@@ -676,7 +676,7 @@ fn encode_pockets(
     // tick's first step, and writes the step's dry, sealed and air counts.
     enc.dispatch_compute(
         &pipes.pocket_tally,
-        &[uniform(params), buffer(23, &l.pocket), buffer(24, &l.pocket_gate), GpuBinding::Buffer { binding: 22, buffer: capped, offset: tally }],
+        &[uniform(params), buffer(6, &l.water), buffer(10, &l.s), buffer(23, &l.pocket), buffer(24, &l.pocket_gate), GpuBinding::Buffer { binding: 22, buffer: capped, offset: tally }],
         [1, 1, 1],
         "gpu_flip.step.pocket_tally",
     );
@@ -705,9 +705,14 @@ fn encode_pocket_mean(enc: &mut GpuEncoder, pipes: &Pipelines, l: &LatticeBuffer
 
 /// The step shader's atomic sites (I8, GPU_FLIP_PRESSURE_SOLVE.md section
 /// 7 (Invariants & enforcement)): the pockets' fixed-point sums, integer adds that come out
-/// the same in any thread order. A new site is added here on purpose.
+/// the same in any thread order, and the tally's cell counts and lowest air
+/// seed (an integer minimum, also order-free). A new site is added here on
+/// purpose.
 #[cfg(test)]
-const POCKET_ATOMIC_SITES: &[&str] = &["pocket_sum", "group_sum", "pocket_clear", "pocket_add", "pocket_accumulate", "pocket_remove", "pocket_flux"];
+const POCKET_ATOMIC_SITES: &[&str] = &[
+    "pocket_sum", "group_sum", "pocket_clear", "pocket_add", "pocket_accumulate", "pocket_remove", "pocket_flux",
+    "pocket_counts", "pocket_first_seed", "pocket_tally",
+];
 
 /// I8's guard: each line of `source` that uses an atomic, outside the named
 /// functions and variable declarations of `allowed`; exchange and

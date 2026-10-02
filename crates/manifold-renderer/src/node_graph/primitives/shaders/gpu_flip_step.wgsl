@@ -1365,6 +1365,37 @@ fn pocket_condition(@builtin(global_invocation_id) gid: vec3<u32>) {
 // The solver words holding the step's dry, sealed and air cell counts.
 const POCKET_COUNT_WORD: u32 = 7u;
 var<workgroup> pocket_counts: array<atomic<u32>, 3>;
+var<workgroup> pocket_first_seed: atomic<u32>;
+const POCKET_SEED_WORD: u32 = 10u;
+
+// Why water cell idx touches air, as pocket_seed decides it: the neighbour's
+// index (0xffffffff for an open box face), the face's open fraction bits,
+// and axis * 2 + (1 on the high side); x is 0xffffffff when it does not.
+fn pocket_seed_reason(idx: u32) -> vec4<u32> {
+    let n = lattice();
+    let m = n + vec3<i32>(1);
+    let p = unflatten(idx, n);
+    for (var a = 0; a < 3; a = a + 1) {
+        let low_open = (u.closed_faces & (1u << u32(2 * a))) == 0u;
+        let high_open = (u.closed_faces & (1u << u32(2 * a + 1))) == 0u;
+        if low_open && p[a] == 0 {
+            return vec4<u32>(0xffffffffu, 0u, u32(2 * a), 0u);
+        }
+        if high_open && p[a] == n[a] - 1 {
+            return vec4<u32>(0xffffffffu, 0u, u32(2 * a + 1), 0u);
+        }
+        for (var s = -1; s <= 1; s = s + 2) {
+            var d = p;
+            d[a] = p[a] + s;
+            if d[a] >= 0 && d[a] < n[a] && !(water[flatten(d, n)] > 0.5) && pocket_linked(p, d, a, n, m) {
+                var f = p;
+                f[a] = max(p[a], d[a]);
+                return vec4<u32>(flatten(d, n), bitcast<u32>(open_at(f, a, n, m)), u32(2 * a) + select(0u, 1u, s > 0), 0u);
+            }
+        }
+    }
+    return vec4<u32>(0xffffffffu, 0u, 0xffffffffu, 0u);
+}
 
 // One workgroup, `capped` bound at the solver words: steps this tick whose
 // spread hit its cap unfinished, and the step's dry, sealed and air cells.
@@ -1373,10 +1404,16 @@ fn pocket_tally(@builtin(local_invocation_index) lane: u32) {
     if lane < 3u {
         atomicStore(&pocket_counts[lane], 0u);
     }
+    if lane == 0u {
+        atomicStore(&pocket_first_seed, 0xffffffffu);
+    }
     workgroupBarrier();
     var counts = vec3<u32>(0u);
     for (var idx = lane; idx < cell_total(); idx = idx + 256u) {
         counts[min(pocket[idx], 2u)] += 1u;
+        if pocket[idx] == POCKET_AIR && pocket_seed_reason(idx).z != 0xffffffffu {
+            atomicMin(&pocket_first_seed, idx);
+        }
     }
     for (var k = 0u; k < 3u; k = k + 1u) {
         atomicAdd(&pocket_counts[k], counts[k]);
@@ -1387,6 +1424,14 @@ fn pocket_tally(@builtin(local_invocation_index) lane: u32) {
     }
     for (var k = 0u; k < 3u; k = k + 1u) {
         capped[POCKET_COUNT_WORD + k] = atomicLoad(&pocket_counts[k]);
+    }
+    let seed = atomicLoad(&pocket_first_seed);
+    capped[POCKET_SEED_WORD] = seed;
+    if seed != 0xffffffffu {
+        let why = pocket_seed_reason(seed);
+        capped[POCKET_SEED_WORD + 1u] = why.x;
+        capped[POCKET_SEED_WORD + 2u] = why.y;
+        capped[POCKET_SEED_WORD + 3u] = why.z;
     }
     let unresolved = pocket_gate[POCKET_UNRESOLVED];
     if u.step_in_tick == 0 {
