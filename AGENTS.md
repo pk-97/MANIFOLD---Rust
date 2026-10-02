@@ -46,6 +46,8 @@ report the gap. Preserve required landing checks. Use the Codex guard's
 short-lived, exact-command exceptions only for necessary bounded checks with a
 concrete reason, never to bypass their bounds.
 
+Parallel agents share one Mac: 14 cores and one GPU. Solve problems on the CPU: small CPU reference tests (8³ or 16³ lattices, hand-built cases) that run in seconds. A GPU proof or the app only confirms a finished stage; it is never for exploring. Codex never runs GPU tests or the app, because its sandbox can't take the GPU lock. Write the GPU proofs, check they compile with `cargo test --no-run --features gpu-proofs`, and hand the lead the exact `scripts/gpu_queue.py` command to run. Order the work in stages: for each one, edit, `cargo check`, CPU proof, commit. Run one cargo command at a time, with `CARGO_BUILD_JOBS=4` and a test filter, never a whole-crate test run.
+
 Start diagnosis with the relevant seam. Runtime claims need logs/reproduction; visual claims need an observed render. Use bounded probes when static evidence is insufficient. A green compile does not establish behaviour.
 
 Keep main runnable. App changes use the existing slot ring (`scripts/agent-worktree.py`), with one owner per workstream and a verified base tip. Read `.claude/GIT_TREE_DISCIPLINE.md` for slot, build-lock, and merge mechanics; do not modify it. Preserve unrelated work. Commit exact paths only; no blanket staging, force-push, or destructive history rewrites.
