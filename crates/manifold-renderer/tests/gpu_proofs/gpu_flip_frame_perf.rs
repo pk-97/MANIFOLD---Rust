@@ -188,15 +188,63 @@ fn print_split(title: &str, columns: &BTreeMap<String, Vec<f64>>) {
     }
 }
 
+/// What the probe renders: the preset as it ships, or with one of its draws
+/// removed so a render pass can be attributed to the object that owns it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Variant {
+    Shipped,
+    /// Whitewater Budget at its card minimum (1000 of 100000): the foam,
+    /// spray and bubble instanced draws all but vanish.
+    WhitewaterMinimum,
+    /// The water's scene object unwired from render_scene: no transmissive
+    /// water layer, so its depth prepass, colour copy and layer draw vanish.
+    WaterUnwired,
+}
+
+/// Node ids in the shipped preset (`WaterDamBreakGpuFlip.json`).
+const WATER_OBJECT_NODE: u64 = 442;
+const RENDER_SCENE_NODE: u64 = 463;
+const WHITEWATER_BUDGET_PARAM: &str = "whitewater_capacity";
+
 #[test]
 fn gpu_flip_frame_perf() {
+    probe(Variant::Shipped);
+}
+
+#[test]
+fn gpu_flip_frame_perf_whitewater_minimum() {
+    probe(Variant::WhitewaterMinimum);
+}
+
+#[test]
+fn gpu_flip_frame_perf_water_unwired() {
+    probe(Variant::WaterUnwired);
+}
+
+fn probe(variant: Variant) {
     let harness = harness::shared();
     let device = &harness.device;
     let sampler = device.create_timestamp_sampler(16384).expect("GPU timestamp sampler");
     let _offline = PhysicsStepScope::for_render(true);
     let target = RenderTarget::new(device, WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float, "gpu-flip-frame-perf");
-    let json: Value = serde_json::from_str(PRESET).expect("GPU FLIP dam break preset parses");
-    let params = manifest(&json);
+    let mut json: Value = serde_json::from_str(PRESET).expect("GPU FLIP dam break preset parses");
+    if variant == Variant::WaterUnwired {
+        let wires = json["wires"].as_array_mut().expect("preset wires");
+        let before = wires.len();
+        wires.retain(|wire| {
+            !(wire["fromNode"] == WATER_OBJECT_NODE && wire["toNode"] == RENDER_SCENE_NODE)
+        });
+        assert_eq!(before - wires.len(), 1, "exactly one wire carries the water into render_scene");
+    }
+    let mut params = manifest(&json);
+    if variant == Variant::WhitewaterMinimum {
+        let budget = params.get_mut(WHITEWATER_BUDGET_PARAM).expect("whitewater budget card param");
+        let minimum = budget.spec.min;
+        assert!(minimum <= 1000.0, "the budget floor moved: {minimum}");
+        budget.value = minimum;
+        budget.base = minimum;
+    }
+    println!("gpu_flip_frame_perf variant: {variant:?}");
     let mut runtime = PresetRuntime::from_json_str_with_device(
         &json.to_string(),
         &PrimitiveRegistry::with_builtin(),
