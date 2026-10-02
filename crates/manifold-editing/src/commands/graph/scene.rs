@@ -1145,6 +1145,28 @@ impl Command for RemoveSceneObjectCommand {
             self.rejection = Some(reason);
             return;
         }
+        let producer_is_loose_object = producer_id.as_ref().is_some_and(|producer_id| {
+            graph_level(&candidate, &scope)
+                .and_then(|(nodes, _)| nodes.iter().find(|node| node.id == *producer_id))
+                .is_some_and(|node| node.type_id == "node.scene_object")
+        });
+        let loose_roles = if scope.is_empty()
+            && producer_is_loose_object
+            && !matches!(physics_match, Some(PhysicsSceneObjectMatch::Valid(_)))
+        {
+            match fluid::remove_loose_scene_object_fluid_roles(
+                &mut candidate,
+                producer_id.expect("producer id checked above"),
+            ) {
+                Ok(roles) => roles,
+                Err(reason) => {
+                    self.rejection = Some(reason);
+                    return;
+                }
+            }
+        } else {
+            Vec::new()
+        };
         let result = (|| {
             let def = &mut candidate;
             let (nodes, wires) = descend_level(&mut def.nodes, &mut def.wires, &scope)?;
@@ -1209,6 +1231,7 @@ impl Command for RemoveSceneObjectCommand {
                 for node in nodes.iter().filter(|node| owned.contains(&node.id)) {
                     collect_node_ids(std::slice::from_ref(node), &mut removed_ids);
                 }
+                collect_node_ids(&loose_roles, &mut removed_ids);
                 nodes.retain(|node| !owned.contains(&node.id));
                 wires.retain(|wire| {
                     !(owned.contains(&wire.from_node)

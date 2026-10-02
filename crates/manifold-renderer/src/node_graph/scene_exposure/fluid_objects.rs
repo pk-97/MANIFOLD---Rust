@@ -44,11 +44,17 @@ pub(super) fn migrate(def: &mut EffectGraphDef) -> bool {
             index += 1;
         }
     }
-    while let Some((fluid_id, object_id, role_id)) = find_loose_role_obstacle(&candidate) {
-        if !group_loose_role_obstacle(&mut candidate, fluid_id, object_id, role_id) {
-            break;
+    // A shape that cannot group stays loose; the delete command still owns
+    // its roles. Skip it and keep grouping the rest.
+    let mut skipped = HashSet::new();
+    while let Some((fluid_id, object_id, role_id)) =
+        find_loose_role_obstacle(&candidate, &skipped)
+    {
+        if group_loose_role_obstacle(&mut candidate, fluid_id, object_id, role_id) {
+            changed = true;
+        } else {
+            skipped.insert(role_id);
         }
-        changed = true;
     }
     if changed {
         *def = candidate;
@@ -240,8 +246,15 @@ fn migrate_one(
 /// object's transform. Remove Object only disconnects roles that live inside
 /// the object's group, so this shape left the collider wired to the solver
 /// after the object was deleted. Grouping it gives the object ownership.
-fn find_loose_role_obstacle(def: &EffectGraphDef) -> Option<(u32, u32, u32)> {
-    for role in def.nodes.iter().filter(|node| node.type_id == ROLE_SOURCE_TYPE_ID) {
+fn find_loose_role_obstacle(
+    def: &EffectGraphDef,
+    skipped: &HashSet<u32>,
+) -> Option<(u32, u32, u32)> {
+    for role in def
+        .nodes
+        .iter()
+        .filter(|node| node.type_id == ROLE_SOURCE_TYPE_ID && !skipped.contains(&node.id))
+    {
         let outs: Vec<_> = def.wires.iter().filter(|wire| wire.from_node == role.id).collect();
         let [out] = outs.as_slice() else { continue };
         let fluid_ok = out.to_port.starts_with("role_")
@@ -741,67 +754,103 @@ mod tests {
 
     const GPU_FLIP_DAM_BREAK_JSON: &str =
         include_str!("../../../assets/generator-presets/WaterDamBreakGpuFlip.json");
+    const MATTER_DAM_BREAK_JSON: &str =
+        include_str!("../../../assets/generator-presets/WaterDamBreakMatter.json");
 
+    /// Role wires into any liquid domain, at any group depth.
     fn domain_role_inputs(def: &EffectGraphDef) -> usize {
-        let domain = def
-            .nodes
-            .iter()
-            .find(|node| node.type_id == "node.gpu_flip_domain")
-            .expect("GPU FLIP domain")
-            .id;
-        def.wires
-            .iter()
-            .filter(|wire| wire.to_node == domain && wire.to_port.starts_with("role_"))
-            .count()
+        fn count(nodes: &[EffectGraphNode], wires: &[EffectGraphWire]) -> usize {
+            let here = wires
+                .iter()
+                .filter(|wire| {
+                    wire.to_port.starts_with("role_")
+                        && nodes.iter().any(|node| {
+                            node.id == wire.to_node && is_liquid_domain(&node.type_id)
+                        })
+                })
+                .count();
+            here + nodes
+                .iter()
+                .filter_map(|node| node.group.as_deref())
+                .map(|group| count(&group.nodes, &group.wires))
+                .sum::<usize>()
+        }
+        count(&def.nodes, &def.wires)
     }
 
-    /// Remove Object on the GPU FLIP Dam Break obstacle through the real
-    /// command, the way the Scene panel's delete issues it.
-    fn delete_obstacle(def: EffectGraphDef) -> EffectGraphDef {
+    fn project_with(def: &EffectGraphDef, preset: &'static str) -> (
+        manifold_core::project::Project,
+        manifold_core::GraphTarget,
+    ) {
         use manifold_core::layer::Layer;
-        use manifold_core::project::Project;
         use manifold_core::{GraphTarget, LayerId, PresetTypeId};
-        use manifold_editing::command::Command;
-        use manifold_editing::commands::graph::RemoveSceneObjectCommand;
 
+        let mut layer = Layer::new_generator("Dam".into(), PresetTypeId::new(preset), 0);
+        let layer_id = LayerId::new("loose-obstacle-layer");
+        layer.layer_id = layer_id.clone();
+        let host = layer.gen_params_or_init();
+        host.graph = Some(def.clone());
+        host.refresh_manifest_from_graph();
+        let mut project = manifold_core::project::Project::default();
+        project.timeline.layers.push(layer);
+        (project, GraphTarget::Generator(layer_id))
+    }
+
+    fn obstacle_slot(def: &EffectGraphDef) -> (u32, u32) {
         let render_id = def
             .nodes
             .iter()
             .find(|node| node.type_id == RENDER_SCENE_TYPE_ID)
             .expect("render scene")
             .id;
-        let obstacle_index = def
+        let index = def
             .wires
             .iter()
             .find(|wire| {
                 wire.to_node == render_id
                     && def.nodes.iter().any(|node| {
-                        node.id == wire.from_node && node.handle.as_deref() == Some("Obstacle")
+                        node.id == wire.from_node
+                            && (node.handle.as_deref() == Some("Obstacle")
+                                || node.node_id.as_str() == "obstacle_object")
                     })
             })
             .and_then(|wire| wire.to_port.strip_prefix("object_")?.parse().ok())
             .expect("Obstacle object slot");
-        let mut layer = Layer::new_generator(
-            "Dam".into(),
-            PresetTypeId::new("WaterDamBreakGpuFlip"),
-            0,
-        );
-        let layer_id = LayerId::new("deleted-obstacle-layer");
-        layer.layer_id = layer_id.clone();
-        let host = layer.gen_params_or_init();
-        host.graph = Some(def.clone());
-        host.refresh_manifest_from_graph();
-        let mut project = Project::default();
-        project.timeline.layers.push(layer);
-        let target = GraphTarget::Generator(layer_id);
-        let mut remove =
-            RemoveSceneObjectCommand::new(target.clone(), vec![], render_id, obstacle_index, def);
+        (render_id, index)
+    }
+
+    /// Remove Object on the obstacle through the real command, the way the
+    /// Scene panel's delete issues it.
+    fn delete_obstacle(def: EffectGraphDef, preset: &'static str) -> EffectGraphDef {
+        use manifold_editing::command::Command;
+        use manifold_editing::commands::graph::RemoveSceneObjectCommand;
+
+        let (render_id, index) = obstacle_slot(&def);
+        let (mut project, target) = project_with(&def, preset);
+        let mut remove = RemoveSceneObjectCommand::new(target.clone(), vec![], render_id, index, def);
         remove.execute(&mut project);
         assert!(remove.was_applied(), "{:?}", remove.rejection_reason());
         project
             .graph_target_owner(&target)
             .and_then(|owner| owner.graph.clone())
             .expect("edited graph")
+    }
+
+    fn assert_obstacle_leaves_solver(def: EffectGraphDef, preset: &'static str) {
+        assert_eq!(domain_role_inputs(&def), 1, "{preset}: the obstacle is the only body");
+        let after = delete_obstacle(def, preset);
+        assert_eq!(domain_role_inputs(&after), 0, "{preset}: deleted obstacle still in the solver");
+        assert!(
+            !after.nodes.iter().any(|node| {
+                node.handle.as_deref() == Some("Obstacle")
+                    || matches!(
+                        node.node_id.as_str(),
+                        "obstacle_collider" | "obstacle_transform" | "obstacle_object"
+                    )
+            }),
+            "{preset}: the obstacle's nodes must go with it"
+        );
+        flatten_groups(&after).expect("edited graph flattens");
     }
 
     #[test]
@@ -821,22 +870,114 @@ mod tests {
     }
 
     #[test]
-    fn deleting_gpu_flip_dam_break_obstacle_removes_its_collider() {
+    fn deleting_grouped_gpu_flip_obstacle_removes_its_collider() {
         let mut def: EffectGraphDef =
             serde_json::from_str(GPU_FLIP_DAM_BREAK_JSON).expect("preset parses");
-        // The loose authored shape is the bug: delete drops the box but the
-        // collider keeps feeding the solver.
-        assert_eq!(domain_role_inputs(&delete_obstacle(def.clone())), 1);
         migrate(&mut def);
-        assert_eq!(domain_role_inputs(&def), 1, "the obstacle is the domain's only body");
-        let after = delete_obstacle(def);
-        assert_eq!(
-            domain_role_inputs(&after),
-            0,
-            "a deleted obstacle must stop reaching the solver"
-        );
-        assert!(!after.nodes.iter().any(|node| {
-            node.handle.as_deref() == Some("Obstacle") || node.node_id.as_str() == "obstacle_collider"
-        }));
+        assert_obstacle_leaves_solver(def, "WaterDamBreakGpuFlip");
+    }
+
+    /// The command owns the rule, not the migration: a loose object's
+    /// collider goes with it.
+    #[test]
+    fn deleting_loose_gpu_flip_obstacle_removes_its_collider() {
+        let def: EffectGraphDef =
+            serde_json::from_str(GPU_FLIP_DAM_BREAK_JSON).expect("preset parses");
+        assert_obstacle_leaves_solver(def, "WaterDamBreakGpuFlip");
+    }
+
+    #[test]
+    fn deleting_matter_dam_break_obstacle_removes_its_collider() {
+        let def: EffectGraphDef =
+            serde_json::from_str(MATTER_DAM_BREAK_JSON).expect("preset parses");
+        assert_obstacle_leaves_solver(def, "WaterDamBreakMatter");
+    }
+
+    #[test]
+    fn enabling_physics_on_loose_obstacle_with_a_collider_is_refused() {
+        use manifold_editing::command::Command;
+        use manifold_editing::commands::graph::EnableSceneObjectPhysicsCommand;
+
+        let def: EffectGraphDef =
+            serde_json::from_str(GPU_FLIP_DAM_BREAK_JSON).expect("preset parses");
+        let (render_id, index) = obstacle_slot(&def);
+        let (mut project, target) = project_with(&def, "WaterDamBreakGpuFlip");
+        let mut enable =
+            EnableSceneObjectPhysicsCommand::new(target, render_id, index, Vec::new(), def);
+        enable.execute(&mut project);
+        assert!(!enable.was_applied());
+        let reason = enable.rejection_reason().unwrap_or_default();
+        assert!(reason.contains("Fluid Role"), "{reason}");
+    }
+
+    /// A loose collider that cannot group must not stop the others.
+    #[test]
+    fn ungroupable_loose_collider_does_not_block_the_rest() {
+        let mut def: EffectGraphDef =
+            serde_json::from_str(GPU_FLIP_DAM_BREAK_JSON).expect("preset parses");
+        let mut blocked = def
+            .nodes
+            .iter()
+            .find(|node| node.node_id.as_str() == "obstacle_object")
+            .unwrap()
+            .clone();
+        let ids = max_node_id_recursive(&def.nodes);
+        let mut collider = def
+            .nodes
+            .iter()
+            .find(|node| node.node_id.as_str() == "obstacle_collider")
+            .unwrap()
+            .clone();
+        let transform = def
+            .nodes
+            .iter()
+            .find(|node| node.node_id.as_str() == "obstacle_transform")
+            .unwrap()
+            .clone();
+        // A handle-less object cannot be grouped; it is listed first.
+        blocked.id = ids + 1;
+        blocked.node_id = NodeId::new("blocked_object");
+        blocked.handle = None;
+        collider.id = ids + 2;
+        collider.node_id = NodeId::new("blocked_collider");
+        let mut blocked_transform = transform.clone();
+        blocked_transform.id = ids + 3;
+        blocked_transform.node_id = NodeId::new("blocked_transform");
+        let domain = def
+            .nodes
+            .iter()
+            .find(|node| node.type_id == "node.gpu_flip_domain")
+            .unwrap()
+            .id;
+        let render = def
+            .nodes
+            .iter()
+            .find(|node| node.type_id == RENDER_SCENE_TYPE_ID)
+            .unwrap()
+            .id;
+        for (from_node, from_port, to_node, to_port) in [
+            (ids + 3, "transform", ids + 1, "transform"),
+            (ids + 3, "transform", ids + 2, "transform"),
+            (ids + 2, "role", domain, "role_1"),
+            (ids + 1, "object", render, "object_10"),
+        ] {
+            def.wires.push(EffectGraphWire {
+                from_node,
+                from_port: from_port.into(),
+                to_node,
+                to_port: to_port.into(),
+            });
+        }
+        def.nodes.insert(0, blocked);
+        def.nodes.insert(0, collider);
+        def.nodes.push(blocked_transform);
+        assert!(migrate(&mut def));
+        let root_roles: Vec<_> = def
+            .nodes
+            .iter()
+            .filter(|node| node.type_id == ROLE_SOURCE_TYPE_ID)
+            .map(|node| node.node_id.as_str())
+            .collect();
+        assert_eq!(root_roles, ["blocked_collider"], "the groupable obstacle must still group");
     }
 }
