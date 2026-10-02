@@ -33,7 +33,7 @@ use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 
 use super::gpu_flip_bodies::{BodyPasses, Bodies, REACTION_FLOATS, body_refusal};
-use super::gpu_flip_pressure::{MAX_ITERATIONS, PressureSolver, Stop, Water, lattice_refusal};
+use super::gpu_flip_pressure::{MAX_ITERATIONS, PressureSolver, Solve, Stop, Water, lattice_refusal, level_lattices, level_refusal};
 use super::liquid_stats::SOLVER_WORDS;
 use super::liquid_solid_distance::{SolidDistanceJob, encode_solid_distance};
 use super::prefix_scan::ScanLabels;
@@ -145,7 +145,7 @@ pub(crate) fn tile_scratch_bytes(cells: [u32; 3], ring_max: u32) -> u64 {
 /// Bytes the step holds for itself at `cells` with `slots` particle slots,
 /// besides the sort's ranges and the solver's scratch: the sorted particles,
 /// seven cell arrays, the solid corners, six face grids, the pocket gate,
-/// the pocket sums and the tile table.
+/// the pocket sums, the coarse pockets and the tile table.
 #[cfg(any(test, feature = "gpu-proofs"))]
 pub(crate) fn scratch_bytes(cells: [u32; 3], slots: u64, ring_max: u32) -> u64 {
     let corners = cells.iter().map(|&n| u64::from(n) + 1).product::<u64>() * 4;
@@ -155,7 +155,15 @@ pub(crate) fn scratch_bytes(cells: [u32; 3], slots: u64, ring_max: u32) -> u64 {
         + 6 * face_bytes(cells)
         + POCKET_GATE_WORDS * 4
         + pocket_sum_bytes(cells)
+        + pocket_coarse_bytes(cells)
         + tile_scratch_bytes(cells, ring_max)
+}
+
+/// The coarse pockets' bytes: a state and a label per level-1 cell (every
+/// deeper level has fewer) and a leader slot per fine cell. A lattice with
+/// no level 1 has no solve level above 0 and never reads them.
+fn pocket_coarse_bytes(cells: [u32; 3]) -> u64 {
+    level_lattices(cells).get(1).map_or(0, |&coarse| 2 * cell_bytes(coarse)) + cell_bytes(cells)
 }
 
 /// Test-only lever, approved 2026-10-02 lead; un-suppressed when the executor
@@ -234,7 +242,8 @@ pub(crate) struct StepParams {
     pub(crate) region_rows: i32,
     /// Half-width of an emitted particle's jitter in cells.
     pub(crate) emit_jitter: f32,
-    pub(crate) _pad: u32,
+    /// The V-cycle level the pressure solves run on (`Step::level`).
+    pub(crate) solve_level: u32,
     /// 1: every tile is active (the test-only oracle, [`set_all_tiles`]).
     pub(crate) all_tiles: u32,
     /// The ring a sparse pass's reads are capped at. Unused while the extend
@@ -285,6 +294,9 @@ struct Pipelines {
     pocket_pin: GpuComputePipeline,
     /// The removed flux into the pressure, then the density, solver word.
     pocket_flux: [GpuComputePipeline; 2],
+    /// The pockets at the solve level: leaders cleared, cells coarsened,
+    /// labels moved to the level.
+    pocket_coarse: [GpuComputePipeline; 3],
     emit_flags: GpuComputePipeline,
     emit_write: GpuComputePipeline,
     tiles_classify: GpuComputePipeline,
@@ -331,6 +343,7 @@ impl Pipelines {
             pocket_remove: pipe("pocket_remove"),
             pocket_pin: pipe("pocket_pin"),
             pocket_flux: [pipe("pocket_flux_pressure"), pipe("pocket_flux_density")],
+            pocket_coarse: [pipe("pocket_leader_clear"), pipe("pocket_coarsen"), pipe("pocket_relabel")],
             emit_flags: pipe("emit_flags"),
             emit_write: pipe("emit_write"),
             tiles_classify: pipe("tiles_classify"),
@@ -458,6 +471,12 @@ struct LatticeBuffers {
     pocket_sum: GpuBuffer,
     /// The solves' water: `water` less each sealed pocket's leader cell.
     solve_water: GpuBuffer,
+    /// The pockets at the solve level: state and label per level cell,
+    /// sized for level 1 ([`pocket_coarse_bytes`]).
+    pocket_coarse: GpuBuffer,
+    pocket_coarse_label: GpuBuffer,
+    /// By fine label, the lowest level cell of that pocket.
+    pocket_leader: GpuBuffer,
 }
 
 /// Words of the pocket spread's gate (gpu_flip_step.wgsl `pocket_gate`).
@@ -484,6 +503,7 @@ impl LatticeBuffers {
         let cell = cell_bytes(cells);
         let face = face_bytes(cells);
         let corners = cells.iter().map(|&n| u64::from(n) + 1).product::<u64>() * 4;
+        let coarse = (pocket_coarse_bytes(cells) - cell) / 2;
         Ok(Self {
             cells,
             water: allocate(device, cell)?,
@@ -502,6 +522,9 @@ impl LatticeBuffers {
             pocket_label: allocate(device, cell)?,
             pocket_sum: allocate(device, pocket_sum_bytes(cells))?,
             solve_water: allocate(device, cell)?,
+            pocket_coarse: allocate(device, coarse.max(4))?,
+            pocket_coarse_label: allocate(device, coarse.max(4))?,
+            pocket_leader: allocate(device, cell)?,
         })
     }
 }
@@ -636,32 +659,100 @@ fn encode_pockets(
     );
 }
 
-/// Each sealed pocket's mean taken off the right-hand side in `l.rhs`
-/// (gpu_flip_step.wgsl pocket_accumulate, pocket_remove): with no air cell
-/// its solve is pure Neumann, solvable only for a right-hand side summing to
-/// 0. What was removed goes to solver word 4 (`solve` 0, pressure) or 5
-/// (1, density).
-fn encode_pocket_mean(enc: &mut GpuEncoder, pipes: &Pipelines, l: &LatticeBuffers, solve: usize, step: &Step<'_>) {
-    let (params, capped, tally) = (&step.params, step.capped, step.tally);
-    let cell_count: u64 = l.cells.iter().map(|&n| u64::from(n)).product();
-    let sums = [uniform(params), buffer(26, &l.pocket_sum)];
+/// The pockets one lattice's right-hand side is corrected over: each
+/// cell's sealed state and its pocket's label (a cell of that lattice), and
+/// the sums, three words a cell plus the removed total's two.
+struct Pockets<'a> {
+    state: &'a GpuBuffer,
+    label: &'a GpuBuffer,
+    sums: &'a GpuBuffer,
+}
+
+impl LatticeBuffers {
+    fn fine_pockets(&self) -> Pockets<'_> {
+        Pockets { state: &self.pocket, label: &self.pocket_label, sums: &self.pocket_sum }
+    }
+
+    fn coarse_pockets(&self) -> Pockets<'_> {
+        Pockets { state: &self.pocket_coarse, label: &self.pocket_coarse_label, sums: &self.pocket_sum }
+    }
+}
+
+/// Each sealed pocket's mean taken off the right-hand side `rhs` on the
+/// lattice `params.n` (gpu_flip_step.wgsl pocket_accumulate,
+/// pocket_remove): with no air cell its solve is pure Neumann, solvable only
+/// for a right-hand side summing to 0. What was removed goes to solver word
+/// 4 (`solve` 0, pressure) or 5 (1, density): h³ of the lattice's cell
+/// size, so a coarse level adds its own volume rate.
+fn encode_pocket_mean(
+    enc: &mut GpuEncoder,
+    pipes: &Pipelines,
+    params: &StepParams,
+    pockets: Pockets<'_>,
+    rhs: &GpuBuffer,
+    solve: usize,
+    capped: &GpuBuffer,
+    tally: u64,
+) {
+    let cell_count: u64 = params.n.iter().map(|&n| u64::from(n)).product();
+    let sums = [uniform(params), buffer(26, pockets.sums)];
     enc.dispatch_compute(&pipes.pocket_clear, &sums, groups(3 * cell_count + 2), "gpu_flip.step.pocket_clear");
-    let cells = [uniform(params), buffer(5, &l.rhs), buffer(23, &l.pocket), buffer(25, &l.pocket_label), buffer(26, &l.pocket_sum)];
+    let cells = [uniform(params), buffer(5, rhs), buffer(23, pockets.state), buffer(25, pockets.label), buffer(26, pockets.sums)];
     enc.dispatch_compute(&pipes.pocket_accumulate, &cells, groups(cell_count), "gpu_flip.step.pocket_accumulate");
     enc.dispatch_compute(&pipes.pocket_remove, &cells, groups(cell_count), "gpu_flip.step.pocket_remove");
     enc.dispatch_compute(
         &pipes.pocket_flux[solve],
-        &[uniform(params), buffer(26, &l.pocket_sum), GpuBinding::Buffer { binding: 22, buffer: capped, offset: tally }],
+        &[uniform(params), buffer(26, pockets.sums), GpuBinding::Buffer { binding: 22, buffer: capped, offset: tally }],
         [1, 1, 1],
         "gpu_flip.step.pocket_flux",
     );
+}
+
+/// The pockets at solve level `params.solve_level` from the fine ones
+/// (gpu_flip_step.wgsl pocket_coarsen): a level cell is sealed when every
+/// fine cell under it is sealed with one label, and takes the lowest such
+/// level cell of its pocket as its label.
+fn encode_pocket_coarsen(enc: &mut GpuEncoder, pipes: &Pipelines, params: &StepParams, l: &LatticeBuffers) {
+    let level = params.solve_level as usize;
+    let coarse_count: u64 = level_lattices(l.cells)[level].iter().map(|&n| u64::from(n)).product();
+    let cell_count: u64 = l.cells.iter().map(|&n| u64::from(n)).product();
+    enc.dispatch_compute(
+        &pipes.pocket_coarse[0],
+        &[uniform(params), buffer(41, &l.pocket_leader)],
+        groups(cell_count),
+        "gpu_flip.step.pocket_leader_clear",
+    );
+    let bindings = [
+        uniform(params),
+        buffer(6, &l.water),
+        buffer(10, &l.s),
+        buffer(23, &l.pocket),
+        buffer(25, &l.pocket_label),
+        buffer(39, &l.pocket_coarse),
+        buffer(40, &l.pocket_coarse_label),
+        buffer(41, &l.pocket_leader),
+    ];
+    enc.dispatch_compute(&pipes.pocket_coarse[1], &bindings, groups(coarse_count), "gpu_flip.step.pocket_coarsen");
+    enc.dispatch_compute(&pipes.pocket_coarse[2], &bindings, groups(coarse_count), "gpu_flip.step.pocket_relabel");
 }
 
 /// The step shader's atomic sites (I8, GPU_FLIP_PRESSURE_SOLVE.md section
 /// 7 (Invariants & enforcement)): the pockets' fixed-point sums, integer adds that come out
 /// the same in any thread order. A new site is added here on purpose.
 #[cfg(test)]
-const POCKET_ATOMIC_SITES: &[&str] = &["pocket_sum", "group_sum", "pocket_clear", "pocket_add", "pocket_accumulate", "pocket_remove", "pocket_flux"];
+const POCKET_ATOMIC_SITES: &[&str] = &[
+    "pocket_sum",
+    "group_sum",
+    "pocket_clear",
+    "pocket_add",
+    "pocket_accumulate",
+    "pocket_remove",
+    "pocket_flux",
+    "pocket_leader",
+    "pocket_leader_clear",
+    "pocket_coarsen",
+    "pocket_relabel",
+];
 
 /// I8's guard: each line of `source` that uses an atomic, outside the named
 /// functions and variable declarations of `allowed`; exchange and
@@ -711,6 +802,9 @@ struct Step<'a> {
     dynamic: bool,
     /// When the pressure and density solves stop.
     pressure: Stop,
+    /// The V-cycle level both solves' gradients run on; 0 is the fine
+    /// lattice.
+    level: usize,
     band: u32,
     ghost: bool,
     /// Run the density projection.
@@ -978,6 +1072,9 @@ impl StepState {
             cells_groups,
             "gpu_flip.step.pocket_pin",
         );
+        if step.level > 0 {
+            encode_pocket_coarsen(enc, pipes, &base, l);
+        }
         if solids && !step.dynamic {
             enc.dispatch_compute(
                 &pipes.pocket_condition,
@@ -992,7 +1089,16 @@ impl StepState {
             vec![buffer(3, &l.f), buffer(5, &l.rhs), buffer(6, &l.water), buffer(10, &l.s), buffer(11, &l.v)],
             "gpu_flip.step.divergence",
         );
-        encode_pocket_mean(enc, pipes, l, 0, step);
+        encode_pocket_mean(enc, pipes, &base, l.fine_pockets(), &l.rhs, 0, step.capped, step.tally);
+        // At a coarse solve level the restricted right-hand side loses each
+        // pocket's zero sum (design section 11), so the mean comes off once
+        // more there; as a later substep's would, its flux adds to the word.
+        let coarse_mean = |solve: usize| {
+            move |enc: &mut GpuEncoder, rhs: &GpuBuffer, lattice: [u32; 3], h: f32| {
+                let params = StepParams { n: lattice, cell_size: h, step_in_tick: 1, ..base };
+                encode_pocket_mean(enc, pipes, &params, l.coarse_pockets(), rhs, solve, step.capped, step.tally);
+            }
+        };
         let water = Water {
             lattice: cells,
             cell_size: p.cell_size,
@@ -1024,7 +1130,12 @@ impl StepState {
             }
         }
         let passes = step.dynamic.then_some((&self.bodies, &coupled));
-        self.solver.solve(enc, &water, &l.rhs, &l.pressure, step.pressure, passes)?;
+        let pressure_mean = coarse_mean(0);
+        self.solver.solve(
+            enc,
+            &water,
+            Solve { rhs: &l.rhs, pressure: &l.pressure, stop: step.pressure, bodies: passes, level: step.level, coarse_rhs: Some(&pressure_mean) },
+        )?;
         let tally = step.tally;
         self.solver.tally(enc, step.pressure, step.capped, tally, 0, step.params.step_in_tick == 0)?;
         // φ binds the water array when the ghost rows are off; the pass never reads it then.
@@ -1073,9 +1184,14 @@ impl StepState {
                 vec![buffer(1, ranges), buffer(2, sorted), buffer(6, &l.water), buffer(9, &l.corners), buffer(5, &l.rhs)],
                 "gpu_flip.step.density_source",
             );
-            encode_pocket_mean(enc, pipes, l, 1, step);
+            encode_pocket_mean(enc, pipes, &base, l.fine_pockets(), &l.rhs, 1, step.capped, step.tally);
             let flat = Water { phi: None, ..water };
-            self.solver.solve(enc, &flat, &l.rhs, &l.pressure, step.pressure, None)?;
+            let density_mean = coarse_mean(1);
+            self.solver.solve(
+                enc,
+                &flat,
+                Solve { rhs: &l.rhs, pressure: &l.pressure, stop: step.pressure, bodies: None, level: step.level, coarse_rhs: Some(&density_mean) },
+            )?;
             self.solver.tally(enc, step.pressure, step.capped, tally, 1, false)?;
             let plain = StepParams { ghost: 0, ..p };
             subtract(enc, &plain, &l.water, &l.f, "gpu_flip.step.density_project");
@@ -1103,6 +1219,20 @@ impl StepState {
             "gpu_flip.step.move",
         );
         Ok(())
+    }
+}
+
+/// The Solve Level, refused unless it is a whole number the lattice's
+/// levels reach (GPU_FLIP_SPARSE_BLOCKS_DESIGN.md section 11 (Solve Level)):
+/// never clamped, so a level the lattice lacks is a named error.
+pub(crate) fn read_solve_level(value: f32, lattice: [u32; 3]) -> Result<usize, String> {
+    if !(value.is_finite() && value >= 0.0 && value.fract() == 0.0) {
+        return Err(format!("Solve Level must be a whole number from 0, not {value}"));
+    }
+    let level = value as usize;
+    match level_refusal(lattice, level) {
+        Some(reason) => Err(reason),
+        None => Ok(level),
     }
 }
 
@@ -1144,6 +1274,7 @@ crate::primitive! {
         reaction: Array(f32) optional,
         dynamic_bodies: ScalarF32 optional,
         closed_faces: ScalarF32 optional,
+        solve_level: ScalarF32 optional,
     },
     outputs: {
         out: Array(FluidParticle),
@@ -1181,6 +1312,7 @@ crate::primitive! {
         int_param!("ghost_fluid", "Ghost Fluid", 1.0, 0.0, 1.0),
         int_param!("volume_projection", "Volume Projection", 1.0, 0.0, 1.0),
         int_param!("closed_faces", "Closed Faces", 63.0, 0.0, 63.0),
+        int_param!("solve_level", "Solve Level", 0.0, 0.0, 4.0),
     ],
     depth_rule: Terminal,
     composition_notes: "Inside node.liquid_state's tick region, once per tick: particles from the state's out, Steps substeps of 1/(60·Steps) s run inside the node, each moving the last one's particles, and the bodies see every substep. The lattice, gravity, the field scalars, forces, impulses, bodies, shapes, atlas, body_count and body_rows (into rows) come from node.gpu_flip_domain; so do dynamic_bodies and reaction, which every substep adds to in place; tick_index from node.liquid_state; count from the fill's live count. Flip Share is the share kept per 1/60 s, so the damping does not change with the step count. The last substep's faces feed node.liquid_state's faces_in, sized exactly to the lattice; out keeps the particles slots. regions and region_count also come from node.gpu_flip_domain: each step an inflow seeds particles at its empty half-cell sites into free pool slots (a full pool emits nothing) and holds the velocity inside it, and an outflow kills the particles it holds; the live count rides the cell ranges. A lattice the device cannot hold, or a side over 1024 cells, is a named error.",
@@ -1297,6 +1429,13 @@ impl Primitive for GpuFlipStep {
                 return;
             }
         };
+        let level = match read_solve_level(ctx.scalar_or_param("solve_level", 0.0), cells) {
+            Ok(level) => level,
+            Err(error) => {
+                ctx.error(format!("{NAME}: {error}"));
+                return;
+            }
+        };
         let box_min = lattice.box_min();
         let regions_in = ctx.inputs.array("regions");
         let region_count = match regions_in {
@@ -1376,7 +1515,7 @@ impl Primitive for GpuFlipStep {
                 region_count,
                 region_rows,
                 emit_jitter: 0.25 * inflow_jitter,
-                _pad: 0,
+                solve_level: level as u32,
                 all_tiles: u32::from(all_tiles()),
                 ring_cap: 0,
                 ring_max: ring_max(band),
@@ -1395,6 +1534,7 @@ impl Primitive for GpuFlipStep {
             reaction,
             dynamic,
             pressure,
+            level,
             tally,
             band,
             ghost,
