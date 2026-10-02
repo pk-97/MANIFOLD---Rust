@@ -1627,6 +1627,14 @@ fn density_source(@builtin(global_invocation_id) gid: vec3<u32>) {
     let n = lattice();
     let m = n + vec3<i32>(1);
     let p = unflatten(idx, n);
+    // Sealed water cannot change volume, and the engine applies no density
+    // correction anywhere (its only sealed-pocket rule is the solid
+    // velocity's zeroing, pressuresolver.cpp:214-333): a sealed pocket's
+    // error is 0, so no displacement goes into it.
+    if pocket_isolated(p, n, m) {
+        cell_out[idx] = 0.0;
+        return;
+    }
     let centre = vec3<f32>(p) + vec3<f32>(0.5);
     let slots = u.capacity;
     var density = 0.0;

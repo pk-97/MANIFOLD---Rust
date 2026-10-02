@@ -1170,7 +1170,7 @@ impl StepState {
             over_c(
                 enc,
                 &pipes.density,
-                vec![buffer(1, ranges), buffer(2, sorted), buffer(6, &l.water), buffer(9, &l.corners), buffer(5, &l.rhs)],
+                vec![buffer(1, ranges), buffer(2, sorted), buffer(6, &l.water), buffer(9, &l.corners), buffer(23, &l.pocket), buffer(5, &l.rhs)],
                 "gpu_flip.step.density_source",
             );
             encode_pocket_mean(enc, pipes, l, 1, step);
