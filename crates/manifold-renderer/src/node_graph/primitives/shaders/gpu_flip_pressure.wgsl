@@ -63,6 +63,7 @@ struct FaceSample {
 @group(0) @binding(11) var<storage, read_write> progress: array<f32>;
 @group(0) @binding(12) var<storage, read_write> gate: array<u32>;
 @group(0) @binding(13) var<storage, read_write> tally: array<u32>;
+@group(0) @binding(14) var<storage, read> armed: array<u32>;
 
 const DIVISOR_FLOOR: f32 = 1e-30;
 
@@ -513,5 +514,15 @@ fn tally_main() {
     tally[u.slot] = tally[u.slot] + u32(progress[1]);
     if u.tolerance >= 0.0 && progress[2] < 0.5 {
         tally[2] = tally[2] + 1u;
+    }
+}
+
+// Re-arms the gate at the start of a solve: every triple's group counts
+// from `armed`, so the solve's dispatches run until the stop zeroes them.
+// A dispatch, not a blit, so it is the solver's own labelled pass.
+@compute @workgroup_size(64, 1, 1)
+fn arm_main(@builtin(local_invocation_index) lane: u32) {
+    for (var i = lane; i < 3u * u.cx; i += 64u) {
+        gate[i] = armed[i];
     }
 }

@@ -82,7 +82,7 @@ const FACE_BYTES: u64 = size_of::<FaceSample>() as u64;
 pub(crate) fn passes(lattice: [u32; 3], iterations: u32) -> (usize, usize) {
     let coarse = level_lattices(lattice).len() - 1;
     let v_cycle = coarse * (4 * SMOOTH_ROUNDS + 3) + 1;
-    // The solve: the gate copy, init and the first norm, then per iteration.
+    // The solve: arming the gate, init and the first norm, then per iteration.
     (2 * coarse + 1, 4 + iterations as usize * (v_cycle + 9))
 }
 
@@ -170,6 +170,7 @@ struct Pipelines {
     norm_partial: GpuComputePipeline,
     check: GpuComputePipeline,
     tally: GpuComputePipeline,
+    arm: GpuComputePipeline,
 }
 
 impl Pipelines {
@@ -192,6 +193,7 @@ impl Pipelines {
             norm_partial: pipeline("norm_partial_main", "gpu_flip.pressure.norm_partial"),
             check: pipeline("check_main", "gpu_flip.pressure.check"),
             tally: pipeline("tally_main", "gpu_flip.pressure.tally"),
+            arm: pipeline("arm_main", "gpu_flip.pressure.arm"),
         }
     }
 }
@@ -433,9 +435,9 @@ impl PressureSolver {
             return Err("the solver was not prepared".into());
         };
         let slots = Slots { levels: b.coarse.len() + 1 };
-        enc.copy_buffer_to_buffer(&b.armed, &b.gate, b.armed.size);
         let g = Gate { buffer: &b.gate, slots };
         let fine = Params { cx: slots.triples(), tolerance: stop.tolerance(), ..Params::at(n, water.cell_size) };
+        enc.dispatch_compute(&pipes.arm, &[bytes(&fine), buffer(12, &b.gate), buffer(14, &b.armed)], [1, 1, 1], "gpu_flip.pressure.arm");
         g.dispatch(
             enc,
             &pipes.init,
