@@ -739,8 +739,7 @@ fn gpu_flip_rising_box_does_not_drag_water_up() {
     use crate::node_graph::liquid::conformance::{BoxScene, Fixture, set_node_param};
     let scene = BoxScene::of(Fixture::SubmergedBox).expect("the submerged box");
     let mut def = box_def(Fixture::SubmergedBox);
-    let mass = 0.25 * 1000.0 * scene.edge.powi(3);
-    set_node_param(&mut def, "box_body", "mass", manifold_core::effect_graph_def::SerializedParamValue::Float { value: mass });
+    set_node_param(&mut def, "box_body", "density", manifold_core::effect_graph_def::SerializedParamValue::Float { value: 250.0 });
     let cell = scene.domain_size / scene.resolution as f32;
     let (surface, half) = (scene.fill + 2.0 * cell, 0.5 * scene.edge + cell);
     let mut lifted = Vec::new();

@@ -294,6 +294,7 @@ struct Pipelines {
     gravity: GpuComputePipeline,
     open: GpuComputePipeline,
     solid_velocity: GpuComputePipeline,
+    solid_extrapolate: GpuComputePipeline,
     phi_into_solids: GpuComputePipeline,
     water_from_phi: GpuComputePipeline,
     divergence: GpuComputePipeline,
@@ -343,6 +344,7 @@ impl Pipelines {
             gravity: pipe("face_gravity"),
             open: pipe("open_fractions"),
             solid_velocity: pipe("solid_face_velocity"),
+            solid_extrapolate: pipe("solid_extrapolate"),
             phi_into_solids: pipe("phi_into_solids"),
             water_from_phi: pipe("water_from_phi"),
             divergence: pipe("divergence"),
@@ -621,6 +623,10 @@ fn extend(
         from = to;
     }
 }
+
+/// Layers of the solid velocity's extrapolation (gpu_flip_step.wgsl
+/// SOLID_LAYERS, MeshLevelSet::_numVelocityExtrapolationLayers).
+const SOLID_LAYERS: u32 = 5;
 
 /// Rounds of the sealed-pocket spread: one round of line sweeps crosses the
 /// lattice along each axis, so the cap is the longest side.
@@ -995,7 +1001,7 @@ impl StepState {
             &[
                 uniform(&base),
                 buffer(10, &l.s),
-                buffer(4, &l.v),
+                buffer(4, &l.b),
                 buffer(14, step.bodies),
                 buffer(15, step.shapes),
                 buffer(16, step.atlas),
@@ -1004,6 +1010,19 @@ impl StepState {
             face_groups,
             "gpu_flip.step.solid_velocity",
         );
+        // The samples carried out over the open faces, every solid alike
+        // (meshlevelset.cpp normalizeVelocityGrid): an odd layer count from
+        // the scratch ends in `l.v`.
+        const _: () = assert!(SOLID_LAYERS % 2 == 1);
+        for layer in 0..SOLID_LAYERS {
+            let (from, to) = if layer % 2 == 0 { (&l.b, &l.v) } else { (&l.v, &l.b) };
+            enc.dispatch_compute(
+                &pipes.solid_extrapolate,
+                &[uniform(&base), buffer(3, from), buffer(4, to)],
+                face_groups,
+                "gpu_flip.step.solid_extrapolate",
+            );
+        }
         if solids {
             over_c(enc, &pipes.phi_into_solids, vec![buffer(9, &l.corners), buffer(5, &l.phi)], "gpu_flip.step.phi_into_solids");
         }

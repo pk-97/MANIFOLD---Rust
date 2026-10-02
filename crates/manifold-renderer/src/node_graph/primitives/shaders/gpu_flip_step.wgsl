@@ -698,7 +698,7 @@ fn closest_body(x: vec3<f32>) -> i32 {
 // external acceleration over tick_seconds plus M⁻¹ times the reaction so
 // far this tick. Velocity w is the record's owner code
 // (gpu_flip_bodies.wgsl): each face's body, counted from this tick's first
-// row.
+// row. Weight w is the known mask: bit a set where axis a was sampled.
 @compute @workgroup_size(256)
 fn solid_face_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
     let idx = gid.x;
@@ -714,29 +714,21 @@ fn solid_face_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
     let h = u.cell_size;
     let first = max(u.rows - u.body_count, 0);
     var code = 0.0;
+    var known = 0.0;
     for (var a = 0; a < 3; a = a + 1) {
         if !face_exists(p, n, a) || p[a] == 0 || p[a] == n[a] {
             continue;
         }
-        // An open face beside a cut cell carries a dynamic body too: its
-        // (c − w) is not zero, so it is in the divergence and the body's
-        // pressure force (the engine extrapolates its rigid boundary map one
-        // layer out, RigidBoundaryVelocityMap::extrapolate). That map holds
-        // only coupled rigid bodies; an animated or fixed solid keeps its cut
-        // faces alone, or it drags the water beside it.
-        var lo = p;
-        lo[a] = p[a] - 1;
-        let cut_beside = solid_faces[flatten(lo, m)].face_weight.w < 1.0 || open.face_weight.w < 1.0;
-        let extended = !(open.face_weight[a] < 1.0);
-        if extended && !cut_beside {
+        // Only a face a solid covers is sampled (weight > 0 in
+        // MeshLevelSet::_computeVelocityGridThread); solid_extrapolate
+        // carries the samples out over the open faces.
+        if !(open.face_weight[a] < 1.0) {
             continue;
         }
+        known = known + f32(1u << u32(a));
         var centre = fma(vec3<f32>(p) + vec3<f32>(0.5), vec3<f32>(h), lattice_min);
         centre[a] = fma(f32(p[a]), h, lattice_min[a]);
         let row = closest_body(centre);
-        if extended && (row < 0 || !(bodies[u32(row)].position_inv_mass.w > 0.0)) {
-            continue;
-        }
         if row >= 0 {
             let bd = bodies[u32(row)];
             let body = row - first;
@@ -768,6 +760,88 @@ fn solid_face_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
         out.face_weight[a] = 0.25 * friction;
     }
     out.face_velocity.w = code;
+    out.face_weight.w = known;
+    faces_out[idx] = out;
+}
+
+// Layers of the solid velocity's extrapolation
+// (MeshLevelSet::_numVelocityExtrapolationLayers).
+const SOLID_LAYERS: u32 = 5u;
+
+// A face on the border of axis a's face lattice: on a box wall, or in the
+// first or last layer across it. The engine holds these done from the
+// start (GridUtils::_initializeStatusGridThread): never extrapolated, never
+// a seed, but counted with their value in a neighbour's mean.
+fn solid_border(p: vec3<i32>, a: i32, n: vec3<i32>) -> bool {
+    var top = n - vec3<i32>(1);
+    top[a] = n[a];
+    return any(p == vec3<i32>(0)) || any(p == top);
+}
+
+fn solid_known(s: FaceSample, a: i32) -> bool {
+    return ((u32(s.face_weight.w) >> u32(a)) & 1u) != 0u;
+}
+
+// One thread per face record, `faces_in` to `faces_out`: one layer of the
+// solid velocity's extrapolation (MACVelocityField::extrapolateVelocityField
+// for every solid, GridUtils::extrapolateGridWithObserver). An unknown inner
+// face with a known neighbour in its axis's lattice takes the mean of its
+// known and border neighbours and is known from the next layer; the owner
+// code goes with the first owned known neighbour, so a dynamic body's
+// reaction reaches the faces its velocity reaches (the engine's
+// RigidBoundaryVelocityMap::extrapolate). Run SOLID_LAYERS times.
+@compute @workgroup_size(256)
+fn solid_extrapolate(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    if idx >= face_total() {
+        return;
+    }
+    let n = lattice();
+    let m = n + vec3<i32>(1);
+    let p = unflatten(idx, m);
+    var out = faces_in[idx];
+    var known = u32(out.face_weight.w);
+    var code = u32(out.face_velocity.w);
+    for (var a = 0; a < 3; a = a + 1) {
+        if !face_exists(p, n, a) || solid_border(p, a, n) || solid_known(out, a) {
+            continue;
+        }
+        var top = n - vec3<i32>(1);
+        top[a] = n[a];
+        var sum = 0.0;
+        var count = 0.0;
+        var seeded = false;
+        var owner = 0u;
+        for (var b = 0; b < 3; b = b + 1) {
+            for (var d = -1; d <= 1; d = d + 2) {
+                var q = p;
+                q[b] = p[b] + d;
+                if q[b] < 0 || q[b] > top[b] {
+                    continue;
+                }
+                let s = faces_in[flatten(q, m)];
+                let border = solid_border(q, a, n);
+                if border || solid_known(s, a) {
+                    sum = sum + s.face_velocity[a];
+                    count = count + 1.0;
+                }
+                if !border && solid_known(s, a) {
+                    seeded = true;
+                    let o = (u32(s.face_velocity.w) >> (8u * u32(a))) & 255u;
+                    if owner == 0u {
+                        owner = o;
+                    }
+                }
+            }
+        }
+        if seeded {
+            out.face_velocity[a] = sum / count;
+            known = known | (1u << u32(a));
+            code = code | (owner << (8u * u32(a)));
+        }
+    }
+    out.face_velocity.w = f32(code);
+    out.face_weight.w = f32(known);
     faces_out[idx] = out;
 }
 
