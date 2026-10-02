@@ -73,8 +73,10 @@ struct Params {
     // (tick major from first_tick).
     region_count: i32,
     region_rows: i32,
+    // Half-width of an emitted particle's jitter in cells, a quarter of the
+    // jitter factor (_getMarkerParticleJitter).
+    emit_jitter: f32,
     _pad0: u32,
-    _pad1: u32,
 };
 
 struct CellRange {
@@ -1789,6 +1791,33 @@ fn emit_site_taken(j: vec3<u32>) -> bool {
     return false;
 }
 
+fn emit_hash(x: u32) -> u32 {
+    let s = x * 747796405u + 2891336453u;
+    let w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u;
+    return (w >> 22u) ^ w;
+}
+
+fn emit_unit(x: u32) -> f32 {
+    return f32(emit_hash(x) >> 8u) / 16777216.0;
+}
+
+// Site idx's particle in world space: the site, and where the inflow holds it
+// deeper than a cell, moved uniformly up to emit_jitter cells each way
+// (_addNewFluidCellsThread 8795-8804, _jitterMarkerParticlePosition 4409),
+// keyed by the site and the substep so each substep draws afresh. The move
+// stays inside the site's half cell.
+fn emit_position(idx: u32, inflow: i32) -> vec3<f32> {
+    let j = emit_site(idx);
+    let x = fma(vec3<f32>(0.25) + 0.5 * vec3<f32>(j), vec3<f32>(u.cell_size), u.box_min);
+    if u.emit_jitter <= 0.0 || inflow < 0 || region_distance(inflow, x) >= -u.cell_size {
+        return x;
+    }
+    let substep = u32(u.tick_index) * 64u + u32(u.step_in_tick);
+    let key = idx * 3u + substep * 2654435761u;
+    let unit = vec3<f32>(emit_unit(key), emit_unit(key + 1u), emit_unit(key + 2u));
+    return x + u.cell_size * u.emit_jitter * (2.0 * unit - vec3<f32>(1.0));
+}
+
 // One thread per half-cell site: 1 when an inflow emits there this substep,
 // the site inside an inflow (distance at or below 0) and outside every solid
 // and wall (solid distance above 0), with its half cell empty.
@@ -1800,11 +1829,15 @@ fn emit_flags(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     let j = emit_site(idx);
-    let q = vec3<f32>(0.25) + 0.5 * vec3<f32>(j);
-    let x = fma(q, vec3<f32>(u.cell_size), u.box_min);
+    let x = fma(vec3<f32>(0.25) + 0.5 * vec3<f32>(j), vec3<f32>(u.cell_size), u.box_min);
+    let inflow = region_holding(x, 2.0, true);
     var flag = 0u;
-    if region_holding(x, 2.0, true) >= 0 && solid_at(q, lattice()) > 0.0 && !emit_site_taken(j) {
-        flag = 1u;
+    if inflow >= 0 && !emit_site_taken(j) {
+        // The solid test is at the jittered position, as the engine's.
+        let p = emit_position(idx, inflow);
+        if solid_at((p - u.box_min) / u.cell_size, lattice()) > 0.0 {
+            flag = 1u;
+        }
     }
     emit_scan[idx] = flag;
 }
@@ -1834,6 +1867,7 @@ fn emit_write(@builtin(global_invocation_id) gid: vec3<u32>) {
     let j = emit_site(idx);
     let x = fma(vec3<f32>(0.25) + 0.5 * vec3<f32>(j), vec3<f32>(u.cell_size), u.box_min);
     let inflow = region_holding(x, 2.0, true);
+    let p = emit_position(idx, inflow);
     // (3 / (4π · 8))^(1/3): the sphere of an eighth of a cell, as the fill's.
-    emitted[slot] = FluidParticle(vec4<f32>(x, 0.31017 * u.cell_size), region_velocity(inflow, x), slot + 1u);
+    emitted[slot] = FluidParticle(vec4<f32>(p, 0.31017 * u.cell_size), region_velocity(inflow, p), slot + 1u);
 }

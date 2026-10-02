@@ -1843,6 +1843,32 @@ fn gpu_flip_inflow_emits_at_empty_sites_into_free_slots() {
     }
     let live_after = written.iter().filter(|p| p.position_radius[3] > 0.0).count();
     assert_eq!(live_after, capacity, "the count is the live prefix plus the emitted, up to the pool");
+
+    // Jitter factor 1, the region a full cell deep everywhere: each emitted
+    // particle moves uniformly up to a quarter cell each way, keyed by site
+    // and substep (_jitterMarkerParticlePosition).
+    let params = StepParams { emit_jitter: 0.25, tick_index: 3, step_in_tick: 1, ..params };
+    let jittered: Vec<FluidParticle> = Pass::new()
+        .bind(1, &ranges)
+        .bind(15, &[shape])
+        .bind(16, &atlas)
+        .bind(27, &[row])
+        .bind(28, &scan)
+        .bind(30, &pool)
+        .run("emit_write", &params, 30, pool.len(), site_count);
+    let substep = 3u32 * 64 + 1;
+    let mut spread = 0.0f64;
+    for (slot, &idx) in (sorted.len()..capacity).zip(&emitted) {
+        let x = site([idx % sites[0], (idx / sites[0]) % sites[1], idx / (sites[0] * sites[1])]);
+        let key = (idx as u32).wrapping_mul(3).wrapping_add(substep.wrapping_mul(2_654_435_761));
+        for (a, &site_a) in x.iter().enumerate() {
+            let unit = f64::from(cpu_fill_hash(key.wrapping_add(a as u32)) >> 8) / 16_777_216.0;
+            let want = site_a + f64::from(H) * 0.25 * (2.0 * unit - 1.0);
+            close(jittered[slot].position_radius[a], want, 1.0, "jittered position");
+            spread = spread.max((want - site_a).abs() / f64::from(H));
+        }
+    }
+    assert!(spread > 0.2 && spread <= 0.25, "the draw reaches near a quarter cell and never past it: {spread}");
 }
 
 /// An outflow empties (fluidsimulation.cpp 9011-9031): a particle whose new

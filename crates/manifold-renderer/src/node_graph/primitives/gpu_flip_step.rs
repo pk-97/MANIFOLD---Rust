@@ -146,7 +146,9 @@ pub(crate) struct StepParams {
     pub(crate) closed_faces: u32,
     pub(crate) region_count: i32,
     pub(crate) region_rows: i32,
-    pub(crate) _pad: [u32; 2],
+    /// Half-width of an emitted particle's jitter in cells.
+    pub(crate) emit_jitter: f32,
+    pub(crate) _pad: u32,
 }
 
 /// One pass of the step's shader on its own, for the value proofs against
@@ -940,6 +942,7 @@ crate::primitive! {
         int_param!("body_count", "Bodies", 0.0, 0.0, MAX_FLUID_ROLES as f32),
         int_param!("rows", "Rows", 0.0, 0.0, 16_777_216.0),
         int_param!("region_count", "Regions", 0.0, 0.0, MAX_FLUID_ROLES as f32),
+        float_param!("inflow_jitter", "Inflow Jitter", 0.0, 0.0, 1.0),
         int_param!("steps", "Steps", 1.0, 1.0, 64.0),
         float_param!("flip", "Flip Share", 0.95, 0.0, 1.0),
         int_param!("iterations", "Iterations (0 = Auto)", 0.0, 0.0, MAX_ITERATIONS as f32),
@@ -1099,6 +1102,12 @@ impl Primitive for GpuFlipStep {
         }
         let reaction = reaction_in.unwrap_or(&zeros);
         let regions = regions_in.unwrap_or(&zeros);
+        // The engine refuses a negative jitter (setMarkerParticleJitterFactor).
+        let inflow_jitter = ctx.scalar_or_param("inflow_jitter", 0.0);
+        if !(inflow_jitter.is_finite() && inflow_jitter >= 0.0) {
+            ctx.error(format!("{NAME}: Inflow Jitter must be 0 or more, not {inflow_jitter}"));
+            return;
+        }
         let region_rows = (regions.size / size_of::<LiquidBody>() as u64).min(i32::MAX as u64) as i32;
         let mut step = Step {
             params: StepParams {
@@ -1132,7 +1141,8 @@ impl Primitive for GpuFlipStep {
                 closed_faces,
                 region_count,
                 region_rows,
-                _pad: [0; 2],
+                emit_jitter: 0.25 * inflow_jitter,
+                _pad: 0,
             },
             particles,
             out,

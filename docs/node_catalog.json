@@ -14694,6 +14694,16 @@
           "type": "int"
         },
         {
+          "default": "0",
+          "label": "Inflow Jitter",
+          "name": "inflow_jitter",
+          "range": [
+            "0",
+            "1"
+          ],
+          "type": "float"
+        },
+        {
           "default": "1",
           "label": "Steps",
           "name": "steps",
