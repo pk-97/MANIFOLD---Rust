@@ -706,35 +706,89 @@ fn cloud_counts(run: &Run, particles: &[FluidParticle]) -> (usize, usize, usize,
     (live, water, n.pow(3) - held, live as f64 / held.max(1) as f64)
 }
 
+/// The share of water cells whose density source the beside-air rule raises
+/// to rest: a face neighbour in the box holds no particle and the cell's tent
+/// density, wall sites included, reads under 8 (`density_source`, no bodies).
+#[cfg(feature = "water-race-probes")]
+fn raised_share(run: &Run, particles: &[FluidParticle], water: &[f32]) -> f64 {
+    let (n, h, min) = (run.n() as i64, run.scene.pressure.cell_size(), run.scene.min());
+    let at = |c: [i64; 3]| (c[0] + n * (c[1] + n * c[2])) as usize;
+    let mut bins: Vec<Vec<[f64; 3]>> = vec![Vec::new(); (n * n * n) as usize];
+    for p in particles.iter().filter(|p| p.position_radius[3] > 0.0) {
+        let q: [f64; 3] = std::array::from_fn(|a| (f64::from(p.position_radius[a]) - min[a]) / h);
+        let c: [i64; 3] = std::array::from_fn(|a| (q[a].floor() as i64).clamp(0, n - 1));
+        bins[at(c)].push(q);
+    }
+    let (mut wet, mut raised) = (0usize, 0usize);
+    for z in 0..n {
+        for y in 0..n {
+            for x in 0..n {
+                let p = [x, y, z];
+                if water[at(p)] <= 0.5 {
+                    continue;
+                }
+                wet += 1;
+                let centre = p.map(|i| i as f64 + 0.5);
+                let (mut density, mut beside_air) = (0.0, false);
+                for dz in -1..=1i64 {
+                    for dy in -1..=1i64 {
+                        for dx in -1..=1i64 {
+                            let d = [dx, dy, dz];
+                            let q = [x + dx, y + dy, z + dz];
+                            if q.iter().any(|&i| i < 0 || i >= n) {
+                                density += d.iter().map(|&o| if o == 0 { 1.5 } else { 0.25 }).product::<f64>();
+                                continue;
+                            }
+                            let bin = &bins[at(q)];
+                            for s in bin {
+                                density += (0..3).map(|a| (1.0 - (centre[a] - s[a]).abs()).clamp(0.0, 1.0)).product::<f64>();
+                            }
+                            if d.iter().map(|o| o.abs()).sum::<i64>() == 1 && bin.is_empty() {
+                                beside_air = true;
+                            }
+                        }
+                    }
+                }
+                raised += usize::from(beside_air && density < 8.0);
+            }
+        }
+    }
+    raised as f64 / wet.max(1) as f64
+}
+
 /// BUG-o6dg (thin cloud never comes back), measurement only: a 0.64 m pool
-/// lifted by gravity reversed to +20 m/s² for 60 frames, then
-/// normal gravity for 120. The lift carries a 5 m/s² sideways part: reversed
-/// gravity alone on the seeded flat pool is an exact equilibrium the solve
-/// holds with negative pressure, and the water never leaves the floor. Prints particles, water cells, air cells and
-/// particles per occupied cell, and the first frame with no air cell.
+/// at 64³ lifted for 60 frames by gravity of (+5 sideways, +20 up) m/s²,
+/// then normal gravity to frame 600. Reversed gravity alone on the seeded
+/// flat pool is an exact equilibrium the solve holds with negative pressure,
+/// so the lift needs the sideways part. Every 30 frames: particles, water
+/// cells, air cells, particles per occupied cell, and the share of water
+/// cells the beside-air rule raises to rest.
 #[cfg(feature = "water-race-probes")]
 #[test]
 fn gpu_flip_forced_pool_volume_probe() {
-    for n in [64, 128] {
-        let mut run = Run::new(WaterScene::pool(n, BOX_METRES, 0.64));
-        let mut no_air = None;
-        for frame in 0..=180 {
-            if frame > 0 {
-                let (x, y) = if frame <= 60 { (5.0, 20.0) } else { (0.0, -G) };
-                run.set_gravity(x, y);
-                run.frame();
-            }
-            let particles = run.particles();
-            let (live, water, air, per_cell) = cloud_counts(&run, &particles);
-            if air == 0 && no_air.is_none() {
-                no_air = Some(frame);
-            }
-            if [0, 30, 60, 90, 120, 180].contains(&frame) {
-                println!("forced pool {n}³ frame {frame:3}: {live} particles, {water} water cells, {air} air cells, {per_cell:.3} per occupied cell");
-            }
+    let n = 64;
+    let mut run = Run::new(WaterScene::pool(n, BOX_METRES, 0.64));
+    let mut no_air = None;
+    for frame in 0..=600 {
+        if frame > 0 {
+            let (x, y) = if frame <= 60 { (5.0, 20.0) } else { (0.0, -G) };
+            run.set_gravity(x, y);
+            run.frame();
         }
-        println!("forced pool {n}³: first frame with no air cell {no_air:?}");
+        let particles = run.particles();
+        let (live, water, air, per_cell) = cloud_counts(&run, &particles);
+        if air == 0 && no_air.is_none() {
+            no_air = Some(frame);
+        }
+        if frame % 30 == 0 {
+            let share = raised_share(&run, &particles, &run.water_of(&particles));
+            println!(
+                "forced pool {n}³ frame {frame:3}: {live} particles, {water} water cells, {air} air cells, {per_cell:.3} per occupied cell, {:.1}% of water cells raised to rest",
+                100.0 * share
+            );
+        }
     }
+    println!("forced pool {n}³: first frame with no air cell {no_air:?}");
 }
 
 /// The Dam Break never gains energy: an inviscid solver with closed walls
