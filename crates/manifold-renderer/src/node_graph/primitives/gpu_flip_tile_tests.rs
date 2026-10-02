@@ -353,6 +353,8 @@ fn gpu_flip_sparse_step_matches_dense_bitwise() {
         if let Some(diff) = first_difference(&sparse.run, &dense.run, true) {
             panic!("frame {frame} differs: {diff}");
         }
+        // The lever reaches the solver's tile lists too: the same iterations.
+        assert_eq!(sparse.run.solver(), dense.run.solver(), "frame {frame}: the solver words differ");
     }
     let mean = active.iter().map(|&a| f64::from(a)).sum::<f64>() / active.len() as f64;
     assert!(mean > 0.0 && mean < 1.0, "the sparse run lit {mean} of the tiles on average");

@@ -45,7 +45,7 @@ use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::ports::PortType;
 use crate::node_graph::primitives::dot_products::MAX_ROWS;
 use crate::node_graph::liquid::coupling::REACTION_FLOATS;
-use crate::node_graph::primitives::gpu_flip_bodies::HELD_BYTES as BODY_PASS_BYTES;
+use crate::node_graph::primitives::gpu_flip_bodies::held_bytes as body_pass_bytes;
 use crate::node_graph::primitives::face_sample_component::axis_param;
 use crate::node_graph::primitives::fluid_surface::{boundary_collisions, fluid_settings};
 use crate::node_graph::primitives::liquid_fill::{fill_of, filled_sites, pool_slots};
@@ -1233,7 +1233,7 @@ fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     if x.bytes("reaction").is_some() {
         let bodies = x.scalar("body_count", 0.0).round().clamp(0.0, MAX_FLUID_ROLES as f32) as u64;
         x.covers("reaction", bodies * REACTION_FLOATS as u64 * 4)?;
-        x.hold(BODY_PASS_BYTES);
+        x.hold(body_pass_bytes(cells, bodies as u32));
     }
     // It moves min(particles, out) records: every one.
     x.covers("out", slots * PARTICLE)

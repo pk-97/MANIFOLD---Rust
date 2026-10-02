@@ -170,7 +170,7 @@ pub(crate) fn set_all_tiles(on: bool) {
     ALL_TILES.store(on, std::sync::atomic::Ordering::SeqCst);
 }
 
-fn all_tiles() -> bool {
+pub(super) fn all_tiles() -> bool {
     #[cfg(all(test, feature = "gpu-proofs"))]
     {
         ALL_TILES.load(std::sync::atomic::Ordering::SeqCst)
@@ -1017,7 +1017,11 @@ impl StepState {
             bodies: step.bodies,
         };
         if step.dynamic {
-            self.bodies.prepare(device)?;
+            self.bodies.prepare(device, cells, coupled.count)?;
+            #[cfg(all(test, feature = "gpu-proofs"))]
+            if POISON.load(std::sync::atomic::Ordering::SeqCst) {
+                self.bodies.poison(enc, &coupled);
+            }
         }
         let passes = step.dynamic.then_some((&self.bodies, &coupled));
         self.solver.solve(enc, &water, &l.rhs, &l.pressure, step.pressure, passes)?;
@@ -1045,7 +1049,7 @@ impl StepState {
         // bodies and their velocity change to the solid faces, then the
         // constraint's friction is the bodies' too.
         if step.dynamic {
-            self.bodies.react(enc, &coupled, &l.pressure, &l.f, step.reaction)?;
+            self.bodies.react(enc, &coupled, self.solver.tiles()?, &l.pressure, &l.f, step.reaction)?;
         }
         // The engine constrains its velocity and its saved velocity to the
         // solids after the pressure solve, so FLIP's change is measured

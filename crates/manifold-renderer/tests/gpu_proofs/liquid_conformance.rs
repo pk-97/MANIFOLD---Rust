@@ -881,51 +881,69 @@ const PUSH_ITERATIONS: [u32; 5] = [4, 6, 8, 12, 16];
 const CONVERGED_ITERATIONS: u32 = 64;
 
 /// What the liquid did to a box over a run's last two seconds.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct Push {
     /// Mean force and torque per tick, N and N·m.
     force: [f64; 3],
     torque: [f64; 3],
-    /// The visible shake: the RMS, over ticks, of how far the push moves the
-    /// box's centre and its corners off their mean motion in one tick, m.
-    shake: f64,
-    turn_shake: f64,
+    /// The box's centre and one corner in world space, tick after tick, m.
+    track: Vec<([f64; 3], [f64; 3])>,
+    /// Each tick's pressure iterations and solves that reached the cap.
+    solves: Vec<[u32; 2]>,
+}
+
+/// The step's solver words for the tick: pressure iterations, density
+/// iterations, capped solves (liquid_stats.rs `SOLVER_WORDS`, the tail of the
+/// capped array).
+fn solver_words(run: &LiquidRun) -> [u32; 3] {
+    let words: Vec<u32> = run.read("node.gpu_flip_step", "capped");
+    let tail = &words[words.len() - 7..];
+    [tail[0], tail[1], tail[2]]
+}
+
+/// `v` rotated by the unit quaternion `q` (xyzw).
+fn rotate(q: [f32; 4], v: [f64; 3]) -> [f64; 3] {
+    let [x, y, z, w] = q.map(f64::from);
+    let t = [
+        2.0 * (y * v[2] - z * v[1]),
+        2.0 * (z * v[0] - x * v[2]),
+        2.0 * (x * v[1] - y * v[0]),
+    ];
+    [
+        v[0] + w * t[0] + (y * t[2] - z * t[1]),
+        v[1] + w * t[1] + (z * t[0] - x * t[2]),
+        v[2] + w * t[2] + (x * t[1] - y * t[0]),
+    ]
 }
 
 fn push_at(row: &'static LiquidSolverRow, fixture: Fixture, iterations: u32) -> Push {
     let scene = box_scene(fixture);
     let mass = f64::from(scene.mass);
-    // A corner's distance from the centre.
-    let corner = 0.5 * 3f64.sqrt() * f64::from(scene.edge);
+    let half = 0.5 * f64::from(scene.edge);
     let mut def = self::scene(row, fixture);
     set_type_param(&mut def, "node.gpu_flip_step", "iterations", SerializedParamValue::Int { value: iterations as i32 });
     let mut run = LiquidRun::offline(row, def, 1);
     let settled = run.steps(180);
     let mut previous = run.body(&settled);
-    let (mut pushes, mut spins, mut torques) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut pushes, mut torques, mut track, mut solves) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for _ in 0..120 {
         let probe = run.step();
         assert_eq!(probe.get("ticks"), 1.0, "offline coupled frames each run a tick");
+        let [pressure, _, capped] = solver_words(&run);
+        solves.push([pressure, capped]);
         let body = run.body(&probe);
         pushes.push(liquid_push(&previous, &body));
         let spin = [0, 1, 2].map(|i| v3(body.angular_velocity)[i] - v3(previous.angular_velocity)[i]);
         let rows = [v3(body.inv_inertia_x), v3(body.inv_inertia_y), v3(body.inv_inertia_z)];
         let torque = solve3(rows, spin).expect("the box has a finite inertia");
-        spins.push(spin);
         torques.push(torque.map(|l| l / TICK));
+        let centre = v3(body.position_inv_mass);
+        let arm = rotate(body.rotation, [half, half, half]);
+        track.push((centre, [0, 1, 2].map(|i| centre[i] + arm[i])));
         previous = body;
     }
     let mean = |xs: &[[f64; 3]]| [0, 1, 2].map(|i| xs.iter().map(|x| x[i]).sum::<f64>() / xs.len() as f64);
-    let rms_off_mean = |xs: &[[f64; 3]]| {
-        let m = mean(xs);
-        (xs.iter().map(|x| [0, 1, 2].map(|i| x[i] - m[i])).map(|d| dot(d, d)).sum::<f64>() / xs.len() as f64).sqrt()
-    };
-    Push {
-        force: mean(&pushes).map(|dv| mass * dv / TICK),
-        torque: mean(&torques),
-        shake: rms_off_mean(&pushes) * TICK,
-        turn_shake: rms_off_mean(&spins) * TICK * corner,
-    }
+    Push { force: mean(&pushes).map(|dv| mass * dv / TICK), torque: mean(&torques), track, solves }
 }
 
 fn distance(a: [f64; 3], b: [f64; 3]) -> f64 {
@@ -933,18 +951,34 @@ fn distance(a: [f64; 3], b: [f64; 3]) -> f64 {
     dot(d, d).sqrt()
 }
 
+/// How far a run's box strays from the converged run's, tick by tick: the
+/// largest centre and corner distance over the window, m.
+fn stray(push: &Push, converged: &Push) -> [f64; 2] {
+    push.track.iter().zip(&converged.track).fold([0.0, 0.0], |[c, k], ((a, ak), (b, bk))| {
+        [c.max(distance(*a, *b)), k.max(distance(*ak, *bk))]
+    })
+}
+
 /// GPU_FLIP_PRESSURE_SOLVE.md section 8 (Solids in the water): the net force
 /// and torque the liquid puts on a submerged and a floating box at 4, 6, 8,
 /// 12 and 16 pressure iterations and at the step's Auto, against 64 (at 32³
 /// the solve reaches the f32 floor by 16). A count is steady when its mean
 /// force and torque are within 1% of the converged run's (of the box's
-/// weight, and weight times edge), and it shakes the box no more than the
-/// converged run does plus 1% of a cell, the liquid's own visible grain. The
-/// smallest steady count is the count bodies need; Auto must be steady.
+/// weight, and weight times edge); the smallest steady count is the count
+/// bodies need. Auto must be steady and must converge like a high fixed
+/// count: on every tick of the window its solve meets the tolerance (never
+/// the cap), and the counts it took are reported against the fixed ones.
+/// Both bars are deterministic reads of the runs. Two statistics were tried
+/// and rejected: a frame-to-frame shake threshold swings about 0.02 cells
+/// between neighbouring counts with the solve's last bits, and the box's
+/// stray from the 64-iteration trajectory measures the floating box's
+/// sensitivity, not convergence — 16 tracks 64 bit for bit while 6, 8, 12
+/// and Auto all stray 0.7–1.6 cells in no order. The strays are printed for
+/// the record only.
 #[test]
 fn gpu_flip_body_push_against_iterations() {
     let row = LIQUID_SOLVERS.iter().find(|row| row.type_id == GPU_FLIP_DOMAIN_TYPE_ID).expect("the GPU FLIP row");
-    let mut unsteady_auto = Vec::new();
+    let mut failed_auto = Vec::new();
     for fixture in [Fixture::SubmergedBox, Fixture::FloatingBox] {
         let scene = box_scene(fixture);
         let weight = f64::from(scene.mass) * G;
@@ -952,47 +986,47 @@ fn gpu_flip_body_push_against_iterations() {
         let dx = cell(&scene);
         let converged = push_at(row, fixture, CONVERGED_ITERATIONS);
         eprintln!(
-            "gpu_flip_body_push {fixture:?} at {CONVERGED_ITERATIONS}: force {:?} N against weight {weight:.1} N, torque {:?} N·m, \
-             shake {:.4} / turn {:.4} cells",
-            converged.force,
-            converged.torque,
-            converged.shake / dx,
-            converged.turn_shake / dx
+            "gpu_flip_body_push {fixture:?} at {CONVERGED_ITERATIONS}: force {:?} N against weight {weight:.1} N, torque {:?} N·m",
+            converged.force, converged.torque
         );
         let mut smallest = None;
         // 0 is the step's Auto.
         for iterations in PUSH_ITERATIONS.into_iter().chain([0]) {
             let push = push_at(row, fixture, iterations);
-            let off = [
-                distance(push.force, converged.force) / weight,
-                distance(push.torque, converged.torque) / lever,
-                (push.shake - converged.shake) / dx,
-                (push.turn_shake - converged.turn_shake) / dx,
-            ];
+            let off = [distance(push.force, converged.force) / weight, distance(push.torque, converged.torque) / lever];
             let steady = off.iter().all(|x| *x <= 0.01);
+            let strays = stray(&push, &converged);
+            let counts = push.solves.iter().fold([u32::MAX, 0], |[lo, hi], s| [lo.min(s[0]), hi.max(s[0])]);
+            let capped: u32 = push.solves.iter().map(|s| s[1]).sum();
             let label = if iterations == 0 { "Auto".to_string() } else { iterations.to_string() };
             eprintln!(
                 "gpu_flip_body_push {fixture:?} at {label}: force {:?} N, torque {:?} N·m; off converged by force {:.3}%, \
-                 torque {:.3}%; shake {:.4} / turn {:.4} cells, extra {:+.4} / {:+.4}{}",
+                 torque {:.3}%; {}..{} iterations a tick, {capped} capped; strays from {CONVERGED_ITERATIONS} by centre {:.4} / corner {:.4} cells{}",
                 push.force,
                 push.torque,
                 off[0] * 100.0,
                 off[1] * 100.0,
-                push.shake / dx,
-                push.turn_shake / dx,
-                off[2],
-                off[3],
+                counts[0],
+                counts[1],
+                strays[0] / dx,
+                strays[1] / dx,
                 if steady { ", steady" } else { "" }
             );
-            if iterations == 0 && !steady {
-                unsteady_auto.push(fixture);
-            } else if iterations > 0 && steady && smallest.is_none() {
+            assert!(counts[0] > 0, "{fixture:?} at {label}: a tick ran no pressure iterations");
+            if iterations == 0 {
+                if !steady || capped > 0 {
+                    failed_auto.push((fixture, steady, capped));
+                }
+            } else if steady && smallest.is_none() {
                 smallest = Some(iterations);
             }
         }
         eprintln!("gpu_flip_body_push {fixture:?}: smallest steady count {smallest:?}");
     }
-    assert!(unsteady_auto.is_empty(), "Auto pressure iterations do not push the box steadily in {unsteady_auto:?}");
+    assert!(
+        failed_auto.is_empty(),
+        "Auto pressure iterations are not steady or hit the cap (fixture, steady, capped solves): {failed_auto:?}"
+    );
 }
 
 /// I5: before it touches the liquid, the coupled box is drawn exactly where
