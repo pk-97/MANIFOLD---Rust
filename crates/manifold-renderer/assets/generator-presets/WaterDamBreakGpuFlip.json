@@ -485,7 +485,7 @@
               },
               "particle_scale": {
                 "type": "Float",
-                "value": 2.2
+                "value": 2.200000047683716
               },
               "smoothing": {
                 "type": "Float",
@@ -1316,7 +1316,7 @@
         },
         "particle_scale": {
           "type": "Float",
-          "value": 2.2
+          "value": 2.200000047683716
         },
         "smoothing_passes": {
           "type": "Float",
@@ -2364,7 +2364,7 @@
         "convert": {
           "type": "Float"
         },
-        "defaultValue": 2.2,
+        "defaultValue": 2.200000047683716,
         "id": "surface_particle_scale",
         "label": "Surface Particle Scale",
         "target": {
@@ -2511,7 +2511,7 @@
         "wholeNumbers": true
       },
       {
-        "defaultValue": 2.2,
+        "defaultValue": 2.200000047683716,
         "formatString": "F3",
         "id": "surface_particle_scale",
         "isToggle": false,
