@@ -77,6 +77,8 @@ Survey: `rg 'purpose: "' crates/manifold-renderer/src/node_graph/primitives/ -g 
 
 **D5 — Grid outputs are MAC faces in the FLIP engine's layout, resampled by the producer.** Faces because two of the three solvers are face-native and whitewater's potentials are face-based. The engine's layout because BUG-imy3 feeds the C++ whitewater lifecycle through shared memory, and a matching layout means no copy. The distance field comes from the surface group, not the solvers. Rejected: node velocities as the contract (SWASH would need the face→node bridge its D2 rejects); consumers that switch on a solver's native layout; per-solver distance outputs (MPM has none, SWASH has only cell flags, and the surface already builds the one the look uses).
 
+**BUG-215v amendment (Peter approved 2026-10-03):** GPU FLIP whitewater consumes the solver's per-step cell-centred particle φ inside the liquid tick region. This supersedes D5's surface-only distance restriction for that consumer; see GPU_WHITEWATER_DESIGN.md D3/D5. Pool, counters, IDs and rendering populations cross the liquid boundary as captured `results`.
+
 **D6 — Coupling is liquid-first lockstep at 1/60 s, one reaction per tick (section 3.3).** It is MPM's protocol (GPU_MPM_SOLVER_DESIGN.md section 5 (Coupling protocol), D25–D30) with the solver-specific parts (fixed-point words, the substep bound) left in MPM. FLIP's synchronous exchange meets it as built. Rejected: Box3D stepping inside a GPU solver's substeps (a CPU wait per substep); an owner type per solver.
 
 **D7 — An incompressible solver solves its bodies with the pressure.** Holding the body during the solve and applying the reaction after is the scheme FLIP measured at 16.1× and 23.7× body energy (section 1.2). SWASH P3b's plan is that scheme, so it is amended: each dynamic body adds six unknowns to the Krylov solve (the Jᵀ M⁻¹ J term FLIP's mass-aware PCG uses), proved in `scripts/swash_reference.py` first. A weakly compressible solver (MPM) keeps its per-substep GPU body integrator. Rejected: smaller ticks or more substeps (halving dt did not help); a damping term (it changes the physics feel, which is Peter's call, and hides the error).
@@ -125,7 +127,7 @@ The producer resamples; no consumer sees a native layout:
 - MPM: `node.matter_face_component` averages the four grid nodes around each face centre, after the lattice padding (`R/matter.rs:287`, `:300`).
 - FLIP: no grid (D3).
 
-The liquid distance field is not a solver output. The Liquid Surface group already builds it (`R/primitives/particle_volume.rs:54`: distance to the nearest blob, negative inside, capped at a tenth of a bin outside). The group exports it as `level_set` with `level_set_bounds` and `level_set_nodes_x/y/z`. Whitewater owns the one atom that resamples or re-distances it onto the lattice it needs.
+The surface distance remains a rendering output. GPU FLIP additionally publishes its existing particle distance for per-tick whitewater (BUG-215v). The Liquid Surface group already builds it (`R/primitives/particle_volume.rs:54`: distance to the nearest blob, negative inside, capped at a tenth of a bin outside). The group exports it as `level_set` with `level_set_bounds` and `level_set_nodes_x/y/z`. Whitewater owns the one atom that resamples or re-distances it onto the lattice it needs.
 
 ### 3.3 Two-way Box3D coupling
 

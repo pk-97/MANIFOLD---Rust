@@ -371,6 +371,7 @@ mod whitewater_pool_cpu;
 mod whitewater_pool_tests;
 pub(crate) mod whitewater_lifecycle;
 pub(crate) mod whitewater_step;
+mod pad_distance_lattice;
 #[cfg(test)]
 mod whitewater_step_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]

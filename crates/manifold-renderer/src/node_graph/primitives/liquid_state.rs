@@ -8,20 +8,28 @@
 //! sized from the lattice wires before the region runs, so it is whole from
 //! the first frame and holds while the transport is paused.
 
-use manifold_gpu::GpuBuffer;
+use manifold_gpu::{GpuBuffer, GpuDevice};
 
 use super::gpu_flip_step::face_bytes;
 use super::liquid_stats::{LIQUID_STATS_WORDS, LiquidTickStats};
+use super::whitewater_step::{DEFAULT_CAPACITY as WHITEWATER_DEFAULT_CAPACITY, MAX_CAPACITY as WHITEWATER_MAX_CAPACITY};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid_particles::{FaceSample, FluidParticle};
 use crate::node_graph::liquid::lattice::LiquidLattice;
 use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::primitive::Primitive;
 use crate::node_graph::substeps::{SubstepBoundaryPorts, SubstepResultPorts};
+use crate::node_graph::whitewater::{WHITEWATER_EMPTY, WhitewaterParticle};
 
 const RESULTS: &[SubstepResultPorts] = &[
-    SubstepResultPorts { capture: "stats_in", output: "stats" },
-    SubstepResultPorts { capture: "faces_in", output: "faces" },
+    SubstepResultPorts { capture: "stats_in", output: "stats", optional: false },
+    SubstepResultPorts { capture: "faces_in", output: "faces", optional: false },
+    SubstepResultPorts { capture: "whitewater_pool_in", output: "whitewater_pool", optional: true },
+    SubstepResultPorts { capture: "whitewater_state_in", output: "whitewater_state", optional: true },
+    SubstepResultPorts { capture: "whitewater_counts_in", output: "whitewater_counts", optional: true },
+    SubstepResultPorts { capture: "foam_particles_in", output: "foam_particles", optional: true },
+    SubstepResultPorts { capture: "bubble_particles_in", output: "bubble_particles", optional: true },
+    SubstepResultPorts { capture: "spray_particles_in", output: "spray_particles", optional: true },
 ];
 
 /// The region's contract. The one iteration scalar is the tick's index in
@@ -39,12 +47,20 @@ pub const LIQUID_STATE_PORTS: SubstepBoundaryPorts = SubstepBoundaryPorts {
 /// Stats readbacks in flight: the GPU writes a slot at the end of a frame's
 /// region, the CPU reads it once the frame clock says that frame retired.
 const READBACK_SLOTS: usize = 3;
+const WHITEWATER_STATE_WORDS: u32 = 8;
+const WHITEWATER_COUNT_WORDS: u32 = 8;
 
 pub struct ReadbackSlot {
     buffer: GpuBuffer,
     stamp: u64,
     epoch: u32,
     pending: bool,
+}
+
+fn create_shared_buffer(device: &GpuDevice, bytes: u64) -> Result<GpuBuffer, String> {
+    crate::node_graph::scene_modifier_expand::admit_candidate_bytes(device.modifier_memory_snapshot(), bytes)
+        .map_err(|error| error.to_string())
+        .and_then(|()| device.try_create_buffer_shared(bytes).map_err(|error| error.to_string()))
 }
 
 crate::primitive! {
@@ -56,7 +72,14 @@ crate::primitive! {
         in: Array(FluidParticle) required,
         stats_in: Array(u32) required,
         faces_in: Array(FaceSample) required,
+        whitewater_pool_in: Array(WhitewaterParticle) optional,
+        whitewater_state_in: Array(u32) optional,
+        whitewater_counts_in: Array(u32) optional,
+        foam_particles_in: Array(FluidParticle) optional,
+        bubble_particles_in: Array(FluidParticle) optional,
+        spray_particles_in: Array(FluidParticle) optional,
         count: ScalarF32 optional,
+        whitewater_capacity: ScalarF32 optional,
         ticks: ScalarF32 optional,
         epoch: ScalarF32 optional,
         nodes_x: ScalarF32 optional,
@@ -67,6 +90,12 @@ crate::primitive! {
         out: Array(FluidParticle),
         stats: Array(u32),
         faces: Array(FaceSample),
+        whitewater_pool: Array(WhitewaterParticle),
+        whitewater_state: Array(u32),
+        whitewater_counts: Array(u32),
+        foam_particles: Array(FluidParticle),
+        bubble_particles: Array(FluidParticle),
+        spray_particles: Array(FluidParticle),
         tick_index: ScalarF32,
         live_count: ScalarF32,
         fault: ScalarF32,
@@ -91,10 +120,67 @@ crate::primitive! {
         faulted: bool = false,
         last_stats: Option<LiquidTickStats> = None,
         faces: Option<GpuBuffer> = None,
+        whitewater_pool: Option<GpuBuffer> = None,
+        whitewater_empty: Option<GpuBuffer> = None,
+        whitewater_state: Option<GpuBuffer> = None,
+        whitewater_counts: Option<GpuBuffer> = None,
+        foam_particles: Option<GpuBuffer> = None,
+        bubble_particles: Option<GpuBuffer> = None,
+        spray_particles: Option<GpuBuffer> = None,
+        whitewater_capacity: u32 = 0,
     },
 }
 
 impl LiquidState {
+    fn ensure_whitewater_buffers(
+        &mut self,
+        device: &GpuDevice,
+        active: [bool; 6],
+        capacity: u32,
+    ) -> Result<bool, String> {
+        let [pool_active, state_active, counts_active, foam_active, bubble_active, spray_active] = active;
+        let pool_bytes = u64::from(capacity) * std::mem::size_of::<WhitewaterParticle>() as u64;
+        let particle_bytes = u64::from(capacity) * std::mem::size_of::<FluidParticle>() as u64;
+        let state_bytes = u64::from(WHITEWATER_STATE_WORDS) * 4;
+        let count_bytes = u64::from(WHITEWATER_COUNT_WORDS) * 4;
+        let mut resized = false;
+
+        let mut ensure = |slot: &mut Option<GpuBuffer>, active: bool, bytes: u64| -> Result<(), String> {
+            if !active {
+                return Ok(());
+            }
+            if slot.as_ref().is_some_and(|buffer| buffer.size == bytes) {
+                return Ok(());
+            }
+            *slot = Some(create_shared_buffer(device, bytes.max(4))?);
+            resized = true;
+            Ok(())
+        };
+        ensure(&mut self.whitewater_pool, pool_active, pool_bytes)?;
+        ensure(&mut self.whitewater_state, state_active, state_bytes)?;
+        ensure(&mut self.whitewater_counts, counts_active, count_bytes)?;
+        ensure(&mut self.foam_particles, foam_active, particle_bytes)?;
+        ensure(&mut self.bubble_particles, bubble_active, particle_bytes)?;
+        ensure(&mut self.spray_particles, spray_active, particle_bytes)?;
+
+        if pool_active && self.whitewater_empty.as_ref().is_none_or(|buffer| buffer.size != pool_bytes) {
+            let template = create_shared_buffer(device, pool_bytes.max(4))?;
+            let Some(ptr) = template.mapped_ptr() else {
+                return Err("whitewater pool's empty template is not CPU-mappable".to_string());
+            };
+            let empty = WhitewaterParticle { kind: WHITEWATER_EMPTY, ..WhitewaterParticle::default() };
+            // SAFETY: the shared buffer is exactly `capacity` records and is
+            // private to this node; the template is never written by a GPU pass.
+            unsafe {
+                std::slice::from_raw_parts_mut(ptr.cast::<WhitewaterParticle>(), capacity as usize).fill(empty);
+            }
+            self.whitewater_empty = Some(template);
+            resized = true;
+        }
+        self.whitewater_capacity = capacity;
+        Ok(resized)
+    }
+
     /// Read every retired readback of the current epoch, newest last.
     fn poll_readbacks(&mut self, clock: Option<&manifold_gpu::FrameClock>) {
         let Some(epoch) = self.epoch else { return };
@@ -127,19 +213,56 @@ impl LiquidState {
 
 impl Primitive for LiquidState {
     fn state_capture_input_ports(&self) -> &'static [&'static str] {
-        &["in", "stats_in", "faces_in"]
+        &[
+            "in",
+            "stats_in",
+            "faces_in",
+            "whitewater_pool_in",
+            "whitewater_state_in",
+            "whitewater_counts_in",
+            "foam_particles_in",
+            "bubble_particles_in",
+            "spray_particles_in",
+        ]
     }
 
     fn persistent_output_ports(&self) -> &'static [&'static str] {
-        &["out", "stats"]
+        &[
+            "out",
+            "stats",
+            "whitewater_pool",
+            "whitewater_state",
+            "whitewater_counts",
+            "foam_particles",
+            "bubble_particles",
+            "spray_particles",
+        ]
     }
 
     fn provides_array_output(&self, port: &str) -> bool {
-        port == "faces"
+        matches!(
+            port,
+            "faces"
+                | "whitewater_pool"
+                | "whitewater_state"
+                | "whitewater_counts"
+                | "foam_particles"
+                | "bubble_particles"
+                | "spray_particles"
+        )
     }
 
     fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
-        (port == "faces").then_some(self.faces.as_ref()).flatten()
+        match port {
+            "faces" => self.faces.as_ref(),
+            "whitewater_pool" => self.whitewater_pool.as_ref(),
+            "whitewater_state" => self.whitewater_state.as_ref(),
+            "whitewater_counts" => self.whitewater_counts.as_ref(),
+            "foam_particles" => self.foam_particles.as_ref(),
+            "bubble_particles" => self.bubble_particles.as_ref(),
+            "spray_particles" => self.spray_particles.as_ref(),
+            _ => None,
+        }
     }
 
     fn substep_boundary(&self) -> Option<SubstepBoundaryPorts> {
@@ -157,7 +280,13 @@ impl Primitive for LiquidState {
             "stats" => Some(LIQUID_STATS_WORDS),
             // Provided storage: a one-record hint, sized at run time from the
             // body's faces, which the plan allocates after this node.
-            "faces" => Some(1),
+            "faces"
+            | "whitewater_pool"
+            | "whitewater_state"
+            | "whitewater_counts"
+            | "foam_particles"
+            | "bubble_particles"
+            | "spray_particles" => Some(1),
             _ => None,
         }
     }
@@ -165,6 +294,13 @@ impl Primitive for LiquidState {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let whole = |v: f32| v.round().max(0.0) as u32;
         let count = whole(ctx.scalar_or_param("count", 0.0));
+        let capacity = ctx.scalar_or_param("whitewater_capacity", WHITEWATER_DEFAULT_CAPACITY as f32).round();
+        if ctx.inputs.slot("whitewater_pool_in").is_some() && !(1.0..=WHITEWATER_MAX_CAPACITY as f32).contains(&capacity) {
+            self.pending = 0;
+            ctx.error(format!("Liquid State: whitewater capacity {capacity} is outside 1 to {WHITEWATER_MAX_CAPACITY}"));
+            return;
+        }
+        let whitewater_capacity = capacity as u32;
         let ticks = whole(ctx.scalar_or_param("ticks", 0.0));
         let epoch = whole(ctx.scalar_or_param("epoch", 0.0));
         let seed = ctx.inputs.array("seed");
@@ -182,10 +318,20 @@ impl Primitive for LiquidState {
             LiquidLattice::from_wires(ctx, "Liquid State").map(|lattice| face_bytes(lattice.cells()))
         }
         .filter(|_| ctx.outputs.array("faces").is_some());
+        let whitewater_active = std::array::from_fn(|i| ctx.inputs.slot(RESULTS[i + 2].capture).is_some());
         let gpu = ctx.gpu_encoder();
         let clock = gpu.device.frame_clock();
         let stats_bytes = u64::from(LIQUID_STATS_WORDS) * 4;
-        let zero_stats = self.zero_stats.get_or_insert_with(|| gpu.device.create_buffer(stats_bytes));
+        let zero_stats = self.zero_stats.get_or_insert_with(|| gpu.device.create_buffer(stats_bytes)).clone();
+        let old_whitewater_capacity = self.whitewater_capacity;
+        let whitewater_resized = match self.ensure_whitewater_buffers(gpu.device, whitewater_active, whitewater_capacity) {
+            Ok(resized) => resized,
+            Err(error) => {
+                refused = Some(format!("Liquid State: whitewater buffers could not be allocated: {error}"));
+                false
+            }
+        };
+        let whitewater_reset = whitewater_resized || old_whitewater_capacity != whitewater_capacity;
 
         // The faces are the lattice's face grid, held across frames; unwired
         // or refused, none.
@@ -217,7 +363,8 @@ impl Primitive for LiquidState {
                 gpu.native_enc.clear_buffer(faces);
             }
         }
-        if self.epoch != Some(epoch) {
+        let epoch_reset = self.epoch != Some(epoch);
+        if epoch_reset {
             self.epoch = Some(epoch);
             self.ticks_done = 0;
             self.faulted = false;
@@ -229,13 +376,30 @@ impl Primitive for LiquidState {
                 }
             }
             if let Some(stats) = stats {
-                gpu.native_enc.clear_buffer(zero_stats);
-                gpu.native_enc.copy_buffer_to_buffer(zero_stats, stats, stats_bytes.min(stats.size));
+                gpu.native_enc.clear_buffer(&zero_stats);
+                gpu.native_enc.copy_buffer_to_buffer(&zero_stats, stats, stats_bytes.min(stats.size));
+            }
+        }
+        if epoch_reset || whitewater_reset {
+            if let (Some(template), Some(pool)) = (&self.whitewater_empty, &self.whitewater_pool) {
+                gpu.native_enc.copy_buffer_to_buffer(template, pool, template.size.min(pool.size));
+            }
+            for buffer in [
+                self.whitewater_state.as_ref(),
+                self.whitewater_counts.as_ref(),
+                self.foam_particles.as_ref(),
+                self.bubble_particles.as_ref(),
+                self.spray_particles.as_ref(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                gpu.native_enc.clear_buffer(buffer);
             }
         }
         self.poll_readbacks(clock.as_ref());
 
-        self.pending = if self.faulted { 0 } else { ticks };
+        self.pending = if self.faulted || refused.is_some() { 0 } else { ticks };
         self.captures = 0;
         let live = self.last_stats.map_or(count, |s| s.live);
         ctx.outputs.set_scalar("live_count", ParamValue::Float(live as f32));
@@ -267,7 +431,16 @@ impl Primitive for LiquidState {
 
     fn late_capture(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         // A body that writes fresh storage is accepted by copy.
-        for (candidate, state) in [("in", "out"), ("stats_in", "stats")] {
+        for (candidate, state) in [
+            ("in", "out"),
+            ("stats_in", "stats"),
+            ("whitewater_pool_in", "whitewater_pool"),
+            ("whitewater_state_in", "whitewater_state"),
+            ("whitewater_counts_in", "whitewater_counts"),
+            ("foam_particles_in", "foam_particles"),
+            ("bubble_particles_in", "bubble_particles"),
+            ("spray_particles_in", "spray_particles"),
+        ] {
             if let (Some(candidate), Some(state)) = (ctx.inputs.array(candidate), ctx.outputs.array(state))
                 && !candidate.ptr_eq(state)
             {

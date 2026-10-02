@@ -60,6 +60,8 @@ impl SubstepBoundaryPorts {
 pub struct SubstepResultPorts {
     pub capture: &'static str,
     pub output: &'static str,
+    /// May be absent only when both capture and output are unwired.
+    pub optional: bool,
 }
 
 /// One contracted repeat region of an
@@ -166,19 +168,38 @@ pub(crate) fn derive_regions(
         }
 
         let mut producers: Vec<NodeInstanceId> = Vec::new();
-        for cap in ports.capture_ports() {
-            let Some(wire) = graph
-                .wires_into(boundary)
-                .find(|w| w.to.1 == cap)
-            else {
+        for result in ports.results {
+            let capture = graph.wires_into(boundary).find(|w| w.to.1 == result.capture);
+            if capture.is_none() && result.optional {
+                if graph.wires_from(boundary).any(|w| w.from.1 == result.output) {
+                    return Err(malformed(
+                        boundary,
+                        boundary,
+                        format!(
+                            "optional result output `{}` is wired but capture port `{}` has no wire",
+                            result.output, result.capture
+                        ),
+                    ));
+                }
+                continue;
+            }
+            let Some(wire) = capture else {
                 return Err(malformed(
                     boundary,
                     boundary,
-                    format!("capture port `{cap}` has no wire"),
+                    format!("capture port `{}` has no wire", result.capture),
                 ));
             };
             producers.push(wire.from.0);
         }
+        let Some(wire) = graph.wires_into(boundary).find(|w| w.to.1 == ports.capture) else {
+            return Err(malformed(
+                boundary,
+                boundary,
+                format!("capture port `{}` has no wire", ports.capture),
+            ));
+        };
+        producers.insert(0, wire.from.0);
         declared.push((boundary, ports, producers));
     }
 
@@ -791,6 +812,7 @@ mod tests {
     const STATS: &[SubstepResultPorts] = &[SubstepResultPorts {
         capture: "stats_in",
         output: "stats",
+        optional: false,
     }];
 
     const PORTS: SubstepBoundaryPorts = SubstepBoundaryPorts {
@@ -804,6 +826,17 @@ mod tests {
 
     const PORTS_WITH_STATS: SubstepBoundaryPorts = SubstepBoundaryPorts {
         results: STATS,
+        ..PORTS
+    };
+
+    const OPTIONAL_WHITEWATER: &[SubstepResultPorts] = &[SubstepResultPorts {
+        capture: "whitewater_pool_in",
+        output: "whitewater_pool",
+        optional: true,
+    }];
+
+    const PORTS_WITH_OPTIONAL_WHITEWATER: SubstepBoundaryPorts = SubstepBoundaryPorts {
+        results: OPTIONAL_WHITEWATER,
         ..PORTS
     };
 
@@ -867,6 +900,26 @@ mod tests {
                     vec![output("out", PortType::Texture2D)],
                 )
             }
+        }
+
+        fn boundary_with_optional_whitewater() -> Self {
+            let mut node = Self::new(
+                "test.substep_boundary_optional_whitewater",
+                vec![
+                    input("seed", PortType::Texture2D, false),
+                    input("in", PortType::Texture2D, false),
+                    input("whitewater_pool_in", PortType::Texture2D, false),
+                ],
+                vec![
+                    output("out", PortType::Texture2D),
+                    output("step_dt", PortType::Scalar(ScalarType::F32)),
+                    output("step_index", PortType::Scalar(ScalarType::F32)),
+                    output("whitewater_pool", PortType::Texture2D),
+                ],
+            );
+            node.boundary = Some(PORTS_WITH_OPTIONAL_WHITEWATER);
+            node.capture_inputs = &["in", "whitewater_pool_in"];
+            node
         }
     }
 
@@ -1110,6 +1163,41 @@ mod tests {
         let (b, _, reason) = malformed_parts(compile(&graph).unwrap_err());
         assert_eq!(b, boundary);
         assert!(reason.contains("`stats_in` has no wire"), "{reason}");
+    }
+
+    #[test]
+    fn substeps_region_unwired_optional_capture_is_allowed() {
+        let mut graph = Graph::new();
+        let src = source(&mut graph, "src");
+        let boundary = graph.add_node(Box::new(TestNode::boundary_with_optional_whitewater()));
+        let body = pass(&mut graph, "body");
+        let consumer = sink(&mut graph, "consumer");
+        graph.connect((src, "out"), (boundary, "seed")).unwrap();
+        graph.connect((boundary, "out"), (body, "a")).unwrap();
+        graph.connect((body, "out"), (boundary, "in")).unwrap();
+        graph.connect((boundary, "out"), (consumer, "tex")).unwrap();
+
+        let plan = compile(&graph).expect("unwired optional result is absent");
+        assert_eq!(plan.substep_regions().len(), 1);
+    }
+
+    #[test]
+    fn substeps_region_optional_output_without_capture_is_rejected() {
+        let mut graph = Graph::new();
+        let src = source(&mut graph, "src");
+        let boundary = graph.add_node(Box::new(TestNode::boundary_with_optional_whitewater()));
+        let body = pass(&mut graph, "body");
+        let consumer = sink(&mut graph, "consumer");
+        graph.connect((src, "out"), (boundary, "seed")).unwrap();
+        graph.connect((boundary, "out"), (body, "a")).unwrap();
+        graph.connect((body, "out"), (boundary, "in")).unwrap();
+        graph.connect((boundary, "out"), (consumer, "tex")).unwrap();
+        graph.connect((boundary, "whitewater_pool"), (consumer, "aux")).unwrap();
+
+        let (b, _, reason) = malformed_parts(compile(&graph).unwrap_err());
+        assert_eq!(b, boundary);
+        assert!(reason.contains("optional result output `whitewater_pool`"), "{reason}");
+        assert!(reason.contains("whitewater_pool_in"), "{reason}");
     }
 
     #[test]
