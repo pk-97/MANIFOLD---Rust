@@ -224,13 +224,14 @@ impl Run {
         self.scene.pressure.n
     }
 
-    /// The force hook: the domain's uniform acceleration (Gravity Y), m/s²,
-    /// from the next frame on. A uniform force field and gravity enter the
-    /// step identically, at every face.
+    /// The force hook: the domain's uniform acceleration (Gravity X and Y),
+    /// m/s², from the next frame on. A uniform force field and gravity enter
+    /// the step identically, at every face.
     #[cfg(feature = "water-race-probes")]
-    pub(super) fn set_gravity_y(&mut self, g: f64) {
+    pub(super) fn set_gravity(&mut self, x: f64, y: f64) {
         let domain = node_named(&self.graph, "domain");
-        self.graph.set_param(domain, "gravity", crate::node_graph::ParamValue::Float(g as f32)).expect("gravity");
+        self.graph.set_param(domain, "gravity_x", crate::node_graph::ParamValue::Float(x as f32)).expect("gravity_x");
+        self.graph.set_param(domain, "gravity", crate::node_graph::ParamValue::Float(y as f32)).expect("gravity");
     }
 
     /// Switch the executor's encode replay; the fill frame already ran
@@ -707,7 +708,9 @@ fn cloud_counts(run: &Run, particles: &[FluidParticle]) -> (usize, usize, usize,
 
 /// BUG-o6dg (thin cloud never comes back), measurement only: a 0.64 m pool
 /// lifted by gravity reversed to +20 m/s² for 60 frames, then
-/// normal gravity for 120. Prints particles, water cells, air cells and
+/// normal gravity for 120. The lift carries a 5 m/s² sideways part: reversed
+/// gravity alone on the seeded flat pool is an exact equilibrium the solve
+/// holds with negative pressure, and the water never leaves the floor. Prints particles, water cells, air cells and
 /// particles per occupied cell, and the first frame with no air cell.
 #[cfg(feature = "water-race-probes")]
 #[test]
@@ -717,7 +720,8 @@ fn gpu_flip_forced_pool_volume_probe() {
         let mut no_air = None;
         for frame in 0..=180 {
             if frame > 0 {
-                run.set_gravity_y(if frame <= 60 { 20.0 } else { -G });
+                let (x, y) = if frame <= 60 { (5.0, 20.0) } else { (0.0, -G) };
+                run.set_gravity(x, y);
                 run.frame();
             }
             let particles = run.particles();
