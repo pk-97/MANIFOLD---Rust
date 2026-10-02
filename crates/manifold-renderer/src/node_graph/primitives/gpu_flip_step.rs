@@ -220,8 +220,8 @@ pub(crate) struct StepParams {
     pub(crate) closed_faces: u32,
     /// 1: every tile is active (the test-only oracle, [`set_all_tiles`]).
     pub(crate) all_tiles: u32,
-    /// The ring a sparse pass's reads are capped at (unused until a pass
-    /// takes a ring).
+    /// The ring a sparse pass's reads are capped at. Unused while the extend
+    /// is dense (design D-4); Phase 2's coarse levels take it.
     pub(crate) ring_cap: u32,
     /// [`ring_max`] for this step: the table's extent.
     pub(crate) ring_max: u32,
