@@ -131,7 +131,7 @@ Obsolete when: main stops being a locally-landed shared trunk (PR/CI-gated merge
   marker at that exact tip), `cargo deny check bans`, touched-crate clippy
   `--tests` + touched-crate nextest, and `scripts/gpu_proofs_gate.py` when
   the diff touches GPU paths (scoped: mapped tests + smoke set from
-  `scripts/gpu_scope.py`, 300s test-time budget, unmapped GPU path fails,
+  `scripts/gpu_scope.py`, 360s test-time budget, unmapped GPU path fails,
   `glb_conformance` only for glTF paths; the whole suite is `--all`, nightly).
   Scoped runs skip any test measured over 60s in the committed
   `scripts/gpu_test_times.json` (tests missing from it run). Nightly
