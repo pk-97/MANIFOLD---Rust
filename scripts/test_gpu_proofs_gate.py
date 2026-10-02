@@ -155,22 +155,74 @@ class GpuProofsGateTests(unittest.TestCase):
         code, _ = self.summary([("a", 9999.0, "b", True)], None)
         self.assertEqual(code, 0)
 
-    def run_main(self, argv, repo_changed=None):
+    def run_main(self, argv, repo_changed=None, build_exit=0):
         calls = []
+        self.events = events = []
 
         def fake_run_gate(manifest, filters, skips, targets, full, lib, timings, hung=None,
                           hang_floor=None):
             calls.append(dict(filters=filters, skips=skips, targets=targets, full=full, lib=lib))
+            events.append(("run", gate.cargo_test_cmd(manifest, targets, full, lib)))
             return 0, ""
+
+        def fake_build(cmd, **kwargs):
+            events.append(("build", cmd))
+            return subprocess.CompletedProcess(cmd, build_exit)
+
+        @contextlib.contextmanager
+        def recording_hold(label, **kwargs):
+            events.append(("hold-enter", label))
+            try:
+                yield
+            finally:
+                events.append(("hold-exit", label))
         out = io.StringIO()
         with contextlib.ExitStack() as stack:
             stack.enter_context(patch.object(sys, "argv", ["gpu_proofs_gate.py", *argv]))
             stack.enter_context(patch.object(gate, "run_gate", side_effect=fake_run_gate))
+            stack.enter_context(patch.object(gate.subprocess, "run", side_effect=fake_build))
             stack.enter_context(patch.object(gate, "changed_paths", return_value=repo_changed or []))
-            stack.enter_context(patch.object(gate.gpu_queue, "hold", return_value=contextlib.nullcontext()))
+            stack.enter_context(patch.object(gate.gpu_queue, "hold", side_effect=recording_hold))
             stack.enter_context(contextlib.redirect_stdout(out))
             code = gate.main()
         return code, calls, out.getvalue()
+
+    def test_test_binaries_build_before_the_hold_with_the_run_arguments(self):
+        code, _, _ = self.run_main(
+            [], repo_changed=["crates/manifold-renderer/src/node_graph/primitives/invert.rs"])
+        self.assertEqual(code, 0)
+        kinds = [kind for kind, _ in self.events]
+        self.assertEqual(kinds, ["build", "hold-enter", "run", "hold-exit"])
+        (_, build), (_, run) = self.events[0], self.events[2]
+        self.assertEqual(build, run + ["--no-run"])
+
+    def test_each_distinct_run_builds_once_before_any_test(self):
+        code, calls, _ = self.run_main(
+            [], repo_changed=["crates/manifold-renderer/tests/glb_conformance.rs"])
+        self.assertEqual(code, 0)
+        self.assertGreater(len(calls), 1)
+        kinds = [kind for kind, _ in self.events]
+        first_hold = kinds.index("hold-enter")
+        builds = [cmd for kind, cmd in self.events if kind == "build"]
+        self.assertTrue(all(k == "build" for k in kinds[:first_hold]))
+        self.assertNotIn("build", kinds[first_hold:])
+        self.assertEqual(len(builds), len({tuple(b) for b in builds}))
+        runs = {tuple(cmd + ["--no-run"]) for kind, cmd in self.events if kind == "run"}
+        self.assertEqual(runs, {tuple(b) for b in builds})
+
+    def test_build_failure_takes_no_lock_and_runs_nothing(self):
+        code, calls, text = self.run_main(["--all"], build_exit=101)
+        self.assertEqual(code, 101)
+        self.assertEqual(calls, [])
+        self.assertEqual([kind for kind, _ in self.events], ["build"])
+        self.assertIn("GPU-PROOFS GATE: FAIL (test build failed, exit 101; no GPU lock taken)", text)
+
+    def test_build_only_compiles_and_stops_without_the_lock(self):
+        code, calls, text = self.run_main(["--build-only", "--all"])
+        self.assertEqual(code, 0)
+        self.assertEqual(calls, [])
+        self.assertEqual([kind for kind, _ in self.events], ["build"])
+        self.assertIn("GPU-PROOFS GATE: BUILT", text)
 
     def test_default_is_scoped_from_diff_and_prints_mode(self):
         p = "crates/manifold-renderer/src/node_graph/primitives/invert.rs"

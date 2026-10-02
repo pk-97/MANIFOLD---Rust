@@ -16,7 +16,7 @@ class StorageGateTests(unittest.TestCase):
     def test_low_space_stops_subprocess(self):
         admission = BuildCheck(False, self.repo / "target", 0, reason="low space")
         with patch("storage_budget.check_build", return_value=admission), \
-                patch("landing_gate.subprocess.run") as execute:
+                patch("landing_gate.subprocess.Popen") as execute:
             result = landing_gate.run_cmd(["cargo", "clippy"], self.repo, 10)
         self.assertEqual(result[0], 2)
         self.assertIn("low space", result[2])
@@ -63,7 +63,7 @@ class StorageGateTests(unittest.TestCase):
                            reason="REFUSED: only 10.0 GiB free", reclaimable=True)
         with patch("storage_budget.check_build", return_value=short), \
                 patch("landing_gate.reclaim_landed_caches", return_value="\nKEEP slot-2: dirty") as reclaim, \
-                patch("landing_gate.subprocess.run") as execute:
+                patch("landing_gate.subprocess.Popen") as execute:
             result = landing_gate.run_cmd(["cargo", "nextest", "run"], self.repo, 10)
         self.assertEqual(result[0], 2)
         self.assertIn("only 10.0 GiB free", result[2])
