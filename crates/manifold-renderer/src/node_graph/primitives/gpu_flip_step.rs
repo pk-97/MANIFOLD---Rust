@@ -28,7 +28,8 @@ use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 
 use super::gpu_flip_bodies::{BodyPasses, Bodies, REACTION_FLOATS, body_refusal};
-use super::gpu_flip_pressure::{MAX_ITERATIONS, PressureSolver, Water, lattice_refusal};
+use super::gpu_flip_pressure::{MAX_ITERATIONS, PressureSolver, Stop, Water, lattice_refusal};
+use super::liquid_stats::SOLVER_WORDS;
 use super::liquid_solid_distance::{SolidDistanceJob, encode_solid_distance};
 use super::sort_particles_into_cells::{
     LIQUID_PARTICLE_READ, ParticleSorter, SortJob, SortLabels, float_param, int_param,
@@ -53,8 +54,9 @@ pub(crate) const FACE_VALID_LAYERS: u32 = 2;
 /// Layers the saved face grid is extended by:
 /// one RK3 stage and its sample reach.
 pub(crate) const EXTENDED_LAYERS: u32 = 2;
-/// Pressure iterations when `iterations` is Auto (0).
-pub(crate) const AUTO_PRESSURE_ITERATIONS: u32 = 8;
+/// The iteration cap when `iterations` is Auto (0): Auto stops on the
+/// engine's tolerance (gpu_flip_pressure.rs Stop::Converged).
+pub(crate) const AUTO_PRESSURE_ITERATIONS: u32 = MAX_ITERATIONS;
 /// The speed the CFL guard is sized for, m/s.
 pub(crate) const DEFAULT_TOP_SPEED: f32 = 20.0;
 
@@ -289,8 +291,10 @@ struct Step<'a> {
     params: StepParams,
     particles: &'a GpuBuffer,
     out: &'a GpuBuffer,
-    /// Two words a slot: guarded RK3 stages and refused push-outs.
+    /// Two words a slot: guarded RK3 stages and refused push-outs; then the
+    /// tick's solver words (liquid_stats.rs SOLVER_WORDS) at byte `tally`.
     capped: &'a GpuBuffer,
+    tally: u64,
     count: u32,
     forces: &'a GpuBuffer,
     impulses: &'a GpuBuffer,
@@ -302,7 +306,8 @@ struct Step<'a> {
     reaction: &'a GpuBuffer,
     /// The bodies take part in the pressure solve and gather its reaction.
     dynamic: bool,
-    pressure_iterations: u32,
+    /// When the pressure and density solves stop.
+    pressure: Stop,
     band: u32,
     ghost: bool,
     /// Run the density projection.
@@ -507,7 +512,9 @@ impl StepState {
             self.bodies.prepare(device)?;
         }
         let passes = step.dynamic.then_some((&self.bodies, &coupled));
-        self.solver.solve(enc, &water, &l.rhs, &l.pressure, step.pressure_iterations, passes)?;
+        self.solver.solve(enc, &water, &l.rhs, &l.pressure, step.pressure, passes)?;
+        let tally = step.tally;
+        self.solver.tally(enc, step.pressure, step.capped, tally, 0, step.params.step_in_tick == 0)?;
         // φ binds the water array when the ghost rows are off; the pass never reads it then.
         let phi = if step.ghost { &l.phi } else { &l.water };
         let subtract = |enc: &mut GpuEncoder, params: &StepParams, phi: &GpuBuffer, faces: &GpuBuffer, label: &str| {
@@ -562,7 +569,8 @@ impl StepState {
                 "gpu_flip.step.density_source",
             );
             let flat = Water { phi: None, ..water };
-            self.solver.solve(enc, &flat, &l.rhs, &l.pressure, step.pressure_iterations, None)?;
+            self.solver.solve(enc, &flat, &l.rhs, &l.pressure, step.pressure, None)?;
+            self.solver.tally(enc, step.pressure, step.capped, tally, 1, false)?;
             let plain = StepParams { ghost: 0, ..p };
             subtract(enc, &plain, &l.water, &l.f, "gpu_flip.step.density_project");
             extend(enc, pipes, &base, face_groups, [&l.f, &l.f, &l.b], step.band, "gpu_flip.step.extend_spread");
@@ -664,13 +672,13 @@ crate::primitive! {
     },
 }
 
-/// The solve's iterations: Auto at 0 or below, else the value, refused past
-/// the solver's MAX_ITERATIONS.
-fn read_iterations(value: f32, auto: u32) -> Result<u32, String> {
+/// When the solves stop: Auto at 0 or below converges within the cap, a
+/// value runs exactly that many iterations, refused past MAX_ITERATIONS.
+fn read_iterations(value: f32) -> Result<Stop, String> {
     match value.round() {
-        v if v <= 0.0 => Ok(auto),
+        v if v <= 0.0 => Ok(Stop::Converged(AUTO_PRESSURE_ITERATIONS)),
         v if v > MAX_ITERATIONS as f32 => Err(format!("Iterations {v} is past the solver's {MAX_ITERATIONS}")),
-        v => Ok(v as u32),
+        v => Ok(Stop::Fixed(v as u32)),
     }
 }
 
@@ -689,7 +697,7 @@ impl Primitive for GpuFlipStep {
             // Provided storage: a one-record hint, sized to the lattice at run time.
             "faces" => Some(1),
             "reaction_out" => inputs.iter().find(|(name, _)| *name == "reaction").map(|&(_, n)| n),
-            "capped" => inputs.iter().find(|(name, _)| *name == "particles").map(|&(_, n)| n.saturating_mul(2)),
+            "capped" => inputs.iter().find(|(name, _)| *name == "particles").map(|&(_, n)| n.saturating_mul(2).saturating_add(SOLVER_WORDS)),
             _ => None,
         }
     }
@@ -723,6 +731,11 @@ impl Primitive for GpuFlipStep {
         let particle_bytes = size_of::<FluidParticle>() as u64;
         let capacity = (particles.size / particle_bytes).min(u64::from(u32::MAX)) as u32;
         let out_slots = (out.size / particle_bytes).min(u64::from(capacity)) as u32;
+        let tally = 2 * u64::from(capacity) * 4;
+        if capped.size < tally + u64::from(SOLVER_WORDS) * 4 {
+            ctx.error(format!("{NAME}: the capped array holds fewer than two words a particle slot and {SOLVER_WORDS} solver words"));
+            return;
+        }
         let count = match ctx.inputs.scalar("count") {
             Some(ParamValue::Float(count)) if count.is_finite() => (count.max(0.0) as u32).min(capacity),
             _ => capacity,
@@ -743,7 +756,7 @@ impl Primitive for GpuFlipStep {
         let tick_index = ctx.scalar_or_param("tick_index", 0.0).round().max(0.0) as i32;
         let body_count = ctx.scalar_or_param("body_count", 0.0).round().clamp(0.0, MAX_FLUID_ROLES as f32) as i32;
         let rows = ctx.scalar_or_param("rows", 0.0).round().max(0.0) as i32;
-        let pressure_iterations = match read_iterations(ctx.scalar_or_param("iterations", 0.0), AUTO_PRESSURE_ITERATIONS) {
+        let pressure = match read_iterations(ctx.scalar_or_param("iterations", 0.0)) {
             Ok(iterations) => iterations,
             Err(error) => {
                 ctx.error(format!("{NAME}: {error}"));
@@ -821,7 +834,8 @@ impl Primitive for GpuFlipStep {
             atlas,
             reaction,
             dynamic,
-            pressure_iterations,
+            pressure,
+            tally,
             band: band_layers(travel).max(FACE_VALID_LAYERS),
             ghost,
             density: ctx.scalar_or_param("volume_projection", 1.0) > 0.5,

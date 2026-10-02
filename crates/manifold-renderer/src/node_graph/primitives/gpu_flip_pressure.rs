@@ -29,6 +29,11 @@ const MAX_COARSE_CELLS: u64 = 64;
 pub(crate) const MAX_SIDE: u32 = 1024;
 /// Iterations one solve may run: the scalars buffer holds two per iteration.
 pub(crate) const MAX_ITERATIONS: u32 = 64;
+/// The stop's relative tolerance on |r|∞ / |f|∞, FLIP Fluids'
+/// `_pressureSolveTolerance` unchanged: f32 carries the recursive residual
+/// below it in 11 to 14 iterations on every saved problem
+/// (`pressure_module_converges_on_the_engine_tolerance`).
+pub(crate) const TOLERANCE: f32 = 1e-9;
 /// Red-black rounds before and after the coarse correction on every level
 /// but the coarsest.
 const SMOOTH_ROUNDS: usize = 2;
@@ -65,6 +70,8 @@ pub(crate) fn scratch_bytes(lattice: [u32; 3]) -> u64 {
     let coarse: u64 = levels[1..].iter().map(|&n| 3 * cells(n) * 4 + face_records(n) * FACE_BYTES).sum();
     let last = cells(*levels.last().expect("at least the fine level"));
     4 * cells(lattice) * 4 + coarse + last * last * 4 + u64::from(MAX_PARTIALS) * 4 + u64::from(2 * MAX_ITERATIONS) * 4
+        + PROGRESS_BYTES
+        + 2 * gate_bytes(levels.len())
 }
 
 const FACE_BYTES: u64 = size_of::<FaceSample>() as u64;
@@ -75,7 +82,8 @@ const FACE_BYTES: u64 = size_of::<FaceSample>() as u64;
 pub(crate) fn passes(lattice: [u32; 3], iterations: u32) -> (usize, usize) {
     let coarse = level_lattices(lattice).len() - 1;
     let v_cycle = coarse * (4 * SMOOTH_ROUNDS + 3) + 1;
-    (2 * coarse + 1, 1 + iterations as usize * (v_cycle + 7))
+    // The solve: the gate copy, init and the first norm, then per iteration.
+    (2 * coarse + 1, 4 + iterations as usize * (v_cycle + 9))
 }
 
 /// Why a lattice is refused, or None.
@@ -122,7 +130,7 @@ struct Params {
     cell_size: f32,
     slot: u32,
     ghost: u32,
-    _pad1: u32,
+    tolerance: f32,
 }
 
 impl Params {
@@ -159,6 +167,9 @@ struct Pipelines {
     dot_finalize: GpuComputePipeline,
     direction: GpuComputePipeline,
     update: GpuComputePipeline,
+    norm_partial: GpuComputePipeline,
+    check: GpuComputePipeline,
+    tally: GpuComputePipeline,
 }
 
 impl Pipelines {
@@ -178,6 +189,9 @@ impl Pipelines {
             dot_finalize: pipeline("dot_finalize_main", "gpu_flip.pressure.dot_finalize"),
             direction: pipeline("direction_main", "gpu_flip.pressure.direction"),
             update: pipeline("update_main", "gpu_flip.pressure.update"),
+            norm_partial: pipeline("norm_partial_main", "gpu_flip.pressure.norm_partial"),
+            check: pipeline("check_main", "gpu_flip.pressure.check"),
+            tally: pipeline("tally_main", "gpu_flip.pressure.tally"),
         }
     }
 }
@@ -204,6 +218,12 @@ struct Buffers {
     inverse: GpuBuffer,
     partials: GpuBuffer,
     scalars: GpuBuffer,
+    /// The stop's record (gpu_flip_pressure.wgsl check_main).
+    progress: GpuBuffer,
+    /// Every gated dispatch's group triple, [`Slots`] order, written once.
+    armed: GpuBuffer,
+    /// The solve's live copy of `armed`, zeroed when the solve stops.
+    gate: GpuBuffer,
 }
 
 impl Buffers {
@@ -232,8 +252,58 @@ impl Buffers {
             inverse: device.create_buffer(last * last * 4),
             partials: device.create_buffer(u64::from(MAX_PARTIALS) * 4),
             scalars: device.create_buffer(u64::from(2 * MAX_ITERATIONS) * 4),
+            progress: device.create_buffer(PROGRESS_BYTES),
+            armed: armed(device, &lattices),
+            gate: device.create_buffer(gate_bytes(lattices.len())),
         }
     }
+}
+
+/// Floats in the stop's record: four, then |r|∞ per iteration.
+pub(crate) const PROGRESS_FLOATS: u32 = 4 + MAX_ITERATIONS;
+const PROGRESS_BYTES: u64 = PROGRESS_FLOATS as u64 * 4;
+/// Bytes of one indirect dispatch's three group counts.
+const TRIPLE_BYTES: u64 = 12;
+
+/// Where each gated dispatch's groups sit in the gate, by triple: level l's
+/// lattice at l, then the dot and norm partials, then one group.
+#[derive(Clone, Copy)]
+struct Slots {
+    levels: usize,
+}
+
+impl Slots {
+    fn level(self, l: usize) -> u64 {
+        l as u64 * TRIPLE_BYTES
+    }
+    fn partials(self) -> u64 {
+        self.levels as u64 * TRIPLE_BYTES
+    }
+    fn single(self) -> u64 {
+        (self.levels as u64 + 1) * TRIPLE_BYTES
+    }
+    fn triples(self) -> u32 {
+        self.levels as u32 + 2
+    }
+}
+
+fn gate_bytes(levels: usize) -> u64 {
+    u64::from(Slots { levels }.triples()) * TRIPLE_BYTES
+}
+
+fn partial_count(n: [u32; 3]) -> u32 {
+    (cells(n).div_ceil(1024) as u32).clamp(1, MAX_PARTIALS)
+}
+
+/// The gate's full group counts for `lattices`, finest first.
+fn armed(device: &GpuDevice, lattices: &[[u32; 3]]) -> GpuBuffer {
+    let mut words: Vec<u32> = lattices.iter().flat_map(|&n| groups(cells(n))).collect();
+    words.extend([partial_count(lattices[0]), 1, 1, 1, 1, 1]);
+    let buffer = device.create_buffer_shared(words.len() as u64 * 4);
+    // SAFETY: the buffer is shared, exactly `words` long, and no GPU work has
+    // been encoded against it yet.
+    unsafe { buffer.write(0, bytemuck::cast_slice(&words)) };
+    buffer
 }
 
 fn bytes(params: &Params) -> GpuBinding<'_> {
@@ -328,8 +398,10 @@ impl PressureSolver {
         Ok(())
     }
 
-    /// Solve L p = `rhs` on the prepared water by `iterations` conjugate
-    /// gradient iterations from zero, one V-cycle each; p into `pressure`.
+    /// Solve L p = `rhs` on the prepared water by conjugate gradient
+    /// iterations from zero, one V-cycle each; p into `pressure`. `stop`
+    /// says when it ends; the solve's record (iterations run, stopped or
+    /// not) is in [`Self::progress`] once the GPU is done.
     /// `water` must be what [`Self::prepare`] last saw. With `bodies`, the
     /// dynamic bodies sit inside the operator: every iteration's s = L p gains
     /// their ρh·G M⁻¹ Gᵀ p (`scripts/mgpcg_reference.py` `body_solve`). The
@@ -340,7 +412,7 @@ impl PressureSolver {
         water: &Water<'_>,
         rhs: &GpuBuffer,
         pressure: &GpuBuffer,
-        iterations: u32,
+        stop: Stop,
         bodies: Option<(&BodyPasses, &Bodies<'_>)>,
     ) -> Result<(), String> {
         let n = water.lattice;
@@ -350,6 +422,7 @@ impl PressureSolver {
         if water.phi.is_some_and(|phi| cells(n) * 4 > phi.size) {
             return Err(format!("a {n:?} lattice is larger than its distance array"));
         }
+        let iterations = stop.cap();
         if !(1..=MAX_ITERATIONS).contains(&iterations) {
             return Err(format!("iterations must be 1 to {MAX_ITERATIONS}, not {iterations}"));
         }
@@ -359,27 +432,33 @@ impl PressureSolver {
         let (Some(pipes), Some(b)) = (self.pipelines.as_ref(), self.buffers.as_ref()) else {
             return Err("the solver was not prepared".into());
         };
-        let fine = Params::at(n, water.cell_size);
-        let lattice = groups(cells(n));
-        enc.dispatch_compute(
+        let slots = Slots { levels: b.coarse.len() + 1 };
+        enc.copy_buffer_to_buffer(&b.armed, &b.gate, b.armed.size);
+        let g = Gate { buffer: &b.gate, slots };
+        let fine = Params { cx: slots.triples(), tolerance: stop.tolerance(), ..Params::at(n, water.cell_size) };
+        g.dispatch(
+            enc,
             &pipes.init,
-            &[bytes(&fine), buffer(1, water.water), buffer(2, water.faces), buffer(3, rhs), buffer(5, &b.r)],
-            lattice,
+            &[bytes(&fine), buffer(1, water.water), buffer(2, water.faces), buffer(3, rhs), buffer(5, &b.r), buffer(6, pressure)],
+            slots.level(0),
             "gpu_flip.pressure.init",
         );
+        norm(enc, pipes, b, g, &Params { mode: 1, ..fine });
         for k in 0..iterations {
-            v_cycle(enc, pipes, b, water);
-            dot(enc, pipes, b, n, &b.r, &b.z, 2 * k);
+            v_cycle(enc, pipes, b, water, g);
+            dot(enc, pipes, b, g, n, (&b.r, &b.z), 2 * k);
             let step = Params { slot: k, ..fine };
-            enc.dispatch_compute(
+            g.dispatch(
+                enc,
                 &pipes.direction,
                 &[bytes(&step), buffer(3, &b.z), buffer(5, &b.p), buffer(7, &b.scalars)],
-                lattice,
+                slots.level(0),
                 "gpu_flip.pressure.direction",
             );
             let (ghost, phi) = water.ghost();
             let apply = Params { mode: 1, ghost, ..fine };
-            enc.dispatch_compute(
+            g.dispatch(
+                enc,
                 &pipes.residual,
                 &[
                     bytes(&apply),
@@ -390,14 +469,17 @@ impl PressureSolver {
                     buffer(5, &b.scratch),
                     buffer(10, phi),
                 ],
-                lattice,
+                slots.level(0),
                 "gpu_flip.pressure.apply",
             );
+            // The body product runs ungated: after a stop it writes s and
+            // its sums, which nothing reads again this solve.
             if let Some((passes, bodies)) = bodies {
                 passes.apply(enc, bodies, &b.p, &b.scratch)?;
             }
-            dot(enc, pipes, b, n, &b.p, &b.scratch, 2 * k + 1);
-            enc.dispatch_compute(
+            dot(enc, pipes, b, g, n, (&b.p, &b.scratch), 2 * k + 1);
+            g.dispatch(
+                enc,
                 &pipes.update,
                 &[
                     bytes(&step),
@@ -407,11 +489,62 @@ impl PressureSolver {
                     buffer(6, &b.r),
                     buffer(7, &b.scalars),
                 ],
-                lattice,
+                slots.level(0),
                 "gpu_flip.pressure.update",
             );
+            norm(enc, pipes, b, g, &step);
         }
         Ok(())
+    }
+
+    /// The last solve's record: |f|∞, iterations run, 1.0 when it stopped by
+    /// the tolerance, then |r|∞ per iteration; [`PROGRESS_FLOATS`] floats.
+    #[cfg(all(test, feature = "gpu-proofs"))]
+    pub(crate) fn progress(&self) -> Option<&GpuBuffer> {
+        self.buffers.as_ref().map(|b| &b.progress)
+    }
+
+    /// Add the last solve, run with `stop`, to the tick's solver words at
+    /// `offset` bytes in `into` (gpu_flip_pressure.wgsl tally_main): its
+    /// iterations to `word`, and 1 to word 2 when it reached its cap without
+    /// meeting the tolerance. `clear` zeroes the words first.
+    pub(crate) fn tally(&self, enc: &mut GpuEncoder, stop: Stop, into: &GpuBuffer, offset: u64, word: u32, clear: bool) -> Result<(), String> {
+        let (Some(pipes), Some(b)) = (self.pipelines.as_ref(), self.buffers.as_ref()) else {
+            return Err("the solver was not prepared".into());
+        };
+        let params = Params { slot: word, mode: u32::from(clear), tolerance: stop.tolerance(), ..Params::default() };
+        enc.dispatch_compute(
+            &pipes.tally,
+            &[bytes(&params), buffer(11, &b.progress), GpuBinding::Buffer { binding: 13, buffer: into, offset }],
+            [1, 1, 1],
+            "gpu_flip.pressure.tally",
+        );
+        Ok(())
+    }
+}
+
+/// When a solve ends.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Stop {
+    /// Exactly this many iterations.
+    Fixed(u32),
+    /// The engine's stop (gpu_flip_pressure.wgsl check_main), after at most
+    /// this many iterations.
+    Converged(u32),
+}
+
+impl Stop {
+    fn cap(self) -> u32 {
+        match self {
+            Stop::Fixed(n) | Stop::Converged(n) => n,
+        }
+    }
+
+    fn tolerance(self) -> f32 {
+        match self {
+            Stop::Fixed(_) => -1.0,
+            Stop::Converged(_) => TOLERANCE,
+        }
     }
 }
 
@@ -425,8 +558,22 @@ impl PressureSolver {
     }
 }
 
+/// A solve's dispatches run on the gate's group counts, which the stop
+/// zeroes.
+#[derive(Clone, Copy)]
+struct Gate<'a> {
+    buffer: &'a GpuBuffer,
+    slots: Slots,
+}
+
+impl Gate<'_> {
+    fn dispatch(self, enc: &mut GpuEncoder, pipeline: &GpuComputePipeline, bindings: &[GpuBinding], at: u64, label: &str) {
+        enc.dispatch_compute_indirect(pipeline, bindings, self.buffer, at, label);
+    }
+}
+
 /// z = V(r): one V-cycle for L e = r from zero.
-fn v_cycle<'a>(enc: &mut GpuEncoder, pipes: &Pipelines, b: &'a Buffers, water: &Water<'a>) {
+fn v_cycle<'a>(enc: &mut GpuEncoder, pipes: &Pipelines, b: &'a Buffers, water: &Water<'a>, g: Gate<'_>) {
     let view = |level: usize| -> View<'a> {
         match level {
             0 => View {
@@ -458,11 +605,12 @@ fn v_cycle<'a>(enc: &mut GpuEncoder, pipes: &Pipelines, b: &'a Buffers, water: &
         let coarse = view(level + 1);
         for round in 0..SMOOTH_ROUNDS {
             for color in [0, 1] {
-                smooth(enc, pipes, &v, color, round == 0 && color == 0);
+                smooth(enc, pipes, &v, color, round == 0 && color == 0, g, level);
             }
         }
         let params = Params::at(v.lattice, v.cell_size).coarse(coarse.lattice);
-        enc.dispatch_compute(
+        g.dispatch(
+            enc,
             &pipes.residual,
             &[
                 bytes(&Params { ghost: v.ghost.0, ..params }),
@@ -473,68 +621,94 @@ fn v_cycle<'a>(enc: &mut GpuEncoder, pipes: &Pipelines, b: &'a Buffers, water: &
                 buffer(5, &b.scratch),
                 buffer(10, v.ghost.1),
             ],
-            groups(cells(v.lattice)),
+            g.slots.level(level),
             "gpu_flip.pressure.residual",
         );
-        enc.dispatch_compute(
+        g.dispatch(
+            enc,
             &pipes.restrict,
             &[bytes(&params), buffer(3, &b.scratch), buffer(5, coarse.rhs), buffer(8, coarse.water)],
-            groups(cells(coarse.lattice)),
+            g.slots.level(level + 1),
             "gpu_flip.pressure.restrict",
         );
     }
     let v = view(last);
     let params = Params::at(v.lattice, v.cell_size);
-    enc.dispatch_compute(
+    g.dispatch(
+        enc,
         &pipes.coarse_solve,
         &[bytes(&params), buffer(3, &b.inverse), buffer(4, v.rhs), buffer(5, v.e)],
-        [1, 1, 1],
+        g.slots.single(),
         "gpu_flip.pressure.coarse_solve",
     );
     for level in (0..last).rev() {
         let v = view(level);
         let coarse = view(level + 1);
         let params = Params::at(v.lattice, v.cell_size).coarse(coarse.lattice);
-        enc.dispatch_compute(
+        g.dispatch(
+            enc,
             &pipes.prolong,
             &[bytes(&params), buffer(1, v.water), buffer(3, coarse.e), buffer(5, v.e)],
-            groups(cells(v.lattice)),
+            g.slots.level(level),
             "gpu_flip.pressure.prolong",
         );
         for _ in 0..SMOOTH_ROUNDS {
             for color in [1, 0] {
-                smooth(enc, pipes, &v, color, false);
+                smooth(enc, pipes, &v, color, false, g, level);
             }
         }
     }
 }
 
 /// One red-black sweep of `color` at a level, from zero when `from_zero`.
-fn smooth(enc: &mut GpuEncoder, pipes: &Pipelines, v: &View<'_>, color: u32, from_zero: bool) {
+fn smooth(enc: &mut GpuEncoder, pipes: &Pipelines, v: &View<'_>, color: u32, from_zero: bool, g: Gate<'_>, level: usize) {
     let params = Params { color, mode: u32::from(from_zero), ghost: v.ghost.0, ..Params::at(v.lattice, v.cell_size) };
-    enc.dispatch_compute(
+    g.dispatch(
+        enc,
         &pipes.smooth,
         &[bytes(&params), buffer(1, v.water), buffer(2, v.faces), buffer(3, v.rhs), buffer(5, v.e), buffer(10, v.ghost.1)],
-        groups(cells(v.lattice)),
+        g.slots.level(level),
         "gpu_flip.pressure.smooth",
     );
 }
 
 /// a · b over the fine lattice into scalars[slot], in a fixed order.
-fn dot(enc: &mut GpuEncoder, pipes: &Pipelines, b: &Buffers, n: [u32; 3], x: &GpuBuffer, y: &GpuBuffer, slot: u32) {
-    let partials = (cells(n).div_ceil(1024) as u32).clamp(1, MAX_PARTIALS);
-    let params = Params { color: partials, slot, ..Params::at(n, 0.0) };
-    enc.dispatch_compute(
+fn dot(enc: &mut GpuEncoder, pipes: &Pipelines, b: &Buffers, g: Gate<'_>, n: [u32; 3], (x, y): (&GpuBuffer, &GpuBuffer), slot: u32) {
+    let params = Params { color: partial_count(n), slot, ..Params::at(n, 0.0) };
+    g.dispatch(
+        enc,
         &pipes.dot_partial,
         &[bytes(&params), buffer(3, x), buffer(4, y), buffer(6, &b.partials)],
-        [partials, 1, 1],
+        g.slots.partials(),
         "gpu_flip.pressure.dot_partial",
     );
-    enc.dispatch_compute(
+    g.dispatch(
+        enc,
         &pipes.dot_finalize,
         &[bytes(&params), buffer(6, &b.partials), buffer(7, &b.scalars)],
-        [1, 1, 1],
+        g.slots.single(),
         "gpu_flip.pressure.dot_finalize",
+    );
+}
+
+/// |r|∞ into the stop's record and the stop test: the start with `mode` 1,
+/// else after iteration `slot`.
+fn norm(enc: &mut GpuEncoder, pipes: &Pipelines, b: &Buffers, g: Gate<'_>, step: &Params) {
+    let n = [step.nx, step.ny, step.nz];
+    let params = Params { color: partial_count(n), ..*step };
+    g.dispatch(
+        enc,
+        &pipes.norm_partial,
+        &[bytes(&params), buffer(3, &b.r), buffer(6, &b.partials)],
+        g.slots.partials(),
+        "gpu_flip.pressure.norm_partial",
+    );
+    g.dispatch(
+        enc,
+        &pipes.check,
+        &[bytes(&params), buffer(6, &b.partials), buffer(11, &b.progress), buffer(12, &b.gate)],
+        g.slots.single(),
+        "gpu_flip.pressure.check",
     );
 }
 
@@ -607,8 +781,8 @@ mod tests {
 
     #[test]
     fn pass_counts_follow_the_levels() {
-        assert_eq!(passes([64; 3], 8), (9, 1 + 8 * (4 * 11 + 1 + 7)));
-        assert_eq!(passes([3; 3], 3), (1, 1 + 3 * 8));
+        assert_eq!(passes([64; 3], 8), (9, 4 + 8 * (4 * 11 + 1 + 9)));
+        assert_eq!(passes([3; 3], 3), (1, 4 + 3 * 10));
         assert!(scratch_bytes([128; 3]) > 4 * 128 * 128 * 128 * 4);
     }
 }

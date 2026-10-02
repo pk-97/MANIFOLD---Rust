@@ -40,7 +40,8 @@ struct Params {
     slot: u32,
     // smooth and residual: 1 reads φ (the finest level's ghost rows).
     ghost: u32,
-    _pad1: u32,
+    // check: the stop's relative tolerance; below 0 the solve never stops early.
+    tolerance: f32,
 };
 
 struct FaceSample {
@@ -59,6 +60,9 @@ struct FaceSample {
 @group(0) @binding(8) var<storage, read> coarse_water: array<f32>;
 @group(0) @binding(9) var<storage, read_write> out_faces: array<FaceSample>;
 @group(0) @binding(10) var<storage, read> phi: array<f32>;
+@group(0) @binding(11) var<storage, read_write> progress: array<f32>;
+@group(0) @binding(12) var<storage, read_write> gate: array<u32>;
+@group(0) @binding(13) var<storage, read_write> tally: array<u32>;
 
 const DIVISOR_FLOOR: f32 = 1e-30;
 
@@ -343,7 +347,8 @@ fn coarse_solve_main(@builtin(local_invocation_index) i: u32) {
 }
 
 // The conjugate gradient's start: r = f (`src`) on water with an open face,
-// else 0, into `out`. The ghost rows only add to a diagonal, so an open
+// else 0, into `out`, and the pressure x = 0 into `out2`, so a solve that
+// stops before its first iteration leaves zero pressure. The ghost rows only add to a diagonal, so an open
 // face is the whole test.
 @compute @workgroup_size(256, 1, 1)
 fn init_main(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -360,6 +365,7 @@ fn init_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
     out[idx] = select(0.0, src[idx], diagonal > 0.0);
+    out2[idx] = 0.0;
 }
 
 // Workgroup g's partial sum of src · aux over a grid stride of the lattice,
@@ -429,4 +435,83 @@ fn update_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let x = select(out[idx], 0.0, k == 0u);
     out[idx] = x - alpha * src[idx];
     out2[idx] = out2[idx] - alpha * aux[idx];
+}
+
+// The stop, ported from FLIP Fluids (pcgsolver.h solveWithAdditionalMatrix,
+// pressuresolver.cpp; MIT, see THIRD_PARTY_NOTICES.md): the residual's
+// infinity norm |r|∞ in the right-hand side's units (the divergence, 1/s).
+// A solve stops before its first iteration when |f|∞ is under START_FLOOR,
+// and after iteration k when |r|∞ ≤ min(tolerance · |f|∞, ACCEPTABLE).
+// progress: [0] |f|∞, [1] iterations run, [2] 1 once stopped by the
+// tolerance, [4 + k] |r|∞ after iteration k. Stopping zeroes every gate
+// triple (`cx` of them), so the solve's later dispatches run no groups.
+const START_FLOOR: f32 = 1e-9;
+const ACCEPTABLE: f32 = 1.0;
+
+// Workgroup g's max of |src| over a grid stride, into out2[g].
+@compute @workgroup_size(256, 1, 1)
+fn norm_partial_main(@builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wg: vec3<u32>) {
+    let length = u.nx * u.ny * u.nz;
+    var acc = 0.0;
+    for (var e = wg.x * 256u + li; e < length; e = e + u.color * 256u) {
+        acc = max(acc, abs(src[e]));
+    }
+    sums[li] = acc;
+    workgroupBarrier();
+    for (var width = 128u; width > 0u; width = width >> 1u) {
+        if li < width {
+            sums[li] = max(sums[li], sums[li + width]);
+        }
+        workgroupBarrier();
+    }
+    if li == 0u {
+        out2[wg.x] = sums[0];
+    }
+}
+
+fn stop() {
+    progress[2] = 1.0;
+    for (var t = 0u; t < u.cx; t = t + 1u) {
+        gate[3u * t] = 0u;
+    }
+}
+
+// The partials' max; mode 1 is the start (|f|∞), else iteration `slot`'s
+// |r|∞ and the stop test.
+@compute @workgroup_size(1, 1, 1)
+fn check_main() {
+    var norm = 0.0;
+    for (var g = 0u; g < u.color; g = g + 1u) {
+        norm = max(norm, out2[g]);
+    }
+    if u.mode == 1u {
+        progress[0] = norm;
+        progress[1] = 0.0;
+        progress[2] = 0.0;
+        if u.tolerance >= 0.0 && norm < START_FLOOR {
+            stop();
+        }
+        return;
+    }
+    progress[4u + u.slot] = norm;
+    progress[1] = f32(u.slot + 1u);
+    if u.tolerance >= 0.0 && norm <= min(u.tolerance * progress[0], ACCEPTABLE) {
+        stop();
+    }
+}
+
+// The tick's solver words, after the step's capped records: [0] pressure
+// iterations, [1] density iterations, [2] solves that reached their cap
+// without meeting the tolerance. Mode 1 clears them first; `slot` is 0 or 1.
+@compute @workgroup_size(1, 1, 1)
+fn tally_main() {
+    if u.mode == 1u {
+        tally[0] = 0u;
+        tally[1] = 0u;
+        tally[2] = 0u;
+    }
+    tally[u.slot] = tally[u.slot] + u32(progress[1]);
+    if u.tolerance >= 0.0 && progress[2] < 0.5 {
+        tally[2] = tally[2] + 1u;
+    }
 }
