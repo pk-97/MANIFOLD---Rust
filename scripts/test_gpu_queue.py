@@ -56,7 +56,7 @@ class GpuQueueTests(unittest.TestCase):
         first.communicate(timeout=30)
         self.assertEqual(log.read_text().split(), ["start", "end", "start", "end"])
         self.assertIn("waiting for the GPU: held by pid", second_err)
-        self.assertIn("running for", second_err)
+        self.assertIn("holding for", second_err)
         self.assertIn("acquired after", second_err)
 
     def test_exit_code_is_the_commands(self):
