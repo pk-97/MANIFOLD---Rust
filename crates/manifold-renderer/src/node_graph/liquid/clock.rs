@@ -2,17 +2,7 @@
 //! (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` section 3.4; GPU_MPM_SOLVER_DESIGN.md
 //! D8). Box3D and FLIP keep `HeldClock` (D9).
 
-use manifold_physics::input::{InputHistory, Timestamped};
-
 use crate::node_graph::fluid::TICK;
-
-/// The time to record this frame's authored inputs at: the frame's target,
-/// never earlier than the history's last sample. Every seam that records
-/// against a `ClockFrame` goes through here, so none can reject a frame the
-/// clock produced.
-pub fn sample_time<T: Timestamped>(history: &InputHistory<T>, target_time: f64) -> f64 {
-    history.back().map_or(target_time, |back| target_time.max(back.time().0))
-}
 
 /// One frame of the clock: how many fixed ticks to run and where the display
 /// sits.

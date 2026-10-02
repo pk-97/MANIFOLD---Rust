@@ -22,7 +22,7 @@ fn gpu_liquid(kind: &str) -> bool {
 
 fn setup_input(kind: &str, port: &str) -> bool {
     if gpu_liquid(kind) {
-        return port != "acceleration_field";
+        return port != "acceleration_field" && !port.starts_with("role_");
     }
     match kind {
         "node.rigid_body" => matches!(port, "release_count" | "source"),
@@ -52,7 +52,7 @@ pub(super) fn retain_physics_setup_outputs(graph: &mut Graph) -> Result<(), Grap
             let kind = node.node.type_id().as_str();
             graph
                 .wires_into(node.id)
-                // A GPU liquid's sample run reads only its force field.
+                // A GPU liquid's sample run reads only its force field and roles.
                 .filter(move |wire| !gpu_liquid(kind) && setup_input(kind, wire.to.1))
                 .map(|wire| wire.from)
         })
@@ -161,9 +161,9 @@ pub(super) fn physics_sample_steps(
     let replays_history = |type_id: &str| {
         matches!(type_id, "node.physics_world" | FLIP_DOMAIN_TYPE_ID) || gpu_liquid(type_id)
     };
-    // A GPU liquid replays its force field only: its bodies stay per-frame
-    // rows (GPU_MPM_SOLVER_DESIGN.md D28, bodies are per-tick rows) and it
-    // owns its paired world, so that world never replays history.
+    // A GPU liquid replays its force field and roles at each tick's start. It
+    // owns its paired world, which Box3D steps tick by tick in lockstep with
+    // it, so that world never replays history.
     let frame_held_rigids: HashSet<_> = graph
         .coupled_scenes()
         .iter()

@@ -511,21 +511,17 @@ impl Primitive for MatterDomain {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        // A physics sample reads the force field at a tick's start; it never
-        // advances time.
+        let mut roles: [Option<FluidRole>; MAX_FLUID_ROLES] = std::array::from_fn(|_| None);
+        let role_pending = crate::node_graph::liquid::read_roles(&ctx.inputs, &ROLE_PORTS, &mut roles);
+        // A physics sample reads the force field and the roles at a tick's
+        // start; it never advances time.
         if crate::node_graph::physics::authored_sample_only() {
             let field = ctx.inputs.vector_field("acceleration_field");
             self.fields.observe_sample(ctx.time.seconds.0, field.as_ref());
+            self.bodies.observe_sample(ctx.time.seconds.0, (!role_pending).then_some(&roles[..]));
             return;
         }
-        let mut roles: [Option<FluidRole>; MAX_FLUID_ROLES] = std::array::from_fn(|_| None);
-        self.role_pending = ctx.inputs.any_pending();
-        for (slot, port) in ROLE_PORTS.iter().enumerate() {
-            if ctx.inputs.slot(port).is_some() {
-                roles[slot] = ctx.inputs.fluid_role(port);
-                self.role_pending |= roles[slot].is_none();
-            }
-        }
+        self.role_pending = ctx.inputs.any_pending() || role_pending;
         self.acceleration = ctx.inputs.vector_field("acceleration_field");
         if ctx.inputs.slot("acceleration_field").is_some() {
             self.role_pending |= self.acceleration.is_none();
@@ -592,6 +588,7 @@ impl Primitive for MatterDomain {
 
     fn request_physics_samples(&mut self, from: f64, until: f64, out: &mut Vec<f64>) {
         self.fields.request_samples(&self.clock, from, until, out);
+        self.bodies.request_samples(&self.clock, from, until, out);
     }
 
     fn set_coupled_physics(&mut self, enabled: bool) {
@@ -765,8 +762,7 @@ impl MatterDomain {
         }
         self.coupled.owner_fresh = false;
         self.impulses.observe_frame(ctx.time.seconds.0, &frame)?;
-        let consumed = frame.simulation_time - f64::from(frame.ticks) * TICK;
-        self.bodies.observe(roles, frame.epoch, frame.target_time, consumed)?;
+        self.bodies.settle(roles, &self.clock, &frame);
         let first_tick = fields::first_tick(&frame);
         // A restart runs no tick yet still publishes the first tick's rows: the
         // fill seeds around the colliders' starting poses. Otherwise a frame
@@ -775,7 +771,7 @@ impl MatterDomain {
         self.rows_fresh = row_ticks > 0;
         let coupled_rows = self.coupled.owner.as_ref().map_or(&[][..], LiquidRigidOwner::rows);
         let rows = if row_ticks > 0 {
-            let rows = self.bodies.rows(first_tick, row_ticks, coupled_rows).len() as f32;
+            let rows = self.bodies.rows(first_tick, frame.ticks, coupled_rows)?.len() as f32;
             self.body_rows = rows;
             rows
         } else {
