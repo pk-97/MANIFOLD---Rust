@@ -7,7 +7,7 @@
 
 use manifold_gpu::GpuBuffer;
 
-use super::gpu_flip_pressure::{MAX_ITERATIONS, PressureSolver, Water, level_lattices, passes};
+use super::gpu_flip_pressure::{MAX_ITERATIONS, PROGRESS_FLOATS, PressureSolver, Stop, Water, level_lattices, passes};
 
 /// One saved problem: water cells and the divergence f (zero in air).
 pub(crate) struct Problem {
@@ -187,7 +187,7 @@ impl Rig {
         let n = self.n as u32;
         let lattice = Water { lattice: [n; 3], cell_size: self.cell_size() as f32, water: &self.water, faces: &self.faces, phi: self.phi.as_ref() };
         self.solver.prepare(&self.device, &mut enc, &lattice).expect("prepares");
-        self.solver.solve(&mut enc, &lattice, &self.rhs, &self.pressure, iterations, None).expect("solves");
+        self.solver.solve(&mut enc, &lattice, &self.rhs, &self.pressure, Stop::Fixed(iterations), None).expect("solves");
         enc.commit_and_wait_profiled(&self.device)
     }
 
@@ -420,7 +420,7 @@ fn rz(rig: &mut Rig, p: &Problem, iterations: u32) -> Vec<(f32, f32)> {
     let n = rig.n as u32;
     let lattice = Water { lattice: [n; 3], cell_size: rig.cell_size() as f32, water: &rig.water, faces: &rig.faces, phi: rig.phi.as_ref() };
     rig.solver.prepare(&rig.device, &mut enc, &lattice).expect("prepares");
-    rig.solver.solve(&mut enc, &lattice, &rig.rhs, &rig.pressure, iterations, None).expect("solves");
+    rig.solver.solve(&mut enc, &lattice, &rig.rhs, &rig.pressure, Stop::Fixed(iterations), None).expect("solves");
     rig.solver.copy_scalars(&mut enc, &scalars);
     enc.commit_and_wait_completed();
     let ptr = scalars.mapped_ptr().expect("shared scalars");
@@ -477,5 +477,78 @@ fn pressure_module_preconditioner_keeps_rz_negative() {
         }
     }
     println!("preconditioner: {checked} iterations over {} solves, r·z < 0 and p·s > 0 on every one: {}", problems.len() * 2, failures.is_empty());
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// One solve of `p` on the engine's stop, at most `cap` iterations: |f|∞,
+/// the iterations run, whether the tolerance stopped it, and |r|∞ after each.
+struct Converged {
+    f_norm: f32,
+    iterations: u32,
+    stopped: bool,
+    norms: Vec<f32>,
+}
+
+fn converge(rig: &mut Rig, p: &Problem, cap: u32) -> Converged {
+    let water: Vec<f32> = p.water.iter().map(|&w| f32::from(u8::from(w))).collect();
+    // SAFETY: shared buffers sized for the lattice; the last solve completed.
+    unsafe {
+        rig.water.write(0, bytemuck::cast_slice(&water));
+        rig.rhs.write(0, bytemuck::cast_slice(&p.f));
+    }
+    let floats = PROGRESS_FLOATS as usize;
+    let record = rig.device.create_buffer_shared(floats as u64 * 4);
+    let mut enc = rig.device.create_encoder("gpu-flip-pressure-converge");
+    let n = rig.n as u32;
+    let lattice = Water { lattice: [n; 3], cell_size: rig.cell_size() as f32, water: &rig.water, faces: &rig.faces, phi: rig.phi.as_ref() };
+    rig.solver.prepare(&rig.device, &mut enc, &lattice).expect("prepares");
+    rig.solver.solve(&mut enc, &lattice, &rig.rhs, &rig.pressure, Stop::Converged(cap), None).expect("solves");
+    let progress = rig.solver.progress().expect("prepared");
+    enc.copy_buffer_to_buffer(progress, &record, record.size);
+    enc.commit_and_wait_completed();
+    let ptr = record.mapped_ptr().expect("shared record");
+    // SAFETY: the copy completed; the buffer holds PROGRESS_FLOATS floats.
+    let all = unsafe { std::slice::from_raw_parts(ptr.cast::<f32>().cast_const(), floats) };
+    let iterations = all[1] as u32;
+    Converged { f_norm: all[0], iterations, stopped: all[2] > 0.5, norms: all[4..4 + iterations as usize].to_vec() }
+}
+
+/// A pool at rest one step after gravity: every water face moved down by
+/// g·dt except the floor's, so the only divergence is the bottom layer's
+/// inflow, g·dt/h.
+fn resting_pool_problem(m: usize) -> Problem {
+    let water: Vec<bool> = (0..m * m * m).map(|c| (c / m) % m < m / 2).collect();
+    let inflow = (9.81 / 60.0 / (BOX_METRES / m as f64)) as f32;
+    let f = (0..m * m * m).map(|c| if water[c] && (c / m).is_multiple_of(m) { -inflow } else { 0.0 }).collect();
+    Problem { frame: 0, water, f }
+}
+
+/// The engine's stop on every shipped problem: each solve stops on the
+/// tolerance, never the cap. The still and resting pools stop within 12
+/// iterations (measured 11), the Dam Break splash frames within 16 (measured
+/// 12 to 14). The stop reads the recursive residual, as the engine's PCG
+/// does, and f32 carries it below 1e-9 · |f|∞ on all of them.
+#[test]
+fn pressure_module_converges_on_the_engine_tolerance() {
+    let mut failures = Vec::new();
+    let mut problems: Vec<(String, Problem)> = Vec::new();
+    for fixture in [DAM_BREAK, "deep_pool_pressure_problems", "deep_pool_density_problems"] {
+        let (n, saved) = load_fixture(fixture);
+        for p in &saved {
+            problems.push((fixture.to_string(), resample(p, n, 64)));
+        }
+    }
+    problems.push(("still_pool".into(), still_pool_problem(64)));
+    problems.push(("resting_pool".into(), resting_pool_problem(64)));
+    for (name, p) in &problems {
+        let mut rig = Rig::new(64);
+        let c = converge(&mut rig, p, MAX_ITERATIONS);
+        let rel: Vec<String> = c.norms.iter().map(|r| format!("{:.1e}", r / c.f_norm)).collect();
+        println!("curve {name} frame {}: |f| {:.3e} it {} stopped {} rel {}", p.frame, c.f_norm, c.iterations, c.stopped, rel.join(" "));
+        let limit = if name.ends_with("pool") { 12 } else { 16 };
+        if !c.stopped || c.iterations > limit {
+            failures.push(format!("{name} frame {}: {} iterations, stopped {}", p.frame, c.iterations, c.stopped));
+        }
+    }
     assert!(failures.is_empty(), "{failures:#?}");
 }

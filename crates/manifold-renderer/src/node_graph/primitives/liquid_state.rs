@@ -11,6 +11,7 @@
 use manifold_gpu::GpuBuffer;
 
 use super::gpu_flip_step::face_bytes;
+use super::gpu_flip_pressure::MAX_ITERATIONS;
 use super::liquid_stats::{LIQUID_STATS_WORDS, LiquidTickStats};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid_particles::{FaceSample, FluidParticle};
@@ -258,6 +259,12 @@ impl Primitive for LiquidState {
             ctx.error(format!(
                 "Liquid State: {} particles were left inside a solid's reach last tick; pushing them out would have moved them past the solver's limit",
                 stats.push_refused
+            ));
+        }
+        if let Some(stats) = self.last_stats.filter(|s| s.unconverged > 0) {
+            ctx.error(format!(
+                "Liquid State: {} solves reached the solver's {MAX_ITERATIONS}-iteration cap last tick without converging; the water is not incompressible",
+                stats.unconverged
             ));
         }
     }

@@ -1,6 +1,6 @@
 # GPU FLIP — the GPU water solver and its multigrid pressure solve
 
-<!-- index: The GPU water solver (GPU FLIP, formerly SWASH): PIC/FLIP particles on a face grid, one liquid tick of two water steps, and a multigrid-preconditioned conjugate gradient pressure solve with a fixed iteration count. The step, the equation, the solve, the Auto iteration rule, the named refusals, the measures against the FLIP Fluids engine, and what is still owed (solids). -->
+<!-- index: The GPU water solver (GPU FLIP, formerly SWASH): PIC/FLIP particles on a face grid, one liquid tick of two water steps, and a multigrid-preconditioned conjugate gradient pressure solve that stops on the FLIP Fluids tolerance. The step, the equation, the solve, the Auto iteration rule, the named refusals, the measures against the FLIP Fluids engine, and what is still owed (solids). -->
 
 **Status:** BUILT · 2026-10-01 · the step is one node, `node.gpu_flip_step` (section 1.1 (stage design)) · owed: BUG-4jfv (solids gate: race rows, engine draft, L2 demo); BUG-0d7t (open-face boundaries); BUG-l2h3 (SWASH to a live instrument) child .10 (occupied-block passes); BUG-h8or (lid slabs) · the retired FFT solve is `docs/archive/FFT_WATER_SOLVER_DESIGN.md`.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) before the solids phase.
@@ -17,19 +17,19 @@ The builder is `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_pres
 
 1. Sort particles into cells (the shared particle sorter of `node.sort_particles_into_cells`, bins = grid cells).
 2. The particles' signed distance φ at the cell centres (`particle_distance`, section 2, the free surface). Water is every cell with φ < 0 (`water_from_phi`, after the solids' `phi_into_solids` in step 4), the engine's liquid cells: a centre within √3·h/2 of a particle. Walls are the box faces.
-3. Particles to faces by gather, no atomics (`particles_to_faces`): each face reads the particles in its neighbouring cells. A box wall face is closed: velocity 0 (section 2, walls). Extend two layers into air (`extend_faces`) and keep the copy for FLIP (`old`).
+3. Particles to faces by gather, no atomics (`particles_to_faces`): each face reads the particles in its neighbouring cells. A box wall face is closed: velocity 0 (section 2, walls). Extend `band_layers` layers into air (`extend_faces`) and keep the copy for FLIP (`old`).
 4. Gravity plus the scene's forces, the wall faces held at 0 (`face_gravity`). The forces and impulses come from the domain's coarse lattices (LIQUID_SOLVER_SEAM_DESIGN.md P8 (Forces and impulses for GPU liquids)), read at each face's centre; an impulse lands once, on the first step of its tick. Solids: the open fraction of every face (`open_fractions`) and the closest body's velocity on it (`solid_face_velocity`); see "Solids in the water" below.
 5. Divergence per water cell → f (`divergence`).
 6. The pressure solve, section 3.
-7. Subtract the pressure gradient on faces touching water (`subtract_pressure`), the air side of a surface face at its ghost pressure; wall faces stay 0. Constrain the solid faces and the walls (`constrain_solid_faces`). Extend `band_layers` layers (`new`): far enough that every RK3 stage of step 9 samples valid faces.
+7. Subtract the pressure gradient on faces touching water (`subtract_pressure`), the air side of a surface face at its ghost pressure; wall faces stay 0. Constrain the solid faces and the walls (`constrain_solid_faces`). Extend `band_layers` layers (`new`), the engine's count; every RK3 stage of step 9 samples valid faces.
 8. Every step, the density projection of Kugelstadt et al. 2019, "Implicit Density Projection for Volume Conserving Liquids" (`density_source`; credit in `gpu_flip_step.rs`). Each water cell's density ρ is the tent-kernel sum of the particles within a cell of its centre, rest 8; solids are sampled with particles as the paper does, on the same rest lattice of eight sites a cell: each of the 26 neighbours outside the box adds what its eight sites would (0.5625 a face, 0.09375 an edge, 0.015625 a corner; blub keeps only the face term), and near a body every site inside it (`solid_at` < 0) adds its tent weight, so a cell the body only cuts weighs its solid part; a cell with any neighbour holding no particles reads at least rest, so a part-full surface cell only spreads (the paper's particle-deficiency clamp; air is an empty cell, not the level-set mask, which also covers the empty cell above the surface). A pool at rest on the seeded lattice reads exactly rest everywhere, so it is never pushed. The source −(1/dt)·clamp(ρ/8 − 1, ±½) (the paper's displacement limit, ρ/ρ0 in [0.5, 1.5]; blub builds both the same way) is solved like section 3 with air at zero, its gradient taken off a copy of the projected faces into `spread`. It is the whole error every step, no per-step share, and it moves particles only: it never becomes velocity, so it adds no speed. Off with Volume Projection 0.
 9. Faces to particles (`faces_to_particles`): PIC/FLIP velocity from `new` and `old`; the RK3 move through `new` plus the density move step dt · (`spread` − `new`), uncapped (the source clamp bounds it); clamped 0.2 cells off the walls.
 
 The step's time rules:
 
 - **Step count.** The step node's Steps param, 1 by default (1/60 s); Peter's ruling, no auto-picked count (adaptive steps: BUG-jyot (adaptive GPU FLIP steps)). The substeps run inside the one node; each body sees every substep through the in-place reaction. At one step a 64³ splash crosses about 4 cells a step, so the CFL guard below fires; the stats count it and Liquid State says so.
-- **The CFL guard.** `TOP_SPEED` = 20 m/s is the fastest water a step is built for. `travel_cells` is how far that moves in one step, rounded up (3 at 64³, 6 at 128³, two steps). Each RK3 stage moves at most that far; faster water keeps its speed and moves only that far that step. Every shortened stage is counted (liquid_stats word 8) and Liquid State reports it by name; a solid push-out refused past `SOLID_PUSH` = 5 cells is counted too (word 9). `new` is extended ceil(¾ · travel) + 1 layers (`band_layers`: 4 at 64³, 6 at 128³), because the stages sample up to ¾ of the travel from where the particle started, and a sample reads faces one cell further. With two layers, 128³ spray left the band and slowed in mid-air.
-- **PIC share per second.** `flip` is the FLIP share kept per 1/60 s (0.95, as the engine runs it at one step a frame). A step keeps flip^(60 · dt), so the PIC damping per second does not change with the step count.
+- **The CFL guard.** `TOP_SPEED` = 20 m/s is the fastest water a step is built for. `travel_cells` is how far that moves in one step, rounded up (3 at 64³, 6 at 128³, two steps). Each RK3 stage moves at most that far; faster water keeps its speed and moves only that far that step. Every shortened stage is counted (liquid_stats word 8) and Liquid State reports it by name; a solid push-out refused past `SOLID_PUSH` = 5 cells is counted too (word 9). Both face grids, `old` after the transfer and `new` after the solve, are extended ⌈√3 · travel⌉ + 3 layers (`band_layers`: 9 at 64³ two steps, 14 at 64³ one step and at 128³ two steps). That is FLIP Fluids' `_extrapolateFluidVelocities`, ⌈√3 · CFL⌉ + 3, which gives 12 at its CFL 5. The one deviation: our travel stands in for the engine's CFL number, because the engine sizes its substeps to that CFL and ours are fixed by Steps (adaptive steps: BUG-jyot (adaptive GPU FLIP steps)).
+- **FLIP share per step.** `flip` is the FLIP share every step keeps, 0.95, as the engine's `_ratioPICFLIP` = 0.05 blends PIC into every substep. More Steps means more PIC damping per second, as in the engine.
 
 ## 1.1 Stage design — decided 2026-10-01
 
@@ -95,7 +95,7 @@ A water body that touches no air (a closed box full of water) makes L singular. 
 
 ## 3. The solve
 
-Conjugate gradient in the L form, from x = 0, r = f, p = 0, rz = 0. Each iteration: z = V(r); rz_new = r·z; β = rz_new / rz_old (0 when rz_old is 0); p = z + βp; s = −Lp; α = rz_new / (p·s); x −= αp; r −= αs. The loop is the solver module's (`gpu_flip_pressure.rs`, `PressureSolver::solve`): a fixed iteration count, no readback, every scalar on the GPU. Dots reduce in two barriered passes in a fixed order; β and α are made on the GPU.
+Conjugate gradient in the L form, from x = 0, r = f, p = 0, rz = 0. Each iteration: z = V(r); rz_new = r·z; β = rz_new / rz_old (0 when rz_old is 0); p = z + βp; s = −Lp; α = rz_new / (p·s); x −= αp; r −= αs. The loop is the solver module's (`gpu_flip_pressure.rs`, `PressureSolver::solve`): no readback, every scalar on the GPU. It stops the way FLIP Fluids' PCG does (`pcgsolver.h`): after each iteration, when |r|∞ ≤ min(1e-9 · |f|∞, 1.0 s⁻¹), f being the divergence in 1/s; and before the first, with p = 0, when |f|∞ < 1e-9. The stop is on the GPU: every dispatch of the solve is indirect, its group counts in a gate buffer that the check pass zeroes, so the passes after a stop run no groups. `MAX_ITERATIONS` = 64 is the cap; a solve that reaches it unconverged is counted in the tick's solver words (`node.liquid_stats` words 10 to 12) and Liquid State raises it as a named error. The f32 recursive residual reaches the engine's 1e-9 unchanged: 11 iterations on a still pool, 12 to 14 on the Dam Break splash frames (`pressure_module_converges_on_the_engine_tolerance`). Dots reduce in two barriered passes in a fixed order; β and α are made on the GPU.
 
 V(r) is one V-cycle for L e = r, from e = 0:
 
@@ -110,10 +110,10 @@ V(r) is one V-cycle for L e = r, from e = 0:
 
 ## 4. Iteration counts — the Auto rule
 
-The counts are build params with an Auto rule: the smallest count at which the f64 reference (`scripts/mgpcg_reference.py`) reaches the retired FFT solve's residual on every committed Dam Break problem (`tests/fixtures/dambreak_pressure_problems.bin.zst`, 7 frames) and on dumped splash solves at 64³ and 128³, plus one. Deep water has fixtures too, written by the atom graph's fixture writer, deleted with the atoms (BUG-2o3c (deep-pool fixtures cannot be regenerated)): a 3 m still pool's main solve (`deep_pool_pressure_problems.bin.zst`) and the density solves of a block dropped into it (`deep_pool_density_problems.bin.zst`). With no FFT record there, their target is the tightest FFT residual at that lattice: 5.5e-5 (64³) and 1.7e-3 (128³) for the main solve, 4.2e-2 and 0.35 for the density solve. A multigrid preconditioner's count does not grow with the lattice, so one count serves every size.
+Auto (Iterations 0, the default) is the convergence stop of section 3 under the `MAX_ITERATIONS` cap; an explicit Iterations value runs exactly that many. The fixed counts below are what the explicit values and the reference proofs use. They were picked as the smallest count at which the f64 reference (`scripts/mgpcg_reference.py`) reaches the retired FFT solve's residual on every committed Dam Break problem (`tests/fixtures/dambreak_pressure_problems.bin.zst`, 7 frames) and on dumped splash solves at 64³ and 128³, plus one. Deep water has fixtures too, written by the atom graph's fixture writer, deleted with the atoms (BUG-2o3c (deep-pool fixtures cannot be regenerated)): a 3 m still pool's main solve (`deep_pool_pressure_problems.bin.zst`) and the density solves of a block dropped into it (`deep_pool_density_problems.bin.zst`). With no FFT record there, their target is the tightest FFT residual at that lattice: 5.5e-5 (64³) and 1.7e-3 (128³) for the main solve, 4.2e-2 and 0.35 for the density solve. A multigrid preconditioner's count does not grow with the lattice, so one count serves every size.
 
 - `PRESSURE_ITERATIONS` = 8: the reference needed at most 7 at 64³ and 5 at 128³ on the Dam Break, 6 and 5 on the deep pool.
-- The density projection runs the step's pressure count (Iterations, Auto = `PRESSURE_ITERATIONS`). The retired `DENSITY_ITERATIONS` = 3 rule (the reference needed 2 at 64³ and 1 at 128³) was for the old density solve, not this one.
+- The density projection runs the step's pressure stop (Iterations; Auto is the convergence stop). The retired `DENSITY_ITERATIONS` = 3 rule (the reference needed 2 at 64³ and 1 at 128³) was for the old density solve, not this one.
 - An Iterations value past the solver's `MAX_ITERATIONS` = 64 is refused by name, never clamped.
 
 Re-run 2026-10-01 for the fixed five levels with a smoothed coarsest level (`--depth 5 --coarse-sweeps 16`) on the Dam Break problems and the deep pool; the splash dumps were not kept, and no count moved.
@@ -251,7 +251,7 @@ Different on purpose:
 | Stage | Engine | GPU FLIP | Why |
 |---|---|---|---|
 | Wall position | the zero face sits half a cell past the wall | exactly on the wall | the engine's offset lets water creep half a cell into the wall; it feels less sticky only by accident |
-| Step | CFL 5 (up to 5 cells a step), 12 extension layers | one 1/60 s step by default, a counted 20 m/s guard, 6 layers at 64³ | big steps are an accuracy shortcut; ours keeps travel to a few cells |
+| Step | CFL 5 (up to 5 cells a step), 12 extension layers | one 1/60 s step by default, a counted 20 m/s guard, ⌈√3 · travel⌉ + 3 layers (14 at 64³) | big steps are an accuracy shortcut; ours keeps travel to a few cells |
 | Volume | no correction | Kugelstadt et al. 2019's density projection | without it the interior thins 7% and the pool stands 13–21% high; see "Volume and energy" |
 | Wall collision | `_resolveCollision` marches each particle's move against the solid (`fluidsimulation.cpp` 8303–8378) | the walls are closed faces and the move is clamped 0.2 cells inside | deliberate non-port: judged on physics, not engine match. The march is what lowers the engine's run-up; our energy proof shows nothing in our step adds energy, so a higher run-up is not a fault |
 
@@ -260,7 +260,7 @@ Different on purpose:
 | # | Invariant | Machine check |
 |---|---|---|
 | I1 | No node-grid velocity in the liquid path | `rg -n "node_vel\|NodeVelocity\|matter_" crates/manifold-renderer/src/node_graph/primitives -g "{gpu_flip_,coarse_inverse,dot_products,divide_by_value}*"` returns zero |
-| I2 | No CPU readback inside a frame; the iteration count is fixed | the same files hold no `read_back`, `readback` or `wait_until_completed`; the step's iteration counts are build params |
+| I2 | No CPU readback inside a frame; the stop is on the GPU | the same files hold no `read_back`, `readback` or `wait_until_completed` |
 | I3 | Every pass of the step and the solver has a value proof against a CPU reference | `gpu_flip_step_tests.rs` (one test per pass), `gpu_flip_pressure_tests.rs`; `step_shader_validates_with_every_entry` |
 | I4 | The GPU solve matches the f64 reference | `pressure_module_matches_reference_64`, `_128`, `_odd_sides` and `_deep_pool`: the solver against `scripts/mgpcg_reference.py` at the shipped counts, within the f32 floor |
 | I5 | Water volume is kept | `gpu_flip_still_pool`, `gpu_flip_still_pool_keeps_its_meshed_volume`, `gpu_flip_free_fall_keeps_g` |
@@ -324,7 +324,7 @@ Peter's scenes have boxes and obstacles in the water, and the engine's Dam Break
 
 1. Face-grid native; no node↔face bridge.
 2. Air removed with pressure zero; no air phase.
-3. Fixed iteration count; no readback inside the frame.
+3. No readback inside the frame. The iteration count is the engine's convergence stop under a fixed cap, decided by BUG-l2h3.23 (the engine ports), not a fixed count.
 4. Gather-form transfers; no atomics.
 5. The density correction moves particles only.
 6. Multigrid-preconditioned CG replaces the FFT capacitance solve (2026-10-01, the MGPCG swap brief). This reverses the FFT record's decided item 8, "No multigrid FLIP".

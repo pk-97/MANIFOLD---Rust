@@ -234,6 +234,14 @@ impl Run {
         words.chunks(2).fold((0, 0), |(c, p), w| (c + u64::from(w[0]), p + u64::from(w[1])))
     }
 
+    /// The last tick's solver words: pressure and density iterations over
+    /// every substep, and solves that reached the cap unconverged.
+    pub(super) fn solver(&self) -> [u32; 3] {
+        let n = 2 * self.scene.particles() as usize;
+        let words: Vec<u32> = self.read(STEP_NODE, "capped", n + 3);
+        [words[n], words[n + 1], words[n + 2]]
+    }
+
     /// The last substep's face grid: projected, constrained to the solids
     /// and extended.
     pub(super) fn faces(&self) -> Vec<FaceSample> {
@@ -597,8 +605,12 @@ fn gpu_flip_dam_break_energy_never_rises() {
         let floor = scene.min()[1];
         let e0 = energy(&run.particles(), floor);
         let mut worst = f64::NEG_INFINITY;
+        let (mut most, mut unconverged) = ([0u32; 2], 0u32);
         for frame in 0..300 {
             run.frame();
+            let [pressure, density, cap] = run.solver();
+            most = [most[0].max(pressure), most[1].max(density)];
+            unconverged += cap;
             let e = energy(&run.particles(), floor) / e0;
             worst = worst.max(e - 1.0);
             if frame % 15 == 14 {
@@ -606,6 +618,11 @@ fn gpu_flip_dam_break_energy_never_rises() {
             }
         }
         println!("GPU FLIP energy {steps} steps: most above E0 {:+.2e}", worst);
+        // The splash frames converge on the engine's tolerance, well under
+        // the cap: at most 16 iterations a solve, as on the saved problems.
+        println!("GPU FLIP energy {steps} steps: most iterations a tick, pressure {} density {}, unconverged solves {unconverged}", most[0], most[1]);
+        assert_eq!(unconverged, 0, "{steps} steps: solves reached the cap");
+        assert!(most.iter().all(|&m| m > 0 && m as usize <= 16 * steps), "{steps} steps: iterations a tick {most:?}");
         assert!(worst <= 1e-4, "{steps} steps: energy rose {worst:.2e} of E0 above its start");
     }
 }
