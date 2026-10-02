@@ -129,7 +129,11 @@ fn body(
 
     var axes = vec3<f32>(blob_radius);
     var basis = mat3x3<f32>(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(0.0, 0.0, 1.0));
-    if neighbours >= min_neighbours {
+    // stretch ≤ 1 caps every axis ratio at 1: the ellipsoid is the sphere
+    // whatever the covariance says, so the second sweep and the eigensolve
+    // are skipped and the sphere is written exactly (no rounding through
+    // V · diag · Vᵀ).
+    if neighbours >= min_neighbours && stretch > 1.0 {
         var covariance = mat3x3<f32>(vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0));
         for (var dz = -1; dz <= 1; dz = dz + 1) {
             for (var dy = -1; dy <= 1; dy = dy + 1) {
