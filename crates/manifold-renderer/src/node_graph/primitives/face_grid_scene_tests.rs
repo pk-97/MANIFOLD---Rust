@@ -268,7 +268,7 @@ fn face_grid_demo_gpu_flip_and_matter_side_by_side() {
     const FRAMES: usize = 45;
     const SCALE: usize = 4;
     const GAP: usize = 8;
-    let scene = WaterScene::dam_break(64).with_faces();
+    let scene = WaterScene::race_dam_break(64).with_faces();
     let mut gpu_flip = Run::new(scene);
     for _ in 0..FRAMES {
         gpu_flip.frame();
