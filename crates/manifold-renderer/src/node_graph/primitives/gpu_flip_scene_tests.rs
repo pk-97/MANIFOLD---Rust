@@ -895,13 +895,6 @@ fn gpu_flip_still_pool_keeps_its_meshed_volume() {
     assert!(drift < 5e-3, "a resting pool's meshed volume moved {:.3}%", 100.0 * drift);
 }
 
-/// The speed pass's measure at 64, Steps 1 (BUG-l2h3.24): the Dam Break and
-/// the still pool, 300 frames each, under Auto and Fixed(16), whose gap is
-/// the cost of Auto's recorded but gated-off iterations. Every tenth frame
-/// is timestamped; the rest give the plain
-/// GPU frame and the CPU encode. Prints medians, the solver's iterations a
-/// solve, and the per-label split with each label's dispatches a frame.
-#[cfg(feature = "water-race-probes")]
 /// Encode replay changes nothing the step computes: 300 Dam Break ticks
 /// with the executor's replay on match replay off bit for bit, particles,
 /// faces and the solver's words, every tick, while the solver's rounds run
@@ -950,6 +943,13 @@ fn gpu_flip_replay_changes_nothing() {
     assert_eq!(direct.replay_stats().replayed, 0, "the direct run replayed nothing");
 }
 
+/// The speed pass's measure at 64, Steps 1 (BUG-l2h3.24): the Dam Break and
+/// the still pool, 300 frames each, under Auto and Fixed(16), whose gap is
+/// the cost of Auto's recorded but gated-off iterations. Every tenth frame
+/// is timestamped; the rest give the plain
+/// GPU frame and the CPU encode. Prints medians, the solver's iterations a
+/// solve, and the per-label split with each label's dispatches a frame.
+#[cfg(feature = "water-race-probes")]
 #[test]
 fn gpu_flip_speed_measure() {
     fn median(mut v: Vec<f64>) -> f64 {
