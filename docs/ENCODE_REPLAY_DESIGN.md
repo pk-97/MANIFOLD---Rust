@@ -322,7 +322,7 @@ Blocked on the FFT decision in section 8 (Deferred), decider Peter via the lead.
 | Before (solver direct) | 32.3 ms (Auto), 22.6 (fixed 16) | 22.9 ms, 5.8 | 46.4 / 51.2 ms | 23.0 / 24.9 ms |
 | After (solver replayed) | 16.75 ms (Auto), 17.95 (fixed 16) | 0.83 ms, 0.26 | 29.5 / 34.8 ms | 1.9 / 2.4 ms |
 
-  A tick replays 7003 dispatches in 140 executes, 128 of them segments (2 solves × 64 rounds, 12 to 14 live); a dead segment costs about 3 µs against the 2.4 µs per zero-group dispatch of each of its 54 commands. Fixed 16 replayed is faster than direct, so the kill line passed with room. Iterations per solve and every output are unchanged.
+  A tick replays 7003 dispatches in 140 executes, 128 of them segments (2 solves × 64 rounds, 12 to 14 live); a dead segment costs about 3 µs against the 2.4 µs per zero-group dispatch of each of its 54 commands (51 since the reductions were folded into the vector passes, 6617 a tick: `docs/GPU_FLIP_PRESSURE_SOLVE.md` section 3 (the solve)). Fixed 16 replayed is faster than direct, so the kill line passed with room. Iterations per solve and every output are unchanged.
 - **Forbidden:** a CPU read-back of the stop; a plain dispatch inside a segment (it breaks the segment by design, but a caller that relies on that is paying the direct path).
 
 ## 7. Decided — do not reopen

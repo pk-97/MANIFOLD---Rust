@@ -95,7 +95,9 @@ A water body that touches no air (a closed box full of water, or water a solid s
 
 ## 3. The solve
 
-Conjugate gradient in the L form, from x = 0, r = f, p = 0, rz = 0. Each iteration: z = V(r); rz_new = r·z; β = rz_new / rz_old (0 when rz_old is 0); p = z + βp; s = −Lp; α = rz_new / (p·s); x −= αp; r −= αs. The loop is the solver module's (`gpu_flip_pressure.rs`, `PressureSolver::solve`): no readback, every scalar on the GPU. It stops the way FLIP Fluids' PCG does (`pcgsolver.h`): after each iteration, when |r|∞ ≤ min(1e-9 · |f|∞, 1.0 s⁻¹), f being the divergence in 1/s; and before the first, with p = 0, when |f|∞ < 1e-9. The stop is on the GPU: every dispatch of the solve is indirect, its group counts in a gate buffer that the check pass zeroes, so the passes after a stop run no groups. `MAX_ITERATIONS` = 64 is the cap; a solve that reaches it unconverged is counted in the tick's solver words (`node.liquid_stats` words 10 to 12) and Liquid State raises it as a named error. The f32 recursive residual reaches the engine's 1e-9 unchanged: 11 iterations on a still pool, 12 to 14 on the Dam Break splash frames (`pressure_module_converges_on_the_engine_tolerance`). Dots reduce in two barriered passes in a fixed order; β and α are made on the GPU.
+Conjugate gradient in the L form, from x = 0, r = f, p = 0, rz = 0. Each iteration: z = V(r); rz_new = r·z; β = rz_new / rz_old (0 when rz_old is 0); p = z + βp; s = −Lp; α = rz_new / (p·s); x −= αp; r −= αs. The loop is the solver module's (`gpu_flip_pressure.rs`, `PressureSolver::solve`): no readback, every scalar on the GPU. It stops the way FLIP Fluids' PCG does (`pcgsolver.h`): after each iteration, when |r|∞ ≤ min(1e-9 · |f|∞, 1.0 s⁻¹), f being the divergence in 1/s; and before the first, with p = 0, when |f|∞ < 1e-9. The stop is on the GPU: every dispatch of the solve is indirect, its group counts in a gate buffer that the check pass zeroes, so the passes after a stop run no groups. `MAX_ITERATIONS` = 64 is the cap; a solve that reaches it unconverged is counted in the tick's solver words (`node.liquid_stats` words 10 to 12) and Liquid State raises it as a named error. The f32 recursive residual reaches the engine's 1e-9 unchanged: 11 iterations on a still pool, 12 to 14 on the Dam Break splash frames (`pressure_module_converges_on_the_engine_tolerance`). β and α are made on the GPU.
+
+The reductions are folded into the passes that hold the vectors: the last fine sweep of the V-cycle folds r·z, the operator pass folds p·s (with dynamic bodies, whose product finishes s afterwards, p·s is its own pass), update folds |r|∞ and init folds |f|∞. A fold writes one partial per workgroup, as many as the lattice has (no cap, `partial_count`), tree-summed in a fixed order; one 256-thread workgroup then sums or maxes the partials in order (`dot_finalize_main`, `check_main`). Two solves of one problem agree bit for bit (`pressure_module_replay_matches_direct`), and a round is v_cycle + 6 dispatches without bodies, + 7 with.
 
 V(r) is one V-cycle for L e = r, from e = 0:
 
@@ -165,6 +167,8 @@ Iteration trend of the atom graph's solve, median residual and GPU ms per solve:
 | 12 | 3.1e-6, 4.5 ms | 1.1e-5, 20.6 ms |
 
 The residual stops falling near 1e-5: that is f32.
+
+Folding the reductions (2026-10-02, `pressure_module_passes_match_the_count`, prepare plus an 8-iteration solve, quiet GPU): 64³ 4.59 → 3.87 ms, 128³ 19.89 → 18.68 ms; 436 → 411 and 524 → 499 passes. The 8-iteration residuals on every reference problem moved only in their third significant digit, both ways (Dam Break 64³ frame 0: 3.304e-6 → 3.276e-6; 128³ frame 30: 2.767e-5 → 2.773e-5); the f32 floor is the recursion, not the sum order.
 
 On solves dumped from a running FFT Dam Break (splash frames 50, 70 and 90, both steps; the atom graph's probe, deleted with it), the GPU residual at the shipped counts is below the FFT solve's on every solve: main 9.0e-6 to 5.2e-5 against 1.4e-3 to 3.8e-3 at 64³, and 7.0e-5 to 4.7e-4 against 4.4e-2 to 8.4e-2 at 128³; density 1.8e-3 to 8.5e-3 against 4.2e-2 to 0.11 at 64³, and 2.3e-3 to 2.2e-2 against 0.35 to 0.92 at 128³.
 
@@ -337,6 +341,6 @@ Peter's scenes have boxes and obstacles in the water, and the engine's Dam Break
 | Item | Revives when |
 |---|---|
 | Warm start from last step's pressure | a measured iteration saving at the worst frame (it saved none for the FFT solve) |
-| Fewer dispatches per iteration (fused smoother levels, a single-pass dot) | the CG vectors row passes a third of the solve, or Vulkan's dispatch cost |
+| Fused smoother levels | the smoothing row passes half the solve, or Vulkan's dispatch cost; the reductions are already folded (section 3 (the solve)) |
 | APIC on faces | a visible PIC/FLIP noise complaint |
 | Wrap-around (torus) axes | the endless-ocean scene is asked for; multigrid wraps with periodic transfers |
