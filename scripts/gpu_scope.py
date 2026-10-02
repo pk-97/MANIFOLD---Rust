@@ -107,6 +107,7 @@ REPORTER_SKIPS = [
 # touched path selected.
 LIQUID_FORCE_FILTERS = [
     "liquid_conformance::liquid_coupled_world_steps",
+    "liquid_conformance::liquid_coupled_live_frame_rate",
     "liquid_conformance::liquid_free_flight",
     "liquid_conformance::liquid_pause_",
     "liquid_conformance::liquid_export_",

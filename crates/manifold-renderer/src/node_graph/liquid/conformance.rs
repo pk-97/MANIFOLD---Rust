@@ -73,8 +73,10 @@ pub enum Check {
     NonfiniteTickNotPublished,
     /// I11: overflow is counted and reported.
     OverflowReported,
-    /// I13: live frames never wait on the GPU.
+    /// I13: uncoupled live frames never wait on the GPU.
     LiveFramesNeverWait,
+    /// I13: coupled live ticks agree at 24 and 60 fps, with bounded reaction waits.
+    CoupledLiveFrameRate,
     /// Speed 0.5 runs half the water time.
     HalfSpeed,
     /// Reset, and the runtime's state reset, start a new epoch.
@@ -91,7 +93,7 @@ const BOX_FALLS: &[Fixture] = &[
 ];
 
 impl Check {
-    pub const ALL: [Check; 14] = [
+    pub const ALL: [Check; 15] = [
         Check::CoupledWorldStepsOnce,
         Check::Collision,
         Check::FloatingDraft,
@@ -103,6 +105,7 @@ impl Check {
         Check::NonfiniteTickNotPublished,
         Check::OverflowReported,
         Check::LiveFramesNeverWait,
+        Check::CoupledLiveFrameRate,
         Check::HalfSpeed,
         Check::Reset,
         Check::FaceGridPublished,
@@ -112,13 +115,18 @@ impl Check {
     pub fn coupled(self) -> bool {
         matches!(
             self,
-            Check::CoupledWorldStepsOnce | Check::Collision | Check::FloatingDraft | Check::HydrostaticLift | Check::FreeFlight
+            Check::CoupledWorldStepsOnce
+                | Check::Collision
+                | Check::FloatingDraft
+                | Check::HydrostaticLift
+                | Check::FreeFlight
+                | Check::CoupledLiveFrameRate
         )
     }
 
     /// The scenes the check runs on. On a row that couples, export and the
-    /// live wait run with a box, where the host and the liquid exchange
-    /// between ticks.
+    /// live frame rate runs with a box, where the host and the liquid exchange
+    /// between ticks. The no wait check uses the uncoupled dam break below.
     pub fn fixtures(self, coupled: bool) -> &'static [Fixture] {
         match self {
             Check::CoupledWorldStepsOnce | Check::FloatingDraft => &[Fixture::FloatingBox],
@@ -127,7 +135,8 @@ impl Check {
             Check::FreeFlight => &[Fixture::Collision { density_ratio: 1.0 }],
             Check::PauseDiscardsImpulses => &[Fixture::StillPool],
             Check::FaceGridPublished => &[Fixture::FaceGrid],
-            Check::ExportFrameRateIndependent | Check::LiveFramesNeverWait if coupled => &[Fixture::FloatingBox],
+            Check::ExportFrameRateIndependent | Check::CoupledLiveFrameRate if coupled => &[Fixture::FloatingBox],
+            Check::LiveFramesNeverWait => &[Fixture::DamBreak],
             _ => &[Fixture::DamBreak],
         }
     }
@@ -354,6 +363,7 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
             (Check::HydrostaticLift, FLIP_COUPLES_NATIVELY),
             (Check::FreeFlight, FLIP_COUPLES_NATIVELY),
             (Check::ExportFrameRateIndependent, FLIP_COUPLES_NATIVELY),
+            (Check::CoupledLiveFrameRate, FLIP_COUPLES_NATIVELY),
             (
                 Check::LiveFramesNeverWait,
                 "live debt policy (D3): FLIP's HeldClock keeps live debt on its worker, not on the liquid clock \

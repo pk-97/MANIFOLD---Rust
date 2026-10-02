@@ -398,7 +398,7 @@ impl LiquidBodies {
     /// reach the pose at its end (the next tick's start), then `coupled`, the
     /// coupled bodies' tick-start state. `ticks` 0 publishes the first tick's
     /// start poses at rest, which a restart seeds around. Every tick gets the
-    /// same coupled rows; an offline frame of several coupled ticks rewrites
+    /// same coupled rows; a frame of several coupled ticks rewrites
     /// each later tick's with [`Self::set_coupled_rows`] once Box3D has
     /// stepped the tick before. A coupled row's shape index counts from the
     /// first coupled body, or is −1. Run ticks' samples are pruned afterwards.
@@ -830,20 +830,29 @@ mod tests {
         ready_coupled(&mut bodies, &roles, &[Arc::clone(&hull)]);
         assert_eq!((bodies.count(), bodies.region_count(), bodies.shapes().len()), (2, 2, 4));
         let mut rig = Rig::default();
-        rig.frame(&mut bodies, 0.0, 2.0 * TICK, &|_| roles.clone());
-        rig.frame(&mut bodies, 2.0 * TICK, 2.0 * TICK, &|_| roles.clone());
+        rig.frame(&mut bodies, 0.0, 3.0 * TICK, &|_| roles.clone());
+        rig.frame(&mut bodies, 3.0 * TICK, 3.0 * TICK, &|_| roles.clone());
         let coupled = LiquidBody { accel_shape: [0.0, 0.0, 0.0, 0.0], ..LiquidBody::default() };
-        let rows = bodies.rows(0, 2, &[coupled]).unwrap().to_vec();
-        assert_eq!(rows.len(), 4);
+        let rows = bodies.rows(0, 3, &[coupled]).unwrap().to_vec();
+        assert_eq!(rows.len(), 6);
         assert_eq!((rows[0].accel_shape[3], rows[1].accel_shape[3]), (1.0, 3.0));
         let regions = bodies.last_region_rows();
-        assert_eq!(regions.len(), 4);
+        assert_eq!(regions.len(), 6);
         assert_eq!(regions[0].angular_velocity[3], REGION_INFLOW);
         assert_eq!(regions[1].angular_velocity[3], REGION_OUTFLOW);
         assert_eq!((regions[0].accel_shape[3], regions[1].accel_shape[3]), (0.0, 2.0));
         assert_eq!(regions[0].inv_inertia_x, [0.0, -2.0, 1.0, 0.5]);
         assert_eq!(regions[2].position_inv_mass[..3], [0.0, 2.0, 0.0]);
-        let (offset, _) = bodies.set_coupled_rows(1, &[coupled]).unwrap();
-        assert_eq!(offset, 3 * std::mem::size_of::<LiquidBody>() as u64);
+        for tick in 1..3 {
+            let moved = LiquidBody { position_inv_mass: [tick as f32, 0.0, 0.0, 1.0], ..coupled };
+            let (offset, written) = bodies.set_coupled_rows(tick, &[moved]).unwrap();
+            assert_eq!(offset, ((2 * tick + 1) * std::mem::size_of::<LiquidBody>()) as u64);
+            assert_eq!(written[0].position_inv_mass, moved.position_inv_mass);
+        }
+        for tick in 0..3 {
+            assert_eq!(bodies.last_rows()[2 * tick].position_inv_mass, rows[2 * tick].position_inv_mass);
+            assert_eq!(bodies.last_rows()[2 * tick + 1].position_inv_mass[0], tick as f32);
+            assert_eq!(bodies.last_rows()[2 * tick + 1].accel_shape[3], 3.0);
+        }
     }
 }

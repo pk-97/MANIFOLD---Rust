@@ -42,7 +42,7 @@ Paths: `R/` = `crates/manifold-renderer/src/node_graph/`, `RP/` = `crates/manifo
 
 - One coupling trait: `StepCoupling`, `SubstepExchange`, `Uncoupled` (`P/stepping.rs:14`, `:30`, `:53`), implemented by FLIP (`R/fluid/coupled/native.rs:314`, `:352`) and MPM. `BodyImpulse` (`P/lib.rs:302`), `apply_impulses` (`:1054`), `TickStamp` (`P/interaction.rs:21`). A coupled Box3D world steps through `advance_worker` from exactly two owners: FLIP's (`R/fluid/coupled/native.rs:115`, `:211`) and MPM's (`R/matter/coupling.rs:69`, `:264`), over `RigidSimulation::advance_with_coupling` (`R/physics.rs:623`, `R/physics/worker.rs:166`).
 - Offline mode: `offline_simulation()` (`R/physics.rs:59`), set only by export through `PhysicsStepScope::with_preview_budget` (`app/content_pipeline.rs:2034`). Live recording runs the live policy.
-- Substep regions: compile-time and never nested (`R/substeps.rs:11`). A boundary opts into offline host syncs by naming a clock port (`SubstepBoundaryPorts`, `:40-46`; FREEZE_COMPILER_MAP.md section 9 (Executor contracts fusion leans on), item 12).
+- Substep regions: compile-time and never nested (`R/substeps.rs:11`). A boundary opts into host syncs by naming a clock port (`SubstepBoundaryPorts`, `:40-46`; FREEZE_COMPILER_MAP.md section 9 (Executor contracts fusion leans on), item 12).
 - Solid distance: `signed_distance_lattice` (`P/sdf.rs:43`), derived lazily on `PreparedFluidGeometry` (`R/fluid_role.rs:37`, `:68`).
 - Domain layout: `domain_layout` (`R/fluid/domain.rs:24`): cells per axis rounded up from Resolution along the longest side, box grown about its centre, no size-multiple rule.
 - Liquid predicate: `is_liquid_domain` = FLIP or matter, hard-coded (`core/liquid_domain.rs:10`). The walk `liquid_domain_of` (`R/scene_modifier_expand/acceleration.rs:87`) runs over `FlatSceneIndex` (`R/scene_modifier_expand/index.rs:15`), which uses only manifold-core types; both are `pub(super)` in the renderer, so editing and the app can't call them.
@@ -85,7 +85,7 @@ Survey: `rg 'purpose: "' crates/manifold-renderer/src/node_graph/primitives/ -g 
 
 **D9 — One clock for GPU liquids: `LiquidClock`,** which is `MatterClock` moved, plus a `held` flag (section 3.4). Box3D and FLIP keep `HeldClock`. Rejected: `HeldClock` for GPU liquids (its debt batches suit a CPU worker, not a GPU tick region); SWASH's frame-count time.
 
-**D10 — SWASH's tick loop is a substep region.** The boundary `node.liquid_state` names the clock port; its body is one step; count = ticks due × steps per tick; offline host syncs fall between ticks. Fusion never crosses the border. Amended 2026-10-01: the pressure solve's loops now run inside `node.gpu_flip_step` (GPU_FLIP_PRESSURE_SOLVE.md section 1.1 (stage design)), so nothing nests, and the compiler refuses a boundary inside another region's body. Rejected: mux-gated fixed step copies (the dispatches still run, and they can't run every due tick offline, go above Speed 1, or host a coupled sync); refusing exports below 60 fps; unrolling the Krylov passes (SWASH D8 rejects it); running the whole frame graph once per tick (the mesher would run per tick).
+**D10 — SWASH's tick loop is a substep region.** The boundary `node.liquid_state` names the clock port; its body is one step; count = ticks due × steps per tick; host syncs fall between ticks. Fusion never crosses the border. Amended 2026-10-01: the pressure solve's loops now run inside `node.gpu_flip_step` (GPU_FLIP_PRESSURE_SOLVE.md section 1.1 (stage design)), so nothing nests, and the compiler refuses a boundary inside another region's body. Rejected: mux-gated fixed step copies (the dispatches still run, and they can't run every due tick offline, go above Speed 1, or host a coupled sync); refusing exports below 60 fps; unrolling the Krylov passes (SWASH D8 rejects it); running the whole frame graph once per tick (the mesher would run per tick).
 
 **D11 — Scene recognition: one list, one walk, one contract (section 3.5).** Rejected: a solver branch at each site; keeping the walk in the renderer, where editing and the app can't reach it (which is how `scene_vm.rs:1234` grew its own FLIP-only walk).
 
@@ -135,7 +135,7 @@ Per 1/60 s tick k:
 2. The liquid runs tick k on the GPU with those bodies and accumulates its reaction.
 3. The reaction crosses as one `BodyImpulse` per body: linear impulse in N·s and angular impulse in N·m·s about the body's centre of mass, scene space. Each solver decodes its own words through the owner's decode closure (MPM: i32 fixed point, `REACTION_WORDS` = 16, `R/matter.rs:201`).
 4. The owner applies it to Box3D tick k exactly once, through `advance_with_coupling`, the only way a coupled Box3D world steps. Box3D adds gravity, fields and contacts.
-5. Live never waits. While tick k's reaction is in flight the pair holds: the liquid runs no tick (clock cap 0) and Box3D does not step. Offline, the tick region's host sync waits for the fence between ticks, so every due tick runs.
+5. Coupled live frames use the ordinary live allowance, up to `MAX_LIVE_TICKS = 3`. Before reusing a pending reaction, the domain waits for its committed frame if needed. Between ticks, the opted-in region commits and waits, applies that tick’s reaction to Box3D, and refreshes the next tick’s body rows. A failed wait or missing tick-end sample is a named error; a failed host exchange stops execution. Uncoupled live frames do not wait. Offline runs every due tick with the same exchanges.
 6. Liquid and bodies share transport, Speed and reset. Different Speeds are refused by name (`matter_domain.rs:835`). A restart of either side restarts both with a new epoch.
 
 Stability (D7): a weakly compressible solver moves bodies on the GPU every substep, under its own substep bound (MPM: `R/matter/coupling.rs:275`). An incompressible solver puts each dynamic body's mass and inertia inside its pressure solve. FLIP meets 3 and 4 synchronously: its native exchange applies the reaction every native substep with body mass in the PCG (`owner.rs:144`).
@@ -220,7 +220,7 @@ pub enum SceneIndexError {                     // the renderer maps it variant f
     Unsupported { path: String, detail: String },
 }
 
-// R/liquid/clock.rs — MatterClock moved; advance/set_tick_cap signatures unchanged
+// R/liquid/clock.rs — MatterClock moved; advance retains the shared live tick policy; the coupled tick-cap override was removed for BUG-gjys
 pub struct LiquidClock;  pub struct ClockFrame { /* today's fields */ pub held: bool /* P8 */ }
 pub const MAX_LIVE_TICKS: u32 = 3;
 
@@ -306,7 +306,7 @@ pub const FACE_GRID_PORTS: [&str; 7] =
 | I10 | Setup problems refuse by name | `liquid_refusals_name_their_control` (each row's `refusals`) |
 | I11 | Overflow is counted and reported | `liquid_overflow_is_reported` |
 | I12 | No atomics where a solver forbids them | `liquid_atomic_free_atoms` (scans each listed atom's WGSL for `atomic`) |
-| I13 | Live frames never wait on the GPU | `liquid_live_frames_never_wait` (a test-build wait counter on the frame clock stays 0 over 120 live frames) |
+| I13 | Uncoupled live frames never wait; coupled live frames use bounded per-tick exchanges | `liquid_live_frames_never_wait` (uncoupled); `liquid_coupled_live_frame_rate` (24 fps and 60 fps tick states) |
 | I14 | No new locks | `rg -n 'Arc<(Mutex\|RwLock)' crates/manifold-renderer/src/node_graph/liquid crates/manifold-renderer/src/node_graph/primitives -g '{matter,gpu_flip,liquid}_*.rs'` → zero |
 | I15 | Fusion never crosses a region border; regions never nest | `substeps_freeze_never_fuses_across_border`, `substeps_region_nested_boundary_rejected` |
 | I16 | Grid outputs share one layout | `liquid_face_grid_layout` (a rigid-rotation field through each solver's resample matches CPU-expected at every face) |

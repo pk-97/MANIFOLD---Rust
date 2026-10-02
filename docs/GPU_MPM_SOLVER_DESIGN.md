@@ -282,16 +282,16 @@ Host syncs between iterations are the one exception to "encode the region and mo
 and they are opt-in per boundary. A boundary opts in by naming a clock input port in
 `SubstepBoundaryPorts::clock`; the compiler resolves the node wired there as the region's
 clock owner and refuses the graph if the port is unwired or the owner sits inside the
-region. Before each iteration after the first, and only offline (`offline_simulation()`,
-export and Record), the executor asks the owner `substep_host_sync(iteration)`; on true it
+region. Before each iteration after the first, the executor asks the owner `substep_host_sync(iteration)`; on true it
 commits the frame's command buffer, waits for it to complete, and calls the owner's
 `substep_host_step(iteration, gpu)`, which may read what the GPU wrote and rewrite shared
-buffers before the rest of the region is encoded. Live frames never ask. A boundary with
+buffers before the rest of the region is encoded. Coupled live frames bound this work
+with `MAX_LIVE_TICKS`; uncoupled frames never ask. A boundary with
 no clock never commits or waits mid-region anywhere, which regions such as GPU FLIP's
 pressure loop rely on. Matter opts in through `node.matter_state`'s `ticks` port, owned by
 `node.matter_domain`, to exchange with Box3D between ticks (section 5); GPU FLIP's
 Box3D coupling will use the same seam. Proofs: `substeps_host_sync_runs_offline_between_iterations`,
-`substeps_host_sync_never_runs_live`, `substeps_host_sync_off_by_default_in_export`,
+`substeps_host_sync_runs_live_between_iterations`, `substeps_host_sync_off_by_default_in_export`,
 `substeps_region_unwired_clock_port_rejected`.
 
 **D8 — Fixed 60 Hz ticks, owned by the domain node; live never spirals; export never
@@ -766,14 +766,14 @@ Test `matter_substep_rule_matches_worked_example` pins this.
 
 Box3D steps once per 1/60 s tick; the fluid's substeps see each body move every substep;
 the fluid's net impulse for tick k reaches Box3D before Box3D steps tick k. With display
-one tick behind (surface D10), the content thread never waits.
+at the last accepted rigid tick, coupled frames may wait for the GPU (BUG-gjys).
 
 Per display frame N, inside the contracted coupled group (liquid side first, as
 `prepare_coupled_scenes` orders it today):
 
-1. `node.matter_domain` checks the reaction buffer of fluid tick k (encoded in frame
-   N−1) with `FrameFence::is_completed` (offline: `FrameClock::wait`). Not complete → publish `ticks = 0`; the pair
-   holds and republishes the previous pair. Lag grows and is reported.
+1. `node.matter_domain` checks the previous tick reaction. If its committed
+   frame has not retired, `FrameClock::wait` waits before readback, live and
+   offline. A failed wait or missing tick-end sample is a named error.
 2. Complete → read the per-body accumulators, convert to world impulses, and run
    `RigidSimulation::advance_with_coupling` with `AdvancementPolicy::Worker { max_ticks: 1 }`
    and a `StepCoupling` implementation (`LiquidCoupling`) whose single `exchange` applies
@@ -782,7 +782,7 @@ Per display frame N, inside the contracted coupled group (liquid side first, as
    acceleration (`PhysicsWorld::dynamics`, as FLIP's exchange does). Box3D steps tick k
    with its own contact substeps.
 3. Upload the body table for fluid tick k+1 (poses at the end of Box3D tick k) and publish
-   `ticks = 1`.
+   the clock’s ordinary tick allowance (live at most `MAX_LIVE_TICKS = 3`).
 4. The GPU runs fluid tick k+1: every substep moves the bodies (4.1 step 2) and
    accumulates reaction (step 5). The reaction slot for tick k+1 is ready for frame N+1.
 5. Presentation at s = t_A: the frame's `particles_a` is the fluid at the end of tick k,
@@ -792,7 +792,8 @@ The GPU body integrator's free-flight baseline equals Box3D's integration of the
 gravity and fields, and the read-back impulse contains only the fluid's reaction, so
 nothing is counted twice. Uncoupled scenes skip steps 1–3 and are free-running under D8.
 
-Offline (export and Record) a frame runs every due tick, each with its own exchange. Steps
+Live frames run the ordinary clock allowance; offline frames run every due tick.
+Each tick has its own exchange. Steps
 1–3 run for the frame's first tick as above; before each later tick the region makes a D7
 host sync: the GPU finishes the previous tick, the domain settles its reaction, steps
 Box3D over it, rewrites that tick's body rows in place and clears the reaction. The tick
@@ -801,12 +802,13 @@ every shared instant (`liquid_export_frame_rate_independent`). The display stays
 at the tick Box3D had settled when the frame began, so at 30 fps the shown pair is one
 tick older than at 60 fps.
 
-**Consequences, stated honestly:** live, a coupled scene advances at most one tick per
-display frame, so at a 30 fps project it runs at half speed live; export runs every tick
-and pays one GPU drain per extra tick (under 1% at 64³, section 8); a missed
-readback leaves a permanent one-tick lag until Reset; Box3D contacts act once per tick
-while the fluid feels the body every substep, so a body pinned against a wall by water
-can jitter by up to one tick of fluid push.
+**Consequences:** at 24 fps a coupled live frame alternates two and three fixed
+60 Hz ticks, without dropping simulation time. The prior frame reaction can cost
+one wait; each extra tick costs one GPU drain. The last tick remains pending until
+the next frame. Overload beyond three ticks uses the same drop-and-reanchor policy
+as uncoupled liquid. The presented pair remains at the rigid tick accepted at frame
+start; Box3D contacts act once per tick while fluid substeps integrate body motion.
+A failed in-frame exchange stops execution rather than reusing stale rows.
 
 ## 6. The interaction surface
 
@@ -1058,7 +1060,7 @@ FLIP-only.
 | Frames id-sorted, ids unique in an epoch | `matter_frame_ids_strictly_increasing` through fill, emit, drain, compaction; `matter_identity_epoch_renumbers_near_limit` |
 | Collider penetration bounded | `matter_collider_penetration_bounded` (rotating box: particle φ ≥ −0.5·dx) |
 | Coupling | the liquid conformance suite, run for every coupled liquid: `liquid_hydrostatic_lift` (within 5%), `liquid_floating_draft` (density 0.5 settles at the waterline ± 0.5·dx), `liquid_coupling_collision` (ratios 0.1/1/10 over up to 30 ticks, ending where the scene loses liquid or the box and never under 8: body energy, and body plus liquid energy, never above 1.01 × initial total; body plus liquid momentum less gravity within 1% of the momentum exchanged), `liquid_free_flight`, `liquid_coupled_world_steps_once_per_tick`; MPM's own: `matter_push_out_reaction_matches_removed_momentum` (D30), `matter_coupling_presentation_shares_display_time` |
-| Coupled pair never blocks live | `matter_coupled_holds_when_reaction_pending`; negative gate: `rg -n 'wait_until_completed\|commit_and_wait' crates/manifold-renderer/src/node_graph/primitives/matter_*.rs` returns nothing |
+| Coupled live ticks exchange in order, bounded by the live clock | `liquid_coupled_three_tick_reactions_are_ordered_and_required`; `substeps_host_sync_runs_live_between_iterations`; GPU: `liquid_coupled_live_frame_rate` |
 | Forces and impulses | `matter_impulse_once_per_tick_across_substeps`; `matter_force_lattice_matches_field`; `matter_input_stream_24_30_60` |
 | One liquid-domain predicate | negative gate: `rg -n '"node\.fluid_surface"' crates -g '*.rs'` returns hits only in `manifold-core/src/liquid_domain.rs`, `R/primitives/fluid_surface.rs` and test code |
 | No FLIP fallback | negative gate: `rg -n -i 'fallback\|fall back' crates/manifold-renderer/src/node_graph/primitives/matter_*.rs` returns nothing |
