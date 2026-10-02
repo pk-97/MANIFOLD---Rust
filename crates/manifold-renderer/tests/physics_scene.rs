@@ -89,7 +89,7 @@ fn physics_boxes_contacts_deflect_the_pile_sideways() {
         enabled: true,
         shape: scalar(id, "shape") as u32,
         kind: scalar(id, "motion") as u32,
-        mass: scalar(id, "mass"),
+        density: scalar(id, "density"),
         friction: scalar(id, "friction"),
         bounce: scalar(id, "bounce"),
         collider: None,
@@ -240,7 +240,7 @@ fn physics_solids_exposures_cover_body_world_triggers_and_roundtrip() {
 
     let targets = binding_targets(&migrated);
     for body_id in [101, 111, 121, 131, 141, 151] {
-        for param in ["mass", "friction", "bounce", "motion", "shape"] {
+        for param in ["density", "friction", "bounce", "motion", "shape"] {
             assert!(
                 targets.contains(&(body_id, param.to_string())),
                 "body {body_id}.{param} must be exposed"
@@ -297,7 +297,7 @@ fn physics_solids_exposures_cover_body_world_triggers_and_roundtrip() {
     for id in [101, 111, 121, 131, 141, 151] {
         assert_eq!(nodes[&id].type_id, "node.rigid_body");
         assert!(matches!(
-            nodes[&id].params.get("mass"),
+            nodes[&id].params.get("density"),
             Some(SerializedParamValue::Float { .. })
         ));
     }

@@ -839,14 +839,21 @@ fn liquid_floating_draft() {
 
 /// I5: a box as dense as the liquid, under 0.8 m of it, feels the weight of
 /// the liquid it displaces, ρ·|g|·V, within 5%. The force is what the body
-/// rows show beyond gravity, averaged over two seconds.
+/// rows show beyond gravity, averaged over two seconds. GPU FLIP runs on
+/// the FLIP Fluids engine's own tank (`gpu_flip_engine_tank`): the 32-cell
+/// Submerged Box is no valid reference, as the engine itself collapses on
+/// it within 16 frames.
 #[test]
 fn liquid_hydrostatic_lift() {
     for row in running(Check::HydrostaticLift) {
         for &fixture in Check::HydrostaticLift.fixtures(row.coupled) {
-            let scene = box_scene(fixture);
+            let (def, scene) = if row.type_id == GPU_FLIP_DOMAIN_TYPE_ID {
+                manifold_renderer::node_graph::liquid::conformance::gpu_flip_engine_tank()
+            } else {
+                (self::scene(row, fixture), box_scene(fixture))
+            };
             let mass = f64::from(scene.mass);
-            let mut run = LiquidRun::offline(row, self::scene(row, fixture), 1);
+            let mut run = LiquidRun::offline(row, def, 1);
             let probe = run.steps(120);
             let mut previous = run.body(&probe);
             let (mut force, mut n) = (0.0, 0.0);
@@ -873,6 +880,181 @@ fn liquid_hydrostatic_lift() {
             assert!(error.abs() <= 0.05, "{}: lift {force:.1} N is not within 5% of {expected:.1} N", row.type_id);
         }
     }
+}
+
+/// One coupled substep of a neutral box, as either solver saw it: vertical
+/// components, SI units.
+#[derive(Clone, Copy, Debug)]
+struct BodySubstep {
+    dt: f64,
+    /// The pressure's impulse on the body, N·s.
+    impulse: f64,
+    /// The body velocity the solve was offered: v + g·dt.
+    predicted: f64,
+    /// The body velocity after the reaction and gravity.
+    after: f64,
+}
+
+/// Frames the side by side compares: the box starts at rest in still water.
+const SIDE_BY_SIDE_TICKS: usize = 30;
+/// GPU FLIP substeps a frame: the engine tank's floor of two. The engine may
+/// take more under its CFL limit; both sides are summed per 60 Hz frame.
+const SIDE_BY_SIDE_SUBSTEPS: u32 = 2;
+
+/// The FLIP Fluids engine on its own coupled tank, summed per 60 Hz frame:
+/// the CPU expected side of the side by side.
+fn engine_tank(scene: &BoxScene) -> Vec<BodySubstep> {
+    use manifold_fluids::{Bounds, Config, FluidWorld, LiquidOptions, MeshRole, RigidBodyState, TimeStepOptions};
+    use manifold_physics::{BodyConfig, PhysicsWorld, Seconds, TriangleMesh};
+    let half = 0.5 * scene.edge;
+    let corner = |k: usize| {
+        [
+            if k & 1 == 1 { half } else { -half },
+            if k & 2 == 2 { half } else { -half },
+            if k & 4 == 4 { half } else { -half },
+        ]
+    };
+    let mesh = TriangleMesh {
+        vertices: [0, 1, 3, 2, 4, 5, 7, 6].map(corner).to_vec(),
+        triangles: vec![
+            [0, 2, 1],
+            [0, 3, 2],
+            [4, 5, 6],
+            [4, 6, 7],
+            [0, 1, 5],
+            [0, 5, 4],
+            [3, 7, 6],
+            [3, 6, 2],
+            [0, 4, 7],
+            [0, 7, 3],
+            [1, 2, 6],
+            [1, 6, 5],
+        ],
+    };
+    // The engine's domain starts at the origin; the scene's is centred in x
+    // and z with its floor at 0.
+    let shift = 0.5 * scene.domain_size;
+    let position = [scene.centre[0] + shift, scene.centre[1], scene.centre[2] + shift];
+    let mut rigid = PhysicsWorld::new([0.0, -G as f32, 0.0]).unwrap();
+    let body = rigid.add_hull(&mesh.vertices, BodyConfig { position, mass: scene.mass, ..BodyConfig::default() }).unwrap();
+    let mut fluid = FluidWorld::new(Config {
+        cells: [scene.resolution as u32; 3],
+        cell_size: f64::from(scene.domain_size) / f64::from(scene.resolution),
+        surface_subdivisions: 0,
+        apic: false,
+    })
+    .unwrap();
+    fluid.set_gravity([0.0; 3]).unwrap();
+    fluid.set_time_step_options(TimeStepOptions { min_substeps: SIDE_BY_SIDE_SUBSTEPS, max_substeps: 32, cfl: 1, adaptive_obstacles: false }).unwrap();
+    fluid.set_liquid_options(LiquidOptions { viscosity: 0.0, surface_tension: 0.0 }).unwrap();
+    let collider = fluid.add_mesh(&mesh, MeshRole::Collider, rigid.pose(body).unwrap()).unwrap();
+    let size = scene.domain_size;
+    fluid.add_fluid_box(Bounds { min: [0.0; 3], max: [size, scene.fill, size] }, [0.0; 3]).unwrap();
+    let frame_dt = Seconds(TICK);
+    // Seed the particles without gravity, as the engine's own tank does.
+    fluid.step(frame_dt).unwrap();
+    fluid.set_gravity([0.0, -G as f32, 0.0]).unwrap();
+    fluid.prepare_rigid_coupling(&[collider], f64::from(FIXTURE_DENSITY)).unwrap();
+    let mut out = Vec::with_capacity(SIDE_BY_SIDE_TICKS);
+    for _ in 0..SIDE_BY_SIDE_TICKS {
+        let mut frame = fluid.begin_frame(frame_dt).unwrap();
+        let start = rigid.dynamics(body).unwrap();
+        let (mut elapsed, mut impulse) = (0.0, 0.0);
+        // The body goes back into the solve every substep, as the engine's
+        // own tank does.
+        while elapsed < frame_dt.0 - 1e-12 {
+            let dynamics = rigid.dynamics(body).unwrap();
+            frame.set_rigid_bodies(&[RigidBodyState { pose: rigid.pose(body).unwrap(), dynamics }]).unwrap();
+            let dt = frame.next_substep().unwrap().expect("a substep remains");
+            frame.advance(dt).unwrap();
+            let reaction = frame.rigid_reactions().unwrap()[0];
+            rigid.apply_impulses(&[reaction.body_impulse(body).unwrap()]).unwrap();
+            rigid.step(dt, 1).unwrap();
+            impulse += reaction.linear[1];
+            elapsed += dt.0;
+        }
+        frame.finish().unwrap();
+        out.push(BodySubstep {
+            dt: elapsed,
+            impulse,
+            predicted: f64::from(start.linear_velocity[1]) + elapsed * f64::from(start.external_linear_acceleration[1]),
+            after: f64::from(rigid.dynamics(body).unwrap().linear_velocity[1]),
+        });
+    }
+    out
+}
+
+/// GPU FLIP on the same tank: the actual side.
+fn gpu_flip_tank(mut def: EffectGraphDef, mass: f64) -> Vec<BodySubstep> {
+    let row = LIQUID_SOLVERS.iter().find(|row| row.type_id == GPU_FLIP_DOMAIN_TYPE_ID).expect("GPU FLIP is a liquid row");
+    set_type_param(&mut def, "node.gpu_flip_step", "steps", SerializedParamValue::Int { value: SIDE_BY_SIDE_SUBSTEPS as i32 });
+    let mut run = LiquidRun::offline(row, def, 1);
+    // A frame publishes the rows its tick ran with: Box3D runs a tick behind,
+    // so tick k's outcome is the next frame's row.
+    let first = run.step();
+    let mut before = run.body(&first);
+    let mut out = Vec::with_capacity(SIDE_BY_SIDE_TICKS);
+    for _ in 0..SIDE_BY_SIDE_TICKS {
+        let probe = run.step();
+        let after = run.body(&probe);
+        let predicted = f64::from(before.linear_velocity[1]) + f64::from(before.accel_shape[1]) * TICK;
+        let velocity = f64::from(after.linear_velocity[1]);
+        // Box3D applies the tick's reaction as one impulse: what it added
+        // beyond gravity is the impulse.
+        out.push(BodySubstep { dt: TICK, impulse: mass * (velocity - predicted), predicted, after: velocity });
+        before = after;
+    }
+    out
+}
+
+/// The coupled pressure reaction on a density-neutral box, frame by frame,
+/// against the FLIP Fluids engine on its own tank: dt, the pressure's
+/// impulse, the velocity offered to the solve and the velocity after it.
+/// The two are different particle discretizations, so the bound is a share
+/// of the engine's impulse, not ulps; a body missing part of its pressure
+/// faces misses by far more.
+#[test]
+fn gpu_flip_body_reaction_matches_engine_substeps() {
+    /// Impulse bound, as a share of the engine's impulse through the frame.
+    const IMPULSE_SHARE: f64 = 0.02;
+    /// Velocity bound, as a share of g·dt per frame run.
+    const VELOCITY_SHARE: f64 = 0.02;
+    let (def, scene) = manifold_renderer::node_graph::liquid::conformance::gpu_flip_engine_tank();
+    let expected = engine_tank(&scene);
+    let mass = f64::from(scene.mass);
+    let actual = gpu_flip_tank(def, mass);
+    eprintln!("frame  dt(cpu/gpu)  impulse N·s (cpu/gpu)  predicted m/s (cpu/gpu)  after m/s (cpu/gpu)");
+    for (k, (e, a)) in expected.iter().zip(&actual).enumerate() {
+        eprintln!(
+            "{k:>3}  {:.5}/{:.5}  {:>8.3}/{:>8.3}  {:>8.4}/{:>8.4}  {:>8.4}/{:>8.4}",
+            e.dt, a.dt, e.impulse, a.impulse, e.predicted, a.predicted, e.after, a.after
+        );
+    }
+    let mut divergence = None;
+    let (mut cpu_total, mut gpu_total) = (0.0, 0.0);
+    for (k, (e, a)) in expected.iter().zip(&actual).enumerate() {
+        // The impulse is bounded cumulatively: the engine's adaptive substeps
+        // bin a substep into a different frame than GPU FLIP's fixed ones, and
+        // the momentum delivered is the invariant.
+        cpu_total += e.impulse;
+        gpu_total += a.impulse;
+        let velocity_bound = VELOCITY_SHARE * G * TICK * (k + 1) as f64;
+        let columns = [
+            ("dt", e.dt, a.dt, 1e-9),
+            ("impulse through this frame", cpu_total, gpu_total, IMPULSE_SHARE * cpu_total.abs()),
+            ("predicted velocity", e.predicted, a.predicted, velocity_bound),
+            ("velocity after", e.after, a.after, velocity_bound),
+        ];
+        if let Some((name, cpu, gpu, bound)) = columns.into_iter().find(|(_, cpu, gpu, bound)| (cpu - gpu).abs() > *bound) {
+            divergence = Some(format!(
+                "frame {k}: {name} is {gpu:.4} on the GPU against the engine's {cpu:.4} (bound {bound:.4}); \
+                 this frame's impulse {:.4} against {:.4}, velocity after {:.4} against {:.4}",
+                a.impulse, e.impulse, a.after, e.after
+            ));
+            break;
+        }
+    }
+    assert!(divergence.is_none(), "GPU FLIP body reaction leaves the engine's: {}", divergence.unwrap_or_default());
 }
 
 /// The pressure iterations the body push is measured at, and the count taken
@@ -1685,4 +1867,32 @@ fn liquid_face_grid_published() {
         assert!(moved > 0, "{}: the next tick left the faces as they were", row.type_id);
         assert!(worst <= u64::from(allowed), "{}: the next tick's faces sit {worst} ulps off: {first:?}", row.type_id);
     }
+}
+
+/// A box a hundredth as dense as water in the GPU FLIP Dam Break stays
+/// bounded in speed for 60 frames. At that ratio the body's per-step friction
+/// gain ρ·h·f·A_wet/m sits far past 2, where an explicit friction reaction on
+/// the body diverged; the pressure, implicit in the solve, is its only
+/// reaction, as in the FLIP Fluids engine (`rigidfluidcoupling.cpp`). The
+/// bound is twice the step's default Top Speed (20 m/s), the fastest water it
+/// is built for: a body the water carries never outruns the water by that much.
+#[test]
+fn gpu_flip_light_body_stays_bounded_in_the_dam_break() {
+    const FRAMES: u32 = 60;
+    const BOUND: f64 = 40.0;
+    let row = LIQUID_SOLVERS.iter().find(|row| row.type_id == GPU_FLIP_DOMAIN_TYPE_ID).expect("the GPU FLIP row");
+    let (def, scene) = manifold_renderer::node_graph::liquid::conformance::gpu_flip_dam_break_with_box(0.01);
+    let mut run = LiquidRun::offline(row, def, 1);
+    let mut peak = 0.0f64;
+    for frame in 0..FRAMES {
+        let probe = run.step();
+        let body = run.body(&probe);
+        let v = v3(body.linear_velocity);
+        let speed = dot(v, v).sqrt();
+        assert!(speed.is_finite(), "frame {frame}: the box's speed is not finite");
+        assert!(speed <= BOUND, "frame {frame}: the box runs at {speed:.2} m/s, past {BOUND:.1}");
+        assert_eq!(run.totals(row).nonfinite, 0, "frame {frame}: a non-finite tick");
+        peak = peak.max(speed);
+    }
+    eprintln!("gpu_flip_light_body_stays_bounded_in_the_dam_break: {} kg box, peak {peak:.2} m/s", scene.mass);
 }

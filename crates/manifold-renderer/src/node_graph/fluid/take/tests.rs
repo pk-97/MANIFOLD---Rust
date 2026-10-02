@@ -63,7 +63,8 @@ pub(in crate::node_graph::fluid) fn request() -> Request {
             pos: [0.0, 0.8, 0.0],
             ..Default::default()
         },
-        mass: 30.0,
+        // 30 kg in the tetrahedron of 0.4 m legs, 0.4³/6 m³.
+        density: 2812.5,
         collider: Some(Arc::new(ColliderGeometry {
             hulls: vec![points.clone()],
         })),

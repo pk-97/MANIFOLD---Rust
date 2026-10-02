@@ -101,7 +101,7 @@ pub fn metadata_for_node_type(type_id: &str) -> Vec<SceneParamMetadata> {
                 && (type_id != "node.bokeh_gather"
                     || matches!(pd.name.as_ref(), "enabled" | "aperture" | "quality"))
         })
-        .filter(|pd| type_id != "node.rigid_body" || matches!(pd.name.as_ref(), "shape" | "motion" | "mass" | "friction" | "bounce" | "collider_parts"))
+        .filter(|pd| type_id != "node.rigid_body" || matches!(pd.name.as_ref(), "shape" | "motion" | "density" | "friction" | "bounce" | "collider_parts"))
         .filter(|pd| type_id != "node.scene_object" || pd.name.as_ref() != "parent_visible")
         .filter(|pd| liquid_dial_params(type_id).is_none_or(|dials| dials.contains(&pd.name.as_ref())))
         .filter(|pd| type_id != "node.whitewater_step" || matches!(pd.name.as_ref(), "enabled" | "amount"))
