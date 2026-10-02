@@ -192,10 +192,16 @@ struct Model {
     margins: Margins,
     /// Removed by the tick, over the run.
     removed: u32,
+    /// The node's Preserve Foam toggle.
+    preserve_foam: bool,
+    /// Foam slots the preservation gave lifetime to, over the run.
+    preserved: u32,
+    /// The most foam in one cell when the preservation ran.
+    foam_density: u32,
 }
 
 impl Model {
-    fn new() -> Self {
+    fn new(preserve_foam: bool) -> Self {
         let shape = shape();
         Self {
             scene: Scene::new(),
@@ -204,7 +210,46 @@ impl Model {
             state: PoolState::default(),
             margins: Margins::default(),
             removed: 0,
+            preserve_foam,
+            preserved: 0,
+            foam_density: 0,
         }
+    }
+
+    /// `node.preserve_foam` at FLIP's settings over the sort's bins (one a
+    /// cell of the whitewater grid), and each foam slot's distance to its
+    /// bin's nearest face in cells — the GPU counts the bin the sort put it
+    /// in, so a slot on a face would be a tie.
+    fn preserve(
+        shape: &StepShape,
+        margins: &mut Margins,
+        preserved: &mut u32,
+        foam_density: &mut u32,
+        pool: Vec<WhitewaterParticle>,
+    ) -> Vec<WhitewaterParticle> {
+        let s = shape;
+        let h = s.cell_size;
+        let origin: [f32; 3] = std::array::from_fn(|a| s.center[a] - 0.5 * s.size[a]);
+        let mut density = std::collections::HashMap::<[i64; 3], u32>::new();
+        for p in pool.iter().filter(|p| p.kind == 1) {
+            let g: [f32; 3] = std::array::from_fn(|a| (p.position_lifetime[a] - origin[a]) / h);
+            let margin = (0..3)
+                .map(|a| {
+                    let f = g[a] - g[a].floor();
+                    f.min(1.0 - f)
+                })
+                .fold(f32::INFINITY, f32::min);
+            if margin.is_finite() {
+                margins.note("preserve", margin);
+                let cell = density.entry(g.map(|x| x.floor() as i64)).or_insert(0);
+                *cell += 1;
+                *foam_density = (*foam_density).max(*cell);
+            }
+        }
+        let settings = pool_cpu::Preserve { dt: TICK as f32, ..pool_cpu::Preserve::flip() };
+        let out = pool_cpu::preserve(&pool, origin, h, s.bins, settings);
+        *preserved += out.iter().zip(&pool).filter(|(o, p)| o.position_lifetime[3] > p.position_lifetime[3]).count() as u32;
+        out
     }
 
     fn reseed(&mut self) {
@@ -265,7 +310,7 @@ impl Model {
         let advect = Advect { gravity: GRAVITY, dt: TICK as f32, ..Advect::flip() };
         let age = Age { dt: TICK as f32, ..Age::flip() };
         for _ in 0..ticks {
-            let stepped: Vec<WhitewaterParticle> = self
+            let mut stepped: Vec<WhitewaterParticle> = self
                 .pool
                 .iter()
                 .map(|&p| {
@@ -276,6 +321,9 @@ impl Model {
                     pool_cpu::age(p, age)
                 })
                 .collect();
+            if self.preserve_foam {
+                stepped = Self::preserve(&self.shape, &mut self.margins, &mut self.preserved, &mut self.foam_density, stepped);
+            }
             let (flags, margins) = pool_cpu::keep(&stepped, &self.scene.solid, &grid, MAX_PER_CELL as u32);
             for margin in margins {
                 self.margins.note("keep", margin / h);
@@ -312,8 +360,8 @@ impl Model {
 /// What the node publishes after each of [`FRAMES`], offline: on a frame
 /// with ticks, the snapshot of the previous frame with ticks; ticks 0 hold
 /// what is shown; zeros on the first frame and on a new epoch.
-fn expected() -> (Vec<Snapshot>, Model) {
-    let mut model = Model::new();
+fn expected(preserve_foam: bool) -> (Vec<Snapshot>, Model) {
+    let mut model = Model::new(preserve_foam);
     let mut published = Snapshot::default();
     let mut pending = None;
     let mut epoch = None;
@@ -341,11 +389,34 @@ fn expected() -> (Vec<Snapshot>, Model) {
 /// threshold, and every path the proof claims exercised.
 #[test]
 fn whitewater_step_reference_is_tie_free() {
-    let (frames, model) = expected();
+    reference_is_tie_free(false);
+}
+
+/// The same fixture with Preserve Foam on: still tie-free, with foam for
+/// the pass to count. The fixture's foam never crowds past the step's min
+/// density (FLIP's 20 a cell), so no slot gains lifetime here and the
+/// across-frames proof with the toggle on covers the routing, not the gain:
+/// BUG-6zi1 (Preserve Foam gain proof). The gain itself is proven per pass
+/// in `whitewater_pool_tests::preserve_foam_matches_flip`.
+#[test]
+fn whitewater_step_reference_is_tie_free_preserving_foam() {
+    let model = reference_is_tie_free(true);
+    assert!(model.foam_density > 0, "no foam for the preservation to count");
+    assert_eq!(model.preserved, 0, "the fixture now exercises the gain: assert it and close BUG-6zi1");
+}
+
+fn reference_is_tie_free(preserve_foam: bool) -> Model {
+    let (frames, model) = expected(preserve_foam);
     for (k, f) in frames.iter().enumerate() {
         println!("frame {k}: {:?}", f.report);
     }
-    println!("closest decision {:?}, removed {}", model.margins.closest, model.removed);
+    println!(
+        "closest decision {:?}, removed {}, foam preserved {}, most foam in a cell {}",
+        model.margins.closest,
+        model.removed,
+        model.preserved,
+        model.foam_density
+    );
     assert_eq!(model.margins.near, 0, "{} decisions within {TOL}; closest {:?}", model.margins.near, model.margins.closest);
     let last = |epoch: u32| frames.iter().zip(FRAMES).filter(|(_, (_, e))| *e == epoch).map(|(f, _)| f.report).next_back().expect("frame");
     let first = frames[4].report;
@@ -358,6 +429,7 @@ fn whitewater_step_reference_is_tie_free() {
     let published = frames.iter().flat_map(|f| f.populations.iter().flatten());
     assert!(published.clone().all(|p| p.position_radius[3] > 0.0), "only living particles are published");
     assert!(last(1).emitted > 0 && last(1).emitted < first.emitted, "the new epoch counts from 0: {:?}", last(1));
+    model
 }
 
 #[cfg(feature = "gpu-proofs")]
@@ -409,6 +481,17 @@ mod gpu {
     /// count zeroed.
     #[test]
     fn whitewater_step_matches_cpu_across_frames() {
+        across_frames(false);
+    }
+
+    /// The same with Preserve Foam on: the preservation pass runs between
+    /// the age and the keep, and the tick's pools swap the other way.
+    #[test]
+    fn whitewater_step_matches_cpu_across_frames_preserving_foam() {
+        across_frames(true);
+    }
+
+    fn across_frames(preserve_foam: bool) {
         let harness = Harness::new();
         let scene = Scene::new();
         let shared = |bytes: &[u8]| {
@@ -422,7 +505,7 @@ mod gpu {
         let level = shared(bytemuck::cast_slice(&scene.level));
         let faces: [GpuBuffer; 3] = std::array::from_fn(|a| shared(bytemuck::cast_slice(&scene.faces[a])));
         let inputs = StepInputs { particles: &particles, solid: &solid, faces: [&faces[0], &faces[1], &faces[2]], level_set: &level };
-        let (want, _) = expected();
+        let (want, _) = expected(preserve_foam);
         let fence = HandFence::default();
         let mut step = Step::default();
         let mut compared = 0;
@@ -438,7 +521,7 @@ mod gpu {
                 wavecrest_emission: WAVECREST_RATE,
                 min_energy: MIN_ENERGY,
                 max_energy: MAX_ENERGY,
-                preserve_foam: false,
+                preserve_foam,
             };
             let mut native = harness.device.create_encoder("whitewater step test");
             let report = {

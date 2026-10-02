@@ -16,7 +16,7 @@ use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 
-use super::prefix_scan::PrefixScan;
+use super::prefix_scan::{PrefixScan, ScanLabels};
 use crate::node_graph::channel_names::well_known;
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::fluid_particles::{
@@ -79,6 +79,7 @@ pub(crate) const LIQUID_PARTICLE_READ: RecordRead = RecordRead {
 pub(crate) struct SortLabels {
     pub clear: &'static str,
     pub count: &'static str,
+    pub scan: ScanLabels,
     pub ranges: &'static str,
     pub tail: &'static str,
     pub scatter: &'static str,
@@ -88,6 +89,7 @@ pub(crate) struct SortLabels {
 const NODE_LABELS: SortLabels = SortLabels {
     clear: "node.sort_particles_into_cells.clear",
     count: "node.sort_particles_into_cells.count",
+    scan: ScanLabels { blocks: "node.sort_particles_into_cells.scan.blocks", add: "node.sort_particles_into_cells.scan.add" },
     ranges: "node.sort_particles_into_cells.ranges",
     tail: "node.sort_particles_into_cells.tail",
     scatter: "node.sort_particles_into_cells.scatter",
@@ -217,7 +219,7 @@ impl ParticleSorter {
         encoder.compute_memory_barrier_buffers();
         encoder.dispatch_compute(count_pass, &bindings, groups(count), labels.count);
         encoder.compute_memory_barrier_buffers();
-        self.scan.encode(encoder, bin_total as usize);
+        self.scan.encode_labelled(encoder, bin_total as usize, labels.scan);
         encoder.dispatch_compute(write_ranges, &bindings, groups(bin_total), labels.ranges);
         encoder.dispatch_compute(clear_tail, &bindings, groups(sorted_capacity), labels.tail);
         encoder.compute_memory_barrier_buffers();
