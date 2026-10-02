@@ -9,6 +9,7 @@ transcript and timings. Exit 0 iff all required checks pass.
 
 import argparse
 import contextlib
+import hashlib
 import importlib.util
 import json
 import os
@@ -300,6 +301,47 @@ def reverse_deps(repo, packages):
         return []
 
 
+THUMBNAIL_KINDS = (("effect-presets", "effects"), ("generator-presets", "generators"))
+
+
+def stale_thumbnails(repo):
+    """Preset JSONs whose thumbnail hash sidecar is missing or differs (pure SHA-256,
+    same rule as preset_thumbnail::tests::factory_thumbnails_fresh)."""
+    assets = Path(repo) / "crates/manifold-renderer/assets"
+    stale = []
+    for presets, thumbs in THUMBNAIL_KINDS:
+        for preset in sorted((assets / presets).glob("*.json")):
+            sidecar = assets / "preset-thumbnails" / thumbs / f"{preset.stem}.hash"
+            digest = hashlib.sha256(preset.read_bytes()).hexdigest()
+            if not sidecar.is_file() or sidecar.read_text().strip() != digest:
+                stale.append(f"{presets}/{preset.name}")
+    return stale
+
+
+def stale_docs_index(repo):
+    """True when docs/README.md differs from what gen_docs_index.py would write."""
+    docs = Path(repo) / "docs"
+    index = docs / "README.md"
+    if not index.is_file():
+        return False
+    import gen_docs_index
+    return gen_docs_index.render(docs)[0] != index.read_text(encoding="utf-8")
+
+
+def freshness_problems(repo):
+    """Every stale generated artifact in one pass: (name, detail lines, regenerate command)."""
+    problems = []
+    thumbs = stale_thumbnails(repo)
+    if thumbs:
+        shown = thumbs[:10] + ([f"... and {len(thumbs) - 10} more"] if len(thumbs) > 10 else [])
+        problems.append(("preset-thumbnails", shown,
+                         "cargo run --release -p manifold-renderer --bin generate-preset-thumbnails"))
+    if stale_docs_index(repo):
+        problems.append(("docs-index", ["docs/README.md differs from the generated index"],
+                         "scripts/gen_docs_index.py"))
+    return problems
+
+
 def skip(results, label, reason):
     """Record a SKIP; the reason travels to the live line and the summary."""
     results.append(("SKIP", label, None, [reason]))
@@ -356,6 +398,16 @@ def _main(stack):
     touches_gpu = touches_gpu_path(repo, base_sha)
 
     results = []
+
+    # Stale generated artifacts are knowable in seconds; report all of them
+    # before any build instead of one per 15-minute rerun.
+    problems = freshness_problems(repo)
+    if problems:
+        for name, detail, command in problems:
+            tail = [*detail, f"regenerate: {command}"]
+            results.append(("FAIL", f"fresh-{name}", None, tail))
+            print_result(f"fresh-{name}", "FAIL", None, tail)
+        return finish(repo, base_sha, results)
 
     # Harness changes use the same focused tests advertised in worker briefs.
     from codex_checks import tooling_checks
@@ -490,6 +542,21 @@ def _main(stack):
         if build_leg(results, "tests-build", ["cargo", "nextest", "run", "--no-run", *pkg_args],
                      repo) == "FAIL" and not args.keep_going:
             return finish(repo, base_sha, results)
+    # The catalog check is one nextest test from the binary just built, so it
+    # costs seconds and fails before the long test run.
+    if "manifold-renderer" in gate_packages:
+        exit_, out, err, duration = run_check(
+            "catalog-fresh",
+            ["cargo", "nextest", "run", "-p", "manifold-renderer", "-E",
+             "test(regenerates_in_sync)"], cwd=repo, timeout=600)
+        tail = (out + err).rstrip().splitlines()[-20:]
+        status = "PASS" if exit_ == 0 else "FAIL"
+        if exit_:
+            tail.append("regenerate: cargo run -p manifold-renderer --bin gen_node_catalog")
+        results.append((status, "catalog-fresh", duration, tail))
+        print_result("catalog-fresh", status, duration, tail if exit_ else None)
+        if status == "FAIL" and not args.keep_going:
+            return finish(repo, base_sha, results)
     if run_gpu:
         if build_leg(results, "gpu-proofs-build",
                      ["python3", "scripts/gpu_proofs_gate.py", "--base", args.base, "--build-only"],
@@ -509,7 +576,7 @@ def _main(stack):
         pkg_args = []
         for p in gate_packages:
             pkg_args.extend(["-p", p])
-        cmd = ["cargo", "nextest", "run", *pkg_args]
+        cmd = ["cargo", "nextest", "run", "--no-fail-fast", *pkg_args]
         exit_, out, err, duration = run_check("tests", cmd, cwd=repo, timeout=3600)
         tail = (out + err).rstrip().splitlines()[-20:]
         status = "PASS" if exit_ == 0 else "FAIL"

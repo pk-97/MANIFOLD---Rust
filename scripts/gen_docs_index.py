@@ -85,8 +85,9 @@ def summary_for(text: str, lines: list[str]) -> str:
     return "(no summary — add an <!-- index: ... --> marker)"
 
 
-def main() -> int:
-    docs = sorted(p for p in DOCS.glob("*.md") if p.name != "README.md")
+def render(docs_dir: Path = DOCS) -> tuple[str, int]:
+    """The index text the committed docs/README.md must equal, and the doc count."""
+    docs = sorted(p for p in docs_dir.glob("*.md") if p.name != "README.md")
     rows = []
     for p in docs:
         text = p.read_text(encoding="utf-8")
@@ -112,9 +113,13 @@ def main() -> int:
     for stem, title, summary in rows:
         out.append(f"| [{title}]({stem}.md) | {summary} |")
     out.append("")
+    return "\n".join(out), len(rows)
 
-    OUT.write_text("\n".join(out), encoding="utf-8")
-    print(f"Wrote {OUT.relative_to(REPO)} — {len(rows)} docs indexed.")
+
+def main() -> int:
+    text, count = render()
+    OUT.write_text(text, encoding="utf-8")
+    print(f"Wrote {OUT.relative_to(REPO)} — {count} docs indexed.")
     return 0
 
 
