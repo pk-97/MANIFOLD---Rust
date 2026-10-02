@@ -51,6 +51,47 @@ pub fn truncate_with_ellipsis(
     ellipsis.to_string()
 }
 
+/// Greedy word wrap of `text` into lines that each measure within `max_width`.
+/// A word wider than `max_width` on its own is split at character boundaries,
+/// so every returned line fits. Empty text yields no lines.
+pub fn wrap_to_width(
+    measurer: &dyn TextMeasure,
+    text: &str,
+    font_size: u16,
+    weight: FontWeight,
+    max_width: f32,
+) -> Vec<String> {
+    let fits = |s: &str| measurer.measure_text(s, font_size, weight).x <= max_width;
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    for word in text.split_whitespace() {
+        let candidate = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
+        if fits(&candidate) {
+            line = candidate;
+            continue;
+        }
+        if !line.is_empty() {
+            lines.push(std::mem::take(&mut line));
+        }
+        if fits(word) {
+            line = word.to_string();
+            continue;
+        }
+        for ch in word.chars() {
+            line.push(ch);
+            if !fits(&line) && line.chars().count() > 1 {
+                line.pop();
+                lines.push(std::mem::take(&mut line));
+                line.push(ch);
+            }
+        }
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines
+}
+
 /// Always-on default measurer carried by every [`UITree`](crate::tree::UITree):
 /// a weight-aware character-width heuristic, identical to `NativeTextRenderer`'s
 /// `TextMeasure` impl. It needs no GPU and no font state, so a tree can always
