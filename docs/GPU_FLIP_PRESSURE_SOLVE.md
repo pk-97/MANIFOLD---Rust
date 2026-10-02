@@ -2,7 +2,7 @@
 
 <!-- index: The GPU water solver (GPU FLIP, formerly SWASH): PIC/FLIP particles on a face grid, one liquid tick of two water steps, and a multigrid-preconditioned conjugate gradient pressure solve that stops on the FLIP Fluids tolerance. The step, the equation, the solve, the Auto iteration rule, the named refusals, the measures against the FLIP Fluids engine, and what is still owed (solids). -->
 
-**Status:** BUILT · 2026-10-01 · the step is one node, `node.gpu_flip_step` (section 1.1 (stage design)) · owed: BUG-4jfv (solids gate: race rows, engine draft, L2 demo); BUG-l2h3 (SWASH to a live instrument) child .10 (occupied-block passes); BUG-h8or (lid slabs) · the retired FFT solve is `docs/archive/FFT_WATER_SOLVER_DESIGN.md`.
+**Status:** BUILT · 2026-10-01 · the step is one node, `node.gpu_flip_step` (section 1.1 (stage design)) · owed: BUG-4jfv (solids gate: race rows, engine draft, L2 demo); BUG-l2h3 (SWASH to a live instrument) child .10 (occupied-block passes); BUG-h8or (lid slabs); BUG-ekb3 (separating solids, designed in section 8) · the retired FFT solve is `docs/archive/FFT_WATER_SOLVER_DESIGN.md`.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) before the solids phase.
 
 GPU FLIP is the liquid water solver: particles carry the water, a face (MAC) grid carries its velocity, and each step makes that velocity divergence-free with one pressure solve. The solve is the textbook multigrid-preconditioned conjugate gradient (McAdams, Sifakis and Teran, "A parallel multigrid Poisson solver for fluids simulation on large grids", 2010). It replaced the FFT capacitance solve on 2026-10-01: the same equation, 3.0× faster at 64³ and 3.7× at 128³, to a smaller residual.
@@ -332,6 +332,58 @@ Peter's scenes have boxes and obstacles in the water, and the engine's Dam Break
   - Before contact the coupled box is drawn exactly where Box3D alone puts it; the world steps once per tick at 60 and 30 fps.
   - Body force against iteration count (`gpu_flip_body_push_against_iterations`): at 4, 6, 8, 12 and 16 iterations the mean force and torque on both boxes are within 0.8% of 64 iterations, so 4 is the smallest steady count; Auto takes 11–17 iterations a tick and never reaches the cap, so it stands with bodies. Shake and trajectory statistics are not bars: the floating box amplifies the solve's last bits into 0.7–1.6 cells of stray over two seconds at any count that is not bit-identical to 64.
 - **Forbidden:** whole-cell solids; a CPU wait for the reaction inside the tick; atomics in the per-body reduction; editing the engine.
+
+### Separating solids — design, not built (BUG-ekb3 (water cannot separate from a solid floor))
+
+Today the solve lets a solid pull on water: a pool under +20 m/s² upward gravity stays on the floor, held by negative pressure in the floor cells. Real water lets go. The FLIP Fluids engine has the same fault (`fluidsimulation.cpp` `_constrainVelocityFieldThread`, 6860–6924, no one-sided condition), so this is a departure from the engine, on physics. On stage: water flung upward, or a box yanked out of a pool, leaves the surface it was on instead of hanging off it.
+
+**The condition.** Batty, Bertails and Bridson 2007 ("A fast variational framework for accurate solid-fluid coupling", section 5): at a solid the water may move away but not in, and the solid may push but never pull. Written per cell, as Chentanez and Müller 2012 ("A multigrid fluid pressure solver handling separating solid boundary conditions", TVCG 18(8)) put it on a multigrid solve: for every water cell with a face of open fraction below 1 (a box wall or a body), a separating cell,
+
+- p_i ≥ 0, the divergence left after the projection d_i ≥ 0, and p_i · d_i = 0.
+
+Either the cell presses on the solid (p > 0, the divergence-free row as today) or it is let go (p = 0, it may lose water, d > 0). A cell with no solid face keeps today's equation exactly. This is the linear complementarity problem the papers solve; our L is a symmetric M-matrix (non-positive off-diagonals, diagonally dominant), for which the active-set iteration below is finite and exact (Hintermüller, Ito and Kunisch 2002, "The primal-dual active set strategy as a semismooth Newton method").
+
+The face velocity is not touched. A wall face stays 0 and a body face stays v_s in `old`, the forced field, the divergence, the projection and the constraint, so the operator and the divergence still agree on every face. That is what killed the earlier separating wall (section 2, walls): it changed the face and not the operator. Here only the pressure unknown changes kind, and a let-go cell is a Dirichlet p = 0 cell, which the operator already handles.
+
+**The active set and its rounds, on the GPU.**
+
+1. `separating` (fine cells, the solve's active tiles): a cell is separating when it is solve water and any of its six faces has open fraction below 1. Written beside `solve_water` at the same time.
+2. The let-go set A starts from last step's A, masked to this step's separating cells (a buffer the step keeps, like the tile rank's ping-pong). A still pool starts and stays empty.
+3. A cell in A leaves the solve's water mask, exactly as a sealed pocket's pinned leader does (section 2): p = 0 there and its neighbours lose that coupling; their diagonals are unchanged because d_i already counts every in-box neighbour. Only the level the gradient runs on needs new rows (`rows_main` over its tiles, plus its tile classify and lists); the coarser levels of the preconditioner keep the masks `prepare` built. The preconditioner is then built from a slightly different mask than the operator. It is still a fixed symmetric positive operator, so the conjugate gradient stays correct; it may take more iterations, which the proofs record.
+4. Solve, warm-started from the previous round's p with A's cells zeroed (`init_main` gains r = f − Lx₀; round one starts from 0 as today).
+5. `separating_update`, one thread a separating cell: a cell not in A with p < 0 joins A; a cell in A whose divergence after projection, d_i = (f − L p)_i computed with it back in the system, is below 0 (water pushed into the solid) leaves A. It writes a changed count, summed as the solver's partials are (tile-indexed, fixed tree, no atomics).
+6. The count arms the next round's gate the way the stop arms the solve (`armed`, indirect dispatch, section 3): no change, no further groups run. No readback.
+
+The rounds stop when A does not change. A round count that reaches a named cap without settling is counted in a new solver word and Liquid State reports it by name, as the solve's `unconverged` is; the water keeps the pressure it has. The cap's value is set from the measure, not here (open call 3).
+
+Signs are exact: no threshold on p. A one-cell film on the floor whose p sits near 0 in f32 may flip into A; pinning a near-zero cell to zero moves nothing visible, and the next round's complementarity check returns it if the water presses back.
+
+**Cost per tick.** Against today's stamped solve at 64 (9.22 ms of `gpu_flip.pressure.*` in GPU_FLIP_SPARSE_BLOCKS_DESIGN.md section 7 (the node measure)), estimated, not measured:
+
+- Water resting on or flowing over solids, A empty and staying empty (the still pool, the settled Dam Break): one `separating_update` pass over the separating cells and one gate pass a solve, about 0.1 ms at 64 and 0.3 ms at 128. The pressure is bitwise today's.
+- A steady separation (a lifting pool after its first ticks): A starts right from last step, so one round plus the check, the same plus one fine rows rebuild, about 0.2 ms at 64.
+- The ticks where contact changes (lift-off, a splash landing): one or two extra warm-started rounds. A warm round converges in fewer iterations than the cold 11–14 (estimate 4–8), so about +40–70% on the main solve for those ticks only. At 64 that is roughly +2 to +3.5 ms on a contact-change tick; at 128 roughly +8 to +12 ms.
+- The density solve is not constrained (below), so it costs nothing.
+
+**The density solve stays plain.** It moves particles toward rest density and never becomes velocity (section 9, item 5). A negative density pressure at the floor pulls particles down only toward rest spacing, which is not suction on the velocity. Constraining it too is open call 2.
+
+**Moving and dynamic bodies.** The divergence already carries the body's motion through the C·v_s term (moving solids, above), so the complementarity is on the relative motion with no new term: a body moving up off the water lets go of it, a body pushing in presses. With dynamic bodies the operator is A + ρh·G M⁻¹ Gᵀ; a let-go cell leaves both, so the body can never be pulled by suction, and the reaction (`react`) reads a pressure that is zero there. The floating box then feels only the push of the water under it. Sealed pockets: a pocket with any let-go cell is no longer sealed (it has a p = 0 cell), so the pocket spread counts last step's A as air before the solve, and that pocket takes no mean removal and no pin.
+
+**Solve Level.** The condition lives on the level the gradient runs on (GPU_FLIP_SPARSE_BLOCKS_DESIGN.md section 11 (Solve Level)): at level k the separating cells are level-k water cells with a coarse face below 1 or a solid child (the coarsening's solid kind, −1), A is a level-k mask, and `separating_update` reads `view(k)`. Nothing below k changes. The fine pressure is P p_k; trilinear prolongation of a field that is ≥ 0 at the let-go coarse cells can still read slightly negative in a fine floor cell beside a pressed coarse neighbour. So at level k the guarantee is p_k ≥ 0 on the coarse unknowns, and the lift is proven, not a fine p ≥ 0.
+
+**Proofs.**
+
+1. Rest stays rest. `gpu_flip_still_pool`, `gpu_flip_hydrostatic_column_rests` and `gpu_flip_still_pool_rests_round_a_static_obstacle` unchanged and green, plus two assertions on each: A empty on every frame (no spurious separation), and the pressure bitwise equal to the step with the condition switched off (the same `all_tiles`-style test-only lever, D-6 of the sparse blocks doc). A drifting or lifting particle fails the existing rest bars.
+2. Lift. `gpu_flip_pool_lifts_under_upward_gravity`: the flat 0.64 m pool of `gpu_flip_forced_pool_volume_probe` at 64 and 128, gravity +20 m/s², 180 frames. Pass: from the first tick p ≥ 0 at every separating cell (read back in the test), the lowest particle rises by more than one cell by frame 10 and follows ½·a·t² within a cell while the water is clear of the lid, and the solver's round word is under its cap. The bead's probe shows the failure today (identical counts every frame).
+3. The LCP against a CPU reference. `scripts/mgpcg_reference.py --separating` solves the same problem by the same active-set rounds over a direct sparse solve and checks the three conditions to 1e-10; `pressure_module_separating_matches_reference` holds the GPU's p and A against it at 64³ and 25³ (A exact, p at the existing pins' bars), at levels 0 and 1.
+4. Everything that exists stays green: every `pressure_module_*` pin, `gpu_flip_sparse_step_matches_dense_bitwise`, `pressure_module_sparse_matches_all_tiles` (with A added to the poison), the body proofs (`gpu_flip_body_operator_matches_cpu`, `_reaction_`, `gpu_flip_body_push_against_iterations`, `gpu_flip_body_step_sparse_matches_all_tiles`), the conformance hold-under and draft rows (627.1 N within 1%, draft within one cell: a held or floating box presses, so A stays empty under it), the pocket proofs and the Dam Break volume and wall-feel rows (recorded, with any movement named).
+
+**Calls only Peter can make.**
+
+1. Which solids let go. Designed: every solid, the box walls and lid included, since real water leaves all of them. The alternative is a per-collider Sticky toggle (a body that holds water like the engine's), which is a new collider param.
+2. The density solve: plain as designed, or the same condition on it.
+3. The rounds cap: a named cap with a stats word and a Liquid State report, the solve's `MAX_ITERATIONS` pattern. The brief says no caps; this one bounds work, not quality, and an unsettled set keeps the last round's pressure. If he rules no cap at all, the rounds run until A settles, which the M-matrix theory says is finite but not how fast.
+4. At Solve Level above 0 the bar is lift-off and coarse p ≥ 0, not a fine p ≥ 0.
 
 ### Tracked in beads
 
