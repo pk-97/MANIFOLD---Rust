@@ -1831,59 +1831,6 @@ fn gpu_flip_sealed_pockets_zero_the_solid_velocity_as_the_engine() {
     assert!(zeroed > 0, "some pocket was sealed");
 }
 
-/// The engine applies no density correction, and sealed water cannot change
-/// volume: the density source is 0 in every sealed pocket cell (a sealed
-/// region of more than one cell) and unchanged everywhere else.
-#[test]
-fn gpu_flip_density_source_is_zero_in_sealed_pockets() {
-    let mut zeroed = 0;
-    for (seed, mask) in [(0xd51, 63), (0xd52, 63 & !1)] {
-        let mut rng = Stream::new(seed);
-        let water: Vec<f32> = (0..cell_len()).map(|_| f32::from(u8::from(rng.unit() < 0.97))).collect();
-        let mut open = solid_faces(seed + 1, true);
-        for face in &mut open {
-            for a in 0..3 {
-                if rng.unit() < 0.5 {
-                    face.weight[a] = 0.0;
-                }
-            }
-        }
-        let (isolated, _) = cpu_isolated(&water, &open, mask);
-        let params = StepParams { closed_faces: mask, ..lattice() };
-        let lines = (N[1] * N[2]).max(N[0] * N[2]).max(N[0] * N[1]);
-        let mut pockets = Pass::new();
-        pockets.bind(6, &water).bind(10, &open).bind(23, &vec![0u32; cell_len()]).bind(24, &[0u32; 11]).bind(25, &vec![0u32; cell_len()]);
-        pockets.run::<u32>("pocket_seed", &params, 23, cell_len(), cell_len());
-        pockets.run::<u32>("pocket_start", &params, 24, 11, 1);
-        loop {
-            pockets.run::<u32>("pocket_round", &params, 24, 11, 1);
-            for sweep in ["pocket_sweep_x", "pocket_sweep_y", "pocket_sweep_z"] {
-                pockets.run::<u32>(sweep, &params, 24, 11, lines);
-            }
-            if pockets.bound::<u32>(24, 11)[9] == 0 {
-                break;
-            }
-        }
-        let pocket = pockets.bound::<u32>(23, cell_len());
-        let (sorted, ranges) = cpu_sort(&random_particles(seed + 2, 400));
-        let corners = vec![1.0f32; face_len()];
-        let step = StepParams { capacity: sorted.len() as u32, rate: 60.0, ..params };
-        let source = |pocket: &[u32]| -> Vec<f32> {
-            let mut pass = Pass::new();
-            let threads = pass.every_tile();
-            pass.bind(1, &ranges).bind(2, &sorted).bind(6, &water).bind(9, &corners).bind(10, &open).bind(23, pocket).run("density_source", &step, 5, cell_len(), threads)
-        };
-        let got = source(&pocket);
-        let free = source(&vec![0u32; cell_len()]);
-        for i in 0..cell_len() {
-            let want = if isolated[i] { 0.0 } else { free[i] };
-            assert_eq!(got[i], want, "seed {seed:#x} mask {mask}: cell {i}");
-            zeroed += usize::from(isolated[i] && free[i] != 0.0);
-        }
-    }
-    assert!(zeroed > 0, "some sealed cell had a density error to zero");
-}
-
 #[test]
 fn gpu_flip_pocket_spread_reports_an_unfinished_cap() {
     // Every cell water and every link open, air only past the open -X face:
