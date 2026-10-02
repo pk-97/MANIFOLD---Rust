@@ -14120,6 +14120,10 @@
           "type": "f32"
         },
         {
+          "name": "solve_level",
+          "type": "f32"
+        },
+        {
           "capacity": "fixed:1",
           "name": "bodies",
           "type": "Array"
@@ -14163,6 +14167,16 @@
           "range": [
             "8",
             "512"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "Solve Level",
+          "name": "solve_level",
+          "range": [
+            "0",
+            "4"
           ],
           "type": "int"
         },
@@ -14455,6 +14469,11 @@
         },
         {
           "name": "closed_faces",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "solve_level",
           "required": false,
           "type": "f32"
         }
@@ -14770,6 +14789,16 @@
           "range": [
             "0",
             "63"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "Solve Level",
+          "name": "solve_level",
+          "range": [
+            "0",
+            "4"
           ],
           "type": "int"
         }
@@ -138353,6 +138382,13 @@
           "max": "512",
           "min": "8",
           "name": "Resolution"
+        },
+        {
+          "default": "0",
+          "id": "solve_level",
+          "max": "4",
+          "min": "0",
+          "name": "Solve Level"
         },
         {
           "default": "1",
