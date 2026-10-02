@@ -120,7 +120,7 @@ class LandingTests(unittest.TestCase):
         self.assertEqual(called, self.checks)
         self.assertEqual(timings["failed"], 0)
         self.assertIn(["python3", "scripts/gpu_proofs_gate.py", "--base", "origin/main",
-                       "--budget", "300"], commands)
+                       "--budget", "360"], commands)
         self.assertTrue(all("--all" not in c and "--full-suite" not in c for c in commands))
         self.assertIn("[gpu-proofs] mode: scoped", output)
         self.assertIn("manifold-gpu core", output)
@@ -148,7 +148,7 @@ class LandingTests(unittest.TestCase):
         proofs = [c for c in commands if c[1:2] == ["scripts/gpu_proofs_gate.py"]]
         self.assertEqual(proofs, [
             ["python3", "scripts/gpu_proofs_gate.py", "--base", "origin/main", "--build-only"],
-            ["python3", "scripts/gpu_proofs_gate.py", "--base", "origin/main", "--budget", "300"]])
+            ["python3", "scripts/gpu_proofs_gate.py", "--base", "origin/main", "--budget", "360"]])
 
     def test_catalog_check_skipped_when_renderer_untouched(self):
         _, _, _, commands, *_ = self.exercise()
