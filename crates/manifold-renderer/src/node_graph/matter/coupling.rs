@@ -100,7 +100,8 @@ mod tests {
             ..RigidBody::default()
         });
         let colliders = RigidImpulseTargets { bodies: 1, copies: false };
-        let mut owner = LiquidRigidOwner::new(&scene, colliders, 3, None).expect("owner");
+        let open = crate::node_graph::liquid::coupling::DomainWalls::default();
+        let mut owner = LiquidRigidOwner::new(&scene, open, colliders, 3, None).expect("owner");
         let scale = ReactionScale { unit: 128.0, cell_size: 0.0625, offset: 0 };
         let mut words = [0i32; 16];
         words[1] = (16_777_216.0 / f64::from(scale.unit)) as i32;
