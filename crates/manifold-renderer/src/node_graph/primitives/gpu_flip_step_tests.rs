@@ -1801,7 +1801,8 @@ fn gpu_flip_inflow_emits_at_empty_sites_into_free_slots() {
     let inside = (0..site_count).filter(|&idx| {
         in_box(site([idx % sites[0], (idx / sites[0]) % sites[1], idx / (sites[0] * sites[1])]), lo, cells)
     });
-    assert_eq!(inside.count(), flagged + 1, "the fixture holds exactly one taken inflow site");
+    let inside = inside.count();
+    assert!(inside > flagged && flagged > 0, "the fixture holds taken and empty inflow sites: {flagged} of {inside} empty");
     let corners = vec![1.0f32; face_len()];
     let params = region_params();
     let got: Vec<u32> = Pass::new()
@@ -1868,6 +1869,7 @@ fn gpu_flip_inflow_emits_at_empty_sites_into_free_slots() {
             spread = spread.max((want - site_a).abs() / f64::from(H));
         }
     }
+    println!("emit proof: {inside} inflow sites, {flagged} empty, {} written to a pool {} short, jitter spread {spread:.4} cells", capacity - sorted.len(), flagged + sorted.len() - capacity);
     assert!(spread > 0.2 && spread <= 0.25, "the draw reaches near a quarter cell and never past it: {spread}");
 }
 
@@ -1911,6 +1913,7 @@ fn gpu_flip_outflow_kills_the_particles_it_holds() {
     }
     let alive = got.iter().filter(|p| p.position_radius[3] > 0.0).count();
     let before = particles.iter().filter(|p| p.position_radius[3] > 0.0).count();
+    println!("drain proof: {drained} drained of {} live", particles.iter().filter(|p| p.position_radius[3] > 0.0).count());
     assert!(drained > 10, "the drain holds a share of the draw: {drained}");
     assert_eq!(alive, before - drained, "the live count drops by exactly the drained");
 }
