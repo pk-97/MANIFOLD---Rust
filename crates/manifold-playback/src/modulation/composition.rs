@@ -6,7 +6,7 @@
 
 use manifold_core::audio_mod::ParameterAudioMod;
 use manifold_core::effects::{ParamEnvelope, ParameterDriver};
-use manifold_core::params::ParamManifest;
+use manifold_core::params::{Param, ParamManifest};
 use manifold_core::params::constrain_to_range;
 use manifold_core::{Beats, Bpm, Seconds};
 
@@ -69,21 +69,47 @@ pub fn compose_controls(
     sample: ControlSample,
     audio_state: impl Fn(usize, &ParameterAudioMod) -> AudioControlState,
 ) -> bool {
+    if sources.drivers.is_empty() && sources.envelopes.is_empty() && sources.audio_mods.is_empty() {
+        return false;
+    }
     let mut dirty = false;
+    for param in params.iter_mut() {
+        if let Some(value) = compose_param(param, param.value, &sources, sample, &audio_state) {
+            param.value = value;
+            dirty = true;
+        }
+    }
+    dirty
+}
+
+fn targets(source: &str, param: &str) -> bool {
+    source == param
+}
+
+/// [`compose_controls`] for one parameter, from `prepared`, without writing.
+/// `None` when no source wrote it. A per-hop caller passes one hop's audio
+/// state and gets the value the frame composition would give for that hop.
+pub fn compose_param(
+    param: &Param,
+    prepared: f32,
+    sources: &ControlSources<'_>,
+    sample: ControlSample,
+    audio_state: &impl Fn(usize, &ParameterAudioMod) -> AudioControlState,
+) -> Option<f32> {
+    let id = param.spec.id.as_str();
+    let mut value = prepared;
+    let mut written = false;
 
     // A stepped audio shadow replaces the prepared base before all downstream
     // sources, matching retained-hop modulation precedence.
     if sources.enabled {
         for (index, audio) in sources.audio_mods.iter().enumerate() {
-            if !audio.enabled {
-                continue;
-            }
-            let state = audio_state(index, audio);
-            if let Some(value) = state.step_value
-                && let Some(param) = params.get_mut(audio.param_id.as_ref())
+            if audio.enabled
+                && targets(audio.param_id.as_ref(), id)
+                && let Some(step) = audio_state(index, audio).step_value
             {
-                param.value = value;
-                dirty = true;
+                value = step;
+                written = true;
             }
         }
     }
@@ -91,17 +117,14 @@ pub fn compose_controls(
     // Envelope step/random shadows apply regardless of the instance-enabled
     // flag, preserving the retained pipeline's established precedence.
     for envelope in sources.envelopes.iter().filter(|envelope| envelope.enabled) {
-        if matches!(
-            envelope.action,
-            manifold_core::audio_mod::TriggerAction::Continuous
-        ) {
+        if matches!(envelope.action, manifold_core::audio_mod::TriggerAction::Continuous) {
             continue;
         }
-        if let Some(value) = envelope.step_value
-            && let Some(param) = params.get_mut(envelope.param_id.as_ref())
+        if targets(envelope.param_id.as_ref(), id)
+            && let Some(step) = envelope.step_value
         {
-            param.value = value;
-            dirty = true;
+            value = step;
+            written = true;
         }
     }
 
@@ -111,7 +134,7 @@ pub fn compose_controls(
             .iter()
             .filter(|driver| driver.enabled && !driver.is_paused_by_user)
         {
-            if let Some(param) = params.get_mut(driver.param_id.as_ref()) {
+            if targets(driver.param_id.as_ref(), id) {
                 let raw = driver_target_value(
                     driver,
                     sample.beat,
@@ -121,9 +144,8 @@ pub fn compose_controls(
                     param.spec.min,
                     param.spec.max,
                 );
-                param.value =
-                    constrain_to_range(raw, param.spec.min, param.spec.max, param.spec.wraps);
-                dirty = true;
+                value = constrain_to_range(raw, param.spec.min, param.spec.max, param.spec.wraps);
+                written = true;
             }
         }
 
@@ -131,25 +153,19 @@ pub fn compose_controls(
         // only produce trigger side effects during the event phase and never
         // write a parameter value here.
         for (index, audio) in sources.audio_mods.iter().enumerate() {
-            if !audio.enabled {
+            if !audio.enabled || !targets(audio.param_id.as_ref(), id) {
                 continue;
             }
-            let Some(param) = params.get_mut(audio.param_id.as_ref()) else {
-                continue;
-            };
             let state = audio_state(index, audio);
             if param.spec.is_trigger && !param.spec.is_trigger_gate {
-                param.value = param.base + state.fire_count as f32;
-                dirty = true;
+                value = param.base + state.fire_count as f32;
+                written = true;
             } else if !param.spec.is_trigger_gate
-                && matches!(
-                    audio.action,
-                    manifold_core::audio_mod::TriggerAction::Continuous
-                )
+                && matches!(audio.action, manifold_core::audio_mod::TriggerAction::Continuous)
                 && let Some(output) = state.held_output
             {
-                param.value = output;
-                dirty = true;
+                value = output;
+                written = true;
             }
         }
     }
@@ -161,26 +177,23 @@ pub fn compose_controls(
     {
         for envelope in sources.envelopes.iter().filter(|envelope| {
             envelope.enabled
-                && matches!(
-                    envelope.action,
-                    manifold_core::audio_mod::TriggerAction::Continuous
-                )
+                && matches!(envelope.action, manifold_core::audio_mod::TriggerAction::Continuous)
         }) {
-            if let Some(param) = params.get_mut(envelope.param_id.as_ref())
+            if targets(envelope.param_id.as_ref(), id)
                 && apply_envelope_offset(
-                    &mut param.value,
+                    &mut value,
                     param.spec.min,
                     param.spec.max,
                     envelope.target_normalized,
                     ParamEnvelope::decay_level(active_elapsed, envelope.decay_beats),
                 )
             {
-                dirty = true;
+                written = true;
             }
         }
     }
 
-    dirty
+    written.then_some(value)
 }
 
 /// Map a driver's normalized output onto a target parameter's value range.
