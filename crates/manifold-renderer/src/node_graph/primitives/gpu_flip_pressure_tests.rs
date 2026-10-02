@@ -547,13 +547,16 @@ fn solve_bits(rig: &mut Rig, p: &Problem, stop: Stop, cache: &mut Option<GpuRepl
 /// GPU switches off once the stop fires) gives the same pressure and the
 /// same stop record, bit for bit, as encoding it directly, on the engine's
 /// stop and at a fixed count, over frames whose problem changes. Once warm,
-/// a frame records nothing and runs no round directly.
+/// a frame records nothing and runs no round directly. Two direct solves
+/// of one problem agree bit for bit too: the folded reductions sum in a
+/// fixed order.
 #[test]
 fn pressure_module_replay_matches_direct() {
     let (n, saved) = load_fixture(DAM_BREAK);
     let problems: Vec<Problem> = saved.iter().take(3).map(|p| resample(p, n, 64)).collect();
     for stop in [Stop::Converged(MAX_ITERATIONS), Stop::Fixed(16)] {
         let mut direct = Rig::new(64);
+        let mut again = Rig::new(64);
         let mut replay = Rig::new(64);
         let mut cache = Some(GpuReplayCache::default());
         let mut none = None;
@@ -561,6 +564,8 @@ fn pressure_module_replay_matches_direct() {
         for frame in 0..6 {
             let p = &problems[frame % problems.len()];
             let (dp, dr) = solve_bits(&mut direct, p, stop, &mut none);
+            let (ap, ar) = solve_bits(&mut again, p, stop, &mut none);
+            assert!(dp == ap && dr == ar, "{stop:?} frame {frame}: two direct solves differ");
             let (rp, rr) = solve_bits(&mut replay, p, stop, &mut cache);
             assert!(dp == rp, "{stop:?} frame {frame}: the replayed pressure differs from direct");
             assert_eq!(dr, rr, "{stop:?} frame {frame}: the replayed stop record differs from direct");
