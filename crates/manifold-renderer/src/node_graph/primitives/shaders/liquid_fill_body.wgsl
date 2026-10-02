@@ -1,3 +1,4 @@
+// Ported from FLIP Fluids fluidsimulation.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
 // node.liquid_fill — BUFFER source body. One thread per particle slot
 // (FluidParticle → Element3). Particles sit on the half-cell site lattice,
 // site j at (1/4 + j/2) cells along each axis (2·nodes sites per axis), the

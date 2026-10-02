@@ -1,3 +1,4 @@
+//! Checked against FLIP Fluids particlelevelset.cpp (MIT); see THIRD_PARTY_NOTICES.md.
 //! The whitewater field against exact distances and FLIP
 //! (`docs/GPU_WHITEWATER_DESIGN.md` section 3.7, O1), on the grid at 64:
 //! 70³ cells over the 71³ solid lattice, the level set refined 3 times.

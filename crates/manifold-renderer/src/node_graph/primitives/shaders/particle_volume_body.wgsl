@@ -1,3 +1,4 @@
+// Uses the search-radius ratio (1.5 radii) from FLIP Fluids particlemesher.cpp `_searchRadiusFactor` (MIT); see THIRD_PARTY_NOTICES.md.
 // node.particle_volume — fusable BUFFER body, GATHER. One thread per level-set
 // node: the distance to the nearest blob ellipsoid in the node's 27 bins,
 // a·(|G·(x − c)| − 1) with a the blob's longest axis (exact for a sphere),

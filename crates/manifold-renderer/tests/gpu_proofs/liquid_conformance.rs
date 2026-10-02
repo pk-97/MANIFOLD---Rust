@@ -1,3 +1,4 @@
+//! Checked against FLIP Fluids the engine's coupled tank (MIT); see THIRD_PARTY_NOTICES.md.
 //! The liquid conformance suite on the GPU (`docs/LIQUID_SOLVER_SEAM_DESIGN.md`
 //! section 4 (Invariants & enforcement)): I4–I8, I11, I13, Speed 0.5 and
 //! Reset, run for every row of `LIQUID_SOLVERS` that names no exemption, on

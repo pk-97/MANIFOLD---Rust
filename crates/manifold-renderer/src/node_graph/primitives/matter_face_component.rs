@@ -1,3 +1,4 @@
+//! Uses the velocity-extrapolation layer count from FLIP Fluids fluidsimulation.cpp `_extrapolateFluidVelocities` (MIT); see THIRD_PARTY_NOTICES.md.
 //! `node.matter_face_component` — one axis of the matter grid as the seam's
 //! face array (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` section 3.2 (Grid
 //! outputs)). A per-element gather on the codegen path.

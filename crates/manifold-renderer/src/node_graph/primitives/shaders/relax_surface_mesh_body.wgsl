@@ -1,3 +1,4 @@
+// Uses the neighbour-mean mesh smoothing from FLIP Fluids trianglemesh.cpp `smooth` (MIT); see THIRD_PARTY_NOTICES.md.
 // node.relax_surface_mesh — fusable BUFFER body, GATHER. One umbrella
 // relaxation pass over node.volume_surface_mesh's triangle list:
 // v += strength × (mean of v's neighbours − v). One thread per vertex slot.
