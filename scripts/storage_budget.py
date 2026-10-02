@@ -24,7 +24,8 @@ from typing import Callable, Iterable, Optional
 
 
 GIB = 2 ** 30
-MAINTENANCE_GOAL_BYTES = 100 * GIB
+# Two concurrent landing gates (~20 GiB of build cache each) plus headroom.
+MAINTENANCE_GOAL_BYTES = 50 * GIB
 DEFAULT_TMP_ROOT = Path("/private/tmp")
 PROFILE_NAMES = ("debug", "release")
 CARGO_MARKERS = (".rustc_info.json", "CACHEDIR.TAG")
