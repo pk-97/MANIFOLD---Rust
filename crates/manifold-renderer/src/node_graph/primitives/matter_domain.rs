@@ -410,7 +410,7 @@ impl Coupling {
     }
 }
 
-fn closed_faces(params: &ParamValues) -> u32 {
+pub(crate) fn closed_faces(params: &ParamValues) -> u32 {
     ["closed_neg_x", "closed_pos_x", "closed_neg_y", "closed_pos_y", "closed_neg_z", "closed_pos_z"]
         .iter()
         .enumerate()

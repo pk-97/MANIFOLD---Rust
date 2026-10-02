@@ -2690,6 +2690,12 @@
     },
     {
       "fromNode": 0,
+      "fromPort": "closed_faces",
+      "toNode": 4,
+      "toPort": "closed_faces"
+    },
+    {
+      "fromNode": 0,
       "fromPort": "body_rows",
       "toNode": 4,
       "toPort": "rows"

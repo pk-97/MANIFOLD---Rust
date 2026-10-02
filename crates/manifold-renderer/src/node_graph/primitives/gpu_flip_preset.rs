@@ -103,7 +103,13 @@ pub(crate) struct WaterScene {
     /// The Dam Break's box as a Collider role (`obstacle_transform` into
     /// `obstacle_collider` into the domain's `role_0`).
     pub obstacle: bool,
+    /// The tank's closed faces, bit 2d the low face of axis d and bit 2d + 1
+    /// the high one; an open face's Closed param is off on the domain.
+    pub closed_faces: u32,
 }
+
+/// The domain's Closed params, in mask bit order.
+const CLOSED_PARAMS: [&str; 6] = ["closed_neg_x", "closed_pos_x", "closed_neg_y", "closed_pos_y", "closed_neg_z", "closed_pos_z"];
 
 /// The face grid's nodes in a scene built with `faces`, x, y and z.
 pub(crate) const FACE_NODES: [&str; 3] = ["face_u", "face_v", "face_w"];
@@ -136,7 +142,14 @@ impl WaterScene {
             ghost_fluid: true,
             volume_projection: true,
             obstacle: false,
+            closed_faces: 63,
         }
+    }
+
+    /// The scene with only the faces in `mask` closed.
+    #[cfg(test)]
+    pub fn with_closed_faces(self, mask: u32) -> Self {
+        Self { closed_faces: mask, ..self }
     }
 
     /// The scene with the Dam Break's box obstacle.
@@ -337,15 +350,17 @@ const FIELD_WIRES: [&str; 9] = [
 pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     let mut b = Builder::default();
     let geometry = scene.geometry();
-    let domain = b.node(
-        "domain",
-        GPU_FLIP_DOMAIN_TYPE_ID,
-        json!({
-            "resolution": int(scene.pressure.n),
-            "domain_size": float(scene.size),
-            "fill_height": float(scene.fill_height),
-        }),
-    );
+    let mut params = json!({
+        "resolution": int(scene.pressure.n),
+        "domain_size": float(scene.size),
+        "fill_height": float(scene.fill_height),
+    });
+    for (bit, name) in CLOSED_PARAMS.iter().enumerate() {
+        if scene.closed_faces & (1 << bit) == 0 {
+            params[*name] = json!({"type": "Bool", "value": false});
+        }
+    }
+    let domain = b.node("domain", GPU_FLIP_DOMAIN_TYPE_ID, params);
     if let Some(volume) = scene.initial_volume() {
         let column = b.node(
             "initial_column",
@@ -668,7 +683,7 @@ fn water_step(b: &mut Builder, scene: WaterScene, tick: (usize, usize)) -> usize
     b.wire((domain, "gravity_z"), step, "gravity_z");
     b.wires(domain, step, &FIELD_WIRES);
     b.wire((state, "tick_index"), step, "tick_index");
-    b.wires(domain, step, &["bodies", "shapes", "atlas", "body_count", "dynamic_bodies"]);
+    b.wires(domain, step, &["bodies", "shapes", "atlas", "body_count", "dynamic_bodies", "closed_faces"]);
     b.wire((domain, "body_rows"), step, "rows");
     step
 }
@@ -785,7 +800,9 @@ pub(super) mod tests {
             let dam = WaterScene::dam_break(n).with_obstacle();
             [dam, dam.with_surface(), WaterScene::still_pool(n).with_obstacle()]
         });
-        for scene in all.chain(probes).chain(obstacle) {
+        // The open-face drain.
+        let open = [WaterScene::still_pool(64).with_closed_faces(63 & !1)];
+        for scene in all.chain(probes).chain(obstacle).chain(open) {
             let n = scene.pressure.n;
             let def = water_def(scene);
             let (graph, plan) = built(&def);

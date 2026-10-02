@@ -61,8 +61,9 @@ struct Params {
     shapes_len: u32,
     // The density projection's source scale, 1 / step_dt.
     rate: f32,
-    // The struct's 128 bytes, the Rust twin's `pad`.
-    pad: u32,
+    // The tank's closed faces: bit 2d the low face of axis d, bit 2d + 1 the
+    // high one.
+    closed_faces: u32,
 };
 
 struct CellRange {

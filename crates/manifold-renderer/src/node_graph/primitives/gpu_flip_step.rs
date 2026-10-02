@@ -117,8 +117,9 @@ pub(crate) struct StepParams {
     pub(crate) particles: u32,
     pub(crate) shapes_len: u32,
     pub(crate) rate: f32,
-    /// The shader's struct rounds up to 16 bytes.
-    pub(crate) pad: u32,
+    /// The tank's closed faces, bit 2d the low face of axis d and bit 2d + 1
+    /// the high one.
+    pub(crate) closed_faces: u32,
 }
 
 /// One pass of the step's shader on its own, for the value proofs against
@@ -412,7 +413,8 @@ impl StepState {
         // The box walls are in the solid with the bodies, as the engine's
         // inverted domain object is: a body flush with a wall then seals
         // against it, where the body's own lattice distance alone would leave
-        // a sub-cell open channel between them.
+        // a sub-cell open channel between them. The engine's domain object
+        // covers all six faces whichever are open, so this mask stays 63.
         encode_solid_distance(
             &mut self.solid,
             device,
@@ -589,6 +591,15 @@ impl StepState {
     }
 }
 
+/// The Closed Faces mask, refused unless it is a whole number in 0..=63.
+pub(crate) fn read_closed_faces(value: f32) -> Result<u32, String> {
+    if value.fract() == 0.0 && (0.0..=63.0).contains(&value) {
+        Ok(value as u32)
+    } else {
+        Err(format!("Closed Faces must be a whole number from 0 to 63, not {value}"))
+    }
+}
+
 crate::primitive! {
     name: GpuFlipStep,
     type_id: "node.gpu_flip_step",
@@ -615,6 +626,7 @@ crate::primitive! {
         rows: ScalarF32 optional,
         reaction: Array(f32) optional,
         dynamic_bodies: ScalarF32 optional,
+        closed_faces: ScalarF32 optional,
     },
     outputs: {
         out: Array(FluidParticle),
@@ -649,6 +661,7 @@ crate::primitive! {
         float_param!("top_speed", "Top Speed", DEFAULT_TOP_SPEED, 0.1, 1000.0),
         int_param!("ghost_fluid", "Ghost Fluid", 1.0, 0.0, 1.0),
         int_param!("volume_projection", "Volume Projection", 1.0, 0.0, 1.0),
+        int_param!("closed_faces", "Closed Faces", 63.0, 0.0, 63.0),
     ],
     depth_rule: Terminal,
     composition_notes: "Inside node.liquid_state's tick region, once per tick: particles from the state's out, Steps substeps of 1/(60·Steps) s run inside the node, each moving the last one's particles, and the bodies see every substep. The lattice, gravity, the field scalars, forces, impulses, bodies, shapes, atlas, body_count and body_rows (into rows) come from node.gpu_flip_domain; so do dynamic_bodies and reaction, which every substep adds to in place; tick_index from node.liquid_state; count from the fill's live count. Flip Share is the share kept per 1/60 s, so the damping does not change with the step count. The last substep's faces feed node.liquid_state's faces_in, sized exactly to the lattice; out keeps the particles slots. A lattice the device cannot hold, or a side over 1024 cells, is a named error.",
@@ -751,6 +764,13 @@ impl Primitive for GpuFlipStep {
             }
         };
         let ghost = ctx.scalar_or_param("ghost_fluid", 1.0) > 0.5;
+        let closed_faces = match read_closed_faces(ctx.scalar_or_param("closed_faces", 63.0)) {
+            Ok(mask) => mask,
+            Err(error) => {
+                ctx.error(format!("{NAME}: {error}"));
+                return;
+            }
+        };
         let box_min = lattice.box_min();
         if let Err(error) = self.state.reserve(ctx.gpu_encoder().device, cells, u64::from(capacity)) {
             ctx.error(format!(
@@ -808,7 +828,7 @@ impl Primitive for GpuFlipStep {
                 // The whole density error each step: projected to rest, no
                 // per-step share.
                 rate: 1.0 / step_dt,
-                pad: 0,
+                closed_faces,
             },
             particles,
             out,
@@ -885,6 +905,16 @@ mod tests {
     #[test]
     fn step_params_match_the_shader_uniform() {
         assert_eq!(size_of::<StepParams>(), 128);
+    }
+
+    #[test]
+    fn closed_faces_takes_the_six_bit_mask_and_refuses_the_rest() {
+        assert_eq!(read_closed_faces(0.0), Ok(0));
+        assert_eq!(read_closed_faces(63.0), Ok(63));
+        assert_eq!(read_closed_faces(61.0), Ok(61));
+        for bad in [64.0, -1.0, 2.5, f32::NAN, f32::INFINITY] {
+            assert!(read_closed_faces(bad).unwrap_err().contains("Closed Faces"), "{bad}");
+        }
     }
 
     /// The band covers ¾ of the travel plus the sample's reach, never under
