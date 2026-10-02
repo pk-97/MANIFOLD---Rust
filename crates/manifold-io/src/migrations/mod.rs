@@ -10,6 +10,7 @@ pub mod reversed_depth_v1160;
 pub mod scene_cinematic_tail_v1130;
 pub mod scene_scale_coc_v1140;
 pub mod scene_transform_v1120;
+pub mod solve_level_card_v1170;
 
 thread_local! {
     /// Per-load handoff from the pre-deserialize migrations (which run pure
