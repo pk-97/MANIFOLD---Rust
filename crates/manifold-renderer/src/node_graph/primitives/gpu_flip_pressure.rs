@@ -415,6 +415,16 @@ impl PressureSolver {
     }
 }
 
+#[cfg(all(test, feature = "gpu-proofs"))]
+impl PressureSolver {
+    /// Copies the last solve's scalars (iteration k's r·z at 2k, p·s at
+    /// 2k + 1) into `into`, a shared buffer of 2 · MAX_ITERATIONS floats.
+    pub(crate) fn copy_scalars(&self, enc: &mut GpuEncoder, into: &GpuBuffer) {
+        let b = self.buffers.as_ref().expect("the solver was prepared");
+        enc.copy_buffer_to_buffer(&b.scalars, into, b.scalars.size);
+    }
+}
+
 /// z = V(r): one V-cycle for L e = r from zero.
 fn v_cycle<'a>(enc: &mut GpuEncoder, pipes: &Pipelines, b: &'a Buffers, water: &Water<'a>) {
     let view = |level: usize| -> View<'a> {
