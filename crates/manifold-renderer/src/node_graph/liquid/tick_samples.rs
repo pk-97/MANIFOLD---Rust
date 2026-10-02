@@ -108,6 +108,11 @@ impl<T: Clone> TickSamples<T> {
         Ok(self.ticks.range(start..start + count))
     }
 
+    /// The value at `tick`'s start, if sampled.
+    pub fn get(&self, tick: u64) -> Option<&T> {
+        self.span(tick, 1).ok().and_then(|mut span| span.next()).map(|(_, value)| value)
+    }
+
     /// Forget ticks before `tick`.
     pub fn prune_before(&mut self, tick: u64) {
         while self.ticks.front().is_some_and(|(recorded, _)| *recorded < tick) {

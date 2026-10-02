@@ -26,6 +26,7 @@ use crate::node_graph::liquid::clock::LiquidClock;
 use crate::node_graph::liquid::coupling::{DomainWalls, LiquidRigidOwner, PendingTick, takes_reaction};
 use crate::node_graph::liquid::fields::{self, FieldLattice, LiquidFields, LiquidImpulses};
 use crate::node_graph::liquid::lattice::LiquidLattice;
+use crate::node_graph::liquid::tick_samples::TickSamples;
 use crate::node_graph::matter::coupling::{ReactionScale, body_limit, decode};
 use crate::node_graph::matter::{
     MAX_SUBSTEPS, REACTION_WORDS, WATER_DENSITY, block_sort_box, free_fall_speed, lattice_blocks, lattice_nodes,
@@ -33,7 +34,7 @@ use crate::node_graph::matter::{
 };
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::physics::{
-    RigidImpulseTargets, RigidSceneObservation, offline_simulation,
+    RigidImpulseTargets, RigidSceneInputs, RigidSceneObservation, offline_simulation,
 };
 use crate::node_graph::physics_events::ResolvedNodeImpulse;
 use crate::node_graph::primitive::Primitive;
@@ -349,6 +350,9 @@ crate::primitive! {
 pub struct Coupling {
     mode: bool,
     observation: Option<RigidSceneObservation>,
+    /// The paired world's authored scene at each tick's start: Box3D steps a
+    /// tick toward the scene at its end, so animated bodies move per tick.
+    scenes: TickSamples<RigidSceneInputs>,
     colliders: RigidImpulseTargets,
     error: Option<String>,
     previous_reset: Option<f32>,
@@ -519,6 +523,7 @@ impl Primitive for MatterDomain {
             let field = ctx.inputs.vector_field("acceleration_field");
             self.fields.observe_sample(ctx.time.seconds.0, field.as_ref());
             self.bodies.observe_sample(ctx.time.seconds.0, (!role_pending).then_some(&roles[..]));
+            self.coupled.scenes.observe(ctx.time.seconds.0, None);
             return;
         }
         self.role_pending = ctx.inputs.any_pending() || role_pending;
@@ -589,6 +594,9 @@ impl Primitive for MatterDomain {
     fn request_physics_samples(&mut self, from: f64, until: f64, out: &mut Vec<f64>) {
         self.fields.request_samples(&self.clock, from, until, out);
         self.bodies.request_samples(&self.clock, from, until, out);
+        if self.coupled.mode {
+            self.coupled.scenes.request(&self.clock, from, until, out);
+        }
     }
 
     fn set_coupled_physics(&mut self, enabled: bool) {
@@ -604,6 +612,14 @@ impl Primitive for MatterDomain {
         colliders: RigidImpulseTargets,
         error: Option<&str>,
     ) {
+        // A replay sample records the scene at a tick's start; a pending one
+        // records nothing, and `run` closes the sample.
+        if crate::node_graph::physics::authored_sample_only() {
+            if let Some(observation) = observation.filter(|_| error.is_none()) {
+                self.coupled.scenes.observe(observation.transport.0, Some(&observation.inputs));
+            }
+            return;
+        }
         self.set_coupled_physics(true);
         self.coupled.observation = observation.cloned();
         self.coupled.colliders = colliders;
@@ -720,12 +736,12 @@ impl MatterDomain {
         // flight. Offline waits for it, then runs every due tick, exchanging
         // with Box3D between them through the region's host syncs.
         let cap = match (&mut self.coupled.owner, &self.coupled.observation) {
-            (Some(owner), Some(observation)) if !restart => {
+            (Some(owner), Some(_)) if !restart => {
                 let reaction = self.reaction.as_ref();
                 let scale = self.coupled.scale;
                 // This frame's clear is encoded after this read.
                 let settled = owner.settle(
-                    &observation.inputs,
+                    self.coupled.scenes.get(owner.completed() + 1),
                     |stamp| clock.as_ref().is_none_or(|clock| if offline { clock.wait(stamp) } else { clock.is_complete(stamp) }),
                     |_, rows, impulses| {
                         let scale = scale.ok_or("Matter coupling: the pending tick has no reaction scale")?;
@@ -761,6 +777,11 @@ impl MatterDomain {
             self.rebuild_owner()?;
         }
         self.coupled.owner_fresh = false;
+        if let Some(owner) = &self.coupled.owner {
+            let scene = self.coupled.observation.as_ref().map(|observation| &observation.inputs);
+            self.coupled.scenes.settle(&self.clock, &frame, scene);
+            self.coupled.scenes.prune_before(owner.completed());
+        }
         self.impulses.observe_frame(ctx.time.seconds.0, &frame)?;
         self.bodies.settle(roles, &self.clock, &frame);
         let first_tick = fields::first_tick(&frame);
@@ -901,12 +922,17 @@ impl MatterDomain {
     /// the GPU has finished tick `tick − 1`, so its reaction words are final
     /// and the body rows are free to rewrite.
     fn exchange_tick(&mut self, tick: u32, exchange: Exchange) -> Result<(), String> {
-        let observation = self.coupled.observation.as_ref().ok_or("Matter coupling: the rigid observation is missing")?;
         let owner = self.coupled.owner.as_mut().ok_or("Matter coupling: no coupled rigid world")?;
         let reaction = self.reaction.as_ref().ok_or("Matter coupling: the reaction array is missing")?;
-        owner.settle(&observation.inputs, |_| true, |_, rows, impulses| {
+        // A tick running this frame started by now, so the tick before it
+        // has its end sampled.
+        let end = self.coupled.scenes.get(owner.completed() + 1);
+        let settled = owner.settle(end, |_| true, |_, rows, impulses| {
             decode(exchange.scale, rows, reaction_words(Some(reaction)), impulses)
         })?;
+        if settled == 0 {
+            return Err(format!("Matter coupling: rigid tick {} has no sampled end", owner.completed()));
+        }
         let (offset, rows) = self.bodies.set_coupled_rows(tick as usize, owner.rows())?;
         let bodies = self.body_buffers.bodies().ok_or("Matter coupling: the body rows are missing")?;
         let bytes: &[u8] = bytemuck::cast_slice(rows);

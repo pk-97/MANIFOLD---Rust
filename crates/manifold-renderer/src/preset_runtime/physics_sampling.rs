@@ -161,24 +161,11 @@ pub(super) fn physics_sample_steps(
     let replays_history = |type_id: &str| {
         matches!(type_id, "node.physics_world" | FLIP_DOMAIN_TYPE_ID) || gpu_liquid(type_id)
     };
-    // A GPU liquid replays its force field and roles at each tick's start. It
-    // owns its paired world, which Box3D steps tick by tick in lockstep with
-    // it, so that world never replays history.
-    let frame_held_rigids: HashSet<_> = graph
-        .coupled_scenes()
-        .iter()
-        .filter(|pair| {
-            graph
-                .get_node(pair.fluid)
-                .is_some_and(|fluid| gpu_liquid(fluid.node.type_id().as_str()))
-        })
-        .map(|pair| pair.rigid)
-        .collect();
+    // A GPU liquid replays its force field, roles and paired world at each
+    // tick's start; its paired world's scene is captured for it there.
     let mut pending: Vec<_> = graph
         .nodes()
-        .filter(|node| {
-            replays_history(node.node.type_id().as_str()) && !frame_held_rigids.contains(&node.id)
-        })
+        .filter(|node| replays_history(node.node.type_id().as_str()))
         .map(|node| node.id)
         .collect();
     if pending.is_empty() {
@@ -582,7 +569,7 @@ mod tests {
     }
 
     #[test]
-    fn matter_liquid_samples_its_field_and_its_world_stays_per_frame() {
+    fn matter_liquid_samples_its_field_and_its_world_per_tick() {
         let runtime = PresetRuntime::from_json_str(
             include_str!("../../assets/generator-presets/WaterFloatingBoxMatter.json"),
             &PrimitiveRegistry::with_builtin(),
@@ -593,7 +580,7 @@ mod tests {
         let mask = runtime.physics_sample_steps.as_ref().expect("the liquid samples its field per tick");
         for pair in pairs {
             assert!(mask[pair.fluid_step], "the liquid samples");
-            assert!(!mask[pair.rigid_step], "its owned world stays per-frame (D28)");
+            assert!(mask[pair.rigid_step], "its owned world's scene samples per tick");
         }
     }
 

@@ -298,25 +298,31 @@ impl LiquidRigidOwner {
     /// (0 while the reaction is still in flight, else 1). `decode` runs only
     /// once `complete` says the frame retired; it fills one impulse per row,
     /// each already naming its body, and only rows that take a reaction reach
-    /// Box3D. A reaction still in flight after [`REACTION_HOLD_LIMIT`]
-    /// settles is an error naming the tick and its frame stamp.
+    /// Box3D. `end` is the authored scene at the settled tick's end (the next
+    /// tick's start), so kinematic and animated bodies move tick by tick; the
+    /// pair holds until the replay has sampled it. A reaction still in flight,
+    /// or an end never sampled, after [`REACTION_HOLD_LIMIT`] settles is an
+    /// error naming the tick and its frame stamp.
     pub fn settle(
         &mut self,
-        inputs: &RigidSceneInputs,
+        end: Option<&RigidSceneInputs>,
         complete: impl FnOnce(u64) -> bool,
         decode: impl FnOnce(PendingTick, &[LiquidBody], &mut [BodyImpulse]) -> Result<(), String>,
     ) -> Result<u32, String> {
         let Some(pending) = self.pending else { return Ok(1) };
-        if !complete(pending.stamp) {
+        let (Some(inputs), true) = (end, complete(pending.stamp)) else {
             self.held += 1;
             if self.held > REACTION_HOLD_LIMIT {
                 return Err(format!(
-                    "Liquid coupling: the reaction of liquid tick {} (frame stamp {}) has not retired after {} frames",
-                    pending.tick, pending.stamp, self.held
+                    "Liquid coupling: liquid tick {} (frame stamp {}) has not settled after {} frames: {}",
+                    pending.tick,
+                    pending.stamp,
+                    self.held,
+                    if end.is_some() { "its reaction never retired" } else { "its end was never sampled" }
                 ));
             }
             return Ok(0);
-        }
+        };
         self.held = 0;
         self.pending = None;
         if pending.tick != self.completed {
@@ -505,7 +511,7 @@ mod tests {
         let mut owner = LiquidRigidOwner::new(&scene, walls, colliders, 1, None).expect("owner");
         for tick in 0..(3.0 / TICK) as u64 {
             owner.set_pending(PendingTick { tick, stamp: 0 });
-            owner.settle(&scene, |_| true, no_reaction).unwrap();
+            owner.settle(Some(&scene), |_| true, no_reaction).unwrap();
         }
         let row = owner.rows()[0];
         // The scale-0.4 cube hull (circumradius 0.4) rests on y = 0 with its
@@ -545,11 +551,11 @@ mod tests {
         assert!((row.position_inv_mass[1] - 1.0).abs() < 1e-5, "the row sits at the centre of mass");
         assert!((row.accel_shape[1] + 9.81).abs() < 1e-4 && row.accel_shape[3] == 0.0);
 
-        assert_eq!(owner.settle(&scene, |_| panic!("nothing pending"), no_reaction).unwrap(), 1);
+        assert_eq!(owner.settle(Some(&scene), |_| panic!("nothing pending"), no_reaction).unwrap(), 1);
         let pending = PendingTick { tick: 0, stamp: 42 };
         owner.set_pending(pending);
         let held = owner
-            .settle(&scene, |stamp| {
+            .settle(Some(&scene), |stamp| {
                 assert_eq!(stamp, 42);
                 false
             }, |_, _, _| panic!("reaction read before the frame retired"))
@@ -557,7 +563,7 @@ mod tests {
         assert_eq!((held, owner.completed(), owner.pending()), (0, 0, Some(pending)));
         assert_eq!(owner.frame().stamp, TickStamp { epoch: 7, tick: 0 });
 
-        assert_eq!(owner.settle(&scene, |_| true, no_reaction).unwrap(), 1);
+        assert_eq!(owner.settle(Some(&scene), |_| true, no_reaction).unwrap(), 1);
         assert_eq!((owner.completed(), owner.pending()), (1, None));
         assert_eq!(owner.frame().stamp, TickStamp { epoch: 7, tick: 1 });
         let fallen = owner.rows()[0].linear_velocity[1];
@@ -575,17 +581,17 @@ mod tests {
         let never = |_, _: &[LiquidBody], _: &mut [BodyImpulse]| panic!("reaction read before the frame retired");
         owner.set_pending(PendingTick { tick: 0, stamp: 42 });
         for _ in 0..REACTION_HOLD_LIMIT {
-            assert_eq!(owner.settle(&scene, |_| false, never).unwrap(), 0);
+            assert_eq!(owner.settle(Some(&scene), |_| false, never).unwrap(), 0);
         }
-        let error = owner.settle(&scene, |_| false, never).unwrap_err();
+        let error = owner.settle(Some(&scene), |_| false, never).unwrap_err();
         assert!(error.contains("tick 0") && error.contains("stamp 42"), "{error}");
         assert_eq!(owner.completed(), 0);
 
         owner.set_pending(PendingTick { tick: 0, stamp: 43 });
         for _ in 0..REACTION_HOLD_LIMIT {
-            assert_eq!(owner.settle(&scene, |_| false, never).unwrap(), 0);
+            assert_eq!(owner.settle(Some(&scene), |_| false, never).unwrap(), 0);
         }
-        assert_eq!(owner.settle(&scene, |_| true, no_reaction).unwrap(), 1);
+        assert_eq!(owner.settle(Some(&scene), |_| true, no_reaction).unwrap(), 1);
         assert_eq!((owner.completed(), owner.pending()), (1, None));
     }
 
@@ -598,7 +604,7 @@ mod tests {
         let mut owner = LiquidRigidOwner::new(&scene, OPEN, colliders, 3, None).expect("owner");
         owner.set_pending(PendingTick { tick: 0, stamp: 0 });
         owner
-            .settle(&scene, |_| true, |pending, rows, impulses| {
+            .settle(Some(&scene), |_| true, |pending, rows, impulses| {
                 assert_eq!((pending.tick, rows.len(), impulses.len()), (0, 1, 1));
                 impulses[0].linear[1] = 1.0 / rows[0].position_inv_mass[3];
                 Ok(())
@@ -621,7 +627,7 @@ mod tests {
         reaction[REACTION_FLOATS + 5] = 1.0e-9;
         owner.set_pending(PendingTick { tick: 0, stamp: 0 });
         owner
-            .settle(&scene, |_| true, |_, rows, impulses| {
+            .settle(Some(&scene), |_| true, |_, rows, impulses| {
                 decode_reaction(1, rows, Some(&reaction[..]), impulses)?;
                 assert_eq!((impulses[0].linear, impulses[0].angular), ([0.0, 32.0, 0.0], [0.0, 1.0e-9, 0.0]));
                 Ok(())
@@ -631,8 +637,84 @@ mod tests {
         assert!((v - (1.0 - 9.81 * TICK as f32)).abs() < 1e-3, "{v}");
         owner.set_pending(PendingTick { tick: 1, stamp: 0 });
         let error = owner
-            .settle(&scene, |_| true, |_, rows, impulses| decode_reaction(2, rows, Some(&reaction[..]), impulses))
+            .settle(Some(&scene), |_| true, |_, rows, impulses| decode_reaction(2, rows, Some(&reaction[..]), impulses))
             .unwrap_err();
         assert!(error.contains("smaller than the bodies"), "{error}");
+    }
+
+    /// An animated body in a coupled world follows its authored path tick
+    /// by tick: Box3D steps each tick toward the scene sampled at the tick's
+    /// end, so its rows match at 24, 30 and 60 fps. A tick whose end nobody
+    /// sampled yet holds the pair.
+    #[test]
+    fn liquid_coupled_animated_rows_match_at_every_frame_rate() {
+        use crate::node_graph::liquid::clock::LiquidClock;
+        use crate::node_graph::liquid::tick_samples::TickSamples;
+
+        let scene_at = |t: f64| {
+            // Smoothstep ease along an arc that turns as it goes.
+            let s = (t / 0.8).clamp(0.0, 1.0);
+            let eased = (s * s * (3.0 - 2.0 * s)) as f32;
+            let angle = std::f32::consts::PI * eased;
+            let mut scene = scene();
+            let body = scene.bodies[0].as_mut().unwrap();
+            body.kind = 2;
+            body.transform.pos = [angle.cos(), 1.0 + 0.5 * angle.sin(), 0.2 * eased];
+            body.transform.rot_euler = [0.0, 1.3 * angle, 0.0];
+            scene
+        };
+        let colliders = RigidImpulseTargets { bodies: 1, copies: false };
+        let run = |fps: f64| {
+            let mut owner = LiquidRigidOwner::new(&scene_at(0.0), OPEN, colliders, 1, None).expect("owner");
+            let (mut clock, mut scenes) = (LiquidClock::default(), TickSamples::default());
+            let (mut times, mut last, mut rows) = (Vec::new(), None::<f64>, Vec::new());
+            for index in 0..=(fps as u64) {
+                let transport = index as f64 / fps;
+                if let Some(last) = last {
+                    times.clear();
+                    scenes.request(&clock, last, transport, &mut times);
+                    for &time in times.iter().filter(|&&time| time < transport) {
+                        scenes.observe(time, Some(&scene_at(time)));
+                    }
+                    scenes.observe(transport, Some(&scene_at(transport)));
+                }
+                last = Some(transport);
+                // Settle every tick already run whose end the replay sampled.
+                while owner.completed() < clock.ticks_done() {
+                    let tick = owner.completed();
+                    owner.set_pending(PendingTick { tick, stamp: 0 });
+                    if owner.settle(scenes.get(tick + 1), |_| true, no_reaction).unwrap() == 0 {
+                        break;
+                    }
+                    rows.push(owner.rows()[0]);
+                }
+                let frame = clock.advance(transport, 1.0 / fps, 1.0, 0.0, false, false);
+                assert_eq!(frame.dropped_seconds, 0.0, "{fps} fps dropped time");
+                scenes.settle(&clock, &frame, Some(&scene_at(transport)));
+            }
+            rows
+        };
+        let reference = run(60.0);
+        assert_eq!(reference.len(), 59);
+        let tick = TICK as f32;
+        let end = scene_at(30.0 * TICK).bodies[0].clone().unwrap().transform.pos;
+        let row = reference[29].position_inv_mass;
+        assert!((0..3).all(|i| (row[i] - end[i]).abs() < 1e-4), "tick 29 ends on the path: {row:?} vs {end:?}");
+        assert!(reference[29].linear_velocity[0].abs() > 1.0 / tick * 1e-3, "the body moves");
+        for fps in [24.0, 30.0] {
+            let rows = run(fps);
+            assert!(rows.len() >= 57, "{fps} fps settled {} ticks", rows.len());
+            for (k, (row, expected)) in rows.iter().zip(&reference).enumerate() {
+                let fields = |b: &LiquidBody| [b.position_inv_mass, b.rotation, b.linear_velocity, b.angular_velocity];
+                for (a, e) in fields(row).iter().zip(fields(expected)) {
+                    assert!((0..4).all(|i| (a[i] - e[i]).abs() < 1e-5), "{fps} fps tick {k}: {a:?} vs {e:?}");
+                }
+            }
+        }
+
+        let mut owner = LiquidRigidOwner::new(&scene_at(0.0), OPEN, colliders, 1, None).expect("owner");
+        owner.set_pending(PendingTick { tick: 0, stamp: 0 });
+        assert_eq!(owner.settle(None, |_| true, no_reaction).unwrap(), 0, "an unsampled end holds");
+        assert_eq!((owner.completed(), owner.pending().map(|p| p.tick)), (0, Some(0)));
     }
 }
