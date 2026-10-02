@@ -19,6 +19,7 @@ use manifold_gpu::{FrameClock, GpuBuffer};
 use manifold_physics::FieldValue;
 
 use super::gpu_flip_pressure::lattice_refusal;
+use super::gpu_flip_step::read_solve_level;
 use super::liquid_fill::{SITES_PER_CELL, filled_sites, site_range};
 use super::matter_domain::closed_faces;
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
@@ -57,6 +58,9 @@ pub(crate) struct GpuFlipGeometry {
     pub(crate) layout: FluidDomainLayout,
     pub(crate) setup: GpuFlipSetup,
     pub(crate) particles: u64,
+    /// The V-cycle level the pressure solves run on; live, so not in the
+    /// setup.
+    pub(crate) solve_level: usize,
 }
 
 impl GpuFlipGeometry {
@@ -124,8 +128,9 @@ fn fill_sites(
 
 /// The domain box, lattice and fill from the domain's params and wires
 /// (`read` is `scalar_or_param`). Refused by name, in this order: a lattice
-/// the pressure solve cannot take, a fill that does not fit the domain, and
-/// a fill past the count a wire carries exactly.
+/// the pressure solve cannot take, a solve level the lattice lacks, a fill
+/// that does not fit the domain, and a fill past the count a wire carries
+/// exactly.
 pub(crate) fn gpu_flip_geometry(
     read: impl Fn(&str, f32) -> f32,
     domain: Option<Transform>,
@@ -136,6 +141,7 @@ pub(crate) fn gpu_flip_geometry(
     if let Some(reason) = lattice_refusal(layout.cells) {
         return Err(format!("GPU FLIP: {reason}. Lower Resolution."));
     }
+    let solve_level = read_solve_level(read("solve_level", 0.0), layout.cells).map_err(|reason| format!("GPU FLIP: {reason}"))?;
     let (pool_sites, box_sites) = fill_sites(&layout, read("fill_height", 0.4), initial_volume)?;
     let capacity = read("particle_capacity", 0.0);
     if !capacity.is_finite() || capacity < 0.0 {
@@ -154,7 +160,7 @@ pub(crate) fn gpu_flip_geometry(
         box_sites,
         particle_capacity: particle_capacity as u32,
     };
-    Ok(GpuFlipGeometry { layout, setup, particles })
+    Ok(GpuFlipGeometry { layout, setup, particles, solve_level })
 }
 
 impl GpuFlipGeometry {
@@ -166,13 +172,13 @@ impl GpuFlipGeometry {
 }
 
 /// Every scalar output, in the order [`GpuFlipDomain::compute`] fills them.
-const OUTPUTS: [&str; 36] = [
+const OUTPUTS: [&str; 37] = [
     "lattice_min_x", "lattice_min_y", "lattice_min_z", "cell_size", "nodes_x", "nodes_y", "nodes_z",
     "closed_faces", "pool_sites", "box_x0", "box_x1", "box_y0", "box_y1", "box_z0", "box_z1",
     "particle_mass", "gravity_x", "gravity", "gravity_z", "ticks", "epoch", "simulation_time",
     "display_time", "dropped_seconds", "body_count", "body_rows", "first_tick", "field_nodes_x",
     "field_nodes_y", "field_nodes_z", "field_spacing", "force_lattices", "impulse_tick", "dynamic_bodies",
-    "particle_capacity", "region_count",
+    "particle_capacity", "region_count", "solve_level",
 ];
 const TICKS: usize = 19;
 const IMPULSE_TICK: usize = 32;
@@ -334,12 +340,14 @@ crate::primitive! {
         impulse_tick: ScalarF32,
         particle_capacity: ScalarF32,
         region_count: ScalarF32,
+        solve_level: ScalarF32,
         bodies: Array(LiquidBody), regions: Array(LiquidBody), shapes: Array(LiquidShape), atlas: Array(u32),
         reaction: Array(f32),
         forces: Array(f32), impulses: Array(f32),
     },
     params: [
         ParamDef { name: Cow::Borrowed("resolution"), label: "Resolution", ty: ParamType::Int, default: ParamValue::Float(64.0), range: Some((8.0, 512.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("solve_level"), label: "Solve Level", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 4.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("domain_size"), label: "Domain Size", ty: ParamType::Float, default: ParamValue::Float(4.0), range: Some((0.5, 20.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("fill_height"), label: "Initial Fill Height", ty: ParamType::Float, default: ParamValue::Float(0.4), range: Some((0.0, 20.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("gravity_x"), label: "Gravity X", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-20.0, 20.0)), enum_values: &[] },
@@ -721,6 +729,7 @@ impl GpuFlipDomain {
         let field = self.fields.prepare(geometry.field_lattice(), self.acceleration.as_ref(), &frame, &self.impulses)?;
         let per_frame = [
             ("closed_faces", closed_faces(ctx.params) as f32),
+            ("solve_level", geometry.solve_level as f32),
             ("gravity_x", gravity[0]),
             ("gravity", gravity[1]),
             ("gravity_z", gravity[2]),
@@ -862,5 +871,26 @@ mod tests {
         // 256³ with a 2.5 m pool is 8 · 256² · 160 particles, past 2^24.
         let over = refused(geometry(256.0, 2.5, None));
         assert!(over.contains("Resolution") && over.contains("Initial Fill Height"), "{over}");
+    }
+
+    /// Solve Level is refused past the lattice's levels, never clamped: 64
+    /// has levels 64, 32, 16, 8, 4, so 3 is the deepest gradient level.
+    #[test]
+    fn gpu_flip_domain_refuses_a_solve_level_the_lattice_lacks() {
+        let at = |resolution: f32, level: f32| {
+            let read = |name: &str, default: f32| match name {
+                "resolution" => resolution,
+                "fill_height" => 0.16,
+                "solve_level" => level,
+                _ => default,
+            };
+            gpu_flip_geometry(read, None, None)
+        };
+        assert_eq!(at(64.0, 3.0).expect("level 3 at 64").solve_level, 3);
+        assert_eq!(at(64.0, 0.0).expect("level 0").solve_level, 0);
+        let refused = at(64.0, 4.0).expect_err("level 4 at 64");
+        assert!(refused.contains("Solve Level must be 0 to 3"), "{refused}");
+        let fraction = at(64.0, 1.5).expect_err("a fraction");
+        assert!(fraction.contains("Solve Level must be a whole number"), "{fraction}");
     }
 }

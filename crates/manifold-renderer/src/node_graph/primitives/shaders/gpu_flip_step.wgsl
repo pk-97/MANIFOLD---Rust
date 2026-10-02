@@ -76,7 +76,9 @@ struct Params {
     // Half-width of an emitted particle's jitter in cells, a quarter of the
     // jitter factor (_getMarkerParticleJitter).
     emit_jitter: f32,
-    _pad0: u32,
+    // The V-cycle level the pressure solves run on; the pocket coarsening
+    // reads it.
+    solve_level: u32,
     // 1: every tile is active (the test-only oracle).
     all_tiles: u32,
     // The ring a sparse pass's reads are capped at.
@@ -1178,6 +1180,90 @@ fn pocket_flux_pressure() {
 @compute @workgroup_size(1)
 fn pocket_flux_density() {
     pocket_flux(5u);
+}
+
+// Solve Level (GPU_FLIP_SPARSE_BLOCKS_DESIGN.md section 11): the pockets at
+// the solve's level. A level cell is sealed when every fine cell under it
+// is sealed with one label; its label is the lowest level cell of that
+// pocket, so the pocket passes run over the level's right-hand side
+// unchanged.
+@group(0) @binding(39) var<storage, read_write> pocket_coarse: array<u32>;
+@group(0) @binding(40) var<storage, read_write> pocket_coarse_label: array<u32>;
+// By fine label: the lowest level cell of that pocket.
+@group(0) @binding(41) var<storage, read_write> pocket_leader: array<atomic<u32>>;
+
+const NO_LEADER: u32 = 0xffffffffu;
+
+// The lattice `k` halvings down, each rounding up: the solver's levels.
+fn level_lattice(k: u32) -> vec3<i32> {
+    var n = lattice();
+    for (var j = 0u; j < k; j = j + 1u) {
+        n = (n + 1) / 2;
+    }
+    return n;
+}
+
+fn level_total(k: u32) -> u32 {
+    let c = level_lattice(k);
+    return u32(c.x * c.y * c.z);
+}
+
+// One thread per fine cell: no pocket has a leader yet.
+@compute @workgroup_size(256)
+fn pocket_leader_clear(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if gid.x < cell_total() {
+        atomicStore(&pocket_leader[gid.x], NO_LEADER);
+    }
+}
+
+// One thread per level cell: sealed with its children's fine label when
+// every in-lattice child is sealed under that one label, dry otherwise.
+@compute @workgroup_size(256)
+fn pocket_coarsen(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    let k = u.solve_level;
+    if idx >= level_total(k) {
+        return;
+    }
+    let n = lattice();
+    let c = level_lattice(k);
+    let side = 1 << k;
+    let base = unflatten(idx, c) * side;
+    var sealed = true;
+    var label = NO_LEADER;
+    for (var z = 0; z < side && sealed; z = z + 1) {
+        for (var y = 0; y < side && sealed; y = y + 1) {
+            for (var x = 0; x < side && sealed; x = x + 1) {
+                let p = base + vec3<i32>(x, y, z);
+                if any(p >= n) {
+                    continue;
+                }
+                let f = flatten(p, n);
+                if pocket[f] != POCKET_SEALED {
+                    sealed = false;
+                } else if label == NO_LEADER {
+                    label = pocket_label[f];
+                } else if pocket_label[f] != label {
+                    sealed = false;
+                }
+            }
+        }
+    }
+    pocket_coarse[idx] = select(POCKET_DRY, POCKET_SEALED, sealed);
+    pocket_coarse_label[idx] = label;
+    if sealed {
+        atomicMin(&pocket_leader[label], idx);
+    }
+}
+
+// One thread per level cell: a sealed cell takes its pocket's leader.
+@compute @workgroup_size(256)
+fn pocket_relabel(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    if idx >= level_total(u.solve_level) || pocket_coarse[idx] != POCKET_SEALED {
+        return;
+    }
+    pocket_coarse_label[idx] = atomicLoad(&pocket_leader[pocket_coarse_label[idx]]);
 }
 
 // A cell of a sealed region of more than one cell; a lone sealed cell keeps

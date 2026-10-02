@@ -812,7 +812,7 @@ fn water_step(b: &mut Builder, scene: WaterScene, tick: (usize, usize)) -> usize
     b.wire((domain, "gravity_z"), step, "gravity_z");
     b.wires(domain, step, &FIELD_WIRES);
     b.wire((state, "tick_index"), step, "tick_index");
-    b.wires(domain, step, &["bodies", "shapes", "atlas", "body_count", "dynamic_bodies", "closed_faces"]);
+    b.wires(domain, step, &["bodies", "shapes", "atlas", "body_count", "dynamic_bodies", "closed_faces", "solve_level"]);
     b.wire((domain, "body_rows"), step, "rows");
     step
 }

@@ -1944,3 +1944,140 @@ fn gpu_flip_outflow_kills_the_particles_it_holds() {
     assert!(drained > 10, "the drain holds a share of the draw: {drained}");
     assert_eq!(alive, before - drained, "the live count drops by exactly the drained");
 }
+
+/// The fine pockets' states and labels after a settled spread over `water`
+/// and `open`, every tank face closed.
+fn fine_pockets(water: &[f32], open: &[FaceSample]) -> (Vec<u32>, Vec<u32>) {
+    let params = lattice();
+    let lines = (N[1] * N[2]).max(N[0] * N[2]).max(N[0] * N[1]);
+    let mut pass = Pass::new();
+    pass.bind(6, water).bind(10, open).bind(23, &vec![0u32; cell_len()]).bind(24, &[0u32; 11]).bind(25, &vec![0u32; cell_len()]);
+    pass.run::<u32>("pocket_seed", &params, 23, cell_len(), cell_len());
+    pass.run::<u32>("pocket_start", &params, 24, 11, 1);
+    for _ in 0..=cell_len() {
+        pass.run::<u32>("pocket_round", &params, 24, 11, 1);
+        for sweep in ["pocket_sweep_x", "pocket_sweep_y", "pocket_sweep_z"] {
+            pass.run::<u32>(sweep, &params, 24, 11, lines);
+        }
+        if pass.bound::<u32>(24, 11)[9] == 0 {
+            break;
+        }
+    }
+    pass.run::<u32>("pocket_check", &params, 24, 11, cell_len());
+    assert_eq!(pass.bound::<u32>(24, 11)[10], 0, "a settled spread leaves no sealed cell linked to air");
+    (pass.bound(23, cell_len()), pass.bound(25, cell_len()))
+}
+
+/// The pockets at Solve Level 1 as the CPU coarsens them: a coarse cell is
+/// sealed when every in-lattice child is sealed under one fine label, and
+/// takes the lowest coarse cell of that fine label as its own; (state,
+/// label) per coarse cell, the label of a dry cell unspecified (None).
+fn cpu_coarse_pockets(labels: &[Option<usize>], c: [usize; 3]) -> Vec<Option<usize>> {
+    let coarse_len = c.iter().product::<usize>();
+    let fine_label: Vec<Option<usize>> = (0..coarse_len)
+        .map(|i| {
+            let at = [i % c[0], (i / c[0]) % c[1], i / (c[0] * c[1])];
+            let mut shared = None;
+            for child in 0..8 {
+                let q = [2 * at[0] + (child & 1), 2 * at[1] + (child >> 1 & 1), 2 * at[2] + (child >> 2)];
+                if (0..3).any(|a| q[a] >= N[a]) {
+                    continue;
+                }
+                match (labels[cell_index(q)], shared) {
+                    (None, _) => return None,
+                    (Some(l), None) => shared = Some(l),
+                    (Some(l), Some(s)) if l != s => return None,
+                    _ => {}
+                }
+            }
+            shared
+        })
+        .collect();
+    (0..coarse_len)
+        .map(|i| fine_label[i].map(|l| (0..coarse_len).find(|&j| fine_label[j] == Some(l)).expect("itself at the latest")))
+        .collect()
+}
+
+/// At Solve Level 1 the pockets are coarsened with the water
+/// (docs/GPU_FLIP_SPARSE_BLOCKS_DESIGN.md section 11 (Solve Level)): a
+/// level cell is sealed when all its fine children are sealed under one
+/// label, its label the lowest level cell of that pocket, and the mean
+/// comes off the coarse right-hand side pocket by pocket so each sums to
+/// zero again; what it removes is h³ at the coarse cell size. A tank of
+/// water, whole; split by a closed plane on a coarse boundary (two coarse
+/// pockets); split off it (the straddling coarse cells stay dry).
+#[test]
+fn gpu_flip_pocket_mean_at_solve_level_one_sums_to_zero() {
+    let coarse = N.map(|n| n.div_ceil(2));
+    assert_eq!(coarse, [3, 3, 2]);
+    let coarse_len = coarse.iter().product::<usize>();
+    let water = vec![1.0f32; cell_len()];
+    let mut sealed_coarse_total = 0;
+    for (case, split_x) in [("whole", None), ("split on the coarse boundary", Some(4)), ("split through a coarse cell", Some(3))] {
+        let mut open = solid_faces(0x5ea, false);
+        if let Some(x) = split_x {
+            for (i, face) in open.iter_mut().enumerate() {
+                if pad_coords(i)[0] == x {
+                    face.weight[0] = 0.0;
+                }
+            }
+        }
+        let (state, label) = fine_pockets(&water, &open);
+        let (_, sealed) = cpu_isolated(&water, &open, 63);
+        assert!(sealed.iter().all(|&s| s), "{case}: every cell is sealed");
+        let fine_labels = cpu_pocket_labels(&sealed, &open);
+        for i in 0..cell_len() {
+            assert_eq!(state[i], 1, "{case}: fine cell {i} sealed");
+            assert_eq!(Some(label[i] as usize), fine_labels[i], "{case}: fine cell {i} label");
+        }
+        let params = StepParams { solve_level: 1, ..lattice() };
+        let mut pass = Pass::new();
+        pass.bind(23, &state).bind(25, &label).bind(39, &vec![7u32; coarse_len]).bind(40, &vec![7u32; coarse_len]).bind(41, &vec![0u32; cell_len()]);
+        pass.run::<u32>("pocket_leader_clear", &params, 41, cell_len(), cell_len());
+        pass.run::<u32>("pocket_coarsen", &params, 39, coarse_len, coarse_len);
+        let got_label = pass.run::<u32>("pocket_relabel", &params, 40, coarse_len, coarse_len);
+        let got_state = pass.bound::<u32>(39, coarse_len);
+        let want = cpu_coarse_pockets(&fine_labels, coarse);
+        for i in 0..coarse_len {
+            assert_eq!(got_state[i] == 1, want[i].is_some(), "{case}: coarse cell {i} sealed");
+            if let Some(l) = want[i] {
+                assert_eq!(got_label[i] as usize, l, "{case}: coarse cell {i} label");
+            }
+        }
+        let sealed_count = want.iter().flatten().count();
+        sealed_coarse_total += sealed_count;
+        let pockets: std::collections::BTreeSet<usize> = want.iter().flatten().copied().collect();
+        println!("coarse pockets {case}: {sealed_count} of {coarse_len} coarse cells sealed in {} pockets {pockets:?}", pockets.len());
+        // The mean off the coarse right-hand side, on the coarse lattice at
+        // its cell size, the flux into the pressure word of a later substep.
+        let mut rng = Stream::new(0x5eb);
+        let rhs: Vec<f32> = (0..coarse_len).map(|_| 4.0 * rng.unit() - 1.0).collect();
+        let coarse_params = StepParams { n: coarse.map(|n| n as u32), cell_size: 2.0 * H, step_in_tick: 1, ..params };
+        let mut mean = Pass::new();
+        mean.bind(23, &got_state).bind(25, &got_label).bind(5, &rhs).bind(26, &vec![7u32; 3 * coarse_len + 2]).bind(22, &[9u32; 6]);
+        mean.run::<u32>("pocket_clear", &coarse_params, 26, 3 * coarse_len + 2, 3 * coarse_len + 2);
+        mean.run::<u32>("pocket_accumulate", &coarse_params, 26, 3 * coarse_len + 2, coarse_len);
+        let removed = mean.run::<f32>("pocket_remove", &coarse_params, 5, coarse_len, coarse_len);
+        let words = mean.run::<u32>("pocket_flux_pressure", &coarse_params, 22, 6, 1);
+        let mut total = 0.0;
+        for &l in &pockets {
+            let members: Vec<usize> = (0..coarse_len).filter(|&i| want[i] == Some(l)).collect();
+            let sum: f64 = members.iter().map(|&i| f64::from(rhs[i])).sum();
+            total += sum.abs();
+            for &i in &members {
+                let want_value = f64::from(rhs[i]) - sum / members.len() as f64;
+                assert!((f64::from(removed[i]) - want_value).abs() <= 1e-4, "{case}: coarse cell {i} rhs {} want {want_value}", removed[i]);
+            }
+            let left: f64 = members.iter().map(|&i| f64::from(removed[i])).sum();
+            assert!(left.abs() < 1e-3, "{case}: coarse pocket {l} sums to {left} after its mean is removed");
+        }
+        for i in (0..coarse_len).filter(|&i| want[i].is_none()) {
+            assert_eq!(removed[i], rhs[i], "{case}: dry coarse cell {i} keeps its value");
+        }
+        let h = 2.0 * f64::from(H);
+        let flux = f64::from(f32::from_bits(words[4])) - f64::from(f32::from_bits(9));
+        let want_flux = total * h * h * h;
+        assert!((flux - want_flux).abs() <= 1e-4 * want_flux.max(1e-9), "{case}: removed flux {flux}, want {want_flux} at the coarse cell size");
+    }
+    assert!(sealed_coarse_total > 0);
+}
