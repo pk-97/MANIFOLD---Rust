@@ -84,11 +84,23 @@ fn cell_bytes(cells: [u32; 3]) -> u64 {
 
 /// Bytes the step holds for itself at `cells` with `slots` particle slots,
 /// besides the sort's ranges and the solver's scratch: the sorted particles,
-/// four cell arrays, the solid corners and five face grids.
+/// seven cell arrays, the solid corners, five face grids, the pocket gate and
+/// the pocket sums.
 #[cfg(any(test, feature = "gpu-proofs"))]
 pub(crate) fn scratch_bytes(cells: [u32; 3], slots: u64) -> u64 {
     let corners = cells.iter().map(|&n| u64::from(n) + 1).product::<u64>() * 4;
-    slots.max(1) * size_of::<FluidParticle>() as u64 + 4 * cell_bytes(cells) + corners + 5 * face_bytes(cells)
+    slots.max(1) * size_of::<FluidParticle>() as u64
+        + 7 * cell_bytes(cells)
+        + corners
+        + 5 * face_bytes(cells)
+        + POCKET_GATE_WORDS * 4
+        + pocket_sum_bytes(cells)
+}
+
+/// Three words a cell (a pocket's 64-bit sum and its count, indexed by its
+/// leader cell), then the removed total's two.
+fn pocket_sum_bytes(cells: [u32; 3]) -> u64 {
+    3 * cell_bytes(cells) + 8
 }
 
 /// The shader's `Params`; field meanings are documented there.
@@ -118,8 +130,9 @@ pub(crate) struct StepParams {
     pub(crate) particles: u32,
     pub(crate) shapes_len: u32,
     pub(crate) rate: f32,
-    /// The shader's struct rounds up to 16 bytes.
-    pub(crate) pad: u32,
+    /// The tank's closed faces, bit 2d the low face of axis d and bit 2d + 1
+    /// the high one.
+    pub(crate) closed_faces: u32,
 }
 
 /// One pass of the step's shader on its own, for the value proofs against
@@ -149,6 +162,19 @@ struct Pipelines {
     constrain: GpuComputePipeline,
     density: GpuComputePipeline,
     advect: GpuComputePipeline,
+    pocket_seed: GpuComputePipeline,
+    pocket_start: GpuComputePipeline,
+    pocket_round: GpuComputePipeline,
+    pocket_sweep: [GpuComputePipeline; 3],
+    pocket_check: GpuComputePipeline,
+    pocket_condition: GpuComputePipeline,
+    pocket_tally: GpuComputePipeline,
+    pocket_clear: GpuComputePipeline,
+    pocket_accumulate: GpuComputePipeline,
+    pocket_remove: GpuComputePipeline,
+    pocket_pin: GpuComputePipeline,
+    /// The removed flux into the pressure, then the density, solver word.
+    pocket_flux: [GpuComputePipeline; 2],
 }
 
 fn step_source() -> String {
@@ -173,6 +199,18 @@ impl Pipelines {
             constrain: pipe("constrain_solid_faces"),
             density: pipe("density_source"),
             advect: pipe("faces_to_particles"),
+            pocket_seed: pipe("pocket_seed"),
+            pocket_start: pipe("pocket_start"),
+            pocket_round: pipe("pocket_round"),
+            pocket_sweep: [pipe("pocket_sweep_x"), pipe("pocket_sweep_y"), pipe("pocket_sweep_z")],
+            pocket_check: pipe("pocket_check"),
+            pocket_condition: pipe("pocket_condition"),
+            pocket_tally: pipe("pocket_tally"),
+            pocket_clear: pipe("pocket_clear"),
+            pocket_accumulate: pipe("pocket_accumulate"),
+            pocket_remove: pipe("pocket_remove"),
+            pocket_pin: pipe("pocket_pin"),
+            pocket_flux: [pipe("pocket_flux_pressure"), pipe("pocket_flux_density")],
         }
     }
 }
@@ -195,7 +233,20 @@ struct LatticeBuffers {
     s: GpuBuffer,
     /// The solids' face velocity and friction.
     v: GpuBuffer,
+    /// Each cell's sealed-pocket state.
+    pocket: GpuBuffer,
+    /// The pocket spread's indirect sizes and flags.
+    pocket_gate: GpuBuffer,
+    /// Each water cell's pocket label.
+    pocket_label: GpuBuffer,
+    /// [`pocket_sum_bytes`].
+    pocket_sum: GpuBuffer,
+    /// The solves' water: `water` less each sealed pocket's leader cell.
+    solve_water: GpuBuffer,
 }
+
+/// Words of the pocket spread's gate (gpu_flip_step.wgsl `pocket_gate`).
+const POCKET_GATE_WORDS: u64 = 11;
 
 fn allocate(device: &GpuDevice, bytes: u64) -> Result<GpuBuffer, String> {
     crate::node_graph::scene_modifier_expand::admit_candidate_bytes(device.modifier_memory_snapshot(), bytes)
@@ -220,6 +271,11 @@ impl LatticeBuffers {
             f: allocate(device, face)?,
             s: allocate(device, face)?,
             v: allocate(device, face)?,
+            pocket: allocate(device, cell)?,
+            pocket_gate: allocate(device, POCKET_GATE_WORDS * 4)?,
+            pocket_label: allocate(device, cell)?,
+            pocket_sum: allocate(device, pocket_sum_bytes(cells))?,
+            solve_water: allocate(device, cell)?,
         })
     }
 }
@@ -288,6 +344,111 @@ fn extend(
         enc.dispatch_compute(&pipes.extend, &[uniform(params), buffer(3, from), buffer(4, to)], face_groups, label);
         from = to;
     }
+}
+
+/// Rounds of the sealed-pocket spread: one round of line sweeps crosses the
+/// lattice along each axis, so the cap is the longest side.
+pub(crate) fn pocket_rounds(cells: [u32; 3]) -> u32 {
+    cells.into_iter().max().unwrap_or(1)
+}
+
+/// Which water reaches air (gpu_flip_step.wgsl pocket_*): seed, up to
+/// [`pocket_rounds`] rounds of indirect sweeps that stop once a round changes
+/// nothing, the unfinished check, then the tally.
+fn encode_pockets(
+    enc: &mut GpuEncoder,
+    pipes: &Pipelines,
+    params: &StepParams,
+    l: &LatticeBuffers,
+    cells: [u32; 3],
+    capped: &GpuBuffer,
+    tally: u64,
+) {
+    let cell_count: u64 = cells.iter().map(|&n| u64::from(n)).product();
+    enc.dispatch_compute(
+        &pipes.pocket_seed,
+        &[uniform(params), buffer(6, &l.water), buffer(10, &l.s), buffer(23, &l.pocket), buffer(25, &l.pocket_label)],
+        groups(cell_count),
+        "gpu_flip.step.pocket_seed",
+    );
+    enc.dispatch_compute(&pipes.pocket_start, &[buffer(24, &l.pocket_gate)], [1, 1, 1], "gpu_flip.step.pocket_start");
+    for _ in 0..pocket_rounds(cells) {
+        enc.dispatch_compute(&pipes.pocket_round, &[uniform(params), buffer(24, &l.pocket_gate)], [1, 1, 1], "gpu_flip.step.pocket_round");
+        for (axis, sweep) in pipes.pocket_sweep.iter().enumerate() {
+            enc.dispatch_compute_indirect(
+                sweep,
+                &[uniform(params), buffer(10, &l.s), buffer(23, &l.pocket), buffer(24, &l.pocket_gate), buffer(25, &l.pocket_label)],
+                &l.pocket_gate,
+                12 * axis as u64,
+                "gpu_flip.step.pocket_sweep",
+            );
+        }
+    }
+    enc.dispatch_compute(
+        &pipes.pocket_check,
+        &[uniform(params), buffer(10, &l.s), buffer(23, &l.pocket), buffer(24, &l.pocket_gate), buffer(25, &l.pocket_label)],
+        groups(cell_count),
+        "gpu_flip.step.pocket_check",
+    );
+    // Adds the step's unfinished spread to the solver word, cleared on the
+    // tick's first step.
+    enc.dispatch_compute(
+        &pipes.pocket_tally,
+        &[uniform(params), buffer(24, &l.pocket_gate), GpuBinding::Buffer { binding: 22, buffer: capped, offset: tally }],
+        [1, 1, 1],
+        "gpu_flip.step.pocket_tally",
+    );
+}
+
+/// Each sealed pocket's mean taken off the right-hand side in `l.rhs`
+/// (gpu_flip_step.wgsl pocket_accumulate, pocket_remove): with no air cell
+/// its solve is pure Neumann, solvable only for a right-hand side summing to
+/// 0. What was removed goes to solver word 4 (`solve` 0, pressure) or 5
+/// (1, density).
+fn encode_pocket_mean(enc: &mut GpuEncoder, pipes: &Pipelines, l: &LatticeBuffers, solve: usize, step: &Step<'_>) {
+    let (params, capped, tally) = (&step.params, step.capped, step.tally);
+    let cell_count: u64 = l.cells.iter().map(|&n| u64::from(n)).product();
+    let sums = [uniform(params), buffer(26, &l.pocket_sum)];
+    enc.dispatch_compute(&pipes.pocket_clear, &sums, groups(3 * cell_count + 2), "gpu_flip.step.pocket_clear");
+    let cells = [uniform(params), buffer(5, &l.rhs), buffer(23, &l.pocket), buffer(25, &l.pocket_label), buffer(26, &l.pocket_sum)];
+    enc.dispatch_compute(&pipes.pocket_accumulate, &cells, groups(cell_count), "gpu_flip.step.pocket_accumulate");
+    enc.dispatch_compute(&pipes.pocket_remove, &cells, groups(cell_count), "gpu_flip.step.pocket_remove");
+    enc.dispatch_compute(
+        &pipes.pocket_flux[solve],
+        &[uniform(params), buffer(26, &l.pocket_sum), GpuBinding::Buffer { binding: 22, buffer: capped, offset: tally }],
+        [1, 1, 1],
+        "gpu_flip.step.pocket_flux",
+    );
+}
+
+/// The step shader's atomic sites (I8, GPU_FLIP_PRESSURE_SOLVE.md section
+/// 7 (Invariants & enforcement)): the pockets' fixed-point sums, integer adds that come out
+/// the same in any thread order. A new site is added here on purpose.
+#[cfg(test)]
+const POCKET_ATOMIC_SITES: &[&str] = &["pocket_sum", "group_sum", "pocket_clear", "pocket_add", "pocket_accumulate", "pocket_remove", "pocket_flux"];
+
+/// I8's guard: each line of `source` that uses an atomic, outside the named
+/// functions and variable declarations of `allowed`; exchange and
+/// compare-exchange are never allowed. Comments are skipped.
+#[cfg(test)]
+pub(crate) fn atomic_sites_outside(source: &str, allowed: &[&str]) -> Vec<String> {
+    let mut owner = "";
+    let mut stray = Vec::new();
+    for line in source.lines() {
+        if let Some(rest) = line.strip_prefix("fn ") {
+            owner = rest.split('(').next().unwrap_or("");
+        } else if let Some(at) = line.find("var<").filter(|_| !line.starts_with(' ')) {
+            owner = line[at..].split_once("> ").map_or("", |(_, rest)| rest.split(':').next().unwrap_or("").trim());
+        }
+        let code = line.split("//").next().unwrap_or("");
+        if !code.contains("atomic") {
+            continue;
+        }
+        if code.contains("atomicExchange") || code.contains("atomicCompareExchange") || !allowed.contains(&owner) {
+            stray.push(format!("{owner}: {}", line.trim()));
+        }
+    }
+    stray
 }
 
 /// Everything one step reads, resolved before any pass is encoded.
@@ -424,7 +585,8 @@ impl StepState {
         // The box walls are in the solid with the bodies, as the engine's
         // inverted domain object is: a body flush with a wall then seals
         // against it, where the body's own lattice distance alone would leave
-        // a sub-cell open channel between them.
+        // a sub-cell open channel between them. The engine's domain object
+        // covers all six faces whichever are open, so this mask stays 63.
         encode_solid_distance(
             &mut self.solid,
             device,
@@ -479,6 +641,24 @@ impl StepState {
             cells_groups,
             "gpu_flip.step.water_from_phi",
         );
+        // Which water reaches air holds every step: the density source reads
+        // it too. As the engine does, the solid velocity's zeroing is skipped
+        // when the bodies are in the solve: their mass resolves the pocket.
+        encode_pockets(enc, pipes, &base, l, cells, step.capped, step.tally);
+        enc.dispatch_compute(
+            &pipes.pocket_pin,
+            &[uniform(&base), buffer(6, &l.water), buffer(23, &l.pocket), buffer(25, &l.pocket_label), buffer(5, &l.solve_water)],
+            cells_groups,
+            "gpu_flip.step.pocket_pin",
+        );
+        if solids && !step.dynamic {
+            enc.dispatch_compute(
+                &pipes.pocket_condition,
+                &[uniform(&base), buffer(4, &l.v), buffer(10, &l.s), buffer(23, &l.pocket)],
+                face_groups,
+                "gpu_flip.step.pocket_condition",
+            );
+        }
         enc.dispatch_compute(
             &pipes.divergence,
             &[
@@ -492,10 +672,11 @@ impl StepState {
             cells_groups,
             "gpu_flip.step.divergence",
         );
+        encode_pocket_mean(enc, pipes, l, 0, step);
         let water = Water {
             lattice: cells,
             cell_size: p.cell_size,
-            water: &l.water,
+            water: &l.solve_water,
             faces: &l.s,
             phi: step.ghost.then_some(&l.phi),
         };
@@ -510,7 +691,7 @@ impl StepState {
             tick_seconds: p.tick_seconds,
             first: (p.rows - p.body_count).max(0) as u32,
             count: p.body_count.max(0) as u32,
-            water: &l.water,
+            water: &l.solve_water,
             open: &l.s,
             solid: &l.v,
             bodies: step.bodies,
@@ -575,6 +756,7 @@ impl StepState {
                 cells_groups,
                 "gpu_flip.step.density_source",
             );
+            encode_pocket_mean(enc, pipes, l, 1, step);
             let flat = Water { phi: None, ..water };
             self.solver.solve(enc, &flat, &l.rhs, &l.pressure, step.pressure, None)?;
             self.solver.tally(enc, step.pressure, step.capped, tally, 1, false)?;
@@ -604,10 +786,19 @@ impl StepState {
     }
 }
 
+/// The Closed Faces mask, refused unless it is a whole number in 0..=63.
+pub(crate) fn read_closed_faces(value: f32) -> Result<u32, String> {
+    if value.fract() == 0.0 && (0.0..=63.0).contains(&value) {
+        Ok(value as u32)
+    } else {
+        Err(format!("Closed Faces must be a whole number from 0 to 63, not {value}"))
+    }
+}
+
 crate::primitive! {
     name: GpuFlipStep,
     type_id: "node.gpu_flip_step",
-    purpose: "Advance GPU FLIP water one 60 Hz tick in Steps equal substeps (1 by default); each substep sorts the particles into the lattice's cells, gathers their velocity onto the cell faces, adds gravity and the scene's forces and impulses, makes the water incompressible against the tank walls and the scene's solid bodies (a multigrid-preconditioned pressure solve, the free surface placed where the particles' distance crosses zero), moves crowded particles apart and sparse ones together so the water keeps its volume (a density projection, position only, when Volume Projection is 1), then moves every particle through the new velocity, blending FLIP and PIC by Flip Share, and keeps it out of the solid bodies (a particle a moving body swept over is removed). When dynamic_bodies is above 0, each body that takes a reaction joins the pressure solve with its own velocity, so the water pushes it and it pushes back in the same solve, and the step adds the pressure's and the friction's impulse on every body to the reaction. Outputs the moved particles, the step's face grid (valid at least 2 layers around the water) and the reaction, in place.",
+    purpose: "Advance GPU FLIP water one 60 Hz tick in Steps equal substeps (1 by default); each substep sorts the particles into the lattice's cells, gathers their velocity onto the cell faces, adds gravity and the scene's forces and impulses, makes the water incompressible against the tank walls and the scene's solid bodies (a multigrid-preconditioned pressure solve, the free surface placed where the particles' distance crosses zero), moves crowded particles apart and sparse ones together so the water keeps its volume (a density projection, position only, when Volume Projection is 1), then moves every particle through the new velocity, blending FLIP and PIC by Flip Share, and keeps it out of the solid bodies (a particle a moving body swept over is removed). A face Closed Faces leaves open (bit 2d the low face of axis d, bit 2d + 1 the high one) drains: every wall stays solid, and a particle that ends a substep within 2 cells of an open face is removed. Water a moving solid seals off from air (and from any open face) does not take that solid's push, unless the bodies are in the solve.When dynamic_bodies is above 0, each body that takes a reaction joins the pressure solve with its own velocity, so the water pushes it and it pushes back in the same solve, and the step adds the pressure's and the friction's impulse on every body to the reaction. Outputs the moved particles, the step's face grid (valid at least 2 layers around the water) and the reaction, in place.",
     inputs: {
         particles: Array(FluidParticle) required,
         count: ScalarF32 optional,
@@ -630,6 +821,7 @@ crate::primitive! {
         rows: ScalarF32 optional,
         reaction: Array(f32) optional,
         dynamic_bodies: ScalarF32 optional,
+        closed_faces: ScalarF32 optional,
     },
     outputs: {
         out: Array(FluidParticle),
@@ -664,6 +856,7 @@ crate::primitive! {
         float_param!("top_speed", "Top Speed", DEFAULT_TOP_SPEED, 0.1, 1000.0),
         int_param!("ghost_fluid", "Ghost Fluid", 1.0, 0.0, 1.0),
         int_param!("volume_projection", "Volume Projection", 1.0, 0.0, 1.0),
+        int_param!("closed_faces", "Closed Faces", 63.0, 0.0, 63.0),
     ],
     depth_rule: Terminal,
     composition_notes: "Inside node.liquid_state's tick region, once per tick: particles from the state's out, Steps substeps of 1/(60·Steps) s run inside the node, each moving the last one's particles, and the bodies see every substep. The lattice, gravity, the field scalars, forces, impulses, bodies, shapes, atlas, body_count and body_rows (into rows) come from node.gpu_flip_domain; so do dynamic_bodies and reaction, which every substep adds to in place; tick_index from node.liquid_state; count from the fill's live count. Flip Share is the share kept per 1/60 s, so the damping does not change with the step count. The last substep's faces feed node.liquid_state's faces_in, sized exactly to the lattice; out keeps the particles slots. A lattice the device cannot hold, or a side over 1024 cells, is a named error.",
@@ -773,6 +966,13 @@ impl Primitive for GpuFlipStep {
             }
         };
         let ghost = ctx.scalar_or_param("ghost_fluid", 1.0) > 0.5;
+        let closed_faces = match read_closed_faces(ctx.scalar_or_param("closed_faces", 63.0)) {
+            Ok(mask) => mask,
+            Err(error) => {
+                ctx.error(format!("{NAME}: {error}"));
+                return;
+            }
+        };
         let box_min = lattice.box_min();
         if let Err(error) = self.state.reserve(ctx.gpu_encoder().device, cells, u64::from(capacity)) {
             ctx.error(format!(
@@ -832,7 +1032,7 @@ impl Primitive for GpuFlipStep {
                 // The whole density error each step: projected to rest, no
                 // per-step share.
                 rate: 1.0 / step_dt,
-                pad: 0,
+                closed_faces,
             },
             particles,
             out,
@@ -873,11 +1073,58 @@ impl Primitive for GpuFlipStep {
 mod tests {
     use super::*;
 
-    /// The liquid conformance suite checks codegen bodies for atomics; the
-    /// step's hand shader has none, so it is checked here.
+    /// I8: the liquid conformance suite checks codegen bodies for atomics;
+    /// the step's hand shader is checked here. Its only atomics are the
+    /// pockets' fixed-point sums.
     #[test]
-    fn step_shader_uses_no_atomics() {
-        assert!(!STEP_SHADER.contains("atomic"));
+    fn step_shader_atomics_are_allowlisted_integer_sums() {
+        let stray = super::atomic_sites_outside(STEP_SHADER, POCKET_ATOMIC_SITES);
+        assert!(stray.is_empty(), "atomics outside the allowlist: {stray:#?}");
+    }
+
+    /// The pocket sums' two-word add with carry (gpu_flip_step.wgsl
+    /// pocket_fixed, pocket_add, pocket_value) gives the exact sum of the
+    /// fixed-point values in any order.
+    #[test]
+    fn pocket_carry_sum_is_exact_in_any_order() {
+        const SCALE: f64 = 65536.0;
+        let fixed = |x: f64| -> (u32, u32) {
+            let v = (x * SCALE).round() as i64;
+            (v as u32, (v >> 32) as u32)
+        };
+        let add = |words: &mut (u32, u32), q: (u32, u32)| {
+            let (low, carry) = words.0.overflowing_add(q.0);
+            words.0 = low;
+            words.1 = words.1.wrapping_add(q.1).wrapping_add(u32::from(carry));
+        };
+        let value = |w: (u32, u32)| ((i64::from(w.1 as i32) << 32) | i64::from(w.0)) as f64 / SCALE;
+        let mut rng = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = || {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            rng
+        };
+        // Mixed signs and magnitudes, some past 2^32 in fixed point.
+        let values: Vec<f64> = (0..20_000).map(|i| {
+            let unit = (next() % 2_000_001) as f64 / 1.0e6 - 1.0;
+            unit * if i % 7 == 0 { 1.0e5 } else { 3.0 }
+        }).collect();
+        let want: f64 = values.iter().map(|&x| (x * SCALE).round()).sum::<f64>() / SCALE;
+        let mut order: Vec<usize> = (0..values.len()).collect();
+        let mut totals = Vec::new();
+        for _ in 0..3 {
+            for i in (1..order.len()).rev() {
+                order.swap(i, (next() % (i as u64 + 1)) as usize);
+            }
+            let mut words = (0u32, 0u32);
+            for &i in &order {
+                add(&mut words, fixed(values[i]));
+            }
+            totals.push(words);
+        }
+        assert!(totals.windows(2).all(|w| w[0] == w[1]), "the words differ by order: {totals:?}");
+        assert_eq!(value(totals[0]), want, "the carry sum equals the exact sum");
     }
 
     #[test]
@@ -910,6 +1157,16 @@ mod tests {
     #[test]
     fn step_params_match_the_shader_uniform() {
         assert_eq!(size_of::<StepParams>(), 128);
+    }
+
+    #[test]
+    fn closed_faces_takes_the_six_bit_mask_and_refuses_the_rest() {
+        assert_eq!(read_closed_faces(0.0), Ok(0));
+        assert_eq!(read_closed_faces(63.0), Ok(63));
+        assert_eq!(read_closed_faces(61.0), Ok(61));
+        for bad in [64.0, -1.0, 2.5, f32::NAN, f32::INFINITY] {
+            assert!(read_closed_faces(bad).unwrap_err().contains("Closed Faces"), "{bad}");
+        }
     }
 
     /// The band is the engine's ⌈√3 · CFL⌉ + 3 on the travel, never under the

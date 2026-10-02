@@ -1,7 +1,8 @@
 //! `node.running_total` — inclusive prefix sum of an `Array(u32)`, with the
 //! grand total read back to the CPU one frame late. A barriered multi-pass
 //! scan plus a readback bridge (ADDING_PRIMITIVES.md exclusions 1 and 3); the
-//! scan is shared with `node.sort_particles_into_cells` (`prefix_scan.rs`). Its
+//! scan is shared with `node.sort_particles_into_cells` (`prefix_scan.rs`) and
+//! runs from `in` straight into `out`, no copy either side. Its
 //! `extent` keeps last frame's total on the GPU (GPU_FLUID_SURFACE_DESIGN.md P6b).
 
 use std::borrow::Cow;
@@ -149,28 +150,27 @@ impl Primitive for RunningTotal {
         let whole = (input.size / 4).min(out.size / 4);
         let n = requested.map_or(whole, |count| (count.max(0.0) as u64).min(whole)) as usize;
         let gpu = ctx.gpu_encoder();
-        let values = match self.scan.buffer(gpu.device, n) {
+        // Level 0 scans straight from `in` into `out`; only the block totals
+        // live in the scan's own storage.
+        let parents = match self.scan.parents(gpu.device, n) {
             Ok(buffer) => buffer.clone(),
             Err(error) => {
                 ctx.error(format!("Running Total: {error}"));
                 return;
             }
         };
-        let bytes = (n * 4) as u64;
         let encoder = &mut *gpu.native_enc;
-        if bytes > 0 {
-            encoder.copy_buffer_to_buffer(input, &values, bytes);
+        if n > 0 {
+            self.scan.encode_into(encoder, n, input, out);
         }
-        self.scan.encode(encoder, n);
-        if bytes > 0 {
-            encoder.copy_buffer_to_buffer(&values, out, bytes);
-        }
+        // With nothing scanned the total reads nothing; `out` may be empty.
+        let scanned = if n > 0 { out } else { &parents };
         let uniforms = TotalParams { n: n as u32, per_item, _pad: [0; 2] };
         encoder.dispatch_compute(
             self.read_total.as_ref().expect("total pipeline created"),
             &[
                 GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: &values, offset: 0 },
+                GpuBinding::Buffer { binding: 1, buffer: scanned, offset: 0 },
                 GpuBinding::Buffer {
                     binding: 2,
                     buffer: self.total_cell.as_ref().expect("total cell allocated"),

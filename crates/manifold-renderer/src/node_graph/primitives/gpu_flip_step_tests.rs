@@ -84,9 +84,10 @@ fn face_exists(p: [usize; 3], a: usize) -> bool {
     (0..3).all(|b| b == a || p[b] < N[b])
 }
 
-/// The step's params over this file's lattice, no impulse tick.
+/// The step's params over this file's lattice, no impulse tick, every tank
+/// face closed.
 fn lattice() -> StepParams {
-    StepParams { n: N.map(|n| n as u32), box_min: MIN, cell_size: H, impulse_tick: -1, ..StepParams::default() }
+    StepParams { n: N.map(|n| n as u32), box_min: MIN, cell_size: H, impulse_tick: -1, closed_faces: 63, ..StepParams::default() }
 }
 
 /// One entry of the step's shader with its buffers bound by number.
@@ -1497,4 +1498,238 @@ fn gpu_flip_constrain_solid_faces_matches_cpu() {
     let want = cpu_constrain(&faces, &open64, &moving64, n);
     assert!(open.contains(&0.0) && open.iter().any(|&w| w > 0.0 && w < 1.0), "closed and cut faces");
     assert_close(&got, &want, "constrain solid faces");
+}
+
+/// The engine's sealed pockets on CPU (PressureSolver::_conditionSolidVelocityField):
+/// water cells link through a face open at least 1e-6; a region reaches air
+/// through a linked dry neighbour or an open tank face (`mask`); a cell of an
+/// unreached region of more than one cell is isolated. Returns the isolated
+/// cells, then every sealed (wet, unreached) cell.
+fn cpu_isolated(water: &[f32], open: &[FaceSample], mask: u32) -> (Vec<bool>, Vec<bool>) {
+    let wet = |c: [usize; 3]| water[cell_index(c)] > 0.5;
+    let neighbours = |c: [usize; 3]| {
+        let mut out = Vec::new();
+        for a in 0..3 {
+            for d in [c[a].checked_sub(1), Some(c[a] + 1).filter(|&q| q < N[a])].into_iter().flatten() {
+                let mut q = c;
+                q[a] = d;
+                let mut f = c;
+                f[a] = c[a].max(d);
+                if open[pad_index(f)].weight[a] >= 1e-6 {
+                    out.push(q);
+                }
+            }
+        }
+        out
+    };
+    let mut reach: Vec<bool> = (0..cell_len())
+        .map(|i| {
+            let c = cell_coords(i);
+            let face = (0..3).any(|a| (mask >> (2 * a) & 1 == 0 && c[a] == 0) || (mask >> (2 * a + 1) & 1 == 0 && c[a] == N[a] - 1));
+            wet(c) && (face || neighbours(c).iter().any(|&q| !wet(q)))
+        })
+        .collect();
+    let mut queue: Vec<usize> = (0..cell_len()).filter(|&i| reach[i]).collect();
+    while let Some(i) = queue.pop() {
+        for q in neighbours(cell_coords(i)) {
+            let j = cell_index(q);
+            if wet(q) && !reach[j] {
+                reach[j] = true;
+                queue.push(j);
+            }
+        }
+    }
+    let isolated = (0..cell_len())
+        .map(|i| {
+            let c = cell_coords(i);
+            wet(c) && !reach[i] && neighbours(c).iter().any(|&q| wet(q))
+        })
+        .collect();
+    let sealed = (0..cell_len()).map(|i| wet(cell_coords(i)) && !reach[i]).collect();
+    (isolated, sealed)
+}
+
+/// The sealed water's pockets on CPU: each cell of `sealed` labelled by the
+/// lowest cell index it links to through sealed cells; other cells None.
+fn cpu_pocket_labels(sealed: &[bool], open: &[FaceSample]) -> Vec<Option<usize>> {
+    let mut label = vec![None; cell_len()];
+    for start in 0..cell_len() {
+        if !sealed[start] || label[start].is_some() {
+            continue;
+        }
+        // Ascending start, so the first cell reached is the lowest index.
+        label[start] = Some(start);
+        let mut queue = vec![start];
+        while let Some(i) = queue.pop() {
+            let c = cell_coords(i);
+            for a in 0..3 {
+                for d in [c[a].checked_sub(1), Some(c[a] + 1).filter(|&q| q < N[a])].into_iter().flatten() {
+                    let mut q = c;
+                    q[a] = d;
+                    let mut f = c;
+                    f[a] = c[a].max(d);
+                    let j = cell_index(q);
+                    if sealed[j] && label[j].is_none() && open[pad_index(f)].weight[a] >= 1e-6 {
+                        label[j] = Some(start);
+                        queue.push(j);
+                    }
+                }
+            }
+        }
+    }
+    label
+}
+
+/// Runs the pocket passes over `water`, `open` and the solid velocity
+/// `moving`, rounds until one changes nothing; returns the conditioned
+/// velocity, the rounds that changed a cell, then `rhs` with each sealed
+/// pocket's mean removed and the solver words after it.
+fn gpu_pockets(water: &[f32], open: &[FaceSample], moving: &[FaceSample], mask: u32, rhs: &[f32]) -> (Vec<FaceSample>, usize, Vec<f32>, Vec<u32>) {
+    let params = StepParams { closed_faces: mask, ..lattice() };
+    let lines = (N[1] * N[2]).max(N[0] * N[2]).max(N[0] * N[1]);
+    let mut pass = Pass::new();
+    pass.bind(6, water)
+        .bind(10, open)
+        .bind(23, &vec![0u32; cell_len()])
+        .bind(24, &[0u32; 11])
+        .bind(4, moving)
+        .bind(25, &vec![0u32; cell_len()])
+        .bind(5, rhs)
+        .bind(26, &vec![7u32; 3 * cell_len() + 2])
+        .bind(22, &[9u32; 6]);
+    pass.run::<u32>("pocket_seed", &params, 23, cell_len(), cell_len());
+    pass.run::<u32>("pocket_start", &params, 24, 11, 1);
+    let mut rounds = 0;
+    loop {
+        pass.run::<u32>("pocket_round", &params, 24, 11, 1);
+        for sweep in ["pocket_sweep_x", "pocket_sweep_y", "pocket_sweep_z"] {
+            pass.run::<u32>(sweep, &params, 24, 11, lines);
+        }
+        if pass.bound::<u32>(24, 11)[9] == 0 {
+            break;
+        }
+        rounds += 1;
+        assert!(rounds <= cell_len(), "the spread never settled");
+    }
+    pass.run::<u32>("pocket_check", &params, 24, 11, cell_len());
+    assert_eq!(pass.bound::<u32>(24, 11)[10], 0, "a settled spread leaves no sealed cell linked to air");
+    let got = pass.run::<FaceSample>("pocket_condition", &params, 4, face_len(), face_len());
+    pass.run::<u32>("pocket_clear", &params, 26, 3 * cell_len() + 2, 3 * cell_len() + 2);
+    pass.run::<u32>("pocket_accumulate", &params, 26, 3 * cell_len() + 2, cell_len());
+    let removed = pass.run::<f32>("pocket_remove", &params, 5, cell_len(), cell_len());
+    let words = pass.run::<u32>("pocket_flux_pressure", &StepParams { step_in_tick: 0, ..params }, 22, 6, 1);
+    (got, rounds, removed, words)
+}
+
+#[test]
+fn gpu_flip_sealed_pockets_zero_the_solid_velocity_as_the_engine() {
+    let mut zeroed = 0;
+    // A random solid seals nothing off, so half its faces are closed again
+    // and nearly every cell is water: walls of closed faces split the water
+    // into pockets, some reaching a dry cell or open face and some not.
+    for (seed, mask) in [(0x5e1, 63), (0x5e2, 63), (0x5e3, 63 & !(1 << 3)), (0x5e4, 63 & !1)] {
+        let mut rng = Stream::new(seed);
+        let water: Vec<f32> = (0..cell_len()).map(|_| f32::from(u8::from(rng.unit() < 0.97))).collect();
+        let mut open = solid_faces(seed + 1, true);
+        for face in &mut open {
+            for a in 0..3 {
+                if rng.unit() < 0.5 {
+                    face.weight[a] = 0.0;
+                }
+            }
+        }
+        let moving: Vec<FaceSample> = (0..face_len())
+            .map(|i| {
+                let p = pad_coords(i);
+                let mut face = FaceSample::default();
+                for a in 0..3 {
+                    if face_exists(p, a) {
+                        face.velocity[a] = 0.5 + rng.unit();
+                    }
+                }
+                face.velocity[3] = 7.0;
+                face
+            })
+            .collect();
+        let (isolated, sealed) = cpu_isolated(&water, &open, mask);
+        let rhs: Vec<f32> = (0..cell_len()).map(|_| 4.0 * rng.unit() - 1.0).collect();
+        let (got, rounds, removed, words) = gpu_pockets(&water, &open, &moving, mask, &rhs);
+        // Each sealed pocket loses its mean, so it sums to 0; every other
+        // cell keeps its value. The GPU rounds each value to 1/65536 first.
+        let labels = cpu_pocket_labels(&sealed, &open);
+        let mut sums = std::collections::BTreeMap::<usize, (f64, usize)>::new();
+        for (i, label) in labels.iter().enumerate() {
+            if let Some(l) = label {
+                let entry = sums.entry(*l).or_default();
+                entry.0 += f64::from(rhs[i]);
+                entry.1 += 1;
+            }
+        }
+        let mut total = 0.0;
+        for (i, label) in labels.iter().enumerate() {
+            let want = match label {
+                Some(l) => {
+                    let (sum, count) = sums[l];
+                    if i == *l {
+                        total += sum.abs();
+                    }
+                    f64::from(rhs[i]) - sum / count as f64
+                }
+                None => f64::from(rhs[i]),
+            };
+            let tolerance = if label.is_some() { 1e-4 } else { 0.0 };
+            assert!((f64::from(removed[i]) - want).abs() <= tolerance, "seed {seed:#x} mask {mask}: cell {i} rhs {} want {want}", removed[i]);
+        }
+        for l in sums.keys() {
+            let residual: f64 = (0..cell_len()).filter(|&i| labels[i] == Some(*l)).map(|i| f64::from(removed[i])).sum();
+            assert!(residual.abs() < 1e-3, "seed {seed:#x} mask {mask}: pocket {l} sums to {residual} after its mean is removed");
+        }
+        let h = f64::from(lattice().cell_size);
+        let flux = f64::from(f32::from_bits(words[4]));
+        assert!((flux - total * h * h * h).abs() <= 1e-4 * (total * h * h * h).max(1e-9), "seed {seed:#x} mask {mask}: removed flux {flux}, want {}", total * h * h * h);
+        assert_eq!(words[5], 0, "the tick's first step clears the density word");
+        assert_eq!(&words[..4], &[9, 9, 9, 9], "the other solver words stay");
+        for i in 0..face_len() {
+            let p = pad_coords(i);
+            for a in 0..3 {
+                if !face_exists(p, a) {
+                    continue;
+                }
+                let mut below = p;
+                let low = p[a] > 0 && {
+                    below[a] = p[a] - 1;
+                    isolated[cell_index(below)]
+                };
+                let high = p[a] < N[a] && isolated[cell_index(p)];
+                let want = if low || high { 0.0 } else { moving[i].velocity[a] };
+                zeroed += usize::from(low || high);
+                assert_eq!(got[i].velocity[a], want, "seed {seed:#x} mask {mask}: record {p:?} axis {a}");
+            }
+            assert_eq!(got[i].velocity[3], 7.0, "the owner code stays");
+            assert_eq!(got[i].weight, moving[i].weight, "the friction stays");
+        }
+        println!("GPU FLIP pockets seed {seed:#x} mask {mask}: {} isolated cells, {} pockets, {rounds} rounds", isolated.iter().filter(|&&s| s).count(), sums.len());
+    }
+    assert!(zeroed > 0, "some pocket was sealed");
+}
+
+#[test]
+fn gpu_flip_pocket_spread_reports_an_unfinished_cap() {
+    // Every cell water and every link open, air only past the open -X face:
+    // with no round run, sealed cells still link to air.
+    let params = StepParams { closed_faces: 63 & !1, ..lattice() };
+    let water = vec![1.0f32; cell_len()];
+    let open = solid_faces(0x5e9, false);
+    let mut pass = Pass::new();
+    pass.bind(6, &water).bind(10, &open).bind(23, &vec![0u32; cell_len()]).bind(24, &[0u32; 11]).bind(25, &vec![0u32; cell_len()]);
+    pass.run::<u32>("pocket_seed", &params, 23, cell_len(), cell_len());
+    pass.run::<u32>("pocket_start", &params, 24, 11, 1);
+    pass.run::<u32>("pocket_check", &params, 24, 11, cell_len());
+    assert_eq!(pass.bound::<u32>(24, 11)[10], 1, "an unfinished spread is flagged");
+    pass.bind(22, &[5u32, 6, 7, 9]);
+    let first: Vec<u32> = pass.run("pocket_tally", &StepParams { step_in_tick: 0, ..params }, 22, 4, 1);
+    assert_eq!(first, [5, 6, 7, 1], "the tick's first step sets the word");
+    let second: Vec<u32> = pass.run("pocket_tally", &StepParams { step_in_tick: 1, ..params }, 22, 4, 1);
+    assert_eq!(second, [5, 6, 7, 2], "later steps add to it");
+    assert_eq!(super::gpu_flip_step::pocket_rounds([6, 5, 4]), 6, "the cap is the longest side");
 }

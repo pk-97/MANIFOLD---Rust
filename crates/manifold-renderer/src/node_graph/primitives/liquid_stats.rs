@@ -29,13 +29,16 @@ pub(crate) fn partial_bytes(count: u32) -> u64 {
 /// speed (m/s), 3 mass (kg), 4-6 momentum (kg·m/s), 7 kinetic energy (J),
 /// 8 move stages a speed cap shortened, 9 solid push-outs refused, 10
 /// pressure solve iterations, 11 density solve iterations, 12 solves that
-/// reached their cap without converging (8-12 are 0 without a `capped`
-/// input). Floats are stored as bits.
-pub const LIQUID_STATS_WORDS: u32 = 13;
+/// reached their cap without converging, 13 steps whose sealed-pocket spread
+/// reached its cap unfinished, 14 and 15 the volume rate (m³/s) taken off
+/// sealed pockets' pressure and density right-hand sides so their solves
+/// have a solution (8-15 are 0 without a `capped` input). Floats are stored
+/// as bits.
+pub const LIQUID_STATS_WORDS: u32 = 16;
 
 /// The solver's words at the end of a `capped` array, after two words a
-/// particle slot: words 10-12 of the stats.
-pub const SOLVER_WORDS: u32 = 3;
+/// particle slot: words 10-15 of the stats.
+pub const SOLVER_WORDS: u32 = 6;
 
 /// One tick's statistics, decoded from the stats words.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -56,12 +59,34 @@ pub struct LiquidTickStats {
     pub density_iterations: u32,
     /// Solves this tick that reached their iteration cap without converging.
     pub unconverged: u32,
+    /// Steps this tick whose sealed-pocket spread reached its cap unfinished.
+    pub unresolved_pockets: u32,
+    /// Volume rate (m³/s) taken off sealed pockets' pressure right-hand side
+    /// this tick, summed over its steps.
+    pub pressure_flux_removed: f32,
+    /// The same for the density projection's source.
+    pub density_flux_removed: f32,
 }
 
 impl LiquidTickStats {
     pub fn from_words(w: &[u32]) -> Self {
         let f = |i: usize| f32::from_bits(w[i]);
-        Self { nonfinite: w[0], live: w[1], max_speed: f(2), mass: f(3), momentum: [f(4), f(5), f(6)], kinetic: f(7), speed_capped: w[8], push_refused: w[9], pressure_iterations: w[10], density_iterations: w[11], unconverged: w[12] }
+        Self {
+            nonfinite: w[0],
+            live: w[1],
+            max_speed: f(2),
+            mass: f(3),
+            momentum: [f(4), f(5), f(6)],
+            kinetic: f(7),
+            speed_capped: w[8],
+            push_refused: w[9],
+            pressure_iterations: w[10],
+            density_iterations: w[11],
+            unconverged: w[12],
+            unresolved_pockets: w[13],
+            pressure_flux_removed: f(14),
+            density_flux_removed: f(15),
+        }
     }
 }
 
@@ -97,7 +122,7 @@ impl StatsPipelines {
 crate::primitive! {
     name: LiquidStats,
     type_id: "node.liquid_stats",
-    purpose: "Reduce a particle liquid's first `count` records to its statistics words, written in place over `stats`: 0 records with a non-finite position, radius or velocity, 1 live records (radius above 0), 2 the fastest speed, 3 mass, 4-6 momentum and 7 kinetic energy, each particle weighing particle_mass, and when capped is wired, 8 and 9 its two words per record summed: the solver's speed-capped move stages and refused solid push-outs, and 10-12 the solver words after the records: pressure and density solve iterations and the solves that reached their cap without converging. Sums run in a fixed order with no atomics, so the words are the same on every run.",
+    purpose: "Reduce a particle liquid's first `count` records to its statistics words, written in place over `stats`: 0 records with a non-finite position, radius or velocity, 1 live records (radius above 0), 2 the fastest speed, 3 mass, 4-6 momentum and 7 kinetic energy, each particle weighing particle_mass, and when capped is wired, 8 and 9 its two words per record summed: the solver's speed-capped move stages and refused solid push-outs, and 10-15 the solver words after the records: pressure and density solve iterations, the solves that reached their cap without converging, the steps whose sealed-pocket spread reached its cap unfinished, and 14-15 the volume rate taken off sealed pockets' pressure and density right-hand sides. Sums run in a fixed order with no atomics, so the words are the same on every run.",
     inputs: {
         particles: Array(FluidParticle) required,
         stats: Array(u32) required,
@@ -215,9 +240,9 @@ mod tests {
 
     #[test]
     fn liquid_stats_words_decode() {
-        let words = [2, 5, 1.5f32.to_bits(), 0.25f32.to_bits(), 1.0f32.to_bits(), (-2.0f32).to_bits(), 0.0f32.to_bits(), 3.0f32.to_bits(), 4, 1, 40, 12, 1];
+        let words = [2, 5, 1.5f32.to_bits(), 0.25f32.to_bits(), 1.0f32.to_bits(), (-2.0f32).to_bits(), 0.0f32.to_bits(), 3.0f32.to_bits(), 4, 1, 40, 12, 1, 2, 0.5f32.to_bits(), 0.125f32.to_bits()];
         let stats = LiquidTickStats::from_words(&words);
-        assert_eq!(stats, LiquidTickStats { nonfinite: 2, live: 5, max_speed: 1.5, mass: 0.25, momentum: [1.0, -2.0, 0.0], kinetic: 3.0, speed_capped: 4, push_refused: 1, pressure_iterations: 40, density_iterations: 12, unconverged: 1 });
+        assert_eq!(stats, LiquidTickStats { nonfinite: 2, live: 5, max_speed: 1.5, mass: 0.25, momentum: [1.0, -2.0, 0.0], kinetic: 3.0, speed_capped: 4, push_refused: 1, pressure_iterations: 40, density_iterations: 12, unconverged: 1, unresolved_pockets: 2, pressure_flux_removed: 0.5, density_flux_removed: 0.125 });
         assert_eq!(words.len(), LIQUID_STATS_WORDS as usize);
     }
 }

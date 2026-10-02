@@ -91,6 +91,8 @@ pub const LIQUID_DIAL_PARAMS: &[(&str, &[&str])] = &[
             "gravity_x", "gravity", "gravity_z",
             "speed", "reset",
             "resolution",
+            "closed_neg_x", "closed_pos_x", "closed_neg_y", "closed_pos_y",
+            "closed_neg_z", "closed_pos_z",
         ],
     ),
 ];
