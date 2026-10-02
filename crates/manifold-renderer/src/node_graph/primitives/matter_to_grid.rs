@@ -104,6 +104,10 @@ crate::primitive! {
 }
 
 impl Primitive for MatterToGrid {
+    fn prewarm_pipelines(&self, device: &manifold_gpu::GpuDevice) {
+        device.create_compute_pipeline(SHADER, "scatter_main", "node.matter_to_grid");
+    }
+
     fn array_output_capacity(
         &self,
         port_name: &str,

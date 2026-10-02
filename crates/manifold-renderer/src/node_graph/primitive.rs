@@ -397,6 +397,10 @@ pub trait Primitive: PrimitiveSpec {
     }
 
     /// Mirror of
+    /// [`EffectNode::prewarm_pipelines`](crate::node_graph::effect_node::EffectNode::prewarm_pipelines).
+    fn prewarm_pipelines(&self, _device: &manifold_gpu::GpuDevice) {}
+
+    /// Mirror of
     /// [`EffectNode::runs_with_pending_inputs`](crate::node_graph::effect_node::EffectNode::runs_with_pending_inputs).
     /// Default `false`: a pending input makes this node's outputs pending
     /// without running it.
@@ -865,6 +869,9 @@ impl<P: Primitive + 'static> EffectNode for P {
     }
     fn warmup_pending(&self) -> bool {
         Primitive::warmup_pending(self)
+    }
+    fn prewarm_pipelines(&self, device: &manifold_gpu::GpuDevice) {
+        Primitive::prewarm_pipelines(self, device);
     }
     fn runs_with_pending_inputs(&self) -> bool {
         Primitive::runs_with_pending_inputs(self)

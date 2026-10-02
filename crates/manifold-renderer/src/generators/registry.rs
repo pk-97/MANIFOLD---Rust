@@ -392,6 +392,7 @@ fn prewarm_all_atom_codegen_pipelines(device: &std::sync::Arc<GpuDevice>) {
         let Some(node) = registry.construct(type_id) else {
             continue;
         };
+        node.prewarm_pipelines(device);
         if !node.wgsl_specialization().is_empty() {
             skipped_specialized += 1;
             continue;

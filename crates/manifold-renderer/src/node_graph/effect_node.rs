@@ -1218,6 +1218,14 @@ pub trait EffectNode: Send {
         false
     }
 
+    /// Compile this node's hand-written, content-independent pipelines into
+    /// the device cache. The startup sweep calls it on every registered node
+    /// type, because the project warmup only reaches pipelines a warmup frame
+    /// dispatches: a node inside a region that runs zero iterations at frame 0
+    /// (a liquid tick region) would otherwise compile on its first played
+    /// frame. Codegen-path atoms need nothing here; the sweep warms them.
+    fn prewarm_pipelines(&self, _device: &manifold_gpu::GpuDevice) {}
+
     /// Run even while an input is pending. By default the executor does not
     /// evaluate a node while any input other than a state-capture back-edge
     /// is pending: its outputs go pending without running, and their bytes

@@ -111,17 +111,26 @@ fn groups(threads: u64) -> [u32; 3] {
 }
 
 impl BodyPasses {
+    fn pipelines(device: &GpuDevice) -> Pipelines {
+        let pipe = |entry: &str, label: &str| device.create_compute_pipeline(SHADER, entry, label);
+        Pipelines {
+            partial: pipe("impulse_partial", "gpu_flip.bodies.partial"),
+            finalize: pipe("impulse_finalize", "gpu_flip.bodies.finalize"),
+            product: pipe("body_product", "gpu_flip.bodies.product"),
+            velocity: pipe("velocity_change", "gpu_flip.bodies.velocity_change"),
+        }
+    }
+
+    /// Compile the passes' pipelines into the device cache.
+    pub(crate) fn prewarm_pipelines(device: &GpuDevice) {
+        Self::pipelines(device);
+    }
+
     /// Build the pipelines and the sums once; the partials hold every body at
     /// the most groups, so no lattice reallocates them.
     pub(crate) fn prepare(&mut self, device: &GpuDevice) -> Result<(), String> {
         if self.pipelines.is_none() {
-            let pipe = |entry: &str, label: &str| device.create_compute_pipeline(SHADER, entry, label);
-            self.pipelines = Some(Pipelines {
-                partial: pipe("impulse_partial", "gpu_flip.bodies.partial"),
-                finalize: pipe("impulse_finalize", "gpu_flip.bodies.finalize"),
-                product: pipe("body_product", "gpu_flip.bodies.product"),
-                velocity: pipe("velocity_change", "gpu_flip.bodies.velocity_change"),
-            });
+            self.pipelines = Some(Self::pipelines(device));
         }
         if self.partials.is_none() {
             self.partials = Some(device.try_create_buffer(PARTIAL_BYTES)?);

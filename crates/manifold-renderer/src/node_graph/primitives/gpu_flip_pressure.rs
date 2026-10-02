@@ -269,6 +269,11 @@ pub(crate) struct PressureSolver {
 }
 
 impl PressureSolver {
+    /// Compile the solver's pipelines into the device cache.
+    pub(crate) fn prewarm_pipelines(device: &GpuDevice) {
+        Pipelines::new(device);
+    }
+
     /// Build the coarse levels and the coarse inverse for `water`. Every
     /// solve until the next prepare runs on this water. Allocates only when
     /// the lattice changes.

@@ -664,6 +664,13 @@ fn read_iterations(value: f32, auto: u32) -> u32 {
 }
 
 impl Primitive for GpuFlipStep {
+    fn prewarm_pipelines(&self, device: &GpuDevice) {
+        Pipelines::new(device);
+        ParticleSorter::default().prepare(device);
+        PressureSolver::prewarm_pipelines(device);
+        BodyPasses::prewarm_pipelines(device);
+    }
+
     fn provides_array_output(&self, port: &str) -> bool {
         port == "faces"
     }
