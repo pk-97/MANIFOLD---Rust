@@ -1,6 +1,6 @@
 # GPU FLIP — the GPU water solver and its multigrid pressure solve
 
-<!-- index: The GPU water solver (GPU FLIP, formerly SWASH): PIC/FLIP particles on a face grid, one liquid tick of two water steps, and a multigrid-preconditioned conjugate gradient pressure solve with a fixed iteration count. The step, the equation, the solve, the Auto iteration rule, the named refusals, the measures against the FLIP Fluids engine, and what is still owed (solids). -->
+<!-- index: The GPU water solver (GPU FLIP, formerly SWASH): PIC/FLIP particles on a face grid, one liquid tick of two water steps, and a multigrid-preconditioned conjugate gradient pressure solve that stops on the FLIP Fluids tolerance. The step, the equation, the solve, the Auto iteration rule, the named refusals, the measures against the FLIP Fluids engine, and what is still owed (solids). -->
 
 **Status:** BUILT · 2026-10-01 · the step is one node, `node.gpu_flip_step` (section 1.1 (stage design)) · owed: BUG-4jfv (solids gate: race rows, engine draft, L2 demo); BUG-0d7t (open-face boundaries); BUG-l2h3 (SWASH to a live instrument) child .10 (occupied-block passes); BUG-h8or (lid slabs) · the retired FFT solve is `docs/archive/FFT_WATER_SOLVER_DESIGN.md`.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) before the solids phase.
@@ -95,7 +95,7 @@ A water body that touches no air (a closed box full of water) makes L singular. 
 
 ## 3. The solve
 
-Conjugate gradient in the L form, from x = 0, r = f, p = 0, rz = 0. Each iteration: z = V(r); rz_new = r·z; β = rz_new / rz_old (0 when rz_old is 0); p = z + βp; s = −Lp; α = rz_new / (p·s); x −= αp; r −= αs. The loop is the solver module's (`gpu_flip_pressure.rs`, `PressureSolver::solve`): a fixed iteration count, no readback, every scalar on the GPU. Dots reduce in two barriered passes in a fixed order; β and α are made on the GPU.
+Conjugate gradient in the L form, from x = 0, r = f, p = 0, rz = 0. Each iteration: z = V(r); rz_new = r·z; β = rz_new / rz_old (0 when rz_old is 0); p = z + βp; s = −Lp; α = rz_new / (p·s); x −= αp; r −= αs. The loop is the solver module's (`gpu_flip_pressure.rs`, `PressureSolver::solve`): no readback, every scalar on the GPU. It stops the way FLIP Fluids' PCG does (`pcgsolver.h`): after each iteration, when |r|∞ ≤ min(1e-9 · |f|∞, 1.0 s⁻¹), f being the divergence in 1/s; and before the first, with p = 0, when |f|∞ < 1e-9. The stop is on the GPU: every dispatch of the solve is indirect, its group counts in a gate buffer that the check pass zeroes, so the passes after a stop run no groups. `MAX_ITERATIONS` = 64 is the cap; a solve that reaches it unconverged is counted in the tick's solver words (`node.liquid_stats` words 10 to 12) and Liquid State raises it as a named error. The f32 recursive residual reaches the engine's 1e-9 unchanged: 11 iterations on a still pool, 12 to 14 on the Dam Break splash frames (`pressure_module_converges_on_the_engine_tolerance`). Dots reduce in two barriered passes in a fixed order; β and α are made on the GPU.
 
 V(r) is one V-cycle for L e = r, from e = 0:
 
@@ -110,10 +110,10 @@ V(r) is one V-cycle for L e = r, from e = 0:
 
 ## 4. Iteration counts — the Auto rule
 
-The counts are build params with an Auto rule: the smallest count at which the f64 reference (`scripts/mgpcg_reference.py`) reaches the retired FFT solve's residual on every committed Dam Break problem (`tests/fixtures/dambreak_pressure_problems.bin.zst`, 7 frames) and on dumped splash solves at 64³ and 128³, plus one. Deep water has fixtures too, written by the atom graph's fixture writer, deleted with the atoms (BUG-2o3c (deep-pool fixtures cannot be regenerated)): a 3 m still pool's main solve (`deep_pool_pressure_problems.bin.zst`) and the density solves of a block dropped into it (`deep_pool_density_problems.bin.zst`). With no FFT record there, their target is the tightest FFT residual at that lattice: 5.5e-5 (64³) and 1.7e-3 (128³) for the main solve, 4.2e-2 and 0.35 for the density solve. A multigrid preconditioner's count does not grow with the lattice, so one count serves every size.
+Auto (Iterations 0, the default) is the convergence stop of section 3 under the `MAX_ITERATIONS` cap; an explicit Iterations value runs exactly that many. The fixed counts below are what the explicit values and the reference proofs use. They were picked as the smallest count at which the f64 reference (`scripts/mgpcg_reference.py`) reaches the retired FFT solve's residual on every committed Dam Break problem (`tests/fixtures/dambreak_pressure_problems.bin.zst`, 7 frames) and on dumped splash solves at 64³ and 128³, plus one. Deep water has fixtures too, written by the atom graph's fixture writer, deleted with the atoms (BUG-2o3c (deep-pool fixtures cannot be regenerated)): a 3 m still pool's main solve (`deep_pool_pressure_problems.bin.zst`) and the density solves of a block dropped into it (`deep_pool_density_problems.bin.zst`). With no FFT record there, their target is the tightest FFT residual at that lattice: 5.5e-5 (64³) and 1.7e-3 (128³) for the main solve, 4.2e-2 and 0.35 for the density solve. A multigrid preconditioner's count does not grow with the lattice, so one count serves every size.
 
 - `PRESSURE_ITERATIONS` = 8: the reference needed at most 7 at 64³ and 5 at 128³ on the Dam Break, 6 and 5 on the deep pool.
-- The density projection runs the step's pressure count (Iterations, Auto = `PRESSURE_ITERATIONS`). The retired `DENSITY_ITERATIONS` = 3 rule (the reference needed 2 at 64³ and 1 at 128³) was for the old density solve, not this one.
+- The density projection runs the step's pressure stop (Iterations; Auto is the convergence stop). The retired `DENSITY_ITERATIONS` = 3 rule (the reference needed 2 at 64³ and 1 at 128³) was for the old density solve, not this one.
 - An Iterations value past the solver's `MAX_ITERATIONS` = 64 is refused by name, never clamped.
 
 Re-run 2026-10-01 for the fixed five levels with a smoothed coarsest level (`--depth 5 --coarse-sweeps 16`) on the Dam Break problems and the deep pool; the splash dumps were not kept, and no count moved.
@@ -260,7 +260,7 @@ Different on purpose:
 | # | Invariant | Machine check |
 |---|---|---|
 | I1 | No node-grid velocity in the liquid path | `rg -n "node_vel\|NodeVelocity\|matter_" crates/manifold-renderer/src/node_graph/primitives -g "{gpu_flip_,coarse_inverse,dot_products,divide_by_value}*"` returns zero |
-| I2 | No CPU readback inside a frame; the iteration count is fixed | the same files hold no `read_back`, `readback` or `wait_until_completed`; the step's iteration counts are build params |
+| I2 | No CPU readback inside a frame; the stop is on the GPU | the same files hold no `read_back`, `readback` or `wait_until_completed` |
 | I3 | Every pass of the step and the solver has a value proof against a CPU reference | `gpu_flip_step_tests.rs` (one test per pass), `gpu_flip_pressure_tests.rs`; `step_shader_validates_with_every_entry` |
 | I4 | The GPU solve matches the f64 reference | `pressure_module_matches_reference_64`, `_128`, `_odd_sides` and `_deep_pool`: the solver against `scripts/mgpcg_reference.py` at the shipped counts, within the f32 floor |
 | I5 | Water volume is kept | `gpu_flip_still_pool`, `gpu_flip_still_pool_keeps_its_meshed_volume`, `gpu_flip_free_fall_keeps_g` |
@@ -324,7 +324,7 @@ Peter's scenes have boxes and obstacles in the water, and the engine's Dam Break
 
 1. Face-grid native; no node↔face bridge.
 2. Air removed with pressure zero; no air phase.
-3. Fixed iteration count; no readback inside the frame.
+3. No readback inside the frame. The iteration count is the engine's convergence stop under a fixed cap, decided by BUG-l2h3.23 (the engine ports), not a fixed count.
 4. Gather-form transfers; no atomics.
 5. The density correction moves particles only.
 6. Multigrid-preconditioned CG replaces the FFT capacitance solve (2026-10-01, the MGPCG swap brief). This reverses the FFT record's decided item 8, "No multigrid FLIP".

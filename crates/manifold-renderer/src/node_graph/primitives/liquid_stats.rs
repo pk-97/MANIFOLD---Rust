@@ -27,9 +27,15 @@ pub(crate) fn partial_bytes(count: u32) -> u64 {
 
 /// Words in the stats array: 0 non-finite records, 1 live records, 2 fastest
 /// speed (m/s), 3 mass (kg), 4-6 momentum (kg·m/s), 7 kinetic energy (J),
-/// 8 move stages a speed cap shortened, 9 solid push-outs refused (both 0
-/// without a `capped` input). Floats are stored as bits.
-pub const LIQUID_STATS_WORDS: u32 = 10;
+/// 8 move stages a speed cap shortened, 9 solid push-outs refused, 10
+/// pressure solve iterations, 11 density solve iterations, 12 solves that
+/// reached their cap without converging (8-12 are 0 without a `capped`
+/// input). Floats are stored as bits.
+pub const LIQUID_STATS_WORDS: u32 = 13;
+
+/// The solver's words at the end of a `capped` array, after two words a
+/// particle slot: words 10-12 of the stats.
+pub const SOLVER_WORDS: u32 = 3;
 
 /// One tick's statistics, decoded from the stats words.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -44,12 +50,18 @@ pub struct LiquidTickStats {
     pub speed_capped: u32,
     /// Solid push-outs the solver refused as too far this tick.
     pub push_refused: u32,
+    /// Pressure solve iterations this tick, every substep.
+    pub pressure_iterations: u32,
+    /// Density solve iterations this tick, every substep.
+    pub density_iterations: u32,
+    /// Solves this tick that reached their iteration cap without converging.
+    pub unconverged: u32,
 }
 
 impl LiquidTickStats {
     pub fn from_words(w: &[u32]) -> Self {
         let f = |i: usize| f32::from_bits(w[i]);
-        Self { nonfinite: w[0], live: w[1], max_speed: f(2), mass: f(3), momentum: [f(4), f(5), f(6)], kinetic: f(7), speed_capped: w[8], push_refused: w[9] }
+        Self { nonfinite: w[0], live: w[1], max_speed: f(2), mass: f(3), momentum: [f(4), f(5), f(6)], kinetic: f(7), speed_capped: w[8], push_refused: w[9], pressure_iterations: w[10], density_iterations: w[11], unconverged: w[12] }
     }
 }
 
@@ -61,6 +73,11 @@ struct StatsParams {
     particle_mass: f32,
     /// 1 when a `capped` array is bound.
     has_capped: u32,
+    /// Particle slots: the solver words start at word 2 · slots of `capped`.
+    slots: u32,
+    /// 1 when the `capped` array holds the solver words.
+    has_solver: u32,
+    _pad: [u32; 2],
 }
 
 pub struct StatsPipelines {
@@ -71,7 +88,7 @@ pub struct StatsPipelines {
 crate::primitive! {
     name: LiquidStats,
     type_id: "node.liquid_stats",
-    purpose: "Reduce a particle liquid's first `count` records to its statistics words, written in place over `stats`: 0 records with a non-finite position, radius or velocity, 1 live records (radius above 0), 2 the fastest speed, 3 mass, 4-6 momentum and 7 kinetic energy, each particle weighing particle_mass, and when capped is wired, 8 and 9 its two words per record summed: the solver's speed-capped move stages and refused solid push-outs. Sums run in a fixed order with no atomics, so the words are the same on every run.",
+    purpose: "Reduce a particle liquid's first `count` records to its statistics words, written in place over `stats`: 0 records with a non-finite position, radius or velocity, 1 live records (radius above 0), 2 the fastest speed, 3 mass, 4-6 momentum and 7 kinetic energy, each particle weighing particle_mass, and when capped is wired, 8 and 9 its two words per record summed: the solver's speed-capped move stages and refused solid push-outs, and 10-12 the solver words after the records: pressure and density solve iterations and the solves that reached their cap without converging. Sums run in a fixed order with no atomics, so the words are the same on every run.",
     inputs: {
         particles: Array(FluidParticle) required,
         stats: Array(u32) required,
@@ -145,9 +162,19 @@ impl Primitive for LiquidStats {
             self.partials = Some(gpu.device.create_buffer(partial_bytes));
         }
         let partials = self.partials.as_ref().expect("partials prepared");
+        let slots = (particles.size / std::mem::size_of::<FluidParticle>() as u64).min(u64::from(u32::MAX)) as u32;
+        let has_solver = capped.is_some_and(|c| c.size >= (2 * u64::from(slots) + u64::from(SOLVER_WORDS)) * 4);
         let count = capped.map_or(count, |c| count.min((c.size / 8).min(u64::from(u32::MAX)) as u32));
         let groups = count.div_ceil(BLOCK);
-        let params = StatsParams { count, groups, particle_mass, has_capped: u32::from(capped.is_some()) };
+        let params = StatsParams {
+            count,
+            groups,
+            particle_mass,
+            has_capped: u32::from(capped.is_some()),
+            slots,
+            has_solver: u32::from(has_solver),
+            _pad: [0; 2],
+        };
         let bindings = [
             GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&params) },
             GpuBinding::Buffer { binding: 1, buffer: particles, offset: 0 },
@@ -168,7 +195,7 @@ mod tests {
 
     #[test]
     fn liquid_stats_params_match_the_shader_and_use_no_atomics() {
-        assert_eq!(std::mem::size_of::<StatsParams>(), 16);
+        assert_eq!(std::mem::size_of::<StatsParams>(), 32);
         assert!(SHADER.contains("struct StatsParams"));
         assert_eq!(std::mem::size_of::<FluidParticle>(), 32);
         assert!(!SHADER.contains("atomic"), "GPU FLIP: the tick statistics use no atomics");
@@ -180,9 +207,9 @@ mod tests {
 
     #[test]
     fn liquid_stats_words_decode() {
-        let words = [2, 5, 1.5f32.to_bits(), 0.25f32.to_bits(), 1.0f32.to_bits(), (-2.0f32).to_bits(), 0.0f32.to_bits(), 3.0f32.to_bits(), 4, 1];
+        let words = [2, 5, 1.5f32.to_bits(), 0.25f32.to_bits(), 1.0f32.to_bits(), (-2.0f32).to_bits(), 0.0f32.to_bits(), 3.0f32.to_bits(), 4, 1, 40, 12, 1];
         let stats = LiquidTickStats::from_words(&words);
-        assert_eq!(stats, LiquidTickStats { nonfinite: 2, live: 5, max_speed: 1.5, mass: 0.25, momentum: [1.0, -2.0, 0.0], kinetic: 3.0, speed_capped: 4, push_refused: 1 });
+        assert_eq!(stats, LiquidTickStats { nonfinite: 2, live: 5, max_speed: 1.5, mass: 0.25, momentum: [1.0, -2.0, 0.0], kinetic: 3.0, speed_capped: 4, push_refused: 1, pressure_iterations: 40, density_iterations: 12, unconverged: 1 });
         assert_eq!(words.len(), LIQUID_STATS_WORDS as usize);
     }
 }
