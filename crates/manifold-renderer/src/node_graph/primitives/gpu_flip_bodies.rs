@@ -201,16 +201,17 @@ impl BodyPasses {
             [params.groups, bodies.count.max(1), 1],
             "gpu_flip.bodies.partial",
         );
-        let mut finalize = vec![
+        // A fixed array, not a Vec: this runs every step. Without a reaction
+        // binding 9 is left off.
+        let finalize = [
             GpuBinding::Bytes { binding: 0, data },
             buffer(4, bodies.bodies),
             buffer(7, partials),
             buffer(8, sums),
+            buffer(9, reaction.unwrap_or(sums)),
         ];
-        if let Some(reaction) = reaction {
-            finalize.push(buffer(9, reaction));
-        }
-        enc.dispatch_compute(&pipes.finalize, &finalize, [1, 1, 1], "gpu_flip.bodies.finalize");
+        let bound = if reaction.is_some() { finalize.len() } else { finalize.len() - 1 };
+        enc.dispatch_compute(&pipes.finalize, &finalize[..bound], [1, 1, 1], "gpu_flip.bodies.finalize");
         Ok(())
     }
 
