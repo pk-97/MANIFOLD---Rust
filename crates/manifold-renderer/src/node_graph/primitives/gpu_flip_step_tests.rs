@@ -12,7 +12,7 @@
 use manifold_gpu::GpuBuffer;
 
 use super::gpu_flip_atom_tests::{FACE_FLOATS, assert_close, face_grid_len, random_values};
-use super::gpu_flip_step::{StepParams, dispatch_pass};
+use super::gpu_flip_step::{StepParams, dispatch_pass, tile_total};
 use super::liquid_fill::LiquidFill;
 use super::liquid_surface_tests::{Harness, params, read};
 use crate::node_graph::fluid_particles::{CellRange, FaceSample, FluidParticle};
@@ -111,6 +111,15 @@ impl Pass {
         }
         self.bound.push((binding, buffer));
         self
+    }
+
+    /// Binds the tile list at 29 as every tile in order, so a pass over the
+    /// cell set C covers the whole lattice; returns its thread count (512 a
+    /// tile).
+    fn every_tile(&mut self) -> usize {
+        let tiles: Vec<u32> = (0..tile_total(N.map(|n| n as u32)) as u32).collect();
+        self.bind(29, &tiles);
+        tiles.len() * 512
     }
 
     /// Runs `entry` over `threads` threads and reads `len` records of
@@ -249,7 +258,9 @@ fn gpu_flip_water_is_negative_phi() {
             _ => rng.unit() * 2.0 - 1.0,
         })
         .collect();
-    let got: Vec<f32> = Pass::new().bind(7, &phi).run("water_from_phi", &lattice(), 5, cell_len(), cell_len());
+    let mut pass = Pass::new();
+    let threads = pass.every_tile();
+    let got: Vec<f32> = pass.bind(7, &phi).run("water_from_phi", &lattice(), 5, cell_len(), threads);
     for (c, (g, f)) in got.iter().zip(&phi).enumerate() {
         assert_eq!(*g, f32::from(u8::from(*f < 0.0)), "cell {c}");
     }
@@ -263,8 +274,13 @@ fn gpu_flip_particles_to_faces_matches_the_wyvill_sum() {
         let particles = random_particles(0x9261, count);
         let (sorted, ranges) = cpu_sort(&particles);
         let step = StepParams { capacity: sorted.len() as u32, ..lattice() };
+        // The pass owns the cells' records; the records past the lattice
+        // are the fill's constants.
+        let mut pass = Pass::new();
+        let threads = pass.every_tile();
+        let filled: Vec<FaceSample> = Pass::new().run("tiles_fill", &step, 4, face_len(), face_len());
         let got: Vec<FaceSample> =
-            Pass::new().bind(1, &ranges).bind(2, &sorted).run("particles_to_faces", &step, 4, face_len(), face_len());
+            pass.bind(1, &ranges).bind(2, &sorted).bind(4, &filled).run("particles_to_faces", &step, 4, face_len(), threads);
         let (checked, invalid, walls) = check_wyvill_faces(&particles, &got);
         if name == "dense" {
             assert!(checked > 200, "the fixture reaches most faces, got {checked}");
@@ -431,12 +447,14 @@ fn gpu_flip_face_divergence_is_the_outflow_of_water_cells() {
     for solid in [false, true] {
         let open = solid_faces(0xd2f, solid);
         let moving = solid_velocity(0xd3f, &open);
-        let got: Vec<f32> = Pass::new()
+        let mut pass = Pass::new();
+        let threads = pass.every_tile();
+        let got: Vec<f32> = pass
             .bind(3, &faces)
             .bind(6, &water)
             .bind(10, &open)
             .bind(11, &moving)
-            .run("divergence", &lattice(), 5, cell_len(), cell_len());
+            .run("divergence", &lattice(), 5, cell_len(), threads);
         let mut pushed = 0;
         for (c, g) in got.iter().enumerate() {
             let p = cell_coords(c);
@@ -733,8 +751,9 @@ fn gpu_flip_particle_distance_is_the_engines_level_set() {
             assert!(far > 0, "the lone particle reaches cells two out, which read 3h here");
         }
         let step = StepParams { capacity: sorted.len() as u32, ..lattice() };
-        let got: Vec<f32> =
-            Pass::new().bind(1, &ranges).bind(2, &sorted).run("particle_distance", &step, 5, cell_len(), cell_len());
+        let mut pass = Pass::new();
+        let threads = pass.every_tile();
+        let got: Vec<f32> = pass.bind(1, &ranges).bind(2, &sorted).run("particle_distance", &step, 5, cell_len(), threads);
         let empty = ranges.iter().filter(|r| r.count == 0).count();
         assert!(empty > 10 && empty < cell_len(), "{name}: the draw has empty and full cells ({empty} empty)");
         for (c, (g, w)) in got.iter().zip(&want).enumerate() {
@@ -1818,7 +1837,7 @@ fn gpu_flip_inflow_emits_at_empty_sites_into_free_slots() {
         .bind(9, &corners)
         .bind(15, &[shape])
         .bind(16, &atlas)
-        .bind(27, &[row])
+        .bind(36, &[row])
         .run("emit_flags", &params, 28, site_count, site_count);
     assert_eq!(got, want, "the flags are the empty inflow sites");
 
@@ -1832,9 +1851,9 @@ fn gpu_flip_inflow_emits_at_empty_sites_into_free_slots() {
         .bind(1, &ranges)
         .bind(15, &[shape])
         .bind(16, &atlas)
-        .bind(27, &[row])
-        .bind(28, &scan)
-        .bind(30, &pool)
+        .bind(36, &[row])
+        .bind(37, &scan)
+        .bind(38, &pool)
         .run("emit_write", &params, 30, pool.len(), site_count);
     assert_eq!(written[..sorted.len()], sorted[..], "the live prefix is untouched");
     assert!(written[capacity..].iter().all(|p| *p == FluidParticle::default()), "nothing past the pool's slots");
@@ -1861,9 +1880,9 @@ fn gpu_flip_inflow_emits_at_empty_sites_into_free_slots() {
         .bind(1, &ranges)
         .bind(15, &[shape])
         .bind(16, &atlas)
-        .bind(27, &[row])
-        .bind(28, &scan)
-        .bind(30, &pool)
+        .bind(36, &[row])
+        .bind(37, &scan)
+        .bind(38, &pool)
         .run("emit_write", &params, 30, pool.len(), site_count);
     let substep = 3u32 * 64 + 1;
     let mut spread = 0.0f64;
@@ -1905,7 +1924,7 @@ fn gpu_flip_outflow_kills_the_particles_it_holds() {
         .bind(22, &vec![0u32; 2 * particles.len()])
         .bind(15, &[shape])
         .bind(16, &atlas)
-        .bind(27, &[row])
+        .bind(36, &[row])
         .run("faces_to_particles", &step, 19, particles.len(), particles.len());
     let mut drained = 0;
     for (i, (g, p)) in got.iter().zip(&particles).enumerate() {

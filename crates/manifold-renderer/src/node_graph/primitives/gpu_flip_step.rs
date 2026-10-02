@@ -94,19 +94,104 @@ fn cell_bytes(cells: [u32; 3]) -> u64 {
     cells.iter().map(|&n| u64::from(n)).product::<u64>() * 4
 }
 
+/// Cells per tile side (GPU_FLIP_SPARSE_BLOCKS_DESIGN.md section 3 (The tile
+/// table)). Partial edge tiles are allowed: no lattice side rule.
+pub(crate) const TILE: u32 = 8;
+
+/// The cell passes' reach from a particle-holding cell, in cells: the tile
+/// set C is every tile within it (`tiles_classify` writes the distance).
+/// The shader holds its own copy; the proofs' CPU model reads this one.
+#[cfg(all(test, feature = "gpu-proofs"))]
+pub(crate) const CELL_REACH: u32 = 2;
+
+/// Tiles per axis, the last one partial when the side is not a multiple of
+/// [`TILE`].
+pub(crate) fn tile_counts(cells: [u32; 3]) -> [u32; 3] {
+    cells.map(|n| n.div_ceil(TILE))
+}
+
+pub(crate) fn tile_total(cells: [u32; 3]) -> u64 {
+    tile_counts(cells).iter().map(|&t| u64::from(t)).product()
+}
+
+/// The farthest tile ring any extend layer reaches at `band` layers: a
+/// layer fills faces `1 + layer` cells from the water. A per-step constant,
+/// not a cap: the table is sized for it.
+pub(crate) fn ring_max(band: u32) -> u32 {
+    (1 + band).div_ceil(TILE)
+}
+
+/// Words of the tile counts: word 0 the cell set C's size, word k in
+/// 1..=ring_max + 1 the tiles with ring ≤ k, then the retired count, then
+/// the ring halves' parity.
+fn tile_count_words(ring_max: u32) -> u64 {
+    u64::from(ring_max) + 4
+}
+
+/// Words of the indirect triples: one per count word 0..=ring_max (C, then
+/// each ring cap), one for the retired list.
+fn tile_args_words(ring_max: u32) -> u64 {
+    3 * (u64::from(ring_max) + 2)
+}
+
+/// Bytes of the tile table at `cells` for `ring_max`: the nearness, two
+/// ring halves, the list by ring, the retired list, the counts and the
+/// triples.
+#[cfg(any(test, feature = "gpu-proofs"))]
+pub(crate) fn tile_scratch_bytes(cells: [u32; 3], ring_max: u32) -> u64 {
+    (5 * tile_total(cells) + tile_count_words(ring_max) + tile_args_words(ring_max)) * 4
+}
+
 /// Bytes the step holds for itself at `cells` with `slots` particle slots,
 /// besides the sort's ranges and the solver's scratch: the sorted particles,
-/// seven cell arrays, the solid corners, five face grids, the pocket gate and
-/// the pocket sums.
+/// seven cell arrays, the solid corners, six face grids, the pocket gate,
+/// the pocket sums and the tile table.
 #[cfg(any(test, feature = "gpu-proofs"))]
-pub(crate) fn scratch_bytes(cells: [u32; 3], slots: u64) -> u64 {
+pub(crate) fn scratch_bytes(cells: [u32; 3], slots: u64, ring_max: u32) -> u64 {
     let corners = cells.iter().map(|&n| u64::from(n) + 1).product::<u64>() * 4;
     slots.max(1) * size_of::<FluidParticle>() as u64
         + 7 * cell_bytes(cells)
         + corners
-        + 5 * face_bytes(cells)
+        + 6 * face_bytes(cells)
         + POCKET_GATE_WORDS * 4
         + pocket_sum_bytes(cells)
+        + tile_scratch_bytes(cells, ring_max)
+}
+
+/// Test-only lever, approved 2026-10-02 lead; un-suppressed when the executor
+/// exposes node access. With it set, `tiles_classify` marks every tile
+/// occupied and `tiles_rings` writes ring 0 everywhere, so the sparse passes
+/// run dense through the same kernels and lists (design D-6).
+#[cfg(all(test, feature = "gpu-proofs"))]
+static ALL_TILES: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+pub(crate) fn set_all_tiles(on: bool) {
+    ALL_TILES.store(on, std::sync::atomic::Ordering::SeqCst);
+}
+
+fn all_tiles() -> bool {
+    #[cfg(all(test, feature = "gpu-proofs"))]
+    {
+        ALL_TILES.load(std::sync::atomic::Ordering::SeqCst)
+    }
+    #[cfg(not(all(test, feature = "gpu-proofs")))]
+    {
+        false
+    }
+}
+
+/// Test-only lever, approved 2026-10-02 lead; un-suppressed when the executor
+/// exposes node access. With it set, the step runs the poison entry
+/// (gpu_flip_tile_tests.rs) after the retire: NaN into every cell array of
+/// the tiles outside rings 0 and 1 (design section 4 (The defined-value
+/// rule)).
+#[cfg(all(test, feature = "gpu-proofs"))]
+static POISON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+pub(crate) fn set_poison(on: bool) {
+    POISON.store(on, std::sync::atomic::Ordering::SeqCst);
 }
 
 /// Three words a cell (a pocket's 64-bit sum and its count, indexed by its
@@ -150,6 +235,14 @@ pub(crate) struct StepParams {
     /// Half-width of an emitted particle's jitter in cells.
     pub(crate) emit_jitter: f32,
     pub(crate) _pad: u32,
+    /// 1: every tile is active (the test-only oracle, [`set_all_tiles`]).
+    pub(crate) all_tiles: u32,
+    /// The ring a sparse pass's reads are capped at. Unused while the extend
+    /// is dense (design D-4); Phase 2's coarse levels take it.
+    pub(crate) ring_cap: u32,
+    /// [`ring_max`] for this step: the table's extent.
+    pub(crate) ring_max: u32,
+    pub(crate) tile_pad: u32,
 }
 
 /// One pass of the step's shader on its own, for the value proofs against
@@ -194,6 +287,14 @@ struct Pipelines {
     pocket_flux: [GpuComputePipeline; 2],
     emit_flags: GpuComputePipeline,
     emit_write: GpuComputePipeline,
+    tiles_classify: GpuComputePipeline,
+    tiles_rings: GpuComputePipeline,
+    tiles_lists: GpuComputePipeline,
+    tiles_fill: GpuComputePipeline,
+    tiles_retire: GpuComputePipeline,
+    /// The proofs' poison entry, dispatched under [`POISON`].
+    #[cfg(all(test, feature = "gpu-proofs"))]
+    poison: GpuComputePipeline,
 }
 
 fn step_source() -> String {
@@ -232,8 +333,99 @@ impl Pipelines {
             pocket_flux: [pipe("pocket_flux_pressure"), pipe("pocket_flux_density")],
             emit_flags: pipe("emit_flags"),
             emit_write: pipe("emit_write"),
+            tiles_classify: pipe("tiles_classify"),
+            tiles_rings: pipe("tiles_rings"),
+            tiles_lists: pipe("tiles_lists"),
+            tiles_fill: pipe("tiles_fill"),
+            tiles_retire: pipe("tiles_retire"),
+            #[cfg(all(test, feature = "gpu-proofs"))]
+            poison: pipe(super::gpu_flip_tile_tests::POISON_ENTRY),
         }
     }
+}
+
+/// The tile table (GPU_FLIP_SPARSE_BLOCKS_DESIGN.md section 3 (The tile
+/// table)), built on the GPU every step from the sort's ranges and never
+/// read back. Sized for one `ring_max`.
+struct TileTable {
+    ring_max: u32,
+    /// Per tile, the Chebyshev cell distance from its box to the nearest
+    /// particle-holding cell: 0..=CELL_REACH, or CELL_REACH + 1 beyond.
+    near: GpuBuffer,
+    /// Two halves of one tile each, the tile's list rank (0 in C); the
+    /// parity word in `counts` names the current half. Zeroed once: the
+    /// first step's "previous" ranks are all 0, so every tile outside C is
+    /// retired then.
+    rank: GpuBuffer,
+    /// Every tile: C first, then the rest of rings 0 and 1, then ring by ring.
+    by_ring: GpuBuffer,
+    /// [`tile_count_words`]; zeroed once, for the parity word.
+    counts: GpuBuffer,
+    /// [`tile_args_words`] indirect triples.
+    args: GpuBuffer,
+    /// Tiles in C on the previous step and not on this one.
+    retired: GpuBuffer,
+}
+
+/// Byte offset of the retired list's indirect triple in `args`.
+fn retired_args_offset(ring_max: u32) -> u64 {
+    12 * (u64::from(ring_max) + 1)
+}
+
+/// `bound` plus the arrays the fill, the retire and the poison write: the
+/// gathered faces and the C passes' cell arrays.
+fn canonical<'a>(l: &'a LatticeBuffers, mut bound: Vec<GpuBinding<'a>>) -> Vec<GpuBinding<'a>> {
+    bound.extend([buffer(4, &l.g), buffer(33, &l.water), buffer(34, &l.phi), buffer(35, &l.rhs)]);
+    bound
+}
+
+impl TileTable {
+    fn new(device: &GpuDevice, cells: [u32; 3], ring_max: u32) -> Result<Self, String> {
+        let tiles = tile_total(cells) * 4;
+        Ok(Self {
+            ring_max,
+            near: allocate(device, tiles)?,
+            rank: allocate_zeroed(device, 2 * tiles)?,
+            by_ring: allocate(device, tiles)?,
+            counts: allocate_zeroed(device, tile_count_words(ring_max) * 4)?,
+            args: allocate(device, tile_args_words(ring_max) * 4)?,
+            retired: allocate(device, tiles)?,
+        })
+    }
+}
+
+/// The table for this step, after the sort: nearness per tile, rings, then
+/// the lists, counts, triples and the active-fraction stats word (`capped`
+/// at the solver words).
+fn encode_tiles(enc: &mut GpuEncoder, pipes: &Pipelines, params: &StepParams, t: &TileTable, ranges: &GpuBuffer, capped: &GpuBuffer, tally: u64) {
+    let tiles = groups(tile_total(params.n));
+    enc.dispatch_compute(
+        &pipes.tiles_classify,
+        &[uniform(params), buffer(1, ranges), buffer(27, &t.near), buffer(30, &t.counts)],
+        tiles,
+        "gpu_flip.step.tiles.classify",
+    );
+    enc.dispatch_compute(
+        &pipes.tiles_rings,
+        &[uniform(params), buffer(27, &t.near), buffer(28, &t.rank), buffer(30, &t.counts)],
+        tiles,
+        "gpu_flip.step.tiles.rings",
+    );
+    enc.dispatch_compute(
+        &pipes.tiles_lists,
+        &[
+            uniform(params),
+            buffer(27, &t.near),
+            buffer(28, &t.rank),
+            buffer(29, &t.by_ring),
+            buffer(30, &t.counts),
+            buffer(31, &t.args),
+            buffer(32, &t.retired),
+            GpuBinding::Buffer { binding: 22, buffer: capped, offset: tally },
+        ],
+        [1, 1, 1],
+        "gpu_flip.step.tiles.lists",
+    );
 }
 
 /// Scratch for one lattice.
@@ -244,7 +436,9 @@ struct LatticeBuffers {
     rhs: GpuBuffer,
     pressure: GpuBuffer,
     corners: GpuBuffer,
-    /// The particles' faces, then the saved (old) faces.
+    /// The particles' faces as gathered over C; canonical elsewhere.
+    g: GpuBuffer,
+    /// The saved (old) faces: `g` extended.
     a: GpuBuffer,
     /// Extension scratch.
     b: GpuBuffer,
@@ -275,6 +469,16 @@ fn allocate(device: &GpuDevice, bytes: u64) -> Result<GpuBuffer, String> {
         .and_then(|()| device.try_create_buffer(bytes))
 }
 
+/// A buffer that carries state from step to step: shared, so it starts at
+/// zero without an encoder.
+fn allocate_zeroed(device: &GpuDevice, bytes: u64) -> Result<GpuBuffer, String> {
+    let buffer = crate::node_graph::scene_modifier_expand::admit_candidate_bytes(device.modifier_memory_snapshot(), bytes)
+        .map_err(|error| error.to_string())
+        .and_then(|()| device.try_create_buffer_shared(bytes))?;
+    buffer.zero_fill();
+    Ok(buffer)
+}
+
 impl LatticeBuffers {
     fn new(device: &GpuDevice, cells: [u32; 3]) -> Result<Self, String> {
         let cell = cell_bytes(cells);
@@ -287,6 +491,7 @@ impl LatticeBuffers {
             rhs: allocate(device, cell)?,
             pressure: allocate(device, cell)?,
             corners: allocate(device, corners)?,
+            g: allocate(device, face)?,
             a: allocate(device, face)?,
             b: allocate(device, face)?,
             f: allocate(device, face)?,
@@ -308,6 +513,11 @@ pub(crate) struct StepState {
     solver: PressureSolver,
     solid: Option<GpuComputePipeline>,
     lattice: Option<LatticeBuffers>,
+    /// Keyed on the lattice (with `lattice`) and its own `ring_max`.
+    tiles: Option<TileTable>,
+    /// The lattice's cell arrays and gathered faces hold canonical values
+    /// everywhere (`tiles_fill` ran); false until the first step on a lattice.
+    filled: bool,
     sorted: Option<GpuBuffer>,
     /// With sources, the emitted particles re-sorted from `sorted`.
     resorted: Option<GpuBuffer>,
@@ -521,7 +731,14 @@ impl StepState {
 
     /// Size every array for `cells` and `slots` before anything is encoded;
     /// `sources` adds the emission's scan and second sorted array.
-    fn reserve(&mut self, device: &GpuDevice, cells: [u32; 3], slots: u64, sources: bool) -> Result<(), String> {
+    fn reserve(
+        &mut self,
+        device: &GpuDevice,
+        cells: [u32; 3],
+        slots: u64,
+        ring_max: u32,
+        sources: bool,
+    ) -> Result<(), String> {
         if self.zeros.is_none() {
             let zeros = device.try_create_buffer_shared(ZERO_BYTES)?;
             zeros.zero_fill();
@@ -530,7 +747,13 @@ impl StepState {
         self.sorter.reserve_ranges(device, cells)?;
         if self.lattice.as_ref().is_none_or(|l| l.cells != cells) {
             self.lattice = None;
+            self.tiles = None;
+            self.filled = false;
             self.lattice = Some(LatticeBuffers::new(device, cells)?);
+        }
+        if self.tiles.as_ref().is_none_or(|t| t.ring_max != ring_max) {
+            self.tiles = None;
+            self.tiles = Some(TileTable::new(device, cells, ring_max)?);
         }
         let face = face_bytes(cells);
         if self.faces.as_ref().is_none_or(|faces| faces.size != face) {
@@ -562,7 +785,8 @@ impl StepState {
 
     fn encode(&mut self, device: &GpuDevice, enc: &mut GpuEncoder, step: &Step<'_>) -> Result<(), String> {
         let pipes = self.pipelines.as_ref().expect("step pipelines built by prepare_pipelines at install");
-        let (Some(l), Some(sorted), Some(out_faces)) = (self.lattice.as_ref(), self.sorted.as_ref(), self.faces.as_ref())
+        let (Some(l), Some(tiles), Some(sorted), Some(out_faces)) =
+            (self.lattice.as_ref(), self.tiles.as_ref(), self.sorted.as_ref(), self.faces.as_ref())
         else {
             return Err("the step's storage was not reserved".into());
         };
@@ -629,8 +853,8 @@ impl StepState {
                     buffer(9, &l.corners),
                     buffer(15, step.shapes),
                     buffer(16, step.atlas),
-                    buffer(27, step.regions),
-                    buffer(28, &scan),
+                    buffer(36, step.regions),
+                    buffer(37, &scan),
                 ];
                 enc.compute_memory_barrier_buffers();
                 enc.dispatch_compute(&pipes.emit_flags, &read, groups(sites), "gpu_flip.step.emit_flags");
@@ -647,9 +871,9 @@ impl StepState {
                         buffer(1, ranges),
                         buffer(15, step.shapes),
                         buffer(16, step.atlas),
-                        buffer(27, step.regions),
-                        buffer(28, &scan),
-                        buffer(30, sorted),
+                        buffer(36, step.regions),
+                        buffer(37, &scan),
+                        buffer(38, sorted),
                     ],
                     groups(sites),
                     "gpu_flip.step.emit_write",
@@ -667,23 +891,44 @@ impl StepState {
         let cells_groups = groups(cell_count);
         let face_groups = groups(face_count);
 
+        // Which tiles hold water this step, from the sort's bin counts. The
+        // cell passes run over the cell set C through its indirect triple;
+        // every other tile holds the canonical values (design section 4 (The
+        // defined-value rule)): filled once per lattice, restored by the
+        // retire when a tile leaves C.
+        encode_tiles(enc, pipes, &base, tiles, ranges, step.capped, step.tally);
+        if !self.filled {
+            enc.dispatch_compute(&pipes.tiles_fill, &canonical(l, vec![uniform(&base)]), face_groups, "gpu_flip.step.tiles.fill");
+            self.filled = true;
+        }
+        enc.dispatch_compute_indirect(
+            &pipes.tiles_retire,
+            &canonical(l, vec![uniform(&base), buffer(32, &tiles.retired)]),
+            &tiles.args,
+            retired_args_offset(tiles.ring_max),
+            "gpu_flip.step.tiles.retire",
+        );
+        #[cfg(all(test, feature = "gpu-proofs"))]
+        if POISON.load(std::sync::atomic::Ordering::SeqCst) {
+            enc.dispatch_compute(
+                &pipes.poison,
+                &canonical(l, vec![uniform(&base), buffer(28, &tiles.rank), buffer(30, &tiles.counts)]),
+                cells_groups,
+                "gpu_flip.step.tiles.poison",
+            );
+        }
+        let over_c = |enc: &mut GpuEncoder, pipeline: &GpuComputePipeline, bindings: Vec<GpuBinding<'_>>, label: &str| {
+            let mut bound = vec![uniform(&base), buffer(29, &tiles.by_ring)];
+            bound.extend(bindings);
+            enc.dispatch_compute_indirect(pipeline, &bound, &tiles.args, 0, label);
+        };
         // The water mask is φ < 0, so φ is built every step.
         let solids = p.body_count > 0;
-        enc.dispatch_compute(
-            &pipes.distance,
-            &[uniform(&base), buffer(1, ranges), buffer(2, sorted), buffer(5, &l.phi)],
-            cells_groups,
-            "gpu_flip.step.distance",
-        );
-        enc.dispatch_compute(
-            &pipes.gather,
-            &[uniform(&base), buffer(1, ranges), buffer(2, sorted), buffer(4, &l.a)],
-            face_groups,
-            "gpu_flip.step.particles_to_faces",
-        );
+        over_c(enc, &pipes.distance, vec![buffer(1, ranges), buffer(2, sorted), buffer(5, &l.phi)], "gpu_flip.step.distance");
+        over_c(enc, &pipes.gather, vec![buffer(1, ranges), buffer(2, sorted), buffer(4, &l.g)], "gpu_flip.step.particles_to_faces");
         // The saved faces: the particles' own, extended so FLIP's change is
         // measured wherever a particle samples.
-        extend(enc, pipes, &base, face_groups, [&l.a, &l.a, &l.b], step.band, "gpu_flip.step.extend_old");
+        extend(enc, pipes, &base, face_groups, [&l.g, &l.a, &l.b], step.band, "gpu_flip.step.extend_old");
         enc.dispatch_compute(
             &pipes.gravity,
             &[
@@ -694,7 +939,7 @@ impl StepState {
                 buffer(13, step.impulses),
                 buffer(15, step.shapes),
                 buffer(16, step.atlas),
-                buffer(27, step.regions),
+                buffer(36, step.regions),
             ],
             face_groups,
             "gpu_flip.step.forces",
@@ -720,19 +965,9 @@ impl StepState {
             "gpu_flip.step.solid_velocity",
         );
         if solids {
-            enc.dispatch_compute(
-                &pipes.phi_into_solids,
-                &[uniform(&base), buffer(9, &l.corners), buffer(5, &l.phi)],
-                cells_groups,
-                "gpu_flip.step.phi_into_solids",
-            );
+            over_c(enc, &pipes.phi_into_solids, vec![buffer(9, &l.corners), buffer(5, &l.phi)], "gpu_flip.step.phi_into_solids");
         }
-        enc.dispatch_compute(
-            &pipes.water_from_phi,
-            &[uniform(&base), buffer(7, &l.phi), buffer(5, &l.water)],
-            cells_groups,
-            "gpu_flip.step.water_from_phi",
-        );
+        over_c(enc, &pipes.water_from_phi, vec![buffer(7, &l.phi), buffer(5, &l.water)], "gpu_flip.step.water_from_phi");
         // Which water reaches air holds every step: the density source reads
         // it too. As the engine does, the solid velocity's zeroing is skipped
         // when the bodies are in the solve: their mass resolves the pocket.
@@ -751,17 +986,10 @@ impl StepState {
                 "gpu_flip.step.pocket_condition",
             );
         }
-        enc.dispatch_compute(
+        over_c(
+            enc,
             &pipes.divergence,
-            &[
-                uniform(&base),
-                buffer(3, &l.f),
-                buffer(5, &l.rhs),
-                buffer(6, &l.water),
-                buffer(10, &l.s),
-                buffer(11, &l.v),
-            ],
-            cells_groups,
+            vec![buffer(3, &l.f), buffer(5, &l.rhs), buffer(6, &l.water), buffer(10, &l.s), buffer(11, &l.v)],
             "gpu_flip.step.divergence",
         );
         encode_pocket_mean(enc, pipes, l, 0, step);
@@ -835,17 +1063,10 @@ impl StepState {
         // taken off a copy of the new faces in `l.f`, and the move reads the
         // difference as a displacement. Air sits at zero at its centres.
         let spread = if step.density {
-            enc.dispatch_compute(
+            over_c(
+                enc,
                 &pipes.density,
-                &[
-                    uniform(&base),
-                    buffer(1, ranges),
-                    buffer(2, sorted),
-                    buffer(6, &l.water),
-                    buffer(9, &l.corners),
-                    buffer(5, &l.rhs),
-                ],
-                cells_groups,
+                vec![buffer(1, ranges), buffer(2, sorted), buffer(6, &l.water), buffer(9, &l.corners), buffer(5, &l.rhs)],
                 "gpu_flip.step.density_source",
             );
             encode_pocket_mean(enc, pipes, l, 1, step);
@@ -872,7 +1093,7 @@ impl StepState {
                 buffer(22, step.capped),
                 buffer(15, step.shapes),
                 buffer(16, step.atlas),
-                buffer(27, step.regions),
+                buffer(36, step.regions),
             ],
             groups(u64::from(p.particles)),
             "gpu_flip.step.move",
@@ -1078,7 +1299,10 @@ impl Primitive for GpuFlipStep {
             Some(_) => ctx.scalar_or_param("region_count", 0.0).round().clamp(0.0, MAX_FLUID_ROLES as f32) as i32,
             None => 0,
         };
-        if let Err(error) = self.state.reserve(ctx.gpu_encoder().device, cells, u64::from(capacity), region_count > 0) {
+        let band = band_layers(travel).max(FACE_VALID_LAYERS);
+        if let Err(error) =
+            self.state.reserve(ctx.gpu_encoder().device, cells, u64::from(capacity), ring_max(band), region_count > 0)
+        {
             ctx.error(format!(
                 "{NAME}: a {}×{}×{} lattice with {capacity} particle slots needs storage the device cannot give: {error}. Lower Resolution.",
                 cells[0], cells[1], cells[2]
@@ -1149,6 +1373,10 @@ impl Primitive for GpuFlipStep {
                 region_rows,
                 emit_jitter: 0.25 * inflow_jitter,
                 _pad: 0,
+                all_tiles: u32::from(all_tiles()),
+                ring_cap: 0,
+                ring_max: ring_max(band),
+                tile_pad: 0,
             },
             particles,
             out,
@@ -1164,7 +1392,7 @@ impl Primitive for GpuFlipStep {
             dynamic,
             pressure,
             tally,
-            band: band_layers(travel).max(FACE_VALID_LAYERS),
+            band,
             ghost,
             density: ctx.scalar_or_param("volume_projection", 1.0) > 0.5,
         };
@@ -1266,6 +1494,11 @@ mod tests {
             "constrain_solid_faces",
             "density_source",
             "faces_to_particles",
+            "tiles_classify",
+            "tiles_rings",
+            "tiles_lists",
+            "tiles_fill",
+            "tiles_retire",
         ] {
             assert!(entries.contains(&entry), "missing entry {entry}");
         }
@@ -1273,7 +1506,29 @@ mod tests {
 
     #[test]
     fn step_params_match_the_shader_uniform() {
-        assert_eq!(size_of::<StepParams>(), 144);
+        assert_eq!(size_of::<StepParams>(), 160);
+    }
+
+    /// The tile table's bytes, by an independent count: five words a tile
+    /// (nearness, two ring halves, the list, the retired list), the counts
+    /// and the triples; partial edge tiles counted whole; the extent's hold
+    /// grows by exactly that.
+    #[test]
+    fn gpu_flip_tile_table_bytes_follow_the_lattice() {
+        assert_eq!(tile_counts([64, 64, 64]), [8, 8, 8]);
+        assert_eq!(tile_counts([63, 100, 8]), [8, 13, 1]);
+        assert_eq!(tile_counts([1, 9, 17]), [1, 2, 3]);
+        assert_eq!(ring_max(14), 2, "64³: 14 layers reach the second ring");
+        assert_eq!(ring_max(23), 3, "128³: 23 layers reach the third");
+        assert_eq!(ring_max(FACE_VALID_LAYERS), 1);
+        for (cells, tiles) in [([64, 64, 64], 512u64), ([63, 100, 8], 104), ([128, 128, 128], 4096), ([1, 9, 17], 6)] {
+            for r in 1..5u32 {
+                let counts = u64::from(r) + 2 + 1 + 1;
+                let triples = 3 * (u64::from(r) + 1 + 1);
+                assert_eq!(tile_scratch_bytes(cells, r), (5 * tiles + counts + triples) * 4, "{cells:?} ring_max {r}");
+                assert_eq!(scratch_bytes(cells, 1000, r) - tile_scratch_bytes(cells, r), scratch_bytes(cells, 1000, 1) - tile_scratch_bytes(cells, 1));
+            }
+        }
     }
 
     #[test]
