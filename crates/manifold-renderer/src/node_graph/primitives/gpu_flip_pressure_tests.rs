@@ -5,7 +5,7 @@
 //! sides 25, 37 and 40. The residual is the true relative residual of the
 //! masked Poisson equation.
 
-use manifold_gpu::{GpuBuffer, GpuReplayCache};
+use manifold_gpu::{GpuBinding, GpuBuffer, GpuReplayCache};
 
 use super::gpu_flip_pressure::{MAX_ITERATIONS, PROGRESS_FLOATS, PressureSolver, ROW_FLOATS, Solve, Stop, Water, level_lattices, max_solve_level, passes};
 use super::liquid_surface_tests::read;
@@ -110,6 +110,311 @@ fn open_face_records(n: usize) -> Vec<[f32; 8]> {
             [0.0, 0.0, 0.0, 0.0, open(0), open(1), open(2), 0.0]
         })
         .collect()
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)]
+struct LentineFluxParams {
+    nx: u32,
+    ny: u32,
+    nz: u32,
+    color: u32,
+    cx: u32,
+    cy: u32,
+    cz: u32,
+    mode: u32,
+    cell_size: f32,
+    slot: u32,
+    ghost: u32,
+    tolerance: f32,
+    list_base: u32,
+    level: u32,
+    all_tiles: u32,
+    pad: u32,
+}
+
+fn lattice_index(p: [usize; 3], n: [usize; 3]) -> usize {
+    p[0] + n[0] * (p[1] + n[1] * p[2])
+}
+
+fn lattice_coords(mut index: usize, n: [usize; 3]) -> [usize; 3] {
+    let x = index % n[0];
+    index /= n[0];
+    let y = index % n[1];
+    [x, y, index / n[1]]
+}
+
+fn lentine_cases() -> [[usize; 3]; 2] {
+    [[8, 8, 8], [7, 9, 5]]
+}
+
+/// Inputs with distinct cut fractions, cell volumes, fluid velocities and
+/// rigid normal velocities. The volume is attached to a cell record at its
+/// low corner, as lentine_flux_main expects; the normal velocities are face
+/// records and are deliberately not copied from the fluid velocity.
+fn lentine_fixture(n: [usize; 3]) -> (Vec<f32>, Vec<[f32; 8]>, Vec<f32>, Vec<f32>) {
+    let faces_n = n.map(|side| side + 1);
+    let cells = n[0] * n[1] * n[2];
+    let face_count = faces_n[0] * faces_n[1] * faces_n[2];
+    let water = vec![1.0; cells];
+    let mut faces = vec![[0.0; 8]; face_count];
+    let mut fluid = vec![0.0; face_count * 8];
+    let mut solid = vec![0.0; face_count * 8];
+    let translation = [0.31, -0.22, 0.17];
+    let angular = [0.07, -0.05, 0.09];
+    for index in 0..face_count {
+        let p = lattice_coords(index, faces_n);
+        let record = &mut faces[index];
+        for axis in 0..3 {
+            let boundary = p[axis] == 0 || p[axis] == n[axis];
+            let code = (p[0] * 5 + p[1] * 7 + p[2] * 11 + axis * 13) % 17;
+            record[4 + axis] = if boundary { 0.0 } else { 0.18 + 0.037 * code as f32 };
+            fluid[8 * index + axis] = -0.7 + 0.11 * (p[0] + 2 * p[1] + 3 * p[2] + axis) as f32;
+            let mut center = [p[0] as f32 + 0.5, p[1] as f32 + 0.5, p[2] as f32 + 0.5];
+            center[axis] = p[axis] as f32;
+            let rigid = [
+                translation[0] + angular[1] * center[2] - angular[2] * center[1],
+                translation[1] + angular[2] * center[0] - angular[0] * center[2],
+                translation[2] + angular[0] * center[1] - angular[1] * center[0],
+            ];
+            solid[8 * index + axis] = rigid[axis];
+        }
+        record[3] = 0.0;
+        record[7] = if p[0] < n[0] && p[1] < n[1] && p[2] < n[2] {
+            0.41 + 0.031 * ((p[0] * 3 + p[1] * 5 + p[2] * 7) % 13) as f32
+        } else {
+            0.0
+        };
+    }
+    (water, faces, fluid, solid)
+}
+
+fn lentine_fine_divergence(q: [usize; 3], n: [usize; 3], faces: &[[f32; 8]], fluid: &[f32], solid: &[f32], h: f64) -> f64 {
+    let faces_n = n.map(|side| side + 1);
+    let cell = lattice_index(q, faces_n);
+    let volume = f64::from(faces[cell][7]);
+    let mut source = 0.0;
+    for axis in 0..3 {
+        for side in 0..2 {
+            let mut f = q;
+            f[axis] += side;
+            if f[axis] == 0 || f[axis] == n[axis] {
+                continue;
+            }
+            let face = lattice_index(f, faces_n);
+            let sign = if side == 0 { -1.0 } else { 1.0 };
+            let open = f64::from(faces[face][4 + axis]);
+            source += sign * (open * f64::from(fluid[8 * face + axis]) + (volume - open) * f64::from(solid[8 * face + axis]));
+        }
+    }
+    source / h
+}
+
+fn lentine_face_gather(p: [usize; 3], axis: usize, n: [usize; 3], faces: &[[f32; 8]], fluid: &[f32]) -> (f64, f64) {
+    let faces_n = n.map(|side| side + 1);
+    let mut area = 0.0;
+    let mut flux = 0.0;
+    for k in 0..4 {
+        let mut q = [2 * p[0], 2 * p[1], 2 * p[2]];
+        let mut bit = 0;
+        for (b, coordinate) in q.iter_mut().enumerate() {
+            if b != axis {
+                *coordinate += (k >> bit) & 1;
+                bit += 1;
+            }
+        }
+        let mut inside = q;
+        inside[axis] = 0;
+        if inside.iter().zip(n).all(|(&v, side)| v < side) {
+            let face = lattice_index(q, faces_n);
+            let weight = f64::from(faces[face][4 + axis]);
+            area += weight;
+            flux += weight * f64::from(fluid[8 * face + axis]);
+        }
+    }
+    (0.25 * area, 0.25 * flux)
+}
+
+fn lentine_solid_source(p: [usize; 3], n: [usize; 3], faces: &[[f32; 8]], solid: &[f32]) -> (f64, f64) {
+    let faces_n = n.map(|side| side + 1);
+    let mut source = 0.0;
+    let mut volume = 0.0;
+    for child in 0..8 {
+        let q = [2 * p[0] + (child & 1), 2 * p[1] + ((child >> 1) & 1), 2 * p[2] + (child >> 2)];
+        if q.iter().zip(n).any(|(&v, side)| v >= side) {
+            continue;
+        }
+        let cell = lattice_index(q, faces_n);
+        let open_volume = f64::from(faces[cell][7]);
+        volume += open_volume;
+        for axis in 0..3 {
+            for side in 0..2 {
+                let mut f = q;
+                f[axis] += side;
+                if f[axis] == 0 || f[axis] == n[axis] {
+                    continue;
+                }
+                let face = lattice_index(f, faces_n);
+                let sign = if side == 0 { -1.0 } else { 1.0 };
+                source += sign * (open_volume - f64::from(faces[face][4 + axis])) * f64::from(solid[8 * face + axis]);
+            }
+        }
+    }
+    (source, volume)
+}
+
+fn lentine_internal_solid_remainder(p: [usize; 3], n: [usize; 3], faces: &[[f32; 8]], solid: &[f32]) -> f64 {
+    let faces_n = n.map(|side| side + 1);
+    let mut remainder = 0.0;
+    for axis in 0..3 {
+        for k in 0..4 {
+            let mut low = [2 * p[0], 2 * p[1], 2 * p[2]];
+            let mut bit = 0;
+            for (b, coordinate) in low.iter_mut().enumerate() {
+                if b != axis {
+                    *coordinate += (k >> bit) & 1;
+                    bit += 1;
+                }
+            }
+            let mut high = low;
+            high[axis] += 1;
+            if high.iter().zip(n).any(|(&v, side)| v >= side) {
+                continue;
+            }
+            let low_cell = lattice_index(low, faces_n);
+            let high_cell = lattice_index(high, faces_n);
+            let face = lattice_index(high, faces_n);
+            let cut_low = f64::from(faces[low_cell][7]) - f64::from(faces[face][4 + axis]);
+            let cut_high = f64::from(faces[high_cell][7]) - f64::from(faces[face][4 + axis]);
+            remainder += (cut_low - cut_high) * f64::from(solid[8 * face + axis]);
+        }
+    }
+    remainder
+}
+
+fn assert_lentine_close(actual: impl Into<f64>, expected: f64, what: &str) {
+    let actual = actual.into();
+    let tolerance = 2.0e-5 * (1.0 + expected.abs());
+    assert!((actual - expected).abs() <= tolerance, "{what}: GPU {actual:.8e}, CPU {expected:.8e}, tolerance {tolerance:.3e}");
+}
+
+/// The conservative Lentine gather preserves the average fine divergence,
+/// including rigid motion in cut cells. The CPU oracle uses f64 accumulation;
+/// the tolerance allows only the shader's f32 operation order. Odd sides also
+/// prove that a virtual child contributes no fluid or solid source.
+#[test]
+fn pressure_module_lentine_flux_conserves_blocks() {
+    let shader = include_str!("shaders/gpu_flip_pressure.wgsl");
+    for n in lentine_cases() {
+        let c = n.map(|side| side.div_ceil(2));
+        let output_n = c.map(|side| side + 1);
+        let h = 0.37_f32;
+        let (water_values, face_values, fluid_values, solid_values) = lentine_fixture(n);
+        let device = crate::test_device();
+        let pipeline = device.create_compute_pipeline(shader, "lentine_flux_main", "gpu-flip-pressure-lentine-flux");
+        let water = device.create_buffer_shared((water_values.len() * 4) as u64);
+        let faces = device.create_buffer_shared((face_values.len() * 32) as u64);
+        let fluid = device.create_buffer_shared((fluid_values.len() * 4) as u64);
+        let solid = device.create_buffer_shared((solid_values.len() * 4) as u64);
+        let output = device.create_buffer_shared((output_n[0] * output_n[1] * output_n[2] * 32) as u64);
+        // SAFETY: each shared buffer is sized for the typed fixture and no GPU
+        // work is in flight before these writes.
+        unsafe {
+            water.write(0, bytemuck::cast_slice(&water_values));
+            faces.write(0, bytemuck::cast_slice(&face_values));
+            fluid.write(0, bytemuck::cast_slice(&fluid_values));
+            solid.write(0, bytemuck::cast_slice(&solid_values));
+            output.write(0, bytemuck::cast_slice(&vec![f32::from_bits(0x7fc00000); output_n[0] * output_n[1] * output_n[2] * 8]));
+        }
+        let params = LentineFluxParams {
+            nx: n[0] as u32,
+            ny: n[1] as u32,
+            nz: n[2] as u32,
+            cx: c[0] as u32,
+            cy: c[1] as u32,
+            cz: c[2] as u32,
+            cell_size: h,
+            ..LentineFluxParams::default()
+        };
+        let mut encoder = device.create_encoder("gpu-flip-pressure-lentine-flux");
+        encoder.dispatch_compute(
+            &pipeline,
+            &[
+                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&params) },
+                GpuBinding::Buffer { binding: 1, buffer: &water, offset: 0 },
+                GpuBinding::Buffer { binding: 2, buffer: &faces, offset: 0 },
+                GpuBinding::Buffer { binding: 3, buffer: &fluid, offset: 0 },
+                GpuBinding::Buffer { binding: 4, buffer: &solid, offset: 0 },
+                GpuBinding::Buffer { binding: 9, buffer: &output, offset: 0 },
+            ],
+            [((output_n[0] * output_n[1] * output_n[2]) as u32).div_ceil(256), 1, 1],
+            "gpu-flip-pressure-lentine-flux",
+        );
+        encoder.commit_and_wait_completed();
+        let actual: Vec<[f32; 8]> = read(&output, output_n[0] * output_n[1] * output_n[2]);
+        let blocks = c[0] * c[1] * c[2];
+        let mut internal_solid_activity = 0.0;
+        for block in 0..blocks {
+            let p = lattice_coords(block, c);
+            let out_index = lattice_index(p, output_n);
+            let mut fluid_difference = 0.0;
+            for axis in 0..3 {
+                let low = p;
+                let mut high = p;
+                high[axis] += 1;
+                let (low_flux, high_flux) = if p[axis] == 0 {
+                    (0.0, if p[axis] + 1 < c[axis] { f64::from(actual[lattice_index(high, output_n)][axis]) } else { 0.0 })
+                } else if p[axis] + 1 == c[axis] {
+                    (f64::from(actual[lattice_index(low, output_n)][axis]), 0.0)
+                } else {
+                    (f64::from(actual[lattice_index(low, output_n)][axis]), f64::from(actual[lattice_index(high, output_n)][axis]))
+                };
+                fluid_difference += (high_flux - low_flux) / (2.0 * f64::from(h));
+                let (area, flux) = if p[axis] == 0 {
+                    (0.0, 0.0)
+                } else {
+                    lentine_face_gather(p, axis, n, &face_values, &fluid_values)
+                };
+                assert_lentine_close(actual[out_index][axis + 4], area, &format!("{n:?} block {p:?} axis {axis} area"));
+                assert_lentine_close(actual[out_index][axis], flux, &format!("{n:?} block {p:?} axis {axis} flux"));
+                if p[axis] == 0 {
+                    assert_lentine_close(actual[out_index][axis], 0.0, &format!("{n:?} block {p:?} axis {axis} wall"));
+                    assert_lentine_close(actual[out_index][axis + 4], 0.0, &format!("{n:?} block {p:?} axis {axis} wall area"));
+                }
+            }
+            let (solid_source, volume) = lentine_solid_source(p, n, &face_values, &solid_values);
+            internal_solid_activity += lentine_internal_solid_remainder(p, n, &face_values, &solid_values).abs();
+            assert_lentine_close(actual[out_index][3], solid_source / (8.0 * f64::from(h)), &format!("{n:?} block {p:?} solid source"));
+            assert_lentine_close(actual[out_index][7], volume / 8.0, &format!("{n:?} block {p:?} volume"));
+            let fine_average = (0..8)
+                .map(|child| {
+                    let q = [2 * p[0] + (child & 1), 2 * p[1] + ((child >> 1) & 1), 2 * p[2] + (child >> 2)];
+                    if q.iter().zip(n).any(|(&v, side)| v >= side) {
+                        0.0
+                    } else {
+                        lentine_fine_divergence(q, n, &face_values, &fluid_values, &solid_values, f64::from(h))
+                    }
+                })
+                .sum::<f64>()
+                / 8.0;
+            assert_lentine_close(f64::from(actual[out_index][3]) + fluid_difference, fine_average, &format!("{n:?} block {p:?} divergence"));
+        }
+        for (index, record) in actual.iter().enumerate() {
+            let p = lattice_coords(index, output_n);
+            let padded = p.iter().zip(c).any(|(&v, side)| v >= side);
+            for axis in 0..3 {
+                if padded || p[axis] == 0 || p[axis] == c[axis] {
+                    assert_lentine_close(record[axis], 0.0, &format!("{n:?} output padding {p:?} velocity {axis}"));
+                    assert_lentine_close(record[axis + 4], 0.0, &format!("{n:?} output padding {p:?} area {axis}"));
+                }
+            }
+            if padded {
+                assert_lentine_close(record[3], 0.0, &format!("{n:?} output padding {p:?} solid source"));
+                assert_lentine_close(record[7], 0.0, &format!("{n:?} output padding {p:?} volume"));
+            }
+        }
+        assert!(internal_solid_activity > 1.0e-3, "{n:?}: fixture did not exercise (c_low-c_high)*v_s");
+    }
 }
 
 /// The box side in metres the fixtures were saved at.
