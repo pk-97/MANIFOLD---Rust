@@ -10,6 +10,7 @@ use manifold_gpu::GpuTextureFormat;
 use super::gpu_flip_preset::{BOX_METRES, DAM_COLUMN, DAM_FILL_HEIGHT, DAM_OBSTACLE, FACE_NODES, REST_PER_CELL, STEP_NODE, WaterScene, water_def};
 use crate::node_graph::liquid::grid::face_len;
 use super::gpu_flip_volume::{VolumeDrift, volume_and_area};
+use super::liquid_stats::{LIQUID_STATS_WORDS, LiquidTickStats};
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::fluid_particles::{FaceSample, FluidParticle};
 use crate::node_graph::substeps::test_nodes::register_substep_test_nodes;
@@ -63,7 +64,7 @@ impl Run {
         // Every array read after a frame keeps its own storage.
         let mut read = vec![(node_named(&graph, "state"), "out")];
         let step = node_named(&graph, STEP_NODE);
-        read.extend([(step, "out"), (step, "faces"), (step, "capped")]);
+        read.extend([(step, "out"), (step, "faces"), (step, "capped"), (node_named(&graph, "stats"), "stats_out")]);
         if scene.surface {
             read.push((node_ending(&graph, "liquid_offsets"), "extent"));
             read.push((node_ending(&graph, "liquid_mesh"), "vertices"));
@@ -226,6 +227,11 @@ impl Run {
             }
         }
         water
+    }
+
+    /// The last tick's node.liquid_stats words.
+    pub(super) fn liquid_stats(&self) -> LiquidTickStats {
+        LiquidTickStats::from_words(&self.read::<u32>("stats", "stats_out", LIQUID_STATS_WORDS as usize))
     }
 
     /// The last tick's speed-capped move stages and refused push-outs.
@@ -392,6 +398,41 @@ fn gpu_flip_still_pool() {
     }
     let end = *fastest.last().expect("sampled");
     assert!(end < 1e-3, "fastest particle {end} m/s after 2 s");
+}
+
+/// An open −X face drains the pool: the engine removes every particle within
+/// 2 cells of an open face, so the water pours out through it. Over 3 s the
+/// live count, read from the particles and from node.liquid_stats, never
+/// rises and ends below half the fill, and every particle record stays
+/// finite and inside the tank.
+#[test]
+fn gpu_flip_open_face_drains_the_pool() {
+    let scene = WaterScene::still_pool(64).with_closed_faces(63 & !1);
+    let mut run = Run::new(scene);
+    let (min, size) = (scene.min(), scene.size);
+    let fill = scene.particles() as usize;
+    let mut last = fill;
+    for frame in 0..180 {
+        run.frame();
+        let particles = run.particles();
+        let stats = particle_stats(&particles);
+        let counted = run.liquid_stats();
+        assert_eq!(stats.bad, 0, "frame {frame}: a non-finite particle");
+        assert_eq!(counted.live as usize, stats.live, "frame {frame}: liquid_stats counts {} live, the particles {}", counted.live, stats.live);
+        assert!(stats.live <= last, "frame {frame}: live count rose from {last} to {}", stats.live);
+        for p in &particles {
+            let inside = (0..3).all(|a| {
+                let x = f64::from(p.position_radius[a]);
+                x >= min[a] && x <= min[a] + size
+            });
+            assert!(inside, "frame {frame}: a particle at {:?} is outside the tank", p.position_radius);
+        }
+        if frame % 30 == 29 {
+            println!("GPU FLIP open −X frame {frame:3}: {} of {fill} live, mean height {:.4} m", stats.live, stats.mean_height);
+        }
+        last = stats.live;
+    }
+    assert!(last < fill / 2, "the open face drained only {} of {fill} particles", fill - last);
 }
 
 /// The closed wall at rest: a 1 m pool for 300 frames. Every box wall face of

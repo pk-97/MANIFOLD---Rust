@@ -1159,6 +1159,23 @@ fn resolve_solid(q0: vec3<f32>, q1: vec3<f32>, n: vec3<i32>, edge: vec3<f32>) ->
     return q1;
 }
 
+// An open face is a sink, as the engine's is: every wall stays solid, and a
+// particle within OPEN_BOUNDARY_WIDTH cells of an open face is removed
+// (FluidSimulation::_openBoundaryWidth, _removeMarkerParticles). The emptied
+// band is air, so the pressure solve puts the water's surface there.
+const OPEN_BOUNDARY_WIDTH: f32 = 2.0;
+
+fn open_band(q: vec3<f32>, n: vec3<i32>) -> bool {
+    for (var a = 0; a < 3; a = a + 1) {
+        let low = (u.closed_faces & (1u << u32(2 * a))) == 0u;
+        let high = (u.closed_faces & (1u << u32(2 * a + 1))) == 0u;
+        if (low && q[a] < OPEN_BOUNDARY_WIDTH) || (high && q[a] > f32(n[a]) - OPEN_BOUNDARY_WIDTH) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // One thread per particle slot, `sorted` to `particles_out`. A live particle
 // (radius > 0) at q blends FLIP and PIC, flip · (v + new(q) − old(q)) +
 // (1 − flip) · new(q), then moves by RK3 through the new faces (stages at ½
@@ -1209,6 +1226,9 @@ fn faces_to_particles(@builtin(global_invocation_id) gid: vec3<u32>) {
         q1 = resolve_solid(q0, q1, n, edge);
         radius = select(radius, 0.0, solid_at(q1, n) < 0.0);
         capped[2u * idx + 1u] = push_before + push_refused;
+    }
+    if open_band(q1, n) {
+        radius = 0.0;
     }
     let before = sample(q0, n, 1u);
     out.position_radius = vec4<f32>(lo + q1 * u.cell_size, radius);
