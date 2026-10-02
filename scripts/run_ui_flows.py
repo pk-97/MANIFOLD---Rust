@@ -219,15 +219,20 @@ def filters_for_touched(range_spec, manifest):
     Returns (filters, hits) — hits is {touched_path: [matched prefixes/flows]}
     for the gate's own output. A touched flow file runs itself (exact-name
     filter). Raises SystemExit(2) if the diff itself fails."""
-    r = subprocess.run(
-        ["git", "diff", "--name-only", range_spec],
-        cwd=ROOT, capture_output=True, text=True,
-    )
-    if r.returncode != 0:
-        print(f"flow gate: `git diff --name-only {range_spec}` failed: "
-              f"{r.stderr.strip()}", file=sys.stderr)
+    import diff_scope
+    try:
+        if "..." in range_spec:
+            base, head = range_spec.split("...", 1)
+            base = diff_scope.git(ROOT, "merge-base", base, head).strip()
+        elif ".." in range_spec:
+            base, head = range_spec.split("..", 1)
+        else:
+            base, head = range_spec, None
+        paths, _ = diff_scope.effective_paths(ROOT, base, head)
+    except RuntimeError as error:
+        print(f"flow gate: {error}", file=sys.stderr)
         raise SystemExit(2)
-    return filters_for_paths((p.strip() for p in r.stdout.splitlines() if p.strip()), manifest)
+    return filters_for_paths(paths, manifest)
 
 def filters_for_paths(paths, manifest):
     triggers = manifest.get("path_triggers", {})

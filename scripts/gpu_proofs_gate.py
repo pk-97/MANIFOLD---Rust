@@ -54,6 +54,7 @@ from pathlib import Path
 
 import gpu_queue
 import gpu_scope
+import diff_scope
 
 # Matches glb_conformance.rs's check_golden() mismatch message:
 #   "golden mismatch: mean_abs_diff {mean_abs:.4} > tol {mean_abs_tol} \
@@ -506,9 +507,15 @@ def changed_paths(repo: Path, base: str) -> list[str]:
     if mb.returncode != 0 or not mb.stdout.strip():
         raise RuntimeError(f"cannot resolve merge-base with {base}: {mb.stderr.strip()}; "
                            "fetch it, or pass --base / --path / --all explicitly")
-    paths = set(git_lines(repo, "diff", "--name-only", "--no-renames", "-z", f"{mb.stdout.strip()}..HEAD"))
-    paths |= set(git_lines(repo, "diff", "--name-only", "--no-renames", "-z", "HEAD"))
-    paths |= set(git_lines(repo, "ls-files", "--others", "--exclude-standard", "-z"))
+    paths = set(diff_scope.effective_paths(repo, mb.stdout.strip(), head=None)[0])
+    for path in git_lines(repo, "ls-files", "--others", "--exclude-standard", "-z"):
+        suffix = Path(path).suffix
+        if suffix in {".md", ".txt"}:
+            continue
+        if suffix in {".rs", ".wgsl", ".py"} and not any(
+                s.strip() for s in diff_scope.code_lines((repo / path).read_text(), suffix)):
+            continue
+        paths.add(path)
     return sorted(paths)
 
 
