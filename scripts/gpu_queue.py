@@ -96,8 +96,22 @@ def _describe(info):
         age = format_age(time.time() - float(info.get("since", "")))
     except ValueError:
         age = "unknown time"
-    return (f"pid {info.get('pid', '?')} `{info.get('label', '?')}` "
-            f"in {info.get('cwd', '?')}, running for {age}")
+    command = holder_command(info.get("pid", ""))
+    shown = f" [{command}]" if command else ""
+    return (f"pid {info.get('pid', '?')} `{info.get('label', '?')}`{shown} "
+            f"in {info.get('cwd', '?')}, holding for {age}")
+
+
+def holder_command(pid):
+    """The holder's live command line (truncated), or "" when it cannot be read."""
+    if not str(pid).isdigit():
+        return ""
+    try:
+        out = subprocess.run(["ps", "-o", "command=", "-p", str(pid)],
+                             capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return " ".join(out.split())[:160]
 
 
 def format_age(seconds):
