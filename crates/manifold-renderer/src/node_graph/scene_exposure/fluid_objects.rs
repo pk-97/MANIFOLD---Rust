@@ -7,7 +7,7 @@ use manifold_core::effect_graph_def::{
     GroupDef, SerializedParamValue,
 };
 use manifold_core::group_edit::group_selection;
-use manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID;
+use manifold_core::liquid_domain::{FLIP_DOMAIN_TYPE_ID, is_liquid_domain};
 use manifold_core::scene_modifier_preset::SceneNodeRef;
 use manifold_core::scene_object_migration::loose_scene_object_owned_ids;
 use manifold_core::{NodeId, short_id};
@@ -24,7 +24,7 @@ const RENDER_SCENE_TYPE_ID: &str = "node.render_scene";
 /// migration chain; this function deliberately leaves malformed or shared
 /// shapes unchanged.
 pub(super) fn migrate(def: &mut EffectGraphDef) -> bool {
-    if !def.nodes.iter().any(|node| node.type_id == FLIP_DOMAIN_TYPE_ID) {
+    if !def.nodes.iter().any(|node| is_liquid_domain(&node.type_id)) {
         return false;
     }
     let mut candidate = def.clone();
@@ -43,6 +43,12 @@ pub(super) fn migrate(def: &mut EffectGraphDef) -> bool {
         } else {
             index += 1;
         }
+    }
+    while let Some((fluid_id, object_id, role_id)) = find_loose_role_obstacle(&candidate) {
+        if !group_loose_role_obstacle(&mut candidate, fluid_id, object_id, role_id) {
+            break;
+        }
+        changed = true;
     }
     if changed {
         *def = candidate;
@@ -217,6 +223,136 @@ fn migrate_one(
     });
 
     let selected: BTreeSet<u32> = owned.into_iter().chain([role_id]).collect();
+    let mut generated_stable_ids = old_stable_ids;
+    generated_stable_ids.insert(role_node_id);
+    group_object_with_role(
+        def,
+        candidate_nodes,
+        candidate_wires,
+        &selected,
+        GroupedRole { fluid_id, render_id, role_id },
+        &object_handle,
+        &generated_stable_ids,
+    )
+}
+
+/// A loose root object whose collider is a root role source sharing the
+/// object's transform. Remove Object only disconnects roles that live inside
+/// the object's group, so this shape left the collider wired to the solver
+/// after the object was deleted. Grouping it gives the object ownership.
+fn find_loose_role_obstacle(def: &EffectGraphDef) -> Option<(u32, u32, u32)> {
+    for role in def.nodes.iter().filter(|node| node.type_id == ROLE_SOURCE_TYPE_ID) {
+        let outs: Vec<_> = def.wires.iter().filter(|wire| wire.from_node == role.id).collect();
+        let [out] = outs.as_slice() else { continue };
+        let fluid_ok = out.to_port.starts_with("role_")
+            && def.nodes.iter().any(|node| {
+                node.id == out.to_node && is_liquid_domain(&node.type_id)
+            });
+        if !fluid_ok {
+            continue;
+        }
+        let ins: Vec<_> = def.wires.iter().filter(|wire| wire.to_node == role.id).collect();
+        let [input] = ins.as_slice() else { continue };
+        let transform_id = input.from_node;
+        if input.to_port != "transform"
+            || !def
+                .nodes
+                .iter()
+                .any(|node| node.id == transform_id && node.type_id == TRANSFORM_TYPE_ID)
+        {
+            continue;
+        }
+        let transform_outs: Vec<_> = def
+            .wires
+            .iter()
+            .filter(|wire| wire.from_node == transform_id && wire.to_node != role.id)
+            .collect();
+        let [object_wire] = transform_outs.as_slice() else { continue };
+        let is_object = object_wire.to_port == "transform"
+            && def.nodes.iter().any(|node| {
+                node.id == object_wire.to_node && node.type_id == SCENE_OBJECT_TYPE_ID
+            });
+        if is_object {
+            return Some((out.to_node, object_wire.to_node, role.id));
+        }
+    }
+    None
+}
+
+fn group_loose_role_obstacle(
+    def: &mut EffectGraphDef,
+    fluid_id: u32,
+    object_id: u32,
+    role_id: u32,
+) -> bool {
+    let Some(object_handle) = def
+        .nodes
+        .iter()
+        .find(|node| node.id == object_id)
+        .and_then(|node| node.handle.clone())
+    else {
+        return false;
+    };
+    let Some(render_id) = def
+        .wires
+        .iter()
+        .find(|wire| {
+            wire.from_node == object_id
+                && wire.from_port == "object"
+                && def
+                    .nodes
+                    .iter()
+                    .any(|node| node.id == wire.to_node && node.type_id == RENDER_SCENE_TYPE_ID)
+        })
+        .map(|wire| wire.to_node)
+    else {
+        return false;
+    };
+    // Ownership is walked without the role's transform input, so the shared
+    // transform counts as the object's own.
+    let object_wires: Vec<_> = def
+        .wires
+        .iter()
+        .filter(|wire| wire.to_node != role_id)
+        .cloned()
+        .collect();
+    let owned = loose_scene_object_owned_ids(&def.nodes, &object_wires, object_id);
+    if owned.iter().any(|id| *id == fluid_id || *id == render_id) {
+        return false;
+    }
+    let selected: BTreeSet<u32> = owned.into_iter().chain([role_id]).collect();
+    let stable_ids = all_stable_ids(&def.nodes);
+    let (nodes, wires) = (def.nodes.clone(), def.wires.clone());
+    group_object_with_role(
+        def,
+        nodes,
+        wires,
+        &selected,
+        GroupedRole { fluid_id, render_id, role_id },
+        &object_handle,
+        &stable_ids,
+    )
+}
+
+#[derive(Clone, Copy)]
+struct GroupedRole {
+    fluid_id: u32,
+    render_id: u32,
+    role_id: u32,
+}
+
+/// Group `selected` into one object group whose outputs are `object` (to the
+/// render scene) and `fluid_role_source_{role_id}` (to the fluid domain).
+fn group_object_with_role(
+    def: &mut EffectGraphDef,
+    candidate_nodes: Vec<EffectGraphNode>,
+    candidate_wires: Vec<EffectGraphWire>,
+    selected: &BTreeSet<u32>,
+    ids: GroupedRole,
+    object_handle: &str,
+    generated_stable_ids: &HashSet<NodeId>,
+) -> bool {
+    let GroupedRole { fluid_id, render_id, role_id } = ids;
     let Some(group_id) = candidate_nodes
         .iter()
         .map(|node| node.id)
@@ -228,8 +364,8 @@ fn migrate_one(
     let Some((mut nodes, mut wires)) = group_selection(
         candidate_nodes,
         candidate_wires,
-        &selected,
-        &object_handle,
+        selected,
+        object_handle,
         (0.0, 0.0),
     )
     .ok() else {
@@ -238,7 +374,7 @@ fn migrate_one(
     let Some(group_index) = nodes.iter().position(|node| node.id == group_id) else {
         return false;
     };
-    nodes[group_index].handle = Some(object_handle.clone());
+    nodes[group_index].handle = Some(object_handle.to_string());
     let Some(group) = nodes[group_index].group.as_deref_mut() else {
         return false;
     };
@@ -266,9 +402,7 @@ fn migrate_one(
             wire.from_port = "object".into();
         }
     }
-    let mut generated_stable_ids = old_stable_ids;
-    generated_stable_ids.insert(role_node_id);
-    repair_generated_stable_ids(&mut nodes[group_index], &generated_stable_ids);
+    repair_generated_stable_ids(&mut nodes[group_index], generated_stable_ids);
     update_scene_refs(def, &mut nodes[group_index]);
     def.nodes = nodes;
     def.wires = wires;
@@ -603,5 +737,106 @@ mod tests {
     #[test]
     fn water_dam_break_legacy_obstacle_migrates_to_grouped_collider() {
         assert_water_migration("WaterDamBreak", WATER_DAM_BREAK_JSON);
+    }
+
+    const GPU_FLIP_DAM_BREAK_JSON: &str =
+        include_str!("../../../assets/generator-presets/WaterDamBreakGpuFlip.json");
+
+    fn domain_role_inputs(def: &EffectGraphDef) -> usize {
+        let domain = def
+            .nodes
+            .iter()
+            .find(|node| node.type_id == "node.gpu_flip_domain")
+            .expect("GPU FLIP domain")
+            .id;
+        def.wires
+            .iter()
+            .filter(|wire| wire.to_node == domain && wire.to_port.starts_with("role_"))
+            .count()
+    }
+
+    /// Remove Object on the GPU FLIP Dam Break obstacle through the real
+    /// command, the way the Scene panel's delete issues it.
+    fn delete_obstacle(def: EffectGraphDef) -> EffectGraphDef {
+        use manifold_core::layer::Layer;
+        use manifold_core::project::Project;
+        use manifold_core::{GraphTarget, LayerId, PresetTypeId};
+        use manifold_editing::command::Command;
+        use manifold_editing::commands::graph::RemoveSceneObjectCommand;
+
+        let render_id = def
+            .nodes
+            .iter()
+            .find(|node| node.type_id == RENDER_SCENE_TYPE_ID)
+            .expect("render scene")
+            .id;
+        let obstacle_index = def
+            .wires
+            .iter()
+            .find(|wire| {
+                wire.to_node == render_id
+                    && def.nodes.iter().any(|node| {
+                        node.id == wire.from_node && node.handle.as_deref() == Some("Obstacle")
+                    })
+            })
+            .and_then(|wire| wire.to_port.strip_prefix("object_")?.parse().ok())
+            .expect("Obstacle object slot");
+        let mut layer = Layer::new_generator(
+            "Dam".into(),
+            PresetTypeId::new("WaterDamBreakGpuFlip"),
+            0,
+        );
+        let layer_id = LayerId::new("deleted-obstacle-layer");
+        layer.layer_id = layer_id.clone();
+        let host = layer.gen_params_or_init();
+        host.graph = Some(def.clone());
+        host.refresh_manifest_from_graph();
+        let mut project = Project::default();
+        project.timeline.layers.push(layer);
+        let target = GraphTarget::Generator(layer_id);
+        let mut remove =
+            RemoveSceneObjectCommand::new(target.clone(), vec![], render_id, obstacle_index, def);
+        remove.execute(&mut project);
+        assert!(remove.was_applied(), "{:?}", remove.rejection_reason());
+        project
+            .graph_target_owner(&target)
+            .and_then(|owner| owner.graph.clone())
+            .expect("edited graph")
+    }
+
+    #[test]
+    fn gpu_flip_dam_break_obstacle_groups_with_its_collider() {
+        let mut def: EffectGraphDef =
+            serde_json::from_str(GPU_FLIP_DAM_BREAK_JSON).expect("preset parses");
+        assert!(migrate(&mut def), "loose collider must group with its object");
+        assert!(!migrate(&mut def), "migration must be idempotent");
+        assert!(
+            !def.nodes.iter().any(|node| node.type_id == ROLE_SOURCE_TYPE_ID),
+            "the collider must live inside the Obstacle group"
+        );
+        flatten_groups(&def).expect("migrated graph flattens");
+        let vm = SceneVm::from_def(&def).expect("scene discoverable");
+        assert!(vm.objects.iter().any(|object| matches!(object,
+            SceneObjectVm::Known(row) if row.name == "Obstacle" && row.group_node_id.is_some())));
+    }
+
+    #[test]
+    fn deleting_gpu_flip_dam_break_obstacle_removes_its_collider() {
+        let mut def: EffectGraphDef =
+            serde_json::from_str(GPU_FLIP_DAM_BREAK_JSON).expect("preset parses");
+        // The loose authored shape is the bug: delete drops the box but the
+        // collider keeps feeding the solver.
+        assert_eq!(domain_role_inputs(&delete_obstacle(def.clone())), 1);
+        migrate(&mut def);
+        assert_eq!(domain_role_inputs(&def), 1, "the obstacle is the domain's only body");
+        let after = delete_obstacle(def);
+        assert_eq!(
+            domain_role_inputs(&after),
+            0,
+            "a deleted obstacle must stop reaching the solver"
+        );
+        assert!(!after.nodes.iter().any(|node| {
+            node.handle.as_deref() == Some("Obstacle") || node.node_id.as_str() == "obstacle_collider"
+        }));
     }
 }
