@@ -12,6 +12,7 @@ use manifold_physics::input::{InputHistory, Timestamped, input_span, input_span_
 
 use crate::node_graph::channel_names::well_known;
 use crate::node_graph::fluid::TICK;
+use crate::node_graph::liquid::clock::sample_time;
 use crate::node_graph::fluid_role::{
     DistanceState, FluidRole, FluidRoleKind, MAX_FLUID_ROLES, PreparedFluidGeometry,
 };
@@ -414,8 +415,9 @@ impl LiquidBodies {
                 controls[slot] = Controls::from_role(role);
             }
         }
+        let time = Seconds(sample_time(history, target_time));
         history
-            .record(Sample { time: Seconds(target_time), controls }, Seconds(consumed_until))
+            .record(Sample { time, controls }, Seconds(consumed_until))
             .map(|_| ())
             .map_err(|e| format!("Liquid: {e}"))
     }

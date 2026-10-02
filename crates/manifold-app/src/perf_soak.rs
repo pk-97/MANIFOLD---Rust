@@ -365,18 +365,18 @@ fn has_conflicting_flags(profile_mode: bool, update_baseline: bool, report_only:
     (profile_mode && update_baseline) || (report_only && (profile_mode || update_baseline))
 }
 
-struct PreparedProject {
-    ct: ContentThread,
-    cmd_tx: crossbeam_channel::Sender<ContentCommand>,
-    cmd_rx: crossbeam_channel::Receiver<ContentCommand>,
-    state_tx: crossbeam_channel::Sender<ContentState>,
-    drain: std::thread::JoinHandle<()>,
-    project_path: PathBuf,
-    width: u32,
-    height: u32,
-    frame_rate: f64,
-    bpm: manifold_core::Bpm,
-    startup: serde_json::Value,
+pub(crate) struct PreparedProject {
+    pub(crate) ct: ContentThread,
+    pub(crate) cmd_tx: crossbeam_channel::Sender<ContentCommand>,
+    pub(crate) cmd_rx: crossbeam_channel::Receiver<ContentCommand>,
+    pub(crate) state_tx: crossbeam_channel::Sender<ContentState>,
+    pub(crate) drain: std::thread::JoinHandle<()>,
+    pub(crate) project_path: PathBuf,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) frame_rate: f64,
+    pub(crate) bpm: manifold_core::Bpm,
+    pub(crate) startup: serde_json::Value,
 }
 
 /// Load a project into the same empty headless context used by the production
@@ -384,15 +384,27 @@ struct PreparedProject {
 /// normal and diagnostic runs use this helper so startup telemetry describes
 /// the same lifecycle in both modes.
 fn prepare_project(project_path_str: &str, mode: &str) -> Result<PreparedProject, String> {
+    prepare_project_edited(project_path_str, mode, &mut |_| {})
+}
+
+/// [`prepare_project`] with one edit to the parsed project before it is
+/// installed (the `frame-time` probe's resolution override): the file on
+/// disk is never touched.
+pub(crate) fn prepare_project_edited(
+    project_path_str: &str,
+    mode: &str,
+    edit: &mut dyn FnMut(&mut manifold_core::project::Project),
+) -> Result<PreparedProject, String> {
     let startup_started = Instant::now();
     let project_path = Path::new(project_path_str).to_path_buf();
 
     let parse_started = Instant::now();
-    let project = manifold_io::loader::load_project_with(
+    let mut project = manifold_io::loader::load_project_with(
         &project_path,
         crate::project_io::install_embedded_presets,
     )
     .map_err(|e| format!("failed to load project '{}': {e}", project_path.display()))?;
+    edit(&mut project);
     let parse_ms = parse_started.elapsed().as_secs_f64() * 1000.0;
 
     let width = project.settings.output_width.max(1) as u32;

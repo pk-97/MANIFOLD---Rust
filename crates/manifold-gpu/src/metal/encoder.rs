@@ -112,6 +112,9 @@ pub struct GpuEncoder {
     pub(crate) scopes: Vec<String>,
     /// The open encode-replay span, between `begin_replay` and `end_replay`.
     pub(crate) replay: Option<super::replay::ReplaySpan>,
+    /// Receives the true GPU seconds of every command buffer this encoder
+    /// commits, chunk splits included ([`Self::tap_gpu_time`]).
+    pub(crate) gpu_time_tap: Option<std::sync::Arc<dyn Fn(f64, f64) + Send + Sync>>,
 }
 
 unsafe impl Send for GpuEncoder {}
@@ -2668,10 +2671,33 @@ impl GpuEncoder {
         }
     }
 
+    /// Report the GPU start and end time (seconds, the device's clock) of
+    /// every command buffer this encoder commits to `tap`: the final one and
+    /// each chunk a `commit_and_continue` split off. Chunks of one frame
+    /// overlap on the GPU, so a frame's true GPU time is the span of its
+    /// chunks, never the sum of their durations; a tap on the final buffer
+    /// alone misses every chunk before it.
+    pub fn tap_gpu_time(&mut self, tap: std::sync::Arc<dyn Fn(f64, f64) + Send + Sync>) {
+        self.gpu_time_tap = Some(tap);
+    }
+
+    fn register_gpu_time_tap(&self) {
+        use block2::RcBlock;
+        let Some(tap) = self.gpu_time_tap.clone() else { return };
+        let block = RcBlock::new(move |buf: NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
+            let cb = unsafe { buf.as_ref() };
+            tap(unsafe { cb.GPUStartTime() }, unsafe { cb.GPUEndTime() });
+        });
+        unsafe {
+            self.cmd_buf.addCompletedHandler(RcBlock::as_ptr(&block));
+        }
+    }
+
     /// Commit the command buffer to the GPU queue.
     pub fn commit(mut self) {
         self.end_current();
         self.register_fault_handler();
+        self.register_gpu_time_tap();
         self.cmd_buf.commit();
     }
 
@@ -2685,6 +2711,7 @@ impl GpuEncoder {
     pub fn commit_and_continue(&mut self, device: &GpuDevice) {
         self.end_current();
         self.register_fault_handler();
+        self.register_gpu_time_tap();
         self.cmd_buf.commit();
 
         if let Some(profile) = &mut self.profile {

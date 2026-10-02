@@ -4456,7 +4456,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Clamp a liquid level set (nodes_x/y/z nodes over the center/size box, node (i, j, k) at i + nx·(j + ny·k)) against its solid lattice (solid_nodes_x/y/z over the same box, sampled trilinearly): border nodes read a tenth of a bin outside, nodes where the solid is negative read max(value, 0), every other node passes through. Nodes past the lattice, and every node while there is no lattice, pass through.",
+      "purpose": "Clamp a liquid level set (nodes_x/y/z nodes over the center/size box, node (i, j, k) at i + nx·(j + ny·k)) against its solid lattice (solid_nodes_x/y/z over the same box, sampled trilinearly): border nodes read a third of a bin outside, nodes where the solid is negative read max(value, 0), every other node passes through. Nodes past the lattice, and every node while there is no lattice, pass through.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Keeps a liquid surface out of walls and solid bodies and closed at the edge of its grid, after smoothing.",
@@ -25958,7 +25958,7 @@
           "type": "int"
         }
       ],
-      "purpose": "The liquid's level set on a lattice: at each node, the distance to the nearest kernel ellipsoid, a·(|G·(x − c)| − 1) with a the kernel's longest axis (exact for spheres), negative inside and capped a tenth of a bin outside. The lattice is the solid lattice (nodes_x/y/z over the center/size box) refined resolution_scale times per cell. Nodes inside a solid are never inside the liquid and the border is outside, so the surface closes.",
+      "purpose": "The liquid's level set on a lattice: at each node, the distance to the nearest kernel ellipsoid, a·(|G·(x − c)| − 1) with a the kernel's longest axis (exact for spheres), negative inside and capped a third of a bin outside (half the kernel reach, the FLIP Fluids mesher's ratio, so a marching-cubes crossing a lattice step away is exact). The lattice is the solid lattice (nodes_x/y/z over the center/size box) refined resolution_scale times per cell. Nodes inside a solid are never inside the liquid and the border is outside, so the surface closes.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Turns liquid particles into a distance field on a grid, the step before the surface mesh is drawn.",
@@ -138390,7 +138390,7 @@
           "name": "Surface Particle Scale"
         },
         {
-          "default": "0",
+          "default": "0.5",
           "id": "mesh_relaxation",
           "max": "1",
           "min": "0",
