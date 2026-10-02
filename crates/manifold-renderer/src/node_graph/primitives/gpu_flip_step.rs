@@ -642,6 +642,7 @@ fn encode_pockets(
     pipes: &Pipelines,
     params: &StepParams,
     l: &LatticeBuffers,
+    ranges: &GpuBuffer,
     cells: [u32; 3],
     capped: &GpuBuffer,
     tally: u64,
@@ -676,7 +677,7 @@ fn encode_pockets(
     // tick's first step, and writes the step's dry, sealed and air counts.
     enc.dispatch_compute(
         &pipes.pocket_tally,
-        &[uniform(params), buffer(6, &l.water), buffer(10, &l.s), buffer(23, &l.pocket), buffer(24, &l.pocket_gate), GpuBinding::Buffer { binding: 22, buffer: capped, offset: tally }],
+        &[uniform(params), buffer(1, ranges), buffer(6, &l.water), buffer(7, &l.phi), buffer(10, &l.s), buffer(23, &l.pocket), buffer(24, &l.pocket_gate), GpuBinding::Buffer { binding: 22, buffer: capped, offset: tally }],
         [1, 1, 1],
         "gpu_flip.step.pocket_tally",
     );
@@ -711,7 +712,7 @@ fn encode_pocket_mean(enc: &mut GpuEncoder, pipes: &Pipelines, l: &LatticeBuffer
 #[cfg(test)]
 const POCKET_ATOMIC_SITES: &[&str] = &[
     "pocket_sum", "group_sum", "pocket_clear", "pocket_add", "pocket_accumulate", "pocket_remove", "pocket_flux",
-    "pocket_counts", "pocket_first_seed", "pocket_tally",
+    "pocket_counts", "pocket_first_seed", "pocket_dry_floor", "pocket_tally",
 ];
 
 /// I8's guard: each line of `source` that uses an atomic, outside the named
@@ -1035,7 +1036,7 @@ impl StepState {
         // Which water reaches air holds every step: the density source reads
         // it too. As the engine does, the solid velocity's zeroing is skipped
         // when the bodies are in the solve: their mass resolves the pocket.
-        encode_pockets(enc, pipes, &base, l, cells, step.capped, step.tally);
+        encode_pockets(enc, pipes, &base, l, ranges, cells, step.capped, step.tally);
         enc.dispatch_compute(
             &pipes.pocket_pin,
             &[uniform(&base), buffer(6, &l.water), buffer(23, &l.pocket), buffer(25, &l.pocket_label), buffer(5, &l.solve_water)],

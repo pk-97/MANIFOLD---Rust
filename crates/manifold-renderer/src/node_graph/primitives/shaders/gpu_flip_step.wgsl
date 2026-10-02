@@ -1366,6 +1366,28 @@ fn pocket_condition(@builtin(global_invocation_id) gid: vec3<u32>) {
 const POCKET_COUNT_WORD: u32 = 7u;
 var<workgroup> pocket_counts: array<atomic<u32>, 3>;
 var<workgroup> pocket_first_seed: atomic<u32>;
+var<workgroup> pocket_dry_floor: atomic<u32>;
+const POCKET_DRY_FLOOR_WORD: u32 = 16u;
+
+// A floor cell (y = 0) reading dry with water in every in-box face neighbour:
+// a hole under the water, not its edge.
+fn dry_floor_hole(idx: u32) -> bool {
+    let n = lattice();
+    let p = unflatten(idx, n);
+    if p.y != 0 || water[idx] > 0.5 {
+        return false;
+    }
+    for (var a = 0; a < 3; a = a + 1) {
+        for (var s = -1; s <= 1; s = s + 2) {
+            var d = p;
+            d[a] = p[a] + s;
+            if d[a] >= 0 && d[a] < n[a] && !(water[flatten(d, n)] > 0.5) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
 const POCKET_SEED_WORD: u32 = 10u;
 
 // Why water cell idx touches air, as pocket_seed decides it: the neighbour's
@@ -1406,6 +1428,7 @@ fn pocket_tally(@builtin(local_invocation_index) lane: u32) {
     }
     if lane == 0u {
         atomicStore(&pocket_first_seed, 0xffffffffu);
+        atomicStore(&pocket_dry_floor, 0u);
     }
     workgroupBarrier();
     var counts = vec3<u32>(0u);
@@ -1413,6 +1436,9 @@ fn pocket_tally(@builtin(local_invocation_index) lane: u32) {
         counts[min(pocket[idx], 2u)] += 1u;
         if pocket[idx] == POCKET_AIR && pocket_seed_reason(idx).z != 0xffffffffu {
             atomicMin(&pocket_first_seed, idx);
+        }
+        if dry_floor_hole(idx) {
+            atomicAdd(&pocket_dry_floor, 1u);
         }
     }
     for (var k = 0u; k < 3u; k = k + 1u) {
@@ -1425,6 +1451,7 @@ fn pocket_tally(@builtin(local_invocation_index) lane: u32) {
     for (var k = 0u; k < 3u; k = k + 1u) {
         capped[POCKET_COUNT_WORD + k] = atomicLoad(&pocket_counts[k]);
     }
+    capped[POCKET_DRY_FLOOR_WORD] = atomicLoad(&pocket_dry_floor);
     let seed = atomicLoad(&pocket_first_seed);
     capped[POCKET_SEED_WORD] = seed;
     if seed != 0xffffffffu {
@@ -1432,6 +1459,10 @@ fn pocket_tally(@builtin(local_invocation_index) lane: u32) {
         capped[POCKET_SEED_WORD + 1u] = why.x;
         capped[POCKET_SEED_WORD + 2u] = why.y;
         capped[POCKET_SEED_WORD + 3u] = why.z;
+        if why.x != 0xffffffffu {
+            capped[POCKET_SEED_WORD + 4u] = bitcast<u32>(phi[why.x]);
+            capped[POCKET_SEED_WORD + 5u] = ranges[why.x].count;
+        }
     }
     let unresolved = pocket_gate[POCKET_UNRESOLVED];
     if u.step_in_tick == 0 {
