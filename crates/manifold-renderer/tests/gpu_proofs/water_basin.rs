@@ -29,6 +29,7 @@ use crate::harness;
 mod explicit_authoring;
 mod authored_coupling;
 mod dam_break_authoring;
+mod deleted_obstacle;
 
 const WATER_BASIN_JSON: &str = include_str!("../../assets/generator-presets/WaterBasin.json");
 const WIDTH: u32 = 640;

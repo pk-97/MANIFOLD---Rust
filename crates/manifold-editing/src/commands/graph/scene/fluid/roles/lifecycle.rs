@@ -3,6 +3,7 @@
 mod object_routes;
 pub(in crate::commands::graph::scene) use object_routes::{
     disconnect_scene_object_fluid_roles, duplicate_scene_object_fluid_roles,
+    loose_scene_object_has_fluid_roles, remove_loose_scene_object_fluid_roles,
 };
 pub use object_routes::restore_scene_object_fluid_roles;
 

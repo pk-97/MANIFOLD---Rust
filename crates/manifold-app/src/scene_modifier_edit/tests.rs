@@ -20,7 +20,7 @@ const MUSHROOM_FIXTURE: &str = concat!(
     "/../../tests/fixtures/gltf/cc0___mushroom.glb"
 );
 
-fn project_with_mushroom() -> (Project, LayerId) {
+pub(crate) fn project_with_mushroom() -> (Project, LayerId) {
     let (graph, _) = assemble_import_graph(Path::new(MUSHROOM_FIXTURE))
         .expect("production mushroom import must assemble");
     let mut layer =
@@ -51,7 +51,7 @@ fn modifier_ids(project: &Project, layer_id: &LayerId) -> Vec<NodeId> {
         .collect()
 }
 
-fn apply_stock(
+pub(crate) fn apply_stock(
     service: &mut EditingService,
     project: &mut Project,
     layer_id: &LayerId,

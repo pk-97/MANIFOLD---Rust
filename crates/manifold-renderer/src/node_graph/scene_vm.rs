@@ -1358,6 +1358,12 @@ fn trace_scene_object(
                 own(source);
             }
         }
+        // The whitewater stepping on this domain's clock is the water's.
+        for whitewater in domain_level.nodes.iter().filter(|node| node.type_id == "node.whitewater_step") {
+            if domain_level.producer(whitewater.id, "ticks").is_some_and(|(from, _)| from == n.id) {
+                own(whitewater);
+            }
+        }
         for index in 0..super::fluid_role::MAX_FLUID_ROLES {
             let role_port = format!("role_{index}");
             let Some((role_level, role_group, role, _)) =
@@ -1786,6 +1792,21 @@ mod tests {
         assert_eq!(domain_transform.pos_value, (0.0, 2.0, 0.0));
         assert_eq!(row.fluid_domain.expect("static domain").size, [4.0, 4.0, 1.0]);
         assert!(row.transform.is_none(), "source transform must not move only the visible mesh");
+    }
+
+    #[test]
+    fn scene_physics_fluid_controls_own_the_whitewater_on_the_domain_clock() {
+        let scene = with_param(node(1, RENDER_SCENE_TYPE_ID, None), "objects",
+            SerializedParamValue::Float { value: 1.0 });
+        let graph = def(vec![scene, node(2, "system.final_output", None),
+            node(3, "node.scene_object", Some("Fluid")),
+            node(4, manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID, None),
+            node(7, "node.whitewater_step", None), node(8, "node.whitewater_step", None)],
+            vec![wire(1, "color", 2, "in"), wire(3, "out", 1, "object_0"),
+                wire(4, "vertices", 3, "vertices"), wire(4, "ticks", 7, "ticks")]);
+        let vm = SceneVm::from_def(&graph).unwrap();
+        let SceneObjectVm::Known(row) = &vm.objects[0] else { panic!("fluid surface row"); };
+        assert_eq!(row.fluid_controls, ["n4", "n7"].map(NodeId::new), "n8 steps no clock of this water");
     }
 
     #[test]

@@ -65,6 +65,19 @@ pub fn run(args: &[String]) {
         readback::cmd_probe(png, &coords);
         return;
     }
+    // `batch <scene> <script> ...`: many `--script` flows in one process
+    // (`script::run_batch`), for `scripts/run_ui_flows.py`.
+    if scene == "batch" {
+        let pairs = &args[2..];
+        if pairs.is_empty() || !pairs.len().is_multiple_of(2) {
+            eprintln!("ui-snap batch: usage: ui-snap batch <scene> <script.json> [<scene> <script.json> ...]");
+            std::process::exit(2);
+        }
+        let flows: Vec<(String, String)> =
+            pairs.chunks(2).map(|p| (p[0].clone(), p[1].clone())).collect();
+        script::run_batch(&flows);
+        return;
+    }
     if scene == "crop" {
         let (Some(png), Some(rect)) = (args.get(2), arg_value(args, "--crop")) else {
             eprintln!("ui-snap crop: usage: cargo xtask ui-snap crop <file.png> --crop x,y,w,h");

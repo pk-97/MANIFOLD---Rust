@@ -210,8 +210,11 @@ fn write_population(p: u32, slot: u32, value: Fluid) {
 }
 
 // Each population's particles to the front of its output in pool order,
-// the radius FLIP's fade of the lifetime (fluid.rs whitewater_fade); the
-// rest of each output zeroed.
+// the radius FLIP's fade of the lifetime (fluid.rs whitewater_fade). Past
+// the count the output is zero: the slot's buffers start zeroed and
+// `counts` still holds what this slot's previous publish filled, so only
+// [new count, previous count) needs zeroing. `publish_counts` overwrites
+// `counts` after.
 @compute @workgroup_size(256)
 fn split(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
@@ -230,7 +233,7 @@ fn split(@builtin(global_invocation_id) gid: vec3<u32>) {
         out.id = 0u;
         write_population(p, scan[i] - 1u - start, out);
     }
-    if s >= population_end(p) - start {
+    if s >= population_end(p) - start && s < counts[p] {
         var zero: Fluid;
         write_population(p, s, zero);
     }

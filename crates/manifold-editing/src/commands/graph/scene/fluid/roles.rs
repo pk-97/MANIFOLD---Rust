@@ -974,4 +974,5 @@ pub use lifecycle::{
 };
 pub(in crate::commands::graph::scene) use lifecycle::{
     disconnect_scene_object_fluid_roles, duplicate_scene_object_fluid_roles,
+    loose_scene_object_has_fluid_roles, remove_loose_scene_object_fluid_roles,
 };
