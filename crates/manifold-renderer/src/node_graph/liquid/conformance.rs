@@ -472,9 +472,6 @@ const BOX_PRESET: &str = "WaterFloatingBoxMatter";
 /// The preset's Box3D world, the box's start, body and drawn object.
 const BOX_NODES: [&str; 6] = ["box_world", "box_start", "box_body", "box_mesh", "box_material", "box_object"];
 
-/// The render scene's free object slot the box is drawn in.
-const BOX_OBJECT_PORT: &str = "object_6";
-
 /// `def` with [`BOX_PRESET`]'s box in its render scene, which pairs the
 /// box's world with the scene's liquid, and the Speed card on the world too.
 fn with_box(mut def: EffectGraphDef) -> EffectGraphDef {
@@ -503,11 +500,11 @@ fn with_box(mut def: EffectGraphDef) -> EffectGraphDef {
         def.nodes.iter().find(|node| node.node_id.as_str() == name).unwrap_or_else(|| panic!("no node {name}")).id
     };
     let (object, scene) = (id_of(&def, "box_object"), id_of(&def, "scene"));
-    assert!(
-        !def.wires.iter().any(|wire| wire.to_node == scene && wire.to_port == BOX_OBJECT_PORT),
-        "the render scene's {BOX_OBJECT_PORT} is taken"
-    );
-    def.wires.push(EffectGraphWire { from_node: object, from_port: "object".into(), to_node: scene, to_port: BOX_OBJECT_PORT.into() });
+    let port = (0..)
+        .map(|k| format!("object_{k}"))
+        .find(|port| !def.wires.iter().any(|wire| wire.to_node == scene && wire.to_port == *port))
+        .expect("an object port is free");
+    def.wires.push(EffectGraphWire { from_node: object, from_port: "object".into(), to_node: scene, to_port: port });
     let metadata = def.preset_metadata.as_mut().expect("the render's cards");
     let speed = metadata
         .bindings
