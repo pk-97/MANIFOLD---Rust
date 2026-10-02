@@ -19,6 +19,8 @@ Modules ported from it (all under `crates/manifold-renderer/src/node_graph/primi
 - `gpu_flip_bodies` (`shaders/gpu_flip_bodies.wgsl`; its CPU references in `gpu_flip_body_tests.rs`) — the bodies' rows in the pressure solve and their captured impulse from `rigidpressurecoupling.h`, the pressure entries and the velocity change on the solid faces from `rigidboundaryvelocity.cpp`, the order of solve, impulse, velocity change and constraint from `rigidfluidcoupling.cpp`; the dynamic bodies' predicted velocity in `gpu_flip_step.wgsl` from `rigidfluidcoupling.cpp`
 - `liquid_fill` — seeding only where the solid distance is positive, from `fluidsimulation.cpp`
 
+`crates/manifold-renderer/src/live_sim_clock_reference.rs` ports the CFL duration rule from `fluidsimulation.cpp::_calculateNextTimeStep` (including epsilon, optional surface-tension/color restrictions and equal frame partition). It is a standalone CPU reference, not runtime integration.
+
 The GPU structure (the step's passes, the multigrid preconditioner) is MANIFOLD's own; the ported parts are the rules above.
 
 ### License
