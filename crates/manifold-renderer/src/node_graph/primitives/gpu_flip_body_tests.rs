@@ -2,13 +2,18 @@
 //! FLIP pressure solve (docs/GPU_FLIP_PRESSURE_SOLVE.md section 8 (solids in
 //! the water)) against CPU f64 references: each body's impulse, the bodies'
 //! share of the operator, the velocity change on the solid faces and the
-//! reaction. The lattice holds enough face records for two partial groups
-//! per body, so the group order of the sum is exercised.
+//! reaction. The lattice spans twelve tiles, partial edge tiles among them,
+//! so the slot order of the sum is exercised. Then the passes over the
+//! solver's active tiles against every tile, bitwise and under NaN poison,
+//! on their own and through a step with a Box3D body
+//! (docs/GPU_FLIP_SPARSE_BLOCKS_DESIGN.md D-9).
 
 use manifold_gpu::{GpuBuffer, GpuDevice};
 
 use super::gpu_flip_atom_tests::{FACE_FLOATS, assert_close, face_grid_len, random_values, random_water};
 use super::gpu_flip_bodies::{BodyPasses, Bodies};
+use super::gpu_flip_pressure::{PressureSolver, Water};
+use super::gpu_flip_step::{TILE, set_all_tiles, set_poison};
 use super::liquid_surface_tests::read;
 use crate::node_graph::liquid::bodies::LiquidBody;
 
@@ -294,19 +299,39 @@ struct Scene {
     rows: Vec<LiquidBody>,
     buffers: [GpuBuffer; 4],
     passes: BodyPasses,
+    /// Prepared on the scene's water for its fine tile set; `all` means
+    /// every tile was classified active.
+    solver: PressureSolver,
 }
 
 impl Scene {
+    /// Random water everywhere, every tile active: the CPU references sum
+    /// every face.
     fn new(seed: u64) -> Self {
+        Self::with_water(seed, random_water(N.iter().product(), seed + 1), true)
+    }
+
+    fn with_water(seed: u64, water: Vec<f32>, all: bool) -> Self {
         let device = crate::test_device();
         let (open, solid) = fixture(seed);
-        let water = random_water(N.iter().product(), seed + 1);
         let rows = bodies();
         let buffers = [shared(&device, &water), shared(&device, &open), shared(&device, &solid), shared(&device, &rows)];
         let mut passes = BodyPasses::default();
         passes.prepare_pipelines(&device);
-        passes.prepare(&device).expect("body passes");
-        Self { device, open, solid, water, rows, buffers, passes }
+        passes.prepare(&device, N.map(|v| v as u32), BODIES as u32).expect("body passes");
+        let mut solver = PressureSolver::default();
+        solver.prepare_pipelines(&device);
+        let mut enc = device.create_encoder("body scene tiles");
+        set_all_tiles(all);
+        let lattice = Water { lattice: N.map(|v| v as u32), cell_size: H, water: &buffers[0], faces: &buffers[1], phi: None };
+        solver.prepare(&device, &mut enc, &lattice).expect("the solver prepares its tile lists");
+        set_all_tiles(false);
+        enc.commit_and_wait_completed();
+        Self { device, open, solid, water, rows, buffers, passes, solver }
+    }
+
+    fn tiles(&self) -> [&GpuBuffer; 3] {
+        self.solver.tiles().expect("prepared")
     }
 
     fn bodies(&self) -> Bodies<'_> {
@@ -340,7 +365,7 @@ fn gpu_flip_body_operator_matches_cpu() {
     let base = random_values(cells, 0xb0d3);
     let (direction_gpu, s) = (shared(&scene.device, &direction), shared(&scene.device, &base));
     let mut enc = scene.device.create_encoder("body operator");
-    scene.passes.apply(&mut enc, &scene.bodies(), &direction_gpu, &s).expect("apply");
+    scene.passes.apply(&mut enc, &scene.bodies(), scene.tiles(), &direction_gpu, &s).expect("apply");
     enc.commit_and_wait_completed();
 
     let impulses = cpu_pressure_impulse(&direction, &scene.water, &scene.open, &scene.solid);
@@ -373,7 +398,7 @@ fn gpu_flip_body_reaction_matches_cpu() {
 
     // The same impulse react starts with, on its own, to read its sums.
     let mut enc = scene.device.create_encoder("pressure sums");
-    scene.passes.apply(&mut enc, &scene.bodies(), &pressure_gpu, &scratch).expect("apply");
+    scene.passes.apply(&mut enc, &scene.bodies(), scene.tiles(), &pressure_gpu, &scratch).expect("apply");
     enc.commit_and_wait_completed();
     let pushed = scene.sums();
     let (want, scale) =
@@ -381,7 +406,7 @@ fn gpu_flip_body_reaction_matches_cpu() {
     assert_sums(&pushed, &want, &scale, "pressure sums");
 
     let mut enc = scene.device.create_encoder("react");
-    scene.passes.react(&mut enc, &scene.bodies(), &pressure_gpu, &faces_gpu, &reaction).expect("react");
+    scene.passes.react(&mut enc, &scene.bodies(), scene.tiles(), &pressure_gpu, &faces_gpu, &reaction).expect("react");
     enc.commit_and_wait_completed();
 
     let changed: Vec<f32> = read(&scene.buffers[2], face_grid_len(N));
@@ -404,4 +429,302 @@ fn gpu_flip_body_reaction_matches_cpu() {
         })
         .collect();
     assert_close(&got, &want, "reaction");
+}
+
+// ── Sparse against every tile ──────────────────────────────────────────────
+
+fn tile_dims() -> [usize; 3] {
+    N.map(|v| v.div_ceil(TILE as usize))
+}
+
+fn tile_of(cell: usize) -> usize {
+    let t = coords(cell, N).map(|v| v / TILE as usize);
+    at(t, tile_dims())
+}
+
+/// The fine tiles the solver classifies active on `water`: a water cell
+/// lies in the tile's box grown by one cell (gpu_flip_pressure.wgsl
+/// classify_main).
+fn active_tiles(water: &[f32]) -> Vec<bool> {
+    let dims = tile_dims();
+    (0..dims.iter().product::<usize>())
+        .map(|t| {
+            let origin = coords(t, dims).map(|v| v * TILE as usize);
+            let first = origin.map(|v| v.saturating_sub(1));
+            let last: [usize; 3] = std::array::from_fn(|a| (origin[a] + TILE as usize).min(N[a] - 1));
+            (first[2]..=last[2]).any(|z| {
+                (first[1]..=last[1]).any(|y| (first[0]..=last[0]).any(|x| water[at([x, y, z], N)] > 0.5))
+            })
+        })
+        .collect()
+}
+
+fn bits(values: &[f32]) -> Vec<u32> {
+    values.iter().map(|v| v.to_bits()).collect()
+}
+
+/// What one run of the passes leaves: the pressure sums, s after the
+/// operator, the solid velocity after the reaction, the friction sums and
+/// the reaction, as bits.
+struct Left {
+    pushed: Vec<u32>,
+    s: Vec<u32>,
+    solid: Vec<u32>,
+    dragged: Vec<u32>,
+    reaction: Vec<u32>,
+}
+
+fn first_differing(a: &[u32], b: &[u32]) -> Option<usize> {
+    assert_eq!(a.len(), b.len());
+    (0..a.len()).find(|&i| a[i] != b[i])
+}
+
+/// The passes over the solver's active tiles equal the passes over every
+/// tile bit for bit: the sums, s, the solid velocity and the reaction; and
+/// the same with NaN in x and s outside the active tiles and in every
+/// partial slot before the run, so nothing the passes read lies outside the
+/// lists. The water fills the first tile column of three, so most tiles are
+/// inactive while the bodies own faces throughout the lattice.
+#[test]
+fn gpu_flip_body_passes_sparse_match_all_tiles() {
+    let seed = 0x5a5e;
+    let cells: usize = N.iter().product();
+    let water: Vec<f32> =
+        random_water(cells, seed + 1).iter().enumerate().map(|(i, &w)| if coords(i, N)[0] < 6 { w } else { 0.0 }).collect();
+    let active = active_tiles(&water);
+    let inactive = active.iter().filter(|a| !**a).count();
+    assert!(inactive >= 6, "{inactive} of {} tiles inactive", active.len());
+    let x = random_values(cells, seed + 2);
+    let base = random_values(cells, seed + 3);
+    let faces = random_values(face_grid_len(N), seed + 4);
+    let reaction_base = random_values(BODIES * 8, seed + 5);
+    let run = |all: bool, poison: bool| -> Left {
+        let scene = Scene::with_water(seed, water.clone(), all);
+        let outside = |v: &[f32]| -> Vec<f32> {
+            v.iter().enumerate().map(|(i, &v)| if poison && !active[tile_of(i)] { f32::NAN } else { v }).collect()
+        };
+        let x_gpu = shared(&scene.device, &outside(&x));
+        let s = shared(&scene.device, &outside(&base));
+        let faces_gpu = shared(&scene.device, &faces);
+        let reaction = shared(&scene.device, &reaction_base);
+        let mut enc = scene.device.create_encoder("sparse apply");
+        if poison {
+            scene.passes.poison(&mut enc, &scene.bodies());
+        }
+        scene.passes.apply(&mut enc, &scene.bodies(), scene.tiles(), &x_gpu, &s).expect("apply");
+        enc.commit_and_wait_completed();
+        let pushed = bits(&scene.sums());
+        let mut enc = scene.device.create_encoder("sparse react");
+        if poison {
+            scene.passes.poison(&mut enc, &scene.bodies());
+        }
+        scene.passes.react(&mut enc, &scene.bodies(), scene.tiles(), &x_gpu, &faces_gpu, &reaction).expect("react");
+        enc.commit_and_wait_completed();
+        let s: Vec<f32> = read(&s, cells);
+        // Only the active tiles' s is compared under poison: the rest holds
+        // the NaN written in, which nothing touched.
+        let s = s.iter().enumerate().map(|(i, v)| if active[tile_of(i)] { v.to_bits() } else { base[i].to_bits() }).collect();
+        Left {
+            pushed,
+            s,
+            solid: bits(&read(&scene.buffers[2], face_grid_len(N))),
+            dragged: bits(&scene.sums()),
+            reaction: bits(&read(&reaction, BODIES * 8)),
+        }
+    };
+    let dense = run(true, false);
+    assert!(dense.pushed[..3].iter().any(|&b| f32::from_bits(b).abs() > 1.0), "the dynamic body is pushed");
+    for (name, left) in [("sparse", run(false, false)), ("poisoned", run(false, true))] {
+        for (what, a, b) in [
+            ("pressure sums", &dense.pushed, &left.pushed),
+            ("s", &dense.s, &left.s),
+            ("solid velocity", &dense.solid, &left.solid),
+            ("friction sums", &dense.dragged, &left.dragged),
+            ("reaction", &dense.reaction, &left.reaction),
+        ] {
+            if let Some(i) = first_differing(a, b) {
+                panic!("{name} {what} differs from all tiles first at {i}: {} vs {}", f32::from_bits(a[i]), f32::from_bits(b[i]));
+            }
+        }
+    }
+}
+
+/// A GPU FLIP conformance box scene (a Box3D body in the liquid) run frame
+/// by frame through the preset runtime, offline, every frame under the
+/// levers it was built with.
+struct BoxRun {
+    device: crate::TestDevice,
+    runtime: crate::preset_runtime::PresetRuntime,
+    target: crate::render_target::RenderTarget,
+    manifest: manifold_core::params::ParamManifest,
+    frame: i64,
+    all: bool,
+    poison: bool,
+    _scope: crate::node_graph::physics::PhysicsStepScope,
+}
+
+const BOX_SIZE: u32 = 64;
+
+impl BoxRun {
+    fn new(fixture: crate::node_graph::liquid::conformance::Fixture, all: bool, poison: bool) -> Self {
+        use crate::node_graph::liquid::conformance::LIQUID_SOLVERS;
+        let device = crate::test_device();
+        let row = LIQUID_SOLVERS
+            .iter()
+            .find(|row| row.type_id == manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID)
+            .expect("the GPU FLIP row");
+        let def = (row.fixture)(fixture).unwrap_or_else(|| panic!("GPU FLIP has no {fixture:?} scene"));
+        let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+        let scope = crate::node_graph::physics::PhysicsStepScope::for_render(true);
+        let manifest = manifold_core::params::ParamManifest::from_params(
+            def.preset_metadata
+                .iter()
+                .flat_map(|metadata| metadata.params.iter().cloned().map(manifold_core::params::Param::bundled))
+                .collect(),
+        );
+        let mut runtime = crate::preset_runtime::PresetRuntime::from_def_with_device(
+            def,
+            &registry,
+            device.arc(),
+            BOX_SIZE,
+            BOX_SIZE,
+            manifold_gpu::GpuTextureFormat::Rgba16Float,
+            None,
+        )
+        .unwrap_or_else(|error| panic!("{fixture:?} builds: {error}"));
+        runtime.set_dump_all(true);
+        let target =
+            crate::render_target::RenderTarget::new(&device, BOX_SIZE, BOX_SIZE, manifold_gpu::GpuTextureFormat::Rgba16Float, "body sparse");
+        let mut run = Self { device, runtime, target, manifest, frame: 0, all, poison, _scope: scope };
+        let started = std::time::Instant::now();
+        loop {
+            run.render(true);
+            if !run.runtime.warmup_pending() {
+                break;
+            }
+            assert!(started.elapsed().as_secs() < 60, "{fixture:?}: asset warm-up did not finish");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        run
+    }
+
+    fn render(&mut self, warming: bool) {
+        use crate::node_graph::fluid::TICK;
+        let time = self.frame as f64 * TICK;
+        let ctx = crate::preset_context::PresetContext {
+            time,
+            beat: time * 2.0,
+            dt: if warming { 0.0 } else { TICK as f32 },
+            width: BOX_SIZE,
+            height: BOX_SIZE,
+            output_width: BOX_SIZE,
+            output_height: BOX_SIZE,
+            aspect: 1.0,
+            owner_key: 0x1C0,
+            is_clip_level: false,
+            frame_count: self.frame,
+            anim_progress: 0.0,
+            trigger_count: 0,
+        };
+        let mut encoder = self.device.create_encoder("body sparse frame");
+        set_all_tiles(self.all);
+        set_poison(self.poison);
+        let status = {
+            let mut gpu = crate::gpu_encoder::GpuEncoder::new(&mut encoder, &self.device);
+            self.runtime.render(&mut gpu, &self.target.texture, &ctx, &self.manifest);
+            gpu.frame_status()
+        };
+        encoder.commit_and_wait_completed();
+        set_all_tiles(false);
+        set_poison(false);
+        use crate::frame_status::FrameRenderStatus;
+        assert!(
+            status == FrameRenderStatus::Complete || (warming && status == FrameRenderStatus::PendingGeometry),
+            "frame {} rendered with status {status:?}",
+            self.frame
+        );
+    }
+
+    /// One tick on.
+    fn step(&mut self) {
+        self.frame += 1;
+        self.render(false);
+    }
+
+    /// The whole of the last-dumped `type_id.port` array, as words.
+    fn words(&self, type_id: &str, port: &str) -> Vec<u32> {
+        let dumps = self.runtime.dump_arrays_all();
+        let dump = dumps
+            .iter()
+            .rev()
+            .find(|dump| dump.type_id == type_id && dump.port == port)
+            .unwrap_or_else(|| panic!("no {type_id}.{port} in the dump"));
+        let bytes = dump.buffer.size();
+        let staging = self.device.create_buffer_shared(bytes);
+        let mut encoder = self.device.create_encoder("body sparse readback");
+        encoder.copy_buffer_to_buffer(dump.buffer, &staging, bytes);
+        encoder.commit_and_wait_completed();
+        read(&staging, bytes as usize / 4)
+    }
+
+    /// What a tick leaves that the bodies touch: the one body's row, its
+    /// reaction, the step's live particles and its solver words. Each is cut
+    /// to what the tick wrote, so a buffer's slack never counts.
+    fn left(&self) -> Vec<(&'static str, Vec<u32>)> {
+        let domain = manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID;
+        let cut = |mut words: Vec<u32>, len: usize| {
+            words.truncate(len);
+            words
+        };
+        let capped = self.words("node.gpu_flip_step", "capped");
+        let particles = (capped.len() - 7) / 2;
+        let particle_words = std::mem::size_of::<crate::node_graph::fluid_particles::FluidParticle>() / 4;
+        // The last solver word is the active-tile share, 1 under the forced
+        // lever by construction; the six before it are the solve's own.
+        let solver = capped[2 * particles..capped.len() - 1].to_vec();
+        vec![
+            ("body row", cut(self.words(domain, "bodies"), std::mem::size_of::<LiquidBody>() / 4)),
+            ("reaction", cut(self.words(domain, "reaction"), 8)),
+            ("particles", cut(self.words("node.gpu_flip_step", "out"), particles * particle_words)),
+            ("solver words", solver),
+        ]
+    }
+}
+
+/// A step with a Box3D body over its active tiles equals the step over
+/// every tile, bit for bit, in the body rows, the reaction, the particles
+/// and the solver words, tick after tick over the submerged and the floating
+/// box; and the same with the step's poison on, which also writes NaN into
+/// every body partial slot before the solve.
+#[test]
+fn gpu_flip_body_step_sparse_matches_all_tiles() {
+    use crate::node_graph::liquid::conformance::Fixture;
+    for fixture in [Fixture::SubmergedBox, Fixture::FloatingBox] {
+        let mut dense = BoxRun::new(fixture, true, false);
+        let mut sparse = BoxRun::new(fixture, false, false);
+        let mut poisoned = BoxRun::new(fixture, false, true);
+        for tick in 1..=90 {
+            dense.step();
+            sparse.step();
+            poisoned.step();
+            let want = dense.left();
+            for (name, run) in [("sparse", &sparse), ("poisoned", &poisoned)] {
+                for ((what, a), (_, b)) in want.iter().zip(run.left()) {
+                    assert_eq!(a.len(), b.len(), "{fixture:?} tick {tick}: {name} {what} is sized differently");
+                    if let Some(i) = first_differing(a, &b) {
+                        panic!(
+                            "{fixture:?} tick {tick}: {name} {what} differs from all tiles first at word {i}: {} ({}) vs {} ({})",
+                            a[i],
+                            f32::from_bits(a[i]),
+                            b[i],
+                            f32::from_bits(b[i])
+                        );
+                    }
+                }
+            }
+        }
+        let words = dense.words("node.gpu_flip_step", "capped");
+        let tail = &words[words.len() - 7..];
+        println!("{fixture:?}: 90 ticks bitwise; last solve {} iterations, capped {}", tail[0], tail[2]);
+    }
 }

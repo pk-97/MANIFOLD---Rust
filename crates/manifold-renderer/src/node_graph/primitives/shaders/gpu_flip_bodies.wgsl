@@ -13,7 +13,15 @@
 // angular velocity change (rad/s), each a vec4 with w = 0. The reaction is
 // 8 floats per body: linear, then angular impulse, each with w = 0.
 //
-// Fixed stride and a fixed reduction tree, so every result is identical run
+// The impulse and the body product run over the pressure solve's fine
+// active tiles (docs/GPU_FLIP_SPARSE_BLOCKS_DESIGN.md D-9): the solve's
+// level-0 flags, lists and live count bound at 12–14, read exactly as
+// gpu_flip_pressure.wgsl reads them. A face a body owns contributes only
+// beside water, and every cell beside water lies in an active tile. Partials
+// are two a tile, indexed by tile; the finalize reads an inactive tile's as
+// 0, which a dense run computes as +0.0, so sparse and dense are bitwise.
+//
+// Fixed slots and a fixed reduction tree, so every result is identical run
 // to run.
 //
 // Ported from FLIP Fluids (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis
@@ -25,8 +33,8 @@
 
 struct Params {
     n: vec3<u32>,
-    // Workgroups per body in the partial pass.
-    groups: u32,
+    // Partial slots per body: two a fine tile.
+    slots: u32,
     lattice_min: vec3<f32>,
     cell_size: f32,
     // The liquid's density, kg/m³.
@@ -73,13 +81,49 @@ struct LiquidBody {
 @group(0) @binding(9) var<storage, read_write> reaction: array<f32>;
 @group(0) @binding(10) var<storage, read_write> product: array<f32>;
 @group(0) @binding(11) var<storage, read_write> solid_rw: array<FaceSample>;
+// The pressure solve's fine level, at word 0 of each: the gate triples
+// (word 0 the live workgroup count), the tile flags and the active list.
+@group(0) @binding(12) var<storage, read> armed: array<u32>;
+@group(0) @binding(13) var<storage, read> flags: array<u32>;
+@group(0) @binding(14) var<storage, read> lists: array<u32>;
 
 const THREADS: u32 = 256u;
+const TILE: i32 = 8;
+// A thread of an active tile whose cell runs past the lattice.
+const NO_CELL: u32 = 0xffffffffu;
 
 var<workgroup> scratch: array<array<f32, 256>, 6>;
 
 fn lattice() -> vec3<i32> {
     return vec3<i32>(u.n);
+}
+
+// The tile helpers as gpu_flip_pressure.wgsl has them (WGSL has no include).
+fn tile_dims(n: vec3<i32>) -> vec3<i32> {
+    return (n + vec3<i32>(TILE - 1)) / TILE;
+}
+
+fn tile_cell(tile: u32, local: u32, n: vec3<i32>) -> u32 {
+    let p = unflatten(tile, tile_dims(n)) * TILE + unflatten(local, vec3<i32>(TILE));
+    if any(p >= n) {
+        return NO_CELL;
+    }
+    return flatten(p, n);
+}
+
+// Whether thread gid's workgroup is inside the fine level's active list; a
+// workgroup past it returns before any barrier, whole.
+fn listed(gid: u32) -> bool {
+    return (gid >> 8u) < armed[0];
+}
+
+fn listed_cell(gid: u32, n: vec3<i32>) -> u32 {
+    return tile_cell(lists[gid >> 9u], gid & 511u, n);
+}
+
+// Thread gid's partial slot: its tile's two, by workgroup.
+fn listed_partial(gid: u32) -> u32 {
+    return 2u * lists[gid >> 9u] + ((gid >> 8u) & 1u);
 }
 
 fn unflatten(idx: u32, m: vec3<i32>) -> vec3<i32> {
@@ -173,36 +217,41 @@ fn face_impulse(p: vec3<i32>, a: i32, n: vec3<i32>, m: vec3<i32>) -> f32 {
     return u.density * h * h * h * w * s.face_weight[a] * (faces[at].face_velocity[a] - s.face_velocity[a]);
 }
 
-// Workgroup (g, b): body b's linear and angular impulse over every inner
-// face it owns, grid-strided from record g · 256, tree-reduced into
-// partials[(b · groups + g) · 8 ..]. A body that takes no reaction sums 0.
+// Workgroup (g, b): body b's linear and angular impulse over the three low
+// faces it owns of each cell in half g of the fine level's active list
+// (listed_cell), tree-reduced into partials[(b · slots + listed_partial) ·
+// 8 ..]. A workgroup past the live count returns whole. A body that takes
+// no reaction sums 0. Every inner face lies on the cell lattice as some
+// cell's low face, and one a body owns pushes only beside water, inside the
+// active tiles.
 @compute @workgroup_size(256, 1, 1)
 fn impulse_partial(
     @builtin(local_invocation_index) li: u32,
     @builtin(workgroup_id) wg: vec3<u32>,
 ) {
+    let gid = wg.x * THREADS + li;
+    if !listed(gid) {
+        return;
+    }
     let b = wg.y;
     let n = lattice();
     let m = n + vec3<i32>(1);
-    let total = u32(m.x) * u32(m.y) * u32(m.z);
+    let idx = listed_cell(gid, n);
     var linear = vec3<f32>(0.0);
     var angular = vec3<f32>(0.0);
-    if b < u.body_count && dynamic_body(b) {
+    if idx != NO_CELL && b < u.body_count && dynamic_body(b) {
         let c = body_centre(b);
-        for (var e = wg.x * THREADS + li; e < total; e = e + u.groups * THREADS) {
-            let p = unflatten(e, m);
-            let code = solid[e].face_velocity.w;
-            for (var a = 0; a < 3; a = a + 1) {
-                var other = p;
-                other[a] = 0;
-                if !all(other < n) || p[a] == 0 || p[a] == n[a] || solid_owner(code, a) != i32(b) {
-                    continue;
-                }
-                var push = vec3<f32>(0.0);
-                push[a] = face_impulse(p, a, n, m);
-                linear = linear + push;
-                angular = angular + cross(face_centre(p, a) - c, push);
+        let p = unflatten(idx, n);
+        let e = flatten(p, m);
+        let code = solid[e].face_velocity.w;
+        for (var a = 0; a < 3; a = a + 1) {
+            if p[a] == 0 || solid_owner(code, a) != i32(b) {
+                continue;
             }
+            var push = vec3<f32>(0.0);
+            push[a] = face_impulse(p, a, n, m);
+            linear = linear + push;
+            angular = angular + cross(face_centre(p, a) - c, push);
         }
     }
     scratch[0][li] = linear.x;
@@ -221,25 +270,51 @@ fn impulse_partial(
         workgroupBarrier();
     }
     if li < 6u {
-        partials[(b * u.groups + wg.x) * 8u + li] = scratch[li][0];
+        partials[(b * u.slots + listed_partial(gid)) * 8u + li] = scratch[li][0];
     }
 }
 
-// One thread per body slot: the partials added in group order into the
-// sums record, the velocity change M⁻¹·impulse for a body that takes a
-// reaction (rigidpressurecoupling.h Body::response), 0 otherwise; with
-// `accumulate`, the impulses added into the reaction. Slots past body_count
-// are zero.
-@compute @workgroup_size(64, 1, 1)
-fn impulse_finalize(@builtin(local_invocation_index) b: u32) {
+// One workgroup per body slot b: every partial of the fine level, in slot
+// order, an inactive tile's read as 0, tree-reduced into the sums record;
+// the velocity change M⁻¹·impulse for a body that takes a reaction
+// (rigidpressurecoupling.h Body::response), 0 otherwise; with `accumulate`,
+// the impulses added into the reaction. A slot past body_count is zero.
+@compute @workgroup_size(256, 1, 1)
+fn impulse_finalize(
+    @builtin(local_invocation_index) li: u32,
+    @builtin(workgroup_id) wg: vec3<u32>,
+) {
+    let b = wg.x;
+    var mine = array<f32, 6>();
+    if b < u.body_count {
+        for (var s = li; s < u.slots; s = s + THREADS) {
+            if flags[s >> 1u] == 0u {
+                continue;
+            }
+            for (var k = 0u; k < 6u; k = k + 1u) {
+                mine[k] = mine[k] + partials[(b * u.slots + s) * 8u + k];
+            }
+        }
+    }
+    for (var k = 0u; k < 6u; k = k + 1u) {
+        scratch[k][li] = mine[k];
+    }
+    workgroupBarrier();
+    for (var width = THREADS / 2u; width > 0u; width = width >> 1u) {
+        if li < width {
+            for (var k = 0u; k < 6u; k = k + 1u) {
+                scratch[k][li] = scratch[k][li] + scratch[k][li + width];
+            }
+        }
+        workgroupBarrier();
+    }
+    if li != 0u {
+        return;
+    }
     var total = array<f32, 16>();
     if b < u.body_count {
         for (var k = 0u; k < 6u; k = k + 1u) {
-            var s = 0.0;
-            for (var g = 0u; g < u.groups; g = g + 1u) {
-                s = s + partials[(b * u.groups + g) * 8u + k];
-            }
-            total[k + k / 3u] = s;
+            total[k + k / 3u] = scratch[k][0];
         }
         if dynamic_body(b) {
             let bd = bodies[u.first + b];
@@ -262,18 +337,22 @@ fn impulse_finalize(@builtin(local_invocation_index) b: u32) {
     }
 }
 
-// One thread per cell, in place on `product`: in a water cell, plus
-// (1/h)·Σ over its six inner owned faces of sign·(c − w)·(dv + dω × r)[a],
-// sign +1 on the cell's high face and −1 on its low, c the cell's open
-// volume, w the face's open fraction, r the face centre less the posed
-// centre of mass, (dv, dω) the owner's sums. With the sums of the same
-// vector's pressure impulse this is ρh·G M⁻¹ Gᵀ x, the bodies' share of the
-// coupled operator (rigidpressurecoupling.h addMatrixProduct).
+// One thread per cell of the fine level's active list, in place on
+// `product`: in a water cell, plus (1/h)·Σ over its six inner owned faces of
+// sign·(c − w)·(dv + dω × r)[a], sign +1 on the cell's high face and −1 on
+// its low, c the cell's open volume, w the face's open fraction, r the face
+// centre less the posed centre of mass, (dv, dω) the owner's sums. With the
+// sums of the same vector's pressure impulse this is ρh·G M⁻¹ Gᵀ x, the
+// bodies' share of the coupled operator (rigidpressurecoupling.h
+// addMatrixProduct). Every water cell is in an active tile.
 @compute @workgroup_size(256)
 fn body_product(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let idx = gid.x;
+    if !listed(gid.x) {
+        return;
+    }
     let n = lattice();
-    if idx >= u32(n.x) * u32(n.y) * u32(n.z) || !(water[idx] > 0.5) {
+    let idx = listed_cell(gid.x, n);
+    if idx == NO_CELL || !(water[idx] > 0.5) {
         return;
     }
     let m = n + vec3<i32>(1);
@@ -327,4 +406,14 @@ fn velocity_change(@builtin(global_invocation_id) gid: vec3<u32>) {
         out.face_velocity[a] = out.face_velocity[a] + basis_dot(a, r, sums_dv(b), sums_dw(b));
     }
     solid_rw[idx] = out;
+}
+
+// Test-only: NaN into every partial of every body slot before an impulse, so
+// a finalize that reads a slot the partial pass did not write, or an
+// inactive tile's, shows in the sums. Never named outside the proofs.
+@compute @workgroup_size(256)
+fn poison_partials(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if gid.x < u.body_count * u.slots * 8u {
+        partials[gid.x] = bitcast<f32>(0x7fc00000u);
+    }
 }

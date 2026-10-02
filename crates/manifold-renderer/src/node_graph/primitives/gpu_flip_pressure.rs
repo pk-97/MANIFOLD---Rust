@@ -668,7 +668,7 @@ impl PressureSolver {
             // its sums, which nothing reads again this solve.
             if let Some((passes, bodies)) = bodies {
                 enc.end_gated_segments();
-                passes.apply(enc, bodies, &b.p, &b.scratch)?;
+                passes.apply(enc, bodies, g.tiles, &b.p, &b.scratch)?;
                 g.begin_round(enc, 2 * k + 1, after);
                 g.dispatch(
                     enc,
@@ -698,6 +698,15 @@ impl PressureSolver {
         }
         enc.end_gated_segments();
         Ok(())
+    }
+
+    /// The fine level's tile buffers after a prepare (the gate triples, the
+    /// flags, the lists; the fine level's words start at 0 in each), for
+    /// the body passes that run outside the solve.
+    pub(crate) fn tiles(&self) -> Result<[&GpuBuffer; 3], String> {
+        let b = self.buffers.as_ref().ok_or("the solver was not prepared")?;
+        debug_assert_eq!(b.bases[0], 0, "the fine level's flags and lists start at word 0");
+        Ok([&b.armed, &b.flags, &b.lists])
     }
 
     /// The last solve's record: |f|∞, iterations run, 1.0 when it stopped by
