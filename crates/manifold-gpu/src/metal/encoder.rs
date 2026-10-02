@@ -299,6 +299,9 @@ impl GpuEncoder {
     }
 
     fn end_current_raw(&mut self) {
+        if let Some(p) = &mut self.profile {
+            p.open_tag = None;
+        }
         let state = std::mem::replace(&mut self.state, EncoderState::None);
         match state {
             EncoderState::None => {}
@@ -321,11 +324,18 @@ impl GpuEncoder {
     /// [`Self::commit_and_wait_profiled`]. The `device` is needed for the
     /// CPU/GPU timestamp calibration pair.
     pub fn enable_dispatch_profiling(&mut self, sampler: GpuTimestampSampler, device: &GpuDevice) {
+        self.enable_profiling_at(sampler, device, ProfileGranularity::Dispatch);
+    }
+
+    /// [`Self::enable_dispatch_profiling`] at a chosen [`ProfileGranularity`].
+    pub fn enable_profiling_at(&mut self, sampler: GpuTimestampSampler, device: &GpuDevice, granularity: ProfileGranularity) {
         let calib_start = profiling::sample_cpu_gpu(device.raw_device());
         self.profile = Some(ProfileState {
             sampler,
             spans: Vec::new(),
             tag: String::new(),
+            granularity,
+            open_tag: None,
             overflow: 0,
             calib_start,
             committed_buffers: Vec::new(),
@@ -376,13 +386,20 @@ impl GpuEncoder {
     }
 
     /// Profiled-mode compute encoder: ends the current encoder and opens a
-    /// fresh one whose stage boundaries write timestamp samples. Falls back
+    /// fresh one whose stage boundaries write timestamp samples, unless the
+    /// granularity keeps the open sampled encoder for this tag. Falls back
     /// to the plain shared encoder when the sample buffer is full.
     fn begin_profiled_compute(
         &mut self,
         label: &str,
         pipeline: &GpuComputePipeline,
     ) -> Retained<ProtocolObject<dyn MTLComputeCommandEncoder>> {
+        self.flush_replay();
+        if let (EncoderState::Compute(enc), Some(p)) = (&self.state, &self.profile)
+            && p.granularity.reuses_open_encoder(p.open_tag.as_deref(), &p.tag)
+        {
+            return enc.clone();
+        }
         self.end_current();
         let threadgroup_bytes = pipeline.state.staticThreadgroupMemoryLength() as u32;
         let Some((sample_buffer, start, end)) = self
@@ -392,6 +409,9 @@ impl GpuEncoder {
         else {
             return self.ensure_compute();
         };
+        if let Some(p) = &mut self.profile {
+            p.open_tag = Some(p.tag.clone());
+        }
         let desc = MTLComputePassDescriptor::computePassDescriptor();
         unsafe {
             let att = desc.sampleBufferAttachments().objectAtIndexedSubscript(0);
