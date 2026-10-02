@@ -1,11 +1,14 @@
 //! The multi-level inclusive prefix sum shared by `node.sort_particles_into_cells`
-//! (bin starts), `node.running_total` and `node.whitewater_step`. One storage
-//! buffer holds every level: level 0 at offset 0 (the values to scan), each
-//! later level the 256-wide block totals of the one before. The last level is
-//! one workgroup — one block, or a tail of up to [`TAIL`] values — so any
-//! length up to 256 × [`TAIL`] scans in three dispatches (blocks, tail, add).
-//! Not a primitive — a scan is barriered and multi-dispatch, so its atoms are
-//! fusion boundaries (ADDING_PRIMITIVES.md, exclusion 1).
+//! (bin starts), `node.running_total` and `node.whitewater_step`. Level 0 is
+//! the values to scan; each later level holds the 256-wide block totals of the
+//! one before. Level 0 lives either in this scan's own storage
+//! ([`PrefixScan::encode_labelled`]) or in the caller's input and output buffers
+//! ([`PrefixScan::encode_into`], no copies either side); the later levels
+//! always live in the scan's storage. The last level is one workgroup — one
+//! block, or a tail of up to [`TAIL`] values — so any length up to
+//! 256 × [`TAIL`] scans in three dispatches (blocks, tail, add). Not a
+//! primitive — a scan is barriered and multi-dispatch, so its atoms are fusion
+//! boundaries (ADDING_PRIMITIVES.md, exclusion 1).
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice};
 
@@ -21,14 +24,16 @@ const MAX_LEVELS: usize = 4;
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct ScanParams {
     n: u32,
-    offset: u32,
+    src_offset: u32,
+    dst_offset: u32,
     parent: u32,
     has_parent: u32,
+    _pad: [u32; 3],
 }
 
-/// (offset, length) of each level for `n` values. Level 0 is scanned in
-/// blocks whatever its length; a later level ends the chain once one
-/// workgroup can scan it.
+/// (offset, length) of each level for `n` values, laid out one after another
+/// from offset 0. Level 0 is scanned in blocks whatever its length; a later
+/// level ends the chain once one workgroup can scan it.
 fn levels(n: usize) -> ([(usize, usize); MAX_LEVELS], usize) {
     let mut levels = [(0, 0); MAX_LEVELS];
     let mut count = 0;
@@ -46,18 +51,24 @@ fn levels(n: usize) -> ([(usize, usize); MAX_LEVELS], usize) {
     (levels, count)
 }
 
-/// Dispatches one `encode(n)` makes.
+/// Dispatches one scan over `n` values makes.
 #[cfg(test)]
 fn dispatches(n: usize) -> usize {
     let (_, count) = levels(n);
     2 * count - 1
 }
 
-/// Words of storage the scan needs for `n` values.
+/// Words of storage every level of a scan over `n` values needs.
 pub(crate) fn storage_words(n: usize) -> usize {
     let (levels, count) = levels(n);
     let (offset, length) = levels[count - 1];
     offset + length
+}
+
+/// Words of storage the levels past level 0 need (never zero: a scan with no
+/// parent level still binds the storage).
+fn parent_words(n: usize) -> usize {
+    (storage_words(n) - n.max(1)).max(1)
 }
 
 #[derive(Default)]
@@ -69,7 +80,7 @@ pub(crate) struct PrefixScan {
     words: usize,
 }
 
-/// Dispatch labels: the block passes and the add passes.
+/// Dispatch labels: the block and tail passes, and the add passes.
 #[derive(Clone, Copy)]
 pub(crate) struct ScanLabels {
     pub blocks: &'static str,
@@ -94,9 +105,19 @@ impl PrefixScan {
         }
     }
 
-    /// The storage buffer, sized for `n` values. Level 0 starts at offset 0.
+    /// The storage buffer sized for every level of `n` values, level 0 at
+    /// offset 0. Pairs with [`Self::encode_labelled`].
     pub(crate) fn buffer(&mut self, device: &GpuDevice, n: usize) -> Result<&GpuBuffer, String> {
-        let words = storage_words(n);
+        self.storage(device, storage_words(n))
+    }
+
+    /// The storage buffer sized for the levels past level 0 of `n` values.
+    /// Pairs with [`Self::encode_into`].
+    pub(crate) fn parents(&mut self, device: &GpuDevice, n: usize) -> Result<&GpuBuffer, String> {
+        self.storage(device, parent_words(n))
+    }
+
+    fn storage(&mut self, device: &GpuDevice, words: usize) -> Result<&GpuBuffer, String> {
         if self.buffer.is_none() || self.words < words {
             let bytes = (words * 4) as u64;
             crate::node_graph::scene_modifier_expand::admit_candidate_bytes(
@@ -110,36 +131,65 @@ impl PrefixScan {
         Ok(self.buffer.as_ref().expect("scan storage allocated"))
     }
 
-    /// Scan level 0 `[0, n)` in place. `prepare` and `buffer` first.
-    pub(crate) fn encode(&self, encoder: &mut manifold_gpu::GpuEncoder, n: usize) {
-        self.encode_labelled(encoder, n, ScanLabels::DEFAULT);
+    /// Scan level 0 `[0, n)` of the storage in place, under the caller's
+    /// dispatch labels so a profile tells one scan site from another.
+    /// `prepare` and `buffer` first.
+    pub(crate) fn encode_labelled(&self, encoder: &mut manifold_gpu::GpuEncoder, n: usize, labels: ScanLabels) {
+        let buffer = self.buffer.as_ref().expect("scan storage prepared");
+        self.encode_levels(encoder, n, buffer, buffer, 0, labels);
     }
 
-    /// [`encode`](Self::encode) with the caller's dispatch labels, so a
-    /// profile tells one scan site from another.
-    pub(crate) fn encode_labelled(&self, encoder: &mut manifold_gpu::GpuEncoder, n: usize, labels: ScanLabels) {
+    /// Scan `src[0, n)` into `dst[0, n)`, the later levels in the storage.
+    /// `prepare` and `parents` first. `src` and `dst` are distinct buffers.
+    pub(crate) fn encode_into(
+        &self,
+        encoder: &mut manifold_gpu::GpuEncoder,
+        n: usize,
+        src: &GpuBuffer,
+        dst: &GpuBuffer,
+    ) {
+        self.encode_levels(encoder, n, src, dst, n.max(1), ScanLabels::DEFAULT);
+    }
+
+    /// `level0_offset` is where level 0 would sit in the storage's layout:
+    /// the later levels' storage offsets are the layout's minus it.
+    fn encode_levels(
+        &self,
+        encoder: &mut manifold_gpu::GpuEncoder,
+        n: usize,
+        src: &GpuBuffer,
+        dst: &GpuBuffer,
+        level0_offset: usize,
+        labels: ScanLabels,
+    ) {
         let blocks = self.blocks.as_ref().expect("scan pipelines prepared");
         let tail = self.tail.as_ref().expect("scan pipelines prepared");
         let add = self.add.as_ref().expect("scan pipelines prepared");
-        let buffer = self.buffer.as_ref().expect("scan storage prepared");
+        let parents = self.buffer.as_ref().expect("scan storage prepared");
         let (levels, count) = levels(n);
         let params = |level: usize| {
             let (offset, length) = levels[level];
-            let parent = if level + 1 < count { Some(levels[level + 1].0) } else { None };
+            let own = if level == 0 { 0 } else { offset - level0_offset };
+            let parent = (level + 1 < count).then(|| levels[level + 1].0 - level0_offset);
             ScanParams {
                 n: length as u32,
-                offset: offset as u32,
+                src_offset: own as u32,
+                dst_offset: own as u32,
                 parent: parent.unwrap_or(0) as u32,
                 has_parent: u32::from(parent.is_some()),
+                _pad: [0; 3],
             }
         };
         let dispatch = |encoder: &mut manifold_gpu::GpuEncoder, pipeline, level: usize, groups: u32, label| {
             let uniforms = params(level);
+            let (src, dst) = if level == 0 { (src, dst) } else { (parents, parents) };
             encoder.dispatch_compute(
                 pipeline,
                 &[
                     GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                    GpuBinding::Buffer { binding: 1, buffer, offset: 0 },
+                    GpuBinding::Buffer { binding: 1, buffer: src, offset: 0 },
+                    GpuBinding::Buffer { binding: 2, buffer: dst, offset: 0 },
+                    GpuBinding::Buffer { binding: 3, buffer: parents, offset: 0 },
                 ],
                 [groups, 1, 1],
                 label,
@@ -178,10 +228,14 @@ mod tests {
         assert_eq!(count, 2);
         assert_eq!(l[1], ((1 << 20) + 3, 4097));
         assert_eq!(storage_words((1 << 20) + 3), (1 << 20) + 3 + 4097);
+        assert_eq!(parent_words((1 << 20) + 3), 4097);
+        assert_eq!(parent_words(256), 1);
+        assert_eq!(parent_words(0), 1);
         let (l, count) = levels(BLOCK * TAIL + 1);
         assert_eq!(count, 3);
         assert_eq!(l[1], (BLOCK * TAIL + 1, TAIL + 1));
         assert_eq!(l[2], (BLOCK * TAIL + 1 + TAIL + 1, 65));
+        assert_eq!(parent_words(BLOCK * TAIL + 1), TAIL + 1 + 65);
     }
 
     #[test]
@@ -200,7 +254,7 @@ mod tests {
 mod gpu_tests {
     use super::*;
 
-    /// The GPU scan equals the CPU inclusive scan word for word, at every
+    /// Both encode paths equal the CPU inclusive scan word for word, at every
     /// level shape: one block, blocks plus a one-block last level, blocks
     /// plus a tail (the three-dispatch case up to 256 × TAIL), and past it.
     #[test]
@@ -215,6 +269,11 @@ mod gpu_tests {
             seed ^= seed << 5;
             seed % 7
         };
+        let read = |buffer: &GpuBuffer, n: usize| -> Vec<u32> {
+            let ptr = buffer.mapped_ptr().expect("shared buffer");
+            // SAFETY: shared buffer holding at least n words; GPU work done.
+            bytemuck::cast_slice(unsafe { std::slice::from_raw_parts(ptr, n * 4) }).to_vec()
+        };
         for n in [1usize, 255, 256, 257, 65_536, 65_537, (1 << 20) + 3, BLOCK * TAIL, BLOCK * TAIL + 1] {
             let values: Vec<u32> = (0..n).map(|_| next()).collect();
             let want: Vec<u32> = values
@@ -224,18 +283,30 @@ mod gpu_tests {
                     Some(*total)
                 })
                 .collect();
+            let check = |got: &[u32], path: &str| {
+                let first_bad = got.iter().zip(&want).position(|(g, w)| g != w);
+                assert_eq!(first_bad, None, "{path}: n = {n} ({} dispatches): word {first_bad:?} differs", dispatches(n));
+            };
+
             let buffer = scan.buffer(&device, n).expect("scan storage");
             // SAFETY: a shared buffer of at least n words; no GPU work in flight.
             unsafe { buffer.write(0, bytemuck::cast_slice(&values)) };
-            let mut encoder = device.create_encoder("prefix scan proof");
-            scan.encode(&mut encoder, n);
+            let mut encoder = device.create_encoder("prefix scan proof (in place)");
+            scan.encode_labelled(&mut encoder, n, ScanLabels::DEFAULT);
             encoder.commit_and_wait_completed();
-            let buffer = scan.buffer.as_ref().expect("scan storage");
-            let ptr = buffer.mapped_ptr().expect("shared buffer");
-            // SAFETY: shared buffer holding at least n words; GPU work done.
-            let got: &[u32] = bytemuck::cast_slice(unsafe { std::slice::from_raw_parts(ptr, n * 4) });
-            let first_bad = got.iter().zip(&want).position(|(g, w)| g != w);
-            assert_eq!(first_bad, None, "n = {n} ({} dispatches): word {:?} differs", dispatches(n), first_bad);
+            check(&read(scan.buffer.as_ref().expect("scan storage"), n), "encode_labelled");
+
+            let bytes = (n * 4) as u64;
+            let src = device.try_create_buffer_shared(bytes).expect("src");
+            let dst = device.try_create_buffer_shared(bytes).expect("dst");
+            // SAFETY: a shared buffer of n words; no GPU work in flight.
+            unsafe { src.write(0, bytemuck::cast_slice(&values)) };
+            scan.parents(&device, n).expect("scan parents");
+            let mut encoder = device.create_encoder("prefix scan proof (into)");
+            scan.encode_into(&mut encoder, n, &src, &dst);
+            encoder.commit_and_wait_completed();
+            check(&read(&dst, n), "encode_into");
+            assert_eq!(read(&src, n), values, "encode_into: n = {n}: src was written");
         }
     }
 }

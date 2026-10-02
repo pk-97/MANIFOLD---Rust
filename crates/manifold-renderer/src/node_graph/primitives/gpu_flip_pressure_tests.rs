@@ -7,7 +7,7 @@
 
 use manifold_gpu::{GpuBuffer, GpuReplayCache};
 
-use super::gpu_flip_pressure::{MAX_ITERATIONS, PROGRESS_FLOATS, PressureSolver, Stop, Water, level_lattices, passes};
+use super::gpu_flip_pressure::{MAX_ITERATIONS, PROGRESS_FLOATS, PressureSolver, ROW_FLOATS, Stop, Water, level_lattices, passes};
 
 /// One saved problem: water cells and the divergence f (zero in air).
 pub(crate) struct Problem {
@@ -667,4 +667,92 @@ fn pressure_module_converges_on_a_pinned_sealed_box() {
     assert!(c.stopped, "pinned sealed box ran {} iterations to the cap", c.iterations);
     assert_eq!(rig.pressure()[0], 0.0, "the pinned cell");
     assert!(residual < F32_FLOOR, "pinned residual {residual:.3e}");
+}
+
+/// A cell's row of L the way the face stencil summed it before the rows
+/// were assembled, in f32 and in the kernel's face order: the six weights
+/// masked to water neighbours, then the ghost and the plain diagonal.
+fn cpu_row(water: &[bool], phi: Option<&[f32]>, c: usize, n: usize, h: f32) -> [f32; ROW_FLOATS] {
+    let mut row = [0.0f32; ROW_FLOATS];
+    if !water[c] {
+        return row;
+    }
+    let at = [c % n, (c / n) % n, c / (n * n)];
+    let stride = [1, n, n * n];
+    let (mut ghost, mut plain) = (0.0f32, 0.0f32);
+    for (k, slot) in row.iter_mut().enumerate().take(6) {
+        let a = k / 2;
+        let open = if k % 2 == 0 { at[a] > 0 } else { at[a] + 1 < n };
+        if !open {
+            continue;
+        }
+        // Every inner face of the rig's box is whole.
+        let w = 1.0f32;
+        ghost += w;
+        plain += w;
+        let q = if k % 2 == 0 { c - stride[a] } else { c + stride[a] };
+        if water[q] {
+            *slot = w;
+        } else if let Some(phi) = phi {
+            let centre = phi[c].min(-0.005 * h);
+            let theta = (phi[q].max(0.0) / (centre + 1e-9)).clamp(-25.0, 25.0);
+            ghost -= w * theta;
+        }
+    }
+    row[6] = ghost;
+    row[7] = plain;
+    row
+}
+
+/// The rows prepare assembles are what the face stencil computed per sweep:
+/// the fused (assembled once) operator against the unfused (recomputed)
+/// one, with the ghost rows and plain, on a Dam Break frame at 64 and the
+/// odd side 37. The weights and the plain diagonal match the CPU bit for
+/// bit; the ghost diagonal's θ is a division the GPU rounds its own way, so
+/// that slot is within `GHOST_ULPS`. (GPU against GPU, the row solve was
+/// bit-equal to the stencil solve it replaced, with and without φ.)
+#[test]
+fn pressure_module_rows_match_the_stencil() {
+    const GHOST_ULPS: u32 = 2;
+    let (n, problems) = load_fixture(DAM_BREAK);
+    for m in [64, 37] {
+        let h = (BOX_METRES / m as f64) as f32;
+        let problem = resample(&problems[2], n, m);
+        let phi = surface_phi(&problem.water, m, h);
+        for with_phi in [false, true] {
+            let mut rig = Rig::new(m);
+            if with_phi {
+                rig = rig.with_phi(&phi);
+            }
+            rig.run(&problem, 1, false);
+            let cells = m * m * m;
+            let copy = rig.device.create_buffer_shared((cells * ROW_FLOATS * 4) as u64);
+            let mut enc = rig.device.create_encoder("gpu-flip-pressure-rows");
+            rig.solver.copy_rows(&mut enc, &copy);
+            enc.commit_and_wait_completed();
+            let ptr = copy.mapped_ptr().expect("shared rows");
+            // SAFETY: the copy completed; the buffer holds cells × ROW_FLOATS floats.
+            let rows = unsafe { std::slice::from_raw_parts(ptr.cast::<f32>().cast_const(), cells * ROW_FLOATS) };
+            let mut wrong = 0;
+            let mut ghosted = 0;
+            let mut ulps = 0;
+            for c in 0..cells {
+                let expected = cpu_row(&problem.water, with_phi.then_some(phi.as_slice()), c, m, h);
+                let got = &rows[c * ROW_FLOATS..(c + 1) * ROW_FLOATS];
+                let exact = (0..ROW_FLOATS).filter(|&k| k != 6).all(|k| got[k].to_bits() == expected[k].to_bits());
+                let apart = got[6].to_bits().abs_diff(expected[6].to_bits());
+                ulps = ulps.max(apart);
+                if !exact || apart > GHOST_ULPS || got[6].is_sign_negative() != expected[6].is_sign_negative() {
+                    wrong += 1;
+                    if wrong <= 3 {
+                        println!("rows {m}³ phi {with_phi} cell {c}: got {got:?}, expected {expected:?}");
+                    }
+                }
+                ghosted += usize::from(expected[6].to_bits() != expected[7].to_bits());
+            }
+            println!("rows {m}³ phi {with_phi}: ghost diagonal at most {ulps} ulp from the CPU's");
+            assert_eq!(wrong, 0, "{m}³ with phi {with_phi}: rows differ from the stencil");
+            assert_eq!(ghosted > 0, with_phi, "{m}³: the ghost diagonal differs from the plain one exactly with φ");
+        }
+    }
 }

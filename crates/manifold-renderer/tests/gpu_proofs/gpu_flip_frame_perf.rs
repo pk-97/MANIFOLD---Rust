@@ -9,11 +9,16 @@
 //! and CPU encode (wall time around `runtime.render`). Timestamped frames
 //! open one encoder per dispatch and turn encode replay off
 //! (ENCODE_REPLAY_DESIGN.md D7), so their split is a ratio, never the budget.
+//! `node.render_scene` is split per pass label and encoder kind the same way.
 //! The whitewater's published counts (foam, bubble, spray, pool full) are
 //! read back every frame through the node preview so a speed change that
 //! moved the particle population shows up beside the time it saved.
 //! Present is not timed here: that is the app with MANIFOLD_RENDER_TRACE=1.
-//! Reported, never gated.
+//! Timing is reported, never gated. Two things are checked: the raster shadow
+//! map stays cached on every timestamped frame (its casters are the static
+//! cubes; the water is transmissive and never a caster), and every timestamped
+//! frame's output is hashed, so a bit-exact render lever is proven by the
+//! hashes matching run to run (the simulation is deterministic).
 
 use std::collections::BTreeMap;
 use std::time::Instant;
@@ -42,6 +47,11 @@ const WHITEWATER: &str = "node.whitewater_step";
 const WHITEWATER_NODE: &str = "whitewater";
 /// Node types split per dispatch label.
 const LABELLED: [&str; 2] = [STEP, WHITEWATER];
+const RENDER: &str = "node.render_scene";
+const SHADOW_LABEL: &str = "node.render_scene shadow";
+const BYTES_PER_PIXEL: u32 = 8;
+const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+const FNV_PRIME: u64 = 0x0100_0000_01b3;
 
 fn manifest(json: &Value) -> ParamManifest {
     let specs: Vec<ParamSpecDef> =
@@ -71,13 +81,24 @@ fn context(frame: i64, tick: u32) -> PresetContext {
 /// A dispatch label of one node: (type id, node tag, label).
 type LabelKey = (String, String, String);
 
+/// A timestamped frame's split: per node type, per dispatch label inside the
+/// labelled solvers, per pass label (with its encoder kind) inside
+/// render_scene, and the output hash.
+struct Split {
+    per_type: BTreeMap<String, f64>,
+    per_step_label: BTreeMap<LabelKey, f64>,
+    per_render_label: BTreeMap<String, f64>,
+    shadow_rendered: bool,
+    hash: u64,
+}
+
 /// One frame's numbers. Plain frames fill `gpu_ms` and `cpu_ms`; timestamped
-/// frames also fill the per-type and per-label splits.
+/// frames also fill the split.
 struct Frame {
     gpu_ms: f64,
     cpu_ms: f64,
     node_error: bool,
-    split: Option<(BTreeMap<String, f64>, BTreeMap<LabelKey, f64>)>,
+    split: Option<Split>,
 }
 
 /// The whitewater node's published counts after a frame (they lag the
@@ -100,6 +121,25 @@ impl Counts {
     fn live(self) -> f64 {
         self.foam + self.bubble + self.spray
     }
+}
+
+fn fnv1a(seed: u64, bytes: impl Iterator<Item = u8>) -> u64 {
+    bytes.fold(seed, |h, b| (h ^ u64::from(b)).wrapping_mul(FNV_PRIME))
+}
+
+/// FNV-1a over the target's bytes, read back through its own encoder so the
+/// copy never lands in the profiled frame.
+fn output_hash(device: &GpuDevice, target: &RenderTarget) -> u64 {
+    let bytes_per_row = target.width * BYTES_PER_PIXEL;
+    let total = u64::from(target.height * bytes_per_row);
+    let buf = device.create_buffer_shared(total);
+    let mut enc = device.create_encoder("gpu flip frame hash");
+    enc.copy_texture_to_buffer(&target.texture, &buf, target.width, target.height, bytes_per_row);
+    enc.commit_and_wait_completed();
+    let ptr = buf.mapped_ptr().expect("shared readback buffer must expose mapped pointer");
+    // SAFETY: the buffer is `total` bytes, shared, and the copy has completed.
+    let bytes: &[u8] = unsafe { std::slice::from_raw_parts(ptr, total as usize) };
+    fnv1a(FNV_OFFSET, bytes.iter().copied())
 }
 
 fn render(
@@ -142,7 +182,9 @@ fn render(
     let steps: BTreeMap<String, String> =
         runtime.take_step_profiles().into_iter().map(|step| (step.tag, step.type_id)).collect();
     let mut per_type = BTreeMap::new();
-    let mut per_label = BTreeMap::new();
+    let mut per_step_label = BTreeMap::new();
+    let mut per_render_label = BTreeMap::new();
+    let mut shadow_rendered = false;
     for span in &profile.spans {
         let Some(type_id) = steps.get(&span.tag) else {
             *per_type.entry("(untagged)".to_owned()).or_insert(0.0) += span.millis;
@@ -151,10 +193,19 @@ fn render(
         *per_type.entry(type_id.clone()).or_insert(0.0) += span.millis;
         if LABELLED.contains(&type_id.as_str()) {
             let key = (type_id.clone(), span.tag.clone(), span.label.clone());
-            *per_label.entry(key).or_insert(0.0) += span.millis;
+            *per_step_label.entry(key).or_insert(0.0) += span.millis;
+        } else if type_id == RENDER {
+            shadow_rendered |= span.label == SHADOW_LABEL;
+            *per_render_label.entry(format!("{:?} {}", span.kind, span.label)).or_insert(0.0) += span.millis;
         }
     }
-    Frame { gpu_ms, cpu_ms, node_error, split: Some((per_type, per_label)) }
+    let hash = output_hash(device, target);
+    Frame {
+        gpu_ms,
+        cpu_ms,
+        node_error,
+        split: Some(Split { per_type, per_step_label, per_render_label, shadow_rendered, hash }),
+    }
 }
 
 fn percentile(samples: &[f64], fraction: f64) -> f64 {
@@ -172,15 +223,63 @@ fn print_split(title: &str, columns: &BTreeMap<String, Vec<f64>>) {
     }
 }
 
+/// What the probe renders: the preset as it ships, or with one of its draws
+/// removed so a render pass can be attributed to the object that owns it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Variant {
+    Shipped,
+    /// Whitewater Budget at its card minimum (1000 of 100000): the foam,
+    /// spray and bubble instanced draws all but vanish.
+    WhitewaterMinimum,
+    /// The water's scene object unwired from render_scene: no transmissive
+    /// water layer, so its depth prepass, colour copy and layer draw vanish.
+    WaterUnwired,
+}
+
+/// Node ids in the shipped preset (`WaterDamBreakGpuFlip.json`).
+const WATER_OBJECT_NODE: u64 = 442;
+const RENDER_SCENE_NODE: u64 = 463;
+const WHITEWATER_BUDGET_PARAM: &str = "whitewater_capacity";
+
 #[test]
 fn gpu_flip_frame_perf() {
+    probe(Variant::Shipped);
+}
+
+#[test]
+fn gpu_flip_frame_perf_whitewater_minimum() {
+    probe(Variant::WhitewaterMinimum);
+}
+
+#[test]
+fn gpu_flip_frame_perf_water_unwired() {
+    probe(Variant::WaterUnwired);
+}
+
+fn probe(variant: Variant) {
     let harness = harness::shared();
     let device = &harness.device;
     let sampler = device.create_timestamp_sampler(16384).expect("GPU timestamp sampler");
     let _offline = PhysicsStepScope::for_render(true);
     let target = RenderTarget::new(device, WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float, "gpu-flip-frame-perf");
-    let json: Value = serde_json::from_str(PRESET).expect("GPU FLIP dam break preset parses");
-    let params = manifest(&json);
+    let mut json: Value = serde_json::from_str(PRESET).expect("GPU FLIP dam break preset parses");
+    if variant == Variant::WaterUnwired {
+        let wires = json["wires"].as_array_mut().expect("preset wires");
+        let before = wires.len();
+        wires.retain(|wire| {
+            !(wire["fromNode"] == WATER_OBJECT_NODE && wire["toNode"] == RENDER_SCENE_NODE)
+        });
+        assert_eq!(before - wires.len(), 1, "exactly one wire carries the water into render_scene");
+    }
+    let mut params = manifest(&json);
+    if variant == Variant::WhitewaterMinimum {
+        let budget = params.get_mut(WHITEWATER_BUDGET_PARAM).expect("whitewater budget card param");
+        let minimum = budget.spec.min;
+        assert!(minimum <= 1000.0, "the budget floor moved: {minimum}");
+        budget.value = minimum;
+        budget.base = minimum;
+    }
+    println!("gpu_flip_frame_perf variant: {variant:?}");
     let mut runtime = PresetRuntime::from_json_str_with_device(
         &json.to_string(),
         &PrimitiveRegistry::with_builtin(),
@@ -210,7 +309,10 @@ fn gpu_flip_frame_perf() {
     let mut stamped_gpu = Vec::new();
     let mut per_type: BTreeMap<String, Vec<f64>> = BTreeMap::new();
     let mut per_label: BTreeMap<LabelKey, Vec<f64>> = BTreeMap::new();
+    let mut per_render: BTreeMap<String, Vec<f64>> = BTreeMap::new();
     let mut counts: Vec<Counts> = Vec::new();
+    let mut shadow_frames = Vec::new();
+    let mut hashes = Vec::new();
     let mut node_error_frames = 0usize;
     for tick in 0..MEASURED_FRAMES {
         frame += 1;
@@ -230,14 +332,21 @@ fn gpu_flip_frame_perf() {
                 plain_gpu.push(result.gpu_ms);
                 plain_cpu.push(result.cpu_ms);
             }
-            Some((types, labels)) => {
+            Some(split) => {
                 stamped_gpu.push(result.gpu_ms);
-                for (name, ms) in types {
+                for (name, ms) in split.per_type {
                     per_type.entry(name).or_default().push(ms);
                 }
-                for (name, ms) in labels {
+                for (name, ms) in split.per_step_label {
                     per_label.entry(name).or_default().push(ms);
                 }
+                for (name, ms) in split.per_render_label {
+                    per_render.entry(name).or_default().push(ms);
+                }
+                if split.shadow_rendered {
+                    shadow_frames.push(tick);
+                }
+                hashes.push((tick, split.hash));
             }
         }
     }
@@ -277,4 +386,15 @@ fn gpu_flip_frame_perf() {
             .collect();
         print_split(&format!("{type_id} per dispatch label"), &labels);
     }
+    print_split("render_scene per pass label", &per_render);
+    let combined = fnv1a(FNV_OFFSET, hashes.iter().flat_map(|&(_, hash)| hash.to_le_bytes()));
+    println!("  output hash over the timestamped frames: {combined:016x}");
+    for (tick, hash) in &hashes {
+        println!("    tick {tick}: {hash:016x}");
+    }
+    println!("  timestamped frames that re-rendered the shadow map: {shadow_frames:?}");
+    assert!(
+        shadow_frames.is_empty(),
+        "the raster shadow map must stay cached: its casters are static, so a re-render means the dirty key moved"
+    );
 }

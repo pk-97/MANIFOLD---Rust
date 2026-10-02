@@ -73,6 +73,34 @@ struct FaceSample {
 // One partial per workgroup of a folded reduction (the fine lattice's group
 // count, no cap): the finalize and check passes sum or max them in order.
 @group(0) @binding(16) var<storage, read_write> partials: array<f32>;
+// A level's operator rows, assembled once at prepare (rows_main): the sweep
+// and residual passes read a cell's row instead of its six faces, six
+// neighbours' water and φ. Non-water cells hold zero rows.
+@group(0) @binding(17) var<storage, read> rows: array<Row>;
+@group(0) @binding(18) var<storage, read_write> out_rows: array<Row>;
+
+// One cell's row of L: lo = w to −x, +x, −y, +y; hi = w to −z, +z, then the
+// ghost diagonal (Σ w − Σ w·θ over air neighbours) and the plain one (Σ w).
+// A weight is 0 where the neighbour is not water or past the box, so the
+// neighbour sum skips exactly what the face stencil skipped.
+struct Row {
+    lo: vec4<f32>,
+    hi: vec4<f32>,
+};
+
+fn row_weight(row: Row, k: u32) -> f32 {
+    if k < 4u {
+        return row.lo[k];
+    }
+    return row.hi[k - 4u];
+}
+
+// Cell idx's neighbour across face k (axis k / 2, low side for even k):
+// the weight is positive only inside the box, so this never leaves it.
+fn across(idx: u32, k: u32) -> u32 {
+    let stride = select(select(u.nx * u.ny, u.nx, k < 4u), 1u, k < 2u);
+    return select(idx + stride, idx - stride, (k & 1u) == 0u);
+}
 
 const DIVISOR_FLOOR: f32 = 1e-30;
 // Rounds a solve may run: the solver's MAX_ITERATIONS.
@@ -200,34 +228,72 @@ fn ghost_ratio(own: u32, air: u32) -> f32 {
     return clamp(max(phi[air], 0.0) / (centre + 1e-9), -25.0, 25.0);
 }
 
-// The diagonal: Σ w over p's faces, less w·θ per air neighbour; and Σ w ·
-// value over its water neighbours, reading `value` from `out` (smoothing in
-// place), `aux`, or nowhere (mode 2: the diagonal only).
+// One thread per cell: its row of L from its faces, its neighbours' water
+// and, with `ghost`, φ. The sums run in the face order −x, +x, −y, +y, −z,
+// +z, the order the stencil summed in before the rows were assembled, so a
+// solve on rows is bit for bit the solve that recomputed them. A cell that
+// is not water, or has no open face, is a zero row.
+@compute @workgroup_size(256, 1, 1)
+fn rows_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let n = lattice();
+    let idx = gid.x;
+    if idx >= u.nx * u.ny * u.nz {
+        return;
+    }
+    var row = Row(vec4<f32>(0.0), vec4<f32>(0.0));
+    if is_water(idx) {
+        let p = coords(idx, n);
+        var ghost = 0.0;
+        var plain = 0.0;
+        for (var k = 0u; k < 6u; k = k + 1u) {
+            let a = i32(k / 2u);
+            let d = select(-1, 1, (k & 1u) == 1u);
+            let w = face_weight(p, a, d, n);
+            if w > 0.0 {
+                ghost = ghost + w;
+                plain = plain + w;
+                var q = p;
+                q[a] = p[a] + d;
+                let at = cell(q, n);
+                if is_water(at) {
+                    if k < 4u {
+                        row.lo[k] = w;
+                    } else {
+                        row.hi[k - 4u] = w;
+                    }
+                } else {
+                    ghost = ghost - w * ghost_ratio(idx, at);
+                }
+            }
+        }
+        row.hi.z = ghost;
+        row.hi.w = plain;
+    }
+    out_rows[idx] = row;
+}
+
+// The cell's diagonal (the ghost one with `ghost` 1, else the plain one)
+// and Σ w · value over its water neighbours, `value` read from `out`
+// (smoothing in place), `aux`, or nowhere (source 2: the diagonal only).
 struct Stencil {
     diagonal: f32,
     sum: f32,
 };
 
-fn stencil(p: vec3<i32>, n: vec3<i32>, source: u32) -> Stencil {
-    var s = Stencil(0.0, 0.0);
-    let own = cell(p, n);
-    for (var a = 0; a < 3; a = a + 1) {
-        for (var d = -1; d <= 1; d = d + 2) {
-            let w = face_weight(p, a, d, n);
-            if w > 0.0 {
-                s.diagonal = s.diagonal + w;
-                var q = p;
-                q[a] = p[a] + d;
-                let at = cell(q, n);
-                if is_water(at) {
-                    if source == 0u {
-                        s.sum = s.sum + w * out[at];
-                    } else if source == 1u {
-                        s.sum = s.sum + w * aux[at];
-                    }
-                } else {
-                    s.diagonal = s.diagonal - w * ghost_ratio(own, at);
-                }
+fn stencil(idx: u32, source: u32) -> Stencil {
+    let row = rows[idx];
+    var s = Stencil(select(row.hi.w, row.hi.z, u.ghost == 1u), 0.0);
+    if source == 2u {
+        return s;
+    }
+    for (var k = 0u; k < 6u; k = k + 1u) {
+        let w = row_weight(row, k);
+        if w > 0.0 {
+            let at = across(idx, k);
+            if source == 0u {
+                s.sum = s.sum + w * out[at];
+            } else {
+                s.sum = s.sum + w * aux[at];
             }
         }
     }
@@ -252,7 +318,7 @@ fn smooth_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_inv
         var e = out[idx];
         if swept {
             let h2 = u.cell_size * u.cell_size;
-            let s = stencil(p, n, select(0u, 2u, from_zero()));
+            let s = stencil(idx, select(0u, 2u, from_zero()));
             e = select(0.0, (s.sum - h2 * src[idx]) / s.diagonal, s.diagonal > 0.0);
             out[idx] = e;
         } else if from_zero() {
@@ -272,13 +338,12 @@ fn smooth_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_inv
 // value · result (p · s) into the workgroup's partial.
 @compute @workgroup_size(256, 1, 1)
 fn residual_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wg: vec3<u32>) {
-    let n = lattice();
     let idx = gid.x;
     var product = 0.0;
     if idx < u.nx * u.ny * u.nz {
         var result = 0.0;
         if is_water(idx) {
-            let s = stencil(coords(idx, n), n, 1u);
+            let s = stencil(idx, 1u);
             if s.diagonal > 0.0 {
                 let rhs = select(src[idx], 0.0, from_zero());
                 result = rhs - (s.sum - s.diagonal * aux[idx]) / (u.cell_size * u.cell_size);
