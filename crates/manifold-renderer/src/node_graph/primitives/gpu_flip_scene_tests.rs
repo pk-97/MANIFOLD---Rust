@@ -943,8 +943,8 @@ fn gpu_flip_replay_changes_nothing() {
     assert_eq!(direct.replay_stats().replayed, 0, "the direct run replayed nothing");
 }
 
-/// The speed pass's measure at 64, Steps 1 (BUG-l2h3.24): the Dam Break and
-/// the still pool, 300 frames each, under Auto and Fixed(16), whose gap is
+/// The speed pass's measure, Steps 1 (BUG-l2h3.24): the Dam Break and the
+/// still pool at 64 and the Dam Break at 128, 300 frames each, under Auto and Fixed(16), whose gap is
 /// the cost of Auto's recorded but gated-off iterations. Every tenth frame
 /// is timestamped; the rest give the plain
 /// GPU frame and the CPU encode. Prints medians, the solver's iterations a
@@ -956,7 +956,11 @@ fn gpu_flip_speed_measure() {
         v.sort_by(f64::total_cmp);
         v[v.len() / 2]
     }
-    let scenes = [("dam break", WaterScene::dam_break(64).with_steps(1)), ("still pool", WaterScene::still_pool(64).with_steps(1))];
+    let scenes = [
+        ("dam break", WaterScene::dam_break(64).with_steps(1)),
+        ("still pool", WaterScene::still_pool(64).with_steps(1)),
+        ("dam break 128", WaterScene::dam_break(128).with_steps(1)),
+    ];
     for (name, scene) in scenes {
         for (mode, scene) in [("auto", scene), ("fixed16", scene.with_iterations(16))] {
             let mut run = Run::new(scene);
