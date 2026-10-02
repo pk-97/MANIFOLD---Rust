@@ -402,6 +402,8 @@ mod gpu_flip_atom_tests;
 mod gpu_flip_body_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_flip_step_tests;
+#[cfg(test)]
+mod gpu_flip_narrow_band_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_flip_scene_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
