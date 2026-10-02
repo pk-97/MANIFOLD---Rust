@@ -102,6 +102,38 @@ class ScopeTests(unittest.TestCase):
         p = plan([shader], users=lambda s: [P + "gpu_flip_step.rs"], repo=self._repo_with(shader))
         self.assertIn("gpu_flip_", p.filters)
 
+    def test_clock_and_fields_get_force_proofs_not_body_or_step(self):
+        for path in (R + "node_graph/liquid/clock.rs", R + "node_graph/liquid/fields.rs",
+                     R + "node_graph/liquid/fields/tests.rs"):
+            p = plan([path])
+            self.assertIn("gpu_flip_face_gravity", p.filters, path)
+            self.assertNotIn("gpu_flip_", p.filters, path)
+            self.assertFalse(any(f.startswith("gpu_flip_body") for f in p.filters), path)
+
+    def test_domain_nodes_are_narrow(self):
+        p = plan([P + "gpu_flip_domain.rs", P + "matter_domain.rs"])
+        self.assertIn("gpu_flip_domain_", p.filters)
+        self.assertIn("matter_scene::", p.filters)
+        self.assertNotIn("gpu_flip_", p.filters)
+        self.assertNotIn("matter_", p.filters)
+
+    def test_body_step_and_pressure_paths_still_pull_the_body_proofs(self):
+        for path in (P + "gpu_flip_bodies.rs", P + "gpu_flip_body_tests.rs",
+                     P + "gpu_flip_step.rs", P + "gpu_flip_pressure.rs",
+                     R + "node_graph/liquid/bodies.rs", R + "node_graph/liquid/coupling.rs"):
+            self.assertIn("gpu_flip_", plan([path]).filters, path)
+
+    def test_mixed_diff_keeps_the_broad_row_whole(self):
+        p = plan([R + "node_graph/liquid/clock.rs", P + "gpu_flip_step.rs"])
+        self.assertIn("gpu_flip_", p.filters)
+
+    def test_reporters_skip_unless_their_own_file_is_touched(self):
+        for name in g.REPORTER_SKIPS:
+            self.assertIn(name, plan([P + "gpu_flip_step.rs"]).final_skips() +
+                          plan([P + "matter_fill.rs"]).final_skips())
+        own = plan(["crates/manifold-renderer/tests/gpu_proofs/matter_cost_probe.rs"])
+        self.assertNotIn("matter_cost_probe", own.final_skips())
+
     def with_times(self, times):
         d = tempfile.mkdtemp()
         self.addCleanup(lambda: __import__("shutil").rmtree(d, ignore_errors=True))
