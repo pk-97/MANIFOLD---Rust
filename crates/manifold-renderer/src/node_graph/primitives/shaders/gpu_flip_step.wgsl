@@ -421,9 +421,12 @@ fn face_gravity(@builtin(global_invocation_id) gid: vec3<u32>) {
         if u.force_lattices > 0 {
             accel = accel + gravity_force(x, origin, force_base, u32(a));
         }
-        // An inflow holds its water at its velocity: a face inside one takes
-        // no body force (_getInflowConstrainedVelocityComponents).
-        if u.region_count > 0 && region_holding(x, 2.0, false) >= 0 {
+        // A valid face inside an inflow takes no body force
+        // (_getInflowConstrainedVelocityComponents 6112-6175, before the body
+        // forces; valid is weight > 0, the engine's _validVelocities after
+        // extension). Nothing pins faces after the solve: the engine's
+        // _constrainVelocityFields is solids only.
+        if u.region_count > 0 && here.face_weight[a] > 0.0 && region_holding(x, 2.0, false) >= 0 {
             accel = 0.0;
         }
         var v = fma(accel, u.step_dt, here.face_velocity[a]);
