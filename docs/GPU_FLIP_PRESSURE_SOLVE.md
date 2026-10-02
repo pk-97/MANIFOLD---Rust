@@ -315,7 +315,7 @@ Peter's scenes have boxes and obstacles in the water, and the engine's Dam Break
   - `solid_face_velocity` writes each solid face's owner code in velocity w: Σ over axes a of (b + 1)·256^a, b the body's index from the tick's first row. At most 64 bodies (`MAX_FLUID_ROLES`, a compile-time assert).
   - The reaction is 8 floats per body (linear then angular impulse, w = 0), aliased step to step and added to over the tick; the domain clears it at the tick's start. A step with dynamic bodies and no reaction wired, or one too short, is a named error.
   - The per-body sums are a fixed two-pass reduction (partials, then one workgroup of 64), so the result is the same run to run.
-  - The friction reaction, ρh³·w·f·(u − v_s) per cut face, is ours: the engine keeps none.
+  - The pressure is a body's only reaction, as in the engine: the constraint's friction acts on the water alone. An explicit friction reaction diverges once ρ·h·f·A_wet/m passes 2, which every light body does (the Dam Break obstacle at 1 kg sat at 15 to 136). An implicit one is a feature for later.
   - The density solve stays uncoupled.
 - **Coupled, as built** (`gpu_flip_domain.rs`, `liquid/coupling.rs`). The domain owns the scene's Box3D world through the shared rigid owner: it steps the world once per settled tick, chains the reaction through the tick's steps, and hands it back at the host sync. Measured on the conformance scenes at 32³ (`tests/gpu_proofs/liquid_conformance.rs`):
   - A box as dense as the water, held under it, feels 627.1 N against ρgV 627.8 N (−0.12%).
