@@ -817,6 +817,33 @@ fn gpu_flip_kick_lift_pool_volume_probe() {
     }
 }
 
+/// Which change freezes the kick pool: five frames each of 4 m at 24 fps,
+/// 10.755 m at 60 fps, 128 at 4 m, and all three, under a net 30 m/s² lift.
+#[cfg(feature = "water-race-probes")]
+#[test]
+fn gpu_flip_kick_freeze_split_probe() {
+    for (n, size, fps) in [(64, 4.0, 24.0), (64, 10.755186, 60.0), (128, 4.0, 60.0), (128, 10.755186, 24.0)] {
+        let mut run = Run::new(WaterScene::pool(n, size, 0.58450913));
+        run.set_fps(fps);
+        let y0: f64 = run.particles().iter().map(|p| f64::from(p.position_radius[1])).sum();
+        for frame in 1..=5 {
+            run.set_gravity(0.0, 40.0 - G);
+            run.frame();
+            let s = run.liquid_stats();
+            let y: f64 = run.particles().iter().map(|p| f64::from(p.position_radius[1])).sum();
+            println!(
+                "freeze split {n}³ {size} m {fps} fps frame {frame}: seconds {:.4}, live {}, pressure iterations {}, max speed {:.3}, kinetic {:.3e}, mean y moved {:.2e} m",
+                run.frames as f64 / run.fps,
+                s.live,
+                s.pressure_iterations,
+                s.max_speed,
+                s.kinetic,
+                (y - y0) / s.live.max(1) as f64
+            );
+        }
+    }
+}
+
 /// One 300-frame run of the kick-lift pool, kicking for its first `kick_frames`. The force is
 /// sampled once per 24 fps display frame and held over that frame's 2-3
 /// liquid ticks, as the live force path does.
