@@ -1838,7 +1838,7 @@ fn gpu_flip_inflow_emits_at_empty_sites_into_free_slots() {
         .bind(15, &[shape])
         .bind(16, &atlas)
         .bind(36, &[row])
-        .run("emit_flags", &params, 28, site_count, site_count);
+        .run("emit_flags", &params, 37, site_count, site_count);
     assert_eq!(got, want, "the flags are the empty inflow sites");
 
     // Two short of room: a full pool emits fewer, never errors.
@@ -1854,7 +1854,7 @@ fn gpu_flip_inflow_emits_at_empty_sites_into_free_slots() {
         .bind(36, &[row])
         .bind(37, &scan)
         .bind(38, &pool)
-        .run("emit_write", &params, 30, pool.len(), site_count);
+        .run("emit_write", &params, 38, pool.len(), site_count);
     assert_eq!(written[..sorted.len()], sorted[..], "the live prefix is untouched");
     assert!(written[capacity..].iter().all(|p| *p == FluidParticle::default()), "nothing past the pool's slots");
     let emitted: Vec<usize> = (0..site_count).filter(|&idx| want[idx] == 1).collect();
@@ -1883,7 +1883,7 @@ fn gpu_flip_inflow_emits_at_empty_sites_into_free_slots() {
         .bind(36, &[row])
         .bind(37, &scan)
         .bind(38, &pool)
-        .run("emit_write", &params, 30, pool.len(), site_count);
+        .run("emit_write", &params, 38, pool.len(), site_count);
     let substep = 3u32 * 64 + 1;
     let mut spread = 0.0f64;
     for (slot, &idx) in (sorted.len()..capacity).zip(&emitted) {
