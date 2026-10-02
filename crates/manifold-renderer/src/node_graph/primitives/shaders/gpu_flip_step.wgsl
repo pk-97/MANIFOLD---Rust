@@ -24,8 +24,8 @@
 // levelsetutils.cpp and meshlevelset.cpp (the solid open fractions),
 // fluidsimulation.cpp (the solids' face velocity, the constraint, and the
 // particles' solid collision and removal), interpolation.cpp (the solid
-// distance's gradient) and pressuresolver.cpp (divergence and the pressure
-// subtraction).
+// distance's gradient) and pressuresolver.cpp (divergence, the pressure
+// subtraction and the sealed pockets' solid velocity).
 
 struct Params {
     // Cells per axis.
@@ -709,6 +709,222 @@ fn water_from_phi(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     cell_out[idx] = select(0.0, 1.0, phi[idx] < 0.0);
+}
+
+// Sealed pockets (PressureSolver::_conditionSolidVelocityField): water a
+// solid closes off from air cannot take the solid's push, so its solid face
+// velocity is zeroed and the pressure solve stays consistent. Water cells
+// link through a face whose open fraction is at least POCKET_LINK. A water
+// cell touches air through a linked face to a dry cell
+// (_computeBordersAirGridThread) or on an open tank face, which drains
+// (open_band). Whether a region reaches air spreads from those cells by line
+// sweeps along each axis, repeated until a round changes nothing.
+@group(0) @binding(23) var<storage, read_write> pocket: array<u32>;
+// Words 0-8: the three sweeps' indirect dispatch sizes (x, y, z); 9: a
+// sweep changed a cell this round; 10: a sealed cell still links to one
+// that reaches air (the spread stopped at its cap unfinished).
+@group(0) @binding(24) var<storage, read_write> pocket_gate: array<u32>;
+
+const POCKET_DRY: u32 = 0u;
+const POCKET_SEALED: u32 = 1u;
+const POCKET_AIR: u32 = 2u;
+const POCKET_LINK: f32 = 1e-6;
+const POCKET_CHANGED: u32 = 9u;
+const POCKET_UNRESOLVED: u32 = 10u;
+// The pocket count's word among the solver words `capped` is bound at.
+const POCKET_WORD: u32 = 3u;
+
+fn pocket_linked(c: vec3<i32>, d: vec3<i32>, a: i32, n: vec3<i32>, m: vec3<i32>) -> bool {
+    // c and d are neighbours along a; the face between is the higher's low face.
+    var f = c;
+    f[a] = max(c[a], d[a]);
+    return open_at(f, a, n, m) >= POCKET_LINK;
+}
+
+// One thread per cell: dry, sealed, or water touching air.
+@compute @workgroup_size(256)
+fn pocket_seed(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    if idx >= cell_total() {
+        return;
+    }
+    if !(water[idx] > 0.5) {
+        pocket[idx] = POCKET_DRY;
+        return;
+    }
+    let n = lattice();
+    let m = n + vec3<i32>(1);
+    let p = unflatten(idx, n);
+    var air = false;
+    for (var a = 0; a < 3; a = a + 1) {
+        let low_open = (u.closed_faces & (1u << u32(2 * a))) == 0u;
+        let high_open = (u.closed_faces & (1u << u32(2 * a + 1))) == 0u;
+        if (low_open && p[a] == 0) || (high_open && p[a] == n[a] - 1) {
+            air = true;
+        }
+        for (var s = -1; s <= 1; s = s + 2) {
+            var d = p;
+            d[a] = p[a] + s;
+            if d[a] >= 0 && d[a] < n[a] && !(water[flatten(d, n)] > 0.5) && pocket_linked(p, d, a, n, m) {
+                air = true;
+            }
+        }
+    }
+    pocket[idx] = select(POCKET_SEALED, POCKET_AIR, air);
+}
+
+// One thread: the first round runs.
+@compute @workgroup_size(1)
+fn pocket_start() {
+    pocket_gate[POCKET_CHANGED] = 1u;
+    pocket_gate[POCKET_UNRESOLVED] = 0u;
+}
+
+// One thread: no spread this step (no moving solid, or bodies in the solve).
+@compute @workgroup_size(1)
+fn pocket_idle() {
+    pocket_gate[POCKET_CHANGED] = 0u;
+    pocket_gate[POCKET_UNRESOLVED] = 0u;
+}
+
+// One thread: this round's sweeps run only when the last round changed a
+// cell.
+@compute @workgroup_size(1)
+fn pocket_round() {
+    let go = pocket_gate[POCKET_CHANGED] != 0u;
+    let n = u.n;
+    let lines = vec3<u32>(n.y * n.z, n.z * n.x, n.x * n.y);
+    for (var a = 0u; a < 3u; a = a + 1u) {
+        pocket_gate[3u * a] = select(0u, (lines[a] + 255u) / 256u, go);
+        pocket_gate[3u * a + 1u] = 1u;
+        pocket_gate[3u * a + 2u] = 1u;
+    }
+    pocket_gate[POCKET_CHANGED] = 0u;
+}
+
+// One thread per line along axis a, forward then back; each line is its
+// thread's alone.
+fn pocket_sweep(t: u32, a: i32) {
+    let n = lattice();
+    let m = n + vec3<i32>(1);
+    let axes = cross_axes(a);
+    if t >= u32(n[axes.x] * n[axes.y]) {
+        return;
+    }
+    var p = vec3<i32>(0);
+    p[axes.x] = i32(t % u32(n[axes.x]));
+    p[axes.y] = i32(t / u32(n[axes.x]));
+    var changed = false;
+    for (var i = 1; i < n[a]; i = i + 1) {
+        var c = p;
+        c[a] = i;
+        var b = p;
+        b[a] = i - 1;
+        let at = flatten(c, n);
+        if pocket[at] == POCKET_SEALED && pocket[flatten(b, n)] == POCKET_AIR && pocket_linked(c, b, a, n, m) {
+            pocket[at] = POCKET_AIR;
+            changed = true;
+        }
+    }
+    for (var i = n[a] - 2; i >= 0; i = i - 1) {
+        var c = p;
+        c[a] = i;
+        var b = p;
+        b[a] = i + 1;
+        let at = flatten(c, n);
+        if pocket[at] == POCKET_SEALED && pocket[flatten(b, n)] == POCKET_AIR && pocket_linked(c, b, a, n, m) {
+            pocket[at] = POCKET_AIR;
+            changed = true;
+        }
+    }
+    if changed {
+        pocket_gate[POCKET_CHANGED] = 1u;
+    }
+}
+
+@compute @workgroup_size(256)
+fn pocket_sweep_x(@builtin(global_invocation_id) gid: vec3<u32>) {
+    pocket_sweep(gid.x, 0);
+}
+
+@compute @workgroup_size(256)
+fn pocket_sweep_y(@builtin(global_invocation_id) gid: vec3<u32>) {
+    pocket_sweep(gid.x, 1);
+}
+
+@compute @workgroup_size(256)
+fn pocket_sweep_z(@builtin(global_invocation_id) gid: vec3<u32>) {
+    pocket_sweep(gid.x, 2);
+}
+
+// A sealed cell with a linked neighbour of the given state.
+fn pocket_neighbour(c: vec3<i32>, state: u32, n: vec3<i32>, m: vec3<i32>) -> bool {
+    for (var a = 0; a < 3; a = a + 1) {
+        for (var s = -1; s <= 1; s = s + 2) {
+            var d = c;
+            d[a] = c[a] + s;
+            if d[a] >= 0 && d[a] < n[a] && pocket[flatten(d, n)] == state && pocket_linked(c, d, a, n, m) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+// One thread per cell, after the last round: a sealed cell still linked to
+// one that reaches air means the spread hit its cap unfinished.
+@compute @workgroup_size(256)
+fn pocket_check(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    if idx >= cell_total() {
+        return;
+    }
+    let n = lattice();
+    let c = unflatten(idx, n);
+    if pocket[idx] == POCKET_SEALED && pocket_neighbour(c, POCKET_AIR, n, n + vec3<i32>(1)) {
+        pocket_gate[POCKET_UNRESOLVED] = 1u;
+    }
+}
+
+// A cell of a sealed region of more than one cell; a lone sealed cell keeps
+// its solid velocity, as the engine skips a group of one.
+fn pocket_isolated(c: vec3<i32>, n: vec3<i32>, m: vec3<i32>) -> bool {
+    return pocket[flatten(c, n)] == POCKET_SEALED && pocket_neighbour(c, POCKET_SEALED, n, m);
+}
+
+// One thread per face record, in place on the solid velocity in
+// `faces_out`: each of the six faces of an isolated cell takes velocity 0.
+@compute @workgroup_size(256)
+fn pocket_condition(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    if idx >= face_total() {
+        return;
+    }
+    let n = lattice();
+    let m = n + vec3<i32>(1);
+    let p = unflatten(idx, m);
+    for (var a = 0; a < 3; a = a + 1) {
+        if !face_exists(p, n, a) {
+            continue;
+        }
+        var below = p;
+        below[a] = p[a] - 1;
+        if (p[a] < n[a] && pocket_isolated(p, n, m)) || (p[a] > 0 && pocket_isolated(below, n, m)) {
+            faces_out[idx].face_velocity[a] = 0.0;
+        }
+    }
+}
+
+// One thread, `capped` bound at the solver words: steps this tick whose
+// spread hit its cap unfinished.
+@compute @workgroup_size(1)
+fn pocket_tally() {
+    let unresolved = pocket_gate[POCKET_UNRESOLVED];
+    if u.step_in_tick == 0 {
+        capped[POCKET_WORD] = unresolved;
+    } else {
+        capped[POCKET_WORD] = capped[POCKET_WORD] + unresolved;
+    }
 }
 
 // Open fraction of face a at record f: 0 on a box wall, which is closed in

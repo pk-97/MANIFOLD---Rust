@@ -267,6 +267,12 @@ impl Primitive for LiquidState {
                 stats.unconverged
             ));
         }
+        if let Some(stats) = self.last_stats.filter(|s| s.unresolved_pockets > 0) {
+            ctx.error(format!(
+                "Liquid State: {} steps last tick could not tell which water a solid seals off from air: the spread reached its cap, one round per cell of the lattice's longest side, unfinished",
+                stats.unresolved_pockets
+            ));
+        }
     }
 
     fn substep_iteration(&mut self, iteration: u32, scalars: &mut [f32]) -> bool {
