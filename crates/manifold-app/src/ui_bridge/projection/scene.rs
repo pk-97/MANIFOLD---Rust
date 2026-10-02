@@ -593,6 +593,27 @@ mod ownership_tests {
         assert!(sections.iter().all(|section| !section.contains("Camera")), "{sections:?}");
     }
 
+    /// The inspector hides the Physics row when a Known object sits on a
+    /// liquid domain and carries no physics of its own (BUG-ejcb, BUG-4lfm).
+    /// The GPU FLIP water is such an object, so the row is keyed off these
+    /// two facts, not off the solver's type id.
+    #[test]
+    fn gpu_flip_water_is_a_liquid_object_without_physics() {
+        use manifold_renderer::node_graph::scene_vm::{SceneObjectVm, SceneVm};
+        let def = manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("WaterDamBreakGpuFlip")).unwrap();
+        let vm = SceneVm::from_def(def).expect("the GPU dam break is a scene");
+        let water = vm.objects.iter().find_map(|object| match object {
+            SceneObjectVm::Known(row) if row.liquid_domain.is_some() => Some(row),
+            _ => None,
+        }).expect("the GPU FLIP water is a Known scene object on a liquid domain");
+        assert!(water.physics.is_none(), "water has no physics of its own: {}", water.name);
+        let domain = water.liquid_domain.as_ref().unwrap();
+        let domain_type = def.nodes.iter()
+            .find(|node| node.node_id == domain.node)
+            .map(|node| node.type_id.as_str());
+        assert_eq!(domain_type, Some(manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID));
+    }
+
     #[test]
     fn imported_gltf_scene_controls_have_one_owner() {
         for fixture in ["cc0__oomurasaki_azalea_r._x_pulchrum.glb", "cc0___mushroom.glb"] {
