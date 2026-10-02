@@ -23,7 +23,7 @@ use crate::node_graph::fluid_role::{FluidRole, MAX_FLUID_ROLES};
 use crate::node_graph::liquid::bodies::{BodiesStatus, LiquidBodies, LiquidBody, LiquidShape};
 use crate::node_graph::liquid::body_buffers::LiquidBodyBuffers;
 use crate::node_graph::liquid::clock::LiquidClock;
-use crate::node_graph::liquid::coupling::{LiquidRigidOwner, PendingTick, takes_reaction};
+use crate::node_graph::liquid::coupling::{DomainWalls, LiquidRigidOwner, PendingTick, takes_reaction};
 use crate::node_graph::liquid::fields::{self, FieldLattice, LiquidFields, LiquidImpulses};
 use crate::node_graph::liquid::lattice::LiquidLattice;
 use crate::node_graph::matter::coupling::{ReactionScale, body_limit, decode};
@@ -353,6 +353,8 @@ pub struct Coupling {
     error: Option<String>,
     previous_reset: Option<f32>,
     owner: Option<LiquidRigidOwner>,
+    /// This frame's domain box and closed faces: the bodies' walls.
+    walls: DomainWalls,
     /// How the owner's pending tick's reaction words decode.
     scale: Option<ReactionScale>,
     /// The owner was built since the clock last restarted: the next frame
@@ -706,6 +708,7 @@ impl MatterDomain {
             return Err(error);
         }
         let clock = if self.coupled.mode { ctx.gpu.as_deref().and_then(|gpu| gpu.device.frame_clock()) } else { None };
+        self.coupled.walls = DomainWalls::of(&layout, closed_faces(ctx.params));
         if self.coupled.mode && !self.observe_rigid(ctx.time.seconds.0, speed)? {
             return Ok(None);
         }
@@ -872,7 +875,7 @@ impl MatterDomain {
     /// on its reset or a change of bodies. False while the world's inputs are
     /// still pending.
     fn observe_rigid(&mut self, transport: f64, speed: f32) -> Result<bool, String> {
-        let Coupling { observation, colliders, error, previous_reset, owner, owner_fresh, epochs, .. } = &mut self.coupled;
+        let Coupling { observation, colliders, error, previous_reset, owner, owner_fresh, epochs, walls, .. } = &mut self.coupled;
         if let Some(error) = error {
             return Err(error.clone());
         }
@@ -890,9 +893,9 @@ impl MatterDomain {
             .validate()?;
         let reset_edge = previous_reset.is_some_and(|previous| previous != observation.reset);
         *previous_reset = Some(observation.reset);
-        if reset_edge || owner.as_ref().is_none_or(|owner| !owner.matches(&observation.inputs, *colliders)) {
+        if reset_edge || owner.as_ref().is_none_or(|owner| !owner.matches(&observation.inputs, *walls, *colliders)) {
             *epochs += 1;
-            *owner = Some(LiquidRigidOwner::new(&observation.inputs, *colliders, *epochs, owner.as_ref())?);
+            *owner = Some(LiquidRigidOwner::new(&observation.inputs, *walls, *colliders, *epochs, owner.as_ref())?);
             *owner_fresh = true;
         }
         Ok(true)
@@ -928,7 +931,7 @@ impl MatterDomain {
     fn rebuild_owner(&mut self) -> Result<(), String> {
         let observation = self.coupled.observation.as_ref().ok_or("Matter coupling: the rigid observation is missing")?;
         self.coupled.epochs += 1;
-        let owner = LiquidRigidOwner::new(&observation.inputs, self.coupled.colliders, self.coupled.epochs, self.coupled.owner.as_ref())?;
+        let owner = LiquidRigidOwner::new(&observation.inputs, self.coupled.walls, self.coupled.colliders, self.coupled.epochs, self.coupled.owner.as_ref())?;
         self.coupled.owner = Some(owner);
         Ok(())
     }

@@ -140,7 +140,7 @@ fn authored_vortex(viscosity: f32) -> (EffectGraphDef, NodeId, String) {
     );
     for (node, name, value) in [
         (mesh, "size", 0.5),
-        (body, "mass", 90.0),
+        (body, "density", 1000.0),
         (pose, "pos_y", 1.05),
         (pose, "scale_y", 0.8),
         (pose, "scale_z", 0.9),

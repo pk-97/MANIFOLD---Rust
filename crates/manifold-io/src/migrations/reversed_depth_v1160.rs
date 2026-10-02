@@ -75,7 +75,7 @@ mod tests {
         let before = project("node.coc_from_depth");
         let after: Value = serde_json::from_str(&crate::migrate::migrate_if_needed(&before.to_string()).unwrap()).unwrap();
         assert_eq!(after["timeline"], before["timeline"]);
-        assert_eq!(after["projectVersion"], "1.16.0");
+        assert_eq!(after["projectVersion"], manifold_core::project::CURRENT_PROJECT_VERSION);
         assert!(super::super::take_migration_notes().is_empty());
         let second: Value = serde_json::from_str(&crate::migrate::migrate_if_needed(&after.to_string()).unwrap()).unwrap();
         assert_eq!(second, after);

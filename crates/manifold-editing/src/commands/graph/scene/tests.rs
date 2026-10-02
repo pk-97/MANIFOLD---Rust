@@ -181,7 +181,7 @@ fn physics_scene_graph() -> EffectGraphDef {
     );
     let mut body_params = BTreeMap::new();
     body_params.insert(
-        "mass".to_string(),
+        "density".to_string(),
         SerializedParamValue::Float { value: 1.0 },
     );
     def.nodes.extend([
@@ -661,7 +661,7 @@ fn compound_parent_rename_keeps_each_child_name_and_duplicate_fans_out_parent_vi
 }
 
 fn body_params() -> Vec<SceneParamMetadata> {
-    vec![scene_param_meta("mass", "Mass"), scene_param_meta("friction", "Friction"), scene_param_meta("bounce", "Bounce")]
+    vec![scene_param_meta("density", "Density"), scene_param_meta("friction", "Friction"), scene_param_meta("bounce", "Bounce")]
 }
 
 fn unused_group_input(id: u32, node_id: &str) -> EffectGraphNode {
@@ -869,6 +869,21 @@ fn imported_physics_enable_disable_group_roundtrips_shared_world_and_bindings() 
     assert!(disabled.nodes.iter().any(|node| node.type_id == "node.physics_world"));
     assert!(!disabled.nodes.iter().any(|node| node.type_id == "node.rigid_body"));
     assert!(!disabled.preset_metadata.as_ref().unwrap().string_bindings.iter().any(|binding| matches!(&binding.target, BindingTarget::Node { node_id, .. } if *node_id == body.node_id)));
+}
+
+/// Mass follows size: Enable leaves the body on its default density and
+/// never writes a mass, so the renderer derives mass from the hull volume.
+#[test]
+fn enable_physics_writes_no_mass() {
+    let graph = imported_group_scene_graph();
+    let (mut project, fx) = project_with_graph(graph.clone());
+    let mut enable = EnableSceneObjectPhysicsCommand::new(GraphTarget::Effect(fx.clone()), 0, 0, body_params(), graph);
+    enable.execute(&mut project);
+    assert!(enable.was_applied(), "enable rejected: {:?}", enable.rejection_reason());
+    let enabled = graph_of(&project, &fx);
+    let group = enabled.nodes.iter().find(|node| node.id == 10).unwrap().group.as_ref().unwrap();
+    let body = group.nodes.iter().find(|node| node.type_id == "node.rigid_body").unwrap();
+    assert!(!body.params.contains_key("mass"), "Enable wrote a mass: {:?}", body.params);
 }
 
 #[test]
@@ -2100,7 +2115,7 @@ fn duplicate_physics_scene_object_preserves_numeric_and_string_bindings() {
                 default_value: 1.0,
                 target: BindingTarget::Node {
                     node_id: body_node_id,
-                    param: "mass".to_string(),
+                    param: "density".to_string(),
                 },
                 convert: Default::default(),
                 user_added: false,
@@ -2160,7 +2175,7 @@ fn duplicate_physics_scene_object_preserves_numeric_and_string_bindings() {
         assert!(meta.bindings.iter().any(|binding| {
             matches!(&binding.target, BindingTarget::Node { node_id, param }
                 if node_id.as_str() == def.nodes.iter().find(|node| node.id == cloned_body).unwrap().node_id.as_str()
-                    && param == "mass")
+                    && param == "density")
         }));
         assert!(meta.string_bindings.iter().any(|binding| {
             matches!(&binding.target, BindingTarget::Node { node_id, param }
@@ -2239,7 +2254,7 @@ fn duplicate_physics_scene_object_renames_sections_and_repeated_ids() {
                 default_value: 1.0,
                 target: BindingTarget::Node {
                     node_id: body_node_id,
-                    param: "mass".to_string(),
+                    param: "density".to_string(),
                 },
                 convert: Default::default(),
                 user_added: false,
@@ -2354,7 +2369,7 @@ fn physics_modulation_inputs_clone_and_remove_with_the_owned_object() {
             from_node: 300,
             from_port: "out".to_string(),
             to_node: 101,
-            to_port: "mass".to_string(),
+            to_port: "density".to_string(),
         },
     ]);
     let (mut project, fx) = project_with_graph(graph);
@@ -2385,7 +2400,7 @@ fn physics_modulation_inputs_clone_and_remove_with_the_owned_object() {
         wire.from_node == 300 && wire.to_node == clone_transform && wire.to_port == "rot_y"
     }));
     assert!(def.wires.iter().any(|wire| {
-        wire.from_node == 300 && wire.to_node == clone_body && wire.to_port == "mass"
+        wire.from_node == 300 && wire.to_node == clone_body && wire.to_port == "density"
     }));
 
     let mut remove = RemoveSceneObjectCommand::new(
@@ -2407,7 +2422,7 @@ fn physics_modulation_inputs_clone_and_remove_with_the_owned_object() {
     assert!(
         def.wires
             .iter()
-            .any(|wire| { wire.from_node == 300 && wire.to_node == 101 && wire.to_port == "mass" })
+            .any(|wire| { wire.from_node == 300 && wire.to_node == 101 && wire.to_port == "density" })
     );
     assert!(!def.wires.iter().any(|wire| {
         wire.from_node == 300 && (wire.to_node == clone_body || wire.to_node == clone_transform)
@@ -2514,7 +2529,7 @@ fn physics_generator_duplicate_refreshes_live_manifest_and_roundtrips_identity()
         mirror_catalog_default(),
     )
     .with_physics_world(
-        vec![scene_param_meta("mass", "Mass")],
+        vec![scene_param_meta("density", "Density")],
         vec![scene_param_meta("color_r", "Red")],
     );
     add.execute(&mut project);
