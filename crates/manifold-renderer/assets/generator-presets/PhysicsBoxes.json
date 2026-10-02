@@ -250,9 +250,9 @@
           "type": "Enum",
           "value": 0
         },
-        "mass": {
+        "density": {
           "type": "Float",
-          "value": 1.0
+          "value": 600.0
         },
         "friction": {
           "type": "Float",
@@ -364,9 +364,9 @@
           "type": "Enum",
           "value": 1
         },
-        "mass": {
+        "density": {
           "type": "Float",
-          "value": 1.0
+          "value": 600.0
         },
         "friction": {
           "type": "Float",
@@ -522,9 +522,9 @@
           "type": "Enum",
           "value": 0
         },
-        "mass": {
+        "density": {
           "type": "Float",
-          "value": 1.0
+          "value": 600.0
         },
         "friction": {
           "type": "Float",
@@ -636,9 +636,9 @@
           "type": "Enum",
           "value": 0
         },
-        "mass": {
+        "density": {
           "type": "Float",
-          "value": 1.0
+          "value": 600.0
         },
         "friction": {
           "type": "Float",

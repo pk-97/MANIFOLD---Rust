@@ -150,6 +150,13 @@ pub fn migrate_if_needed(json: &str) -> Result<String, serde_json::Error> {
         root["projectVersion"] = Value::String("1.16.0".to_string());
     }
 
+    // 2026-10-02: rigid bodies take density; a stored mass was size-blind,
+    // so it is dropped along with wires and cards bound to it.
+    if is_version_less_than(&version, "1.17.0") {
+        crate::migrations::rigid_body_density_v1170::migrate(&mut root);
+        root["projectVersion"] = Value::String("1.17.0".to_string());
+    }
+
     serde_json::to_string_pretty(&root)
 }
 
