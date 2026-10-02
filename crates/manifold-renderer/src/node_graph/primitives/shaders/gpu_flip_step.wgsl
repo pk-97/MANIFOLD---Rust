@@ -1362,10 +1362,32 @@ fn pocket_condition(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 }
 
-// One thread, `capped` bound at the solver words: steps this tick whose
-// spread hit its cap unfinished.
-@compute @workgroup_size(1)
-fn pocket_tally() {
+// The solver words holding the step's dry, sealed and air cell counts.
+const POCKET_COUNT_WORD: u32 = 7u;
+var<workgroup> pocket_counts: array<atomic<u32>, 3>;
+
+// One workgroup, `capped` bound at the solver words: steps this tick whose
+// spread hit its cap unfinished, and the step's dry, sealed and air cells.
+@compute @workgroup_size(256)
+fn pocket_tally(@builtin(local_invocation_index) lane: u32) {
+    if lane < 3u {
+        atomicStore(&pocket_counts[lane], 0u);
+    }
+    workgroupBarrier();
+    var counts = vec3<u32>(0u);
+    for (var idx = lane; idx < cell_total(); idx = idx + 256u) {
+        counts[min(pocket[idx], 2u)] += 1u;
+    }
+    for (var k = 0u; k < 3u; k = k + 1u) {
+        atomicAdd(&pocket_counts[k], counts[k]);
+    }
+    workgroupBarrier();
+    if lane != 0u {
+        return;
+    }
+    for (var k = 0u; k < 3u; k = k + 1u) {
+        capped[POCKET_COUNT_WORD + k] = atomicLoad(&pocket_counts[k]);
+    }
     let unresolved = pocket_gate[POCKET_UNRESOLVED];
     if u.step_in_tick == 0 {
         capped[POCKET_WORD] = unresolved;

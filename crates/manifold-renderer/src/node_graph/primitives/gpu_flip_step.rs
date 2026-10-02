@@ -673,10 +673,10 @@ fn encode_pockets(
         "gpu_flip.step.pocket_check",
     );
     // Adds the step's unfinished spread to the solver word, cleared on the
-    // tick's first step.
+    // tick's first step, and writes the step's dry, sealed and air counts.
     enc.dispatch_compute(
         &pipes.pocket_tally,
-        &[uniform(params), buffer(24, &l.pocket_gate), GpuBinding::Buffer { binding: 22, buffer: capped, offset: tally }],
+        &[uniform(params), buffer(23, &l.pocket), buffer(24, &l.pocket_gate), GpuBinding::Buffer { binding: 22, buffer: capped, offset: tally }],
         [1, 1, 1],
         "gpu_flip.step.pocket_tally",
     );

@@ -1844,11 +1844,16 @@ fn gpu_flip_pocket_spread_reports_an_unfinished_cap() {
     pass.run::<u32>("pocket_start", &params, 24, 11, 1);
     pass.run::<u32>("pocket_check", &params, 24, 11, cell_len());
     assert_eq!(pass.bound::<u32>(24, 11)[10], 1, "an unfinished spread is flagged");
-    pass.bind(22, &[5u32, 6, 7, 9]);
-    let first: Vec<u32> = pass.run("pocket_tally", &StepParams { step_in_tick: 0, ..params }, 22, 4, 1);
-    assert_eq!(first, [5, 6, 7, 1], "the tick's first step sets the word");
-    let second: Vec<u32> = pass.run("pocket_tally", &StepParams { step_in_tick: 1, ..params }, 22, 4, 1);
-    assert_eq!(second, [5, 6, 7, 2], "later steps add to it");
+    // The step's dry, sealed and air counts follow in words 7-9.
+    let pocket = pass.bound::<u32>(23, cell_len());
+    let counts: Vec<u32> = (0..3).map(|k| pocket.iter().filter(|&&s| s == k).count() as u32).collect();
+    assert_eq!(counts, [0, (cell_len() - N[1] * N[2]) as u32, (N[1] * N[2]) as u32], "every cell water, the -X layer touching air");
+    pass.bind(22, &[5u32, 6, 7, 9, 0, 0, 0, 77, 77, 77]);
+    let first: Vec<u32> = pass.run("pocket_tally", &StepParams { step_in_tick: 0, ..params }, 22, 10, 1);
+    assert_eq!(first[..4], [5, 6, 7, 1], "the tick's first step sets the word");
+    assert_eq!(first[7..], counts[..], "the step's dry, sealed and air cells");
+    let second: Vec<u32> = pass.run("pocket_tally", &StepParams { step_in_tick: 1, ..params }, 22, 10, 1);
+    assert_eq!(second[..4], [5, 6, 7, 2], "later steps add to it");
     assert_eq!(super::gpu_flip_step::pocket_rounds([6, 5, 4]), 6, "the cap is the longest side");
 }
 

@@ -1186,8 +1186,8 @@ fn lid_pressed_into_pool(mask: u32) -> (f64, f64, f64) {
         run.frame();
         let stats = run.liquid_stats();
         println!(
-            "GPU FLIP pressed lid mask {mask} frame {frame:2}: {} live, {} pressure iterations, {} density, {} unconverged, {} unresolved, {:.3e}/{:.3e} m³/s removed from sealed pressure/density",
-            stats.live, stats.pressure_iterations, stats.density_iterations, stats.unconverged, stats.unresolved_pockets, stats.pressure_flux_removed, stats.density_flux_removed
+            "GPU FLIP pressed lid mask {mask} frame {frame:2}: {} live, {} pressure iterations, {} density, {} unconverged, {} unresolved, {:.3e}/{:.3e} m³/s removed from sealed pressure/density, dry/sealed/air cells {:?}",
+            stats.live, stats.pressure_iterations, stats.density_iterations, stats.unconverged, stats.unresolved_pockets, stats.pressure_flux_removed, stats.density_flux_removed, stats.pocket_cells
         );
         removed += f64::from(stats.pressure_flux_removed);
         let half = (0.5 * side) as f32;

@@ -33,13 +33,14 @@ pub(crate) fn partial_bytes(count: u32) -> u64 {
 /// reached its cap unfinished, 14 and 15 the volume rate (m³/s) taken off
 /// sealed pockets' pressure and density right-hand sides so their solves
 /// have a solution, 16 the share of the lattice's 8³ tiles the cell passes
-/// ran over (8-16 are 0 without a `capped` input). Floats are stored as
-/// bits.
-pub const LIQUID_STATS_WORDS: u32 = 17;
+/// ran over, 17-19 the last substep's dry, sealed and air cells as the
+/// sealed-pocket pass classed them (8-19 are 0 without a `capped` input).
+/// Floats are stored as bits.
+pub const LIQUID_STATS_WORDS: u32 = 20;
 
 /// The solver's words at the end of a `capped` array, after two words a
-/// particle slot: words 10-16 of the stats.
-pub const SOLVER_WORDS: u32 = 7;
+/// particle slot: words 10-19 of the stats.
+pub const SOLVER_WORDS: u32 = 10;
 
 /// One tick's statistics, decoded from the stats words.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -71,6 +72,9 @@ pub struct LiquidTickStats {
     /// (GPU_FLIP_SPARSE_BLOCKS_DESIGN.md section 5 (Stats)), the tick's
     /// last substep.
     pub active_tiles: f32,
+    /// The last substep's cells the sealed-pocket pass classed dry, sealed
+    /// (water no air reaches) and touching air.
+    pub pocket_cells: [u32; 3],
 }
 
 impl LiquidTickStats {
@@ -92,6 +96,7 @@ impl LiquidTickStats {
             pressure_flux_removed: f(14),
             density_flux_removed: f(15),
             active_tiles: f(16),
+            pocket_cells: [w[17], w[18], w[19]],
         }
     }
 }
@@ -246,9 +251,9 @@ mod tests {
 
     #[test]
     fn liquid_stats_words_decode() {
-        let words = [2, 5, 1.5f32.to_bits(), 0.25f32.to_bits(), 1.0f32.to_bits(), (-2.0f32).to_bits(), 0.0f32.to_bits(), 3.0f32.to_bits(), 4, 1, 40, 12, 1, 2, 0.5f32.to_bits(), 0.125f32.to_bits(), 0.3125f32.to_bits()];
+        let words = [2, 5, 1.5f32.to_bits(), 0.25f32.to_bits(), 1.0f32.to_bits(), (-2.0f32).to_bits(), 0.0f32.to_bits(), 3.0f32.to_bits(), 4, 1, 40, 12, 1, 2, 0.5f32.to_bits(), 0.125f32.to_bits(), 0.3125f32.to_bits(), 3, 4, 5];
         let stats = LiquidTickStats::from_words(&words);
-        assert_eq!(stats, LiquidTickStats { nonfinite: 2, live: 5, max_speed: 1.5, mass: 0.25, momentum: [1.0, -2.0, 0.0], kinetic: 3.0, speed_capped: 4, push_refused: 1, pressure_iterations: 40, density_iterations: 12, unconverged: 1, unresolved_pockets: 2, pressure_flux_removed: 0.5, density_flux_removed: 0.125, active_tiles: 0.3125 });
+        assert_eq!(stats, LiquidTickStats { nonfinite: 2, live: 5, max_speed: 1.5, mass: 0.25, momentum: [1.0, -2.0, 0.0], kinetic: 3.0, speed_capped: 4, push_refused: 1, pressure_iterations: 40, density_iterations: 12, unconverged: 1, unresolved_pockets: 2, pressure_flux_removed: 0.5, density_flux_removed: 0.125, active_tiles: 0.3125, pocket_cells: [3, 4, 5] });
         assert_eq!(words.len(), LIQUID_STATS_WORDS as usize);
     }
 }
