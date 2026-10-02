@@ -1740,11 +1740,11 @@ struct ObjectDraw<'ctx> {
     /// structure, AO, GI, reflections, and primary hits on both
     /// paths.
     cast_shadows: bool,
-    /// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: this object routes to
-    /// Pass B AND wants the opaque-scene-color snapshot bound at
-    /// @binding(27) (`Blend` or PBR `transmission_factor > 0`). Every
-    /// other draw binds the 1×1 dummy there instead — same always-
-    /// bind ABI-stub discipline as `normal_map`/`mr_map`/etc above.
+    /// GLTF_MATERIAL_EXTENSIONS_DESIGN.md E2a: PBR with
+    /// `transmission_factor > 0`. Routes to Pass B, takes the opaque-scene-
+    /// color snapshot before its draw and samples it at @binding(27). A
+    /// Blend draw routes to Pass B too but never reads the snapshot, so it
+    /// binds the 1×1 dummy there like every other draw.
     is_transmissive: bool,
     /// RAYTRACING_DESIGN.md section 12 AM1: kept so the post-loop
     /// remap below can rebuild a Blend draw's pipeline WITHOUT aux
@@ -4983,11 +4983,16 @@ impl RenderScene {
                         "node.render_scene transmissive depth prepass",
                     );
                 }
-                gpu.native_enc.copy_texture_to_texture(
-                    resolve_target, opaque_scene_color, width, height, 1,
-                );
-                if opaque_scene_color.mip_level_count() > 1 {
-                    gpu.native_enc.generate_mipmaps(opaque_scene_color);
+                // Only a transmissive shader samples the snapshot
+                // (`transmission_factor > 0` gates every read); a plain
+                // Blend layer composites straight onto `resolve_target`.
+                if draw.is_transmissive {
+                    gpu.native_enc.copy_texture_to_texture(
+                        resolve_target, opaque_scene_color, width, height, 1,
+                    );
+                    if opaque_scene_color.mip_level_count() > 1 {
+                        gpu.native_enc.generate_mipmaps(opaque_scene_color);
+                    }
                 }
                 gpu.native_enc.draw_instanced_depth_batch(
                     resolve_target,

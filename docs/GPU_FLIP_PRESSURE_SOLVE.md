@@ -102,7 +102,8 @@ The reductions are folded into the passes that hold the vectors: the last fine s
 V(r) is one V-cycle for L e = r, from e = 0:
 
 - The depth follows the lattice: each level halves every side, rounding up, until every side is 4 or less (`level_lattices`). An odd side's extra coarse half-cell is solid. A coarse cell is water only if all its children are water; a coarse face's open fraction is the mean of the fine faces it covers. `PressureSolver::prepare` builds the coarse levels once per water, and both solves of a step reuse them.
-- Pre-smooth: 2 rounds of red-black Gauss-Seidel (red then black), from zero. The finest level's sweeps and residual, and the conjugate gradient's −Lp, read φ (the ghost rows of section 2); every coarser level runs zero φ.
+- The operator is assembled once per level at prepare, as the reference's `Level` does (`rows_main`): each cell's row is its six face weights (0 where the neighbour is not water) and two diagonals, the ghost one (section 2) and the plain one, 32 bytes a cell. Sweeps, residuals and the conjugate gradient's −Lp read rows and the neighbour vector only, never the faces, water or φ. The fine level's ghost diagonal needs φ, so a solve with φ after a prepare without it is a named error. The rows are what the per-sweep stencil computed, bit for bit in the solve (the row solve matched the stencil solve it replaced, plain and ghost, at 64 and 37) and against a CPU model in `pressure_module_rows_match_the_stencil` (weights and plain diagonal exact; the ghost diagonal within 2 ulp, the GPU's θ division).
+- Pre-smooth: 2 rounds of red-black Gauss-Seidel (red then black), from zero. The finest level's sweeps and residual, and the conjugate gradient's −Lp, use the ghost diagonal (the ghost rows of section 2); every coarser level runs zero φ, the plain one.
 - Residual r − Le, full-weighting restriction to the next level (the transpose of prolongation, masked to coarse water).
 - Recurse. The coarsest level, at most 4³ = 64 cells, is solved exactly by its inverse (`shaders/coarse_inverse.wgsl`, one workgroup), built at prepare.
 - Prolong-add the correction, trilinear (3/4 and 1/4 per axis, clamped at the box), masked to water.
@@ -169,6 +170,8 @@ Iteration trend of the atom graph's solve, median residual and GPU ms per solve:
 The residual stops falling near 1e-5: that is f32.
 
 Folding the reductions (2026-10-02, `pressure_module_passes_match_the_count`, prepare plus an 8-iteration solve, quiet GPU): 64³ 4.59 → 3.87 ms, 128³ 19.89 → 18.68 ms; 436 → 411 and 524 → 499 passes. The 8-iteration residuals on every reference problem moved only in their third significant digit, both ways (Dam Break 64³ frame 0: 3.304e-6 → 3.276e-6; 128³ frame 30: 2.767e-5 → 2.773e-5); the f32 floor is the recursion, not the sum order.
+
+Assembling the rows (2026-10-02, same measure, same box back to back, after the open-face weights landed): 64³ 6.4 → 3.8 ms, 37³ 3.4 → 1.9 ms, 128³ 19.3 → 18.9 ms; the prepare grows by one rows pass per level (9 + 411 → 14 + 411 at 64³). The pressure is bit for bit what the per-sweep stencil solved. In a 64³ Dam Break frame (`gpu_flip_speed_measure`, Auto) the smooth share fell 11.2 → 9.1 ms and the frame 21.7 → 19.8 ms; the frame probe's p50 34.8 → 32.2 ms. 128³ moved little: its sweeps were already bandwidth-bound on the vector, not the operator.
 
 On solves dumped from a running FFT Dam Break (splash frames 50, 70 and 90, both steps; the atom graph's probe, deleted with it), the GPU residual at the shipped counts is below the FFT solve's on every solve: main 9.0e-6 to 5.2e-5 against 1.4e-3 to 3.8e-3 at 64³, and 7.0e-5 to 4.7e-4 against 4.4e-2 to 8.4e-2 at 128³; density 1.8e-3 to 8.5e-3 against 4.2e-2 to 0.11 at 64³, and 2.3e-3 to 2.2e-2 against 0.35 to 0.92 at 128³.
 
@@ -341,6 +344,6 @@ Peter's scenes have boxes and obstacles in the water, and the engine's Dam Break
 | Item | Revives when |
 |---|---|
 | Warm start from last step's pressure | a measured iteration saving at the worst frame (it saved none for the FFT solve) |
-| Fused smoother levels | the smoothing row passes half the solve, or Vulkan's dispatch cost; the reductions are already folded (section 3 (the solve)) |
+| Fused smoother levels | the smoothing row passes half the solve, or Vulkan's dispatch cost; the reductions are folded and the operator is assembled once per level (section 3 (the solve)) |
 | APIC on faces | a visible PIC/FLIP noise complaint |
 | Wrap-around (torus) axes | the endless-ocean scene is asked for; multigrid wraps with periodic transfers |
