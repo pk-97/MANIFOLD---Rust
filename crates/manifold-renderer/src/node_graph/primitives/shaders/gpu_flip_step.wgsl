@@ -1376,6 +1376,12 @@ fn density_source(@builtin(global_invocation_id) gid: vec3<u32>) {
                         continue;
                     }
                     let q = (particle.position_radius.xyz - u.box_min) / u.cell_size;
+                    // A particle the solid has swept over is removed by this
+                    // step's move; the solid's rest sites below already count
+                    // that volume, so counting it too reads as crowding.
+                    if u.body_count > 0 && solid_at(q, n) < 0.0 {
+                        continue;
+                    }
                     let w = clamp(vec3<f32>(1.0) - abs(centre - q), vec3<f32>(0.0), vec3<f32>(1.0));
                     density = density + w.x * w.y * w.z;
                 }
