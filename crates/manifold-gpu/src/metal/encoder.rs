@@ -2751,7 +2751,8 @@ impl GpuEncoder {
     /// [`Self::commit_and_continue`], then block until the GPU has completed
     /// everything committed so far. Afterwards the CPU may read and write
     /// shared storage the committed work touched before encoding more.
-    /// Offline paths only: a live frame must never wait on the GPU.
+    /// Coupled liquid regions also use this live, once between fixed ticks,
+    /// with their frame tick count bounded by the live clock.
     pub fn commit_wait_and_continue(&mut self, device: &GpuDevice) {
         let committed = self.cmd_buf.clone();
         self.commit_and_continue(device);

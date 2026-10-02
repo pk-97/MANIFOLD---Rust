@@ -369,14 +369,14 @@ pub struct Coupling {
     failed: bool,
     /// Transport of the last frame the pair advanced at.
     transport: Option<f64>,
-    /// This offline frame runs several coupled ticks, exchanging with Box3D
+    /// This frame runs several coupled ticks, exchanging with Box3D
     /// between them.
     exchange: Option<Exchange>,
     /// A host step failed; the next frame reports it and restarts the pair.
     host_error: Option<String>,
 }
 
-/// An offline frame of several coupled ticks: the region syncs at each later
+/// A frame of several coupled ticks: the region syncs at each later
 /// tick's first substep, and the domain settles the tick before it there.
 #[derive(Clone, Copy)]
 struct Exchange {
@@ -483,14 +483,14 @@ impl Primitive for MatterDomain {
         self.role_pending
     }
 
-    /// Offline coupled frames sync at each later tick's first substep.
+    /// Coupled frames sync at each later tick's first substep.
     fn substep_host_sync(&self, iteration: u32) -> bool {
         self.coupled
             .exchange
             .is_some_and(|x| iteration.is_multiple_of(x.substeps) && iteration / x.substeps < x.ticks)
     }
 
-    /// Section 5 between two ticks of one offline frame: settle the tick the
+    /// Section 5 between two ticks of one frame: settle the tick the
     /// GPU just finished, step Box3D over it, and hand the next tick the
     /// bodies' new state and a cleared reaction.
     fn substep_host_step(
@@ -731,39 +731,31 @@ impl MatterDomain {
         }
         let setup_changed = self.setup != Some(setup);
         let restart = setup_changed || self.coupled.owner_fresh;
-        // Section 5: live, the liquid runs at most the one tick whose bodies
-        // Box3D has settled, and none while the last tick's reaction is in
-        // flight. Offline waits for it, then runs every due tick, exchanging
-        // with Box3D between them through the region's host syncs.
-        let cap = match (&mut self.coupled.owner, &self.coupled.observation) {
-            (Some(owner), Some(_)) if !restart => {
-                let reaction = self.reaction.as_ref();
-                let scale = self.coupled.scale;
-                // This frame's clear is encoded after this read.
-                let settled = owner.settle(
-                    self.coupled.scenes.get(owner.completed() + 1),
-                    |stamp| clock.as_ref().is_none_or(|clock| if offline { clock.wait(stamp) } else { clock.is_complete(stamp) }),
-                    |_, rows, impulses| {
-                        let scale = scale.ok_or("Matter coupling: the pending tick has no reaction scale")?;
-                        decode(scale, rows, reaction_words(reaction), impulses)
-                    },
-                );
-                match settled {
-                    Ok(ticks) => {
-                        if offline && ticks > 0 { None } else { Some(ticks) }
-                    }
-                    Err(error) => {
-                        // A dead reaction or a failed step: the pair restarts
-                        // with a fresh rigid owner, the error reported.
-                        self.coupled.owner = None;
-                        return Err(error);
-                    }
-                }
+        // Finish the prior reaction before reusing its buffer. Live and
+        // offline share per-tick exchanges; only the clock limits live work.
+        if !restart
+            && let (Some(owner), Some(_)) = (&mut self.coupled.owner, &self.coupled.observation)
+        {
+            let reaction = self.reaction.as_ref();
+            let scale = self.coupled.scale;
+            // This frame's clear is encoded after this read.
+            let settled = owner.settle_ready(
+                self.coupled.scenes.get(owner.completed() + 1),
+                |stamp| clock.as_ref().is_none_or(|clock| {
+                    clock.is_complete(stamp) || (clock.wait(stamp) && clock.is_complete(stamp))
+                }),
+                |_, rows, impulses| {
+                    let scale = scale.ok_or("Matter coupling: the pending tick has no reaction scale")?;
+                    decode(scale, rows, reaction_words(reaction), impulses)
+                },
+            );
+            if let Err(error) = settled {
+                // A dead reaction or a failed step: the pair restarts
+                // with a fresh rigid owner, the error reported.
+                self.coupled.owner = None;
+                return Err(error);
             }
-            (Some(_), _) => Some(1),
-            (None, _) => None,
-        };
-        self.clock.set_tick_cap(cap);
+        }
         self.setup = Some(setup);
         let frame = self.clock.advance(
             ctx.time.seconds.0,
@@ -826,7 +818,7 @@ impl MatterDomain {
         let mut display_time = frame.display_time;
         if let Some(owner) = &mut self.coupled.owner {
             if frame.ticks > 0 {
-                if (frame.ticks != 1 && !offline) || first_tick != owner.completed() {
+                if first_tick != owner.completed() {
                     return Err(format!(
                         "Matter coupling: fluid ticks {first_tick}+{} do not follow rigid tick {}",
                         frame.ticks,
@@ -927,12 +919,9 @@ impl MatterDomain {
         // A tick running this frame started by now, so the tick before it
         // has its end sampled.
         let end = self.coupled.scenes.get(owner.completed() + 1);
-        let settled = owner.settle(end, |_| true, |_, rows, impulses| {
+        owner.settle_ready(end, |_| true, |_, rows, impulses| {
             decode(exchange.scale, rows, reaction_words(Some(reaction)), impulses)
         })?;
-        if settled == 0 {
-            return Err(format!("Matter coupling: rigid tick {} has no sampled end", owner.completed()));
-        }
         let (offset, rows) = self.bodies.set_coupled_rows(tick as usize, owner.rows())?;
         let bodies = self.body_buffers.bodies().ok_or("Matter coupling: the body rows are missing")?;
         let bytes: &[u8] = bytemuck::cast_slice(rows);
