@@ -229,7 +229,6 @@ impl Run {
     /// The force hook: the domain's uniform acceleration (Gravity X and Y),
     /// m/s², from the next frame on. A uniform force field and gravity enter
     /// the step identically, at every face.
-    #[cfg(feature = "water-race-probes")]
     pub(super) fn set_gravity(&mut self, x: f64, y: f64) {
         let domain = node_named(&self.graph, "domain");
         self.graph.set_param(domain, "gravity_x", crate::node_graph::ParamValue::Float(x as f32)).expect("gravity_x");

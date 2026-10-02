@@ -618,6 +618,68 @@ def body_gate(n, box, fill, ratios, counts):
         print("; ".join(line), flush=True)
 
 
+# The active-set rounds' ceiling: far above what a scene takes; hitting it
+# is printed, never silent.
+SEPARATE_ROUNDS = 64
+
+
+def touching_solid(water, faces):
+    """Water cells with any face less than fully open (a box wall or a body)."""
+    low = [side(w, ax, True) < 1.0 for ax, w in enumerate(faces)]
+    high = [side(w, ax, False) < 1.0 for ax, w in enumerate(faces)]
+    return water & np.logical_or.reduce(low + high)
+
+
+def separating(water, f, h, faces):
+    """Separating solids (docs/GPU_FLIP_PRESSURE_SOLVE.md section 8): the
+    complementarity on each water cell touching a solid, solved exactly by
+    the primal-dual active set over the direct solve. A cell presses (p ≥ 0)
+    or is let go (p = 0 and its leftover divergence f − Σ w·p_j / h² ≥ 0).
+    Returns the pressure, the let-go set, the rounds and the three conditions'
+    worst violations."""
+    touching = touching_solid(water, faces)
+    let_go = np.zeros_like(water)
+    for rounds in range(1, SEPARATE_ROUNDS + 1):
+        x = direct(water & ~let_go, f, h, faces)
+        left = f - neighbour_sum(x, faces) / h**2
+        join = touching & ~let_go & (x < 0)
+        leave = let_go & (left < 0)
+        if not join.any() and not leave.any():
+            break
+        let_go = (let_go | join) & ~leave
+    else:
+        print(f"separating: the active set hit its ceiling of {SEPARATE_ROUNDS} rounds", flush=True)
+    pressing = touching & ~let_go
+    worst = (
+        max(0.0, -x[pressing].min(initial=0.0)),
+        max(0.0, -left[let_go].min(initial=0.0)),
+        np.abs(x[let_go]).max(initial=0.0),
+    )
+    return x, let_go, rounds, worst
+
+
+def separating_gate(n, fill, dt):
+    """A pool `fill` deep after one step of ±20 m/s²: every inner face moved
+    by g·dt, so the only divergence is the bottom layer's, ±g·dt/h. Down,
+    the floor presses and nothing is let go; up, the plain solve holds the
+    water with negative pressure and the separating one lets the floor go."""
+    h = L / n
+    water = np.zeros((n, n, n), bool)
+    water[:, : max(1, int(round(fill * n))), :] = True
+    faces = open_faces(water.shape)
+    for g in (-20.0, 20.0):
+        f = np.zeros(water.shape)
+        f[:, 0, :] = np.where(water[:, 0, :], g * dt / h, 0.0)
+        plain = direct(water, f, h, faces)
+        x, let_go, rounds, worst = separating(water, f, h, faces)
+        print(
+            f"separating {n}^3 g {g:+.0f}: plain pressure min {plain[water].min():.3e}; "
+            f"{rounds} rounds, {int(let_go.sum())} cells let go, pressure min {x[water].min():.3e}; "
+            f"violations p<0 {worst[0]:.1e}, outflow<0 {worst[1]:.1e}, let-go |p| {worst[2]:.1e}",
+            flush=True,
+        )
+
+
 def coarsen(water, f, k):
     """A k-times coarser problem: a cell is water when at least half its
     children are, and its divergence is their mean."""
@@ -669,7 +731,12 @@ def main():
     ap.add_argument("--ratios", default="0,0.1,1,10")
     ap.add_argument("--side", help="resample each problem to these sides, odd included (e.g. 24,25,37,40)")
     ap.add_argument("--symmetry", action="store_true", help="also check the preconditioner is symmetric and negative definite")
+    ap.add_argument("--separating", help="n,fill,dt: the separating-solid gate on a pool under ±20 m/s²")
     args = ap.parse_args()
+    if args.separating:
+        v = args.separating.split(",")
+        separating_gate(int(v[0]), float(v[1]), float(v[2]))
+        return
     counts = [int(k) for k in args.iterations.split(",")]
     if args.body:
         v = [float(t) for t in args.body.split(",")]

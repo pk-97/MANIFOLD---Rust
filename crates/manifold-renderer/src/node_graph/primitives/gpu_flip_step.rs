@@ -144,13 +144,13 @@ pub(crate) fn tile_scratch_bytes(cells: [u32; 3], ring_max: u32) -> u64 {
 
 /// Bytes the step holds for itself at `cells` with `slots` particle slots,
 /// besides the sort's ranges and the solver's scratch: the sorted particles,
-/// seven cell arrays, the solid corners, six face grids, the pocket gate,
+/// [`LATTICE_CELL_ARRAYS`] cell arrays, the solid corners, six face grids, the pocket gate,
 /// the pocket sums and the tile table.
 #[cfg(any(test, feature = "gpu-proofs"))]
 pub(crate) fn scratch_bytes(cells: [u32; 3], slots: u64, ring_max: u32) -> u64 {
     let corners = cells.iter().map(|&n| u64::from(n) + 1).product::<u64>() * 4;
     slots.max(1) * size_of::<FluidParticle>() as u64
-        + 7 * cell_bytes(cells)
+        + LATTICE_CELL_ARRAYS * cell_bytes(cells)
         + corners
         + 6 * face_bytes(cells)
         + POCKET_GATE_WORDS * 4
@@ -193,6 +193,36 @@ static POISON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::ne
 pub(crate) fn set_poison(on: bool) {
     POISON.store(on, std::sync::atomic::Ordering::SeqCst);
 }
+
+/// Test-only lever, approved 2026-10-03 lead; un-suppressed when the executor
+/// exposes node access. With it set, no solid lets water go: the step skips
+/// the separate passes and the second prepare, and runs the solves as before
+/// separating solids (GPU_FLIP_PRESSURE_SOLVE.md section 8 (Separating
+/// solids)), the bitwise oracle for scenes whose let-go set stays empty.
+#[cfg(all(test, feature = "gpu-proofs"))]
+static SEPARATE_OFF: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+pub(crate) fn set_separate_off(on: bool) {
+    SEPARATE_OFF.store(on, std::sync::atomic::Ordering::SeqCst);
+}
+
+fn separating() -> bool {
+    #[cfg(all(test, feature = "gpu-proofs"))]
+    {
+        !SEPARATE_OFF.load(std::sync::atomic::Ordering::SeqCst)
+    }
+    #[cfg(not(all(test, feature = "gpu-proofs")))]
+    {
+        true
+    }
+}
+
+/// The lattice's cell-sized arrays (`LatticeBuffers`): water, φ, the
+/// right-hand side, the pressure, the pocket state and label, the solve
+/// mask, the contact mask and the let-go set.
+#[cfg(any(test, feature = "gpu-proofs"))]
+const LATTICE_CELL_ARRAYS: u64 = 9;
 
 /// Three words a cell (a pocket's 64-bit sum and its count, indexed by its
 /// leader cell), then the removed total's two.
@@ -283,6 +313,8 @@ struct Pipelines {
     pocket_accumulate: GpuComputePipeline,
     pocket_remove: GpuComputePipeline,
     pocket_pin: GpuComputePipeline,
+    separate_pin: GpuComputePipeline,
+    separate_update: GpuComputePipeline,
     /// The removed flux into the pressure, then the density, solver word.
     pocket_flux: [GpuComputePipeline; 2],
     emit_flags: GpuComputePipeline,
@@ -330,6 +362,8 @@ impl Pipelines {
             pocket_accumulate: pipe("pocket_accumulate"),
             pocket_remove: pipe("pocket_remove"),
             pocket_pin: pipe("pocket_pin"),
+            separate_pin: pipe("separate_pin"),
+            separate_update: pipe("separate_update"),
             pocket_flux: [pipe("pocket_flux_pressure"), pipe("pocket_flux_density")],
             emit_flags: pipe("emit_flags"),
             emit_write: pipe("emit_write"),
@@ -458,6 +492,10 @@ struct LatticeBuffers {
     pocket_sum: GpuBuffer,
     /// The solves' water: `water` less each sealed pocket's leader cell.
     solve_water: GpuBuffer,
+    /// The main solve's water: `solve_water` less each let-go cell.
+    contact_water: GpuBuffer,
+    /// 1 where water touching a solid is let go; carried step to step.
+    let_go: GpuBuffer,
 }
 
 /// Words of the pocket spread's gate (gpu_flip_step.wgsl `pocket_gate`).
@@ -502,6 +540,8 @@ impl LatticeBuffers {
             pocket_label: allocate(device, cell)?,
             pocket_sum: allocate(device, pocket_sum_bytes(cells))?,
             solve_water: allocate(device, cell)?,
+            contact_water: allocate(device, cell)?,
+            let_go: allocate_zeroed(device, cell)?,
         })
     }
 }
@@ -978,6 +1018,21 @@ impl StepState {
             cells_groups,
             "gpu_flip.step.pocket_pin",
         );
+        // Separating solids (GPU_FLIP_PRESSURE_SOLVE.md section 8): the
+        // let-go set from the last step's update comes out of the main
+        // solve's mask, its cells held at pressure 0.
+        let separate = separating();
+        let main_water = if separate {
+            enc.dispatch_compute(
+                &pipes.separate_pin,
+                &[uniform(&base), buffer(6, &l.solve_water), buffer(10, &l.s), buffer(39, &l.let_go), buffer(5, &l.contact_water)],
+                cells_groups,
+                "gpu_flip.step.separate_pin",
+            );
+            &l.contact_water
+        } else {
+            &l.solve_water
+        };
         if solids && !step.dynamic {
             enc.dispatch_compute(
                 &pipes.pocket_condition,
@@ -996,7 +1051,7 @@ impl StepState {
         let water = Water {
             lattice: cells,
             cell_size: p.cell_size,
-            water: &l.solve_water,
+            water: main_water,
             faces: &l.s,
             phi: step.ghost.then_some(&l.phi),
         };
@@ -1011,7 +1066,7 @@ impl StepState {
             tick_seconds: p.tick_seconds,
             first: (p.rows - p.body_count).max(0) as u32,
             count: p.body_count.max(0) as u32,
-            water: &l.solve_water,
+            water: main_water,
             open: &l.s,
             solid: &l.v,
             bodies: step.bodies,
@@ -1027,6 +1082,23 @@ impl StepState {
         self.solver.solve(enc, &water, &l.rhs, &l.pressure, step.pressure, passes)?;
         let tally = step.tally;
         self.solver.tally(enc, step.pressure, step.capped, tally, 0, step.params.step_in_tick == 0)?;
+        // One active-set update for the next step, while this step's
+        // pressure and right-hand side are still in place.
+        if separate {
+            enc.dispatch_compute(
+                &pipes.separate_update,
+                &[
+                    uniform(&base),
+                    buffer(6, &l.contact_water),
+                    buffer(5, &l.rhs),
+                    buffer(8, &l.pressure),
+                    buffer(10, &l.s),
+                    buffer(39, &l.let_go),
+                ],
+                cells_groups,
+                "gpu_flip.step.separate_update",
+            );
+        }
         // φ binds the water array when the ghost rows are off; the pass never reads it then.
         let phi = if step.ghost { &l.phi } else { &l.water };
         let subtract = |enc: &mut GpuEncoder, params: &StepParams, phi: &GpuBuffer, faces: &GpuBuffer, label: &str| {
@@ -1074,7 +1146,13 @@ impl StepState {
                 "gpu_flip.step.density_source",
             );
             encode_pocket_mean(enc, pipes, l, 1, step);
-            let flat = Water { phi: None, ..water };
+            // The density solve stays plain: every water cell in it, let go
+            // or not, so its rows are rebuilt on the pocket-only mask.
+            let plain_water = Water { water: &l.solve_water, ..water };
+            if separate {
+                self.solver.prepare(device, enc, &plain_water)?;
+            }
+            let flat = Water { phi: None, ..plain_water };
             self.solver.solve(enc, &flat, &l.rhs, &l.pressure, step.pressure, None)?;
             self.solver.tally(enc, step.pressure, step.capped, tally, 1, false)?;
             let plain = StepParams { ghost: 0, ..p };
@@ -1503,9 +1581,46 @@ mod tests {
             "tiles_lists",
             "tiles_fill",
             "tiles_retire",
+            "separate_pin",
+            "separate_update",
         ] {
             assert!(entries.contains(&entry), "missing entry {entry}");
         }
+    }
+
+    /// Separating solids' extents: the lattice allocates exactly
+    /// [`LATTICE_CELL_ARRAYS`] cell-sized arrays, which the extent's hold
+    /// counts; the two new passes run one thread a cell, bounded by the cell
+    /// total, and bind the contact mask and the let-go set at their own
+    /// bindings.
+    #[test]
+    fn gpu_flip_separating_solids_buffers_and_dispatches_are_held() {
+        let source = include_str!("gpu_flip_step.rs");
+        let body = source.split("fn new(device: &GpuDevice, cells: [u32; 3]) -> Result<Self, String> {\n        let cell").nth(1).expect("LatticeBuffers::new");
+        let body = body.split("\n    }\n").next().unwrap_or("");
+        let arrays = body.matches("(device, cell)?").count() as u64;
+        assert_eq!(arrays, LATTICE_CELL_ARRAYS, "cell arrays allocated by LatticeBuffers::new");
+        for cells in [[64u32, 64, 64], [63, 100, 8], [128, 128, 128]] {
+            let face = face_bytes(cells);
+            let corners = cells.iter().map(|&n| u64::from(n) + 1).product::<u64>() * 4;
+            let particles = 1000 * size_of::<FluidParticle>() as u64;
+            let expected = particles
+                + 9 * cell_bytes(cells)
+                + corners
+                + 6 * face
+                + POCKET_GATE_WORDS * 4
+                + pocket_sum_bytes(cells)
+                + tile_scratch_bytes(cells, 2);
+            assert_eq!(scratch_bytes(cells, 1000, 2), expected, "{cells:?}");
+        }
+        let shader = step_source();
+        for entry in ["fn separate_pin(", "fn separate_update("] {
+            let body = shader.split(entry).nth(1).unwrap_or_else(|| panic!("{entry}"));
+            let head: String = body.lines().take(4).collect();
+            assert!(head.contains("if idx >= cell_total()"), "{entry} bounds its threads by the cell total");
+        }
+        assert!(shader.contains("@binding(39) var<storage, read_write> let_go: array<f32>;"));
+        assert!(source.contains("buffer(39, &l.let_go), buffer(5, &l.contact_water)"));
     }
 
     #[test]

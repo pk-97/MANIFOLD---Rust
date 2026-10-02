@@ -1047,6 +1047,86 @@ fn pocket_pin(@builtin(global_invocation_id) gid: vec3<u32>) {
     cell_out[idx] = select(water[idx], 0.0, leader);
 }
 
+// Separating solids (GPU_FLIP_PRESSURE_SOLVE.md section 8 (Separating
+// solids)): 1 where a water cell touching a solid is let go, its pressure held
+// at 0 and its leftover divergence free to be outflow. Carried step to step.
+@group(0) @binding(39) var<storage, read_write> let_go: array<f32>;
+
+// A water cell with any face less than fully open: a box wall or a body.
+fn touches_solid(p: vec3<i32>, n: vec3<i32>, m: vec3<i32>) -> bool {
+    for (var a = 0; a < 3; a = a + 1) {
+        var q = p;
+        q[a] = p[a] + 1;
+        if open_at(p, a, n, m) < 1.0 || open_at(q, a, n, m) < 1.0 {
+            return true;
+        }
+    }
+    return false;
+}
+
+// One thread per cell, `water` the solve mask to `cell_out` the contact mask:
+// the let-go set kept only on water touching a solid (and emptied on the
+// first step of the first tick), each let-go cell taken out of the mask.
+@compute @workgroup_size(256)
+fn separate_pin(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    if idx >= cell_total() {
+        return;
+    }
+    let n = lattice();
+    let m = n + vec3<i32>(1);
+    let first = u.tick_index == 0 && u.step_in_tick == 0;
+    let keep = !first && let_go[idx] > 0.5 && water[idx] > 0.5 && touches_solid(unflatten(idx, n), n, m);
+    let_go[idx] = select(0.0, 1.0, keep);
+    cell_out[idx] = select(water[idx], 0.0, keep);
+}
+
+// One thread per cell, after the main solve, `water` the contact mask and
+// `cell_out` the right-hand side (read only): one active-set update. A
+// pressing cell whose pressure came out negative is let go; a let-go cell
+// whose leftover divergence f − Σ w·p_j / h² is negative (water pushed into
+// the solid) presses again.
+@compute @workgroup_size(256)
+fn separate_update(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    if idx >= cell_total() {
+        return;
+    }
+    let n = lattice();
+    let m = n + vec3<i32>(1);
+    let p = unflatten(idx, n);
+    if water[idx] > 0.5 {
+        if pressure[idx] < 0.0 && touches_solid(p, n, m) {
+            let_go[idx] = 1.0;
+        }
+        return;
+    }
+    if !(let_go[idx] > 0.5) {
+        return;
+    }
+    var pushed = 0.0;
+    for (var a = 0; a < 3; a = a + 1) {
+        var q = p;
+        q[a] = p[a] + 1;
+        // Only the solve's own cells carry a pressure; the rest hold 0 in
+        // the operator and may hold anything in the array.
+        if p[a] > 0 {
+            var r = p;
+            r[a] = p[a] - 1;
+            let j = flatten(r, n);
+            pushed = pushed + select(0.0, open_at(p, a, n, m) * pressure[j], water[j] > 0.5);
+        }
+        if p[a] + 1 < n[a] {
+            let j = flatten(q, n);
+            pushed = pushed + select(0.0, open_at(q, a, n, m) * pressure[j], water[j] > 0.5);
+        }
+    }
+    let h = u.cell_size;
+    if cell_out[idx] - pushed / (h * h) < 0.0 {
+        let_go[idx] = 0.0;
+    }
+}
+
 // One thread per word: the pocket sums start at 0.
 @compute @workgroup_size(256)
 fn pocket_clear(@builtin(global_invocation_id) gid: vec3<u32>) {
