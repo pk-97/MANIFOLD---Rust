@@ -80,9 +80,7 @@ fn stage(name: &str, label: &str) -> &'static str {
         let pass = label.strip_prefix("gpu_flip.").unwrap_or("");
         return match pass {
             p if p.starts_with("step.sort.") => "particle sort",
-            "step.distance" | "step.water_from_phi" | "step.block_liquid" | "step.block_dilate" => {
-                "particle distance + water mask"
-            }
+            "step.distance" | "step.water_from_phi" => "particle distance + water mask",
             "step.particles_to_faces" => "particle→face",
             "step.forces" => "forces",
             "step.solid_distance" | "step.open_fractions" | "step.solid_velocity" | "step.phi_into_solids"

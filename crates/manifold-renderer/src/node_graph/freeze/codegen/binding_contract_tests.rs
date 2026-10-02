@@ -178,12 +178,11 @@ fn dispatch_tail_census_is_stable() {
     // lattice_curvature and extend_lattice, buffer atoms; its emitter adds
     // jitter_particles, sample_faces_at_particles, energy_potential,
     // wavecrest_potential and emission_count, buffer atoms; its spawn adds
-    // spawn_whitewater and whitewater_type, buffer atoms. The liquid block
-    // map adds liquid_blocks. The whitewater GPU lifecycle adds
-    // advect_whitewater, retype_whitewater, age_whitewater, preserve_foam and
-    // keep_whitewater, buffer atoms. Liquid mesh relaxation adds
-    // relax_surface_mesh, a buffer atom.
-    assert_eq!(total, 225, "standalone atom census drifted");
+    // spawn_whitewater and whitewater_type, buffer atoms. The whitewater GPU
+    // lifecycle adds advect_whitewater, retype_whitewater, age_whitewater,
+    // preserve_foam and keep_whitewater, buffer atoms. Liquid mesh relaxation
+    // adds relax_surface_mesh, a buffer atom.
+    assert_eq!(total, 224, "standalone atom census drifted");
     assert_eq!(
         qualifying, 93,
         "canonical texture-path population drifted"

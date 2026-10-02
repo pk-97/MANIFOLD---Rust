@@ -61,12 +61,8 @@ struct Params {
     shapes_len: u32,
     // The density projection's source scale, 1 / step_dt.
     rate: f32,
-    // 1: the particle gathers skip cells whose block and its 26 neighbours
-    // hold no particle (`blocks`); 0 reads every cell.
-    block_skip: u32,
-    // The struct's 144 bytes, the Rust twin's `pad`.
-    pad0: u32,
-    pad1: u32,
+    // The struct's 128 bytes, the Rust twin's `pad`.
+    pad: u32,
 };
 
 struct CellRange {
@@ -133,10 +129,6 @@ struct LiquidShape {
 // the CFL guard shortened, and solid push-outs refused past SOLID_PUSH. The
 // tick's stats reduce them (liquid_stats words 8 and 9).
 @group(0) @binding(22) var<storage, read_write> capped: array<u32>;
-// The step's block occupancy map (liquid_blocks.wgsl layout, LB_LIQUID only):
-// read as `blocks`, written as `blocks_out`.
-@group(0) @binding(23) var<storage, read> blocks: array<u32>;
-@group(0) @binding(24) var<storage, read_write> blocks_out: array<u32>;
 
 // Set by resolve_solid when it refuses a push-out past SOLID_PUSH.
 var<private> push_refused: u32 = 0u;
@@ -173,66 +165,6 @@ fn face_exists(p: vec3<i32>, n: vec3<i32>, a: i32) -> bool {
     return all(other < n);
 }
 
-// Whether a particle may sit within 4 cells of cell c: c's block or one of
-// its 26 neighbours holds a particle (`blocks` is the dilated map). Always true
-// with block_skip 0. Both gathers below reach at most 2 cells, so a false
-// here means their loops would find no particle and add nothing.
-fn near_water(c: vec3<i32>) -> bool {
-    if u.block_skip == 0u {
-        return true;
-    }
-    let cell = vec3<u32>(clamp(c, vec3<i32>(0), lattice() - vec3<i32>(1)));
-    return (blocks[lb_index(cell, u.n)] & LB_LIQUID) != 0u;
-}
-
-// One thread per block, the sort's `ranges` to `blocks_out`: LB_LIQUID when
-// some cell of the block holds a particle, else 0. Edge blocks are partial.
-@compute @workgroup_size(256)
-fn block_liquid(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let nb = lb_blocks(u.n);
-    let idx = gid.x;
-    if idx >= nb.x * nb.y * nb.z {
-        return;
-    }
-    let b = vec3<u32>(idx % nb.x, (idx / nb.x) % nb.y, idx / (nb.x * nb.y));
-    let first = b * LB_CELLS;
-    let end = min(first + vec3<u32>(LB_CELLS), u.n);
-    var bits = 0u;
-    for (var z = first.z; z < end.z; z = z + 1u) {
-        for (var y = first.y; y < end.y; y = y + 1u) {
-            for (var x = first.x; x < end.x; x = x + 1u) {
-                if ranges[x + u.n.x * (y + u.n.y * z)].count > 0u {
-                    bits = LB_LIQUID;
-                }
-            }
-        }
-    }
-    blocks_out[idx] = bits;
-}
-
-// One thread per block, `blocks` to `blocks_out`: LB_LIQUID when the block or
-// any of its 26 neighbours has it.
-@compute @workgroup_size(256)
-fn block_dilate(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let nb = vec3<i32>(lb_blocks(u.n));
-    let idx = gid.x;
-    if idx >= u32(nb.x * nb.y * nb.z) {
-        return;
-    }
-    let b = unflatten(idx, nb);
-    let first = max(b - vec3<i32>(1), vec3<i32>(0));
-    let last = min(b + vec3<i32>(1), nb - vec3<i32>(1));
-    var bits = 0u;
-    for (var z = first.z; z <= last.z; z = z + 1) {
-        for (var y = first.y; y <= last.y; y = y + 1) {
-            for (var x = first.x; x <= last.x; x = x + 1) {
-                bits = bits | (blocks[flatten(vec3<i32>(x, y, z), nb)] & LB_LIQUID);
-            }
-        }
-    }
-    blocks_out[idx] = bits;
-}
-
 // One thread per face record. Each face sums the engine's Wyvill weight
 // 1 − (4/9)·s³/r⁶ + (17/9)·s²/r⁴ − (22/9)·s/r² for s = |q − face|² < r²,
 // r = √3/2 cells, over every live particle in the 3 × 3 × 3 cells around p,
@@ -261,8 +193,7 @@ fn particles_to_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let inv_h = 1.0 / u.cell_size;
     let first = max(p - vec3<i32>(1), vec3<i32>(0));
-    // Far from water the gather is empty: its z loop runs no rounds.
-    let last = select(first - vec3<i32>(1), min(p + vec3<i32>(1), n - vec3<i32>(1)), near_water(p));
+    let last = min(p + vec3<i32>(1), n - vec3<i32>(1));
     let slots = u.capacity;
     let rsq = 0.75;
     let coef1 = (4.0 / 9.0) / (rsq * rsq * rsq);
@@ -850,8 +781,7 @@ fn particle_distance(@builtin(global_invocation_id) gid: vec3<u32>) {
     let slots = u.capacity;
     var distance = 3.0 * h;
     var near = false;
-    // Far from water no ring holds a particle: start past the last ring.
-    for (var ring = select(3, 1, near_water(p)); ring <= 2; ring = ring + 1) {
+    for (var ring = 1; ring <= 2; ring = ring + 1) {
         if ring == 2 && (!near || distance <= 1.5 * h - radius) {
             break;
         }
