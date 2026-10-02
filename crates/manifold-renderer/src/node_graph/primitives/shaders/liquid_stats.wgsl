@@ -153,7 +153,7 @@ fn finish_main(@builtin(local_invocation_id) lid: vec3<u32>) {
         stats[7] = bitcast<u32>(s.kinetic);
         stats[8] = s.speed_capped;
         stats[9] = s.push_refused;
-        for (var w = 0u; w < 3u; w = w + 1u) {
+        for (var w = 0u; w < 6u; w = w + 1u) {
             stats[10u + w] = 0u;
             if params.has_solver != 0u {
                 stats[10u + w] = capped[2u * params.slots + w];

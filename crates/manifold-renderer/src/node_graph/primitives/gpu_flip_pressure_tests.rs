@@ -633,3 +633,38 @@ fn pressure_module_converges_on_the_engine_tolerance() {
     }
     assert!(failures.is_empty(), "{failures:#?}");
 }
+
+/// A box full of water with every wall closed is one sealed pocket: pure
+/// Neumann, L singular. The step pins the pocket's leader (its lowest cell)
+/// to p = 0 by leaving it out of the solve's water mask, so L is nonsingular.
+/// With a zero-sum source the pinned solve stops on the tolerance, the pinned
+/// cell reads 0, and the masked residual meets the f32 floor.
+#[test]
+fn pressure_module_converges_on_a_pinned_sealed_box() {
+    let m = 32;
+    let cells = m * m * m;
+    let mut f: Vec<f32> = (0..cells).map(|c| ((c as u64).wrapping_mul(2_654_435_761) >> 8) as f32 % 1000.0 / 500.0 - 1.0).collect();
+    let mean = f.iter().map(|&v| f64::from(v)).sum::<f64>() / cells as f64;
+    for v in &mut f {
+        *v -= mean as f32;
+    }
+    let mut water = vec![true; cells];
+    let unpinned = converge(&mut Rig::new(m), &Problem { frame: 0, water: water.clone(), f: f.clone() }, MAX_ITERATIONS);
+    water[0] = false;
+    f[0] = 0.0;
+    let pinned = Problem { frame: 0, water, f };
+    let mut rig = Rig::new(m);
+    let c = converge(&mut rig, &pinned, MAX_ITERATIONS);
+    let residual = rig.residual_of(&pinned);
+    println!(
+        "sealed box {m}³: unpinned {} iterations stopped {}; pinned {} iterations stopped {}, p[0] {}, residual {residual:.3e}",
+        unpinned.iterations,
+        unpinned.stopped,
+        c.iterations,
+        c.stopped,
+        rig.pressure()[0]
+    );
+    assert!(c.stopped, "pinned sealed box ran {} iterations to the cap", c.iterations);
+    assert_eq!(rig.pressure()[0], 0.0, "the pinned cell");
+    assert!(residual < F32_FLOOR, "pinned residual {residual:.3e}");
+}
