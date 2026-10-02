@@ -142,31 +142,6 @@ fn cpu_pressure_impulse(x: &[f32], water: &[f32], open: &[f32], solid: &[f32]) -
     out
 }
 
-/// The constraint's drag through every owned cut face beside water:
-/// ρh³·w·f·(u − v_s).
-fn cpu_friction(faces: &[f32], water: &[f32], open: &[f32], solid: &[f32]) -> Vec<f64> {
-    let mut out = vec![0.0; face_grid_len(N)];
-    let mass = f64::from(DENSITY) * f64::from(H).powi(3);
-    for i in 0..m().iter().product::<usize>() {
-        let p = coords(i, m());
-        for a in 0..3 {
-            let w = f64::from(open[i * FACE_FLOATS + 4 + a]);
-            if !inner(p, a) || owner(solid[i * FACE_FLOATS + 3], a).is_none() || !(w > 0.0 && w < 1.0) {
-                continue;
-            }
-            let mut lo = p;
-            lo[a] -= 1;
-            if !(water[at(lo, N)] > 0.5 || water[at(p, N)] > 0.5) {
-                continue;
-            }
-            let f = f64::from(solid[i * FACE_FLOATS + 4 + a]);
-            let slip = f64::from(faces[i * FACE_FLOATS + a]) - f64::from(solid[i * FACE_FLOATS + a]);
-            out[i * FACE_FLOATS + a] = mass * w * f * slip;
-        }
-    }
-    out
-}
-
 /// Each body's sums record from per-face impulses: linear and angular
 /// impulse, and M⁻¹ times them for a dynamic body; 0 for any other. Also the
 /// sum of |term| per float, the scale an f32 reduction's rounding grows with.
@@ -357,17 +332,14 @@ fn gpu_flip_body_operator_matches_cpu() {
 }
 
 /// After the projection: the pressure's impulse into the reaction and its
-/// velocity change into the solid faces, then the friction against the
-/// changed solid velocity into the reaction too.
+/// velocity change into the solid faces.
 #[test]
 fn gpu_flip_body_reaction_matches_cpu() {
     let scene = Scene::new(0x7ea1);
     let cells: usize = N.iter().product();
     let pressure = random_values(cells, 0x7ea2);
-    let faces = random_values(face_grid_len(N), 0x7ea3);
     let base = random_values(BODIES * 8, 0x7ea4);
     let pressure_gpu = shared(&scene.device, &pressure);
-    let faces_gpu = shared(&scene.device, &faces);
     let reaction = shared(&scene.device, &base);
     let scratch = shared(&scene.device, &vec![0.0_f32; cells]);
 
@@ -381,7 +353,7 @@ fn gpu_flip_body_reaction_matches_cpu() {
     assert_sums(&pushed, &want, &scale, "pressure sums");
 
     let mut enc = scene.device.create_encoder("react");
-    scene.passes.react(&mut enc, &scene.bodies(), &pressure_gpu, &faces_gpu, &reaction).expect("react");
+    scene.passes.react(&mut enc, &scene.bodies(), &pressure_gpu, &reaction).expect("react");
     enc.commit_and_wait_completed();
 
     let changed: Vec<f32> = read(&scene.buffers[2], face_grid_len(N));
@@ -390,17 +362,13 @@ fn gpu_flip_body_reaction_matches_cpu() {
     assert!(touched > 50, "the dynamic body's faces gain its velocity change: {touched}");
     assert_close(&changed, &want_changed, "velocity change");
 
-    let drag = cpu_friction(&faces, &scene.water, &scene.open, &changed);
-    let (want, scale) = cpu_body_sums(&drag, &scene.solid, &scene.rows);
-    assert!(want[..3].iter().any(|&v| v.abs() > 1.0), "water drags the dynamic body");
-    let dragged = scene.sums();
-    assert_sums(&dragged, &want, &scale, "friction sums");
-
+    // The pressure is the only reaction; the water's drag on the body never
+    // reaches it (the engine's rigidfluidcoupling.cpp keeps none).
     let got: Vec<f32> = read(&reaction, BODIES * 8);
     let want: Vec<f64> = (0..BODIES * 8)
         .map(|k| {
             let (b, j) = (k / 8, k % 8);
-            f64::from(base[k]) + f64::from(pushed[SUM_FLOATS * b + j]) + f64::from(dragged[SUM_FLOATS * b + j])
+            f64::from(base[k]) + f64::from(pushed[SUM_FLOATS * b + j])
         })
         .collect();
     assert_close(&got, &want, "reaction");

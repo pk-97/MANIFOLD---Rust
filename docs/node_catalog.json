@@ -35551,7 +35551,7 @@
           "type": "Transform"
         },
         {
-          "name": "mass",
+          "name": "density",
           "required": false,
           "type": "f32"
         },
@@ -35622,12 +35622,12 @@
           "type": "enum"
         },
         {
-          "default": "1",
-          "label": "Mass (kg)",
-          "name": "mass",
+          "default": "600",
+          "label": "Density (kg/m³)",
+          "name": "density",
           "range": [
-            "0.01",
-            "100"
+            "1",
+            "25000"
           ],
           "type": "float"
         },
@@ -35782,10 +35782,10 @@
           "type": "table"
         }
       ],
-      "purpose": "Describe a rigid body's shape, starting transform, motion type, mass and contact properties. Wire body into a shared Physics World. An optional builtin or imported MeshSource is prepared once as convex hulls using standard Box3D.",
+      "purpose": "Describe a rigid body's shape, starting transform, motion type, density and contact properties; Box3D gives it density times its installed hull volume as mass. Wire body into a shared Physics World. An optional builtin or imported MeshSource is prepared once as convex hulls using standard Box3D.",
       "role": "Source",
       "stratum": "atom",
-      "summary": "Give an object mass, friction and bounce, then connect it to a Physics World.",
+      "summary": "Give an object density, friction and bounce, then connect it to a Physics World.",
       "type_id": "node.rigid_body"
     },
     {
@@ -72469,11 +72469,11 @@
           "name": "Motion"
         },
         {
-          "default": "1",
-          "id": "101_mass",
-          "max": "100",
-          "min": "0.01",
-          "name": "Mass (kg)"
+          "default": "600",
+          "id": "101_density",
+          "max": "25000",
+          "min": "1",
+          "name": "Density (kg/m³)"
         },
         {
           "default": "0.6",
@@ -74688,11 +74688,11 @@
           "name": "Motion"
         },
         {
-          "default": "1",
-          "id": "121_mass",
-          "max": "100",
-          "min": "0.01",
-          "name": "Mass (kg)"
+          "default": "600",
+          "id": "121_density",
+          "max": "25000",
+          "min": "1",
+          "name": "Density (kg/m³)"
         },
         {
           "default": "0.25",
@@ -76977,11 +76977,11 @@
           "name": "Motion"
         },
         {
-          "default": "1",
-          "id": "141_mass",
-          "max": "100",
-          "min": "0.01",
-          "name": "Mass (kg)"
+          "default": "600",
+          "id": "141_density",
+          "max": "25000",
+          "min": "1",
+          "name": "Density (kg/m³)"
         },
         {
           "default": "0.2",
@@ -79196,11 +79196,11 @@
           "name": "Motion"
         },
         {
-          "default": "1",
-          "id": "161_mass",
-          "max": "100",
-          "min": "0.01",
-          "name": "Mass (kg)"
+          "default": "600",
+          "id": "161_density",
+          "max": "25000",
+          "min": "1",
+          "name": "Density (kg/m³)"
         },
         {
           "default": "0.2",
@@ -81998,11 +81998,11 @@
           "name": "Motion"
         },
         {
-          "default": "1",
-          "id": "101_mass",
-          "max": "100",
-          "min": "0.01",
-          "name": "Mass (kg)"
+          "default": "600",
+          "id": "101_density",
+          "max": "25000",
+          "min": "1",
+          "name": "Density (kg/m³)"
         },
         {
           "default": "0.55",
@@ -84217,11 +84217,11 @@
           "name": "Motion"
         },
         {
-          "default": "1",
-          "id": "111_mass",
-          "max": "100",
-          "min": "0.01",
-          "name": "Mass (kg)"
+          "default": "600",
+          "id": "111_density",
+          "max": "25000",
+          "min": "1",
+          "name": "Density (kg/m³)"
         },
         {
           "default": "0.55",
@@ -86436,11 +86436,11 @@
           "name": "Motion"
         },
         {
-          "default": "1",
-          "id": "121_mass",
-          "max": "100",
-          "min": "0.01",
-          "name": "Mass (kg)"
+          "default": "600",
+          "id": "121_density",
+          "max": "25000",
+          "min": "1",
+          "name": "Density (kg/m³)"
         },
         {
           "default": "0.55",
@@ -88655,11 +88655,11 @@
           "name": "Motion"
         },
         {
-          "default": "1",
-          "id": "131_mass",
-          "max": "100",
-          "min": "0.01",
-          "name": "Mass (kg)"
+          "default": "600",
+          "id": "131_density",
+          "max": "25000",
+          "min": "1",
+          "name": "Density (kg/m³)"
         },
         {
           "default": "0.55",
@@ -90874,11 +90874,11 @@
           "name": "Motion"
         },
         {
-          "default": "1",
-          "id": "141_mass",
-          "max": "100",
-          "min": "0.01",
-          "name": "Mass (kg)"
+          "default": "600",
+          "id": "141_density",
+          "max": "25000",
+          "min": "1",
+          "name": "Density (kg/m³)"
         },
         {
           "default": "0.55",
@@ -93093,11 +93093,11 @@
           "name": "Motion"
         },
         {
-          "default": "1",
-          "id": "151_mass",
-          "max": "100",
-          "min": "0.01",
-          "name": "Mass (kg)"
+          "default": "600",
+          "id": "151_density",
+          "max": "25000",
+          "min": "1",
+          "name": "Density (kg/m³)"
         },
         {
           "default": "0.55",
@@ -164153,11 +164153,11 @@
           "name": "Seed"
         },
         {
-          "default": "62.5",
-          "id": "box_mass",
-          "max": "100",
-          "min": "0.01",
-          "name": "Box Mass"
+          "default": "500",
+          "id": "box_density",
+          "max": "2000",
+          "min": "1",
+          "name": "Box Density"
         },
         {
           "default": "0",

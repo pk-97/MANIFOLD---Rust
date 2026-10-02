@@ -1652,3 +1652,31 @@ fn liquid_face_grid_published() {
         assert!(worst <= u64::from(allowed), "{}: the next tick's faces sit {worst} ulps off: {first:?}", row.type_id);
     }
 }
+
+/// A box a hundredth as dense as water in the GPU FLIP Dam Break stays
+/// bounded in speed for 60 frames. At that ratio the body's per-step friction
+/// gain ρ·h·f·A_wet/m sits far past 2, where an explicit friction reaction on
+/// the body diverged; the pressure, implicit in the solve, is its only
+/// reaction, as in the FLIP Fluids engine (`rigidfluidcoupling.cpp`). The
+/// bound is twice the step's default Top Speed (20 m/s), the fastest water it
+/// is built for: a body the water carries never outruns the water by that much.
+#[test]
+fn gpu_flip_light_body_stays_bounded_in_the_dam_break() {
+    const FRAMES: u32 = 60;
+    const BOUND: f64 = 40.0;
+    let row = LIQUID_SOLVERS.iter().find(|row| row.type_id == GPU_FLIP_DOMAIN_TYPE_ID).expect("the GPU FLIP row");
+    let (def, scene) = manifold_renderer::node_graph::liquid::conformance::gpu_flip_dam_break_with_box(0.01);
+    let mut run = LiquidRun::offline(row, def, 1);
+    let mut peak = 0.0f64;
+    for frame in 0..FRAMES {
+        let probe = run.step();
+        let body = run.body(&probe);
+        let v = v3(body.linear_velocity);
+        let speed = dot(v, v).sqrt();
+        assert!(speed.is_finite(), "frame {frame}: the box's speed is not finite");
+        assert!(speed <= BOUND, "frame {frame}: the box runs at {speed:.2} m/s, past {BOUND:.1}");
+        assert_eq!(run.totals(row).nonfinite, 0, "frame {frame}: a non-finite tick");
+        peak = peak.max(speed);
+    }
+    eprintln!("gpu_flip_light_body_stays_bounded_in_the_dam_break: {} kg box, peak {peak:.2} m/s", scene.mass);
+}
