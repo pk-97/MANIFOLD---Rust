@@ -8,8 +8,13 @@
 //! and CPU encode (wall time around `runtime.render`). Timestamped frames
 //! open one encoder per dispatch and turn encode replay off
 //! (ENCODE_REPLAY_DESIGN.md D7), so their split is a ratio, never the budget.
+//! `node.render_scene` is split per pass label and encoder kind the same way.
 //! Present is not timed here: that is the app with MANIFOLD_RENDER_TRACE=1.
-//! Reported, never gated.
+//! Timing is reported, never gated. Two things are checked: the raster shadow
+//! map stays cached on every timestamped frame (its casters are the static
+//! cubes; the water is transmissive and never a caster), and every timestamped
+//! frame's output is hashed, so a bit-exact render lever is proven by the
+//! hashes matching run to run (the simulation is deterministic).
 
 use std::collections::BTreeMap;
 use std::time::Instant;
@@ -33,6 +38,11 @@ const TIMESTAMP_EVERY: usize = 10;
 const WIDTH: u32 = 1920;
 const HEIGHT: u32 = 1080;
 const STEP: &str = "node.gpu_flip_step";
+const RENDER: &str = "node.render_scene";
+const SHADOW_LABEL: &str = "node.render_scene shadow";
+const BYTES_PER_PIXEL: u32 = 8;
+const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+const FNV_PRIME: u64 = 0x0100_0000_01b3;
 
 fn manifest(json: &Value) -> ParamManifest {
     let specs: Vec<ParamSpecDef> =
@@ -59,13 +69,43 @@ fn context(frame: i64, tick: u32) -> PresetContext {
     }
 }
 
+/// A timestamped frame's split: per node type, per dispatch label inside the
+/// solver, per pass label (with its encoder kind) inside render_scene, and the
+/// output hash.
+struct Split {
+    per_type: BTreeMap<String, f64>,
+    per_step_label: BTreeMap<String, f64>,
+    per_render_label: BTreeMap<String, f64>,
+    shadow_rendered: bool,
+    hash: u64,
+}
+
 /// One frame's numbers. Plain frames fill `gpu_ms` and `cpu_ms`; timestamped
-/// frames also fill the per-type and per-step-label splits.
+/// frames also fill the split.
 struct Frame {
     gpu_ms: f64,
     cpu_ms: f64,
     node_error: bool,
-    split: Option<(BTreeMap<String, f64>, BTreeMap<String, f64>)>,
+    split: Option<Split>,
+}
+
+fn fnv1a(seed: u64, bytes: impl Iterator<Item = u8>) -> u64 {
+    bytes.fold(seed, |h, b| (h ^ u64::from(b)).wrapping_mul(FNV_PRIME))
+}
+
+/// FNV-1a over the target's bytes, read back through its own encoder so the
+/// copy never lands in the profiled frame.
+fn output_hash(device: &GpuDevice, target: &RenderTarget) -> u64 {
+    let bytes_per_row = target.width * BYTES_PER_PIXEL;
+    let total = u64::from(target.height * bytes_per_row);
+    let buf = device.create_buffer_shared(total);
+    let mut enc = device.create_encoder("gpu flip frame hash");
+    enc.copy_texture_to_buffer(&target.texture, &buf, target.width, target.height, bytes_per_row);
+    enc.commit_and_wait_completed();
+    let ptr = buf.mapped_ptr().expect("shared readback buffer must expose mapped pointer");
+    // SAFETY: the buffer is `total` bytes, shared, and the copy has completed.
+    let bytes: &[u8] = unsafe { std::slice::from_raw_parts(ptr, total as usize) };
+    fnv1a(FNV_OFFSET, bytes.iter().copied())
 }
 
 fn render(
@@ -109,6 +149,8 @@ fn render(
         runtime.take_step_profiles().into_iter().map(|step| (step.tag, step.type_id)).collect();
     let mut per_type = BTreeMap::new();
     let mut per_step_label = BTreeMap::new();
+    let mut per_render_label = BTreeMap::new();
+    let mut shadow_rendered = false;
     for span in &profile.spans {
         let Some(type_id) = steps.get(&span.tag) else {
             *per_type.entry("(untagged)".to_owned()).or_insert(0.0) += span.millis;
@@ -117,9 +159,18 @@ fn render(
         *per_type.entry(type_id.clone()).or_insert(0.0) += span.millis;
         if type_id == STEP {
             *per_step_label.entry(span.label.clone()).or_insert(0.0) += span.millis;
+        } else if type_id == RENDER {
+            shadow_rendered |= span.label == SHADOW_LABEL;
+            *per_render_label.entry(format!("{:?} {}", span.kind, span.label)).or_insert(0.0) += span.millis;
         }
     }
-    Frame { gpu_ms, cpu_ms, node_error, split: Some((per_type, per_step_label)) }
+    let hash = output_hash(device, target);
+    Frame {
+        gpu_ms,
+        cpu_ms,
+        node_error,
+        split: Some(Split { per_type, per_step_label, per_render_label, shadow_rendered, hash }),
+    }
 }
 
 fn percentile(samples: &[f64], fraction: f64) -> f64 {
@@ -173,6 +224,9 @@ fn gpu_flip_frame_perf() {
     let mut stamped_gpu = Vec::new();
     let mut per_type: BTreeMap<String, Vec<f64>> = BTreeMap::new();
     let mut per_label: BTreeMap<String, Vec<f64>> = BTreeMap::new();
+    let mut per_render: BTreeMap<String, Vec<f64>> = BTreeMap::new();
+    let mut shadow_frames = Vec::new();
+    let mut hashes = Vec::new();
     let mut node_error_frames = 0usize;
     for tick in 0..MEASURED_FRAMES {
         frame += 1;
@@ -191,14 +245,21 @@ fn gpu_flip_frame_perf() {
                 plain_gpu.push(result.gpu_ms);
                 plain_cpu.push(result.cpu_ms);
             }
-            Some((types, labels)) => {
+            Some(split) => {
                 stamped_gpu.push(result.gpu_ms);
-                for (name, ms) in types {
+                for (name, ms) in split.per_type {
                     per_type.entry(name).or_default().push(ms);
                 }
-                for (name, ms) in labels {
+                for (name, ms) in split.per_step_label {
                     per_label.entry(name).or_default().push(ms);
                 }
+                for (name, ms) in split.per_render_label {
+                    per_render.entry(name).or_default().push(ms);
+                }
+                if split.shadow_rendered {
+                    shadow_frames.push(tick);
+                }
+                hashes.push((tick, split.hash));
             }
         }
     }
@@ -219,4 +280,15 @@ fn gpu_flip_frame_perf() {
     );
     print_split("per node type", &per_type);
     print_split("gpu_flip_step per dispatch label", &per_label);
+    print_split("render_scene per pass label", &per_render);
+    let combined = fnv1a(FNV_OFFSET, hashes.iter().flat_map(|&(_, hash)| hash.to_le_bytes()));
+    println!("  output hash over the timestamped frames: {combined:016x}");
+    for (tick, hash) in &hashes {
+        println!("    tick {tick}: {hash:016x}");
+    }
+    println!("  timestamped frames that re-rendered the shadow map: {shadow_frames:?}");
+    assert!(
+        shadow_frames.is_empty(),
+        "the raster shadow map must stay cached: its casters are static, so a re-render means the dirty key moved"
+    );
 }
