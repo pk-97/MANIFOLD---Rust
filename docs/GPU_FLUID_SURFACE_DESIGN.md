@@ -194,14 +194,17 @@ negative-inside values, `φ = max(φ, 0)`). Border nodes are forced outside so m
 cubes emits a closed, consistently wound surface. The volume-optics path needs a closed mesh
 (`volume_geometry` in the current contract of WATER_SIMULATION_DESIGN.md).
 
-**D16 — Marching cubes is three atoms: count, running total, emit per output vertex.**
-Count writes triangles per cell; running total is an inclusive scan with a one-frame-late
-CPU total; emit runs one thread per output vertex, binary-searches the scan for its cell
-and computes the vertex and a gradient normal. Threads past the total write zero
-vertices — the zeroed-tail contract of `R/fluid_mesh_upload.rs:95-117` with no clear
-pass. If the total exceeds capacity, emit writes an empty mesh and the next frame
-reports the error. Rejected: one thread per active cell writing up to 15 vertices — a
-scatter write the codegen cannot express and the per-element scope test rejects.
+**D16 — Marching cubes is three atoms: count, running total, cell-owned emit.**
+Count writes triangles per cell; running total is an inclusive scan with a
+one-frame-late CPU total. Emit assigns one invocation to each active cell.
+Its scan interval owns the same ordered triangles; a twelve-edge cache reuses
+interpolation and gradient results. Relaxation uses the same ownership and
+preserves the original neighbour-add order. A separate GPU pass clears retired
+vertex slots before emission. Both passes use freeze-generated bindings and
+bodies (`owned_outputs` and `buffer_index` in ADDING_PRIMITIVES.md). If the total
+exceeds capacity, the mesh is empty and the next frame reports the error.
+BUG-8c4w / BUG-l24y replace the former per-vertex binary search; the dense body
+remains a test oracle.
 
 **D17 — Binning is one atom.** `node.sort_particles_into_cells` is atomic count → scan →
 atomic scatter → per-bin stabilise (D21), declared `BarrieredReduction` (precedent
@@ -238,6 +241,36 @@ adds in a fixed order. Cost: the sort goes from 0.20 to 0.51 ms p95 at res 64 ×
 the surface stays inside D20. Proof: `fluid_sort_particles_into_cells_is_deterministic`
 (three runs byte-identical, bins in input order, crowded and sparse bins). Rejected: an
 opt-in switch, because determinism is an invariant, not a mode.
+
+**D22 — Occupied bricks schedule the existing dense lattice (BUG-8c4w / BUG-l24y).**
+`node.lattice_bricks` marks 8³-node bricks from blob support plus the positive
+distance band, including five nodes on each side: three smoothing taps, one
+gradient neighbour, and one cell corner. Domain-border bricks remain active.
+The support-box endpoints use the volume's exact coordinate expression, so
+rounding a precomputed spacing cannot exclude a sample. A shared `PrefixScan`
+compacts the mask in ascending brick order, without particle readback or caps.
+The schedule contains eight u32 header words (active count, indirect grid xyz,
+brick dimensions xyz, reserved), N mask words and N compact-list slots.
+
+Volume, smoothing, solid clamp and triangle counting keep their dense storage
+and freeze body arithmetic. Generated index mapping dispatches active bricks;
+an exterior pass writes inactive slots every frame, which also clears retired
+bricks. Volume exterior is `cell_size / 3`; each smoothing axis applies the
+original ordered binomial sum to its constant exterior input. Copying the band
+would lose f32 bits. Clamp restores the original border band, and exterior
+cells count zero triangles. Capacity padding keeps the pre-existing pass-through
+rules. The WaterDamBreakGpuFlip group wires one schedule through mesh emission and
+both relaxation passes too, and binds its refinement to Surface Detail.
+
+This is an independent implementation informed by FLIP Fluids'
+`particlemesher.cpp` active blocks and [Museth 2013, VDB](https://museth.org/Ken/Publications_files/Museth_TOG13.pdf):
+topology is separate from sample values. No native code was copied. Storage
+remains dense; the optimization removes inactive gathers, not lattice memory.
+CPU proofs cover support/halo conservativeness, exact exterior arithmetic,
+unique schedule ownership and shader validation. GPU proofs preserve the
+pre-change dense bodies and compare bits at simulation resolutions 64 and 128,
+including moving and empty frames. They must run on the GPU-owning session;
+compiling them does not establish bit parity or a performance improvement.
 
 ## 3. The particle-frame contract
 

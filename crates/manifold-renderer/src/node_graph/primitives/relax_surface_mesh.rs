@@ -4,15 +4,17 @@
 //! neighbours, as FLIP Fluids' mesh smoothing does. The neighbours come from
 //! the lattice the mesh was built on, so the triangle list needs no index
 //! buffer. Chain nodes for more passes. A per-element gather on the codegen
-//! path; with `extent` wired it dispatches only over live and last frame's
-//! vertices and passes the mesh's live extent on.
+//! path; each cell owns its scan interval, while a pass-2 invocation on the
+//! same generated kernel clears retired vertex slots before emission. With
+//! `extent` wired it dispatches only over live and last frame's vertices and
+//! passes the mesh's live extent on.
 
 use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
 use super::count_surface_triangles::MARCHING_CUBES_COMMON;
-use super::running_total::EXTENT_GRID_OFFSET;
+use super::liquid_bricks;
 use super::sort_particles_into_cells::float_param;
 use super::standalone_pipeline::standalone_pipeline;
 use crate::generators::mesh_common::MeshVertex;
@@ -29,21 +31,22 @@ struct RelaxUniforms {
     nodes_y: f32,
     nodes_z: f32,
     strength: f32,
+    max_capacity: u32,
+    brick_pass: u32,
     dispatch_count: u32,
-    _pad0: u32,
-    _pad1: u32,
-    _pad2: u32,
+    _pad: u32,
 }
 
 crate::primitive! {
     name: RelaxSurfaceMesh,
     type_id: "node.relax_surface_mesh",
-    purpose: "One relaxation pass over a marching-cubes triangle list from node.volume_surface_mesh: each vertex moves strength of the way toward the mean of the vertices it shares a triangle edge with. Neighbours are found through the lattice the mesh was built on (the four cells around each vertex's lattice edge), so every copy of a shared vertex moves identically and the mesh stays closed. Strength 0 copies the input; slots past the live triangles are zero. Normals pass through.",
+    purpose: "One relaxation pass over a marching-cubes triangle list from node.volume_surface_mesh: each lattice cell owns its scan interval and caches each shared-edge neighbour sum, then every vertex moves strength of the way toward the mean of the vertices it shares a triangle edge with. Every copy of a shared vertex moves identically and the mesh stays closed. Strength 0 copies the input; slots past the live triangles are zero. Normals pass through.",
     inputs: {
         vertices: Array(MeshVertex) required,
         levelset: Array(f32) required,
         scan: Array(u32) required,
         extent: Array(u32) optional,
+        bricks: Array(u32) optional,
         nodes_x: ScalarF32 optional, nodes_y: ScalarF32 optional, nodes_z: ScalarF32 optional,
         strength: ScalarF32 optional,
     },
@@ -66,8 +69,11 @@ crate::primitive! {
     aliases: ["mesh smoothing", "laplacian smooth", "relax mesh", "smooth liquid mesh", "umbrella smoothing"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/relax_surface_mesh_body.wgsl"),
-    input_access: [BufferGather, BufferGather, BufferGather, BufferGather],
-    wgsl_includes: [MARCHING_CUBES_COMMON],
+    input_access: [BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
+    derived_uniforms: ["max_capacity:u32", "brick_pass:u32"],
+    wgsl_includes: [MARCHING_CUBES_COMMON, liquid_bricks::COMMON],
+    owned_outputs: ["relaxed"],
+    buffer_index: "liquid_cell_brick_index",
     extra_fields: {
         // Identity of the output buffer last written; a new one is written whole.
         emit_target: usize = 0,
@@ -75,14 +81,25 @@ crate::primitive! {
 }
 
 impl Primitive for RelaxSurfaceMesh {
-    fn array_output_capacity(&self, port: &str, _params: &ParamValues, inputs: &[(&str, u32)]) -> Option<u32> {
+    fn array_output_capacity(
+        &self,
+        port: &str,
+        _params: &ParamValues,
+        inputs: &[(&str, u32)],
+    ) -> Option<u32> {
         (port == "relaxed")
-            .then(|| inputs.iter().find(|(name, _)| *name == "vertices").map(|&(_, n)| n))
+            .then(|| {
+                inputs
+                    .iter()
+                    .find(|(name, _)| *name == "vertices")
+                    .map(|&(_, n)| n)
+            })
             .flatten()
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let nodes = ["nodes_x", "nodes_y", "nodes_z"].map(|name| ctx.scalar_or_param(name, 2.0).round());
+        let nodes =
+            ["nodes_x", "nodes_y", "nodes_z"].map(|name| ctx.scalar_or_param(name, 2.0).round());
         let strength = ctx.scalar_or_param("strength", 0.5);
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
@@ -94,10 +111,28 @@ impl Primitive for RelaxSurfaceMesh {
         ) else {
             return;
         };
-        let cells: u64 = nodes.iter().map(|&n| n.max(2.0) as u64 - 1).product();
-        let node_total: u64 = nodes.iter().map(|&n| n.max(2.0) as u64).product();
-        if nodes.iter().all(|&n| n >= 2.0) && (node_total > levelset.size / 4 || cells > scan.size / 4) {
-            ctx.error("Relax Surface Mesh: the lattice is larger than its level set or running total");
+        let dimensions = nodes.map(|n| n.max(2.0) as u64);
+        let Some(node_total) = dimensions
+            .into_iter()
+            .try_fold(1u64, |total, n| total.checked_mul(n))
+        else {
+            ctx.error("Relax Surface Mesh: lattice node count overflows the dispatch index");
+            return;
+        };
+        let Some(cells) = nodes
+            .map(|n| n.max(2.0) as u64 - 1)
+            .into_iter()
+            .try_fold(1u64, |total, n| total.checked_mul(n))
+        else {
+            ctx.error("Relax Surface Mesh: lattice cell count overflows the dispatch index");
+            return;
+        };
+        if nodes.iter().all(|&n| n >= 2.0)
+            && (node_total > levelset.size / 4 || cells > scan.size / 4)
+        {
+            ctx.error(
+                "Relax Surface Mesh: the lattice is larger than its level set or running total",
+            );
             return;
         }
         let vertex = std::mem::size_of::<MeshVertex>() as u64;
@@ -109,53 +144,198 @@ impl Primitive for RelaxSurfaceMesh {
             return;
         }
         let Ok(slots) = u32::try_from(in_slots) else {
-            ctx.error(format!("Relax Surface Mesh: {in_slots} vertices is more than one dispatch carries"));
+            ctx.error(format!(
+                "Relax Surface Mesh: {in_slots} vertices is more than one dispatch carries"
+            ));
             return;
         };
-        if slots == 0 {
+        let Ok(dispatch_cells) = u32::try_from(cells) else {
+            ctx.error(format!(
+                "Relax Surface Mesh: {cells} cells is more than one dispatch carries"
+            ));
+            return;
+        };
+        if slots == 0 || dispatch_cells == 0 {
             return;
         }
+        let max_capacity = slots;
         let extent = ctx.inputs.array("extent");
         let fresh = relaxed.identity_key() != self.emit_target;
         self.emit_target = relaxed.identity_key();
         if let Some(live) = ctx.inputs.live_extent("vertices") {
-            ctx.outputs.set_live_extent("relaxed", LiveExtent { bound: live.bound.min(slots), ..live });
+            ctx.outputs.set_live_extent(
+                "relaxed",
+                LiveExtent {
+                    bound: live.bound.min(slots),
+                    ..live
+                },
+            );
         }
         let uniforms = RelaxUniforms {
             nodes_x: nodes[0],
             nodes_y: nodes[1],
             nodes_z: nodes[2],
             strength,
+            max_capacity,
+            brick_pass: 0,
+            dispatch_count: dispatch_cells,
+            _pad: 0,
+        };
+        let bricks = ctx.inputs.array("bricks");
+        if bricks
+            .is_some_and(|b| !liquid_bricks::valid_schedule(b, nodes.map(|n| n.max(2.0) as u32)))
+        {
+            ctx.error("Relax Surface Mesh: brick schedule does not match the lattice");
+            return;
+        }
+        let brick_pass = u32::from(bricks.is_some());
+        let uniforms = RelaxUniforms {
+            brick_pass,
+            ..uniforms
+        };
+        let gpu = ctx.gpu_encoder();
+        let clear_uniforms = RelaxUniforms {
+            brick_pass: 2,
             dispatch_count: slots,
-            _pad0: 0,
-            _pad1: 0,
-            _pad2: 0,
+            ..uniforms
+        };
+        let clear_bindings = [
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&clear_uniforms),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: vertices,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: levelset,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: scan,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 4,
+                buffer: extent.unwrap_or(scan),
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 5,
+                buffer: bricks.unwrap_or(scan),
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 6,
+                buffer: relaxed,
+                offset: 0,
+            },
+        ];
+        if let Some(extent) = extent.filter(|_| !fresh) {
+            gpu.native_enc.dispatch_compute_indirect(
+                pipeline,
+                &clear_bindings,
+                extent,
+                super::running_total::EXTENT_GRID_OFFSET,
+                "node.relax_surface_mesh.clear_tail",
+            );
+        } else {
+            liquid_bricks::dispatch(
+                gpu.native_enc,
+                pipeline,
+                &clear_bindings,
+                bricks,
+                2,
+                slots,
+                "node.relax_surface_mesh.clear",
+            );
+        }
+        let brick_pass = u32::from(bricks.is_some());
+        let uniforms = RelaxUniforms {
+            brick_pass,
+            dispatch_count: dispatch_cells,
+            ..uniforms
         };
         let bindings = [
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-            GpuBinding::Buffer { binding: 1, buffer: vertices, offset: 0 },
-            GpuBinding::Buffer { binding: 2, buffer: levelset, offset: 0 },
-            GpuBinding::Buffer { binding: 3, buffer: scan, offset: 0 },
-            GpuBinding::Buffer { binding: 4, buffer: extent.unwrap_or(scan), offset: 0 },
-            GpuBinding::Buffer { binding: 5, buffer: relaxed, offset: 0 },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&uniforms),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: vertices,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: levelset,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: scan,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 4,
+                buffer: extent.unwrap_or(scan),
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 5,
+                buffer: bricks.unwrap_or(scan),
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 6,
+                buffer: relaxed,
+                offset: 0,
+            },
         ];
-        let gpu = ctx.gpu_encoder();
-        match extent {
-            // The running total's grid covers this frame's and last frame's
-            // vertices: live ones are relaxed, the rest cleared.
-            Some(extent) if !fresh => gpu.native_enc.dispatch_compute_indirect(
-                pipeline,
-                &bindings,
-                extent,
-                EXTENT_GRID_OFFSET,
-                "node.relax_surface_mesh",
-            ),
-            _ => gpu.native_enc.dispatch_compute(
-                pipeline,
-                &bindings,
-                [slots.div_ceil(256), 1, 1],
-                "node.relax_surface_mesh",
-            ),
-        }
+        liquid_bricks::dispatch(
+            gpu.native_enc,
+            pipeline,
+            &bindings,
+            bricks,
+            brick_pass,
+            dispatch_cells,
+            "node.relax_surface_mesh",
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RelaxSurfaceMesh;
+
+    #[test]
+    fn cell_owned_relax_codegen_caches_neighbour_sums() {
+        assert_eq!(
+            std::mem::size_of::<super::RelaxUniforms>(),
+            8 * std::mem::size_of::<u32>()
+        );
+        let source = crate::node_graph::freeze::codegen::standalone_for_spec::<RelaxSurfaceMesh>()
+            .expect("cell-owned relax standalone codegen");
+        let module =
+            naga::front::wgsl::parse_str(&source).expect("generated relax kernel must parse");
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .expect("generated relax kernel must validate");
+        assert!(!source.contains("var lo"));
+        assert!(source.contains("edge_cache[edge] = rsm_neighbour_sum"));
+        assert!(source.contains("if !edge_ready[edge]"));
+        assert!(source.contains("edge_cache[edge]"));
+        assert!(source.contains("buf_relaxed[slot]"));
+        assert!(source.contains("if idx == 0xffffffffu"));
+        assert!(source.contains("if brick_pass == 2u"));
+        assert!(source.contains("buf_relaxed[idx] = zero"));
+        assert!(!source.contains("buf_relaxed[idx] = body"));
     }
 }

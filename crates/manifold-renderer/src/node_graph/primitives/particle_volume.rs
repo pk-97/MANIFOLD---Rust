@@ -7,6 +7,7 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
+use super::liquid_bricks;
 use super::sort_particles_into_cells::{bin_param, float_param, read_searched_bins};
 use super::standalone_pipeline::standalone_pipeline;
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
@@ -32,8 +33,8 @@ struct VolumeUniforms {
     bins_x: i32,
     bins_y: i32,
     bins_z: i32,
+    brick_pass: u32,
     dispatch_count: u32,
-    _pad0: u32,
 }
 
 /// Level-set nodes per axis: `(n − 1)·m + 1` over the solid lattice's box.
@@ -57,6 +58,7 @@ crate::primitive! {
         blobs: Array(FluidBlob) required,
         cell_ranges: Array(CellRange) required,
         solid: Array(f32) required,
+        bricks: Array(u32) optional,
         center_x: ScalarF32 optional, center_y: ScalarF32 optional, center_z: ScalarF32 optional,
         size_x: ScalarF32 optional, size_y: ScalarF32 optional, size_z: ScalarF32 optional,
         nodes_x: ScalarF32 optional, nodes_y: ScalarF32 optional, nodes_z: ScalarF32 optional,
@@ -100,7 +102,10 @@ crate::primitive! {
     aliases: ["level set", "signed distance", "liquid field", "scalar field"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/particle_volume_body.wgsl"),
-    input_access: [BufferGather, BufferGather, BufferGather],
+    input_access: [BufferGather, BufferGather, BufferGather, BufferGather],
+    derived_uniforms: ["brick_pass:u32"],
+    wgsl_includes: [liquid_bricks::COMMON],
+    buffer_index: "liquid_brick_index",
 }
 
 impl Primitive for ParticleVolume {
@@ -113,21 +118,34 @@ impl Primitive for ParticleVolume {
         if port != "levelset" {
             return None;
         }
-        let solid = inputs.iter().find(|(name, _)| *name == "solid").map(|&(_, n)| n)?;
+        let solid = inputs
+            .iter()
+            .find(|(name, _)| *name == "solid")
+            .map(|&(_, n)| n)?;
         Some(solid.saturating_mul(volume_scale(params).pow(3)))
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let nodes = ["nodes_x", "nodes_y", "nodes_z"].map(|name| ctx.scalar_or_param(name, 2.0).round());
+        let nodes =
+            ["nodes_x", "nodes_y", "nodes_z"].map(|name| ctx.scalar_or_param(name, 2.0).round());
         let scale = volume_scale(ctx.params);
         let lattice_valid = nodes.iter().all(|&n| n >= 2.0);
-        let refined = if lattice_valid { refined_nodes(nodes, scale) } else { [0; 3] };
-        for (port, value) in ["volume_nodes_x", "volume_nodes_y", "volume_nodes_z"].into_iter().zip(refined) {
-            ctx.outputs.set_scalar(port, ParamValue::Float(value as f32));
+        let refined = if lattice_valid {
+            refined_nodes(nodes, scale)
+        } else {
+            [0; 3]
+        };
+        for (port, value) in ["volume_nodes_x", "volume_nodes_y", "volume_nodes_z"]
+            .into_iter()
+            .zip(refined)
+        {
+            ctx.outputs
+                .set_scalar(port, ParamValue::Float(value as f32));
         }
         let [center_x, center_y, center_z] =
             ["center_x", "center_y", "center_z"].map(|name| ctx.scalar_or_param(name, 0.0));
-        let [size_x, size_y, size_z] = ["size_x", "size_y", "size_z"].map(|name| ctx.scalar_or_param(name, 4.0));
+        let [size_x, size_y, size_z] =
+            ["size_x", "size_y", "size_z"].map(|name| ctx.scalar_or_param(name, 4.0));
         let uniforms = VolumeUniforms {
             center_x,
             center_y,
@@ -143,8 +161,8 @@ impl Primitive for ParticleVolume {
             bins_x: 0,
             bins_y: 0,
             bins_z: 0,
+            brick_pass: 0,
             dispatch_count: 0,
-            _pad0: 0,
         };
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
@@ -182,19 +200,63 @@ impl Primitive for ParticleVolume {
             }
         };
         let [bins_x, bins_y, bins_z] = bins.map(|n| n as i32);
-        let uniforms = VolumeUniforms { bins_x, bins_y, bins_z, dispatch_count: total as u32, ..uniforms };
+        let uniforms = VolumeUniforms {
+            bins_x,
+            bins_y,
+            bins_z,
+            dispatch_count: total as u32,
+            ..uniforms
+        };
+        let bricks = ctx.inputs.array("bricks");
+        if bricks.is_some_and(|b| !liquid_bricks::valid_schedule(b, refined)) {
+            ctx.error("Liquid lattice: brick schedule does not match the lattice dimensions");
+            return;
+        }
         let gpu = ctx.gpu_encoder();
-        gpu.native_enc.dispatch_compute(
-            pipeline,
-            &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: blobs, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: ranges, offset: 0 },
-                GpuBinding::Buffer { binding: 3, buffer: solid, offset: 0 },
-                GpuBinding::Buffer { binding: 4, buffer: levelset, offset: 0 },
-            ],
-            [(total as u32).div_ceil(256), 1, 1],
-            "node.particle_volume",
-        );
+        for pass in 0..if bricks.is_some() { 2 } else { 1 } {
+            let uniforms = VolumeUniforms {
+                brick_pass: if bricks.is_some() { 2 - pass } else { 0 },
+                ..uniforms
+            };
+            liquid_bricks::dispatch(
+                gpu.native_enc,
+                pipeline,
+                &[
+                    GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&uniforms),
+                    },
+                    GpuBinding::Buffer {
+                        binding: 1,
+                        buffer: blobs,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 2,
+                        buffer: ranges,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 3,
+                        buffer: solid,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 4,
+                        buffer: bricks.unwrap_or(solid),
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 5,
+                        buffer: levelset,
+                        offset: 0,
+                    },
+                ],
+                bricks,
+                uniforms.brick_pass,
+                total as u32,
+                "node.particle_volume",
+            );
+        }
     }
 }

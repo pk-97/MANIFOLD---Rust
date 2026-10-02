@@ -240,6 +240,15 @@ pub trait PrimitiveSpec: Send {
     /// (WGSL atomics are integer-only).
     const ATOMIC_OUTPUTS: &'static [&'static str] = &[];
 
+    /// Array output ports written directly by the body. The generated
+    /// standalone wrapper binds these outputs but skips its coincident store.
+    const OWNED_OUTPUTS: &'static [&'static str] = &[];
+
+    /// Optional WGSL function that maps a dense dispatch id to a sparse array
+    /// element. It is defined by the primitive's WGSL includes and returns
+    /// `0xffffffffu` for an inactive dispatch item.
+    const BUFFER_INDEX: Option<&'static str> = None;
+
     /// How this primitive propagates the depth companion channel the "3D
     /// Shading" toggle synthesizes (design doc `docs/DEPTH_RELIGHT_DESIGN.md`
     /// D1). **No default** — unlike [`FUSION_KIND`](Self::FUSION_KIND), every
@@ -1150,6 +1159,12 @@ impl<P: Primitive + 'static> EffectNode for P {
     fn atomic_outputs(&self) -> &'static [&'static str] {
         P::ATOMIC_OUTPUTS
     }
+    fn owned_outputs(&self) -> &'static [&'static str] {
+        P::OWNED_OUTPUTS
+    }
+    fn buffer_index(&self) -> Option<&'static str> {
+        P::BUFFER_INDEX
+    }
 }
 
 /// Runtime view of a primitive's const metadata, suitable for
@@ -1271,6 +1286,8 @@ macro_rules! primitive {
         $( frame_time_inputs: [ $($fti:literal),* $(,)? ], )?
         $( wgsl_includes: [ $($inc:expr),* $(,)? ], )?
         $( atomic_outputs: [ $($atomic_out:literal),* $(,)? ], )?
+        $( owned_outputs: [ $($owned_out:literal),* $(,)? ], )?
+        $( buffer_index: $buffer_index:literal, )?
         $( extra_fields: { $($field_name:ident : $field_ty:ty = $field_init:expr),* $(,)? }, )?
     ) => {
         $crate::__primitive_struct! {
@@ -1340,6 +1357,8 @@ macro_rules! primitive {
             $( const FRAME_TIME_INPUTS: &'static [&'static str] = &[ $($fti),* ]; )?
             $( const WGSL_INCLUDES: &'static [&'static str] = &[ $($inc),* ]; )?
             $( const ATOMIC_OUTPUTS: &'static [&'static str] = &[ $($atomic_out),* ]; )?
+            $( const OWNED_OUTPUTS: &'static [&'static str] = &[ $($owned_out),* ]; )?
+            $( const BUFFER_INDEX: Option<&'static str> = Some($buffer_index); )?
 
             fn cached_type_id() -> &'static $crate::node_graph::effect_node::EffectNodeType {
                 static CELL: std::sync::OnceLock<$crate::node_graph::effect_node::EffectNodeType> =

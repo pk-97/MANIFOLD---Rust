@@ -568,6 +568,7 @@ pub const LIQUID_EXTENT_RULES: &[ExtentRule] = &[
     ExtentRule { type_id: "node.sort_particles_into_cells", check: sort_particles_into_cells },
     ExtentRule { type_id: "node.shape_particle_blobs", check: shape_particle_blobs },
     ExtentRule { type_id: "node.particle_volume", check: particle_volume },
+    ExtentRule { type_id: "node.lattice_bricks", check: lattice_bricks },
     ExtentRule { type_id: "node.smooth_lattice", check: smooth_lattice },
     ExtentRule { type_id: "node.clamp_liquid_to_solids", check: clamp_liquid_to_solids },
     ExtentRule { type_id: "node.count_surface_triangles", check: count_surface_triangles },
@@ -995,8 +996,32 @@ fn particle_volume(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
         x.publish(port, n as f32);
     }
     searched(x)?;
+    brick_schedule(x, refined)?;
     x.covers("solid", nodes_total(nodes) * 4)?;
     x.covers("levelset", lattice_total(refined) * 4)
+}
+
+fn lattice_bricks(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    use crate::node_graph::primitives::{lattice_bricks::brick_layout, prefix_scan::storage_words};
+    let nodes = x.nodes(["nodes_x", "nodes_y", "nodes_z"]);
+    if nodes.iter().any(|&n| n < 2.0) {
+        return Err(x.uncovered(format!("no lattice: nodes {nodes:?}")));
+    }
+    let layout = brick_layout(nodes.map(|n| n as u32), volume_scale(x.params()))
+        .ok_or_else(|| x.uncovered("brick lattice cannot be indexed in u32".into()))?;
+    searched(x)?;
+    x.covers("solid", nodes_total(nodes) * 4)?;
+    let bytes = u64::from(layout.words) * 4;
+    x.provide("bricks", bytes);
+    x.hold(bytes + storage_words(layout.count as usize) as u64 * 4);
+    Ok(())
+}
+
+fn brick_schedule(x: &AtomExtent<'_>, nodes: [u32; 3]) -> Result<(), Verdict> {
+    if !x.wired("bricks") { return Ok(()); }
+    let words = crate::node_graph::primitives::liquid_bricks::schedule_words(nodes)
+        .ok_or_else(|| x.uncovered("brick schedule size overflow".into()))?;
+    x.covers("bricks", words * 4)
 }
 
 fn smooth_lattice(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
@@ -1004,6 +1029,7 @@ fn smooth_lattice(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     if nodes.iter().any(|&n| n < 2.0) {
         return Err(x.uncovered(format!("no lattice: nodes {nodes:?}")));
     }
+    brick_schedule(x, nodes.map(|n| n as u32))?;
     x.covers("levelset", nodes_total(nodes) * 4)?;
     x.covers("smoothed", nodes_total(nodes) * 4)
 }
@@ -1014,6 +1040,7 @@ fn clamp_liquid_to_solids(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     if nodes.iter().chain(&solid).any(|&n| n < 2.0) {
         return Err(x.uncovered(format!("no lattice: nodes {nodes:?}, solid {solid:?}")));
     }
+    brick_schedule(x, nodes.map(|n| n as u32))?;
     x.covers("levelset", nodes_total(nodes) * 4)?;
     x.covers("clamped", nodes_total(nodes) * 4)?;
     x.covers("solid", nodes_total(solid) * 4)
@@ -1024,6 +1051,7 @@ fn count_surface_triangles(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     if nodes.iter().any(|&n| n < 2.0) {
         return Err(x.uncovered(format!("no lattice: nodes {nodes:?}")));
     }
+    brick_schedule(x, nodes.map(|n| n as u32))?;
     x.covers("levelset", nodes_total(nodes) * 4)?;
     x.covers("counts", nodes_total(nodes.map(|n| n - 1.0)) * 4)
 }
@@ -1038,10 +1066,11 @@ fn volume_surface_mesh(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     if nodes.iter().any(|&n| n < 2.0) {
         return Err(x.uncovered(format!("no lattice: nodes {nodes:?}")));
     }
+    brick_schedule(x, nodes.map(|n| n as u32))?;
     x.covers("levelset", nodes_total(nodes) * 4)?;
     x.covers("scan", nodes_total(nodes.map(|n| n - 1.0)) * 4)?;
-    // Provided and grown at run time; the kernel's dispatch count is the
-    // buffer's own whole-triangle slot count (`emit_slots`), so any size covers.
+    // Provided and grown at run time; cell emission checks the live scan total
+    // against the buffer's whole-triangle slot count before writing.
     let start = start_capacity(x.params(), nodes) * size_of::<MeshVertex>() as u64;
     x.provide("vertices", start);
     x.hold(start);
@@ -1053,9 +1082,10 @@ fn relax_surface_mesh(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     if nodes.iter().any(|&n| n < 2.0) {
         return Err(x.uncovered(format!("no lattice: nodes {nodes:?}")));
     }
+    brick_schedule(x, nodes.map(|n| n as u32))?;
     x.covers("levelset", nodes_total(nodes) * 4)?;
     x.covers("scan", nodes_total(nodes.map(|n| n - 1.0)) * 4)?;
-    // One thread per input slot; neighbours lie below the live total, inside it.
+    // Cell-owned intervals and neighbour reads lie below the checked live total.
     let vertices = x.bytes("vertices").ok_or_else(|| x.uncovered("vertices is unbound".into()))?;
     x.covers("relaxed", vertices)
 }

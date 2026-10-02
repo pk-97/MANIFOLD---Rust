@@ -332,6 +332,8 @@ pub(crate) mod sort_particles_into_cells;
 mod running_total;
 mod shape_particle_blobs;
 pub(crate) mod particle_volume;
+pub(crate) mod lattice_bricks;
+pub(crate) mod liquid_bricks;
 mod smooth_lattice;
 pub(crate) mod dot_products;
 mod divide_by_value;

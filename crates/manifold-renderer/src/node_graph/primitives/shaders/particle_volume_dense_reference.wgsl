@@ -1,3 +1,4 @@
+// Test-only pre-brick dense reference, main 4aab34f86.
 // node.particle_volume — fusable BUFFER body, GATHER. One thread per level-set
 // node: the distance to the nearest blob ellipsoid in the node's 27 bins,
 // a·(|G·(x − c)| − 1) with a the blob's longest axis (exact for a sphere),
@@ -47,10 +48,8 @@ fn body(
     bins_x: i32,
     bins_y: i32,
     bins_z: i32,
-    brick_pass: u32,
 ) -> f32 {
     let band = cell_size / 3.0;
-    if brick_pass == 2u { return band; }
     let solid_nodes = max(vec3<u32>(vec3<f32>(nodes_x, nodes_y, nodes_z)), vec3<u32>(2u));
     let scale = u32(clamp(resolution_scale, 1, 8));
     let nodes = (solid_nodes - vec3<u32>(1u)) * scale + vec3<u32>(1u);
@@ -102,9 +101,4 @@ fn body(
         phi = max(phi, 0.0);
     }
     return phi;
-}
-
-fn liquid_brick_index(invocation: u32) -> u32 {
-    let dims = (max(vec3<u32>(vec3<f32>(params.nodes_x, params.nodes_y, params.nodes_z)), vec3<u32>(2u)) - vec3<u32>(1u)) * u32(clamp(params.resolution_scale, 1, 8)) + vec3<u32>(1u);
-    return liquid_brick_select(invocation, dims, params.brick_pass);
 }

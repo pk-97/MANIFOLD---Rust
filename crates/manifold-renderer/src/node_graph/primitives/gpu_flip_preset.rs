@@ -728,12 +728,12 @@ fn scene_cards(metadata: &Value, scene: WaterScene) -> Value {
     metadata
 }
 
-/// Sets `resolution_scale` on every surface volume and mesh node in `value`,
+/// Sets `resolution_scale` on the surface schedule, volume and mesh in `value`,
 /// however deep the group nests them.
 fn set_surface_scale(value: &mut Value, scale: usize) {
     match value {
         Value::Object(map) => {
-            let surface = map.get("nodeId").is_some_and(|id| id == "liquid_volume" || id == "liquid_mesh");
+            let surface = map.get("nodeId").is_some_and(|id| id == "liquid_volume" || id == "liquid_mesh" || id == "liquid_bricks");
             if surface && let Some(params) = map.get_mut("params") {
                 params["resolution_scale"] = int(scale);
             }
