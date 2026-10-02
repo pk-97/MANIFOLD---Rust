@@ -183,8 +183,8 @@ fn face_exists(p: vec3<i32>, n: vec3<i32>, a: i32) -> bool {
 // solve, its velocity the static solid's).
 @compute @workgroup_size(256)
 fn particles_to_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let idx = gid.x;
-    if idx >= face_total() {
+    let idx = c_face_index(gid.x);
+    if idx == NO_CELL {
         return;
     }
     let n = lattice();
@@ -695,8 +695,8 @@ fn solid_centre(p: vec3<i32>, m: vec3<i32>) -> f32 {
 // One thread per cell, in place on `cell_out`: the particles' φ.
 @compute @workgroup_size(256)
 fn phi_into_solids(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let idx = gid.x;
-    if idx >= cell_total() {
+    let idx = c_cell_index(gid.x);
+    if idx == NO_CELL {
         return;
     }
     let n = lattice();
@@ -711,8 +711,8 @@ fn phi_into_solids(@builtin(global_invocation_id) gid: vec3<u32>) {
 // particles rather than stopping at the cells that hold one.
 @compute @workgroup_size(256)
 fn water_from_phi(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let idx = gid.x;
-    if idx >= cell_total() {
+    let idx = c_cell_index(gid.x);
+    if idx == NO_CELL {
         return;
     }
     cell_out[idx] = select(0.0, 1.0, phi[idx] < 0.0);
@@ -743,9 +743,10 @@ fn water_from_phi(@builtin(global_invocation_id) gid: vec3<u32>) {
 // Per tile, the Chebyshev cell distance from its box to the nearest
 // particle-holding cell, 0..=CELL_REACH, or CELL_REACH + 1 beyond.
 @group(0) @binding(27) var<storage, read_write> tile_near: array<u32>;
-// Two halves of one tile each: the ring to the nearest occupied tile, or
-// ring_max + 1. The parity word of `tile_counts` names the current half.
-@group(0) @binding(28) var<storage, read_write> tile_ring: array<u32>;
+// Two halves of one tile each: the tile's list rank (rank_of), 0 in the
+// cell set C, 1 for the rest of rings 0 and 1, else its ring (ring_max + 1
+// beyond). The parity word of `tile_counts` names the current half.
+@group(0) @binding(28) var<storage, read_write> tile_rank: array<u32>;
 // Every tile: the cell set C (ring <= 1 and near <= CELL_REACH) first, then
 // the rest of rings 0 and 1, then ring by ring (tiles_lists).
 @group(0) @binding(29) var<storage, read_write> tiles_by_ring: array<u32>;
@@ -756,8 +757,14 @@ fn water_from_phi(@builtin(global_invocation_id) gid: vec3<u32>) {
 // Indirect triples [2 · count, 1, 1] (512 threads a tile, 256 a group): one
 // per count word k = 0..=ring_max, then the retired list.
 @group(0) @binding(31) var<storage, read_write> tile_args: array<u32>;
-// Tiles whose previous step had them in C and this step does not.
+// Tiles in C on the previous step and not on this one.
 @group(0) @binding(32) var<storage, read_write> tiles_retired: array<u32>;
+// The cell arrays the C passes own, for the canonical fill and the retire
+// (GPU_FLIP_SPARSE_BLOCKS_DESIGN.md section 4 (The defined-value rule)); the
+// gathered faces bind at `faces_out`.
+@group(0) @binding(33) var<storage, read_write> tile_water: array<f32>;
+@group(0) @binding(34) var<storage, read_write> tile_phi: array<f32>;
+@group(0) @binding(35) var<storage, read_write> tile_rhs: array<f32>;
 
 // Fixed point for the pocket sums: integer adds give the same total in any
 // order, so the solves stay the same on every run.
@@ -1160,8 +1167,8 @@ fn solid_flux(f: vec3<i32>, a: i32, n: vec3<i32>, m: vec3<i32>, c: f32) -> f32 {
 // cell's open volume; 0 in air.
 @compute @workgroup_size(256)
 fn divergence(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let idx = gid.x;
-    if idx >= cell_total() {
+    let idx = c_cell_index(gid.x);
+    if idx == NO_CELL {
         return;
     }
     if !(water[idx] > 0.5) {
@@ -1193,8 +1200,8 @@ fn divergence(@builtin(global_invocation_id) gid: vec3<u32>) {
 // value within 0.005h of zero moves to ±0.005h by its sign, zero to −0.005h.
 @compute @workgroup_size(256)
 fn particle_distance(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let idx = gid.x;
-    if idx >= cell_total() {
+    let idx = c_cell_index(gid.x);
+    if idx == NO_CELL {
         return;
     }
     let n = lattice();
@@ -1375,8 +1382,8 @@ const MAX_DENSITY_ERROR: f32 = 0.5;
 // into sparse ones; 0 outside the water.
 @compute @workgroup_size(256)
 fn density_source(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let idx = gid.x;
-    if idx >= cell_total() {
+    let idx = c_cell_index(gid.x);
+    if idx == NO_CELL {
         return;
     }
     if !(water[idx] > 0.5) {
@@ -1723,6 +1730,115 @@ fn tile_parity_word() -> u32 {
     return u.ring_max + 3u;
 }
 
+// A thread of a tile list with no cell: the tile's box runs past the lattice
+// (a partial edge tile).
+const NO_CELL: u32 = 0xffffffffu;
+
+// Thread `gid` of a list dispatched at 512 threads a tile: the cell at local
+// index gid & 511 of the tile at list index gid >> 9, flattened, or NO_CELL.
+fn list_cell(tile: u32, gid: u32) -> u32 {
+    let n = lattice();
+    let origin = unflatten(tile, vec3<i32>(tile_dims())) * i32(TILE);
+    let cell = origin + unflatten(gid & 511u, vec3<i32>(i32(TILE)));
+    if any(cell >= n) {
+        return NO_CELL;
+    }
+    return flatten(cell, n);
+}
+
+// The cell passes run over the cell set C, the first `tile_counts[0]` tiles
+// of `tiles_by_ring`, through the triple at `tile_args[0]`.
+fn c_cell_index(gid: u32) -> u32 {
+    return list_cell(tiles_by_ring[gid >> 9u], gid);
+}
+
+// The gather runs over C's cells too: cell p owns face record p. A record
+// past the lattice (p[a] == n[a]) belongs to no cell and is a constant: wall
+// faces closed, the others absent (canonical_face), written by tiles_fill.
+fn c_face_index(gid: u32) -> u32 {
+    let cell = c_cell_index(gid);
+    if cell == NO_CELL {
+        return NO_CELL;
+    }
+    let n = lattice();
+    return flatten(unflatten(cell, n), n + vec3<i32>(1));
+}
+
+// The gather's output at record p with no particle within reach: every face
+// absent (velocity 0, weight 0) except a box wall face, closed (0, weight 1).
+fn canonical_face(p: vec3<i32>, n: vec3<i32>) -> FaceSample {
+    var out = FaceSample(vec4<f32>(0.0), vec4<f32>(0.0));
+    for (var a = 0; a < 3; a = a + 1) {
+        if face_exists(p, n, a) && (p[a] == 0 || p[a] == n[a]) {
+            out.face_weight[a] = 1.0;
+        }
+    }
+    return out;
+}
+
+// The canonical cell values: water 0, φ 3h (particle_distance's start, kept
+// where no particle is within its scan), rhs 0.
+fn canonical_cell(idx: u32) {
+    tile_water[idx] = 0.0;
+    tile_phi[idx] = 3.0 * u.cell_size;
+    tile_rhs[idx] = 0.0;
+}
+
+// One thread per face record, once per lattice: every record and cell
+// canonical, so the cells the C passes never visit read as the dense passes
+// would leave them.
+@compute @workgroup_size(256)
+fn tiles_fill(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    if idx >= face_total() {
+        return;
+    }
+    let n = lattice();
+    let p = unflatten(idx, n + vec3<i32>(1));
+    faces_out[idx] = canonical_face(p, n);
+    if all(p < n) {
+        canonical_cell(flatten(p, n));
+    }
+}
+
+// 512 threads a retired tile (the triple at `tile_args[3 · (ring_max + 1)]`):
+// its cells and their records back to canonical, so a tile leaving C reads
+// as the dense passes would leave it. Wall records past the lattice are
+// never written by the C passes and keep their fill.
+@compute @workgroup_size(256)
+fn tiles_retire(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = list_cell(tiles_retired[gid.x >> 9u], gid.x);
+    if idx == NO_CELL {
+        return;
+    }
+    let n = lattice();
+    let p = unflatten(idx, n);
+    canonical_cell(idx);
+    faces_out[flatten(p, n + vec3<i32>(1))] = canonical_face(p, n);
+}
+
+// Test-only (gpu_flip_tile_tests.rs): one thread per cell, after
+// tiles_retire; NaN into the water, φ and rhs of every cell of a tile with
+// ring > 1 (rank >= 2), so a dense read that escapes the defined-value rule
+// shows in the particles or the faces.
+@compute @workgroup_size(256)
+fn poison_inactive(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    if idx >= cell_total() {
+        return;
+    }
+    let n = lattice();
+    let tile = flatten(unflatten(idx, n) / i32(TILE), vec3<i32>(tile_dims()));
+    let half = tile_counts[tile_parity_word()] * tile_total();
+    if tile_rank[half + tile] < 2u {
+        return;
+    }
+    let nan = bitcast<f32>(0x7fc00000u);
+    tile_water[idx] = nan;
+    tile_phi[idx] = nan;
+    tile_rhs[idx] = nan;
+}
+
 // One thread per tile, the sort's bin counts to `tile_near`: the Chebyshev
 // cell distance from the tile's box to the nearest particle-holding cell,
 // scanning the box grown by CELL_REACH (12³ cells at most); CELL_REACH + 1
@@ -1764,9 +1880,9 @@ fn tiles_classify(@builtin(global_invocation_id) gid: vec3<u32>) {
     tile_near[t] = near;
 }
 
-// One thread per tile, `tile_near` to the current half of `tile_ring`: the
-// Chebyshev tile distance to the nearest occupied tile (near 0) within
-// ring_max, else ring_max + 1. With `all_tiles`, 0 everywhere.
+// One thread per tile, `tile_near` to the current half of `tile_rank`: the
+// rank of the Chebyshev tile distance to the nearest occupied tile (near 0)
+// within ring_max, else of ring_max + 1. With `all_tiles`, 0 everywhere.
 @compute @workgroup_size(256)
 fn tiles_rings(@builtin(global_invocation_id) gid: vec3<u32>) {
     let t = gid.x;
@@ -1776,7 +1892,7 @@ fn tiles_rings(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let at = tile_counts[tile_parity_word()] * total + t;
     if u.all_tiles != 0u {
-        tile_ring[at] = 0u;
+        tile_rank[at] = 0u;
         return;
     }
     let dims = vec3<i32>(tile_dims());
@@ -1797,12 +1913,12 @@ fn tiles_rings(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
         }
     }
-    tile_ring[at] = ring;
+    tile_rank[at] = rank_of(ring, tile_near[t]);
 }
 
 // The list rank of a tile: 0 in the cell set C, 1 for the rest of rings 0
 // and 1, else its ring.
-fn tile_rank(ring: u32, near: u32) -> u32 {
+fn rank_of(ring: u32, near: u32) -> u32 {
     if ring <= 1u {
         return select(1u, 0u, near <= CELL_REACH);
     }
@@ -1814,11 +1930,9 @@ fn tile_rank(ring: u32, near: u32) -> u32 {
 // rank 1 the rest of rings 0 and 1, rank k >= 2 ring k. The ranks' start
 // offsets become their ends as the scatter advances them, and the ends are
 // the counts: word 0 is |C|, word k >= 1 the tiles with ring <= k. Then the
-// triples, the retired list against the previous half (a tile that was in
-// ring 0 or 1 and is not in C now; the previous nearness is not kept, so a
-// tile outside C both steps is listed again, harmlessly), and the
-// active-fraction stats word (solver word 6, `capped` bound at the solver
-// words): |C| / T³.
+// triples, the retired list against the previous half (exactly the tiles in
+// C then and not now), and the active-fraction stats word (solver word 6,
+// `capped` bound at the solver words): |C| / T³.
 @compute @workgroup_size(1)
 fn tiles_lists() {
     let total = tile_total();
@@ -1830,7 +1944,7 @@ fn tiles_lists() {
         tile_counts[k] = 0u;
     }
     for (var t = 0u; t < total; t = t + 1u) {
-        let rank = tile_rank(tile_ring[cur + t], tile_near[t]);
+        let rank = tile_rank[cur + t];
         tile_counts[rank] = tile_counts[rank] + 1u;
     }
     var start = 0u;
@@ -1841,10 +1955,10 @@ fn tiles_lists() {
     }
     var retired = 0u;
     for (var t = 0u; t < total; t = t + 1u) {
-        let rank = tile_rank(tile_ring[cur + t], tile_near[t]);
+        let rank = tile_rank[cur + t];
         tiles_by_ring[tile_counts[rank]] = t;
         tile_counts[rank] = tile_counts[rank] + 1u;
-        if tile_ring[prev + t] <= 1u && rank != 0u {
+        if tile_rank[prev + t] == 0u && rank != 0u {
             tiles_retired[retired] = t;
             retired = retired + 1u;
         }

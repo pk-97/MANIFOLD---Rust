@@ -2,7 +2,7 @@
 
 <!-- index: Design for BUG-jyot (GPU FLIP at 128 for 60 fps), Option C: the GPU FLIP step classifies 8^3 tiles on the GPU each tick (ring distance from particle-holding tiles), runs the dense lattice passes and later the multigrid pressure solve over tile lists by indirect dispatch, keeps every skipped buffer at the dense pass's value, and proves bitwise equality against the dense path on the 64 Dam Break. -->
 
-**Status:** IN PROGRESS · 2026-10-02 · Fable 5.1 (lane) · design for BUG-jyot (GPU FLIP at 128 for 60 fps), Option C. Phase 1 (tile table + lattice passes) is BUG-t7i2 (sparse blocks phase 1), in build; Phase 2 (pressure solve over tiles) waits on its measure. Owed: the measure at 64 and 128. Pointer: GPU_FLIP_STRUCTURAL_OPTIONS.md section 6 (Option C — sparse tiles).
+**Status:** IN PROGRESS · 2026-10-02 · Fable 5.1 (lane) · design for BUG-jyot (GPU FLIP at 128 for 60 fps), Option C. Phase 1 (tile table + lattice passes) is BUG-t7i2 (sparse blocks phase 1), in build: the table and the six cell passes over C are in, the extend layers' read cap is next; Phase 2 (pressure solve over tiles) waits on its measure. Owed: the extend cap, the measure at 64 and 128. Pointer: GPU_FLIP_STRUCTURAL_OPTIONS.md section 6 (Option C — sparse tiles).
 **Execution contract:** no size caps, no quality caps, one step per frame, a capped solve is reported in stats never a node error, block list decided on the GPU each tick, never read back, every reader of a skipped block sees a defined value, all GPU through `manifold-gpu`, no new shared state, output bitwise equal to dense.
 
 The occupied-block rule in the contract comes from BUG-l2h3 (SWASH to a live instrument) item .10, closed 2026-10-02 as deferred to BUG-jyot.
@@ -41,13 +41,13 @@ Extend, don't redesign: one stage node, one solver module, the particle-frame se
 
 **D-1. Tile = 8³ cells, T_a = ceil(n_a/8) per axis, partial edge tiles allowed.** A thread in a partial tile whose cell index ≥ n returns. Rejected: requiring n to be a multiple of 8, because that is a size rule.
 
-**D-2. Classification on the GPU from the sort, no readback, no atomics.** `tiles_classify`: one thread per tile scans `ranges[c].count` over its box grown by CELL_REACH = 2 cells and writes `tile_near[t]` = the Chebyshev cell distance from the box to the nearest particle-holding cell (0 occupied, 1, 2, or 3 for none within reach). Thread 0 flips the ring halves' parity word first, so the parity is GPU state and a replayed encode stays right. `tiles_rings`: one thread per tile reads `tile_near == 0` over the (2·ring_max+1)³ tile neighbourhood and writes `ring[t]` = Chebyshev tile distance to the nearest occupied tile, or ring_max+1 if none within ring_max. `tiles_lists`: one thread (precedent `pocket_round`) counting-sorts tiles by rank, stable in tile order — rank 0 is C (D-3), rank 1 the rest of rings 0 and 1, rank k ≥ 2 ring k — into `tiles_by_ring`, writes the counts (word 0 = |C|, word k ≥ 1 = tiles with ring ≤ k), the indirect triples `[2·count, 1, 1]` (512 threads per tile, 256 per group) for words 0..=ring_max then the retired list (D-5), and the active-fraction stats word. `ring_max(band) = ceil((1+band)/8)` for the band the step runs with (2 at 64, 3 at 128; derived, not a cap). Rejected: atomics for compaction, because the order must be deterministic for bitwise proofs; a workgroup scan, because the 1-thread builder over T³ ≤ 32³ tiles at 256³ is measured before it is optimised (deferred, section 9); CPU readback, because the occupied-block rule (status line) forbids it.
+**D-2. Classification on the GPU from the sort, no readback, no atomics.** `tiles_classify`: one thread per tile scans `ranges[c].count` over its box grown by CELL_REACH = 2 cells and writes `tile_near[t]` = the Chebyshev cell distance from the box to the nearest particle-holding cell (0 occupied, 1, 2, or 3 for none within reach). Thread 0 flips the ring halves' parity word first, so the parity is GPU state and a replayed encode stays right. `tiles_rings`: one thread per tile reads `tile_near == 0` over the (2·ring_max+1)³ tile neighbourhood, takes the ring = Chebyshev tile distance to the nearest occupied tile (ring_max+1 if none within ring_max), and writes the tile's rank — 0 in C (D-3), 1 for the rest of rings 0 and 1, else the ring — into the current half of `tile_rank`; the rank is what both the lists and the retire need, and ring ≤ k is rank ≤ k for every k ≥ 1. `tiles_lists`: one thread (precedent `pocket_round`) counting-sorts tiles by rank, stable in tile order, into `tiles_by_ring`, writes the counts (word 0 = |C|, word k ≥ 1 = tiles with ring ≤ k), the indirect triples `[2·count, 1, 1]` (512 threads per tile, 256 per group) for words 0..=ring_max then the retired list (D-5), and the active-fraction stats word. `ring_max(band) = ceil((1+band)/8)` for the band the step runs with (2 at 64, 3 at 128; derived, not a cap). Rejected: atomics for compaction, because the order must be deterministic for bitwise proofs; a workgroup scan, because the 1-thread builder over T³ ≤ 32³ tiles at 256³ is measured before it is optimised (deferred, section 9); CPU readback, because the occupied-block rule (status line) forbids it.
 
 **D-3. One tile set per pass from its stencil reach, not one halo for all.** Every cell pass in scope reads within 2 cells of a particle-holding cell, so they all share C = {ring ≤ 1 and near ≤ 2}: the tiles whose box lies within 2 cells of a particle. Classifying by cell distance rather than tile ring matters: ring ≤ 1 alone lights 0.562 of tiles at 64 frame 0 (appendix, `halo1+1ring`) where the cell passes need 0.312. An extend layer i fills faces at distance ≤ 1+i, so it runs over ring ≤ r(i) = ceil((1+i)/8) with a read cap of r(i−1). Rejected: the band-wide halo for everything, because it lights 0.83 of tiles at 64 (section 0); a narrower extend halo, because whitewater observes faces beyond it (section 9).
 
 **D-4. Extend layer 1 runs dense; later layers run over rings with a read cap.** A read-capped neighbour read returns the canonical record (wall weight 1, velocity 0 on the p[a]==0 or n planes, else the zero record) for any neighbour in a tile beyond the cap. Because layer 1 writes every record of the face grid, the three face outputs (`a` after extend old, `f` after extend new, `out_faces` after extend spread) are dense-bitwise everywhere and need no clear when a tile retires. Expected gain for extend on this scene: 0–30% at 64, ~35% at 128 (ring ≤ 2 is 0.75–1.0 of tiles at 64, 0.48–0.96 at 128). Rejected: skipping layer 1 in inactive tiles, because then face records in inactive tiles would hold the previous tick's values and whitewater would read them.
 
-**D-5. Retire-clear instead of a dense clear per tick.** The ring table is ping-ponged; a tile with `ring_prev ≤ 1` and `ring > 1` is retired this tick and `tiles.retire` writes the canonical values of the cell buffers that cell passes own: `water = 0`, `phi = 3h`, `rhs = 0`. `allocate` fills the same canonical values once. Rejected: a dense clear per tick, because it costs a full lattice write per buffer, which is the work being removed; leaving stale values, because dense readers (`pocket_pin` → `solve_water`, the solver's `is_water`, rows, `coarsen_water`) would see phantom water.
+**D-5. Retire-clear instead of a dense clear per tick.** The rank table is ping-ponged; exactly the tiles with `rank_prev == 0` and `rank != 0` are retired this tick, and `tiles_retire` (512 threads a tile, indirect) writes the canonical values of the buffers the cell passes own: `water = 0`, `phi = 3h`, `rhs = 0`, and the gathered face record of each cell (`canonical_face`: every face absent, a box wall face closed). The gather has its own buffer `g` for this: `a` is the extend's output and is dense-bitwise by D-4, so it is never canonical and could not be the sparse gather's target. `tiles_fill` writes the same canonical values over every record and cell once per lattice, on the first step after `reserve` builds the lattice (`StepState.filled`); the records past the lattice (p[a] = n) belong to no cell and keep that fill. The zeroed first "previous" half retires every tile outside C on the first step, harmlessly. Rejected: a dense clear per tick, because it costs a full lattice write per buffer, which is the work being removed; leaving stale values, because dense readers (`pocket_pin` → `solve_water`, the solver's `is_water`, rows, `coarsen_water`) would see phantom water; the superset retire rule (`ring_prev ≤ 1`), because it rewrote every rank-1 tile every tick.
 
 **D-6. The oracle lever is `StepParams.all_tiles`, test-only.** With it set, `tiles.rings` writes ring = 0 for every tile, so every pass runs dense through the same kernels and the same list machinery. It is settable only behind `cfg(feature = "gpu-proofs")` and never a node param. Rejected: keeping the old dense kernels as a second code path, because two paths drift.
 
@@ -55,29 +55,28 @@ Extend, don't redesign: one stage node, one solver module, the particle-frame se
 
 ## 3. The tile table
 
-Buffers (all `u32`, in `TileTable` beside `LatticeBuffers`, counted in `scratch_bytes` and the extent hold; bindings 27–32):
+Buffers (all `u32`, in `TileTable` beside `LatticeBuffers`, counted in `scratch_bytes` and the extent hold; bindings 27–32; the fill, retire and poison bind the gathered faces `g` at 4 and `water`, `phi`, `rhs` at 33–35):
 
 | Buffer | Length | Writer | Readers |
 |---|---|---|---|
-| `tile_near` | T³ | `tiles_classify` | `tiles_rings`, `tiles_lists` |
-| `tile_ring` | 2·T³, halves by the parity word | `tiles_rings` | every sparse pass (read cap), `tiles_lists` |
+| `tile_near` | T³ | `tiles_classify` | `tiles_rings` |
+| `tile_rank` | 2·T³, halves by the parity word | `tiles_rings` | `tiles_lists` (both halves), the poison; the extend layers' read cap (Phase 1 step 3) |
 | `tiles_by_ring` | T³ | `tiles_lists` | every sparse pass (thread → tile) |
 | `tile_counts` | ring_max+4: |C|, ring ≤ k for k = 1..=ring_max+1, retired count, parity | `tiles_lists` (parity: `tiles_classify`) | proofs |
 | `tile_args` | 3·(ring_max+2) indirect triples (C, each ring cap, retired) | `tiles_lists` | `dispatch_compute_indirect` |
 | `tiles_retired` | T³ | `tiles_lists` | `tiles_retire` |
 
-`tile_ring` and `tile_counts` carry state across steps, so they are shared buffers zero-filled once; the table is rebuilt when the lattice or `ring_max` changes.
+`tile_rank` and `tile_counts` carry state across steps, so they are shared buffers zero-filled once; the table is rebuilt when the lattice or `ring_max` changes.
 
-Thread mapping in every sparse pass:
+Thread mapping in every sparse pass (`list_cell`, `c_cell_index`):
 
 ```wgsl
-let tile = tiles_by_ring[gid / 512u];
-let local = vec3<u32>(gid & 7u, (gid >> 3u) & 7u, (gid >> 6u) & 7u);
-let cell = tile_origin(tile) + local;
-if any(cell >= lattice) { return; }
+let tile = tiles_by_ring[gid >> 9u];
+let cell = unflatten(tile, tile_dims()) * 8 + unflatten(gid & 511u, vec3(8));
+if any(cell >= lattice) { return NO_CELL; }
 ```
 
-A face thread owns record `cell` plus, on each axis a where `cell[a] == n−1`, the wall records with p[a] = n (up to 8 records in a corner), so the (n+1)³ face grid is covered by the n³ cell mapping.
+The gather maps a C cell to its own record (`c_face_index`). The records past the lattice (p[a] = n) belong to no cell and are constants — the wall face closed, the others absent — written by `tiles_fill` and never again.
 
 The reach rule, per pass in Phase 1 scope:
 
@@ -102,17 +101,18 @@ pub(crate) fn tile_counts(cells: [u32; 3]) -> [u32; 3];       // ceil(n_a / TILE
 pub(crate) fn ring_max(band: u32) -> u32;                     // ceil((1 + band) / TILE)
 pub(crate) fn tile_scratch_bytes(cells: [u32; 3], ring_max: u32) -> u64;
 pub(crate) fn scratch_bytes(cells: [u32; 3], slots: u64, ring_max: u32) -> u64;
-struct TileTable { ring_max, near, ring, by_ring, counts, args, retired }
+struct TileTable { ring_max, near, rank, by_ring, counts, args, retired }
+struct LatticeBuffers { …, g /* the gather's faces, canonical outside C */, a /* g extended */, … }
 fn encode_tiles(enc, pipes, params, t: &TileTable, ranges, capped, tally);
 ```
 
-WGSL entries: `tiles_classify`, `tiles_rings`, `tiles_lists`, `tiles_retire`; dispatch labels `gpu_flip.step.tiles.classify`, `.tiles.rings`, `.tiles.lists`, `.tiles.retire`. The sparse passes keep their entry names; `Params` carries `all_tiles`, `ring_cap`, `ring_max`, and the bindings gain `tiles_by_ring` and `tile_ring`.
+WGSL entries: `tiles_classify`, `tiles_rings`, `tiles_lists`, `tiles_fill`, `tiles_retire`; dispatch labels `gpu_flip.step.tiles.classify`, `.tiles.rings`, `.tiles.lists`, `.tiles.fill`, `.tiles.retire`. The sparse passes keep their entry names and labels; `Params` carries `all_tiles`, `ring_cap`, `ring_max`, and the bindings gain `tiles_by_ring` and `tile_rank`.
 
 ## 4. The defined-value rule
 
 Every lattice buffer, after every pass, holds the dense pass's value in every tile outside that pass's tile set, or is read only through a ring cap that returns the canonical record. Concretely:
 
-- `water`, `phi`, `rhs`: written over C each tick; canonical (0, 3h, 0) elsewhere by `allocate` and `tiles.retire`. Dense readers see dense values.
+- `water`, `phi`, `rhs`, and the gathered faces `g`: written over C each tick; canonical (0, 3h, 0, `canonical_face`) elsewhere by `tiles_fill` and `tiles_retire`. Dense readers see dense values.
 - `a`, `f`, `out_faces`: dense-bitwise by D-4.
 - `s`, `v`, `b`, `corners`, `pressure`, `pocket*`: owned by dense passes in Phase 1, unchanged.
 - Intermediate extend layers: read only through the cap; a capped read of a record a dense extend would have filled with a non-canonical value cannot happen, because layer i−1 filled every record within distance i of the liquid and all of those lie within ring r(i−1) (a record at cell distance ≤ i from a particle-holding cell is in a tile at Chebyshev tile distance ≤ ceil(i/8) ≤ r(i−1)).
@@ -120,7 +120,7 @@ Every lattice buffer, after every pass, holds the dense pass's value in every ti
 Machine checks:
 
 1. The bitwise proof (section 6) over 60 Dam Break frames.
-2. A NaN-poison proof: the test-only entry `poison_inactive` writes NaN into every cell and face record of tiles with ring > 1 (cells) or beyond r(i) (faces, per layer, via the same cap) after `tiles.lists`; the step then runs; particles and `out_faces` must be bitwise equal to the unpoisoned run. A read that escapes its cap turns into NaN in the output and fails. `rg -n "poison_inactive" crates/ -g "*.rs"` outside `tests/` must return nothing (a test asserts it).
+2. A NaN-poison proof: the test-only entry `poison_inactive` writes NaN into `water`, `phi` and `rhs` of every cell of tiles with ring > 1 after `tiles_retire` (dispatched by the step under the test-only `POISON` lever, the same approval as `all_tiles`); the step then runs; particles and `out_faces` must be bitwise equal to the unpoisoned run. A read that escapes C turns into NaN in the output and fails. The face records are not poisoned in Phase 1 steps 1–2: `g` feeds the dense extend, so NaN there would reach `out_faces` by construction, not by a leak; the per-layer face poison beyond r(i) comes with the read cap (step 3). `rg -n "poison_inactive" crates/ -g "*.rs"` outside `*_tests.rs` must return nothing (`gpu_flip_poison_entry_is_named_only_in_tests` asserts it; the step builds the pipeline from the tests' `POISON_ENTRY` constant).
 3. Extent CPU proofs: `gpu_flip_*_cover_every_dispatch` extended to the four tile dispatches; `tile_scratch_bytes` is counted in `scratch_bytes` and the extent hold.
 
 ## 5. Stats
@@ -131,7 +131,7 @@ Word 16: the active cell-set tile fraction, `|C| / T³` as f32 bits, written by 
 
 | Proof | Oracle | Pass condition |
 |---|---|---|
-| `gpu_flip_tiles_match_the_cpu_classification` | CPU near/rings from the sort's `ranges` read back once in the test (the test reads back; the step never does) | `tile_near`, `tile_ring`, `tiles_by_ring` order, `tile_counts`, `tile_args` triples, the retired list and the parity flip equal to the CPU model on `dam_break(64)` frames 0, 30, 60; `all_tiles` gives near 0 and ring 0 everywhere |
+| `gpu_flip_tiles_match_the_cpu_classification` | CPU near/ranks from the sort's `ranges` read back once in the test (the test reads back; the step never does) | `tile_near`, `tile_rank`, `tiles_by_ring` order, `tile_counts`, `tile_args` triples, the retired list and the parity flip equal to the CPU model on `dam_break(64)` frames 0, 30, 60; `all_tiles` gives near 0 and rank 0 everywhere |
 | `gpu_flip_sparse_step_matches_dense_bitwise` | the same kernels with `all_tiles = true` in the same run | 64 Dam Break, 60 frames, per-frame hash of particles and `out_faces` equal; the HEAD-dense hash from `gpu_flip_frame_perf` reported once in the phase report (not pinned, because it moves with any kernel change) |
 | `gpu_flip_sparse_step_survives_poison` | NaN poison (section 4) | particles and `out_faces` bitwise equal to the unpoisoned sparse run over 10 frames |
 | `gpu_flip_tile_extent_covers_every_dispatch` (CPU) | extent model | every tile dispatch covered; scratch bytes include the table |
@@ -179,7 +179,7 @@ Opens after Phase 1's measure. Entry state: Phase 1 landed. Deliverables per sec
 - Classification from the sort's bin counts by cell distance (`tile_near`), GPU-held parity, deterministic 1-thread list builder, no atomics, no readback (D-2).
 - Per-pass tile sets from stencil reach; one set C = {ring ≤ 1, near ≤ 2} for every cell pass (D-3).
 - Extend layer 1 dense, later layers ringed with a read cap; face outputs dense-bitwise (D-4).
-- Retire-clear of `water`, `phi`, `rhs`; canonical fill at allocation (D-5).
+- Retire-clear of `water`, `phi`, `rhs` and the gathered faces `g`, exactly the tiles leaving C; canonical fill on the first step of a lattice (D-5).
 - `all_tiles` is the oracle, test-only (D-6).
 - Phase 2 gated on Phase 1's measure (D-7).
 - Stats word 16 = active cell-set tile fraction (section 5).

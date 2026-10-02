@@ -1,7 +1,9 @@
 //! The GPU FLIP step's tile table (docs/GPU_FLIP_SPARSE_BLOCKS_DESIGN.md
 //! section 3 (The tile table)) against a CPU model: the three kernels run on
 //! their own over the Dam Break's particles, every word compared, then the
-//! same classification read back through the step's stats word.
+//! same classification read back through the step's stats word. Then the
+//! sparse step against the dense one through the same kernels, bitwise, and
+//! under the NaN poison (section 4 (The defined-value rule)).
 
 use manifold_gpu::GpuBuffer;
 
@@ -9,17 +11,22 @@ use super::gpu_flip_preset::WaterScene;
 use super::gpu_flip_scene_tests::Run;
 use super::gpu_flip_step::{
     CELL_REACH, DEFAULT_TOP_SPEED, FACE_VALID_LAYERS, StepParams, TILE, band_layers, dispatch_pass, ring_max,
-    set_all_tiles, tile_counts, tile_total, travel_cells,
+    set_all_tiles, set_poison, tile_counts, tile_total, travel_cells,
 };
 use super::liquid_surface_tests::read;
 use crate::node_graph::fluid::TICK;
 use crate::node_graph::fluid_particles::{CellRange, FluidParticle};
 
+/// The step shader's poison entry: NaN into every cell array of the tiles
+/// outside rings 0 and 1, after the retire. Named here only, so the step's
+/// own source never spells it (a test below holds that).
+pub(crate) const POISON_ENTRY: &str = "poison_inactive";
+
 /// The tile table's words as the CPU builds them for one step.
 #[derive(Debug, PartialEq, Eq)]
 struct Model {
     near: Vec<u32>,
-    ring: Vec<u32>,
+    rank: Vec<u32>,
     by_ring: Vec<u32>,
     counts: Vec<u32>,
     args: Vec<u32>,
@@ -56,9 +63,9 @@ fn rank(ring: u32, near: u32) -> u32 {
     }
 }
 
-/// The CPU model of one step: `prev_ring` is the previous step's rings
+/// The CPU model of one step: `prev_rank` is the previous step's ranks
 /// (zero before the first), `all` the oracle lever.
-fn model(counts: &[u32], n: [u32; 3], r: u32, prev_ring: &[u32], all: bool) -> Model {
+fn model(counts: &[u32], n: [u32; 3], r: u32, prev_rank: &[u32], all: bool) -> Model {
     let dims = tile_counts(n);
     let total = tile_total(n) as usize;
     let mut near = vec![CELL_REACH + 1; total];
@@ -109,21 +116,21 @@ fn model(counts: &[u32], n: [u32; 3], r: u32, prev_ring: &[u32], all: bool) -> M
         by_ring.extend((0..total as u32).filter(|&t| ranks[t as usize] == k));
         counts_out.push(by_ring.len() as u32);
     }
-    let retired: Vec<u32> = (0..total as u32).filter(|&t| prev_ring[t as usize] <= 1 && ranks[t as usize] != 0).collect();
+    let retired: Vec<u32> = (0..total as u32).filter(|&t| prev_rank[t as usize] == 0 && ranks[t as usize] != 0).collect();
     counts_out.push(retired.len() as u32);
     let mut args = Vec::new();
     for &count in &counts_out[..=r as usize] {
         args.extend([2 * count, 1, 1]);
     }
     args.extend([2 * retired.len() as u32, 1, 1]);
-    Model { near, ring, by_ring, counts: counts_out, args, retired }
+    Model { near, rank: ranks, by_ring, counts: counts_out, args, retired }
 }
 
 /// The tile buffers on the GPU, shared so the test reads them back.
 struct Table {
     ranges: GpuBuffer,
     near: GpuBuffer,
-    ring: GpuBuffer,
+    rank: GpuBuffer,
     by_ring: GpuBuffer,
     counts: GpuBuffer,
     args: GpuBuffer,
@@ -144,7 +151,7 @@ impl Table {
         Self {
             ranges: words(2 * (n[0] * n[1] * n[2]) as usize),
             near: words(total),
-            ring: words(2 * total),
+            rank: words(2 * total),
             by_ring: words(total),
             counts: words(r as usize + 4),
             args: words(3 * (r as usize + 2)),
@@ -163,14 +170,14 @@ impl Table {
         unsafe { std::ptr::copy_nonoverlapping(ranges.as_ptr().cast::<u8>(), ptr, ranges.len() * 8) };
         let threads = self.total as u64;
         dispatch_pass(device, "tiles_classify", params, &[(1, &self.ranges), (27, &self.near), (30, &self.counts)], threads);
-        dispatch_pass(device, "tiles_rings", params, &[(27, &self.near), (28, &self.ring), (30, &self.counts)], threads);
+        dispatch_pass(device, "tiles_rings", params, &[(27, &self.near), (28, &self.rank), (30, &self.counts)], threads);
         dispatch_pass(
             device,
             "tiles_lists",
             params,
             &[
                 (27, &self.near),
-                (28, &self.ring),
+                (28, &self.rank),
                 (29, &self.by_ring),
                 (30, &self.counts),
                 (31, &self.args),
@@ -185,17 +192,17 @@ impl Table {
         read::<u32>(&self.counts, self.r as usize + 4)[self.r as usize + 3]
     }
 
-    /// The GPU's words in the model's shape: the current ring half, the
+    /// The GPU's words in the model's shape: the current rank half, the
     /// lists cut to their counts.
     fn model(&self) -> Model {
         let counts = read::<u32>(&self.counts, self.r as usize + 4);
-        let ring = read::<u32>(&self.ring, 2 * self.total);
+        let rank = read::<u32>(&self.rank, 2 * self.total);
         let half = self.parity() as usize * self.total;
         let by_ring = read::<u32>(&self.by_ring, self.total);
         let retired = read::<u32>(&self.retired, self.total);
         Model {
             near: read(&self.near, self.total),
-            ring: ring[half..half + self.total].to_vec(),
+            rank: rank[half..half + self.total].to_vec(),
             by_ring: by_ring[..counts[self.r as usize + 1] as usize].to_vec(),
             counts: counts[..self.r as usize + 3].to_vec(),
             args: read(&self.args, 3 * (self.r as usize + 2)),
@@ -211,7 +218,7 @@ impl Table {
 fn assert_model(gpu: &Model, cpu: &Model, what: &str) {
     for (name, g, c) in [
         ("near", &gpu.near, &cpu.near),
-        ("ring", &gpu.ring, &cpu.ring),
+        ("rank", &gpu.rank, &cpu.rank),
         ("by_ring", &gpu.by_ring, &cpu.by_ring),
         ("counts", &gpu.counts, &cpu.counts),
         ("args", &gpu.args, &cpu.args),
@@ -223,7 +230,7 @@ fn assert_model(gpu: &Model, cpu: &Model, what: &str) {
     }
 }
 
-/// `tile_near`, `tile_ring`, the lists, counts, triples, retired list and
+/// `tile_near`, `tile_rank`, the lists, counts, triples, retired list and
 /// parity equal the CPU model on `dam_break(64)` at frames 0, 30 and 60,
 /// stepped through the same buffers so the parity flips and the retired
 /// list sees the previous step; `all_tiles` lights everything; the step's
@@ -262,13 +269,13 @@ fn gpu_flip_tiles_match_the_cpu_classification() {
             let stats = run.liquid_stats().active_tiles;
             assert_eq!(stats.to_bits(), (cpu.counts[0] as f32 / total as f32).to_bits(), "the step's stats word {stats}");
         }
-        prev = cpu.ring;
+        prev = cpu.rank;
     }
     let dense = StepParams { all_tiles: 1, ..params };
     let counts = cell_counts(&run.particles(), n, min, h);
     table.step(&device, &dense, &counts);
     let cpu = model(&counts, n, r, &prev, true);
-    assert!(cpu.near.iter().all(|&v| v == 0) && cpu.ring.iter().all(|&v| v == 0) && cpu.counts[0] == total as u32);
+    assert!(cpu.near.iter().all(|&v| v == 0) && cpu.rank.iter().all(|&v| v == 0) && cpu.counts[0] == total as u32);
     assert_model(&table.model(), &cpu, "all_tiles");
     assert_eq!(table.stats_word(), 1.0);
     // The lever reaches the step: its stats word reads 1.0 on the next tick.
@@ -278,4 +285,124 @@ fn gpu_flip_tiles_match_the_cpu_classification() {
     assert_eq!(run.liquid_stats().active_tiles, 1.0, "the step under all_tiles");
     run.frame();
     assert!(run.liquid_stats().active_tiles < 1.0, "the lever released");
+}
+
+/// A run of `dam_break(64)` whose every frame, the fill included, goes
+/// through the levers `all` and `poison`.
+struct Twin {
+    run: Run,
+    all: bool,
+    poison: bool,
+}
+
+impl Twin {
+    fn new(all: bool, poison: bool) -> Self {
+        set_all_tiles(all);
+        set_poison(poison);
+        let run = Run::new(WaterScene::dam_break(64));
+        set_all_tiles(false);
+        set_poison(false);
+        Self { run, all, poison }
+    }
+
+    fn frame(&mut self) {
+        set_all_tiles(self.all);
+        set_poison(self.poison);
+        self.run.frame();
+        set_all_tiles(false);
+        set_poison(false);
+    }
+}
+
+/// The first particle and, with `faces` (the step has run: not on the fill
+/// frame, whose face output is unsized), the first face record that differ
+/// between the two runs, as none or where and what.
+fn first_difference(a: &Run, b: &Run, faces: bool) -> Option<String> {
+    let (pa, pb) = (a.particles(), b.particles());
+    if let Some(i) = (0..pa.len()).find(|&i| bytemuck::bytes_of(&pa[i]) != bytemuck::bytes_of(&pb[i])) {
+        return Some(format!("particle {i}: {:?} vs {:?}", pa[i], pb[i]));
+    }
+    if !faces {
+        return None;
+    }
+    let (fa, fb) = (a.faces(), b.faces());
+    let m = a.n() + 1;
+    if let Some(i) = (0..fa.len()).find(|&i| bytemuck::bytes_of(&fa[i]) != bytemuck::bytes_of(&fb[i])) {
+        let p = [i % m, (i / m) % m, i / (m * m)];
+        let tile = p.map(|v| v / TILE as usize);
+        return Some(format!("face record {i} at {p:?} (tile {tile:?}): {:?} vs {:?}", fa[i], fb[i]));
+    }
+    None
+}
+
+/// The sparse step equals the dense one through the same kernels and lists
+/// (design section 6 (Proof plan)): 60 frames of `dam_break(64)`, the
+/// particles and the output faces bitwise after every frame.
+#[test]
+fn gpu_flip_sparse_step_matches_dense_bitwise() {
+    let mut sparse = Twin::new(false, false);
+    let mut dense = Twin::new(true, false);
+    if let Some(diff) = first_difference(&sparse.run, &dense.run, false) {
+        panic!("the fill frame differs: {diff}");
+    }
+    let mut active = Vec::with_capacity(60);
+    for frame in 1..=60 {
+        sparse.frame();
+        dense.frame();
+        active.push(sparse.run.liquid_stats().active_tiles);
+        if let Some(diff) = first_difference(&sparse.run, &dense.run, true) {
+            panic!("frame {frame} differs: {diff}");
+        }
+    }
+    let mean = active.iter().map(|&a| f64::from(a)).sum::<f64>() / active.len() as f64;
+    assert!(mean > 0.0 && mean < 1.0, "the sparse run lit {mean} of the tiles on average");
+    println!("gpu_flip_sparse_step_matches_dense_bitwise: active tiles {:.3} at frame 1, {mean:.3} mean over 60", active[0]);
+}
+
+/// NaN in every cell array of the tiles outside rings 0 and 1 after the
+/// retire never reaches the particles or the output faces: both bitwise
+/// equal to the unpoisoned sparse run over 10 frames (design section 4 (The
+/// defined-value rule)).
+#[test]
+fn gpu_flip_sparse_step_survives_poison() {
+    let mut clean = Twin::new(false, false);
+    let mut poisoned = Twin::new(false, true);
+    for frame in 0..=10 {
+        if frame > 0 {
+            clean.frame();
+            poisoned.frame();
+        }
+        if let Some(diff) = first_difference(&clean.run, &poisoned.run, frame > 0) {
+            panic!("frame {frame} differs under the poison: {diff}");
+        }
+        let particles = poisoned.run.particles();
+        assert!(
+            particles.iter().all(|p| p.position_radius.iter().chain(&p.velocity).all(|v| v.is_finite())),
+            "frame {frame}: a poisoned particle"
+        );
+    }
+}
+
+/// The poison entry is the proofs' alone: no source file outside the tests
+/// spells its name (design section 4 (The defined-value rule)).
+#[test]
+fn gpu_flip_poison_entry_is_named_only_in_tests() {
+    fn walk(dir: &std::path::Path, hits: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).expect("readable").flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, hits);
+            } else if path.extension().is_some_and(|e| e == "rs")
+                && std::fs::read_to_string(&path).is_ok_and(|s| s.contains(POISON_ENTRY))
+            {
+                hits.push(path);
+            }
+        }
+    }
+    let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().expect("crates/");
+    let mut hits = Vec::new();
+    walk(crates, &mut hits);
+    let stray: Vec<_> = hits.iter().filter(|p| !p.to_string_lossy().ends_with("_tests.rs")).collect();
+    assert!(stray.is_empty(), "{POISON_ENTRY} is named outside the tests: {stray:?}");
+    assert!(!hits.is_empty(), "this file names it");
 }
