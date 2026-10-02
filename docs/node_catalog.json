@@ -46001,6 +46001,30 @@
       ],
       "params": [
         {
+          "default": "1",
+          "enum_values": [
+            "Off",
+            "On"
+          ],
+          "label": "Whitewater",
+          "name": "enabled",
+          "range": [
+            "0",
+            "1"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "1",
+          "label": "Whitewater Amount",
+          "name": "amount",
+          "range": [
+            "0",
+            "2"
+          ],
+          "type": "float"
+        },
+        {
           "default": "100000",
           "label": "Capacity",
           "name": "capacity",
@@ -143618,6 +143642,20 @@
           "max": "20",
           "min": "0",
           "name": "Light Size"
+        },
+        {
+          "default": "1",
+          "id": "475_enabled",
+          "max": "1",
+          "min": "0",
+          "name": "Whitewater"
+        },
+        {
+          "default": "1",
+          "id": "475_amount",
+          "max": "2",
+          "min": "0",
+          "name": "Whitewater Amount"
         },
         {
           "default": "0.95",

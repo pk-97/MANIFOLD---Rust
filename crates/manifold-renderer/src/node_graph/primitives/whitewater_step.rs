@@ -65,6 +65,8 @@ pub const MAX_CAPACITY: u32 = 250_000;
 pub(crate) const WHITEWATER_STEP_SHADER: &str = include_str!("shaders/whitewater_step.wgsl");
 
 pub(crate) const OUTPUTS: [&str; 3] = ["foam_particles", "bubble_particles", "spray_particles"];
+/// The population counts, in [`OUTPUTS`]' order.
+const OUTPUT_COUNTS: [&str; 3] = ["foam_count", "bubble_count", "spray_count"];
 
 /// Published outputs in flight or on show; four cover live's three frames
 /// behind and the one being written.
@@ -113,6 +115,22 @@ crate::primitive! {
     },
     params: [
         ParamDef {
+            name: Cow::Borrowed("enabled"),
+            label: "Whitewater",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((0.0, 1.0)),
+            enum_values: &["Off", "On"],
+        },
+        ParamDef {
+            name: Cow::Borrowed("amount"),
+            label: "Whitewater Amount",
+            ty: ParamType::Float,
+            default: ParamValue::Float(1.0),
+            range: Some((0.0, 2.0)),
+            enum_values: &[],
+        },
+        ParamDef {
             name: Cow::Borrowed("capacity"),
             label: "Capacity",
             ty: ParamType::Int,
@@ -154,7 +172,7 @@ crate::primitive! {
         },
     ],
     depth_rule: Terminal,
-    composition_notes: "Wire everything from the liquid: particles and count from its particle frame (count_b), solid, grid_bounds and grid_nodes_x/y/z from the particle frame's solid lattice, face_u/v/w, face_cells_x/y/z and face_valid_layers from its face grid (at least one valid layer), level_set and level_set_nodes_x/y/z from its level set (a whole refinement of the lattice), ticks, epoch and gravity_x/gravity/gravity_z from the domain, seed from anything that changes per run (simulation time). The face grid must sit centred on the lattice's cells by a whole number of cells. Draw each particles output with node.particles_to_copies, its count wired to live_count. emitted, thinned and pool_full count since the epoch began.",
+    composition_notes: "Whitewater Off unpublishes the pool and skips every pass (the outputs count 0); On starts it over. Whitewater Amount scales Wavecrest Emission live, 0 emitting nothing while the pool it already holds plays out. Wire everything from the liquid: particles and count from its particle frame (count_b), solid, grid_bounds and grid_nodes_x/y/z from the particle frame's solid lattice, face_u/v/w, face_cells_x/y/z and face_valid_layers from its face grid (at least one valid layer), level_set and level_set_nodes_x/y/z from its level set (a whole refinement of the lattice), ticks, epoch and gravity_x/gravity/gravity_z from the domain, seed from anything that changes per run (simulation time). The face grid must sit centred on the lattice's cells by a whole number of cells. Draw each particles output with node.particles_to_copies, its count wired to live_count. emitted, thinned and pool_full count since the epoch began.",
     examples: [],
     picker: { label: "Whitewater Step", category: Atom },
     summary: "Makes and moves the spray, foam and bubbles a liquid throws up, all on the GPU.",
@@ -748,6 +766,16 @@ impl Step {
         Ok(self.outputs.report)
     }
 
+    /// Whitewater switched off: unpublish the pool so nothing downstream
+    /// draws it, and start it over when it is switched on again. The
+    /// buffers stay; a slot a frame still reads is not rewritten until
+    /// that frame retires, as after any restart.
+    pub(crate) fn stop(&mut self) {
+        self.epoch = None;
+        self.outputs.clear();
+        self.owed = false;
+    }
+
 
     fn fields(&self) -> &Fields {
         self.fields.as_ref().expect("whitewater fields allocated")
@@ -1054,6 +1082,10 @@ impl WhitewaterStep {
         if !(1.0..=MAX_CAPACITY as f32).contains(&capacity) {
             return Err(format!("capacity {capacity} is outside 1 to {MAX_CAPACITY}"));
         }
+        let amount = ctx.param_f32("amount", 1.0);
+        if !amount.is_finite() || amount < 0.0 {
+            return Err(format!("Whitewater Amount {amount} must be 0 or more"));
+        }
         let shape = StepShape::new(
             triple(["grid_nodes_x", "grid_nodes_y", "grid_nodes_z"]),
             triple(["level_set_nodes_x", "level_set_nodes_y", "level_set_nodes_z"]),
@@ -1070,7 +1102,7 @@ impl WhitewaterStep {
             epoch: whole(ctx.scalar_or_param("epoch", 0.0)),
             seed: ctx.scalar_or_param("seed", 0.0),
             gravity: [ctx.scalar_or_param("gravity_x", 0.0), ctx.scalar_or_param("gravity", -9.81), ctx.scalar_or_param("gravity_z", 0.0)],
-            wavecrest_emission: ctx.param_f32("wavecrest_emission", WAVECREST_RATE),
+            wavecrest_emission: ctx.param_f32("wavecrest_emission", WAVECREST_RATE) * amount,
             min_energy: ctx.param_f32("min_energy", MIN_ENERGY),
             max_energy: ctx.param_f32("max_energy", MAX_ENERGY),
             preserve_foam: matches!(ctx.params.get("preserve_foam"), Some(ParamValue::Bool(true))),
@@ -1097,6 +1129,13 @@ impl Primitive for WhitewaterStep {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        if ctx.param_f32("enabled", 1.0) < 0.5 {
+            self.step.stop();
+            for name in OUTPUT_COUNTS.iter().chain(["emitted", "thinned", "pool_full"].iter()) {
+                ctx.outputs.set_scalar(name, ParamValue::Float(0.0));
+            }
+            return;
+        }
         let frame = match Self::frame(ctx) {
             Ok(frame) => frame,
             Err(refusal) => {
@@ -1130,7 +1169,7 @@ impl Primitive for WhitewaterStep {
                 return;
             }
         };
-        for (name, count) in ["foam_count", "bubble_count", "spray_count"].into_iter().zip(report.counts) {
+        for (name, count) in OUTPUT_COUNTS.into_iter().zip(report.counts) {
             ctx.outputs.set_scalar(name, ParamValue::Float(count as f32));
         }
         ctx.outputs.set_scalar("emitted", ParamValue::Float(report.emitted as f32));

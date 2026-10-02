@@ -614,6 +614,27 @@ mod ownership_tests {
         assert_eq!(domain_type, Some(manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID));
     }
 
+    /// The GPU water's panel carries its whitewater switch, amount and
+    /// budget under one Whitewater section (BUG-ejcb item 2).
+    #[test]
+    fn gpu_flip_water_owns_its_whitewater_controls() {
+        use manifold_renderer::node_graph::scene_vm::{SceneObjectVm, SceneVm};
+        let def = manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("WaterDamBreakGpuFlip")).unwrap();
+        assert_one_owner("WaterDamBreakGpuFlip", def);
+        let vm = SceneVm::from_def(def).unwrap();
+        let water = vm.objects.iter().find_map(|object| match object {
+            SceneObjectVm::Known(row) if row.liquid_domain.is_some() => Some(row),
+            _ => None,
+        }).expect("the water is a scene object");
+        let owned = object_controls(Some(def), water);
+        let ids = parameter_ids_for_nodes(Some(def), &owned);
+        for id in ["whitewater_capacity", "475_enabled", "475_amount"] {
+            assert!(ids.iter().any(|actual| actual == id), "missing whitewater control {id} in {ids:?}");
+        }
+        let sections = sections_for_nodes(Some(def), &owned);
+        assert!(sections.iter().any(|section| section == "Whitewater"), "{sections:?}");
+    }
+
     #[test]
     fn imported_gltf_scene_controls_have_one_owner() {
         for fixture in ["cc0__oomurasaki_azalea_r._x_pulchrum.glb", "cc0___mushroom.glb"] {
