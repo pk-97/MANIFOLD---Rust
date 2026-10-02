@@ -1,3 +1,4 @@
+// Ported from FLIP Fluids polygonizer3d.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
 // Marching-cubes tables and conventions shared by node.count_surface_triangles
 // and node.volume_surface_mesh. Corner order, edge order and triangle table
 // are FLIP Fluids' polygonizer3d (Paul Bourke's tables), vendored in

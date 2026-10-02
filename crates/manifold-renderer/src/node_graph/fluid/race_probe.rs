@@ -1,3 +1,4 @@
+//! Checked against FLIP Fluids the engine's Dam Break race (MIT); see THIRD_PARTY_NOTICES.md.
 //! The FLIP Fluids engine's side of the water race
 //! (docs/GPU_FLIP_PRESSURE_SOLVE.md section 6 (measures)): the shipped Dam Break
 //! (`WaterDamBreak.json`) with its obstacle unwired, built by the production

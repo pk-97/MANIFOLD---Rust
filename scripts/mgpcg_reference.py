@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Ported from FLIP Fluids levelsetutils.cpp, pressuresolver.cpp and pcgsolver.h (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
+# Multigrid after McAdams, Sifakis & Teran 2010.
 """The GPU FLIP pressure solve in f64: the oracle for the pinned residuals in
 crates/manifold-renderer/src/node_graph/primitives/gpu_flip_pressure_tests.rs.
 

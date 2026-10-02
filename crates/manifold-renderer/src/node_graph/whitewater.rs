@@ -1,3 +1,4 @@
+//! Uses the particle id limit (256) from FLIP Fluids diffuseparticlesimulation.h `_diffuseParticleIDLimit` (MIT); see THIRD_PARTY_NOTICES.md.
 //! The whitewater grid and its records (`docs/GPU_WHITEWATER_DESIGN.md`
 //! section 3.1 (Grids), section 3.3 (Atoms)). The grid is the frame's solid
 //! lattice read as cells: `nodes − 1` cells a side from the solid lattice's

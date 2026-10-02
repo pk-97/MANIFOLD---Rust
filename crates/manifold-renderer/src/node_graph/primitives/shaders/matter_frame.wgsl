@@ -1,3 +1,4 @@
+// Ported from FLIP Fluids fluidsimulation.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
 // node.matter_frame — write one particle frame of the seam
 // (GPU_FLUID_SURFACE_DESIGN.md section 3.1) from matter points
 // (GPU_MPM_SOLVER_DESIGN.md D9, D14). Storage order is id order, so the frame

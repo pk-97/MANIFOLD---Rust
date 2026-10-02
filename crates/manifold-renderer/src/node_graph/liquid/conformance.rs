@@ -1,3 +1,4 @@
+//! Checked against FLIP Fluids the engine's coupled tank (gravity tests) (MIT); see THIRD_PARTY_NOTICES.md.
 //! The liquid conformance table (`docs/LIQUID_SOLVER_SEAM_DESIGN.md`
 //! section 3.8 (Committed signatures), I2 and I10): one row per liquid domain
 //! type with its scenes, the setup changes it refuses by name, and the checks

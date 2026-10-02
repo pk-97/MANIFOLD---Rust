@@ -1,3 +1,4 @@
+//! Ported from FLIP Fluids rigidpressurecoupling.h, rigidboundaryvelocity.cpp and rigidfluidcoupling.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
 //! GPU FLIP's dynamic bodies inside the pressure solve
 //! (docs/GPU_FLIP_PRESSURE_SOLVE.md section 8 (solids in the water),
 //! LIQUID_SOLVER_SEAM_DESIGN.md D7 (bodies inside the pressure solve)): each

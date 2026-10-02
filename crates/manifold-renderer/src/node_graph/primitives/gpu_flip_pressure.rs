@@ -1,3 +1,5 @@
+//! Ported from FLIP Fluids pressuresolver.cpp and pcgsolver.h (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
+//! Multigrid preconditioner after McAdams, Sifakis & Teran 2010.
 //! GPU FLIP's pressure solver: the multigrid-preconditioned conjugate
 //! gradient for L p = f on the water (docs/GPU_FLIP_PRESSURE_SOLVE.md section
 //! 3 (the solve)), as a module the step node encodes directly. One solver

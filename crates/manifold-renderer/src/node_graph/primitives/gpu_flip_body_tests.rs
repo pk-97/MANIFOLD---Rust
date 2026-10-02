@@ -1,3 +1,4 @@
+//! Checked against FLIP Fluids rigidfluidcoupling.cpp (MIT); see THIRD_PARTY_NOTICES.md.
 //! GPU value proofs for the passes that put dynamic bodies inside the GPU
 //! FLIP pressure solve (docs/GPU_FLIP_PRESSURE_SOLVE.md section 8 (solids in
 //! the water)) against CPU f64 references: each body's impulse, the bodies'

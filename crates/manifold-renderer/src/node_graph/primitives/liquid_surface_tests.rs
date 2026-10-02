@@ -1,3 +1,4 @@
+//! Checked against FLIP Fluids polygonizer3d.cpp (MIT); see THIRD_PARTY_NOTICES.md.
 //! GPU value proofs for the liquid-surface atoms (GPU_FLUID_SURFACE_DESIGN.md
 //! P5–P6) against CPU f64 references. Each atom runs through its own `run()`
 //! on a real device with pre-bound shared buffers; scalar inputs arrive as the
