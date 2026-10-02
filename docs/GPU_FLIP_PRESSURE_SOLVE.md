@@ -321,7 +321,7 @@ Peter's scenes have boxes and obstacles in the water, and the engine's Dam Break
   - A box as dense as the water, held under it, feels 627.1 N against ρgV 627.8 N (−0.12%).
   - A half-density box dropped tilted settles with its centre 0.26 cells under the waterline.
   - Before contact the coupled box is drawn exactly where Box3D alone puts it; the world steps once per tick at 60 and 30 fps.
-  - Body force against iteration count (`gpu_flip_body_push_against_iterations`): at 4, 6, 8, 12 and 16 iterations the mean force and torque on both boxes are within 0.8% of 64 iterations, and the extra shake is under 0.003 cells. 4 is the smallest steady count, so Auto (8) stands with bodies. 16 matches 64 bit for bit: the solve reaches the f32 floor by then.
+  - Body force against iteration count (`gpu_flip_body_push_against_iterations`): at 4, 6, 8, 12 and 16 iterations the mean force and torque on both boxes are within 0.8% of 64 iterations, so 4 is the smallest steady count; Auto takes 11–17 iterations a tick and never reaches the cap, so it stands with bodies. Shake and trajectory statistics are not bars: the floating box amplifies the solve's last bits into 0.7–1.6 cells of stray over two seconds at any count that is not bit-identical to 64.
 - **Forbidden:** whole-cell solids; a CPU wait for the reaction inside the tick; atomics in the per-body reduction; editing the engine.
 
 ### Tracked in beads
