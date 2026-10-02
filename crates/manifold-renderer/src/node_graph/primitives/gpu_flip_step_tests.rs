@@ -26,8 +26,7 @@ const N: [usize; 3] = [6, 5, 4];
 const H: f32 = 0.25;
 const MIN: [f32; 3] = [-0.5, 0.1, 0.3];
 
-/// The move's caps in cells: the shader's MAX_SPREAD and WALL_MARGIN.
-const MAX_SPREAD_CELLS: f64 = 0.5;
+/// The move's wall cap in cells: the shader's WALL_MARGIN.
 const WALL_MARGIN_CELLS: f64 = 0.2;
 
 struct Stream(u64);
@@ -123,6 +122,11 @@ impl Pass {
         dispatch_pass(&self.device, entry, params, &buffers, threads as u64);
         let buffer = &self.bound.iter().find(|(binding, _)| *binding == out).expect("bound").1;
         read(buffer, len)
+    }
+
+    /// `len` records of the buffer bound at `binding`.
+    fn bound<T: bytemuck::Pod>(&self, binding: u32, len: usize) -> Vec<T> {
+        read(&self.bound.iter().find(|(b, _)| *b == binding).expect("bound").1, len)
     }
 }
 
@@ -234,55 +238,20 @@ fn cpu_sort(particles: &[FluidParticle]) -> (Vec<FluidParticle>, Vec<CellRange>)
 }
 
 #[test]
-fn gpu_flip_classify_marks_occupied_cells() {
+fn gpu_flip_water_is_negative_phi() {
     let mut rng = Stream::new(0xce11);
-    let ranges: Vec<CellRange> =
-        (0..cell_len()).map(|c| CellRange { start: c as u32 * 3, count: u32::from(rng.unit() < 0.4) * 3 }).collect();
-    let got: Vec<f32> = Pass::new().bind(1, &ranges).run("classify", &lattice(), 5, cell_len(), cell_len());
-    for (c, (g, r)) in got.iter().zip(&ranges).enumerate() {
-        assert_eq!(*g, f32::from(u8::from(r.count > 0)), "cell {c}");
-    }
-}
-
-#[test]
-fn gpu_flip_density_source_evens_packing_inside_and_spreads_at_the_surface() {
-    let mut rng = Stream::new(0xde45);
-    // One cell in eight empty, so the draw holds both inside and surface cells.
-    let ranges: Vec<CellRange> = (0..cell_len())
-        .map(|c| {
-            let u = rng.unit();
-            CellRange { start: c as u32 * 20, count: if u < 0.125 { 0 } else { 1 + (u * 16.0) as u32 } }
+    // Draws straddle zero, with the eps snap's ±0.005h values among them.
+    let phi: Vec<f32> = (0..cell_len())
+        .map(|c| match c % 4 {
+            0 => 0.005,
+            1 => -0.005,
+            _ => rng.unit() * 2.0 - 1.0,
         })
         .collect();
-    let (rest, rate) = (8.0_f32, 2.5_f32);
-    let step = StepParams { rest, rate, ..lattice() };
-    let got: Vec<f32> = Pass::new().bind(1, &ranges).run("density_source", &step, 5, cell_len(), cell_len());
-    // Walls count as full: a neighbour past the lattice never makes a surface.
-    // A neighbour under half full does: a stray particle is not water.
-    let full = |p: [usize; 3], a: usize, side: i64| {
-        let q = p[a] as i64 + side;
-        if q < 0 || q >= N[a] as i64 {
-            return true;
-        }
-        let mut r = p;
-        r[a] = q as usize;
-        2.0 * ranges[cell_index(r)].count as f32 >= rest
-    };
-    // Cells seen per (inside, crowded) kind.
-    let mut kinds = [[0usize; 2]; 2];
-    for (c, g) in got.iter().enumerate() {
-        if ranges[c].count == 0 {
-            assert_eq!(*g, 0.0, "empty cell {c}");
-            continue;
-        }
-        let p = cell_coords(c);
-        let inside = (0..3).all(|a| full(p, a, -1) && full(p, a, 1));
-        let crowding = f64::from(ranges[c].count) / f64::from(rest) - 1.0;
-        kinds[usize::from(inside)][usize::from(crowding > 0.0)] += 1;
-        let source = if inside { crowding } else { crowding.max(0.0) };
-        close(*g, -f64::from(rate) * source, 3.0, &format!("cell {c}"));
+    let got: Vec<f32> = Pass::new().bind(7, &phi).run("water_from_phi", &lattice(), 5, cell_len(), cell_len());
+    for (c, (g, f)) in got.iter().zip(&phi).enumerate() {
+        assert_eq!(*g, f32::from(u8::from(*f < 0.0)), "cell {c}");
     }
-    assert!(kinds.iter().flatten().all(|&k| k > 3), "the draw covers every inside/surface, crowded/sparse kind: {kinds:?}");
 }
 
 #[test]
@@ -298,7 +267,7 @@ fn gpu_flip_particles_to_faces_matches_the_wyvill_sum() {
         let (checked, invalid, walls) = check_wyvill_faces(&particles, &got);
         if name == "dense" {
             assert!(checked > 200, "the fixture reaches most faces, got {checked}");
-            assert!(walls.iter().all(|&k| k > 10), "the draw covers walls held and kept: {walls:?}");
+            assert!(walls[1] > 10, "the draw reaches wall faces with moving water: {walls:?}");
         } else {
             assert!(checked > 5 && invalid > 50, "{name}: {checked} faces reached, {invalid} not");
         }
@@ -315,7 +284,7 @@ fn check_wyvill_faces(particles: &[FluidParticle], got: &[FaceSample]) -> (usize
         if d2 < rsq { 1.0 - 4.0 / 9.0 * d2.powi(3) / rsq.powi(3) + 17.0 / 9.0 * d2 * d2 / (rsq * rsq) - 22.0 / 9.0 * d2 / rsq } else { 0.0 }
     };
     let (mut checked, mut invalid) = (0, 0);
-    // Wall faces held (water moving into the wall) and kept (leaving it).
+    // Wall faces the particles reach still or moving, all held at 0.
     let mut walls = [0usize; 2];
     for (i, face) in got.iter().enumerate() {
         let p = pad_coords(i);
@@ -344,13 +313,11 @@ fn check_wyvill_faces(particles: &[FluidParticle], got: &[FaceSample]) -> (usize
             let valid = weight > 1e-6;
             let velocity = if valid { momentum / weight } else { 0.0 };
             if p[a] == 0 || p[a] == N[a] {
-                // A wall keeps only what leaves it, and is always valid.
+                // A wall is closed: velocity 0 whatever the particles carry,
+                // and always valid.
                 close(face.weight[a], 1.0, 1.0, &format!("wall weight {p:?}/{a}"));
-                let leaving = if p[a] == 0 { velocity.max(0.0) } else { velocity.min(0.0) };
-                walls[usize::from(leaving != 0.0)] += 1;
-                if weight > 0.05 || leaving == 0.0 {
-                    close(face.velocity[a], leaving, 1.0, &format!("wall velocity {p:?}/{a}"));
-                }
+                walls[usize::from(velocity != 0.0)] += 1;
+                assert_eq!(face.velocity[a], 0.0, "wall velocity {p:?}/{a}");
                 continue;
             }
             if !valid {
@@ -388,10 +355,8 @@ fn gpu_flip_face_gravity_adds_gravity_and_holds_the_walls() {
             let pushed = f64::from(before.velocity[a]) + f64::from(g[a]) * f64::from(dt);
             let (velocity, weight) = if !face_exists(p, a) {
                 (0.0, 0.0)
-            } else if p[a] == 0 {
-                (pushed.max(0.0), f64::from(before.weight[a]))
-            } else if p[a] == N[a] {
-                (pushed.min(0.0), f64::from(before.weight[a]))
+            } else if p[a] == 0 || p[a] == N[a] {
+                (0.0, f64::from(before.weight[a]))
             } else {
                 (pushed, f64::from(before.weight[a]))
             };
@@ -450,13 +415,7 @@ fn gpu_flip_face_gravity_adds_the_scene_forces_and_impulses() {
                 let pushed = f64::from(before.velocity[a])
                     + (f64::from(g[a]) + f64::from(force)) * f64::from(dt)
                     + f64::from(impulse);
-                let velocity = if p[a] == 0 {
-                    pushed.max(0.0)
-                } else if p[a] == N[a] {
-                    pushed.min(0.0)
-                } else {
-                    pushed
-                };
+                let velocity = if p[a] == 0 || p[a] == N[a] { 0.0 } else { pushed };
                 close(face.velocity[a], velocity, 1.0, &format!("step {step} velocity {p:?}/{a}"));
                 close(face.weight[a], f64::from(before.weight[a]), 1.0, &format!("weight {p:?}/{a}"));
             }
@@ -480,12 +439,13 @@ fn gpu_flip_face_divergence_is_the_outflow_of_water_cells() {
         let mut pushed = 0;
         for (c, g) in got.iter().enumerate() {
             let p = cell_coords(c);
-            // A wall face counts whole; an inner face by its open fraction,
-            // plus the solid's (c − w)·v_s, c the cell's open volume.
+            // A wall face is closed and carries nothing; an inner face counts
+            // by its open fraction, plus the solid's (c − w)·v_s, c the
+            // cell's open volume.
             let centre = f64::from(open[pad_index(p)].weight[3]);
             let flux = |q: [usize; 3], a: usize| {
                 if q[a] == 0 || q[a] == N[a] {
-                    return f64::from(faces[pad_index(q)].velocity[a]);
+                    return 0.0;
                 }
                 let w = f64::from(open[pad_index(q)].weight[a]);
                 w * f64::from(faces[pad_index(q)].velocity[a]) + (centre - w) * f64::from(moving[pad_index(q)].velocity[a])
@@ -555,7 +515,7 @@ fn gpu_flip_subtract_pressure_projects_faces_touching_water() {
                 let (velocity, weight) = if !face_exists(p, a) {
                     (0.0, 0.0)
                 } else if p[a] == 0 || p[a] == N[a] {
-                    (f64::from(faces[i].velocity[a]), 1.0)
+                    (0.0, 1.0)
                 } else {
                     let mut below = p;
                     below[a] -= 1;
@@ -621,7 +581,18 @@ fn gpu_flip_subtract_pressure_projects_faces_touching_water() {
                 }
             }
             let left = div(&got, q);
-            let want = div(&faces, q) - lp;
+            // The walls are closed: the divergence the solve saw carries no
+            // wall flux, as `divergence` writes it.
+            let mut walled = faces.clone();
+            for (i, face) in walled.iter_mut().enumerate() {
+                let p = pad_coords(i);
+                for a in 0..3 {
+                    if p[a] == 0 || p[a] == N[a] {
+                        face.velocity[a] = 0.0;
+                    }
+                }
+            }
+            let want = div(&walled, q) - lp;
             // f32 faces up to ~300 round by ~3e-5 each; six over h stays under 1e-3.
             assert!((left - want).abs() <= 5e-3, "divergence left in cell {q:?}: {left} vs {want}");
         }
@@ -869,8 +840,6 @@ fn cpu_sample(q: [f64; 3], field: &[FaceSample]) -> [f64; 3] {
 fn gpu_flip_faces_to_particles_blends_flip_and_moves_by_rk3() {
     let faces = random_faces(0xf1a5, true);
     let old = random_faces(0x01d5, false);
-    // A third grid: velocity comes from `faces`, the move from `advect`.
-    let advect = random_faces(0xad7e, true);
     let mut particles = random_particles(0x2b3, 300);
     // Two particles against the walls, so the clamp is exercised.
     particles[0].position_radius[0] = MIN[0] + 1e-4;
@@ -882,21 +851,24 @@ fn gpu_flip_faces_to_particles_blends_flip_and_moves_by_rk3() {
     // A guard short enough that some RK3 stages hit it and some don't.
     let (dt, flip, max_travel) = (0.07f32, 0.9f32, 0.45f32);
     let step = StepParams { step_dt: dt, flip, max_travel, particles: particles.len() as u32, ..lattice() };
-    let got: Vec<FluidParticle> = Pass::new()
+    let mut pass = Pass::new();
+    let got: Vec<FluidParticle> = pass
         .bind(2, &particles)
         .bind(3, &faces)
         .bind(17, &old)
-        .bind(18, &advect)
+        // Spread equal to the new faces: no density move.
+        .bind(18, &faces)
+        .bind(22, &vec![7u32; 2 * particles.len()])
         .run("faces_to_particles", &step, 19, particles.len(), particles.len());
+    // Step 0 of the tick starts the counts over the stale 7s.
+    let capped: Vec<u32> = pass.bound(22, 2 * particles.len());
     let per_cell = f64::from(dt) / f64::from(H);
-    // Particles whose spread is within the cap, and past it.
-    let mut spreads = [0usize; 2];
     // RK3 stages within the CFL guard, and shortened by it.
-    let mut stages = [0usize; 2];
-    let mut guard = |v: [f64; 3]| {
+    let stages = [std::cell::Cell::new(0usize), std::cell::Cell::new(0usize)];
+    let guard = |v: [f64; 3]| {
         let cells = v.iter().map(|c| c * c).sum::<f64>().sqrt() * per_cell;
         let past = cells > f64::from(max_travel);
-        stages[usize::from(past)] += 1;
+        stages[usize::from(past)].set(stages[usize::from(past)].get() + 1);
         if past { v.map(|c| c * f64::from(max_travel) / cells) } else { v }
     };
     for (i, (g, p)) in got.iter().zip(&particles).enumerate() {
@@ -913,18 +885,16 @@ fn gpu_flip_faces_to_particles_blends_flip_and_moves_by_rk3() {
             continue;
         }
         let q0: [f64; 3] = std::array::from_fn(|a| (f64::from(p.position_radius[a]) - f64::from(MIN[a])) / f64::from(H));
+        let past_before = stages[1].get();
         let after = cpu_sample(q0, &faces);
         let k1 = guard(after);
         let k2 = guard(cpu_sample(std::array::from_fn(|a| q0[a] + 0.5 * per_cell * k1[a]), &faces));
         let k3 = guard(cpu_sample(std::array::from_fn(|a| q0[a] + 0.75 * per_cell * k2[a]), &faces));
-        let pushed = cpu_sample(q0, &advect);
-        let spread: [f64; 3] = std::array::from_fn(|a| per_cell * (pushed[a] - after[a]));
-        let length = spread.iter().map(|s| s * s).sum::<f64>().sqrt();
-        let scale = if length > MAX_SPREAD_CELLS { MAX_SPREAD_CELLS / length } else { 1.0 };
-        spreads[usize::from(scale < 1.0)] += 1;
         let before = cpu_sample(q0, &old);
+        assert_eq!(capped[2 * i] as usize, stages[1].get() - past_before, "particle {i}: guarded stages");
+        assert_eq!(capped[2 * i + 1], 0, "particle {i}: no bodies, no refused push");
         for a in 0..3 {
-            let q1 = (q0[a] + per_cell * (2.0 * k1[a] + 3.0 * k2[a] + 4.0 * k3[a]) / 9.0 + scale * spread[a])
+            let q1 = (q0[a] + per_cell * (2.0 * k1[a] + 3.0 * k2[a] + 4.0 * k3[a]) / 9.0)
                 .clamp(WALL_MARGIN_CELLS, N[a] as f64 - WALL_MARGIN_CELLS);
             let position = f64::from(MIN[a]) + q1 * f64::from(H);
             let velocity =
@@ -934,7 +904,7 @@ fn gpu_flip_faces_to_particles_blends_flip_and_moves_by_rk3() {
         }
         assert_eq!((g.position_radius[3], g.id), (p.position_radius[3], p.id), "particle {i} keeps radius and id");
     }
-    assert!(spreads.iter().all(|&k| k > 10), "the draw covers spreads within and past the cap: {spreads:?}");
+    let stages = stages.map(std::cell::Cell::into_inner);
     assert!(stages.iter().all(|&k| k > 30), "the draw covers stages within and past the CFL guard: {stages:?}");
 }
 
@@ -1488,10 +1458,15 @@ fn cpu_constrain(faces: &[f32], open: &[f64], moving: &[f64], n: [usize; 3]) -> 
     for i in 0..m.iter().product::<usize>() {
         let p = [i % m[0], (i / m[0]) % m[1], i / (m[0] * m[1])];
         for a in 0..3 {
-            if !(0..3).all(|b| b == a || p[b] < n[b]) || p[a] == 0 || p[a] == n[a] {
+            if !(0..3).all(|b| b == a || p[b] < n[b]) {
                 continue;
             }
             let (v, w) = (i * FACE_FLOATS + a, i * FACE_FLOATS + 4 + a);
+            // A box wall is the static domain's closed face.
+            if p[a] == 0 || p[a] == n[a] {
+                out[v] = 0.0;
+                continue;
+            }
             let solid = moving[v];
             if open[w] <= 0.0 {
                 out[v] = solid;

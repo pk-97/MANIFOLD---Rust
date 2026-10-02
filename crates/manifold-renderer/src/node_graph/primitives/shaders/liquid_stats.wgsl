@@ -24,13 +24,15 @@ struct Partial {
     momentum_y: f32,
     momentum_z: f32,
     kinetic: f32,
+    speed_capped: u32,
+    push_refused: u32,
 }
 
 struct StatsParams {
     count: u32,
     groups: u32,
     particle_mass: f32,
-    _pad0: u32,
+    has_capped: u32,
 }
 
 const GROUP: u32 = 256u;
@@ -40,6 +42,8 @@ const PER_THREAD: u32 = 8u;
 @group(0) @binding(1) var<storage, read> particles: array<FluidParticle>;
 @group(0) @binding(2) var<storage, read_write> partials: array<Partial>;
 @group(0) @binding(3) var<storage, read_write> stats: array<u32>;
+// Two words per record from the solver; any buffer when has_capped is 0.
+@group(0) @binding(4) var<storage, read> capped: array<u32>;
 
 var<workgroup> scratch: array<Partial, 256>;
 
@@ -48,7 +52,7 @@ fn finite(x: f32) -> bool {
 }
 
 fn empty() -> Partial {
-    return Partial(0u, 0u, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+    return Partial(0u, 0u, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0u, 0u);
 }
 
 fn combine(a: Partial, b: Partial) -> Partial {
@@ -61,6 +65,8 @@ fn combine(a: Partial, b: Partial) -> Partial {
         a.momentum_y + b.momentum_y,
         a.momentum_z + b.momentum_z,
         a.kinetic + b.kinetic,
+        a.speed_capped + b.speed_capped,
+        a.push_refused + b.push_refused,
     );
 }
 
@@ -104,7 +110,12 @@ fn particles_main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocatio
     for (var k = 0u; k < PER_THREAD; k = k + 1u) {
         let i = base + k * GROUP + t;
         if i < params.count {
-            acc = combine(acc, record_partial(particles[i]));
+            var r = record_partial(particles[i]);
+            if params.has_capped != 0u {
+                r.speed_capped = capped[2u * i];
+                r.push_refused = capped[2u * i + 1u];
+            }
+            acc = combine(acc, r);
         }
     }
     scratch[t] = acc;
@@ -135,5 +146,7 @@ fn finish_main(@builtin(local_invocation_id) lid: vec3<u32>) {
         stats[5] = bitcast<u32>(s.momentum_y);
         stats[6] = bitcast<u32>(s.momentum_z);
         stats[7] = bitcast<u32>(s.kinetic);
+        stats[8] = s.speed_capped;
+        stats[9] = s.push_refused;
     }
 }

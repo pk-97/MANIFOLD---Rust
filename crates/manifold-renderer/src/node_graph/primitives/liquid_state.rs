@@ -246,6 +246,20 @@ impl Primitive for LiquidState {
         if let Some(error) = refused {
             ctx.error(error);
         }
+        // The solver's silent limits, made loud: the water still moves, but
+        // not as its velocity says.
+        if let Some(stats) = self.last_stats.filter(|s| s.speed_capped > 0) {
+            ctx.error(format!(
+                "Liquid State: {} particle move stages hit the solver's speed cap last tick; fast water lags its velocity (BUG-jyot, adaptive steps)",
+                stats.speed_capped
+            ));
+        }
+        if let Some(stats) = self.last_stats.filter(|s| s.push_refused > 0) {
+            ctx.error(format!(
+                "Liquid State: {} particles were left inside a solid's reach last tick; pushing them out would have moved them past the solver's limit",
+                stats.push_refused
+            ));
+        }
     }
 
     fn substep_iteration(&mut self, iteration: u32, scalars: &mut [f32]) -> bool {

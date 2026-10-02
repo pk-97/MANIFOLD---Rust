@@ -192,9 +192,10 @@ const VENDORED_GROUP: &str = include_str!("../../../tests/fixtures/whitewater_ve
 /// lifecycle reports probed by name.
 fn vendored_render_def(scene: WaterScene) -> EffectGraphDef {
     let mut g = Appender::new(render_def(scene.with_faces()));
-    let group: Value = serde_json::from_str(VENDORED_GROUP).expect("the vendored group parses");
+    let mut group: Value = serde_json::from_str(VENDORED_GROUP).expect("the vendored group parses");
     let id = g.id("whitewater");
-    assert_eq!(group["id"].as_u64(), Some(id), "the vendored group keeps the node's id");
+    // The render ids move with the water def's node count; the group takes the node's.
+    group["id"] = json!(id);
     let nodes = g.def["nodes"].as_array_mut().expect("nodes");
     *nodes.iter_mut().find(|n| n["nodeId"] == "whitewater").expect("the whitewater node") = group;
     let target = json!({"kind": "node", "nodeId": "ww.lifecycle", "param": "capacity"});
@@ -454,7 +455,7 @@ fn gpu_flip_resolution_card_resizes_at_runtime() {
         .clone();
     let mut show = Show::new(def, (320, 180), true, &[]);
     show.restart();
-    let step = format!("s{}.step", scene.steps - 1);
+    let step = super::gpu_flip_preset::STEP_NODE;
     for n in [64u32, 32, 100] {
         let mut card = Param::bundled(spec.clone());
         card.value = n as f32;
@@ -471,7 +472,7 @@ fn gpu_flip_resolution_card_resizes_at_runtime() {
         }
         let [count] = show.probes(["count"]);
         println!("Resolution {n}: {count} particles, GPU p50 {:.2} ms; foam {} bubble {} spray {}", percentile(&gpu_ms, 0.5), last[0], last[1], last[2]);
-        assert_eq!(show.provided_bytes(&step, "faces"), faces, "Resolution {n}: the step's faces");
+        assert_eq!(show.provided_bytes(step, "faces"), faces, "Resolution {n}: the step's faces");
         assert_eq!(count as u64, WaterScene::dam_break(n as usize).particles(), "Resolution {n}: the fill");
         assert!(last[0] + last[1] + last[2] > 0.0, "Resolution {n}: no whitewater by 1.5 s: {last:?}");
     }

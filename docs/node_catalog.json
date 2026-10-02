@@ -14405,6 +14405,11 @@
           "capacity": "follows:reaction",
           "name": "reaction_out",
           "type": "Array"
+        },
+        {
+          "capacity": "inputs:2000@1000,2048@1024",
+          "name": "capped",
+          "type": "Array"
         }
       ],
       "params": [
@@ -14609,22 +14614,12 @@
           "type": "int"
         },
         {
-          "default": "2",
-          "label": "Steps per Tick",
-          "name": "steps_per_tick",
+          "default": "1",
+          "label": "Steps",
+          "name": "steps",
           "range": [
             "1",
             "64"
-          ],
-          "type": "int"
-        },
-        {
-          "default": "0",
-          "label": "Step in Tick",
-          "name": "step_in_tick",
-          "range": [
-            "0",
-            "63"
           ],
           "type": "int"
         },
@@ -14649,26 +14644,6 @@
           "type": "int"
         },
         {
-          "default": "0",
-          "label": "Density Iterations (0 = Auto)",
-          "name": "density_iterations",
-          "range": [
-            "0",
-            "64"
-          ],
-          "type": "int"
-        },
-        {
-          "default": "120",
-          "label": "Spread Rate",
-          "name": "spread_rate",
-          "range": [
-            "0",
-            "10000"
-          ],
-          "type": "float"
-        },
-        {
           "default": "20",
           "label": "Top Speed",
           "name": "top_speed",
@@ -14687,12 +14662,22 @@
             "1"
           ],
           "type": "int"
+        },
+        {
+          "default": "1",
+          "label": "Volume Projection",
+          "name": "volume_projection",
+          "range": [
+            "0",
+            "1"
+          ],
+          "type": "int"
         }
       ],
-      "purpose": "Advance GPU FLIP water one step. Sorts the particles into the lattice's cells, gathers their velocity onto the cell faces, adds gravity and the scene's forces and impulses, makes the water incompressible against the tank walls and the scene's solid bodies (a multigrid-preconditioned pressure solve, the free surface placed where the particles' distance crosses zero), spreads crowded particles apart (a density solve, when Spread Rate is above 0), then moves every particle through the new velocity, blending FLIP and PIC by Flip Share, and keeps it out of the solid bodies (a particle a moving body swept over is removed). When dynamic_bodies is above 0, each body that takes a reaction joins the pressure solve with its own velocity, so the water pushes it and it pushes back in the same solve, and the step adds the pressure's and the friction's impulse on every body to the reaction. Outputs the moved particles, the step's face grid (valid at least 2 layers around the water) and the reaction, in place.",
+      "purpose": "Advance GPU FLIP water one 60 Hz tick in Steps equal substeps (1 by default); each substep sorts the particles into the lattice's cells, gathers their velocity onto the cell faces, adds gravity and the scene's forces and impulses, makes the water incompressible against the tank walls and the scene's solid bodies (a multigrid-preconditioned pressure solve, the free surface placed where the particles' distance crosses zero), moves crowded particles apart and sparse ones together so the water keeps its volume (a density projection, position only, when Volume Projection is 1), then moves every particle through the new velocity, blending FLIP and PIC by Flip Share, and keeps it out of the solid bodies (a particle a moving body swept over is removed). When dynamic_bodies is above 0, each body that takes a reaction joins the pressure solve with its own velocity, so the water pushes it and it pushes back in the same solve, and the step adds the pressure's and the friction's impulse on every body to the reaction. Outputs the moved particles, the step's face grid (valid at least 2 layers around the water) and the reaction, in place.",
       "role": "Filter",
       "stratum": "atom",
-      "summary": "Moves the water forward one step: gravity, solids, incompressibility and the particles' motion.",
+      "summary": "Moves the water forward one tick, in Steps substeps: gravity, solids, incompressibility and the particles' motion.",
       "type_id": "node.gpu_flip_step"
     },
     {
@@ -18783,7 +18768,7 @@
           "type": "Array"
         },
         {
-          "capacity": "fixed:8",
+          "capacity": "fixed:10",
           "name": "stats",
           "type": "Array"
         },
@@ -18835,6 +18820,11 @@
           "type": "Array"
         },
         {
+          "name": "capped",
+          "required": false,
+          "type": "Array"
+        },
+        {
           "name": "count",
           "required": false,
           "type": "f32"
@@ -18875,7 +18865,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Reduce a particle liquid's first `count` records to its statistics words, written in place over `stats`: 0 records with a non-finite position, radius or velocity, 1 live records (radius above 0), 2 the fastest speed, 3 mass, 4-6 momentum and 7 kinetic energy, each particle weighing particle_mass. Sums run in a fixed order with no atomics, so the words are the same on every run.",
+      "purpose": "Reduce a particle liquid's first `count` records to its statistics words, written in place over `stats`: 0 records with a non-finite position, radius or velocity, 1 live records (radius above 0), 2 the fastest speed, 3 mass, 4-6 momentum and 7 kinetic energy, each particle weighing particle_mass, and when capped is wired, 8 and 9 its two words per record summed: the solver's speed-capped move stages and refused solid push-outs. Sums run in a fixed order with no atomics, so the words are the same on every run.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Measures a particle liquid once per tick: how much there is, how fast it moves, and whether anything went wrong.",
