@@ -401,6 +401,9 @@ struct Record {
 pub(crate) struct Feel {
     pub runup: f64,
     pub at_lid: usize,
+    /// The farthest x of a particle more than 10 cm above the 0.16 m pool:
+    /// the collapsing column's front.
+    pub front: f64,
     /// The share of live particles faster than the step's CFL guard.
     pub past_guard: f64,
 }
@@ -408,7 +411,7 @@ pub(crate) struct Feel {
 /// [`Feel`] over (position and radius, velocity) pairs; `guard` is the
 /// speed the CFL guard allows (m/s).
 pub(crate) fn feel(particles: impl Iterator<Item = ([f32; 4], [f32; 3])>, floor: f64, guard: f64) -> Feel {
-    let mut out = Feel::default();
+    let mut out = Feel { front: f64::NEG_INFINITY, ..Feel::default() };
     let (mut live, mut fast) = (0usize, 0usize);
     for (p, v) in particles.filter(|(p, _)| p[3] > 0.0) {
         let height = f64::from(p[1]) - floor;
@@ -416,6 +419,9 @@ pub(crate) fn feel(particles: impl Iterator<Item = ([f32; 4], [f32; 3])>, floor:
             out.runup = out.runup.max(height);
         }
         out.at_lid += usize::from(height > 3.9);
+        if height > 0.26 {
+            out.front = out.front.max(f64::from(p[0]));
+        }
         live += 1;
         fast += usize::from(v.iter().map(|&c| f64::from(c).powi(2)).sum::<f64>().sqrt() > guard);
     }
@@ -430,6 +436,10 @@ pub(crate) fn report_feel(label: &str, feel: &[Feel]) {
     let contact: usize = feel.iter().take(131).skip(50).map(|f| f.at_lid).sum();
     let last = feel.iter().rposition(|f| f.at_lid > 0);
     println!("{label}: run-up at frames 59/74/89 {} m, lid contact {contact}, last frame at the lid {last:?}", runup.join(" / "));
+    let front: Vec<String> = [6, 12, 18, 24].iter().filter_map(|&f| feel.get(f)).map(|f| format!("{:.2}", f.front)).collect();
+    if let (Some(a), Some(b)) = (feel.get(6), feel.get(24)) {
+        println!("{label}: front x at frames 6/12/18/24 {} m, {:.2} m/s over frames 6–24", front.join(" / "), (b.front - a.front) * 60.0 / 18.0);
+    }
 }
 
 /// The Dam Break for `frames` frames: per-frame GPU and CPU encode ms, what
@@ -445,13 +455,15 @@ fn dam_break(scene: WaterScene, label: &str, frames: usize) -> Record {
     let (mut rms, mut max) = (Vec::new(), Vec::new());
     let (mut blocks_max, mut water_max) = (0.0_f64, 0.0_f64);
     let (mut raw, mut oracle, mut packed, mut broken) = (Vec::new(), None, Vec::new(), Vec::new());
+    let mut per_cell: Vec<f64> = Vec::new();
     for frame in 0..frames {
         let (g, c) = run.frame();
         record.gpu.push(g);
         record.cpu.push(c);
-        for step in 0..scene.steps {
-            let water = run.water(step);
-            let (r, m) = divergence(&run.faces(step), &water, n, h);
+        // A later substep's water mask stays inside the step node.
+        if scene.steps == 1 {
+            let water = run.water();
+            let (r, m) = divergence(&run.faces(), &water, n, h);
             rms.push(r);
             max.push(m);
             let (fraction, blocks) = occupancy(&water, n);
@@ -469,6 +481,10 @@ fn dam_break(scene: WaterScene, label: &str, frames: usize) -> Record {
             }
         }
         let particles = run.particles();
+        // The mesher-free volume: live particles over the φ < 0 cells.
+        let live_count = particles.iter().filter(|p| p.position_radius[3] > 0.0).count();
+        let phi_cells = run.water_of(&particles).iter().filter(|&&w| w > 0.5).count();
+        per_cell.push(live_count as f64 / phi_cells.max(1) as f64);
         record.motion.push(particle_motion(&particles, min));
         let guard = scene.travel_cells() as f64 * h / scene.step_dt();
         record.feel.push(feel(particles.iter().map(|p| (p.position_radius, p.velocity)), min[1], guard));
@@ -498,6 +514,7 @@ fn dam_break(scene: WaterScene, label: &str, frames: usize) -> Record {
             if let Some(v) = record.volume.last() {
                 println!("{label} frame {frame:3}: water volume {:+.2}%, raw mesh {:+.2}%", 100.0 * v, 100.0 * (raw[frame] / raw[0] - 1.0));
             }
+            println!("{label} frame {frame:3}: {} particles, {:.3} a φ<0 cell ({:+.2}%)", stats.live, per_cell[frame], 100.0 * (per_cell[frame] / per_cell[0] - 1.0));
             println!("{label} frame {frame:3}: particles past rest {:.1}%, missing inside {:.1}%", 100.0 * pack.crowded, 100.0 * pack.hollow);
         }
     }
@@ -509,6 +526,14 @@ fn dam_break(scene: WaterScene, label: &str, frames: usize) -> Record {
     println!("{label}: water at most {:.1}% of cells, {:.1}% of 8³ blocks", 100.0 * water_max, 100.0 * blocks_max);
     report_motion(label, &record.motion);
     report_feel(label, &record.feel);
+    let spread: Vec<f64> = per_cell.iter().map(|c| (c / per_cell[0] - 1.0).abs()).collect();
+    println!(
+        "{label}: particles per φ<0 cell {:.3} at frame 0, {:.3} last, drift max {:.2}%, at the last frame {:+.2}%",
+        per_cell[0],
+        per_cell[frames - 1],
+        100.0 * worst(&spread),
+        100.0 * (per_cell[frames - 1] / per_cell[0] - 1.0)
+    );
     let top = record.motion.iter().map(|m| m.fastest).fold(0.0, f64::max);
     println!("{label}: the top speed crosses {:.2} cells a step, {} steps a frame", top * scene.step_dt() / h, scene.steps);
     let guarded = record.feel.iter().map(|f| f.past_guard).fold(0.0, f64::max);
@@ -563,51 +588,13 @@ fn gpu_flip_refined_splash() {
     dam_break(WaterScene::race_dam_break(128).with_surface(), "SPLASH 128³", 150);
 }
 
-/// The 128³ splash against what else could feed it: the density source (rate
-/// 0) and the step length (four steps a frame, so a fast particle crosses
-/// half as many cells per step as the two-layer face extension covers).
+/// The 128³ splash against the step length: four steps a frame, so a fast
+/// particle crosses half as many cells per step as the two-layer face
+/// extension covers.
 #[test]
 fn gpu_flip_refined_splash_causes() {
     let refined = WaterScene::race_dam_break(128).with_surface();
-    dam_break(WaterScene { spread_rate: 0.0, ..refined }, "SPLASH rate 0 128³", 120);
     dam_break(WaterScene { steps: 4, ..refined }, "SPLASH 4 steps 128³", 120);
-}
-
-/// The crowding against the density solve's strength, share 1 and 0.5 at
-/// 64³ and 128³, two steps a frame, 300 frames.
-#[test]
-fn gpu_flip_refined_density_causes() {
-    for n in [64, 128] {
-        let scene = WaterScene::race_dam_break(n);
-        let per_second = 1.0 / scene.step_dt();
-        for share in [1.0, 0.5] {
-            dam_break(WaterScene { spread_rate: share * per_second, ..scene }, &format!("DENSITY share {share} {n}³"), 300);
-        }
-    }
-}
-
-/// How high the 64³ splash throws and whether it stays at the lid (BUG-h8or,
-/// splash slabs along the lid), as shipped and with the density solve left
-/// out, against `gpu_flip_engine_race`'s splash lines.
-#[test]
-fn gpu_flip_splash_causes_64() {
-    let base = WaterScene::race_dam_break(64);
-    dam_break(base, "LID share 1 64³", 150);
-    dam_break(WaterScene { spread_rate: 0.0, ..base }, "LID rate 0 64³", 150);
-}
-
-/// The step's cadence levers on the meshed 64³ Dam Break: the density solve
-/// every step against once a frame (drift, packing, missing, the lid), and one
-/// water step a frame (the same plus the splash height over time and the cells
-/// a step the top speed crosses). The engine's side is
-/// `gpu_flip_engine_splash_64`.
-#[test]
-fn gpu_flip_cadence_64() {
-    let base = WaterScene::race_dam_break(64).with_surface();
-    dam_break(WaterScene { density_once: false, ..base }, "CADENCE density every step 64³", 300);
-    dam_break(base, "CADENCE density once 64³", 300);
-    let one_step = WaterScene { steps: 1, spread_rate: super::gpu_flip_preset::SPREAD_PER_STEP * 60.0, ..base };
-    dam_break(one_step, "CADENCE one step 64³", 300);
 }
 
 /// The walls against the step count: the meshed 64³ Dam Break at two water
@@ -666,19 +653,4 @@ fn gpu_flip_transfer_kernel_refined() {
 #[test]
 fn gpu_flip_dam_break_settles() {
     dam_break(WaterScene::race_dam_break(64).with_surface(), "SETTLE 64³", 900);
-}
-
-/// The density solve's share of crowding removed per step (rate × step dt)
-/// and its iteration count against volume drift and particle motion, on the
-/// meshed 64³ Dam Break, with the drift curve every 30 frames. The
-/// correction moves particles only, so a share up to 2 relaxes instead of
-/// oscillating.
-#[test]
-fn gpu_flip_density_sweep() {
-    let base = WaterScene::race_dam_break(64).with_surface();
-    let per_second = 1.0 / base.step_dt();
-    for (share, iterations) in [(5.0 / 6.0, 3), (1.0, 3), (1.5, 3), (5.0 / 6.0, 8), (1.0, 8)] {
-        let scene = WaterScene { spread_rate: share * per_second, density_iterations: iterations, ..base };
-        dam_break(scene, &format!("SWEEP share {share:.2} iterations {iterations}"), 300);
-    }
 }

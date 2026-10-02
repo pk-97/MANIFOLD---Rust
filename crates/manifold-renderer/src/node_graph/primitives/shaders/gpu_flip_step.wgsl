@@ -13,6 +13,11 @@
 // The CPU sizes every buffer for the lattice and the particle slots before
 // it dispatches; each pass only checks its thread is inside its range.
 //
+// The density projection (density_source) is ported from blub (MIT,
+// Copyright (c) 2020 Andreas Reich; see THIRD_PARTY_NOTICES.md):
+// density_projection_gather_error.comp, its kernel, solid face weight 0.5625,
+// surface clamp and source clamp.
+//
 // Ported from FLIP Fluids (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis
 // Fassbaender; see THIRD_PARTY_NOTICES.md): velocityadvector.cpp (particles
 // to faces), particlelevelset.cpp (the particle distance),
@@ -46,10 +51,6 @@ struct Params {
     flip: f32,
     // The farthest one RK3 stage moves, in cells.
     max_travel: f32,
-    // Particles a full cell holds.
-    rest: f32,
-    // The density source's rate (1/s).
-    rate: f32,
     // The largest |box_min| component, for the solid faces' tolerance.
     box_offset: f32,
     // subtract: 1 reads `phi` for the free surface, 0 keeps air at zero.
@@ -58,6 +59,10 @@ struct Params {
     particles: u32,
     // Records `shapes` holds.
     shapes_len: u32,
+    // The density projection's source scale, 1 / step_dt.
+    rate: f32,
+    // The struct's 128 bytes, the Rust twin's `pad`.
+    pad: u32,
 };
 
 struct CellRange {
@@ -114,12 +119,19 @@ struct LiquidShape {
 @group(0) @binding(15) var<storage, read> shapes: array<LiquidShape>;
 @group(0) @binding(16) var<storage, read> atlas: array<u32>;
 @group(0) @binding(17) var<storage, read> old: array<FaceSample>;
-@group(0) @binding(18) var<storage, read> advect: array<FaceSample>;
+@group(0) @binding(18) var<storage, read> spread: array<FaceSample>;
 @group(0) @binding(19) var<storage, read_write> particles_out: array<FluidParticle>;
 @group(0) @binding(20) var<storage, read_write> faces_rw: array<FaceSample>;
 // 8 floats per body: the linear and angular impulse the water has put on it
 // so far this tick (gpu_flip_bodies.wgsl).
 @group(0) @binding(21) var<storage, read> reaction: array<f32>;
+// Two words per particle slot, summed over the tick's substeps: RK3 stages
+// the CFL guard shortened, and solid push-outs refused past SOLID_PUSH. The
+// tick's stats reduce them (liquid_stats words 8 and 9).
+@group(0) @binding(22) var<storage, read_write> capped: array<u32>;
+
+// Set by resolve_solid when it refuses a push-out past SOLID_PUSH.
+var<private> push_refused: u32 = 0u;
 
 fn lattice() -> vec3<i32> {
     return vec3<i32>(u.n);
@@ -153,30 +165,14 @@ fn face_exists(p: vec3<i32>, n: vec3<i32>, a: i32) -> bool {
     return all(other < n);
 }
 
-// One thread per cell: 1 where the sort put a particle in it, else 0.
-@compute @workgroup_size(256)
-fn classify(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let idx = gid.x;
-    if idx >= cell_total() {
-        return;
-    }
-    cell_out[idx] = select(0.0, 1.0, ranges[idx].count > 0u);
-}
-
-// A box wall lets water leave and never enter: of the velocity on a wall
-// face it keeps only the part pointing into the box (up from the floor face,
-// index 0; down from the lid face, index n).
-fn wall(v: f32, low: bool) -> f32 {
-    return select(min(v, 0.0), max(v, 0.0), low);
-}
-
 // One thread per face record. Each face sums the engine's Wyvill weight
 // 1 − (4/9)·s³/r⁶ + (17/9)·s²/r⁴ − (22/9)·s/r² for s = |q − face|² < r²,
 // r = √3/2 cells, over every live particle in the 3 × 3 × 3 cells around p,
 // and the weighted velocity along its normal. A face over weight 1e-6 gets
 // the ratio; any other gets velocity 0 and weight 0 for the extension to
-// fill. A box wall face keeps only the part leaving the wall and is always
-// valid (weight 1), so the extension never writes it.
+// fill. A box wall face is closed: velocity 0, valid (weight 1), so the
+// extension never writes it (the engine's domain boundary, weight 0 in the
+// solve, its velocity the static solid's).
 @compute @workgroup_size(256)
 fn particles_to_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
     let idx = gid.x;
@@ -241,7 +237,7 @@ fn particles_to_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
     weight = select(vec3<f32>(0.0), weight, valid);
     for (var a = 0; a < 3; a = a + 1) {
         if exists[a] && (p[a] == 0 || p[a] == n[a]) {
-            velocity[a] = wall(velocity[a], p[a] == 0);
+            velocity[a] = 0.0;
             weight[a] = 1.0;
         }
     }
@@ -322,8 +318,8 @@ fn gravity_impulse(x: vec3<f32>, origin: vec3<f32>, axis: u32) -> f32 {
 // One thread per face record, `faces_in` to `faces_out`: each face gains
 // step_dt · (g + forces(x)) along its normal a, x its centre, plus the
 // impulses on step 0 of impulse_tick, read from the domain's coarse field
-// lattices (origin the box minimum). A box wall face then keeps only the
-// part leaving the wall. Weights pass through.
+// lattices (origin the box minimum). A box wall face stays 0. Weights pass
+// through.
 @compute @workgroup_size(256)
 fn face_gravity(@builtin(global_invocation_id) gid: vec3<u32>) {
     let idx = gid.x;
@@ -357,13 +353,7 @@ fn face_gravity(@builtin(global_invocation_id) gid: vec3<u32>) {
         if impulse {
             v = v + gravity_impulse(x, origin, u32(a));
         }
-        if p[a] == 0 {
-            out.face_velocity[a] = max(v, 0.0);
-        } else if p[a] == n[a] {
-            out.face_velocity[a] = min(v, 0.0);
-        } else {
-            out.face_velocity[a] = v;
-        }
+        out.face_velocity[a] = select(v, 0.0, p[a] == 0 || p[a] == n[a]);
     }
     faces_out[idx] = out;
 }
@@ -707,25 +697,24 @@ fn phi_into_solids(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 }
 
-// One thread per cell, in place on `cell_out`: the water cells, after
-// `phi_into_solids` wrote `phi`. The cells it moved become water.
+// One thread per cell, `phi` to `cell_out`: water is φ < 0, after
+// `phi_into_solids`. The engine's pressure cells are its liquid SDF's
+// negative cells (PressureSolver::_initialize), which reach 0.866h past the
+// particles rather than stopping at the cells that hold one.
 @compute @workgroup_size(256)
-fn water_into_solids(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn water_from_phi(@builtin(global_invocation_id) gid: vec3<u32>) {
     let idx = gid.x;
     if idx >= cell_total() {
         return;
     }
-    let n = lattice();
-    if phi[idx] < 0.5 * u.cell_size && solid_centre(unflatten(idx, n), n + vec3<i32>(1)) < 0.0 {
-        cell_out[idx] = 1.0;
-    }
+    cell_out[idx] = select(0.0, 1.0, phi[idx] < 0.0);
 }
 
-// Open fraction of face a at record f: 1 on a box wall (it holds only the
-// part leaving the wall), else the solid's.
+// Open fraction of face a at record f: 0 on a box wall, which is closed in
+// the solve too, else the solid's.
 fn open_at(f: vec3<i32>, a: i32, n: vec3<i32>, m: vec3<i32>) -> f32 {
     if f[a] == 0 || f[a] == n[a] {
-        return 1.0;
+        return 0.0;
     }
     return solid_faces[flatten(f, m)].face_weight[a];
 }
@@ -839,8 +828,8 @@ fn surface_phi(cell: u32) -> f32 {
     return select(0.0, phi[cell], u.ghost == 1u);
 }
 
-// One thread per face record, in place on `faces_rw`. A box wall face keeps
-// its velocity and is valid. A closed inner face (open fraction 0) keeps its
+// One thread per face record, in place on `faces_rw`. A box wall face is 0
+// and valid. A closed inner face (open fraction 0) keeps its
 // velocity and is valid, for the constraint to give it the solid's
 // (PressureSolver::_applyPressureToVelocityField). An open inner face beside
 // water loses (p_upper − p_lower) / h, the air side's pressure the ghost
@@ -866,7 +855,6 @@ fn subtract_pressure(@builtin(global_invocation_id) gid: vec3<u32>) {
             continue;
         }
         if p[a] == 0 || p[a] == n[a] {
-            out.face_velocity[a] = here.face_velocity[a];
             out.face_weight[a] = 1.0;
             continue;
         }
@@ -898,7 +886,8 @@ fn subtract_pressure(@builtin(global_invocation_id) gid: vec3<u32>) {
 // (FluidSimulation::_constrainVelocityFieldThread): on an inner face, a
 // closed face (open fraction 0) takes the solid's velocity v_s, a cut face
 // takes f·v_s + (1 − f)·u with f the solid's friction, an open face keeps u.
-// Box wall faces and the weights pass through.
+// A box wall face is 0, the static domain's velocity
+// (FluidSimulation::_constrainVelocityFields). Weights pass through.
 @compute @workgroup_size(256)
 fn constrain_solid_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
     let idx = gid.x;
@@ -912,7 +901,11 @@ fn constrain_solid_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
     let open = solid_faces[idx];
     let solid_here = solid_velocity[idx];
     for (var a = 0; a < 3; a = a + 1) {
-        if !face_exists(p, n, a) || p[a] == 0 || p[a] == n[a] {
+        if !face_exists(p, n, a) {
+            continue;
+        }
+        if p[a] == 0 || p[a] == n[a] {
+            out.face_velocity[a] = 0.0;
             continue;
         }
         let w = open.face_weight[a];
@@ -927,44 +920,117 @@ fn constrain_solid_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
     faces_rw[idx] = out;
 }
 
-// One thread per cell, the ranges to `cell_out`: a cell holding particles
-// has crowding e = count / rest − 1. Inside the water (every neighbour in
-// the lattice holds at least half of rest) its source is rate · e; at the
-// surface, rate · max(e, 0), since fewer particles there only mean a
-// part-full cell. Out is −source; an empty cell gives 0.
+// Rest density: eight evenly placed particles per cell, each weighed by the
+// tent kernel at the cell's centre, sum to 8.
+const REST_DENSITY: f32 = 8.0;
+// What a solid neighbour cell at offset d would weigh at the centre if it
+// held eight evenly placed particles, as the paper samples solids with
+// particles: Π over axes of 1.5 at offset 0 and 0.25 at ±1. A face neighbour
+// weighs 0.5625, an edge one 0.09375, a corner one 0.015625; with the cell's
+// own and its water neighbours they sum to REST_DENSITY.
+// A cell whose centre is this many cells clear of every body has no site
+// inside one; its rest sites lie within 0.44 cells of the centre.
+const SOLID_SITE_REACH: f32 = 1.75;
+fn solid_neighbour_density(d: vec3<i32>) -> f32 {
+    let w = select(vec3<f32>(1.5), vec3<f32>(0.25), d != vec3<i32>(0));
+    return w.x * w.y * w.z;
+}
+// The source's clamp: one projection moves a particle at most about half a
+// cell.
+const MAX_DENSITY_ERROR: f32 = 0.5;
+
+// Kugelstadt et al. 2019's density source (see gpu_flip_step.rs). One thread
+// per cell, the sorted particles to `cell_out`. In a water cell, ρ is the sum
+// of the tent weights Π(1 − |c − q|) of the particles within a cell of its
+// centre c, plus what solid rest sites would weigh: solid_neighbour_density
+// for each neighbour outside the box, each body site's tent weight. Beside
+// a cell holding no particles ρ is at least REST_DENSITY, since a part full
+// surface cell is not thin water. Out is −rate · clamp(ρ / ρ0 − 1, ±½),
+// so the solve's pressure gradient moves particles out of crowded cells and
+// into sparse ones; 0 outside the water.
 @compute @workgroup_size(256)
 fn density_source(@builtin(global_invocation_id) gid: vec3<u32>) {
     let idx = gid.x;
     if idx >= cell_total() {
         return;
     }
-    if ranges[idx].count == 0u {
+    if !(water[idx] > 0.5) {
         cell_out[idx] = 0.0;
         return;
     }
     let n = lattice();
+    let m = n + vec3<i32>(1);
     let p = unflatten(idx, n);
-    var inside = true;
-    for (var a = 0; a < 3; a = a + 1) {
-        for (var side = -1; side <= 1; side = side + 2) {
-            var q = p;
-            q[a] = p[a] + side;
-            if q[a] >= 0 && q[a] < n[a] && 2.0 * f32(ranges[flatten(q, n)].count) < u.rest {
-                inside = false;
+    let centre = vec3<f32>(p) + vec3<f32>(0.5);
+    let slots = u.capacity;
+    var density = 0.0;
+    let first = max(p - vec3<i32>(1), vec3<i32>(0));
+    let last = min(p + vec3<i32>(1), n - vec3<i32>(1));
+    for (var z = first.z; z <= last.z; z = z + 1) {
+        for (var y = first.y; y <= last.y; y = y + 1) {
+            for (var x = first.x; x <= last.x; x = x + 1) {
+                let range = ranges[flatten(vec3<i32>(x, y, z), n)];
+                let start = min(range.start, slots);
+                let end = start + min(range.count, slots - start);
+                for (var s = start; s < end; s = s + 1u) {
+                    let particle = sorted[s];
+                    if !(particle.position_radius.w > 0.0) {
+                        continue;
+                    }
+                    let q = (particle.position_radius.xyz - u.box_min) / u.cell_size;
+                    let w = clamp(vec3<f32>(1.0) - abs(centre - q), vec3<f32>(0.0), vec3<f32>(1.0));
+                    density = density + w.x * w.y * w.z;
+                }
             }
         }
     }
-    let crowding = f32(ranges[idx].count) / u.rest - 1.0;
-    cell_out[idx] = -u.rate * select(max(crowding, 0.0), crowding, inside);
+    // The paper's air is a neighbour cell holding no particles: the level-set
+    // mask also covers empty cells just above the surface, and their missing
+    // particles would otherwise read as a thin surface layer.
+    var beside_air = false;
+    for (var z = -1; z <= 1; z = z + 1) {
+        for (var y = -1; y <= 1; y = y + 1) {
+            for (var x = -1; x <= 1; x = x + 1) {
+                let d = vec3<i32>(x, y, z);
+                let q = p + d;
+                if any(q < vec3<i32>(0)) || any(q >= n) {
+                    density = density + solid_neighbour_density(d);
+                    continue;
+                }
+                var inside_body = false;
+                if u.body_count > 0 {
+                    let distance = solid_centre(q, m);
+                    inside_body = distance < 0.0;
+                    // Bodies are sampled per rest site, so a cell a body only
+                    // cuts weighs its solid part; liquid_fill seeds exactly
+                    // the sites outside the solid, so the two make the full
+                    // lattice at rest.
+                    if distance < SOLID_SITE_REACH * u.cell_size {
+                        for (var k = 0; k < 8; k = k + 1) {
+                            let site = vec3<f32>(q) + vec3<f32>(0.25) + 0.5 * vec3<f32>(vec3<i32>(k & 1, (k >> 1u) & 1, (k >> 2u) & 1));
+                            if solid_at(site, n) < 0.0 {
+                                let w = clamp(vec3<f32>(1.0) - abs(centre - site), vec3<f32>(0.0), vec3<f32>(1.0));
+                                density = density + w.x * w.y * w.z;
+                            }
+                        }
+                    }
+                }
+                if any(d != vec3<i32>(0)) && !inside_body && ranges[flatten(q, n)].count == 0u {
+                    beside_air = true;
+                }
+            }
+        }
+    }
+    if beside_air {
+        density = max(density, REST_DENSITY);
+    }
+    let error = clamp(density / REST_DENSITY - 1.0, -MAX_DENSITY_ERROR, MAX_DENSITY_ERROR);
+    cell_out[idx] = -u.rate * error;
 }
 
 // A moved particle stays 0.2 cells inside each box wall, as the engine keeps
 // its particles off its solids (`_solidBufferWidth`).
 const WALL_MARGIN: f32 = 0.2;
-
-// A density correction longer than half a cell carries a particle past the
-// cell it was spreading from and crowds the next one.
-const MAX_SPREAD: f32 = 0.5;
 
 // The CFL guard: one RK3 stage moves at most max_travel cells. A non-finite
 // v stays non-finite.
@@ -973,13 +1039,18 @@ fn guard(v: vec3<f32>, per_cell: f32) -> vec3<f32> {
     return select(v, v * (u.max_travel / cells), cells > u.max_travel);
 }
 
+// 1 when the guard shortens v.
+fn guarded(v: vec3<f32>, per_cell: f32) -> u32 {
+    return select(0u, 1u, length(v) * per_cell > u.max_travel);
+}
+
 // Exponent bits, not x != x: fast math may fold a NaN comparison away.
 fn finite(v: vec3<f32>) -> bool {
     let bits = bitcast<vec3<u32>>(v) & vec3<u32>(0x7f800000u);
     return all(bits != vec3<u32>(0x7f800000u));
 }
 
-// grid: 0 the new faces, 1 `old`, 2 `advect`.
+// grid: 0 the new faces, 1 `old`, 2 `spread`.
 fn face_record(index: u32, grid: u32) -> FaceSample {
     if grid == 0u {
         return faces_in[index];
@@ -987,7 +1058,7 @@ fn face_record(index: u32, grid: u32) -> FaceSample {
     if grid == 1u {
         return old[index];
     }
-    return advect[index];
+    return spread[index];
 }
 
 // Trilinear per component over the faces with weight > 0, renormalised by
@@ -1100,11 +1171,19 @@ fn resolve_solid(q0: vec3<f32>, q1: vec3<f32>, n: vec3<i32>, edge: vec3<f32>) ->
                 return last;
             }
             let pushed = current - (d - SOLID_BUFFER) * normalize(g);
-            if solid_at(pushed, n) < 0.0 || length(pushed - current) > SOLID_PUSH {
+            if length(pushed - current) > SOLID_PUSH {
+                push_refused = 1u;
+                return last;
+            }
+            if solid_at(pushed, n) < 0.0 {
                 return last;
             }
             let kept = clamp(pushed, edge, vec3<f32>(n) - edge);
-            if any(kept != pushed) && (solid_at(kept, n) < 0.0 || length(kept - pushed) > SOLID_PUSH) {
+            if any(kept != pushed) && length(kept - pushed) > SOLID_PUSH {
+                push_refused = 1u;
+                return last;
+            }
+            if any(kept != pushed) && solid_at(kept, n) < 0.0 {
                 return last;
             }
             return kept;
@@ -1117,8 +1196,8 @@ fn resolve_solid(q0: vec3<f32>, q1: vec3<f32>, n: vec3<i32>, edge: vec3<f32>) ->
 // One thread per particle slot, `sorted` to `particles_out`. A live particle
 // (radius > 0) at q blends FLIP and PIC, flip · (v + new(q) − old(q)) +
 // (1 − flip) · new(q), then moves by RK3 through the new faces (stages at ½
-// and ¾ of step_dt, weights 2/9, 3/9, 4/9, each guarded), plus the spread
-// step_dt · (advect(q) − new(q)) capped at MAX_SPREAD cells, kept
+// and ¾ of step_dt, weights 2/9, 3/9, 4/9, each guarded), plus the density
+// projection's move, kept
 // WALL_MARGIN cells inside each wall. With bodies, the move is kept out of
 // the solids (resolve_solid), and a particle still inside one, where a
 // moving solid swept over it, is removed: radius 0
@@ -1133,6 +1212,11 @@ fn faces_to_particles(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let particle = sorted[idx];
     var out = particle;
+    let first = u.step_in_tick == 0;
+    let cfl_before = select(capped[2u * idx], 0u, first);
+    let push_before = select(capped[2u * idx + 1u], 0u, first);
+    capped[2u * idx] = cfl_before;
+    capped[2u * idx + 1u] = push_before;
     if !(particle.position_radius.w > 0.0) {
         particles_out[idx] = out;
         return;
@@ -1143,18 +1227,22 @@ fn faces_to_particles(@builtin(global_invocation_id) gid: vec3<u32>) {
     let q0 = (particle.position_radius.xyz - lo) / u.cell_size;
     let after = sample(q0, n, 0u);
     let k1 = guard(after, per_cell);
-    let k2 = guard(sample(q0 + 0.5 * per_cell * k1, n, 0u), per_cell);
-    let k3 = guard(sample(q0 + 0.75 * per_cell * k2, n, 0u), per_cell);
-    let spread = per_cell * (sample(q0, n, 2u) - after);
-    let spread_cells = length(spread);
-    let capped = select(spread, spread * (MAX_SPREAD / spread_cells), spread_cells > MAX_SPREAD);
+    let s2 = sample(q0 + 0.5 * per_cell * k1, n, 0u);
+    let k2 = guard(s2, per_cell);
+    let s3 = sample(q0 + 0.75 * per_cell * k2, n, 0u);
+    let k3 = guard(s3, per_cell);
+    capped[2u * idx] = cfl_before + guarded(after, per_cell) + guarded(s2, per_cell) + guarded(s3, per_cell);
     let edge = vec3<f32>(WALL_MARGIN);
-    let reached = q0 + per_cell * (2.0 * k1 + 3.0 * k2 + 4.0 * k3) / 9.0 + capped;
+    // The density projection's move, step_dt · (spread(q) − new(q)): position
+    // only, never kept as velocity. Zero rate binds `faces_in` as `spread`.
+    let moved = per_cell * (sample(q0, n, 2u) - after);
+    let reached = q0 + per_cell * (2.0 * k1 + 3.0 * k2 + 4.0 * k3) / 9.0 + moved;
     var q1 = select(reached, clamp(reached, edge, vec3<f32>(n) - edge), finite(reached));
     var radius = particle.position_radius.w;
     if u.body_count > 0 && finite(q1) {
         q1 = resolve_solid(q0, q1, n, edge);
         radius = select(radius, 0.0, solid_at(q1, n) < 0.0);
+        capped[2u * idx + 1u] = push_before + push_refused;
     }
     let before = sample(q0, n, 1u);
     out.position_radius = vec4<f32>(lo + q1 * u.cell_size, radius);

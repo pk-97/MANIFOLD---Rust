@@ -275,7 +275,7 @@ fn face_grid_demo_gpu_flip_and_matter_side_by_side() {
     }
     assert_eq!(gpu_flip.n(), 64);
     let gpu_flip_faces = gpu_flip.face_grid();
-    let gpu_flip_liquid: Vec<bool> = gpu_flip.water(scene.steps - 1).iter().map(|&w| w > 0.5).collect();
+    let gpu_flip_liquid: Vec<bool> = gpu_flip.water().iter().map(|&w| w > 0.5).collect();
     drop(gpu_flip);
     let mut matter = MatterRun::new(matter_dam_break_faces(None, false));
     for _ in 0..FRAMES {
