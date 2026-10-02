@@ -533,13 +533,16 @@ fn built_by_water_def(node_id: &str) -> bool {
 
 /// The obstacle's render nodes, which `render_def` adds when the scene has
 /// the box: its mesh, its material and the object the render scene draws.
+#[cfg(any(test, feature = "gpu-proofs"))]
 const OBSTACLE_RENDER: [&str; 3] = ["obstacle_mesh", "obstacle_material", "obstacle_object"];
 
 /// The render scene's object slot the box takes.
+#[cfg(any(test, feature = "gpu-proofs"))]
 const OBSTACLE_SLOT: &str = "object_1";
 
 /// The box as the audience sees it: a unit cube on the collider's own
 /// transform, in `WaterDamBreak.json`'s copper.
+#[cfg(any(test, feature = "gpu-proofs"))]
 fn add_obstacle_render(def: &mut Value, transform: u64, scene: u64) {
     let next = def["nodes"].as_array().expect("nodes").iter().filter_map(|n| n["id"].as_u64()).max().expect("nodes") + 1;
     let [mesh, material, object] = [next, next + 1, next + 2];
