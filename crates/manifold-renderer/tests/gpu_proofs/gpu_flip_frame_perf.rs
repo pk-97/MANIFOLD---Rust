@@ -33,9 +33,6 @@ const TIMESTAMP_EVERY: usize = 10;
 const WIDTH: u32 = 1920;
 const HEIGHT: u32 = 1080;
 const STEP: &str = "node.gpu_flip_step";
-/// A timestamped frame joins the split only when its spans cover this share
-/// of the whole-frame GPU time; below it the calibration is stale (see `render`).
-const STAMPED_COVERAGE: f64 = 0.7;
 
 fn manifest(json: &Value) -> ParamManifest {
     let specs: Vec<ParamSpecDef> =
@@ -108,14 +105,6 @@ fn render(
         profile.spans.len(),
         profile.invalid,
     );
-    // A zero-group dispatch (a dead solver round) never rewrites its sample
-    // slot, so the slot keeps an older frame's stamp and `resolve` calibrates
-    // the frame origin on it: every span collapses. Such a frame is dropped
-    // from the split, loudly, until the sampler rejects stale stamps.
-    if summed < gpu_ms * STAMPED_COVERAGE {
-        println!("      dropped from the split: stale timestamp calibration");
-        return Frame { gpu_ms, cpu_ms, node_error, split: Some((BTreeMap::new(), BTreeMap::new())) };
-    }
     let steps: BTreeMap<String, String> =
         runtime.take_step_profiles().into_iter().map(|step| (step.tag, step.type_id)).collect();
     let mut per_type = BTreeMap::new();
@@ -185,7 +174,6 @@ fn gpu_flip_frame_perf() {
     let mut per_type: BTreeMap<String, Vec<f64>> = BTreeMap::new();
     let mut per_label: BTreeMap<String, Vec<f64>> = BTreeMap::new();
     let mut node_error_frames = 0usize;
-    let mut dropped_stamped = 0usize;
     for tick in 0..MEASURED_FRAMES {
         frame += 1;
         let stamped = tick % TIMESTAMP_EVERY == TIMESTAMP_EVERY - 1;
@@ -205,10 +193,6 @@ fn gpu_flip_frame_perf() {
             }
             Some((types, labels)) => {
                 stamped_gpu.push(result.gpu_ms);
-                if types.is_empty() {
-                    dropped_stamped += 1;
-                    continue;
-                }
                 for (name, ms) in types {
                     per_type.entry(name).or_default().push(ms);
                 }
@@ -228,11 +212,10 @@ fn gpu_flip_frame_perf() {
         percentile(&plain_cpu, 0.95),
     );
     println!(
-        "  timestamped frames ({}): GPU p50 {:.2} ms p95 {:.2} ms; {dropped_stamped} dropped from the split (stale calibration), {} kept",
+        "  timestamped frames ({}): GPU p50 {:.2} ms p95 {:.2} ms",
         stamped_gpu.len(),
         percentile(&stamped_gpu, 0.5),
         percentile(&stamped_gpu, 0.95),
-        stamped_gpu.len() - dropped_stamped,
     );
     print_split("per node type", &per_type);
     print_split("gpu_flip_step per dispatch label", &per_label);
