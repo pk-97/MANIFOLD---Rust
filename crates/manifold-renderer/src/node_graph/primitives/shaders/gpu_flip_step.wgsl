@@ -1325,7 +1325,9 @@ const REST_DENSITY: f32 = 8.0;
 // held eight evenly placed particles, as the paper samples solids with
 // particles: Π over axes of 1.5 at offset 0 and 0.25 at ±1. A face neighbour
 // weighs 0.5625, an edge one 0.09375, a corner one 0.015625; with the cell's
-// own and its water neighbours they sum to REST_DENSITY.
+// own and its water neighbours they sum to REST_DENSITY. blub's live branch
+// keeps only the face term; without the rest a seeded cell at a wall reads
+// 5.5% light and a still pool creeps toward the walls.
 // A cell whose centre is this many cells clear of every body has no site
 // inside one; its rest sites lie within 0.44 cells of the centre.
 const SOLID_SITE_REACH: f32 = 1.75;
@@ -1342,7 +1344,7 @@ const MAX_DENSITY_ERROR: f32 = 0.5;
 // of the tent weights Π(1 − |c − q|) of the particles within a cell of its
 // centre c, plus what solid rest sites would weigh: solid_neighbour_density
 // for each neighbour outside the box, each body site's tent weight. Beside
-// a cell holding no particles ρ is at least REST_DENSITY, since a part full
+// a face neighbour holding no particles ρ is at least REST_DENSITY, since a part full
 // surface cell is not thin water. Out is −rate · clamp(ρ / ρ0 − 1, ±½),
 // so the solve's pressure gradient moves particles out of crowded cells and
 // into sparse ones; 0 outside the water.
@@ -1397,6 +1399,9 @@ fn density_source(@builtin(global_invocation_id) gid: vec3<u32>) {
             for (var x = -1; x <= 1; x = x + 1) {
                 let d = vec3<i32>(x, y, z);
                 let q = p + d;
+                // Air is read on the six face neighbours only, as blub's live
+                // branch does (density_projection_gather_error.comp:182-184).
+                let face = abs(d.x) + abs(d.y) + abs(d.z) == 1;
                 if any(q < vec3<i32>(0)) || any(q >= n) {
                     density = density + solid_neighbour_density(d);
                     continue;
@@ -1419,7 +1424,7 @@ fn density_source(@builtin(global_invocation_id) gid: vec3<u32>) {
                         }
                     }
                 }
-                if any(d != vec3<i32>(0)) && !inside_body && ranges[flatten(q, n)].count == 0u {
+                if face && !inside_body && ranges[flatten(q, n)].count == 0u {
                     beside_air = true;
                 }
             }
