@@ -447,10 +447,36 @@ fn transfer_weight(f: i32, c: i32, coarse: i32) -> f32 {
     return select(0.0, 0.75, parent == c) + select(0.0, 0.25, other == c);
 }
 
+// The transfers are the trilinear prolongation and its transpose of McAdams,
+// Sifakis & Teran 2010 (the form `scripts/mgpcg_reference.py` mirrors); the
+// FLIP Fluids engine is PCG+MIC(0) and has no transfer form to port. Each
+// workgroup is one half tile (8×8×4 cells); it stages the taps its cells read
+// in workgroup memory once, then every cell gathers from the stage in the
+// same order with the same weights as a direct gather, so the sums are
+// bitwise those of the gather kernels. Entries past the lattice are never
+// read (the gather skips them); they are zeroed so every slot is defined.
+
+// Fine taps of a coarse half tile: 2×8+2 by 2×8+2 by 2×4+2.
+const RESTRICT_FOOT: vec3<i32> = vec3<i32>(18, 18, 10);
+const RESTRICT_FOOT_CELLS: u32 = 3240u;
+var<workgroup> fine_patch: array<f32, 3240>;
+
+// Coarse taps of a fine half tile: 8/2+2 by 8/2+2 by 4/2+2.
+const PROLONG_FOOT: vec3<i32> = vec3<i32>(6, 6, 4);
+const PROLONG_FOOT_CELLS: u32 = 144u;
+var<workgroup> coarse_patch: array<f32, 144>;
+
+// The first cell of thread gid's half tile on lattice n.
+fn half_tile_origin(gid: u32, n: vec3<i32>) -> vec3<i32> {
+    let tile = lists[u.list_base + (gid >> 9u)];
+    let half = i32((gid >> 8u) & 1u);
+    return coords(tile, tile_dims(n)) * TILE + vec3<i32>(0, 0, 4 * half);
+}
+
 // One thread per coarse cell of the coarse level's active tiles: the fine
 // residual in `src` restricted by the transpose of prolongation over 8,
 // masked to coarse water. Fine cells past an odd side are the virtual
-// solid: not read.
+// solid: not read. The unlisted return precedes the barrier, whole.
 @compute @workgroup_size(256, 1, 1)
 fn restrict_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !listed(gid.x) {
@@ -458,6 +484,17 @@ fn restrict_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let n = lattice();
     let c = coarse_lattice();
+    let origin = half_tile_origin(gid.x, c);
+    let base = 2 * origin - vec3<i32>(1);
+    for (var k = gid.x & 255u; k < RESTRICT_FOOT_CELLS; k = k + 256u) {
+        let q = base + coords(k, RESTRICT_FOOT);
+        var v = 0.0;
+        if all(q >= vec3<i32>(0)) && all(q < n) {
+            v = src[cell(q, n)];
+        }
+        fine_patch[k] = v;
+    }
+    workgroupBarrier();
     let idx = listed_cell(gid.x, c);
     if idx == NO_CELL {
         return;
@@ -467,6 +504,7 @@ fn restrict_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     let p = coords(idx, c);
+    let at = 2 * (p - origin) + vec3<i32>(1);
     var sum = 0.0;
     for (var dz = -1; dz <= 2; dz = dz + 1) {
         let fz = 2 * p.z + dz;
@@ -485,7 +523,8 @@ fn restrict_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 if fx < 0 || fx >= n.x {
                     continue;
                 }
-                sum = sum + wy * transfer_weight(fx, p.x, c.x) * src[cell(vec3<i32>(fx, fy, fz), n)];
+                let tap = fine_patch[cell(at + vec3<i32>(dx, dy, dz), RESTRICT_FOOT)];
+                sum = sum + wy * transfer_weight(fx, p.x, c.x) * tap;
             }
         }
     }
@@ -494,7 +533,8 @@ fn restrict_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
 // One thread per fine cell: in a water cell, e in `out` plus the coarse
 // correction in `src` interpolated trilinearly. A fine cell's parent is
-// always inside the coarse lattice, odd sides included.
+// always inside the coarse lattice, odd sides included. The unlisted return
+// precedes the barrier, whole.
 @compute @workgroup_size(256, 1, 1)
 fn prolong_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !listed(gid.x) {
@@ -502,6 +542,18 @@ fn prolong_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let n = lattice();
     let c = coarse_lattice();
+    let origin = half_tile_origin(gid.x, n);
+    let base = origin / 2 - vec3<i32>(1);
+    let k = gid.x & 255u;
+    if k < PROLONG_FOOT_CELLS {
+        let q = base + coords(k, PROLONG_FOOT);
+        var v = 0.0;
+        if all(q >= vec3<i32>(0)) && all(q < c) {
+            v = src[cell(q, c)];
+        }
+        coarse_patch[k] = v;
+    }
+    workgroupBarrier();
     let idx = listed_cell(gid.x, n);
     if idx == NO_CELL || !is_water(idx) {
         return;
@@ -514,7 +566,8 @@ fn prolong_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     for (var corner = 0; corner < 8; corner = corner + 1) {
         let pick = vec3<bool>((corner & 1) != 0, (corner & 2) != 0, (corner & 4) != 0);
         let w = select(vec3<f32>(0.75), vec3<f32>(0.25), pick);
-        sum = sum + w.x * w.y * w.z * src[cell(select(parent, other, pick), c)];
+        let tap = coarse_patch[cell(select(parent, other, pick) - base, PROLONG_FOOT)];
+        sum = sum + w.x * w.y * w.z * tap;
     }
     out[idx] = out[idx] + sum;
 }
