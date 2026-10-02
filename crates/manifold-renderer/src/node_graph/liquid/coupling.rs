@@ -81,7 +81,15 @@ pub struct LiquidRigidOwner {
     rows: Vec<LiquidBody>,
     impulses: Vec<BodyImpulse>,
     pending: Option<PendingTick>,
+    /// Consecutive settles that found the pending tick still in flight.
+    held: u32,
 }
+
+/// Settles a pending reaction may stay in flight before the owner reports
+/// it dead: the frame clock's offline wait, five seconds of 60 fps frames.
+/// A tick that never retires must surface with its stamp, never hold the
+/// pair at zero ticks for good.
+pub const REACTION_HOLD_LIMIT: u32 = 300;
 
 impl LiquidRigidOwner {
     /// Prepare the rigid world of `inputs` at tick 0 of `epoch`. Hull
@@ -151,6 +159,7 @@ impl LiquidRigidOwner {
             rows: Vec::new(),
             impulses: Vec::new(),
             pending: None,
+            held: 0,
         };
         owner.update_friction(inputs);
         let world = owner.rigid.native_world().expect("prepared above");
@@ -202,6 +211,7 @@ impl LiquidRigidOwner {
     /// The liquid tick now running on the GPU; the next frame settles it.
     pub fn set_pending(&mut self, pending: PendingTick) {
         self.pending = Some(pending);
+        self.held = 0;
     }
 
     pub fn pending(&self) -> Option<PendingTick> {
@@ -221,7 +231,8 @@ impl LiquidRigidOwner {
     /// (0 while the reaction is still in flight, else 1). `decode` runs only
     /// once `complete` says the frame retired; it fills one impulse per row,
     /// each already naming its body, and only rows that take a reaction reach
-    /// Box3D.
+    /// Box3D. A reaction still in flight after [`REACTION_HOLD_LIMIT`]
+    /// settles is an error naming the tick and its frame stamp.
     pub fn settle(
         &mut self,
         inputs: &RigidSceneInputs,
@@ -230,8 +241,16 @@ impl LiquidRigidOwner {
     ) -> Result<u32, String> {
         let Some(pending) = self.pending else { return Ok(1) };
         if !complete(pending.stamp) {
+            self.held += 1;
+            if self.held > REACTION_HOLD_LIMIT {
+                return Err(format!(
+                    "Liquid coupling: the reaction of liquid tick {} (frame stamp {}) has not retired after {} frames",
+                    pending.tick, pending.stamp, self.held
+                ));
+            }
             return Ok(0);
         }
+        self.held = 0;
         self.pending = None;
         if pending.tick != self.completed {
             return Err(format!(
@@ -453,6 +472,31 @@ mod tests {
         assert_eq!(owner.frame().stamp, TickStamp { epoch: 7, tick: 1 });
         let fallen = owner.rows()[0].linear_velocity[1];
         assert!((fallen + 9.81 * TICK as f32).abs() < 1e-3, "free fall over one tick: {fallen}");
+    }
+
+    /// A reaction that never retires holds the pair for the limit, then
+    /// surfaces as an error naming the tick and its stamp; a new pending
+    /// tick starts the count over.
+    #[test]
+    fn liquid_coupled_dead_reaction_is_an_error_not_a_hold() {
+        let scene = scene();
+        let colliders = RigidImpulseTargets { bodies: 1, copies: false };
+        let mut owner = LiquidRigidOwner::new(&scene, colliders, 7, None).expect("owner");
+        let never = |_, _: &[LiquidBody], _: &mut [BodyImpulse]| panic!("reaction read before the frame retired");
+        owner.set_pending(PendingTick { tick: 0, stamp: 42 });
+        for _ in 0..REACTION_HOLD_LIMIT {
+            assert_eq!(owner.settle(&scene, |_| false, never).unwrap(), 0);
+        }
+        let error = owner.settle(&scene, |_| false, never).unwrap_err();
+        assert!(error.contains("tick 0") && error.contains("stamp 42"), "{error}");
+        assert_eq!(owner.completed(), 0);
+
+        owner.set_pending(PendingTick { tick: 0, stamp: 43 });
+        for _ in 0..REACTION_HOLD_LIMIT {
+            assert_eq!(owner.settle(&scene, |_| false, never).unwrap(), 0);
+        }
+        assert_eq!(owner.settle(&scene, |_| true, no_reaction).unwrap(), 1);
+        assert_eq!((owner.completed(), owner.pending()), (1, None));
     }
 
     /// A decoded impulse of m·Δv (Δv = +1 m/s) reaches Box3D on top of the

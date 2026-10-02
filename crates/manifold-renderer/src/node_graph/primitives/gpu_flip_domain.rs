@@ -626,15 +626,25 @@ impl GpuFlipDomain {
                 let reaction = self.reaction.as_ref();
                 let offset = self.coupled.offset;
                 // This frame's clear is encoded after this read.
-                let ticks = owner.settle(
+                let settled = owner.settle(
                     &observation.inputs,
                     |stamp| clock.as_ref().is_none_or(|clock| if offline { clock.wait(stamp) } else { clock.is_complete(stamp) }),
                     |_, rows, impulses| {
                         let offset = offset.ok_or("GPU FLIP coupling: the pending tick has no body offset")?;
                         decode_reaction(offset, rows, reaction_floats(reaction), impulses)
                     },
-                )?;
-                if offline && ticks > 0 { None } else { Some(ticks) }
+                );
+                match settled {
+                    Ok(ticks) => {
+                        if offline && ticks > 0 { None } else { Some(ticks) }
+                    }
+                    Err(error) => {
+                        // A dead reaction or a failed step: the pair restarts
+                        // with a fresh rigid owner, the error reported.
+                        self.coupled.owner = None;
+                        return Err(error);
+                    }
+                }
             }
             (Some(_), _) => Some(1),
             (None, _) => None,

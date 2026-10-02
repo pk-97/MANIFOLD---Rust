@@ -85,6 +85,28 @@ struct Frame {
     split: Option<Split>,
 }
 
+/// The GPU-clock span covered by one encoder's chunks within a frame.
+#[derive(Default)]
+struct Span {
+    first_start: Option<f64>,
+    last_end: f64,
+}
+
+impl Span {
+    fn cover(&mut self, start: f64, end: f64) {
+        self.first_start = Some(self.first_start.map_or(start, |s| s.min(start)));
+        self.last_end = self.last_end.max(end);
+    }
+
+    fn seen(&self) -> bool {
+        self.first_start.is_some()
+    }
+
+    fn ms(&self) -> f64 {
+        self.first_start.map_or(0.0, |start| (self.last_end - start).max(0.0) * 1e3)
+    }
+}
+
 #[derive(Clone, Default)]
 struct Split {
     /// Whole command buffers (Generators + Compositor), GPU ms.
@@ -298,7 +320,7 @@ fn probe(args: &Args) -> Result<(), String> {
 
     ct.timer.resume_after_load();
     ct.handle_command(ContentCommand::Play);
-    let (gpu_time_tx, gpu_time_rx) = crossbeam_channel::unbounded::<(&'static str, f64)>();
+    let (gpu_time_tx, gpu_time_rx) = crossbeam_channel::unbounded::<(&'static str, f64, f64)>();
     ct.content_pipeline.set_gpu_time_tap(Some(gpu_time_tx));
     let mut frames: Vec<Frame> = Vec::with_capacity(args.frames);
     let mut last = Instant::now();
@@ -326,21 +348,30 @@ fn probe(args: &Args) -> Result<(), String> {
     drain.join().map_err(|_| "drain thread panicked".to_string())?;
 
     // Completion handlers fire in submission order; the plain frames took
-    // them in that same order. Let the last buffers land before pairing.
+    // them in that same order. A frame is every Generators chunk, then every
+    // Compositor chunk (chunking splits each encoder into several buffers);
+    // a Generators chunk after a Compositor one starts the next frame. The
+    // chunks of one frame overlap on the GPU, so a frame's time is the span
+    // from its first start to its last end, not the sum of durations. Let
+    // the last buffers land before grouping.
     std::thread::sleep(Duration::from_millis(500));
     let mut plain = frames.iter_mut().filter(|f| f.split.is_none());
-    let (mut generators, mut compositor) = (None, None);
-    while let Ok((label, seconds)) = gpu_time_rx.try_recv() {
-        match label {
-            "Generators" => generators = Some(seconds * 1e3),
-            _ => compositor = Some(seconds * 1e3),
-        }
-        if let (Some(g), Some(c)) = (generators, compositor) {
+    let (mut generators, mut compositor) = (Span::default(), Span::default());
+    let mut chunks: Vec<(&'static str, f64, f64)> = Vec::new();
+    while let Ok(chunk) = gpu_time_rx.try_recv() {
+        chunks.push(chunk);
+    }
+    for (label, start, end) in chunks {
+        let is_generators = label == "Generators";
+        if is_generators && compositor.seen() {
             let Some(frame) = plain.next() else { break };
-            frame.plain_gpu_ms = Some((g, c));
-            generators = None;
-            compositor = None;
+            frame.plain_gpu_ms = Some((generators.ms(), compositor.ms()));
+            (generators, compositor) = (Span::default(), Span::default());
         }
+        if is_generators { &mut generators } else { &mut compositor }.cover(start, end);
+    }
+    if compositor.seen() && let Some(frame) = plain.next() {
+        frame.plain_gpu_ms = Some((generators.ms(), compositor.ms()));
     }
     let unpaired = frames.iter().filter(|f| f.split.is_none() && f.plain_gpu_ms.is_none()).count();
     if unpaired > 0 {
