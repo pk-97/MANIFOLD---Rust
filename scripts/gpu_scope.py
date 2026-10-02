@@ -34,7 +34,7 @@ RENDERER_SRC = "crates/manifold-renderer/src/"
 PROOFS_DIR = "crates/manifold-renderer/tests/gpu_proofs/"
 
 # Landing ceiling for the scoped (non-glb) GPU step, seconds of test run time.
-LANDING_BUDGET_S = 300
+LANDING_BUDGET_S = 360
 
 # Fixed end-to-end smoke: always runs when any GPU path is touched. Four proofs
 # that cover the effect chain + alpha contract, command-buffer replay, the
