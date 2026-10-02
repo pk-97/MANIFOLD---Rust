@@ -243,7 +243,7 @@ impl MatterScene {
         let harness = harness::shared();
         let device = &harness.device;
         let mut backend = MetalBackend::new(device.clone(), 64, 64, GpuTextureFormat::Rgba16Float);
-        pre_allocate_resources(&graph, &plan, device, &mut backend).expect("pre-allocate");
+        pre_allocate_resources(&mut graph, &plan, device, &mut backend).expect("pre-allocate");
         let output = |node: NodeInstanceId, port: &str| {
             plan.steps()
                 .iter()

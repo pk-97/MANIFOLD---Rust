@@ -31,7 +31,6 @@ use crate::node_graph::fluid_particles::{
 use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
 use crate::node_graph::freeze::classify::fusion_kind_str;
 use crate::node_graph::liquid::EXACT_F32_COUNT;
-use crate::node_graph::liquid::blocks::block_total;
 use crate::node_graph::liquid::bodies::{LiquidBody, LiquidShape};
 use crate::node_graph::liquid::clock::MAX_LIVE_TICKS;
 use crate::node_graph::liquid::fields::{FieldFrame, FieldLattice, STAGING_SLOTS as FIELD_STAGING_SLOTS};
@@ -59,7 +58,7 @@ use crate::node_graph::primitives::sort_particles_into_cells::range_storage_byte
 use crate::node_graph::primitives::gpu_flip_domain::gpu_flip_geometry;
 use crate::node_graph::primitives::gpu_flip_pressure::{lattice_refusal, scratch_bytes as pressure_scratch_bytes};
 use crate::node_graph::primitives::gpu_flip_step::{face_bytes, scratch_bytes as step_scratch_bytes};
-use crate::node_graph::primitives::volume_surface_mesh::mesh_capacity;
+use crate::node_graph::primitives::volume_surface_mesh::start_capacity;
 use crate::node_graph::resource_allocation::plan_array_allocations;
 use crate::node_graph::primitives::matter_face_component::MATTER_FACE_VALID_LAYERS;
 use crate::node_graph::primitives::whitewater_lifecycle::{DEFAULT_CAPACITY, MAX_CAPACITY};
@@ -571,6 +570,7 @@ pub const LIQUID_EXTENT_RULES: &[ExtentRule] = &[
     ExtentRule { type_id: "node.count_surface_triangles", check: count_surface_triangles },
     ExtentRule { type_id: "node.running_total", check: running_total },
     ExtentRule { type_id: "node.volume_surface_mesh", check: volume_surface_mesh },
+    ExtentRule { type_id: "node.relax_surface_mesh", check: relax_surface_mesh },
     ExtentRule { type_id: "node.render_scene", check: size_bounded },
     ExtentRule { type_id: "node.scene_object", check: size_bounded },
     ExtentRule { type_id: "node.physics_world", check: physics_world },
@@ -582,7 +582,6 @@ pub const LIQUID_EXTENT_RULES: &[ExtentRule] = &[
     ExtentRule { type_id: "node.switch_texture", check: texture_only },
     ExtentRule { type_id: "node.tone_map", check: texture_only },
     ExtentRule { type_id: "node.surface_crossings", check: surface_crossings },
-    ExtentRule { type_id: "node.liquid_blocks", check: liquid_blocks },
     ExtentRule { type_id: "node.nearest_crossing", check: nearest_crossing },
     ExtentRule { type_id: "node.crossing_distance", check: crossing_distance },
     ExtentRule { type_id: "node.liquid_cells", check: liquid_cells },
@@ -1038,8 +1037,24 @@ fn volume_surface_mesh(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     }
     x.covers("levelset", nodes_total(nodes) * 4)?;
     x.covers("scan", nodes_total(nodes.map(|n| n - 1.0)) * 4)?;
-    // The kernel places triangles up to Mesh Capacity, not the buffer.
-    x.covers("vertices", u64::from(mesh_capacity(x.params())) * size_of::<MeshVertex>() as u64)
+    // Provided and grown at run time; the kernel's dispatch count is the
+    // buffer's own whole-triangle slot count (`emit_slots`), so any size covers.
+    let start = start_capacity(x.params(), nodes) * size_of::<MeshVertex>() as u64;
+    x.provide("vertices", start);
+    x.hold(start);
+    Ok(())
+}
+
+fn relax_surface_mesh(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let nodes = x.nodes(["nodes_x", "nodes_y", "nodes_z"]);
+    if nodes.iter().any(|&n| n < 2.0) {
+        return Err(x.uncovered(format!("no lattice: nodes {nodes:?}")));
+    }
+    x.covers("levelset", nodes_total(nodes) * 4)?;
+    x.covers("scan", nodes_total(nodes.map(|n| n - 1.0)) * 4)?;
+    // One thread per input slot; neighbours lie below the live total, inside it.
+    let vertices = x.bytes("vertices").ok_or_else(|| x.uncovered("vertices is unbound".into()))?;
+    x.covers("relaxed", vertices)
 }
 
 // ── GPU FLIP ─────────────────────────────────────────────────────────────────
@@ -1278,19 +1293,6 @@ fn surface_crossings(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let levels = ["level_nodes_x", "level_nodes_y", "level_nodes_z"].map(|name| whole(x, name, 211.0));
     refinement(nodes, levels).map_err(Verdict::Refused)?;
     x.covers("out", cell_total(cells) * SURFACE_CROSSING_BYTES)?;
-    x.covers_if_bound("blocks", block_total(cells) * 4)?;
-    x.covers("solid", cell_total(nodes) * 4)?;
-    x.covers("level_set", cell_total(levels) * 4)
-}
-
-/// One thread per block; it gathers every cell of `water`, the closed
-/// footprint of the solid lattice and of the level set.
-fn liquid_blocks(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let (nodes, cells) = whitewater_lattice(x, ["nodes_x", "nodes_y", "nodes_z"])?;
-    let levels = ["level_nodes_x", "level_nodes_y", "level_nodes_z"].map(|name| whole(x, name, 211.0));
-    refinement(nodes, levels).map_err(Verdict::Refused)?;
-    x.covers("out", block_total(cells) * 4)?;
-    x.covers("water", cell_total(cells) * 4)?;
     x.covers("solid", cell_total(nodes) * 4)?;
     x.covers("level_set", cell_total(levels) * 4)
 }

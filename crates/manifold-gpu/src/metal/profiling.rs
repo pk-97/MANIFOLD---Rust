@@ -323,6 +323,25 @@ pub(crate) fn resolve(
         };
         stamps.extend(resolved.iter().map(|s| s.timestamp));
     }
+    resolve_stamps(&state.spans, &stamps, state.calib_start, calib_end, profile)
+}
+
+/// The arithmetic half of [`resolve`]: `stamps` holds each span's start and
+/// end tick in order. A stamp below the GPU tick sampled at enable predates
+/// this frame: a dispatch that never ran (zero threadgroups) leaves its
+/// sample slot holding an older frame's value, and such a stamp must not set
+/// the frame origin or the stale span would collapse every other span's
+/// scale. Those spans count as `invalid`.
+fn resolve_stamps(
+    spans: &[PendingSpan],
+    stamps: &[u64],
+    calib_start: (u64, u64),
+    calib_end: (u64, u64),
+    mut profile: GpuFrameProfile,
+) -> GpuFrameProfile {
+    let total_ms = profile.total_ms;
+    let (cpu1, gpu1) = calib_start;
+    let fresh = |t: u64| t != COUNTER_ERROR && t != 0 && t >= gpu1;
 
     // GPU-tick → ms conversion. The Apple-silicon GPU timestamp clock can
     // PAUSE while the GPU is idle, so calibrating against a CPU wall-clock
@@ -333,11 +352,10 @@ pub(crate) fn resolve(
     // per-dispatch encoders the earliest→latest sample ticks span that same
     // execution window. The sampleTimestamps calibration pair is kept only
     // as the fallback for a degenerate window (single span).
-    let (cpu1, gpu1) = state.calib_start;
     let (cpu2, gpu2) = calib_end;
     let tick_ns = mach_tick_nanos();
 
-    let valid = || stamps.iter().copied().filter(|&t| t != COUNTER_ERROR && t != 0);
+    let valid = || stamps.iter().copied().filter(|&t| fresh(t));
     let origin = valid().min().unwrap_or(0);
     let last = valid().max().unwrap_or(0);
     let ns_per_gpu_tick = if last > origin && total_ms > 0.0 {
@@ -348,10 +366,10 @@ pub(crate) fn resolve(
         1.0
     };
 
-    for (i, span) in state.spans.iter().enumerate() {
+    for (i, span) in spans.iter().enumerate() {
         let start = stamps[i * 2];
         let end = stamps[i * 2 + 1];
-        if start == COUNTER_ERROR || end == COUNTER_ERROR || end < start {
+        if !fresh(start) || !fresh(end) || end < start {
             profile.invalid += 1;
             continue;
         }
@@ -365,4 +383,49 @@ pub(crate) fn resolve(
         });
     }
     profile
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn span(label: &str) -> PendingSpan {
+        PendingSpan { tag: String::new(), label: label.to_owned(), kind: GpuWorkKind::Compute, threadgroup_bytes: 0 }
+    }
+
+    fn profile(total_ms: f64) -> GpuFrameProfile {
+        GpuFrameProfile { total_ms, ..Default::default() }
+    }
+
+    /// A slot left over from an older frame (a zero-group dispatch never
+    /// rewrote it) must not become the frame origin: the fresh spans scale
+    /// from the fresh origin and the stale span is dropped as invalid.
+    #[test]
+    fn stale_stamp_does_not_set_the_origin() {
+        let enable_tick = 1_000_000;
+        let spans = [span("fresh a"), span("stale"), span("fresh b")];
+        // Fresh window 1_000_100..1_000_300 = 200 ticks for a 10 ms frame.
+        let stamps = [1_000_100, 1_000_150, 400, 450, 1_000_200, 1_000_300];
+        let out = resolve_stamps(&spans, &stamps, (0, enable_tick), (0, enable_tick + 400), profile(10.0));
+        assert_eq!(out.invalid, 1);
+        assert_eq!(out.spans.len(), 2);
+        let a = &out.spans[0];
+        let b = &out.spans[1];
+        assert!((a.start_ms - 0.0).abs() < 1e-9, "fresh a starts the frame, got {}", a.start_ms);
+        assert!((a.millis - 2.5).abs() < 1e-9, "50 of 200 ticks is 2.5 ms, got {}", a.millis);
+        assert!((b.start_ms - 5.0).abs() < 1e-9, "got {}", b.start_ms);
+        assert!((b.millis - 5.0).abs() < 1e-9, "got {}", b.millis);
+    }
+
+    #[test]
+    fn counter_error_and_zero_are_invalid() {
+        let spans = [span("a"), span("err"), span("zero")];
+        let stamps = [100, 200, COUNTER_ERROR, 300, 0, 300];
+        let out = resolve_stamps(&spans, &stamps, (0, 50), (0, 500), profile(1.0));
+        assert_eq!(out.invalid, 2);
+        assert_eq!(out.spans.len(), 1);
+        // The fresh window is 100..300 (the invalid spans' fresh end stamps
+        // still bound it): span a is 100 of 200 ticks.
+        assert!((out.spans[0].millis - 0.5).abs() < 1e-9, "got {}", out.spans[0].millis);
+    }
 }

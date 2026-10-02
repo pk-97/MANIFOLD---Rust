@@ -35,11 +35,15 @@ fn out_dir() -> PathBuf {
 }
 
 fn project() -> Project {
+    project_of(PRESET)
+}
+
+fn project_of(preset: &'static str) -> Project {
     let mut project = Project::default();
     project.settings.bpm = Bpm(BPM as f32);
     project.settings.output_width = WIDTH as i32;
     project.settings.output_height = HEIGHT as i32;
-    let mut layer = Layer::new_generator("GPU FLIP Dam Break".into(), PresetTypeId::new(PRESET), 0);
+    let mut layer = Layer::new_generator("GPU FLIP Dam Break".into(), PresetTypeId::new(preset), 0);
     // A minute long, so the live run never reaches its end.
     layer.clips.push(TimelineClip::new_generator(Beats::ZERO, Beats(128.0)));
     project.timeline.layers.push(layer);
@@ -134,6 +138,42 @@ fn gpu_flip_dam_break_export_matches_across_frame_rates() {
         WIDTH * HEIGHT
     );
     assert_eq!(differing, 0, "the frame at {AT} s differs between 60 and 30 fps");
+}
+
+/// The Dam Break as a project for the content-thread trace gate:
+/// `MANIFOLD_RENDER_TRACE=1 cargo xtask perf-soak <dir>/gpu_flip_dam_break.manifold --seconds 60`
+/// plays it with its whitewater, and no content frame may pass 20 ms.
+#[test]
+fn gpu_flip_dam_break_soak_project() {
+    let path = out_dir().join("gpu_flip_dam_break.manifold");
+    manifold_io::saver::save_project_v1(&project(), &path).expect("save the soak project");
+    println!("GPU FLIP soak project → {}", path.display());
+}
+
+/// The project warmup builds every pipeline a liquid preset dispatches, so
+/// its first played frames compile nothing. The warm frame runs zero liquid
+/// ticks, so the tick region's nodes are first reached on stage
+/// (BUG-jtod (GPU FLIP first-play stall)).
+#[test]
+fn liquid_presets_play_without_pipeline_compiles() {
+    use manifold_core::cold_touch::{ColdTouchKind, cold_touch_count};
+    let mut failures = Vec::new();
+    for preset in [PRESET, "WaterDamBreakMatter", "WaterFloatingBoxMatter", "WaterStillPoolMatter"] {
+        let mut content = headless_content_thread(project_of(preset), WIDTH, HEIGHT);
+        let (state_tx, _state_rx) = unbounded();
+        crate::scene_modifier_journey::warm_project(&mut content, &state_tx);
+        let before = cold_touch_count(ColdTouchKind::PipelineCompile);
+        content.handle_command(ContentCommand::Play);
+        for _ in 0..120 {
+            content.tick_frame(&state_tx);
+        }
+        content.content_pipeline.wait_for_render_complete();
+        let compiles = cold_touch_count(ColdTouchKind::PipelineCompile) - before;
+        if compiles > 0 {
+            failures.push(format!("{preset}: {compiles}"));
+        }
+    }
+    assert!(failures.is_empty(), "pipelines compiled while a warmed preset played: {failures:?}");
 }
 
 #[test]

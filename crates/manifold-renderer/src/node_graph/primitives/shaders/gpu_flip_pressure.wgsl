@@ -63,8 +63,15 @@ struct FaceSample {
 @group(0) @binding(11) var<storage, read_write> progress: array<f32>;
 @group(0) @binding(12) var<storage, read_write> gate: array<u32>;
 @group(0) @binding(13) var<storage, read_write> tally: array<u32>;
+@group(0) @binding(14) var<storage, read> armed: array<u32>;
+// The replayed rounds' range entries, {location, length} pairs, two a round
+// (gpu_flip_pressure.rs Gate): a round's recorded dispatches run when its
+// length is its command count and skip when it is 0.
+@group(0) @binding(15) var<storage, read_write> ranges: array<u32>;
 
 const DIVISOR_FLOOR: f32 = 1e-30;
+// Rounds a solve may run: the solver's MAX_ITERATIONS.
+const ROUNDS: u32 = 64u;
 
 var<workgroup> sums: array<f32, 256>;
 
@@ -444,7 +451,8 @@ fn update_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 // and after iteration k when |r|∞ ≤ min(tolerance · |f|∞, ACCEPTABLE).
 // progress: [0] |f|∞, [1] iterations run, [2] 1 once stopped by the
 // tolerance, [4 + k] |r|∞ after iteration k. Stopping zeroes every gate
-// triple (`cx` of them), so the solve's later dispatches run no groups.
+// triple (`cx` of them) and the range entries of every round from `first`
+// on, so the solve's later dispatches run no groups direct or replayed.
 const START_FLOOR: f32 = 1e-9;
 const ACCEPTABLE: f32 = 1.0;
 
@@ -469,10 +477,14 @@ fn norm_partial_main(@builtin(local_invocation_index) li: u32, @builtin(workgrou
     }
 }
 
-fn stop() {
+fn stop(first: u32) {
     progress[2] = 1.0;
     for (var t = 0u; t < u.cx; t = t + 1u) {
         gate[3u * t] = 0u;
+    }
+    for (var r = first; r < ROUNDS; r = r + 1u) {
+        ranges[4u * r + 1u] = 0u;
+        ranges[4u * r + 3u] = 0u;
     }
 }
 
@@ -489,14 +501,14 @@ fn check_main() {
         progress[1] = 0.0;
         progress[2] = 0.0;
         if u.tolerance >= 0.0 && norm < START_FLOOR {
-            stop();
+            stop(0u);
         }
         return;
     }
     progress[4u + u.slot] = norm;
     progress[1] = f32(u.slot + 1u);
     if u.tolerance >= 0.0 && norm <= min(u.tolerance * progress[0], ACCEPTABLE) {
-        stop();
+        stop(u.slot + 1u);
     }
 }
 
@@ -513,5 +525,22 @@ fn tally_main() {
     tally[u.slot] = tally[u.slot] + u32(progress[1]);
     if u.tolerance >= 0.0 && progress[2] < 0.5 {
         tally[2] = tally[2] + 1u;
+    }
+}
+
+// Re-arms the gate at the start of a solve: every triple's group counts
+// from `armed`, and every round's two range entries live at `color` and
+// `slot` commands, so the solve's dispatches run until the stop zeroes them.
+// A dispatch, not a blit, so it is the solver's own labelled pass.
+@compute @workgroup_size(64, 1, 1)
+fn arm_main(@builtin(local_invocation_index) lane: u32) {
+    for (var i = lane; i < 3u * u.cx; i += 64u) {
+        gate[i] = armed[i];
+    }
+    for (var r = lane; r < ROUNDS; r += 64u) {
+        ranges[4u * r] = 0u;
+        ranges[4u * r + 1u] = u.color;
+        ranges[4u * r + 2u] = 0u;
+        ranges[4u * r + 3u] = u.slot;
     }
 }

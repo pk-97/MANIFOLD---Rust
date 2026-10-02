@@ -78,7 +78,7 @@ fn make_runtime(harness: &harness::ParityHarness, max_capacity: f32) -> Runtime 
         harness.height,
         GpuTextureFormat::Rgba16Float,
     );
-    pre_allocate_resources(&graph, &plan, &harness.device, &mut backend).unwrap();
+    pre_allocate_resources(&mut graph, &plan, &harness.device, &mut backend).unwrap();
 
     Runtime {
         graph,

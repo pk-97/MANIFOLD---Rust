@@ -450,22 +450,27 @@ impl Primitive for GpuFlipDomain {
         coupled.owner.as_ref().map(LiquidRigidOwner::frame)
     }
 
+    // While an input is pending the liquid holds its last good frame.
+    fn runs_with_pending_inputs(&self) -> bool {
+        true
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         // A physics sample reads authored inputs only; it never advances time.
         if crate::node_graph::physics::authored_sample_only() {
             return;
         }
         let mut roles: [Option<FluidRole>; MAX_FLUID_ROLES] = std::array::from_fn(|_| None);
-        self.role_pending = false;
+        self.role_pending = ctx.inputs.any_pending();
         for (slot, port) in ROLE_PORTS.iter().enumerate() {
-            if let Some(input) = ctx.inputs.slot(port) {
+            if ctx.inputs.slot(port).is_some() {
                 roles[slot] = ctx.inputs.fluid_role(port);
-                self.role_pending |= !ctx.inputs.slot_content_ready(input) || roles[slot].is_none();
+                self.role_pending |= roles[slot].is_none();
             }
         }
         self.acceleration = ctx.inputs.vector_field("acceleration_field");
-        if let Some(slot) = ctx.inputs.slot("acceleration_field") {
-            self.role_pending |= !ctx.inputs.slot_content_ready(slot) || self.acceleration.is_none();
+        if ctx.inputs.slot("acceleration_field").is_some() {
+            self.role_pending |= self.acceleration.is_none();
         }
         // Every output is published every frame, so no consumer reads a slot
         // this node left unwritten. While a role or the field is still being

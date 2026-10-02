@@ -111,18 +111,28 @@ fn groups(threads: u64) -> [u32; 3] {
 }
 
 impl BodyPasses {
-    /// Build the pipelines and the sums once; the partials hold every body at
-    /// the most groups, so no lattice reallocates them.
-    pub(crate) fn prepare(&mut self, device: &GpuDevice) -> Result<(), String> {
-        if self.pipelines.is_none() {
-            let pipe = |entry: &str, label: &str| device.create_compute_pipeline(SHADER, entry, label);
-            self.pipelines = Some(Pipelines {
-                partial: pipe("impulse_partial", "gpu_flip.bodies.partial"),
-                finalize: pipe("impulse_finalize", "gpu_flip.bodies.finalize"),
-                product: pipe("body_product", "gpu_flip.bodies.product"),
-                velocity: pipe("velocity_change", "gpu_flip.bodies.velocity_change"),
-            });
+    fn pipelines(device: &GpuDevice) -> Pipelines {
+        let pipe = |entry: &str, label: &str| device.create_compute_pipeline(SHADER, entry, label);
+        Pipelines {
+            partial: pipe("impulse_partial", "gpu_flip.bodies.partial"),
+            finalize: pipe("impulse_finalize", "gpu_flip.bodies.finalize"),
+            product: pipe("body_product", "gpu_flip.bodies.product"),
+            velocity: pipe("velocity_change", "gpu_flip.bodies.velocity_change"),
         }
+    }
+
+    /// Build the passes' pipelines; the owning node calls this at install.
+    pub(crate) fn prepare_pipelines(&mut self, device: &GpuDevice) {
+        if self.pipelines.is_none() {
+            self.pipelines = Some(Self::pipelines(device));
+        }
+    }
+
+    /// Allocate the sums once; the partials hold every body at the most
+    /// groups, so no lattice reallocates them. The pipelines come from
+    /// `prepare_pipelines` at install.
+    pub(crate) fn prepare(&mut self, device: &GpuDevice) -> Result<(), String> {
+        assert!(self.pipelines.is_some(), "body pipelines built by prepare_pipelines at install");
         if self.partials.is_none() {
             self.partials = Some(device.try_create_buffer(PARTIAL_BYTES)?);
         }
@@ -191,16 +201,17 @@ impl BodyPasses {
             [params.groups, bodies.count.max(1), 1],
             "gpu_flip.bodies.partial",
         );
-        let mut finalize = vec![
+        // A fixed array, not a Vec: this runs every step. Without a reaction
+        // binding 9 is left off.
+        let finalize = [
             GpuBinding::Bytes { binding: 0, data },
             buffer(4, bodies.bodies),
             buffer(7, partials),
             buffer(8, sums),
+            buffer(9, reaction.unwrap_or(sums)),
         ];
-        if let Some(reaction) = reaction {
-            finalize.push(buffer(9, reaction));
-        }
-        enc.dispatch_compute(&pipes.finalize, &finalize, [1, 1, 1], "gpu_flip.bodies.finalize");
+        let bound = if reaction.is_some() { finalize.len() } else { finalize.len() - 1 };
+        enc.dispatch_compute(&pipes.finalize, &finalize[..bound], [1, 1, 1], "gpu_flip.bodies.finalize");
         Ok(())
     }
 

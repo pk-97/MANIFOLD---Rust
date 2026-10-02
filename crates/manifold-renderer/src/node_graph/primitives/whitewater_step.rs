@@ -814,8 +814,7 @@ impl Step {
             enc,
             get(&p.crossings),
             &[nodes[0], nodes[1], nodes[2], ("level_nodes_x", lx), ("level_nodes_y", ly), ("level_nodes_z", lz)],
-            // No block map: blocks_len stays 0 and the solid stands in for it.
-            &[inputs.level_set, inputs.solid, inputs.solid, &f.crossings[0]],
+            &[inputs.level_set, inputs.solid, &f.crossings[0]],
             cells,
             label("crossings"),
         );
@@ -1098,12 +1097,6 @@ impl Primitive for WhitewaterStep {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        // Before the liquid's first good frame its inputs are pending: there
-        // is no grid to step, so the step's outputs are pending too.
-        if ctx.inputs.any_pending() {
-            ctx.mark_outputs_pending();
-            return;
-        }
         let frame = match Self::frame(ctx) {
             Ok(frame) => frame,
             Err(refusal) => {

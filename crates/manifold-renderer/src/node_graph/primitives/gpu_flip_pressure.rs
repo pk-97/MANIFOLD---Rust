@@ -11,7 +11,7 @@
 //! solid, so any Resolution runs and the V-cycle stays symmetric
 //! (`scripts/mgpcg_reference.py`, the oracle, proves both).
 
-use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
+use manifold_gpu::{GATED_RANGE_BYTES, GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 
 use super::gpu_flip_bodies::{Bodies, BodyPasses};
 use crate::node_graph::fluid_particles::FaceSample;
@@ -72,6 +72,7 @@ pub(crate) fn scratch_bytes(lattice: [u32; 3]) -> u64 {
     4 * cells(lattice) * 4 + coarse + last * last * 4 + u64::from(MAX_PARTIALS) * 4 + u64::from(2 * MAX_ITERATIONS) * 4
         + PROGRESS_BYTES
         + 2 * gate_bytes(levels.len())
+        + RANGES_BYTES
 }
 
 const FACE_BYTES: u64 = size_of::<FaceSample>() as u64;
@@ -81,9 +82,18 @@ const FACE_BYTES: u64 = size_of::<FaceSample>() as u64;
 #[cfg(test)]
 pub(crate) fn passes(lattice: [u32; 3], iterations: u32) -> (usize, usize) {
     let coarse = level_lattices(lattice).len() - 1;
+    let (before, after) = round_commands(coarse);
+    // The solve: arming the gate, init and the first norm, then per iteration.
+    (2 * coarse + 1, 4 + iterations as usize * (before + after) as usize)
+}
+
+/// A conjugate gradient round's gated dispatches with `coarse` levels below
+/// the fine one: those up to and including the operator product, then
+/// those after it (the body product sits between, ungated).
+fn round_commands(coarse: usize) -> (u32, u32) {
     let v_cycle = coarse * (4 * SMOOTH_ROUNDS + 3) + 1;
-    // The solve: the gate copy, init and the first norm, then per iteration.
-    (2 * coarse + 1, 4 + iterations as usize * (v_cycle + 9))
+    // v_cycle, r·z (2), direction, apply | p·s (2), update, norm (2)
+    (v_cycle as u32 + 4, 5)
 }
 
 /// Why a lattice is refused, or None.
@@ -170,6 +180,7 @@ struct Pipelines {
     norm_partial: GpuComputePipeline,
     check: GpuComputePipeline,
     tally: GpuComputePipeline,
+    arm: GpuComputePipeline,
 }
 
 impl Pipelines {
@@ -192,6 +203,7 @@ impl Pipelines {
             norm_partial: pipeline("norm_partial_main", "gpu_flip.pressure.norm_partial"),
             check: pipeline("check_main", "gpu_flip.pressure.check"),
             tally: pipeline("tally_main", "gpu_flip.pressure.tally"),
+            arm: pipeline("arm_main", "gpu_flip.pressure.arm"),
         }
     }
 }
@@ -222,8 +234,13 @@ struct Buffers {
     progress: GpuBuffer,
     /// Every gated dispatch's group triple, [`Slots`] order, written once.
     armed: GpuBuffer,
+    /// The CPU's copy of `armed`, by triple: what a recorded dispatch runs.
+    groups: Vec<[u32; 3]>,
     /// The solve's live copy of `armed`, zeroed when the solve stops.
     gate: GpuBuffer,
+    /// The replayed rounds' range entries (`GATED_RANGE_BYTES` each, two a
+    /// round): armed with the gate, and zeroed past the round that stops.
+    ranges: GpuBuffer,
 }
 
 impl Buffers {
@@ -254,7 +271,9 @@ impl Buffers {
             scalars: device.create_buffer(u64::from(2 * MAX_ITERATIONS) * 4),
             progress: device.create_buffer(PROGRESS_BYTES),
             armed: armed(device, &lattices),
+            groups: armed_groups(&lattices),
             gate: device.create_buffer(gate_bytes(lattices.len())),
+            ranges: device.create_buffer(RANGES_BYTES),
         }
     }
 }
@@ -264,6 +283,9 @@ pub(crate) const PROGRESS_FLOATS: u32 = 4 + MAX_ITERATIONS;
 const PROGRESS_BYTES: u64 = PROGRESS_FLOATS as u64 * 4;
 /// Bytes of one indirect dispatch's three group counts.
 const TRIPLE_BYTES: u64 = 12;
+/// Range entries a solve's rounds take: two a round, every round the cap
+/// allows (gpu_flip_pressure.wgsl ROUNDS).
+const RANGES_BYTES: u64 = 2 * MAX_ITERATIONS as u64 * GATED_RANGE_BYTES;
 
 /// Where each gated dispatch's groups sit in the gate, by triple: level l's
 /// lattice at l, then the dot and norm partials, then one group.
@@ -273,14 +295,14 @@ struct Slots {
 }
 
 impl Slots {
-    fn level(self, l: usize) -> u64 {
-        l as u64 * TRIPLE_BYTES
+    fn level(self, l: usize) -> usize {
+        l
     }
-    fn partials(self) -> u64 {
-        self.levels as u64 * TRIPLE_BYTES
+    fn partials(self) -> usize {
+        self.levels
     }
-    fn single(self) -> u64 {
-        (self.levels as u64 + 1) * TRIPLE_BYTES
+    fn single(self) -> usize {
+        self.levels + 1
     }
     fn triples(self) -> u32 {
         self.levels as u32 + 2
@@ -295,10 +317,16 @@ fn partial_count(n: [u32; 3]) -> u32 {
     (cells(n).div_ceil(1024) as u32).clamp(1, MAX_PARTIALS)
 }
 
-/// The gate's full group counts for `lattices`, finest first.
+/// The gate's full group counts for `lattices`, finest first, by triple.
+fn armed_groups(lattices: &[[u32; 3]]) -> Vec<[u32; 3]> {
+    let mut triples: Vec<[u32; 3]> = lattices.iter().map(|&n| groups(cells(n))).collect();
+    triples.extend([[partial_count(lattices[0]), 1, 1], [1, 1, 1]]);
+    triples
+}
+
+/// [`armed_groups`] on the device.
 fn armed(device: &GpuDevice, lattices: &[[u32; 3]]) -> GpuBuffer {
-    let mut words: Vec<u32> = lattices.iter().flat_map(|&n| groups(cells(n))).collect();
-    words.extend([partial_count(lattices[0]), 1, 1, 1, 1, 1]);
+    let words: Vec<u32> = armed_groups(lattices).into_iter().flatten().collect();
     let buffer = device.create_buffer_shared(words.len() as u64 * 4);
     // SAFETY: the buffer is shared, exactly `words` long, and no GPU work has
     // been encoded against it yet.
@@ -339,6 +367,13 @@ pub(crate) struct PressureSolver {
 }
 
 impl PressureSolver {
+    /// Build the solver's pipelines; the owning node calls this at install.
+    pub(crate) fn prepare_pipelines(&mut self, device: &GpuDevice) {
+        if self.pipelines.is_none() {
+            self.pipelines = Some(Pipelines::new(device));
+        }
+    }
+
     /// Build the coarse levels and the coarse inverse for `water`. Every
     /// solve until the next prepare runs on this water. Allocates only when
     /// the lattice changes.
@@ -354,7 +389,7 @@ impl PressureSolver {
         if !(water.cell_size.is_finite() && water.cell_size > 0.0) {
             return Err("the cell size must be positive".into());
         }
-        let pipes = self.pipelines.get_or_insert_with(|| Pipelines::new(device));
+        let pipes = self.pipelines.as_ref().expect("pressure pipelines built by prepare_pipelines at install");
         if self.buffers.as_ref().is_none_or(|b| b.lattice != n) {
             self.buffers = Some(Buffers::new(device, n));
         }
@@ -433,18 +468,33 @@ impl PressureSolver {
             return Err("the solver was not prepared".into());
         };
         let slots = Slots { levels: b.coarse.len() + 1 };
-        enc.copy_buffer_to_buffer(&b.armed, &b.gate, b.armed.size);
-        let g = Gate { buffer: &b.gate, slots };
+        let g = Gate { buffer: &b.gate, ranges: &b.ranges, groups: &b.groups, slots, gated: true };
+        // The gate is armed just below, so the prelude always runs full:
+        // plain dispatches, which record with the rest of the step.
+        let plain = Gate { gated: false, ..g };
+        // Each round is one replayed segment, or two around the ungated body
+        // product: the arm writes every round's range entries as live and
+        // the stop zeroes the rounds after it, with the gate.
+        let (before, after) = round_commands(b.coarse.len());
+        let (before, after) = if bodies.is_some() { (before, after) } else { (before + after, 0) };
         let fine = Params { cx: slots.triples(), tolerance: stop.tolerance(), ..Params::at(n, water.cell_size) };
-        g.dispatch(
+        let arm = Params { color: before, slot: after, ..fine };
+        enc.dispatch_compute(
+            &pipes.arm,
+            &[bytes(&arm), buffer(12, &b.gate), buffer(14, &b.armed), buffer(15, &b.ranges)],
+            [1, 1, 1],
+            "gpu_flip.pressure.arm",
+        );
+        plain.dispatch(
             enc,
             &pipes.init,
             &[bytes(&fine), buffer(1, water.water), buffer(2, water.faces), buffer(3, rhs), buffer(5, &b.r), buffer(6, pressure)],
             slots.level(0),
             "gpu_flip.pressure.init",
         );
-        norm(enc, pipes, b, g, &Params { mode: 1, ..fine });
+        norm(enc, pipes, b, plain, &Params { mode: 1, ..fine });
         for k in 0..iterations {
+            g.begin_round(enc, 2 * k, before);
             v_cycle(enc, pipes, b, water, g);
             dot(enc, pipes, b, g, n, (&b.r, &b.z), 2 * k);
             let step = Params { slot: k, ..fine };
@@ -475,7 +525,9 @@ impl PressureSolver {
             // The body product runs ungated: after a stop it writes s and
             // its sums, which nothing reads again this solve.
             if let Some((passes, bodies)) = bodies {
+                enc.end_gated_segments();
                 passes.apply(enc, bodies, &b.p, &b.scratch)?;
+                g.begin_round(enc, 2 * k + 1, after);
             }
             dot(enc, pipes, b, g, n, (&b.p, &b.scratch), 2 * k + 1);
             g.dispatch(
@@ -494,6 +546,7 @@ impl PressureSolver {
             );
             norm(enc, pipes, b, g, &step);
         }
+        enc.end_gated_segments();
         Ok(())
     }
 
@@ -559,16 +612,32 @@ impl PressureSolver {
 }
 
 /// A solve's dispatches run on the gate's group counts, which the stop
-/// zeroes.
+/// zeroes: as indirect dispatches when encoded directly, and inside a
+/// replayed round as recorded dispatches of the full counts, which the
+/// round's range entry switches off with the gate. Ungated, a dispatch is
+/// plain at the full counts.
 #[derive(Clone, Copy)]
 struct Gate<'a> {
     buffer: &'a GpuBuffer,
+    ranges: &'a GpuBuffer,
+    groups: &'a [[u32; 3]],
     slots: Slots,
+    gated: bool,
 }
 
 impl Gate<'_> {
-    fn dispatch(self, enc: &mut GpuEncoder, pipeline: &GpuComputePipeline, bindings: &[GpuBinding], at: u64, label: &str) {
-        enc.dispatch_compute_indirect(pipeline, bindings, self.buffer, at, label);
+    fn dispatch(self, enc: &mut GpuEncoder, pipeline: &GpuComputePipeline, bindings: &[GpuBinding], triple: usize, label: &str) {
+        let groups = self.groups[triple];
+        if self.gated {
+            enc.dispatch_compute_gated(pipeline, bindings, groups, self.buffer, triple as u64 * TRIPLE_BYTES, label);
+        } else {
+            enc.dispatch_compute(pipeline, bindings, groups, label);
+        }
+    }
+
+    /// Open the gated segment of range entry `index`, `commands` dispatches long.
+    fn begin_round(self, enc: &mut GpuEncoder, index: u32, commands: u32) {
+        enc.begin_gated_segment(self.ranges, index, commands);
     }
 }
 
@@ -706,7 +775,7 @@ fn norm(enc: &mut GpuEncoder, pipes: &Pipelines, b: &Buffers, g: Gate<'_>, step:
     g.dispatch(
         enc,
         &pipes.check,
-        &[bytes(&params), buffer(6, &b.partials), buffer(11, &b.progress), buffer(12, &b.gate)],
+        &[bytes(&params), buffer(6, &b.partials), buffer(11, &b.progress), buffer(12, &b.gate), buffer(15, &b.ranges)],
         g.slots.single(),
         "gpu_flip.pressure.check",
     );
@@ -785,6 +854,14 @@ mod tests {
     fn pass_counts_follow_the_levels() {
         assert_eq!(passes([64; 3], 8), (9, 4 + 8 * (4 * 11 + 1 + 9)));
         assert_eq!(passes([3; 3], 3), (1, 4 + 3 * 10));
+        assert_eq!(round_commands(4), (4 * 11 + 1 + 4, 5));
         assert!(scratch_bytes([128; 3]) > 4 * 128 * 128 * 128 * 4);
+    }
+
+    /// The shader zeroes range entries up to its own round count, which must
+    /// be the cap the solver sizes the entries for.
+    #[test]
+    fn shader_rounds_match_the_iteration_cap() {
+        assert!(SHADER.contains(&format!("const ROUNDS: u32 = {MAX_ITERATIONS}u;")));
     }
 }

@@ -483,3 +483,348 @@ fn replay_cpu_cost_probe() {
         assert_eq!(cache.stats().recorded, len as u64, "the probe replays after its first frame");
     }
 }
+
+// ---- Gated segments (BUG-l2h3.24 lever A) ---------------------------------
+
+/// Writes, per segment, the indirect arguments its dispatches use directly
+/// and the execution range its replayed recording runs by: both from one
+/// GPU-side flag, as a converged solver would write them.
+const GATE_WGSL: &str = r#"
+struct Gate { segments: u32, groups: u32, commands: u32, pad: u32 };
+@group(0) @binding(0) var<storage, read> flags: array<u32>;
+@group(0) @binding(1) var<storage, read_write> args: array<u32>;
+@group(0) @binding(2) var<storage, read_write> ranges: array<u32>;
+@group(0) @binding(3) var<uniform> gate: Gate;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let s = id.x;
+    if (s >= gate.segments) { return; }
+    let live = flags[s] != 0u;
+    args[s * 3u] = select(0u, gate.groups, live);
+    args[s * 3u + 1u] = 1u;
+    args[s * 3u + 2u] = 1u;
+    ranges[s * 2u] = 0u;
+    ranges[s * 2u + 1u] = select(0u, gate.commands, live);
+}
+"#;
+
+const SEGMENTS: usize = 4;
+const SEGMENT_COMMANDS: u32 = 3;
+
+struct GatedRig {
+    rig: Rig,
+    gate: GpuComputePipeline,
+    flags: GpuBuffer,
+    args: GpuBuffer,
+    ranges: GpuBuffer,
+}
+
+impl GatedRig {
+    fn new(device: &GpuDevice, replay: bool, segments: usize) -> Self {
+        let rig = Rig::new(device, replay);
+        let flags = device.create_buffer_shared((segments * 4) as u64);
+        let args = device.create_buffer_shared((segments * 12) as u64);
+        let ranges = device.create_buffer_shared(segments as u64 * crate::GATED_RANGE_BYTES);
+        Self { rig, gate: device.create_compute_pipeline(GATE_WGSL, "main", "replay-proof gate"), flags, args, ranges }
+    }
+
+    fn set_flags(&self, live: &[u32]) {
+        write_u32s(&self.flags, live);
+    }
+}
+
+/// How one gated frame is shaped: dispatches issued per segment (the
+/// declared length is `declared`), a segment to break with a texture
+/// dispatch after its first command, and a segment to break with a plain
+/// recordable mix after its first command.
+#[derive(Clone, Copy)]
+struct GatedShape {
+    counts: [u32; SEGMENTS],
+    declared: u32,
+    break_in: Option<usize>,
+    plain_in: Option<usize>,
+}
+
+impl Default for GatedShape {
+    fn default() -> Self {
+        Self { counts: [SEGMENT_COMMANDS; SEGMENTS], declared: SEGMENT_COMMANDS, break_in: None, plain_in: None }
+    }
+}
+
+/// One gated frame: the gate kernel decides every segment on the GPU, then
+/// `SEGMENTS` segments of mixes, each gated by its own range entry, and a
+/// trailing ungated mix so the stretch after the last segment is covered.
+fn encode_gated_frame(enc: &mut GpuEncoder, k: &Kernels, g: &GatedRig, frame: u32, shape: GatedShape) {
+    let gate: [u32; 4] = [SEGMENTS as u32, GROUPS[0], shape.declared, 0];
+    enc.dispatch_compute(
+        &g.gate,
+        &[
+            GpuBinding::Buffer { binding: 0, buffer: &g.flags, offset: 0 },
+            GpuBinding::Buffer { binding: 1, buffer: &g.args, offset: 0 },
+            GpuBinding::Buffer { binding: 2, buffer: &g.ranges, offset: 0 },
+            GpuBinding::Bytes { binding: 3, data: bytemuck_u32(&gate) },
+        ],
+        [1, 1, 1],
+        "replay-proof gate",
+    );
+    let mut step = 0usize;
+    let mut mix = |enc: &mut GpuEncoder, segment: Option<usize>| {
+        let src = &g.rig.buffers[step % 3];
+        let dst = &g.rig.buffers[(step + 1) % 3];
+        let params: [u32; 4] = [1_664_525 + step as u32, frame.wrapping_mul(7) + step as u32, (step as u32 * 37 + frame) % N as u32, 0];
+        let bindings = [
+            GpuBinding::Buffer { binding: 0, buffer: src, offset: 0 },
+            GpuBinding::Buffer { binding: 1, buffer: dst, offset: 0 },
+            GpuBinding::Bytes { binding: 2, data: bytemuck_u32(&params) },
+        ];
+        match segment {
+            Some(s) => enc.dispatch_compute_gated(&k.mix, &bindings, GROUPS, &g.args, (s * 12) as u64, "replay-proof gated mix"),
+            None => enc.dispatch_compute(&k.mix, &bindings, GROUPS, "replay-proof mix"),
+        }
+        step += 1;
+    };
+    for s in 0..SEGMENTS {
+        enc.begin_gated_segment(&g.ranges, s as u32, shape.declared);
+        for i in 0..shape.counts[s] {
+            mix(enc, Some(s));
+            if i == 0 && shape.plain_in == Some(s) {
+                mix(enc, None);
+            }
+            if i == 0 && shape.break_in == Some(s) {
+                enc.dispatch_compute(
+                    &k.to_tex,
+                    &[
+                        GpuBinding::Buffer { binding: 0, buffer: &g.rig.buffers[0], offset: 0 },
+                        GpuBinding::Texture { binding: 1, texture: &g.rig.texture },
+                    ],
+                    GROUPS,
+                    "replay-proof to_tex",
+                );
+            }
+        }
+    }
+    enc.end_gated_segments();
+    mix(enc, None);
+}
+
+fn run_gated_frame(device: &GpuDevice, k: &Kernels, g: &mut GatedRig, frame: u32, shape: GatedShape) -> f64 {
+    let mut enc = device.create_encoder("replay-proof gated");
+    if let Some(cache) = g.rig.cache.take() {
+        enc.begin_replay(device, cache);
+    }
+    encode_gated_frame(&mut enc, k, g, frame, shape);
+    if enc.replay.is_some() {
+        g.rig.cache = Some(enc.end_replay());
+    }
+    enc.commit_and_wait_completed_timed() * 1e3
+}
+
+/// Which segments run on frame `frame`: a pattern that changes every frame
+/// and leaves some segments dead on every frame.
+fn live_pattern(frame: u32) -> [u32; SEGMENTS] {
+    std::array::from_fn(|s| u32::from(!(frame as usize + s).is_multiple_of(3)))
+}
+
+/// Dead segments execute with the GPU-written range `{0, 0}` and run
+/// nothing; live ones run every command. Output matches direct encoding
+/// (today's indirect dispatches) bit for bit while the live pattern changes
+/// every frame, with no re-recording. Under `MTL_DEBUG_LAYER=1` this is also
+/// the legality probe for the zero-length execute.
+#[test]
+fn replay_segment_skips_dead_segments() {
+    let device = GpuDevice::new();
+    let k = Kernels::new(&device);
+    let mut direct = GatedRig::new(&device, false, SEGMENTS);
+    let mut replay = GatedRig::new(&device, true, SEGMENTS);
+    println!(
+        "MTL_DEBUG_LAYER={}",
+        std::env::var("MTL_DEBUG_LAYER").unwrap_or_else(|_| "unset (run with MTL_DEBUG_LAYER=1 for the legality probe)".into())
+    );
+    for frame in 0..9 {
+        let live = live_pattern(frame);
+        direct.set_flags(&live);
+        replay.set_flags(&live);
+        run_gated_frame(&device, &k, &mut direct, frame, GatedShape::default());
+        let before = replay.rig.stats();
+        run_gated_frame(&device, &k, &mut replay, frame, GatedShape::default());
+        assert_eq!(direct.rig.contents(), replay.rig.contents(), "frame {frame}: gated replay diverged from direct (live {live:?})");
+        let after = replay.rig.stats();
+        let per_frame = SEGMENTS as u64 * u64::from(SEGMENT_COMMANDS) + 2;
+        if frame == 0 {
+            assert_eq!(after.recorded - before.recorded, per_frame, "frame 0 records the gate, every segment and the tail");
+        } else {
+            assert_eq!(after.recorded - before.recorded, 0, "frame {frame}: a changed live pattern records nothing");
+            assert_eq!(after.replayed - before.replayed, per_frame);
+        }
+        assert_eq!(after.segments_replayed - before.segments_replayed, SEGMENTS as u64, "every segment executes, dead ones empty");
+        assert_eq!(after.segments_direct - before.segments_direct, 0);
+        if frame > 0 {
+            assert_eq!(after.store_allocations, before.store_allocations, "a warm ring allocates no segment buffers");
+        }
+        // The gate kernel's chunk run, four segments, the tail's chunk run.
+        assert_eq!(after.executes - before.executes, SEGMENTS as u64 + 2);
+    }
+    assert_eq!(replay.rig.stats().ring_busy, 0);
+}
+
+/// A segment that issues more dispatches than it declared runs the extra
+/// ones directly; one that issues fewer leaves no-op slots; a direct
+/// dispatch inside a segment cuts it and the rest of that segment runs
+/// directly. Every shape matches direct encoding, and a shape repeated
+/// replays.
+#[test]
+fn replay_segment_count_mismatch_runs_direct() {
+    let device = GpuDevice::new();
+    let k = Kernels::new(&device);
+    let mut direct = GatedRig::new(&device, false, SEGMENTS);
+    let mut replay = GatedRig::new(&device, true, SEGMENTS);
+    let over = GatedShape { counts: [3, 5, 3, 3], ..GatedShape::default() };
+    let under = GatedShape { counts: [3, 1, 3, 2], ..GatedShape::default() };
+    let longer = GatedShape { counts: [4, 4, 4, 4], declared: 4, ..GatedShape::default() };
+    let broken = GatedShape { break_in: Some(2), ..GatedShape::default() };
+    let plain = GatedShape { plain_in: Some(1), ..GatedShape::default() };
+    let shapes = [
+        GatedShape::default(),
+        over,
+        over,
+        under,
+        under,
+        GatedShape::default(),
+        longer,
+        broken,
+        broken,
+        GatedShape::default(),
+        GatedShape::default(),
+        plain,
+        plain,
+        GatedShape::default(),
+        GatedShape::default(),
+    ];
+    let mut stats = Vec::new();
+    for (frame, shape) in shapes.iter().enumerate() {
+        let frame = frame as u32;
+        let live = live_pattern(frame);
+        direct.set_flags(&live);
+        replay.set_flags(&live);
+        run_gated_frame(&device, &k, &mut direct, frame, *shape);
+        let before = replay.rig.stats();
+        run_gated_frame(&device, &k, &mut replay, frame, *shape);
+        assert_eq!(direct.rig.contents(), replay.rig.contents(), "frame {frame}: gated replay diverged from direct (live {live:?})");
+        let after = replay.rig.stats();
+        stats.push((after.recorded - before.recorded, after.segments_direct - before.segments_direct, after.segments_replayed - before.segments_replayed));
+    }
+    let (recorded, segments_direct, segments_replayed): (Vec<_>, Vec<_>, Vec<_>) =
+        stats.iter().fold((vec![], vec![], vec![]), |mut acc, s| {
+            acc.0.push(s.0);
+            acc.1.push(s.1);
+            acc.2.push(s.2);
+            acc
+        });
+    assert_eq!(segments_direct[1], 2, "two dispatches over the declared length run directly");
+    assert_eq!(recorded[2], 0, "the over-long shape replays once recorded");
+    assert_eq!(segments_direct[2], 2);
+    assert!(recorded[3] > 0, "fewer dispatches cut the recording");
+    assert_eq!((recorded[4], segments_direct[4]), (0, 0), "the shorter shape replays, no-op slots and all");
+    assert!(recorded[6] > 0, "a changed declared length is a new segment");
+    assert_eq!(segments_replayed[6], SEGMENTS as u64);
+    assert!(segments_direct[7] > 0, "the rest of a cut segment runs directly");
+    assert_eq!(recorded[8], 0, "the cut shape replays as recorded");
+    assert_eq!(recorded[10], 0);
+    assert_eq!(segments_replayed[10], SEGMENTS as u64);
+    let rest = u64::from(SEGMENT_COMMANDS - 1);
+    assert_eq!(segments_direct[11], rest, "a plain dispatch inside a segment breaks it: the rest runs directly");
+    assert_eq!((recorded[12], segments_direct[12]), (0, rest), "the broken shape replays as recorded, its tail still direct");
+    assert_eq!(segments_replayed[12], SEGMENTS as u64, "a broken segment still executes whole, once");
+    assert_eq!((recorded[14], segments_direct[14]), (0, 0), "the default shape replays again once re-recorded");
+}
+
+/// Reports GPU µs per dead segment execute (the kill line: under 3 µs) next
+/// to today's cost of the same dead rounds as zero-group indirect dispatches.
+#[test]
+fn replay_segment_dead_cost_probe() {
+    const SEGS: usize = 64;
+    const CMDS: u32 = 8;
+    const REPS: usize = 60;
+    let device = GpuDevice::new();
+    let k = Kernels::new(&device);
+    let median = |mut v: Vec<f64>| {
+        v.sort_by(f64::total_cmp);
+        v[v.len() / 2]
+    };
+    let dead = [0u32; SEGS];
+    // A frame of `segments` dead segments: the gate kernel then the segments.
+    let frame = |enc: &mut GpuEncoder, g: &GatedRig, segments: usize| {
+        let gate: [u32; 4] = [SEGS as u32, GROUPS[0], CMDS, 0];
+        enc.dispatch_compute(
+            &g.gate,
+            &[
+                GpuBinding::Buffer { binding: 0, buffer: &g.flags, offset: 0 },
+                GpuBinding::Buffer { binding: 1, buffer: &g.args, offset: 0 },
+                GpuBinding::Buffer { binding: 2, buffer: &g.ranges, offset: 0 },
+                GpuBinding::Bytes { binding: 3, data: bytemuck_u32(&gate) },
+            ],
+            [1, 1, 1],
+            "replay-probe gate",
+        );
+        let params: [u32; 4] = [3, 1, 2, 0];
+        for s in 0..segments {
+            enc.begin_gated_segment(&g.ranges, s as u32, CMDS);
+            for _ in 0..CMDS {
+                enc.dispatch_compute_gated(
+                    &k.mix,
+                    &[
+                        GpuBinding::Buffer { binding: 0, buffer: &g.rig.buffers[0], offset: 0 },
+                        GpuBinding::Buffer { binding: 1, buffer: &g.rig.buffers[1], offset: 0 },
+                        GpuBinding::Bytes { binding: 2, data: bytemuck_u32(&params) },
+                    ],
+                    GROUPS,
+                    &g.args,
+                    (s * 12) as u64,
+                    "replay-probe gated mix",
+                );
+            }
+        }
+        enc.end_gated_segments();
+    };
+    let measure = |replay: bool, segments: usize| -> f64 {
+        let mut g = GatedRig::new(&device, replay, SEGS);
+        g.set_flags(&dead);
+        let mut gpu = Vec::with_capacity(REPS);
+        let mut warm = GpuReplayStats::default();
+        for rep in 0..REPS + 3 {
+            let mut enc = device.create_encoder("replay-probe dead segments");
+            if let Some(cache) = g.rig.cache.take() {
+                enc.begin_replay(&device, cache);
+            }
+            frame(&mut enc, &g, segments);
+            if enc.replay.is_some() {
+                g.rig.cache = Some(enc.end_replay());
+            }
+            let ms = enc.commit_and_wait_completed_timed() * 1e3;
+            if rep == 2 && replay {
+                warm = g.rig.cache.as_ref().unwrap().stats();
+            }
+            if rep >= 3 {
+                gpu.push(ms);
+            }
+        }
+        if replay && segments > 0 {
+            // The first visit may fall short of arena space (the store grows
+            // between spans); warm frames replay every dead round.
+            let stats = g.rig.cache.as_ref().unwrap().stats();
+            assert_eq!(stats.segments_direct - warm.segments_direct, 0, "every warm dead round replays");
+            assert_eq!(stats.segments_replayed - warm.segments_replayed, REPS as u64 * SEGS as u64);
+            assert_eq!(stats.recorded - warm.recorded, 0, "a warm ring records nothing");
+        }
+        median(gpu)
+    };
+    let gate_only = measure(true, 0);
+    let replayed = measure(true, SEGS);
+    let direct = measure(false, SEGS);
+    let per_segment_us = (replayed - gate_only) * 1e3 / SEGS as f64;
+    let per_dead_dispatch_us = (direct - gate_only) * 1e3 / (SEGS as f64 * f64::from(CMDS));
+    println!(
+        "SEGMENT PROBE {SEGS} dead segments x {CMDS}: gate only {gate_only:.3} ms, replayed {replayed:.3} ms ({per_segment_us:.2} us per dead segment; kill line 3 us), direct {direct:.3} ms ({per_dead_dispatch_us:.2} us per zero-group indirect dispatch)"
+    );
+}

@@ -49,11 +49,8 @@ const STEP_SHADER: &str = include_str!("shaders/gpu_flip_step.wgsl");
 const NAME: &str = "GPU FLIP Step";
 
 /// Layers of valid faces the step's face grid holds around the water at
-/// least: the extension after the projection runs ⌈¾ · travel⌉ + 1 ≥ 2.
+/// least: both extensions run `band_layers` ≥ 5.
 pub(crate) const FACE_VALID_LAYERS: u32 = 2;
-/// Layers the saved face grid is extended by:
-/// one RK3 stage and its sample reach.
-pub(crate) const EXTENDED_LAYERS: u32 = 2;
 /// The iteration cap when `iterations` is Auto (0): Auto stops on the
 /// engine's tolerance (gpu_flip_pressure.rs Stop::Converged).
 pub(crate) const AUTO_PRESSURE_ITERATIONS: u32 = MAX_ITERATIONS;
@@ -67,11 +64,13 @@ pub(crate) fn travel_cells(top_speed: f32, step_dt: f32, cell_size: f32) -> u32 
     (f64::from(top_speed) * f64::from(step_dt) / f64::from(cell_size) - 1e-4).ceil().max(1.0) as u32
 }
 
-/// Layers the projected faces are extended by: the RK3 stages sample up to ¾
-/// of the travel from where a particle started, and a sample reads faces one
-/// cell further.
+/// Layers both face grids are extended by, the saved one after the transfer
+/// and the projected one after the solve: FLIP Fluids'
+/// `_extrapolateFluidVelocities`, ⌈√3 · CFL⌉ + 3, with the CFL guard's
+/// travel in cells for the engine's CFL number (the one deviation; the
+/// engine sizes its substeps to CFL 5, ours are fixed by Steps).
 pub(crate) fn band_layers(travel: u32) -> u32 {
-    (0.75 * f64::from(travel)).ceil() as u32 + 1
+    (3f64.sqrt() * f64::from(travel)).ceil() as u32 + 3
 }
 
 /// Bytes of the step's face grid at `cells`: one record per padded cell.
@@ -323,7 +322,7 @@ fn uniform(params: &StepParams) -> GpuBinding<'_> {
 
 /// `layers` extension passes from `source` into `target`, ping-ponging
 /// through `scratch` so the last pass lands in `target`. `source` may be
-/// `target` only for an even `layers`: the first pass then writes `scratch`.
+/// `target`: an even count's first pass writes `scratch`, an odd one starts from a copy there.
 fn extend(
     enc: &mut GpuEncoder,
     pipes: &Pipelines,
@@ -333,8 +332,13 @@ fn extend(
     layers: u32,
     label: &str,
 ) {
-    debug_assert!(layers.is_multiple_of(2) || !std::ptr::eq(source, target), "an odd extension would overwrite its source");
     let mut from = source;
+    // In place with an odd count, the first pass would write its own source:
+    // start from a copy in `scratch` instead, which that pass does not write.
+    if !layers.is_multiple_of(2) && std::ptr::eq(source, target) {
+        enc.copy_buffer_to_buffer(source, scratch, source.size.min(scratch.size));
+        from = scratch;
+    }
     for i in 0..layers {
         let to = if (layers - i) % 2 == 1 { target } else { scratch };
         enc.dispatch_compute(&pipes.extend, &[uniform(params), buffer(3, from), buffer(4, to)], face_groups, label);
@@ -476,11 +480,14 @@ struct Step<'a> {
 }
 
 impl StepState {
-    fn prepare(&mut self, device: &GpuDevice) {
+    /// Build every pipeline a step dispatches, at install.
+    fn prepare_pipelines(&mut self, device: &GpuDevice) {
         if self.pipelines.is_none() {
             self.pipelines = Some(Pipelines::new(device));
         }
         self.sorter.prepare(device);
+        self.solver.prepare_pipelines(device);
+        self.bodies.prepare_pipelines(device);
     }
 
     /// Size every array for `cells` and `slots` before anything is encoded.
@@ -517,8 +524,8 @@ impl StepState {
     }
 
     fn encode(&mut self, device: &GpuDevice, enc: &mut GpuEncoder, step: &Step<'_>) -> Result<(), String> {
-        let (Some(pipes), Some(l), Some(sorted), Some(out_faces)) =
-            (self.pipelines.as_ref(), self.lattice.as_ref(), self.sorted.as_ref(), self.faces.as_ref())
+        let pipes = self.pipelines.as_ref().expect("step pipelines built by prepare_pipelines at install");
+        let (Some(l), Some(sorted), Some(out_faces)) = (self.lattice.as_ref(), self.sorted.as_ref(), self.faces.as_ref())
         else {
             return Err("the step's storage was not reserved".into());
         };
@@ -567,7 +574,7 @@ impl StepState {
         );
         // The saved faces: the particles' own, extended so FLIP's change is
         // measured wherever a particle samples.
-        extend(enc, pipes, &base, face_groups, [&l.a, &l.a, &l.b], EXTENDED_LAYERS, "gpu_flip.step.extend_old");
+        extend(enc, pipes, &base, face_groups, [&l.a, &l.a, &l.b], step.band, "gpu_flip.step.extend_old");
         enc.dispatch_compute(
             &pipes.gravity,
             &[uniform(&base), buffer(3, &l.a), buffer(4, &l.f), buffer(12, step.forces), buffer(13, step.impulses)],
@@ -876,6 +883,10 @@ fn read_iterations(value: f32) -> Result<Stop, String> {
 }
 
 impl Primitive for GpuFlipStep {
+    fn prepare_pipelines(&mut self, device: &GpuDevice) {
+        self.state.prepare_pipelines(device);
+    }
+
     fn provides_array_output(&self, port: &str) -> bool {
         port == "faces"
     }
@@ -900,7 +911,6 @@ impl Primitive for GpuFlipStep {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        self.state.prepare(ctx.gpu_encoder().device);
         let Some(lattice) = LiquidLattice::from_wires(ctx, NAME) else {
             return;
         };
@@ -936,7 +946,6 @@ impl Primitive for GpuFlipStep {
         let steps = ctx.scalar_or_param("steps", 1.0).round().clamp(1.0, 64.0);
         let step_dt = (TICK / f64::from(steps)) as f32;
         let flip = ctx.scalar_or_param("flip", 0.95).clamp(0.0, 1.0);
-        let flip_per_step = f64::from(flip).powf(60.0 * f64::from(step_dt)) as f32;
         let top_speed = ctx.scalar_or_param("top_speed", DEFAULT_TOP_SPEED);
         if !(top_speed.is_finite() && top_speed > 0.0) {
             ctx.error(format!("{NAME}: Top Speed must be positive, not {top_speed}"));
@@ -1012,7 +1021,9 @@ impl Primitive for GpuFlipStep {
                 body_count,
                 rows,
                 tick_seconds: step_dt,
-                flip: flip_per_step,
+                // The share is per step, as the engine's `_ratioPICFLIP`, whatever
+                // the step count.
+                flip,
                 max_travel: travel as f32,
                 box_offset: box_min.iter().fold(0.0_f32, |m, v| m.max(v.abs())),
                 ghost: u32::from(ghost),
@@ -1158,13 +1169,14 @@ mod tests {
         }
     }
 
-    /// The band covers ¾ of the travel plus the sample's reach, never under
-    /// the face grid's guarantee.
+    /// The band is the engine's ⌈√3 · CFL⌉ + 3 on the travel, never under the
+    /// face grid's guarantee.
     #[test]
     fn band_layers_cover_the_travel() {
         assert_eq!(travel_cells(DEFAULT_TOP_SPEED, 1.0 / 120.0, 0.0625), 3);
-        assert_eq!(band_layers(3), 4);
-        assert_eq!(band_layers(1), 2);
+        assert_eq!(band_layers(3), 9);
+        assert_eq!(band_layers(1), 5);
+        assert_eq!(band_layers(5), 12, "the engine's 12 layers at its CFL 5");
         for travel in 1..64 {
             assert!(band_layers(travel) >= FACE_VALID_LAYERS);
         }

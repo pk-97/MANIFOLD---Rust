@@ -1694,6 +1694,23 @@ impl std::error::Error for PreAllocationError {}
 ///    The architectural invariant: this function returns `Ok` only when
 ///    every resource is bound, or `Err` otherwise. No third state.
 pub fn pre_allocate_resources(
+    graph: &mut Graph,
+    plan: &ExecutionPlan,
+    device: &GpuDevice,
+    backend: &mut MetalBackend,
+) -> Result<(), PreAllocationError> {
+    // Every install path comes through here, so nodes that build pipelines
+    // ahead of run() are ready before the first frame on all of them.
+    for node in graph.nodes_mut() {
+        node.node.prepare_pipelines(device);
+    }
+    allocate_resources(graph, plan, device, backend)
+}
+
+/// Allocation only, for a graph that is already installed (its nodes'
+/// pipelines prepared by [`pre_allocate_resources`]). Resize is the caller:
+/// it reallocates against a candidate backend from a shared borrow.
+pub fn allocate_resources(
     graph: &Graph,
     plan: &ExecutionPlan,
     device: &GpuDevice,
@@ -2505,7 +2522,7 @@ mod tests {
         let plan = compile(&graph).expect("seed-only graph compiles");
 
         let mut backend = MetalBackend::new(std::sync::Arc::clone(&device), 256, 256, GpuTextureFormat::Rgba16Float);
-        pre_allocate_resources(&graph, &plan, &device, &mut backend)
+        pre_allocate_resources(&mut graph, &plan, &device, &mut backend)
             .expect("full pre-allocate pipeline succeeds for seed-only graph");
     }
 

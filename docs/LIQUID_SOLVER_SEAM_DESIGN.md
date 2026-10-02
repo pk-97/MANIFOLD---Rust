@@ -2,7 +2,7 @@
 
 <!-- index: The contract FLIP, GPU MLS-MPM and SWASH meet to join scenes — particle frames, face-grid outputs, Box3D coupling, clock/pause/export, scene recognition, safety rails — and the phases that move MPM and SWASH behind it. -->
 
-**Status:** PROPOSED · 2026-10-01 · P7b, P8 and P9 shipped, P8 owes its L3 flow · P5 and P6 retired (regions no longer nest) · P7a unaudited · P11 built, unwired (a net loss alone) · P10, P12 not built · owed: GPU template lookups, BUG-2xcw (solver-neutral fluid lookups); Peter's calls in section 8 (Calls only Peter makes) · amends GPU FLIP's tick loop and solids phase (D7, D10, D12).
+**Status:** PROPOSED · 2026-10-01 · P7b, P8 and P9 shipped, P8 owes its L3 flow · P5 and P6 retired (regions no longer nest) · P7a unaudited · P11, P12 retired (block map a net loss) · P10 not built · owed: GPU template lookups, BUG-2xcw (solver-neutral fluid lookups); Peter's calls in section 8 (Calls only Peter makes) · amends GPU FLIP's tick loop and solids phase (D7, D10, D12).
 
 **Prerequisites:** none for P1–P6 (MPM coupling is on main). P7a needs GPU FLIP's full step (GPU_FLIP_PRESSURE_SOLVE.md section 1 (the step)). P10 needs the BUG-imy3 (GPU whitewater, solver-agnostic) design approved.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
@@ -172,7 +172,7 @@ GPU liquids run on `LiquidClock` (today's `MatterClock`, `R/matter.rs:509`).
 - Water panel: exposure keys on the predicate plus the type's dial row, replacing the FLIP-only filters (`R/scene_exposure.rs:97`, `core/scene_exposure.rs:69`).
 - Enable Physics: refused and hidden on any object whose surface walks to a liquid domain. Today `scene_object_physics_plan` refuses only objects with a fluid role (`edit/commands/graph/scene/physics.rs:1025`).
 - Forces: a domain is a force target by having `acceleration_field` (`R/scene_modifier_expand/acceleration.rs:37`).
-- Add Fluid: authors the one template `DEFAULT_LIQUID_TEMPLATE` names. No solver dropdown.
+- Add Fluid: authors GPU FLIP only, from `gpu_flip_liquid_template` (app `ui_bridge/project.rs`), which wraps `gpu_flip_liquid_body` (`R/primitives/gpu_flip_preset.rs`) with card exposures. The body comes from the same builder the shipped GPU FLIP preset is checked against. No solver dropdown, no fallback to another solver.
 - Pairing: one liquid domain and one rigid world per coupled scene (`R/scene_modifier_expand/coupling.rs:85`).
 
 ### 3.6 Solids
@@ -288,16 +288,7 @@ pub const FACE_GRID_PORTS: [&str; 7] =
 
 ### 3.10 Block occupancy map (BUG-1z1p (shared block occupancy map))
 
-One small map per tick says, for each block of cells, whether it may hold liquid, surface or solid. Consumers use it to skip empty blocks. It is solver-neutral: it is built from the published particle frame and the level set the Liquid Surface group already makes, so any solver whose frame feeds that group gets it for free.
-
-- **Block size: 4 cells per side** (`LIQUID_BLOCK_CELLS` in `R/liquid/blocks.rs`). A 4³ block is 64 cells, one threadgroup's worth for a later solver tile. At 64³ cells the map is 16³ = 4096 words, 16 KB. 8 per side skips too little at a thin surface; 2 makes the map as costly to build as the scans it saves. Edge blocks are partial (ceil division).
-- **Lattice:** the domain's cells, which is the solid lattice's nodes minus one per axis (the whitewater grid). Block `b` covers cells `4b .. 4b+3`, clipped to the lattice. The level set refines each cell by a whole factor `s`.
-- **Layout:** one u32 per block, index `bx + BX·(by + BY·bz)`. Bit 0 LIQUID: some cell in the block is liquid under the solver's own rule (a particle in the cell, the step's `classify` pass). Bit 1 SURFACE: the level set has a node `< 0` and a node `>= 0` in the block's closed footprint (refined nodes `4bs` to `min(4(b+1)s, L-1)` per axis). Bit 2 SOLID: some solid-lattice node `< 0` in the block's closed footprint. Bits 3–31 are zero.
-- **Meaning:** a set bit means "may hold", a clear bit guarantees absence. A consumer that ignores the map, or is given none, computes the same thing; the map only lets it skip work whose result it already knows.
-- **Which tick:** the published frame's tick, the state the solver hands the next tick.
-- **Writer:** one atom, `node.liquid_blocks`, in the Liquid Surface group, after the group's sort and level set. It refuses by name when the sort's bins are not the domain's cells or the refinement is not whole. Nothing else writes the map.
-- **Consumers:** whitewater's `node.surface_crossings` takes it as an optional `blocks` input and skips the footprint scan in blocks without SURFACE, giving bit-identical output. Unwired, it scans every cell. A map shorter than the block lattice is a refusal, never a silent full scan.
-- **Solver tile skipping (later, P12):** a per-tick map can gate a step's per-cell work only after it is dilated by `ceil(steps × max cell travel per step / 4)` blocks, since liquid moves during the tick. The graph cannot feed the map back into the tick region without a state capture, so the solver builds its own map inside the region from its `water` lattice with the same atom shape and the same block size. Pressure sweeps skip blocks with no LIQUID after dilation by one block (the solve's stencil reach). The mesher reads the clamped level set, which differs from the exported one only near solids, so it may skip only blocks with neither SURFACE nor SOLID; that is verified against `node.clamp_liquid_to_solids` before it ships.
+**Retired 2026-10-02.** The map and both its uses are deleted. As surface_crossings' only input it cost more than it saved (P11 numbers below). Inside the GPU FLIP step, a block skip built from sort occupancy was bit-exact but saved 0.2 to 0.5 ms of a 30 ms frame at Resolution 64, inside frame noise. The frame is dominated by the pressure solve's dispatch count, the subject of the liquid speed phase bead. Revisit only if a profile shows per-cell work, not dispatch count, as the cost.
 
 ## 4. Invariants & enforcement
 
@@ -318,7 +309,6 @@ One small map per tick says, for each block of cells, whether it may hold liquid
 | I13 | Live frames never wait on the GPU | `liquid_live_frames_never_wait` (a test-build wait counter on the frame clock stays 0 over 120 live frames) |
 | I14 | No new locks | `rg -n 'Arc<(Mutex\|RwLock)' crates/manifold-renderer/src/node_graph/liquid crates/manifold-renderer/src/node_graph/primitives -g '{matter,gpu_flip,liquid}_*.rs'` → zero |
 | I15 | Fusion never crosses a region border; regions never nest | `substeps_freeze_never_fuses_across_border`, `substeps_region_nested_boundary_rejected` |
-| I17 | The block map never changes a consumer's output | `surface_crossings_block_skip_is_bit_identical` (gpu proof, map on vs off) |
 | I16 | Grid outputs share one layout | `liquid_face_grid_layout` (a rigid-rotation field through each solver's resample matches CPU-expected at every face) |
 
 Rows I4–I8, I11, I13 and I16 run for every row of `LIQUID_SOLVERS` unless the row names an exemption.
@@ -471,8 +461,8 @@ Order: P1 → P2a → P2b and P1 → P3 → P4 on main; P5 → P6 on main, in pa
 
 - **Entry state:** P2b on main. `rg -n 'const FLUID_TYPE_ID' crates/manifold-editing/src/commands/graph/scene/fluid.rs` matches.
 - **Read-back:** `edit/commands/graph/scene/fluid.rs` whole; `app/ui_bridge/project.rs:619`; GROUPING_GRAPHS.md.
-- **Old → new:** `AddSceneFluidCommand` builds `node.fluid_surface` from `FLUID_TYPE_ID` (`fluid.rs:23`) with metadata the app looks up for that type (`project.rs:619`) → the command inserts the template graph the app hands it, and the app resolves it from one constant, `DEFAULT_LIQUID_TEMPLATE` (today's FLIP scene fluid). ⚠ VERIFY-AT-IMPL: the command's `catalog_default` may already carry the graph; if so, the change is deleting `FLUID_TYPE_ID` and building from it.
-- **Deliverables:** tests `scene_physics_add_fluid_template_undo_reload` for the FLIP template and for a GPU template (Dam Break Matter's Live Matter and Liquid Surface groups) passed in by the test; flow `scripts/ui-flows/scene-fluid-template.json`. Switching the constant to SWASH is a one-line change on Peter's go (section 8, call 3), not this phase.
+- **Old → new:** `AddSceneFluidCommand` builds `node.fluid_surface` from `FLUID_TYPE_ID` (`fluid.rs:23`) with metadata the app looks up for that type (`project.rs:619`) → the command inserts the template graph the app hands it, and the app resolves it from one constant, `DEFAULT_LIQUID_TEMPLATE`, which names `gpu_flip_liquid_template`. ⚠ VERIFY-AT-IMPL: the command's `catalog_default` may already carry the graph; if so, the change is deleting `FLUID_TYPE_ID` and building from it.
+- **Deliverables:** tests `scene_physics_add_fluid_template_undo_reload` for the FLIP template and for a GPU template (Dam Break Matter's Live Matter and Liquid Surface groups) passed in by the test; flow `scripts/ui-flows/scene-fluid-template.json`. Another solver's template is its own builder plus its own Add Fluid tests, never a one-line swap.
 - **Gate:** positive: the tests and every `scene-fluid-*` flow. Negative: `rg -n 'FLUID_TYPE_ID' crates/manifold-editing/src` returns zero.
 - **Demo:** L3: the flow adds a fluid, plays, moves the source, undoes, redoes, saves, reloads and plays.
 - **Gesture:** Add Fluid into a scene and drag the source while it pours.
@@ -489,24 +479,20 @@ Order: P1 → P2a → P2b and P1 → P3 → P4 on main; P5 → P6 on main, in pa
 - **Forbidden:** a consumer that switches on solver; node velocities as the contract; per-solver distance outputs; publishing every tick.
 - **Test scope:** focused renderer; GPU proofs.
 
-### P11 — Block occupancy map and its first consumer (BUG-1z1p (shared block occupancy map))
+### P11 — Block occupancy map (retired, deleted 2026-10-02)
 
-`R/liquid/blocks.rs` (constants, WGSL include), `node.liquid_blocks` on the codegen path with a CPU-reference value proof and a fused-vs-unfused proof, an extent rule, and `node.surface_crossings` reading the map. Gate: I17, and a measured surface_crossings time with the map, net of the producer's cost.
-
-**Built, not wired.** I17 holds. CPU extents are proven at Resolution 64 and 128 (`liquid_block_extents_at_64_and_128`). `surface_crossings_block_skip_timing_on_dam_break` measured the shipped Dam Break at Surface Detail 0 (refinement 2), taking the level set, solid and particles at frames 30, 90 and 150 (GPU ms per dispatch):
+Built, measured, then deleted with the rest of section 3.10 (block occupancy map). GPU ms per dispatch on the shipped Dam Break at Surface Detail 0, frames 30, 90 and 150:
 
 | Resolution | Blocks with surface | Map | Crossings, map off → on | Saved, net of the map |
 |---|---|---|---|---|
 | 64 (70³ cells, 18³ blocks) | 17–29% | 0.10 | 0.31–0.50 → 0.29–0.50 | −0.08 to −0.10 |
 | 128 (134³ cells, 34³ blocks) | 10–27% | 0.64–0.79 | 1.18–3.06 → 0.89–2.89 | −0.41 to −0.48 |
 
-With surface_crossings as its only consumer, the map costs more than it saves at both sizes. surface_crossings already skips footprints with no sign change, so the map only spares it the level-set reads. Building the map reads the same level set, one thread per block. The map pays only once it is shared, with the mesher and the step (P12 (solver tile skipping)). Wiring it also needs a graph producer of the cell `water` lattice. The step's `water` is internal, on the face grid's cells, and nothing in the graph publishes it.
+With surface_crossings as its only consumer, the map costs more than it saves at both sizes. surface_crossings already skips footprints with no sign change, so the map only spares it the level-set reads. Building the map reads the same level set, one thread per block.
 
-`surface_crossings` has no fused proof with the map: a gather-only region dispatches over its shortest gathered input, here the map (BUG-iiv4 (gather-only region count anchor)).
+### P12 — Solver tile skipping (retired)
 
-### P12 — Solver tile skipping (entry: P11 shipped and the dilation bound measured)
-
-The GPU FLIP step builds its in-region map from `water` per section 3.10 (block occupancy map) and gates face and pressure work on dilated LIQUID. Gate: a dam break with skipping on matches skipping off bit for bit over 300 ticks.
+Measured as a bit-exact in-step block skip and dropped; see section 3.10 (block occupancy map).
 
 ## 6. Decided — do not reopen
 
@@ -522,6 +508,7 @@ The GPU FLIP step builds its in-region map from `water` per section 3.10 (block 
 10. One list, one walk, one scene contract (D11).
 11. Solids through the shared distance lattice (D12).
 12. Named refusals and counted overflow, never clamps or truncation (D13).
+13. Add Fluid authors GPU FLIP, with no solver picker and no fallback to CPU FLIP or Matter (Peter, 2026-10-02).
 
 ## 7. Deferred
 
@@ -542,5 +529,5 @@ The GPU FLIP step builds its in-region map from `water` per section 3.10 (block 
 
 1. **P1 edits MPM-owned files before SWASH's P4.** The SWASH design's decided item 1 keeps MPM untouched until P4. The move changes no behaviour and is gated on unchanged proof numbers; without it SWASH P3b must copy MPM's coupling owner or import it. Recommendation: yes, before SWASH P3b.
 2. **The resolution ceiling (D14).** Recommendation: yes. It turns a machine lockup into a named refusal; each ceiling lifts as its staged GPU check passes.
-3. **Which liquid Add Fluid authors (P9).** FLIP until his SWASH P4 go.
+3. **Which liquid Add Fluid authors (P9).** Decided: GPU FLIP, no picker, no fallback (section 6 (Decided), item 13).
 4. **The bake workflow for GPU liquids** (BUG-vglg.18). Recommendation: GPU liquids offer no cache until that talk.

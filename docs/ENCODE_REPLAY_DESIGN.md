@@ -1,6 +1,6 @@
 # Encode Replay — record a repeat region's dispatches once, replay them every frame
 
-**Status:** IN PROGRESS · 2026-10-01 · Opus 5.5 (worker seat, slot-4). P1a, P1b and P2 built on feat/encode-replay, P1b's FFT half on feat/fft-encode-cache; P3 blocked on the FFT decision in section 8 (Deferred).
+**Status:** IN PROGRESS · 2026-10-02 · Fable (lane, slot-7). P1a, P1b and P2 on main; P4 (gated segments, the GPU FLIP solver replayed) on feat/liquid-speed-2; P3 blocked on the FFT decision in section 8 (Deferred).
 **Prerequisites:** feat/planner-reuse (array slots static after `pre_allocate_resources`).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) and section 6 (Seam briefs) before starting any phase.
 
@@ -80,8 +80,12 @@ Rejected: dropping debug labels everywhere to save their 0.9 µs, because fault 
 **D9 — Buffer copies join recordings (P2).** Inside a span that replays (it took a ring entry), `copy_buffer_to_buffer` and `copy_buffer_range` whose offsets and size are multiples of 4 encode as a dispatch of a built-in `manifold-gpu` copy kernel (WGSL, one thread per word, through `create_compute_pipeline`), so they record like any other dispatch. Other copies stay blits: part-word copies, a copy within one buffer whose ranges overlap, copies outside spans, and copies in a span that runs direct (ring busy, profiling, diagnostics, `MANIFOLD_ENCODE_REPLAY=0`). A word copy is exact, so output is unchanged.
 
 **D10 — The Vulkan equivalent** (named, not built; the Vulkan backend has no command buffers yet). An entry is a secondary `VkCommandBuffer`, compute only, recorded outside any render pass with push descriptors (VULKAN_BACKEND_DESIGN.md D4 (Descriptors)) and the hazard barriers the encoder's tracker emits (D6 (Synchronization)) baked in. Bytes go to an entry-owned host-visible uniform buffer, the same way D5 (Bytes) maps them. The entry executes through `vkCmdExecuteCommands` in the frame's primary. Idle means the device timeline semaphore passed the submitting commit's value (D9 (GpuEvent)). The ring removes any need for `SIMULTANEOUS_USE`. `VK_EXT_device_generated_commands` is the GPU-driven alternative and is not needed. On Vulkan the FFT is compute (no MPSGraph), so FFTs record too.
+A gated segment (D12) is its own compute-only secondary command buffer, executed under `VK_EXT_conditional_rendering`: `vkCmdBeginConditionalRenderingEXT` on the segment's range entry (a non-zero `length` word runs it, zero skips it; the predicate is read at execution time like Metal's indirect range), `vkCmdExecuteCommands`, `vkCmdEndConditionalRenderingEXT`. Without the extension the fallback is the direct path as today: every gated dispatch is `vkCmdDispatchIndirect` on its gate triple, and a dead round costs its zero-group dispatches.
 
 **D11 — The FFT half is out of scope.** It is a blocking decision for P3 only (section 8 (Deferred)). P1 and P2 don't depend on it.
+
+**D12 — Gated segments: the GPU decides how many recorded dispatches run.** A solver whose iteration count is decided on the GPU (the GPU FLIP pressure solve stops on a tolerance its `check` kernel evaluates) runs every dispatch up to its cap as an indirect dispatch whose group counts a gate buffer holds, zeroed by the stop. Indirect grids are not recordable (D4), so such a solver paid the full CPU encode and a zero-group dispatch per dead command (about 2.4 µs of GPU each, 400 a frame on the Dam Break). A gated segment is a run of gated dispatches recorded as one indirect command buffer of exactly the length the caller declares, executed by `executeCommandsInBuffer:indirectBuffer:indirectBufferOffset:` on a range entry (`{location, length}`, `GATED_RANGE_BYTES`) the GPU writes: `{0, commands}` runs it whole, `{0, 0}` skips it in about 3 µs. The contract is that one GPU decision writes both the indirect group counts and the range entries: the direct path and the replayed path read the same decision, so they can't disagree. The caller declares the segment's length and must issue exactly that many gated dispatches; one over runs directly, one under leaves reset (no-op) slots. Nothing non-recordable goes inside a segment: a flush, or a plain dispatch, breaks it (the segment executes whole once, the rest of it runs directly), and a recording that continued past the break is cut. Outside a replaying span a gated dispatch is today's indirect dispatch.
+Rejected: a CPU-side iteration count (read back the stop) because the frame never waits on the GPU. Rejected: per-dispatch predication (`executeCommandsInBuffer` per command on its own range) because the measured floor is per execute, not per command, and a round is the unit the stop decides.
 
 ## 3. Design body
 
@@ -122,13 +126,34 @@ impl GpuEncoder {
 }
 ```
 
-The cache moves into the encoder for the span and back out, so `GpuEncoder` gets no lifetime and nothing is shared. `begin_replay` takes the device because it is the only place a store allocates: it grows the chosen entry to what its last visit wanted (chunks, and arenas from the device's retire-aware allocator). A visit that outgrows its entry encodes the rest directly and the next visit grows it. A span never nests: `begin_replay` inside an open span is a `debug_assert!` failure, and the executor opens spans at depth 0 only.
+Gated segments (D12), inside a span:
+
+```rust
+/// Bytes of one range entry: {location: u32, length: u32}.
+pub const GATED_RANGE_BYTES: u64 = 8;
+
+impl GpuEncoder {
+    /// Open a segment: the next `commands` gated dispatches run from one
+    /// recording the GPU executes by `ranges[index]`. Closes the open one.
+    pub fn begin_gated_segment(&mut self, ranges: &GpuBuffer, index: u32, commands: u32);
+    /// A dispatch the GPU may switch off: `gate[gate_offset]` holds its
+    /// indirect group counts (zeros when off), `groups` the counts when on.
+    /// Recorded with `groups` inside a segment; an indirect dispatch anywhere else.
+    pub fn dispatch_compute_gated(&mut self, pipeline, bindings, groups: [u32; 3], gate: &GpuBuffer, gate_offset: u64, label);
+    /// Close the open segment; later dispatches are ungated.
+    pub fn end_gated_segments(&mut self);
+}
+```
+
+`GpuReplayStats` gains `segments_replayed` (segment executes, dead ones included) and `segments_direct` (gated dispatches that ran as indirect dispatches inside a span: over the declared length, a broken segment's tail, or no entry). The cache moves into the encoder for the span and back out, so `GpuEncoder` gets no lifetime and nothing is shared. `begin_replay` takes the device because it is the only place a store allocates: it grows the chosen entry to what its last visit wanted (chunks, and arenas from the device's retire-aware allocator). A visit that outgrows its entry encodes the rest directly and the next visit grows it. A span never nests: `begin_replay` inside an open span is a `debug_assert!` failure, and the executor opens spans at depth 0 only.
 
 `GpuReplayCache` is backend-specific (`metal/replay.rs`, and a stats-only stub in `vulkan/replay.rs`); `GpuReplayStats`, the recorded command list, the comparison and the ring policy are the neutral part in `replay.rs`.
 
 ### 3.2 Internals (`replay.rs` neutral, `metal/replay.rs` backend store)
 
-`replay.rs` owns the recorded command list and the comparison. Per entry: `commands: Vec<CommandRecord>` (pipeline identity, grid, a range into `bindings`, the bytes slots), `bindings: Vec<BindingRecord>` (slot, kind, identity, offset or length), and a CPU shadow of every bytes slot. `metal/replay.rs` defines `pub(crate) struct ReplayStore` (ICB chunks, bytes arenas, retained objects, the per-command signpost strings, the last executing command buffer, the `useResources` scratch). Its methods are record one command at an index, patch bytes at a slot, execute a range on a compute encoder, and report idle. `vulkan/replay.rs` has the same `ReplayStore` with `supported() -> false`. The recordable test, the comparison and the ring policy are written once, in `replay.rs`.
+`replay.rs` owns the recorded command list and the comparison. Per entry: `commands: Vec<CommandRecord>` (pipeline identity, grid, a range into `bindings`, the bytes slots, and for a gated dispatch its `GateKey`: range buffer, offset, declared length, slot), `bindings: Vec<BindingRecord>` (slot, kind, identity, offset or length), and a CPU shadow of every bytes slot. `metal/replay.rs` defines `pub(crate) struct ReplayStore` (ICB chunks, one ICB per gated segment sized to its declared length, bytes arenas, retained objects, the per-command signpost strings, the last executing command buffer, the `useResources` scratch). Its methods are record one command at a place (a chunk position or a segment slot), patch bytes at a slot, execute a range on a compute encoder (chunk runs by explicit range, each segment whole by its GPU-written range entry, a memory barrier between), and report idle. A segment with a changed declared length is a new segment buffer; a truncated recording resets the dropped segment slots so an always-whole execute runs them as no-ops. `vulkan/replay.rs` has the same `ReplayStore` with `supported() -> false`. The recordable test, the comparison and the ring policy are written once, in `replay.rs`.
+
+The GPU FLIP pressure solver (`crates/manifold-renderer/src/node_graph/primitives/gpu_flip_pressure.rs`) is the first caller: its `arm` kernel writes the gate triples and every round's two range entries live (one segment a round, or two around the ungated body product), and its `check` kernel zeroes the gate and the range entries of every round after the one that met the tolerance. The four-dispatch prelude (arm, init, the first norm) runs ungated and plain, since the gate is armed just before it.
 
 Hooks in `metal/encoder.rs`:
 - `dispatch_compute_grid`: with a span open and the dispatch recordable, hand it to the span and return. Otherwise flush and encode as today.
@@ -193,6 +218,7 @@ The first visit inserts into the map; later frames never allocate. The offline h
 - **I3 — Every buffer an executed stretch references is declared and alive.** Enforcement: record retains, execute declares (D6); arenas come from the retire-aware allocator and the command buffer retains an executed chunk. Tests: every P1a proof runs green under `MTL_DEBUG_LAYER=1 MTL_VALIDATION=1` with no validation errors; `replay_cache_dropped_in_flight_is_safe` drops a cache whose entry is still executing and still matches direct. Not run: the negative half (switch the declaration off and watch the layer object). The auto-mode classifier blocks switching `useResources` off, so that check is Peter's to run by hand or waive.
 - **I4 — A warm ring allocates nothing.** Test: `replay_steady_state_records_nothing` (after the warm-up frames, `recorded` and `store_allocations` stay flat over 20 frames).
 - **I5 — Replay is off wherever per-dispatch attribution is needed.** Test: `replay_off_under_profiling_and_dump` (encoder profiling on, or `dump_all` on: `replayed == 0`).
+- **I8 — A segment executes whole, once, by the range the GPU wrote.** Enforcement: `break_segment` on any flush or plain dispatch inside an open segment; `close_segment` cuts a recording that continues past what a visit took; a changed declared length allocates a new segment. Tests: `replay_segment_skips_dead_segments` (live pattern changes every frame, bit-exact, no re-record), `replay_segment_count_mismatch_runs_direct` (over, under, longer, texture-broken and plain-broken shapes all match direct), `replay_segment_dead_cost_probe` (µs per dead segment against µs per zero-group dispatch); renderer: `pressure_module_replay_matches_direct` (the solver on both stops, pressure and stop record bit-equal to direct, a warm frame records nothing and runs no round directly), `gpu_flip_replay_changes_nothing` (300 Dam Break ticks: particles, faces and solver words bit-equal to replay off, every tick).
 - **I6 — Replay knows nothing about any particular graph.** Negative gate, zero hits: `rg -i 'swash|krylov|fft_3d|matter' crates/manifold-gpu/src/replay.rs crates/manifold-gpu/src/metal/replay.rs crates/manifold-renderer/src/node_graph/execution/substep_region.rs`.
 - **I7 — No invalidation API.** Negative gate, zero hits: `rg 'fn (invalidate|reset_recording|mark_dirty)' crates/manifold-gpu/src`.
 
@@ -285,6 +311,20 @@ FFT encode (section 8 (Deferred)), SWASH atoms (owned by the SWASH seat; any cha
 
 Blocked on the FFT decision in section 8 (Deferred), decider Peter via the lead. Not briefed until it is answered.
 
+### P4 — Gated segments and the GPU FLIP solver (item 24, GPU FLIP speed after the physics ports, under BUG-l2h3 (SWASH live-instrument epic))
+
+- **Deliverables:** D12 in `replay.rs` and `metal/replay.rs` (A1), the solver on segments (A2), the I8 tests, the Dam Break numbers.
+- **Gate:** the I8 tests green, also under `MTL_DEBUG_LAYER=1`; `pressure_module_*` green; the kill line, replayed live rounds within 5% of direct GPU time at a fixed 16 iterations.
+- **As measured** (M4 Max, `gpu_flip_speed_measure` Dam Break 64 Steps 1, medians; `gpu_flip_frame_perf` the shipped preset at 1920×1080, 270 plain frames):
+
+| | GPU plain | CPU encode | Frame GPU p50 / p95 | Frame CPU encode p50 / p95 |
+|---|---|---|---|---|
+| Before (solver direct) | 32.3 ms (Auto), 22.6 (fixed 16) | 22.9 ms, 5.8 | 46.4 / 51.2 ms | 23.0 / 24.9 ms |
+| After (solver replayed) | 16.75 ms (Auto), 17.95 (fixed 16) | 0.83 ms, 0.26 | 29.5 / 34.8 ms | 1.9 / 2.4 ms |
+
+  A tick replays 7003 dispatches in 140 executes, 128 of them segments (2 solves × 64 rounds, 12 to 14 live); a dead segment costs about 3 µs against the 2.4 µs per zero-group dispatch of each of its 54 commands. Fixed 16 replayed is faster than direct, so the kill line passed with room. Iterations per solve and every output are unchanged.
+- **Forbidden:** a CPU read-back of the stop; a plain dispatch inside a segment (it breaks the segment by design, but a caller that relies on that is paying the direct path).
+
 ## 7. Decided — do not reopen
 
 1. One span per outermost region visit, keyed by boundary.
@@ -296,7 +336,8 @@ Blocked on the FFT decision in section 8 (Deferred), decider Peter via the lead.
 7. Off under dispatch profiling, fault diagnostics, `dump_all` and `MANIFOLD_ENCODE_REPLAY=0`.
 8. One signpost per executed stretch.
 9. Word-aligned copies inside spans become a compute copy (P2).
-10. Vulkan twin: secondary command buffers, not device-generated commands.
+10. Vulkan twin: secondary command buffers, not device-generated commands; gated segments under `VK_EXT_conditional_rendering`, `vkCmdDispatchIndirect` as the fallback.
+11. A gated segment is executed whole by a GPU-written range entry; one GPU decision writes the gate and the range (D12).
 
 ## 8. Deferred
 

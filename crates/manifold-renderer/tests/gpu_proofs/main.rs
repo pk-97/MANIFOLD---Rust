@@ -86,6 +86,8 @@ mod rt_dynamic_catalog;
 mod rt_dynamic_perf;
 #[cfg(feature = "fluid-perf-proofs")]
 mod fluid_surface_perf;
+#[cfg(feature = "water-race-probes")]
+mod gpu_flip_frame_perf;
 #[cfg(feature = "matter-perf-proofs")]
 mod matter_solver_perf;
 mod rt_dynamic_fusion;

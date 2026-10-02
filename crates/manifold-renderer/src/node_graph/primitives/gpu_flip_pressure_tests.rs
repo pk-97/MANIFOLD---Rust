@@ -5,7 +5,7 @@
 //! sides 25, 37 and 40. The residual is the true relative residual of the
 //! masked Poisson equation.
 
-use manifold_gpu::GpuBuffer;
+use manifold_gpu::{GpuBuffer, GpuReplayCache};
 
 use super::gpu_flip_pressure::{MAX_ITERATIONS, PROGRESS_FLOATS, PressureSolver, Stop, Water, level_lattices, passes};
 
@@ -139,6 +139,8 @@ impl Rig {
         let faces = device.create_buffer_shared(records.len() as u64 * 32);
         // SAFETY: a shared buffer sized for the records; no GPU work is queued.
         unsafe { faces.write(0, bytemuck::cast_slice(&records)) };
+        let mut solver = PressureSolver::default();
+        solver.prepare_pipelines(&device);
         Self {
             n,
             water: device.create_buffer_shared(cells),
@@ -146,7 +148,7 @@ impl Rig {
             pressure: device.create_buffer_shared(cells),
             faces,
             device,
-            solver: PressureSolver::default(),
+            solver,
             phi: None,
         }
     }
@@ -509,6 +511,82 @@ fn converge(rig: &mut Rig, p: &Problem, cap: u32) -> Converged {
     let all = unsafe { std::slice::from_raw_parts(ptr.cast::<f32>().cast_const(), floats) };
     let iterations = all[1] as u32;
     Converged { f_norm: all[0], iterations, stopped: all[2] > 0.5, norms: all[4..4 + iterations as usize].to_vec() }
+}
+
+/// One prepare and solve of `p` on `stop`, inside a replay span when `cache`
+/// holds one (the step's region on stage): the pressure and the stop's
+/// record, as bits.
+fn solve_bits(rig: &mut Rig, p: &Problem, stop: Stop, cache: &mut Option<GpuReplayCache>) -> (Vec<u32>, Vec<u32>) {
+    let water: Vec<f32> = p.water.iter().map(|&w| f32::from(u8::from(w))).collect();
+    // SAFETY: shared buffers sized for the lattice; the last solve completed.
+    unsafe {
+        rig.water.write(0, bytemuck::cast_slice(&water));
+        rig.rhs.write(0, bytemuck::cast_slice(&p.f));
+    }
+    let floats = PROGRESS_FLOATS as usize;
+    let record = rig.device.create_buffer_shared(floats as u64 * 4);
+    let mut enc = rig.device.create_encoder("gpu-flip-pressure-replay");
+    let spanned = cache.take().map(|cache| enc.begin_replay(&rig.device, cache)).is_some();
+    let n = rig.n as u32;
+    let lattice = Water { lattice: [n; 3], cell_size: rig.cell_size() as f32, water: &rig.water, faces: &rig.faces, phi: rig.phi.as_ref() };
+    rig.solver.prepare(&rig.device, &mut enc, &lattice).expect("prepares");
+    rig.solver.solve(&mut enc, &lattice, &rig.rhs, &rig.pressure, stop, None).expect("solves");
+    if spanned {
+        *cache = Some(enc.end_replay());
+    }
+    let progress = rig.solver.progress().expect("prepared");
+    enc.copy_buffer_to_buffer(progress, &record, record.size);
+    enc.commit_and_wait_completed();
+    let ptr = record.mapped_ptr().expect("shared record");
+    // SAFETY: the copy completed; the buffer holds PROGRESS_FLOATS floats.
+    let all = unsafe { std::slice::from_raw_parts(ptr.cast::<u32>().cast_const(), floats) };
+    (bytemuck::cast_slice(rig.pressure()).to_vec(), all.to_vec())
+}
+
+/// A solve replayed from a recording (every round one gated segment the
+/// GPU switches off once the stop fires) gives the same pressure and the
+/// same stop record, bit for bit, as encoding it directly, on the engine's
+/// stop and at a fixed count, over frames whose problem changes. Once warm,
+/// a frame records nothing and runs no round directly.
+#[test]
+fn pressure_module_replay_matches_direct() {
+    let (n, saved) = load_fixture(DAM_BREAK);
+    let problems: Vec<Problem> = saved.iter().take(3).map(|p| resample(p, n, 64)).collect();
+    for stop in [Stop::Converged(MAX_ITERATIONS), Stop::Fixed(16)] {
+        let mut direct = Rig::new(64);
+        let mut replay = Rig::new(64);
+        let mut cache = Some(GpuReplayCache::default());
+        let mut none = None;
+        let mut last = GpuReplayCache::default().stats();
+        for frame in 0..6 {
+            let p = &problems[frame % problems.len()];
+            let (dp, dr) = solve_bits(&mut direct, p, stop, &mut none);
+            let (rp, rr) = solve_bits(&mut replay, p, stop, &mut cache);
+            assert!(dp == rp, "{stop:?} frame {frame}: the replayed pressure differs from direct");
+            assert_eq!(dr, rr, "{stop:?} frame {frame}: the replayed stop record differs from direct");
+            let stats = cache.as_ref().expect("the span handed its cache back").stats();
+            let iterations = f32::from_bits(rr[1]) as u64;
+            println!(
+                "{stop:?} frame {frame}: {iterations} iterations, recorded {} replayed {} direct {} segments replayed {} direct {}",
+                stats.recorded - last.recorded,
+                stats.replayed - last.replayed,
+                stats.direct - last.direct,
+                stats.segments_replayed - last.segments_replayed,
+                stats.segments_direct - last.segments_direct
+            );
+            // The first visit records what its new entry holds; the second
+            // grows it and records the rest.
+            if frame >= 2 {
+                assert_eq!(stats.recorded, last.recorded, "{stop:?} frame {frame}: a warm solve records nothing");
+                assert_eq!(stats.segments_direct, last.segments_direct, "{stop:?} frame {frame}: no round runs directly");
+                let rounds = match stop {
+                    Stop::Converged(cap) | Stop::Fixed(cap) => u64::from(cap),
+                };
+                assert_eq!(stats.segments_replayed - last.segments_replayed, rounds, "{stop:?} frame {frame}: every round is one segment execute");
+            }
+            last = stats;
+        }
+    }
 }
 
 /// A pool at rest one step after gravity: every water face moved down by

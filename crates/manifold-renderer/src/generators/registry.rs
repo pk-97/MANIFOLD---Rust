@@ -389,9 +389,10 @@ fn prewarm_all_atom_codegen_pipelines(device: &std::sync::Arc<GpuDevice>) {
     let mut skipped_specialized = 0usize;
     let mut codegen_failed = 0usize;
     for type_id in registry.known_type_ids() {
-        let Some(node) = registry.construct(type_id) else {
+        let Some(mut node) = registry.construct(type_id) else {
             continue;
         };
+        node.prepare_pipelines(device);
         if !node.wgsl_specialization().is_empty() {
             skipped_specialized += 1;
             continue;

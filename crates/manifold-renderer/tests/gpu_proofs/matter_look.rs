@@ -1,27 +1,20 @@
-//! Look gates A1, A3 and A5, and free-flight momentum
+//! Look gates A1 and A3, and free-flight momentum
 //! (`docs/GPU_MPM_SOLVER_DESIGN.md` section 7 (look gates) and section 12
 //! (invariants)). A2, A4 and A6 were water look targets, withdrawn with the
-//! MPM water look goal. Every metric comes from `matter::look` over seam
-//! particle frames. The Dam Break scene matches `WaterDamBreakMatter.json`:
-//! 4 m domain, 64 cells, 0.16 m pool, the preset's column, closed walls. FLIP
-//! runs the same scene through the real `node.fluid_surface` at its defaults,
-//! without the preset's moving box. Gates are evaluated at Liveliness 0;
+//! MPM water look goal; A5 compared splash against the CPU FLIP engine and was
+//! dropped with routine FLIP comparisons. Every metric comes from
+//! `matter::look` over seam particle frames. The Dam Break scene matches
+//! `WaterDamBreakMatter.json`: 4 m domain, 64 cells, 0.16 m pool, the
+//! preset's column, closed walls. Gates are evaluated at Liveliness 0;
 //! Liveliness 0.9 numbers are printed.
 
 use std::sync::OnceLock;
 
-use manifold_core::{Beats, Seconds};
-use manifold_gpu::GpuTextureFormat;
-use manifold_renderer::gpu_encoder::GpuEncoder;
-use manifold_renderer::node_graph::fluid::{TICK, domain_layout};
+use manifold_renderer::node_graph::Transform;
+use manifold_renderer::node_graph::fluid::domain_layout;
 use manifold_renderer::node_graph::fluid_particles::FluidParticle;
-use manifold_renderer::node_graph::matter::look::{ALIGNMENT_TICKS, Cells, LookRecorder, RETENTION_TICKS};
-use manifold_renderer::node_graph::{
-    ExecutionPlan, Executor, FrameTime, Graph, MetalBackend, NodeInstanceId, ParamValue,
-    PrimitiveRegistry, ResourceId, StateStore, Transform, compile, pre_allocate_resources,
-};
+use manifold_renderer::node_graph::matter::look::{ALIGNMENT_TICKS, Cells, LookRecorder};
 
-use crate::harness;
 use crate::matter_scene::{MatterScene, SceneSettings};
 
 const DOMAIN_SIZE: f32 = 4.0;
@@ -47,99 +40,6 @@ fn dam_break(liveliness: f32) -> SceneSettings {
         column: Some(column()),
         liveliness,
         ..SceneSettings::default()
-    }
-}
-
-/// FLIP through the real `node.fluid_surface`; `count_b` is read back through
-/// `node.particles_to_copies`, its seam consumer.
-struct FlipScene {
-    graph: Graph,
-    plan: ExecutionPlan,
-    executor: Executor,
-    state: StateStore,
-    counter: NodeInstanceId,
-    particles: ResourceId,
-    frame_count: u32,
-}
-
-impl FlipScene {
-    fn new() -> Self {
-        let registry = PrimitiveRegistry::with_builtin();
-        let mut graph = Graph::new();
-        let fluid = graph.add_node(registry.construct(manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID).expect("fluid"));
-        let volume = graph.add_node(registry.construct("node.transform_3d").expect("transform"));
-        let counter = graph.add_node(registry.construct("node.particles_to_copies").expect("copies"));
-        let c = column();
-        for (name, value) in [
-            ("pos_x", c.pos[0]), ("pos_y", c.pos[1]), ("pos_z", c.pos[2]),
-            ("scale_x", c.scale[0]), ("scale_y", c.scale[1]), ("scale_z", c.scale[2]),
-        ] {
-            graph.set_param(volume, name, ParamValue::Float(value)).expect(name);
-        }
-        graph.set_param(fluid, "resolution", ParamValue::Float(RESOLUTION as f32)).expect("resolution");
-        graph.set_param(fluid, "domain_size", ParamValue::Float(DOMAIN_SIZE)).expect("domain_size");
-        graph.set_param(fluid, "fill_height", ParamValue::Float(POOL)).expect("fill_height");
-        graph.connect((volume, "transform"), (fluid, "initial_volume")).expect("column");
-        graph.connect((fluid, "particles_b"), (counter, "particles")).expect("particles");
-        graph.connect((fluid, "count_b"), (counter, "live_count")).expect("count");
-        graph.add_external_output(counter, "copies").expect("output");
-        let plan = compile(&graph).expect("flip scene compiles");
-        let device = &harness::shared().device;
-        let mut backend = MetalBackend::new(device.clone(), 64, 64, GpuTextureFormat::Rgba16Float);
-        pre_allocate_resources(&graph, &plan, device, &mut backend).expect("pre-allocate");
-        let particles = plan
-            .steps()
-            .iter()
-            .find(|s| s.node == fluid)
-            .and_then(|s| s.outputs.iter().find(|(p, _)| *p == "particles_b").map(|&(_, r)| r))
-            .expect("particles_b");
-        Self {
-            graph,
-            plan,
-            executor: Executor::new(Box::new(backend)),
-            state: StateStore::new(),
-            counter,
-            particles,
-            frame_count: 0,
-        }
-    }
-
-    fn tick(&mut self) {
-        let device = &harness::shared().device;
-        let time = FrameTime {
-            beats: Beats(0.0),
-            seconds: Seconds(f64::from(self.frame_count) * TICK),
-            delta: Seconds(TICK),
-            frame_count: i64::from(self.frame_count),
-        };
-        let mut enc = device.create_encoder("flip-look");
-        {
-            let mut gpu = GpuEncoder::new(&mut enc, device);
-            self.executor
-                .execute_frame_with_state(&mut self.graph, &self.plan, time, &mut gpu, &mut self.state, 0);
-        }
-        enc.commit_and_wait_completed();
-        self.frame_count += 1;
-    }
-
-    fn frame(&self) -> Vec<FluidParticle> {
-        let count = self.executor.live_scalar_input(self.counter, "live_count").unwrap_or(0.0) as usize;
-        if self.executor.backend().slot_for(self.particles).is_none() {
-            return Vec::new();
-        }
-        let source = self
-            .executor
-            .host_array_buffer(&self.graph, &self.plan, self.particles)
-            .expect("particles hold their own contents");
-        let device = &harness::shared().device;
-        let bytes = (count * std::mem::size_of::<FluidParticle>()) as u64;
-        let copy = device.create_buffer_shared(bytes.max(16));
-        let mut enc = device.create_encoder("flip-look-readback");
-        enc.copy_buffer_to_buffer(source, &copy, bytes);
-        enc.commit_and_wait_completed();
-        let ptr = copy.mapped_ptr().expect("shared storage");
-        // SAFETY: the copy completed; `count` whole records fit the buffer.
-        unsafe { std::slice::from_raw_parts(ptr.cast::<FluidParticle>().cast_const(), count).to_vec() }
     }
 }
 
@@ -206,19 +106,6 @@ fn matter(liveliness: f32) -> &'static Series {
     }
 }
 
-fn flip() -> &'static Series {
-    static FLIP: OnceLock<Series> = OnceLock::new();
-    FLIP.get_or_init(|| {
-        let mut scene = FlipScene::new();
-        let mut series = Series::new();
-        for tick in 1..=*RETENTION_TICKS.end() {
-            scene.tick();
-            series.observe(tick, &scene.frame());
-        }
-        series
-    })
-}
-
 fn describe(name: &str, s: &Series) {
     let settle = s.settling();
     eprintln!(
@@ -240,7 +127,6 @@ fn matter_look_lattice_alignment() {
     eprintln!("matter_look_lattice_alignment (largest 16-bin histogram bin over mean; fails above 1.5)");
     describe("matter L0", gate);
     describe("matter L0.9", matter(0.9));
-    eprintln!("  FLIP: {:?}", flip().alignment);
     assert_eq!(gate.alignment.len(), ALIGNMENT_TICKS.len());
     for (t, ratio, interior) in &gate.alignment {
         assert!(*interior > 10_000, "too few interior points at {t} s: {interior}");
@@ -277,19 +163,6 @@ fn matter_look_volume_drift() {
     assert!(peak <= 0.03, "Dam Break volume error {peak}");
     assert!(settled <= 0.01, "settled volume error {settled}");
     assert!(pool_error <= 0.01, "still pool volume error {pool_error}");
-}
-
-/// A5: the Dam Break keeps at least 0.6 × FLIP's detached-point fraction.
-#[test]
-fn matter_look_splash_retention() {
-    let (m, f) = (matter(0.0).max_splash(), flip().max_splash());
-    eprintln!(
-        "matter_look_splash_retention: matter L0 {m:.4}, L0.9 {:.4}, FLIP {f:.4} (gate 0.6 × FLIP = {:.4})",
-        matter(0.9).max_splash(),
-        0.6 * f
-    );
-    assert!(f > 0.0, "FLIP produced no splash to compare against");
-    assert!(m >= 0.6 * f, "splash {m} against FLIP {f}");
 }
 
 /// Zero gravity, a blob in the middle of the domain moving at constant

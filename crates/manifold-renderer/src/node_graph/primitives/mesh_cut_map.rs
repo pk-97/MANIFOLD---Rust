@@ -293,14 +293,6 @@ fn run_cut_map(
         ctx.error("node.cut_mesh_map: missing required `reference` input");
         return;
     };
-    if ctx
-        .inputs
-        .slot("reference")
-        .is_some_and(|slot| !ctx.inputs.slot_content_ready(slot))
-    {
-        ctx.mark_outputs_pending();
-        return;
-    }
     let Some(map) = ctx.outputs.array("map") else {
         ctx.error("node.cut_mesh_map: missing required `map` output");
         return;

@@ -165,7 +165,7 @@ _Generated from the node registry. Do not hand-edit. 363 nodes registered, group
 | — | `node.texture_sum_5` | Filter | Legacy fixed five-input sum, superseded by node.multi_blend (dynamic N inputs). Hidden from the palette but still loads in saved graphs. |
 | Wet/Dry | `node.wet_dry` | Filter | Crossfades a processed image back over the original, so you can dial how much of an effect shows. At 0 you get the original, at 1 the full effect. |
 
-### 3D Geometry (87)
+### 3D Geometry (88)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -225,6 +225,7 @@ _Generated from the node registry. Do not hand-edit. 363 nodes registered, group
 | Push Along Normals | `node.push_along_normals` | Filter | Pushes every point of a mesh outward or inward along its own surface direction — the 3D version of a bulge or breathe effect, optionally masked and driven by a… |
 | Push Mesh | `node.push_mesh` | Filter | Pushes a mesh's points up and down by reading a height image, turning a flat grid into bumpy terrain. The 3D version of a displacement. |
 | Reflect Array | `node.reflect_array` | Filter | Makes a mirrored copy of every instance across a plane — drop a reflected scene under the floor and ride the offset. |
+| Relax Surface Mesh | `node.relax_surface_mesh` | Filter | Smooths a liquid's surface mesh by easing each point toward its neighbours, rounding off the small facets and steps. |
 | Remap Cut Weights | `node.remap_cut_weights` | Filter | Carries per-vertex masks through a triangle cut map. |
 | Remap Mesh Cut | `node.remap_mesh_cut` | Filter | Applies a triangle and barycentric cut map to a mesh while preserving its shading frame. |
 | Render Copies | `node.render_copies` | Filter | Draws many copies of one mesh in a single pass, each placed by a list of transforms. The fast way to render a field of repeated objects. |
@@ -293,7 +294,7 @@ _Generated from the node registry. Do not hand-edit. 363 nodes registered, group
 | Turbulence (simplex) | `node.turbulence` | Filter | Pushes particles around with a flowing noise field, giving organic, swirling motion. The classic turbulence force. |
 | Wrap Around (torus) | `node.wrap_around` | Filter | Wraps particles back to the opposite edge when they leave the frame, so the cloud loops seamlessly instead of escaping. |
 
-### Particles 3D (59)
+### Particles 3D (58)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -316,7 +317,6 @@ _Generated from the node registry. Do not hand-edit. 363 nodes registered, group
 | Keep In Box (3D) | `node.keep_in_box_3d` | Filter | Holds 3D particles inside their container, either wrapping them around or bouncing them back at the edges. The hard boundary after a move. |
 | Keep Whitewater | `node.keep_whitewater` | Filter | Decides which foam, spray and bubbles survive this step: the dead, the stray and the overcrowded go. |
 | Lattice Curvature | `node.lattice_curvature` | Filter | Measures how sharply the liquid's surface bends at each grid cell, which is where wave crests throw foam. |
-| Liquid Blocks | `node.liquid_blocks` | Filter | Marks which blocks of a liquid's grid hold water, surface or walls, so later steps can skip the empty ones. |
 | Liquid Cells | `node.liquid_cells` | Filter | Sorts every grid cell into air, liquid or wall, the map whitewater uses to decide where spray and foam can form. |
 | Liquid Fill | `node.liquid_fill` | Source | Places the liquid's starting particles: a pool on the floor plus one block of water. |
 | Liquid Frame | `node.liquid_frame` | Filter | Hands a simulated particle liquid to the liquid surface, one frame per simulation tick. |
@@ -585,7 +585,7 @@ _Generated from the node registry. Do not hand-edit. 363 nodes registered, group
 | `WaterBasin` | Water Basin (CPU) | generator | Sim | 1069 |
 | `WaterDamBreak` | Water — Dam Break | generator | Sim | 2308 |
 | `WaterDamBreakGpu` | Water — Dam Break (GPU Surface) | generator | Sim | 2309 |
-| `WaterDamBreakGpuFlip` | Water — Dam Break (GPU FLIP) | generator | Sim | 1970 |
+| `WaterDamBreakGpuFlip` | Water — Dam Break (GPU FLIP) | generator | Sim | 2293 |
 | `WaterDamBreakMatter` | Water — Dam Break (Live GPU) | generator | Sim | 1390 |
 | `WaterFloatingBoxMatter` | Water — Floating Box (Live GPU) | generator | Sim | 1383 |
 | `WaterStillPoolMatter` | Water — Still Pool (Live GPU) | generator | Sim | 1058 |
