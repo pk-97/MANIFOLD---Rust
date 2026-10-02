@@ -1082,23 +1082,6 @@ impl StepState {
         self.solver.solve(enc, &water, &l.rhs, &l.pressure, step.pressure, passes)?;
         let tally = step.tally;
         self.solver.tally(enc, step.pressure, step.capped, tally, 0, step.params.step_in_tick == 0)?;
-        // One active-set update for the next step, while this step's
-        // pressure and right-hand side are still in place.
-        if separate {
-            enc.dispatch_compute(
-                &pipes.separate_update,
-                &[
-                    uniform(&base),
-                    buffer(6, &l.contact_water),
-                    buffer(5, &l.rhs),
-                    buffer(8, &l.pressure),
-                    buffer(10, &l.s),
-                    buffer(39, &l.let_go),
-                ],
-                cells_groups,
-                "gpu_flip.step.separate_update",
-            );
-        }
         // φ binds the water array when the ghost rows are off; the pass never reads it then.
         let phi = if step.ghost { &l.phi } else { &l.water };
         let subtract = |enc: &mut GpuEncoder, params: &StepParams, phi: &GpuBuffer, faces: &GpuBuffer, label: &str| {
@@ -1132,6 +1115,32 @@ impl StepState {
                 &[uniform(&base), buffer(20, faces), buffer(10, &l.s), buffer(11, &l.v)],
                 face_groups,
                 label,
+            );
+        }
+        // One active-set update for the next step. The leftover divergence
+        // is the divergence pass itself on the projected, constrained faces,
+        // against the solid velocity after the reaction, so a body's own
+        // motion counts exactly as it does in the right-hand side. The
+        // right-hand side is free until the density source rewrites it.
+        if separate {
+            over_c(
+                enc,
+                &pipes.divergence,
+                vec![buffer(3, &l.f), buffer(5, &l.rhs), buffer(6, &l.water), buffer(10, &l.s), buffer(11, &l.v)],
+                "gpu_flip.step.separate_divergence",
+            );
+            enc.dispatch_compute(
+                &pipes.separate_update,
+                &[
+                    uniform(&base),
+                    buffer(6, &l.contact_water),
+                    buffer(5, &l.rhs),
+                    buffer(8, &l.pressure),
+                    buffer(10, &l.s),
+                    buffer(39, &l.let_go),
+                ],
+                cells_groups,
+                "gpu_flip.step.separate_update",
             );
         }
         extend(enc, pipes, &base, face_groups, [&l.f, out_faces, &l.b], step.band, "gpu_flip.step.extend_new");

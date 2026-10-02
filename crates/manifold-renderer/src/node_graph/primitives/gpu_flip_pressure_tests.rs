@@ -813,3 +813,85 @@ fn pressure_module_rows_match_the_stencil() {
         }
     }
 }
+
+/// Separating solids (GPU_FLIP_PRESSURE_SOLVE.md section 8 (Separating
+/// solids)) against `scripts/mgpcg_reference.py --separating n,0.25,0.016667`:
+/// a pool a quarter deep after one step of ±20 m/s², the active set run over
+/// the GPU solve (each round a converged solve on the water less the let-go
+/// cells, then the join and leave rule) to the reference's rounds, let-go
+/// count and pressure. Down: 1 round, nothing let go, minimum pressure
+/// 8.333e-2 (16³) and 4.167e-2 (32³). Up: 2 rounds, every wall-touching
+/// cell let go (436 and 1892), the pressure 0 on every water cell.
+#[test]
+fn pressure_module_separating_matches_reference() {
+    for (m, g, rounds, let_go, p_min) in
+        [(16, -20.0, 1, 0, 8.333e-2), (16, 20.0, 2, 436, 0.0), (32, -20.0, 1, 0, 4.167e-2), (32, 20.0, 2, 1892, 0.0)]
+    {
+        let cells = m * m * m;
+        let h = BOX_METRES / m as f64;
+        let rows = ((0.25 * m as f64).round() as usize).max(1);
+        let at = |x: usize, y: usize, z: usize| x + m * (y + m * z);
+        let water: Vec<bool> = (0..cells).map(|c| (c / m) % m < rows).collect();
+        let f: Vec<f32> = (0..cells).map(|c| if water[c] && (c / m) % m == 0 { (g / 60.0 / h) as f32 } else { 0.0 }).collect();
+        // Every inner face is whole, so a cell touches a solid on the box walls.
+        let touching: Vec<bool> = (0..cells)
+            .map(|c| {
+                let p = [c % m, (c / m) % m, c / (m * m)];
+                water[c] && p.iter().any(|&v| v == 0 || v == m - 1)
+            })
+            .collect();
+        let mut rig = Rig::new(m);
+        let mut out = vec![false; cells];
+        let mut pressure = Vec::new();
+        let mut taken = 0;
+        for round in 1..=64 {
+            taken = round;
+            let mask: Vec<bool> = (0..cells).map(|c| water[c] && !out[c]).collect();
+            let c = converge(&mut rig, &Problem { frame: 0, water: mask.clone(), f: f.clone() }, MAX_ITERATIONS);
+            assert!(c.stopped || c.f_norm == 0.0, "{m}³ g {g} round {round}: the solve did not stop on its tolerance");
+            pressure = rig.pressure().to_vec();
+            let p_at = |c: usize| if mask[c] { f64::from(pressure[c]) } else { 0.0 };
+            let mut changed = false;
+            for c in 0..cells {
+                if mask[c] && touching[c] && pressure[c] < 0.0 {
+                    out[c] = true;
+                    changed = true;
+                } else if out[c] {
+                    let [x, y, z] = [c % m, (c / m) % m, c / (m * m)];
+                    let mut pushed = 0.0;
+                    for (q, inside) in [
+                        (x.wrapping_sub(1), x > 0),
+                        (x + 1, x + 1 < m),
+                    ] {
+                        if inside {
+                            pushed += p_at(at(q, y, z));
+                        }
+                    }
+                    for (q, inside) in [(y.wrapping_sub(1), y > 0), (y + 1, y + 1 < m)] {
+                        if inside {
+                            pushed += p_at(at(x, q, z));
+                        }
+                    }
+                    for (q, inside) in [(z.wrapping_sub(1), z > 0), (z + 1, z + 1 < m)] {
+                        if inside {
+                            pushed += p_at(at(x, y, q));
+                        }
+                    }
+                    if f64::from(f[c]) - pushed / (h * h) < 0.0 {
+                        out[c] = false;
+                        changed = true;
+                    }
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        let count = out.iter().filter(|&&o| o).count();
+        let low = (0..cells).filter(|&c| water[c]).map(|c| if out[c] { 0.0 } else { f64::from(pressure[c]) }).fold(f64::INFINITY, f64::min);
+        println!("separating {m}³ g {g:+}: {taken} rounds, {count} let go, pressure min {low:.4e}");
+        assert_eq!((taken, count), (rounds, let_go), "{m}³ g {g}: rounds and let-go count against the reference");
+        let tolerance = if p_min == 0.0 { 1e-6 } else { 1e-3 * p_min };
+        assert!((low - p_min).abs() <= tolerance, "{m}³ g {g}: pressure min {low} against the reference {p_min}");
+    }
+}

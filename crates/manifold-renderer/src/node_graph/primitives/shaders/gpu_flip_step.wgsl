@@ -1081,11 +1081,12 @@ fn separate_pin(@builtin(global_invocation_id) gid: vec3<u32>) {
     cell_out[idx] = select(water[idx], 0.0, keep);
 }
 
-// One thread per cell, after the main solve, `water` the contact mask and
-// `cell_out` the right-hand side (read only): one active-set update. A
-// pressing cell whose pressure came out negative is let go; a let-go cell
-// whose leftover divergence f − Σ w·p_j / h² is negative (water pushed into
-// the solid) presses again.
+// One thread per cell, after the projection and the bodies' reaction,
+// `water` the contact mask and `cell_out` (read only) the divergence of the
+// projected faces against the solids' updated face velocity: one active-set
+// update. A pressing cell whose pressure came out negative is let go; a
+// let-go cell whose leftover divergence is negative (water pushed into the
+// solid, relative to the solid's own motion) presses again.
 @compute @workgroup_size(256)
 fn separate_update(@builtin(global_invocation_id) gid: vec3<u32>) {
     let idx = gid.x;
@@ -1104,25 +1105,7 @@ fn separate_update(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !(let_go[idx] > 0.5) {
         return;
     }
-    var pushed = 0.0;
-    for (var a = 0; a < 3; a = a + 1) {
-        var q = p;
-        q[a] = p[a] + 1;
-        // Only the solve's own cells carry a pressure; the rest hold 0 in
-        // the operator and may hold anything in the array.
-        if p[a] > 0 {
-            var r = p;
-            r[a] = p[a] - 1;
-            let j = flatten(r, n);
-            pushed = pushed + select(0.0, open_at(p, a, n, m) * pressure[j], water[j] > 0.5);
-        }
-        if p[a] + 1 < n[a] {
-            let j = flatten(q, n);
-            pushed = pushed + select(0.0, open_at(q, a, n, m) * pressure[j], water[j] > 0.5);
-        }
-    }
-    let h = u.cell_size;
-    if cell_out[idx] - pushed / (h * h) < 0.0 {
+    if cell_out[idx] < 0.0 {
         let_go[idx] = 0.0;
     }
 }
