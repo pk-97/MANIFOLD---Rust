@@ -21,6 +21,15 @@ slowest tests. Scoped runs skip tests measured over
 gpu_scope.SLOW_THRESHOLD_S (scripts/gpu_test_times.json); `--record-times PATH` writes
 fresh measurements. The chosen mode and why are always printed.
 
+HANG WATCHDOG: the output is streamed and the one running test is timed. A test
+that starts and does not finish (ok / FAILED / ignored) within its allowance
+gets its process group killed and the gate fails with `GPU-PROOFS GATE: HUNG
+<name> after Ns` (exit 4), so a hang cannot hold the machine-wide GPU lock.
+Allowance = max(120s, 5x its time in scripts/gpu_test_times.json); a test with
+no record gets 300s. `--hang-allowance SECONDS` replaces the 120s floor (and
+the no-record 300s). A heartbeat naming the running test prints every 60s. A
+hang is a red gate: never ignore the test, never skip it on rerun.
+
 Exit 0 iff the underlying cargo run exited 0.
 
 Obsolete when: cargo test reports cross-binary failure summaries natively
@@ -28,10 +37,16 @@ and the landing docs point at that instead.
 """
 
 import argparse
+import codecs
+import contextlib
 import json
+import os
+import queue
 import re
+import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -68,7 +83,17 @@ TEST_LINE_RE = re.compile(r"^test (\S+) \.\.\. (ok|FAILED)\b")
 # "test X ... " from its result, which then arrives on a line of its own. The
 # time still belongs to X, not to the next test that finishes on one line.
 TEST_START_RE = re.compile(r"^test (\S+) \.\.\. ")
-BARE_RESULT_RE = re.compile(r"^(ok|FAILED)\s*$")
+BARE_RESULT_RE = re.compile(r"^(ok|FAILED|ignored)\s*$")
+IGNORED_LINE_RE = re.compile(r"^test (\S+) \.\.\. ignored\b")
+
+# Hang watchdog: a test that started and never finished holds the machine-wide
+# GPU lock for everyone. Allowance = max(floor, multiple x recorded time); a
+# test with no record gets the no-record allowance.
+HANG_FLOOR_S = 120.0
+HANG_MULTIPLE = 5.0
+NO_RECORD_ALLOWANCE_S = 300.0
+HEARTBEAT_S = 60.0
+WATCH_TICK_S = 1.0
 
 FAILURES_BLOCK_RE = re.compile(r"failures:\n((?:    \S.*\n)+)\ntest result:")
 
@@ -85,6 +110,8 @@ def run_gate(
     full_suite: bool = False,
     lib: bool = False,
     timings: list | None = None,
+    hung: list | None = None,
+    hang_floor: float | None = None,
 ) -> tuple[int, str]:
     if full_suite and targets is not None:
         raise ValueError("full_suite and targets are mutually exclusive")
@@ -118,23 +145,152 @@ def run_gate(
             cmd.extend(["--skip", skip])
     print(f"$ {' '.join(cmd)}", flush=True)
 
+    # Own process group so a hang kill takes cargo and the test binary, and
+    # nothing else.
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
+        bufsize=0,
+        start_new_session=True,
     )
+    assert proc.stdout is not None
+    watchdog = Watchdog(gpu_scope.load_times(), hang_floor)
+    chunks: queue.Queue = queue.Queue()
+
+    def pump() -> None:
+        for chunk in _chunks(proc.stdout):
+            chunks.put(chunk)
+        chunks.put(None)
+
+    pump_thread = threading.Thread(target=pump, daemon=True)
+    pump_thread.start()
     lines: list[str] = []
     state: dict = {"t": None, "bin": ""}
-    assert proc.stdout is not None
-    for line in proc.stdout:
-        print(line, end="", flush=True)
-        lines.append(line)
-        if timings is not None:
-            record_timing(line, time.monotonic(), state, timings)
+    pending = ""
+    try:
+        while True:
+            try:
+                chunk = chunks.get(timeout=WATCH_TICK_S)
+            except queue.Empty:
+                chunk = ""
+            now = time.monotonic()
+            if chunk is None:
+                break
+            pending += chunk
+            while "\n" in pending:
+                line, pending = pending.split("\n", 1)
+                line += "\n"
+                print(line, end="", flush=True)
+                lines.append(line)
+                if timings is not None:
+                    record_timing(line, now, state, timings)
+                watchdog.feed_line(line, now)
+            watchdog.feed_partial(pending, now)
+            beat = watchdog.heartbeat(now)
+            if beat:
+                print(beat, flush=True)
+            verdict = watchdog.check(now)
+            if verdict:
+                name, waited, allowance = verdict
+                print(f"GPU-PROOFS GATE: HUNG {name} after {waited:.0f}s "
+                      f"(allowance {allowance:.0f}s; killing the test process group)", flush=True)
+                _kill_group(proc)
+                if hung is not None:
+                    hung.append((name, waited))
+                break
+    except KeyboardInterrupt:
+        _kill_group(proc)
+        raise
+    if pending:
+        print(pending, end="", flush=True)
+        lines.append(pending)
     exit_code = proc.wait()
+    pump_thread.join(timeout=5)
+    if not pump_thread.is_alive() and hasattr(proc.stdout, "close"):
+        proc.stdout.close()
     return exit_code, "".join(lines)
+
+
+def _chunks(stream):
+    """Yield decoded text as it arrives, including a line's unfinished tail."""
+    if not hasattr(stream, "read"):
+        yield from stream
+        return
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+    while True:
+        data = stream.read(65536)
+        if not data:
+            break
+        yield decoder.decode(data)
+
+
+def _kill_group(proc) -> None:
+    """SIGKILL the process group this gate started; never anything else."""
+    with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
+        os.killpg(proc.pid, signal.SIGKILL)
+
+
+class Watchdog:
+    """Tracks the one running test and says when it has outlived its allowance.
+
+    Libtest prints `test X ... ` with no newline before it runs, so a hang shows
+    up as an unfinished tail, not a line; `feed_partial` sees that tail. Pure
+    logic over (text, now): no clock, no process, unit-testable without a GPU.
+    """
+
+    def __init__(self, times: dict, floor: float | None = None):
+        self.times = times
+        self.floor = HANG_FLOOR_S if floor is None else floor
+        self.no_record = NO_RECORD_ALLOWANCE_S if floor is None else floor
+        self.name: str | None = None
+        self.started = 0.0
+        self.last_beat = 0.0
+
+    def allowance(self, name: str) -> float:
+        rec = self.times.get(name)
+        if rec is None:
+            return self.no_record
+        return max(self.floor, HANG_MULTIPLE * rec)
+
+    def _start(self, name: str, now: float) -> None:
+        if self.name != name:
+            self.name, self.started, self.last_beat = name, now, now
+
+    def feed_line(self, line: str, now: float) -> None:
+        if RUNNING_BINARY_RE.match(line):
+            self.name = None
+            return
+        m = TEST_LINE_RE.match(line) or IGNORED_LINE_RE.match(line)
+        if m:
+            self.name = None
+            return
+        if BARE_RESULT_RE.match(line):
+            self.name = None
+            return
+        m = TEST_START_RE.match(line)
+        if m:
+            self._start(m.group(1), now)
+
+    def feed_partial(self, tail: str, now: float) -> None:
+        m = TEST_START_RE.match(tail)
+        if m:
+            self._start(m.group(1), now)
+
+    def check(self, now: float):
+        """(name, waited, allowance) once the running test is over its allowance."""
+        if self.name is None:
+            return None
+        waited = now - self.started
+        allowance = self.allowance(self.name)
+        return (self.name, waited, allowance) if waited > allowance else None
+
+    def heartbeat(self, now: float) -> str | None:
+        if self.name is None or now - self.last_beat < HEARTBEAT_S:
+            return None
+        self.last_beat = now
+        return (f"[gate] still running: {self.name} for {now - self.started:.0f}s "
+                f"(hang allowance {self.allowance(self.name):.0f}s)")
 
 
 def record_timing(line: str, now: float, state: dict, timings: list) -> None:
@@ -241,6 +397,7 @@ def print_summary(
     exit_code: int,
     timings: list | None = None,
     budget: float | None = None,
+    hung: list | None = None,
 ) -> int:
     """Print the consolidated report; return the final exit code."""
     failed_tests = parse_failed_tests(output)
@@ -282,6 +439,11 @@ def print_summary(
         print("\nPer-binary results: none parsed")
 
     print()
+    if hung:
+        for name, waited in hung:
+            print(f"GPU-PROOFS GATE: HUNG {name} after {waited:.0f}s")
+        print("GPU-PROOFS GATE: FAIL (hung test killed; a hang is a red gate, never skip or ignore it)")
+        return 4
     if exit_code == 0 and over_budget:
         print(f"GPU-PROOFS GATE: FAIL (over time budget: {spent:.0f}s > {budget:.0f}s; "
               "to fix: if these tests are slow on purpose, record times with "
@@ -365,6 +527,10 @@ def main() -> int:
     parser.add_argument("--budget", type=float, default=None, metavar="SECONDS",
                         help="fail if budgeted test time exceeds this (landing passes "
                         f"{gpu_scope.LANDING_BUDGET_S})")
+    parser.add_argument("--hang-allowance", type=float, default=None, metavar="SECONDS",
+                        help="floor of the per-test hang allowance (default "
+                        f"{HANG_FLOOR_S:.0f}s; also the allowance of a test with no recorded time, "
+                        f"which otherwise gets {NO_RECORD_ALLOWANCE_S:.0f}s)")
     parser.add_argument("--timings-md", type=Path, default=None,
                         help="write the 25 slowest tests as markdown to this path")
     parser.add_argument("--record-times", type=Path, default=None, metavar="PATH",
@@ -404,23 +570,26 @@ def main() -> int:
             print(f"  note: {note}")
         runs = [dict(r, full=False) for r in plan.runs()]
 
-    exit_code, outputs, all_timings = 0, [], []
+    exit_code, outputs, all_timings, hung = 0, [], [], []
     # One GPU run on the machine at a time (scripts/gpu_queue.py). Held for all
     # cargo runs so another run cannot interleave between test binaries.
     with gpu_queue.hold("gpu_proofs_gate"):
         for run in runs:
             run_timings: list = []
             code, output = run_gate(manifest_path, run["filters"], run["skips"], run["targets"],
-                                    run["full"], run["lib"], run_timings)
+                                    run["full"], run["lib"], run_timings, hung,
+                                    args.hang_allowance)
             exit_code = exit_code or code
             outputs.append(output)
             all_timings += [(n, s, b, run["budgeted"]) for n, s, b in run_timings]
+            if hung:
+                break
     output = "".join(outputs)
     if args.timings_md:
         write_timings_md(args.timings_md, all_timings)
     if args.record_times:
         print(write_times_json(args.record_times, all_timings))
-    return print_summary(output, exit_code, all_timings, args.budget)
+    return print_summary(output, exit_code, all_timings, args.budget, hung)
 
 
 if __name__ == "__main__":
