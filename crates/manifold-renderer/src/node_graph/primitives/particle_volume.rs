@@ -1,3 +1,4 @@
+//! Uses the search-radius ratio (1.5 radii) from FLIP Fluids particlemesher.cpp `_searchRadiusFactor` (MIT); see THIRD_PARTY_NOTICES.md.
 //! `node.particle_volume` — the liquid level set: one value per lattice node,
 //! the distance to the nearest anisotropic kernel in the node's bins
 //! (GPU_FLUID_SURFACE_DESIGN.md D8, D15, D18, P6e). A per-element gather on

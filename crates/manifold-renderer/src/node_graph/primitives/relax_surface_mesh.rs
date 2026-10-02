@@ -1,3 +1,4 @@
+//! Uses the neighbour-mean mesh smoothing from FLIP Fluids trianglemesh.cpp `smooth` (MIT); see THIRD_PARTY_NOTICES.md.
 //! `node.relax_surface_mesh` — one umbrella relaxation pass over
 //! node.volume_surface_mesh's triangle list (BUG-xwf1 (Liquid Surface mesh
 //! relaxation)): each vertex moves `strength` of the way to the mean of its

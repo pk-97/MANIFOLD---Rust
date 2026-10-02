@@ -1,3 +1,4 @@
+// Uses the search-radius ratio (1.5 radii) from FLIP Fluids particlemesher.cpp `_searchRadiusFactor` (MIT); see THIRD_PARTY_NOTICES.md.
 // node.shape_particle_blobs — fusable BUFFER body, GATHER. One anisotropic
 // surface kernel per sorted particle (Yu & Turk 2010, GPU_FLUID_SURFACE_DESIGN.md
 // D14): neighbours within the kernel radius in the 27 surrounding bins give a

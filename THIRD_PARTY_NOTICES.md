@@ -22,6 +22,16 @@ Modules ported from it (all under `crates/manifold-renderer/src/node_graph/primi
 - `shaders/marching_cubes_common.wgsl` — the corner order, edge order and triangle table from `polygonizer3d.cpp` (Paul Bourke's tables)
 - `scripts/mgpcg_reference.py` (the f64 oracle for the pressure solve) — the segment and square inside-fractions from `levelsetutils.cpp`, the operator and stop from `pressuresolver.cpp` and `pcgsolver.h`
 
+Constants taken from the engine (each file's header says which):
+
+- `particle_volume`, `shape_particle_blobs` (and their shaders) — the search-radius ratio from `particlemesher.cpp` (`_searchRadiusFactor`)
+- `relax_surface_mesh` (and its shader) — the neighbour-mean smoothing from `trianglemesh.cpp` (`smooth`)
+- `node_graph/whitewater.rs` — the particle id limit from `diffuseparticlesimulation.h` (`_diffuseParticleIDLimit`)
+- `gpu_flip_preset.rs` — the PIC/FLIP ratio from `fluidsimulation.h` (`_ratioPICFLIP`) and the Dam Break scene values
+- `matter_face_component` — the extrapolation layer count from `fluidsimulation.cpp` (`_extrapolateFluidVelocities`)
+
+The C++ bridge in `crates/manifold-fluids/native/` (`bridge.*`, `coupling_*probe.*`) is MANIFOLD's own; it includes the vendored headers and copies no engine code.
+
 Checked against the engine, no engine code in them (each file's header says so):
 
 - `gpu_flip_pressure_tests.rs` — the pressure solve's stop, against `pressuresolver.cpp` and `pcgsolver.h`

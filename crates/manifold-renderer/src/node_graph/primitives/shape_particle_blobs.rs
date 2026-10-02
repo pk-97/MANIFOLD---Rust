@@ -1,3 +1,4 @@
+//! Uses the search-radius ratio (1.5 radii) from FLIP Fluids particlemesher.cpp `_searchRadiusFactor` (MIT); see THIRD_PARTY_NOTICES.md.
 //! `node.shape_particle_blobs` — one anisotropic surface kernel per sorted
 //! liquid particle (Yu & Turk 2010; GPU_FLUID_SURFACE_DESIGN.md D14). A
 //! per-element gather over the sorted particles' bins, on the codegen path.
