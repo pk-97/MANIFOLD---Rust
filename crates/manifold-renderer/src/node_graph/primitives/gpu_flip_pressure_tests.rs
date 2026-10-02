@@ -1,3 +1,4 @@
+//! Checked against FLIP Fluids pressuresolver.cpp and pcgsolver.h (MIT); see THIRD_PARTY_NOTICES.md.
 //! The pressure solver module against the f64 reference
 //! (`scripts/mgpcg_reference.py`, the default rule: halve rounding up to 4
 //! or less, then the exact inverse) on the saved Dam Break and deep pool

@@ -1,3 +1,4 @@
+//! Checked against FLIP Fluids the engine's Dam Break scene (WaterDamBreak.json) (MIT); see THIRD_PARTY_NOTICES.md.
 //! GPU FLIP, the GPU water solver (docs/GPU_FLIP_PRESSURE_SOLVE.md), as
 //! graphs built for any lattice. `water_def` is a running liquid on the
 //! liquid seam (docs/LIQUID_SOLVER_SEAM_DESIGN.md P7a): node.gpu_flip_domain's clock runs

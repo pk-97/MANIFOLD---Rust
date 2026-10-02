@@ -1,3 +1,4 @@
+//! Checked against FLIP Fluids the engine's Dam Break race clips (MIT); see THIRD_PARTY_NOTICES.md.
 //! GPU FLIP end to end through the render graph the app shows (`render_def`):
 //! particles → GPU Liquid Surface → water material with volume optics → tone
 //! map → frames, run by `PresetRuntime` as the app runs a generator. A long

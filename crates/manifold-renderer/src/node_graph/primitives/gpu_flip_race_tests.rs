@@ -1,3 +1,4 @@
+//! Checked against FLIP Fluids the engine's Dam Break race (MIT); see THIRD_PARTY_NOTICES.md.
 //! GPU FLIP's side of the water race (docs/GPU_FLIP_PRESSURE_SOLVE.md
 //! section 6 (measures)): the Dam Break probes that report cost, what the
 //! projection leaves undone, occupancy, packing, particle motion and the water

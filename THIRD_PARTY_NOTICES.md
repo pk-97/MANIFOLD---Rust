@@ -17,7 +17,20 @@ Modules ported from it (all under `crates/manifold-renderer/src/node_graph/primi
 - `gpu_flip_step` (`shaders/gpu_flip_step.wgsl`; its CPU references in `gpu_flip_step_tests.rs`) — particles to faces from `velocityadvector.cpp`, the PIC/FLIP blend per step from `fluidsimulation.cpp` (`_ratioPICFLIP`), the extension layer count from `fluidsimulation.cpp` (`_extrapolateFluidVelocities`, with the CFL guard's travel in cells for the engine's CFL number, the one deviation), the particle distance and its extension into solids from `particlelevelset.cpp`, the solid collision and removal of particles from `fluidsimulation.cpp`, the solid distance's gradient from `meshlevelset.cpp` and `interpolation.cpp`, the solid open fractions from `levelsetutils.cpp` and `meshlevelset.cpp`, the solids' face velocity and the constraint from `fluidsimulation.cpp`, divergence, the pressure subtraction and the sealed pockets' solid velocity from `pressuresolver.cpp`, inflow emission, the inflow constrained velocity and outflow removal from `fluidsimulation.cpp` (`_addNewFluidCells`, `_constrainMarkerParticleVelocities`, `_getInflowConstrainedVelocityComponents`, `_updateFluidObjects`); `liquid_fill`'s pool slots and `liquid/bodies.rs`' region rows serve them
 - `gpu_flip_pressure` (`shaders/gpu_flip_pressure.wgsl`) — the ghost-fluid free-surface rows from `pressuresolver.cpp`; the conjugate gradient's stop (the infinity-norm residual test, its tolerance and acceptable tolerance, the zero right-hand-side early out) from `pcgsolver.h` and `pressuresolver.cpp`
 - `gpu_flip_bodies` (`shaders/gpu_flip_bodies.wgsl`; its CPU references in `gpu_flip_body_tests.rs`) — the bodies' rows in the pressure solve and their captured impulse from `rigidpressurecoupling.h`, the pressure entries and the velocity change on the solid faces from `rigidboundaryvelocity.cpp`, the order of solve, impulse, velocity change and constraint from `rigidfluidcoupling.cpp`; the dynamic bodies' predicted velocity in `gpu_flip_step.wgsl` from `rigidfluidcoupling.cpp`
-- `liquid_fill` — seeding only where the solid distance is positive, from `fluidsimulation.cpp`
+- `liquid_fill` (`shaders/liquid_fill_body.wgsl`) — the half-cell seeding lattice, and seeding only where the solid distance is positive, from `fluidsimulation.cpp`
+- `shaders/matter_frame.wgsl` — the marker radius from rest volume, from `fluidsimulation.cpp` (`_initializeParticleRadii`)
+- `shaders/marching_cubes_common.wgsl` — the corner order, edge order and triangle table from `polygonizer3d.cpp` (Paul Bourke's tables)
+- `scripts/mgpcg_reference.py` (the f64 oracle for the pressure solve) — the segment and square inside-fractions from `levelsetutils.cpp`, the operator and stop from `pressuresolver.cpp` and `pcgsolver.h`
+
+Checked against the engine, no engine code in them (each file's header says so):
+
+- `gpu_flip_pressure_tests.rs` — the pressure solve's stop, against `pressuresolver.cpp` and `pcgsolver.h`
+- `gpu_flip_body_tests.rs` — the bodies' reaction, against `rigidfluidcoupling.cpp`
+- `whitewater_field_tests.rs` — a field's rule, against `particlelevelset.cpp`
+- `liquid_surface_tests.rs` — the marching-cubes tables, against `polygonizer3d.cpp`
+- `gpu_flip_preset.rs`, `gpu_flip_race_tests.rs`, `gpu_flip_render_smoke_tests.rs`, `fluid/race_probe.rs` — the engine's Dam Break scene and its race numbers
+- `liquid/conformance.rs`, `tests/gpu_proofs/liquid_conformance.rs` — the engine's coupled tank (its gravity tests)
+- `manifold-fluids/src/whitewater_oracle.rs` — runs the engine's whitewater emitter and curvature as test oracles
 
 The GPU structure (the step's passes, the multigrid preconditioner) is MANIFOLD's own; the ported parts are the rules above.
 
