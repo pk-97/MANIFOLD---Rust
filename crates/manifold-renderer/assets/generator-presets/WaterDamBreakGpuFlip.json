@@ -455,7 +455,7 @@
             "params": {
               "b": {
                 "type": "Float",
-                "value": 1.4
+                "value": 1.0
               },
               "op": {
                 "type": "Enum",
@@ -485,7 +485,7 @@
               },
               "particle_scale": {
                 "type": "Float",
-                "value": 3.0
+                "value": 2.2
               },
               "smoothing": {
                 "type": "Float",
@@ -1308,7 +1308,7 @@
       "params": {
         "bin_cells": {
           "type": "Float",
-          "value": 1.4
+          "value": 1.0
         },
         "mesh_relaxation": {
           "type": "Float",
@@ -1316,7 +1316,7 @@
         },
         "particle_scale": {
           "type": "Float",
-          "value": 3.0
+          "value": 2.2
         },
         "smoothing_passes": {
           "type": "Float",
@@ -2364,7 +2364,7 @@
         "convert": {
           "type": "Float"
         },
-        "defaultValue": 3.0,
+        "defaultValue": 2.2,
         "id": "surface_particle_scale",
         "label": "Surface Particle Scale",
         "target": {
@@ -2511,7 +2511,7 @@
         "wholeNumbers": true
       },
       {
-        "defaultValue": 3.0,
+        "defaultValue": 2.2,
         "formatString": "F3",
         "id": "surface_particle_scale",
         "isToggle": false,

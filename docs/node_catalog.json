@@ -138319,7 +138319,7 @@
           "name": "Environment"
         },
         {
-          "default": "3",
+          "default": "2.2",
           "id": "surface_particle_scale",
           "max": "4",
           "min": "1",
