@@ -467,6 +467,8 @@ pub struct LiquidFields {
     /// Transport times the history replay must sample before the next frame,
     /// with their ticks, ascending.
     requests: Vec<(f64, u64)>,
+    /// The clock's epoch drop total at the last frame.
+    dropped_seconds: f64,
     forces_dirty: bool,
     impulses_dirty: bool,
     clock: Option<FrameClock>,
@@ -499,6 +501,10 @@ impl LiquidFields {
         if frame.restarted {
             self.tick_fields.clear();
         }
+        // `dropped_seconds` counts the whole epoch; only this frame's drop
+        // moves owed ticks.
+        let dropped = frame.dropped_seconds > self.dropped_seconds;
+        self.dropped_seconds = frame.dropped_seconds;
         let Some(field) = field else {
             // No field wired: no tick reads forces.
             self.tick_fields.clear();
@@ -510,7 +516,6 @@ impl LiquidFields {
         // other start was or will be sampled by the history replay. A live drop
         // moves the owed tick's start into the past, where nothing sampled it,
         // so it reads this frame: a tick late, never a stale pre-drop value.
-        let dropped = frame.dropped_seconds > 0.0;
         let mut next = clock.ticks_done();
         while let Some(start) = clock.tick_start(next).filter(|&start| start <= clock.transport()) {
             if dropped || start == clock.transport() {

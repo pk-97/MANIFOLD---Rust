@@ -159,30 +159,34 @@ fn liquid_forces_per_tick_follow_simulation_speed() {
     }
 }
 
-/// A machine that cannot keep up: late, jittery frames and a stall. Live
-/// runs at most three ticks a frame, keeps one tick owed and drops the rest
-/// of the owed time, so the liquid falls behind the transport; ticks are
-/// never skipped or merged. Each tick still reads the field at the transport
-/// time its own start maps to, never at the frame that runs it.
+/// A machine that cannot keep up: late, jittery frames and a 30-tick stall.
+/// Live runs at most three ticks a frame, keeps one tick owed and skips the
+/// rest of the owed time; tick indices stay contiguous. A drop re-anchors the
+/// tick-to-transport map at the current frame, so the forces never lag the
+/// music: every tick reads the field at the transport time its own start maps
+/// to, less than two ticks before the previous frame, however long the stall.
 #[test]
 fn liquid_forces_per_tick_survive_late_frames() {
     let mut rig = Rig::new();
     let mut transport = 0.0;
     let mut ran = 0u64;
     let mut drops = 0;
+    let mut dropped_total = 0.0;
     let mut pinned = std::collections::HashMap::new();
     let intervals = [1.0, 2.6, 0.4, 1.9, 30.0, 1.0, 2.2, 0.7, 3.4, 1.0];
     rig.frame(0.0, TICK, 1.0, false, &modulated).unwrap();
     for step in 0..120 {
         let interval = TICK * intervals[step % intervals.len()];
+        let previous = transport;
         transport += interval;
         let starts: Vec<_> = (0..4)
             .map(|offset| pinned.get(&(ran + offset)).copied().or(rig.clock.tick_start(ran + offset)))
             .collect();
         let (frame, laid) = rig.frame(transport, interval, 1.0, false, &modulated).unwrap();
         assert_eq!(first_tick(&frame), ran, "frame {step}: no tick skipped or merged");
-        if frame.dropped_seconds > 0.0 {
+        if frame.dropped_seconds > dropped_total {
             // The owed tick now starts in the past; it reads this frame.
+            dropped_total = frame.dropped_seconds;
             drops += 1;
             let mut owed = rig.clock.ticks_done();
             while rig.clock.tick_start(owed).is_some_and(|start| start <= transport) {
@@ -193,6 +197,12 @@ fn liquid_forces_per_tick_survive_late_frames() {
         for (offset, lattice) in rig.tick_lattices(&frame, &laid).into_iter().enumerate() {
             let start = starts[offset].expect("a running clock maps every tick");
             assert!(start < transport, "frame {step}: tick {} starts before the frame that runs it", ran + offset as u64);
+            // At most the one owed tick plus the part of a tick not yet due.
+            assert!(
+                start > previous - 2.0 * TICK,
+                "frame {step}: tick {} reads {start}, two ticks behind the last frame at {previous}",
+                ran + offset as u64
+            );
             assert_eq!(lattice, expected(start), "frame {step}: tick {}", ran + offset as u64);
         }
         ran += u64::from(frame.ticks);
