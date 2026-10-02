@@ -1788,7 +1788,14 @@ fn gpu_flip_inflow_emits_at_empty_sites_into_free_slots() {
     // One particle on an inflow site, so the proof sees a taken site skipped.
     let held = site([2 * lo[0] + 1, 2 * lo[1], 2 * lo[2] + 1]);
     live.push(FluidParticle { position_radius: [held[0] as f32, held[1] as f32, held[2] as f32, 0.08], velocity: [0.0; 3], id: 999 });
-    let (sorted, ranges) = cpu_sort(&live);
+    let (sorted, mut ranges) = cpu_sort(&live);
+    // The sorter gives an empty cell the running start too (write_ranges), so
+    // the last cell's end is the live count even when that cell is empty.
+    let mut end = 0;
+    for r in &mut ranges {
+        r.start = end;
+        end += r.count;
+    }
     let taken = |j: [usize; 3]| {
         sorted.iter().any(|p| (0..3).all(|a| ((2.0 * (p.position_radius[a] - MIN[a]) / H).floor() as i64) == j[a] as i64))
     };
@@ -1848,7 +1855,8 @@ fn gpu_flip_inflow_emits_at_empty_sites_into_free_slots() {
     // Jitter factor 1, the region a full cell deep everywhere: each emitted
     // particle moves uniformly up to a quarter cell each way, keyed by site
     // and substep (_jitterMarkerParticlePosition).
-    let params = StepParams { emit_jitter: 0.25, tick_index: 3, step_in_tick: 1, ..params };
+    // first_tick 3 too: the one region row is the tick's.
+    let params = StepParams { emit_jitter: 0.25, tick_index: 3, first_tick: 3, step_in_tick: 1, ..params };
     let jittered: Vec<FluidParticle> = Pass::new()
         .bind(1, &ranges)
         .bind(15, &[shape])
