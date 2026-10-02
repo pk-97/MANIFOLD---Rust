@@ -4,7 +4,7 @@ use super::*;
 use crate::node_graph::ParamValues;
 use crate::node_graph::physics::{PhysicsHistoryDrainScope, offline_simulation};
 use crate::preset_context::ProjectTempo;
-use manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID;
+use manifold_core::liquid_domain::{FLIP_DOMAIN_TYPE_ID, GPU_FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN_TYPE_ID};
 use manifold_core::tempo::TempoMapConverter;
 
 #[cfg(test)]
@@ -15,7 +15,15 @@ mod input_tests;
 #[path = "physics_history_drain_tests.rs"]
 mod drain_tests;
 
+/// GPU liquids whose force field is evaluated at each tick's start.
+fn gpu_liquid(kind: &str) -> bool {
+    matches!(kind, GPU_FLIP_DOMAIN_TYPE_ID | MATTER_DOMAIN_TYPE_ID)
+}
+
 fn setup_input(kind: &str, port: &str) -> bool {
+    if gpu_liquid(kind) {
+        return port != "acceleration_field";
+    }
     match kind {
         "node.rigid_body" => matches!(port, "release_count" | "source"),
         FLIP_DOMAIN_TYPE_ID => port == "domain",
@@ -44,7 +52,8 @@ pub(super) fn retain_physics_setup_outputs(graph: &mut Graph) -> Result<(), Grap
             let kind = node.node.type_id().as_str();
             graph
                 .wires_into(node.id)
-                .filter(move |wire| setup_input(kind, wire.to.1))
+                // A GPU liquid's sample run reads only its force field.
+                .filter(move |wire| !gpu_liquid(kind) && setup_input(kind, wire.to.1))
                 .map(|wire| wire.from)
         })
         .collect();
@@ -61,6 +70,9 @@ pub(super) struct PhysicsInputSnapshot {
     values: Vec<Option<ParamValues>>,
     clock_steps: Vec<usize>,
     project_tempo: Option<ProjectTempo>,
+    /// Transport times GPU liquids asked to sample this interval: their
+    /// ticks' starts, so forces are evaluated per tick.
+    tick_times: Vec<f64>,
 }
 
 impl PhysicsInputSnapshot {
@@ -98,6 +110,7 @@ impl PhysicsInputSnapshot {
             values,
             clock_steps,
             project_tempo: None,
+            tick_times: Vec::new(),
         }
     }
 
@@ -145,17 +158,19 @@ pub(super) fn physics_sample_steps(
 ) -> Result<Option<Vec<bool>>, String> {
     use std::collections::HashSet;
 
-    let replays_history = |type_id: &str| matches!(type_id, "node.physics_world" | FLIP_DOMAIN_TYPE_ID);
-    // A coupled pair samples together or not at all. The matter domain records
-    // its controls once per display frame (GPU_MPM_SOLVER_DESIGN.md D28, bodies
-    // are per-tick rows) and owns its paired world, so neither replays history.
+    let replays_history = |type_id: &str| {
+        matches!(type_id, "node.physics_world" | FLIP_DOMAIN_TYPE_ID) || gpu_liquid(type_id)
+    };
+    // A GPU liquid replays its force field only: its bodies stay per-frame
+    // rows (GPU_MPM_SOLVER_DESIGN.md D28, bodies are per-tick rows) and it
+    // owns its paired world, so that world never replays history.
     let frame_held_rigids: HashSet<_> = graph
         .coupled_scenes()
         .iter()
         .filter(|pair| {
             graph
                 .get_node(pair.fluid)
-                .is_some_and(|fluid| !replays_history(fluid.node.type_id().as_str()))
+                .is_some_and(|fluid| gpu_liquid(fluid.node.type_id().as_str()))
         })
         .map(|pair| pair.rigid)
         .collect();
@@ -207,6 +222,10 @@ pub(super) fn physics_sample_steps(
                 | "node.math"
                 | "node.affine_scalar"
         ) || node.node.is_pure();
+        // A GPU liquid's sample run only records its field; it never encodes.
+        if gpu_liquid(type_id) {
+            continue;
+        }
         let requires = node.node.requires();
         if !stateless_cpu || requires.gpu_encoder || requires.state_store {
             return Err(format!(
@@ -270,9 +289,8 @@ impl PresetRuntime {
         // A producer callback must never inherit offline history draining.
         let _scope = crate::node_graph::physics::PhysicsStepScope::for_render(false);
         self.sample_physics_history(source);
-        // No ancestry means no solver here replays held-input history: a
-        // frame-held one (the matter domain and its paired world) records its
-        // controls once per display frame, so there is no interval to close.
+        // No ancestry means no solver here replays held-input history, so
+        // there is no interval to close.
         let (Some(inputs), Some(steps)) = (
             self.physics_input_snapshot.as_mut(),
             self.physics_sample_steps.as_ref(),
@@ -377,6 +395,16 @@ impl PresetRuntime {
                 })
                 .peekable()
         });
+        // GPU liquids sample exactly at their ticks' starts: each tick's force
+        // comes from its own simulated time, whatever the display rate.
+        inputs.tick_times.clear();
+        for instance in self.graph.nodes_mut() {
+            instance
+                .node
+                .request_physics_samples(previous.seconds.0, current.seconds.0, &mut inputs.tick_times);
+        }
+        inputs.tick_times.sort_by(f64::total_cmp);
+        let mut tick_index = 0;
         let mut grid = (previous.seconds.0 * SAMPLE_RATE).floor() + 1.0;
         let mut last_time = previous.seconds.0;
         loop {
@@ -384,8 +412,9 @@ impl PresetRuntime {
                 .as_mut()
                 .and_then(|values| values.peek().copied())
                 .unwrap_or(f64::INFINITY);
+            let tick_time = inputs.tick_times.get(tick_index).copied().unwrap_or(f64::INFINITY);
             let grid_time = grid / SAMPLE_RATE;
-            let time = grid_time.min(boundary);
+            let time = grid_time.min(boundary).min(tick_time);
             if time >= current.seconds.0 {
                 break;
             }
@@ -394,6 +423,9 @@ impl PresetRuntime {
             }
             if time == boundary {
                 boundaries.as_mut().expect("finite boundary").next();
+            }
+            while inputs.tick_times.get(tick_index) == Some(&time) {
+                tick_index += 1;
             }
             if time <= last_time {
                 continue;
@@ -550,14 +582,19 @@ mod tests {
     }
 
     #[test]
-    fn matter_coupled_world_records_per_frame_without_history_sampling() {
+    fn matter_liquid_samples_its_field_and_its_world_stays_per_frame() {
         let runtime = PresetRuntime::from_json_str(
             include_str!("../../assets/generator-presets/WaterFloatingBoxMatter.json"),
             &PrimitiveRegistry::with_builtin(),
         )
         .expect("WaterFloatingBoxMatter loads");
-        assert!(!runtime.plan.coupled_scenes().is_empty(), "the box and the liquid are one coupled scene");
-        assert!(runtime.physics_sample_steps.is_none());
+        let pairs = runtime.plan.coupled_scenes();
+        assert!(!pairs.is_empty(), "the box and the liquid are one coupled scene");
+        let mask = runtime.physics_sample_steps.as_ref().expect("the liquid samples its field per tick");
+        for pair in pairs {
+            assert!(mask[pair.fluid_step], "the liquid samples");
+            assert!(!mask[pair.rigid_step], "its owned world stays per-frame (D28)");
+        }
     }
 
     #[test]

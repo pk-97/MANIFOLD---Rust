@@ -511,8 +511,11 @@ impl Primitive for MatterDomain {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        // A physics sample reads authored inputs only; it never advances time.
+        // A physics sample reads the force field at a tick's start; it never
+        // advances time.
         if crate::node_graph::physics::authored_sample_only() {
+            let field = ctx.inputs.vector_field("acceleration_field");
+            self.fields.observe_sample(ctx.time.seconds.0, field.as_ref());
             return;
         }
         let mut roles: [Option<FluidRole>; MAX_FLUID_ROLES] = std::array::from_fn(|_| None);
@@ -585,6 +588,10 @@ impl Primitive for MatterDomain {
     fn clear_state(&mut self) {
         self.coupled.reset();
         self.clock.restart();
+    }
+
+    fn request_physics_samples(&mut self, from: f64, until: f64, out: &mut Vec<f64>) {
+        self.fields.request_samples(&self.clock, from, until, out);
     }
 
     fn set_coupled_physics(&mut self, enabled: bool) {
@@ -829,7 +836,7 @@ impl MatterDomain {
         self.coupled.transport = Some(ctx.time.seconds.0);
         let field = self
             .fields
-            .prepare(FieldLattice::of(&lattice), self.acceleration.as_ref(), &frame, &self.impulses)?;
+            .prepare(FieldLattice::of(&lattice), self.acceleration.as_ref(), &self.clock, &frame, &self.impulses)?;
 
         let per_frame = [
             ("gravity_x", ctx.scalar_or_param("gravity_x", 0.0)),

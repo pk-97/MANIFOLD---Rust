@@ -5,6 +5,9 @@ Single source for scripts/gpu_proofs_gate.py (default mode, dev and landing),
 scripts/landing_gate.py and scripts/codex_checks.py. Rules:
 
 - Every touched GPU path maps to test filters, plus the fixed SMOKE set.
+- A path maps to the proofs of the thing it changes: NARROW_ROWS (clock, fields,
+  domain nodes) beat the broad solver rows, and timing reporters (REPORTER_SKIPS)
+  run only when their own file is touched or nightly.
 - A GPU path with no mapping is a hard failure naming the path; the author adds
   a rule here. There is no run-everything fallback. Everything runs only with
   `gpu_proofs_gate.py --all` (nightly trunk_health.py).
@@ -84,6 +87,58 @@ def slow_tests(times=None):
 # A shader included by more primitives than this is "shared WGSL" -> BROAD.
 SHARED_WGSL_USERS = 12
 
+# Reporters print timings and assert nothing about behaviour, so they prove no
+# change; they run when their own file is touched (the skip drops out then, see
+# Plan.final_skips) and nightly under --all. Filters name the test fn.
+REPORTER_SKIPS = [
+    "matter_cost_probe",
+    "matter_solver_perf",
+    "gpu_flip_frame_perf",
+    "gpu_flip_cost_probe",
+    "gpu_flip_speed_measure",
+]
+
+# Liquid paths whose change is narrower than the whole solver: the tick clock,
+# the scene force fields and the domain nodes feed forces and pacing, not the
+# body, step or pressure kernels. They get the force/clock proofs only, never
+# the body engine side-by-side or the sparse-vs-dense solver proofs. Body, step
+# and pressure paths stay on the broad `gpu_flip_` row below.
+# Filters, not skips: a skip is global and would hide body proofs that another
+# touched path selected.
+LIQUID_FORCE_FILTERS = [
+    "liquid_conformance::liquid_coupled_world_steps",
+    "liquid_conformance::liquid_free_flight",
+    "liquid_conformance::liquid_pause_",
+    "liquid_conformance::liquid_export_",
+    "liquid_conformance::liquid_nonfinite",
+    "liquid_conformance::liquid_overflow",
+    "liquid_conformance::liquid_live_frames",
+    "liquid_conformance::liquid_half_speed",
+    "liquid_conformance::liquid_reset",
+    "gpu_flip_face_gravity",
+]
+LIQUID_DOMAIN_FILTERS = LIQUID_FORCE_FILTERS + [
+    "gpu_flip_domain_",
+    "gpu_flip_preset::",
+    "gpu_flip_resolution_card",
+    "gpu_flip_still_pool",
+    "gpu_flip_free_fall",
+]
+MATTER_DOMAIN_FILTERS = ["matter_scene::", "matter_coupling::", "matter_look::",
+                         "matter_transfer::", "substeps_"]
+
+# Narrow rows win over EXPLICIT_ROWS: a path matching one gets only that row.
+NARROW_ROWS = [
+    ((RENDERER_SRC + "node_graph/liquid/clock.rs",
+      RENDERER_SRC + "node_graph/liquid/fields.rs",
+      RENDERER_SRC + "node_graph/liquid/fields/"),
+     (LIQUID_FORCE_FILTERS, REPORTER_SKIPS)),
+    ((RENDERER_SRC + "node_graph/primitives/gpu_flip_domain.rs",),
+     (LIQUID_DOMAIN_FILTERS, REPORTER_SKIPS)),
+    ((RENDERER_SRC + "node_graph/primitives/matter_domain.rs",),
+     (MATTER_DOMAIN_FILTERS, REPORTER_SKIPS)),
+]
+
 # Explicit rows: (path substrings, (filters, skips)). `rt_` skips particletext:
 # the freeze proof `particletext_*` hangs the GPU on main (BUG-i6eo).
 EXPLICIT_ROWS = [
@@ -106,7 +161,7 @@ EXPLICIT_ROWS = [
       RENDERER_SRC + "node_graph/primitives/shaders/zero_array",
       PROOFS_DIR + "matter_",
       PROOFS_DIR + "substeps"),
-     (["matter_", "substeps_"], [])),
+     (["matter_", "substeps_"], REPORTER_SKIPS)),
     # GPU FLIP water (GPU_FLIP_PRESSURE_SOLVE.md): the step's proofs are scene
     # proofs in other files (still pool, free fall, whitewater, resize), so a
     # module filter alone would miss them.
@@ -118,7 +173,7 @@ EXPLICIT_ROWS = [
       RENDERER_SRC + "node_graph/primitives/shaders/gpu_flip_",
       RENDERER_SRC + "node_graph/primitives/shaders/liquid_fill",
       RENDERER_SRC + "node_graph/primitives/shaders/face_sample_component"),
-     (["gpu_flip_", "face_grid_tests::"], [])),
+     (["gpu_flip_", "face_grid_tests::"], REPORTER_SKIPS)),
     # Graph runtime.
     ((RENDERER_SRC + "node_graph/execution",
       RENDERER_SRC + "node_graph/resource_allocation",
@@ -308,7 +363,9 @@ def plan_for_paths(paths, repo, shader_users=None):
         plan.paths.append(path)
         if is_gltf_path(path):
             plan.glb = True
-        for patterns, (filters, skips) in EXPLICIT_ROWS:
+        narrow = next((row for pats, row in NARROW_ROWS
+                       if any(pat in path for pat in pats)), None)
+        for patterns, (filters, skips) in ([(("",), narrow)] if narrow else EXPLICIT_ROWS):
             if any(pat in path for pat in patterns):
                 plan.filters.update(filters)
                 plan.skips.update(skips)

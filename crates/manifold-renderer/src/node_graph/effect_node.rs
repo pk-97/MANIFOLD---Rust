@@ -1261,6 +1261,11 @@ pub trait EffectNode: Send {
     /// Hosts install an immutable snapshot; native I/O stays on the worker.
     fn set_physics_project_tempo(&mut self, _tempo: Option<&crate::preset_context::ProjectTempo>) {}
 
+    /// Transport times in `(from, until]` the physics history replay must
+    /// sample exactly before the next frame: a GPU liquid asks for each
+    /// coming tick's start, so its forces are evaluated per tick.
+    fn request_physics_samples(&mut self, _from: f64, _until: f64, _out: &mut Vec<f64>) {}
+
     /// Authored dependency identity, prepared before evaluating live controls.
     fn set_physics_source_identity(&mut self, _identity: Result<[u8; 32], String>) {}
 
