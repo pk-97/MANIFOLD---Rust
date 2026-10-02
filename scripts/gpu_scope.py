@@ -158,6 +158,14 @@ DOC_SUFFIXES = (".md", ".txt")
 PRESET_RUNTIME_DIR = RENDERER_SRC + "preset_runtime/"
 LIB_PROOF_ROWS = {
     RENDERER_SRC + "layer_skin.rs": ["layer_skin::", "preset_runtime::layer_skin_tests::"],
+    # The whitewater step's proofs (across frames, the pool passes, the
+    # handoff) live in sibling `_tests` modules the path filter alone misses.
+    RENDERER_SRC + "node_graph/primitives/whitewater_step.rs": [
+        "node_graph::primitives::whitewater_step::",
+        "node_graph::primitives::whitewater_step_tests::",
+        "node_graph::primitives::whitewater_pool_tests::",
+        "node_graph::primitives::whitewater_handoff_tests::",
+    ],
 }
 
 PATH_ATTR_MOD = re.compile(r'#\[path\s*=\s*"tests/([\w.]+)"\]\s*mod\s+(\w+)\s*;')
