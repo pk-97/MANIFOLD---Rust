@@ -27,7 +27,7 @@ import subprocess
 import sys
 
 TRAILER = re.compile(r"^\s*Closes:\s*(.+?)\s*$", re.MULTILINE | re.IGNORECASE)
-BEAD = re.compile(r"^(BUG|TASK)-[0-9a-z]+$", re.IGNORECASE)
+BEAD = re.compile(r"^(BUG|TASK)-[0-9a-z]+(\.[0-9]+)*$", re.IGNORECASE)
 
 
 def current_branch() -> str:
