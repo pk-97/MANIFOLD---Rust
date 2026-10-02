@@ -63,7 +63,8 @@ fn fixture() -> (FluidSettings, FluidControls, RigidSceneInputs) {
             pos: position,
             ..Transform::default()
         },
-        mass: 90.0,
+        // 90 kg in the 0.5 × 0.4 × 0.45 m box.
+        density: 1000.0,
         bounce: 0.0,
         collider: Some(Arc::new(ColliderGeometry { hulls: vec![hull] })),
         ..RigidBody::default()

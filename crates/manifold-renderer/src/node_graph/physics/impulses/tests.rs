@@ -410,7 +410,7 @@ fn rigid_impulses_high_velocity_applies_once_across_microsteps() {
     for body in bodies.iter_mut().flatten() {
         body.transform.scale = [0.02; 3];
     }
-    bodies[1].as_mut().unwrap().mass = 10.0;
+    bodies[1].as_mut().unwrap().density *= 10.0;
     let mut simulation = RigidSimulation::default();
     initialize(&mut simulation, &bodies);
     let epoch = simulation.impulse_epoch().unwrap();

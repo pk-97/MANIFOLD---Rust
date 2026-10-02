@@ -715,12 +715,28 @@ fn solid_face_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
     let first = max(u.rows - u.body_count, 0);
     var code = 0.0;
     for (var a = 0; a < 3; a = a + 1) {
-        if !face_exists(p, n, a) || p[a] == 0 || p[a] == n[a] || !(open.face_weight[a] < 1.0) {
+        if !face_exists(p, n, a) || p[a] == 0 || p[a] == n[a] {
+            continue;
+        }
+        // An open face beside a cut cell carries a dynamic body too: its
+        // (c − w) is not zero, so it is in the divergence and the body's
+        // pressure force (the engine extrapolates its rigid boundary map one
+        // layer out, RigidBoundaryVelocityMap::extrapolate). That map holds
+        // only coupled rigid bodies; an animated or fixed solid keeps its cut
+        // faces alone, or it drags the water beside it.
+        var lo = p;
+        lo[a] = p[a] - 1;
+        let cut_beside = solid_faces[flatten(lo, m)].face_weight.w < 1.0 || open.face_weight.w < 1.0;
+        let extended = !(open.face_weight[a] < 1.0);
+        if extended && !cut_beside {
             continue;
         }
         var centre = fma(vec3<f32>(p) + vec3<f32>(0.5), vec3<f32>(h), lattice_min);
         centre[a] = fma(f32(p[a]), h, lattice_min[a]);
         let row = closest_body(centre);
+        if extended && (row < 0 || !(bodies[u32(row)].position_inv_mass.w > 0.0)) {
+            continue;
+        }
         if row >= 0 {
             let bd = bodies[u32(row)];
             let body = row - first;

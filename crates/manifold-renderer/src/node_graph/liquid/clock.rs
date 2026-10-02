@@ -23,8 +23,8 @@ pub struct ClockFrame {
     /// This frame starts a new simulation (first frame, reset, setup change or
     /// backward seek); the state reseeds before any tick runs.
     pub restarted: bool,
-    /// Transport paused or Simulation Speed 0: simulated time did not move.
-    /// Impulses fired now are discarded, so resume never bursts.
+    /// Transport paused or Simulation Speed 0 now. Impulses fired now are
+    /// discarded, so resume never bursts.
     pub held: bool,
     /// Simulated seconds at the end of this frame's ticks.
     pub simulation_time: f64,
@@ -57,9 +57,48 @@ pub struct LiquidClock {
     ticks_done: u64,
     dropped_seconds: f64,
     tick_cap: Option<u32>,
+    /// Speed over the interval after the last frame. Like every replayed
+    /// control, a Speed edit takes effect from the frame that observes it.
+    speed: f64,
+    /// Transport and target where the current speed began (a start, a speed
+    /// edit or a drop). Targets and tick starts are measured from here, so
+    /// they never accumulate rounding and agree at every frame rate.
+    anchor_transport: f64,
+    anchor_target: f64,
 }
 
 impl LiquidClock {
+    /// The transport time tick `tick` starts at, under the current speed.
+    /// None before the clock starts or while Speed is 0.
+    pub fn tick_start(&self, tick: u64) -> Option<f64> {
+        (self.started && self.speed > 0.0)
+            .then(|| self.anchor_transport + ((tick as f64) * TICK - self.anchor_target) / self.speed)
+    }
+
+    /// The transport of the last frame.
+    pub fn transport(&self) -> f64 {
+        self.last_transport
+    }
+
+    /// Ticks run since the epoch began: the next tick to run.
+    pub fn ticks_done(&self) -> u64 {
+        self.ticks_done
+    }
+
+    /// Every tick not yet run whose start lies in `(from, until]` of
+    /// transport time, ascending, with its transport time. A live drop moves
+    /// the anchor, so an owed tick maps to a later transport and is visited
+    /// again.
+    pub fn tick_starts(&self, from: f64, until: f64, mut visit: impl FnMut(f64, u64)) {
+        let mut tick = self.ticks_done;
+        while let Some(transport) = self.tick_start(tick).filter(|&transport| transport <= until) {
+            if transport > from {
+                visit(transport, tick);
+            }
+            tick += 1;
+        }
+    }
+
     /// Cap the ticks of the frames that follow, live and offline alike: at most
     /// `cap` run, one tick of debt is kept and the rest is dropped, reported.
     /// A coupled domain caps at 0 while its body reaction is pending and at 1
@@ -99,6 +138,7 @@ impl LiquidClock {
         // epoch the target never moves back past it, so a drop under a tick
         // cap can only give back this frame's advance.
         let mut floor = self.target_time;
+        let speed = f64::from(speed);
         if restarted {
             self.epoch = self.epoch.wrapping_add(1);
             self.started = true;
@@ -106,10 +146,19 @@ impl LiquidClock {
             self.ticks_done = 0;
             self.dropped_seconds = 0.0;
             floor = 0.0;
+            self.speed = speed;
+            self.anchor_transport = transport;
+            self.anchor_target = 0.0;
         } else {
-            let advance = (transport - self.last_transport).max(0.0) * f64::from(speed);
-            held = advance <= 0.0;
-            self.target_time += advance;
+            // The interval since the last frame ran at the last frame's speed.
+            held = transport <= self.last_transport || speed <= 0.0;
+            let reached = self.anchor_target + (transport - self.anchor_transport).max(0.0) * self.speed;
+            self.target_time = reached.max(self.target_time);
+            if speed != self.speed {
+                self.speed = speed;
+                self.anchor_transport = transport;
+                self.anchor_target = self.target_time;
+            }
         }
         self.last_transport = transport;
         let due = ((self.target_time / TICK + 1e-9).floor() as u64).saturating_sub(self.ticks_done);
@@ -128,6 +177,8 @@ impl LiquidClock {
                 let seconds = (dropped as f64 * TICK).min(self.target_time - floor).max(0.0);
                 self.target_time -= seconds;
                 self.dropped_seconds += seconds;
+                self.anchor_transport = transport;
+                self.anchor_target = self.target_time;
             }
             run
         };
@@ -201,14 +252,16 @@ mod tests {
         assert_eq!(held.simulation_time, a.simulation_time);
         // Speed 0 holds while transport runs.
         assert!(clock.advance(2.0 * TICK, TICK, 0.0, 0.0, false, false).held);
-        // Speed 0.5 runs a tick every other frame and never holds.
-        let frames: Vec<_> = (3..7)
+        // Speed 0.5 runs a tick every other frame and never holds. A speed
+        // edit applies from the interval after the frame that sees it, so the
+        // first of these frames still advances at speed 0.
+        let frames: Vec<_> = (3..8)
             .map(|i| clock.advance(i as f64 * TICK, TICK, 0.5, 0.0, false, false))
             .collect();
         assert_eq!(frames.iter().map(|f| f.ticks).sum::<u32>(), 2);
         assert!(frames.iter().all(|f| !f.held));
         // A changed reset counter restarts in a new epoch.
-        let reset = clock.advance(7.0 * TICK, TICK, 1.0, 1.0, false, false);
+        let reset = clock.advance(8.0 * TICK, TICK, 1.0, 1.0, false, false);
         assert!(reset.restarted);
         assert!(!reset.held);
         assert_eq!(reset.epoch, 2);

@@ -424,6 +424,9 @@ pub trait Primitive: PrimitiveSpec {
 
     fn set_physics_project_tempo(&mut self, _tempo: Option<&crate::preset_context::ProjectTempo>) {}
 
+    /// See [`EffectNode::request_physics_samples`].
+    fn request_physics_samples(&mut self, _from: f64, _until: f64, _out: &mut Vec<f64>) {}
+
     fn set_physics_source_identity(&mut self, _identity: Result<[u8; 32], String>) {}
 
     fn source_asset_paths(&self) -> &'static [&'static str] {
@@ -890,6 +893,9 @@ impl<P: Primitive + 'static> EffectNode for P {
 
     fn set_physics_project_tempo(&mut self, tempo: Option<&crate::preset_context::ProjectTempo>) {
         Primitive::set_physics_project_tempo(self, tempo);
+    }
+    fn request_physics_samples(&mut self, from: f64, until: f64, out: &mut Vec<f64>) {
+        Primitive::request_physics_samples(self, from, until, out);
     }
     fn set_physics_source_identity(&mut self, identity: Result<[u8; 32], String>) {
         Primitive::set_physics_source_identity(self, identity);

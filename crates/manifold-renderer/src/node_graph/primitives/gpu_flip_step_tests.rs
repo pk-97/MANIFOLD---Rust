@@ -1387,12 +1387,24 @@ fn cpu_solid_face_velocity(open: &[f64], solids: &Solids, reaction: &[f32]) -> (
     for i in 0..m.iter().product::<usize>() {
         let p = [i % m[0], (i / m[0]) % m[1], i / (m[0] * m[1])];
         for a in 0..3 {
-            if !(0..3).all(|b| b == a || p[b] < n[b]) || p[a] == 0 || p[a] == n[a] || open[i * FACE_FLOATS + 4 + a] >= 1.0 {
+            if !(0..3).all(|b| b == a || p[b] < n[b]) || p[a] == 0 || p[a] == n[a] {
+                continue;
+            }
+            // An open face beside a cut cell carries a dynamic body too.
+            let mut lo = p;
+            lo[a] -= 1;
+            let lo_index = lo[0] + m[0] * (lo[1] + m[1] * lo[2]);
+            let cut_beside = open[lo_index * FACE_FLOATS + 7] < 1.0 || open[i * FACE_FLOATS + 7] < 1.0;
+            let extended = open[i * FACE_FLOATS + 4 + a] >= 1.0;
+            if extended && !cut_beside {
                 continue;
             }
             let mut centre: [f64; 3] = std::array::from_fn(|b| min[b] + (p[b] as f64 + 0.5) * h);
             centre[a] = min[a] + p[a] as f64 * h;
             let (row, clear) = closest(solids, centre);
+            if extended && !row.is_some_and(|row| solids.bodies[row].position_inv_mass[3] > 0.0) {
+                continue;
+            }
             margin = margin.min(clear);
             if let Some(row) = row {
                 let (position, _) = body_pose_at(&solids.bodies[row], SOLID_TICK);

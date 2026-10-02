@@ -500,7 +500,10 @@ carry it to the tick-end pose. A restart publishes the first tick's rows with no
 run, so the fill sees the starting pose. Rows upload through the inline uniform path in
 encoder order. `node.matter_move_bodies` poses each body at the end of its substep,
 `t = (substep_in_tick + 1)·step_dt`, the slerp between the tick's end poses;
-`node.liquid_solid_distance` poses the last row at the frame's end.
+`node.liquid_solid_distance` poses the last row at the frame's end. Fields are not
+frame-held: the liquid's `acceleration_field` is sampled by the physics history replay
+at each tick's own start (LIQUID_SOLVER_SEAM_DESIGN.md section P8 (Forces and impulses
+for GPU liquids)); only the paired world's bodies stay per display frame.
 
 **D29 — Colliders are projected on the grid and pushed out on the points (amends
 section 4.1 steps 4 and 6).** The grid projection alone leaves points up to about a cell
@@ -1406,8 +1409,8 @@ at the end of the phase.
     momentum the points lost: 80 points, worst word 6.1 counts against an 81-count
     rounding bound.
   - Physics history sampling seeded the paired world without its matter domain and
-    panicked on any coupled matter preset. A world paired with a liquid that does not
-    replay history now records once per display frame with it (D28).
+    panicked on any coupled matter preset. The liquid now replays history for
+    its field per tick; its paired world records once per display frame (D28).
   - `examples/fluid_capture.rs` reads the presented frame's count, `count_b` or
     `count_a`. Demo: `/tmp/manifold_matter_p2b`, 64³, 262,144 points, 300 frames. The box
     settles half-submerged and tips onto an edge, the stable pose at density 0.5. GPU

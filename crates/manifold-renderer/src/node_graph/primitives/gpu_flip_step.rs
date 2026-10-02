@@ -1101,10 +1101,10 @@ impl StepState {
         };
         subtract(enc, &ghost, phi, &l.f, "gpu_flip.step.project");
         // The engine's finishPressure: the pressure's impulse goes to the
-        // bodies and their velocity change to the solid faces, then the
-        // constraint's friction is the bodies' too.
+        // bodies and their velocity change to the solid faces. The
+        // constraint's friction below acts on the water only.
         if step.dynamic {
-            self.bodies.react(enc, &coupled, self.solver.tiles()?, &l.pressure, &l.f, step.reaction)?;
+            self.bodies.react(enc, &coupled, self.solver.tiles()?, &l.pressure, step.reaction)?;
         }
         // The engine constrains its velocity and its saved velocity to the
         // solids after the pressure solve, so FLIP's change is measured
