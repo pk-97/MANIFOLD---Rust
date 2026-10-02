@@ -14,15 +14,15 @@ pub use pulses::{TriggerPulse, TriggerPulseBuffer, TriggerPulseKind, TriggerPuls
 
 use composition::{
     AudioControlState, ControlSample, ControlSources, apply_envelope_offset,
-    compose_controls, driver_target_value,
+    compose_controls, compose_param, driver_target_value,
 };
 
 use manifold_core::audio_features::{
     AudioFeatureSnapshot, AudioHopStamp, SendFeatures,
 };
 use manifold_core::audio_mod::{
-    AudioFeatureKind, AudioModContribution, AudioModObservation, TriggerAction, WrapMode,
-    random_step_value,
+    AudioFeatureKind, AudioModContribution, AudioModObservation, HopClock, HopValue,
+    ParameterAudioMod, TriggerAction, WrapMode, random_step_value,
 };
 use manifold_core::audio_trigger::{FireMeterCapture, TriggerFireMode, fire_meter_key_for_param};
 use manifold_core::{Beats, Seconds};
@@ -482,10 +482,101 @@ fn compose_retained_controls(
         }
         if let Some(gp) = layer.gen_params_mut() {
             let sample = ControlSample { active_elapsed: Some(elapsed), ..sample };
+            record_hop_values(gp, sample);
             any |= compose_instance_retained_controls(gp, sample, fire_meters);
         }
     }
     any
+}
+
+/// Live hop clock re-anchors when a hop would map past the evaluation time or
+/// further behind it than this. Settled, hop times stop depending on fps.
+const HOP_CLOCK_MAX_LAG: f64 = 0.1;
+
+/// Record each audio-modulated parameter's effective value at every hop of
+/// this update, for simulations that tick between frames (BUG-2jx6 (host-fed
+/// modulation sampled per liquid tick)). Reads the hops the update already
+/// advanced; nothing is re-evaluated. Runs before the frame composition, so
+/// `prepared` is the value composition starts from.
+fn record_hop_values(instance: &mut PresetInstance, sample: ControlSample) {
+    let Some(mods) = instance.audio_mods.as_mut() else {
+        return;
+    };
+    for index in 0..mods.len() {
+        let mut timeline = std::mem::take(&mut mods[index].hop_timeline);
+        timeline.values.clear();
+        let m = &mods[index];
+        if let Some(param) = instance.params.get(m.param_id.as_ref())
+            && m.enabled
+            && instance.enabled
+        {
+            timeline.prepared = param.value;
+            let sources = ControlSources {
+                enabled: instance.enabled,
+                drivers: instance.drivers.as_deref().unwrap_or_default(),
+                envelopes: instance.envelopes.as_deref().unwrap_or_default(),
+                audio_mods: mods,
+            };
+            if let Some(last) = m.audio_observations.hops().last() {
+                settle_hop_clock(&mut timeline.clock, last, sample.time);
+            }
+            for observation in m.audio_observations.hops() {
+                let Some(time) = hop_time(timeline.clock, observation) else {
+                    continue;
+                };
+                let hop_state = match observation.contribution {
+                    AudioModContribution::Continuous(v) => {
+                        AudioControlState { held_output: Some(v), ..AudioControlState::current(m) }
+                    }
+                    AudioModContribution::Stepped(v) => {
+                        AudioControlState { step_value: v, ..AudioControlState::current(m) }
+                    }
+                    AudioModContribution::TriggerCounter { count, .. } => {
+                        AudioControlState { fire_count: count, ..AudioControlState::current(m) }
+                    }
+                };
+                let state = |i: usize, other: &ParameterAudioMod| {
+                    if i == index { hop_state } else { AudioControlState::current(other) }
+                };
+                let value = compose_param(param, timeline.prepared, &sources, sample, &state)
+                    .unwrap_or(timeline.prepared);
+                timeline.values.push(HopValue { time, value });
+            }
+        }
+        mods[index].hop_timeline = timeline;
+    }
+}
+
+/// Transport time of a hop: the export's stamped time, else the live sample
+/// clock anchored to the evaluation time.
+fn hop_time(clock: Option<HopClock>, observation: &AudioModObservation) -> Option<Seconds> {
+    if let Some(time) = observation.stamp.timeline_time {
+        return Some(time);
+    }
+    let stamp = observation.stamp;
+    clock
+        .filter(|c| c.epoch == stamp.epoch && c.sample_rate == stamp.sample_rate)
+        .map(|c| Seconds(c.time_of(stamp.end_sample)))
+}
+
+/// Re-anchor the live clock, judged once per update on its latest hop, so the
+/// hops within one update keep their audio spacing.
+fn settle_hop_clock(clock: &mut Option<HopClock>, last: &AudioModObservation, eval: Seconds) {
+    let stamp = last.stamp;
+    if stamp.timeline_time.is_some() || stamp.sample_rate == 0 {
+        return;
+    }
+    let eval = last.evaluation_time.unwrap_or(eval).0;
+    let stale = clock.is_none_or(|c| {
+        let mapped = c.time_of(stamp.end_sample);
+        c.epoch != stamp.epoch
+            || c.sample_rate != stamp.sample_rate
+            || mapped > eval
+            || mapped < eval - HOP_CLOCK_MAX_LAG
+    });
+    if stale {
+        *clock = Some(HopClock::anchored(stamp.epoch, stamp.sample_rate, stamp.end_sample, eval));
+    }
 }
 
 fn compose_instance_retained_controls(
@@ -1083,6 +1174,7 @@ fn clear_audio_observations(project: &mut Project) {
     fn clear(fx: &mut PresetInstance) {
         for m in fx.audio_mods.iter_mut().flatten() {
             m.audio_observations.begin(0);
+            m.hop_timeline.values.clear();
         }
     }
     for fx in &mut project.settings.master_effects { clear(fx); }
@@ -2181,6 +2273,63 @@ mod tests {
         project.timeline.layers[0].effects.as_mut().unwrap()[0]
             .audio_mods_mut()
             .push(m);
+    }
+
+    /// Per-hop values recorded in one update equal the values a frame ending
+    /// at each hop would compose, for a smoothed (attack/release) mod.
+    #[test]
+    fn attack_release_hop_values_match_frame_values() {
+        const HOP: u64 = 480;
+        let levels = [0.0, 1.0, 1.0, 0.2, 0.0, 0.9, 0.0, 0.0, 0.5, 0.0, 0.0, 0.0];
+        let snapshot_of = |range: std::ops::Range<usize>| {
+            let mut snapshot = empty_hop_snapshot(1);
+            for index in range {
+                let mut hop = snapshot_low_hop(levels[index], 1, (index as u64 + 1) * HOP)
+                    .hop_batches[0].hops()[0];
+                hop.stamp.timeline_time = Some(Seconds((index as f64 + 1.0) * 0.01));
+                hop.dt = Seconds(0.01);
+                snapshot.hop_batches[0].push(hop).unwrap();
+            }
+            snapshot
+        };
+        let project = || {
+            let (mut project, send_id) = project_with_audio_send();
+            let mut layer = generator_layer();
+            let mut m = ParameterAudioMod::new(
+                "speed".into(), send_id,
+                AudioFeature::new(AudioFeatureKind::Amplitude, AudioBand::Low),
+            );
+            m.shape.attack_ms = 30.0;
+            m.shape.release_ms = 90.0;
+            layer.gen_params_mut().unwrap().audio_mods_mut().push(m);
+            project.timeline.layers = vec![layer];
+            project
+        };
+        let speed = |project: &Project| {
+            project.timeline.layers[0].gen_params().unwrap().params.get("speed").unwrap().value
+        };
+        let timeline = |project: &Project| {
+            project.timeline.layers[0].gen_params().unwrap().audio_mods.as_ref().unwrap()[0]
+                .hop_timeline.values.clone()
+        };
+
+        let mut per_frame = project();
+        let mut frame_values = Vec::new();
+        for index in 0..levels.len() {
+            retained_tick(&mut per_frame, &snapshot_of(index..index + 1), Seconds(0.01), &[]);
+            frame_values.push(HopValue { time: Seconds((index as f64 + 1.0) * 0.01), value: speed(&per_frame) });
+            assert_eq!(timeline(&per_frame), [frame_values[index]]);
+        }
+        assert!(frame_values.windows(2).any(|w| w[0].value != w[1].value), "the shaper must move");
+
+        let mut per_hop = project();
+        let mut hop_values = Vec::new();
+        for chunk in [0..5, 5..12] {
+            retained_tick(&mut per_hop, &snapshot_of(chunk), Seconds(0.05), &[]);
+            hop_values.extend(timeline(&per_hop));
+            assert_eq!(hop_values.last().unwrap().value, speed(&per_hop));
+        }
+        assert_eq!(hop_values, frame_values);
     }
 
     #[test]

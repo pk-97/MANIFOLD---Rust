@@ -738,6 +738,7 @@ fn pitch_presence_mods_survive_roundtrip_and_drive() {
         audio_held_output: None,
         audio_held_meter: 0.0,
         audio_observations: Default::default(),
+        hop_timeline: Default::default(),
         trigger_edge: Default::default(),
         fire_count: 0,
         trigger_mode: None,
