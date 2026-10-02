@@ -2775,6 +2775,12 @@
       "toPort": "epoch"
     },
     {
+      "fromNode": 0,
+      "fromPort": "particle_capacity",
+      "toNode": 4,
+      "toPort": "particle_capacity"
+    },
+    {
       "fromNode": 4,
       "fromPort": "particles",
       "toNode": 5,
@@ -2977,6 +2983,18 @@
       "fromPort": "reaction",
       "toNode": 6,
       "toPort": "reaction"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "regions",
+      "toNode": 6,
+      "toPort": "regions"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "region_count",
+      "toNode": 6,
+      "toPort": "region_count"
     },
     {
       "fromNode": 6,

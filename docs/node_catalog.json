@@ -14112,8 +14112,21 @@
           "type": "f32"
         },
         {
+          "name": "particle_capacity",
+          "type": "f32"
+        },
+        {
+          "name": "region_count",
+          "type": "f32"
+        },
+        {
           "capacity": "fixed:1",
           "name": "bodies",
+          "type": "Array"
+        },
+        {
+          "capacity": "fixed:1",
+          "name": "regions",
           "type": "Array"
         },
         {
@@ -14258,9 +14271,15 @@
           "label": "Closed +Z",
           "name": "closed_pos_z",
           "type": "bool"
+        },
+        {
+          "default": "0",
+          "label": "Particle Capacity",
+          "name": "particle_capacity",
+          "type": "int"
         }
       ],
-      "purpose": "Define a GPU FLIP liquid domain with node.fluid_surface's scene contract: the axis-aligned domain box, resolution, initial fill height and box, gravity, the scene's acceleration field and impulses, simulation speed and reset. Outputs this frame's fixed 60 Hz ticks, the epoch and the display clock, the fill's half-cell sites and particle mass, gravity, the scene's forces and impulses on coarse field lattices over the box, and the padded lattice with its Closed Faces mask (bit 2d the low face of axis d, bit 2d + 1 the high one) for the step, the solid distance and the particle frame. Each face of the tank is closed unless its Closed param is off; an open face drains the water that reaches it. A hit fired while the liquid is held (paused, Speed 0) is discarded, never replayed. Up to 64 Collider roles become one body row per collider per tick of this frame (its pose at the tick's start and its motion over the tick), a shape per collider and their distance lattices packed in one half-precision atlas; the water flows around them. Paired with a physics world, its bodies join the water two ways: the domain steps the world one settled 1/60 s tick at a time, its bodies' rows follow the collider rows, dynamic_bodies counts the ones the water pushes, and the reaction the steps add up reaches each body as one impulse per tick. Live, the pair runs at most one tick per frame and holds while that tick's reaction is still on the GPU. Fill, Inflow and Outflow roles are refused by name.",
+      "purpose": "Define a GPU FLIP liquid domain with node.fluid_surface's scene contract: the axis-aligned domain box, resolution, initial fill height and box, gravity, the scene's acceleration field and impulses, simulation speed and reset. Outputs this frame's fixed 60 Hz ticks, the epoch and the display clock, the fill's half-cell sites and particle mass, gravity, the scene's forces and impulses on coarse field lattices over the box, and the padded lattice with its Closed Faces mask (bit 2d the low face of axis d, bit 2d + 1 the high one) for the step, the solid distance and the particle frame. Each face of the tank is closed unless its Closed param is off; an open face drains the water that reaches it. A hit fired while the liquid is held (paused, Speed 0) is discarded, never replayed. Up to 64 Collider roles become one body row per collider per tick of this frame (its pose at the tick's start and its motion over the tick), a shape per collider and their distance lattices packed in one half-precision atlas; the water flows around them. Paired with a physics world, its bodies join the water two ways: the domain steps the world one settled 1/60 s tick at a time, its bodies' rows follow the collider rows, dynamic_bodies counts the ones the water pushes, and the reaction the steps add up reaches each body as one impulse per tick. Live, the pair runs at most one tick per frame and holds while that tick's reaction is still on the GPU. Inflow and Outflow roles become region rows (regions, region_count) beside the body rows, sharing the shapes and atlas: an inflow emits water at its velocity into its volume each substep, an outflow removes the water inside it. Particle Capacity sizes the particle pool sources emit into (0 = the fill's count); a full pool stops emitting and shows in the stats. Fill roles are refused by name.",
       "role": "Source",
       "stratum": "atom",
       "summary": "Sets up a GPU FLIP liquid: its box, resolution, starting fill, gravity and speed.",
@@ -14406,6 +14425,16 @@
         },
         {
           "name": "body_count",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "regions",
+          "required": false,
+          "type": "Array"
+        },
+        {
+          "name": "region_count",
           "required": false,
           "type": "f32"
         },
@@ -14653,6 +14682,26 @@
             "16777216"
           ],
           "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "Regions",
+          "name": "region_count",
+          "range": [
+            "0",
+            "64"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "Inflow Jitter",
+          "name": "inflow_jitter",
+          "range": [
+            "0",
+            "1"
+          ],
+          "type": "float"
         },
         {
           "default": "1",
@@ -17963,6 +18012,11 @@
           "name": "epoch",
           "required": false,
           "type": "f32"
+        },
+        {
+          "name": "particle_capacity",
+          "required": false,
+          "type": "f32"
         }
       ],
       "label": "Liquid Fill",
@@ -18157,9 +18211,19 @@
             "16777215"
           ],
           "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "Particle Capacity",
+          "name": "particle_capacity",
+          "range": [
+            "0",
+            "16777216"
+          ],
+          "type": "int"
         }
       ],
-      "purpose": "Place a liquid's starting particles at rest, one per half-cell site of the authored box inside the padded lattice (node.gpu_flip_domain's lattice wires: the box starts 3 cells in and has nodes − 7 cells per axis; site j at (1/4 + j/2) cells along each axis, 2 sites per cell): every site below pool_sites, then the box of sites [box_x0, x1) × [max(box_y0, pool_sites), y1) × [box_z0, z1), in lattice order. Each particle moves up to jitter / 4 cells each way by a hash of seed; 0 keeps the exact lattice. The radius is the sphere of an eighth of a cell; ids count from 1. A site inside one of the first body_count bodies at its pose when the epoch starts (its distance lattice at or below zero) is left dead, radius 0. The storage holds exactly the sites covered, and count is their number; a fill past the 16,777,216 particles a count carries exactly is refused.",
+      "purpose": "Place a liquid's starting particles at rest, one per half-cell site of the authored box inside the padded lattice (node.gpu_flip_domain's lattice wires: the box starts 3 cells in and has nodes − 7 cells per axis; site j at (1/4 + j/2) cells along each axis, 2 sites per cell): every site below pool_sites, then the box of sites [box_x0, x1) × [max(box_y0, pool_sites), y1) × [box_z0, z1), in lattice order. Each particle moves up to jitter / 4 cells each way by a hash of seed; 0 keeps the exact lattice. The radius is the sphere of an eighth of a cell; ids count from 1. A site inside one of the first body_count bodies at its pose when the epoch starts (its distance lattice at or below zero) is left dead, radius 0. The storage holds the larger of the sites covered and particle_capacity (0 = the sites covered), and count is its slot count: slots past the fill start dead, for sources to emit into. A pool past the 16,777,216 particles a count carries exactly is refused.",
       "role": "Source",
       "stratum": "atom",
       "summary": "Places the liquid's starting particles: a pool on the floor plus one block of water.",
