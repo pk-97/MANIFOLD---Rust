@@ -224,6 +224,15 @@ impl Run {
         self.scene.pressure.n
     }
 
+    /// The force hook: the domain's uniform acceleration (Gravity Y), m/s²,
+    /// from the next frame on. A uniform force field and gravity enter the
+    /// step identically, at every face.
+    #[cfg(feature = "water-race-probes")]
+    pub(super) fn set_gravity_y(&mut self, g: f64) {
+        let domain = node_named(&self.graph, "domain");
+        self.graph.set_param(domain, "gravity", crate::node_graph::ParamValue::Float(g as f32)).expect("gravity");
+    }
+
     /// Switch the executor's encode replay; the fill frame already ran
     /// (it ticks no step), every later frame honours the switch.
     pub(super) fn set_encode_replay(&mut self, on: bool) {
@@ -677,6 +686,51 @@ pub(super) fn energy(particles: &[FluidParticle], floor: f64) -> f64 {
             0.5 * v2 + G * (f64::from(p.position_radius[1]) - floor)
         })
         .sum()
+}
+
+/// Live particles, φ-water cells, air cells (no particle: the density
+/// source's air) and particles per occupied cell (rest 8).
+#[cfg(feature = "water-race-probes")]
+fn cloud_counts(run: &Run, particles: &[FluidParticle]) -> (usize, usize, usize, f64) {
+    let (n, h, min) = (run.n(), run.scene.pressure.cell_size(), run.scene.min());
+    let mut occupied = vec![false; n.pow(3)];
+    let mut live = 0;
+    for p in particles.iter().filter(|p| p.position_radius[3] > 0.0) {
+        live += 1;
+        let c = |a: usize| ((f64::from(p.position_radius[a]) - min[a]) / h).floor().clamp(0.0, (n - 1) as f64) as usize;
+        occupied[c(0) + n * (c(1) + n * c(2))] = true;
+    }
+    let held = occupied.iter().filter(|&&o| o).count();
+    let water = run.water_of(particles).iter().filter(|&&w| w > 0.5).count();
+    (live, water, n.pow(3) - held, live as f64 / held.max(1) as f64)
+}
+
+/// BUG-o6dg (thin cloud never comes back), measurement only: a 0.64 m pool
+/// lifted by gravity reversed to +20 m/s² for 60 frames, then
+/// normal gravity for 120. Prints particles, water cells, air cells and
+/// particles per occupied cell, and the first frame with no air cell.
+#[cfg(feature = "water-race-probes")]
+#[test]
+fn gpu_flip_forced_pool_volume_probe() {
+    for n in [64, 128] {
+        let mut run = Run::new(WaterScene::pool(n, BOX_METRES, 0.64));
+        let mut no_air = None;
+        for frame in 0..=180 {
+            if frame > 0 {
+                run.set_gravity_y(if frame <= 60 { 20.0 } else { -G });
+                run.frame();
+            }
+            let particles = run.particles();
+            let (live, water, air, per_cell) = cloud_counts(&run, &particles);
+            if air == 0 && no_air.is_none() {
+                no_air = Some(frame);
+            }
+            if [0, 30, 60, 90, 120, 180].contains(&frame) {
+                println!("forced pool {n}³ frame {frame:3}: {live} particles, {water} water cells, {air} air cells, {per_cell:.3} per occupied cell");
+            }
+        }
+        println!("forced pool {n}³: first frame with no air cell {no_air:?}");
+    }
 }
 
 /// The Dam Break never gains energy: an inviscid solver with closed walls
