@@ -222,7 +222,7 @@ Measured basis: ~80% of a phase's wall-clock is cargo compile/test (playbook,
    (`deps/<target>-<16 hex>`, the bulk of a warm slot at ~55 MB per test
    binary); build-script `out/` products are kept because Cargo would not
    rerun the script if they vanished. The landing gate's storage admission
-   (100 GiB reserve) runs `agent-worktree.py reclaim` before refusing — it
+   (50 GiB reserve) runs `agent-worktree.py reclaim` before refusing — it
    frees landed, clean, lease-free, process-free slots only, LRU first,
    until the reserve is met; dirty, unlanded and main caches are never
    touched by it. The script
