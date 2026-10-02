@@ -4,12 +4,18 @@ use ahash::AHashMap;
 use manifold_core::audio_trigger::fire_meter_key_for_param;
 use manifold_core::effects::PresetInstance;
 use manifold_core::project::Project;
+use manifold_core::layer::Layer;
 use manifold_core::{EffectId, LayerId};
+use manifold_renderer::generator_renderer::GeneratorRenderer;
 use manifold_playback::modulation::{TriggerPulse, TriggerPulseKind};
 
 struct Owner {
     layer: Option<LayerId>,
     parameters: AHashMap<u64, TriggerPulseKind>,
+    /// Fire parameters that are scene-modifier impulse aliases on this
+    /// generator, keyed like `parameters`. Their events are physics inputs,
+    /// not graph counters, so delivery needs the parameter id back.
+    impulses: AHashMap<u64, String>,
     seen: bool,
     ambiguous: bool,
 }
@@ -33,15 +39,15 @@ impl TriggerTargets {
         }
         if let Some(project) = project {
             for instance in &project.settings.master_effects {
-                self.visit(instance, None);
+                self.visit(instance, None, None);
             }
             for layer in &project.timeline.layers {
                 if let Some(instance) = layer.gen_params() {
-                    self.visit(instance, Some(&layer.layer_id));
+                    self.visit(instance, Some(&layer.layer_id), Some(layer));
                 }
                 if let Some(effects) = &layer.effects {
                     for instance in effects {
-                        self.visit(instance, Some(&layer.layer_id));
+                        self.visit(instance, Some(&layer.layer_id), None);
                     }
                 }
             }
@@ -50,13 +56,21 @@ impl TriggerTargets {
         self.version = Some((version, epoch));
     }
 
-    fn visit(&mut self, instance: &PresetInstance, layer: Option<&LayerId>) {
+    /// `generator` is the host layer when `instance` is its generator params;
+    /// only generators own scene-modifier impulse aliases.
+    fn visit(
+        &mut self,
+        instance: &PresetInstance,
+        layer: Option<&LayerId>,
+        generator: Option<&Layer>,
+    ) {
         if !self.owners.contains_key(&instance.id) {
             self.owners.insert(
                 instance.id.clone(),
                 Owner {
                     layer: layer.cloned(),
                     parameters: AHashMap::with_capacity(instance.params.len()),
+                    impulses: AHashMap::new(),
                     seen: false,
                     ambiguous: false,
                 },
@@ -74,6 +88,7 @@ impl TriggerTargets {
             owner.layer = layer.cloned();
         }
         owner.parameters.clear();
+        owner.impulses.clear();
         for param in instance.params.iter() {
             let kind = if param.spec.is_trigger_gate {
                 TriggerPulseKind::Gate
@@ -82,9 +97,15 @@ impl TriggerTargets {
             } else {
                 continue;
             };
-            owner
-                .parameters
-                .insert(fire_meter_key_for_param("", &param.spec.id), kind);
+            let key = fire_meter_key_for_param("", &param.spec.id);
+            owner.parameters.insert(key, kind);
+            if kind == TriggerPulseKind::Parameter
+                && generator.is_some_and(|layer| {
+                    GeneratorRenderer::has_scene_impulse(layer, &param.spec.id)
+                })
+            {
+                owner.impulses.insert(key, param.spec.id.clone());
+            }
         }
         owner.seen = true;
     }
@@ -95,6 +116,17 @@ impl TriggerTargets {
                 && owner.layer == pulse.layer_id
                 && owner.parameters.get(&pulse.param_key) == Some(&pulse.kind)
         })
+    }
+
+    /// The scene-impulse parameter an accepted Parameter pulse fires, if any.
+    /// Every surface's Fire arm lands here: the scene panel and the layer
+    /// inspector edit the same generator parameter.
+    pub(super) fn scene_impulse(&self, pulse: &TriggerPulse) -> Option<(&LayerId, &str)> {
+        if pulse.kind != TriggerPulseKind::Parameter || !self.accepts(pulse) {
+            return None;
+        }
+        let owner = self.owners.get(&pulse.owner_id)?;
+        Some((owner.layer.as_ref()?, owner.impulses.get(&pulse.param_key)?.as_str()))
     }
 }
 
@@ -209,6 +241,114 @@ mod tests {
         targets.refresh(Some(&project), 2, 1);
         assert!(!targets.accepts(&effect_pulse));
         assert!(!targets.accepts(&generator_pulse));
+    }
+
+    /// A scene force's Fire armed to a kick resolves to its physics impulse.
+    /// The arm goes through EditingService exactly as the card's audio drawer
+    /// does; the kick is a synthetic retained hop on the real modulation walk.
+    #[test]
+    fn scene_force_fire_audio_kick_resolves_to_the_scene_impulse() {
+        use manifold_core::audio_features::{
+            AudioFeatureHop, AudioFeatureSnapshot, AudioHopBatch, AudioHopStamp, SendFeatures,
+        };
+        use manifold_core::audio_mod::{
+            AudioBand, AudioFeature, AudioFeatureKind, AudioModShape, ParameterAudioMod,
+        };
+        use manifold_core::audio_setup::AudioSend;
+        use manifold_core::audio_trigger::{FireMeterCapture, TriggerFireMode};
+        use manifold_core::effect_graph_def::BindingTarget;
+        use manifold_core::{Beats, Seconds};
+        use manifold_editing::commands::audio_mod::AddAudioModCommand;
+        use manifold_editing::commands::effect_target::DriverTarget;
+        use manifold_editing::service::EditingService;
+
+        let (mut project, layer_id) = crate::scene_modifier_edit::tests::project_with_mushroom();
+        let mut editing = EditingService::new();
+        let modifier = crate::scene_modifier_edit::tests::apply_stock(
+            &mut editing, &mut project, &layer_id, "RadialForce",
+        );
+        let layer = project.timeline.find_layer_by_id(&layer_id).unwrap().1;
+        let fire = layer
+            .generator_graph()
+            .and_then(|graph| graph.preset_metadata.as_ref())
+            .unwrap()
+            .bindings
+            .iter()
+            .find_map(|binding| match &binding.target {
+                BindingTarget::SceneModifier { modifier_id, param_id }
+                    if *modifier_id == modifier && param_id == "fire" => Some(binding.id.clone()),
+                _ => None,
+            })
+            .expect("Fire is bound on the host generator");
+        let owner = layer.gen_params().unwrap().id.clone();
+
+        let send = AudioSend::new("Audio 1");
+        let send_id = send.id.clone();
+        project.audio_setup.sends.push(send);
+        let mut arm = ParameterAudioMod::new(
+            fire.clone().into(),
+            send_id,
+            AudioFeature::new(AudioFeatureKind::Kick, AudioBand::Full),
+        );
+        arm.trigger_mode = Some(TriggerFireMode::Transient);
+        arm.shape = AudioModShape {
+            sensitivity: 1.83,
+            attack_ms: 0.0,
+            release_ms: 819.0,
+            ..Default::default()
+        };
+        editing.execute(
+            Box::new(AddAudioModCommand::new(
+                DriverTarget::GeneratorParam { layer_id: layer_id.clone() },
+                arm,
+            )),
+            &mut project,
+        );
+        assert!(editing.take_rejection().is_none());
+
+        let mut features = SendFeatures::default();
+        features.bands[AudioBand::Low.index()].kick = 1.0;
+        let mut snapshot = AudioFeatureSnapshot { sends: vec![features], ..Default::default() };
+        let mut batch = AudioHopBatch::with_capacity(1);
+        batch.begin(1);
+        batch
+            .push(AudioFeatureHop {
+                stamp: AudioHopStamp {
+                    epoch: 1,
+                    end_sample: 512,
+                    sample_rate: 48_000,
+                    source_time: None,
+                    timeline_time: None,
+                },
+                dt: Seconds(512.0 / 48_000.0),
+                features,
+            })
+            .unwrap();
+        snapshot.hop_batches.push(batch);
+
+        let mut pulses: Vec<TriggerPulse> = Vec::new();
+        manifold_playback::modulation::evaluate_modulation(
+            &mut project,
+            Beats(0.0),
+            Seconds::ZERO,
+            Seconds(1.0 / 60.0),
+            &snapshot,
+            &mut Vec::new(),
+            &mut pulses,
+            &[],
+            &mut FireMeterCapture::default(),
+        );
+        assert_eq!(pulses.len(), 1, "one kick fires the armed Fire once");
+        let pulse = &pulses[0];
+        assert_eq!(pulse.owner_id, owner);
+
+        let mut targets = TriggerTargets::default();
+        targets.refresh(Some(&project), 1, 1);
+        assert_eq!(
+            targets.scene_impulse(pulse),
+            Some((&layer_id, fire.as_str())),
+            "the kick must reach the scene impulse producer, not stop at the counter"
+        );
     }
 
     #[test]

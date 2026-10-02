@@ -1983,6 +1983,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         targets: &trigger_targets::TriggerTargets,
         pulses: &[manifold_playback::engine::trigger_delivery::CapturedTriggerPulse],
         renderers: &mut [Box<dyn manifold_playback::renderer::ClipRenderer>],
+        project: Option<&manifold_core::project::Project>,
     ) {
         if pulses.is_empty() {
             return;
@@ -1990,14 +1991,45 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         let mut gen_renderer = renderers
             .iter_mut()
             .find_map(|r| r.as_any_mut().downcast_mut::<GeneratorRenderer>());
+        let mut project_tempo = None;
         for captured in pulses {
             let pulse = &captured.pulse;
             if !targets.accepts(pulse) {
                 continue;
             }
-            // Named Fire parameters keep their existing parameter-counter
-            // behavior. Their retained events are for explicit target delivery,
-            // never the compatibility gate broadcast below.
+            // A Fire parameter that aliases a scene-modifier impulse is a
+            // physics event, not a counter: its parameter value never reaches
+            // the solver. Audio and clip-edge fires take the same producer the
+            // manual Fire button calls (`FireParameter` in content_commands).
+            if let Some((layer_id, param)) = targets.scene_impulse(pulse) {
+                let layer = project.and_then(|project| {
+                    project.timeline.layers.iter().find(|layer| &layer.layer_id == layer_id)
+                });
+                if let (Some(layer), Some(gr)) = (layer, gen_renderer.as_deref_mut()) {
+                    let tempo = project_tempo.get_or_insert_with(|| {
+                        project.map(|project| {
+                            manifold_renderer::preset_context::ProjectTempo::new(
+                                &project.tempo_map,
+                                project.settings.bpm,
+                            )
+                        })
+                    });
+                    let source = manifold_renderer::node_graph::FrameTime {
+                        seconds: captured.accepted_time,
+                        beats: captured.accepted_beat,
+                        delta: manifold_core::Seconds::ZERO,
+                        frame_count: 0,
+                    };
+                    if let Err(message) =
+                        gr.fire_scene_impulse(layer, param, source, tempo.as_ref())
+                    {
+                        log::warn!("Scene impulse {param} on {layer_id}: {message}");
+                    }
+                }
+                continue;
+            }
+            // Other named Fire parameters keep their parameter-counter
+            // behavior, never the compatibility gate broadcast below.
             if pulse.kind != manifold_playback::modulation::TriggerPulseKind::Gate {
                 continue;
             }
@@ -2229,7 +2261,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             if let Some(first) = pulses.first() {
                 self.trigger_targets.refresh(project, data_version, first.epoch);
             }
-            Self::apply_trigger_pulses(&mut self.master_trigger_count, &self.trigger_targets, pulses, renderers);
+            Self::apply_trigger_pulses(&mut self.master_trigger_count, &self.trigger_targets, pulses, renderers, project);
         });
 
         // Split borrow: get renderers + project from engine simultaneously.
@@ -4281,13 +4313,13 @@ mod trigger_delivery_tests {
         assert!(targets.accepts(&parameter_event.pulse));
         pulses.insert(1, parameter_event);
         let mut count = 10;
-        super::ContentPipeline::apply_trigger_pulses(&mut count, &targets, &pulses, &mut []);
+        super::ContentPipeline::apply_trigger_pulses(&mut count, &targets, &pulses, &mut [], None);
         assert_eq!(count, 13);
-        super::ContentPipeline::apply_trigger_pulses(&mut count, &targets, &[], &mut []);
+        super::ContentPipeline::apply_trigger_pulses(&mut count, &targets, &[], &mut [], None);
         assert_eq!(count, 13);
         project.settings.master_effects.clear();
         targets.refresh(Some(&project), 2, 3);
-        super::ContentPipeline::apply_trigger_pulses(&mut count, &targets, &pulses, &mut []);
+        super::ContentPipeline::apply_trigger_pulses(&mut count, &targets, &pulses, &mut [], None);
         assert_eq!(count, 13);
     }
 }

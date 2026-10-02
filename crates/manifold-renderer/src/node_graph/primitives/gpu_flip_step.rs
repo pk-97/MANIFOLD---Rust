@@ -12,6 +12,10 @@
 //! grid output is this node's own storage, exactly one record per padded
 //! cell, reallocated when the lattice changes.
 //!
+//! Inflow emission, the inflow constrained velocity and outflow removal port
+//! FLIP Fluids `fluidsimulation.cpp` (MIT, Copyright (C) 2026 Ryan L. Guy &
+//! Dennis Fassbaender; see THIRD_PARTY_NOTICES.md), line refs in the shader.
+//!
 //! The density projection is T. Kugelstadt, A. Longva, N. Thuerey and
 //! J. Bender, "Implicit Density Projection for Volume Conserving Liquids",
 //! IEEE TVCG 27(4), 2019: each step solves a second Poisson equation whose
@@ -23,6 +27,7 @@
 //! (Copyright (c) 2020 Andreas Reich, github.com/Wumpf/blub,
 //! `density_projection_gather_error.comp`; see THIRD_PARTY_NOTICES.md).
 
+use crate::node_graph::primitives::prefix_scan::PrefixScan;
 use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
@@ -31,6 +36,7 @@ use super::gpu_flip_bodies::{BodyPasses, Bodies, REACTION_FLOATS, body_refusal};
 use super::gpu_flip_pressure::{MAX_ITERATIONS, PressureSolver, Stop, Water, lattice_refusal};
 use super::liquid_stats::SOLVER_WORDS;
 use super::liquid_solid_distance::{SolidDistanceJob, encode_solid_distance};
+use super::prefix_scan::ScanLabels;
 use super::sort_particles_into_cells::{
     LIQUID_PARTICLE_READ, ParticleSorter, SortJob, SortLabels, float_param, int_param,
 };
@@ -76,6 +82,12 @@ pub(crate) fn band_layers(travel: u32) -> u32 {
 /// Bytes of the step's face grid at `cells`: one record per padded cell.
 pub(crate) fn face_bytes(cells: [u32; 3]) -> u64 {
     cells.iter().map(|&n| u64::from(n) + 1).product::<u64>() * size_of::<FaceSample>() as u64
+}
+
+/// Half-cell sites sources emit at: eight a cell (gpu_flip_step.wgsl
+/// emit_sites).
+pub(crate) fn emit_sites(cells: [u32; 3]) -> u64 {
+    cells.iter().map(|&n| 2 * u64::from(n)).product()
 }
 
 fn cell_bytes(cells: [u32; 3]) -> u64 {
@@ -218,6 +230,11 @@ pub(crate) struct StepParams {
     /// The tank's closed faces, bit 2d the low face of axis d and bit 2d + 1
     /// the high one.
     pub(crate) closed_faces: u32,
+    pub(crate) region_count: i32,
+    pub(crate) region_rows: i32,
+    /// Half-width of an emitted particle's jitter in cells.
+    pub(crate) emit_jitter: f32,
+    pub(crate) _pad: u32,
     /// 1: every tile is active (the test-only oracle, [`set_all_tiles`]).
     pub(crate) all_tiles: u32,
     /// The ring a sparse pass's reads are capped at. Unused while the extend
@@ -268,6 +285,8 @@ struct Pipelines {
     pocket_pin: GpuComputePipeline,
     /// The removed flux into the pressure, then the density, solver word.
     pocket_flux: [GpuComputePipeline; 2],
+    emit_flags: GpuComputePipeline,
+    emit_write: GpuComputePipeline,
     tiles_classify: GpuComputePipeline,
     tiles_rings: GpuComputePipeline,
     tiles_lists: GpuComputePipeline,
@@ -312,6 +331,8 @@ impl Pipelines {
             pocket_remove: pipe("pocket_remove"),
             pocket_pin: pipe("pocket_pin"),
             pocket_flux: [pipe("pocket_flux_pressure"), pipe("pocket_flux_density")],
+            emit_flags: pipe("emit_flags"),
+            emit_write: pipe("emit_write"),
             tiles_classify: pipe("tiles_classify"),
             tiles_rings: pipe("tiles_rings"),
             tiles_lists: pipe("tiles_lists"),
@@ -498,6 +519,10 @@ pub(crate) struct StepState {
     /// everywhere (`tiles_fill` ran); false until the first step on a lattice.
     filled: bool,
     sorted: Option<GpuBuffer>,
+    /// With sources, the emitted particles re-sorted from `sorted`.
+    resorted: Option<GpuBuffer>,
+    /// The emission flags' scan, one word a half-cell site.
+    emit_scan: PrefixScan,
     /// The face grid output: exactly [`face_bytes`] of the current lattice.
     faces: Option<GpuBuffer>,
     /// [`ZERO_BYTES`] zero bytes bound where an optional input is unwired.
@@ -512,6 +537,7 @@ const ZERO_BYTES: u64 = (MAX_FLUID_ROLES * REACTION_FLOATS * 4) as u64;
 const SORT_LABELS: SortLabels = SortLabels {
     clear: "gpu_flip.step.sort.clear",
     count: "gpu_flip.step.sort.count",
+    scan: ScanLabels { blocks: "gpu_flip.step.sort.scan.blocks", add: "gpu_flip.step.sort.scan.add" },
     ranges: "gpu_flip.step.sort.ranges",
     tail: "gpu_flip.step.sort.tail",
     scatter: "gpu_flip.step.sort.scatter",
@@ -676,6 +702,8 @@ struct Step<'a> {
     bodies: &'a GpuBuffer,
     shapes: &'a GpuBuffer,
     atlas: &'a GpuBuffer,
+    /// Inflow and outflow rows; read when `params.region_count` > 0.
+    regions: &'a GpuBuffer,
     /// What the water has pushed on each body so far this tick, read by the
     /// solid velocity; added to when `dynamic`.
     reaction: &'a GpuBuffer,
@@ -696,12 +724,21 @@ impl StepState {
             self.pipelines = Some(Pipelines::new(device));
         }
         self.sorter.prepare(device);
+        self.emit_scan.prepare(device);
         self.solver.prepare_pipelines(device);
         self.bodies.prepare_pipelines(device);
     }
 
-    /// Size every array for `cells` and `slots` before anything is encoded.
-    fn reserve(&mut self, device: &GpuDevice, cells: [u32; 3], slots: u64, ring_max: u32) -> Result<(), String> {
+    /// Size every array for `cells` and `slots` before anything is encoded;
+    /// `sources` adds the emission's scan and second sorted array.
+    fn reserve(
+        &mut self,
+        device: &GpuDevice,
+        cells: [u32; 3],
+        slots: u64,
+        ring_max: u32,
+        sources: bool,
+    ) -> Result<(), String> {
         if self.zeros.is_none() {
             let zeros = device.try_create_buffer_shared(ZERO_BYTES)?;
             zeros.zero_fill();
@@ -736,6 +773,13 @@ impl StepState {
             self.sorted = None;
             self.sorted = Some(allocate(device, sorted)?);
         }
+        if sources {
+            if self.resorted.as_ref().is_none_or(|buffer| buffer.size < sorted) {
+                self.resorted = None;
+                self.resorted = Some(allocate(device, sorted)?);
+            }
+            self.emit_scan.buffer(device, emit_sites(cells) as usize)?;
+        }
         Ok(())
     }
 
@@ -749,28 +793,100 @@ impl StepState {
         let cells = l.cells;
         let p = step.params;
         let capacity = p.capacity;
-        self.sorter.encode(
-            device,
-            enc,
-            &SortJob {
-                particles: step.particles,
-                read: LIQUID_PARTICLE_READ,
-                capacity,
-                count: step.count,
-                bin_min: p.box_min,
-                inv_cell: 1.0 / p.cell_size,
-                bins: cells,
-                sorted: Some(sorted),
-                order: None,
-            },
-            &SORT_LABELS,
-        )?;
-        let ranges = self.sorter.ranges().ok_or("the cell ranges were not reserved")?;
-        let cell_count: u64 = cells.iter().map(|&n| u64::from(n)).product();
-        let face_count: u64 = cells.iter().map(|&n| u64::from(n) + 1).product();
+        let sort_job = |particles, sorted| SortJob {
+            particles,
+            read: LIQUID_PARTICLE_READ,
+            capacity,
+            count: step.count,
+            bin_min: p.box_min,
+            inv_cell: 1.0 / p.cell_size,
+            bins: cells,
+            sorted: Some(sorted),
+            order: None,
+        };
         // Copies of the params, so each Bytes binding borrows a value that
         // lives across its dispatch.
         let base = p;
+        let corners = cells.map(|n| n + 1);
+        // The box walls are in the solid with the bodies, as the engine's
+        // inverted domain object is: a body flush with a wall then seals
+        // against it, where the body's own lattice distance alone would leave
+        // a sub-cell open channel between them. The engine's domain object
+        // covers all six faces whichever are open, so this mask stays 63.
+        // First, since emission seeds only outside the solid.
+        encode_solid_distance(
+            &mut self.solid,
+            device,
+            enc,
+            &SolidDistanceJob {
+                min: p.box_min,
+                cell_size: p.cell_size,
+                nodes: corners,
+                closed_faces: 63,
+                wall_inset: 0,
+                body_count: p.body_count,
+                rows: p.rows,
+                tick_seconds: p.tick_seconds,
+                bodies: step.bodies,
+                shapes: step.shapes,
+                atlas: step.atlas,
+                out: &l.corners,
+            },
+            "gpu_flip.step.solid_distance",
+        );
+        self.sorter.encode(device, enc, &sort_job(step.particles, sorted), &SORT_LABELS)?;
+        // Sources emit after the last substep's move and before the transfer,
+        // as the engine's _updateFluidObjects runs between its advance and its
+        // next step: the flags mark each empty inflow site outside the solid,
+        // their scan ranks them, and each lands at the live count plus its
+        // rank, so the live particles stay one dense prefix with no atomics.
+        // The re-sort puts the emitted ones in their cells.
+        let sorted = match self.resorted.as_ref().filter(|_| p.region_count > 0) {
+            Some(resorted) => {
+                let sites = emit_sites(cells);
+                let ranges = self.sorter.ranges().ok_or("the cell ranges were not reserved")?;
+                let scan = self.emit_scan.buffer(device, sites as usize)?.clone();
+                let read = [
+                    uniform(&base),
+                    buffer(1, ranges),
+                    buffer(2, sorted),
+                    buffer(9, &l.corners),
+                    buffer(15, step.shapes),
+                    buffer(16, step.atlas),
+                    buffer(36, step.regions),
+                    buffer(37, &scan),
+                ];
+                enc.compute_memory_barrier_buffers();
+                enc.dispatch_compute(&pipes.emit_flags, &read, groups(sites), "gpu_flip.step.emit_flags");
+                enc.compute_memory_barrier_buffers();
+                self.emit_scan.encode_labelled(
+                    enc,
+                    sites as usize,
+                    ScanLabels { blocks: "gpu_flip.step.emit_scan.blocks", add: "gpu_flip.step.emit_scan.add" },
+                );
+                enc.dispatch_compute(
+                    &pipes.emit_write,
+                    &[
+                        uniform(&base),
+                        buffer(1, ranges),
+                        buffer(15, step.shapes),
+                        buffer(16, step.atlas),
+                        buffer(36, step.regions),
+                        buffer(37, &scan),
+                        buffer(38, sorted),
+                    ],
+                    groups(sites),
+                    "gpu_flip.step.emit_write",
+                );
+                enc.compute_memory_barrier_buffers();
+                self.sorter.encode(device, enc, &SortJob { count: capacity, ..sort_job(sorted, resorted) }, &SORT_LABELS)?;
+                resorted
+            }
+            None => sorted,
+        };
+        let ranges = self.sorter.ranges().ok_or("the cell ranges were not reserved")?;
+        let cell_count: u64 = cells.iter().map(|&n| u64::from(n)).product();
+        let face_count: u64 = cells.iter().map(|&n| u64::from(n) + 1).product();
         let ghost = StepParams { ghost: u32::from(step.ghost), ..p };
         let cells_groups = groups(cell_count);
         let face_groups = groups(face_count);
@@ -815,35 +931,18 @@ impl StepState {
         extend(enc, pipes, &base, face_groups, [&l.g, &l.a, &l.b], step.band, "gpu_flip.step.extend_old");
         enc.dispatch_compute(
             &pipes.gravity,
-            &[uniform(&base), buffer(3, &l.a), buffer(4, &l.f), buffer(12, step.forces), buffer(13, step.impulses)],
+            &[
+                uniform(&base),
+                buffer(3, &l.a),
+                buffer(4, &l.f),
+                buffer(12, step.forces),
+                buffer(13, step.impulses),
+                buffer(15, step.shapes),
+                buffer(16, step.atlas),
+                buffer(36, step.regions),
+            ],
             face_groups,
             "gpu_flip.step.forces",
-        );
-        let corners = cells.map(|n| n + 1);
-        // The box walls are in the solid with the bodies, as the engine's
-        // inverted domain object is: a body flush with a wall then seals
-        // against it, where the body's own lattice distance alone would leave
-        // a sub-cell open channel between them. The engine's domain object
-        // covers all six faces whichever are open, so this mask stays 63.
-        encode_solid_distance(
-            &mut self.solid,
-            device,
-            enc,
-            &SolidDistanceJob {
-                min: p.box_min,
-                cell_size: p.cell_size,
-                nodes: corners,
-                closed_faces: 63,
-                wall_inset: 0,
-                body_count: p.body_count,
-                rows: p.rows,
-                tick_seconds: p.tick_seconds,
-                bodies: step.bodies,
-                shapes: step.shapes,
-                atlas: step.atlas,
-                out: &l.corners,
-            },
-            "gpu_flip.step.solid_distance",
         );
         enc.dispatch_compute(
             &pipes.open,
@@ -996,6 +1095,9 @@ impl StepState {
                 buffer(18, spread),
                 buffer(19, step.out),
                 buffer(22, step.capped),
+                buffer(15, step.shapes),
+                buffer(16, step.atlas),
+                buffer(36, step.regions),
             ],
             groups(u64::from(p.particles)),
             "gpu_flip.step.move",
@@ -1036,6 +1138,8 @@ crate::primitive! {
         shapes: Array(LiquidShape) optional,
         atlas: Array(u32) optional,
         body_count: ScalarF32 optional,
+        regions: Array(LiquidBody) optional,
+        region_count: ScalarF32 optional,
         rows: ScalarF32 optional,
         reaction: Array(f32) optional,
         dynamic_bodies: ScalarF32 optional,
@@ -1068,6 +1172,8 @@ crate::primitive! {
         int_param!("tick_index", "Tick", 0.0, 0.0, 16_777_216.0),
         int_param!("body_count", "Bodies", 0.0, 0.0, MAX_FLUID_ROLES as f32),
         int_param!("rows", "Rows", 0.0, 0.0, 16_777_216.0),
+        int_param!("region_count", "Regions", 0.0, 0.0, MAX_FLUID_ROLES as f32),
+        float_param!("inflow_jitter", "Inflow Jitter", 0.0, 0.0, 1.0),
         int_param!("steps", "Steps", 1.0, 1.0, 64.0),
         float_param!("flip", "Flip Share", 0.95, 0.0, 1.0),
         int_param!("iterations", "Iterations (0 = Auto)", 0.0, 0.0, MAX_ITERATIONS as f32),
@@ -1077,7 +1183,7 @@ crate::primitive! {
         int_param!("closed_faces", "Closed Faces", 63.0, 0.0, 63.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "Inside node.liquid_state's tick region, once per tick: particles from the state's out, Steps substeps of 1/(60·Steps) s run inside the node, each moving the last one's particles, and the bodies see every substep. The lattice, gravity, the field scalars, forces, impulses, bodies, shapes, atlas, body_count and body_rows (into rows) come from node.gpu_flip_domain; so do dynamic_bodies and reaction, which every substep adds to in place; tick_index from node.liquid_state; count from the fill's live count. Flip Share is the share kept per 1/60 s, so the damping does not change with the step count. The last substep's faces feed node.liquid_state's faces_in, sized exactly to the lattice; out keeps the particles slots. A lattice the device cannot hold, or a side over 1024 cells, is a named error.",
+    composition_notes: "Inside node.liquid_state's tick region, once per tick: particles from the state's out, Steps substeps of 1/(60·Steps) s run inside the node, each moving the last one's particles, and the bodies see every substep. The lattice, gravity, the field scalars, forces, impulses, bodies, shapes, atlas, body_count and body_rows (into rows) come from node.gpu_flip_domain; so do dynamic_bodies and reaction, which every substep adds to in place; tick_index from node.liquid_state; count from the fill's live count. Flip Share is the share kept per 1/60 s, so the damping does not change with the step count. The last substep's faces feed node.liquid_state's faces_in, sized exactly to the lattice; out keeps the particles slots. regions and region_count also come from node.gpu_flip_domain: each step an inflow seeds particles at its empty half-cell sites into free pool slots (a full pool emits nothing) and holds the velocity inside it, and an outflow kills the particles it holds; the live count rides the cell ranges. A lattice the device cannot hold, or a side over 1024 cells, is a named error.",
     examples: ["WaterDamBreakGpuFlip"],
     picker: { label: "GPU FLIP Step", category: Atom },
     summary: "Moves the water forward one tick, in Steps substeps: gravity, solids, incompressibility and the particles' motion.",
@@ -1192,8 +1298,15 @@ impl Primitive for GpuFlipStep {
             }
         };
         let box_min = lattice.box_min();
+        let regions_in = ctx.inputs.array("regions");
+        let region_count = match regions_in {
+            Some(_) => ctx.scalar_or_param("region_count", 0.0).round().clamp(0.0, MAX_FLUID_ROLES as f32) as i32,
+            None => 0,
+        };
         let band = band_layers(travel).max(FACE_VALID_LAYERS);
-        if let Err(error) = self.state.reserve(ctx.gpu_encoder().device, cells, u64::from(capacity), ring_max(band)) {
+        if let Err(error) =
+            self.state.reserve(ctx.gpu_encoder().device, cells, u64::from(capacity), ring_max(band), region_count > 0)
+        {
             ctx.error(format!(
                 "{NAME}: a {}×{}×{} lattice with {capacity} particle slots needs storage the device cannot give: {error}. Lower Resolution.",
                 cells[0], cells[1], cells[2]
@@ -1222,6 +1335,14 @@ impl Primitive for GpuFlipStep {
             return;
         }
         let reaction = reaction_in.unwrap_or(&zeros);
+        let regions = regions_in.unwrap_or(&zeros);
+        // The engine refuses a negative jitter (setMarkerParticleJitterFactor).
+        let inflow_jitter = ctx.scalar_or_param("inflow_jitter", 0.0);
+        if !(inflow_jitter.is_finite() && inflow_jitter >= 0.0) {
+            ctx.error(format!("{NAME}: Inflow Jitter must be 0 or more, not {inflow_jitter}"));
+            return;
+        }
+        let region_rows = (regions.size / size_of::<LiquidBody>() as u64).min(i32::MAX as u64) as i32;
         let mut step = Step {
             params: StepParams {
                 n: cells,
@@ -1252,6 +1373,10 @@ impl Primitive for GpuFlipStep {
                 // per-step share.
                 rate: 1.0 / step_dt,
                 closed_faces,
+                region_count,
+                region_rows,
+                emit_jitter: 0.25 * inflow_jitter,
+                _pad: 0,
                 all_tiles: u32::from(all_tiles()),
                 ring_cap: 0,
                 ring_max: ring_max(band),
@@ -1264,6 +1389,7 @@ impl Primitive for GpuFlipStep {
             forces: field.forces.unwrap_or(&zeros),
             impulses: field.impulses.unwrap_or(&zeros),
             bodies,
+            regions,
             shapes,
             atlas,
             reaction,
@@ -1384,7 +1510,7 @@ mod tests {
 
     #[test]
     fn step_params_match_the_shader_uniform() {
-        assert_eq!(size_of::<StepParams>(), 144);
+        assert_eq!(size_of::<StepParams>(), 160);
     }
 
     /// The tile table's bytes, by an independent count: five words a tile

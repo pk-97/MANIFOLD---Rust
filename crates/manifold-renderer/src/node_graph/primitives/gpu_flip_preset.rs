@@ -22,8 +22,9 @@ use crate::node_graph::fluid::{FluidDomainLayout, domain_layout};
 use crate::node_graph::liquid::grid::FACE_INPUT_PORTS;
 use crate::node_graph::transform::Transform;
 
-/// The box is 4 m on its longest side; the lowest wave it holds is 2π / 4 m.
-pub(crate) const BOX_METRES: f64 = 4.0;
+/// The FLIP Fluids engine's Dam Break tank side, the scenes' default Domain
+/// Size; a scene's own `size` is what every measure reads.
+const DAM_BREAK_METRES: f64 = 4.0;
 
 /// Water substeps per 60 Hz liquid tick, the step node's Steps. A collider
 /// moves per substep: each places it where its tick's row has it at the
@@ -44,11 +45,6 @@ pub(crate) struct PressureShape {
 impl PressureShape {
     pub fn at(n: usize) -> Self {
         Self { n, iterations: PRESSURE_ITERATIONS }
-    }
-
-    #[cfg(test)]
-    pub fn cell_size(&self) -> f64 {
-        BOX_METRES / self.n as f64
     }
 }
 
@@ -130,7 +126,7 @@ impl WaterScene {
     pub fn dam_break(n: usize) -> Self {
         Self {
             pressure: PressureShape::at(n),
-            size: BOX_METRES,
+            size: DAM_BREAK_METRES,
             steps: STEPS_PER_TICK,
             flip: 0.95,
             fill_height: DAM_FILL_HEIGHT,
@@ -228,6 +224,12 @@ impl WaterScene {
         Self { pressure: PressureShape { iterations, ..self.pressure }, ..self }
     }
 
+    /// The cell side in metres: the tank's side over the lattice.
+    #[cfg(test)]
+    pub fn cell_size(&self) -> f64 {
+        self.size / self.pressure.n as f64
+    }
+
     /// `steps` water steps a frame.
     #[cfg(test)]
     pub fn with_steps(self, steps: usize) -> Self {
@@ -242,7 +244,7 @@ impl WaterScene {
     /// The step's CFL guard at this scene's step and cell size.
     #[cfg(all(test, feature = "water-race-probes"))]
     pub fn travel_cells(&self) -> usize {
-        let travel = super::gpu_flip_step::travel_cells(DEFAULT_TOP_SPEED, self.step_dt() as f32, self.pressure.cell_size() as f32);
+        let travel = super::gpu_flip_step::travel_cells(DEFAULT_TOP_SPEED, self.step_dt() as f32, self.cell_size() as f32);
         travel as usize
     }
 
@@ -431,7 +433,7 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     );
     b.wires(domain, fill, &FILL_WIRES);
     b.wires(domain, fill, &LATTICE_WIRES);
-    b.wires(domain, fill, &["bodies", "shapes", "atlas", "body_count", "epoch"]);
+    b.wires(domain, fill, &["bodies", "shapes", "atlas", "body_count", "epoch", "particle_capacity"]);
     let count = (fill, "count");
     let state = b.node("state", "node.liquid_state", json!({}));
     b.wire((fill, "particles"), state, "seed");
@@ -442,6 +444,7 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     b.wire(particles, step, "particles");
     b.wire(count, step, "count");
     b.wire((domain, "reaction"), step, "reaction");
+    b.wires(domain, step, &["regions", "region_count"]);
     let (particles, faces) = ((step, "out"), (step, "faces"));
     let stats = b.node("stats", "node.liquid_stats", json!({}));
     b.wire(particles, stats, "particles");
@@ -1117,7 +1120,7 @@ pub(super) mod tests {
         assert_eq!(FACE_GRID_GPU_FLIP_LAYERS, FACE_VALID_LAYERS);
         let at = |n: usize, steps: usize| {
             let s = WaterScene::dam_break(n).with_steps(steps);
-            let travel = travel_cells(TOP_SPEED as f32, s.step_dt() as f32, s.pressure.cell_size() as f32);
+            let travel = travel_cells(TOP_SPEED as f32, s.step_dt() as f32, s.cell_size() as f32);
             (travel, band_layers(travel))
         };
         let bands = [at(64, 2), at(64, 1), at(128, 2), at(96, 2), at(16, 2)];

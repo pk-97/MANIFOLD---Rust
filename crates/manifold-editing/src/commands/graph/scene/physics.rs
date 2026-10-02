@@ -1067,13 +1067,14 @@ pub(super) fn scene_object_physics_plan(
     if scene_physics_binding(def, &parts).is_ok() {
         return Err("Selected object already has standard physics enabled".into());
     }
-    if let Some(group_id) = parts.group_id {
-        let assignments = scene_fluid_role_assignments(def, group_id)?;
-        if !assignments.is_empty() {
-            return Err(
-                "Remove this object's Fluid Role before enabling Physics; physics bodies interact with water automatically".into(),
-            );
-        }
+    let has_fluid_role = match parts.group_id {
+        Some(group_id) => !scene_fluid_role_assignments(def, group_id)?.is_empty(),
+        None => fluid::loose_scene_object_has_fluid_roles(def, parts.object_id)?,
+    };
+    if has_fluid_role {
+        return Err(
+            "Remove this object's Fluid Role before enabling Physics; physics bodies interact with water automatically".into(),
+        );
     }
     if parts
         .compound_sources

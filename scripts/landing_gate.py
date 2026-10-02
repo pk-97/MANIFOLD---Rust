@@ -13,8 +13,10 @@ import importlib.util
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -85,47 +87,142 @@ def reclaim_landed_caches(reserve_bytes):
     return "\n" + tail
 
 
-def run_cmd(cmd, cwd, timeout):
+def descendant_pids(root):
+    """Every live descendant of `root`, from one `ps` snapshot."""
+    try:
+        table = subprocess.run(["ps", "-A", "-o", "pid=,ppid="], capture_output=True,
+                               text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    children = {}
+    for line in table.splitlines():
+        fields = line.split()
+        if len(fields) == 2 and fields[0].isdigit() and fields[1].isdigit():
+            children.setdefault(int(fields[1]), []).append(int(fields[0]))
+    found, frontier = [], [root]
+    while frontier:
+        for child in children.get(frontier.pop(), []):
+            found.append(child)
+            frontier.append(child)
+    return found
+
+
+def kill_tree(root):
+    """SIGKILL `root` and everything under it.
+
+    Killing only the direct child orphans its children: a timed-out flow gate
+    left the app running and holding the GPU lock (BUG-i3hc (flow gate
+    re-queues the GPU lock per flow)). Each process is stopped before the
+    tree is re-read, so nothing can fork past the snapshot."""
+    seen = []
+    pending = [root]
+    while pending:
+        for pid in pending:
+            with contextlib.suppress(OSError):
+                os.kill(pid, signal.SIGSTOP)
+        seen.extend(pending)
+        pending = [p for p in descendant_pids(root) if p not in seen]
+    for pid in seen:
+        with contextlib.suppress(OSError):
+            os.kill(pid, signal.SIGKILL)
+
+
+def run_cmd(cmd, cwd, timeout, live_log=None):
     """Run subprocess, return (exit, stdout, stderr, duration).
 
-    A timeout is a FAIL (-1), never a traceback — the gate must always end
-    at its summary line."""
+    With `live_log`, both streams are also written to that file line by line
+    as they arrive, so a leg that hangs or is killed still leaves its
+    transcript. A timeout is a FAIL (-1) that kills the whole process tree,
+    never a traceback — the gate must always end at its summary line."""
     start = time.time()
     environment, refusal = build_environment(cmd, cwd)
     if refusal:
         return 2, "", refusal, time.time() - start
+    proc = subprocess.Popen(cmd, cwd=str(cwd), stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True, errors="replace",
+                            env=environment)
+    streams = {"out": [], "err": []}
+    log = open(live_log, "w") if live_log else None
+    log_lock = threading.Lock()
+
+    def drain(pipe, sink):
+        for line in pipe:
+            sink.append(line)
+            if log:
+                with log_lock:
+                    # A reader outliving its join (an escaped process still
+                    # holding the pipe) must not write to the closed file.
+                    if not log.closed:
+                        log.write(line)
+                        log.flush()
+
+    readers = [threading.Thread(target=drain, args=(proc.stdout, streams["out"]), daemon=True),
+               threading.Thread(target=drain, args=(proc.stderr, streams["err"]), daemon=True)]
+    for reader in readers:
+        reader.start()
+    timed_out = False
     try:
-        r = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True,
-                           timeout=timeout, env=environment)
-    except subprocess.TimeoutExpired as error:
-        duration = time.time() - start
-        def decoded(value):
-            return value.decode(errors="replace") if isinstance(value, bytes) else value or ""
-        return (-1, decoded(error.stdout), decoded(error.stderr) +
-                f"\nTIMEOUT after {duration:.0f}s: {' '.join(cmd)}", duration)
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        kill_tree(proc.pid)
+        proc.wait()
+    except BaseException:
+        kill_tree(proc.pid)
+        raise
+    finally:
+        for reader, pipe in zip(readers, (proc.stdout, proc.stderr)):
+            reader.join(timeout=30)
+            if not reader.is_alive():
+                pipe.close()
+        if log:
+            with log_lock:
+                log.close()
     duration = time.time() - start
-    return r.returncode, r.stdout, r.stderr, duration
+    out, err = "".join(streams["out"]), "".join(streams["err"])
+    if timed_out:
+        return -1, out, err + f"\nTIMEOUT after {duration:.0f}s: {' '.join(cmd)}", duration
+    return proc.returncode, out, err, duration
+
+
+def landing_log_path(repo, label):
+    log_dir = Path(repo) / "target" / "landing-logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+    return (log_dir / f"{label}-{stamp}-{time.time_ns()}.log").resolve()
 
 
 def write_landing_log(repo, label, stdout, stderr):
     """Persist the complete subprocess transcript for post-gate diagnosis."""
-    log_dir = Path(repo) / "target" / "landing-logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
-    path = log_dir / f"{label}-{stamp}-{time.time_ns()}.log"
+    path = landing_log_path(repo, label)
     path.write_text(stdout + stderr)
-    return path.resolve()
+    return path
 
 
 def run_check(label, cmd, cwd, timeout):
-    print(f"[RUN] {label}", flush=True)
-    result = run_cmd(cmd, cwd, timeout)
+    live = landing_log_path(cwd, label.replace("/", "-"))
+    print(f"[RUN] {label}  (live transcript: {live})", flush=True)
+    result = run_cmd(cmd, cwd, timeout, live_log=live)
     exit_, out, err, _ = result
     if exit_ and label != "gpu-proofs":
+        # Rewritten as stdout then stderr, the layout every landing log has.
         # GPU proofs retain their transcript on both success and failure below.
-        log = write_landing_log(cwd, label.replace("/", "-"), out, err)
-        print(f"[{label}] complete transcript: {log}", flush=True)
+        live.write_text(out + err)
+        print(f"[{label}] complete transcript: {live}", flush=True)
+    else:
+        with contextlib.suppress(OSError):
+            live.unlink()
     return result
+
+
+def build_leg(results, label, cmd, repo):
+    """A compile-only leg; records and prints its result, returns the status."""
+    exit_, out, err, duration = run_check(label, cmd, cwd=repo, timeout=3600)
+    tail = (out + err).rstrip().splitlines()[-20:]
+    status = "PASS" if exit_ == 0 else "FAIL"
+    results.append((status, label, duration, tail))
+    print_result(label, status, duration, tail if exit_ else None)
+    return status
 
 
 def parse_package_from_cargo(toml_path):
@@ -369,11 +466,41 @@ def _main(stack):
     if status == "FAIL" and not args.keep_going:
         return finish(repo, base_sha, results)
 
+    # GPU-proofs scope is settled before anything builds: an unmapped path
+    # fails here, not after a compile.
+    run_gpu = touches_gpu and not args.skip_gpu
+    if run_gpu:
+        changed = run_cmd(["git", "diff", "--name-only", f"{base_sha}..HEAD"],
+                          cwd=repo, timeout=300)[1]
+        paths = [l.strip() for l in changed.strip().splitlines() if l.strip()]
+        plan = gpu_scope.plan_for_paths(paths, repo)
+        if plan.unmapped:
+            message = gpu_scope.unmapped_message(plan)
+            print(message)
+            results.append(("FAIL", "gpu-proofs", None, message.splitlines()))
+            return finish(repo, base_sha, results)
+
+    # Compile every test binary the hold will run before taking it, so the
+    # hold covers test time only (BUG-w0hh (landing gate speed)). The legs
+    # under the hold then find everything built and go straight to testing.
+    if gate_packages:
+        pkg_args = []
+        for p in gate_packages:
+            pkg_args.extend(["-p", p])
+        if build_leg(results, "tests-build", ["cargo", "nextest", "run", "--no-run", *pkg_args],
+                     repo) == "FAIL" and not args.keep_going:
+            return finish(repo, base_sha, results)
+    if run_gpu:
+        if build_leg(results, "gpu-proofs-build",
+                     ["python3", "scripts/gpu_proofs_gate.py", "--base", args.base, "--build-only"],
+                     repo) == "FAIL" and not args.keep_going:
+            return finish(repo, base_sha, results)
+
     # Nextest tests call GpuDevice::new_queued; each would queue behind every
     # agent's GPU run on its own. Hold the machine-wide GPU lock once, from
     # here through gpu-proofs: child test processes inherit an ancestor's hold,
     # so the landing waits once (visibly, on stdout) then runs straight through.
-    if gate_packages or (touches_gpu and not args.skip_gpu):
+    if gate_packages or run_gpu:
         print("[gpu-queue] taking the GPU lock for the tests and gpu-proofs legs", flush=True)
         stack.enter_context(gpu_queue.hold("landing_gate tests+gpu-proofs", out=sys.stdout))
 
@@ -398,15 +525,6 @@ def _main(stack):
         if args.skip_gpu:
             skip(results, "gpu-proofs", f"skipped by flag: {args.skip_gpu}")
         else:
-            changed = run_cmd(["git", "diff", "--name-only", f"{base_sha}..HEAD"],
-                              cwd=repo, timeout=300)[1]
-            paths = [l.strip() for l in changed.strip().splitlines() if l.strip()]
-            plan = gpu_scope.plan_for_paths(paths, repo)
-            if plan.unmapped:
-                message = gpu_scope.unmapped_message(plan)
-                print(message)
-                results.append(("FAIL", "gpu-proofs", None, message.splitlines()))
-                return finish(repo, base_sha, results)
             print("[gpu-proofs] mode: scoped (focused tests + smoke; --all is nightly only)")
             print("[gpu-proofs] " + plan.describe().replace("\n", "\n[gpu-proofs] "), flush=True)
             cmd = ["python3", "scripts/gpu_proofs_gate.py", "--base", args.base,

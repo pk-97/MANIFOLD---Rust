@@ -3,12 +3,16 @@
 //! ships (resolution 64, Steps 1, Auto iterations), one deterministic tick a
 //! frame from tick 0. 300 measured frames after asset warm-up: every tenth
 //! frame carries per-dispatch GPU timestamps (split per node type, plus per
-//! dispatch label inside `node.gpu_flip_step` so the solver stays readable);
+//! dispatch label inside `node.gpu_flip_step` and `node.whitewater_step`,
+//! keyed on the node's tag and the label, so the solvers stay readable);
 //! the other frames are plain and give the budget numbers, whole-frame GPU ms
 //! and CPU encode (wall time around `runtime.render`). Timestamped frames
 //! open one encoder per dispatch and turn encode replay off
 //! (ENCODE_REPLAY_DESIGN.md D7), so their split is a ratio, never the budget.
 //! `node.render_scene` is split per pass label and encoder kind the same way.
+//! The whitewater's published counts (foam, bubble, spray, pool full) are
+//! read back every frame through the node preview so a speed change that
+//! moved the particle population shows up beside the time it saved.
 //! Every split is reported twice, for the splash (ticks before
 //! `SPLASH_END_TICK`, the column falling and hitting the far wall) and for
 //! the calm after it, because the two phases have different costs and Peter
@@ -48,6 +52,11 @@ const SPLASH_END_TICK: usize = 150;
 const WIDTH: u32 = 1920;
 const HEIGHT: u32 = 1080;
 const STEP: &str = "node.gpu_flip_step";
+const WHITEWATER: &str = "node.whitewater_step";
+/// The preset's whitewater node, whose scalar outputs carry the counts.
+const WHITEWATER_NODE: &str = "whitewater";
+/// Node types split per dispatch label.
+const LABELLED: [&str; 2] = [STEP, WHITEWATER];
 const RENDER: &str = "node.render_scene";
 const SHADOW_LABEL: &str = "node.render_scene shadow";
 const BYTES_PER_PIXEL: u32 = 8;
@@ -79,12 +88,15 @@ fn context(frame: i64, tick: u32) -> PresetContext {
     }
 }
 
+/// A dispatch label of one node: (type id, node tag, label).
+type LabelKey = (String, String, String);
+
 /// A timestamped frame's split: per node type, per dispatch label inside the
-/// solver, per pass label (with its encoder kind) inside render_scene, and the
-/// output hash.
+/// labelled solvers, per pass label (with its encoder kind) inside
+/// render_scene, and the output hash.
 struct Split {
     per_type: BTreeMap<String, f64>,
-    per_step_label: BTreeMap<String, f64>,
+    per_step_label: BTreeMap<LabelKey, f64>,
     per_render_label: BTreeMap<String, f64>,
     shadow_rendered: bool,
     hash: u64,
@@ -97,6 +109,28 @@ struct Frame {
     cpu_ms: f64,
     node_error: bool,
     split: Option<Split>,
+}
+
+/// The whitewater node's published counts after a frame (they lag the
+/// frame that wrote them by the readback).
+#[derive(Clone, Copy, Default)]
+struct Counts {
+    foam: f64,
+    bubble: f64,
+    spray: f64,
+    pool_full: f64,
+}
+
+impl Counts {
+    fn read(runtime: &PresetRuntime) -> Self {
+        let (_, outputs) = runtime.preview_scalar_io();
+        let port = |name: &str| outputs.iter().find_map(|(port, value)| (port == name).then_some(f64::from(*value))).unwrap_or(0.0);
+        Self { foam: port("foam_count"), bubble: port("bubble_count"), spray: port("spray_count"), pool_full: port("pool_full") }
+    }
+
+    fn live(self) -> f64 {
+        self.foam + self.bubble + self.spray
+    }
 }
 
 fn fnv1a(seed: u64, bytes: impl Iterator<Item = u8>) -> u64 {
@@ -167,8 +201,9 @@ fn render(
             continue;
         };
         *per_type.entry(type_id.clone()).or_insert(0.0) += span.millis;
-        if type_id == STEP {
-            *per_step_label.entry(span.label.clone()).or_insert(0.0) += span.millis;
+        if LABELLED.contains(&type_id.as_str()) {
+            let key = (type_id.clone(), span.tag.clone(), span.label.clone());
+            *per_step_label.entry(key).or_insert(0.0) += span.millis;
         } else if type_id == RENDER {
             shadow_rendered |= span.label == SHADOW_LABEL;
             *per_render_label.entry(format!("{:?} {}", span.kind, span.label)).or_insert(0.0) += span.millis;
@@ -206,12 +241,14 @@ struct Phase {
     plain_cpu: Vec<f64>,
     stamped_gpu: Vec<f64>,
     per_type: BTreeMap<String, Vec<f64>>,
-    per_label: BTreeMap<String, Vec<f64>>,
+    per_label: BTreeMap<LabelKey, Vec<f64>>,
     per_render: BTreeMap<String, Vec<f64>>,
+    counts: Vec<Counts>,
 }
 
 impl Phase {
-    fn add(&mut self, result: Frame) {
+    fn add(&mut self, result: Frame, counts: Counts) {
+        self.counts.push(counts);
         match result.split {
             None => {
                 self.plain_gpu.push(result.gpu_ms);
@@ -248,8 +285,28 @@ impl Phase {
             percentile(&self.stamped_gpu, 0.5),
             percentile(&self.stamped_gpu, 0.95),
         );
+        let live: Vec<f64> = self.counts.iter().map(|c| c.live()).collect();
+        let last = self.counts.last().copied().unwrap_or_default();
+        println!(
+            "  whitewater live particles: p50 {:.0} p95 {:.0} max {:.0} | last frame foam {:.0} bubble {:.0} spray {:.0} | pool full on {} frames",
+            percentile(&live, 0.5),
+            percentile(&live, 0.95),
+            live.iter().copied().fold(0.0, f64::max),
+            last.foam,
+            last.bubble,
+            last.spray,
+            self.counts.iter().filter(|c| c.pool_full > 0.0).count(),
+        );
         print_split("per node type", &self.per_type);
-        print_split("gpu_flip_step per dispatch label", &self.per_label);
+        for type_id in LABELLED {
+            let labels: BTreeMap<String, Vec<f64>> = self
+                .per_label
+                .iter()
+                .filter(|((t, _, _), _)| t == type_id)
+                .map(|((_, tag, label), samples)| (format!("{tag}: {label}"), samples.clone()))
+                .collect();
+            print_split(&format!("{type_id} per dispatch label"), &labels);
+        }
         print_split("render_scene per pass label", &self.per_render);
     }
 }
@@ -333,6 +390,8 @@ fn probe(variant: Variant) {
         assert!(warmup_started.elapsed().as_secs() < 30, "asset warmup did not settle");
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
+    // The preview copies the node's CPU-side scalars; it adds no GPU work.
+    runtime.set_preview_node(Some(&manifold_core::NodeId::from(WHITEWATER_NODE)));
     let mut whole = Phase::default();
     let mut splash = Phase::default();
     let mut calm = Phase::default();
@@ -351,6 +410,7 @@ fn probe(variant: Variant) {
             &params,
             stamped.then_some(&sampler),
         );
+        let counts = Counts::read(&runtime);
         node_error_frames += usize::from(result.node_error);
         if let Some(split) = &result.split {
             if split.shadow_rendered {
@@ -375,8 +435,8 @@ fn probe(variant: Variant) {
                 hash: split.hash,
             }),
         };
-        whole.add(for_whole);
-        if tick < SPLASH_END_TICK { splash.add(result) } else { calm.add(result) }
+        whole.add(for_whole, counts);
+        if tick < SPLASH_END_TICK { splash.add(result, counts) } else { calm.add(result, counts) }
     }
     println!("  frames with a node error (live still presents them): {node_error_frames} of {MEASURED_FRAMES}");
     println!("  plain-frame GPU ms per tick:");

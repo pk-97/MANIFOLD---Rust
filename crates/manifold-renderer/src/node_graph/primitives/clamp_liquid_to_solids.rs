@@ -41,7 +41,7 @@ struct ClampUniforms {
 crate::primitive! {
     name: ClampLiquidToSolids,
     type_id: "node.clamp_liquid_to_solids",
-    purpose: "Clamp a liquid level set (nodes_x/y/z nodes over the center/size box, node (i, j, k) at i + nx·(j + ny·k)) against its solid lattice (solid_nodes_x/y/z over the same box, sampled trilinearly): border nodes read a tenth of a bin outside, nodes where the solid is negative read max(value, 0), every other node passes through. Nodes past the lattice, and every node while there is no lattice, pass through.",
+    purpose: "Clamp a liquid level set (nodes_x/y/z nodes over the center/size box, node (i, j, k) at i + nx·(j + ny·k)) against its solid lattice (solid_nodes_x/y/z over the same box, sampled trilinearly): border nodes read a third of a bin outside, nodes where the solid is negative read max(value, 0), every other node passes through. Nodes past the lattice, and every node while there is no lattice, pass through.",
     inputs: {
         levelset: Array(f32) required,
         solid: Array(f32) required,
