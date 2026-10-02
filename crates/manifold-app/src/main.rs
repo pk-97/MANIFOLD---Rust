@@ -86,6 +86,10 @@ mod perform_mode;
 // (native Metal `ContentThread`, same constraint as `journey-proofs`).
 #[cfg(all(feature = "perf-soak", target_os = "macos"))]
 mod perf_soak;
+// `manifold frame-time <project> --frames N [--resolution R]`: the whole
+// frame of a real project with per-pass GPU timestamps, calm vs splash.
+#[cfg(all(feature = "perf-soak", target_os = "macos"))]
+mod frame_time;
 // Sibling frame loop for bare-glb/gltf input — PERF_BUDGET_GATE_DESIGN.md D7 /
 // P2b. Same feature gate as `perf_soak` (dispatched from inside its `run()`).
 #[cfg(all(feature = "perf-soak", target_os = "macos"))]
@@ -189,6 +193,14 @@ fn main() {
         let args: Vec<String> = std::env::args().collect();
         if args.get(1).map(String::as_str) == Some("perf-soak") {
             crate::perf_soak::run(&args[1..]);
+        }
+    }
+
+    #[cfg(all(feature = "perf-soak", target_os = "macos"))]
+    {
+        let args: Vec<String> = std::env::args().collect();
+        if args.get(1).map(String::as_str) == Some("frame-time") {
+            crate::frame_time::run(&args[1..]);
         }
     }
 

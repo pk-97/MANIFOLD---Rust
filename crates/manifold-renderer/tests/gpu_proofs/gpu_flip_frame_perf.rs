@@ -13,6 +13,12 @@
 //! The whitewater's published counts (foam, bubble, spray, pool full) are
 //! read back every frame through the node preview so a speed change that
 //! moved the particle population shows up beside the time it saved.
+//! Every split is reported twice, for the splash (ticks before
+//! `SPLASH_END_TICK`, the column falling and hitting the far wall) and for
+//! the calm after it, because the two phases have different costs and Peter
+//! hears both on stage. Plain frames print their GPU ms per tick so a
+//! bimodal (fast/slow alternating) phase is visible as a sequence, not
+//! hidden in a percentile.
 //! Present is not timed here: that is the app with MANIFOLD_RENDER_TRACE=1.
 //! Timing is reported, never gated. Two things are checked: the raster shadow
 //! map stays cached on every timestamped frame (its casters are the static
@@ -38,7 +44,11 @@ use crate::harness;
 
 const PRESET: &str = include_str!("../../assets/generator-presets/WaterDamBreakGpuFlip.json");
 const MEASURED_FRAMES: usize = 300;
-const TIMESTAMP_EVERY: usize = 10;
+const TIMESTAMP_EVERY: usize = 5;
+/// First tick of the calm phase. The column has fallen, hit the far wall
+/// and the sloshing has settled into a swaying pool by here (checked on the
+/// plain-frame GPU sequence this probe prints: the splash hump ends before it).
+const SPLASH_END_TICK: usize = 150;
 const WIDTH: u32 = 1920;
 const HEIGHT: u32 = 1080;
 const STEP: &str = "node.gpu_flip_step";
@@ -219,7 +229,85 @@ fn print_split(title: &str, columns: &BTreeMap<String, Vec<f64>>) {
     rows.sort_by(|a, b| percentile(b.1, 0.5).total_cmp(&percentile(a.1, 0.5)));
     println!("  {title} (timestamped frames, ratios only):");
     for (name, samples) in rows {
-        println!("    {name:<40} p50 {:>8.3} ms  p95 {:>8.3} ms", percentile(samples, 0.5), percentile(samples, 0.95));
+        println!("    {name:<52} p50 {:>8.3} ms  p95 {:>8.3} ms", percentile(samples, 0.5), percentile(samples, 0.95));
+    }
+}
+
+/// One phase's accumulated numbers: plain-frame budgets plus the
+/// timestamped splits.
+#[derive(Default)]
+struct Phase {
+    plain_gpu: Vec<f64>,
+    plain_cpu: Vec<f64>,
+    stamped_gpu: Vec<f64>,
+    per_type: BTreeMap<String, Vec<f64>>,
+    per_label: BTreeMap<LabelKey, Vec<f64>>,
+    per_render: BTreeMap<String, Vec<f64>>,
+    counts: Vec<Counts>,
+}
+
+impl Phase {
+    fn add(&mut self, result: Frame, counts: Counts) {
+        self.counts.push(counts);
+        match result.split {
+            None => {
+                self.plain_gpu.push(result.gpu_ms);
+                self.plain_cpu.push(result.cpu_ms);
+            }
+            Some(split) => {
+                self.stamped_gpu.push(result.gpu_ms);
+                for (name, ms) in split.per_type {
+                    self.per_type.entry(name).or_default().push(ms);
+                }
+                for (name, ms) in split.per_step_label {
+                    self.per_label.entry(name).or_default().push(ms);
+                }
+                for (name, ms) in split.per_render_label {
+                    self.per_render.entry(name).or_default().push(ms);
+                }
+            }
+        }
+    }
+
+    fn report(&self, name: &str) {
+        println!("== {name} ==");
+        println!(
+            "  plain frames ({}): GPU p50 {:.2} ms p95 {:.2} ms | CPU encode p50 {:.2} ms p95 {:.2} ms",
+            self.plain_gpu.len(),
+            percentile(&self.plain_gpu, 0.5),
+            percentile(&self.plain_gpu, 0.95),
+            percentile(&self.plain_cpu, 0.5),
+            percentile(&self.plain_cpu, 0.95),
+        );
+        println!(
+            "  timestamped frames ({}): GPU p50 {:.2} ms p95 {:.2} ms",
+            self.stamped_gpu.len(),
+            percentile(&self.stamped_gpu, 0.5),
+            percentile(&self.stamped_gpu, 0.95),
+        );
+        let live: Vec<f64> = self.counts.iter().map(|c| c.live()).collect();
+        let last = self.counts.last().copied().unwrap_or_default();
+        println!(
+            "  whitewater live particles: p50 {:.0} p95 {:.0} max {:.0} | last frame foam {:.0} bubble {:.0} spray {:.0} | pool full on {} frames",
+            percentile(&live, 0.5),
+            percentile(&live, 0.95),
+            live.iter().copied().fold(0.0, f64::max),
+            last.foam,
+            last.bubble,
+            last.spray,
+            self.counts.iter().filter(|c| c.pool_full > 0.0).count(),
+        );
+        print_split("per node type", &self.per_type);
+        for type_id in LABELLED {
+            let labels: BTreeMap<String, Vec<f64>> = self
+                .per_label
+                .iter()
+                .filter(|((t, _, _), _)| t == type_id)
+                .map(|((_, tag, label), samples)| (format!("{tag}: {label}"), samples.clone()))
+                .collect();
+            print_split(&format!("{type_id} per dispatch label"), &labels);
+        }
+        print_split("render_scene per pass label", &self.per_render);
     }
 }
 
@@ -304,13 +392,10 @@ fn probe(variant: Variant) {
     }
     // The preview copies the node's CPU-side scalars; it adds no GPU work.
     runtime.set_preview_node(Some(&manifold_core::NodeId::from(WHITEWATER_NODE)));
-    let mut plain_gpu = Vec::new();
-    let mut plain_cpu = Vec::new();
-    let mut stamped_gpu = Vec::new();
-    let mut per_type: BTreeMap<String, Vec<f64>> = BTreeMap::new();
-    let mut per_label: BTreeMap<LabelKey, Vec<f64>> = BTreeMap::new();
-    let mut per_render: BTreeMap<String, Vec<f64>> = BTreeMap::new();
-    let mut counts: Vec<Counts> = Vec::new();
+    let mut whole = Phase::default();
+    let mut splash = Phase::default();
+    let mut calm = Phase::default();
+    let mut plain_sequence = Vec::new();
     let mut shadow_frames = Vec::new();
     let mut hashes = Vec::new();
     let mut node_error_frames = 0usize;
@@ -325,68 +410,43 @@ fn probe(variant: Variant) {
             &params,
             stamped.then_some(&sampler),
         );
-        counts.push(Counts::read(&runtime));
+        let counts = Counts::read(&runtime);
         node_error_frames += usize::from(result.node_error);
-        match result.split {
-            None => {
-                plain_gpu.push(result.gpu_ms);
-                plain_cpu.push(result.cpu_ms);
+        if let Some(split) = &result.split {
+            if split.shadow_rendered {
+                shadow_frames.push(tick);
             }
-            Some(split) => {
-                stamped_gpu.push(result.gpu_ms);
-                for (name, ms) in split.per_type {
-                    per_type.entry(name).or_default().push(ms);
-                }
-                for (name, ms) in split.per_step_label {
-                    per_label.entry(name).or_default().push(ms);
-                }
-                for (name, ms) in split.per_render_label {
-                    per_render.entry(name).or_default().push(ms);
-                }
-                if split.shadow_rendered {
-                    shadow_frames.push(tick);
-                }
-                hashes.push((tick, split.hash));
-            }
+            hashes.push((tick, split.hash));
+        } else {
+            plain_sequence.push((tick, result.gpu_ms));
         }
+        // The splits are moved into one phase and cloned into the whole-run
+        // view: a `Frame` is read-only data, so the copy is the price of two
+        // tables, never a render.
+        let for_whole = Frame {
+            gpu_ms: result.gpu_ms,
+            cpu_ms: result.cpu_ms,
+            node_error: result.node_error,
+            split: result.split.as_ref().map(|split| Split {
+                per_type: split.per_type.clone(),
+                per_step_label: split.per_step_label.clone(),
+                per_render_label: split.per_render_label.clone(),
+                shadow_rendered: split.shadow_rendered,
+                hash: split.hash,
+            }),
+        };
+        whole.add(for_whole, counts);
+        if tick < SPLASH_END_TICK { splash.add(result, counts) } else { calm.add(result, counts) }
     }
     println!("  frames with a node error (live still presents them): {node_error_frames} of {MEASURED_FRAMES}");
-    println!(
-        "  plain frames ({}): GPU p50 {:.2} ms p95 {:.2} ms | CPU encode p50 {:.2} ms p95 {:.2} ms",
-        plain_gpu.len(),
-        percentile(&plain_gpu, 0.5),
-        percentile(&plain_gpu, 0.95),
-        percentile(&plain_cpu, 0.5),
-        percentile(&plain_cpu, 0.95),
-    );
-    println!(
-        "  timestamped frames ({}): GPU p50 {:.2} ms p95 {:.2} ms",
-        stamped_gpu.len(),
-        percentile(&stamped_gpu, 0.5),
-        percentile(&stamped_gpu, 0.95),
-    );
-    let live: Vec<f64> = counts.iter().map(|c| c.live()).collect();
-    let last = counts.last().copied().unwrap_or_default();
-    println!(
-        "  whitewater live particles: p50 {:.0} p95 {:.0} max {:.0} | last frame foam {:.0} bubble {:.0} spray {:.0} | pool full on {} frames",
-        percentile(&live, 0.5),
-        percentile(&live, 0.95),
-        live.iter().copied().fold(0.0, f64::max),
-        last.foam,
-        last.bubble,
-        last.spray,
-        counts.iter().filter(|c| c.pool_full > 0.0).count(),
-    );
-    print_split("per node type", &per_type);
-    for type_id in LABELLED {
-        let labels: BTreeMap<String, Vec<f64>> = per_label
-            .iter()
-            .filter(|((t, _, _), _)| t == type_id)
-            .map(|((_, tag, label), samples)| (format!("{tag}: {label}"), samples.clone()))
-            .collect();
-        print_split(&format!("{type_id} per dispatch label"), &labels);
+    println!("  plain-frame GPU ms per tick:");
+    for row in plain_sequence.chunks(12) {
+        let cells: Vec<String> = row.iter().map(|(tick, ms)| format!("{tick:>3}:{ms:>6.2}")).collect();
+        println!("    {}", cells.join(" "));
     }
-    print_split("render_scene per pass label", &per_render);
+    whole.report("whole run");
+    splash.report(&format!("splash (ticks 0..{SPLASH_END_TICK})"));
+    calm.report(&format!("calm (ticks {SPLASH_END_TICK}..{MEASURED_FRAMES})"));
     let combined = fnv1a(FNV_OFFSET, hashes.iter().flat_map(|&(_, hash)| hash.to_le_bytes()));
     println!("  output hash over the timestamped frames: {combined:016x}");
     for (tick, hash) in &hashes {
