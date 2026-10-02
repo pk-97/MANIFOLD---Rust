@@ -2,7 +2,17 @@
 //! (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` section 3.4; GPU_MPM_SOLVER_DESIGN.md
 //! D8). Box3D and FLIP keep `HeldClock` (D9).
 
+use manifold_physics::input::{InputHistory, Timestamped};
+
 use crate::node_graph::fluid::TICK;
+
+/// The time to record this frame's authored inputs at: the frame's target,
+/// never earlier than the history's last sample. Every seam that records
+/// against a `ClockFrame` goes through here, so none can reject a frame the
+/// clock produced.
+pub fn sample_time<T: Timestamped>(history: &InputHistory<T>, target_time: f64) -> f64 {
+    history.back().map_or(target_time, |back| target_time.max(back.time().0))
+}
 
 /// One frame of the clock: how many fixed ticks to run and where the display
 /// sits.
@@ -85,12 +95,17 @@ impl LiquidClock {
             || reset_edge
             || transport < self.last_transport - 1e-9;
         let mut held = false;
+        // Authored inputs were sampled at the last frame's target; within an
+        // epoch the target never moves back past it, so a drop under a tick
+        // cap can only give back this frame's advance.
+        let mut floor = self.target_time;
         if restarted {
             self.epoch = self.epoch.wrapping_add(1);
             self.started = true;
             self.target_time = 0.0;
             self.ticks_done = 0;
             self.dropped_seconds = 0.0;
+            floor = 0.0;
         } else {
             let advance = (transport - self.last_transport).max(0.0) * f64::from(speed);
             held = advance <= 0.0;
@@ -106,10 +121,11 @@ impl LiquidClock {
                 None => ((frame_interval / TICK) - 1e-6).ceil().clamp(1.0, f64::from(MAX_LIVE_TICKS)) as u64,
             };
             let run = due.min(allowance);
-            // Keep one tick of scheduling jitter; drop the rest visibly.
+            // Keep one tick of scheduling jitter; drop the rest visibly. What
+            // the floor keeps stays owed and runs on later frames.
             let dropped = due.saturating_sub(run).saturating_sub(1);
             if dropped > 0 {
-                let seconds = dropped as f64 * TICK;
+                let seconds = (dropped as f64 * TICK).min(self.target_time - floor).max(0.0);
                 self.target_time -= seconds;
                 self.dropped_seconds += seconds;
             }
@@ -292,6 +308,30 @@ mod tests {
         clock.set_tick_cap(None);
         let uncapped = clock.advance(8.0 * TICK, 3.0 * TICK, 1.0, 0.0, false, true);
         assert_eq!(uncapped.ticks, 4);
+    }
+
+    /// A coupled domain holding under cap 0 with jittery frames (one tick's
+    /// GPU work spanning several display frames) never moves the target back
+    /// past the last frame's: the body history records every frame.
+    #[test]
+    fn liquid_clock_target_never_regresses_under_tick_cap_zero() {
+        let mut clock = LiquidClock::default();
+        let mut transport = 0.0;
+        let intervals = [2.5, 2.5, 2.5, 0.07, 0.2, 1.9, 2.5, 0.1, 3.0, 0.05, 2.5, 2.5];
+        let caps = [Some(1), Some(0), Some(0), Some(1), Some(0), Some(0), Some(1), Some(0)];
+        let mut previous = clock.advance(0.0, TICK, 1.0, 0.0, false, false);
+        for step in 0..400 {
+            let interval = TICK * intervals[step % intervals.len()];
+            transport += interval;
+            clock.set_tick_cap(caps[step % caps.len()]);
+            let frame = clock.advance(transport, interval, 1.0, 0.0, false, false);
+            assert!(!frame.restarted, "frame {step}");
+            assert!(frame.target_time >= previous.target_time - 1e-12, "frame {step}: target went back");
+            assert!(frame.target_time <= transport + 1e-9, "frame {step}: target ran ahead of the transport");
+            assert!(frame.dropped_seconds >= previous.dropped_seconds, "frame {step}: dropped time shrank");
+            previous = frame;
+        }
+        assert!(previous.dropped_seconds > 0.0, "the cap must have dropped something");
     }
 
     /// A state reset restarts once in a new epoch while the transport runs on.

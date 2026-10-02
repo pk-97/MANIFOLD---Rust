@@ -26,7 +26,7 @@ use manifold_physics::{FieldValue, TickStamp, VectorField};
 
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid::TICK;
-use crate::node_graph::liquid::clock::{ClockFrame, MAX_LIVE_TICKS};
+use crate::node_graph::liquid::clock::{ClockFrame, MAX_LIVE_TICKS, sample_time};
 use crate::node_graph::liquid::coupling::LiquidRigidOwner;
 use crate::node_graph::liquid::lattice::LiquidLattice;
 use crate::node_graph::physics::ResolvedRigidImpulse;
@@ -504,8 +504,7 @@ impl LiquidFields {
         if frame.restarted {
             history.clear();
         }
-        // A held frame can sit behind a sample recorded at a later target.
-        let time = history.back().map_or(frame.target_time, |back| frame.target_time.max(back.time));
+        let time = sample_time(history, frame.target_time);
         history
             .record(FieldSample { time, field: field.cloned() }, Seconds(first as f64 * TICK))
             .map_err(|error| format!("Liquid forces: {error}"))?;
