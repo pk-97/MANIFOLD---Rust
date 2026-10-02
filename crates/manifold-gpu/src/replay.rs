@@ -25,6 +25,12 @@ pub(crate) const BYTES_ALIGN: usize = 256;
 /// Most bindings one recordable dispatch carries, the sizes buffer included.
 pub(crate) const MAX_KEY_BINDINGS: usize = 32;
 
+/// Bytes per entry of a gated segment's range buffer: `{location: u32,
+/// length: u32}`, Metal's indirect execution range. A live segment holds
+/// `{0, commands}`, a dead one `{0, 0}`; the GPU writes it, the replayed
+/// segment reads it (`GpuEncoder::begin_gated_segment`).
+pub const GATED_RANGE_BYTES: u64 = 8;
+
 /// What replay did, summed over a span cache's life.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct GpuReplayStats {
@@ -42,6 +48,11 @@ pub struct GpuReplayStats {
     pub ring_busy: u64,
     /// Recording chunks and uniform arenas created. Flat once warm.
     pub store_allocations: u64,
+    /// Gated segments run from a recording, the GPU deciding each one's
+    /// length (dead segments included).
+    pub segments_replayed: u64,
+    /// Gated dispatches that ran directly, as an indirect dispatch.
+    pub segments_direct: u64,
 }
 
 impl std::ops::AddAssign for GpuReplayStats {
@@ -52,7 +63,21 @@ impl std::ops::AddAssign for GpuReplayStats {
         self.executes += other.executes;
         self.ring_busy += other.ring_busy;
         self.store_allocations += other.store_allocations;
+        self.segments_replayed += other.segments_replayed;
+        self.segments_direct += other.segments_direct;
     }
+}
+
+/// A dispatch's place in a gated segment: the range buffer the GPU writes
+/// the segment's length into (by identity and byte offset), the length the
+/// segment declared, and this dispatch's slot inside it. Slot 0 opens the
+/// segment, so a recording's segment structure is part of every key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct GateKey {
+    pub ranges: usize,
+    pub offset: u64,
+    pub commands: u32,
+    pub slot: u32,
 }
 
 /// `MANIFOLD_ENCODE_REPLAY=0` turns replay off for the process, which brings
@@ -74,6 +99,7 @@ pub(crate) enum KeyBinding<'a> {
 pub(crate) struct DispatchKey<'a> {
     pub pipeline: usize,
     pub groups: [u32; 3],
+    pub gate: Option<GateKey>,
     bindings: [KeyBinding<'a>; MAX_KEY_BINDINGS],
     len: usize,
 }
@@ -83,6 +109,7 @@ impl<'a> DispatchKey<'a> {
         Self {
             pipeline,
             groups,
+            gate: None,
             bindings: [KeyBinding::Bytes { slot: 0, data: &[] }; MAX_KEY_BINDINGS],
             len: 0,
         }
@@ -126,6 +153,7 @@ pub(crate) struct BytesSlot {
 struct RecordedCommand {
     pipeline: usize,
     groups: [u32; 3],
+    gate: Option<GateKey>,
     bindings_start: u32,
     bindings_end: u32,
 }
@@ -148,6 +176,11 @@ pub(crate) struct Recording {
 impl Recording {
     pub fn len(&self) -> usize {
         self.commands.len()
+    }
+
+    /// Whether command `index` continues a gated segment opened before it.
+    pub fn continues_segment(&self, index: usize) -> bool {
+        self.commands.get(index).and_then(|c| c.gate).is_some_and(|gate| gate.slot > 0)
     }
 
     /// Drop every command from `len` on.
@@ -175,6 +208,7 @@ impl Recording {
         let recorded = &self.bindings[command.bindings_start as usize..command.bindings_end as usize];
         command.pipeline == key.pipeline
             && command.groups == key.groups
+            && command.gate == key.gate
             && recorded.len() == key.bindings().len()
             && recorded.iter().zip(key.bindings()).all(|(recorded, incoming)| match (recorded, incoming) {
                 (
@@ -229,6 +263,7 @@ impl Recording {
         self.commands.push(RecordedCommand {
             pipeline: key.pipeline,
             groups: key.groups,
+            gate: key.gate,
             bindings_start,
             bindings_end: self.bindings.len() as u32,
         });
@@ -312,10 +347,35 @@ mod tests {
         assert!(k.push(KeyBinding::Buffer { slot: 5, id: 0x4000, offset: 0 }));
         variants.push(("binding count (more)", k));
 
+        let mut k = key(&bytes);
+        k.gate = Some(GateKey { ranges: 0x5000, offset: 0, commands: 4, slot: 0 });
+        variants.push(("gate (added)", k));
+
         for (field, variant) in &variants {
             assert!(!recording.matches(0, variant), "a changed {field} must miss");
         }
         assert!(!recording.matches(1, &key(&bytes)), "past the end must miss");
+
+        // A gated command: every gate field decides the match too.
+        let gate = GateKey { ranges: 0x5000, offset: 8, commands: 4, slot: 1 };
+        let mut gated = Recording::default();
+        let mut k = key(&bytes);
+        k.gate = Some(gate);
+        gated.push(&k, &[BytesSlot { arena: 0, offset: 0 }]);
+        assert!(gated.matches(0, &k));
+        assert!(gated.continues_segment(0));
+        for (field, changed) in [
+            ("ranges", GateKey { ranges: 0x5008, ..gate }),
+            ("offset", GateKey { offset: 16, ..gate }),
+            ("commands", GateKey { commands: 5, ..gate }),
+            ("slot", GateKey { slot: 0, ..gate }),
+        ] {
+            let mut k = key(&bytes);
+            k.gate = Some(changed);
+            assert!(!gated.matches(0, &k), "a changed gate {field} must miss");
+        }
+        assert!(!gated.matches(0, &key(&bytes)), "a gate removed must miss");
+        assert!(!recording.continues_segment(0), "an ungated command opens no segment");
 
         let mut recording = recording;
         let changed = [9, 2, 3, 4, 5, 6, 7, 8];

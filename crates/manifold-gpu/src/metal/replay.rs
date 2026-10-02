@@ -5,12 +5,22 @@
 //! against the entry at the current position (`crate::replay`); matched
 //! and newly recorded commands wait as one pending stretch, which runs with
 //! a single execute the moment anything else needs the encoder.
+//!
+//! A gated segment (`GpuEncoder::begin_gated_segment`) is a run of
+//! dispatches whose number the GPU decides: it lives in its own indirect
+//! command buffer, sized to the length the segment declared, and is executed
+//! from a range the GPU wrote (`{0, commands}` live, `{0, 0}` dead), so a
+//! converged solver's remaining rounds cost one empty execute each instead
+//! of a CPU-encoded indirect dispatch apiece. Slots the segment didn't fill
+//! are reset, which Metal runs as no-ops; a segment is always executed as a
+//! whole, so a flush landing inside one cuts the recording there and the
+//! rest of that segment runs directly.
 
 use std::ops::Range;
 use std::ptr::NonNull;
 
+use objc2::Message;
 use objc2::rc::Retained;
-use objc2::msg_send;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::{NSRange, NSString};
 use objc2_metal::{
@@ -25,8 +35,8 @@ use super::encoder::{EncoderState, GpuEncoder, MAX_BUFFER_SLOTS, RT_STAGE_PREFIX
 use super::types::{GpuBuffer, GpuComputePipeline};
 use super::SIZES_BUFFER_BINDING;
 use crate::replay::{
-    ARENA_BYTES, BYTES_ALIGN, BytesSlot, CHUNK_COMMANDS, DispatchKey, GpuReplayStats, KeyBinding, MAX_ARENAS,
-    MAX_CHUNKS, MAX_KEY_BINDINGS, Recording, pick_entry, replay_allowed_by_env,
+    ARENA_BYTES, BYTES_ALIGN, BytesSlot, CHUNK_COMMANDS, DispatchKey, GateKey, GpuReplayStats, KeyBinding,
+    MAX_ARENAS, MAX_CHUNKS, MAX_KEY_BINDINGS, Recording, pick_entry, replay_allowed_by_env,
 };
 use crate::types::GpuBinding;
 
@@ -75,18 +85,39 @@ struct ReplayEntry {
     store: ReplayStore,
 }
 
+/// Where a stored command's indirect command sits.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Place {
+    /// Position across the entry's chunks.
+    Chunk(usize),
+    /// Slot inside one gated segment's command buffer.
+    Segment { segment: usize, slot: usize },
+}
+
 struct StoredCommand {
     /// Retained so a recorded pipeline can't be freed while named here.
     _pipeline: Retained<ProtocolObject<dyn MTLComputePipelineState>>,
+    place: Place,
     retained_start: u32,
     resources_start: u32,
     arena_before: (u32, u32),
     label: Retained<NSString>,
 }
 
+/// One gated segment's command buffer and the range the GPU executes it by.
+struct StoredSegment {
+    icb: Retained<ProtocolObject<dyn MTLIndirectCommandBuffer>>,
+    commands: usize,
+    ranges: Retained<ProtocolObject<dyn MTLBuffer>>,
+    offset: u64,
+}
+
 #[derive(Default)]
 struct ReplayStore {
     chunks: Vec<Retained<ProtocolObject<dyn MTLIndirectCommandBuffer>>>,
+    /// Next free chunk position; chunk commands are placed in order.
+    chunk_cursor: usize,
+    segments: Vec<StoredSegment>,
     arenas: Vec<GpuBuffer>,
     /// Next free byte: (arena, offset).
     arena_cursor: (u32, u32),
@@ -115,9 +146,12 @@ impl ReplayStore {
         self.chunks.len() * CHUNK_COMMANDS
     }
 
-    /// The only place a store allocates.
+    /// Where chunks and arenas are allocated: between spans, from what the
+    /// last visit fell short of. Segment buffers are the exception, made
+    /// when a segment is first recorded (a changed segment structure is a
+    /// recording cut, which already allocates nothing while warm).
     fn reserve(&mut self, device: &GpuDevice, stats: &mut GpuReplayStats) {
-        let chunks = (self.commands.len() + self.short_commands).div_ceil(CHUNK_COMMANDS).clamp(1, MAX_CHUNKS);
+        let chunks = (self.chunk_cursor + self.short_commands).div_ceil(CHUNK_COMMANDS).clamp(1, MAX_CHUNKS);
         while self.chunks.len() < chunks {
             let Some(chunk) = new_chunk(device) else {
                 log::warn!("encode replay: indirect command buffer allocation failed; the span encodes directly");
@@ -179,6 +213,9 @@ impl ReplayStore {
         unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), base.add(slot.offset as usize), data.len()) };
     }
 
+    /// Drop every command from `len` on. A dropped segment slot is reset so
+    /// the segment, always executed whole, runs it as a no-op; a segment
+    /// whose first slot is dropped goes with its buffer.
     fn truncate(&mut self, len: usize) {
         let Some(first) = self.commands.get(len) else {
             return;
@@ -186,25 +223,83 @@ impl ReplayStore {
         self.retained.truncate(first.retained_start as usize);
         self.resources.truncate(first.resources_start as usize);
         self.arena_cursor = first.arena_before;
+        let mut chunk_cursor = self.chunk_cursor;
+        let mut segments = self.segments.len();
+        for command in &self.commands[len..] {
+            match command.place {
+                Place::Chunk(position) => chunk_cursor = chunk_cursor.min(position),
+                Place::Segment { segment, slot } => {
+                    unsafe { self.segments[segment].icb.indirectComputeCommandAtIndex(slot) }.reset();
+                    if slot == 0 {
+                        segments = segments.min(segment);
+                    }
+                }
+            }
+        }
+        self.chunk_cursor = chunk_cursor;
+        self.segments.truncate(segments);
         self.commands.truncate(len);
     }
 
-    /// Write `key` as the next command. `buffers` holds the buffer of every
-    /// buffer binding and `slots` the arena slot of every inline binding,
-    /// both in binding order.
+    /// Whether the next command of `key` has a place: a chunk position, or
+    /// a slot inside the open segment (`gate.slot` within its declared
+    /// length; slot 0 needs a new segment buffer, made here).
+    fn place_for(
+        &mut self,
+        device: &ProtocolObject<dyn MTLDevice>,
+        key: &DispatchKey,
+        ranges: Option<&Retained<ProtocolObject<dyn MTLBuffer>>>,
+        stats: &mut GpuReplayStats,
+    ) -> Option<Place> {
+        let Some(gate) = key.gate else {
+            return (self.chunk_cursor < self.capacity()).then_some(Place::Chunk(self.chunk_cursor));
+        };
+        let slot = gate.slot as usize;
+        if slot >= gate.commands as usize {
+            return None;
+        }
+        if slot == 0 {
+            let ranges = ranges.expect("a gated key names its range buffer");
+            let icb = new_icb(device, gate.commands as usize)?;
+            for i in 0..gate.commands as usize {
+                unsafe { icb.indirectComputeCommandAtIndex(i) }.reset();
+            }
+            stats.store_allocations += 1;
+            self.segments.push(StoredSegment { icb, commands: gate.commands as usize, ranges: ranges.clone(), offset: gate.offset });
+        }
+        let segment = self.segments.len().checked_sub(1)?;
+        (self.segments[segment].commands == gate.commands as usize).then_some(Place::Segment { segment, slot })
+    }
+
+    /// Write `key` as the next command at `place`. `buffers` holds the
+    /// buffer of every buffer binding and `slots` the arena slot of every
+    /// inline binding, both in binding order.
     fn record(
         &mut self,
         pipeline: &GpuComputePipeline,
         key: &DispatchKey,
+        place: Place,
         buffers: &[Option<&GpuBuffer>],
         slots: &[BytesSlot],
         arena_before: (u32, u32),
         label: &str,
     ) {
-        let index = self.commands.len();
         let retained_start = self.retained.len() as u32;
         let resources_start = self.resources.len() as u32;
-        let command = unsafe { self.chunks[index / CHUNK_COMMANDS].indirectComputeCommandAtIndex(index % CHUNK_COMMANDS) };
+        let command = match place {
+            Place::Chunk(position) => {
+                debug_assert_eq!(position, self.chunk_cursor, "chunk commands are placed in order");
+                self.chunk_cursor = position + 1;
+                unsafe { self.chunks[position / CHUNK_COMMANDS].indirectComputeCommandAtIndex(position % CHUNK_COMMANDS) }
+            }
+            Place::Segment { segment, slot } => {
+                let stored = &self.segments[segment];
+                if slot == 0 {
+                    self.resources.push(resource(&stored.ranges));
+                }
+                unsafe { stored.icb.indirectComputeCommandAtIndex(slot) }
+            }
+        };
         command.reset();
         command.setComputePipelineState(&pipeline.state);
         let mut buffers = buffers.iter();
@@ -230,6 +325,7 @@ impl ReplayStore {
         command.setBarrier();
         self.commands.push(StoredCommand {
             _pipeline: pipeline.state.clone(),
+            place,
             retained_start,
             resources_start,
             arena_before,
@@ -238,21 +334,26 @@ impl ReplayStore {
     }
 
     /// Run commands `range` on `enc`, in order and each after the last,
-    /// with everything encoded before them finished first. Returns the
-    /// number of execute calls.
+    /// with everything encoded before them finished first: chunk runs by
+    /// explicit range, each gated segment whole, by the range the GPU
+    /// wrote. Returns (execute calls, segment executes).
     fn execute(
         &mut self,
         enc: &ProtocolObject<dyn MTLComputeCommandEncoder>,
         range: Range<usize>,
         cmd_buf: &Retained<ProtocolObject<dyn MTLCommandBuffer>>,
-    ) -> u64 {
+    ) -> (u64, u64) {
         let first = &self.commands[range.start];
         let resources_start = first.resources_start as usize;
         let resources_end = self.commands.get(range.end).map_or(self.resources.len(), |c| c.resources_start as usize);
-        let mut executes = 0;
+        let (mut executes, mut segments) = (0, 0);
         unsafe {
             enc.pushDebugGroup(&first.label);
             enc.insertDebugSignpost(&first.label);
+            // The command buffers themselves are direct arguments of the
+            // execute calls and need no useResource: declaring one costs
+            // ~6 us of GPU time per call (measured, dead-segment probe), and
+            // the proofs hold without it under the Metal debug layer.
             enc.memoryBarrierWithScope(MTLBarrierScope::Buffers);
             if resources_end > resources_start {
                 let resources = NonNull::new_unchecked(self.resources.as_mut_ptr().add(resources_start));
@@ -264,32 +365,58 @@ impl ReplayStore {
             }
             let mut start = range.start;
             while start < range.end {
-                let chunk = start / CHUNK_COMMANDS;
-                let end = range.end.min((chunk + 1) * CHUNK_COMMANDS);
-                let icb = &self.chunks[chunk];
-                let () = msg_send![enc, useResource: &**icb, usage: MTLResourceUsage::Read];
-                enc.executeCommandsInBuffer_withRange(icb, NSRange::new(start % CHUNK_COMMANDS, end - start));
+                if executes > 0 {
+                    enc.memoryBarrierWithScope(MTLBarrierScope::Buffers);
+                }
+                match self.commands[start].place {
+                    Place::Chunk(position) => {
+                        let chunk = position / CHUNK_COMMANDS;
+                        let mut end = start + 1;
+                        while end < range.end
+                            && self.commands[end].place == Place::Chunk(position + (end - start))
+                            && (position + (end - start)) / CHUNK_COMMANDS == chunk
+                        {
+                            end += 1;
+                        }
+                        let icb = &self.chunks[chunk];
+                        enc.executeCommandsInBuffer_withRange(icb, NSRange::new(position % CHUNK_COMMANDS, end - start));
+                        start = end;
+                    }
+                    Place::Segment { segment, .. } => {
+                        let mut end = start + 1;
+                        while end < range.end && matches!(self.commands[end].place, Place::Segment { segment: s, .. } if s == segment) {
+                            end += 1;
+                        }
+                        let stored = &self.segments[segment];
+                        enc.executeCommandsInBuffer_indirectBuffer_indirectBufferOffset(&stored.icb, &stored.ranges, stored.offset as usize);
+                        segments += 1;
+                        start = end;
+                    }
+                }
                 executes += 1;
-                start = end;
             }
             enc.memoryBarrierWithScope(MTLBarrierScope::Buffers);
             enc.popDebugGroup();
         }
         self.last_cmd_buf = Some(cmd_buf.clone());
-        executes
+        (executes, segments)
     }
 }
 
 fn new_chunk(device: &GpuDevice) -> Option<Retained<ProtocolObject<dyn MTLIndirectCommandBuffer>>> {
+    new_icb(device.raw_device(), CHUNK_COMMANDS)
+}
+
+fn new_icb(device: &ProtocolObject<dyn MTLDevice>, commands: usize) -> Option<Retained<ProtocolObject<dyn MTLIndirectCommandBuffer>>> {
     let desc = MTLIndirectCommandBufferDescriptor::new();
     desc.setCommandTypes(MTLIndirectCommandType::ConcurrentDispatch);
     desc.setInheritPipelineState(false);
     desc.setInheritBuffers(false);
     desc.setMaxKernelBufferBindCount(ICB_BUFFER_SLOTS);
     unsafe {
-        device.raw_device().newIndirectCommandBufferWithDescriptor_maxCommandCount_options(
+        device.newIndirectCommandBufferWithDescriptor_maxCommandCount_options(
             &desc,
-            CHUNK_COMMANDS,
+            commands,
             MTLResourceOptions::StorageModeShared,
         )
     }
@@ -328,6 +455,22 @@ pub(crate) struct ReplaySpan {
     mode: SpanMode,
     /// The device's word-copy kernel while the span replays (D9).
     copy_kernel: Option<std::sync::Arc<GpuComputePipeline>>,
+    /// The gated segment being encoded, between `begin_gated_segment` and
+    /// the next begin or `end_gated_segments`.
+    segment: Option<OpenSegment>,
+    /// The device, for a segment buffer recorded mid-span.
+    device: Retained<ProtocolObject<dyn MTLDevice>>,
+}
+
+struct OpenSegment {
+    ranges: Retained<ProtocolObject<dyn MTLBuffer>>,
+    offset: u64,
+    commands: u32,
+    /// Gated dispatches the span took so far: the next one's slot.
+    taken: u32,
+    /// A flush ran inside this segment: the rest of it encodes directly,
+    /// since the segment's buffer already executed as a whole.
+    broken: bool,
 }
 
 /// The word copy a replaying span turns buffer copies into (D9): one thread
@@ -358,7 +501,109 @@ impl GpuEncoder {
         let enabled = self.profile.is_none() && !super::gpu_fault::diagnostics_enabled() && replay_allowed_by_env();
         let entry = if enabled { cache.enter(device) } else { None };
         let copy_kernel = entry.is_some().then(|| device.replay_copy_kernel().clone());
-        self.replay = Some(ReplaySpan { cache, entry, cursor: 0, pending_start: 0, mode: SpanMode::Validate, copy_kernel });
+        self.replay = Some(ReplaySpan {
+            cache,
+            entry,
+            cursor: 0,
+            pending_start: 0,
+            mode: SpanMode::Validate,
+            copy_kernel,
+            segment: None,
+            device: device.raw_device().retain(),
+        });
+    }
+
+    /// Open a gated segment inside the span: the next `dispatch_compute_gated`
+    /// calls, up to `commands` of them, run from one recording the GPU
+    /// executes by `ranges[index]` (`GATED_RANGE_BYTES` per entry), written
+    /// earlier in this command buffer as `{0, commands}` to run or `{0, 0}`
+    /// to skip. Closes the segment before it. Outside a span, or when the
+    /// span encodes directly, gating is the dispatches' own indirect
+    /// arguments, as before. Every dispatch of a segment must stay inside
+    /// the segment's range buffer decision: the GPU writes both.
+    pub fn begin_gated_segment(&mut self, ranges: &GpuBuffer, index: u32, commands: u32) {
+        let Some(mut span) = self.replay.take() else {
+            return;
+        };
+        self.close_segment(&mut span);
+        if span.entry.is_some() {
+            span.segment = Some(OpenSegment {
+                ranges: ranges.raw.clone(),
+                offset: u64::from(index) * crate::replay::GATED_RANGE_BYTES,
+                commands,
+                taken: 0,
+                broken: false,
+            });
+        }
+        self.replay = Some(span);
+    }
+
+    /// Close the open gated segment; later dispatches are ungated.
+    pub fn end_gated_segments(&mut self) {
+        let Some(mut span) = self.replay.take() else {
+            return;
+        };
+        self.close_segment(&mut span);
+        self.replay = Some(span);
+    }
+
+    /// A dispatch the GPU may have switched off: `gate` holds its indirect
+    /// threadgroup counts at `gate_offset` (zeros when off), `groups` the
+    /// counts it has when on. Inside an open gated segment of a replaying
+    /// span it is recorded with `groups` and the segment's range decides;
+    /// everywhere else it is today's indirect dispatch.
+    pub fn dispatch_compute_gated(
+        &mut self,
+        pipeline: &GpuComputePipeline,
+        bindings: &[GpuBinding],
+        groups: [u32; 3],
+        gate: &GpuBuffer,
+        gate_offset: u64,
+        label: &str,
+    ) {
+        if let Some(mut span) = self.replay.take() {
+            let taken = match &span.segment {
+                Some(segment) if !segment.broken && segment.taken < segment.commands => {
+                    let gate = GateKey {
+                        ranges: identity(&*segment.ranges),
+                        offset: segment.offset,
+                        commands: segment.commands,
+                        slot: segment.taken,
+                    };
+                    self.replay_dispatch_in(&mut span, pipeline, bindings, Some(groups), Some(gate), label)
+                }
+                _ => false,
+            };
+            if taken {
+                span.segment.as_mut().expect("taken inside a segment").taken += 1;
+            } else {
+                span.cache.stats.segments_direct += 1;
+            }
+            self.replay = Some(span);
+            if taken {
+                return;
+            }
+        }
+        self.dispatch_compute_indirect(pipeline, bindings, gate, gate_offset, label);
+    }
+
+    /// Close the open segment. A recording that continues the segment past
+    /// what this visit took is cut there: the segment executes whole, so
+    /// the slots it didn't take must be no-ops, which the cut resets.
+    fn close_segment(&mut self, span: &mut ReplaySpan) {
+        let Some(segment) = span.segment.take() else {
+            return;
+        };
+        let Some(entry) = span.entry else {
+            return;
+        };
+        if segment.taken > 0 && span.mode == SpanMode::Validate {
+            let ReplayEntry { recording, store } = &mut span.cache.entries[entry];
+            if recording.continues_segment(span.cursor) {
+                recording.truncate(span.cursor);
+                store.truncate(span.cursor);
+            }
+        }
     }
 
     /// Offer a buffer copy to the open span as a word-copy dispatch (D9), so
@@ -427,9 +672,13 @@ impl GpuEncoder {
             return;
         }
         let entry = span.entry.expect("a pending stretch belongs to an entry");
+        // A flush inside a gated segment runs the segment whole.
+        Self::break_segment(span);
         let enc = self.ensure_compute_raw();
         let store = &mut span.cache.entries[entry].store;
-        span.cache.stats.executes += store.execute(&enc, span.pending_start..span.cursor, &self.cmd_buf);
+        let (executes, segments) = store.execute(&enc, span.pending_start..span.cursor, &self.cmd_buf);
+        span.cache.stats.executes += executes;
+        span.cache.stats.segments_replayed += segments;
         span.pending_start = span.cursor;
         // What an executed indirect range leaves bound is not specified:
         // the next direct dispatch binds everything again.
@@ -448,9 +697,31 @@ impl GpuEncoder {
         let Some(mut span) = self.replay.take() else {
             return false;
         };
-        let taken = self.replay_dispatch_in(&mut span, pipeline, bindings, groups, label);
+        // An ungated dispatch inside a gated segment breaks it: a segment
+        // executes whole, so a chunk command between its slots would run
+        // the segment twice around the chunk.
+        Self::break_segment(&mut span);
+        let taken = self.replay_dispatch_in(&mut span, pipeline, bindings, groups, None, label);
         self.replay = Some(span);
         taken
+    }
+
+    /// End the open segment's recording here: the rest of it runs directly,
+    /// and a recording that continued the segment past here is cut so the
+    /// slots it would run are no-ops.
+    fn break_segment(span: &mut ReplaySpan) {
+        let Some(entry) = span.entry else {
+            return;
+        };
+        let Some(segment) = span.segment.as_mut().filter(|s| s.taken > 0 && !s.broken) else {
+            return;
+        };
+        segment.broken = true;
+        let ReplayEntry { recording, store } = &mut span.cache.entries[entry];
+        if recording.continues_segment(span.cursor) {
+            recording.truncate(span.cursor);
+            store.truncate(span.cursor);
+        }
     }
 
     fn replay_dispatch_in(
@@ -459,6 +730,7 @@ impl GpuEncoder {
         pipeline: &GpuComputePipeline,
         bindings: &[GpuBinding],
         groups: Option<[u32; 3]>,
+        gate: Option<GateKey>,
         label: &str,
     ) -> bool {
         let Some(entry) = span.entry else {
@@ -476,6 +748,7 @@ impl GpuEncoder {
         // The key mirrors the direct path: bindings the pipeline doesn't
         // map are skipped, and the sizes buffer comes last.
         let mut key = DispatchKey::new(identity(&*pipeline.state), groups);
+        key.gate = gate;
         let mut buffers: [Option<&GpuBuffer>; MAX_KEY_BINDINGS] = [None; MAX_KEY_BINDINGS];
         let mut buffer_count = 0;
         for binding in bindings {
@@ -535,8 +808,9 @@ impl GpuEncoder {
                     span.cache.stats.replayed += 1;
                     return true;
                 }
-                // A miss: run what matched, cut the recording here, record on.
-                self.flush_span(span);
+                // A miss: cut the recording here and record on. What
+                // matched stays pending; the cut touches nothing before
+                // the cursor, and a segment's dropped slots become no-ops.
                 let ReplayEntry { recording, store } = &mut span.cache.entries[entry];
                 recording.truncate(span.cursor);
                 store.truncate(span.cursor);
@@ -549,14 +823,15 @@ impl GpuEncoder {
         debug_assert_eq!(recording.len(), span.cursor, "records append at the cursor");
         let arena_before = store.arena_cursor;
         let mut slots = [BytesSlot { arena: 0, offset: 0 }; MAX_KEY_BINDINGS];
-        let fits = span.cursor < store.capacity() && {
+        let ranges = span.segment.as_ref().map(|s| &s.ranges);
+        let fits = store.place_for(&span.device, &key, ranges, &mut span.cache.stats).is_some_and(|place| {
             let (fits, count) = store.alloc_bytes(&key, &mut slots);
             fits && {
                 recording.push(&key, &slots[..count]);
-                store.record(pipeline, &key, &buffers[..buffer_count], &slots[..count], arena_before, label);
+                store.record(pipeline, &key, place, &buffers[..buffer_count], &slots[..count], arena_before, label);
                 true
             }
-        };
+        });
         if fits {
             span.cursor += 1;
             span.cache.stats.recorded += 1;

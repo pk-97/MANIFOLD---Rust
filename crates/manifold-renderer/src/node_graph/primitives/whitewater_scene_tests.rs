@@ -401,16 +401,6 @@ impl Show {
         self.runtime.errors().iter().map(|e| format!("{e:?}")).collect()
     }
 
-    /// The id of the one node whose id ends with `suffix` (group members
-    /// carry their group's prefix).
-    pub(super) fn node_named(&self, suffix: &str) -> String {
-        let ends =
-            |id: &str| id.strip_suffix(suffix).is_some_and(|head| head.chars().last().is_none_or(|c| !c.is_alphanumeric() && c != '_'));
-        let found: Vec<&str> = self.runtime.graph.nodes().map(|n| n.node_id.as_str()).filter(|id| ends(id)).collect();
-        assert_eq!(found.len(), 1, "one node ends with {suffix}: {found:?}");
-        found[0].to_string()
-    }
-
     /// Hold the arrays the named nodes write on the next frames, for
     /// `dumped`; an empty list stops.
     pub(super) fn hold(&mut self, names: &[String]) {
@@ -419,6 +409,7 @@ impl Show {
     }
 
     /// The first `len` records the named held node wrote on `port` this frame.
+    #[cfg(feature = "whitewater-oracle")]
     pub(super) fn dumped<T: bytemuck::Pod>(&self, name: &str, port: &str, len: usize) -> Vec<T> {
         let arrays = self.runtime.dump_arrays_all();
         let array = arrays

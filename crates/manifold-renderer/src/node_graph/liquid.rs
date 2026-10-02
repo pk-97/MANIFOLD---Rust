@@ -5,7 +5,6 @@
 //! the face grid layout every solver publishes. Solver rules (substep bounds,
 //! reaction encodings, block sorting) stay with each solver.
 
-pub mod blocks;
 pub mod bodies;
 pub mod body_buffers;
 pub mod clock;

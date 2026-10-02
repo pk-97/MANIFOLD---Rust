@@ -814,8 +814,7 @@ impl Step {
             enc,
             get(&p.crossings),
             &[nodes[0], nodes[1], nodes[2], ("level_nodes_x", lx), ("level_nodes_y", ly), ("level_nodes_z", lz)],
-            // No block map: blocks_len stays 0 and the solid stands in for it.
-            &[inputs.level_set, inputs.solid, inputs.solid, &f.crossings[0]],
+            &[inputs.level_set, inputs.solid, &f.crossings[0]],
             cells,
             label("crossings"),
         );
