@@ -1182,8 +1182,8 @@ impl Executor {
                 .all(|(&selected, params)| !selected || params.is_some()),
             "physics sample params must be present for every selected step",
         );
-        // A GPU liquid samples its force field without its paired world, which
-        // it owns; a world never samples without its liquid.
+        // A world's scene sample is captured for its liquid, so a world never
+        // samples without its liquid.
         assert!(
             plan.coupled_scenes().iter().all(|pair| {
                 !sample_steps[pair.rigid_step] || sample_steps[pair.fluid_step]

@@ -4,12 +4,19 @@ use super::*;
 use crate::node_graph::ParamValues;
 use crate::node_graph::physics::{PhysicsHistoryDrainScope, offline_simulation};
 use crate::preset_context::ProjectTempo;
+use manifold_core::audio_mod::HopValue;
+use manifold_core::effects::PresetInstance;
+use manifold_foundation::ParamId;
 use manifold_core::liquid_domain::{FLIP_DOMAIN_TYPE_ID, GPU_FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN_TYPE_ID};
 use manifold_core::tempo::TempoMapConverter;
 
 #[cfg(test)]
 #[path = "physics_sampling_inputs_tests.rs"]
 mod input_tests;
+
+#[cfg(test)]
+#[path = "physics_host_modulation_tests.rs"]
+mod host_modulation_tests;
 
 #[cfg(test)]
 #[path = "physics_history_drain_tests.rs"]
@@ -22,7 +29,7 @@ fn gpu_liquid(kind: &str) -> bool {
 
 fn setup_input(kind: &str, port: &str) -> bool {
     if gpu_liquid(kind) {
-        return port != "acceleration_field";
+        return port != "acceleration_field" && !port.starts_with("role_");
     }
     match kind {
         "node.rigid_body" => matches!(port, "release_count" | "source"),
@@ -52,7 +59,7 @@ pub(super) fn retain_physics_setup_outputs(graph: &mut Graph) -> Result<(), Grap
             let kind = node.node.type_id().as_str();
             graph
                 .wires_into(node.id)
-                // A GPU liquid's sample run reads only its force field.
+                // A GPU liquid's sample run reads only its force field and roles.
                 .filter(move |wire| !gpu_liquid(kind) && setup_input(kind, wire.to.1))
                 .map(|wire| wire.from)
         })
@@ -73,6 +80,14 @@ pub(super) struct PhysicsInputSnapshot {
     /// Transport times GPU liquids asked to sample this interval: their
     /// ticks' starts, so forces are evaluated per tick.
     tick_times: Vec<f64>,
+    /// This frame's per-hop effective values of host audio-modulated params,
+    /// `hops[..hop_len]`, so each tick reads the value at its own time
+    /// (BUG-2jx6 (host-fed modulation sampled per liquid tick)). Storage is
+    /// reused across frames.
+    hops: Vec<(ParamId, Vec<HopValue>)>,
+    hop_len: usize,
+    /// `(binding, step, hop entry)` for bindings into the sampled ancestry.
+    hop_routes: Vec<(usize, usize, usize)>,
 }
 
 impl PhysicsInputSnapshot {
@@ -83,6 +98,61 @@ impl PhysicsInputSnapshot {
             self.values[new].clone_from(&prior.values[old]);
         }
         self.project_tempo.clone_from(&prior.project_tempo);
+        self.hops.clone_from(&prior.hops);
+        self.hop_len = prior.hop_len;
+    }
+
+    /// Copy the host instance's per-hop values for this frame.
+    pub(super) fn set_hops(&mut self, instance: Option<&PresetInstance>) {
+        self.hop_len = 0;
+        let mods = instance.and_then(|i| i.audio_mods.as_deref()).unwrap_or_default();
+        for m in mods.iter().filter(|m| !m.hop_timeline.values.is_empty()) {
+            if self.hop_len == self.hops.len() {
+                self.hops.push(Default::default());
+            }
+            let (id, values) = &mut self.hops[self.hop_len];
+            id.clone_from(&m.param_id);
+            values.clone_from(&m.hop_timeline.values);
+            self.hop_len += 1;
+        }
+    }
+
+    /// Route bindings whose source has hop values into sampled node params.
+    fn route_hops(&mut self, bindings: &[ResolvedBinding], plan: &ExecutionPlan) {
+        self.hop_routes.clear();
+        if self.hop_len == 0 {
+            return;
+        }
+        for (b, binding) in bindings.iter().enumerate() {
+            let ResolvedTarget::Node { node, param } = &binding.target else { continue };
+            let Some(h) = self.hops[..self.hop_len]
+                .iter()
+                .position(|(id, _)| *id == binding.source_id)
+            else {
+                continue;
+            };
+            let Some(s) = plan.steps().iter().position(|step| step.node == *node) else {
+                continue;
+            };
+            if self.values[s].as_ref().is_some_and(|v| v.get(param.as_ref()).is_some()) {
+                self.hop_routes.push((b, s, h));
+            }
+        }
+    }
+
+    /// Write each routed param's latest hop value at or before `time`.
+    /// Before the frame's first hop the held value stays.
+    fn apply_hops(&mut self, bindings: &[ResolvedBinding], time: f64) {
+        for &(b, s, h) in &self.hop_routes {
+            let values = &self.hops[h].1;
+            let n = values.partition_point(|hop| hop.time.0 <= time);
+            let Some(hop) = n.checked_sub(1).map(|i| values[i]) else { continue };
+            let binding = &bindings[b];
+            let ResolvedTarget::Node { param, .. } = &binding.target else { continue };
+            if let Some(slot) = self.values[s].as_mut().and_then(|v| v.get_mut(param.as_ref())) {
+                *slot = binding.write_value(hop.value);
+            }
+        }
     }
 
     pub(super) fn prepare(graph: &Graph, plan: &ExecutionPlan, steps: &[bool]) -> Self {
@@ -111,6 +181,9 @@ impl PhysicsInputSnapshot {
             clock_steps,
             project_tempo: None,
             tick_times: Vec::new(),
+            hops: Vec::new(),
+            hop_len: 0,
+            hop_routes: Vec::new(),
         }
     }
 
@@ -161,24 +234,11 @@ pub(super) fn physics_sample_steps(
     let replays_history = |type_id: &str| {
         matches!(type_id, "node.physics_world" | FLIP_DOMAIN_TYPE_ID) || gpu_liquid(type_id)
     };
-    // A GPU liquid replays its force field only: its bodies stay per-frame
-    // rows (GPU_MPM_SOLVER_DESIGN.md D28, bodies are per-tick rows) and it
-    // owns its paired world, so that world never replays history.
-    let frame_held_rigids: HashSet<_> = graph
-        .coupled_scenes()
-        .iter()
-        .filter(|pair| {
-            graph
-                .get_node(pair.fluid)
-                .is_some_and(|fluid| gpu_liquid(fluid.node.type_id().as_str()))
-        })
-        .map(|pair| pair.rigid)
-        .collect();
+    // A GPU liquid replays its force field, roles and paired world at each
+    // tick's start; its paired world's scene is captured for it there.
     let mut pending: Vec<_> = graph
         .nodes()
-        .filter(|node| {
-            replays_history(node.node.type_id().as_str()) && !frame_held_rigids.contains(&node.id)
-        })
+        .filter(|node| replays_history(node.node.type_id().as_str()))
         .map(|node| node.id)
         .collect();
     if pending.is_empty() {
@@ -334,6 +394,11 @@ impl PresetRuntime {
             inputs.capture(&self.graph, &self.plan, &self.physics_project_tempo);
             return;
         }
+        let bindings = self
+            .effect_nodes
+            .first()
+            .map_or(&[][..], |slot| slot.bound.bindings.as_slice());
+        inputs.route_hops(bindings, &self.plan);
         let drain_offline = offline_simulation();
         if drain_offline {
             // An offline render may inherit a preview backlog. Drain the
@@ -437,6 +502,7 @@ impl PresetRuntime {
                 frame_count: current.frame_count,
             };
             inputs.set_sample_time(sample);
+            inputs.apply_hops(bindings, time);
             samples_since_drain += 1;
             let drain = drain_offline && samples_since_drain == DRAIN_INTERVAL;
             let _drain = drain.then(PhysicsHistoryDrainScope::new);
@@ -479,6 +545,7 @@ impl PresetRuntime {
             ..current
         };
         inputs.set_sample_time(closing);
+        inputs.apply_hops(bindings, current.seconds.0);
         let _drain = drain_offline.then(PhysicsHistoryDrainScope::new);
         self.executor.execute_physics_sample_frame(
             &mut self.graph,
@@ -582,7 +649,7 @@ mod tests {
     }
 
     #[test]
-    fn matter_liquid_samples_its_field_and_its_world_stays_per_frame() {
+    fn matter_liquid_samples_its_field_and_its_world_per_tick() {
         let runtime = PresetRuntime::from_json_str(
             include_str!("../../assets/generator-presets/WaterFloatingBoxMatter.json"),
             &PrimitiveRegistry::with_builtin(),
@@ -593,7 +660,7 @@ mod tests {
         let mask = runtime.physics_sample_steps.as_ref().expect("the liquid samples its field per tick");
         for pair in pairs {
             assert!(mask[pair.fluid_step], "the liquid samples");
-            assert!(!mask[pair.rigid_step], "its owned world stays per-frame (D28)");
+            assert!(mask[pair.rigid_step], "its owned world's scene samples per tick");
         }
     }
 
