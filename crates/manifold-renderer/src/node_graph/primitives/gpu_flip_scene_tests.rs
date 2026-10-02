@@ -223,6 +223,16 @@ impl Run {
         self.scene.pressure.n
     }
 
+    /// Switch the executor's encode replay; the fill frame already ran
+    /// (it ticks no step), every later frame honours the switch.
+    pub(super) fn set_encode_replay(&mut self, on: bool) {
+        self.exec.set_encode_replay(on);
+    }
+
+    pub(super) fn replay_stats(&self) -> manifold_gpu::GpuReplayStats {
+        self.exec.replay_stats()
+    }
+
     pub(super) fn particles(&self) -> Vec<FluidParticle> {
         self.read("state", "out", self.scene.particles() as usize)
     }
@@ -892,6 +902,54 @@ fn gpu_flip_still_pool_keeps_its_meshed_volume() {
 /// GPU frame and the CPU encode. Prints medians, the solver's iterations a
 /// solve, and the per-label split with each label's dispatches a frame.
 #[cfg(feature = "water-race-probes")]
+/// Encode replay changes nothing the step computes: 300 Dam Break ticks
+/// with the executor's replay on match replay off bit for bit, particles,
+/// faces and the solver's words, every tick, while the solver's rounds run
+/// as replayed segments and none directly.
+#[test]
+fn gpu_flip_replay_changes_nothing() {
+    let scene = WaterScene::dam_break(64).with_obstacle().with_steps(1);
+    let mut direct = Run::new(scene);
+    direct.set_encode_replay(false);
+    let mut replay = Run::new(scene);
+    // The ring's three entries each take two visits to hold the whole
+    // step; from the tenth tick every frame replays all of it.
+    const WARM: u32 = 10;
+    let mut last = replay.replay_stats();
+    for frame in 1..=300 {
+        direct.frame();
+        replay.frame();
+        let (dp, rp) = (direct.particles(), replay.particles());
+        assert!(bytemuck::cast_slice::<_, u8>(&dp) == bytemuck::cast_slice::<_, u8>(&rp), "tick {frame}: the particles differ with replay on");
+        let (df, rf) = (direct.faces(), replay.faces());
+        assert!(bytemuck::cast_slice::<_, u8>(&df) == bytemuck::cast_slice::<_, u8>(&rf), "tick {frame}: the faces differ with replay on");
+        assert_eq!(direct.solver(), replay.solver(), "tick {frame}: the solver words differ with replay on");
+        let stats = replay.replay_stats();
+        let delta = |take: fn(&manifold_gpu::GpuReplayStats) -> u64| take(&stats) - take(&last);
+        if frame <= WARM || frame % 100 == 0 {
+            println!(
+                "tick {frame}: solver words {:?}; recorded {} replayed {} direct {} executes {} segments replayed {} direct {} allocations {}",
+                replay.solver(),
+                delta(|s| s.recorded),
+                delta(|s| s.replayed),
+                delta(|s| s.direct),
+                delta(|s| s.executes),
+                delta(|s| s.segments_replayed),
+                delta(|s| s.segments_direct),
+                delta(|s| s.store_allocations)
+            );
+        }
+        if frame > WARM {
+            assert_eq!(delta(|s| s.recorded), 0, "tick {frame}: a warm tick records nothing");
+            assert_eq!(delta(|s| s.segments_direct), 0, "tick {frame}: no round runs directly");
+            assert_eq!(delta(|s| s.store_allocations), 0, "tick {frame}: a warm ring allocates nothing");
+            assert!(delta(|s| s.segments_replayed) >= 2, "tick {frame}: the solves' rounds run as segments");
+        }
+        last = stats;
+    }
+    assert_eq!(direct.replay_stats().replayed, 0, "the direct run replayed nothing");
+}
+
 #[test]
 fn gpu_flip_speed_measure() {
     fn median(mut v: Vec<f64>) -> f64 {

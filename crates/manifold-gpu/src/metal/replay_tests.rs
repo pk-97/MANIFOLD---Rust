@@ -535,18 +535,20 @@ impl GatedRig {
 }
 
 /// How one gated frame is shaped: dispatches issued per segment (the
-/// declared length is `declared`), and a segment to break with a texture
-/// dispatch after its first command.
+/// declared length is `declared`), a segment to break with a texture
+/// dispatch after its first command, and a segment to break with a plain
+/// recordable mix after its first command.
 #[derive(Clone, Copy)]
 struct GatedShape {
     counts: [u32; SEGMENTS],
     declared: u32,
     break_in: Option<usize>,
+    plain_in: Option<usize>,
 }
 
 impl Default for GatedShape {
     fn default() -> Self {
-        Self { counts: [SEGMENT_COMMANDS; SEGMENTS], declared: SEGMENT_COMMANDS, break_in: None }
+        Self { counts: [SEGMENT_COMMANDS; SEGMENTS], declared: SEGMENT_COMMANDS, break_in: None, plain_in: None }
     }
 }
 
@@ -586,6 +588,9 @@ fn encode_gated_frame(enc: &mut GpuEncoder, k: &Kernels, g: &GatedRig, frame: u3
         enc.begin_gated_segment(&g.ranges, s as u32, shape.declared);
         for i in 0..shape.counts[s] {
             mix(enc, Some(s));
+            if i == 0 && shape.plain_in == Some(s) {
+                mix(enc, None);
+            }
             if i == 0 && shape.break_in == Some(s) {
                 enc.dispatch_compute(
                     &k.to_tex,
@@ -676,8 +681,9 @@ fn replay_segment_count_mismatch_runs_direct() {
     let mut replay = GatedRig::new(&device, true, SEGMENTS);
     let over = GatedShape { counts: [3, 5, 3, 3], ..GatedShape::default() };
     let under = GatedShape { counts: [3, 1, 3, 2], ..GatedShape::default() };
-    let longer = GatedShape { counts: [4, 4, 4, 4], declared: 4, break_in: None };
+    let longer = GatedShape { counts: [4, 4, 4, 4], declared: 4, ..GatedShape::default() };
     let broken = GatedShape { break_in: Some(2), ..GatedShape::default() };
+    let plain = GatedShape { plain_in: Some(1), ..GatedShape::default() };
     let shapes = [
         GatedShape::default(),
         over,
@@ -688,6 +694,10 @@ fn replay_segment_count_mismatch_runs_direct() {
         longer,
         broken,
         broken,
+        GatedShape::default(),
+        GatedShape::default(),
+        plain,
+        plain,
         GatedShape::default(),
         GatedShape::default(),
     ];
@@ -722,6 +732,11 @@ fn replay_segment_count_mismatch_runs_direct() {
     assert_eq!(recorded[8], 0, "the cut shape replays as recorded");
     assert_eq!(recorded[10], 0);
     assert_eq!(segments_replayed[10], SEGMENTS as u64);
+    let rest = u64::from(SEGMENT_COMMANDS - 1);
+    assert_eq!(segments_direct[11], rest, "a plain dispatch inside a segment breaks it: the rest runs directly");
+    assert_eq!((recorded[12], segments_direct[12]), (0, rest), "the broken shape replays as recorded, its tail still direct");
+    assert_eq!(segments_replayed[12], SEGMENTS as u64, "a broken segment still executes whole, once");
+    assert_eq!((recorded[14], segments_direct[14]), (0, 0), "the default shape replays again once re-recorded");
 }
 
 /// Reports GPU µs per dead segment execute (the kill line: under 3 µs) next

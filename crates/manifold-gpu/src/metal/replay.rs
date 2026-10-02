@@ -672,17 +672,8 @@ impl GpuEncoder {
             return;
         }
         let entry = span.entry.expect("a pending stretch belongs to an entry");
-        // A flush inside a gated segment runs the segment whole: the rest
-        // of the segment goes direct, and a recording that continued the
-        // segment past here is cut so the slots it would run are no-ops.
-        if let Some(segment) = span.segment.as_mut().filter(|s| s.taken > 0 && !s.broken) {
-            segment.broken = true;
-            let ReplayEntry { recording, store } = &mut span.cache.entries[entry];
-            if recording.continues_segment(span.cursor) {
-                recording.truncate(span.cursor);
-                store.truncate(span.cursor);
-            }
-        }
+        // A flush inside a gated segment runs the segment whole.
+        Self::break_segment(span);
         let enc = self.ensure_compute_raw();
         let store = &mut span.cache.entries[entry].store;
         let (executes, segments) = store.execute(&enc, span.pending_start..span.cursor, &self.cmd_buf);
@@ -706,9 +697,31 @@ impl GpuEncoder {
         let Some(mut span) = self.replay.take() else {
             return false;
         };
+        // An ungated dispatch inside a gated segment breaks it: a segment
+        // executes whole, so a chunk command between its slots would run
+        // the segment twice around the chunk.
+        Self::break_segment(&mut span);
         let taken = self.replay_dispatch_in(&mut span, pipeline, bindings, groups, None, label);
         self.replay = Some(span);
         taken
+    }
+
+    /// End the open segment's recording here: the rest of it runs directly,
+    /// and a recording that continued the segment past here is cut so the
+    /// slots it would run are no-ops.
+    fn break_segment(span: &mut ReplaySpan) {
+        let Some(entry) = span.entry else {
+            return;
+        };
+        let Some(segment) = span.segment.as_mut().filter(|s| s.taken > 0 && !s.broken) else {
+            return;
+        };
+        segment.broken = true;
+        let ReplayEntry { recording, store } = &mut span.cache.entries[entry];
+        if recording.continues_segment(span.cursor) {
+            recording.truncate(span.cursor);
+            store.truncate(span.cursor);
+        }
     }
 
     fn replay_dispatch_in(
