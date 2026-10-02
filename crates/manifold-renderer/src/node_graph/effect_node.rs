@@ -1218,6 +1218,16 @@ pub trait EffectNode: Send {
         false
     }
 
+    /// Build this node's hand-written, content-independent pipelines into the
+    /// instance. Generator install calls it on every node, and the startup
+    /// sweep calls it on every registered type so install hits the device
+    /// cache. The project warmup only reaches pipelines a warm frame
+    /// dispatches; a node inside a region that runs zero iterations at frame 0
+    /// (a liquid tick region) would otherwise compile on stage. A node that
+    /// implements this expects its pipelines in `run()` instead of building
+    /// them lazily. Codegen-path atoms need nothing here.
+    fn prepare_pipelines(&mut self, _device: &manifold_gpu::GpuDevice) {}
+
     /// Run even while an input is pending. By default the executor does not
     /// evaluate a node while any input other than a state-capture back-edge
     /// is pending: its outputs go pending without running, and their bytes

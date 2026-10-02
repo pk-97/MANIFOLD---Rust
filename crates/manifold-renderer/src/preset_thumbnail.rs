@@ -508,7 +508,7 @@ fn render_effect(
         backend.pre_bind_texture_2d(final_in, out_target)
     };
 
-    crate::node_graph::pre_allocate_resources(&graph, &plan, device, &mut backend)
+    crate::node_graph::pre_allocate_resources(&mut graph, &plan, device, &mut backend)
         .map_err(|error| format!("effect resource allocation failed: {error:?}"))?;
 
     let audio_preview = thumbnail_audio_visuals(&graph);

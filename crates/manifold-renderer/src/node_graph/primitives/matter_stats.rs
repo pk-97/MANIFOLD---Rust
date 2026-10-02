@@ -50,6 +50,16 @@ pub struct StatsPipelines {
     finish: GpuComputePipeline,
 }
 
+impl StatsPipelines {
+    fn new(device: &manifold_gpu::GpuDevice) -> Self {
+        Self {
+            points: device.create_compute_pipeline(SHADER, "points_main", "node.matter_stats.points"),
+            grid: device.create_compute_pipeline(SHADER, "grid_main", "node.matter_stats.grid"),
+            finish: device.create_compute_pipeline(SHADER, "finish_main", "node.matter_stats.finish"),
+        }
+    }
+}
+
 crate::primitive! {
     name: MatterStats,
     type_id: "node.matter_stats",
@@ -105,6 +115,12 @@ crate::primitive! {
 }
 
 impl Primitive for MatterStats {
+    fn prepare_pipelines(&mut self, device: &manifold_gpu::GpuDevice) {
+        if self.pipelines.is_none() {
+            self.pipelines = Some(StatsPipelines::new(device));
+        }
+    }
+
     fn array_output_capacity(
         &self,
         port_name: &str,
@@ -161,11 +177,7 @@ impl Primitive for MatterStats {
         let node_groups = node_count.div_ceil(BLOCK);
         let partial_bytes = u64::from((point_groups + node_groups).max(1)) * PARTIAL_BYTES;
         let gpu = ctx.gpu_encoder();
-        let pipelines = self.pipelines.get_or_insert_with(|| StatsPipelines {
-            points: gpu.device.create_compute_pipeline(SHADER, "points_main", "node.matter_stats.points"),
-            grid: gpu.device.create_compute_pipeline(SHADER, "grid_main", "node.matter_stats.grid"),
-            finish: gpu.device.create_compute_pipeline(SHADER, "finish_main", "node.matter_stats.finish"),
-        });
+        let pipelines = self.pipelines.as_ref().expect("matter stats pipelines built by prepare_pipelines at install");
         if self.partials.as_ref().is_none_or(|b| b.size < partial_bytes) {
             self.partials = Some(gpu.device.create_buffer(partial_bytes));
         }

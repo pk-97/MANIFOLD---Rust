@@ -83,7 +83,7 @@ impl PresetRuntime {
         for (resource, buffer) in &g.shared_arrays {
             backend.pre_bind_array(*resource, buffer.clone());
         }
-        crate::node_graph::pre_allocate_resources(&g.graph, &g.plan, &device, &mut backend)
+        crate::node_graph::pre_allocate_resources(&mut g.graph, &g.plan, &device, &mut backend)
             .map_err(super::modifier_runtime::generator_error_from_prealloc)?;
 
         g.executor = Executor::new(Box::new(backend));

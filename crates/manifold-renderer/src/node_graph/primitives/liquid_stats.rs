@@ -68,6 +68,15 @@ pub struct StatsPipelines {
     finish: GpuComputePipeline,
 }
 
+impl StatsPipelines {
+    fn new(device: &manifold_gpu::GpuDevice) -> Self {
+        Self {
+            particles: device.create_compute_pipeline(SHADER, "particles_main", "node.liquid_stats.particles"),
+            finish: device.create_compute_pipeline(SHADER, "finish_main", "node.liquid_stats.finish"),
+        }
+    }
+}
+
 crate::primitive! {
     name: LiquidStats,
     type_id: "node.liquid_stats",
@@ -102,6 +111,12 @@ crate::primitive! {
 }
 
 impl Primitive for LiquidStats {
+    fn prepare_pipelines(&mut self, device: &manifold_gpu::GpuDevice) {
+        if self.pipelines.is_none() {
+            self.pipelines = Some(StatsPipelines::new(device));
+        }
+    }
+
     fn array_output_capacity(
         &self,
         port_name: &str,
@@ -133,10 +148,7 @@ impl Primitive for LiquidStats {
         let count = requested.min((particles.size / std::mem::size_of::<FluidParticle>() as u64) as u32);
         let partial_bytes = partial_bytes(count);
         let gpu = ctx.gpu_encoder();
-        let pipelines = self.pipelines.get_or_insert_with(|| StatsPipelines {
-            particles: gpu.device.create_compute_pipeline(SHADER, "particles_main", "node.liquid_stats.particles"),
-            finish: gpu.device.create_compute_pipeline(SHADER, "finish_main", "node.liquid_stats.finish"),
-        });
+        let pipelines = self.pipelines.as_ref().expect("liquid stats pipelines built by prepare_pipelines at install");
         if self.partials.as_ref().is_none_or(|b| b.size < partial_bytes) {
             self.partials = Some(gpu.device.create_buffer(partial_bytes));
         }

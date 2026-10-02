@@ -284,7 +284,7 @@ fn reconcile_fluidsim(registry: &PrimitiveRegistry, device: &std::sync::Arc<GpuD
         let plan = compile(&graph).unwrap();
         let mut backend = MetalBackend::new(std::sync::Arc::clone(device), w, h, FORMAT);
         if prealloc {
-            manifold_renderer::node_graph::pre_allocate_resources(&graph, &plan, device, &mut backend).unwrap();
+            manifold_renderer::node_graph::pre_allocate_resources(&mut graph, &plan, device, &mut backend).unwrap();
         }
         let mut exec = Executor::new(Box::new(backend));
         let mut state = StateStore::new();
@@ -367,7 +367,7 @@ fn profile_per_dispatch(registry: &PrimitiveRegistry, device: &std::sync::Arc<Gp
         // Allocate the full-size Array (particle) + Texture3D buffers, exactly
         // like the production generator path — without this the particle
         // dispatches run on empty buffers and read as ~free.
-        manifold_renderer::node_graph::pre_allocate_resources(&graph, &full, device, &mut backend)
+        manifold_renderer::node_graph::pre_allocate_resources(&mut graph, &full, device, &mut backend)
             .ok()?;
         let mut exec = Executor::new(Box::new(backend));
         exec.set_profile_force_all_live(true);
@@ -1308,7 +1308,7 @@ fn attribute_def(
     // Full-size Array/Texture3D allocation, like the production generator
     // path — without it particle dispatches run on empty buffers.
     let _ = manifold_renderer::node_graph::pre_allocate_resources(
-        &graph,
+        &mut graph,
         &plan,
         device,
         &mut backend,

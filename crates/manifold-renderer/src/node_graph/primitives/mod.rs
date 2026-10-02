@@ -410,6 +410,8 @@ mod gpu_flip_scene_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod whitewater_scene_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
+mod liquid_prepare_tests;
+#[cfg(all(test, feature = "gpu-proofs"))]
 pub(crate) mod gpu_flip_volume;
 #[cfg(all(test, feature = "water-race-probes"))]
 pub(crate) mod gpu_flip_race_tests;
