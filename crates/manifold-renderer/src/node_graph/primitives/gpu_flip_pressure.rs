@@ -2,8 +2,10 @@
 //! gradient for L p = f on the water (docs/GPU_FLIP_PRESSURE_SOLVE.md section
 //! 3 (the solve)), as a module the step node encodes directly. One solver
 //! serves every solve on one water lattice: [`PressureSolver::prepare`] builds
-//! the coarse levels once, then [`PressureSolver::solve`] runs per right-hand
-//! side (the pressure solve and the density solve).
+//! the coarse levels and assembles every level's operator rows once (the
+//! reference `Level`'s assembly: six face weights and the ghost and plain
+//! diagonals per cell), then [`PressureSolver::solve`] runs per right-hand
+//! side (the pressure solve and the density solve) reading rows only.
 //!
 //! The V-cycle depth follows the lattice: each level halves every side,
 //! rounding up, until every side is [`COARSEST_SIDE`] or less, and that level
@@ -37,9 +39,10 @@ pub(crate) const TOLERANCE: f32 = 1e-9;
 /// Red-black rounds before and after the coarse correction on every level
 /// but the coarsest.
 const SMOOTH_ROUNDS: usize = 2;
-/// Partial sums per dot product, at most; one per 1024 cells below that.
-const MAX_PARTIALS: u32 = 64;
 const THREADS: u32 = 256;
+/// Params mode bit: the pass folds its per-cell product into one partial per
+/// workgroup (gpu_flip_pressure.wgsl REDUCE).
+const REDUCE: u32 = 2;
 
 /// The V-cycle's lattices, finest first: halve every side, rounding up, while
 /// any side is over [`COARSEST_SIDE`].
@@ -62,38 +65,52 @@ fn face_records(n: [u32; 3]) -> u64 {
 }
 
 /// Device bytes the solver holds for itself at `lattice`: four lattice
-/// vectors, each coarse level's water, faces, right-hand side and correction,
-/// the coarse inverse, the partial sums and the scalars.
+/// vectors and the fine rows, each coarse level's water, faces, rows,
+/// right-hand side and correction, the coarse inverse, the partial sums and
+/// the scalars.
 #[cfg(any(test, feature = "gpu-proofs"))]
 pub(crate) fn scratch_bytes(lattice: [u32; 3]) -> u64 {
     let levels = level_lattices(lattice);
-    let coarse: u64 = levels[1..].iter().map(|&n| 3 * cells(n) * 4 + face_records(n) * FACE_BYTES).sum();
+    let coarse: u64 = levels[1..].iter().map(|&n| 3 * cells(n) * 4 + cells(n) * ROW_BYTES + face_records(n) * FACE_BYTES).sum();
     let last = cells(*levels.last().expect("at least the fine level"));
-    4 * cells(lattice) * 4 + coarse + last * last * 4 + u64::from(MAX_PARTIALS) * 4 + u64::from(2 * MAX_ITERATIONS) * 4
+    4 * cells(lattice) * 4 + cells(lattice) * ROW_BYTES + coarse + last * last * 4 + u64::from(partial_count(lattice)) * 4 + u64::from(2 * MAX_ITERATIONS) * 4
         + PROGRESS_BYTES
         + 2 * gate_bytes(levels.len())
         + RANGES_BYTES
 }
 
 const FACE_BYTES: u64 = size_of::<FaceSample>() as u64;
+/// One cell's operator row (gpu_flip_pressure.wgsl Row): six weights and
+/// two diagonals.
+const ROW_BYTES: u64 = 32;
 
 /// Dispatches one [`PressureSolver::prepare`] and one
 /// [`PressureSolver::solve`] of `iterations` encode at `lattice`.
 #[cfg(test)]
 pub(crate) fn passes(lattice: [u32; 3], iterations: u32) -> (usize, usize) {
     let coarse = level_lattices(lattice).len() - 1;
-    let (before, after) = round_commands(coarse);
-    // The solve: arming the gate, init and the first norm, then per iteration.
-    (2 * coarse + 1, 4 + iterations as usize * (before + after) as usize)
+    let (before, after) = round_commands(coarse, false);
+    // Prepare: every level's rows, each coarse level's water and faces, the
+    // inverse. The solve: arming the gate, init and the start's check, then
+    // per iteration.
+    (3 * coarse + 2, 3 + iterations as usize * (before + after) as usize)
 }
 
 /// A conjugate gradient round's gated dispatches with `coarse` levels below
 /// the fine one: those up to and including the operator product, then
-/// those after it (the body product sits between, ungated).
-fn round_commands(coarse: usize) -> (u32, u32) {
-    let v_cycle = coarse * (4 * SMOOTH_ROUNDS + 3) + 1;
-    // v_cycle, r·z (2), direction, apply | p·s (2), update, norm (2)
-    (v_cycle as u32 + 4, 5)
+/// those after it. With `bodies` the body product sits between, ungated,
+/// and p · s needs its own pass; without, the operator pass folds it and
+/// the round is one piece.
+fn round_commands(coarse: usize, bodies: bool) -> (u32, u32) {
+    let v_cycle = (coarse * (4 * SMOOTH_ROUNDS + 3) + 1) as u32;
+    // v_cycle (r·z folded), finalize, direction, apply | update (|r|∞ folded), check
+    if bodies {
+        // apply plain | p·s partial, finalize
+        (v_cycle + 3, 4)
+    } else {
+        // apply folds p·s | finalize
+        (v_cycle + 6, 0)
+    }
 }
 
 /// Why a lattice is refused, or None.
@@ -119,8 +136,8 @@ pub(crate) struct Water<'a> {
 }
 
 impl<'a> Water<'a> {
-    /// The φ binding and flag a finest-level pass takes. A pass with no φ
-    /// binds the water array in its slot and never reads it.
+    /// The φ binding and flag the fine rows are built with. With no φ the
+    /// water array sits in the slot and is never read.
     fn ghost(&self) -> (u32, &'a GpuBuffer) {
         self.phi.map_or((0, self.water), |phi| (1, phi))
     }
@@ -170,6 +187,7 @@ struct Pipelines {
     prolong: GpuComputePipeline,
     coarsen_water: GpuComputePipeline,
     coarsen_faces: GpuComputePipeline,
+    rows: GpuComputePipeline,
     inverse: GpuComputePipeline,
     coarse_solve: GpuComputePipeline,
     init: GpuComputePipeline,
@@ -177,7 +195,6 @@ struct Pipelines {
     dot_finalize: GpuComputePipeline,
     direction: GpuComputePipeline,
     update: GpuComputePipeline,
-    norm_partial: GpuComputePipeline,
     check: GpuComputePipeline,
     tally: GpuComputePipeline,
     arm: GpuComputePipeline,
@@ -193,6 +210,7 @@ impl Pipelines {
             prolong: pipeline("prolong_main", "gpu_flip.pressure.prolong"),
             coarsen_water: pipeline("coarsen_water_main", "gpu_flip.pressure.coarsen_water"),
             coarsen_faces: pipeline("coarsen_faces_main", "gpu_flip.pressure.coarsen_faces"),
+            rows: pipeline("rows_main", "gpu_flip.pressure.rows"),
             inverse: device.create_compute_pipeline(INVERSE_SHADER, "inverse_main", "gpu_flip.pressure.coarse_inverse"),
             coarse_solve: pipeline("coarse_solve_main", "gpu_flip.pressure.coarse_solve"),
             init: pipeline("init_main", "gpu_flip.pressure.init"),
@@ -200,7 +218,6 @@ impl Pipelines {
             dot_finalize: pipeline("dot_finalize_main", "gpu_flip.pressure.dot_finalize"),
             direction: pipeline("direction_main", "gpu_flip.pressure.direction"),
             update: pipeline("update_main", "gpu_flip.pressure.update"),
-            norm_partial: pipeline("norm_partial_main", "gpu_flip.pressure.norm_partial"),
             check: pipeline("check_main", "gpu_flip.pressure.check"),
             tally: pipeline("tally_main", "gpu_flip.pressure.tally"),
             arm: pipeline("arm_main", "gpu_flip.pressure.arm"),
@@ -214,6 +231,7 @@ struct Level {
     cell_size: f32,
     water: GpuBuffer,
     faces: GpuBuffer,
+    rows: GpuBuffer,
     rhs: GpuBuffer,
     e: GpuBuffer,
 }
@@ -222,12 +240,15 @@ struct Level {
 struct Buffers {
     lattice: [u32; 3],
     coarse: Vec<Level>,
+    /// The fine level's operator rows, built at prepare.
+    rows: GpuBuffer,
     r: GpuBuffer,
     z: GpuBuffer,
     p: GpuBuffer,
     /// A V-cycle level's residual, then the iteration's s = −L p.
     scratch: GpuBuffer,
     inverse: GpuBuffer,
+    /// One float per fine-lattice workgroup: a folded reduction's partials.
     partials: GpuBuffer,
     scalars: GpuBuffer,
     /// The stop's record (gpu_flip_pressure.wgsl check_main).
@@ -247,6 +268,7 @@ impl Buffers {
     fn new(device: &GpuDevice, lattice: [u32; 3]) -> Self {
         let lattices = level_lattices(lattice);
         let vector = |n: [u32; 3]| device.create_buffer(cells(n) * 4);
+        let rows = |n: [u32; 3]| device.create_buffer(cells(n) * ROW_BYTES);
         let coarse = lattices[1..]
             .iter()
             .map(|&n| Level {
@@ -254,6 +276,7 @@ impl Buffers {
                 cell_size: 0.0,
                 water: vector(n),
                 faces: device.create_buffer(face_records(n) * FACE_BYTES),
+                rows: rows(n),
                 rhs: vector(n),
                 e: vector(n),
             })
@@ -262,12 +285,13 @@ impl Buffers {
         Self {
             lattice,
             coarse,
+            rows: rows(lattice),
             r: vector(lattice),
             z: vector(lattice),
             p: vector(lattice),
             scratch: vector(lattice),
             inverse: device.create_buffer(last * last * 4),
-            partials: device.create_buffer(u64::from(MAX_PARTIALS) * 4),
+            partials: device.create_buffer(u64::from(partial_count(lattice)) * 4),
             scalars: device.create_buffer(u64::from(2 * MAX_ITERATIONS) * 4),
             progress: device.create_buffer(PROGRESS_BYTES),
             armed: armed(device, &lattices),
@@ -288,7 +312,7 @@ const TRIPLE_BYTES: u64 = 12;
 const RANGES_BYTES: u64 = 2 * MAX_ITERATIONS as u64 * GATED_RANGE_BYTES;
 
 /// Where each gated dispatch's groups sit in the gate, by triple: level l's
-/// lattice at l, then the dot and norm partials, then one group.
+/// lattice at l, then one group.
 #[derive(Clone, Copy)]
 struct Slots {
     levels: usize,
@@ -298,14 +322,11 @@ impl Slots {
     fn level(self, l: usize) -> usize {
         l
     }
-    fn partials(self) -> usize {
+    fn single(self) -> usize {
         self.levels
     }
-    fn single(self) -> usize {
-        self.levels + 1
-    }
     fn triples(self) -> u32 {
-        self.levels as u32 + 2
+        self.levels as u32 + 1
     }
 }
 
@@ -313,14 +334,16 @@ fn gate_bytes(levels: usize) -> u64 {
     u64::from(Slots { levels }.triples()) * TRIPLE_BYTES
 }
 
+/// Partials a folded reduction over `n` writes: one per workgroup of the
+/// lattice, however large it is.
 fn partial_count(n: [u32; 3]) -> u32 {
-    (cells(n).div_ceil(1024) as u32).clamp(1, MAX_PARTIALS)
+    groups(cells(n))[0]
 }
 
 /// The gate's full group counts for `lattices`, finest first, by triple.
 fn armed_groups(lattices: &[[u32; 3]]) -> Vec<[u32; 3]> {
     let mut triples: Vec<[u32; 3]> = lattices.iter().map(|&n| groups(cells(n))).collect();
-    triples.extend([[partial_count(lattices[0]), 1, 1], [1, 1, 1]]);
+    triples.push([1, 1, 1]);
     triples
 }
 
@@ -346,24 +369,29 @@ fn groups(threads: u64) -> [u32; 3] {
     [threads.div_ceil(u64::from(THREADS)) as u32, 1, 1]
 }
 
-/// One level's view for the V-cycle: the fine level reads the caller's water,
-/// faces and φ and works in r and z; coarse levels run zero φ.
+/// One level's view for the V-cycle: the fine level reads the caller's water
+/// and its rows and works in r and z; coarse levels' rows are plain.
 struct View<'a> {
     lattice: [u32; 3],
     cell_size: f32,
     water: &'a GpuBuffer,
-    faces: &'a GpuBuffer,
+    rows: &'a GpuBuffer,
     rhs: &'a GpuBuffer,
     e: &'a GpuBuffer,
-    ghost: (u32, &'a GpuBuffer),
+    /// 1 reads the rows' ghost diagonal, 0 the plain one.
+    ghost: u32,
+    /// The fold's partials: the sweep and residual passes reference them
+    /// whether or not they fold, so every dispatch binds them.
+    partials: &'a GpuBuffer,
 }
 
 #[derive(Default)]
 pub(crate) struct PressureSolver {
     pipelines: Option<Pipelines>,
     buffers: Option<Buffers>,
-    /// The lattice and cell size the coarse levels were last built for.
-    prepared: Option<([u32; 3], f32)>,
+    /// The lattice and cell size the levels were last built for, and
+    /// whether the fine rows carry the ghost diagonal (prepare saw φ).
+    prepared: Option<([u32; 3], f32, bool)>,
 }
 
 impl PressureSolver {
@@ -374,8 +402,9 @@ impl PressureSolver {
         }
     }
 
-    /// Build the coarse levels and the coarse inverse for `water`. Every
-    /// solve until the next prepare runs on this water. Allocates only when
+    /// Build every level's operator rows, the coarse levels and the coarse
+    /// inverse for `water`. Every solve until the next prepare runs on this
+    /// water; a solve with φ needs a prepare that saw it. Allocates only when
     /// the lattice changes.
     pub(crate) fn prepare(&mut self, device: &GpuDevice, enc: &mut GpuEncoder, water: &Water<'_>) -> Result<(), String> {
         if let Some(reason) = lattice_refusal(water.lattice) {
@@ -399,6 +428,22 @@ impl PressureSolver {
             h *= 2.0;
             level.cell_size = h;
         }
+        let (ghost, phi) = water.ghost();
+        let assemble = |enc: &mut GpuEncoder, lattice: [u32; 3], water: &GpuBuffer, faces: &GpuBuffer, ghost: (u32, &GpuBuffer), rows: &GpuBuffer| {
+            enc.dispatch_compute(
+                &pipes.rows,
+                &[
+                    bytes(&Params { ghost: ghost.0, ..Params::at(lattice, 0.0) }),
+                    buffer(1, water),
+                    buffer(2, faces),
+                    buffer(10, ghost.1),
+                    buffer(18, rows),
+                ],
+                groups(cells(lattice)),
+                "gpu_flip.pressure.rows",
+            );
+        };
+        assemble(enc, n, water.water, water.faces, (ghost, phi), &b.rows);
         let mut fine = (n, water.water, water.faces);
         for level in &b.coarse {
             let params = Params::at(fine.0, 0.0).coarse(level.lattice);
@@ -414,6 +459,7 @@ impl PressureSolver {
                 groups(face_records(level.lattice)),
                 "gpu_flip.pressure.coarsen_faces",
             );
+            assemble(enc, level.lattice, &level.water, &level.faces, (0, &level.water), &level.rows);
             fine = (level.lattice, &level.water, &level.faces);
         }
         let (last, last_water, last_faces) = fine;
@@ -429,7 +475,7 @@ impl PressureSolver {
             [1, 1, 1],
             "gpu_flip.pressure.coarse_inverse",
         );
-        self.prepared = Some((n, water.cell_size));
+        self.prepared = Some((n, water.cell_size, water.phi.is_some()));
         Ok(())
     }
 
@@ -451,11 +497,14 @@ impl PressureSolver {
         bodies: Option<(&BodyPasses, &Bodies<'_>)>,
     ) -> Result<(), String> {
         let n = water.lattice;
-        if self.prepared != Some((n, water.cell_size)) {
+        let Some((lattice, cell_size, with_phi)) = self.prepared else {
+            return Err("the solver was not prepared".into());
+        };
+        if (lattice, cell_size) != (n, water.cell_size) {
             return Err(format!("the solver was not prepared for a {n:?} lattice at this cell size"));
         }
-        if water.phi.is_some_and(|phi| cells(n) * 4 > phi.size) {
-            return Err(format!("a {n:?} lattice is larger than its distance array"));
+        if water.phi.is_some() && !with_phi {
+            return Err("the solver was prepared without the free surface's distance".into());
         }
         let iterations = stop.cap();
         if !(1..=MAX_ITERATIONS).contains(&iterations) {
@@ -475,8 +524,7 @@ impl PressureSolver {
         // Each round is one replayed segment, or two around the ungated body
         // product: the arm writes every round's range entries as live and
         // the stop zeroes the rounds after it, with the gate.
-        let (before, after) = round_commands(b.coarse.len());
-        let (before, after) = if bodies.is_some() { (before, after) } else { (before + after, 0) };
+        let (before, after) = round_commands(b.coarse.len(), bodies.is_some());
         let fine = Params { cx: slots.triples(), tolerance: stop.tolerance(), ..Params::at(n, water.cell_size) };
         let arm = Params { color: before, slot: after, ..fine };
         enc.dispatch_compute(
@@ -488,15 +536,23 @@ impl PressureSolver {
         plain.dispatch(
             enc,
             &pipes.init,
-            &[bytes(&fine), buffer(1, water.water), buffer(2, water.faces), buffer(3, rhs), buffer(5, &b.r), buffer(6, pressure)],
+            &[
+                bytes(&Params { mode: REDUCE, ..fine }),
+                buffer(1, water.water),
+                buffer(2, water.faces),
+                buffer(3, rhs),
+                buffer(5, &b.r),
+                buffer(6, pressure),
+                buffer(16, &b.partials),
+            ],
             slots.level(0),
             "gpu_flip.pressure.init",
         );
-        norm(enc, pipes, b, plain, &Params { mode: 1, ..fine });
+        check(enc, pipes, b, plain, &Params { mode: 1, ..fine });
         for k in 0..iterations {
             g.begin_round(enc, 2 * k, before);
             v_cycle(enc, pipes, b, water, g);
-            dot(enc, pipes, b, g, n, (&b.r, &b.z), 2 * k);
+            dot_finalize(enc, pipes, b, g, n, 2 * k);
             let step = Params { slot: k, ..fine };
             g.dispatch(
                 enc,
@@ -505,19 +561,19 @@ impl PressureSolver {
                 slots.level(0),
                 "gpu_flip.pressure.direction",
             );
-            let (ghost, phi) = water.ghost();
-            let apply = Params { mode: 1, ghost, ..fine };
+            // With no bodies s is final here, so the pass folds p · s.
+            let apply = Params { mode: 1 | if bodies.is_some() { 0 } else { REDUCE }, ghost: water.ghost().0, ..fine };
             g.dispatch(
                 enc,
                 &pipes.residual,
                 &[
                     bytes(&apply),
                     buffer(1, water.water),
-                    buffer(2, water.faces),
                     buffer(3, &b.p),
                     buffer(4, &b.p),
                     buffer(5, &b.scratch),
-                    buffer(10, phi),
+                    buffer(16, &b.partials),
+                    buffer(17, &b.rows),
                 ],
                 slots.level(0),
                 "gpu_flip.pressure.apply",
@@ -528,23 +584,31 @@ impl PressureSolver {
                 enc.end_gated_segments();
                 passes.apply(enc, bodies, &b.p, &b.scratch)?;
                 g.begin_round(enc, 2 * k + 1, after);
+                g.dispatch(
+                    enc,
+                    &pipes.dot_partial,
+                    &[bytes(&fine), buffer(3, &b.p), buffer(4, &b.scratch), buffer(16, &b.partials)],
+                    slots.level(0),
+                    "gpu_flip.pressure.dot_partial",
+                );
             }
-            dot(enc, pipes, b, g, n, (&b.p, &b.scratch), 2 * k + 1);
+            dot_finalize(enc, pipes, b, g, n, 2 * k + 1);
             g.dispatch(
                 enc,
                 &pipes.update,
                 &[
-                    bytes(&step),
+                    bytes(&Params { mode: REDUCE, ..step }),
                     buffer(3, &b.p),
                     buffer(4, &b.scratch),
                     buffer(5, pressure),
                     buffer(6, &b.r),
                     buffer(7, &b.scalars),
+                    buffer(16, &b.partials),
                 ],
                 slots.level(0),
                 "gpu_flip.pressure.update",
             );
-            norm(enc, pipes, b, g, &step);
+            check(enc, pipes, b, g, &step);
         }
         enc.end_gated_segments();
         Ok(())
@@ -609,7 +673,18 @@ impl PressureSolver {
         let b = self.buffers.as_ref().expect("the solver was prepared");
         enc.copy_buffer_to_buffer(&b.scalars, into, b.scalars.size);
     }
+
+    /// Copies the fine level's rows (`ROW_BYTES` a cell, gpu_flip_pressure.wgsl
+    /// Row) into `into`, a shared buffer of the lattice's cells × `ROW_BYTES`.
+    pub(crate) fn copy_rows(&self, enc: &mut GpuEncoder, into: &GpuBuffer) {
+        let b = self.buffers.as_ref().expect("the solver was prepared");
+        enc.copy_buffer_to_buffer(&b.rows, into, b.rows.size);
+    }
 }
+
+/// Bytes of one cell's row, for the proofs.
+#[cfg(all(test, feature = "gpu-proofs"))]
+pub(crate) const ROW_FLOATS: usize = ROW_BYTES as usize / 4;
 
 /// A solve's dispatches run on the gate's group counts, which the stop
 /// zeroes: as indirect dispatches when encoded directly, and inside a
@@ -641,7 +716,8 @@ impl Gate<'_> {
     }
 }
 
-/// z = V(r): one V-cycle for L e = r from zero.
+/// z = V(r): one V-cycle for L e = r from zero. The last fine sweep folds
+/// r · z into the partials.
 fn v_cycle<'a>(enc: &mut GpuEncoder, pipes: &Pipelines, b: &'a Buffers, water: &Water<'a>, g: Gate<'_>) {
     let view = |level: usize| -> View<'a> {
         match level {
@@ -649,10 +725,11 @@ fn v_cycle<'a>(enc: &mut GpuEncoder, pipes: &Pipelines, b: &'a Buffers, water: &
                 lattice: water.lattice,
                 cell_size: water.cell_size,
                 water: water.water,
-                faces: water.faces,
+                rows: &b.rows,
                 rhs: &b.r,
                 e: &b.z,
-                ghost: water.ghost(),
+                ghost: water.ghost().0,
+                partials: &b.partials,
             },
             l => {
                 let c = &b.coarse[l - 1];
@@ -660,10 +737,11 @@ fn v_cycle<'a>(enc: &mut GpuEncoder, pipes: &Pipelines, b: &'a Buffers, water: &
                     lattice: c.lattice,
                     cell_size: c.cell_size,
                     water: &c.water,
-                    faces: &c.faces,
+                    rows: &c.rows,
                     rhs: &c.rhs,
                     e: &c.e,
-                    ghost: (0, &c.water),
+                    ghost: 0,
+                    partials: &b.partials,
                 }
             }
         }
@@ -674,7 +752,8 @@ fn v_cycle<'a>(enc: &mut GpuEncoder, pipes: &Pipelines, b: &'a Buffers, water: &
         let coarse = view(level + 1);
         for round in 0..SMOOTH_ROUNDS {
             for color in [0, 1] {
-                smooth(enc, pipes, &v, color, round == 0 && color == 0, g, level);
+                let sweep = if round == 0 && color == 0 { Sweep::FromZero } else { Sweep::Plain };
+                smooth(enc, pipes, &v, color, sweep, g, level);
             }
         }
         let params = Params::at(v.lattice, v.cell_size).coarse(coarse.lattice);
@@ -682,13 +761,13 @@ fn v_cycle<'a>(enc: &mut GpuEncoder, pipes: &Pipelines, b: &'a Buffers, water: &
             enc,
             &pipes.residual,
             &[
-                bytes(&Params { ghost: v.ghost.0, ..params }),
+                bytes(&Params { ghost: v.ghost, ..params }),
                 buffer(1, v.water),
-                buffer(2, v.faces),
                 buffer(3, v.rhs),
                 buffer(4, v.e),
                 buffer(5, &b.scratch),
-                buffer(10, v.ghost.1),
+                buffer(16, v.partials),
+                buffer(17, v.rows),
             ],
             g.slots.level(level),
             "gpu_flip.pressure.residual",
@@ -721,61 +800,63 @@ fn v_cycle<'a>(enc: &mut GpuEncoder, pipes: &Pipelines, b: &'a Buffers, water: &
             g.slots.level(level),
             "gpu_flip.pressure.prolong",
         );
-        for _ in 0..SMOOTH_ROUNDS {
+        for round in 0..SMOOTH_ROUNDS {
             for color in [1, 0] {
-                smooth(enc, pipes, &v, color, false, g, level);
+                let last = level == 0 && round == SMOOTH_ROUNDS - 1 && color == 0;
+                let sweep = if last { Sweep::Fold } else { Sweep::Plain };
+                smooth(enc, pipes, &v, color, sweep, g, level);
             }
         }
     }
 }
 
-/// One red-black sweep of `color` at a level, from zero when `from_zero`.
-fn smooth(enc: &mut GpuEncoder, pipes: &Pipelines, v: &View<'_>, color: u32, from_zero: bool, g: Gate<'_>, level: usize) {
-    let params = Params { color, mode: u32::from(from_zero), ghost: v.ghost.0, ..Params::at(v.lattice, v.cell_size) };
+/// What a sweep does besides relaxing: the first of a level starts from
+/// zero; the solve's last fine one folds rhs · e into the partials.
+#[derive(Clone, Copy)]
+enum Sweep {
+    Plain,
+    FromZero,
+    Fold,
+}
+
+/// One red-black sweep of `color` at a level.
+fn smooth(enc: &mut GpuEncoder, pipes: &Pipelines, v: &View<'_>, color: u32, sweep: Sweep, g: Gate<'_>, level: usize) {
+    let mode = match sweep {
+        Sweep::Plain => 0,
+        Sweep::FromZero => 1,
+        Sweep::Fold => REDUCE,
+    };
+    let params = Params { color, mode, ghost: v.ghost, ..Params::at(v.lattice, v.cell_size) };
     g.dispatch(
         enc,
         &pipes.smooth,
-        &[bytes(&params), buffer(1, v.water), buffer(2, v.faces), buffer(3, v.rhs), buffer(5, v.e), buffer(10, v.ghost.1)],
+        &[bytes(&params), buffer(1, v.water), buffer(3, v.rhs), buffer(5, v.e), buffer(16, v.partials), buffer(17, v.rows)],
         g.slots.level(level),
         "gpu_flip.pressure.smooth",
     );
 }
 
-/// a · b over the fine lattice into scalars[slot], in a fixed order.
-fn dot(enc: &mut GpuEncoder, pipes: &Pipelines, b: &Buffers, g: Gate<'_>, n: [u32; 3], (x, y): (&GpuBuffer, &GpuBuffer), slot: u32) {
+/// The folded partials of a dot product over the fine lattice summed into
+/// scalars[slot], in a fixed order.
+fn dot_finalize(enc: &mut GpuEncoder, pipes: &Pipelines, b: &Buffers, g: Gate<'_>, n: [u32; 3], slot: u32) {
     let params = Params { color: partial_count(n), slot, ..Params::at(n, 0.0) };
     g.dispatch(
         enc,
-        &pipes.dot_partial,
-        &[bytes(&params), buffer(3, x), buffer(4, y), buffer(6, &b.partials)],
-        g.slots.partials(),
-        "gpu_flip.pressure.dot_partial",
-    );
-    g.dispatch(
-        enc,
         &pipes.dot_finalize,
-        &[bytes(&params), buffer(6, &b.partials), buffer(7, &b.scalars)],
+        &[bytes(&params), buffer(7, &b.scalars), buffer(16, &b.partials)],
         g.slots.single(),
         "gpu_flip.pressure.dot_finalize",
     );
 }
 
-/// |r|∞ into the stop's record and the stop test: the start with `mode` 1,
-/// else after iteration `slot`.
-fn norm(enc: &mut GpuEncoder, pipes: &Pipelines, b: &Buffers, g: Gate<'_>, step: &Params) {
-    let n = [step.nx, step.ny, step.nz];
-    let params = Params { color: partial_count(n), ..*step };
-    g.dispatch(
-        enc,
-        &pipes.norm_partial,
-        &[bytes(&params), buffer(3, &b.r), buffer(6, &b.partials)],
-        g.slots.partials(),
-        "gpu_flip.pressure.norm_partial",
-    );
+/// The folded partials' max, |r|∞, into the stop's record and the stop
+/// test: the start with `mode` 1, else after iteration `slot`.
+fn check(enc: &mut GpuEncoder, pipes: &Pipelines, b: &Buffers, g: Gate<'_>, step: &Params) {
+    let params = Params { color: partial_count([step.nx, step.ny, step.nz]), ..*step };
     g.dispatch(
         enc,
         &pipes.check,
-        &[bytes(&params), buffer(6, &b.partials), buffer(11, &b.progress), buffer(12, &b.gate), buffer(15, &b.ranges)],
+        &[bytes(&params), buffer(11, &b.progress), buffer(12, &b.gate), buffer(15, &b.ranges), buffer(16, &b.partials)],
         g.slots.single(),
         "gpu_flip.pressure.check",
     );
@@ -852,10 +933,26 @@ mod tests {
 
     #[test]
     fn pass_counts_follow_the_levels() {
-        assert_eq!(passes([64; 3], 8), (9, 4 + 8 * (4 * 11 + 1 + 9)));
-        assert_eq!(passes([3; 3], 3), (1, 4 + 3 * 10));
-        assert_eq!(round_commands(4), (4 * 11 + 1 + 4, 5));
+        assert_eq!(passes([64; 3], 8), (14, 3 + 8 * (4 * 11 + 1 + 6)));
+        assert_eq!(passes([3; 3], 3), (2, 3 + 3 * 7));
+        assert_eq!(round_commands(4, false), (4 * 11 + 1 + 6, 0));
+        assert_eq!(round_commands(4, true), (4 * 11 + 1 + 3, 4));
         assert!(scratch_bytes([128; 3]) > 4 * 128 * 128 * 128 * 4);
+    }
+
+    /// A folded reduction writes one partial per workgroup of the lattice,
+    /// with no cap: the partials buffer is sized from the same count, so the
+    /// first pass fills the GPU however large the lattice is (BUG-l2h3.22).
+    #[test]
+    fn reductions_fill_the_lattice() {
+        assert_eq!(partial_count([64; 3]), 1024);
+        assert_eq!(partial_count([128; 3]), 8192);
+        assert_eq!(partial_count([1, 1, 1]), 1);
+        for n in [[3; 3], [37, 19, 5], [100; 3], [256; 3], [MAX_SIDE, 64, 1]] {
+            let independent = cells(n).div_ceil(u64::from(THREADS)) as u32;
+            assert_eq!(partial_count(n), independent, "{n:?}");
+            assert_eq!(armed_groups(&level_lattices(n))[0][0], independent, "{n:?}");
+        }
     }
 
     /// The shader zeroes range entries up to its own round count, which must
