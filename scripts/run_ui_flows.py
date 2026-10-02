@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Run the UI-flow suite against its manifest-declared scenes (S8).
 
-Reads scripts/ui-flows/manifest.json and runs each flow as
-`<manifold binary> ui-snap <scene> --script scripts/ui-flows/<flow>.json` (the
-binary `cargo xtask` would run, built once up front). The manifest
+Reads scripts/ui-flows/manifest.json and runs the selected flows through one
+`<manifold binary> ui-snap batch <scene> <script> ...` process (the binary
+`cargo xtask` would run, built once up front). Each flow reports exactly what
+`ui-snap <scene> --script scripts/ui-flows/<flow>.json` would, and anything
+the batch can't vouch for reruns that way, solo; scripts/ui_flows_batch_proof.py
+is the oracle that the two modes agree. The manifest
 is the single source of the flow->scene mapping, so a flow can never be run under
 the wrong scene by lore (the P-P landing's false FAIL) and no flow file can be
 silently skipped (the BUG-252 count-match gate, made mechanical here).
@@ -28,7 +31,7 @@ the build lock:
 
 GPU: the build runs with no lock held; the flow loop then holds the
 machine-wide GPU lock (scripts/gpu_queue.py) once, and every flow process
-inherits it. Without the outer hold each flow re-queued on its own and other
+(batch or solo) inherits it. Without the outer hold each flow re-queued on its own and other
 lanes' GPU jobs slotted in between flows (BUG-i3hc (flow gate re-queues the
 GPU lock per flow)). Every line is flushed so a caller's timeout keeps the
 transcript so far.
@@ -42,11 +45,13 @@ scripts/ui-flows/<flow>.json always runs that flow):
   scripts/run_ui_flows.py --touched origin/main...HEAD
 No trigger matches the diff -> exits 0 without building anything.
 """
+import collections
 import functools
 import json
 import os
 import subprocess
 import sys
+import threading
 import time
 
 import gpu_queue
@@ -89,14 +94,83 @@ def build_binary():
     return binary
 
 
+def flow_script(name):
+    return os.path.join("scripts", "ui-flows", f"{name}.json")
+
+
 def run_flow(binary, name, scene):
-    script = os.path.join("scripts", "ui-flows", f"{name}.json")
+    """One flow in its own process. Returns (exit code, last stderr line)."""
     r = subprocess.run(
-        [binary, "ui-snap", scene, "--script", script],
+        [binary, "ui-snap", scene, "--script", flow_script(name)],
         cwd=ROOT, capture_output=True, text=True,
     )
     tail = (r.stderr.strip().splitlines() or ["(no stderr)"])[-1]
     return r.returncode, tail
+
+
+BATCH_RECORD = "@@ui-snap-batch@@"
+
+
+def run_batch(binary, jobs, report, fell_back=None):
+    """Run `jobs` ([(name, scene)]) in as few `ui-snap batch` processes as
+    possible; call report(name, scene, code, tail, seconds) once per job as
+    each finishes, and fell_back(name, why) for each job that ran solo.
+
+    The batch process reports each flow with the code and tail a solo run
+    would give (crates/manifold-app/src/ui_snapshot/script.rs `run_batch`).
+    Anything it can't vouch for runs solo here instead: a flow it marks
+    `rerun`, and the flow it was inside when it died. After a death the rest
+    go to a fresh batch. Every pass either reports a flow or falls back to
+    solo for all that remain, so this always terminates."""
+    pending = list(jobs)
+    while pending:
+        argv = [binary, "ui-snap", "batch"]
+        for name, scene in pending:
+            argv += [scene, flow_script(name)]
+        proc = subprocess.Popen(argv, cwd=ROOT, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True)
+        err_tail = collections.deque(maxlen=20)
+        drain = threading.Thread(target=lambda: err_tail.extend(proc.stderr))
+        drain.start()
+        finished, solo, current = set(), {}, None
+        for line in proc.stdout:
+            if not line.startswith(BATCH_RECORD):
+                continue
+            rec = json.loads(line[len(BATCH_RECORD):])
+            if "begin" in rec:
+                current = rec["begin"]
+                continue
+            index, current = rec["index"], None
+            finished.add(index)
+            if "rerun" in rec:
+                solo[index] = f"handed back: {rec['rerun']}"
+                say(f"  (batch handed back {pending[index][0]}: {rec['rerun']}; running it solo)")
+            else:
+                name, scene = pending[index]
+                report(name, scene, rec["code"], rec["tail"], rec["seconds"])
+        proc.wait()
+        drain.join()
+        proc.stdout.close()
+        proc.stderr.close()
+        if current is not None:
+            finished.add(current)
+            last_err = (list(err_tail) or ["(no stderr)"])[-1].strip()
+            solo[current] = f"batch died, exit {proc.returncode}: {last_err}"
+            say(f"  (batch died in {pending[current][0]}, exit {proc.returncode}: "
+                f"{last_err}; running it solo)")
+        if not finished:
+            say(f"  (batch exited {proc.returncode} without running a flow; "
+                "running the rest solo)")
+            solo = {i: f"batch ran nothing, exit {proc.returncode}" for i in range(len(pending))}
+        for index, why in solo.items():
+            name, scene = pending[index]
+            if fell_back is not None:
+                fell_back(name, why)
+            start = time.monotonic()
+            code, tail = run_flow(binary, name, scene)
+            report(name, scene, code, tail, time.monotonic() - start)
+        done = finished | solo.keys()
+        pending = [job for i, job in enumerate(pending) if i not in done]
 
 
 def write_gate_marker(range_spec, filters, ok):
@@ -224,31 +298,29 @@ def main():
         with gpu_queue.hold(f"run_ui_flows: {len(required) + len(known_red)} flows",
                             out=sys.stdout):
             say("— required flows —")
-            for name in required:
-                scene = flows[name]
-                start = time.monotonic()
-                code, tail = run_flow(binary, name, scene)
-                secs = f"{time.monotonic() - start:.1f}s"
+
+            def report_required(name, scene, code, tail, seconds):
                 if code == 0:
-                    say(f"  PASS   {name}  [{scene}]  {secs}")
+                    say(f"  PASS   {name}  [{scene}]  {seconds:.1f}s")
                 else:
                     green_fail.append(name)
-                    say(f"  FAIL   {name}  [{scene}]  {secs}  exit={code}  {tail}")
+                    say(f"  FAIL   {name}  [{scene}]  {seconds:.1f}s  exit={code}  {tail}")
+
+            run_batch(binary, [(n, flows[n]) for n in required], report_required)
 
             if known_red:
                 say("— known-red flows (expected fail) —")
-            for name in known_red:
-                entry = xfail[name]
-                scene = entry["scene"]
-                start = time.monotonic()
-                code, tail = run_flow(binary, name, scene)
-                secs = f"{time.monotonic() - start:.1f}s"
+
+            def report_known_red(name, scene, code, tail, seconds):
+                bug = xfail[name].get("bug", "?")
                 if code != 0:
                     xfail_ok.append(name)
-                    say(f"  XFAIL  {name}  [{scene}]  {secs}  ({entry.get('bug', '?')}) exit={code}")
+                    say(f"  XFAIL  {name}  [{scene}]  {seconds:.1f}s  ({bug}) exit={code}")
                 else:
                     xfail_surprise.append(name)
-                    say(f"  XPASS  {name}  [{scene}]  {secs}  now GREEN — promote into flows ({entry.get('bug', '?')})")
+                    say(f"  XPASS  {name}  [{scene}]  {seconds:.1f}s  now GREEN — promote into flows ({bug})")
+
+            run_batch(binary, [(n, xfail[n]["scene"]) for n in known_red], report_known_red)
         say(f"flow gate: {len(required) + len(known_red)} flows in "
             f"{time.monotonic() - gate_start:.0f}s under one GPU hold")
 
