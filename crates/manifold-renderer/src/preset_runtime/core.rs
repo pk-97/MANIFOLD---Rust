@@ -215,6 +215,10 @@ pub(super) enum PresetIo {
     Transform {
         source_slot: Option<Slot>,
         output_slot: Slot,
+        /// The logical resource `output_slot` carries. The slot is recycled
+        /// storage, so this resource's readiness decides whether the slot
+        /// holds this frame's output.
+        output_resource: ResourceId,
     },
     /// Generator. No input. The host installs its target texture into
     /// `final_output_slot` each frame; the graph renders into it. `Some(slot)`
@@ -1289,7 +1293,7 @@ impl PresetRuntime {
         // shipped with commit 3500e7a7 and lacked Texture3D + audit
         // coverage.
         if let Err(e) =
-            crate::node_graph::pre_allocate_resources(&graph, &plan, device, &mut backend)
+            crate::node_graph::pre_allocate_resources(&mut graph, &plan, device, &mut backend)
         {
             record_chain_error(
                 &mut errors,
@@ -1340,6 +1344,7 @@ impl PresetRuntime {
             io: PresetIo::Transform {
                 source_slot,
                 output_slot,
+                output_resource: final_output_resource,
             },
             width,
             height,
@@ -1628,10 +1633,7 @@ impl PresetRuntime {
         // so the first downstream effect reads the upstream texture directly
         // via slot lookup. A source-independent chain has no source slot and
         // runs without touching the host input.
-        let PresetIo::Transform {
-            source_slot,
-            output_slot,
-        } = self.io
+        let PresetIo::Transform { source_slot, .. } = self.io
         else {
             // `run` is the effect-chain entry; a generator-IO runtime renders
             // via `render` instead. Defensive — callers never cross the wires.
@@ -1679,19 +1681,21 @@ impl PresetRuntime {
         self.last_physics_frame_time = Some(frame_time);
         self.observe_impulse_setup();
 
-        // The chain output is in the slot pre-bound to the last
-        // effect's output resource.
-        self.executor.backend().texture_2d(output_slot)
+        self.output_texture()
     }
 
     /// The chain's final output texture from the most recent
-    /// [`Self::run`]. Returns `None` if the backend lookup fails
-    /// (should be unreachable since `output_slot` was pre-bound at
-    /// build time), or if this is a generator-IO runtime (no owned output).
+    /// [`Self::run`]. `None` for a generator-IO runtime, and when the
+    /// chain's last step was held by a pending input: it wrote nothing, and
+    /// its recycled slot holds another resource's bytes. The host then
+    /// composites its input unprocessed for that frame.
     pub fn output_texture(&self) -> Option<&GpuTexture> {
-        let PresetIo::Transform { output_slot, .. } = self.io else {
+        let PresetIo::Transform { output_slot, output_resource, .. } = self.io else {
             return None;
         };
+        if self.executor.mesh_pending_of(output_resource) {
+            return None;
+        }
         self.executor.backend().texture_2d(output_slot)
     }
 
@@ -1957,7 +1961,13 @@ impl PresetRuntime {
         self.last_physics_frame_time = Some(frame_time);
         self.observe_impulse_setup();
 
-        self.render_math_views(gpu, target, ctx, params);
+        // A held terminal leaves the host's target holding the last frame it
+        // wrote, overlays included; drawing them again would stack.
+        let held = matches!(self.io, PresetIo::Generate { final_output_input_resource, .. }
+            if self.executor.mesh_pending_of(final_output_input_resource));
+        if !held {
+            self.render_math_views(gpu, target, ctx, params);
+        }
 
         self.consume_trigger_markers();
         ctx.anim_progress

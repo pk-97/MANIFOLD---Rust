@@ -172,7 +172,7 @@ GPU liquids run on `LiquidClock` (today's `MatterClock`, `R/matter.rs:509`).
 - Water panel: exposure keys on the predicate plus the type's dial row, replacing the FLIP-only filters (`R/scene_exposure.rs:97`, `core/scene_exposure.rs:69`).
 - Enable Physics: refused and hidden on any object whose surface walks to a liquid domain. Today `scene_object_physics_plan` refuses only objects with a fluid role (`edit/commands/graph/scene/physics.rs:1025`).
 - Forces: a domain is a force target by having `acceleration_field` (`R/scene_modifier_expand/acceleration.rs:37`).
-- Add Fluid: authors the one template `DEFAULT_LIQUID_TEMPLATE` names. No solver dropdown.
+- Add Fluid: authors GPU FLIP only, from `gpu_flip_liquid_template` (app `ui_bridge/project.rs`), which wraps `gpu_flip_liquid_body` (`R/primitives/gpu_flip_preset.rs`) with card exposures. The body comes from the same builder the shipped GPU FLIP preset is checked against. No solver dropdown, no fallback to another solver.
 - Pairing: one liquid domain and one rigid world per coupled scene (`R/scene_modifier_expand/coupling.rs:85`).
 
 ### 3.6 Solids
@@ -471,8 +471,8 @@ Order: P1 → P2a → P2b and P1 → P3 → P4 on main; P5 → P6 on main, in pa
 
 - **Entry state:** P2b on main. `rg -n 'const FLUID_TYPE_ID' crates/manifold-editing/src/commands/graph/scene/fluid.rs` matches.
 - **Read-back:** `edit/commands/graph/scene/fluid.rs` whole; `app/ui_bridge/project.rs:619`; GROUPING_GRAPHS.md.
-- **Old → new:** `AddSceneFluidCommand` builds `node.fluid_surface` from `FLUID_TYPE_ID` (`fluid.rs:23`) with metadata the app looks up for that type (`project.rs:619`) → the command inserts the template graph the app hands it, and the app resolves it from one constant, `DEFAULT_LIQUID_TEMPLATE` (today's FLIP scene fluid). ⚠ VERIFY-AT-IMPL: the command's `catalog_default` may already carry the graph; if so, the change is deleting `FLUID_TYPE_ID` and building from it.
-- **Deliverables:** tests `scene_physics_add_fluid_template_undo_reload` for the FLIP template and for a GPU template (Dam Break Matter's Live Matter and Liquid Surface groups) passed in by the test; flow `scripts/ui-flows/scene-fluid-template.json`. Switching the constant to SWASH is a one-line change on Peter's go (section 8, call 3), not this phase.
+- **Old → new:** `AddSceneFluidCommand` builds `node.fluid_surface` from `FLUID_TYPE_ID` (`fluid.rs:23`) with metadata the app looks up for that type (`project.rs:619`) → the command inserts the template graph the app hands it, and the app resolves it from one constant, `DEFAULT_LIQUID_TEMPLATE`, which names `gpu_flip_liquid_template`. ⚠ VERIFY-AT-IMPL: the command's `catalog_default` may already carry the graph; if so, the change is deleting `FLUID_TYPE_ID` and building from it.
+- **Deliverables:** tests `scene_physics_add_fluid_template_undo_reload` for the FLIP template and for a GPU template (Dam Break Matter's Live Matter and Liquid Surface groups) passed in by the test; flow `scripts/ui-flows/scene-fluid-template.json`. Another solver's template is its own builder plus its own Add Fluid tests, never a one-line swap.
 - **Gate:** positive: the tests and every `scene-fluid-*` flow. Negative: `rg -n 'FLUID_TYPE_ID' crates/manifold-editing/src` returns zero.
 - **Demo:** L3: the flow adds a fluid, plays, moves the source, undoes, redoes, saves, reloads and plays.
 - **Gesture:** Add Fluid into a scene and drag the source while it pours.
@@ -522,6 +522,7 @@ The GPU FLIP step builds its in-region map from `water` per section 3.10 (block 
 10. One list, one walk, one scene contract (D11).
 11. Solids through the shared distance lattice (D12).
 12. Named refusals and counted overflow, never clamps or truncation (D13).
+13. Add Fluid authors GPU FLIP, with no solver picker and no fallback to CPU FLIP or Matter (Peter, 2026-10-02).
 
 ## 7. Deferred
 
@@ -542,5 +543,5 @@ The GPU FLIP step builds its in-region map from `water` per section 3.10 (block 
 
 1. **P1 edits MPM-owned files before SWASH's P4.** The SWASH design's decided item 1 keeps MPM untouched until P4. The move changes no behaviour and is gated on unchanged proof numbers; without it SWASH P3b must copy MPM's coupling owner or import it. Recommendation: yes, before SWASH P3b.
 2. **The resolution ceiling (D14).** Recommendation: yes. It turns a machine lockup into a named refusal; each ceiling lifts as its staged GPU check passes.
-3. **Which liquid Add Fluid authors (P9).** FLIP until his SWASH P4 go.
+3. **Which liquid Add Fluid authors (P9).** Decided: GPU FLIP, no picker, no fallback (section 6 (Decided), item 13).
 4. **The bake workflow for GPU liquids** (BUG-vglg.18). Recommendation: GPU liquids offer no cache until that talk.

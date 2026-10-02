@@ -3,7 +3,9 @@
 
 import contextlib
 import io
+import subprocess
 import sys
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -105,12 +107,26 @@ class GpuProofsGateTests(unittest.TestCase):
             gate.record_timing(line, now, state, timings)
         self.assertEqual([(n, round(s, 1)) for n, s, _ in timings], [("a::one", 3.0), ("a::two", 10.5)])
 
+    def test_result_split_by_native_output_is_charged_to_its_own_test(self):
+        timings, state = [], {"t": None, "bin": ""}
+        feed = [
+            (0.0, "     Running tests/gpu_proofs/main.rs (target/debug/deps/gpu_proofs-ab)\n"),
+            (1.0, "test a::slow ... ------------\n"),
+            (2.0, "Fluid Engine Version 1.8.8\n"),
+            (200.0, "ok\n"),
+            (201.0, "test a::fast ... ok\n"),
+        ]
+        for now, line in feed:
+            gate.record_timing(line, now, state, timings)
+        self.assertEqual([(n, round(s, 1)) for n, s, _ in timings], [("a::slow", 200.0), ("a::fast", 1.0)])
+
     def test_timings_collected_during_run(self):
         process = FakeProcess()
         process.stdout = iter(["     Running a (b)\n", "test x ... ok\n"])
         timings = []
         with patch.object(gate.subprocess, "Popen", return_value=process):
-            with patch.object(gate.time, "monotonic", side_effect=[1.0, 4.0]):
+            ticks = iter([1.0, 4.0] + [4.0] * 50)
+            with patch.object(gate.time, "monotonic", side_effect=lambda: next(ticks)):
                 with contextlib.redirect_stdout(io.StringIO()):
                     gate.run_gate(Path("/tmp/Cargo.toml"), [], [], None, False, False, timings)
         self.assertEqual(timings, [("x", 3.0, "a")])
@@ -142,7 +158,8 @@ class GpuProofsGateTests(unittest.TestCase):
     def run_main(self, argv, repo_changed=None):
         calls = []
 
-        def fake_run_gate(manifest, filters, skips, targets, full, lib, timings):
+        def fake_run_gate(manifest, filters, skips, targets, full, lib, timings, hung=None,
+                          hang_floor=None):
             calls.append(dict(filters=filters, skips=skips, targets=targets, full=full, lib=lib))
             return 0, ""
         out = io.StringIO()
@@ -236,6 +253,96 @@ class GpuProofsGateTests(unittest.TestCase):
             [], repo_changed=["crates/manifold-renderer/tests/glb_conformance.rs"])
         self.assertEqual([c["targets"] for c in calls], [["gpu_proofs"], ["glb_conformance"]])
         self.assertEqual(calls[1]["filters"], [])
+
+
+class WatchdogTests(unittest.TestCase):
+    TIMES = {"m::known": 100.0}
+
+    def dog(self, floor=None):
+        return gate.Watchdog(self.TIMES, floor)
+
+    def test_allowance_is_floor_five_times_record_or_no_record_default(self):
+        d = self.dog()
+        self.assertEqual(d.allowance("m::known"), 500.0)
+        self.assertEqual(d.allowance("m::unknown"), 300.0)
+        d.times = {"m::tiny": 2.0}
+        self.assertEqual(d.allowance("m::tiny"), 120.0)
+
+    def test_floor_override_replaces_floor_and_no_record_default(self):
+        d = self.dog(floor=10.0)
+        self.assertEqual(d.allowance("m::unknown"), 10.0)
+        d.times = {"m::tiny": 1.0, "m::big": 50.0}
+        self.assertEqual(d.allowance("m::tiny"), 10.0)
+        self.assertEqual(d.allowance("m::big"), 250.0)
+
+    def test_unfinished_tail_starts_the_clock_and_hang_fires(self):
+        d = self.dog()
+        d.feed_line("     Running a (b)\n", 0.0)
+        d.feed_partial("test m::unknown ... ", 10.0)
+        self.assertIsNone(d.check(300.0))
+        name, waited, allowance = d.check(311.0)
+        self.assertEqual((name, round(waited), allowance), ("m::unknown", 301, 300.0))
+
+    def test_result_line_stops_the_clock(self):
+        for result in ("test m::a ... ok\n", "test m::a ... FAILED\n", "test m::a ... ignored\n"):
+            d = self.dog()
+            d.feed_partial("test m::a ... ", 0.0)
+            d.feed_line(result, 5.0)
+            self.assertIsNone(d.check(9999.0), result)
+
+    def test_result_split_by_native_output_stops_the_clock(self):
+        d = self.dog()
+        d.feed_line("test m::a ... ------------\n", 0.0)
+        d.feed_line("Fluid Engine Version 1.8.8\n", 1.0)
+        self.assertIsNotNone(d.check(400.0))
+        d.feed_line("ok\n", 401.0)
+        self.assertIsNone(d.check(9999.0))
+
+    def test_partial_then_full_line_does_not_restart_the_clock(self):
+        d = self.dog()
+        d.feed_partial("test m::a ... ", 0.0)
+        d.feed_line("test m::a ... ------\n", 50.0)
+        self.assertEqual(d.check(301.0)[0], "m::a")
+
+    def test_heartbeat_every_minute_names_the_test(self):
+        d = self.dog()
+        d.feed_partial("test m::known ... ", 0.0)
+        self.assertIsNone(d.heartbeat(59.0))
+        beat = d.heartbeat(61.0)
+        self.assertIn("m::known", beat)
+        self.assertIn("61s", beat)
+        self.assertIsNone(d.heartbeat(100.0))
+        self.assertIsNotNone(d.heartbeat(122.0))
+
+    def test_idle_between_tests_never_fires(self):
+        d = self.dog()
+        d.feed_line("test m::a ... ok\n", 0.0)
+        self.assertIsNone(d.check(9999.0))
+        self.assertIsNone(d.heartbeat(9999.0))
+
+    def test_hung_run_is_killed_and_reported(self):
+        real_popen = subprocess.Popen
+
+        def sh_popen(cmd, **kwargs):
+            return real_popen(["/bin/sh", "-c", "printf 'test m::stuck ... '; sleep 60"], **kwargs)
+
+        hung = []
+        out = io.StringIO()
+        started = time.monotonic()
+        with patch.object(gate.subprocess, "Popen", side_effect=sh_popen):
+            with contextlib.redirect_stdout(out):
+                code, _ = gate.run_gate(Path("/tmp/Cargo.toml"), [], [], hung=hung, hang_floor=1.0)
+        self.assertLess(time.monotonic() - started, 30)
+        self.assertNotEqual(code, 0)
+        self.assertEqual([n for n, _ in hung], ["m::stuck"])
+        self.assertIn("GPU-PROOFS GATE: HUNG m::stuck after", out.getvalue())
+
+    def test_summary_fails_loudly_on_hang(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = gate.print_summary("", 0, [], None, [("m::stuck", 130.4)])
+        self.assertEqual(code, 4)
+        self.assertIn("GPU-PROOFS GATE: HUNG m::stuck after 130s", out.getvalue())
 
 
 if __name__ == "__main__":

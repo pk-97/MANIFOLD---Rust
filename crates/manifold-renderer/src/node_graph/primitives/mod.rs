@@ -398,7 +398,6 @@ pub(crate) mod face_grid_scenes;
 mod face_grid_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod face_grid_scene_tests;
-#[cfg(any(test, feature = "gpu-proofs"))]
 pub(crate) mod gpu_flip_preset;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_flip_atom_tests;
@@ -411,6 +410,8 @@ mod gpu_flip_scene_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod whitewater_scene_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
+mod liquid_prepare_tests;
+#[cfg(all(test, feature = "gpu-proofs"))]
 pub(crate) mod gpu_flip_volume;
 #[cfg(all(test, feature = "water-race-probes"))]
 pub(crate) mod gpu_flip_race_tests;
@@ -421,6 +422,7 @@ mod gpu_flip_render_smoke_tests;
 mod clamp_liquid_to_solids;
 mod count_surface_triangles;
 pub(crate) mod volume_surface_mesh;
+mod relax_surface_mesh;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod liquid_surface_tests;
 mod transform_shake;

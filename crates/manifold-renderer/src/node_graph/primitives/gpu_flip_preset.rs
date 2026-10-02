@@ -120,7 +120,7 @@ pub(crate) const TOP_SPEED: f64 = DEFAULT_TOP_SPEED as f64;
 pub(crate) const REST_PER_CELL: f64 = 8.0;
 
 impl WaterScene {
-    /// The engine's Dam Break without its obstacle.
+    /// The engine's Dam Break, its box obstacle standing in the column's path.
     pub fn dam_break(n: usize) -> Self {
         Self {
             pressure: PressureShape::at(n),
@@ -134,8 +134,15 @@ impl WaterScene {
             faces: false,
             ghost_fluid: true,
             volume_projection: true,
-            obstacle: false,
+            obstacle: true,
         }
+    }
+
+    /// The Dam Break the FLIP engine races: no obstacle, as `race_probe` and
+    /// the race clips run the engine.
+    #[cfg(all(test, feature = "gpu-proofs"))]
+    pub fn race_dam_break(n: usize) -> Self {
+        Self { obstacle: false, ..Self::dam_break(n) }
     }
 
     /// The scene with the Dam Break's box obstacle.
@@ -144,13 +151,16 @@ impl WaterScene {
         Self { obstacle: true, ..self }
     }
 
-    /// A pool 1 m deep and nothing else (I5).
+    /// A pool 1 m deep and nothing else (I5). Every scene built from it
+    /// leaves the box out unless it asks with [`Self::with_obstacle`].
+    #[cfg(any(test, feature = "gpu-proofs"))]
     pub fn still_pool(n: usize) -> Self {
-        Self { fill_height: 1.0, column: [[0.0; 2]; 3], ..Self::dam_break(n) }
+        Self { fill_height: 1.0, column: [[0.0; 2]; 3], obstacle: false, ..Self::dam_break(n) }
     }
 
     /// A pool `fill` deep in a tank `size` on a side at `n` cells: the
     /// conformance box scenes' water.
+    #[cfg(any(test, feature = "gpu-proofs"))]
     pub fn pool(n: usize, size: f64, fill: f64) -> Self {
         Self { size, fill_height: fill, ..Self::still_pool(n) }
     }
@@ -172,15 +182,15 @@ impl WaterScene {
     /// A 0.9 m pool with a 0.2 m slab over its left half: 1 m mean depth,
     /// a step in the surface whose sloshing is mostly the tank's first
     /// standing wave.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "gpu-proofs"))]
     pub fn slosh(n: usize) -> Self {
-        Self { fill_height: 0.9, column: [[-2.0, 0.0], [0.9, 1.1], [-2.0, 2.0]], ..Self::dam_break(n) }
+        Self { fill_height: 0.9, column: [[-2.0, 0.0], [0.9, 1.1], [-2.0, 2.0]], obstacle: false, ..Self::dam_break(n) }
     }
 
     /// A 1 m block of water high in the tank, clear of every wall.
     #[cfg(test)]
     pub fn free_fall(n: usize) -> Self {
-        Self { fill_height: 0.0, column: [[-0.5, 0.5], [2.5, 3.5], [-0.5, 0.5]], ..Self::dam_break(n) }
+        Self { fill_height: 0.0, column: [[-0.5, 0.5], [2.5, 3.5], [-0.5, 0.5]], ..Self::still_pool(n) }
     }
 
     pub fn with_surface(self) -> Self {
@@ -188,6 +198,7 @@ impl WaterScene {
     }
 
     /// Publish the face grid (section 3.2 (Grid outputs) of the seam).
+    #[cfg(any(test, feature = "gpu-proofs"))]
     pub fn with_faces(self) -> Self {
         Self { faces: true, ..self }
     }
@@ -492,20 +503,126 @@ fn surface_group() -> Value {
 
 /// The nodes `water_def` makes; every other node of the shipped preset is
 /// its render.
+#[cfg(any(test, feature = "gpu-proofs"))]
 fn built_by_water_def(node_id: &str) -> bool {
     let step = node_id.split_once('.').is_some_and(|(step, _)| {
         step.len() > 1 && step.starts_with('s') && step[1..].bytes().all(|b| b.is_ascii_digit())
     });
     step || FACE_NODES.contains(&node_id)
-        || matches!(node_id, "domain" | "initial_column" | "fill" | "state" | STEP_NODE | "stats" | "solid" | "frame" | "surface")
+        || OBSTACLE_RENDER.contains(&node_id)
+        || matches!(
+            node_id,
+            "domain" | "initial_column" | "obstacle_transform" | "obstacle_collider" | "fill" | "state" | STEP_NODE | "stats" | "solid" | "frame" | "surface"
+        )
+}
+
+/// The obstacle's render nodes, which `render_def` adds when the scene has
+/// the box: its mesh, its material and the object the render scene draws.
+#[cfg(any(test, feature = "gpu-proofs"))]
+const OBSTACLE_RENDER: [&str; 3] = ["obstacle_mesh", "obstacle_material", "obstacle_object"];
+
+/// The render scene's object slot the box takes.
+#[cfg(any(test, feature = "gpu-proofs"))]
+const OBSTACLE_SLOT: &str = "object_1";
+
+/// The box as the audience sees it: a unit cube on the collider's own
+/// transform, in `WaterDamBreak.json`'s copper.
+#[cfg(any(test, feature = "gpu-proofs"))]
+fn add_obstacle_render(def: &mut Value, transform: u64, scene: u64) {
+    let next = def["nodes"].as_array().expect("nodes").iter().filter_map(|n| n["id"].as_u64()).max().expect("nodes") + 1;
+    let [mesh, material, object] = [next, next + 1, next + 2];
+    let material_params = json!({
+        "color_r": float(0.52), "color_g": float(0.23), "color_b": float(0.073),
+        "metallic": float(0.94), "roughness": float(0.19), "ambient": float(0.0),
+    });
+    let nodes = def["nodes"].as_array_mut().expect("nodes");
+    nodes.push(json!({"id": mesh, "nodeId": "obstacle_mesh", "typeId": "node.cube_mesh", "handle": "Obstacle Mesh", "params": {}}));
+    nodes.push(json!({"id": material, "nodeId": "obstacle_material", "typeId": "node.pbr_material", "handle": "Obstacle Material", "params": material_params}));
+    nodes.push(json!({"id": object, "nodeId": "obstacle_object", "typeId": "node.scene_object", "handle": "Obstacle", "params": {}}));
+    let wire = |from: u64, from_port: &str, to: u64, to_port: &str| json!({"fromNode": from, "fromPort": from_port, "toNode": to, "toPort": to_port});
+    let wires = def["wires"].as_array_mut().expect("wires");
+    wires.push(wire(mesh, "vertices", object, "vertices"));
+    wires.push(wire(material, "out", object, "material"));
+    wires.push(wire(transform, "transform", object, "transform"));
+    wires.push(wire(object, "object", scene, OBSTACLE_SLOT));
+}
+
+/// Add Fluid handle suffixes by builder node name: `""` is the bare fluid
+/// handle; unnamed nodes carry none.
+const BODY_HANDLES: [(&str, &str); 5] = [
+    ("domain", "Simulation"),
+    ("initial_column", "Initial Volume"),
+    ("surface", "Surface"),
+    ("water_material", "Material"),
+    ("water_object", ""),
+];
+
+/// The body's group output node name.
+pub const LIQUID_BODY_OUTPUT: &str = "fluid_output";
+
+/// The liquid body Add Fluid inserts, as one graph: the shipped Dam Break's
+/// water and Liquid Surface from [`water_def`], and the shipped preset's
+/// water material and object, closed into a group output. Built by the same
+/// builder and preset `WaterDamBreakGpuFlip.json` is checked against, so the
+/// two cannot drift. Nodes keep the builder's names (`domain`,
+/// `initial_column`, `water_material`, `water_object`,
+/// [`LIQUID_BODY_OUTPUT`]); handles are Add Fluid suffixes.
+pub fn gpu_flip_liquid_body() -> EffectGraphDef {
+    use manifold_core::effect_graph_def::{EffectGraphNode, EffectGraphWire, GROUP_OUTPUT_TYPE_ID};
+
+    // The box is the preset's scene dressing, not the liquid: Add Fluid inserts water only.
+    let mut def = water_def(WaterScene { obstacle: false, ..WaterScene::dam_break(64).with_surface() });
+    let harness: Vec<u32> = def.nodes.iter()
+        .filter(|node| matches!(node.node_id.as_str(), "mesh_sink" | "output"))
+        .map(|node| node.id)
+        .collect();
+    def.nodes.retain(|node| !harness.contains(&node.id));
+    def.wires.retain(|wire| !harness.contains(&wire.from_node) && !harness.contains(&wire.to_node));
+
+    let preset = shipped_preset();
+    let mut next = def.nodes.iter().map(|node| node.id).max().expect("water nodes") + 1;
+    let mut take = |name: &str, nodes: &mut Vec<EffectGraphNode>| -> u32 {
+        let found = preset["nodes"].as_array().expect("preset nodes").iter()
+            .find(|node| node["nodeId"] == name)
+            .unwrap_or_else(|| panic!("the GPU FLIP preset has no {name}"));
+        let mut node: EffectGraphNode = serde_json::from_value(found.clone()).expect("preset node");
+        node.id = next;
+        next += 1;
+        nodes.push(node);
+        nodes.last().expect("pushed").id
+    };
+    let material = take("water_material", &mut def.nodes);
+    let object = take("water_object", &mut def.nodes);
+    let output = next;
+    def.nodes.push(serde_json::from_value(json!({
+        "id": output, "nodeId": LIQUID_BODY_OUTPUT, "typeId": GROUP_OUTPUT_TYPE_ID,
+    })).expect("group output"));
+
+    let surface = def.nodes.iter().find(|node| node.node_id.as_str() == "surface").expect("liquid surface").id;
+    let wire = |from_node: u32, from_port: &str, to_node: u32, to_port: &str| EffectGraphWire {
+        from_node, from_port: from_port.into(), to_node, to_port: to_port.into(),
+    };
+    def.wires.extend([
+        wire(surface, "vertices", object, "vertices"),
+        wire(material, "out", object, "material"),
+        wire(object, "object", output, "object"),
+    ]);
+    for node in &mut def.nodes {
+        node.handle = BODY_HANDLES.iter()
+            .find(|(name, _)| *name == node.node_id.as_str())
+            .map(|(_, suffix)| (*suffix).to_owned());
+    }
+    def
 }
 
 /// Surface Detail adds this to its value to give the surface nodes' scale.
+#[cfg(any(test, feature = "gpu-proofs"))]
 const SURFACE_DETAIL_OFFSET: usize = 2;
 
 /// A meshed scene inside the shipped preset's render: `water_def`'s water
 /// and surface, the preset's other nodes, and the preset's wires between the
 /// two, matched by node name.
+#[cfg(any(test, feature = "gpu-proofs"))]
 pub(crate) fn render_def(scene: WaterScene) -> EffectGraphDef {
     // The render's Whitewater group reads the face grid.
     let mut def = serde_json::to_value(water_def(scene.with_surface().with_faces())).expect("water def serialises");
@@ -537,7 +654,7 @@ pub(crate) fn render_def(scene: WaterScene) -> EffectGraphDef {
         .filter(|n| built_by_water_def(&name_of(n)))
         .map(|n| (n["id"].as_u64().expect("preset id"), name_of(n)))
         .collect();
-    for wire in preset["wires"].as_array().expect("preset wires") {
+    'wires: for wire in preset["wires"].as_array().expect("preset wires") {
         if ends(wire).iter().all(|id| !render_ids.contains(id)) {
             continue;
         }
@@ -548,10 +665,19 @@ pub(crate) fn render_def(scene: WaterScene) -> EffectGraphDef {
                 id + shift
             } else {
                 let name = &water_name.iter().find(|(water, _)| *water == id).expect("a preset node").1;
+                // The obstacle's render wires are the builder's own, below.
+                if OBSTACLE_RENDER.contains(&name.as_str()) {
+                    continue 'wires;
+                }
                 id_of(&def, name)
             });
         }
         def["wires"].as_array_mut().expect("wires").push(wire);
+    }
+    if scene.obstacle {
+        let transform = id_of(&def, "obstacle_transform");
+        let scene_node = id_of(&def, "scene");
+        add_obstacle_render(&mut def, transform, scene_node);
     }
     for key in ["name", "description"] {
         def[key] = preset[key].clone();
@@ -563,6 +689,7 @@ pub(crate) fn render_def(scene: WaterScene) -> EffectGraphDef {
 /// The shipped cards with every default at the value this scene's def bakes,
 /// so no card overwrites what the extent proof checked: Resolution at the
 /// lattice, Surface Detail at the surface scale, gone past its range.
+#[cfg(any(test, feature = "gpu-proofs"))]
 fn scene_cards(metadata: &Value, scene: WaterScene) -> Value {
     let mut metadata = metadata.clone();
     let detail = scene.surface_scale.checked_sub(SURFACE_DETAIL_OFFSET).filter(|detail| *detail <= 2);

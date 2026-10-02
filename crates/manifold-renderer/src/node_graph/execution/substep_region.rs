@@ -42,6 +42,18 @@ impl Executor {
         if self.run_step(graph, plan, boundary_idx, StepPass::Frame, env, tally, gpu, state) == StepFlow::Abort {
             return StepFlow::Abort;
         }
+        if self.pending_skipped[boundary_idx] {
+            // A pending boundary has no state to iterate: the body visits
+            // once, so each step publishes its outputs pending.
+            for &step_idx in &region.steps[1..] {
+                let pass = StepPass::Repeat { first: true };
+                if self.run_step(graph, plan, step_idx, pass, env, tally, gpu, state) == StepFlow::Abort {
+                    return StepFlow::Abort;
+                }
+            }
+            self.release_region_held(plan, region, env);
+            return StepFlow::Next;
+        }
         let ports = graph
             .get_node(region.boundary)
             .and_then(|inst| inst.node.substep_boundary())
@@ -126,7 +138,11 @@ impl Executor {
         if flow == StepFlow::Abort {
             return StepFlow::Abort;
         }
+        self.release_region_held(plan, region, env);
+        StepFlow::Next
+    }
 
+    fn release_region_held(&mut self, plan: &ExecutionPlan, region: &SubstepRegion, env: StepEnv<'_>) {
         for &resource in &region.held_resources {
             if self.backend.slot_for(resource).is_none()
                 || self.dump_pinned_resources.contains(&resource)
@@ -141,6 +157,5 @@ impl Executor {
             let dims = resolve_dims(plan, resource, env.canvas_dims);
             self.backend.release(resource, ty, fmt, dims);
         }
-        StepFlow::Next
     }
 }

@@ -1035,7 +1035,7 @@ mod tests {
 
         let device = crate::test_device();
         let make_runtime = |dedicated| {
-            let (graph, waves) = wave_graph();
+            let (mut graph, waves) = wave_graph();
             let plan = compile(&graph).unwrap();
             let planned = plan_array_allocations(&graph, &plan, (64, 64), &AHashMap::default()).unwrap();
             let final_resource = plan.steps().iter().find(|step| step.node == waves[3])
@@ -1048,7 +1048,7 @@ mod tests {
                     backend.pre_bind_array(resource, device.create_buffer_shared(storage.bytes));
                 }
             }
-            pre_allocate_resources(&graph, &plan, &device, &mut backend).unwrap();
+            pre_allocate_resources(&mut graph, &plan, &device, &mut backend).unwrap();
             let unique: AHashSet<_> = planned.storage.keys()
                 .map(|resource| backend.slot_for(*resource).unwrap()).collect();
             assert_eq!(unique.len(), if dedicated { 5 } else { 4 });

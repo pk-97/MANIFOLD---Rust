@@ -97,10 +97,6 @@ impl Primitive for ClampLiquidToSolids {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        if ctx.inputs.any_pending() {
-            ctx.mark_outputs_pending();
-            return;
-        }
         let nodes = ["nodes_x", "nodes_y", "nodes_z"].map(|name| ctx.scalar_or_param(name, 2.0).round());
         let solid_nodes =
             ["solid_nodes_x", "solid_nodes_y", "solid_nodes_z"].map(|name| ctx.scalar_or_param(name, 2.0).round());

@@ -655,17 +655,18 @@ fn fluid_sort_particles_into_cells_disabled_leaves_outputs_untouched() {
     assert_ne!(run(&mut harness, &second, 1.0), enabled, "re-enabled, it sorts the new particles");
 }
 
-/// Before its first frame the producer publishes zero particles and zero lattice
-/// nodes, which the group's bin-size math turns into a negative cell size.
+/// A producer without a frame yet is pending, so the executor holds this node;
+/// a lattice that reaches it is real, and a broken one is an error even with
+/// no particles.
 #[test]
-fn fluid_sort_particles_into_cells_is_silent_before_the_first_frame() {
+fn fluid_sort_particles_into_cells_rejects_a_broken_lattice_at_any_count() {
     let mut harness = Harness::new();
     let no_lattice = Lattice { center: [0.0; 3], size: [4.0; 3], cell: -4.0 };
     let (input, _) = harness.array(&[particle([0.0; 3], 0.02, 1)], 1);
     let (sorted, _) = harness.array::<FluidParticle>(&[], 1);
     let (ranges, _) = harness.array::<CellRange>(&[], 64);
     let mut sort = SortParticlesIntoCells::new();
-    for (count, expect_error) in [(0.0, false), (1.0, true)] {
+    for (count, expect_error) in [(0.0, true), (1.0, true)] {
         let count_slot = harness.scalar_input(count);
         let (_, errors) = harness.run(
             &mut sort,
@@ -1156,6 +1157,17 @@ impl SphereLevelSet {
         Self { nodes, min, size, center, radius, values }
     }
 
+    /// Foam: a random sign at every node, so the surface has far more area
+    /// than the lattice's own box.
+    fn foam(nodes: u32, seed: u64) -> Self {
+        let mut level_set = Self::new(nodes, 0.5);
+        let mut rng = Rng(seed);
+        for value in &mut level_set.values {
+            *value = rng.next_f32() - 0.5;
+        }
+        level_set
+    }
+
     fn phi(&self, p: [u32; 3]) -> f64 {
         f64::from(self.values[(p[0] + self.nodes * (p[1] + self.nodes * p[2])) as usize])
     }
@@ -1197,6 +1209,18 @@ fn run_marching_cubes(
     capacity: u32,
     reported_total: Option<f32>,
 ) -> MeshRun {
+    run_marching_cubes_on(harness, &mut VolumeSurfaceMesh::new(), level_set, capacity, reported_total)
+}
+
+/// One frame of `mesh`, which keeps its grown buffer between calls. Reads
+/// the whole buffer the node provides.
+fn run_marching_cubes_on(
+    harness: &mut Harness,
+    mesh: &mut VolumeSurfaceMesh,
+    level_set: &SphereLevelSet,
+    capacity: u32,
+    reported_total: Option<f32>,
+) -> MeshRun {
     let (levelset_slot, _) = harness.array(&level_set.values, level_set.values.len());
     let (counts_slot, _) = harness.array::<u32>(&[], level_set.values.len());
     let n = level_set.nodes as f32;
@@ -1223,7 +1247,7 @@ fn run_marching_cubes(
         assert!(errors.is_empty(), "{errors:?}");
         total = scalars.iter().find(|(slot, _)| *slot == total_slot).map(|(_, v)| v.clone());
     }
-    let (vertices_slot, vertices_buf) = harness.array::<MeshVertex>(&[], capacity as usize);
+    let (vertices_slot, _) = harness.array::<MeshVertex>(&[], 3);
     let centre = level_set.min + 0.5 * level_set.size;
     let mut mesh_params = params(&[
         ("center_x", centre),
@@ -1242,12 +1266,14 @@ fn run_marching_cubes(
         mesh_params.insert(Cow::Borrowed("total"), ParamValue::Float(total));
     }
     let (_, errors) = harness.run(
-        &mut VolumeSurfaceMesh::new(),
+        mesh,
         &[("levelset", levelset_slot), ("scan", scan_slot)],
         &[("vertices", vertices_slot)],
         &mesh_params,
     );
-    MeshRun { vertices: read(&vertices_buf, capacity as usize), errors, total }
+    let provided = harness.buffer(vertices_slot);
+    let slots = (provided.size / std::mem::size_of::<MeshVertex>() as u64) as usize;
+    MeshRun { vertices: read(&provided, slots), errors, total }
 }
 
 /// Res 64 at Surface Detail 2 is a 261³ lattice: more than 65,535 threadgroups
@@ -1350,23 +1376,62 @@ fn volume_surface_mesh_sphere_is_watertight() {
     }
 }
 
+/// A surface with no more area than the lattice's box fits the starting
+/// buffer whatever Starting Mesh Capacity says: no frame waits on the total.
 #[test]
-fn volume_surface_mesh_overflow_writes_empty() {
+fn volume_surface_mesh_starts_at_the_box_surface() {
     let mut harness = Harness::new();
     let sphere = SphereLevelSet::new(33, 0.55);
-    let run = run_marching_cubes(&mut harness, &sphere, 999, None);
-    assert!(run.vertices.iter().all(is_zero), "an overflow is an empty mesh, never a truncated one");
+    let fixed = run_marching_cubes(&mut harness, &sphere, 200_000, None);
+    let Some(ParamValue::Float(triangles)) = fixed.total else { panic!("total") };
+    let live = triangles as usize * 3;
+    let run = run_marching_cubes(&mut harness, &sphere, 0, None);
+    assert!(run.errors.is_empty(), "{:?}", run.errors);
+    assert_eq!(run.vertices.len(), 12 * 3 * 32 * 32, "the box surface of 32³ cells");
+    assert_eq!(
+        bytemuck::cast_slice::<MeshVertex, u8>(&run.vertices[..live]),
+        bytemuck::cast_slice::<MeshVertex, u8>(&fixed.vertices[..live]),
+        "the first frame is the whole mesh"
+    );
 }
 
+/// Foam outgrows the starting buffer mid-run: the frame that overflows is an
+/// empty mesh, never a truncated one; the next names the overflow with its
+/// count and grows; and the grown mesh is the fixed-capacity mesh bit for bit.
 #[test]
-fn fluid_surface_overflow_reports_error() {
+fn fluid_surface_mesh_grows_past_capacity_mid_run() {
     let mut harness = Harness::new();
-    let sphere = SphereLevelSet::new(33, 0.55);
-    let first = run_marching_cubes(&mut harness, &sphere, 999, None);
-    let Some(ParamValue::Float(triangles)) = first.total else { panic!("total") };
-    assert!(first.errors.is_empty(), "nothing is reported before the total arrives");
-    let next = run_marching_cubes(&mut harness, &sphere, 999, Some(triangles));
-    assert!(next.errors.iter().any(|e| e.contains("Mesh Capacity is 999")), "{:?}", next.errors);
+    let foam = SphereLevelSet::foam(33, 0xf0a3_5eed);
+    let fixed = run_marching_cubes(&mut harness, &foam, 2_000_000, None);
+    let Some(ParamValue::Float(triangles)) = fixed.total else { panic!("total") };
+    let live = triangles as usize * 3;
+    let start = 999;
+    assert!(live > start && fixed.vertices.len() >= live, "foam ({live} vertices) outgrows the start ({start})");
+
+    let mut mesh = VolumeSurfaceMesh::new();
+    let first = run_marching_cubes_on(&mut harness, &mut mesh, &foam, 999, None);
+    assert!(first.errors.is_empty(), "nothing is reported before the total arrives: {:?}", first.errors);
+    assert_eq!(first.vertices.len(), start, "an explicit Starting Mesh Capacity wins");
+    assert!(first.vertices.iter().all(is_zero), "an overflow is an empty mesh, never a truncated one");
+
+    let grown = run_marching_cubes_on(&mut harness, &mut mesh, &foam, 999, Some(triangles));
+    assert!(
+        grown.errors.iter().any(|e| e.contains(&format!("Mesh Capacity is {start}")) && e.contains(&live.to_string())),
+        "{:?}",
+        grown.errors
+    );
+    assert!(grown.vertices.len() >= 2 * live, "grown to {} for {live} live vertices", grown.vertices.len());
+    assert_eq!(
+        bytemuck::cast_slice::<MeshVertex, u8>(&grown.vertices[..live]),
+        bytemuck::cast_slice::<MeshVertex, u8>(&fixed.vertices[..live]),
+        "the grown mesh is the fixed-capacity mesh"
+    );
+    assert!(grown.vertices[live..].iter().all(is_zero), "the grown tail is zeroed");
+
+    // Steady state: the same surface neither grows nor reports again.
+    let steady = run_marching_cubes_on(&mut harness, &mut mesh, &foam, 999, Some(triangles));
+    assert!(steady.errors.is_empty(), "{:?}", steady.errors);
+    assert_eq!(steady.vertices.len(), grown.vertices.len(), "no allocation once the surface fits");
 }
 
 // --- P6b: live triangles only ---------------------------------------------
@@ -1408,6 +1473,8 @@ struct LiveMesh {
     total: Slot,
     extent: (Slot, GpuBuffer),
     vertices: (Slot, GpuBuffer),
+    /// The level set the last frame meshed.
+    levelset: Option<Slot>,
 }
 
 impl LiveMesh {
@@ -1424,6 +1491,7 @@ impl LiveMesh {
             total,
             extent: harness.array::<u32>(&[], 4),
             vertices: harness.array::<MeshVertex>(&[], capacity),
+            levelset: None,
         }
     }
 
@@ -1457,6 +1525,11 @@ impl LiveMesh {
             &params(&mesh_params),
         );
         assert!(errors.is_empty(), "{errors:?}");
+        // The executor hands the published extent to the mesh's consumers.
+        if let Some((slot, extent)) = harness.live_extents.first().cloned() {
+            Backend::set_live_extent(&mut harness.backend, slot, extent);
+        }
+        self.levelset = Some(levelset);
         read::<u32>(&self.extent.1, 1)[0] as usize * 3
     }
 }
@@ -1481,13 +1554,13 @@ fn fluid_volume_surface_mesh_writes_only_live_and_last_frame_vertices() {
     let sentinel = MeshVertex { position: [9.0; 3], _pad0: 0.0, normal: [1.0, 0.0, 0.0], _pad1: 0.0, uv: [0.0; 2], _pad2: [0.0; 2], tangent: [0.0; 4], color: [1.0; 4] };
     let tail = vec![sentinel; capacity - sentinel_from];
     // SAFETY: shared buffer, no GPU work in flight between harness runs.
-    unsafe { live.vertices.1.write((sentinel_from * std::mem::size_of::<MeshVertex>()) as u64, bytemuck::cast_slice(&tail)) };
+    unsafe { harness.buffer(live.vertices.0).write((sentinel_from * std::mem::size_of::<MeshVertex>()) as u64, bytemuck::cast_slice(&tail)) };
 
     assert_eq!(live.frame(&mut harness, &big, capacity), first);
     let shrunk = live.frame(&mut harness, &small, capacity);
     assert!(shrunk < first, "the small sphere has fewer vertices ({shrunk} of {first})");
     live.frame(&mut harness, &small, capacity);
-    let vertices: Vec<MeshVertex> = read(&live.vertices.1, capacity);
+    let vertices: Vec<MeshVertex> = read(&harness.buffer(live.vertices.0), capacity);
     assert!(vertices[..shrunk].iter().all(|v| v.normal != [0.0; 3]), "live vertices are written");
     assert!(vertices[shrunk..sentinel_from].iter().all(is_zero), "vacated slots are cleared");
     assert!(
@@ -1830,5 +1903,249 @@ fn fluid_liquid_surface_keeps_padding_and_border_air_at_extreme_dials() {
     assert!(
         border_liquid_before > 0 && padding_liquid_before > 0,
         "the unclamped surface must reach the border ({border_liquid_before}) and the padding ({padding_liquid_before})"
+    );
+}
+
+// --- Mesh relaxation (BUG-xwf1 (Liquid Surface mesh relaxation)) ----------
+
+use super::relax_surface_mesh::RelaxSurfaceMesh;
+
+/// One relax pass of `mesh`'s last frame from `input` into `output`.
+fn relax_pass(
+    harness: &mut Harness,
+    relax: &mut RelaxSurfaceMesh,
+    mesh: &LiveMesh,
+    nodes: u32,
+    input: Slot,
+    output: Slot,
+    strength: f32,
+) {
+    let n = nodes as f32;
+    let levelset = mesh.levelset.expect("a meshed frame");
+    let (_, errors) = harness.run(
+        relax,
+        &[("vertices", input), ("levelset", levelset), ("scan", mesh.scan), ("extent", mesh.extent.0)],
+        &[("relaxed", output)],
+        &params(&[("nodes_x", n), ("nodes_y", n), ("nodes_z", n), ("strength", strength)]),
+    );
+    assert!(errors.is_empty(), "{errors:?}");
+    if let Some((slot, extent)) = harness.live_extents.first().cloned() {
+        Backend::set_live_extent(&mut harness.backend, slot, extent);
+    }
+}
+
+/// Welded vertex ids of a closed triangle list (shared vertices are
+/// bit-identical) and each welded vertex's distinct neighbours.
+fn weld(live: &[MeshVertex]) -> (Vec<usize>, Vec<Vec<usize>>) {
+    let mut ids = std::collections::HashMap::new();
+    let welded: Vec<usize> = live
+        .iter()
+        .map(|v| {
+            let next = ids.len();
+            *ids.entry(v.position.map(f32::to_bits)).or_insert(next)
+        })
+        .collect();
+    let mut neighbours = vec![std::collections::BTreeSet::new(); ids.len()];
+    for tri in welded.chunks_exact(3) {
+        for (a, b) in [(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])] {
+            neighbours[a].insert(b);
+            neighbours[b].insert(a);
+        }
+    }
+    (welded, neighbours.into_iter().map(|set| set.into_iter().collect()).collect())
+}
+
+/// f64 umbrella pass over welded positions: p + strength × (mean − p).
+fn umbrella(points: &[[f64; 3]], neighbours: &[Vec<usize>], strength: f64) -> Vec<[f64; 3]> {
+    points
+        .iter()
+        .zip(neighbours)
+        .map(|(p, around)| {
+            let n = around.len() as f64;
+            std::array::from_fn(|a| {
+                let mean = around.iter().map(|&j| points[j][a]).sum::<f64>() / n;
+                p[a] + strength * (mean - p[a])
+            })
+        })
+        .collect()
+}
+
+/// Mean angle (radians) between the faces on either side of each edge.
+fn mean_dihedral(live: &[MeshVertex], welded: &[usize]) -> f64 {
+    let face = |t: usize| {
+        let p = [live[3 * t].position, live[3 * t + 1].position, live[3 * t + 2].position];
+        let u: [f64; 3] = std::array::from_fn(|i| f64::from(p[1][i] - p[0][i]));
+        let w: [f64; 3] = std::array::from_fn(|i| f64::from(p[2][i] - p[0][i]));
+        let n = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]];
+        let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+        n.map(|c| c / len)
+    };
+    let mut by_edge = std::collections::HashMap::new();
+    for (t, tri) in welded.chunks_exact(3).enumerate() {
+        for (a, b) in [(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])] {
+            by_edge.entry((a.min(b), a.max(b))).or_insert_with(Vec::new).push(t);
+        }
+    }
+    let angles: Vec<f64> = by_edge
+        .values()
+        .map(|faces| {
+            let (f, g) = (face(faces[0]), face(faces[1]));
+            (f[0] * g[0] + f[1] * g[1] + f[2] * g[2]).clamp(-1.0, 1.0).acos()
+        })
+        .collect();
+    angles.iter().sum::<f64>() / angles.len() as f64
+}
+
+/// Two chained passes match an f64 umbrella reference over the welded mesh,
+/// keep shared vertices bit-identical (the mesh stays closed), leave normals
+/// alone, zero the tail, and flatten the facets of a bumpy sphere. Strength 0
+/// copies the input.
+#[test]
+fn fluid_relax_surface_mesh_matches_umbrella_reference_on_a_bumpy_sphere() {
+    let mut harness = Harness::new();
+    let mut sphere = SphereLevelSet::new(33, 0.55);
+    // A quarter-cell of noise: the lumpy surface relaxation is for.
+    let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
+    let cell = sphere.size / (sphere.nodes - 1) as f32;
+    for value in &mut sphere.values {
+        *value += 0.25 * cell * (rng.next_f32() - 0.5);
+    }
+    let capacity = 120_000;
+    let mut mesh = LiveMesh::new(&mut harness, sphere.values.len(), capacity);
+    let live_count = mesh.frame(&mut harness, &sphere, capacity);
+    let raw: Vec<MeshVertex> = read(&harness.buffer(mesh.vertices.0), capacity);
+    let (welded, neighbours) = weld(&raw[..live_count]);
+    let mut points = vec![[0.0_f64; 3]; neighbours.len()];
+    for (slot, &w) in welded.iter().enumerate() {
+        points[w] = raw[slot].position.map(f64::from);
+    }
+
+    let strength = 0.5;
+    let (first_slot, first_buf) = harness.array::<MeshVertex>(&[], capacity);
+    let (second_slot, second_buf) = harness.array::<MeshVertex>(&[], capacity);
+    let input = mesh.vertices.0;
+    relax_pass(&mut harness, &mut RelaxSurfaceMesh::new(), &mesh, sphere.nodes, input, first_slot, strength);
+    relax_pass(&mut harness, &mut RelaxSurfaceMesh::new(), &mesh, sphere.nodes, first_slot, second_slot, strength);
+    let first: Vec<MeshVertex> = read(&first_buf, capacity);
+    let second: Vec<MeshVertex> = read(&second_buf, capacity);
+
+    let reference_first = umbrella(&points, &neighbours, f64::from(strength));
+    let reference_second = umbrella(&reference_first, &neighbours, f64::from(strength));
+    for (pass, (got, want)) in [(&first, &reference_first), (&second, &reference_second)].into_iter().enumerate() {
+        let mut worst = 0.0_f64;
+        let mut copies: Vec<Option<[u32; 3]>> = vec![None; neighbours.len()];
+        for (slot, &w) in welded.iter().enumerate() {
+            let v = &got[slot];
+            for (&got, &want) in v.position.iter().zip(&want[w]) {
+                worst = worst.max((f64::from(got) - want).abs());
+            }
+            let bits = v.position.map(f32::to_bits);
+            assert_eq!(*copies[w].get_or_insert(bits), bits, "pass {pass}: copies of welded vertex {w} differ");
+            assert_eq!(v.normal, raw[slot].normal, "pass {pass}: normals pass through");
+            assert_eq!(v.uv, raw[slot].uv);
+            assert_eq!(v.color, raw[slot].color);
+        }
+        assert!(worst < 1e-5, "pass {pass}: positions differ from the f64 umbrella by {worst} m");
+        assert!(got[live_count..].iter().all(is_zero), "pass {pass}: the tail past the live triangles is zeroed");
+    }
+
+    let before = mean_dihedral(&raw[..live_count], &welded);
+    let after = mean_dihedral(&second[..live_count], &welded);
+    assert!(after < before, "relaxation must flatten the facets: {before} → {after} rad");
+
+    let (still_slot, still_buf) = harness.array::<MeshVertex>(&[], capacity);
+    relax_pass(&mut harness, &mut RelaxSurfaceMesh::new(), &mesh, sphere.nodes, input, still_slot, 0.0);
+    let still: Vec<MeshVertex> = read(&still_buf, capacity);
+    assert!(
+        bytemuck::cast_slice::<MeshVertex, u8>(&still) == bytemuck::cast_slice::<MeshVertex, u8>(&raw),
+        "strength 0 copies the mesh bit for bit"
+    );
+}
+
+/// With `extent` wired a relax pass forwards the mesh's live extent and,
+/// after its first frame, writes only live and last frame's vertices: a
+/// shrinking surface clears what it vacates and matches a fresh full pass.
+#[test]
+fn fluid_relax_surface_mesh_follows_the_live_extent() {
+    let mut harness = Harness::new();
+    let big = SphereLevelSet::new(33, 0.7);
+    let small = SphereLevelSet::new(33, 0.35);
+    let capacity = 120_000;
+    let mut mesh = LiveMesh::new(&mut harness, big.values.len(), capacity);
+    let mut relax = RelaxSurfaceMesh::new();
+    let (relaxed_slot, relaxed_buf) = harness.array::<MeshVertex>(&[], capacity);
+    let input = mesh.vertices.0;
+
+    let first = mesh.frame(&mut harness, &big, capacity);
+    relax_pass(&mut harness, &mut relax, &mesh, big.nodes, input, relaxed_slot, 0.5);
+    let (slot, extent) = harness.live_extents.first().cloned().expect("the relax pass forwards the live extent");
+    assert_eq!(slot, relaxed_slot);
+    assert!(extent.counts.ptr_eq(&mesh.extent.1), "the count is the running total's extent");
+    assert_eq!((extent.offset, extent.per_item), (0, 3));
+
+    let shrunk = mesh.frame(&mut harness, &small, capacity);
+    relax_pass(&mut harness, &mut relax, &mesh, small.nodes, input, relaxed_slot, 0.5);
+    assert!(shrunk < first, "the small sphere has fewer vertices ({shrunk} of {first})");
+    let relaxed: Vec<MeshVertex> = read(&relaxed_buf, capacity);
+    assert!(relaxed[shrunk..first].iter().all(is_zero), "vacated slots are cleared");
+
+    let (fresh_slot, fresh_buf) = harness.array::<MeshVertex>(&[], capacity);
+    relax_pass(&mut harness, &mut RelaxSurfaceMesh::new(), &mesh, small.nodes, input, fresh_slot, 0.5);
+    let fresh: Vec<MeshVertex> = read(&fresh_buf, capacity);
+    assert!(
+        bytemuck::cast_slice::<MeshVertex, u8>(&relaxed[..shrunk]) == bytemuck::cast_slice::<MeshVertex, u8>(&fresh[..shrunk]),
+        "the indirect pass relaxes the live vertices as a full pass does"
+    );
+}
+
+/// Relaxation gathers every input, so it never fuses as a consumer. As a
+/// producer it could head a region with a coincident mesh atom after it, but
+/// no fused capacity shape covers a gathered anchor beside other gathers, so
+/// the region builder refuses it. Pinned on the shipped Dam Break with a
+/// rotate after the relax chain: once this fails, the fused-vs-unfused render
+/// proof is owed (BUG-xwf1 (Liquid Surface mesh relaxation)).
+#[test]
+fn fluid_relax_surface_mesh_stays_standalone_in_the_fused_view() {
+    use manifold_core::effect_graph_def::EffectGraphDef;
+    use serde_json::{Value, json};
+
+    let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+    let json = crate::node_graph::bundled_presets::bundled_preset_json(&manifold_core::PresetTypeId::new(
+        "WaterDamBreakGpuFlip",
+    ))
+    .expect("Dam Break bundled");
+    let mut preset: Value = serde_json::from_str(&json).expect("Dam Break parses");
+    let nodes = preset["nodes"].as_array_mut().expect("nodes");
+    let group = &mut nodes.iter_mut().find(|n| n["nodeId"] == "surface").expect("the Liquid Surface group")["group"];
+    let id = |group: &Value, key: &str, name: &str| {
+        let nodes = group["nodes"].as_array().expect("group nodes");
+        nodes.iter().find(|n| n[key] == name).unwrap_or_else(|| panic!("no {name}"))["id"].clone()
+    };
+    let (last, out) = (id(group, "nodeId", "liquid_relax_2"), id(group, "typeId", "system.group_output"));
+    let turn = json!(100);
+    group["nodes"].as_array_mut().expect("group nodes").push(json!({
+        "id": turn, "typeId": "node.rotate_3d", "nodeId": "liquid_turn",
+        "params": {"angle_y": {"type": "Float", "value": 0.01}}
+    }));
+    let wires = group["wires"].as_array_mut().expect("group wires");
+    let into_output = wires
+        .iter_mut()
+        .find(|w| w["fromNode"] == last && w["toNode"] == out)
+        .expect("the relax chain feeds the group output");
+    into_output["toNode"] = turn.clone();
+    into_output["toPort"] = json!("in");
+    wires.push(json!({"fromNode": turn, "fromPort": "out", "toNode": out, "toPort": "vertices"}));
+
+    let def: EffectGraphDef = serde_json::from_value(preset).expect("the variant loads");
+    // No region anywhere in the graph means the unfused graph renders, where
+    // each relax pass is trivially its own dispatch.
+    let Some(view) = crate::node_graph::freeze::install::fuse_generator_view(&def, &registry) else {
+        return;
+    };
+    let relaxes = view.def.nodes.iter().filter(|n| n.type_id == "node.relax_surface_mesh").count();
+    assert_eq!(relaxes, 2, "both relax passes stay their own dispatch");
+    assert!(
+        !view.def.nodes.iter().any(|n| n.wgsl_source.as_deref().is_some_and(|s| s.contains("rsm_cell_edge"))),
+        "relaxation fused into a kernel: prove it renders like the unfused graph"
     );
 }

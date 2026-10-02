@@ -555,8 +555,8 @@ fn dam_break(scene: WaterScene, label: &str, frames: usize) -> Record {
 /// The race rows at a lattice: the step alone, then meshed; the difference
 /// is the surface. The spread rate is the scene's default.
 fn cost_probe(n: usize) {
-    dam_break(WaterScene::dam_break(n), &format!("GPU FLIP step {n}³"), 300);
-    dam_break(WaterScene::dam_break(n).with_surface(), &format!("GPU FLIP meshed {n}³"), 300);
+    dam_break(WaterScene::race_dam_break(n), &format!("GPU FLIP step {n}³"), 300);
+    dam_break(WaterScene::race_dam_break(n).with_surface(), &format!("GPU FLIP meshed {n}³"), 300);
 }
 
 #[test]
@@ -576,7 +576,7 @@ fn gpu_flip_cost_probe_refined() {
 #[test]
 fn gpu_flip_refined_splash_iterations() {
     for iterations in [4, 8, 12] {
-        let scene = WaterScene::dam_break(128).with_surface().with_iterations(iterations);
+        let scene = WaterScene::race_dam_break(128).with_surface().with_iterations(iterations);
         dam_break(scene, &format!("ITERATIONS {iterations} 128³"), 150);
     }
 }
@@ -585,7 +585,7 @@ fn gpu_flip_refined_splash_iterations() {
 /// (`gpu_flip_engine_race_refined`): p99 and top speed, peak height.
 #[test]
 fn gpu_flip_refined_splash() {
-    dam_break(WaterScene::dam_break(128).with_surface(), "SPLASH 128³", 150);
+    dam_break(WaterScene::race_dam_break(128).with_surface(), "SPLASH 128³", 150);
 }
 
 /// The 128³ splash against the step length: four steps a frame, so a fast
@@ -593,7 +593,7 @@ fn gpu_flip_refined_splash() {
 /// extension covers.
 #[test]
 fn gpu_flip_refined_splash_causes() {
-    let refined = WaterScene::dam_break(128).with_surface();
+    let refined = WaterScene::race_dam_break(128).with_surface();
     dam_break(WaterScene { steps: 4, ..refined }, "SPLASH 4 steps 128³", 120);
 }
 
@@ -606,7 +606,7 @@ fn gpu_flip_wall_feel_64() {
     std::fs::create_dir_all("/tmp/flip_parity").expect("out dir");
     for steps in [2, 1] {
         let label = format!("WALLS {steps} steps 64³");
-        let record = dam_break(WaterScene::dam_break(64).with_steps(steps).with_surface(), &label, 300);
+        let record = dam_break(WaterScene::race_dam_break(64).with_steps(steps).with_surface(), &label, 300);
         let rows: Vec<String> = record.volume.iter().enumerate().map(|(f, v)| format!("{f},{v:.5}")).collect();
         std::fs::write(format!("/tmp/flip_parity/gpu_volume_steps_{steps}.csv"), format!("frame,volume_drift\n{}\n", rows.join("\n"))).expect("csv");
     }
@@ -620,7 +620,7 @@ fn ghost_fluid_race(n: usize) {
     // The ghost rows stiffen the surface cells the plain coarse levels never
     // see, so the ghost runs also show how far the shipped count leaves them.
     for (ghost, iterations) in [(false, PRESSURE_ITERATIONS), (true, PRESSURE_ITERATIONS), (true, 16)] {
-        let scene = WaterScene { ghost_fluid: ghost, ..WaterScene::dam_break(n).with_surface() }.with_iterations(iterations);
+        let scene = WaterScene { ghost_fluid: ghost, ..WaterScene::race_dam_break(n).with_surface() }.with_iterations(iterations);
         let label = format!("SURFACE {} {iterations} it {n}³", if ghost { "ghost" } else { "plain" });
         dam_break(scene, &label, 300);
     }
@@ -641,16 +641,16 @@ fn gpu_flip_ghost_fluid_refined() {
 /// `gpu_flip_ghost_fluid_64` and `_refined` and the engine's.
 #[test]
 fn gpu_flip_transfer_kernel_64() {
-    dam_break(WaterScene::dam_break(64).with_surface(), "TRANSFER 64³", 300);
+    dam_break(WaterScene::race_dam_break(64).with_surface(), "TRANSFER 64³", 300);
 }
 
 #[test]
 fn gpu_flip_transfer_kernel_refined() {
-    dam_break(WaterScene::dam_break(128).with_surface(), "TRANSFER 128³", 300);
+    dam_break(WaterScene::race_dam_break(128).with_surface(), "TRANSFER 128³", 300);
 }
 
 /// 15 s of the meshed Dam Break at 64³: how still the pool is by the end.
 #[test]
 fn gpu_flip_dam_break_settles() {
-    dam_break(WaterScene::dam_break(64).with_surface(), "SETTLE 64³", 900);
+    dam_break(WaterScene::race_dam_break(64).with_surface(), "SETTLE 64³", 900);
 }

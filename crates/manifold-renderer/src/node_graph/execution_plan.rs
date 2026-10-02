@@ -56,6 +56,15 @@ pub struct ExecutionStep {
     /// the node's declared output ports.
     pub outputs: Vec<(&'static str, ResourceId)>,
 
+    /// The inputs whose pending state gates this step: while one is
+    /// pending the step goes pending without running, and its outputs
+    /// inherit that pending. Every wired input except state-capture
+    /// back-edges, which carry last frame's value. Empty for a node that
+    /// runs with pending inputs
+    /// ([`EffectNode::runs_with_pending_inputs`](crate::node_graph::effect_node::EffectNode::runs_with_pending_inputs)):
+    /// it declares its outputs' readiness itself.
+    pub readiness_inputs: Vec<ResourceId>,
+
     /// Resources whose last reader is this step. The runtime's pool may
     /// recycle the underlying physical buffers after this step completes.
     pub free_after: Vec<ResourceId>,
@@ -816,6 +825,8 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
         }
 
         let mut step_inputs = Vec::new();
+        let mut readiness_inputs = Vec::new();
+        let gates_on_inputs = !inst.node.runs_with_pending_inputs();
         for input_port in inst.node.inputs() {
             if let Some(wire) = wire_by_target.get(&(node_id, input_port.name.clone())) {
                 let res_id = *output_resources
@@ -828,6 +839,9 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
                     }
                 } else {
                     last_reader.insert(res_id, step_idx);
+                    if gates_on_inputs {
+                        readiness_inputs.push(res_id);
+                    }
                 }
             }
             // Optional unwired inputs are omitted from the bindings.
@@ -867,6 +881,7 @@ pub fn compile(graph: &Graph) -> Result<ExecutionPlan, GraphError> {
             node: node_id,
             inputs: step_inputs,
             outputs: step_outputs,
+            readiness_inputs,
             free_after: Vec::new(), // populated in the next loop
         });
     }

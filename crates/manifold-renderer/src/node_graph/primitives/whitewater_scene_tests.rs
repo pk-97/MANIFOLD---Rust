@@ -802,7 +802,7 @@ fn whitewater_side_by_side() {
         return;
     };
     std::fs::create_dir_all(&dir).expect("output directory");
-    let scene = WaterScene::dam_break(64);
+    let scene = WaterScene::race_dam_break(64);
     let gpu_flip_show = || {
         let mut show = Show::new(whitewater_render_def(scene), DEMO_SIZE, true, &[]);
         show.restart();
@@ -920,7 +920,7 @@ fn whitewater_emission_against_engine_150() {
     drop(flip);
     assert!(errors.is_empty(), "the engine ran with errors: {errors:#?}");
 
-    let mut show = Show::new(whitewater_render_def(WaterScene::dam_break(64)), (320, 180), true, &[]);
+    let mut show = Show::new(whitewater_render_def(WaterScene::race_dam_break(64)), (320, 180), true, &[]);
     show.restart();
     let gpu_rows: Vec<[f32; 6]> = (0..EMISSION_FRAMES)
         .map(|_| {

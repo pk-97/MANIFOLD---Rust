@@ -118,15 +118,10 @@ impl Primitive for ParticleVolume {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        if ctx.inputs.any_pending() {
-            ctx.mark_outputs_pending();
-            return;
-        }
         let nodes = ["nodes_x", "nodes_y", "nodes_z"].map(|name| ctx.scalar_or_param(name, 2.0).round());
         let scale = volume_scale(ctx.params);
-        // A producer without a frame yet publishes no lattice: nothing to sum,
-        // and downstream atoms see no lattice either.
-        let refined = if nodes.iter().all(|&n| n >= 2.0) { refined_nodes(nodes, scale) } else { [0; 3] };
+        let lattice_valid = nodes.iter().all(|&n| n >= 2.0);
+        let refined = if lattice_valid { refined_nodes(nodes, scale) } else { [0; 3] };
         for (port, value) in ["volume_nodes_x", "volume_nodes_y", "volume_nodes_z"].into_iter().zip(refined) {
             ctx.outputs.set_scalar(port, ParamValue::Float(value as f32));
         }
@@ -153,7 +148,11 @@ impl Primitive for ParticleVolume {
         };
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
-        if refined[0] == 0 {
+        if !lattice_valid {
+            ctx.error(format!(
+                "Particle Volume: a {}×{}×{} solid lattice has fewer than 2 nodes on an axis. Wire nodes_x/y/z from the same producer as solid.",
+                nodes[0], nodes[1], nodes[2]
+            ));
             return;
         }
         let (Some(blobs), Some(ranges), Some(solid), Some(levelset)) = (

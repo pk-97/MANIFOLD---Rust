@@ -139,6 +139,8 @@ impl Rig {
         let faces = device.create_buffer_shared(records.len() as u64 * 32);
         // SAFETY: a shared buffer sized for the records; no GPU work is queued.
         unsafe { faces.write(0, bytemuck::cast_slice(&records)) };
+        let mut solver = PressureSolver::default();
+        solver.prepare_pipelines(&device);
         Self {
             n,
             water: device.create_buffer_shared(cells),
@@ -146,7 +148,7 @@ impl Rig {
             pressure: device.create_buffer_shared(cells),
             faces,
             device,
-            solver: PressureSolver::default(),
+            solver,
             phi: None,
         }
     }

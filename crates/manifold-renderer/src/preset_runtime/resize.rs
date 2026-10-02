@@ -47,7 +47,7 @@ impl PresetRuntime {
                 for (resource, buffer) in array_overrides {
                     candidate.pre_bind_array(*resource, buffer.clone());
                 }
-                crate::node_graph::pre_allocate_resources(
+                crate::node_graph::allocate_resources(
                     &self.graph,
                     &self.plan,
                     device,
@@ -92,6 +92,7 @@ impl PresetRuntime {
                     PresetIo::Transform {
                         source_slot: source.map(|source| candidate.slot_for(source).expect("prepared source")),
                         output_slot: candidate.slot_for(output).expect("prepared output"),
+                        output_resource: output,
                     }
                 }
             }

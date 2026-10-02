@@ -304,6 +304,7 @@ impl Scene {
         let rows = bodies();
         let buffers = [shared(&device, &water), shared(&device, &open), shared(&device, &solid), shared(&device, &rows)];
         let mut passes = BodyPasses::default();
+        passes.prepare_pipelines(&device);
         passes.prepare(&device).expect("body passes");
         Self { device, open, solid, water, rows, buffers, passes }
     }

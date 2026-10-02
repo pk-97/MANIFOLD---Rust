@@ -1375,8 +1375,15 @@ fn trace_scene_object(
             }
             own(role);
             for port in ["transform", "source_transform"] {
-                if let Some((_, _, source, _)) = resolve_producer_through_group(&role_level, role.id, port)
+                if let Some((source_level, _, source, _)) = resolve_producer_through_group(&role_level, role.id, port)
                     && source.type_id == "node.transform_3d"
+                    // A scene object drawing the same transform owns it: the
+                    // box a collider role follows is the Obstacle's, not the
+                    // water's.
+                    && !source_level.nodes.iter().any(|object| {
+                        object.type_id == "node.scene_object"
+                            && source_level.producer(object.id, "transform").is_some_and(|(from, _)| from == source.id)
+                    })
                 {
                     own(source);
                 }

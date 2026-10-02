@@ -292,6 +292,102 @@ fn invisible_object_casts_no_shadow_and_does_not_draw() {
     );
 }
 
+/// The occluder's mesh comes from a GLB instead of a grid, so it streams in
+/// over the first frames like a show asset does.
+fn streaming_occluder_json() -> String {
+    use serde_json::json;
+    let glb = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/gltf/hostile/two_material_pbr.glb");
+    assert!(glb.exists(), "missing fixture {}", glb.display());
+    let mut scene: serde_json::Value = serde_json::from_str(&scene_json(1.0)).unwrap();
+    let nodes = scene["nodes"].as_array_mut().unwrap();
+    nodes.retain(|n| n["id"] != 5 && n["id"] != 6);
+    nodes.push(json!({"id":50,"typeId":"node.gltf_mesh_source","nodeId":"occ_glb","params":{
+        "path":{"type":"String","value":glb.to_string_lossy()},
+        "fit":{"type":"Enum","value":1}}}));
+    let wires = scene["wires"].as_array_mut().unwrap();
+    wires.retain(|w| w["fromNode"] != 5 && w["fromNode"] != 6);
+    wires.push(json!({"fromNode":50,"fromPort":"vertices","toNode":41,"toPort":"vertices"}));
+    scene.to_string()
+}
+
+/// A mesh still streaming in drops only its own object: the rest of the
+/// scene renders that frame, the frame reports itself incomplete so export
+/// and warmup wait, and the object appears once its mesh lands.
+#[test]
+fn streaming_mesh_drops_only_its_object() {
+    use manifold_renderer::frame_status::FrameRenderStatus;
+    let h = harness::shared();
+    let registry = PrimitiveRegistry::with_builtin();
+    let mut runtime = PresetRuntime::from_json_str_with_device(
+        &streaming_occluder_json(),
+        &registry,
+        std::sync::Arc::clone(&h.device),
+        h.width,
+        h.height,
+        GpuTextureFormat::Rgba16Float,
+        None,
+    )
+    .expect("streaming-occluder scene graph must build");
+    let target = h.make_target("render-scene-streaming-object");
+    let mut render = |frame: i64| {
+        let ctx = PresetContext {
+            time: 0.1,
+            beat: 0.2,
+            dt: 1.0 / 60.0,
+            width: h.width,
+            height: h.height,
+            output_width: h.width,
+            output_height: h.height,
+            aspect: h.width as f32 / h.height as f32,
+            owner_key: 0,
+            is_clip_level: false,
+            frame_count: frame,
+            anim_progress: 0.0,
+            trigger_count: 0,
+        };
+        let mut enc = h.device.create_encoder("render-scene-streaming-object-enc");
+        let status = {
+            let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
+            runtime.render(
+                &mut gpu,
+                &target.texture,
+                &ctx,
+                &manifold_core::params::ParamManifest::default(),
+            );
+            gpu.frame_status()
+        };
+        enc.commit_and_wait_completed();
+        status
+    };
+
+    // The GLB source publishes no earlier than the frame after its copy.
+    assert_eq!(render(0), FrameRenderStatus::PendingGeometry);
+    let streaming = h.readback(&target.texture);
+    let mut frame = 1;
+    while render(frame) != FrameRenderStatus::Complete {
+        assert!(frame < 600, "GLB occluder never landed");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        frame += 1;
+    }
+    let landed = h.readback(&target.texture);
+    write_png(&streaming, h.width, h.height, "/tmp/render_scene_streaming_object.png");
+    write_png(&landed, h.width, h.height, "/tmp/render_scene_landed_object.png");
+
+    let (_, peak_streaming) = luma(&streaming);
+    let red_streaming = red_excess_sum(&streaming);
+    let red_landed = red_excess_sum(&landed);
+    eprintln!(
+        "streaming object: peak={peak_streaming:.3} red-excess streaming={red_streaming:.1} landed={red_landed:.1} after {frame} frames"
+    );
+    assert!(peak_streaming > 0.2, "the rest of the scene must render while a mesh streams in");
+    assert!(red_landed > 1.0, "the landed occluder must draw");
+    assert!(
+        red_streaming < red_landed * 0.05,
+        "the streaming occluder must not draw: streaming={red_streaming:.1} landed={red_landed:.1}"
+    );
+}
+
 #[test]
 fn material_inspector_glass_opaque_route_preserves_transmission_lobes() {
     let (opaque, w, h) = render_readback(&glass_scene_json(0, 0.65, 0.35, 0.45));
