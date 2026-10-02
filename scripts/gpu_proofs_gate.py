@@ -7,8 +7,10 @@ rounds. This wrapper streams output live, then parses the full captured run
 into one summary: every failed test name, every golden-mismatch detail (file +
 diff), and a per-binary pass/fail count. Every selected test binary runs to
 completion with `--no-fail-fast`. Never nextest — process-per-test
-defeats the GPU device lock. The whole run holds the machine-wide GPU queue
-(scripts/gpu_queue.py) and waits its turn behind any other GPU run.
+defeats the GPU device lock. The test binaries are compiled first with no
+lock held (`cargo test --no-run`, same arguments); then the test run holds the
+machine-wide GPU queue (scripts/gpu_queue.py) and waits its turn behind any
+other GPU run. `--build-only` stops after the compile.
 
 Default mode is SCOPED: the branch's diff against `--base` (default
 origin/main, plus uncommitted and untracked files) is mapped by
@@ -30,7 +32,7 @@ no record gets 300s. `--hang-allowance SECONDS` replaces the 120s floor (and
 the no-record 300s). A heartbeat naming the running test prints every 60s. A
 hang is a red gate: never ignore the test, never skip it on rerun.
 
-Exit 0 iff the underlying cargo run exited 0.
+Exit 0 iff the underlying cargo build and run exited 0.
 
 Obsolete when: cargo test reports cross-binary failure summaries natively
 and the landing docs point at that instead.
@@ -102,20 +104,16 @@ def default_manifest_path() -> Path:
     return Path(__file__).resolve().parent.parent / "Cargo.toml"
 
 
-def run_gate(
+def cargo_test_cmd(
     manifest_path: Path,
-    filters: list[str],
-    skips: list[str],
     targets: list[str] | None = None,
     full_suite: bool = False,
     lib: bool = False,
-    timings: list | None = None,
-    hung: list | None = None,
-    hang_floor: float | None = None,
-) -> tuple[int, str]:
+) -> list[str]:
+    """The `cargo test` command up to the libtest `--`, shared by the build
+    and the run so the run finds every binary already built."""
     if full_suite and targets is not None:
         raise ValueError("full_suite and targets are mutually exclusive")
-
     cmd = [
         "cargo",
         "test",
@@ -132,6 +130,38 @@ def run_gate(
             cmd.append("--lib")
         for target in targets or ([] if lib else ["gpu_proofs"]):
             cmd.extend(["--test", target])
+    return cmd
+
+
+def build_tests(manifest_path: Path, runs: list[dict]) -> int:
+    """Compile every run's test binaries with no GPU lock held, so the hold
+    covers test time only: the run that follows re-checks fingerprints and
+    starts testing. Returns the first nonzero cargo exit, else 0."""
+    built: list[list[str]] = []
+    for run in runs:
+        cmd = cargo_test_cmd(manifest_path, run["targets"], run["full"], run["lib"]) + ["--no-run"]
+        if cmd in built:
+            continue
+        built.append(cmd)
+        print(f"$ {' '.join(cmd)}", flush=True)
+        code = subprocess.run(cmd).returncode
+        if code:
+            return code
+    return 0
+
+
+def run_gate(
+    manifest_path: Path,
+    filters: list[str],
+    skips: list[str],
+    targets: list[str] | None = None,
+    full_suite: bool = False,
+    lib: bool = False,
+    timings: list | None = None,
+    hung: list | None = None,
+    hang_floor: float | None = None,
+) -> tuple[int, str]:
+    cmd = cargo_test_cmd(manifest_path, targets, full_suite, lib)
     # Serial test threads, always: ~135 proofs share one Metal device, and
     # parallel execution corrupts VALUES, not just timing (BUG-m0c9 — red
     # sets rotate across identical binaries; the same tests pass serially).
@@ -531,6 +561,9 @@ def main() -> int:
                         help="floor of the per-test hang allowance (default "
                         f"{HANG_FLOOR_S:.0f}s; also the allowance of a test with no recorded time, "
                         f"which otherwise gets {NO_RECORD_ALLOWANCE_S:.0f}s)")
+    parser.add_argument("--build-only", action="store_true",
+                        help="compile the selected test binaries and stop (no GPU lock); "
+                        "the landing gate runs this before taking its hold")
     parser.add_argument("--timings-md", type=Path, default=None,
                         help="write the 25 slowest tests as markdown to this path")
     parser.add_argument("--record-times", type=Path, default=None, metavar="PATH",
@@ -569,6 +602,14 @@ def main() -> int:
         for note in plan.notes:
             print(f"  note: {note}")
         runs = [dict(r, full=False) for r in plan.runs()]
+
+    build_code = build_tests(manifest_path, runs)
+    if build_code:
+        print(f"GPU-PROOFS GATE: FAIL (test build failed, exit {build_code}; no GPU lock taken)")
+        return build_code
+    if args.build_only:
+        print("GPU-PROOFS GATE: BUILT (--build-only; no test run, no GPU lock taken)")
+        return 0
 
     exit_code, outputs, all_timings, hung = 0, [], [], []
     # One GPU run on the machine at a time (scripts/gpu_queue.py). Held for all

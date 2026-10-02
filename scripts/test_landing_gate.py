@@ -26,7 +26,7 @@ def process_alive(pid):
 
 class LandingTests(unittest.TestCase):
     checks = ["tooling", "design-status", "docs-index", "deny", "ignored-tests",
-              "clippy", "flow-gate", "tests", "gpu-proofs"]
+              "clippy", "flow-gate", "tests-build", "gpu-proofs-build", "tests", "gpu-proofs"]
 
     def exercise(self, failed=None, extra=(), stale_docs=False, packages=True, head="head", paths=None):
         called, commands = [], []
@@ -67,6 +67,8 @@ class LandingTests(unittest.TestCase):
                 return 0, out, "", 0.01
             label = ({"nextest": "tests"}.get(cmd[1], cmd[1]) if cmd[0] == "cargo"
                      else labels[Path(cmd[1]).name])
+            if "--no-run" in cmd or "--build-only" in cmd:
+                label += "-build"
             called.append(label)
             events.append(label)
             return (1 if label == failed else 0), f"output for {label}\n", "", 0.01
@@ -132,8 +134,28 @@ class LandingTests(unittest.TestCase):
         enter, leave = events.index("hold-enter:landing_gate tests+gpu-proofs"), events.index("hold-exit")
         self.assertLess(enter, events.index("tests"))
         self.assertLess(events.index("gpu-proofs"), leave)
-        # Cheap prerequisites and clippy do not hold the GPU.
+        # Cheap prerequisites, clippy and every test-binary compile run
+        # before the hold, so it covers test time only.
         self.assertLess(events.index("clippy"), enter)
+        self.assertLess(events.index("tests-build"), enter)
+        self.assertLess(events.index("gpu-proofs-build"), enter)
+
+    def test_builds_compile_exactly_what_the_held_legs_run(self):
+        _, _, _, commands, *_ = self.exercise()
+        nextest = [c for c in commands if c[:2] == ["cargo", "nextest"]]
+        self.assertEqual(nextest, [["cargo", "nextest", "run", "--no-run", "-p", "manifold-gpu"],
+                                   ["cargo", "nextest", "run", "-p", "manifold-gpu"]])
+        proofs = [c for c in commands if c[1:2] == ["scripts/gpu_proofs_gate.py"]]
+        self.assertEqual(proofs, [
+            ["python3", "scripts/gpu_proofs_gate.py", "--base", "origin/main", "--build-only"],
+            ["python3", "scripts/gpu_proofs_gate.py", "--base", "origin/main", "--budget", "300"]])
+
+    def test_build_failure_stops_before_the_hold(self):
+        for failed in ("tests-build", "gpu-proofs-build"):
+            with self.subTest(failed=failed):
+                code, *_ = self.exercise(failed)
+                self.assertEqual(code, 1)
+                self.assertFalse(any(e.startswith("hold") for e in self.events))
 
     def test_tests_failure_still_releases_the_hold(self):
         self.exercise("tests")
@@ -144,6 +166,8 @@ class LandingTests(unittest.TestCase):
             paths=["crates/manifold-renderer/src/node_graph/orphan.bin"])
         self.assertEqual(code, 1)
         self.assertNotIn("gpu-proofs", called)
+        self.assertNotIn("gpu-proofs-build", called)
+        self.assertNotIn("tests-build", called)
         self.assertIn("node_graph/orphan.bin", output)
         self.assertIn("Add a mapping rule", output)
 

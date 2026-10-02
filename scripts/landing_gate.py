@@ -215,6 +215,16 @@ def run_check(label, cmd, cwd, timeout):
     return result
 
 
+def build_leg(results, label, cmd, repo):
+    """A compile-only leg; records and prints its result, returns the status."""
+    exit_, out, err, duration = run_check(label, cmd, cwd=repo, timeout=3600)
+    tail = (out + err).rstrip().splitlines()[-20:]
+    status = "PASS" if exit_ == 0 else "FAIL"
+    results.append((status, label, duration, tail))
+    print_result(label, status, duration, tail if exit_ else None)
+    return status
+
+
 def parse_package_from_cargo(toml_path):
     """Extract the first 'name = \"...\"' line from a Cargo.toml."""
     content = Path(toml_path).read_text()
@@ -456,11 +466,41 @@ def _main(stack):
     if status == "FAIL" and not args.keep_going:
         return finish(repo, base_sha, results)
 
+    # GPU-proofs scope is settled before anything builds: an unmapped path
+    # fails here, not after a compile.
+    run_gpu = touches_gpu and not args.skip_gpu
+    if run_gpu:
+        changed = run_cmd(["git", "diff", "--name-only", f"{base_sha}..HEAD"],
+                          cwd=repo, timeout=300)[1]
+        paths = [l.strip() for l in changed.strip().splitlines() if l.strip()]
+        plan = gpu_scope.plan_for_paths(paths, repo)
+        if plan.unmapped:
+            message = gpu_scope.unmapped_message(plan)
+            print(message)
+            results.append(("FAIL", "gpu-proofs", None, message.splitlines()))
+            return finish(repo, base_sha, results)
+
+    # Compile every test binary the hold will run before taking it, so the
+    # hold covers test time only (BUG-w0hh (landing gate speed)). The legs
+    # under the hold then find everything built and go straight to testing.
+    if gate_packages:
+        pkg_args = []
+        for p in gate_packages:
+            pkg_args.extend(["-p", p])
+        if build_leg(results, "tests-build", ["cargo", "nextest", "run", "--no-run", *pkg_args],
+                     repo) == "FAIL" and not args.keep_going:
+            return finish(repo, base_sha, results)
+    if run_gpu:
+        if build_leg(results, "gpu-proofs-build",
+                     ["python3", "scripts/gpu_proofs_gate.py", "--base", args.base, "--build-only"],
+                     repo) == "FAIL" and not args.keep_going:
+            return finish(repo, base_sha, results)
+
     # Nextest tests call GpuDevice::new_queued; each would queue behind every
     # agent's GPU run on its own. Hold the machine-wide GPU lock once, from
     # here through gpu-proofs: child test processes inherit an ancestor's hold,
     # so the landing waits once (visibly, on stdout) then runs straight through.
-    if gate_packages or (touches_gpu and not args.skip_gpu):
+    if gate_packages or run_gpu:
         print("[gpu-queue] taking the GPU lock for the tests and gpu-proofs legs", flush=True)
         stack.enter_context(gpu_queue.hold("landing_gate tests+gpu-proofs", out=sys.stdout))
 
@@ -485,15 +525,6 @@ def _main(stack):
         if args.skip_gpu:
             skip(results, "gpu-proofs", f"skipped by flag: {args.skip_gpu}")
         else:
-            changed = run_cmd(["git", "diff", "--name-only", f"{base_sha}..HEAD"],
-                              cwd=repo, timeout=300)[1]
-            paths = [l.strip() for l in changed.strip().splitlines() if l.strip()]
-            plan = gpu_scope.plan_for_paths(paths, repo)
-            if plan.unmapped:
-                message = gpu_scope.unmapped_message(plan)
-                print(message)
-                results.append(("FAIL", "gpu-proofs", None, message.splitlines()))
-                return finish(repo, base_sha, results)
             print("[gpu-proofs] mode: scoped (focused tests + smoke; --all is nightly only)")
             print("[gpu-proofs] " + plan.describe().replace("\n", "\n[gpu-proofs] "), flush=True)
             cmd = ["python3", "scripts/gpu_proofs_gate.py", "--base", args.base,
