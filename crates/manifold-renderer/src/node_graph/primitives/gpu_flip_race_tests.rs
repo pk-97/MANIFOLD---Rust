@@ -460,9 +460,10 @@ fn dam_break(scene: WaterScene, label: &str, frames: usize) -> Record {
         let (g, c) = run.frame();
         record.gpu.push(g);
         record.cpu.push(c);
-        for step in 0..scene.steps {
-            let water = run.water(step);
-            let (r, m) = divergence(&run.faces(step), &water, n, h);
+        // A later substep's water mask stays inside the step node.
+        if scene.steps == 1 {
+            let water = run.water();
+            let (r, m) = divergence(&run.faces(), &water, n, h);
             rms.push(r);
             max.push(m);
             let (fraction, blocks) = occupancy(&water, n);

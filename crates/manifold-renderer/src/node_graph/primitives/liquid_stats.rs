@@ -18,7 +18,7 @@ const SHADER: &str = include_str!("shaders/liquid_stats.wgsl");
 /// Records one workgroup folds: 256 threads × 8.
 const BLOCK: u32 = 256 * 8;
 /// Bytes of one partial record.
-const PARTIAL_BYTES: u64 = 32;
+const PARTIAL_BYTES: u64 = 40;
 
 /// Scratch for the reduction over `count` records: one partial per block.
 pub(crate) fn partial_bytes(count: u32) -> u64 {
@@ -26,9 +26,10 @@ pub(crate) fn partial_bytes(count: u32) -> u64 {
 }
 
 /// Words in the stats array: 0 non-finite records, 1 live records, 2 fastest
-/// speed (m/s), 3 mass (kg), 4-6 momentum (kg·m/s), 7 kinetic energy (J).
-/// Floats are stored as bits.
-pub const LIQUID_STATS_WORDS: u32 = 8;
+/// speed (m/s), 3 mass (kg), 4-6 momentum (kg·m/s), 7 kinetic energy (J),
+/// 8 move stages a speed cap shortened, 9 solid push-outs refused (both 0
+/// without a `capped` input). Floats are stored as bits.
+pub const LIQUID_STATS_WORDS: u32 = 10;
 
 /// One tick's statistics, decoded from the stats words.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -39,12 +40,16 @@ pub struct LiquidTickStats {
     pub mass: f32,
     pub momentum: [f32; 3],
     pub kinetic: f32,
+    /// Particle move stages the solver's speed cap shortened this tick.
+    pub speed_capped: u32,
+    /// Solid push-outs the solver refused as too far this tick.
+    pub push_refused: u32,
 }
 
 impl LiquidTickStats {
     pub fn from_words(w: &[u32]) -> Self {
         let f = |i: usize| f32::from_bits(w[i]);
-        Self { nonfinite: w[0], live: w[1], max_speed: f(2), mass: f(3), momentum: [f(4), f(5), f(6)], kinetic: f(7) }
+        Self { nonfinite: w[0], live: w[1], max_speed: f(2), mass: f(3), momentum: [f(4), f(5), f(6)], kinetic: f(7), speed_capped: w[8], push_refused: w[9] }
     }
 }
 
@@ -54,7 +59,8 @@ struct StatsParams {
     count: u32,
     groups: u32,
     particle_mass: f32,
-    _pad0: u32,
+    /// 1 when a `capped` array is bound.
+    has_capped: u32,
 }
 
 pub struct StatsPipelines {
@@ -65,10 +71,11 @@ pub struct StatsPipelines {
 crate::primitive! {
     name: LiquidStats,
     type_id: "node.liquid_stats",
-    purpose: "Reduce a particle liquid's first `count` records to its statistics words, written in place over `stats`: 0 records with a non-finite position, radius or velocity, 1 live records (radius above 0), 2 the fastest speed, 3 mass, 4-6 momentum and 7 kinetic energy, each particle weighing particle_mass. Sums run in a fixed order with no atomics, so the words are the same on every run.",
+    purpose: "Reduce a particle liquid's first `count` records to its statistics words, written in place over `stats`: 0 records with a non-finite position, radius or velocity, 1 live records (radius above 0), 2 the fastest speed, 3 mass, 4-6 momentum and 7 kinetic energy, each particle weighing particle_mass, and when capped is wired, 8 and 9 its two words per record summed: the solver's speed-capped move stages and refused solid push-outs. Sums run in a fixed order with no atomics, so the words are the same on every run.",
     inputs: {
         particles: Array(FluidParticle) required,
         stats: Array(u32) required,
+        capped: Array(u32) optional,
         count: ScalarF32 optional,
         particle_mass: ScalarF32 optional,
     },
@@ -119,6 +126,7 @@ impl Primitive for LiquidStats {
         let particle_mass = ctx.scalar_or_param("particle_mass", 0.030_517_578);
         let particles = ctx.inputs.array("particles");
         let stats = ctx.inputs.array("stats");
+        let capped = ctx.inputs.array("capped");
         // In place on the stats input.
         ctx.mark_gpu_accessed();
         let (Some(particles), Some(stats)) = (particles, stats) else { return };
@@ -127,7 +135,6 @@ impl Primitive for LiquidStats {
             return;
         }
         let count = requested.min((particles.size / std::mem::size_of::<FluidParticle>() as u64) as u32);
-        let groups = count.div_ceil(BLOCK);
         let partial_bytes = partial_bytes(count);
         let gpu = ctx.gpu_encoder();
         let pipelines = self.pipelines.get_or_insert_with(|| StatsPipelines {
@@ -138,12 +145,15 @@ impl Primitive for LiquidStats {
             self.partials = Some(gpu.device.create_buffer(partial_bytes));
         }
         let partials = self.partials.as_ref().expect("partials prepared");
-        let params = StatsParams { count, groups, particle_mass, _pad0: 0 };
+        let count = capped.map_or(count, |c| count.min((c.size / 8).min(u64::from(u32::MAX)) as u32));
+        let groups = count.div_ceil(BLOCK);
+        let params = StatsParams { count, groups, particle_mass, has_capped: u32::from(capped.is_some()) };
         let bindings = [
             GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&params) },
             GpuBinding::Buffer { binding: 1, buffer: particles, offset: 0 },
             GpuBinding::Buffer { binding: 2, buffer: partials, offset: 0 },
             GpuBinding::Buffer { binding: 3, buffer: stats, offset: 0 },
+            GpuBinding::Buffer { binding: 4, buffer: capped.unwrap_or(particles), offset: 0 },
         ];
         if groups > 0 {
             gpu.native_enc.dispatch_compute(&pipelines.particles, &bindings, [groups, 1, 1], "node.liquid_stats.particles");
@@ -170,9 +180,9 @@ mod tests {
 
     #[test]
     fn liquid_stats_words_decode() {
-        let words = [2, 5, 1.5f32.to_bits(), 0.25f32.to_bits(), 1.0f32.to_bits(), (-2.0f32).to_bits(), 0.0f32.to_bits(), 3.0f32.to_bits()];
+        let words = [2, 5, 1.5f32.to_bits(), 0.25f32.to_bits(), 1.0f32.to_bits(), (-2.0f32).to_bits(), 0.0f32.to_bits(), 3.0f32.to_bits(), 4, 1];
         let stats = LiquidTickStats::from_words(&words);
-        assert_eq!(stats, LiquidTickStats { nonfinite: 2, live: 5, max_speed: 1.5, mass: 0.25, momentum: [1.0, -2.0, 0.0], kinetic: 3.0 });
+        assert_eq!(stats, LiquidTickStats { nonfinite: 2, live: 5, max_speed: 1.5, mass: 0.25, momentum: [1.0, -2.0, 0.0], kinetic: 3.0, speed_capped: 4, push_refused: 1 });
         assert_eq!(words.len(), LIQUID_STATS_WORDS as usize);
     }
 }

@@ -13,6 +13,11 @@
 // The CPU sizes every buffer for the lattice and the particle slots before
 // it dispatches; each pass only checks its thread is inside its range.
 //
+// The density projection (density_source) is ported from blub (MIT,
+// Copyright (c) 2020 Andreas Reich; see THIRD_PARTY_NOTICES.md):
+// density_projection_gather_error.comp, its kernel, solid-neighbour weight
+// 0.5625, surface clamp and source clamp.
+//
 // Ported from FLIP Fluids (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis
 // Fassbaender; see THIRD_PARTY_NOTICES.md): velocityadvector.cpp (particles
 // to faces), particlelevelset.cpp (the particle distance),
@@ -120,6 +125,13 @@ struct LiquidShape {
 // 8 floats per body: the linear and angular impulse the water has put on it
 // so far this tick (gpu_flip_bodies.wgsl).
 @group(0) @binding(21) var<storage, read> reaction: array<f32>;
+// Two words per particle slot, summed over the tick's substeps: RK3 stages
+// the CFL guard shortened, and solid push-outs refused past SOLID_PUSH. The
+// tick's stats reduce them (liquid_stats words 8 and 9).
+@group(0) @binding(22) var<storage, read_write> capped: array<u32>;
+
+// Set by resolve_solid when it refuses a push-out past SOLID_PUSH.
+var<private> push_refused: u32 = 0u;
 
 fn lattice() -> vec3<i32> {
     return vec3<i32>(u.n);
@@ -992,6 +1004,11 @@ fn guard(v: vec3<f32>, per_cell: f32) -> vec3<f32> {
     return select(v, v * (u.max_travel / cells), cells > u.max_travel);
 }
 
+// 1 when the guard shortens v.
+fn guarded(v: vec3<f32>, per_cell: f32) -> u32 {
+    return select(0u, 1u, length(v) * per_cell > u.max_travel);
+}
+
 // Exponent bits, not x != x: fast math may fold a NaN comparison away.
 fn finite(v: vec3<f32>) -> bool {
     let bits = bitcast<vec3<u32>>(v) & vec3<u32>(0x7f800000u);
@@ -1119,11 +1136,19 @@ fn resolve_solid(q0: vec3<f32>, q1: vec3<f32>, n: vec3<i32>, edge: vec3<f32>) ->
                 return last;
             }
             let pushed = current - (d - SOLID_BUFFER) * normalize(g);
-            if solid_at(pushed, n) < 0.0 || length(pushed - current) > SOLID_PUSH {
+            if length(pushed - current) > SOLID_PUSH {
+                push_refused = 1u;
+                return last;
+            }
+            if solid_at(pushed, n) < 0.0 {
                 return last;
             }
             let kept = clamp(pushed, edge, vec3<f32>(n) - edge);
-            if any(kept != pushed) && (solid_at(kept, n) < 0.0 || length(kept - pushed) > SOLID_PUSH) {
+            if any(kept != pushed) && length(kept - pushed) > SOLID_PUSH {
+                push_refused = 1u;
+                return last;
+            }
+            if any(kept != pushed) && solid_at(kept, n) < 0.0 {
                 return last;
             }
             return kept;
@@ -1152,6 +1177,11 @@ fn faces_to_particles(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let particle = sorted[idx];
     var out = particle;
+    let first = u.step_in_tick == 0;
+    let cfl_before = select(capped[2u * idx], 0u, first);
+    let push_before = select(capped[2u * idx + 1u], 0u, first);
+    capped[2u * idx] = cfl_before;
+    capped[2u * idx + 1u] = push_before;
     if !(particle.position_radius.w > 0.0) {
         particles_out[idx] = out;
         return;
@@ -1162,8 +1192,11 @@ fn faces_to_particles(@builtin(global_invocation_id) gid: vec3<u32>) {
     let q0 = (particle.position_radius.xyz - lo) / u.cell_size;
     let after = sample(q0, n, 0u);
     let k1 = guard(after, per_cell);
-    let k2 = guard(sample(q0 + 0.5 * per_cell * k1, n, 0u), per_cell);
-    let k3 = guard(sample(q0 + 0.75 * per_cell * k2, n, 0u), per_cell);
+    let s2 = sample(q0 + 0.5 * per_cell * k1, n, 0u);
+    let k2 = guard(s2, per_cell);
+    let s3 = sample(q0 + 0.75 * per_cell * k2, n, 0u);
+    let k3 = guard(s3, per_cell);
+    capped[2u * idx] = cfl_before + guarded(after, per_cell) + guarded(s2, per_cell) + guarded(s3, per_cell);
     let edge = vec3<f32>(WALL_MARGIN);
     // The density projection's move, step_dt · (spread(q) − new(q)): position
     // only, never kept as velocity. Zero rate binds `faces_in` as `spread`.
@@ -1174,6 +1207,7 @@ fn faces_to_particles(@builtin(global_invocation_id) gid: vec3<u32>) {
     if u.body_count > 0 && finite(q1) {
         q1 = resolve_solid(q0, q1, n, edge);
         radius = select(radius, 0.0, solid_at(q1, n) < 0.0);
+        capped[2u * idx + 1u] = push_before + push_refused;
     }
     let before = sample(q0, n, 1u);
     out.position_radius = vec4<f32>(lo + q1 * u.cell_size, radius);

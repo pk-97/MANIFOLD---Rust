@@ -123,6 +123,11 @@ impl Pass {
         let buffer = &self.bound.iter().find(|(binding, _)| *binding == out).expect("bound").1;
         read(buffer, len)
     }
+
+    /// `len` records of the buffer bound at `binding`.
+    fn bound<T: bytemuck::Pod>(&self, binding: u32, len: usize) -> Vec<T> {
+        read(&self.bound.iter().find(|(b, _)| *b == binding).expect("bound").1, len)
+    }
 }
 
 fn close(got: f32, want: f64, scale: f64, what: &str) {
@@ -846,18 +851,24 @@ fn gpu_flip_faces_to_particles_blends_flip_and_moves_by_rk3() {
     // A guard short enough that some RK3 stages hit it and some don't.
     let (dt, flip, max_travel) = (0.07f32, 0.9f32, 0.45f32);
     let step = StepParams { step_dt: dt, flip, max_travel, particles: particles.len() as u32, ..lattice() };
-    let got: Vec<FluidParticle> = Pass::new()
+    let mut pass = Pass::new();
+    let got: Vec<FluidParticle> = pass
         .bind(2, &particles)
         .bind(3, &faces)
         .bind(17, &old)
+        // Spread equal to the new faces: no density move.
+        .bind(18, &faces)
+        .bind(22, &vec![7u32; 2 * particles.len()])
         .run("faces_to_particles", &step, 19, particles.len(), particles.len());
+    // Step 0 of the tick starts the counts over the stale 7s.
+    let capped: Vec<u32> = pass.bound(22, 2 * particles.len());
     let per_cell = f64::from(dt) / f64::from(H);
     // RK3 stages within the CFL guard, and shortened by it.
-    let mut stages = [0usize; 2];
-    let mut guard = |v: [f64; 3]| {
+    let stages = [std::cell::Cell::new(0usize), std::cell::Cell::new(0usize)];
+    let guard = |v: [f64; 3]| {
         let cells = v.iter().map(|c| c * c).sum::<f64>().sqrt() * per_cell;
         let past = cells > f64::from(max_travel);
-        stages[usize::from(past)] += 1;
+        stages[usize::from(past)].set(stages[usize::from(past)].get() + 1);
         if past { v.map(|c| c * f64::from(max_travel) / cells) } else { v }
     };
     for (i, (g, p)) in got.iter().zip(&particles).enumerate() {
@@ -874,11 +885,14 @@ fn gpu_flip_faces_to_particles_blends_flip_and_moves_by_rk3() {
             continue;
         }
         let q0: [f64; 3] = std::array::from_fn(|a| (f64::from(p.position_radius[a]) - f64::from(MIN[a])) / f64::from(H));
+        let past_before = stages[1].get();
         let after = cpu_sample(q0, &faces);
         let k1 = guard(after);
         let k2 = guard(cpu_sample(std::array::from_fn(|a| q0[a] + 0.5 * per_cell * k1[a]), &faces));
         let k3 = guard(cpu_sample(std::array::from_fn(|a| q0[a] + 0.75 * per_cell * k2[a]), &faces));
         let before = cpu_sample(q0, &old);
+        assert_eq!(capped[2 * i] as usize, stages[1].get() - past_before, "particle {i}: guarded stages");
+        assert_eq!(capped[2 * i + 1], 0, "particle {i}: no bodies, no refused push");
         for a in 0..3 {
             let q1 = (q0[a] + per_cell * (2.0 * k1[a] + 3.0 * k2[a] + 4.0 * k3[a]) / 9.0)
                 .clamp(WALL_MARGIN_CELLS, N[a] as f64 - WALL_MARGIN_CELLS);
@@ -890,6 +904,7 @@ fn gpu_flip_faces_to_particles_blends_flip_and_moves_by_rk3() {
         }
         assert_eq!((g.position_radius[3], g.id), (p.position_radius[3], p.id), "particle {i} keeps radius and id");
     }
+    let stages = stages.map(std::cell::Cell::into_inner);
     assert!(stages.iter().all(|&k| k > 30), "the draw covers stages within and past the CFL guard: {stages:?}");
 }
 

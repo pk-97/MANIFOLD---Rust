@@ -2,7 +2,7 @@
 //! graphs built for any lattice. `water_def` is a running liquid on the
 //! liquid seam (docs/LIQUID_SOLVER_SEAM_DESIGN.md P7a): node.gpu_flip_domain's clock runs
 //! node.liquid_state's tick region, whose body is one 60 Hz tick of
-//! [`STEPS_PER_TICK`] water steps, then
+//! one node.gpu_flip_step of [`STEPS_PER_TICK`] substeps, then
 //! node.liquid_stats; node.liquid_frame publishes each tick to the liquid
 //! surface. `render_def` puts it in the render of the shipped
 //! `WaterDamBreakGpuFlip.json`, which is its own Dam Break at 64. Every node
@@ -25,10 +25,10 @@ use crate::node_graph::transform::Transform;
 /// The box is 4 m on its longest side; the lowest wave it holds is 2π / 4 m.
 pub(crate) const BOX_METRES: f64 = 4.0;
 
-/// Water steps per 60 Hz liquid tick (D8): copies of the step inside the tick
-/// region. A collider moves per step: each
-/// step places it where its tick's row has it at the step's end.
-pub(crate) const STEPS_PER_TICK: usize = 2;
+/// Water substeps per 60 Hz liquid tick, the step node's Steps. A collider
+/// moves per substep: each places it where its tick's row has it at the
+/// substep's end.
+pub(crate) const STEPS_PER_TICK: usize = 1;
 
 /// The main solve's iterations: the step's Auto.
 pub(crate) const PRESSURE_ITERATIONS: usize = AUTO_PRESSURE_ITERATIONS as usize;
@@ -76,7 +76,7 @@ pub(crate) struct WaterScene {
     pub pressure: PressureShape,
     /// The tank's side in metres: the domain's Domain Size.
     pub size: f64,
-    /// Water steps per tick: copies of the step subgraph in the tick region.
+    /// Water substeps per tick: the step node's Steps.
     pub steps: usize,
     /// The FLIP share kept per 1/60 s, the FLIP Fluids engine's 0.95 at its
     /// one step a frame; [`Self::flip_per_step`] is what a step uses.
@@ -107,6 +107,9 @@ pub(crate) struct WaterScene {
 
 /// The face grid's nodes in a scene built with `faces`, x, y and z.
 pub(crate) const FACE_NODES: [&str; 3] = ["face_u", "face_v", "face_w"];
+
+/// The water step node in every scene.
+pub(crate) const STEP_NODE: &str = "step";
 
 /// The fastest water a step is built for (m/s): the Dam Break's splash tops
 /// out near 13 m/s at 64³ and 19–25 m/s at 128³, the FLIP Fluids engine's
@@ -409,21 +412,18 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     b.wire((fill, "particles"), state, "seed");
     b.wire(count, state, "count");
     b.wires(domain, state, &["ticks", "epoch"]);
-    let mut particles: Port = (state, "out");
-    let mut faces = particles;
-    let mut reaction = (domain, "reaction");
-    for k in 0..scene.steps {
-        let step = water_step(&mut b, scene, (domain, state), k);
-        b.wire(particles, step, "particles");
-        b.wire(count, step, "count");
-        b.wire(reaction, step, "reaction");
-        (particles, faces, reaction) = ((step, "out"), (step, "faces"), (step, "reaction_out"));
-    }
+    let particles: Port = (state, "out");
+    let step = water_step(&mut b, scene, (domain, state));
+    b.wire(particles, step, "particles");
+    b.wire(count, step, "count");
+    b.wire((domain, "reaction"), step, "reaction");
+    let (particles, faces) = ((step, "out"), (step, "faces"));
     let stats = b.node("stats", "node.liquid_stats", json!({}));
     b.wire(particles, stats, "particles");
     b.wire((state, "stats"), stats, "stats");
     b.wire(count, stats, "count");
     b.wire((domain, "particle_mass"), stats, "particle_mass");
+    b.wire((step, "capped"), stats, "capped");
     b.wire(particles, state, "in");
     b.wire((stats, "stats_out"), state, "stats_in");
     // The tick's last faces leave the region beside its particles, into the
@@ -498,7 +498,7 @@ fn built_by_water_def(node_id: &str) -> bool {
         step.len() > 1 && step.starts_with('s') && step[1..].bytes().all(|b| b.is_ascii_digit())
     });
     step || FACE_NODES.contains(&node_id)
-        || matches!(node_id, "domain" | "initial_column" | "fill" | "state" | "stats" | "solid" | "frame" | "surface")
+        || matches!(node_id, "domain" | "initial_column" | "fill" | "state" | STEP_NODE | "stats" | "solid" | "frame" | "surface")
 }
 
 /// Surface Detail adds this to its value to give the surface nodes' scale.
@@ -640,21 +640,20 @@ fn padded_lattice(scene: &WaterScene, extra: &[(&str, Value)]) -> Value {
     params
 }
 
-/// Water step `k` of the tick (docs/GPU_FLIP_PRESSURE_SOLVE.md section 1
-/// (the step)): one node.gpu_flip_step on the domain's lattice, gravity,
+/// The tick's water (docs/GPU_FLIP_PRESSURE_SOLVE.md section 1 (the step)):
+/// one node.gpu_flip_step of `scene.steps` substeps on the domain's lattice, gravity,
 /// fields and bodies, and the state's tick index. The caller wires its
 /// particles and count.
-fn water_step(b: &mut Builder, scene: WaterScene, tick: (usize, usize), k: usize) -> usize {
+fn water_step(b: &mut Builder, scene: WaterScene, tick: (usize, usize)) -> usize {
     let (domain, state) = tick;
     let iterations = |n: usize, auto: u32| int(if n == auto as usize { 0 } else { n });
     let step = b.node(
-        &format!("s{k}.step"),
+        STEP_NODE,
         "node.gpu_flip_step",
         padded_lattice(
             &scene,
             &[
-                ("steps_per_tick", int(scene.steps)),
-                ("step_in_tick", int(k)),
+                ("steps", int(scene.steps)),
                 ("flip", float(scene.flip)),
                 ("iterations", iterations(scene.pressure.iterations, AUTO_PRESSURE_ITERATIONS)),
                 ("top_speed", float(TOP_SPEED)),
@@ -771,8 +770,7 @@ pub(super) mod tests {
     fn gpu_flip_scenes_cover_every_dispatch() {
         let scenes = [WaterScene::dam_break, WaterScene::still_pool, WaterScene::deep_pool, WaterScene::deep_drop, WaterScene::free_fall];
         let all = LATTICES.into_iter().flat_map(|n| scenes.map(|at| at(n))).flat_map(|scene| [scene, scene.with_surface()]);
-        // The splash probes' scenes: four steps a tick is four copies of the
-        // step.
+        // The splash probes' scenes.
         let refined = WaterScene::dam_break(128).with_surface();
         let step = WaterScene::dam_break(128);
         let probes = [
@@ -794,7 +792,7 @@ pub(super) mod tests {
             let regions = plan.substep_regions();
             assert_eq!(regions.len(), 1, "one tick region");
             let report = walked(&def, false, &format!("scene {n}³, {} steps", scene.steps));
-            assert!(report.checked > 6 + scene.steps, "checked only {} nodes at {n}³, {} steps", report.checked, scene.steps);
+            assert!(report.checked > 7, "checked only {} nodes at {n}³, {} steps", report.checked, scene.steps);
             let meshed = plan.steps().iter().any(|step| {
                 graph.nodes().any(|node| node.id == step.node && node.node.type_id().as_str() == "node.volume_surface_mesh")
             });
@@ -802,7 +800,7 @@ pub(super) mod tests {
         }
     }
 
-    /// The tick region's body is the tick: every step copy and the stats, and
+    /// The tick region's body is the tick: the step and the stats, and
     /// nothing the frame or the domain runs once a frame.
     #[test]
     fn gpu_flip_tick_region_is_the_tick() {
@@ -812,9 +810,7 @@ pub(super) mod tests {
         let name = |step: usize| graph.get_node(plan.steps()[step].node).expect("plan node").node_id.as_str().to_string();
         assert_eq!(graph.get_node(region.boundary).expect("boundary").node_id.as_str(), "state");
         let body: Vec<String> = region.steps.iter().map(|&step| name(step)).collect();
-        let steps: Vec<String> = (0..scene.steps).map(|k| format!("s{k}.step")).collect();
-        let in_tick: Vec<String> = body.iter().filter(|node| node.starts_with('s') && node.ends_with(".step")).cloned().collect();
-        assert_eq!(in_tick, steps, "the tick runs its steps in order");
+        assert_eq!(body.iter().filter(|node| *node == STEP_NODE).count(), 1, "the tick runs one step node");
         assert!(body.iter().any(|node| node == "stats"), "the stats run every tick");
         let outside = ["domain", "fill", "solid", "frame", "initial_column"];
         assert!(!body.iter().any(|node| outside.contains(&node.as_str()) || node.starts_with("surface")), "{body:?}");
@@ -889,7 +885,7 @@ pub(super) mod tests {
             let (_, plan) = built(&def);
             assert_eq!(plan.substep_regions().len(), 1, "one tick region");
             let report = walked(&def, false, &format!("rendered {n}³"));
-            assert!(report.checked > 6 + scene.steps, "checked only {} nodes at {n}³", report.checked);
+            assert!(report.checked > 7, "checked only {} nodes at {n}³", report.checked);
             let runtime = crate::preset_runtime::PresetRuntime::from_def(def, &registry, None).expect("the rendered scene builds");
             let shadowed: Vec<_> = runtime.shadowed_def_params().collect();
             assert!(shadowed.is_empty(), "{n}³ at surface scale {}: cards overwrite def params: {shadowed:?}", scene.surface_scale);
@@ -927,7 +923,7 @@ pub(super) mod tests {
             let scene = WaterScene::dam_break(n);
             for scene in [scene.with_surface(), scene.with_faces()] {
                 let report = walked(&render_def(scene), true, &format!("frozen render {n}³"));
-                assert!(report.checked > 6 + scene.steps, "checked only {} nodes at {n}³", report.checked);
+                assert!(report.checked > 7, "checked only {} nodes at {n}³", report.checked);
             }
         }
     }
@@ -950,11 +946,10 @@ pub(super) mod tests {
         def
     }
 
-    /// The tick hands the state its last step's faces, whatever the step
-    /// count.
+    /// The tick hands the state the step's faces, whatever the step count.
     #[test]
     fn gpu_flip_state_takes_the_last_steps_extended_faces() {
-        for scene in [WaterScene::dam_break(64), WaterScene { steps: 1, ..WaterScene::dam_break(64) }] {
+        for scene in [WaterScene::dam_break(64), WaterScene::dam_break(64).with_steps(2)] {
             let def = serde_json::to_value(water_def(scene)).expect("def");
             let name = |id: &Value| -> String {
                 let nodes = def["nodes"].as_array().expect("nodes");
@@ -964,7 +959,7 @@ pub(super) mod tests {
             let into: Vec<_> = wires.iter().filter(|w| w["toPort"] == "faces_in").collect();
             assert_eq!(into.len(), 1, "one faces_in wire");
             assert_eq!(name(&into[0]["toNode"]), "state");
-            assert_eq!(name(&into[0]["fromNode"]), format!("s{}.step", scene.steps - 1));
+            assert_eq!(name(&into[0]["fromNode"]), STEP_NODE);
             assert_eq!(into[0]["fromPort"], "faces");
         }
     }
