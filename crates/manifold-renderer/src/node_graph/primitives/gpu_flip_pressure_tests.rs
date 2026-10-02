@@ -7,7 +7,7 @@
 
 use manifold_gpu::GpuBuffer;
 
-use super::gpu_flip_pressure::{PressureSolver, Water, level_lattices, passes};
+use super::gpu_flip_pressure::{MAX_ITERATIONS, PressureSolver, Water, level_lattices, passes};
 
 /// One saved problem: water cells and the divergence f (zero in air).
 pub(crate) struct Problem {
@@ -403,4 +403,77 @@ fn pressure_module_passes_match_the_count() {
         times.sort_by(f64::total_cmp);
         println!("pressure module {m}³: {prepare} + {solve} passes, {:.2} ms GPU per prepare and 8-iteration solve (median of 5)", times[2]);
     }
+}
+
+/// (r·z, p·s) of every iteration of one solve of `p`, `iterations` long.
+fn rz(rig: &mut Rig, p: &Problem, iterations: u32) -> Vec<(f32, f32)> {
+    let water: Vec<f32> = p.water.iter().map(|&w| f32::from(u8::from(w))).collect();
+    // SAFETY: shared buffers sized for the lattice; the last solve completed.
+    unsafe {
+        rig.water.write(0, bytemuck::cast_slice(&water));
+        rig.rhs.write(0, bytemuck::cast_slice(&p.f));
+    }
+    let scalars = rig.device.create_buffer_shared(u64::from(2 * MAX_ITERATIONS) * 4);
+    let mut enc = rig.device.create_encoder("gpu-flip-pressure-rz");
+    let n = rig.n as u32;
+    let lattice = Water { lattice: [n; 3], cell_size: rig.cell_size() as f32, water: &rig.water, faces: &rig.faces, phi: rig.phi.as_ref() };
+    rig.solver.prepare(&rig.device, &mut enc, &lattice).expect("prepares");
+    rig.solver.solve(&mut enc, &lattice, &rig.rhs, &rig.pressure, iterations, None).expect("solves");
+    rig.solver.copy_scalars(&mut enc, &scalars);
+    enc.commit_and_wait_completed();
+    let ptr = scalars.mapped_ptr().expect("shared scalars");
+    // SAFETY: the copy completed; the buffer holds 2 · MAX_ITERATIONS floats.
+    let all = unsafe { std::slice::from_raw_parts(ptr.cast::<f32>().cast_const(), 2 * MAX_ITERATIONS as usize) };
+    (0..iterations as usize).map(|k| (all[2 * k], all[2 * k + 1])).collect()
+}
+
+/// A still pool: the lower half of the box is water, its divergence a fixed
+/// pseudo-random spread.
+fn still_pool_problem(m: usize) -> Problem {
+    let water: Vec<bool> = (0..m * m * m).map(|c| (c / m) % m < m / 2).collect();
+    let f = (0..m * m * m)
+        .map(|c| if water[c] { ((c as u64).wrapping_mul(2_654_435_761) >> 8) as f32 % 1000.0 / 500.0 - 1.0 } else { 0.0 })
+        .collect();
+    Problem { frame: 0, water, f }
+}
+
+/// The V-cycle preconditioner re-derives L at each coarse level rather than
+/// taking R·L·P, so its definiteness is not given by construction. The solve
+/// runs CG on A = −L (s = A p, p·s > 0) with z = V(r) ≈ L⁻¹ r = −A⁻¹ r, so the
+/// preconditioner −V is positive definite exactly when r·z < 0. Every
+/// iteration of every solve keeps both signs on the shipped problems (the Dam
+/// Break, the deep pool, a still pool), plain and with the ghost rows. A sign
+/// flip is a finding to report, not to patch.
+#[test]
+fn pressure_module_preconditioner_keeps_rz_negative() {
+    let mut problems: Vec<(String, usize, Problem)> = Vec::new();
+    for fixture in [DAM_BREAK, "deep_pool_pressure_problems", "deep_pool_density_problems"] {
+        let (n, saved) = load_fixture(fixture);
+        for m in [64, 37] {
+            for p in &saved {
+                problems.push((fixture.to_string(), m, resample(p, n, m)));
+            }
+        }
+    }
+    for m in [64, 37] {
+        problems.push(("still_pool".into(), m, still_pool_problem(m)));
+    }
+    let mut failures = Vec::new();
+    let mut checked = 0;
+    for (name, m, problem) in &problems {
+        let h = (BOX_METRES / *m as f64) as f32;
+        for ghost in [false, true] {
+            let mut rig = Rig::new(*m);
+            if ghost {
+                rig = rig.with_phi(&surface_phi(&problem.water, *m, h));
+            }
+            let values = rz(&mut rig, problem, 16);
+            checked += values.len();
+            if let Some((k, (rz, ps))) = values.iter().enumerate().find(|(_, (rz, ps))| rz.is_nan() || ps.is_nan() || *rz >= 0.0 || *ps <= 0.0) {
+                failures.push(format!("{name} {m}³ frame {} ghost {ghost}: iteration {k} r·z {rz:e}, p·s {ps:e} ({values:?})", problem.frame));
+            }
+        }
+    }
+    println!("preconditioner: {checked} iterations over {} solves, r·z < 0 and p·s > 0 on every one: {}", problems.len() * 2, failures.is_empty());
+    assert!(failures.is_empty(), "{failures:#?}");
 }

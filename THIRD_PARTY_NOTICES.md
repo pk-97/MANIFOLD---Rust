@@ -49,7 +49,7 @@ SOFTWARE.
 
 Source: blub by Andreas Reich (github.com/Wumpf/blub), MIT license.
 
-Ported from it: the density projection in `gpu_flip_step` (`shaders/gpu_flip_step.wgsl` entry `density_source`, its CPU-side wiring in `gpu_flip_step.rs`) from `density_projection_gather_error.comp`: the tent-kernel cell density, the 0.5625 solid-neighbour weight, the rest clamp beside air and the source clamp, as blub builds Kugelstadt et al. 2019.
+Ported from it: the density projection in `gpu_flip_step` (`shaders/gpu_flip_step.wgsl` entry `density_source`, its CPU-side wiring in `gpu_flip_step.rs`) from `density_projection_gather_error.comp`: the tent-kernel cell density, the 0.5625 solid face weight (extended here to edge, corner and per-site body weights), the rest clamp beside air and the source clamp, as blub builds Kugelstadt et al. 2019.
 
 ### License
 

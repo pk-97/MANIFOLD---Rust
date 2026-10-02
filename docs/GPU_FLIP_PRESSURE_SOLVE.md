@@ -22,7 +22,7 @@ The builder is `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_pres
 5. Divergence per water cell → f (`divergence`).
 6. The pressure solve, section 3.
 7. Subtract the pressure gradient on faces touching water (`subtract_pressure`), the air side of a surface face at its ghost pressure; wall faces stay 0. Constrain the solid faces and the walls (`constrain_solid_faces`). Extend `band_layers` layers (`new`): far enough that every RK3 stage of step 9 samples valid faces.
-8. Every step, the density projection of Kugelstadt et al. 2019, "Implicit Density Projection for Volume Conserving Liquids" (`density_source`; credit in `gpu_flip_step.rs`). Each water cell's density ρ is the tent-kernel sum of the particles within a cell of its centre, rest 8; a wall or body face neighbour adds 0.5625, what its particles would (blub's stand-in for the paper's particle-sampled solids); a cell beside air reads at least rest, so a part-full surface cell only spreads (the paper's particle-deficiency clamp, applied only where a neighbour holds air). The source −(1/dt)·clamp(ρ/8 − 1, ±½) (the paper's displacement limit, ρ/ρ0 in [0.5, 1.5]; blub builds both the same way) is solved like section 3 with air at zero, its gradient taken off a copy of the projected faces into `spread`. It is the whole error every step, no per-step share, and it moves particles only: it never becomes velocity, so it adds no speed. Off with Volume Projection 0.
+8. Every step, the density projection of Kugelstadt et al. 2019, "Implicit Density Projection for Volume Conserving Liquids" (`density_source`; credit in `gpu_flip_step.rs`). Each water cell's density ρ is the tent-kernel sum of the particles within a cell of its centre, rest 8; solids are sampled with particles as the paper does, on the same rest lattice of eight sites a cell: each of the 26 neighbours outside the box adds what its eight sites would (0.5625 a face, 0.09375 an edge, 0.015625 a corner; blub keeps only the face term), and near a body every site inside it (`solid_at` < 0) adds its tent weight, so a cell the body only cuts weighs its solid part; a cell with any neighbour holding no particles reads at least rest, so a part-full surface cell only spreads (the paper's particle-deficiency clamp; air is an empty cell, not the level-set mask, which also covers the empty cell above the surface). A pool at rest on the seeded lattice reads exactly rest everywhere, so it is never pushed. The source −(1/dt)·clamp(ρ/8 − 1, ±½) (the paper's displacement limit, ρ/ρ0 in [0.5, 1.5]; blub builds both the same way) is solved like section 3 with air at zero, its gradient taken off a copy of the projected faces into `spread`. It is the whole error every step, no per-step share, and it moves particles only: it never becomes velocity, so it adds no speed. Off with Volume Projection 0.
 9. Faces to particles (`faces_to_particles`): PIC/FLIP velocity from `new` and `old`; the RK3 move through `new` plus the density move step dt · (`spread` − `new`), uncapped (the source clamp bounds it); clamped 0.2 cells off the walls.
 
 The step's time rules:
@@ -186,12 +186,12 @@ Read it this way. Fewer particles pack past rest than under the FFT solve (10.4%
 
 | Row | 1 step | 2 steps |
 |---|---|---|
-| column depth against 0.6556 m | +0.21% | +0.24% |
-| interior density against 8 | −0.55% | −0.35% |
-| worst frame-to-frame energy rise from frame 400 | +7.8e-5 E0 | +2.4e-5 E0 |
-| energy above E0, most | none (−2.5e-3) | none (−2.2e-3) |
+| column depth against 0.6556 m | +2.38% | +2.42% |
+| interior density against 8 | −0.37% | −0.37% |
+| worst frame-to-frame energy rise from frame 400 | +8.5e-5 E0 | +1.1e-5 E0 |
+| energy above E0 | none | none |
 
-The standing wave's period is 2.803 s against 2.80 s. The rows above this one predate the projection.
+The standing wave's period is 2.817 s against 2.80 s. A still pool and the pool round a static box rest at 1e-6 and 5e-5 m/s, as before the projection. The column stands about 2% high because a surface cell beside an empty cell is only ever spread, never pulled together (the paper's clamp); measuring air from the level-set mask instead pulled the surface in to +0.2% but pushed a pool at rest every step. The rows above this one predate the projection.
 
 **Walls and steps** (`gpu_flip_wall_feel_64`, the meshed 64³ Dam Break, 300 frames; the engine's column is the parity audit's `/tmp/flip_feel/engine.csv`). Run-up is the highest particle within 25 cm of the far wall. Lid contact counts particle-frames within 10 cm of the lid over frames 50–130.
 
