@@ -144,11 +144,39 @@ class LandingTests(unittest.TestCase):
         _, _, _, commands, *_ = self.exercise()
         nextest = [c for c in commands if c[:2] == ["cargo", "nextest"]]
         self.assertEqual(nextest, [["cargo", "nextest", "run", "--no-run", "-p", "manifold-gpu"],
-                                   ["cargo", "nextest", "run", "-p", "manifold-gpu"]])
+                                   ["cargo", "nextest", "run", "--no-fail-fast", "-p", "manifold-gpu"]])
         proofs = [c for c in commands if c[1:2] == ["scripts/gpu_proofs_gate.py"]]
         self.assertEqual(proofs, [
             ["python3", "scripts/gpu_proofs_gate.py", "--base", "origin/main", "--build-only"],
             ["python3", "scripts/gpu_proofs_gate.py", "--base", "origin/main", "--budget", "300"]])
+
+    def test_catalog_check_skipped_when_renderer_untouched(self):
+        _, _, _, commands, *_ = self.exercise()
+        self.assertFalse(any("test(regenerates_in_sync)" in c for c in commands))
+
+    def test_stale_thumbnail_and_docs_reported_together_before_any_build(self):
+        with tempfile.TemporaryDirectory() as d:
+            assets = Path(d) / "crates/manifold-renderer/assets"
+            for sub in ("effect-presets", "preset-thumbnails/effects"):
+                (assets / sub).mkdir(parents=True)
+            (assets / "effect-presets/Bloom.json").write_text("{}")
+            (assets / "preset-thumbnails/effects/Bloom.hash").write_text("deadbeef")
+            (Path(d) / "docs").mkdir()
+            (Path(d) / "docs/README.md").write_text("old")
+            (Path(d) / "docs/A.md").write_text("# A\n\nA long enough summary line for the index here.\n")
+            names = [n for n, _, _ in landing_gate.freshness_problems(d)]
+            self.assertEqual(names, ["preset-thumbnails", "docs-index"])
+            (assets / "preset-thumbnails/effects/Bloom.hash").write_text(
+                landing_gate.hashlib.sha256(b"{}").hexdigest() + "\n")
+            self.assertEqual(landing_gate.stale_thumbnails(d), [])
+
+    def test_stale_artifacts_fail_gate_with_regenerate_commands(self):
+        problems = [("preset-thumbnails", ["x.json"], "regen-cmd")]
+        with patch.object(landing_gate, "freshness_problems", return_value=problems):
+            code, called, timings, _, _, output, _ = self.exercise()
+        self.assertEqual(code, 1)
+        self.assertEqual(called, [])
+        self.assertIn("regenerate: regen-cmd", output)
 
     def test_build_failure_stops_before_the_hold(self):
         for failed in ("tests-build", "gpu-proofs-build"):
