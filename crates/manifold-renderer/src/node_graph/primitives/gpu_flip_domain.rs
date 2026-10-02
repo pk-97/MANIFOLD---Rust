@@ -441,6 +441,10 @@ impl Primitive for GpuFlipDomain {
         self.clock.restart();
     }
 
+    fn request_physics_samples(&mut self, from: f64, until: f64, out: &mut Vec<f64>) {
+        self.fields.request_samples(&self.clock, from, until, out);
+    }
+
     fn set_coupled_physics(&mut self, enabled: bool) {
         if self.coupled.mode != enabled {
             self.coupled.mode = enabled;
@@ -474,8 +478,11 @@ impl Primitive for GpuFlipDomain {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        // A physics sample reads authored inputs only; it never advances time.
+        // A physics sample reads the force field at a tick's start; it never
+        // advances time.
         if crate::node_graph::physics::authored_sample_only() {
+            let field = ctx.inputs.vector_field("acceleration_field");
+            self.fields.observe_sample(ctx.time.seconds.0, field.as_ref());
             return;
         }
         let mut roles: [Option<FluidRole>; MAX_FLUID_ROLES] = std::array::from_fn(|_| None);
@@ -718,7 +725,13 @@ impl GpuFlipDomain {
             // runs this frame's ticks.
             display_time = owner.completed() as f64 * TICK;
         }
-        let field = self.fields.prepare(geometry.field_lattice(), self.acceleration.as_ref(), &frame, &self.impulses)?;
+        let field = self.fields.prepare(
+            geometry.field_lattice(),
+            self.acceleration.as_ref(),
+            &self.clock,
+            &frame,
+            &self.impulses,
+        )?;
         let per_frame = [
             ("closed_faces", closed_faces(ctx.params) as f32),
             ("gravity_x", gravity[0]),
