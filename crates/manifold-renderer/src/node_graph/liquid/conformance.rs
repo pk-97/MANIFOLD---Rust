@@ -487,6 +487,27 @@ pub fn gpu_flip_dam_break_with_box(density_ratio: f32) -> (EffectGraphDef, BoxSc
     (scene.set(with_box(render_def(water)), GPU_FLIP_DOMAIN_TYPE_ID), scene)
 }
 
+/// The FLIP Fluids engine's own coupled tank (its gravity tests: 2.4 m at
+/// 48 cells, water to 1.5 m) with a density-neutral cube at its body's
+/// height, on GPU FLIP. The side by side against the engine runs here
+/// because that is where the engine is proven a valid reference.
+pub fn gpu_flip_engine_tank() -> (EffectGraphDef, BoxScene) {
+    let edge = 0.4;
+    let scene = BoxScene {
+        domain_size: 2.4,
+        resolution: 48,
+        fill: 1.5,
+        liquid_gravity: -G,
+        open_faces: false,
+        centre: [0.0, 0.9, 0.0],
+        rotation: [0.0; 3],
+        edge,
+        mass: FIXTURE_DENSITY * edge.powi(3),
+    };
+    let water = WaterScene::pool(scene.resolution as usize, f64::from(scene.domain_size), f64::from(scene.fill));
+    (scene.set(with_box(render_def(water)), GPU_FLIP_DOMAIN_TYPE_ID), scene)
+}
+
 /// The Floating Box preset whose box the GPU FLIP box scenes carry.
 const BOX_PRESET: &str = "WaterFloatingBoxMatter";
 

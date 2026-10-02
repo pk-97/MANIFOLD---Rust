@@ -629,7 +629,17 @@ fn solid_face_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
     let first = max(u.rows - u.body_count, 0);
     var code = 0.0;
     for (var a = 0; a < 3; a = a + 1) {
-        if !face_exists(p, n, a) || p[a] == 0 || p[a] == n[a] || !(open.face_weight[a] < 1.0) {
+        if !face_exists(p, n, a) || p[a] == 0 || p[a] == n[a] {
+            continue;
+        }
+        // An open face beside a cut cell carries the body too: its (c − w)
+        // is not zero, so it is in the divergence and the body's pressure
+        // force (the engine extrapolates its rigid boundary map one layer
+        // out, RigidBoundaryVelocityMap::extrapolate).
+        var lo = p;
+        lo[a] = p[a] - 1;
+        let cut_beside = solid_faces[flatten(lo, m)].face_weight.w < 1.0 || open.face_weight.w < 1.0;
+        if !(open.face_weight[a] < 1.0) && !cut_beside {
             continue;
         }
         var centre = fma(vec3<f32>(p) + vec3<f32>(0.5), vec3<f32>(h), lattice_min);
