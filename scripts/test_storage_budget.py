@@ -93,8 +93,8 @@ def test_build_admission():
         target.mkdir(parents=True)
         with patch.object(sb, "registered_worktrees", return_value=(repo,)):
             unknown = sb.check_build(root / "other" / "target", repo, free_bytes=200 * sb.GIB)
-            low = sb.check_build(target, repo, free_bytes=99 * sb.GIB)
-            good = sb.check_build(target, repo, free_bytes=101 * sb.GIB)
+            low = sb.check_build(target, repo, free_bytes=49 * sb.GIB)
+            good = sb.check_build(target, repo, free_bytes=51 * sb.GIB)
         check("unknown target override rejected", not unknown and "canonical" in unknown.reason, unknown.reason)
         check("low free space rejected", not low and "reserve" in low.reason, low.reason)
         check("canonical target with reserve accepted", bool(good), good.reason)
