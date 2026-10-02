@@ -31,6 +31,7 @@ use super::gpu_flip_bodies::{BodyPasses, Bodies, REACTION_FLOATS, body_refusal};
 use super::gpu_flip_pressure::{MAX_ITERATIONS, PressureSolver, Stop, Water, lattice_refusal};
 use super::liquid_stats::SOLVER_WORDS;
 use super::liquid_solid_distance::{SolidDistanceJob, encode_solid_distance};
+use super::prefix_scan::ScanLabels;
 use super::sort_particles_into_cells::{
     LIQUID_PARTICLE_READ, ParticleSorter, SortJob, SortLabels, float_param, int_param,
 };
@@ -302,6 +303,7 @@ const ZERO_BYTES: u64 = (MAX_FLUID_ROLES * REACTION_FLOATS * 4) as u64;
 const SORT_LABELS: SortLabels = SortLabels {
     clear: "gpu_flip.step.sort.clear",
     count: "gpu_flip.step.sort.count",
+    scan: ScanLabels { blocks: "gpu_flip.step.sort.scan.blocks", add: "gpu_flip.step.sort.scan.add" },
     ranges: "gpu_flip.step.sort.ranges",
     tail: "gpu_flip.step.sort.tail",
     scatter: "gpu_flip.step.sort.scatter",

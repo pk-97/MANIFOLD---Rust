@@ -3,11 +3,15 @@
 //! ships (resolution 64, Steps 1, Auto iterations), one deterministic tick a
 //! frame from tick 0. 300 measured frames after asset warm-up: every tenth
 //! frame carries per-dispatch GPU timestamps (split per node type, plus per
-//! dispatch label inside `node.gpu_flip_step` so the solver stays readable);
+//! dispatch label inside `node.gpu_flip_step` and `node.whitewater_step`,
+//! keyed on the node's tag and the label, so the solvers stay readable);
 //! the other frames are plain and give the budget numbers, whole-frame GPU ms
 //! and CPU encode (wall time around `runtime.render`). Timestamped frames
 //! open one encoder per dispatch and turn encode replay off
 //! (ENCODE_REPLAY_DESIGN.md D7), so their split is a ratio, never the budget.
+//! The whitewater's published counts (foam, bubble, spray, pool full) are
+//! read back every frame through the node preview so a speed change that
+//! moved the particle population shows up beside the time it saved.
 //! Present is not timed here: that is the app with MANIFOLD_RENDER_TRACE=1.
 //! Reported, never gated.
 
@@ -33,6 +37,11 @@ const TIMESTAMP_EVERY: usize = 10;
 const WIDTH: u32 = 1920;
 const HEIGHT: u32 = 1080;
 const STEP: &str = "node.gpu_flip_step";
+const WHITEWATER: &str = "node.whitewater_step";
+/// The preset's whitewater node, whose scalar outputs carry the counts.
+const WHITEWATER_NODE: &str = "whitewater";
+/// Node types split per dispatch label.
+const LABELLED: [&str; 2] = [STEP, WHITEWATER];
 
 fn manifest(json: &Value) -> ParamManifest {
     let specs: Vec<ParamSpecDef> =
@@ -59,13 +68,38 @@ fn context(frame: i64, tick: u32) -> PresetContext {
     }
 }
 
+/// A dispatch label of one node: (type id, node tag, label).
+type LabelKey = (String, String, String);
+
 /// One frame's numbers. Plain frames fill `gpu_ms` and `cpu_ms`; timestamped
-/// frames also fill the per-type and per-step-label splits.
+/// frames also fill the per-type and per-label splits.
 struct Frame {
     gpu_ms: f64,
     cpu_ms: f64,
     node_error: bool,
-    split: Option<(BTreeMap<String, f64>, BTreeMap<String, f64>)>,
+    split: Option<(BTreeMap<String, f64>, BTreeMap<LabelKey, f64>)>,
+}
+
+/// The whitewater node's published counts after a frame (they lag the
+/// frame that wrote them by the readback).
+#[derive(Clone, Copy, Default)]
+struct Counts {
+    foam: f64,
+    bubble: f64,
+    spray: f64,
+    pool_full: f64,
+}
+
+impl Counts {
+    fn read(runtime: &PresetRuntime) -> Self {
+        let (_, outputs) = runtime.preview_scalar_io();
+        let port = |name: &str| outputs.iter().find_map(|(port, value)| (port == name).then_some(f64::from(*value))).unwrap_or(0.0);
+        Self { foam: port("foam_count"), bubble: port("bubble_count"), spray: port("spray_count"), pool_full: port("pool_full") }
+    }
+
+    fn live(self) -> f64 {
+        self.foam + self.bubble + self.spray
+    }
 }
 
 fn render(
@@ -108,18 +142,19 @@ fn render(
     let steps: BTreeMap<String, String> =
         runtime.take_step_profiles().into_iter().map(|step| (step.tag, step.type_id)).collect();
     let mut per_type = BTreeMap::new();
-    let mut per_step_label = BTreeMap::new();
+    let mut per_label = BTreeMap::new();
     for span in &profile.spans {
         let Some(type_id) = steps.get(&span.tag) else {
             *per_type.entry("(untagged)".to_owned()).or_insert(0.0) += span.millis;
             continue;
         };
         *per_type.entry(type_id.clone()).or_insert(0.0) += span.millis;
-        if type_id == STEP {
-            *per_step_label.entry(span.label.clone()).or_insert(0.0) += span.millis;
+        if LABELLED.contains(&type_id.as_str()) {
+            let key = (type_id.clone(), span.tag.clone(), span.label.clone());
+            *per_label.entry(key).or_insert(0.0) += span.millis;
         }
     }
-    Frame { gpu_ms, cpu_ms, node_error, split: Some((per_type, per_step_label)) }
+    Frame { gpu_ms, cpu_ms, node_error, split: Some((per_type, per_label)) }
 }
 
 fn percentile(samples: &[f64], fraction: f64) -> f64 {
@@ -168,11 +203,14 @@ fn gpu_flip_frame_perf() {
         assert!(warmup_started.elapsed().as_secs() < 30, "asset warmup did not settle");
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
+    // The preview copies the node's CPU-side scalars; it adds no GPU work.
+    runtime.set_preview_node(Some(&manifold_core::NodeId::from(WHITEWATER_NODE)));
     let mut plain_gpu = Vec::new();
     let mut plain_cpu = Vec::new();
     let mut stamped_gpu = Vec::new();
     let mut per_type: BTreeMap<String, Vec<f64>> = BTreeMap::new();
-    let mut per_label: BTreeMap<String, Vec<f64>> = BTreeMap::new();
+    let mut per_label: BTreeMap<LabelKey, Vec<f64>> = BTreeMap::new();
+    let mut counts: Vec<Counts> = Vec::new();
     let mut node_error_frames = 0usize;
     for tick in 0..MEASURED_FRAMES {
         frame += 1;
@@ -185,6 +223,7 @@ fn gpu_flip_frame_perf() {
             &params,
             stamped.then_some(&sampler),
         );
+        counts.push(Counts::read(&runtime));
         node_error_frames += usize::from(result.node_error);
         match result.split {
             None => {
@@ -217,6 +256,25 @@ fn gpu_flip_frame_perf() {
         percentile(&stamped_gpu, 0.5),
         percentile(&stamped_gpu, 0.95),
     );
+    let live: Vec<f64> = counts.iter().map(|c| c.live()).collect();
+    let last = counts.last().copied().unwrap_or_default();
+    println!(
+        "  whitewater live particles: p50 {:.0} p95 {:.0} max {:.0} | last frame foam {:.0} bubble {:.0} spray {:.0} | pool full on {} frames",
+        percentile(&live, 0.5),
+        percentile(&live, 0.95),
+        live.iter().copied().fold(0.0, f64::max),
+        last.foam,
+        last.bubble,
+        last.spray,
+        counts.iter().filter(|c| c.pool_full > 0.0).count(),
+    );
     print_split("per node type", &per_type);
-    print_split("gpu_flip_step per dispatch label", &per_label);
+    for type_id in LABELLED {
+        let labels: BTreeMap<String, Vec<f64>> = per_label
+            .iter()
+            .filter(|((t, _, _), _)| t == type_id)
+            .map(|((_, tag, label), samples)| (format!("{tag}: {label}"), samples.clone()))
+            .collect();
+        print_split(&format!("{type_id} per dispatch label"), &labels);
+    }
 }

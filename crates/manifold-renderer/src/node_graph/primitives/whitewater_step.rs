@@ -33,7 +33,7 @@ use super::keep_whitewater::KeepWhitewater;
 use super::lattice_curvature::LatticeCurvature;
 use super::liquid_cells::LiquidCells;
 use super::nearest_crossing::NearestCrossing;
-use super::prefix_scan::{PrefixScan, storage_words};
+use super::prefix_scan::{PrefixScan, ScanLabels, storage_words};
 use super::preserve_foam::PreserveFoam;
 use super::retype_whitewater::RetypeWhitewater;
 use super::sample_faces_at_particles::SampleFacesAtParticles;
@@ -381,9 +381,26 @@ fn pack<P: Primitive>(values: &[(&str, f32)], count: u32) -> Uniform {
     Uniform { words, len: (at + 1).next_multiple_of(4) }
 }
 
+/// Whether a dispatch ends with a barrier. `None` only when the next
+/// dispatch reads nothing this one writes: the barrier the next one ends
+/// with covers both.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Barrier {
+    After,
+    None,
+}
+
 /// Dispatch `pipeline` over `count` threads, the uniform at 0 and `buffers`
-/// from 1 in order, then a barrier.
-fn dispatch(enc: &mut manifold_gpu::GpuEncoder, pipeline: &GpuComputePipeline, uniform: &[u8], buffers: &[&GpuBuffer], count: u32, label: &str) {
+/// from 1 in order, then `barrier`.
+fn dispatch(
+    enc: &mut manifold_gpu::GpuEncoder,
+    pipeline: &GpuComputePipeline,
+    uniform: &[u8],
+    buffers: &[&GpuBuffer],
+    count: u32,
+    label: &str,
+    barrier: Barrier,
+) {
     if count == 0 {
         return;
     }
@@ -393,7 +410,9 @@ fn dispatch(enc: &mut manifold_gpu::GpuEncoder, pipeline: &GpuComputePipeline, u
         _ => GpuBinding::Bytes { binding: 0, data: uniform },
     });
     enc.dispatch_compute(pipeline, &bindings[..=buffers.len()], [count.div_ceil(256), 1, 1], label);
-    enc.compute_memory_barrier_buffers();
+    if barrier == Barrier::After {
+        enc.compute_memory_barrier_buffers();
+    }
 }
 
 fn atom<P: Primitive>(
@@ -404,8 +423,20 @@ fn atom<P: Primitive>(
     count: u32,
     label: &str,
 ) {
+    atom_then::<P>(enc, pipeline, values, buffers, count, label, Barrier::After);
+}
+
+fn atom_then<P: Primitive>(
+    enc: &mut manifold_gpu::GpuEncoder,
+    pipeline: &GpuComputePipeline,
+    values: &[(&str, f32)],
+    buffers: &[&GpuBuffer],
+    count: u32,
+    label: &str,
+    barrier: Barrier,
+) {
     let uniform = pack::<P>(values, count);
-    dispatch(enc, pipeline, bytemuck::cast_slice(&uniform.words[..uniform.len]), buffers, count, label);
+    dispatch(enc, pipeline, bytemuck::cast_slice(&uniform.words[..uniform.len]), buffers, count, label, barrier);
 }
 
 #[derive(Default)]
@@ -464,7 +495,19 @@ const SORT_LABELS: SortLabels = SortLabels {
     tail: "node.whitewater_step.sort.tail",
     scatter: "node.whitewater_step.sort.scatter",
     stabilise: "node.whitewater_step.sort.stabilise",
+    scan: ScanLabels { blocks: "node.whitewater_step.sort.scan.blocks", add: "node.whitewater_step.sort.scan.add" },
 };
+
+/// The four scans of a tick, told apart in a profile: how many each liquid
+/// particle emits, the append of the spawns, the keep's compaction, and the
+/// split into populations.
+const EMISSION_SCAN: ScanLabels =
+    ScanLabels { blocks: "node.whitewater_step.emission_scan.blocks", add: "node.whitewater_step.emission_scan.add" };
+const APPEND_SCAN: ScanLabels =
+    ScanLabels { blocks: "node.whitewater_step.append_scan.blocks", add: "node.whitewater_step.append_scan.add" };
+const KEEP_SCAN: ScanLabels = ScanLabels { blocks: "node.whitewater_step.keep_scan.blocks", add: "node.whitewater_step.keep_scan.add" };
+const SPLIT_SCAN: ScanLabels =
+    ScanLabels { blocks: "node.whitewater_step.split_scan.blocks", add: "node.whitewater_step.split_scan.add" };
 
 impl Pipelines {
     fn prepare(&mut self, device: &GpuDevice) {
@@ -645,8 +688,16 @@ impl Outputs {
         let shared = |bytes| allocate(device, bytes, true);
         let counts = shared(COUNT_WORDS as u64 * 4)?;
         counts.zero_fill();
+        // Past each population's count the buffer is zero, from here on: the
+        // split zeroes only what the slot's previous publish filled beyond
+        // the new count, so the slot's counts must describe its buffers
+        // from the first publish.
+        let buffers = [shared(population)?, shared(population)?, shared(population)?];
+        for buffer in &buffers {
+            buffer.zero_fill();
+        }
         self.slots.push(OutputSlot {
-            buffers: [shared(population)?, shared(population)?, shared(population)?],
+            buffers,
             counts,
             written: None,
             read: 0,
@@ -732,7 +783,7 @@ impl Step {
             let emitters = frame.count.map_or(slots, |count| count.min(slots));
             let scratch = self.particles.reserve(device, slots)?.clone();
             let offsets = self.emission_scan.buffer(device, emitters.max(1) as usize)?.clone();
-            self.emit(enc, frame, inputs, &scratch, &offsets, slots, emitters);
+            self.emit(enc, frame, inputs, &scratch, &offsets, emitters);
             for _ in 0..frame.ticks {
                 self.tick(enc, device, frame, inputs)?;
             }
@@ -757,7 +808,7 @@ impl Step {
     /// bindings 1 to 10 in the shader's order.
     fn hand(&self, enc: &mut manifold_gpu::GpuEncoder, pass: Hand, params: HandParams, bound: [&GpuBuffer; 10]) {
         let (pipeline, label) = self.pipelines.hand(pass);
-        dispatch(enc, pipeline, bytemuck::bytes_of(&params), &bound, params.count, label);
+        dispatch(enc, pipeline, bytemuck::bytes_of(&params), &bound, params.count, label, Barrier::After);
     }
 
     /// Bindings for a hand pass: the pool pair, the slot scan, the typed
@@ -787,7 +838,6 @@ impl Step {
         inputs: &StepInputs<'_>,
         scratch: &[GpuBuffer; 4],
         offsets: &GpuBuffer,
-        slots: u32,
         emitters: u32,
     ) {
         let s = &frame.shape;
@@ -838,7 +888,9 @@ impl Step {
             cells,
             label("distance"),
         );
-        atom::<LiquidCells>(enc, get(&p.liquid), &nodes, &[&f.distance, inputs.solid, &f.cells], cells, label("liquid"));
+        // Liquid cells and curvature both read the distance; neither reads
+        // the other, so one barrier after the pair.
+        atom_then::<LiquidCells>(enc, get(&p.liquid), &nodes, &[&f.distance, inputs.solid, &f.cells], cells, label("liquid"), Barrier::None);
         atom::<LatticeCurvature>(
             enc,
             get(&p.curvature),
@@ -856,12 +908,16 @@ impl Step {
         let box3 = [("center_x", cx), ("center_y", cy), ("center_z", cz), ("size_x", sx), ("size_y", sy), ("size_z", sz)];
         let faces = [("face_cells_x", fx), ("face_cells_y", fy), ("face_cells_z", fz)];
         let epoch = frame.epoch as f32;
+        // The per-particle passes run over the emitters, not every slot of
+        // the particle array: the emission count masks everything from the
+        // live count up, and the spawn reads the scratch only below the
+        // emission scan's length.
         atom::<JitterParticles>(
             enc,
             get(&p.jitter),
             &[("cell_size", s.cell_size), ("seed", frame.seed), ("epoch", epoch)],
             &[inputs.particles, jittered],
-            slots,
+            emitters,
             "node.whitewater_step.jitter",
         );
         let mut sample = [("", 0.0); 12];
@@ -873,16 +929,19 @@ impl Step {
             get(&p.sample),
             &sample,
             &[jittered, inputs.faces[0], inputs.faces[1], inputs.faces[2], sampled],
-            slots,
+            emitters,
             "node.whitewater_step.sample_velocity",
         );
-        atom::<EnergyPotential>(
+        // Energy and wavecrest both read the sampled velocity; neither reads
+        // the other, so one barrier after the pair.
+        atom_then::<EnergyPotential>(
             enc,
             get(&p.energy),
             &[("min_energy", frame.min_energy), ("max_energy", frame.max_energy)],
             &[sampled, energy],
-            slots,
+            emitters,
             "node.whitewater_step.energy",
+            Barrier::None,
         );
         let mut grid = [("", 0.0); 9];
         grid[..6].copy_from_slice(&box3);
@@ -892,7 +951,7 @@ impl Step {
             get(&p.wavecrest),
             &grid,
             &[sampled, &f.distance, &f.curvature[curvature], &f.cells, wavecrest],
-            slots,
+            emitters,
             "node.whitewater_step.wavecrest",
         );
         atom::<EmissionCount>(
@@ -903,7 +962,7 @@ impl Step {
             emitters,
             "node.whitewater_step.emission",
         );
-        self.emission_scan.encode(enc, emitters.max(1) as usize);
+        self.emission_scan.encode_labelled(enc, emitters.max(1) as usize, EMISSION_SCAN);
         let mut spawn = [("", 0.0); 19];
         spawn[0] = ("capacity", s.capacity as f32);
         spawn[1] = ("emitters", emitters as f32);
@@ -924,7 +983,7 @@ impl Step {
         let params = HandParams { capacity: s.capacity, spawn_slots: s.capacity, emitters, count: s.capacity };
         let pool = &f.pools[self.current];
         self.hand(enc, Hand::LiveFlags, params, self.bound(pool, pool, HandBuffers::default()));
-        self.slot_scan.encode(enc, s.capacity as usize);
+        self.slot_scan.encode_labelled(enc, s.capacity as usize, APPEND_SCAN);
         self.hand(enc, Hand::Append, params, self.bound(pool, pool, HandBuffers::default()));
         let state = HandParams { count: 1, ..params };
         self.hand(enc, Hand::AppendState, state, self.bound(pool, pool, HandBuffers { offsets: Some(offsets), ..HandBuffers::default() }));
@@ -994,31 +1053,50 @@ impl Step {
         self.sort.encode(device, enc, &job, &SORT_LABELS)?;
         let ranges = self.sort.ranges().expect("ranges reserved with the shape");
         let bins = [("bins_x", bx), ("bins_y", by), ("bins_z", bz)];
-        let mut preserve = [("", 0.0); 12];
-        preserve[0] = ("enabled", f32::from(u8::from(frame.preserve_foam)));
-        preserve[1] = ("dt", dt);
-        preserve[2..8].copy_from_slice(&place[..6]);
-        preserve[8] = ("cell_size", s.cell_size);
-        preserve[9] = bins[0];
-        preserve[10] = bins[1];
-        preserve[11] = bins[2];
-        atom::<PreserveFoam>(
-            enc,
-            get(&p.preserve),
-            &preserve,
-            &[b, b, ranges, &f.order, a],
-            cap,
-            "node.whitewater_step.preserve_foam",
-        );
+        // Preserve foam off is the identity (FLIP skips the pass,
+        // diffuseparticlesimulation.cpp:2124), so the aged pool `b` goes
+        // straight to the keep and the compaction lands back in `a`; on, the
+        // preserved pool is `a` and the compaction lands in `b`. Either way
+        // `current` ends on the compacted pool.
+        let (stepped, out) = if frame.preserve_foam {
+            let mut preserve = [("", 0.0); 12];
+            preserve[0] = ("enabled", 1.0);
+            preserve[1] = ("dt", dt);
+            preserve[2..8].copy_from_slice(&place[..6]);
+            preserve[8] = ("cell_size", s.cell_size);
+            preserve[9] = bins[0];
+            preserve[10] = bins[1];
+            preserve[11] = bins[2];
+            atom::<PreserveFoam>(
+                enc,
+                get(&p.preserve),
+                &preserve,
+                &[b, b, ranges, &f.order, a],
+                cap,
+                "node.whitewater_step.preserve_foam",
+            );
+            (a, b)
+        } else {
+            (b, a)
+        };
         let mut keep = [("", 0.0); 12];
         keep[..9].copy_from_slice(&place[..9]);
         keep[9..].copy_from_slice(&bins);
-        atom::<KeepWhitewater>(enc, get(&p.keep), &keep, &[a, a, ranges, &f.order, inputs.solid, &f.scan], cap, "node.whitewater_step.keep");
-        self.slot_scan.encode(enc, cap as usize);
+        atom::<KeepWhitewater>(
+            enc,
+            get(&p.keep),
+            &keep,
+            &[stepped, stepped, ranges, &f.order, inputs.solid, &f.scan],
+            cap,
+            "node.whitewater_step.keep",
+        );
+        self.slot_scan.encode_labelled(enc, cap as usize, KEEP_SCAN);
         let params = HandParams { capacity: cap, spawn_slots: 0, emitters: 0, count: cap };
-        self.hand(enc, Hand::Compact, params, self.bound(a, b, HandBuffers::default()));
-        self.hand(enc, Hand::CompactState, HandParams { count: 1, ..params }, self.bound(a, b, HandBuffers::default()));
-        self.current = 1 - self.current;
+        self.hand(enc, Hand::Compact, params, self.bound(stepped, out, HandBuffers::default()));
+        self.hand(enc, Hand::CompactState, HandParams { count: 1, ..params }, self.bound(stepped, out, HandBuffers::default()));
+        if frame.preserve_foam {
+            self.current = 1 - self.current;
+        }
         Ok(())
     }
 
@@ -1032,7 +1110,7 @@ impl Step {
         let extra = || HandBuffers { populations: Some([foam, bubble, spray]), counts: Some(&slot.counts), ..HandBuffers::default() };
         let params = HandParams { capacity: shape.capacity, spawn_slots: 0, emitters: 0, count: 3 * shape.capacity };
         self.hand(enc, Hand::SplitFlags, params, self.bound(pool, pool, extra()));
-        self.slot_scan.encode(enc, shape.slot_scan_values());
+        self.slot_scan.encode_labelled(enc, shape.slot_scan_values(), SPLIT_SCAN);
         self.hand(enc, Hand::Split, params, self.bound(pool, pool, extra()));
         self.hand(enc, Hand::PublishCounts, HandParams { count: 1, ..params }, self.bound(pool, pool, extra()));
     }
