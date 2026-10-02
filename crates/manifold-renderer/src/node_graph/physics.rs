@@ -2271,20 +2271,29 @@ mod tests {
         }
     }
 
-    /// Mass follows size: the Dam Break obstacle's transform (0.6, 1.16, 0.85)
-    /// on the builtin cube installs a hull whose volume, times the default
-    /// 600 kg/m³, is the body's mass. Box3D reports that mass back.
+    /// Mass follows size: Enable Physics on the Dam Break obstacle wires its
+    /// unit `cube_mesh` source into the body, so the hull is the drawn box at
+    /// scale (0.6, 1.16, 0.85): about 0.59 m³, about 354 kg at 600 kg/m³.
+    /// Box3D reports that mass back.
     #[test]
     fn dam_break_obstacle_mass_is_density_times_hull_volume() {
         let scale = [0.6, 1.16, 0.85];
+        let points: Vec<_> = crate::node_graph::mesh_source::MeshSource::Cube { size: 1.0 }
+            .load_vertices()
+            .unwrap()
+            .into_iter()
+            .map(|vertex| vertex.position)
+            .collect();
         let obstacle = RigidBody {
             transform: Transform { scale, ..Transform::default() },
+            collider: Some(Arc::new(ColliderGeometry {
+                hulls: vec![manifold_physics::cook_hull(&points).unwrap()],
+            })),
             ..RigidBody::default()
         };
         let mut world = PhysicsWorld::new(GRAVITY).unwrap();
         let (handle, volume) = add_body_geometry(&mut world, &obstacle).unwrap();
-        let edge = crate::node_graph::liquid::conformance::CUBE_EDGE_PER_SCALE;
-        let box_volume: f32 = scale.iter().map(|s| s * edge).product();
+        let box_volume: f32 = scale.iter().product();
         assert!((volume - box_volume).abs() < 1e-3 * box_volume, "hull {volume} m³ vs box {box_volume} m³");
         let mass = DEFAULT_DENSITY * volume;
         let reported = 1.0 / world.dynamics(handle).unwrap().inverse_mass;
