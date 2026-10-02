@@ -635,7 +635,11 @@ impl StepState {
                 enc.compute_memory_barrier_buffers();
                 enc.dispatch_compute(&pipes.emit_flags, &read, groups(sites), "gpu_flip.step.emit_flags");
                 enc.compute_memory_barrier_buffers();
-                self.emit_scan.encode(enc, sites as usize);
+                self.emit_scan.encode_labelled(
+                    enc,
+                    sites as usize,
+                    ScanLabels { blocks: "gpu_flip.step.emit_scan.blocks", add: "gpu_flip.step.emit_scan.add" },
+                );
                 enc.dispatch_compute(
                     &pipes.emit_write,
                     &[
