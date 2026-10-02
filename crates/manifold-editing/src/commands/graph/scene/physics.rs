@@ -32,6 +32,10 @@ pub(super) fn append_physics_scene_object(
         SerializedParamValue::Enum { value: 1 },
     );
     body_params.insert(
+        "mass".to_string(),
+        SerializedParamValue::Float { value: 1.0 },
+    );
+    body_params.insert(
         "friction".to_string(),
         SerializedParamValue::Float { value: 0.5 },
     );
@@ -1063,13 +1067,14 @@ pub(super) fn scene_object_physics_plan(
     if scene_physics_binding(def, &parts).is_ok() {
         return Err("Selected object already has standard physics enabled".into());
     }
-    if let Some(group_id) = parts.group_id {
-        let assignments = scene_fluid_role_assignments(def, group_id)?;
-        if !assignments.is_empty() {
-            return Err(
-                "Remove this object's Fluid Role before enabling Physics; physics bodies interact with water automatically".into(),
-            );
-        }
+    let has_fluid_role = match parts.group_id {
+        Some(group_id) => !scene_fluid_role_assignments(def, group_id)?.is_empty(),
+        None => fluid::loose_scene_object_has_fluid_roles(def, parts.object_id)?,
+    };
+    if has_fluid_role {
+        return Err(
+            "Remove this object's Fluid Role before enabling Physics; physics bodies interact with water automatically".into(),
+        );
     }
     if parts
         .compound_sources
@@ -1093,6 +1098,7 @@ pub(super) fn scene_object_physics_plan(
         );
     }
     body_params.insert("motion".to_string(), SerializedParamValue::Enum { value: 1 });
+    body_params.insert("mass".to_string(), SerializedParamValue::Float { value: 1.0 });
     body_params.insert("friction".to_string(), SerializedParamValue::Float { value: 0.5 });
     body_params.insert("bounce".to_string(), SerializedParamValue::Float { value: 0.15 });
 

@@ -96,32 +96,120 @@ struct StepResult {
     artifact: Option<String>,
 }
 
+/// How one flow ended. `Done.code` is the exit code a solo `--script` process
+/// gives (0 all steps passed, 1 a step failed, 2 setup error) and `tail` is
+/// the last line it wrote to stderr — the two things `run_ui_flows.py`
+/// reports, so a batched flow reports exactly what a solo one would.
+enum FlowOutcome {
+    Done { code: i32, tail: String },
+    /// Batch only: this scene would build against a preset registry a fresh
+    /// process never has (see [`run_batch`]). Nothing was written.
+    Requeue(String),
+}
+
+fn setup_error(message: String) -> FlowOutcome {
+    eprintln!("{message}");
+    let tail = message.lines().last().unwrap_or_default().to_string();
+    FlowOutcome::Done { code: 2, tail }
+}
+
 /// Run `script_path`'s `AutomationAction` array against `scene`. Exits the
 /// process: 0 if every step succeeded, 1 otherwise (D6/D10 — no partial
-/// pass). `LOGICAL_W`/`LOGICAL_H`/`SCALE`/`zoom_ppb` mirror
-/// `render_ui_scene`'s own fixed values so a script's rects agree with the
-/// plain `--dump`/`--interact` runs of the same scene.
+/// pass), 2 on a setup error.
 pub fn run(scene: &str, script_path: &str) {
+    let mut device = None;
+    match run_flow(scene, script_path, &mut device, None) {
+        FlowOutcome::Done { code: 0, .. } => {}
+        FlowOutcome::Done { code, .. } => std::process::exit(code),
+        FlowOutcome::Requeue(_) => unreachable!("requeue needs a batch context"),
+    }
+}
+
+/// Prefix of `run_batch`'s two stdout records per flow (`begin`, then the
+/// result); everything else on stdout is the flows' own output.
+const BATCH_RECORD: &str = "@@ui-snap-batch@@";
+
+/// `ui-snap batch <scene> <script> [<scene> <script> ...]`: run many flows in
+/// one process, sharing only the `GpuDevice` (and with it the one GPU-lock
+/// acquisition and process start-up). Every flow still builds its own
+/// fixture, `UIRoot`, `UIRenderer`, cache and offscreen exactly as a solo run
+/// does, and writes the same artifacts.
+///
+/// Each flow prints `@@ui-snap-batch@@ {"begin": index}` on stdout, then one
+/// result record carrying the request index and either the solo-equivalent
+/// `code`/`tail`/`seconds` or `rerun` with a reason. A flow that panics gets
+/// a `rerun` record and ends the batch (exit 101) so nothing runs on top of
+/// half-torn state; a `begin` with no result (the process died) is the
+/// caller's to rerun solo too.
+///
+/// The one process-global input a fixture reads is the preset registry.
+/// Scenes that install a project preset overlay replace it wholesale, so they
+/// see the same registry whatever ran before; every other scene must see the
+/// registry a fresh process starts with. So installing scenes run last
+/// ([`super::fixtures::installs_preset_overlay`]), and a non-installing scene
+/// that finds the catalog generation already moved gets `rerun` instead of
+/// running against the wrong registry — a stale list costs speed, never
+/// correctness.
+pub fn run_batch(flows: &[(String, String)]) {
+    let mut order: Vec<usize> = (0..flows.len()).collect();
+    order.sort_by_key(|&i| super::fixtures::installs_preset_overlay(&flows[i].0));
+    let fresh_generation = manifold_renderer::preset_loader::catalog_generation();
+    let mut device = None;
+    for index in order {
+        let (scene, script) = &flows[index];
+        println!("{BATCH_RECORD} {}", serde_json::json!({"begin": index}));
+        let start = std::time::Instant::now();
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_flow(scene, script, &mut device, Some(fresh_generation))
+        }));
+        let record = match &outcome {
+            Ok(FlowOutcome::Done { code, tail }) => serde_json::json!({
+                "index": index, "code": code, "tail": tail,
+                "seconds": start.elapsed().as_secs_f64(),
+            }),
+            Ok(FlowOutcome::Requeue(reason)) => serde_json::json!({"index": index, "rerun": reason}),
+            Err(_) => serde_json::json!({"index": index, "rerun": "panicked"}),
+        };
+        println!("{BATCH_RECORD} {record}");
+        if outcome.is_err() {
+            std::process::exit(101);
+        }
+    }
+}
+
+/// One flow, solo or batched. `device` is created on first use, after the
+/// fixture builds (where a solo run always created it); `batch_generation`
+/// is the catalog generation a fresh process had, `None` when solo.
+fn run_flow(
+    scene: &str,
+    script_path: &str,
+    device: &mut Option<GpuDevice>,
+    batch_generation: Option<u64>,
+) -> FlowOutcome {
+    let generation_before = manifold_renderer::preset_loader::catalog_generation();
     let Some(mut data) = super::fixtures::build(scene) else {
-        eprintln!(
+        return setup_error(format!(
             "ui-snap --script: unknown scene '{scene}' (known: timeline, states, inspector, dmxcard, \
              paramsteps, scrollshrink, hairlineclips, automation, selectionclips, gltfscene, \
              gltfanimscene, envmod, rtquality)"
-        );
-        std::process::exit(2);
+        ));
     };
+    if let Some(fresh) = batch_generation {
+        let installed = manifold_renderer::preset_loader::catalog_generation() != generation_before;
+        if !installed && generation_before != fresh {
+            return FlowOutcome::Requeue(format!(
+                "scene '{scene}' built against a preset registry an earlier flow changed"
+            ));
+        }
+    }
     let script_text = match std::fs::read_to_string(script_path) {
         Ok(t) => t,
-        Err(e) => {
-            eprintln!("ui-snap --script: can't read '{script_path}': {e}");
-            std::process::exit(2);
-        }
+        Err(e) => return setup_error(format!("ui-snap --script: can't read '{script_path}': {e}")),
     };
     let actions: Vec<AutomationAction> = match serde_json::from_str(&script_text) {
         Ok(a) => a,
         Err(e) => {
-            eprintln!("ui-snap --script: '{script_path}' doesn't parse: {e}");
-            std::process::exit(2);
+            return setup_error(format!("ui-snap --script: '{script_path}' doesn't parse: {e}"))
         }
     };
 
@@ -188,9 +276,10 @@ pub fn run(scene: &str, script_path: &str) {
     // reads it back (see `Runner::write_png`).
     let tex_w = (super::LOGICAL_W * super::SCALE) as u32;
     let tex_h = (super::LOGICAL_H * super::SCALE) as u32;
-    let mut render = RenderState::new(tex_w, tex_h);
+    let device = device.get_or_insert_with(|| GpuDevice::new_queued("ui-snap script"));
+    let mut render = RenderState::new(device, tex_w, tex_h);
     composite_frame(
-        &render.device,
+        render.device,
         &mut render.ui_renderer,
         &mut render.cache,
         &mut ui,
@@ -244,9 +333,12 @@ pub fn run(scene: &str, script_path: &str) {
         println!("  [{:>2}] {:<5} {} — {}", r.index, r.status, r.action, r.detail);
     }
 
-    if !ok {
-        eprintln!("ui-snap --script: FAILED — see {}", result_path.display());
-        std::process::exit(1);
+    if ok {
+        FlowOutcome::Done { code: 0, tail: String::new() }
+    } else {
+        let tail = format!("ui-snap --script: FAILED — see {}", result_path.display());
+        eprintln!("{tail}");
+        FlowOutcome::Done { code: 1, tail }
     }
 }
 
@@ -257,10 +349,10 @@ pub fn run(scene: &str, script_path: &str) {
 /// exists to kill). Kept OUT of `Runner` itself (rather than a field on it)
 /// because `Runner::new()` is also used standalone by [`click_by_text`],
 /// which never renders a pixel — building a `GpuDevice`/atlas there would be
-/// pure waste. `pub fn run` constructs this once and threads it through
-/// every `Runner::step` call.
-struct RenderState {
-    device: GpuDevice,
+/// pure waste. `run_flow` constructs this once per flow and threads it
+/// through every `Runner::step` call; only the device outlives the flow.
+struct RenderState<'d> {
+    device: &'d GpuDevice,
     ui_renderer: UIRenderer,
     cache: UICacheManager,
     composite: CompositeResources,
@@ -268,17 +360,16 @@ struct RenderState {
     tex_h: u32,
 }
 
-impl RenderState {
+impl<'d> RenderState<'d> {
     /// D8: scale factor 1.0 always, at the fixture's logical size (matches
     /// every other headless caller of the seam).
-    fn new(tex_w: u32, tex_h: u32) -> Self {
-        let device = GpuDevice::new_queued("ui-snap script");
-        let ui_renderer = UIRenderer::new(&device, manifold_renderer::presentation::UI_FORMAT);
+    fn new(device: &'d GpuDevice, tex_w: u32, tex_h: u32) -> Self {
+        let ui_renderer = UIRenderer::new(device, manifold_renderer::presentation::UI_FORMAT);
         let mut cache = UICacheManager::new(manifold_renderer::presentation::UI_FORMAT, 1.0);
         cache.set_scale_factor(1.0);
-        cache.ensure_atlas(&device, tex_w, tex_h);
+        cache.ensure_atlas(device, tex_w, tex_h);
         cache.invalidate_all();
-        let composite = CompositeResources::new(&device, tex_w, tex_h);
+        let composite = CompositeResources::new(device, tex_w, tex_h);
         Self { device, ui_renderer, cache, composite, tex_w, tex_h }
     }
 
@@ -287,7 +378,7 @@ impl RenderState {
     /// separately (`composite_frame`, called from `Runner::advance_frame` /
     /// the `Step` loop).
     fn readback_linear(&self) -> Vec<u8> {
-        super::render::readback(&self.device, &self.composite.offscreen, self.tex_w, self.tex_h)
+        super::render::readback(self.device, &self.composite.offscreen, self.tex_w, self.tex_h)
     }
 }
 
@@ -457,7 +548,7 @@ impl Runner {
                     // never reaches the widget tree a `Dump`/`Snapshot` reads.
                     super::reconcile_state(ui, data);
                     composite_frame(
-                        &render.device,
+                        render.device,
                         &mut render.ui_renderer,
                         &mut render.cache,
                         ui,
@@ -1389,7 +1480,7 @@ impl Runner {
         self.scroll_dirty.visual = false;
         super::reconcile_state(ui, data);
         composite_frame(
-            &render.device,
+            render.device,
             &mut render.ui_renderer,
             &mut render.cache,
             ui,
@@ -1571,9 +1662,9 @@ impl Runner {
         // LED composite preview band (LED_STRIPS_DESIGN MVP-P4): a real
         // panel-bitmap instance so the band's quad paints in flow snapshots
         // too — same helper the base render path uses.
-        let mut bitmap_gpu = super::render::make_panel_bitmap_gpu(&render.device, ui);
+        let mut bitmap_gpu = super::render::make_panel_bitmap_gpu(render.device, ui);
         crate::ui_frame::render_main_ui_passes(
-            &render.device,
+            render.device,
             &mut render.ui_renderer,
             ui,
             &render.composite.offscreen,

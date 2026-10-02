@@ -186,7 +186,7 @@ mod geometry_tests {
         initial.bodies[0].as_mut().unwrap().transform.pos[0] += 3.0;
         initial.bodies[0].as_mut().unwrap().transform.rot_euler[1] += 0.5;
         initial.bodies[0].as_mut().unwrap().enabled = false;
-        initial.bodies[0].as_mut().unwrap().density += 2.0;
+        initial.bodies[0].as_mut().unwrap().mass += 2.0;
         initial.bodies[0].as_mut().unwrap().kind = 2;
         initial.gravity[0] += 1.0;
         initial.copy_count = 3.0;

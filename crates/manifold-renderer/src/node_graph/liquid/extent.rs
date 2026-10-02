@@ -45,10 +45,10 @@ use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::ports::PortType;
 use crate::node_graph::primitives::dot_products::MAX_ROWS;
 use crate::node_graph::liquid::coupling::REACTION_FLOATS;
-use crate::node_graph::primitives::gpu_flip_bodies::HELD_BYTES as BODY_PASS_BYTES;
+use crate::node_graph::primitives::gpu_flip_bodies::held_bytes as body_pass_bytes;
 use crate::node_graph::primitives::face_sample_component::axis_param;
 use crate::node_graph::primitives::fluid_surface::{boundary_collisions, fluid_settings};
-use crate::node_graph::primitives::liquid_fill::{fill_of, filled_sites};
+use crate::node_graph::primitives::liquid_fill::{fill_of, filled_sites, pool_slots};
 use crate::node_graph::primitives::liquid_stats::{LIQUID_STATS_WORDS, partial_bytes};
 use crate::node_graph::primitives::matter_domain::{fill_region, matter_geometry};
 use crate::node_graph::primitives::matter_face_component::matter_cells;
@@ -57,7 +57,10 @@ use crate::node_graph::primitives::particle_volume::{refined_nodes, volume_scale
 use crate::node_graph::primitives::sort_particles_into_cells::range_storage_bytes;
 use crate::node_graph::primitives::gpu_flip_domain::gpu_flip_geometry;
 use crate::node_graph::primitives::gpu_flip_pressure::{lattice_refusal, scratch_bytes as pressure_scratch_bytes};
-use crate::node_graph::primitives::gpu_flip_step::{face_bytes, scratch_bytes as step_scratch_bytes};
+use crate::node_graph::fluid::TICK;
+use crate::node_graph::primitives::gpu_flip_step::{
+    DEFAULT_TOP_SPEED, FACE_VALID_LAYERS, band_layers, face_bytes, ring_max, scratch_bytes as step_scratch_bytes, travel_cells,
+};
 use crate::node_graph::primitives::volume_surface_mesh::start_capacity;
 use crate::node_graph::resource_allocation::plan_array_allocations;
 use crate::node_graph::primitives::matter_face_component::MATTER_FACE_VALID_LAYERS;
@@ -1081,6 +1084,7 @@ fn gpu_flip_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.publish("body_count", 0.0);
     x.publish("body_rows", 0.0);
     x.publish("dynamic_bodies", 0.0);
+    x.publish("region_count", 0.0);
     // The walk takes a live frame's most force lattices and an impulse tick,
     // so the field reads are checked.
     let field = FieldFrame { lattice: geometry.field_lattice(), force_lattices: MAX_LIVE_TICKS, impulse_tick: Some(0) };
@@ -1090,6 +1094,7 @@ fn gpu_flip_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     }
     for (port, bytes) in [
         ("bodies", size_of::<LiquidBody>() as u64),
+        ("regions", size_of::<LiquidBody>() as u64),
         ("shapes", size_of::<LiquidShape>() as u64),
         ("atlas", 4),
         ("reaction", (MAX_FLUID_ROLES * REACTION_FLOATS * 4) as u64),
@@ -1108,10 +1113,10 @@ fn gpu_flip_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 fn liquid_fill(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let cells = x.lattice()?.cells();
     let (pool, sites) = fill_of(|name, default| x.scalar(name, default));
-    let placed = filled_sites(cells, pool, sites);
+    let placed = pool_slots(filled_sites(cells, pool, sites), x.scalar("particle_capacity", 0.0));
     if placed > u64::from(EXACT_F32_COUNT) {
         return Err(Verdict::Refused(format!(
-            "Liquid Fill: the fill places {placed} particles, more than the {EXACT_F32_COUNT} a particle count carries exactly"
+            "Liquid Fill: the pool holds {placed} particles, more than the {EXACT_F32_COUNT} a particle count carries exactly"
         )));
     }
     x.publish("count", placed as f32);
@@ -1211,7 +1216,15 @@ fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     search_fits(x, cells, ranges)?;
     // The sort's ranges, cell counts, rank and slot scratch.
     x.hold(ranges + bin_total(cells) * 4 + 2 * slots.max(1) * 4);
-    x.hold(faces + pressure_scratch_bytes(cells) + step_scratch_bytes(cells, slots));
+    // The tile table's size follows the band the step runs with (ring_max),
+    // read the way the step reads it; an unwired or unresolved scalar is the
+    // default.
+    let steps = x.scalar("steps", 1.0).round().clamp(1.0, 64.0);
+    let top_speed = x.scalar("top_speed", DEFAULT_TOP_SPEED);
+    let top_speed = if top_speed.is_finite() && top_speed > 0.0 { top_speed } else { DEFAULT_TOP_SPEED };
+    let travel = travel_cells(top_speed, (TICK / f64::from(steps)) as f32, x.lattice()?.cell_size());
+    let ring = ring_max(band_layers(travel).max(FACE_VALID_LAYERS));
+    x.hold(faces + pressure_scratch_bytes(cells) + step_scratch_bytes(cells, slots, ring));
     field_reads(x)?;
     let rows = body_rows(x)?;
     x.covers_if_bound("bodies", rows * size_of::<LiquidBody>() as u64)?;
@@ -1220,7 +1233,7 @@ fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     if x.bytes("reaction").is_some() {
         let bodies = x.scalar("body_count", 0.0).round().clamp(0.0, MAX_FLUID_ROLES as f32) as u64;
         x.covers("reaction", bodies * REACTION_FLOATS as u64 * 4)?;
-        x.hold(BODY_PASS_BYTES);
+        x.hold(body_pass_bytes(cells, bodies as u32));
     }
     // It moves min(particles, out) records: every one.
     x.covers("out", slots * PARTICLE)

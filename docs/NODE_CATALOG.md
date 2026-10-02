@@ -235,7 +235,7 @@ _Generated from the node registry. Do not hand-edit. 363 nodes registered, group
 | Render Scene | `node.render_scene` | Filter | Draws several 3D objects into one scene so the nearer ones correctly block the farther ones, each with its own position and material, lit by any number of shar… |
 | Repeat Outline (rings) | `node.repeat_outline` | Filter | Stacks scaled copies of an outline into concentric rings, turning one shape into a set of nested rings. |
 | Revolve Curve | `node.revolve_curve` | Source | Spins a 2D profile curve around a vertical axis to build a solid of revolution — a lathe. The classic way to build vases, columns, and bells from a cross-secti… |
-| Rigid Body | `node.rigid_body` | Source | Give an object density, friction and bounce, then connect it to a Physics World. |
+| Rigid Body | `node.rigid_body` | Source | Give an object mass, friction and bounce, then connect it to a Physics World. |
 | Ripple | `node.ripple_mesh` | Filter | Pushes every vertex along its normal by a sine wave indexed by position along an axis, making a mesh ripple like water or sheet metal. |
 | Rotate 3D | `node.rotate_3d` | Filter | Spins a 3D mesh around the X, Y, and Z axes. Wire an LFO or a beat into the angles to keep it turning. |
 | Rotate 4D | `node.rotate_4d` | Filter | Spins 4D geometry through its rotation planes, the move that makes a tesseract appear to turn inside out. |
@@ -585,7 +585,7 @@ _Generated from the node registry. Do not hand-edit. 363 nodes registered, group
 | `WaterBasin` | Water Basin (CPU) | generator | Sim | 1069 |
 | `WaterDamBreak` | Water — Dam Break | generator | Sim | 2308 |
 | `WaterDamBreakGpu` | Water — Dam Break (GPU Surface) | generator | Sim | 2309 |
-| `WaterDamBreakGpuFlip` | Water — Dam Break (GPU FLIP) | generator | Sim | 2293 |
+| `WaterDamBreakGpuFlip` | Water — Dam Break (GPU FLIP) | generator | Sim | 2295 |
 | `WaterDamBreakMatter` | Water — Dam Break (Live GPU) | generator | Sim | 1390 |
 | `WaterFloatingBoxMatter` | Water — Floating Box (Live GPU) | generator | Sim | 1383 |
 | `WaterStillPoolMatter` | Water — Still Pool (Live GPU) | generator | Sim | 1058 |

@@ -39,6 +39,8 @@ def tooling_checks(repo, paths):
         "scripts/test_rt_noise_gate.py": {"scripts/rt_noise_gate.py", "scripts/test_rt_noise_gate.py", "scripts/rt_noise_baseline.json", "scripts/trunk_health.py"},
         "scripts/test_codex_checks.py": {"scripts/codex_checks.py", "scripts/test_codex_checks.py", "scripts/landing_gate.py", "scripts/run_ui_flows.py", "scripts/gpu_proofs_gate.py", "scripts/gpu_scope.py", "scripts/ui-flows/manifest.json"},
         "scripts/test_landing_gate.py": {"scripts/landing_gate.py", "scripts/gpu_scope.py", "scripts/land_branch.py", "scripts/test_landing_gate.py", "scripts/trunk_health.py"},
+        "scripts/test_run_ui_flows.py": {"scripts/run_ui_flows.py", "scripts/test_run_ui_flows.py", "scripts/gpu_queue.py"},
+        "scripts/test_ui_flows_batch_proof.py": {"scripts/ui_flows_batch_proof.py", "scripts/test_ui_flows_batch_proof.py", "scripts/run_ui_flows.py", "scripts/test_run_ui_flows.py"},
         "scripts/test_gpu_proofs_gate.py": {"scripts/gpu_proofs_gate.py", "scripts/test_gpu_proofs_gate.py", "scripts/gpu_scope.py"},
         "scripts/test_gpu_scope.py": {"scripts/gpu_scope.py", "scripts/test_gpu_scope.py"},
         "scripts/test_codex_prepare.py": {"scripts/codex_prepare.py", "scripts/codex_subsystems.json", "scripts/test_codex_prepare.py", "scripts/codex_checks.py"},

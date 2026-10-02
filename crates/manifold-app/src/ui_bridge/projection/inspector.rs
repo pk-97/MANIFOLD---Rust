@@ -705,6 +705,12 @@ pub fn sync_inspector_data(
                                                         def, vm.scene_root_node_id, *index as u32,
                                                     ).is_ok()
                                                 }),
+                                                lattice: known.fluid_domain.map(|layout| {
+                                                    manifold_ui::panels::scene_setup_panel::LatticeReadout {
+                                                        cells: layout.cells,
+                                                        cell_size_m: layout.cell_size as f32,
+                                                    }
+                                                }),
                                             },
                                         ))
                                     }

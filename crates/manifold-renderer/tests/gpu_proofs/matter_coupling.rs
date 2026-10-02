@@ -188,11 +188,9 @@ fn preset(scene: &Scene) -> String {
             params[format!("scale_{axis}")] = float(scale);
         }
     }
-    // The body takes density; the cube's volume is edge³.
-    let density = scene.mass / scene.edge.powi(3);
-    node_mut(nodes, 72)["params"]["density"] = float(density);
+    node_mut(nodes, 72)["params"]["mass"] = float(scene.mass);
     // Card params own their bound node params, so the scene sets them there.
-    for (id, value) in [("resolution", scene.resolution as f64), ("box_density", f64::from(density))] {
+    for (id, value) in [("resolution", scene.resolution as f64), ("box_mass", f64::from(scene.mass))] {
         for list in ["params", "bindings"] {
             for card in doc["presetMetadata"][list].as_array_mut().expect("card list").iter_mut() {
                 if card["id"] == id {

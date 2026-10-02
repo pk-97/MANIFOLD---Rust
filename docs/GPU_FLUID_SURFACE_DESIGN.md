@@ -912,12 +912,16 @@ More smoothing passes flatten only the shortest bumps and thicken the liquid; a 
 covariance makes the anisotropy noisier, not calmer.
 
 **Shape.** `node.particle_volume` writes `min(band, min over blobs of a·(|G·(x − c)| − 1))`,
-where `a` is the blob's longest axis and `band` is a tenth of a bin: the distance to the
+where `a` is the blob's longest axis and `band` is a third of a bin: the distance to the
 nearest blob ellipsoid (exact for spheres, scaled by the long axis for stretched blobs),
-negative inside, capped a tenth of a bin outside. `threshold` goes. D15 stands: solid
+negative inside, capped a third of a bin outside. `threshold` goes. D15 stands: solid
 nodes are `max(φ, 0)`, border nodes are `band`. The cap is exact because of one contract
-between the two atoms: `node.shape_particle_blobs` caps a blob's reach at `0.9·bin −
+between the two atoms: `node.shape_particle_blobs` caps a blob's reach at `2/3·bin −
 |centre − particle|`, so any blob a node's ±1-bin search misses is at least `band` away.
+Band is half the reach, the FLIP Fluids mesher's ratio (its field is exact out to 1.5
+radii), and it exceeds the lattice step at resolution scale ≤ 2, so every marching-cubes
+crossing reads an exact field. (2026-10-02: was a tenth of a bin and 0.9·bin; below the
+lattice step the crossings read a clipped field, which was the blobby look.)
 The volume value test checks it against a brute force over every blob. D2 stands: the
 kernels are still Yu & Turk's, and FLIP's sphere union is this atom fed isotropic blobs
 (stretch 1, smoothing 0, isolated scale 1) — a look choice for Peter, not a code path.
@@ -972,7 +976,7 @@ defaults of 2026-09-28 (the Vert64ResVortex and Vert80Res exports):
 |---|---|---|---|
 | Simulation resolution | 64 (one export at 80) | — | same particles |
 | Mesh lattice | Detail 1: engine subdivision 2, dx/2 | subdivision 1, dx | Detail 1: ×3, dx/3 |
-| Particle radius | 2.2 × marker radius (0.68 dx), spheres | 3.0 × | 2.2 ×, Yu & Turk ellipsoids, reach ≤ 0.9 bin |
+| Particle radius | 2.2 × marker radius (0.68 dx), spheres | 3.0 × | 2.2 ×, Yu & Turk ellipsoids, reach ≤ 2/3 bin |
 | Level set | distance to the sphere union | same | distance to the nearest ellipsoid (P6e) |
 | Field smoothing | none | none | [1, 2, 1] × 2 passes per axis |
 | Mesh smoothing | umbrella Laplacian 0.35 × 2 on the welded mesh | 0.5 × 2 | none: a triangle soup has no shared vertices |

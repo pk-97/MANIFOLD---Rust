@@ -1081,6 +1081,11 @@ impl ScenePanel {
                 }
             }
         }
+        if let Some(lattice) = &row.lattice {
+            tree.add_label(Some(self.content_parent), inner_x, next_cy,
+                inner_w, ROW_H, &lattice.line(), label_style());
+            next_cy += ROW_H;
+        }
         self.build_fluid_role_action(tree, inner_x, inner_w, next_cy + ROW_GAP, row)
     }
 

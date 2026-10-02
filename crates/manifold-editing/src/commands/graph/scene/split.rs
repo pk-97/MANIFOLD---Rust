@@ -165,8 +165,7 @@ impl Command for SplitSceneObjectCommand {
             Some(SerializedParamValue::Int { value }) => *value as f32,
             _ => fallback,
         };
-        // Pieces keep the parent's density, so their masses sum to the parent's.
-        let density = existing_body.and_then(|node| node.params.get("density")).cloned();
+        let total_mass = body_float("mass", 1.0);
         let friction = body_float("friction", 0.5);
         let bounce = body_float("bounce", 0.15);
         let body_params = match scene_body_params(&parts.source, def) {
@@ -175,9 +174,12 @@ impl Command for SplitSceneObjectCommand {
                     "motion".to_string(),
                     SerializedParamValue::Enum { value: 1 },
                 );
-                if let Some(density) = density.clone() {
-                    params.insert("density".to_string(), density);
-                }
+                params.insert(
+                    "mass".to_string(),
+                    SerializedParamValue::Float {
+                        value: total_mass / 8.0,
+                    },
+                );
                 params.insert(
                     "friction".to_string(),
                     SerializedParamValue::Float { value: friction },

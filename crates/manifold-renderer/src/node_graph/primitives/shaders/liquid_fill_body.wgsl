@@ -6,7 +6,8 @@
 // [box_x0, x1) × [max(box_y0, pool), y1) × [box_z0, z1). Each particle is
 // jittered by up to jitter / 4 cells each way by a hash of (seed, slot) and
 // starts at rest; the radius is that of a sphere of an eighth of a cell;
-// id = slot + 1. Slots past the fill are unused (all zero). The lattice
+// id = slot + 1. Slots past the fill, up to particle_capacity, start dead
+// (all zero) for sources to emit into. The lattice
 // params are the padded lattice (liquid::lattice, 3 nodes of padding a side):
 // the authored box starts 3 cells in and has nodes − 7 cells per axis. A
 // site inside an enabled body at its pose when the epoch starts (rows
@@ -70,6 +71,7 @@ fn body(
     seed: i32,
     body_count: i32,
     epoch: i32,
+    particle_capacity: i32,
 ) -> Element3 {
     var out = Element3(vec4<f32>(0.0), vec3<f32>(0.0), 0u);
     let n = 2u * vec3<u32>(max(vec3<f32>(nodes_x, nodes_y, nodes_z) - vec3<f32>(7.0), vec3<f32>(0.0)));

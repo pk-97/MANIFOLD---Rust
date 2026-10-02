@@ -10,7 +10,7 @@
   {"Step":{"frames":30}},
   "Snapshot",
   {"Key":{"key":"Z","modifiers":{"command":true}}},
-  {"Assert":{"selector":{"Query":{"name":"param_row.24_pos_x.value"}},"check":{"TextEquals":"0.00"}}},
+  {"Assert":{"selector":{"Query":{"name":"param_row.24_pos_x.value"}},"check":{"TextEquals":"-1.25"}}},
   {"Key":{"key":"Z","modifiers":{"command":true,"shift":true}}},
   {"Assert":{"selector":{"Query":{"name":"param_row.24_pos_x.value"}},"check":{"TextEquals":"0.50"}}},
   {"Step":{"frames":30}},

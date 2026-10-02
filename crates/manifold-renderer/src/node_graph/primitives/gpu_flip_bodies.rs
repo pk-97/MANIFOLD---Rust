@@ -10,11 +10,13 @@
 //!   operator on the search direction: its pressure impulse per body, then
 //!   (1/h)·G·M⁻¹·impulse added to s;
 //! - after the projection, the pressure's impulse into the reaction and its
-//!   velocity change into the solid velocity.
+//!   velocity change into the solid velocity, then the constraint's friction
+//!   impulse into the reaction.
 //!
-//! The pressure is a body's only reaction, as in the engine
-//! (rigidfluidcoupling.cpp): the constraint's friction acts on the water
-//! alone. An explicit friction reaction diverges once ρ·h·f·A_wet/m passes 2.
+//! The impulse and the body product run over the pressure solve's fine
+//! active tiles (docs/GPU_FLIP_SPARSE_BLOCKS_DESIGN.md D-9): the solver's
+//! level-0 tile buffers come in with every call. The partials are two a
+//! tile per body, so they grow with the lattice and the body count.
 //!
 //! The reaction holds 8 floats per body (linear then angular impulse, N·s and
 //! N·m·s about the posed centre of mass), added up over a tick's steps.
@@ -26,21 +28,17 @@ pub(crate) use crate::node_graph::liquid::coupling::REACTION_FLOATS;
 
 const SHADER: &str = include_str!("shaders/gpu_flip_bodies.wgsl");
 
-/// Workgroups per body in a partial sum, at most.
-const MAX_GROUPS: u32 = 64;
-/// Face records one partial thread covers before another group is added.
-const RECORDS_PER_THREAD: u64 = 16;
 const THREADS: u64 = 256;
 const SUM_FLOATS: u64 = 16;
-// Owner codes hold a body index in a byte per axis, and the finalize pass
-// covers every body in one workgroup of 64.
-const _: () = assert!(MAX_FLUID_ROLES <= 64);
-const PARTIAL_BYTES: u64 = MAX_FLUID_ROLES as u64 * MAX_GROUPS as u64 * 8 * 4;
+/// Floats one partial slot holds (six used).
+const PARTIAL_FLOATS: u64 = 8;
+// Owner codes hold a body index in a byte per axis.
+const _: () = assert!(MAX_FLUID_ROLES <= 255);
 const SUM_BYTES: u64 = MAX_FLUID_ROLES as u64 * SUM_FLOATS * 4;
-/// Device bytes the passes hold once a step has dynamic bodies, for the
-/// extent proofs.
-#[cfg(any(test, feature = "gpu-proofs"))]
-pub(crate) const HELD_BYTES: u64 = PARTIAL_BYTES + SUM_BYTES;
+
+/// The pressure solver's fine-level tile buffers the passes read their
+/// cells and partial slots through: the gate triples, the flags, the lists.
+pub(crate) type Tiles<'a> = [&'a GpuBuffer; 3];
 
 /// The bodies a step couples into its solve, and what their passes read.
 pub(crate) struct Bodies<'a> {
@@ -64,17 +62,17 @@ pub(crate) struct Bodies<'a> {
 #[derive(Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)]
 struct Params {
     n: [u32; 3],
-    groups: u32,
+    slots: u32,
     lattice_min: [f32; 3],
     cell_size: f32,
     density: f32,
     tick_seconds: f32,
     first: u32,
     body_count: u32,
+    mode: u32,
     accumulate: u32,
     _pad0: u32,
     _pad1: u32,
-    _pad2: u32,
 }
 
 struct Pipelines {
@@ -82,6 +80,8 @@ struct Pipelines {
     finalize: GpuComputePipeline,
     product: GpuComputePipeline,
     velocity: GpuComputePipeline,
+    #[cfg(all(test, feature = "gpu-proofs"))]
+    poison: GpuComputePipeline,
 }
 
 /// The passes' pipelines and their partial sums and per-body sums.
@@ -96,13 +96,22 @@ fn records(n: [u32; 3]) -> u64 {
     n.iter().map(|&side| u64::from(side) + 1).product()
 }
 
-fn cells(n: [u32; 3]) -> u64 {
-    n.iter().map(|&side| u64::from(side)).product()
+/// Partial slots per body: two a fine tile (gpu_flip_pressure.rs
+/// `partial_count`).
+fn partial_slots(n: [u32; 3]) -> u64 {
+    2 * n.iter().map(|&side| u64::from(side.div_ceil(super::gpu_flip_step::TILE))).product::<u64>()
 }
 
-/// Workgroups per body for a face grid of `records`.
-fn partial_groups(records: u64) -> u32 {
-    records.div_ceil(THREADS * RECORDS_PER_THREAD).clamp(1, u64::from(MAX_GROUPS)) as u32
+/// Bytes the partials hold for `count` bodies on lattice `n`.
+fn partial_bytes(n: [u32; 3], count: u32) -> u64 {
+    u64::from(count.max(1)) * partial_slots(n) * PARTIAL_FLOATS * 4
+}
+
+/// Device bytes the passes hold once a step has `count` dynamic bodies on
+/// lattice `n`, for the extent proof (gated as `liquid::extent` is).
+#[cfg(any(test, feature = "gpu-proofs"))]
+pub(crate) fn held_bytes(n: [u32; 3], count: u32) -> u64 {
+    partial_bytes(n, count) + SUM_BYTES
 }
 
 fn buffer(binding: u32, buffer: &GpuBuffer) -> GpuBinding<'_> {
@@ -113,6 +122,12 @@ fn groups(threads: u64) -> [u32; 3] {
     [threads.div_ceil(THREADS).max(1) as u32, 1, 1]
 }
 
+/// Every fine tile's two workgroups: what a listed dispatch is launched
+/// with; the kernels return whole workgroups past the live count.
+fn tile_groups(n: [u32; 3]) -> u32 {
+    partial_slots(n) as u32
+}
+
 impl BodyPasses {
     fn pipelines(device: &GpuDevice) -> Pipelines {
         let pipe = |entry: &str, label: &str| device.create_compute_pipeline(SHADER, entry, label);
@@ -121,6 +136,8 @@ impl BodyPasses {
             finalize: pipe("impulse_finalize", "gpu_flip.bodies.finalize"),
             product: pipe("body_product", "gpu_flip.bodies.product"),
             velocity: pipe("velocity_change", "gpu_flip.bodies.velocity_change"),
+            #[cfg(all(test, feature = "gpu-proofs"))]
+            poison: pipe("poison_partials", "gpu_flip.bodies.poison"),
         }
     }
 
@@ -131,13 +148,14 @@ impl BodyPasses {
         }
     }
 
-    /// Allocate the sums once; the partials hold every body at the most
-    /// groups, so no lattice reallocates them. The pipelines come from
-    /// `prepare_pipelines` at install.
-    pub(crate) fn prepare(&mut self, device: &GpuDevice) -> Result<(), String> {
+    /// Allocate the sums once and the partials for `count` bodies on
+    /// lattice `n`, growing them when a larger lattice or more bodies
+    /// arrive. The pipelines come from `prepare_pipelines` at install.
+    pub(crate) fn prepare(&mut self, device: &GpuDevice, n: [u32; 3], count: u32) -> Result<(), String> {
         assert!(self.pipelines.is_some(), "body pipelines built by prepare_pipelines at install");
-        if self.partials.is_none() {
-            self.partials = Some(device.try_create_buffer(PARTIAL_BYTES)?);
+        let need = partial_bytes(n, count);
+        if self.partials.as_ref().is_none_or(|p| p.size < need) {
+            self.partials = Some(device.try_create_buffer(need)?);
         }
         if self.sums.is_none() {
             // Shared so the value proofs can read the last impulse's sums.
@@ -152,16 +170,32 @@ impl BodyPasses {
         self.sums.as_ref()
     }
 
-    fn params(bodies: &Bodies<'_>, accumulate: bool) -> Params {
+    /// Test-only: NaN into every partial slot of `bodies` after a prepare,
+    /// so a finalize that reads a slot the partial pass did not write shows
+    /// in the sums.
+    #[cfg(all(test, feature = "gpu-proofs"))]
+    pub(crate) fn poison(&self, enc: &mut GpuEncoder, bodies: &Bodies<'_>) {
+        let (pipes, partials, _) = self.parts().expect("the body passes were prepared");
+        let params = Self::params(bodies, 0, false);
+        enc.dispatch_compute(
+            &pipes.poison,
+            &[GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&params) }, buffer(7, partials)],
+            groups(u64::from(bodies.count) * partial_slots(bodies.lattice) * PARTIAL_FLOATS),
+            "gpu_flip.bodies.poison",
+        );
+    }
+
+    fn params(bodies: &Bodies<'_>, mode: u32, accumulate: bool) -> Params {
         Params {
             n: bodies.lattice,
-            groups: partial_groups(records(bodies.lattice)),
+            slots: partial_slots(bodies.lattice) as u32,
             lattice_min: bodies.lattice_min,
             cell_size: bodies.cell_size,
             density: bodies.density,
             tick_seconds: bodies.tick_seconds,
             first: bodies.first,
             body_count: bodies.count,
+            mode,
             accumulate: u32::from(accumulate),
             ..Params::default()
         }
@@ -169,23 +203,32 @@ impl BodyPasses {
 
     fn parts(&self) -> Result<(&Pipelines, &GpuBuffer, &GpuBuffer), String> {
         match (&self.pipelines, &self.partials, &self.sums) {
-            (Some(pipes), Some(partials), Some(sums)) => Ok((pipes, partials, sums)),
+            (Some(pipes), Some(partials), Some(sums)) => {
+                Ok((pipes, partials, sums))
+            }
             _ => Err("the body passes were not prepared".into()),
         }
     }
 
-    /// Each body's pressure impulse from `pressure` into the sums; with
-    /// `reaction`, also added into it.
+    /// Each body's impulse into the sums: the pressure's from `pressure`
+    /// (`mode` 0) or the constraint's friction from `faces` against the solid
+    /// velocity (`mode` 1); with `reaction`, also added into it.
     fn impulse(
         &self,
         enc: &mut GpuEncoder,
         bodies: &Bodies<'_>,
-        pressure: &GpuBuffer,
+        tiles: Tiles<'_>,
+        mode: u32,
+        source: &GpuBuffer,
         reaction: Option<&GpuBuffer>,
     ) -> Result<(), String> {
         let (pipes, partials, sums) = self.parts()?;
-        let params = Self::params(bodies, reaction.is_some());
+        if partials.size < partial_bytes(bodies.lattice, bodies.count) {
+            return Err(format!("the body partials were prepared for fewer than {} bodies on {:?}", bodies.count, bodies.lattice));
+        }
+        let params = Self::params(bodies, mode, reaction.is_some());
         let data = bytemuck::bytes_of(&params);
+        let source_binding = if mode == 0 { 5 } else { 6 };
         enc.dispatch_compute(
             &pipes.partial,
             &[
@@ -194,10 +237,12 @@ impl BodyPasses {
                 buffer(2, bodies.open),
                 buffer(3, bodies.solid),
                 buffer(4, bodies.bodies),
-                buffer(5, pressure),
+                buffer(source_binding, source),
                 buffer(7, partials),
+                buffer(12, tiles[0]),
+                buffer(14, tiles[2]),
             ],
-            [params.groups, bodies.count.max(1), 1],
+            [tile_groups(bodies.lattice), bodies.count.max(1), 1],
             "gpu_flip.bodies.partial",
         );
         // A fixed array, not a Vec: this runs every step. Without a reaction
@@ -207,25 +252,28 @@ impl BodyPasses {
             buffer(4, bodies.bodies),
             buffer(7, partials),
             buffer(8, sums),
+            buffer(13, tiles[1]),
             buffer(9, reaction.unwrap_or(sums)),
         ];
         let bound = if reaction.is_some() { finalize.len() } else { finalize.len() - 1 };
-        enc.dispatch_compute(&pipes.finalize, &finalize[..bound], [1, 1, 1], "gpu_flip.bodies.finalize");
+        enc.dispatch_compute(&pipes.finalize, &finalize[..bound], [bodies.count.max(1), 1, 1], "gpu_flip.bodies.finalize");
         Ok(())
     }
 
     /// Inside a conjugate gradient iteration: the bodies' share of the
-    /// operator on the search direction `direction`, added to `s`.
+    /// operator on the search direction `direction`, added to `s`, over the
+    /// solver's fine active `tiles`.
     pub(crate) fn apply(
         &self,
         enc: &mut GpuEncoder,
         bodies: &Bodies<'_>,
+        tiles: Tiles<'_>,
         direction: &GpuBuffer,
         s: &GpuBuffer,
     ) -> Result<(), String> {
-        self.impulse(enc, bodies, direction, None)?;
+        self.impulse(enc, bodies, tiles, 0, direction, None)?;
         let (pipes, _, sums) = self.parts()?;
-        let params = Self::params(bodies, false);
+        let params = Self::params(bodies, 0, false);
         enc.dispatch_compute(
             &pipes.product,
             &[
@@ -236,8 +284,10 @@ impl BodyPasses {
                 buffer(4, bodies.bodies),
                 buffer(8, sums),
                 buffer(10, s),
+                buffer(12, tiles[0]),
+                buffer(14, tiles[2]),
             ],
-            groups(cells(bodies.lattice)),
+            [tile_groups(bodies.lattice), 1, 1],
             "gpu_flip.bodies.product",
         );
         Ok(())
@@ -245,17 +295,20 @@ impl BodyPasses {
 
     /// After the projection, as the engine finishes its pressure stage: the
     /// pressure's impulse into `reaction` and its velocity change into the
-    /// solid velocity (`solid_rw`, the same buffer as `bodies.solid`).
+    /// solid velocity (`solid_rw`, the same buffer as `bodies.solid`), then
+    /// the friction the constraint will apply to `faces` into `reaction`.
     pub(crate) fn react(
         &self,
         enc: &mut GpuEncoder,
         bodies: &Bodies<'_>,
+        tiles: Tiles<'_>,
         pressure: &GpuBuffer,
+        faces: &GpuBuffer,
         reaction: &GpuBuffer,
     ) -> Result<(), String> {
-        self.impulse(enc, bodies, pressure, Some(reaction))?;
+        self.impulse(enc, bodies, tiles, 0, pressure, Some(reaction))?;
         let (pipes, _, sums) = self.parts()?;
-        let params = Self::params(bodies, false);
+        let params = Self::params(bodies, 0, false);
         enc.dispatch_compute(
             &pipes.velocity,
             &[
@@ -267,13 +320,12 @@ impl BodyPasses {
             groups(records(bodies.lattice)),
             "gpu_flip.bodies.velocity_change",
         );
-        Ok(())
+        self.impulse(enc, bodies, tiles, 1, faces, Some(reaction))
     }
 }
 
 /// Why a step's dynamic bodies are refused, or None: every body's owner code
-/// must fit a byte, the finalize pass runs one workgroup of 64, and the
-/// reaction must hold every body.
+/// must fit a byte, and the reaction must hold every body.
 pub(crate) fn body_refusal(count: u32, reaction: Option<&GpuBuffer>) -> Option<String> {
     if count as usize > MAX_FLUID_ROLES {
         return Some(format!("{count} bodies exceed the {MAX_FLUID_ROLES} a liquid holds"));
@@ -305,7 +357,7 @@ mod tests {
             .validate(&module)
             .unwrap_or_else(|e| panic!("{e:?}"));
         let entries: Vec<&str> = module.entry_points.iter().map(|e| e.name.as_str()).collect();
-        for entry in ["impulse_partial", "impulse_finalize", "body_product", "velocity_change"] {
+        for entry in ["impulse_partial", "impulse_finalize", "body_product", "velocity_change", "poison_partials"] {
             assert!(entries.contains(&entry), "missing entry {entry}");
         }
     }
@@ -315,10 +367,14 @@ mod tests {
         assert_eq!(size_of::<Params>(), 64);
     }
 
+    /// Two slots a tile, partial edge tiles counted, as the solver counts
+    /// its fine partials.
     #[test]
-    fn partial_groups_grow_with_the_face_grid() {
-        assert_eq!(partial_groups(1), 1);
-        assert_eq!(partial_groups(25 * 25 * 25), 4);
-        assert_eq!(partial_groups(65 * 65 * 65), MAX_GROUPS);
+    fn partial_slots_are_two_a_tile() {
+        assert_eq!(partial_slots([8, 8, 8]), 2);
+        assert_eq!(partial_slots([17, 16, 15]), 2 * 3 * 2 * 2);
+        assert_eq!(partial_slots([64; 3]), 2 * 512);
+        assert_eq!(partial_bytes([64; 3], 0), partial_bytes([64; 3], 1));
+        assert_eq!(partial_bytes([64; 3], 3), 3 * 1024 * 32);
     }
 }

@@ -1018,7 +1018,7 @@ mod prepared_toggle_tests {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 #[cfg(test)]
 mod frame_tests;

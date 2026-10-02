@@ -4456,7 +4456,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Clamp a liquid level set (nodes_x/y/z nodes over the center/size box, node (i, j, k) at i + nx·(j + ny·k)) against its solid lattice (solid_nodes_x/y/z over the same box, sampled trilinearly): border nodes read a tenth of a bin outside, nodes where the solid is negative read max(value, 0), every other node passes through. Nodes past the lattice, and every node while there is no lattice, pass through.",
+      "purpose": "Clamp a liquid level set (nodes_x/y/z nodes over the center/size box, node (i, j, k) at i + nx·(j + ny·k)) against its solid lattice (solid_nodes_x/y/z over the same box, sampled trilinearly): border nodes read a third of a bin outside, nodes where the solid is negative read max(value, 0), every other node passes through. Nodes past the lattice, and every node while there is no lattice, pass through.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Keeps a liquid surface out of walls and solid bodies and closed at the edge of its grid, after smoothing.",
@@ -14112,8 +14112,21 @@
           "type": "f32"
         },
         {
+          "name": "particle_capacity",
+          "type": "f32"
+        },
+        {
+          "name": "region_count",
+          "type": "f32"
+        },
+        {
           "capacity": "fixed:1",
           "name": "bodies",
+          "type": "Array"
+        },
+        {
+          "capacity": "fixed:1",
+          "name": "regions",
           "type": "Array"
         },
         {
@@ -14258,9 +14271,15 @@
           "label": "Closed +Z",
           "name": "closed_pos_z",
           "type": "bool"
+        },
+        {
+          "default": "0",
+          "label": "Particle Capacity",
+          "name": "particle_capacity",
+          "type": "int"
         }
       ],
-      "purpose": "Define a GPU FLIP liquid domain with node.fluid_surface's scene contract: the axis-aligned domain box, resolution, initial fill height and box, gravity, the scene's acceleration field and impulses, simulation speed and reset. Outputs this frame's fixed 60 Hz ticks, the epoch and the display clock, the fill's half-cell sites and particle mass, gravity, the scene's forces and impulses on coarse field lattices over the box, and the padded lattice with its Closed Faces mask (bit 2d the low face of axis d, bit 2d + 1 the high one) for the step, the solid distance and the particle frame. Each face of the tank is closed unless its Closed param is off; an open face drains the water that reaches it. A hit fired while the liquid is held (paused, Speed 0) is discarded, never replayed. Up to 64 Collider roles become one body row per collider per tick of this frame (its pose at the tick's start and its motion over the tick), a shape per collider and their distance lattices packed in one half-precision atlas; the water flows around them. Paired with a physics world, its bodies join the water two ways: the domain steps the world one settled 1/60 s tick at a time, its bodies' rows follow the collider rows, dynamic_bodies counts the ones the water pushes, and the reaction the steps add up reaches each body as one impulse per tick. Live, the pair runs at most one tick per frame and holds while that tick's reaction is still on the GPU. Fill, Inflow and Outflow roles are refused by name.",
+      "purpose": "Define a GPU FLIP liquid domain with node.fluid_surface's scene contract: the axis-aligned domain box, resolution, initial fill height and box, gravity, the scene's acceleration field and impulses, simulation speed and reset. Outputs this frame's fixed 60 Hz ticks, the epoch and the display clock, the fill's half-cell sites and particle mass, gravity, the scene's forces and impulses on coarse field lattices over the box, and the padded lattice with its Closed Faces mask (bit 2d the low face of axis d, bit 2d + 1 the high one) for the step, the solid distance and the particle frame. Each face of the tank is closed unless its Closed param is off; an open face drains the water that reaches it. A hit fired while the liquid is held (paused, Speed 0) is discarded, never replayed. Up to 64 Collider roles become one body row per collider per tick of this frame (its pose at the tick's start and its motion over the tick), a shape per collider and their distance lattices packed in one half-precision atlas; the water flows around them. Paired with a physics world, its bodies join the water two ways: the domain steps the world one settled 1/60 s tick at a time, its bodies' rows follow the collider rows, dynamic_bodies counts the ones the water pushes, and the reaction the steps add up reaches each body as one impulse per tick. Live, the pair runs at most one tick per frame and holds while that tick's reaction is still on the GPU. Inflow and Outflow roles become region rows (regions, region_count) beside the body rows, sharing the shapes and atlas: an inflow emits water at its velocity into its volume each substep, an outflow removes the water inside it. Particle Capacity sizes the particle pool sources emit into (0 = the fill's count); a full pool stops emitting and shows in the stats. Fill roles are refused by name.",
       "role": "Source",
       "stratum": "atom",
       "summary": "Sets up a GPU FLIP liquid: its box, resolution, starting fill, gravity and speed.",
@@ -14410,6 +14429,16 @@
           "type": "f32"
         },
         {
+          "name": "regions",
+          "required": false,
+          "type": "Array"
+        },
+        {
+          "name": "region_count",
+          "required": false,
+          "type": "f32"
+        },
+        {
           "name": "rows",
           "required": false,
           "type": "f32"
@@ -14448,7 +14477,7 @@
           "type": "Array"
         },
         {
-          "capacity": "inputs:2006@1000,2054@1024",
+          "capacity": "inputs:2007@1000,2055@1024",
           "name": "capped",
           "type": "Array"
         }
@@ -14653,6 +14682,26 @@
             "16777216"
           ],
           "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "Regions",
+          "name": "region_count",
+          "range": [
+            "0",
+            "64"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "Inflow Jitter",
+          "name": "inflow_jitter",
+          "range": [
+            "0",
+            "1"
+          ],
+          "type": "float"
         },
         {
           "default": "1",
@@ -17963,6 +18012,11 @@
           "name": "epoch",
           "required": false,
           "type": "f32"
+        },
+        {
+          "name": "particle_capacity",
+          "required": false,
+          "type": "f32"
         }
       ],
       "label": "Liquid Fill",
@@ -18157,9 +18211,19 @@
             "16777215"
           ],
           "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "Particle Capacity",
+          "name": "particle_capacity",
+          "range": [
+            "0",
+            "16777216"
+          ],
+          "type": "int"
         }
       ],
-      "purpose": "Place a liquid's starting particles at rest, one per half-cell site of the authored box inside the padded lattice (node.gpu_flip_domain's lattice wires: the box starts 3 cells in and has nodes − 7 cells per axis; site j at (1/4 + j/2) cells along each axis, 2 sites per cell): every site below pool_sites, then the box of sites [box_x0, x1) × [max(box_y0, pool_sites), y1) × [box_z0, z1), in lattice order. Each particle moves up to jitter / 4 cells each way by a hash of seed; 0 keeps the exact lattice. The radius is the sphere of an eighth of a cell; ids count from 1. A site inside one of the first body_count bodies at its pose when the epoch starts (its distance lattice at or below zero) is left dead, radius 0. The storage holds exactly the sites covered, and count is their number; a fill past the 16,777,216 particles a count carries exactly is refused.",
+      "purpose": "Place a liquid's starting particles at rest, one per half-cell site of the authored box inside the padded lattice (node.gpu_flip_domain's lattice wires: the box starts 3 cells in and has nodes − 7 cells per axis; site j at (1/4 + j/2) cells along each axis, 2 sites per cell): every site below pool_sites, then the box of sites [box_x0, x1) × [max(box_y0, pool_sites), y1) × [box_z0, z1), in lattice order. Each particle moves up to jitter / 4 cells each way by a hash of seed; 0 keeps the exact lattice. The radius is the sphere of an eighth of a cell; ids count from 1. A site inside one of the first body_count bodies at its pose when the epoch starts (its distance lattice at or below zero) is left dead, radius 0. The storage holds the larger of the sites covered and particle_capacity (0 = the sites covered), and count is its slot count: slots past the fill start dead, for sources to emit into. A pool past the 16,777,216 particles a count carries exactly is refused.",
       "role": "Source",
       "stratum": "atom",
       "summary": "Places the liquid's starting particles: a pool on the floor plus one block of water.",
@@ -18687,7 +18751,7 @@
           "type": "Array"
         },
         {
-          "capacity": "fixed:16",
+          "capacity": "fixed:17",
           "name": "stats",
           "type": "Array"
         },
@@ -18784,7 +18848,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Reduce a particle liquid's first `count` records to its statistics words, written in place over `stats`: 0 records with a non-finite position, radius or velocity, 1 live records (radius above 0), 2 the fastest speed, 3 mass, 4-6 momentum and 7 kinetic energy, each particle weighing particle_mass, and when capped is wired, 8 and 9 its two words per record summed: the solver's speed-capped move stages and refused solid push-outs, and 10-15 the solver words after the records: pressure and density solve iterations, the solves that reached their cap without converging, the steps whose sealed-pocket spread reached its cap unfinished, and 14-15 the volume rate taken off sealed pockets' pressure and density right-hand sides. Sums run in a fixed order with no atomics, so the words are the same on every run.",
+      "purpose": "Reduce a particle liquid's first `count` records to its statistics words, written in place over `stats`: 0 records with a non-finite position, radius or velocity, 1 live records (radius above 0), 2 the fastest speed, 3 mass, 4-6 momentum and 7 kinetic energy, each particle weighing particle_mass, and when capped is wired, 8 and 9 its two words per record summed: the solver's speed-capped move stages and refused solid push-outs, and 10-16 the solver words after the records: pressure and density solve iterations, the solves that reached their cap without converging, the steps whose sealed-pocket spread reached its cap unfinished, 14-15 the volume rate taken off sealed pockets' pressure and density right-hand sides, and 16 the share of the lattice's 8³ tiles the cell passes ran over. Sums run in a fixed order with no atomics, so the words are the same on every run.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Measures a particle liquid once per tick: how much there is, how fast it moves, and whether anything went wrong.",
@@ -25894,7 +25958,7 @@
           "type": "int"
         }
       ],
-      "purpose": "The liquid's level set on a lattice: at each node, the distance to the nearest kernel ellipsoid, a·(|G·(x − c)| − 1) with a the kernel's longest axis (exact for spheres), negative inside and capped a tenth of a bin outside. The lattice is the solid lattice (nodes_x/y/z over the center/size box) refined resolution_scale times per cell. Nodes inside a solid are never inside the liquid and the border is outside, so the surface closes.",
+      "purpose": "The liquid's level set on a lattice: at each node, the distance to the nearest kernel ellipsoid, a·(|G·(x − c)| − 1) with a the kernel's longest axis (exact for spheres), negative inside and capped a third of a bin outside (half the kernel reach, the FLIP Fluids mesher's ratio, so a marching-cubes crossing a lattice step away is exact). The lattice is the solid lattice (nodes_x/y/z over the center/size box) refined resolution_scale times per cell. Nodes inside a solid are never inside the liquid and the border is outside, so the surface closes.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Turns liquid particles into a distance field on a grid, the step before the surface mesh is drawn.",
@@ -35551,7 +35615,7 @@
           "type": "Transform"
         },
         {
-          "name": "density",
+          "name": "mass",
           "required": false,
           "type": "f32"
         },
@@ -35622,12 +35686,12 @@
           "type": "enum"
         },
         {
-          "default": "600",
-          "label": "Density (kg/m³)",
-          "name": "density",
+          "default": "1",
+          "label": "Mass (kg)",
+          "name": "mass",
           "range": [
-            "1",
-            "25000"
+            "0.01",
+            "100"
           ],
           "type": "float"
         },
@@ -35782,10 +35846,10 @@
           "type": "table"
         }
       ],
-      "purpose": "Describe a rigid body's shape, starting transform, motion type, density and contact properties; Box3D gives it density times its installed hull volume as mass. Wire body into a shared Physics World. An optional builtin or imported MeshSource is prepared once as convex hulls using standard Box3D.",
+      "purpose": "Describe a rigid body's shape, starting transform, motion type, mass and contact properties. Wire body into a shared Physics World. An optional builtin or imported MeshSource is prepared once as convex hulls using standard Box3D.",
       "role": "Source",
       "stratum": "atom",
-      "summary": "Give an object density, friction and bounce, then connect it to a Physics World.",
+      "summary": "Give an object mass, friction and bounce, then connect it to a Physics World.",
       "type_id": "node.rigid_body"
     },
     {
@@ -46051,6 +46115,30 @@
         }
       ],
       "params": [
+        {
+          "default": "1",
+          "enum_values": [
+            "Off",
+            "On"
+          ],
+          "label": "Whitewater",
+          "name": "enabled",
+          "range": [
+            "0",
+            "1"
+          ],
+          "type": "float"
+        },
+        {
+          "default": "1",
+          "label": "Whitewater Amount",
+          "name": "amount",
+          "range": [
+            "0",
+            "2"
+          ],
+          "type": "float"
+        },
         {
           "default": "100000",
           "label": "Capacity",
@@ -72445,11 +72533,11 @@
           "name": "Motion"
         },
         {
-          "default": "600",
-          "id": "101_density",
-          "max": "25000",
-          "min": "1",
-          "name": "Density (kg/m³)"
+          "default": "1",
+          "id": "101_mass",
+          "max": "100",
+          "min": "0.01",
+          "name": "Mass (kg)"
         },
         {
           "default": "0.6",
@@ -74664,11 +74752,11 @@
           "name": "Motion"
         },
         {
-          "default": "600",
-          "id": "121_density",
-          "max": "25000",
-          "min": "1",
-          "name": "Density (kg/m³)"
+          "default": "1",
+          "id": "121_mass",
+          "max": "100",
+          "min": "0.01",
+          "name": "Mass (kg)"
         },
         {
           "default": "0.25",
@@ -76953,11 +77041,11 @@
           "name": "Motion"
         },
         {
-          "default": "600",
-          "id": "141_density",
-          "max": "25000",
-          "min": "1",
-          "name": "Density (kg/m³)"
+          "default": "1",
+          "id": "141_mass",
+          "max": "100",
+          "min": "0.01",
+          "name": "Mass (kg)"
         },
         {
           "default": "0.2",
@@ -79172,11 +79260,11 @@
           "name": "Motion"
         },
         {
-          "default": "600",
-          "id": "161_density",
-          "max": "25000",
-          "min": "1",
-          "name": "Density (kg/m³)"
+          "default": "1",
+          "id": "161_mass",
+          "max": "100",
+          "min": "0.01",
+          "name": "Mass (kg)"
         },
         {
           "default": "0.2",
@@ -81974,11 +82062,11 @@
           "name": "Motion"
         },
         {
-          "default": "600",
-          "id": "101_density",
-          "max": "25000",
-          "min": "1",
-          "name": "Density (kg/m³)"
+          "default": "1",
+          "id": "101_mass",
+          "max": "100",
+          "min": "0.01",
+          "name": "Mass (kg)"
         },
         {
           "default": "0.55",
@@ -84193,11 +84281,11 @@
           "name": "Motion"
         },
         {
-          "default": "600",
-          "id": "111_density",
-          "max": "25000",
-          "min": "1",
-          "name": "Density (kg/m³)"
+          "default": "1",
+          "id": "111_mass",
+          "max": "100",
+          "min": "0.01",
+          "name": "Mass (kg)"
         },
         {
           "default": "0.55",
@@ -86412,11 +86500,11 @@
           "name": "Motion"
         },
         {
-          "default": "600",
-          "id": "121_density",
-          "max": "25000",
-          "min": "1",
-          "name": "Density (kg/m³)"
+          "default": "1",
+          "id": "121_mass",
+          "max": "100",
+          "min": "0.01",
+          "name": "Mass (kg)"
         },
         {
           "default": "0.55",
@@ -88631,11 +88719,11 @@
           "name": "Motion"
         },
         {
-          "default": "600",
-          "id": "131_density",
-          "max": "25000",
-          "min": "1",
-          "name": "Density (kg/m³)"
+          "default": "1",
+          "id": "131_mass",
+          "max": "100",
+          "min": "0.01",
+          "name": "Mass (kg)"
         },
         {
           "default": "0.55",
@@ -90850,11 +90938,11 @@
           "name": "Motion"
         },
         {
-          "default": "600",
-          "id": "141_density",
-          "max": "25000",
-          "min": "1",
-          "name": "Density (kg/m³)"
+          "default": "1",
+          "id": "141_mass",
+          "max": "100",
+          "min": "0.01",
+          "name": "Mass (kg)"
         },
         {
           "default": "0.55",
@@ -93069,11 +93157,11 @@
           "name": "Motion"
         },
         {
-          "default": "600",
-          "id": "151_density",
-          "max": "25000",
-          "min": "1",
-          "name": "Density (kg/m³)"
+          "default": "1",
+          "id": "151_mass",
+          "max": "100",
+          "min": "0.01",
+          "name": "Mass (kg)"
         },
         {
           "default": "0.55",
@@ -138302,7 +138390,7 @@
           "name": "Surface Particle Scale"
         },
         {
-          "default": "0",
+          "default": "0.5",
           "id": "mesh_relaxation",
           "max": "1",
           "min": "0",
@@ -138496,153 +138584,6 @@
           "max": "1",
           "min": "0",
           "name": "Billboard"
-        },
-        {
-          "default": "0.35",
-          "id": "2_pos_x",
-          "max": "100",
-          "min": "-100",
-          "name": "Position X"
-        },
-        {
-          "default": "0.58",
-          "id": "2_pos_y",
-          "max": "100",
-          "min": "-100",
-          "name": "Position Y"
-        },
-        {
-          "default": "-0.1",
-          "id": "2_pos_z",
-          "max": "100",
-          "min": "-100",
-          "name": "Position Z"
-        },
-        {
-          "default": "0",
-          "id": "2_rot_x",
-          "max": "6.2831855",
-          "min": "-6.2831855",
-          "name": "Rotation X"
-        },
-        {
-          "default": "0",
-          "id": "2_rot_y",
-          "max": "6.2831855",
-          "min": "-6.2831855",
-          "name": "Rotation Y"
-        },
-        {
-          "default": "0",
-          "id": "2_rot_z",
-          "max": "6.2831855",
-          "min": "-6.2831855",
-          "name": "Rotation Z"
-        },
-        {
-          "default": "0.6",
-          "id": "2_scale_x",
-          "max": "10",
-          "min": "0.01",
-          "name": "Scale X"
-        },
-        {
-          "default": "1.16",
-          "id": "2_scale_y",
-          "max": "10",
-          "min": "0.01",
-          "name": "Scale Y"
-        },
-        {
-          "default": "0.85",
-          "id": "2_scale_z",
-          "max": "10",
-          "min": "0.01",
-          "name": "Scale Z"
-        },
-        {
-          "default": "0",
-          "id": "2_billboard",
-          "max": "1",
-          "min": "0",
-          "name": "Billboard"
-        },
-        {
-          "default": "3",
-          "id": "3_role",
-          "max": "3",
-          "min": "0",
-          "name": "Role"
-        },
-        {
-          "default": "1",
-          "id": "3_enabled",
-          "max": "1",
-          "min": "0",
-          "name": "Enabled"
-        },
-        {
-          "default": "0",
-          "id": "3_velocity_x",
-          "max": "20",
-          "min": "-20",
-          "name": "Velocity X"
-        },
-        {
-          "default": "0",
-          "id": "3_velocity_y",
-          "max": "20",
-          "min": "-20",
-          "name": "Velocity Y"
-        },
-        {
-          "default": "0",
-          "id": "3_velocity_z",
-          "max": "20",
-          "min": "-20",
-          "name": "Velocity Z"
-        },
-        {
-          "default": "0",
-          "id": "3_inherit_motion",
-          "max": "2",
-          "min": "0",
-          "name": "Inherit Motion"
-        },
-        {
-          "default": "0",
-          "id": "3_friction",
-          "max": "1",
-          "min": "0",
-          "name": "Friction"
-        },
-        {
-          "default": "0",
-          "id": "3_geometry",
-          "max": "1",
-          "min": "0",
-          "name": "Geometry"
-        },
-        {
-          "default": "1",
-          "id": "3_shape",
-          "max": "4",
-          "min": "0",
-          "name": "Builtin Shape"
-        },
-        {
-          "default": "0.8660254",
-          "id": "3_radius",
-          "max": "1000",
-          "min": "0.001",
-          "name": "Radius"
-        },
-        {
-          "default": "32",
-          "id": "3_collider_parts",
-          "max": "64",
-          "min": "1",
-          "name": "Collider Detail"
         },
         {
           "default": "1",
@@ -143711,6 +143652,20 @@
           "max": "20",
           "min": "0",
           "name": "Light Size"
+        },
+        {
+          "default": "1",
+          "id": "475_enabled",
+          "max": "1",
+          "min": "0",
+          "name": "Whitewater"
+        },
+        {
+          "default": "1",
+          "id": "475_amount",
+          "max": "2",
+          "min": "0",
+          "name": "Whitewater Amount"
         },
         {
           "default": "0.95",
@@ -152202,6 +152157,153 @@
           "max": "4",
           "min": "0",
           "name": "Appearance Gain"
+        },
+        {
+          "default": "0.35",
+          "id": "2_pos_x",
+          "max": "100",
+          "min": "-100",
+          "name": "Position X"
+        },
+        {
+          "default": "0.58",
+          "id": "2_pos_y",
+          "max": "100",
+          "min": "-100",
+          "name": "Position Y"
+        },
+        {
+          "default": "-0.1",
+          "id": "2_pos_z",
+          "max": "100",
+          "min": "-100",
+          "name": "Position Z"
+        },
+        {
+          "default": "0",
+          "id": "2_rot_x",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Rotation X"
+        },
+        {
+          "default": "0",
+          "id": "2_rot_y",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Rotation Y"
+        },
+        {
+          "default": "0",
+          "id": "2_rot_z",
+          "max": "6.2831855",
+          "min": "-6.2831855",
+          "name": "Rotation Z"
+        },
+        {
+          "default": "0.6",
+          "id": "2_scale_x",
+          "max": "10",
+          "min": "0.01",
+          "name": "Scale X"
+        },
+        {
+          "default": "1.16",
+          "id": "2_scale_y",
+          "max": "10",
+          "min": "0.01",
+          "name": "Scale Y"
+        },
+        {
+          "default": "0.85",
+          "id": "2_scale_z",
+          "max": "10",
+          "min": "0.01",
+          "name": "Scale Z"
+        },
+        {
+          "default": "0",
+          "id": "2_billboard",
+          "max": "1",
+          "min": "0",
+          "name": "Billboard"
+        },
+        {
+          "default": "3",
+          "id": "3_role",
+          "max": "3",
+          "min": "0",
+          "name": "Role"
+        },
+        {
+          "default": "1",
+          "id": "3_enabled",
+          "max": "1",
+          "min": "0",
+          "name": "Enabled"
+        },
+        {
+          "default": "0",
+          "id": "3_velocity_x",
+          "max": "20",
+          "min": "-20",
+          "name": "Velocity X"
+        },
+        {
+          "default": "0",
+          "id": "3_velocity_y",
+          "max": "20",
+          "min": "-20",
+          "name": "Velocity Y"
+        },
+        {
+          "default": "0",
+          "id": "3_velocity_z",
+          "max": "20",
+          "min": "-20",
+          "name": "Velocity Z"
+        },
+        {
+          "default": "0",
+          "id": "3_inherit_motion",
+          "max": "2",
+          "min": "0",
+          "name": "Inherit Motion"
+        },
+        {
+          "default": "0",
+          "id": "3_friction",
+          "max": "1",
+          "min": "0",
+          "name": "Friction"
+        },
+        {
+          "default": "0",
+          "id": "3_geometry",
+          "max": "1",
+          "min": "0",
+          "name": "Geometry"
+        },
+        {
+          "default": "1",
+          "id": "3_shape",
+          "max": "4",
+          "min": "0",
+          "name": "Builtin Shape"
+        },
+        {
+          "default": "0.8660254",
+          "id": "3_radius",
+          "max": "1000",
+          "min": "0.001",
+          "name": "Radius"
+        },
+        {
+          "default": "32",
+          "id": "3_collider_parts",
+          "max": "64",
+          "min": "1",
+          "name": "Collider Detail"
         },
         {
           "default": "0.52",
@@ -164115,11 +164217,11 @@
           "name": "Seed"
         },
         {
-          "default": "500",
-          "id": "box_density",
-          "max": "2000",
-          "min": "1",
-          "name": "Box Density"
+          "default": "62.5",
+          "id": "box_mass",
+          "max": "100",
+          "min": "0.01",
+          "name": "Box Mass"
         },
         {
           "default": "0",

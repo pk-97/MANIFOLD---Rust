@@ -64,6 +64,10 @@ const SCENE_VOCABULARY_TYPE_IDS: &[&str] = &[
     // `metadata_for_node_type` — the root node's other params (sun, env,
     // counts) stay hand-curated exposures, never auto-stamped.
     "node.render_scene",
+    // The liquid's whitewater: its on/off and amount join the water's
+    // Simulation controls (BUG-ejcb); its rates and budget stay graph-side
+    // or hand-curated.
+    "node.whitewater_step",
 ];
 
 /// The curated `node.render_scene` auto-stamp subset (see the vocabulary
@@ -97,9 +101,10 @@ pub fn metadata_for_node_type(type_id: &str) -> Vec<SceneParamMetadata> {
                 && (type_id != "node.bokeh_gather"
                     || matches!(pd.name.as_ref(), "enabled" | "aperture" | "quality"))
         })
-        .filter(|pd| type_id != "node.rigid_body" || matches!(pd.name.as_ref(), "shape" | "motion" | "density" | "friction" | "bounce" | "collider_parts"))
+        .filter(|pd| type_id != "node.rigid_body" || matches!(pd.name.as_ref(), "shape" | "motion" | "mass" | "friction" | "bounce" | "collider_parts"))
         .filter(|pd| type_id != "node.scene_object" || pd.name.as_ref() != "parent_visible")
         .filter(|pd| liquid_dial_params(type_id).is_none_or(|dials| dials.contains(&pd.name.as_ref())))
+        .filter(|pd| type_id != "node.whitewater_step" || matches!(pd.name.as_ref(), "enabled" | "amount"))
         .filter(|pd| type_id != "node.fluid_role_source" || matches!(pd.name.as_ref(),
             "role" | "enabled" | "geometry" | "shape" | "radius"
                 | "velocity_x" | "velocity_y" | "velocity_z" | "inherit_motion"
@@ -409,6 +414,7 @@ fn section_name_for_node(node: &manifold_core::effect_graph_def::EffectGraphNode
         "node.atmosphere" => "Atmosphere".to_string(),
         "node.bake_environment" => "Environment".to_string(),
         "node.render_scene" => return "Rendering".to_string(),
+        "node.whitewater_step" => return "Whitewater".to_string(),
         "node.scene_object" => "Object".to_string(),
         _ => {
             // Modifiers and anything else: use the type id suffix.
@@ -660,6 +666,22 @@ mod tests {
             vec!["Off".to_string(), "On".to_string()],
             "display labels carried through despite the Float type"
         );
+    }
+
+    /// The scene panel shows the GPU whitewater's switch and amount, nothing
+    /// else of the node: rates and energies stay graph-side, the budget is
+    /// the preset's hand-curated card.
+    #[test]
+    fn whitewater_step_exposes_its_switch_and_amount_only() {
+        let metadata = metadata_for_node_type("node.whitewater_step");
+        let names: Vec<&str> = metadata.iter().map(|param| param.name.as_str()).collect();
+        assert_eq!(names, ["enabled", "amount"]);
+        let enabled = &metadata[0];
+        assert!(!enabled.whole_numbers);
+        assert!(matches!(enabled.convert, manifold_core::effects::ParamConvert::Float));
+        assert_eq!(enabled.value_labels, vec!["Off".to_string(), "On".to_string()]);
+        let node = graph_node(7, "whitewater", "node.whitewater_step");
+        assert_eq!(section_name_for_node(&node), "Whitewater");
     }
 
     #[test]

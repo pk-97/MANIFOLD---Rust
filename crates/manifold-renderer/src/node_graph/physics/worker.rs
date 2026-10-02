@@ -87,7 +87,7 @@ impl RigidSceneInputs {
                     .scale
                     .iter()
                     .any(|v| !v.is_finite() || *v <= 0.0)
-                || [body.density, body.friction, body.bounce, body.release_count]
+                || [body.mass, body.friction, body.bounce, body.release_count]
                     .iter()
                     .any(|v| !v.is_finite())
                 || body.release_count < 0.0

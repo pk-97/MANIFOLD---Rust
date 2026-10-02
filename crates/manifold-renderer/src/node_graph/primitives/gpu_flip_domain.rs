@@ -45,6 +45,9 @@ pub(crate) struct GpuFlipSetup {
     pub(crate) lattice: LiquidLattice,
     pub(crate) pool_sites: u32,
     pub(crate) box_sites: [[u32; 2]; 3],
+    /// Particle slots the pool holds; 0 means the fill's count. Sources
+    /// emit into the slots past the live particles.
+    pub(crate) particle_capacity: u32,
 }
 
 /// The domain's setup and the layout it came from, computed from params and
@@ -58,8 +61,8 @@ pub(crate) struct GpuFlipGeometry {
 
 impl GpuFlipGeometry {
     /// The scalar outputs fixed by the setup, by name.
-    pub(crate) fn outputs(&self) -> [(&'static str, f32); 15] {
-        let GpuFlipSetup { lattice, pool_sites, box_sites } = self.setup;
+    pub(crate) fn outputs(&self) -> [(&'static str, f32); 16] {
+        let GpuFlipSetup { lattice, pool_sites, box_sites, particle_capacity } = self.setup;
         let h = self.layout.cell_size;
         [
             ("lattice_min_x", lattice.min()[0]),
@@ -77,6 +80,7 @@ impl GpuFlipGeometry {
             ("box_z0", box_sites[2][0] as f32),
             ("box_z1", box_sites[2][1] as f32),
             ("particle_mass", (f64::from(WATER_DENSITY) * h * h * h / f64::from(SITES_PER_CELL)) as f32),
+            ("particle_capacity", particle_capacity as f32),
         ]
     }
 }
@@ -133,13 +137,23 @@ pub(crate) fn gpu_flip_geometry(
         return Err(format!("GPU FLIP: {reason}. Lower Resolution."));
     }
     let (pool_sites, box_sites) = fill_sites(&layout, read("fill_height", 0.4), initial_volume)?;
-    let particles = filled_sites(layout.cells, pool_sites, box_sites);
+    let capacity = read("particle_capacity", 0.0);
+    if !capacity.is_finite() || capacity < 0.0 {
+        return Err("GPU FLIP: Particle Capacity must be 0 (the fill's count) or a positive count".into());
+    }
+    let particle_capacity = capacity.round() as u64;
+    let particles = filled_sites(layout.cells, pool_sites, box_sites).max(particle_capacity);
     if particles > u64::from(EXACT_F32_COUNT) {
         return Err(format!(
-            "GPU FLIP: the fill places {particles} particles, more than the {EXACT_F32_COUNT} a particle count carries exactly. Lower Resolution or Initial Fill Height."
+            "GPU FLIP: the pool holds {particles} particles, more than the {EXACT_F32_COUNT} a particle count carries exactly. Lower Resolution, Initial Fill Height or Particle Capacity."
         ));
     }
-    let setup = GpuFlipSetup { lattice: LiquidLattice::from_layout(&layout), pool_sites, box_sites };
+    let setup = GpuFlipSetup {
+        lattice: LiquidLattice::from_layout(&layout),
+        pool_sites,
+        box_sites,
+        particle_capacity: particle_capacity as u32,
+    };
     Ok(GpuFlipGeometry { layout, setup, particles })
 }
 
@@ -152,12 +166,13 @@ impl GpuFlipGeometry {
 }
 
 /// Every scalar output, in the order [`GpuFlipDomain::compute`] fills them.
-const OUTPUTS: [&str; 34] = [
+const OUTPUTS: [&str; 36] = [
     "lattice_min_x", "lattice_min_y", "lattice_min_z", "cell_size", "nodes_x", "nodes_y", "nodes_z",
     "closed_faces", "pool_sites", "box_x0", "box_x1", "box_y0", "box_y1", "box_z0", "box_z1",
     "particle_mass", "gravity_x", "gravity", "gravity_z", "ticks", "epoch", "simulation_time",
     "display_time", "dropped_seconds", "body_count", "body_rows", "first_tick", "field_nodes_x",
     "field_nodes_y", "field_nodes_z", "field_spacing", "force_lattices", "impulse_tick", "dynamic_bodies",
+    "particle_capacity", "region_count",
 ];
 const TICKS: usize = 19;
 const IMPULSE_TICK: usize = 32;
@@ -219,7 +234,7 @@ fn reaction_floats(buffer: Option<&GpuBuffer>) -> Option<&[f32]> {
 crate::primitive! {
     name: GpuFlipDomain,
     type_id: "node.gpu_flip_domain",
-    purpose: "Define a GPU FLIP liquid domain with node.fluid_surface's scene contract: the axis-aligned domain box, resolution, initial fill height and box, gravity, the scene's acceleration field and impulses, simulation speed and reset. Outputs this frame's fixed 60 Hz ticks, the epoch and the display clock, the fill's half-cell sites and particle mass, gravity, the scene's forces and impulses on coarse field lattices over the box, and the padded lattice with its Closed Faces mask (bit 2d the low face of axis d, bit 2d + 1 the high one) for the step, the solid distance and the particle frame. Each face of the tank is closed unless its Closed param is off; an open face drains the water that reaches it. A hit fired while the liquid is held (paused, Speed 0) is discarded, never replayed. Up to 64 Collider roles become one body row per collider per tick of this frame (its pose at the tick's start and its motion over the tick), a shape per collider and their distance lattices packed in one half-precision atlas; the water flows around them. Paired with a physics world, its bodies join the water two ways: the domain steps the world one settled 1/60 s tick at a time, its bodies' rows follow the collider rows, dynamic_bodies counts the ones the water pushes, and the reaction the steps add up reaches each body as one impulse per tick. Live, the pair runs at most one tick per frame and holds while that tick's reaction is still on the GPU. Fill, Inflow and Outflow roles are refused by name.",
+    purpose: "Define a GPU FLIP liquid domain with node.fluid_surface's scene contract: the axis-aligned domain box, resolution, initial fill height and box, gravity, the scene's acceleration field and impulses, simulation speed and reset. Outputs this frame's fixed 60 Hz ticks, the epoch and the display clock, the fill's half-cell sites and particle mass, gravity, the scene's forces and impulses on coarse field lattices over the box, and the padded lattice with its Closed Faces mask (bit 2d the low face of axis d, bit 2d + 1 the high one) for the step, the solid distance and the particle frame. Each face of the tank is closed unless its Closed param is off; an open face drains the water that reaches it. A hit fired while the liquid is held (paused, Speed 0) is discarded, never replayed. Up to 64 Collider roles become one body row per collider per tick of this frame (its pose at the tick's start and its motion over the tick), a shape per collider and their distance lattices packed in one half-precision atlas; the water flows around them. Paired with a physics world, its bodies join the water two ways: the domain steps the world one settled 1/60 s tick at a time, its bodies' rows follow the collider rows, dynamic_bodies counts the ones the water pushes, and the reaction the steps add up reaches each body as one impulse per tick. Live, the pair runs at most one tick per frame and holds while that tick's reaction is still on the GPU. Inflow and Outflow roles become region rows (regions, region_count) beside the body rows, sharing the shapes and atlas: an inflow emits water at its velocity into its volume each substep, an outflow removes the water inside it. Particle Capacity sizes the particle pool sources emit into (0 = the fill's count); a full pool stops emitting and shows in the stats. Fill roles are refused by name.",
     inputs: {
         domain: Transform optional,
         initial_volume: Transform optional,
@@ -317,7 +332,9 @@ crate::primitive! {
         field_spacing: ScalarF32,
         force_lattices: ScalarF32,
         impulse_tick: ScalarF32,
-        bodies: Array(LiquidBody), shapes: Array(LiquidShape), atlas: Array(u32),
+        particle_capacity: ScalarF32,
+        region_count: ScalarF32,
+        bodies: Array(LiquidBody), regions: Array(LiquidBody), shapes: Array(LiquidShape), atlas: Array(u32),
         reaction: Array(f32),
         forces: Array(f32), impulses: Array(f32),
     },
@@ -336,9 +353,10 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("closed_pos_y"), label: "Closed Top", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
         ParamDef { name: Cow::Borrowed("closed_neg_z"), label: "Closed −Z", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
         ParamDef { name: Cow::Borrowed("closed_pos_z"), label: "Closed +Z", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("particle_capacity"), label: "Particle Capacity", ty: ParamType::Int, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "The GPU FLIP group's source of truth: ticks and epoch into node.liquid_state (the tick region's clock owner), the fill sites and the padded lattice into node.liquid_fill, gravity, forces, impulses, the field scalars (field_nodes_x/y/z, field_spacing, force_lattices, first_tick, impulse_tick), bodies, shapes, atlas, dynamic_bodies and the padded lattice into every node.gpu_flip_step, reaction into the first step of the tick (each later step takes the one before's reaction_out), and the padded lattice with bodies, shapes and atlas into node.liquid_solid_distance, node.liquid_frame and node.face_sample_component; simulation_time, display_time and epoch into node.liquid_frame; particle_mass into node.liquid_stats. The domain box, Resolution and fill restart the liquid; gravity and Simulation Speed are live. Live runs at most three ticks per display frame and reports dropped time; export runs every tick.",
+    composition_notes: "The GPU FLIP group's source of truth: ticks and epoch into node.liquid_state (the tick region's clock owner), the fill sites and the padded lattice into node.liquid_fill, gravity, forces, impulses, the field scalars (field_nodes_x/y/z, field_spacing, force_lattices, first_tick, impulse_tick), bodies, regions, region_count, shapes, atlas, dynamic_bodies and the padded lattice into every node.gpu_flip_step, reaction into the first step of the tick (each later step takes the one before's reaction_out), and the padded lattice with bodies, shapes and atlas into node.liquid_solid_distance, node.liquid_frame and node.face_sample_component; simulation_time, display_time and epoch into node.liquid_frame; particle_mass into node.liquid_stats; particle_capacity into node.liquid_fill. The domain box, Resolution and fill restart the liquid; gravity and Simulation Speed are live. Live runs at most three ticks per display frame and reports dropped time; export runs every tick.",
     examples: [],
     picker: { label: "GPU FLIP Domain", category: Atom },
     summary: "Sets up a GPU FLIP liquid: its box, resolution, starting fill, gravity and speed.",
@@ -350,7 +368,7 @@ crate::primitive! {
         clock: LiquidClock = LiquidClock::default(),
         setup: Option<GpuFlipSetup> = None,
         published: Option<[f32; OUTPUTS.len()]> = None,
-        bodies: LiquidBodies = LiquidBodies::default(),
+        bodies: LiquidBodies = LiquidBodies::with_regions(),
         body_buffers: LiquidBodyBuffers = LiquidBodyBuffers::default(),
         role_pending: bool = false,
         body_rows: f32 = 0.0,
@@ -366,7 +384,7 @@ crate::primitive! {
 
 impl Primitive for GpuFlipDomain {
     fn provides_array_output(&self, port: &str) -> bool {
-        matches!(port, "bodies" | "shapes" | "atlas" | "reaction" | "forces" | "impulses")
+        matches!(port, "bodies" | "regions" | "shapes" | "atlas" | "reaction" | "forces" | "impulses")
     }
 
     fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
@@ -385,7 +403,7 @@ impl Primitive for GpuFlipDomain {
         _params: &ParamValues,
         _input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
-        matches!(port_name, "bodies" | "shapes" | "atlas" | "reaction" | "forces" | "impulses").then_some(1)
+        matches!(port_name, "bodies" | "regions" | "shapes" | "atlas" | "reaction" | "forces" | "impulses").then_some(1)
     }
 
     fn warmup_pending(&self) -> bool {
@@ -626,15 +644,25 @@ impl GpuFlipDomain {
                 let reaction = self.reaction.as_ref();
                 let offset = self.coupled.offset;
                 // This frame's clear is encoded after this read.
-                let ticks = owner.settle(
+                let settled = owner.settle(
                     &observation.inputs,
                     |stamp| clock.as_ref().is_none_or(|clock| if offline { clock.wait(stamp) } else { clock.is_complete(stamp) }),
                     |_, rows, impulses| {
                         let offset = offset.ok_or("GPU FLIP coupling: the pending tick has no body offset")?;
                         decode_reaction(offset, rows, reaction_floats(reaction), impulses)
                     },
-                )?;
-                if offline && ticks > 0 { None } else { Some(ticks) }
+                );
+                match settled {
+                    Ok(ticks) => {
+                        if offline && ticks > 0 { None } else { Some(ticks) }
+                    }
+                    Err(error) => {
+                        // A dead reaction or a failed step: the pair restarts
+                        // with a fresh rigid owner, the error reported.
+                        self.coupled.owner = None;
+                        return Err(error);
+                    }
+                }
             }
             (Some(_), _) => Some(1),
             (None, _) => None,
@@ -702,6 +730,7 @@ impl GpuFlipDomain {
             ("display_time", display_time as f32),
             ("dropped_seconds", frame.dropped_seconds as f32),
             ("body_count", self.bodies.count() as f32),
+            ("region_count", self.bodies.region_count() as f32),
             ("body_rows", self.body_rows),
             ("dynamic_bodies", dynamic_bodies as f32),
             ("first_tick", first_tick as f32),

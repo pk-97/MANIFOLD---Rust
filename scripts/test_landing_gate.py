@@ -7,6 +7,8 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from unittest.mock import patch
 
@@ -15,9 +17,16 @@ import land_branch
 import trunk_health
 
 
+def process_alive(pid):
+    """True while `pid` runs; a reaped or zombie process counts as gone."""
+    state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)],
+                           capture_output=True, text=True).stdout.strip()
+    return bool(state) and not state.startswith("Z")
+
+
 class LandingTests(unittest.TestCase):
     checks = ["tooling", "design-status", "docs-index", "deny", "ignored-tests",
-              "clippy", "flow-gate", "tests", "gpu-proofs"]
+              "clippy", "flow-gate", "tests-build", "gpu-proofs-build", "tests", "gpu-proofs"]
 
     def exercise(self, failed=None, extra=(), stale_docs=False, packages=True, head="head", paths=None):
         called, commands = [], []
@@ -37,7 +46,7 @@ class LandingTests(unittest.TestCase):
             finally:
                 events.append("hold-exit")
 
-        def run(cmd, cwd, timeout):
+        def run(cmd, cwd, timeout, live_log=None):
             commands.append(cmd)
             if cmd[0] == "git":
                 if cmd[1] == "merge-base":
@@ -58,6 +67,8 @@ class LandingTests(unittest.TestCase):
                 return 0, out, "", 0.01
             label = ({"nextest": "tests"}.get(cmd[1], cmd[1]) if cmd[0] == "cargo"
                      else labels[Path(cmd[1]).name])
+            if "--no-run" in cmd or "--build-only" in cmd:
+                label += "-build"
             called.append(label)
             events.append(label)
             return (1 if label == failed else 0), f"output for {label}\n", "", 0.01
@@ -123,8 +134,28 @@ class LandingTests(unittest.TestCase):
         enter, leave = events.index("hold-enter:landing_gate tests+gpu-proofs"), events.index("hold-exit")
         self.assertLess(enter, events.index("tests"))
         self.assertLess(events.index("gpu-proofs"), leave)
-        # Cheap prerequisites and clippy do not hold the GPU.
+        # Cheap prerequisites, clippy and every test-binary compile run
+        # before the hold, so it covers test time only.
         self.assertLess(events.index("clippy"), enter)
+        self.assertLess(events.index("tests-build"), enter)
+        self.assertLess(events.index("gpu-proofs-build"), enter)
+
+    def test_builds_compile_exactly_what_the_held_legs_run(self):
+        _, _, _, commands, *_ = self.exercise()
+        nextest = [c for c in commands if c[:2] == ["cargo", "nextest"]]
+        self.assertEqual(nextest, [["cargo", "nextest", "run", "--no-run", "-p", "manifold-gpu"],
+                                   ["cargo", "nextest", "run", "-p", "manifold-gpu"]])
+        proofs = [c for c in commands if c[1:2] == ["scripts/gpu_proofs_gate.py"]]
+        self.assertEqual(proofs, [
+            ["python3", "scripts/gpu_proofs_gate.py", "--base", "origin/main", "--build-only"],
+            ["python3", "scripts/gpu_proofs_gate.py", "--base", "origin/main", "--budget", "300"]])
+
+    def test_build_failure_stops_before_the_hold(self):
+        for failed in ("tests-build", "gpu-proofs-build"):
+            with self.subTest(failed=failed):
+                code, *_ = self.exercise(failed)
+                self.assertEqual(code, 1)
+                self.assertFalse(any(e.startswith("hold") for e in self.events))
 
     def test_tests_failure_still_releases_the_hold(self):
         self.exercise("tests")
@@ -135,6 +166,8 @@ class LandingTests(unittest.TestCase):
             paths=["crates/manifold-renderer/src/node_graph/orphan.bin"])
         self.assertEqual(code, 1)
         self.assertNotIn("gpu-proofs", called)
+        self.assertNotIn("gpu-proofs-build", called)
+        self.assertNotIn("tests-build", called)
         self.assertIn("node_graph/orphan.bin", output)
         self.assertIn("Add a mapping rule", output)
 
@@ -165,14 +198,72 @@ class LandingTests(unittest.TestCase):
         self.assertIn("[SKIP] gpu-proofs (skipped by flag: deferred)", output)
         self.assertIn("SKIP clippy (no touched packages)\n", output)
 
-    def test_timeout_retains_partial_output(self):
-        error = subprocess.TimeoutExpired(["test"], 1, output=b"before timeout\n", stderr=b"detail\n")
-        with patch.object(landing_gate.subprocess, "run", side_effect=error):
-            code, out, err, _ = landing_gate.run_cmd(["test"], Path.cwd(), 1)
-        self.assertEqual(code, -1)
-        self.assertEqual(out, "before timeout\n")
-        self.assertIn("detail", err)
-        self.assertIn("TIMEOUT", err)
+    def test_timeout_retains_partial_output_and_kills_grandchildren(self):
+        # The shape of a hung flow gate: a script whose own child outlives the
+        # timeout. Killing only the direct child orphaned the app, which kept
+        # the GPU lock.
+        with tempfile.TemporaryDirectory() as d:
+            pidfile = Path(d) / "grandchild.pid"
+            script = (
+                "import subprocess, sys, time\n"
+                "g = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'])\n"
+                f"open({str(pidfile)!r}, 'w').write(str(g.pid))\n"
+                "print('before timeout', flush=True)\n"
+                "print('detail', file=sys.stderr, flush=True)\n"
+                "time.sleep(120)\n")
+            live = Path(d) / "live.log"
+            code, out, err, duration = landing_gate.run_cmd(
+                [sys.executable, "-c", script], Path(d), 3, live_log=live)
+            grandchild = int(pidfile.read_text())
+            self.assertEqual(code, -1)
+            self.assertEqual(out, "before timeout\n")
+            self.assertIn("detail", err)
+            self.assertIn("TIMEOUT", err)
+            self.assertLess(duration, 60)
+            self.assertIn("before timeout", live.read_text())
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline and process_alive(grandchild):
+                time.sleep(0.1)
+            self.assertFalse(process_alive(grandchild), "grandchild survived the timeout")
+
+    def test_live_log_holds_lines_before_the_command_exits(self):
+        with tempfile.TemporaryDirectory() as d:
+            live = Path(d) / "live.log"
+            gate = Path(d) / "go"
+            script = (
+                "import os, sys, time\n"
+                "print('first line', flush=True)\n"
+                f"while not os.path.exists({str(gate)!r}): time.sleep(0.05)\n"
+                "print('second line', flush=True)\n")
+            result = {}
+            worker = threading.Thread(target=lambda: result.update(zip(
+                ("code", "out", "err", "duration"),
+                landing_gate.run_cmd([sys.executable, "-c", script], Path(d), 60,
+                                     live_log=live))))
+            worker.start()
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline and not (
+                    live.exists() and "first line" in live.read_text()):
+                time.sleep(0.05)
+            seen_while_running = live.read_text() if live.exists() else ""
+            gate.touch()
+            worker.join(60)
+            self.assertIn("first line", seen_while_running)
+            self.assertNotIn("second line", seen_while_running)
+            self.assertEqual(result["code"], 0)
+            self.assertEqual(result["out"], "first line\nsecond line\n")
+
+    def test_passing_leg_leaves_no_log_and_failing_leg_keeps_full_transcript(self):
+        with tempfile.TemporaryDirectory() as d, \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            landing_gate.run_check("ok-leg", [sys.executable, "-c", "print('fine')"], Path(d), 60)
+            landing_gate.run_check("bad-leg", [sys.executable, "-c",
+                "import sys; print('out'); print('why', file=sys.stderr); sys.exit(3)"],
+                Path(d), 60)
+            logs = {p.name.rsplit("-", 2)[0]: p.read_text()
+                    for p in (Path(d) / "target/landing-logs").glob("*.log")}
+        self.assertEqual(logs, {"bad-leg": "out\nwhy\n"})
+        self.assertIn("[RUN] ok-leg  (live transcript:", output.getvalue())
 
     def test_nightly_keeps_full_renderer_coverage(self):
         with tempfile.TemporaryDirectory() as d, contextlib.ExitStack() as stack:

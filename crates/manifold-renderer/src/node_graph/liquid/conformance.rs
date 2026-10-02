@@ -467,26 +467,6 @@ fn gpu_flip_fixture(fixture: Fixture) -> Option<EffectGraphDef> {
     }
 }
 
-/// The GPU FLIP Dam Break with a free box `density_ratio` times as dense as
-/// the water standing where the static obstacle stands, and that obstacle
-/// removed. A light box is where an explicit body reaction runs away.
-pub fn gpu_flip_dam_break_with_box(density_ratio: f32) -> (EffectGraphDef, BoxScene) {
-    let water = WaterScene { obstacle: false, ..WaterScene::dam_break(64) };
-    let edge = 0.6;
-    let scene = BoxScene {
-        domain_size: water.size as f32,
-        resolution: 64,
-        fill: water.fill_height as f32,
-        liquid_gravity: -G,
-        open_faces: false,
-        centre: [0.35, 0.3 + 0.5 * edge, -0.1],
-        rotation: [0.0; 3],
-        edge,
-        mass: density_ratio * FIXTURE_DENSITY * edge.powi(3),
-    };
-    (scene.set(with_box(render_def(water)), GPU_FLIP_DOMAIN_TYPE_ID), scene)
-}
-
 /// The FLIP Fluids engine's own coupled tank (its gravity tests: 2.4 m at
 /// 48 cells, water to 1.5 m) with a density-neutral cube at its body's
 /// height, on GPU FLIP. The side by side against the engine runs here
@@ -723,8 +703,7 @@ impl BoxScene {
             set_node_param(&mut def, "box_start", &format!("rot_{axis}"), float(self.rotation[i]));
             set_node_param(&mut def, "box_start", &format!("scale_{axis}"), float(scale));
         }
-        // The body takes density; the cube's volume is edge³.
-        set_node_param(&mut def, "box_body", "density", float(self.mass / self.edge.powi(3)));
+        set_node_param(&mut def, "box_body", "mass", float(self.mass));
         def
     }
 }

@@ -1060,6 +1060,12 @@ pub struct ContentPipeline {
     /// `"Compositor"`. Drained by [`Self::take_gpu_profiles`].
     #[cfg(target_os = "macos")]
     last_gpu_profiles: Vec<(&'static str, manifold_gpu::GpuFrameProfile)>,
+    /// `frame-time` probe: GPU start and end time of every unprofiled
+    /// command buffer, chunk splits included, reported from its completion
+    /// handler as `(label, start, end)`. Profiled frames serialise the
+    /// encoders, so only the plain frames carry the number the show pays.
+    #[cfg(all(target_os = "macos", feature = "perf-soak"))]
+    gpu_time_tap: Option<crossbeam_channel::Sender<(&'static str, f64, f64)>>,
     /// Fence-stamped drop-retirement queue (BUG-l7t4 class fix). Drained once
     /// per frame in `render_content_native`; its `Drop` flushes at teardown.
     /// FIELD ORDER MATTERS: this must drop after resource-owning fields — sibling
@@ -1219,6 +1225,8 @@ impl ContentPipeline {
             profiling_enabled: false,
             #[cfg(target_os = "macos")]
             last_gpu_profiles: Vec::new(),
+            #[cfg(all(target_os = "macos", feature = "perf-soak"))]
+            gpu_time_tap: None,
             #[cfg(target_os = "macos")]
             retire_queue: None,
             #[cfg(target_os = "macos")]
@@ -1269,6 +1277,29 @@ impl ContentPipeline {
     #[cfg(all(target_os = "macos", feature = "perf-soak"))]
     pub fn take_gpu_profiles(&mut self) -> Vec<(&'static str, manifold_gpu::GpuFrameProfile)> {
         std::mem::take(&mut self.last_gpu_profiles)
+    }
+
+    /// Report every unprofiled command buffer's true GPU time
+    /// (`"Generators"` / `"Compositor"`, start, end) into `tap` from its
+    /// completion handler. Buffers complete in submission order, so the
+    /// receiver groups them into plain frames by order.
+    #[cfg(all(target_os = "macos", feature = "perf-soak"))]
+    pub fn set_gpu_time_tap(&mut self, tap: Option<crossbeam_channel::Sender<(&'static str, f64, f64)>>) {
+        self.gpu_time_tap = tap;
+    }
+
+    /// Report every command buffer `enc` commits (chunk splits included) to
+    /// the frame-time tap, when one is set.
+    #[cfg(target_os = "macos")]
+    fn tap_gpu_time(&self, enc: &mut manifold_gpu::GpuEncoder, label: &'static str) {
+        #[cfg(feature = "perf-soak")]
+        if let Some(tap) = self.gpu_time_tap.clone() {
+            enc.tap_gpu_time(std::sync::Arc::new(move |start, end| {
+                let _ = tap.send((label, start, end));
+            }));
+        }
+        #[cfg(not(feature = "perf-soak"))]
+        let _ = (enc, label);
     }
 
     /// Drain the compositor's owned chains' per-step CPU profiles from the
@@ -1952,6 +1983,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         targets: &trigger_targets::TriggerTargets,
         pulses: &[manifold_playback::engine::trigger_delivery::CapturedTriggerPulse],
         renderers: &mut [Box<dyn manifold_playback::renderer::ClipRenderer>],
+        project: Option<&manifold_core::project::Project>,
     ) {
         if pulses.is_empty() {
             return;
@@ -1959,14 +1991,45 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         let mut gen_renderer = renderers
             .iter_mut()
             .find_map(|r| r.as_any_mut().downcast_mut::<GeneratorRenderer>());
+        let mut project_tempo = None;
         for captured in pulses {
             let pulse = &captured.pulse;
             if !targets.accepts(pulse) {
                 continue;
             }
-            // Named Fire parameters keep their existing parameter-counter
-            // behavior. Their retained events are for explicit target delivery,
-            // never the compatibility gate broadcast below.
+            // A Fire parameter that aliases a scene-modifier impulse is a
+            // physics event, not a counter: its parameter value never reaches
+            // the solver. Audio and clip-edge fires take the same producer the
+            // manual Fire button calls (`FireParameter` in content_commands).
+            if let Some((layer_id, param)) = targets.scene_impulse(pulse) {
+                let layer = project.and_then(|project| {
+                    project.timeline.layers.iter().find(|layer| &layer.layer_id == layer_id)
+                });
+                if let (Some(layer), Some(gr)) = (layer, gen_renderer.as_deref_mut()) {
+                    let tempo = project_tempo.get_or_insert_with(|| {
+                        project.map(|project| {
+                            manifold_renderer::preset_context::ProjectTempo::new(
+                                &project.tempo_map,
+                                project.settings.bpm,
+                            )
+                        })
+                    });
+                    let source = manifold_renderer::node_graph::FrameTime {
+                        seconds: captured.accepted_time,
+                        beats: captured.accepted_beat,
+                        delta: manifold_core::Seconds::ZERO,
+                        frame_count: 0,
+                    };
+                    if let Err(message) =
+                        gr.fire_scene_impulse(layer, param, source, tempo.as_ref())
+                    {
+                        log::warn!("Scene impulse {param} on {layer_id}: {message}");
+                    }
+                }
+                continue;
+            }
+            // Other named Fire parameters keep their parameter-counter
+            // behavior, never the compatibility gate broadcast below.
             if pulse.kind != manifold_playback::modulation::TriggerPulseKind::Gate {
                 continue;
             }
@@ -2198,7 +2261,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             if let Some(first) = pulses.first() {
                 self.trigger_targets.refresh(project, data_version, first.epoch);
             }
-            Self::apply_trigger_pulses(&mut self.master_trigger_count, &self.trigger_targets, pulses, renderers);
+            Self::apply_trigger_pulses(&mut self.master_trigger_count, &self.trigger_targets, pulses, renderers, project);
         });
 
         // Split borrow: get renderers + project from engine simultaneously.
@@ -2306,6 +2369,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         {
             let mut modifier_preview_error = None;
             let mut gen_enc = native_device.create_encoder("Generators");
+            if !self.profiling_enabled {
+                self.tap_gpu_time(&mut gen_enc, "Generators");
+            }
             // PERF_BUDGET_GATE_DESIGN P2 / D6: attach the dispatch sampler to
             // this command buffer when a --profile run is active. Every
             // generator's executor was already scoped (`gen:{layer_id}`) at
@@ -2536,6 +2602,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
 
         // ── Compositor CB (+ direct present, preview, recording) ────
         let mut native_enc = native_device.create_encoder("Compositor");
+        if !self.profiling_enabled {
+            self.tap_gpu_time(&mut native_enc, "Compositor");
+        }
         // PERF_BUDGET_GATE_DESIGN P2 / D6: same sampler, same command buffer
         // — the compositor was forced to `composite_serial` by
         // `set_profiling` so this IS the single shared compositor command
@@ -4244,13 +4313,13 @@ mod trigger_delivery_tests {
         assert!(targets.accepts(&parameter_event.pulse));
         pulses.insert(1, parameter_event);
         let mut count = 10;
-        super::ContentPipeline::apply_trigger_pulses(&mut count, &targets, &pulses, &mut []);
+        super::ContentPipeline::apply_trigger_pulses(&mut count, &targets, &pulses, &mut [], None);
         assert_eq!(count, 13);
-        super::ContentPipeline::apply_trigger_pulses(&mut count, &targets, &[], &mut []);
+        super::ContentPipeline::apply_trigger_pulses(&mut count, &targets, &[], &mut [], None);
         assert_eq!(count, 13);
         project.settings.master_effects.clear();
         targets.refresh(Some(&project), 2, 3);
-        super::ContentPipeline::apply_trigger_pulses(&mut count, &targets, &pulses, &mut []);
+        super::ContentPipeline::apply_trigger_pulses(&mut count, &targets, &pulses, &mut [], None);
         assert_eq!(count, 13);
     }
 }

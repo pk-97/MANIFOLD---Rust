@@ -170,11 +170,14 @@ fn body(
             basis = eigen.vectors;
         }
     }
-    // Reach at most (1 − band) of a bin from the particle, so any blob a lattice
-    // node's ±1-bin search misses is at least band·bin away: node.particle_volume
-    // caps its distance field at that band, which keeps the cap exact.
-    // The band (0.1) is shared with particle_volume_body.wgsl.
-    axes = min(axes, vec3<f32>(max(0.9 * cell_size - length(centre - x), 1e-6 * cell_size)));
+    // Reach at most two thirds of a bin from the particle, so any blob a lattice
+    // node's ±1-bin search misses is at least a third of a bin away:
+    // node.particle_volume caps its distance field at that band, which keeps
+    // the cap exact. Band = half the reach is the FLIP Fluids mesher's ratio
+    // (exact out to 1.5 radii, particlemesher.cpp `_searchRadiusFactor`);
+    // the band (1/3) is shared with particle_volume_body.wgsl and
+    // clamp_liquid_to_solids_body.wgsl.
+    axes = min(axes, vec3<f32>(max((2.0 / 3.0) * cell_size - length(centre - x), 1e-6 * cell_size)));
     let inverse_axes = mat3x3<f32>(
         vec3<f32>(1.0 / axes.x, 0.0, 0.0),
         vec3<f32>(0.0, 1.0 / axes.y, 0.0),

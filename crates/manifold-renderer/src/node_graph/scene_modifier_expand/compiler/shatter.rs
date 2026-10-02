@@ -337,14 +337,9 @@ pub(super) fn prepare(
                     body.params
                         .insert("fragment_parent".into(), float(parent_slot as f32));
                     body.params.insert("collider_parts".into(), float(1.0));
-                    // A piece is the parent's material; its mass follows
-                    // its own hull.
                     body.params.insert(
-                        "density".into(),
-                        float(
-                            number(parent.params.get("density"))
-                                .unwrap_or(crate::node_graph::physics::DEFAULT_DENSITY),
-                        ),
+                        "mass".into(),
+                        float(number(parent.params.get("mass")).unwrap_or(1.0) / count as f32),
                     );
                     wire(def, authored_pose.clone(), body_copy, "transform");
                     if let Some(local) = &local {

@@ -454,6 +454,26 @@ pub struct ObjectKnownRow {
     pub physics_imported: bool,
     pub fluid_role_available: bool,
     pub fluid_roles: Result<Vec<FluidRoleRow>, String>,
+    /// The liquid's lattice as its Resolution and box resolve it; `None`
+    /// for anything that is not water, or water whose box is wire-driven.
+    pub lattice: Option<LatticeReadout>,
+}
+
+/// What a liquid's Resolution buys: the cell grid and the cell's edge.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LatticeReadout {
+    pub cells: [u32; 3],
+    pub cell_size_m: f32,
+}
+
+impl LatticeReadout {
+    /// One line for the panel: the grid, the cell edge in centimetres and
+    /// the cell count.
+    pub fn line(&self) -> String {
+        let [x, y, z] = self.cells;
+        let count = u64::from(x) * u64::from(y) * u64::from(z);
+        format!("Lattice {x} × {y} × {z} · {:.1} cm cells · {count} cells", self.cell_size_m * 100.0)
+    }
 }
 
 /// Which rows of the matched sections a selection shows: all of them, or

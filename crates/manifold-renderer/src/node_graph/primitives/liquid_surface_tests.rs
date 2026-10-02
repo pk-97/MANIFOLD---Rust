@@ -1002,7 +1002,8 @@ fn fluid_shape_particle_blobs_stretch_one_is_an_exact_sphere() {
 
 /// The level set's cap outside the liquid, as a fraction of a bin; the WGSL of
 /// `node.particle_volume` and `node.shape_particle_blobs` both hold it (P6e).
-const LEVEL_SET_BAND: f64 = 0.1;
+/// The volume's cap, as a fraction of a bin; the blob reach cap is the rest.
+const LEVEL_SET_BAND: f64 = 1.0 / 3.0;
 
 /// The volume against a brute force over every blob, not just the node's
 /// bins: it matches only if no blob the ±1-bin search misses comes within the
@@ -1782,7 +1783,7 @@ fn fluid_clamp_liquid_to_solids_matches_reference_and_passes_through() {
     let (_, errors) = run(&mut harness, nodes);
     assert!(errors.is_empty(), "{errors:?}");
     let clamped: Vec<f32> = read(&clamped_buf, values.len());
-    let band = 0.1_f32 * cell;
+    let band = cell / 3.0;
     let h: [f64; 3] = std::array::from_fn(|a| f64::from(size[a]) / f64::from(nodes[a] - 1));
     let (mut border, mut raised, mut kept, mut ambiguous) = (0, 0, 0, 0);
     for (idx, (&value, &out)) in values[..total].iter().zip(&clamped).enumerate() {
@@ -1856,7 +1857,9 @@ fn fluid_clamp_fused_with_smoothing_renders_like_unfused() {
 /// resolution 8 against the floor and four closed walls and, through the open
 /// top, up to the lattice's top edge. After the clamp every padding node
 /// (behind a closed wall) reads air and every border node reads the band;
-/// before it, both kinds read liquid, or the fixture proves nothing.
+/// before it, the padding reads liquid and smoothing has pulled the border
+/// off the band (the volume already holds it there), or the fixture proves
+/// nothing.
 #[test]
 fn fluid_liquid_surface_keeps_padding_and_border_air_at_extreme_dials() {
     use crate::node_graph::liquid::lattice::{LiquidLattice, PADDING_NODES};
@@ -1943,16 +1946,16 @@ fn fluid_liquid_surface_keeps_padding_and_border_air_at_extreme_dials() {
 
     let smoothed: Vec<f32> = read(&smoothed.expect("three passes"), total);
     let clamped: Vec<f32> = read(&clamped_buf, total);
-    let band = 0.1_f32 * cell;
+    let band = cell / 3.0;
     let h: [f64; 3] = std::array::from_fn(|a| f64::from(lattice.size[a]) / f64::from(nodes[a] - 1));
     let (mut border, mut padding) = (0, 0);
-    let (mut border_liquid_before, mut padding_liquid_before) = (0, 0);
+    let (mut border_moved_before, mut padding_liquid_before) = (0, 0);
     for idx in 0..total {
         let ijk = [idx as u32 % nodes[0], (idx as u32 / nodes[0]) % nodes[1], idx as u32 / (nodes[0] * nodes[1])];
         if (0..3).any(|a| ijk[a] == 0 || ijk[a] == nodes[a] - 1) {
             assert_eq!(clamped[idx].to_bits(), band.to_bits(), "border node {ijk:?} reads {}", clamped[idx]);
             border += 1;
-            border_liquid_before += usize::from(smoothed[idx] < 0.0);
+            border_moved_before += usize::from(smoothed[idx].to_bits() != band.to_bits());
             continue;
         }
         let p: [f64; 3] = std::array::from_fn(|a| f64::from(min[a]) + f64::from(ijk[a]) * h[a]);
@@ -1964,8 +1967,8 @@ fn fluid_liquid_surface_keeps_padding_and_border_air_at_extreme_dials() {
     }
     assert!(border > 1000 && padding > 1000, "border {border}, padding {padding}");
     assert!(
-        border_liquid_before > 0 && padding_liquid_before > 0,
-        "the unclamped surface must reach the border ({border_liquid_before}) and the padding ({padding_liquid_before})"
+        border_moved_before > 0 && padding_liquid_before > 0,
+        "smoothing must move the border off the band ({border_moved_before}) and the unclamped surface must reach the padding ({padding_liquid_before})"
     );
 }
 

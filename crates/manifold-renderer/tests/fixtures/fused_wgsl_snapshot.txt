@@ -14998,7 +14998,7 @@ fn n1_body(
     }
     let ijk = vec3<u32>(idx % nodes.x, (idx / nodes.x) % nodes.y, idx / (nodes.x * nodes.y));
     if any(ijk == vec3<u32>(0u)) || any(ijk == nodes - vec3<u32>(1u)) {
-        return 0.1 * cell_size;
+        return cell_size / 3.0;
     }
     let size = vec3<f32>(size_x, size_y, size_z);
     let lattice_min = vec3<f32>(center_x, center_y, center_z) - 0.5 * size;
@@ -15134,7 +15134,7 @@ fn n1_body(
     }
     let ijk = vec3<u32>(idx % nodes.x, (idx / nodes.x) % nodes.y, idx / (nodes.x * nodes.y));
     if any(ijk == vec3<u32>(0u)) || any(ijk == nodes - vec3<u32>(1u)) {
-        return 0.1 * cell_size;
+        return cell_size / 3.0;
     }
     let size = vec3<f32>(size_x, size_y, size_z);
     let lattice_min = vec3<f32>(center_x, center_y, center_z) - 0.5 * size;
@@ -15270,7 +15270,7 @@ fn n1_body(
     }
     let ijk = vec3<u32>(idx % nodes.x, (idx / nodes.x) % nodes.y, idx / (nodes.x * nodes.y));
     if any(ijk == vec3<u32>(0u)) || any(ijk == nodes - vec3<u32>(1u)) {
-        return 0.1 * cell_size;
+        return cell_size / 3.0;
     }
     let size = vec3<f32>(size_x, size_y, size_z);
     let lattice_min = vec3<f32>(center_x, center_y, center_z) - 0.5 * size;
@@ -15406,7 +15406,7 @@ fn n1_body(
     }
     let ijk = vec3<u32>(idx % nodes.x, (idx / nodes.x) % nodes.y, idx / (nodes.x * nodes.y));
     if any(ijk == vec3<u32>(0u)) || any(ijk == nodes - vec3<u32>(1u)) {
-        return 0.1 * cell_size;
+        return cell_size / 3.0;
     }
     let size = vec3<f32>(size_x, size_y, size_z);
     let lattice_min = vec3<f32>(center_x, center_y, center_z) - 0.5 * size;
