@@ -1,10 +1,11 @@
 // node.particle_volume — fusable BUFFER body, GATHER. One thread per level-set
 // node: the distance to the nearest blob ellipsoid in the node's 27 bins,
 // a·(|G·(x − c)| − 1) with a the blob's longest axis (exact for a sphere),
-// negative inside, capped at band = 0.1 bin outside (GPU_FLUID_SURFACE_DESIGN.md
+// negative inside, capped at band = 1/3 bin outside (GPU_FLUID_SURFACE_DESIGN.md
 // D18, P6e; never an atomic splat). node.shape_particle_blobs keeps every blob
-// within 0.9 bin of its particle, so a blob the search misses is at least band
-// away and the cap is exact. A node inside a solid is capped at 0 — never
+// within 2/3 bin of its particle, so a blob the search misses is at least band
+// away and the cap is exact. Band = half the reach is the FLIP Fluids mesher's
+// ratio (its field is exact out to 1.5 radii). A node inside a solid is capped at 0 — never
 // inside the liquid, as upstream's scalar field caps solid vertices — and the
 // lattice border is outside, so the surface closes (D15).
 //
@@ -47,7 +48,7 @@ fn body(
     bins_y: i32,
     bins_z: i32,
 ) -> f32 {
-    let band = 0.1 * cell_size;
+    let band = cell_size / 3.0;
     let solid_nodes = max(vec3<u32>(vec3<f32>(nodes_x, nodes_y, nodes_z)), vec3<u32>(2u));
     let scale = u32(clamp(resolution_scale, 1, 8));
     let nodes = (solid_nodes - vec3<u32>(1u)) * scale + vec3<u32>(1u);

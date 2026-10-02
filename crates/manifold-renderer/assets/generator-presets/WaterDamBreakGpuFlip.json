@@ -455,7 +455,7 @@
             "params": {
               "b": {
                 "type": "Float",
-                "value": 1.0
+                "value": 1.4
               },
               "op": {
                 "type": "Enum",
@@ -485,7 +485,7 @@
               },
               "particle_scale": {
                 "type": "Float",
-                "value": 2.200000047683716
+                "value": 3.0
               },
               "smoothing": {
                 "type": "Float",
@@ -591,7 +591,7 @@
             "params": {
               "value": {
                 "type": "Float",
-                "value": 2.0
+                "value": 0.0
               }
             },
             "typeId": "node.value"
@@ -609,7 +609,7 @@
             "params": {
               "value": {
                 "type": "Float",
-                "value": 0.0
+                "value": 0.5
               }
             },
             "typeId": "node.value"
@@ -1308,19 +1308,19 @@
       "params": {
         "bin_cells": {
           "type": "Float",
-          "value": 1.0
+          "value": 1.4
         },
         "mesh_relaxation": {
           "type": "Float",
-          "value": 0.0
+          "value": 0.5
         },
         "particle_scale": {
           "type": "Float",
-          "value": 2.200000047683716
+          "value": 3.0
         },
         "smoothing_passes": {
           "type": "Float",
-          "value": 2.0
+          "value": 0.0
         }
       },
       "typeId": "group"
@@ -2364,7 +2364,7 @@
         "convert": {
           "type": "Float"
         },
-        "defaultValue": 2.200000047683716,
+        "defaultValue": 3.0,
         "id": "surface_particle_scale",
         "label": "Surface Particle Scale",
         "target": {
@@ -2377,7 +2377,7 @@
         "convert": {
           "type": "Float"
         },
-        "defaultValue": 0.0,
+        "defaultValue": 0.5,
         "id": "mesh_relaxation",
         "label": "Mesh Relaxation",
         "target": {
@@ -2511,7 +2511,7 @@
         "wholeNumbers": true
       },
       {
-        "defaultValue": 2.200000047683716,
+        "defaultValue": 3.0,
         "formatString": "F3",
         "id": "surface_particle_scale",
         "isToggle": false,
@@ -2523,7 +2523,7 @@
         "wholeNumbers": false
       },
       {
-        "defaultValue": 0.0,
+        "defaultValue": 0.5,
         "formatString": "F2",
         "id": "mesh_relaxation",
         "isToggle": false,
