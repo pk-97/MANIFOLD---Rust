@@ -554,6 +554,11 @@ fn run_built(scene: WaterScene, label: &str, transport: bool, build: fn(WaterSce
     // it is what every Reset must reproduce.
     let first_frame = smoke.frame(dt, false);
     let first = smoke.particles();
+    // The fill leaves sites inside a solid dead; the run must lose none after.
+    let seeded = particle_health(&first, tank_min).live;
+    if !scene.obstacle && seeded != scene.particles() as usize {
+        smoke.critical.push(format!("the fill seeded {seeded} live particles of {}", scene.particles()));
+    }
     let mut warmups = 0;
     while smoke.runtime.warmup_pending() && warmups < 600 {
         smoke.frame(dt, false);
@@ -672,8 +677,8 @@ fn run_built(scene: WaterScene, label: &str, transport: bool, build: fn(WaterSce
                 smoke.critical.push(format!("frame {frame}: {faults} particle ids missing or repeated"));
             }
             assert_eq!(h.non_finite, 0, "CRITICAL: frame {frame}: {} particles not finite", h.non_finite);
-            if h.live != scene.particles() as usize {
-                smoke.critical.push(format!("frame {frame}: {} live particles of {}", h.live, scene.particles()));
+            if h.live != seeded {
+                smoke.critical.push(format!("frame {frame}: {} live particles of {seeded} seeded", h.live));
             }
             if h.outside_tank > 0 {
                 smoke.critical.push(format!("frame {frame}: {} particles outside the tank", h.outside_tank));
@@ -1141,7 +1146,7 @@ fn gpu_flip_look_variants_64() {
 /// the Dam Break at 64³ for 300 frames, left to right GPU FLIP, the FLIP
 /// Fluids engine (whitewater as shipped) and MPM, through one camera, tank,
 /// light rig, water material and tone map. The studio floor is left out as in
-/// Peter's exports, and the obstacle too, since GPU FLIP has no solids yet. Writes each column, the
+/// Peter's exports, and the obstacle too, as the engine race runs. Writes each column, the
 /// side-by-side clip with a phone copy, and a still row at frames 90 and 240
 /// under `GPU_FLIP_SMOKE_DIR`.
 #[test]
@@ -1165,7 +1170,7 @@ fn gpu_flip_race_clips_64() {
     }
     println!("RACE CLIP MPM water material from the engine preset: {material:?}");
     let columns = [
-        record_gpu_flip(WaterScene::dam_break(64), "race_gpu_flip_64", frames, &stills, &dir),
+        record_gpu_flip(WaterScene::race_dam_break(64), "race_gpu_flip_64", frames, &stills, &dir),
         record_preset(preset_def_from("WaterDamBreakGpu.json", &left_out, &json!({})), "race_engine_64", frames, &stills, &dir),
         record_preset(
             preset_def_from("WaterDamBreakMatter.json", &left_out, &json!({ "water_material": material })),
