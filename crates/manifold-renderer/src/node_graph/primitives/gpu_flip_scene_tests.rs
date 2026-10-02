@@ -48,6 +48,8 @@ pub(super) struct Run {
     state: StateStore,
     scene: WaterScene,
     frames: i64,
+    /// Frames per second of the project clock; every tick is one frame.
+    fps: f64,
     /// The particles the frame's tick started from: the state's, read
     /// before the frame runs.
     entering: Vec<FluidParticle>,
@@ -80,7 +82,7 @@ impl Run {
         let mut backend = MetalBackend::new(device.arc(), 64, 64, GpuTextureFormat::Rgba16Float);
         pre_allocate_resources(&mut graph, &plan, &device, &mut backend).expect("pre-allocate");
         let exec = Executor::new(Box::new(backend));
-        let mut run = Self { device, graph, plan, exec, state: StateStore::new(), scene, frames: 0, entering: Vec::new() };
+        let mut run = Self { device, graph, plan, exec, state: StateStore::new(), scene, frames: 0, fps: 60.0, entering: Vec::new() };
         // The domain's clock restarts on its first frame and ticks none: the
         // state takes the fill. Every later frame is one tick.
         run.frame();
@@ -119,8 +121,8 @@ impl Run {
             let mut gpu = GpuEncoder::new(&mut enc, &self.device);
             let time = FrameTime {
                 beats: Beats(0.0),
-                seconds: Seconds(self.frames as f64 / 60.0),
-                delta: Seconds(1.0 / 60.0),
+                seconds: Seconds(self.frames as f64 / self.fps),
+                delta: Seconds(1.0 / self.fps),
                 frame_count: self.frames,
             };
             self.exec.execute_frame_with_state(&mut self.graph, &self.plan, time, &mut gpu, &mut self.state, 0);
@@ -159,8 +161,8 @@ impl Run {
             let mut gpu = GpuEncoder::new(&mut enc, &self.device);
             let time = FrameTime {
                 beats: Beats(0.0),
-                seconds: Seconds(self.frames as f64 / 60.0),
-                delta: Seconds(1.0 / 60.0),
+                seconds: Seconds(self.frames as f64 / self.fps),
+                delta: Seconds(1.0 / self.fps),
                 frame_count: self.frames,
             };
             self.exec.execute_frame_with_state(&mut self.graph, &self.plan, time, &mut gpu, &mut self.state, 0);
@@ -190,8 +192,8 @@ impl Run {
             let mut gpu = GpuEncoder::new(&mut enc, &self.device);
             let time = FrameTime {
                 beats: Beats(0.0),
-                seconds: Seconds(self.frames as f64 / 60.0),
-                delta: Seconds(1.0 / 60.0),
+                seconds: Seconds(self.frames as f64 / self.fps),
+                delta: Seconds(1.0 / self.fps),
                 frame_count: self.frames,
             };
             let start = std::time::Instant::now();
@@ -232,6 +234,13 @@ impl Run {
         let domain = node_named(&self.graph, "domain");
         self.graph.set_param(domain, "gravity_x", crate::node_graph::ParamValue::Float(x as f32)).expect("gravity_x");
         self.graph.set_param(domain, "gravity", crate::node_graph::ParamValue::Float(y as f32)).expect("gravity");
+    }
+
+    /// The project frame rate from the next frame on: the tick's dt is one
+    /// frame.
+    #[cfg(feature = "water-race-probes")]
+    pub(super) fn set_fps(&mut self, fps: f64) {
+        self.fps = fps;
     }
 
     /// Switch the executor's encode replay; the fill frame already ran
@@ -789,6 +798,43 @@ fn gpu_flip_forced_pool_volume_probe() {
         }
     }
     println!("forced pool {n}³: first frame with no air cell {no_air:?}");
+}
+
+/// Peter's waterFunv3 export (BUG-o6dg): 24 fps, 128, Domain Size 10.755,
+/// fill 0.5845, one step. Its Uniform Force card points (0, 2, 0) with
+/// Strength at 0 and a low-band kick audio mod driving it to +20 (rangeMin
+/// 0.5 of −20..20, attack 0, release 72 ms), so each kick lifts the water at
+/// up to 40 m/s² over gravity. Kicks are modelled four to the bar at 140 bpm,
+/// each at full level, decaying as exp(−t/72 ms). The Vortex card (also
+/// kick-driven) is not modelled: it is horizontal and the hook is uniform.
+#[cfg(feature = "water-race-probes")]
+#[test]
+fn gpu_flip_kick_lift_pool_volume_probe() {
+    let n = 128;
+    let mut run = Run::new(WaterScene::pool(n, 10.755186, 0.58450913));
+    run.set_fps(24.0);
+    let beat = 60.0 / 140.0;
+    let mut no_air = None;
+    for frame in 0..=300 {
+        if frame > 0 {
+            let since_kick = (frame as f64 / 24.0) % beat;
+            run.set_gravity(0.0, -G + 2.0 * 20.0 * (-since_kick / 0.072).exp());
+            run.frame();
+        }
+        let particles = run.particles();
+        let (live, water, air, per_cell) = cloud_counts(&run, &particles);
+        if air == 0 && no_air.is_none() {
+            no_air = Some(frame);
+        }
+        if frame % 30 == 0 {
+            let share = raised_share(&run, &particles, &run.water_of(&particles));
+            println!(
+                "kick pool {n}³ 24fps frame {frame:3}: {live} particles, {water} water cells, {air} air cells, {per_cell:.3} per occupied cell, {:.1}% of water cells raised to rest",
+                100.0 * share
+            );
+        }
+    }
+    println!("kick pool {n}³: first frame with no air cell {no_air:?}");
 }
 
 /// The Dam Break never gains energy: an inviscid solver with closed walls
