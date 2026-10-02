@@ -78,8 +78,7 @@ pub(crate) struct WaterScene {
     pub size: f64,
     /// Water substeps per tick: the step node's Steps.
     pub steps: usize,
-    /// The FLIP share kept per 1/60 s, the FLIP Fluids engine's 0.95 at its
-    /// one step a frame; [`Self::flip_per_step`] is what a step uses.
+    /// The FLIP share kept per step, the FLIP Fluids engine's 0.95.
     pub flip: f64,
     pub fill_height: f64,
     pub column: [[f64; 2]; 3],
@@ -1105,7 +1104,7 @@ pub(super) mod tests {
             (travel, band_layers(travel))
         };
         let bands = [at(64, 2), at(64, 1), at(128, 2), at(96, 2), at(16, 2)];
-        assert_eq!(bands, [(3, 4), (6, 6), (6, 6), (4, 4), (1, 2)]);
+        assert_eq!(bands, [(3, 9), (6, 14), (6, 14), (4, 10), (1, 5)]);
         assert!(bands.iter().all(|&(_, band)| band >= FACE_VALID_LAYERS));
     }
 
