@@ -33,7 +33,9 @@ struct Params {
     cx: u32,
     cy: u32,
     cz: u32,
-    // smooth: 1 starts from zero. residual: 1 has no rhs (−L value).
+    // Bit 0: smooth starts from zero; residual has no rhs (−L value); check
+    // is the start. Bit 1 (REDUCE): the pass also folds its per-cell product
+    // into one partial per workgroup.
     mode: u32,
     cell_size: f32,
     // The conjugate gradient iteration, or the scalar a dot product writes.
@@ -68,12 +70,116 @@ struct FaceSample {
 // (gpu_flip_pressure.rs Gate): a round's recorded dispatches run when its
 // length is its command count and skip when it is 0.
 @group(0) @binding(15) var<storage, read_write> ranges: array<u32>;
+// One partial per workgroup of a folded reduction (the fine lattice's group
+// count, no cap): the finalize and check passes sum or max them in order.
+@group(0) @binding(16) var<storage, read_write> partials: array<f32>;
+// A level's operator rows, assembled once at prepare (rows_main): the sweep
+// and residual passes read a cell's row instead of its six faces, six
+// neighbours' water and φ. Non-water cells hold zero rows.
+@group(0) @binding(17) var<storage, read> rows: array<Row>;
+@group(0) @binding(18) var<storage, read_write> out_rows: array<Row>;
+
+// One cell's row of L: lo = w to −x, +x, −y, +y; hi = w to −z, +z, then the
+// ghost diagonal (Σ w − Σ w·θ over air neighbours) and the plain one (Σ w).
+// A weight is 0 where the neighbour is not water or past the box, so the
+// neighbour sum skips exactly what the face stencil skipped.
+struct Row {
+    lo: vec4<f32>,
+    hi: vec4<f32>,
+};
+
+fn row_weight(row: Row, k: u32) -> f32 {
+    if k < 4u {
+        return row.lo[k];
+    }
+    return row.hi[k - 4u];
+}
+
+// Cell idx's neighbour across face k (axis k / 2, low side for even k):
+// the weight is positive only inside the box, so this never leaves it.
+fn across(idx: u32, k: u32) -> u32 {
+    let stride = select(select(u.nx * u.ny, u.nx, k < 4u), 1u, k < 2u);
+    return select(idx + stride, idx - stride, (k & 1u) == 0u);
+}
 
 const DIVISOR_FLOOR: f32 = 1e-30;
 // Rounds a solve may run: the solver's MAX_ITERATIONS.
 const ROUNDS: u32 = 64u;
+const REDUCE: u32 = 2u;
 
 var<workgroup> sums: array<f32, 256>;
+
+fn from_zero() -> bool {
+    return (u.mode & 1u) == 1u;
+}
+
+fn reduces() -> bool {
+    return (u.mode & REDUCE) != 0u;
+}
+
+// Workgroup wg's tree sum of its threads' values, in a fixed order, into
+// partials[wg]. Called in uniform control flow by every thread.
+fn fold_sum(li: u32, wg: u32, value: f32) {
+    sums[li] = value;
+    workgroupBarrier();
+    for (var width = 128u; width > 0u; width = width >> 1u) {
+        if li < width {
+            sums[li] = sums[li] + sums[li + width];
+        }
+        workgroupBarrier();
+    }
+    if li == 0u {
+        partials[wg] = sums[0];
+    }
+}
+
+fn fold_max(li: u32, wg: u32, value: f32) {
+    sums[li] = value;
+    workgroupBarrier();
+    for (var width = 128u; width > 0u; width = width >> 1u) {
+        if li < width {
+            sums[li] = max(sums[li], sums[li + width]);
+        }
+        workgroupBarrier();
+    }
+    if li == 0u {
+        partials[wg] = sums[0];
+    }
+}
+
+// Thread li's strided share of the `count` partials, summed in order, then
+// the workgroup's tree: the one-workgroup second pass of a reduction.
+fn total_of_partials(li: u32, count: u32) -> f32 {
+    var acc = 0.0;
+    for (var g = li; g < count; g = g + 256u) {
+        acc = acc + partials[g];
+    }
+    sums[li] = acc;
+    workgroupBarrier();
+    for (var width = 128u; width > 0u; width = width >> 1u) {
+        if li < width {
+            sums[li] = sums[li] + sums[li + width];
+        }
+        workgroupBarrier();
+    }
+    return sums[0];
+}
+
+fn max_of_partials(li: u32, count: u32) -> f32 {
+    var acc = 0.0;
+    for (var g = li; g < count; g = g + 256u) {
+        acc = max(acc, partials[g]);
+    }
+    sums[li] = acc;
+    workgroupBarrier();
+    for (var width = 128u; width > 0u; width = width >> 1u) {
+        if li < width {
+            sums[li] = max(sums[li], sums[li + width]);
+        }
+        workgroupBarrier();
+    }
+    return sums[0];
+}
 
 fn lattice() -> vec3<i32> {
     return vec3<i32>(i32(u.nx), i32(u.ny), i32(u.nz));
@@ -122,34 +228,72 @@ fn ghost_ratio(own: u32, air: u32) -> f32 {
     return clamp(max(phi[air], 0.0) / (centre + 1e-9), -25.0, 25.0);
 }
 
-// The diagonal: Σ w over p's faces, less w·θ per air neighbour; and Σ w ·
-// value over its water neighbours, reading `value` from `out` (smoothing in
-// place), `aux`, or nowhere (mode 2: the diagonal only).
+// One thread per cell: its row of L from its faces, its neighbours' water
+// and, with `ghost`, φ. The sums run in the face order −x, +x, −y, +y, −z,
+// +z, the order the stencil summed in before the rows were assembled, so a
+// solve on rows is bit for bit the solve that recomputed them. A cell that
+// is not water, or has no open face, is a zero row.
+@compute @workgroup_size(256, 1, 1)
+fn rows_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let n = lattice();
+    let idx = gid.x;
+    if idx >= u.nx * u.ny * u.nz {
+        return;
+    }
+    var row = Row(vec4<f32>(0.0), vec4<f32>(0.0));
+    if is_water(idx) {
+        let p = coords(idx, n);
+        var ghost = 0.0;
+        var plain = 0.0;
+        for (var k = 0u; k < 6u; k = k + 1u) {
+            let a = i32(k / 2u);
+            let d = select(-1, 1, (k & 1u) == 1u);
+            let w = face_weight(p, a, d, n);
+            if w > 0.0 {
+                ghost = ghost + w;
+                plain = plain + w;
+                var q = p;
+                q[a] = p[a] + d;
+                let at = cell(q, n);
+                if is_water(at) {
+                    if k < 4u {
+                        row.lo[k] = w;
+                    } else {
+                        row.hi[k - 4u] = w;
+                    }
+                } else {
+                    ghost = ghost - w * ghost_ratio(idx, at);
+                }
+            }
+        }
+        row.hi.z = ghost;
+        row.hi.w = plain;
+    }
+    out_rows[idx] = row;
+}
+
+// The cell's diagonal (the ghost one with `ghost` 1, else the plain one)
+// and Σ w · value over its water neighbours, `value` read from `out`
+// (smoothing in place), `aux`, or nowhere (source 2: the diagonal only).
 struct Stencil {
     diagonal: f32,
     sum: f32,
 };
 
-fn stencil(p: vec3<i32>, n: vec3<i32>, source: u32) -> Stencil {
-    var s = Stencil(0.0, 0.0);
-    let own = cell(p, n);
-    for (var a = 0; a < 3; a = a + 1) {
-        for (var d = -1; d <= 1; d = d + 2) {
-            let w = face_weight(p, a, d, n);
-            if w > 0.0 {
-                s.diagonal = s.diagonal + w;
-                var q = p;
-                q[a] = p[a] + d;
-                let at = cell(q, n);
-                if is_water(at) {
-                    if source == 0u {
-                        s.sum = s.sum + w * out[at];
-                    } else if source == 1u {
-                        s.sum = s.sum + w * aux[at];
-                    }
-                } else {
-                    s.diagonal = s.diagonal - w * ghost_ratio(own, at);
-                }
+fn stencil(idx: u32, source: u32) -> Stencil {
+    let row = rows[idx];
+    var s = Stencil(select(row.hi.w, row.hi.z, u.ghost == 1u), 0.0);
+    if source == 2u {
+        return s;
+    }
+    for (var k = 0u; k < 6u; k = k + 1u) {
+        let w = row_weight(row, k);
+        if w > 0.0 {
+            let at = across(idx, k);
+            if source == 0u {
+                s.sum = s.sum + w * out[at];
+            } else {
+                s.sum = s.sum + w * aux[at];
             }
         }
     }
@@ -159,45 +303,58 @@ fn stencil(p: vec3<i32>, n: vec3<i32>, source: u32) -> Stencil {
 // One red-black Gauss-Seidel sweep of L e = rhs in place in `out` (e), rhs
 // in `src`. A water cell of the swept color becomes
 // (Σ w · water neighbours' e − h² · rhs) / diagonal, or 0 with no open face.
-// From zero (mode 1) every other cell is written 0 and neighbours read 0.
+// From zero (mode bit 0) every other cell is written 0 and neighbours read
+// 0. With REDUCE, the solve's last fine sweep, each thread also folds
+// rhs · e of its cell (r · z, the unswept color's e final since the sweep
+// before) into the workgroup's partial.
 @compute @workgroup_size(256, 1, 1)
-fn smooth_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn smooth_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wg: vec3<u32>) {
     let n = lattice();
     let idx = gid.x;
-    if idx >= u.nx * u.ny * u.nz {
-        return;
-    }
-    let p = coords(idx, n);
-    let swept = is_water(idx) && u32(p.x + p.y + p.z) % 2u == u.color;
-    if !swept {
-        if u.mode == 1u {
-            out[idx] = 0.0;
+    var product = 0.0;
+    if idx < u.nx * u.ny * u.nz {
+        let p = coords(idx, n);
+        let swept = is_water(idx) && u32(p.x + p.y + p.z) % 2u == u.color;
+        var e = out[idx];
+        if swept {
+            let h2 = u.cell_size * u.cell_size;
+            let s = stencil(idx, select(0u, 2u, from_zero()));
+            e = select(0.0, (s.sum - h2 * src[idx]) / s.diagonal, s.diagonal > 0.0);
+            out[idx] = e;
+        } else if from_zero() {
+            e = 0.0;
+            out[idx] = e;
         }
-        return;
+        product = src[idx] * e;
     }
-    let h2 = u.cell_size * u.cell_size;
-    let s = stencil(p, n, select(0u, 2u, u.mode == 1u));
-    out[idx] = select(0.0, (s.sum - h2 * src[idx]) / s.diagonal, s.diagonal > 0.0);
+    if reduces() {
+        fold_sum(li, wg.x, product);
+    }
 }
 
 // rhs − L value in a water cell with an open face, else 0; rhs in `src`
-// (0 with mode 1, which makes −L value), value in `aux`.
+// (0 with mode bit 0, which makes −L value), value in `aux`. With REDUCE
+// (the operator product s = −L p with no bodies) each thread also folds
+// value · result (p · s) into the workgroup's partial.
 @compute @workgroup_size(256, 1, 1)
-fn residual_main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let n = lattice();
+fn residual_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wg: vec3<u32>) {
     let idx = gid.x;
-    if idx >= u.nx * u.ny * u.nz {
-        return;
-    }
-    var result = 0.0;
-    if is_water(idx) {
-        let s = stencil(coords(idx, n), n, 1u);
-        if s.diagonal > 0.0 {
-            let rhs = select(src[idx], 0.0, u.mode == 1u);
-            result = rhs - (s.sum - s.diagonal * aux[idx]) / (u.cell_size * u.cell_size);
+    var product = 0.0;
+    if idx < u.nx * u.ny * u.nz {
+        var result = 0.0;
+        if is_water(idx) {
+            let s = stencil(idx, 1u);
+            if s.diagonal > 0.0 {
+                let rhs = select(src[idx], 0.0, from_zero());
+                result = rhs - (s.sum - s.diagonal * aux[idx]) / (u.cell_size * u.cell_size);
+            }
         }
+        out[idx] = result;
+        product = aux[idx] * result;
     }
-    out[idx] = result;
+    if reduces() {
+        fold_sum(li, wg.x, product);
+    }
 }
 
 // The share fine cell f takes from coarse cell c along one axis in
@@ -355,56 +512,51 @@ fn coarse_solve_main(@builtin(local_invocation_index) i: u32) {
 
 // The conjugate gradient's start: r = f (`src`) on water with an open face,
 // else 0, into `out`, and the pressure x = 0 into `out2`, so a solve that
-// stops before its first iteration leaves zero pressure. The ghost rows only add to a diagonal, so an open
-// face is the whole test.
+// stops before its first iteration leaves zero pressure. The ghost rows only
+// add to a diagonal, so an open face is the whole test. With REDUCE each
+// thread folds |r| into the workgroup's partial, for the start's |f|∞.
 @compute @workgroup_size(256, 1, 1)
-fn init_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn init_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wg: vec3<u32>) {
     let n = lattice();
     let idx = gid.x;
-    if idx >= u.nx * u.ny * u.nz {
-        return;
-    }
-    var diagonal = 0.0;
-    if is_water(idx) {
-        let p = coords(idx, n);
-        for (var a = 0; a < 3; a = a + 1) {
-            diagonal = diagonal + face_weight(p, a, -1, n) + face_weight(p, a, 1, n);
+    var r = 0.0;
+    if idx < u.nx * u.ny * u.nz {
+        var diagonal = 0.0;
+        if is_water(idx) {
+            let p = coords(idx, n);
+            for (var a = 0; a < 3; a = a + 1) {
+                diagonal = diagonal + face_weight(p, a, -1, n) + face_weight(p, a, 1, n);
+            }
         }
+        r = select(0.0, src[idx], diagonal > 0.0);
+        out[idx] = r;
+        out2[idx] = 0.0;
     }
-    out[idx] = select(0.0, src[idx], diagonal > 0.0);
-    out2[idx] = 0.0;
+    if reduces() {
+        fold_max(li, wg.x, abs(r));
+    }
 }
 
-// Workgroup g's partial sum of src · aux over a grid stride of the lattice,
-// tree-reduced in a fixed order into out2[g]. `color` is the partial count.
+// One workgroup per 256 cells: its partial sum of src · aux, tree-reduced
+// in a fixed order into partials[wg]. The bodies path's p · s, whose s is
+// finished by the body product after the operator pass.
 @compute @workgroup_size(256, 1, 1)
-fn dot_partial_main(@builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wg: vec3<u32>) {
-    let length = u.nx * u.ny * u.nz;
-    var acc = 0.0;
-    for (var e = wg.x * 256u + li; e < length; e = e + u.color * 256u) {
-        acc = acc + src[e] * aux[e];
+fn dot_partial_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wg: vec3<u32>) {
+    let idx = gid.x;
+    var product = 0.0;
+    if idx < u.nx * u.ny * u.nz {
+        product = src[idx] * aux[idx];
     }
-    sums[li] = acc;
-    workgroupBarrier();
-    for (var width = 128u; width > 0u; width = width >> 1u) {
-        if li < width {
-            sums[li] = sums[li] + sums[li + width];
-        }
-        workgroupBarrier();
-    }
-    if li == 0u {
-        out2[wg.x] = sums[0];
-    }
+    fold_sum(li, wg.x, product);
 }
 
-// The partials in order into scalars[slot].
-@compute @workgroup_size(1, 1, 1)
-fn dot_finalize_main() {
-    var total = 0.0;
-    for (var g = 0u; g < u.color; g = g + 1u) {
-        total = total + out2[g];
+// The `color` partials in order into scalars[slot].
+@compute @workgroup_size(256, 1, 1)
+fn dot_finalize_main(@builtin(local_invocation_index) li: u32) {
+    let total = total_of_partials(li, u.color);
+    if li == 0u {
+        scalars[u.slot] = total;
     }
-    scalars[u.slot] = total;
 }
 
 // Iteration k's scalars: rz at 2k, p·s at 2k + 1.
@@ -431,17 +583,23 @@ fn direction_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
 // x −= α p into `out`, r −= α s into `out2`, α = rz_k / (p·s)_k; p in `src`,
 // s in `aux`. The first iteration starts x from zero and never reads it.
+// With REDUCE each thread folds |r| of its cell into the workgroup's
+// partial, for the stop's |r|∞.
 @compute @workgroup_size(256, 1, 1)
-fn update_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn update_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wg: vec3<u32>) {
     let idx = gid.x;
-    if idx >= u.nx * u.ny * u.nz {
-        return;
+    var r = 0.0;
+    if idx < u.nx * u.ny * u.nz {
+        let k = u.slot;
+        let alpha = ratio(scalars[2u * k], scalars[2u * k + 1u]);
+        let x = select(out[idx], 0.0, k == 0u);
+        out[idx] = x - alpha * src[idx];
+        r = out2[idx] - alpha * aux[idx];
+        out2[idx] = r;
     }
-    let k = u.slot;
-    let alpha = ratio(scalars[2u * k], scalars[2u * k + 1u]);
-    let x = select(out[idx], 0.0, k == 0u);
-    out[idx] = x - alpha * src[idx];
-    out2[idx] = out2[idx] - alpha * aux[idx];
+    if reduces() {
+        fold_max(li, wg.x, abs(r));
+    }
 }
 
 // The stop, ported from FLIP Fluids (pcgsolver.h solveWithAdditionalMatrix,
@@ -453,29 +611,9 @@ fn update_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 // tolerance, [4 + k] |r|∞ after iteration k. Stopping zeroes every gate
 // triple (`cx` of them) and the range entries of every round from `first`
 // on, so the solve's later dispatches run no groups direct or replayed.
+// The norm's partials come folded from init (the start) or update.
 const START_FLOOR: f32 = 1e-9;
 const ACCEPTABLE: f32 = 1.0;
-
-// Workgroup g's max of |src| over a grid stride, into out2[g].
-@compute @workgroup_size(256, 1, 1)
-fn norm_partial_main(@builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wg: vec3<u32>) {
-    let length = u.nx * u.ny * u.nz;
-    var acc = 0.0;
-    for (var e = wg.x * 256u + li; e < length; e = e + u.color * 256u) {
-        acc = max(acc, abs(src[e]));
-    }
-    sums[li] = acc;
-    workgroupBarrier();
-    for (var width = 128u; width > 0u; width = width >> 1u) {
-        if li < width {
-            sums[li] = max(sums[li], sums[li + width]);
-        }
-        workgroupBarrier();
-    }
-    if li == 0u {
-        out2[wg.x] = sums[0];
-    }
-}
 
 fn stop(first: u32) {
     progress[2] = 1.0;
@@ -488,13 +626,13 @@ fn stop(first: u32) {
     }
 }
 
-// The partials' max; mode 1 is the start (|f|∞), else iteration `slot`'s
-// |r|∞ and the stop test.
-@compute @workgroup_size(1, 1, 1)
-fn check_main() {
-    var norm = 0.0;
-    for (var g = 0u; g < u.color; g = g + 1u) {
-        norm = max(norm, out2[g]);
+// The `color` partials' max; mode 1 is the start (|f|∞), else iteration
+// `slot`'s |r|∞ and the stop test.
+@compute @workgroup_size(256, 1, 1)
+fn check_main(@builtin(local_invocation_index) li: u32) {
+    let norm = max_of_partials(li, u.color);
+    if li != 0u {
+        return;
     }
     if u.mode == 1u {
         progress[0] = norm;
