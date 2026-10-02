@@ -238,9 +238,10 @@ const FLIP_COUPLES_NATIVELY: &str = "synchronous coupling (D3): FLIP steps its b
      takes them from the scene layer's roles, so it has no rigid owner to count, no host sync between coupled \
      ticks, and no box scene a preset can carry";
 
-const GPU_FLIP_CLOSED_TANK: &str = "GPU FLIP's tank is closed on every face (it has no open-face boundary \
-     yet): a box pressing on an incompressible pool in a closed tank hands its momentum to the walls at once, \
-     so body plus liquid momentum cannot balance; the collision scene needs open faces";
+const GPU_FLIP_WALLS_IN_SOLVE: &str = "GPU FLIP's tank walls are in its pressure solve on every face by \
+     design, as in the engine: an open face is a sink that removes particles, not a hole in the wall. The \
+     floor's push back on a box pressing the pool is real ground reaction, so the walls absorb momentum and \
+     body plus liquid momentum cannot balance; the check is valid only for a solver with no walls in the solve";
 
 pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
     LiquidSolverRow {
@@ -433,7 +434,7 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
             // A gather: the published faces are the solver's projected faces.
             ulps: (0, ""),
         }),
-        exempt: &[(Check::Collision, GPU_FLIP_CLOSED_TANK)],
+        exempt: &[(Check::Collision, GPU_FLIP_WALLS_IN_SOLVE)],
     },
 ];
 
@@ -449,10 +450,10 @@ fn liquid_totals(words: &[u32]) -> LiquidTotals {
 }
 
 /// GPU FLIP's scenes in the render graph the app shows: the pool scenes at
-/// the 64³ lattice its solver is built for, the box scenes at their own. Its
-/// tank is closed on every face, so a scene that asks for open faces keeps
-/// them closed; only the checks that end before the box reaches the liquid
-/// run on one.
+/// the 64³ lattice its solver is built for, the box scenes at their own. A
+/// scene that asks for open faces keeps them closed: its walls stay in the
+/// solve either way, and only the checks that end before the box reaches the
+/// liquid run on one.
 fn gpu_flip_fixture(fixture: Fixture) -> Option<EffectGraphDef> {
     match fixture {
         Fixture::DamBreak => Some(bundled(SHIPPED_PRESET)),
