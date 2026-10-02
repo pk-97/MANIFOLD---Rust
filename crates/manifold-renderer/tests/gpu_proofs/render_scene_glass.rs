@@ -785,3 +785,43 @@ fn stacked_transmission_preserves_both_panes_tint() {
         "stacked glass tint",
     );
 }
+
+/// The transmission scene plus a red Blend pane (alpha 0.4) as object 2 at
+/// `pos_y`; the glass pane is moved to `glass_pos_x`, `glass_pos_y`.
+fn blend_pane_with_glass(glass_pos_x: f32, glass_pos_y: f32, blend_pos_y: f32) -> String {
+    use serde_json::json;
+    let mut graph: serde_json::Value =
+        serde_json::from_str(&transmission_scene(0.0, 1.0, false)).unwrap();
+    let (blend_nodes, blend_ids) = plane_object(300, blend_pos_y, [1.0, 0.2, 0.2], 0.4, 2);
+    let blend_nodes: Vec<serde_json::Value> =
+        serde_json::from_str(&format!("[{}]", blend_nodes.trim_end_matches(','))).unwrap();
+    let blend_wires: Vec<serde_json::Value> =
+        serde_json::from_str(&format!("[{}]", wire_object(&blend_ids, 2).trim_end_matches(','))).unwrap();
+    let nodes = graph["nodes"].as_array_mut().unwrap();
+    let glass_transform = nodes.iter_mut().find(|n| n["id"] == 202).unwrap();
+    glass_transform["params"]["pos_x"] = json!({"type":"Float", "value":glass_pos_x});
+    glass_transform["params"]["pos_y"] = json!({"type":"Float", "value":glass_pos_y});
+    nodes.iter_mut().find(|n| n["id"] == 20).unwrap()["params"]["objects"]["value"] = json!(3);
+    nodes.extend(blend_nodes);
+    graph["wires"].as_array_mut().unwrap().extend(blend_wires);
+    graph.to_string()
+}
+
+/// A Blend layer in a frame that also holds glass takes the Pass B route
+/// but never reads the opaque-scene snapshot, so it composites to the exact
+/// straight-alpha "over" value with the snapshot copy skipped.
+#[test]
+fn blend_layer_composites_exactly_when_glass_shares_the_frame() {
+    let (bytes, w, h) = render_readback(&blend_pane_with_glass(20.0, 1.0, 1.0));
+    let expected = over([1.0, 0.2, 0.2], 0.4, [0.15, 0.3, 0.6]);
+    assert_rgb_close(center_rgb(&bytes, w, h), expected, 0.02, "blend pane beside glass");
+}
+
+/// Glass drawn after a Blend layer takes its own snapshot right before its
+/// draw, so it transmits the already-blended colour.
+#[test]
+fn glass_above_a_blend_layer_transmits_the_blended_colour() {
+    let (bytes, w, h) = render_readback(&blend_pane_with_glass(0.0, 2.0, 1.0));
+    let expected = over([1.0, 0.2, 0.2], 0.4, [0.15, 0.3, 0.6]);
+    assert_rgb_close(center_rgb(&bytes, w, h), expected, 0.025, "glass over blend pane");
+}
