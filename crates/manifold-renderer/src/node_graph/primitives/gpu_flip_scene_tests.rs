@@ -810,6 +810,18 @@ fn gpu_flip_forced_pool_volume_probe() {
 #[cfg(feature = "water-race-probes")]
 #[test]
 fn gpu_flip_kick_lift_pool_volume_probe() {
+    // A still seeded pool is an equilibrium, so the control kicks for the
+    // first 3 s, then stops: it asks whether the thrown pool comes back.
+    for kick_frames in [300, 72] {
+        kick_lift_pool(kick_frames);
+    }
+}
+
+/// One 300-frame run of the kick-lift pool, kicking for its first `kick_frames`. The force is
+/// sampled once per 24 fps display frame and held over that frame's 2-3
+/// liquid ticks, as the live force path does.
+#[cfg(feature = "water-race-probes")]
+fn kick_lift_pool(kick_frames: usize) {
     let n = 128;
     let mut run = Run::new(WaterScene::pool(n, 10.755186, 0.58450913));
     run.set_fps(24.0);
@@ -818,7 +830,8 @@ fn gpu_flip_kick_lift_pool_volume_probe() {
     for frame in 0..=300 {
         if frame > 0 {
             let since_kick = (frame as f64 / 24.0) % beat;
-            run.set_gravity(0.0, -G + 2.0 * 20.0 * (-since_kick / 0.072).exp());
+            let lift = if frame <= kick_frames { 2.0 * 20.0 * (-since_kick / 0.072).exp() } else { 0.0 };
+            run.set_gravity(0.0, -G + lift);
             run.frame();
         }
         let particles = run.particles();
@@ -829,12 +842,12 @@ fn gpu_flip_kick_lift_pool_volume_probe() {
         if frame % 30 == 0 {
             let share = raised_share(&run, &particles, &run.water_of(&particles));
             println!(
-                "kick pool {n}³ 24fps frame {frame:3}: {live} particles, {water} water cells, {air} air cells, {per_cell:.3} per occupied cell, {:.1}% of water cells raised to rest",
+                "kick pool {n}³ 24fps kicks to {kick_frames} frame {frame:3}: {live} particles, {water} water cells, {air} air cells, {per_cell:.3} per occupied cell, {:.1}% of water cells raised to rest",
                 100.0 * share
             );
         }
     }
-    println!("kick pool {n}³: first frame with no air cell {no_air:?}");
+    println!("kick pool {n}³ kicks to {kick_frames}: first frame with no air cell {no_air:?}");
 }
 
 /// The Dam Break never gains energy: an inviscid solver with closed walls
