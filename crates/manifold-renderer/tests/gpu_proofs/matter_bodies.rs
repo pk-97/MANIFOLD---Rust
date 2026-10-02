@@ -57,7 +57,7 @@ impl Bench {
         let plan = compile(&graph).expect("bench compiles");
         let device = &harness::shared().device;
         let mut backend = MetalBackend::new(device.clone(), 64, 64, GpuTextureFormat::Rgba16Float);
-        pre_allocate_resources(&graph, &plan, device, &mut backend).expect("pre-allocate");
+        pre_allocate_resources(&mut graph, &plan, device, &mut backend).expect("pre-allocate");
         let hosts = host_nodes.iter().map(|&h| (h, output_of(&plan, h, "out"))).collect();
         Self { graph, plan, executor: Executor::new(Box::new(backend)), state: StateStore::new(), hosts, node }
     }

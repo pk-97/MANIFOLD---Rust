@@ -115,7 +115,7 @@ fn run(mut graph: Graph) -> Run {
     let plan = compile(&graph).expect("proof def compiles");
     assert_eq!(plan.substep_regions().len(), 1, "one substep region");
     let mut backend = MetalBackend::new(device.clone(), 64, 64, GpuTextureFormat::Rgba16Float);
-    pre_allocate_resources(&graph, &plan, device, &mut backend).expect("pre-allocate");
+    pre_allocate_resources(&mut graph, &plan, device, &mut backend).expect("pre-allocate");
 
     let boundary = node_of(&graph, "test.particle_boundary");
     let seed_res = resource(&plan, node_of(&graph, "test.particle_source"), "out", true);
@@ -271,7 +271,7 @@ fn run_with_storage(mut graph: Graph, frames: u32, storage: Storage) -> StorageR
             backend.pre_bind_array(resource, device.create_buffer_shared(array.bytes));
         }
     }
-    pre_allocate_resources(&graph, &plan, device, &mut backend).expect("pre-allocate");
+    pre_allocate_resources(&mut graph, &plan, device, &mut backend).expect("pre-allocate");
     let buffers = (0..plan.resource_count() as u32)
         .filter_map(|r| backend.slot_for(ResourceId(r)).filter(|_| matches!(plan.resource_type(ResourceId(r)), Some(PortType::Array(_)))))
         .collect::<std::collections::HashSet<_>>()
@@ -412,7 +412,7 @@ fn post_frame_readers_never_see_reused_storage() {
     let harness = harness::shared();
     let device = &harness.device;
     let mut backend = MetalBackend::new(device.clone(), 64, 64, GpuTextureFormat::Rgba16Float);
-    pre_allocate_resources(&graph, &plan, device, &mut backend).expect("pre-allocate");
+    pre_allocate_resources(&mut graph, &plan, device, &mut backend).expect("pre-allocate");
     let copies: Vec<ResourceId> = plan
         .steps()
         .iter()

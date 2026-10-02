@@ -218,7 +218,7 @@ fn render_and_readback(
         unsafe { weights_buf.write(0, bytemuck::cast_slice(weights)) };
         backend.pre_bind_array(res_of(mesh_in, "weights"), weights_buf);
     }
-    pre_allocate_resources(&graph, &plan, device, &mut backend)
+    pre_allocate_resources(&mut graph, &plan, device, &mut backend)
         .unwrap_or_else(|e| panic!("resource pre-allocation must pass its audit: {e:?}"));
 
     let mut exec = Executor::new(Box::new(backend));

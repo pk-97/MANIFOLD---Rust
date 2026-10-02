@@ -203,7 +203,7 @@ impl Chain {
         let fused = graph.nodes().filter(|node| node.node.type_id().as_str() == "node.wgsl_compute").count();
         let device = crate::test_device();
         let mut backend = MetalBackend::new(device.arc(), 8, 8, GpuTextureFormat::Rgba16Float);
-        pre_allocate_resources(&graph, &plan, &device, &mut backend).expect("pre-allocate");
+        pre_allocate_resources(&mut graph, &plan, &device, &mut backend).expect("pre-allocate");
         let output = |backend: &MetalBackend, name: &str, port: &str| {
             let node = super::gpu_flip_scene_tests::node_named(&graph, name);
             let slot = backend.slot_for(super::gpu_flip_scene_tests::output_of(&plan, node, port)).expect("bound");

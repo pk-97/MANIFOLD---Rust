@@ -121,17 +121,18 @@ impl BodyPasses {
         }
     }
 
-    /// Compile the passes' pipelines into the device cache.
-    pub(crate) fn prewarm_pipelines(device: &GpuDevice) {
-        Self::pipelines(device);
-    }
-
-    /// Build the pipelines and the sums once; the partials hold every body at
-    /// the most groups, so no lattice reallocates them.
-    pub(crate) fn prepare(&mut self, device: &GpuDevice) -> Result<(), String> {
+    /// Build the passes' pipelines; the owning node calls this at install.
+    pub(crate) fn prepare_pipelines(&mut self, device: &GpuDevice) {
         if self.pipelines.is_none() {
             self.pipelines = Some(Self::pipelines(device));
         }
+    }
+
+    /// Allocate the sums once; the partials hold every body at the most
+    /// groups, so no lattice reallocates them. The pipelines come from
+    /// `prepare_pipelines` at install.
+    pub(crate) fn prepare(&mut self, device: &GpuDevice) -> Result<(), String> {
+        assert!(self.pipelines.is_some(), "body pipelines built by prepare_pipelines at install");
         if self.partials.is_none() {
             self.partials = Some(device.try_create_buffer(PARTIAL_BYTES)?);
         }

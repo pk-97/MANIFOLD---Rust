@@ -75,7 +75,7 @@ fn run_graph(
     let mut graph = def.into_graph(&registry(), &Default::default()).expect("proof def builds");
     let plan = compile(&graph).expect("proof def compiles");
     let mut backend = MetalBackend::new(device.clone(), 64, 64, GpuTextureFormat::Rgba16Float);
-    pre_allocate_resources(&graph, &plan, device, &mut backend).expect("pre-allocate");
+    pre_allocate_resources(&mut graph, &plan, device, &mut backend).expect("pre-allocate");
     let boundary = node_of(&graph, "test.particle_boundary");
     let state_res = resource(&plan, boundary, "out", true);
     let sink_res = resource(&plan, node_of(&graph, "test.particle_sink"), "particles", false);

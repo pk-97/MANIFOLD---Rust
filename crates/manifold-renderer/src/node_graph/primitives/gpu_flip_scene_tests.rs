@@ -79,7 +79,7 @@ impl Run {
         let plan = compile(&graph).expect("water def compiles");
         let device = crate::test_device();
         let mut backend = MetalBackend::new(device.arc(), 64, 64, GpuTextureFormat::Rgba16Float);
-        pre_allocate_resources(&graph, &plan, &device, &mut backend).expect("pre-allocate");
+        pre_allocate_resources(&mut graph, &plan, &device, &mut backend).expect("pre-allocate");
         let exec = Executor::new(Box::new(backend));
         let mut run = Self { device, graph, plan, exec, state: StateStore::new(), scene, frames: 0, entering: Vec::new() };
         // The domain's clock restarts on its first frame and ticks none: the

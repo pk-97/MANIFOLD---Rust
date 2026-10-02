@@ -146,7 +146,7 @@ pub use chain_spec::{SpliceResult, splice_def_into_chain};
 pub use graph::{Graph, NodeInstance, WireWalkMode};
 pub use graph_loader::{
     BoundaryHandling, GraphBuildError, HandleScope, NodeInstantiation, PreAllocationError,
-    WireSide as BuildWireSide, instantiate_def, log_build_error, pre_allocate_resources,
+    WireSide as BuildWireSide, instantiate_def, log_build_error, pre_allocate_resources, allocate_resources,
 };
 pub use loaded_preset_view::{
     LoadedPresetView, collect_node_handles, loaded_preset_view_by_id, outer_routings_from_view,

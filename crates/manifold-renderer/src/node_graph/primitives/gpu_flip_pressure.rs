@@ -269,9 +269,11 @@ pub(crate) struct PressureSolver {
 }
 
 impl PressureSolver {
-    /// Compile the solver's pipelines into the device cache.
-    pub(crate) fn prewarm_pipelines(device: &GpuDevice) {
-        Pipelines::new(device);
+    /// Build the solver's pipelines; the owning node calls this at install.
+    pub(crate) fn prepare_pipelines(&mut self, device: &GpuDevice) {
+        if self.pipelines.is_none() {
+            self.pipelines = Some(Pipelines::new(device));
+        }
     }
 
     /// Build the coarse levels and the coarse inverse for `water`. Every
@@ -289,7 +291,7 @@ impl PressureSolver {
         if !(water.cell_size.is_finite() && water.cell_size > 0.0) {
             return Err("the cell size must be positive".into());
         }
-        let pipes = self.pipelines.get_or_insert_with(|| Pipelines::new(device));
+        let pipes = self.pipelines.as_ref().expect("pressure pipelines built by prepare_pipelines at install");
         if self.buffers.as_ref().is_none_or(|b| b.lattice != n) {
             self.buffers = Some(Buffers::new(device, n));
         }

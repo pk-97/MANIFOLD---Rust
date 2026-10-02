@@ -104,8 +104,10 @@ crate::primitive! {
 }
 
 impl Primitive for MatterToGrid {
-    fn prewarm_pipelines(&self, device: &manifold_gpu::GpuDevice) {
-        device.create_compute_pipeline(SHADER, "scatter_main", "node.matter_to_grid");
+    fn prepare_pipelines(&mut self, device: &manifold_gpu::GpuDevice) {
+        if self.kernel.is_none() {
+            self.kernel = Some(device.create_compute_pipeline(SHADER, "scatter_main", "node.matter_to_grid"));
+        }
     }
 
     fn array_output_capacity(
@@ -142,9 +144,7 @@ impl Primitive for MatterToGrid {
         let accum = ctx.inputs.array("accum");
         let sorted = ctx.inputs.array("order").zip(ctx.inputs.array("ranges"));
         let gpu = ctx.gpu_encoder();
-        let kernel = self
-            .kernel
-            .get_or_insert_with(|| gpu.device.create_compute_pipeline(SHADER, "scatter_main", "node.matter_to_grid"));
+        let kernel = self.kernel.as_ref().expect("matter to grid kernel built by prepare_pipelines at install");
         let (Some(points), Some(accum)) = (points, accum) else {
             return;
         };
