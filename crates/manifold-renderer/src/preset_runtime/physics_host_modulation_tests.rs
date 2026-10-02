@@ -26,8 +26,9 @@ thread_local! {
 }
 
 /// Stands in for a GPU liquid: asks for its tick starts and records the
-/// acceleration it sees at each one.
-struct TickedLiquid(EffectNodeType, Vec<f64>);
+/// acceleration it sees at each one. A surface built from its `cell_size`
+/// output lets a scene object recognise it as water.
+struct TickedLiquid(EffectNodeType, Vec<f64>, [NodeOutput; 1]);
 
 impl EffectNode for TickedLiquid {
     fn is_liveness_root(&self) -> bool {
@@ -49,7 +50,7 @@ impl EffectNode for TickedLiquid {
         &INPUTS
     }
     fn outputs(&self) -> &[NodeOutput] {
-        &[]
+        &self.2
     }
     fn parameters(&self) -> &[ParamDef] {
         &[]
@@ -83,10 +84,25 @@ impl EffectNode for TickedLiquid {
     }
 }
 
-fn runtime() -> PresetRuntime {
-    let liquid = manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID;
+const LIQUID: &str = manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID;
+
+fn registry() -> PrimitiveRegistry {
     let mut registry = PrimitiveRegistry::with_builtin();
-    registry.register(liquid, move || Box::new(TickedLiquid(EffectNodeType::new(liquid), Vec::new())));
+    registry.register(LIQUID, || {
+        let cell_size = NodePort {
+            name: Cow::Borrowed("cell_size"),
+            ty: PortType::Scalar(crate::node_graph::ports::ScalarType::F32),
+            kind: PortKind::Output,
+            required: false,
+        };
+        Box::new(TickedLiquid(EffectNodeType::new(LIQUID), Vec::new(), [cell_size]))
+    });
+    registry
+}
+
+/// A generator whose own `strength` param scales the liquid's force.
+fn generator() -> (PresetRuntime, &'static str) {
+    let liquid = LIQUID;
     let def = serde_json::json!({
         "version": 2, "name": "Kick force",
         "presetMetadata": {
@@ -115,10 +131,72 @@ fn runtime() -> PresetRuntime {
             {"fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in"}
         ]
     });
-    PresetRuntime::from_json_str(&def.to_string(), &registry).unwrap()
+    (PresetRuntime::from_json_str(&def.to_string(), &registry()).unwrap(), "strength")
 }
 
-fn project() -> Project {
+/// A Uniform Force card on a scene whose water is the liquid; the card's
+/// strength is a host param on the owner, as on stage.
+fn modifier_card() -> (PresetRuntime, String) {
+    use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef};
+    use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
+    let owner: EffectGraphDef = serde_json::from_value(serde_json::json!({
+        "version": 2, "name": "Kick water",
+        "presetMetadata": {
+            "id": "KickForce", "displayName": "Kick water", "category": "Test",
+            "oscPrefix": "kick_water", "available": true, "params": [], "bindings": []
+        },
+        "nodes": [
+            {"id": 2, "nodeId": "liquid", "typeId": LIQUID},
+            {"id": 3, "nodeId": "source", "typeId": "system.source"},
+            {"id": 4, "nodeId": "output", "typeId": "system.final_output"},
+            {"id": 5, "nodeId": "input", "typeId": "system.generator_input"},
+            {"id": 6, "nodeId": "water_object", "typeId": "node.scene_object"},
+            {"id": 7, "nodeId": "scene", "typeId": "node.render_scene"},
+            {"id": 8, "nodeId": "surface", "typeId": "node.plane_mesh"}
+        ],
+        "wires": [
+            {"fromNode": 2, "fromPort": "cell_size", "toNode": 8, "toPort": "width"},
+            {"fromNode": 8, "fromPort": "vertices", "toNode": 6, "toPort": "vertices"},
+            {"fromNode": 6, "fromPort": "object", "toNode": 7, "toPort": "object_0"},
+            {"fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in"}
+        ]
+    }))
+    .unwrap();
+    let recipe: EffectGraphDef = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/assets/scene-modifier-presets/UniformForce.json"
+    )))
+    .unwrap();
+    let top = |node: &str| SceneNodeRef { scope: Vec::new(), node: manifold_core::NodeId::new(node) };
+    let instance = crate::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
+        &owner,
+        &recipe,
+        manifold_core::NodeId::new("kick"),
+        top("scene"),
+        SceneTargetSelection::Explicit { objects: vec![top("water_object")] },
+    )
+    .unwrap();
+    let def = manifold_core::scene_modifier_edit::insert_scene_modifier(&owner, 0, instance)
+        .unwrap()
+        .graph;
+    let strength = def
+        .preset_metadata
+        .as_ref()
+        .unwrap()
+        .bindings
+        .iter()
+        .find(|binding| {
+            matches!(&binding.target,
+                BindingTarget::SceneModifier { param_id, .. } if param_id == "strength")
+        })
+        .unwrap()
+        .id
+        .clone();
+    let json = serde_json::to_string(&def).unwrap();
+    (PresetRuntime::from_json_str(&json, &registry()).unwrap(), strength)
+}
+
+fn project(strength_id: &str) -> Project {
     let mut project = Project::default();
     let send = AudioSend::new("Kick");
     let send_id = send.id.clone();
@@ -126,7 +204,7 @@ fn project() -> Project {
     let mut layer = Layer::new_generator("Liquid".into(), PresetTypeId::new("KickForce"), 0);
     let generator = layer.gen_params_or_init();
     let mut strength = Param::bundled(ParamSpecDef {
-        id: "strength".into(),
+        id: strength_id.into(),
         name: "Strength".into(),
         min: -20.0,
         max: 20.0,
@@ -137,7 +215,7 @@ fn project() -> Project {
     strength.base = 1.0;
     generator.params = ParamManifest::from_params(vec![strength]);
     let mut kick = ParameterAudioMod::new(
-        "strength".into(),
+        strength_id.to_owned().into(),
         send_id,
         AudioFeature::new(AudioFeatureKind::Amplitude, AudioBand::Low),
     );
@@ -188,10 +266,14 @@ fn snapshot(hops: std::ops::Range<u64>, offline: bool) -> AudioFeatureSnapshot {
     }
 }
 
-fn run(fps: u32, offline: bool) -> Vec<(f64, f32)> {
+fn run<S: AsRef<str>>(
+    build: fn() -> (PresetRuntime, S),
+    fps: u32,
+    offline: bool,
+) -> Vec<(f64, f32)> {
     TICKS.with_borrow_mut(Vec::clear);
-    let mut project = project();
-    let mut runtime = runtime();
+    let (mut runtime, strength) = build();
+    let mut project = project(strength.as_ref());
     let mut next_hop = 1;
     for frame in 0..=fps {
         let seconds = f64::from(frame) / f64::from(fps);
@@ -225,8 +307,17 @@ fn run(fps: u32, offline: bool) -> Vec<(f64, f32)> {
 
 #[test]
 fn host_kick_forces_per_tick_match_across_frame_rates() {
-    let baseline = run(60, true);
-    assert_eq!(baseline.len(), TICK_RATE as usize, "one force per tick");
+    assert_identical_across_frame_rates(generator);
+}
+
+#[test]
+fn modifier_card_kick_forces_per_tick_match_across_frame_rates() {
+    assert_identical_across_frame_rates(modifier_card);
+}
+
+fn assert_identical_across_frame_rates<S: AsRef<str>>(build: fn() -> (PresetRuntime, S)) {
+    let run = |fps, offline| run(build, fps, offline);
+    let baseline = run(60, true);    assert_eq!(baseline.len(), TICK_RATE as usize, "one force per tick");
     let kick: Vec<f32> = baseline
         .iter()
         .filter(|(time, _)| (0.5..0.7).contains(time))
