@@ -789,8 +789,10 @@ mod tests {
     /// hand shaders have none, so they are checked here.
     #[test]
     fn pressure_solver_uses_no_atomics() {
-        assert!(!SHADER.contains("atomic"));
-        assert!(!INVERSE_SHADER.contains("atomic"));
+        for source in [SHADER, INVERSE_SHADER] {
+            let stray = super::super::gpu_flip_step::atomic_sites_outside(source, &[]);
+            assert!(stray.is_empty(), "atomics outside the allowlist (I8): {stray:#?}");
+        }
     }
 
     /// The level rule, odd sides included, as the reference's --symmetry run

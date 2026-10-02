@@ -11,7 +11,6 @@
 use manifold_gpu::GpuBuffer;
 
 use super::gpu_flip_step::face_bytes;
-use super::gpu_flip_pressure::MAX_ITERATIONS;
 use super::liquid_stats::{LIQUID_STATS_WORDS, LiquidTickStats};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid_particles::{FaceSample, FluidParticle};
@@ -247,24 +246,13 @@ impl Primitive for LiquidState {
         if let Some(error) = refused {
             ctx.error(error);
         }
-        // The solver's silent limits, made loud: the water still moves, but
-        // not as its velocity says.
-        if let Some(stats) = self.last_stats.filter(|s| s.speed_capped > 0) {
+        // A speed-capped move, a refused push and a capped solve are the
+        // solver's limits, not faults: the water keeps moving, and the stats
+        // words (speed_capped, push_refused, unconverged) report them.
+        if let Some(stats) = self.last_stats.filter(|s| s.unresolved_pockets > 0) {
             ctx.error(format!(
-                "Liquid State: {} particle move stages hit the solver's speed cap last tick; fast water lags its velocity (BUG-jyot, adaptive steps)",
-                stats.speed_capped
-            ));
-        }
-        if let Some(stats) = self.last_stats.filter(|s| s.push_refused > 0) {
-            ctx.error(format!(
-                "Liquid State: {} particles were left inside a solid's reach last tick; pushing them out would have moved them past the solver's limit",
-                stats.push_refused
-            ));
-        }
-        if let Some(stats) = self.last_stats.filter(|s| s.unconverged > 0) {
-            ctx.error(format!(
-                "Liquid State: {} solves reached the solver's {MAX_ITERATIONS}-iteration cap last tick without converging; the water is not incompressible",
-                stats.unconverged
+                "Liquid State: {} steps last tick could not tell which water a solid seals off from air: the spread reached its cap, one round per cell of the lattice's longest side, unfinished",
+                stats.unresolved_pockets
             ));
         }
     }

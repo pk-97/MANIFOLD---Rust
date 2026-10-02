@@ -20,6 +20,7 @@ use manifold_physics::FieldValue;
 
 use super::gpu_flip_pressure::lattice_refusal;
 use super::liquid_fill::{SITES_PER_CELL, filled_sites, site_range};
+use super::matter_domain::closed_faces;
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::fluid::{CoupledRigidFrame, CoupledRigidInputs, FluidDomainLayout, TICK, domain_layout};
 use crate::node_graph::fluid_role::{FluidRole, MAX_FLUID_ROLES};
@@ -37,9 +38,6 @@ use crate::node_graph::physics::{RigidImpulseTargets, RigidSceneObservation, off
 use crate::node_graph::physics_events::ResolvedNodeImpulse;
 use crate::node_graph::primitive::Primitive;
 use crate::node_graph::transform::Transform;
-
-/// Every wall of the tank is closed.
-const CLOSED_FACES: u32 = 63;
 
 /// Everything whose change restarts the liquid.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -60,7 +58,7 @@ pub(crate) struct GpuFlipGeometry {
 
 impl GpuFlipGeometry {
     /// The scalar outputs fixed by the setup, by name.
-    pub(crate) fn outputs(&self) -> [(&'static str, f32); 16] {
+    pub(crate) fn outputs(&self) -> [(&'static str, f32); 15] {
         let GpuFlipSetup { lattice, pool_sites, box_sites } = self.setup;
         let h = self.layout.cell_size;
         [
@@ -71,7 +69,6 @@ impl GpuFlipGeometry {
             ("nodes_x", lattice.nodes()[0] as f32),
             ("nodes_y", lattice.nodes()[1] as f32),
             ("nodes_z", lattice.nodes()[2] as f32),
-            ("closed_faces", CLOSED_FACES as f32),
             ("pool_sites", pool_sites as f32),
             ("box_x0", box_sites[0][0] as f32),
             ("box_x1", box_sites[0][1] as f32),
@@ -222,7 +219,7 @@ fn reaction_floats(buffer: Option<&GpuBuffer>) -> Option<&[f32]> {
 crate::primitive! {
     name: GpuFlipDomain,
     type_id: "node.gpu_flip_domain",
-    purpose: "Define a GPU FLIP liquid domain with node.fluid_surface's scene contract: the axis-aligned domain box, resolution, initial fill height and box, gravity, the scene's acceleration field and impulses, simulation speed and reset. Outputs this frame's fixed 60 Hz ticks, the epoch and the display clock, the fill's half-cell sites and particle mass, gravity, the scene's forces and impulses on coarse field lattices over the box, and the padded lattice with its closed walls for the solid distance and the particle frame. The tank is closed on every side. A hit fired while the liquid is held (paused, Speed 0) is discarded, never replayed. Up to 64 Collider roles become one body row per collider per tick of this frame (its pose at the tick's start and its motion over the tick), a shape per collider and their distance lattices packed in one half-precision atlas; the water flows around them. Paired with a physics world, its bodies join the water two ways: the domain steps the world one settled 1/60 s tick at a time, its bodies' rows follow the collider rows, dynamic_bodies counts the ones the water pushes, and the reaction the steps add up reaches each body as one impulse per tick. Live, the pair runs at most one tick per frame and holds while that tick's reaction is still on the GPU. Fill, Inflow and Outflow roles are refused by name.",
+    purpose: "Define a GPU FLIP liquid domain with node.fluid_surface's scene contract: the axis-aligned domain box, resolution, initial fill height and box, gravity, the scene's acceleration field and impulses, simulation speed and reset. Outputs this frame's fixed 60 Hz ticks, the epoch and the display clock, the fill's half-cell sites and particle mass, gravity, the scene's forces and impulses on coarse field lattices over the box, and the padded lattice with its Closed Faces mask (bit 2d the low face of axis d, bit 2d + 1 the high one) for the step, the solid distance and the particle frame. Each face of the tank is closed unless its Closed param is off; an open face drains the water that reaches it. A hit fired while the liquid is held (paused, Speed 0) is discarded, never replayed. Up to 64 Collider roles become one body row per collider per tick of this frame (its pose at the tick's start and its motion over the tick), a shape per collider and their distance lattices packed in one half-precision atlas; the water flows around them. Paired with a physics world, its bodies join the water two ways: the domain steps the world one settled 1/60 s tick at a time, its bodies' rows follow the collider rows, dynamic_bodies counts the ones the water pushes, and the reaction the steps add up reaches each body as one impulse per tick. Live, the pair runs at most one tick per frame and holds while that tick's reaction is still on the GPU. Fill, Inflow and Outflow roles are refused by name.",
     inputs: {
         domain: Transform optional,
         initial_volume: Transform optional,
@@ -333,6 +330,12 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("gravity_z"), label: "Gravity Z", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-20.0, 20.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("speed"), label: "Simulation Speed", ty: ParamType::Float, default: ParamValue::Float(1.0), range: Some((0.0, 4.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("reset"), label: "Reset", ty: ParamType::Trigger, default: ParamValue::Float(0.0), range: Some((0.0, 1.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("closed_neg_x"), label: "Closed −X", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("closed_pos_x"), label: "Closed +X", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("closed_neg_y"), label: "Closed Bottom", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("closed_pos_y"), label: "Closed Top", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("closed_neg_z"), label: "Closed −Z", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("closed_pos_z"), label: "Closed +Z", ty: ParamType::Bool, default: ParamValue::Bool(true), range: None, enum_values: &[] },
     ],
     depth_rule: Terminal,
     composition_notes: "The GPU FLIP group's source of truth: ticks and epoch into node.liquid_state (the tick region's clock owner), the fill sites and the padded lattice into node.liquid_fill, gravity, forces, impulses, the field scalars (field_nodes_x/y/z, field_spacing, force_lattices, first_tick, impulse_tick), bodies, shapes, atlas, dynamic_bodies and the padded lattice into every node.gpu_flip_step, reaction into the first step of the tick (each later step takes the one before's reaction_out), and the padded lattice with bodies, shapes and atlas into node.liquid_solid_distance, node.liquid_frame and node.face_sample_component; simulation_time, display_time and epoch into node.liquid_frame; particle_mass into node.liquid_stats. The domain box, Resolution and fill restart the liquid; gravity and Simulation Speed are live. Live runs at most three ticks per display frame and reports dropped time; export runs every tick.",
@@ -689,6 +692,7 @@ impl GpuFlipDomain {
         }
         let field = self.fields.prepare(geometry.field_lattice(), self.acceleration.as_ref(), &frame, &self.impulses)?;
         let per_frame = [
+            ("closed_faces", closed_faces(ctx.params) as f32),
             ("gravity_x", gravity[0]),
             ("gravity", gravity[1]),
             ("gravity_z", gravity[2]),

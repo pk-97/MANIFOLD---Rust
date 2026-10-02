@@ -10,6 +10,7 @@ use manifold_gpu::GpuTextureFormat;
 use super::gpu_flip_preset::{BOX_METRES, DAM_COLUMN, DAM_FILL_HEIGHT, DAM_OBSTACLE, FACE_NODES, REST_PER_CELL, STEP_NODE, WaterScene, water_def};
 use crate::node_graph::liquid::grid::face_len;
 use super::gpu_flip_volume::{VolumeDrift, volume_and_area};
+use super::liquid_stats::{LIQUID_STATS_WORDS, LiquidTickStats};
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::fluid_particles::{FaceSample, FluidParticle};
 use crate::node_graph::substeps::test_nodes::register_substep_test_nodes;
@@ -63,7 +64,7 @@ impl Run {
         // Every array read after a frame keeps its own storage.
         let mut read = vec![(node_named(&graph, "state"), "out")];
         let step = node_named(&graph, STEP_NODE);
-        read.extend([(step, "out"), (step, "faces"), (step, "capped")]);
+        read.extend([(step, "out"), (step, "faces"), (step, "capped"), (node_named(&graph, "stats"), "stats_out")]);
         if scene.surface {
             read.push((node_ending(&graph, "liquid_offsets"), "extent"));
             read.push((node_ending(&graph, "liquid_mesh"), "vertices"));
@@ -273,6 +274,11 @@ impl Run {
         water
     }
 
+    /// The last tick's node.liquid_stats words.
+    pub(super) fn liquid_stats(&self) -> LiquidTickStats {
+        LiquidTickStats::from_words(&self.read::<u32>("stats", "stats_out", LIQUID_STATS_WORDS as usize))
+    }
+
     /// The last tick's speed-capped move stages and refused push-outs.
     pub(super) fn capped(&self) -> (u64, u64) {
         let words: Vec<u32> = self.read(STEP_NODE, "capped", 2 * self.scene.particles() as usize);
@@ -445,6 +451,41 @@ fn gpu_flip_still_pool() {
     }
     let end = *fastest.last().expect("sampled");
     assert!(end < 1e-3, "fastest particle {end} m/s after 2 s");
+}
+
+/// An open −X face drains the pool: the engine removes every particle within
+/// 2 cells of an open face, so the water pours out through it. Over 3 s the
+/// live count, read from the particles and from node.liquid_stats, never
+/// rises and ends below half the fill, and every particle record stays
+/// finite and inside the tank.
+#[test]
+fn gpu_flip_open_face_drains_the_pool() {
+    let scene = WaterScene::still_pool(64).with_closed_faces(63 & !1);
+    let mut run = Run::new(scene);
+    let (min, size) = (scene.min(), scene.size);
+    let fill = scene.particles() as usize;
+    let mut last = fill;
+    for frame in 0..180 {
+        run.frame();
+        let particles = run.particles();
+        let stats = particle_stats(&particles);
+        let counted = run.liquid_stats();
+        assert_eq!(stats.bad, 0, "frame {frame}: a non-finite particle");
+        assert_eq!(counted.live as usize, stats.live, "frame {frame}: liquid_stats counts {} live, the particles {}", counted.live, stats.live);
+        assert!(stats.live <= last, "frame {frame}: live count rose from {last} to {}", stats.live);
+        for p in &particles {
+            let inside = (0..3).all(|a| {
+                let x = f64::from(p.position_radius[a]);
+                x >= min[a] && x <= min[a] + size
+            });
+            assert!(inside, "frame {frame}: a particle at {:?} is outside the tank", p.position_radius);
+        }
+        if frame % 30 == 29 {
+            println!("GPU FLIP open −X frame {frame:3}: {} of {fill} live, mean height {:.4} m", stats.live, stats.mean_height);
+        }
+        last = stats.live;
+    }
+    assert!(last < fill / 2, "the open face drained only {} of {fill} particles", fill - last);
 }
 
 /// The closed wall at rest: a 1 m pool for 300 frames. Every box wall face of
@@ -893,6 +934,103 @@ fn gpu_flip_still_pool_keeps_its_meshed_volume() {
     println!("GPU FLIP still pool meshed: frame 0 {v0:.4} m³ over {a0:.3} m², last {:.4} m³, drift max {:.3}%", measures[119].0, 100.0 * drift);
     println!("GPU FLIP still pool meshed: particles hold {:.4} m³, skin {:.2} mm", run.particle_volume(), 1000.0 * skin);
     assert!(drift < 5e-3, "a resting pool's meshed volume moved {:.3}%", 100.0 * drift);
+}
+
+/// A lid as wide as the tank pressed down into a 1 m pool at 1 m/s. No live
+/// particle ever leaves the box. Closed, the water under it is sealed off
+/// from air: every solve converges until the lid first kills water it has
+/// squeezed into itself, and from then on a solve may reach its cap, which
+/// the stats report while the tick runs on. The engine removes only
+/// particles still inside the solid after the push-out, so a slow lid crowds
+/// the sealed water rather than removing it, here as in the engine. With the
+/// low-x face open the water escapes through it.
+#[test]
+fn gpu_flip_box_pressed_into_a_full_tank_converges_and_escapes_when_open() {
+    let closed = lid_pressed_into_pool(63);
+    let open = lid_pressed_into_pool(63 & !1);
+    println!("GPU FLIP pressed lid: water by the low-x face moves out at {:.3} m/s sealed, {:.3} m/s open; displacement rate over the open face {:.3} m/s", closed.0, open.0, open.1);
+    // Mass conservation: open, the water the lid displaces leaves through
+    // the open face, so the mean outflow there is the lid area times its
+    // speed over the open area. Sampled two to four cells in, the profile is
+    // not flat, so half of it is the floor. Sealed, the crowded water churns
+    // by the wall but has no net way out: under a quarter of the open flow.
+    assert!(open.0 > 0.5 * open.1, "open: the pressed water leaves at {:.3} m/s, under half the displacement rate {:.3}", open.0, open.1);
+    assert!(closed.0.abs() < 0.25 * open.0, "sealed: the water by the wall moves out at {:.3} m/s against {:.3} open", closed.0, open.0);
+}
+
+const LID_SPEED: f64 = 1.0;
+const LID_THICKNESS: f64 = 0.4;
+
+/// The mean -x speed of the water two to four cells in from the low-x face
+/// over the last ten frames, and the speed the lid's displacement would
+/// drive through that face: lid area times lid speed over the open area;
+/// and the volume rate taken off sealed pockets' pressure solves, summed.
+fn lid_pressed_into_pool(mask: u32) -> (f64, f64, f64) {
+    let scene = WaterScene::still_pool(64).with_obstacle().with_closed_faces(mask);
+    let h = scene.pressure.cell_size();
+    let mut run = Run::new(scene);
+    let transform = node_named(&run.graph, "obstacle_transform");
+    // Overlapping the walls by a cell, so no gap runs between lid and wall.
+    let width = BOX_METRES + 2.0 * h;
+    for (name, value) in [("pos_x", 0.0), ("pos_z", 0.0), ("scale_x", width), ("scale_y", LID_THICKNESS), ("scale_z", width)] {
+        run.graph.set_param(transform, name, crate::node_graph::ParamValue::Float(value as f32)).expect(name);
+    }
+    let surface = 1.0;
+    let start = surface + 0.5 * LID_THICKNESS - 2.0 * h;
+    let low_x = -0.5 * BOX_METRES;
+    let mut outward = Vec::new();
+    let mut drive = 0.0;
+    let mut removed = 0.0;
+    let mut squeezed = false;
+    for frame in 1..=30 {
+        let y = start - LID_SPEED * f64::from(frame) / 60.0;
+        run.graph.set_param(transform, "pos_y", crate::node_graph::ParamValue::Float(y as f32)).expect("pos_y");
+        run.frame();
+        let stats = run.liquid_stats();
+        println!(
+            "GPU FLIP pressed lid mask {mask} frame {frame:2}: {} live, {} pressure iterations, {} density, {} unconverged, {} unresolved, {:.3e}/{:.3e} m³/s removed from sealed pressure/density",
+            stats.live, stats.pressure_iterations, stats.density_iterations, stats.unconverged, stats.unresolved_pockets, stats.pressure_flux_removed, stats.density_flux_removed
+        );
+        removed += f64::from(stats.pressure_flux_removed);
+        let half = (0.5 * BOX_METRES) as f32;
+        let outside = run
+            .particles()
+            .iter()
+            .filter(|p| p.position_radius[3] > 0.0)
+            .filter(|p| {
+                let q = p.position_radius;
+                q[0].abs() > half || q[2].abs() > half || q[1] < 0.0 || q[1] > BOX_METRES as f32
+            })
+            .count();
+        assert_eq!(outside, 0, "mask {mask}: frame {frame} left live water outside the box");
+        let entering = run.entering.iter().filter(|p| p.position_radius[3] > 0.0).count() as u32;
+        squeezed |= stats.live != entering;
+        if squeezed {
+            // Water the lid has squeezed into itself is killed there; past
+            // that a capped solve is reported and the tick still runs.
+            assert!(stats.live > 0, "mask {mask}: frame {frame} left no live water");
+            assert!(
+                stats.pressure_flux_removed.is_finite() && stats.density_flux_removed.is_finite(),
+                "mask {mask}: frame {frame} produced non-finite stats"
+            );
+        } else {
+            assert_eq!(stats.unconverged, 0, "mask {mask}: frame {frame} left a pressure or density solve unconverged before any water was squeezed");
+        }
+        assert_eq!(stats.unresolved_pockets, 0, "mask {mask}: frame {frame} left a pocket spread unfinished");
+        if frame > 20 {
+            let under = y - 0.5 * LID_THICKNESS;
+            drive = LID_SPEED * BOX_METRES * BOX_METRES / (BOX_METRES * under);
+            let near: Vec<f64> = run
+                .particles()
+                .iter()
+                .filter(|p| p.position_radius[3] > 0.0)
+                .filter(|p| (2.0 * h..4.0 * h).contains(&(f64::from(p.position_radius[0]) - low_x)))
+                .map(|p| -f64::from(p.velocity[0]))
+                .collect();
+            outward.push(near.iter().sum::<f64>() / near.len().max(1) as f64);
+        }
+    }
+    (outward.iter().sum::<f64>() / outward.len() as f64, drive, removed)
 }
 
 /// Encode replay changes nothing the step computes: 300 Dam Break ticks

@@ -14222,9 +14222,45 @@
             "1"
           ],
           "type": "trigger"
+        },
+        {
+          "default": "true",
+          "label": "Closed −X",
+          "name": "closed_neg_x",
+          "type": "bool"
+        },
+        {
+          "default": "true",
+          "label": "Closed +X",
+          "name": "closed_pos_x",
+          "type": "bool"
+        },
+        {
+          "default": "true",
+          "label": "Closed Bottom",
+          "name": "closed_neg_y",
+          "type": "bool"
+        },
+        {
+          "default": "true",
+          "label": "Closed Top",
+          "name": "closed_pos_y",
+          "type": "bool"
+        },
+        {
+          "default": "true",
+          "label": "Closed −Z",
+          "name": "closed_neg_z",
+          "type": "bool"
+        },
+        {
+          "default": "true",
+          "label": "Closed +Z",
+          "name": "closed_pos_z",
+          "type": "bool"
         }
       ],
-      "purpose": "Define a GPU FLIP liquid domain with node.fluid_surface's scene contract: the axis-aligned domain box, resolution, initial fill height and box, gravity, the scene's acceleration field and impulses, simulation speed and reset. Outputs this frame's fixed 60 Hz ticks, the epoch and the display clock, the fill's half-cell sites and particle mass, gravity, the scene's forces and impulses on coarse field lattices over the box, and the padded lattice with its closed walls for the solid distance and the particle frame. The tank is closed on every side. A hit fired while the liquid is held (paused, Speed 0) is discarded, never replayed. Up to 64 Collider roles become one body row per collider per tick of this frame (its pose at the tick's start and its motion over the tick), a shape per collider and their distance lattices packed in one half-precision atlas; the water flows around them. Paired with a physics world, its bodies join the water two ways: the domain steps the world one settled 1/60 s tick at a time, its bodies' rows follow the collider rows, dynamic_bodies counts the ones the water pushes, and the reaction the steps add up reaches each body as one impulse per tick. Live, the pair runs at most one tick per frame and holds while that tick's reaction is still on the GPU. Fill, Inflow and Outflow roles are refused by name.",
+      "purpose": "Define a GPU FLIP liquid domain with node.fluid_surface's scene contract: the axis-aligned domain box, resolution, initial fill height and box, gravity, the scene's acceleration field and impulses, simulation speed and reset. Outputs this frame's fixed 60 Hz ticks, the epoch and the display clock, the fill's half-cell sites and particle mass, gravity, the scene's forces and impulses on coarse field lattices over the box, and the padded lattice with its Closed Faces mask (bit 2d the low face of axis d, bit 2d + 1 the high one) for the step, the solid distance and the particle frame. Each face of the tank is closed unless its Closed param is off; an open face drains the water that reaches it. A hit fired while the liquid is held (paused, Speed 0) is discarded, never replayed. Up to 64 Collider roles become one body row per collider per tick of this frame (its pose at the tick's start and its motion over the tick), a shape per collider and their distance lattices packed in one half-precision atlas; the water flows around them. Paired with a physics world, its bodies join the water two ways: the domain steps the world one settled 1/60 s tick at a time, its bodies' rows follow the collider rows, dynamic_bodies counts the ones the water pushes, and the reaction the steps add up reaches each body as one impulse per tick. Live, the pair runs at most one tick per frame and holds while that tick's reaction is still on the GPU. Fill, Inflow and Outflow roles are refused by name.",
       "role": "Source",
       "stratum": "atom",
       "summary": "Sets up a GPU FLIP liquid: its box, resolution, starting fill, gravity and speed.",
@@ -14387,6 +14423,11 @@
           "name": "dynamic_bodies",
           "required": false,
           "type": "f32"
+        },
+        {
+          "name": "closed_faces",
+          "required": false,
+          "type": "f32"
         }
       ],
       "label": "GPU FLIP Step",
@@ -14407,7 +14448,7 @@
           "type": "Array"
         },
         {
-          "capacity": "inputs:2003@1000,2051@1024",
+          "capacity": "inputs:2006@1000,2054@1024",
           "name": "capped",
           "type": "Array"
         }
@@ -14672,9 +14713,19 @@
             "1"
           ],
           "type": "int"
+        },
+        {
+          "default": "63",
+          "label": "Closed Faces",
+          "name": "closed_faces",
+          "range": [
+            "0",
+            "63"
+          ],
+          "type": "int"
         }
       ],
-      "purpose": "Advance GPU FLIP water one 60 Hz tick in Steps equal substeps (1 by default); each substep sorts the particles into the lattice's cells, gathers their velocity onto the cell faces, adds gravity and the scene's forces and impulses, makes the water incompressible against the tank walls and the scene's solid bodies (a multigrid-preconditioned pressure solve, the free surface placed where the particles' distance crosses zero), moves crowded particles apart and sparse ones together so the water keeps its volume (a density projection, position only, when Volume Projection is 1), then moves every particle through the new velocity, blending FLIP and PIC by Flip Share, and keeps it out of the solid bodies (a particle a moving body swept over is removed). When dynamic_bodies is above 0, each body that takes a reaction joins the pressure solve with its own velocity, so the water pushes it and it pushes back in the same solve, and the step adds the pressure's and the friction's impulse on every body to the reaction. Outputs the moved particles, the step's face grid (valid at least 2 layers around the water) and the reaction, in place.",
+      "purpose": "Advance GPU FLIP water one 60 Hz tick in Steps equal substeps (1 by default); each substep sorts the particles into the lattice's cells, gathers their velocity onto the cell faces, adds gravity and the scene's forces and impulses, makes the water incompressible against the tank walls and the scene's solid bodies (a multigrid-preconditioned pressure solve, the free surface placed where the particles' distance crosses zero), moves crowded particles apart and sparse ones together so the water keeps its volume (a density projection, position only, when Volume Projection is 1), then moves every particle through the new velocity, blending FLIP and PIC by Flip Share, and keeps it out of the solid bodies (a particle a moving body swept over is removed). A face Closed Faces leaves open (bit 2d the low face of axis d, bit 2d + 1 the high one) drains: every wall stays solid, and a particle that ends a substep within 2 cells of an open face is removed. Water a moving solid seals off from air (and from any open face) does not take that solid's push, unless the bodies are in the solve.When dynamic_bodies is above 0, each body that takes a reaction joins the pressure solve with its own velocity, so the water pushes it and it pushes back in the same solve, and the step adds the pressure's and the friction's impulse on every body to the reaction. Outputs the moved particles, the step's face grid (valid at least 2 layers around the water) and the reaction, in place.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Moves the water forward one tick, in Steps substeps: gravity, solids, incompressibility and the particles' motion.",
@@ -18636,7 +18687,7 @@
           "type": "Array"
         },
         {
-          "capacity": "fixed:13",
+          "capacity": "fixed:16",
           "name": "stats",
           "type": "Array"
         },
@@ -18733,7 +18784,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Reduce a particle liquid's first `count` records to its statistics words, written in place over `stats`: 0 records with a non-finite position, radius or velocity, 1 live records (radius above 0), 2 the fastest speed, 3 mass, 4-6 momentum and 7 kinetic energy, each particle weighing particle_mass, and when capped is wired, 8 and 9 its two words per record summed: the solver's speed-capped move stages and refused solid push-outs, and 10-12 the solver words after the records: pressure and density solve iterations and the solves that reached their cap without converging. Sums run in a fixed order with no atomics, so the words are the same on every run.",
+      "purpose": "Reduce a particle liquid's first `count` records to its statistics words, written in place over `stats`: 0 records with a non-finite position, radius or velocity, 1 live records (radius above 0), 2 the fastest speed, 3 mass, 4-6 momentum and 7 kinetic energy, each particle weighing particle_mass, and when capped is wired, 8 and 9 its two words per record summed: the solver's speed-capped move stages and refused solid push-outs, and 10-15 the solver words after the records: pressure and density solve iterations, the solves that reached their cap without converging, the steps whose sealed-pocket spread reached its cap unfinished, and 14-15 the volume rate taken off sealed pockets' pressure and density right-hand sides. Sums run in a fixed order with no atomics, so the words are the same on every run.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Measures a particle liquid once per tick: how much there is, how fast it moves, and whether anything went wrong.",
@@ -138333,6 +138384,48 @@
           "max": "20",
           "min": "-20",
           "name": "Gravity Z"
+        },
+        {
+          "default": "1",
+          "id": "0_closed_neg_x",
+          "max": "1",
+          "min": "0",
+          "name": "Closed −X"
+        },
+        {
+          "default": "1",
+          "id": "0_closed_pos_x",
+          "max": "1",
+          "min": "0",
+          "name": "Closed +X"
+        },
+        {
+          "default": "1",
+          "id": "0_closed_neg_y",
+          "max": "1",
+          "min": "0",
+          "name": "Closed Bottom"
+        },
+        {
+          "default": "1",
+          "id": "0_closed_pos_y",
+          "max": "1",
+          "min": "0",
+          "name": "Closed Top"
+        },
+        {
+          "default": "1",
+          "id": "0_closed_neg_z",
+          "max": "1",
+          "min": "0",
+          "name": "Closed −Z"
+        },
+        {
+          "default": "1",
+          "id": "0_closed_pos_z",
+          "max": "1",
+          "min": "0",
+          "name": "Closed +Z"
         },
         {
           "default": "-1.25",
