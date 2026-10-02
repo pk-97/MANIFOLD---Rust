@@ -11,6 +11,12 @@
 //! ratio, never the budget. `--stamp-granularity node` keeps one sampled
 //! encoder per graph step instead, so the per-node-type table is the plain
 //! frame's breakdown (replay still off; the inner tables are then empty).
+//! A timestamped frame waits for its GPU work, a plain frame does not, and
+//! a liquid coupled to a body runs no tick while the last tick's reaction
+//! is in flight: with plain and timestamped frames interleaved on such a
+//! project the timestamped frames skip the step once the plain frame's GPU
+//! work outlasts the tick interval (every one of them at 128). Measure a
+//! coupled project with `--stamp-every 1`.
 //! The first `S` frames are the splash, the rest
 //! the calm; both tables print. `--resolution` overrides the GPU FLIP
 //! generator's `resolution` card in memory, never on disk.
