@@ -57,7 +57,10 @@ use crate::node_graph::primitives::particle_volume::{refined_nodes, volume_scale
 use crate::node_graph::primitives::sort_particles_into_cells::range_storage_bytes;
 use crate::node_graph::primitives::gpu_flip_domain::gpu_flip_geometry;
 use crate::node_graph::primitives::gpu_flip_pressure::{lattice_refusal, scratch_bytes as pressure_scratch_bytes};
-use crate::node_graph::primitives::gpu_flip_step::{face_bytes, scratch_bytes as step_scratch_bytes};
+use crate::node_graph::fluid::TICK;
+use crate::node_graph::primitives::gpu_flip_step::{
+    DEFAULT_TOP_SPEED, FACE_VALID_LAYERS, band_layers, face_bytes, ring_max, scratch_bytes as step_scratch_bytes, travel_cells,
+};
 use crate::node_graph::primitives::volume_surface_mesh::start_capacity;
 use crate::node_graph::resource_allocation::plan_array_allocations;
 use crate::node_graph::primitives::matter_face_component::MATTER_FACE_VALID_LAYERS;
@@ -1211,7 +1214,15 @@ fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     search_fits(x, cells, ranges)?;
     // The sort's ranges, cell counts, rank and slot scratch.
     x.hold(ranges + bin_total(cells) * 4 + 2 * slots.max(1) * 4);
-    x.hold(faces + pressure_scratch_bytes(cells) + step_scratch_bytes(cells, slots));
+    // The tile table's size follows the band the step runs with (ring_max),
+    // read the way the step reads it; an unwired or unresolved scalar is the
+    // default.
+    let steps = x.scalar("steps", 1.0).round().clamp(1.0, 64.0);
+    let top_speed = x.scalar("top_speed", DEFAULT_TOP_SPEED);
+    let top_speed = if top_speed.is_finite() && top_speed > 0.0 { top_speed } else { DEFAULT_TOP_SPEED };
+    let travel = travel_cells(top_speed, (TICK / f64::from(steps)) as f32, x.lattice()?.cell_size());
+    let ring = ring_max(band_layers(travel).max(FACE_VALID_LAYERS));
+    x.hold(faces + pressure_scratch_bytes(cells) + step_scratch_bytes(cells, slots, ring));
     field_reads(x)?;
     let rows = body_rows(x)?;
     x.covers_if_bound("bodies", rows * size_of::<LiquidBody>() as u64)?;

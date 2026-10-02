@@ -64,6 +64,13 @@ struct Params {
     // The tank's closed faces: bit 2d the low face of axis d, bit 2d + 1 the
     // high one.
     closed_faces: u32,
+    // 1: every tile is active (the test-only oracle).
+    all_tiles: u32,
+    // The ring a sparse pass's reads are capped at.
+    ring_cap: u32,
+    // The farthest ring the table holds; ring_max + 1 means none within it.
+    ring_max: u32,
+    tile_pad: u32,
 };
 
 struct CellRange {
@@ -731,6 +738,26 @@ fn water_from_phi(@builtin(global_invocation_id) gid: vec3<u32>) {
 // integer (low, high) and the cell count. Then two words: the magnitude of
 // everything removed this solve, in the same fixed point.
 @group(0) @binding(26) var<storage, read_write> pocket_sum: array<atomic<u32>>;
+// The tile table (GPU_FLIP_SPARSE_BLOCKS_DESIGN.md section 3 (The tile
+// table)): 8³ tiles, T = ceil(n / 8) per axis, x fastest, partial edge tiles.
+// Per tile, the Chebyshev cell distance from its box to the nearest
+// particle-holding cell, 0..=CELL_REACH, or CELL_REACH + 1 beyond.
+@group(0) @binding(27) var<storage, read_write> tile_near: array<u32>;
+// Two halves of one tile each: the ring to the nearest occupied tile, or
+// ring_max + 1. The parity word of `tile_counts` names the current half.
+@group(0) @binding(28) var<storage, read_write> tile_ring: array<u32>;
+// Every tile: the cell set C (ring <= 1 and near <= CELL_REACH) first, then
+// the rest of rings 0 and 1, then ring by ring (tiles_lists).
+@group(0) @binding(29) var<storage, read_write> tiles_by_ring: array<u32>;
+// Word 0 |C|, word k = 1..=ring_max + 1 the tiles with ring <= k (the last
+// is every tile), the retired count at ring_max + 2, the parity at
+// ring_max + 3.
+@group(0) @binding(30) var<storage, read_write> tile_counts: array<u32>;
+// Indirect triples [2 · count, 1, 1] (512 threads a tile, 256 a group): one
+// per count word k = 0..=ring_max, then the retired list.
+@group(0) @binding(31) var<storage, read_write> tile_args: array<u32>;
+// Tiles whose previous step had them in C and this step does not.
+@group(0) @binding(32) var<storage, read_write> tiles_retired: array<u32>;
 
 // Fixed point for the pocket sums: integer adds give the same total in any
 // order, so the solves stay the same on every run.
@@ -1672,4 +1699,164 @@ fn faces_to_particles(@builtin(global_invocation_id) gid: vec3<u32>) {
     out.position_radius = vec4<f32>(lo + q1 * u.cell_size, radius);
     out.velocity = u.flip * (particle.velocity + after - before) + (1.0 - u.flip) * after;
     particles_out[idx] = out;
+}
+
+// ---- The tile table (GPU_FLIP_SPARSE_BLOCKS_DESIGN.md section 3 (The tile
+// table)). Built every step from the sort's ranges, on the GPU, never read
+// back; the parity and the lists live here so a replayed encode stays
+// right. ----
+
+const TILE: u32 = 8u;
+// The cell passes' reach from a particle-holding cell.
+const CELL_REACH: u32 = 2u;
+
+fn tile_dims() -> vec3<u32> {
+    return (u.n + vec3<u32>(TILE - 1u)) / TILE;
+}
+
+fn tile_total() -> u32 {
+    let t = tile_dims();
+    return t.x * t.y * t.z;
+}
+
+fn tile_parity_word() -> u32 {
+    return u.ring_max + 3u;
+}
+
+// One thread per tile, the sort's bin counts to `tile_near`: the Chebyshev
+// cell distance from the tile's box to the nearest particle-holding cell,
+// scanning the box grown by CELL_REACH (12³ cells at most); CELL_REACH + 1
+// when none. Thread 0 flips the ring halves' parity for this step first: no
+// other thread of this pass reads it, and `tiles_rings` runs after.
+@compute @workgroup_size(256)
+fn tiles_classify(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let t = gid.x;
+    if t >= tile_total() {
+        return;
+    }
+    if t == 0u {
+        tile_counts[tile_parity_word()] = 1u - tile_counts[tile_parity_word()];
+    }
+    if u.all_tiles != 0u {
+        tile_near[t] = 0u;
+        return;
+    }
+    let n = lattice();
+    let reach = i32(CELL_REACH);
+    let origin = unflatten(t, vec3<i32>(tile_dims())) * i32(TILE);
+    let box_last = min(origin + vec3<i32>(i32(TILE) - 1), n - vec3<i32>(1));
+    let first = max(origin - vec3<i32>(reach), vec3<i32>(0));
+    let last = min(box_last + vec3<i32>(reach), n - vec3<i32>(1));
+    var near = CELL_REACH + 1u;
+    for (var z = first.z; z <= last.z; z = z + 1) {
+        for (var y = first.y; y <= last.y; y = y + 1) {
+            for (var x = first.x; x <= last.x; x = x + 1) {
+                let c = vec3<i32>(x, y, z);
+                if ranges[flatten(c, n)].count == 0u {
+                    continue;
+                }
+                // Distance from the cell to the box: 0 inside it.
+                let d = max(max(origin - c, c - box_last), vec3<i32>(0));
+                near = min(near, u32(max(max(d.x, d.y), d.z)));
+            }
+        }
+    }
+    tile_near[t] = near;
+}
+
+// One thread per tile, `tile_near` to the current half of `tile_ring`: the
+// Chebyshev tile distance to the nearest occupied tile (near 0) within
+// ring_max, else ring_max + 1. With `all_tiles`, 0 everywhere.
+@compute @workgroup_size(256)
+fn tiles_rings(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let t = gid.x;
+    let total = tile_total();
+    if t >= total {
+        return;
+    }
+    let at = tile_counts[tile_parity_word()] * total + t;
+    if u.all_tiles != 0u {
+        tile_ring[at] = 0u;
+        return;
+    }
+    let dims = vec3<i32>(tile_dims());
+    let p = unflatten(t, dims);
+    let r = i32(u.ring_max);
+    let first = max(p - vec3<i32>(r), vec3<i32>(0));
+    let last = min(p + vec3<i32>(r), dims - vec3<i32>(1));
+    var ring = u.ring_max + 1u;
+    for (var z = first.z; z <= last.z; z = z + 1) {
+        for (var y = first.y; y <= last.y; y = y + 1) {
+            for (var x = first.x; x <= last.x; x = x + 1) {
+                let q = vec3<i32>(x, y, z);
+                if tile_near[flatten(q, dims)] != 0u {
+                    continue;
+                }
+                let d = abs(q - p);
+                ring = min(ring, u32(max(max(d.x, d.y), d.z)));
+            }
+        }
+    }
+    tile_ring[at] = ring;
+}
+
+// The list rank of a tile: 0 in the cell set C, 1 for the rest of rings 0
+// and 1, else its ring.
+fn tile_rank(ring: u32, near: u32) -> u32 {
+    if ring <= 1u {
+        return select(1u, 0u, near <= CELL_REACH);
+    }
+    return ring;
+}
+
+// One thread: the lists. A counting sort of the tiles by rank, stable in
+// tile order: rank 0 is the cell set C (ring <= 1 and near <= CELL_REACH),
+// rank 1 the rest of rings 0 and 1, rank k >= 2 ring k. The ranks' start
+// offsets become their ends as the scatter advances them, and the ends are
+// the counts: word 0 is |C|, word k >= 1 the tiles with ring <= k. Then the
+// triples, the retired list against the previous half (a tile that was in
+// ring 0 or 1 and is not in C now; the previous nearness is not kept, so a
+// tile outside C both steps is listed again, harmlessly), and the
+// active-fraction stats word (solver word 6, `capped` bound at the solver
+// words): |C| / T³.
+@compute @workgroup_size(1)
+fn tiles_lists() {
+    let total = tile_total();
+    let r = u.ring_max;
+    let parity = tile_counts[tile_parity_word()];
+    let cur = parity * total;
+    let prev = (1u - parity) * total;
+    for (var k = 0u; k <= r + 1u; k = k + 1u) {
+        tile_counts[k] = 0u;
+    }
+    for (var t = 0u; t < total; t = t + 1u) {
+        let rank = tile_rank(tile_ring[cur + t], tile_near[t]);
+        tile_counts[rank] = tile_counts[rank] + 1u;
+    }
+    var start = 0u;
+    for (var k = 0u; k <= r + 1u; k = k + 1u) {
+        let count = tile_counts[k];
+        tile_counts[k] = start;
+        start = start + count;
+    }
+    var retired = 0u;
+    for (var t = 0u; t < total; t = t + 1u) {
+        let rank = tile_rank(tile_ring[cur + t], tile_near[t]);
+        tiles_by_ring[tile_counts[rank]] = t;
+        tile_counts[rank] = tile_counts[rank] + 1u;
+        if tile_ring[prev + t] <= 1u && rank != 0u {
+            tiles_retired[retired] = t;
+            retired = retired + 1u;
+        }
+    }
+    tile_counts[r + 2u] = retired;
+    for (var k = 0u; k <= r; k = k + 1u) {
+        tile_args[3u * k] = 2u * tile_counts[k];
+        tile_args[3u * k + 1u] = 1u;
+        tile_args[3u * k + 2u] = 1u;
+    }
+    tile_args[3u * (r + 1u)] = 2u * retired;
+    tile_args[3u * (r + 1u) + 1u] = 1u;
+    tile_args[3u * (r + 1u) + 2u] = 1u;
+    capped[6u] = bitcast<u32>(f32(tile_counts[0]) / f32(total));
 }
