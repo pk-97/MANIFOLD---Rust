@@ -85,11 +85,23 @@ fn cell_bytes(cells: [u32; 3]) -> u64 {
 
 /// Bytes the step holds for itself at `cells` with `slots` particle slots,
 /// besides the sort's ranges and the solver's scratch: the sorted particles,
-/// five cell arrays, the solid corners, five face grids and the pocket gate.
+/// seven cell arrays, the solid corners, five face grids, the pocket gate and
+/// the pocket sums.
 #[cfg(any(test, feature = "gpu-proofs"))]
 pub(crate) fn scratch_bytes(cells: [u32; 3], slots: u64) -> u64 {
     let corners = cells.iter().map(|&n| u64::from(n) + 1).product::<u64>() * 4;
-    slots.max(1) * size_of::<FluidParticle>() as u64 + 5 * cell_bytes(cells) + corners + 5 * face_bytes(cells) + POCKET_GATE_WORDS * 4
+    slots.max(1) * size_of::<FluidParticle>() as u64
+        + 7 * cell_bytes(cells)
+        + corners
+        + 5 * face_bytes(cells)
+        + POCKET_GATE_WORDS * 4
+        + pocket_sum_bytes(cells)
+}
+
+/// Three words a cell (a pocket's 64-bit sum and its count, indexed by its
+/// leader cell), then the removed total's two.
+fn pocket_sum_bytes(cells: [u32; 3]) -> u64 {
+    3 * cell_bytes(cells) + 8
 }
 
 /// The shader's `Params`; field meanings are documented there.
@@ -153,12 +165,17 @@ struct Pipelines {
     advect: GpuComputePipeline,
     pocket_seed: GpuComputePipeline,
     pocket_start: GpuComputePipeline,
-    pocket_idle: GpuComputePipeline,
     pocket_round: GpuComputePipeline,
     pocket_sweep: [GpuComputePipeline; 3],
     pocket_check: GpuComputePipeline,
     pocket_condition: GpuComputePipeline,
     pocket_tally: GpuComputePipeline,
+    pocket_clear: GpuComputePipeline,
+    pocket_accumulate: GpuComputePipeline,
+    pocket_remove: GpuComputePipeline,
+    pocket_pin: GpuComputePipeline,
+    /// The removed flux into the pressure, then the density, solver word.
+    pocket_flux: [GpuComputePipeline; 2],
 }
 
 fn step_source() -> String {
@@ -185,12 +202,16 @@ impl Pipelines {
             advect: pipe("faces_to_particles"),
             pocket_seed: pipe("pocket_seed"),
             pocket_start: pipe("pocket_start"),
-            pocket_idle: pipe("pocket_idle"),
             pocket_round: pipe("pocket_round"),
             pocket_sweep: [pipe("pocket_sweep_x"), pipe("pocket_sweep_y"), pipe("pocket_sweep_z")],
             pocket_check: pipe("pocket_check"),
             pocket_condition: pipe("pocket_condition"),
             pocket_tally: pipe("pocket_tally"),
+            pocket_clear: pipe("pocket_clear"),
+            pocket_accumulate: pipe("pocket_accumulate"),
+            pocket_remove: pipe("pocket_remove"),
+            pocket_pin: pipe("pocket_pin"),
+            pocket_flux: [pipe("pocket_flux_pressure"), pipe("pocket_flux_density")],
         }
     }
 }
@@ -217,6 +238,12 @@ struct LatticeBuffers {
     pocket: GpuBuffer,
     /// The pocket spread's indirect sizes and flags.
     pocket_gate: GpuBuffer,
+    /// Each water cell's pocket label.
+    pocket_label: GpuBuffer,
+    /// [`pocket_sum_bytes`].
+    pocket_sum: GpuBuffer,
+    /// The solves' water: `water` less each sealed pocket's leader cell.
+    solve_water: GpuBuffer,
 }
 
 /// Words of the pocket spread's gate (gpu_flip_step.wgsl `pocket_gate`).
@@ -247,6 +274,9 @@ impl LatticeBuffers {
             v: allocate(device, face)?,
             pocket: allocate(device, cell)?,
             pocket_gate: allocate(device, POCKET_GATE_WORDS * 4)?,
+            pocket_label: allocate(device, cell)?,
+            pocket_sum: allocate(device, pocket_sum_bytes(cells))?,
+            solve_water: allocate(device, cell)?,
         })
     }
 }
@@ -318,9 +348,9 @@ pub(crate) fn pocket_rounds(cells: [u32; 3]) -> u32 {
     cells.into_iter().max().unwrap_or(1)
 }
 
-/// The sealed pockets' solid velocity (gpu_flip_step.wgsl pocket_*): seed,
-/// up to [`pocket_rounds`] rounds of indirect sweeps that stop once a round
-/// changes nothing, the unfinished check, the zeroing, then the tally.
+/// Which water reaches air (gpu_flip_step.wgsl pocket_*): seed, up to
+/// [`pocket_rounds`] rounds of indirect sweeps that stop once a round changes
+/// nothing, the unfinished check, then the tally.
 fn encode_pockets(
     enc: &mut GpuEncoder,
     pipes: &Pipelines,
@@ -331,10 +361,9 @@ fn encode_pockets(
     tally: u64,
 ) {
     let cell_count: u64 = cells.iter().map(|&n| u64::from(n)).product();
-    let face_count: u64 = cells.iter().map(|&n| u64::from(n) + 1).product();
     enc.dispatch_compute(
         &pipes.pocket_seed,
-        &[uniform(params), buffer(6, &l.water), buffer(10, &l.s), buffer(23, &l.pocket)],
+        &[uniform(params), buffer(6, &l.water), buffer(10, &l.s), buffer(23, &l.pocket), buffer(25, &l.pocket_label)],
         groups(cell_count),
         "gpu_flip.step.pocket_seed",
     );
@@ -344,7 +373,7 @@ fn encode_pockets(
         for (axis, sweep) in pipes.pocket_sweep.iter().enumerate() {
             enc.dispatch_compute_indirect(
                 sweep,
-                &[uniform(params), buffer(10, &l.s), buffer(23, &l.pocket), buffer(24, &l.pocket_gate)],
+                &[uniform(params), buffer(10, &l.s), buffer(23, &l.pocket), buffer(24, &l.pocket_gate), buffer(25, &l.pocket_label)],
                 &l.pocket_gate,
                 12 * axis as u64,
                 "gpu_flip.step.pocket_sweep",
@@ -353,28 +382,69 @@ fn encode_pockets(
     }
     enc.dispatch_compute(
         &pipes.pocket_check,
-        &[uniform(params), buffer(10, &l.s), buffer(23, &l.pocket), buffer(24, &l.pocket_gate)],
+        &[uniform(params), buffer(10, &l.s), buffer(23, &l.pocket), buffer(24, &l.pocket_gate), buffer(25, &l.pocket_label)],
         groups(cell_count),
         "gpu_flip.step.pocket_check",
     );
-    enc.dispatch_compute(
-        &pipes.pocket_condition,
-        &[uniform(params), buffer(4, &l.v), buffer(10, &l.s), buffer(23, &l.pocket)],
-        groups(face_count),
-        "gpu_flip.step.pocket_condition",
-    );
-    pocket_tally(enc, pipes, params, l, capped, tally);
-}
-
-/// Adds the step's unfinished spread to the solver word, cleared on the
-/// tick's first step.
-fn pocket_tally(enc: &mut GpuEncoder, pipes: &Pipelines, params: &StepParams, l: &LatticeBuffers, capped: &GpuBuffer, tally: u64) {
+    // Adds the step's unfinished spread to the solver word, cleared on the
+    // tick's first step.
     enc.dispatch_compute(
         &pipes.pocket_tally,
         &[uniform(params), buffer(24, &l.pocket_gate), GpuBinding::Buffer { binding: 22, buffer: capped, offset: tally }],
         [1, 1, 1],
         "gpu_flip.step.pocket_tally",
     );
+}
+
+/// Each sealed pocket's mean taken off the right-hand side in `l.rhs`
+/// (gpu_flip_step.wgsl pocket_accumulate, pocket_remove): with no air cell
+/// its solve is pure Neumann, solvable only for a right-hand side summing to
+/// 0. What was removed goes to solver word 4 (`solve` 0, pressure) or 5
+/// (1, density).
+fn encode_pocket_mean(enc: &mut GpuEncoder, pipes: &Pipelines, l: &LatticeBuffers, solve: usize, step: &Step<'_>) {
+    let (params, capped, tally) = (&step.params, step.capped, step.tally);
+    let cell_count: u64 = l.cells.iter().map(|&n| u64::from(n)).product();
+    let sums = [uniform(params), buffer(26, &l.pocket_sum)];
+    enc.dispatch_compute(&pipes.pocket_clear, &sums, groups(3 * cell_count + 2), "gpu_flip.step.pocket_clear");
+    let cells = [uniform(params), buffer(5, &l.rhs), buffer(23, &l.pocket), buffer(25, &l.pocket_label), buffer(26, &l.pocket_sum)];
+    enc.dispatch_compute(&pipes.pocket_accumulate, &cells, groups(cell_count), "gpu_flip.step.pocket_accumulate");
+    enc.dispatch_compute(&pipes.pocket_remove, &cells, groups(cell_count), "gpu_flip.step.pocket_remove");
+    enc.dispatch_compute(
+        &pipes.pocket_flux[solve],
+        &[uniform(params), buffer(26, &l.pocket_sum), GpuBinding::Buffer { binding: 22, buffer: capped, offset: tally }],
+        [1, 1, 1],
+        "gpu_flip.step.pocket_flux",
+    );
+}
+
+/// The step shader's atomic sites (I8, GPU_FLIP_PRESSURE_SOLVE.md section
+/// 7 (Invariants & enforcement)): the pockets' fixed-point sums, integer adds that come out
+/// the same in any thread order. A new site is added here on purpose.
+#[cfg(test)]
+const POCKET_ATOMIC_SITES: &[&str] = &["pocket_sum", "group_sum", "pocket_clear", "pocket_add", "pocket_accumulate", "pocket_remove", "pocket_flux"];
+
+/// I8's guard: each line of `source` that uses an atomic, outside the named
+/// functions and variable declarations of `allowed`; exchange and
+/// compare-exchange are never allowed. Comments are skipped.
+#[cfg(test)]
+pub(crate) fn atomic_sites_outside(source: &str, allowed: &[&str]) -> Vec<String> {
+    let mut owner = "";
+    let mut stray = Vec::new();
+    for line in source.lines() {
+        if let Some(rest) = line.strip_prefix("fn ") {
+            owner = rest.split('(').next().unwrap_or("");
+        } else if let Some(at) = line.find("var<").filter(|_| !line.starts_with(' ')) {
+            owner = line[at..].split_once("> ").map_or("", |(_, rest)| rest.split(':').next().unwrap_or("").trim());
+        }
+        let code = line.split("//").next().unwrap_or("");
+        if !code.contains("atomic") {
+            continue;
+        }
+        if code.contains("atomicExchange") || code.contains("atomicCompareExchange") || !allowed.contains(&owner) {
+            stray.push(format!("{owner}: {}", line.trim()));
+        }
+    }
+    stray
 }
 
 /// Everything one step reads, resolved before any pass is encoded.
@@ -564,13 +634,23 @@ impl StepState {
             cells_groups,
             "gpu_flip.step.water_from_phi",
         );
-        // Sealed pockets. As the engine does, the conditioning is skipped
+        // Which water reaches air holds every step: the density source reads
+        // it too. As the engine does, the solid velocity's zeroing is skipped
         // when the bodies are in the solve: their mass resolves the pocket.
+        encode_pockets(enc, pipes, &base, l, cells, step.capped, step.tally);
+        enc.dispatch_compute(
+            &pipes.pocket_pin,
+            &[uniform(&base), buffer(6, &l.water), buffer(23, &l.pocket), buffer(25, &l.pocket_label), buffer(5, &l.solve_water)],
+            cells_groups,
+            "gpu_flip.step.pocket_pin",
+        );
         if solids && !step.dynamic {
-            encode_pockets(enc, pipes, &base, l, cells, step.capped, step.tally);
-        } else {
-            enc.dispatch_compute(&pipes.pocket_idle, &[buffer(24, &l.pocket_gate)], [1, 1, 1], "gpu_flip.step.pocket_idle");
-            pocket_tally(enc, pipes, &base, l, step.capped, step.tally);
+            enc.dispatch_compute(
+                &pipes.pocket_condition,
+                &[uniform(&base), buffer(4, &l.v), buffer(10, &l.s), buffer(23, &l.pocket)],
+                face_groups,
+                "gpu_flip.step.pocket_condition",
+            );
         }
         enc.dispatch_compute(
             &pipes.divergence,
@@ -585,10 +665,11 @@ impl StepState {
             cells_groups,
             "gpu_flip.step.divergence",
         );
+        encode_pocket_mean(enc, pipes, l, 0, step);
         let water = Water {
             lattice: cells,
             cell_size: p.cell_size,
-            water: &l.water,
+            water: &l.solve_water,
             faces: &l.s,
             phi: step.ghost.then_some(&l.phi),
         };
@@ -603,7 +684,7 @@ impl StepState {
             tick_seconds: p.tick_seconds,
             first: (p.rows - p.body_count).max(0) as u32,
             count: p.body_count.max(0) as u32,
-            water: &l.water,
+            water: &l.solve_water,
             open: &l.s,
             solid: &l.v,
             bodies: step.bodies,
@@ -668,6 +749,7 @@ impl StepState {
                 cells_groups,
                 "gpu_flip.step.density_source",
             );
+            encode_pocket_mean(enc, pipes, l, 1, step);
             let flat = Water { phi: None, ..water };
             self.solver.solve(enc, &flat, &l.rhs, &l.pressure, step.pressure, None)?;
             self.solver.tally(enc, step.pressure, step.capped, tally, 1, false)?;
@@ -980,11 +1062,58 @@ impl Primitive for GpuFlipStep {
 mod tests {
     use super::*;
 
-    /// The liquid conformance suite checks codegen bodies for atomics; the
-    /// step's hand shader has none, so it is checked here.
+    /// I8: the liquid conformance suite checks codegen bodies for atomics;
+    /// the step's hand shader is checked here. Its only atomics are the
+    /// pockets' fixed-point sums.
     #[test]
-    fn step_shader_uses_no_atomics() {
-        assert!(!STEP_SHADER.contains("atomic"));
+    fn step_shader_atomics_are_allowlisted_integer_sums() {
+        let stray = super::atomic_sites_outside(STEP_SHADER, POCKET_ATOMIC_SITES);
+        assert!(stray.is_empty(), "atomics outside the allowlist: {stray:#?}");
+    }
+
+    /// The pocket sums' two-word add with carry (gpu_flip_step.wgsl
+    /// pocket_fixed, pocket_add, pocket_value) gives the exact sum of the
+    /// fixed-point values in any order.
+    #[test]
+    fn pocket_carry_sum_is_exact_in_any_order() {
+        const SCALE: f64 = 65536.0;
+        let fixed = |x: f64| -> (u32, u32) {
+            let v = (x * SCALE).round() as i64;
+            (v as u32, (v >> 32) as u32)
+        };
+        let add = |words: &mut (u32, u32), q: (u32, u32)| {
+            let (low, carry) = words.0.overflowing_add(q.0);
+            words.0 = low;
+            words.1 = words.1.wrapping_add(q.1).wrapping_add(u32::from(carry));
+        };
+        let value = |w: (u32, u32)| ((i64::from(w.1 as i32) << 32) | i64::from(w.0)) as f64 / SCALE;
+        let mut rng = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = || {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            rng
+        };
+        // Mixed signs and magnitudes, some past 2^32 in fixed point.
+        let values: Vec<f64> = (0..20_000).map(|i| {
+            let unit = (next() % 2_000_001) as f64 / 1.0e6 - 1.0;
+            unit * if i % 7 == 0 { 1.0e5 } else { 3.0 }
+        }).collect();
+        let want: f64 = values.iter().map(|&x| (x * SCALE).round()).sum::<f64>() / SCALE;
+        let mut order: Vec<usize> = (0..values.len()).collect();
+        let mut totals = Vec::new();
+        for _ in 0..3 {
+            for i in (1..order.len()).rev() {
+                order.swap(i, (next() % (i as u64 + 1)) as usize);
+            }
+            let mut words = (0u32, 0u32);
+            for &i in &order {
+                add(&mut words, fixed(values[i]));
+            }
+            totals.push(words);
+        }
+        assert!(totals.windows(2).all(|w| w[0] == w[1]), "the words differ by order: {totals:?}");
+        assert_eq!(value(totals[0]), want, "the carry sum equals the exact sum");
     }
 
     #[test]

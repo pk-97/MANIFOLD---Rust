@@ -1503,8 +1503,9 @@ fn gpu_flip_constrain_solid_faces_matches_cpu() {
 /// The engine's sealed pockets on CPU (PressureSolver::_conditionSolidVelocityField):
 /// water cells link through a face open at least 1e-6; a region reaches air
 /// through a linked dry neighbour or an open tank face (`mask`); a cell of an
-/// unreached region of more than one cell is isolated.
-fn cpu_isolated(water: &[f32], open: &[FaceSample], mask: u32) -> Vec<bool> {
+/// unreached region of more than one cell is isolated. Returns the isolated
+/// cells, then every sealed (wet, unreached) cell.
+fn cpu_isolated(water: &[f32], open: &[FaceSample], mask: u32) -> (Vec<bool>, Vec<bool>) {
     let wet = |c: [usize; 3]| water[cell_index(c)] > 0.5;
     let neighbours = |c: [usize; 3]| {
         let mut out = Vec::new();
@@ -1538,22 +1539,64 @@ fn cpu_isolated(water: &[f32], open: &[FaceSample], mask: u32) -> Vec<bool> {
             }
         }
     }
-    (0..cell_len())
+    let isolated = (0..cell_len())
         .map(|i| {
             let c = cell_coords(i);
             wet(c) && !reach[i] && neighbours(c).iter().any(|&q| wet(q))
         })
-        .collect()
+        .collect();
+    let sealed = (0..cell_len()).map(|i| wet(cell_coords(i)) && !reach[i]).collect();
+    (isolated, sealed)
+}
+
+/// The sealed water's pockets on CPU: each cell of `sealed` labelled by the
+/// lowest cell index it links to through sealed cells; other cells None.
+fn cpu_pocket_labels(sealed: &[bool], open: &[FaceSample]) -> Vec<Option<usize>> {
+    let mut label = vec![None; cell_len()];
+    for start in 0..cell_len() {
+        if !sealed[start] || label[start].is_some() {
+            continue;
+        }
+        // Ascending start, so the first cell reached is the lowest index.
+        label[start] = Some(start);
+        let mut queue = vec![start];
+        while let Some(i) = queue.pop() {
+            let c = cell_coords(i);
+            for a in 0..3 {
+                for d in [c[a].checked_sub(1), Some(c[a] + 1).filter(|&q| q < N[a])].into_iter().flatten() {
+                    let mut q = c;
+                    q[a] = d;
+                    let mut f = c;
+                    f[a] = c[a].max(d);
+                    let j = cell_index(q);
+                    if sealed[j] && label[j].is_none() && open[pad_index(f)].weight[a] >= 1e-6 {
+                        label[j] = Some(start);
+                        queue.push(j);
+                    }
+                }
+            }
+        }
+    }
+    label
 }
 
 /// Runs the pocket passes over `water`, `open` and the solid velocity
 /// `moving`, rounds until one changes nothing; returns the conditioned
-/// velocity and the rounds that changed a cell.
-fn gpu_pockets(water: &[f32], open: &[FaceSample], moving: &[FaceSample], mask: u32) -> (Vec<FaceSample>, usize) {
+/// velocity, the rounds that changed a cell, then `rhs` with each sealed
+/// pocket's mean removed and the solver words after it.
+fn gpu_pockets(water: &[f32], open: &[FaceSample], moving: &[FaceSample], mask: u32, rhs: &[f32]) -> (Vec<FaceSample>, usize, Vec<f32>, Vec<u32>) {
     let params = StepParams { closed_faces: mask, ..lattice() };
     let lines = (N[1] * N[2]).max(N[0] * N[2]).max(N[0] * N[1]);
     let mut pass = Pass::new();
-    pass.bind(6, water).bind(10, open).bind(23, &vec![0u32; cell_len()]).bind(24, &[0u32; 11]).bind(4, moving);
+    pass.bind(6, water)
+        .bind(10, open)
+        .bind(23, &vec![0u32; cell_len()])
+        .bind(24, &[0u32; 11])
+        .bind(4, moving)
+        .bind(25, &vec![0u32; cell_len()])
+        .bind(5, rhs)
+        .bind(26, &vec![7u32; 3 * cell_len() + 2])
+        .bind(22, &[9u32; 6]);
     pass.run::<u32>("pocket_seed", &params, 23, cell_len(), cell_len());
     pass.run::<u32>("pocket_start", &params, 24, 11, 1);
     let mut rounds = 0;
@@ -1571,7 +1614,11 @@ fn gpu_pockets(water: &[f32], open: &[FaceSample], moving: &[FaceSample], mask: 
     pass.run::<u32>("pocket_check", &params, 24, 11, cell_len());
     assert_eq!(pass.bound::<u32>(24, 11)[10], 0, "a settled spread leaves no sealed cell linked to air");
     let got = pass.run::<FaceSample>("pocket_condition", &params, 4, face_len(), face_len());
-    (got, rounds)
+    pass.run::<u32>("pocket_clear", &params, 26, 3 * cell_len() + 2, 3 * cell_len() + 2);
+    pass.run::<u32>("pocket_accumulate", &params, 26, 3 * cell_len() + 2, cell_len());
+    let removed = pass.run::<f32>("pocket_remove", &params, 5, cell_len(), cell_len());
+    let words = pass.run::<u32>("pocket_flux_pressure", &StepParams { step_in_tick: 0, ..params }, 22, 6, 1);
+    (got, rounds, removed, words)
 }
 
 #[test]
@@ -1604,8 +1651,44 @@ fn gpu_flip_sealed_pockets_zero_the_solid_velocity_as_the_engine() {
                 face
             })
             .collect();
-        let isolated = cpu_isolated(&water, &open, mask);
-        let (got, rounds) = gpu_pockets(&water, &open, &moving, mask);
+        let (isolated, sealed) = cpu_isolated(&water, &open, mask);
+        let rhs: Vec<f32> = (0..cell_len()).map(|_| 4.0 * rng.unit() - 1.0).collect();
+        let (got, rounds, removed, words) = gpu_pockets(&water, &open, &moving, mask, &rhs);
+        // Each sealed pocket loses its mean, so it sums to 0; every other
+        // cell keeps its value. The GPU rounds each value to 1/65536 first.
+        let labels = cpu_pocket_labels(&sealed, &open);
+        let mut sums = std::collections::BTreeMap::<usize, (f64, usize)>::new();
+        for (i, label) in labels.iter().enumerate() {
+            if let Some(l) = label {
+                let entry = sums.entry(*l).or_default();
+                entry.0 += f64::from(rhs[i]);
+                entry.1 += 1;
+            }
+        }
+        let mut total = 0.0;
+        for (i, label) in labels.iter().enumerate() {
+            let want = match label {
+                Some(l) => {
+                    let (sum, count) = sums[l];
+                    if i == *l {
+                        total += sum.abs();
+                    }
+                    f64::from(rhs[i]) - sum / count as f64
+                }
+                None => f64::from(rhs[i]),
+            };
+            let tolerance = if label.is_some() { 1e-4 } else { 0.0 };
+            assert!((f64::from(removed[i]) - want).abs() <= tolerance, "seed {seed:#x} mask {mask}: cell {i} rhs {} want {want}", removed[i]);
+        }
+        for l in sums.keys() {
+            let residual: f64 = (0..cell_len()).filter(|&i| labels[i] == Some(*l)).map(|i| f64::from(removed[i])).sum();
+            assert!(residual.abs() < 1e-3, "seed {seed:#x} mask {mask}: pocket {l} sums to {residual} after its mean is removed");
+        }
+        let h = f64::from(lattice().cell_size);
+        let flux = f64::from(f32::from_bits(words[4]));
+        assert!((flux - total * h * h * h).abs() <= 1e-4 * (total * h * h * h).max(1e-9), "seed {seed:#x} mask {mask}: removed flux {flux}, want {}", total * h * h * h);
+        assert_eq!(words[5], 0, "the tick's first step clears the density word");
+        assert_eq!(&words[..4], &[9, 9, 9, 9], "the other solver words stay");
         for i in 0..face_len() {
             let p = pad_coords(i);
             for a in 0..3 {
@@ -1625,7 +1708,7 @@ fn gpu_flip_sealed_pockets_zero_the_solid_velocity_as_the_engine() {
             assert_eq!(got[i].velocity[3], 7.0, "the owner code stays");
             assert_eq!(got[i].weight, moving[i].weight, "the friction stays");
         }
-        println!("GPU FLIP pockets seed {seed:#x} mask {mask}: {} isolated cells, {rounds} rounds", isolated.iter().filter(|&&s| s).count());
+        println!("GPU FLIP pockets seed {seed:#x} mask {mask}: {} isolated cells, {} pockets, {rounds} rounds", isolated.iter().filter(|&&s| s).count(), sums.len());
     }
     assert!(zeroed > 0, "some pocket was sealed");
 }
@@ -1638,7 +1721,7 @@ fn gpu_flip_pocket_spread_reports_an_unfinished_cap() {
     let water = vec![1.0f32; cell_len()];
     let open = solid_faces(0x5e9, false);
     let mut pass = Pass::new();
-    pass.bind(6, &water).bind(10, &open).bind(23, &vec![0u32; cell_len()]).bind(24, &[0u32; 11]);
+    pass.bind(6, &water).bind(10, &open).bind(23, &vec![0u32; cell_len()]).bind(24, &[0u32; 11]).bind(25, &vec![0u32; cell_len()]);
     pass.run::<u32>("pocket_seed", &params, 23, cell_len(), cell_len());
     pass.run::<u32>("pocket_start", &params, 24, 11, 1);
     pass.run::<u32>("pocket_check", &params, 24, 11, cell_len());

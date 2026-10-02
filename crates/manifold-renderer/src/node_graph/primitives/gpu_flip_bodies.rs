@@ -286,7 +286,8 @@ mod tests {
 
     #[test]
     fn body_shader_uses_no_atomics() {
-        assert!(!SHADER.contains("atomic"));
+        let stray = super::super::gpu_flip_step::atomic_sites_outside(SHADER, &[]);
+        assert!(stray.is_empty(), "atomics outside the allowlist (I8): {stray:#?}");
     }
 
     #[test]

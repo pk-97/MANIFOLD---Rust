@@ -724,6 +724,18 @@ fn water_from_phi(@builtin(global_invocation_id) gid: vec3<u32>) {
 // sweep changed a cell this round; 10: a sealed cell still links to one
 // that reaches air (the spread stopped at its cap unfinished).
 @group(0) @binding(24) var<storage, read_write> pocket_gate: array<u32>;
+// Each water cell's pocket: the lowest cell index of the sealed water it
+// links to. A pocket's label is its leader cell.
+@group(0) @binding(25) var<storage, read_write> pocket_label: array<u32>;
+// Per label, three words: a right-hand side sum as a 64-bit fixed-point
+// integer (low, high) and the cell count. Then two words: the magnitude of
+// everything removed this solve, in the same fixed point.
+@group(0) @binding(26) var<storage, read_write> pocket_sum: array<atomic<u32>>;
+
+// Fixed point for the pocket sums: integer adds give the same total in any
+// order, so the solves stay the same on every run.
+const POCKET_SCALE: f32 = 65536.0;
+const TWO_32: f32 = 4294967296.0;
 
 const POCKET_DRY: u32 = 0u;
 const POCKET_SEALED: u32 = 1u;
@@ -752,6 +764,7 @@ fn pocket_seed(@builtin(global_invocation_id) gid: vec3<u32>) {
         pocket[idx] = POCKET_DRY;
         return;
     }
+    pocket_label[idx] = idx;
     let n = lattice();
     let m = n + vec3<i32>(1);
     let p = unflatten(idx, n);
@@ -780,13 +793,6 @@ fn pocket_start() {
     pocket_gate[POCKET_UNRESOLVED] = 0u;
 }
 
-// One thread: no spread this step (no moving solid, or bodies in the solve).
-@compute @workgroup_size(1)
-fn pocket_idle() {
-    pocket_gate[POCKET_CHANGED] = 0u;
-    pocket_gate[POCKET_UNRESOLVED] = 0u;
-}
-
 // One thread: this round's sweeps run only when the last round changed a
 // cell.
 @compute @workgroup_size(1)
@@ -800,6 +806,25 @@ fn pocket_round() {
         pocket_gate[3u * a + 2u] = 1u;
     }
     pocket_gate[POCKET_CHANGED] = 0u;
+}
+
+// Cell c from its line neighbour b: sealed water linked to water reaching
+// air reaches air too; linked sealed water takes the lower label.
+fn pocket_step(c: vec3<i32>, b: vec3<i32>, a: i32, n: vec3<i32>, m: vec3<i32>) -> bool {
+    let at = flatten(c, n);
+    let near = flatten(b, n);
+    if pocket[at] != POCKET_SEALED || pocket[near] == POCKET_DRY || !pocket_linked(c, b, a, n, m) {
+        return false;
+    }
+    if pocket[near] == POCKET_AIR {
+        pocket[at] = POCKET_AIR;
+        return true;
+    }
+    if pocket_label[near] < pocket_label[at] {
+        pocket_label[at] = pocket_label[near];
+        return true;
+    }
+    return false;
 }
 
 // One thread per line along axis a, forward then back; each line is its
@@ -820,22 +845,14 @@ fn pocket_sweep(t: u32, a: i32) {
         c[a] = i;
         var b = p;
         b[a] = i - 1;
-        let at = flatten(c, n);
-        if pocket[at] == POCKET_SEALED && pocket[flatten(b, n)] == POCKET_AIR && pocket_linked(c, b, a, n, m) {
-            pocket[at] = POCKET_AIR;
-            changed = true;
-        }
+        changed = pocket_step(c, b, a, n, m) || changed;
     }
     for (var i = n[a] - 2; i >= 0; i = i - 1) {
         var c = p;
         c[a] = i;
         var b = p;
         b[a] = i + 1;
-        let at = flatten(c, n);
-        if pocket[at] == POCKET_SEALED && pocket[flatten(b, n)] == POCKET_AIR && pocket_linked(c, b, a, n, m) {
-            pocket[at] = POCKET_AIR;
-            changed = true;
-        }
+        changed = pocket_step(c, b, a, n, m) || changed;
     }
     if changed {
         pocket_gate[POCKET_CHANGED] = 1u;
@@ -881,9 +898,173 @@ fn pocket_check(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let n = lattice();
     let c = unflatten(idx, n);
-    if pocket[idx] == POCKET_SEALED && pocket_neighbour(c, POCKET_AIR, n, n + vec3<i32>(1)) {
+    if pocket[idx] != POCKET_SEALED {
+        return;
+    }
+    let m = n + vec3<i32>(1);
+    var unfinished = pocket_neighbour(c, POCKET_AIR, n, m);
+    // A pocket still split between two labels: each part's mean is removed
+    // apart, which keeps the solve consistent but spreads unevenly.
+    for (var a = 0; a < 3; a = a + 1) {
+        for (var s = -1; s <= 1; s = s + 2) {
+            var d = c;
+            d[a] = c[a] + s;
+            if d[a] >= 0 && d[a] < n[a] && pocket[flatten(d, n)] == POCKET_SEALED && pocket_label[flatten(d, n)] != pocket_label[idx] && pocket_linked(c, d, a, n, m) {
+                unfinished = true;
+            }
+        }
+    }
+    if unfinished {
         pocket_gate[POCKET_UNRESOLVED] = 1u;
     }
+}
+
+// One thread per cell, `water` to `cell_out`: the solves' water, less each
+// sealed pocket's leader cell. With no air a pocket's L is singular, and in
+// f32 its residual never reaches the stop; the leader then stands as air at
+// p = 0, an identity row, and its neighbours see it as a pressure-0
+// neighbour as the subtract pass does.
+@compute @workgroup_size(256)
+fn pocket_pin(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    if idx >= cell_total() {
+        return;
+    }
+    let leader = pocket[idx] == POCKET_SEALED && pocket_label[idx] == idx;
+    cell_out[idx] = select(water[idx], 0.0, leader);
+}
+
+// One thread per word: the pocket sums start at 0.
+@compute @workgroup_size(256)
+fn pocket_clear(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if gid.x < 3u * cell_total() + 2u {
+        atomicStore(&pocket_sum[gid.x], 0u);
+    }
+}
+
+// A cell's right-hand side in the sums' fixed point, as (low, high) of a
+// 64-bit two's-complement integer. The value the solve then sees is this
+// rounded one, so a pocket sums to exactly its removed mean.
+fn pocket_fixed(x: f32) -> vec2<u32> {
+    let v = round(x * POCKET_SCALE);
+    // Split the magnitude, which is exact for an integral f32, then negate.
+    let m = abs(v);
+    let mh = floor(m / TWO_32);
+    let q = vec2<u32>(u32(m - mh * TWO_32), u32(mh));
+    return select(q, pocket_negate(q), v < 0.0);
+}
+
+fn pocket_negate(q: vec2<u32>) -> vec2<u32> {
+    let low = ~q.x + 1u;
+    return vec2<u32>(low, ~q.y + select(0u, 1u, low == 0u));
+}
+
+// Decoded through the magnitude, so a small negative keeps its precision.
+fn pocket_value(low: u32, high: u32) -> f32 {
+    let negative = (high & 0x80000000u) != 0u;
+    let m = select(vec2<u32>(low, high), pocket_negate(vec2<u32>(low, high)), negative);
+    let magnitude = (f32(m.y) * TWO_32 + f32(m.x)) / POCKET_SCALE;
+    return select(magnitude, -magnitude, negative);
+}
+
+// Adds (low, high) at word w with the carry; the total is exact in any order.
+fn pocket_add(w: u32, q: vec2<u32>) {
+    let old = atomicAdd(&pocket_sum[w], q.x);
+    let carry = select(0u, 1u, old + q.x < old);
+    atomicAdd(&pocket_sum[w + 1u], q.y + carry);
+}
+
+var<workgroup> group_label: u32;
+var<workgroup> group_sum: array<atomic<u32>, 3>;
+
+// One thread per cell, the right-hand side in `cell_out`: each sealed cell
+// adds itself to its pocket. A workgroup first folds the cells sharing its
+// first sealed cell's label, so a large pocket is not one contended word.
+@compute @workgroup_size(256)
+fn pocket_accumulate(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) lane: u32) {
+    let idx = gid.x;
+    if lane == 0u {
+        group_label = 0xffffffffu;
+        atomicStore(&group_sum[0], 0u);
+        atomicStore(&group_sum[1], 0u);
+        atomicStore(&group_sum[2], 0u);
+    }
+    workgroupBarrier();
+    let sealed = idx < cell_total() && pocket[idx] == POCKET_SEALED;
+    var label = 0u;
+    if sealed {
+        label = pocket_label[idx];
+        // Any one sealed lane's label wins; the rest go straight to memory.
+        group_label = label;
+    }
+    workgroupBarrier();
+    let shared_label = workgroupUniformLoad(&group_label);
+    if sealed {
+        let q = pocket_fixed(cell_out[idx]);
+        if label == shared_label {
+            let old = atomicAdd(&group_sum[0], q.x);
+            let carry = select(0u, 1u, old + q.x < old);
+            atomicAdd(&group_sum[1], q.y + carry);
+            atomicAdd(&group_sum[2], 1u);
+        } else {
+            pocket_add(3u * label, q);
+            atomicAdd(&pocket_sum[3u * label + 2u], 1u);
+        }
+    }
+    workgroupBarrier();
+    if lane == 0u && shared_label != 0xffffffffu {
+        pocket_add(3u * shared_label, vec2<u32>(atomicLoad(&group_sum[0]), atomicLoad(&group_sum[1])));
+        atomicAdd(&pocket_sum[3u * shared_label + 2u], atomicLoad(&group_sum[2]));
+    }
+}
+
+// One thread per cell: a sealed cell's right-hand side less its pocket's
+// mean, so each pocket sums to 0 and its pure-Neumann solve has a solution.
+// The leader cell adds what its pocket lost to the removed total.
+@compute @workgroup_size(256)
+fn pocket_remove(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    if idx >= cell_total() || pocket[idx] != POCKET_SEALED {
+        return;
+    }
+    let label = pocket_label[idx];
+    let low = atomicLoad(&pocket_sum[3u * label]);
+    let high = atomicLoad(&pocket_sum[3u * label + 1u]);
+    let count = atomicLoad(&pocket_sum[3u * label + 2u]);
+    let q = pocket_fixed(cell_out[idx]);
+    cell_out[idx] = pocket_value(q.x, q.y) - pocket_value(low, high) / f32(count);
+    if idx == label {
+        let total = pocket_value(low, high);
+        pocket_add(3u * cell_total(), pocket_fixed(abs(total)));
+    }
+}
+
+// One thread, `capped` bound at the solver words: the volume rate removed
+// from this step's pockets, h³ times the removed sum, added to `word`.
+fn pocket_flux(word: u32) {
+    let at = 3u * cell_total();
+    let total = pocket_value(atomicLoad(&pocket_sum[at]), atomicLoad(&pocket_sum[at + 1u]));
+    let h = u.cell_size;
+    let removed = total * h * h * h;
+    if u.step_in_tick == 0 {
+        capped[word] = bitcast<u32>(removed);
+    } else {
+        capped[word] = bitcast<u32>(bitcast<f32>(capped[word]) + removed);
+    }
+}
+
+@compute @workgroup_size(1)
+fn pocket_flux_pressure() {
+    // The density word too: a tick without the density projection reads 0.
+    if u.step_in_tick == 0 {
+        capped[5u] = 0u;
+    }
+    pocket_flux(4u);
+}
+
+@compute @workgroup_size(1)
+fn pocket_flux_density() {
+    pocket_flux(5u);
 }
 
 // A cell of a sealed region of more than one cell; a lone sealed cell keeps

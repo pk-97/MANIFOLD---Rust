@@ -147,7 +147,7 @@ impl WaterScene {
     }
 
     /// The scene with only the faces in `mask` closed.
-    #[cfg(any(test, feature = "gpu-proofs"))]
+    #[cfg(test)]
     pub fn with_closed_faces(self, mask: u32) -> Self {
         Self { closed_faces: mask, ..self }
     }

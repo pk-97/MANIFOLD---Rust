@@ -903,6 +903,9 @@ fn gpu_flip_box_pressed_into_a_full_tank_converges_and_escapes_when_open() {
     // a twentieth of it.
     assert!(open.0 > 0.5 * open.1, "open: the pressed water leaves at {:.3} m/s, under half the displacement rate {:.3}", open.0, open.1);
     assert!(closed.0.abs() < 0.05 * closed.1, "sealed: the water by the wall moves out at {:.3} m/s against a displacement rate of {:.3}", closed.0, closed.1);
+    // The sealed lid's push is what the pockets' mean removal takes off, and
+    // the stats say so.
+    assert!(closed.2 > 0.0, "sealed: the pressed lid removed no flux from its pocket's pressure solve");
 }
 
 const LID_SPEED: f64 = 1.0;
@@ -910,8 +913,9 @@ const LID_THICKNESS: f64 = 0.4;
 
 /// The mean -x speed of the water two to four cells in from the low-x face
 /// over the last ten frames, and the speed the lid's displacement would
-/// drive through that face: lid area times lid speed over the open area.
-fn lid_pressed_into_pool(mask: u32) -> (f64, f64) {
+/// drive through that face: lid area times lid speed over the open area;
+/// and the volume rate taken off sealed pockets' pressure solves, summed.
+fn lid_pressed_into_pool(mask: u32) -> (f64, f64, f64) {
     let scene = WaterScene::still_pool(64).with_obstacle().with_closed_faces(mask);
     let h = scene.pressure.cell_size();
     let mut run = Run::new(scene);
@@ -926,16 +930,18 @@ fn lid_pressed_into_pool(mask: u32) -> (f64, f64) {
     let low_x = -0.5 * BOX_METRES;
     let mut outward = Vec::new();
     let mut drive = 0.0;
+    let mut removed = 0.0;
     for frame in 1..=30 {
         let y = start - LID_SPEED * f64::from(frame) / 60.0;
         run.graph.set_param(transform, "pos_y", crate::node_graph::ParamValue::Float(y as f32)).expect("pos_y");
         run.frame();
         let stats = run.liquid_stats();
-        println!("GPU FLIP pressed lid mask {mask} frame {frame:2}: {} live, {} pressure iterations, {} density, {} unconverged, {} unresolved", stats.live, stats.pressure_iterations, stats.density_iterations, stats.unconverged, stats.unresolved_pockets);
-        // One substep a tick: a pressure count under the cap is a converged
-        // pressure solve. The density solve's own cap is not this pass's
-        // contract (BUG-n3od (density solve reaches its cap under a pressed lid)).
-        assert!(stats.pressure_iterations < super::gpu_flip_pressure::MAX_ITERATIONS, "mask {mask}: frame {frame}'s pressure solve reached its cap");
+        println!(
+            "GPU FLIP pressed lid mask {mask} frame {frame:2}: {} live, {} pressure iterations, {} density, {} unconverged, {} unresolved, {:.3e}/{:.3e} m³/s removed from sealed pressure/density",
+            stats.live, stats.pressure_iterations, stats.density_iterations, stats.unconverged, stats.unresolved_pockets, stats.pressure_flux_removed, stats.density_flux_removed
+        );
+        removed += f64::from(stats.pressure_flux_removed);
+        assert_eq!(stats.unconverged, 0, "mask {mask}: frame {frame} left a pressure or density solve unconverged");
         assert_eq!(stats.unresolved_pockets, 0, "mask {mask}: frame {frame} left a pocket spread unfinished");
         if frame > 20 {
             let under = y - 0.5 * LID_THICKNESS;
@@ -950,5 +956,5 @@ fn lid_pressed_into_pool(mask: u32) -> (f64, f64) {
             outward.push(near.iter().sum::<f64>() / near.len().max(1) as f64);
         }
     }
-    (outward.iter().sum::<f64>() / outward.len() as f64, drive)
+    (outward.iter().sum::<f64>() / outward.len() as f64, drive, removed)
 }
