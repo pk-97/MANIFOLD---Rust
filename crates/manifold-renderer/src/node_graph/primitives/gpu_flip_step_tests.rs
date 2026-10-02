@@ -84,9 +84,10 @@ fn face_exists(p: [usize; 3], a: usize) -> bool {
     (0..3).all(|b| b == a || p[b] < N[b])
 }
 
-/// The step's params over this file's lattice, no impulse tick.
+/// The step's params over this file's lattice, no impulse tick, every tank
+/// face closed.
 fn lattice() -> StepParams {
-    StepParams { n: N.map(|n| n as u32), box_min: MIN, cell_size: H, impulse_tick: -1, ..StepParams::default() }
+    StepParams { n: N.map(|n| n as u32), box_min: MIN, cell_size: H, impulse_tick: -1, closed_faces: 63, ..StepParams::default() }
 }
 
 /// One entry of the step's shader with its buffers bound by number.
