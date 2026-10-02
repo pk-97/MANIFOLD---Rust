@@ -48,7 +48,7 @@ use crate::node_graph::liquid::coupling::REACTION_FLOATS;
 use crate::node_graph::primitives::gpu_flip_bodies::HELD_BYTES as BODY_PASS_BYTES;
 use crate::node_graph::primitives::face_sample_component::axis_param;
 use crate::node_graph::primitives::fluid_surface::{boundary_collisions, fluid_settings};
-use crate::node_graph::primitives::liquid_fill::{fill_of, filled_sites};
+use crate::node_graph::primitives::liquid_fill::{fill_of, filled_sites, pool_slots};
 use crate::node_graph::primitives::liquid_stats::{LIQUID_STATS_WORDS, partial_bytes};
 use crate::node_graph::primitives::matter_domain::{fill_region, matter_geometry};
 use crate::node_graph::primitives::matter_face_component::matter_cells;
@@ -1081,6 +1081,7 @@ fn gpu_flip_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.publish("body_count", 0.0);
     x.publish("body_rows", 0.0);
     x.publish("dynamic_bodies", 0.0);
+    x.publish("region_count", 0.0);
     // The walk takes a live frame's most force lattices and an impulse tick,
     // so the field reads are checked.
     let field = FieldFrame { lattice: geometry.field_lattice(), force_lattices: MAX_LIVE_TICKS, impulse_tick: Some(0) };
@@ -1090,6 +1091,7 @@ fn gpu_flip_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     }
     for (port, bytes) in [
         ("bodies", size_of::<LiquidBody>() as u64),
+        ("regions", size_of::<LiquidBody>() as u64),
         ("shapes", size_of::<LiquidShape>() as u64),
         ("atlas", 4),
         ("reaction", (MAX_FLUID_ROLES * REACTION_FLOATS * 4) as u64),
@@ -1108,10 +1110,10 @@ fn gpu_flip_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 fn liquid_fill(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let cells = x.lattice()?.cells();
     let (pool, sites) = fill_of(|name, default| x.scalar(name, default));
-    let placed = filled_sites(cells, pool, sites);
+    let placed = pool_slots(filled_sites(cells, pool, sites), x.scalar("particle_capacity", 0.0));
     if placed > u64::from(EXACT_F32_COUNT) {
         return Err(Verdict::Refused(format!(
-            "Liquid Fill: the fill places {placed} particles, more than the {EXACT_F32_COUNT} a particle count carries exactly"
+            "Liquid Fill: the pool holds {placed} particles, more than the {EXACT_F32_COUNT} a particle count carries exactly"
         )));
     }
     x.publish("count", placed as f32);

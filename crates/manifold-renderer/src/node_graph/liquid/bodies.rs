@@ -146,11 +146,19 @@ struct Controls {
     transform: Transform,
     enabled: bool,
     friction: f32,
+    velocity: [f32; 3],
+    inherit_motion: f32,
 }
 
 impl Controls {
     fn from_role(role: &FluidRole) -> Self {
-        Self { transform: role.transform, enabled: role.enabled, friction: role.friction }
+        Self {
+            transform: role.transform,
+            enabled: role.enabled,
+            friction: role.friction,
+            velocity: role.velocity,
+            inherit_motion: role.inherit_motion,
+        }
     }
 
     /// As FLIP roles interpolate: position and Euler angles lerp, a switch
@@ -165,9 +173,15 @@ impl Controls {
             },
             enabled: if alpha >= 1.0 { next.enabled } else { self.enabled },
             friction: lerp(self.friction, next.friction),
+            velocity: std::array::from_fn(|i| lerp(self.velocity[i], next.velocity[i])),
+            inherit_motion: lerp(self.inherit_motion, next.inherit_motion),
         }
     }
 }
+
+/// Region codes in a region row's `angular_velocity.w`.
+pub const REGION_INFLOW: f32 = 2.0;
+pub const REGION_OUTFLOW: f32 = 3.0;
 
 #[derive(Clone, Copy)]
 struct Sample {
@@ -183,6 +197,7 @@ impl Timestamped for Sample {
 
 struct BodyRole {
     slot: usize,
+    kind: FluidRoleKind,
     geometry: Arc<PreparedFluidGeometry>,
     scale: [f32; 3],
 }
@@ -209,13 +224,37 @@ pub struct LiquidBodies {
     /// Bumped whenever `shapes` or `atlas` is rebuilt.
     pub version: u64,
     rows: Vec<LiquidBody>,
+    /// Inflow and Outflow rows, tick major, built beside `rows`.
+    region_rows: Vec<LiquidBody>,
     warned_thin: bool,
+    /// Whether Inflow and Outflow roles are accepted as regions; a solver
+    /// without sources and drains leaves this off and refuses them.
+    accepts_regions: bool,
 }
 
 impl LiquidBodies {
-    /// Roles and coupled bodies: the rows per tick.
+    /// Bodies that also take Inflow and Outflow roles as region rows.
+    pub fn with_regions() -> Self {
+        Self { accepts_regions: true, ..Self::default() }
+    }
+
+    /// Collider roles and coupled bodies: the body rows per tick.
     pub fn count(&self) -> usize {
-        self.roles.len() + self.coupled.len()
+        self.colliders() + self.coupled.len()
+    }
+
+    fn colliders(&self) -> usize {
+        self.roles.iter().filter(|role| role.kind == FluidRoleKind::Collider).count()
+    }
+
+    /// Inflow and Outflow roles: the region rows per tick.
+    pub fn region_count(&self) -> usize {
+        self.roles.len() - self.colliders()
+    }
+
+    /// The region rows the last [`Self::rows`] call produced.
+    pub fn last_region_rows(&self) -> &[LiquidBody] {
+        &self.region_rows
     }
 
     pub fn shapes(&self) -> &[LiquidShape] {
@@ -267,11 +306,10 @@ impl LiquidBodies {
         let mut count = 0;
         for (slot, role) in roles.iter().enumerate() {
             let Some(role) = role else { continue };
-            if role.kind != FluidRoleKind::Collider {
-                return Err(format!(
-                    "Liquid: role {slot} is {:?}; the live liquid simulates Collider roles only until sources and drains arrive",
-                    role.kind
-                ));
+            let region = matches!(role.kind, FluidRoleKind::Inflow | FluidRoleKind::Outflow);
+            if role.kind != FluidRoleKind::Collider && !(region && self.accepts_regions) {
+                let takes = if self.accepts_regions { "Collider, Inflow and Outflow" } else { "Collider" };
+                return Err(format!("Liquid: role {slot} is {:?}; this liquid simulates {takes} roles only", role.kind));
             }
             if role.transform.scale.iter().any(|s| !(s.is_finite() && *s > 0.0)) {
                 return Err(format!("Liquid: role {slot} scale must be finite and positive"));
@@ -282,7 +320,7 @@ impl LiquidBodies {
                 DistanceState::Ready(_) => {}
             }
             same &= self.roles.get(count).is_some_and(|known| {
-                known.slot == slot && Arc::ptr_eq(&known.geometry, &role.geometry) && known.scale == role.transform.scale
+                known.slot == slot && known.kind == role.kind && Arc::ptr_eq(&known.geometry, &role.geometry) && known.scale == role.transform.scale
             });
             count += 1;
         }
@@ -299,7 +337,7 @@ impl LiquidBodies {
         self.atlas.clear();
         let mut placed: Vec<(Arc<PreparedFluidGeometry>, LiquidShape)> = Vec::new();
         let role_shapes = roles.iter().enumerate().filter_map(|(slot, role)| {
-            role.as_ref().map(|role| (format!("collider role {slot}"), Some(slot), &role.geometry, role.transform.scale))
+            role.as_ref().map(|role| (format!("{:?} role {slot}", role.kind), Some((slot, role.kind)), &role.geometry, role.transform.scale))
         });
         let coupled_shapes = coupled
             .iter()
@@ -334,15 +372,16 @@ impl LiquidBodies {
                     ((nodes - 1) as f32 * lattice.spacing - 4.0 * lattice.spacing) * scale[axis]
                 })
                 .fold(f32::INFINITY, f32::min);
-            if thinnest < THIN_COLLIDER_CELLS * cell_size && !self.warned_thin {
+            let collides = slot.is_none_or(|(_, kind)| kind == FluidRoleKind::Collider);
+            if collides && thinnest < THIN_COLLIDER_CELLS * cell_size && !self.warned_thin {
                 self.warned_thin = true;
                 log::warn!(
                     "[liquid] {name} is {thinnest:.3} m thick, under {THIN_COLLIDER_CELLS} cells ({:.3} m); liquid may leak through it",
                     THIN_COLLIDER_CELLS * cell_size
                 );
             }
-            if let Some(slot) = slot {
-                self.roles.push(BodyRole { slot, geometry: Arc::clone(geometry), scale });
+            if let Some((slot, kind)) = slot {
+                self.roles.push(BodyRole { slot, kind, geometry: Arc::clone(geometry), scale });
             }
         }
         self.coupled.clear();
@@ -391,6 +430,7 @@ impl LiquidBodies {
     /// Consumed samples are pruned afterwards.
     pub fn rows(&mut self, first_tick: u64, ticks: u32, coupled: &[LiquidBody]) -> &[LiquidBody] {
         self.rows.clear();
+        self.region_rows.clear();
         let Some(history) = &mut self.history else {
             return &self.rows;
         };
@@ -406,7 +446,11 @@ impl LiquidBodies {
                 };
                 let start = at(input_span(history.iter(), start_time));
                 let end = at(input_span_before(history.iter(), end_time));
-                self.rows.push(body_row(start, end, index as f32));
+                let row = body_row(start, end, index as f32);
+                match role.kind {
+                    FluidRoleKind::Inflow | FluidRoleKind::Outflow => self.region_rows.push(region_row(row, role.kind, start)),
+                    _ => self.rows.push(row),
+                }
             }
             self.rows.extend(coupled.iter().map(|row| coupled_row(row, offset)));
         }
@@ -419,7 +463,7 @@ impl LiquidBodies {
     /// in [`Self::last_rows`].
     pub fn set_coupled_rows(&mut self, tick: usize, coupled: &[LiquidBody]) -> Result<(u64, &[LiquidBody]), String> {
         let count = self.count();
-        let start = tick * count + self.roles.len();
+        let start = tick * count + self.colliders();
         if coupled.len() != self.coupled.len() || start + coupled.len() > self.rows.len() {
             return Err(format!("Liquid coupling: tick {tick} has no coupled rows this frame"));
         }
@@ -438,6 +482,19 @@ fn coupled_row(row: &LiquidBody, offset: f32) -> LiquidBody {
     LiquidBody {
         accel_shape: [row.accel_shape[0], row.accel_shape[1], row.accel_shape[2], if shape >= 0.0 { shape + offset } else { -1.0 }],
         ..*row
+    }
+}
+
+/// A source or drain's row: a body row with the region code in
+/// `angular_velocity.w`, and the emitted velocity (m/s, world) with the
+/// share of the region's own motion added to it in `inv_inertia_x`.
+fn region_row(row: LiquidBody, kind: FluidRoleKind, controls: Controls) -> LiquidBody {
+    let code = if kind == FluidRoleKind::Inflow { REGION_INFLOW } else { REGION_OUTFLOW };
+    let v = controls.velocity;
+    LiquidBody {
+        angular_velocity: [row.angular_velocity[0], row.angular_velocity[1], row.angular_velocity[2], code],
+        inv_inertia_x: [v[0], v[1], v[2], controls.inherit_motion.clamp(0.0, 1.0)],
+        ..row
     }
 }
 
@@ -645,7 +702,8 @@ mod tests {
     }
 
     /// Two roles sharing one geometry share its atlas block; a scale change
-    /// rebuilds the shapes; non-collider roles are refused.
+    /// rebuilds the shapes; sources and drains are refused unless the liquid
+    /// takes regions, and a fill is always refused.
     #[test]
     fn liquid_bodies_share_geometry_and_refuse_other_roles() {
         let geometry = cube();
@@ -662,6 +720,44 @@ mod tests {
         assert_eq!((bodies.atlas().len(), bodies.version), (words, version + 1));
         assert_eq!(bodies.shapes()[1].scale_min, [1.0; 4]);
         roles[1] = Some(FluidRole { kind: FluidRoleKind::Inflow, ..roles[0].clone().unwrap() });
-        assert!(bodies.prepare(&roles, &[], 0.0625, false).unwrap_err().contains("Collider roles only"));
+        assert!(bodies.prepare(&roles, &[], 0.0625, false).unwrap_err().contains("simulates Collider roles only"));
+        bodies.accepts_regions = true;
+        ready(&mut bodies, &roles);
+        roles[1] = Some(FluidRole { kind: FluidRoleKind::InitialFill, ..roles[0].clone().unwrap() });
+        assert!(bodies.prepare(&roles, &[], 0.0625, false).unwrap_err().contains("Collider, Inflow and Outflow"));
+    }
+
+    /// Inflow and Outflow roles become region rows, not body rows: the code,
+    /// the emitted velocity and the inherited share ride in the row, shape
+    /// indices stay the role order, and coupled rows land after colliders.
+    #[test]
+    fn liquid_bodies_split_regions_from_colliders() {
+        let geometry = cube();
+        let hull = cube();
+        let region = |kind, pos| {
+            Some(FluidRole { kind, velocity: [0.0, -2.0, 1.0], inherit_motion: 0.5, ..collider(&geometry, pos, 0.0).unwrap() })
+        };
+        let roles = vec![
+            region(FluidRoleKind::Inflow, [0.0, 2.0, 0.0]),
+            collider(&geometry, [0.0; 3], 0.0),
+            region(FluidRoleKind::Outflow, [1.0, 0.0, 0.0]),
+        ];
+        let mut bodies = LiquidBodies::with_regions();
+        ready_coupled(&mut bodies, &roles, &[Arc::clone(&hull)]);
+        assert_eq!((bodies.count(), bodies.region_count(), bodies.shapes().len()), (2, 2, 4));
+        bodies.observe(&roles, 0, 2.0 * TICK, 0.0).unwrap();
+        let coupled = LiquidBody { accel_shape: [0.0, 0.0, 0.0, 0.0], ..LiquidBody::default() };
+        let rows = bodies.rows(0, 2, &[coupled]).to_vec();
+        assert_eq!(rows.len(), 4);
+        assert_eq!((rows[0].accel_shape[3], rows[1].accel_shape[3]), (1.0, 3.0));
+        let regions = bodies.last_region_rows();
+        assert_eq!(regions.len(), 4);
+        assert_eq!(regions[0].angular_velocity[3], REGION_INFLOW);
+        assert_eq!(regions[1].angular_velocity[3], REGION_OUTFLOW);
+        assert_eq!((regions[0].accel_shape[3], regions[1].accel_shape[3]), (0.0, 2.0));
+        assert_eq!(regions[0].inv_inertia_x, [0.0, -2.0, 1.0, 0.5]);
+        assert_eq!(regions[2].position_inv_mass[..3], [0.0, 2.0, 0.0]);
+        let (offset, _) = bodies.set_coupled_rows(1, &[coupled]).unwrap();
+        assert_eq!(offset, 3 * std::mem::size_of::<LiquidBody>() as u64);
     }
 }

@@ -61,6 +61,15 @@ Peter, 2026-10-01: GPU FLIP is a specialised solver (DECOMPOSING_GENERATORS.md s
 
 **Shared, so they stay catalog atoms:** `running_total`, `sort_particles_into_cells`, `smooth_lattice`, `math`, `value`, `transform_components`, `particles_to_copies`, `tone_map` and every render node. None of the folded atoms is used outside GPU FLIP: SWASH is GPU FLIP's former name, and MPM's `matter_*` nodes share only the surface group and the seam. Replacing the Liquid Surface group with one node across the four water presets is its own job: BUG-twnl (Liquid Surface group as one node).
 
+## 1.2 Inflow and outflow
+
+A role of kind Inflow or Outflow reaches the step as a region row (`regions`, `region_count` from `node.gpu_flip_domain`), sharing the bodies' shapes and atlas; it is not a solid. Ported from FLIP Fluids `fluidsimulation.cpp`:
+
+- **Pool.** The domain's Particle Capacity is the slot count `liquid_fill` allocates, 0 meaning the fill's count. No upper bound past the exact-count refusal (section 5). A full pool emits nothing and shows as the live count reaching the slots.
+- **Emit.** After the first sort, `emit_flags` marks each half-cell site (eight a cell, the fill's lattice) inside an inflow, outside the solid, with no live particle in its half cell (`_addNewFluidCells` 8566-8603, `_addNewFluidCellsThread` 8771-8811). The scan ranks them and `emit_write` writes each at the live count plus its rank, the live count being the sorted prefix's end; a second sort places them. Deterministic, no atomics. New particles sit at the site, no jitter, id slot + 1.
+- **Constrained velocity.** A particle inside an inflow takes the inflow's velocity plus Inherit Motion's share of its rigid motion (`_constrainMarkerParticleVelocities` 7397-7451), and faces inside an inflow take no body force (`_getInflowConstrainedVelocityComponents` 6112).
+- **Drain.** A particle whose moved position an outflow holds below zero dies (radius 0, 9011-9031); the next sort drops it. Inverted outflows are not supported.
+
 ## 2. The equation
 
 On the water cells W of an n_x × n_y × n_z lattice with cell size h:
@@ -125,7 +134,7 @@ The count changes only with this rule re-run, on the same fixtures, with the new
 Every limit is a named refusal at build; nothing is clamped silently.
 
 - Any lattice side from 1 to 1024 runs, odd sides included; outside that the solver refuses by name (`lattice_refusal`, "GPU FLIP: every lattice side must be 1 to 1024 … Lower Resolution.").
-- More particles than a count carries exactly (2²⁴): refused by name; Resolution 256 is refused by it.
+- More particle slots than a count carries exactly (2²⁴), the fill or Particle Capacity whichever is larger: refused by name; Resolution 256 is refused by it.
 - Resolution and Domain Size apply at runtime: the step's lattice arrays are its own storage, reallocated when the lattice changes (`gpu_flip_resolution_card_resizes_at_runtime`).
 - Every array covers every dispatch before the GPU sees it: the step's one extent rule in `node_graph/liquid/extent.rs` sizes its inner arrays with the functions it dispatches with, walked at even and odd lattices (`gpu_flip_*_cover_every_dispatch`, `gpu_flip_any_resolution_walks_on_the_built_graph`).
 

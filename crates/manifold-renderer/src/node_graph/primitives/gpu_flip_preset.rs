@@ -431,7 +431,7 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     );
     b.wires(domain, fill, &FILL_WIRES);
     b.wires(domain, fill, &LATTICE_WIRES);
-    b.wires(domain, fill, &["bodies", "shapes", "atlas", "body_count", "epoch"]);
+    b.wires(domain, fill, &["bodies", "shapes", "atlas", "body_count", "epoch", "particle_capacity"]);
     let count = (fill, "count");
     let state = b.node("state", "node.liquid_state", json!({}));
     b.wire((fill, "particles"), state, "seed");
@@ -442,6 +442,7 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     b.wire(particles, step, "particles");
     b.wire(count, step, "count");
     b.wire((domain, "reaction"), step, "reaction");
+    b.wires(domain, step, &["regions", "region_count"]);
     let (particles, faces) = ((step, "out"), (step, "faces"));
     let stats = b.node("stats", "node.liquid_stats", json!({}));
     b.wire(particles, stats, "particles");

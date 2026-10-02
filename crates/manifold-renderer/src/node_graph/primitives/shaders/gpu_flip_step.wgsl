@@ -25,7 +25,12 @@
 // fluidsimulation.cpp (the solids' face velocity, the constraint, and the
 // particles' solid collision and removal), interpolation.cpp (the solid
 // distance's gradient) and pressuresolver.cpp (divergence, the pressure
-// subtraction and the sealed pockets' solid velocity).
+// subtraction and the sealed pockets' solid velocity). Sources and drains
+// follow fluidsimulation.cpp: _updateInflowMeshFluidSource (8813-8874) and
+// _addNewFluidCells (8566-8603, 8771-8811) for emission, the outflow removal
+// in _updateMeshFluidSources (9011-9031), _constrainMarkerParticleVelocities
+// (7397-7451) and _getInflowConstrainedVelocityComponents (6112) for the
+// constrained velocity.
 
 struct Params {
     // Cells per axis.
@@ -64,6 +69,12 @@ struct Params {
     // The tank's closed faces: bit 2d the low face of axis d, bit 2d + 1 the
     // high one.
     closed_faces: u32,
+    // Inflow and outflow regions a tick, and the region rows `regions` holds
+    // (tick major from first_tick).
+    region_count: i32,
+    region_rows: i32,
+    _pad0: u32,
+    _pad1: u32,
 };
 
 struct CellRange {
@@ -130,6 +141,14 @@ struct LiquidShape {
 // the CFL guard shortened, and solid push-outs refused past SOLID_PUSH. The
 // tick's stats reduce them (liquid_stats words 8 and 9).
 @group(0) @binding(22) var<storage, read_write> capped: array<u32>;
+// Inflow (code 2) and outflow (code 3) rows: LiquidBody rows with the code in
+// angular_velocity.w, the emitted velocity in inv_inertia_x.xyz and the share
+// of the region's own motion added to it in inv_inertia_x.w.
+@group(0) @binding(27) var<storage, read> regions: array<LiquidBody>;
+// One word per half-cell site: the emission flags, scanned in place.
+@group(0) @binding(28) var<storage, read_write> emit_scan: array<u32>;
+// The sorted particles, written past the live ones by emit_write.
+@group(0) @binding(30) var<storage, read_write> emitted: array<FluidParticle>;
 
 // Set by resolve_solid when it refuses a push-out past SOLID_PUSH.
 var<private> push_refused: u32 = 0u;
@@ -316,6 +335,56 @@ fn gravity_impulse(x: vec3<f32>, origin: vec3<f32>, axis: u32) -> f32 {
     return sum;
 }
 
+// The world-space signed distance at x to region r of this substep's tick,
+// posed tick_seconds into the tick as closest_body poses a body; far
+// outside (1e30) when the region is off or its lattice does not hold x.
+fn region_distance(r: i32, x: vec3<f32>) -> f32 {
+    let row = (u.tick_index - u.first_tick) * u.region_count + r;
+    if row < 0 || row >= u.region_rows {
+        return 1e30;
+    }
+    let bd = regions[u32(row)];
+    let shape_index = i32(bd.accel_shape.w);
+    if shape_index < 0 || u32(shape_index) >= u.shapes_len {
+        return 1e30;
+    }
+    let position = fma(bd.linear_velocity.xyz, vec3<f32>(u.tick_seconds), bd.position_inv_mass.xyz);
+    let q = liquid_turn(bd.rotation, bd.angular_velocity.xyz, u.tick_seconds);
+    let sh = shapes[u32(shape_index)];
+    let dims = vec3<u32>(sh.dims_x, sh.dims_y, sh.dims_z);
+    let g = liquid_lattice_coord(x, position, q, sh.origin_spacing, sh.scale_min.xyz);
+    if !liquid_lattice_holds(g, dims) {
+        return 1e30;
+    }
+    return liquid_lattice_distance(sh.atlas_offset, dims, g) * sh.scale_min.w;
+}
+
+// The first region of kind `code` (2 inflow, 3 outflow) holding x: distance
+// at or below 0 when `closed`, below 0 otherwise; −1 when none does.
+fn region_holding(x: vec3<f32>, code: f32, closed: bool) -> i32 {
+    let first = (u.tick_index - u.first_tick) * u.region_count;
+    for (var r = 0; r < u.region_count; r = r + 1) {
+        let row = first + r;
+        if row < 0 || row >= u.region_rows || regions[u32(row)].angular_velocity.w != code {
+            continue;
+        }
+        let d = region_distance(r, x);
+        if d < 0.0 || (closed && d <= 0.0) {
+            return r;
+        }
+    }
+    return -1;
+}
+
+// An inflow's velocity at x: its authored velocity plus its share of the
+// region's own rigid motion there (the engine's append-object-velocity).
+fn region_velocity(r: i32, x: vec3<f32>) -> vec3<f32> {
+    let bd = regions[u32((u.tick_index - u.first_tick) * u.region_count + r)];
+    let position = fma(bd.linear_velocity.xyz, vec3<f32>(u.tick_seconds), bd.position_inv_mass.xyz);
+    let rigid = bd.linear_velocity.xyz + cross(bd.angular_velocity.xyz, x - position);
+    return bd.inv_inertia_x.xyz + bd.inv_inertia_x.w * rigid;
+}
+
 // One thread per face record, `faces_in` to `faces_out`: each face gains
 // step_dt · (g + forces(x)) along its normal a, x its centre, plus the
 // impulses on step 0 of impulse_tick, read from the domain's coarse field
@@ -349,6 +418,11 @@ fn face_gravity(@builtin(global_invocation_id) gid: vec3<u32>) {
         var accel = u.gravity[a];
         if u.force_lattices > 0 {
             accel = accel + gravity_force(x, origin, force_base, u32(a));
+        }
+        // An inflow holds its water at its velocity: a face inside one takes
+        // no body force (_getInflowConstrainedVelocityComponents).
+        if u.region_count > 0 && region_holding(x, 2.0, false) >= 0 {
+            accel = 0.0;
         }
         var v = fma(accel, u.step_dt, here.face_velocity[a]);
         if impulse {
@@ -1669,7 +1743,97 @@ fn faces_to_particles(@builtin(global_invocation_id) gid: vec3<u32>) {
         radius = 0.0;
     }
     let before = sample(q0, n, 1u);
-    out.position_radius = vec4<f32>(lo + q1 * u.cell_size, radius);
     out.velocity = u.flip * (particle.velocity + after - before) + (1.0 - u.flip) * after;
+    if u.region_count > 0 {
+        // An inflow sets the velocity of the water it holds
+        // (_constrainMarkerParticleVelocities); an outflow removes the water
+        // that ends the move inside it.
+        let x0 = particle.position_radius.xyz;
+        let inflow = region_holding(x0, 2.0, true);
+        if inflow >= 0 {
+            out.velocity = region_velocity(inflow, x0);
+        }
+        if region_holding(lo + q1 * u.cell_size, 3.0, false) >= 0 {
+            radius = 0.0;
+        }
+    }
+    out.position_radius = vec4<f32>(lo + q1 * u.cell_size, radius);
     particles_out[idx] = out;
+}
+
+// Half-cell sites per axis, 2n: site j at (1/4 + j/2) cells, the fill's
+// lattice and the engine's (_addNewFluidCellsThread).
+fn emit_sites() -> vec3<u32> {
+    return 2u * u.n;
+}
+
+fn emit_site(idx: u32) -> vec3<u32> {
+    let s = emit_sites();
+    return vec3<u32>(idx % s.x, (idx / s.x) % s.y, idx / (s.x * s.y));
+}
+
+// Whether a live sorted particle already sits in site j's half cell: the
+// engine skips a site whose subcell of its particle mask is set
+// (_addNewFluidCells), so a source tops its volume up and never stacks.
+fn emit_site_taken(j: vec3<u32>) -> bool {
+    let n = lattice();
+    let cell = vec3<i32>(j / 2u);
+    let range = ranges[flatten(cell, n)];
+    for (var k = 0u; k < range.count; k = k + 1u) {
+        let x = sorted[range.start + k].position_radius.xyz;
+        let sub = vec3<i32>(floor(2.0 * (x - u.box_min) / u.cell_size));
+        if all(sub == vec3<i32>(j)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// One thread per half-cell site: 1 when an inflow emits there this substep,
+// the site inside an inflow (distance at or below 0) and outside every solid
+// and wall (solid distance above 0), with its half cell empty.
+@compute @workgroup_size(256)
+fn emit_flags(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    let s = emit_sites();
+    if idx >= s.x * s.y * s.z {
+        return;
+    }
+    let j = emit_site(idx);
+    let q = vec3<f32>(0.25) + 0.5 * vec3<f32>(j);
+    let x = fma(q, vec3<f32>(u.cell_size), u.box_min);
+    var flag = 0u;
+    if region_holding(x, 2.0, true) >= 0 && solid_at(q, lattice()) > 0.0 && !emit_site_taken(j) {
+        flag = 1u;
+    }
+    emit_scan[idx] = flag;
+}
+
+// One thread per half-cell site, after the flags' inclusive scan: a flagged
+// site writes a new particle at rest in its inflow's velocity to slot
+// live + rank of the sorted particles, live being the sorted prefix's end.
+// A rank past the pool's slots emits nothing: a full pool shows as the
+// stats' live count reaching the slots, never as an error.
+@compute @workgroup_size(256)
+fn emit_write(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    let s = emit_sites();
+    if idx >= s.x * s.y * s.z {
+        return;
+    }
+    let before = select(0u, emit_scan[idx - 1u], idx > 0u);
+    if emit_scan[idx] == before {
+        return;
+    }
+    let n = lattice();
+    let last = ranges[flatten(n - vec3<i32>(1), n)];
+    let slot = last.start + last.count + before;
+    if slot >= u.capacity {
+        return;
+    }
+    let j = emit_site(idx);
+    let x = fma(vec3<f32>(0.25) + 0.5 * vec3<f32>(j), vec3<f32>(u.cell_size), u.box_min);
+    let inflow = region_holding(x, 2.0, true);
+    // (3 / (4π · 8))^(1/3): the sphere of an eighth of a cell, as the fill's.
+    emitted[slot] = FluidParticle(vec4<f32>(x, 0.31017 * u.cell_size), region_velocity(inflow, x), slot + 1u);
 }
