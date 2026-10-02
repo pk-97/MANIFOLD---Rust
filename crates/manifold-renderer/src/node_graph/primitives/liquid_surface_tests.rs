@@ -937,6 +937,69 @@ fn fluid_shape_particle_blobs_match_reference_shapes() {
     assert!(paired < scale * r && paired > iso * scale * r, "{paired}");
 }
 
+/// Stretch 1 skips the covariance sweep and the eigensolve: every well-populated
+/// blob is written as an exact sphere (G = I / radius, off-diagonals zero), and
+/// that sphere is the reference's answer for stretch 1 to rounding.
+#[test]
+fn fluid_shape_particle_blobs_stretch_one_is_an_exact_sphere() {
+    let mut harness = Harness::new();
+    let lattice = Lattice { center: [0.0, 0.0, 0.0], size: [4.0, 4.0, 4.0], cell: 0.25 };
+    let r = 0.05_f32;
+    let mut particles = Vec::new();
+    // A line (anisotropic covariance) and a cloud (near-isotropic): both must
+    // come out as spheres.
+    for i in 0..9 {
+        particles.push(particle([-1.0 + i as f32 * 0.8 * r, 0.5, 0.5], r, particles.len() as u32 + 1));
+    }
+    for i in 0..5 {
+        for j in 0..5 {
+            for k in 0..5 {
+                let o = [i, j, k].map(|n| (n as f32 - 2.0) * 0.9 * r);
+                particles.push(particle([1.0 + o[0], -1.0 + o[1], 0.3 + o[2]], r, particles.len() as u32 + 1));
+            }
+        }
+    }
+    let (scale, smoothing, iso, min_n) = (3.0_f32, 0.9_f32, 0.5_f32, 6);
+    let shape = [
+        ("particle_scale", scale),
+        ("stretch", 1.0),
+        ("smoothing", smoothing),
+        ("isolated_scale", iso),
+        ("min_neighbours", min_n as f32),
+    ];
+    let (sorted, _, blobs, _) = sort_and_shape(&mut harness, &lattice, &particles, particles.len(), &shape);
+    let mut populated = 0;
+    for (index, blob) in blobs.iter().enumerate().take(particles.len()) {
+        let (centre, g, bound) = reference_blob(
+            &sorted,
+            index,
+            f64::from(lattice.cell),
+            f64::from(scale),
+            1.0,
+            f64::from(smoothing),
+            f64::from(iso),
+            min_n,
+        );
+        assert_eq!(blob.shape_off, [0.0; 4], "blob {index} is not a sphere");
+        let diag = blob.shape_diag;
+        assert!(diag[0] == diag[1] && diag[1] == diag[2], "blob {index} axes differ: {diag:?}");
+        assert!((f64::from(diag[0]) * f64::from(blob.center_radius[3]) - 1.0).abs() < 1e-5, "blob {index} G ≠ 1 / bound");
+        let actual = blob_matrix(blob);
+        for row in 0..3 {
+            assert!((f64::from(blob.center_radius[row]) - centre[row]).abs() < 1e-5, "blob {index} centre");
+            for col in 0..3 {
+                assert!(
+                    (actual[row][col] - g[row][col]).abs() * bound < 1e-5,
+                    "blob {index} G[{row}][{col}] differs from the stretch-1 reference"
+                );
+            }
+        }
+        assert!((f64::from(blob.center_radius[3]) - bound).abs() / bound < 1e-5, "blob {index} bound");
+        populated += 1;
+    }
+    assert_eq!(populated, particles.len());
+}
+
 /// The level set's cap outside the liquid, as a fraction of a bin; the WGSL of
 /// `node.particle_volume` and `node.shape_particle_blobs` both hold it (P6e).
 const LEVEL_SET_BAND: f64 = 0.1;
