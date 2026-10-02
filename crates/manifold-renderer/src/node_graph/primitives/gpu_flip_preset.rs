@@ -170,9 +170,10 @@ impl WaterScene {
         Self { obstacle: true, ..self }
     }
 
-    /// A pool 1 m deep and nothing else (I5).
+    /// A pool 1 m deep and nothing else (I5). Every scene built from it
+    /// leaves the box out unless it asks with [`Self::with_obstacle`].
     pub fn still_pool(n: usize) -> Self {
-        Self { fill_height: 1.0, column: [[0.0; 2]; 3], ..Self::dam_break(n) }
+        Self { fill_height: 1.0, column: [[0.0; 2]; 3], obstacle: false, ..Self::dam_break(n) }
     }
 
     /// A pool `fill` deep in a tank `size` on a side at `n` cells: the
@@ -198,7 +199,7 @@ impl WaterScene {
     /// A 1 m block of water high in the tank, clear of every wall.
     #[cfg(test)]
     pub fn free_fall(n: usize) -> Self {
-        Self { fill_height: 0.0, column: [[-0.5, 0.5], [2.5, 3.5], [-0.5, 0.5]], ..Self::dam_break(n) }
+        Self { fill_height: 0.0, column: [[-0.5, 0.5], [2.5, 3.5], [-0.5, 0.5]], ..Self::still_pool(n) }
     }
 
     pub fn with_surface(self) -> Self {
