@@ -47,7 +47,7 @@ impl PresetRuntime {
                 for (resource, buffer) in array_overrides {
                     candidate.pre_bind_array(*resource, buffer.clone());
                 }
-                crate::node_graph::pre_allocate_resources(
+                crate::node_graph::allocate_resources(
                     &self.graph,
                     &self.plan,
                     device,

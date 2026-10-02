@@ -734,6 +734,13 @@ fn run_soak(
         Evaluation::not_evaluated(reason, "report_only")
     } else {
         let mut evaluation = evaluate_normal_run(&stats);
+        // The warmup resets the counters, so every touch here happened on stage.
+        let cold_touches = manifold_core::cold_touch::total_cold_touches();
+        if cold_touches > 0 {
+            let mut reasons = evaluation.reasons;
+            reasons.push(format!("{cold_touches} cold touches during playback; the warmup missed them"));
+            evaluation = Evaluation::failed(reasons);
+        }
         let identity_errors = identity_availability_errors(&identity);
         if !startup_errors.is_empty() || !identity_errors.is_empty() {
             evaluation = Evaluation::failed(

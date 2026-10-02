@@ -534,7 +534,7 @@ mod gpu {
                 );
                 backend.bind_resource_to_slot(resource, slot);
             }
-            pre_allocate_resources(&graph, &plan, &device, &mut backend)
+            pre_allocate_resources(&mut graph, &plan, &device, &mut backend)
                 .expect("CodeTerminal resources preallocate");
             Self {
                 device,

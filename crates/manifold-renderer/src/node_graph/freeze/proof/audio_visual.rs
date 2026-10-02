@@ -17,7 +17,7 @@ struct AudioGraph {
 impl AudioGraph {
     fn new(device: &std::sync::Arc<GpuDevice>, def: EffectGraphDef, input: &GpuTexture) -> Self {
         let registry = PrimitiveRegistry::with_builtin();
-        let graph = def.into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("audio graph loads");
+        let mut graph = def.into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("audio graph loads");
         let plan = compile(&graph).expect("audio graph compiles");
         let source = resource_for_output(&plan, find_node(&graph, "system.source"), "out");
         let final_node = find_node(&graph, "system.final_output");
@@ -34,7 +34,7 @@ impl AudioGraph {
         encoder.copy_texture_to_texture(input, &source_target.texture, width, height, 1);
         encoder.commit_and_wait_completed();
         let mut backend = MetalBackend::new(device.clone(), width, height, FMT);
-        crate::node_graph::pre_allocate_resources(&graph, &plan, device, &mut backend)
+        crate::node_graph::pre_allocate_resources(&mut graph, &plan, device, &mut backend)
             .expect("audio graph resources allocate as in production");
         backend.pre_bind_texture_2d(source, source_target);
         let output = backend.pre_bind_texture_2d(

@@ -1293,7 +1293,7 @@ impl PresetRuntime {
         // shipped with commit 3500e7a7 and lacked Texture3D + audit
         // coverage.
         if let Err(e) =
-            crate::node_graph::pre_allocate_resources(&graph, &plan, device, &mut backend)
+            crate::node_graph::pre_allocate_resources(&mut graph, &plan, device, &mut backend)
         {
             record_chain_error(
                 &mut errors,

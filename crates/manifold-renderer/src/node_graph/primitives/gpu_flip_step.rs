@@ -310,11 +310,14 @@ struct Step<'a> {
 }
 
 impl StepState {
-    fn prepare(&mut self, device: &GpuDevice) {
+    /// Build every pipeline a step dispatches, at install.
+    fn prepare_pipelines(&mut self, device: &GpuDevice) {
         if self.pipelines.is_none() {
             self.pipelines = Some(Pipelines::new(device));
         }
         self.sorter.prepare(device);
+        self.solver.prepare_pipelines(device);
+        self.bodies.prepare_pipelines(device);
     }
 
     /// Size every array for `cells` and `slots` before anything is encoded.
@@ -351,8 +354,8 @@ impl StepState {
     }
 
     fn encode(&mut self, device: &GpuDevice, enc: &mut GpuEncoder, step: &Step<'_>) -> Result<(), String> {
-        let (Some(pipes), Some(l), Some(sorted), Some(out_faces)) =
-            (self.pipelines.as_ref(), self.lattice.as_ref(), self.sorted.as_ref(), self.faces.as_ref())
+        let pipes = self.pipelines.as_ref().expect("step pipelines built by prepare_pipelines at install");
+        let (Some(l), Some(sorted), Some(out_faces)) = (self.lattice.as_ref(), self.sorted.as_ref(), self.faces.as_ref())
         else {
             return Err("the step's storage was not reserved".into());
         };
@@ -675,6 +678,10 @@ fn read_iterations(value: f32, auto: u32) -> Result<u32, String> {
 }
 
 impl Primitive for GpuFlipStep {
+    fn prepare_pipelines(&mut self, device: &GpuDevice) {
+        self.state.prepare_pipelines(device);
+    }
+
     fn provides_array_output(&self, port: &str) -> bool {
         port == "faces"
     }
@@ -699,7 +706,6 @@ impl Primitive for GpuFlipStep {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        self.state.prepare(ctx.gpu_encoder().device);
         let Some(lattice) = LiquidLattice::from_wires(ctx, NAME) else {
             return;
         };

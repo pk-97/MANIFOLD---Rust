@@ -1914,7 +1914,7 @@ fn render_effect_frames_with_state(
     let mut backend = MetalBackend::new(std::sync::Arc::clone(device), w, h, FMT);
     backend.pre_bind_texture_2d(src_res, src_rt);
     let out_slot = backend.pre_bind_texture_2d(out_res, out_rt);
-    crate::node_graph::pre_allocate_resources(&graph, &plan, device, &mut backend)
+    crate::node_graph::pre_allocate_resources(&mut graph, &plan, device, &mut backend)
         .expect("pre-allocate");
 
     let mut exec = Executor::new(Box::new(backend));
@@ -3980,7 +3980,7 @@ fn render_def_capture_node_host(
         .and_then(|n| inst.id_map.get(&n.id).copied());
 
     let mut backend = MetalBackend::new(std::sync::Arc::clone(device), w, h, FMT);
-    pre_allocate_resources(&graph, &plan, device, &mut backend).ok()?;
+    pre_allocate_resources(&mut graph, &plan, device, &mut backend).ok()?;
     let mut exec = Executor::new(Box::new(backend));
     exec.set_preview_target(Some(target_inst));
     let mut state = StateStore::new();
@@ -4500,7 +4500,7 @@ fn atomic_side_output_atom_cuts_fusion_and_matches_unfused() {
         let momentum_res = resource_for_output(&plan, atom, "momentum");
 
         let mut backend = MetalBackend::new(std::sync::Arc::clone(&device), w, h, FMT);
-        pre_allocate_resources(&graph, &plan, &device, &mut backend).expect("pre-allocate");
+        pre_allocate_resources(&mut graph, &plan, &device, &mut backend).expect("pre-allocate");
         let mut exec = Executor::new(Box::new(backend));
         exec.set_preview_target(Some(resolve));
         let mut state = StateStore::new();
