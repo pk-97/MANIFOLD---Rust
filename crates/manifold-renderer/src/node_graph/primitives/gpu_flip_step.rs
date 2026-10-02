@@ -158,7 +158,7 @@ pub(crate) fn set_all_tiles(on: bool) {
     ALL_TILES.store(on, std::sync::atomic::Ordering::SeqCst);
 }
 
-fn all_tiles() -> bool {
+pub(super) fn all_tiles() -> bool {
     #[cfg(all(test, feature = "gpu-proofs"))]
     {
         ALL_TILES.load(std::sync::atomic::Ordering::SeqCst)

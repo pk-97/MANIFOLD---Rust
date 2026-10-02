@@ -21,6 +21,21 @@
 //
 // The CPU sizes every buffer for the lattice before it dispatches; each pass
 // only checks its thread is inside the lattice.
+//
+// Every level's lattice passes run over its active tiles
+// (GPU_FLIP_SPARSE_BLOCKS_DESIGN.md section 7 (the pressure solve over
+// tiles)): 8³ tiles, a tile active when a touched cell lies in its box grown
+// by one cell, touched meaning water on the fine level and any touched child
+// on a coarse one (classify_main). The list of active tiles in tile order
+// (lists_main) maps a thread to a cell: 512 threads a tile, two workgroups.
+// Every read of a vector is inside the active tiles: the stencil reads water
+// neighbours only, restriction reads one cell past coarse water's children,
+// prolongation one coarse cell past a fine water cell's parent. The vectors
+// outside the active tiles are never read; the pressure and r are written
+// everywhere by init, so they stay the dense solve's zero there. A folded
+// partial is indexed by its tile, and the finalize and check passes take an
+// inactive tile's partial as 0, so the sums run the same tree whichever
+// tiles are active.
 
 struct Params {
     // This level's cells: the fine level of a transfer or coarsening.
@@ -44,6 +59,13 @@ struct Params {
     ghost: u32,
     // check: the stop's relative tolerance; below 0 the solve never stops early.
     tolerance: f32,
+    // The dispatched level's first word in `flags` and `lists`.
+    list_base: u32,
+    // The dispatched level's gate triple: its group count is armed[3 · level].
+    level: u32,
+    // classify: 1 marks every tile active (the test-only oracle).
+    all_tiles: u32,
+    _pad0: u32,
 };
 
 struct FaceSample {
@@ -65,7 +87,9 @@ struct FaceSample {
 @group(0) @binding(11) var<storage, read_write> progress: array<f32>;
 @group(0) @binding(12) var<storage, read_write> gate: array<u32>;
 @group(0) @binding(13) var<storage, read_write> tally: array<u32>;
-@group(0) @binding(14) var<storage, read> armed: array<u32>;
+// Every gated dispatch's group triple when on: level l's at 3l, written by
+// lists_main from its active tile count, then the one-group triple.
+@group(0) @binding(14) var<storage, read_write> armed: array<u32>;
 // The replayed rounds' range entries, {location, length} pairs, two a round
 // (gpu_flip_pressure.rs Gate): a round's recorded dispatches run when its
 // length is its command count and skip when it is 0.
@@ -78,6 +102,10 @@ struct FaceSample {
 // neighbours' water and φ. Non-water cells hold zero rows.
 @group(0) @binding(17) var<storage, read> rows: array<Row>;
 @group(0) @binding(18) var<storage, read_write> out_rows: array<Row>;
+// Per level from its list_base, one word a tile: 1 when the tile is active
+// (classify_main), and the active tiles in tile order (lists_main).
+@group(0) @binding(19) var<storage, read_write> flags: array<u32>;
+@group(0) @binding(20) var<storage, read_write> lists: array<u32>;
 
 // One cell's row of L: lo = w to −x, +x, −y, +y; hi = w to −z, +z, then the
 // ghost diagonal (Σ w − Σ w·θ over air neighbours) and the plain one (Σ w).
@@ -108,6 +136,47 @@ const ROUNDS: u32 = 64u;
 const REDUCE: u32 = 2u;
 
 var<workgroup> sums: array<f32, 256>;
+var<workgroup> scan: array<u32, 256>;
+
+const TILE: i32 = 8;
+// A thread of an active tile whose cell runs past the lattice (a partial
+// edge tile).
+const NO_CELL: u32 = 0xffffffffu;
+
+fn tile_dims(n: vec3<i32>) -> vec3<i32> {
+    return (n + vec3<i32>(TILE - 1)) / TILE;
+}
+
+fn tile_total(n: vec3<i32>) -> u32 {
+    let t = tile_dims(n);
+    return u32(t.x * t.y * t.z);
+}
+
+// Cell `local` (0..512) of `tile`, flattened in the lattice, or NO_CELL.
+fn tile_cell(tile: u32, local: u32, n: vec3<i32>) -> u32 {
+    let p = coords(tile, tile_dims(n)) * TILE + coords(local, vec3<i32>(TILE));
+    if any(p >= n) {
+        return NO_CELL;
+    }
+    return cell(p, n);
+}
+
+// Whether thread gid's workgroup is inside the dispatched level's active
+// list. A recorded dispatch runs every tile's two workgroups; the ones past
+// the list return before any barrier, whole.
+fn listed(gid: u32) -> bool {
+    return (gid >> 8u) < armed[3u * u.level];
+}
+
+// Thread gid's cell on lattice n through the dispatched level's list.
+fn listed_cell(gid: u32, n: vec3<i32>) -> u32 {
+    return tile_cell(lists[u.list_base + (gid >> 9u)], gid & 511u, n);
+}
+
+// Thread gid's partial slot: its tile's two, by workgroup.
+fn listed_partial(gid: u32) -> u32 {
+    return 2u * lists[u.list_base + (gid >> 9u)] + ((gid >> 8u) & 1u);
+}
 
 fn from_zero() -> bool {
     return (u.mode & 1u) == 1u;
@@ -117,9 +186,9 @@ fn reduces() -> bool {
     return (u.mode & REDUCE) != 0u;
 }
 
-// Workgroup wg's tree sum of its threads' values, in a fixed order, into
-// partials[wg]. Called in uniform control flow by every thread.
-fn fold_sum(li: u32, wg: u32, value: f32) {
+// The workgroup's tree sum of its threads' values, in a fixed order, into
+// partials[slot]. Called in uniform control flow by every thread.
+fn fold_sum(li: u32, slot: u32, value: f32) {
     sums[li] = value;
     workgroupBarrier();
     for (var width = 128u; width > 0u; width = width >> 1u) {
@@ -129,11 +198,11 @@ fn fold_sum(li: u32, wg: u32, value: f32) {
         workgroupBarrier();
     }
     if li == 0u {
-        partials[wg] = sums[0];
+        partials[slot] = sums[0];
     }
 }
 
-fn fold_max(li: u32, wg: u32, value: f32) {
+fn fold_max(li: u32, slot: u32, value: f32) {
     sums[li] = value;
     workgroupBarrier();
     for (var width = 128u; width > 0u; width = width >> 1u) {
@@ -143,8 +212,14 @@ fn fold_max(li: u32, wg: u32, value: f32) {
         workgroupBarrier();
     }
     if li == 0u {
-        partials[wg] = sums[0];
+        partials[slot] = sums[0];
     }
+}
+
+// Partial g of the fine level, two a tile: 0 for an inactive tile, whose
+// slots the fold never wrote.
+fn fine_partial(g: u32) -> f32 {
+    return select(0.0, partials[g], flags[g >> 1u] != 0u);
 }
 
 // Thread li's strided share of the `count` partials, summed in order, then
@@ -152,7 +227,7 @@ fn fold_max(li: u32, wg: u32, value: f32) {
 fn total_of_partials(li: u32, count: u32) -> f32 {
     var acc = 0.0;
     for (var g = li; g < count; g = g + 256u) {
-        acc = acc + partials[g];
+        acc = acc + fine_partial(g);
     }
     sums[li] = acc;
     workgroupBarrier();
@@ -168,7 +243,7 @@ fn total_of_partials(li: u32, count: u32) -> f32 {
 fn max_of_partials(li: u32, count: u32) -> f32 {
     var acc = 0.0;
     for (var g = li; g < count; g = g + 256u) {
-        acc = max(acc, partials[g]);
+        acc = max(acc, fine_partial(g));
     }
     sums[li] = acc;
     workgroupBarrier();
@@ -308,11 +383,14 @@ fn stencil(idx: u32, source: u32) -> Stencil {
 // rhs · e of its cell (r · z, the unswept color's e final since the sweep
 // before) into the workgroup's partial.
 @compute @workgroup_size(256, 1, 1)
-fn smooth_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wg: vec3<u32>) {
+fn smooth_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) li: u32) {
+    if !listed(gid.x) {
+        return;
+    }
     let n = lattice();
-    let idx = gid.x;
+    let idx = listed_cell(gid.x, n);
     var product = 0.0;
-    if idx < u.nx * u.ny * u.nz {
+    if idx != NO_CELL {
         let p = coords(idx, n);
         let swept = is_water(idx) && u32(p.x + p.y + p.z) % 2u == u.color;
         var e = out[idx];
@@ -328,7 +406,7 @@ fn smooth_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_inv
         product = src[idx] * e;
     }
     if reduces() {
-        fold_sum(li, wg.x, product);
+        fold_sum(li, listed_partial(gid.x), product);
     }
 }
 
@@ -337,10 +415,13 @@ fn smooth_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_inv
 // (the operator product s = −L p with no bodies) each thread also folds
 // value · result (p · s) into the workgroup's partial.
 @compute @workgroup_size(256, 1, 1)
-fn residual_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wg: vec3<u32>) {
-    let idx = gid.x;
+fn residual_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) li: u32) {
+    if !listed(gid.x) {
+        return;
+    }
+    let idx = listed_cell(gid.x, lattice());
     var product = 0.0;
-    if idx < u.nx * u.ny * u.nz {
+    if idx != NO_CELL {
         var result = 0.0;
         if is_water(idx) {
             let s = stencil(idx, 1u);
@@ -353,7 +434,7 @@ fn residual_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_i
         product = aux[idx] * result;
     }
     if reduces() {
-        fold_sum(li, wg.x, product);
+        fold_sum(li, listed_partial(gid.x), product);
     }
 }
 
@@ -366,15 +447,19 @@ fn transfer_weight(f: i32, c: i32, coarse: i32) -> f32 {
     return select(0.0, 0.75, parent == c) + select(0.0, 0.25, other == c);
 }
 
-// One thread per coarse cell: the fine residual in `src` restricted by the
-// transpose of prolongation over 8, masked to coarse water. Fine cells past
-// an odd side are the virtual solid: not read.
+// One thread per coarse cell of the coarse level's active tiles: the fine
+// residual in `src` restricted by the transpose of prolongation over 8,
+// masked to coarse water. Fine cells past an odd side are the virtual
+// solid: not read.
 @compute @workgroup_size(256, 1, 1)
 fn restrict_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !listed(gid.x) {
+        return;
+    }
     let n = lattice();
     let c = coarse_lattice();
-    let idx = gid.x;
-    if idx >= u.cx * u.cy * u.cz {
+    let idx = listed_cell(gid.x, c);
+    if idx == NO_CELL {
         return;
     }
     if !(coarse_water[idx] > 0.5) {
@@ -412,10 +497,13 @@ fn restrict_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 // always inside the coarse lattice, odd sides included.
 @compute @workgroup_size(256, 1, 1)
 fn prolong_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !listed(gid.x) {
+        return;
+    }
     let n = lattice();
     let c = coarse_lattice();
-    let idx = gid.x;
-    if idx >= u.nx * u.ny * u.nz || !is_water(idx) {
+    let idx = listed_cell(gid.x, n);
+    if idx == NO_CELL || !is_water(idx) {
         return;
     }
     let f = coords(idx, n);
@@ -431,9 +519,11 @@ fn prolong_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     out[idx] = out[idx] + sum;
 }
 
-// One thread per coarse cell: water (1) when every fine child inside the
-// fine lattice is water, else air (0). A child past an odd side is the
-// virtual solid and never makes the cell air.
+// One thread per coarse cell: water (1) into `out` when every fine child
+// inside the fine lattice is water, else air (0); touched (1) into `out2`
+// when any child is touched in `aux` (the fine level's water, or the level
+// above's touched). A child past an odd side is the virtual solid and never
+// makes the cell air.
 @compute @workgroup_size(256, 1, 1)
 fn coarsen_water_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let n = lattice();
@@ -444,13 +534,114 @@ fn coarsen_water_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let p = 2 * coords(idx, c);
     var all_water = true;
+    var touched = false;
     for (var child = 0; child < 8; child = child + 1) {
         let q = p + vec3<i32>(child & 1, (child >> 1u) & 1, (child >> 2u) & 1);
-        if all(q < n) && !is_water(cell(q, n)) {
-            all_water = false;
+        if all(q < n) {
+            let at = cell(q, n);
+            if !is_water(at) {
+                all_water = false;
+            }
+            if aux[at] > 0.5 {
+                touched = true;
+            }
         }
     }
     out[idx] = select(0.0, 1.0, all_water);
+    out2[idx] = select(0.0, 1.0, touched);
+}
+
+// One thread per tile of this level: active (1) when a touched cell (`water`
+// binds the level's touched mask) lies in the tile's box grown by one cell,
+// into flags from list_base; every tile with `all_tiles`.
+@compute @workgroup_size(256, 1, 1)
+fn classify_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let n = lattice();
+    let t = gid.x;
+    if t >= tile_total(n) {
+        return;
+    }
+    var lit = u.all_tiles != 0u;
+    if !lit {
+        let origin = coords(t, tile_dims(n)) * TILE;
+        let first = max(origin - vec3<i32>(1), vec3<i32>(0));
+        let last = min(origin + vec3<i32>(TILE), n - vec3<i32>(1));
+        for (var z = first.z; z <= last.z && !lit; z = z + 1) {
+            for (var y = first.y; y <= last.y && !lit; y = y + 1) {
+                for (var x = first.x; x <= last.x; x = x + 1) {
+                    if is_water(cell(vec3<i32>(x, y, z), n)) {
+                        lit = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    flags[u.list_base + t] = u32(lit);
+}
+
+// One workgroup per level: the level's active tiles in tile order into
+// lists from list_base, and the level's gate triple into armed: two
+// workgroups a tile. Each thread counts a run of tiles, the workgroup scans
+// the counts (integers, so the order is exact), and each thread writes its
+// run's tiles at its offset. Level 0 also writes the one-group triple at
+// `slot`.
+@compute @workgroup_size(256, 1, 1)
+fn lists_main(@builtin(local_invocation_index) li: u32) {
+    let n = lattice();
+    let total = tile_total(n);
+    let run = (total + 255u) / 256u;
+    let first = min(li * run, total);
+    let last = min(first + run, total);
+    var mine = 0u;
+    for (var t = first; t < last; t = t + 1u) {
+        mine = mine + flags[u.list_base + t];
+    }
+    scan[li] = mine;
+    workgroupBarrier();
+    for (var width = 1u; width < 256u; width = width << 1u) {
+        var add = 0u;
+        if li >= width {
+            add = scan[li - width];
+        }
+        workgroupBarrier();
+        scan[li] = scan[li] + add;
+        workgroupBarrier();
+    }
+    var at = scan[li] - mine;
+    for (var t = first; t < last; t = t + 1u) {
+        if flags[u.list_base + t] != 0u {
+            lists[u.list_base + at] = t;
+            at = at + 1u;
+        }
+    }
+    if li == 255u {
+        armed[3u * u.level] = 2u * scan[255];
+        armed[3u * u.level + 1u] = 1u;
+        armed[3u * u.level + 2u] = 1u;
+    }
+}
+
+// Test-only: NaN into every cell of this level's inactive tiles in `out`
+// (a vector) and the level's two partials per inactive tile, so a solve
+// that reads outside its active set shows in its pressure. Never named
+// outside the proofs (gpu_flip_pressure_tests.rs).
+@compute @workgroup_size(256, 1, 1)
+fn poison_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let n = lattice();
+    let tile = gid.x >> 9u;
+    if tile >= tile_total(n) || flags[u.list_base + tile] != 0u {
+        return;
+    }
+    let nan = bitcast<f32>(0x7fc00000u);
+    let idx = tile_cell(tile, gid.x & 511u, n);
+    if idx != NO_CELL {
+        out[idx] = nan;
+    }
+    if (gid.x & 511u) == 0u && u.level == 0u {
+        partials[2u * tile] = nan;
+        partials[2u * tile + 1u] = nan;
+    }
 }
 
 // One thread per padded coarse face record: each coarse face's open fraction
@@ -510,17 +701,24 @@ fn coarse_solve_main(@builtin(local_invocation_index) i: u32) {
     out[i] = -u.cell_size * u.cell_size * sum;
 }
 
-// The conjugate gradient's start: r = f (`src`) on water with an open face,
-// else 0, into `out`, and the pressure x = 0 into `out2`, so a solve that
-// stops before its first iteration leaves zero pressure. The ghost rows only
-// add to a diagonal, so an open face is the whole test. With REDUCE each
-// thread folds |r| into the workgroup's partial, for the start's |f|∞.
+// The conjugate gradient's start, over every tile (512 threads a tile in
+// tile order, no list): r = f (`src`) on water with an open face, else 0,
+// into `out`, and the pressure x = 0 into `out2`, so a solve that stops
+// before its first iteration leaves zero pressure, and both are the dense
+// solve's zero outside the active tiles, which the solve never writes. The
+// ghost rows only add to a diagonal, so an open face is the whole test.
+// With REDUCE each thread folds |r| into its tile's partial, for the
+// start's |f|∞.
 @compute @workgroup_size(256, 1, 1)
-fn init_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wg: vec3<u32>) {
+fn init_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) li: u32) {
     let n = lattice();
-    let idx = gid.x;
+    let tile = gid.x >> 9u;
+    if tile >= tile_total(n) {
+        return;
+    }
+    let idx = tile_cell(tile, gid.x & 511u, n);
     var r = 0.0;
-    if idx < u.nx * u.ny * u.nz {
+    if idx != NO_CELL {
         var diagonal = 0.0;
         if is_water(idx) {
             let p = coords(idx, n);
@@ -533,21 +731,25 @@ fn init_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invoc
         out2[idx] = 0.0;
     }
     if reduces() {
-        fold_max(li, wg.x, abs(r));
+        fold_max(li, 2u * tile + ((gid.x >> 8u) & 1u), abs(r));
     }
 }
 
-// One workgroup per 256 cells: its partial sum of src · aux, tree-reduced
-// in a fixed order into partials[wg]. The bodies path's p · s, whose s is
-// finished by the body product after the operator pass.
+// One workgroup per 256 cells of the active tiles: its partial sum of
+// src · aux, tree-reduced in a fixed order into its tile's partial. The
+// bodies path's p · s, whose s is finished by the body product after the
+// operator pass.
 @compute @workgroup_size(256, 1, 1)
-fn dot_partial_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wg: vec3<u32>) {
-    let idx = gid.x;
+fn dot_partial_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) li: u32) {
+    if !listed(gid.x) {
+        return;
+    }
+    let idx = listed_cell(gid.x, lattice());
     var product = 0.0;
-    if idx < u.nx * u.ny * u.nz {
+    if idx != NO_CELL {
         product = src[idx] * aux[idx];
     }
-    fold_sum(li, wg.x, product);
+    fold_sum(li, listed_partial(gid.x), product);
 }
 
 // The `color` partials in order into scalars[slot].
@@ -568,8 +770,11 @@ fn ratio(top: f32, bottom: f32) -> f32 {
 // takes p = z and never reads p.
 @compute @workgroup_size(256, 1, 1)
 fn direction_main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let idx = gid.x;
-    if idx >= u.nx * u.ny * u.nz {
+    if !listed(gid.x) {
+        return;
+    }
+    let idx = listed_cell(gid.x, lattice());
+    if idx == NO_CELL {
         return;
     }
     let k = u.slot;
@@ -586,10 +791,13 @@ fn direction_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 // With REDUCE each thread folds |r| of its cell into the workgroup's
 // partial, for the stop's |r|∞.
 @compute @workgroup_size(256, 1, 1)
-fn update_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wg: vec3<u32>) {
-    let idx = gid.x;
+fn update_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) li: u32) {
+    if !listed(gid.x) {
+        return;
+    }
+    let idx = listed_cell(gid.x, lattice());
     var r = 0.0;
-    if idx < u.nx * u.ny * u.nz {
+    if idx != NO_CELL {
         let k = u.slot;
         let alpha = ratio(scalars[2u * k], scalars[2u * k + 1u]);
         let x = select(out[idx], 0.0, k == 0u);
@@ -598,7 +806,7 @@ fn update_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_inv
         out2[idx] = r;
     }
     if reduces() {
-        fold_max(li, wg.x, abs(r));
+        fold_max(li, listed_partial(gid.x), abs(r));
     }
 }
 

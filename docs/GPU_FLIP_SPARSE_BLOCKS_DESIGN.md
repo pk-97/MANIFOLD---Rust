@@ -2,7 +2,7 @@
 
 <!-- index: Design for BUG-jyot (GPU FLIP at 128 for 60 fps), Option C: the GPU FLIP step classifies 8^3 tiles on the GPU each tick (ring distance from particle-holding tiles), runs the dense lattice passes and later the multigrid pressure solve over tile lists by indirect dispatch, keeps every skipped buffer at the dense pass's value, and proves bitwise equality against the dense path on the 64 Dam Break. -->
 
-**Status:** IN PROGRESS · 2026-10-02 · Fable 5.1 (lane) · design for BUG-jyot (GPU FLIP at 128 for 60 fps), Option C. Phase 1 (tile table + lattice passes) is BUG-t7i2 (sparse blocks phase 1), in build: the table and the six cell passes over C are in; the extend stays dense (D-4). Phase 2 (pressure solve over tiles) opens on the measure. Owed: the measure at 64 and 128. Pointer: GPU_FLIP_STRUCTURAL_OPTIONS.md section 6 (Option C — sparse tiles).
+**Status:** IN PROGRESS · 2026-10-02 · Fable 5.1 (lane) · design for BUG-jyot (GPU FLIP at 128 for 60 fps), Option C. Phase 1 (tile table + lattice passes) is BUG-t7i2 (sparse blocks phase 1), in build: the table and the six cell passes over C are in, the extend stays dense (D-4), measured at 64 and 128. Phase 2a (the solve's lattice passes over each level's own active tiles, D-8) is in build, proven bitwise. Owed: the Phase 2 measure; Phase 2b (rows over tiles). Pointer: GPU_FLIP_STRUCTURAL_OPTIONS.md section 6 (Option C — sparse tiles).
 **Execution contract:** no size caps, no quality caps, one step per frame, a capped solve is reported in stats never a node error, block list decided on the GPU each tick, never read back, every reader of a skipped block sees a defined value, all GPU through `manifold-gpu`, no new shared state, output bitwise equal to dense.
 
 The occupied-block rule in the contract comes from BUG-l2h3 (SWASH to a live instrument) item .10, closed 2026-10-02 as deferred to BUG-jyot.
@@ -51,7 +51,9 @@ Extend, don't redesign: one stage node, one solver module, the particle-frame se
 
 **D-6. The oracle lever is `StepParams.all_tiles`, test-only.** With it set, `tiles.rings` writes ring = 0 for every tile, so every pass runs dense through the same kernels and the same list machinery. It is settable only behind `cfg(feature = "gpu-proofs")` and never a node param. Rejected: keeping the old dense kernels as a second code path, because two paths drift.
 
-**D-7. Phase 2 (the solve) is sketched here and decided at its own gate.** Section 7 fixes the shape; the coarse-level ring rule and the GPU-written `partial_count` are marked VERIFY-AT-IMPL. Rejected: building the solve in the same phase, because its proof (iteration-count equality and bitwise residuals) is a separate gate and the Phase 1 measure decides whether the solve's share justifies it.
+**D-7. Phase 2 (the solve) is sketched here and decided at its own gate.** Section 7 fixed the shape; the coarse-level ring rule and the GPU-written `partial_count` it sketched were both replaced at implementation (D-8). Rejected: building the solve in the same phase, because its proof (iteration-count equality and bitwise residuals) is a separate gate and the Phase 1 measure decides whether the solve's share justifies it.
+
+**D-8. The solve owns its tile sets: one per level, from that level's water, not the step's table.** The reference solver spans fluid cells only (`pressuresolver.cpp` `_pressureCells`); the solve's every stencil read is of a water neighbour, restriction reads one fine cell past a coarse water cell's children, prolongation reads one coarse cell past a fine water cell's parent. So a level's tile is active when a touched cell lies in its box grown by one cell, touched being water on the fine level and any touched child on a coarse one (`coarsen_water_main` writes it beside the coarse water). That set is inside C and closed under every read the solve makes, which the poison proof checks. Rejected: feeding the step's table down the levels (the coarse-ring sketch), because the solve then depends on a table its own `Rig` proofs do not have, and C is wider than the solve needs. Rejected: a GPU-written `partial_count`, because partials indexed by tile (two a tile, inactive tiles read as 0 in the finalize, which is bitwise-safe: a dense run's inactive partials are +0.0) make every reduction a fixed tree with no count to carry. `init_main` stays dense so pressure and r are the dense solve's zero everywhere; z, p, the residual scratch and the coarse right-hand sides and corrections are stale outside the set and never read. Lists come from one 256-thread workgroup integer scan per level, deterministic; the level's gate triple is written by that kernel. Under replay a recorded dispatch carries every tile's group count and the kernels return whole workgroups past the live count, so the saving there is the work, not the launches; encoded directly the launches shrink too.
 
 ## 3. The tile table
 
@@ -138,14 +140,14 @@ Word 16: the active cell-set tile fraction, `|C| / T³` as f32 bits, written by 
 
 Stats proof: word 16 at frame 0 of `dam_break(64)` equals the CPU count's halo1 fraction for that frame within one tile of 512 (the fixture's frame 0 is the standing column: 0.312).
 
-## 7. Phase 2 sketch — the pressure solve over tiles (VERIFY-AT-IMPL)
+## 7. Phase 2 — the pressure solve over tiles (D-8)
 
-- Level 0 `smooth`, `residual`, `apply`, `update`, the dot products: over C.
-- Coarse levels: a coarse tile of 8³ coarse cells covers 16³ fine cells; its ring is the minimum over its children, which makes the coarse 1-ring a superset of the fine set's image. Each level carries its own `tiles_by_ring`, counts and triples, built by `tiles.lists` in the same 1-thread kernel (it loops levels).
-- `partial_count` and `dot_finalize`'s `Params.color` become GPU-written per tick (`count_le[1]·2` groups per level); `armed_groups` is rewritten per tick from `tile_args` instead of once.
-- Vectors are canonical 0 beyond C; `init_main` already masks on `water`, which is canonical by D-5.
-- Proof: iteration count and `tally` words equal to the dense solve per frame over the 60-frame run, pressure bitwise equal over C.
-- Rows (`prepare`) stay dense in Phase 2a; moving row assembly to C is Phase 2b after the measure.
+- Every level's `smooth`, `residual`, `apply`, `restrict`, `prolong`, `direction`, `update` and the dot-product partial run over that level's active tiles: 512 threads a tile in list order, `listed_cell` through `lists[list_base + tile]`, `NO_CELL` past the lattice. A level's `Params` carry `list_base` and `level` (its gate triple).
+- Active set per level: `classify_main` (one thread a tile, the box grown by one cell over the level's touched mask) into `flags`, `lists_main` (one workgroup, integer scan) into `lists` and the level's triple of `armed`, both at `prepare` after the level's water. Touched: the fine water; a coarse level's any-touched-child, written by `coarsen_water_main`.
+- Partials: two a tile of the fine level, `partial_count = 2·T³`; `dot_finalize` and `check` read an inactive tile's as 0 (`fine_partial`).
+- `init_main`, `rows`, the coarsenings, the inverse, `coarse_solve`, `dot_finalize`, `check`, `arm`, `tally`: dense or single-group, unchanged in shape.
+- Oracle: the step's `all_tiles` lever reaches the classifier (every tile active). Proofs: `pressure_module_sparse_matches_all_tiles` (pressure and stop record bitwise at 64³ and 25³, on the stop and at a fixed count, direct and replayed, with NaN poisoned outside the set), `gpu_flip_sparse_step_matches_dense_bitwise` (the solver words per frame over the 60-frame run).
+- Phase 2b after the measure: rows and the coarsenings over the sets.
 
 ## 8. Phasing briefs
 
@@ -162,7 +164,7 @@ Stats proof: word 16 at frame 0 of `dam_break(64)` equals the CPU count's halo1 
 
 ### Phase 2 — the pressure solve over tiles
 
-Opens after Phase 1's measure. Entry state: Phase 1 landed. Deliverables per section 7; the gate adds iteration-count and `tally` equality per frame and pressure bitwise over C. Forbidden moves as Phase 1 plus: no change to `MAX_ITERATIONS`, no change to the stop rule.
+Opened on Phase 1's measure (the solve was 62% of the tick at 64). Phase 2a, the lattice passes over the solve's own sets (D-8, section 7), is in build with its proofs. Phase 2b, rows and coarsenings over the sets, opens on the Phase 2a measure. Forbidden moves as Phase 1 plus: no change to `MAX_ITERATIONS`, no change to the stop rule.
 
 ## 9. Deferred
 
@@ -181,6 +183,7 @@ Opens after Phase 1's measure. Entry state: Phase 1 landed. Deliverables per sec
 - Retire-clear of `water`, `phi`, `rhs` and the gathered faces `g`, exactly the tiles leaving C; canonical fill on the first step of a lattice (D-5).
 - `all_tiles` is the oracle, test-only (D-6).
 - Phase 2 gated on Phase 1's measure (D-7).
+- The solve's tile sets are its own, one per level from that level's water, tile-indexed partials, init dense, workgroup-scan lists (D-8).
 - Stats word 16 = active cell-set tile fraction (section 5).
 
 ## Appendix — the tile count on the fixture

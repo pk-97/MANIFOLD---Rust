@@ -517,6 +517,12 @@ fn converge(rig: &mut Rig, p: &Problem, cap: u32) -> Converged {
 /// holds one (the step's region on stage): the pressure and the stop's
 /// record, as bits.
 fn solve_bits(rig: &mut Rig, p: &Problem, stop: Stop, cache: &mut Option<GpuReplayCache>) -> (Vec<u32>, Vec<u32>) {
+    solve_bits_under(rig, p, stop, cache, false)
+}
+
+/// [`solve_bits`], poisoning the solver's vectors outside its active tiles
+/// between the prepare and the solve when `poison`.
+fn solve_bits_under(rig: &mut Rig, p: &Problem, stop: Stop, cache: &mut Option<GpuReplayCache>, poison: bool) -> (Vec<u32>, Vec<u32>) {
     let water: Vec<f32> = p.water.iter().map(|&w| f32::from(u8::from(w))).collect();
     // SAFETY: shared buffers sized for the lattice; the last solve completed.
     unsafe {
@@ -530,6 +536,9 @@ fn solve_bits(rig: &mut Rig, p: &Problem, stop: Stop, cache: &mut Option<GpuRepl
     let n = rig.n as u32;
     let lattice = Water { lattice: [n; 3], cell_size: rig.cell_size() as f32, water: &rig.water, faces: &rig.faces, phi: rig.phi.as_ref() };
     rig.solver.prepare(&rig.device, &mut enc, &lattice).expect("prepares");
+    if poison {
+        rig.solver.poison(&mut enc);
+    }
     rig.solver.solve(&mut enc, &lattice, &rig.rhs, &rig.pressure, stop, None).expect("solves");
     if spanned {
         *cache = Some(enc.end_replay());
@@ -590,6 +599,54 @@ fn pressure_module_replay_matches_direct() {
                 assert_eq!(stats.segments_replayed - last.segments_replayed, rounds, "{stop:?} frame {frame}: every round is one segment execute");
             }
             last = stats;
+        }
+    }
+}
+
+/// The solve over each level's active tiles equals the solve over every
+/// tile, bit for bit, in the pressure and the stop record, on the engine's
+/// stop and at a fixed count, direct and replayed, over Dam Break frames at
+/// 64³ and 25³ (odd sides: partial edge tiles); and the same with NaN
+/// written into every vector cell and fine partial outside the active tiles
+/// before the solve, so nothing the solve reads lies outside its lists
+/// (docs/GPU_FLIP_SPARSE_BLOCKS_DESIGN.md section 7 (Phase 2)).
+#[test]
+fn pressure_module_sparse_matches_all_tiles() {
+    use super::gpu_flip_step::set_all_tiles;
+    let (n, saved) = load_fixture(DAM_BREAK);
+    for m in [64, 25] {
+        let problems: Vec<Problem> = saved.iter().take(3).map(|p| resample(p, n, m)).collect();
+        for stop in [Stop::Converged(MAX_ITERATIONS), Stop::Fixed(16)] {
+            let mut dense = Rig::new(m);
+            let mut sparse = Rig::new(m);
+            let mut poisoned = Rig::new(m);
+            let mut replay = Rig::new(m);
+            let mut cache = Some(GpuReplayCache::default());
+            let mut none = None;
+            for frame in 0..4 {
+                let p = &problems[frame % problems.len()];
+                set_all_tiles(true);
+                let (dp, dr) = solve_bits(&mut dense, p, stop, &mut none);
+                set_all_tiles(false);
+                let (sp, sr) = solve_bits(&mut sparse, p, stop, &mut none);
+                let (pp, pr) = solve_bits_under(&mut poisoned, p, stop, &mut none, true);
+                let (rp, rr) = solve_bits_under(&mut replay, p, stop, &mut cache, true);
+                let iterations = f32::from_bits(sr[1]);
+                println!("{m}³ {stop:?} frame {frame}: {iterations} iterations");
+                for (name, (xp, xr)) in [("sparse", (&sp, &sr)), ("poisoned", (&pp, &pr)), ("poisoned replay", (&rp, &rr))] {
+                    assert_eq!(&dr, xr, "{m}³ {stop:?} frame {frame}: the {name} stop record differs from all tiles");
+                    if let Some(i) = (0..dp.len()).find(|&i| dp[i] != xp[i]) {
+                        panic!(
+                            "{m}³ {stop:?} frame {frame}: the {name} pressure differs from all tiles first at cell {i} [{}, {}, {}]: {} vs {}",
+                            i % m,
+                            (i / m) % m,
+                            i / (m * m),
+                            f32::from_bits(dp[i]),
+                            f32::from_bits(xp[i])
+                        );
+                    }
+                }
+            }
         }
     }
 }
