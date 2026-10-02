@@ -1431,6 +1431,7 @@ impl GpuDevice {
             profile: None,
             scopes: Vec::new(),
             replay: None,
+            gpu_time_tap: None,
         }
     }
 
