@@ -946,7 +946,7 @@ mod tests {
         let domain = def
             .nodes
             .iter()
-            .find(|node| node.type_id == "node.gpu_flip_domain")
+            .find(|node| node.type_id == manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID)
             .unwrap()
             .id;
         let render = def
