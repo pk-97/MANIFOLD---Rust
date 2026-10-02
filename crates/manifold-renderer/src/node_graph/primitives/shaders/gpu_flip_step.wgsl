@@ -1216,8 +1216,26 @@ fn pocket_leader_clear(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 }
 
+// A fine cell the solver coarsens as solid (gpu_flip_pressure.wgsl kind):
+// not water, every face closed. It is no part of any pocket.
+fn cell_solid(p: vec3<i32>, n: vec3<i32>, m: vec3<i32>) -> bool {
+    if water[flatten(p, n)] > 0.5 {
+        return false;
+    }
+    for (var a = 0; a < 3; a = a + 1) {
+        var above = p;
+        above[a] = p[a] + 1;
+        if open_at(p, a, n, m) != 0.0 || open_at(above, a, n, m) != 0.0 {
+            return false;
+        }
+    }
+    return true;
+}
+
 // One thread per level cell: sealed with its children's fine label when
-// every in-lattice child is sealed under that one label, dry otherwise.
+// every in-lattice child that is not solid is sealed under that one label,
+// dry otherwise. The solver's level cell is water with solid children
+// inside it; they carry no label and never break the seal.
 @compute @workgroup_size(256)
 fn pocket_coarsen(@builtin(global_invocation_id) gid: vec3<u32>) {
     let idx = gid.x;
@@ -1226,6 +1244,7 @@ fn pocket_coarsen(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     let n = lattice();
+    let m = n + vec3<i32>(1);
     let c = level_lattice(k);
     let side = 1 << k;
     let base = unflatten(idx, c) * side;
@@ -1235,7 +1254,7 @@ fn pocket_coarsen(@builtin(global_invocation_id) gid: vec3<u32>) {
         for (var y = 0; y < side && sealed; y = y + 1) {
             for (var x = 0; x < side && sealed; x = x + 1) {
                 let p = base + vec3<i32>(x, y, z);
-                if any(p >= n) {
+                if any(p >= n) || cell_solid(p, n, m) {
                     continue;
                 }
                 let f = flatten(p, n);
@@ -1249,6 +1268,8 @@ fn pocket_coarsen(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
         }
     }
+    // A level cell of solid children only is dry: it has no label to seal under.
+    sealed = sealed && label != NO_LEADER;
     pocket_coarse[idx] = select(POCKET_DRY, POCKET_SEALED, sealed);
     pocket_coarse_label[idx] = label;
     if sealed {

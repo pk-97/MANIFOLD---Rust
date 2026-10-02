@@ -637,10 +637,12 @@ impl PressureSolver {
         tiles(enc, n, water.water, 0);
         let mut fine = (n, water.water, water.water, water.faces);
         for (index, level) in b.coarse.iter().enumerate() {
-            let params = Params::at(fine.0, 0.0).coarse(level.lattice);
+            // `level` is the fine side of this coarsening: at 0 the mask has
+            // no solid kind and the kernel reads the faces for it.
+            let params = Params { level: index as u32, ..Params::at(fine.0, 0.0).coarse(level.lattice) };
             enc.dispatch_compute(
                 &pipes.coarsen_water,
-                &[bytes(&params), buffer(1, fine.1), buffer(4, fine.2), buffer(5, &level.water), buffer(6, &level.touched)],
+                &[bytes(&params), buffer(1, fine.1), buffer(2, fine.3), buffer(4, fine.2), buffer(5, &level.water), buffer(6, &level.touched)],
                 groups(cells(level.lattice)),
                 "gpu_flip.pressure.coarsen_water",
             );

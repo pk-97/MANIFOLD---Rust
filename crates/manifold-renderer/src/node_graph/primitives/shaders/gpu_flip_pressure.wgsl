@@ -611,11 +611,38 @@ fn prolong_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     out[idx] = out[idx] + sum;
 }
 
-// One thread per coarse cell: water (1) into `out` when every fine child
-// inside the fine lattice is water, else air (0); touched (1) into `out2`
-// when any child is touched in `aux` (the fine level's water, or the level
-// above's touched). A child past an odd side is the virtual solid and never
-// makes the cell air.
+// A cell's kind in `water`: 1 water, 0 air, −1 solid. The fine level's mask
+// (u.level 0) carries no solid kind: there a cell with every face closed is
+// solid (a cell inside a body or a wall), any other non-water cell air.
+const KIND_AIR: u32 = 0u;
+const KIND_WATER: u32 = 1u;
+const KIND_SOLID: u32 = 2u;
+
+fn kind(p: vec3<i32>, n: vec3<i32>) -> u32 {
+    let at = cell(p, n);
+    if water[at] > 0.5 {
+        return KIND_WATER;
+    }
+    if water[at] < -0.5 {
+        return KIND_SOLID;
+    }
+    if u.level != 0u {
+        return KIND_AIR;
+    }
+    for (var a = 0; a < 3; a = a + 1) {
+        if face_weight(p, a, -1, n) != 0.0 || face_weight(p, a, 1, n) != 0.0 {
+            return KIND_AIR;
+        }
+    }
+    return KIND_SOLID;
+}
+
+// One thread per coarse cell: the cell-type coarsening of McAdams, Sifakis
+// and Teran 2010 into `out` — air (0) when any fine child inside the fine
+// lattice is air, solid (−1) when every one is solid, else water (1); a
+// child past an odd side is the virtual solid. Touched (1) into `out2` when
+// any child is touched in `aux` (the fine level's water, or the level
+// above's touched).
 @compute @workgroup_size(256, 1, 1)
 fn coarsen_water_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let n = lattice();
@@ -625,21 +652,21 @@ fn coarsen_water_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     let p = 2 * coords(idx, c);
-    var all_water = true;
+    var any_air = false;
+    var all_solid = true;
     var touched = false;
     for (var child = 0; child < 8; child = child + 1) {
         let q = p + vec3<i32>(child & 1, (child >> 1u) & 1, (child >> 2u) & 1);
         if all(q < n) {
-            let at = cell(q, n);
-            if !is_water(at) {
-                all_water = false;
-            }
-            if aux[at] > 0.5 {
+            let k = kind(q, n);
+            any_air = any_air || k == KIND_AIR;
+            all_solid = all_solid && k == KIND_SOLID;
+            if aux[cell(q, n)] > 0.5 {
                 touched = true;
             }
         }
     }
-    out[idx] = select(0.0, 1.0, all_water);
+    out[idx] = select(select(1.0, -1.0, all_solid), 0.0, any_air);
     out2[idx] = select(0.0, 1.0, touched);
 }
 

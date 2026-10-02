@@ -894,37 +894,40 @@ fn fingerprint(words: &[u32]) -> u64 {
     words.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &w| (h ^ u64::from(w)).wrapping_mul(0x0000_0100_0000_01b3))
 }
 
-/// Solve Level 0 is the fine solve as it was before the level existed, bit
-/// for bit: the pressure and the stop record of the first three Dam Break
-/// problems at 64³, on the engine's stop and at a fixed count, pinned as
-/// fingerprints from the run that introduced the level (this GPU; a
-/// different device or a kernel change that moves a bit re-pins on purpose,
-/// never silently).
+/// Solve Level 0 is the fine solve: on the first three Dam Break problems at
+/// 64³ the engine's stop lands within one iteration of the count before the
+/// level existed (12, 12, 13), never on the cap, and a run repeats bit for
+/// bit. The value-level pin is [`pressure_module_matches_reference_64`]
+/// (3 and 8 iterations against the f64 reference). The bitwise pin against
+/// main went when the paper's cell-type coarsening came in (section 11
+/// (Solve Level)): a coarse cell over water and solid children is water
+/// now, which moves every level's rows under a body or a floor.
 #[test]
 fn gpu_flip_solve_level_zero_is_the_fine_step() {
-    const PINS: [(&str, u32, u64, u64); 6] = [
-        ("Converged", 0, 0xf69e0da8bbb863da, 0xa7fabd4abd31e087),
-        ("Converged", 15, 0xddcf6ec08319b9b4, 0xa33f05107474e950),
-        ("Converged", 30, 0xac7c1380ea3cabee, 0x61fe81f76ffe7a75),
-        ("Fixed", 0, 0xf69e0da8bbb863da, 0x21dfe2a72363f9a6),
-        ("Fixed", 15, 0xddcf6ec08319b9b4, 0xebb6e446aa43b2d7),
-        ("Fixed", 30, 0x0e8e09b999573cc6, 0xc16c863874d9bfcb),
-    ];
+    const BEFORE: [(u32, u32); 3] = [(0, 12), (15, 12), (30, 13)];
     let (n, saved) = load_fixture(DAM_BREAK);
     let mut rig = Rig::new(64);
     assert_eq!(rig.level, 0);
     let mut none = None;
     let mut failures = Vec::new();
-    for (stop, name) in [(Stop::Converged(MAX_ITERATIONS), "Converged"), (Stop::Fixed(16), "Fixed")] {
-        for p in saved.iter().take(3) {
-            let problem = resample(p, n, 64);
-            let (pressure, record) = solve_bits(&mut rig, &problem, stop, &mut none);
-            let (fp, fr) = (fingerprint(&pressure), fingerprint(&record));
-            println!("solve level 0 {name} frame {}: pressure {fp:#018x} record {fr:#018x}", p.frame);
-            let pin = PINS.iter().find(|pin| pin.0 == name && pin.1 == p.frame).expect("a pin per run");
-            if (fp, fr) != (pin.2, pin.3) {
-                failures.push(format!("{name} frame {}: pressure {fp:#018x} record {fr:#018x} against the pins {:#018x} {:#018x}", p.frame, pin.2, pin.3));
-            }
+    for (p, &(frame, before)) in saved.iter().zip(&BEFORE) {
+        assert_eq!(p.frame, frame);
+        let problem = resample(p, n, 64);
+        let c = converge(&mut rig, &problem, MAX_ITERATIONS);
+        let (pressure, record) = solve_bits(&mut rig, &problem, Stop::Converged(MAX_ITERATIONS), &mut none);
+        let again = solve_bits(&mut rig, &problem, Stop::Converged(MAX_ITERATIONS), &mut none);
+        println!(
+            "solve level 0 frame {frame}: {} iterations (before the paper's coarsening {before}), stopped {}, pressure {:#018x} record {:#018x}",
+            c.iterations,
+            c.stopped,
+            fingerprint(&pressure),
+            fingerprint(&record)
+        );
+        if !c.stopped || c.iterations.abs_diff(before) > 1 {
+            failures.push(format!("frame {frame}: {} iterations, stopped {}, against {before} before", c.iterations, c.stopped));
+        }
+        if (pressure, record) != again {
+            failures.push(format!("frame {frame}: a repeated solve differs"));
         }
     }
     assert!(failures.is_empty(), "level 0 moved: {failures:#?}");
@@ -1123,9 +1126,26 @@ fn box_means(r: &[f64], water: &[bool], n: usize) -> Vec<f64> {
 /// The engine's stop at Solve Level 1 on every shipped problem: each solve
 /// stops on the tolerance, never the cap, within the fine level's bar; the
 /// counts beside the fine ones. The deepest level each lattice offers is
-/// levels − 2, and that level stops too.
+/// levels − 2, and that level stops too. Level 0 lands within one iteration
+/// of its count before the paper's cell-type coarsening came in (BEFORE,
+/// measured on the same problems): the rule may move the rows under a body
+/// or a floor, never the convergence on these.
 #[test]
 fn pressure_module_solve_level_converges_on_the_engine_tolerance() {
+    const BEFORE: [(&str, u32, u32); 12] = [
+        (DAM_BREAK, 0, 12),
+        (DAM_BREAK, 15, 12),
+        (DAM_BREAK, 30, 13),
+        (DAM_BREAK, 45, 14),
+        (DAM_BREAK, 60, 13),
+        (DAM_BREAK, 90, 12),
+        (DAM_BREAK, 120, 14),
+        ("deep_pool_pressure_problems", 60, 11),
+        ("deep_pool_density_problems", 30, 12),
+        ("deep_pool_density_problems", 60, 12),
+        ("still_pool", 0, 11),
+        ("resting_pool", 0, 11),
+    ];
     let mut failures = Vec::new();
     let mut problems: Vec<(String, Problem)> = Vec::new();
     for fixture in [DAM_BREAK, "deep_pool_pressure_problems", "deep_pool_density_problems"] {
@@ -1146,6 +1166,12 @@ fn pressure_module_solve_level_converges_on_the_engine_tolerance() {
             let limit = if name.ends_with("pool") { 12 } else { 16 };
             if !c.stopped || (level <= 1 && c.iterations > limit) {
                 failures.push(format!("{name} frame {} level {level}: {} iterations, stopped {}", p.frame, c.iterations, c.stopped));
+            }
+            if level == 0 {
+                let before = BEFORE.iter().find(|row| row.0 == name && row.1 == p.frame).map(|row| row.2).expect("a count before the rule per problem");
+                if c.iterations.abs_diff(before) > 1 {
+                    failures.push(format!("{name} frame {} level 0: {} iterations against {before} before the paper's coarsening", p.frame, c.iterations));
+                }
             }
             counts.push(format!("level {level}: {} iterations{}", c.iterations, if c.stopped { "" } else { " (capped)" }));
         }

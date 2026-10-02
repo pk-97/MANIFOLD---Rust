@@ -1969,10 +1969,11 @@ fn fine_pockets(water: &[f32], open: &[FaceSample]) -> (Vec<u32>, Vec<u32>) {
 }
 
 /// The pockets at Solve Level 1 as the CPU coarsens them: a coarse cell is
-/// sealed when every in-lattice child is sealed under one fine label, and
+/// sealed when every in-lattice child that is not solid is sealed under one
+/// fine label (a solid child is skipped, as the solver coarsens it), and
 /// takes the lowest coarse cell of that fine label as its own; (state,
 /// label) per coarse cell, the label of a dry cell unspecified (None).
-fn cpu_coarse_pockets(labels: &[Option<usize>], c: [usize; 3]) -> Vec<Option<usize>> {
+fn cpu_coarse_pockets(labels: &[Option<usize>], solid: &[bool], c: [usize; 3]) -> Vec<Option<usize>> {
     let coarse_len = c.iter().product::<usize>();
     let fine_label: Vec<Option<usize>> = (0..coarse_len)
         .map(|i| {
@@ -1980,7 +1981,7 @@ fn cpu_coarse_pockets(labels: &[Option<usize>], c: [usize; 3]) -> Vec<Option<usi
             let mut shared = None;
             for child in 0..8 {
                 let q = [2 * at[0] + (child & 1), 2 * at[1] + (child >> 1 & 1), 2 * at[2] + (child >> 2)];
-                if (0..3).any(|a| q[a] >= N[a]) {
+                if (0..3).any(|a| q[a] >= N[a]) || solid[cell_index(q)] {
                     continue;
                 }
                 match (labels[cell_index(q)], shared) {
@@ -2005,15 +2006,22 @@ fn cpu_coarse_pockets(labels: &[Option<usize>], c: [usize; 3]) -> Vec<Option<usi
 /// comes off the coarse right-hand side pocket by pocket so each sums to
 /// zero again; what it removes is h³ at the coarse cell size. A tank of
 /// water, whole; split by a closed plane on a coarse boundary (two coarse
-/// pockets); split off it (the straddling coarse cells stay dry).
+/// pockets); split off it (the straddling coarse cells stay dry); with one
+/// solid cell (not water, every face closed) inside the first coarse cell,
+/// which stays sealed with its seven water children.
 #[test]
 fn gpu_flip_pocket_mean_at_solve_level_one_sums_to_zero() {
     let coarse = N.map(|n| n.div_ceil(2));
     assert_eq!(coarse, [3, 3, 2]);
     let coarse_len = coarse.iter().product::<usize>();
-    let water = vec![1.0f32; cell_len()];
     let mut sealed_coarse_total = 0;
-    for (case, split_x) in [("whole", None), ("split on the coarse boundary", Some(4)), ("split through a coarse cell", Some(3))] {
+    for (case, split_x, solid_cell) in [
+        ("whole", None, None),
+        ("split on the coarse boundary", Some(4), None),
+        ("split through a coarse cell", Some(3), None),
+        ("a solid cell inside a coarse cell", None, Some([1, 1, 1])),
+    ] {
+        let mut water = vec![1.0f32; cell_len()];
         let mut open = solid_faces(0x5ea, false);
         if let Some(x) = split_x {
             for (i, face) in open.iter_mut().enumerate() {
@@ -2022,22 +2030,41 @@ fn gpu_flip_pocket_mean_at_solve_level_one_sums_to_zero() {
                 }
             }
         }
+        if let Some(c) = solid_cell {
+            water[cell_index(c)] = 0.0;
+            for (i, face) in open.iter_mut().enumerate() {
+                let p = pad_coords(i);
+                for a in 0..3 {
+                    if (0..3).all(|b| b == a || p[b] == c[b]) && (p[a] == c[a] || p[a] == c[a] + 1) {
+                        face.weight[a] = 0.0;
+                    }
+                }
+            }
+        }
+        let solid: Vec<bool> = (0..cell_len()).map(|i| solid_cell == Some(cell_coords(i))).collect();
         let (state, label) = fine_pockets(&water, &open);
         let (_, sealed) = cpu_isolated(&water, &open, 63);
-        assert!(sealed.iter().all(|&s| s), "{case}: every cell is sealed");
+        assert!((0..cell_len()).all(|i| sealed[i] || solid[i]), "{case}: every water cell is sealed");
         let fine_labels = cpu_pocket_labels(&sealed, &open);
         for i in 0..cell_len() {
+            if solid[i] {
+                assert_ne!(state[i], 1, "{case}: the solid cell {i} is no pocket");
+                continue;
+            }
             assert_eq!(state[i], 1, "{case}: fine cell {i} sealed");
             assert_eq!(Some(label[i] as usize), fine_labels[i], "{case}: fine cell {i} label");
         }
         let params = StepParams { solve_level: 1, ..lattice() };
         let mut pass = Pass::new();
-        pass.bind(23, &state).bind(25, &label).bind(39, &vec![7u32; coarse_len]).bind(40, &vec![7u32; coarse_len]).bind(41, &vec![0u32; cell_len()]);
+        pass.bind(6, &water).bind(10, &open).bind(23, &state).bind(25, &label).bind(39, &vec![7u32; coarse_len]).bind(40, &vec![7u32; coarse_len]).bind(41, &vec![0u32; cell_len()]);
         pass.run::<u32>("pocket_leader_clear", &params, 41, cell_len(), cell_len());
         pass.run::<u32>("pocket_coarsen", &params, 39, coarse_len, coarse_len);
         let got_label = pass.run::<u32>("pocket_relabel", &params, 40, coarse_len, coarse_len);
         let got_state = pass.bound::<u32>(39, coarse_len);
-        let want = cpu_coarse_pockets(&fine_labels, coarse);
+        let want = cpu_coarse_pockets(&fine_labels, &solid, coarse);
+        if solid_cell.is_some() {
+            assert!(want[0].is_some(), "{case}: the coarse cell over the solid cell is sealed");
+        }
         for i in 0..coarse_len {
             assert_eq!(got_state[i] == 1, want[i].is_some(), "{case}: coarse cell {i} sealed");
             if let Some(l) = want[i] {

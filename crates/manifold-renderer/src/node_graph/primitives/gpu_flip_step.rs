@@ -724,6 +724,8 @@ fn encode_pocket_coarsen(enc: &mut GpuEncoder, pipes: &Pipelines, params: &StepP
     );
     let bindings = [
         uniform(params),
+        buffer(6, &l.water),
+        buffer(10, &l.s),
         buffer(23, &l.pocket),
         buffer(25, &l.pocket_label),
         buffer(39, &l.pocket_coarse),

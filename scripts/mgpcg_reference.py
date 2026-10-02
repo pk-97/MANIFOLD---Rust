@@ -7,7 +7,9 @@ step for step as the graph runs it (docs/GPU_FLIP_PRESSURE_SOLVE.md): the
 masked Poisson equation L p = f on water cells, p = 0 on air, box walls
 closed, each face weighted by its open fraction (1 without solids). One
 V-cycle per iteration: red-black Gauss-Seidel, 2 sweeps before and 2 after,
-trilinear transfers, a coarse cell is air if any child is air. A coarse
+trilinear transfers, the cell types coarsened as the paper does: a coarse
+cell is air if any child is air, solid if every child is solid, else water;
+on the fine lattice a cell with every face closed is solid. A coarse
 face's weight is the mean of the four fine faces it covers
 (the pressure solver's face coarsening); a cell whose faces are all closed drops out.
 By default each level halves every side, rounding up, until every side is
@@ -163,12 +165,24 @@ def pad_to_even(x, axes, value):
     return np.pad(x, pad, constant_values=value)
 
 
-def coarsen_water(water):
-    """A coarse cell is air if any child is air; a virtual child (an odd
-    side's padding) is solid, never air."""
-    water = pad_to_even(water, range(3), True)
+def fine_solid(water, faces):
+    """The fine lattice's solid cells: not water, every face closed (inside
+    a body or a wall). The GPU reads them the same way (gpu_flip_pressure.wgsl kind)."""
+    return ~water & (diagonal(faces) == 0)
+
+
+def coarsen_water(water, solid):
+    """McAdams, Sifakis & Teran 2010's cell-type coarsening: a coarse cell is
+    air if any child is air, solid if every child is solid, else water. A
+    virtual child (an odd side's padding) is solid. (water, solid) out."""
+    water = pad_to_even(water, range(3), False)
+    solid = pad_to_even(solid, range(3), True)
     nz, ny, nx = water.shape
-    return water.reshape(nz // 2, 2, ny // 2, 2, nx // 2, 2).all(axis=(1, 3, 5))
+    shape = (nz // 2, 2, ny // 2, 2, nx // 2, 2)
+    air = ~(water | solid)
+    any_air = air.reshape(shape).any(axis=(1, 3, 5))
+    all_solid = solid.reshape(shape).all(axis=(1, 3, 5))
+    return ~any_air & ~all_solid, all_solid
 
 
 def coarsen_faces(faces):
@@ -267,13 +281,14 @@ class Multigrid:
     def __init__(self, water, h, faces, depth=None, coarse_sweeps=None):
         self.levels = [Level(water, h, faces)]
         self.P = []
+        solid = fine_solid(water, faces)
         def halve(shape):
             if depth is not None:
                 return len(self.levels) < depth
             return max(shape) > 4
         while halve(water.shape):
             fine = water.shape
-            water = coarsen_water(water)
+            water, solid = coarsen_water(water, solid)
             faces = coarsen_faces(faces)
             h *= 2
             self.P.append([prolong_1d(nc, nf) for nc, nf in zip(water.shape, fine)])
