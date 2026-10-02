@@ -1055,6 +1055,10 @@ pub struct ContentPipeline {
     /// single serial path, so the dispatch sampler always spans one command
     /// buffer (the old D6 forced-serial constraint is structural now).
     profiling_enabled: bool,
+    /// How finely a profiled frame is cut: per dispatch (the default) or per
+    /// profile tag, i.e. per graph step. See [`manifold_gpu::ProfileGranularity`].
+    #[cfg(target_os = "macos")]
+    profiling_granularity: manifold_gpu::ProfileGranularity,
     /// Resolved [`manifold_gpu::GpuFrameProfile`]s from the last profiled
     /// frame: `(command_buffer_label, profile)` — `"Generators"` and
     /// `"Compositor"`. Drained by [`Self::take_gpu_profiles`].
@@ -1224,6 +1228,8 @@ impl ContentPipeline {
             profiling_sampler: None,
             profiling_enabled: false,
             #[cfg(target_os = "macos")]
+            profiling_granularity: manifold_gpu::ProfileGranularity::Dispatch,
+            #[cfg(target_os = "macos")]
             last_gpu_profiles: Vec::new(),
             #[cfg(all(target_os = "macos", feature = "perf-soak"))]
             gpu_time_tap: None,
@@ -1252,6 +1258,13 @@ impl ContentPipeline {
         } else {
             None
         };
+    }
+
+    /// Choose how finely profiled frames are cut. Takes effect on the next
+    /// profiled frame.
+    #[cfg(all(target_os = "macos", feature = "perf-soak"))]
+    pub fn set_profiling_granularity(&mut self, granularity: manifold_gpu::ProfileGranularity) {
+        self.profiling_granularity = granularity;
     }
 
     /// Whether the sampler requested by [`Self::set_profiling`] was actually
@@ -2379,7 +2392,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
             if self.profiling_enabled
                 && let Some(sampler) = self.profiling_sampler.clone()
             {
-                gen_enc.enable_dispatch_profiling(sampler, native_device);
+                gen_enc.enable_profiling_at(sampler, native_device, self.profiling_granularity);
             }
             {
                 let mut gpu_gen = if let Some(pool) = texture_pool {
@@ -2613,7 +2626,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         if self.profiling_enabled
             && let Some(sampler) = self.profiling_sampler.clone()
         {
-            native_enc.enable_dispatch_profiling(sampler, native_device);
+            native_enc.enable_profiling_at(sampler, native_device, self.profiling_granularity);
         }
 
         // ── Build clip + layer descriptors (CPU only) ────────────────

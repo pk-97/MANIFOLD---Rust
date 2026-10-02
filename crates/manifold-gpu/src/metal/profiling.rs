@@ -130,12 +130,39 @@ pub(crate) struct PendingSpan {
     pub(crate) threadgroup_bytes: u32,
 }
 
+/// How finely a profiled frame is cut into spans. `Dispatch` opens a sampled
+/// encoder per compute dispatch, so every dispatch is timed and the frame
+/// loses all cross-dispatch overlap: the spans rank passes against each
+/// other inside one encoder, never against the budget. `Tag` keeps one
+/// sampled encoder open while the host's profile tag is unchanged, so the
+/// dispatches of one node share an encoder exactly as a production frame
+/// batches them: the spans are the plain frame's per-node time. A node still
+/// yields several spans when a render, blit or acceleration pass, or a
+/// replayed stretch, ends its encoder; the sum per tag is the node's time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProfileGranularity {
+    Dispatch,
+    Tag,
+}
+
+impl ProfileGranularity {
+    /// Whether the next profiled dispatch, tagged `tag`, keeps the open
+    /// sampled compute encoder (tagged `open`, `None` when no sampled
+    /// encoder is open) instead of ending it and opening its own.
+    pub fn reuses_open_encoder(self, open: Option<&str>, tag: &str) -> bool {
+        self == ProfileGranularity::Tag && open == Some(tag)
+    }
+}
+
 /// Encoder-side profiling state. Lives on [`GpuEncoder`] while a frame is
 /// being encoded in profiled mode.
 pub(crate) struct ProfileState {
     pub(crate) sampler: GpuTimestampSampler,
     pub(crate) spans: Vec<PendingSpan>,
     pub(crate) tag: String,
+    pub(crate) granularity: ProfileGranularity,
+    /// The tag of the sampled compute encoder currently open, if one is.
+    pub(crate) open_tag: Option<String>,
     pub(crate) overflow: usize,
     /// Correlated (cpu mach ticks, gpu ticks) pair taken at enable time.
     pub(crate) calib_start: (u64, u64),
@@ -427,5 +454,15 @@ mod tests {
         // The fresh window is 100..300 (the invalid spans' fresh end stamps
         // still bound it): span a is 100 of 200 ticks.
         assert!((out.spans[0].millis - 0.5).abs() < 1e-9, "got {}", out.spans[0].millis);
+    }
+
+    #[test]
+    fn tag_granularity_reuses_the_open_encoder_only_within_one_tag() {
+        use ProfileGranularity::{Dispatch, Tag};
+        assert!(Tag.reuses_open_encoder(Some("gen:1:s3"), "gen:1:s3"));
+        assert!(!Tag.reuses_open_encoder(Some("gen:1:s3"), "gen:1:s4"));
+        assert!(!Tag.reuses_open_encoder(None, "gen:1:s3"));
+        assert!(!Dispatch.reuses_open_encoder(Some("gen:1:s3"), "gen:1:s3"));
+        assert!(!Dispatch.reuses_open_encoder(None, "gen:1:s3"));
     }
 }

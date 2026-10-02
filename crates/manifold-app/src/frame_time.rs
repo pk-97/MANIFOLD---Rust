@@ -8,7 +8,10 @@
 //! split per node type, per dispatch label inside the solver and the
 //! whitewater, and per pass label inside render_scene. Timestamped frames
 //! open one encoder per dispatch with encode replay off, so their split is a
-//! ratio, never the budget. The first `S` frames are the splash, the rest
+//! ratio, never the budget. `--stamp-granularity node` keeps one sampled
+//! encoder per graph step instead, so the per-node-type table is the plain
+//! frame's breakdown (replay still off; the inner tables are then empty).
+//! The first `S` frames are the splash, the rest
 //! the calm; both tables print. `--resolution` overrides the GPU FLIP
 //! generator's `resolution` card in memory, never on disk.
 //! Presentation is not timed here (no window); the pacing doc's vsync
@@ -16,6 +19,8 @@
 
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
+
+use manifold_gpu::ProfileGranularity;
 
 use crate::content_command::ContentCommand;
 use crate::perf_soak::{prepare_project_edited, PreparedProject};
@@ -33,6 +38,7 @@ struct Args {
     frames: usize,
     resolution: Option<f32>,
     stamp_every: usize,
+    granularity: ProfileGranularity,
     splash_frames: usize,
     png: Option<(usize, String)>,
 }
@@ -41,9 +47,19 @@ fn usage_exit(msg: &str) -> ! {
     eprintln!("frame-time: {msg}");
     eprintln!(
         "usage: manifold frame-time <project.manifold> --frames N [--resolution R] \
-         [--stamp-every K] [--splash-frames S] [--png-frame T --png <path>]"
+         [--stamp-every K] [--stamp-granularity dispatch|node] [--splash-frames S] \
+         [--png-frame T --png <path>]"
     );
     std::process::exit(2);
+}
+
+/// `--stamp-granularity` values: `dispatch` (default) or `node`.
+fn granularity(s: Option<&str>) -> Result<ProfileGranularity, String> {
+    match s {
+        None | Some("dispatch") => Ok(ProfileGranularity::Dispatch),
+        Some("node") => Ok(ProfileGranularity::Tag),
+        Some(other) => Err(format!("--stamp-granularity must be dispatch or node, not {other}")),
+    }
 }
 
 fn value(args: &[String], flag: &str) -> Option<String> {
@@ -63,6 +79,7 @@ fn parse(args: &[String]) -> Args {
     };
     let frames = number("--frames", None);
     let stamp_every = number("--stamp-every", Some(5)).max(1);
+    let granularity = granularity(value(args, "--stamp-granularity").as_deref()).unwrap_or_else(|e| usage_exit(&e));
     let splash_frames = number("--splash-frames", Some(frames / 2));
     let resolution = value(args, "--resolution")
         .map(|s| s.parse::<f32>().unwrap_or_else(|_| usage_exit("--resolution must be a number")));
@@ -71,7 +88,20 @@ fn parse(args: &[String]) -> Args {
         (Some(_), None) | (None, Some(_)) => usage_exit("--png-frame and --png go together"),
         (Some(_), Some(path)) => Some((number("--png-frame", None), path)),
     };
-    Args { project, frames, resolution, stamp_every, splash_frames, png }
+    Args { project, frames, resolution, stamp_every, granularity, splash_frames, png }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stamp_granularity_flag_parses() {
+        assert_eq!(granularity(None), Ok(ProfileGranularity::Dispatch));
+        assert_eq!(granularity(Some("dispatch")), Ok(ProfileGranularity::Dispatch));
+        assert_eq!(granularity(Some("node")), Ok(ProfileGranularity::Tag));
+        assert!(granularity(Some("step")).is_err());
+    }
 }
 
 /// One frame's numbers. Every frame has the wall interval and the surface
@@ -314,9 +344,17 @@ fn probe(args: &Args) -> Result<(), String> {
     let resolution_note = args.resolution.map_or("the file's resolution".to_owned(), |r| format!("resolution {r}"));
     let device_name = ct.content_pipeline.native_device().map_or("unknown".to_owned(), |d| d.device_name());
     println!(
-        "frame-time: {} at {width}x{height} @ {frame_rate} fps, {resolution_note}, {} frames, every {}th timestamped, splash = first {} frames, on {device_name}",
-        args.project, args.frames, args.stamp_every, args.splash_frames
+        "frame-time: {} at {width}x{height} @ {frame_rate} fps, {resolution_note}, {} frames, every {}th timestamped per {}, splash = first {} frames, on {device_name}",
+        args.project,
+        args.frames,
+        args.stamp_every,
+        match args.granularity {
+            ProfileGranularity::Dispatch => "dispatch",
+            ProfileGranularity::Tag => "node",
+        },
+        args.splash_frames
     );
+    ct.content_pipeline.set_profiling_granularity(args.granularity);
 
     ct.timer.resume_after_load();
     ct.handle_command(ContentCommand::Play);
