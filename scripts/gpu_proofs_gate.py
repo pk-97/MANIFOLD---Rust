@@ -10,7 +10,9 @@ completion with `--no-fail-fast`. Never nextest — process-per-test
 defeats the GPU device lock. The test binaries are compiled first with no
 lock held (`cargo test --no-run`, same arguments); then the test run holds the
 machine-wide GPU queue (scripts/gpu_queue.py) and waits its turn behind any
-other GPU run. `--build-only` stops after the compile.
+other GPU run. `--build-only` stops after the compile. Landing nextest and
+catalog checks use the same proof feature to reuse the renderer artifacts.
+Builds disable incremental compilation so sccache can cache workspace crates.
 
 Default mode is SCOPED: the branch's diff against `--base` (default
 origin/main, plus uncommitted and untracked files) is mapped by
@@ -134,6 +136,12 @@ def cargo_test_cmd(
     return cmd
 
 
+def build_environment():
+    environment = os.environ.copy()
+    environment["CARGO_INCREMENTAL"] = "0"
+    return environment
+
+
 def build_tests(manifest_path: Path, runs: list[dict]) -> int:
     """Compile every run's test binaries with no GPU lock held, so the hold
     covers test time only: the run that follows re-checks fingerprints and
@@ -145,7 +153,7 @@ def build_tests(manifest_path: Path, runs: list[dict]) -> int:
             continue
         built.append(cmd)
         print(f"$ {' '.join(cmd)}", flush=True)
-        code = subprocess.run(cmd).returncode
+        code = subprocess.run(cmd, env=build_environment()).returncode
         if code:
             return code
     return 0
@@ -184,6 +192,7 @@ def run_gate(
         stderr=subprocess.STDOUT,
         bufsize=0,
         start_new_session=True,
+        env=build_environment(),
     )
     assert proc.stdout is not None
     watchdog = Watchdog(gpu_scope.load_times(), hang_floor)
