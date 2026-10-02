@@ -59,6 +59,46 @@ impl AudioHopSample for AudioModObservation {
     }
 }
 
+/// One hop's effective parameter value at its transport time.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HopValue {
+    pub time: crate::Seconds,
+    pub value: f32,
+}
+
+/// A live audio sample clock anchored to transport time.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HopClock {
+    pub epoch: u64,
+    pub sample_rate: u32,
+    /// Transport time minus audio time. Kept as one offset so a settled
+    /// clock maps a hop to exactly the time an export stamps on it.
+    pub offset: f64,
+}
+
+impl HopClock {
+    pub fn anchored(epoch: u64, sample_rate: u32, end_sample: u64, time: f64) -> Self {
+        let mut clock = Self { epoch, sample_rate, offset: 0.0 };
+        clock.offset = time - clock.time_of(end_sample);
+        clock
+    }
+
+    pub fn time_of(&self, end_sample: u64) -> f64 {
+        end_sample as f64 / f64::from(self.sample_rate) + self.offset
+    }
+}
+
+/// Runtime-only per-hop values of one update, so a simulation can read the
+/// value at each of its ticks (LIQUID_SOLVER_SEAM_DESIGN.md P8 (forces and
+/// impulses for GPU liquids)). Cleared, never reallocated, per update.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct HopTimeline {
+    pub values: Vec<HopValue>,
+    pub clock: Option<HopClock>,
+    /// The parameter's value before this update's composition.
+    pub prepared: f32,
+}
+
 /// A frequency band a feature is measured over. `Full` is the whole spectrum;
 /// `Low`/`Mid`/`High` restrict the reduction to a sub-range, so any feature can
 /// run on any band (e.g. `Transients` on `Low` is a kick detector).
@@ -560,6 +600,8 @@ pub struct ParameterAudioMod {
     /// consumers. The batch reuses the same bounded hop storage contract.
     #[serde(skip)]
     pub audio_observations: AudioHopBatch<AudioModObservation>,
+    #[serde(skip)]
+    pub hop_timeline: HopTimeline,
     /// Last effective audio output and normalized meter level, held between hops.
     #[serde(skip)]
     pub audio_held_output: Option<f32>,
@@ -630,6 +672,7 @@ impl ParameterAudioMod {
             audio_hop_cursor: crate::audio_features::AudioHopCursor::default(),
             audio_hop_source: None,
             audio_observations: AudioHopBatch::default(),
+            hop_timeline: HopTimeline::default(),
             audio_held_output: None,
             audio_held_meter: 0.0,
             trigger_edge: crate::audio_trigger::TransientEdge::default(),

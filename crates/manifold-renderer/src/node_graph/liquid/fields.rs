@@ -25,8 +25,6 @@
 
 use manifold_core::Seconds;
 use manifold_gpu::{FrameClock, GpuBuffer};
-use std::collections::VecDeque;
-
 use manifold_physics::input::{AppliedEvent, EventQueue, EventStamp};
 use manifold_physics::{FieldValue, TickStamp, VectorField};
 
@@ -35,6 +33,7 @@ use crate::node_graph::fluid::TICK;
 use crate::node_graph::liquid::clock::{ClockFrame, LiquidClock, MAX_LIVE_TICKS};
 use crate::node_graph::liquid::coupling::LiquidRigidOwner;
 use crate::node_graph::liquid::lattice::LiquidLattice;
+use crate::node_graph::liquid::tick_samples::TickSamples;
 use crate::node_graph::physics::ResolvedRigidImpulse;
 use crate::node_graph::physics_events::{ResolvedNodeImpulse, map_rigid_receipt};
 
@@ -461,14 +460,8 @@ pub struct LiquidFields {
     impulses: Vec<[f32; 4]>,
     /// The field every lattice holds while it holds still.
     force_source: Option<FieldValue>,
-    /// The field at each tick's start, ascending by tick, from the oldest
-    /// tick not yet run.
-    tick_fields: VecDeque<(u64, FieldValue)>,
-    /// Transport times the history replay must sample before the next frame,
-    /// with their ticks, ascending.
-    requests: Vec<(f64, u64)>,
-    /// The clock's epoch drop total at the last frame.
-    dropped_seconds: f64,
+    /// The field at each tick's start, from the oldest tick not yet run.
+    tick_fields: TickSamples<FieldValue>,
     forces_dirty: bool,
     impulses_dirty: bool,
     clock: Option<FrameClock>,
@@ -498,44 +491,19 @@ impl LiquidFields {
             self.impulses_dirty = true;
         }
         let first = first_tick(frame);
-        if frame.restarted {
-            self.tick_fields.clear();
-        }
-        // `dropped_seconds` counts the whole epoch; only this frame's drop
-        // moves owed ticks.
-        let dropped = frame.dropped_seconds > self.dropped_seconds;
-        self.dropped_seconds = frame.dropped_seconds;
-        let Some(field) = field else {
+        self.tick_fields.settle(clock, frame, field);
+        if field.is_none() {
             // No field wired: no tick reads forces.
-            self.tick_fields.clear();
             self.force_lattices = 0;
             self.force_source = None;
             return self.finish(lattice, impulses);
-        };
-        // This frame's controls belong to a tick that starts exactly now; every
-        // other start was or will be sampled by the history replay. A live drop
-        // moves the owed tick's start into the past, where nothing sampled it,
-        // so it reads this frame: a tick late, never a stale pre-drop value.
-        let mut next = clock.ticks_done();
-        while let Some(start) = clock.tick_start(next).filter(|&start| start <= clock.transport()) {
-            if dropped || start == clock.transport() {
-                self.record_tick(next, field);
-            }
-            next += 1;
         }
         let ticks = frame.ticks as usize;
-        let start = self.tick_fields.partition_point(|(recorded, _)| *recorded < first);
-        for offset in 0..ticks {
-            let tick = first + offset as u64;
-            if self.tick_fields.get(start + offset).is_none_or(|(recorded, _)| *recorded != tick) {
-                return Err(format!(
-                    "Liquid forces: tick {tick} was never sampled; the host must replay physics history before each frame"
-                ));
-            }
-        }
-        let sampled = self.tick_fields.range(start..start + ticks).map(|(_, at)| at);
-        let head = self.tick_fields.get(start).filter(|_| ticks > 0).map(|(_, at)| at);
-        if let Some(head) = head.filter(|head| sampled.clone().all(|at| at == *head)) {
+        let sampled = self.tick_fields.span(first, ticks).map_err(|tick| {
+            format!("Liquid forces: tick {tick} was never sampled; the host must replay physics history before each frame")
+        })?;
+        let head = sampled.clone().next().map(|(_, at)| at);
+        if let Some(head) = head.filter(|head| sampled.clone().all(|(_, at)| at == *head)) {
             if self.force_lattices != 1 || self.force_source.as_ref() != Some(head) {
                 self.forces.resize(count, [0.0; 4]);
                 fill(&lattice, &mut self.forces, |x| head.sample(x)).map_err(|_| NOT_FINITE.to_string())?;
@@ -547,7 +515,7 @@ impl LiquidFields {
             // A tick reads the field at its own start, so the lattices match
             // at any frame rate.
             self.forces.resize(ticks * count, [0.0; 4]);
-            for (values, at) in self.forces.chunks_exact_mut(count).zip(sampled) {
+            for (values, at) in self.forces.chunks_exact_mut(count).zip(sampled.map(|(_, at)| at)) {
                 fill(&lattice, values, |x| at.sample(x)).map_err(|_| NOT_FINITE.to_string())?;
             }
             self.force_lattices = ticks;
@@ -555,51 +523,19 @@ impl LiquidFields {
             self.forces_dirty = true;
         }
         // Keep only ticks not yet run.
-        let end = first + ticks as u64;
-        while self.tick_fields.front().is_some_and(|(tick, _)| *tick < end) {
-            self.tick_fields.pop_front();
-        }
+        self.tick_fields.prune_before(first + ticks as u64);
         self.finish(lattice, impulses)
     }
 
     /// The transport times the history replay must sample before the next
-    /// frame: each tick's start under `clock`, in `(from, until]`. Replaces
-    /// any earlier requests.
+    /// frame: each tick's start under `clock`, in `(from, until]`.
     pub fn request_samples(&mut self, clock: &LiquidClock, from: f64, until: f64, out: &mut Vec<f64>) {
-        self.requests.clear();
-        let requests = &mut self.requests;
-        clock.tick_starts(from, until, |transport, tick| {
-            requests.push((transport, tick));
-            out.push(transport);
-        });
+        self.tick_fields.request(clock, from, until, out);
     }
 
-    /// A history replay sample at transport `now`: record `field` for every
-    /// requested tick whose start has been reached. The replay samples each
-    /// request exactly; the closing sample takes one rounding past the frame.
+    /// A history replay sample of the field at transport `now`.
     pub fn observe_sample(&mut self, now: f64, field: Option<&FieldValue>) {
-        let reached = self.requests.partition_point(|&(transport, _)| transport <= now);
-        if reached == 0 {
-            return;
-        }
-        let mut requests = std::mem::take(&mut self.requests);
-        if let Some(field) = field {
-            for &(_, tick) in &requests[..reached] {
-                self.record_tick(tick, field);
-            }
-        }
-        requests.drain(..reached);
-        self.requests = requests;
-    }
-
-    /// Later samples of a tick replace earlier ones: a live drop moves a tick
-    /// to a later transport time.
-    fn record_tick(&mut self, tick: u64, field: &FieldValue) {
-        let at = self.tick_fields.partition_point(|(recorded, _)| *recorded < tick);
-        match self.tick_fields.get_mut(at) {
-            Some((recorded, value)) if *recorded == tick => value.clone_from(field),
-            _ => self.tick_fields.insert(at, (tick, field.clone())),
-        }
+        self.tick_fields.observe(now, field);
     }
 
     fn finish(&mut self, lattice: FieldLattice, impulses: &LiquidImpulses) -> Result<FieldFrame, String> {
