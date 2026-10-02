@@ -10,8 +10,8 @@
 //! it to the committed thumbnails root
 //! (`assets/preset-thumbnails/{effects,generators}/<id>.png` —
 //! `preset_thumbnail::factory_thumbnail_path`'s dev-resolution target), and
-//! writes a `<Name>.hash` sidecar (SHA-256 of the preset JSON bytes) that
-//! `factory_thumbnails_fresh` checks on every default-suite run. Finally it
+//! writes a `<Name>.hash` sidecar (SHA-256 of the preset JSON bytes) so a
+//! stale thumbnail can be listed. Nothing gates on it. Finally it
 //! composes a plain contact-sheet montage of every thumbnail at
 //! `<workspace>/target/thumbnail-contact-sheet.png` and prints the row-major
 //! grid order so a reviewer can map cells.
@@ -152,8 +152,7 @@ fn render_one(
         &out_path,
     )?;
 
-    // D7 freshness sidecar: the SHA-256 of the preset JSON bytes. Editing the
-    // preset without re-running this bin fails `factory_thumbnails_fresh`.
+    // Freshness sidecar: the SHA-256 of the preset JSON bytes.
     let digest = format!("{:x}", sha2::Sha256::digest(&json_bytes));
     std::fs::write(out_path.with_extension("hash"), format!("{digest}\n"))
         .map_err(|e| format!("write hash sidecar: {e}"))?;
