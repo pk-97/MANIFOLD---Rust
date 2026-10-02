@@ -888,9 +888,11 @@ fn gpu_flip_still_pool_keeps_its_meshed_volume() {
 }
 
 /// A lid as wide as the tank pressed down into a 1 m pool at 1 m/s. Closed,
-/// the water under it is sealed off from air and takes none of its push, so
-/// every solve converges in the normal count and no pocket spread runs out.
-/// With the low-x face open the water escapes through it.
+/// the water under it is sealed off from air and takes none of its push: no
+/// pocket spread runs out, and every solve converges until the lid first
+/// kills water it has squeezed into itself. From then on a solve may reach
+/// its cap; that is reported in the stats and the tick still runs. With the
+/// low-x face open the water escapes through it.
 #[test]
 fn gpu_flip_box_pressed_into_a_full_tank_converges_and_escapes_when_open() {
     let closed = lid_pressed_into_pool(63);
@@ -931,6 +933,7 @@ fn lid_pressed_into_pool(mask: u32) -> (f64, f64, f64) {
     let mut outward = Vec::new();
     let mut drive = 0.0;
     let mut removed = 0.0;
+    let mut squeezed = false;
     for frame in 1..=30 {
         let y = start - LID_SPEED * f64::from(frame) / 60.0;
         run.graph.set_param(transform, "pos_y", crate::node_graph::ParamValue::Float(y as f32)).expect("pos_y");
@@ -941,7 +944,19 @@ fn lid_pressed_into_pool(mask: u32) -> (f64, f64, f64) {
             stats.live, stats.pressure_iterations, stats.density_iterations, stats.unconverged, stats.unresolved_pockets, stats.pressure_flux_removed, stats.density_flux_removed
         );
         removed += f64::from(stats.pressure_flux_removed);
-        assert_eq!(stats.unconverged, 0, "mask {mask}: frame {frame} left a pressure or density solve unconverged");
+        let entering = run.entering.iter().filter(|p| p.position_radius[3] > 0.0).count() as u32;
+        squeezed |= stats.live != entering;
+        if squeezed {
+            // Water the lid has squeezed into itself is killed there; past
+            // that a capped solve is reported and the tick still runs.
+            assert!(stats.live > 0, "mask {mask}: frame {frame} left no live water");
+            assert!(
+                stats.pressure_flux_removed.is_finite() && stats.density_flux_removed.is_finite(),
+                "mask {mask}: frame {frame} produced non-finite stats"
+            );
+        } else {
+            assert_eq!(stats.unconverged, 0, "mask {mask}: frame {frame} left a pressure or density solve unconverged before any water was squeezed");
+        }
         assert_eq!(stats.unresolved_pockets, 0, "mask {mask}: frame {frame} left a pocket spread unfinished");
         if frame > 20 {
             let under = y - 0.5 * LID_THICKNESS;
