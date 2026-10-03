@@ -13,13 +13,8 @@
     },
     {
       "transition": "debug escalation ladder \u2014 probe loops delegated, seam review first",
-      "enforcement": "hook",
-      "file": ".claude/hooks/probe-loop-guard.py"
-    },
-    {
-      "transition": "sustained hands-on grinding without delegation gets a routing nudge every 20 actions",
-      "enforcement": "hook",
-      "file": ".claude/hooks/delegation-nudge.py"
+      "enforcement": "prompt",
+      "file": null
     },
     {
       "transition": "memory is rules, not history",
@@ -28,8 +23,8 @@
     },
     {
       "transition": "no bare #[allow(dead_code)]",
-      "enforcement": "hook",
-      "file": ".claude/hooks/dead-code-suppression-hook.py"
+      "enforcement": "prompt",
+      "file": null
     },
     {
       "transition": "explicit model per Agent spawn",
@@ -37,14 +32,9 @@
       "file": ".claude/hooks/agent-launch-guard.py"
     },
     {
-      "transition": "no executor-tier agents spawning agents",
-      "enforcement": "hook",
-      "file": ".claude/hooks/agent-tier-spawn-guard.py"
-    },
-    {
-      "transition": "every subagent/teammate receives the worker-seat charge on its first tool call",
-      "enforcement": "hook",
-      "file": ".claude/hooks/worker-seat-charge.py"
+      "transition": "lanes never spawn agents",
+      "enforcement": "prompt",
+      "file": null
     },
     {
       "transition": "teammate slot naming from the slot map",
@@ -57,39 +47,19 @@
       "file": ".claude/hooks/agent-worktree-isolation-guard.py"
     },
     {
-      "transition": "seat identity frozen per pane",
-      "enforcement": "hook",
-      "file": ".claude/hooks/seat-freeze-guard.py"
+      "transition": "worker seats rotate at ~200K context",
+      "enforcement": "prompt",
+      "file": null
     },
     {
-      "transition": "context ceiling on lead tool calls",
-      "enforcement": "hook",
-      "file": ".claude/hooks/context-ceiling-guard.py"
-    },
-    {
-      "transition": "workflow launches announce roster + explicit models",
-      "enforcement": "hook",
-      "file": ".claude/hooks/workflow-gate.py"
-    },
-    {
-      "transition": "per-lane gates fire at executor stop; trail streak releases past limit (D10)",
-      "enforcement": "hook",
-      "file": ".claude/hooks/subagent-stop-gate.py"
-    },
-    {
-      "transition": "no lane goes idle without a SendMessage report",
-      "enforcement": "hook",
-      "file": ".claude/hooks/lane-report-enforcer.py"
+      "transition": "a lane's report is its final text turn, never a SendMessage",
+      "enforcement": "prompt",
+      "file": null
     },
     {
       "transition": "verdicts written only by gate_runner (I2 edit guard)",
       "enforcement": "hook",
       "file": ".claude/hooks/worktree-guard.py"
-    },
-    {
-      "transition": "cc-fleet subagents at declared tiers only",
-      "enforcement": "hook",
-      "file": ".claude/hooks/cc-fleet-tier-guard.py"
     },
     {
       "transition": "GATE: brief gate commands executed verbatim, verdict to trail; gaming scan (D9)",
@@ -153,8 +123,8 @@
     },
     {
       "transition": "no new landing reports \u2014 landing prose in the merge commit",
-      "enforcement": "hook",
-      "file": ".claude/hooks/landing-report-guard.py"
+      "enforcement": "prompt",
+      "file": null
     },
     {
       "transition": "shipped design docs cited-or-archived (lifecycle census)",

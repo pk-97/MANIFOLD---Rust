@@ -197,8 +197,7 @@ Obsolete when: main stops being a locally-landed shared trunk (PR/CI-gated merge
   into main.
 - **Never use the Agent tool's built-in `isolation: "worktree"` for repo
   work** — it bases the worktree off the default branch, not your tip, and
-  bypasses the slot ring's cap. Hook-denied
-  (`agent-worktree-isolation-guard.py`), as is raw `git worktree add`
+  bypasses the slot ring's cap. Hook-denied, as is raw `git worktree add`
   (`preToolUseBash.py`). Worktrees come from `scripts/agent-worktree.py
   acquire` only, with the step-0 base-verification guard in the brief.
 
