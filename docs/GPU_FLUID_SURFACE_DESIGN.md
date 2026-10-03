@@ -46,7 +46,7 @@ defaults where that node omits a value. Its metadata controls contain older defa
 and are not the initial node state. Baseline: `4208155f5`.
 
 This is a source audit, not a GPU or visual parity claim. Counts are table rows
-(related values are grouped): **43 matched, 10 ported, 4 clock, 6 unported**. Clock rows belong to BUG-7qzk and are
+(related values are grouped): **43 matched, 11 ported, 4 clock, 6 unported**. Clock rows belong to BUG-7qzk and are
 unchanged. The unported rows mean full engine parity is not achieved.
 
 The marker volume is `h³/8`; `4πr³/3 = h³/8` gives
@@ -90,6 +90,7 @@ The GPU stores the nearest f32 marker coefficient, `0.31017524`.
 | Exterior distance band | 3r | bin width / 3 | 3 × maximum active kernel radius | ported | `crates/manifold-fluids/native/flip_engine/particlemesher.cpp:379`; `crates/manifold-renderer/src/node_graph/primitives/shaders/particle_volume_body.wgsl:91` |
 | Production field border | same solid-SDF clamp as interior; +0.001 is preview only | bin width / 3 override | removed artificial border override | ported | `crates/manifold-fluids/native/flip_engine/particlemesher.cpp:67`; `crates/manifold-renderer/src/node_graph/primitives/shaders/particle_volume_body.wgsl:154` |
 | Solid field clamp | max(phi,0) in negative-inside convention | max(phi,0) in negative-inside convention | max(phi,0) in negative-inside convention | matched | `crates/manifold-fluids/native/flip_engine/scalarfield.cpp:435`; `crates/manifold-renderer/src/node_graph/primitives/shaders/particle_volume_body.wgsl:154` |
+| Mesh vertex solid clamp | constrain mu to solid root on open side; sequential epsilon bounds 1e-10 | present at b75c12b29; missing contact coverage and credit | retained exact rule; oblique-wall and thin-plate proofs | ported | `crates/manifold-fluids/native/flip_engine/polygonizer3d.cpp:467`; `crates/manifold-renderer/src/node_graph/primitives/shaders/volume_surface_mesh_body.wgsl:54` |
 | Anisotropy / centre smoothing / detached shrink | sphere / 0 / 1 | sphere / 0 / 1 | sphere / 0 / 1 | matched | `crates/manifold-fluids/native/flip_engine/particlemesher.cpp:418`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_preset.rs:519` |
 | Field smoothing / Fill Pits | 0 / 0 (engine has neither) | 0 / 0 (engine has neither) | 0 / 0 (engine has neither) | matched | `crates/manifold-fluids/native/flip_engine/particlemesher.cpp:305`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_preset.rs:519` |
 | Mesh smoothing value | 0.35 preset override (header default 0.5) | 0.5 | 0.35 | ported | `crates/manifold-renderer/assets/generator-presets/WaterDamBreak.json:652`; `crates/manifold-renderer/src/node_graph/primitives/surface_mesh_normals.rs:125` |

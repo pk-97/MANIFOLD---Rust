@@ -45905,7 +45905,7 @@
           "type": "int"
         }
       ],
-      "purpose": "Build the triangle-list mesh of a level set's zero crossing (marching cubes): each lattice cell owns its inclusive scan interval, caches its twelve edge vertices, and emits the existing triangle table order with gradient normals pointing outward. Slots past the live triangles are zero. The vertex buffer starts at max_capacity (0: the lattice's box surface) and grows from the late triangle total; a frame whose surface outruns the buffer is an empty mesh and a named error, and the buffer grows.",
+      "purpose": "Build the triangle-list mesh of a level set's zero crossing (marching cubes): each lattice cell owns its inclusive scan interval, caches its twelve edge vertices, and emits the existing triangle table order with gradient normals pointing outward. Optional solid-lattice samples constrain each edge crossing to the open side of the solid root using FLIP Fluids _vertexInterp (epsilon 1e-10). Slots past the live triangles are zero. The vertex buffer starts at max_capacity (0: the lattice's box surface) and grows from the late triangle total; a frame whose surface outruns the buffer is an empty mesh and a named error, and the buffer grows.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Builds the triangle mesh of a liquid's surface from its density field, ready to render with any material.",
