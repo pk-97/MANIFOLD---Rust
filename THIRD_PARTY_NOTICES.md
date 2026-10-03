@@ -22,6 +22,7 @@ Modules ported from it (all under `crates/manifold-renderer/src/node_graph/primi
 - `gpu_flip_bodies` (`shaders/gpu_flip_bodies.wgsl`; its CPU references in `gpu_flip_body_tests.rs`) — the bodies' rows in the pressure solve and their captured impulse from `rigidpressurecoupling.h`, the pressure entries and the velocity change on the solid faces from `rigidboundaryvelocity.cpp`, the order of solve, impulse, velocity change and constraint from `rigidfluidcoupling.cpp`; the dynamic bodies' predicted velocity in `gpu_flip_step.wgsl` from `rigidfluidcoupling.cpp`
 - `liquid_fill` (`shaders/liquid_fill_body.wgsl`) — the half-cell seeding lattice, and seeding only where the solid distance is positive, from `fluidsimulation.cpp`
 - `shaders/matter_frame.wgsl` — the marker radius from rest volume, from `fluidsimulation.cpp` (`_initializeParticleRadii`)
+- `volume_surface_mesh.rs`, `shaders/volume_surface_mesh_body.wgsl` — the solid-edge interval constraint and endpoint epsilon from `polygonizer3d.cpp` (`_vertexInterp`), including the CPU f64 reference
 - `shaders/marching_cubes_common.wgsl` — the corner order, edge order and triangle table from `polygonizer3d.cpp` (Paul Bourke's tables)
 - `scripts/mgpcg_reference.py` (the f64 oracle for the pressure solve) — the segment and square inside-fractions from `levelsetutils.cpp`, the operator and stop from `pressuresolver.cpp` and `pcgsolver.h`
 

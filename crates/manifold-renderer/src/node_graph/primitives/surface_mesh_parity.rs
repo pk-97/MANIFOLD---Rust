@@ -3,7 +3,7 @@
 //! four cells around each lattice edge, independently of that list.
 use glam::{DVec3, Vec3};
 
-const CORNERS: [[usize; 3]; 8] = [
+pub(super) const CORNERS: [[usize; 3]; 8] = [
     [0, 0, 0],
     [1, 0, 0],
     [1, 0, 1],
@@ -13,7 +13,7 @@ const CORNERS: [[usize; 3]; 8] = [
     [1, 1, 1],
     [0, 1, 1],
 ];
-const EDGES: [(usize, usize); 12] = [
+pub(super) const EDGES: [(usize, usize); 12] = [
     (0, 1),
     (1, 2),
     (2, 3),
@@ -38,7 +38,7 @@ pub(super) struct Fixture {
     cell_triangles: Vec<Vec<[usize; 3]>>,
 }
 
-fn triangle_table() -> Vec<[i32; 16]> {
+pub(super) fn triangle_table() -> Vec<[i32; 16]> {
     let source = include_str!("../../../../manifold-fluids/native/flip_engine/polygonizer3d.cpp");
     let start = source.find("_triTable[256][16] = {").unwrap();
     source[start..]

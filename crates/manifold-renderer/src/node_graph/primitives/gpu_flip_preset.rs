@@ -1208,6 +1208,17 @@ pub(super) mod tests {
                 assert!(surface["params"][param]["value"].is_number(), "{name}: {param}");
             }
             let wires = group["wires"].as_array().unwrap();
+            let nodes = group["nodes"].as_array().unwrap();
+            let mesh = &nodes.iter().find(|n| n["nodeId"] == "liquid_mesh").unwrap()["id"];
+            let clamp = &nodes.iter().find(|n| n["typeId"] == "node.clamp_liquid_to_solids").unwrap()["id"];
+            for port in ["solid", "solid_nodes_x", "solid_nodes_y", "solid_nodes_z"] {
+                let source = |id: &Value| {
+                    let wire = wires.iter().find(|w| &w["toNode"] == id && w["toPort"] == port)
+                        .unwrap_or_else(|| panic!("{name}: missing {port}"));
+                    (wire["fromNode"].clone(), wire["fromPort"].clone())
+                };
+                assert_eq!(source(mesh), source(clamp), "{name}: mesh and clamp must share {port}");
+            }
             let mut destinations = std::collections::HashSet::new();
             for wire in wires {
                 assert!(destinations.insert((wire["toNode"].as_u64().unwrap(), wire["toPort"].as_str().unwrap())),

@@ -1,3 +1,4 @@
+//! Ported from FLIP Fluids polygonizer3d.cpp `_vertexInterp` (MIT); see THIRD_PARTY_NOTICES.md.
 //! `node.volume_surface_mesh` — the marching-cubes triangle list of a level
 //! set, one cell-owned thread per lattice cell. It feeds
 //! `node.scene_object.vertices` exactly as the CPU fluid mesh does. A
@@ -110,7 +111,7 @@ pub(crate) fn grown_capacity(late_triangles: f32, slots: u32) -> Option<u64> {
 crate::primitive! {
     name: VolumeSurfaceMesh,
     type_id: "node.volume_surface_mesh",
-    purpose: "Build the triangle-list mesh of a level set's zero crossing (marching cubes): each lattice cell owns its inclusive scan interval, caches its twelve edge vertices, and emits the existing triangle table order with gradient normals pointing outward. Slots past the live triangles are zero. The vertex buffer starts at max_capacity (0: the lattice's box surface) and grows from the late triangle total; a frame whose surface outruns the buffer is an empty mesh and a named error, and the buffer grows.",
+    purpose: "Build the triangle-list mesh of a level set's zero crossing (marching cubes): each lattice cell owns its inclusive scan interval, caches its twelve edge vertices, and emits the existing triangle table order with gradient normals pointing outward. Optional solid-lattice samples constrain each edge crossing to the open side of the solid root using FLIP Fluids _vertexInterp (epsilon 1e-10). Slots past the live triangles are zero. The vertex buffer starts at max_capacity (0: the lattice's box surface) and grows from the late triangle total; a frame whose surface outruns the buffer is an empty mesh and a named error, and the buffer grows.",
     inputs: {
         levelset: Array(f32) required,
         scan: Array(u32) required,
@@ -731,6 +732,114 @@ mod tests {
         std::array::from_fn(|axis| p1[axis] + mu * (p2[axis] - p1[axis]))
     }
 
+    pub(super) struct ContactFixture {
+        pub field: Vec<f32>,
+        pub solid: Vec<f32>,
+        pub scan: Vec<u32>,
+        pub edge_scan: Vec<u32>,
+        pub points: Vec<[f64; 3]>,
+        pub indices: Vec<usize>,
+    }
+
+    /// Eight nodes per axis, unit spacing. The plate spans 0.625 cells in x;
+    /// both faces cross edges. Values are binary fractions to isolate the
+    /// endpoint constraint from sampling roundoff. Read topology from the
+    /// engine's table, independently of the GPU table and scan.
+    pub(super) fn contact_fixture(plate: bool) -> ContactFixture {
+        use super::super::surface_mesh_parity::{CORNERS, EDGES, triangle_table};
+        let n = 8usize;
+        let flat = |p: [usize; 3]| p[0] + n * (p[1] + n * p[2]);
+        let mut solid = Vec::new();
+        let mut field = Vec::new();
+        for z in 0..n {
+            for y in 0..n {
+                for x in 0..n {
+                    let wall = x as f32 + 0.5 * y as f32 + 0.25 * z as f32 - 4.125;
+                    let distance = if plate { wall.abs() - 0.3125 } else { wall };
+                    solid.push(distance);
+                    let liquid = y as f32 - 4.25;
+                    field.push(if distance < 0.0 { liquid.max(0.0) } else { liquid });
+                }
+            }
+        }
+        let mut points = Vec::new();
+        let mut edge_scan = Vec::new();
+        let mut edge_ids = std::collections::HashMap::new();
+        let mut contacts = [0usize; 2];
+        for i in 0..n.pow(3) {
+            let a = [i % n, (i / n) % n, i / (n * n)];
+            for axis in 0..3 {
+                let mut b = a;
+                b[axis] += 1;
+                if b[axis] == n || (field[i] < 0.0) == (field[flat(b)] < 0.0) {
+                    continue;
+                }
+                let (s1, s2) = (f64::from(solid[i]), f64::from(solid[flat(b)]));
+                let point = flip_vertex_interp(a.map(|v| v as f64), b.map(|v| v as f64),
+                    f64::from(field[i]), f64::from(field[flat(b)]), Some((s1, s2)));
+                if (s1 < 0.0) != (s2 < 0.0) {
+                    let root = -s1 / (s2 - s1);
+                    let mu = point[axis] - a[axis] as f64;
+                    if s1 < 0.0 {
+                        assert!(mu >= root - 1e-14, "inside-to-open: {mu} < {root}");
+                        contacts[0] += 1;
+                    } else {
+                        assert!(mu <= root + 1e-14, "open-to-inside: {mu} > {root}");
+                        contacts[1] += 1;
+                    }
+                }
+                edge_ids.insert((a, axis), points.len());
+                points.push(point);
+            }
+            edge_scan.push(points.len() as u32);
+        }
+        assert!(contacts[0] > 0, "fixture must exercise contact");
+        if plate { assert!(contacts[1] > 0, "both plate faces must be exercised"); }
+        let mut scan = Vec::new();
+        let mut indices = Vec::new();
+        let table = triangle_table();
+        for z in 0..n - 1 {
+            for y in 0..n - 1 {
+                for x in 0..n - 1 {
+                    let cell = [x, y, z];
+                    let corners = CORNERS.map(|o| std::array::from_fn(|d| cell[d] + o[d]));
+                    let case = corners.iter().enumerate().fold(0usize, |bits, (j, p)|
+                        bits | (usize::from(field[flat(*p)] < 0.0) << j));
+                    for &e in table[case].iter().take_while(|&&e| e >= 0) {
+                        let (a, b) = EDGES[e as usize];
+                        let (a, b) = (corners[a], corners[b]);
+                        let low = std::array::from_fn(|d| a[d].min(b[d]));
+                        let axis = (0..3).find(|&d| a[d] != b[d]).unwrap();
+                        indices.push(edge_ids[&(low, axis)]);
+                    }
+                    scan.push((indices.len() / 3) as u32);
+                }
+            }
+        }
+        ContactFixture { field, solid, scan, edge_scan, points, indices }
+    }
+
+    #[test]
+    pub(super) fn mesh_contact_oblique_wall_and_thin_plate_cpu_reference_and_extents() {
+        for plate in [false, true] {
+            let f = contact_fixture(plate);
+            // liquid/extent.rs volume_surface_mesh rules: node gathers cover
+            // 8^3 nodes; scans cover 7^3 cells; outputs cover every scanned
+            // triangle and edge. Rounded-up workgroups are idx-guarded.
+            assert_eq!(f.field.len(), 8usize.pow(3));
+            assert_eq!(f.solid.len(), f.field.len());
+            assert_eq!(f.edge_scan.len(), f.field.len());
+            assert_eq!(f.scan.len(), 7usize.pow(3));
+            assert_eq!(f.scan.last().copied().unwrap() as usize * 3, f.indices.len());
+            assert_eq!(f.edge_scan.last().copied().unwrap() as usize, f.points.len());
+            assert!(f.points.len() <= f.indices.len());
+            assert!(f.indices.iter().all(|&i| i < f.points.len()));
+            let slots = emit_slots((f.indices.len() as u64 + 3) * VERTEX_BYTES);
+            assert!(slots as usize >= f.indices.len());
+            assert!(7u32.pow(3).div_ceil(256) * 256 < u32::MAX);
+        }
+    }
+
     #[test]
     fn flip_vertex_interp_clips_solid_crossings_and_endpoints() {
         let p1 = [0.0, 2.0, -1.0];
@@ -740,6 +849,11 @@ mod tests {
             (0.1, Some((-0.25, 0.75)), 0.25),
             (0.9, Some((0.75, -0.25)), 0.75),
             (0.1, Some((-1.0e-12, 1.0e-12)), 0.0),
+            (0.9, Some((1.0e-12, -1.0e-12)), 0.0),
+            (0.1, Some((-0.25, 0.0)), 1.0 - 1e-10),
+            (0.9, Some((0.0, -0.25)), 0.0),
+            (0.4, Some((0.2, 0.3)), 0.4),
+            (0.4, Some((-0.2, -0.3)), 0.4),
             (0.0, None, 1.0e-10),
             (1.0, None, 1.0 - 1.0e-10),
         ];
@@ -761,6 +875,50 @@ mod gpu_tests {
     use crate::generators::mesh_common::MeshVertex;
     use crate::node_graph::primitives::liquid_surface_tests::{params, read, Harness};
     use crate::node_graph::parameters::ParamValue;
+
+    #[test]
+    fn mesh_contact_oblique_wall_and_thin_plate_match_cpu_reference() {
+        // CPU extent proof runs before device acquisition, at this exact size.
+        super::tests::mesh_contact_oblique_wall_and_thin_plate_cpu_reference_and_extents();
+        let mut h = Harness::new();
+        for plate in [false, true] {
+            let f = super::tests::contact_fixture(plate);
+            let (field, _) = h.array(&f.field, f.field.len());
+            let (solid, _) = h.array(&f.solid, f.solid.len());
+            let (scan, _) = h.array(&f.scan, f.scan.len());
+            let (edges, _) = h.array(&f.edge_scan, f.edge_scan.len());
+            for indexed in [false, true] {
+                let capacity = f.indices.len() + 3;
+                let (vertices, _) = h.array::<MeshVertex>(&[], capacity);
+                let (indices, _) = h.array::<u32>(&[], capacity);
+                let settings = params(&[
+                    ("center_x", 3.5), ("center_y", 3.5), ("center_z", 3.5),
+                    ("size_x", 7.0), ("size_y", 7.0), ("size_z", 7.0),
+                    ("nodes_x", 8.0), ("nodes_y", 8.0), ("nodes_z", 8.0),
+                    ("solid_nodes_x", 8.0), ("solid_nodes_y", 8.0), ("solid_nodes_z", 8.0),
+                    ("max_capacity", capacity as f32), ("total", (f.indices.len() / 3) as f32),
+                ]);
+                let mut inputs = vec![("levelset", field), ("solid", solid), ("scan", scan)];
+                if indexed { inputs.push(("edge_scan", edges)); }
+                let (_, errors) = h.run(&mut VolumeSurfaceMesh::new(), &inputs,
+                    &[("vertices", vertices), ("indices", indices)], &settings);
+                assert!(errors.is_empty(), "{errors:?}");
+                let got = read::<MeshVertex>(&h.buffer(vertices), capacity);
+                let actual_indices = if indexed {
+                    read::<u32>(&h.buffer(indices), f.indices.len())
+                } else { (0..f.indices.len() as u32).collect() };
+                for (i, (&actual, &expected)) in actual_indices.iter().zip(&f.indices).enumerate() {
+                    for axis in 0..3 {
+                        assert!((f64::from(got[actual as usize].position[axis]) - f.points[expected][axis]).abs() < 1e-6,
+                            "plate={plate}, indexed={indexed}, vertex={i}, axis={axis}");
+                    }
+                    if indexed { assert_eq!(actual as usize, expected); }
+                }
+                let live = if indexed { f.points.len() } else { f.indices.len() };
+                assert!(got[live..].iter().all(|v| v.position == [0.0; 3] && v.color == [0.0; 4]));
+            }
+        }
+    }
 
     #[test]
     fn solid_endpoint_clip_matches_nested_f64_reference() {

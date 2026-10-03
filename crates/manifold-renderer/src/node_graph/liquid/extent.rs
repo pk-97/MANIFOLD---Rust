@@ -1818,6 +1818,25 @@ mod tests {
     }
 
     #[test]
+    fn liquid_mesh_contact_rejects_short_solid_before_gpu_work() {
+        let (_, def) = liquid_presets().into_iter().find(|(id, _)| id == "WaterDamBreakGpuFlip").expect("preset");
+        let mut flat = manifold_core::flatten::flatten_groups(def).expect("flattens");
+        let mesh = flat.nodes.iter().find(|n| n.type_id == "node.volume_surface_mesh").expect("mesh").id;
+        let bounds = flat.nodes.iter().find(|n| n.type_id == "node.blob_bounds").expect("two-float source").id;
+        let solid = flat.wires.iter_mut().find(|w| w.to_node == mesh && w.to_port == "solid").expect("solid wire");
+        solid.from_node = bounds;
+        solid.from_port = "bounds".into();
+        match check_preset_extents(&flat, 8) {
+            Err(ExtentError::Uncovered { node, detail }) => {
+                // The early solid refusal leaves owned outputs unsized, so
+                // the walk may report that before its final coverage pass.
+                assert!(node.contains("volume_surface_mesh"), "{node}: {detail}");
+            }
+            other => panic!("expected a short solid lattice refusal, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn liquid_presets_all_extent_checked() {
         let presets = liquid_presets();
         assert!(presets.len() >= 7, "liquid presets: {:?}", presets.iter().map(|(id, _)| id).collect::<Vec<_>>());
