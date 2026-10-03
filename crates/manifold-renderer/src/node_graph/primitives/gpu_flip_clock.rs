@@ -938,21 +938,30 @@ mod gpu_tests {
 
     #[test]
     fn gpu_flip_clock_marker_histogram_removal_value_proof() {
-        // Ten particles occupy the highest CFL bin.  With 20,000 markers the
-        // native 0.05% budget admits exactly those ten, raising the removal
-        // threshold to (bin + 4) frames.  The outlier count is deliberately
-        // above six so the relative clamp cannot hide that threshold.
+        // Native removal bins speeds by CFL * cell / the whole frame, even when
+        // the scheduler splits it: _removeMarkerParticles is passed
+        // _currentFrameDeltaTime. Every case is a CFL split where a step-dt
+        // width gives a different limit. Speeds sit mid-bin, because a speed
+        // exactly on a bin edge lands in different bins in the f32 kernel and
+        // the f64 reference. Nine 11 m/s outliers keep the relative clamp out
+        // of play. At 1 s they share the top bin with one 3.25 m/s marker:
+        // 300 markers have no removal budget, so the six-step floor removes
+        // it; 0.05% of 21,000 is 10.5, so the budget admits the top bin and
+        // the limit walks down to (bin + 4) widths, which keeps it.
+        use manifold_core::Seconds;
+        use manifold_physics::stepping::{marker_particle_speed_limit, MarkerSpeedLimitConfig};
         let device = crate::test_device();
-        for (count, duration) in [(300u32, 0.25), (300, 1.0), (20_000, 1.0)] {
+        for (count, duration, limit) in [(300u32, 0.25, 12.0), (300, 1.0, 3.0), (21_000, 1.0, 3.5)] {
             let clock = GpuFlipClock::new(&device, count, 1, 1);
             let markers = device.create_buffer_shared(u64::from(count) * 32);
             let empty = device.create_buffer_shared(96);
             let readback = device.create_buffer_shared(48);
-            let mut particles = vec![particle(1.0); count as usize];
+            let mut particles = vec![particle(1.25); count as usize];
             for (i, marker) in particles.iter_mut().enumerate() { marker.id = i as u32 + 101; }
-            for marker in particles.iter_mut().take(10) {
-                marker.velocity = [10.0, 0.0, 0.0];
+            for marker in particles.iter_mut().take(9) {
+                marker.velocity = [11.0, 0.0, 0.0];
             }
+            particles[9].velocity = [3.25, 0.0, 0.0];
             unsafe {
                 markers.write(0, bytemuck::cast_slice(&particles));
             }
@@ -985,17 +994,20 @@ mod gpu_tests {
             enc.copy_buffer_to_buffer(plan.buffer(), &readback, 48);
             enc.commit_and_wait_completed();
             let result = read_plan(&readback);
-            assert_eq!(result.maximum_speed, 10.0);
+            assert!((result.maximum_speed - 11.0).abs() < 1e-5);
             let speeds: Vec<f64> = particles.iter().map(|m| f64::from(m.velocity[0])).collect();
-            let expected_limit = manifold_physics::stepping::marker_particle_speed_limit(
-                &speeds, manifold_core::Seconds(f64::from(p.frame_duration)),
+            let cpu_limit = |dt: f32| marker_particle_speed_limit(
+                &speeds, Seconds(f64::from(dt)),
                 f64::from(p.cell_size), f64::from(p.cfl), p.max_frame_steps,
-                manifold_physics::stepping::MarkerSpeedLimitConfig::default(), &mut [0; 6],
+                MarkerSpeedLimitConfig::default(), &mut [0; 6],
             ).value as f32;
-            assert_eq!(result.marker_limit, expected_limit);
+            assert!(result.dt < p.frame_duration, "{count} markers, {duration} s: no CFL split");
+            assert_ne!(cpu_limit(result.dt), limit, "{count} markers, {duration} s: step-dt width agrees");
+            assert_eq!(cpu_limit(p.frame_duration), limit, "{count} markers, {duration} s: CPU");
+            assert_eq!(result.marker_limit, limit, "{count} markers, {duration} s: GPU");
             let got = unsafe { std::slice::from_raw_parts(markers.mapped_ptr().unwrap().cast::<FluidParticle>(), count as usize) };
             for (before, after) in particles.iter().zip(got) {
-                assert_eq!(after.position_radius[3] > 0.0, before.velocity[0] <= expected_limit);
+                assert_eq!(after.position_radius[3] > 0.0, before.velocity[0] <= limit);
                 assert_eq!(before.id, after.id);
             }
         }

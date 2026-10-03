@@ -648,8 +648,10 @@ impl Default for MarkerSpeedLimitConfig {
     }
 }
 
-/// Port `_getMarkerParticleSpeedLimit`. `histogram` is caller-owned scratch
-/// with one bin per allowed frame step; this function performs no allocation.
+/// Port `_getMarkerParticleSpeedLimit`. `dt` is the whole accepted frame, not
+/// the substep: the engine passes `_currentFrameDeltaTime` at every substep.
+/// `histogram` is caller-owned scratch with one bin per allowed frame step;
+/// this function performs no allocation.
 pub fn marker_particle_speed_limit(
     speeds: &[f64],
     dt: Seconds,
