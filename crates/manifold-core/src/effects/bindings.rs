@@ -189,6 +189,7 @@ impl UserParamBinding {
             ParamConvert::IntRound | ParamConvert::EnumRound | ParamConvert::Trigger
         );
         ParamSpecDef {
+            tooltip: None,
             id: self.id.clone(),
             name: self.label.clone(),
             min: self.min,

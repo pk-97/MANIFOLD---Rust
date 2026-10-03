@@ -86,16 +86,17 @@ fn body(
     let size = vec3<f32>(size_x, size_y, size_z);
     let lattice_min = vec3<f32>(center_x, center_y, center_z) - 0.5 * size;
     let home = clamp(vec3<i32>(floor((x - lattice_min) / cell_size)), vec3<i32>(0), bins - vec3<i32>(1));
-    // One home for the search radius: the kernel never reaches past one bin.
-    let radius = min(particle_scale * physical, cell_size);
+    // The bins index the kernels; they never limit their size.
+    let radius = particle_scale * physical;
+    let search = i32(ceil(max(radius, 3.0 * physical) / cell_size));
 
     var weight_sum = 0.0;
     var mean = vec3<f32>(0.0);
     var neighbours = 0;
     var nearest = 1e30;
-    for (var dz = -1; dz <= 1; dz = dz + 1) {
-        for (var dy = -1; dy <= 1; dy = dy + 1) {
-            for (var dx = -1; dx <= 1; dx = dx + 1) {
+    for (var dz = -search; dz <= search; dz = dz + 1) {
+        for (var dy = -search; dy <= search; dy = dy + 1) {
+            for (var dx = -search; dx <= search; dx = dx + 1) {
                 let b = home + vec3<i32>(dx, dy, dz);
                 if any(b < vec3<i32>(0)) || any(b >= bins) {
                     continue;
@@ -136,9 +137,9 @@ fn body(
     // V · diag · Vᵀ).
     if neighbours >= min_neighbours && stretch > 1.0 {
         var covariance = mat3x3<f32>(vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0));
-        for (var dz = -1; dz <= 1; dz = dz + 1) {
-            for (var dy = -1; dy <= 1; dy = dy + 1) {
-                for (var dx = -1; dx <= 1; dx = dx + 1) {
+        for (var dz = -search; dz <= search; dz = dz + 1) {
+            for (var dy = -search; dy <= search; dy = dy + 1) {
+                for (var dx = -search; dx <= search; dx = dx + 1) {
                     let b = home + vec3<i32>(dx, dy, dz);
                     if any(b < vec3<i32>(0)) || any(b >= bins) {
                         continue;
@@ -163,7 +164,7 @@ fn body(
         if largest > 1e-20 {
             // Axis lengths ∝ sqrt(variance), the ratio capped at `stretch`,
             // rescaled to keep the isotropic kernel's volume.
-            let limit = max(stretch, 1.0);
+            let limit = stretch;
             let floor_variance = largest / (limit * limit);
             let spread = sqrt(max(eigen.values, vec3<f32>(floor_variance)));
             let norm = pow(spread.x * spread.y * spread.z, 1.0 / 3.0);
@@ -171,14 +172,6 @@ fn body(
             basis = eigen.vectors;
         }
     }
-    // Reach at most two thirds of a bin from the particle, so any blob a lattice
-    // node's ±1-bin search misses is at least a third of a bin away:
-    // node.particle_volume caps its distance field at that band, which keeps
-    // the cap exact. Band = half the reach is the FLIP Fluids mesher's ratio
-    // (exact out to 1.5 radii, particlemesher.cpp `_searchRadiusFactor`);
-    // the band (1/3) is shared with particle_volume_body.wgsl and
-    // clamp_liquid_to_solids_body.wgsl.
-    axes = min(axes, vec3<f32>(max((2.0 / 3.0) * cell_size - length(centre - x), 1e-6 * cell_size)));
     let inverse_axes = mat3x3<f32>(
         vec3<f32>(1.0 / axes.x, 0.0, 0.0),
         vec3<f32>(0.0, 1.0 / axes.y, 0.0),
@@ -190,6 +183,6 @@ fn body(
     return Element3(
         vec4<f32>(centre, bound),
         vec4<f32>(g[0][0], g[1][1], g[2][2], det),
-        vec4<f32>(g[1][0], g[2][0], g[2][1], 0.0),
+        vec4<f32>(g[1][0], g[2][0], g[2][1], length(centre - x)),
     );
 }

@@ -22,7 +22,7 @@ pub struct RingWrite {
     pub previous_count: u32,
     /// The ring was reallocated for this tick.
     pub grown: bool,
-    restarted: bool,
+    pub restarted: bool,
 }
 
 #[derive(Default)]
@@ -41,6 +41,13 @@ impl FrameRing {
     /// simulated time past the newest frame.
     pub fn wants_tick(&self, epoch: u32, simulation_time: f64) -> bool {
         self.epoch != Some(epoch) || simulation_time > self.t_b
+    }
+
+    /// Force the next publication to collapse A onto its newly-latticed B.
+    /// A lattice change makes an older particle frame incomparable even when
+    /// the simulation clock did not advance.
+    pub fn invalidate(&mut self) {
+        self.epoch = None;
     }
 
     /// Start writing one tick of `bytes` per slot. Slots too small for it are

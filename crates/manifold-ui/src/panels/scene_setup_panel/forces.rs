@@ -232,6 +232,7 @@ mod tests {
             modifier: Some(ModifierCardInfo {
                 instance_id: manifold_foundation::NodeId::new(id),
                 layer_id: LayerId::new(layer),
+                params_owner: Default::default(),
                 enabled_label: "Enabled".into(),
                 stack_index: 0,
                 stack_len: 1,
@@ -241,6 +242,7 @@ mod tests {
             rows: vec![ParamRow {
                 id: std::borrow::Cow::Owned(format!("{id}_strength")),
                 spec: RowSpec {
+                    tooltip: None,
                     name: "Strength".into(),
                     min: -1.0,
                     max: 1.0,

@@ -179,6 +179,7 @@ class GpuProofsGateTests(unittest.TestCase):
                 events.append(("hold-exit", label))
         out = io.StringIO()
         with contextlib.ExitStack() as stack:
+            stack.enter_context(patch.object(gate.gate_passes, "proof_pass", return_value=None))
             stack.enter_context(patch.object(sys, "argv", ["gpu_proofs_gate.py", *argv]))
             stack.enter_context(patch.object(gate, "run_gate", side_effect=fake_run_gate))
             stack.enter_context(patch.object(gate.subprocess, "run", side_effect=fake_build))
@@ -320,6 +321,11 @@ class WatchdogTests(unittest.TestCase):
         self.assertEqual(d.allowance("m::unknown"), 300.0)
         d.times = {"m::tiny": 2.0}
         self.assertEqual(d.allowance("m::tiny"), 120.0)
+
+    def test_committed_glb_sweep_allowance_outlasts_a_whole_sweep(self):
+        # The sweep takes ~16 minutes; the no-record 300s killed every glTF landing.
+        d = gate.Watchdog(gate.gpu_scope.load_times())
+        self.assertGreater(d.allowance("glb_conformance_sweep"), 2 * 930.0)
 
     def test_floor_override_replaces_floor_and_no_record_default(self):
         d = self.dog(floor=10.0)

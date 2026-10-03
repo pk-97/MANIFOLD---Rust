@@ -547,13 +547,16 @@ fn whitewater_step_extents_at_64() {
     assert!(bin_total(step.bins) <= MAX_BINS);
     assert_eq!(step.population_bytes(), 3_200_000);
     assert_eq!(step.pool_bytes(), 4_800_000);
-    assert_eq!(step.slot_scan_values(), 300_000);
+    assert_eq!(step.slot_scan_values(), 400_000);
     assert_eq!([0, 1, 2].map(|a| step.face_bytes(a)), [266_240 * 4; 3]);
     assert_eq!(step.level_bytes(), cell_total(level) * 4);
     assert_eq!(step.solid_bytes(), 357_911 * 4);
     let held = step.held_bytes(u64::from(PARTICLE_SLOTS));
     println!("whitewater_step holds {held} bytes at 64 over {PARTICLE_SLOTS} particle slots");
-    assert!(held < 256 << 20, "{held} bytes");
+    // Account for the turbulence/influence fields, inside potential and
+    // fourth population. The former 256 MiB assertion was a budget for the
+    // incomplete three-emitter port, not a limit on FLIP's emitter features.
+    assert_eq!(held, 282_078_580, "all emitter scratch and output rings are accounted for");
 
     let refusals = [
         (StepShape::new([0; 3], level, [64; 3], 1.0, bounds, DEFAULT_CAPACITY), "solid lattice is missing"),

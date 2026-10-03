@@ -619,9 +619,16 @@ pub trait Primitive: PrimitiveSpec {
         false
     }
 
-    /// Mirror of
-    /// [`EffectNode::substep_host_sync`](crate::node_graph::effect_node::EffectNode::substep_host_sync).
-    /// Default: `false`.
+    /// The clock's accepted interval for this region iteration. The named
+    /// scalar output publishes its duration before the body executes.
+    fn substep_clock_interval(&self, _iteration: u32) -> Option<(&'static str, manifold_physics::stepping::StepInterval)> {
+        None
+    }
+
+    /// Let a boundary derive its numerical substeps from the clock interval.
+    fn set_substep_interval(&mut self, _interval: manifold_physics::stepping::StepInterval) {}
+
+    /// Mirror of `EffectNode::substep_host_sync`. Default: `false`.
     fn substep_host_sync(&self, _iteration: u32) -> bool {
         false
     }
@@ -1055,6 +1062,12 @@ impl<P: Primitive + 'static> EffectNode for P {
     }
     fn substep_iteration(&mut self, iteration: u32, scalars: &mut [f32]) -> bool {
         Primitive::substep_iteration(self, iteration, scalars)
+    }
+    fn substep_clock_interval(&self, iteration: u32) -> Option<(&'static str, manifold_physics::stepping::StepInterval)> {
+        Primitive::substep_clock_interval(self, iteration)
+    }
+    fn set_substep_interval(&mut self, interval: manifold_physics::stepping::StepInterval) {
+        Primitive::set_substep_interval(self, interval);
     }
     fn substep_host_sync(&self, iteration: u32) -> bool {
         Primitive::substep_host_sync(self, iteration)

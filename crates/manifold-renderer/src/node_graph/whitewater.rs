@@ -83,7 +83,7 @@ pub struct WhitewaterParticle {
     /// Scene metres, and seconds left.
     pub position_lifetime: [f32; 4],
     pub velocity: [f32; 3],
-    /// Bubble 0, foam 1, spray 2, empty [`WHITEWATER_EMPTY`].
+    /// Bubble 0, foam 1, spray 2, dust 4, empty [`WHITEWATER_EMPTY`].
     pub kind: u32,
     /// FLIP's per-particle id, 0 to [`WHITEWATER_ID_LIMIT`] − 1.
     pub id: u32,

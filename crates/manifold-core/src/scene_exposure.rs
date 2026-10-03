@@ -268,6 +268,7 @@ pub fn stamp_scene_node_exposures_into(
         };
 
         params.push(ParamSpecDef {
+            tooltip: None,
             id: id.clone(),
             name: meta.label.clone(),
             min,
@@ -954,6 +955,7 @@ mod tests {
             if user_added { "user" } else { "auto" }
         );
         let spec = ParamSpecDef {
+            tooltip: None,
             id: id.clone(),
             name: param.to_string(),
             min: 0.0,
@@ -1459,6 +1461,7 @@ mod tests {
         // Simulate a pre-fix def: a spec + binding already stamped at the
         // manifest default (0.5), even though the node itself carries 7.5.
         let stale_spec = ParamSpecDef {
+            tooltip: None,
             id: "7_pos_x".to_string(),
             name: "X".to_string(),
             min: 0.0,
@@ -1594,6 +1597,7 @@ mod tests {
         let node = make_node(7, "node.bend_mesh");
         let node_id = node.node_id.clone();
         let auto_spec = ParamSpecDef {
+            tooltip: None,
             id: "7_angle".to_string(),
             name: "Angle".to_string(),
             min: 0.0,
@@ -1617,6 +1621,7 @@ mod tests {
             default_mirrors_node_param: true,
         };
         let user_spec = ParamSpecDef {
+            tooltip: None,
             id: "user_angle".to_string(),
             name: "My Angle".to_string(),
             min: -9.0,
@@ -2295,6 +2300,7 @@ mod tests {
             default_mirrors_node_param: true,
         };
         let authored_spec = ParamSpecDef {
+            tooltip: None,
             id: "custom_light_mode".into(),
             name: "My light mode".into(),
             min: 0.0,
@@ -2458,6 +2464,7 @@ mod tests {
 
     fn float_spec_default(id: &str, name: &str, section: &str) -> ParamSpecDef {
         ParamSpecDef {
+            tooltip: None,
             id: id.to_string(),
             name: name.to_string(),
             min: 0.0,
@@ -2548,6 +2555,7 @@ mod tests {
         let node_id = node.node_id.clone();
 
         let stale_spec = ParamSpecDef {
+            tooltip: None,
             id: "3_distance".to_string(),
             name: "Distance".to_string(),
             min: 0.01,
@@ -2645,6 +2653,7 @@ mod tests {
         let node_id = node.node_id.clone();
 
         let stale_spec = ParamSpecDef {
+            tooltip: None,
             id: "2_pos_x".to_string(),
             name: "X".to_string(),
             min: -100.0,
@@ -2745,6 +2754,7 @@ mod tests {
         let node_id = node.node_id.clone();
 
         let stale_spec = ParamSpecDef {
+            tooltip: None,
             id: "4_scale_x".to_string(),
             name: "Scale X".to_string(),
             min: 0.0,

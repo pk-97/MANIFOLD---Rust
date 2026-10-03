@@ -5,9 +5,10 @@
 // triangle's repeated edge references perform the interpolation and gradient
 // arithmetic once, in the same order as the dense vertex oracle.
 //
-// ABI: `levelset` (f32) and `scan` (u32, inclusive running total of per-cell
-// triangle counts) are gathered; the output MeshVertex is Element. Attributes
-// match the CPU fluid mesh: uv from the authored domain's x/z, white colour.
+// ABI: `levelset` (f32), `scan` (u32, inclusive running total of per-cell
+// triangle counts), and optional `solid` (f32) are gathered; the output
+// MeshVertex is Element. Attributes match the CPU fluid mesh: uv from the
+// authored domain's x/z, white colour.
 
 fn vsm_phi(p: vec3<u32>, nodes: vec3<u32>) -> f32 {
     return buf_levelset[mc_node(p, nodes)];
@@ -34,6 +35,7 @@ fn vsm_edge(
     lattice_min: vec3<f32>,
     size: vec3<f32>,
     resolution_scale: i32,
+    solid_nodes: vec3<u32>,
 ) -> Element {
     var a = cell + MC_CORNERS[MC_EDGE_A[edge]];
     var b = cell + MC_CORNERS[MC_EDGE_B[edge]];
@@ -44,8 +46,40 @@ fn vsm_edge(
     }
     let phi_a = vsm_phi(a, nodes);
     let phi_b = vsm_phi(b, nodes);
-    let mu = clamp(phi_a / (phi_a - phi_b), 0.0, 1.0);
-    let position = lattice_min + mix(vec3<f32>(a), vec3<f32>(b), mu) * spacing;
+    let position_a = lattice_min + vec3<f32>(a) * spacing;
+    let position_b = lattice_min + vec3<f32>(b) * spacing;
+    var min_mu = 0.0;
+    var max_mu = 1.0;
+    let solid_enabled = min(min(solid_nodes.x, solid_nodes.y), solid_nodes.z) >= 2u;
+    if solid_enabled {
+        let solid_spacing = size / vec3<f32>(solid_nodes - vec3<u32>(1u));
+        let s1 = clamp_liquid_solid_at(position_a, lattice_min, solid_spacing, solid_nodes);
+        let s2 = clamp_liquid_solid_at(position_b, lattice_min, solid_spacing, solid_nodes);
+        if (s1 < 0.0 && s2 >= 0.0) || (s2 < 0.0 && s1 >= 0.0) {
+            let diff = s2 - s1;
+            if abs(diff) > 1e-10 {
+                let su = -s1 / diff;
+                if s1 < 0.0 {
+                    min_mu = su;
+                } else {
+                    max_mu = su;
+                }
+            } else {
+                max_mu = min_mu;
+            }
+        }
+    }
+    let eps = 1e-10;
+    min_mu = max(min_mu, eps);
+    max_mu = min(max_mu, 1.0 - eps);
+    var mu = (0.0 - phi_a) / (phi_b - phi_a);
+    if mu < min_mu {
+        mu = min_mu;
+    }
+    if mu > max_mu {
+        mu = max_mu;
+    }
+    let position = position_a + mu * (position_b - position_a);
     var normal = mix(vsm_gradient(a, nodes, spacing), vsm_gradient(b, nodes, spacing), mu);
     let length_squared = dot(normal, normal);
     if length_squared > 0.0 {
@@ -73,9 +107,13 @@ fn body(
     nodes_x: f32,
     nodes_y: f32,
     nodes_z: f32,
+    solid_nodes_x: f32,
+    solid_nodes_y: f32,
+    solid_nodes_z: f32,
     resolution_scale: i32,
     max_capacity: i32,
     brick_pass: u32,
+    indexed: u32,
 ) {
     let zero = Element(
         vec3<f32>(0.0),
@@ -87,6 +125,7 @@ fn body(
     );
     if brick_pass == 2u {
         var live = 0u;
+        var live_indices = 0u;
         if min(min(nodes_x, nodes_y), nodes_z) >= 2.0 {
             let clear_nodes = vec3<u32>(vec3<f32>(nodes_x, nodes_y, nodes_z));
             let clear_cells = clear_nodes - vec3<u32>(1u);
@@ -94,8 +133,13 @@ fn body(
             let triangles = buf_scan[clear_total - 1u];
             if triangles <= u32(max_capacity) / 3u {
                 live = triangles * 3u;
+                live_indices = live;
+                if indexed != 0u {
+                    live = buf_edge_scan[clear_nodes.x * clear_nodes.y * clear_nodes.z - 1u];
+                }
             }
         }
+        if indexed != 0u && idx >= live_indices { buf_indices[idx] = 0u; }
         if idx >= live {
             buf_vertices[idx] = zero;
         }
@@ -129,6 +173,7 @@ fn body(
     let size = vec3<f32>(size_x, size_y, size_z);
     let lattice_min = vec3<f32>(center_x, center_y, center_z) - 0.5 * size;
     let spacing = size / vec3<f32>(cells);
+    let solid_nodes = vec3<u32>(vec3<f32>(solid_nodes_x, solid_nodes_y, solid_nodes_z));
     var edge_cache: array<Element, 12>;
     var edge_ready: array<bool, 12>;
     for (var e = 0u; e < 12u; e = e + 1u) {
@@ -137,9 +182,18 @@ fn body(
     for (var t = 0u; t < triangles; t = t + 1u) {
         for (var corner = 0u; corner < 3u; corner = corner + 1u) {
             let edge = mc_edge(case_index, t * 3u + corner);
+            if indexed != 0u {
+                let vertex = se_vertex(cell, edge, nodes);
+                buf_indices[(first + t) * 3u + corner] = vertex;
+                if !edge_ready[edge] && se_owner(cell, edge, nodes) {
+                    buf_vertices[vertex] = vsm_edge(cell, edge, nodes, spacing, lattice_min, size, resolution_scale, solid_nodes);
+                }
+                edge_ready[edge] = true;
+                continue;
+            }
             if !edge_ready[edge] {
                 edge_cache[edge] = vsm_edge(
-                    cell, edge, nodes, spacing, lattice_min, size, resolution_scale,
+                    cell, edge, nodes, spacing, lattice_min, size, resolution_scale, solid_nodes,
                 );
                 edge_ready[edge] = true;
             }

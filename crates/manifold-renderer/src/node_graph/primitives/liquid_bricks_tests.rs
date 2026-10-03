@@ -35,8 +35,9 @@ fn constant_filter(value: f32, passes: usize, fused: bool) -> f32 {
     sum
 }
 
-// Preserve the pre-change math and dense wrapper. Only add the unused ABI
-// argument introduced with scheduling; no replacement of arithmetic or reads.
+// Preserve the dense wrapper while keeping its ABI in lockstep with the
+// scheduled node. Optional solid input is bound by the generated wrapper;
+// no-solid fixtures pass zero solid dimensions so the constraint is inert.
 fn dense_source<P: crate::node_graph::primitive::PrimitiveSpec>(original: &str) -> String {
     use crate::node_graph::freeze::codegen::{StandaloneKernelSpec, generate_standalone};
     let mut body = original.to_owned();
@@ -56,6 +57,8 @@ fn dense_source<P: crate::node_graph::primitive::PrimitiveSpec>(original: &str) 
             !P::DENSE_BUFFER_FUSION.is_some_and(|dense| dense.body_fragments.contains(include))
         })
         .collect();
+    // The retained dense oracle emits only the original triangle-list output.
+    let outputs: Vec<_> = P::OUTPUTS.iter().filter(|output| output.name != "indices").cloned().collect();
     generate_standalone(&StandaloneKernelSpec {
         fusion_kind: P::FUSION_KIND,
         body: &body,
@@ -63,7 +66,7 @@ fn dense_source<P: crate::node_graph::primitive::PrimitiveSpec>(original: &str) 
         params: P::PARAMS,
         input_access: P::INPUT_ACCESS,
         derived_uniforms: P::DERIVED_UNIFORMS,
-        outputs: P::OUTPUTS,
+        outputs: &outputs,
         stencil_fetch: P::STENCIL_FETCH,
         includes: &includes,
     })

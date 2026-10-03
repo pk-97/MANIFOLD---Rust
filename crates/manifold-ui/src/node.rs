@@ -528,6 +528,8 @@ pub struct UINode {
     pub flags: UIFlags,
     pub style: UIStyle,
     pub text: Option<String>,
+    /// Authored help displayed by the shared overlay pass on hover.
+    pub tooltip: Option<String>,
     /// Optional texture for Image nodes (thumbnails, icons).
     /// Port of Unity UINode.Texture field.
     pub texture: Option<TextureHandle>,

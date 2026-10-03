@@ -2619,6 +2619,7 @@ mod tests {
     /// `generator_registration::ParamSpec::to_param_def`'s doc comment).
     fn add_trigger_gate_param(inst: &mut PresetInstance, id: &str) {
         inst.params.push(Param::bundled(ParamSpecDef {
+            tooltip: None,
             id: id.to_string(),
             name: "Clip Trigger".to_string(),
             min: 0.0,

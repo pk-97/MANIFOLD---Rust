@@ -946,6 +946,7 @@ fn placeholder_param_info() -> ParamRow {
     ParamRow {
         id: manifold_foundation::ParamId::from(""),
         spec: RowSpec {
+            tooltip: None,
             name: String::new(),
             min: 0.0,
             max: 1.0,

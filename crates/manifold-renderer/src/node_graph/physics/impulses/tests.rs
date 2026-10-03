@@ -2,8 +2,8 @@ use manifold_core::Seconds;
 use manifold_physics::input::EventStamp;
 
 use crate::node_graph::physics::{
-    MAX_BODIES, PhysicsAuthoredSampleScope, ResolvedRigidImpulse, RigidBody, RigidImpulseTargets,
-    RigidSimulation,
+    PhysicsAuthoredSampleScope, ResolvedRigidImpulse, RigidBody, RigidImpulseTargets,
+    RigidSimulation, MAX_BODIES,
 };
 use crate::node_graph::transform::Transform;
 
@@ -56,12 +56,10 @@ fn receipts(
 fn rigid_impulse_stamp_requires_an_exact_accepted_observation() {
     let bodies = one_body([0.0, 4.0, 0.0]);
     let mut simulation = RigidSimulation::default();
-    assert!(
-        simulation
-            .impulse_stamp(Seconds::ZERO, 0)
-            .expect_err("stamp before initialization")
-            .contains("epoch")
-    );
+    assert!(simulation
+        .impulse_stamp(Seconds::ZERO, 0)
+        .expect_err("stamp before initialization")
+        .contains("epoch"));
 
     simulation
         .advance(bodies.clone(), [0.0; 3], Seconds(5.0), 1.0, 0.0)
@@ -81,18 +79,16 @@ fn rigid_impulse_stamp_requires_an_exact_accepted_observation() {
         .unwrap();
     assert_eq!(
         simulation.impulse_stamp(Seconds(6.0), 2).unwrap().time,
-        Seconds(2.0)
+        Seconds(1.0)
     );
     simulation
         .advance(bodies, [0.0; 3], Seconds(6.0), 2.0, 0.0)
         .unwrap();
     assert_eq!(
         simulation.impulse_stamp(Seconds(6.0), 3).unwrap().time,
-        Seconds(2.0)
+        Seconds(1.0)
     );
-    assert!(simulation
-        .impulse_stamp(Seconds(6.0 + 1e-9), 4)
-        .is_err());
+    assert!(simulation.impulse_stamp(Seconds(6.0 + 1e-9), 4).is_err());
 }
 
 #[test]
@@ -273,20 +269,18 @@ fn rigid_impulses_reset_and_seek_cancel_old_epoch_inputs() {
         .unwrap();
     let second_epoch = simulation.impulse_epoch().unwrap();
     assert_eq!(second_epoch, first_epoch + 1);
-    assert!(
-        simulation
-            .enqueue_impulse(
-                stamp(first_epoch, 0.0, 1),
-                payload(
-                    [1.0, 0.0, 0.0],
-                    RigidImpulseTargets {
-                        bodies: 1,
-                        copies: false
-                    }
-                ),
-            )
-            .is_err()
-    );
+    assert!(simulation
+        .enqueue_impulse(
+            stamp(first_epoch, 0.0, 1),
+            payload(
+                [1.0, 0.0, 0.0],
+                RigidImpulseTargets {
+                    bodies: 1,
+                    copies: false
+                }
+            ),
+        )
+        .is_err());
     simulation
         .advance(bodies.clone(), [0.0; 3], Seconds(2.0 * DT), 1.0, 1.0)
         .unwrap();
@@ -297,20 +291,18 @@ fn rigid_impulses_reset_and_seek_cancel_old_epoch_inputs() {
         .unwrap();
     let third_epoch = simulation.impulse_epoch().unwrap();
     assert_eq!(third_epoch, second_epoch + 1);
-    assert!(
-        simulation
-            .enqueue_impulse(
-                stamp(second_epoch, 0.0, 0),
-                payload(
-                    [1.0, 0.0, 0.0],
-                    RigidImpulseTargets {
-                        bodies: 1,
-                        copies: false
-                    }
-                ),
-            )
-            .is_err()
-    );
+    assert!(simulation
+        .enqueue_impulse(
+            stamp(second_epoch, 0.0, 0),
+            payload(
+                [1.0, 0.0, 0.0],
+                RigidImpulseTargets {
+                    bodies: 1,
+                    copies: false
+                }
+            ),
+        )
+        .is_err());
 }
 
 #[test]
@@ -394,7 +386,11 @@ fn rigid_impulses_pause_retains_pending_input() {
         )
         .unwrap();
     simulation
-        .advance(bodies.clone(), [0.0; 3], Seconds(DT), 0.0, 0.0)
+        .advance(bodies.clone(), [0.0; 3], Seconds::ZERO, 0.0, 0.0)
+        .unwrap();
+    assert!(receipts(&mut simulation).is_empty());
+    simulation
+        .advance(bodies.clone(), [0.0; 3], Seconds(DT), 1.0, 0.0)
         .unwrap();
     assert!(receipts(&mut simulation).is_empty());
     simulation
@@ -469,25 +465,21 @@ fn rigid_impulses_queue_and_receipt_budget_overflow_is_sticky() {
             )
             .unwrap();
     }
-    assert!(
-        simulation
-            .enqueue_impulse(
-                stamp(epoch, 0.0, 256),
-                payload(
-                    [0.0; 3],
-                    RigidImpulseTargets {
-                        bodies: 1,
-                        copies: false
-                    }
-                ),
-            )
-            .is_err()
-    );
-    assert!(
-        simulation
-            .advance(bodies.clone(), [0.0; 3], Seconds(DT), 1.0, 0.0)
-            .is_err()
-    );
+    assert!(simulation
+        .enqueue_impulse(
+            stamp(epoch, 0.0, 256),
+            payload(
+                [0.0; 3],
+                RigidImpulseTargets {
+                    bodies: 1,
+                    copies: false
+                }
+            ),
+        )
+        .is_err());
+    assert!(simulation
+        .advance(bodies.clone(), [0.0; 3], Seconds(DT), 1.0, 0.0)
+        .is_err());
     assert_eq!(receipts(&mut simulation).len(), 0);
 
     let mut recovered = RigidSimulation::default();
@@ -511,26 +503,22 @@ fn rigid_impulses_queue_and_receipt_budget_overflow_is_sticky() {
         .advance(bodies.clone(), [0.0; 3], Seconds(DT), 1.0, 0.0)
         .unwrap();
     assert_eq!(recovered.impulse_receipts.len(), 256);
-    assert!(
-        recovered
-            .enqueue_impulse(
-                stamp(epoch, DT, 256),
-                payload(
-                    [0.0; 3],
-                    RigidImpulseTargets {
-                        bodies: 1,
-                        copies: false
-                    }
-                ),
-            )
-            .is_err()
-    );
+    assert!(recovered
+        .enqueue_impulse(
+            stamp(epoch, DT, 256),
+            payload(
+                [0.0; 3],
+                RigidImpulseTargets {
+                    bodies: 1,
+                    copies: false
+                }
+            ),
+        )
+        .is_err());
     assert_eq!(receipts(&mut recovered).len(), 256);
-    assert!(
-        recovered
-            .advance(bodies.clone(), [0.0; 3], Seconds(2.0 * DT), 1.0, 0.0)
-            .is_err()
-    );
+    assert!(recovered
+        .advance(bodies.clone(), [0.0; 3], Seconds(2.0 * DT), 1.0, 0.0)
+        .is_err());
     recovered
         .advance(bodies, [0.0; 3], Seconds(2.0 * DT), 1.0, 1.0)
         .unwrap();
@@ -544,20 +532,18 @@ fn rigid_impulses_invalid_target_preserves_producer_sequence() {
     let mut simulation = RigidSimulation::default();
     initialize(&mut simulation, &bodies);
     let epoch = simulation.impulse_epoch().unwrap();
-    assert!(
-        simulation
-            .enqueue_impulse(
-                stamp(epoch, 0.0, 7),
-                payload(
-                    [1.0, 0.0, 0.0],
-                    RigidImpulseTargets {
-                        bodies: 1 << 1,
-                        copies: false
-                    }
-                ),
-            )
-            .is_err()
-    );
+    assert!(simulation
+        .enqueue_impulse(
+            stamp(epoch, 0.0, 7),
+            payload(
+                [1.0, 0.0, 0.0],
+                RigidImpulseTargets {
+                    bodies: 1 << 1,
+                    copies: false
+                }
+            ),
+        )
+        .is_err());
     simulation
         .enqueue_impulse(
             stamp(epoch, 0.0, 7),
@@ -598,17 +584,13 @@ fn rigid_impulses_native_error_latches_receipt_and_reset_recovers() {
             },
         )
         .unwrap();
-    assert!(
-        simulation
-            .advance(bodies.clone(), [0.0; 3], Seconds(DT), 1.0, 0.0)
-            .is_err()
-    );
+    assert!(simulation
+        .advance(bodies.clone(), [0.0; 3], Seconds(DT), 1.0, 0.0)
+        .is_err());
     assert_eq!(receipts(&mut simulation).len(), 1);
-    assert!(
-        simulation
-            .advance(bodies.clone(), [0.0; 3], Seconds(2.0 * DT), 1.0, 0.0)
-            .is_err()
-    );
+    assert!(simulation
+        .advance(bodies.clone(), [0.0; 3], Seconds(2.0 * DT), 1.0, 0.0)
+        .is_err());
 
     simulation
         .advance(bodies.clone(), [0.0; 3], Seconds(DT), 1.0, 1.0)
@@ -641,7 +623,9 @@ fn rigid_impulses_while_held_are_discarded_not_replayed_on_resume() {
     let mut simulation = RigidSimulation::default();
     initialize(&mut simulation, &bodies);
     let strike = |simulation: &mut RigidSimulation, transport: f64, sequence: u64| {
-        let stamp = simulation.impulse_stamp(Seconds(transport), sequence).unwrap();
+        let stamp = simulation
+            .impulse_stamp(Seconds(transport), sequence)
+            .unwrap();
         let targets = RigidImpulseTargets {
             bodies: 1,
             copies: false,
@@ -663,13 +647,26 @@ fn rigid_impulses_while_held_are_discarded_not_replayed_on_resume() {
         .advance(bodies.clone(), [0.0; 3], Seconds(2.0 * DT), 0.0, 0.0)
         .unwrap();
     strike(&mut simulation, 2.0 * DT, 1);
-    assert_eq!(simulation.impulse_queue.as_ref().unwrap().len(), 0, "held impulses pend");
+    assert_eq!(
+        simulation.impulse_queue.as_ref().unwrap().len(),
+        0,
+        "held impulses pend"
+    );
 
     for frame in 3..8 {
         simulation
-            .advance(bodies.clone(), [0.0; 3], Seconds(frame as f64 * DT), 1.0, 0.0)
+            .advance(
+                bodies.clone(),
+                [0.0; 3],
+                Seconds(frame as f64 * DT),
+                1.0,
+                0.0,
+            )
             .unwrap();
     }
-    assert!(receipts(&mut simulation).is_empty(), "resume replayed a held impulse");
+    assert!(
+        receipts(&mut simulation).is_empty(),
+        "resume replayed a held impulse"
+    );
     assert_eq!(simulation.poses[0].pos[0], 0.0, "{:?}", simulation.poses[0]);
 }

@@ -156,6 +156,7 @@ pub(in crate::node_graph::fluid) fn request() -> Request {
             .unwrap();
     }
     request.count = 6;
+    request.interval = None;
     request
 }
 
@@ -752,6 +753,8 @@ fn fluid_take_project_clock_runtime_flushes_holds_without_publishing_frames() {
     observe(&mut runtime, -1.0, -1.0 + 1.25 * TICK, 1.0);
     assert_eq!(runtime.completed_tick, 1);
     assert!(!runtime.vertices.is_empty());
+    // Observe the pause at this endpoint; the preceding span ran at speed 1.
+    observe(&mut runtime, -1.0, -1.0 + 1.25 * TICK, 0.0);
     let version = runtime.version;
     let stats = runtime.stats;
     let vertices = bytemuck::cast_slice::<_, u8>(&runtime.vertices).to_vec();
@@ -767,6 +770,8 @@ fn fluid_take_project_clock_runtime_flushes_holds_without_publishing_frames() {
     assert_eq!(replay.project_range().unwrap().end.transport, Seconds(5.0));
     assert!((replay.simulation_time_at(Seconds(3.0)).unwrap().0 - 1.25 * TICK).abs() < 1e-12);
     observe(&mut runtime, 6.0, 5.0 + TICK, 2.0);
+    assert_eq!(runtime.completed_tick, 1);
+    observe(&mut runtime, 7.0, 5.0 + 2.0 * TICK, 2.0);
     assert_eq!(runtime.completed_tick, 3);
     let mut replay = FluidTakeReplay::open(directory.0.as_ref()).unwrap();
     let mut ticks = Vec::new();

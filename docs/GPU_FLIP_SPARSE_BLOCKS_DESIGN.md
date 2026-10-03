@@ -2,8 +2,7 @@
 
 <!-- index: Design for BUG-jyot (GPU FLIP at 128 for 60 fps), Option C: the GPU FLIP step classifies 8^3 tiles on the GPU each tick (ring distance from particle-holding tiles), runs the dense lattice passes and later the multigrid pressure solve over tile lists by indirect dispatch, keeps every skipped buffer at the dense pass's value, and proves bitwise equality against the dense path on the 64 Dam Break. -->
 
-**Status:** IN PROGRESS · 2026-10-03 · Fable 5.1 (lane) · BUG-jyot (GPU FLIP at 128 for 60 fps), Option C; Phase 1 is BUG-t7i2 (sparse blocks phase 1). Built, bitwise: tile table, cell passes over C, extend dense (D-4), solve (D-8), body passes (D-9); 2c transfers value-level. Owed: all_tiles-forced run, Phase 2 measure. Pointer: GPU_FLIP_STRUCTURAL_OPTIONS.md section 6 (Option C — sparse tiles).
-**Execution contract:** no size caps, no quality caps, one step per frame, a capped solve is reported in stats never a node error, block list decided on the GPU each tick, never read back, every reader of a skipped block sees a defined value, all GPU through `manifold-gpu`, no new shared state, output bitwise equal to dense.
+**Status:** IN PROGRESS · BUG-jyot (GPU FLIP at 128 for 60 fps), Option C. Sparse tile/cell/solve/body passes built; owed: all_tiles-forced run and Phase 2 measurement. BUG-lxxl (coarse solve): standalone stage-2 component pressures and stage-3 scatter/local projection built, both GPU value proofs pass. Solve Level paths unchanged; stages 4–6 remain open. Contract: no size/quality caps, one step per frame, GPU-owned block lists, defined skipped buffers, explicit capped-solve stats, all GPU through `manifold-gpu`, no new shared state, dense-equivalent sparse output. See section 11.1 (Lentine port) and GPU_FLIP_STRUCTURAL_OPTIONS.md section 6 (Option C — sparse tiles).
 
 The occupied-block rule in the contract comes from BUG-l2h3 (SWASH to a live instrument) item .10, closed 2026-10-02 as deferred to BUG-jyot.
 
@@ -239,6 +238,184 @@ The divergence bound (`gpu_flip_solve_level_divergence_bound`, 64³ dam break, e
 Bodies at level 1 under the paper's rule: `scripts/mgpcg_reference.py --body 32,0.5,0.4,0.5,0.12,0.12,0.12,0.6 --solve-level 1` reports the converged impulse off the fine direct solve by 8.6% (ratio 0, held), 33.9% (0.1), 6.4% (1), 4.5% (10), against 0.00% at level 0 for every ratio (before the rule: 73–96%). The ratio-0 row has no body term at all — the 8.6% is the coarse pressure's own discretisation at the body's faces (two fine cells per unknown, prolonged linearly across a solid boundary), so the fine bar (1% at the engine stop) cannot be met at level 1 by any body coupling; it is the price of the level, not a defect of `Pᵀ B P`. No GPU proof pins the level-1 impulse against the reference at the fine bar for that reason; the GPU proof at level 1 is the body step sparse against dense bitwise over 90 ticks (both box scenes, 12 iterations, 0 capped). On stage a floating body at Solve Level 1 rides a few percent low on its buoyancy and a light one (ratio 0.1) a third low; Solve Level 0 is still the setting for a scene whose bodies have to float right.
 
 A saved generator layer carries its own graph snapshot and that snapshot is the manifest authority (`gather_known_params`), so a project saved before this card had neither the card nor the domain→step wire. The project migration v1.16.0 → v1.17.0 (`manifold-io/src/migrations/solve_level_card_v1170.rs`) adds the card, the binding and the wire to every stored graph with a GPU FLIP domain and step, verbatim from the bundled def, idempotent; a domain or step inside a group is reported on load and left alone. Node tables at levels 0 and 1 on `/tmp/waterFunv3.manifold` are in section 7 (the node measure).
+
+### 11.1 Lentine port — component-aware coarse projection (BUG-lxxl, 2026-10-03)
+
+The port targets Lentine, Zheng and Fedkiw, [“A Novel Algorithm for
+Incompressible Flow Using Only a Coarse Grid Projection” (2010)](https://physbam.stanford.edu/papers/stanford2010-02.pdf),
+sections 3.2–3.5 and 4. `scripts/lentine_reference.py` is the f64 proof of
+the 2³ block calculation and component-aware outer/local projection, not a
+replacement for the runtime solver.
+The new `lentine_flux_main` gather is not yet dispatched by the step.
+The existing runtime paths, including Solve Level 0, remain unchanged.
+
+**A necessary correction to the coarse-flux plan.** In
+`gpu_flip_step.wgsl::divergence`, `c` in `(c − w) v_s` is the current
+cell's open volume (`solid_faces[flatten(p, m)].face_weight.w`), not a
+shared or averaged face volume. Orient a fine face from cell L to cell R.
+Its two fluid contributions cancel in the block sum, but its two solid
+contributions leave `(c_L − c_R) v_s`. Therefore aggregating only the four
+fine subfaces of each coarse boundary is insufficient for the existing
+moving-solid convention. Keep the boundary fluid flux and the full sum of
+the child cells' solid source, including internal faces. A single shared
+coarse solid velocity with an averaged `c` loses this term.
+
+For a complete block with fine spacing `h` and coarse spacing `H = 2h`,
+the conservative coarse right-hand side is
+
+```text
+F_C = [Σ boundary faces σ w_f u_f
+       + Σ children i Σ faces of i σ_if (c_i − w_f) v_sf] / (8h).
+```
+
+Here σ is +1 on the high face and −1 on the low face. Equivalently,
+`F_C = Σ_i divergence_i / 8`. The coarse open fraction and fluid flux
+density are respectively `Σ_4 w_f / 4` and `Σ_4 w_f u_f / 4`.
+An alpha-zero boundary update adds the same velocity delta to each of the
+four fine subfaces, so its flux change is `deltaU * Σ_4 w_f`. The local
+weighted Neumann solve changes only the twelve interior faces and must
+leave the twenty-four boundary faces fixed. It can remove only a compatible
+source: its prescribed cell divergences must sum to the block's existing
+net flux. Disconnected fluid components need separate compatibility and
+gauge handling; one gauge for all eight cells is not generally sufficient
+under solid cuts.
+
+**Component-aware unknowns (decided).** One pressure per block is invalid:
+the reference's cut-wall case has zero flux on every coarse face yet component
+sources +1 and −1. Use one unknown per positive-open-face-connected water
+component inside each 2³ block. Label a component by its lowest fine-cell
+index; never join through air, closed faces, or a different block. Gather the
+complete fine source per component. Keep boundary subfaces associated with
+their two component IDs, including parallel edges between the same pair.
+The existing six-neighbour lattice row cannot represent this graph unchanged.
+
+The CPU reference uses integrated fine-flux units at h=1: each boundary
+subface has coarse conductance w/2 for H=2h. Gather by summation and scatter
+with that same conductance. The remaining source then sums to zero on EACH
+block component, allowing independent local Neumann solves with fixed block
+boundary velocities. Each sealed connected component of the coarse graph
+gets its own gauge and compatibility check; opposite nonzero pocket sums
+must not be averaged together. An isolated compatible unknown has pressure
+zero by gauge. Incompatible sources raise an error, without pivot floors or
+silent mean removal. The standalone stage-2 encoder now implements this
+representation; the step does not use it yet.
+
+**Stage 2 implementation (GPU value proof passed).**
+`gpu_flip_lentine::ComponentSolver` is available in normal builds as a standalone
+encoder. It allocates once per lattice and encodes without CPU graph construction,
+readback, or per-encode allocation. Input is fine water, one `vec4` per cell
+(positive-axis open-face weights xyz and explicit Dirichlet conductance w), and
+the **complete integrated source** to remove. For the step this is `h * rhs`,
+including child solid sources minus prescribed density sources, never the old
+boundary-only gather. Odd blocks sum only actual wet children, without dividing
+by eight. Explicit anchors are not stage 5's mixed free-surface treatment.
+
+GPU block labels use the lowest connected wet fine-cell index; dry is `u32::MAX`.
+Matrix-free graph rows retain every boundary subface's `w/2` conductance and
+`anchor/2` diagonal. GPU union/find identifies global pockets and compensated
+sums check their sources separately. Each sealed pocket gauges its lowest root.
+The f32 compatibility allowance is `8 * f32::EPSILON * sum(abs(source))`
+(eight children per gather), without an absolute source floor or mean removal.
+Incompatibility and invalid inputs produce explicit device status and poisoned
+pressure/transfer outputs. Isolated compatible roots have zero pressure.
+
+The existing six-neighbour multigrid rows cannot represent this graph. This
+stage uses gauged, unpreconditioned CG, inheriting the existing 64-iteration
+budget and `1e-9` relative recursive-residual stop; converged, capped and
+breakdown are distinct statuses. Final true residual includes gauge rows.
+No grid-size/component-count cap is added. Storage is `80 * cell_count + 64`
+bytes excluding inputs. Topology setup and scalar reductions are serial GPU
+passes; row products, updates and transfer are parallel. Performance is unmeasured.
+
+Output potential follows the reference sign (opposite the step pressure).
+Transfer outputs each oriented subface's `w * (potential_low - potential_high) / 2`
+and each cell's anchor flux, to **subtract** from fluid flux. It uses the same
+conductance as the operator; internal, closed and wall edges are zero. The
+stage-2 encoder leaves velocity buffers untouched. Both existing Solve Level paths remain unchanged.
+
+The value proof `gpu_flip_lentine::gpu_tests::component_coarse_matches_reference`
+invokes `scripts/lentine_reference.py --gpu-fixtures` for fresh f64 Cholesky
+results. The exporter and complete reference projection share `component_coarse`.
+Ten cases cover cut components, two sealed pockets, odd edges, isolation,
+incompatible pocket sums, dry cells, moving-solid/prescribed sources, isolated
+and empty inputs, and 9×5×3. Labels, gathered sources, gauge-fixed pressures,
+individual transfers, true residual and component remaining-source sums are
+checked at `2e-5 * max(1, reference scale)`; inputs remain unchanged and each
+case re-encodes after poisoning scratch. The lead ran this proof successfully
+at the stage-2 branch tip.
+
+**Stage 3 implementation (GPU value proof passed).**
+`gpu_flip_lentine::ComponentProjection` composes stage 2 with alpha-zero
+boundary velocity scatter and independent weighted local Neumann projections
+(Lentine sections 3.4–3.5). Inputs retain stage-2 integrated h=1 source units;
+the additional velocity vec4 matches the links layout: positive-axis faces xyz,
+plus one outward aggregate explicit-anchor velocity w. Low domain walls remain
+prescribed source terms. Anchors are a standalone test seam, not mixed-surface
+handling. Caller input buffers are unchanged; input/output aliasing is forbidden.
+
+Scatter subtracts `(potential_low - potential_high)/2` on each open interblock
+wet-to-wet face and `potential/2` at positive explicit anchors. Equal component
+pairs receive equal deltas, preserving fine subface variation. Local RHS uses
+**actual represented velocity changes**, including scatter roundoff, and the
+complete supplied source. Each component checks compatibility with the stage-2
+eight-child f32 summation allowance, using absolute source and removed-flux
+magnitudes. No mismatch is removed. Each block uses direct Cholesky after gauging
+its lowest wet cell per component; closed, dry and absent edges never connect.
+The eight slots follow the 2³ mathematical block, with no new resolution,
+iteration or quality cap. Nonpositive/nonfinite pivots are explicit breakdowns.
+Local correction changes only open internal wet-to-wet faces, leaving all
+scattered boundary/anchor velocities bitwise fixed.
+
+`boundary_velocity`, final `velocity`, `local_pressure` and separate projection
+`progress` are reusable outputs. Progress reports status, first failing cell
+slot and true maximum fine-cell integrated residual, including gauge rows.
+Invalid inputs, incompatible local sources and breakdowns poison all stage-3
+outputs. Non-converged coarse status propagates without a local fallback.
+Storage is `120 * cell_count + 80` bytes including stage 2, excluding inputs.
+There is no CPU graph construction, readback or per-encode allocation.
+
+`component_projection_matches_reference` loads fresh f64 expectations from
+`scripts/lentine_reference.py --gpu-projection-fixtures`. It compares boundary
+velocities, local gauge-fixed pressures, final velocities, physical source
+conservation and reported residuals over the ten stage-2 topologies. It also
+checks fixed/closed/dry faces, poisoned scratch reuse, invalid values, a finite
+scatter whose delta is lost to rounding, and recovery after failure. The f64
+CPU tests cover parallel-subface variation, gauge invariance and moving-solid
+sources. GPU execution remains required before declaring stage 3 proven.
+
+**Remaining integration.** Stage 1 has a standalone block gather retaining
+that solid source; the old gather alone cannot supply component constraints.
+Stage 2 has passed its GPU value proof. Stage 3 is standalone and awaiting its
+GPU value proof. Stage 4 switches Solve Level 1 only after those checks.
+Stage 5 is the paper's connected fine-grid free-surface solve across mixed blocks, not independent
+Dirichlet solves inside each mixed block. Stage 6 must preserve the density
+solve's prescribed source and account for velocity changes from dynamic-body
+reaction; applying a local projection and then the old prolonged-pressure
+reaction is not a coupling proof. Odd domain edges and cut-induced components
+are covered by the passed stage-2 proof and the unrun stage-3 proof; integrated
+handling remains unfinished.
+BUG-lxxl stays open.
+
+**Validation (CPU only).** Run the executable directly:
+
+```sh
+scripts/lentine_reference.py --filter component
+```
+
+The cut-wall counterexample now projects separate +1/−1 component sources
+(error 1.67e-16). Sealed two-pocket cases at 4×2×2 and 7×3×2 exercise weighted
+cuts, odd edges, independent gauges, unchanged outer faces during the local
+solve, and isolation when one pocket's source changes (worst error 7.22e-15).
+They reject globally balanced but individually incompatible pocket sources.
+The full-water block and lattice gather proofs also pass (4.44e-16 and
+2.22e-16 respectively); filters are `full_water`, `lattice`, `reject`, and
+`coarse_balance`. The reference is executable and needs no third-party package.
+
+The stage-2 component proof passed on the lead’s GPU run. The inherited
+`pressure_module_lentine_flux_conserves_blocks` remains a distinct gather proof.
+Stage-3 build/check results and the exact lead GPU command are in the slot
+handoff. Compilation and CPU shader validation do not establish GPU behaviour;
+no stage-3 GPU execution or performance measurement has occurred.
 
 ## Appendix — the tile count on the fixture
 

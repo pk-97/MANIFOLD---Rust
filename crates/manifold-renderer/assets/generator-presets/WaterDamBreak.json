@@ -647,7 +647,7 @@
         },
         "surface_particle_scale": {
           "type": "Float",
-          "value": 2.2
+          "value": 3.0
         },
         "surface_smoothing": {
           "type": "Float",

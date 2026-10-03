@@ -1,10 +1,10 @@
 use manifold_core::Seconds;
 use manifold_physics::{
-    FieldInput, FieldValue, TickStamp, VectorField,
     input::{AppliedEvent, EventQueue, EventStamp},
+    FieldInput, FieldValue, TickStamp, VectorField,
 };
 
-use super::{FIXED_TICK, IMPULSE_CAPACITY, MAX_BODIES, RigidSimulation, TARGET_SLOTS};
+use super::{RigidSimulation, FIXED_TICK, IMPULSE_CAPACITY, MAX_BODIES, TARGET_SLOTS};
 
 /// A fixed set of ordinary body slots and the reset-latched copy group.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -188,7 +188,10 @@ impl RigidSimulation {
         self.impulse_receipts.drain(..)
     }
 
-    pub(super) fn validate_impulse_targets(&self, targets: RigidImpulseTargets) -> Result<(), String> {
+    pub(super) fn validate_impulse_targets(
+        &self,
+        targets: RigidImpulseTargets,
+    ) -> Result<(), String> {
         if targets.is_empty() {
             return Err("Physics: impulse targets must select a body or copies".into());
         }

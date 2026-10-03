@@ -29,7 +29,7 @@ fn vortex_event(
         .scaled(0.5)
         .expect("valid vortex scale");
     let stamp = runtime
-        .impulse_stamp(Seconds::ZERO, VORTEX_SEQUENCE)
+        .impulse_stamp(Seconds(TICK), VORTEX_SEQUENCE)
         .expect("accepted zero-time vortex stamp");
     runtime
         .enqueue_scene_impulse(
@@ -63,22 +63,26 @@ fn run_case(
     let mut runtime = FluidRuntime::default();
     super::observe(&mut runtime, &fixture, 0.0, 0.0, colliders);
     runtime.advance(true).expect("prepare vortex fixture");
+    // Initial liquid volumes seed at the end of the first native substep.
+    // Start the vortex trace with liquid already surrounding the collider.
+    super::observe(&mut runtime, &fixture, TICK, 0.0, colliders);
+    runtime.advance(true).expect("seed vortex fixture");
     let initial = runtime
         .coupled_rigid_frame()
         .expect("initial coupled frame")
         .clone();
-    assert_eq!(initial.stamp.tick, 0);
+    assert_eq!(initial.stamp.tick, 1);
     assert!(finite_frame(&initial));
     vortex_event(&mut runtime, &fixture);
 
     if batched {
         for tick in 1..=OUTER_TICKS {
-            super::observe(&mut runtime, &fixture, tick as f64 * TICK, 0.0, colliders);
+            super::observe(&mut runtime, &fixture, (tick + 1) as f64 * TICK, 0.0, colliders);
         }
         runtime.advance(true).expect("batched vortex trace");
     } else {
         for tick in 1..=OUTER_TICKS {
-            super::observe(&mut runtime, &fixture, tick as f64 * TICK, 0.0, colliders);
+            super::observe(&mut runtime, &fixture, (tick + 1) as f64 * TICK, 0.0, colliders);
             runtime.advance(true).expect("vortex trace");
             assert!(finite_frame(
                 runtime
@@ -91,9 +95,9 @@ fn run_case(
         .coupled_rigid_frame()
         .expect("final coupled frame")
         .clone();
-    assert_eq!(final_frame.stamp.tick, OUTER_TICKS);
+    assert_eq!(final_frame.stamp.tick, OUTER_TICKS + 1);
     assert_eq!(final_frame.stamp.epoch, runtime.epoch);
-    assert_eq!(runtime.completed_tick, OUTER_TICKS);
+    assert_eq!(runtime.completed_tick, OUTER_TICKS + 1);
     assert!(finite_frame(&final_frame));
     assert!(runtime.stats.particles > 0);
     assert!(!runtime.vertices.is_empty());
@@ -106,7 +110,7 @@ fn run_case(
     super::observe(
         &mut runtime,
         &fixture,
-        OUTER_TICKS as f64 * TICK,
+        (OUTER_TICKS + 1) as f64 * TICK,
         0.0,
         colliders,
     );
@@ -136,7 +140,7 @@ fn fluid_coupled_liquid_vortex_transfers_positive_roll_only_through_selected_col
             "vortex viscosity={viscosity}: coupled pos={:?} rot={:?}; uncoupled pos={:?} rot={:?}",
             coupled.pos, coupled.rot_euler, uncoupled.pos, uncoupled.rot_euler
         );
-        assert_eq!(coupled.stamp.tick, OUTER_TICKS);
+        assert_eq!(coupled.stamp.tick, OUTER_TICKS + 1);
         assert!(coupled.stamp.epoch > 0);
         assert!(coupled.particles > 0 && coupled.surface_vertices > 0);
         assert!(uncoupled.particles > 0 && uncoupled.surface_vertices > 0);

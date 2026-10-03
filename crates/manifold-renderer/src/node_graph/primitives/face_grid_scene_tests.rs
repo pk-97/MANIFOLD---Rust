@@ -308,13 +308,10 @@ fn face_grid_demo_gpu_flip_and_matter_side_by_side() {
         // Both solvers carry velocity on the liquid's own faces and across
         // one layer; only GPU FLIP's extension also fills the layer along the
         // axis (MATTER_FACE_VALID_LAYERS is 0 for that reason).
-        // GPU FLIP's transfer kernel does not reach the far faces of a cell
-        // whose particles sit near a wall (the engine's Wyvill radius, half a
-        // cell's diagonal), so extension fills them, and beside a wall it
-        // copies the wall face's held 0: a thin film on a side wall carries
-        // exactly zero across it. A face read here is only its velocity, so
-        // such a zero cannot be told from an empty face; 1% of a layer is
-        // allowed for them.
+        // Keep the original 1% allowance for physically stationary faces:
+        // this readback contains velocity, not validity. Wall zeros may
+        // contribute to extension averages but must not seed valid zero
+        // fronts ahead of the fluid (BUG-2dxjf).
         let gpu_flip = name == "GPU FLIP";
         let full = if gpu_flip { 3 } else { 2 };
         for (layer, &(carrying, counted)) in shares.iter().enumerate().take(full) {

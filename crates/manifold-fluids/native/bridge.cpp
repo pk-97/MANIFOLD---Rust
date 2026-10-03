@@ -702,6 +702,8 @@ void write_stats(const FluidSimulationFrameStats &native, ManifoldFluidsFrameSta
     stats->substeps = static_cast<uint32_t>(native.substeps);
     stats->simulation_ms = native.timing.total * 1000.0;
     stats->meshing_ms = native.timing.mesh * 1000.0;
+    stats->cap_hit = static_cast<uint32_t>(native.capHit);
+    stats->numerical_recovery = static_cast<uint32_t>(native.numericalRecovery);
 }
 
 } // namespace
@@ -1510,6 +1512,33 @@ extern "C" int manifold_fluids_world_step(void *world, double dt,
     });
 }
 
+extern "C" int manifold_fluids_world_step_live(void *world, double dt,
+                                                 ManifoldFluidsFrameStats *stats_out) {
+    return guarded([&] {
+        if (world == nullptr) {
+            throw std::invalid_argument("world pointer must be non-null");
+        }
+        auto *native = static_cast<NativeWorld *>(world);
+        native->simulation->beginLiveUpdate(dt);
+        try {
+            while (native->simulation->isUpdateInProgress()) {
+                const double time_step = native->simulation->nextUpdateTimeStep();
+                if (time_step == 0.0) {
+                    break;
+                }
+                native->simulation->advanceUpdate(time_step);
+            }
+            native->simulation->finishUpdate();
+        } catch (...) {
+            if (native->simulation->isUpdateInProgress()) {
+                native->simulation->abortUpdate();
+            }
+            throw;
+        }
+        write_stats(native->simulation->getFrameStatsData(), stats_out);
+    });
+}
+
 extern "C" int manifold_fluids_world_begin_frame(void *world, double dt) {
     return guarded([&] {
         if (world == nullptr) { throw std::invalid_argument("world pointer must be non-null"); }
@@ -1518,6 +1547,18 @@ extern "C" int manifold_fluids_world_begin_frame(void *world, double dt) {
         if (native->rigid_coupling) {
             // A new frame cannot expose or reuse the previous frame's last
             // accepted exchange, even before its first body upload.
+            native->rigid_coupling->invalidate();
+            native->rigid_input_ready = false;
+        }
+    });
+}
+
+extern "C" int manifold_fluids_world_begin_live_frame(void *world, double dt) {
+    return guarded([&] {
+        if (world == nullptr) { throw std::invalid_argument("world pointer must be non-null"); }
+        auto *native = static_cast<NativeWorld *>(world);
+        native->simulation->beginLiveUpdate(dt);
+        if (native->rigid_coupling) {
             native->rigid_coupling->invalidate();
             native->rigid_input_ready = false;
         }
@@ -2351,13 +2392,55 @@ extern "C" int manifold_fluids_oracle_curvature(const float *phi, uint32_t isize
     });
 }
 
-// FLIP's own emitter on a lifecycle's last fields (GPU_WHITEWATER_DESIGN.md
-// section 3.7, O2): the liquid particles at `positions` (scene metres, three
-// floats each) become the markers, `curvature` (cell centres) the curvature
-// grid, and one update runs with emission on, turbulence emission 0 and
-// lifetime variance 0, so it emits, advances, retypes and ages as FLIP does.
-// Emission is off again afterwards.
-extern "C" int manifold_fluids_oracle_emit(void *lifecycle, const float *curvature,
+// Test-only lattice values and samples from the unchanged TurbulenceField.
+extern "C" int manifold_fluids_oracle_turbulence(void *lifecycle, float *values,
+                                                const float *positions, size_t count,
+                                                float *samples) {
+    return guarded([&] {
+        NativeWhitewater &native = whitewater_of(lifecycle);
+        if (!native.fields_set || values == nullptr ||
+            (count && (positions == nullptr || samples == nullptr))) {
+            throw std::invalid_argument("oracle turbulence needs fields and outputs");
+        }
+        TurbulenceField field;
+        field.calculateTurbulenceField(&native.velocity, native.liquid);
+        for (int k = 0; k < native.ksize; ++k) {
+            for (int j = 0; j < native.jsize; ++j) {
+                for (int i = 0; i < native.isize; ++i) {
+                    values[i + native.isize * (j + native.jsize * k)] = field(i, j, k);
+                }
+            }
+        }
+        for (size_t i = 0; i < count; ++i) {
+            const float *p = positions + 3 * i;
+            vmath::vec3 local = vmath::vec3(p[0], p[1], p[2]) - native.origin;
+            if (!finite3(p) || !Grid3d::isPositionInGrid(local, native.dx,
+                native.isize, native.jsize, native.ksize)) {
+                throw std::invalid_argument("oracle turbulence sample outside grid");
+            }
+            samples[i] = field.evaluateTurbulenceAtPosition(local);
+        }
+    });
+}
+
+// Test-only controls through the public API; the vendored code stays unchanged.
+extern "C" int manifold_fluids_oracle_emission_options(void *lifecycle,
+    double wavecrest, double turbulence, double minimum, double maximum,
+    double generation, double speed, double influence) {
+    return guarded([&] {
+        NativeWhitewater &native = whitewater_of(lifecycle);
+        auto &sim = *native.simulation;
+        sim.setDiffuseParticleWavecrestEmissionRate(wavecrest);
+        sim.setDiffuseParticleTurbulenceEmissionRate(turbulence);
+        sim.setMinTurbulence(minimum);
+        sim.setMaxTurbulence(maximum);
+        sim.setEmitterGenerationRate(generation);
+        sim.setSprayEmissionSpeed(speed);
+        native.influence.fill(influence);
+    });
+}
+
+extern "C" int manifold_fluids_oracle_emit_configured(void *lifecycle, const float *curvature,
                                            const float *positions, size_t count, double dt) {
     return guarded([&] {
         NativeWhitewater &native = whitewater_of(lifecycle);
@@ -2386,11 +2469,17 @@ extern "C" int manifold_fluids_oracle_emit(void *lifecycle, const float *curvatu
         simulation.setEmitterGenerationBounds(AABB(0.0, 0.0, 0.0, native.isize * native.dx,
                                                    native.jsize * native.dx,
                                                    native.ksize * native.dx));
-        simulation.setDiffuseParticleTurbulenceEmissionRate(0.0);
         simulation.setDiffuseParticleLifetimeVariance(0.0);
         simulation.update(params);
         simulation.disableDiffuseParticleEmission();
         native.markers = ParticleSystem();
     });
+}
+extern "C" int manifold_fluids_oracle_emit(void *lifecycle, const float *curvature,
+                                           const float *positions, size_t count, double dt) {
+    const int configured = manifold_fluids_oracle_emission_options(
+        lifecycle, 175.0, 0.0, 100.0, 200.0, 1.0, 1.0, 1.0);
+    if (!configured) { return configured; }
+    return manifold_fluids_oracle_emit_configured(lifecycle, curvature, positions, count, dt);
 }
 #endif

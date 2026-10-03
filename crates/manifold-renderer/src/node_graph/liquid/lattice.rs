@@ -327,6 +327,18 @@ mod tests {
                 while type_of(&flat, upstream.0) == Some("node.smooth_lattice") {
                     upstream = source(upstream.0, "levelset");
                 }
+                // Optional closing is three distinct operations: grow,
+                // rebuild distance, shrink. Solids still clip last.
+                if type_of(&flat, upstream.0) == Some("node.offset_lattice") {
+                    assert_eq!(upstream.1, "out");
+                    upstream = source(upstream.0, "levelset");
+                    assert_eq!(type_of(&flat, upstream.0), Some("node.redistance_lattice"));
+                    assert_eq!(upstream.1, "out");
+                    upstream = source(upstream.0, "levelset");
+                    assert_eq!(type_of(&flat, upstream.0), Some("node.offset_lattice"));
+                    assert_eq!(upstream.1, "out");
+                    upstream = source(upstream.0, "levelset");
+                }
                 let volume = upstream.0;
                 assert_eq!(upstream, (volume, "levelset"), "{type_id}: the clamp's level set");
                 assert_eq!(type_of(&flat, volume), Some("node.particle_volume"), "{type_id}: the clamp's level set");

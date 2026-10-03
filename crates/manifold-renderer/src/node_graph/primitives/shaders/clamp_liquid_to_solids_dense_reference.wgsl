@@ -1,11 +1,5 @@
-// Test-only pre-brick dense reference, main 4aab34f86.
-// node.clamp_liquid_to_solids — fusable BUFFER body; `levelset` is read at
-// the thread's own node, `solid` is gathered. One thread per level-set node:
-// border nodes read band (1/3 bin, outside), nodes inside a solid read at
-// least 0 (never liquid), and every other node passes through unchanged. The
-// node position and the trilinear solid sample are node.particle_volume's, so
-// on an unsmoothed level set this changes nothing. Nodes past the lattice,
-// and every node while there is no lattice, pass through.
+// Production FLIP field contract: native support and solid clipping,
+// with no preview-only border override. Test references are independent gathers.
 
 fn clamp_liquid_solid_at(p: vec3<f32>, lattice_min: vec3<f32>, spacing: vec3<f32>, nodes: vec3<u32>) -> f32 {
     let g = clamp((p - lattice_min) / spacing, vec3<f32>(0.0), vec3<f32>(nodes - vec3<u32>(1u)));
@@ -52,9 +46,6 @@ fn body(
         return e_levelset;
     }
     let ijk = vec3<u32>(idx % nodes.x, (idx / nodes.x) % nodes.y, idx / (nodes.x * nodes.y));
-    if any(ijk == vec3<u32>(0u)) || any(ijk == nodes - vec3<u32>(1u)) {
-        return cell_size / 3.0;
-    }
     let size = vec3<f32>(size_x, size_y, size_z);
     let lattice_min = vec3<f32>(center_x, center_y, center_z) - 0.5 * size;
     let p = lattice_min + vec3<f32>(ijk) * size / vec3<f32>(nodes - vec3<u32>(1u));

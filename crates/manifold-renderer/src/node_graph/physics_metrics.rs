@@ -17,6 +17,8 @@ pub struct PhysicsMetrics {
     pub body_count: u32,
     /// Maximum unprocessed physics time across worlds, in seconds.
     pub backlog_seconds: f32,
+    pub sim_step_cap_hit: bool,
+    pub sim_nonfinite: bool,
 }
 
 thread_local! {
@@ -24,6 +26,8 @@ thread_local! {
         physics_cpu_ms: 0.0,
         body_count: 0,
         backlog_seconds: 0.0,
+        sim_step_cap_hit: false,
+        sim_nonfinite: false,
     }) };
     static RECORDING_ENABLED: Cell<bool> = const { Cell::new(true) };
 }
@@ -81,12 +85,33 @@ pub fn record_frame(physics_ms: f32, body_count: u32, pending_seconds: f32) {
                     0.0
                 },
             body_count: current.body_count.saturating_add(body_count),
+            sim_step_cap_hit: current.sim_step_cap_hit,
+            sim_nonfinite: current.sim_nonfinite,
             backlog_seconds: current.backlog_seconds.max(if pending_seconds.is_finite() {
                 pending_seconds.max(0.0)
             } else {
                 0.0
             }),
         });
+    });
+}
+
+/// Add completed-time telemetry from a liquid world without double-counting
+/// rigid bodies or their CPU cost. Submitted GPU endpoints are not completion.
+#[inline]
+pub fn record_simulation(target: f64, completed: f64, cap_hit: bool, nonfinite: bool) {
+    if !RECORDING_ENABLED.with(Cell::get) {
+        return;
+    }
+    FRAME_METRICS.with(|metrics| {
+        let mut current = metrics.get();
+        let lag = target - completed;
+        if lag.is_finite() {
+            current.backlog_seconds = current.backlog_seconds.max(lag.max(0.0) as f32);
+        }
+        current.sim_step_cap_hit |= cap_hit;
+        current.sim_nonfinite |= nonfinite || !lag.is_finite();
+        metrics.set(current);
     });
 }
 
@@ -105,6 +130,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn live_interval_metrics_use_completed_time_and_aggregate_warnings() {
+        begin_frame();
+        record_simulation(2.0, 1.875, true, false);
+        record_simulation(8.0, 8.0, false, true);
+        record_frame(1.0, 3, 0.05);
+        let metrics = take_frame();
+        assert_eq!(metrics.backlog_seconds, 0.125);
+        assert!(metrics.sim_step_cap_hit && metrics.sim_nonfinite);
+        assert_eq!(metrics.body_count, 3);
+        begin_frame();
+        record_simulation(0.0, 0.0, false, false);
+        assert_eq!(take_frame(), PhysicsMetrics::default());
+    }
+
+    #[test]
     fn records_multiple_worlds_and_resets_on_take() {
         begin_frame();
         record_frame(1.25, 2, 0.25);
@@ -116,6 +156,7 @@ mod tests {
                 physics_cpu_ms: 2.0,
                 body_count: 5,
                 backlog_seconds: 0.75,
+                ..PhysicsMetrics::default()
             }
         );
         assert_eq!(take_frame(), PhysicsMetrics::default());
@@ -148,6 +189,7 @@ mod tests {
                 physics_cpu_ms: 8.0,
                 body_count: 8,
                 backlog_seconds: 8.0,
+                ..PhysicsMetrics::default()
             }
         );
     }

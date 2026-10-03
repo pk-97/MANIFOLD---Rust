@@ -1,19 +1,5 @@
-// Test-only pre-brick dense reference, main 4aab34f86.
-// node.particle_volume — fusable BUFFER body, GATHER. One thread per level-set
-// node: the distance to the nearest blob ellipsoid in the node's 27 bins,
-// a·(|G·(x − c)| − 1) with a the blob's longest axis (exact for a sphere),
-// negative inside, capped at band = 1/3 bin outside (GPU_FLUID_SURFACE_DESIGN.md
-// D18, P6e; never an atomic splat). node.shape_particle_blobs keeps every blob
-// within 2/3 bin of its particle, so a blob the search misses is at least band
-// away and the cap is exact. Band = half the reach is the FLIP Fluids mesher's
-// ratio (its field is exact out to 1.5 radii). A node inside a solid is capped at 0 — never
-// inside the liquid, as upstream's scalar field caps solid vertices — and the
-// lattice border is outside, so the surface closes (D15).
-//
-// ABI: `blobs` (FluidBlob → Element), `cell_ranges` (CellRange → Element2) and
-// `solid` (f32) are gathered; the output is one f32 per node. The bin grid is
-// the sort's (`bins_x/y/z`), never ceil(size / cell_size) again: fast-math
-// division can land one bin past the ranges the sort wrote.
+// Production FLIP field contract: native support and solid clipping,
+// with no preview-only border override. Test references are independent gathers.
 
 fn pv_solid(p: vec3<f32>, lattice_min: vec3<f32>, spacing: vec3<f32>, nodes: vec3<u32>) -> f32 {
     let g = clamp((p - lattice_min) / spacing, vec3<f32>(0.0), vec3<f32>(nodes - vec3<u32>(1u)));
@@ -48,8 +34,11 @@ fn body(
     bins_x: i32,
     bins_y: i32,
     bins_z: i32,
+    band_extra: f32,
 ) -> f32 {
-    let band = cell_size / 3.0;
+    var radius = 0.0;
+    for (var k = 0u; k < arrayLength(&buf_blobs); k += 1u) { radius = max(radius, buf_blobs[k].center_radius.w); }
+    let band = 3.0 * radius;
     let solid_nodes = max(vec3<u32>(vec3<f32>(nodes_x, nodes_y, nodes_z)), vec3<u32>(2u));
     let scale = u32(clamp(resolution_scale, 1, 8));
     let nodes = (solid_nodes - vec3<u32>(1u)) * scale + vec3<u32>(1u);
@@ -58,43 +47,26 @@ fn body(
         return band;
     }
     let ijk = vec3<u32>(idx % nodes.x, (idx / nodes.x) % nodes.y, idx / (nodes.x * nodes.y));
-    if any(ijk == vec3<u32>(0u)) || any(ijk == nodes - vec3<u32>(1u)) {
-        return band;
-    }
     let size = vec3<f32>(size_x, size_y, size_z);
     let lattice_min = vec3<f32>(center_x, center_y, center_z) - 0.5 * size;
     let p = lattice_min + vec3<f32>(ijk) * size / vec3<f32>(nodes - vec3<u32>(1u));
 
     var phi = band;
-    let home = clamp(vec3<i32>(floor((p - lattice_min) / cell_size)), vec3<i32>(0), bins - vec3<i32>(1));
-    for (var dz = -1; dz <= 1; dz = dz + 1) {
-        for (var dy = -1; dy <= 1; dy = dy + 1) {
-            for (var dx = -1; dx <= 1; dx = dx + 1) {
-                let b = home + vec3<i32>(dx, dy, dz);
-                if any(b < vec3<i32>(0)) || any(b >= bins) {
-                    continue;
-                }
-                let range = buf_cell_ranges[u32(b.x + bins.x * (b.y + bins.y * b.z))];
-                for (var k = range.start; k < range.start + range.count; k = k + 1u) {
-                    let blob = buf_blobs[k];
-                    let reach = blob.center_radius.w;
-                    let d = p - blob.center_radius.xyz;
-                    // Past reach + band the blob cannot go below the cap.
-                    let limit = reach + band;
-                    if !(reach > 0.0) || dot(d, d) >= limit * limit {
-                        continue;
-                    }
-                    let diag = blob.shape_diag;
-                    let off = blob.shape_off;
-                    let v = vec3<f32>(
-                        diag.x * d.x + off.x * d.y + off.y * d.z,
-                        off.x * d.x + diag.y * d.y + off.z * d.z,
-                        off.y * d.x + off.z * d.y + diag.z * d.z,
-                    );
-                    phi = min(phi, reach * (length(v) - 1.0));
-                }
-            }
-        }
+    let h = size / vec3<f32>(nodes - vec3<u32>(1u));
+    for (var k = 0u; k < arrayLength(&buf_blobs); k += 1u) {
+        let blob = buf_blobs[k];
+        let r = blob.center_radius.w;
+        if !(r > 0.0) { continue; }
+        let first = vec3<i32>(floor((blob.center_radius.xyz - vec3<f32>(1.5 * r) - lattice_min) / h));
+        let last = vec3<i32>(floor((blob.center_radius.xyz + vec3<f32>(1.5 * r) - lattice_min) / h)) + vec3<i32>(1);
+        if any(vec3<i32>(ijk) < first) || any(vec3<i32>(ijk) > last) { continue; }
+        let d = p - blob.center_radius.xyz;
+        let diag = blob.shape_diag;
+        let off = blob.shape_off;
+        let v = vec3<f32>(diag.x*d.x + off.x*d.y + off.y*d.z,
+            off.x*d.x + diag.y*d.y + off.z*d.z,
+            off.y*d.x + off.z*d.y + diag.z*d.z);
+        phi = min(phi, r * (length(v) - 1.0));
     }
     let spacing = size / vec3<f32>(solid_nodes - vec3<u32>(1u));
     if pv_solid(p, lattice_min, spacing, solid_nodes) < 0.0 {

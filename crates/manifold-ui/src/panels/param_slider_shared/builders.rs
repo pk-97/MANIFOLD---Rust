@@ -2116,6 +2116,11 @@ pub(crate) fn build_param_row(
         ));
     }
 
+    for node in [Some(slider.track), Some(slider.value_text), slider.label].into_iter().flatten() {
+        if let Some(node) = tree.get_node_mut(node) {
+            node.tooltip.clone_from(&info.spec.tooltip);
+        }
+    }
     ids.slider = Some(slider);
 
     // D/E buttons (right of the slider row), at the column x's computed up top.

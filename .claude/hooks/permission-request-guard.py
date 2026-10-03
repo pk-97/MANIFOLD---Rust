@@ -12,7 +12,7 @@ for ALL of them, right before the terminal prompt, and it may answer allow/deny.
 
 Policy:
   - Worker seat (payload carries `agent_id` / `agent_type` / `teammate_name`; lead
-    payloads carry none — same discriminator as worker-seat-charge.py): DENY with a
+    payloads carry none — same discriminator as hook_telemetry.worker_no_prompt): DENY with a
     reroute note. A worker that cannot proceed without a human stops and reports up;
     the lead or Peter decides. Nothing here ever ALLOWS — this hook never widens
     what runs, so docs/PERMISSION_BOUNDARY.md section 4 is untouched.

@@ -1607,6 +1607,7 @@ mod tests {
                 is_line_based: false,
                     layer_types: None,
                 params: vec![ParamSpecDef {
+                    tooltip: None,
                     id: param_id.to_string(),
                     name: "Amount".to_string(),
                     min: 0.0,
@@ -1692,6 +1693,7 @@ mod tests {
     fn seed_manifest_param(inst: &mut manifold_core::effects::PresetInstance, param_id: &str) {
         use manifold_core::effect_graph_def::ParamSpecDef;
         inst.params.push(Param::bundled(ParamSpecDef {
+            tooltip: None,
             id: param_id.to_string(),
             name: "Amount".to_string(),
             min: 0.0,

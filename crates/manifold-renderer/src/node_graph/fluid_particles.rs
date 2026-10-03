@@ -51,7 +51,7 @@ pub struct FluidBlob {
     pub center_radius: [f32; 4],
     /// Symmetric shape matrix G: xx, yy, zz; w = det(G).
     pub shape_diag: [f32; 4],
-    /// G: xy, xz, yz; w = 0.
+    /// G: xy, xz, yz; w = centre displacement from the sorted particle.
     pub shape_off: [f32; 4],
 }
 

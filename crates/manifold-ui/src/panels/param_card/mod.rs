@@ -719,7 +719,8 @@ impl ParamCardPanel {
     /// `is_trigger_gate` ones, so this no longer filters by
     /// `info.is_trigger_gate` — a continuous/Step/Random drawer's meter now
     /// updates exactly like a trigger-gate drawer's. Keyed on
-    /// `(effect_id, param_id)` via `manifold_foundation::
+    /// `(params owner, param_id)` — the card's own instance, or for a scene
+    /// modifier card the generator that owns its host params — via `manifold_foundation::
     /// fire_meter_key_for_param` — the SAME constructor the content-thread
     /// capture uses — so `fire_level` (built at the app boundary from
     /// `ContentState::fire_meters`, a `manifold-core` type `manifold-ui`
@@ -735,12 +736,13 @@ impl ParamCardPanel {
         fire_level: &dyn Fn(u64) -> Option<f32>,
         dt: f32,
     ) {
+        let owner = self.modifier.as_ref().map_or(&self.effect_id, |m| &m.params_owner);
         for (pi, cfg) in self.row_host.audio_configs.iter().enumerate() {
             let Some((dids, _)) = cfg else { continue };
             let Some(info) = self.rows.get(pi) else { continue };
             let Some(Some(meter)) = dids.meters.first() else { continue };
             let key = manifold_foundation::fire_meter_key_for_param(
-                self.effect_id.as_str(),
+                owner.as_str(),
                 info.id.as_ref(),
             );
             let level = fire_level(key).unwrap_or(0.0);
@@ -1253,6 +1255,7 @@ pub(super) mod tests {
                 ParamRow {
                     id: std::borrow::Cow::Borrowed("radius"),
                     spec: RowSpec {
+                        tooltip: None,
                         name: "Radius".into(),
                         min: 0.0,
                         max: 100.0,
@@ -1284,6 +1287,7 @@ pub(super) mod tests {
                 ParamRow {
                     id: std::borrow::Cow::Borrowed("strength"),
                     spec: RowSpec {
+                        tooltip: None,
                         name: "Strength".into(),
                         min: 0.0,
                         max: 1.0,
@@ -1328,6 +1332,7 @@ pub(super) mod tests {
         c.rows.push(ParamRow {
             id: std::borrow::Cow::Borrowed("invert"),
             spec: RowSpec {
+                tooltip: None,
                 name: "Invert".into(),
                 min: 0.0,
                 max: 1.0,
@@ -1359,6 +1364,7 @@ pub(super) mod tests {
         c.rows.push(ParamRow {
             id: std::borrow::Cow::Borrowed("reset"),
             spec: RowSpec {
+                tooltip: None,
                 name: "Reset".into(),
                 min: 0.0,
                 max: 0.0,
@@ -1603,6 +1609,7 @@ pub(super) mod tests {
         c.rows.push(ParamRow {
             id: std::borrow::Cow::Borrowed("clip_trigger"),
             spec: RowSpec {
+                tooltip: None,
                 name: "Clip Trigger".into(),
                 min: 0.0,
                 max: 1.0,
@@ -2143,6 +2150,20 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn manifest_slider_tooltip_reaches_the_interactive_tree() {
+        let mut config = generator_config_with_mappable();
+        config.rows[0].spec.tooltip = Some("Shape the surface.".into());
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&config);
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 340.0, 200.0));
+        assert!(tree.nodes().iter().any(|node| {
+            node.flags.contains(UIFlags::INTERACTIVE)
+                && node.tooltip.as_deref() == Some("Shape the surface.")
+        }));
+    }
+
+    #[test]
     fn generator_author_context_shows_mapping_chevron() {
         let mut tree = UITree::new();
         let mut panel = ParamCardPanel::new();
@@ -2391,6 +2412,7 @@ pub(super) mod tests {
         config.modifier = Some(crate::param_surface::ModifierCardInfo {
             instance_id: manifold_foundation::NodeId::new("modifier-1"),
             layer_id: LayerId::new("layer-1"),
+            params_owner: Default::default(),
             enabled_label: "Enabled".into(),
             stack_index: 0,
             stack_len: 1,
@@ -3114,6 +3136,7 @@ pub(super) mod tests {
         c.modifier = Some(crate::param_surface::ModifierCardInfo {
             instance_id: manifold_foundation::NodeId::new("modifier-1"),
             layer_id: manifold_foundation::LayerId::new("layer-a"),
+            params_owner: Default::default(),
             enabled_label: "Enabled".into(),
             stack_index: 1,
             stack_len: 3,
@@ -3237,6 +3260,7 @@ pub(super) mod tests {
         config.modifier = Some(crate::param_surface::ModifierCardInfo {
             instance_id: manifold_foundation::NodeId::new("modifier-camera"),
             layer_id: manifold_foundation::LayerId::new("layer-camera"),
+            params_owner: Default::default(),
             enabled_label: "Camera Travel".into(),
             stack_index: 0,
             stack_len: 1,
@@ -3313,6 +3337,7 @@ pub(super) mod tests {
                 ParamRow {
                     id: std::borrow::Cow::Borrowed("speed"),
                     spec: RowSpec {
+                        tooltip: None,
                         name: "Speed".into(),
                         min: 0.0,
                         max: 10.0,
@@ -3344,6 +3369,7 @@ pub(super) mod tests {
                 ParamRow {
                     id: std::borrow::Cow::Borrowed("invert"),
                     spec: RowSpec {
+                        tooltip: None,
                         name: "Invert".into(),
                         min: 0.0,
                         max: 1.0,
@@ -3375,6 +3401,7 @@ pub(super) mod tests {
                 ParamRow {
                     id: std::borrow::Cow::Borrowed("scale"),
                     spec: RowSpec {
+                        tooltip: None,
                         name: "Scale".into(),
                         min: 0.1,
                         max: 5.0,

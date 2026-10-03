@@ -1557,6 +1557,7 @@ mod tests {
         ParamRow {
             id: std::borrow::Cow::Borrowed(id),
             spec: RowSpec {
+                tooltip: None,
                 name: name.into(),
                 min: 0.0,
                 max: 1.0,
@@ -2505,6 +2506,7 @@ mod tests {
                 config.modifier = Some(crate::param_surface::ModifierCardInfo {
                     instance_id: manifold_foundation::NodeId::new(format!("modifier-{i}")),
                     layer_id: layer.clone(),
+                    params_owner: Default::default(),
                     enabled_label: "Enabled".into(),
                     stack_index: i,
                     stack_len: 3,

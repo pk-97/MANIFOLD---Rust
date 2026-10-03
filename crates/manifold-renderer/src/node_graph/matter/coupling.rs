@@ -50,7 +50,7 @@ pub fn decode(
 /// The D4 body term: the shortest `0.5·(dx/c)·√(m_b/(ρ0·A_b·dx))` over the
 /// dynamic coupled bodies, with `c` the wave speed. Errors, naming the
 /// body, when it needs more than [`MAX_SUBSTEPS`] substeps with `dt_f`.
-pub fn body_limit(owner: &LiquidRigidOwner, cell_size: f32, wave: f32, v_est: f32) -> Result<Option<f32>, String> {
+fn body_limit_details(owner: &LiquidRigidOwner, cell_size: f32, wave: f32) -> Option<(f32, usize, f32)> {
     let mut limit: Option<(f32, usize, f32)> = None;
     for (index, (face_area, row)) in owner.face_areas().zip(owner.rows()).enumerate() {
         if !takes_reaction(row) {
@@ -61,7 +61,17 @@ pub fn body_limit(owner: &LiquidRigidOwner, cell_size: f32, wave: f32, v_est: f3
             limit = Some((dt, index, face_area));
         }
     }
-    let Some((dt, index, face_area)) = limit else { return Ok(None) };
+    limit
+}
+
+/// Live retains the actual body CFL restriction even when it exceeds the
+/// numerical cap; the frame planner reports the cap and covers the remainder.
+pub fn live_body_limit(owner: &LiquidRigidOwner, cell_size: f32, wave: f32) -> Option<f32> {
+    body_limit_details(owner, cell_size, wave).map(|(dt, _, _)| dt)
+}
+
+pub fn body_limit(owner: &LiquidRigidOwner, cell_size: f32, wave: f32, v_est: f32) -> Result<Option<f32>, String> {
+    let Some((dt, index, face_area)) = body_limit_details(owner, cell_size, wave) else { return Ok(None) };
     if substeps_per_tick(cell_size, wave, v_est, Some(dt), None) > MAX_SUBSTEPS {
         let row = &owner.rows()[index];
         return Err(format!(
@@ -105,14 +115,14 @@ mod tests {
         let scale = ReactionScale { unit: 128.0, cell_size: 0.0625, offset: 0 };
         let mut words = [0i32; 16];
         words[1] = (16_777_216.0 / f64::from(scale.unit)) as i32;
-        owner.set_pending(PendingTick { tick: 0, stamp: 0 });
+        owner.set_pending(PendingTick { tick: 0, stamp: 0, interval: manifold_physics::stepping::StepInterval::new(manifold_core::Seconds((0) as f64 * TICK), manifold_core::Seconds(TICK)), offline: true });
         owner
             .settle_ready(Some(&scene), |_| true, |_, rows, impulses| decode(scale, rows, Some(&words[..]), impulses))
             .unwrap();
         let v = owner.rows()[0].linear_velocity[1];
         assert!((v - (1.0 - 9.81 * TICK as f32)).abs() < 1e-3, "{v}");
         let short = [0i32; 8];
-        owner.set_pending(PendingTick { tick: 1, stamp: 0 });
+        owner.set_pending(PendingTick { tick: 1, stamp: 0, interval: manifold_physics::stepping::StepInterval::new(manifold_core::Seconds((1) as f64 * TICK), manifold_core::Seconds(2.0 * TICK)), offline: true });
         let error = owner
             .settle_ready(Some(&scene), |_| true, |_, rows, impulses| decode(scale, rows, Some(&short[..]), impulses))
             .unwrap_err();

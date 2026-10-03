@@ -126,7 +126,8 @@ fn owner_frame_accepts_a_smaller_shared_step_without_changing_integration() {
     assert!((rest.0 - DT.0 / 2.0).abs() < 1e-12);
     frame.advance(rest).unwrap();
     assert_eq!(frame.next_substep().unwrap(), None);
-    assert_eq!(frame.finish().unwrap().substeps, 2);
+    let stats = frame.finish().unwrap();
+    assert_eq!(stats.substeps, 2);
     assert_same_motion(&mut regular, &mut staged);
 }
 
@@ -190,6 +191,63 @@ fn owner_frame_exhaustion_does_not_force_a_step_beyond_the_stability_bound() {
     );
     drop(frame);
     assert!(world.surface(&mut Vec::new()).is_err());
+}
+
+#[test]
+fn live_owner_frame_consumes_the_remainder_at_the_substep_cap() {
+    let mut world = scene(2, 2, [20.0, 0.0, 0.0]);
+    let mut frame = world.begin_live_frame(DT).unwrap();
+    let first = frame.next_substep().unwrap().unwrap();
+    assert!(first.0 < DT.0, "CFL should restrict the first live substep");
+    frame.advance(first).unwrap();
+
+    let remainder = frame.next_substep().unwrap().unwrap();
+    assert!(remainder.0 > 0.0);
+    assert!((first.0 + remainder.0 - DT.0).abs() < 1e-12);
+    frame.advance(remainder).unwrap();
+    assert_eq!(frame.next_substep().unwrap(), None);
+    let stats = frame.finish().unwrap();
+    assert_eq!(stats.substeps, 2);
+    assert!(stats.cap_hit);
+}
+
+#[test]
+fn live_owner_frame_event_split_retains_the_numerical_offer() {
+    let mut world = scene(1, 2, [20.0, 0.0, 0.0]);
+    let clear = UniformField::new([0.0; 3]).unwrap();
+    let mut frame = world.begin_live_frame(DT).unwrap();
+    let offered = frame.next_substep().unwrap().unwrap();
+    let first = Seconds(offered.0 * 0.5);
+    frame.set_fields(first, &[FieldInput {
+        field: &clear, acceleration: 1.0, delta_velocity: 0.0,
+    }]).unwrap();
+    frame.advance(first).unwrap();
+    let retained = frame.next_substep().unwrap().unwrap();
+    assert!((first.0 + retained.0 - offered.0).abs() < 1e-12);
+    frame.advance(retained).unwrap();
+    let remainder = frame.next_substep().unwrap().unwrap();
+    assert!((offered.0 + remainder.0 - DT.0).abs() < 1e-12);
+    frame.advance(remainder).unwrap();
+    assert_eq!(frame.next_substep().unwrap(), None);
+    let stats = frame.finish().unwrap();
+    assert_eq!(stats.substeps, 3, "two numerical offers plus one event split");
+    assert!(stats.cap_hit);
+}
+
+#[test]
+fn live_owner_frame_preserves_20_24_30_and_60_fps_intervals() {
+    for fps in [20.0, 24.0, 30.0, 60.0] {
+        let duration = Seconds(1.0 / fps);
+        let mut world = scene(1, 6, [0.0; 3]);
+        let mut frame = world.begin_live_frame(duration).unwrap();
+        let mut elapsed = 0.0;
+        while let Some(step) = frame.next_substep().unwrap() {
+            elapsed += step.0;
+            frame.advance(step).unwrap();
+        }
+        frame.finish().unwrap();
+        assert!((elapsed - duration.0).abs() < 1e-12, "fps={fps}");
+    }
 }
 
 #[test]

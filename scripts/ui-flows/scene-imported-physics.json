@@ -54,7 +54,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Mass (kg)"
+          "text": "Density (kg/m³)"
         }
       },
       "check": "Exists"
@@ -362,7 +362,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Mass (kg)"
+          "text": "Density (kg/m³)"
         }
       },
       "check": {
@@ -400,7 +400,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Mass (kg)"
+          "text": "Density (kg/m³)"
         }
       },
       "check": "Exists"

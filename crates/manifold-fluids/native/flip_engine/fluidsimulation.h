@@ -88,6 +88,8 @@ struct FluidSimulationFrameStats {
     int fluidParticles = 0;
     int diffuseParticles = 0;
     int performanceScore = 0;
+    int capHit = 0;
+    int numericalRecovery = 0;
 
     int pressureSolverEnabled = 1;
     int pressureSolverSuccess = 0;
@@ -277,6 +279,7 @@ public:
         Advance a frame through individually owned native substeps.
     */
     void beginUpdate(double dt);
+    void beginLiveUpdate(double dt);
     double nextUpdateTimeStep();
     void advanceUpdate(double dt);
     void finishUpdate();
@@ -1862,6 +1865,7 @@ private:
                                               vmath::vec3 fluidVelocity);
     double _predictMaximumMarkerParticleSpeed(double dt);
     double _getMaximumMarkerParticleSpeed();
+    void _recoverNonfiniteMarkerVelocities();
     double _getMaximumObstacleSpeed(double dt);
     void _updateTimingData();
     void _logStepInfo();
@@ -1871,7 +1875,7 @@ private:
     bool _isFluidOrWhitewaterInSimulation();
     bool _isFluidInSimulation();
     void _stepFluid(double dt);
-    void _beginUpdate(double dt, bool externallyStepped);
+    void _beginUpdate(double dt, bool externallyStepped, bool liveExternallyStepped = false);
     void _joinNativeThreadsNoexcept() noexcept;
 
     /*
@@ -2281,6 +2285,12 @@ private:
     bool _isUpdateInProgress = false;
     bool _isUpdateFailed = false;
     bool _isExternallySteppedUpdate = false;
+    bool _isLiveExternallySteppedUpdate = false;
+    bool _liveNumericalRecovery = false;
+    bool _liveCapHit = false;
+    int _liveNumericalSubsteps = 0;
+    double _liveOfferedTimeStepRemaining = 0.0;
+    std::vector<bool> _liveNonfiniteMarkerRemovals;
     RigidFluidCoupling *_rigidCoupling = nullptr;
     bool _hasOfferedUpdateTimeStep = false;
     double _offeredUpdateTimeStep = 0.0;

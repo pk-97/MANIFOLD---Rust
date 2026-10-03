@@ -43,14 +43,14 @@ The happy path of a landing is mechanical: fetch, merge `origin/main` into the b
 - **A judgment-tier model is the only orchestrator.** The lead. Never a lane model over lane models, at any depth.
 - **The lead steers before the lane spawns.** Every brief names the existing system the work rides on (the reuse target) and the conviction test that must fail before the fix. Building a parallel path is a brief violation.
 - **Lanes make exactly ONE commit, then STOP and report.** The lead reviews that commit before the lane continues. Wrong direction always shows in the first diff. An owner seat continued via `SendMessage` follows the same rule per continuation: one commit, stop, report.
-- **A lane's report is its final text turn, never a SendMessage** (hook-enforced, `lane-report-enforcer.py`). SendMessage is for mid-flight questions and for the lead's continuations.
+- **A lane's report is its final text turn, never a SendMessage.** The harness delivers that turn to the lead; a SendMessage copy doubles it. SendMessage is for mid-flight questions and for the lead's continuations.
 - **Lanes have no landing rights.** Lane branches are safe to abandon.
 - **Lanes never spawn agents.** Only the lead spawns.
 - **Decisions flow up.** "Existing system doesn't cover X" or "this needs a new module" = stop and report, never improvise.
 - **Review is the throttle.** About three owner seats live at once, plus short Sonnet lanes while review keeps up. Landing never outpaces review.
 - **Resume note in every brief.** Lane state = branch + findings doc, recoverable by the next session.
 - **Work items are beads.** Briefs reference bead ids.
-- **Lane health is scheduled, never Peter's job** (`lane-health-guard.py`, its docstring is the spec). Before a background lane spawn, arm a session `CronCreate` (30 min) whose prompt contains `lane-health-check`. Two consecutive idle checks with no report = stalled: message once, then stop the lane and escalate. Delete the job when no lanes run. Read-only consult forks need none.
+- **Lane health is scheduled, never Peter's job.** `scripts/fleet_health.py` is the automated check for stalled, blocked and unreviewed agent work; the lead reads its report, not the lanes. Two consecutive idle checks with no report = stalled: message once, then stop the lane and escalate.
 - **A failing lane is respawned once, never taken over.** Stop it, carry what it learned into a fresh brief, respawn. A second failure means the task was shaped wrong: the lead re-shapes it (with the consult seat if stuck). The lead does not grind lane work itself.
 - **Briefs restate the invariants every time:** one commit then stop, pathspec commits, no landing, worktree via the slot ring, explicit `model`, LOW effort.
 - **Launch defects are one deny that spells the corrected call** (`agent-launch-guard.py`). Names are `<slot>-<descriptive-task>`.
@@ -61,7 +61,7 @@ Lead context is the scarcest resource in the rig. Reach for cheap seats before d
 
 What never delegates: verification of evidence the lead acts on. A weaker model's omissions are invisible in its own summary, so the lead spot-checks the underlying code or data. **Visual verification: judgment-tier seats only.** Opus 5.5 workers render and judge their own headless stills as part of their gate (Peter re-approved 2026-09-29: "Opus 5.5 has strong visual skills now"); the lead looks at the same frames before anything lands and is the final call. Sonnet lanes never run headless-PNG or screenshot loops: briefs name the expected visual outcome and the lead renders and looks after the commit. Obsolete when: Sonnet-tier lanes show real visual judgment and Peter re-approves.
 
-**Debug escalation ladder (hook-enforced, `probe-loop-guard.py`).** For "this looks wrong and it's not obvious why": (1) lead semantic review of the seam first, the cheapest oracle and the strongest against this codebase's wiring bugs; (2) still stuck → the consult seat, a Fable fork reading the seam fresh, read-and-discuss only; (3) instrument probe loops last, delegated to an Opus diagnosis lane with the evidence table in the brief, never lead-run. The hook counts lead probe actions and same-file edit→run→re-edit loops: warns at 3, denies at 6 until `/tmp/manifold_seam_review.md` (the evidence table) exists.
+**Debug escalation ladder.** For "this looks wrong and it's not obvious why": (1) lead semantic review of the seam first, the cheapest oracle and the strongest against this codebase's wiring bugs; (2) still stuck → the consult seat, a Fable fork reading the seam fresh, read-and-discuss only; (3) instrument probe loops last, delegated to an Opus diagnosis lane with the evidence table in the brief, never lead-run. Three probes without a written evidence table is the signal to step back to (1).
 
 ## The consult seat
 
@@ -81,6 +81,8 @@ Slow flows come from agents re-deriving what the lead already knows. Every lane 
 - **The gate commands** it must run and what "done" means. Lanes run their own gates and may iterate at most twice per gate, then stop and report verbatim.
 - **Prescriptive imperatives** ("Run `cargo clippy -p manifold-ui -- -D warnings`", "Read `path:line`"), not "check X". Sonnet skips tool calls on soft phrasing.
 - **The reference to port from**, when one exists, and the instruction to name every deviation.
+- **The source and everything made from it.** Name the file that defines the contract and every file generated from or checked against it: builder, shipped JSON, catalog, UI flows, goldens. Regenerate from the source. A golden is refreshed only for a change the brief names, never because it fails.
+- **The fixes a merge must keep.** Name the other branch's fixes and the tests that prove them. After merging main, run those tests, even when the merge was clean.
 
 ## Verification
 
@@ -98,5 +100,5 @@ Use when a phase's judgment is done and only mechanical bulk remains.
 - **Command hygiene for auto mode:** single-purpose commands, no `$()` writes or repo-path redirects (`/tmp` and `/dev/null` are fine). A blocked command = park, never retry variants.
 - **Scope fence per night**, written into the queue: only pre-decided mechanical phases run.
 - **A report is a trigger, never a stopping point:** act on a lane completion within standing authority immediately; ending a turn on a status summary is the observed stall.
-- **Context ceiling for worker seats is hook-enforced** (`context-ceiling-guard.py`): warn 150K, stop 200K with a wrap-up lane (commit, handoff, report). The lead and any seat Peter is typing into are exempt. A well-shaped worker never nears 150K; hitting it is the defect signal. Rationale: `docs/TOKEN_ECONOMICS.md` section 3c (Cost inside a session grows without limit).
+- **Worker seats rotate at about 200K context:** commit, handoff, report, respawn. A well-shaped worker never nears 150K; hitting it is the defect signal. Rationale: `docs/TOKEN_ECONOMICS.md` section 3c (Cost inside a session grows without limit).
 - **Nudges are idempotent:** the lead either nudges or dispatches for a slice, never both.

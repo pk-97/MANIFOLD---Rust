@@ -105,9 +105,9 @@ Obsolete when: main stops being a locally-landed shared trunk (PR/CI-gated merge
   merge whose message lists every branch and tip. If the gate goes red, find
   the culprit by re-gating without each branch in turn, drop it with its name
   and the failure in the report, and land the rest. A single ready branch
-  still lands alone. Why: the gate costs 30-60 minutes (GPU proofs alone
-  about 16), so four branches one at a time cost four gates, and back-to-back
-  gates on the shared GPU run flaky. Mechanism: `scripts/land_wave.py --batch`
+  still lands alone. Shared passes avoid repeated checks of unchanged inputs.
+  Batching also avoids separate checks of overlapping changes.
+  Mechanism: `scripts/land_wave.py --batch`
   (module docstring is the spec, tests in `scripts/test_land_wave.py`).
 - **To land a workstream:** fetch → merge current `origin/main` into your
   branch → run `scripts/landing_gate.py --repo <worktree path>` (agents
@@ -138,6 +138,21 @@ Obsolete when: main stops being a locally-landed shared trunk (PR/CI-gated merge
   GPU-proof legs. The selected CPU tests retain the GPU lock because device use
   cannot be known cheaply; builds run outside that hold. Full touched-crate and
   workspace CPU suites run nightly through `trunk_health.py`.
+  Successful legs are stored in the Git common directory, shared by every
+  slot. Keys cover content, dependency crates, test selection, features,
+  toolchain, environment, fixtures and gate scripts. An unchanged leg prints
+  `[REUSED]` with its original commit and time. Failed or unidentifiable legs
+  run again. Standalone proof-gate runs and equivalent serial cargo proof
+  commands through `gpu_queue.py` share these records. Only exact selections
+  match; a different filter, target or skip list needs its own pass. Raw cargo
+  runs longer than the minimum hang allowance need the instrumented proof gate
+  before they can count as landing passes.
+  A fully reused test set needs no build or GPU lock. Build results alone
+  are not reusable after a slot cache is reclaimed. Nightly sweeps never reuse.
+  The gate requires a clean committed tree and refreshes the existing verdict
+  and flow marker after reuse. `land_branch.py` checks the proposed merge tree
+  before committing it. If main changed that tree, it merges main into the
+  slot and gates again; only changed inputs need new checks.
   Scoped runs skip any test measured over 60s in the committed
   `scripts/gpu_test_times.json` (tests missing from it run). Nightly
   `trunk_health.py` runs `--all --record-times /tmp/gpu_test_times.nightly.json`
@@ -197,8 +212,7 @@ Obsolete when: main stops being a locally-landed shared trunk (PR/CI-gated merge
   into main.
 - **Never use the Agent tool's built-in `isolation: "worktree"` for repo
   work** — it bases the worktree off the default branch, not your tip, and
-  bypasses the slot ring's cap. Hook-denied
-  (`agent-worktree-isolation-guard.py`), as is raw `git worktree add`
+  bypasses the slot ring's cap. Hook-denied, as is raw `git worktree add`
   (`preToolUseBash.py`). Worktrees come from `scripts/agent-worktree.py
   acquire` only, with the step-0 base-verification guard in the brief.
 

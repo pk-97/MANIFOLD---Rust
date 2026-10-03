@@ -27,8 +27,8 @@ struct Params {
     bricks_y: u32,
     bricks_z: u32,
     brick_count: u32,
-    _pad0: u32,
-    _pad1: u32,
+    band_extra: f32,
+    bounds_len: u32,
 }
 
 struct Blob {
@@ -47,6 +47,8 @@ struct CellRange {
 @group(0) @binding(2) var<storage, read> cell_ranges: array<CellRange>;
 @group(0) @binding(3) var<storage, read_write> prefix: array<u32>;
 @group(0) @binding(4) var<storage, read_write> bricks: array<u32>;
+
+@group(0) @binding(5) var<storage, read> bounds: array<f32>;
 
 const HALO_NODES: i32 = 5;
 
@@ -75,7 +77,18 @@ fn mark_brick(id: u32) -> u32 {
     let size = vec3<f32>(params.size_x, params.size_y, params.size_z);
     let lo = domain_min + vec3<f32>(lo_node) * size / vec3<f32>(nodes - vec3<u32>(1u));
     let hi = domain_min + vec3<f32>(hi_node) * size / vec3<f32>(nodes - vec3<u32>(1u));
-    let band = params.cell_size / 3.0;
+    let extra = params.band_extra + select(0.0, length(size / vec3<f32>(nodes - vec3<u32>(1u))), params.band_extra > 0.0);
+    var bound = vec2<f32>(0.0);
+    if params.bounds_len == 2u {
+        bound = vec2<f32>(bounds[0], bounds[1]);
+    } else {
+        for (var k = 0u; k < arrayLength(&blobs); k += 1u) {
+            let blob = blobs[k];
+            let r = blob.center_radius.w;
+            if r > 0.0 { bound = max(bound, vec2<f32>(r, 1.5 * r + blob.shape_off.w)); }
+        }
+    }
+    let h = size / vec3<f32>(nodes - vec3<u32>(1u));
 
     // A domain border brick is retained even when no blob is present.  This
     // is what makes an empty frame write the same exterior field as the dense
@@ -86,8 +99,9 @@ fn mark_brick(id: u32) -> u32 {
 
     let bin_lo_f = (lo - domain_min) / vec3<f32>(params.cell_size);
     let bin_hi_f = (hi - domain_min) / vec3<f32>(params.cell_size);
-    let bin_lo = vec3<i32>(floor(bin_lo_f)) - vec3<i32>(1);
-    let bin_hi = vec3<i32>(floor(bin_hi_f)) + vec3<i32>(1);
+    let reach_bins = i32(ceil((bound.y + extra + length(h)) / params.cell_size));
+    let bin_lo = vec3<i32>(floor(bin_lo_f)) - vec3<i32>(reach_bins);
+    let bin_hi = vec3<i32>(floor(bin_hi_f)) + vec3<i32>(reach_bins);
     let first = vec3<u32>(
         clamp_bin(bin_lo.x, params.bins_x),
         clamp_bin(bin_lo.y, params.bins_y),
@@ -110,8 +124,8 @@ fn mark_brick(id: u32) -> u32 {
                         continue;
                     }
                     let d = max(max(lo - centre, centre - hi), vec3<f32>(0.0));
-                    let support = reach + band;
-                    if dot(d, d) <= support * support {
+                    let support = vec3<f32>(1.5 * reach + extra) + h;
+                    if all(d <= support) {
                         return 1u;
                     }
                 }

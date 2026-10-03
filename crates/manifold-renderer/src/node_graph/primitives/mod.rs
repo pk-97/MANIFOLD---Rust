@@ -247,6 +247,8 @@ mod render_mode;
 pub(crate) mod render_scene;
 #[cfg(feature = "gpu-proofs")]
 pub use render_scene::rt_proof::{RtProbeObject, RtProbeScene};
+#[cfg(feature = "gpu-proofs")]
+pub use render_scene::blend_snapshot_proof;
 mod render_filled_rects;
 mod render_lines;
 mod render_text;
@@ -331,6 +333,7 @@ pub(crate) mod prefix_scan;
 pub(crate) mod sort_particles_into_cells;
 mod running_total;
 mod shape_particle_blobs;
+mod blob_bounds;
 pub(crate) mod particle_volume;
 pub(crate) mod lattice_bricks;
 pub(crate) mod liquid_bricks;
@@ -338,8 +341,12 @@ mod smooth_lattice;
 pub(crate) mod dot_products;
 mod divide_by_value;
 pub(crate) mod gpu_flip_bodies;
+// Standalone staged encoder; the step keeps its existing pressure path.
+pub mod gpu_flip_lentine;
 pub(crate) mod gpu_flip_pressure;
 pub(crate) mod gpu_flip_step;
+pub(crate) mod gpu_flip_clock;
+pub(crate) mod gpu_flip_narrow_band;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_flip_pressure_tests;
 pub(crate) mod liquid_fill;
@@ -358,6 +365,18 @@ mod extend_lattice;
 mod jitter_particles;
 mod sample_faces_at_particles;
 mod energy_potential;
+mod turbulence_field;
+mod whitewater_obstacle_source;
+mod whitewater_emitter_dispatch;
+mod whitewater_influence;
+mod dust_potential;
+mod whitewater_emitter_velocity;
+mod inside_turbulence_potential;
+mod turbulence_emission_count;
+#[cfg(test)]
+mod whitewater_emitter_cpu;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod whitewater_emitter_gpu_tests;
 mod wavecrest_potential;
 mod emission_count;
 mod spawn_whitewater;
@@ -403,6 +422,8 @@ pub(crate) mod gpu_flip_preset;
 mod gpu_flip_atom_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_flip_body_tests;
+#[cfg(test)]
+mod gpu_flip_extension_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_flip_step_tests;
 #[cfg(test)]
@@ -411,6 +432,8 @@ mod gpu_flip_narrow_band_tests;
 mod gpu_flip_scene_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_flip_tile_tests;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod gpu_flip_separate_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod whitewater_scene_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
@@ -425,8 +448,15 @@ pub(crate) mod gpu_flip_still;
 mod gpu_flip_render_smoke_tests;
 mod clamp_liquid_to_solids;
 mod count_surface_triangles;
+mod count_surface_edges;
 pub(crate) mod volume_surface_mesh;
 mod relax_surface_mesh;
+mod smooth_surface_mesh;
+mod surface_mesh_normals;
+#[cfg(test)]
+mod surface_mesh_parity;
+#[cfg(test)]
+mod surface_mesh_freeze_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod liquid_surface_tests;
 mod transform_shake;
@@ -661,6 +691,8 @@ pub use remove_drift_3d::RemoveDrift3D;
 pub use render_3d_mesh::Render3DMesh;
 pub use render_instanced_3d_mesh::RenderInstanced3DMesh;
 pub use render_scene::RenderScene;
+#[cfg(feature = "fluid-perf-proofs")]
+pub use render_scene::water_perf;
 pub use render_scene::{arm_rt_capture, disarm_rt_capture, take_rt_captures, RtCaptureSlot};
 pub use render_filled_rects::RenderFilledRects;
 pub use render_lines::RenderLines;
@@ -1066,3 +1098,9 @@ pub use mix_arrays::MixArrays;
 
 #[cfg(test)]
 mod particle_frame_blend_tests;
+
+pub mod offset_lattice;
+pub mod redistance_lattice;
+
+#[cfg(test)]
+mod lattice_closing_tests;

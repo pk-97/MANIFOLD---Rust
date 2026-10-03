@@ -607,6 +607,7 @@ mod tests {
             rows: vec![ParamRow {
                 id: std::borrow::Cow::Owned(id.to_string()),
                 spec: RowSpec {
+                    tooltip: None,
                     name: "Amount".into(),
                     min: 0.0,
                     max: 1.0,

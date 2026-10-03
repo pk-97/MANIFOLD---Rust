@@ -1,11 +1,11 @@
 use manifold_core::Seconds;
 use manifold_physics::input::AppliedEvent;
-use manifold_physics::stepping::StepCoupling;
+use manifold_physics::stepping::{StepCoupling, StepInterval};
 use manifold_physics::{BodyHandle, FieldValue, PhysicsWorld};
 
 use super::{
-    AdvancementPolicy, FIXED_TICK, IMPULSE_CAPACITY, MAX_BODIES, ResolvedRigidImpulse, RigidBody,
-    RigidSimulation, TARGET_SLOTS, same_collider,
+    same_collider, AdvancementPolicy, ResolvedRigidImpulse, RigidBody, RigidSimulation, FIXED_TICK,
+    IMPULSE_CAPACITY, MAX_BODIES, TARGET_SLOTS,
 };
 
 /// The retained scene inputs consumed by the shared FLIP worker.
@@ -217,6 +217,69 @@ impl RigidSimulation {
             inputs.acceleration_field.clone(),
             &inputs.targeted_fields,
             Some(events),
+            None,
+            coupling,
+        );
+        self.advancement_policy = previous_policy;
+        result
+    }
+
+    /// Advance one accepted live interval from the shared frame plan.
+    ///
+    /// The interval is authoritative: this entry point does not consult or
+    /// accumulate a fixed-tick worker budget. Events are assigned to the
+    /// interval by the shared clock and are applied at their source times,
+    /// including boundaries inside a stretched interval.
+    pub(crate) fn advance_worker_interval<C: StepCoupling>(
+        &mut self,
+        inputs: &RigidSceneInputs,
+        interval: StepInterval,
+        events: &[AppliedEvent<ResolvedRigidImpulse>],
+        coupling: &mut C,
+    ) -> Result<(), String> {
+        self.validate_assigned_interval(interval, events)?;
+        if self.world.is_some()
+            && !self.native_topology_matches(inputs)
+        {
+            return Err("Physics worker cannot rebuild native topology within an epoch".into());
+        }
+
+        // The retained authored observation may already bracket beyond this
+        // accepted liquid interval. Keep that observation time for input
+        // history while the explicit interval remains authoritative for
+        // physics integration.
+        let observation_time = self
+            .last_time
+            .map_or(interval.end, |last| Seconds(last.0.max(interval.end.0)));
+
+        let previous_policy = self.advancement_policy;
+        {
+            self
+                .impulse_queue
+                .as_ref()
+                .ok_or("Physics worker interval requires an initialized impulse queue")?;
+            if !self.impulse_receipts.is_empty() || !self.impulse_tick_events.is_empty() {
+                return Err(
+                    "Physics worker cannot start an interval with pending impulse receipts".into(),
+                );
+            }
+        }
+        self.advancement_policy = AdvancementPolicy::Worker { max_ticks: 1 };
+        let result = self.advance_with_coupling_inner(
+            inputs.bodies.clone(),
+            inputs.prototype.clone(),
+            inputs.copy_count,
+            inputs.copy_spacing,
+            inputs.copy_columns,
+            inputs.layout,
+            inputs.gravity,
+            observation_time,
+            1.0,
+            0.0,
+            inputs.acceleration_field.clone(),
+            &inputs.targeted_fields,
+            Some(events),
+            Some(interval),
             coupling,
         );
         self.advancement_policy = previous_policy;
@@ -298,6 +361,49 @@ impl RigidSimulation {
         }
         Ok(())
     }
+
+    fn validate_assigned_interval(
+        &self,
+        interval: StepInterval,
+        events: &[AppliedEvent<ResolvedRigidImpulse>],
+    ) -> Result<(), String> {
+        let duration = interval.duration().0;
+        if !interval.start.0.is_finite()
+            || !interval.end.0.is_finite()
+            || !duration.is_finite()
+            || duration <= 0.0
+        {
+            return Err("Physics worker interval must have finite positive duration".into());
+        }
+        if events.len() > IMPULSE_CAPACITY {
+            return Err("Physics worker assigned impulse batch exceeds capacity".into());
+        }
+        let Some(epoch) = self.impulse_epoch else {
+            return Err("Physics worker assigned impulses require an initialized epoch".into());
+        };
+        for pair in events.windows(2) {
+            if pair[0].source.time.0 > pair[1].source.time.0
+                || (pair[0].source.time.0 == pair[1].source.time.0
+                    && pair[0].source.sequence > pair[1].source.sequence)
+            {
+                return Err("Physics worker interval events must be time ordered".into());
+            }
+        }
+        for event in events {
+            if event.source.epoch != epoch || event.applied.epoch != epoch {
+                return Err("Physics worker assigned impulse epoch does not match owner".into());
+            }
+            if !event.source.time.0.is_finite()
+                || event.source.time.0 >= interval.end.0
+                || !event.lateness.0.is_finite()
+                || event.lateness.0 < 0.0
+            {
+                return Err("Physics worker assigned impulse is outside its interval".into());
+            }
+            self.validate_impulse_targets(event.value.targets)?;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -306,9 +412,9 @@ mod tests {
     use crate::node_graph::physics::{
         PhysicsAuthoredSampleScope, PhysicsStepScope, ResolvedRigidImpulse, RigidImpulseTargets,
     };
-    use manifold_physics::TickStamp;
     use manifold_physics::input::{AppliedEvent, EventStamp};
-    use manifold_physics::stepping::Uncoupled;
+    use manifold_physics::stepping::{FramePlan, Uncoupled};
+    use manifold_physics::TickStamp;
 
     fn scene() -> RigidSceneInputs {
         let mut scene = RigidSceneInputs::default();
@@ -377,6 +483,100 @@ mod tests {
     }
 
     #[test]
+    fn worker_intervals_follow_shared_frame_plan_without_debt() {
+        for intervals in [20, 24, 30, 60] {
+            let mut simulation = RigidSimulation::with_worker_epoch(intervals).unwrap();
+            let mut coupling = Uncoupled;
+            let inputs = scene();
+            simulation
+                .advance_worker(&inputs, Seconds::ZERO, 0, &mut coupling)
+                .unwrap();
+            let plan = FramePlan::new(Seconds::ZERO, Seconds(1.0), intervals).value;
+            for ordinal in 0..intervals {
+                let interval = plan.interval(ordinal).unwrap();
+                simulation
+                    .advance_worker_interval(
+                        &inputs,
+                        interval,
+                        &[],
+                        &mut coupling,
+                    )
+                    .unwrap();
+                assert!((simulation.physics_time - interval.end.0).abs() < 1.0e-12);
+            }
+            assert!((simulation.physics_time - 1.0).abs() < 1e-12);
+            assert_eq!(simulation.pending_time, Seconds::ZERO);
+            assert_eq!(simulation.accumulator, 0.0);
+        }
+    }
+
+    #[test]
+    fn worker_interval_accepts_authored_observation_beyond_interval_end() {
+        let mut simulation = RigidSimulation::with_worker_epoch(66).unwrap();
+        let mut coupling = Uncoupled;
+        let inputs = scene();
+        simulation
+            .advance_worker(&inputs, Seconds::ZERO, 0, &mut coupling)
+            .unwrap();
+        simulation
+            .advance_worker(
+                &inputs,
+                Seconds(2.0 * super::super::FIXED_TICK.0),
+                0,
+                &mut coupling,
+            )
+            .unwrap();
+        simulation
+            .advance_worker_interval(
+                &inputs,
+                StepInterval::new(Seconds::ZERO, Seconds(super::super::FIXED_TICK.0)),
+                &[],
+                &mut coupling,
+            )
+            .unwrap();
+        assert!((simulation.physics_time - super::super::FIXED_TICK.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn worker_interval_delivers_locally_queued_impulse_inside_stretched_span() {
+        let mut simulation = RigidSimulation::with_worker_epoch(77).unwrap();
+        let mut coupling = Uncoupled;
+        let inputs = scene();
+        simulation
+            .advance_worker(&inputs, Seconds::ZERO, 0, &mut coupling)
+            .unwrap();
+        let stamp = EventStamp {
+            epoch: simulation.impulse_epoch().unwrap(),
+            time: Seconds(1.5 * super::super::FIXED_TICK.0),
+            sequence: 1,
+        };
+        simulation
+            .enqueue_impulse(
+                stamp,
+                ResolvedRigidImpulse {
+                    field: FieldValue::uniform([2.0, 0.0, 0.0]).unwrap(),
+                    targets: RigidImpulseTargets {
+                        bodies: 1,
+                        copies: false,
+                    },
+                },
+            )
+            .unwrap();
+        simulation
+            .advance_worker_interval(
+                &inputs,
+                StepInterval::new(Seconds::ZERO, Seconds(3.0 * super::super::FIXED_TICK.0)),
+                &[],
+                &mut coupling,
+            )
+            .unwrap();
+        let receipts: Vec<_> = simulation.drain_applied_impulses().collect();
+        assert_eq!(receipts.len(), 1);
+        assert_eq!(receipts[0].source, stamp);
+        assert_eq!(simulation.pending_time, Seconds::ZERO);
+    }
+
+    #[test]
     fn worker_rejects_topology_change_before_replacing_native_world() {
         let mut simulation = RigidSimulation::with_worker_epoch(1).unwrap();
         let mut coupling = Uncoupled;
@@ -395,11 +595,9 @@ mod tests {
         let before_shape = simulation.descriptions[0].as_ref().unwrap().shape;
         let mut changed = inputs.clone();
         changed.bodies[0].as_mut().unwrap().shape = 2;
-        assert!(
-            simulation
-                .advance_worker(&changed, Seconds::ZERO, 1, &mut coupling)
-                .is_err()
-        );
+        assert!(simulation
+            .advance_worker(&changed, Seconds::ZERO, 1, &mut coupling)
+            .is_err());
         assert_eq!(simulation.native_handles().0[0], Some(handle));
         assert_eq!(
             simulation.native_world().unwrap().pose(handle).unwrap(),
@@ -453,7 +651,10 @@ mod tests {
         inputs.acceleration_field = Some(FieldValue::uniform([1.0, 0.0, 0.0]).unwrap());
         let total_time = 3.0 * super::super::FIXED_TICK.0;
 
-        let mut ordinary = RigidSimulation::default();
+        let mut ordinary = RigidSimulation {
+            advancement_policy: AdvancementPolicy::Worker { max_ticks: 3 },
+            ..Default::default()
+        };
         let mut ordinary_coupling = Uncoupled;
         ordinary
             .advance_with_fields(
@@ -695,16 +896,14 @@ mod tests {
                 copies: false,
             },
         );
-        assert!(
-            simulation
-                .advance_worker_tick(
-                    &inputs,
-                    Seconds(super::super::FIXED_TICK.0),
-                    std::slice::from_ref(&invalid_target),
-                    &mut coupling,
-                )
-                .is_err()
-        );
+        assert!(simulation
+            .advance_worker_tick(
+                &inputs,
+                Seconds(super::super::FIXED_TICK.0),
+                std::slice::from_ref(&invalid_target),
+                &mut coupling,
+            )
+            .is_err());
         assert_eq!(
             simulation.impulse_queue.as_ref().unwrap().next_tick(),
             before_cursor
@@ -724,16 +923,14 @@ mod tests {
                 copies: false,
             },
         );
-        assert!(
-            simulation
-                .advance_worker_tick(
-                    &inputs,
-                    Seconds(super::super::FIXED_TICK.0),
-                    std::slice::from_ref(&wrong_tick),
-                    &mut coupling,
-                )
-                .is_err()
-        );
+        assert!(simulation
+            .advance_worker_tick(
+                &inputs,
+                Seconds(super::super::FIXED_TICK.0),
+                std::slice::from_ref(&wrong_tick),
+                &mut coupling,
+            )
+            .is_err());
         assert_eq!(
             simulation.impulse_queue.as_ref().unwrap().next_tick(),
             before_cursor

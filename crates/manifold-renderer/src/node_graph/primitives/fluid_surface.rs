@@ -25,6 +25,31 @@ use manifold_fluids::{LiquidOptions, SurfaceOptions, WhitewaterOptions};
 /// them wired switches the node into publishing particle frames.
 const PARTICLE_ARRAY_PORTS: [&str; 4] = ["particles_a", "particles_b", "solid_a", "solid_b"];
 
+/// Valid empty storage before the native solver accepts its first tick. Kept
+/// outside the worker ring: it is immutable while a display frame reads it.
+pub struct EmptyParticleFrame {
+    particles: manifold_gpu::GpuBuffer,
+    solid: manifold_gpu::GpuBuffer,
+    nodes: [u32; 3],
+}
+
+impl EmptyParticleFrame {
+    fn new(device: &manifold_gpu::GpuDevice, nodes: [u32; 3]) -> Result<Self, String> {
+        let particle_bytes = std::mem::size_of::<FluidParticle>() as u64;
+        let solid_bytes = nodes.into_iter().map(u64::from).product::<u64>() * 4;
+        crate::node_graph::scene_modifier_expand::admit_candidate_bytes(
+            device.modifier_memory_snapshot(), particle_bytes + solid_bytes,
+        ).map_err(|error| error.to_string())?;
+        let particles = device.try_create_buffer_shared(particle_bytes).map_err(|error| error.to_string())?;
+        let solid = device.try_create_buffer_shared(solid_bytes).map_err(|error| error.to_string())?;
+        // Fresh storage, not yet published. Zero live particles imply an
+        // exterior level set everywhere, regardless of the zero solid field.
+        particles.zero_fill();
+        solid.zero_fill();
+        Ok(Self { particles, solid, nodes })
+    }
+}
+
 const ROLE_PORTS: [&str; MAX_FLUID_ROLES] = [
     "role_0", "role_1", "role_2", "role_3", "role_4", "role_5", "role_6", "role_7", "role_8",
     "role_9", "role_10", "role_11", "role_12", "role_13", "role_14", "role_15", "role_16",
@@ -178,6 +203,7 @@ crate::primitive! {
     boundary_reason: IoBridge,
     extra_fields: {
         surface_buffer: Option<manifold_gpu::GpuBuffer> = None,
+        empty_particle_frame: Option<EmptyParticleFrame> = None,
         runtime: FluidRuntime = FluidRuntime::default(),
         upload: FluidMeshUpload = FluidMeshUpload::default(),
         foam_upload: InstanceSnapshotUpload = InstanceSnapshotUpload::default(),
@@ -222,7 +248,14 @@ impl Primitive for FluidSurface {
             return self.surface_buffer.as_ref();
         }
         // The worker writes ring slots directly; A/B are published as is.
-        let (a, b) = self.runtime.particles.pair()?;
+        let Some((a, b)) = self.runtime.particles.pair() else {
+            let empty = self.empty_particle_frame.as_ref()?;
+            return match port {
+                "particles_a" | "particles_b" => Some(&empty.particles),
+                "solid_a" | "solid_b" => Some(&empty.solid),
+                _ => None,
+            };
+        };
         match port {
             "particles_a" => Some(a.particles()),
             "particles_b" => Some(b.particles()),
@@ -242,6 +275,7 @@ impl Primitive for FluidSurface {
 
     fn clear_state(&mut self) {
         self.runtime.clear();
+        self.empty_particle_frame = None;
         self.role_pending = false;
         self.domain_failure = false;
         self.coupled_observation = None;
@@ -254,6 +288,7 @@ impl Primitive for FluidSurface {
         }
         self.coupled_mode = enabled;
         self.runtime.clear();
+        self.empty_particle_frame = None;
         self.coupled_observation = None;
         self.coupled_error = None;
         self.coupled_previous_reset = None;
@@ -750,13 +785,31 @@ impl FluidSurface {
         ] {
             ctx.outputs.set_scalar(name, ParamValue::Float(value));
         }
-        if let Some((bounds, _)) = self.runtime.particle_lattice() {
+        // Geometry is CPU-owned and exists before the first particle capture.
+        // Never publish a zero lattice as a ready surface input at tick zero.
+        if let Some((bounds, nodes)) = self.runtime.particle_lattice() {
+            if b.is_none()
+                && let Some(gpu) = ctx.gpu.as_deref()
+                && self.empty_particle_frame.as_ref().is_none_or(|empty| empty.nodes != nodes)
+            {
+                match EmptyParticleFrame::new(gpu.device, nodes) {
+                    Ok(empty) => self.empty_particle_frame = Some(empty),
+                    Err(error) => {
+                        Self::report_failure(&mut self.domain_failure, ctx,
+                            format!("Fluid empty particle frame: {error}"));
+                        return;
+                    }
+                }
+            }
             ctx.outputs.set_transform("grid_bounds", bounds);
+            for (name, value) in ["grid_nodes_x", "grid_nodes_y", "grid_nodes_z"].into_iter().zip(nodes) {
+                ctx.outputs.set_scalar(name, ParamValue::Float(value as f32));
+            }
         }
-        // The lattice of the published solid; no frame yet → no lattice (0).
-        let nodes = b.map_or([0; 3], |frame| frame.info.solid_nodes);
-        for (name, value) in ["grid_nodes_x", "grid_nodes_y", "grid_nodes_z"].into_iter().zip(nodes) {
-            ctx.outputs.set_scalar(name, ParamValue::Float(value as f32));
+        if b.is_some() {
+            // Buffer drops are fence-retired; neither the worker nor this
+            // publisher ever overwrites the empty frame while it is read.
+            self.empty_particle_frame = None;
         }
         if ctx.gpu.is_some() {
             // This frame's GPU work reads the pair; reuse waits for it.
@@ -1038,7 +1091,20 @@ mod tests {
             &mut errors,
         );
         assert!(errors.is_empty(), "{errors:?}");
-        assert!((fluid.runtime.simulation_time() - 2.0 / 60.0).abs() < 1e-8);
+        // A speed edit starts at its observation; the preceding interval
+        // retains speed 1, then the next interval advances at shared speed 2.
+        assert!((fluid.runtime.simulation_time() - 1.0 / 60.0).abs() < 1e-8);
+        assert!(Primitive::coupled_rigid_frame(&fluid).is_some());
+        let third = coupled_observation(2.0 / 60.0, 2.0, 0.0);
+        Primitive::set_coupled_rigid_inputs(
+            &mut fluid,
+            Some(&third),
+            RigidImpulseTargets::default(),
+            None,
+        );
+        run_mock_with_scalars(&mut fluid, &params, &[("speed", 2.0)], 2.0 / 60.0, &mut errors);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert!((fluid.runtime.simulation_time() - 3.0 / 60.0).abs() < 1e-8);
         assert!(Primitive::coupled_rigid_frame(&fluid).is_some());
     }
 
@@ -1099,7 +1165,20 @@ mod tests {
         errors.clear();
         run_mock_with_scalars(&mut fluid, &params, &[("speed", 2.0)], 1.0 / 60.0, &mut errors);
         assert!(errors.is_empty(), "{errors:?}");
-        assert!((fluid.runtime.simulation_time() - 2.0 / 60.0).abs() < 1e-8);
+        // A speed edit starts at its observation; the preceding interval
+        // retains speed 1, then the next interval advances at shared speed 2.
+        assert!((fluid.runtime.simulation_time() - 1.0 / 60.0).abs() < 1e-8);
+        assert!(Primitive::coupled_rigid_frame(&fluid).is_some());
+        let third = coupled_observation(2.0 / 60.0, 2.0, 0.0);
+        Primitive::set_coupled_rigid_inputs(
+            &mut fluid,
+            Some(&third),
+            RigidImpulseTargets::default(),
+            None,
+        );
+        run_mock_with_scalars(&mut fluid, &params, &[("speed", 2.0)], 2.0 / 60.0, &mut errors);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert!((fluid.runtime.simulation_time() - 3.0 / 60.0).abs() < 1e-8);
         assert!(Primitive::coupled_rigid_frame(&fluid).is_some());
     }
 
@@ -1503,6 +1582,65 @@ mod tests {
         };
         let mut ctx = EffectNodeContext::new(time, params, inputs, outputs, None).with_errors(errors);
         Primitive::run(fluid, &mut ctx);
+    }
+
+    #[test]
+    fn first_frame_particle_lattice_is_valid_before_gpu_publish() {
+        use crate::node_graph::{Backend, PortType, ResourceId, ScalarType};
+
+        let mut fluid = FluidSurface::new();
+        let settings = FluidSettings { resolution: 8, ..FluidSettings::default() };
+        fluid.runtime.set_outputs(true, false);
+        fluid.runtime.observe(settings, FluidControls::default(), Seconds(0.0), 1.0, 0.0).unwrap();
+        fluid.runtime.advance(true).unwrap();
+        assert_eq!(fluid.runtime.simulation_time(), 0.0);
+        assert!(!fluid.runtime.particle_capture_pending(), "native capture starts after the first completed tick");
+        assert!(fluid.runtime.particles.pair().is_none());
+        let expected = settings.domain_layout().unwrap().solid_lattice();
+        let mut backend = MockBackend::new();
+        let names = ["grid_nodes_x", "grid_nodes_y", "grid_nodes_z"];
+        let mut bindings: Vec<_> = names.iter().enumerate().map(|(i, &name)| {
+            (name, backend.acquire(ResourceId(i as u32), PortType::Scalar(ScalarType::F32), None, (0, 0)))
+        }).collect();
+        bindings.push(("grid_bounds", backend.acquire(ResourceId(3), PortType::Transform, None, (0, 0))));
+        let inputs = NodeInputs::new(&[], &backend, &[]);
+        let (mut scalar, mut camera, mut light, mut material) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        let (mut transform, mut atmosphere, mut render_mode, mut object) =
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        let outputs = NodeOutputs::new(&bindings, &backend, &mut scalar, &mut camera, &mut light,
+            &mut material, &mut transform, &mut atmosphere, &mut render_mode, &mut object);
+        let params = ParamValues::default();
+        let time = FrameTime { beats: Beats(0.0), seconds: Seconds(0.0), delta: Seconds(0.0), frame_count: 1 };
+        let pending = {
+            let mut ctx = EffectNodeContext::new(time, &params, inputs, outputs, None);
+            fluid.publish_particle_frame(&mut ctx, 1.0, 0.0);
+            ctx.outputs_pending
+        };
+        assert_eq!(scalar.len(), 3);
+        for ((_, value), expected) in scalar.iter().zip(expected.1) {
+            assert_eq!(value.as_scalar(), Some(expected as f32));
+        }
+        assert_eq!(transform[0].1, expected.0);
+        let cell = transform[0].1.scale[0] / (scalar[0].1.as_scalar().unwrap() - 1.0);
+        assert!(cell.is_finite() && cell > 0.0);
+        assert!(!pending, "the initial empty frame has valid CPU geometry");
+    }
+
+    #[test]
+    #[cfg(feature = "gpu-proofs")]
+    fn fluid_empty_particle_frame_has_complete_zeroed_storage() {
+        let device = crate::test_device();
+        let nodes = [12; 3];
+        let empty = EmptyParticleFrame::new(&device, nodes).unwrap();
+        assert_eq!(empty.particles.size, std::mem::size_of::<FluidParticle>() as u64);
+        assert_eq!(empty.solid.size, 12 * 12 * 12 * 4);
+        for buffer in [&empty.particles, &empty.solid] {
+            // SAFETY: freshly allocated shared storage, never submitted to GPU.
+            let bytes = unsafe {
+                std::slice::from_raw_parts(buffer.mapped_ptr().unwrap(), buffer.size as usize)
+            };
+            assert!(bytes.iter().all(|byte| *byte == 0));
+        }
     }
 
     #[test]

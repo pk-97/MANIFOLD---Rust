@@ -43,8 +43,8 @@ struct BrickUniforms {
     bricks_y: u32,
     bricks_z: u32,
     brick_count: u32,
-    _pad0: u32,
-    _pad1: u32,
+    band_extra: f32,
+    bounds_len: u32,
 }
 
 /// Dimensions and storage size of one brick layout.
@@ -131,14 +131,6 @@ fn resolution_from_params(params: &ParamValues) -> u32 {
 }
 
 #[cfg(test)]
-/// The positive exterior value used by the dense path at every sample outside
-/// the active brick set.  Kept as a function so CPU proofs and the consumers
-/// share the exact expression instead of a tolerance-based approximation.
-pub(crate) fn canonical_exterior_value(cell_size: f32) -> f32 {
-    cell_size / 3.0
-}
-
-#[cfg(test)]
 const HALO_NODES: u32 = 5;
 
 #[cfg(test)]
@@ -164,19 +156,11 @@ fn expanded_bounds(
 }
 
 #[cfg(test)]
-fn intersects_support(center: [f32; 3], support: f32, lo: [f32; 3], hi: [f32; 3]) -> bool {
-    let mut distance2 = 0.0;
-    for axis in 0..3 {
-        let distance = if center[axis] < lo[axis] {
-            lo[axis] - center[axis]
-        } else if center[axis] > hi[axis] {
-            center[axis] - hi[axis]
-        } else {
-            0.0
-        };
-        distance2 += distance * distance;
-    }
-    distance2 <= support * support
+fn intersects_support(center: [f32; 3], support: [f32; 3], lo: [f32; 3], hi: [f32; 3]) -> bool {
+    (0..3).all(|axis| {
+        let distance = (lo[axis] - center[axis]).max(center[axis] - hi[axis]).max(0.0);
+        distance <= support[axis]
+    })
 }
 
 /// CPU reference for the GPU mark pass.  This deliberately uses the blob's
@@ -189,7 +173,7 @@ pub(crate) fn conservative_brick_mask(
     size: [f32; 3],
     solid_nodes: [u32; 3],
     resolution_scale: u32,
-    cell_size: f32,
+    _cell_size: f32,
 ) -> Option<Vec<u32>> {
     let layout = brick_layout(solid_nodes, resolution_scale)?;
     let lattice_min = [
@@ -197,7 +181,7 @@ pub(crate) fn conservative_brick_mask(
         center[1] - size[1] * 0.5,
         center[2] - size[2] * 0.5,
     ];
-    let band = canonical_exterior_value(cell_size);
+    let h: [f32; 3] = std::array::from_fn(|a| size[a] / (layout.nodes[a] - 1) as f32);
     let mut mask = vec![0u32; layout.count as usize];
     for id in 0..layout.count {
         let brick = [
@@ -223,7 +207,7 @@ pub(crate) fn conservative_brick_mask(
                         blob.center_radius[1],
                         blob.center_radius[2],
                     ],
-                    reach + band,
+                    h.map(|spacing| 1.5 * reach + spacing),
                     lo,
                     hi,
                 )
@@ -265,10 +249,12 @@ crate::primitive! {
         blobs: Array(FluidBlob) required,
         cell_ranges: Array(CellRange) required,
         solid: Array(f32) required,
+        bounds: Array(f32) optional,
         center_x: ScalarF32 optional, center_y: ScalarF32 optional, center_z: ScalarF32 optional,
         size_x: ScalarF32 optional, size_y: ScalarF32 optional, size_z: ScalarF32 optional,
         nodes_x: ScalarF32 optional, nodes_y: ScalarF32 optional, nodes_z: ScalarF32 optional,
         cell_size: ScalarF32 optional,
+        band_extra: ScalarF32 optional,
         bins_x: ScalarF32 optional, bins_y: ScalarF32 optional, bins_z: ScalarF32 optional,
     },
     outputs: {
@@ -289,6 +275,7 @@ crate::primitive! {
         bin_param!("bins_x", "Bins X"),
         bin_param!("bins_y", "Bins Y"),
         bin_param!("bins_z", "Bins Z"),
+        float_param!("band_extra", "Extra Distance Band", 0.0, 0.0, 100.0),
     ],
     depth_rule: Terminal,
     composition_notes: "Wire blobs and cell_ranges from the particle surface's sort and shape nodes, solid from the same lattice capacity as node.particle_volume, and center/size/nodes/cell_size/bins from those same producers. Feed the output to every sparse liquid-surface stage. The header's indirect grid is [2*active_count,1,1], the dense mask clears retired bricks each frame, and the boundary bricks stay active even for an empty frame. This is a barriered producer with a PrefixScan, so it is a graph fusion boundary.",
@@ -380,6 +367,11 @@ impl Primitive for LatticeBricks {
             ["center_x", "center_y", "center_z"].map(|name| ctx.scalar_or_param(name, 0.0));
         let [size_x, size_y, size_z] =
             ["size_x", "size_y", "size_z"].map(|name| ctx.scalar_or_param(name, 4.0));
+        let bounds = ctx.inputs.array("bounds");
+        if bounds.is_some_and(|b| b.size != 8) {
+            ctx.error("Lattice Bricks: bounds must contain the two words from Blob Bounds");
+            return;
+        }
         let cell_size = ctx.scalar_or_param("cell_size", 0.0625);
         let allocation_error = {
             let gpu = ctx.gpu_encoder();
@@ -440,8 +432,8 @@ impl Primitive for LatticeBricks {
             bricks_y: layout.bricks[1],
             bricks_z: layout.bricks[2],
             brick_count: layout.count,
-            _pad0: 0,
-            _pad1: 0,
+            band_extra: ctx.scalar_or_param("band_extra", 0.0),
+            bounds_len: if bounds.is_some() { 2 } else { 0 },
         };
         let bindings = [
             GpuBinding::Bytes {
@@ -468,6 +460,7 @@ impl Primitive for LatticeBricks {
                 buffer: &bricks,
                 offset: 0,
             },
+            GpuBinding::Buffer { binding: 5, buffer: bounds.unwrap_or(blobs), offset: 0 },
         ];
         let groups = [layout.count.div_ceil(256), 1, 1];
         let gpu = ctx.gpu_encoder();
@@ -551,15 +544,13 @@ mod tests {
             for y in 0..nodes[1] {
                 for x in 0..nodes[0] {
                     let at = [x, y, z];
-                    let point: [f32; 3] = std::array::from_fn(|a| {
-                        min[a] + at[a] as f32 * size[a] / (nodes[a] - 1) as f32
-                    });
                     if blobs.iter().any(|item| {
-                        let dx = point[0] - item.center_radius[0];
-                        let dy = point[1] - item.center_radius[1];
-                        let dz = point[2] - item.center_radius[2];
-                        dx * dx + dy * dy + dz * dz
-                            <= (item.center_radius[3] + canonical_exterior_value(cell_size)).powi(2)
+                        (0..3).all(|a| {
+                            let h = size[a] / (nodes[a] - 1) as f32;
+                            let lo = ((item.center_radius[a] - 1.5*item.center_radius[3] - min[a])/h).floor();
+                            let hi = ((item.center_radius[a] + 1.5*item.center_radius[3] - min[a])/h).floor()+1.0;
+                            at[a] as f32 >= lo && at[a] as f32 <= hi
+                        })
                     }) {
                         // Three smoothing taps on each axis, one gradient
                         // neighbour, and the other corner of an owned cell.

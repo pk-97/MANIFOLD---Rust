@@ -133,7 +133,10 @@ inventory::submit! {
     crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
         type_id: "node.add_burst",
         array_ports: &[],
-        recompute: |ctx| Some(vec![ctx.frame.seconds.0 as f32, ctx.frame.delta.0 as f32 * 60.0]),
+        recompute: |ctx| Some(vec![
+            ctx.frame.seconds.0 as f32,
+            crate::node_graph::physics::particle_frame_duration(ctx.frame.delta),
+        ]),
     }
 }
 
@@ -194,7 +197,7 @@ impl Primitive for ApplyRadialBurstToParticles {
         }
 
         let time_val = ctx.time.seconds.0 as f32;
-        let dt_scaled = ctx.time.delta.0 as f32 * 60.0;
+        let dt_scaled = crate::node_graph::physics::particle_frame_duration(ctx.time.delta);
 
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);

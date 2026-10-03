@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 367 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 376 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -165,7 +165,7 @@ _Generated from the node registry. Do not hand-edit. 367 nodes registered, group
 | — | `node.texture_sum_5` | Filter | Legacy fixed five-input sum, superseded by node.multi_blend (dynamic N inputs). Hidden from the palette but still loads in saved graphs. |
 | Wet/Dry | `node.wet_dry` | Filter | Crossfades a processed image back over the original, so you can dial how much of an effect shows. At 0 you get the original, at 1 the full effect. |
 
-### 3D Geometry (88)
+### 3D Geometry (91)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -177,6 +177,7 @@ _Generated from the node registry. Do not hand-edit. 367 nodes registered, group
 | Camera Switch | `node.camera_switch` | Source | Switches between two cameras. Scene modifiers use it so toggling the modifier on and off never rebuilds the graph. |
 | Combine XY (curve) | `node.combine_xy` | Filter | Zips two number lists, X and Y, into one list of points ready to draw as a line or curve. |
 | Copy Positions | `node.copy_positions` | Map | Turns copy transforms into homogeneous XYZ positions for downstream fields and geometry math. |
+| Count Surface Edges | `node.count_surface_edges` | Filter | Counts shared marching-cubes surface edges at lattice nodes so a later scan can index one vertex per crossing. |
 | Count Surface Triangles | `node.count_surface_triangles` | Filter | Works out how many triangles each small cube of the liquid's surface needs, the first step of building its mesh. |
 | Cube Mesh | `node.cube_mesh` | Source | Builds a unit cube as a 3D mesh ready to rotate, light, and render. The starting block for box-based geometry. |
 | Cut Mesh Bands | `node.cut_mesh_bands` | Source | Cuts mesh triangles into directional bands while retaining source-triangle provenance. |
@@ -247,6 +248,8 @@ _Generated from the node registry. Do not hand-edit. 367 nodes registered, group
 | Shatter | `node.shatter_mesh` | Filter | Explodes a mesh into separate triangular shards, each sliding away along its own flat face normal. |
 | Skin Mesh | `node.skin_mesh` | Filter | Deforms an imported rigged mesh by its animated skeleton — the GPU counterpart to a Skeleton Pose node's joint matrices. |
 | Slice | `node.slice_mesh` | Filter | Clamps all vertices past a plane onto the plane, turning a mesh into a flat cut face you can sweep across. |
+| Smooth Surface Mesh | `node.smooth_surface_mesh` | Filter | Smooths a liquid's surface mesh by easing each point toward its neighbours, rounding off the small facets and steps. |
+| Surface Mesh Normals | `node.surface_mesh_normals` | Filter | Rebuilds smooth normals from the final surface triangles so lighting follows the smoothed water. |
 | Taper Mesh | `node.taper_mesh` | Filter | Narrows a mesh toward a point along one axis, like sharpening a pencil or a candle flame. The lighting normals scale with it so the taper still shades correctl… |
 | Torus Wrap Field | `node.torus_wrap_field` | Map | Wraps a flat grid of points around a torus, a donut shape, placing copies on its surface. |
 | Transform 3D | `node.transform_3d` | Source | Position, rotation, and scale for one scene object. Wire it into a render_scene transform slot, or drive an axis from an LFO or MIDI to animate it live. |
@@ -294,7 +297,7 @@ _Generated from the node registry. Do not hand-edit. 367 nodes registered, group
 | Turbulence (simplex) | `node.turbulence` | Filter | Pushes particles around with a flowing noise field, giving organic, swirling motion. The classic turbulence force. |
 | Wrap Around (torus) | `node.wrap_around` | Filter | Wraps particles back to the opposite edge when they leave the frame, so the cloud loops seamlessly instead of escaping. |
 
-### Particles 3D (61)
+### Particles 3D (68)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -305,6 +308,7 @@ _Generated from the node registry. Do not hand-edit. 367 nodes registered, group
 | Crossing Distance | `node.crossing_distance` | Filter | Measures how far each grid cell is from the liquid's surface, negative inside the liquid. |
 | Draw Particles (3D scatter) | `node.draw_particles_3d` | Filter | Splats 3D particles into a volume buffer, building up a 3D density field from where they land. The 3D version of Draw Particles. |
 | Draw Particles (camera) | `node.draw_particles_camera` | Filter | Projects 3D particles through a camera and splats them onto a 2D image in one step. The display path for a 3D particle sim. |
+| Dust Potential | `node.dust_potential` | Filter | Finds turbulent dust emitters near solid objects. |
 | Emission Count | `node.emission_count` | Filter | Works out how many foam, spray and bubble particles each bit of breaking water throws off this frame. |
 | Energy Potential | `node.energy_potential` | Filter | Scores how fast each bit of water is moving, from 0 to 1, because faster water throws more foam and spray. |
 | Extend Lattice | `node.extend_lattice` | Filter | Fills the empty cells next to known ones with their neighbours' average, one cell further each time. |
@@ -313,7 +317,7 @@ _Generated from the node registry. Do not hand-edit. 367 nodes registered, group
 | GPU FLIP Domain | `node.gpu_flip_domain` | Source | Sets up a GPU FLIP liquid: its box, resolution, starting fill, gravity and speed. |
 | GPU FLIP Step | `node.gpu_flip_step` | Filter | Moves the water forward one tick, in Steps substeps: gravity, solids, incompressibility and the particles' motion. |
 | Grid to Matter | `node.grid_to_matter` | Filter | Moves each liquid particle with the grid's velocities and updates how compressed it is. |
-| Interpolate Particle Frames | `node.interpolate_particle_frames` | Filter | Smooths a particle simulation between two accepted frames while letting new particles grow in naturally. |
+| Inside Turbulence Potential | `node.inside_turbulence_potential` | Filter | Finds submerged turbulent emitters, including near-surface particles classified inside by FLIP. |
 | Jitter Particles | `node.jitter_particles` | Filter | Nudges each liquid particle by a small random amount, so foam doesn't line up on the simulation's grid. |
 | Keep In Box (3D) | `node.keep_in_box_3d` | Filter | Holds 3D particles inside their container, either wrapping them around or bouncing them back at the edges. The hard boundary after a move. |
 | Keep Whitewater | `node.keep_whitewater` | Filter | Decides which foam, spray and bubbles survive this step: the dead, the stray and the overcrowded go. |
@@ -337,11 +341,12 @@ _Generated from the node registry. Do not hand-edit. 367 nodes registered, group
 | Matter to Grid | `node.matter_to_grid` | Filter | Spreads each liquid particle's weight and motion onto the simulation grid around it. |
 | Move Particles (3D, Euler step) | `node.move_particles_3d` | Filter | Moves every 3D particle one step along its velocity each frame. The integrator for a 3D particle system. |
 | Nearest Crossing | `node.nearest_crossing` | Filter | Passes each grid cell the closest known point on the liquid's surface from its neighbours. |
+| Offset Lattice | `node.offset_lattice` | Filter | Add a distance to every scalar lattice sample. Zero returns the input bits unchanged. Negative offsets grow a negative-inside surface; positive offsets shrink … |
 | Particle Volume | `node.particle_volume` | Filter | Turns liquid particles into a distance field on a grid, the step before the surface mesh is drawn. |
 | Particles To Copies | `node.particles_to_copies` | Map | Places a copy of a shape at every liquid particle, sized by the particle, so you can see the particles themselves. |
 | Preserve Foam | `node.preserve_foam` | Filter | Keeps foam alive longer where lots of it has gathered, so thick foam lingers. |
 | Push From Walls (3D) | `node.push_from_walls_3d` | Filter | Pushes 3D particles gently away from the walls of their container as they get close, keeping them inside without a hard bounce. |
-| Push Out Of Solid | `node.push_out_of_solid` | Filter | Moves liquid particles out of solid regions while keeping their size, velocity and identity. |
+| Redistance Lattice | `node.redistance_lattice` | Filter | Rebuild a node-centred signed distance field from the input zero surface, using the nearest marching-cubes triangle within Band metres. The sign comes from the… |
 | Remove Drift (3D) | `node.remove_drift_3d` | Filter | Balances the forces on a particle system so it stops slowly sliding in one direction — a long-running fluid stays centered instead of silting into a corner. |
 | Retype Whitewater | `node.retype_whitewater` | Filter | Re-decides whether each whitewater particle is now spray, foam or a bubble after it has moved. |
 | Sample Faces at Particles | `node.sample_faces_at_particles` | Filter | Reads the liquid's flow at each particle, so whitewater knows how fast and which way the water there is moving. |
@@ -355,8 +360,13 @@ _Generated from the node registry. Do not hand-edit. 367 nodes registered, group
 | Surface Crossings | `node.surface_crossings` | Filter | Finds where the liquid's surface passes through each grid cell, the first step to measuring distance to the surface. |
 | Swirl Force (3D, curl) | `node.swirl_force_3d` | Filter | Turns a 3D gradient field into a swirling, divergence-free force, the move that makes 3D particles curl into smoke-like eddies. |
 | Turbulence (3D, simplex) | `node.turbulence_3d` | Filter | Pushes 3D particles around with a flowing 3D noise field for organic, swirling motion through space. |
+| Emission Count | `node.turbulence_emission_count` | Filter | Works out how many foam, spray and bubble particles each bit of breaking water throws off this frame. |
+| Turbulence Field | `node.turbulence_field` | Filter | Measures local liquid agitation for whitewater emission. |
 | Wavecrest Potential | `node.wavecrest_potential` | Filter | Scores how sharply each bit of water is breaking over a wave crest, which is where foam and spray come from. |
+| Whitewater Emitter Velocity | `node.whitewater_emitter_velocity` | Filter | Scales surface emitter velocity by the FLIP spray emission factor. |
+| Whitewater Influence | `node.whitewater_influence` | Filter | Decays obstacle influence and reapplies solid sources. |
 | Whitewater Lifecycle | `node.whitewater_lifecycle` | Filter | Moves and ages spray, foam and bubbles the way FLIP's own whitewater does. |
+| Whitewater Obstacle Source | `node.whitewater_obstacle_source` | Filter | Supplies obstacle properties for dust emission and whitewater influence. |
 | Whitewater Step | `node.whitewater_step` | Filter | Makes and moves the spray, foam and bubbles a liquid throws up, all on the GPU. |
 | Whitewater Type | `node.whitewater_type` | Filter | Decides whether each new whitewater particle is spray, foam or a bubble, from where it sits against the water surface. |
 
@@ -412,7 +422,7 @@ _Generated from the node registry. Do not hand-edit. 367 nodes registered, group
 | Track Persist | `node.track_persist` | Filter | Keeps a stable identity on each tracked blob from frame to frame, holding onto one briefly even if it flickers out. Stops IDs from jumping around. |
 | Track Regions | `node.track_regions` | Filter | Assigns stable IDs and motion to detected regions while preserving the legacy box stream for existing HUD nodes. |
 
-### Math & Convert (26)
+### Math & Convert (25)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -424,7 +434,6 @@ _Generated from the node registry. Do not hand-edit. 367 nodes registered, group
 | Divide By Value | `node.divide_by_value` | Map | Divides a list of numbers by one number the GPU just worked out. |
 | Dot Products | `node.dot_products` | Map | Measures how much a list of numbers lines up with each row of a table, all on the GPU. |
 | Magnitude → dB | `node.magnitude_db` | Filter | Converts a brightness or spectrum magnitude image into a bounded decibel field for meters and palettes. |
-| Mix Arrays | `node.mix_arrays` | Filter | Blends two GPU lists of numbers element by element for display-time interpolation. |
 | Normalize | `node.normalize` | Filter | Scales the red and green channels read as a 2D vector down to length 1, keeping the direction and dropping the magnitude. |
 | Pack RGBA | `node.pack_rgba` | Filter | Combines four single-channel images into one RGBA image, one image per colour channel. The opposite of pulling an image apart. |
 | Power | `node.power` | Filter | Raises each value to a power, which sharpens or softens a 0-to-1 field. Above 1 pushes toward black, below 1 lifts the midtones. |
@@ -497,7 +506,7 @@ _Generated from the node registry. Do not hand-edit. 367 nodes registered, group
 | — | `system.mesh_input` | — | — |
 | — | `system.mesh_output` | — | — |
 
-### Effect & generator presets (96)
+### Effect & generator presets (95)
 
 | id | name | kind | category | params |
 |---|---|---|---|---|
@@ -588,12 +597,11 @@ _Generated from the node registry. Do not hand-edit. 367 nodes registered, group
 | `VoronoiPrism` | Voronoi Prism | effect | Spatial | 3 |
 | `WaterBasin` | Water Basin (CPU) | generator | Sim | 1069 |
 | `WaterDamBreak` | Water — Dam Break | generator | Sim | 2308 |
-| `WaterDamBreakGpu` | Water — Dam Break (GPU Surface) | generator | Sim | 2309 |
-| `WaterDamBreakGpuFlip` | Water — Dam Break (GPU FLIP) | generator | Sim | 2296 |
-| `WaterDamBreakMatter` | Water — Dam Break (Live GPU) | generator | Sim | 1390 |
-| `WaterDamBreakParticles` | Water — Dam Break (Particle View) | generator | Sim | 2293 |
-| `WaterFloatingBoxMatter` | Water — Floating Box (Live GPU) | generator | Sim | 1383 |
-| `WaterStillPoolMatter` | Water — Still Pool (Live GPU) | generator | Sim | 1058 |
+| `WaterDamBreakGpu` | Water — Dam Break (GPU Surface) | generator | Sim | 2314 |
+| `WaterDamBreakGpuFlip` | Water — Dam Break (GPU FLIP) | generator | Sim | 2613 |
+| `WaterDamBreakMatter` | Water — Dam Break (Live GPU) | generator | Sim | 1397 |
+| `WaterFloatingBoxMatter` | Water — Floating Box (Live GPU) | generator | Sim | 1390 |
+| `WaterStillPoolMatter` | Water — Still Pool (Live GPU) | generator | Sim | 1065 |
 | `Watercolor` | Watercolor | effect | Stylize | 4 |
 | `Wireframe` | Wireframe | generator | Geometry | 9 |
 | `WireframeDepth` | Wireframe Depth | effect | Stylize | 8 |

@@ -79,6 +79,19 @@ impl Executor {
         let flow = 'iterations: {
             let mut iteration = 0u32;
             loop {
+                if let Some(clock) = region.clock
+                    && let Some((port, interval)) = graph.get_node(clock)
+                        .and_then(|owner| owner.node.substep_clock_interval(iteration))
+                {
+                    if let Some(slot) = plan.steps().iter().find(|step| step.node == clock)
+                        .and_then(|step| step.outputs.iter().find(|(name, _)| *name == port))
+                        .and_then(|(_, resource)| self.backend.slot_for(*resource))
+                    {
+                        self.backend.set_scalar(slot, ParamValue::Float(interval.duration().0 as f32));
+                    }
+                    graph.get_node_mut(region.boundary).expect("boundary exists")
+                        .node.set_substep_interval(interval);
+                }
                 let more = graph
                     .get_node_mut(region.boundary)
                     .expect("boundary exists")

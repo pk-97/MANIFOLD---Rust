@@ -22,8 +22,16 @@ import diff_scope
 
 def process_alive(pid):
     """True while `pid` runs; a reaped or zombie process counts as gone."""
-    state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)],
-                           capture_output=True, text=True).stdout.strip()
+    try:
+        state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)],
+                               capture_output=True, text=True).stdout.strip()
+    except PermissionError:
+        # macOS sandbox can deny ps while allowing checks of our own children.
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
     return bool(state) and not state.startswith("Z")
 
 
@@ -504,7 +512,8 @@ class DeliveryTests(unittest.TestCase):
             with self.assertRaises(SystemExit) as stopped:
                 land_branch.main()
             self.assertEqual(stopped.exception.code, 1)
-            self.assertEqual([call.args[0] for call in step.call_args_list], ["fetch", "merge origin/main into branch"])
+            self.assertEqual([call.args[0] for call in step.call_args_list],
+                             ["fetch", "merge origin/main into branch", "pin gate commit"])
             self.assertNotIn("--keep-going", gate.call_args.args[0])
 
 

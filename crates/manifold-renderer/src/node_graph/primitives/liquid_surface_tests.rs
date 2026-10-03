@@ -757,7 +757,7 @@ fn fluid_running_total_names_a_total_past_its_capacity() {
 fn reference_blob(
     particles: &[FluidParticle],
     index: usize,
-    cell: f64,
+    _cell: f64,
     particle_scale: f64,
     stretch: f64,
     smoothing: f64,
@@ -767,7 +767,7 @@ fn reference_blob(
     let p = particles[index].position_radius;
     let x = [p[0] as f64, p[1] as f64, p[2] as f64];
     let physical = p[3] as f64;
-    let radius = (particle_scale * physical).min(cell);
+    let radius = particle_scale * physical;
     let (mut weight_sum, mut mean, mut neighbours, mut nearest) = (0.0, [0.0; 3], 0, f64::INFINITY);
     let mut members = Vec::new();
     for (k, other) in particles.iter().enumerate() {
@@ -816,9 +816,6 @@ fn reference_blob(
             basis = vectors;
         }
     }
-    let shift = (0..3).map(|a| (centre[a] - x[a]).powi(2)).sum::<f64>().sqrt();
-    let cap = ((1.0 - LEVEL_SET_BAND) * cell - shift).max(1e-6 * cell);
-    let axes = axes.map(|a| a.min(cap));
     // G = V diag(1/a) Vᵀ with eigenvectors as columns of V (basis[row][col]).
     let g = std::array::from_fn(|r| {
         std::array::from_fn(|col| (0..3).map(|k| basis[r][k] * basis[col][k] / axes[k]).sum())
@@ -981,7 +978,9 @@ fn fluid_shape_particle_blobs_stretch_one_is_an_exact_sphere() {
             f64::from(iso),
             min_n,
         );
-        assert_eq!(blob.shape_off, [0.0; 4], "blob {index} is not a sphere");
+        assert_eq!(&blob.shape_off[..3], &[0.0; 3], "blob {index} is not a sphere");
+        let shift = (0..3).map(|a| (blob.center_radius[a] - sorted[index].position_radius[a]).powi(2)).sum::<f32>().sqrt();
+        assert!((blob.shape_off[3] - shift).abs() < 1e-6, "blob {index} search displacement");
         let diag = blob.shape_diag;
         assert!(diag[0] == diag[1] && diag[1] == diag[2], "blob {index} axes differ: {diag:?}");
         assert!((f64::from(diag[0]) * f64::from(blob.center_radius[3]) - 1.0).abs() < 1e-5, "blob {index} G ≠ 1 / bound");
@@ -1004,13 +1003,28 @@ fn fluid_shape_particle_blobs_stretch_one_is_an_exact_sphere() {
 /// The level set's cap outside the liquid, as a fraction of a bin; the WGSL of
 /// `node.particle_volume` and `node.shape_particle_blobs` both hold it (P6e).
 /// The volume's cap, as a fraction of a bin; the blob reach cap is the rest.
-const LEVEL_SET_BAND: f64 = 1.0 / 3.0;
+fn native_support(ijk: [u32; 3], centre: [f64; 3], radius: f64, min: [f64; 3], h: [f64; 3], extra: f64) -> bool {
+    (0..3).all(|a| {
+        let lo = ((centre[a] - 1.5 * radius - extra - min[a]) / h[a]).floor();
+        let hi = ((centre[a] + 1.5 * radius + extra - min[a]) / h[a]).floor() + 1.0;
+        f64::from(ijk[a]) >= lo && f64::from(ijk[a]) <= hi
+    })
+}
 
 /// The volume against a brute force over every blob, not just the node's
 /// bins: it matches only if no blob the ±1-bin search misses comes within the
 /// cap, which is the blob atom's reach contract.
 #[test]
 fn fluid_particle_volume_matches_brute_force_distance_and_solid_clamp() {
+    volume_distance_reference(0.0);
+}
+
+#[test]
+fn fluid_fill_pits_expanded_band_matches_all_blobs() {
+    volume_distance_reference(0.5);
+}
+
+fn volume_distance_reference(band_extra: f32) {
     let mut harness = Harness::new();
     let lattice = Lattice { center: [0.0, 1.0, 0.0], size: [2.0, 2.0, 2.0], cell: 0.25 };
     let solid_nodes = [9u32, 9, 9];
@@ -1047,6 +1061,7 @@ fn fluid_particle_volume_matches_brute_force_distance_and_solid_clamp() {
         ("nodes_y", solid_nodes[1] as f32),
         ("nodes_z", solid_nodes[2] as f32),
         ("resolution_scale", scale as f32),
+        ("band_extra", band_extra),
     ]);
     node_params.insert(Cow::Borrowed("resolution_scale"), ParamValue::Float(scale as f32));
     let volume_nodes: [Slot; 3] = std::array::from_fn(|_| harness.scalar());
@@ -1067,17 +1082,37 @@ fn fluid_particle_volume_matches_brute_force_distance_and_solid_clamp() {
         assert_eq!(value, Some(ParamValue::Float(expected as f32)));
     }
     let levelset: Vec<f32> = read(&levelset_buf, total);
+    if band_extra > 0.0 {
+        use super::lattice_bricks::{LatticeBricks, brick_layout};
+        let layout = brick_layout(solid_nodes, scale).unwrap();
+        let (bricks, _) = harness.array::<u32>(&[], layout.words as usize);
+        let (_, errors) = harness.run(
+            &mut LatticeBricks::new(),
+            &[("blobs", blobs_slot), ("cell_ranges", ranges_slot), ("solid", solid_slot)],
+            &[("bricks", bricks)], &node_params,
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        let (sparse, sparse_buf) = harness.array::<f32>(&[], total);
+        let (_, errors) = harness.run(
+            &mut ParticleVolume::new(),
+            &[("blobs", blobs_slot), ("cell_ranges", ranges_slot), ("solid", solid_slot), ("bricks", bricks)],
+            &[("levelset", sparse)], &node_params,
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(read::<u32>(&sparse_buf, total), read::<u32>(&levelset_buf, total));
+    }
     let h: [f64; 3] = std::array::from_fn(|a| f64::from(lattice.size[a]) / f64::from(nodes[a] - 1));
-    let band = LEVEL_SET_BAND * f64::from(lattice.cell);
+    let band = 3.0 * blobs.iter().map(|b| f64::from(b.center_radius[3])).fold(0.0, f64::max) + f64::from(band_extra)
+        + if band_extra > 0.0 { h.iter().map(|v| v*v).sum::<f64>().sqrt() } else { 0.0 };
     let (mut inside, mut clamped, mut in_band) = (0, 0, 0);
     for (idx, &value) in levelset.iter().enumerate() {
         let ijk = [idx as u32 % nodes[0], (idx as u32 / nodes[0]) % nodes[1], idx as u32 / (nodes[0] * nodes[1])];
-        let border = (0..3).any(|a| ijk[a] == 0 || ijk[a] == nodes[a] - 1);
         let p: [f64; 3] = std::array::from_fn(|a| f64::from(min[a]) + f64::from(ijk[a]) * h[a]);
         let mut expected = band;
         for blob in &blobs[..particles.len()] {
             let reach = f64::from(blob.center_radius[3]);
-            if reach <= 0.0 {
+            let extra = f64::from(band_extra) + if band_extra > 0.0 { h.iter().map(|v| v*v).sum::<f64>().sqrt() } else { 0.0 };
+            if reach <= 0.0 || !native_support(ijk, std::array::from_fn(|a| f64::from(blob.center_radius[a])), reach, min.map(f64::from), h, extra) {
                 continue;
             }
             let d: [f64; 3] = std::array::from_fn(|a| p[a] - f64::from(blob.center_radius[a]));
@@ -1087,12 +1122,9 @@ fn fluid_particle_volume_matches_brute_force_distance_and_solid_clamp() {
             expected = expected.min(reach * (q - 1.0));
         }
         // Solid distance is linear in y, so trilinear interpolation is exact.
-        if !border && p[1] - 0.7 < 0.0 {
+        if p[1] - 0.7 < 0.0 {
             expected = expected.max(0.0);
             clamped += 1;
-        }
-        if border {
-            expected = band;
         }
         if expected < 0.0 {
             inside += 1;
@@ -1117,7 +1149,8 @@ fn fluid_particle_volume_is_the_distance_to_a_lone_sphere() {
     let lattice = Lattice { center: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0], cell: 0.25 };
     let solid_nodes = [5u32, 5, 5];
     let centre = [0.03_f32, -0.02, 0.01];
-    let (r, scale) = (0.05_f32, 3.0_f32);
+    // Exact native marker coefficient; scale three exceeds the old bin cap.
+    let (r, scale) = (0.31017524 * lattice.cell, 3.0_f32);
     let particles = [particle(centre, r, 1)];
     let shape = [("particle_scale", scale), ("stretch", 4.0), ("smoothing", 0.0), ("isolated_scale", 1.0), ("min_neighbours", 6.0)];
     let (_, _, _, (_, ranges_slot, blobs_slot)) = sort_and_shape(&mut harness, &lattice, &particles, 1, &shape);
@@ -1150,14 +1183,13 @@ fn fluid_particle_volume_is_the_distance_to_a_lone_sphere() {
     let min = lattice.min();
     let h = f64::from(lattice.size[0]) / f64::from(nodes[0] - 1);
     let radius = f64::from(scale * r);
-    let band = LEVEL_SET_BAND * f64::from(lattice.cell);
+    let band = 3.0 * radius;
     let mut inside = 0;
     for (idx, &value) in levelset.iter().enumerate() {
         let ijk = [idx as u32 % nodes[0], (idx as u32 / nodes[0]) % nodes[1], idx as u32 / (nodes[0] * nodes[1])];
-        let border = (0..3).any(|a| ijk[a] == 0 || ijk[a] == nodes[a] - 1);
         let p: [f64; 3] = std::array::from_fn(|a| f64::from(min[a]) + f64::from(ijk[a]) * h);
         let distance = (0..3).map(|a| (p[a] - f64::from(centre[a])).powi(2)).sum::<f64>().sqrt() - radius;
-        let expected = if border { band } else { distance.min(band) };
+        let expected = if native_support(ijk, centre.map(f64::from), radius, min.map(f64::from), [h; 3], 0.0) { distance.min(band) } else { band };
         if expected < 0.0 {
             inside += 1;
         }
@@ -1168,6 +1200,7 @@ fn fluid_particle_volume_is_the_distance_to_a_lone_sphere() {
 
 // --- P6: marching cubes ---------------------------------------------------
 
+use super::count_surface_edges::CountSurfaceEdges;
 use super::count_surface_triangles::CountSurfaceTriangles;
 use super::volume_surface_mesh::VolumeSurfaceMesh;
 use crate::generators::mesh_common::MeshVertex;
@@ -1233,6 +1266,17 @@ impl SphereLevelSet {
         level_set
     }
 
+    /// A crossing on the lattice boundary exercises the ownership rule's
+    /// clamped neighbouring cells and its lowest-index edge convention.
+    fn boundary(nodes: u32) -> Self {
+        let min = -1.0;
+        let size = 2.0;
+        let values = (0..nodes.pow(3))
+            .map(|i| if i % nodes == 0 { -1.0 } else { 1.0 })
+            .collect();
+        Self { nodes, min, size, center: [0.0; 3], radius: 0.0, values }
+    }
+
     fn phi(&self, p: [u32; 3]) -> f64 {
         f64::from(self.values[(p[0] + self.nodes * (p[1] + self.nodes * p[2])) as usize])
     }
@@ -1266,6 +1310,9 @@ struct MeshRun {
     vertices: Vec<MeshVertex>,
     errors: Vec<String>,
     total: Option<ParamValue>,
+    levelset: Slot,
+    scan: Slot,
+    vertices_slot: Slot,
 }
 
 fn run_marching_cubes(
@@ -1338,7 +1385,138 @@ fn run_marching_cubes_on(
     );
     let provided = harness.buffer(vertices_slot);
     let slots = (provided.size / std::mem::size_of::<MeshVertex>() as u64) as usize;
-    MeshRun { vertices: read(&provided, slots), errors, total }
+    MeshRun {
+        vertices: read(&provided, slots),
+        errors,
+        total,
+        levelset: levelset_slot,
+        scan: scan_slot,
+        vertices_slot,
+    }
+}
+
+struct IndexedMeshRun {
+    vertices: Vec<MeshVertex>,
+    indices: Vec<u32>,
+    errors: Vec<String>,
+    total: Option<ParamValue>,
+    levelset: Slot,
+    scan: Slot,
+    edge_scan: Slot,
+    vertices_slot: Slot,
+    indices_slot: Slot,
+    extent_slot: Option<Slot>,
+}
+
+/// The indexed sibling of `run_marching_cubes_on`: triangle counts still own
+/// triangle order, while the second count/scan assigns one compact slot to
+/// every crossed lattice edge.
+fn run_indexed_marching_cubes_on(
+    harness: &mut Harness,
+    mesh: &mut VolumeSurfaceMesh,
+    level_set: &SphereLevelSet,
+    capacity: u32,
+    reported_total: Option<f32>,
+    with_extent: bool,
+) -> IndexedMeshRun {
+    let (levelset_slot, _) = harness.array(&level_set.values, level_set.values.len());
+    let (counts_slot, _) = harness.array::<u32>(&[], level_set.values.len());
+    let n = level_set.nodes as f32;
+    let nodes = params(&[("nodes_x", n), ("nodes_y", n), ("nodes_z", n)]);
+    let (_, errors) = harness.run(
+        &mut CountSurfaceTriangles::new(),
+        &[("levelset", levelset_slot)],
+        &[("counts", counts_slot)],
+        &nodes,
+    );
+    assert!(errors.is_empty(), "{errors:?}");
+
+    let (scan_slot, _) = harness.array::<u32>(&[], level_set.values.len());
+    let total_slot = harness.scalar();
+    let extent = with_extent.then(|| harness.array::<u32>(&[], 4));
+    let mut running = RunningTotal::new();
+    let mut total = None;
+    for _ in 0..2 {
+        let mut outputs = vec![("out", scan_slot), ("total", total_slot)];
+        if let Some((extent_slot, _)) = &extent {
+            outputs.push(("extent", *extent_slot));
+        }
+        let (scalars, errors) = harness.run(
+            &mut running,
+            &[("in", counts_slot)],
+            &outputs,
+            &params(&[("per_item", 3.0)]),
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        total = scalars.iter().find(|(slot, _)| *slot == total_slot).map(|(_, v)| v.clone());
+    }
+
+    let (edge_counts_slot, _) = harness.array::<u32>(&[], level_set.values.len());
+    let (_, errors) = harness.run(
+        &mut CountSurfaceEdges::new(),
+        &[("levelset", levelset_slot)],
+        &[("counts", edge_counts_slot)],
+        &nodes,
+    );
+    assert!(errors.is_empty(), "{errors:?}");
+    let (edge_scan_slot, _) = harness.array::<u32>(&[], level_set.values.len());
+    let (_, errors) = harness.run(
+        &mut RunningTotal::new(),
+        &[("in", edge_counts_slot)],
+        &[("out", edge_scan_slot)],
+        &ParamValues::default(),
+    );
+    assert!(errors.is_empty(), "{errors:?}");
+
+    let (vertices_slot, _) = harness.array::<MeshVertex>(&[], capacity as usize);
+    let (indices_slot, _) = harness.array::<u32>(&[], capacity as usize);
+    let centre = level_set.min + 0.5 * level_set.size;
+    let mut mesh_params = params(&[
+        ("center_x", centre),
+        ("center_y", centre),
+        ("center_z", centre),
+        ("size_x", level_set.size),
+        ("size_y", level_set.size),
+        ("size_z", level_set.size),
+        ("nodes_x", n),
+        ("nodes_y", n),
+        ("nodes_z", n),
+        ("resolution_scale", 1.0),
+        ("max_capacity", capacity as f32),
+    ]);
+    if let Some(total) = reported_total {
+        mesh_params.insert(Cow::Borrowed("total"), ParamValue::Float(total));
+    }
+    let mut mesh_inputs = vec![
+        ("levelset", levelset_slot),
+        ("scan", scan_slot),
+        ("edge_scan", edge_scan_slot),
+    ];
+    if let Some((extent_slot, _)) = &extent {
+        mesh_inputs.push(("extent", *extent_slot));
+    }
+    let (_, errors) = harness.run(
+        mesh,
+        &mesh_inputs,
+        &[("vertices", vertices_slot), ("indices", indices_slot)],
+        &mesh_params,
+    );
+    let vertices = harness.buffer(vertices_slot);
+    let indices = harness.buffer(indices_slot);
+    let vertex_slots = (vertices.size / std::mem::size_of::<MeshVertex>() as u64) as usize;
+    let index_slots = (indices.size / std::mem::size_of::<u32>() as u64) as usize;
+    IndexedMeshRun {
+        vertices: read(&vertices, vertex_slots),
+        indices: read(&indices, index_slots),
+        errors,
+        total,
+        levelset: levelset_slot,
+        scan: scan_slot,
+        edge_scan: edge_scan_slot,
+        vertices_slot,
+        indices_slot,
+        extent_slot: extent.as_ref().map(|(slot, _)| *slot),
+    }
 }
 
 /// Res 64 at Surface Detail 2 is a 261³ lattice: more than 65,535 threadgroups
@@ -1374,6 +1552,87 @@ fn triangle_area(a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> f64 {
 
 fn is_zero(vertex: &MeshVertex) -> bool {
     bytemuck::bytes_of(vertex).iter().all(|&b| b == 0)
+}
+
+fn sorted_triangle_bytes(vertices: &[MeshVertex]) -> Vec<Vec<u8>> {
+    let mut triangles: Vec<Vec<u8>> = vertices
+        .chunks_exact(3)
+        .map(|triangle| bytemuck::cast_slice::<MeshVertex, u8>(triangle).to_vec())
+        .collect();
+    triangles.sort_unstable();
+    triangles
+}
+
+/// Expand an indexed triangle list and compare the complete vertex records,
+/// including normals, UVs, tangents, and colour. The indexed path owns one
+/// record per crossed edge; its indices retain the original table order.
+fn assert_indexed_expansion_matches(
+    level_set: &SphereLevelSet,
+    direct: &MeshRun,
+    indexed: &IndexedMeshRun,
+    radial_winding: bool,
+) -> usize {
+    assert!(direct.errors.is_empty(), "direct: {:?}", direct.errors);
+    assert!(indexed.errors.is_empty(), "indexed: {:?}", indexed.errors);
+    assert_eq!(indexed.total, direct.total, "triangle totals differ");
+    let triangles = match direct.total.as_ref() {
+        Some(ParamValue::Float(total)) => *total as usize,
+        other => panic!("missing triangle total: {other:?}"),
+    };
+    let triangle_vertices = triangles * 3;
+    assert!(triangle_vertices > 0, "fixture must cross the surface");
+    assert!(direct.vertices.len() >= triangle_vertices);
+    assert!(indexed.indices.len() >= triangle_vertices);
+
+    let unique_live = indexed.indices[..triangle_vertices]
+        .iter()
+        .copied()
+        .max()
+        .map_or(0, |index| index as usize + 1);
+    assert!(unique_live < triangle_vertices, "indexed mesh did not share vertices");
+    for (triangle, &index) in indexed.indices[..triangle_vertices].iter().enumerate() {
+        assert!((index as usize) < unique_live, "index {triangle} is out of bounds: {index} >= {unique_live}");
+    }
+
+    let expanded: Vec<MeshVertex> = indexed.indices[..triangle_vertices]
+        .iter()
+        .map(|&index| indexed.vertices[index as usize])
+        .collect();
+    assert_eq!(
+        bytemuck::cast_slice::<MeshVertex, u8>(&expanded),
+        bytemuck::cast_slice::<MeshVertex, u8>(&direct.vertices[..triangle_vertices]),
+        "indexed expansion changes the triangle-list vertex records"
+    );
+    assert_eq!(sorted_triangle_bytes(&expanded), sorted_triangle_bytes(&direct.vertices[..triangle_vertices]));
+    assert!(direct.vertices[triangle_vertices..].iter().all(is_zero), "direct vertex tail is not zero");
+    assert!(indexed.vertices[unique_live..].iter().all(is_zero), "indexed vertex tail is not zero");
+    assert!(indexed.indices[triangle_vertices..].iter().all(|&index| index == 0), "index tail is not zero");
+
+    let expected = level_set.reference_positions();
+    assert_eq!(expected.len(), triangle_vertices, "f64 reference triangle count");
+    let worst = expanded
+        .iter()
+        .zip(expected)
+        .flat_map(|(vertex, want)| vertex.position.into_iter().zip(want))
+        .map(|(got, want)| (f64::from(got) - want).abs())
+        .fold(0.0, f64::max);
+    assert!(worst < 1e-5, "indexed positions differ from the independent f64 reference by {worst}");
+    if radial_winding {
+        for (triangle, vertices) in expanded.chunks_exact(3).enumerate() {
+            let u: [f32; 3] = std::array::from_fn(|axis| vertices[1].position[axis] - vertices[0].position[axis]);
+            let v: [f32; 3] = std::array::from_fn(|axis| vertices[2].position[axis] - vertices[0].position[axis]);
+            let face = [
+                u[1] * v[2] - u[2] * v[1],
+                u[2] * v[0] - u[0] * v[2],
+                u[0] * v[1] - u[1] * v[0],
+            ];
+            let out: f32 = (0..3)
+                .map(|axis| face[axis] * (vertices[0].position[axis] - level_set.center[axis]))
+                .sum();
+            assert!(out > 0.0, "triangle {triangle} winds inward");
+        }
+    }
+    triangle_vertices
 }
 
 #[test]
@@ -1497,6 +1756,72 @@ fn fluid_surface_mesh_grows_past_capacity_mid_run() {
     let steady = run_marching_cubes_on(&mut harness, &mut mesh, &foam, 999, Some(triangles));
     assert!(steady.errors.is_empty(), "{:?}", steady.errors);
     assert_eq!(steady.vertices.len(), grown.vertices.len(), "no allocation once the surface fits");
+}
+
+/// The compact edge-owned mesh expands to the existing triangle list exactly:
+/// same complete records, table order and winding, with one vertex per shared
+/// lattice edge. Sphere, random foam, and a boundary-only crossing cover the
+/// ordinary, high-sharing, and clamped-edge cases at both small grids.
+#[test]
+fn fluid_indexed_surface_mesh_matches_triangle_list_on_spheres_foam_and_boundary() {
+    for (nodes, level_set, radial_winding) in [
+        (8, SphereLevelSet::new(8, 0.7), true),
+        (16, SphereLevelSet::new(16, 0.7), true),
+        (8, SphereLevelSet::foam(8, 0xf0a3_5eed), false),
+        (16, SphereLevelSet::foam(16, 0x5eed_cafe), false),
+        (8, SphereLevelSet::boundary(8), false),
+        (16, SphereLevelSet::boundary(16), false),
+    ] {
+        let mut harness = Harness::new();
+        let capacity = 200_000;
+        let direct = run_marching_cubes(&mut harness, &level_set, capacity, None);
+        let indexed = run_indexed_marching_cubes_on(
+            &mut harness,
+            &mut VolumeSurfaceMesh::new(),
+            &level_set,
+            capacity,
+            None,
+            true,
+        );
+        let triangle_vertices = assert_indexed_expansion_matches(&level_set, &direct, &indexed, radial_winding);
+        let extent_slot = indexed.extent_slot.expect("indexed live extent");
+        let extent_buffer = harness.buffer(extent_slot);
+        assert!(
+            harness
+                .live_extents
+                .iter()
+                .any(|(slot, extent)| *slot == indexed.indices_slot && extent.counts.ptr_eq(&extent_buffer) && extent.per_item == 3),
+            "triangle extent is published on indices"
+        );
+        assert!(
+            harness
+                .live_extents
+                .iter()
+                .any(|(slot, extent)| *slot == indexed.vertices_slot && extent.per_item == 1),
+            "edge extent is published on compact vertices"
+        );
+        assert!(triangle_vertices > nodes as usize, "{nodes}³ fixture produced too little surface");
+    }
+}
+
+/// A first frame whose triangle total exceeds the supplied starting capacity
+/// clears both owned indexed outputs. The same path can then grow on a later
+/// frame; this assertion protects the no-truncated-mesh contract.
+#[test]
+fn fluid_indexed_surface_mesh_overflow_is_empty_and_tails_are_zero() {
+    let mut harness = Harness::new();
+    let foam = SphereLevelSet::foam(16, 0xdead_beef);
+    let run = run_indexed_marching_cubes_on(
+        &mut harness,
+        &mut VolumeSurfaceMesh::new(),
+        &foam,
+        3,
+        None,
+        false,
+    );
+    assert!(run.errors.is_empty(), "first frame has no late total: {:?}", run.errors);
+    assert!(run.vertices.iter().all(is_zero), "overflowed indexed vertices must be empty");
+    assert!(run.indices.iter().all(|&index| index == 0), "overflowed indices must be empty");
 }
 
 // --- P6b: live triangles only ---------------------------------------------
@@ -1784,15 +2109,12 @@ fn fluid_clamp_liquid_to_solids_matches_reference_and_passes_through() {
     let (_, errors) = run(&mut harness, nodes);
     assert!(errors.is_empty(), "{errors:?}");
     let clamped: Vec<f32> = read(&clamped_buf, values.len());
-    let band = cell / 3.0;
     let h: [f64; 3] = std::array::from_fn(|a| f64::from(size[a]) / f64::from(nodes[a] - 1));
     let (mut border, mut raised, mut kept, mut ambiguous) = (0, 0, 0, 0);
     for (idx, (&value, &out)) in values[..total].iter().zip(&clamped).enumerate() {
         let ijk = [idx as u32 % nodes[0], (idx as u32 / nodes[0]) % nodes[1], idx as u32 / (nodes[0] * nodes[1])];
         if (0..3).any(|a| ijk[a] == 0 || ijk[a] == nodes[a] - 1) {
-            assert_eq!(out.to_bits(), band.to_bits(), "border node {ijk:?}: {out}");
             border += 1;
-            continue;
         }
         let p: [f64; 3] = std::array::from_fn(|a| f64::from(min[a]) + f64::from(ijk[a]) * h[a]);
         let s = solid_sample(&solid, solid_nodes, min, size, p);
@@ -1801,7 +2123,15 @@ fn fluid_clamp_liquid_to_solids_matches_reference_and_passes_through() {
             ambiguous += 1;
             continue;
         }
-        let expected = if s < 0.0 { value.max(0.0) } else { value };
+        // ParticleMesher::_computeScalarField negates its distance, then
+        // ScalarField::getScalarFieldValue clips positive-inside solid values.
+        // Convert back to this graph's negative-inside convention; canonicalize
+        // threshold zero because the GPU max returns positive zero.
+        let mut native = -f64::from(value);
+        if s < 0.0 && native > 0.0 {
+            native = 0.0;
+        }
+        let expected = if native == 0.0 { 0.0 } else { -native as f32 };
         if s < 0.0 && value < 0.0 {
             raised += 1;
         } else if s > 0.0 {
@@ -1856,10 +2186,9 @@ fn fluid_clamp_scheduled_boundary_renders_like_unfrozen() {
 /// Resolution Scale 4, Particle Scale 8. Water fills a padded 1 m lattice at
 /// resolution 8 against the floor and four closed walls and, through the open
 /// top, up to the lattice's top edge. After the clamp every padding node
-/// (behind a closed wall) reads air and every border node reads the band;
-/// before it, the padding reads liquid and smoothing has pulled the border
-/// off the band (the volume already holds it there), or the fixture proves
-/// nothing.
+/// (behind a closed wall) reads air, including borders. Open border samples
+/// pass through, as in the native production mesher. The fixture must bring
+/// liquid into solid padding before the final clamp.
 #[test]
 fn fluid_liquid_surface_keeps_padding_and_border_air_at_extreme_dials() {
     use crate::node_graph::liquid::lattice::{LiquidLattice, PADDING_NODES};
@@ -1946,20 +2275,24 @@ fn fluid_liquid_surface_keeps_padding_and_border_air_at_extreme_dials() {
 
     let smoothed: Vec<f32> = read(&smoothed.expect("three passes"), total);
     let clamped: Vec<f32> = read(&clamped_buf, total);
-    let band = cell / 3.0;
     let h: [f64; 3] = std::array::from_fn(|a| f64::from(lattice.size[a]) / f64::from(nodes[a] - 1));
     let (mut border, mut padding) = (0, 0);
     let (mut border_moved_before, mut padding_liquid_before) = (0, 0);
     for idx in 0..total {
         let ijk = [idx as u32 % nodes[0], (idx as u32 / nodes[0]) % nodes[1], idx as u32 / (nodes[0] * nodes[1])];
+        let p: [f64; 3] = std::array::from_fn(|a| f64::from(min[a]) + f64::from(ijk[a]) * h[a]);
+        let solid_value = solid_sample(&solid, solid_nodes, min, lattice.size, p);
         if (0..3).any(|a| ijk[a] == 0 || ijk[a] == nodes[a] - 1) {
-            assert_eq!(clamped[idx].to_bits(), band.to_bits(), "border node {ijk:?} reads {}", clamped[idx]);
+            if solid_value < -1e-4 {
+                assert!(clamped[idx] >= 0.0, "solid border node {ijk:?} reads liquid");
+            } else if solid_value > 1e-4 {
+                assert_eq!(clamped[idx].to_bits(), smoothed[idx].to_bits(), "open border {ijk:?}");
+            }
             border += 1;
-            border_moved_before += usize::from(smoothed[idx].to_bits() != band.to_bits());
+            border_moved_before += usize::from(smoothed[idx] < 0.0);
             continue;
         }
-        let p: [f64; 3] = std::array::from_fn(|a| f64::from(min[a]) + f64::from(ijk[a]) * h[a]);
-        if solid_sample(&solid, solid_nodes, min, lattice.size, p) < -1e-4 {
+        if solid_value < -1e-4 {
             assert!(clamped[idx] >= 0.0, "padding node {ijk:?} reads liquid: {}", clamped[idx]);
             padding += 1;
             padding_liquid_before += usize::from(smoothed[idx] < 0.0);
@@ -1967,8 +2300,8 @@ fn fluid_liquid_surface_keeps_padding_and_border_air_at_extreme_dials() {
     }
     assert!(border > 1000 && padding > 1000, "border {border}, padding {padding}");
     assert!(
-        border_moved_before > 0 && padding_liquid_before > 0,
-        "smoothing must move the border off the band ({border_moved_before}) and the unclamped surface must reach the padding ({padding_liquid_before})"
+        padding_liquid_before > 0,
+        "smoothing must reach the solid padding; liquid border samples ({border_moved_before}) and the unclamped surface must reach the padding ({padding_liquid_before})"
     );
 }
 
@@ -1998,6 +2331,33 @@ fn relax_pass(
     if let Some((slot, extent)) = harness.live_extents.first().cloned() {
         Backend::set_live_extent(&mut harness.backend, slot, extent);
     }
+}
+
+/// Relax a mesh without a live extent. The optional edge scan switches the
+/// same shader from triangle-list slots to compact shared-edge slots.
+fn relax_pass_slots(
+    harness: &mut Harness,
+    relax: &mut RelaxSurfaceMesh,
+    levelset: Slot,
+    scan: Slot,
+    edge_scan: Option<Slot>,
+    nodes: u32,
+    input: Slot,
+    output: Slot,
+    strength: f32,
+) {
+    let mut inputs = vec![("vertices", input), ("levelset", levelset), ("scan", scan)];
+    if let Some(edge_scan) = edge_scan {
+        inputs.push(("edge_scan", edge_scan));
+    }
+    let n = nodes as f32;
+    let (_, errors) = harness.run(
+        relax,
+        &inputs,
+        &[("relaxed", output)],
+        &params(&[("nodes_x", n), ("nodes_y", n), ("nodes_z", n), ("strength", strength)]),
+    );
+    assert!(errors.is_empty(), "{errors:?}");
 }
 
 /// Welded vertex ids of a closed triangle list (shared vertices are
@@ -2128,6 +2488,77 @@ fn fluid_relax_surface_mesh_matches_umbrella_reference_on_a_bumpy_sphere() {
     );
 }
 
+/// Cell-owned relaxation reads the same neighbours in the indexed and
+/// triangle-list layouts. Two sequential passes at strength 0.5 and 0 are
+/// compared record-for-record after expanding the compact indices.
+#[test]
+fn fluid_indexed_relaxation_matches_triangle_list_for_two_passes() {
+    let mut harness = Harness::new();
+    let sphere = SphereLevelSet::new(16, 0.7);
+    let capacity = 200_000;
+    let direct = run_marching_cubes(&mut harness, &sphere, capacity, None);
+    let indexed = run_indexed_marching_cubes_on(
+        &mut harness,
+        &mut VolumeSurfaceMesh::new(),
+        &sphere,
+        capacity,
+        None,
+        false,
+    );
+    let triangle_vertices = assert_indexed_expansion_matches(&sphere, &direct, &indexed, true);
+
+    for strength in [0.5, 0.0] {
+        let mut direct_input = direct.vertices_slot;
+        let mut indexed_input = indexed.vertices_slot;
+        for pass in 0..2 {
+            let (direct_output, direct_buffer) = harness.array::<MeshVertex>(&[], direct.vertices.len());
+            let (indexed_output, indexed_buffer) = harness.array::<MeshVertex>(&[], indexed.vertices.len());
+            relax_pass_slots(
+                &mut harness,
+                &mut RelaxSurfaceMesh::new(),
+                direct.levelset,
+                direct.scan,
+                None,
+                sphere.nodes,
+                direct_input,
+                direct_output,
+                strength,
+            );
+            relax_pass_slots(
+                &mut harness,
+                &mut RelaxSurfaceMesh::new(),
+                indexed.levelset,
+                indexed.scan,
+                Some(indexed.edge_scan),
+                sphere.nodes,
+                indexed_input,
+                indexed_output,
+                strength,
+            );
+            let direct_values: Vec<MeshVertex> = read(&direct_buffer, direct.vertices.len());
+            let indexed_values: Vec<MeshVertex> = read(&indexed_buffer, indexed.vertices.len());
+            let unique_live = indexed.indices[..triangle_vertices]
+                .iter()
+                .copied()
+                .max()
+                .map_or(0, |index| index as usize + 1);
+            let expanded: Vec<MeshVertex> = indexed.indices[..triangle_vertices]
+                .iter()
+                .map(|&index| indexed_values[index as usize])
+                .collect();
+            assert_eq!(
+                bytemuck::cast_slice::<MeshVertex, u8>(&expanded),
+                bytemuck::cast_slice::<MeshVertex, u8>(&direct_values[..triangle_vertices]),
+                "strength {strength}, pass {pass}: indexed relaxation differs after expansion"
+            );
+            assert!(direct_values[triangle_vertices..].iter().all(is_zero), "direct pass {pass} tail is not zero");
+            assert!(indexed_values[unique_live..].iter().all(is_zero), "indexed pass {pass} tail is not zero");
+            direct_input = direct_output;
+            indexed_input = indexed_output;
+        }
+    }
+}
+
 /// With `extent` wired a relax pass forwards the mesh's live extent and,
 /// after its first frame, writes only live and last frame's vertices: a
 /// shrinking surface clears what it vacates and matches a fresh full pass.
@@ -2187,7 +2618,7 @@ fn fluid_relax_surface_mesh_stays_standalone_in_the_fused_view() {
         let nodes = group["nodes"].as_array().expect("group nodes");
         nodes.iter().find(|n| n[key] == name).unwrap_or_else(|| panic!("no {name}"))["id"].clone()
     };
-    let (last, out) = (id(group, "nodeId", "liquid_relax_2"), id(group, "typeId", "system.group_output"));
+    let (last, out) = (id(group, "nodeId", "liquid_normals"), id(group, "typeId", "system.group_output"));
     let turn = json!(100);
     group["nodes"].as_array_mut().expect("group nodes").push(json!({
         "id": turn, "typeId": "node.rotate_3d", "nodeId": "liquid_turn",
@@ -2208,10 +2639,10 @@ fn fluid_relax_surface_mesh_stays_standalone_in_the_fused_view() {
     let Some(view) = crate::node_graph::freeze::install::fuse_generator_view(&def, &registry) else {
         return;
     };
-    let relaxes = view.def.nodes.iter().filter(|n| n.type_id == "node.relax_surface_mesh").count();
-    assert_eq!(relaxes, 2, "both relax passes stay their own dispatch");
+    let relaxes = view.def.nodes.iter().filter(|n| matches!(n.type_id.as_str(), "node.smooth_surface_mesh" | "node.surface_mesh_normals")).count();
+    assert_eq!(relaxes, 2, "smoothing and normals stay their own dispatch");
     assert!(
-        !view.def.nodes.iter().any(|n| n.wgsl_source.as_deref().is_some_and(|s| s.contains("rsm_cell_edge"))),
+        !view.def.nodes.iter().any(|n| n.wgsl_source.as_deref().is_some_and(|s| s.contains("sm_adj_cell_edge"))),
         "relaxation fused into a kernel: prove it renders like the unfused graph"
     );
 }

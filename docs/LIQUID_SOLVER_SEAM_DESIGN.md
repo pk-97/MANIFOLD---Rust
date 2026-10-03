@@ -104,7 +104,7 @@ Survey: `rg 'purpose: "' crates/manifold-renderer/src/node_graph/primitives/ -g 
 The surface design's section 3 (The particle-frame contract) stands: 32-byte `FluidParticle` (`R/fluid_particles.rs:12`), ports `particles_a/b`, `count_a/b`, `identity_a/b`, `solid_a/b`, `grid_bounds`, `grid_nodes_x/y/z`, `blend`, `span`, display one tick behind (s = target − tick). Amendments:
 
 1. A producer publishes through a frame node (`node.matter_frame`, `node.liquid_frame`), never raw solver state. The frame node owns the A/B ring (`R/liquid/frame_ring.rs`) and holds while the clock is held.
-2. A tick with any non-finite position or velocity is never published. The stats node flags it; the frame keeps the last good tick and the domain shows a named error.
+2. A tick with any non-finite position or velocity is never published. The stats node flags it; the frame keeps the last good tick and the domain shows a named error. The BUG-7qzk clock implementation reseeds live GPU FLIP particles on the next retired fault without resetting its epoch/time; offline and other solver fault policy remains unchanged. The lead must run `liquid_nonfinite_live_flip_reseeds_without_stopping_clock` before this recovery is considered verified (see LIVE_SIM_CLOCK_DESIGN.md section 9). Narrow-band reseed capacity shortage (stats word 27) keeps the last good particles, faces and interior and halts until Reset.
 3. `solid_*` comes from `node.liquid_solid_distance`: walls plus every collider role and coupled body. No preset wires a constant.
 4. Records past `count` have radius 0.
 5. Ids are sorted ascending or all 0. A solver that reorders its state each tick (SWASH's bin sort) publishes 0.
@@ -127,17 +127,19 @@ The producer resamples; no consumer sees a native layout:
 - MPM: `node.matter_face_component` averages the four grid nodes around each face centre, after the lattice padding (`R/matter.rs:287`, `:300`).
 - FLIP: no grid (D3).
 
-The surface distance remains a rendering output. GPU FLIP additionally publishes its existing particle distance for per-tick whitewater (BUG-215v). The Liquid Surface group already builds it (`R/primitives/particle_volume.rs:54`: distance to the nearest blob, negative inside, capped at a tenth of a bin outside). The group exports it as `level_set` with `level_set_bounds` and `level_set_nodes_x/y/z`. Whitewater owns the one atom that resamples or re-distances it onto the lattice it needs.
+The visible surface distance remains a rendering output, exported as `level_set` with its bounds and node counts. GPU FLIP also publishes its particle distance for per-tick whitewater (BUG-215v); whitewater owns resampling or re-distancing onto its lattice.
+
+The Ferstl et al. (2016) narrow-band amendment in `GPU_FLIP_NARROW_BAND_DESIGN.md` permits optional solver interior distance because deep liquid has no particles. `gpu_flip_step.interior` holds exactly nx·ny·nz f32 distances in metres, x fastest, at m+(i+½,j+½,k+½)h. `liquid_state.interior_in` captures it beside the tick particles, and `liquid_frame.interior` publishes `interior_a/b` through the same ring indices, epoch, lattice and failed-tick gate. A disabled field is positive everywhere. The mesher accepts optional `interior`, samples the cell-centred lattice and unions the particle field with interior+h before solid/border constraints. Unwired consumers retain their existing particle path; no solver-specific branch is needed. Stats contain 28 words: the 18-word solver tail preserves separating-floor diagnostics at words 17–26 and appends narrow-band reseed shortages at word 27. Coarse solve stage 3 retains its standalone reference-proven boundary scatter and local projection; Solve Level integration remains stage 4.
 
 ### 3.3 Two-way Box3D coupling
 
-Per 1/60 s tick k:
+Per accepted interval k (nominal 1/60 s in export):
 
 1. The owner (`LiquidRigidOwner`) holds Box3D's settled state at the start of tick k and writes the body rows (`LiquidBody`, 128 bytes) into the liquid's shared buffer.
 2. The liquid runs tick k on the GPU with those bodies and accumulates its reaction.
 3. The reaction crosses as one `BodyImpulse` per body: linear impulse in N·s and angular impulse in N·m·s about the body's centre of mass, scene space. Each solver decodes its own words through the owner's decode closure (MPM: i32 fixed point, `REACTION_WORDS` = 16, `R/matter.rs:201`).
 4. The owner applies it to Box3D tick k exactly once, through `advance_with_coupling`, the only way a coupled Box3D world steps. Box3D adds gravity, fields and contacts.
-5. Coupled live frames use the ordinary live allowance, up to `MAX_LIVE_TICKS = 3`. Before reusing a pending reaction, the domain waits for its committed frame if needed. Between ticks, the opted-in region commits and waits, applies that tick’s reaction to Box3D, and refreshes the next tick’s body rows. A failed wait or missing tick-end sample is a named error; a failed host exchange stops execution. Uncoupled live frames do not wait. Offline runs every due tick with the same exchanges.
+5. BUG-7qzk replaces the live tick allowance with one full accepted interval from `manifold_physics::clock`. `PendingTick` carries its endpoints; retired reaction settlement advances Box3D over that same interval. Numerical FLIP substeps use reference CFL, with the last allowed substep taking the remainder. Offline retains every nominal tick and its existing host exchanges. Runtime and verification status: [LIVE_SIM_CLOCK_DESIGN.md](LIVE_SIM_CLOCK_DESIGN.md#9-current-implementation-seam-and-outstanding-work).
 6. Liquid and bodies share transport, Speed and reset. Different Speeds are refused by name (`matter_domain.rs:835`). A restart of either side restarts both with a new epoch.
 
 Stability (D7): a weakly compressible solver moves bodies on the GPU every substep, under its own substep bound (MPM: `R/matter/coupling.rs:275`). An incompressible solver puts each dynamic body's mass and inertia inside its pressure solve. FLIP meets 3 and 4 synchronously: its native exchange applies the reaction every native substep with body mass in the PCG (`owner.rs:144`).
@@ -151,15 +153,15 @@ With it: `liquid_floating_draft` (a box at half the liquid's density settles wit
 
 ### 3.4 Clock, pause, speed, reset, export
 
-GPU liquids run on `LiquidClock` (today's `MatterClock`, `R/matter.rs:509`).
+All live solvers use the physics-layer interval contract. GPU liquids retain the `LiquidClock` import as an alias for `SimulationClock`; it has no independent time-dropping policy.
 
 | Event | What the liquid does |
 |---|---|
-| Play | Fixed 60 Hz ticks; target += transport delta × Speed; display one tick behind. |
+| Play | Accept the whole transport span × Speed; numerical subdivisions do not change the accepted endpoint. |
 | Pause or Speed 0 | No ticks; outputs held; `ClockFrame.held` true. A tick already on the GPU completes and publishes. Impulses fired while held are discarded with a receipt; a hit fired before the first tick is due is kept. |
 | Speed change | Applies from the interval after the frame that sees it; must equal the paired Box3D world's Speed. |
 | Reset, backward seek, setup change | Restart: new epoch, state reseeds, a coupled Box3D world restarts with it. |
-| Forward jump, live | At most 3 ticks per frame (`MAX_LIVE_TICKS`), one tick of jitter debt kept, the rest dropped and reported in `dropped_seconds`. |
+| Forward jump, live | Cover the complete interval. `dropped_seconds` remains a compatibility output fixed at zero; cap hits are explicit HUD warnings. |
 | Export (offline) | Every due tick, host syncs between coupled ticks. 30 fps export equals 60 fps at the same transport time. |
 | Live recording | Live policy. |
 | Cache Record / Playback | FLIP only. GPU liquids have no cache row until a particle-frame bake exists (section 7). |
@@ -222,16 +224,15 @@ pub enum SceneIndexError {                     // the renderer maps it variant f
     Unsupported { path: String, detail: String },
 }
 
-// R/liquid/clock.rs — MatterClock moved; advance retains the shared live tick policy; the coupled tick-cap override was removed for BUG-gjys
-pub struct LiquidClock;  pub struct ClockFrame { /* today's fields */ pub held: bool /* P8 */ }
-pub const MAX_LIVE_TICKS: u32 = 3;
+// R/liquid/clock.rs — compatibility import; the physics layer owns timing.
+pub use manifold_physics::clock::{SimulationClock as LiquidClock, ClockFrame};
 
 // R/liquid/bodies.rs — moved from R/matter.rs:82-168 and R/matter/bodies.rs
 pub struct LiquidBody;  pub const LIQUID_BODY_SPECS;  pub struct LiquidShape;  pub const LIQUID_SHAPE_SPECS;
 pub struct LiquidBodies;  pub enum BodiesStatus;  pub fn pack_distance_atlas;  pub fn body_pose_at;
 
 // R/liquid/coupling.rs
-pub struct PendingTick { pub tick: u64, pub stamp: u64 }
+pub struct PendingTick { pub tick: u64, pub stamp: u64, pub interval: StepInterval, pub offline: bool }
 pub struct LiquidCoupling;                     // MatterCoupling moved: the one-exchange StepCoupling
 impl LiquidRigidOwner {                        // RigidOwner moved; new/matches/geometries/rows kept
     pub fn set_pending(&mut self, pending: PendingTick);
@@ -282,7 +283,7 @@ pub const FACE_GRID_PORTS: [&str; 7] =
 - Holding a body fixed in an incompressible solve and applying the reaction afterwards.
 - An analytic box clip for solids.
 - Mux-gated step copies to fake pause or Speed.
-- A solver publishing its own distance field.
+- A solver publishing a distance field outside the optional narrow-band interior contract in section 3.2.
 - A consumer that branches on which solver made the grid.
 - `Arc<Mutex>` for a readback.
 - `pub use` aliases for renamed items.

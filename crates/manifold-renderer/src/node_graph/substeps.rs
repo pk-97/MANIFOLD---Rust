@@ -840,6 +840,19 @@ mod tests {
         ..PORTS
     };
 
+    const OPTIONAL_RESULT: &[SubstepResultPorts] = &[SubstepResultPorts {
+        capture: "optional_in",
+        output: "optional_out",
+        optional: true,
+    }];
+
+    const PORTS_WITH_OPTIONAL_RESULT: SubstepBoundaryPorts = SubstepBoundaryPorts {
+        results: OPTIONAL_RESULT,
+        ..PORTS
+    };
+
+    const OPTIONAL_CAPTURE_INPUTS: &[&str] = &["in", "optional_in"];
+
     struct TestNode {
         type_id: EffectNodeType,
         inputs: Vec<NodeInput>,
@@ -871,10 +884,11 @@ mod tests {
                 output("step_dt", PortType::Scalar(ScalarType::F32)),
                 output("step_index", PortType::Scalar(ScalarType::F32)),
             ];
-            let capture_inputs: &'static [&'static str] = if ports.results.is_empty() {
+            let has_stats = ports.results.iter().any(|result| result.capture == "stats_in");
+            let capture_inputs: &'static [&'static str] = if !has_stats {
                 &["in"]
             } else {
-                inputs.push(input("stats_in", PortType::Texture2D, false));
+                inputs.push(input("stats_in", PortType::Texture2D, true));
                 outputs.push(output("stats", PortType::Texture2D));
                 &["in", "stats_in"]
             };
@@ -886,6 +900,14 @@ mod tests {
                 capture_inputs,
                 ..Self::new("test.substep_boundary", inputs, outputs)
             }
+        }
+
+        fn boundary_with_optional_result() -> Self {
+            let mut boundary = Self::boundary(PORTS_WITH_OPTIONAL_RESULT);
+            boundary.inputs.push(input("optional_in", PortType::Texture2D, false));
+            boundary.outputs.push(output("optional_out", PortType::Texture2D));
+            boundary.capture_inputs = OPTIONAL_CAPTURE_INPUTS;
+            boundary
         }
 
         fn feedback_style() -> Self {
@@ -1160,9 +1182,50 @@ mod tests {
         graph.connect((body, "out"), (boundary, "in")).unwrap();
         graph.connect((boundary, "out"), (consumer, "tex")).unwrap();
 
-        let (b, _, reason) = malformed_parts(compile(&graph).unwrap_err());
-        assert_eq!(b, boundary);
-        assert!(reason.contains("`stats_in` has no wire"), "{reason}");
+        assert!(matches!(
+            compile(&graph).unwrap_err(),
+            GraphError::RequiredInputUnwired { node, port }
+                if node == boundary && port == "stats_in"
+        ));
+    }
+
+    #[test]
+    fn substeps_region_unwired_optional_result_capture_is_allowed() {
+        let mut graph = Graph::new();
+        let src = source(&mut graph, "src");
+        let boundary = graph.add_node(Box::new(TestNode::boundary_with_optional_result()));
+        let body = pass(&mut graph, "body");
+        let consumer = sink(&mut graph, "consumer");
+        graph.connect((src, "out"), (boundary, "seed")).unwrap();
+        graph.connect((boundary, "out"), (body, "a")).unwrap();
+        graph.connect((body, "out"), (boundary, "in")).unwrap();
+        graph.connect((boundary, "out"), (consumer, "tex")).unwrap();
+
+        let plan = compile(&graph).expect("unwired optional result is legal");
+        let region = &plan.substep_regions()[0];
+        assert_eq!(region.steps.len(), 2);
+    }
+
+    #[test]
+    fn substeps_region_wired_optional_result_capture_stays_in_region() {
+        let mut graph = Graph::new();
+        let src = source(&mut graph, "src");
+        let boundary = graph.add_node(Box::new(TestNode::boundary_with_optional_result()));
+        let body = pass(&mut graph, "body");
+        let optional_body = pass(&mut graph, "optional_body");
+        let consumer = sink(&mut graph, "consumer");
+        graph.connect((src, "out"), (boundary, "seed")).unwrap();
+        graph.connect((boundary, "out"), (body, "a")).unwrap();
+        graph.connect((body, "out"), (boundary, "in")).unwrap();
+        graph.connect((body, "out"), (optional_body, "a")).unwrap();
+        graph.connect((optional_body, "out"), (boundary, "optional_in")).unwrap();
+        graph.connect((boundary, "out"), (consumer, "tex")).unwrap();
+        graph.connect((boundary, "optional_out"), (consumer, "aux")).unwrap();
+
+        let plan = compile(&graph).expect("wired optional result remains legal");
+        let region = &plan.substep_regions()[0];
+        let nodes: Vec<NodeInstanceId> = region.steps.iter().map(|&i| plan.steps()[i].node).collect();
+        assert_eq!(nodes, vec![boundary, body, optional_body]);
     }
 
     #[test]
@@ -1554,6 +1617,7 @@ mod tests {
         accepted: f32,
         seeded: bool,
         ports: SubstepBoundaryPorts,
+        interval_duration: f32,
     }
 
     impl SimBoundary {
@@ -1577,6 +1641,7 @@ mod tests {
                 accepted: 0.0,
                 seeded: false,
                 ports: SIM_PORTS,
+                interval_duration: 0.5,
             }
         }
     }
@@ -1615,11 +1680,14 @@ mod tests {
         fn substep_boundary(&self) -> Option<SubstepBoundaryPorts> {
             Some(self.ports)
         }
+        fn set_substep_interval(&mut self, interval: manifold_physics::stepping::StepInterval) {
+            self.interval_duration = interval.duration().0 as f32;
+        }
         fn substep_iteration(&mut self, iteration: u32, scalars: &mut [f32]) -> bool {
             if iteration >= self.pending {
                 return false;
             }
-            scalars[0] = 0.5;
+            scalars[0] = self.interval_duration;
             scalars[1] = iteration as f32;
             true
         }
@@ -1720,6 +1788,7 @@ mod tests {
         outputs: Vec<NodeOutput>,
         log: Log,
         fail_at: Option<u32>,
+        intervals: Option<manifold_physics::clock::ClockFrame>,
     }
 
     impl EffectNode for EagerClock {
@@ -1743,6 +1812,9 @@ mod tests {
         }
         fn substep_host_sync(&self, _iteration: u32) -> bool {
             true
+        }
+        fn substep_clock_interval(&self, iteration: u32) -> Option<(&'static str, manifold_physics::stepping::StepInterval)> {
+            self.intervals.as_ref()?.interval(u64::from(iteration)).map(|interval| ("out", interval))
         }
         fn substep_host_step(
             &mut self,
@@ -1772,6 +1844,11 @@ mod tests {
     }
 
     fn clock_fixture_with_failure(opted: bool, fail_at: Option<u32>) -> SimFixture {
+        clock_fixture_with_intervals(opted, fail_at, None)
+    }
+
+    fn clock_fixture_with_intervals(opted: bool, fail_at: Option<u32>, intervals: Option<manifold_physics::clock::ClockFrame>) -> SimFixture {
+        let sample_intervals = intervals.is_some();
         let log: Log = Arc::default();
         let count = Arc::new(Mutex::new(3));
         let mut graph = Graph::new();
@@ -1782,6 +1859,7 @@ mod tests {
             outputs: vec![output("out", PortType::Scalar(ScalarType::F32))],
             log: log.clone(),
             fail_at,
+            intervals,
         }));
         let mut sim = SimBoundary::new(log.clone(), count.clone());
         if opted {
@@ -1797,7 +1875,7 @@ mod tests {
         graph.connect((boundary, "step_dt"), (add_dt, "b")).unwrap();
         graph.connect((add_dt, "out"), (add_index, "a")).unwrap();
         graph.connect((boundary, "step_index"), (add_index, "b")).unwrap();
-        graph.connect((aux, "out"), (add_index, "c")).unwrap();
+        graph.connect((if sample_intervals { clock } else { aux }, "out"), (add_index, "c")).unwrap();
         graph.connect((add_index, "out"), (boundary, "in")).unwrap();
         graph.connect((boundary, "out"), (consumer, "a")).unwrap();
         let plan = compile(&graph).unwrap();
@@ -2005,6 +2083,24 @@ mod tests {
             ]
         );
         assert_eq!(exec.substep_host_syncs(), 2);
+    }
+
+    #[test]
+    fn substeps_clock_history_sets_each_interval_before_boundary_and_body() {
+        use manifold_physics::clock::SimulationClock;
+        let mut clock = SimulationClock::default();
+        clock.advance(0.0, 0.5, 1.0, 0.0, false, true);
+        clock.observe_speed(0.25, 2.0);
+        let intervals = clock.advance(1.5, 0.5, 2.0, 0.0, false, true);
+        let mut fx = clock_fixture_with_intervals(true, None, Some(intervals));
+        let mut exec = Executor::with_mock();
+        let log = run_frame(&mut fx, &mut exec, 3);
+        assert_eq!(log.last().unwrap(), "consumer a=9.5 b=0 c=none");
+        assert_eq!(region_events(&log), vec![
+            "add_index a=1.75 b=0 c=0.75", "capture 2.5", "host 1",
+            "add_index a=3.5 b=1 c=1", "capture 5.5", "host 2",
+            "add_index a=6.5 b=2 c=1", "capture 9.5",
+        ]);
     }
 
     /// Live coupling uses the same ordered exchanges as export.

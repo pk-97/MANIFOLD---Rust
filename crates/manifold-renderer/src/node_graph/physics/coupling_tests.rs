@@ -1,5 +1,5 @@
 use super::*;
-use manifold_physics::{TickStamp, input::EventStamp};
+use manifold_physics::{input::EventStamp, TickStamp};
 
 fn bodies() -> [Option<RigidBody>; MAX_BODIES] {
     let mut bodies = std::array::from_fn(|_| None);
@@ -252,12 +252,10 @@ fn scene_physics_coupled_substeps_reuse_forces_and_consume_edge_once() {
             .collect::<Vec<_>>(),
         [0, 1]
     );
-    assert!(
-        probe
-            .stamps
-            .iter()
-            .all(|stamp| Some(stamp.epoch) == simulation.impulse_epoch())
-    );
+    assert!(probe
+        .stamps
+        .iter()
+        .all(|stamp| Some(stamp.epoch) == simulation.impulse_epoch()));
     assert_eq!(simulation.impulse_receipts.len(), 1);
     assert_eq!(simulation.physics_time, FIXED_TICK.0 * 2.0);
 }
@@ -282,15 +280,12 @@ fn scene_physics_coupling_failure_retains_published_pose_and_latches() {
 }
 
 #[test]
-fn scene_physics_coupling_capture_publishes_native_pose_before_deferred_edit() {
-    let _scope = PhysicsStepScope::with_preview_budget(false, std::time::Duration::ZERO);
+fn scene_physics_coupling_capture_publishes_accepted_span_and_paused_edit() {
+    let _live = PhysicsStepScope::for_render(false);
     let mut bodies = std::array::from_fn(|_| None);
     let animated = RigidBody {
         kind: 2,
-        transform: Transform {
-            pos: [-2.0, 0.0, 0.0],
-            ..Transform::default()
-        },
+        transform: Transform { pos: [-2.0, 0.0, 0.0], ..Transform::default() },
         ..RigidBody::default()
     };
     bodies[0] = Some(animated.clone());
@@ -347,7 +342,8 @@ fn scene_physics_coupling_capture_publishes_native_pose_before_deferred_edit() {
     .unwrap();
     assert_eq!(capture.publications.len(), 1);
     assert_eq!(capture.publications[0].stamp.tick, 0);
-    assert_eq!(simulation.pending_time, FIXED_TICK);
+    assert_eq!(simulation.pending_time, Seconds::ZERO);
+    assert_eq!(simulation.physics_time, FIXED_TICK.0 * 2.0);
 
     bodies[0].as_mut().unwrap().transform.pos[0] = 5.0;
     prototype.transform.pos[0] = 5.0;
@@ -361,57 +357,39 @@ fn scene_physics_coupling_capture_publishes_native_pose_before_deferred_edit() {
     )
     .unwrap();
     assert_eq!(capture.publications.len(), 1);
+    assert_eq!(simulation.pending_time, Seconds::ZERO);
     assert!((simulation.poses[0].pos[0] - 5.0).abs() < 1.0e-5);
     for (pose, offset) in simulation.copy_poses.iter().zip(&copy_offsets) {
         assert!((pose.pos[0] - (5.0 + offset)).abs() < 1.0e-5);
     }
-    assert_eq!(simulation.physics_time, FIXED_TICK.0);
-    assert_eq!(simulation.pending_time, FIXED_TICK);
 
-    // The last owed tick samples the left side of the edit boundary. Its
-    // native publication must remain historical even while the preview pose
-    // above shows the authored teleport.
     advance_capture(
         &mut simulation,
         bodies.clone(),
         Some(prototype.clone()),
-        FIXED_TICK.0 * 2.0,
+        FIXED_TICK.0 * 3.0,
+        1.0,
+        &mut capture,
+    )
+    .unwrap();
+    assert_eq!(capture.publications.len(), 1);
+    assert_eq!(simulation.physics_time, FIXED_TICK.0 * 2.0);
+    advance_capture(
+        &mut simulation,
+        bodies,
+        Some(prototype),
+        FIXED_TICK.0 * 4.0,
         1.0,
         &mut capture,
     )
     .unwrap();
     assert_eq!(capture.publications.len(), 2);
     assert_eq!(capture.publications[1].stamp.tick, 1);
-    assert!((capture.publications[1].body_position[0] + 1.0).abs() < 1.0e-5);
-    assert_eq!(
-        capture.publications[1].copy_positions.len(),
-        copy_offsets.len()
-    );
-    for (pose, offset) in capture.publications[1]
-        .copy_positions
-        .iter()
-        .zip(&copy_offsets)
-    {
-        assert!((pose[0] - (-1.0 + offset)).abs() < 1.0e-5);
-    }
-    assert_eq!(simulation.physics_time, FIXED_TICK.0 * 2.0);
     assert_eq!(simulation.pending_time, Seconds::ZERO);
-
-    // The next accepted tick begins after the deferred edit has been applied,
-    // so both the ordinary body and every animated copy publish the new pose.
-    advance_capture(
-        &mut simulation,
-        bodies,
-        Some(prototype),
-        FIXED_TICK.0 * 3.0,
-        1.0,
-        &mut capture,
-    )
-    .unwrap();
-    assert_eq!(capture.publications.len(), 3);
-    assert_eq!(capture.publications[2].stamp.tick, 2);
-    assert!((capture.publications[2].body_position[0] - 5.0).abs() < 1.0e-5);
-    for (captured, expected) in capture.publications[2]
+    assert_eq!(simulation.physics_time,
+        FIXED_TICK.0 * 2.0 + (FIXED_TICK.0 * 4.0 - FIXED_TICK.0 * 3.0));
+    assert!((capture.publications[1].body_position[0] - 5.0).abs() < 1.0e-5);
+    for (captured, expected) in capture.publications[1]
         .copy_positions
         .iter()
         .zip(&simulation.copy_poses[..simulation.active_copy_count])
@@ -420,7 +398,6 @@ fn scene_physics_coupling_capture_publishes_native_pose_before_deferred_edit() {
             assert!((actual - expected).abs() < 1.0e-5);
         }
     }
-    assert_eq!(simulation.physics_time, FIXED_TICK.0 * 3.0);
 }
 
 #[test]

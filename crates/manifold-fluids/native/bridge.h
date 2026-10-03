@@ -13,6 +13,8 @@ typedef struct ManifoldFluidsFrameStats {
     uint32_t substeps;
     double simulation_ms;
     double meshing_ms;
+    uint32_t cap_hit;
+    uint32_t numerical_recovery;
 } ManifoldFluidsFrameStats;
 
 typedef struct ManifoldFluidsWhitewaterParticle {
@@ -105,7 +107,9 @@ int manifold_fluids_world_set_obstacle(void *world, const float *previous_min,
                                        const float *next_max);
 int manifold_fluids_world_clear_obstacle(void *world);
 int manifold_fluids_world_step(void *world, double dt, ManifoldFluidsFrameStats *stats_out);
+int manifold_fluids_world_step_live(void *world, double dt, ManifoldFluidsFrameStats *stats_out);
 int manifold_fluids_world_begin_frame(void *world, double dt);
+int manifold_fluids_world_begin_live_frame(void *world, double dt);
 int manifold_fluids_world_next_substep(void *world, double *dt_out);
 int manifold_fluids_world_advance_substep(void *world, double dt);
 int manifold_fluids_world_finish_frame(void *world, ManifoldFluidsFrameStats *stats_out);

@@ -21,7 +21,6 @@ use manifold_gpu::{FrameClock, GpuDevice, GpuEvent, GpuTextureFormat, RetireMark
 use manifold_renderer::frame_status::{FrameRenderFailure, FrameRenderStatus};
 use manifold_renderer::gpu_encoder::GpuEncoder;
 use manifold_renderer::node_graph::fluid::TICK;
-use manifold_renderer::node_graph::liquid::clock::MAX_LIVE_TICKS;
 use manifold_renderer::node_graph::fluid_particles::FluidParticle;
 use manifold_renderer::node_graph::liquid::bodies::LiquidBody;
 use manifold_renderer::node_graph::liquid::grid::{FACE_GRID_PORTS, face_len};
@@ -276,6 +275,7 @@ struct LiquidRun {
     /// Ticks per frame: 1 is 60 fps, 2 is 30 fps, 2.5 is 24 fps.
     stride: f64,
     live: bool,
+    project_fps: f64,
     /// The check provokes a node error, so a frame it fails is expected.
     errors_expected: bool,
     /// What the last warm-up frame published.
@@ -333,8 +333,20 @@ impl LiquidRun {
         dry: bool,
         clock: Option<Clocked>,
     ) -> Self {
+        Self::on_project_rate(row, def, stride, live, dry, clock, 60.0)
+    }
+
+    fn on_project_rate(
+        row: &'static LiquidSolverRow,
+        def: EffectGraphDef,
+        stride: f64,
+        live: bool,
+        dry: bool,
+        clock: Option<Clocked>,
+        project_fps: f64,
+    ) -> Self {
         let device = clock.as_ref().map_or_else(|| Arc::clone(&harness::shared().device), |clock| Arc::clone(&clock.device));
-        let scope = PhysicsStepScope::for_render(!live);
+        let scope = PhysicsStepScope::for_project_rate(!live, project_fps);
         let registry = registry();
         let Prepared { def, cards, publisher } = prepare(row, &def, &registry, dry);
         let manifest = ParamManifest::from_params(
@@ -364,6 +376,7 @@ impl LiquidRun {
             transport: 0.0,
             stride,
             live,
+            project_fps,
             errors_expected: false,
             start: Probe::EMPTY,
             clock,
@@ -383,6 +396,7 @@ impl LiquidRun {
     }
 
     fn render(&mut self, warming: bool) -> Probe {
+        let _scope = PhysicsStepScope::for_project_rate(!self.live, self.project_fps);
         let time = self.transport * TICK;
         let ctx = PresetContext {
             time,
@@ -790,6 +804,36 @@ fn liquid_coupling_collision() {
     }
 }
 
+/// A non-60 project exercises the production scope, clock, CFL scheduler,
+/// narrow-band history and renderer output sampling without output-rate retuning.
+#[test]
+fn liquid_export_matches_live_project_schedule() {
+    let row = LIQUID_SOLVERS.iter().find(|row| row.type_id == GPU_FLIP_DOMAIN_TYPE_ID).unwrap();
+    for project_fps in [24.0, 60.0] {
+        for narrow in [false, true] {
+            let make = |fps: f64, live| {
+                let mut def = scene(row, Fixture::FaceGrid);
+                set_type_param(&mut def, GPU_FLIP_DOMAIN_TYPE_ID, "resolution", SerializedParamValue::Int { value: 8 });
+                set_type_param(&mut def, "node.gpu_flip_step", "narrow_band", SerializedParamValue::Float { value: if narrow { 1.0 } else { 0.0 } });
+                LiquidRun::on_project_rate(row, def, 60.0 / fps, live, false, None, project_fps)
+            };
+            let mut live = make(project_fps, true);
+            live.steps(project_fps as u32 / 2);
+            let expected = live.particles("particles_b");
+            for export_fps in [20.0, 24.0, 30.0, 60.0] {
+                let mut export = make(export_fps, false);
+                // Use the same half-second span at every output cadence.
+                // Capture only at a shared endpoint; presentation delay is separate.
+                export.steps(export_fps as u32 / 2);
+                assert_eq!(bytemuck::cast_slice::<_, u32>(&export.particles("particles_b")),
+                    bytemuck::cast_slice::<_, u32>(&expected),
+                    "project {project_fps}, export {export_fps}, narrow {narrow}");
+            }
+            assert!(!expected.is_empty());
+        }
+    }
+}
+
 /// I5: a box at half the liquid's density, dropped tilted into the pool,
 /// settles with its centre at the waterline (a half-density cube's draft in
 /// any orientation), within half a cell. The waterline is the free surface
@@ -1088,11 +1132,10 @@ struct Push {
 }
 
 /// The step's solver words for the tick: pressure iterations, density
-/// iterations, capped solves (liquid_stats.rs `SOLVER_WORDS`, the tail of the
-/// capped array).
+/// iterations, capped solves (the `SOLVER_WORDS` tail of the capped array).
 fn solver_words(run: &LiquidRun) -> [u32; 3] {
     let words: Vec<u32> = run.read("node.gpu_flip_step", "capped");
-    let tail = &words[words.len() - 7..];
+    let tail = &words[words.len() - manifold_renderer::node_graph::SOLVER_WORDS as usize..];
     [tail[0], tail[1], tail[2]]
 }
 
@@ -1573,6 +1616,32 @@ fn liquid_nonfinite_tick_not_published() {
     }
 }
 
+/// Live GPU FLIP reports a bad state and recovers without an epoch reset or
+/// lost transport time. Offline I8 above deliberately retains its old policy.
+#[test]
+fn liquid_nonfinite_live_flip_reseeds_without_stopping_clock() {
+    let row = LIQUID_SOLVERS.iter().find(|row| row.type_id == GPU_FLIP_DOMAIN_TYPE_ID).unwrap();
+    let mut def = scene(row, Fixture::StillPool);
+    set_type_param(&mut def, GPU_FLIP_DOMAIN_TYPE_ID, "resolution", SerializedParamValue::Int { value: 16 });
+    let tap = NodeErrorTap::new();
+    let mut run = LiquidRun::new(row, def, 1, true, false);
+    let before = run.steps(3);
+    assert!(tap.take().is_empty());
+    run.errors_expected = true;
+    run.poison(row, 100);
+    run.step();
+    assert!(run.totals(row).nonfinite > 0, "the fixture must reach the non-finite path");
+    let recovered = run.steps(3);
+    assert_eq!(recovered.get("epoch"), before.get("epoch"), "recovery must not reset time");
+    let expected = f64::from(before.get("simulation_time")) + 4.0 * TICK;
+    assert!((f64::from(recovered.get("simulation_time")) - expected).abs() < 1e-6);
+    assert_eq!(run.totals(row).nonfinite, 0, "reseeded state must be finite");
+    assert!(run.particles("particles_b").iter().all(|p| {
+        p.position_radius.iter().chain(p.velocity.iter()).all(|v| v.is_finite())
+    }));
+    assert!(tap.take().iter().any(|error| error.contains("non-finite") && error.contains("show continues")));
+}
+
 /// I11: a run-time capacity overflow is counted and reported as a named
 /// error carrying the count, within a frame of the liquid first needing it.
 #[test]
@@ -1621,77 +1690,44 @@ fn liquid_live_frames_never_wait() {
     }
 }
 
-/// I13: a coupled liquid runs the same tick states at live 24 and 60 fps.
-/// The 24 fps clock may run two or three ticks in a frame; each tick's body
-/// row and the final particle frame must match the corresponding 60 fps tick.
-/// A reaction may wait for the preceding committed frame, but the wait count
-/// stays bounded by the number of display frames.
+/// Coupled live solvers cover one transport second at every display rate.
+/// Live trajectories may differ: the invariant is the accepted endpoint,
+/// finite output, and real momentum exchange, without fixed-tick debt bursts.
 #[test]
 fn liquid_coupled_live_frame_rate() {
-    const FRAMES_60: u32 = 60;
-    const FRAMES_24: u32 = 24;
     const BODY_WORDS: usize = std::mem::size_of::<LiquidBody>() / 4;
-
     for row in running(Check::CoupledLiveFrameRate) {
         for &fixture in Check::CoupledLiveFrameRate.fixtures(row.coupled) {
-            let mut at_60 = LiquidRun::on(row, scene(row, fixture), 1, true, false, Some(Clocked::new()));
-            let waits_before = FrameClock::waits_on_this_thread();
-            let mut reference_rows = Vec::with_capacity(FRAMES_60 as usize);
-            let mut reference_particles = Vec::with_capacity(FRAMES_60 as usize);
-            let mut reference_ticks = 0usize;
-            for frame in 0..FRAMES_60 {
-                let dump = at_60.dump(row);
-                let ticks = dump.probe.get("ticks") as usize;
-                assert!(ticks <= 1, "{} {fixture:?}: 60 fps frame {frame} ran {ticks} ticks", row.type_id);
-                if ticks == 0 {
-                    continue;
+            for fps in [20u32, 24, 30, 60] {
+                let mut run = LiquidRun::on_fractional(
+                    row, scene(row, fixture), 60.0 / f64::from(fps),
+                    true, false, Some(Clocked::new()),
+                );
+                let waits_before = FrameClock::waits_on_this_thread();
+                let mut previous_rows: Option<Vec<u32>> = None;
+                let mut coupling = 0.0f64;
+                for frame in 1..=fps {
+                    let dump = run.dump(row);
+                    assert_eq!(dump.probe.get("ticks"), 1.0,
+                        "{} {fixture:?}: {fps} fps frame {frame} must accept one interval", row.type_id);
+                    let expected = f64::from(frame) / f64::from(fps);
+                    assert!((f64::from(dump.probe.get("simulation_time")) - expected).abs() < 1e-6,
+                        "{} {fixture:?}: {fps} fps frame {frame} lost simulation time", row.type_id);
+                    assert_eq!(dump.rows.len(), BODY_WORDS);
+                    assert_eq!(run.totals(row).nonfinite, 0);
+                    if let Some(previous) = previous_rows.as_ref() {
+                        let before: &[LiquidBody] = bytemuck::cast_slice(previous);
+                        let after: &[LiquidBody] = bytemuck::cast_slice(&dump.rows);
+                        coupling += liquid_push(&before[0], &after[0]).iter()
+                            .map(|value| value * value).sum::<f64>().sqrt();
+                    }
+                    previous_rows = Some(dump.rows);
                 }
-                assert_eq!(dump.rows.len(), BODY_WORDS, "{} {fixture:?}: 60 fps body rows", row.type_id);
-                reference_rows.push(dump.rows);
-                reference_particles.push(dump.particles);
-                reference_ticks += ticks;
+                let waits = FrameClock::waits_on_this_thread() - waits_before;
+                assert!(waits <= u64::from(fps), "{} {fixture:?}: {fps} fps used {waits} waits", row.type_id);
+                assert!(coupling > 1e-4, "{} {fixture:?}: {fps} fps exchanged no body momentum", row.type_id);
+                eprintln!("liquid_coupled_live_frame_rate {} {fixture:?}: {fps} fps covered 1 s, coupling {coupling:.4e}, waits {waits}", row.type_id);
             }
-            let waits_60 = FrameClock::waits_on_this_thread() - waits_before;
-            // PresetRuntime keeps Executor::substep_host_syncs private to the
-            // renderer crate; this integration proof bounds the reaction
-            // waits visible through FrameClock.
-            assert_eq!(reference_ticks, FRAMES_60 as usize, "{} {fixture:?}: 60 fps ran {reference_ticks} ticks", row.type_id);
-            assert!(waits_60 <= u64::from(FRAMES_60), "{} {fixture:?}: 60 fps used {waits_60} waits", row.type_id);
-
-            let mut coupling = 0.0f64;
-            for pair in reference_rows.windows(2) {
-                let before: &[LiquidBody] = bytemuck::cast_slice(&pair[0]);
-                let after: &[LiquidBody] = bytemuck::cast_slice(&pair[1]);
-                coupling += liquid_push(&before[0], &after[0]).iter().map(|value| value * value).sum::<f64>().sqrt();
-            }
-            assert!(coupling > 1e-4, "{} {fixture:?}: the live scene exchanged no body momentum", row.type_id);
-            drop(at_60);
-
-            let mut at_24 = LiquidRun::on_fractional(row, scene(row, fixture), 2.5, true, false, Some(Clocked::new()));
-            let waits_before = FrameClock::waits_on_this_thread();
-            let mut matched_ticks = 0usize;
-            for frame in 0..FRAMES_24 {
-                let dump = at_24.dump(row);
-                let ticks = dump.probe.get("ticks") as usize;
-                assert!(ticks <= MAX_LIVE_TICKS as usize, "{} {fixture:?}: 24 fps frame {frame} ran {ticks} ticks", row.type_id);
-                if ticks == 0 {
-                    continue;
-                }
-                assert_eq!(dump.rows.len(), ticks * BODY_WORDS, "{} {fixture:?}: 24 fps frame {frame} body rows", row.type_id);
-                assert!(matched_ticks + ticks <= reference_rows.len(), "{} {fixture:?}: 24 fps ran past the 60 fps reference at frame {frame}", row.type_id);
-                for (tick, words) in dump.rows.chunks_exact(BODY_WORDS).enumerate() {
-                    assert_eq!(words, reference_rows[matched_ticks + tick].as_slice(), "{} {fixture:?}: 24 fps frame {frame} body tick {} differs", row.type_id, matched_ticks + tick);
-                }
-                assert_eq!(dump.particles, reference_particles[matched_ticks + ticks - 1], "{} {fixture:?}: 24 fps frame {frame} particle state differs", row.type_id);
-                matched_ticks += ticks;
-            }
-            let waits_24 = FrameClock::waits_on_this_thread() - waits_before;
-            assert_eq!(matched_ticks, FRAMES_60 as usize, "{} {fixture:?}: 24 fps ran {matched_ticks} matched ticks", row.type_id);
-            assert!(waits_24 <= u64::from(FRAMES_24), "{} {fixture:?}: 24 fps used {waits_24} waits", row.type_id);
-            eprintln!(
-                "liquid_coupled_live_frame_rate {} {fixture:?}: {matched_ticks} ticks match at 24/60 fps, coupling {coupling:.4e}, waits {waits_24}/{waits_60}",
-                row.type_id
-            );
         }
     }
 }
