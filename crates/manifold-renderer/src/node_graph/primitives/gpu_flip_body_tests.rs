@@ -14,7 +14,7 @@ use manifold_gpu::{GpuBuffer, GpuDevice};
 use super::gpu_flip_atom_tests::{FACE_FLOATS, assert_close, face_grid_len, random_values, random_water};
 use super::gpu_flip_bodies::{BodyPasses, Bodies};
 use super::gpu_flip_pressure::{PressureSolver, Water};
-use super::gpu_flip_step::{TILE, set_all_tiles, set_poison, set_separate_off};
+use super::gpu_flip_step::{TILE, set_all_tiles, set_gate_off, set_poison, set_separate_off};
 use super::liquid_surface_tests::read;
 use crate::node_graph::liquid::bodies::LiquidBody;
 use super::liquid_stats::SOLVER_WORDS;
@@ -533,6 +533,8 @@ struct BoxRun {
     poison: bool,
     /// No solid lets water go (`set_separate_off`).
     off: bool,
+    /// Every pass of an inactive clock slot runs (`set_gate_off`).
+    ungated: bool,
     _scope: crate::node_graph::physics::PhysicsStepScope,
 }
 
@@ -549,13 +551,27 @@ fn box_def(fixture: crate::node_graph::liquid::conformance::Fixture) -> manifold
 
 impl BoxRun {
     fn new(fixture: crate::node_graph::liquid::conformance::Fixture, all: bool, poison: bool, level: i32) -> Self {
+        Self::of(Self::at_level(fixture, level), all, poison, false)
+    }
+
+    /// The scene with every pass of an inactive clock slot run, as before
+    /// the slots were gated.
+    fn ungated(fixture: crate::node_graph::liquid::conformance::Fixture, level: i32) -> Self {
+        Self::with_levers(Self::at_level(fixture, level), false, false, false, true)
+    }
+
+    fn at_level(fixture: crate::node_graph::liquid::conformance::Fixture, level: i32) -> manifold_core::effect_graph_def::EffectGraphDef {
         let mut def = box_def(fixture);
         let domain = def.nodes.iter_mut().find(|node| node.node_id.as_str() == "domain").expect("domain");
         domain.params.insert("solve_level".into(), manifold_core::effect_graph_def::SerializedParamValue::Int { value: level });
-        Self::of(def, all, poison, false)
+        def
     }
 
     fn of(def: manifold_core::effect_graph_def::EffectGraphDef, all: bool, poison: bool, off: bool) -> Self {
+        Self::with_levers(def, all, poison, off, false)
+    }
+
+    fn with_levers(def: manifold_core::effect_graph_def::EffectGraphDef, all: bool, poison: bool, off: bool, ungated: bool) -> Self {
         let fixture = "box scene";
         let device = crate::test_device();
         let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
@@ -579,7 +595,7 @@ impl BoxRun {
         runtime.set_dump_all(true);
         let target =
             crate::render_target::RenderTarget::new(&device, BOX_SIZE, BOX_SIZE, manifold_gpu::GpuTextureFormat::Rgba16Float, "body sparse");
-        let mut run = Self { device, runtime, target, manifest, frame: 0, all, poison, off, _scope: scope };
+        let mut run = Self { device, runtime, target, manifest, frame: 0, all, poison, off, ungated, _scope: scope };
         let started = std::time::Instant::now();
         loop {
             run.render(true);
@@ -614,6 +630,7 @@ impl BoxRun {
         set_all_tiles(self.all);
         set_poison(self.poison);
         set_separate_off(self.off);
+        set_gate_off(self.ungated);
         let status = {
             let mut gpu = crate::gpu_encoder::GpuEncoder::new(&mut encoder, &self.device);
             self.runtime.render(&mut gpu, &self.target.texture, &ctx, &self.manifest);
@@ -623,6 +640,7 @@ impl BoxRun {
         set_all_tiles(false);
         set_poison(false);
         set_separate_off(false);
+        set_gate_off(false);
         use crate::frame_status::FrameRenderStatus;
         assert!(
             status == FrameRenderStatus::Complete || (warming && status == FrameRenderStatus::PendingGeometry),
@@ -722,6 +740,66 @@ fn gpu_flip_body_step_sparse_matches_all_tiles() {
         let words = dense.words("node.gpu_flip_step", "capped");
         let tail = &words[words.len() - SOLVER_WORDS as usize..];
         println!("{fixture:?} level {level}: 90 ticks bitwise; last solve {} iterations, capped {}", tail[0], tail[2]);
+    }
+}
+
+/// Inactive clock slots (BUG-e6z6s (inactive FLIP slots)): a slot the
+/// clock leaves no time to step arms its solves off, zeroes its tile and
+/// pocket triples and skips its sorts and scans, and the step comes out as
+/// it did when every pass of such a slot ran: the body row, the reaction,
+/// the particles, the solver words, the faces, the substep schedule and
+/// every substep's faces bit for bit, tick after tick, over the submerged
+/// and the floating box at Solve Level 0 (the body product on the solve's
+/// gate) and the floating box at 1 (the plain one, the coarse pockets).
+/// Every frame dumps every array, so the ticks are few and level 1 runs one
+/// box. The distance may differ only where the gated step holds the
+/// canonical 3h: a tile that left C during a frame's inactive slots used to
+/// be retired there and then have its φ put back by the slot's commit mask,
+/// so it kept a stale φ outside C; now the next active step retires it.
+#[test]
+fn gpu_flip_inactive_slots_match_the_ungated_step() {
+    use crate::node_graph::liquid::conformance::Fixture;
+    const STEP: &str = "node.gpu_flip_step";
+    const TICKS: u32 = 30;
+    for (fixture, level) in [(Fixture::SubmergedBox, 0), (Fixture::FloatingBox, 0), (Fixture::FloatingBox, 1)] {
+        let mut gated = BoxRun::new(fixture, false, false, level);
+        let mut ungated = BoxRun::ungated(fixture, level);
+        let (mut inactive, mut slots, mut canonical_cells) = (0usize, 0usize, 0usize);
+        for tick in 1..=TICKS {
+            gated.step();
+            ungated.step();
+            let at = format!("{fixture:?} level {level} tick {tick}");
+            let read = |run: &BoxRun| {
+                let mut arrays = run.left();
+                for port in ["faces", "substep_schedule", "substep_u", "substep_v", "substep_w"] {
+                    arrays.push((port, run.words(STEP, port)));
+                }
+                arrays
+            };
+            let (arrays, got) = (read(&ungated), read(&gated));
+            for ((what, a), (_, b)) in arrays.iter().zip(&got) {
+                assert_eq!(a.len(), b.len(), "{at}: {what} is sized differently");
+                if let Some(i) = first_differing(a, b) {
+                    panic!("{at}: gated {what} differs first at word {i}: {} ({}) vs ungated {} ({})", b[i], f32::from_bits(b[i]), a[i], f32::from_bits(a[i]));
+                }
+            }
+            assert_eq!(gated.tile_share(), ungated.tile_share(), "{at}: tile share");
+            let schedule = &got.iter().find(|(what, _)| *what == "substep_schedule").expect("the schedule").1;
+            slots += schedule.len() / 4;
+            inactive += schedule.chunks_exact(4).filter(|row| f32::from_bits(row[0]) == 0.0).count();
+            let (a, b) = (ungated.words(STEP, "distance"), gated.words(STEP, "distance"));
+            assert_eq!(a.len(), b.len(), "{at}: distance is sized differently");
+            let three_h = b.iter().map(|&w| f32::from_bits(w)).fold(f32::MIN, f32::max);
+            assert!(three_h > 0.0, "{at}: no cell holds the canonical distance");
+            for (i, (&old, &new)) in a.iter().zip(&b).enumerate() {
+                if old != new {
+                    assert_eq!(new, three_h.to_bits(), "{at}: distance cell {i} differs and the gated one is not canonical: {} vs ungated {}", f32::from_bits(new), f32::from_bits(old));
+                    canonical_cells += 1;
+                }
+            }
+        }
+        assert!(inactive > 0, "{fixture:?} level {level}: no inactive slot in {slots}, so nothing was gated");
+        println!("{fixture:?} level {level}: {TICKS} ticks bitwise; {inactive} of {slots} slots inactive; {canonical_cells} distance cells canonical where ungated kept a stale φ");
     }
 }
 

@@ -1325,6 +1325,7 @@ impl Step {
             bins: s.bins,
             sorted: None,
             order: Some(&f.order),
+            gate: None,
         };
         self.sort.encode(device, enc, &job, &SORT_LABELS)?;
         let ranges = self.sort.ranges().expect("ranges reserved with the shape");

@@ -107,6 +107,16 @@ struct FaceSample {
 // (classify_main), and the active tiles in tile order (lists_main).
 @group(0) @binding(19) var<storage, read_write> flags: array<u32>;
 @group(0) @binding(20) var<storage, read_write> lists: array<u32>;
+// The GPU FLIP clock's plan for the step this solve runs in (gpu_flip_clock.wgsl
+// Plan; word 0 step_dt, word 11 live_mode). A live slot with no time to step
+// is inactive: arm zeroes every gate triple and round, so the gated passes
+// run no groups, and every plain pass returns. Zeros (live_mode 0) are
+// always active: a solve outside a live clock.
+@group(0) @binding(21) var<storage, read> slot_plan: array<u32>;
+
+fn slot_inactive() -> bool {
+    return slot_plan[11] != 0u && !(bitcast<f32>(slot_plan[0]) > 0.0);
+}
 
 // One cell's row of L: lo = w to −x, +x, −y, +y; hi = w to −z, +z, then the
 // ghost diagonal (Σ w − Σ w·θ over air neighbours) and the plain one (Σ w).
@@ -311,6 +321,9 @@ fn ghost_ratio(own: u32, air: u32) -> f32 {
 // is not water, or has no open face, is a zero row.
 @compute @workgroup_size(256, 1, 1)
 fn rows_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if slot_inactive() {
+        return;
+    }
     let n = lattice();
     let idx = gid.x;
     if idx >= u.nx * u.ny * u.nz {
@@ -498,7 +511,7 @@ fn open_water(at: u32, n: vec3<i32>) -> bool {
 // non-water cells alone. The unlisted return precedes the barrier, whole.
 @compute @workgroup_size(256, 1, 1)
 fn restrict_main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if !listed(gid.x) {
+    if slot_inactive() || !listed(gid.x) {
         return;
     }
     let n = lattice();
@@ -565,7 +578,7 @@ fn restrict_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 // prolongation chain, so a prolonged vector is 0 off the water.
 @compute @workgroup_size(256, 1, 1)
 fn zero_main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if gid.x < u.nx * u.ny * u.nz {
+    if !slot_inactive() && gid.x < u.nx * u.ny * u.nz {
         out[gid.x] = 0.0;
     }
 }
@@ -576,7 +589,7 @@ fn zero_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 // precedes the barrier, whole.
 @compute @workgroup_size(256, 1, 1)
 fn prolong_main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if !listed(gid.x) {
+    if slot_inactive() || !listed(gid.x) {
         return;
     }
     let n = lattice();
@@ -645,6 +658,9 @@ fn kind(p: vec3<i32>, n: vec3<i32>) -> u32 {
 // above's touched).
 @compute @workgroup_size(256, 1, 1)
 fn coarsen_water_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if slot_inactive() {
+        return;
+    }
     let n = lattice();
     let c = coarse_lattice();
     let idx = gid.x;
@@ -675,6 +691,9 @@ fn coarsen_water_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 // into flags from list_base; every tile with `all_tiles`.
 @compute @workgroup_size(256, 1, 1)
 fn classify_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if slot_inactive() {
+        return;
+    }
     let n = lattice();
     let t = gid.x;
     if t >= tile_total(n) {
@@ -707,6 +726,9 @@ fn classify_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 // `slot`.
 @compute @workgroup_size(256, 1, 1)
 fn lists_main(@builtin(local_invocation_index) li: u32) {
+    if slot_inactive() {
+        return;
+    }
     let n = lattice();
     let total = tile_total(n);
     let run = (total + 255u) / 256u;
@@ -769,6 +791,9 @@ fn poison_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 // velocity 0.
 @compute @workgroup_size(256, 1, 1)
 fn coarsen_faces_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if slot_inactive() {
+        return;
+    }
     let n = lattice();
     let c = coarse_lattice();
     let m = c + vec3<i32>(1);
@@ -908,6 +933,9 @@ fn coarse_solve_main(@builtin(local_invocation_index) i: u32) {
 // start's |f|∞.
 @compute @workgroup_size(256, 1, 1)
 fn init_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) li: u32) {
+    if slot_inactive() {
+        return;
+    }
     let n = lattice();
     let tile = gid.x >> 9u;
     if tile >= tile_total(n) {
@@ -1035,6 +1063,9 @@ fn stop(first: u32) {
 // `slot`'s |r|∞ and the stop test.
 @compute @workgroup_size(256, 1, 1)
 fn check_main(@builtin(local_invocation_index) li: u32) {
+    if slot_inactive() {
+        return;
+    }
     let norm = max_of_partials(li, u.color);
     if li != 0u {
         return;
@@ -1060,6 +1091,9 @@ fn check_main(@builtin(local_invocation_index) li: u32) {
 // without meeting the tolerance. Mode 1 clears them first; `slot` is 0 or 1.
 @compute @workgroup_size(1, 1, 1)
 fn tally_main() {
+    if slot_inactive() {
+        return;
+    }
     if u.mode == 1u {
         tally[0] = 0u;
         tally[1] = 0u;
@@ -1071,19 +1105,37 @@ fn tally_main() {
     }
 }
 
-// Re-arms the gate at the start of a solve: every triple's group counts
-// from `armed`, and every round's two range entries live at `color` and
-// `slot` commands, so the solve's dispatches run until the stop zeroes them.
+// Word i of a live gate: the first `cy` triples from `armed`, then the body
+// passes' two (gpu_flip_pressure.rs Slots): the impulse partial over the
+// fine level's live workgroups and `cz` bodies, and the finalize over the
+// bodies.
+fn armed_word(i: u32) -> u32 {
+    let triple = i / 3u;
+    let word = i % 3u;
+    if triple < u.cy {
+        return armed[i];
+    }
+    if triple == u.cy {
+        return select(select(1u, u.cz, word == 1u), armed[0], word == 0u);
+    }
+    return select(1u, u.cz, word == 0u);
+}
+
+// Re-arms the gate at the start of a solve: every one of the `cx` triples,
+// and every round's two range entries live at `color` and `slot` commands,
+// so the solve's dispatches run until the stop zeroes them. An inactive
+// clock slot arms all of it off, so its solve runs no groups at all.
 // A dispatch, not a blit, so it is the solver's own labelled pass.
 @compute @workgroup_size(64, 1, 1)
 fn arm_main(@builtin(local_invocation_index) lane: u32) {
+    let off = slot_inactive();
     for (var i = lane; i < 3u * u.cx; i += 64u) {
-        gate[i] = armed[i];
+        gate[i] = select(armed_word(i), 0u, off);
     }
     for (var r = lane; r < ROUNDS; r += 64u) {
         ranges[4u * r] = 0u;
-        ranges[4u * r + 1u] = u.color;
+        ranges[4u * r + 1u] = select(u.color, 0u, off);
         ranges[4u * r + 2u] = 0u;
-        ranges[4u * r + 3u] = u.slot;
+        ranges[4u * r + 3u] = select(u.slot, 0u, off);
     }
 }

@@ -33,6 +33,9 @@ struct FaceSample {
 @group(0) @binding(1) var<storage, read> water: array<f32>;
 @group(0) @binding(2) var<storage, read> solid_faces: array<FaceSample>;
 @group(0) @binding(3) var<storage, read_write> out: array<f32>;
+// The GPU FLIP clock's plan (gpu_flip_pressure.wgsl slot_plan): a live slot
+// with no time to step builds nothing.
+@group(0) @binding(4) var<storage, read> slot_plan: array<u32>;
 
 fn coords(c: u32) -> vec3<i32> {
     return vec3<i32>(
@@ -85,6 +88,9 @@ fn entry(i: u32, j: u32) -> f32 {
 
 @compute @workgroup_size(256, 1, 1)
 fn inverse_main(@builtin(local_invocation_index) t: u32) {
+    if slot_plan[11] != 0u && !(bitcast<f32>(slot_plan[0]) > 0.0) {
+        return;
+    }
     let n = u.nodes_x * u.nodes_y * u.nodes_z;
     let entries = n * n;
     if n > MAX_CELLS || n > arrayLength(&water) || entries > arrayLength(&out)
