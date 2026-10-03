@@ -5,8 +5,17 @@ use manifold_physics::UniformField;
 const DT: Seconds = Seconds(1.0 / 60.0);
 
 fn scene(min_substeps: u32, max_substeps: u32, velocity: [f32; 3]) -> FluidWorld {
+    scene_in([12; 3], min_substeps, max_substeps, velocity)
+}
+
+fn scene_in(
+    cells: [u32; 3],
+    min_substeps: u32,
+    max_substeps: u32,
+    velocity: [f32; 3],
+) -> FluidWorld {
     let mut world = FluidWorld::new(Config {
-        cells: [12; 3],
+        cells,
         cell_size: 0.15,
         surface_subdivisions: 0,
         apic: false,
@@ -232,6 +241,44 @@ fn live_owner_frame_event_split_retains_the_numerical_offer() {
     let stats = frame.finish().unwrap();
     assert_eq!(stats.substeps, 3, "two numerical offers plus one event split");
     assert!(stats.cap_hit);
+}
+
+#[test]
+fn live_span_removes_only_the_markers_its_configured_interval_removes() {
+    // A late live frame runs four 1/60 s intervals as one span. At 16 m/s the
+    // liquid fits one interval's removal limit (six CFL-1 substeps of 0.15 m
+    // cells: 54 m/s) but not the span's (13.5 m/s). Twenty cells along X keep
+    // it off the far wall for the whole span, so only that limit removes.
+    let span = Seconds(4.0 * DT.0);
+    let live = |dt: Seconds, limit: Option<Seconds>| {
+        let mut world = scene_in([20, 12, 12], 1, 6, [16.0, 0.0, 0.0]);
+        world.set_speed_limit_interval(limit).unwrap();
+        let stats = world.step_live_with_fields(dt, &[]).unwrap();
+        (world, stats)
+    };
+    let (mut frame, kept) = live(DT, None);
+    assert!(kept.particles > 0);
+    // An interval's own limit is the frame's, so export does not change.
+    let (mut limited_frame, limited) = live(DT, Some(DT));
+    assert_eq!(
+        (limited.particles, limited.substeps),
+        (kept.particles, kept.substeps)
+    );
+    assert_same_motion(&mut frame, &mut limited_frame);
+    let (_, unlimited_span) = live(span, None);
+    assert!(
+        unlimited_span.particles < kept.particles,
+        "the span's own limit removes ordinary-speed markers: {unlimited_span:?}"
+    );
+    let (_, limited_span) = live(span, Some(DT));
+    assert_eq!(
+        limited_span.particles, kept.particles,
+        "a four-interval span keeps every marker one interval keeps"
+    );
+    let mut world = scene(1, 6, [0.0; 3]);
+    for invalid in [0.0, -DT.0, f64::NAN, f64::INFINITY] {
+        assert!(world.set_speed_limit_interval(Some(Seconds(invalid))).is_err());
+    }
 }
 
 #[test]

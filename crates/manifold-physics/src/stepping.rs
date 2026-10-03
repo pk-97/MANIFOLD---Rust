@@ -648,8 +648,9 @@ impl Default for MarkerSpeedLimitConfig {
     }
 }
 
-/// Port `_getMarkerParticleSpeedLimit`. `dt` is the whole accepted frame, not
-/// the substep: the engine passes `_currentFrameDeltaTime` at every substep.
+/// Port `_getMarkerParticleSpeedLimit`. `dt` is never the substep: the engine
+/// passes the whole accepted frame at every substep, or one Sim Rate interval
+/// when a live span is longer (MANIFOLD's `setMarkerSpeedLimitFrameDeltaTime`).
 /// `histogram` is caller-owned scratch with one bin per allowed frame step;
 /// this function performs no allocation.
 pub fn marker_particle_speed_limit(

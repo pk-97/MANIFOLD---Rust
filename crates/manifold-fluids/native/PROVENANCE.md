@@ -30,6 +30,13 @@ Local changes:
   fluid population could lose its fastest particles every frame until empty
   (BUG-zpn3). The absolute extreme-speed, solid, open-boundary and per-cell
   population protections remain active.
+- `setMarkerSpeedLimitFrameDeltaTime` measures the marker speed limit against
+  at most a configured interval instead of the whole frame (0 keeps the
+  upstream frame). The live worker passes the project Sim Rate interval, so a
+  late frame that runs several intervals as one span removes only the markers
+  one interval removes, as export does (BUG-i6niq (live water loses particles
+  under load)). CFL substep selection and the final-substep stretch still use
+  the whole frame.
 - `surfaceframe.{h,cpp}` and the capture method in `fluidsimulation.{h,cpp}` add
   explicit, independently owned reconstruction inputs for one completed frame.
   Capture reuses the production obstacle-offset/meshing-volume preparation;

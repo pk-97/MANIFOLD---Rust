@@ -139,6 +139,11 @@ impl NativeSimulation {
             || FluidRuntime::step_at(&request.history, tick),
             |interval| FluidRuntime::step_at_interval(&request.history, interval),
         );
+        // Every step path below runs after this: plain, impulse-split and
+        // coupled live frames all keep one Sim Rate interval's speed limit.
+        native
+            .set_speed_limit_interval(request.speed_limit_interval)
+            .map_err(|e| e.to_string())?;
         native
             .set_gravity(step.current.gravity)
             .map_err(|e| e.to_string())?;

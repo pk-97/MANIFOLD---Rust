@@ -397,6 +397,10 @@ struct Request {
     start_tick: u64,
     count: usize,
     interval: Option<StepInterval>,
+    /// The Sim Rate interval a live interval's marker speed limit is measured
+    /// against, so a late span removes only what one interval removes. None
+    /// for fixed ticks.
+    speed_limit_interval: Option<Seconds>,
     history: Vec<Sample>,
     impulses: Vec<AppliedEvent<ResolvedNodeImpulse>>,
     role_setup: Arc<roles::Setup>,
@@ -1505,6 +1509,7 @@ impl FluidRuntime {
                 .take()
                 .expect("one recycled role history per request");
             self.role_history.snapshot(&mut role_history);
+            let interval = if count > 0 { live_interval } else { None };
             let request = Request {
                 outputs: Outputs {
                     surface_meshing: self.effective_surface_meshing(),
@@ -1523,7 +1528,9 @@ impl FluidRuntime {
                     self.completed_tick
                 },
                 count,
-                interval: if count > 0 { live_interval } else { None },
+                interval,
+                speed_limit_interval: interval
+                    .map(|_| Seconds(super::physics::simulation_interval())),
                 history,
                 impulses,
                 role_setup: Arc::clone(&self.role_setup),
@@ -2292,6 +2299,52 @@ mod tests {
                 assert!((runtime.completed_time - accepted).abs() < 1e-9);
                 assert_eq!(runtime.completed_tick, (frame * u64::from(rate.hz())) / 60);
             }
+        }
+    }
+
+    #[test]
+    fn live_span_measures_its_speed_limit_against_one_sim_rate_interval() {
+        let settings = FluidSettings {
+            resolution: 8,
+            fill_height: 0.0,
+            ..FluidSettings::default()
+        };
+        let controls = FluidControls::default();
+        let rate = manifold_physics::SimRate::Hz30;
+        let interval = rate.interval();
+        // Live owes four intervals as one span; export steps the first alone.
+        for (offline, owed) in [(false, 4.0), (true, 1.0)] {
+            let _scope = crate::node_graph::physics::PhysicsStepScope::for_settings(
+                offline,
+                manifold_physics::PhysicsSettings { sim_rate: rate },
+            );
+            let (requests, received) = mpsc::sync_channel::<Request>(1);
+            let (_replies, replies) = mpsc::sync_channel::<Reply>(1);
+            let mut runtime = FluidRuntime::default();
+            runtime.observe(settings, controls, Seconds::ZERO, 1.0, 0.0).unwrap();
+            runtime.worker = Some(Worker {
+                requests,
+                replies,
+                cancel_epoch: Arc::clone(&runtime.cancel_epoch),
+            });
+            let mut native = NativeSimulation::default();
+            runtime.advance(false).unwrap();
+            let initial = received.recv().unwrap();
+            assert_eq!((initial.count, initial.speed_limit_interval), (0, None));
+            runtime.accept(native.process(initial, &runtime.cancel_epoch)).unwrap();
+
+            runtime
+                .observe(settings, controls, Seconds(4.0 * interval), 1.0, 0.0)
+                .unwrap();
+            runtime.advance(false).unwrap();
+            let request = received.recv().unwrap();
+            let span = request.interval.expect("an owed live interval");
+            assert!((span.duration().0 - owed * interval).abs() < 1e-12, "offline={offline}");
+            assert_eq!(request.speed_limit_interval, Some(Seconds(interval)));
+            let reply = native.process(request, &runtime.cancel_epoch);
+            assert_eq!(reply.error, None);
+            assert_eq!(reply.accepted_interval, Some(span));
+            runtime.accept(reply).unwrap();
         }
     }
 

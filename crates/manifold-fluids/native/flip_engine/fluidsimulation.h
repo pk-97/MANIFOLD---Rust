@@ -1278,6 +1278,11 @@ public:
     void enableExtremeVelocityRemoval();
     void disableExtremeVelocityRemoval();
     bool isExtremeVelocityRemovalEnabled();
+    // MANIFOLD: measure the removal speed limit against at most dt instead of
+    // the whole frame; 0 measures the frame. A live frame that spans several
+    // configured frames then removes only what one configured frame removes.
+    // Timestep selection still divides the whole frame.
+    void setMarkerSpeedLimitFrameDeltaTime(double dt);
 
     /*
         Set FLIP (splashy) or APIC (swirly) velocity transfer method
@@ -2577,6 +2582,8 @@ private:
     bool _isAdaptiveObstacleTimeSteppingEnabled = false;
     bool _isAdaptiveForceFieldTimeSteppingEnabled = false;
     bool _isExtremeVelocityRemovalEnabled = true;
+    // MANIFOLD: setMarkerSpeedLimitFrameDeltaTime; 0 is unset.
+    double _markerSpeedLimitFrameDeltaTime = 0.0;
     double _extremeParticleVelocityThreshold = 0.99999;
     double _extremeParticleVelocityThresholdLower = 0.90;
     double _maxExtremeVelocityRemovalPercent = 0.0005;
