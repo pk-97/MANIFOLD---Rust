@@ -291,7 +291,11 @@ fn particles_to_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
 // One thread per face record, `faces_in` to `faces_out`. A valid face
 // (weight > 0) is copied. An invalid one takes the mean velocity of the
 // valid faces of its component among its six grid neighbours and becomes
-// valid (weight 1); with none it stays as it was.
+// valid (weight 1) only if a non-wall neighbour seeds it. FLIP Fluids
+// GridUtils::_initializeStatusGridThread holds boundary samples DONE: they
+// contribute to the mean but never start a layer. Here only the normal end
+// faces are walls; the transverse end rows are fluid cell centres, not the
+// engine's solid border cells. Keep their fluid samples eligible as seeds.
 @compute @workgroup_size(256)
 fn extend_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
     let idx = gid.x;
@@ -317,6 +321,7 @@ fn extend_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
         var sum = 0.0;
         var hits = 0.0;
+        var seeded = false;
         for (var b = 0; b < 3; b = b + 1) {
             for (var d = -1; d <= 1; d = d + 2) {
                 var q = p;
@@ -328,10 +333,11 @@ fn extend_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
                 if neighbour.face_weight[a] > 0.0 {
                     sum = sum + neighbour.face_velocity[a];
                     hits = hits + 1.0;
+                    seeded = seeded || (q[a] > 0 && q[a] < n[a]);
                 }
             }
         }
-        if hits > 0.0 {
+        if seeded {
             out.face_velocity[a] = sum / hits;
             out.face_weight[a] = 1.0;
         }

@@ -81,6 +81,8 @@ Slow flows come from agents re-deriving what the lead already knows. Every lane 
 - **The gate commands** it must run and what "done" means. Lanes run their own gates and may iterate at most twice per gate, then stop and report verbatim.
 - **Prescriptive imperatives** ("Run `cargo clippy -p manifold-ui -- -D warnings`", "Read `path:line`"), not "check X". Sonnet skips tool calls on soft phrasing.
 - **The reference to port from**, when one exists, and the instruction to name every deviation.
+- **The source and everything made from it.** Name the file that defines the contract and every file generated from or checked against it: builder, shipped JSON, catalog, UI flows, goldens. Regenerate from the source. A golden is refreshed only for a change the brief names, never because it fails.
+- **The fixes a merge must keep.** Name the other branch's fixes and the tests that prove them. After merging main, run those tests, even when the merge was clean.
 
 ## Verification
 

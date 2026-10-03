@@ -408,6 +408,8 @@ pub(crate) mod gpu_flip_preset;
 mod gpu_flip_atom_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_flip_body_tests;
+#[cfg(test)]
+mod gpu_flip_extension_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_flip_step_tests;
 #[cfg(test)]

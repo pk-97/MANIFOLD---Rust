@@ -776,52 +776,11 @@ fn gpu_flip_particle_distance_is_the_engines_level_set() {
     }
 }
 
-fn cpu_extend(faces: &[FaceSample]) -> Vec<FaceSample> {
-    (0..face_len())
-        .map(|i| {
-            let p = pad_coords(i);
-            let mut out = FaceSample::default();
-            for a in 0..3 {
-                if !face_exists(p, a) {
-                    continue;
-                }
-                out.velocity[a] = faces[i].velocity[a];
-                out.weight[a] = faces[i].weight[a];
-                if faces[i].weight[a] > 0.0 {
-                    continue;
-                }
-                let (mut sum, mut hits) = (0.0f64, 0.0f64);
-                for b in 0..3 {
-                    for d in [-1i64, 1] {
-                        let q = p[b] as i64 + d;
-                        let top = if b == a { N[b] as i64 } else { N[b] as i64 - 1 };
-                        if q < 0 || q > top {
-                            continue;
-                        }
-                        let mut r = p;
-                        r[b] = q as usize;
-                        let neighbour = faces[pad_index(r)];
-                        if neighbour.weight[a] > 0.0 {
-                            sum += f64::from(neighbour.velocity[a]);
-                            hits += 1.0;
-                        }
-                    }
-                }
-                if hits > 0.0 {
-                    out.velocity[a] = (sum / hits) as f32;
-                    out.weight[a] = 1.0;
-                }
-            }
-            out
-        })
-        .collect()
-}
-
 #[test]
 fn gpu_flip_extend_faces_fills_one_layer() {
     let faces = random_faces(0xe7e, true);
     let got: Vec<FaceSample> = Pass::new().bind(3, &faces).run("extend_faces", &lattice(), 4, face_len(), face_len());
-    let want = cpu_extend(&faces);
+    let want = super::gpu_flip_extension_tests::cpu_extend(&faces, N);
     let mut filled = 0;
     for (i, (g, w)) in got.iter().zip(&want).enumerate() {
         for a in 0..3 {
@@ -831,6 +790,29 @@ fn gpu_flip_extend_faces_fills_one_layer() {
         }
     }
     assert!(filled > 20, "the fixture fills faces, got {filled}");
+}
+
+/// A wall's held zero must not claim the gap before the fluid front arrives.
+#[test]
+fn gpu_flip_extend_faces_waits_for_fluid_beside_walls() {
+    use super::gpu_flip_extension_tests::{cpu_extend, wall_gap};
+    for axis in 0..3 {
+        for high in [false, true] {
+            let (mut faces, target) = wall_gap(N, axis, high);
+            for layer in 0..2 {
+                let want = cpu_extend(&faces, N);
+                let got: Vec<FaceSample> = Pass::new().bind(3, &faces).run("extend_faces", &lattice(), 4, face_len(), face_len());
+                for (i, (g, w)) in got.iter().zip(&want).enumerate() {
+                    for a in 0..3 {
+                        close(g.velocity[a], f64::from(w.velocity[a]), 1.0, &format!("layer {layer} face {:?}/{a}", pad_coords(i)));
+                        assert_eq!(g.weight[a], w.weight[a]);
+                    }
+                }
+                faces = got;
+            }
+            assert!(faces[target].velocity[axis] > 0.0, "axis {axis}, high {high}: fluid reaches the wall gap");
+        }
+    }
 }
 
 /// The kernel's per-component trilinear sample over faces with weight > 0,
