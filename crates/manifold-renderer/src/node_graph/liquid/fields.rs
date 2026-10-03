@@ -213,7 +213,7 @@ pub struct LiquidImpulses {
     /// Counts restarts; never wraps in practice, unlike the clock's u32.
     epoch: u64,
     held: bool,
-    /// Transport of the frame last observed: stamps are taken only there.
+    /// Transport of the frame last observed: no older hit is stamped.
     transport: Option<f64>,
     simulation_time: f64,
     last_sequence: Option<u64>,
@@ -307,7 +307,10 @@ impl LiquidImpulses {
         self.queue.as_ref().map(|_| self.epoch)
     }
 
-    /// Stamp a hit at the simulated time of the frame last observed.
+    /// Stamp a hit at the simulated time of the frame last observed. A hit
+    /// from a later transport (an audio fire captured after the engine ticked,
+    /// before the frame runs) has no tick yet, so it takes the same stamp and
+    /// lands on the next frame's first tick. Only an older hit is stale.
     pub fn stamp(&self, transport: f64, sequence: u64) -> Result<EventStamp, String> {
         if let Some(error) = &self.failure {
             return Err(error.clone());
@@ -315,8 +318,8 @@ impl LiquidImpulses {
         if self.queue.is_none() {
             return Err("Liquid impulses: the clock has not started".into());
         }
-        if self.transport != Some(transport) {
-            return Err("Liquid impulses: an impulse must be captured at the frame the liquid last ran".into());
+        if !transport.is_finite() || self.transport.is_none_or(|last| transport < last) {
+            return Err("Liquid impulses: the hit is older than the frame the liquid last ran".into());
         }
         Ok(EventStamp {
             epoch: self.epoch,
