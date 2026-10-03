@@ -322,6 +322,11 @@ class WatchdogTests(unittest.TestCase):
         d.times = {"m::tiny": 2.0}
         self.assertEqual(d.allowance("m::tiny"), 120.0)
 
+    def test_committed_glb_sweep_allowance_outlasts_a_whole_sweep(self):
+        # The sweep takes ~16 minutes; the no-record 300s killed every glTF landing.
+        d = gate.Watchdog(gate.gpu_scope.load_times())
+        self.assertGreater(d.allowance("glb_conformance_sweep"), 2 * 930.0)
+
     def test_floor_override_replaces_floor_and_no_record_default(self):
         d = self.dog(floor=10.0)
         self.assertEqual(d.allowance("m::unknown"), 10.0)
