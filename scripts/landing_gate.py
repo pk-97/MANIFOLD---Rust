@@ -50,6 +50,7 @@ def build_environment(cmd, cwd):
     from storage_budget import check_build
     repo = Path(cwd).resolve()
     environment = os.environ.copy()
+    environment["CARGO_INCREMENTAL"] = "0"
     overrides = [environment[name] for name in
                  ("CARGO_TARGET_DIR", "CARGO_BUILD_TARGET_DIR") if environment.get(name)]
     targets = {Path(os.path.abspath(repo / value)) for value in overrides}
@@ -525,12 +526,22 @@ def _main(stack):
             results.append(("FAIL", "gpu-proofs", None, message.splitlines()))
             return finish(repo, base_sha, results)
 
+    # Nextest must keep the default-feature test set, regardless of proof
+    # scope. Enabling gpu-proofs also admits nested/individually gated tests
+    # and required-features binaries; their names have no common boundary.
+    # An exact default inventory would require its own build anyway. Keep
+    # separate feature builds and let gpu_proofs_gate alone opt into proofs
+    # via scoped, budgeted cargo test runs.
+    test_packages = set(cpu_plan.packages)
+    test_args = [a for p in sorted(test_packages) for a in ("-p", p)]
+    cpu_args = cpu_plan.args()
+
     # Compile every test binary the hold will run before taking it, so the
     # hold covers test time only (BUG-w0hh (landing gate speed)). The legs
     # under the hold then find everything built and go straight to testing.
     print("[tests] " + cpu_plan.describe().replace("\n", "\n[tests] "), flush=True)
     if cpu_plan.filters:
-        if build_leg(results, "tests-build", ["cargo", "nextest", "run", "--no-run", *cpu_plan.args()],
+        if build_leg(results, "tests-build", ["cargo", "nextest", "run", "--no-run", *cpu_args],
                      repo) == "FAIL" and not args.keep_going:
             return finish(repo, base_sha, results)
     else:
@@ -545,8 +556,9 @@ def _main(stack):
     if any(path.startswith(catalog_paths) for path in paths):
         exit_, out, err, duration = run_check(
             "catalog-fresh",
-            ["cargo", "nextest", "run", "-p", "manifold-renderer", "-E",
-             "test(regenerates_in_sync)"], cwd=repo, timeout=600)
+            ["cargo", "nextest", "run", *test_args,
+             *([] if "manifold-renderer" in test_packages else ["-p", "manifold-renderer"]),
+             "-E", "test(regenerates_in_sync)"], cwd=repo, timeout=600)
         tail = (out + err).rstrip().splitlines()[-20:]
         status = "PASS" if exit_ == 0 else "FAIL"
         if exit_:
@@ -576,7 +588,7 @@ def _main(stack):
 
     # f. tests (if packages touched)
     if cpu_plan.filters:
-        cmd = ["cargo", "nextest", "run", "--no-fail-fast", "--no-tests=pass", *cpu_plan.args()]
+        cmd = ["cargo", "nextest", "run", "--no-fail-fast", "--no-tests=pass", *cpu_args]
         exit_, out, err, duration = run_check("tests", cmd, cwd=repo, timeout=3600)
         tail = (out + err).rstrip().splitlines()[-20:]
         status = "PASS" if exit_ == 0 else "FAIL"

@@ -5,6 +5,7 @@ Every test uses a private MANIFOLD_GPU_QUEUE_DIR, so none of them touch (or
 wait on) the real machine-wide lock.
 """
 
+import contextlib
 import os
 import signal
 import subprocess
@@ -12,7 +13,9 @@ import sys
 import tempfile
 import time
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
+from unittest.mock import patch
 
 import gpu_queue
 
@@ -24,6 +27,9 @@ class GpuQueueTests(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.dir = Path(self._tmp.name)
         self.env = {**os.environ, "MANIFOLD_GPU_QUEUE_DIR": str(self.dir / "q")}
+        directory = patch.object(gpu_queue, "queue_dir", return_value=self.dir / "q")
+        directory.start()
+        self.addCleanup(directory.stop)
         self.procs = []
 
     def tearDown(self):
@@ -125,6 +131,122 @@ class GpuQueueTests(unittest.TestCase):
             self.assertEqual(free.returncode, 0)
         finally:
             del os.environ["MANIFOLD_GPU_QUEUE_DIR"]
+
+    def test_token_admission_when_ancestor_walk_fails(self):
+        with patch.dict(os.environ, {gpu_queue.HOLDER_ENV: "previous"}):
+            holder = gpu_queue.acquire("outer")
+            token = os.environ[gpu_queue.HOLDER_ENV]
+            info = gpu_queue.read_holder(self.dir / "q")
+            self.assertEqual(token, f"{os.getpid()}:{info['nonce']}")
+            try:
+                for candidate, allowed in ((token, True), (token + "stale", False), (None, False)):
+                    with self.subTest(token=candidate), \
+                            patch.dict(os.environ), \
+                            patch.object(gpu_queue, "ancestor_pids", return_value=[]), \
+                            patch.object(gpu_queue, "holder_command", return_value=""), \
+                            patch.object(gpu_queue.time, "sleep", side_effect=RuntimeError("waited")):
+                        if candidate is None:
+                            os.environ.pop(gpu_queue.HOLDER_ENV, None)
+                        else:
+                            os.environ[gpu_queue.HOLDER_ENV] = candidate
+                        if allowed:
+                            child = gpu_queue.acquire("child")
+                            self.assertIsNone(child.fd)
+                            child.release()
+                            self.assertEqual(gpu_queue.read_holder(self.dir / "q"), info)
+                        else:
+                            with self.assertRaisesRegex(RuntimeError, "waited"):
+                                gpu_queue.acquire("child")
+                with patch.object(gpu_queue, "ancestor_pids", return_value=[]), \
+                        patch.object(gpu_queue, "holder_command", return_value=""), \
+                        patch.object(gpu_queue.time, "sleep", side_effect=RuntimeError("waited")):
+                    gpu_queue._write_holder(self.dir / "q", "replacement", "new-nonce")
+                    with self.assertRaisesRegex(RuntimeError, "waited"):
+                        gpu_queue.acquire("changed record")
+                    gpu_queue._write_holder(self.dir / "q", "outer", info["nonce"])
+                with patch.object(gpu_queue.os, "kill", side_effect=ProcessLookupError), \
+                        patch.object(gpu_queue, "ancestor_pids", return_value=[]), \
+                        patch.object(gpu_queue, "holder_command", return_value=""), \
+                        patch.object(gpu_queue.time, "sleep", side_effect=RuntimeError("waited")):
+                    with self.assertRaisesRegex(RuntimeError, "waited"):
+                        gpu_queue.acquire("dead holder")
+            finally:
+                holder.release()
+            self.assertEqual(os.environ[gpu_queue.HOLDER_ENV], "previous")
+
+    def test_cargo_test_builds_before_the_lock_and_preserves_runtime_args(self):
+        events = []
+
+        @contextmanager
+        def recording_hold(label, **kwargs):
+            events.append(("hold-enter", label))
+            try:
+                yield
+            finally:
+                events.append(("hold-exit", label))
+
+        child = type("Child", (), {"wait": lambda self: 0, "send_signal": lambda self, sig: None})()
+        command = ["cargo", "+nightly", "test", "--release", "-p", "demo", "--", "--nocapture"]
+        with patch.object(gpu_queue.subprocess, "run", side_effect=lambda cmd: events.append(("build", cmd)) or subprocess.CompletedProcess(cmd, 0)), \
+             patch.object(gpu_queue.subprocess, "Popen", side_effect=lambda cmd: events.append(("run", cmd)) or child), \
+             patch.object(gpu_queue, "hold", side_effect=recording_hold):
+            self.assertEqual(gpu_queue.run_queued(command), 0)
+
+        self.assertEqual(events, [
+            ("build", ["cargo", "+nightly", "test", "--release", "-p", "demo", "--no-run", "--", "--nocapture"]),
+            ("hold-enter", "cargo +nightly test --release -p demo -- --nocapture"),
+            ("run", command),
+            ("hold-exit", "cargo +nightly test --release -p demo -- --nocapture"),
+        ])
+
+    def test_cargo_run_build_excludes_runtime_args(self):
+        events = []
+        child = type("Child", (), {"wait": lambda self: 0, "send_signal": lambda self, sig: None})()
+        command = ["cargo", "run", "--release", "-p", "demo", "--bin", "demo", "--", "--selftest"]
+        with patch.object(gpu_queue.subprocess, "run", side_effect=lambda cmd: events.append(cmd) or subprocess.CompletedProcess(cmd, 0)), \
+             patch.object(gpu_queue.subprocess, "Popen", return_value=child), \
+             patch.object(gpu_queue, "hold", return_value=contextlib.nullcontext()):
+            self.assertEqual(gpu_queue.run_queued(command), 0)
+        self.assertEqual(events, [["cargo", "build", "--release", "-p", "demo", "--bin", "demo"]])
+
+    def test_cargo_build_failure_takes_no_lock(self):
+        command = ["cargo", "build", "-p", "demo"]
+        with patch.object(gpu_queue.subprocess, "run", return_value=subprocess.CompletedProcess(command, 101)), \
+             patch.object(gpu_queue, "hold", side_effect=AssertionError("build must not take the lock")):
+            self.assertEqual(gpu_queue.run_queued(command), 101)
+
+    def test_successful_cargo_build_and_no_run_take_no_lock(self):
+        build = ["cargo", "build", "-p", "demo"]
+        no_run = ["cargo", "test", "-p", "demo", "--no-run"]
+        with patch.object(gpu_queue.subprocess, "run", side_effect=lambda cmd: subprocess.CompletedProcess(cmd, 0)), \
+             patch.object(gpu_queue, "hold", side_effect=AssertionError("build-only command must not lock")):
+            self.assertEqual(gpu_queue.run_queued(build), 0)
+            self.assertEqual(gpu_queue.run_queued(no_run), 0)
+
+    def test_cargo_prebuild_is_rejected_inside_an_inherited_hold(self):
+        command = ["cargo", "run", "-p", "demo"]
+        gpu_queue._held_depth = 1
+        try:
+            with patch.object(gpu_queue.subprocess, "run", side_effect=AssertionError("must not build")), \
+                 patch.object(gpu_queue, "hold", side_effect=AssertionError("must not nest")):
+                self.assertEqual(gpu_queue.run_queued(command), 2)
+        finally:
+            gpu_queue._held_depth = 0
+
+    def test_unsupported_cargo_invocation_is_rejected_before_lock(self):
+        command = ["cargo", "metadata", "--no-deps"]
+        with patch.object(gpu_queue.subprocess, "run", side_effect=AssertionError("must reject")), \
+             patch.object(gpu_queue, "hold", side_effect=AssertionError("must reject")):
+            self.assertEqual(gpu_queue.run_queued(command), 2)
+
+    def test_cargo_ancestor_hold_or_unknown_ancestry_refuses_build(self):
+        for ancestors in ([42], []):
+            with self.subTest(ancestors=ancestors), \
+                    patch.object(gpu_queue, "read_holder", return_value={"pid": "42"}), \
+                    patch.object(gpu_queue, "ancestor_pids", return_value=ancestors), \
+                    patch.object(gpu_queue, "_run_build") as build:
+                self.assertEqual(gpu_queue.run_queued(["cargo", "test"]), 2)
+                build.assert_not_called()
 
 
 def with_group_kill(proc):

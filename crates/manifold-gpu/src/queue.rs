@@ -16,8 +16,11 @@
 //! `scripts/gpu_queue.py` speaks the same protocol (same lock file, same
 //! `gpu.holder` record) and holds the lock across a whole multi-process run.
 //! A process whose ancestor holds the lock does not wait for it: on contention
-//! it checks whether the holder's pid is one of its own ancestors, so a gate
-//! script that holds the lock and runs cargo does not deadlock its own tests.
+//! it first checks MANIFOLD_GPU_LOCK_HOLDER=<pid>:<nonce> against the current
+//! record and a live holder PID. Each acquisition writes a fresh nonce; stale
+//! tokens cannot grant admission. Native ancestor lookup is the fallback.
+//! Rust outer holders export the token with [`Held::configure_child`] before
+//! spawning children (global environment mutation is unsafe with threads).
 //!
 //! Obsolete when: GPU admission moves to a device-level scheduler that
 //! replaces this file lock.
@@ -27,6 +30,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+const HOLDER_ENV: &str = "MANIFOLD_GPU_LOCK_HOLDER";
 
 const POLL: Duration = Duration::from_millis(250);
 const REPORT_EVERY: Duration = Duration::from_secs(30);
@@ -61,11 +66,24 @@ pub fn queue_dir() -> PathBuf {
 /// closes); an `Inherited` value means an ancestor process holds it.
 #[derive(Debug)]
 pub enum Held {
-    Owned { _file: File, holder_path: PathBuf },
+    Owned {
+        _file: File,
+        holder_path: PathBuf,
+        token: String,
+    },
     Inherited,
 }
 
 impl Held {
+    /// Export this acquisition's token to a child without mutating global env.
+    /// Keep this guard alive until the child exits. Inherited guards preserve
+    /// the ancestor token already inherited by the command.
+    pub fn configure_child(&self, command: &mut std::process::Command) {
+        if let Self::Owned { token, .. } = self {
+            command.env(HOLDER_ENV, token);
+        }
+    }
+
     pub fn is_inherited(&self) -> bool {
         matches!(self, Held::Inherited)
     }
@@ -89,9 +107,19 @@ pub fn acquire_in(
     report_every: Duration,
     out: &mut dyn Write,
 ) -> std::io::Result<Held> {
-    acquire_with(directory, label, poll, report_every, out, &ancestor_pids)
+    let token = std::env::var(HOLDER_ENV).ok();
+    acquire_with_token(
+        directory,
+        label,
+        poll,
+        report_every,
+        out,
+        &ancestor_pids,
+        token.as_deref(),
+    )
 }
 
+#[cfg(test)]
 fn acquire_with(
     directory: &Path,
     label: &str,
@@ -99,6 +127,18 @@ fn acquire_with(
     report_every: Duration,
     out: &mut dyn Write,
     ancestors: &dyn Fn() -> Vec<u32>,
+) -> std::io::Result<Held> {
+    acquire_with_token(directory, label, poll, report_every, out, ancestors, None)
+}
+
+fn acquire_with_token(
+    directory: &Path,
+    label: &str,
+    poll: Duration,
+    report_every: Duration,
+    out: &mut dyn Write,
+    ancestors: &dyn Fn() -> Vec<u32>,
+    token: Option<&str>,
 ) -> std::io::Result<Held> {
     std::fs::create_dir_all(directory)?;
     let file = OpenOptions::new()
@@ -118,6 +158,9 @@ fn acquire_with(
         }
         let info = read_holder(directory);
         let holder_pid = info.get("pid").and_then(|p| p.parse::<u32>().ok());
+        if token_matches(&info, token) {
+            return Ok(Held::Inherited);
+        }
         let mine = ancestor_cache.get_or_insert_with(ancestors);
         if holder_pid.is_some_and(|p| mine.contains(&p)) {
             return Ok(Held::Inherited);
@@ -141,8 +184,14 @@ fn acquire_with(
         );
     }
     let holder_path = directory.join("gpu.holder");
-    write_holder(directory, &holder_path, label);
-    Ok(Held::Owned { _file: file, holder_path })
+    let nonce = uuid::Uuid::new_v4().simple().to_string();
+    write_holder(directory, &holder_path, label, &nonce)?;
+    let token = format!("{}:{nonce}", std::process::id());
+    Ok(Held::Owned {
+        _file: file,
+        holder_path,
+        token,
+    })
 }
 
 fn process_label(label: &str) -> String {
@@ -155,10 +204,20 @@ fn process_label(label: &str) -> String {
 }
 
 fn one_line(s: &str, max: usize) -> String {
-    s.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(max).collect()
+    s.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(max)
+        .collect()
 }
 
-fn write_holder(directory: &Path, holder_path: &Path, label: &str) {
+fn write_holder(
+    directory: &Path,
+    holder_path: &Path,
+    label: &str,
+    nonce: &str,
+) -> std::io::Result<()> {
     let since = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs_f64())
@@ -167,15 +226,14 @@ fn write_holder(directory: &Path, holder_path: &Path, label: &str) {
         .map(|p| one_line(&p.display().to_string(), 300))
         .unwrap_or_default();
     let body = format!(
-        "pid={}\nsince={since:.3}\nlabel={}\ncwd={cwd}\n",
+        "pid={}\nnonce={nonce}\nsince={since:.3}\nlabel={}\ncwd={cwd}\n",
         std::process::id(),
         one_line(label, 300)
     );
-    // Best effort: the lock is what matters, the record only names the holder.
+    // Publish atomically before handing the token to a child.
     let tmp = directory.join(format!("gpu.holder.tmp.{}", std::process::id()));
-    if std::fs::write(&tmp, body).is_ok() {
-        let _ = std::fs::rename(&tmp, holder_path);
-    }
+    std::fs::write(&tmp, body)?;
+    std::fs::rename(&tmp, holder_path)
 }
 
 fn read_holder(directory: &Path) -> std::collections::HashMap<String, String> {
@@ -198,7 +256,10 @@ fn describe(info: &std::collections::HashMap<String, String>) -> String {
         .get("since")
         .and_then(|s| s.parse::<f64>().ok())
         .and_then(|since| {
-            let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs_f64();
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .ok()?
+                .as_secs_f64();
             Some(format_age((now - since).max(0.0) as u64))
         })
         .unwrap_or_else(|| "unknown time".to_string());
@@ -219,21 +280,69 @@ fn format_age(seconds: u64) -> String {
     }
 }
 
-/// Pids of this process's ancestors, nearest first; empty if `ps` fails.
+fn token_matches(info: &std::collections::HashMap<String, String>, token: Option<&str>) -> bool {
+    let Some(pid) = info
+        .get("pid")
+        .and_then(|p| p.parse::<i32>().ok())
+        .filter(|p| *p > 1)
+    else {
+        return false;
+    };
+    let Some(nonce) = info.get("nonce").filter(|n| !n.is_empty()) else {
+        return false;
+    };
+    token.is_some_and(|t| t == format!("{pid}:{nonce}"))
+        // SAFETY: signal 0 only probes whether the positive PID is alive.
+        && unsafe { libc::kill(pid, 0) == 0 }
+}
+
+/// Native parent lookup: never launch `ps`, which sandboxes may forbid.
+fn parent_pid(pid: u32) -> Option<u32> {
+    if pid == std::process::id() {
+        // SAFETY: getppid takes no arguments and has no preconditions.
+        return Some(unsafe { libc::getppid() } as u32);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::uninit();
+        let size = std::mem::size_of::<libc::proc_bsdinfo>() as i32;
+        // SAFETY: the buffer has the exact size required by PROC_PIDTBSDINFO.
+        let read = unsafe {
+            libc::proc_pidinfo(
+                pid as i32,
+                libc::PROC_PIDTBSDINFO,
+                0,
+                info.as_mut_ptr().cast(),
+                size,
+            )
+        };
+        if read == size {
+            // SAFETY: a successful full-size read initialized the structure.
+            return Some(unsafe { info.assume_init() }.pbi_ppid);
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        return stat
+            .rsplit_once(')')?
+            .1
+            .split_whitespace()
+            .nth(1)?
+            .parse()
+            .ok();
+    }
+    #[cfg(not(target_os = "linux"))]
+    None
+}
+
+/// Ancestors nearest first; inspection failure stops the fallback walk.
 fn ancestor_pids() -> Vec<u32> {
     let mut pids = Vec::new();
     let mut pid = std::process::id();
     for _ in 0..64 {
-        let Ok(out) = std::process::Command::new("ps")
-            .args(["-o", "ppid=", "-p", &pid.to_string()])
-            .output()
-        else {
-            break;
-        };
-        let Some(parent) = String::from_utf8_lossy(&out.stdout).trim().parse::<u32>().ok() else {
-            break;
-        };
-        if parent <= 1 {
+        let Some(parent) = parent_pid(pid) else { break };
+        if parent <= 1 || pids.contains(&parent) {
             break;
         }
         pids.push(parent);
@@ -259,8 +368,15 @@ mod tests {
     #[test]
     fn two_holders_serialize_and_waiter_names_the_holder() {
         let dir = temp_dir("serialize");
-        let first = acquire_with(&dir, "first job", FAST, FAST, &mut std::io::sink(), &Vec::new)
-            .unwrap();
+        let first = acquire_with(
+            &dir,
+            "first job",
+            FAST,
+            FAST,
+            &mut std::io::sink(),
+            &Vec::new,
+        )
+        .unwrap();
         assert!(!first.is_inherited());
 
         let inside = Arc::new(AtomicUsize::new(0));
@@ -268,21 +384,31 @@ mod tests {
             let (dir, inside) = (dir.clone(), Arc::clone(&inside));
             std::thread::spawn(move || {
                 let mut out: Vec<u8> = Vec::new();
-                let held = acquire_with(&dir, "second job", FAST, FAST, &mut out, &Vec::new)
-                    .unwrap();
+                let held =
+                    acquire_with(&dir, "second job", FAST, FAST, &mut out, &Vec::new).unwrap();
                 inside.fetch_add(1, Ordering::SeqCst);
                 drop(held);
                 String::from_utf8(out).unwrap()
             })
         };
         std::thread::sleep(Duration::from_millis(150));
-        assert_eq!(inside.load(Ordering::SeqCst), 0, "waiter got in while the lock was held");
+        assert_eq!(
+            inside.load(Ordering::SeqCst),
+            0,
+            "waiter got in while the lock was held"
+        );
         drop(first);
         let message = waiter.join().unwrap();
         assert_eq!(inside.load(Ordering::SeqCst), 1);
         assert!(message.contains("waiting for the GPU"), "{message}");
-        assert!(message.contains("first job"), "waiter must name the holder: {message}");
-        assert!(message.contains(&format!("pid {}", std::process::id())), "{message}");
+        assert!(
+            message.contains("first job"),
+            "waiter must name the holder: {message}"
+        );
+        assert!(
+            message.contains(&format!("pid {}", std::process::id())),
+            "{message}"
+        );
         assert!(message.contains("acquired after"), "{message}");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -290,13 +416,20 @@ mod tests {
     #[test]
     fn ancestor_holder_is_inherited_not_waited_on() {
         let dir = temp_dir("inherit");
-        let holder = acquire_with(&dir, "gate", FAST, FAST, &mut std::io::sink(), &Vec::new)
-            .unwrap();
+        let holder =
+            acquire_with(&dir, "gate", FAST, FAST, &mut std::io::sink(), &Vec::new).unwrap();
         // The record names this process; pretend this process is the "child"
         // by reporting it as its own ancestor.
         let me = std::process::id();
-        let child = acquire_with(&dir, "cargo test", FAST, FAST, &mut std::io::sink(), &|| vec![me])
-            .unwrap();
+        let child = acquire_with(
+            &dir,
+            "cargo test",
+            FAST,
+            FAST,
+            &mut std::io::sink(),
+            &|| vec![me],
+        )
+        .unwrap();
         assert!(child.is_inherited());
         drop(holder);
         let _ = std::fs::remove_dir_all(&dir);
@@ -305,15 +438,22 @@ mod tests {
     #[test]
     fn unrelated_holder_is_not_inherited() {
         let dir = temp_dir("unrelated");
-        let holder = acquire_with(&dir, "someone else", FAST, FAST, &mut std::io::sink(), &Vec::new)
-            .unwrap();
+        let holder = acquire_with(
+            &dir,
+            "someone else",
+            FAST,
+            FAST,
+            &mut std::io::sink(),
+            &Vec::new,
+        )
+        .unwrap();
         let finished = Arc::new(AtomicBool::new(false));
         let waiter = {
             let (dir, finished) = (dir.clone(), Arc::clone(&finished));
             std::thread::spawn(move || {
                 // Ancestors that do not include the holder's pid.
-                let held = acquire_with(&dir, "x", FAST, FAST, &mut std::io::sink(), &|| vec![2])
-                    .unwrap();
+                let held =
+                    acquire_with(&dir, "x", FAST, FAST, &mut std::io::sink(), &|| vec![2]).unwrap();
                 finished.store(true, Ordering::SeqCst);
                 assert!(!held.is_inherited());
             })
@@ -340,10 +480,21 @@ mod tests {
         };
 
         // Rust holds: Python sees the GPU busy.
-        let rust = acquire_with(&dir, "rust job", FAST, FAST, &mut std::io::sink(), &Vec::new)
-            .unwrap();
+        let rust = acquire_with(
+            &dir,
+            "rust job",
+            FAST,
+            FAST,
+            &mut std::io::sink(),
+            &Vec::new,
+        )
+        .unwrap();
         let status = run(&["status"]);
-        assert_eq!(status.status.code(), Some(1), "python must see the Rust holder");
+        assert_eq!(
+            status.status.code(),
+            Some(1),
+            "python must see the Rust holder"
+        );
         assert!(String::from_utf8_lossy(&status.stdout).contains("rust job"));
         drop(rust);
         assert_eq!(run(&["status"]).status.code(), Some(0));
@@ -361,23 +512,30 @@ mod tests {
         let record = dir.join("gpu.holder");
         let started = Instant::now();
         while !record.exists() {
-            assert!(started.elapsed() < Duration::from_secs(10), "python never took the lock");
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "python never took the lock"
+            );
             std::thread::sleep(Duration::from_millis(20));
         }
         let done = Arc::new(AtomicBool::new(false));
         let waiter = {
             let (dir, done) = (dir.clone(), Arc::clone(&done));
             std::thread::spawn(move || {
-                let held = acquire_with(&dir, "rust job", FAST, FAST, &mut std::io::sink(), &|| {
-                    Vec::new()
-                })
-                .unwrap();
+                let held =
+                    acquire_with(&dir, "rust job", FAST, FAST, &mut std::io::sink(), &|| {
+                        Vec::new()
+                    })
+                    .unwrap();
                 done.store(true, Ordering::SeqCst);
                 drop(held);
             })
         };
         std::thread::sleep(Duration::from_millis(200));
-        assert!(!done.load(Ordering::SeqCst), "Rust slipped past a Python holder");
+        assert!(
+            !done.load(Ordering::SeqCst),
+            "Rust slipped past a Python holder"
+        );
         python.kill().unwrap(); // SIGKILL: the lock must free without cleanup code
         python.wait().unwrap();
         waiter.join().unwrap();
@@ -387,7 +545,101 @@ mod tests {
 
     #[test]
     fn real_ancestor_lookup_finds_a_parent() {
-        assert!(!ancestor_pids().is_empty(), "ps lookup returned no ancestors");
+        assert!(
+            !ancestor_pids().is_empty(),
+            "native lookup returned no ancestors"
+        );
+    }
+
+    #[test]
+    fn tokens_work_with_failed_ancestor_walk_and_stale_or_missing_tokens_wait() {
+        for case in ["matching", "changed", "missing", "dead"] {
+            let dir = temp_dir(case);
+            let holder =
+                acquire_with(&dir, "outer", FAST, FAST, &mut std::io::sink(), &Vec::new).unwrap();
+            let info = read_holder(&dir);
+            let token = format!("{}:{}", info["pid"], info["nonce"]);
+            let candidate = match case {
+                "missing" => None,
+                _ => Some(token.clone()),
+            };
+            if case == "changed" {
+                write_holder(&dir, &dir.join("gpu.holder"), "replacement", "new-nonce").unwrap();
+            } else if case == "dead" {
+                let dead = std::process::Command::new("true").spawn().unwrap();
+                let dead_pid = dead.id();
+                let mut dead = dead;
+                dead.wait().unwrap();
+                std::fs::write(
+                    dir.join("gpu.holder"),
+                    format!("pid={dead_pid}\nnonce=dead\n"),
+                )
+                .unwrap();
+                assert!(!token_matches(
+                    &read_holder(&dir),
+                    Some(&format!("{dead_pid}:dead"))
+                ));
+            }
+            let candidate = if case == "dead" {
+                let record = read_holder(&dir);
+                Some(format!("{}:{}", record["pid"], record["nonce"]))
+            } else {
+                candidate
+            };
+            let (tx, rx) = std::sync::mpsc::channel();
+            let child_dir = dir.clone();
+            let waiter = std::thread::spawn(move || {
+                let child = acquire_with_token(
+                    &child_dir,
+                    "child",
+                    FAST,
+                    FAST,
+                    &mut std::io::sink(),
+                    &Vec::new,
+                    candidate.as_deref(),
+                )
+                .unwrap();
+                tx.send(child.is_inherited()).unwrap();
+            });
+            let result = rx.recv_timeout(Duration::from_millis(150));
+            if case == "matching" {
+                // Release before asserting so a regression cannot strand the waiter.
+                drop(holder);
+                waiter.join().unwrap();
+                assert!(result.unwrap());
+            } else {
+                drop(holder);
+                waiter.join().unwrap();
+                assert!(result.is_err(), "{case} token bypassed the lock");
+                assert!(!rx.recv().unwrap());
+            }
+        }
+    }
+
+    #[test]
+    fn rust_holder_exports_token_to_python_child_without_ps() {
+        let dir = temp_dir("token-interop");
+        let holder =
+            acquire_with(&dir, "outer", FAST, FAST, &mut std::io::sink(), &Vec::new).unwrap();
+        let mut command = std::process::Command::new("python3");
+        command.args(["-c", "import gpu_queue; gpu_queue.ancestor_pids = lambda: []; h = gpu_queue.acquire('child'); assert h.fd is None"])
+            .env("PYTHONPATH", Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts"))
+            .env("MANIFOLD_GPU_QUEUE_DIR", &dir);
+        holder.configure_child(&mut command);
+        let mut child = command.spawn().unwrap();
+        let started = Instant::now();
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                assert!(status.success());
+                break;
+            }
+            if started.elapsed() > Duration::from_secs(5) {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                panic!("Python child did not inherit Rust token");
+            }
+            std::thread::sleep(FAST);
+        }
     }
 
     #[test]

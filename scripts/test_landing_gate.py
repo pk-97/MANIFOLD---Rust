@@ -3,6 +3,7 @@
 import contextlib
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -70,6 +71,8 @@ class LandingTests(unittest.TestCase):
                 return 0, out, "", 0.01
             label = ({"nextest": "tests"}.get(cmd[1], cmd[1]) if cmd[0] == "cargo"
                      else labels[Path(cmd[1]).name])
+            if "test(regenerates_in_sync)" in cmd:
+                label = "catalog-fresh"
             if "--no-run" in cmd or "--build-only" in cmd:
                 label += "-build"
             called.append(label)
@@ -152,7 +155,8 @@ class LandingTests(unittest.TestCase):
     def test_builds_compile_exactly_what_the_held_legs_run(self):
         _, _, _, commands, *_ = self.exercise()
         nextest = [c for c in commands if c[:2] == ["cargo", "nextest"]]
-        selection = ["-p", "manifold-gpu", "-E", "(package(=manifold-gpu) & test(/^metal::device::/))"]
+        selection = ["-p", "manifold-gpu",
+                     "-E", "(package(=manifold-gpu) & test(/^metal::device::/))"]
         self.assertEqual(nextest, [["cargo", "nextest", "run", "--no-run", *selection],
                                    ["cargo", "nextest", "run", "--no-fail-fast", "--no-tests=pass", *selection]])
         proofs = [c for c in commands if c[1:2] == ["scripts/gpu_proofs_gate.py"]]
@@ -163,6 +167,53 @@ class LandingTests(unittest.TestCase):
     def test_catalog_check_skipped_when_renderer_untouched(self):
         _, _, _, commands, *_ = self.exercise()
         self.assertFalse(any("test(regenerates_in_sync)" in c for c in commands))
+
+    def test_proofs_do_not_change_nextest_selection(self):
+        # Cover nested gpu_tests, scene modules, individually gated tests,
+        # required-features binaries, and the transitive manifold-gpu feature.
+        # Compare entire argv: no feature, package or filter changes may leak
+        # from proof selection into nextest (including build/catalog commands).
+        for path in (
+            "crates/manifold-renderer/src/node_graph/primitives/invert.rs",
+            "crates/manifold-renderer/src/node_graph/primitives/mod.rs",
+            "crates/manifold-renderer/src/node_graph/primitives/gpu_flip_scene_tests.rs",
+            "crates/manifold-renderer/src/node_graph/bundled_presets.rs",
+            "crates/manifold-renderer/tests/gpu_proofs/main.rs",
+            "crates/manifold-renderer/tests/glb_conformance.rs",
+            "crates/manifold-gpu/src/metal/device.rs",
+        ):
+            with self.subTest(path=path):
+                code, _, _, enabled, *_ = self.exercise(paths=[path])
+                self.assertEqual(code, 0)
+                code, _, _, disabled, *_ = self.exercise(
+                    paths=[path], extra=["--skip-gpu", "deferred"])
+                self.assertEqual(code, 0)
+                nextest = lambda commands: [c for c in commands if c[:2] == ["cargo", "nextest"]]
+                self.assertTrue(nextest(enabled))
+                self.assertEqual(nextest(enabled), nextest(disabled))
+                for cmd in nextest(enabled):
+                    self.assertNotIn("--features", cmd)
+                    self.assertNotIn("--all-features", cmd)
+                self.assertIn(
+                    ["python3", "scripts/gpu_proofs_gate.py", "--path", path,
+                     "--budget", "360"], enabled)
+
+    def test_skipped_proofs_do_not_enable_proof_features(self):
+        code, _, _, commands, *_ = self.exercise(extra=["--skip-gpu", "deferred"])
+        self.assertEqual(code, 0)
+        self.assertTrue(all("--features" not in c for c in commands))
+
+    def test_gate_builds_disable_incremental_and_preserve_jobs(self):
+        from storage_budget import BuildCheck
+        root = Path.cwd()
+        with patch.dict(os.environ, {"CARGO_INCREMENTAL": "1", "CARGO_BUILD_JOBS": "4"}, clear=True), \
+                patch("storage_budget.check_build", return_value=BuildCheck(True, root / "target", 200 * 2**30)):
+            for cmd in (["cargo", "nextest"], ["python3", "scripts/gpu_proofs_gate.py"],
+                        ["python3", "scripts/run_ui_flows.py"]):
+                env, refusal = landing_gate.build_environment(cmd, root)
+                self.assertIsNone(refusal)
+                self.assertEqual(env["CARGO_INCREMENTAL"], "0")
+                self.assertEqual(env["CARGO_BUILD_JOBS"], "4")
 
     def test_stale_thumbnail_and_docs_reported_together_before_any_build(self):
         with tempfile.TemporaryDirectory() as d:
