@@ -2,7 +2,7 @@
 
 <!-- index: Moves FLIP surface reconstruction to GPU atoms (anisotropic level set + marching cubes) and interpolates a slower solver tick to 60 fps through a producer-agnostic particle-frame seam. -->
 
-**Status:** BUILDING · P1, P2, P5, P6, P6b, P6c built; P6d measured, no lever kept; P6e (distance level set) built; P6f measured, look call owed (BUG-4snj (Liquid Surface default look)). It meets the 6 ms gate (5.7 ms p95 at res 64 ×2); blobs and volume at 4 ms stay a kernel design item (BUG-l24y (GPU liquid surface kernels cost), section 9 P6d). P3 deferred, P4 dropped, P7–P8 not built.
+**Status:** BUILDING · P1, P2, P5, P6, P6b, P6c built; P6d measured, no lever kept; P6e (distance level set) built; P6f measured, look call owed (BUG-4snj (Liquid Surface default look)). It meets the 6 ms gate (5.7 ms p95 at res 64 ×2); blobs and volume at 4 ms stay a kernel design item (BUG-l24y (GPU liquid surface kernels cost), section 9 P6d). P3 building (atoms and particle view); owed: GPU FLIP identity, GPU proofs and visual verification. P4 dropped, P7–P8 not built.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 **Superseded in part (2026-09-29):** live water is GPU MLS-MPM per [GPU_MPM_SOLVER_DESIGN.md](GPU_MPM_SOLVER_DESIGN.md); D1's live-FLIP clause, D3, D9 and P4 no longer apply to live. The seam, atoms and interpolation stand.
 
@@ -641,11 +641,7 @@ is the orchestrating session's.
 
 ### P3 — Interpolation atoms and the particle view (first pixels)
 
-**DEFERRED (2026-09-29).** Trigger: a sub-60 Hz particle producer exists. At 60 Hz the
-newest frame is at most one tick from display time, so the surface reads `particles_b`.
-The `FluidParticle` records moved to P2 (they are the contract).
-`node.particles_to_copies` left this phase: it is built under GPU_MPM_SOLVER_DESIGN.md P1
-(Water kernel, look gates and the cost probe).
+**BUILDING — CPU VERIFIED (2026-10-03).** Owed: GPU FLIP identity publication, protected extent rules, optional-A fusion (BUG-adcx), Metal preset validation, GPU value/fusion proof execution and particle-view stills; solver-rate control follows the live sim clock.
 
 - **Entry state:** P2 merged; `rg -n 'particles_a' crates/manifold-renderer/src/node_graph/primitives/fluid_surface.rs` shows the ports.
 - **Read-back:** D8, D11; sections 4 and 4.1; ADDING_PRIMITIVES.md whole.

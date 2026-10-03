@@ -1056,3 +1056,13 @@ mod fluid_role_source;
 pub(crate) mod physics_world;
 pub(crate) use gltf_animation_source::quat_to_render_scene_euler;
 mod platonic_mesh;
+
+mod interpolate_particle_frames;
+mod push_out_of_solid;
+mod mix_arrays;
+pub use interpolate_particle_frames::InterpolateParticleFrames;
+pub use push_out_of_solid::PushOutOfSolid;
+pub use mix_arrays::MixArrays;
+
+#[cfg(test)]
+mod particle_frame_blend_tests;
