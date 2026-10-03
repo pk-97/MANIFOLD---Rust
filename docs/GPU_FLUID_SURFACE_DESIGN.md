@@ -804,7 +804,7 @@ is the orchestrating session's.
 
 ### P3 — Interpolation atoms and the particle view (first pixels)
 
-**BUILDING — pass 2 and Sim Rate implemented (2026-10-03); owed: optional-A fusion and device/visual proofs; see [BUG-upao](#bug-upao--pass-2-and-sim-rate-2026-10-03).**
+**BUILT — pass 2 and Sim Rate GPU-proven (2026-10-04); owed: optional-A fusion (BUG-adcx (unwired gather blocks fusion)); see [BUG-upao](#bug-upao--pass-2-and-sim-rate-2026-10-03).**
 
 - **Entry state:** P2 merged; `rg -n 'particles_a' crates/manifold-renderer/src/node_graph/primitives/fluid_surface.rs` shows the ports.
 - **Read-back:** D8, D11; sections 4 and 4.1; ADDING_PRIMITIVES.md whole.
