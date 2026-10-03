@@ -10,6 +10,8 @@ Companion docs: `docs/archive/SEMANTIC_WORKFLOW_PROGRAMS.md` (the IR this implem
 
 ## 1. Audit — what exists (verified 2026-07-25, main @ e692762c)
 
+The hooks this audit and the phase briefs below cite as precedents (`agent-tier-spawn-guard.py`, `workflow-gate.py`, `lane-report-enforcer.py`, `subagent-stop-gate.py`) were retired 2026-10-03 with the proxy-era fleet; the names are history, not live files. `agent-launch-guard.py` and `worktree-guard.py` remain.
+
 | Piece | Where | State |
 |---|---|---|
 | Deny-capable hook pattern | `.claude/hooks/agent-launch-guard.py`, `agent-tier-spawn-guard.py`, `worktree-guard.py` | exists — PreToolUse hooks deny with spelled-out fixes |
