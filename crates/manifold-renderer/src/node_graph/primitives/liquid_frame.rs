@@ -9,35 +9,33 @@
 //! Its optional interior-distance ring carries the Ferstl et al. (2016)
 //! narrow-band field beside the particle frames.
 
-use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
+use manifold_gpu::GpuBuffer;
 
-use super::liquid_stats::{with_stats_layout, LIQUID_STATS_WORDS};
+use super::liquid_stats::LIQUID_STATS_WORDS;
+use super::particle_publication::{ParticlePublication, Publication};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid_particles::FluidParticle;
-use crate::node_graph::liquid::frame_ring::{FrameRing, RING};
-use crate::node_graph::liquid::grid::{interior_bytes, FACE_INPUT_PORTS, PublishedFaces};
+use crate::node_graph::liquid::frame_ring::{FrameRing, RingWrite, RING};
+use crate::node_graph::liquid::grid::{interior_bytes, face_len, FACE_GRID_PORTS, FACE_INPUT_PORTS, PublishedFaces};
 use crate::node_graph::liquid::lattice::{LiquidLattice, frame_lattice};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
-const SHADER_SOURCE: &str = include_str!("shaders/liquid_frame.wgsl");
-
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct FrameParams {
-    count: u32,
-    previous_count: u32,
-    slots: u32,
-    _pad0: u32,
+pub struct PendingPublication {
+    write: RingWrite,
+    epoch: u32,
+    simulation_time: f64,
+    stamp: u64,
 }
 
 crate::primitive! {
     name: LiquidFrame,
     type_id: "node.liquid_frame",
-    purpose: "Publish a particle liquid's state as particle frames for the liquid surface: after every simulated tick, write the first `count` records as frame B with id 0 (the previous B becomes A), slots past count at radius 0, with the native FLIP mesh lattice (1.5-cell padding) when Native Mesh Grid is enabled, otherwise the legacy simulation lattice, the blend and span of the one-tick-behind display clock, and the solid lattice: node.liquid_solid_distance's walls and bodies when `solid` is wired, each tick's copy kept beside its frame, otherwise the walls alone. With face_u_in, face_v_in and face_w_in wired, each tick's face grid is published beside frame B as face_u, face_v and face_w over the domain's cells, with face_valid_layers from the param. An optional cell-centred `interior` distance is copied into matching A/B slots. A tick whose stats flag a non-finite record or narrow-band capacity shortage is never published.",
+    purpose: "Publish a particle liquid's state as particle frames for the liquid surface: after every simulated tick, publish a compact copy sorted by persistent nonzero birth id as frame B (the previous B becomes A), with the retired live count and a cleared tail, with the native FLIP mesh lattice (1.5-cell padding) when Native Mesh Grid is enabled, otherwise the legacy simulation lattice, the blend and span of the one-tick-behind display clock, and the solid lattice: node.liquid_solid_distance's walls and bodies when `solid` is wired, each tick's copy kept beside its frame, otherwise the walls alone. With face_u_in, face_v_in and face_w_in wired, each tick's face grid is published beside frame B as face_u, face_v and face_w over the domain's cells, with face_valid_layers from the param. An optional cell-centred `interior` distance is copied into matching A/B slots. A tick whose stats flag a non-finite record or narrow-band capacity shortage is never published.",
     inputs: {
         particles: Array(FluidParticle) required,
         stats: Array(u32) required,
+        identity: Array(u32) required,
         interior: Array(f32) optional,
         solid: Array(f32) optional,
         face_u_in: Array(f32) optional, face_v_in: Array(f32) optional, face_w_in: Array(f32) optional,
@@ -66,7 +64,7 @@ crate::primitive! {
         ParamDef { name: std::borrow::Cow::Borrowed("face_valid_layers"), label: "Face Valid Layers", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 8.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "Reads node.liquid_state's out and stats after the region; count comes from the fill, and the lattice, closed faces, simulation_time, display_time and epoch from the liquid's domain; New GPU FLIP graphs enable Native Mesh Grid and take solid from node.liquid_solid_distance sampled on the domain mesh_min/mesh_nodes outputs with Wall Inset 1.5; the lattice inputs remain the simulation grid; the face inputs from three node.face_sample_component on liquid_state's faces. Its outputs are the particle-frame seam node.fluid_surface and node.matter_frame also publish, so the Liquid Surface atoms and whitewater read any solver unchanged. face_valid_layers is how many face layers past the liquid the solver extended its velocity into; it reads 0 unless all three axes are wired. identity_a/b carry the domain epoch. Ids are 0: a particle solver may reorder its state every tick.",
+    composition_notes: "Reads node.liquid_state's out and stats after the region; count comes from the fill, and the lattice, closed faces, simulation_time, display_time and epoch from the liquid's domain; New GPU FLIP graphs enable Native Mesh Grid and take solid from node.liquid_solid_distance sampled on the domain mesh_min/mesh_nodes outputs with Wall Inset 1.5; the lattice inputs remain the simulation grid; the face inputs from three node.face_sample_component on liquid_state's faces. Its outputs are the particle-frame seam node.fluid_surface and node.matter_frame also publish, so the Liquid Surface atoms and whitewater read any solver unchanged. face_valid_layers is how many face layers past the liquid the solver extended its velocity into; it reads 0 unless all three axes are wired. identity_a/b carry each accepted frame identity epoch. Domain reset, identity renumbering and growth collapse the pair; publication preserves solver storage order.",
     examples: [],
     picker: { label: "Liquid Frame", category: Atom },
     summary: "Hands a simulated particle liquid to the liquid surface, one frame per simulation tick.",
@@ -75,7 +73,9 @@ crate::primitive! {
     aliases: ["liquid frame", "particle frame", "publish particles"],
     boundary_reason: CrossFrameState,
     extra_fields: {
-        convert: Option<GpuComputePipeline> = None,
+        publication: ParticlePublication = ParticlePublication::default(),
+        metadata: Vec<GpuBuffer> = Vec::new(),
+        pending: Option<PendingPublication> = None,
         ring: FrameRing = FrameRing::default(),
         solid: Option<GpuBuffer> = None,
         solid_key: Option<([u32; 7], u32)> = None,
@@ -86,15 +86,13 @@ crate::primitive! {
         interior_epoch: Option<u32> = None,
         lattice_key: Option<[u32; 7]> = None,
         faces: PublishedFaces = PublishedFaces::default(),
+        face_slots: [Vec<GpuBuffer>; 3] = std::array::from_fn(|_| Vec::new()),
     },
 }
 
 impl Primitive for LiquidFrame {
     fn prepare_pipelines(&mut self, device: &manifold_gpu::GpuDevice) {
-        if self.convert.is_none() {
-            let shader = with_stats_layout(SHADER_SOURCE);
-            self.convert = Some(device.create_compute_pipeline(&shader, "cs_main", "node.liquid_frame"));
-        }
+        self.publication.prepare(device);
         self.faces.prepare(device);
     }
 
@@ -112,7 +110,8 @@ impl Primitive for LiquidFrame {
             "solid_a" if self.solid_wired => self.solid_slots.get(self.ring.a()),
             "solid_b" if self.solid_wired => self.solid_slots.get(self.ring.b()),
             "solid_a" | "solid_b" => self.solid.as_ref(),
-            _ => self.faces.buffer(port),
+            _ => FACE_GRID_PORTS[..3].iter().position(|&p| p == port)
+                .and_then(|axis| self.ring.buffer_b().and_then(|_| self.face_slots[axis].get(self.ring.b()))),
         }
     }
 
@@ -138,6 +137,7 @@ impl Primitive for LiquidFrame {
         let epoch = ctx.scalar_or_param("epoch", 0.0).round().max(0.0) as u32;
         let particles = ctx.inputs.array("particles");
         let stats = ctx.inputs.array("stats");
+        let identity = ctx.inputs.array("identity");
         let interior = ctx.inputs.array("interior");
         let solid_in = ctx.inputs.array("solid");
         self.solid_wired = solid_in.is_some();
@@ -161,6 +161,18 @@ impl Primitive for LiquidFrame {
         }
         let mut refused = None;
         let gpu = ctx.gpu_encoder();
+        let clock = gpu.device.frame_clock();
+        if self.pending.as_ref().is_some_and(|p| clock.as_ref().is_none_or(|c| c.is_complete(p.stamp))) {
+            let pending = self.pending.take().expect("completed publication");
+            if pending.epoch == epoch && !lattice_changed {
+                let buffer = &self.metadata[pending.write.write];
+                if let Some(ptr) = buffer.mapped_ptr() {
+                    // SAFETY: metadata shares the retired publication fence. No particles are read back.
+                    let words = unsafe { std::slice::from_raw_parts(ptr.cast::<u32>(), 4) };
+                    self.ring.retire(pending.write, words, epoch, pending.simulation_time);
+                }
+            }
+        }
         let interior_size = interior_bytes(lattice.cells());
         let interior_key = (lattice.cells(), lattice.cell_size().to_bits());
         let interior_valid = if interior_size == 0 {
@@ -249,10 +261,11 @@ impl Primitive for LiquidFrame {
         }
 
         let record = std::mem::size_of::<FluidParticle>() as u64;
-        let ready = particles.zip(stats).filter(|(_, stats)| stats.size >= u64::from(LIQUID_STATS_WORDS) * 4);
+        let ready = particles.zip(stats).filter(|(_, stats)| stats.size >= u64::from(LIQUID_STATS_WORDS) * 4)
+            .filter(|_| identity.is_some_and(|b| b.size >= 16));
         let bytes = u64::from(count.max(1)) * record;
         let interior_ready = interior.is_none() || (interior_valid && self.interior_slots.len() == RING);
-        let ring = if self.ring.wants_tick(epoch, simulation_time) && ready.is_some() && interior_ready {
+        let ring = if self.pending.is_none() && self.ring.wants_tick(epoch, simulation_time) && ready.is_some() && interior_ready {
             self.ring.begin(gpu.device, bytes, epoch).map(Some).unwrap_or_else(|error| {
                 refused = Some(format!(
                     "Liquid Frame: the particle frames need {RING} × {bytes} bytes the device cannot give: {error}. Lower Resolution."
@@ -262,7 +275,6 @@ impl Primitive for LiquidFrame {
         } else {
             None
         };
-        let published = ring.is_some();
         if let (Some(slot), Some((particles, stats))) = (ring, ready) {
             let write = slot.write;
             if slot.grown {
@@ -272,31 +284,18 @@ impl Primitive for LiquidFrame {
                     }
                 }
             }
-            let pipeline = self.convert.as_ref().expect("liquid frame pipeline prepared at install");
             let count = count.min((particles.size / record) as u32);
             let target = self.ring.slot(write);
-            let params = FrameParams {
-                count,
-                previous_count: if lattice_changed {
-                    0
-                } else {
-                    slot.previous_count.min((self.ring.slot(slot.previous).size / record) as u32)
-                },
-                slots: (target.size / record) as u32,
-                _pad0: 0,
-            };
-            gpu.native_enc.dispatch_compute(
-                pipeline,
-                &[
-                    GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&params) },
-                    GpuBinding::Buffer { binding: 1, buffer: particles, offset: 0 },
-                    GpuBinding::Buffer { binding: 2, buffer: stats, offset: 0 },
-                    GpuBinding::Buffer { binding: 3, buffer: self.ring.slot(slot.previous), offset: 0 },
-                    GpuBinding::Buffer { binding: 4, buffer: target, offset: 0 },
-                ],
-                [params.slots.div_ceil(256), 1, 1],
-                "node.liquid_frame",
-            );
+            if self.metadata.is_empty() {
+                self.metadata = (0..RING).map(|_| gpu.device.create_buffer_shared(16)).collect();
+            }
+            if let Err(error) = self.publication.encode(gpu.device, gpu.native_enc, Publication {
+                source: particles, target, stats, identity: identity.expect("identity checked"),
+                metadata: &self.metadata[write], count,
+            }) {
+                ctx.error(format!("Liquid Frame: {error}"));
+                return;
+            }
             if let Some(solid_in) = solid_in {
                 // Each tick's solid lattice sits beside its frame, so A and B
                 // each carry the solids where their particles were.
@@ -338,19 +337,54 @@ impl Primitive for LiquidFrame {
             {
                 refused = Some(format!("Liquid Frame: {error}"));
             }
-            self.ring.finish(slot, count, epoch, simulation_time);
+            for (axis, input) in faces_in.into_iter().enumerate() {
+                let Some(input) = input else { self.face_slots[axis].clear(); continue; };
+                let bytes = face_len(lattice.cells(), axis) * 4;
+                if input.size < bytes {
+                    refused = Some(format!("Liquid Frame: face axis {axis} needs {bytes} bytes"));
+                    continue;
+                }
+                let slots = &mut self.face_slots[axis];
+                if slots.len() != RING || slots.iter().any(|s| s.size != bytes) {
+                    let allocation = crate::node_graph::scene_modifier_expand::admit_candidate_bytes(
+                        gpu.device.modifier_memory_snapshot(), RING as u64 * bytes,
+                    ).map_err(|error| error.to_string()).and_then(|()|
+                        (0..RING).map(|_| gpu.device.try_create_buffer_shared(bytes)).collect::<Result<Vec<_>, _>>()
+                    );
+                    match allocation {
+                        Ok(new) => *slots = new,
+                        Err(error) => {
+                            refused = Some(format!("Liquid Frame: face axis {axis} needs {RING} × {bytes} bytes: {error}"));
+                            slots.clear();
+                            continue;
+                        }
+                    }
+                }
+                gpu.native_enc.copy_buffer_to_buffer(input, &slots[write], bytes);
+            }
+            self.pending = Some(PendingPublication {
+                write: slot, epoch, simulation_time, stamp: clock.as_ref().map_or(0, |c| c.stamp()),
+            });
+            if crate::node_graph::physics::offline_simulation() {
+                // Export must present this accepted sample, independent of
+                // output fps. Only offline waits; live retires metadata above.
+                gpu.native_enc.commit_wait_and_continue(gpu.device);
+                if let Some(ptr) = self.metadata[write].mapped_ptr() {
+                    // SAFETY: the publication command buffer completed above.
+                    let words = unsafe { std::slice::from_raw_parts(ptr.cast::<u32>(), 4) };
+                    self.ring.retire(slot, words, epoch, simulation_time);
+                }
+                self.pending = None;
+            }
             self.lattice_key = Some(lattice_key);
         }
-        let faces_refused =
-            self.faces.publish(gpu, lattice.cells(), faces_in, ready.map(|(_, stats)| stats), published, "Liquid Frame");
-
         let (blend, span) = self.ring.blend(display_time);
-        let faces_published = self.faces.complete();
+        let faces_published = self.ring.buffer_b().is_some() && self.face_slots.iter().all(|slots| slots.len() == RING);
         for (name, value) in [
             ("count_a", self.ring.count_a() as f32),
             ("count_b", self.ring.count_b() as f32),
-            ("identity_a", epoch as f32),
-            ("identity_b", epoch as f32),
+            ("identity_a", self.ring.identity_a() as f32),
+            ("identity_b", self.ring.identity_b() as f32),
             ("grid_nodes_x", surface.nodes()[0] as f32),
             ("grid_nodes_y", surface.nodes()[1] as f32),
             ("grid_nodes_z", surface.nodes()[2] as f32),
@@ -364,7 +398,12 @@ impl Primitive for LiquidFrame {
             ctx.outputs.set_scalar(name, ParamValue::Float(value));
         }
         ctx.outputs.set_transform("grid_bounds", surface.bounds());
-        for error in [refused, faces_refused].into_iter().flatten() {
+        if self.ring.buffer_b().is_none() {
+            // No accepted frame exists yet (startup or resized lattice).
+            // Consumers must not interpret preallocated storage as a frame.
+            ctx.mark_outputs_pending();
+        }
+        if let Some(error) = refused {
             ctx.error(error);
         }
     }
@@ -387,23 +426,17 @@ mod tests {
 
     #[test]
     fn liquid_frame_params_match_the_shader() {
-        let shader = with_stats_layout(SHADER_SOURCE);
-        assert_eq!(std::mem::size_of::<FrameParams>(), 16);
-        assert!(shader.contains("struct FrameParams"));
-        assert!(shader.contains("NARROW_BAND_SHORTAGE_WORD"), "capacity-short ticks repeat particle frames");
         let frame = LiquidFrame::new();
         assert!(frame.provides_array_output("interior_a"));
         assert!(frame.provides_array_output("interior_b"));
-        let module = naga::front::wgsl::parse_str(&shader).expect("liquid_frame.wgsl parses");
-        naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
-            .validate(&module)
-            .expect("liquid_frame.wgsl validates");
+
     }
 }
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
-    use super::{with_stats_layout, FrameParams, LIQUID_STATS_WORDS, SHADER_SOURCE};
+    use super::{ParticlePublication, Publication, LIQUID_STATS_WORDS};
+    use super::super::liquid_stats::with_stats_layout;
     use super::super::liquid_stats::NARROW_BAND_SHORTAGE_WORD;
     use crate::node_graph::fluid_particles::FluidParticle;
     use super::super::liquid_surface_tests::read;
@@ -436,36 +469,32 @@ mod gpu_tests {
     fn gpu_flip_narrow_band_publication_repeats_failed_ticks() {
         let device = crate::test_device();
         let state = [
-            FluidParticle { position_radius: [1.0, 2.0, 3.0, 0.5], velocity: [4.0, 5.0, 6.0], id: 0 },
-            FluidParticle { position_radius: [7.0, 8.0, 9.0, 0.5], velocity: [1.0, 2.0, 3.0], id: 0 },
+            FluidParticle { position_radius: [1.0, 2.0, 3.0, 0.5], velocity: [4.0, 5.0, 6.0], id: 1 },
+            FluidParticle { position_radius: [7.0, 8.0, 9.0, 0.5], velocity: [1.0, 2.0, 3.0], id: 2 },
         ];
         let previous = [
             FluidParticle { position_radius: [-1.0, -2.0, -3.0, 0.5], velocity: [-4.0, -5.0, -6.0], id: 2 },
             FluidParticle { position_radius: [-7.0, -8.0, -9.0, 0.5], velocity: [-1.0, -2.0, -3.0], id: 3 },
         ];
-        let frame_params = FrameParams { count: 2, previous_count: 2, slots: 2, _pad0: 0 };
         for shortage in [false, true] {
             let state_buffer = shared(&device, &state);
-            let previous_buffer = shared(&device, &previous);
             let stats = shared(&device, &[0u32; LIQUID_STATS_WORDS as usize]);
             if shortage {
                 unsafe { stats.write(u64::from(NARROW_BAND_SHORTAGE_WORD) * 4, &1u32.to_ne_bytes()) };
             }
             let frame = shared(&device, &[FluidParticle::default(); 2]);
-            let shader = with_stats_layout(SHADER_SOURCE);
-            let pipeline = device.create_compute_pipeline(&shader, "cs_main", "liquid-frame-proof");
+            let identity = shared(&device, &[3u32, 7, 0, 0]);
+            let metadata = shared(&device, &[0u32; 4]);
+            let mut publisher = ParticlePublication::default();
+            publisher.prepare(&device);
             let mut encoder = device.create_encoder("liquid-frame-particle-proof");
-            encoder.dispatch_compute(
-                &pipeline,
-                &[
-                    GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&frame_params) },
-                    bind(1, &state_buffer), bind(2, &stats), bind(3, &previous_buffer), bind(4, &frame),
-                ],
-                [1, 1, 1],
-                "liquid-frame-particle-proof",
-            );
+            publisher.encode(&device, &mut encoder, Publication {
+                source: &state_buffer, target: &frame, identity: &identity, stats: &stats, metadata: &metadata, count: 2,
+            }).unwrap();
             encoder.commit_and_wait_completed();
-            let got: Vec<FluidParticle> = read(&frame, 2);
+            let words: Vec<u32> = read(&metadata, 4);
+            assert_eq!(words, [2, 7, u32::from(!shortage), 0]);
+            let got: Vec<FluidParticle> = if words[2] == 0 { previous.to_vec() } else { read(&frame, 2) };
             let expected = if shortage { previous } else { state };
             assert_eq!(got, expected, "particle publication shortage={shortage}");
 

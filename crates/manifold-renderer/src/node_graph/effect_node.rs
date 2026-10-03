@@ -996,6 +996,10 @@ pub trait EffectNode: Send {
         false
     }
 
+    /// A boundary whose persistent identity range is exhausted requests a
+    /// full restart through its existing clock owner before another tick.
+    fn take_substep_restart_request(&mut self) -> bool { false }
+
     /// The clock's accepted interval for this region iteration. The named
     /// scalar output publishes its duration before the body executes.
     fn substep_clock_interval(&self, _iteration: u32) -> Option<(&'static str, manifold_physics::stepping::StepInterval)> {

@@ -2357,13 +2357,15 @@ fn emit_flags(@builtin(global_invocation_id) gid: vec3<u32>) {
 // stats' live count reaching the slots, never as an error.
 @compute @workgroup_size(256)
 fn emit_write(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if birth_identity[3] != 0u { return; }
     if !clock_active() { return; }
     let idx = gid.x;
     let s = emit_sites();
     if idx >= s.x * s.y * s.z {
         return;
     }
-    let before = select(0u, emit_scan[idx - 1u], idx > 0u);
+    var before = 0u;
+    if idx > 0u { before = emit_scan[idx - 1u]; }
     if emit_scan[idx] == before {
         return;
     }
@@ -2378,8 +2380,10 @@ fn emit_write(@builtin(global_invocation_id) gid: vec3<u32>) {
     let inflow = region_holding(x, 2.0, true);
     let p = emit_position(idx, inflow);
     // (3 / (4π · 8))^(1/3): the sphere of an eighth of a cell, as the fill's.
-    emitted[slot] = FluidParticle(vec4<f32>(p, 0.31017524 * u.cell_size), region_velocity(inflow, p), slot + 1u);
+    emitted[slot] = FluidParticle(vec4<f32>(p, 0.31017524 * u.cell_size), region_velocity(inflow, p), birth_identity[2] + before);
 }
+
+@group(0) @binding(47) var<storage, read> birth_identity: array<u32>;
 
 // ---- The tile table (GPU_FLIP_SPARSE_BLOCKS_DESIGN.md section 3 (The tile
 // table)). Built every step from the sort's ranges, on the GPU, never read

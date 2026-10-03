@@ -443,6 +443,8 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     let particles: Port = (state, "out");
     let step = water_step(&mut b, scene, (domain, state));
     b.wire(particles, step, "particles");
+    b.wire((state, "identity"), step, "identity");
+    b.wire((step, "identity_out"), state, "identity_in");
     b.wire(count, step, "count");
     b.wire((domain, "reaction"), step, "reaction");
     b.wires(domain, step, &["regions", "region_count", "epoch"]);
@@ -484,6 +486,7 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     let frame = b.node("frame", "node.liquid_frame", json!({"face_valid_layers": int(FACE_VALID_LAYERS as usize), "native_mesh_grid": {"type": "Bool", "value": true}}));
     b.wire((state, "out"), frame, "particles");
     b.wire((state, "stats"), frame, "stats");
+    b.wire((state, "identity"), frame, "identity");
     b.wire((state, "interior"), frame, "interior");
     b.wire((solid, "solid"), frame, "solid");
     b.wire(count, frame, "count");
@@ -710,8 +713,16 @@ pub(crate) fn render_def(scene: WaterScene) -> EffectGraphDef {
                 id_of(&def, name)
             });
         }
-        def["wires"].as_array_mut().expect("wires").push(wire);
+        // A render-stage presentation wire replaces the raw frame wire that
+        // water_def supplies to its surface test harness.
+        let wires = def["wires"].as_array_mut().expect("wires");
+        wires.retain(|old| old["toNode"] != wire["toNode"] || old["toPort"] != wire["toPort"]);
+        wires.push(wire);
     }
+    // Append persistent render nodes before rebuilding the obstacle render,
+    // so the first regeneration and later regenerations assign the same IDs.
+    add_dust_render(&mut def);
+    add_dust_display(&mut def);
     if scene.obstacle {
         let transform = id_of(&def, "obstacle_transform");
         let scene_node = id_of(&def, "scene");
@@ -740,9 +751,29 @@ pub(crate) fn render_def(scene: WaterScene) -> EffectGraphDef {
             wires.push(json!({"fromNode":from, "fromPort":port, "toNode":whitewater, "toPort":port}));
         }
     }
-    add_dust_render(&mut def);
     def["presetMetadata"] = scene_cards(&preset["presetMetadata"], scene);
     serde_json::from_value(def).expect("render def")
+}
+
+/// The batch's new dust population shares the established empty-A presentation
+/// path used by foam and bubbles, with the liquid frame's unchanged fraction.
+#[cfg(any(test, feature = "gpu-proofs"))]
+fn add_dust_display(def: &mut Value) {
+    let nodes = def["nodes"].as_array().expect("nodes");
+    if nodes.iter().any(|n| n["nodeId"] == "dust_blend") { return; }
+    let id = |name: &str| nodes.iter().find(|n| n["nodeId"] == name).expect("dust display node")["id"].as_u64().expect("id");
+    let (frame, state, copies) = (id("frame"), id("state"), id("dust_copies"));
+    let blend = nodes.iter().filter_map(|n| n["id"].as_u64()).max().expect("nodes") + 1;
+    def["nodes"].as_array_mut().expect("nodes").push(json!({"id": blend, "nodeId": "dust_blend", "typeId": "node.interpolate_particle_frames"}));
+    let wires = def["wires"].as_array_mut().expect("wires");
+    wires.retain(|w| w["toNode"] != copies || w["toPort"] != "particles");
+    for (from, output, to, input) in [
+        (state, "dust_particles", blend, "particles_b"),
+        (frame, "blend", blend, "blend"), (frame, "span", blend, "span"),
+        (blend, "out", copies, "particles"),
+    ] {
+        wires.push(json!({"fromNode": from, "fromPort": output, "toNode": to, "toPort": input}));
+    }
 }
 
 /// Dust follows the same particle-frame render path as the other populations.

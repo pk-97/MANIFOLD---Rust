@@ -41,6 +41,19 @@ impl Executor {
         if self.run_step(graph, plan, boundary_idx, StepPass::Frame, env, tally, gpu, state) == StepFlow::Abort {
             return StepFlow::Abort;
         }
+        let restart = graph.get_node_mut(region.boundary)
+            .is_some_and(|boundary| boundary.node.take_substep_restart_request());
+        if restart {
+            if let Some(clock) = region.clock.and_then(|id| graph.get_node_mut(id)) {
+                // The next clock visit produces a fresh domain epoch, including
+                // a coupled rigid owner. No ID is reused in the old epoch.
+                clock.node.clear_state();
+            } else {
+                eprintln!("[graph error] substep boundary {:?} requested an identity restart without a clock owner", region.boundary);
+            }
+            self.release_region_held(plan, region, env);
+            return StepFlow::Next;
+        }
         if self.pending_skipped[boundary_idx] {
             // A pending boundary has no state to iterate: the body visits
             // once, so each step publishes its outputs pending.

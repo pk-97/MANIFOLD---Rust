@@ -132,7 +132,8 @@ LIQUID_DOMAIN_FILTERS = LIQUID_FORCE_FILTERS + [
 MATTER_DOMAIN_FILTERS = ["matter_scene::", "matter_coupling::", "matter_look::",
                          "matter_transfer::", "substeps_"]
 
-# Narrow rows win over EXPLICIT_ROWS: a path matching one gets only that row.
+# Narrow rows win over EXPLICIT_ROWS: a path matching any gets only the narrow
+# rows it matches.
 NARROW_ROWS = [
     ((RENDERER_SRC + "node_graph/primitives/gpu_flip_extension_tests.rs",),
      (["gpu_flip_step_order_", "gpu_flip_extend_faces_"], [])),
@@ -146,6 +147,24 @@ NARROW_ROWS = [
        "gpu_flip_narrow_band_mesher_values",
        "mesh_contact_oblique_wall_and_thin_plate_match_cpu_reference",
        "fluid_clamp_scheduled_boundary_renders_like_unfrozen"], [])),
+    ((RENDERER_SRC + "node_graph/primitives/particle_identity",
+      RENDERER_SRC + "node_graph/primitives/particle_publication",
+      RENDERER_SRC + "node_graph/primitives/particle_frame_blend_tests",
+      RENDERER_SRC + "node_graph/primitives/interpolate_particle_frames",
+      RENDERER_SRC + "node_graph/primitives/push_out_of_solid",
+      RENDERER_SRC + "node_graph/primitives/mix_arrays",
+      RENDERER_SRC + "node_graph/primitives/liquid_frame",
+      RENDERER_SRC + "node_graph/liquid/frame_ring",
+      RENDERER_SRC + "node_graph/primitives/shaders/particle_identity",
+      RENDERER_SRC + "node_graph/primitives/shaders/particle_publication",
+      RENDERER_SRC + "node_graph/primitives/shaders/interpolate_particle_frames",
+      RENDERER_SRC + "node_graph/primitives/shaders/push_out_of_solid",
+      RENDERER_SRC + "node_graph/primitives/shaders/mix_arrays",
+      RENDERER_SRC + "node_graph/primitives/shaders/liquid_frame.wgsl"),
+     (["particle_publication_gpu_tests::", "particle_frame_blend_tests::gpu_tests::",
+       "interpolate_particle_frames::gpu_tests::", "push_out_of_solid::gpu_tests::",
+       "mix_arrays::gpu_tests::", "gpu_flip_inflow_emits_at_empty_sites_into_free_slots",
+       "gpu_flip_narrow_band_publication_repeats_failed_ticks"], [])),
     ((RENDERER_SRC + "node_graph/primitives/gpu_flip_clock.rs",
       RENDERER_SRC + "node_graph/primitives/shaders/gpu_flip_clock.wgsl"),
      (["gpu_flip_clock::gpu_tests::"], [])),
@@ -454,9 +473,10 @@ def plan_for_paths(paths, repo, shader_users=None):
         plan.paths.append(path)
         if is_gltf_path(path):
             plan.glb = True
-        narrow = next((row for pats, row in NARROW_ROWS
-                       if any(pat in path for pat in pats)), None)
-        for patterns, (filters, skips) in ([(("",), narrow)] if narrow else EXPLICIT_ROWS):
+        # A path that several features own maps to every one of their rows.
+        narrow = [(("",), row) for pats, row in NARROW_ROWS
+                  if any(pat in path for pat in pats)]
+        for patterns, (filters, skips) in (narrow or EXPLICIT_ROWS):
             if any(pat in path for pat in patterns):
                 plan.filters.update(filters)
                 plan.skips.update(skips)

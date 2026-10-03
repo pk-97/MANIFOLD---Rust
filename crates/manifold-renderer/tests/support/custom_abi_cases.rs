@@ -19,13 +19,6 @@ pub const CASES: &[CustomAbiCase] = &[
         aliases: &[],
     },
     CustomAbiCase {
-        source: "liquid_frame.rs",
-        rust_struct: "FrameParams",
-        shader: "shaders/liquid_frame.wgsl",
-        shader_struct: "FrameParams",
-        aliases: &[],
-    },
-    CustomAbiCase {
         source: "../liquid/grid.rs",
         rust_struct: "FaceParams",
         shader: "shaders/liquid_frame_faces.wgsl",

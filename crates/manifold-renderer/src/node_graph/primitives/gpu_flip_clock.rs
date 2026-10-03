@@ -1381,9 +1381,9 @@ mod gpu_tests {
                     impulse_nodes: [2, 2, 2],
                     impulse_origin: [0.0; 3],
                     impulse_spacing: 1.0,
-                    body_rows: &markers,
+                    body_rows: markers,
                     body_rows_offset: 0,
-                    body_reaction: &markers,
+                    body_reaction: markers,
                 },
                 &p,
             );

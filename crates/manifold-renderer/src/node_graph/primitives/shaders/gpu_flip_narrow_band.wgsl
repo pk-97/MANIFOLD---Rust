@@ -252,10 +252,14 @@ fn nb_reseed_status() {
 @compute @workgroup_size(256)
 fn nb_reseed_write(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
+    if nb_clock_plan[11] != 0u && bitcast<f32>(nb_clock_plan[0]) <= 0.0 { return; }
+    if birth_identity[3] != 0u { return; }
     if i >= 8u * nb_total() || nb_status[0] != 0u { return; }
     var before = 0u; if i > 0u { before = nb_scan[i - 1u]; }
     if nb_scan[i] == before { return; }
     let last = nb_ranges[nb_total() - 1u]; let slot = last.start + last.count + before;
     let q = nb_site(nb_coords(i / 8u, nb.n), i % 8u);
-    nb_particles[slot] = NbParticle(vec4<f32>(nb.minimum + q * nb.h, 0.31017524 * nb.h), nb_velocity(q), slot + 1u);
+    nb_particles[slot] = NbParticle(vec4<f32>(nb.minimum + q * nb.h, 0.31017524 * nb.h), nb_velocity(q), birth_identity[2] + before);
 }
+
+@group(0) @binding(47) var<storage, read> birth_identity: array<u32>;

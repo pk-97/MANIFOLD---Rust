@@ -2,7 +2,7 @@
 
 <!-- index: Moves FLIP surface reconstruction to GPU atoms (anisotropic level set + marching cubes) and interpolates a slower solver tick to 60 fps through a producer-agnostic particle-frame seam. -->
 
-**Status:** BUILDING · P1, P2, P5, P6, P6b, P6c built; P6d measured, no lever kept; P6e (distance level set) built; P6f measured; Peter selected engine parity (2026-10-03 audit below). Before the parity port it met the 6 ms gate (5.7 ms p95 at res 64 ×2); current performance is unmeasured; blobs and volume at 4 ms stay a kernel design item (BUG-l24y (GPU liquid surface kernels cost), section 9 P6d). P3 deferred, P4 dropped, P7–P8 not built.
+**Status:** BUILDING · P3 pass 2 implemented; owed: GPU/visual proofs, optional-A fusion and Sim Rate; see [BUG-upao](#bug-upao--pass-2-and-sim-rate-2026-10-03).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 **Superseded in part (2026-09-29):** live water is GPU MLS-MPM per [GPU_MPM_SOLVER_DESIGN.md](GPU_MPM_SOLVER_DESIGN.md); D1's live-FLIP clause, D3, D9 and P4 no longer apply to live. The seam, atoms and interpolation stand.
 
@@ -796,11 +796,7 @@ is the orchestrating session's.
 
 ### P3 — Interpolation atoms and the particle view (first pixels)
 
-**DEFERRED (2026-09-29).** Trigger: a sub-60 Hz particle producer exists. At 60 Hz the
-newest frame is at most one tick from display time, so the surface reads `particles_b`.
-The `FluidParticle` records moved to P2 (they are the contract).
-`node.particles_to_copies` left this phase: it is built under GPU_MPM_SOLVER_DESIGN.md P1
-(Water kernel, look gates and the cost probe).
+**BUILDING — pass 2 implemented (2026-10-03); owed: optional-A fusion, device/visual proofs and Sim Rate; see [BUG-upao](#bug-upao--pass-2-and-sim-rate-2026-10-03).**
 
 - **Entry state:** P2 merged; `rg -n 'particles_a' crates/manifold-renderer/src/node_graph/primitives/fluid_surface.rs` shows the ports.
 - **Read-back:** D8, D11; sections 4 and 4.1; ADDING_PRIMITIVES.md whole.
@@ -810,7 +806,66 @@ The `FluidParticle` records moved to P2 (they are the contract).
 - **Gesture:** pause and resume transport mid-splash; the particles hold exactly and resume without a jump.
 - **Forbidden:** extrapolation; reusing `Particle`; a fallback when A is missing (A unwired is the move-from-B path by design).
 
-### P4 — Solver rate (seam brief)
+### BUG-upao — pass 2 and Sim Rate (2026-10-03)
+
+**IMPLEMENTED, DEVICE VERIFICATION OWED.** Pass 1 remains three generated atoms
+(interpolation, solid projection and array mix), with value and fusion proofs.
+Pass 2 retains GPU birth allocation beside `liquid_state`, reserves accepted scan
+ranks for inflow and narrow-band births, and publishes a compact ID-sorted copy
+with a cleared tail. Section 2.5 audit: spatial cell sorting cannot order
+arbitrary birth IDs; the publisher reuses `PrefixScan` and persistent scratch.
+No new catalog atom is introduced. Fenced metadata alone supplies live count and
+identity epoch; only accepted frames advance the ring timestamp. Exhausting the
+exact-f32 identity epoch requests a full restart through the existing domain clock
+owner, including coupled rigid state. The landed clock ports are `epoch`,
+`simulation_time`, `display_time`, and `interval_duration` (`tick_interval` below).
+Display time reaches `FrameRing::blend` unchanged. Optional-A whitewater fusion
+remains blocked on BUG-adcx. Sim Rate remains a separate job.
+
+**Pass 2 consumes these clock outputs only.** These are required seam names/units,
+not claims about the changing branch's private API; bind them at the landed boundary:
+
+| Output | Consumer and meaning |
+| --- | --- |
+| `epoch: u32` | Reset publication on seek/restart; no pair crosses a reset. |
+| `simulation_time: Seconds` | Timestamp of each successfully completed tick, saved with its particle/solid frame. Rejected work never advances publication time. |
+| `display_time: Seconds` | Presentation time in the same simulation-seconds domain, with speed, pause and latency already resolved by the clock. Feed unchanged to `FrameRing::blend`. |
+| `tick_interval: Seconds` | Resolved integration interval and Sim Rate reporting; never the denominator of the published-pair blend. |
+
+The first three retain the existing liquid graph port names. Do not multiply by
+Speed, subtract another tick or read a private accumulator. Use existing
+`display_blend(s, t_A, t_B)`: `alpha = clamp((s - t_A)/(t_B - t_A), 0, 1)` and
+`span = t_B - t_A`. A collapsed pair gives `(1, 0)`; skipped publications widen
+span. The same fraction presents particles, solids and whitewater in live and export.
+Pause holds display time; growth/reset/identity renumbering collapses A onto B.
+
+**Pass 2:** retain a GPU next-birth-id counter beside `liquid_state`; reserve ranges
+by accepted emission rank. Preserve ids through cell sorts, deaths and every substep.
+Before u32 exhaustion renumber live records and advance the identity epoch; exhaustion
+of the exact-f32 epoch range requires a full reset. `liquid_frame` publishes a compact
+id-sorted copy with a cleared tail, retaining each frame's count/time/identity epoch.
+Stop clearing ids only when allocation and sorting land together. Do not reorder
+solver storage or read particles back to the CPU. Reuse persistent scratch storage.
+
+CPU fixtures in `particle_frame_blend_tests::publication_contract` specify reordered
+trajectories, death/birth, empty pools, rollover, sorting and retired tails. They are
+reference oracles, not proof of today's GPU publisher; port them to its pass-2 GPU
+proof. `liquid::frame_ring::tests` exercises production blend metadata at all four
+rates, skipped ticks, pause, restart and growth. Extent tests cover both presets,
+A/B counts, solid storage and unequal mix buffers. Preserve B-only capacity and the
+interpolation/projection fusion proof; resolve BUG-adcx before claiming full fusion.
+
+**Sim Rate follows BUG-7qzk:** one authored `simRate` enum at the landed shared clock
+owner, choices 15/20/30/60 Hz, missing/default value 30 Hz. Reuse parameter UI and
+undoable content commands; live/export read the same serialized value. A rate edit
+starts a clock epoch and collapses the accepted pair once. Tooltip: “Simulation
+updates per second. Hits land up to one update late; kicks are read at this rate.”
+Acceptance: four-rate serialization and undo/redo, trigger sampling at the chosen
+rate, speed applied once, and equal live/export values for equal clock inputs.
+No Sim Rate implementation or second clock in this patch. This note supersedes the
+historical P4 proposal below for BUG-upao only.
+
+### P4 — Solver rate (historical seam brief)
 
 **DROPPED (2026-09-29).** The live solver is MLS-MPM at 60 Hz; FLIP keeps its fixed 60 Hz
 tick as the bake engine. The brief below is kept only as the record of what was designed.
