@@ -46,7 +46,7 @@ defaults where that node omits a value. Its metadata controls contain older defa
 and are not the initial node state. Baseline: `4208155f5`.
 
 This is a source audit, not a GPU or visual parity claim. Counts are table rows
-(related values are grouped): **43 matched, 11 ported, 4 clock, 6 unported**. Clock rows belong to BUG-7qzk and are
+(related values are grouped): **43 matched, 10 ported, 1 deviation, 4 clock, 6 unported**. Clock rows belong to BUG-7qzk and are
 unchanged. The unported rows mean full engine parity is not achieved.
 
 The marker volume is `h³/8`; `4πr³/3 = h³/8` gives
@@ -77,7 +77,7 @@ The GPU stores the nearest f32 marker coefficient, `0.31017524`.
 | Pressure maximum CG iterations | 900 | 64 | 900 | ported | `crates/manifold-fluids/native/flip_engine/fluidsimulation.h:2491`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_pressure.rs:43` |
 | Pressure ghost theta / matrix epsilon | ±25 / 1e-9 | ±25 / 1e-9 | ±25 / 1e-9 | matched | `crates/manifold-fluids/native/flip_engine/pressuresolver.cpp:681`; `crates/manifold-renderer/src/node_graph/primitives/shaders/gpu_flip_pressure.wgsl:304` |
 | Velocity projection ghost epsilon | 1e-6 | 1e-9 | 1e-6 | ported | `crates/manifold-fluids/native/flip_engine/pressuresolver.cpp:1112`; `crates/manifold-renderer/src/node_graph/primitives/shaders/gpu_flip_step.wgsl:1764` |
-| Additional density projection | absent | enabled | disabled in Dam Break builder | ported | `crates/manifold-fluids/native/flip_engine/fluidsimulation.cpp:6515`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_preset.rs:139` |
+| Additional density projection | absent | enabled | enabled: deliberate deviation; without it the Dam Break settles 21.5% too deep at 64 (interior 6.6 against 8 a cell after 1800 frames); BUG-irim0 (engine volume mechanism) | deviation | `crates/manifold-fluids/native/flip_engine/fluidsimulation.cpp:6515`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_preset.rs:139` |
 | Open boundary width / closed faces | 2 cells / all six closed | 2 cells / all six closed | 2 cells / all six closed | matched | `crates/manifold-fluids/native/flip_engine/fluidsimulation.h:2584`; `crates/manifold-renderer/src/node_graph/primitives/shaders/gpu_flip_step.wgsl:2102` |
 | CFL number | 5 | 20 m/s travel guard | owned by the clock | clock | `crates/manifold-fluids/native/flip_engine/fluidsimulation.h:2294`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_step.rs:68` |
 | Frame substeps | adaptive 1..6 | fixed one per tick | owned by the clock | clock | `crates/manifold-fluids/native/flip_engine/fluidsimulation.h:2290`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_preset.rs:34` |
