@@ -747,7 +747,7 @@ fn narrow_redistance(enc: &mut GpuEncoder, pipes: &BandPipelines, params: &NbPar
 /// `layers` extension passes from `source` into `target`, ping-ponging
 /// through `scratch` so the last pass lands in `target`. `source` may be
 /// `target`: an even count's first pass writes `scratch`, an odd one starts from a copy there.
-fn extend(enc: &mut GpuEncoder, pipes: &Pipelines, params: &StepParams, face_groups: [u32; 3], [source, target, scratch]: [&GpuBuffer; 3], layers: u32, label: &str) {
+fn extend(enc: &mut GpuEncoder, pipes: &Pipelines, clock_plan: &GpuBuffer, params: &StepParams, face_groups: [u32; 3], [source, target, scratch]: [&GpuBuffer; 3], layers: u32, label: &str) {
     let mut from = source;
     // In place with an odd count, the first pass would write its own source:
     // start from a copy in `scratch` instead, which that pass does not write.
@@ -757,7 +757,7 @@ fn extend(enc: &mut GpuEncoder, pipes: &Pipelines, params: &StepParams, face_gro
     }
     for i in 0..layers {
         let to = if (layers - i) % 2 == 1 { target } else { scratch };
-        enc.dispatch_compute(&pipes.extend, &[uniform(params), buffer(3, from), buffer(4, to)], face_groups, label);
+        enc.dispatch_compute(&pipes.extend, &[buffer(46, clock_plan), uniform(params), buffer(3, from), buffer(4, to)], face_groups, label);
         from = to;
     }
 }
@@ -1327,7 +1327,7 @@ impl StepState {
                     "gpu_flip.step.narrow.initialize_gather",
                 );
                 enc.compute_memory_barrier_buffers();
-                extend(enc, pipes, &base, face_groups, [&l.g, &nb.previous_faces, &l.b], step.band, "gpu_flip.step.narrow.initialize_faces");
+                extend(enc, pipes, step.clock_plan, &base, face_groups, [&l.g, &nb.previous_faces, &l.b], step.band, "gpu_flip.step.narrow.initialize_faces");
                 narrow_redistance(enc, nb_pipes, &nb_params, &l.phi, &nb.previous_phi, cells, "gpu_flip.step.narrow.initialize_distance");
                 enc.copy_buffer_to_buffer(&nb.previous_phi, &l.phi, l.phi.size);
             } else {
@@ -1550,7 +1550,7 @@ impl StepState {
         // The saved faces: the particles' own, extended so FLIP's change is
         // measured wherever a particle samples.
         if step.narrow_enabled {
-            extend(enc, pipes, &base, face_groups, [&l.g, &l.a, &l.b], step.band, "gpu_flip.step.narrow.extend_old");
+            extend(enc, pipes, step.clock_plan, &base, face_groups, [&l.g, &l.a, &l.b], step.band, "gpu_flip.step.narrow.extend_old");
             let nb = self.narrow.buffers.as_ref().ok_or("narrow-band storage was not reserved")?;
             let nb_pipes = self.narrow.pipes.as_ref().ok_or("narrow-band pipelines were not prepared")?;
             enc.dispatch_compute(
@@ -1559,9 +1559,9 @@ impl StepState {
                 face_groups,
                 "gpu_flip.step.narrow.combine",
             );
-            extend(enc, pipes, &base, face_groups, [&l.g, &l.g, &l.b], step.band, "gpu_flip.step.narrow.extend_combined");
+            extend(enc, pipes, step.clock_plan, &base, face_groups, [&l.g, &l.g, &l.b], step.band, "gpu_flip.step.narrow.extend_combined");
         } else {
-            extend(enc, pipes, &base, face_groups, [&l.g, &l.a, &l.b], step.band, "gpu_flip.step.extend_old");
+            extend(enc, pipes, step.clock_plan, &base, face_groups, [&l.g, &l.a, &l.b], step.band, "gpu_flip.step.extend_old");
         }
         let force_faces = if step.narrow_enabled { &l.g } else { &l.a };
         enc.dispatch_compute(
@@ -1580,7 +1580,7 @@ impl StepState {
             face_groups,
             "gpu_flip.step.forces",
         );
-        enc.dispatch_compute(&pipes.open, &[uniform(&base), buffer(9, &l.corners), buffer(4, &l.s)], face_groups, "gpu_flip.step.open_fractions");
+        enc.dispatch_compute(&pipes.open, &[buffer(46, step.clock_plan), uniform(&base), buffer(9, &l.corners), buffer(4, &l.s)], face_groups, "gpu_flip.step.open_fractions");
         enc.dispatch_compute(
             &pipes.solid_velocity,
             &[
@@ -1729,7 +1729,7 @@ impl StepState {
         let subtract = |enc: &mut GpuEncoder, params: &StepParams, phi: &GpuBuffer, faces: &GpuBuffer, label: &str| {
             enc.dispatch_compute(
                 &pipes.subtract,
-                &[uniform(params), buffer(20, faces), buffer(10, &l.s), buffer(6, &l.water), buffer(8, &l.pressure), buffer(7, phi)],
+                &[uniform(params), buffer(46, step.clock_plan), buffer(20, faces), buffer(10, &l.s), buffer(6, &l.water), buffer(8, &l.pressure), buffer(7, phi)],
                 face_groups,
                 label,
             );
@@ -1745,7 +1745,7 @@ impl StepState {
         // solids after the pressure solve, so FLIP's change is measured
         // between two constrained fields.
         for (faces, label) in [(&l.f, "gpu_flip.step.constrain"), (&l.a, "gpu_flip.step.constrain_old")] {
-            enc.dispatch_compute(&pipes.constrain, &[uniform(&base), buffer(20, faces), buffer(10, &l.s), buffer(11, &l.v)], face_groups, label);
+            enc.dispatch_compute(&pipes.constrain, &[buffer(46, step.clock_plan), uniform(&base), buffer(20, faces), buffer(10, &l.s), buffer(11, &l.v)], face_groups, label);
         }
         // One active-set update for the next step. The leftover divergence
         // is the divergence pass itself on the projected, constrained faces,
@@ -1774,7 +1774,7 @@ impl StepState {
                 "gpu_flip.step.separate_update",
             );
         }
-        extend(enc, pipes, &base, face_groups, [&l.f, out_faces, &l.b], step.band, "gpu_flip.step.extend_new");
+        extend(enc, pipes, step.clock_plan, &base, face_groups, [&l.f, out_faces, &l.b], step.band, "gpu_flip.step.extend_new");
         // The density projection (module doc): its pressure's gradient is
         // taken off a copy of the new faces in `l.f`, and the move reads the
         // difference as a displacement. Air sits at zero at its centres.
@@ -1829,7 +1829,7 @@ impl StepState {
             self.solver.tally(enc, step.pressure, step.capped, tally, 1, false)?;
             let plain = StepParams { ghost: 0, ..base };
             subtract(enc, &plain, &l.water, &l.f, "gpu_flip.step.density_project");
-            extend(enc, pipes, &base, face_groups, [&l.f, &l.f, &l.b], step.band, "gpu_flip.step.extend_spread");
+            extend(enc, pipes, step.clock_plan, &base, face_groups, [&l.f, &l.f, &l.b], step.band, "gpu_flip.step.extend_spread");
             &l.f
         } else {
             out_faces

@@ -496,7 +496,7 @@ impl LiquidFields {
         impulses: &LiquidImpulses,
     ) -> Result<FieldFrame, String> {
         let count = lattice.node_count();
-        self.live_frame = self.split_live_hits.then_some(*frame);
+        self.live_frame = self.split_live_hits.then(|| frame.clone());
         self.frame_first = frame.first_sequence;
         self.frame_ticks = frame.ticks;
         if self.lattice != Some(lattice) {
@@ -564,7 +564,7 @@ impl LiquidFields {
         let lattice_count = if self.live_frame.is_some() { events.len().max(1) } else { self.frame_ticks.max(1) as usize };
         self.impulses.resize(count * lattice_count, [0.0; 4]);
         if impulse_tick.is_some() {
-            if let Some(frame) = self.live_frame {
+            if let Some(frame) = &self.live_frame {
                 let mut first = 0;
                 while first < events.len() {
                     let tick = events[first].applied.tick;

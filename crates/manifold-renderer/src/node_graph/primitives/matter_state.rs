@@ -281,7 +281,7 @@ impl Primitive for MatterState {
             self.faulted);
 
         self.substeps = substeps;
-        self.step_dt = substep_duration(interval_duration, substeps, crate::node_graph::physics::offline_simulation());
+        self.step_dt = substep_duration(interval_duration, substeps);
         self.pending = if (self.faulted && !live_mode) || refused.is_some() { 0 } else { ticks.saturating_mul(substeps) };
         self.captures = 0;
         let live = self.last_stats.map_or(count, |s| s.live);
@@ -295,6 +295,10 @@ impl Primitive for MatterState {
             } else {
                 "Matter: a tick produced non-finite values; the liquid is halted until Reset"});
         }
+    }
+
+    fn set_substep_interval(&mut self, interval: manifold_physics::stepping::StepInterval) {
+        self.step_dt = substep_duration(interval.duration().0 as f32, self.substeps);
     }
 
     fn substep_iteration(&mut self, iteration: u32, scalars: &mut [f32]) -> bool {

@@ -291,6 +291,7 @@ impl GpuFlipClock {
             inputs.live_hit_count,
             inputs.event_impulses,
             &event_params,
+            params,
         );
         encoder.copy_buffer_to_buffer(marker, &self.marker_result, 16);
         // The reduction result is consumed by the classification pass to
@@ -485,6 +486,7 @@ impl GpuFlipClock {
             0,
             &empty_hits,
             &empty_params,
+            params,
         );
         encoder.copy_buffer_to_buffer(marker, &self.marker_result, 16);
         encoder.compute_memory_barrier_buffers();
@@ -526,6 +528,7 @@ impl GpuFlipClock {
         live_hit_count: u32,
         event_impulses: &GpuBuffer,
         event_params: &EventFieldParams,
+        clock_params: &GpuFlipClockParams,
     ) -> &'a GpuBuffer {
         if count == 0 {
             encoder.clear_buffer(&self.scratch_a);
@@ -570,6 +573,10 @@ impl GpuFlipClock {
                     binding: 27,
                     buffer: event_impulses,
                     offset: 0,
+                },
+                GpuBinding::Bytes {
+                    binding: 15,
+                    data: clock_params.as_bytes(),
                 },
                 GpuBinding::Bytes {
                     binding: 26,
@@ -728,8 +735,57 @@ fn reduce_bytes(count: u32, mode: u32) -> [u8; 16] {
 }
 
 #[cfg(test)]
+// The shader implements the native epsilon/ceil schedule in f32. Widening
+// its inputs before the arithmetic can cross an integer ceil boundary.
+fn expected_dt(
+    p: &GpuFlipClockParams,
+    speed: f64,
+    restrictions: manifold_physics::stepping::CflRestrictions,
+) -> f32 {
+    let mut limit = p.cfl * p.cell_size / (speed as f32 + 1e-6);
+    if let Some((condition, constant)) = restrictions.surface_tension {
+        limit = limit.min(condition as f32 * (p.cell_size * p.cell_size * p.cell_size).sqrt()
+            * (1.0 / (constant as f32 + 1e-6)).sqrt());
+    }
+    if let Some(rate) = restrictions.color_mixing_rate {
+        limit = limit.min(1.0 / (rate as f32 + 1e-6));
+    }
+    p.frame_duration / (p.frame_duration / limit).ceil().max(1.0)
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gpu_flip_clock_epsilon_ceil_and_cap_cpu_proof() {
+        use manifold_physics::stepping::{CflRestrictions, LiveStepSchedule};
+        use manifold_physics::Seconds;
+        let p = GpuFlipClockParams {
+            frame_duration: 0.1, cell_size: 0.1, cfl: 5.0,
+            surface_condition: 0.0, surface_constant: 0.0, color_mixing_rate: 0.0,
+            _pad_prediction: 0.0, _pad0: 0.0, min_frame_steps: 1,
+            max_frame_steps: 6, flags: 0, interval_sequence: 0, constant_force: [0.0; 4],
+        };
+        // 0.5 / (10 + epsilon) is below 0.05: ceil requires three
+        // subdivisions, not the two in the old reaction proof.
+        assert_eq!(expected_dt(&p, 10.0, CflRestrictions::default()), p.frame_duration / 3.0);
+        for speed in [0.0, 5.0, 10.0, 100.0, 1000.0] {
+            let duration = expected_dt(&p, speed, CflRestrictions::default());
+            let mut schedule = LiveStepSchedule::new(Seconds::ZERO,
+                Seconds(f64::from(p.frame_duration)), 1, 6).value;
+            let mut end = Seconds::ZERO;
+            let mut capped = false;
+            while let Some(step) = schedule.next(Seconds(f64::from(duration))).value {
+                assert_eq!(step.interval.start, end);
+                end = step.interval.end;
+                capped |= step.hit_cap;
+            }
+            assert_eq!(end, Seconds(f64::from(p.frame_duration)));
+            assert!(schedule.steps_taken() <= 6);
+            assert_eq!(capped, speed >= 100.0);
+        }
+    }
 
     #[test]
     fn gpu_flip_clock_shader_parses_and_validates_on_cpu() {
@@ -749,8 +805,7 @@ mod gpu_tests {
     use crate::node_graph::fluid_particles::FluidParticle;
     use crate::node_graph::liquid::bodies::LiquidBody;
     use bytemuck::Zeroable;
-    use manifold_physics::Seconds;
-    use manifold_physics::stepping::{CflRestrictions, cfl_step_duration};
+    use manifold_physics::stepping::CflRestrictions;
     use std::mem::size_of;
 
     #[repr(C)]
@@ -807,18 +862,6 @@ mod gpu_tests {
             std::slice::from_raw_parts(buffer.mapped_ptr().unwrap(), count * size_of::<u32>())
         };
         bytemuck::cast_slice(bytes).to_vec()
-    }
-
-    fn expected_dt(p: &GpuFlipClockParams, speed: f64, restrictions: CflRestrictions) -> f32 {
-        cfl_step_duration(
-            Seconds(f64::from(p.frame_duration)),
-            f64::from(p.cell_size),
-            f64::from(p.cfl),
-            speed,
-            restrictions,
-        )
-        .value
-        .0 as f32
     }
 
     #[test]
@@ -882,7 +925,8 @@ mod gpu_tests {
             let result = read_plan(&readback);
             let expected_speed = if count == 0 { 0.0 } else { speed };
             assert!((f64::from(result.maximum_speed) - expected_speed).abs() < 1e-5);
-            let expected_limit = if count == 0 { 12.0 } else { 30.0 };
+            let expected_limit = p.max_frame_steps as f32 * p.cfl * p.cell_size
+                / expected_dt(&p, expected_speed, CflRestrictions::default());
             assert!((result.marker_limit - expected_limit).abs() < 1e-5);
             assert!(
                 (result.dt - expected_dt(&p, expected_speed, CflRestrictions::default())).abs()
@@ -941,7 +985,9 @@ mod gpu_tests {
         enc.commit_and_wait_completed();
         let result = read_plan(&readback);
         assert_eq!(result.maximum_speed, 10.0);
-        assert_eq!(result.marker_limit, 60.0);
+        let expected_limit = p.max_frame_steps as f32 * (p.cfl * p.cell_size
+            / expected_dt(&p, 10.0, CflRestrictions::default()));
+        assert_eq!(result.marker_limit, expected_limit);
     }
 
     #[test]
@@ -1086,7 +1132,7 @@ mod gpu_tests {
         assert_eq!(without_reaction.dt, p.frame_duration);
         assert_eq!(with_reaction.maximum_speed, 10.0);
         assert!(with_reaction.dt < without_reaction.dt);
-        assert!(with_reaction.dt > 0.04 && with_reaction.dt < 0.06);
+        assert_eq!(with_reaction.dt, expected_dt(&p, 10.0, CflRestrictions::default()));
     }
 
     #[test]
@@ -1328,8 +1374,9 @@ mod gpu_tests {
         assert_eq!(plans[0].step_index, 0);
         assert_eq!(plans[0].cap_hit, 0);
         assert_eq!(plans[1].maximum_speed, 100.0);
-        assert_eq!(plans[1].dt, 0.005);
-        assert!((plans[1].elapsed - 0.025).abs() < 1.0e-6);
+        let event_dt = expected_dt(&p, 100.0, CflRestrictions::default());
+        assert_eq!(plans[1].dt, event_dt);
+        assert!((plans[1].elapsed - (0.02 + event_dt)).abs() < 1.0e-6);
         assert_eq!(plans[1].step_index, 1);
         assert_ne!(plans[1].pad & 0x8000_0000, 0);
         assert_eq!(plans[2].pad, 0);

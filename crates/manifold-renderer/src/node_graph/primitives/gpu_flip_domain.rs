@@ -229,7 +229,7 @@ impl Coupling {
 
 /// A frame of several coupled ticks: the region syncs before each
 /// later tick, and the domain settles the tick before it there.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct Exchange {
     frame: manifold_physics::clock::ClockFrame,
     ticks: u32,
@@ -389,6 +389,7 @@ crate::primitive! {
     boundary_reason: NonGpu,
     extra_fields: {
         clock: LiquidClock = LiquidClock::default(),
+        scheduled_frame: Option<manifold_physics::clock::ClockFrame> = None,
         setup: Option<GpuFlipSetup> = None,
         published: Option<[f32; OUTPUTS.len()]> = None,
         bodies: LiquidBodies = LiquidBodies::with_regions(),
@@ -438,9 +439,14 @@ impl Primitive for GpuFlipDomain {
         self.role_pending
     }
 
+    fn substep_clock_interval(&self, iteration: u32) -> Option<(&'static str, manifold_physics::stepping::StepInterval)> {
+        self.scheduled_frame.as_ref()?.interval(u64::from(iteration))
+            .map(|interval| ("interval_duration", interval))
+    }
+
     /// Coupled frames sync before each later tick of the frame.
     fn substep_host_sync(&self, iteration: u32) -> bool {
-        self.coupled.exchange.is_some_and(|x| iteration < x.ticks)
+        self.coupled.exchange.as_ref().is_some_and(|x| iteration < x.ticks)
     }
 
     /// Between two ticks of one frame: settle the tick the GPU just
@@ -451,7 +457,7 @@ impl Primitive for GpuFlipDomain {
         iteration: u32,
         _gpu: Option<&mut crate::gpu_encoder::GpuEncoder<'_>>,
     ) -> Result<(), String> {
-        let Some(exchange) = self.coupled.exchange else { return Ok(()) };
+        let Some(exchange) = self.coupled.exchange.clone() else { return Ok(()) };
         let result = self.exchange_tick(iteration, exchange);
         if let Err(error) = &result {
             // The pair restarts next frame with a fresh rigid owner.
@@ -523,6 +529,7 @@ impl Primitive for GpuFlipDomain {
         // A physics sample reads the force field and the roles at a tick's
         // start; it never advances time.
         if crate::node_graph::physics::authored_sample_only() {
+            self.clock.observe_speed(ctx.time.seconds.0, ctx.scalar_or_param("speed", 1.0));
             let field = ctx.inputs.vector_field("acceleration_field");
             self.fields.observe_sample(ctx.time.seconds.0, field.as_ref());
             self.bodies.observe_sample(ctx.time.seconds.0, (!role_pending).then_some(&roles[..]));
@@ -540,6 +547,7 @@ impl Primitive for GpuFlipDomain {
         // repeat with zero ticks and no impulse. Before the first good frame
         // there is nothing to hold, so the outputs are declared pending.
         self.coupled.exchange = None;
+        self.scheduled_frame = None;
         let computed = if self.role_pending { Ok(None) } else { self.compute(ctx, &roles) };
         let held = || {
             let mut held = self.published.unwrap_or([0.0; OUTPUTS.len()]);
@@ -619,7 +627,9 @@ impl Primitive for GpuFlipDomain {
         if self.holding {
             return Err("GPU FLIP impulses: cannot capture an impulse while the liquid is pending or failed".into());
         }
-        self.impulses.stamp(transport.0, sequence)
+        let mut stamp = self.impulses.stamp(transport.0, sequence)?;
+        stamp.time = manifold_core::Seconds(self.clock.simulation_at(transport.0));
+        Ok(stamp)
     }
 
     fn enqueue_physics_impulse(
@@ -714,6 +724,7 @@ impl GpuFlipDomain {
             restart,
             offline,
         );
+        self.scheduled_frame = Some(frame.clone());
         if frame.numerical_error {
             crate::node_graph::physics_metrics::record_simulation(0.0, 0.0, false, true);
         }
@@ -758,7 +769,7 @@ impl GpuFlipDomain {
                 owner.set_pending(pending);
                 self.coupled.offset = Some(offset);
                 if frame.ticks > 1 {
-                    self.coupled.exchange = Some(Exchange { frame, ticks: frame.ticks, pending, offset });
+                    self.coupled.exchange = Some(Exchange { frame: frame.clone(), ticks: frame.ticks, pending, offset });
                 }
             }
             // The water is shown at the tick Box3D has settled, with the

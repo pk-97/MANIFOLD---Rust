@@ -456,7 +456,7 @@ pub(crate) fn installed_volume(world: &PhysicsWorld, handle: BodyHandle) -> Resu
 }
 
 pub struct RigidSimulation {
-    export_clock: manifold_physics::clock::SimulationClock,
+    clock: manifold_physics::clock::SimulationClock,
     world: Option<PhysicsWorld>,
     handles: [Option<BodyHandle>; MAX_BODIES],
     descriptions: [Option<RigidBody>; MAX_BODIES],
@@ -550,7 +550,7 @@ impl Default for RigidSimulation {
             impulse_failure: None,
             impulse_overflow_latched: false,
             accepted_observation: None,
-            export_clock: Default::default(),
+            clock: Default::default(),
             held: HeldClock::default(),
             worker_epoch: None,
             advancement_policy: AdvancementPolicy::Preview,
@@ -914,9 +914,8 @@ impl RigidSimulation {
                 return Ok(());
             }
             if !history_drain_requested() {
-                let elapsed = now.0 - self.last_time.unwrap_or(now).0;
-                let elapsed_simulation = elapsed * f64::from(speed);
-                let authored_time = self.authored_time + elapsed_simulation;
+                let authored_time = self.clock.observe_speed(now.0, speed);
+                let elapsed_simulation = authored_time - self.authored_time;
                 self.ensure_targeted_history(targeted_fields)?;
                 self.record_authored_sample(
                     authored_time,
@@ -1081,11 +1080,16 @@ impl RigidSimulation {
                 self.release_fragments(index, body, body.release_count)?;
             }
         }
-        let elapsed = now.0 - self.last_time.unwrap_or(now).0;
-        // Preserve all elapsed time. Preview can yield with ticks still queued.
-        let elapsed_simulation = elapsed * f64::from(speed);
+        let clock_frame = if accepted_interval.is_none() {
+            Some(self.clock.advance(now.0, project_frame_interval(), speed, reset_count, rebuild,
+                offline_simulation()))
+        } else {
+            None
+        };
+        let authored_time = accepted_interval.map_or_else(
+            || self.clock.simulation_at(now.0), |_| now.0);
+        let elapsed_simulation = authored_time - self.authored_time;
         let stationary_edit = elapsed_simulation == 0.0;
-        let authored_time = self.authored_time + elapsed_simulation;
         self.ensure_targeted_history(targeted_fields)?;
         self.record_authored_sample(
             authored_time,
@@ -1097,6 +1101,8 @@ impl RigidSimulation {
         )?;
         self.authored_time = authored_time;
         self.held.observe(authored_time);
+        // A stop edit holds new input even while the preceding span finishes.
+        self.held.held |= speed == 0.0;
         let accumulated = self.accumulator + elapsed_simulation;
         const TICK: f64 = FIXED_TICK.0;
         let due_steps = ((accumulated + 1e-9) / TICK).floor() as usize;
@@ -1104,14 +1110,11 @@ impl RigidSimulation {
         // Ordinary live rigid worlds cover the complete observed simulation
         // span in one accepted interval. An explicitly bounded fixed worker
         // remains separate from the live transport policy.
-        let export_frame = (accepted_interval.is_none()
-            && offline_simulation()
-            && matches!(self.advancement_policy, AdvancementPolicy::Preview))
-            .then(|| self.export_clock.advance(now.0, project_frame_interval(), 1.0, reset_count, rebuild, true));
+        let export_frame = clock_frame.as_ref().filter(|_| offline_simulation()
+            && matches!(self.advancement_policy, AdvancementPolicy::Preview));
         let accepted_interval = accepted_interval.or_else(|| {
             (!offline_simulation()
                 && matches!(self.advancement_policy, AdvancementPolicy::Preview)
-                && speed > 0.0
                 && accumulated > 0.0)
                 .then(|| {
                     FramePlan::new(
@@ -1124,7 +1127,7 @@ impl RigidSimulation {
                 }).flatten()
         });
         let steps = if let Some(frame) = export_frame {
-            if speed > 0.0 { frame.ticks as usize } else { 0 }
+            frame.ticks as usize
         } else if accepted_interval.is_some() {
             1
         } else {
@@ -1203,8 +1206,6 @@ impl RigidSimulation {
         let mut completed = 0;
         for ordinal in 0..steps {
             let accepted_interval = export_frame.and_then(|frame| frame.interval(ordinal as u64))
-                .map(|interval| StepInterval::new(Seconds(self.physics_time),
-                    Seconds(self.physics_time + interval.duration().0 * f64::from(speed))))
                 .or(accepted_interval);
             let result = (|| -> Result<(), String> {
                 let (step_start, step_end) = accepted_interval.map_or_else(
@@ -3343,7 +3344,7 @@ mod tests {
     }
 
     #[test]
-    fn zero_speed_does_not_advance_until_transport_resumes() {
+    fn zero_speed_finishes_preceding_interval_and_holds_until_resume() {
         let bodies = one_body([0.0, 4.0, 0.0]);
         let mut simulation = RigidSimulation::default();
         simulation
@@ -3353,11 +3354,19 @@ mod tests {
         simulation
             .advance(bodies.clone(), GRAVITY, Seconds(0.5), 0.0, 0.0)
             .unwrap();
-        assert_eq!(simulation.poses[0].pos, authored);
+        let held = simulation.poses[0].pos;
+        assert!(held[1] < authored[1] - 0.1);
+        assert_eq!(simulation.physics_time, 0.5);
         simulation
             .advance(bodies.clone(), GRAVITY, Seconds(1.0), 1.0, 0.0)
             .unwrap();
-        assert!(simulation.poses[0].pos[1] < authored[1] - 0.1);
+        assert_eq!(simulation.poses[0].pos, held);
+        assert_eq!(simulation.physics_time, 0.5);
+        simulation
+            .advance(bodies, GRAVITY, Seconds(1.5), 1.0, 0.0)
+            .unwrap();
+        assert!(simulation.poses[0].pos[1] < held[1] - 0.1);
+        assert_eq!(simulation.physics_time, 1.0);
     }
 
     #[test]
@@ -3945,7 +3954,7 @@ mod tests {
         let next = Seconds(now.0 + FRAME);
         simulation.advance(bodies, GRAVITY, next, 1.0, 0.0).unwrap();
         assert_eq!(simulation.pending_time, Seconds::ZERO);
-        assert!((simulation.physics_time - next.0).abs() < 1e-12);
+        assert!((simulation.physics_time - now.0).abs() < 1e-12);
     }
 
     #[test]
@@ -4347,7 +4356,7 @@ mod tests {
         assert_eq!(simulation.poses, accepted_pose);
         simulation.advance(bodies.clone(), GRAVITY, Seconds(6.0), 1.0, 0.0).unwrap();
         assert_eq!(simulation.pending_time, Seconds::ZERO);
-        assert!((simulation.physics_time - 6.0).abs() < 1e-12);
+        assert!((simulation.physics_time - 3.0).abs() < 1e-12);
         simulation.advance(bodies, GRAVITY, Seconds(6.0), 1.0, 1.0).unwrap();
         assert_eq!(simulation.pending_time, Seconds::ZERO);
         assert_eq!(simulation.poses[0].pos, [0.0, 4.0, 0.0]);

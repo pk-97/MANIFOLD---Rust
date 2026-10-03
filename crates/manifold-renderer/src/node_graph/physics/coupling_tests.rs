@@ -365,9 +365,20 @@ fn scene_physics_coupling_capture_publishes_accepted_span_and_paused_edit() {
 
     advance_capture(
         &mut simulation,
+        bodies.clone(),
+        Some(prototype.clone()),
+        FIXED_TICK.0 * 3.0,
+        1.0,
+        &mut capture,
+    )
+    .unwrap();
+    assert_eq!(capture.publications.len(), 1);
+    assert_eq!(simulation.physics_time, FIXED_TICK.0 * 2.0);
+    advance_capture(
+        &mut simulation,
         bodies,
         Some(prototype),
-        FIXED_TICK.0 * 3.0,
+        FIXED_TICK.0 * 4.0,
         1.0,
         &mut capture,
     )
@@ -375,7 +386,8 @@ fn scene_physics_coupling_capture_publishes_accepted_span_and_paused_edit() {
     assert_eq!(capture.publications.len(), 2);
     assert_eq!(capture.publications[1].stamp.tick, 1);
     assert_eq!(simulation.pending_time, Seconds::ZERO);
-    assert_eq!(simulation.physics_time, FIXED_TICK.0 * 3.0);
+    assert_eq!(simulation.physics_time,
+        FIXED_TICK.0 * 2.0 + (FIXED_TICK.0 * 4.0 - FIXED_TICK.0 * 3.0));
     assert!((capture.publications[1].body_position[0] - 5.0).abs() < 1.0e-5);
     for (captured, expected) in capture.publications[1]
         .copy_positions

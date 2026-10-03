@@ -2,13 +2,15 @@
 //! export accepts complete project-frame intervals. Sequence is identity,
 //! never elapsed time. Submission and fenced completion belong to consumers.
 
+use std::sync::Arc;
+
 use crate::Seconds;
 use crate::stepping::{FramePlan, StepInterval};
 
 pub const TICK: f64 = 1.0 / 60.0;
 
 /// Accepted frame intervals and transport/display endpoints.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ClockFrame {
     pub plan: FramePlan,
     pub first_sequence: u64,
@@ -17,9 +19,8 @@ pub struct ClockFrame {
     project_interval: f64,
     transport_origin: f64,
     transport_first: u64,
-    speed: f64,
-    anchor_transport: f64,
-    anchor_target: f64,
+    transport_intervals: u64,
+    speed_history: Arc<Vec<SpeedAnchor>>,
     pub ticks: u32,
     pub epoch: u32,
     /// This frame starts a new simulation (first frame, reset, setup change or
@@ -59,14 +60,71 @@ pub struct SimulationClock {
     /// Speed over the interval after the last frame. Like every replayed
     /// control, a Speed edit takes effect from the frame that observes it.
     speed: f64,
-    /// Transport and target where the current speed began (a start, a speed
-    /// edit). Targets and tick starts are measured from here, so
-    /// they never accumulate rounding and agree at every frame rate.
-    anchor_transport: f64,
-    anchor_target: f64,
+    /// Retain the continuity anchor and all speed edits after accepted time.
+    speed_history: Vec<SpeedAnchor>,
+    history_snapshots: Vec<Arc<Vec<SpeedAnchor>>>,
+}
+
+/// Piecewise-constant speed, integrated once at each observed edit. Accepted
+/// frames retain an immutable view; later edits cannot rewrite their endpoints.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct SpeedAnchor {
+    transport: f64,
+    simulation: f64,
+    speed: f64,
+}
+
+fn map_transport(anchors: &[SpeedAnchor], transport: f64) -> f64 {
+    let index = anchors.partition_point(|anchor| anchor.transport <= transport);
+    anchors.get(index.saturating_sub(1)).map_or(0.0, |anchor| {
+        anchor.simulation + (transport - anchor.transport).max(0.0) * anchor.speed
+    })
 }
 
 impl SimulationClock {
+    /// Observe controls without accepting a render interval or consuming ticks.
+    /// History/source capture and rendering share this exact time mapping.
+    pub fn observe_speed(&mut self, transport: f64, speed: f32) -> f64 {
+        if !transport.is_finite() || !speed.is_finite() || speed < 0.0 {
+            return self.target_time;
+        }
+        let simulation = map_transport(&self.speed_history, transport);
+        if self.speed_history.last().is_none_or(|last| {
+            transport >= last.transport && last.speed != f64::from(speed)
+        }) {
+            let history = &mut self.speed_history;
+            let anchor = SpeedAnchor { transport, simulation, speed: f64::from(speed) };
+            if history.last().is_some_and(|last| last.transport == transport) {
+                *history.last_mut().expect("last anchor") = anchor;
+            } else {
+                history.push(anchor);
+            }
+        }
+        simulation
+    }
+
+    pub fn accepted_time(&self) -> f64 {
+        self.simulation_time
+    }
+
+    pub fn simulation_at(&self, transport: f64) -> f64 {
+        map_transport(&self.speed_history, transport)
+    }
+
+    // Reuse retired immutable snapshots instead of allocating in the frame
+    // path. Consumers keep their accepted view until they have drained it.
+    fn snapshot_history(&mut self) -> Arc<Vec<SpeedAnchor>> {
+        let index = self.history_snapshots.iter().position(|slot| Arc::strong_count(slot) == 1)
+            .unwrap_or_else(|| {
+                self.history_snapshots.push(Arc::new(Vec::with_capacity(256)));
+                self.history_snapshots.len() - 1
+            });
+        let snapshot = Arc::get_mut(&mut self.history_snapshots[index]).expect("retired snapshot");
+        snapshot.clear();
+        snapshot.extend_from_slice(&self.speed_history);
+        self.history_snapshots[index].clone()
+    }
+
     /// The transport time tick `tick` starts at, under the current speed.
     /// None before the clock starts or while Speed is 0.
     pub fn tick_start(&self, tick: u64) -> Option<f64> {
@@ -170,9 +228,8 @@ impl SimulationClock {
                     project_interval: 0.0,
                     transport_origin: self.transport_origin,
                     transport_first: self.transport_done,
-                    speed: self.speed,
-                    anchor_transport: self.anchor_transport,
-                    anchor_target: self.anchor_target,
+                    transport_intervals: 0,
+                    speed_history: self.snapshot_history(),
                     ticks: 0,
                     epoch: self.epoch,
                     restarted: false,
@@ -208,13 +265,6 @@ impl SimulationClock {
         } else {
             transport
         };
-        let interval_speed = if restarted { speed } else { self.speed };
-        let interval_anchor_transport = if restarted {
-            transport
-        } else {
-            self.anchor_transport
-        };
-        let interval_anchor_target = if restarted { 0.0 } else { self.anchor_target };
         if restarted {
             self.epoch = self.epoch.wrapping_add(1);
             self.started = true;
@@ -222,15 +272,15 @@ impl SimulationClock {
             self.ticks_done = 0;
             self.simulation_time = 0.0;
             self.speed = speed;
-            self.anchor_transport = transport;
-            self.anchor_target = 0.0;
             self.transport_origin = transport;
             self.transport_done = 0;
+            self.speed_history.clear();
+            self.observe_speed(transport, speed as f32);
         } else {
             // The interval since the last frame ran at the last frame's speed.
             held = transport <= self.last_transport || speed <= 0.0;
-            let reached = self.anchor_target
-                + (accepted_transport - self.anchor_transport).max(0.0) * self.speed;
+            self.observe_speed(transport, speed as f32);
+            let reached = self.simulation_at(accepted_transport);
             if reached.is_finite() {
                 self.target_time = reached.max(self.target_time);
             } else {
@@ -238,19 +288,18 @@ impl SimulationClock {
             }
             if speed != self.speed {
                 self.speed = speed;
-                self.anchor_transport = accepted_transport;
-                self.anchor_target = self.target_time;
             }
         }
         self.last_transport = transport;
         let first_sequence = self.ticks_done;
         let start = self.simulation_time;
-        let ticks = if offline {
-            if interval_speed > 0.0 {
-                transport_reached - transport_first
-            } else {
-                0
-            }
+        let ticks = if offline && self.speed_history.iter().all(|anchor| anchor.speed > 0.0) {
+            transport_reached - transport_first
+        } else if offline {
+            (transport_first..transport_reached).filter(|&index| {
+                let at = |i| self.simulation_at(self.transport_origin + i as f64 * self.project_interval);
+                at(index + 1) > at(index)
+            }).count() as u64
         } else {
             u64::from(self.target_time > start)
         };
@@ -262,6 +311,10 @@ impl SimulationClock {
             end: Seconds(self.simulation_time),
             intervals: ticks,
         };
+        let speed_history = self.snapshot_history();
+        let retained = self.speed_history.partition_point(|anchor| anchor.transport <= accepted_transport)
+            .saturating_sub(1);
+        self.speed_history.drain(..retained);
         ClockFrame {
             plan,
             first_sequence,
@@ -270,9 +323,8 @@ impl SimulationClock {
             project_interval: self.project_interval,
             transport_origin: self.transport_origin,
             transport_first,
-            speed: interval_speed,
-            anchor_transport: interval_anchor_transport,
-            anchor_target: interval_anchor_target,
+            transport_intervals: transport_reached - transport_first,
+            speed_history,
             ticks: ticks as u32,
             epoch: self.epoch,
             restarted,
@@ -287,17 +339,15 @@ impl SimulationClock {
 
 impl ClockFrame {
     /// Retain an unread export schedule without one allocation per observation.
-    pub fn append(&mut self, next: Self) -> bool {
+    pub fn append(&mut self, next: &Self) -> bool {
         if !self.offline
             || !next.offline
             || self.epoch != next.epoch
             || self.project_interval != next.project_interval
             || self.transport_origin != next.transport_origin
-            || self.anchor_transport != next.anchor_transport
-            || self.anchor_target != next.anchor_target
-            || self.speed != next.speed
+            || self.speed_history != next.speed_history
             || self.first_sequence + u64::from(self.ticks) != next.first_sequence
-            || self.transport_first + u64::from(self.ticks) != next.transport_first
+            || self.transport_first + self.transport_intervals != next.transport_first
         {
             return false;
         }
@@ -305,6 +355,7 @@ impl ClockFrame {
             return false;
         };
         self.ticks = ticks;
+        self.transport_intervals += next.transport_intervals;
         self.plan.end = next.plan.end;
         self.plan.intervals += next.plan.intervals;
         self.simulation_time = next.simulation_time;
@@ -312,28 +363,27 @@ impl ClockFrame {
         self.display_time = next.display_time;
         true
     }
-    pub fn interval(self, ordinal: u64) -> Option<StepInterval> {
+    pub fn interval(&self, ordinal: u64) -> Option<StepInterval> {
         if self.offline {
-            (ordinal < u64::from(self.ticks)).then(|| {
-                let endpoint = |index: u64| {
-                    Seconds(
-                        self.anchor_target
-                            + (self.transport_origin + index as f64 * self.project_interval
-                                - self.anchor_transport)
-                                .max(0.0)
-                                * self.speed,
-                    )
-                };
-                let index = self.transport_first + ordinal;
-                StepInterval::new(endpoint(index), endpoint(index + 1))
-            })
+            let endpoint = |index: u64| Seconds(map_transport(&self.speed_history,
+                self.transport_origin + index as f64 * self.project_interval));
+            if self.transport_intervals == u64::from(self.ticks) {
+                return (ordinal < u64::from(self.ticks)).then(|| {
+                    let index = self.transport_first + ordinal;
+                    StepInterval::new(endpoint(index), endpoint(index + 1))
+                });
+            }
+            (self.transport_first..self.transport_first + self.transport_intervals)
+                .map(|index| StepInterval::new(endpoint(index), endpoint(index + 1)))
+                .filter(|interval| interval.end.0 > interval.start.0)
+                .nth(ordinal as usize)
         } else {
             self.plan.interval(ordinal)
         }
     }
-    pub fn duration(self) -> Seconds {
+    pub fn duration(&self) -> Seconds {
         if self.offline {
-            Seconds(self.project_interval * self.speed)
+            self.interval(0).map_or(Seconds::ZERO, |interval| interval.duration())
         } else {
             Seconds(self.plan.end.0 - self.plan.start.0)
         }
@@ -344,6 +394,48 @@ impl ClockFrame {
 mod tests {
     use super::*;
     use crate::stepping::{CflPolicy, CflRestrictions, LiveStepSchedule};
+
+    #[test]
+    fn source_speed_observations_cannot_rewrite_accepted_intervals() {
+        let mut clock = SimulationClock::default();
+        clock.advance(2.0, TICK, 1.0, 0.0, false, true);
+        assert!((clock.observe_speed(2.05, 2.0) - 0.05).abs() < 1e-12);
+        assert!((clock.observe_speed(2.10, 2.0) - 0.15).abs() < 1e-12);
+        let accepted = clock.advance(2.10, TICK, 2.0, 0.0, false, true);
+        let intervals: Vec<_> = (0..u64::from(accepted.ticks))
+            .map(|i| accepted.interval(i).unwrap()).collect();
+        assert!((accepted.simulation_time - 0.15).abs() < 1e-12);
+        assert!((intervals[2].end.0 - 0.05).abs() < 1e-12);
+        assert!((intervals[3].duration().0 - 2.0 * TICK).abs() < 1e-12);
+        clock.observe_speed(2.10, 0.5);
+        clock.advance(2.2, TICK, 0.5, 0.0, false, true);
+        assert_eq!(intervals, (0..u64::from(accepted.ticks))
+            .map(|i| accepted.interval(i).unwrap()).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn historical_speed_schedule_is_independent_of_export_partition() {
+        let run = |fps: u32| {
+            let mut clock = SimulationClock::default();
+            clock.advance(0.0, TICK, 1.0, 0.0, false, true);
+            let mut intervals = Vec::new();
+            for sample in 1..=240 {
+                let transport = sample as f64 / 240.0;
+                let speed = if sample < 53 { 1.0 } else if sample < 149 { 2.0 } else { 0.5 };
+                clock.observe_speed(transport, speed);
+                if sample % (240 / fps) == 0 {
+                    let frame = clock.advance(transport, TICK, speed, 0.0, false, true);
+                    intervals.extend((0..u64::from(frame.ticks)).map(|i| frame.interval(i).unwrap()));
+                }
+            }
+            intervals
+        };
+        let expected = run(60);
+        assert_eq!(expected.len(), 60);
+        for fps in [1, 20, 24, 30, 120] {
+            assert_eq!(run(fps), expected, "export {fps} fps");
+        }
+    }
 
     #[test]
     fn live_clock_covers_every_frame_at_20_24_30_60_fps() {

@@ -1042,7 +1042,7 @@ impl FluidRuntime {
         // Source/history samples map inputs to simulation time without
         // consuming frame sequences. Only a render or an explicit offline
         // drain accepts intervals that the worker will actually execute.
-        let clock_frame = if self.cache_mode == CacheMode::Live
+        let clock_frame = if self.cache_mode != CacheMode::Playback
             && (!super::physics::authored_sample_only()
                 || super::physics::history_drain_requested())
         {
@@ -1057,30 +1057,28 @@ impl FluidRuntime {
         } else {
             None
         };
-        if super::physics::offline_simulation()
-            && let Some(frame) = clock_frame.filter(|frame| frame.ticks > 0)
+        if self.cache_mode == CacheMode::Live && super::physics::offline_simulation()
+            && let Some(frame) = clock_frame.as_ref().filter(|frame| frame.ticks > 0)
         {
             if self.export_frames.back_mut().is_some_and(|previous| previous.append(frame)) {
                 // Adjacent observations share one retained project schedule.
             } else if self.export_frames.len() == HISTORY_CAPACITY {
                 return Err("Water export interval history is full; drain accepted intervals before observing more transport".into());
             } else {
-                self.export_frames.push_back(frame);
+                self.export_frames.push_back(frame.clone());
             }
         }
-        if clock_frame.is_some_and(|frame| frame.numerical_error)
+        if clock_frame.as_ref().is_some_and(|frame| frame.numerical_error)
             && !crate::node_graph::physics::offline_simulation()
         {
             crate::node_graph::physics_metrics::record_simulation(0.0, 0.0, false, true);
         }
         let target_time = if self.cache_mode == CacheMode::Playback {
             (transport.0 * speed as f64).max(0.0)
-        } else if let Some(frame) = clock_frame {
-            frame.target_time
-        } else if let Some(previous) = self.last_transport {
-            // CPU export/recording historically applies the observed Speed
-            // to this interval. Keep its arithmetic and sample order exact.
-            self.target_time + (transport.0 - previous).max(0.0) * speed as f64
+        } else if clock_frame.is_some() {
+            self.clock.simulation_at(transport.0)
+        } else if self.last_transport.is_some() {
+            self.clock.observe_speed(transport.0, speed)
         } else {
             self.target_time
         };
@@ -1413,7 +1411,10 @@ impl FluidRuntime {
                 return Ok(());
             }
         let live_mode = self.cache_mode == CacheMode::Live;
-        let target_tick = simulation_tick(self.target_time);
+        let target_time = if live_mode && super::physics::offline_simulation() {
+            self.clock.accepted_time()
+        } else { self.target_time };
+        let target_tick = simulation_tick(target_time);
             let playback = (self.cache_mode == CacheMode::Playback).then(|| PlaybackAddress {
                 transport: Seconds(self.last_transport.expect("observed transport")),
                 legacy_tick: target_tick,
@@ -1424,14 +1425,14 @@ impl FluidRuntime {
             {
                 self.export_frames.pop_front();
             }
-            let live_interval = if live_mode && self.target_time > self.simulation_time() {
+            let live_interval = if live_mode && target_time > self.simulation_time() {
                 Some(if super::physics::offline_simulation() {
                     self.export_frames.front()
                         .and_then(|frame| self.completed_tick.checked_sub(frame.first_sequence)
                             .and_then(|ordinal| frame.interval(ordinal)))
                         .ok_or("Water export is missing its accepted project interval")?
                 } else {
-                    StepInterval::new(Seconds(self.simulation_time()), Seconds(self.target_time))
+                    StepInterval::new(Seconds(self.simulation_time()), Seconds(target_time))
                 })
             } else { None };
             // A owed particle capture goes before any further stepping, so
@@ -1443,7 +1444,7 @@ impl FluidRuntime {
                     playback == self.completed_playback
                 } else {
                     (if live_mode {
-                        self.target_time <= self.simulation_time()
+                        target_time <= self.simulation_time()
                     } else {
                         due == 0
                     })

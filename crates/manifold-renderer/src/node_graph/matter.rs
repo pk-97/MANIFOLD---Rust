@@ -246,17 +246,10 @@ pub const MAX_SUBSTEPS: u32 = 128;
 
 /// Duration of one MPM iteration for an observed frame interval.
 ///
-/// Offline export retains the historical f64 division and cast so its fixed
-/// tick/substep bits remain unchanged. Live playback divides the accepted
-/// frame duration in f32, including when the substep cap stretches work over
-/// the whole interval.
-pub fn substep_duration(interval_duration: f32, substeps: u32, offline: bool) -> f32 {
-    let substeps = substeps.max(1);
-    if offline {
-        (TICK / f64::from(substeps)) as f32
-    } else {
-        interval_duration / substeps as f32
-    }
+/// Live and export divide the same accepted interval, including when the
+/// substep cap stretches work over the whole interval.
+pub fn substep_duration(interval_duration: f32, substeps: u32) -> f32 {
+    interval_duration / substeps.max(1) as f32
 }
 
 /// Grid velocity clamp per component, in cells per substep
@@ -405,7 +398,7 @@ mod tests {
     fn live_mpm_substep_duration_covers_display_rates() {
         for fps in [20.0f32, 24.0, 30.0, 60.0] {
             let interval = 1.0 / fps;
-            let duration = substep_duration(interval, 4, false);
+            let duration = substep_duration(interval, 4);
             assert_eq!(duration.to_bits(), (interval / 4.0).to_bits());
             assert!((duration * 4.0 - interval).abs() < 1.0e-6);
         }
@@ -414,19 +407,21 @@ mod tests {
     #[test]
     fn live_mpm_substep_cap_still_covers_the_full_interval() {
         let interval = 1.0f32 / 20.0;
-        let duration = substep_duration(interval, MAX_SUBSTEPS, false);
+        let duration = substep_duration(interval, MAX_SUBSTEPS);
         assert!((duration * MAX_SUBSTEPS as f32 - interval).abs() < 1.0e-6);
     }
 
     #[test]
-    fn export_mpm_substep_duration_keeps_fixed_tick_bits() {
-        for substeps in 1..=MAX_SUBSTEPS {
-            let expected = (TICK / f64::from(substeps)) as f32;
-            assert_eq!(
-                substep_duration(0.25, substeps, true).to_bits(),
-                expected.to_bits(),
-                "substeps={substeps}"
-            );
+    fn export_mpm_substep_duration_uses_the_accepted_project_interval() {
+        for interval in [1.0f32 / 24.0, 1.0 / 60.0, 0.25] {
+            for substeps in 1..=MAX_SUBSTEPS {
+                let expected = interval / substeps as f32;
+                assert_eq!(
+                    substep_duration(interval, substeps).to_bits(),
+                    expected.to_bits(),
+                    "substeps={substeps}"
+                );
+            }
         }
     }
 

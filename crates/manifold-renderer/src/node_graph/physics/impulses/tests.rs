@@ -79,14 +79,14 @@ fn rigid_impulse_stamp_requires_an_exact_accepted_observation() {
         .unwrap();
     assert_eq!(
         simulation.impulse_stamp(Seconds(6.0), 2).unwrap().time,
-        Seconds(2.0)
+        Seconds(1.0)
     );
     simulation
         .advance(bodies, [0.0; 3], Seconds(6.0), 2.0, 0.0)
         .unwrap();
     assert_eq!(
         simulation.impulse_stamp(Seconds(6.0), 3).unwrap().time,
-        Seconds(2.0)
+        Seconds(1.0)
     );
     assert!(simulation.impulse_stamp(Seconds(6.0 + 1e-9), 4).is_err());
 }
@@ -386,7 +386,11 @@ fn rigid_impulses_pause_retains_pending_input() {
         )
         .unwrap();
     simulation
-        .advance(bodies.clone(), [0.0; 3], Seconds(DT), 0.0, 0.0)
+        .advance(bodies.clone(), [0.0; 3], Seconds::ZERO, 0.0, 0.0)
+        .unwrap();
+    assert!(receipts(&mut simulation).is_empty());
+    simulation
+        .advance(bodies.clone(), [0.0; 3], Seconds(DT), 1.0, 0.0)
         .unwrap();
     assert!(receipts(&mut simulation).is_empty());
     simulation
