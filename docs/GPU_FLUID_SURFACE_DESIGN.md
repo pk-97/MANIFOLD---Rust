@@ -46,8 +46,8 @@ defaults where that node omits a value. Its metadata controls contain older defa
 and are not the initial node state. Baseline: `4208155f5`.
 
 This is a source audit, not a GPU or visual parity claim. Counts are table rows
-(related values are grouped): **43 matched, 9 ported, 2 deviations, 4 clock, 6 unported**. Clock rows belong to BUG-7qzk and are
-unchanged. The unported rows mean full engine parity is not achieved.
+(related values are grouped): **43 matched, 17 ported, 4 partly ported, 2 deviations, 3 unported**. The unported rows mean full engine
+parity is not achieved.
 
 The marker volume is `h³/8`; `4πr³/3 = h³/8` gives
 `r/h = (3/(32·3.141592653))^(1/3) = 0.31017524546911046`.
@@ -79,10 +79,10 @@ The GPU stores the nearest f32 marker coefficient, `0.31017524`.
 | Velocity projection ghost epsilon | 1e-6 | 1e-9 | 1e-6 | ported | `crates/manifold-fluids/native/flip_engine/pressuresolver.cpp:1112`; `crates/manifold-renderer/src/node_graph/primitives/shaders/gpu_flip_step.wgsl:1764` |
 | Additional density projection | absent | enabled | enabled: deliberate deviation; without it the Dam Break settles 21.5% too deep at 64 (interior 6.6 against 8 a cell after 1800 frames); BUG-irim0 (engine volume mechanism) | deviation | `crates/manifold-fluids/native/flip_engine/fluidsimulation.cpp:6515`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_preset.rs:139` |
 | Open boundary width / closed faces | 2 cells / all six closed | 2 cells / all six closed | 2 cells / all six closed | matched | `crates/manifold-fluids/native/flip_engine/fluidsimulation.h:2584`; `crates/manifold-renderer/src/node_graph/primitives/shaders/gpu_flip_step.wgsl:2102` |
-| CFL number | 5 | 20 m/s travel guard | owned by the clock | clock | `crates/manifold-fluids/native/flip_engine/fluidsimulation.h:2294`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_step.rs:68` |
-| Frame substeps | adaptive 1..6 | fixed one per tick | owned by the clock | clock | `crates/manifold-fluids/native/flip_engine/fluidsimulation.h:2290`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_preset.rs:34` |
-| Sim time / frames / speed | offered frame dt, speed 1 | fixed liquid tick / speed 1 | owned by the clock | clock | `crates/manifold-renderer/assets/generator-presets/WaterDamBreak.json:632`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_preset.rs:6` |
-| Velocity extrapolation layers | ceil(sqrt(3)·5)+3 = 12 | derived from travel guard | configured CFL 5: 12 layers | ported | `crates/manifold-fluids/native/flip_engine/fluidsimulation.cpp:4832`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_step.rs:82` |
+| CFL number | 5 | 20 m/s travel guard | 5: the clock's substep limit; the 20 m/s guard stays the advection clamp | ported | `crates/manifold-fluids/native/flip_engine/fluidsimulation.h:2294`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_step.rs:2474` |
+| Frame substeps | adaptive 1..6 | fixed one per tick | adaptive Steps..6 under the CFL limit; Steps defaults to 1 | ported | `crates/manifold-fluids/native/flip_engine/fluidsimulation.h:2290`; `crates/manifold-physics/src/stepping.rs:22` |
+| Sim time / frames / speed | offered frame dt, speed 1 | fixed liquid tick / speed 1 | offered frame interval, speed 1; export keeps exact 60 Hz steps | ported | `crates/manifold-renderer/assets/generator-presets/WaterDamBreak.json:632`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_preset.rs:6` |
+| Velocity extrapolation layers | ceil(sqrt(3)·5)+3 = 12 | derived from travel guard | configured CFL 5: 12 layers | ported | `crates/manifold-fluids/native/flip_engine/fluidsimulation.cpp:4832`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_step.rs:2287` |
 | Mesher subdivision | 1 | 1 | 1 | matched | `crates/manifold-renderer/assets/generator-presets/WaterDamBreak.json:636`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_preset.rs:136` |
 | Particle scale | 3 | 3 | 3 | matched | `crates/manifold-renderer/assets/generator-presets/WaterDamBreak.json:648`; `crates/manifold-renderer/src/node_graph/primitives/shape_particle_blobs.rs:67` |
 | Field radius | 3 marker radii = 0.9305257364073314h | capped at 2/3 cell | uncapped native radius | ported | `crates/manifold-fluids/native/flip_engine/particlemesher.cpp:81`; `crates/manifold-renderer/src/node_graph/primitives/shaders/shape_particle_blobs_body.wgsl:90` |
@@ -97,34 +97,34 @@ The GPU stores the nearest f32 marker coefficient, `0.31017524`.
 | Mesh smoothing iterations | 2 | 2 | 2 | matched | `crates/manifold-renderer/assets/generator-presets/WaterDamBreak.json:656`; `crates/manifold-renderer/src/node_graph/primitives/smooth_surface_mesh.rs:33` |
 | Whitewater enabled / types | on; foam, bubbles, spray; dust off | on; foam, bubbles, spray; dust off | on; foam, bubbles, spray; dust off | matched | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:461`; `crates/manifold-renderer/src/node_graph/primitives/whitewater_step.rs:142` |
 | Whitewater capacity | 100000 preset override | 100000 preset override | 100000 preset override | matched | `crates/manifold-renderer/assets/generator-presets/WaterDamBreak.json:664`; `crates/manifold-renderer/src/node_graph/primitives/whitewater_step.rs:52` |
-| Wavecrest rate | 175 | 175 | unchanged | owned by BUG-imy3.1 (whitewater emitters) | `crates/manifold-renderer/assets/generator-presets/WaterDamBreak.json:668`; `crates/manifold-renderer/src/node_graph/primitives/emission_count.rs:20` |
-| Turbulence rate / potential | 175 / clamp((T−100)/100,0,1) | absent | 175 / clamp((T−100)/100,0,1) | owned by BUG-imy3.1 (whitewater emitters) | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:471`; `crates/manifold-renderer/src/node_graph/primitives/turbulence_emission_count.rs` |
-| Energy min / max | 0.1 / 60 | 0.1 / 60 | unchanged | owned by BUG-imy3.1 (whitewater emitters) | `crates/manifold-renderer/assets/generator-presets/WaterDamBreak.json:676`; `crates/manifold-renderer/src/node_graph/primitives/energy_potential.rs:20` |
-| Wavecrest curvature min / max / sharpness | 0.4 / 1 / 0.4 | 0.4 / 1 / 0.4 | unchanged | owned by BUG-imy3.1 (whitewater emitters) | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:466`; `crates/manifold-renderer/src/node_graph/primitives/wavecrest_potential.rs:25` |
+| Wavecrest rate | 175 | 175 | 175 | matched | `crates/manifold-renderer/assets/generator-presets/WaterDamBreak.json:668`; `crates/manifold-renderer/src/node_graph/primitives/emission_count.rs:20` |
+| Turbulence rate / potential | 175 / clamp((T−100)/100,0,1) | absent | 175 / clamp((T−100)/100,0,1) | ported | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:471`; `crates/manifold-renderer/src/node_graph/primitives/turbulence_emission_count.rs` |
+| Energy min / max | 0.1 / 60 | 0.1 / 60 | 0.1 / 60 | matched | `crates/manifold-renderer/assets/generator-presets/WaterDamBreak.json:676`; `crates/manifold-renderer/src/node_graph/primitives/energy_potential.rs:20` |
+| Wavecrest curvature min / max / sharpness | 0.4 / 1 / 0.4 | 0.4 / 1 / 0.4 | 0.4 / 1 / 0.4 | matched | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:466`; `crates/manifold-renderer/src/node_graph/primitives/wavecrest_potential.rs:25` |
 | Whitewater lifetime min / max / variance | 0 / 7 / 3 seconds | 0 / 7 / 3 seconds | 0 / 7 / 3 seconds | matched | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:478`; `crates/manifold-renderer/src/node_graph/primitives/spawn_whitewater.rs:26` |
 | Spray / bubble / foam lifetime modifiers | 2 / 0.333 / 1 | 2 / 0.333 / 1 | 2 / 0.333 / 1 | matched | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:488`; `crates/manifold-renderer/src/node_graph/primitives/age_whitewater.rs:47` |
 | Foam offset / distance / buffer | 0 / 1h / 1h | 0 / 1h / 1h | 0 / 1h / 1h | matched | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:484`; `crates/manifold-renderer/src/node_graph/primitives/shaders/whitewater_type_body.wgsl:19` |
 | Bubble buoyancy / drag | 4 / 1 | 4 / 1 | 4 / 1 | matched | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:493`; `crates/manifold-renderer/src/node_graph/primitives/advect_whitewater.rs:94` |
 | Foam advection strength | 1 | 1 | 1 | matched | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:492`; `crates/manifold-renderer/src/node_graph/primitives/shaders/advect_whitewater_body.wgsl:186` |
-| Spray drag / variance / emission speed | 0 / 0.25 / 1 | 0 / 0.25 / 1 | unchanged | owned by BUG-imy3.1 (whitewater emitters) | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:499`; `crates/manifold-renderer/src/node_graph/primitives/shaders/spawn_whitewater_body.wgsl:19` |
+| Spray drag / variance / emission speed | 0 / 0.25 / 1 | 0 / 0.25 / 1 | 0 / 0.25 / 1 | matched | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:499`; `crates/manifold-renderer/src/node_graph/primitives/shaders/spawn_whitewater_body.wgsl:19` |
 | Spray friction / restitution | 0 / 0.2 | 0 / 0.2 | 0 / 0.2 | matched | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:502`; `crates/manifold-renderer/src/node_graph/primitives/shaders/advect_whitewater_body.wgsl:27` |
 | Whitewater classification distance | upwind-reinitialised surface phi | raw padded solver phi | engine valid-band/upwind rule before padding | CPU reference + compiled GPU proof; execution owed | `particlelevelset.cpp:263`, `levelsetsolver.cpp:82`; `whitewater_distance.rs`, `upwind_distance.rs` |
 | Whitewater motion schedule | each accepted liquid substep | once per outer tick | exact accepted durations and MAC snapshots | motion port; retype/emission/solids remain outer-interval sampled | `diffuseparticlesimulation.cpp:2250`; `liquid/substep_history.rs`, `advect_whitewater.rs` |
 | Whitewater force fields / hits | per-type force sampling; foam follows vmac | gravity only | same domain field buffers and timestamped event indices as liquid | no duplicate physics values; GPU execution owed | `diffuseparticlesimulation.cpp:2658`; `liquid/fields.rs` |
 | Whitewater mesh drains | strict negative posed source SDF | absent | same region/shape/atlas inputs and strict boundary | final interval pose; intermediate drain crossings remain a deviation | `fluidsimulation.cpp:9034`; `keep_whitewater.rs` |
 | Whitewater max particles per cell | 5000 | 5000 | 5000 | matched | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:504`; `crates/manifold-renderer/src/node_graph/primitives/keep_whitewater.rs:22` |
-| Emitter radius / jitter | 8 marker radii / 1 | 8 marker radii / 1 | unchanged | owned by BUG-imy3.1 (whitewater emitters) | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:505`; `crates/manifold-renderer/src/node_graph/primitives/shaders/spawn_whitewater_body.wgsl:22` |
+| Emitter radius / jitter | 8 marker radii / 1 | 8 marker radii / 1 | 8 marker radii / 1 | matched | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:505`; `crates/manifold-renderer/src/node_graph/primitives/shaders/spawn_whitewater_body.wgsl:22` |
 | Whitewater collision buffer / march | 0.25h / 0.5h | 0.25h / 0.5h | 0.25h / 0.5h | matched | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:464`; `crates/manifold-renderer/src/node_graph/primitives/shaders/advect_whitewater_body.wgsl:27` |
 | Foam preservation / rate / densities | off / 0.75 / 20..45 | off / 0.75 / 20..45 | off / 0.75 / 20..45 | matched | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:509`; `crates/manifold-renderer/src/node_graph/primitives/preserve_foam.rs:65` |
-| Whitewater surface-emitter band | 1.5h | 1.5h | unchanged | owned by BUG-imy3.1 (whitewater emitters) | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:463`; `crates/manifold-renderer/src/node_graph/primitives/shaders/wavecrest_potential_body.wgsl:94` |
+| Whitewater surface-emitter band | 1.5h | 1.5h | 1.5h | matched | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:463`; `crates/manifold-renderer/src/node_graph/primitives/shaders/wavecrest_potential_body.wgsl:94` |
 | Whitewater maximum velocity factor | 1.1 | 1.1 | 1.1 | matched | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:465`; `crates/manifold-renderer/src/node_graph/primitives/shaders/advect_whitewater_body.wgsl:30` |
 | Wall geometry / collision / last inner face | native padded boundary mesh, marched collision, skipped boundary pressure cells/last inner face | exact wall faces, clamp wall motion, all interior faces | unchanged; geometry/operator port remains | unported | `crates/manifold-fluids/native/flip_engine/fluidsimulation.cpp:5508`; `crates/manifold-renderer/src/node_graph/primitives/shaders/gpu_flip_step.wgsl:2062` |
 | Surface/solid grid origin and extent | 1.5h padding each side; native 67 cells / 68 mesh nodes | 3h padding; 70 cells / 71 nodes | 1.5h padding; 67 cells / 68 nodes, native half-cell phase; mesh and clamp share the sampled solid | ported (GPU execution pending) | `crates/manifold-renderer/src/node_graph/fluid/domain.rs:120`; `crates/manifold-renderer/src/node_graph/liquid/lattice.rs` (`surface`); `crates/manifold-fluids/native/flip_engine/particlemesher.cpp:103`; `crates/manifold-fluids/native/flip_engine/polygonizer3d.cpp:361` |
-| Marker removal | 250 per cell + extreme-velocity removal | no native per-cell or extreme-velocity removal | stable cell cap at 250; clock speed limit over accepted frame interval; GPU compaction preserves survivor ids | ported | `crates/manifold-fluids/native/flip_engine/fluidsimulation.h:2565`; `crates/manifold-renderer/src/node_graph/primitives/shaders/gpu_flip_step.wgsl:2130` |
+| Marker removal | 250 per cell + extreme-velocity removal | no native per-cell or extreme-velocity removal | stable cell cap at 250; clock speed limit over the accepted frame, at most one Sim Rate interval of simulated time live; GPU compaction preserves survivor ids | ported | `crates/manifold-fluids/native/flip_engine/fluidsimulation.h:2565`; `crates/manifold-renderer/src/node_graph/primitives/shaders/gpu_flip_step.wgsl:2130` |
 | Step operation order | extrapolate then constrain; inflow at step end | constrain then extrapolate; inflow before transfer | projected velocity extrapolated before both solid constraints; inflow after movement/removal | ported | `crates/manifold-fluids/native/flip_engine/fluidsimulation.cpp:6658`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_step.rs:384` |
 | Inflow placement | after marker advection/removal | before transfer | end of step, first transferred/advected on next step | ported | `fluidsimulation.cpp::_stepFluid`, `_updateFluidObjects`; `gpu_flip_step.rs::encode` |
 | Pressure preconditioner / precision | MIC PCG, f64 | multigrid PCG, f32 | unchanged; equal tolerance/iteration values do not imply identical trajectories | unported | `crates/manifold-fluids/native/flip_engine/pressuresolver.cpp:934`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_pressure.rs:6` |
-| Whitewater emission ordering / overload | native randomized emitter order and capacity truncation | stable GPU order and even thinning when frame emissions exceed capacity | unchanged | owned by BUG-imy3.1 (whitewater emitters) | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.cpp:1515`; `crates/manifold-renderer/src/node_graph/primitives/whitewater_step.rs:163` |
+| Whitewater emission ordering / overload | native randomized emitter order and capacity truncation | stable GPU order and even thinning when frame emissions exceed capacity | unchanged; a shared random stream and native emitter selection remain | unported | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.cpp:1515`; `crates/manifold-renderer/src/node_graph/primitives/whitewater_step.rs:163` |
 
 BUG-g75v.8 step-order audit (2026-10-03): section 2.5 found stable cell sorting,
 compaction, PrefixScan, and GPU extreme-speed removal already exist. The
@@ -132,7 +132,10 @@ compaction, PrefixScan, and GPU extreme-speed removal already exist. The
 node; no new catalog atom or fusion boundary. Native removal counts each cell
 place before speed rejection, so ranges are captured before speed removal.
 The threshold uses the accepted frame interval (_currentFrameDeltaTime), not
-the adaptive substep or 1/60 s. New inflow ids remain owned by emit_write.
+the adaptive substep or 1/60 s. A live late frame runs its owed intervals as one
+span, so its frame is capped at one Sim Rate interval of simulated time and the
+span removes only what on-time frames would (BUG-i6niq (late spans lose
+particles)); export steps each interval. New inflow ids remain owned by emit_write.
 CPU reference and extent proofs precede GPU value proofs; GPU execution remains
 lead-owned, so these ports are not yet GPU-verified.
 
@@ -186,7 +189,7 @@ wall geometry changes the pressure operator and seed exclusion; MIC/f64 is a dif
 pressure solver (native uses f64, which native Metal cannot execute); whitewater overload ordering requires a shared random stream
 and native emitter selection. These are not clock-owned exemptions.
 `graph-tool validate` creates `GpuDevice::new_queued`, so it is deferred to the
-lead; `graph-tool fusion` is CPU-only. GPU execution is required before accepting the changed field proofs. Whitewater emission is owned by BUG-imy3.1 (whitewater emitters).
+lead; `graph-tool fusion` is CPU-only. GPU execution is required before accepting the changed field proofs.
 
 The snapshot regeneration is for changed source/ABI contracts and requires review;
 a failed value proof is not permission to refresh a golden.

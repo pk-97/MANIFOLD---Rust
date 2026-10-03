@@ -226,10 +226,18 @@ impl LiquidBodies {
 
     /// Reference CFL samples the actual mesh vertices. Coupled hull vertices
     /// remain eligible outside the domain, including a hull enclosing it.
+    /// Colliders join the CFL only under rigid coupling, as in FLIP Fluids:
+    /// `_getMaximumObstacleSpeed` returns 0 unless rigid coupling or adaptive
+    /// obstacle time stepping is on, and the latter is off by default
+    /// (`fluidsimulation.cpp:11168`, `fluidsimulation.h:2577`) with no GPU
+    /// control. So a collider that jumps between frames never splits the
+    /// interval and sweeps through the water at the jump's speed. Sources
+    /// always feed the first-substep prediction.
     pub fn prepare_clock_vertices(&mut self, min: [f32; 3], size: [f32; 3]) {
         use crate::node_graph::primitives::gpu_flip_clock::GpuFlipBodyVertex;
         self.clock_obstacles.clear();
         self.clock_sources.clear();
+        let coupling = !self.coupled.is_empty();
         let mut collider = 0;
         let mut region = 0;
         let mut append = |geometry: &PreparedFluidGeometry, scale: [f32; 3], row: LiquidBody, coupled: bool, source: bool, row_index: Option<usize>| {
@@ -266,9 +274,11 @@ impl LiquidBodies {
         for role in &self.roles {
             let rows = if role.kind == FluidRoleKind::Collider { &self.rows } else { &self.region_rows };
             let index = if role.kind == FluidRoleKind::Collider { let n = collider; collider += 1; n } else { let n = region; region += 1; n };
+            let source = role.kind == FluidRoleKind::Inflow;
             if let Some(&row) = rows.get(index)
-                && role.kind != FluidRoleKind::Outflow {
-                append(&role.geometry, role.scale, row, false, role.kind == FluidRoleKind::Inflow, None);
+                && role.kind != FluidRoleKind::Outflow
+                && (source || coupling) {
+                append(&role.geometry, role.scale, row, false, source, None);
             }
         }
         for (index, geometry) in self.coupled.iter().enumerate() {
@@ -913,5 +923,38 @@ mod tests {
         assert_eq!(bodies.last_rows()[0].position_inv_mass, rows[0].position_inv_mass);
         assert_eq!(bodies.last_rows()[1].position_inv_mass[0], 1.0);
         assert_eq!(bodies.last_rows()[1].accel_shape[3], 3.0);
+    }
+
+    /// A collider joins the clock's CFL only under rigid coupling, as in the
+    /// engine: alone, a collider jumping a metre a tick adds no obstacle
+    /// vertex; beside a coupled hull it counts at its own speed. A source
+    /// always feeds the first-substep prediction.
+    #[test]
+    fn liquid_clock_vertices_count_colliders_only_under_coupling() {
+        let geometry = cube();
+        let roles_at = |t: f64| {
+            let inflow = FluidRole { kind: FluidRoleKind::Inflow, ..collider(&geometry, [0.0, 1.0, 0.0], 0.0).unwrap() };
+            vec![collider(&geometry, [(t / TICK) as f32, 0.0, 0.0], 0.0), Some(inflow)]
+        };
+        for coupled in [vec![], vec![cube()]] {
+            let mut bodies = LiquidBodies::with_regions();
+            ready_coupled(&mut bodies, &roles_at(0.0), &coupled);
+            let mut rig = Rig::default();
+            rig.frame(&mut bodies, 0.0, TICK, &roles_at);
+            let frame = rig.frame(&mut bodies, TICK, TICK, &roles_at);
+            let hulls = vec![LiquidBody::default(); coupled.len()];
+            let rows = bodies.rows(first_tick(&frame), frame.ticks, &hulls).unwrap().to_vec();
+            assert!((rows[0].linear_velocity[0] - 60.0).abs() < 1e-3, "the collider moves a metre a tick");
+            bodies.prepare_clock_vertices([-4.0; 3], [8.0; 3]);
+            assert_eq!(bodies.clock_sources().len(), 8, "the source counts with or without coupling");
+            let obstacles = bodies.clock_obstacles();
+            if coupled.is_empty() {
+                assert!(obstacles.is_empty(), "an uncoupled collider never joins the CFL");
+            } else {
+                assert_eq!(obstacles.len(), 16, "the collider and the hull, a cube each");
+                assert!(obstacles[..8].iter().all(|v| v.position[3] == 1.0 && (v.velocity[0] - 60.0).abs() < 1e-3));
+                assert!(obstacles[8..].iter().all(|v| v.velocity[3] == 2.0), "the hull names its body row");
+            }
+        }
     }
 }
