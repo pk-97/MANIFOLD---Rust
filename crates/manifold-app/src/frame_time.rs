@@ -1,5 +1,5 @@
 //! `manifold frame-time <project.manifold> --frames N [--resolution R]
-//! [--solve-level L] [--stamp-every K] [--splash-frames S] [--png-frame T --png <path>]` —
+//! [--solve-level L] [--sim-rate HZ] [--stamp-every K] [--splash-frames S] [--png-frame T --png <path>]` —
 //! the whole frame of a real project the way the app runs it: the
 //! production loader, the headless content thread, the project's own frame
 //! rate and output size, from the clip's start. Every frame reports what
@@ -20,7 +20,7 @@
 //! The first `S` frames are the splash, the rest
 //! the calm; both tables print. `--resolution` and `--solve-level` override
 //! the GPU FLIP generator's `resolution` and `solve_level` cards in memory,
-//! never on disk.
+//! never on disk; `--sim-rate` overrides the project's Sim Rate the same way.
 //! Presentation is not timed here (no window); the pacing doc's vsync
 //! quantisation applies on top of these numbers.
 
@@ -46,6 +46,7 @@ struct Args {
     frames: usize,
     resolution: Option<f32>,
     solve_level: Option<f32>,
+    sim_rate: Option<manifold_core::settings::SimRate>,
     stamp_every: usize,
     granularity: ProfileGranularity,
     splash_frames: usize,
@@ -55,7 +56,7 @@ struct Args {
 fn usage_exit(msg: &str) -> ! {
     eprintln!("frame-time: {msg}");
     eprintln!(
-        "usage: manifold frame-time <project.manifold> --frames N [--resolution R] [--solve-level L] \
+        "usage: manifold frame-time <project.manifold> --frames N [--resolution R] [--solve-level L] [--sim-rate 15|20|30|60] \
          [--stamp-every K] [--stamp-granularity dispatch|node] [--splash-frames S] \
          [--png-frame T --png <path>]"
     );
@@ -94,12 +95,16 @@ fn parse(args: &[String]) -> Args {
         .map(|s| s.parse::<f32>().unwrap_or_else(|_| usage_exit("--resolution must be a number")));
     let solve_level = value(args, "--solve-level")
         .map(|s| s.parse::<f32>().unwrap_or_else(|_| usage_exit("--solve-level must be a number")));
+    let sim_rate = value(args, "--sim-rate").map(|s| {
+        s.parse::<u32>().ok().and_then(|hz| manifold_core::settings::SimRate::try_from(hz).ok())
+            .unwrap_or_else(|| usage_exit("--sim-rate must be 15, 20, 30 or 60"))
+    });
     let png = match (value(args, "--png-frame"), value(args, "--png")) {
         (None, None) => None,
         (Some(_), None) | (None, Some(_)) => usage_exit("--png-frame and --png go together"),
         (Some(_), Some(path)) => Some((number("--png-frame", None), path)),
     };
-    Args { project, frames, resolution, solve_level, stamp_every, granularity, splash_frames, png }
+    Args { project, frames, resolution, solve_level, sim_rate, stamp_every, granularity, splash_frames, png }
 }
 
 #[cfg(test)]
@@ -335,8 +340,13 @@ pub fn run(args: &[String]) -> ! {
 
 fn probe(args: &Args) -> Result<(), String> {
     let mut overridden = 0usize;
+    let mut sim_rate = manifold_core::settings::SimRate::default();
     let PreparedProject { mut ct, cmd_tx, cmd_rx, state_tx, drain, width, height, frame_rate, .. } =
         prepare_project_edited(&args.project, "frame-time", &mut |project| {
+            if let Some(rate) = args.sim_rate {
+                project.settings.physics.sim_rate = rate;
+            }
+            sim_rate = project.settings.physics.sim_rate;
             let overrides = [(RESOLUTION_PARAM, args.resolution), (SOLVE_LEVEL_PARAM, args.solve_level)];
             for layer in &mut project.timeline.layers {
                 if !layer.hosts_generator() || layer.generator_type().as_str() != GENERATOR {
@@ -357,7 +367,8 @@ fn probe(args: &Args) -> Result<(), String> {
         return Err(format!("a {GENERATOR} layer took {overridden} of the {asked} overrides (resolution, solve level)"));
     }
     let resolution_note = args.resolution.map_or("the file's resolution".to_owned(), |r| format!("resolution {r}"))
-        + &args.solve_level.map_or(String::new(), |l| format!(", solve level {l}"));
+        + &args.solve_level.map_or(String::new(), |l| format!(", solve level {l}"))
+        + &format!(", sim rate {} Hz", sim_rate.hz());
     let device_name = ct.content_pipeline.native_device().map_or("unknown".to_owned(), |d| d.device_name());
     println!(
         "frame-time: {} at {width}x{height} @ {frame_rate} fps, {resolution_note}, {} frames, every {}th timestamped per {}, splash = first {} frames, on {device_name}",

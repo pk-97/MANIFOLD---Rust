@@ -2892,14 +2892,19 @@
       "typeId": "node.particles_to_copies"
     },
     {
-      "handle": "Obstacle Mesh",
       "id": 506,
+      "nodeId": "dust_blend",
+      "typeId": "node.interpolate_particle_frames"
+    },
+    {
+      "handle": "Obstacle Mesh",
+      "id": 507,
       "nodeId": "obstacle_mesh",
       "typeId": "node.cube_mesh"
     },
     {
       "handle": "Obstacle Material",
-      "id": 507,
+      "id": 508,
       "nodeId": "obstacle_material",
       "params": {
         "ambient": {
@@ -2931,7 +2936,7 @@
     },
     {
       "handle": "Obstacle",
-      "id": 508,
+      "id": 509,
       "nodeId": "obstacle_object",
       "typeId": "node.scene_object"
     }
@@ -3830,6 +3835,18 @@
       "toPort": "particles"
     },
     {
+      "fromNode": 5,
+      "fromPort": "identity",
+      "toNode": 6,
+      "toPort": "identity"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "identity_out",
+      "toNode": 5,
+      "toPort": "identity_in"
+    },
+    {
       "fromNode": 4,
       "fromPort": "count",
       "toNode": 6,
@@ -4176,6 +4193,12 @@
       "fromPort": "stats",
       "toNode": 11,
       "toPort": "stats"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "identity",
+      "toNode": 11,
+      "toPort": "identity"
     },
     {
       "fromNode": 5,
@@ -4946,12 +4969,6 @@
       "toPort": "material"
     },
     {
-      "fromNode": 5,
-      "fromPort": "dust_particles",
-      "toNode": 505,
-      "toPort": "particles"
-    },
-    {
       "fromNode": 505,
       "fromPort": "copies",
       "toNode": 504,
@@ -4964,25 +4981,49 @@
       "toPort": "object_10"
     },
     {
+      "fromNode": 5,
+      "fromPort": "dust_particles",
+      "toNode": 506,
+      "toPort": "particles_b"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "blend",
+      "toNode": 506,
+      "toPort": "blend"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "span",
+      "toNode": 506,
+      "toPort": "span"
+    },
+    {
       "fromNode": 506,
-      "fromPort": "vertices",
-      "toNode": 508,
-      "toPort": "vertices"
+      "fromPort": "out",
+      "toNode": 505,
+      "toPort": "particles"
     },
     {
       "fromNode": 507,
+      "fromPort": "vertices",
+      "toNode": 509,
+      "toPort": "vertices"
+    },
+    {
+      "fromNode": 508,
       "fromPort": "out",
-      "toNode": 508,
+      "toNode": 509,
       "toPort": "material"
     },
     {
       "fromNode": 2,
       "fromPort": "transform",
-      "toNode": 508,
+      "toNode": 509,
       "toPort": "transform"
     },
     {
-      "fromNode": 508,
+      "fromNode": 509,
       "fromPort": "object",
       "toNode": 463,
       "toPort": "object_1"
