@@ -620,6 +620,7 @@ mod modulation_topology_guard_tests {
 
     fn spec(id: &str) -> ParamSpecDef {
         ParamSpecDef {
+            tooltip: None,
             id: id.to_string(),
             name: id.to_string(),
             min: 0.0,

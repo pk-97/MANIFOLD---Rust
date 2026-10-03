@@ -163,7 +163,7 @@ fn body(
         if largest > 1e-20 {
             // Axis lengths ∝ sqrt(variance), the ratio capped at `stretch`,
             // rescaled to keep the isotropic kernel's volume.
-            let limit = max(stretch, 1.0);
+            let limit = stretch;
             let floor_variance = largest / (limit * limit);
             let spread = sqrt(max(eigen.values, vec3<f32>(floor_variance)));
             let norm = pow(spread.x * spread.y * spread.z, 1.0 / 3.0);

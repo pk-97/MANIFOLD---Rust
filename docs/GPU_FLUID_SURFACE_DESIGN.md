@@ -1113,6 +1113,65 @@ blobs by a fifth.
 - **Forbidden:** changing preset defaults before Peter's call; judging look from stills
   read through a second tone curve; any MPM scene above res 64 on the GPU.
 
+### P6g — Live surface shaping (2026-10-03)
+
+The Liquid Surface group exposes `stretch` (1), `smoothing` (0), and
+`fill_pits` (0). Manifest rows are **Stretch**, **Centre Smoothing**, and
+**Fill Pits**, in Water Detail. Their short help text travels through the
+shared parameter surface. UI ranges are 1–16, 0–1 and 0–1; these are not
+runtime clamps. Existing preset defaults are unchanged.
+
+**Section 2.5 audit:** distance rebuilding exists for whitewater, but the
+liquid closing is genuinely new, not one wire away. `surface_crossings`
+seeds one crossing per coarse cell centre; `nearest_crossing` spreads those
+seeds; `crossing_distance` measures against a tangent plane, caps at four
+cells and applies whitewater wall/epsilon policy. The liquid surface is
+node-centred and can be refined independently. `lattice_curvature` measures
+curvature, not distance. Adapting those operations would require a new seed
+layout and a new distance evaluator, and would retain nearest-plane error.
+`array_math` has offsets but is CPU-only (mapped arrays); it cannot consume
+this frame's GPU level set without a fence.
+
+Two new atoms therefore supply the missing operations: `offset_lattice`
+(coincident add, one dispatch) and `redistance_lattice` (gather, one dispatch).
+The latter measures Euclidean distance to the input marching-cubes triangles,
+using the existing corner/edge/table convention and a band-sized cell search.
+It saturates at the authored band; there is no fixed search-size cap. This is
+exact for that piecewise-linear surface, with lattice discretization error.
+Both have standalone generated kernels, freeze bodies/access declarations,
+value proofs and a redistance→offset fused/unfused proof.
+
+For bin width b and Fill Pits f, d=f*b. The chain is volume → offset(−d) →
+redistance(band=d+b) → offset(+d) → existing smoothing → solid clamp → mesh.
+This is a distance rebuild between offsets, not offset/blur/offset. The input
+volume's cap and bin search expand to b/3+2d+one lattice-cell diagonal; the
+brick support also includes another b, covering the rebuilt field's full
+positive band and the existing filter/normal halo. Negative-inside sign is
+preserved. A nonzero closing has positive cap 2d+b after shrinking. Zero
+returns the original f32 bits and skips the distance search; copy dispatches
+remain. Three standalone dispatches are added; CPU fusion reports for all five
+presets combine redistance and shrinking, leaving two frozen dispatches, with dense
+redistance cost O(lattice nodes × (band / spacing)^3). No GPU timing or visual
+acceptance is established; the 6 ms budget must be measured by the GPU owner.
+
+The f64 reference proves two-sphere pit filling, reduced jittered-sheet height
+variance, lone-sphere radius within lattice error, and bit-identical zero.
+The retained P6e f64 replica was also evaluated on the 116,307-particle settle
+capture at 8 s, x −1.75…−0.3, z −0.5…0.5, dx/3 spacing, particle scale 2.2,
+isolated scale 1, raw level set (no lattice blur or mesh relaxation):
+
+| Stretch / centre smoothing | Slope RMS 1–2 dx | 2–4 dx | over 4 dx | Curvature std (1/m) |
+|---|---|---|---|---|
+| 1 / 0 | 19.08° | 4.01° | 4.49° | 41.51 |
+| 4 / 0.5 | 28.12° | 7.02° | 4.98° | 69.45 |
+| 4 / 1 | 39.29° | 13.60° | 6.03° | 119.78 |
+
+These isolated-kernel replica numbers are not GPU measurements, a chosen
+look, or a promise that increasing either dial improves a given scene.
+P6e's dimpled CPU comparator is not the artistic target. Fill Pits is proven
+on the small geometric fixtures above; full settle closing metrics are not
+available here.
+
 ### P7 — Add Fluid authors the GPU surface
 
 - **Entry state:** P6 merged. Anchors: `rg -n 'pub struct AddSceneFluidCommand|scene_build_wire\(fluid_id, "vertices"' crates/manifold-editing/src/commands/graph/scene/fluid.rs`.

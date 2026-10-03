@@ -198,6 +198,7 @@ fn spec_from_binding(
         ParamConvert::IntRound | ParamConvert::EnumRound | ParamConvert::Trigger
     );
     crate::effect_graph_def::ParamSpecDef {
+        tooltip: None,
         id: b.id.clone(),
         name: b.label.clone(),
         min: 0.0,
@@ -231,6 +232,7 @@ fn placeholder_spec(
     entry: &ParamEntryWire,
 ) -> crate::effect_graph_def::ParamSpecDef {
     crate::effect_graph_def::ParamSpecDef {
+        tooltip: None,
         id: id.to_string(),
         name: id.to_string(),
         min: 0.0,

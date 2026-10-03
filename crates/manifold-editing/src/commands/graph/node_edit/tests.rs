@@ -231,6 +231,7 @@ fn remove_graph_node_prunes_bound_card_slider_and_undo_restores() {
         is_line_based: false,
         layer_types: None,
         params: vec![ParamSpecDef {
+            tooltip: None,
             id: "amount".into(),
             name: "Amount".into(),
             min: 0.0,
@@ -371,6 +372,7 @@ fn remove_group_node_prunes_card_slider_bound_to_a_nested_node() {
         is_line_based: false,
         layer_types: None,
         params: vec![ParamSpecDef {
+            tooltip: None,
             id: "amount".into(),
             name: "Amount".into(),
             min: 0.0,

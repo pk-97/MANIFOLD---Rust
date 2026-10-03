@@ -168,6 +168,7 @@ mod tests {
 
     fn spec(id: &str, default: f32, curve: MacroCurve) -> ParamSpecDef {
         ParamSpecDef {
+            tooltip: None,
             id: id.into(),
             name: id.into(),
             min: 0.0,

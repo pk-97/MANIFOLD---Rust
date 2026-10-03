@@ -136,6 +136,20 @@ pub(crate) fn render_tree_overlay_passes(
     // Effect card drag ghost + text input — TOOLTIP depth, above every
     // overlay.
     ui_renderer.push_depth(Depth::TOOLTIP);
+    if text_input.is_none() && ui_root.input.pressed_widget().is_none()
+        && let Some(node) = ui_root.input.hovered_node(&ui_root.tree)
+            .and_then(|id| ui_root.tree.get_node(id))
+        && let Some(help) = node.tooltip.as_deref()
+    {
+        let size = ui_renderer.measure_text_cached(help, 11, manifold_ui::node::FontWeight::Medium);
+        let width = size.x + 14.0;
+        let height = size.y + 14.0;
+        let x = node.bounds.x.min((logical_w as f32 - width).max(0.0));
+        let y = (node.bounds.y_max() + 4.0).min((logical_h as f32 - height).max(0.0));
+        ui_renderer.draw_rounded_rect(x, y, width, height,
+            manifold_ui::node::Color32::new(28, 28, 32, 250), 4.0);
+        ui_renderer.draw_text(x + 7.0, y + 7.0, help, 11.0, [235, 235, 240, 255]);
+    }
     if let Some(start) = ui_root.inspector.card_drag_first_node() {
         ui_renderer.render_tree_range(&ui_root.tree, start, usize::MAX);
     }

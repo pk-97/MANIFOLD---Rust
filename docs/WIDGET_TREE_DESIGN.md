@@ -221,6 +221,10 @@ Peter's rule (quoted in the intro) is standing: **agents never build their own i
 
 ---
 
+Manifest `tooltip` text follows the same descriptor path: `ParamSpecDef` →
+`RowSpec` → the shared slider builder’s tree nodes. The shared tree overlay
+pass paints it on hover in either window; no scene-specific rows or handlers.
+
 ## 6. Invariants & enforcement
 
 | Invariant | Enforcement (machine check, by name) |

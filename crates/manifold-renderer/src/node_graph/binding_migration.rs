@@ -135,6 +135,7 @@ mod tests {
             is_line_based: false,
                 layer_types: None,
             params: vec![ParamSpecDef {
+                tooltip: None,
                 id: id.to_string(),
                 name: inner.to_string(),
                 min: 0.0,

@@ -48,6 +48,7 @@ fn body(
     bins_x: i32,
     bins_y: i32,
     bins_z: i32,
+    band_extra: f32,
 ) -> f32 {
     let band = cell_size / 3.0;
     let solid_nodes = max(vec3<u32>(vec3<f32>(nodes_x, nodes_y, nodes_z)), vec3<u32>(2u));

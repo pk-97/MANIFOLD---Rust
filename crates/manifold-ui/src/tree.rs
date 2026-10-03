@@ -335,6 +335,7 @@ impl UITree {
             flags: UIFlags::VISIBLE | UIFlags::DIRTY | extra_flags,
             style,
             text: text.map(String::from),
+            tooltip: None,
             texture: None,
             uv: [0.0, 0.0, 1.0, 1.0],
             draw_order: self.count as i32,

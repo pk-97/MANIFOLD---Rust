@@ -43,7 +43,7 @@ struct BrickUniforms {
     bricks_y: u32,
     bricks_z: u32,
     brick_count: u32,
-    _pad0: u32,
+    band_extra: f32,
     _pad1: u32,
 }
 
@@ -269,6 +269,7 @@ crate::primitive! {
         size_x: ScalarF32 optional, size_y: ScalarF32 optional, size_z: ScalarF32 optional,
         nodes_x: ScalarF32 optional, nodes_y: ScalarF32 optional, nodes_z: ScalarF32 optional,
         cell_size: ScalarF32 optional,
+        band_extra: ScalarF32 optional,
         bins_x: ScalarF32 optional, bins_y: ScalarF32 optional, bins_z: ScalarF32 optional,
     },
     outputs: {
@@ -289,6 +290,7 @@ crate::primitive! {
         bin_param!("bins_x", "Bins X"),
         bin_param!("bins_y", "Bins Y"),
         bin_param!("bins_z", "Bins Z"),
+        float_param!("band_extra", "Extra Distance Band", 0.0, 0.0, 100.0),
     ],
     depth_rule: Terminal,
     composition_notes: "Wire blobs and cell_ranges from the particle surface's sort and shape nodes, solid from the same lattice capacity as node.particle_volume, and center/size/nodes/cell_size/bins from those same producers. Feed the output to every sparse liquid-surface stage. The header's indirect grid is [2*active_count,1,1], the dense mask clears retired bricks each frame, and the boundary bricks stay active even for an empty frame. This is a barriered producer with a PrefixScan, so it is a graph fusion boundary.",
@@ -440,7 +442,7 @@ impl Primitive for LatticeBricks {
             bricks_y: layout.bricks[1],
             bricks_z: layout.bricks[2],
             brick_count: layout.count,
-            _pad0: 0,
+            band_extra: ctx.scalar_or_param("band_extra", 0.0),
             _pad1: 0,
         };
         let bindings = [

@@ -1120,6 +1120,7 @@ mod tests {
                 layer_types: None,
                 params: vec![
                     ParamSpecDef {
+                        tooltip: None,
                         id: "shape".into(),
                         name: "Shape".into(),
                         min: 0.0,
@@ -1141,6 +1142,7 @@ mod tests {
                         material_role: None,
                     },
                     ParamSpecDef {
+                        tooltip: None,
                         id: "scale".into(),
                         name: "Scale".into(),
                         min: 0.25,
@@ -1391,6 +1393,7 @@ mod tests {
                 layer_types: None,
                 params: vec![
                     ParamSpecDef {
+                        tooltip: None,
                         id: "shape".into(),
                         name: "Shape".into(),
                         min: 0.0,
@@ -1412,6 +1415,7 @@ mod tests {
                         material_role: None,
                     },
                     ParamSpecDef {
+                        tooltip: None,
                         id: "user.render.animate.1".into(),
                         name: "Animate".into(),
                         min: 0.0,
@@ -1849,6 +1853,7 @@ mod tests {
                 is_line_based: false,
                 layer_types: None,
                 params: vec![ParamSpecDef {
+                    tooltip: None,
                     id: "pattern".into(),
                     name: "Pattern".into(),
                     min: 0.0,

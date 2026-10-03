@@ -102,6 +102,7 @@ mod tests {
                 is_line_based: false,
                     layer_types: None,
                 params: vec![ParamSpecDef {
+                    tooltip: None,
                     id: "speed".to_string(),
                     name: "Speed".to_string(),
                     min: 0.0,

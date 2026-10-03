@@ -776,6 +776,7 @@ mod tests {
     #[test]
     fn registry_seeding_preserves_the_authored_spec() {
         let spec = ParamSpecDef {
+            tooltip: None,
             id: "cam_tilt".to_string(),
             name: "Camera Tilt".to_string(),
             min: -std::f32::consts::PI,
@@ -891,6 +892,7 @@ mod tests {
             is_line_based: false,
                 layer_types: None,
             params: vec![ParamSpecDef {
+                tooltip: None,
                 id: "amount".to_string(),
                 name: "Amount".to_string(),
                 min: 0.0,
@@ -988,6 +990,7 @@ mod tests {
             is_line_based: false,
                 layer_types: None,
             params: vec![ParamSpecDef {
+                tooltip: None,
                 id: "amount".to_string(),
                 name: "Amount".to_string(),
                 min: 0.0,

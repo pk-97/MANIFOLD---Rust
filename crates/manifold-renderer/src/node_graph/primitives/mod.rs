@@ -1061,3 +1061,9 @@ mod fluid_role_source;
 pub(crate) mod physics_world;
 pub(crate) use gltf_animation_source::quat_to_render_scene_euler;
 mod platonic_mesh;
+
+pub mod offset_lattice;
+pub mod redistance_lattice;
+
+#[cfg(test)]
+mod lattice_closing_tests;

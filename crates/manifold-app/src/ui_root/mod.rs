@@ -1777,6 +1777,7 @@ mod tick_parity_tests {
             rows: vec![manifold_ui::ParamRow {
                 id: std::borrow::Cow::Borrowed("amount"),
                 spec: manifold_ui::RowSpec {
+                    tooltip: None,
                     name: "Amount".into(),
                     min: 0.0,
                     max: 1.0,

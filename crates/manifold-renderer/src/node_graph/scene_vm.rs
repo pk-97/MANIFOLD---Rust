@@ -1397,6 +1397,24 @@ fn trace_scene_object(
         }
     }
 
+    if liquid_domain.is_some() {
+        // Surface controls belong to the water whose mesh consumes them.
+        // Stay inside this mesh level: group inputs are the ownership boundary
+        // for simulation, collider and source objects in the enclosing scene.
+        let mut pending: Vec<u32> = cursor.map(|(id, _)| id).into_iter().collect();
+        let mut seen = HashSet::new();
+        while let Some(id) = pending.pop() {
+            if !seen.insert(id) { continue; }
+            let Some(source) = current_level.node(id) else { continue; };
+            if source.type_id == manifold_core::effect_graph_def::GROUP_INPUT_TYPE_ID
+                || manifold_core::liquid_domain::is_liquid_domain(&source.type_id)
+            { continue; }
+            own(source);
+            pending.extend(current_level.wires.iter().filter(|wire| wire.to_node == id)
+                .map(|wire| wire.from_node));
+        }
+    }
+
     if group_node_id.is_some() {
         level.nodes.iter().filter(|node| node.type_id == "node.fluid_role_source").for_each(&mut own);
     }

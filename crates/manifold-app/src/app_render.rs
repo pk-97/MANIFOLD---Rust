@@ -3736,6 +3736,7 @@ mod bound_node_param_drag_tests {
         let mut fx = PresetInstance::new(PresetTypeId::new("Test"));
         let effect_id = fx.id.clone();
         fx.params.push(Param::bundled(ParamSpecDef {
+            tooltip: None,
             id: "amount".into(),
             name: "Amount".into(),
             min: 0.0,

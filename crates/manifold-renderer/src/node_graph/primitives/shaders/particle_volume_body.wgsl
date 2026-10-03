@@ -2,7 +2,8 @@
 // node.particle_volume — fusable BUFFER body, GATHER. One thread per level-set
 // node: the distance to the nearest blob ellipsoid in the node's 27 bins,
 // a·(|G·(x − c)| − 1) with a the blob's longest axis (exact for a sphere),
-// negative inside, capped at band = 1/3 bin outside (GPU_FLUID_SURFACE_DESIGN.md
+// negative inside, capped at band = 1/3 bin + extra + cell diagonal outside
+// (extra zero preserves the original 1/3-bin cap exactly) (GPU_FLUID_SURFACE_DESIGN.md
 // D18, P6e; never an atomic splat). node.shape_particle_blobs keeps every blob
 // within 2/3 bin of its particle, so a blob the search misses is at least band
 // away and the cap is exact. Band = half the reach is the FLIP Fluids mesher's
@@ -83,13 +84,17 @@ fn body(
     bins_x: i32,
     bins_y: i32,
     bins_z: i32,
+    band_extra: f32,
     brick_pass: u32,
     interior_len: u32,
 ) -> f32 {
-    let band = cell_size / 3.0;
+
     let solid_nodes = max(vec3<u32>(vec3<f32>(nodes_x, nodes_y, nodes_z)), vec3<u32>(2u));
     let scale = u32(clamp(resolution_scale, 1, 8));
     let nodes = (solid_nodes - vec3<u32>(1u)) * scale + vec3<u32>(1u);
+    let margin = length(vec3<f32>(size_x,size_y,size_z) / vec3<f32>(nodes - vec3<u32>(1u)));
+    let extra = band_extra + select(0.0, margin, band_extra > 0.0);
+    let band = cell_size / 3.0 + extra;
     let bins = vec3<i32>(bins_x, bins_y, bins_z);
     if idx >= nodes.x * nodes.y * nodes.z {
         return band;
@@ -108,9 +113,10 @@ fn body(
     var phi = band;
     if brick_pass != 2u {
         let home = clamp(vec3<i32>(floor((p - lattice_min) / cell_size)), vec3<i32>(0), bins - vec3<i32>(1));
-        for (var dz = -1; dz <= 1; dz = dz + 1) {
-            for (var dy = -1; dy <= 1; dy = dy + 1) {
-                for (var dx = -1; dx <= 1; dx = dx + 1) {
+        let reach_bins = i32(ceil(1.0 + extra / cell_size));
+        for (var dz = -reach_bins; dz <= reach_bins; dz = dz + 1) {
+            for (var dy = -reach_bins; dy <= reach_bins; dy = dy + 1) {
+                for (var dx = -reach_bins; dx <= reach_bins; dx = dx + 1) {
                     let b = home + vec3<i32>(dx, dy, dz);
                     if any(b < vec3<i32>(0)) || any(b >= bins) {
                         continue;

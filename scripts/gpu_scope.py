@@ -147,6 +147,12 @@ NARROW_ROWS = [
 # Explicit rows: (path substrings, (filters, skips)). `rt_` skips particletext:
 # the freeze proof `particletext_*` hangs the GPU on main (BUG-i6eo).
 EXPLICIT_ROWS = [
+    ((RENDERER_SRC + "node_graph/primitives/offset_lattice",
+      RENDERER_SRC + "node_graph/primitives/redistance_lattice",
+      RENDERER_SRC + "node_graph/primitives/lattice_closing",
+      RENDERER_SRC + "node_graph/primitives/shaders/offset_lattice",
+      RENDERER_SRC + "node_graph/primitives/shaders/redistance_lattice"),
+     (["fluid_fill_pits"], [])),
     (("crates/manifold-gpu/src/metal/raytrace.rs",
       RENDERER_SRC + "node_graph/primitives/render_scene.rs",
       RENDERER_SRC + "node_graph/primitives/shaders/render_scene.wgsl",

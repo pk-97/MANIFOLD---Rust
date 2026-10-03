@@ -36,10 +36,11 @@ struct VolumeUniforms {
     bins_x: i32,
     bins_y: i32,
     bins_z: i32,
+    band_extra: f32,
     brick_pass: u32,
     interior_len: u32,
     dispatch_count: u32,
-    _pad: [u32; 3],
+    _pad: [u32; 2],
 }
 
 /// Level-set nodes per axis: `(n − 1)·m + 1` over the solid lattice's box.
@@ -58,7 +59,7 @@ pub(crate) fn volume_scale(params: &ParamValues) -> u32 {
 crate::primitive! {
     name: ParticleVolume,
     type_id: "node.particle_volume",
-    purpose: "The liquid's level set on a lattice: at each node, the distance to the nearest kernel ellipsoid, a·(|G·(x − c)| − 1) with a the kernel's longest axis (exact for spheres), negative inside and capped a third of a bin outside (half the kernel reach, the FLIP Fluids mesher's ratio, so a marching-cubes crossing a lattice step away is exact). The lattice is the solid lattice (nodes_x/y/z over the center/size box) refined resolution_scale times per cell. Nodes inside a solid are never inside the liquid and the border is outside, so the surface closes.",
+    purpose: "The liquid's level set on a lattice: at each node, the distance to the nearest kernel ellipsoid, a·(|G·(x − c)| − 1) with a the kernel's longest axis (exact for spheres), negative inside and capped at a third of a bin outside by default; positive band_extra adds that distance plus one lattice-cell diagonal so an offset crossing retains its interpolation support. The lattice is the solid lattice (nodes_x/y/z over the center/size box) refined resolution_scale times per cell. Nodes inside a solid are never inside the liquid and the border is outside, so the surface closes.",
     inputs: {
         blobs: Array(FluidBlob) required,
         cell_ranges: Array(CellRange) required,
@@ -69,6 +70,7 @@ crate::primitive! {
         size_x: ScalarF32 optional, size_y: ScalarF32 optional, size_z: ScalarF32 optional,
         nodes_x: ScalarF32 optional, nodes_y: ScalarF32 optional, nodes_z: ScalarF32 optional,
         cell_size: ScalarF32 optional,
+        band_extra: ScalarF32 optional,
         bins_x: ScalarF32 optional, bins_y: ScalarF32 optional, bins_z: ScalarF32 optional,
     },
     outputs: {
@@ -97,6 +99,7 @@ crate::primitive! {
         bin_param!("bins_x", "Bins X"),
         bin_param!("bins_y", "Bins Y"),
         bin_param!("bins_z", "Bins Z"),
+        float_param!("band_extra", "Extra Distance Band", 0.0, 0.0, 100.0),
     ],
     depth_rule: Terminal,
     composition_notes: "Wire blobs from node.shape_particle_blobs, cell_ranges and bins_x/y/z from the same node.sort_particles_into_cells (the bins are the sort's, never worked out again on the GPU; cell_ranges must hold one range per bin or nothing runs, a named error; all three unwired takes the sort's CPU rule on the shared box, checked the same way), and the producer's solid lattice (solid_b, grid_nodes_x/y/z, grid_bounds through node.transform_components). Optionally wire the narrow-band solver's cell-centred interior distance, with exactly one value per authored physical cell: the solid lattice has three padding nodes on every side, so the extent is (solid_nodes - 7)^3; an unwired input preserves the dense particle path. resolution_scale sets mesh detail (2–4 per simulation cell) and the allocation (solid capacity × scale³); it is not a live wire. The blobs' particle_scale sets how far the surface sits from the particles. volume_nodes_x/y/z carry the refined lattice to node.count_surface_triangles and node.volume_surface_mesh.",
@@ -179,10 +182,11 @@ impl Primitive for ParticleVolume {
             bins_x: 0,
             bins_y: 0,
             bins_z: 0,
+            band_extra: ctx.scalar_or_param("band_extra", 0.0),
             brick_pass: 0,
             interior_len: 0,
             dispatch_count: 0,
-            _pad: [0; 3],
+            _pad: [0; 2],
         };
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
