@@ -44,6 +44,7 @@ fn enqueue(runtime: &mut FluidRuntime, sequence: u64, time: f64, x: f32) -> Tick
 
 #[test]
 fn fluid_impulse_stamp_tracks_target_time_from_exact_transport() {
+    let _live = crate::node_graph::physics::PhysicsStepScope::for_render(false);
     let mut runtime = FluidRuntime::default();
     assert!(
         runtime
@@ -66,17 +67,24 @@ fn fluid_impulse_stamp_tracks_target_time_from_exact_transport() {
         .unwrap();
     assert_eq!(
         runtime.impulse_stamp(Seconds(6.0), 2).unwrap().time,
-        Seconds(2.0)
+        Seconds(1.0)
     );
     runtime
         .observe(empty_settings(), controls(), Seconds(6.0), 2.0, 0.0)
         .unwrap();
     assert_eq!(
         runtime.impulse_stamp(Seconds(6.0), 3).unwrap().time,
-        Seconds(2.0)
+        Seconds(1.0)
+    );
+    runtime
+        .observe(empty_settings(), controls(), Seconds(7.0), 2.0, 0.0)
+        .unwrap();
+    assert_eq!(
+        runtime.impulse_stamp(Seconds(7.0), 4).unwrap().time,
+        Seconds(3.0)
     );
     assert!(runtime
-        .impulse_stamp(Seconds(6.0 + 1e-9), 4)
+        .impulse_stamp(Seconds(7.0 + 1e-9), 5)
         .is_err());
 }
 

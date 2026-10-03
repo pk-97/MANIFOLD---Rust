@@ -94,6 +94,7 @@ pub(crate) struct BodyPasses {
     pipelines: Option<Pipelines>,
     partials: Option<GpuBuffer>,
     sums: Option<GpuBuffer>,
+    clock_plan: Option<GpuBuffer>,
 }
 
 fn records(n: [u32; 3]) -> u64 {
@@ -150,6 +151,19 @@ impl BodyPasses {
         if self.pipelines.is_none() {
             self.pipelines = Some(Self::pipelines(device));
         }
+        if self.clock_plan.is_none() {
+            let plan = device.create_buffer_shared(48);
+            plan.zero_fill();
+            self.clock_plan = Some(plan);
+        }
+    }
+
+    pub(crate) fn set_clock_plan(&mut self, plan: &GpuBuffer) {
+        self.clock_plan = Some(plan.clone());
+    }
+
+    fn clock_binding(&self) -> GpuBinding<'_> {
+        buffer(15, self.clock_plan.as_ref().expect("body clock plan prepared"))
     }
 
     /// Allocate the sums once and the partials for `count` bodies on
@@ -241,6 +255,7 @@ impl BodyPasses {
                 buffer(7, partials),
                 buffer(12, tiles[0]),
                 buffer(14, tiles[2]),
+                self.clock_binding(),
             ],
             [tile_groups(bodies.lattice), bodies.count.max(1), 1],
             "gpu_flip.bodies.partial",
@@ -253,6 +268,7 @@ impl BodyPasses {
             buffer(7, partials),
             buffer(8, sums),
             buffer(13, tiles[1]),
+            self.clock_binding(),
             buffer(9, reaction.unwrap_or(sums)),
         ];
         let bound = if reaction.is_some() { finalize.len() } else { finalize.len() - 1 };
@@ -286,6 +302,7 @@ impl BodyPasses {
                 buffer(10, s),
                 buffer(12, tiles[0]),
                 buffer(14, tiles[2]),
+                self.clock_binding(),
             ],
             [tile_groups(bodies.lattice), 1, 1],
             "gpu_flip.bodies.product",
@@ -314,6 +331,7 @@ impl BodyPasses {
                 buffer(4, bodies.bodies),
                 buffer(8, sums),
                 buffer(11, bodies.solid),
+                self.clock_binding(),
             ],
             groups(records(bodies.lattice)),
             "gpu_flip.bodies.velocity_change",

@@ -13,6 +13,27 @@
 // two halves per word) are gathered; the output is one f32 per node. Poses
 // and sampling are liquid_pose.wgsl's and liquid_collider.wgsl's.
 
+struct ClockPlan {
+    step_dt: f32,
+    elapsed: f32,
+    remaining: f32,
+    maximum_speed: f32,
+    cap_hit: u32,
+    nonfinite: u32,
+    step_index: u32,
+    event: u32,
+    numerical_end: f32,
+    marker_limit: f32,
+    _pad0: u32,
+    live_mode: u32,
+};
+
+@group(0) @binding(5) var<storage, read> clock_plan: array<ClockPlan>;
+
+fn adaptive_tick_seconds(tick_seconds: f32) -> f32 {
+    return select(tick_seconds, clock_plan[0].elapsed, clock_plan[0].live_mode != 0u);
+}
+
 fn liquid_atlas_half(index: u32) -> f32 {
     let pair = unpack2x16float(buf_atlas[index / 2u]);
     return select(pair.x, pair.y, (index & 1u) == 1u);
@@ -63,8 +84,9 @@ fn body(
             continue;
         }
         // The pose after tick_seconds, as node.matter_move_bodies moves it.
-        let position = bd.position_inv_mass.xyz + bd.linear_velocity.xyz * tick_seconds;
-        let q = liquid_turn(bd.rotation, bd.angular_velocity.xyz, tick_seconds);
+        let pose_time = adaptive_tick_seconds(tick_seconds);
+        let position = bd.position_inv_mass.xyz + bd.linear_velocity.xyz * pose_time;
+        let q = liquid_turn(bd.rotation, bd.angular_velocity.xyz, pose_time);
         let sh = buf_shapes[u32(shape_index)];
         let dims = vec3<u32>(sh.dims_x, sh.dims_y, sh.dims_z);
         let g = liquid_lattice_coord(x, position, q, sh.origin_spacing, sh.scale_min.xyz);

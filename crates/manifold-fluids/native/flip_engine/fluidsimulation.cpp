@@ -8432,6 +8432,8 @@ float FluidSimulation::_getMarkerParticleSpeedLimit(double dt) {
 
 void FluidSimulation::_removeMarkerParticles(double dt) {
 
+    _recoverNonfiniteMarkerVelocities();
+
     AABB boundaryAABB = _getBoundaryAABB();
     vmath::vec3 minp = boundaryAABB.getMinPoint();
     vmath::vec3 maxp = boundaryAABB.getMaxPoint();
@@ -11036,6 +11038,7 @@ void FluidSimulation::_stepFluid(double dt) {
         _updateSheetSeeding();
         _updateMarkerParticleVelocities();
         _deleteSavedVelocityField();
+        _recoverNonfiniteMarkerVelocities();
         _advanceMarkerParticles(dt);
         _updateFluidObjects();
         _updateMarkerParticleAttributes(dt);
@@ -11125,6 +11128,40 @@ double FluidSimulation::_getMaximumMarkerParticleSpeed() {
     return sqrt(maxsq);
 }
 
+void FluidSimulation::_recoverNonfiniteMarkerVelocities() {
+    if (!_isLiveExternallySteppedUpdate) {
+        return;
+    }
+
+    std::vector<vmath::vec3> *positions;
+    std::vector<vmath::vec3> *velocities;
+    _markerParticles.getAttributeValues("POSITION", positions);
+    _markerParticles.getAttributeValues("VELOCITY", velocities);
+    _liveNonfiniteMarkerRemovals.resize(positions->size());
+    std::fill(_liveNonfiniteMarkerRemovals.begin(),
+              _liveNonfiniteMarkerRemovals.end(), false);
+    for (size_t index = 0; index < velocities->size(); index++) {
+        vmath::vec3 &velocity = velocities->at(index);
+        if (!std::isfinite(velocity.x) || !std::isfinite(velocity.y) ||
+                !std::isfinite(velocity.z)) {
+            velocity = vmath::vec3(0.0f, 0.0f, 0.0f);
+            _liveNumericalRecovery = true;
+        }
+        const vmath::vec3 &position = positions->at(index);
+        if (!std::isfinite(position.x) || !std::isfinite(position.y) ||
+                !std::isfinite(position.z)) {
+            _liveNonfiniteMarkerRemovals[index] = true;
+            _liveNumericalRecovery = true;
+        }
+    }
+    if (std::any_of(_liveNonfiniteMarkerRemovals.begin(),
+                    _liveNonfiniteMarkerRemovals.end(), [](bool remove) {
+            return remove;
+        })) {
+        _markerParticles.removeParticles(_liveNonfiniteMarkerRemovals);
+    }
+}
+
 double FluidSimulation::_getMaximumObstacleSpeed(double dt) {
     if (!_isAdaptiveObstacleTimeSteppingEnabled && !_rigidCoupling) {
         return 0.0;
@@ -11161,6 +11198,8 @@ double FluidSimulation::_getMaximumObstacleSpeed(double dt) {
 }
 
 double FluidSimulation::_calculateNextTimeStep(double dt) {
+    _recoverNonfiniteMarkerVelocities();
+
     double maxu = 0.0;
     if (_currentFrame == 0 && _currentFrameTimeStepNumber == 0) {
         // Fluid has not yet been added to the simulation, so estimate the
@@ -11187,7 +11226,26 @@ double FluidSimulation::_calculateNextTimeStep(double dt) {
         timeStep = std::min(timeStep, 1.0 / (_colorAttributeMixingRate + eps));
     }
 
-    int estimatedNumFrameSubsteps = std::max((int)std::ceil(dt / timeStep), 1);
+    if (!std::isfinite(timeStep) || timeStep <= 0.0) {
+        if (_isLiveExternallySteppedUpdate) {
+            _liveNumericalRecovery = true;
+            return dt;
+        }
+    }
+
+    double estimatedNumFrameSubstepsValue = std::ceil(dt / timeStep);
+    if (_isLiveExternallySteppedUpdate) {
+        if (!std::isfinite(estimatedNumFrameSubstepsValue)) {
+            _liveNumericalRecovery = true;
+            return dt;
+        }
+        if (estimatedNumFrameSubstepsValue > std::numeric_limits<int>::max()) {
+            // Keep the same ceil/division rule without an overflowing int
+            // conversion. Finite runaway speed is not a numerical fault.
+            return dt / estimatedNumFrameSubstepsValue;
+        }
+    }
+    int estimatedNumFrameSubsteps = std::max((int)estimatedNumFrameSubstepsValue, 1);
 
     timeStep = dt / estimatedNumFrameSubsteps;
 
@@ -11355,7 +11413,7 @@ void FluidSimulation::_joinNativeThreadsNoexcept() noexcept {
     _isCalculateFluidCurvatureGridThreadRunning = false;
 }
 
-void FluidSimulation::_beginUpdate(double dt, bool externallyStepped) {
+void FluidSimulation::_beginUpdate(double dt, bool externallyStepped, bool liveExternallyStepped) {
     if (!_isSimulationInitialized) {
         throw std::runtime_error("Error: FluidSimulation must be initialized before update.\n");
     }
@@ -11401,6 +11459,11 @@ void FluidSimulation::_beginUpdate(double dt, bool externallyStepped) {
     _isCurrentFrameFinished = false;
     _isUpdateInProgress = true;
     _isExternallySteppedUpdate = externallyStepped;
+    _isLiveExternallySteppedUpdate = liveExternallyStepped;
+    _liveNumericalRecovery = false;
+    _liveCapHit = false;
+    _liveNumericalSubsteps = 0;
+    _liveOfferedTimeStepRemaining = 0.0;
     _hasOfferedUpdateTimeStep = false;
     _offeredUpdateTimeStep = 0.0;
 
@@ -11424,7 +11487,11 @@ void FluidSimulation::_beginUpdate(double dt, bool externallyStepped) {
 }
 
 void FluidSimulation::beginUpdate(double dt) {
-    _beginUpdate(dt, true);
+    _beginUpdate(dt, true, false);
+}
+
+void FluidSimulation::beginLiveUpdate(double dt) {
+    _beginUpdate(dt, true, true);
 }
 
 double FluidSimulation::nextUpdateTimeStep() {
@@ -11443,31 +11510,78 @@ double FluidSimulation::nextUpdateTimeStep() {
         return 0.0;
     }
 
-    if (_isExternallySteppedUpdate &&
+    if (_isExternallySteppedUpdate && !_isLiveExternallySteppedUpdate &&
             _currentFrameTimeStepNumber >= _maxFrameTimeSteps &&
             _currentFrameDeltaTimeRemaining > eps) {
         throw std::runtime_error("Error: externally stepped update exceeded the maximum frame substep count before exhausting the frame interval.\n");
     }
 
-    double substepTime = _currentFrameDeltaTime / (double)_minFrameTimeSteps;
-    double timeStep = fmin(_calculateNextTimeStep(_currentFrameDeltaTime),
-                           _currentFrameDeltaTimeRemaining);
-    double timeCompleted = _currentFrameDeltaTime - _currentFrameDeltaTimeRemaining;
-    double stepLimit = (_currentFrameTimeStepNumber + 1) * substepTime;
-    if (timeCompleted + timeStep > stepLimit) {
-        timeStep = fmin(substepTime, _currentFrameDeltaTimeRemaining);
-    }
-
-    if (!_isExternallySteppedUpdate && _currentFrameTimeStepNumber == _maxFrameTimeSteps - 1) {
+    const bool retainingLiveOffer = _isLiveExternallySteppedUpdate &&
+            _liveOfferedTimeStepRemaining > 0.0;
+    const bool liveAtCap = _isLiveExternallySteppedUpdate &&
+            _liveNumericalSubsteps >= _maxFrameTimeSteps - 1;
+    double timeStep;
+    if (retainingLiveOffer && !liveAtCap) {
+        // A rigid or user-authored event may clip an offered native step. Keep
+        // consuming that numerical offer across the split instead of starting
+        // a fresh numerical offer for each event boundary. A newly smaller
+        // CFL offer may shorten the retained remainder, but never lengthens it.
+        double refreshed = fmin(_calculateNextTimeStep(_currentFrameDeltaTime),
+                                _currentFrameDeltaTimeRemaining);
+        double substepTime = _currentFrameDeltaTime / (double)_minFrameTimeSteps;
+        double timeCompleted = _currentFrameDeltaTime - _currentFrameDeltaTimeRemaining;
+        double stepLimit = (_liveNumericalSubsteps + 1) * substepTime;
+        if (timeCompleted + refreshed > stepLimit) {
+            refreshed = fmin(substepTime, _currentFrameDeltaTimeRemaining);
+        }
+        timeStep = fmin(_liveOfferedTimeStepRemaining, refreshed);
+        if (timeStep < _liveOfferedTimeStepRemaining) {
+            _liveOfferedTimeStepRemaining = timeStep;
+        }
+    } else if (retainingLiveOffer) {
+        // Once the numerical cap is reached, the retained offer is the
+        // remainder itself. Do not replace that recovery path with a fresh
+        // CFL calculation.
+        _liveCapHit = true;
         timeStep = _currentFrameDeltaTimeRemaining;
+    } else {
+        double substepTime = _currentFrameDeltaTime / (double)_minFrameTimeSteps;
+        timeStep = fmin(_calculateNextTimeStep(_currentFrameDeltaTime),
+                        _currentFrameDeltaTimeRemaining);
+        double timeCompleted = _currentFrameDeltaTime - _currentFrameDeltaTimeRemaining;
+        const int scheduleStepNumber = _isLiveExternallySteppedUpdate
+                ? _liveNumericalSubsteps
+                : _currentFrameTimeStepNumber;
+        double stepLimit = (scheduleStepNumber + 1) * substepTime;
+        if (timeCompleted + timeStep > stepLimit) {
+            timeStep = fmin(substepTime, _currentFrameDeltaTimeRemaining);
+        }
+
+        const int liveStepNumber = _liveNumericalSubsteps;
+        if ((!_isExternallySteppedUpdate || _isLiveExternallySteppedUpdate) &&
+                (_isLiveExternallySteppedUpdate ? liveStepNumber : _currentFrameTimeStepNumber) >=
+                    _maxFrameTimeSteps - 1) {
+            if (_isLiveExternallySteppedUpdate) {
+                _liveCapHit = true;
+            }
+            timeStep = _currentFrameDeltaTimeRemaining;
+        }
     }
 
     if (!std::isfinite(timeStep) || timeStep <= 0.0) {
-        throw std::runtime_error("Error: FluidSimulation could not produce a finite positive frame substep.\n");
+        if (_isLiveExternallySteppedUpdate) {
+            _liveNumericalRecovery = true;
+            timeStep = _currentFrameDeltaTimeRemaining;
+        } else {
+            throw std::runtime_error("Error: FluidSimulation could not produce a finite positive frame substep.\n");
+        }
     }
 
     _offeredUpdateTimeStep = timeStep;
     _hasOfferedUpdateTimeStep = true;
+    if (_isLiveExternallySteppedUpdate && !retainingLiveOffer) {
+        _liveOfferedTimeStepRemaining = timeStep;
+    }
     return _offeredUpdateTimeStep;
 }
 
@@ -11514,8 +11628,13 @@ void FluidSimulation::advanceUpdate(double dt) {
 
         _stepFluid(_currentFrameTimeStep);
 
-        if (_isExternallySteppedUpdate && (!_pressureSolverSuccess || !_viscositySolverSuccess)) {
+        if (_isExternallySteppedUpdate && !_isLiveExternallySteppedUpdate &&
+                (!_pressureSolverSuccess || !_viscositySolverSuccess)) {
             throw std::runtime_error("Error: externally stepped update encountered a failed pressure or viscosity solve.\n");
+        }
+        if (_isLiveExternallySteppedUpdate &&
+                (!_pressureSolverSuccess || !_viscositySolverSuccess)) {
+            _liveNumericalRecovery = true;
         }
 
         if (_rigidCoupling) {
@@ -11533,6 +11652,14 @@ void FluidSimulation::advanceUpdate(double dt) {
         _totalFluidParticlesProcessedTime += stepTimer.getTime();
 
         _currentFrameTimeStepNumber++;
+        if (_isLiveExternallySteppedUpdate) {
+            _liveOfferedTimeStepRemaining =
+                fmax(0.0, _liveOfferedTimeStepRemaining - dt);
+            if (_liveOfferedTimeStepRemaining <= 0.0) {
+                _liveOfferedTimeStepRemaining = 0.0;
+                _liveNumericalSubsteps++;
+            }
+        }
         _hasOfferedUpdateTimeStep = false;
         _offeredUpdateTimeStep = 0.0;
     } catch (...) {
@@ -11580,6 +11707,11 @@ void FluidSimulation::finishUpdate() {
         _outputData.frameData.fluidParticles = (int)_markerParticles.size();
         _outputData.frameData.diffuseParticles = (int)(_diffuseMaterial.getDiffuseParticles()->size());
         _outputData.frameData.performanceScore = _currentPerformanceScore;
+        _outputData.frameData.capHit = _liveCapHit ? 1 : 0;
+        _outputData.frameData.numericalRecovery = _liveNumericalRecovery ? 1 : 0;
+        if (_liveNumericalRecovery) {
+            _logfile.logString("Live numerical recovery: non-finite marker or solver state.");
+        }
 
         _outputData.frameData.pressureSolverEnabled = 1;
         _outputData.frameData.pressureSolverSuccess = (int)_pressureSolverSuccess;

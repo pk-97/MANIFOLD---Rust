@@ -32,10 +32,13 @@ use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 
-use super::gpu_flip_bodies::{BodyPasses, Bodies, REACTION_FLOATS, body_refusal};
+use super::gpu_flip_bodies::{Bodies, BodyPasses, REACTION_FLOATS, body_refusal};
+use super::gpu_flip_clock::{
+    GpuFlipClock, GpuFlipClockInputs, GpuFlipClockParams, flags as clock_flags,
+};
 use super::gpu_flip_pressure::{MAX_ITERATIONS, PressureSolver, Solve, Stop, Water, lattice_refusal, level_lattices, level_refusal};
-use super::liquid_stats::SOLVER_WORDS;
 use super::liquid_solid_distance::{SolidDistanceJob, encode_solid_distance};
+use super::liquid_stats::SOLVER_WORDS;
 use super::prefix_scan::ScanLabels;
 use super::sort_particles_into_cells::{
     LIQUID_PARTICLE_READ, ParticleSorter, SortJob, SortLabels, float_param, int_param,
@@ -52,6 +55,7 @@ use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
 const STEP_SHADER: &str = include_str!("shaders/gpu_flip_step.wgsl");
+const MASK_SHADER: &str = include_str!("shaders/gpu_flip_commit_mask.wgsl");
 const NAME: &str = "GPU FLIP Step";
 
 /// Layers of valid faces the step's face grid holds around the water at
@@ -157,6 +161,16 @@ pub(crate) fn scratch_bytes(cells: [u32; 3], slots: u64, ring_max: u32) -> u64 {
         + pocket_sum_bytes(cells)
         + pocket_coarse_bytes(cells)
         + tile_scratch_bytes(cells, ring_max)
+        + mask_saved_bytes(cells, slots.max(1))
+}
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+fn mask_saved_bytes(cells: [u32; 3], slots: u64) -> u64 {
+    slots * size_of::<FluidParticle>() as u64
+        + face_bytes(cells)
+        + cell_bytes(cells)
+        + ZERO_BYTES
+        + (slots * 8 + u64::from(SOLVER_WORDS) * 4)
 }
 
 /// The coarse pockets' bytes: a state and a label per level-1 cell (every
@@ -251,7 +265,7 @@ pub(crate) struct StepParams {
     pub(crate) ring_cap: u32,
     /// [`ring_max`] for this step: the table's extent.
     pub(crate) ring_max: u32,
-    pub(crate) tile_pad: u32,
+    pub(crate) live_impulse_stride: u32,
 }
 
 /// One pass of the step's shader on its own, for the value proofs against
@@ -262,6 +276,9 @@ pub(crate) fn dispatch_pass(device: &GpuDevice, entry: &str, params: &StepParams
     let pipeline = device.create_compute_pipeline(&step_source(), entry, "node.gpu_flip_step");
     let mut bindings = vec![uniform(params)];
     bindings.extend(buffers.iter().map(|&(binding, b)| buffer(binding, b)));
+    let clock_plan = device.create_buffer_shared(48);
+    clock_plan.zero_fill();
+    bindings.push(buffer(42, &clock_plan));
     let mut enc = device.create_encoder("gpu_flip.step.pass");
     enc.dispatch_compute(&pipeline, &bindings, groups(threads), "gpu_flip.step.pass");
     enc.commit_and_wait_completed();
@@ -532,6 +549,7 @@ impl LatticeBuffers {
 #[derive(Default)]
 pub(crate) struct StepState {
     pipelines: Option<Pipelines>,
+    mask_pipeline: Option<GpuComputePipeline>,
     sorter: ParticleSorter,
     solver: PressureSolver,
     solid: Option<GpuComputePipeline>,
@@ -549,8 +567,15 @@ pub(crate) struct StepState {
     /// The face grid output: exactly [`face_bytes`] of the current lattice.
     faces: Option<GpuBuffer>,
     /// [`ZERO_BYTES`] zero bytes bound where an optional input is unwired.
+    saved_particles: Option<GpuBuffer>,
+    saved_faces: Option<GpuBuffer>,
+    saved_distance: Option<GpuBuffer>,
+    saved_reaction: Option<GpuBuffer>,
+    saved_capped: Option<GpuBuffer>,
     zeros: Option<GpuBuffer>,
     bodies: BodyPasses,
+    clock: Option<GpuFlipClock>,
+    clock_capacities: [u32; 3],
 }
 
 /// Zero bytes bound for an unwired input: the uniform-sized arrays, and an
@@ -779,8 +804,10 @@ pub(crate) fn atomic_sites_outside(source: &str, allowed: &[&str]) -> Vec<String
 }
 
 /// Everything one step reads, resolved before any pass is encoded.
+#[derive(Clone, Copy)]
 struct Step<'a> {
     params: StepParams,
+    clock_plan: &'a GpuBuffer,
     particles: &'a GpuBuffer,
     out: &'a GpuBuffer,
     /// Two words a slot: guarded RK3 stages and refused push-outs; then the
@@ -817,6 +844,13 @@ impl StepState {
         if self.pipelines.is_none() {
             self.pipelines = Some(Pipelines::new(device));
         }
+        if self.mask_pipeline.is_none() {
+            self.mask_pipeline = Some(device.create_compute_pipeline(
+                MASK_SHADER,
+                "commit_mask",
+                "gpu_flip.commit_mask",
+            ));
+        }
         self.sorter.prepare(device);
         self.emit_scan.prepare(device);
         self.solver.prepare_pipelines(device);
@@ -837,6 +871,45 @@ impl StepState {
             let zeros = device.try_create_buffer_shared(ZERO_BYTES)?;
             zeros.zero_fill();
             self.zeros = Some(zeros);
+        }
+        let saved_particle_bytes = slots.max(1) * size_of::<FluidParticle>() as u64;
+        if self
+            .saved_particles
+            .as_ref()
+            .is_none_or(|buffer| buffer.size < saved_particle_bytes)
+        {
+            self.saved_particles = Some(allocate(device, saved_particle_bytes)?);
+        }
+        let saved_face_bytes = face_bytes(cells);
+        if self
+            .saved_faces
+            .as_ref()
+            .is_none_or(|buffer| buffer.size < saved_face_bytes)
+        {
+            self.saved_faces = Some(allocate(device, saved_face_bytes)?);
+        }
+        let saved_distance_bytes = cell_bytes(cells);
+        if self
+            .saved_distance
+            .as_ref()
+            .is_none_or(|buffer| buffer.size < saved_distance_bytes)
+        {
+            self.saved_distance = Some(allocate(device, saved_distance_bytes)?);
+        }
+        if self
+            .saved_reaction
+            .as_ref()
+            .is_none_or(|buffer| buffer.size < ZERO_BYTES)
+        {
+            self.saved_reaction = Some(allocate(device, ZERO_BYTES)?);
+        }
+        let saved_capped_bytes = slots.max(1) * 8 + u64::from(SOLVER_WORDS) * 4;
+        if self
+            .saved_capped
+            .as_ref()
+            .is_none_or(|buffer| buffer.size < saved_capped_bytes)
+        {
+            self.saved_capped = Some(allocate(device, saved_capped_bytes)?);
         }
         self.sorter.reserve_ranges(device, cells)?;
         if self.lattice.as_ref().is_none_or(|l| l.cells != cells) {
@@ -875,6 +948,36 @@ impl StepState {
             self.emit_scan.buffer(device, emit_sites(cells) as usize)?;
         }
         Ok(())
+    }
+
+    fn  commit_mask(
+        &self,
+        enc: &mut GpuEncoder,
+        plan: &GpuBuffer,
+        target: &GpuBuffer,
+        saved: &GpuBuffer,
+        label: &'static str,
+    ) {
+        let words = (target.size.min(saved.size) / 4).min(u64::from(u32::MAX)) as u32;
+        if words == 0 {
+            return;
+        }
+        let params = [words, 0, 0, 0];
+        enc.dispatch_compute(
+            self.mask_pipeline.as_ref().expect("mask pipeline prepared"),
+            &[
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&params),
+                },
+                buffer(1, plan),
+                buffer(2, target),
+                buffer(3, saved),
+            ],
+            groups(u64::from(words)),
+            label,
+        );
+        enc.compute_memory_barrier_buffers();
     }
 
     fn encode(&mut self, device: &GpuDevice, enc: &mut GpuEncoder, step: &Step<'_>) -> Result<(), String> {
@@ -925,6 +1028,7 @@ impl StepState {
                 shapes: step.shapes,
                 atlas: step.atlas,
                 out: &l.corners,
+                clock_plan: step.clock_plan,
             },
             "gpu_flip.step.solid_distance",
         );
@@ -948,6 +1052,7 @@ impl StepState {
                     buffer(15, step.shapes),
                     buffer(16, step.atlas),
                     buffer(36, step.regions),
+                    buffer(42, step.clock_plan),
                     buffer(37, &scan),
                 ];
                 enc.compute_memory_barrier_buffers();
@@ -966,6 +1071,7 @@ impl StepState {
                         buffer(15, step.shapes),
                         buffer(16, step.atlas),
                         buffer(36, step.regions),
+                        buffer(42, step.clock_plan),
                         buffer(37, &scan),
                         buffer(38, sorted),
                     ],
@@ -1034,6 +1140,7 @@ impl StepState {
                 buffer(15, step.shapes),
                 buffer(16, step.atlas),
                 buffer(36, step.regions),
+                buffer(42, step.clock_plan),
             ],
             face_groups,
             "gpu_flip.step.forces",
@@ -1054,6 +1161,7 @@ impl StepState {
                 buffer(15, step.shapes),
                 buffer(16, step.atlas),
                 buffer(21, step.reaction),
+                buffer(42, step.clock_plan),
             ],
             face_groups,
             "gpu_flip.step.solid_velocity",
@@ -1122,6 +1230,7 @@ impl StepState {
             solid: &l.v,
             bodies: step.bodies,
         };
+        self.bodies.set_clock_plan(step.clock_plan);
         if step.dynamic {
             self.bodies.prepare(device, cells, coupled.count)?;
             #[cfg(all(test, feature = "gpu-proofs"))]
@@ -1214,6 +1323,7 @@ impl StepState {
                 buffer(15, step.shapes),
                 buffer(16, step.atlas),
                 buffer(36, step.regions),
+                buffer(42, step.clock_plan),
             ],
             groups(u64::from(p.particles)),
             "gpu_flip.step.move",
@@ -1264,7 +1374,7 @@ crate::primitive! {
         impulse_tick: ScalarF32 optional,
         first_tick: ScalarF32 optional,
         tick_index: ScalarF32 optional,
-        bodies: Array(LiquidBody) optional,
+        interval_duration: ScalarF32 optional, bodies: Array(LiquidBody) optional,
         shapes: Array(LiquidShape) optional,
         atlas: Array(u32) optional,
         body_count: ScalarF32 optional,
@@ -1275,7 +1385,12 @@ crate::primitive! {
         dynamic_bodies: ScalarF32 optional,
         closed_faces: ScalarF32 optional,
         solve_level: ScalarF32 optional,
-    },
+        clock_obstacles: Array(f32) optional,
+        clock_obstacle_count: ScalarF32 optional,
+        clock_sources: Array(f32) optional,
+        clock_source_count: ScalarF32 optional,
+        live_hits: Array(f32) optional,
+        live_hit_count: ScalarF32 optional},
     outputs: {
         out: Array(FluidParticle),
         faces: Array(FaceSample),
@@ -1286,6 +1401,7 @@ crate::primitive! {
         face_valid_layers: ScalarF32,
         reaction_out: Array(f32),
         capped: Array(u32),
+        clock_status: Array(u32),
     },
     params: [
         float_param!("lattice_min_x", "Lattice Min X", -2.1875, -1.0e4, 1.0e4),
@@ -1367,6 +1483,7 @@ impl Primitive for GpuFlipStep {
             "faces" | "distance" => Some(1),
             "reaction_out" => inputs.iter().find(|(name, _)| *name == "reaction").map(|&(_, n)| n),
             "capped" => inputs.iter().find(|(name, _)| *name == "particles").map(|&(_, n)| n.saturating_mul(2).saturating_add(SOLVER_WORDS)),
+            "clock_status" => Some(8),
             _ => None,
         }
     }
@@ -1411,11 +1528,16 @@ impl Primitive for GpuFlipStep {
             return;
         }
         let count = match ctx.inputs.scalar("count") {
-            Some(ParamValue::Float(count)) if count.is_finite() => (count.max(0.0) as u32).min(capacity),
+            Some(ParamValue::Float(count)) if count.is_finite() => {(count.max(0.0) as u32).min(capacity)},
             _ => capacity,
         };
         let steps = ctx.scalar_or_param("steps", 1.0).round().clamp(1.0, 64.0);
-        let step_dt = (TICK / f64::from(steps)) as f32;
+        let interval_duration = if crate::node_graph::physics::offline_simulation() {
+            TICK
+        } else {
+            f64::from(ctx.scalar_or_param("interval_duration", TICK as f32))
+        };
+        let step_dt = (interval_duration/ f64::from(steps)) as f32;
         let flip = ctx.scalar_or_param("flip", 0.95).clamp(0.0, 1.0);
         let top_speed = ctx.scalar_or_param("top_speed", DEFAULT_TOP_SPEED);
         if !(top_speed.is_finite() && top_speed > 0.0) {
@@ -1468,6 +1590,51 @@ impl Primitive for GpuFlipStep {
             return;
         }
         let zeros = self.state.zeros.clone().expect("zeros prepared");
+        let  live = !crate::node_graph::physics::offline_simulation();
+        let clock_obstacles = ctx.inputs.array("clock_obstacles").unwrap_or(&zeros);
+        let clock_sources = ctx.inputs.array("clock_sources").unwrap_or(&zeros);
+        let obstacle_count = ctx
+            .scalar_or_param("clock_obstacle_count", 0.0)
+            .round()
+            .max(0.0)
+            .min(
+                (clock_obstacles.size
+                    / size_of::<super::gpu_flip_clock::GpuFlipBodyVertex>() as u64)
+                    as f32,
+            ) as u32;
+        let source_count = ctx
+            .scalar_or_param("clock_source_count", 0.0)
+            .round()
+            .max(0.0)
+            .min(
+                (clock_sources.size / size_of::<super::gpu_flip_clock::GpuFlipBodyVertex>() as u64)
+                    as f32,
+            ) as u32;
+        let live_hits = ctx.inputs.array("live_hits").unwrap_or(&zeros);
+        let live_hit_count = ctx
+            .scalar_or_param("live_hit_count", 0.0)
+            .round()
+            .max(0.0)
+            .min((live_hits.size / 16) as f32) as u32;
+        if live {
+            let capacities = [capacity, obstacle_count.max(1), source_count.max(1)];
+            if self.state.clock.is_none()
+                || self
+                    .state
+                    .clock_capacities
+                    .iter()
+                    .zip(capacities)
+                    .any(|(old, new)| *old < new)
+            {
+                self.state.clock = Some(GpuFlipClock::new(
+                    ctx.gpu_encoder().device,
+                    capacities[0],
+                    capacities[1],
+                    capacities[2],
+                ));
+                self.state.clock_capacities = capacities;
+            }
+        }
         let bodies_in = ctx.inputs.array("bodies");
         let shapes_in = ctx.inputs.array("shapes");
         let atlas_in = ctx.inputs.array("atlas");
@@ -1497,7 +1664,7 @@ impl Primitive for GpuFlipStep {
             return;
         }
         let region_rows = (regions.size / size_of::<LiquidBody>() as u64).min(i32::MAX as u64) as i32;
-        let mut step = Step {
+        let step = Step {
             params: StepParams {
                 n: cells,
                 capacity,
@@ -1534,8 +1701,14 @@ impl Primitive for GpuFlipStep {
                 all_tiles: u32::from(all_tiles()),
                 ring_cap: 0,
                 ring_max: ring_max(band),
-                tile_pad: 0,
-            },
+                live_impulse_stride: field
+                    .nodes
+                    .iter()
+                    .map(|&n| n as usize)
+                    .product::<usize>()
+                    .saturating_mul(4)
+                    .min(u32::MAX as usize) as u32},
+            clock_plan: &zeros,
             particles,
             out,
             capped,
@@ -1555,20 +1728,156 @@ impl Primitive for GpuFlipStep {
             ghost,
             density: ctx.scalar_or_param("volume_projection", 1.0) > 0.5,
         };
+        let  clock_status = ctx.outputs.array("clock_status").cloned();
+        let body_row_offset = u64::try_from(rows.saturating_sub(body_count).max(0))
+            .unwrap_or(0)
+            .saturating_mul(size_of::<LiquidBody>() as u64);
         let gpu = ctx.gpu_encoder();
         // The first substep reads the tick's particles, every later one the
         // last one's out. The reaction is in place, so the bodies feel every
         // substep.
-        for k in 0..steps as i32 {
-            step.params.step_in_tick = k;
-            step.params.tick_seconds = (k + 1) as f32 * step_dt;
-            if k > 0 {
-                step.particles = out;
-            }
-            if let Err(error) = self.state.encode(gpu.device, gpu.native_enc, &step) {
+        let clock_params = GpuFlipClockParams {
+            frame_duration: interval_duration as f32,
+            cell_size: h,
+            cfl: 5.0,
+            surface_condition: 1.0,
+            surface_constant: 1.0,
+            color_mixing_rate: 0.0,
+            _pad_prediction: 0.0,
+            _pad0: 0.0,
+            min_frame_steps: steps as u32,
+            max_frame_steps: manifold_physics::stepping::LIVE_DEFAULT_MAX_STEPS,
+            flags: if tick_index == 0 {
+                clock_flags::FIRST_SUBSTEP | clock_flags::FLUID_PRESENT_OR_GENERATING
+            } else {
+                clock_flags::FLUID_PRESENT_OR_GENERATING
+            },
+            _pad1: 0,
+            constant_force: [gravity[0], gravity[1], gravity[2], 0.0],
+        };
+        let mut last_clock_plan = zeros.clone();
+        let encoded_steps = if live {
+            manifold_physics::stepping::LIVE_DEFAULT_MAX_STEPS as f32 + live_hit_count as f32
+        } else {
+            steps
+        };
+        if live {
+            let clock = self.state.clock.as_ref().expect("live clock prepared");
+            clock.begin_frame(gpu.native_enc, &clock_params);
+        }
+        for k in 0..encoded_steps as i32 {
+            let particles_for_step = if k > 0 { out } else { particles };
+            let params = StepParams {
+                step_in_tick: k,
+                tick_seconds: (k + 1) as f32 * step_dt,
+                ..step.params
+            };
+            if live {
+                let plan_buffer = {
+                    let clock = self.state.clock.as_ref().expect("live clock prepared");
+                    let plan = clock.dispatch(
+                        gpu.native_enc,
+                        GpuFlipClockInputs {
+                            marker_particles: particles_for_step,
+                            marker_count:step.count,
+                            obstacle_vertices: clock_obstacles,
+                            obstacle_count,
+                            source_vertices: clock_sources,
+                            source_count,
+                            live_hits,
+                            live_hit_count,
+                            event_impulses: field.impulses.unwrap_or(&zeros),
+                            impulse_stride: step.params.live_impulse_stride,
+                            impulse_nodes: step.params.field_nodes,
+                            impulse_origin: step.params.box_min,
+                            impulse_spacing: step.params.field_spacing,
+                            body_rows: bodies,
+                            body_rows_offset: body_row_offset,
+                            body_reaction: reaction,
+                        },
+                        &clock_params,
+                    );
+                    plan.buffer().clone()
+                };
+                let iteration = Step {
+                    params,
+                    particles: particles_for_step,
+                    clock_plan: &plan_buffer,
+                    ..step
+                };
+            if let Err(error) = self.state.encode(gpu.device, gpu.native_enc, &iteration) {
                 ctx.error(format!("{NAME}: {error}"));
                 return;
             }
+        self.state
+                    .clock
+                    .as_ref()
+                    .expect("live clock prepared")
+                    .remove_extreme(gpu.native_enc, out, step.count, &clock_params);
+                self.state.commit_mask(
+                    gpu.native_enc,
+                    &plan_buffer,
+                    out,
+                    self.state
+                        .saved_particles
+                        .as_ref()
+                        .expect("particle mask prepared"),
+                    "gpu_flip.step.mask.particles",
+                );
+                self.state.commit_mask(
+                    gpu.native_enc,
+                    &plan_buffer,
+                    self.state.faces.as_ref().expect("face mask prepared"),
+                    self.state.saved_faces.as_ref().expect("face mask prepared"),
+                    "gpu_flip.step.mask.faces",
+                );
+                self.state.commit_mask(
+                    gpu.native_enc,
+                    &plan_buffer,
+                    &self.state.lattice.as_ref().expect("lattice prepared").phi,
+                    self.state
+                        .saved_distance
+                        .as_ref()
+                        .expect("distance mask prepared"),
+                    "gpu_flip.step.mask.distance",
+                );
+                self.state.commit_mask(
+                    gpu.native_enc,
+                    &plan_buffer,
+                    step.reaction,
+                    self.state
+                        .saved_reaction
+                        .as_ref()
+                        .expect("reaction mask prepared"),
+                    "gpu_flip.step.mask.reaction",
+                );
+                self.state.commit_mask(
+                    gpu.native_enc,
+                    &plan_buffer,
+                    step.capped,
+                    self.state
+                        .saved_capped
+                        .as_ref()
+                        .expect("capped mask prepared"),
+                    "gpu_flip.step.mask.capped",
+                );
+                last_clock_plan = plan_buffer;
+                continue;
+            }
+            let iteration = Step {
+                params,
+                particles: particles_for_step,
+                clock_plan: &zeros,
+                ..step
+            };
+            if let Err(error) = self.state.encode(gpu.device, gpu.native_enc, &iteration) {
+                ctx.error(format!("{NAME}: {error}"));
+                return;
+            }
+        }
+        if let Some(status) = clock_status {
+            gpu.native_enc
+                .copy_buffer_to_buffer(&last_clock_plan, &status, 32);
         }
     }
 }
@@ -1633,7 +1942,14 @@ mod tests {
 
     #[test]
     fn step_shader_validates_with_every_entry() {
-        let source = step_source();
+        let mask = naga::front::wgsl::parse_str(MASK_SHADER)
+            .unwrap_or_else(|e| panic!("{}", e.emit_to_string(MASK_SHADER)));
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&mask)
+        .unwrap_or_else(|e| panic!("{e:?}"));let source = step_source();
         let module = naga::front::wgsl::parse_str(&source).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&source)));
         naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
             .validate(&module)

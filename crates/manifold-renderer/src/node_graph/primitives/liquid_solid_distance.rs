@@ -7,6 +7,8 @@ use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 
+use super::standalone_pipeline::standalone_pipeline;
+
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid::TICK;
 use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
@@ -14,7 +16,6 @@ use crate::node_graph::liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody
 use crate::node_graph::liquid::lattice::{LiquidLattice, PADDING_NODES};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
-use super::standalone_pipeline::standalone_pipeline;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -85,6 +86,7 @@ crate::primitive! {
     wgsl_includes: [LIQUID_POSE, LIQUID_COLLIDER],
     extra_fields: {
         solid: Option<GpuBuffer> = None,
+        clock_plan: Option<GpuBuffer> = None,
     },
 }
 
@@ -142,6 +144,21 @@ impl Primitive for LiquidSolidDistance {
                 }
             }
         }
+        if self.clock_plan.is_none() {
+            let plan = ctx.gpu_encoder().device.try_create_buffer_shared(48);
+            match plan {
+                Ok(plan) => {
+                    plan.zero_fill();
+                    self.clock_plan = Some(plan);
+                }
+                Err(error) => {
+                    ctx.error(format!(
+                        "Liquid Solid Distance: could not allocate its clock plan: {error}"
+                    ));
+                    return;
+                }
+            }
+        }
         let gpu = ctx.gpu_encoder();
         let ((Some(bodies), Some(shapes), Some(atlas)), Some(solid)) = (inputs, self.solid.as_ref()) else {
             return;
@@ -159,6 +176,7 @@ impl Primitive for LiquidSolidDistance {
             shapes,
             atlas,
             out: solid,
+            clock_plan: self.clock_plan.as_ref().expect("clock plan prepared"),
         };
         encode_solid_distance(&mut self.pipeline, gpu.device, gpu.native_enc, &job, "node.liquid_solid_distance");
     }
@@ -180,6 +198,7 @@ pub(crate) struct SolidDistanceJob<'a> {
     pub atlas: &'a GpuBuffer,
     /// At least one f32 per node.
     pub out: &'a GpuBuffer,
+    pub clock_plan: &'a GpuBuffer,
 }
 
 /// The node's kernel, for a stage that writes a solid lattice inside its own
@@ -219,7 +238,12 @@ pub(crate) fn encode_solid_distance(
             GpuBinding::Buffer { binding: 1, buffer: job.bodies, offset: 0 },
             GpuBinding::Buffer { binding: 2, buffer: job.shapes, offset: 0 },
             GpuBinding::Buffer { binding: 3, buffer: job.atlas, offset: 0 },
-            GpuBinding::Buffer { binding: 4, buffer: job.out, offset: 0 },
+            GpuBinding::Buffer { binding: 4, buffer: job.out,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 5,
+                buffer: job.clock_plan, offset: 0 },
         ],
         [nodes.div_ceil(256), 1, 1],
         label,

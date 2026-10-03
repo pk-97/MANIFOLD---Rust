@@ -81,25 +81,40 @@ pub struct FramePlan {
 }
 
 impl FramePlan {
-    pub fn new(start: Seconds, end: Seconds, intervals: u64) -> Result<Self, LiveStepError> {
-        if !start.0.is_finite() || !end.0.is_finite() {
-            return Err(LiveStepError::NonFinite("frame-plan endpoint"));
-        }
+    pub fn new(start: Seconds, end: Seconds, intervals: u64) -> LiveStepOutcome<Self> {
+        let mut diagnostic = None;
+        let start = if start.0.is_finite() {
+            start
+        } else {
+            diagnostic = Some(LiveStepError::NonFinite("frame-plan endpoint"));
+            Seconds::ZERO
+        };
+        let mut end = if end.0.is_finite() {
+            end
+        } else {
+            diagnostic.get_or_insert(LiveStepError::NonFinite("frame-plan endpoint"));
+            start
+        };
         if end.0 < start.0 {
-            return Err(LiveStepError::InvalidInput(
+            diagnostic.get_or_insert(LiveStepError::InvalidInput(
                 "frame-plan end must not precede start",
             ));
+            end = start;
         }
         if intervals == 0 && end.0 > start.0 {
-            return Err(LiveStepError::InvalidInput(
+            diagnostic.get_or_insert(LiveStepError::InvalidInput(
                 "a positive frame span needs an interval",
             ));
+            end = start;
         }
-        Ok(Self {
-            start,
-            end,
-            intervals,
-        })
+        LiveStepOutcome {
+            value: Self {
+                start,
+                end,
+                intervals,
+            },
+            diagnostic,
+        }
     }
 
     #[inline]
@@ -138,15 +153,23 @@ pub struct CompletionLedger {
 }
 
 impl CompletionLedger {
-    pub fn new(epoch: u32, completed: Seconds) -> Result<Self, LiveStepError> {
-        if !completed.0.is_finite() {
-            return Err(LiveStepError::NonFinite("completed time"));
+    pub fn new(epoch: u32, completed: Seconds) -> LiveStepOutcome<Self> {
+        let (completed, diagnostic) = if completed.0.is_finite() {
+            (completed, None)
+        } else {
+            (
+                Seconds::ZERO,
+                Some(LiveStepError::NonFinite("completed time")),
+            )
+        };
+        LiveStepOutcome {
+            value: Self {
+                epoch,
+                next_sequence: 0,
+                completed,
+            },
+            diagnostic,
         }
-        Ok(Self {
-            epoch,
-            next_sequence: 0,
-            completed,
-        })
     }
 
     #[inline]
@@ -164,55 +187,66 @@ impl CompletionLedger {
         epoch: u32,
         sequence: u64,
         interval: StepInterval,
-    ) -> Result<CompletionReceipt, LiveStepError> {
-        if !interval.start.0.is_finite() || !interval.end.0.is_finite() {
-            return Err(LiveStepError::NonFinite("completion interval"));
-        }
-        if interval.end.0 < interval.start.0 {
-            return Err(LiveStepError::InvalidInput(
+    ) -> LiveStepOutcome<CompletionReceipt> {
+        let diagnostic = if !interval.start.0.is_finite() || !interval.end.0.is_finite() {
+            Some(LiveStepError::NonFinite("completion interval"))
+        } else if interval.end.0 < interval.start.0 {
+            Some(LiveStepError::InvalidInput(
                 "completion interval end must not precede start",
-            ));
+            ))
+        } else {
+            None
+        };
+        LiveStepOutcome {
+            value: CompletionReceipt {
+                epoch,
+                sequence,
+                interval,
+            },
+            diagnostic,
         }
-        Ok(CompletionReceipt {
-            epoch,
-            sequence,
-            interval,
-        })
     }
 
     /// Retire a receipt if it belongs to this epoch and is the next fence in
     /// order. A stale or early receipt is ignored and returns `false`.
-    pub fn retire(&mut self, receipt: CompletionReceipt) -> Result<bool, LiveStepError> {
+    pub fn retire(&mut self, receipt: CompletionReceipt) -> LiveStepOutcome<bool> {
         if !receipt.interval.start.0.is_finite() || !receipt.interval.end.0.is_finite() {
-            return Err(LiveStepError::NonFinite("completion interval"));
+            return LiveStepOutcome::diagnostic(
+                false,
+                LiveStepError::NonFinite("completion interval"),
+            );
         }
         if receipt.interval.end.0 < receipt.interval.start.0 {
-            return Err(LiveStepError::InvalidInput(
-                "completion interval end must not precede start",
-            ));
+            return LiveStepOutcome::diagnostic(
+                false,
+                LiveStepError::InvalidInput("completion interval end must not precede start"),
+            );
         }
         if receipt.epoch != self.epoch || receipt.sequence != self.next_sequence {
-            return Ok(false);
+            return LiveStepOutcome::ok(false);
         }
         if receipt.interval.start.0 != self.completed.0 {
-            return Err(LiveStepError::InvalidInput(
-                "completion interval does not start at the completed endpoint",
-            ));
+            return LiveStepOutcome::diagnostic(
+                false,
+                LiveStepError::InvalidInput(
+                    "completion interval does not start at the completed endpoint",
+                ),
+            );
         }
         self.completed = receipt.interval.end;
         self.next_sequence = self.next_sequence.saturating_add(1);
-        Ok(true)
+        LiveStepOutcome::ok(true)
     }
 
     /// Reset the fence when transport setup/seek starts a new clock epoch.
-    pub fn reset(&mut self, epoch: u32, completed: Seconds) -> Result<(), LiveStepError> {
+    pub fn reset(&mut self, epoch: u32, completed: Seconds) -> LiveStepOutcome<()> {
         if !completed.0.is_finite() {
-            return Err(LiveStepError::NonFinite("completed time"));
+            return LiveStepOutcome::diagnostic((), LiveStepError::NonFinite("completed time"));
         }
         self.epoch = epoch;
         self.next_sequence = 0;
         self.completed = completed;
-        Ok(())
+        LiveStepOutcome::ok(())
     }
 }
 
@@ -241,6 +275,41 @@ impl std::fmt::Display for LiveStepError {
 
 impl std::error::Error for LiveStepError {}
 
+/// A live numerical result always contains a usable value. Diagnostics are
+/// advisory runtime state: callers can surface them while continuing to own
+/// transport time and completion ordering.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LiveStepOutcome<T> {
+    pub value: T,
+    pub diagnostic: Option<LiveStepError>,
+}
+
+impl<T> LiveStepOutcome<T> {
+    #[inline]
+    pub const fn ok(value: T) -> Self {
+        Self {
+            value,
+            diagnostic: None,
+        }
+    }
+
+    #[inline]
+    pub const fn diagnostic(value: T, diagnostic: LiveStepError) -> Self {
+        Self {
+            value,
+            diagnostic: Some(diagnostic),
+        }
+    }
+}
+
+impl<T> std::ops::Deref for LiveStepOutcome<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.value
+    }
+}
+
 /// A reference-engine outer schedule. The caller supplies a freshly measured
 /// CFL duration for each call to [`Self::next`].
 #[derive(Clone, Copy, Debug)]
@@ -250,6 +319,7 @@ pub struct LiveStepSchedule {
     minimum_step: Seconds,
     max_steps: u32,
     steps_taken: u32,
+    diagnostic: Option<LiveStepError>,
 }
 
 /// One scheduled outer interval. `hit_cap` is true when the FLIP Fluids final
@@ -266,29 +336,55 @@ impl LiveStepSchedule {
         frame_duration: Seconds,
         min_steps: u32,
         max_steps: u32,
-    ) -> Result<Self, LiveStepError> {
-        finite_positive(frame_duration, "frame duration")?;
-        if !start.0.is_finite() {
-            return Err(LiveStepError::NonFinite("schedule start"));
-        }
-        if min_steps == 0 || max_steps == 0 || min_steps > max_steps {
-            return Err(LiveStepError::InvalidInput(
-                "step counts must be positive and min_steps <= max_steps",
+    ) -> LiveStepOutcome<Self> {
+        let mut diagnostic = None;
+        let start = if start.0.is_finite() {
+            start
+        } else {
+            diagnostic = Some(LiveStepError::NonFinite("schedule start"));
+            Seconds::ZERO
+        };
+        let frame_duration = if frame_duration.0.is_finite() && frame_duration.0 > 0.0 {
+            frame_duration
+        } else {
+            diagnostic.get_or_insert(if frame_duration.0.is_finite() {
+                LiveStepError::InvalidInput("frame duration")
+            } else {
+                LiveStepError::NonFinite("frame duration")
+            });
+            Seconds::ZERO
+        };
+        let (min_steps, max_steps) = if min_steps == 0 || max_steps == 0 {
+            diagnostic.get_or_insert(LiveStepError::InvalidInput(
+                "step counts must be positive",
             ));
-        }
+            (1, 1)
+        } else {
+            (min_steps, max_steps)
+        };
         let end = Seconds(start.0 + frame_duration.0);
-        if end.0 <= start.0 {
-            return Err(LiveStepError::InvalidInput(
+        let (end, frame_duration) = if !end.0.is_finite() {
+            diagnostic.get_or_insert(LiveStepError::NonFinite("schedule endpoint"));
+            (start, Seconds::ZERO)
+        } else if end.0 > start.0 {
+            (end, frame_duration)
+        } else {
+            diagnostic.get_or_insert(LiveStepError::InvalidInput(
                 "frame duration makes no representable progress",
             ));
+            (start, Seconds::ZERO)
+        };
+        LiveStepOutcome {
+            value: Self {
+                interval: StepInterval::new(start, end),
+                cursor: start,
+                minimum_step: Seconds(frame_duration.0 / f64::from(min_steps)),
+                max_steps,
+                steps_taken: 0,
+                diagnostic,
+            },
+            diagnostic,
         }
-        Ok(Self {
-            interval: StepInterval::new(start, end),
-            cursor: start,
-            minimum_step: Seconds(frame_duration.0 / f64::from(min_steps)),
-            max_steps,
-            steps_taken: 0,
-        })
     }
 
     #[inline]
@@ -304,10 +400,23 @@ impl LiveStepSchedule {
     /// Select the next interval using the reference minimum-step schedule.
     /// On the final allowed step, all remaining time is consumed even if it
     /// exceeds the CFL duration. This is the live clock's no-slow-motion rule.
-    pub fn next(&mut self, cfl_duration: Seconds) -> Result<Option<ScheduledStep>, LiveStepError> {
-        finite_positive(cfl_duration, "CFL duration")?;
+    pub fn next(&mut self, cfl_duration: Seconds) -> LiveStepOutcome<Option<ScheduledStep>> {
+        let mut diagnostic = self.diagnostic.take();
+        let cfl_duration = if cfl_duration.0.is_finite() && cfl_duration.0 > 0.0 {
+            cfl_duration
+        } else {
+            diagnostic.get_or_insert(if cfl_duration.0.is_finite() {
+                LiveStepError::InvalidInput("CFL duration")
+            } else {
+                LiveStepError::NonFinite("CFL duration")
+            });
+            self.interval.duration()
+        };
         if self.is_complete() {
-            return Ok(None);
+            return LiveStepOutcome {
+                value: None,
+                diagnostic,
+            };
         }
 
         let remaining = self.interval.end.0 - self.cursor.0;
@@ -325,7 +434,10 @@ impl LiveStepSchedule {
             }
         };
         if !duration.is_finite() || duration <= 0.0 {
-            return Err(LiveStepError::NonFinite("scheduled duration"));
+            return LiveStepOutcome::diagnostic(
+                None,
+                LiveStepError::NonFinite("scheduled duration"),
+            );
         }
 
         let end = if at_cap || duration >= remaining {
@@ -333,11 +445,13 @@ impl LiveStepSchedule {
         } else {
             let end = self.cursor.0 + duration;
             if end <= self.cursor.0 {
-                return Err(LiveStepError::InvalidInput(
+                diagnostic.get_or_insert(LiveStepError::InvalidInput(
                     "scheduled duration makes no representable progress",
                 ));
+                self.interval.end
+            } else {
+                Seconds(end)
             }
-            Seconds(end)
         };
 
         let step = ScheduledStep {
@@ -346,7 +460,10 @@ impl LiveStepSchedule {
         };
         self.cursor = step.interval.end;
         self.steps_taken += 1;
-        Ok(Some(step))
+        LiveStepOutcome {
+            value: Some(step),
+            diagnostic,
+        }
     }
 }
 
@@ -384,7 +501,7 @@ impl CflPolicy {
         frame_duration: Seconds,
         max_speed: f64,
         restrictions: CflRestrictions,
-    ) -> Result<Seconds, LiveStepError> {
+    ) -> LiveStepOutcome<Seconds> {
         cfl_step_duration(
             frame_duration,
             self.cell_size,
@@ -398,7 +515,7 @@ impl CflPolicy {
         self,
         start: Seconds,
         frame_duration: Seconds,
-    ) -> Result<LiveStepSchedule, LiveStepError> {
+    ) -> LiveStepOutcome<LiveStepSchedule> {
         LiveStepSchedule::new(start, frame_duration, self.min_steps, self.max_steps)
     }
 }
@@ -412,55 +529,98 @@ pub fn cfl_step_duration(
     cfl: f64,
     max_speed: f64,
     restrictions: CflRestrictions,
-) -> Result<Seconds, LiveStepError> {
-    finite_positive(frame_duration, "frame duration")?;
-    for (value, name) in [
-        (cell_size, "cell size"),
-        (cfl, "CFL number"),
-        (max_speed, "maximum speed"),
-    ] {
-        if !value.is_finite() {
-            return Err(LiveStepError::NonFinite(name));
-        }
-    }
-    if cell_size <= 0.0 || cfl <= 0.0 || max_speed < 0.0 {
-        return Err(LiveStepError::InvalidInput(
-            "cell size and CFL must be positive; speed must be non-negative",
-        ));
-    }
+) -> LiveStepOutcome<Seconds> {
+    let mut diagnostic = None;
+    let frame_duration = if frame_duration.0.is_finite() && frame_duration.0 > 0.0 {
+        frame_duration
+    } else {
+        diagnostic = Some(if frame_duration.0.is_finite() {
+            LiveStepError::InvalidInput("frame duration")
+        } else {
+            LiveStepError::NonFinite("frame duration")
+        });
+        Seconds(NOMINAL_TICK_SECONDS)
+    };
+    let cell_size = if cell_size.is_finite() && cell_size > 0.0 {
+        cell_size
+    } else {
+        diagnostic.get_or_insert(if cell_size.is_finite() {
+            LiveStepError::InvalidInput("cell size")
+        } else {
+            LiveStepError::NonFinite("cell size")
+        });
+        1.0
+    };
+    let cfl = if cfl.is_finite() && cfl > 0.0 {
+        cfl
+    } else {
+        diagnostic.get_or_insert(if cfl.is_finite() {
+            LiveStepError::InvalidInput("CFL number")
+        } else {
+            LiveStepError::NonFinite("CFL number")
+        });
+        LIVE_DEFAULT_CFL
+    };
+    // A non-finite runtime velocity is reported, then treated as zero for
+    // this interval so the transport clock continues and the reference
+    // formula remains finite.
+    let max_speed = if max_speed.is_finite() && max_speed >= 0.0 {
+        max_speed
+    } else {
+        diagnostic.get_or_insert(if max_speed.is_finite() {
+            LiveStepError::InvalidInput("maximum speed")
+        } else {
+            LiveStepError::NonFinite("maximum speed")
+        });
+        0.0
+    };
 
     let mut limit = cfl * cell_size / (max_speed + LIVE_CFL_EPSILON);
     if let Some((condition, constant)) = restrictions.surface_tension {
         if !condition.is_finite() || !constant.is_finite() {
-            return Err(LiveStepError::NonFinite("surface-tension restriction"));
-        }
-        if condition <= 0.0 || constant < 0.0 {
-            return Err(LiveStepError::InvalidInput(
+            diagnostic.get_or_insert(LiveStepError::NonFinite("surface-tension restriction"));
+        } else if condition <= 0.0 || constant < 0.0 {
+            diagnostic.get_or_insert(LiveStepError::InvalidInput(
                 "surface-tension condition must be positive and constant non-negative",
             ));
+        } else {
+            limit = limit.min(
+                condition
+                    * (cell_size * cell_size * cell_size).sqrt()
+                    * (1.0 / (constant + LIVE_CFL_EPSILON)).sqrt(),
+            );
         }
-        limit = limit.min(
-            condition
-                * (cell_size * cell_size * cell_size).sqrt()
-                * (1.0 / (constant + LIVE_CFL_EPSILON)).sqrt(),
-        );
     }
     if let Some(rate) = restrictions.color_mixing_rate {
         if !rate.is_finite() {
-            return Err(LiveStepError::NonFinite("color mixing rate"));
-        }
-        if rate < 0.0 {
-            return Err(LiveStepError::InvalidInput(
+            diagnostic.get_or_insert(LiveStepError::NonFinite("color mixing rate"));
+        } else if rate < 0.0 {
+            diagnostic.get_or_insert(LiveStepError::InvalidInput(
                 "color mixing rate must be non-negative",
             ));
+        } else {
+            limit = limit.min(1.0 / (rate + LIVE_CFL_EPSILON));
         }
-        limit = limit.min(1.0 / (rate + LIVE_CFL_EPSILON));
     }
     if !limit.is_finite() || limit <= 0.0 {
-        return Err(LiveStepError::NonFinite("CFL limit"));
+        diagnostic.get_or_insert(LiveStepError::NonFinite("CFL limit"));
+        return LiveStepOutcome {
+            value: frame_duration,
+            diagnostic,
+        };
     }
     let count = (frame_duration.0 / limit).ceil().max(1.0);
-    Ok(Seconds(frame_duration.0 / count))
+    if !count.is_finite() || frame_duration.0 / count <= 0.0 {
+        diagnostic.get_or_insert(LiveStepError::NonFinite("CFL subdivision count"));
+        return LiveStepOutcome {
+            value: frame_duration,
+            diagnostic,
+        };
+    }
+    LiveStepOutcome {
+        value: Seconds(frame_duration.0 / count),
+        diagnostic,
+    }
 }
 
 /// Native extreme-particle-removal parameters. These are the pinned engine
@@ -498,25 +658,55 @@ pub fn marker_particle_speed_limit(
     max_frame_steps: u32,
     config: MarkerSpeedLimitConfig,
     histogram: &mut [usize],
-) -> Result<f64, LiveStepError> {
-    finite_positive(dt, "speed-limit duration")?;
-    for (value, name) in [(cell_size, "cell size"), (cfl, "CFL number")] {
-        if !value.is_finite() {
-            return Err(LiveStepError::NonFinite(name));
-        }
-    }
-    if cell_size <= 0.0 || cfl <= 0.0 || max_frame_steps == 0 {
-        return Err(LiveStepError::InvalidInput(
+) -> LiveStepOutcome<f64> {
+    let mut diagnostic = None;
+    let dt = if dt.0.is_finite() && dt.0 > 0.0 {
+        dt.0
+    } else {
+        diagnostic = Some(if dt.0.is_finite() {
+            LiveStepError::InvalidInput("speed-limit duration")
+        } else {
+            LiveStepError::NonFinite("speed-limit duration")
+        });
+        NOMINAL_TICK_SECONDS
+    };
+    let cell_size = if cell_size.is_finite() && cell_size > 0.0 {
+        cell_size
+    } else {
+        diagnostic.get_or_insert(if cell_size.is_finite() {
+            LiveStepError::InvalidInput("cell size")
+        } else {
+            LiveStepError::NonFinite("cell size")
+        });
+        1.0
+    };
+    let cfl = if cfl.is_finite() && cfl > 0.0 {
+        cfl
+    } else {
+        diagnostic.get_or_insert(if cfl.is_finite() {
+            LiveStepError::InvalidInput("CFL number")
+        } else {
+            LiveStepError::NonFinite("CFL number")
+        });
+        LIVE_DEFAULT_CFL
+    };
+    if max_frame_steps == 0 {
+        diagnostic.get_or_insert(LiveStepError::InvalidInput(
             "cell size, CFL, and max frame steps must be positive",
         ));
     }
-    let bins = max_frame_steps as usize;
-    if histogram.len() < bins {
-        return Err(LiveStepError::ScratchTooSmall {
-            required: bins,
+    let max_frame_steps = max_frame_steps.max(1);
+    let requested_bins = max_frame_steps as usize;
+    let bins = requested_bins.min(histogram.len());
+    if histogram.len() < requested_bins {
+        diagnostic.get_or_insert(LiveStepError::ScratchTooSmall {
+            required: requested_bins,
             actual: histogram.len(),
         });
     }
+    let mut removal_percent = config.max_extreme_velocity_removal_percent;
+    let mut lower_threshold = config.extreme_particle_velocity_threshold_lower;
+    let mut upper_threshold = config.extreme_particle_velocity_threshold;
     if [
         config.max_extreme_velocity_removal_percent,
         config.extreme_particle_velocity_threshold_lower,
@@ -525,26 +715,41 @@ pub fn marker_particle_speed_limit(
     .iter()
     .any(|value| !value.is_finite())
     {
-        return Err(LiveStepError::NonFinite("speed-limit configuration"));
+        diagnostic.get_or_insert(LiveStepError::NonFinite("speed-limit configuration"));
+        removal_percent = MarkerSpeedLimitConfig::default().max_extreme_velocity_removal_percent;
+        lower_threshold =
+            MarkerSpeedLimitConfig::default().extreme_particle_velocity_threshold_lower;
+        upper_threshold = MarkerSpeedLimitConfig::default().extreme_particle_velocity_threshold;
     }
 
+    if bins == 0 {
+        let floor = f64::from(max_frame_steps) * cfl * cell_size / dt;
+        return LiveStepOutcome {
+            value: floor,
+            diagnostic,
+        };
+    }
     histogram[..bins].fill(0);
-    let speed_limit_step = cfl * cell_size / dt.0;
+    let speed_limit_step = cfl * cell_size / dt;
     if !speed_limit_step.is_finite() || speed_limit_step <= 0.0 {
-        return Err(LiveStepError::NonFinite("speed-limit bin width"));
+        diagnostic.get_or_insert(LiveStepError::NonFinite("speed-limit bin width"));
+        return LiveStepOutcome {
+            value: 0.0,
+            diagnostic,
+        };
     }
     let mut max_particle_speed: f64 = 0.0;
     for &speed in speeds {
         if !speed.is_finite() || speed < 0.0 {
-            return Err(LiveStepError::NonFinite("marker speed"));
+            diagnostic.get_or_insert(LiveStepError::NonFinite("marker speed"));
+            continue;
         }
         let index = (speed / speed_limit_step).floor() as usize;
         histogram[index.min(bins - 1)] += 1;
         max_particle_speed = max_particle_speed.max(speed);
     }
 
-    let max_removal = ((speeds.len() as f64 * config.max_extreme_velocity_removal_percent)
-        as usize)
+    let max_removal = ((speeds.len() as f64 * removal_percent) as usize)
         .min(config.max_extreme_velocity_removal_absolute);
     let floor = f64::from(max_frame_steps) * speed_limit_step;
     let mut maxspeed = floor;
@@ -559,8 +764,8 @@ pub fn marker_particle_speed_limit(
         ) * speed_limit_step;
     }
 
-    let lower = config.extreme_particle_velocity_threshold_lower * max_particle_speed;
-    let upper = config.extreme_particle_velocity_threshold * max_particle_speed;
+    let lower = lower_threshold * max_particle_speed;
+    let upper = upper_threshold * max_particle_speed;
     let lower_count = speeds
         .iter()
         .filter(|&&speed| speed >= lower && speed < upper)
@@ -575,18 +780,35 @@ pub fn marker_particle_speed_limit(
     // MANIFOLD: a relative outlier in a small population can still be slow.
     // Never remove particles that fit within the configured frame's CFL and
     // substep budget merely because they are the fastest remaining particles.
-    Ok(maxspeed.max(floor))
+    LiveStepOutcome {
+        value: maxspeed.max(floor),
+        diagnostic,
+    }
 }
 
 /// Box3D's longer accepted interval is internally kept at no more than one
 /// quarter of the nominal 60 Hz tick, with the reference minimum of four.
-pub fn box3d_substep_count(duration: Seconds) -> Result<u32, LiveStepError> {
-    finite_positive(duration, "Box3D duration")?;
-    let count = (4.0 * duration.0 / NOMINAL_TICK_SECONDS).ceil().max(4.0);
+pub fn box3d_substep_count(duration: Seconds) -> LiveStepOutcome<u32> {
+    let duration = if duration.0.is_finite() && duration.0 > 0.0 {
+        duration.0
+    } else {
+        return LiveStepOutcome::diagnostic(
+            4,
+            if duration.0.is_finite() {
+                LiveStepError::InvalidInput("Box3D duration")
+            } else {
+                LiveStepError::NonFinite("Box3D duration")
+            },
+        );
+    };
+    let count = (4.0 * duration / NOMINAL_TICK_SECONDS).ceil().max(4.0);
     if !count.is_finite() || count > f64::from(u32::MAX) {
-        return Err(LiveStepError::NonFinite("Box3D substep count"));
+        return LiveStepOutcome::diagnostic(
+            u32::MAX,
+            LiveStepError::NonFinite("Box3D substep count"),
+        );
     }
-    Ok(count as u32)
+    LiveStepOutcome::ok(count as u32)
 }
 
 /// Pressure coupling is an impulse in mass-scaled units. Convert it once to a
@@ -594,16 +816,6 @@ pub fn box3d_substep_count(duration: Seconds) -> Result<u32, LiveStepError> {
 #[inline]
 pub fn pressure_impulse_delta_velocity(impulse: f64, inverse_mass: f64) -> f64 {
     impulse * inverse_mass
-}
-
-fn finite_positive(value: Seconds, name: &'static str) -> Result<(), LiveStepError> {
-    if !value.0.is_finite() {
-        return Err(LiveStepError::NonFinite(name));
-    }
-    if value.0 <= 0.0 {
-        return Err(LiveStepError::InvalidInput(name));
-    }
-    Ok(())
 }
 
 /// A backend participating in the rigid owner's fixed ticks. The returned
@@ -688,19 +900,25 @@ mod tests {
         speeds[1] = 200.0;
         let mut histogram = [0; 6];
         let limit = marker_particle_speed_limit(
-            &speeds, Seconds(1.0), 0.2, 5.0, 6,
-            MarkerSpeedLimitConfig::default(), &mut histogram,
-        ).expect("finite reference inputs");
+            &speeds,
+            Seconds(1.0),
+            0.2,
+            5.0,
+            6,
+            MarkerSpeedLimitConfig::default(),
+            &mut histogram,
+        )
+        .value;
         assert_eq!(limit, 6.0);
     }
 
     #[test]
     fn live_step_cap_keeps_time_without_error() {
-        let mut schedule = LiveStepSchedule::new(Seconds::ZERO, Seconds(0.2), 1, 6).unwrap();
+        let mut schedule = LiveStepSchedule::new(Seconds::ZERO, Seconds(0.2), 1, 6).value;
         let mut covered = 0.0;
         let mut count = 0;
         let mut capped = false;
-        while let Some(step) = schedule.next(Seconds(0.001)).unwrap() {
+        while let Some(step) = schedule.next(Seconds(0.001)).value {
             covered += step.interval.duration().0;
             count += 1;
             capped |= step.hit_cap;
@@ -708,13 +926,13 @@ mod tests {
         assert_eq!(count, 6);
         assert!(capped);
         assert!((covered - 0.2).abs() < 1e-12);
-        assert_eq!(schedule.next(Seconds(0.001)).unwrap(), None);
+        assert_eq!(schedule.next(Seconds(0.001)).value, None);
     }
 
     #[test]
     fn live_interval_hits_land_inside_capped_step() {
-        let mut schedule = LiveStepSchedule::new(Seconds::ZERO, Seconds(0.2), 1, 1).unwrap();
-        let step = schedule.next(Seconds(0.001)).unwrap().unwrap();
+        let mut schedule = LiveStepSchedule::new(Seconds::ZERO, Seconds(0.2), 1, 1).value;
+        let step = schedule.next(Seconds(0.001)).value.unwrap();
         assert!(step.hit_cap);
         let hits = [Seconds(0.03), Seconds(0.03), Seconds(0.19)];
         let mut actions = Vec::new();
@@ -735,9 +953,9 @@ mod tests {
 
     #[test]
     fn live_step_minimum_schedule_matches_reference() {
-        let mut schedule = LiveStepSchedule::new(Seconds::ZERO, Seconds(0.1), 2, 6).unwrap();
+        let mut schedule = LiveStepSchedule::new(Seconds::ZERO, Seconds(0.1), 2, 6).value;
         let mut durations = Vec::new();
-        while let Some(step) = schedule.next(Seconds(0.08)).unwrap() {
+        while let Some(step) = schedule.next(Seconds(0.08)).value {
             durations.push(step.interval.duration().0);
         }
         assert_eq!(durations, vec![0.05, 0.05]);
@@ -746,10 +964,51 @@ mod tests {
     #[test]
     fn live_cfl_epsilon_and_ceil_match_reference() {
         let duration =
-            cfl_step_duration(Seconds(1.0), 2.0, 5.0, 3.0, CflRestrictions::default()).unwrap();
+            cfl_step_duration(Seconds(1.0), 2.0, 5.0, 3.0, CflRestrictions::default()).value;
         let limit: f64 = 5.0 * 2.0 / (3.0 + 1e-6);
         let expected = 1.0 / (1.0 / limit).ceil().max(1.0);
         assert_eq!(duration, Seconds(expected));
+    }
+
+    #[test]
+    fn live_nonfinite_speed_reports_diagnostic_and_keeps_time() {
+        let outcome =
+            cfl_step_duration(Seconds(0.1), 0.1, 2.0, f64::NAN, CflRestrictions::default());
+        assert_eq!(
+            outcome.diagnostic,
+            Some(LiveStepError::NonFinite("maximum speed"))
+        );
+        assert!(outcome.value.0.is_finite() && outcome.value.0 > 0.0);
+
+        let mut histogram = [0; 6];
+        let speed = marker_particle_speed_limit(
+            &[1.0, f64::NAN, 2.0],
+            Seconds(TICK),
+            1.0,
+            5.0,
+            6,
+            MarkerSpeedLimitConfig::default(),
+            &mut histogram,
+        );
+        assert_eq!(
+            speed.diagnostic,
+            Some(LiveStepError::NonFinite("marker speed"))
+        );
+        assert_eq!(speed.value, 6.0 * 5.0 / TICK);
+    }
+
+    #[test]
+    fn live_invalid_schedule_stays_non_panicking_and_reports_diagnostic() {
+        let mut schedule = LiveStepSchedule::new(Seconds::ZERO, Seconds(0.1), 1, 6).value;
+        let outcome = schedule.next(Seconds(f64::NAN));
+        assert_eq!(
+            outcome.diagnostic,
+            Some(LiveStepError::NonFinite("CFL duration"))
+        );
+        assert!(outcome.value.is_some());
+        let overflow = LiveStepSchedule::new(Seconds(f64::MAX), Seconds(f64::MAX), 1, 6);
+        assert_eq!(overflow.diagnostic, Some(LiveStepError::NonFinite("schedule endpoint")));
+        assert!(overflow.value.is_complete());
     }
 
     #[test]
@@ -764,63 +1023,84 @@ mod tests {
             MarkerSpeedLimitConfig::default(),
             &mut histogram,
         )
-        .unwrap();
+        .value;
         assert_eq!(floor, 6.0 * 5.0 / TICK);
     }
 
     #[test]
     fn live_pressure_units_and_box3d_substeps() {
         assert_eq!(pressure_impulse_delta_velocity(12.0, 0.25), 3.0);
-        assert_eq!(box3d_substep_count(Seconds(TICK)).unwrap(), 4);
-        assert_eq!(box3d_substep_count(Seconds(0.1)).unwrap(), 24);
+        assert_eq!(box3d_substep_count(Seconds(TICK)).value, 4);
+        assert_eq!(box3d_substep_count(Seconds(0.1)).value, 24);
     }
 
     #[test]
     fn live_interval_completion_receipts() {
-        let mut ledger = CompletionLedger::new(7, Seconds::ZERO).unwrap();
+        let mut ledger = CompletionLedger::new(7, Seconds::ZERO).value;
         let first = ledger
             .submit(7, 0, StepInterval::new(Seconds::ZERO, Seconds(0.1)))
-            .unwrap();
+            .value;
         let second = ledger
             .submit(7, 1, StepInterval::new(Seconds(0.1), Seconds(0.2)))
-            .unwrap();
-        assert!(!ledger.retire(second).unwrap());
-        assert!(ledger.retire(first).unwrap());
-        assert!(ledger.retire(second).unwrap());
+            .value;
+        assert!(!ledger.retire(second).value);
+        assert!(ledger.retire(first).value);
+        assert!(ledger.retire(second).value);
         assert_eq!(ledger.completed(), Seconds(0.2));
         let stale = ledger
             .submit(6, 2, StepInterval::new(Seconds(0.2), Seconds(0.3)))
-            .unwrap();
-        assert!(!ledger.retire(stale).unwrap());
+            .value;
+        assert!(!ledger.retire(stale).value);
     }
 
     #[test]
     fn live_interval_completion_rejects_public_nonfinite_receipt() {
-        let mut ledger = CompletionLedger::new(1, Seconds::ZERO).unwrap();
+        let mut ledger = CompletionLedger::new(1, Seconds::ZERO).value;
         let receipt = CompletionReceipt {
             epoch: 1,
             sequence: 0,
             interval: StepInterval::new(Seconds::ZERO, Seconds(f64::NAN)),
         };
+        let outcome = ledger.retire(receipt);
+        assert!(!outcome.value);
         assert_eq!(
-            ledger.retire(receipt),
-            Err(LiveStepError::NonFinite("completion interval"))
+            outcome.diagnostic,
+            Some(LiveStepError::NonFinite("completion interval"))
         );
     }
 
     #[test]
     fn live_interval_coupled_endpoints() {
-        let plan = FramePlan::new(Seconds(2.0), Seconds(2.3), 3).unwrap();
-        let mut fluid = CompletionLedger::new(4, Seconds(2.0)).unwrap();
-        let mut rigid = CompletionLedger::new(4, Seconds(2.0)).unwrap();
+        let plan = FramePlan::new(Seconds(2.0), Seconds(2.3), 3).value;
+        let mut fluid = CompletionLedger::new(4, Seconds(2.0)).value;
+        let mut rigid = CompletionLedger::new(4, Seconds(2.0)).value;
         for sequence in 0..3 {
             let interval = plan.interval(sequence).unwrap();
-            let fluid_receipt = fluid.submit(4, sequence, interval).unwrap();
-            let rigid_receipt = rigid.submit(4, sequence, interval).unwrap();
-            assert!(fluid.retire(fluid_receipt).unwrap());
-            assert!(rigid.retire(rigid_receipt).unwrap());
+            let fluid_receipt = fluid.submit(4, sequence, interval).value;
+            let rigid_receipt = rigid.submit(4, sequence, interval).value;
+            assert!(fluid.retire(fluid_receipt).value);
+            assert!(rigid.retire(rigid_receipt).value);
             assert_eq!(fluid.completed(), rigid.completed());
         }
         assert_eq!(fluid.completed(), Seconds(2.3));
+    }
+    #[test]
+    fn live_cap_takes_precedence_over_a_larger_minimum_step_setting() {
+        // Native FLIP setters accept these independently. A large authored
+        // minimum must not silently increase the maximum allowed work.
+        let outcome = LiveStepSchedule::new(Seconds::ZERO, Seconds(0.1), 64, 6);
+        assert!(outcome.diagnostic.is_none());
+        let mut schedule = outcome.value;
+        let mut count = 0;
+        let mut final_step = None;
+        while let Some(step) = schedule.next(Seconds(0.1)).value {
+            count += 1;
+            final_step = Some(step);
+        }
+        assert_eq!(count, 6);
+        let step = final_step.unwrap();
+        assert!(step.hit_cap);
+        assert_eq!(step.interval.end, Seconds(0.1));
+        assert!(step.interval.duration().0 > 0.09);
     }
 }

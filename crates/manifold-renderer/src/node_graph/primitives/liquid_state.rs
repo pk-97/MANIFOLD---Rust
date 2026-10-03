@@ -22,7 +22,11 @@ use crate::node_graph::substeps::{SubstepBoundaryPorts, SubstepResultPorts};
 use crate::node_graph::whitewater::{WHITEWATER_EMPTY, WhitewaterParticle};
 
 const RESULTS: &[SubstepResultPorts] = &[
-    SubstepResultPorts { capture: "stats_in", output: "stats", optional: false },
+    SubstepResultPorts {
+        capture: "clock_status_in",
+        output: "clock_status",
+        optional: true,
+    },SubstepResultPorts { capture: "stats_in", output: "stats", optional: false },
     SubstepResultPorts { capture: "faces_in", output: "faces", optional: false },
     SubstepResultPorts { capture: "whitewater_pool_in", output: "whitewater_pool", optional: true },
     SubstepResultPorts { capture: "whitewater_state_in", output: "whitewater_state", optional: true },
@@ -52,6 +56,7 @@ const WHITEWATER_COUNT_WORDS: u32 = 8;
 
 pub struct ReadbackSlot {
     buffer: GpuBuffer,
+    clock_status: GpuBuffer,
     stamp: u64,
     epoch: u32,
     pending: bool,
@@ -72,6 +77,7 @@ crate::primitive! {
         seed: Array(FluidParticle) required,
         in: Array(FluidParticle) required,
         stats_in: Array(u32) required,
+        clock_status_in: Array(u32) optional,
         faces_in: Array(FaceSample) required,
         whitewater_pool_in: Array(WhitewaterParticle) optional,
         whitewater_state_in: Array(u32) optional,
@@ -92,6 +98,7 @@ crate::primitive! {
     outputs: {
         out: Array(FluidParticle),
         stats: Array(u32),
+        clock_status: Array(u32),
         faces: Array(FaceSample),
         whitewater_pool: Array(WhitewaterParticle),
         whitewater_state: Array(u32),
@@ -123,6 +130,8 @@ crate::primitive! {
         zero_stats: Option<GpuBuffer> = None,
         readback: Vec<ReadbackSlot> = Vec::new(),
         faulted: bool = false,
+        cap_hit: bool = false,
+        clock_nonfinite: bool = false,
         last_stats: Option<LiquidTickStats> = None,
         faces: Option<GpuBuffer> = None,
         whitewater_pool: Option<GpuBuffer> = None,
@@ -188,8 +197,8 @@ impl LiquidState {
 
     /// Read every retired readback of the current epoch, newest last.
     fn poll_readbacks(&mut self, clock: Option<&manifold_gpu::FrameClock>, live_recovery: bool) -> bool {
-        let Some(epoch) = self.epoch else { return false };
-        let mut newest: Option<(u64, LiquidTickStats, f64)> = None;
+        let Some(epoch) = self.epoch else { return false ;};
+        let mut newest: Option<(u64, LiquidTickStats, f64, bool, bool)> = None;
         for slot in self.readback.iter_mut().filter(|s| s.pending) {
             if !clock.is_none_or(|c| c.is_complete(slot.stamp)) {
                 continue;
@@ -203,11 +212,19 @@ impl LiquidState {
             let words =
                 unsafe { std::slice::from_raw_parts(ptr.cast::<u32>().cast_const(), LIQUID_STATS_WORDS as usize) };
             let stats = LiquidTickStats::from_words(words);
-            if newest.is_none_or(|(stamp, _, _)| slot.stamp >= stamp) {
-                newest = Some((slot.stamp, stats, slot.endpoint));
+            let status = slot.clock_status.mapped_ptr().map(|ptr| {
+                // SAFETY: this slot shares the retired fence with its stats.
+                unsafe { std::slice::from_raw_parts(ptr.cast::<u32>().cast_const(), 8) }
+            });
+            let cap_hit = status.is_some_and(|words| words[4] != 0);
+            let nonfinite = status.is_some_and(|words| words[5] != 0);
+            if newest.is_none_or(|(stamp, _, _, _, _)| slot.stamp >= stamp) {
+                newest = Some((slot.stamp, stats, slot.endpoint, cap_hit, nonfinite));
             }
         }
-        if let Some((_, stats, endpoint)) = newest {
+        if let Some((_, stats, endpoint, cap_hit, nonfinite)) = newest {
+            self.cap_hit = cap_hit;
+            self.clock_nonfinite = nonfinite;
             self.faulted = stats.nonfinite > 0 || (self.faulted && !live_recovery);
             self.completed_time = endpoint;
             self.last_stats = Some(stats);
@@ -222,7 +239,7 @@ impl Primitive for LiquidState {
         &[
             "in",
             "stats_in",
-            "faces_in",
+            "clock_status_in","faces_in",
             "whitewater_pool_in",
             "whitewater_state_in",
             "whitewater_counts_in",
@@ -236,6 +253,7 @@ impl Primitive for LiquidState {
         &[
             "out",
             "stats",
+            "clock_status",
             "whitewater_pool",
             "whitewater_state",
             "whitewater_counts",
@@ -284,6 +302,7 @@ impl Primitive for LiquidState {
         match port_name {
             "out" => input_capacities.iter().find(|(p, _)| *p == "seed").map(|&(_, n)| n),
             "stats" => Some(LIQUID_STATS_WORDS),
+            "clock_status" => Some(8),
             // Provided storage: a one-record hint, sized at run time from the
             // body's faces, which the plan allocates after this node.
             "faces"
@@ -380,6 +399,8 @@ impl Primitive for LiquidState {
             self.epoch = Some(epoch);
             self.ticks_done = 0;
             self.faulted = false;
+            self.cap_hit = false;
+            self.clock_nonfinite = false;
             self.last_stats = None;
             if let (Some(seed), Some(out)) = (seed, out) {
                 let bytes = (u64::from(count) * std::mem::size_of::<FluidParticle>() as u64).min(seed.size).min(out.size);
@@ -420,7 +441,7 @@ impl Primitive for LiquidState {
             }
         }
         if let Some(target) = target_time {
-            crate::node_graph::physics_metrics::record_simulation(target, self.completed_time, false, self.faulted);
+            crate::node_graph::physics_metrics::record_simulation(target, self.completed_time, self.cap_hit, self.faulted|| self.clock_nonfinite);
         }
 
         self.pending = if refused.is_some() || (self.faulted && !live_recovery) { 0 } else { ticks };
@@ -462,6 +483,7 @@ impl Primitive for LiquidState {
         for (candidate, state) in [
             ("in", "out"),
             ("stats_in", "stats"),
+            ("clock_status_in", "clock_status"),
             ("whitewater_pool_in", "whitewater_pool"),
             ("whitewater_state_in", "whitewater_state"),
             ("whitewater_counts_in", "whitewater_counts"),
@@ -494,6 +516,7 @@ impl Primitive for LiquidState {
         self.ticks_done += u64::from(self.pending);
         let Some(stats) = ctx.outputs.array("stats") else { return };
         let Some(epoch) = self.epoch else { return };
+        let clock_status = ctx.inputs.array("clock_status_in");
         let gpu = ctx.gpu_encoder();
         let clock = gpu.device.frame_clock();
         let stats_bytes = u64::from(LIQUID_STATS_WORDS) * 4;
@@ -503,6 +526,7 @@ impl Primitive for LiquidState {
             None if self.readback.len() < READBACK_SLOTS => {
                 self.readback.push(ReadbackSlot {
                     buffer: gpu.device.create_buffer_shared(stats_bytes),
+                    clock_status: gpu.device.create_buffer_shared(32),
                     stamp: 0,
                     epoch,
                     pending: false,
@@ -516,6 +540,12 @@ impl Primitive for LiquidState {
         };
         let slot = &mut self.readback[index];
         gpu.native_enc.copy_buffer_to_buffer(stats, &slot.buffer, stats_bytes.min(stats.size));
+        if let Some(status) = clock_status {
+            gpu.native_enc
+                .copy_buffer_to_buffer(status, &slot.clock_status, 32);
+        } else {
+            gpu.native_enc.clear_buffer(&slot.clock_status);
+        }
         slot.stamp = clock.as_ref().map_or(0, |c| c.stamp());
         slot.epoch = epoch;
         slot.pending = true;

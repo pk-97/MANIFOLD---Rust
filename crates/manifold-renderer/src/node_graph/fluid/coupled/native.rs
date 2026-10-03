@@ -2,16 +2,19 @@ use manifold_fluids::{
     CoupledFluidFrame, FluidFrame, FluidWorld, FrameStats, MeshRole, RigidFluidCoupling,
 };
 use manifold_physics::input::AppliedEvent;
-use manifold_physics::stepping::{StepCoupling, SubstepExchange, Uncoupled};
+use manifold_physics::stepping::{StepCoupling, StepInterval, SubstepExchange, Uncoupled};
 use manifold_physics::{BodyHandle, FieldInput, PhysicsWorld, Seconds, TickStamp};
 
-use crate::node_graph::physics::{MAX_BODIES, ResolvedRigidImpulse, RigidSceneInputs, RigidSimulation};
+use crate::node_graph::physics::{
+    MAX_BODIES, ResolvedRigidImpulse, RigidSceneInputs, RigidSimulation,
+};
 use crate::node_graph::physics_events::ResolvedNodeImpulse;
 use crate::node_graph::primitives::quat_to_render_scene_euler;
 use crate::node_graph::transform::Transform;
 
+use super::super::impulses::ImpulseSum;
 use super::{CoupledRigidFrame, Request, Setup};
-use crate::node_graph::fluid::{FluidDomainLayout, TICK};
+use crate::node_graph::fluid::{FluidDomainLayout, FluidRuntime, Sample, TICK};
 
 /// How a prepared rigid world's bodies map onto a [`CoupledRigidFrame`]:
 /// shared by every liquid that owns a rigid world in-thread.
@@ -49,10 +52,16 @@ impl Layout {
 
     /// Size `output`'s copy storage for this layout, before a tick captures into it.
     pub(crate) fn prepare_output(&self, output: &mut CoupledRigidFrame) {
-        output.copies.resize(self.copies.len(), Transform::default());
+        output
+            .copies
+            .resize(self.copies.len(), Transform::default());
     }
 
-    pub(crate) fn capture(&self, world: &PhysicsWorld, output: &mut CoupledRigidFrame) -> Result<(), String> {
+    pub(crate) fn capture(
+        &self,
+        world: &PhysicsWorld,
+        output: &mut CoupledRigidFrame,
+    ) -> Result<(), String> {
         for (index, destination) in output.poses.iter_mut().enumerate() {
             let Some(mut handle) = self.bodies[index] else {
                 *destination = self.authored[index];
@@ -155,8 +164,14 @@ impl Native {
             None
         } else {
             Some(
-                RigidFluidCoupling::prepare(fluid, world, &bindings, domain.native_origin(), setup.density)
-                    .map_err(|error| error.to_string())?,
+                RigidFluidCoupling::prepare(
+                    fluid,
+                    world,
+                    &bindings,
+                    domain.native_origin(),
+                    setup.density,
+                )
+                .map_err(|error| error.to_string())?,
             )
         };
         Ok(Self {
@@ -188,13 +203,16 @@ impl Native {
         fluid: &mut FluidWorld,
         request: &mut Request,
         stamp: TickStamp,
+        interval: Option<StepInterval>,
         fields: &[FieldInput<'_>],
         impulses: &[AppliedEvent<ResolvedNodeImpulse>],
+        live_history: &[Sample],
+        domain: FluidDomainLayout,
     ) -> Result<FrameStats, String> {
         if stamp != self.completed {
             return Err("Fluid coupling: rigid and liquid tick boundaries differ".into());
         }
-        let end = (stamp.tick + 1) as f64 * TICK;
+        let end = interval.map_or((stamp.tick + 1) as f64 * TICK, |interval| interval.end.0);
         // Keep one right-hand bracket beyond this tick for interpolation, but
         // do not fill the native owner's shorter history with a whole backlog.
         let bracket = request
@@ -241,21 +259,40 @@ impl Native {
         }
         let mut plain_stats = None;
         {
+            let initial_fields = if interval.is_some() {
+                fields.get(..1).unwrap_or(&[])
+            } else {
+                fields
+            };
             let mut participant = Participant {
                 fluid,
                 coupling: self.coupling.as_mut(),
                 layout: &self.layout,
                 output: &mut request.output,
                 expected: stamp,
-                fields,
+                fields: initial_fields,
+                live_interval: interval,
+                live_impulses: impulses,
+                live_origin: domain.native_origin(),
+                live_history,
+                live_domain: domain,
                 plain_stats: &mut plain_stats,
             };
-            let result = self.rigid.advance_worker_tick(
-                &latest.inputs,
-                self.observed_time,
-                &self.rigid_events,
-                &mut participant,
-            );
+            let result = if let Some(interval) = interval {
+                self.rigid.advance_worker_interval(
+                    &latest.inputs,
+                    interval,
+                    &self.rigid_events,
+                    &mut participant,
+                )
+            } else {
+                self.rigid.advance_worker_tick(
+                    &latest.inputs,
+                    self.observed_time,
+                    &self.rigid_events,
+                    &mut participant,
+                )
+            };
             // The outer request owns delivery receipts for both participants.
             // Drain the native owner's retained receipt scratch after every
             // attempt, preserving the original assignment without re-enqueueing.
@@ -288,19 +325,37 @@ impl Native {
     }
 }
 
-struct Participant<'a, 'field> {
+struct Participant<'a> {
     fluid: &'a mut FluidWorld,
     coupling: Option<&'a mut RigidFluidCoupling>,
     layout: &'a Layout,
     output: &'a mut CoupledRigidFrame,
     expected: TickStamp,
-    fields: &'a [FieldInput<'field>],
+    fields: &'a [FieldInput<'a>],
     plain_stats: &'a mut Option<FrameStats>,
+    live_interval: Option<StepInterval>,
+    live_impulses: &'a [AppliedEvent<ResolvedNodeImpulse>],
+    live_origin: [f32; 3],
+    live_history: &'a [Sample],
+    live_domain: FluidDomainLayout,
 }
 
 enum LiquidFrame<'a> {
     Coupled(CoupledFluidFrame<'a, 'a>),
     Plain(FluidFrame<'a>),
+}
+
+impl LiquidFrame<'_> {
+    fn set_fields(
+        &mut self,
+        duration: Seconds,
+        fields: &[FieldInput<'_>],
+    ) -> Result<(), manifold_fluids::FluidError> {
+        match self {
+            LiquidFrame::Coupled(frame) => frame.set_fields(duration, fields),
+            LiquidFrame::Plain(frame) => frame.set_fields(duration, fields),
+        }
+    }
 }
 
 struct Exchange<'a> {
@@ -309,9 +364,18 @@ struct Exchange<'a> {
     output: &'a mut CoupledRigidFrame,
     stamp: TickStamp,
     plain_stats: &'a mut Option<FrameStats>,
+    live_interval: Option<StepInterval>,
+    live_impulses: &'a [AppliedEvent<ResolvedNodeImpulse>],
+    live_origin: [f32; 3],
+    live_history: &'a [Sample],
+    live_domain: FluidDomainLayout,
+    live_current: Seconds,
+    live_active_events: usize,
+    live_first_active_event: usize,
+    live_fields_prepared: bool,
 }
 
-impl StepCoupling for Participant<'_, '_> {
+impl StepCoupling for Participant<'_> {
     type Error = String;
     type Frame<'a>
         = Exchange<'a>
@@ -323,21 +387,29 @@ impl StepCoupling for Participant<'_, '_> {
         stamp: TickStamp,
         duration: Seconds,
     ) -> Result<Self::Frame<'_>, String> {
-        if stamp != self.expected || duration != Seconds(TICK) {
+        if stamp != self.expected || (self.live_interval.is_none() && duration != Seconds(TICK)) {
             return Err("Fluid coupling: rigid owner requested a different epoch or tick".into());
         }
         let liquid = if let Some(coupling) = self.coupling.as_deref_mut() {
-            LiquidFrame::Coupled(
+            LiquidFrame::Coupled(if self.live_interval.is_some() {
+                coupling
+                    .begin_live_frame(self.fluid, duration, self.fields)
+                    .map_err(|error| error.to_string())?
+            } else {
                 coupling
                     .begin_frame(self.fluid, duration, self.fields)
-                    .map_err(|error| error.to_string())?,
-            )
+                    .map_err(|error| error.to_string())?
+            })
         } else {
-            LiquidFrame::Plain(
+            LiquidFrame::Plain(if self.live_interval.is_some() {
+                self.fluid
+                    .begin_live_frame_with_fields(duration, self.fields)
+                    .map_err(|error| error.to_string())?
+            } else {
                 self.fluid
                     .begin_frame_with_fields(duration, self.fields)
-                    .map_err(|error| error.to_string())?,
-            )
+                    .map_err(|error| error.to_string())?
+            })
         };
         Ok(Exchange {
             liquid,
@@ -345,7 +417,71 @@ impl StepCoupling for Participant<'_, '_> {
             output: self.output,
             stamp,
             plain_stats: self.plain_stats,
+            live_interval: self.live_interval,
+            live_impulses: self.live_impulses,
+            live_origin: self.live_origin,
+            live_history: self.live_history,
+            live_domain: self.live_domain,
+            live_current: self
+                .live_interval
+                .map_or(Seconds::ZERO, |interval| interval.start),
+            live_active_events: 0,
+            live_first_active_event: 0,
+            live_fields_prepared: false,
         })
+    }
+}
+
+impl Exchange<'_> {
+    fn set_live_fields(&mut self, duration: Seconds, include_impulses: bool) -> Result<(), String> {
+        let Some(interval) = self.live_interval else {
+            return Ok(());
+        };
+        while self.live_active_events < self.live_impulses.len()
+            && self.live_impulses[self.live_active_events].source.time.0
+                <= self.live_current.0 + 1e-12
+        {
+            self.live_active_events += 1;
+        }
+        let segment_end = self
+            .live_impulses
+            .get(self.live_active_events)
+            .map_or(interval.end.0, |event| {
+                event.source.time.0.min(interval.end.0)
+            });
+        let segment_duration = Seconds((segment_end - self.live_current.0).max(0.0));
+        let field =
+            FluidRuntime::field_at_time(self.live_history, self.live_current, self.live_domain);
+        let impulse = ImpulseSum {
+            events: if include_impulses {
+                &self.live_impulses[self.live_first_active_event..self.live_active_events]
+            } else {
+                &[]
+            },
+            origin: self.live_origin,
+        };
+        let fields = [
+            FieldInput {
+                field: &field,
+                acceleration: 1.0,
+                delta_velocity: 0.0,
+            },
+            FieldInput {
+                field: &impulse,
+                acceleration: 0.0,
+                delta_velocity: 1.0,
+            },
+        ];
+        let field_duration = if include_impulses {
+            duration
+        } else {
+            Seconds(segment_duration.0.min(duration.0))
+        };
+        self.liquid
+            .set_fields(field_duration, &fields)
+            .map_err(|error| error.to_string())?;
+        self.live_fields_prepared = true;
+        Ok(())
     }
 }
 
@@ -353,6 +489,33 @@ impl SubstepExchange for Exchange<'_> {
     type Error = String;
 
     fn next_substep(&mut self, rigid: &PhysicsWorld, maximum: Seconds) -> Result<Seconds, String> {
+        let maximum = if let Some(interval) = self.live_interval {
+            if !self.live_fields_prepared {
+                self.set_live_fields(
+                    Seconds(
+                        self.live_impulses
+                            .get(self.live_active_events)
+                            .map_or(interval.end.0, |event| {
+                                event.source.time.0.min(interval.end.0)
+                            })
+                            - self.live_current.0,
+                    ),
+                    false,
+                )?;
+            }
+            let event_end = self
+                .live_impulses
+                .get(self.live_active_events)
+                .map_or(interval.end.0, |event| {
+                    event.source.time.0.min(interval.end.0)
+                });
+            Seconds(maximum.0.min((event_end - self.live_current.0).max(0.0)))
+        } else {
+            maximum
+        };
+        if maximum.0 <= 0.0 {
+            return Err("Fluid coupling: live event boundary did not advance".into());
+        }
         match &mut self.liquid {
             LiquidFrame::Coupled(frame) => frame
                 .next_substep(rigid, maximum)
@@ -366,11 +529,40 @@ impl SubstepExchange for Exchange<'_> {
     }
 
     fn exchange(&mut self, rigid: &mut PhysicsWorld, duration: Seconds) -> Result<(), String> {
+        if self.live_interval.is_some() {
+            // Delta-velocity fields are normalized by the accepted duration;
+            // install them immediately before this one native substep so an
+            // offered step clipped by the owner cannot over-apply an event.
+            self.set_live_fields(duration, true)?;
+        }
         match &mut self.liquid {
             LiquidFrame::Coupled(frame) => frame.exchange(rigid, duration),
             LiquidFrame::Plain(frame) => frame.advance(duration),
         }
         .map_err(|error| error.to_string())
+        .map(|()| {
+            if let Some(interval) = self.live_interval {
+                self.live_current = Seconds(self.live_current.0 + duration.0);
+                self.live_first_active_event = self.live_active_events;
+                let segment_end = interval.end.0;
+                let next_event = self
+                    .live_impulses
+                    .get(self.live_active_events)
+                    .map_or(segment_end, |event| event.source.time.0.min(segment_end));
+                if self.live_current.0 + 1e-12 >= next_event {
+                    while self.live_first_active_event < self.live_active_events
+                        && self.live_impulses[self.live_first_active_event]
+                            .source
+                            .time
+                            .0
+                            <= self.live_current.0 + 1e-12
+                    {
+                        self.live_first_active_event += 1;
+                    }
+                    self.live_fields_prepared = false;
+                }
+            }
+        })
     }
 
     fn finish(self, rigid: &PhysicsWorld) -> Result<(), String> {

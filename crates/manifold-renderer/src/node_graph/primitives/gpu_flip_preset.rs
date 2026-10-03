@@ -809,6 +809,7 @@ fn water_step(b: &mut Builder, scene: WaterScene, tick: (usize, usize)) -> usize
         ),
     );
     b.wires(domain, step, &LATTICE_WIRES);
+    b.wire((domain, "interval_duration"), step, "interval_duration");
     b.wire((domain, "gravity_x"), step, "gravity_x");
     b.wire((domain, "gravity"), step, "gravity_y");
     b.wire((domain, "gravity_z"), step, "gravity_z");

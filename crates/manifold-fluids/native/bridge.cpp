@@ -702,6 +702,8 @@ void write_stats(const FluidSimulationFrameStats &native, ManifoldFluidsFrameSta
     stats->substeps = static_cast<uint32_t>(native.substeps);
     stats->simulation_ms = native.timing.total * 1000.0;
     stats->meshing_ms = native.timing.mesh * 1000.0;
+    stats->cap_hit = static_cast<uint32_t>(native.capHit);
+    stats->numerical_recovery = static_cast<uint32_t>(native.numericalRecovery);
 }
 
 } // namespace
@@ -1510,6 +1512,33 @@ extern "C" int manifold_fluids_world_step(void *world, double dt,
     });
 }
 
+extern "C" int manifold_fluids_world_step_live(void *world, double dt,
+                                                 ManifoldFluidsFrameStats *stats_out) {
+    return guarded([&] {
+        if (world == nullptr) {
+            throw std::invalid_argument("world pointer must be non-null");
+        }
+        auto *native = static_cast<NativeWorld *>(world);
+        native->simulation->beginLiveUpdate(dt);
+        try {
+            while (native->simulation->isUpdateInProgress()) {
+                const double time_step = native->simulation->nextUpdateTimeStep();
+                if (time_step == 0.0) {
+                    break;
+                }
+                native->simulation->advanceUpdate(time_step);
+            }
+            native->simulation->finishUpdate();
+        } catch (...) {
+            if (native->simulation->isUpdateInProgress()) {
+                native->simulation->abortUpdate();
+            }
+            throw;
+        }
+        write_stats(native->simulation->getFrameStatsData(), stats_out);
+    });
+}
+
 extern "C" int manifold_fluids_world_begin_frame(void *world, double dt) {
     return guarded([&] {
         if (world == nullptr) { throw std::invalid_argument("world pointer must be non-null"); }
@@ -1518,6 +1547,18 @@ extern "C" int manifold_fluids_world_begin_frame(void *world, double dt) {
         if (native->rigid_coupling) {
             // A new frame cannot expose or reuse the previous frame's last
             // accepted exchange, even before its first body upload.
+            native->rigid_coupling->invalidate();
+            native->rigid_input_ready = false;
+        }
+    });
+}
+
+extern "C" int manifold_fluids_world_begin_live_frame(void *world, double dt) {
+    return guarded([&] {
+        if (world == nullptr) { throw std::invalid_argument("world pointer must be non-null"); }
+        auto *native = static_cast<NativeWorld *>(world);
+        native->simulation->beginLiveUpdate(dt);
+        if (native->rigid_coupling) {
             native->rigid_coupling->invalidate();
             native->rigid_input_ready = false;
         }

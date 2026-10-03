@@ -696,6 +696,56 @@ fn migrate_gltf_ao_mask(def: &mut EffectGraphDef) -> bool {
     changed
 }
 
+/// Add explicit interval wires to pre-clock liquid graphs, preserving authored
+/// duration wires and all export settings. Runs once at graph installation.
+fn wire_liquid_intervals(def: &mut EffectGraphDef) -> bool {
+    use manifold_core::effect_graph_def::EffectGraphWire;
+    let mut domains = std::collections::BTreeMap::new();
+    for node in &def.nodes {
+        if matches!(node.type_id.as_str(), "node.gpu_flip_domain" | "node.matter_domain") {
+            domains.insert(node.id, node.id);
+        }
+    }
+    // Follow only solver boundaries, never arbitrary graph ancestry.
+    for _ in 0..3 {
+        for node in &def.nodes {
+            if !matches!(node.type_id.as_str(), "node.liquid_state" | "node.matter_state" | "node.gpu_flip_step") { continue; }
+            let source = def.wires.iter().filter(|wire| wire.to_node == node.id)
+                .filter_map(|wire| domains.get(&wire.from_node).copied()).next();
+            if let Some(source) = source { domains.insert(node.id, source); }
+        }
+    }
+    let mut changed = false;
+    for node in &def.nodes {
+        let ports: &[(&str, &str)] = match node.type_id.as_str() {
+            "node.gpu_flip_step" => &[("interval_duration", "interval_duration"), ("clock_obstacles", "clock_obstacles"), ("clock_sources", "clock_sources"), ("clock_obstacle_count", "clock_obstacle_count"), ("clock_source_count", "clock_source_count"), ("live_hits", "live_hits"), ("live_hit_count", "live_hit_count")],
+            "node.matter_state" => &[("interval_duration", "interval_duration"), ("target_time", "target_time"), ("simulation_time", "simulation_time"), ("step_cap_hit", "step_cap_hit")],
+            "node.whitewater_step" => &[("interval_duration", "dt")],
+            "node.liquid_solid_distance" => &[("interval_duration", "tick_seconds")],
+            _ => &[],
+        };
+        let source = def.wires.iter().filter(|wire| wire.to_node == node.id)
+            .find_map(|wire| domains.get(&wire.from_node).copied());
+        if let Some(source) = source {
+            for &(output, input) in ports {
+                if def.wires.iter().any(|wire| wire.to_node == node.id && wire.to_port == input) { continue; }
+                def.wires.push(EffectGraphWire { from_node: source, from_port: output.into(), to_node: node.id, to_port: input.into() });
+                changed = true;
+            }
+        }
+        if node.type_id == "node.liquid_state" && !def.wires.iter().any(|w| w.to_node == node.id && w.to_port == "clock_status_in") {
+            let step = def.wires.iter().filter(|w| w.to_node == node.id && w.to_port == "in")
+                .find_map(|w| def.nodes.iter().find(|n| n.id == w.from_node && n.type_id == "node.gpu_flip_step"));
+            if let Some(step) = step {
+                def.wires.push(EffectGraphWire { from_node: step.id, from_port: "clock_status".into(), to_node: node.id, to_port: "clock_status_in".into() });
+                changed = true;
+            }
+        }
+    }
+    changed
+}
+
+
 /// Returns the [`NodeInstantiation`] on success. On any error the
 /// graph's state is the union of every successful step before the
 /// failure — both callers handle this by either propagating
@@ -819,6 +869,11 @@ pub fn instantiate_def(
     } else {
         def
     };
+
+    // Older liquid graphs did not carry accepted duration. Upgrade their
+    // existing domain/state/step connections at the common loader seam.
+    let mut interval_wired = def.clone();
+    let def = if wire_liquid_intervals(&mut interval_wired) { &interval_wired } else { def };
 
     // For Splice, identify the def's Source and FinalOutput up front so
     // we know which nodes to skip during instantiation and which wires
@@ -1969,6 +2024,27 @@ fn audit_array_resource_bindings(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn live_clock_graph_wires_are_explicit_idempotent_and_preserve_authored_duration() {
+        use manifold_core::effect_graph_def::EffectGraphWire;
+        let wire = |from, output: &str, to, input: &str| EffectGraphWire {
+            from_node: from, from_port: output.into(), to_node: to, to_port: input.into(),
+        };
+        let mut def = EffectGraphDef {
+            version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
+            name: None, description: None, preset_metadata: None, scene_modifiers: Vec::new(),
+            nodes: vec![bare_node(1, "node.gpu_flip_domain"), bare_node(2, "node.liquid_state"), bare_node(3, "node.gpu_flip_step"), bare_node(4, "node.whitewater_step"), bare_node(5, "node.scalar")],
+            wires: vec![wire(1, "ticks", 2, "ticks"), wire(2, "out", 3, "particles"), wire(3, "out", 2, "in"), wire(3, "faces", 4, "faces"), wire(5, "out", 4, "dt")],
+        };
+        assert!(wire_liquid_intervals(&mut def));
+        assert!(def.wires.contains(&wire(1, "interval_duration", 3, "interval_duration")));
+        assert!(def.wires.contains(&wire(1, "live_hits", 3, "live_hits")));
+        assert!(def.wires.contains(&wire(3, "clock_status", 2, "clock_status_in")));
+        assert_eq!(def.wires.iter().filter(|w| w.to_node == 4 && w.to_port == "dt").count(), 1);
+        assert!(def.wires.contains(&wire(5, "out", 4, "dt")));
+        assert!(!wire_liquid_intervals(&mut def));
+    }
 
     #[test]
     fn scene_modifier_v3_runtime_requires_attachment_before_node_installation() {

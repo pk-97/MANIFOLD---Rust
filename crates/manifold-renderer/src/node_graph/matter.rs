@@ -243,6 +243,22 @@ pub fn wave_speed(lambda: f64, density: f64) -> f64 {
 pub const ACOUSTIC_CFL: f64 = 1.0 / 3.0;
 /// The substep cap (D4).
 pub const MAX_SUBSTEPS: u32 = 128;
+
+/// Duration of one MPM iteration for an observed frame interval.
+///
+/// Offline export retains the historical f64 division and cast so its fixed
+/// tick/substep bits remain unchanged. Live playback divides the accepted
+/// frame duration in f32, including when the substep cap stretches work over
+/// the whole interval.
+pub fn substep_duration(interval_duration: f32, substeps: u32, offline: bool) -> f32 {
+    let substeps = substeps.max(1);
+    if offline {
+        (TICK / f64::from(substeps)) as f32
+    } else {
+        interval_duration / substeps as f32
+    }
+}
+
 /// Grid velocity clamp per component, in cells per substep
 /// (taichi_elements `g2p2g_allowed_cfl`).
 pub const VELOCITY_CLAMP_CFL: f32 = 0.9;
@@ -383,6 +399,35 @@ mod tests {
         let n_above =
             substeps_per_tick(dx as f32, (unit * fitted * 1.001) as f32, v as f32, None, None);
         assert!(n_above > MAX_SUBSTEPS, "{n_above}");
+    }
+
+    #[test]
+    fn live_mpm_substep_duration_covers_display_rates() {
+        for fps in [20.0f32, 24.0, 30.0, 60.0] {
+            let interval = 1.0 / fps;
+            let duration = substep_duration(interval, 4, false);
+            assert_eq!(duration.to_bits(), (interval / 4.0).to_bits());
+            assert!((duration * 4.0 - interval).abs() < 1.0e-6);
+        }
+    }
+
+    #[test]
+    fn live_mpm_substep_cap_still_covers_the_full_interval() {
+        let interval = 1.0f32 / 20.0;
+        let duration = substep_duration(interval, MAX_SUBSTEPS, false);
+        assert!((duration * MAX_SUBSTEPS as f32 - interval).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn export_mpm_substep_duration_keeps_fixed_tick_bits() {
+        for substeps in 1..=MAX_SUBSTEPS {
+            let expected = (TICK / f64::from(substeps)) as f32;
+            assert_eq!(
+                substep_duration(0.25, substeps, true).to_bits(),
+                expected.to_bits(),
+                "substeps={substeps}"
+            );
+        }
     }
 
     /// U sits at or above dx/dt, and with it the encode and decode scales

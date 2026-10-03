@@ -288,6 +288,10 @@ pub struct FrameStats {
     /// frame also includes time the owner spends between substep calls.
     pub simulation_ms: f64,
     pub meshing_ms: f64,
+    /// The live frame reached its native substep cap and consumed the remainder.
+    pub cap_hit: bool,
+    /// The live frame recovered from a non-finite value or solver failure.
+    pub numerical_recovery: bool,
 }
 
 /// An actionable error from the native FLIP bridge or its input boundary.
@@ -326,6 +330,8 @@ struct NativeFrameStats {
     substeps: u32,
     simulation_ms: f64,
     meshing_ms: f64,
+    cap_hit: u32,
+    numerical_recovery: u32,
 }
 
 impl From<NativeFrameStats> for FrameStats {
@@ -336,6 +342,8 @@ impl From<NativeFrameStats> for FrameStats {
             substeps: stats.substeps,
             simulation_ms: stats.simulation_ms,
             meshing_ms: stats.meshing_ms,
+            cap_hit: stats.cap_hit != 0,
+            numerical_recovery: stats.numerical_recovery != 0,
         }
     }
 }
@@ -465,6 +473,11 @@ unsafe extern "C" {
     ) -> i32;
     fn manifold_fluids_world_clear_obstacle(world: *mut std::ffi::c_void) -> i32;
     fn manifold_fluids_world_step(
+        world: *mut std::ffi::c_void,
+        dt: f64,
+        stats_out: *mut NativeFrameStats,
+    ) -> i32;
+    fn manifold_fluids_world_step_live(
         world: *mut std::ffi::c_void,
         dt: f64,
         stats_out: *mut NativeFrameStats,
@@ -734,10 +747,30 @@ impl FluidWorld {
         dt: Seconds,
         fields: &[FieldInput<'_>],
     ) -> Result<(), FluidError> {
-        if !(dt.0.is_finite() && dt.0 > 0.0 && dt.0 <= 1.0 / 30.0) {
-            return Err(FluidError::input(
-                "dt must be finite and in (0, 1/30] seconds",
-            ));
+        self.prepare_step_fields_with_limit(dt, fields, Some(1.0 / 30.0))
+    }
+
+    fn prepare_live_step_fields(
+        &mut self,
+        dt: Seconds,
+        fields: &[FieldInput<'_>],
+    ) -> Result<(), FluidError> {
+        self.prepare_step_fields_with_limit(dt, fields, None)
+    }
+
+    fn prepare_step_fields_with_limit(
+        &mut self,
+        dt: Seconds,
+        fields: &[FieldInput<'_>],
+        max_dt: Option<f64>,
+    ) -> Result<(), FluidError> {
+        let within_limit = max_dt.is_none_or(|max_dt| dt.0 <= max_dt);
+        if !(dt.0.is_finite() && dt.0 > 0.0 && within_limit) {
+            return Err(FluidError::input(if max_dt.is_some() {
+                "dt must be finite and in (0, 1/30] seconds"
+            } else {
+                "dt must be finite and positive"
+            }));
         }
         if !fields.is_empty() {
             if !self.field_cell_size.is_finite() || self.field_cell_size <= 0.0 {
@@ -836,6 +869,23 @@ impl FluidWorld {
         let mut native_stats = NativeFrameStats::default();
         let ok = unsafe { manifold_fluids_world_step(self.native, dt.0, &mut native_stats) };
         native_result(ok, "stepping the fluid world")?;
+        Ok(native_stats.into())
+    }
+
+    /// Step one live frame. The native substep cap consumes the remaining
+    /// interval, and numerical solver faults are returned as diagnostics in
+    /// [`FrameStats`] while the frame remains completed.
+    pub fn step_live_with_fields(
+        &mut self,
+        dt: Seconds,
+        fields: &[FieldInput<'_>],
+    ) -> Result<FrameStats, FluidError> {
+        self.prepare_live_step_fields(dt, fields)?;
+        let mut native_stats = NativeFrameStats::default();
+        let ok = unsafe {
+            manifold_fluids_world_step_live(self.native, dt.0, &mut native_stats)
+        };
+        native_result(ok, "stepping the live fluid world")?;
         Ok(native_stats.into())
     }
 

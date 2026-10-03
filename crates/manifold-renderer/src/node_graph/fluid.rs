@@ -11,6 +11,7 @@ use manifold_fluids::{
     WhitewaterParticle,
 };
 use manifold_physics::FieldValue;
+use manifold_physics::stepping::StepInterval;
 use manifold_physics::input::{
     AppliedEvent, EventQueue, HistoryWrite, InputHistory, Timestamped, input_span,
     input_span_before,
@@ -394,6 +395,7 @@ struct Request {
     initial: FluidControls,
     start_tick: u64,
     count: usize,
+    interval: Option<StepInterval>,
     history: Vec<Sample>,
     impulses: Vec<AppliedEvent<ResolvedNodeImpulse>>,
     role_setup: Arc<roles::Setup>,
@@ -412,6 +414,7 @@ struct Reply {
     source_identity: Option<[u8; 32]>,
     epoch: u64,
     tick: u64,
+    accepted_interval: Option<StepInterval>,
     /// Exclusive boundary of native ticks begun, including a failed tick.
     started_tick: u64,
     impulses: Vec<AppliedEvent<ResolvedNodeImpulse>>,
@@ -436,6 +439,7 @@ fn cancelled_reply(request: Request) -> Reply {
         source_identity: request.source_identity,
         epoch: request.epoch,
         tick: request.start_tick,
+        accepted_interval: None,
         started_tick: request.start_tick,
         impulses: request.impulses,
         history: request.history,
@@ -513,6 +517,7 @@ pub struct FluidRuntime {
     previous_reset: Option<f32>,
     reset_requested: bool,
     target_time: f64,
+    clock: manifold_physics::clock::SimulationClock,
     held: super::physics::HeldClock,
     epoch: u64,
     cancel_epoch: Arc<AtomicU64>,
@@ -529,6 +534,7 @@ pub struct FluidRuntime {
     pub whitewater: WhitewaterFrame,
     pub version: u64,
     pub completed_tick: u64,
+    completed_time: f64,
     pub obstacle: Transform,
     pub stats: FrameStats,
     cache_mode: CacheMode,
@@ -565,6 +571,7 @@ impl Default for FluidRuntime {
             previous_reset: None,
             reset_requested: false,
             target_time: 0.0,
+            clock: Default::default(),
             held: Default::default(),
             epoch: 0,
             cancel_epoch: Arc::new(AtomicU64::new(0)),
@@ -581,6 +588,7 @@ impl Default for FluidRuntime {
             whitewater: WhitewaterFrame::default(),
             version: 0,
             completed_tick: 0,
+            completed_time: 0.0,
             obstacle: FluidControls::default().obstacle,
             stats: FrameStats::default(),
             cache_mode: CacheMode::Live,
@@ -682,8 +690,10 @@ impl FluidRuntime {
             coupled.clear();
         }
         self.target_time = 0.0;
+        self.clock.restart();
         self.held = Default::default();
         self.completed_tick = 0;
+        self.completed_time = 0.0;
         self.epoch = self.epoch.checked_add(1).expect("fluid epoch exhausted");
         if self.epoch > 1 {
             self.impulses
@@ -752,13 +762,13 @@ impl FluidRuntime {
             return (1.0, 0.0);
         };
         let tick_time = |slot: &particle_ring::ParticleSlot| {
-            slot.frame().map_or(0.0, |frame| frame.tick as f64 * TICK)
+            slot.frame().map_or(0.0, |frame| frame.time)
         };
         display_blend(self.target_time - TICK, tick_time(a), tick_time(b))
     }
 
     pub fn simulation_time(&self) -> f64 {
-        self.completed_tick as f64 * TICK
+        self.completed_time
     }
 
     /// Read the rigid poses belonging to the currently accepted liquid mesh.
@@ -982,6 +992,14 @@ impl FluidRuntime {
             || !(0.0..=4.0).contains(&speed)
             || !reset.is_finite()
         {
+            if self.cache_mode == CacheMode::Live && !super::physics::offline_simulation() {
+                // Retain the previous accepted observation. The next valid
+                // transport still owns the whole elapsed span.
+                super::physics_metrics::record_simulation(
+                    self.target_time, self.completed_time, false, true,
+                );
+                return Ok(());
+            }
             return Err("Water: invalid transport, speed or reset value".into());
         }
         // Trigger buttons publish a counter, just like Physics World. Every
@@ -1017,9 +1035,32 @@ impl FluidRuntime {
         if let Some(error) = &self.failure {
             return Err(error.clone());
         }
+        let clock_frame = if self.cache_mode == CacheMode::Live
+            && !crate::node_graph::physics::offline_simulation()
+        {
+            Some(self.clock.advance(
+                transport.0,
+                0.0,
+                speed,
+                reset,
+                false,
+                false,
+            ))
+        } else {
+            None
+        };
+        if clock_frame.is_some_and(|frame| frame.numerical_error)
+            && !crate::node_graph::physics::offline_simulation()
+        {
+            crate::node_graph::physics_metrics::record_simulation(0.0, 0.0, false, true);
+        }
         let target_time = if self.cache_mode == CacheMode::Playback {
             (transport.0 * speed as f64).max(0.0)
+        } else if let Some(frame) = clock_frame {
+            frame.target_time
         } else if let Some(previous) = self.last_transport {
+            // CPU export/recording historically applies the observed Speed
+            // to this interval. Keep its arithmetic and sample order exact.
             self.target_time + (transport.0 - previous).max(0.0) * speed as f64
         } else {
             self.target_time
@@ -1156,15 +1197,39 @@ impl FluidRuntime {
 
     fn step_at(history: &[Sample], tick: u64) -> Step {
         let current = tick as f64 * TICK;
+        Self::step_at_time(history, Seconds(current))
+    }
+
+    fn step_at_time(history: &[Sample], current: Seconds) -> Step {
         Step {
-            previous: Self::controls_at(history.iter(), (current - TICK).max(0.0)),
-            current: Self::controls_at(history.iter(), current),
-            next: Self::controls_at_before(history.iter(), current + TICK),
+            previous: Self::controls_at(history.iter(), (current.0 - TICK).max(0.0)),
+            current: Self::controls_at(history.iter(), current.0),
+            next: Self::controls_at_before(history.iter(), current.0 + TICK),
+        }
+    }
+
+    fn step_at_interval(history: &[Sample], interval: StepInterval) -> Step {
+        let separation = interval.duration().0;
+        Step {
+            previous: Self::controls_at(
+                history.iter(),
+                (interval.start.0 - separation).max(0.0),
+            ),
+            current: Self::controls_at(history.iter(), interval.start.0),
+            next: Self::controls_at_before(history.iter(), interval.end.0),
         }
     }
 
     fn field_at(history: &[Sample], tick: u64, domain: FluidDomainLayout) -> ContinuousField<'_> {
-        let span = input_span(history.iter(), Seconds(tick as f64 * TICK))
+        Self::field_at_time(history, Seconds(tick as f64 * TICK), domain)
+    }
+
+    fn field_at_time(
+        history: &[Sample],
+        time: Seconds,
+        domain: FluidDomainLayout,
+    ) -> ContinuousField<'_> {
+        let span = input_span(history.iter(), time)
             .expect("observe before advance");
         ContinuousField {
             before: span.before.acceleration_field.as_ref(),
@@ -1227,6 +1292,17 @@ impl FluidRuntime {
             return Ok(());
         }
         if let Some(error) = reply.error {
+            if self.cache_mode == CacheMode::Live
+                && !crate::node_graph::physics::offline_simulation()
+                && reply.epoch == self.epoch
+            {
+                crate::node_graph::physics_metrics::record_simulation(
+                    self.target_time,
+                    self.completed_time,
+                    reply.stats.cap_hit,
+                    reply.stats.numerical_recovery,
+                );
+            }
             self.spare = Some(reply.vertices);
             self.spare_whitewater = Some(reply.whitewater);
             self.spare_history = Some(reply.history);
@@ -1249,6 +1325,20 @@ impl FluidRuntime {
         self.spare_whitewater = Some(std::mem::replace(&mut self.whitewater, reply.whitewater));
         self.spare_history = Some(reply.history);
         self.completed_tick = reply.tick;
+        let completed_time = reply
+            .accepted_interval
+            .map_or(reply.tick as f64 * TICK, |interval| interval.end.0);
+        if self.cache_mode == CacheMode::Live
+            && !crate::node_graph::physics::offline_simulation()
+        {
+            crate::node_graph::physics_metrics::record_simulation(
+                self.target_time,
+                completed_time,
+                reply.stats.cap_hit,
+                reply.stats.numerical_recovery,
+            );
+        }
+        self.completed_time = completed_time;
         self.obstacle = reply.obstacle;
         self.stats = reply.stats;
         self.initialized = true;
@@ -1303,12 +1393,22 @@ impl FluidRuntime {
             if self.held.is_held() && self.initialized && !blocking {
                 return Ok(());
             }
-            let target_tick = simulation_tick(self.target_time);
+        let live_mode = self.cache_mode == CacheMode::Live
+            && !crate::node_graph::physics::offline_simulation();
+        let target_tick = simulation_tick(self.target_time);
             let playback = (self.cache_mode == CacheMode::Playback).then(|| PlaybackAddress {
                 transport: Seconds(self.last_transport.expect("observed transport")),
                 legacy_tick: target_tick,
             });
             let due = target_tick.saturating_sub(self.completed_tick);
+            let live_interval = (live_mode
+                && self.target_time > self.simulation_time())
+                .then(|| {
+                    StepInterval::new(
+                        Seconds(self.simulation_time()),
+                        Seconds(self.target_time),
+                    )
+                });
             // A owed particle capture goes before any further stepping, so
             // the frame is the completed tick itself (growth, late wiring).
             let capture_only = self.particle_capture_pending();
@@ -1317,7 +1417,11 @@ impl FluidRuntime {
                 && (if self.cache_mode == CacheMode::Playback {
                     playback == self.completed_playback
                 } else {
-                    due == 0
+                    (if live_mode {
+                        self.target_time <= self.simulation_time()
+                    } else {
+                        due == 0
+                    })
                         && !(self.cache_mode == CacheMode::Record
                             && (self.timing.pending()
                                 || self.source_identity != self.committed_source_identity))
@@ -1328,6 +1432,8 @@ impl FluidRuntime {
             let initial = self.history.front().expect("observed controls").controls;
             let count = if capture_only {
                 0
+            } else if live_mode {
+                usize::from(live_interval.is_some())
             } else {
                 request_count(self.cache_mode, due, target_tick, self.initialized)?
             };
@@ -1344,7 +1450,11 @@ impl FluidRuntime {
                 None
             };
             let impulses = if self.cache_mode == CacheMode::Live {
-                match self.prepare_impulse_batch(self.completed_tick, count) {
+                match self.prepare_impulse_batch(
+                    self.completed_tick,
+                    count,
+                    live_mode.then_some(live_interval).flatten(),
+                ) {
                     Ok(events) => events,
                     Err(error) => {
                         if let Some(slot) = particles {
@@ -1388,6 +1498,14 @@ impl FluidRuntime {
                     self.completed_tick
                 },
                 count,
+                interval: if live_mode && count > 0 {
+                    Some(StepInterval::new(
+                        Seconds(self.simulation_time()),
+                        Seconds(self.target_time),
+                    ))
+                } else {
+                    None
+                },
                 history,
                 impulses,
                 role_setup: Arc::clone(&self.role_setup),
@@ -1677,6 +1795,7 @@ mod tests {
                     impulses: Vec::with_capacity(IMPULSE_CAPACITY),
                     epoch: init.epoch,
                     tick: init.start_tick + init.count as u64,
+                    accepted_interval: None,
                     history: init.history,
                     role_history: init.role_history,
                     vertices: init.recycle,
@@ -1717,6 +1836,7 @@ mod tests {
                                     impulses: Vec::with_capacity(IMPULSE_CAPACITY),
                                     epoch: request.epoch,
                                     tick: request.start_tick + request.count as u64,
+                                    accepted_interval: None,
                                     history: request.history,
                                     role_history: request.role_history,
                                     vertices: request.recycle,
@@ -1792,6 +1912,7 @@ mod tests {
                 impulses: Vec::with_capacity(IMPULSE_CAPACITY),
                 epoch: runtime.epoch,
                 tick: 7,
+                accepted_interval: None,
                 history: Vec::new(),
                 role_history: Vec::new(),
                 vertices: Vec::new(),
@@ -1819,6 +1940,7 @@ mod tests {
                 impulses: Vec::with_capacity(IMPULSE_CAPACITY),
                 epoch: old_epoch,
                 tick: 8,
+                accepted_interval: None,
                 history: Vec::new(),
                 role_history: Vec::new(),
                 vertices: Vec::new(),
@@ -1966,6 +2088,7 @@ mod tests {
 
     #[test]
     fn fluid_clock_retains_time_pause_reset_and_backward_seek() {
+        let _live = crate::node_graph::physics::PhysicsStepScope::for_render(false);
         let mut runtime = FluidRuntime::default();
         let settings = FluidSettings::default();
         let controls = FluidControls::default();
@@ -1975,11 +2098,11 @@ mod tests {
         runtime
             .observe(settings, controls, Seconds(10.25), 2.0, 0.0)
             .unwrap();
-        assert!((runtime.target_time - 0.5).abs() < 1e-9);
+        assert!((runtime.target_time - 0.25).abs() < 1e-9);
         runtime
             .observe(settings, controls, Seconds(10.25), 2.0, 0.0)
             .unwrap();
-        assert!((runtime.target_time - 0.5).abs() < 1e-9);
+        assert!((runtime.target_time - 0.25).abs() < 1e-9);
         runtime
             .observe(settings, controls, Seconds(10.5), 1.0, 1.0)
             .unwrap();
@@ -2025,14 +2148,15 @@ mod tests {
     /// time debt, and discards impulses; moving again resumes from the held
     /// tick without a jump.
     #[test]
-    fn fluid_held_transport_freezes_live_water_with_time_debt() {
+    fn fluid_held_transport_freezes_live_water_after_accepted_span() {
+        let _live = crate::node_graph::physics::PhysicsStepScope::for_render(false);
         let settings = FluidSettings::default();
         let controls = FluidControls::default();
         let mut runtime = FluidRuntime::default();
         runtime.observe(settings, controls, Seconds(0.0), 1.0, 0.0).unwrap();
         runtime.advance(true).unwrap();
         assert!(runtime.initialized);
-        // One second of debt; the live request carries one batch of it.
+        // The live request carries the complete observed second.
         runtime.observe(settings, controls, Seconds(1.0), 1.0, 0.0).unwrap();
         runtime.advance(false).unwrap();
         assert!(runtime.busy);
@@ -2064,7 +2188,8 @@ mod tests {
         // The batch in flight at pause covers played time, so it publishes;
         // nothing is requested after it.
         wait_for_tick_change(&mut runtime, 1.0, 1.0);
-        assert_eq!(runtime.completed_tick, start_tick + BATCH as u64);
+        assert_eq!(runtime.completed_tick, start_tick + 1);
+        assert!((runtime.completed_time - 1.0).abs() < 1e-9);
         assert!(!runtime.busy, "held water requested more steps");
         let before = held(&runtime);
         let hold = |runtime: &mut FluidRuntime, transport: f64, speed: f32| {
@@ -2088,21 +2213,68 @@ mod tests {
         strike(&mut runtime, 1.0, 0);
         // Simulation Speed 0 holds while the transport keeps running.
         hold(&mut runtime, 2.0, 0.0);
-        assert!(before == held(&runtime), "speed-zero water moved");
-        assert!((runtime.target_time - 1.0).abs() < 1e-9, "held time adds no debt");
+        // The first observation at speed zero completes the preceding speed-1
+        // interval. Only subsequent held observations must remain unchanged.
+        let after_transition = held(&runtime);
+        hold(&mut runtime, 2.0, 0.0);
+        assert!(after_transition == held(&runtime), "speed-zero water moved");
+        assert!((runtime.target_time - 2.0).abs() < 1e-9, "held time adds no debt");
         strike(&mut runtime, 2.0, 1);
         assert_eq!(runtime.impulse_outstanding, 0, "held impulses are discarded");
 
         // Resume continues from the held tick one batch at a time.
-        wait_for_tick_change(&mut runtime, 2.0 + TICK, 1.0);
+        runtime
+            .observe(settings, controls, Seconds(3.0), 1.0, 0.0)
+            .unwrap();
+        runtime.advance(false).unwrap();
+        // The first resumed observation at transport 3.0 sees the held
+        // speed-zero interval and remains at time 2.0. Transport 4.0 then
+        // advances one live interval at speed 1.
+        wait_for_tick_change(&mut runtime, 4.0, 1.0);
         assert_eq!(
             runtime.completed_tick,
-            before.1 + BATCH as u64,
+            after_transition.1 + 1,
             "resume publishes one batch, not a jump"
         );
-        runtime.advance(true).unwrap();
-        assert_eq!(runtime.completed_tick, simulation_tick(1.0 + TICK), "debt is retained");
+        assert!((runtime.completed_time - 3.0).abs() < 1e-9);
         assert_eq!(runtime.drain_applied_impulses().count(), 0, "no discarded impulse ran");
+    }
+
+    #[test]
+    fn fluid_live_runtime_preserves_20_24_30_and_60_fps_endpoints() {
+        let _live = crate::node_graph::physics::PhysicsStepScope::for_render(false);
+        let settings = FluidSettings {
+            resolution: 8,
+            fill_height: 0.0,
+            ..FluidSettings::default()
+        };
+        let controls = FluidControls::default();
+        for fps in [20.0, 24.0, 30.0, 60.0] {
+            let mut runtime = FluidRuntime::default();
+            runtime.observe(settings, controls, Seconds::ZERO, 1.0, 0.0).unwrap();
+            runtime.advance(true).unwrap();
+            for frame in 1..=fps as u64 {
+                let transport = frame as f64 / fps;
+                runtime
+                    .observe(settings, controls, Seconds(transport), 1.0, 0.0)
+                    .unwrap();
+                runtime.advance(false).unwrap();
+                let started = std::time::Instant::now();
+                while runtime.completed_time + 1e-9 < transport {
+                    assert!(
+                        started.elapsed() < std::time::Duration::from_secs(30),
+                        "live fluid endpoint stalled at {transport}s for {fps}fps"
+                    );
+                    runtime
+                        .observe(settings, controls, Seconds(transport), 1.0, 0.0)
+                        .unwrap();
+                    runtime.advance(false).unwrap();
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+                assert!((runtime.completed_time - transport).abs() < 1e-9);
+                assert_eq!(runtime.completed_tick, frame);
+            }
+        }
     }
 
     #[test]
@@ -2225,6 +2397,7 @@ mod tests {
             substeps: 1,
             simulation_ms: 12.0,
             meshing_ms: 6.0,
+            ..FrameStats::default()
         };
         for tick in [2, 3, 4, 120] {
             writer
@@ -2364,6 +2537,7 @@ mod tests {
                 impulses: Vec::with_capacity(IMPULSE_CAPACITY),
                 epoch: old,
                 tick: 123,
+                accepted_interval: None,
                 history: Vec::new(),
                 role_history: Vec::new(),
                 vertices: Vec::new(),
@@ -2413,6 +2587,7 @@ mod tests {
                 impulses: Vec::with_capacity(IMPULSE_CAPACITY),
                 epoch: epoch.wrapping_add(1),
                 tick: 1,
+                accepted_interval: None,
                 history: Vec::new(),
                 role_history: Vec::new(),
                 vertices: Vec::new(),
@@ -2439,6 +2614,7 @@ mod tests {
                 impulses: Vec::with_capacity(IMPULSE_CAPACITY),
                 epoch,
                 tick: 1,
+                accepted_interval: None,
                 history: Vec::new(),
                 role_history: Vec::new(),
                 vertices: Vec::new(),
@@ -2473,6 +2649,7 @@ mod tests {
                 impulses: Vec::with_capacity(IMPULSE_CAPACITY),
                 epoch,
                 tick: 2,
+                accepted_interval: None,
                 history: Vec::new(),
                 role_history: Vec::new(),
                 vertices: Vec::new(),
@@ -2514,6 +2691,7 @@ mod tests {
                     impulses: Vec::with_capacity(IMPULSE_CAPACITY),
                     epoch,
                     tick: 0,
+                    accepted_interval: None,
                     history: Vec::new(),
                     role_history: Vec::new(),
                     vertices: Vec::new(),

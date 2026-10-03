@@ -27,7 +27,7 @@ use crate::node_graph::liquid::coupling::{DomainWalls, LiquidRigidOwner, Pending
 use crate::node_graph::liquid::fields::{self, FieldLattice, LiquidFields, LiquidImpulses};
 use crate::node_graph::liquid::lattice::LiquidLattice;
 use crate::node_graph::liquid::tick_samples::TickSamples;
-use crate::node_graph::matter::coupling::{ReactionScale, body_limit, decode};
+use crate::node_graph::matter::coupling::{ReactionScale, body_limit, decode, live_body_limit};
 use crate::node_graph::matter::{
     MAX_SUBSTEPS, REACTION_WORDS, WATER_DENSITY, block_sort_box, free_fall_speed, lattice_blocks, lattice_nodes,
     momentum_unit, stiffness_fitting_cap, substeps_per_tick, water_lambda, wave_speed,
@@ -128,7 +128,7 @@ pub(crate) fn fill_region(
             return Err("Matter: the initial volume must be a finite box fully inside the domain".into());
         }
         for (d, range) in column.iter_mut().enumerate() {
-            let cell = |x: f32| (((f64::from(x) - f64::from(layout.min[d])) / dx).round().max(0.0) as u32).min(layout.cells[d]);
+            let cell = |x: f32| {(((f64::from(x) - f64::from(layout.min[d])) / dx).round().max(0.0) as u32).min(layout.cells[d])};
             *range = [
                 cell(volume.pos[d] - volume.scale[d] * 0.5),
                 cell(volume.pos[d] + volume.scale[d] * 0.5),
@@ -273,6 +273,8 @@ crate::primitive! {
         substeps_per_tick: ScalarF32,
         epoch: ScalarF32,
         simulation_time: ScalarF32,
+    interval_duration: ScalarF32,
+    target_time: ScalarF32, step_cap_hit: ScalarF32,
         display_time: ScalarF32,
         dropped_seconds: ScalarF32,
         lambda: ScalarF32,
@@ -427,7 +429,7 @@ pub(crate) fn closed_faces(params: &ParamValues) -> u32 {
 }
 
 /// Every scalar output, in the order [`MatterDomain::compute`] fills them.
-const OUTPUTS: [&str; 52] = [
+const OUTPUTS: [&str; 55] = [
     "lattice_min_x", "lattice_min_y", "lattice_min_z", "cell_size", "nodes_x", "nodes_y",
     "nodes_z", "closed_faces", "gravity_x", "gravity", "gravity_z", "pool_cells", "column_x0",
     "column_x1", "column_y0", "column_y1", "column_z0", "column_z1", "points_per_cell",
@@ -437,7 +439,9 @@ const OUTPUTS: [&str; 52] = [
     "block_size_x", "block_size_y", "block_size_z", "block_cell_size", "momentum_unit",
     "body_count", "body_rows", "first_tick", "dynamic_count", "field_nodes_x", "field_nodes_y",
     "field_nodes_z", "field_spacing", "force_lattices", "impulse_tick",
-];
+    "interval_duration",
+    "target_time",
+    "step_cap_hit"];
 /// Wired role ports, in slot order (node.fluid_surface's names).
 const ROLE_PORTS: [&str; MAX_FLUID_ROLES] = [
     "role_0", "role_1", "role_2", "role_3", "role_4", "role_5", "role_6", "role_7", "role_8",
@@ -487,7 +491,7 @@ impl Primitive for MatterDomain {
     fn substep_host_sync(&self, iteration: u32) -> bool {
         self.coupled
             .exchange
-            .is_some_and(|x| iteration.is_multiple_of(x.substeps) && iteration / x.substeps < x.ticks)
+            .is_some_and(|x| {iteration.is_multiple_of(x.substeps) && iteration / x.substeps < x.ticks})
     }
 
     /// Section 5 between two ticks of one frame: settle the tick the
@@ -765,6 +769,9 @@ impl MatterDomain {
             restart,
             offline,
         );
+        if frame.numerical_error {
+            crate::node_graph::physics_metrics::record_simulation(0.0, 0.0, false, true);
+        }
         if frame.restarted && self.coupled.owner.is_some() && !self.coupled.owner_fresh {
             self.rebuild_owner()?;
         }
@@ -797,7 +804,11 @@ impl MatterDomain {
         let unit_wave = wave_speed(water_lambda(longest, 1.0), f64::from(WATER_DENSITY));
         let v_est = free_fall_speed(f64::from(layout.size[1]));
         let stiffness = f64::from(ctx.scalar_or_param("stiffness", 1.0).clamp(0.5, 3.0));
-        let fitted = stiffness.min(stiffness_fitting_cap(dx, unit_wave, v_est));
+        let fitted = if offline {
+            stiffness.min(stiffness_fitting_cap(dx, unit_wave, v_est))
+        } else {
+            stiffness
+        };
         let limited = fitted < stiffness;
         if limited != self.limited {
             self.limited = limited;
@@ -809,12 +820,21 @@ impl MatterDomain {
         }
         let wave = (unit_wave * fitted) as f32;
         let body_limit = match &self.coupled.owner {
-            Some(owner) => body_limit(owner, lattice.cell_size(), wave, v_est as f32)?,
+            Some(owner) if offline => body_limit(owner, lattice.cell_size(), wave, v_est as f32)?,
+            Some(owner) => live_body_limit(owner, lattice.cell_size(), wave),
             None => None,
         };
-        let substeps = substeps_per_tick(lattice.cell_size(), wave, v_est as f32, body_limit, None).min(MAX_SUBSTEPS);
+        let nominal_substeps = substeps_per_tick(lattice.cell_size(), wave, v_est as f32, body_limit, None);
+        let requested = if offline {
+            nominal_substeps
+        } else {
+            ((frame.duration().0 / TICK * f64::from(nominal_substeps)).ceil() as u32).max(1)
+        };
+        let substeps = requested.min(MAX_SUBSTEPS);
         let lambda = water_lambda(longest, fitted);
-        let unit = momentum_unit(lattice.cell_size(), TICK / f64::from(substeps));
+        let unit = momentum_unit(lattice.cell_size(), if frame.ticks == 0 {TICK / f64::from(substeps)} else {
+                frame.duration().0 / f64::from(substeps)
+            });
         let mut display_time = frame.display_time;
         if let Some(owner) = &mut self.coupled.owner {
             if frame.ticks > 0 {
@@ -825,7 +845,16 @@ impl MatterDomain {
                         owner.completed()
                     ));
                 }
-                let pending = PendingTick { tick: first_tick, stamp: clock.as_ref().map_or(0, FrameClock::stamp) };
+                let pending = PendingTick { tick: first_tick, stamp: clock.as_ref().map_or(0, FrameClock::stamp) ,
+                    interval: manifold_physics::stepping::StepInterval::new(
+                        frame.plan.start,
+                        manifold_core::Seconds(if frame.offline {
+                            frame.plan.start.0 + TICK
+                        } else {
+                            frame.plan.end.0
+                        }),
+                    ),
+                    offline: frame.offline};
                 let scale = ReactionScale {
                     unit,
                     cell_size: lattice.cell_size(),
@@ -840,7 +869,7 @@ impl MatterDomain {
             // The liquid is shown at the tick Box3D has settled, with the
             // bodies' accepted frame, which the scene takes before the region
             // runs this frame's ticks.
-            display_time = owner.completed() as f64 * TICK;
+            display_time = owner.completed_time().0;
         }
         self.coupled.transport = Some(ctx.time.seconds.0);
         let field = self
@@ -855,6 +884,15 @@ impl MatterDomain {
             ("substeps_per_tick", substeps as f32),
             ("epoch", frame.epoch as f32),
             ("simulation_time", frame.simulation_time as f32),
+            ("interval_duration", frame.duration().0 as f32),
+            ("target_time", frame.target_time as f32),
+            (
+                "step_cap_hit",
+                if !offline && requested >= MAX_SUBSTEPS {
+                    1.0
+                } else {
+                    0.0
+                }),
             ("display_time", display_time as f32),
             ("dropped_seconds", frame.dropped_seconds as f32),
             ("lambda", lambda as f32),
@@ -933,7 +971,10 @@ impl MatterDomain {
         // encoded after this write.
         unsafe { bodies.write(offset, bytes) };
         reaction.zero_fill();
-        owner.set_pending(PendingTick { tick: exchange.pending.tick + u64::from(tick), ..exchange.pending });
+        owner.set_pending(PendingTick { tick: exchange.pending.tick + u64::from(tick), interval: manifold_physics::stepping::StepInterval::new(
+                manifold_core::Seconds(exchange.pending.interval.start.0 + f64::from(tick) * TICK),
+                manifold_core::Seconds(exchange.pending.interval.end.0 + f64::from(tick) * TICK),
+            ),..exchange.pending });
         Ok(())
     }
 

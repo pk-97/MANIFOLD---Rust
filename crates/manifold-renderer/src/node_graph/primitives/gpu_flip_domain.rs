@@ -173,14 +173,17 @@ impl GpuFlipGeometry {
 }
 
 /// Every scalar output, in the order [`GpuFlipDomain::compute`] fills them.
-const OUTPUTS: [&str; 38] = [
+const OUTPUTS: [&str; 42] = [
     "lattice_min_x", "lattice_min_y", "lattice_min_z", "cell_size", "nodes_x", "nodes_y", "nodes_z",
     "closed_faces", "pool_sites", "box_x0", "box_x1", "box_y0", "box_y1", "box_z0", "box_z1",
     "particle_mass", "gravity_x", "gravity", "gravity_z", "ticks", "epoch", "simulation_time",
     "display_time", "target_time", "dropped_seconds", "body_count", "body_rows", "first_tick", "field_nodes_x",
     "field_nodes_y", "field_nodes_z", "field_spacing", "force_lattices", "impulse_tick", "dynamic_bodies",
     "particle_capacity", "region_count", "solve_level",
-];
+    "interval_duration",
+    "clock_obstacle_count",
+    "clock_source_count",
+    "live_hit_count"];
 const TICKS: usize = 19;
 const IMPULSE_TICK: usize = 33;
 const _: () = assert!(matches!(OUTPUTS[TICKS].as_bytes(), b"ticks"));
@@ -336,6 +339,10 @@ crate::primitive! {
         ticks: ScalarF32,
         epoch: ScalarF32,
         simulation_time: ScalarF32,
+    interval_duration: ScalarF32,
+    clock_obstacle_count: ScalarF32, clock_source_count: ScalarF32,
+    clock_obstacles: Array(f32), clock_sources: Array(f32),
+    live_hits: Array(f32), live_hit_count: ScalarF32,
         target_time: ScalarF32,
         display_time: ScalarF32,
         dropped_seconds: ScalarF32,
@@ -399,7 +406,9 @@ crate::primitive! {
 
 impl Primitive for GpuFlipDomain {
     fn provides_array_output(&self, port: &str) -> bool {
-        matches!(port, "bodies" | "regions" | "shapes" | "atlas" | "reaction" | "forces" | "impulses")
+        matches!(port, "bodies" | "regions" | "shapes" | "atlas" | "reaction" | "forces" | "impulses"| "clock_obstacles"
+                | "clock_sources"
+                | "live_hits")
     }
 
     fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
@@ -407,6 +416,7 @@ impl Primitive for GpuFlipDomain {
             "reaction" => return self.reaction.as_ref(),
             "forces" => return self.fields.forces_buffer(),
             "impulses" => return self.fields.impulses_buffer(),
+            "live_hits" => return self.fields.live_hits_buffer(),
             _ => {}
         }
         self.body_buffers.output(port)
@@ -418,7 +428,9 @@ impl Primitive for GpuFlipDomain {
         _params: &ParamValues,
         _input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
-        matches!(port_name, "bodies" | "regions" | "shapes" | "atlas" | "reaction" | "forces" | "impulses").then_some(1)
+        matches!(port_name, "bodies" | "regions" | "shapes" | "atlas" | "reaction" | "forces" | "impulses"| "clock_obstacles"
+                | "clock_sources"
+                | "live_hits").then_some(1)
     }
 
     fn warmup_pending(&self) -> bool {
@@ -701,6 +713,9 @@ impl GpuFlipDomain {
             restart,
             offline,
         );
+        if frame.numerical_error {
+            crate::node_graph::physics_metrics::record_simulation(0.0, 0.0, false, true);
+        }
         if frame.restarted && self.coupled.owner.is_some() && !self.coupled.owner_fresh {
             self.rebuild_owner()?;
         }
@@ -723,6 +738,8 @@ impl GpuFlipDomain {
             self.body_rows = self.bodies.rows(first_tick, frame.ticks, coupled_rows)?.len() as f32;
         }
         let dynamic_bodies = coupled_rows.iter().filter(|row| takes_reaction(row)).count();
+        self.bodies
+            .prepare_clock_vertices(geometry.layout.min, geometry.layout.size);
         let mut display_time = frame.display_time;
         if let Some(owner) = &mut self.coupled.owner {
             if frame.ticks > 0 {
@@ -733,7 +750,16 @@ impl GpuFlipDomain {
                         owner.completed()
                     ));
                 }
-                let pending = PendingTick { tick: first_tick, stamp: clock.as_ref().map_or(0, FrameClock::stamp) };
+                let pending = PendingTick { tick: first_tick, stamp: clock.as_ref().map_or(0, FrameClock::stamp) ,
+                    interval: manifold_physics::stepping::StepInterval::new(
+                        frame.plan.start,
+                        manifold_core::Seconds(if frame.offline {
+                            frame.plan.start.0 + TICK
+                        } else {
+                            frame.plan.end.0
+                        }),
+                    ),
+                    offline: frame.offline};
                 let offset = self.bodies.count() - owner.rows().len();
                 owner.set_pending(pending);
                 self.coupled.offset = Some(offset);
@@ -744,8 +770,9 @@ impl GpuFlipDomain {
             // The water is shown at the tick Box3D has settled, with the
             // bodies' accepted frame, which the scene takes before the region
             // runs this frame's ticks.
-            display_time = owner.completed() as f64 * TICK;
+            display_time = owner.completed_time().0;
         }
+        self.fields.split_live_hits();
         let field = self.fields.prepare(
             geometry.field_lattice(),
             self.acceleration.as_ref(),
@@ -762,6 +789,16 @@ impl GpuFlipDomain {
             ("ticks", frame.ticks as f32),
             ("epoch", frame.epoch as f32),
             ("simulation_time", frame.simulation_time as f32),
+            ("interval_duration", frame.duration().0 as f32),
+            (
+                "clock_obstacle_count",
+                self.bodies.clock_obstacles().len() as f32,
+            ),
+            (
+                "clock_source_count",
+                self.bodies.clock_sources().len() as f32,
+            ),
+            ("live_hit_count", self.fields.live_hit_count() as f32),
             ("target_time", frame.target_time as f32),
             ("display_time", display_time as f32),
             ("dropped_seconds", frame.dropped_seconds as f32),
@@ -836,7 +873,10 @@ impl GpuFlipDomain {
         // encoded after this write.
         unsafe { bodies.write(offset, bytes) };
         reaction.zero_fill();
-        owner.set_pending(PendingTick { tick: exchange.pending.tick + u64::from(tick), ..exchange.pending });
+        owner.set_pending(PendingTick { tick: exchange.pending.tick + u64::from(tick),
+            interval: manifold_physics::stepping::StepInterval::new(
+                manifold_core::Seconds(exchange.pending.interval.start.0 + f64::from(tick) * TICK),
+                manifold_core::Seconds(exchange.pending.interval.end.0 + f64::from(tick) * TICK)), ..exchange.pending });
         Ok(())
     }
 

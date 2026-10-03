@@ -2,7 +2,7 @@
 //! (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` P8; GPU_MPM_SOLVER_DESIGN.md D13).
 //!
 //! A domain calls the same things whatever its solver:
-//! - [`LiquidImpulses`] keeps scene impulses on the domain's fixed-tick clock.
+//! - [`LiquidImpulses`] keeps scene impulses on the domain's accepted clock.
 //!   Call [`LiquidImpulses::observe_frame`] right after `LiquidClock::advance`,
 //!   and [`LiquidImpulses::commit_frame`] once the frame's ticks are encoded;
 //!   the impulse hooks call `stamp`, `enqueue`, `drain_applied` and
@@ -16,7 +16,9 @@
 //!   [`FieldLattice`], a quarter of the solver's resolution per axis: one
 //!   lattice while the ticks agree, one per tick otherwise, so a tick reads
 //!   the same forces at any frame rate. A tick nobody sampled is an error.
-//!   This frame's impulses go onto one more lattice.
+//!   Fixed export impulses use one additional lattice. GPU FLIP live hits
+//!   retain distinct timestamps and use one lattice per timestamp; ties sum
+//!   in source order.
 //! - [`LiquidFields::upload`] copies what changed into the stable `forces` and
 //!   `impulses` buffers in encoder order. The solver's atoms read them with
 //!   `LIQUID_FIELD` (`shaders/liquid_field.wgsl`): forces every substep from
@@ -30,7 +32,7 @@ use manifold_physics::{FieldValue, TickStamp, VectorField};
 
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid::TICK;
-use crate::node_graph::liquid::clock::{ClockFrame, LiquidClock, MAX_LIVE_TICKS};
+use crate::node_graph::liquid::clock::{ClockFrame, LiquidClock, FIELD_RESERVE_INTERVALS};
 use crate::node_graph::liquid::coupling::LiquidRigidOwner;
 use crate::node_graph::liquid::lattice::LiquidLattice;
 use crate::node_graph::liquid::tick_samples::TickSamples;
@@ -190,7 +192,7 @@ impl<'a> FieldBinding<'a> {
 
 /// The first tick a frame runs, counted in its epoch.
 pub fn first_tick(frame: &ClockFrame) -> u64 {
-    (frame.simulation_time / TICK).round() as u64 - u64::from(frame.ticks)
+    frame.first_sequence
 }
 
 /// Scene impulses on a liquid's fixed-tick clock. A hit fired after a frame
@@ -273,7 +275,15 @@ impl LiquidImpulses {
         }
         let pending = &mut self.pending;
         for tick in first..first + u64::from(frame.ticks) {
-            if let Err(error) = queue.begin_tick(TickStamp { epoch: self.epoch, tick }, |event| pending.push(event)) {
+            let stamp = TickStamp { epoch: self.epoch, tick };
+            let result = if frame.offline {
+                queue.begin_tick(stamp, |event| pending.push(event))
+            } else if let Some(interval) = frame.interval(tick - first) {
+                queue.begin_interval(stamp, interval, |event| pending.push(event))
+            } else {
+                Ok(())
+            };
+            if let Err(error) = result {
                 let error = format!("Liquid impulses: {error}");
                 self.failure = Some(error.clone());
                 return Err(error);
@@ -364,7 +374,7 @@ impl LiquidImpulses {
         }
         let mut planned = None;
         if let Some((targets, owner)) = rigid {
-            let rigid_stamp = owner.rigid().impulse_stamp(Seconds(owner.completed() as f64 * TICK), stamp.sequence)?;
+            let rigid_stamp = owner.rigid().impulse_stamp(owner.completed_time(), stamp.sequence)?;
             planned = Some(owner.rigid_mut().enqueue_impulse(
                 rigid_stamp,
                 ResolvedRigidImpulse { field: impulse.field.clone(), targets },
@@ -441,6 +451,9 @@ struct FieldBuffers {
     lattice: FieldLattice,
     /// Force lattices the buffers hold room for.
     force_capacity: usize,
+    impulse_capacity: usize,
+    live_hit_capacity: usize,
+    live_hits: GpuBuffer,
     forces: GpuBuffer,
     impulses: GpuBuffer,
     staging: Vec<StagingSlot>,
@@ -458,6 +471,9 @@ pub struct LiquidFields {
     forces: Vec<[f32; 4]>,
     force_lattices: usize,
     impulses: Vec<[f32; 4]>,
+    live_hits: Vec<[u32; 4]>,
+    live_start: Option<f64>,
+    split_live_hits: bool,
     /// The field every lattice holds while it holds still.
     force_source: Option<FieldValue>,
     /// The field at each tick's start, from the oldest tick not yet run.
@@ -469,6 +485,8 @@ pub struct LiquidFields {
 }
 
 impl LiquidFields {
+    pub fn split_live_hits(&mut self) { self.split_live_hits = true; }
+
     /// Lay each of the frame's ticks' fields onto its lattice and sample the
     /// frame's hits. Call right after `clock` advanced to `frame`; `field` is
     /// this frame's, which belongs to any tick starting exactly now.
@@ -481,6 +499,7 @@ impl LiquidFields {
         impulses: &LiquidImpulses,
     ) -> Result<FieldFrame, String> {
         let count = lattice.node_count();
+        self.live_start = (self.split_live_hits && !frame.offline).then_some(frame.plan.start.0);
         if self.lattice != Some(lattice) {
             self.forces.clear();
             self.force_lattices = 0;
@@ -540,19 +559,44 @@ impl LiquidFields {
 
     fn finish(&mut self, lattice: FieldLattice, impulses: &LiquidImpulses) -> Result<FieldFrame, String> {
         let impulse_tick = impulses.impulse_tick();
+        self.live_hits.clear();
+        let events = impulses.frame_events();
+        let count = lattice.node_count();
+        let lattice_count = if self.live_start.is_some() { events.len().max(1) } else { 1 };
+        self.impulses.resize(count * lattice_count, [0.0; 4]);
         if impulse_tick.is_some() {
-            let events = impulses.frame_events();
-            fill(&lattice, &mut self.impulses, |x| {
-                let mut sum = [0.0f32; 3];
-                for event in events.iter().filter(|event| event.value.target.affects_fluid()) {
-                    let v = event.value.field.sample(x);
-                    for axis in 0..3 {
-                        sum[axis] += v[axis];
+            if let Some(start) = self.live_start {
+                let mut first = 0;
+                while first < events.len() {
+                    let relative = (events[first].source.time.0 - start).max(0.0) as f32;
+                    let mut end = first + 1;
+                    while end < events.len() && ((events[end].source.time.0 - start).max(0.0) as f32).to_bits() == relative.to_bits() {
+                        end += 1;
                     }
+                    let index = self.live_hits.len();
+                    self.live_hits.push([relative.to_bits(), index as u32, 0, 0]);
+                    fill(&lattice, &mut self.impulses[index * count..(index + 1) * count], |x| {
+                        let mut sum = [0.0; 3];
+                        for event in &events[first..end] {
+                            if event.value.target.affects_fluid() {
+                                let value = event.value.field.sample(x);
+                                for axis in 0..3 { sum[axis] += value[axis]; }
+                            }
+                        }
+                        sum
+                    }).map_err(|_| "Liquid impulses: the impulse field is not finite inside the domain".to_string())?;
+                    first = end;
                 }
-                sum
-            })
-            .map_err(|_| "Liquid impulses: the impulse field is not finite inside the domain".to_string())?;
+            } else {
+                fill(&lattice, &mut self.impulses, |x| {
+                    let mut sum = [0.0f32; 3];
+                    for event in events.iter().filter(|event| event.value.target.affects_fluid()) {
+                        let v = event.value.field.sample(x);
+                        for axis in 0..3 { sum[axis] += v[axis]; }
+                    }
+                    sum
+                }).map_err(|_| "Liquid impulses: the impulse field is not finite inside the domain".to_string())?;
+            }
             self.impulses_dirty = true;
         }
         Ok(FieldFrame {
@@ -569,6 +613,12 @@ impl LiquidFields {
 
     pub fn impulses(&self) -> &[[f32; 4]] {
         &self.impulses
+    }
+
+    pub fn live_hit_count(&self) -> usize { self.live_hits.len() }
+
+    pub fn live_hits_buffer(&self) -> Option<&GpuBuffer> {
+        self.gpu.as_ref().map(|gpu| &gpu.live_hits)
     }
 
     pub fn forces_buffer(&self) -> Option<&GpuBuffer> {
@@ -588,33 +638,37 @@ impl LiquidFields {
         }
         let bytes = lattice.bytes();
         let force_bytes = self.force_lattices as u64 * bytes;
+        let impulse_bytes = (self.impulses.len() * 16) as u64;
+        let live_hit_bytes = (self.live_hits.len() * 16) as u64;
         if self
             .gpu
             .as_ref()
-            .is_none_or(|buffers| buffers.lattice != lattice || buffers.force_capacity < self.force_lattices)
+            .is_none_or(|buffers| buffers.lattice != lattice || buffers.force_capacity < self.force_lattices || buffers.impulse_capacity < self.impulses.len() || buffers.live_hit_capacity < self.live_hits.len())
         {
             // Room for a live frame's ticks up front; offline catch-up grows it.
-            let force_capacity = self.force_lattices.max(MAX_LIVE_TICKS as usize);
+            let force_capacity = self.force_lattices.max(FIELD_RESERVE_INTERVALS as usize);
             let create = |what: &str, size: u64| {
                 gpu.device
                     .try_create_buffer_shared(size)
                     .map_err(|error| format!("Liquid fields: the {what} need {size} bytes: {error}"))
             };
             let forces = create("forces", force_capacity as u64 * bytes)?;
-            let impulses = create("impulses", bytes)?;
+            let impulses = create("impulses", impulse_bytes)?;
+            let live_hits = create("live hits", live_hit_bytes.max(16))?;
             forces.zero_fill();
             impulses.zero_fill();
+            live_hits.zero_fill();
             let staging = (0..STAGING_SLOTS)
                 .map(|_| {
-                    create("staging lattices", (1 + force_capacity as u64) * bytes)
+                    create("staging lattices", impulse_bytes + force_capacity as u64 * bytes + live_hit_bytes.max(16))
                         .map(|buffer| StagingSlot { buffer, read_stamp: 0 })
                 })
                 .collect::<Result<_, _>>()?;
-            self.gpu = Some(FieldBuffers { lattice, force_capacity, forces, impulses, staging });
+            self.gpu = Some(FieldBuffers { lattice, force_capacity, impulse_capacity: self.impulses.len(), live_hit_capacity: self.live_hits.len(), live_hits, forces, impulses, staging });
             self.forces_dirty = true;
             self.impulses_dirty = true;
         }
-        if !self.forces_dirty && !self.impulses_dirty {
+        if !self.forces_dirty && !self.impulses_dirty && self.live_hits.is_empty() {
             return Ok(());
         }
         let buffers = self.gpu.as_mut().expect("allocated above");
@@ -642,14 +696,20 @@ impl LiquidFields {
             // reader has retired (checked or waited above) and the copy below
             // is the next.
             unsafe { slot.buffer.write(0, bytemuck::cast_slice(&self.impulses)) };
-            gpu.native_enc.copy_buffer_range(&slot.buffer, 0, &buffers.impulses, 0, bytes);
+            gpu.native_enc.copy_buffer_range(&slot.buffer, 0, &buffers.impulses, 0, impulse_bytes);
         }
         if self.forces_dirty && force_bytes > 0 {
             let forces = &self.forces[..self.force_lattices * lattice.node_count()];
             // SAFETY: as above, after the impulse lattice; the capacity holds
             // every force lattice.
-            unsafe { slot.buffer.write(bytes, bytemuck::cast_slice(forces)) };
-            gpu.native_enc.copy_buffer_range(&slot.buffer, bytes, &buffers.forces, 0, force_bytes);
+            unsafe { slot.buffer.write(impulse_bytes, bytemuck::cast_slice(forces)) };
+            gpu.native_enc.copy_buffer_range(&slot.buffer, impulse_bytes, &buffers.forces, 0, force_bytes);
+        }
+        if live_hit_bytes > 0 {
+            let offset = impulse_bytes + buffers.force_capacity as u64 * bytes;
+            // SAFETY: the retired staging slot includes the event records.
+            unsafe { slot.buffer.write(offset, bytemuck::cast_slice(&self.live_hits)) };
+            gpu.native_enc.copy_buffer_range(&slot.buffer, offset, &buffers.live_hits, 0, live_hit_bytes);
         }
         slot.read_stamp = clock.map_or(0, FrameClock::stamp);
         self.forces_dirty = false;
