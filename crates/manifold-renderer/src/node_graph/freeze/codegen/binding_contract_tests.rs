@@ -189,7 +189,8 @@ fn dispatch_tail_census_is_stable() {
     // it adds no standalone atom. No standalone atom is removed.
     // BUG-imy3.1 adds turbulence_field, inside_turbulence_potential, turbulence_emission_count,
     // whitewater_emitter_velocity, whitewater_obstacle_source, whitewater_influence and dust_potential.
-    assert_eq!(total, 235, "standalone atom census drifted");
+    // BUG-g75v.7 adds upwind_distance, a buffer stencil atom.
+    assert_eq!(total, 236, "standalone atom census drifted");
     assert_eq!(
         qualifying, 93,
         "canonical texture-path population drifted"

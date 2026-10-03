@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 377 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 378 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -297,7 +297,7 @@ _Generated from the node registry. Do not hand-edit. 377 nodes registered, group
 | Turbulence (simplex) | `node.turbulence` | Filter | Pushes particles around with a flowing noise field, giving organic, swirling motion. The classic turbulence force. |
 | Wrap Around (torus) | `node.wrap_around` | Filter | Wraps particles back to the opposite edge when they leave the frame, so the cloud loops seamlessly instead of escaping. |
 
-### Particles 3D (69)
+### Particles 3D (70)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -363,6 +363,7 @@ _Generated from the node registry. Do not hand-edit. 377 nodes registered, group
 | Turbulence (3D, simplex) | `node.turbulence_3d` | Filter | Pushes 3D particles around with a flowing 3D noise field for organic, swirling motion through space. |
 | Emission Count | `node.turbulence_emission_count` | Filter | Works out how many foam, spray and bubble particles each bit of breaking water throws off this frame. |
 | Turbulence Field | `node.turbulence_field` | Filter | Measures local liquid agitation for whitewater emission. |
+| Upwind Distance | `node.upwind_distance` | Filter | One FLIP Fluids upwind signed-distance sweep on valid cells, with recomputed smoothed sign, clamped neighbours and pseudo-time h/2. Invalid cells retain their … |
 | Wavecrest Potential | `node.wavecrest_potential` | Filter | Scores how sharply each bit of water is breaking over a wave crest, which is where foam and spray come from. |
 | Whitewater Emitter Velocity | `node.whitewater_emitter_velocity` | Filter | Scales surface emitter velocity by the FLIP spray emission factor. |
 | Whitewater Influence | `node.whitewater_influence` | Filter | Decays obstacle influence and reapplies solid sources. |

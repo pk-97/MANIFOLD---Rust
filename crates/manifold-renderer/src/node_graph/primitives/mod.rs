@@ -375,6 +375,8 @@ mod inside_turbulence_potential;
 mod turbulence_emission_count;
 #[cfg(test)]
 mod whitewater_emitter_cpu;
+#[cfg(test)]
+mod whitewater_engine_cpu;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod whitewater_emitter_gpu_tests;
 mod wavecrest_potential;
@@ -1094,3 +1096,9 @@ pub mod redistance_lattice;
 
 #[cfg(test)]
 mod lattice_closing_tests;
+
+pub mod upwind_distance;
+pub(crate) mod whitewater_distance;
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod whitewater_engine_gpu_tests;

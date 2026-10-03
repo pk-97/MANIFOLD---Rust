@@ -264,8 +264,16 @@ LIB_PROOF_ROWS = {
         "node_graph::primitives::whitewater_step_tests::",
         "node_graph::primitives::whitewater_pool_tests::",
         "node_graph::primitives::whitewater_handoff_tests::",
+        "node_graph::primitives::whitewater_engine_gpu_tests::",
     ],
 }
+
+# The solver adapter publishes the accepted schedule and MAC history.
+# The broad gpu_flip_ row above still supplies its existing solver proofs.
+LIB_PROOF_ROWS[RENDERER_SRC + "node_graph/primitives/gpu_flip_step.rs"] = [
+    "node_graph::primitives::gpu_flip_step::",
+    "node_graph::primitives::whitewater_engine_gpu_tests::",
+]
 
 # BUG-imy3.1: per-element emitters share CPU-reference and fused value proofs.
 for _whitewater_atom in (
@@ -279,6 +287,20 @@ for _whitewater_atom in (
         "node_graph::primitives::whitewater_step_tests::",
     ]
 del _whitewater_atom
+
+# BUG-g75v.7: engine distance, accepted MAC history, force and drain proofs.
+for _engine_path in (
+    "primitives/upwind_distance.rs", "primitives/whitewater_distance.rs",
+    "primitives/whitewater_engine_cpu.rs", "primitives/whitewater_engine_gpu_tests.rs",
+    "primitives/advect_whitewater.rs", "primitives/keep_whitewater.rs",
+    "liquid/substep_history.rs",
+):
+    LIB_PROOF_ROWS[RENDERER_SRC + "node_graph/" + _engine_path] = [
+        "node_graph::primitives::whitewater_engine_gpu_tests::",
+        "node_graph::primitives::whitewater_pool_tests::",
+        "node_graph::primitives::whitewater_step_tests::",
+    ]
+del _engine_path
 
 PATH_ATTR_MOD = re.compile(r'#\[path\s*=\s*"tests/([\w.]+)"\]\s*mod\s+(\w+)\s*;')
 

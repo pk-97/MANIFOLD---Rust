@@ -666,6 +666,7 @@ pub(crate) struct StepState {
     bodies: BodyPasses,
     clock: Option<GpuFlipClock>,
     clock_capacities: [u32; 3],
+    history: crate::node_graph::liquid::substep_history::SubstepHistory,
     narrow: NarrowBand,
     narrow_history: Option<NarrowHistory>,
     narrow_reset_pending: bool,
@@ -2061,6 +2062,9 @@ crate::primitive! {
         out: Array(FluidParticle),
         faces: Array(FaceSample),
         distance: Array(f32),
+        substep_schedule: Array(f32),
+        substep_u: Array(f32), substep_v: Array(f32), substep_w: Array(f32),
+        substep_count: ScalarF32,
         grid_bounds: Transform,
         grid_nodes_x: ScalarF32, grid_nodes_y: ScalarF32, grid_nodes_z: ScalarF32,
         face_cells_x: ScalarF32, face_cells_y: ScalarF32, face_cells_z: ScalarF32,
@@ -2130,10 +2134,11 @@ fn read_iterations(value: f32) -> Result<Stop, String> {
 impl Primitive for GpuFlipStep {
     fn prepare_pipelines(&mut self, device: &GpuDevice) {
         self.state.prepare_pipelines(device);
+        self.state.history.prepare(device);
     }
 
     fn provides_array_output(&self, port: &str) -> bool {
-        matches!(port, "faces" | "distance" | "interior")
+        matches!(port, "faces" | "distance" | "interior" | "substep_schedule" | "substep_u" | "substep_v" | "substep_w")
     }
 
     fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
@@ -2141,6 +2146,8 @@ impl Primitive for GpuFlipStep {
             "faces" => self.state.faces.as_ref(),
             "distance" => self.state.lattice.as_ref().map(|l| &l.phi),
             "interior" => self.state.interior.as_ref(),
+            "substep_schedule" => self.state.history.schedule.as_ref(),
+            "substep_u" | "substep_v" | "substep_w" => self.state.history.faces.as_ref().map(|f| &f[match port { "substep_u" => 0, "substep_v" => 1, _ => 2 }]),
             _ => None,
         }
     }
@@ -2149,7 +2156,7 @@ impl Primitive for GpuFlipStep {
         match port {
             "out" => inputs.iter().find(|(name, _)| *name == "particles").map(|&(_, n)| n),
             // Provided storage: a one-record hint, sized to the lattice at run time.
-            "faces" | "distance" | "interior" => Some(1),
+            "faces" | "distance" | "interior" | "substep_schedule" | "substep_u" | "substep_v" | "substep_w" => Some(1),
             "reaction_out" => inputs.iter().find(|(name, _)| *name == "reaction").map(|&(_, n)| n),
             "capped" => inputs.iter().find(|(name, _)| *name == "particles").map(|&(_, n)| n.saturating_mul(2).saturating_add(SOLVER_WORDS)),
             "clock_status" => Some(8),
@@ -2441,7 +2448,14 @@ impl Primitive for GpuFlipStep {
         let body_row_offset = u64::try_from(rows.saturating_sub(body_count).max(0))
             .unwrap_or(0)
             .saturating_mul(size_of::<LiquidBody>() as u64);
+        let history_slots = manifold_physics::stepping::LIVE_DEFAULT_MAX_STEPS + live_hit_count;
+        ctx.outputs.set_scalar("substep_count", ParamValue::Float(history_slots as f32));
         let gpu = ctx.gpu_encoder();
+        self.state.history.prepare(gpu.device);
+        if let Err(error) = self.state.history.reserve(gpu.device, step.params.n, history_slots) {
+            ctx.error(format!("{NAME}: {error}"));
+            return;
+        }
         // The first substep reads the tick's particles, every later one the
         // last one's out. The reaction is in place, so the bodies feel every
         // substep.
@@ -2582,6 +2596,7 @@ impl Primitive for GpuFlipStep {
                         gpu.native_enc.copy_buffer_to_buffer(&nb.phi, interior, nb.phi.size);
                     }
                 }
+                self.state.history.capture(gpu.native_enc, k as u32, &plan_buffer, self.state.faces.as_ref().expect("faces prepared"));
                 last_clock_plan = plan_buffer;
             }
         }

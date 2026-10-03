@@ -619,6 +619,10 @@ pub const LIQUID_EXTENT_RULES: &[ExtentRule] = &[
     ExtentRule { type_id: "node.keep_whitewater", check: keep_whitewater },
     ExtentRule { type_id: "node.whitewater_lifecycle", check: whitewater_lifecycle },
     ExtentRule { type_id: "node.whitewater_step", check: whitewater_step },
+    ExtentRule { type_id: "node.upwind_distance", check: |x| {
+        let count=["nodes_x","nodes_y","nodes_z"].map(|p|u64::from(whole(x,p,8.0))).into_iter().product::<u64>();
+        for port in ["levelset","valid","out"] { x.covers(port,count*4)?; } Ok(())
+    } },
     ExtentRule { type_id: "node.particles_to_copies", check: particles_to_copies },
 ];
 
@@ -1393,6 +1397,13 @@ fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let faces = face_bytes(cells);
     x.provide("faces", faces);
     x.provide("distance", cell_total(cells) * 4);
+    let history_slots = manifold_physics::stepping::LIVE_DEFAULT_MAX_STEPS + whole(x,"live_hit_count",0.0);
+    x.provide("substep_schedule",u64::from(history_slots)*16);
+    for (axis,port) in ["substep_u","substep_v","substep_w"].into_iter().enumerate() {
+        x.provide(port,u64::from(history_slots)*face_len(cells,axis)*4);
+    }
+    x.publish("substep_count",history_slots as f32);
+    x.hold(super::substep_history::history_bytes(cells,history_slots));
     let lattice = x.lattice()?;
     x.publish_transform("grid_bounds", lattice.bounds());
     for (port, value) in ["grid_nodes_x", "grid_nodes_y", "grid_nodes_z"].into_iter().zip(lattice.nodes())
@@ -1649,7 +1660,13 @@ fn whitewater_type(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 /// record per pool slot.
 fn advect_whitewater(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let (nodes, _) = whitewater_lattice(x, ["nodes_x", "nodes_y", "nodes_z"])?;
-    whitewater_faces(x, nodes, ["face_cells_x", "face_cells_y", "face_cells_z"])?;
+    let cells=whitewater_faces(x, nodes, ["face_cells_x", "face_cells_y", "face_cells_z"])?;
+    let steps=u64::from(whole(x,"substep_count",0.0));
+    if steps>0 {
+        x.covers("substep_schedule",steps*16)?;
+        for (axis,port) in ["substep_u","substep_v","substep_w"].into_iter().enumerate() { x.covers(port,steps*face_len(cells,axis)*4)?; }
+    }
+    field_reads(x)?;
     x.covers("solid", cell_total(nodes) * 4)?;
     x.covers("out", x.bytes("pool").unwrap_or(0))
 }
@@ -1680,6 +1697,12 @@ fn preserve_foam(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 /// flag per pool slot. Unset bins are the sort's own rule on the grid's box
 /// and cell, as the atom's run works them out.
 fn keep_whitewater(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let regions = u64::from(whole(x, "region_count", 0.0));
+    if regions > 0 {
+        x.covers("regions", (regions + u64::from(whole(x, "region_offset", 0.0))) * size_of::<LiquidBody>() as u64)?;
+        x.covers("shapes", size_of::<LiquidShape>() as u64)?;
+        x.covers("atlas", 4)?;
+    }
     let (nodes, cells) = whitewater_lattice(x, ["nodes_x", "nodes_y", "nodes_z"])?;
     x.covers("solid", cell_total(nodes) * 4)?;
     let ports = ["bins_x", "bins_y", "bins_z"];
@@ -1751,6 +1774,19 @@ fn whitewater_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.provide("state_out", 32);
     x.provide("counts_out", 36);
     if x.input("obstacle_source").is_some() { x.covers("obstacle_source", shape.solid_bytes() * 4)?; }
+    if x.input("substep_schedule").is_some() {
+        let slots=u64::from(whole(x,"substep_count",0.0));
+        x.covers("substep_schedule",slots*16)?;
+        for (axis,port) in ["substep_u","substep_v","substep_w"].into_iter().enumerate() { x.covers(port,slots*shape.face_bytes(axis))?; }
+        field_reads(x)?;
+        let regions=u64::from(whole(x,"region_count",0.0));
+        if regions>0 {
+            let row=(whole(x,"tick_index",0.0).saturating_sub(whole(x,"first_tick",0.0))) as u64;
+            x.covers("regions",(row+1)*regions*size_of::<LiquidBody>() as u64)?;
+            x.covers("shapes",size_of::<LiquidShape>() as u64)?;
+            x.covers("atlas",4)?;
+        }
+    }
     if x.input("distance").is_some() {
         x.covers("distance", cell_total(shape.face_cells) * 4)?;
         x.covers("pool", shape.pool_bytes())?;

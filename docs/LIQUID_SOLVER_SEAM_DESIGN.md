@@ -131,6 +131,15 @@ The visible surface distance remains a rendering output, exported as `level_set`
 
 The Ferstl et al. (2016) narrow-band amendment in `GPU_FLIP_NARROW_BAND_DESIGN.md` permits optional solver interior distance because deep liquid has no particles. `gpu_flip_step.interior` holds exactly nx·ny·nz f32 distances in metres, x fastest, at m+(i+½,j+½,k+½)h. `liquid_state.interior_in` captures it beside the tick particles, and `liquid_frame.interior` publishes `interior_a/b` through the same ring indices, epoch, lattice and failed-tick gate. A disabled field is positive everywhere. The mesher accepts optional `interior`, samples the cell-centred lattice and unions the particle field with interior+h before solid/border constraints. Unwired consumers retain their existing particle path; no solver-specific branch is needed. Stats contain 28 words: the 18-word solver tail preserves separating-floor diagnostics at words 17–26 and appends narrow-band reseed shortages at word 27. Coarse solve stage 3 retains its standalone reference-proven boundary scatter and local projection; Solve Level integration remains stage 4.
 
+Accepted numerical substeps (BUG-g75v.7): a producer may also publish
+`substep_schedule` (four f32 words per row: seconds, elapsed endpoint, bitcast
+one-shot impulse-index/valid-bit, reserved zero), `substep_u/v/w` (concatenated
+MAC arrays in the layout above), and `substep_count`. Duration zero denotes an
+inactive encoded slot. The event high bit marks a hit; remaining bits index the
+domain impulse lattices. This is a solver-neutral consumer seam; a producer
+adapts its private scheduler/velocity layout before publication. Whitewater
+never reads a GPU FLIP private face record or scheduler structure.
+
 ### 3.3 Two-way Box3D coupling
 
 Per accepted interval k (nominal 1/60 s in export):

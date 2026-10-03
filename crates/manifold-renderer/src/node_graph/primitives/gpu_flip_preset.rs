@@ -711,12 +711,23 @@ pub(crate) fn render_def(scene: WaterScene) -> EffectGraphDef {
     let source = id_of(&def, "whitewater_obstacle_source");
     let whitewater = id_of(&def, "whitewater");
     let state = id_of(&def, "state");
+    let step = id_of(&def, STEP_NODE);
+    let domain = id_of(&def, "domain");
     let wires = def["wires"].as_array_mut().expect("wires");
     // Regeneration is idempotent: the source and new capture may already be in the seed preset.
     wires.retain(|w| !(w["toNode"] == whitewater && w["toPort"] == "obstacle_source"
         || w["toNode"] == state && w["toPort"] == "dust_particles_in"));
     wires.push(json!({"fromNode":source, "fromPort":"solid", "toNode":whitewater, "toPort":"obstacle_source"}));
     wires.push(json!({"fromNode":whitewater, "fromPort":"dust_particles", "toNode":state, "toPort":"dust_particles_in"}));
+    for (from, ports) in [
+        (step, &["substep_schedule", "substep_u", "substep_v", "substep_w", "substep_count"][..]),
+        (domain, &["forces", "impulses", "field_nodes_x", "field_nodes_y", "field_nodes_z", "field_spacing", "force_lattices", "impulse_tick", "first_tick", "regions", "region_count", "shapes", "atlas"][..]),
+    ] {
+        for port in ports {
+            wires.retain(|w| !(w["toNode"] == whitewater && w["toPort"] == *port));
+            wires.push(json!({"fromNode":from, "fromPort":port, "toNode":whitewater, "toPort":port}));
+        }
+    }
     add_dust_render(&mut def);
     def["presetMetadata"] = scene_cards(&preset["presetMetadata"], scene);
     serde_json::from_value(def).expect("render def")
@@ -1269,6 +1280,13 @@ pub(super) mod tests {
         let distance = def.wires.iter().find(|w| w.to_node == whitewater.0 && w.to_port == "distance").unwrap();
         assert_eq!(distance.from_port, "distance");
         assert!(def.nodes.iter().any(|n| n.id == distance.from_node && n.type_id == "node.gpu_flip_step"));
+        for port in ["substep_schedule", "substep_u", "substep_v", "substep_w", "substep_count"] {
+            assert!(wire(distance.from_node, port, whitewater.0, port), "missing accepted {port}");
+        }
+        for port in ["forces", "impulses", "field_nodes_x", "field_nodes_y", "field_nodes_z", "field_spacing", "force_lattices", "first_tick", "regions", "region_count", "shapes", "atlas"] {
+            let water=def.wires.iter().find(|w|w.to_node==distance.from_node && w.to_port==port).expect(port);
+            assert!(wire(water.from_node, &water.from_port, whitewater.0, port), "{port} must share the liquid source");
+        }
         for (output, capture, held) in [
             ("pool_out", "whitewater_pool_in", "whitewater_pool"),
             ("state_out", "whitewater_state_in", "whitewater_state"),
