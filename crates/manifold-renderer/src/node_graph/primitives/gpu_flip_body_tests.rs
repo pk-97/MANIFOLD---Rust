@@ -14,9 +14,13 @@ use manifold_gpu::{GpuBuffer, GpuDevice};
 use super::gpu_flip_atom_tests::{FACE_FLOATS, assert_close, face_grid_len, random_values, random_water};
 use super::gpu_flip_bodies::{BodyPasses, Bodies};
 use super::gpu_flip_pressure::{PressureSolver, Water};
-use super::gpu_flip_step::{TILE, set_all_tiles, set_poison};
+use super::gpu_flip_step::{TILE, set_all_tiles, set_poison, set_separate_off};
 use super::liquid_surface_tests::read;
 use crate::node_graph::liquid::bodies::LiquidBody;
+use super::liquid_stats::SOLVER_WORDS;
+
+/// Tail index of stats word 16 (active-tile share): the tail starts at stats word 10 (liquid_stats.rs `SOLVER_WORDS`).
+const TILE_SHARE: usize = 16 - 10;
 
 const N: [usize; 3] = [17, 16, 15];
 const H: f32 = 0.25;
@@ -527,22 +531,33 @@ struct BoxRun {
     frame: i64,
     all: bool,
     poison: bool,
+    /// No solid lets water go (`set_separate_off`).
+    off: bool,
     _scope: crate::node_graph::physics::PhysicsStepScope,
 }
 
 const BOX_SIZE: u32 = 64;
 
+fn box_def(fixture: crate::node_graph::liquid::conformance::Fixture) -> manifold_core::effect_graph_def::EffectGraphDef {
+    use crate::node_graph::liquid::conformance::LIQUID_SOLVERS;
+    let row = LIQUID_SOLVERS
+        .iter()
+        .find(|row| row.type_id == manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID)
+        .expect("the GPU FLIP row");
+    (row.fixture)(fixture).unwrap_or_else(|| panic!("GPU FLIP has no {fixture:?} scene"))
+}
+
 impl BoxRun {
     fn new(fixture: crate::node_graph::liquid::conformance::Fixture, all: bool, poison: bool, level: i32) -> Self {
-        use crate::node_graph::liquid::conformance::LIQUID_SOLVERS;
-        let device = crate::test_device();
-        let row = LIQUID_SOLVERS
-            .iter()
-            .find(|row| row.type_id == manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID)
-            .expect("the GPU FLIP row");
-        let mut def = (row.fixture)(fixture).unwrap_or_else(|| panic!("GPU FLIP has no {fixture:?} scene"));
+        let mut def = box_def(fixture);
         let domain = def.nodes.iter_mut().find(|node| node.node_id.as_str() == "domain").expect("domain");
         domain.params.insert("solve_level".into(), manifold_core::effect_graph_def::SerializedParamValue::Int { value: level });
+        Self::of(def, all, poison, false)
+    }
+
+    fn of(def: manifold_core::effect_graph_def::EffectGraphDef, all: bool, poison: bool, off: bool) -> Self {
+        let fixture = "box scene";
+        let device = crate::test_device();
         let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
         let scope = crate::node_graph::physics::PhysicsStepScope::for_render(true);
         let manifest = manifold_core::params::ParamManifest::from_params(
@@ -564,7 +579,7 @@ impl BoxRun {
         runtime.set_dump_all(true);
         let target =
             crate::render_target::RenderTarget::new(&device, BOX_SIZE, BOX_SIZE, manifold_gpu::GpuTextureFormat::Rgba16Float, "body sparse");
-        let mut run = Self { device, runtime, target, manifest, frame: 0, all, poison, _scope: scope };
+        let mut run = Self { device, runtime, target, manifest, frame: 0, all, poison, off, _scope: scope };
         let started = std::time::Instant::now();
         loop {
             run.render(true);
@@ -598,6 +613,7 @@ impl BoxRun {
         let mut encoder = self.device.create_encoder("body sparse frame");
         set_all_tiles(self.all);
         set_poison(self.poison);
+        set_separate_off(self.off);
         let status = {
             let mut gpu = crate::gpu_encoder::GpuEncoder::new(&mut encoder, &self.device);
             self.runtime.render(&mut gpu, &self.target.texture, &ctx, &self.manifest);
@@ -606,6 +622,7 @@ impl BoxRun {
         encoder.commit_and_wait_completed();
         set_all_tiles(false);
         set_poison(false);
+        set_separate_off(false);
         use crate::frame_status::FrameRenderStatus;
         assert!(
             status == FrameRenderStatus::Complete || (warming && status == FrameRenderStatus::PendingGeometry),
@@ -636,6 +653,12 @@ impl BoxRun {
         read(&staging, bytes as usize / 4)
     }
 
+    /// The share of 8^3 tiles the cell passes ran over, from the last tick.
+    fn tile_share(&self) -> f32 {
+        let capped = self.words("node.gpu_flip_step", "capped");
+        f32::from_bits(capped[capped.len() - SOLVER_WORDS as usize + TILE_SHARE])
+    }
+
     /// What a tick leaves that the bodies touch: the one body's row, its
     /// reaction, the step's live particles and its solver words. Each is cut
     /// to what the tick wrote, so a buffer's slack never counts.
@@ -646,11 +669,12 @@ impl BoxRun {
             words
         };
         let capped = self.words("node.gpu_flip_step", "capped");
-        let particles = (capped.len() - 7) / 2;
+        let particles = (capped.len() - SOLVER_WORDS as usize) / 2;
         let particle_words = std::mem::size_of::<crate::node_graph::fluid_particles::FluidParticle>() / 4;
-        // The last solver word is the active-tile share, 1 under the forced
-        // lever by construction; the six before it are the solve's own.
-        let solver = capped[2 * particles..capped.len() - 1].to_vec();
+        // The active-tile share differs between sparse and all-tiles by design
+        // (see `tile_share`); every other solver word must match bit for bit.
+        let mut solver = capped[2 * particles..].to_vec();
+        solver.remove(TILE_SHARE);
         vec![
             ("body row", cut(self.words(domain, "bodies"), std::mem::size_of::<LiquidBody>() / 4)),
             ("reaction", cut(self.words(domain, "reaction"), 8)),
@@ -679,6 +703,8 @@ fn gpu_flip_body_step_sparse_matches_all_tiles() {
             poisoned.step();
             let want = dense.left();
             for (name, run) in [("sparse", &sparse), ("poisoned", &poisoned)] {
+                assert_eq!(dense.tile_share(), 1.0, "{fixture:?} level {level} tick {tick}: all-tiles share");
+                assert!(run.tile_share() <= dense.tile_share(), "{fixture:?} level {level} tick {tick}: {name} share {} exceeds all-tiles", run.tile_share());
                 for ((what, a), (_, b)) in want.iter().zip(run.left()) {
                     assert_eq!(a.len(), b.len(), "{fixture:?} level {level} tick {tick}: {name} {what} is sized differently");
                     if let Some(i) = first_differing(a, &b) {
@@ -694,7 +720,58 @@ fn gpu_flip_body_step_sparse_matches_all_tiles() {
             }
         }
         let words = dense.words("node.gpu_flip_step", "capped");
-        let tail = &words[words.len() - 7..];
+        let tail = &words[words.len() - SOLVER_WORDS as usize..];
         println!("{fixture:?} level {level}: 90 ticks bitwise; last solve {} iterations, capped {}", tail[0], tail[2]);
     }
+}
+
+impl BoxRun {
+    fn body_height(&self) -> f64 {
+        let words = self.words(manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID, "bodies");
+        let row: &LiquidBody = bytemuck::from_bytes(bytemuck::cast_slice(&words[..std::mem::size_of::<LiquidBody>() / 4]));
+        f64::from(row.position_inv_mass[1])
+    }
+
+    /// The live particles at or above `y` inside the box's footprint `half`.
+    fn water_above(&self, y: f32, half: f32) -> usize {
+        let capped = self.words("node.gpu_flip_step", "capped");
+        let count = (capped.len() - SOLVER_WORDS as usize) / 2;
+        let words = self.words("node.gpu_flip_step", "out");
+        let particles: &[crate::node_graph::fluid_particles::FluidParticle] =
+            bytemuck::cast_slice(&words[..count * std::mem::size_of::<crate::node_graph::fluid_particles::FluidParticle>() / 4]);
+        particles
+            .iter()
+            .filter(|p| p.position_radius[3] > 0.0)
+            .filter(|p| p.position_radius[1] >= y && p.position_radius[0].abs() < half && p.position_radius[2].abs() < half)
+            .count()
+    }
+}
+
+/// A box a quarter as dense as water, released under 0.2 m of it: buoyancy
+/// lifts it out of the pool. Separating solids let the water under it go,
+/// so less water rides up above the pool surface in the box's footprint
+/// than with every solid holding water by suction; the box clears the
+/// surface either way.
+#[test]
+fn gpu_flip_rising_box_does_not_drag_water_up() {
+    use crate::node_graph::liquid::conformance::{BoxScene, Fixture, set_node_param};
+    let scene = BoxScene::of(Fixture::SubmergedBox).expect("the submerged box");
+    let mut def = box_def(Fixture::SubmergedBox);
+    set_node_param(&mut def, "box_body", "density", manifold_core::effect_graph_def::SerializedParamValue::Float { value: 250.0 });
+    let cell = scene.domain_size / scene.resolution as f32;
+    let (surface, half) = (scene.fill + 2.0 * cell, 0.5 * scene.edge + cell);
+    let mut lifted = Vec::new();
+    for off in [false, true] {
+        let mut run = BoxRun::of(def.clone(), false, false, off);
+        let mut most = 0;
+        for _ in 1..=60 {
+            run.step();
+            most = most.max(run.water_above(surface, half));
+        }
+        let height = run.body_height();
+        println!("rising box, separation {}: box centre at {height:.3} m, most water above the surface in its footprint {most}", if off { "off" } else { "on" });
+        assert!(height > f64::from(scene.fill), "separation off {off}: the box did not clear the surface ({height} m)");
+        lifted.push(most);
+    }
+    assert!(lifted[0] < lifted[1], "separating solids lifted {} particles, holding solids {}", lifted[0], lifted[1]);
 }

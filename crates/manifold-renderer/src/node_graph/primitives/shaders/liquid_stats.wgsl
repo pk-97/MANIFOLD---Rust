@@ -4,7 +4,8 @@
 //   particles_main — each workgroup folds a fixed block of records, then a
 //                    fixed workgroup-memory tree, into one partial;
 //   finish_main    — one workgroup folds the partials in a fixed order and
-//                    writes the stats words.
+//                    writes the stats words. The final solver word is the
+//                    narrow-band reseed shortage count.
 // Every sum runs in a fixed order with no read-modify-write races, so the
 // words are the same on every run. Non-finite values are found with an exponent-bits test:
 // fast math may fold isfinite().
@@ -153,10 +154,10 @@ fn finish_main(@builtin(local_invocation_id) lid: vec3<u32>) {
         stats[7] = bitcast<u32>(s.kinetic);
         stats[8] = s.speed_capped;
         stats[9] = s.push_refused;
-        for (var w = 0u; w < 7u; w = w + 1u) {
-            stats[10u + w] = 0u;
+        for (var w = 0u; w < SOLVER_WORDS; w = w + 1u) {
+            stats[SOLVER_STATS_START + w] = 0u;
             if params.has_solver != 0u {
-                stats[10u + w] = capped[2u * params.slots + w];
+                stats[SOLVER_STATS_START + w] = capped[2u * params.slots + w];
             }
         }
     }

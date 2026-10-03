@@ -42,6 +42,7 @@ def tooling_checks(repo, paths):
         "scripts/test_run_ui_flows.py": {"scripts/run_ui_flows.py", "scripts/test_run_ui_flows.py", "scripts/gpu_queue.py"},
         "scripts/test_ui_flows_batch_proof.py": {"scripts/ui_flows_batch_proof.py", "scripts/test_ui_flows_batch_proof.py", "scripts/run_ui_flows.py", "scripts/test_run_ui_flows.py"},
         "scripts/test_gpu_proofs_gate.py": {"scripts/gpu_proofs_gate.py", "scripts/test_gpu_proofs_gate.py", "scripts/gpu_scope.py"},
+        "scripts/test_gate_passes.py": {"scripts/gate_passes.py", "scripts/test_gate_passes.py", "scripts/landing_gate.py", "scripts/gpu_proofs_gate.py", "scripts/gpu_queue.py"},
         "scripts/test_gpu_scope.py": {"scripts/gpu_scope.py", "scripts/test_gpu_scope.py"},
         "scripts/test_codex_prepare.py": {"scripts/codex_prepare.py", "scripts/codex_subsystems.json", "scripts/test_codex_prepare.py", "scripts/codex_checks.py"},
         "scripts/test_codex_usage.py": {"scripts/codex_usage.py", "scripts/test_codex_usage.py"},

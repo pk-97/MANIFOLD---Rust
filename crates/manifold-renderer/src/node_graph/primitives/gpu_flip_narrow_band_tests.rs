@@ -1,5 +1,10 @@
 //! CPU naga and opt-in GPU proofs for `gpu_flip_narrow_band.wgsl`.
 //!
+//! The integrated proofs exercise `GpuFlipStep::run`, rather than only the
+//! narrow-band kernels.  The stage follows F. Ferstl, R. Ando, C. Wojtan,
+//! R. Westermann and N. Thuerey, "Narrow Band FLIP for Liquid Simulations",
+//! Computer Graphics Forum 35(2), 225–232, 2016, doi:10.1111/cgf.12825.
+//!
 //! The GPU module is deliberately kept behind `gpu-proofs`: these tests use a
 //! real native Metal device and are not part of the ordinary renderer test
 //! set.  The unconditional naga test still catches malformed WGSL and checks
@@ -48,7 +53,274 @@ struct NbRange {
 
 #[cfg(test)]
 mod cpu_tests {
+    use std::collections::BTreeSet;
+
     use super::{NbParams, SHADER};
+    use crate::node_graph::fluid_particles::FluidParticle;
+
+    pub(super) const STEP_CELLS: [usize; 3] = [16, 16, 16];
+    const POOL_TOP: usize = 12;
+
+    pub(super) fn quarter_pool() -> Vec<FluidParticle> {
+        let mut particles = Vec::with_capacity(STEP_CELLS[0] * POOL_TOP * STEP_CELLS[2] * 8);
+        let mut id = 0;
+        for z in 0..STEP_CELLS[2] {
+            for y in 0..POOL_TOP {
+                for x in 0..STEP_CELLS[0] {
+                    for site in 0..8 {
+                        particles.push(FluidParticle {
+                            position_radius: [
+                                x as f32 + 0.25 + 0.5 * (site & 1) as f32,
+                                y as f32 + 0.25 + 0.5 * ((site >> 1) & 1) as f32,
+                                z as f32 + 0.25 + 0.5 * ((site >> 2) & 1) as f32,
+                                0.31017,
+                            ],
+                            velocity: [0.0; 3],
+                            id,
+                        });
+                        id += 1;
+                    }
+                }
+            }
+        }
+        particles
+    }
+
+    /// Analytic particle field for `quarter_pool`, using the existing FLIP
+    /// finite gather contract, not an unbounded nearest-particle distance.
+    /// See gpu_flip_step_tests::{cpu_gather_distance,
+    /// gpu_flip_particle_distance_is_the_engines_level_set}: no live particle
+    /// in the 27 adjacent cells means 3h, even if ring two contains particles.
+    pub(super) fn stationary_pool_particle_phi() -> Vec<f32> {
+        (0..cells(STEP_CELLS))
+            .map(|i| {
+                let y = coords(i, STEP_CELLS)[1];
+                if y > POOL_TOP {
+                    return 3.0;
+                }
+                // All x/z columns are filled through y=POOL_TOP-1. The
+                // nearest quarter site is in the same or adjacent y cell,
+                // inside its 2r scatter box. Neither value needs the eps snap.
+                let dy = if y < POOL_TOP { 0.25 } else { 0.75 };
+                (0.125_f32 + dy * dy).sqrt() - 0.8660254
+            })
+            .collect()
+    }
+
+    /// First-enable oracle: nb.initialized is false for this whole step, so
+    /// nb_union uses only the particle field. The freshly initialized history
+    /// supplies transport; Eq. (4)'s shrunken-history union starts next step.
+    /// At zero velocity the particle field does not change during transport.
+    pub(super) fn stationary_pool_initial_phi() -> Vec<f32> {
+        redistance_oracle(stationary_pool_particle_phi())
+    }
+
+    /// Brute-force CPU reinitialization oracle. It computes edge crossings
+    /// once, then takes the direct minimum over every seed and Manhattan
+    /// lattice distance; it deliberately does not reproduce the GPU sweeps.
+    fn redistance_oracle(field: Vec<f32>) -> Vec<f32> {
+        let sentinel = STEP_CELLS.iter().sum::<usize>() as f32;
+        let mut seeds = vec![sentinel; field.len()];
+        for z in 0..STEP_CELLS[2] {
+            for y in 0..STEP_CELLS[1] {
+                for x in 0..STEP_CELLS[0] {
+                    let here_index = x + STEP_CELLS[0] * (y + STEP_CELLS[1] * z);
+                    let here = field[here_index];
+                    if here == 0.0 {
+                        seeds[here_index] = 0.0;
+                    }
+                    for axis in 0..3 {
+                        let mut next = [x, y, z];
+                        if next[axis] + 1 >= STEP_CELLS[axis] {
+                            continue;
+                        }
+                        next[axis] += 1;
+                        let next_index =
+                            next[0] + STEP_CELLS[0] * (next[1] + STEP_CELLS[1] * next[2]);
+                        let other = field[next_index];
+                        if (here < 0.0) == (other < 0.0) {
+                            continue;
+                        }
+                        let denominator = here.abs() + other.abs();
+                        if denominator > 0.0 {
+                            seeds[here_index] = seeds[here_index].min(here.abs() / denominator);
+                            seeds[next_index] = seeds[next_index].min(other.abs() / denominator);
+                        }
+                    }
+                }
+            }
+        }
+        let mut result = Vec::with_capacity(field.len());
+        for z in 0..STEP_CELLS[2] {
+            for y in 0..STEP_CELLS[1] {
+                for x in 0..STEP_CELLS[0] {
+                    let index = x + STEP_CELLS[0] * (y + STEP_CELLS[1] * z);
+                    let mut distance = sentinel;
+                    for sz in 0..STEP_CELLS[2] {
+                        for sy in 0..STEP_CELLS[1] {
+                            for sx in 0..STEP_CELLS[0] {
+                                let seed_index = sx + STEP_CELLS[0] * (sy + STEP_CELLS[1] * sz);
+                                let grid_distance =
+                                    x.abs_diff(sx) + y.abs_diff(sy) + z.abs_diff(sz);
+                                distance = distance.min(seeds[seed_index] + grid_distance as f32);
+                            }
+                        }
+                    }
+                    result.push(if field[index] < 0.0 {
+                        -distance
+                    } else {
+                        distance
+                    });
+                }
+            }
+        }
+        result
+    }
+
+    pub(super) fn cells(n: [usize; 3]) -> usize {
+        n.iter().product()
+    }
+
+    pub(super) fn coords(i: usize, n: [usize; 3]) -> [usize; 3] {
+        [i % n[0], (i / n[0]) % n[1], i / (n[0] * n[1])]
+    }
+
+    pub(super) fn expected_retained(input: &[FluidParticle], phi: &[f32]) -> BTreeSet<u32> {
+        input
+            .iter()
+            .filter(|p| {
+                let [x, y, z, _] = p.position_radius;
+                let wall = x.min(16.0 - x).min(y.min(16.0 - y)).min(z.min(16.0 - z));
+                // Deletion samples the cell-centred field at the particle,
+                // not at its containing cell's centre (the band-mask rule).
+                wall <= 3.0 || sample_cell_phi(phi, [x, y, z]) >= -3.0
+            })
+            .map(|p| p.id)
+            .collect()
+    }
+
+    /// Clamped trilinear sampling of the fixture's h=1, origin=0.5 field.
+    /// Port of the independent `narrow_band_grid_reference.Field.sample`.
+    fn sample_cell_phi(phi: &[f32], position: [f32; 3]) -> f32 {
+        let q: [f32; 3] =
+            std::array::from_fn(|a| (position[a] - 0.5).clamp(0.0, (STEP_CELLS[a] - 1) as f32));
+        let lo = q.map(|value| value.floor() as usize);
+        let hi: [usize; 3] = std::array::from_fn(|a| (lo[a] + 1).min(STEP_CELLS[a] - 1));
+        let t: [f32; 3] = std::array::from_fn(|a| q[a] - lo[a] as f32);
+        let mut value = 0.0;
+        for z in 0..2 {
+            for y in 0..2 {
+                for x in 0..2 {
+                    let bits = [x, y, z];
+                    let p: [usize; 3] =
+                        std::array::from_fn(|a| if bits[a] == 0 { lo[a] } else { hi[a] });
+                    let weight: f32 = (0..3)
+                        .map(|a| if bits[a] == 0 { 1.0 - t[a] } else { t[a] })
+                        .product();
+                    value += weight * phi[p[0] + STEP_CELLS[0] * (p[1] + STEP_CELLS[1] * p[2])];
+                }
+            }
+        }
+        value
+    }
+
+    #[test]
+    fn narrow_band_oracle_samples_cell_centres_and_clamps_edges() {
+        let affine = |p: [f32; 3]| p[0] + 2.0 * p[1] - 4.0 * p[2];
+        let phi = (0..cells(STEP_CELLS))
+            .map(|i| affine(coords(i, STEP_CELLS).map(|v| v as f32 + 0.5)))
+            .collect::<Vec<_>>();
+        for p in [[8.25, 9.75, 7.25], [0.25, 4.75, 15.75], [15.75, 0.25, 4.75]] {
+            assert_eq!(
+                sample_cell_phi(&phi, p),
+                affine(p.map(|v| v.clamp(0.5, 15.5)))
+            );
+        }
+    }
+
+    #[test]
+    fn narrow_band_stationary_pool_finite_support_pins_all_cell_values() {
+        let particle = stationary_pool_particle_phi();
+        let phi = stationary_pool_initial_phi();
+        // Independent f64 planar derivation: y=13 has no occupied cell in
+        // its 3x3x3 neighbourhood. The old unbounded oracle used the nearest
+        // particle in y=11 instead, shifting every reinitialized cell.
+        let below = (0.125_f64 + 0.75 * 0.75).sqrt() - 3.0_f64.sqrt() / 2.0;
+        let crossing = -below / (3.0 - below);
+        let unbounded_above = (0.125_f64 + 1.75 * 1.75).sqrt() - 3.0_f64.sqrt() / 2.0;
+        let unbounded_crossing = -below / (unbounded_above - below);
+        assert!((unbounded_crossing - crossing).abs() > 0.026);
+        for (i, actual) in phi.iter().enumerate() {
+            let p = coords(i, STEP_CELLS);
+            if p[1] > POOL_TOP {
+                assert_eq!(particle[i], 3.0, "unsupported air cell {p:?}");
+            }
+            let expected = p[1] as f64 - POOL_TOP as f64 - crossing;
+            assert!(
+                (f64::from(*actual) - expected).abs() < 2.0e-6,
+                "cell {p:?}: {actual} vs analytic {expected}"
+            );
+        }
+        eprintln!(
+            "finite-support crossing={crossing:.10}, unbounded={unbounded_crossing:.10}; \
+            all {} cells checked; interior[0,0,0]={}",
+            phi.len(),
+            phi[0]
+        );
+    }
+
+    #[test]
+    fn narrow_band_stationary_pool_oracle_retains_upper_sites_at_band_edge() {
+        let input = quarter_pool();
+        let phi = stationary_pool_initial_phi();
+        let retained = expected_retained(&input, &phi);
+        // This pool has a planar crossing between centres y=12.5 and 13.5.
+        // Derive its height from the nearest supported particle distance and
+        // the unsupported air sentinel, independently of the transform.
+        let below = (0.125_f32 + 0.75 * 0.75).sqrt() - 0.8660254;
+        let above = 3.0;
+        let surface_y = 12.5 + (-below) / (above - below);
+        let analytic: BTreeSet<_> = input
+            .iter()
+            .filter(|p| {
+                let [x, y, z, _] = p.position_radius;
+                let wall = x.min(16.0 - x).min(y.min(16.0 - y)).min(z.min(16.0 - z));
+                wall <= 3.0 || y - surface_y >= -3.0
+            })
+            .map(|p| p.id)
+            .collect();
+        assert_eq!(retained, analytic);
+
+        // The old containing-cell lookup rejected all eight sites at y=9.
+        // Only the lower four are deeper than 3h, away from the solid band.
+        let cell_retained: BTreeSet<_> = input
+            .iter()
+            .filter(|p| {
+                let [x, y, z, _] = p.position_radius;
+                let wall = x.min(16.0 - x).min(y.min(16.0 - y)).min(z.min(16.0 - z));
+                let cell = x.floor() as usize
+                    + STEP_CELLS[0] * (y.floor() as usize + STEP_CELLS[1] * z.floor() as usize);
+                wall <= 3.0 || phi[cell] >= -3.0
+            })
+            .map(|p| p.id)
+            .collect();
+        let mut upper_ids = BTreeSet::new();
+        for z in 3..13 {
+            for x in 3..13 {
+                for site in [2, 3, 6, 7] {
+                    upper_ids.insert((8 * (x + 16 * (9 + POOL_TOP * z)) + site) as u32);
+                }
+            }
+        }
+        assert_eq!(
+            retained
+                .difference(&cell_retained)
+                .copied()
+                .collect::<BTreeSet<_>>(),
+            upper_ids
+        );
+        assert!(cell_retained.is_subset(&retained));
+    }
 
     #[test]
     fn gpu_flip_narrow_band_shader_validates() {
@@ -147,17 +419,141 @@ mod cpu_tests {
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
-    use super::super::prefix_scan::PrefixScan;
-    use super::{NbFace, NbParams, NbParticle, NbRange, SHADER};
-    use manifold_gpu::{GpuBinding, GpuBuffer};
+    use std::collections::BTreeSet;
 
-    use super::super::liquid_surface_tests::read;
+    use super::super::gpu_flip_step::{GpuFlipStep, StepParams, dispatch_pass};
+    use super::super::liquid_surface_tests::{Harness, params as effect_params, read};
+    use super::super::prefix_scan::PrefixScan;
+    use super::super::liquid_stats::{SOLVER_WORDS, NARROW_BAND_SHORTAGE_TAIL};
+    use super::cpu_tests::{
+        STEP_CELLS, cells, coords, expected_retained, quarter_pool, stationary_pool_initial_phi,
+        stationary_pool_particle_phi,
+    };
+    use super::{NbFace, NbParams, NbParticle, NbRange, SHADER};
+    use crate::node_graph::fluid_particles::{FaceSample, FluidParticle};
+    use crate::node_graph::primitive::Primitive;
+    use manifold_gpu::{GpuBinding, GpuBuffer};
 
     const N: [usize; 3] = [8, 8, 8];
     const H: f32 = 1.0;
 
-    fn cells(n: [usize; 3]) -> usize {
-        n.iter().product()
+    const STEP_NODES: [usize; 3] = [23, 23, 23];
+
+    fn step_params(
+        narrow_band: Option<f32>,
+        epoch: Option<f32>,
+        tick: u32,
+    ) -> crate::node_graph::effect_node::ParamValues {
+        let mut values = vec![
+            ("lattice_min_x", -3.0),
+            ("lattice_min_y", -3.0),
+            ("lattice_min_z", -3.0),
+            ("cell_size", 1.0),
+            ("nodes_x", STEP_NODES[0] as f32),
+            ("nodes_y", STEP_NODES[1] as f32),
+            ("nodes_z", STEP_NODES[2] as f32),
+            ("gravity_x", 0.0),
+            ("gravity_y", 0.0),
+            ("gravity_z", 0.0),
+            ("steps", 1.0),
+            ("tick_index", tick as f32),
+            ("flip", 0.0),
+            ("iterations", 1.0),
+            ("top_speed", 1.0),
+            ("ghost_fluid", 1.0),
+            ("volume_projection", 0.0),
+            ("closed_faces", 63.0),
+            ("solve_level", 0.0),
+        ];
+        if let Some(value) = narrow_band {
+            values.push(("narrow_band", value));
+        }
+        if let Some(value) = epoch {
+            values.push(("epoch", value));
+        }
+        effect_params(&values)
+    }
+
+    struct StepRun {
+        particles: Vec<FluidParticle>,
+        faces: Vec<FaceSample>,
+        interior: Vec<f32>,
+        errors: Vec<String>,
+        live: u32,
+    }
+
+    fn run_step(
+        harness: &mut Harness,
+        step: &mut GpuFlipStep,
+        input: &[FluidParticle],
+        capacity: usize,
+        narrow_band: Option<f32>,
+        epoch: Option<f32>,
+        tick: u32,
+    ) -> StepRun {
+        let (particles_slot, _) = harness.array(input, capacity);
+        let count_slot = harness.scalar_input(input.len() as f32);
+        let (out_slot, _) = harness.array::<FluidParticle>(&[], capacity);
+        let (faces_slot, _) = harness.array::<FaceSample>(&[], 1);
+        let (capped_slot, _) = harness.array::<u32>(&[], 2 * capacity + SOLVER_WORDS as usize);
+        let (interior_out_slot, _) = harness.array::<f32>(&[], STEP_CELLS.iter().product());
+
+        step.prepare_pipelines(&harness.device);
+        let inputs = vec![("particles", particles_slot), ("count", count_slot)];
+        let (_, errors) = harness.run(
+            step,
+            &inputs,
+            &[
+                ("out", out_slot),
+                ("faces", faces_slot),
+                ("capped", capped_slot),
+                ("interior", interior_out_slot),
+            ],
+            &step_params(narrow_band, epoch, tick),
+        );
+        let out: Vec<FluidParticle> = read(&harness.buffer(out_slot), capacity);
+        let face_count: usize = STEP_CELLS.iter().map(|n| n + 1).product();
+        let faces = read(&harness.buffer(faces_slot), face_count);
+        // The step provides private interior storage, replacing the harness's
+        // shared placeholder. Read it back as the body proofs read private arrays.
+        let interior_buffer = harness.buffer(interior_out_slot);
+        let staging = harness.device.create_buffer_shared(interior_buffer.size);
+        let mut encoder = harness
+            .device
+            .create_encoder("narrow-band interior readback");
+        encoder.copy_buffer_to_buffer(&interior_buffer, &staging, interior_buffer.size);
+        encoder.commit_and_wait_completed();
+        let interior = read(&staging, STEP_CELLS.iter().product());
+        let live = out.iter().filter(|p| p.position_radius[3] > 0.0).count() as u32;
+        StepRun {
+            particles: out,
+            faces,
+            interior,
+            errors,
+            live,
+        }
+    }
+
+    fn active_ids(particles: &[FluidParticle]) -> BTreeSet<u32> {
+        particles
+            .iter()
+            .filter(|p| p.position_radius[3] > 0.0)
+            .map(|p| p.id)
+            .collect()
+    }
+
+    fn site_keys(particles: &[FluidParticle]) -> BTreeSet<(u32, u32, u32)> {
+        particles
+            .iter()
+            .filter(|p| p.position_radius[3] > 0.0)
+            .map(|p| {
+                (
+                    (p.position_radius[0] * 4.0).round() as u32,
+                    (p.position_radius[1] * 4.0).round() as u32,
+                    (p.position_radius[2] * 4.0).round() as u32,
+                )
+            })
+            .collect()
     }
 
     fn faces(n: [usize; 3]) -> usize {
@@ -166,10 +562,6 @@ mod gpu_tests {
 
     fn index(p: [usize; 3], n: [usize; 3]) -> usize {
         p[0] + n[0] * (p[1] + n[1] * p[2])
-    }
-
-    fn coords(i: usize, n: [usize; 3]) -> [usize; 3] {
-        [i % n[0], (i / n[0]) % n[1], i / (n[0] * n[1])]
     }
 
     fn params(n: [usize; 3]) -> NbParams {
@@ -696,5 +1088,418 @@ mod gpu_tests {
             }
             assert!(written[16..].iter().all(|p| p.position_radius[3] == 0.0));
         }
+    }
+
+    #[test]
+    fn gpu_flip_narrow_band_restore_overflow_latches_without_partial_write() {
+        let device = crate::test_device();
+        let eligible = [index([2, 3, 3], N), index([3, 3, 3], N)];
+        // Only these two cells are liquid. Even the outer quarter sites sample
+        // at most 1 - 5 * (3/4)^3 = -1.109375, below the -h restore cutoff.
+        let mut phi_values = vec![1.0_f32; cells(N)];
+        for &i in &eligible {
+            phi_values[i] = -4.0;
+        }
+        let phi = shared(&device, &phi_values);
+        let previous = shared(&device, &vec![0.0_f32; cells(N)]);
+        let solid = shared(&device, &vec![4.0_f32; faces(N)]);
+        let mut ranges = vec![NbRange::default(); cells(N)];
+        let mut live = 0;
+        for (i, range) in ranges.iter_mut().enumerate() {
+            range.start = live;
+            range.count = u32::from(eligible.contains(&i));
+            live += range.count;
+        }
+        let ranges_buffer = shared(&device, &ranges);
+        let mut input = vec![NbParticle::default(); 20];
+        input[..2].copy_from_slice(&[
+            NbParticle {
+                position_radius: [2.1, 3.1, 3.1, 0.31],
+                velocity: [9.0; 3],
+                id: 100,
+            },
+            NbParticle {
+                position_radius: [3.1, 3.1, 3.1, 0.31],
+                velocity: [9.0; 3],
+                id: 101,
+            },
+        ]);
+        let particles = shared(&device, &input);
+        let flags = shared(&device, &vec![99_u32; 8 * cells(N)]);
+        let ranks = shared(&device, &vec![0_u32; 8 * cells(N)]);
+        let status = shared(&device, &[0_u32; 2]);
+        let velocity = shared(
+            &device,
+            &vec![
+                NbFace {
+                    velocity: [1.0, 2.0, 3.0, 0.0],
+                    weight: [1.0; 4],
+                };
+                faces(N)
+            ],
+        );
+        let mut uniform = params(N);
+        // Eight slots cannot hold the two existing particles plus fourteen
+        // restore sites. The input buffer is deliberately larger than the
+        // declared capacity so a forbidden partial write is observable.
+        uniform.slots = 8;
+        let got_flags: Vec<u32> = run(
+            &device,
+            "nb_restore_flags",
+            &uniform,
+            vec![
+                bind(1, &phi),
+                bind(6, &solid),
+                bind(8, &previous),
+                bind(9, &particles),
+                bind(10, &ranges_buffer),
+                bind(11, &flags),
+            ],
+            &flags,
+            8 * cells(N),
+        );
+        let selected = got_flags.iter().filter(|&&flag| flag != 0).count() as u32;
+        for (i, &flag) in got_flags.iter().enumerate() {
+            assert_eq!(
+                flag,
+                u32::from(eligible.contains(&(i / 8)) && i % 8 != 0),
+                "restore site {i}"
+            );
+        }
+        assert_eq!(
+            selected, 14,
+            "two cells with one occupied site need seven each"
+        );
+
+        let mut scan = PrefixScan::default();
+        scan.prepare(&device);
+        scan.parents(&device, got_flags.len()).unwrap();
+        let mut encoder = device.create_encoder("narrow-band-restore-overflow-scan");
+        scan.encode_into(&mut encoder, got_flags.len(), &flags, &ranks);
+        encoder.commit_and_wait_completed();
+
+        let status_values: Vec<u32> = run(
+            &device,
+            "nb_reseed_status",
+            &uniform,
+            vec![
+                bind(10, &ranges_buffer),
+                bind(11, &ranks),
+                bind(12, &status),
+            ],
+            &status,
+            2,
+        );
+        // CPU oracle: live=2, additions=14, capacity=8.
+        assert_eq!(status_values, [8, 16]);
+        let before = read(&particles, input.len());
+        let pipeline =
+            device.create_compute_pipeline(SHADER, "nb_reseed_write", "nb-restore-write");
+        let mut encoder = device.create_encoder("narrow-band-restore-overflow-write");
+        encoder.dispatch_compute(
+            &pipeline,
+            &[
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniform),
+                },
+                bind(3, &velocity),
+                bind(9, &particles),
+                bind(10, &ranges_buffer),
+                bind(11, &ranks),
+                bind(12, &status),
+            ],
+            [(8 * cells(N)).div_ceil(256) as u32, 1, 1],
+            "narrow-band-restore-overflow-write",
+        );
+        encoder.commit_and_wait_completed();
+        assert_eq!(
+            bytemuck::cast_slice::<NbParticle, u8>(&read::<NbParticle>(&particles, input.len())),
+            bytemuck::cast_slice::<NbParticle, u8>(&before),
+            "restore wrote despite shortage"
+        );
+
+        // The step's failure word is a max latch: a later zero status cannot
+        // erase the shortage, while the next tick's tally keeps the stats
+        // word until an explicit reset clears the failure.
+        let capped = shared(&device, &[0_u32; SOLVER_WORDS as usize]);
+        let failure = shared(&device, &[0_u32; 1]);
+        let mut step = StepParams {
+            n: N.map(|value| value as u32),
+            capacity: uniform.slots,
+            step_in_tick: 0,
+            ..StepParams::default()
+        };
+        dispatch_pass(
+            &device,
+            "narrow_latch",
+            &step,
+            &[(43, &status), (44, &failure)],
+            1,
+        );
+        assert_eq!(read::<u32>(&failure, 1), [8]);
+        unsafe {
+            status.write(0, bytemuck::cast_slice::<u32, u8>(&[0, 16]));
+        }
+        dispatch_pass(
+            &device,
+            "narrow_latch",
+            &step,
+            &[(43, &status), (44, &failure)],
+            1,
+        );
+        assert_eq!(read::<u32>(&failure, 1), [8]);
+        unsafe {
+            status.write(0, bytemuck::cast_slice::<u32, u8>(&[8, 16]));
+        }
+        dispatch_pass(
+            &device,
+            "narrow_tally",
+            &step,
+            &[(22, &capped), (43, &status)],
+            1,
+        );
+        assert_eq!(read::<u32>(&capped, SOLVER_WORDS as usize)[NARROW_BAND_SHORTAGE_TAIL as usize], 8);
+        step.step_in_tick = 1;
+        unsafe {
+            status.write(0, bytemuck::cast_slice::<u32, u8>(&[0, 16]));
+        }
+        dispatch_pass(
+            &device,
+            "narrow_tally",
+            &step,
+            &[(22, &capped), (43, &status)],
+            1,
+        );
+        assert_eq!(read::<u32>(&capped, SOLVER_WORDS as usize)[NARROW_BAND_SHORTAGE_TAIL as usize], 8);
+        failure.zero_fill();
+        dispatch_pass(
+            &device,
+            "narrow_latch",
+            &step,
+            &[(43, &status), (44, &failure)],
+            1,
+        );
+        assert_eq!(read::<u32>(&failure, 1), [0]);
+    }
+
+    #[test]
+    fn gpu_flip_step_narrow_band_off_is_bit_identical_to_default() {
+        let input = quarter_pool();
+        let capacity = input.len() + 8 * STEP_CELLS[0] * STEP_CELLS[2];
+
+        let mut default_harness = Harness::new();
+        let mut default_step = GpuFlipStep::new();
+        let default = run_step(
+            &mut default_harness,
+            &mut default_step,
+            &input,
+            capacity,
+            None,
+            None,
+            0,
+        );
+        assert!(
+            default.errors.is_empty(),
+            "default step errors: {:?}",
+            default.errors
+        );
+
+        let mut explicit_harness = Harness::new();
+        let mut explicit_step = GpuFlipStep::new();
+        let explicit = run_step(
+            &mut explicit_harness,
+            &mut explicit_step,
+            &input,
+            capacity,
+            Some(0.0),
+            Some(7.0),
+            0,
+        );
+        assert!(
+            explicit.errors.is_empty(),
+            "explicit off errors: {:?}",
+            explicit.errors
+        );
+        assert_eq!(
+            bytemuck::cast_slice::<FluidParticle, u8>(&default.particles),
+            bytemuck::cast_slice::<FluidParticle, u8>(&explicit.particles),
+            "narrow_band=0 changes particles"
+        );
+        assert_eq!(
+            bytemuck::cast_slice::<FaceSample, u8>(&default.faces),
+            bytemuck::cast_slice::<FaceSample, u8>(&explicit.faces),
+            "narrow_band=0 changes faces"
+        );
+    }
+
+    #[test]
+    fn gpu_flip_narrow_band_stationary_pool_particle_field_matches_finite_support() {
+        let device = crate::test_device();
+        let input = quarter_pool();
+        let mut start = 0;
+        let ranges: Vec<_> = (0..cells(STEP_CELLS))
+            .map(|i| {
+                let count = if coords(i, STEP_CELLS)[1] < 12 { 8 } else { 0 };
+                let range = NbRange { start, count };
+                start += count;
+                range
+            })
+            .collect();
+        assert_eq!(start as usize, input.len());
+        let sorted = shared(&device, &input);
+        let ranges = shared(&device, &ranges);
+        let phi = shared(&device, &vec![0.0_f32; cells(STEP_CELLS)]);
+        // The dense narrow-band branch skips this list, but the unspecialized
+        // shader still declares the baseline cell-index binding.
+        let tiles = shared(&device, &(0..8_u32).collect::<Vec<_>>());
+        let params = StepParams {
+            n: STEP_CELLS.map(|n| n as u32),
+            cell_size: 1.0,
+            capacity: input.len() as u32,
+            particles: input.len() as u32,
+            narrow_band: 1,
+            ..StepParams::default()
+        };
+        dispatch_pass(
+            &device,
+            "particle_distance",
+            &params,
+            &[(1, &ranges), (2, &sorted), (5, &phi), (29, &tiles)],
+            cells(STEP_CELLS) as u64,
+        );
+        for (i, (actual, expected)) in read::<f32>(&phi, cells(STEP_CELLS))
+            .into_iter()
+            .zip(stationary_pool_particle_phi())
+            .enumerate()
+        {
+            close(
+                actual,
+                f64::from(expected),
+                1.0,
+                &format!("particle field cell {:?}", coords(i, STEP_CELLS)),
+            );
+        }
+    }
+
+    #[test]
+    fn gpu_flip_step_narrow_band_stationary_pool_matches_oracle() {
+        let input = quarter_pool();
+        let capacity = input.len() + 8 * STEP_CELLS[0] * STEP_CELLS[2];
+        let mut harness = Harness::new();
+        let mut step = GpuFlipStep::new();
+        let result = run_step(
+            &mut harness,
+            &mut step,
+            &input,
+            capacity,
+            Some(1.0),
+            Some(7.0),
+            0,
+        );
+        assert!(
+            result.errors.is_empty(),
+            "narrow-band errors: {:?}",
+            result.errors
+        );
+
+        // The first stationary pass only retires particles outside R=3h; the
+        // solid is consulted separately for the near-wall retention rule.
+        let expected_phi = stationary_pool_initial_phi();
+        assert_eq!(
+            active_ids(&result.particles),
+            expected_retained(&input, &expected_phi)
+        );
+        for (i, (actual, expected)) in result.interior.iter().zip(expected_phi).enumerate() {
+            assert!(
+                (actual - expected).abs() <= 2.0e-3,
+                "interior field cell {:?} (index {i}): {actual} vs {expected}",
+                coords(i, STEP_CELLS)
+            );
+        }
+    }
+
+    #[test]
+    fn gpu_flip_step_narrow_band_enable_disable_restores_pool_and_reset_is_repeatable() {
+        let input = quarter_pool();
+        let capacity = input.len() + 8 * STEP_CELLS[0] * STEP_CELLS[2];
+        let mut harness = Harness::new();
+        let mut step = GpuFlipStep::new();
+        let enabled = run_step(
+            &mut harness,
+            &mut step,
+            &input,
+            capacity,
+            Some(1.0),
+            Some(11.0),
+            0,
+        );
+        assert!(
+            enabled.errors.is_empty(),
+            "enable errors: {:?}",
+            enabled.errors
+        );
+        let retained: Vec<_> = enabled
+            .particles
+            .iter()
+            .filter(|p| p.position_radius[3] > 0.0)
+            .copied()
+            .collect();
+        let restored = run_step(
+            &mut harness,
+            &mut step,
+            &retained,
+            capacity,
+            Some(0.0),
+            Some(11.0),
+            1,
+        );
+        assert!(
+            restored.errors.is_empty(),
+            "disable errors: {:?}",
+            restored.errors
+        );
+        assert_eq!(restored.live as usize, input.len());
+        assert_eq!(site_keys(&restored.particles), site_keys(&input));
+        assert!(
+            restored.particles[..restored.live as usize]
+                .iter()
+                .all(|p| p.velocity == [0.0; 3] && p.position_radius[3] > 0.0)
+        );
+        assert!(
+            restored.particles[restored.live as usize..]
+                .iter()
+                .all(|p| p.position_radius[3] == 0.0)
+        );
+
+        // A changed epoch invalidates the history. A fresh instance at that
+        // epoch must produce the same values, including the interior field.
+        let reset = run_step(
+            &mut harness,
+            &mut step,
+            &input,
+            capacity,
+            Some(1.0),
+            Some(12.0),
+            0,
+        );
+        let mut fresh_harness = Harness::new();
+        let mut fresh_step = GpuFlipStep::new();
+        let fresh = run_step(
+            &mut fresh_harness,
+            &mut fresh_step,
+            &input,
+            capacity,
+            Some(1.0),
+            Some(12.0),
+            0,
+        );
+        assert!(reset.errors.is_empty() && fresh.errors.is_empty());
+        assert_eq!(active_ids(&reset.particles), active_ids(&fresh.particles));
+        assert_eq!(reset.interior, fresh.interior);
+        assert_eq!(
+            bytemuck::cast_slice::<FaceSample, u8>(&reset.faces),
+            bytemuck::cast_slice::<FaceSample, u8>(&fresh.faces)
+        );
     }
 }

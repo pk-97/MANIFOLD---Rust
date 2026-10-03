@@ -27,12 +27,15 @@ from narrow_band_reference import (  # noqa: E402
     in_band,
     narrow_band_lifecycle,
     reseed_entering_cells,
+    restore_interior,
     _check_capacity,
 )
+from narrow_band_grid_reference import Field  # noqa: E402
 
 
 CELL = (0, 0, 0)
 H_VALUES = (0.5, 1.0, 2.0)
+CELLS_8 = tuple((x, y, z) for z in range(8) for y in range(8) for x in range(8))
 
 
 def particle(index: int, position: tuple[float, float, float], velocity=(0.0, 0.0, 0.0)):
@@ -314,6 +317,107 @@ class NarrowBandReferenceTests(unittest.TestCase):
                 velocity_at=lambda _p: (0.0, 0.0, 0.0), cells=(CELL,),
                 h=1.0, capacity=2,
             )
+
+    def test_restore_interior_fills_an_8_cubed_grid_and_keeps_existing_particles(self):
+        existing = particle(77, (0.1, 0.1, 0.1), velocity=(9.0, 8.0, 7.0))
+        slots, count = restore_interior(
+            (existing,), new_phi={cell: -1.0 for cell in CELLS_8},
+            liquid_phi_at=all_eligible, solid_phi_at=no_solid,
+            velocity_at=lambda point: point, cells=CELLS_8,
+            h=1.0, capacity=8 * len(CELLS_8), next_id=100,
+        )
+        live = still_in_cell(slots)
+        self.assertEqual(count, 8 * len(CELLS_8) - 1)
+        self.assertEqual(len(live), 8 * len(CELLS_8))
+        self.assertIn(existing, live)
+        self.assertEqual(
+            [p.velocity for p in live if p.id != existing.id],
+            [p.position for p in live if p.id != existing.id],
+        )
+        counts = {cell: 0 for cell in CELLS_8}
+        for p in live:
+            counts[tuple(math.floor(axis) for axis in p.position)] += 1
+        self.assertTrue(all(value == 8 for value in counts.values()))
+
+    def test_restore_interior_leaves_surface_cells_untouched(self):
+        interior = (0, 0, 0)
+        surface = (1, 0, 0)
+        phi = {cell: 0.0 for cell in CELLS_8}
+        phi[interior] = -1.0
+        phi[surface] = -0.5
+        slots, count = restore_interior(
+            (), new_phi=phi, liquid_phi_at=all_eligible,
+            solid_phi_at=no_solid, velocity_at=lambda _point: (0.0, 0.0, 0.0),
+            cells=CELLS_8, h=1.0, capacity=8 * len(CELLS_8), next_id=1,
+        )
+        live = still_in_cell(slots)
+        self.assertEqual(count, 8)
+        self.assertTrue(all(tuple(math.floor(axis) for axis in p.position) == interior for p in live))
+        self.assertFalse(any(tuple(math.floor(axis) for axis in p.position) == surface for p in live))
+
+    def test_restore_interior_preserves_occupied_half_cells(self):
+        cell = (3, 3, 3)
+        occupied_site = fill_sites(cell, 1.0)[0]
+        occupied = particle(91, (3.24, occupied_site[1], occupied_site[2]))
+        slots, count = restore_interior(
+            (occupied,), new_phi={cell: -1.0 for cell in CELLS_8},
+            liquid_phi_at=all_eligible, solid_phi_at=no_solid,
+            velocity_at=lambda _point: (0.0, 0.0, 0.0), cells=CELLS_8,
+            h=1.0, capacity=8 * len(CELLS_8), next_id=100,
+        )
+        live = still_in_cell(slots)
+        in_cell = [p for p in live if tuple(math.floor(axis) for axis in p.position) == cell]
+        self.assertEqual(count, 8 * len(CELLS_8) - 1)
+        self.assertEqual(len(in_cell), 8)
+        self.assertIn(occupied, in_cell)
+        self.assertNotIn(occupied_site, [p.position for p in in_cell])
+
+    def test_restore_interior_refuses_the_whole_append_on_capacity_shortage(self):
+        particles = ()
+        with self.assertRaises(ValueError):
+            restore_interior(
+                particles, new_phi={cell: -1.0 for cell in CELLS_8},
+                liquid_phi_at=all_eligible, solid_phi_at=no_solid,
+                velocity_at=lambda _point: (0.0, 0.0, 0.0), cells=CELLS_8,
+                h=1.0, capacity=8 * len(CELLS_8) - 1, next_id=1,
+            )
+        self.assertEqual(particles, ())
+
+    def test_restore_overflow_gpu_fixture_has_exactly_fourteen_missing_sites(self):
+        eligible = ((2, 3, 3), (3, 3, 3))
+        existing = (
+            particle(100, (2.1, 3.1, 3.1), (9.0, 9.0, 9.0)),
+            particle(101, (3.1, 3.1, 3.1), (9.0, 9.0, 9.0)),
+        )
+        # Match the GPU fixture and sample the actual cell-centred field at
+        # quarter sites; a constant all-eligible sampler would miss this bug.
+        phi = {cell: -4.0 if cell in eligible else 1.0 for cell in CELLS_8}
+        field = Field((8, 8, 8), (0.5, 0.5, 0.5), 1.0, tuple(phi.values()))
+        kwargs = dict(
+            new_phi=phi, liquid_phi_at=field.sample, solid_phi_at=no_solid,
+            velocity_at=lambda _point: (1.0, 2.0, 3.0), cells=CELLS_8,
+            h=1.0, next_id=102,
+        )
+        slots, count = restore_interior(existing, capacity=16, **kwargs)
+        self.assertEqual(count, 14)
+        added = [p for p in still_in_cell(slots) if p.id >= 102]
+        self.assertEqual(
+            {p.position for p in added},
+            {site for cell in eligible for site in fill_sites(cell, 1.0)[1:]},
+        )
+        self.assertTrue(all(p.velocity == (1.0, 2.0, 3.0) for p in added))
+        self.assertTrue(all(p in slots for p in existing))
+        with self.assertRaisesRegex(ValueError, "explicit capacity"):
+            restore_interior(existing, capacity=8, **kwargs)
+
+        # The original constant field made all 512 cells eligible, explaining
+        # the GPU's 4094 additions instead of the intended two-cell deficit.
+        full_phi = {cell: -2.0 for cell in CELLS_8}
+        _, full_count = restore_interior(
+            existing, capacity=8 * len(CELLS_8),
+            **{**kwargs, "new_phi": full_phi, "liquid_phi_at": lambda _p: -2.0},
+        )
+        self.assertEqual(full_count, 4094)
 
 
 if __name__ == "__main__":
