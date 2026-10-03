@@ -31,6 +31,7 @@ fn create_engine() -> PlaybackEngine {
 /// pattern for getting a param onto the manifest without the registry).
 fn add_whole_number_param(inst: &mut PresetInstance, id: &str, max: f32) {
     inst.params.push(Param::bundled(ParamSpecDef {
+        tooltip: None,
         id: id.to_string(),
         name: id.to_string(),
         min: 0.0,

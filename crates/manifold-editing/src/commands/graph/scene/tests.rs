@@ -4061,6 +4061,7 @@ fn import_model_into_scene_command_extends_card_metadata_and_undo_restores() {
     let before = graph_of(&project, &fx).clone();
 
     let new_param = ParamSpecDef {
+        tooltip: None,
         id: "opacity_1".to_string(),
         name: "Opacity".to_string(),
         min: 0.0,

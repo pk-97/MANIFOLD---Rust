@@ -84,6 +84,7 @@ pub(super) fn modifier_exposure_command(
 pub(super) fn slot(id: &str, value: f32, exposed: bool) -> manifold_core::params::Param {
     let mut p =
         manifold_core::params::Param::bundled(manifold_core::effect_graph_def::ParamSpecDef {
+            tooltip: None,
             id: id.into(),
             name: id.into(),
             min: 0.0,

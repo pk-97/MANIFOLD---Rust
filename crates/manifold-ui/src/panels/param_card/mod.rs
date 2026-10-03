@@ -1253,6 +1253,7 @@ pub(super) mod tests {
                 ParamRow {
                     id: std::borrow::Cow::Borrowed("radius"),
                     spec: RowSpec {
+                        tooltip: None,
                         name: "Radius".into(),
                         min: 0.0,
                         max: 100.0,
@@ -1284,6 +1285,7 @@ pub(super) mod tests {
                 ParamRow {
                     id: std::borrow::Cow::Borrowed("strength"),
                     spec: RowSpec {
+                        tooltip: None,
                         name: "Strength".into(),
                         min: 0.0,
                         max: 1.0,
@@ -1328,6 +1330,7 @@ pub(super) mod tests {
         c.rows.push(ParamRow {
             id: std::borrow::Cow::Borrowed("invert"),
             spec: RowSpec {
+                tooltip: None,
                 name: "Invert".into(),
                 min: 0.0,
                 max: 1.0,
@@ -1359,6 +1362,7 @@ pub(super) mod tests {
         c.rows.push(ParamRow {
             id: std::borrow::Cow::Borrowed("reset"),
             spec: RowSpec {
+                tooltip: None,
                 name: "Reset".into(),
                 min: 0.0,
                 max: 0.0,
@@ -1603,6 +1607,7 @@ pub(super) mod tests {
         c.rows.push(ParamRow {
             id: std::borrow::Cow::Borrowed("clip_trigger"),
             spec: RowSpec {
+                tooltip: None,
                 name: "Clip Trigger".into(),
                 min: 0.0,
                 max: 1.0,
@@ -2140,6 +2145,20 @@ pub(super) mod tests {
         c.kind = ParamCardKind::Generator;
         c.rows[1].mapping.mappable = true;
         c
+    }
+
+    #[test]
+    fn manifest_slider_tooltip_reaches_the_interactive_tree() {
+        let mut config = generator_config_with_mappable();
+        config.rows[0].spec.tooltip = Some("Shape the surface.".into());
+        let mut tree = UITree::new();
+        let mut panel = ParamCardPanel::new();
+        panel.configure(&config);
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 340.0, 200.0));
+        assert!(tree.nodes().iter().any(|node| {
+            node.flags.contains(UIFlags::INTERACTIVE)
+                && node.tooltip.as_deref() == Some("Shape the surface.")
+        }));
     }
 
     #[test]
@@ -3313,6 +3332,7 @@ pub(super) mod tests {
                 ParamRow {
                     id: std::borrow::Cow::Borrowed("speed"),
                     spec: RowSpec {
+                        tooltip: None,
                         name: "Speed".into(),
                         min: 0.0,
                         max: 10.0,
@@ -3344,6 +3364,7 @@ pub(super) mod tests {
                 ParamRow {
                     id: std::borrow::Cow::Borrowed("invert"),
                     spec: RowSpec {
+                        tooltip: None,
                         name: "Invert".into(),
                         min: 0.0,
                         max: 1.0,
@@ -3375,6 +3396,7 @@ pub(super) mod tests {
                 ParamRow {
                     id: std::borrow::Cow::Borrowed("scale"),
                     spec: RowSpec {
+                        tooltip: None,
                         name: "Scale".into(),
                         min: 0.1,
                         max: 5.0,

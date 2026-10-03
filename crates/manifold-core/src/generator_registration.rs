@@ -162,6 +162,7 @@ impl ParamSpec {
     pub fn to_param_def(&self) -> RegistryParamDef {
         RegistryParamDef {
             spec: crate::effect_graph_def::ParamSpecDef {
+                tooltip: None,
                 id: self.id.to_string(),
                 name: self.name.to_string(),
                 min: self.min,

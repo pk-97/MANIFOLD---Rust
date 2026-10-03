@@ -69,6 +69,7 @@ pub(super) fn sample_user_binding(id: &str, node: &str, inner: &str) -> UserPara
 /// id, exposure, and a 0..1 range. Replaces the old positional `ParamSlot`.
 pub(super) fn slot(id: &str, value: f32, exposed: bool) -> crate::params::Param {
     let spec = crate::effect_graph_def::ParamSpecDef {
+        tooltip: None,
         id: id.to_string(),
         name: String::new(),
         min: 0.0,

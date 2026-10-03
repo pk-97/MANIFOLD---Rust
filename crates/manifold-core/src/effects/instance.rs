@@ -933,6 +933,7 @@ impl PresetInstance {
         // effects — the registry drives the static prefix; the user tail
         // is keyed by id).
         meta.params.push(ParamSpecDef {
+            tooltip: None,
             id: binding.id.clone(),
             name: binding.label.clone(),
             min: binding.min,
@@ -1712,6 +1713,7 @@ mod tests {
                 is_line_based: false,
                 layer_types: None,
                 params: vec![ParamSpecDef {
+                    tooltip: None,
                     id: "amount".to_string(),
                     name: "Amount".to_string(),
                     min: 0.0,

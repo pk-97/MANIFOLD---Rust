@@ -83,8 +83,7 @@ pub(crate) struct WaterScene {
     /// Mesh the liquid with the shipped GPU liquid surface.
     pub surface: bool,
     /// Surface lattice nodes per cell (`resolution_scale` of the surface's
-    /// volume and mesh): the shipped Surface Detail 0 is 2, which fits the
-    /// frame budget at 64 (BUG-mjhx, surface scale at GPU FLIP 64).
+    /// volume and mesh): Surface Detail 0 is subdivision 1, the FLIP default.
     pub surface_scale: usize,
     /// Publish the face grid: three node.face_sample_component named
     /// [`FACE_NODES`] on the state's faces after the region, into the frame.
@@ -134,7 +133,7 @@ impl WaterScene {
             fill_height: DAM_FILL_HEIGHT,
             column: DAM_COLUMN,
             surface: false,
-            surface_scale: 2,
+            surface_scale: 1,
             faces: false,
             ghost_fluid: true,
             volume_projection: true,
@@ -626,6 +625,7 @@ pub fn gpu_flip_liquid_body() -> EffectGraphDef {
     };
     def.wires.extend([
         wire(surface, "vertices", object, "vertices"),
+        wire(surface, "indices", object, "indices"),
         wire(material, "out", object, "material"),
         wire(object, "object", output, "object"),
     ]);
@@ -639,7 +639,7 @@ pub fn gpu_flip_liquid_body() -> EffectGraphDef {
 
 /// Surface Detail adds this to its value to give the surface nodes' scale.
 #[cfg(any(test, feature = "gpu-proofs"))]
-const SURFACE_DETAIL_OFFSET: usize = 2;
+const SURFACE_DETAIL_OFFSET: usize = 1;
 
 /// A meshed scene inside the shipped preset's render: `water_def`'s water
 /// and surface, the preset's other nodes, and the preset's wires between the
@@ -1131,6 +1131,39 @@ pub(super) mod tests {
         let bands = [at(64, 2), at(64, 1), at(128, 2), at(96, 2), at(16, 2)];
         assert_eq!(bands, [(3, 9), (6, 14), (6, 14), (4, 10), (1, 5)]);
         assert!(bands.iter().all(|&(_, band)| band >= FACE_VALID_LAYERS));
+    }
+
+    /// The shipped JSON owns the authored surface. All solver presets copy
+    /// that group, including its indexed mesh and independent shaping controls.
+    #[test]
+    fn gpu_flip_surface_group_is_shared_with_all_water_presets() {
+        let source = surface_group();
+        let group = &source["group"];
+        assert_eq!(group["nodes"].as_array().unwrap().len(), 32);
+        let registry = PrimitiveRegistry::with_builtin();
+        for name in [SHIPPED_PRESET, "WaterDamBreakGpu", "WaterDamBreakMatter", "WaterStillPoolMatter", "WaterFloatingBoxMatter"] {
+            let json = bundled_preset_json(&PresetTypeId::new(name)).unwrap();
+            let preset: Value = serde_json::from_str(&json).unwrap();
+            let surface = preset["nodes"].as_array().unwrap().iter()
+                .find(|n| n["handle"] == "Liquid Surface").unwrap();
+            assert_eq!(&surface["group"], group, "{name}: authored surface drift");
+            assert_eq!(surface["params"], source["params"], "{name}: defaults drift");
+            for param in ["stretch", "smoothing", "fill_pits", "smoothing_iterations"] {
+                assert!(surface["params"][param]["value"].is_number(), "{name}: {param}");
+            }
+            let wires = group["wires"].as_array().unwrap();
+            let mut destinations = std::collections::HashSet::new();
+            for wire in wires {
+                assert!(destinations.insert((wire["toNode"].as_u64().unwrap(), wire["toPort"].as_str().unwrap())),
+                    "{name}: duplicate input wire {wire}");
+            }
+            crate::preset_runtime::PresetRuntime::from_json_str(&json, &registry)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let detail = preset["presetMetadata"]["bindings"].as_array().unwrap().iter()
+                .filter(|b| b["id"] == "surface_detail").collect::<Vec<_>>();
+            assert_eq!(detail.len(), 3, "{name}: detail reaches volume, mesh and bricks");
+            assert!(detail.iter().all(|b| b["offset"] == 1.0));
+        }
     }
 
     /// The shipped `WaterDamBreakGpuFlip.json` is the builder's Dam Break at 64,

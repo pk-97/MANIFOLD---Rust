@@ -25,6 +25,7 @@ pub(super) fn card_param(
     section: &str,
 ) -> ParamSpecDef {
     ParamSpecDef {
+        tooltip: None,
         id: id.to_string(),
         name: name.to_string(),
         min,
@@ -98,6 +99,7 @@ pub(super) fn animation_card_params(
     clip_labels: Vec<String>,
 ) {
     let base = ParamSpecDef {
+        tooltip: None,
         id: String::new(),
         name: String::new(),
         min: 0.0,

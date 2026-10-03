@@ -21,84 +21,6 @@
 // MeshVertex is Element. `levelset` and `scan` must be the ones the mesh was
 // built from this frame.
 
-// The cell corner at offset `o` (each component 0 or 1).
-fn rsm_corner(o: vec3<u32>) -> u32 {
-    for (var c = 0u; c < 8u; c = c + 1u) {
-        if all(MC_CORNERS[c] == o) {
-            return c;
-        }
-    }
-    return 8u;
-}
-
-// The cell edge joining corners `p` and `q`, or 12 when none does.
-fn rsm_cell_edge(p: u32, q: u32) -> u32 {
-    for (var e = 0u; e < 12u; e = e + 1u) {
-        if (MC_EDGE_A[e] == p && MC_EDGE_B[e] == q) || (MC_EDGE_A[e] == q && MC_EDGE_B[e] == p) {
-            return e;
-        }
-    }
-    return 12u;
-}
-
-struct RsmNeighbourSum {
-    sum: vec3<f32>,
-    met: u32,
-}
-
-fn rsm_neighbour_sum(
-    home: vec3<u32>,
-    edge: u32,
-    cells: vec3<u32>,
-    nodes: vec3<u32>,
-) -> RsmNeighbourSum {
-    var a = home + MC_CORNERS[MC_EDGE_A[edge]];
-    var b = home + MC_CORNERS[MC_EDGE_B[edge]];
-    if mc_node(b, nodes) < mc_node(a, nodes) {
-        let swap = a;
-        a = b;
-        b = swap;
-    }
-    // The lattice edge runs from `a` one node up along `step`; the four cells
-    // around it are visited in the exact order used by the dense oracle.
-    let step = b - a;
-    let side_u = select(vec3<u32>(1u, 0u, 0u), vec3<u32>(0u, 1u, 0u), step.x == 1u);
-    let side_v = select(vec3<u32>(0u, 0u, 1u), vec3<u32>(0u, 1u, 0u), step.z == 1u);
-    var sum = vec3<f32>(0.0);
-    var met = 0u;
-    for (var around = 0u; around < 4u; around = around + 1u) {
-        let du = side_u * (around & 1u);
-        let dv = side_v * (around >> 1u);
-        if any(a < du + dv) {
-            continue;
-        }
-        let cell = a - du - dv;
-        if any(cell >= cells) {
-            continue;
-        }
-        let cell_edge = rsm_cell_edge(rsm_corner(a - cell), rsm_corner(b - cell));
-        let case_index = mc_case(cell, nodes);
-        let cell_index = cell.x + cells.x * (cell.y + cells.y * cell.z);
-        var base = 0u;
-        if cell_index > 0u {
-            base = buf_scan[cell_index - 1u];
-        }
-        let cell_triangles = MC_TRIANGLE_COUNT[case_index];
-        for (var t = 0u; t < cell_triangles; t = t + 1u) {
-            for (var corner = 0u; corner < 3u; corner = corner + 1u) {
-                if mc_edge(case_index, t * 3u + corner) != cell_edge {
-                    continue;
-                }
-                let slot = (base + t) * 3u;
-                sum = sum + buf_vertices[slot + (corner + 1u) % 3u].position;
-                sum = sum + buf_vertices[slot + (corner + 2u) % 3u].position;
-                met = met + 2u;
-            }
-        }
-    }
-    return RsmNeighbourSum(sum, met);
-}
-
 fn rsm_relax_vertex(idx: u32, strength: f32, neighbours: RsmNeighbourSum) -> Element {
     let v = buf_vertices[idx];
     let unmoved = Element(v.position, v.normal, v.uv, v.uv1, v.tangent, v.color);
@@ -118,6 +40,7 @@ fn body(
     strength: f32,
     max_capacity: u32,
     brick_pass: u32,
+    indexed: u32,
 ) {
     let zero = Element(
         vec3<f32>(0.0),
@@ -136,6 +59,9 @@ fn body(
             let triangles = buf_scan[clear_total - 1u];
             if triangles <= max_capacity / 3u {
                 live = triangles * 3u;
+                if indexed != 0u {
+                    live = buf_edge_scan[clear_nodes.x * clear_nodes.y * clear_nodes.z - 1u];
+                }
             }
         }
         if idx >= live {
@@ -172,11 +98,15 @@ fn body(
         for (var corner = 0u; corner < 3u; corner = corner + 1u) {
             let edge_entry = t * 3u + corner;
             let edge = mc_edge(case_index, edge_entry);
+            if indexed != 0u && (!se_owner(home, edge, nodes) || edge_ready[edge]) {
+                continue;
+            }
             if !edge_ready[edge] {
-                edge_cache[edge] = rsm_neighbour_sum(home, edge, cells, nodes);
+                edge_cache[edge] = rsm_neighbour_sum(home, edge, cells, nodes, indexed, false);
                 edge_ready[edge] = true;
             }
-            let slot = (base + t) * 3u + corner;
+            var slot = (base + t) * 3u + corner;
+            if indexed != 0u { slot = se_vertex(home, edge, nodes); }
             buf_relaxed[slot] = rsm_relax_vertex(slot, strength, edge_cache[edge]);
         }
     }

@@ -465,6 +465,7 @@ fn param_surface(
             ParamRow {
                 id: std::borrow::Cow::Owned(id),
                 spec: RowSpec {
+                    tooltip: p.spec.tooltip.clone(),
                     name: p.spec.name.clone(),
                     min: p.spec.min,
                     max: p.spec.max,
@@ -1066,6 +1067,7 @@ mod param_label_tests {
 
     fn user_spec(id: &str, name: &str) -> manifold_core::effect_graph_def::ParamSpecDef {
         manifold_core::effect_graph_def::ParamSpecDef {
+            tooltip: None,
             id: id.to_string(),
             name: name.to_string(),
             min: 0.0,
@@ -1533,6 +1535,7 @@ mod sync_card_values_tests {
 
     fn user_spec(id: &str, name: &str) -> manifold_core::effect_graph_def::ParamSpecDef {
         manifold_core::effect_graph_def::ParamSpecDef {
+            tooltip: None,
             id: id.to_string(),
             name: name.to_string(),
             min: 0.0,

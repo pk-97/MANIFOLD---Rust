@@ -7,6 +7,7 @@ use super::*;
     /// `effects.rs`'s own test module).
     pub(super) fn slot(id: &str, value: f32, exposed: bool) -> crate::params::Param {
         let spec = crate::effect_graph_def::ParamSpecDef {
+            tooltip: None,
             id: id.to_string(),
             name: String::new(),
             min: 0.0,

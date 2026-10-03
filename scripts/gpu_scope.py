@@ -151,6 +151,12 @@ NARROW_ROWS = [
 # Explicit rows: (path substrings, (filters, skips)). `rt_` skips particletext:
 # the freeze proof `particletext_*` hangs the GPU on main (BUG-i6eo).
 EXPLICIT_ROWS = [
+    ((RENDERER_SRC + "node_graph/primitives/offset_lattice",
+      RENDERER_SRC + "node_graph/primitives/redistance_lattice",
+      RENDERER_SRC + "node_graph/primitives/lattice_closing",
+      RENDERER_SRC + "node_graph/primitives/shaders/offset_lattice",
+      RENDERER_SRC + "node_graph/primitives/shaders/redistance_lattice"),
+     (["fluid_fill_pits"], [])),
     (("crates/manifold-gpu/src/metal/raytrace.rs",
       RENDERER_SRC + "node_graph/primitives/render_scene.rs",
       RENDERER_SRC + "node_graph/primitives/shaders/render_scene.wgsl",
@@ -183,6 +189,21 @@ EXPLICIT_ROWS = [
       RENDERER_SRC + "node_graph/primitives/shaders/liquid_fill",
       RENDERER_SRC + "node_graph/primitives/shaders/face_sample_component"),
      (["gpu_flip_", "face_grid_tests::"], REPORTER_SKIPS)),
+    # Shared marching-cubes topology: ownership, expanded vertex values, and raster parity.
+    ((RENDERER_SRC + "node_graph/primitives/count_surface_edges",
+      RENDERER_SRC + "node_graph/primitives/volume_surface_mesh",
+      RENDERER_SRC + "node_graph/primitives/relax_surface_mesh",
+      RENDERER_SRC + "node_graph/primitives/smooth_surface_mesh",
+      RENDERER_SRC + "node_graph/primitives/surface_mesh_normals",
+      RENDERER_SRC + "node_graph/primitives/surface_mesh_parity",
+      RENDERER_SRC + "node_graph/primitives/surface_mesh_freeze_tests",
+      RENDERER_SRC + "node_graph/primitives/shaders/count_surface_edges",
+      RENDERER_SRC + "node_graph/primitives/shaders/surface_edge_",
+      RENDERER_SRC + "node_graph/primitives/shaders/volume_surface_mesh",
+      RENDERER_SRC + "node_graph/primitives/shaders/relax_surface_mesh",
+      RENDERER_SRC + "node_graph/primitives/shaders/surface_mesh_",
+      PROOFS_DIR + "liquid_indexed.rs"),
+     (["count_surface_edges::gpu_tests::", "volume_surface_mesh::gpu_tests::", "surface_mesh_normals::gpu_tests::", "surface_mesh_freeze_tests::gpu_tests::", "fluid_indexed_", "liquid_indexed::"], [])),
     # Graph runtime.
     ((RENDERER_SRC + "node_graph/execution",
       RENDERER_SRC + "node_graph/resource_allocation",

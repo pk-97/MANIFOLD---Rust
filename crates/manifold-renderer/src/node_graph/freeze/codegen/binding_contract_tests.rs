@@ -181,8 +181,12 @@ fn dispatch_tail_census_is_stable() {
     // spawn_whitewater and whitewater_type, buffer atoms. The whitewater GPU
     // lifecycle adds advect_whitewater, retype_whitewater, age_whitewater,
     // preserve_foam and keep_whitewater, buffer atoms. Liquid mesh relaxation
-    // adds relax_surface_mesh, a buffer atom.
-    assert_eq!(total, 224, "standalone atom census drifted");
+    // adds relax_surface_mesh, a buffer atom. Fill Pits adds offset_lattice
+    // and redistance_lattice, buffer atoms. Shared-edge meshing adds
+    // count_surface_edges and surface_mesh_normals. smooth_surface_mesh is
+    // an iteration boundary, not a standalone atom; relax_surface_mesh remains
+    // registered for saved graphs. No standalone atom is removed.
+    assert_eq!(total, 228, "standalone atom census drifted");
     assert_eq!(
         qualifying, 93,
         "canonical texture-path population drifted"

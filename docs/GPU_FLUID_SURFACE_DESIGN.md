@@ -37,6 +37,60 @@ Beads: BUG-vglg (CPU FLIP scene physics epic), whose child BUG-vglg.18 is the ba
 cache workflow; BUG-3sta (fluid surfacing: remesh baked motion, tune detached droplets)
 is the slot-9 work this design builds on.
 
+## 2026-10-03 FLIP mesher parity audit (BUG-rlk1i)
+
+Source: vendored `particlemesher.cpp`, `scalarfield.cpp`, `polygonizer3d.cpp`,
+`trianglemesh.cpp`, `fluidsimulation.cpp` / `.h`; normals: `manifold-fluids::decode_surface`.
+The audit starts at `43493cf4a`; the last column records this branch's changes.
+It is a source/CPU parity audit, not an observed visual-parity claim.
+
+| Stage | FLIP Fluids | GPU starting point | Verdict after this change |
+|---|---|---|---|
+| Field kernel / radius | Sphere union `min(length(x-p)-r)`, `r = markerRadius * scale`; default scale 3 | Isotropic defaults select spheres, but radius/reach is capped by bins; scale 2.2 | Default scale matches (3); bin-based radius/reach caps remain pending Peter's look call (details below) |
+| Distance band / solids | Initialize distance to `3r`; visit the grid-aligned `1.5r` support box, then negate the field; positive-inside solid samples become zero | Negative-inside band is bin/3; solid samples use `max(phi,0)` | Solid clamp and strict zero-case convention match after sign conversion. Radius/support and band differ; native border is +0.001 in our convention, versus bin/3 |
+| Grid / subdivision | `(cells * subdivision)+1` nodes, default subdivision 1 | Same formula; default scale and Detail offset 2 | Matches default and mapping (1); existing simulation padding is unchanged |
+| Field smoothing | None | Three optional binomial axes at zero strength | Matches at zero; this is separate from mesh smoothing |
+| Polygonizer | Linear zero crossing limited to nonsolid edge interval; U/V/W edge-owned vertices | BUG-llkb welded indexed output; missing solid interpolation constraint | Sharing retained; solid-edge constraint ported with optional solid lattice input; GPU proofs pending |
+| Mesh smoothing | Jacobi `v += value*(mean of neighbours over incident triangles - v)`, value 0.5, iterations 2 | Same gather, two separate relax nodes | Matches formula/defaults; one stage now owns the uncapped iteration loop |
+| Normals | Sum unnormalized face cross products per welded vertex, normalize after smoothing (`decode_surface`) | Raw field gradient passed through position updates | Missing stage added: area-weighted normals from final triangles |
+
+Section 2.5 inventory: `facet_normals` exists, but is flat-only and assumes a
+triangle list: welded smooth normals are not one wire away. `neighbor_smooth`
+operates on a regular grid of instance transforms, not incident mesh triangles.
+`relax_surface_mesh` already owns the shared-edge neighbour cache and generated
+standalone pass; both stages reuse it. `smooth_surface_mesh` is the new iteration
+boundary; `surface_mesh_normals` is the genuinely new area-normal gather.
+Existing relax remains available for saved graphs. The production chain replaces
+two relax instances with one smoothing stage and one normal stage. The merged
+Fill Pits chain adds nine nodes: 32 Liquid Surface nodes including group I/O
+in all five water presets; no catalog atom removed.
+Relaxation and normals use `wgsl_body`, BufferGather and owned-output codegen;
+freezing keeps their gathered topology materialized. The smoothing stage reuses
+the prewarmed relaxation kernel and retains one capacity-sized ping-pong buffer.
+The 0–10 smoothing/iteration spans are editable UI ranges, never execution caps.
+Water Detail uses the existing manifest projection and keeps `mesh_relaxation`
+as the stable binding ID for Smoothing Value. Surface control ownership uses
+one traversal of the water's upstream mesh graph. The shipped JSON is the
+surface source: the builder reads it without reapplying mesh edits or
+overriding authored surface metadata.
+
+The integration review read the full native field path. `_computeScalarField`
+negates the sphere distance before `ScalarField::getScalarFieldValue`; native
+`> 0` and GPU `< 0` set identical marching-cubes cases, including solid zeros.
+The previous audit omitted that negation and incorrectly requested a solid-sign
+change. A CPU reference covers both signs, signed zero and all 256 solid masks;
+the existing GPU solid-clamp proof remains the execution check.
+
+**Left for Peter's look call, no new issue filed:** removing the current radius
+cap increases the default isotropic radius from 2/3 of a simulation cell to
+about 0.93 cells at particle scale 3. Native support is the inclusive grid box
+`floor((p - 1.5r)/h)` through `floor((p + 1.5r)/h)+1`, not a spherical cutoff;
+its untouched distance is `3r`. Radius, support, distance initialization and
+border distance must be ported together, retaining Fill Pits' extra support and
+the sparse-brick halo. They change sheet thickness, gaps and boundary crossings,
+so this integration leaves the existing field kernels in place. No new cap or
+fallback is introduced. Visual parity and the new mesh GPU proofs are unverified.
+
 ## 1. Audit — what exists (verified 2026-09-29 at `b88e4c9cf`)
 
 Paths abbreviated after first use: `R/` = `crates/manifold-renderer/src/node_graph/`,
@@ -187,12 +241,15 @@ when a neighbour is within 2r, smoothstep to `isolated_scale` by 3r), computed f
 same neighbour search as the anisotropy. Yu & Turk's sparse-neighbour rule (isotropic
 kernel below N_ε neighbours) also applies.
 
-**D15 — The level set clamps at solids the way upstream does and closes at the lattice
-border.** A lattice node whose solid distance is negative is capped at the threshold:
-never inside the liquid, so the surface wraps the solid (`scalarfield.cpp:439-447`; with
-negative-inside values, `φ = max(φ, 0)`). Border nodes are forced outside so marching
-cubes emits a closed, consistently wound surface. The volume-optics path needs a closed mesh
-(`volume_geometry` in the current contract of WATER_SIMULATION_DESIGN.md).
+**D15 — Solid sign matches upstream after converting conventions.** Native
+`ParticleMesher::_computeScalarField` negates its distance field before
+`ScalarField::getScalarFieldValue` applies `min(value, 0)` inside solids.
+With our negative-inside values this is `max(phi, 0)`, as implemented. Native
+polygonizer case bits use `> 0`; ours use `< 0`, so zero belongs outside in both.
+The polygonizer separately ports `_vertexInterp`'s solid-edge interval constraint.
+Border magnitude still differs: native writes -0.001 after negation (our +0.001),
+whereas the current GPU field and post-smoothing clamp use bin/3. The coupled
+radius/support/band/border look decision is recorded in the parity audit above.
 
 **D16 — Marching cubes is three atoms: count, running total, cell-owned emit.**
 Count writes triangles per cell; running total is an inclusive scan with a
@@ -702,8 +759,14 @@ solid. Decisions made while building:
   rule measures physical radii (neighbour within 2 r → 3 r), because the search reaches
   one bin, not slot-9's three meshing radii. Yu & Turk's `k_s`/`k_n` constants are not
   used.
-- **No lattice yet.** Before its first frame the producer publishes zero nodes; the
-  volume, count and mesh atoms then emit nothing, without an error.
+- **Before the first particle capture (BUG-a1xh).** The CPU FLIP producer derives
+  bounds and positive node counts from its accepted domain layout, before any GPU
+  publication. The native engine only captures after a completed simulation tick.
+  Until then, zero counts accompany a zeroed particle record and a correctly sized
+  zero solid lattice: the surface is entirely exterior. This immutable storage is
+  separate from the worker ring and retires when the first real A/B pair arrives.
+  A zero lattice dimension is invalid input, not an empty-frame sentinel, and
+  consumers keep their checks. Initialization does not advance simulation time.
 
 - **Entry state:** P3 merged. Anchors: `rg -n 'BarrieredReduction' crates/manifold-renderer/src/node_graph/primitives/spawn_from_mesh.rs`, `rg -n 'atomic_outputs' crates/manifold-renderer/src/node_graph/primitives/scatter_particles_3d.rs`, `rg -n 'input_access' crates/manifold-renderer/src/node_graph/primitives/triangulate_grid.rs`.
 - **Read-back:** D8, D14, D15, D17, D18; section 4.1; the Yu & Turk 2010 sections on anisotropy and centre smoothing.
@@ -837,6 +900,35 @@ phase** (below).
   load 18–32, on a landing seat; steady-state max 8 ms). At the defaults: max 6.75 ms,
   mean 1.04 ms.
 - **Deletion gate.** `rg -n 'fn mesh_vertex_count' crates/manifold-renderer/src/node_graph/primitives/render_scene.rs` and `rg -U 'pub struct DepthMsaaDraw[^}]*vertex_count' crates/manifold-gpu/src/metal/encoder.rs` both find nothing.
+
+### Indexed surface topology (BUG-llkb)
+
+`node.count_surface_edges` counts sign-changing positive x/y/z edges at each
+lattice node. Its inclusive `node.running_total` scan assigns one shared vertex
+per lower-endpoint/axis key, ported from the vendored FLIP Fluids
+`polygonizer3d.cpp::_calculateVertexList` U/V/W edge ownership. The original
+marching-cubes table, lower-endpoint interpolation, triangle order and vertex
+attributes remain authoritative. Boundary edges have one clamped owner cell.
+
+Wiring this scan to `volume_surface_mesh.edge_scan` selects shared vertices plus
+`indices: Array(u32)`. With no edge scan, saved graphs retain triangle-list output.
+`relax_surface_mesh.edge_scan` addresses the same shared vertices while preserving
+the original neighbour traversal and arithmetic. Mesh Capacity, growth, overflow
+emptiness, level-set resolution, and material settings are unchanged. The index
+buffer has the same slot capacity as the original triangle-list vertex buffer;
+extent admission includes both buffers and the extra edge count/scan storage.
+
+`scene_object.indices` carries topology to `render_scene`: all mesh raster passes
+use UInt32 indexed draws, the GPU triangle extent drives indexed indirect counts,
+and existing RT index-buffer support receives the same topology. The compact
+vertex extent is separate from the live triangle index extent. Missing wired
+storage reports an error rather than selecting triangle-list mode.
+
+CPU checks cover all 256 table cases, boundary ownership and buffer extents.
+GPU proofs compare ordered and sorted expanded triangle bytes, overflow/tails,
+two relaxation passes, opaque/volume image bytes, and paired preset frame hashes
+and timings. GPU execution is pending; compilation does not establish parity or
+performance. The original dense kernels remain active proof oracles.
 
 ### P6c — Level-set smoothing
 
@@ -1112,6 +1204,66 @@ blobs by a fifth.
   the surface becomes FLIP's sphere union next frame, no restart (D14).
 - **Forbidden:** changing preset defaults before Peter's call; judging look from stills
   read through a second tone curve; any MPM scene above res 64 on the GPU.
+
+### P6g — Live surface shaping (2026-10-03)
+
+The Liquid Surface group exposes `stretch` (1), `smoothing` (0), and
+`fill_pits` (0). Manifest rows are **Stretch**, **Centre Smoothing**, and
+**Fill Pits**, in Water Detail. Their short help text travels through the
+shared parameter surface. UI ranges are 1–16, 0–1 and 0–1; these are not
+runtime clamps. The integrated presets use particle scale 3, mesh smoothing
+0.5 × 2, and Surface Detail 0 → subdivision 1.
+
+**Section 2.5 audit:** distance rebuilding exists for whitewater, but the
+liquid closing is genuinely new, not one wire away. `surface_crossings`
+seeds one crossing per coarse cell centre; `nearest_crossing` spreads those
+seeds; `crossing_distance` measures against a tangent plane, caps at four
+cells and applies whitewater wall/epsilon policy. The liquid surface is
+node-centred and can be refined independently. `lattice_curvature` measures
+curvature, not distance. Adapting those operations would require a new seed
+layout and a new distance evaluator, and would retain nearest-plane error.
+`array_math` has offsets but is CPU-only (mapped arrays); it cannot consume
+this frame's GPU level set without a fence.
+
+Two new atoms therefore supply the missing operations: `offset_lattice`
+(coincident add, one dispatch) and `redistance_lattice` (gather, one dispatch).
+The latter measures Euclidean distance to the input marching-cubes triangles,
+using the existing corner/edge/table convention and a band-sized cell search.
+It saturates at the authored band; there is no fixed search-size cap. This is
+exact for that piecewise-linear surface, with lattice discretization error.
+Both have standalone generated kernels, freeze bodies/access declarations,
+value proofs and a redistance→offset fused/unfused proof.
+
+For bin width b and Fill Pits f, d=f*b. The chain is volume → offset(−d) →
+redistance(band=d+b) → offset(+d) → existing smoothing → solid clamp → mesh.
+This is a distance rebuild between offsets, not offset/blur/offset. The input
+volume's cap and bin search expand to b/3+2d+one lattice-cell diagonal; the
+brick support also includes another b, covering the rebuilt field's full
+positive band and the existing filter/normal halo. Negative-inside sign is
+preserved. A nonzero closing has positive cap 2d+b after shrinking. Zero
+returns the original f32 bits and skips the distance search; copy dispatches
+remain. Three standalone dispatches are added; CPU fusion reports for all five
+presets combine redistance and shrinking, leaving two frozen dispatches, with dense
+redistance cost O(lattice nodes × (band / spacing)^3). No GPU timing or visual
+acceptance is established; the 6 ms budget must be measured by the GPU owner.
+
+The f64 reference proves two-sphere pit filling, reduced jittered-sheet height
+variance, lone-sphere radius within lattice error, and bit-identical zero.
+The retained P6e f64 replica was also evaluated on the 116,307-particle settle
+capture at 8 s, x −1.75…−0.3, z −0.5…0.5, dx/3 spacing, particle scale 2.2,
+isolated scale 1, raw level set (no lattice blur or mesh relaxation):
+
+| Stretch / centre smoothing | Slope RMS 1–2 dx | 2–4 dx | over 4 dx | Curvature std (1/m) |
+|---|---|---|---|---|
+| 1 / 0 | 19.08° | 4.01° | 4.49° | 41.51 |
+| 4 / 0.5 | 28.12° | 7.02° | 4.98° | 69.45 |
+| 4 / 1 | 39.29° | 13.60° | 6.03° | 119.78 |
+
+These isolated-kernel replica numbers are not GPU measurements, a chosen
+look, or a promise that increasing either dial improves a given scene.
+P6e's dimpled CPU comparator is not the artistic target. Fill Pits is proven
+on the small geometric fixtures above; full settle closing metrics are not
+available here.
 
 ### P7 — Add Fluid authors the GPU surface
 

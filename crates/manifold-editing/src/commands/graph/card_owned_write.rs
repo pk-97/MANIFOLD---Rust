@@ -71,6 +71,7 @@ mod tests {
         use manifold_core::macro_bank::MacroCurve;
         use manifold_core::{NodeId, PresetTypeId};
         let spec = ParamSpecDef {
+            tooltip: None,
             id: "amount".to_string(),
             name: "Amount".to_string(),
             min: 0.0,

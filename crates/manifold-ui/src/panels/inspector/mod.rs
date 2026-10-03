@@ -1557,6 +1557,7 @@ mod tests {
         ParamRow {
             id: std::borrow::Cow::Borrowed(id),
             spec: RowSpec {
+                tooltip: None,
                 name: name.into(),
                 min: 0.0,
                 max: 1.0,

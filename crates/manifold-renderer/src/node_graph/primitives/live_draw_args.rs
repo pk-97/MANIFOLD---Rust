@@ -1,15 +1,14 @@
 //! Indirect draw arguments for scene objects whose mesh publishes a live
-//! extent (GPU_FLUID_SURFACE_DESIGN.md P6b): one four-word block per object,
+//! extent (GPU_FLUID_SURFACE_DESIGN.md P6b): one aligned eight-word block per object,
 //! written on the GPU each frame from the extent's count, so every raster pass
 //! draws only the live triangles.
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 
-use crate::generators::mesh_common::MeshVertex;
 use crate::node_graph::live_extent::LiveExtent;
 
 /// Bytes of one object's draw arguments.
-pub(super) const ARGS_BYTES: u64 = 16;
+pub(super) const ARGS_BYTES: u64 = 32;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -46,16 +45,15 @@ impl LiveDrawArgs {
     }
 
     /// Encode block `slot`: the extent's live vertices as whole triangles,
-    /// clamped to `vertices`' capacity, drawn `instances` times.
+    /// clamped to the vertex or index buffer capacity, drawn `instances` times.
     pub(super) fn write(
         &self,
         encoder: &mut GpuEncoder,
         slot: usize,
         extent: &LiveExtent,
-        vertices: &GpuBuffer,
+        capacity: u32,
         instances: u32,
     ) {
-        let capacity = (vertices.size / std::mem::size_of::<MeshVertex>() as u64).min(u64::from(u32::MAX)) as u32;
         let params = LiveArgs {
             word: (extent.offset / 4) as u32,
             per_item: extent.per_item,
@@ -86,11 +84,10 @@ mod tests {
     use super::*;
 
     /// Whole live triangles, clamped to the vertex buffer's capacity, in the
-    /// object's own four-word block.
+    /// object's own aligned block.
     #[test]
     fn live_draw_args_are_whole_live_triangles_within_capacity() {
         let device = crate::test_device();
-        let vertices = device.create_buffer_shared(18 * std::mem::size_of::<MeshVertex>() as u64);
         let mut writer = LiveDrawArgs::default();
         for (triangles, expected) in [(4u32, 12u32), (7, 18)] {
             let counts = device.create_buffer_shared(8);
@@ -99,11 +96,11 @@ mod tests {
             let args = writer.prepare(&device, 2);
             let mut encoder = device.create_encoder("live draw args test");
             let extent = LiveExtent { counts, offset: 4, per_item: 3, bound: 18 };
-            writer.write(&mut encoder, 1, &extent, &vertices, 5);
+            writer.write(&mut encoder, 1, &extent, 18, 5);
             encoder.commit_and_wait_completed();
             let ptr = args.mapped_ptr().expect("shared arguments buffer");
-            let words = unsafe { std::slice::from_raw_parts(ptr as *const u32, 8) };
-            assert_eq!(&words[4..], &[expected, 5, 0, 0], "{triangles} triangles in an 18-vertex buffer");
+            let words = unsafe { std::slice::from_raw_parts(ptr as *const u32, 16) };
+            assert_eq!(&words[8..13], &[expected, 5, 0, 0, 0], "{triangles} triangles in an 18-vertex buffer");
         }
     }
 }

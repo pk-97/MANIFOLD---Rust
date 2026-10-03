@@ -117,6 +117,7 @@ mod matter_transfer;
 mod matter_bodies;
 mod matter_coupling;
 mod liquid_conformance;
+mod liquid_indexed;
 mod smoke;
 mod substeps;
 mod encode_replay;
