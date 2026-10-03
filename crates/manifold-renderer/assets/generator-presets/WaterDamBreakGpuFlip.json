@@ -412,8 +412,13 @@
             },
             {
               "name": "mesh_relaxation",
-              "targetHandle": "Mesh Relaxation",
+              "targetHandle": "Smoothing Value",
               "targetParam": "value"
+            },
+            {
+              "name": "smoothing_iterations",
+              "targetHandle": "Smooth Surface Mesh",
+              "targetParam": "iterations"
             }
           ]
         },
@@ -493,7 +498,7 @@
               },
               "particle_scale": {
                 "type": "Float",
-                "value": 2.200000047683716
+                "value": 3.0
               },
               "smoothing": {
                 "type": "Float",
@@ -513,7 +518,7 @@
             "params": {
               "resolution_scale": {
                 "type": "Int",
-                "value": 2
+                "value": 1
               }
             },
             "typeId": "node.particle_volume"
@@ -547,7 +552,7 @@
               },
               "resolution_scale": {
                 "type": "Int",
-                "value": 2
+                "value": 1
               }
             },
             "typeId": "node.volume_surface_mesh"
@@ -611,7 +616,7 @@
             "typeId": "node.clamp_liquid_to_solids"
           },
           {
-            "handle": "Mesh Relaxation",
+            "handle": "Smoothing Value",
             "id": 17,
             "nodeId": "liquid_mesh_relaxation",
             "params": {
@@ -623,16 +628,22 @@
             "typeId": "node.value"
           },
           {
-            "handle": "Relax 1",
+            "handle": "Smooth Surface Mesh",
             "id": 18,
-            "nodeId": "liquid_relax_1",
-            "typeId": "node.relax_surface_mesh"
+            "nodeId": "liquid_smooth_mesh",
+            "params": {
+              "iterations": {
+                "type": "Int",
+                "value": 2
+              }
+            },
+            "typeId": "node.smooth_surface_mesh"
           },
           {
-            "handle": "Relax 2",
+            "handle": "Surface Normals",
             "id": 19,
-            "nodeId": "liquid_relax_2",
-            "typeId": "node.relax_surface_mesh"
+            "nodeId": "liquid_normals",
+            "typeId": "node.surface_mesh_normals"
           },
           {
             "handle": "Occupied Bricks",
@@ -641,7 +652,7 @@
             "params": {
               "resolution_scale": {
                 "type": "Int",
-                "value": 2
+                "value": 1
               }
             },
             "typeId": "node.lattice_bricks"
@@ -980,7 +991,7 @@
           },
           {
             "fromNode": 19,
-            "fromPort": "relaxed",
+            "fromPort": "out",
             "toNode": 11,
             "toPort": "vertices"
           },
@@ -1060,12 +1071,6 @@
             "fromNode": 17,
             "fromPort": "out",
             "toNode": 18,
-            "toPort": "strength"
-          },
-          {
-            "fromNode": 17,
-            "fromPort": "out",
-            "toNode": 19,
             "toPort": "strength"
           },
           {
@@ -1525,6 +1530,36 @@
             "toPort": "edge_scan"
           },
           {
+            "fromNode": 0,
+            "fromPort": "solid",
+            "toNode": 10,
+            "toPort": "solid"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "nodes_x",
+            "toNode": 10,
+            "toPort": "solid_nodes_x"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "nodes_y",
+            "toNode": 10,
+            "toPort": "solid_nodes_y"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "nodes_z",
+            "toNode": 10,
+            "toPort": "solid_nodes_z"
+          },
+          {
+            "fromNode": 10,
+            "fromPort": "indices",
+            "toNode": 11,
+            "toPort": "indices"
+          },
+          {
             "fromNode": 22,
             "fromPort": "out",
             "toNode": 18,
@@ -1535,12 +1570,6 @@
             "fromPort": "out",
             "toNode": 19,
             "toPort": "edge_scan"
-          },
-          {
-            "fromNode": 10,
-            "fromPort": "indices",
-            "toNode": 11,
-            "toPort": "indices"
           }
         ]
       },
@@ -1558,7 +1587,11 @@
         },
         "particle_scale": {
           "type": "Float",
-          "value": 2.200000047683716
+          "value": 3.0
+        },
+        "smoothing_iterations": {
+          "type": "Int",
+          "value": 2
         },
         "smoothing_passes": {
           "type": "Float",
@@ -2639,7 +2672,7 @@
         "defaultValue": 0.0,
         "id": "surface_detail",
         "label": "Surface Detail",
-        "offset": 2.0,
+        "offset": 1.0,
         "target": {
           "kind": "node",
           "nodeId": "liquid_volume",
@@ -2653,7 +2686,7 @@
         "defaultValue": 0.0,
         "id": "surface_detail",
         "label": "Surface Detail",
-        "offset": 2.0,
+        "offset": 1.0,
         "target": {
           "kind": "node",
           "nodeId": "liquid_mesh",
@@ -2664,7 +2697,7 @@
         "convert": {
           "type": "Float"
         },
-        "defaultValue": 2.200000047683716,
+        "defaultValue": 3.0,
         "id": "surface_particle_scale",
         "label": "Surface Particle Scale",
         "target": {
@@ -2679,7 +2712,7 @@
         },
         "defaultValue": 0.5,
         "id": "mesh_relaxation",
-        "label": "Mesh Relaxation",
+        "label": "Smoothing Value",
         "target": {
           "kind": "node",
           "nodeId": "liquid_mesh_relaxation",
@@ -2746,11 +2779,24 @@
         "defaultValue": 0.0,
         "id": "surface_detail",
         "label": "Surface Detail",
-        "offset": 2.0,
+        "offset": 1.0,
         "target": {
           "kind": "node",
           "nodeId": "liquid_bricks",
           "param": "resolution_scale"
+        }
+      },
+      {
+        "convert": {
+          "type": "IntRound"
+        },
+        "defaultValue": 2.0,
+        "id": "surface_smoothing_iterations",
+        "label": "Smoothing Iterations",
+        "target": {
+          "kind": "node",
+          "nodeId": "liquid_smooth_mesh",
+          "param": "iterations"
         }
       }
     ],
@@ -2837,7 +2883,7 @@
         "wholeNumbers": true
       },
       {
-        "defaultValue": 2.200000047683716,
+        "defaultValue": 3.0,
         "formatString": "F3",
         "id": "surface_particle_scale",
         "isToggle": false,
@@ -2854,9 +2900,9 @@
         "id": "mesh_relaxation",
         "isToggle": false,
         "isTrigger": false,
-        "max": 1.0,
+        "max": 10.0,
         "min": 0.0,
-        "name": "Mesh Relaxation",
+        "name": "Smoothing Value",
         "section": "Water Detail",
         "wholeNumbers": false
       },
@@ -2939,6 +2985,18 @@
         "max": 250000.0,
         "min": 1000.0,
         "name": "Whitewater Budget",
+        "section": "Water Detail",
+        "wholeNumbers": true
+      },
+      {
+        "defaultValue": 2.0,
+        "formatString": "F0",
+        "id": "surface_smoothing_iterations",
+        "isToggle": false,
+        "isTrigger": false,
+        "max": 10.0,
+        "min": 0.0,
+        "name": "Smoothing Iterations",
         "section": "Water Detail",
         "wholeNumbers": true
       }
@@ -4247,6 +4305,12 @@
       "toPort": "spray_particles_in"
     },
     {
+      "fromNode": 14,
+      "fromPort": "indices",
+      "toNode": 442,
+      "toPort": "indices"
+    },
+    {
       "fromNode": 499,
       "fromPort": "vertices",
       "toNode": 501,
@@ -4269,12 +4333,6 @@
       "fromPort": "object",
       "toNode": 463,
       "toPort": "object_1"
-    },
-    {
-      "fromNode": 14,
-      "fromPort": "indices",
-      "toNode": 442,
-      "toPort": "indices"
     }
   ]
 }

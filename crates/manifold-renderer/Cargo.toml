@@ -92,6 +92,8 @@ core-foundation = "0.9"
 sha2 = "0.10"
 
 [dev-dependencies]
+# Independent f64 FLIP surface reconstruction reference fixtures.
+glam = "0.29.3"
 syn = { version = "2", features = ["full", "visit"] }
 # Serializes GPU tests on the shared Metal device (see `test_device`). Reentrant
 # so a single test may acquire it more than once without deadlocking.

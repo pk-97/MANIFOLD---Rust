@@ -83,8 +83,7 @@ pub(crate) struct WaterScene {
     /// Mesh the liquid with the shipped GPU liquid surface.
     pub surface: bool,
     /// Surface lattice nodes per cell (`resolution_scale` of the surface's
-    /// volume and mesh): the shipped Surface Detail 0 is 2, which fits the
-    /// frame budget at 64 (BUG-mjhx, surface scale at GPU FLIP 64).
+    /// volume and mesh): Surface Detail 0 is subdivision 1, the FLIP default.
     pub surface_scale: usize,
     /// Publish the face grid: three node.face_sample_component named
     /// [`FACE_NODES`] on the state's faces after the region, into the frame.
@@ -134,7 +133,7 @@ impl WaterScene {
             fill_height: DAM_FILL_HEIGHT,
             column: DAM_COLUMN,
             surface: false,
-            surface_scale: 2,
+            surface_scale: 1,
             faces: false,
             ghost_fluid: true,
             volume_projection: true,
@@ -520,7 +519,102 @@ fn shipped_preset() -> Value {
 fn surface_group() -> Value {
     let preset = shipped_preset();
     let nodes = preset["nodes"].as_array().expect("preset nodes");
-    nodes.iter().find(|node| node["nodeId"] == "surface").expect("liquid surface group").clone()
+    let mut surface = nodes.iter().find(|node| node["nodeId"] == "surface").expect("liquid surface group").clone();
+    wire_indexed_surface(&mut surface["group"]);
+    surface_mesh_stages(&mut surface);
+    surface
+}
+
+/// Mesh-only builder edits; the particle/field lane keeps its own wiring.
+fn surface_mesh_stages(surface: &mut Value) {
+    surface["params"]["particle_scale"] = float(3.0);
+    surface["params"]["smoothing_iterations"] = int(2);
+    let group = &mut surface["group"];
+    let nodes = group["nodes"].as_array_mut().unwrap();
+    for node in nodes.iter_mut() {
+        match node["nodeId"].as_str().unwrap_or("") {
+            "liquid_blobs" => node["params"]["particle_scale"] = float(3.0),
+            "liquid_mesh_relaxation" => node["handle"] = json!("Smoothing Value"),
+            "liquid_relax_1" | "liquid_smooth_mesh" => {
+                node["nodeId"] = json!("liquid_smooth_mesh");
+                node["handle"] = json!("Smooth Surface Mesh");
+                node["typeId"] = json!("node.smooth_surface_mesh");
+                node["params"] = json!({"iterations": int(2)});
+            }
+            "liquid_relax_2" | "liquid_normals" => {
+                node["nodeId"] = json!("liquid_normals");
+                node["handle"] = json!("Surface Normals");
+                node["typeId"] = json!("node.surface_mesh_normals");
+            }
+            _ => {}
+        }
+    }
+    let id = |name: &str| nodes.iter().find(|n| n["nodeId"] == name).unwrap()["id"].as_u64().unwrap();
+    let (normals, offsets, smooth) = (id("liquid_normals"), id("liquid_edge_offsets"), id("liquid_smooth_mesh"));
+    let wires = group["wires"].as_array_mut().unwrap();
+    wires.retain(|w| w["toNode"] != normals || w["toPort"] != "strength");
+    for wire in wires.iter_mut().filter(|w| w["fromNode"] == normals) {
+        if wire["fromPort"] == "relaxed" { wire["fromPort"] = json!("out"); }
+    }
+    for consumer in [smooth, normals] { set_wire(wires, offsets, "out", consumer, "edge_scan"); }
+    let params = group["interface"]["params"].as_array_mut().unwrap();
+    for param in params.iter_mut().filter(|p| p["name"] == "mesh_relaxation") {
+        param["targetHandle"] = json!("Smoothing Value");
+    }
+    if !params.iter().any(|p| p["name"] == "smoothing_iterations") {
+        params.push(json!({"name": "smoothing_iterations", "targetHandle": "Smooth Surface Mesh", "targetParam": "iterations"}));
+    }
+}
+
+/// Own the welded topology wiring in the builder, including when the source
+/// template predates BUG-llkb. Regeneration must never drop the edge scan.
+fn wire_indexed_surface(group: &mut Value) {
+    for (name, handle, ty) in [
+        ("liquid_edge_count", "Count Surface Edges", "node.count_surface_edges"),
+        ("liquid_edge_offsets", "Edge Offsets", "node.running_total"),
+    ] {
+        let nodes = group["nodes"].as_array_mut().expect("surface nodes");
+        if !nodes.iter().any(|n| n["nodeId"] == name) {
+            let id = nodes.iter().filter_map(|n| n["id"].as_u64()).max().unwrap() + 1;
+            nodes.push(json!({"id": id, "nodeId": name, "handle": handle, "typeId": ty}));
+        }
+    }
+    let id = |name: &str| group["nodes"].as_array().unwrap().iter()
+        .find(|n| n["nodeId"] == name || n["typeId"] == name).unwrap()["id"].as_u64().unwrap();
+    let (count, offsets, volume, clamp, mesh, output) = (
+        id("liquid_edge_count"), id("liquid_edge_offsets"), id("liquid_volume"),
+        id("liquid_clamp_to_solids"), id("liquid_mesh"), id("system.group_output"),
+    );
+    let relax: Vec<u64> = group["nodes"].as_array().unwrap().iter()
+        .filter(|n| n["typeId"] == "node.relax_surface_mesh")
+        .map(|n| n["id"].as_u64().unwrap()).collect();
+    let wires = group["wires"].as_array_mut().unwrap();
+    set_wire(wires, clamp, "clamped", count, "levelset");
+    for axis in ["x", "y", "z"] {
+        set_wire(wires, volume, &format!("volume_nodes_{axis}"), count, &format!("nodes_{axis}"));
+    }
+    set_wire(wires, count, "counts", offsets, "in");
+    for consumer in std::iter::once(mesh).chain(relax) {
+        set_wire(wires, offsets, "out", consumer, "edge_scan");
+    }
+    // The polygonizer clips edge crossings against the same solid lattice
+    // the field stage samples; retain the producer's dimensions verbatim.
+    let solid_wires: Vec<Value> = wires.iter().filter(|w| w["toNode"] == clamp
+        && matches!(w["toPort"].as_str(), Some("solid" | "solid_nodes_x" | "solid_nodes_y" | "solid_nodes_z")))
+        .cloned().collect();
+    for wire in solid_wires {
+        set_wire(wires, wire["fromNode"].as_u64().unwrap(), wire["fromPort"].as_str().unwrap(), mesh, wire["toPort"].as_str().unwrap());
+    }
+    set_wire(wires, mesh, "indices", output, "indices");
+    let outputs = group["interface"]["outputs"].as_array_mut().unwrap();
+    if !outputs.iter().any(|p| p["name"] == "indices") {
+        outputs.push(json!({"name": "indices", "portType": "Array(u32)"}));
+    }
+}
+
+fn set_wire(wires: &mut Vec<Value>, from: u64, port: &str, to: u64, input: &str) {
+    wires.retain(|w| w["toNode"] != to || w["toPort"] != input);
+    wires.push(json!({"fromNode": from, "fromPort": port, "toNode": to, "toPort": input}));
 }
 
 /// The nodes `water_def` makes; every other node of the shipped preset is
@@ -626,6 +720,7 @@ pub fn gpu_flip_liquid_body() -> EffectGraphDef {
     };
     def.wires.extend([
         wire(surface, "vertices", object, "vertices"),
+        wire(surface, "indices", object, "indices"),
         wire(material, "out", object, "material"),
         wire(object, "object", output, "object"),
     ]);
@@ -639,7 +734,7 @@ pub fn gpu_flip_liquid_body() -> EffectGraphDef {
 
 /// Surface Detail adds this to its value to give the surface nodes' scale.
 #[cfg(any(test, feature = "gpu-proofs"))]
-const SURFACE_DETAIL_OFFSET: usize = 2;
+const SURFACE_DETAIL_OFFSET: usize = 1;
 
 /// A meshed scene inside the shipped preset's render: `water_def`'s water
 /// and surface, the preset's other nodes, and the preset's wires between the
@@ -696,6 +791,9 @@ pub(crate) fn render_def(scene: WaterScene) -> EffectGraphDef {
         }
         def["wires"].as_array_mut().expect("wires").push(wire);
     }
+    let surface = id_of(&def, "surface");
+    let object = id_of(&def, "water_object");
+    set_wire(def["wires"].as_array_mut().unwrap(), surface, "indices", object, "indices");
     if scene.obstacle {
         let transform = id_of(&def, "obstacle_transform");
         let scene_node = id_of(&def, "scene");
@@ -729,6 +827,33 @@ fn scene_cards(metadata: &Value, scene: WaterScene) -> Value {
             }
         }
     }
+    for binding in metadata["bindings"].as_array_mut().unwrap() {
+        match binding["id"].as_str().unwrap_or("") {
+            "surface_detail" => binding["offset"] = json!(SURFACE_DETAIL_OFFSET),
+            "surface_particle_scale" => binding["defaultValue"] = json!(3.0),
+            "mesh_relaxation" => binding["label"] = json!("Smoothing Value"),
+            _ => {}
+        }
+    }
+    for param in metadata["params"].as_array_mut().unwrap() {
+        match param["id"].as_str().unwrap_or("") {
+            "surface_particle_scale" => param["defaultValue"] = json!(3.0),
+            "mesh_relaxation" => {
+                param["name"] = json!("Smoothing Value");
+                param["min"] = json!(0.0);
+                param["max"] = json!(10.0);
+            }
+            _ => {}
+        }
+    }
+    let bindings = metadata["bindings"].as_array_mut().unwrap();
+    bindings.retain(|p| p["id"] != "surface_smoothing_iterations");
+    bindings.push(json!({"id": "surface_smoothing_iterations", "label": "Smoothing Iterations", "defaultValue": 2.0,
+        "convert": {"type": "IntRound"}, "target": {"kind": "node", "nodeId": "liquid_smooth_mesh", "param": "iterations"}}));
+    let params = metadata["params"].as_array_mut().unwrap();
+    params.retain(|p| p["id"] != "surface_smoothing_iterations");
+    params.push(json!({"id": "surface_smoothing_iterations", "name": "Smoothing Iterations", "defaultValue": 2.0,
+        "min": 0.0, "max": 10.0, "wholeNumbers": true, "formatString": "F0", "section": "Water Detail"}));
     metadata
 }
 

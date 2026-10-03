@@ -5,9 +5,10 @@
 // Past the live total the vertex is zero (the zeroed-tail contract); a total
 // past capacity makes the whole mesh empty (the node reports it next frame).
 //
-// ABI: `levelset` (f32) and `scan` (u32, inclusive running total of per-cell
-// triangle counts) are gathered; the output MeshVertex is Element. Attributes
-// match the CPU fluid mesh: uv from the authored domain's x/z, white colour.
+// ABI: `levelset` (f32), `scan` (u32, inclusive running total of per-cell
+// triangle counts), and optional `solid` (f32) are gathered; the output
+// MeshVertex is Element. Attributes match the CPU fluid mesh: uv from the
+// authored domain's x/z, white colour.
 
 fn vsm_phi(p: vec3<u32>, nodes: vec3<u32>) -> f32 {
     return buf_levelset[mc_node(p, nodes)];
@@ -38,6 +39,9 @@ fn body(
     nodes_x: f32,
     nodes_y: f32,
     nodes_z: f32,
+    solid_nodes_x: f32,
+    solid_nodes_y: f32,
+    solid_nodes_z: f32,
     resolution_scale: i32,
     max_capacity: i32,
 ) -> Element {
@@ -83,14 +87,47 @@ fn body(
         a = b;
         b = swap;
     }
-    let phi_a = vsm_phi(a, nodes);
-    let phi_b = vsm_phi(b, nodes);
-    let mu = clamp(phi_a / (phi_a - phi_b), 0.0, 1.0);
-
     let size = vec3<f32>(size_x, size_y, size_z);
     let lattice_min = vec3<f32>(center_x, center_y, center_z) - 0.5 * size;
     let spacing = size / vec3<f32>(cells);
-    let position = lattice_min + mix(vec3<f32>(a), vec3<f32>(b), mu) * spacing;
+    let phi_a = vsm_phi(a, nodes);
+    let phi_b = vsm_phi(b, nodes);
+    let position_a = lattice_min + vec3<f32>(a) * spacing;
+    let position_b = lattice_min + vec3<f32>(b) * spacing;
+    var min_mu = 0.0;
+    var max_mu = 1.0;
+    let solid_nodes = vec3<u32>(vec3<f32>(solid_nodes_x, solid_nodes_y, solid_nodes_z));
+    let solid_enabled = min(min(solid_nodes.x, solid_nodes.y), solid_nodes.z) >= 2u;
+    if solid_enabled {
+        let solid_spacing = size / vec3<f32>(solid_nodes - vec3<u32>(1u));
+        let s1 = clamp_liquid_solid_at(position_a, lattice_min, solid_spacing, solid_nodes);
+        let s2 = clamp_liquid_solid_at(position_b, lattice_min, solid_spacing, solid_nodes);
+        if (s1 < 0.0 && s2 >= 0.0) || (s2 < 0.0 && s1 >= 0.0) {
+            let diff = s2 - s1;
+            if abs(diff) > 1e-10 {
+                let su = -s1 / diff;
+                if s1 < 0.0 {
+                    min_mu = su;
+                } else {
+                    max_mu = su;
+                }
+            } else {
+                max_mu = min_mu;
+            }
+        }
+    }
+    let eps = 1e-10;
+    min_mu = max(min_mu, eps);
+    max_mu = min(max_mu, 1.0 - eps);
+    var mu = (0.0 - phi_a) / (phi_b - phi_a);
+    if mu < min_mu {
+        mu = min_mu;
+    }
+    if mu > max_mu {
+        mu = max_mu;
+    }
+
+    let position = position_a + mu * (position_b - position_a);
     var normal = mix(vsm_gradient(a, nodes, spacing), vsm_gradient(b, nodes, spacing), mu);
     let length_squared = dot(normal, normal);
     if length_squared > 0.0 {

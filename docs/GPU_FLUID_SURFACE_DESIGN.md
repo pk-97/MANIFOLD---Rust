@@ -37,6 +37,44 @@ Beads: BUG-vglg (CPU FLIP scene physics epic), whose child BUG-vglg.18 is the ba
 cache workflow; BUG-3sta (fluid surfacing: remesh baked motion, tune detached droplets)
 is the slot-9 work this design builds on.
 
+## 2026-10-03 FLIP mesher parity audit (BUG-rlk1i)
+
+Source: vendored `particlemesher.cpp`, `scalarfield.cpp`, `polygonizer3d.cpp`,
+`trianglemesh.cpp`, `fluidsimulation.cpp` / `.h`; normals: `manifold-fluids::decode_surface`.
+The audit starts at `43493cf4a`; the last column records this branch's changes.
+It is a source/CPU parity audit, not an observed visual-parity claim.
+
+| Stage | FLIP Fluids | GPU starting point | Verdict after this change |
+|---|---|---|---|
+| Field kernel / radius | Sphere union `min(length(x-p)-r)`, `r = markerRadius * scale`; default scale 3 | Isotropic defaults select spheres, but radius/reach is capped by bins; scale 2.2 | Default matches (3); radius support still differs in the reserved field stage |
+| Distance band / solids | Initialize to `3r`; positive samples inside solids become zero (`min(phi,0)`) | Band is bin/3; samples inside solids use `max(phi,0)` | Differs; reserved field stage must reconcile support, solid sign and zero-crossing convention |
+| Grid / subdivision | `(cells * subdivision)+1` nodes, default subdivision 1 | Same formula; default scale and Detail offset 2 | Matches default and mapping (1); existing simulation padding is unchanged |
+| Field smoothing | None | Three optional binomial axes at zero strength | Matches at zero; this is separate from mesh smoothing |
+| Polygonizer | Linear zero crossing limited to nonsolid edge interval; U/V/W edge-owned vertices | BUG-llkb welded indexed output; missing solid interpolation constraint | Sharing retained; solid-edge constraint ported with optional solid lattice input; GPU proofs pending |
+| Mesh smoothing | Jacobi `v += value*(mean of neighbours over incident triangles - v)`, value 0.5, iterations 2 | Same gather, two separate relax nodes | Matches formula/defaults; one stage now owns the uncapped iteration loop |
+| Normals | Sum unnormalized face cross products per welded vertex, normalize after smoothing (`decode_surface`) | Raw field gradient passed through position updates | Missing stage added: area-weighted normals from final triangles |
+
+Section 2.5 inventory: `facet_normals` exists, but is flat-only and assumes a
+triangle list: welded smooth normals are not one wire away. `neighbor_smooth`
+operates on a regular grid of instance transforms, not incident mesh triangles.
+`relax_surface_mesh` already owns the shared-edge neighbour cache and generated
+standalone pass; both stages reuse it. `smooth_surface_mesh` is the new iteration
+boundary; `surface_mesh_normals` is the genuinely new area-normal gather.
+Existing relax remains available for saved graphs. The production chain replaces
+two relax instances with one smoothing stage and one normal stage (23 → 23
+Liquid Surface nodes including group I/O; no catalog atom removed).
+Both per-cell atoms use `wgsl_body`, BufferGather and owned-output codegen;
+freezing keeps their gathered topology materialized. The smoothing stage reuses
+the prewarmed relaxation kernel and retains one capacity-sized ping-pong buffer.
+The 0–10 smoothing/iteration spans are editable UI ranges, never execution caps.
+Water Detail uses the existing manifest projection and keeps `mesh_relaxation`
+as the stable binding ID for Smoothing Value. Surface control ownership reuses
+the slot-3 traversal verbatim so the two branches can merge the same fix.
+
+The reserved field lane owns blobs, distance support and field solid handling;
+this lane does not modify those kernels. Full look parity remains dependent on
+closing those field gaps; BUG-rlk1i records them for the lead.
+
 ## 1. Audit — what exists (verified 2026-09-29 at `b88e4c9cf`)
 
 Paths abbreviated after first use: `R/` = `crates/manifold-renderer/src/node_graph/`,
@@ -187,12 +225,13 @@ when a neighbour is within 2r, smoothstep to `isolated_scale` by 3r), computed f
 same neighbour search as the anisotropy. Yu & Turk's sparse-neighbour rule (isotropic
 kernel below N_ε neighbours) also applies.
 
-**D15 — The level set clamps at solids the way upstream does and closes at the lattice
-border.** A lattice node whose solid distance is negative is capped at the threshold:
-never inside the liquid, so the surface wraps the solid (`scalarfield.cpp:439-447`; with
-negative-inside values, `φ = max(φ, 0)`). Border nodes are forced outside so marching
-cubes emits a closed, consistently wound surface. The volume-optics path needs a closed mesh
-(`volume_geometry` in the current contract of WATER_SIMULATION_DESIGN.md).
+**D15 — Solid treatment is a tracked parity gap.** The current field stage forces
+negative-solid samples to `max(phi, 0)` and border nodes outside to close the mesh.
+This differs from upstream `ScalarField::getScalarFieldValue`, which uses
+`min(phi, 0)` inside solids with a positive-outside polygonizer case convention.
+Do not describe the current rule as a FLIP port. The polygonizer now separately
+ports `_vertexInterp`'s solid-edge interval constraint; full field/solid parity
+still requires the coordinated field-stage correction above.
 
 **D16 — Marching cubes is three atoms: count, running total, cell-owned emit.**
 Count writes triangles per cell; running total is an inclusive scan with a

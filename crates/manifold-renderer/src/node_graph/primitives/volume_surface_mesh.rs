@@ -50,12 +50,15 @@ struct MeshUniforms {
     nodes_x: f32,
     nodes_y: f32,
     nodes_z: f32,
+    solid_nodes_x: f32,
+    solid_nodes_y: f32,
+    solid_nodes_z: f32,
     resolution_scale: i32,
     max_capacity: i32,
     brick_pass: u32,
     indexed: u32,
     dispatch_count: u32,
-    _pad: [u32; 2],
+    _pad: [u32; 3],
 }
 
 /// The first buffer's capacity in vertices, whole triangles: Starting Mesh
@@ -114,10 +117,12 @@ crate::primitive! {
         extent: Array(u32) optional,
         bricks: Array(u32) optional,
         edge_scan: Array(u32) optional,
+        solid: Array(f32) optional,
         total: ScalarF32 optional,
         center_x: ScalarF32 optional, center_y: ScalarF32 optional, center_z: ScalarF32 optional,
         size_x: ScalarF32 optional, size_y: ScalarF32 optional, size_z: ScalarF32 optional,
         nodes_x: ScalarF32 optional, nodes_y: ScalarF32 optional, nodes_z: ScalarF32 optional,
+        solid_nodes_x: ScalarF32 optional, solid_nodes_y: ScalarF32 optional, solid_nodes_z: ScalarF32 optional,
     },
     outputs: {
         vertices: Array(MeshVertex),
@@ -133,6 +138,9 @@ crate::primitive! {
         float_param!("nodes_x", "Nodes X", 2.0, 2.0, 4096.0),
         float_param!("nodes_y", "Nodes Y", 2.0, 2.0, 4096.0),
         float_param!("nodes_z", "Nodes Z", 2.0, 2.0, 4096.0),
+        float_param!("solid_nodes_x", "Solid Nodes X", 2.0, 2.0, 4096.0),
+        float_param!("solid_nodes_y", "Solid Nodes Y", 2.0, 2.0, 4096.0),
+        float_param!("solid_nodes_z", "Solid Nodes Z", 2.0, 2.0, 4096.0),
         ParamDef {
             name: Cow::Borrowed("resolution_scale"),
             label: "Resolution Scale",
@@ -151,7 +159,7 @@ crate::primitive! {
         },
     ],
     depth_rule: Terminal,
-    composition_notes: "Wire levelset and nodes_x/y/z from node.particle_volume, scan and total from node.running_total over node.count_surface_triangles, extent from the same running total with per_item 3, and the box from the lattice bounds through node.transform_components. resolution_scale must match the volume's; it places UVs on the authored domain (1.5 simulation cells inside the padded lattice) as the CPU fluid mesh does. Slots past the live triangles are zero. Wire total: the vertex buffer grows from it; unwired it holds only its start. Leave Starting Mesh Capacity at 0 so the start follows the lattice. With extent wired the mesh writes only live and last frame's vertices and publishes its live extent, so node.render_scene draws only live triangles. For indexed output, wire the inclusive node.count_surface_edges scan to edge_scan and wire both vertices and indices to node.scene_object. No edge_scan retains triangle-list output. Capacity and overflow rules are identical.",
+    composition_notes: "Wire levelset and nodes_x/y/z from node.particle_volume, scan and total from node.running_total over node.count_surface_triangles, extent from the same running total with per_item 3, and the box from the lattice bounds through node.transform_components. Optionally wire solid and solid_nodes_x/y/z from the same solid lattice over the same box; the FLIP endpoint is clipped between the solid crossings. Without solid, no solid constraint is applied. resolution_scale must match the volume's; it places UVs on the authored domain (1.5 simulation cells inside the padded lattice) as the CPU fluid mesh does. Slots past the live triangles are zero. Wire total: the vertex buffer grows from it; unwired it holds only its start. Leave Starting Mesh Capacity at 0 so the start follows the lattice. With extent wired the mesh writes only live and last frame's vertices and publishes its live extent, so node.render_scene draws only live triangles. For indexed output, wire the inclusive node.count_surface_edges scan to edge_scan and wire both vertices and indices to node.scene_object. No edge_scan retains triangle-list output. Capacity and overflow rules are identical.",
     examples: [],
     picker: { label: "Volume Surface Mesh", category: Atom },
     summary: "Builds the triangle mesh of a liquid's surface from its density field, ready to render with any material.",
@@ -160,9 +168,9 @@ crate::primitive! {
     aliases: ["marching cubes", "isosurface", "polygonize", "surface mesh", "liquid mesh"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/volume_surface_mesh_body.wgsl"),
-    input_access: [BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
+    input_access: [BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
     derived_uniforms: ["brick_pass:u32", "indexed:u32"],
-    wgsl_includes: [MARCHING_CUBES_COMMON, liquid_bricks::COMMON, include_str!("shaders/surface_edge_ownership.wgsl"), include_str!("shaders/surface_edge_index.wgsl")],
+    wgsl_includes: [MARCHING_CUBES_COMMON, liquid_bricks::COMMON, include_str!("shaders/surface_edge_ownership.wgsl"), include_str!("shaders/surface_edge_index.wgsl"), include_str!("shaders/clamp_liquid_to_solids_element.wgsl")],
     owned_outputs: ["vertices", "indices"],
     buffer_index: "liquid_cell_brick_index",
     extra_fields: {
@@ -275,6 +283,46 @@ impl Primitive for VolumeSurfaceMesh {
             ["size_x", "size_y", "size_z"].map(|name| ctx.scalar_or_param(name, 4.0));
         let nodes =
             ["nodes_x", "nodes_y", "nodes_z"].map(|name| ctx.scalar_or_param(name, 2.0).round());
+        let solid_wired = ctx.inputs.slot_of("solid").is_some();
+        let solid_nodes_input = ["solid_nodes_x", "solid_nodes_y", "solid_nodes_z"]
+            .map(|name| ctx.scalar_or_param(name, 2.0));
+        let solid_nodes = if solid_wired {
+            let Some(solid) = ctx.inputs.array("solid") else {
+                ctx.error("Volume Surface Mesh: solid is wired but its array is unavailable");
+                return;
+            };
+            if solid_nodes_input
+                .iter()
+                .any(|&n| !n.is_finite() || n < 2.0)
+            {
+                ctx.error(format!(
+                    "Volume Surface Mesh: invalid solid lattice dimensions {}×{}×{}",
+                    solid_nodes_input[0], solid_nodes_input[1], solid_nodes_input[2]
+                ));
+                return;
+            }
+            let rounded = solid_nodes_input.map(f32::round);
+            if rounded.iter().any(|&n| n >= u32::MAX as f32) {
+                ctx.error("Volume Surface Mesh: solid lattice dimensions exceed u32");
+                return;
+            }
+            let Some(total) = rounded.iter().try_fold(1u64, |total, &n| {
+                total.checked_mul(n as u64)
+            }) else {
+                ctx.error("Volume Surface Mesh: solid lattice dimensions overflow");
+                return;
+            };
+            if !solid.size.is_multiple_of(4) || total > solid.size / 4 {
+                ctx.error(format!(
+                    "Volume Surface Mesh: solid has {} f32 values; solid lattice needs {total}",
+                    solid.size / 4
+                ));
+                return;
+            }
+            rounded
+        } else {
+            [0.0; 3]
+        };
         let indexed = ctx.inputs.slot_of("edge_scan").is_some();
         if indexed && ctx.inputs.array("edge_scan").is_none() {
             ctx.error("Volume Surface Mesh: wired edge scan is unavailable");
@@ -371,12 +419,15 @@ impl Primitive for VolumeSurfaceMesh {
             nodes_x: nodes[0],
             nodes_y: nodes[1],
             nodes_z: nodes[2],
+            solid_nodes_x: solid_nodes[0],
+            solid_nodes_y: solid_nodes[1],
+            solid_nodes_z: solid_nodes[2],
             resolution_scale,
             max_capacity: slots as i32,
             brick_pass: 0,
             indexed: u32::from(indexed),
             dispatch_count: dispatch_cells,
-            _pad: [0; 2],
+            _pad: [0; 3],
         };
         let bricks = ctx.inputs.array("bricks");
         if bricks
@@ -385,6 +436,7 @@ impl Primitive for VolumeSurfaceMesh {
             ctx.error("Liquid surface mesh: brick schedule does not match the lattice");
             return;
         }
+        let solid_buffer = ctx.inputs.array("solid").unwrap_or(scan);
         let gpu = ctx.gpu_encoder();
         let pipeline = self.pipeline.as_ref().expect("pipeline built above");
         let clear_uniforms = MeshUniforms {
@@ -422,9 +474,14 @@ impl Primitive for VolumeSurfaceMesh {
                 buffer: edge_scan.unwrap_or(scan),
                 offset: 0,
             },
-            GpuBinding::Buffer { binding: 6, buffer: vertices, offset: 0 },
             GpuBinding::Buffer {
-                binding: 7, buffer: self.indices.as_ref().unwrap_or(self.index_stub.as_ref().expect("stub prepared")), offset: 0,
+                binding: 6,
+                buffer: solid_buffer,
+                offset: 0,
+            },
+            GpuBinding::Buffer { binding: 7, buffer: vertices, offset: 0 },
+            GpuBinding::Buffer {
+                binding: 8, buffer: self.indices.as_ref().unwrap_or(self.index_stub.as_ref().expect("stub prepared")), offset: 0,
             },
         ];
         if let Some(extent) = extent.filter(|_| !fresh) {
@@ -482,9 +539,14 @@ impl Primitive for VolumeSurfaceMesh {
                 buffer: edge_scan.unwrap_or(scan),
                 offset: 0,
             },
-            GpuBinding::Buffer { binding: 6, buffer: vertices, offset: 0 },
             GpuBinding::Buffer {
-                binding: 7, buffer: self.indices.as_ref().unwrap_or(self.index_stub.as_ref().expect("stub prepared")), offset: 0,
+                binding: 6,
+                buffer: solid_buffer,
+                offset: 0,
+            },
+            GpuBinding::Buffer { binding: 7, buffer: vertices, offset: 0 },
+            GpuBinding::Buffer {
+                binding: 8, buffer: self.indices.as_ref().unwrap_or(self.index_stub.as_ref().expect("stub prepared")), offset: 0,
             },
         ];
         liquid_bricks::dispatch(
@@ -609,7 +671,7 @@ mod tests {
     fn cell_owned_mesh_codegen_has_no_vertex_binary_search() {
         assert_eq!(
             std::mem::size_of::<MeshUniforms>(),
-            16 * std::mem::size_of::<u32>()
+            20 * std::mem::size_of::<u32>()
         );
         let source = crate::node_graph::freeze::codegen::standalone_for_spec::<VolumeSurfaceMesh>()
             .expect("cell-owned mesh standalone codegen");
@@ -628,5 +690,136 @@ mod tests {
         assert!(source.contains("if brick_pass == 2u"));
         assert!(source.contains("buf_vertices[idx] = zero"));
         assert!(!source.contains("buf_vertices[idx] = body"));
+        assert!(source.contains("solid_nodes_x"));
+        assert!(source.contains("clamp_liquid_solid_at"));
+        assert!(source.contains("min_mu = max(min_mu, eps)"));
+    }
+
+    pub(super) fn flip_vertex_interp(
+        p1: [f64; 3],
+        p2: [f64; 3],
+        valp1: f64,
+        valp2: f64,
+        solid: Option<(f64, f64)>,
+    ) -> [f64; 3] {
+        let eps = 1e-10;
+        let (mut min_mu, mut max_mu) = (0.0, 1.0);
+        if let Some((s1, s2)) = solid
+            && ((s1 < 0.0 && s2 >= 0.0) || (s2 < 0.0 && s1 >= 0.0))
+        {
+            let diff = s2 - s1;
+            if diff.abs() > eps {
+                let su = -s1 / diff;
+                if s1 < 0.0 {
+                    min_mu = su;
+                } else {
+                    max_mu = su;
+                }
+            } else {
+                max_mu = min_mu;
+            }
+        }
+        min_mu = min_mu.max(eps);
+        max_mu = max_mu.min(1.0 - eps);
+        let mut mu = -valp1 / (valp2 - valp1);
+        if mu < min_mu {
+            mu = min_mu;
+        }
+        if mu > max_mu {
+            mu = max_mu;
+        }
+        std::array::from_fn(|axis| p1[axis] + mu * (p2[axis] - p1[axis]))
+    }
+
+    #[test]
+    fn flip_vertex_interp_clips_solid_crossings_and_endpoints() {
+        let p1 = [0.0, 2.0, -1.0];
+        let p2 = [4.0, 6.0, 3.0];
+        let cases = [
+            (0.1, None, 0.1),
+            (0.1, Some((-0.25, 0.75)), 0.25),
+            (0.9, Some((0.75, -0.25)), 0.75),
+            (0.1, Some((-1.0e-12, 1.0e-12)), 0.0),
+            (0.0, None, 1.0e-10),
+            (1.0, None, 1.0 - 1.0e-10),
+        ];
+        for (surface_mu, solid, expected_mu) in cases {
+            let got = flip_vertex_interp(p1, p2, -surface_mu, 1.0 - surface_mu, solid);
+            let want: [f64; 3] = std::array::from_fn(|axis| p1[axis] + expected_mu * (p2[axis] - p1[axis]));
+            for (actual, expected) in got.into_iter().zip(want) {
+                assert!((actual - expected).abs() < 1e-12, "{actual} vs {expected}");
+            }
+        }
+    }
+}
+
+#[cfg(feature = "gpu-proofs")]
+#[cfg(test)]
+mod gpu_tests {
+    use super::tests::flip_vertex_interp;
+    use super::VolumeSurfaceMesh;
+    use crate::generators::mesh_common::MeshVertex;
+    use crate::node_graph::primitives::liquid_surface_tests::{params, read, Harness};
+    use crate::node_graph::parameters::ParamValue;
+
+    #[test]
+    fn solid_endpoint_clip_matches_nested_f64_reference() {
+        let mut harness = Harness::new();
+        let levelset = vec![-0.1_f32, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9];
+        let solid = vec![-0.25_f32, 0.75, 0.75, 0.75, 0.75, 0.75, 0.75, 0.75];
+        let scan = vec![1_u32; 8];
+        let (levelset_slot, _) = harness.array(&levelset, levelset.len());
+        let (scan_slot, _) = harness.array(&scan, scan.len());
+        let (solid_slot, _) = harness.array(&solid, solid.len());
+        let (out_slot, _) = harness.array::<MeshVertex>(&[], 3);
+        let base = [
+            ("center_x", 0.0),
+            ("center_y", 0.0),
+            ("center_z", 0.0),
+            ("size_x", 2.0),
+            ("size_y", 2.0),
+            ("size_z", 2.0),
+            ("nodes_x", 2.0),
+            ("nodes_y", 2.0),
+            ("nodes_z", 2.0),
+            ("total", 1.0),
+        ];
+        let mut run = |solid_input| {
+            let mut params = params(&base);
+            if solid_input {
+                params.insert("solid_nodes_x".into(), ParamValue::Float(2.0));
+                params.insert("solid_nodes_y".into(), ParamValue::Float(2.0));
+                params.insert("solid_nodes_z".into(), ParamValue::Float(2.0));
+            }
+            let mut mesh = VolumeSurfaceMesh::new();
+            let inputs = if solid_input {
+                vec![("levelset", levelset_slot), ("scan", scan_slot), ("solid", solid_slot)]
+            } else {
+                vec![("levelset", levelset_slot), ("scan", scan_slot)]
+            };
+            let (_, errors) = harness.run(&mut mesh, &inputs, &[("vertices", out_slot)], &params);
+            assert!(errors.is_empty(), "{errors:?}");
+            let buffer = harness.buffer(out_slot);
+            read::<MeshVertex>(&buffer, 1)[0].position
+        };
+        let unconstrained = run(false);
+        let constrained = run(true);
+        let expected_unconstrained = flip_vertex_interp(
+            [-1.0, -1.0, -1.0],
+            [1.0, -1.0, -1.0],
+            -0.1,
+            0.9,
+            None,
+        );
+        let expected_constrained = flip_vertex_interp(
+            [-1.0, -1.0, -1.0],
+            [1.0, -1.0, -1.0],
+            -0.1,
+            0.9,
+            Some((-0.25, 0.75)),
+        );
+        assert!((f64::from(unconstrained[0]) - expected_unconstrained[0]).abs() < 1e-6);
+        assert!((f64::from(constrained[0]) - expected_constrained[0]).abs() < 1e-6);
+        assert!(constrained[0] > unconstrained[0]);
     }
 }

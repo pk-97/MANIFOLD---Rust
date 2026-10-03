@@ -2578,7 +2578,7 @@ fn fluid_relax_surface_mesh_stays_standalone_in_the_fused_view() {
         let nodes = group["nodes"].as_array().expect("group nodes");
         nodes.iter().find(|n| n[key] == name).unwrap_or_else(|| panic!("no {name}"))["id"].clone()
     };
-    let (last, out) = (id(group, "nodeId", "liquid_relax_2"), id(group, "typeId", "system.group_output"));
+    let (last, out) = (id(group, "nodeId", "liquid_normals"), id(group, "typeId", "system.group_output"));
     let turn = json!(100);
     group["nodes"].as_array_mut().expect("group nodes").push(json!({
         "id": turn, "typeId": "node.rotate_3d", "nodeId": "liquid_turn",
@@ -2599,10 +2599,10 @@ fn fluid_relax_surface_mesh_stays_standalone_in_the_fused_view() {
     let Some(view) = crate::node_graph::freeze::install::fuse_generator_view(&def, &registry) else {
         return;
     };
-    let relaxes = view.def.nodes.iter().filter(|n| n.type_id == "node.relax_surface_mesh").count();
-    assert_eq!(relaxes, 2, "both relax passes stay their own dispatch");
+    let relaxes = view.def.nodes.iter().filter(|n| matches!(n.type_id.as_str(), "node.smooth_surface_mesh" | "node.surface_mesh_normals")).count();
+    assert_eq!(relaxes, 2, "smoothing and normals stay their own dispatch");
     assert!(
-        !view.def.nodes.iter().any(|n| n.wgsl_source.as_deref().is_some_and(|s| s.contains("rsm_cell_edge"))),
+        !view.def.nodes.iter().any(|n| n.wgsl_source.as_deref().is_some_and(|s| s.contains("sm_adj_cell_edge"))),
         "relaxation fused into a kernel: prove it renders like the unfused graph"
     );
 }

@@ -287,6 +287,66 @@ fn graph_json(fixture: Fixture, indexed: bool, volume: bool, objects: u32) -> St
     .to_string()
 }
 
+/// The final parity stages in the existing bounded render fixture.
+fn smoothed_graph_json(fixture: Fixture) -> String {
+    let mut graph: Value = serde_json::from_str(&graph_json(fixture, true, false, 1)).unwrap();
+    for node in graph["nodes"].as_array_mut().unwrap() {
+        if node["id"] == 7 {
+            node["typeId"] = json!("node.smooth_surface_mesh");
+            node["params"]["strength"] = scalar(0.5);
+            node["params"]["iterations"] = int(2);
+        }
+        if node["id"] == 8 {
+            node["typeId"] = json!("node.surface_mesh_normals");
+            node["params"].as_object_mut().unwrap().remove("strength");
+        }
+    }
+    for wire in graph["wires"].as_array_mut().unwrap() {
+        if wire["fromNode"] == 8 { wire["fromPort"] = json!("out"); }
+    }
+    // A real pointwise region makes this a compiler-on/off proof even
+    // though the shared-edge gather must retain its own dispatch.
+    graph["nodes"].as_array_mut().unwrap().extend([
+        json!({"id": 30, "typeId": "node.rotate_3d", "nodeId": "turn_a", "params": {"angle_y": scalar(0.0)}}),
+        json!({"id": 31, "typeId": "node.rotate_3d", "nodeId": "turn_b", "params": {"angle_y": scalar(0.0)}}),
+    ]);
+    let wires = graph["wires"].as_array_mut().unwrap();
+    wires.retain(|w| w["toNode"] != 12 || w["toPort"] != "vertices");
+    wires.extend([wire(8,"out",30,"in"),wire(30,"out",31,"in"),wire(31,"out",12,"vertices")]);
+    graph.to_string()
+}
+
+fn fused_smoothed_graph(fixture: Fixture) -> String {
+    let def = serde_json::from_str(&smoothed_graph_json(fixture)).unwrap();
+    let view = manifold_renderer::node_graph::freeze::install::fuse_generator_view(&def, &registry_for(fixture))
+        .expect("the downstream pointwise pair must fuse");
+    for ty in ["node.smooth_surface_mesh", "node.surface_mesh_normals"] {
+        assert_eq!(view.def.nodes.iter().filter(|n| n.type_id == ty).count(),1,"{ty} survives freezing");
+    }
+    serde_json::to_string(&view.def).unwrap()
+}
+
+#[test]
+fn smoothed_liquid_fixture_graphs_compile_on_cpu() {
+    for fixture in [SPHERE, ASYMMETRIC] {
+        for json in [smoothed_graph_json(fixture),fused_smoothed_graph(fixture)] {
+            PresetRuntime::from_json_str(&json,&registry_for(fixture)).expect("smoothed fixture compiles");
+        }
+    }
+}
+
+#[test]
+fn liquid_surface_smoothing_normals_fused_matches_unfused() {
+    for fixture in [SPHERE, ASYMMETRIC] {
+        let registry=registry_for(fixture);
+        let plain=render(&smoothed_graph_json(fixture),&registry);
+        let fused=render(&fused_smoothed_graph(fixture),&registry);
+        assert_eq!(plain,fused,"smoothed normals change when freezing {}",fixture.type_id);
+        let hidden=render(&hidden_scene_json(fixture,false),&registry);
+        assert_ne!(plain,hidden,"surface must actually draw");
+    }
+}
+
 fn hidden_scene_json(fixture: Fixture, volume: bool) -> String {
     let mut graph: Value = serde_json::from_str(&graph_json(fixture, false, volume, 1)).unwrap();
     let object = graph["nodes"].as_array_mut().unwrap().iter_mut()

@@ -2502,6 +2502,7 @@ dependencies = [
  "core-foundation 0.9.4",
  "core-graphics",
  "core-text",
+ "glam",
  "gltf",
  "half",
  "image",

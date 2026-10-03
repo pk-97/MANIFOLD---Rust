@@ -1,34 +1,12 @@
-// Uses the neighbour-mean mesh smoothing from FLIP Fluids trianglemesh.cpp `smooth` (MIT); see THIRD_PARTY_NOTICES.md.
-// node.relax_surface_mesh — fusable BUFFER body, GATHER. One umbrella
-// relaxation pass over node.volume_surface_mesh's triangle list:
-// v += strength × (mean of v's neighbours − v). One thread per vertex slot.
-//
-// The list has no index buffer, but every vertex sits on one lattice edge, and
-// the mesh places triangle t of cell c at slots 3 × (scan[c − 1] + t). So a
-// vertex finds its neighbours by walking the four cells around its lattice
-// edge and the triangles there that use the edge. Each neighbour of a closed
-// fan is met twice, once per triangle on either side of the shared edge, so
-// the plain mean over those meetings is the mean over distinct neighbours.
-// Every copy of a vertex walks the same cells in the same order and reads the
-// same copies, so the copies stay bit-identical: the mesh stays closed.
-//
-// Strength 0 copies the input. Past the live triangles, or when the mesh
-// overflowed (`count` too small for the total), the vertex is zero, as the
-// mesh writes it. Normals, uvs and colours pass through.
-//
-// ABI: `vertices` (MeshVertex), `levelset` (f32) and `scan` (u32, inclusive
-// running total of per-cell triangle counts) are gathered; the output
-// MeshVertex is Element. `levelset` and `scan` must be the ones the mesh was
-// built from this frame.
-
-fn rsm_relax_vertex(idx: u32, strength: f32, neighbours: RsmNeighbourSum) -> Element {
+// Normals of the final mesh, gathered through its shared lattice edge topology.
+fn rsm_normal_vertex(idx: u32, neighbours: RsmNeighbourSum) -> Element {
     let v = buf_vertices[idx];
-    let unmoved = Element(v.position, v.normal, v.uv, v.uv1, v.tangent, v.color);
-    if strength == 0.0 || neighbours.met == 0u {
-        return unmoved;
+    let magnitude = length(neighbours.normal);
+    var normal = vec3<f32>(0.0);
+    if magnitude > 1.1920928955078125e-7 && magnitude <= 3.402823466e38 {
+        normal = neighbours.normal / magnitude;
     }
-    let mean = neighbours.sum / f32(neighbours.met);
-    return Element(v.position + strength * (mean - v.position), v.normal, v.uv, v.uv1, v.tangent, v.color);
+    return Element(v.position, normal, v.uv, v.uv1, v.tangent, v.color);
 }
 
 fn body(
@@ -65,7 +43,7 @@ fn body(
             }
         }
         if idx >= live {
-            buf_relaxed[idx] = zero;
+            buf_out[idx] = zero;
         }
         return;
     }
@@ -102,12 +80,12 @@ fn body(
                 continue;
             }
             if !edge_ready[edge] {
-                edge_cache[edge] = rsm_neighbour_sum(home, edge, cells, nodes, indexed, false);
+                edge_cache[edge] = rsm_neighbour_sum(home, edge, cells, nodes, indexed, true);
                 edge_ready[edge] = true;
             }
             var slot = (base + t) * 3u + corner;
             if indexed != 0u { slot = se_vertex(home, edge, nodes); }
-            buf_relaxed[slot] = rsm_relax_vertex(slot, strength, edge_cache[edge]);
+            buf_out[slot] = rsm_normal_vertex(slot, edge_cache[edge]);
         }
     }
 }

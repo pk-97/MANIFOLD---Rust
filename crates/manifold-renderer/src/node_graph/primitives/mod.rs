@@ -435,6 +435,12 @@ mod count_surface_triangles;
 mod count_surface_edges;
 pub(crate) mod volume_surface_mesh;
 mod relax_surface_mesh;
+mod smooth_surface_mesh;
+mod surface_mesh_normals;
+#[cfg(test)]
+mod surface_mesh_parity;
+#[cfg(test)]
+mod surface_mesh_freeze_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod liquid_surface_tests;
 mod transform_shake;

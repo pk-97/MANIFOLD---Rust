@@ -577,6 +577,8 @@ pub const LIQUID_EXTENT_RULES: &[ExtentRule] = &[
     ExtentRule { type_id: "node.running_total", check: running_total },
     ExtentRule { type_id: "node.volume_surface_mesh", check: volume_surface_mesh },
     ExtentRule { type_id: "node.relax_surface_mesh", check: relax_surface_mesh },
+    ExtentRule { type_id: "node.smooth_surface_mesh", check: smooth_surface_mesh },
+    ExtentRule { type_id: "node.surface_mesh_normals", check: surface_mesh_normals },
     ExtentRule { type_id: "node.render_scene", check: size_bounded },
     ExtentRule { type_id: "node.scene_object", check: size_bounded },
     ExtentRule { type_id: "node.physics_world", check: physics_world },
@@ -1091,6 +1093,13 @@ fn volume_surface_mesh(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     if nodes.iter().any(|&n| n < 2.0) {
         return Err(x.uncovered(format!("no lattice: nodes {nodes:?}")));
     }
+    if x.wired("solid") {
+        let solid = x.nodes(["solid_nodes_x", "solid_nodes_y", "solid_nodes_z"]);
+        if solid.iter().any(|&n| !n.is_finite() || n < 2.0) {
+            return Err(x.uncovered(format!("invalid solid lattice: {solid:?}")));
+        }
+        x.covers("solid", nodes_total(solid) * 4)?;
+    }
     brick_schedule(x, nodes.map(|n| n as u32))?;
     x.covers("levelset", nodes_total(nodes) * 4)?;
     x.covers("scan", nodes_total(nodes.map(|n| n - 1.0)) * 4)?;
@@ -1109,6 +1118,22 @@ fn volume_surface_mesh(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 }
 
 fn relax_surface_mesh(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    surface_mesh_pass(x, "relaxed")
+}
+
+fn smooth_surface_mesh(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    surface_mesh_pass(x, "relaxed")?;
+    // The stage retains one ping-pong mesh when iterations exceeds one.
+    // A scalar wire can change that count without a graph/extent rebuild.
+    x.hold(x.bytes("vertices").unwrap_or(0));
+    Ok(())
+}
+
+fn surface_mesh_normals(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    surface_mesh_pass(x, "out")
+}
+
+fn surface_mesh_pass(x: &mut AtomExtent<'_>, output: &str) -> Result<(), Verdict> {
     let nodes = x.nodes(["nodes_x", "nodes_y", "nodes_z"]);
     if nodes.iter().any(|&n| n < 2.0) {
         return Err(x.uncovered(format!("no lattice: nodes {nodes:?}")));
@@ -1119,7 +1144,7 @@ fn relax_surface_mesh(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     if x.wired("edge_scan") { x.covers("edge_scan", nodes_total(nodes) * 4)?; }
     // Cell-owned intervals and neighbour reads lie below the checked live total.
     let vertices = x.bytes("vertices").ok_or_else(|| x.uncovered("vertices is unbound".into()))?;
-    x.covers("relaxed", vertices)
+    x.covers(output, vertices)
 }
 
 // ── GPU FLIP ─────────────────────────────────────────────────────────────────
