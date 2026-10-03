@@ -1,8 +1,7 @@
 //! `node.clamp_liquid_to_solids` — the last step before a liquid surface is
-//! meshed: nodes inside a solid are never liquid and the lattice border is
-//! outside, whatever smoothing did to them. node.particle_volume applies the
-//! same rule before smoothing; smoothing can pull liquid values back into
-//! walls, bodies and the border, so the mesher reads this atom's output.
+//! meshed: nodes inside a solid are never liquid, including border samples.
+//! node.particle_volume applies the same production FLIP rule before smoothing;
+//! smoothing can pull liquid values back into walls and bodies.
 //! A per-element gather on the codegen path.
 
 use std::borrow::Cow;
@@ -36,13 +35,13 @@ struct ClampUniforms {
     cell_size: f32,
     brick_pass: u32,
     dispatch_count: u32,
-    _pad0: u32,
+    _pad: u32,
 }
 
 crate::primitive! {
     name: ClampLiquidToSolids,
     type_id: "node.clamp_liquid_to_solids",
-    purpose: "Clamp a liquid level set (nodes_x/y/z nodes over the center/size box, node (i, j, k) at i + nx·(j + ny·k)) against its solid lattice (solid_nodes_x/y/z over the same box, sampled trilinearly): border nodes read a third of a bin outside, nodes where the solid is negative read max(value, 0), every other node passes through. Nodes past the lattice, and every node while there is no lattice, pass through.",
+    purpose: "Clamp every liquid field sample, including borders, against its solid lattice: where solid distance is negative return max(value, 0), otherwise preserve the value. This ports ScalarField::getScalarFieldValue after sign conversion; the preview mesher border replacement does not apply to production surfaces.",
     inputs: {
         levelset: Array(f32) required,
         solid: Array(f32) required,
@@ -167,7 +166,7 @@ impl Primitive for ClampLiquidToSolids {
             cell_size,
             brick_pass: 0,
             dispatch_count: count,
-            _pad0: 0,
+            _pad: 0,
         };
         let bricks = ctx.inputs.array("bricks");
         if bricks

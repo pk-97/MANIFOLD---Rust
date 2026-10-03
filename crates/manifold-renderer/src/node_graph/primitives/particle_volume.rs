@@ -39,8 +39,9 @@ struct VolumeUniforms {
     band_extra: f32,
     brick_pass: u32,
     interior_len: u32,
+    bounds_len: u32,
     dispatch_count: u32,
-    _pad: [u32; 2],
+    _pad: [u32; 1],
 }
 
 /// Level-set nodes per axis: `(n − 1)·m + 1` over the solid lattice's box.
@@ -59,13 +60,14 @@ pub(crate) fn volume_scale(params: &ParamValues) -> u32 {
 crate::primitive! {
     name: ParticleVolume,
     type_id: "node.particle_volume",
-    purpose: "The liquid's level set on a lattice: at each node, the distance to the nearest kernel ellipsoid, a·(|G·(x − c)| − 1) with a the kernel's longest axis (exact for spheres), negative inside and capped at a third of a bin outside by default; positive band_extra adds that distance plus one lattice-cell diagonal so an offset crossing retains its interpolation support. The lattice is the solid lattice (nodes_x/y/z over the center/size box) refined resolution_scale times per cell. Nodes inside a solid are never inside the liquid and the border is outside, so the surface closes.",
+    purpose: "The liquid's level set on a lattice: at each node, the distance to the nearest kernel ellipsoid, a·(|G·(x − c)| − 1) with a the kernel's longest axis (exact for spheres), negative inside and initialized to three times the largest kernel radius; each kernel visits the inclusive FLIP grid support box from floor((centre - 1.5r)/spacing) through floor((centre + 1.5r)/spacing)+1; positive band_extra expands support and the exterior distance by that distance plus one lattice-cell diagonal so an offset crossing retains its interpolation support. The lattice is the solid lattice (nodes_x/y/z over the center/size box) refined resolution_scale times per cell. Nodes inside a solid are never inside the liquid; borders follow the same solid-SDF rule as the production FLIP mesher (the preview-only +0.001 closure is not applied). Optional bounds from node.blob_bounds share the maximum reduction; unwired graphs evaluate the same maximum directly.",
     inputs: {
         blobs: Array(FluidBlob) required,
         cell_ranges: Array(CellRange) required,
         solid: Array(f32) required,
         bricks: Array(u32) optional,
         interior: Array(f32) optional,
+        bounds: Array(f32) optional,
         center_x: ScalarF32 optional, center_y: ScalarF32 optional, center_z: ScalarF32 optional,
         size_x: ScalarF32 optional, size_y: ScalarF32 optional, size_z: ScalarF32 optional,
         nodes_x: ScalarF32 optional, nodes_y: ScalarF32 optional, nodes_z: ScalarF32 optional,
@@ -111,8 +113,8 @@ crate::primitive! {
     aliases: ["level set", "signed distance", "liquid field", "scalar field"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/particle_volume_body.wgsl"),
-    input_access: [BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
-    derived_uniforms: ["brick_pass:u32", "interior_len:u32"],
+    input_access: [BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
+    derived_uniforms: ["brick_pass:u32", "interior_len:u32", "bounds_len:u32"],
     wgsl_includes: [liquid_bricks::COMMON],
     buffer_index: "liquid_brick_index",
 }
@@ -122,9 +124,9 @@ crate::primitive! {
 inventory::submit! {
     crate::node_graph::freeze::derived_uniform_registry::DerivedUniformRecompute {
         type_id: "node.particle_volume",
-        array_ports: &["interior"],
+        array_ports: &["interior", "bounds"],
         recompute: |ctx| {
-            Some(vec![0.0, (ctx.array_len)("interior").unwrap_or(0) as f32])
+            Some(vec![0.0, (ctx.array_len)("interior").unwrap_or(0) as f32, (ctx.array_len)("bounds").unwrap_or(0) as f32])
         },
     }
 }
@@ -185,8 +187,9 @@ impl Primitive for ParticleVolume {
             band_extra: ctx.scalar_or_param("band_extra", 0.0),
             brick_pass: 0,
             interior_len: 0,
+            bounds_len: 0,
             dispatch_count: 0,
-            _pad: [0; 2],
+            _pad: [0; 1],
         };
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
@@ -264,6 +267,11 @@ impl Primitive for ParticleVolume {
             dispatch_count: total as u32,
             ..uniforms
         };
+        let bounds = ctx.inputs.array("bounds");
+        if bounds.is_some_and(|b| b.size != 8) {
+            ctx.error("Particle Volume: bounds must contain the two words from Blob Bounds");
+            return;
+        }
         let bricks = ctx.inputs.array("bricks");
         if bricks.is_some_and(|b| !liquid_bricks::valid_schedule(b, refined)) {
             ctx.error("Liquid lattice: brick schedule does not match the lattice dimensions");
@@ -273,6 +281,7 @@ impl Primitive for ParticleVolume {
         for pass in 0..if bricks.is_some() { 2 } else { 1 } {
             let uniforms = VolumeUniforms {
                 brick_pass: if bricks.is_some() { 2 - pass } else { 0 },
+                bounds_len: if bounds.is_some() { 2 } else { 0 },
                 ..uniforms
             };
             liquid_bricks::dispatch(
@@ -310,6 +319,11 @@ impl Primitive for ParticleVolume {
                     },
                     GpuBinding::Buffer {
                         binding: 6,
+                        buffer: bounds.unwrap_or(solid),
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 7,
                         buffer: levelset,
                         offset: 0,
                     },
@@ -446,7 +460,7 @@ mod cpu_tests {
         assert!(wgsl.contains("brick_pass: u32"), "{wgsl}");
         assert!(wgsl.contains("interior_len: u32"), "{wgsl}");
         assert!(
-            wgsl.contains("params.brick_pass, params.interior_len"),
+            wgsl.contains("params.brick_pass, params.interior_len, params.bounds_len"),
             "{wgsl}"
         );
         assert!(
@@ -458,7 +472,7 @@ mod cpu_tests {
             "{wgsl}"
         );
         assert!(
-            wgsl.contains("@group(0) @binding(6) var<storage, read_write> buf_levelset"),
+            wgsl.contains("@group(0) @binding(7) var<storage, read_write> buf_levelset"),
             "{wgsl}"
         );
         let clear_guard = wgsl
@@ -494,7 +508,7 @@ mod cpu_tests {
                 "node.particle_volume",
                 &ctx,
             ),
-            Some(vec![0.0, 7.0])
+            Some(vec![0.0, 7.0, 0.0])
         );
     }
 }
@@ -513,7 +527,7 @@ mod gpu_tests {
     ) -> Vec<f32> {
         let levels = solid_nodes;
         let total = levels.iter().product();
-        let band = lattice.cell / 3.0;
+        let band = blob.map_or(0.0, |b| 3.0 * b.center_radius[3]);
         let min = lattice.min();
         (0..total)
             .map(|idx| {
@@ -522,13 +536,17 @@ mod gpu_tests {
                     (idx / levels[0]) % levels[1],
                     idx / (levels[0] * levels[1]),
                 ];
-                if (0..3).any(|axis| ijk[axis] == 0 || ijk[axis] + 1 == levels[axis]) {
-                    return band;
-                }
                 let p = std::array::from_fn(|axis| {
                     min[axis] + ijk[axis] as f32 * lattice.size[axis] / (levels[axis] - 1) as f32
                 });
                 let particle_phi = blob.map_or(band, |blob| {
+                    let support = 1.5 * blob.center_radius[3];
+                    if (0..3).any(|axis| {
+                        let h = lattice.size[axis] / (levels[axis] - 1) as f32;
+                        let lo = ((blob.center_radius[axis] - support - min[axis]) / h).floor() as i32;
+                        let hi = ((blob.center_radius[axis] + support - min[axis]) / h).floor() as i32 + 1;
+                        (ijk[axis] as i32) < lo || ijk[axis] as i32 > hi
+                    }) { return band; }
                     let d: [f32; 3] = std::array::from_fn(|axis| p[axis] - blob.center_radius[axis]);
                     let v = [
                         blob.shape_diag[0] * d[0]

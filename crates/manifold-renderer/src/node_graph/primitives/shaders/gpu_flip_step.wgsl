@@ -1823,9 +1823,9 @@ fn subtract_pressure(@builtin(global_invocation_id) gid: vec3<u32>) {
             var p_upper = pressure[upper];
             var p_lower = pressure[lower];
             if !wet_upper {
-                p_upper = clamp(max(surface_phi(upper), 0.0) / (min(surface_phi(lower), surface) + 1e-9), -25.0, 25.0) * p_lower;
+                p_upper = clamp(max(surface_phi(upper), 0.0) / (min(surface_phi(lower), surface) + 1e-6), -25.0, 25.0) * p_lower;
             } else if !wet_lower {
-                p_lower = clamp(max(surface_phi(lower), 0.0) / (min(surface_phi(upper), surface) + 1e-9), -25.0, 25.0) * p_upper;
+                p_lower = clamp(max(surface_phi(lower), 0.0) / (min(surface_phi(upper), surface) + 1e-6), -25.0, 25.0) * p_upper;
             }
             out.face_velocity[a] = here.face_velocity[a] - (p_upper - p_lower) / u.cell_size;
             out.face_weight[a] = 1.0;
@@ -2378,7 +2378,7 @@ fn emit_write(@builtin(global_invocation_id) gid: vec3<u32>) {
     let inflow = region_holding(x, 2.0, true);
     let p = emit_position(idx, inflow);
     // (3 / (4π · 8))^(1/3): the sphere of an eighth of a cell, as the fill's.
-    emitted[slot] = FluidParticle(vec4<f32>(p, 0.31017 * u.cell_size), region_velocity(inflow, p), slot + 1u);
+    emitted[slot] = FluidParticle(vec4<f32>(p, 0.31017524 * u.cell_size), region_velocity(inflow, p), slot + 1u);
 }
 
 // ---- The tile table (GPU_FLIP_SPARSE_BLOCKS_DESIGN.md section 3 (The tile

@@ -40,7 +40,7 @@ const MAX_COARSE_CELLS: u64 = 64;
 /// The longest lattice side the solver takes.
 pub(crate) const MAX_SIDE: u32 = 1024;
 /// Iterations one solve may run: the scalars buffer holds two per iteration.
-pub(crate) const MAX_ITERATIONS: u32 = 64;
+pub(crate) const MAX_ITERATIONS: u32 = 900;
 /// The stop's relative tolerance on |r|∞ / |f|∞, FLIP Fluids'
 /// `_pressureSolveTolerance` unchanged: f32 carries the recursive residual
 /// below it in 11 to 14 iterations on every saved problem

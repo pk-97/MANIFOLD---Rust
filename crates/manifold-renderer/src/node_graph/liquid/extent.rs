@@ -568,6 +568,7 @@ pub const LIQUID_EXTENT_RULES: &[ExtentRule] = &[
     ExtentRule { type_id: "node.divide_by_value", check: divide_by_value },
     ExtentRule { type_id: "node.sort_particles_into_cells", check: sort_particles_into_cells },
     ExtentRule { type_id: "node.shape_particle_blobs", check: shape_particle_blobs },
+    ExtentRule { type_id: "node.blob_bounds", check: blob_bounds },
     ExtentRule { type_id: "node.particle_volume", check: particle_volume },
     ExtentRule { type_id: "node.offset_lattice", check: offset_lattice },
     ExtentRule { type_id: "node.redistance_lattice", check: redistance_lattice },
@@ -995,6 +996,17 @@ fn searched(x: &AtomExtent<'_>) -> Result<[u32; 3], Verdict> {
     searched_bins(bins, ranges, "search").map_err(|error| x.uncovered(error))
 }
 
+fn blob_bounds(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    x.covers("bounds", 8)
+}
+
+fn optional_blob_bounds(x: &AtomExtent<'_>) -> Result<(), Verdict> {
+    if x.wired("bounds") && x.bytes("bounds") != Some(8) {
+        return Err(x.uncovered("bounds must contain exactly two f32 words from Blob Bounds".into()));
+    }
+    Ok(())
+}
+
 fn shape_particle_blobs(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     searched(x)?;
     // One blob per sorted slot.
@@ -1011,6 +1023,7 @@ fn particle_volume(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     for (port, n) in ["volume_nodes_x", "volume_nodes_y", "volume_nodes_z"].into_iter().zip(refined) {
         x.publish(port, n as f32);
     }
+    optional_blob_bounds(x)?;
     searched(x)?;
     brick_schedule(x, refined)?;
     if x.wired("interior") {
@@ -1041,7 +1054,7 @@ fn lattice_bricks(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let bytes = u64::from(layout.words) * 4;
     x.provide("bricks", bytes);
     x.hold(bytes + storage_words(layout.count as usize) as u64 * 4);
-    Ok(())
+    optional_blob_bounds(x)
 }
 
 fn brick_schedule(x: &AtomExtent<'_>, nodes: [u32; 3]) -> Result<(), Verdict> {
@@ -1782,6 +1795,25 @@ mod tests {
         for resolution in [8, 16] {
             let report = preset.check(resolution).unwrap_or_else(|error| panic!("{id} at {resolution}: {error}"));
             assert!(report.checked > 0);
+        }
+    }
+
+    #[test]
+    fn liquid_blob_bounds_reject_wrong_extent_before_gpu_work() {
+        let (_, def) = liquid_presets().into_iter().find(|(id, _)| id == "WaterDamBreakGpuFlip").expect("preset");
+        for consumer in ["node.particle_volume", "node.lattice_bricks"] {
+            let mut flat = manifold_core::flatten::flatten_groups(def).expect("flattens");
+            let id = flat.nodes.iter().find(|n| n.type_id == consumer).expect("consumer").id;
+            // Both ports are Array<f32>, so the graph type check accepts this
+            // deliberately wrong wire. The extent contract must reject it.
+            let solid = flat.wires.iter().find(|w| w.to_node == id && w.to_port == "solid").expect("solid wire").clone();
+            let bound = flat.wires.iter_mut().find(|w| w.to_node == id && w.to_port == "bounds").expect("bounds wire");
+            bound.from_node = solid.from_node;
+            bound.from_port = solid.from_port;
+            match check_preset_extents(&flat, 8) {
+                Err(ExtentError::Uncovered { detail, .. }) => assert!(detail.contains("bounds must contain exactly two"), "{consumer}: {detail}"),
+                other => panic!("{consumer}: expected a malformed bounds refusal, got {other:?}"),
+            }
         }
     }
 

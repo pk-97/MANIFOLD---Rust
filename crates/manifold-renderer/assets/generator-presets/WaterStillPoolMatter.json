@@ -1,10 +1,10 @@
 {
   "version": 2,
-  "name": "Water \u2014 Still Pool (Live GPU)",
-  "description": "GPU MLS-MPM still pool in the Water \u2014 Dam Break basin: a half-metre pool that should settle and stay still. The solver is one group, Live Matter: the domain sets the lattice, walls, gravity and clock; the fill seeds points; Point State repeats Clear Grid, Points To Grid, Grid Update and Grid To Points once per substep; at each tick's first substep Sort Into Blocks orders the points by grid block so Points To Grid adds each block in fast memory; Tick Stats checks each tick; Frame publishes the particles. The group flattens to the same graph as its wired atoms. Particles are drawn as small spheres until the liquid surface lands.",
+  "name": "Water — Still Pool (Live GPU)",
+  "description": "GPU MLS-MPM still pool in the Water — Dam Break basin: a half-metre pool that should settle and stay still. The solver is one group, Live Matter: the domain sets the lattice, walls, gravity and clock; the fill seeds points; Point State repeats Clear Grid, Points To Grid, Grid Update and Grid To Points once per substep; at each tick's first substep Sort Into Blocks orders the points by grid block so Points To Grid adds each block in fast memory; Tick Stats checks each tick; Frame publishes the particles. The group flattens to the same graph as its wired atoms. Particles are drawn as small spheres until the liquid surface lands.",
   "presetMetadata": {
     "id": "WaterStillPoolMatter",
-    "displayName": "Water \u2014 Still Pool (Live GPU)",
+    "displayName": "Water — Still Pool (Live GPU)",
     "category": "Sim",
     "oscPrefix": "waterstillpoolmatter",
     "available": true,
@@ -182,7 +182,7 @@
         "wholeNumbers": false
       },
       {
-        "defaultValue": 0.5,
+        "defaultValue": 0.35,
         "formatString": "F2",
         "id": "mesh_relaxation",
         "isToggle": false,
@@ -408,7 +408,7 @@
         "convert": {
           "type": "Float"
         },
-        "defaultValue": 0.5,
+        "defaultValue": 0.35,
         "id": "mesh_relaxation",
         "label": "Smoothing Value",
         "target": {
@@ -2472,7 +2472,7 @@
             "params": {
               "value": {
                 "type": "Float",
-                "value": 0.5
+                "value": 0.3499999940395355
               }
             },
             "typeId": "node.value"
@@ -2608,6 +2608,10 @@
               }
             },
             "typeId": "node.math"
+          },
+          {
+            "id": 32,
+            "typeId": "node.blob_bounds"
           }
         ],
         "wires": [
@@ -3648,6 +3652,24 @@
             "fromPort": "out",
             "toNode": 31,
             "toPort": "b"
+          },
+          {
+            "fromNode": 32,
+            "fromPort": "bounds",
+            "toNode": 7,
+            "toPort": "bounds"
+          },
+          {
+            "fromNode": 32,
+            "fromPort": "bounds",
+            "toNode": 20,
+            "toPort": "bounds"
+          },
+          {
+            "fromNode": 6,
+            "fromPort": "blobs",
+            "toNode": 32,
+            "toPort": "blobs"
           }
         ]
       },
@@ -3656,27 +3678,27 @@
           "type": "Float",
           "value": 1.0
         },
+        "fill_pits": {
+          "type": "Float",
+          "value": 0.0
+        },
         "mesh_relaxation": {
           "type": "Float",
-          "value": 0.5
+          "value": 0.3499999940395355
         },
         "particle_scale": {
           "type": "Float",
           "value": 3.0
+        },
+        "smoothing": {
+          "type": "Float",
+          "value": 0.0
         },
         "smoothing_iterations": {
           "type": "Int",
           "value": 2
         },
         "smoothing_passes": {
-          "type": "Float",
-          "value": 0.0
-        },
-        "fill_pits": {
-          "type": "Float",
-          "value": 0.0
-        },
-        "smoothing": {
           "type": "Float",
           "value": 0.0
         },

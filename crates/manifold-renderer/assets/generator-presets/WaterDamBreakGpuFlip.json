@@ -232,7 +232,7 @@
         },
         "volume_projection": {
           "type": "Int",
-          "value": 1
+          "value": 0
         }
       },
       "typeId": "node.gpu_flip_step"
@@ -642,7 +642,7 @@
             "params": {
               "value": {
                 "type": "Float",
-                "value": 0.5
+                "value": 0.3499999940395355
               }
             },
             "typeId": "node.value"
@@ -778,6 +778,10 @@
               }
             },
             "typeId": "node.math"
+          },
+          {
+            "id": 32,
+            "typeId": "node.blob_bounds"
           }
         ],
         "wires": [
@@ -1818,6 +1822,24 @@
             "fromPort": "out",
             "toNode": 31,
             "toPort": "b"
+          },
+          {
+            "fromNode": 32,
+            "fromPort": "bounds",
+            "toNode": 7,
+            "toPort": "bounds"
+          },
+          {
+            "fromNode": 32,
+            "fromPort": "bounds",
+            "toNode": 20,
+            "toPort": "bounds"
+          },
+          {
+            "fromNode": 6,
+            "fromPort": "blobs",
+            "toNode": 32,
+            "toPort": "blobs"
           }
         ]
       },
@@ -1835,7 +1857,7 @@
         },
         "mesh_relaxation": {
           "type": "Float",
-          "value": 0.5
+          "value": 0.3499999940395355
         },
         "particle_scale": {
           "type": "Float",
@@ -3044,7 +3066,7 @@
         "convert": {
           "type": "Float"
         },
-        "defaultValue": 0.5,
+        "defaultValue": 0.3499999940395355,
         "id": "mesh_relaxation",
         "label": "Smoothing Value",
         "target": {
@@ -3268,7 +3290,7 @@
         "wholeNumbers": false
       },
       {
-        "defaultValue": 0.5,
+        "defaultValue": 0.3499999940395355,
         "formatString": "F2",
         "id": "mesh_relaxation",
         "isToggle": false,

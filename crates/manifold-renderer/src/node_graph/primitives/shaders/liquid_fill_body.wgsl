@@ -103,7 +103,7 @@ fn body(
     let lo = vec3<f32>(lattice_min_x, lattice_min_y, lattice_min_z) + vec3<f32>(3.0 * cell_size);
     // (3 / (4π · 8))^(1/3): the sphere of an eighth of a cell.
     let x = lo + local * cell_size;
-    let radius = select(0.31017 * cell_size, 0.0, liquid_fill_in_solid(x, body_count));
+    let radius = select(0.31017524 * cell_size, 0.0, liquid_fill_in_solid(x, body_count));
     out.position_radius = vec4<f32>(x, radius);
     out.id = idx + 1u;
     return out;

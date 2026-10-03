@@ -32,6 +32,15 @@ class ScopeTests(unittest.TestCase):
             self.assertIn("whitewater_particle_tests::", result.filters)
             self.assertFalse(result.unmapped)
 
+    def test_blob_bounds_selects_dense_and_sparse_consumers(self):
+        for path in (P + "blob_bounds.rs", P + "shaders/blob_bounds.wgsl"):
+            result = plan([path], users=lambda _: [P + "blob_bounds.rs"],
+                          repo=self._repo_with(path))
+            self.assertTrue({"node_graph::primitives::blob_bounds::",
+                             "liquid_surface_tests::",
+                             "liquid_bricks::tests::gpu_tests::"} <= result.filters)
+            self.assertFalse(result.unmapped)
+
     def test_narrow_band_isolated_passes_select_their_value_proofs(self):
         for path in (P + "gpu_flip_narrow_band_tests.rs",
                      P + "gpu_flip_narrow_band.rs",
