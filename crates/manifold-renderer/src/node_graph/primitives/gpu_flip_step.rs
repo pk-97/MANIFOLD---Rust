@@ -2471,7 +2471,7 @@ impl Primitive for GpuFlipStep {
             surface_constant: 1.0,
             color_mixing_rate: 0.0,
             _pad_prediction: 0.0,
-            _pad0: 0.0,
+            limit_interval: (interval_duration as f32).min(crate::node_graph::physics::simulation_interval() as f32),
             min_frame_steps: steps as u32,
             max_frame_steps: manifold_physics::stepping::LIVE_DEFAULT_MAX_STEPS,
             flags: if tick_index == 0 {
