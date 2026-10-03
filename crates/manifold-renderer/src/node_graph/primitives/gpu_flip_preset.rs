@@ -136,7 +136,7 @@ impl WaterScene {
             surface_scale: 1,
             faces: false,
             ghost_fluid: true,
-            volume_projection: true,
+            volume_projection: false,
             obstacle: true,
             closed_faces: 63,
         }
@@ -1139,7 +1139,7 @@ pub(super) mod tests {
     fn gpu_flip_surface_group_is_shared_with_all_water_presets() {
         let source = surface_group();
         let group = &source["group"];
-        assert_eq!(group["nodes"].as_array().unwrap().len(), 32);
+        assert_eq!(group["nodes"].as_array().unwrap().len(), 33);
         let registry = PrimitiveRegistry::with_builtin();
         for name in [SHIPPED_PRESET, "WaterDamBreakGpu", "WaterDamBreakMatter", "WaterStillPoolMatter", "WaterFloatingBoxMatter"] {
             let json = bundled_preset_json(&PresetTypeId::new(name)).unwrap();

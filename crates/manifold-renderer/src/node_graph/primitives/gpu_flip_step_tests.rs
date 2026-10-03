@@ -509,7 +509,7 @@ fn gpu_flip_subtract_pressure_projects_faces_touching_water() {
     let pressure: Vec<f32> = water.iter().map(|&w| if w > 0.5 { rng.signed(3.0) } else { 0.0 }).collect();
     let ghost = |air: usize, wet: usize, phi: &[f32]| {
         let surface = f64::from(phi[wet]).min(-0.005 * f64::from(H));
-        (f64::from(phi[air]).max(0.0) / (surface + 1e-9)).clamp(-25.0, 25.0) * f64::from(pressure[wet])
+        (f64::from(phi[air]).max(0.0) / (surface + 1e-6)).clamp(-25.0, 25.0) * f64::from(pressure[wet])
     };
     // Faces whose air side took a ghost pressure that is not zero.
     let mut ghosts = 0;
@@ -560,10 +560,8 @@ fn gpu_flip_subtract_pressure_projects_faces_touching_water() {
                 close(face.weight[a], weight, 1.0, &format!("weight {p:?}/{a}"));
             }
         }
-        // The projection leaves exactly the residual of the rows the solve
-        // inverted: div(out) = div(faces) − L p, L the pressure solver's
-        // ghost rows. A θ that differs from the matrix's (the engine's 1e-6
-        // here) leaves part of the surface pressure as divergence.
+        // Native velocity projection uses 1e-6, unlike the matrix's 1e-9.
+        // Check that projection operator with the same error bound.
         let h = f64::from(H);
         let div = |f: &[FaceSample], c: [usize; 3]| -> f64 {
             (0..3)
@@ -594,7 +592,7 @@ fn gpu_flip_subtract_pressure_projects_faces_touching_water() {
                         continue;
                     }
                     let j = cell_index(r);
-                    let theta = (f64::from(phi[j]).max(0.0) / (centre + 1e-9)).clamp(-25.0, 25.0);
+                    let theta = (f64::from(phi[j]).max(0.0) / (centre + 1e-6)).clamp(-25.0, 25.0);
                     let p_j = if water[j] > 0.5 { f64::from(pressure[j]) } else { theta * f64::from(pressure[c]) };
                     lp += (p_j - f64::from(pressure[c])) / (h * h);
                 }
@@ -978,7 +976,7 @@ fn gpu_flip_liquid_fill_places_pool_then_box() {
             let want = MIN[a] + local * H;
             assert!((g.position_radius[a] - want).abs() < 1e-5, "particle {i} axis {a}: {} vs {want}", g.position_radius[a]);
         }
-        assert!((g.position_radius[3] - 0.31017 * H).abs() < 1e-6);
+        assert!((g.position_radius[3] - 0.31017524 * H).abs() < 1e-6);
         assert_eq!((g.velocity, g.id), ([0.0; 3], i as u32 + 1), "particle {i}");
     }
 }
@@ -1954,7 +1952,7 @@ fn gpu_flip_inflow_emits_at_empty_sites_into_free_slots() {
             close(p.position_radius[a], x[a], 1.0, "emitted position");
             close(p.velocity[a], f64::from(velocity[a]), 1.0, "emitted velocity");
         }
-        close(p.position_radius[3], 0.31017 * f64::from(H), 1.0, "emitted radius");
+        close(p.position_radius[3], 0.31017524 * f64::from(H), 1.0, "emitted radius");
         assert_eq!(p.id, slot as u32 + 1);
     }
     let live_after = written.iter().filter(|p| p.position_radius[3] > 0.0).count();

@@ -185,7 +185,8 @@ fn dispatch_tail_census_is_stable() {
     // and redistance_lattice, buffer atoms. Shared-edge meshing adds
     // count_surface_edges and surface_mesh_normals. smooth_surface_mesh is
     // an iteration boundary, not a standalone atom; relax_surface_mesh remains
-    // registered for saved graphs. No standalone atom is removed.
+    // registered for saved graphs. blob_bounds is a barriered reduction, so
+    // it adds no standalone atom. No standalone atom is removed.
     assert_eq!(total, 228, "standalone atom census drifted");
     assert_eq!(
         qualifying, 93,

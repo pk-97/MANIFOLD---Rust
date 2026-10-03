@@ -252,5 +252,5 @@ fn nb_reseed_write(@builtin(global_invocation_id) gid: vec3<u32>) {
     if nb_scan[i] == before { return; }
     let last = nb_ranges[nb_total() - 1u]; let slot = last.start + last.count + before;
     let q = nb_site(nb_coords(i / 8u, nb.n), i % 8u);
-    nb_particles[slot] = NbParticle(vec4<f32>(nb.minimum + q * nb.h, 0.31017 * nb.h), nb_velocity(q), slot + 1u);
+    nb_particles[slot] = NbParticle(vec4<f32>(nb.minimum + q * nb.h, 0.31017524 * nb.h), nb_velocity(q), slot + 1u);
 }

@@ -1,10 +1,10 @@
 {
   "version": 2,
-  "name": "Water \u2014 Dam Break (GPU Surface)",
-  "description": "FLIP dam break with a GPU liquid surface: the Liquid Surface group turns each particle frame into an anisotropic level set and a marching-cubes mesh on the GPU, so Surface Detail and particle shape change the next frame without restarting the simulation. Live only; native whitewater as in Water \u2014 Dam Break.",
+  "name": "Water — Dam Break (GPU Surface)",
+  "description": "FLIP dam break with a GPU liquid surface: the Liquid Surface group turns each particle frame into an anisotropic level set and a marching-cubes mesh on the GPU, so Surface Detail and particle shape change the next frame without restarting the simulation. Live only; native whitewater as in Water — Dam Break.",
   "presetMetadata": {
     "id": "WaterDamBreakGpu",
-    "displayName": "Water \u2014 Dam Break (GPU Surface)",
+    "displayName": "Water — Dam Break (GPU Surface)",
     "category": "Sim",
     "oscPrefix": "waterdambreakgpu",
     "available": true,
@@ -225,7 +225,7 @@
         "wholeNumbers": false
       },
       {
-        "defaultValue": 0.5,
+        "defaultValue": 0.35,
         "formatString": "F2",
         "id": "mesh_relaxation",
         "isToggle": false,
@@ -490,7 +490,7 @@
         "convert": {
           "type": "Float"
         },
-        "defaultValue": 0.5,
+        "defaultValue": 0.35,
         "id": "mesh_relaxation",
         "label": "Smoothing Value",
         "target": {
@@ -1899,7 +1899,7 @@
             "params": {
               "value": {
                 "type": "Float",
-                "value": 0.5
+                "value": 0.3499999940395355
               }
             },
             "typeId": "node.value"
@@ -2035,6 +2035,10 @@
               }
             },
             "typeId": "node.math"
+          },
+          {
+            "id": 32,
+            "typeId": "node.blob_bounds"
           }
         ],
         "wires": [
@@ -3075,6 +3079,24 @@
             "fromPort": "out",
             "toNode": 31,
             "toPort": "b"
+          },
+          {
+            "fromNode": 32,
+            "fromPort": "bounds",
+            "toNode": 7,
+            "toPort": "bounds"
+          },
+          {
+            "fromNode": 32,
+            "fromPort": "bounds",
+            "toNode": 20,
+            "toPort": "bounds"
+          },
+          {
+            "fromNode": 6,
+            "fromPort": "blobs",
+            "toNode": 32,
+            "toPort": "blobs"
           }
         ]
       },
@@ -3083,27 +3105,27 @@
           "type": "Float",
           "value": 1.0
         },
+        "fill_pits": {
+          "type": "Float",
+          "value": 0.0
+        },
         "mesh_relaxation": {
           "type": "Float",
-          "value": 0.5
+          "value": 0.3499999940395355
         },
         "particle_scale": {
           "type": "Float",
           "value": 3.0
+        },
+        "smoothing": {
+          "type": "Float",
+          "value": 0.0
         },
         "smoothing_iterations": {
           "type": "Int",
           "value": 2
         },
         "smoothing_passes": {
-          "type": "Float",
-          "value": 0.0
-        },
-        "fill_pits": {
-          "type": "Float",
-          "value": 0.0
-        },
-        "smoothing": {
           "type": "Float",
           "value": 0.0
         },

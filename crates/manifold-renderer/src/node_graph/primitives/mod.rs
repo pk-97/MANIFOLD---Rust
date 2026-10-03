@@ -333,6 +333,7 @@ pub(crate) mod prefix_scan;
 pub(crate) mod sort_particles_into_cells;
 mod running_total;
 mod shape_particle_blobs;
+mod blob_bounds;
 pub(crate) mod particle_volume;
 pub(crate) mod lattice_bricks;
 pub(crate) mod liquid_bricks;

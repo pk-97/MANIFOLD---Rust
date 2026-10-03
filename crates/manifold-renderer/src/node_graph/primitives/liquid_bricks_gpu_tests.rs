@@ -1,5 +1,5 @@
-//! Compile-only in the slot-2 workstream: run on a GPU owner with these exact
-//! filters. The oracles are the unmodified dense bodies from main 4aab34f86.
+//! Sparse field proofs against independent dense gathers. The field oracle
+//! follows native ParticleMesher support and production solid/border semantics.
 use super::dense_source;
 use crate::generators::mesh_common::MeshVertex;
 use crate::node_graph::bindings::Slot;
@@ -146,6 +146,8 @@ fn fixture(resolution: u32) {
     ));
     let count_slots: [(Slot, GpuBuffer); 2] = std::array::from_fn(|_| h.array::<u32>(&[], total));
     let mut builder = LatticeBricks::new();
+    let (bounds_slot, _) = h.array::<f32>(&[], 2);
+    let mut bounder = crate::node_graph::primitives::blob_bounds::BlobBounds::new();
     let mut scans: [RunningTotal; 2] = std::array::from_fn(|_| RunningTotal::new());
     let scan_slots: [(Slot, GpuBuffer); 2] = std::array::from_fn(|_| h.array::<u32>(&[], total));
     let extent_slots: [(Slot, GpuBuffer); 2] = std::array::from_fn(|_| h.array::<u32>(&[], 4));
@@ -205,7 +207,8 @@ fn fixture(resolution: u32) {
                         center[2] + (i / 16) as f32 * cell,
                     ]
                 };
-                let reach = 0.6 * cell;
+                // Native scale-3 radius exceeds the former two-thirds-bin cap.
+                let reach = (3.0 * 0.31017524) * cell;
                 // Stretched supports as well as spheres; reach is the largest axis.
                 blobs.push(FluidBlob {
                     center_radius: [p[0], p[1], p[2], reach],
@@ -234,10 +237,13 @@ fn fixture(resolution: u32) {
             blob_buffer.write(0, bytemuck::cast_slice(&blobs));
             range_buffer.write(0, bytemuck::cast_slice(&ranges));
         }
+        let (_, errors) = h.run(&mut bounder, &[("blobs", blob_slot)], &[("bounds", bounds_slot)], &params(&[]));
+        assert!(errors.is_empty(), "{errors:?}");
         let (_, errors) = h.run(
             &mut builder,
             &[
                 ("blobs", blob_slot),
+                ("bounds", bounds_slot),
                 ("cell_ranges", range_slot),
                 ("solid", solid_slot),
             ],
@@ -260,6 +266,7 @@ fn fixture(resolution: u32) {
         for (lane, node) in volume.iter_mut().enumerate() {
             let mut inputs = vec![
                 ("blobs", blob_slot),
+                ("bounds", bounds_slot),
                 ("cell_ranges", range_slot),
                 ("solid", solid_slot),
             ];

@@ -73,7 +73,7 @@ mod cpu_tests {
                                 x as f32 + 0.25 + 0.5 * (site & 1) as f32,
                                 y as f32 + 0.25 + 0.5 * ((site >> 1) & 1) as f32,
                                 z as f32 + 0.25 + 0.5 * ((site >> 2) & 1) as f32,
-                                0.31017,
+                                0.31017524,
                             ],
                             velocity: [0.0; 3],
                             id,
@@ -1084,7 +1084,7 @@ mod gpu_tests {
                     ]
                 );
                 assert_eq!(particle.velocity, [1.0, 2.0, 3.0]);
-                assert_eq!(particle.position_radius[3], 0.31017);
+                assert_eq!(particle.position_radius[3], 0.31017524);
             }
             assert!(written[16..].iter().all(|p| p.position_radius[3] == 0.0));
         }

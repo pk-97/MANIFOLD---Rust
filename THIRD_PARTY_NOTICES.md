@@ -24,7 +24,7 @@ Modules ported from it (all under `crates/manifold-renderer/src/node_graph/primi
 
 Constants taken from the engine (each file's header says which):
 
-- `particle_volume`, `shape_particle_blobs` (and their shaders) — the search-radius ratio from `particlemesher.cpp` (`_searchRadiusFactor`)
+- `particle_volume`, `shape_particle_blobs`, `lattice_bricks`, `clamp_liquid_to_solids` (and their shaders) — the marker radius, inclusive field support, distance band and border/solid rules from `fluidsimulation.cpp`, `particlemesher.cpp` and `scalarfield.cpp`.
 - `relax_surface_mesh` (and its shader) — the neighbour-mean smoothing from `trianglemesh.cpp` (`smooth`)
 - `node_graph/whitewater.rs` — the particle id limit from `diffuseparticlesimulation.h` (`_diffuseParticleIDLimit`)
 - `gpu_flip_preset.rs` — the PIC/FLIP ratio from `fluidsimulation.h` (`_ratioPICFLIP`) and the Dam Break scene values

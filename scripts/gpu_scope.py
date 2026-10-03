@@ -147,6 +147,11 @@ NARROW_ROWS = [
 # Explicit rows: (path substrings, (filters, skips)). `rt_` skips particletext:
 # the freeze proof `particletext_*` hangs the GPU on main (BUG-i6eo).
 EXPLICIT_ROWS = [
+    # Blob bounds controls the sparse reach and dense particle field together.
+    ((RENDERER_SRC + "node_graph/primitives/blob_bounds.rs",
+      RENDERER_SRC + "node_graph/primitives/shaders/blob_bounds.wgsl"),
+     (["node_graph::primitives::blob_bounds::",
+       "liquid_surface_tests::", "liquid_bricks::tests::gpu_tests::"], [])),
     ((RENDERER_SRC + "node_graph/primitives/offset_lattice",
       RENDERER_SRC + "node_graph/primitives/redistance_lattice",
       RENDERER_SRC + "node_graph/primitives/lattice_closing",
