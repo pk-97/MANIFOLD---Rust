@@ -450,6 +450,25 @@ class DiffScopeTests(unittest.TestCase):
             self.assertIn("test(/^node_graph::fluid::checks::/)", plan.filterset)
             self.assertIn("binary(=fluid_preset)", plan.filterset)
 
+    def test_shared_test_code_selects_the_binaries_that_use_it(self):
+        with tempfile.TemporaryDirectory() as d:
+            crate = Path(d) / "crates/manifold-renderer"
+            tests = crate / "tests"
+            (tests / "support").mkdir(parents=True)
+            (tests / "proofs").mkdir()
+            (crate / "Cargo.toml").write_text('[package]\nname = "manifold-renderer"\n')
+            (tests / "abi.rs").write_text("mod support {\n    pub mod cases;\n}\n")
+            (tests / "layout.rs").write_text('#[path = "support/cases.rs"]\nmod cases;\n')
+            (tests / "other.rs").write_text("")
+            (tests / "proofs/main.rs").write_text("")
+            plan = cpu_scope.plan_for_paths(["crates/manifold-renderer/tests/support/cases.rs",
+                                             "crates/manifold-renderer/tests/proofs/water.rs"], d)
+            self.assertEqual(plan.filters, {
+                "(package(=manifold-renderer) & binary(=abi))",
+                "(package(=manifold-renderer) & binary(=layout))",
+                "(package(=manifold-renderer) & binary(=proofs))",
+            })
+
     def test_bundled_preset_json_selects_preset_contracts(self):
         with tempfile.TemporaryDirectory() as d:
             plan = cpu_scope.plan_for_paths(["crates/manifold-renderer/assets/generator-presets/Water.json"], d)
