@@ -30,7 +30,7 @@ use crate::node_graph::liquid::tick_samples::TickSamples;
 use crate::node_graph::matter::coupling::{ReactionScale, decode, live_body_limit};
 use crate::node_graph::matter::{
     MAX_SUBSTEPS, REACTION_WORDS, WATER_DENSITY, block_sort_box, free_fall_speed, lattice_blocks, lattice_nodes,
-    momentum_unit, substeps_per_tick, water_lambda, wave_speed,
+    momentum_unit, substeps_for_interval, substeps_per_tick, water_lambda, wave_speed,
 };
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::physics::{
@@ -833,7 +833,7 @@ impl MatterDomain {
             None => None,
         };
         let nominal_substeps = substeps_per_tick(lattice.cell_size(), wave, v_est as f32, body_limit, None);
-        let requested = ((frame.duration().0 / TICK * f64::from(nominal_substeps)).ceil() as u32).max(1);
+        let requested = substeps_for_interval(frame.duration().0 as f32, nominal_substeps);
         let substeps = requested.min(MAX_SUBSTEPS);
         let lambda = water_lambda(longest, fitted);
         let unit = momentum_unit(lattice.cell_size(), if frame.ticks == 0 {TICK / f64::from(substeps)} else {

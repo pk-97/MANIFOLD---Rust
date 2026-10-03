@@ -88,6 +88,19 @@ impl SimulationClock {
         if !transport.is_finite() || !speed.is_finite() || speed < 0.0 {
             return self.target_time;
         }
+        let observed_simulation = map_transport(&self.speed_history, transport);
+        // A late source/audio observation may read accepted time, but may
+        // only change the speed of time we have not accepted yet.
+        let accepted_transport = if self.offline {
+            self.transport_origin + self.transport_done as f64 * self.project_interval
+        } else {
+            self.last_transport
+        };
+        let transport = if self.started && !self.speed_history.is_empty() {
+            transport.max(accepted_transport)
+        } else {
+            transport
+        };
         let simulation = map_transport(&self.speed_history, transport);
         if self.speed_history.last().is_none_or(|last| {
             transport >= last.transport && last.speed != f64::from(speed)
@@ -100,7 +113,7 @@ impl SimulationClock {
                 history.push(anchor);
             }
         }
-        simulation
+        observed_simulation
     }
 
     pub fn accepted_time(&self) -> f64 {
@@ -411,6 +424,38 @@ mod tests {
         clock.advance(2.2, TICK, 0.5, 0.0, false, true);
         assert_eq!(intervals, (0..u64::from(accepted.ticks))
             .map(|i| accepted.interval(i).unwrap()).collect::<Vec<_>>());
+    }
+
+    fn late_speed_observation_preserves_accepted_time(offline: bool) {
+        let mut clock = SimulationClock::default();
+        clock.advance(2.0, TICK, 1.0, 0.0, false, offline);
+        // Offline stops at 2.1 even though the render observed 2.107.
+        let previous = clock.advance(2.107, TICK, 1.0, 0.0, false, offline);
+        let end = if offline { 2.0 + 6.0 * TICK } else { 2.107 };
+        let samples: Vec<_> = (0..=100).map(|i| {
+            let x = 2.0 + (end - 2.0) * f64::from(i) / 100.0;
+            (x, clock.simulation_at(x))
+        }).collect();
+        let observed = clock.simulation_at(2.05);
+        assert_eq!(clock.observe_speed(2.05, 3.0), observed);
+        for (x, expected) in samples {
+            assert_eq!(clock.simulation_at(x), expected, "past transport {x}");
+        }
+        assert_eq!(clock.simulation_at(end), previous.simulation_time);
+        let future = end + TICK;
+        assert_eq!(clock.simulation_at(future), previous.simulation_time + (future - end) * 3.0);
+        let next = clock.advance(2.2, TICK, 3.0, 0.0, false, offline);
+        assert_eq!(next.interval(0).unwrap().start.0, previous.simulation_time);
+    }
+
+    #[test]
+    fn late_live_speed_observation_preserves_accepted_time() {
+        late_speed_observation_preserves_accepted_time(false);
+    }
+
+    #[test]
+    fn late_offline_speed_observation_preserves_accepted_time() {
+        late_speed_observation_preserves_accepted_time(true);
     }
 
     #[test]

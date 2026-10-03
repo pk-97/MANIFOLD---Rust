@@ -1229,13 +1229,14 @@ mod gpu_tests {
         let markers = device.create_buffer_shared(32);
         let empty = device.create_buffer_shared(96);
         let readback = device.create_buffer_shared(48);
+        let before_cap = device.create_buffer_shared(48);
         let p = params();
         unsafe {
             markers.write(0, bytemuck::bytes_of(&particle(1000.0)));
         }
         let mut enc = device.create_encoder("flip-clock cap proof");
         clock.begin_frame(&mut enc, &p);
-        for _ in 0..p.max_frame_steps {
+        for step in 0..p.max_frame_steps {
             let plan = clock.dispatch(
                 &mut enc,
                 GpuFlipClockInputs {
@@ -1259,11 +1260,20 @@ mod gpu_tests {
                 &p,
             );
             enc.copy_buffer_to_buffer(plan.buffer(), &readback, 48);
+            if step + 2 == p.max_frame_steps {
+                enc.copy_buffer_to_buffer(plan.buffer(), &before_cap, 48);
+            }
         }
         enc.commit_and_wait_completed();
         let result = read_plan(&readback);
-        let expected = 1.0 - 5.0 * expected_dt(&p, 1000.0, CflRestrictions::default());
-        assert!((result.dt - expected).abs() < 1e-6);
+        let before = read_plan(&before_cap);
+        assert_eq!(before.step_index, 5);
+        assert_eq!(before.cap_hit, 0);
+        assert!(before.remaining > 0.99 && before.remaining < p.frame_duration);
+        // The cap consumes the actual GPU cursor exactly. A host-derived
+        // CFL quotient at an integer ceil boundary can choose the adjacent
+        // count after Metal reciprocal lowering; it is not this invariant.
+        assert_eq!(result.dt, before.remaining);
         assert_eq!(result.elapsed, p.frame_duration);
         assert_eq!(result.remaining, 0.0);
         assert_eq!(result.step_index, 6);
@@ -1375,7 +1385,9 @@ mod gpu_tests {
         assert_eq!(plans[0].cap_hit, 0);
         assert_eq!(plans[1].maximum_speed, 100.0);
         let event_dt = expected_dt(&p, 100.0, CflRestrictions::default());
-        assert_eq!(plans[1].dt, event_dt);
+        // Metal may lower division to reciprocal multiplication. This
+        // non-binary fraction can differ from host division by one f32 ulp.
+        assert!(plans[1].dt.to_bits().abs_diff(event_dt.to_bits()) <= 1);
         assert!((plans[1].elapsed - (0.02 + event_dt)).abs() < 1.0e-6);
         assert_eq!(plans[1].step_index, 1);
         assert_ne!(plans[1].pad & 0x8000_0000, 0);

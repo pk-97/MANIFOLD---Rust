@@ -315,7 +315,9 @@ pub(crate) fn dispatch_pass(device: &GpuDevice, entry: &str, params: &StepParams
     bindings.extend(buffers.iter().map(|&(binding, b)| buffer(binding, b)));
     let clock_plan = device.create_buffer_shared(48);
     clock_plan.zero_fill();
-    bindings.push(buffer(46, &clock_plan));
+    if !buffers.iter().any(|&(binding, _)| binding == 46) {
+        bindings.push(buffer(46, &clock_plan));
+    }
     let mut enc = device.create_encoder("gpu_flip.step.pass");
     enc.dispatch_compute(&pipeline, &bindings, groups(threads), "gpu_flip.step.pass");
     enc.commit_and_wait_completed();
@@ -1636,7 +1638,7 @@ impl StepState {
         let main_water = if separate {
             enc.dispatch_compute(
                 &pipes.separate_pin,
-                &[uniform(&base), buffer(6, &l.solve_water), buffer(10, &l.s), buffer(42, &l.let_go), buffer(5, &l.contact_water)],
+                &[uniform(&base), buffer(46, step.clock_plan), buffer(6, &l.solve_water), buffer(10, &l.s), buffer(42, &l.let_go), buffer(5, &l.contact_water)],
                 cells_groups,
                 "gpu_flip.step.separate_pin",
             );
@@ -1764,6 +1766,7 @@ impl StepState {
                 &pipes.separate_update,
                 &[
                     uniform(&base),
+                    buffer(46, step.clock_plan),
                     buffer(6, &l.contact_water),
                     buffer(5, &l.rhs),
                     buffer(8, &l.pressure),

@@ -252,6 +252,13 @@ pub fn substep_duration(interval_duration: f32, substeps: u32) -> f32 {
     interval_duration / substeps.max(1) as f32
 }
 
+/// Use the same duration representation as the GPU before choosing a count.
+/// Subtracting f64 transport endpoints can straddle an integer by a few
+/// bits even when both intervals encode the same f32 duration.
+pub fn substeps_for_interval(duration: f32, nominal: u32) -> u32 {
+    (f64::from(duration / TICK as f32) * f64::from(nominal)).ceil().max(1.0) as u32
+}
+
 /// Grid velocity clamp per component, in cells per substep
 /// (taichi_elements `g2p2g_allowed_cfl`).
 pub const VELOCITY_CLAMP_CFL: f32 = 0.9;
@@ -341,6 +348,31 @@ pub fn solid_bytes(nodes: [u32; 3]) -> u64 {
 mod tests {
     use super::*;
     use crate::node_graph::ports::std430_stride;
+
+    #[test]
+    fn matter_export_substeps_ignore_frame_partition_roundoff() {
+        use manifold_physics::clock::SimulationClock;
+        let run = |stride: u32| {
+            let mut clock = SimulationClock::default();
+            let mut schedule = Vec::new();
+            for frame in 0..=120 / stride {
+                let accepted = clock.advance(f64::from(frame * stride) * TICK, TICK, 1.0, 0.0, false, true);
+                let substeps = substeps_for_interval(accepted.duration().0 as f32, 34);
+                for i in 0..accepted.ticks {
+                    let dt = substep_duration(accepted.interval(u64::from(i)).unwrap().duration().0 as f32, substeps);
+                    schedule.push((substeps, dt.to_bits()));
+                }
+            }
+            schedule
+        };
+        let reference = run(1);
+        assert!(reference.iter().all(|&(steps, _)| steps == 34));
+        for stride in [2, 3, 4, 6] {
+            assert_eq!(run(stride), reference, "export grouping {stride}");
+        }
+        assert_eq!(substeps_for_interval((2.0 * TICK) as f32, 34), 68);
+        assert_eq!(substeps_for_interval((1.5 * TICK) as f32, 34), 51);
+    }
 
     #[test]
     fn matter_records_match_their_channel_layouts() {

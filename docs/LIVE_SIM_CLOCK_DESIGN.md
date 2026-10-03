@@ -1,8 +1,6 @@
 # Live sim clock — water keeps transport time under load
 
-**Status:** IMPLEMENTED, IN REVIEW · 2026-10-03 · BUG-7qzk. Owed: lead-run GPU/visual verification. See [section 9](#9-current-implementation-seam-and-outstanding-work).
-**Prerequisites:** BUG-gjys is present in slot-1 at `b424888f6`. Section 8 decisions were resolved by Peter on 2026-10-03.
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md sections 5–6 before starting any phase.
+**Status:** SHIPPED · 2026-10-03 · BUG-7qzk. Owed: lead GPU and visual verification. See [section 9](#9-current-implementation-seam-and-outstanding-work).
 
 <!-- index: GPU FLIP timing audit, transport-locked live intervals, timestamped hits, reference-engine CFL rule, Box3D substeps and editor HUD lag; shared runtime intervals, duration-aware whitewater and completed-time HUD plumbing; lead GPU verification pending. -->
 
@@ -52,7 +50,7 @@ Re-derive with `rg -n 'TICK|FIXED_TICK|60\.0|tick_seconds|step_dt|simulation_tim
 
 **D3 — Sample/apply by time, identify by epoch/sequence.** Preserve authored replay and event ordering/receipts. Half-open [start,end) intervals own events; ties retain input order. Integrate to the hit, apply once, then continue. Already tick-quantized hits retain their tick; never round again to a stretched edge. Held input discards impulses as today. Rejected: one frame-wide impulse lattice applied at its beginning or end.
 
-**D4 — Preserve control semantics.** Reset counter changes (undo included), setup changes, explicit restart and backward seek reseed once. Pause retains epoch and water. `SimulationClock` integrates Speed anchors on the transport timeline; source capture, rigid impulses, fluid workers, GPU domains and offline history drain use that mapping. An edit applies from its observation onward. Accepted frames retain immutable history snapshots, so later edits and export-frame partitioning cannot change their interval endpoints. Speed 0 marks input held but can complete the preceding interval at its previous speed. Beats remain transport authority; Seconds belong at the sim seam. No serialization changes.
+**D4 — Preserve control semantics.** Reset counter changes (undo included), setup changes, explicit restart and backward seek reseed once. Pause retains epoch and water. `SimulationClock` integrates Speed anchors on the transport timeline; source capture, rigid impulses, fluid workers, GPU domains and offline history drain use that mapping. An edit applies from its observation or the accepted transport endpoint, whichever is later. A late source observation reads its original historical time but cannot retime accepted work. Accepted frames retain immutable history snapshots, so later edits and export-frame partitioning cannot change their interval endpoints. Speed 0 marks input held but can complete the preceding interval at its previous speed. Beats remain transport authority; Seconds belong at the sim seam. No serialization changes.
 
 **D5 — Port CFL, do not invent it.** Use section 4's reference rule. Existing travel_cells sizes the spatial halo after dt selection; it is not a replacement timestep heuristic.
 
@@ -65,6 +63,8 @@ Re-derive with `rg -n 'TICK|FIXED_TICK|60\.0|tick_seconds|step_dt|simulation_tim
 `manifold_physics::clock::SimulationClock` owns transport/Speed anchors, epochs and accepted `ClockFrame` intervals. `manifold_physics::stepping` owns `FramePlan`, `StepInterval`, CFL/minimum/final-cap scheduling, event traversal and completion receipts. Numerical helpers return `LiveStepOutcome<T>`: a defined value plus an advisory diagnostic, never a live-frame stopping `Err`. Stateless particle consumers use the physics duration adapter on the playback-owned delta.
 
 Ordinals identify accepted work in both modes. Authored samples and pose velocities use accepted interval boundaries. `EventQueue::begin_interval` delivers original source timestamps in half-open intervals. GPU scheduling consumes current-state maxima directly in encoder order. Fenced state readbacks carry completion endpoints and cap/error flags; submission alone never establishes completion. Coupled rigid settlement uses the fluid interval stored in `PendingTick`.
+
+GPU FLIP encodes the same maximum numerical-slot shape on later ticks even when CFL selects fewer active steps. An inactive slot must preserve persistent state, including the separating-solid pressure mask; density-solve scratch cannot update the next active step’s constraints. Replay storage reserves the full measured shape between visits. Matter selects its interval subdivision count from the same f32 duration the GPU consumes, so f64 transport subtraction noise cannot change an export’s numerical schedule.
 
 The test-only `live_sim_clock_reference.rs` remains a CPU specification oracle. It is not a second runtime clock. GPU FLIP retains the reference maximum of six numerical steps even if authored Steps requests a larger minimum; the native final-step rule then owns the remainder.
 

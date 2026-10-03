@@ -1235,6 +1235,9 @@ fn separate_pin(@builtin(global_invocation_id) gid: vec3<u32>) {
     if idx >= cell_total() {
         return;
     }
+    // This mask is history, not scratch: inactive clock slots must not
+    // change next step's pressure constraints using stale solve data.
+    if !clock_active() { return; }
     let n = lattice();
     let m = n + vec3<i32>(1);
     let first = u.tick_index == 0 && u.step_in_tick == 0;
@@ -1255,6 +1258,9 @@ fn separate_update(@builtin(global_invocation_id) gid: vec3<u32>) {
     if idx >= cell_total() {
         return;
     }
+    // This mask is history, not scratch: inactive clock slots must not
+    // change next step's pressure constraints using stale solve data.
+    if !clock_active() { return; }
     let n = lattice();
     let m = n + vec3<i32>(1);
     let p = unflatten(idx, n);

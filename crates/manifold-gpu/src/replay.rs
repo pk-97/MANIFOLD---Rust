@@ -14,12 +14,8 @@ pub const REPLAY_RING: usize = 3;
 
 /// Commands per recording chunk.
 pub(crate) const CHUNK_COMMANDS: usize = 512;
-/// Chunks per entry; a span that needs more encodes the rest directly.
-pub(crate) const MAX_CHUNKS: usize = 64;
 /// Bytes per uniform arena.
 pub(crate) const ARENA_BYTES: usize = 256 * 1024;
-/// Arenas per entry.
-pub(crate) const MAX_ARENAS: usize = 64;
 /// Uniform slot alignment: the constant-buffer offset rule on non-Apple GPUs.
 pub(crate) const BYTES_ALIGN: usize = 256;
 /// Most bindings one recordable dispatch carries, the sizes buffer included.
