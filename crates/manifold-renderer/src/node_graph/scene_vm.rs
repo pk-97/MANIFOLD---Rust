@@ -1358,10 +1358,20 @@ fn trace_scene_object(
                 own(source);
             }
         }
-        // The whitewater stepping on this domain's clock is the water's.
+        // The whitewater stepping on this domain's clock is the water's: the
+        // legacy step reads its ticks, the per-tick step its epoch.
+        let mut water_nodes = vec![n.id];
         for whitewater in domain_level.nodes.iter().filter(|node| node.type_id == "node.whitewater_step") {
-            if domain_level.producer(whitewater.id, "ticks").is_some_and(|(from, _)| from == n.id) {
+            if ["ticks", "epoch"].iter().any(|port| domain_level.producer(whitewater.id, port).is_some_and(|(from, _)| from == n.id)) {
                 own(whitewater);
+                water_nodes.push(whitewater.id);
+            }
+        }
+        // A shared value wired into the water's own nodes is the water's
+        // control: the whitewater budget feeds the step and the state at once.
+        for wire in domain_level.wires.iter().filter(|wire| water_nodes.contains(&wire.to_node)) {
+            if let Some(value) = domain_level.node(wire.from_node).filter(|node| node.type_id == "node.value") {
+                own(value);
             }
         }
         for index in 0..super::fluid_role::MAX_FLUID_ROLES {
@@ -1825,6 +1835,23 @@ mod tests {
         let vm = SceneVm::from_def(&graph).unwrap();
         let SceneObjectVm::Known(row) = &vm.objects[0] else { panic!("fluid surface row"); };
         assert_eq!(row.fluid_controls, ["n4", "n7"].map(NodeId::new), "n8 steps no clock of this water");
+    }
+
+    #[test]
+    fn scene_physics_fluid_controls_own_values_wired_into_the_water() {
+        let scene = with_param(node(1, RENDER_SCENE_TYPE_ID, None), "objects",
+            SerializedParamValue::Float { value: 1.0 });
+        let graph = def(vec![scene, node(2, "system.final_output", None),
+            node(3, "node.scene_object", Some("Fluid")),
+            node(4, manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID, None),
+            node(7, "node.whitewater_step", None), node(8, "node.whitewater_step", None),
+            node(9, "node.value", None), node(10, "node.value", None)],
+            vec![wire(1, "color", 2, "in"), wire(3, "out", 1, "object_0"),
+                wire(4, "vertices", 3, "vertices"), wire(4, "epoch", 7, "epoch"),
+                wire(9, "out", 7, "capacity"), wire(10, "out", 8, "capacity")]);
+        let vm = SceneVm::from_def(&graph).unwrap();
+        let SceneObjectVm::Known(row) = &vm.objects[0] else { panic!("fluid surface row"); };
+        assert_eq!(row.fluid_controls, ["n4", "n7", "n9"].map(NodeId::new), "n10 feeds no node of this water");
     }
 
     #[test]

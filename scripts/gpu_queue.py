@@ -358,6 +358,13 @@ def run_queued(command, label=None, **kwargs):
     except UnsupportedCargoInvocation as err:
         print(f"gpu_queue: {err}", file=sys.stderr)
         return 2
+    import gate_passes
+    passed = gate_passes.queued_proof(command, Path.cwd()) if kind == 'test' else None
+    if kind == 'test' and any('gpu-proofs' in arg for arg in command) and not passed and not _cargo_has_no_run(command):
+        print('[NO REUSE] gpu-proofs: command is outside the canonical serial proof grammar',
+              flush=True)
+    if passed and passed.reused():
+        return 0
     if build_command is not None and (_held_depth or _ancestor_holds(kwargs.get("directory"))):
         print("gpu_queue: cannot prebuild Cargo while the GPU lock is already held",
               file=sys.stderr)
@@ -369,6 +376,7 @@ def run_queued(command, label=None, **kwargs):
         if kind == "build" or (kind == "test" and _cargo_has_no_run(command)):
             return 0
     with hold(label, **kwargs):
+        started = time.monotonic()
         try:
             child = subprocess.Popen(command)
         except OSError as err:
@@ -382,7 +390,19 @@ def run_queued(command, label=None, **kwargs):
         previous = {s: signal.signal(s, forward)
                     for s in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
         try:
-            return child.wait()
+            code = child.wait()
+            if passed:
+                seconds = time.monotonic() - started
+                from gpu_proofs_gate import HANG_FLOOR_S
+                if code == 0 and seconds > HANG_FLOOR_S:
+                    # Raw cargo has no per-test watchdog/timings. A total
+                    # shorter than its minimum allowance proves no test
+                    # exceeded it; longer runs need the instrumented wrapper.
+                    print('[NO REUSE] gpu-proofs: raw cargo duration cannot establish '
+                          'per-test hang allowances; use gpu_proofs_gate.py', flush=True)
+                else:
+                    passed.save(code, seconds)
+            return code
         finally:
             for sig, handler in previous.items():
                 signal.signal(sig, handler)
