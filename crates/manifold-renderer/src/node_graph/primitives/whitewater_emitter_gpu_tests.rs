@@ -903,6 +903,7 @@ fn whitewater_dust_step_publishes_a_distinct_population() {
             shape,
             count: Some(32),
             ticks: 1,
+            dt: crate::node_graph::fluid::TICK as f32,
             epoch: 0,
             seed: 0.0,
             gravity: [0.0, -9.81, 0.0],

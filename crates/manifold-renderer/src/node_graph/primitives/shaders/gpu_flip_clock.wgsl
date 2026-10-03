@@ -156,7 +156,7 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     let speed_limit_step = marker_clock_params.cfl * marker_clock_params.cell_size /
-        marker_clock_plan[0].step_dt;
+        marker_clock_params.frame_duration;
     let bin = min(u32(floor(speed / speed_limit_step)),
         max(marker_clock_params.max_frame_steps, 1u) - 1u);
     atomicAdd(&marker_histogram_atomic[bin], 1u);
@@ -170,7 +170,9 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 
 // Finish the native _getMarkerParticleSpeedLimit policy after the scheduler
-// has selected this numerical interval. The limit is consumed by the
+// has selected this numerical interval. Native removal uses the whole
+// accepted frame duration (_currentFrameDeltaTime), even at a CFL/event split.
+// The limit is consumed by the
 // particle write pass after advection; it never changes the CFL maximum.
 @compute @workgroup_size(1)
 fn finalize_marker_limit() {
@@ -178,7 +180,7 @@ fn finalize_marker_limit() {
     if state.live_mode == 0u || state.step_dt <= 0.0 {
         return;
     }
-    let speed_limit_step = clock.cfl * clock.cell_size / state.step_dt;
+    let speed_limit_step = clock.cfl * clock.cell_size / clock.frame_duration;
     let max_steps = max(clock.max_frame_steps, 1u);
     var live_count = 0u;
     for (var b = 0u; b < max_steps; b = b + 1u) {

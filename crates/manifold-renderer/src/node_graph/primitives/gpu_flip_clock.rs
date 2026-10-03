@@ -465,7 +465,7 @@ impl GpuFlipClock {
 
     /// Recompute the native marker threshold from the post-step velocities and
     /// remove over-limit particles in place. This does not touch the clock
-    /// cursor; it only consumes the accepted step duration in the plan.
+    /// cursor; it uses the accepted frame interval, as native _currentFrameDeltaTime.
     pub(crate) fn remove_extreme(
         &self,
         encoder: &mut GpuEncoder,
@@ -926,7 +926,7 @@ mod gpu_tests {
             let expected_speed = if count == 0 { 0.0 } else { speed };
             assert!((f64::from(result.maximum_speed) - expected_speed).abs() < 1e-5);
             let expected_limit = p.max_frame_steps as f32 * p.cfl * p.cell_size
-                / expected_dt(&p, expected_speed, CflRestrictions::default());
+                / p.frame_duration;
             assert!((result.marker_limit - expected_limit).abs() < 1e-5);
             assert!(
                 (result.dt - expected_dt(&p, expected_speed, CflRestrictions::default())).abs()
@@ -943,51 +943,62 @@ mod gpu_tests {
         // threshold to (bin + 4) frames.  The outlier count is deliberately
         // above six so the relative clamp cannot hide that threshold.
         let device = crate::test_device();
-        let count = 20_000u32;
-        let clock = GpuFlipClock::new(&device, count, 1, 1);
-        let markers = device.create_buffer_shared(u64::from(count) * 32);
-        let empty = device.create_buffer_shared(96);
-        let readback = device.create_buffer_shared(48);
-        let mut particles = vec![particle(1.0); count as usize];
-        for marker in particles.iter_mut().take(10) {
-            marker.velocity = [10.0, 0.0, 0.0];
+        for (count, duration) in [(300u32, 0.25), (300, 1.0), (20_000, 1.0)] {
+            let clock = GpuFlipClock::new(&device, count, 1, 1);
+            let markers = device.create_buffer_shared(u64::from(count) * 32);
+            let empty = device.create_buffer_shared(96);
+            let readback = device.create_buffer_shared(48);
+            let mut particles = vec![particle(1.0); count as usize];
+            for (i, marker) in particles.iter_mut().enumerate() { marker.id = i as u32 + 101; }
+            for marker in particles.iter_mut().take(10) {
+                marker.velocity = [10.0, 0.0, 0.0];
+            }
+            unsafe {
+                markers.write(0, bytemuck::cast_slice(&particles));
+            }
+            let p = GpuFlipClockParams { frame_duration: duration, ..params() };
+            let mut enc = device.create_encoder("flip-clock marker histogram proof");
+            clock.begin_frame(&mut enc, &p);
+            let plan = clock.dispatch(
+                &mut enc,
+                GpuFlipClockInputs {
+                    marker_particles: &markers,
+                    marker_count: count,
+                    obstacle_vertices: &empty,
+                    obstacle_count: 0,
+                    source_vertices: &empty,
+                    source_count: 0,
+                    live_hits: &markers,
+                    live_hit_count: 0,
+                    event_impulses: &markers,
+                    impulse_stride: 0,
+                    impulse_nodes: [2, 2, 2],
+                    impulse_origin: [0.0; 3],
+                    impulse_spacing: 1.0,
+                    body_rows: &markers,
+                    body_rows_offset: 0,
+                    body_reaction: &markers,
+                },
+                &p,
+            );
+            clock.remove_extreme(&mut enc, &markers, count, &p);
+            enc.copy_buffer_to_buffer(plan.buffer(), &readback, 48);
+            enc.commit_and_wait_completed();
+            let result = read_plan(&readback);
+            assert_eq!(result.maximum_speed, 10.0);
+            let speeds: Vec<f64> = particles.iter().map(|m| f64::from(m.velocity[0])).collect();
+            let expected_limit = manifold_physics::stepping::marker_particle_speed_limit(
+                &speeds, manifold_core::Seconds(f64::from(p.frame_duration)),
+                f64::from(p.cell_size), f64::from(p.cfl), p.max_frame_steps,
+                manifold_physics::stepping::MarkerSpeedLimitConfig::default(), &mut [0; 6],
+            ).value as f32;
+            assert_eq!(result.marker_limit, expected_limit);
+            let got = unsafe { std::slice::from_raw_parts(markers.mapped_ptr().unwrap().cast::<FluidParticle>(), count as usize) };
+            for (before, after) in particles.iter().zip(got) {
+                assert_eq!(after.position_radius[3] > 0.0, before.velocity[0] <= expected_limit);
+                assert_eq!(before.id, after.id);
+            }
         }
-        unsafe {
-            markers.write(0, bytemuck::cast_slice(&particles));
-        }
-        let p = params();
-        let mut enc = device.create_encoder("flip-clock marker histogram proof");
-        clock.begin_frame(&mut enc, &p);
-        let plan = clock.dispatch(
-            &mut enc,
-            GpuFlipClockInputs {
-                marker_particles: &markers,
-                marker_count: count,
-                obstacle_vertices: &empty,
-                obstacle_count: 0,
-                source_vertices: &empty,
-                source_count: 0,
-                live_hits: &markers,
-                live_hit_count: 0,
-                event_impulses: &markers,
-                impulse_stride: 0,
-                impulse_nodes: [2, 2, 2],
-                impulse_origin: [0.0; 3],
-                impulse_spacing: 1.0,
-                body_rows: &markers,
-                body_rows_offset: 0,
-                body_reaction: &markers,
-            },
-            &p,
-        );
-        clock.remove_extreme(&mut enc, &markers, count, &p);
-        enc.copy_buffer_to_buffer(plan.buffer(), &readback, 48);
-        enc.commit_and_wait_completed();
-        let result = read_plan(&readback);
-        assert_eq!(result.maximum_speed, 10.0);
-        let expected_limit = p.max_frame_steps as f32 * (p.cfl * p.cell_size
-            / expected_dt(&p, 10.0, CflRestrictions::default()));
-        assert_eq!(result.marker_limit, expected_limit);
     }
 
     #[test]

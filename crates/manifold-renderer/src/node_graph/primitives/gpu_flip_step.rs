@@ -1,8 +1,8 @@
 //! `node.gpu_flip_step` — one GPU FLIP water step (docs/GPU_FLIP_PRESSURE_SOLVE.md
 //! section 1 (the step)): sort, particle distance, particles to faces,
 //! extend, forces, solids, water mask from φ, divergence, pressure solve,
-//! projection, constraint, extend, density projection, then the particles
-//! move, Steps times a tick. One node
+//! projection, extend, constraint, density projection, then the particles
+//! move, remove crowded/extreme markers, compact, and emit inflow. One node
 //! because no pass has a consumer outside the step and the solve between them
 //! is a barriered reduction; the hand kernels live in
 //! `shaders/gpu_flip_step.wgsl`, the solver in [`super::gpu_flip_pressure`].
@@ -12,14 +12,15 @@
 //! grid output is this node's own storage, exactly one record per padded
 //! cell, reallocated when the lattice changes.
 //!
-//! Inflow emission, the inflow constrained velocity and outflow removal port
+//! Extrapolation order/count, marker removal, inflow emission/placement,
+//! inflow constrained velocity and outflow removal port
 //! FLIP Fluids `fluidsimulation.cpp` (MIT, Copyright (C) 2026 Ryan L. Guy &
 //! Dennis Fassbaender; see THIRD_PARTY_NOTICES.md), line refs in the shader.
 //!
 //! The narrow-band transport, distance, and reseeding stages port Ferstl et
 //! al., "Narrow Band FLIP for Liquid Simulations", Computer Graphics Forum
 //! 35(2), 225–232 (2016), doi:10.1111/cgf.12825. FLIP Fluids is credited
-//! above only for the inflow and outflow portions reused by this step.
+//! above for the engine step policies reused by this stage.
 //!
 //! The density projection is T. Kugelstadt, A. Longva, N. Thuerey and
 //! J. Bender, "Implicit Density Projection for Volume Conserving Liquids",
@@ -70,6 +71,8 @@ pub(crate) const FACE_VALID_LAYERS: u32 = 2;
 pub(crate) const AUTO_PRESSURE_ITERATIONS: u32 = MAX_ITERATIONS;
 /// The speed the CFL guard is sized for, m/s.
 pub(crate) const DEFAULT_TOP_SPEED: f32 = 20.0;
+/// Configured engine CFL, shared with the clock.
+pub(crate) const ENGINE_CFL: u32 = 5;
 
 /// The CFL guard: the farthest one RK3 stage moves a particle, in cells,
 /// `top_speed` over one step rounded up. The inputs are f32, so a ratio
@@ -78,13 +81,9 @@ pub(crate) fn travel_cells(top_speed: f32, step_dt: f32, cell_size: f32) -> u32 
     (f64::from(top_speed) * f64::from(step_dt) / f64::from(cell_size) - 1e-4).ceil().max(1.0) as u32
 }
 
-/// Layers both face grids are extended by, the saved one after the transfer
-/// and the projected one after the solve: FLIP Fluids'
-/// `_extrapolateFluidVelocities`, ⌈√3 · CFL⌉ + 3, with the CFL guard's
-/// travel in cells for the engine's CFL number (the one deviation; the
-/// engine sizes its substeps to CFL 5, ours are fixed by Steps).
-pub(crate) fn band_layers(travel: u32) -> u32 {
-    (3f64.sqrt() * f64::from(travel)).ceil() as u32 + 3
+/// FLIP Fluids _extrapolateFluidVelocities: configured CFL, never travel.
+pub(crate) fn band_layers(cfl: u32) -> u32 {
+    (3f64.sqrt() * f64::from(cfl)).ceil() as u32 + 3
 }
 
 /// Bytes of the step's face grid at `cells`: one record per padded cell.
@@ -363,6 +362,7 @@ struct Pipelines {
     /// The pockets at the solve level: leaders cleared, cells coarsened,
     /// labels moved to the level.
     pocket_coarse: [GpuComputePipeline; 3],
+    remove_crowded: GpuComputePipeline,
     emit_flags: GpuComputePipeline,
     emit_write: GpuComputePipeline,
     tiles_classify: GpuComputePipeline,
@@ -427,6 +427,7 @@ impl Pipelines {
             separate_update: pipe("separate_update"),
             pocket_flux: [pipe("pocket_flux_pressure"), pipe("pocket_flux_density")],
             pocket_coarse: [pipe("pocket_leader_clear"), pipe("pocket_coarsen"), pipe("pocket_relabel")],
+            remove_crowded: pipe("remove_crowded_markers"),
             emit_flags: pipe("emit_flags"),
             emit_write: pipe("emit_write"),
             tiles_classify: pipe("tiles_classify"),
@@ -647,8 +648,6 @@ pub(crate) struct StepState {
     /// everywhere (`tiles_fill` ran); false until the first step on a lattice.
     filled: bool,
     sorted: Option<GpuBuffer>,
-    /// With sources, the emitted particles re-sorted from `sorted`.
-    resorted: Option<GpuBuffer>,
     /// The emission flags' scan, one word a half-cell site.
     emit_scan: PrefixScan,
     /// The face grid output: exactly [`face_bytes`] of the current lattice.
@@ -1013,7 +1012,7 @@ impl StepState {
     }
 
     /// Size every array for `cells` and `slots` before anything is encoded;
-    /// `sources` adds the emission's scan and second sorted array.
+    /// `sources` adds the emission scan; removal reuses the sorted array.
     fn reserve(&mut self, device: &GpuDevice, cells: [u32; 3], slots: u64, ring_max: u32, sources: bool, narrow_enabled: bool, interior_wired: bool) -> Result<(), String> {
         if self.zeros.is_none() {
             let zeros = device.try_create_buffer_shared(ZERO_BYTES)?;
@@ -1086,10 +1085,6 @@ impl StepState {
             self.sorted = Some(allocate(device, sorted)?);
         }
         if sources {
-            if self.resorted.as_ref().is_none_or(|buffer| buffer.size < sorted) {
-                self.resorted = None;
-                self.resorted = Some(allocate(device, sorted)?);
-            }
             self.emit_scan.buffer(device, emit_sites(cells) as usize)?;
         }
         if narrow_enabled {
@@ -1181,7 +1176,7 @@ impl StepState {
         restore
     }
 
-    fn encode(&mut self, device: &GpuDevice, enc: &mut GpuEncoder, step: &Step<'_>) -> Result<(), String> {
+    fn encode(&mut self, device: &GpuDevice, enc: &mut GpuEncoder, step: &Step<'_>, clock_params: &GpuFlipClockParams) -> Result<(), String> {
         let pipes = self.pipelines.as_ref().expect("step pipelines built by prepare_pipelines at install");
         let (Some(l), Some(tiles), Some(sorted), Some(out_faces)) = (self.lattice.as_ref(), self.tiles.as_ref(), self.sorted.as_ref(), self.faces.as_ref()) else {
             return Err("the step's storage was not reserved".into());
@@ -1243,68 +1238,6 @@ impl StepState {
             "gpu_flip.step.solid_distance",
         );
         self.sorter.encode(device, enc, &sort_job(step.particles, sorted), &SORT_LABELS)?;
-        // Sources emit after the last substep's move and before the transfer,
-        // as the engine's _updateFluidObjects runs between its advance and its
-        // next step: the flags mark each empty inflow site outside the solid,
-        // their scan ranks them, and each lands at the live count plus its
-        // rank, so the live particles stay one dense prefix with no atomics.
-        // The re-sort puts the emitted ones in their cells.
-        let sorted = match self.resorted.as_ref().filter(|_| p.region_count > 0) {
-            Some(resorted) => {
-                let sites = emit_sites(cells);
-                let ranges = self.sorter.ranges().ok_or("the cell ranges were not reserved")?;
-                let scan = self.emit_scan.buffer(device, sites as usize)?.clone();
-                let read = [
-                    uniform(&base),
-                    buffer(1, ranges),
-                    buffer(2, sorted),
-                    buffer(9, &l.corners),
-                    buffer(15, step.shapes),
-                    buffer(16, step.atlas),
-                    buffer(36, step.regions),
-                    buffer(46, step.clock_plan),
-                    buffer(37, &scan),
-                ];
-                enc.compute_memory_barrier_buffers();
-                enc.dispatch_compute(&pipes.emit_flags, &read, groups(sites), "gpu_flip.step.emit_flags");
-                enc.compute_memory_barrier_buffers();
-                self.emit_scan.encode_labelled(
-                    enc,
-                    sites as usize,
-                    ScanLabels {
-                        blocks: "gpu_flip.step.emit_scan.blocks",
-                        add: "gpu_flip.step.emit_scan.add",
-                    },
-                );
-                enc.dispatch_compute(
-                    &pipes.emit_write,
-                    &[
-                        uniform(&base),
-                        buffer(1, ranges),
-                        buffer(15, step.shapes),
-                        buffer(16, step.atlas),
-                        buffer(36, step.regions),
-                        buffer(46, step.clock_plan),
-                        buffer(37, &scan),
-                        buffer(38, sorted),
-                    ],
-                    groups(sites),
-                    "gpu_flip.step.emit_write",
-                );
-                enc.compute_memory_barrier_buffers();
-                self.sorter.encode(
-                    device,
-                    enc,
-                    &SortJob {
-                        count: capacity,
-                        ..sort_job(sorted, resorted)
-                    },
-                    &SORT_LABELS,
-                )?;
-                resorted
-            }
-            None => sorted,
-        };
         let cell_count: u64 = cells.iter().map(|&n| u64::from(n)).product();
         let face_count: u64 = cells.iter().map(|&n| u64::from(n) + 1).product();
         let ghost = StepParams { ghost: u32::from(step.ghost), ..base };
@@ -1743,12 +1676,15 @@ impl StepState {
         if step.dynamic {
             self.bodies.react(enc, &coupled, self.solver.tiles()?, &l.pressure, step.reaction)?;
         }
+        extend(enc, pipes, step.clock_plan, &base, face_groups, [&l.f, out_faces, &l.b], step.band, "gpu_flip.step.extend_new");
+        enc.compute_memory_barrier_buffers();
         // The engine constrains its velocity and its saved velocity to the
         // solids after the pressure solve, so FLIP's change is measured
         // between two constrained fields.
-        for (faces, label) in [(&l.f, "gpu_flip.step.constrain"), (&l.a, "gpu_flip.step.constrain_old")] {
+        for (faces, label) in [(out_faces, "gpu_flip.step.constrain"), (&l.a, "gpu_flip.step.constrain_old")] {
             enc.dispatch_compute(&pipes.constrain, &[buffer(46, step.clock_plan), uniform(&base), buffer(20, faces), buffer(10, &l.s), buffer(11, &l.v)], face_groups, label);
         }
+        enc.copy_buffer_to_buffer(out_faces, &l.f, out_faces.size);
         // One active-set update for the next step. The leftover divergence
         // is the divergence pass itself on the projected, constrained faces,
         // against the solid velocity after the reaction, so a body's own
@@ -1777,7 +1713,6 @@ impl StepState {
                 "gpu_flip.step.separate_update",
             );
         }
-        extend(enc, pipes, step.clock_plan, &base, face_groups, [&l.f, out_faces, &l.b], step.band, "gpu_flip.step.extend_new");
         // The density projection (module doc): its pressure's gradient is
         // taken off a copy of the new faces in `l.f`, and the move reads the
         // difference as a displacement. Air sits at zero at its centres.
@@ -1949,6 +1884,47 @@ impl StepState {
         } else if let Some(interior) = self.interior.as_ref() {
             enc.dispatch_compute(&pipes.narrow_disabled, &[uniform(&base), buffer(5, interior)], cells_groups, "gpu_flip.step.narrow.disabled");
         }
+        // Native removal precedes inflow. Stable cell ranks predate speed
+        // removal: an extreme marker still consumes a cell quota place.
+        enc.compute_memory_barrier_buffers();
+        self.sorter.encode(device, enc, &SortJob {
+            count: base.particles, ..sort_job(step.out, sorted)
+        }, &SORT_LABELS)?;
+        enc.compute_memory_barrier_buffers();
+        self.clock.as_ref().expect("live clock prepared")
+            .remove_extreme(enc, sorted, base.particles, clock_params);
+        let ranges = self.sorter.ranges().ok_or("the cell ranges were not reserved")?;
+        enc.compute_memory_barrier_buffers();
+        enc.dispatch_compute(&pipes.remove_crowded,
+            &[uniform(&base), buffer(46, step.clock_plan), buffer(1, ranges), buffer(38, sorted)],
+            cells_groups, "gpu_flip.step.remove_crowded");
+        enc.compute_memory_barrier_buffers();
+        self.sorter.encode(device, enc, &SortJob {
+            count: base.particles, ..sort_job(sorted, step.out)
+        }, &SORT_LABELS)?;
+        // New inflow is first transferred and advected by the following step.
+        if p.region_count > 0 {
+            let sites = emit_sites(cells);
+            let ranges = self.sorter.ranges().ok_or("the cell ranges were not reserved")?;
+            let scan = self.emit_scan.buffer(device, sites as usize)?.clone();
+            let emission = StepParams { capacity: base.particles, ..base };
+            enc.compute_memory_barrier_buffers();
+            enc.dispatch_compute(&pipes.emit_flags, &[
+                uniform(&emission), buffer(1, ranges), buffer(2, step.out),
+                buffer(9, &l.corners), buffer(15, step.shapes), buffer(16, step.atlas),
+                buffer(36, step.regions), buffer(46, step.clock_plan), buffer(37, &scan),
+            ], groups(sites), "gpu_flip.step.emit_flags");
+            enc.compute_memory_barrier_buffers();
+            self.emit_scan.encode_labelled(enc, sites as usize, ScanLabels {
+                blocks: "gpu_flip.step.emit_scan.blocks", add: "gpu_flip.step.emit_scan.add",
+            });
+            enc.dispatch_compute(&pipes.emit_write, &[
+                uniform(&emission), buffer(1, ranges), buffer(15, step.shapes),
+                buffer(16, step.atlas), buffer(36, step.regions), buffer(46, step.clock_plan),
+                buffer(37, &scan), buffer(38, step.out),
+            ], groups(sites), "gpu_flip.step.emit_write");
+        }
+        enc.compute_memory_barrier_buffers();
         // A failure is sticky across narrow enable toggles and is cleared only
         // by an epoch/lattice reset.  Never-enabled dense steps use the
         // existing zero storage, so they do not acquire a new scratch word.
@@ -2020,7 +1996,7 @@ fn read_epoch(value: f32) -> Result<u32, String> {
 crate::primitive! {
     name: GpuFlipStep,
     type_id: "node.gpu_flip_step",
-    purpose: "Advance GPU FLIP water one 60 Hz tick in Steps equal substeps (1 by default); each substep sorts the particles into the lattice's cells, gathers their velocity onto the cell faces, adds gravity and the scene's forces and impulses, makes the water incompressible against the tank walls and the scene's solid bodies (a multigrid-preconditioned pressure solve, the free surface placed where the particles' distance crosses zero), moves crowded particles apart and sparse ones together so the water keeps its volume (a density projection, position only, when Volume Projection is 1), then moves every particle through the new velocity, blending FLIP and PIC by Flip Share, and keeps it out of the solid bodies (a particle a moving body swept over is removed). A face Closed Faces leaves open (bit 2d the low face of axis d, bit 2d + 1 the high one) drains: every wall stays solid, and a particle that ends a substep within 2 cells of an open face is removed. Water a moving solid seals off from air (and from any open face) does not take that solid's push, unless the bodies are in the solve.When dynamic_bodies is above 0, each body that takes a reaction joins the pressure solve with its own velocity, so the water pushes it and it pushes back in the same solve, and the step adds the pressure's and the friction's impulse on every body to the reaction. Outputs the moved particles, the step's face grid (valid at least 2 layers around the water) and the reaction, in place.",
+    purpose: "Advance GPU FLIP water through the accepted clock interval with CFL 5 and Steps minimum substeps (1 by default); each substep sorts the particles into the lattice's cells, gathers their velocity onto the cell faces, adds gravity and the scene's forces and impulses, makes the water incompressible against the tank walls and the scene's solid bodies (a multigrid-preconditioned pressure solve, the free surface placed where the particles' distance crosses zero), moves crowded particles apart and sparse ones together so the water keeps its volume (a density projection, position only, when Volume Projection is 1), then moves every particle through the new velocity, blending FLIP and PIC by Flip Share, and keeps it out of the solid bodies (a particle a moving body swept over is removed). A face Closed Faces leaves open (bit 2d the low face of axis d, bit 2d + 1 the high one) drains: every wall stays solid, and a particle that ends a substep within 2 cells of an open face is removed. Water a moving solid seals off from air (and from any open face) does not take that solid's push, unless the bodies are in the solve.When dynamic_bodies is above 0, each body that takes a reaction joins the pressure solve with its own velocity, so the water pushes it and it pushes back in the same solve, and the step adds the pressure's and the friction's impulse on every body to the reaction. Extrapolates projected velocity by 12 layers before constraining solids. Removes markers above 250 per cell and extreme velocities using the accepted interval, compacts survivors without changing their ids, then emits inflow for the next step. Outputs the moved particles, the step's face grid (valid at least 2 layers around the water) and the reaction, in place.",
     inputs: {
         particles: Array(FluidParticle) required,
         count: ScalarF32 optional,
@@ -2273,7 +2249,7 @@ impl Primitive for GpuFlipStep {
             Some(_) => ctx.scalar_or_param("region_count", 0.0).round().clamp(0.0, MAX_FLUID_ROLES as f32) as i32,
             None => 0,
         };
-        let band = band_layers(travel).max(FACE_VALID_LAYERS);
+        let band = band_layers(ENGINE_CFL).max(FACE_VALID_LAYERS);
         let restore_narrow = self.state.sync_narrow_history(epoch, box_min, h, cells, capacity, tick_index, narrow_enabled);
         if (narrow_enabled || restore_narrow || self.state.narrow_full_count) && out_slots != capacity {
             ctx.error(format!("{NAME}: Narrow Band history requires out to hold all {capacity} particle slots"));
@@ -2448,7 +2424,7 @@ impl Primitive for GpuFlipStep {
         let clock_params = GpuFlipClockParams {
             frame_duration: interval_duration as f32,
             cell_size: h,
-            cfl: 5.0,
+            cfl: ENGINE_CFL as f32,
             surface_condition: 1.0,
             surface_constant: 1.0,
             color_mixing_rate: 0.0,
@@ -2472,7 +2448,7 @@ impl Primitive for GpuFlipStep {
         }
         for k in 0..encoded_steps as i32 {
             step.restore_narrow = restore_narrow && k == 0;
-            step.count = if self.state.narrow_full_count || step.restore_narrow { capacity } else { count };
+            step.count = if k > 0 { out_slots } else if self.state.narrow_full_count || step.restore_narrow { capacity } else { count };
             let particles_for_step = if k > 0 { out } else { particles };
             let params = StepParams {
                 step_in_tick: k,
@@ -2512,15 +2488,10 @@ impl Primitive for GpuFlipStep {
                     clock_plan: &plan_buffer,
                     ..step
                 };
-            if let Err(error) = self.state.encode(gpu.device, gpu.native_enc, &iteration) {
+            if let Err(error) = self.state.encode(gpu.device, gpu.native_enc, &iteration, &clock_params) {
                 ctx.error(format!("{NAME}: {error}"));
                 return;
             }
-        self.state
-                    .clock
-                    .as_ref()
-                    .expect("live clock prepared")
-                    .remove_extreme(gpu.native_enc, out, step.count, &clock_params);
                 self.state.commit_mask(
                     gpu.native_enc,
                     &plan_buffer,
@@ -2711,6 +2682,7 @@ mod tests {
                 "particle_distance",
                 "subtract_pressure",
                 "constrain_solid_faces",
+                "remove_crowded_markers",
                 "density_source",
                 "faces_to_particles",
                 "tiles_classify",
@@ -2808,16 +2780,16 @@ mod tests {
         }
     }
 
-    /// The band is the engine's ⌈√3 · CFL⌉ + 3 on the travel, never under the
+    /// The band is the engine's ⌈√3 · CFL⌉ + 3, never under the
     /// face grid's guarantee.
     #[test]
-    fn band_layers_cover_the_travel() {
+    fn band_layers_match_configured_engine_cfl() {
         assert_eq!(travel_cells(DEFAULT_TOP_SPEED, 1.0 / 120.0, 0.0625), 3);
         assert_eq!(band_layers(3), 9);
         assert_eq!(band_layers(1), 5);
         assert_eq!(band_layers(5), 12, "the engine's 12 layers at its CFL 5");
-        for travel in 1..64 {
-            assert!(band_layers(travel) >= FACE_VALID_LAYERS);
-        }
+        assert_eq!(band_layers(8), 17);
+        assert_eq!(band_layers(0), 3);
+        assert_eq!(band_layers(ENGINE_CFL), 12);
     }
 }

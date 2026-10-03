@@ -134,6 +134,8 @@ MATTER_DOMAIN_FILTERS = ["matter_scene::", "matter_coupling::", "matter_look::",
 
 # Narrow rows win over EXPLICIT_ROWS: a path matching one gets only that row.
 NARROW_ROWS = [
+    ((RENDERER_SRC + "node_graph/primitives/gpu_flip_extension_tests.rs",),
+     (["gpu_flip_step_order_", "gpu_flip_extend_faces_"], [])),
     ((RENDERER_SRC + "node_graph/primitives/gpu_flip_clock.rs",
       RENDERER_SRC + "node_graph/primitives/shaders/gpu_flip_clock.wgsl"),
      (["gpu_flip_clock::gpu_tests::"], [])),
