@@ -497,9 +497,13 @@ mod gpu_tests {
         let (faces_slot, _) = harness.array::<FaceSample>(&[], 1);
         let (capped_slot, _) = harness.array::<u32>(&[], 2 * capacity + SOLVER_WORDS as usize);
         let (interior_out_slot, _) = harness.array::<f32>(&[], STEP_CELLS.iter().product());
+        // liquid_state's birth identity as its reset seeds it: next id, epoch,
+        // reserved base, full-reset request.
+        let next = input.iter().map(|p| p.id).max().unwrap_or(0) + 1;
+        let (identity_slot, _) = harness.array::<u32>(&[next, 1, 0, 0], 4);
 
         step.prepare_pipelines(&harness.device);
-        let inputs = vec![("particles", particles_slot), ("count", count_slot)];
+        let inputs = vec![("particles", particles_slot), ("count", count_slot), ("identity", identity_slot)];
         let (_, errors) = harness.run(
             step,
             &inputs,
