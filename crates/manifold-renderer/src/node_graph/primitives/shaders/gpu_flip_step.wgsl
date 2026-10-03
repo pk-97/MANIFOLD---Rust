@@ -91,9 +91,12 @@ struct Params {
     ring_max: u32,
     narrow_band: u32, // Ferstl 2016: 0 dense, 1 initialization, 2 band-masked.
     live_impulse_stride: u32,
-    clock_pad0: u32,
-    clock_pad1: u32,
-    clock_pad2: u32,
+    // The extension's layer this dispatch runs, from 1 (extend_layer).
+    extend_layer: u32,
+    // The extension's layer count.
+    extend_layers: u32,
+    // 1 when the extension's source is its target.
+    extend_in_place: u32,
 };
 
 struct CellRange {
@@ -184,6 +187,17 @@ struct ClockPlan {
 // The sorted particles, written past the live ones by emit_write.
 @group(0) @binding(38) var<storage, read_write> emitted: array<FluidParticle>;
 @group(0) @binding(46) var<storage, read> clock_plan: array<ClockPlan>;
+// The extension's record tiles (extend_classify, extend_reach): per tile,
+// bit 0 an invalid face and bits 8 + 8·axis + c a seed at local coordinate c;
+// the first layer that writes the tile, or EXTEND_NEVER; 1 when some layer
+// does; the tiles some layer writes, in tile order; the layers' triple.
+@group(0) @binding(48) var<storage, read_write> extend_marks: array<u32>;
+@group(0) @binding(49) var<storage, read_write> extend_first: array<u32>;
+@group(0) @binding(50) var<storage, read_write> extend_flags: array<u32>;
+@group(0) @binding(51) var<storage, read> extend_list: array<u32>;
+@group(0) @binding(52) var<storage, read_write> extend_args: array<u32>;
+// The extension's source: every record still at its source value.
+@group(0) @binding(53) var<storage, read> extend_source: array<FaceSample>;
 
 // Set by resolve_solid when it refuses a push-out past SOLID_PUSH.
 var<private> push_refused: u32 = 0u;
@@ -325,8 +339,156 @@ fn particles_to_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
     faces_out[idx] = out;
 }
 
-// One thread per face record, `faces_in` to `faces_out`. A valid face
-// (weight > 0) is copied. An invalid one takes the mean velocity of the
+// ---- The extension over its tiles (gpu_flip_step.rs extend) ----
+// Face records are tiled 8³, n / 8 + 1 tiles per axis so the records past the
+// lattice have tiles too. A layer runs only over the tiles it can change; a
+// record of a tile no layer writes ends as its source value with its absent
+// faces and w zeroed, which is what every layer would copy there.
+
+const EXTEND_NEVER: u32 = 0xffffffffu;
+
+fn extend_dims() -> vec3<i32> {
+    return vec3<i32>(u.n / TILE + vec3<u32>(1u));
+}
+
+fn extend_tile_total() -> u32 {
+    let t = extend_dims();
+    return u32(t.x * t.y * t.z);
+}
+
+var<workgroup> extend_bits: array<u32, 256>;
+
+// One workgroup per record tile, two records a thread: the tile's marks into
+// `extend_marks`, and each record's source value with its absent faces and w
+// zeroed into `faces_out`, the extension's target (in place, only a record
+// that changes is written). A seed is a valid face off the box walls, the
+// faces a layer fills from.
+@compute @workgroup_size(256)
+fn extend_classify(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) li: u32) {
+    if !clock_active() { return; }
+    let n = lattice();
+    let m = n + vec3<i32>(1);
+    let tile = wid.x;
+    let origin = unflatten(tile, extend_dims()) * i32(TILE);
+    var bits = 0u;
+    for (var half = 0u; half < 2u; half = half + 1u) {
+        let local = unflatten(li + 256u * half, vec3<i32>(i32(TILE)));
+        let p = origin + local;
+        if any(p > n) {
+            continue;
+        }
+        let idx = flatten(p, m);
+        let here = faces_in[idx];
+        var out = FaceSample(vec4<f32>(0.0), vec4<f32>(0.0));
+        for (var a = 0; a < 3; a = a + 1) {
+            if !face_exists(p, n, a) {
+                continue;
+            }
+            out.face_velocity[a] = here.face_velocity[a];
+            out.face_weight[a] = here.face_weight[a];
+            if here.face_weight[a] > 0.0 {
+                if p[a] > 0 && p[a] < n[a] {
+                    bits = bits | (1u << (8u + u32(local.x))) | (1u << (16u + u32(local.y))) | (1u << (24u + u32(local.z)));
+                }
+            } else {
+                bits = bits | 1u;
+            }
+        }
+        let same = all(bitcast<vec4<u32>>(out.face_velocity) == bitcast<vec4<u32>>(here.face_velocity))
+            && all(bitcast<vec4<u32>>(out.face_weight) == bitcast<vec4<u32>>(here.face_weight));
+        if u.extend_in_place == 0u || !same {
+            faces_out[idx] = out;
+        }
+    }
+    extend_bits[li] = bits;
+    workgroupBarrier();
+    for (var width = 128u; width > 0u; width = width >> 1u) {
+        if li < width {
+            extend_bits[li] = extend_bits[li] | extend_bits[li + width];
+        }
+        workgroupBarrier();
+    }
+    if li == 0u {
+        extend_marks[tile] = extend_bits[0];
+    }
+}
+
+// One thread per record tile, after extend_classify: the first layer that
+// writes the tile into `extend_first`, and 1 into `extend_flags` when some
+// layer does. Only a tile with an invalid face changes, and a face fills no
+// earlier than the layer equal to its distance from the nearest seed: at
+// least the Chebyshev gap from the tile's box to a seed tile's seed box. In
+// place, a tile that would start in a layer writing the source starts one
+// layer earlier, since that layer reads unstarted tiles from the source.
+// With `all_tiles` every tile starts at layer 1. An inactive clock slot
+// zeroes the layers' triple.
+@compute @workgroup_size(256)
+fn extend_reach(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !clock_active() {
+        if gid.x == 0u {
+            extend_args[0] = 0u;
+            extend_args[1] = 1u;
+            extend_args[2] = 1u;
+        }
+        return;
+    }
+    let t = gid.x;
+    if t >= extend_tile_total() {
+        return;
+    }
+    let dims = extend_dims();
+    let tile = unflatten(t, dims);
+    let layers = u.extend_layers;
+    var first = EXTEND_NEVER;
+    if u.all_tiles != 0u {
+        first = 1u;
+    } else if (extend_marks[t] & 1u) != 0u {
+        let reach = i32((layers + TILE - 1u) / TILE);
+        let lo = max(tile - vec3<i32>(reach), vec3<i32>(0));
+        let hi = min(tile + vec3<i32>(reach), dims - vec3<i32>(1));
+        let box_lo = tile * i32(TILE);
+        let box_hi = box_lo + vec3<i32>(i32(TILE) - 1);
+        var gap = EXTEND_NEVER;
+        for (var z = lo.z; z <= hi.z; z = z + 1) {
+            for (var y = lo.y; y <= hi.y; y = y + 1) {
+                for (var x = lo.x; x <= hi.x; x = x + 1) {
+                    let q = vec3<i32>(x, y, z);
+                    let seeds = extend_marks[flatten(q, dims)] >> 8u;
+                    if seeds == 0u {
+                        continue;
+                    }
+                    let masks = vec3<u32>(seeds & 255u, (seeds >> 8u) & 255u, seeds >> 16u);
+                    let seed_lo = q * i32(TILE) + vec3<i32>(firstTrailingBit(masks));
+                    let seed_hi = q * i32(TILE) + vec3<i32>(firstLeadingBit(masks));
+                    let d = max(max(seed_lo - box_hi, box_lo - seed_hi), vec3<i32>(0));
+                    gap = min(gap, u32(max(max(d.x, d.y), d.z)));
+                }
+            }
+        }
+        if gap <= layers {
+            first = max(gap, 1u);
+            if u.extend_in_place != 0u && first >= 2u && ((layers - first) & 1u) == 0u {
+                first = first - 1u;
+            }
+        }
+    }
+    extend_first[t] = first;
+    extend_flags[t] = u32(first != EXTEND_NEVER);
+}
+
+// A record for layer `extend_layer`: the last layer's output when its tile
+// started before this layer, else its source value.
+fn extend_face(idx: u32, started: bool) -> FaceSample {
+    if started {
+        return faces_in[idx];
+    }
+    return extend_source[idx];
+}
+
+// 512 threads a listed tile (the triple at `extend_args`), layer
+// `extend_layer` of the extension from the tile's first layer on: one thread
+// per face record, `faces_in` (and `extend_source`) to `faces_out`. A valid
+// face (weight > 0) is copied. An invalid one takes the mean velocity of the
 // valid faces of its component among its six grid neighbours and becomes
 // valid (weight 1) only if a non-wall neighbour seeds it. FLIP Fluids
 // GridUtils::_initializeStatusGridThread holds boundary samples DONE: they
@@ -334,17 +496,25 @@ fn particles_to_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
 // faces are walls; the transverse end rows are fluid cell centres, not the
 // engine's solid border cells. Keep their fluid samples eligible as seeds.
 @compute @workgroup_size(256)
-fn extend_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn extend_layer(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
-    let idx = gid.x;
-    if idx >= face_total() {
+    let tile = extend_list[gid.x >> 9u];
+    let k = u.extend_layer;
+    let first = extend_first[tile];
+    if first > k {
         return;
     }
     let n = lattice();
     let m = n + vec3<i32>(1);
-    let p = unflatten(idx, m);
+    let dims = extend_dims();
+    let p = unflatten(tile, dims) * i32(TILE) + unflatten(gid.x & 511u, vec3<i32>(i32(TILE)));
+    if any(p > n) {
+        return;
+    }
+    let idx = flatten(p, m);
+    let started = first < k;
     var out = FaceSample(vec4<f32>(0.0), vec4<f32>(0.0));
-    let here = faces_in[idx];
+    let here = extend_face(idx, started);
     for (var a = 0; a < 3; a = a + 1) {
         // Faces of component a span 0..=n on axis a and 0..n on the others.
         var top = n - vec3<i32>(1);
@@ -367,7 +537,12 @@ fn extend_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
                 if q[b] < 0 || q[b] > top[b] {
                     continue;
                 }
-                let neighbour = faces_in[flatten(q, m)];
+                // A step out of the tile takes the next tile's start.
+                var ready = started;
+                if q[b] / i32(TILE) != p[b] / i32(TILE) {
+                    ready = extend_first[flatten(q / i32(TILE), dims)] < k;
+                }
+                let neighbour = extend_face(flatten(q, m), ready);
                 if neighbour.face_weight[a] > 0.0 {
                     sum = sum + neighbour.face_velocity[a];
                     hits = hits + 1.0;

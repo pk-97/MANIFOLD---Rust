@@ -9,10 +9,10 @@
 //! fluidsimulation.cpp (solid face velocity, the constraint),
 //! pressuresolver.cpp (the pressure subtraction).
 
-use manifold_gpu::GpuBuffer;
+use manifold_gpu::{GpuBuffer, GpuDevice};
 
 use super::gpu_flip_atom_tests::{FACE_FLOATS, assert_close, face_grid_len, random_values};
-use super::gpu_flip_step::{StepParams, dispatch_pass, tile_total};
+use super::gpu_flip_step::{ExtendRig, StepParams, dispatch_pass, tile_total};
 use super::liquid_fill::LiquidFill;
 use super::liquid_surface_tests::{Harness, params, read};
 use crate::node_graph::fluid_particles::{CellRange, FaceSample, FluidParticle};
@@ -774,10 +774,103 @@ fn gpu_flip_particle_distance_is_the_engines_level_set() {
     }
 }
 
+/// A buffer holding `values`.
+fn shared<T: bytemuck::Pod>(device: &GpuDevice, values: &[T]) -> GpuBuffer {
+    let buffer = device.create_buffer_shared((size_of_val(values) as u64).max(16));
+    buffer.zero_fill();
+    if !values.is_empty() {
+        // SAFETY: shared buffer sized for `values`; no GPU work in flight.
+        unsafe { buffer.write(0, bytemuck::cast_slice(values)) };
+    }
+    buffer
+}
+
+/// A clock plan with ClockPlan.live_mode (word 11) and step_dt (word 0).
+fn clock_plan(device: &GpuDevice, live: bool, step_dt: f32) -> GpuBuffer {
+    let mut words = [0u32; 12];
+    words[0] = step_dt.to_bits();
+    words[11] = u32::from(live);
+    shared(device, &words)
+}
+
+/// `layers` layers of the step's extension over this file's lattice, out of
+/// place, the clock open.
+fn extend_on_gpu(faces: &[FaceSample], layers: u32) -> Vec<FaceSample> {
+    let device = crate::test_device();
+    let rig = ExtendRig::new(&device);
+    let [source, target, scratch] = [(); 3].map(|()| shared(&device, faces));
+    rig.run(&device, &lattice(), &clock_plan(&device, false, 0.0), [&source, &target, &scratch], layers);
+    read(&target, faces.len())
+}
+
+fn assert_same_bytes(got: &[FaceSample], want: &[FaceSample], n: [usize; 3], what: &str) {
+    let differ: Vec<usize> = (0..want.len()).filter(|&i| bytemuck::bytes_of(&got[i]) != bytemuck::bytes_of(&want[i])).collect();
+    if let Some(&i) = differ.first() {
+        let m = n.map(|v| v + 1);
+        let p = [i % m[0], (i / m[0]) % m[1], i / (m[0] * m[1])];
+        panic!("{what}: {} records differ, first {p:?}: {:?} vs {:?}", differ.len(), got[i], want[i]);
+    }
+}
+
+/// The extension over its tiles lands on the CPU layers byte for byte: every
+/// fixture, 1, 2, 5 and 12 layers (12 is the band at CFL 5), in place and
+/// out, the far tiles culled and every tile run, the clock open off and on
+/// the live clock. Out of place the source is untouched. A shut clock writes
+/// neither the source nor the target.
+#[test]
+fn gpu_flip_extend_faces_over_tiles_match_the_cpu_layers() {
+    use super::gpu_flip_extension_tests::{cpu_extend, extension_fixtures};
+    let device = crate::test_device();
+    let rig = ExtendRig::new(&device);
+    let plans = [clock_plan(&device, false, 0.0), clock_plan(&device, true, 1.0 / 180.0)];
+    let shut = clock_plan(&device, true, 0.0);
+    let mut runs = 0;
+    for n in [[20usize, 17, 9], [24, 40, 16]] {
+        for (name, faces) in extension_fixtures(n, 0xe7e ^ n[1] as u64) {
+            let garbage: Vec<FaceSample> = faces.iter().map(|f| FaceSample { velocity: f.weight, weight: f.velocity }).collect();
+            let mut want = vec![faces.clone()];
+            for _ in 0..12 {
+                want.push(cpu_extend(want.last().expect("a layer"), n));
+            }
+            for layers in [1u32, 2, 5, 12] {
+                for in_place in [false, true] {
+                    for all_tiles in [0u32, 1] {
+                        let what = format!("{name} {n:?}, {layers} layers, in place {in_place}, all tiles {all_tiles}");
+                        let plan = &plans[(layers + u32::from(in_place) + all_tiles) as usize % 2];
+                        let params = StepParams { n: n.map(|v| v as u32), all_tiles, ..StepParams::default() };
+                        let [source, other, scratch] = [&faces, &garbage, &garbage].map(|values| shared(&device, values));
+                        let target = if in_place { &source } else { &other };
+                        rig.run(&device, &params, plan, [&source, target, &scratch], layers);
+                        assert_same_bytes(&read::<FaceSample>(target, faces.len()), &want[layers as usize], n, &what);
+                        if !in_place {
+                            assert_same_bytes(&read::<FaceSample>(&source, faces.len()), &faces, n, &format!("{what}: the source"));
+                        }
+                        runs += 1;
+                    }
+                }
+            }
+            for (layers, in_place) in [(12, false), (12, true), (5, false), (5, true)] {
+                let what = format!("{name} {n:?}, {layers} layers, in place {in_place}, clock shut");
+                let params = StepParams { n: n.map(|v| v as u32), ..StepParams::default() };
+                let [source, other, scratch] = [&faces, &garbage, &garbage].map(|values| shared(&device, values));
+                let target = if in_place { &source } else { &other };
+                rig.run(&device, &params, &shut, [&source, target, &scratch], layers);
+                assert_same_bytes(&read::<FaceSample>(&source, faces.len()), &faces, n, &format!("{what}: the source"));
+                assert_same_bytes(&read::<FaceSample>(&other, faces.len()), &garbage, n, &format!("{what}: the target"));
+                // An odd count in place copies the source to scratch first,
+                // ungated, as before the tiles; nothing reads scratch after.
+                let scratch_want = if in_place && layers % 2 == 1 { &faces } else { &garbage };
+                assert_same_bytes(&read::<FaceSample>(&scratch, faces.len()), scratch_want, n, &format!("{what}: scratch"));
+            }
+        }
+    }
+    assert_eq!(runs, 2 * 8 * 4 * 2 * 2);
+}
+
 #[test]
 fn gpu_flip_extend_faces_fills_one_layer() {
     let faces = random_faces(0xe7e, true);
-    let got: Vec<FaceSample> = Pass::new().bind(3, &faces).run("extend_faces", &lattice(), 4, face_len(), face_len());
+    let got = extend_on_gpu(&faces, 1);
     let want = super::gpu_flip_extension_tests::cpu_extend(&faces, N);
     let mut filled = 0;
     for (i, (g, w)) in got.iter().zip(&want).enumerate() {
@@ -799,7 +892,7 @@ fn gpu_flip_extend_faces_waits_for_fluid_beside_walls() {
             let (mut faces, target) = wall_gap(N, axis, high);
             for layer in 0..2 {
                 let want = cpu_extend(&faces, N);
-                let got: Vec<FaceSample> = Pass::new().bind(3, &faces).run("extend_faces", &lattice(), 4, face_len(), face_len());
+                let got = extend_on_gpu(&faces, 1);
                 for (i, (g, w)) in got.iter().zip(&want).enumerate() {
                     for a in 0..3 {
                         close(g.velocity[a], f64::from(w.velocity[a]), 1.0, &format!("layer {layer} face {:?}/{a}", pad_coords(i)));
@@ -2204,13 +2297,12 @@ fn gpu_flip_step_order_extend_constraint_value_proof() {
     let (initial, wall) = moving_wall_fixture(N);
     assert_eq!(initial.len(), face_len());
     for cfl in [1, 3, 5, 8] {
+        let layers = super::gpu_flip_step::band_layers(cfl);
         let mut want = initial.clone();
-        let mut got = initial.clone();
-        for _ in 0..super::gpu_flip_step::band_layers(cfl) {
+        for _ in 0..layers {
             want = cpu_extend(&want, N);
-            got = Pass::new().bind(3, &got)
-                .run("extend_faces", &lattice(), 4, face_len(), face_len());
         }
+        let got = extend_on_gpu(&initial, layers);
         let mut open = vec![FaceSample { weight: [1.0; 4], ..FaceSample::default() }; face_len()];
         let mut moving = vec![FaceSample::default(); face_len()];
         open[wall].weight[0] = 0.5;

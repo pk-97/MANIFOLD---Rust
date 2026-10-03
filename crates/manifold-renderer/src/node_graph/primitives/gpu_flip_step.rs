@@ -127,6 +127,23 @@ pub(crate) fn ring_max(band: u32) -> u32 {
     (1 + band).div_ceil(TILE)
 }
 
+/// The extension's tiles per axis: 8³ face records, n / 8 + 1 a side, so the
+/// records past the lattice (p[a] = n[a]) have tiles too.
+pub(crate) fn extend_tile_counts(cells: [u32; 3]) -> [u32; 3] {
+    cells.map(|n| n / TILE + 1)
+}
+
+fn extend_tile_total(cells: [u32; 3]) -> u64 {
+    extend_tile_counts(cells).iter().map(|&t| u64::from(t)).product()
+}
+
+/// Bytes of the extension's tiles: four words a tile (marks, first layer,
+/// flag, list) and the layers' indirect triple.
+#[cfg(any(test, feature = "gpu-proofs"))]
+pub(crate) fn extend_scratch_bytes(cells: [u32; 3]) -> u64 {
+    4 * extend_tile_total(cells) * 4 + 12
+}
+
 /// Words of the tile counts: word 0 the cell set C's size, word k in
 /// 1..=ring_max + 1 the tiles with ring ≤ k, then the retired count, then
 /// the ring halves' parity.
@@ -151,7 +168,7 @@ pub(crate) fn tile_scratch_bytes(cells: [u32; 3], ring_max: u32) -> u64 {
 /// Bytes the step holds for itself at `cells` with `slots` particle slots,
 /// besides the sort's ranges and the solver's scratch: the sorted particles,
 /// [`LATTICE_CELL_ARRAYS`] cell arrays, the solid corners, six face grids, the pocket gate,
-/// the pocket sums, the coarse pockets and the tile table.
+/// the pocket sums, the coarse pockets, the tile table and the extension's tiles.
 #[cfg(any(test, feature = "gpu-proofs"))]
 pub(crate) fn scratch_bytes(cells: [u32; 3], slots: u64, ring_max: u32) -> u64 {
     let corners = cells.iter().map(|&n| u64::from(n) + 1).product::<u64>() * 4;
@@ -163,6 +180,7 @@ pub(crate) fn scratch_bytes(cells: [u32; 3], slots: u64, ring_max: u32) -> u64 {
         + pocket_sum_bytes(cells)
         + pocket_coarse_bytes(cells)
         + tile_scratch_bytes(cells, ring_max)
+        + extend_scratch_bytes(cells)
         + mask_saved_bytes(cells, slots.max(1))
 }
 
@@ -315,15 +333,19 @@ pub(crate) struct StepParams {
     pub(crate) solve_level: u32,
     /// 1: every tile is active (the test-only oracle, [`set_all_tiles`]).
     pub(crate) all_tiles: u32,
-    /// The ring a sparse pass's reads are capped at. Unused while the extend
-    /// is dense (design D-4); Phase 2's coarse levels take it.
+    /// The ring a sparse pass's reads are capped at. Unused: the extension
+    /// culls its own tiles ([`extend`]); Phase 2's coarse levels take it.
     pub(crate) ring_cap: u32,
     /// [`ring_max`] for this step: the table's extent.
     pub(crate) ring_max: u32,
     /// Ferstl 2016: 0 dense, 1 full-history initialization, 2 masked band.
     pub(crate) narrow_band: u32,
     pub(crate) live_impulse_stride: u32,
-    pub(crate) clock_pad: [u32; 3],
+    /// The extension's layer a dispatch runs, from 1 ([`extend`]).
+    pub(crate) extend_layer: u32,
+    pub(crate) extend_layers: u32,
+    /// 1 when the extension's source is its target.
+    pub(crate) extend_in_place: u32,
 }
 
 /// One pass of the step's shader on its own, for the value proofs against
@@ -344,9 +366,37 @@ pub(crate) fn dispatch_pass(device: &GpuDevice, entry: &str, params: &StepParams
     enc.commit_and_wait_completed();
 }
 
+/// The extension on its own, for the value proofs: the step's pipelines and
+/// the solve's list builder, built once.
+#[cfg(all(test, feature = "gpu-proofs"))]
+pub(crate) struct ExtendRig {
+    pipes: Pipelines,
+    lists: PressureSolver,
+}
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+impl ExtendRig {
+    pub(crate) fn new(device: &GpuDevice) -> Self {
+        let mut lists = PressureSolver::default();
+        lists.prepare_pipelines(device);
+        Self { pipes: Pipelines::new(device), lists }
+    }
+
+    /// `layers` layers from `source` into `target` through `scratch` on the
+    /// lattice `params.n` under the clock plan `plan`, waited on. `source`
+    /// may be `target`.
+    pub(crate) fn run(&self, device: &GpuDevice, params: &StepParams, plan: &GpuBuffer, buffers: [&GpuBuffer; 3], layers: u32) {
+        let tiles = ExtendTiles::new(device, params.n).expect("the extension's tiles");
+        let mut enc = device.create_encoder("gpu_flip.step.extend");
+        extend(&mut enc, &self.pipes, &self.lists, &tiles, plan, params, buffers, layers, "gpu_flip.step.extend");
+        enc.commit_and_wait_completed();
+    }
+}
+
 struct Pipelines {
     gather: GpuComputePipeline,
-    extend: GpuComputePipeline,
+    /// The extension: classify the tiles, their first layers, one layer.
+    extend: [GpuComputePipeline; 3],
     gravity: GpuComputePipeline,
     open: GpuComputePipeline,
     solid_velocity: GpuComputePipeline,
@@ -414,7 +464,7 @@ impl Pipelines {
         let band_pipe = |entry: &str| device.create_compute_pipeline(&band, entry, "node.gpu_flip_step.narrow_band");
         Self {
             gather: pipe("particles_to_faces"),
-            extend: pipe("extend_faces"),
+            extend: [pipe("extend_classify"), pipe("extend_reach"), pipe("extend_layer")],
             gravity: pipe("face_gravity"),
             open: pipe("open_fractions"),
             solid_velocity: pipe("solid_face_velocity"),
@@ -484,6 +534,35 @@ struct TileTable {
     args: GpuBuffer,
     /// Tiles in C on the previous step and not on this one.
     retired: GpuBuffer,
+}
+
+/// The extension's record tiles ([`extend_tile_counts`]), rebuilt by every
+/// extension on the GPU from its source and never read back.
+struct ExtendTiles {
+    /// Per tile: bit 0 an invalid face, bits 8 + 8·axis + c a seed at local
+    /// coordinate c (`extend_classify`).
+    marks: GpuBuffer,
+    /// Per tile: the first layer that writes it, or u32::MAX (`extend_reach`).
+    first: GpuBuffer,
+    /// Per tile: 1 when some layer writes it; the list builder's flags.
+    flags: GpuBuffer,
+    /// The flagged tiles in tile order.
+    list: GpuBuffer,
+    /// The layers' indirect triple, [2 · listed, 1, 1].
+    args: GpuBuffer,
+}
+
+impl ExtendTiles {
+    fn new(device: &GpuDevice, cells: [u32; 3]) -> Result<Self, String> {
+        let tiles = extend_tile_total(cells) * 4;
+        Ok(Self {
+            marks: allocate(device, tiles)?,
+            first: allocate(device, tiles)?,
+            flags: allocate(device, tiles)?,
+            list: allocate(device, tiles)?,
+            args: allocate_zeroed(device, 12)?,
+        })
+    }
 }
 
 /// Byte offset of the retired list's indirect triple in `args`.
@@ -565,8 +644,10 @@ struct LatticeBuffers {
     g: GpuBuffer,
     /// The saved (old) faces: `g` extended.
     a: GpuBuffer,
-    /// Extension scratch.
+    /// Extension scratch; stale outside the extension's tiles afterwards,
+    /// and rewritten whole by `solid_face_velocity` before anything reads it.
     b: GpuBuffer,
+    extend: ExtendTiles,
     /// The forced, projected, constrained faces.
     f: GpuBuffer,
     /// Open fractions.
@@ -630,6 +711,7 @@ impl LatticeBuffers {
             g: allocate(device, face)?,
             a: allocate(device, face)?,
             b: allocate(device, face)?,
+            extend: ExtendTiles::new(device, cells)?,
             f: allocate(device, face)?,
             s: allocate(device, face)?,
             v: allocate(device, face)?,
@@ -771,20 +853,81 @@ fn narrow_redistance(enc: &mut GpuEncoder, pipes: &BandPipelines, params: &NbPar
     }
 }
 
+/// Labels of the extension's tile passes, shared by every extension.
+const EXTEND_TILE_LABELS: [&str; 3] = [
+    "gpu_flip.step.extend_tiles.classify",
+    "gpu_flip.step.extend_tiles.reach",
+    "gpu_flip.step.extend_tiles.list",
+];
+
 /// `layers` extension passes from `source` into `target`, ping-ponging
-/// through `scratch` so the last pass lands in `target`. `source` may be
-/// `target`: an even count's first pass writes `scratch`, an odd one starts from a copy there.
-fn extend(enc: &mut GpuEncoder, pipes: &Pipelines, clock_plan: &GpuBuffer, params: &StepParams, face_groups: [u32; 3], [source, target, scratch]: [&GpuBuffer; 3], layers: u32, label: &str) {
+/// through `scratch` so the last pass lands in `target`, each over only the
+/// tiles it can change (gpu_flip_step.wgsl extend_classify, extend_reach,
+/// the solve's list builder, extend_layer). Every other record of `target`
+/// ends as `source`'s with its absent faces zeroed, which is what each layer
+/// copies there, so `target` is byte for byte the extension run over every
+/// record. `source` may be `target`: an even count's first pass writes
+/// `scratch`, an odd one starts from a copy there. An inactive clock slot
+/// writes neither `source` nor `target`; nothing reads `scratch` after.
+fn extend(
+    enc: &mut GpuEncoder,
+    pipes: &Pipelines,
+    lists: &PressureSolver,
+    tiles: &ExtendTiles,
+    clock_plan: &GpuBuffer,
+    params: &StepParams,
+    [source, target, scratch]: [&GpuBuffer; 3],
+    layers: u32,
+    label: &str,
+) {
+    if layers == 0 {
+        return;
+    }
+    let in_place = std::ptr::eq(source, target);
+    let setup = StepParams { extend_layers: layers, extend_in_place: u32::from(in_place), ..*params };
+    let [classify, reach, layer] = &pipes.extend;
+    let total = extend_tile_total(params.n);
+    enc.dispatch_compute(
+        classify,
+        &[uniform(&setup), buffer(46, clock_plan), buffer(3, source), buffer(4, target), buffer(48, &tiles.marks)],
+        [total as u32, 1, 1],
+        EXTEND_TILE_LABELS[0],
+    );
+    enc.dispatch_compute(
+        reach,
+        &[uniform(&setup), buffer(46, clock_plan), buffer(48, &tiles.marks), buffer(49, &tiles.first), buffer(50, &tiles.flags), buffer(52, &tiles.args)],
+        groups(total),
+        EXTEND_TILE_LABELS[1],
+    );
+    lists.encode_tile_list(enc, params.n.map(|n| n + 1), &tiles.flags, &tiles.list, &tiles.args, clock_plan, EXTEND_TILE_LABELS[2]);
     let mut from = source;
     // In place with an odd count, the first pass would write its own source:
     // start from a copy in `scratch` instead, which that pass does not write.
-    if !layers.is_multiple_of(2) && std::ptr::eq(source, target) {
+    if !layers.is_multiple_of(2) && in_place {
         enc.copy_buffer_to_buffer(source, scratch, source.size.min(scratch.size));
         from = scratch;
     }
-    for i in 0..layers {
-        let to = if (layers - i) % 2 == 1 { target } else { scratch };
-        enc.dispatch_compute(&pipes.extend, &[buffer(46, clock_plan), uniform(params), buffer(3, from), buffer(4, to)], face_groups, label);
+    for k in 1..=layers {
+        let to = if (layers - k).is_multiple_of(2) { target } else { scratch };
+        // Where an unstarted tile still holds its source value: the source,
+        // or its copy while the first pass writes the source.
+        let unstarted = if k == 1 { from } else { source };
+        let pass = StepParams { extend_layer: k, ..setup };
+        enc.dispatch_compute_indirect(
+            layer,
+            &[
+                uniform(&pass),
+                buffer(46, clock_plan),
+                buffer(3, from),
+                buffer(4, to),
+                buffer(53, unstarted),
+                buffer(49, &tiles.first),
+                buffer(51, &tiles.list),
+            ],
+            &tiles.args,
+            0,
+            label,
+        );
         from = to;
     }
 }
@@ -1299,7 +1442,7 @@ impl StepState {
                     "gpu_flip.step.narrow.initialize_gather",
                 );
                 enc.compute_memory_barrier_buffers();
-                extend(enc, pipes, step.clock_plan, &base, face_groups, [&l.g, &nb.previous_faces, &l.b], step.band, "gpu_flip.step.narrow.initialize_faces");
+                extend(enc, pipes, &self.solver, &l.extend, step.clock_plan, &base, [&l.g, &nb.previous_faces, &l.b], step.band, "gpu_flip.step.narrow.initialize_faces");
                 narrow_redistance(enc, nb_pipes, &nb_params, &l.phi, &nb.previous_phi, cells, "gpu_flip.step.narrow.initialize_distance");
                 enc.copy_buffer_to_buffer(&nb.previous_phi, &l.phi, l.phi.size);
             } else {
@@ -1527,7 +1670,7 @@ impl StepState {
         // The saved faces: the particles' own, extended so FLIP's change is
         // measured wherever a particle samples.
         if step.narrow_enabled {
-            extend(enc, pipes, step.clock_plan, &base, face_groups, [&l.g, &l.a, &l.b], step.band, "gpu_flip.step.narrow.extend_old");
+            extend(enc, pipes, &self.solver, &l.extend, step.clock_plan, &base, [&l.g, &l.a, &l.b], step.band, "gpu_flip.step.narrow.extend_old");
             let nb = self.narrow.buffers.as_ref().ok_or("narrow-band storage was not reserved")?;
             let nb_pipes = self.narrow.pipes.as_ref().ok_or("narrow-band pipelines were not prepared")?;
             enc.dispatch_compute(
@@ -1536,9 +1679,9 @@ impl StepState {
                 face_groups,
                 "gpu_flip.step.narrow.combine",
             );
-            extend(enc, pipes, step.clock_plan, &base, face_groups, [&l.g, &l.g, &l.b], step.band, "gpu_flip.step.narrow.extend_combined");
+            extend(enc, pipes, &self.solver, &l.extend, step.clock_plan, &base, [&l.g, &l.g, &l.b], step.band, "gpu_flip.step.narrow.extend_combined");
         } else {
-            extend(enc, pipes, step.clock_plan, &base, face_groups, [&l.g, &l.a, &l.b], step.band, "gpu_flip.step.extend_old");
+            extend(enc, pipes, &self.solver, &l.extend, step.clock_plan, &base, [&l.g, &l.a, &l.b], step.band, "gpu_flip.step.extend_old");
         }
         let force_faces = if step.narrow_enabled { &l.g } else { &l.a };
         enc.dispatch_compute(
@@ -1719,7 +1862,7 @@ impl StepState {
         if step.dynamic {
             self.bodies.react(enc, &coupled, self.solver.tiles()?, &l.pressure, step.reaction)?;
         }
-        extend(enc, pipes, step.clock_plan, &base, face_groups, [&l.f, out_faces, &l.b], step.band, "gpu_flip.step.extend_new");
+        extend(enc, pipes, &self.solver, &l.extend, step.clock_plan, &base, [&l.f, out_faces, &l.b], step.band, "gpu_flip.step.extend_new");
         enc.compute_memory_barrier_buffers();
         // The engine constrains its velocity and its saved velocity to the
         // solids after the pressure solve, so FLIP's change is measured
@@ -1810,7 +1953,7 @@ impl StepState {
             self.solver.tally(enc, step.pressure, step.capped, tally, 1, false)?;
             let plain = StepParams { ghost: 0, ..base };
             subtract(enc, &plain, &l.water, &l.f, "gpu_flip.step.density_project");
-            extend(enc, pipes, step.clock_plan, &base, face_groups, [&l.f, &l.f, &l.b], step.band, "gpu_flip.step.extend_spread");
+            extend(enc, pipes, &self.solver, &l.extend, step.clock_plan, &base, [&l.f, &l.f, &l.b], step.band, "gpu_flip.step.extend_spread");
             &l.f
         } else {
             out_faces
@@ -2464,7 +2607,9 @@ impl Primitive for GpuFlipStep {
                     .saturating_mul(4)
                     .min(u32::MAX as usize) as u32,
                 narrow_band: u32::from(narrow_enabled),
-                clock_pad: [0; 3],
+                extend_layer: 0,
+                extend_layers: 0,
+                extend_in_place: 0,
             },
             clock_plan: &zeros,
             particles,
@@ -2755,7 +2900,9 @@ mod tests {
             let entries: Vec<&str> = module.entry_points.iter().map(|e| e.name.as_str()).collect();
             for entry in [
                 "particles_to_faces",
-                "extend_faces",
+                "extend_classify",
+                "extend_reach",
+                "extend_layer",
                 "face_gravity",
                 "open_fractions",
                 "solid_face_velocity",
@@ -2810,6 +2957,7 @@ mod tests {
                 + pocket_sum_bytes(cells)
                 + pocket_coarse_bytes(cells)
                 + tile_scratch_bytes(cells, 2)
+                + extend_scratch_bytes(cells)
                 + mask_saved_bytes(cells, 1000);
             assert_eq!(scratch_bytes(cells, 1000, 2), expected, "{cells:?}");
         }
@@ -2840,6 +2988,11 @@ mod tests {
         assert_eq!(ring_max(14), 2, "64³: 14 layers reach the second ring");
         assert_eq!(ring_max(23), 3, "128³: 23 layers reach the third");
         assert_eq!(ring_max(FACE_VALID_LAYERS), 1);
+        // The extension tiles the (n + 1)³ face records.
+        assert_eq!(extend_tile_counts([64, 64, 64]), [9, 9, 9]);
+        assert_eq!(extend_tile_counts([63, 100, 8]), [8, 13, 2]);
+        assert_eq!(extend_tile_counts([1, 7, 15]), [1, 1, 2]);
+        assert_eq!(extend_scratch_bytes([64, 64, 64]), 16 * 729 + 12);
         for (cells, tiles) in [([64, 64, 64], 512u64), ([63, 100, 8], 104), ([128, 128, 128], 4096), ([1, 9, 17], 6)] {
             for r in 1..5u32 {
                 let counts = u64::from(r) + 2 + 1 + 1;

@@ -917,6 +917,21 @@ impl PressureSolver {
         Ok([&b.armed, &b.flags, &b.lists])
     }
 
+    /// The solve's list builder (lists_main) over another set of 8³ tiles:
+    /// the tiles `flags` marks (a 0 or 1 word a tile, ceil(lattice / 8) per
+    /// axis) in tile order into `list`, and their indirect triple
+    /// [2 · count, 1, 1] into `triple`. An inactive slot of `plan` writes
+    /// nothing.
+    pub(crate) fn encode_tile_list(&self, enc: &mut GpuEncoder, lattice: [u32; 3], flags: &GpuBuffer, list: &GpuBuffer, triple: &GpuBuffer, plan: &GpuBuffer, label: &str) {
+        let pipes = self.pipelines.as_ref().expect("pressure pipelines built by prepare_pipelines at install");
+        enc.dispatch_compute(
+            &pipes.lists,
+            &[bytes(&Params::at(lattice, 0.0)), buffer(14, triple), buffer(19, flags), buffer(20, list), buffer(21, plan)],
+            [1, 1, 1],
+            label,
+        );
+    }
+
     /// The last solve's record: |f|∞, iterations run, 1.0 when it stopped by
     /// the tolerance, then |r|∞ per iteration; [`PROGRESS_FLOATS`] floats.
     #[cfg(all(test, feature = "gpu-proofs"))]
