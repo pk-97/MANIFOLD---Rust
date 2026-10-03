@@ -519,7 +519,7 @@ pub struct FluidRuntime {
     reset_requested: bool,
     target_time: f64,
     clock: manifold_physics::clock::SimulationClock,
-    accepted_frames: VecDeque<manifold_physics::clock::ClockFrame>,
+    export_frames: VecDeque<manifold_physics::clock::ClockFrame>,
     held: super::physics::HeldClock,
     epoch: u64,
     cancel_epoch: Arc<AtomicU64>,
@@ -574,7 +574,7 @@ impl Default for FluidRuntime {
             reset_requested: false,
             target_time: 0.0,
             clock: Default::default(),
-            accepted_frames: VecDeque::with_capacity(HISTORY_CAPACITY),
+            export_frames: VecDeque::with_capacity(HISTORY_CAPACITY),
             held: Default::default(),
             epoch: 0,
             cancel_epoch: Arc::new(AtomicU64::new(0)),
@@ -694,7 +694,7 @@ impl FluidRuntime {
         }
         self.target_time = 0.0;
         self.clock.restart();
-        self.accepted_frames.clear();
+        self.export_frames.clear();
         self.held = Default::default();
         self.completed_tick = 0;
         self.completed_time = 0.0;
@@ -1058,15 +1058,15 @@ impl FluidRuntime {
         } else {
             None
         };
-        if self.cache_mode == CacheMode::Live
+        if self.cache_mode == CacheMode::Live && super::physics::offline_simulation()
             && let Some(frame) = clock_frame.as_ref().filter(|frame| frame.ticks > 0)
         {
-            if self.accepted_frames.back_mut().is_some_and(|previous| previous.append(frame)) {
+            if self.export_frames.back_mut().is_some_and(|previous| previous.append(frame)) {
                 // Adjacent observations share one retained simulation schedule.
-            } else if self.accepted_frames.len() == HISTORY_CAPACITY {
-                return Err("Water accepted interval history is full; drain accepted intervals before observing more transport".into());
+            } else if self.export_frames.len() == HISTORY_CAPACITY {
+                return Err("Water export interval history is full; drain accepted intervals before observing more transport".into());
             } else {
-                self.accepted_frames.push_back(frame.clone());
+                self.export_frames.push_back(frame.clone());
             }
         }
         if clock_frame.as_ref().is_some_and(|frame| frame.numerical_error)
@@ -1416,16 +1416,23 @@ impl FluidRuntime {
                 legacy_tick: target_tick,
             });
             let due = target_tick.saturating_sub(self.completed_tick);
-            while self.accepted_frames.front().is_some_and(|frame|
+            while self.export_frames.front().is_some_and(|frame|
                 self.completed_tick >= frame.first_sequence + u64::from(frame.ticks))
             {
-                self.accepted_frames.pop_front();
+                self.export_frames.pop_front();
             }
+            // Export steps each accepted interval. A live worker that fell
+            // behind takes everything it owes as one span, so it never queues
+            // a backlog behind the show.
             let live_interval = if live_mode && target_time > self.simulation_time() {
-                Some(self.accepted_frames.front()
-                    .and_then(|frame| self.completed_tick.checked_sub(frame.first_sequence)
-                        .and_then(|ordinal| frame.interval(ordinal)))
-                    .ok_or("Water is missing its accepted simulation interval")?)
+                Some(if super::physics::offline_simulation() {
+                    self.export_frames.front()
+                        .and_then(|frame| self.completed_tick.checked_sub(frame.first_sequence)
+                            .and_then(|ordinal| frame.interval(ordinal)))
+                        .ok_or("Water export is missing its accepted simulation interval")?
+                } else {
+                    StepInterval::new(Seconds(self.simulation_time()), Seconds(target_time))
+                })
             } else { None };
             // A owed particle capture goes before any further stepping, so
             // the frame is the completed tick itself (growth, late wiring).

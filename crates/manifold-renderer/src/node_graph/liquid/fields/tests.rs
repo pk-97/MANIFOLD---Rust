@@ -205,9 +205,10 @@ fn liquid_forces_per_tick_cover_late_frames() {
         assert!(frame.ticks <= 1, "frame {step}: at most one accepted live interval");
         assert_eq!(frame.dropped_seconds, 0.0, "frame {step}: live time was dropped");
         assert_eq!(frame.plan.start.0, completed, "frame {step}: interval start");
+        let boundary = (transport / TICK + 1e-9).floor() * TICK;
         for (offset, lattice) in rig.tick_lattices(&frame, &laid).into_iter().enumerate() {
             let interval = frame.interval(offset as u64).unwrap();
-            assert!((interval.end.0 - transport).abs() < 1e-12, "frame {step}: full span");
+            assert!((interval.end.0 - boundary).abs() < 1e-12, "frame {step}: owed span ends on the last boundary");
             assert_eq!(lattice, expected(interval.start.0), "frame {step}: interval start");
         }
         completed = frame.plan.end.0;

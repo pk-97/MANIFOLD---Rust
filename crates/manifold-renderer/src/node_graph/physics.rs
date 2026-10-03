@@ -3923,20 +3923,24 @@ mod tests {
     }
 
     #[test]
-    fn live_accepts_the_full_observed_span_without_pending_backlog() {
+    fn live_accepts_owed_intervals_to_the_last_boundary_without_backlog() {
         let _live = PhysicsStepScope::for_render(false);
         let bodies = one_body([0.0, 4.0, 0.0]);
         let mut simulation = RigidSimulation::default();
         simulation.advance(bodies.clone(), GRAVITY, Seconds::ZERO, 1.0, 0.0).unwrap();
+        // Half a Sim Rate interval past 3 s: the late frame takes every owed
+        // interval as one span ending on the 3 s boundary.
         let now = Seconds(3.0 + FRAME / 2.0);
         simulation.advance(bodies.clone(), GRAVITY, now, 1.0, 0.0).unwrap();
         assert_eq!(simulation.pending_time, Seconds::ZERO);
-        assert!((simulation.physics_time - now.0).abs() < 1e-12);
+        assert!((simulation.physics_time - 3.0).abs() < 1e-12);
         let accepted_pose = simulation.poses;
         simulation.advance(bodies.clone(), GRAVITY, now, 0.0, 0.0).unwrap();
         assert_eq!(simulation.pending_time, Seconds::ZERO);
-        assert_eq!(simulation.physics_time, now.0);
+        assert!((simulation.physics_time - 3.0).abs() < 1e-12);
         assert_eq!(simulation.poses, accepted_pose);
+        // The next boundary closes the half interval run at Speed 1; Speed 0
+        // from `now` adds nothing.
         let next = Seconds(now.0 + FRAME);
         simulation.advance(bodies, GRAVITY, next, 1.0, 0.0).unwrap();
         assert_eq!(simulation.pending_time, Seconds::ZERO);

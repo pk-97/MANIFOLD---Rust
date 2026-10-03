@@ -1,6 +1,7 @@
-//! Transport-owned simulation intervals. Sim Rate gates live updates; a late
-//! live update covers the full owed span. Export uses complete rate intervals. Sequence is identity,
-//! never elapsed time. Submission and fenced completion belong to consumers.
+//! Transport-owned simulation intervals on the Sim Rate grid. Live and export
+//! accept the same boundaries; a late live frame runs its owed intervals as one
+//! span. Sequence is identity, never elapsed time. Submission and fenced
+//! completion belong to consumers.
 
 use std::sync::Arc;
 
@@ -31,10 +32,11 @@ pub struct ClockFrame {
     pub held: bool,
     /// Simulated seconds at the end of this frame's ticks.
     pub simulation_time: f64,
-    /// Continuous simulation target for observed transport. Live work waits
-    /// for a nominal boundary, then accepts the full owed span.
+    /// Continuous simulation target for observed transport. Accepted work
+    /// stops at the last Sim Rate boundary transport has reached.
     pub target_time: f64,
-    /// Display time `s = target − tick` (surface design D10).
+    /// Display time: the simulation one Sim Rate interval of transport ago,
+    /// through the Speed history (surface design D10).
     pub display_time: f64,
     /// Compatibility output for existing graphs: always zero.
     pub dropped_seconds: f64,
@@ -166,13 +168,15 @@ impl SimulationClock {
     }
 
     /// Every tick not yet run whose start lies in `(from, until]` of
-    /// transport time, ascending, with its transport time. Both modes request the
-    /// same authored simulation-rate boundaries.
+    /// transport time, ascending, with its transport time. Both modes sample
+    /// authored values on Sim Rate boundaries; live merges owed boundaries into
+    /// the one tick that starts at the last of them.
     pub fn tick_starts(&self, from: f64, until: f64, mut visit: impl FnMut(f64, u64)) {
         if !self.offline {
             let due = ((until - self.transport_origin) / self.simulation_interval + 1e-9).floor() as u64;
-            if self.started && self.speed > 0.0 && due > self.transport_done && until > from {
-                visit(until, self.ticks_done + 1);
+            let boundary = self.transport_origin + due as f64 * self.simulation_interval;
+            if self.started && self.speed > 0.0 && due > self.transport_done && boundary > from {
+                visit(boundary, self.ticks_done + 1);
             }
             return;
         }
@@ -196,10 +200,10 @@ impl SimulationClock {
         self.started = false;
     }
 
-    /// Gate live work on nominal boundaries, covering the full owed span if late.
-    /// Export accepts complete nominal intervals. Both use shared Sim Rate,
-    /// never display/output fps.
-    /// An interval edit starts one epoch; Speed is integrated exactly once.
+    /// Accept work up to the last Sim Rate boundary transport has reached.
+    /// Export runs each owed interval as its own tick; live runs them as one
+    /// span, so a late frame never queues a burst. Display and output fps never
+    /// enter. A rate edit starts one epoch; Speed is integrated exactly once.
     pub fn advance(
         &mut self,
         transport: f64,
@@ -270,9 +274,11 @@ impl SimulationClock {
         let restarted =
             !self.started || rate_changed || setup_changed || reset_edge || transport < self.last_transport - 1e-9;
         let mut held = false;
-        // Authored inputs were sampled at the last frame's target; within an
-        // epoch the target never moves back past it. Fractional nominal
-        // intervals remain owed until their closing transport boundary.
+        // Within an epoch the target never moves back past the last frame's.
+        // Accepted work ends on a Sim Rate boundary in both modes: equal clock
+        // inputs give equal intervals, and the display time, one interval
+        // behind the target, always lies inside the accepted pair however the
+        // frames jitter. A partial interval stays owed until its boundary.
         let speed = f64::from(speed);
         let transport_first = if restarted { 0 } else { self.transport_done };
         let transport_reached = if !restarted {
@@ -283,11 +289,8 @@ impl SimulationClock {
         };
         let accepted_transport = if restarted {
             transport
-        } else if offline || transport_reached > self.transport_done {
-            let nominal = self.transport_origin + transport_reached as f64 * self.simulation_interval;
-            if offline || (transport - nominal).abs() < 1e-9 { nominal } else { transport }
         } else {
-            self.last_accepted_transport
+            self.transport_origin + transport_reached as f64 * self.simulation_interval
         };
         if restarted {
             self.epoch = self.epoch.wrapping_add(1);
@@ -337,8 +340,14 @@ impl SimulationClock {
             end: Seconds(self.simulation_time),
             intervals: ticks,
         };
+        // The display shows the simulation as it stood one Sim Rate interval of
+        // transport ago, through the Speed history: one interval of latency at
+        // any Speed, and never past the newest accepted state.
+        let display_from = transport - self.simulation_interval;
+        let display_time = self.simulation_at(display_from).max(0.0);
         let speed_history = self.snapshot_history();
-        let retained = self.speed_history.partition_point(|anchor| anchor.transport <= accepted_transport)
+        let retained = self.speed_history
+            .partition_point(|anchor| anchor.transport <= accepted_transport.min(display_from))
             .saturating_sub(1);
         self.speed_history.drain(..retained);
         ClockFrame {
@@ -357,7 +366,7 @@ impl SimulationClock {
             held,
             simulation_time: self.simulation_time,
             target_time: self.target_time,
-            display_time: (self.target_time - self.simulation_interval * self.speed).max(0.0),
+            display_time,
             dropped_seconds: 0.0,
         }
     }
@@ -438,9 +447,9 @@ mod tests {
     fn late_speed_observation_preserves_accepted_time(offline: bool) {
         let mut clock = SimulationClock::default();
         clock.advance(2.0, TICK, 1.0, 0.0, false, offline);
-        // Offline stops at 2.1 even though the render observed 2.107.
+        // Both modes stop at the 2.1 boundary even though the render observed 2.107.
         let previous = clock.advance(2.107, TICK, 1.0, 0.0, false, offline);
-        let end = if offline { 2.0 + 6.0 * TICK } else { 2.107 };
+        let end = 2.0 + 6.0 * TICK;
         let samples: Vec<_> = (0..=100).map(|i| {
             let x = 2.0 + (end - 2.0) * f64::from(i) / 100.0;
             (x, clock.simulation_at(x))
@@ -667,13 +676,14 @@ mod tests {
     }
 
     #[test]
-    fn sim_rate_late_live_update_keeps_full_span_and_six_step_cap() {
+    fn sim_rate_late_live_update_takes_owed_intervals_as_one_span() {
         for rate in crate::SimRate::ALL {
             let mut clock = SimulationClock::default();
             clock.advance(0.0, rate.interval(), 1.0, 0.0, false, false);
             let late = clock.advance(1.07, rate.interval(), 1.0, 0.0, false, false);
             assert_eq!(late.ticks, 1);
-            assert_eq!(late.simulation_time, 1.07);
+            let boundary = (1.07 / rate.interval()).floor() * rate.interval();
+            assert!((late.simulation_time - boundary).abs() < 1e-12, "{} Hz", rate.hz());
             let interval = late.interval(0).unwrap();
             let mut schedule = LiveStepSchedule::new(interval.start, interval.duration(), 1, 6).value;
             let mut end = Seconds::ZERO;
@@ -683,4 +693,52 @@ mod tests {
         }
     }
 
+    /// Display frames wobble around their nominal times and Speed changes
+    /// mid-show. Live still lands on the export boundaries, and the display
+    /// time never leaves the accepted pair, so the blend never holds a frame.
+    #[test]
+    fn sim_rate_jittered_live_frames_match_export_and_stay_inside_the_pair() {
+        const JITTER: [f64; 5] = [0.0009, -0.0007, 0.0003, -0.0009, 0.0006];
+        for rate in crate::SimRate::ALL {
+            for speeds in [[1.0f32; 4], [2.0; 4], [1.0, 0.0, 0.5, 2.0]] {
+                let speed_at = |display: u32| speeds[(display as usize / 7) % speeds.len()];
+                let mut live = SimulationClock::default();
+                let mut export = SimulationClock::default();
+                live.advance(0.0, rate.interval(), speeds[0], 0.0, false, false);
+                export.advance(0.0, rate.interval(), speeds[0], 0.0, false, true);
+                let (mut previous, mut current) = (0.0, 0.0);
+                let mut last_display = 0.0;
+                let mut export_ends = Vec::new();
+                for display in 1..=120u32 {
+                    let transport = f64::from(display) / 60.0 + JITTER[display as usize % JITTER.len()];
+                    let speed = speed_at(display);
+                    let frame = live.advance(transport, rate.interval(), speed, 0.0, false, false);
+                    assert!(frame.display_time >= last_display - 1e-12, "display went back");
+                    last_display = frame.display_time;
+                    if frame.ticks > 0 {
+                        previous = current;
+                        current = frame.simulation_time;
+                    }
+                    assert!(
+                        frame.display_time >= previous - 1e-12 && frame.display_time <= current + 1e-12,
+                        "{} Hz speed {speed} frame {display}: display {} outside [{previous}, {current}]",
+                        rate.hz(),
+                        frame.display_time,
+                    );
+                    let offline = export.advance(transport, rate.interval(), speed, 0.0, false, true);
+                    for ordinal in 0..u64::from(offline.ticks) {
+                        export_ends.push(offline.interval(ordinal).unwrap().end.0);
+                    }
+                    if frame.ticks > 0 {
+                        assert!(
+                            export_ends.last().is_some_and(|end| (end - current).abs() < 1e-12),
+                            "{} Hz frame {display}: live ended off the export boundaries",
+                            rate.hz(),
+                        );
+                    }
+                }
+                assert_eq!(live.accepted_time(), export.accepted_time());
+            }
+        }
+    }
 }
