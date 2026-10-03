@@ -132,6 +132,48 @@ class GpuQueueTests(unittest.TestCase):
         finally:
             del os.environ["MANIFOLD_GPU_QUEUE_DIR"]
 
+    def test_token_admission_when_ancestor_walk_fails(self):
+        with patch.dict(os.environ, {gpu_queue.HOLDER_ENV: "previous"}):
+            holder = gpu_queue.acquire("outer")
+            token = os.environ[gpu_queue.HOLDER_ENV]
+            info = gpu_queue.read_holder(self.dir / "q")
+            self.assertEqual(token, f"{os.getpid()}:{info['nonce']}")
+            try:
+                for candidate, allowed in ((token, True), (token + "stale", False), (None, False)):
+                    with self.subTest(token=candidate), \
+                            patch.dict(os.environ), \
+                            patch.object(gpu_queue, "ancestor_pids", return_value=[]), \
+                            patch.object(gpu_queue, "holder_command", return_value=""), \
+                            patch.object(gpu_queue.time, "sleep", side_effect=RuntimeError("waited")):
+                        if candidate is None:
+                            os.environ.pop(gpu_queue.HOLDER_ENV, None)
+                        else:
+                            os.environ[gpu_queue.HOLDER_ENV] = candidate
+                        if allowed:
+                            child = gpu_queue.acquire("child")
+                            self.assertIsNone(child.fd)
+                            child.release()
+                            self.assertEqual(gpu_queue.read_holder(self.dir / "q"), info)
+                        else:
+                            with self.assertRaisesRegex(RuntimeError, "waited"):
+                                gpu_queue.acquire("child")
+                with patch.object(gpu_queue, "ancestor_pids", return_value=[]), \
+                        patch.object(gpu_queue, "holder_command", return_value=""), \
+                        patch.object(gpu_queue.time, "sleep", side_effect=RuntimeError("waited")):
+                    gpu_queue._write_holder(self.dir / "q", "replacement", "new-nonce")
+                    with self.assertRaisesRegex(RuntimeError, "waited"):
+                        gpu_queue.acquire("changed record")
+                    gpu_queue._write_holder(self.dir / "q", "outer", info["nonce"])
+                with patch.object(gpu_queue.os, "kill", side_effect=ProcessLookupError), \
+                        patch.object(gpu_queue, "ancestor_pids", return_value=[]), \
+                        patch.object(gpu_queue, "holder_command", return_value=""), \
+                        patch.object(gpu_queue.time, "sleep", side_effect=RuntimeError("waited")):
+                    with self.assertRaisesRegex(RuntimeError, "waited"):
+                        gpu_queue.acquire("dead holder")
+            finally:
+                holder.release()
+            self.assertEqual(os.environ[gpu_queue.HOLDER_ENV], "previous")
+
     def test_cargo_test_builds_before_the_lock_and_preserves_runtime_args(self):
         events = []
 
