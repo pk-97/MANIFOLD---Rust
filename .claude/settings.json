@@ -43,7 +43,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" worktree-size-sentinel.py seat-identity.py bead-staleness.py local-time.py system-prompt-version-check.py"
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/hook_telemetry.py\" local-time.py"
           }
         ]
       }
