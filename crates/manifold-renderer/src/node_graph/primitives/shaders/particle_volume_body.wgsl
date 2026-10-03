@@ -27,13 +27,13 @@ fn pv_interior(
     lattice_min: vec3<f32>,
     spacing: vec3<f32>,
     solid_nodes: vec3<u32>,
+    cells: vec3<u32>,
 ) -> f32 {
     // Interior samples live at the centres of the simulation cells. Subtract
     // half a cell before clamping so a volume node on a cell centre reads that
     // cell exactly; the clamp gives the expected boundary extension.
-    let cells = solid_nodes - vec3<u32>(7u);
     let top = cells - vec3<u32>(1u);
-    let physical_min = lattice_min + 3.0 * spacing;
+    let physical_min = lattice_min + 0.5 * vec3<f32>(solid_nodes - cells - vec3<u32>(1u)) * spacing;
     let g = clamp((p - physical_min) / spacing - vec3<f32>(0.5), vec3<f32>(0.0), vec3<f32>(top));
     let base = min(vec3<u32>(floor(g)), top);
     let f = g - vec3<f32>(base);
@@ -130,14 +130,18 @@ fn body(
     }
     let spacing = size / vec3<f32>(solid_nodes - vec3<u32>(1u));
     let physical_nodes = max(solid_nodes, vec3<u32>(8u));
-    let interior_cells = physical_nodes - vec3<u32>(7u);
+    // Exact buffer length distinguishes native mesh padding from the legacy
+    // solver lattice. CPU and extent validation reject every other shape.
+    let native_cells = max(solid_nodes, vec3<u32>(5u)) - vec3<u32>(4u);
+    let native_total = native_cells.x * native_cells.y * native_cells.z;
+    let interior_cells = select(physical_nodes - vec3<u32>(7u), native_cells, interior_len == native_total);
     let interior_total = interior_cells.x * interior_cells.y * interior_cells.z;
     if interior_len == interior_total && interior_len != 0u {
         // A simulation cell width is the narrow-band unit. Rectangular boxes
         // retain their per-axis interpolation spacing; the smallest axis is a
         // conservative physical h for the Eq. 4 one-cell shrink.
         let h = min(spacing.x, min(spacing.y, spacing.z));
-        phi = min(phi, pv_interior(p, lattice_min, spacing, solid_nodes) + h);
+        phi = min(phi, pv_interior(p, lattice_min, spacing, solid_nodes, interior_cells) + h);
     }
     if pv_solid(p, lattice_min, spacing, solid_nodes) < 0.0 {
         phi = max(phi, 0.0);

@@ -353,6 +353,10 @@ pub(crate) mod liquid_fill;
 pub(crate) mod liquid_state;
 pub(crate) mod liquid_stats;
 mod liquid_frame;
+pub(crate) mod particle_identity;
+pub(crate) mod particle_publication;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod particle_publication_gpu_tests;
 pub(crate) mod gpu_flip_domain;
 pub(crate) mod face_sample_component;
 pub(crate) mod matter_face_component;
@@ -375,6 +379,8 @@ mod inside_turbulence_potential;
 mod turbulence_emission_count;
 #[cfg(test)]
 mod whitewater_emitter_cpu;
+#[cfg(test)]
+mod whitewater_engine_cpu;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod whitewater_emitter_gpu_tests;
 mod wavecrest_potential;
@@ -1089,8 +1095,24 @@ pub(crate) mod physics_world;
 pub(crate) use gltf_animation_source::quat_to_render_scene_euler;
 mod platonic_mesh;
 
+mod interpolate_particle_frames;
+pub(crate) mod push_out_of_solid;
+mod mix_arrays;
+pub use interpolate_particle_frames::InterpolateParticleFrames;
+pub use push_out_of_solid::PushOutOfSolid;
+pub use mix_arrays::MixArrays;
+
+#[cfg(test)]
+mod particle_frame_blend_tests;
+
 pub mod offset_lattice;
 pub mod redistance_lattice;
 
 #[cfg(test)]
 mod lattice_closing_tests;
+
+pub mod upwind_distance;
+pub(crate) mod whitewater_distance;
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod whitewater_engine_gpu_tests;

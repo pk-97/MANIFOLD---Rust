@@ -60,7 +60,7 @@ use crate::node_graph::primitives::gpu_flip_domain::gpu_flip_geometry;
 use crate::node_graph::primitives::gpu_flip_pressure::{lattice_refusal, scratch_bytes as pressure_scratch_bytes};
 use crate::node_graph::fluid::TICK;
 use crate::node_graph::primitives::gpu_flip_step::{
-    DEFAULT_TOP_SPEED, FACE_VALID_LAYERS, band_layers, face_bytes, halo_travel, ring_max, scratch_bytes as step_scratch_bytes,
+    ENGINE_CFL, FACE_VALID_LAYERS, band_layers, face_bytes, ring_max, scratch_bytes as step_scratch_bytes,
 };
 use crate::node_graph::primitives::volume_surface_mesh::start_capacity;
 use crate::node_graph::resource_allocation::plan_array_allocations;
@@ -543,6 +543,9 @@ impl LiquidPreset {
 
 /// Every node type a liquid preset may hold that touches an array or the GPU.
 pub const LIQUID_EXTENT_RULES: &[ExtentRule] = &[
+    ExtentRule { type_id: "node.interpolate_particle_frames", check: interpolate_particle_frames },
+    ExtentRule { type_id: "node.push_out_of_solid", check: push_out_of_solid },
+    ExtentRule { type_id: "node.mix_arrays", check: mix_arrays },
     ExtentRule { type_id: MATTER_DOMAIN_TYPE_ID, check: matter_domain },
     ExtentRule { type_id: FLIP_DOMAIN_TYPE_ID, check: fluid_surface },
     ExtentRule { type_id: "node.matter_fill", check: matter_fill },
@@ -619,8 +622,46 @@ pub const LIQUID_EXTENT_RULES: &[ExtentRule] = &[
     ExtentRule { type_id: "node.keep_whitewater", check: keep_whitewater },
     ExtentRule { type_id: "node.whitewater_lifecycle", check: whitewater_lifecycle },
     ExtentRule { type_id: "node.whitewater_step", check: whitewater_step },
+    ExtentRule { type_id: "node.upwind_distance", check: |x| {
+        let count=["nodes_x","nodes_y","nodes_z"].map(|p|u64::from(whole(x,p,8.0))).into_iter().product::<u64>();
+        for port in ["levelset","valid","out"] { x.covers(port,count*4)?; } Ok(())
+    } },
     ExtentRule { type_id: "node.particles_to_copies", check: particles_to_copies },
 ];
+
+fn interpolate_particle_frames(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    // Output follows B's capacity, never A+B. Count tails are explicitly zeroed.
+    let bytes = x.bytes("particles_b").ok_or_else(|| x.uncovered("particles_b is unbound".into()))?;
+    x.covers("out", bytes)?;
+    for (port, count, default) in [("particles_a", "count_a", 0.0), ("particles_b", "count_b", -1.0)] {
+        if port == "particles_a" && !x.wired(port) { continue; }
+        let value = x.scalar(count, default);
+        if port == "particles_b" && value == -1.0 { continue; }
+        if !value.is_finite() || !(0.0..=EXACT_F32_COUNT as f32).contains(&value) {
+            return Err(Verdict::Refused(format!("{count} must be a finite count (only count_b accepts -1)")));
+        }
+        // The shader truncates positive counts, it does not round them.
+        x.covers(port, value as u64 * PARTICLE)?;
+    }
+    Ok(())
+}
+
+fn push_out_of_solid(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let (_, bytes) = crate::node_graph::primitives::push_out_of_solid::solid_shape(|name, default| x.scalar(name, default))
+        .map_err(Verdict::Refused)?;
+    x.covers("solid", bytes)?;
+    let particles = x.bytes("particles").ok_or_else(|| x.uncovered("particles is unbound".into()))?;
+    x.covers("out", particles)
+}
+
+fn mix_arrays(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let a = x.bytes("a").ok_or_else(|| x.uncovered("a is unbound".into()))?;
+    let b = x.bytes("b").ok_or_else(|| x.uncovered("b is unbound".into()))?;
+    if a != b {
+        return Err(Verdict::Refused(format!("Mix Arrays: input capacities must match (a={a} bytes, b={b} bytes)")));
+    }
+    x.covers("out", a)
+}
 
 fn nodes_total(nodes: [f32; 3]) -> u64 {
     nodes.iter().map(|&n| n.max(0.0) as u64).product()
@@ -1027,13 +1068,9 @@ fn particle_volume(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     searched(x)?;
     brick_schedule(x, refined)?;
     if x.wired("interior") {
-        let padding = 1 + 2 * crate::node_graph::liquid::lattice::PADDING_NODES;
-        if nodes.iter().any(|&n| n <= padding as f32) {
-            return Err(x.uncovered("interior needs the padded liquid lattice".into()));
-        }
-        let bytes = nodes.iter().map(|&n| (n as u64) - u64::from(padding)).product::<u64>() * 4;
-        if x.bytes("interior") != Some(bytes) {
-            return Err(x.uncovered(format!("interior must hold exactly {bytes} bytes for the cell-centred lattice")));
+        let bytes = x.bytes("interior").unwrap_or(0);
+        if !bytes.is_multiple_of(4) || super::lattice::interior_cells(nodes.map(|n| n as u32), bytes / 4).is_none() {
+            return Err(x.uncovered("interior must hold exactly the native or solver physical cell count".into()));
         }
         x.covers("interior", bytes)?;
     }
@@ -1256,6 +1293,9 @@ fn liquid_fill(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 }
 
 fn liquid_state(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    x.provide("identity", 16);
+    x.hold(4 * 16); // persistent identity and the three fenced metadata copies
+    x.covers_if_bound("identity_in", 16)?;
     let mut whitewater_check = Ok(());
     let capacity = x.count("whitewater_capacity", STEP_CAPACITY as f32)?;
     if !(1..=STEP_MAX_CAPACITY).contains(&capacity) {
@@ -1342,7 +1382,12 @@ fn liquid_stats(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 }
 
 fn liquid_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    x.covers("identity", 16)?;
     let lattice = x.lattice()?;
+    let surface = super::lattice::frame_lattice(lattice, x.params());
+    for (axis, input) in FACE_INPUT_PORTS.into_iter().enumerate() {
+        if x.wired(input) { x.hold((RING - 1) as u64 * face_len(lattice.cells(), axis) * 4); }
+    }
     let mut interior_check = Ok(());
     if x.wired("interior") {
         let bytes = crate::node_graph::liquid::grid::interior_bytes(lattice.cells());
@@ -1360,7 +1405,8 @@ fn liquid_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     provide_frame_faces(x, &lattice, valid_layers);
     let count = x.count("count", 0.0)?;
     let particles = u64::from(count.max(1)) * PARTICLE;
-    let solid = lattice.solid_bytes();
+    let solid = surface.solid_bytes();
+    x.hold(crate::node_graph::primitives::particle_publication::scratch_bytes(count) + RING as u64 * 16);
     let wired = x.wired("solid");
     x.hold(if wired { RING as u64 * solid } else { solid });
     x.provide("particles_a", particles);
@@ -1370,8 +1416,8 @@ fn liquid_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.hold(RING as u64 * particles);
     x.publish("count_a", count as f32);
     x.publish("count_b", count as f32);
-    x.publish_transform("grid_bounds", lattice.bounds());
-    for (port, n) in ["grid_nodes_x", "grid_nodes_y", "grid_nodes_z"].into_iter().zip(lattice.nodes()) {
+    x.publish_transform("grid_bounds", surface.bounds());
+    for (port, n) in ["grid_nodes_x", "grid_nodes_y", "grid_nodes_z"].into_iter().zip(surface.nodes()) {
         x.publish(port, n as f32);
     }
     x.covers("particles", u64::from(count) * PARTICLE)?;
@@ -1386,6 +1432,8 @@ fn liquid_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 /// own scratch at the wired lattice, the field and body reads, and every
 /// particle carried through.
 fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    x.covers("identity", 16)?;
+    x.covers_if_bound("identity_out", 16)?;
     let cells = x.lattice()?.cells();
     if let Some(reason) = lattice_refusal(cells) {
         return Err(Verdict::Refused(format!("GPU FLIP Step: {reason}. Lower Resolution.")));
@@ -1393,6 +1441,13 @@ fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let faces = face_bytes(cells);
     x.provide("faces", faces);
     x.provide("distance", cell_total(cells) * 4);
+    let history_slots = manifold_physics::stepping::LIVE_DEFAULT_MAX_STEPS + whole(x,"live_hit_count",0.0);
+    x.provide("substep_schedule",u64::from(history_slots)*16);
+    for (axis,port) in ["substep_u","substep_v","substep_w"].into_iter().enumerate() {
+        x.provide(port,u64::from(history_slots)*face_len(cells,axis)*4);
+    }
+    x.publish("substep_count",history_slots as f32);
+    x.hold(super::substep_history::history_bytes(cells,history_slots));
     let lattice = x.lattice()?;
     x.publish_transform("grid_bounds", lattice.bounds());
     for (port, value) in ["grid_nodes_x", "grid_nodes_y", "grid_nodes_z"].into_iter().zip(lattice.nodes())
@@ -1414,18 +1469,15 @@ fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
         x.hold(6 * cell_bytes + 3 * faces + slots * PARTICLE + 16);
         x.hold(storage_words((lattice_total(cells) * 8) as usize) as u64 * 4);
     }
+    if x.wired("regions") {
+        x.hold(storage_words(crate::node_graph::primitives::gpu_flip_step::emit_sites(cells) as usize) as u64 * 4);
+    }
     let ranges = range_storage_bytes(cells);
     search_fits(x, cells, ranges)?;
     // The sort's ranges, cell counts, rank and slot scratch.
     x.hold(ranges + bin_total(cells) * 4 + 2 * slots.max(1) * 4);
-    // The tile table's size follows the band the step runs with (ring_max),
-    // read the way the step reads it; an unwired or unresolved scalar is the
-    // default.
-    let steps = x.scalar("steps", 1.0).round().clamp(1.0, 64.0);
-    let top_speed = x.scalar("top_speed", DEFAULT_TOP_SPEED);
-    let top_speed = if top_speed.is_finite() && top_speed > 0.0 { top_speed } else { DEFAULT_TOP_SPEED };
-    let travel = halo_travel(top_speed, steps, x.lattice()?.cell_size());
-    let ring = ring_max(band_layers(travel).max(FACE_VALID_LAYERS));
+    // Same configured CFL as the step, never particle travel.
+    let ring = ring_max(band_layers(ENGINE_CFL).max(FACE_VALID_LAYERS));
     x.hold(faces + pressure_scratch_bytes(cells) + step_scratch_bytes(cells, slots, ring));
     field_reads(x)?;
     x.covers_if_bound("clock_status", 32)?;
@@ -1649,7 +1701,13 @@ fn whitewater_type(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 /// record per pool slot.
 fn advect_whitewater(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let (nodes, _) = whitewater_lattice(x, ["nodes_x", "nodes_y", "nodes_z"])?;
-    whitewater_faces(x, nodes, ["face_cells_x", "face_cells_y", "face_cells_z"])?;
+    let cells=whitewater_faces(x, nodes, ["face_cells_x", "face_cells_y", "face_cells_z"])?;
+    let steps=u64::from(whole(x,"substep_count",0.0));
+    if steps>0 {
+        x.covers("substep_schedule",steps*16)?;
+        for (axis,port) in ["substep_u","substep_v","substep_w"].into_iter().enumerate() { x.covers(port,steps*face_len(cells,axis)*4)?; }
+    }
+    field_reads(x)?;
     x.covers("solid", cell_total(nodes) * 4)?;
     x.covers("out", x.bytes("pool").unwrap_or(0))
 }
@@ -1680,6 +1738,12 @@ fn preserve_foam(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 /// flag per pool slot. Unset bins are the sort's own rule on the grid's box
 /// and cell, as the atom's run works them out.
 fn keep_whitewater(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let regions = u64::from(whole(x, "region_count", 0.0));
+    if regions > 0 {
+        x.covers("regions", (regions + u64::from(whole(x, "region_offset", 0.0))) * size_of::<LiquidBody>() as u64)?;
+        x.covers("shapes", size_of::<LiquidShape>() as u64)?;
+        x.covers("atlas", 4)?;
+    }
     let (nodes, cells) = whitewater_lattice(x, ["nodes_x", "nodes_y", "nodes_z"])?;
     x.covers("solid", cell_total(nodes) * 4)?;
     let ports = ["bins_x", "bins_y", "bins_z"];
@@ -1751,6 +1815,19 @@ fn whitewater_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.provide("state_out", 32);
     x.provide("counts_out", 36);
     if x.input("obstacle_source").is_some() { x.covers("obstacle_source", shape.solid_bytes() * 4)?; }
+    if x.input("substep_schedule").is_some() {
+        let slots=u64::from(whole(x,"substep_count",0.0));
+        x.covers("substep_schedule",slots*16)?;
+        for (axis,port) in ["substep_u","substep_v","substep_w"].into_iter().enumerate() { x.covers(port,slots*shape.face_bytes(axis))?; }
+        field_reads(x)?;
+        let regions=u64::from(whole(x,"region_count",0.0));
+        if regions>0 {
+            let row=(whole(x,"tick_index",0.0).saturating_sub(whole(x,"first_tick",0.0))) as u64;
+            x.covers("regions",(row+1)*regions*size_of::<LiquidBody>() as u64)?;
+            x.covers("shapes",size_of::<LiquidShape>() as u64)?;
+            x.covers("atlas",4)?;
+        }
+    }
     if x.input("distance").is_some() {
         x.covers("distance", cell_total(shape.face_cells) * 4)?;
         x.covers("pool", shape.pool_bytes())?;
@@ -1774,6 +1851,39 @@ mod tests {
     use crate::node_graph::primitives::matter_domain::admit_lattice;
     use manifold_core::preset_def::PresetKind;
 
+    #[test]
+    fn liquid_mesh_grid_native_dispatch_extents_are_covered() {
+        for (size, resolution) in [(4.0, 64), (1.0, 8), (6.0, 32)] {
+            let layout = domain_layout(None, size, resolution).unwrap();
+            let mesh = LiquidLattice::from_layout(&layout).surface();
+            let solid_nodes = mesh.nodes().map(u64::from);
+            let solid_count = solid_nodes.into_iter().product::<u64>();
+            assert_eq!(mesh.solid_bytes(), solid_count * 4);
+            for scale in [1u64, 2, 3, 4] {
+                let nodes = solid_nodes.map(|n| (n - 1) * scale + 1);
+                let count = nodes.into_iter().product::<u64>();
+                let cells = nodes.map(|n| n - 1);
+                let cell_count = cells.into_iter().product::<u64>();
+                // Node dispatches (splat, smoothing, offsets, redistance,
+                // clamp) use count; MC dispatches use cell_count. The last
+                // MC cell's +1 corner is exactly the last allocated node.
+                let last_corner = cells[0] + nodes[0] * (cells[1] + nodes[1] * cells[2]);
+                assert_eq!(last_corner, count - 1);
+                assert!(count * 4 <= u64::from(u32::MAX));
+                assert!(cell_count * 15 <= u64::from(u32::MAX));
+                assert!(count <= count.div_ceil(256) * 256);
+                assert!(count.div_ceil(256) * 256 - count < 256);
+            }
+        }
+        // Walk actual producers and consumers with extent.rs, including
+        // provided solids, frame rings, sparse schedules and mesh outputs.
+        let (_, def) = liquid_presets().into_iter().find(|(id, _)| id == "WaterDamBreakGpuFlip").unwrap();
+        for resolution in [8, 32, 64] {
+            let report = check_preset_extents(def, resolution).unwrap();
+            assert!(report.checked > 20);
+        }
+    }
+
     /// Every bundled generator preset holding a liquid domain.
     fn liquid_presets() -> Vec<(String, &'static EffectGraphDef)> {
         let holds_liquid = |def: &EffectGraphDef| {
@@ -1783,6 +1893,65 @@ mod tests {
         bundled_preset_type_ids(PresetKind::Generator)
             .filter_map(|id| bundled_preset_def(&id).filter(|def| holds_liquid(def)).map(|def| (id.to_string(), def)))
             .collect()
+    }
+
+    fn particle_blend_preset() -> EffectGraphDef {
+        serde_json::from_str(include_str!("../../../assets/generator-presets/WaterDamBreakParticles.json")).unwrap()
+    }
+
+    #[test]
+    fn particle_blend_presets_have_complete_extent_rules() {
+        for text in [
+            include_str!("../../../assets/generator-presets/WaterDamBreakGpuFlip.json"),
+            include_str!("../../../assets/generator-presets/WaterDamBreakParticles.json"),
+        ] {
+            let def = serde_json::from_str(text).unwrap();
+            for resolution in [16, 32] {
+                check_preset_extents(&def, resolution).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn particle_blend_counts_and_solid_storage_are_checked() {
+        use manifold_core::effect_graph_def::SerializedParamValue;
+        for (type_id, port, value) in [
+            ("node.interpolate_particle_frames", "count_a", 16_777_216.0),
+            ("node.interpolate_particle_frames", "count_b", 16_777_216.0),
+            ("node.push_out_of_solid", "nodes_x", 4096.0),
+        ] {
+            let mut def = particle_blend_preset();
+            let node = def.nodes.iter_mut().find(|node| node.type_id == type_id).unwrap();
+            let id = node.id;
+            node.params.insert(port.into(), SerializedParamValue::Float { value });
+            def.wires.retain(|wire| !(wire.to_node == id && wire.to_port == port));
+            match check_preset_extents(&def, 16) {
+                Err(ExtentError::Uncovered { node, .. }) => assert!(node.contains(type_id), "{node}"),
+                other => panic!("{type_id}.{port}: expected uncovered storage, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn particle_blend_mix_refuses_unequal_capacities() {
+        let mut preset = LiquidPreset::build(&particle_blend_preset()).unwrap();
+        let rules: Vec<_> = LIQUID_EXTENT_RULES.iter().map(|rule| {
+            if rule.type_id == "node.liquid_frame" {
+                ExtentRule { type_id: rule.type_id, check: |x| {
+                    liquid_frame(x)?;
+                    // Simulate a malformed frame publisher, without a device.
+                    x.provided.iter_mut().find(|(port, _)| *port == "solid_b").unwrap().1 += 4;
+                    Ok(())
+                }}
+            } else { *rule }
+        }).collect();
+        match check_graph(&mut preset.graph, &preset.plan, &rules) {
+            Err(ExtentError::Refused { node, reason }) => {
+                assert!(node.contains("node.mix_arrays"), "{node}");
+                assert!(reason.contains("input capacities must match"), "{reason}");
+            }
+            other => panic!("expected unequal arrays to be refused, got {other:?}"),
+        }
     }
 
     /// Section 3.7 (Safety rails) rule 1, I9: every liquid preset at every

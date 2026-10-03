@@ -746,3 +746,43 @@ mod phong_graph_migration_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod sim_rate_tests {
+    use super::*;
+    use manifold_core::settings::SimRate;
+
+    #[test]
+    fn sim_rate_round_trip_v1_v2_and_legacy_default() {
+        let root = std::env::temp_dir().join(format!("manifold-sim-rate-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("project.manifold");
+        let mut project = Project::default();
+        assert_eq!(project.settings.physics.sim_rate, SimRate::Hz30);
+        for rate in SimRate::ALL {
+            project.settings.physics.sim_rate = rate;
+            crate::saver::save_project_v1(&project, &path).unwrap();
+            assert_eq!(load_project(&path).unwrap().settings.physics.sim_rate, rate);
+            std::fs::remove_file(&path).unwrap();
+            crate::saver::save_project(&mut project, &path, None, false).unwrap();
+            assert_eq!(load_project(&path).unwrap().settings.physics.sim_rate, rate);
+            std::fs::remove_file(&path).unwrap();
+        }
+        for missing in ["rate", "physics", "settings"] {
+            let mut json = serde_json::to_value(&project).unwrap();
+            match missing {
+                "rate" => { json["settings"]["physics"].as_object_mut().unwrap().remove("simRate"); }
+                "physics" => { json["settings"].as_object_mut().unwrap().remove("physics"); }
+                _ => { json.as_object_mut().unwrap().remove("settings"); }
+            }
+            let json = serde_json::to_string(&json).unwrap();
+            std::fs::write(&path, &json).unwrap();
+            assert_eq!(load_project(&path).unwrap().settings.physics.sim_rate, SimRate::Hz60, "{missing}");
+            std::fs::remove_file(&path).unwrap();
+            crate::archive::save_v2_archive(&json, "Legacy", path.to_str().unwrap(), None, false).unwrap();
+            assert_eq!(load_project(&path).unwrap().settings.physics.sim_rate, SimRate::Hz60, "{missing}");
+            std::fs::remove_file(&path).unwrap();
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}

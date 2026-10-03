@@ -1,21 +1,46 @@
-//! The lattice a GPU liquid simulates, couples and meshes on: the domain
-//! layout's box grown by [`PADDING_NODES`] per side, with the walls as
-//! solid. It is built only from a padded layout, or read back from the
-//! wires such a lattice produced, so a solver built on it cannot hand the
-//! surface bare, unpadded bounds.
+//! GPU liquid grids: the simulation lattice retains [`PADDING_NODES`] per
+//! side; [`LiquidLattice::surface`] derives the native FLIP mesh/solid grid
+//! with 1.5-cell padding. Both retain the authored box and uniform spacing.
 
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid::FluidDomainLayout;
 use crate::node_graph::transform::Transform;
+use crate::node_graph::parameters::ParamValue;
 
 /// Nodes added outside the authored box on every side (taichi `padding = 3`).
 pub const PADDING_NODES: u32 = 3;
 
+/// Native meshing extent: three extra cells total, 1.5 on each side.
+pub const SURFACE_PADDING_CELLS: f32 = 1.5;
+pub const SURFACE_EXTRA_NODES: u32 = 4;
+
 /// Most nodes per axis a lattice wire may carry, as every lattice atom.
 pub const MAX_LATTICE_NODES: u32 = 1024;
 
+/// The optional cell-centred interior field identifies its physical grid by
+/// exact length. Support the native mesh (1.5h padding) and existing solver
+/// lattices (3h); their products are strictly ordered, so never ambiguous.
+pub(crate) fn interior_cells(nodes: [u32; 3], values: u64) -> Option<[u32; 3]> {
+    [SURFACE_EXTRA_NODES, 1 + 2 * PADDING_NODES].into_iter().find_map(|extra| {
+        let cells = nodes.map(|n| n.saturating_sub(extra));
+        (cells.iter().all(|&n| n > 0)
+            && cells.into_iter().map(u64::from).product::<u64>() == values)
+            .then_some(cells)
+    })
+}
+
+/// Old embedded graphs feed a simulation-grid solid. New builders explicitly
+/// opt into the native grid when they also wire the separately sampled solid.
+pub(crate) fn frame_lattice(lattice: LiquidLattice, params: &crate::node_graph::effect_node::ParamValues) -> LiquidLattice {
+    if matches!(params.get("native_mesh_grid"), Some(ParamValue::Bool(true))) {
+        lattice.surface()
+    } else {
+        lattice
+    }
+}
+
 /// Node (i, j, k) at `min + (i, j, k) · cell_size`. The fields are private:
-/// [`Self::from_layout`] is the only public way to make one.
+/// Constructed from a domain layout, then optionally converted to its surface.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LiquidLattice {
     min: [f32; 3],
@@ -34,6 +59,18 @@ impl LiquidLattice {
             nodes: layout.cells.map(|n| n + 1 + 2 * PADDING_NODES),
             cell_size: dx,
             cells: layout.cells,
+        }
+    }
+
+    /// Native FLIP meshing grid: authored cells + 3, with one more node.
+    /// ParticleMesher::_initialize and Polygonizer3d::_getVertexPosition use
+    /// integer node positions; the native origin supplies the half-cell phase.
+    pub fn surface(&self) -> Self {
+        Self {
+            min: self.box_min().map(|v| v - SURFACE_PADDING_CELLS * self.cell_size),
+            nodes: self.cells.map(|n| n + SURFACE_EXTRA_NODES),
+            cell_size: self.cell_size,
+            cells: self.cells,
         }
     }
 
@@ -86,7 +123,7 @@ impl LiquidLattice {
 
     /// Minimum corner of the authored box: the first cell inside the padding.
     pub fn box_min(&self) -> [f32; 3] {
-        self.min.map(|v| v + PADDING_NODES as f32 * self.cell_size)
+        std::array::from_fn(|d| self.min[d] + (self.nodes[d] - self.cells[d] - 1) as f32 * 0.5 * self.cell_size)
     }
 
     pub fn cell_size(&self) -> f32 {
@@ -123,7 +160,7 @@ impl LiquidLattice {
     /// lattice diagonal.
     pub fn wall_distance(&self, closed_faces: u32) -> Vec<f32> {
         let dx = self.cell_size;
-        let low: [f32; 3] = std::array::from_fn(|d| self.min[d] + PADDING_NODES as f32 * dx);
+        let low = self.box_min();
         let high: [f32; 3] = std::array::from_fn(|d| low[d] + self.cells[d] as f32 * dx);
         let far = self.nodes.iter().map(|&n| (n as f32 * dx).powi(2)).sum::<f32>().sqrt();
         let [nx, ny, nz] = self.nodes;
@@ -153,6 +190,60 @@ impl LiquidLattice {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn surface_lattice_matches_native_engine_nodes_and_crossings() {
+        // Independent native formula: config adds 3 cells, native_origin
+        // subtracts 1.5h; particlemesher.cpp multiplies by subdivision then
+        // adds one; polygonizer3d.cpp emits h * index without another shift.
+        for (size, resolution) in [(4.0, 64), (1.0, 8), (6.0, 32)] {
+            let layout = crate::node_graph::fluid::domain_layout(None, size, resolution).unwrap();
+            let mesh = LiquidLattice::from_layout(&layout).surface();
+            let (native_bounds, native_nodes) = layout.solid_lattice();
+            assert_eq!(mesh.nodes(), native_nodes);
+            assert_eq!(mesh.bounds(), native_bounds);
+            assert_eq!(mesh.nodes(), [resolution + 4; 3]);
+            if resolution == 64 {
+                assert_eq!(mesh.min(), [-2.09375, -0.09375, -2.09375]);
+                assert_eq!(mesh.bounds().scale, [4.1875; 3]);
+            }
+            for axis in 0..3 {
+                let h = layout.cell_size;
+                let origin = f64::from(layout.min[axis]) - 1.5 * h;
+                assert_eq!(f64::from(mesh.min()[axis]), origin);
+                for subdivision in [1, 2, 3] {
+                    let nodes = (resolution + 3) * subdivision + 1;
+                    let step = h / f64::from(subdivision);
+                    for i in 0..nodes {
+                        let native = origin + f64::from(i) * step;
+                        let actual = f64::from(mesh.min()[axis])
+                            + f64::from(i) * f64::from(mesh.cell_size()) / f64::from(subdivision);
+                        assert!((native - actual).abs() < 1e-12);
+                    }
+                }
+            }
+            let field = mesh.wall_distance(1 << 2);
+            let nx = mesh.nodes()[0] as usize;
+            let a = f64::from(field[nx]);
+            let b = f64::from(field[2 * nx]);
+            assert_eq!((a, b), (-0.5 * layout.cell_size, 0.5 * layout.cell_size));
+            let crossing = f64::from(mesh.min()[1]) + (1.0 - a / (b - a)) * layout.cell_size;
+            assert_eq!(crossing, f64::from(layout.min[1]));
+        }
+    }
+
+    #[test]
+    fn interior_grid_counts_identify_padding_and_reject_short_fields() {
+        for cells in [[8u32; 3], [32, 16, 8], [64; 3]] {
+            let values = cells.into_iter().map(u64::from).product::<u64>();
+            for extra in [4, 7] {
+                let nodes = cells.map(|n| n + extra);
+                assert_eq!(interior_cells(nodes, values), Some(cells));
+                assert_eq!(interior_cells(nodes, values - 1), None);
+                assert_eq!(interior_cells(nodes, 0), None);
+            }
+        }
+    }
 
     #[test]
     fn liquid_lattice_pads_the_authored_box() {
@@ -279,7 +370,8 @@ mod tests {
     /// Every bundled Liquid Surface meshes on the lattice a solver's frame
     /// node published: its solid, node counts and box are wired straight from
     /// one node.fluid_surface, node.matter_frame or node.liquid_frame, never
-    /// a hand-made transform or value that could drop the padding.
+    /// a hand-made transform or value that could drop the padding. A
+    /// display-time solid is a node.mix_arrays of that frame's two solids.
     #[test]
     fn liquid_surface_lattice_comes_from_the_frame() {
         const FRAMES: [&str; 3] =
@@ -288,7 +380,12 @@ mod tests {
         for (type_id, flat) in flat_bundled_hosts() {
             let source = |id: u32, port: &str| source(&type_id, &flat, id, port);
             for volume in flat.nodes.iter().filter(|n| n.type_id == "node.particle_volume") {
-                let (frame, port) = source(volume.id, "solid");
+                let (mut frame, mut port) = source(volume.id, "solid");
+                if type_of(&flat, frame) == Some("node.mix_arrays") {
+                    let (a, b) = (source(frame, "a"), source(frame, "b"));
+                    assert_eq!((a.1, b), ("solid_a", (a.0, "solid_b")), "{type_id}: display solid");
+                    (frame, port) = a;
+                }
                 assert!(FRAMES.contains(&type_of(&flat, frame).unwrap_or("")), "{type_id}: solid from {port}");
                 assert!(matches!(port, "solid_a" | "solid_b"), "{type_id}: solid from {port}");
                 let (box_node, _) = source(volume.id, "center_x");

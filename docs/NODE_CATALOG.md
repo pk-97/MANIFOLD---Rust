@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 377 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 381 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -297,7 +297,7 @@ _Generated from the node registry. Do not hand-edit. 377 nodes registered, group
 | Turbulence (simplex) | `node.turbulence` | Filter | Pushes particles around with a flowing noise field, giving organic, swirling motion. The classic turbulence force. |
 | Wrap Around (torus) | `node.wrap_around` | Filter | Wraps particles back to the opposite edge when they leave the frame, so the cloud loops seamlessly instead of escaping. |
 
-### Particles 3D (69)
+### Particles 3D (72)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -319,6 +319,7 @@ _Generated from the node registry. Do not hand-edit. 377 nodes registered, group
 | GPU FLIP Step | `node.gpu_flip_step` | Filter | Moves the water forward one tick, in Steps substeps: gravity, solids, incompressibility and the particles' motion. |
 | Grid to Matter | `node.grid_to_matter` | Filter | Moves each liquid particle with the grid's velocities and updates how compressed it is. |
 | Inside Turbulence Potential | `node.inside_turbulence_potential` | Filter | Finds submerged turbulent emitters, including near-surface particles classified inside by FLIP. |
+| Interpolate Particle Frames | `node.interpolate_particle_frames` | Filter | Smooths a particle simulation between two accepted frames while letting new particles grow in naturally. |
 | Jitter Particles | `node.jitter_particles` | Filter | Nudges each liquid particle by a small random amount, so foam doesn't line up on the simulation's grid. |
 | Keep In Box (3D) | `node.keep_in_box_3d` | Filter | Holds 3D particles inside their container, either wrapping them around or bouncing them back at the edges. The hard boundary after a move. |
 | Keep Whitewater | `node.keep_whitewater` | Filter | Decides which foam, spray and bubbles survive this step: the dead, the stray and the overcrowded go. |
@@ -347,6 +348,7 @@ _Generated from the node registry. Do not hand-edit. 377 nodes registered, group
 | Particles To Copies | `node.particles_to_copies` | Map | Places a copy of a shape at every liquid particle, sized by the particle, so you can see the particles themselves. |
 | Preserve Foam | `node.preserve_foam` | Filter | Keeps foam alive longer where lots of it has gathered, so thick foam lingers. |
 | Push From Walls (3D) | `node.push_from_walls_3d` | Filter | Pushes 3D particles gently away from the walls of their container as they get close, keeping them inside without a hard bounce. |
+| Push Out Of Solid | `node.push_out_of_solid` | Filter | Moves liquid particles out of solid regions while keeping their size, velocity and identity. |
 | Redistance Lattice | `node.redistance_lattice` | Filter | Rebuild a node-centred signed distance field from the input zero surface, using the nearest marching-cubes triangle within Band metres. The sign comes from the… |
 | Remove Drift (3D) | `node.remove_drift_3d` | Filter | Balances the forces on a particle system so it stops slowly sliding in one direction — a long-running fluid stays centered instead of silting into a corner. |
 | Retype Whitewater | `node.retype_whitewater` | Filter | Re-decides whether each whitewater particle is now spray, foam or a bubble after it has moved. |
@@ -363,6 +365,7 @@ _Generated from the node registry. Do not hand-edit. 377 nodes registered, group
 | Turbulence (3D, simplex) | `node.turbulence_3d` | Filter | Pushes 3D particles around with a flowing 3D noise field for organic, swirling motion through space. |
 | Emission Count | `node.turbulence_emission_count` | Filter | Works out how many foam, spray and bubble particles each bit of breaking water throws off this frame. |
 | Turbulence Field | `node.turbulence_field` | Filter | Measures local liquid agitation for whitewater emission. |
+| Upwind Distance | `node.upwind_distance` | Filter | One FLIP Fluids upwind signed-distance sweep on valid cells, with recomputed smoothed sign, clamped neighbours and pseudo-time h/2. Invalid cells retain their … |
 | Wavecrest Potential | `node.wavecrest_potential` | Filter | Scores how sharply each bit of water is breaking over a wave crest, which is where foam and spray come from. |
 | Whitewater Emitter Velocity | `node.whitewater_emitter_velocity` | Filter | Scales surface emitter velocity by the FLIP spray emission factor. |
 | Whitewater Influence | `node.whitewater_influence` | Filter | Decays obstacle influence and reapplies solid sources. |
@@ -423,7 +426,7 @@ _Generated from the node registry. Do not hand-edit. 377 nodes registered, group
 | Track Persist | `node.track_persist` | Filter | Keeps a stable identity on each tracked blob from frame to frame, holding onto one briefly even if it flickers out. Stops IDs from jumping around. |
 | Track Regions | `node.track_regions` | Filter | Assigns stable IDs and motion to detected regions while preserving the legacy box stream for existing HUD nodes. |
 
-### Math & Convert (25)
+### Math & Convert (26)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -435,6 +438,7 @@ _Generated from the node registry. Do not hand-edit. 377 nodes registered, group
 | Divide By Value | `node.divide_by_value` | Map | Divides a list of numbers by one number the GPU just worked out. |
 | Dot Products | `node.dot_products` | Map | Measures how much a list of numbers lines up with each row of a table, all on the GPU. |
 | Magnitude → dB | `node.magnitude_db` | Filter | Converts a brightness or spectrum magnitude image into a bounded decibel field for meters and palettes. |
+| Mix Arrays | `node.mix_arrays` | Filter | Blends two GPU lists of numbers element by element for display-time interpolation. |
 | Normalize | `node.normalize` | Filter | Scales the red and green channels read as a 2D vector down to length 1, keeping the direction and dropping the magnitude. |
 | Pack RGBA | `node.pack_rgba` | Filter | Combines four single-channel images into one RGBA image, one image per colour channel. The opposite of pulling an image apart. |
 | Power | `node.power` | Filter | Raises each value to a power, which sharpens or softens a 0-to-1 field. Above 1 pushes toward black, below 1 lifts the midtones. |
@@ -507,7 +511,7 @@ _Generated from the node registry. Do not hand-edit. 377 nodes registered, group
 | — | `system.mesh_input` | — | — |
 | — | `system.mesh_output` | — | — |
 
-### Effect & generator presets (95)
+### Effect & generator presets (96)
 
 | id | name | kind | category | params |
 |---|---|---|---|---|
@@ -601,6 +605,7 @@ _Generated from the node registry. Do not hand-edit. 377 nodes registered, group
 | `WaterDamBreakGpu` | Water — Dam Break (GPU Surface) | generator | Sim | 2314 |
 | `WaterDamBreakGpuFlip` | Water — Dam Break (GPU FLIP) | generator | Sim | 2613 |
 | `WaterDamBreakMatter` | Water — Dam Break (Live GPU) | generator | Sim | 1397 |
+| `WaterDamBreakParticles` | Water — Dam Break (Particle View) | generator | Sim | 2606 |
 | `WaterFloatingBoxMatter` | Water — Floating Box (Live GPU) | generator | Sim | 1390 |
 | `WaterStillPoolMatter` | Water — Still Pool (Live GPU) | generator | Sim | 1065 |
 | `Watercolor` | Watercolor | effect | Stylize | 4 |

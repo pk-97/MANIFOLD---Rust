@@ -15461,7 +15461,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     dst[idx] = r1;
 }
 
-=== generator:WaterDamBreakGpuFlip node:99 ===
+=== generator:WaterDamBreakGpuFlip node:108 ===
 struct Params {
     n0_nodes_x: f32,
     n0_nodes_y: f32,
@@ -15631,7 +15631,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     dst[idx] = r1;
 }
 
-=== generator:WaterDamBreakGpuFlip node:100 ===
+=== generator:WaterDamBreakGpuFlip node:109 ===
 struct Params {
     n0_nodes_x: f32,
     n0_nodes_y: f32,
@@ -16033,6 +16033,300 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let r0 = n0_body(idx, count, params.n0_nodes_x, params.n0_nodes_y, params.n0_nodes_z, params.n0_size_x, params.n0_size_y, params.n0_size_z, params.n0_band, params.n0_enabled);
     let r1 = n1_body(idx, count, r0, params.n1_offset);
+    dst[idx] = r1;
+}
+
+=== generator:WaterDamBreakGpuFlip node:110 ===
+struct Element {
+    position_radius: vec4<f32>,
+    velocity: vec3<f32>,
+    id: u32,
+}
+
+struct Params {
+    n0_count_a: f32,
+    n0_count_b: f32,
+    n0_identity_a: f32,
+    n0_identity_b: f32,
+    n0_blend: f32,
+    n0_span: f32,
+    n0_acceleration_x: f32,
+    n0_acceleration_y: f32,
+    n0_acceleration_z: f32,
+    n1_center_x: f32,
+    n1_center_y: f32,
+    n1_center_z: f32,
+    n1_size_x: f32,
+    n1_size_y: f32,
+    n1_size_z: f32,
+    n1_nodes_x: f32,
+    n1_nodes_y: f32,
+    n1_nodes_z: f32,
+    _pad0: u32,
+    _pad1: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> src_0: array<Element>;
+@group(0) @binding(2) var<storage, read> src_1: array<Element>;
+@group(0) @binding(3) var<storage, read> src_2: array<f32>;
+// @fused_output
+@group(0) @binding(4) var<storage, read_write> dst: array<Element>;
+// @fused_output_capacity: s1
+
+fn b_count(value: f32, capacity: u32) -> u32 {
+    if value < 0.0 {
+        return capacity;
+    }
+    if !(value >= 0.0) {
+        return 0u;
+    }
+    return min(u32(min(value, f32(capacity))), capacity);
+}
+
+fn a_count(value: f32, capacity: u32) -> u32 {
+    if !(value >= 0.0) {
+        return 0u;
+    }
+    return min(u32(min(value, f32(capacity))), capacity);
+}
+
+fn safe_blend(value: f32) -> f32 {
+    if !(value >= 0.0) {
+        return 0.0;
+    }
+    return min(value, 1.0);
+}
+
+fn safe_span(value: f32) -> f32 {
+    if !(value > 0.0) {
+        return 0.0;
+    }
+    return value;
+}
+
+fn zero_particle() -> Element {
+    return Element(vec4<f32>(0.0), vec3<f32>(0.0), 0u);
+}
+
+fn hermite_particle(a: Element, b: Element, t: f32, span: f32) -> Element {
+    if span == 0.0 {
+        return Element(b.position_radius, b.velocity, b.id);
+    }
+
+    let t2 = t * t;
+    let t3 = t2 * t;
+    let h00 = 2.0 * t3 - 3.0 * t2 + 1.0;
+    let h10 = t3 - 2.0 * t2 + t;
+    let h01 = -2.0 * t3 + 3.0 * t2;
+    let h11 = t3 - t2;
+    let position = h00 * a.position_radius.xyz
+        + h10 * span * a.velocity
+        + h01 * b.position_radius.xyz
+        + h11 * span * b.velocity;
+
+    // Derivative of the Hermite curve with respect to physical time.  The
+    // position terms divide by span; this helper is only called for span > 0.
+    let dh00 = (6.0 * t2 - 6.0 * t) / span;
+    let dh10 = 3.0 * t2 - 4.0 * t + 1.0;
+    let dh01 = (-6.0 * t2 + 6.0 * t) / span;
+    let dh11 = 3.0 * t2 - 2.0 * t;
+    let velocity = dh00 * a.position_radius.xyz
+        + dh10 * a.velocity
+        + dh01 * b.position_radius.xyz
+        + dh11 * b.velocity;
+    let radius = mix(a.position_radius.w, b.position_radius.w, t);
+    return Element(vec4<f32>(position, radius), velocity, b.id);
+}
+
+fn birth_particle(b: Element, t: f32, span: f32, acceleration: vec3<f32>, grow: f32) -> Element {
+    let tau = (1.0 - t) * span;
+    let position = b.position_radius.xyz - tau * b.velocity + 0.5 * acceleration * tau * tau;
+    let velocity = b.velocity - acceleration * tau;
+    return Element(vec4<f32>(position, b.position_radius.w * grow), velocity, b.id);
+}
+
+fn po_node(at: vec3<i32>, nodes: vec3<u32>) -> f32 {
+    if any(at < vec3<i32>(0)) || any(at >= vec3<i32>(nodes)) {
+        return 0.0;
+    }
+    let u = vec3<u32>(at);
+    return src_2[u.x + nodes.x * (u.y + nodes.y * u.z)];
+}
+
+fn po_sample(q_in: vec3<f32>, nodes: vec3<u32>) -> f32 {
+    let top = vec3<f32>(nodes - vec3<u32>(1u));
+    let q = clamp(q_in, vec3<f32>(0.0), top);
+    let base = min(vec3<i32>(floor(q)), vec3<i32>(nodes - vec3<u32>(2u)));
+    let f = q - vec3<f32>(base);
+    var value = 0.0;
+    for (var corner = 0u; corner < 8u; corner = corner + 1u) {
+        let offset = vec3<i32>(i32(corner & 1u), i32((corner >> 1u) & 1u), i32((corner >> 2u) & 1u));
+        let weight = select(1.0 - f.x, f.x, offset.x == 1)
+            * select(1.0 - f.y, f.y, offset.y == 1)
+            * select(1.0 - f.z, f.z, offset.z == 1);
+        value = value + weight * po_node(base + offset, nodes);
+    }
+    return value;
+}
+
+fn po_gradient(q: vec3<f32>, nodes: vec3<u32>, spacing: vec3<f32>) -> vec3<f32> {
+    // Half a lattice cell on either side gives a central difference while
+    // retaining the same trilinear value at arbitrary particle positions.
+    let half = vec3<f32>(0.5);
+    let dx = po_sample(q + vec3<f32>(half.x, 0.0, 0.0), nodes)
+        - po_sample(q - vec3<f32>(half.x, 0.0, 0.0), nodes);
+    let dy = po_sample(q + vec3<f32>(0.0, half.y, 0.0), nodes)
+        - po_sample(q - vec3<f32>(0.0, half.y, 0.0), nodes);
+    let dz = po_sample(q + vec3<f32>(0.0, 0.0, half.z), nodes)
+        - po_sample(q - vec3<f32>(0.0, 0.0, half.z), nodes);
+    return vec3<f32>(dx / max(spacing.x, 1.0e-6), dy / max(spacing.y, 1.0e-6), dz / max(spacing.z, 1.0e-6));
+}
+
+fn n0_body(
+    idx: u32,
+    count: u32,
+    e_particles_b: Element,
+    count_a: f32,
+    count_b: f32,
+    identity_a: f32,
+    identity_b: f32,
+    blend: f32,
+    span: f32,
+    acceleration_x: f32,
+    acceleration_y: f32,
+    acceleration_z: f32,
+) -> Element {
+    // `count` is the output-capacity anchor from particles_b.  Keeping this
+    // bound independent of the coincident input global is required when the
+    // atom fuses: a coincident producer is a register, not a storage binding.
+    let b_limit = b_count(count_b, count);
+    if idx >= b_limit || !(e_particles_b.position_radius.w > 0.0) {
+        return zero_particle();
+    }
+
+    let t = safe_blend(blend);
+    let h = safe_span(span);
+    let a_limit = a_count(count_a, arrayLength(&src_0));
+    var matched = false;
+    var a_particle = zero_particle();
+    if identity_a == identity_b && e_particles_b.id != 0u {
+        var low = 0u;
+        var high = a_limit;
+        loop {
+            if low >= high {
+                break;
+            }
+            let middle = low + (high - low) / 2u;
+            let middle_id = src_0[middle].id;
+            if middle_id < e_particles_b.id {
+                low = middle + 1u;
+            } else {
+                high = middle;
+            }
+        }
+        if low < a_limit {
+            let candidate = src_0[low];
+            if candidate.id == e_particles_b.id && candidate.id != 0u {
+                matched = true;
+                a_particle = candidate;
+            }
+        }
+    }
+
+    if matched {
+        return hermite_particle(a_particle, e_particles_b, t, h);
+    }
+    return birth_particle(
+        e_particles_b,
+        t,
+        h,
+        vec3<f32>(acceleration_x, acceleration_y, acceleration_z),
+        select(1.0, t, a_limit > 0u),
+    );
+}
+
+fn n1_body(
+    idx: u32,
+    count: u32,
+    e_particles: Element,
+    center_x: f32,
+    center_y: f32,
+    center_z: f32,
+    size_x: f32,
+    size_y: f32,
+    size_z: f32,
+    nodes_x: f32,
+    nodes_y: f32,
+    nodes_z: f32,
+) -> Element {
+    var out = e_particles;
+    if !(e_particles.position_radius.w > 0.0) {
+        return out;
+    }
+    // Match the standalone runtime's scalar policy exactly: live wires may
+    // carry fractional values, but lattice dimensions are rounded and have a
+    // minimum of two nodes before sizing and bounds checks.
+    let raw_nodes = vec3<f32>(nodes_x, nodes_y, nodes_z);
+    // Avoid adding 0.5 to an already integral large f32, which can round up.
+    let lattice = floor(raw_nodes) + select(vec3<f32>(0.0), vec3<f32>(1.0), fract(raw_nodes) >= vec3<f32>(0.5));
+    if !all(lattice >= vec3<f32>(2.0)) || !all(lattice <= vec3<f32>(16777216.0)) {
+        return out;
+    }
+    let nodes = vec3<u32>(lattice);
+    // Divide the available storage so a large authored lattice cannot wrap
+    // a u32 product and accidentally pass the bounds check.
+    if nodes.z > arrayLength(&src_2) / nodes.x / nodes.y {
+        return out;
+    }
+    let size = vec3<f32>(size_x, size_y, size_z);
+    let center = vec3<f32>(center_x, center_y, center_z);
+    if !all(size > vec3<f32>(0.0)) || !all(size <= vec3<f32>(3.402823e+38))
+        || !all(abs(center) <= vec3<f32>(3.402823e+38)) {
+        return out;
+    }
+    let spacing = size / vec3<f32>(nodes - vec3<u32>(1u));
+    let origin = center - 0.5 * size;
+    var position = e_particles.position_radius.xyz;
+    let top = vec3<f32>(nodes - vec3<u32>(1u));
+    // Four fixed normalized-gradient steps cover curvature and trilinear
+    // interpolation error while keeping this a barrier-free per-particle
+    // body with deterministic work.
+    for (var iteration = 0u; iteration < 4u; iteration = iteration + 1u) {
+        let q = (position - origin) / spacing;
+        if any(q < vec3<f32>(0.0)) || any(q > top) {
+            break;
+        }
+        let phi = po_sample(q, nodes);
+        if !(phi < 0.0) {
+            break;
+        }
+        let gradient = po_gradient(q, nodes, spacing);
+        let gradient_length = length(gradient);
+        // A flat negative field has no defined outward direction. Keep it
+        // stable rather than producing NaNs or an arbitrary axis push.
+        if !(gradient_length > 1.0e-6)
+            || !(gradient_length < 3.402823e+38)
+            || !(gradient_length == gradient_length)
+        {
+            break;
+        }
+        position = position - phi * gradient / gradient_length;
+    }
+    out.position_radius = vec4<f32>(position, e_particles.position_radius.w);
+    return out;
+}
+
+@compute @workgroup_size(256)
+fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    let count = arrayLength(&src_1);
+    if idx >= count {
+        return;
+    }
+    let e_1 = src_1[idx];
+    let r0 = n0_body(idx, count, e_1, params.n0_count_a, params.n0_count_b, params.n0_identity_a, params.n0_identity_b, params.n0_blend, params.n0_span, params.n0_acceleration_x, params.n0_acceleration_y, params.n0_acceleration_z);
+    let r1 = n1_body(idx, count, r0, params.n1_center_x, params.n1_center_y, params.n1_center_z, params.n1_size_x, params.n1_size_y, params.n1_size_z, params.n1_nodes_x, params.n1_nodes_y, params.n1_nodes_z);
     dst[idx] = r1;
 }
 
@@ -16609,6 +16903,313 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let r0 = n0_body(idx, count, params.n0_nodes_x, params.n0_nodes_y, params.n0_nodes_z, params.n0_size_x, params.n0_size_y, params.n0_size_z, params.n0_band, params.n0_enabled);
     let r1 = n1_body(idx, count, r0, params.n1_offset);
     dst[idx] = r1;
+}
+
+=== generator:WaterDamBreakParticles node:519 ===
+struct Element {
+    position_radius: vec4<f32>,
+    velocity: vec3<f32>,
+    id: u32,
+}
+
+struct Element2 {
+    pos_scale: vec4<f32>,
+    rot: vec4<f32>,
+}
+
+struct Params {
+    n0_count_a: f32,
+    n0_count_b: f32,
+    n0_identity_a: f32,
+    n0_identity_b: f32,
+    n0_blend: f32,
+    n0_span: f32,
+    n0_acceleration_x: f32,
+    n0_acceleration_y: f32,
+    n0_acceleration_z: f32,
+    n1_center_x: f32,
+    n1_center_y: f32,
+    n1_center_z: f32,
+    n1_size_x: f32,
+    n1_size_y: f32,
+    n1_size_z: f32,
+    n1_nodes_x: f32,
+    n1_nodes_y: f32,
+    n1_nodes_z: f32,
+    n2_live_count: f32,
+    _pad0: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> src_0: array<Element>;
+@group(0) @binding(2) var<storage, read> src_1: array<Element>;
+@group(0) @binding(3) var<storage, read> src_2: array<f32>;
+// @fused_output
+@group(0) @binding(4) var<storage, read_write> dst: array<Element2>;
+// @fused_output_capacity: s1
+
+fn b_count(value: f32, capacity: u32) -> u32 {
+    if value < 0.0 {
+        return capacity;
+    }
+    if !(value >= 0.0) {
+        return 0u;
+    }
+    return min(u32(min(value, f32(capacity))), capacity);
+}
+
+fn a_count(value: f32, capacity: u32) -> u32 {
+    if !(value >= 0.0) {
+        return 0u;
+    }
+    return min(u32(min(value, f32(capacity))), capacity);
+}
+
+fn safe_blend(value: f32) -> f32 {
+    if !(value >= 0.0) {
+        return 0.0;
+    }
+    return min(value, 1.0);
+}
+
+fn safe_span(value: f32) -> f32 {
+    if !(value > 0.0) {
+        return 0.0;
+    }
+    return value;
+}
+
+fn zero_particle() -> Element {
+    return Element(vec4<f32>(0.0), vec3<f32>(0.0), 0u);
+}
+
+fn hermite_particle(a: Element, b: Element, t: f32, span: f32) -> Element {
+    if span == 0.0 {
+        return Element(b.position_radius, b.velocity, b.id);
+    }
+
+    let t2 = t * t;
+    let t3 = t2 * t;
+    let h00 = 2.0 * t3 - 3.0 * t2 + 1.0;
+    let h10 = t3 - 2.0 * t2 + t;
+    let h01 = -2.0 * t3 + 3.0 * t2;
+    let h11 = t3 - t2;
+    let position = h00 * a.position_radius.xyz
+        + h10 * span * a.velocity
+        + h01 * b.position_radius.xyz
+        + h11 * span * b.velocity;
+
+    // Derivative of the Hermite curve with respect to physical time.  The
+    // position terms divide by span; this helper is only called for span > 0.
+    let dh00 = (6.0 * t2 - 6.0 * t) / span;
+    let dh10 = 3.0 * t2 - 4.0 * t + 1.0;
+    let dh01 = (-6.0 * t2 + 6.0 * t) / span;
+    let dh11 = 3.0 * t2 - 2.0 * t;
+    let velocity = dh00 * a.position_radius.xyz
+        + dh10 * a.velocity
+        + dh01 * b.position_radius.xyz
+        + dh11 * b.velocity;
+    let radius = mix(a.position_radius.w, b.position_radius.w, t);
+    return Element(vec4<f32>(position, radius), velocity, b.id);
+}
+
+fn birth_particle(b: Element, t: f32, span: f32, acceleration: vec3<f32>, grow: f32) -> Element {
+    let tau = (1.0 - t) * span;
+    let position = b.position_radius.xyz - tau * b.velocity + 0.5 * acceleration * tau * tau;
+    let velocity = b.velocity - acceleration * tau;
+    return Element(vec4<f32>(position, b.position_radius.w * grow), velocity, b.id);
+}
+
+fn po_node(at: vec3<i32>, nodes: vec3<u32>) -> f32 {
+    if any(at < vec3<i32>(0)) || any(at >= vec3<i32>(nodes)) {
+        return 0.0;
+    }
+    let u = vec3<u32>(at);
+    return src_2[u.x + nodes.x * (u.y + nodes.y * u.z)];
+}
+
+fn po_sample(q_in: vec3<f32>, nodes: vec3<u32>) -> f32 {
+    let top = vec3<f32>(nodes - vec3<u32>(1u));
+    let q = clamp(q_in, vec3<f32>(0.0), top);
+    let base = min(vec3<i32>(floor(q)), vec3<i32>(nodes - vec3<u32>(2u)));
+    let f = q - vec3<f32>(base);
+    var value = 0.0;
+    for (var corner = 0u; corner < 8u; corner = corner + 1u) {
+        let offset = vec3<i32>(i32(corner & 1u), i32((corner >> 1u) & 1u), i32((corner >> 2u) & 1u));
+        let weight = select(1.0 - f.x, f.x, offset.x == 1)
+            * select(1.0 - f.y, f.y, offset.y == 1)
+            * select(1.0 - f.z, f.z, offset.z == 1);
+        value = value + weight * po_node(base + offset, nodes);
+    }
+    return value;
+}
+
+fn po_gradient(q: vec3<f32>, nodes: vec3<u32>, spacing: vec3<f32>) -> vec3<f32> {
+    // Half a lattice cell on either side gives a central difference while
+    // retaining the same trilinear value at arbitrary particle positions.
+    let half = vec3<f32>(0.5);
+    let dx = po_sample(q + vec3<f32>(half.x, 0.0, 0.0), nodes)
+        - po_sample(q - vec3<f32>(half.x, 0.0, 0.0), nodes);
+    let dy = po_sample(q + vec3<f32>(0.0, half.y, 0.0), nodes)
+        - po_sample(q - vec3<f32>(0.0, half.y, 0.0), nodes);
+    let dz = po_sample(q + vec3<f32>(0.0, 0.0, half.z), nodes)
+        - po_sample(q - vec3<f32>(0.0, 0.0, half.z), nodes);
+    return vec3<f32>(dx / max(spacing.x, 1.0e-6), dy / max(spacing.y, 1.0e-6), dz / max(spacing.z, 1.0e-6));
+}
+
+fn n0_body(
+    idx: u32,
+    count: u32,
+    e_particles_b: Element,
+    count_a: f32,
+    count_b: f32,
+    identity_a: f32,
+    identity_b: f32,
+    blend: f32,
+    span: f32,
+    acceleration_x: f32,
+    acceleration_y: f32,
+    acceleration_z: f32,
+) -> Element {
+    // `count` is the output-capacity anchor from particles_b.  Keeping this
+    // bound independent of the coincident input global is required when the
+    // atom fuses: a coincident producer is a register, not a storage binding.
+    let b_limit = b_count(count_b, count);
+    if idx >= b_limit || !(e_particles_b.position_radius.w > 0.0) {
+        return zero_particle();
+    }
+
+    let t = safe_blend(blend);
+    let h = safe_span(span);
+    let a_limit = a_count(count_a, arrayLength(&src_0));
+    var matched = false;
+    var a_particle = zero_particle();
+    if identity_a == identity_b && e_particles_b.id != 0u {
+        var low = 0u;
+        var high = a_limit;
+        loop {
+            if low >= high {
+                break;
+            }
+            let middle = low + (high - low) / 2u;
+            let middle_id = src_0[middle].id;
+            if middle_id < e_particles_b.id {
+                low = middle + 1u;
+            } else {
+                high = middle;
+            }
+        }
+        if low < a_limit {
+            let candidate = src_0[low];
+            if candidate.id == e_particles_b.id && candidate.id != 0u {
+                matched = true;
+                a_particle = candidate;
+            }
+        }
+    }
+
+    if matched {
+        return hermite_particle(a_particle, e_particles_b, t, h);
+    }
+    return birth_particle(
+        e_particles_b,
+        t,
+        h,
+        vec3<f32>(acceleration_x, acceleration_y, acceleration_z),
+        select(1.0, t, a_limit > 0u),
+    );
+}
+
+fn n1_body(
+    idx: u32,
+    count: u32,
+    e_particles: Element,
+    center_x: f32,
+    center_y: f32,
+    center_z: f32,
+    size_x: f32,
+    size_y: f32,
+    size_z: f32,
+    nodes_x: f32,
+    nodes_y: f32,
+    nodes_z: f32,
+) -> Element {
+    var out = e_particles;
+    if !(e_particles.position_radius.w > 0.0) {
+        return out;
+    }
+    // Match the standalone runtime's scalar policy exactly: live wires may
+    // carry fractional values, but lattice dimensions are rounded and have a
+    // minimum of two nodes before sizing and bounds checks.
+    let raw_nodes = vec3<f32>(nodes_x, nodes_y, nodes_z);
+    // Avoid adding 0.5 to an already integral large f32, which can round up.
+    let lattice = floor(raw_nodes) + select(vec3<f32>(0.0), vec3<f32>(1.0), fract(raw_nodes) >= vec3<f32>(0.5));
+    if !all(lattice >= vec3<f32>(2.0)) || !all(lattice <= vec3<f32>(16777216.0)) {
+        return out;
+    }
+    let nodes = vec3<u32>(lattice);
+    // Divide the available storage so a large authored lattice cannot wrap
+    // a u32 product and accidentally pass the bounds check.
+    if nodes.z > arrayLength(&src_2) / nodes.x / nodes.y {
+        return out;
+    }
+    let size = vec3<f32>(size_x, size_y, size_z);
+    let center = vec3<f32>(center_x, center_y, center_z);
+    if !all(size > vec3<f32>(0.0)) || !all(size <= vec3<f32>(3.402823e+38))
+        || !all(abs(center) <= vec3<f32>(3.402823e+38)) {
+        return out;
+    }
+    let spacing = size / vec3<f32>(nodes - vec3<u32>(1u));
+    let origin = center - 0.5 * size;
+    var position = e_particles.position_radius.xyz;
+    let top = vec3<f32>(nodes - vec3<u32>(1u));
+    // Four fixed normalized-gradient steps cover curvature and trilinear
+    // interpolation error while keeping this a barrier-free per-particle
+    // body with deterministic work.
+    for (var iteration = 0u; iteration < 4u; iteration = iteration + 1u) {
+        let q = (position - origin) / spacing;
+        if any(q < vec3<f32>(0.0)) || any(q > top) {
+            break;
+        }
+        let phi = po_sample(q, nodes);
+        if !(phi < 0.0) {
+            break;
+        }
+        let gradient = po_gradient(q, nodes, spacing);
+        let gradient_length = length(gradient);
+        // A flat negative field has no defined outward direction. Keep it
+        // stable rather than producing NaNs or an arbitrary axis push.
+        if !(gradient_length > 1.0e-6)
+            || !(gradient_length < 3.402823e+38)
+            || !(gradient_length == gradient_length)
+        {
+            break;
+        }
+        position = position - phi * gradient / gradient_length;
+    }
+    out.position_radius = vec4<f32>(position, e_particles.position_radius.w);
+    return out;
+}
+
+fn n2_body(idx: u32, count: u32, e_particles: Element, live_count: f32) -> Element2 {
+    if live_count >= 0.0 && f32(idx) >= live_count {
+        return Element2(vec4<f32>(0.0), vec4<f32>(0.0));
+    }
+    return Element2(e_particles.position_radius, vec4<f32>(0.0));
+}
+
+@compute @workgroup_size(256)
+fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    let count = arrayLength(&src_1);
+    if idx >= count {
+        return;
+    }
+    let e_1 = src_1[idx];
+    let r0 = n0_body(idx, count, e_1, params.n0_count_a, params.n0_count_b, params.n0_identity_a, params.n0_identity_b, params.n0_blend, params.n0_span, params.n0_acceleration_x, params.n0_acceleration_y, params.n0_acceleration_z);
+    let r1 = n1_body(idx, count, r0, params.n1_center_x, params.n1_center_y, params.n1_center_z, params.n1_size_x, params.n1_size_y, params.n1_size_z, params.n1_nodes_x, params.n1_nodes_y, params.n1_nodes_z);
+    let r2 = n2_body(idx, count, r1, params.n2_live_count);
+    dst[idx] = r2;
 }
 
 === generator:WaterFloatingBoxMatter node:81 ===

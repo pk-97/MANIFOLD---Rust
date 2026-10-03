@@ -1043,9 +1043,26 @@ fn fluid_fill_pits_expanded_band_matches_all_blobs() {
 }
 
 fn volume_distance_reference(band_extra: f32) {
-    let mut harness = Harness::new();
     let lattice = Lattice { center: [0.0, 1.0, 0.0], size: [2.0, 2.0, 2.0], cell: 0.25 };
     let solid_nodes = [9u32, 9, 9];
+    volume_distance_on_lattice(band_extra, lattice, solid_nodes);
+}
+
+#[test]
+fn fluid_mesh_grid_native_particle_field_matches_reference() {
+    let layout = crate::node_graph::fluid::domain_layout(None, 2.0, 8).unwrap();
+    let mesh = crate::node_graph::liquid::lattice::LiquidLattice::from_layout(&layout).surface();
+    // Odd cell count, even node count and native half-cell origin, including
+    // sparse blob bounds and the expanded closing band at subdivision two.
+    for band in [0.0, 0.5] {
+        volume_distance_on_lattice(band, Lattice {
+            center: mesh.bounds().pos, size: mesh.bounds().scale, cell: mesh.cell_size(),
+        }, mesh.nodes());
+    }
+}
+
+fn volume_distance_on_lattice(band_extra: f32, lattice: Lattice, solid_nodes: [u32; 3]) {
+    let mut harness = Harness::new();
     let min = lattice.min();
     let mut rng = Rng(0x1234_5678);
     let particles: Vec<FluidParticle> = (0..900u32)
@@ -1683,6 +1700,142 @@ fn fluid_volume_surface_mesh_matches_cpu_marching_cubes_on_a_sphere() {
         .sum();
     let analytic = 4.0 * std::f64::consts::PI * f64::from(sphere.radius).powi(2);
     assert!((area / analytic - 1.0).abs() < 0.01, "area {area} vs {analytic}");
+}
+
+#[test]
+fn fluid_mesh_grid_native_plane_crossing_matches_engine() {
+    let mut harness = Harness::new();
+    for resolution in [8, 16] {
+        let layout = crate::node_graph::fluid::domain_layout(None, 2.0, resolution).unwrap();
+        let mesh = crate::node_graph::liquid::lattice::LiquidLattice::from_layout(&layout).surface();
+        // Translate Y/Z to X's origin so the existing cubic MC harness can
+        // exercise the native grid against the authored low wall at x=-1.
+        let n = mesh.nodes()[0];
+        let min = mesh.min()[0];
+        let crossing = -1.0;
+        let plane = SphereLevelSet {
+            nodes: n, min, size: mesh.bounds().scale[0], center: [0.0; 3], radius: 0.0,
+            values: (0..n.pow(3)).map(|i| min + (i % n) as f32 * mesh.cell_size() - crossing).collect(),
+        };
+        let count = plane.values.len();
+        let (field, _) = harness.array(&plane.values, count);
+        let (grown, grown_buffer) = harness.array::<f32>(&[], count);
+        let offset = -0.25 * mesh.cell_size();
+        let (_, errors) = harness.run(&mut super::offset_lattice::OffsetLattice::new(),
+            &[("levelset", field)], &[("out", grown)], &params(&[("offset", offset)]));
+        assert!(errors.is_empty(), "{errors:?}");
+        let grown_values = read::<f32>(&grown_buffer, count);
+        for (&got, &original) in grown_values.iter().zip(&plane.values) {
+            assert_eq!(got, original + offset);
+        }
+        let (distance, distance_buffer) = harness.array::<f32>(&[], count);
+        let band = 2.0 * mesh.cell_size();
+        let (_, errors) = harness.run(&mut super::redistance_lattice::RedistanceLattice::new(),
+            &[("levelset", grown)], &[("out", distance)], &params(&[
+                ("nodes_x", n as f32), ("nodes_y", n as f32), ("nodes_z", n as f32),
+                ("size_x", plane.size), ("size_y", plane.size), ("size_z", plane.size),
+                ("band", band),
+            ]));
+        assert!(errors.is_empty(), "{errors:?}");
+        for (got, want) in read::<f32>(&distance_buffer, count).into_iter().zip(grown_values) {
+            assert!((got - want.clamp(-band, band)).abs() < 1e-6);
+        }
+        let mut source = field;
+        for axis in 0..3 {
+            let (stage, _) = harness.array::<f32>(&[], count);
+            let (_, errors) = harness.run(&mut SmoothLattice::new(), &[("levelset", source)],
+                &[("smoothed", stage)], &params(&[
+                    ("nodes_x", n as f32), ("nodes_y", n as f32), ("nodes_z", n as f32),
+                    ("passes", 1.0), ("axis", axis as f32),
+                ]));
+            assert!(errors.is_empty(), "{errors:?}");
+            source = stage;
+        }
+        let expected_smooth = reference_smooth(&plane.values, [n as usize; 3], 1);
+        for (got, want) in read::<f32>(&harness.buffer(source), count).into_iter().zip(expected_smooth) {
+            assert!((f64::from(got) - want).abs() < 1e-6);
+        }
+        let expected = plane.reference_positions();
+        let run = run_marching_cubes(&mut harness, &plane, 6 * (n - 1).pow(2), None);
+        assert!(run.errors.is_empty(), "{:?}", run.errors);
+        assert_eq!(run.total, Some(ParamValue::Float((expected.len() / 3) as f32)));
+        for (vertex, want) in run.vertices.iter().zip(expected) {
+            assert!((vertex.position[0] - crossing).abs() < 1e-6);
+            for (got, reference) in vertex.position.iter().zip(want) {
+                assert!((f64::from(*got) - reference).abs() < 1e-6);
+            }
+        }
+    }
+}
+
+#[test]
+fn fluid_mesh_grid_native_solid_and_clamp_match_engine() {
+    use super::liquid_solid_distance::LiquidSolidDistance;
+    use crate::node_graph::liquid::bodies::{LiquidBody, LiquidShape};
+    let mut harness = Harness::new();
+    for resolution in [8, 16] {
+        let layout = crate::node_graph::fluid::domain_layout(None, 2.0, resolution).unwrap();
+        let mesh = crate::node_graph::liquid::lattice::LiquidLattice::from_layout(&layout).surface();
+        let n = mesh.nodes();
+        let count = mesh.node_count() as usize;
+        let (bodies, _) = harness.array::<LiquidBody>(&[], 1);
+        let (shapes, _) = harness.array::<LiquidShape>(&[], 1);
+        let (atlas, _) = harness.array::<u32>(&[], 1);
+        let (solid, _) = harness.array::<f32>(&[], count);
+        let settings = params(&[
+            ("lattice_min_x", mesh.min()[0]), ("lattice_min_y", mesh.min()[1]), ("lattice_min_z", mesh.min()[2]),
+            ("nodes_x", n[0] as f32), ("nodes_y", n[1] as f32), ("nodes_z", n[2] as f32),
+            ("cell_size", mesh.cell_size()), ("wall_inset", 1.5), ("closed_faces", 63.0),
+        ]);
+        let (_, errors) = harness.run(&mut LiquidSolidDistance::new(),
+            &[("bodies", bodies), ("shapes", shapes), ("atlas", atlas)], &[("solid", solid)], &settings);
+        assert!(errors.is_empty(), "{errors:?}");
+        let values = read::<f32>(&harness.buffer(solid), count);
+        // Native node p = domain_min + (i - 1.5)h; distance to all six walls.
+        for (i, &value) in values.iter().enumerate() {
+            let q = [i as u32 % n[0], i as u32 / n[0] % n[1], i as u32 / (n[0] * n[1])];
+            let expected = q.into_iter().map(|v| {
+                let x = (f64::from(v) - 1.5) * layout.cell_size;
+                x.min(2.0 - x)
+            }).fold(f64::INFINITY, f64::min);
+            assert!((f64::from(value) - expected).abs() < 1e-6);
+        }
+        let simulation = crate::node_graph::liquid::lattice::LiquidLattice::from_layout(&layout);
+        let (particles, _) = harness.array(&[particle([0.0, 1.0, 0.0], 0.1, 1)], 1);
+        let (stats, _) = harness.array(&[0u32; super::liquid_stats::LIQUID_STATS_WORDS as usize], super::liquid_stats::LIQUID_STATS_WORDS as usize);
+        // A frame publishes only beside a birth identity: liquid_state's seed
+        // for this one particle is next id 2, epoch 0, no reservation, no reset.
+        let (identity, _) = harness.array::<u32>(&[2, 0, 0, 0], 4);
+        let (published, _) = harness.array::<f32>(&[], 1);
+        let grid_nodes: [Slot; 3] = std::array::from_fn(|_| harness.scalar());
+        let mut frame_params = params(&[
+            ("lattice_min_x", simulation.min()[0]), ("lattice_min_y", simulation.min()[1]), ("lattice_min_z", simulation.min()[2]),
+            ("nodes_x", simulation.nodes()[0] as f32), ("nodes_y", simulation.nodes()[1] as f32), ("nodes_z", simulation.nodes()[2] as f32),
+            ("cell_size", simulation.cell_size()), ("count", 1.0), ("simulation_time", 1.0),
+        ]);
+        frame_params.insert("native_mesh_grid".into(), ParamValue::Bool(true));
+        let mut frame = super::liquid_frame::LiquidFrame::new();
+        frame.prepare_pipelines(&harness.device);
+        let (scalars, errors) = harness.run(&mut frame,
+            &[("particles", particles), ("stats", stats), ("identity", identity), ("solid", solid)],
+            &[("solid_b", published), ("grid_nodes_x", grid_nodes[0]), ("grid_nodes_y", grid_nodes[1]), ("grid_nodes_z", grid_nodes[2])],
+            &frame_params);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(harness.buffer(published).size, mesh.solid_bytes());
+        assert_eq!(read::<f32>(&harness.buffer(published), count), values);
+        for slot in grid_nodes {
+            assert!(scalars.iter().any(|(s, value)| *s == slot && *value == ParamValue::Float(n[0] as f32)));
+        }
+        let (field, _) = harness.array(&vec![-0.25_f32; count], count);
+        let (clamped, buffer) = harness.array::<f32>(&[], count);
+        let (_, errors) = harness.run(&mut ClampLiquidToSolids::new(),
+            &[("levelset", field), ("solid", published)], &[("clamped", clamped)],
+            &clamp_params(mesh.bounds().pos, mesh.bounds().scale, n, n, mesh.cell_size()));
+        assert!(errors.is_empty(), "{errors:?}");
+        for (value, distance) in read::<f32>(&buffer, count).into_iter().zip(values) {
+            assert_eq!(value, if distance < 0.0 { 0.0 } else { -0.25 });
+        }
+    }
 }
 
 #[test]

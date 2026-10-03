@@ -45,6 +45,8 @@ use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::fluid::TICK;
 use crate::node_graph::fluid_particles::{FluidParticle, MAX_BINS, bin_counts, bin_total};
 use crate::node_graph::liquid::grid::face_len;
+use crate::node_graph::liquid::bodies::{LiquidBody, LiquidShape};
+use crate::node_graph::liquid::fields::FieldBinding;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::physics::offline_simulation;
 use crate::node_graph::primitive::Primitive;
@@ -96,6 +98,15 @@ crate::primitive! {
         face_valid_layers: ScalarF32 optional,
         level_set: Array(f32) optional,
         distance: Array(f32) optional,
+        substep_schedule: Array(f32) optional,
+        substep_u: Array(f32) optional, substep_v: Array(f32) optional, substep_w: Array(f32) optional,
+        substep_count: ScalarF32 optional,
+        forces: Array(f32) optional, impulses: Array(f32) optional,
+        field_nodes_x: ScalarF32 optional, field_nodes_y: ScalarF32 optional, field_nodes_z: ScalarF32 optional,
+        field_spacing: ScalarF32 optional, force_lattices: ScalarF32 optional,
+        impulse_tick: ScalarF32 optional, first_tick: ScalarF32 optional,
+        regions: Array(LiquidBody) optional, shapes: Array(LiquidShape) optional, atlas: Array(u32) optional,
+        region_count: ScalarF32 optional,
         pool: Array(WhitewaterParticle) optional,
         pool_state: Array(u32) optional,
         tick_index: ScalarF32 optional,
@@ -298,7 +309,7 @@ impl StepShape {
     /// slots, every scratch, scan, sort and output slot.
     pub fn held_bytes(&self, particles: u64) -> u64 {
         let cells = self.cell_count();
-        let grid = cells * (2 * SURFACE_CROSSING_BYTES + 4 + 4 + 2 * KNOWN_VALUE + 4);
+        let grid = cells * (2 * SURFACE_CROSSING_BYTES + 4 + 4 + 4 + 2 * KNOWN_VALUE + 4);
         let per_particle = particles * (2 * PARTICLE + 4 + 4 + 4) + storage_words(particles as usize) as u64 * 4;
         let capacity = u64::from(self.capacity);
         let pool = 2 * self.spawn_bytes() + 2 * self.pool_bytes() + capacity * 4;
@@ -306,6 +317,7 @@ impl StepShape {
         let scan = storage_words(self.slot_scan_values()) as u64 * 4 + STATE_WORDS * 4;
         let outputs = OUTPUT_SLOTS as u64 * (4 * self.population_bytes() + COUNT_WORDS as u64 * 4);
         grid + per_particle + pool + sort + scan + outputs + 6 * self.solid_bytes()
+            + super::whitewater_distance::scratch_bytes(self.face_cells)
     }
 }
 
@@ -316,7 +328,9 @@ pub(crate) struct StepFrame {
     /// Live liquid particles; `None` takes every slot.
     pub count: Option<u32>,
     pub ticks: u32,
-    /// Duration of each accepted interval; export supplies exactly 1/60 s.
+    /// Simulation seconds in the accepted interval: one Sim Rate interval of
+    /// transport in export, every owed interval as one span live, both scaled
+    /// by Speed.
     pub dt: f32,
     pub epoch: u32,
     pub seed: f32,
@@ -338,7 +352,20 @@ pub(crate) struct StepFrame {
     pub preserve_foam: bool,
 }
 
+pub(crate) struct MotionInputs<'a> {
+    pub schedule: &'a GpuBuffer,
+    pub faces: [&'a GpuBuffer; 3],
+    pub count: u32,
+    pub fields: FieldBinding<'a>,
+    pub tick_index: f32,
+    pub regions: Option<&'a GpuBuffer>,
+    pub shapes: Option<&'a GpuBuffer>,
+    pub atlas: Option<&'a GpuBuffer>,
+    pub region_count: u32,
+}
+
 pub(crate) struct StepInputs<'a> {
+    pub motion: Option<MotionInputs<'a>>,
     pub particles: &'a GpuBuffer,
     pub solid: &'a GpuBuffer,
     pub obstacle_source: Option<&'a GpuBuffer>,
@@ -349,6 +376,13 @@ pub(crate) struct StepInputs<'a> {
 
 /// Each input holds at least what the shape reads from it.
 fn require_inputs(shape: &StepShape, inputs: &StepInputs<'_>) -> Result<(), String> {
+    if let Some(m) = &inputs.motion {
+        if m.schedule.size < u64::from(m.count) * 16 { return Err("substep schedule is too short".into()); }
+        for axis in 0..3 {
+            if m.faces[axis].size < u64::from(m.count) * shape.face_bytes(axis) { return Err("substep face history is too short".into()); }
+        }
+        if m.region_count > 0 && (m.regions.is_none() || m.shapes.is_none() || m.atlas.is_none()) { return Err("outflows require regions, shapes and atlas".into()); }
+    }
     if inputs.obstacle_source.is_some_and(|source| source.size < shape.solid_bytes() * 4) {
         return Err("obstacle source is shorter than the solid lattice".to_owned());
     }
@@ -399,7 +433,7 @@ impl Report {
 /// at its default, its derived uniforms, then the dispatch count, padded to
 /// 16 bytes.
 struct Uniform {
-    words: [u32; 32],
+    words: [u32; 64],
     len: usize,
 }
 
@@ -410,7 +444,7 @@ fn pack<P: Primitive>(values: &[(&str, f32)], count: u32) -> Uniform {
         "{} takes no param among {values:?}",
         P::TYPE_ID
     );
-    let mut words = [0u32; 32];
+    let mut words = [0u32; 64];
     for (word, p) in words.iter_mut().zip(params) {
         let value = values.iter().find(|(name, _)| p.name == *name).map(|&(_, v)| v).unwrap_or(match p.default {
             ParamValue::Float(v) => v,
@@ -463,7 +497,7 @@ fn dispatch(
     if count == 0 {
         return;
     }
-    let bindings: [GpuBinding<'_>; 12] = std::array::from_fn(|i| match i {
+    let bindings: [GpuBinding<'_>; 16] = std::array::from_fn(|i| match i {
         0 => GpuBinding::Bytes { binding: 0, data: uniform },
         i if i <= buffers.len() => GpuBinding::Buffer { binding: i as u32, buffer: buffers[i - 1], offset: 0 },
         _ => GpuBinding::Bytes { binding: 0, data: uniform },
@@ -636,6 +670,7 @@ fn allocate(device: &GpuDevice, bytes: u64, shared: bool) -> Result<GpuBuffer, S
 struct Fields {
     crossings: [GpuBuffer; 2],
     distance: GpuBuffer,
+    surface: GpuBuffer,
     cells: GpuBuffer,
     curvature: [GpuBuffer; 2],
     turbulence: GpuBuffer,
@@ -657,6 +692,7 @@ impl Fields {
         Ok(Self {
             crossings: [alloc(cells * SURFACE_CROSSING_BYTES)?, alloc(cells * SURFACE_CROSSING_BYTES)?],
             distance: alloc(cells * 4)?,
+            surface: alloc(cells * 4)?,
             cells: alloc(cells * 4)?,
             curvature: [alloc(cells * KNOWN_VALUE)?, alloc(cells * KNOWN_VALUE)?],
             turbulence: alloc(cells * 4)?,
@@ -791,6 +827,7 @@ impl Outputs {
 #[derive(Default)]
 pub(crate) struct Step {
     pipelines: Pipelines,
+    surface_distance: super::whitewater_distance::SurfaceDistance,
     shape: Option<StepShape>,
     epoch: Option<u32>,
     fields: Option<Fields>,
@@ -820,6 +857,7 @@ impl Step {
     ) -> Result<Report, String> {
         let device = gpu.device;
         self.pipelines.prepare(device);
+        self.surface_distance.prepare(device);
         self.emission_scan.prepare(device);
         self.slot_scan.prepare(device);
         self.sort.prepare(device);
@@ -868,6 +906,7 @@ impl Step {
     }
 
     fn reserve(&mut self, device: &GpuDevice, shape: StepShape, particles: u64) -> Result<(), String> {
+        self.surface_distance.reserve(device, shape.face_cells)?;
         if self.shape != Some(shape) {
             self.shape = None;
             self.fields = None;
@@ -902,6 +941,7 @@ impl Step {
             return Err("the boundary whitewater pool capacity or state words do not match the step".into());
         }
         self.pipelines.prepare(gpu.device);
+        self.surface_distance.prepare(gpu.device);
         self.emission_scan.prepare(gpu.device);
         self.slot_scan.prepare(gpu.device);
         self.sort.prepare(gpu.device);
@@ -1017,6 +1057,9 @@ impl Step {
             let padding = face_offset(s.nodes, s.face_cells).expect("validated face placement")[0];
             encode_pad_distance_lattice(enc, get(&p.pad_distance), distance, &f.distance,
                 s.face_cells, padding, 3.0 * s.cell_size);
+            let surface = self.surface_distance.encode(enc, distance, s.cell_size);
+            encode_pad_distance_lattice(enc, get(&p.pad_distance), surface, &f.surface,
+                s.face_cells, padding, 5.0 * s.cell_size);
             enc.compute_memory_barrier_buffers();
         } else {
             atom::<SurfaceCrossings>(
@@ -1047,6 +1090,7 @@ impl Step {
                 cells,
                 label("distance"),
             );
+            enc.copy_buffer_to_buffer(&f.distance, &f.surface, u64::from(cells) * 4);
         }
         atom::<WhitewaterInfluence>(enc, get(&p.influence),
             &[("base_level", frame.influence_base), ("decay_rate", frame.influence_decay), ("dt", frame.dt),
@@ -1062,7 +1106,7 @@ impl Step {
             enc,
             get(&p.curvature),
             &[nodes[0], nodes[1], nodes[2], ("cell_size", s.cell_size)],
-            &[&f.distance, &f.curvature[0]],
+            &[&f.surface, &f.curvature[0]],
             cells,
             label("curvature"),
         );
@@ -1113,7 +1157,7 @@ impl Step {
         velocity_params[10] = ("seed", frame.seed);
         velocity_params[11] = ("epoch", epoch);
         atom::<WhitewaterEmitterVelocity>(enc, get(&p.emitter_velocity), &velocity_params,
-            &[sampled, &f.distance, &f.cells, jittered], emitters, "node.whitewater_step.emitter_velocity");
+            &[sampled, &f.surface, &f.cells, jittered], emitters, "node.whitewater_step.emitter_velocity");
         let unscaled = sampled;
         let sampled = jittered;
         atom_then::<EnergyPotential>(
@@ -1124,7 +1168,7 @@ impl Step {
             enc,
             get(&p.wavecrest),
             &grid,
-            &[sampled, &f.distance, &f.curvature[curvature], &f.cells, wavecrest],
+            &[sampled, &f.surface, &f.curvature[curvature], &f.cells, wavecrest],
             emitters,
             "node.whitewater_step.wavecrest",
         );
@@ -1134,7 +1178,7 @@ impl Step {
         turbulence_params[10] = ("max_turbulence", frame.max_turbulence);
         turbulence_params[11] = ("inside_enabled", f32::from(u8::from(frame.inside_emission)));
         atom::<InsideTurbulencePotential>(enc, get(&p.inside), &turbulence_params,
-            &[sampled, &f.distance, &f.turbulence, &f.cells, inside], emitters, "node.whitewater_step.inside");
+            &[sampled, &f.surface, &f.turbulence, &f.cells, inside], emitters, "node.whitewater_step.inside");
         let mut count_params = [("", 0.0); 18];
         count_params[..8].copy_from_slice(&[("rate", frame.wavecrest_emission), ("turbulence_rate", frame.turbulence_emission), ("generation_rate", frame.generation_rate), ("seed", frame.seed), ("epoch", epoch), ("points_per_cell", 8.0), ("ticks", frame.ticks as f32), ("live_count", emitters as f32)]);
         count_params[8..17].copy_from_slice(&grid);
@@ -1165,7 +1209,7 @@ impl Step {
             s.capacity,
             "node.whitewater_step.spawn",
         );
-        atom::<WhitewaterType>(enc, get(&p.kind), &velocity_params, &[&f.spawns, &f.distance, &f.cells, &f.typed], s.capacity, "node.whitewater_step.kind");
+        atom::<WhitewaterType>(enc, get(&p.kind), &velocity_params, &[&f.spawns, &f.surface, &f.cells, &f.typed], s.capacity, "node.whitewater_step.kind");
         let params = HandParams { capacity: s.capacity, spawn_slots: s.capacity, emitters, count: s.capacity };
         let pool = &f.pools[self.current];
         self.hand(enc, Hand::LiveFlags, params, self.bound(pool, pool, HandBuffers::default()));
@@ -1198,7 +1242,7 @@ impl Step {
             dust_type[..9].copy_from_slice(&grid);
             dust_type[9] = ("dust", 1.0);
             atom::<WhitewaterType>(enc, get(&p.kind), &dust_type,
-                &[&f.spawns, &f.distance, &f.cells, &f.typed], s.capacity, "node.whitewater_step.dust_type");
+                &[&f.spawns, &f.surface, &f.cells, &f.typed], s.capacity, "node.whitewater_step.dust_type");
             self.hand(enc, Hand::LiveFlags, params, self.bound(pool, pool, HandBuffers::default()));
             self.slot_scan.encode_labelled(enc, s.capacity as usize, APPEND_SCAN);
             self.hand(enc, Hand::Append, params, self.bound(pool, pool, HandBuffers::default()));
@@ -1242,16 +1286,30 @@ impl Step {
             ("face_cells_z", fz),
         ];
         let [gx, gy, gz] = frame.gravity;
-        let mut advect = [("", 0.0); 16];
+        let mut advect = [("", 0.0); 24];
         advect[..12].copy_from_slice(&place);
-        advect[12..].copy_from_slice(&[("gravity_x", gx), ("gravity_y", gy), ("gravity_z", gz), ("dt", dt)]);
+        advect[12..16].copy_from_slice(&[("gravity_x", gx), ("gravity_y", gy), ("gravity_z", gz), ("dt", dt)]);
         let faces = inputs.faces;
-        atom::<AdvectWhitewater>(enc, get(&p.advect), &advect, &[a, faces[0], faces[1], faces[2], inputs.solid, b], cap, "node.whitewater_step.advect");
+        let motion = inputs.motion.as_ref();
+        let empty = &f.state;
+        let history = motion.map_or([empty;3], |m| m.faces);
+        let field_nodes = motion.map_or([2;3], |m| m.fields.nodes);
+        advect[16..].copy_from_slice(&[
+            ("substep_count", motion.map_or(0.0, |m| m.count as f32)),
+            ("field_nodes_x", field_nodes[0] as f32), ("field_nodes_y", field_nodes[1] as f32), ("field_nodes_z", field_nodes[2] as f32),
+            ("field_spacing", motion.map_or(0.25, |m| m.fields.spacing)),
+            ("force_lattices", motion.map_or(0.0, |m| m.fields.force_lattices as f32)),
+            ("tick_index", motion.map_or(0.0, |m| m.tick_index)),
+            ("first_tick", motion.map_or(0.0, |m| m.fields.first_tick as f32)),
+        ]);
+        atom::<AdvectWhitewater>(enc, get(&p.advect), &advect, &[a, faces[0], faces[1], faces[2], inputs.solid,
+            motion.map_or(empty, |m| m.schedule), history[0], history[1], history[2],
+            motion.and_then(|m| m.fields.forces).unwrap_or(empty), motion.and_then(|m| m.fields.impulses).unwrap_or(empty), b], cap, "node.whitewater_step.advect");
         atom::<RetypeWhitewater>(
             enc,
             get(&p.retype),
             &place,
-            &[b, &f.distance, &f.cells, faces[0], faces[1], faces[2], a],
+            &[b, &f.surface, &f.cells, faces[0], faces[1], faces[2], a],
             cap,
             "node.whitewater_step.retype",
         );
@@ -1267,6 +1325,7 @@ impl Step {
             bins: s.bins,
             sorted: None,
             order: Some(&f.order),
+            gate: None,
         };
         self.sort.encode(device, enc, &job, &SORT_LABELS)?;
         let ranges = self.sort.ranges().expect("ranges reserved with the shape");
@@ -1297,14 +1356,19 @@ impl Step {
         } else {
             (b, a)
         };
-        let mut keep = [("", 0.0); 12];
+        let mut keep = [("", 0.0); 15];
         keep[..9].copy_from_slice(&place[..9]);
-        keep[9..].copy_from_slice(&bins);
+        keep[9..12].copy_from_slice(&bins);
+        keep[12..].copy_from_slice(&[
+            ("region_count", motion.map_or(0.0, |m| m.region_count as f32)),
+            ("region_offset", motion.map_or(0.0, |m| (m.tick_index - m.fields.first_tick as f32).max(0.0) * m.region_count as f32)),
+            ("tick_seconds", frame.dt),
+        ]);
         atom::<KeepWhitewater>(
             enc,
             get(&p.keep),
             &keep,
-            &[stepped, stepped, ranges, &f.order, inputs.solid, &f.scan],
+            &[stepped, stepped, ranges, &f.order, inputs.solid, motion.and_then(|m| m.regions).unwrap_or(empty), motion.and_then(|m| m.shapes).unwrap_or(empty), motion.and_then(|m| m.atlas).unwrap_or(empty), &f.scan],
             cap,
             "node.whitewater_step.keep",
         );
@@ -1372,7 +1436,8 @@ impl WhitewaterStep {
             return Err("Whitewater: Max Turbulence must exceed nonnegative Min Turbulence".to_owned());
         }
         Ok(StepFrame {
-            dt: ctx.scalar_or_param("dt", TICK as f32),
+            // A graph saved without the domain's interval wire runs on the project's Sim Rate.
+            dt: ctx.scalar_or_param("dt", crate::node_graph::physics::simulation_interval() as f32),
             shape,
             count,
             ticks: if ctx.inputs.slot("distance").is_some() { 1 } else { whole(ctx.scalar_or_param("ticks", 0.0)) },
@@ -1401,6 +1466,7 @@ impl WhitewaterStep {
 impl Primitive for WhitewaterStep {
     fn prepare_pipelines(&mut self, device: &GpuDevice) {
         self.step.pipelines.prepare(device);
+        self.step.surface_distance.prepare(device);
         self.step.emission_scan.prepare(device);
         self.step.slot_scan.prepare(device);
         self.step.sort.prepare(device);
@@ -1455,7 +1521,18 @@ impl Primitive for WhitewaterStep {
             ctx.error("Whitewater Step: particles, solid, face_u/v/w and level_set must all be wired");
             return;
         };
-        let inputs = StepInputs { particles, solid, obstacle_source: ctx.inputs.array("obstacle_source"), faces: [face_u, face_v, face_w], level_set, distance: ctx.inputs.array("distance") };
+        let motion = if let Some(schedule) = ctx.inputs.array("substep_schedule") {
+            let [Some(u), Some(v), Some(w)] = ["substep_u", "substep_v", "substep_w"].map(|n| ctx.inputs.array(n)) else {
+                ctx.error("Whitewater Step: an accepted schedule requires all three substep face histories"); return;
+            };
+            let fields = match FieldBinding::read(ctx, ctx.inputs.array("forces"), ctx.inputs.array("impulses"), "Whitewater Step") {
+                Ok(fields) => fields, Err(error) => { ctx.error(error); return; }
+            };
+            Some(MotionInputs { schedule, faces: [u,v,w], count: ctx.scalar_or_param("substep_count",0.0) as u32,
+                fields, tick_index: ctx.scalar_or_param("tick_index",0.0), regions: ctx.inputs.array("regions"),
+                shapes: ctx.inputs.array("shapes"), atlas: ctx.inputs.array("atlas"), region_count: ctx.scalar_or_param("region_count",0.0) as u32 })
+        } else { None };
+        let inputs = StepInputs { motion, particles, solid, obstacle_source: ctx.inputs.array("obstacle_source"), faces: [face_u, face_v, face_w], level_set, distance: ctx.inputs.array("distance") };
         if self.tick_mode {
             let (Some(pool), Some(state)) = (ctx.inputs.array("pool"), ctx.inputs.array("pool_state")) else {
                 ctx.error("Whitewater Step: per-tick distance requires pool and pool_state from the liquid boundary");

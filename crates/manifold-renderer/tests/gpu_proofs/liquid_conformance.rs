@@ -346,7 +346,9 @@ impl LiquidRun {
         project_fps: f64,
     ) -> Self {
         let device = clock.as_ref().map_or_else(|| Arc::clone(&harness::shared().device), |clock| Arc::clone(&clock.device));
-        let scope = PhysicsStepScope::for_project_rate(!live, project_fps);
+        let scope = PhysicsStepScope::for_settings(!live, manifold_physics::PhysicsSettings {
+            sim_rate: manifold_physics::SimRate::try_from(project_fps as u32).expect("authored rate"),
+        });
         let registry = registry();
         let Prepared { def, cards, publisher } = prepare(row, &def, &registry, dry);
         let manifest = ParamManifest::from_params(
@@ -396,7 +398,9 @@ impl LiquidRun {
     }
 
     fn render(&mut self, warming: bool) -> Probe {
-        let _scope = PhysicsStepScope::for_project_rate(!self.live, self.project_fps);
+        let _scope = PhysicsStepScope::for_settings(!self.live, manifold_physics::PhysicsSettings {
+            sim_rate: manifold_physics::SimRate::try_from(self.project_fps as u32).expect("authored rate"),
+        });
         let time = self.transport * TICK;
         let ctx = PresetContext {
             time,
@@ -804,12 +808,13 @@ fn liquid_coupling_collision() {
     }
 }
 
-/// A non-60 project exercises the production scope, clock, CFL scheduler,
+/// Every authored Sim Rate exercises the production scope, clock, CFL scheduler,
 /// narrow-band history and renderer output sampling without output-rate retuning.
 #[test]
 fn liquid_export_matches_live_project_schedule() {
     let row = LIQUID_SOLVERS.iter().find(|row| row.type_id == GPU_FLIP_DOMAIN_TYPE_ID).unwrap();
-    for project_fps in [24.0, 60.0] {
+    for rate in manifold_physics::SimRate::ALL {
+        let project_fps = f64::from(rate.hz());
         for narrow in [false, true] {
             let make = |fps: f64, live| {
                 let mut def = scene(row, Fixture::FaceGrid);
@@ -817,8 +822,12 @@ fn liquid_export_matches_live_project_schedule() {
                 set_type_param(&mut def, "node.gpu_flip_step", "narrow_band", SerializedParamValue::Float { value: if narrow { 1.0 } else { 0.0 } });
                 LiquidRun::on_project_rate(row, def, 60.0 / fps, live, false, None, project_fps)
             };
-            let mut live = make(project_fps, true);
-            live.steps(project_fps as u32 / 2);
+            let mut live = make(60.0, true);
+            live.steps(30);
+            // A live frame never waits: it publishes a tick once the tick's
+            // fence retires, on a later frame. A paused frame retires the
+            // 0.5 s publication without accepting more work.
+            live.hold();
             let expected = live.particles("particles_b");
             for export_fps in [20.0, 24.0, 30.0, 60.0] {
                 let mut export = make(export_fps, false);
@@ -1605,7 +1614,15 @@ fn liquid_nonfinite_tick_not_published() {
             run.set_card("reset", 1.0);
             let fresh = run.steps(2);
             assert_eq!(run.totals(row).nonfinite, 0, "{}: Reset did not clear the fault", row.type_id);
-            assert_ne!(fresh.get("identity_b"), before.get("identity_b"), "{}: Reset kept the epoch", row.type_id);
+            // The domain counts the epoch. A frame's identity epoch changes
+            // only when live ids are renumbered and starts again with each
+            // simulation, so it may repeat across a Reset.
+            assert!(fresh.get("epoch") > before.get("epoch"), "{}: Reset kept the epoch", row.type_id);
+            assert!(
+                first_difference(&run.frame_words("particles_b"), &b).is_some(),
+                "{}: the fresh epoch never published",
+                row.type_id
+            );
             assert!(
                 run.particles("particles_b").iter().all(|p| p.position_radius.iter().all(|v| v.is_finite())),
                 "{}: the fresh epoch published non-finite particles",
@@ -1691,8 +1708,11 @@ fn liquid_live_frames_never_wait() {
 }
 
 /// Coupled live solvers cover one transport second at every display rate.
-/// Live trajectories may differ: the invariant is the accepted endpoint,
-/// finite output, and real momentum exchange, without fixed-tick debt bursts.
+/// Each frame ends on the last Sim Rate boundary transport has reached; a
+/// frame between boundaries (24 fps at 60 Hz) owes the partial interval to
+/// the next boundary (LIVE_SIM_CLOCK_DESIGN.md D1, D7). Live trajectories may
+/// differ: the invariant is the accepted endpoint, finite output, and real
+/// momentum exchange, without fixed-tick debt bursts.
 #[test]
 fn liquid_coupled_live_frame_rate() {
     const BODY_WORDS: usize = std::mem::size_of::<LiquidBody>() / 4;
@@ -1703,6 +1723,7 @@ fn liquid_coupled_live_frame_rate() {
                     row, scene(row, fixture), 60.0 / f64::from(fps),
                     true, false, Some(Clocked::new()),
                 );
+                let interval = 1.0 / run.project_fps;
                 let waits_before = FrameClock::waits_on_this_thread();
                 let mut previous_rows: Option<Vec<u32>> = None;
                 let mut coupling = 0.0f64;
@@ -1710,8 +1731,8 @@ fn liquid_coupled_live_frame_rate() {
                     let dump = run.dump(row);
                     assert_eq!(dump.probe.get("ticks"), 1.0,
                         "{} {fixture:?}: {fps} fps frame {frame} must accept one interval", row.type_id);
-                    let expected = f64::from(frame) / f64::from(fps);
-                    assert!((f64::from(dump.probe.get("simulation_time")) - expected).abs() < 1e-6,
+                    let boundary = (run.transport * TICK / interval + 1e-9).floor() * interval;
+                    assert!((f64::from(dump.probe.get("simulation_time")) - boundary).abs() < 1e-6,
                         "{} {fixture:?}: {fps} fps frame {frame} lost simulation time", row.type_id);
                     assert_eq!(dump.rows.len(), BODY_WORDS);
                     assert_eq!(run.totals(row).nonfinite, 0);

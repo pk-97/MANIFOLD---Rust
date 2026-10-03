@@ -48,7 +48,11 @@ pub struct GpuFlipClockParams {
     pub surface_constant: f32,
     pub color_mixing_rate: f32,
     pub _pad_prediction: f32,
-    pub _pad0: f32,
+    /// One Sim Rate interval of simulated time for a live frame, or 0 to
+    /// measure the marker speed limit against the whole frame (export). The
+    /// kernel uses the shorter of the two, so a late live span never lowers
+    /// the limit and loaded playback removes the same outliers export does.
+    pub limit_interval: f32,
     pub min_frame_steps: u32,
     pub max_frame_steps: u32,
     pub flags: u32,
@@ -465,7 +469,7 @@ impl GpuFlipClock {
 
     /// Recompute the native marker threshold from the post-step velocities and
     /// remove over-limit particles in place. This does not touch the clock
-    /// cursor; it only consumes the accepted step duration in the plan.
+    /// cursor; it uses the accepted frame interval, as native _currentFrameDeltaTime.
     pub(crate) fn remove_extreme(
         &self,
         encoder: &mut GpuEncoder,
@@ -764,7 +768,7 @@ mod tests {
         let p = GpuFlipClockParams {
             frame_duration: 0.1, cell_size: 0.1, cfl: 5.0,
             surface_condition: 0.0, surface_constant: 0.0, color_mixing_rate: 0.0,
-            _pad_prediction: 0.0, _pad0: 0.0, min_frame_steps: 1,
+            _pad_prediction: 0.0, limit_interval: 0.1, min_frame_steps: 1,
             max_frame_steps: 6, flags: 0, interval_sequence: 0, constant_force: [0.0; 4],
         };
         // 0.5 / (10 + epsilon) is below 0.05: ceil requires three
@@ -834,7 +838,7 @@ mod gpu_tests {
             surface_constant: 0.0,
             color_mixing_rate: 0.0,
             _pad_prediction: 0.0,
-            _pad0: 0.0,
+            limit_interval: 1.0,
             min_frame_steps: 1,
             max_frame_steps: 6,
             flags: 0,
@@ -880,6 +884,7 @@ mod gpu_tests {
         }
         let p = GpuFlipClockParams {
             frame_duration: 0.1,
+            limit_interval: 0.1,
             cfl: 2.0,
             ..params()
         };
@@ -926,7 +931,7 @@ mod gpu_tests {
             let expected_speed = if count == 0 { 0.0 } else { speed };
             assert!((f64::from(result.maximum_speed) - expected_speed).abs() < 1e-5);
             let expected_limit = p.max_frame_steps as f32 * p.cfl * p.cell_size
-                / expected_dt(&p, expected_speed, CflRestrictions::default());
+                / p.limit_interval;
             assert!((result.marker_limit - expected_limit).abs() < 1e-5);
             assert!(
                 (result.dt - expected_dt(&p, expected_speed, CflRestrictions::default())).abs()
@@ -938,56 +943,90 @@ mod gpu_tests {
 
     #[test]
     fn gpu_flip_clock_marker_histogram_removal_value_proof() {
-        // Ten particles occupy the highest CFL bin.  With 20,000 markers the
-        // native 0.05% budget admits exactly those ten, raising the removal
-        // threshold to (bin + 4) frames.  The outlier count is deliberately
-        // above six so the relative clamp cannot hide that threshold.
+        // Native removal bins speeds by CFL * cell / the whole frame, even when
+        // the scheduler splits it: _removeMarkerParticles is passed
+        // _currentFrameDeltaTime. Every case is a CFL split where a step-dt
+        // width gives a different limit. Speeds sit mid-bin, because a speed
+        // exactly on a bin edge lands in different bins in the f32 kernel and
+        // the f64 reference. Nine 11 m/s outliers keep the relative clamp out
+        // of play. At 1 s they share the top bin with one 3.25 m/s marker:
+        // 300 markers have no removal budget, so the six-step floor removes
+        // it; 0.05% of 21,000 is 10.5, so the budget admits the top bin and
+        // the limit walks down to (bin + 4) widths, which keeps it. Each case
+        // runs as export (limit_interval 0 measures the frame) and as a late
+        // live frame four intervals long, measured as one interval: it removes
+        // exactly what export removes, where the span's own width would lower
+        // the limit and delete ordinary water.
+        use manifold_core::Seconds;
+        use manifold_physics::stepping::{marker_particle_speed_limit, MarkerSpeedLimitConfig};
         let device = crate::test_device();
-        let count = 20_000u32;
-        let clock = GpuFlipClock::new(&device, count, 1, 1);
-        let markers = device.create_buffer_shared(u64::from(count) * 32);
-        let empty = device.create_buffer_shared(96);
-        let readback = device.create_buffer_shared(48);
-        let mut particles = vec![particle(1.0); count as usize];
-        for marker in particles.iter_mut().take(10) {
-            marker.velocity = [10.0, 0.0, 0.0];
+        let cases = [(300u32, 0.25, 12.0), (300, 1.0, 3.0), (21_000, 1.0, 3.5)];
+        for ((count, duration, limit), span) in cases.into_iter().flat_map(|case| [(case, 1.0f32), (case, 4.0)]) {
+            let clock = GpuFlipClock::new(&device, count, 1, 1);
+            let markers = device.create_buffer_shared(u64::from(count) * 32);
+            let empty = device.create_buffer_shared(96);
+            let readback = device.create_buffer_shared(48);
+            let mut particles = vec![particle(1.25); count as usize];
+            for (i, marker) in particles.iter_mut().enumerate() { marker.id = i as u32 + 101; }
+            for marker in particles.iter_mut().take(9) {
+                marker.velocity = [11.0, 0.0, 0.0];
+            }
+            particles[9].velocity = [3.25, 0.0, 0.0];
+            unsafe {
+                markers.write(0, bytemuck::cast_slice(&particles));
+            }
+            let limit_interval = if span == 1.0 { 0.0 } else { duration };
+            let p = GpuFlipClockParams { frame_duration: duration * span, limit_interval, ..params() };
+            let mut enc = device.create_encoder("flip-clock marker histogram proof");
+            clock.begin_frame(&mut enc, &p);
+            let plan = clock.dispatch(
+                &mut enc,
+                GpuFlipClockInputs {
+                    marker_particles: &markers,
+                    marker_count: count,
+                    obstacle_vertices: &empty,
+                    obstacle_count: 0,
+                    source_vertices: &empty,
+                    source_count: 0,
+                    live_hits: &markers,
+                    live_hit_count: 0,
+                    event_impulses: &markers,
+                    impulse_stride: 0,
+                    impulse_nodes: [2, 2, 2],
+                    impulse_origin: [0.0; 3],
+                    impulse_spacing: 1.0,
+                    body_rows: &markers,
+                    body_rows_offset: 0,
+                    body_reaction: &markers,
+                },
+                &p,
+            );
+            clock.remove_extreme(&mut enc, &markers, count, &p);
+            enc.copy_buffer_to_buffer(plan.buffer(), &readback, 48);
+            enc.commit_and_wait_completed();
+            let result = read_plan(&readback);
+            assert!((result.maximum_speed - 11.0).abs() < 1e-5);
+            let speeds: Vec<f64> = particles.iter().map(|m| f64::from(m.velocity[0])).collect();
+            let cpu_limit = |dt: f32| marker_particle_speed_limit(
+                &speeds, Seconds(f64::from(dt)),
+                f64::from(p.cell_size), f64::from(p.cfl), p.max_frame_steps,
+                MarkerSpeedLimitConfig::default(), &mut [0; 6],
+            ).value as f32;
+            let case = format!("{count} markers, {duration} s frame, {span}x span");
+            assert!(result.dt < p.frame_duration, "{case}: no CFL split");
+            if span == 1.0 {
+                assert_ne!(cpu_limit(result.dt), limit, "{case}: step-dt width agrees");
+            } else {
+                assert_ne!(cpu_limit(p.frame_duration), limit, "{case}: span width agrees");
+            }
+            assert_eq!(cpu_limit(duration), limit, "{case}: CPU");
+            assert_eq!(result.marker_limit, limit, "{case}: GPU");
+            let got = unsafe { std::slice::from_raw_parts(markers.mapped_ptr().unwrap().cast::<FluidParticle>(), count as usize) };
+            for (before, after) in particles.iter().zip(got) {
+                assert_eq!(after.position_radius[3] > 0.0, before.velocity[0] <= limit);
+                assert_eq!(before.id, after.id);
+            }
         }
-        unsafe {
-            markers.write(0, bytemuck::cast_slice(&particles));
-        }
-        let p = params();
-        let mut enc = device.create_encoder("flip-clock marker histogram proof");
-        clock.begin_frame(&mut enc, &p);
-        let plan = clock.dispatch(
-            &mut enc,
-            GpuFlipClockInputs {
-                marker_particles: &markers,
-                marker_count: count,
-                obstacle_vertices: &empty,
-                obstacle_count: 0,
-                source_vertices: &empty,
-                source_count: 0,
-                live_hits: &markers,
-                live_hit_count: 0,
-                event_impulses: &markers,
-                impulse_stride: 0,
-                impulse_nodes: [2, 2, 2],
-                impulse_origin: [0.0; 3],
-                impulse_spacing: 1.0,
-                body_rows: &markers,
-                body_rows_offset: 0,
-                body_reaction: &markers,
-            },
-            &p,
-        );
-        clock.remove_extreme(&mut enc, &markers, count, &p);
-        enc.copy_buffer_to_buffer(plan.buffer(), &readback, 48);
-        enc.commit_and_wait_completed();
-        let result = read_plan(&readback);
-        assert_eq!(result.maximum_speed, 10.0);
-        let expected_limit = p.max_frame_steps as f32 * (p.cfl * p.cell_size
-            / expected_dt(&p, 10.0, CflRestrictions::default()));
-        assert_eq!(result.marker_limit, expected_limit);
     }
 
     #[test]

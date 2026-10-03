@@ -1,8 +1,8 @@
 //! `node.gpu_flip_step` — one GPU FLIP water step (docs/GPU_FLIP_PRESSURE_SOLVE.md
 //! section 1 (the step)): sort, particle distance, particles to faces,
 //! extend, forces, solids, water mask from φ, divergence, pressure solve,
-//! projection, constraint, extend, density projection, then the particles
-//! move, Steps times a tick. One node
+//! projection, extend, constraint, density projection, then the particles
+//! move, remove crowded/extreme markers, compact, and emit inflow. One node
 //! because no pass has a consumer outside the step and the solve between them
 //! is a barriered reduction; the hand kernels live in
 //! `shaders/gpu_flip_step.wgsl`, the solver in [`super::gpu_flip_pressure`].
@@ -12,14 +12,15 @@
 //! grid output is this node's own storage, exactly one record per padded
 //! cell, reallocated when the lattice changes.
 //!
-//! Inflow emission, the inflow constrained velocity and outflow removal port
+//! Extrapolation order/count, marker removal, inflow emission/placement,
+//! inflow constrained velocity and outflow removal port
 //! FLIP Fluids `fluidsimulation.cpp` (MIT, Copyright (C) 2026 Ryan L. Guy &
 //! Dennis Fassbaender; see THIRD_PARTY_NOTICES.md), line refs in the shader.
 //!
 //! The narrow-band transport, distance, and reseeding stages port Ferstl et
 //! al., "Narrow Band FLIP for Liquid Simulations", Computer Graphics Forum
 //! 35(2), 225–232 (2016), doi:10.1111/cgf.12825. FLIP Fluids is credited
-//! above only for the inflow and outflow portions reused by this step.
+//! above for the engine step policies reused by this stage.
 //!
 //! The density projection is T. Kugelstadt, A. Longva, N. Thuerey and
 //! J. Bender, "Implicit Density Projection for Volume Conserving Liquids",
@@ -48,7 +49,6 @@ use super::liquid_stats::{SOLVER_WORDS, with_stats_layout};
 use super::prefix_scan::ScanLabels;
 use super::sort_particles_into_cells::{LIQUID_PARTICLE_READ, ParticleSorter, SortJob, SortLabels, float_param, int_param};
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
-use crate::node_graph::fluid::TICK;
 use crate::node_graph::fluid_particles::{FaceSample, FluidParticle};
 use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
 use crate::node_graph::liquid::{EXACT_F32_COUNT, WATER_DENSITY};
@@ -70,6 +70,8 @@ pub(crate) const FACE_VALID_LAYERS: u32 = 2;
 pub(crate) const AUTO_PRESSURE_ITERATIONS: u32 = MAX_ITERATIONS;
 /// The speed the CFL guard is sized for, m/s.
 pub(crate) const DEFAULT_TOP_SPEED: f32 = 20.0;
+/// Configured engine CFL, shared with the clock.
+pub(crate) const ENGINE_CFL: u32 = 5;
 
 /// The CFL guard: the farthest one RK3 stage moves a particle, in cells,
 /// `top_speed` over one step rounded up. The inputs are f32, so a ratio
@@ -78,22 +80,9 @@ pub(crate) fn travel_cells(top_speed: f32, step_dt: f32, cell_size: f32) -> u32 
     (f64::from(top_speed) * f64::from(step_dt) / f64::from(cell_size) - 1e-4).ceil().max(1.0) as u32
 }
 
-/// The halo's travel: the CFL guard over one nominal step, TICK / Steps. The
-/// live clock's GPU schedule picks each substep's length; the extend band, the
-/// tile rings and the storage the planner admits for them are sized once from
-/// the nominal step, as the reference sizes its extrapolation from its CFL
-/// number and never from a stretched remainder. A slow frame never resizes them.
-pub(crate) fn halo_travel(top_speed: f32, steps: f32, cell_size: f32) -> u32 {
-    travel_cells(top_speed, (TICK / f64::from(steps)) as f32, cell_size)
-}
-
-/// Layers both face grids are extended by, the saved one after the transfer
-/// and the projected one after the solve: FLIP Fluids'
-/// `_extrapolateFluidVelocities`, ⌈√3 · CFL⌉ + 3, with the CFL guard's
-/// travel in cells for the engine's CFL number (the one deviation; the
-/// engine sizes its substeps to CFL 5, ours are fixed by Steps).
-pub(crate) fn band_layers(travel: u32) -> u32 {
-    (3f64.sqrt() * f64::from(travel)).ceil() as u32 + 3
+/// FLIP Fluids _extrapolateFluidVelocities: configured CFL, never travel.
+pub(crate) fn band_layers(cfl: u32) -> u32 {
+    (3f64.sqrt() * f64::from(cfl)).ceil() as u32 + 3
 }
 
 /// Bytes of the step's face grid at `cells`: one record per padded cell.
@@ -253,6 +242,29 @@ fn separating() -> bool {
     }
 }
 
+/// Test-only lever for the inactive-slot proof (BUG-e6z6s (inactive FLIP
+/// slots)): with it set, every pass of an inactive clock slot runs as it did
+/// before the slots were gated. The gate plan is zeros, so only the passes
+/// that always read the clock see the slot as inactive.
+#[cfg(all(test, feature = "gpu-proofs"))]
+static GATE_OFF: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+pub(crate) fn set_gate_off(on: bool) {
+    GATE_OFF.store(on, std::sync::atomic::Ordering::SeqCst);
+}
+
+pub(super) fn gating() -> bool {
+    #[cfg(all(test, feature = "gpu-proofs"))]
+    {
+        !GATE_OFF.load(std::sync::atomic::Ordering::SeqCst)
+    }
+    #[cfg(not(all(test, feature = "gpu-proofs")))]
+    {
+        true
+    }
+}
+
 /// The lattice's cell-sized arrays (`LatticeBuffers`): water, φ, the
 /// right-hand side, the pressure, the pocket state and label, the solve
 /// mask, the contact mask and the let-go set.
@@ -372,6 +384,7 @@ struct Pipelines {
     /// The pockets at the solve level: leaders cleared, cells coarsened,
     /// labels moved to the level.
     pocket_coarse: [GpuComputePipeline; 3],
+    remove_crowded: GpuComputePipeline,
     emit_flags: GpuComputePipeline,
     emit_write: GpuComputePipeline,
     tiles_classify: GpuComputePipeline,
@@ -436,6 +449,7 @@ impl Pipelines {
             separate_update: pipe("separate_update"),
             pocket_flux: [pipe("pocket_flux_pressure"), pipe("pocket_flux_density")],
             pocket_coarse: [pipe("pocket_leader_clear"), pipe("pocket_coarsen"), pipe("pocket_relabel")],
+            remove_crowded: pipe("remove_crowded_markers"),
             emit_flags: pipe("emit_flags"),
             emit_write: pipe("emit_write"),
             tiles_classify: pipe("tiles_classify"),
@@ -501,18 +515,19 @@ impl TileTable {
 
 /// The table for this step, after the sort: nearness per tile, rings, then
 /// the lists, counts, triples and the active-fraction stats word (`capped`
-/// at the solver words).
-fn encode_tiles(enc: &mut GpuEncoder, pipes: &Pipelines, params: &StepParams, t: &TileTable, ranges: &GpuBuffer, capped: &GpuBuffer, tally: u64) {
+/// at the solver words). An inactive slot of `plan` keeps the last active
+/// step's table and zeroes its triples.
+fn encode_tiles(enc: &mut GpuEncoder, pipes: &Pipelines, params: &StepParams, t: &TileTable, ranges: &GpuBuffer, capped: &GpuBuffer, tally: u64, plan: &GpuBuffer) {
     let tiles = groups(tile_total(params.n));
     enc.dispatch_compute(
         &pipes.tiles_classify,
-        &[uniform(params), buffer(1, ranges), buffer(27, &t.near), buffer(30, &t.counts)],
+        &[uniform(params), buffer(1, ranges), buffer(27, &t.near), buffer(30, &t.counts), buffer(46, plan)],
         tiles,
         "gpu_flip.step.tiles.classify",
     );
     enc.dispatch_compute(
         &pipes.tiles_rings,
-        &[uniform(params), buffer(27, &t.near), buffer(28, &t.rank), buffer(30, &t.counts)],
+        &[uniform(params), buffer(27, &t.near), buffer(28, &t.rank), buffer(30, &t.counts), buffer(46, plan)],
         tiles,
         "gpu_flip.step.tiles.rings",
     );
@@ -520,6 +535,7 @@ fn encode_tiles(enc: &mut GpuEncoder, pipes: &Pipelines, params: &StepParams, t:
         &pipes.tiles_lists,
         &[
             uniform(params),
+            buffer(46, plan),
             buffer(27, &t.near),
             buffer(28, &t.rank),
             buffer(29, &t.by_ring),
@@ -644,6 +660,7 @@ struct NarrowHistory {
 
 #[derive(Default)]
 pub(crate) struct StepState {
+    identity_ops: super::particle_identity::ParticleIdentity,
     pipelines: Option<Pipelines>,
     mask_pipeline: Option<GpuComputePipeline>,
     sorter: ParticleSorter,
@@ -656,8 +673,6 @@ pub(crate) struct StepState {
     /// everywhere (`tiles_fill` ran); false until the first step on a lattice.
     filled: bool,
     sorted: Option<GpuBuffer>,
-    /// With sources, the emitted particles re-sorted from `sorted`.
-    resorted: Option<GpuBuffer>,
     /// The emission flags' scan, one word a half-cell site.
     emit_scan: PrefixScan,
     /// The face grid output: exactly [`face_bytes`] of the current lattice.
@@ -675,6 +690,7 @@ pub(crate) struct StepState {
     bodies: BodyPasses,
     clock: Option<GpuFlipClock>,
     clock_capacities: [u32; 3],
+    history: crate::node_graph::liquid::substep_history::SubstepHistory,
     narrow: NarrowBand,
     narrow_history: Option<NarrowHistory>,
     narrow_reset_pending: bool,
@@ -795,17 +811,18 @@ fn encode_pockets(
     cells: [u32; 3],
     capped: &GpuBuffer,
     tally: u64,
+    plan: &GpuBuffer,
 ) {
     let cell_count: u64 = cells.iter().map(|&n| u64::from(n)).product();
     enc.dispatch_compute(
         &pipes.pocket_seed,
-        &[uniform(params), buffer(6, &l.water), buffer(10, &l.s), buffer(23, &l.pocket), buffer(25, &l.pocket_label)],
+        &[uniform(params), buffer(6, &l.water), buffer(10, &l.s), buffer(23, &l.pocket), buffer(25, &l.pocket_label), buffer(46, plan)],
         groups(cell_count),
         "gpu_flip.step.pocket_seed",
     );
-    enc.dispatch_compute(&pipes.pocket_start, &[buffer(24, &l.pocket_gate)], [1, 1, 1], "gpu_flip.step.pocket_start");
+    enc.dispatch_compute(&pipes.pocket_start, &[buffer(24, &l.pocket_gate), buffer(46, plan)], [1, 1, 1], "gpu_flip.step.pocket_start");
     for _ in 0..pocket_rounds(cells) {
-        enc.dispatch_compute(&pipes.pocket_round, &[uniform(params), buffer(24, &l.pocket_gate)], [1, 1, 1], "gpu_flip.step.pocket_round");
+        enc.dispatch_compute(&pipes.pocket_round, &[uniform(params), buffer(24, &l.pocket_gate), buffer(46, plan)], [1, 1, 1], "gpu_flip.step.pocket_round");
         for (axis, sweep) in pipes.pocket_sweep.iter().enumerate() {
             enc.dispatch_compute_indirect(
                 sweep,
@@ -818,7 +835,7 @@ fn encode_pockets(
     }
     enc.dispatch_compute(
         &pipes.pocket_check,
-        &[uniform(params), buffer(10, &l.s), buffer(23, &l.pocket), buffer(24, &l.pocket_gate), buffer(25, &l.pocket_label)],
+        &[uniform(params), buffer(10, &l.s), buffer(23, &l.pocket), buffer(24, &l.pocket_gate), buffer(25, &l.pocket_label), buffer(46, plan)],
         groups(cell_count),
         "gpu_flip.step.pocket_check",
     );
@@ -826,7 +843,7 @@ fn encode_pockets(
     // tick's first step, and writes the step's dry, sealed and air counts.
     enc.dispatch_compute(
         &pipes.pocket_tally,
-        &[uniform(params), buffer(1, ranges), buffer(6, &l.water), buffer(7, &l.phi), buffer(10, &l.s), buffer(23, &l.pocket), buffer(24, &l.pocket_gate), GpuBinding::Buffer { binding: 22, buffer: capped, offset: tally }],
+        &[uniform(params), buffer(1, ranges), buffer(6, &l.water), buffer(7, &l.phi), buffer(10, &l.s), buffer(23, &l.pocket), buffer(24, &l.pocket_gate), GpuBinding::Buffer { binding: 22, buffer: capped, offset: tally }, buffer(46, plan)],
         [1, 1, 1],
         "gpu_flip.step.pocket_tally",
     );
@@ -865,11 +882,11 @@ impl LatticeBuffers {
 /// for a right-hand side summing to 0. What was removed goes to solver word
 /// 4 (`solve` 0, pressure) or 5 (1, density): h³ of the lattice's cell
 /// size, so a coarse level adds its own volume rate.
-fn encode_pocket_mean(enc: &mut GpuEncoder, pipes: &Pipelines, params: &StepParams, pockets: Pockets<'_>, rhs: &GpuBuffer, solve: usize, capped: &GpuBuffer, tally: u64) {
+fn encode_pocket_mean(enc: &mut GpuEncoder, pipes: &Pipelines, params: &StepParams, pockets: Pockets<'_>, rhs: &GpuBuffer, solve: usize, capped: &GpuBuffer, tally: u64, plan: &GpuBuffer) {
     let cell_count: u64 = params.n.iter().map(|&n| u64::from(n)).product();
-    let sums = [uniform(params), buffer(26, pockets.sums)];
+    let sums = [uniform(params), buffer(26, pockets.sums), buffer(46, plan)];
     enc.dispatch_compute(&pipes.pocket_clear, &sums, groups(3 * cell_count + 2), "gpu_flip.step.pocket_clear");
-    let cells = [uniform(params), buffer(5, rhs), buffer(23, pockets.state), buffer(25, pockets.label), buffer(26, pockets.sums)];
+    let cells = [uniform(params), buffer(5, rhs), buffer(23, pockets.state), buffer(25, pockets.label), buffer(26, pockets.sums), buffer(46, plan)];
     enc.dispatch_compute(&pipes.pocket_accumulate, &cells, groups(cell_count), "gpu_flip.step.pocket_accumulate");
     enc.dispatch_compute(&pipes.pocket_remove, &cells, groups(cell_count), "gpu_flip.step.pocket_remove");
     enc.dispatch_compute(
@@ -882,6 +899,7 @@ fn encode_pocket_mean(enc: &mut GpuEncoder, pipes: &Pipelines, params: &StepPara
                 buffer: capped,
                 offset: tally,
             },
+            buffer(46, plan),
         ],
         [1, 1, 1],
         "gpu_flip.step.pocket_flux",
@@ -892,13 +910,13 @@ fn encode_pocket_mean(enc: &mut GpuEncoder, pipes: &Pipelines, params: &StepPara
 /// (gpu_flip_step.wgsl pocket_coarsen): a level cell is sealed when every
 /// fine cell under it is sealed with one label, and takes the lowest such
 /// level cell of its pocket as its label.
-fn encode_pocket_coarsen(enc: &mut GpuEncoder, pipes: &Pipelines, params: &StepParams, l: &LatticeBuffers) {
+fn encode_pocket_coarsen(enc: &mut GpuEncoder, pipes: &Pipelines, params: &StepParams, l: &LatticeBuffers, plan: &GpuBuffer) {
     let level = params.solve_level as usize;
     let coarse_count: u64 = level_lattices(l.cells)[level].iter().map(|&n| u64::from(n)).product();
     let cell_count: u64 = l.cells.iter().map(|&n| u64::from(n)).product();
     enc.dispatch_compute(
         &pipes.pocket_coarse[0],
-        &[uniform(params), buffer(41, &l.pocket_leader)],
+        &[uniform(params), buffer(41, &l.pocket_leader), buffer(46, plan)],
         groups(cell_count),
         "gpu_flip.step.pocket_leader_clear",
     );
@@ -911,6 +929,7 @@ fn encode_pocket_coarsen(enc: &mut GpuEncoder, pipes: &Pipelines, params: &StepP
         buffer(39, &l.pocket_coarse),
         buffer(40, &l.pocket_coarse_label),
         buffer(41, &l.pocket_leader),
+        buffer(46, plan),
     ];
     enc.dispatch_compute(&pipes.pocket_coarse[1], &bindings, groups(coarse_count), "gpu_flip.step.pocket_coarsen");
     enc.dispatch_compute(&pipes.pocket_coarse[2], &bindings, groups(coarse_count), "gpu_flip.step.pocket_relabel");
@@ -967,6 +986,7 @@ pub(crate) fn atomic_sites_outside(source: &str, allowed: &[&str]) -> Vec<String
 /// Everything one step reads, resolved before any pass is encoded.
 #[derive(Clone, Copy)]
 struct Step<'a> {
+    identity: &'a GpuBuffer,
     params: StepParams,
     clock_plan: &'a GpuBuffer,
     particles: &'a GpuBuffer,
@@ -1015,6 +1035,7 @@ impl StepState {
             ));
         }
         self.sorter.prepare(device);
+        self.identity_ops.prepare(device);
         self.emit_scan.prepare(device);
         self.solver.prepare_pipelines(device);
         self.bodies.prepare_pipelines(device);
@@ -1022,7 +1043,7 @@ impl StepState {
     }
 
     /// Size every array for `cells` and `slots` before anything is encoded;
-    /// `sources` adds the emission's scan and second sorted array.
+    /// `sources` adds the emission scan; removal reuses the sorted array.
     fn reserve(&mut self, device: &GpuDevice, cells: [u32; 3], slots: u64, ring_max: u32, sources: bool, narrow_enabled: bool, interior_wired: bool) -> Result<(), String> {
         if self.zeros.is_none() {
             let zeros = device.try_create_buffer_shared(ZERO_BYTES)?;
@@ -1095,10 +1116,6 @@ impl StepState {
             self.sorted = Some(allocate(device, sorted)?);
         }
         if sources {
-            if self.resorted.as_ref().is_none_or(|buffer| buffer.size < sorted) {
-                self.resorted = None;
-                self.resorted = Some(allocate(device, sorted)?);
-            }
             self.emit_scan.buffer(device, emit_sites(cells) as usize)?;
         }
         if narrow_enabled {
@@ -1167,7 +1184,7 @@ impl StepState {
                 || history.cell_size.to_bits() != cell_size.to_bits()
                 || history.cells != cells
                 || history.slots != slots
-                || (epoch.is_none() && tick < history.last_tick)
+                || tick < history.last_tick
         });
         if identity_changed {
             self.narrow.initialized = false;
@@ -1190,7 +1207,7 @@ impl StepState {
         restore
     }
 
-    fn encode(&mut self, device: &GpuDevice, enc: &mut GpuEncoder, step: &Step<'_>) -> Result<(), String> {
+    fn encode(&mut self, device: &GpuDevice, enc: &mut GpuEncoder, step: &Step<'_>, clock_params: &GpuFlipClockParams) -> Result<(), String> {
         let pipes = self.pipelines.as_ref().expect("step pipelines built by prepare_pipelines at install");
         let (Some(l), Some(tiles), Some(sorted), Some(out_faces)) = (self.lattice.as_ref(), self.tiles.as_ref(), self.sorted.as_ref(), self.faces.as_ref()) else {
             return Err("the step's storage was not reserved".into());
@@ -1198,6 +1215,11 @@ impl StepState {
         let cells = l.cells;
         let p = step.params;
         let capacity = p.capacity;
+        // What reads this slot's activity beyond the passes that always did:
+        // the clock plan, or zeros (always active) for the narrow band, whose
+        // passes are not all clock-aware, and under the test lever.
+        let gated = gating() && !step.narrow_enabled && !step.restore_narrow;
+        let gate_plan = if gated { step.clock_plan } else { self.zeros.as_ref().expect("zero storage prepared") };
         let sort_job = |particles, sorted| SortJob {
             particles,
             read: LIQUID_PARTICLE_READ,
@@ -1208,6 +1230,7 @@ impl StepState {
             bins: cells,
             sorted: Some(sorted),
             order: None,
+            gate: Some(gate_plan),
         };
         // Copies of the params, so each Bytes binding borrows a value that
         // lives across its dispatch.  Narrow mode 1 is the one-time full
@@ -1239,7 +1262,7 @@ impl StepState {
                 cell_size: p.cell_size,
                 nodes: corners,
                 closed_faces: 63,
-                wall_inset: 0,
+                wall_inset: 0.0,
                 body_count: p.body_count,
                 rows: p.rows,
                 tick_seconds: p.tick_seconds,
@@ -1252,68 +1275,6 @@ impl StepState {
             "gpu_flip.step.solid_distance",
         );
         self.sorter.encode(device, enc, &sort_job(step.particles, sorted), &SORT_LABELS)?;
-        // Sources emit after the last substep's move and before the transfer,
-        // as the engine's _updateFluidObjects runs between its advance and its
-        // next step: the flags mark each empty inflow site outside the solid,
-        // their scan ranks them, and each lands at the live count plus its
-        // rank, so the live particles stay one dense prefix with no atomics.
-        // The re-sort puts the emitted ones in their cells.
-        let sorted = match self.resorted.as_ref().filter(|_| p.region_count > 0) {
-            Some(resorted) => {
-                let sites = emit_sites(cells);
-                let ranges = self.sorter.ranges().ok_or("the cell ranges were not reserved")?;
-                let scan = self.emit_scan.buffer(device, sites as usize)?.clone();
-                let read = [
-                    uniform(&base),
-                    buffer(1, ranges),
-                    buffer(2, sorted),
-                    buffer(9, &l.corners),
-                    buffer(15, step.shapes),
-                    buffer(16, step.atlas),
-                    buffer(36, step.regions),
-                    buffer(46, step.clock_plan),
-                    buffer(37, &scan),
-                ];
-                enc.compute_memory_barrier_buffers();
-                enc.dispatch_compute(&pipes.emit_flags, &read, groups(sites), "gpu_flip.step.emit_flags");
-                enc.compute_memory_barrier_buffers();
-                self.emit_scan.encode_labelled(
-                    enc,
-                    sites as usize,
-                    ScanLabels {
-                        blocks: "gpu_flip.step.emit_scan.blocks",
-                        add: "gpu_flip.step.emit_scan.add",
-                    },
-                );
-                enc.dispatch_compute(
-                    &pipes.emit_write,
-                    &[
-                        uniform(&base),
-                        buffer(1, ranges),
-                        buffer(15, step.shapes),
-                        buffer(16, step.atlas),
-                        buffer(36, step.regions),
-                        buffer(46, step.clock_plan),
-                        buffer(37, &scan),
-                        buffer(38, sorted),
-                    ],
-                    groups(sites),
-                    "gpu_flip.step.emit_write",
-                );
-                enc.compute_memory_barrier_buffers();
-                self.sorter.encode(
-                    device,
-                    enc,
-                    &SortJob {
-                        count: capacity,
-                        ..sort_job(sorted, resorted)
-                    },
-                    &SORT_LABELS,
-                )?;
-                resorted
-            }
-            None => sorted,
-        };
         let cell_count: u64 = cells.iter().map(|&n| u64::from(n)).product();
         let face_count: u64 = cells.iter().map(|&n| u64::from(n) + 1).product();
         let ghost = StepParams { ghost: u32::from(step.ghost), ..base };
@@ -1431,10 +1392,15 @@ impl StepState {
                 "gpu_flip.step.narrow.restore_latch",
             );
             enc.compute_memory_barrier_buffers();
+            self.identity_ops.reserve(enc, super::particle_identity::BirthReservation {
+                particles: &nb.particles, identity: step.identity, ranges, scan: &scan, plan: step.clock_plan,
+                params: [capacity, cell_count as u32, scan_threads as u32, 2],
+            });
             enc.dispatch_compute(
                 &nb_pipes.write,
                 &[
                     narrow_uniform(&restore_params), buffer(46, step.clock_plan),
+                    buffer(47, step.identity),
                     buffer(3, &nb.previous_faces),
                     buffer(9, &nb.particles),
                     buffer(10, ranges),
@@ -1464,7 +1430,7 @@ impl StepState {
         // defined-value rule)): filled once per lattice, restored by the
         // retire when a tile leaves C.
         if !step.narrow_enabled {
-            encode_tiles(enc, pipes, &base, tiles, ranges, step.capped, step.tally);
+            encode_tiles(enc, pipes, &base, tiles, ranges, step.capped, step.tally, gate_plan);
         }
         if !step.narrow_enabled && !self.filled {
             enc.dispatch_compute(&pipes.tiles_fill, &canonical(l, vec![uniform(&base)]), face_groups, "gpu_flip.step.tiles.fill");
@@ -1615,7 +1581,7 @@ impl StepState {
             let (from, to) = if layer % 2 == 0 { (&l.b, &l.v) } else { (&l.v, &l.b) };
             enc.dispatch_compute(
                 &pipes.solid_extrapolate,
-                &[uniform(&base), buffer(3, from), buffer(4, to)],
+                &[uniform(&base), buffer(3, from), buffer(4, to), buffer(46, gate_plan)],
                 face_groups,
                 "gpu_flip.step.solid_extrapolate",
             );
@@ -1633,10 +1599,10 @@ impl StepState {
         // Which water reaches air holds every step: the density source reads
         // it too. As the engine does, the solid velocity's zeroing is skipped
         // when the bodies are in the solve: their mass resolves the pocket.
-        encode_pockets(enc, pipes, &base, l, ranges, cells, step.capped, step.tally);
+        encode_pockets(enc, pipes, &base, l, ranges, cells, step.capped, step.tally, gate_plan);
         enc.dispatch_compute(
             &pipes.pocket_pin,
-            &[uniform(&base), buffer(6, &l.water), buffer(23, &l.pocket), buffer(25, &l.pocket_label), buffer(5, &l.solve_water)],
+            &[uniform(&base), buffer(6, &l.water), buffer(23, &l.pocket), buffer(25, &l.pocket_label), buffer(5, &l.solve_water), buffer(46, gate_plan)],
             cells_groups,
             "gpu_flip.step.pocket_pin",
         );
@@ -1656,12 +1622,12 @@ impl StepState {
             &l.solve_water
         };
         if step.level > 0 {
-            encode_pocket_coarsen(enc, pipes, &base, l);
+            encode_pocket_coarsen(enc, pipes, &base, l, gate_plan);
         }
         if solids && !step.dynamic {
             enc.dispatch_compute(
                 &pipes.pocket_condition,
-                &[uniform(&base), buffer(4, &l.v), buffer(10, &l.s), buffer(23, &l.pocket)],
+                &[uniform(&base), buffer(4, &l.v), buffer(10, &l.s), buffer(23, &l.pocket), buffer(46, gate_plan)],
                 face_groups,
                 "gpu_flip.step.pocket_condition",
             );
@@ -1673,7 +1639,7 @@ impl StepState {
             cells_groups,
             "gpu_flip.step.divergence",
         );
-        encode_pocket_mean(enc, pipes, &base, l.fine_pockets(), &l.rhs, 0, step.capped, step.tally);
+        encode_pocket_mean(enc, pipes, &base, l.fine_pockets(), &l.rhs, 0, step.capped, step.tally, gate_plan);
         // At a coarse solve level the restricted right-hand side loses each
         // pocket's zero sum (design section 11), so the mean comes off once
         // more there; as a later substep's would, its flux adds to the word.
@@ -1685,7 +1651,7 @@ impl StepState {
                     step_in_tick: 1,
                     ..base
                 };
-                encode_pocket_mean(enc, pipes, &params, l.coarse_pockets(), rhs, solve, step.capped, step.tally);
+                encode_pocket_mean(enc, pipes, &params, l.coarse_pockets(), rhs, solve, step.capped, step.tally, gate_plan);
             }
         };
         let water = Water {
@@ -1695,6 +1661,7 @@ impl StepState {
             faces: &l.s,
             phi: step.ghost.then_some(&l.phi),
         };
+        self.solver.set_clock_plan(gate_plan);
         self.solver.prepare(device, enc, &water)?;
         // Dynamic bodies join the solve as the engine's mass-aware PCG
         // (RigidFluidCoupling) has them; their tick rows start at `first`.
@@ -1752,12 +1719,15 @@ impl StepState {
         if step.dynamic {
             self.bodies.react(enc, &coupled, self.solver.tiles()?, &l.pressure, step.reaction)?;
         }
+        extend(enc, pipes, step.clock_plan, &base, face_groups, [&l.f, out_faces, &l.b], step.band, "gpu_flip.step.extend_new");
+        enc.compute_memory_barrier_buffers();
         // The engine constrains its velocity and its saved velocity to the
         // solids after the pressure solve, so FLIP's change is measured
         // between two constrained fields.
-        for (faces, label) in [(&l.f, "gpu_flip.step.constrain"), (&l.a, "gpu_flip.step.constrain_old")] {
+        for (faces, label) in [(out_faces, "gpu_flip.step.constrain"), (&l.a, "gpu_flip.step.constrain_old")] {
             enc.dispatch_compute(&pipes.constrain, &[buffer(46, step.clock_plan), uniform(&base), buffer(20, faces), buffer(10, &l.s), buffer(11, &l.v)], face_groups, label);
         }
+        enc.copy_buffer_to_buffer(out_faces, &l.f, out_faces.size);
         // One active-set update for the next step. The leftover divergence
         // is the divergence pass itself on the projected, constrained faces,
         // against the solid velocity after the reaction, so a body's own
@@ -1786,7 +1756,6 @@ impl StepState {
                 "gpu_flip.step.separate_update",
             );
         }
-        extend(enc, pipes, step.clock_plan, &base, face_groups, [&l.f, out_faces, &l.b], step.band, "gpu_flip.step.extend_new");
         // The density projection (module doc): its pressure's gradient is
         // taken off a copy of the new faces in `l.f`, and the move reads the
         // difference as a displacement. Air sits at zero at its centres.
@@ -1817,7 +1786,7 @@ impl StepState {
                     "gpu_flip.step.density_source",
                 );
             }
-            encode_pocket_mean(enc, pipes, &base, l.fine_pockets(), &l.rhs, 1, step.capped, step.tally);
+            encode_pocket_mean(enc, pipes, &base, l.fine_pockets(), &l.rhs, 1, step.capped, step.tally, gate_plan);
             // The density solve stays plain: every water cell in it, let go
             // or not, so its rows are rebuilt on the pocket-only mask.
             let plain_water = Water { water: &l.solve_water, ..water };
@@ -1925,10 +1894,15 @@ impl StepState {
                 "gpu_flip.step.narrow.reseed_latch",
             );
             enc.compute_memory_barrier_buffers();
+            self.identity_ops.reserve(enc, super::particle_identity::BirthReservation {
+                particles: &nb.particles, identity: step.identity, ranges, scan: &scan, plan: step.clock_plan,
+                params: [capacity, cell_count as u32, scan_threads as u32, 2],
+            });
             enc.dispatch_compute(
                 &nb_pipes.write,
                 &[
                     narrow_uniform(&nb_params), buffer(46, step.clock_plan),
+                    buffer(47, step.identity),
                     buffer(3, out_faces),
                     buffer(9, &nb.particles),
                     buffer(10, ranges),
@@ -1958,6 +1932,51 @@ impl StepState {
         } else if let Some(interior) = self.interior.as_ref() {
             enc.dispatch_compute(&pipes.narrow_disabled, &[uniform(&base), buffer(5, interior)], cells_groups, "gpu_flip.step.narrow.disabled");
         }
+        // Native removal precedes inflow. Stable cell ranks predate speed
+        // removal: an extreme marker still consumes a cell quota place.
+        enc.compute_memory_barrier_buffers();
+        self.sorter.encode(device, enc, &SortJob {
+            count: base.particles, ..sort_job(step.out, sorted)
+        }, &SORT_LABELS)?;
+        enc.compute_memory_barrier_buffers();
+        self.clock.as_ref().expect("live clock prepared")
+            .remove_extreme(enc, sorted, base.particles, clock_params);
+        let ranges = self.sorter.ranges().ok_or("the cell ranges were not reserved")?;
+        enc.compute_memory_barrier_buffers();
+        enc.dispatch_compute(&pipes.remove_crowded,
+            &[uniform(&base), buffer(46, step.clock_plan), buffer(1, ranges), buffer(38, sorted)],
+            cells_groups, "gpu_flip.step.remove_crowded");
+        enc.compute_memory_barrier_buffers();
+        self.sorter.encode(device, enc, &SortJob {
+            count: base.particles, ..sort_job(sorted, step.out)
+        }, &SORT_LABELS)?;
+        // New inflow is first transferred and advected by the following step.
+        if p.region_count > 0 {
+            let sites = emit_sites(cells);
+            let ranges = self.sorter.ranges().ok_or("the cell ranges were not reserved")?;
+            let scan = self.emit_scan.buffer(device, sites as usize)?.clone();
+            let emission = StepParams { capacity: base.particles, ..base };
+            enc.compute_memory_barrier_buffers();
+            enc.dispatch_compute(&pipes.emit_flags, &[
+                uniform(&emission), buffer(1, ranges), buffer(2, step.out),
+                buffer(9, &l.corners), buffer(15, step.shapes), buffer(16, step.atlas),
+                buffer(36, step.regions), buffer(46, step.clock_plan), buffer(37, &scan),
+            ], groups(sites), "gpu_flip.step.emit_flags");
+            enc.compute_memory_barrier_buffers();
+            self.emit_scan.encode_labelled_gated(enc, sites as usize, ScanLabels {
+                blocks: "gpu_flip.step.emit_scan.blocks", add: "gpu_flip.step.emit_scan.add",
+            }, gate_plan);
+            self.identity_ops.reserve(enc, super::particle_identity::BirthReservation {
+                particles: step.out, identity: step.identity, ranges, scan: &scan, plan: step.clock_plan,
+                params: [emission.capacity, cells.iter().product(), sites as u32, 1],
+            });
+            enc.dispatch_compute(&pipes.emit_write, &[
+                uniform(&emission), buffer(1, ranges), buffer(15, step.shapes),
+                buffer(16, step.atlas), buffer(36, step.regions), buffer(46, step.clock_plan),
+                buffer(37, &scan), buffer(38, step.out), buffer(47, step.identity),
+            ], groups(sites), "gpu_flip.step.emit_write");
+        }
+        enc.compute_memory_barrier_buffers();
         // A failure is sticky across narrow enable toggles and is cleared only
         // by an epoch/lattice reset.  Never-enabled dense steps use the
         // existing zero storage, so they do not acquire a new scratch word.
@@ -2029,9 +2048,10 @@ fn read_epoch(value: f32) -> Result<u32, String> {
 crate::primitive! {
     name: GpuFlipStep,
     type_id: "node.gpu_flip_step",
-    purpose: "Advance GPU FLIP water one 60 Hz tick in Steps equal substeps (1 by default); each substep sorts the particles into the lattice's cells, gathers their velocity onto the cell faces, adds gravity and the scene's forces and impulses, makes the water incompressible against the tank walls and the scene's solid bodies (a multigrid-preconditioned pressure solve, the free surface placed where the particles' distance crosses zero), moves crowded particles apart and sparse ones together so the water keeps its volume (a density projection, position only, when Volume Projection is 1), then moves every particle through the new velocity, blending FLIP and PIC by Flip Share, and keeps it out of the solid bodies (a particle a moving body swept over is removed). A face Closed Faces leaves open (bit 2d the low face of axis d, bit 2d + 1 the high one) drains: every wall stays solid, and a particle that ends a substep within 2 cells of an open face is removed. Water a moving solid seals off from air (and from any open face) does not take that solid's push, unless the bodies are in the solve.When dynamic_bodies is above 0, each body that takes a reaction joins the pressure solve with its own velocity, so the water pushes it and it pushes back in the same solve, and the step adds the pressure's and the friction's impulse on every body to the reaction. Outputs the moved particles, the step's face grid (valid at least 2 layers around the water) and the reaction, in place.",
+    purpose: "Advance GPU FLIP water through the accepted clock interval with CFL 5 and Steps minimum substeps (1 by default); each substep sorts the particles into the lattice's cells, gathers their velocity onto the cell faces, adds gravity and the scene's forces and impulses, makes the water incompressible against the tank walls and the scene's solid bodies (a multigrid-preconditioned pressure solve, the free surface placed where the particles' distance crosses zero), moves crowded particles apart and sparse ones together so the water keeps its volume (a density projection, position only, when Volume Projection is 1), then moves every particle through the new velocity, blending FLIP and PIC by Flip Share, and keeps it out of the solid bodies (a particle a moving body swept over is removed). A face Closed Faces leaves open (bit 2d the low face of axis d, bit 2d + 1 the high one) drains: every wall stays solid, and a particle that ends a substep within 2 cells of an open face is removed. Water a moving solid seals off from air (and from any open face) does not take that solid's push, unless the bodies are in the solve.When dynamic_bodies is above 0, each body that takes a reaction joins the pressure solve with its own velocity, so the water pushes it and it pushes back in the same solve, and the step adds the pressure's and the friction's impulse on every body to the reaction. Extrapolates projected velocity by 12 layers before constraining solids. Removes markers above 250 per cell and extreme velocities using the accepted interval, compacts survivors without changing their ids, then emits inflow for the next step. Outputs the moved particles, the step's face grid (valid at least 2 layers around the water) and the reaction, in place.",
     inputs: {
         particles: Array(FluidParticle) required,
+        identity: Array(u32) required,
         count: ScalarF32 optional,
         lattice_min_x: ScalarF32 optional, lattice_min_y: ScalarF32 optional, lattice_min_z: ScalarF32 optional,
         cell_size: ScalarF32 optional,
@@ -2045,7 +2065,8 @@ crate::primitive! {
         impulse_tick: ScalarF32 optional,
         first_tick: ScalarF32 optional,
         tick_index: ScalarF32 optional,
-        interval_duration: ScalarF32 optional, bodies: Array(LiquidBody) optional,
+        interval_duration: ScalarF32 optional, limit_interval: ScalarF32 optional,
+        bodies: Array(LiquidBody) optional,
         shapes: Array(LiquidShape) optional,
         atlas: Array(u32) optional,
         body_count: ScalarF32 optional,
@@ -2068,8 +2089,12 @@ crate::primitive! {
     },
     outputs: {
         out: Array(FluidParticle),
+        identity_out: Array(u32),
         faces: Array(FaceSample),
         distance: Array(f32),
+        substep_schedule: Array(f32),
+        substep_u: Array(f32), substep_v: Array(f32), substep_w: Array(f32),
+        substep_count: ScalarF32,
         grid_bounds: Transform,
         grid_nodes_x: ScalarF32, grid_nodes_y: ScalarF32, grid_nodes_z: ScalarF32,
         face_cells_x: ScalarF32, face_cells_y: ScalarF32, face_cells_z: ScalarF32,
@@ -2139,10 +2164,11 @@ fn read_iterations(value: f32) -> Result<Stop, String> {
 impl Primitive for GpuFlipStep {
     fn prepare_pipelines(&mut self, device: &GpuDevice) {
         self.state.prepare_pipelines(device);
+        self.state.history.prepare(device);
     }
 
     fn provides_array_output(&self, port: &str) -> bool {
-        matches!(port, "faces" | "distance" | "interior")
+        matches!(port, "faces" | "distance" | "interior" | "substep_schedule" | "substep_u" | "substep_v" | "substep_w")
     }
 
     fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
@@ -2150,6 +2176,8 @@ impl Primitive for GpuFlipStep {
             "faces" => self.state.faces.as_ref(),
             "distance" => self.state.lattice.as_ref().map(|l| &l.phi),
             "interior" => self.state.interior.as_ref(),
+            "substep_schedule" => self.state.history.schedule.as_ref(),
+            "substep_u" | "substep_v" | "substep_w" => self.state.history.faces.as_ref().map(|f| &f[match port { "substep_u" => 0, "substep_v" => 1, _ => 2 }]),
             _ => None,
         }
     }
@@ -2158,10 +2186,11 @@ impl Primitive for GpuFlipStep {
         match port {
             "out" => inputs.iter().find(|(name, _)| *name == "particles").map(|&(_, n)| n),
             // Provided storage: a one-record hint, sized to the lattice at run time.
-            "faces" | "distance" | "interior" => Some(1),
+            "faces" | "distance" | "interior" | "substep_schedule" | "substep_u" | "substep_v" | "substep_w" => Some(1),
             "reaction_out" => inputs.iter().find(|(name, _)| *name == "reaction").map(|&(_, n)| n),
             "capped" => inputs.iter().find(|(name, _)| *name == "particles").map(|&(_, n)| n.saturating_mul(2).saturating_add(SOLVER_WORDS)),
             "clock_status" => Some(8),
+            "identity_out" => Some(4),
             _ => None,
         }
     }
@@ -2174,7 +2203,7 @@ impl Primitive for GpuFlipStep {
     }
 
     fn aliased_array_io(&self) -> &'static [(&'static str, &'static str)] {
-        &[("reaction", "reaction_out")]
+        &[("reaction", "reaction_out"), ("identity", "identity_out")]
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -2229,8 +2258,16 @@ impl Primitive for GpuFlipStep {
             _ => capacity,
         };
         let steps = ctx.scalar_or_param("steps", 1.0).round().clamp(1.0, 64.0);
-        let interval_duration = f64::from(ctx.scalar_or_param("interval_duration", TICK as f32));
+        // A graph saved without the domain's interval wire runs on the project's Sim Rate.
+        let interval_duration = f64::from(ctx.scalar_or_param(
+            "interval_duration",
+            crate::node_graph::physics::simulation_interval() as f32,
+        ));
         let step_dt = (interval_duration/ f64::from(steps)) as f32;
+        // 0 (export, or a graph without the wire) measures the whole frame.
+        let limit_interval = Some(ctx.scalar_or_param("limit_interval", 0.0))
+            .filter(|limit| limit.is_finite() && *limit > 0.0)
+            .unwrap_or(0.0);
         let flip = ctx.scalar_or_param("flip", 0.95).clamp(0.0, 1.0);
         let top_speed = ctx.scalar_or_param("top_speed", DEFAULT_TOP_SPEED);
         if !(top_speed.is_finite() && top_speed > 0.0) {
@@ -2238,7 +2275,7 @@ impl Primitive for GpuFlipStep {
             return;
         }
         let h = lattice.cell_size();
-        let travel = halo_travel(top_speed, steps, h);
+        let travel = travel_cells(top_speed, step_dt, h);
         let gravity = [("gravity_x", 0.0), ("gravity_y", -9.81), ("gravity_z", 0.0)].map(|(name, default)| ctx.scalar_or_param(name, default));
         let tick_index = ctx.scalar_or_param("tick_index", 0.0).round().max(0.0) as i32;
         let epoch = if ctx.inputs.slot("epoch").is_some() {
@@ -2282,7 +2319,7 @@ impl Primitive for GpuFlipStep {
             Some(_) => ctx.scalar_or_param("region_count", 0.0).round().clamp(0.0, MAX_FLUID_ROLES as f32) as i32,
             None => 0,
         };
-        let band = band_layers(travel).max(FACE_VALID_LAYERS);
+        let band = band_layers(ENGINE_CFL).max(FACE_VALID_LAYERS);
         let restore_narrow = self.state.sync_narrow_history(epoch, box_min, h, cells, capacity, tick_index, narrow_enabled);
         if (narrow_enabled || restore_narrow || self.state.narrow_full_count) && out_slots != capacity {
             ctx.error(format!("{NAME}: Narrow Band history requires out to hold all {capacity} particle slots"));
@@ -2304,6 +2341,10 @@ impl Primitive for GpuFlipStep {
             return;
         }
         let zeros = self.state.zeros.clone().expect("zeros prepared");
+        let Some(identity) = ctx.inputs.array("identity").filter(|b| b.size >= 16) else {
+            ctx.error("GPU FLIP Step: persistent liquid_state identity is required");
+            return;
+        };
         let clock_obstacles = ctx.inputs.array("clock_obstacles").unwrap_or(&zeros);
         let clock_sources = ctx.inputs.array("clock_sources").unwrap_or(&zeros);
         let obstacle_count = ctx
@@ -2378,6 +2419,7 @@ impl Primitive for GpuFlipStep {
         }
         let region_rows = (regions.size / size_of::<LiquidBody>() as u64).min(i32::MAX as u64) as i32;
         let mut step = Step {
+            identity,
             params: StepParams {
                 n: cells,
                 capacity,
@@ -2450,19 +2492,26 @@ impl Primitive for GpuFlipStep {
         let body_row_offset = u64::try_from(rows.saturating_sub(body_count).max(0))
             .unwrap_or(0)
             .saturating_mul(size_of::<LiquidBody>() as u64);
+        let history_slots = manifold_physics::stepping::LIVE_DEFAULT_MAX_STEPS + live_hit_count;
+        ctx.outputs.set_scalar("substep_count", ParamValue::Float(history_slots as f32));
         let gpu = ctx.gpu_encoder();
+        self.state.history.prepare(gpu.device);
+        if let Err(error) = self.state.history.reserve(gpu.device, step.params.n, history_slots) {
+            ctx.error(format!("{NAME}: {error}"));
+            return;
+        }
         // The first substep reads the tick's particles, every later one the
         // last one's out. The reaction is in place, so the bodies feel every
         // substep.
         let clock_params = GpuFlipClockParams {
             frame_duration: interval_duration as f32,
             cell_size: h,
-            cfl: 5.0,
+            cfl: ENGINE_CFL as f32,
             surface_condition: 1.0,
             surface_constant: 1.0,
             color_mixing_rate: 0.0,
             _pad_prediction: 0.0,
-            _pad0: 0.0,
+            limit_interval,
             min_frame_steps: steps as u32,
             max_frame_steps: manifold_physics::stepping::LIVE_DEFAULT_MAX_STEPS,
             flags: if tick_index == 0 {
@@ -2481,7 +2530,7 @@ impl Primitive for GpuFlipStep {
         }
         for k in 0..encoded_steps as i32 {
             step.restore_narrow = restore_narrow && k == 0;
-            step.count = if self.state.narrow_full_count || step.restore_narrow { capacity } else { count };
+            step.count = if k > 0 { out_slots } else if self.state.narrow_full_count || step.restore_narrow { capacity } else { count };
             let particles_for_step = if k > 0 { out } else { particles };
             let params = StepParams {
                 step_in_tick: k,
@@ -2521,15 +2570,10 @@ impl Primitive for GpuFlipStep {
                     clock_plan: &plan_buffer,
                     ..step
                 };
-            if let Err(error) = self.state.encode(gpu.device, gpu.native_enc, &iteration) {
+            if let Err(error) = self.state.encode(gpu.device, gpu.native_enc, &iteration, &clock_params) {
                 ctx.error(format!("{NAME}: {error}"));
                 return;
             }
-        self.state
-                    .clock
-                    .as_ref()
-                    .expect("live clock prepared")
-                    .remove_extreme(gpu.native_enc, out, step.count, &clock_params);
                 self.state.commit_mask(
                     gpu.native_enc,
                     &plan_buffer,
@@ -2591,6 +2635,7 @@ impl Primitive for GpuFlipStep {
                         gpu.native_enc.copy_buffer_to_buffer(&nb.phi, interior, nb.phi.size);
                     }
                 }
+                self.state.history.capture(gpu.native_enc, k as u32, &plan_buffer, self.state.faces.as_ref().expect("faces prepared"));
                 last_clock_plan = plan_buffer;
             }
         }
@@ -2720,6 +2765,7 @@ mod tests {
                 "particle_distance",
                 "subtract_pressure",
                 "constrain_solid_faces",
+                "remove_crowded_markers",
                 "density_source",
                 "faces_to_particles",
                 "tiles_classify",
@@ -2817,16 +2863,16 @@ mod tests {
         }
     }
 
-    /// The band is the engine's ⌈√3 · CFL⌉ + 3 on the travel, never under the
+    /// The band is the engine's ⌈√3 · CFL⌉ + 3, never under the
     /// face grid's guarantee.
     #[test]
-    fn band_layers_cover_the_travel() {
+    fn band_layers_match_configured_engine_cfl() {
         assert_eq!(travel_cells(DEFAULT_TOP_SPEED, 1.0 / 120.0, 0.0625), 3);
         assert_eq!(band_layers(3), 9);
         assert_eq!(band_layers(1), 5);
         assert_eq!(band_layers(5), 12, "the engine's 12 layers at its CFL 5");
-        for travel in 1..64 {
-            assert!(band_layers(travel) >= FACE_VALID_LAYERS);
-        }
+        assert_eq!(band_layers(8), 17);
+        assert_eq!(band_layers(0), 3);
+        assert_eq!(band_layers(ENGINE_CFL), 12);
     }
 }

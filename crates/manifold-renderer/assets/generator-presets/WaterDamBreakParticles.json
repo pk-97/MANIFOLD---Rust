@@ -1,0 +1,3654 @@
+{
+  "description": "GPU FLIP dam break drawn as small sphere copies of the blended, solid-clamped liquid particles, with the same display-time whitewater as the surface preset.",
+  "name": "Water — Dam Break (Particle View)",
+  "nodes": [
+    {
+      "id": 0,
+      "nodeId": "domain",
+      "params": {
+        "domain_size": {
+          "type": "Float",
+          "value": 4.0
+        },
+        "fill_height": {
+          "type": "Float",
+          "value": 0.1599999964237213
+        },
+        "resolution": {
+          "type": "Int",
+          "value": 64
+        }
+      },
+      "typeId": "node.gpu_flip_domain"
+    },
+    {
+      "id": 1,
+      "nodeId": "initial_column",
+      "params": {
+        "pos_x": {
+          "type": "Float",
+          "value": -1.25
+        },
+        "pos_y": {
+          "type": "Float",
+          "value": 1.1200000047683716
+        },
+        "pos_z": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "scale_x": {
+          "type": "Float",
+          "value": 1.1799999475479126
+        },
+        "scale_y": {
+          "type": "Float",
+          "value": 1.9199999570846558
+        },
+        "scale_z": {
+          "type": "Float",
+          "value": 3.5
+        }
+      },
+      "typeId": "node.transform_3d"
+    },
+    {
+      "id": 2,
+      "nodeId": "obstacle_transform",
+      "params": {
+        "pos_x": {
+          "type": "Float",
+          "value": 0.3499999940395355
+        },
+        "pos_y": {
+          "type": "Float",
+          "value": 0.5799999833106995
+        },
+        "pos_z": {
+          "type": "Float",
+          "value": -0.10000000149011612
+        },
+        "scale_x": {
+          "type": "Float",
+          "value": 0.6000000238418579
+        },
+        "scale_y": {
+          "type": "Float",
+          "value": 1.159999966621399
+        },
+        "scale_z": {
+          "type": "Float",
+          "value": 0.8500000238418579
+        }
+      },
+      "typeId": "node.transform_3d"
+    },
+    {
+      "id": 3,
+      "nodeId": "obstacle_collider",
+      "params": {
+        "radius": {
+          "type": "Float",
+          "value": 0.8660253882408142
+        },
+        "role": {
+          "type": "Enum",
+          "value": 3
+        },
+        "shape": {
+          "type": "Enum",
+          "value": 1
+        }
+      },
+      "typeId": "node.fluid_role_source"
+    },
+    {
+      "id": 4,
+      "nodeId": "fill",
+      "params": {
+        "box_x0": {
+          "type": "Int",
+          "value": 5
+        },
+        "box_x1": {
+          "type": "Int",
+          "value": 43
+        },
+        "box_y0": {
+          "type": "Int",
+          "value": 5
+        },
+        "box_y1": {
+          "type": "Int",
+          "value": 67
+        },
+        "box_z0": {
+          "type": "Int",
+          "value": 8
+        },
+        "box_z1": {
+          "type": "Int",
+          "value": 120
+        },
+        "cell_size": {
+          "type": "Float",
+          "value": 0.0625
+        },
+        "jitter": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "lattice_min_x": {
+          "type": "Float",
+          "value": -2.1875
+        },
+        "lattice_min_y": {
+          "type": "Float",
+          "value": -0.1875
+        },
+        "lattice_min_z": {
+          "type": "Float",
+          "value": -2.1875
+        },
+        "nodes_x": {
+          "type": "Int",
+          "value": 71
+        },
+        "nodes_y": {
+          "type": "Int",
+          "value": 71
+        },
+        "nodes_z": {
+          "type": "Int",
+          "value": 71
+        },
+        "pool_sites": {
+          "type": "Int",
+          "value": 5
+        },
+        "seed": {
+          "type": "Int",
+          "value": 0
+        }
+      },
+      "typeId": "node.liquid_fill"
+    },
+    {
+      "id": 5,
+      "nodeId": "state",
+      "typeId": "node.liquid_state"
+    },
+    {
+      "id": 6,
+      "nodeId": "step",
+      "params": {
+        "cell_size": {
+          "type": "Float",
+          "value": 0.0625
+        },
+        "flip": {
+          "type": "Float",
+          "value": 0.949999988079071
+        },
+        "ghost_fluid": {
+          "type": "Int",
+          "value": 1
+        },
+        "iterations": {
+          "type": "Int",
+          "value": 0
+        },
+        "lattice_min_x": {
+          "type": "Float",
+          "value": -2.1875
+        },
+        "lattice_min_y": {
+          "type": "Float",
+          "value": -0.1875
+        },
+        "lattice_min_z": {
+          "type": "Float",
+          "value": -2.1875
+        },
+        "nodes_x": {
+          "type": "Int",
+          "value": 71
+        },
+        "nodes_y": {
+          "type": "Int",
+          "value": 71
+        },
+        "nodes_z": {
+          "type": "Int",
+          "value": 71
+        },
+        "steps": {
+          "type": "Int",
+          "value": 1
+        },
+        "top_speed": {
+          "type": "Float",
+          "value": 20.0
+        },
+        "volume_projection": {
+          "type": "Int",
+          "value": 1
+        }
+      },
+      "typeId": "node.gpu_flip_step"
+    },
+    {
+      "id": 7,
+      "nodeId": "stats",
+      "typeId": "node.liquid_stats"
+    },
+    {
+      "id": 8,
+      "nodeId": "solid",
+      "typeId": "node.liquid_solid_distance"
+    },
+    {
+      "id": 9,
+      "nodeId": "mesh_solid",
+      "params": {
+        "wall_inset": {
+          "type": "Float",
+          "value": 1.5
+        }
+      },
+      "typeId": "node.liquid_solid_distance"
+    },
+    {
+      "id": 10,
+      "nodeId": "whitewater_obstacle_source",
+      "typeId": "node.whitewater_obstacle_source"
+    },
+    {
+      "id": 11,
+      "nodeId": "frame",
+      "params": {
+        "face_valid_layers": {
+          "type": "Int",
+          "value": 2
+        },
+        "native_mesh_grid": {
+          "type": "Bool",
+          "value": true
+        }
+      },
+      "typeId": "node.liquid_frame"
+    },
+    {
+      "id": 12,
+      "nodeId": "face_u",
+      "params": {
+        "axis": {
+          "type": "Enum",
+          "value": 0
+        },
+        "nodes_x": {
+          "type": "Float",
+          "value": 71.0
+        },
+        "nodes_y": {
+          "type": "Float",
+          "value": 71.0
+        },
+        "nodes_z": {
+          "type": "Float",
+          "value": 71.0
+        }
+      },
+      "typeId": "node.face_sample_component"
+    },
+    {
+      "id": 13,
+      "nodeId": "face_v",
+      "params": {
+        "axis": {
+          "type": "Enum",
+          "value": 1
+        },
+        "nodes_x": {
+          "type": "Float",
+          "value": 71.0
+        },
+        "nodes_y": {
+          "type": "Float",
+          "value": 71.0
+        },
+        "nodes_z": {
+          "type": "Float",
+          "value": 71.0
+        }
+      },
+      "typeId": "node.face_sample_component"
+    },
+    {
+      "id": 14,
+      "nodeId": "face_w",
+      "params": {
+        "axis": {
+          "type": "Enum",
+          "value": 2
+        },
+        "nodes_x": {
+          "type": "Float",
+          "value": 71.0
+        },
+        "nodes_y": {
+          "type": "Float",
+          "value": 71.0
+        },
+        "nodes_z": {
+          "type": "Float",
+          "value": 71.0
+        }
+      },
+      "typeId": "node.face_sample_component"
+    },
+    {
+      "handle": "input",
+      "id": 433,
+      "nodeId": "input",
+      "typeId": "system.generator_input"
+    },
+    {
+      "handle": "camera",
+      "id": 434,
+      "nodeId": "camera",
+      "params": {
+        "distance": {
+          "type": "Float",
+          "value": 9.350000381469727
+        },
+        "far": {
+          "type": "Float",
+          "value": 2000.0
+        },
+        "fov_y": {
+          "type": "Float",
+          "value": 0.6399999856948853
+        },
+        "look_y": {
+          "type": "Float",
+          "value": 1.2000000476837158
+        },
+        "orbit": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "tilt": {
+          "type": "Float",
+          "value": 0.3499999940395355
+        }
+      },
+      "typeId": "node.orbit_camera"
+    },
+    {
+      "handle": "environment",
+      "id": 435,
+      "nodeId": "environment",
+      "params": {
+        "emitter_count": {
+          "type": "Int",
+          "value": 1
+        },
+        "emitter_elevation": {
+          "type": "Float",
+          "value": 0.550000011920929
+        },
+        "emitter_intensity": {
+          "type": "Float",
+          "value": 1.399999976158142
+        },
+        "emitter_width": {
+          "type": "Float",
+          "value": 0.1899999976158142
+        },
+        "fill": {
+          "type": "Float",
+          "value": 0.07000000029802322
+        },
+        "height": {
+          "type": "Int",
+          "value": 512
+        },
+        "intensity": {
+          "type": "Float",
+          "value": 0.699999988079071
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 1
+        },
+        "width": {
+          "type": "Int",
+          "value": 1024
+        }
+      },
+      "typeId": "node.bake_environment"
+    },
+    {
+      "handle": "light",
+      "id": 436,
+      "nodeId": "light",
+      "params": {
+        "aim_x": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "aim_y": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "aim_z": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "cast_shadows": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 0.800000011920929
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 0.8999999761581421
+        },
+        "color_r": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "intensity": {
+          "type": "Float",
+          "value": 1.399999976158142
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 0
+        },
+        "pos_x": {
+          "type": "Float",
+          "value": -2.0
+        },
+        "pos_y": {
+          "type": "Float",
+          "value": 6.0
+        },
+        "pos_z": {
+          "type": "Float",
+          "value": -2.5
+        },
+        "shadow_bias": {
+          "type": "Float",
+          "value": 0.0010000000474974513
+        },
+        "shadow_resolution": {
+          "type": "Int",
+          "value": 2048
+        },
+        "shadow_softness": {
+          "type": "Enum",
+          "value": 2
+        }
+      },
+      "typeId": "node.light"
+    },
+    {
+      "handle": "Water Material",
+      "id": 441,
+      "nodeId": "water_material",
+      "params": {
+        "ambient": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 0.9900000095367432
+        },
+        "color_r": {
+          "type": "Float",
+          "value": 0.9800000190734863
+        },
+        "ior": {
+          "type": "Float",
+          "value": 1.3329999446868896
+        },
+        "metallic": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "roughness": {
+          "type": "Float",
+          "value": 0.017999999225139618
+        },
+        "transmission": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "volume_attenuation_color_b": {
+          "type": "Float",
+          "value": 0.800000011920929
+        },
+        "volume_attenuation_color_g": {
+          "type": "Float",
+          "value": 0.7200000286102295
+        },
+        "volume_attenuation_color_r": {
+          "type": "Float",
+          "value": 0.3499999940395355
+        },
+        "volume_attenuation_distance": {
+          "type": "Float",
+          "value": 3.0
+        },
+        "volume_geometry": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "volume_scattering_color_b": {
+          "type": "Float",
+          "value": 0.9200000166893005
+        },
+        "volume_scattering_color_g": {
+          "type": "Float",
+          "value": 0.8600000143051147
+        },
+        "volume_scattering_color_r": {
+          "type": "Float",
+          "value": 0.6800000071525574
+        },
+        "volume_scattering_density": {
+          "type": "Float",
+          "value": 0.054999999701976776
+        },
+        "volume_thickness": {
+          "type": "Float",
+          "value": 0.09000000357627869
+        }
+      },
+      "typeId": "node.pbr_material"
+    },
+    {
+      "handle": "Water",
+      "id": 442,
+      "nodeId": "water_object",
+      "typeId": "node.scene_object"
+    },
+    {
+      "handle": "Basin Floor Mesh",
+      "id": 446,
+      "nodeId": "floor_mesh",
+      "typeId": "node.cube_mesh"
+    },
+    {
+      "handle": "Basin Material",
+      "id": 447,
+      "nodeId": "basin_material",
+      "params": {
+        "ambient": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 0.0560000017285347
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 0.04899999871850014
+        },
+        "color_r": {
+          "type": "Float",
+          "value": 0.03500000014901161
+        },
+        "metallic": {
+          "type": "Float",
+          "value": 0.10000000149011612
+        },
+        "roughness": {
+          "type": "Float",
+          "value": 0.36000001430511475
+        }
+      },
+      "typeId": "node.pbr_material"
+    },
+    {
+      "handle": "Basin Floor Transform",
+      "id": 448,
+      "nodeId": "floor_transform",
+      "params": {
+        "pos_y": {
+          "type": "Float",
+          "value": -0.054999999701976776
+        },
+        "scale_x": {
+          "type": "Float",
+          "value": 4.159999847412109
+        },
+        "scale_y": {
+          "type": "Float",
+          "value": 0.2199999988079071
+        },
+        "scale_z": {
+          "type": "Float",
+          "value": 4.159999847412109
+        }
+      },
+      "typeId": "node.transform_3d"
+    },
+    {
+      "handle": "Basin Floor",
+      "id": 449,
+      "nodeId": "floor_object",
+      "typeId": "node.scene_object"
+    },
+    {
+      "handle": "Basin Rear Wall Mesh",
+      "id": 450,
+      "nodeId": "rear_mesh",
+      "typeId": "node.cube_mesh"
+    },
+    {
+      "handle": "Basin Rear Wall Transform",
+      "id": 451,
+      "nodeId": "rear_transform",
+      "params": {
+        "pos_y": {
+          "type": "Float",
+          "value": 0.4000000059604645
+        },
+        "pos_z": {
+          "type": "Float",
+          "value": -2.0399999618530273
+        },
+        "scale_x": {
+          "type": "Float",
+          "value": 4.159999847412109
+        },
+        "scale_y": {
+          "type": "Float",
+          "value": 0.949999988079071
+        },
+        "scale_z": {
+          "type": "Float",
+          "value": 0.14000000059604645
+        }
+      },
+      "typeId": "node.transform_3d"
+    },
+    {
+      "handle": "Basin Rear Wall",
+      "id": 452,
+      "nodeId": "rear_object",
+      "typeId": "node.scene_object"
+    },
+    {
+      "handle": "Basin Left Wall Mesh",
+      "id": 453,
+      "nodeId": "left_mesh",
+      "typeId": "node.cube_mesh"
+    },
+    {
+      "handle": "Basin Left Wall Transform",
+      "id": 454,
+      "nodeId": "left_transform",
+      "params": {
+        "pos_x": {
+          "type": "Float",
+          "value": -2.0399999618530273
+        },
+        "pos_y": {
+          "type": "Float",
+          "value": 0.4000000059604645
+        },
+        "scale_x": {
+          "type": "Float",
+          "value": 0.14000000059604645
+        },
+        "scale_y": {
+          "type": "Float",
+          "value": 0.949999988079071
+        },
+        "scale_z": {
+          "type": "Float",
+          "value": 4.159999847412109
+        }
+      },
+      "typeId": "node.transform_3d"
+    },
+    {
+      "handle": "Basin Left Wall",
+      "id": 455,
+      "nodeId": "left_object",
+      "typeId": "node.scene_object"
+    },
+    {
+      "handle": "Basin Right Wall Mesh",
+      "id": 456,
+      "nodeId": "right_mesh",
+      "typeId": "node.cube_mesh"
+    },
+    {
+      "handle": "Basin Right Wall Transform",
+      "id": 457,
+      "nodeId": "right_transform",
+      "params": {
+        "pos_x": {
+          "type": "Float",
+          "value": 2.0399999618530273
+        },
+        "pos_y": {
+          "type": "Float",
+          "value": 0.4000000059604645
+        },
+        "scale_x": {
+          "type": "Float",
+          "value": 0.14000000059604645
+        },
+        "scale_y": {
+          "type": "Float",
+          "value": 0.949999988079071
+        },
+        "scale_z": {
+          "type": "Float",
+          "value": 4.159999847412109
+        }
+      },
+      "typeId": "node.transform_3d"
+    },
+    {
+      "handle": "Basin Right Wall",
+      "id": 458,
+      "nodeId": "right_object",
+      "typeId": "node.scene_object"
+    },
+    {
+      "handle": "scene",
+      "id": 463,
+      "nodeId": "scene",
+      "params": {
+        "lights": {
+          "type": "Int",
+          "value": 2
+        },
+        "objects": {
+          "type": "Int",
+          "value": 11
+        }
+      },
+      "typeId": "node.render_scene"
+    },
+    {
+      "handle": "final_output",
+      "id": 464,
+      "nodeId": "final_output",
+      "typeId": "system.final_output"
+    },
+    {
+      "handle": "Rim Light",
+      "id": 466,
+      "nodeId": "rim_light",
+      "params": {
+        "aim_y": {
+          "type": "Float",
+          "value": 0.4000000059604645
+        },
+        "cast_shadows": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 0.7799999713897705
+        },
+        "color_r": {
+          "type": "Float",
+          "value": 0.5699999928474426
+        },
+        "intensity": {
+          "type": "Float",
+          "value": 0.6499999761581421
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 0
+        },
+        "pos_x": {
+          "type": "Float",
+          "value": 4.0
+        },
+        "pos_y": {
+          "type": "Float",
+          "value": 3.0
+        },
+        "pos_z": {
+          "type": "Float",
+          "value": 2.5
+        }
+      },
+      "typeId": "node.light"
+    },
+    {
+      "handle": "Filmic Display",
+      "id": 471,
+      "nodeId": "filmic_display",
+      "params": {
+        "curve": {
+          "type": "Enum",
+          "value": 2
+        },
+        "exposure": {
+          "type": "Float",
+          "value": 0.8999999761581421
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 0
+        }
+      },
+      "typeId": "node.tone_map"
+    },
+    {
+      "handle": "Sky Environment",
+      "id": 472,
+      "nodeId": "sky_environment",
+      "params": {
+        "height": {
+          "type": "Int",
+          "value": 1024
+        },
+        "width": {
+          "type": "Int",
+          "value": 2048
+        }
+      },
+      "typeId": "node.hdri_source"
+    },
+    {
+      "handle": "Sky Exposure",
+      "id": 473,
+      "nodeId": "sky_exposure",
+      "params": {
+        "gain": {
+          "type": "Float",
+          "value": 2.0
+        }
+      },
+      "typeId": "node.exposure"
+    },
+    {
+      "handle": "Environment Select",
+      "id": 474,
+      "nodeId": "environment_select",
+      "params": {
+        "num_inputs": {
+          "type": "Int",
+          "value": 2
+        },
+        "selector": {
+          "type": "Float",
+          "value": 0.0
+        }
+      },
+      "typeId": "node.switch_texture"
+    },
+    {
+      "handle": "Whitewater",
+      "id": 475,
+      "nodeId": "whitewater",
+      "params": {
+        "capacity": {
+          "type": "Int",
+          "value": 100000
+        },
+        "max_energy": {
+          "type": "Float",
+          "value": 60.0
+        },
+        "min_energy": {
+          "type": "Float",
+          "value": 0.10000000149011612
+        },
+        "wavecrest_emission": {
+          "type": "Float",
+          "value": 175.0
+        }
+      },
+      "typeId": "node.whitewater_step"
+    },
+    {
+      "handle": "Foam Mesh",
+      "id": 476,
+      "nodeId": "foam_mesh",
+      "params": {
+        "radius": {
+          "type": "Float",
+          "value": 0.004999999888241291
+        },
+        "shape": {
+          "type": "Enum",
+          "value": 3
+        }
+      },
+      "typeId": "node.platonic_solid_mesh"
+    },
+    {
+      "handle": "Foam Material",
+      "id": 477,
+      "nodeId": "foam_material",
+      "params": {
+        "color_b": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 0.9800000190734863
+        },
+        "color_r": {
+          "type": "Float",
+          "value": 0.949999988079071
+        },
+        "ior": {
+          "type": "Float",
+          "value": 1.3329999446868896
+        },
+        "metallic": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "roughness": {
+          "type": "Float",
+          "value": 0.550000011920929
+        },
+        "transmission": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "volume_thickness": {
+          "type": "Float",
+          "value": 0.009999999776482582
+        }
+      },
+      "typeId": "node.pbr_material"
+    },
+    {
+      "handle": "Foam Object",
+      "id": 478,
+      "nodeId": "foam_object",
+      "params": {
+        "cast_shadows": {
+          "type": "Float",
+          "value": 0.0
+        }
+      },
+      "typeId": "node.scene_object"
+    },
+    {
+      "handle": "Bubble Mesh",
+      "id": 479,
+      "nodeId": "bubble_mesh",
+      "params": {
+        "radius": {
+          "type": "Float",
+          "value": 0.0035000001080334187
+        },
+        "shape": {
+          "type": "Enum",
+          "value": 3
+        }
+      },
+      "typeId": "node.platonic_solid_mesh"
+    },
+    {
+      "handle": "Bubble Material",
+      "id": 480,
+      "nodeId": "bubble_material",
+      "params": {
+        "color_b": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 0.9800000190734863
+        },
+        "color_r": {
+          "type": "Float",
+          "value": 0.949999988079071
+        },
+        "ior": {
+          "type": "Float",
+          "value": 1.3329999446868896
+        },
+        "metallic": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "roughness": {
+          "type": "Float",
+          "value": 0.30000001192092896
+        },
+        "transmission": {
+          "type": "Float",
+          "value": 0.3499999940395355
+        },
+        "volume_particle_density": {
+          "type": "Float",
+          "value": 70.0
+        },
+        "volume_thickness": {
+          "type": "Float",
+          "value": 0.007000000216066837
+        }
+      },
+      "typeId": "node.pbr_material"
+    },
+    {
+      "handle": "Bubble Object",
+      "id": 481,
+      "nodeId": "bubble_object",
+      "params": {
+        "cast_shadows": {
+          "type": "Float",
+          "value": 0.0
+        }
+      },
+      "typeId": "node.scene_object"
+    },
+    {
+      "handle": "Spray Mesh",
+      "id": 482,
+      "nodeId": "spray_mesh",
+      "params": {
+        "radius": {
+          "type": "Float",
+          "value": 0.003000000026077032
+        },
+        "shape": {
+          "type": "Enum",
+          "value": 3
+        }
+      },
+      "typeId": "node.platonic_solid_mesh"
+    },
+    {
+      "handle": "Spray Material",
+      "id": 483,
+      "nodeId": "spray_material",
+      "params": {
+        "color_b": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 0.9800000190734863
+        },
+        "color_r": {
+          "type": "Float",
+          "value": 0.949999988079071
+        },
+        "ior": {
+          "type": "Float",
+          "value": 1.3329999446868896
+        },
+        "metallic": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "roughness": {
+          "type": "Float",
+          "value": 0.11999999731779099
+        },
+        "transmission": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "volume_thickness": {
+          "type": "Float",
+          "value": 0.006000000052154064
+        }
+      },
+      "typeId": "node.pbr_material"
+    },
+    {
+      "handle": "Spray Object",
+      "id": 484,
+      "nodeId": "spray_object",
+      "params": {
+        "cast_shadows": {
+          "type": "Float",
+          "value": 0.0
+        }
+      },
+      "typeId": "node.scene_object"
+    },
+    {
+      "handle": "Foam Copies",
+      "id": 485,
+      "nodeId": "foam_copies",
+      "typeId": "node.particles_to_copies"
+    },
+    {
+      "handle": "Bubble Copies",
+      "id": 486,
+      "nodeId": "bubble_copies",
+      "typeId": "node.particles_to_copies"
+    },
+    {
+      "handle": "Spray Copies",
+      "id": 487,
+      "nodeId": "spray_copies",
+      "typeId": "node.particles_to_copies"
+    },
+    {
+      "handle": "Studio Floor Mesh",
+      "id": 488,
+      "nodeId": "studio_floor_mesh",
+      "typeId": "node.cube_mesh"
+    },
+    {
+      "handle": "Studio Floor Material",
+      "id": 489,
+      "nodeId": "studio_floor_material",
+      "params": {
+        "ambient": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 0.006000000052154064
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 0.004000000189989805
+        },
+        "color_r": {
+          "type": "Float",
+          "value": 0.003000000026077032
+        },
+        "metallic": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "roughness": {
+          "type": "Float",
+          "value": 0.6499999761581421
+        }
+      },
+      "typeId": "node.pbr_material"
+    },
+    {
+      "handle": "Studio Floor Transform",
+      "id": 490,
+      "nodeId": "studio_floor_transform",
+      "params": {
+        "pos_y": {
+          "type": "Float",
+          "value": -0.2800000011920929
+        },
+        "scale_x": {
+          "type": "Float",
+          "value": 2000.0
+        },
+        "scale_y": {
+          "type": "Float",
+          "value": 0.20000000298023224
+        },
+        "scale_z": {
+          "type": "Float",
+          "value": 2000.0
+        }
+      },
+      "typeId": "node.transform_3d"
+    },
+    {
+      "handle": "Studio Floor",
+      "id": 491,
+      "nodeId": "studio_floor",
+      "typeId": "node.scene_object"
+    },
+    {
+      "id": 495,
+      "nodeId": "whitewater_budget",
+      "params": {
+        "value": {
+          "type": "Float",
+          "value": 100000.0
+        }
+      },
+      "typeId": "node.value"
+    },
+    {
+      "id": 496,
+      "nodeId": "whitewater_face_u",
+      "params": {
+        "axis": {
+          "type": "Enum",
+          "value": 0
+        }
+      },
+      "typeId": "node.face_sample_component"
+    },
+    {
+      "id": 497,
+      "nodeId": "whitewater_face_v",
+      "params": {
+        "axis": {
+          "type": "Enum",
+          "value": 1
+        }
+      },
+      "typeId": "node.face_sample_component"
+    },
+    {
+      "id": 498,
+      "nodeId": "whitewater_face_w",
+      "params": {
+        "axis": {
+          "type": "Enum",
+          "value": 2
+        }
+      },
+      "typeId": "node.face_sample_component"
+    },
+    {
+      "handle": "Dust Mesh",
+      "id": 502,
+      "nodeId": "dust_mesh",
+      "params": {
+        "radius": {
+          "type": "Float",
+          "value": 0.004999999888241291
+        },
+        "shape": {
+          "type": "Enum",
+          "value": 3
+        }
+      },
+      "typeId": "node.platonic_solid_mesh"
+    },
+    {
+      "handle": "Dust Material",
+      "id": 503,
+      "nodeId": "dust_material",
+      "params": {
+        "color_b": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 0.9800000190734863
+        },
+        "color_r": {
+          "type": "Float",
+          "value": 0.949999988079071
+        },
+        "ior": {
+          "type": "Float",
+          "value": 1.3329999446868896
+        },
+        "metallic": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "roughness": {
+          "type": "Float",
+          "value": 0.550000011920929
+        },
+        "transmission": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "volume_thickness": {
+          "type": "Float",
+          "value": 0.009999999776482582
+        }
+      },
+      "typeId": "node.pbr_material"
+    },
+    {
+      "handle": "Dust Object",
+      "id": 504,
+      "nodeId": "dust_object",
+      "params": {
+        "cast_shadows": {
+          "type": "Float",
+          "value": 0.0
+        }
+      },
+      "typeId": "node.scene_object"
+    },
+    {
+      "handle": "Dust Copies",
+      "id": 505,
+      "nodeId": "dust_copies",
+      "typeId": "node.particles_to_copies"
+    },
+    {
+      "id": 506,
+      "nodeId": "particle_blend",
+      "typeId": "node.interpolate_particle_frames"
+    },
+    {
+      "id": 507,
+      "nodeId": "solid_blend",
+      "typeId": "node.mix_arrays"
+    },
+    {
+      "id": 508,
+      "nodeId": "particle_push_out",
+      "typeId": "node.push_out_of_solid"
+    },
+    {
+      "id": 509,
+      "nodeId": "display_lattice_box",
+      "typeId": "node.transform_components"
+    },
+    {
+      "id": 510,
+      "nodeId": "foam_blend",
+      "typeId": "node.interpolate_particle_frames"
+    },
+    {
+      "id": 511,
+      "nodeId": "bubble_blend",
+      "typeId": "node.interpolate_particle_frames"
+    },
+    {
+      "id": 512,
+      "nodeId": "spray_blend",
+      "typeId": "node.interpolate_particle_frames"
+    },
+    {
+      "id": 513,
+      "nodeId": "dust_blend",
+      "typeId": "node.interpolate_particle_frames"
+    },
+    {
+      "handle": "Obstacle Mesh",
+      "id": 514,
+      "nodeId": "obstacle_mesh",
+      "typeId": "node.cube_mesh"
+    },
+    {
+      "handle": "Obstacle Material",
+      "id": 515,
+      "nodeId": "obstacle_material",
+      "params": {
+        "ambient": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 0.0729999989271164
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 0.23000000417232513
+        },
+        "color_r": {
+          "type": "Float",
+          "value": 0.5199999809265137
+        },
+        "metallic": {
+          "type": "Float",
+          "value": 0.9399999976158142
+        },
+        "roughness": {
+          "type": "Float",
+          "value": 0.1899999976158142
+        }
+      },
+      "typeId": "node.pbr_material"
+    },
+    {
+      "handle": "Obstacle",
+      "id": 516,
+      "nodeId": "obstacle_object",
+      "typeId": "node.scene_object"
+    },
+    {
+      "id": 517,
+      "nodeId": "liquid_particle_copies",
+      "typeId": "node.particles_to_copies"
+    },
+    {
+      "id": 518,
+      "nodeId": "liquid_particle_mesh",
+      "params": {
+        "radius": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "shape": {
+          "type": "Enum",
+          "value": 3
+        }
+      },
+      "typeId": "node.platonic_solid_mesh"
+    }
+  ],
+  "presetMetadata": {
+    "available": true,
+    "bindings": [
+      {
+        "convert": {
+          "type": "IntRound"
+        },
+        "defaultMirrorsNodeParam": true,
+        "defaultValue": 64.0,
+        "id": "resolution",
+        "label": "Resolution",
+        "target": {
+          "kind": "node",
+          "nodeId": "domain",
+          "param": "resolution"
+        }
+      },
+      {
+        "convert": {
+          "type": "IntRound"
+        },
+        "defaultMirrorsNodeParam": true,
+        "defaultValue": 0.0,
+        "id": "solve_level",
+        "label": "Solve Level",
+        "target": {
+          "kind": "node",
+          "nodeId": "domain",
+          "param": "solve_level"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true,
+        "defaultValue": 1.0,
+        "id": "speed",
+        "label": "Speed",
+        "target": {
+          "kind": "node",
+          "nodeId": "domain",
+          "param": "speed"
+        }
+      },
+      {
+        "convert": {
+          "type": "Trigger"
+        },
+        "defaultMirrorsNodeParam": true,
+        "defaultValue": 0.0,
+        "id": "reset",
+        "label": "Reset",
+        "target": {
+          "kind": "node",
+          "nodeId": "domain",
+          "param": "reset"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultValue": 0.0,
+        "id": "environment_mode",
+        "label": "Environment",
+        "target": {
+          "kind": "node",
+          "nodeId": "environment_select",
+          "param": "selector"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true,
+        "defaultValue": 2.5,
+        "id": "water_attenuation",
+        "label": "Water Absorption Distance",
+        "target": {
+          "kind": "node",
+          "nodeId": "water_material",
+          "param": "volume_attenuation_distance"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true,
+        "defaultValue": 0.10000000149011612,
+        "id": "water_scattering",
+        "label": "Water Scattering",
+        "target": {
+          "kind": "node",
+          "nodeId": "water_material",
+          "param": "volume_scattering_density"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultValue": 0.004999999888241291,
+        "id": "foam_radius",
+        "label": "Foam Size",
+        "target": {
+          "kind": "node",
+          "nodeId": "foam_mesh",
+          "param": "radius"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultValue": 0.003000000026077032,
+        "id": "spray_radius",
+        "label": "Spray Size",
+        "target": {
+          "kind": "node",
+          "nodeId": "spray_mesh",
+          "param": "radius"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultValue": 70.0,
+        "id": "bubble_density",
+        "label": "Bubble Scattering",
+        "target": {
+          "kind": "node",
+          "nodeId": "bubble_material",
+          "param": "volume_particle_density"
+        }
+      },
+      {
+        "convert": {
+          "type": "IntRound"
+        },
+        "defaultMirrorsNodeParam": true,
+        "defaultValue": 100000.0,
+        "id": "whitewater_capacity",
+        "label": "Whitewater Budget",
+        "target": {
+          "kind": "node",
+          "nodeId": "whitewater_budget",
+          "param": "value"
+        }
+      }
+    ],
+    "category": "Sim",
+    "displayName": "Water — Dam Break (Particle View)",
+    "id": "WaterDamBreakParticles",
+    "isLineBased": false,
+    "oscPrefix": "waterdambreakparticles",
+    "params": [
+      {
+        "defaultValue": 64.0,
+        "formatString": "F0",
+        "id": "resolution",
+        "isToggle": false,
+        "isTrigger": false,
+        "max": 512.0,
+        "min": 8.0,
+        "name": "Resolution",
+        "section": "Fluid",
+        "wholeNumbers": true
+      },
+      {
+        "defaultValue": 0.0,
+        "formatString": "F0",
+        "id": "solve_level",
+        "isToggle": false,
+        "isTrigger": false,
+        "max": 4.0,
+        "min": 0.0,
+        "name": "Solve Level",
+        "section": "Fluid",
+        "wholeNumbers": true
+      },
+      {
+        "defaultValue": 1.0,
+        "formatString": "F1",
+        "id": "speed",
+        "isToggle": false,
+        "isTrigger": false,
+        "max": 4.0,
+        "min": 0.0,
+        "name": "Speed",
+        "section": "Fluid",
+        "wholeNumbers": false
+      },
+      {
+        "defaultValue": 0.0,
+        "formatString": "F0",
+        "id": "reset",
+        "isToggle": false,
+        "isTrigger": true,
+        "max": 1.0,
+        "min": 0.0,
+        "name": "Reset",
+        "section": "Fluid",
+        "wholeNumbers": true
+      },
+      {
+        "defaultValue": 0.0,
+        "formatString": "F0",
+        "id": "environment_mode",
+        "isToggle": false,
+        "isTrigger": false,
+        "max": 1.0,
+        "min": 0.0,
+        "name": "Environment",
+        "section": "Lighting",
+        "valueLabels": [
+          "Studio",
+          "HDRI"
+        ],
+        "wholeNumbers": true
+      },
+      {
+        "defaultValue": 2.5,
+        "formatString": "F2",
+        "id": "water_attenuation",
+        "isToggle": false,
+        "isTrigger": false,
+        "materialRole": {
+          "scalar": {
+            "feature": "glass"
+          }
+        },
+        "max": 20.0,
+        "min": 0.10000000149011612,
+        "name": "Water Absorption Distance",
+        "section": "Water",
+        "wholeNumbers": false
+      },
+      {
+        "defaultValue": 0.10000000149011612,
+        "formatString": "F2",
+        "id": "water_scattering",
+        "isToggle": false,
+        "isTrigger": false,
+        "materialRole": {
+          "scalar": {
+            "feature": "glass"
+          }
+        },
+        "max": 2.0,
+        "min": 0.0,
+        "name": "Water Scattering",
+        "section": "Water",
+        "wholeNumbers": false
+      },
+      {
+        "defaultValue": 0.004999999888241291,
+        "formatString": "F3",
+        "id": "foam_radius",
+        "isToggle": false,
+        "isTrigger": false,
+        "max": 0.029999999329447746,
+        "min": 0.0010000000474974513,
+        "name": "Foam Size",
+        "section": "Water Detail",
+        "wholeNumbers": false
+      },
+      {
+        "defaultValue": 0.003000000026077032,
+        "formatString": "F3",
+        "id": "spray_radius",
+        "isToggle": false,
+        "isTrigger": false,
+        "max": 0.019999999552965164,
+        "min": 0.0010000000474974513,
+        "name": "Spray Size",
+        "section": "Water Detail",
+        "wholeNumbers": false
+      },
+      {
+        "defaultValue": 70.0,
+        "formatString": "F2",
+        "id": "bubble_density",
+        "isToggle": false,
+        "isTrigger": false,
+        "max": 200.0,
+        "min": 0.0,
+        "name": "Bubble Scattering",
+        "section": "Water",
+        "wholeNumbers": false
+      },
+      {
+        "defaultValue": 100000.0,
+        "formatString": "F0",
+        "id": "whitewater_capacity",
+        "isToggle": false,
+        "isTrigger": false,
+        "max": 250000.0,
+        "min": 1000.0,
+        "name": "Whitewater Budget",
+        "section": "Water Detail",
+        "wholeNumbers": true
+      }
+    ],
+    "stringBindings": [
+      {
+        "defaultValue": "",
+        "id": "hdri_file",
+        "label": "HDRI File",
+        "target": {
+          "kind": "node",
+          "nodeId": "sky_environment",
+          "param": "path"
+        }
+      }
+    ],
+    "stringParams": [
+      {
+        "defaultValue": "",
+        "file_path": true,
+        "id": "hdri_file",
+        "isFilePicker": true,
+        "name": "HDRI File",
+        "useDropdown": false
+      }
+    ]
+  },
+  "version": 3,
+  "wires": [
+    {
+      "fromNode": 1,
+      "fromPort": "transform",
+      "toNode": 0,
+      "toPort": "initial_volume"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "transform",
+      "toNode": 3,
+      "toPort": "transform"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "role",
+      "toNode": 0,
+      "toPort": "role_0"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "pool_sites",
+      "toNode": 4,
+      "toPort": "pool_sites"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "box_x0",
+      "toNode": 4,
+      "toPort": "box_x0"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "box_x1",
+      "toNode": 4,
+      "toPort": "box_x1"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "box_y0",
+      "toNode": 4,
+      "toPort": "box_y0"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "box_y1",
+      "toNode": 4,
+      "toPort": "box_y1"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "box_z0",
+      "toNode": 4,
+      "toPort": "box_z0"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "box_z1",
+      "toNode": 4,
+      "toPort": "box_z1"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "lattice_min_x",
+      "toNode": 4,
+      "toPort": "lattice_min_x"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "lattice_min_y",
+      "toNode": 4,
+      "toPort": "lattice_min_y"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "lattice_min_z",
+      "toNode": 4,
+      "toPort": "lattice_min_z"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "cell_size",
+      "toNode": 4,
+      "toPort": "cell_size"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "nodes_x",
+      "toNode": 4,
+      "toPort": "nodes_x"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "nodes_y",
+      "toNode": 4,
+      "toPort": "nodes_y"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "nodes_z",
+      "toNode": 4,
+      "toPort": "nodes_z"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "bodies",
+      "toNode": 4,
+      "toPort": "bodies"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "shapes",
+      "toNode": 4,
+      "toPort": "shapes"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "atlas",
+      "toNode": 4,
+      "toPort": "atlas"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "body_count",
+      "toNode": 4,
+      "toPort": "body_count"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "epoch",
+      "toNode": 4,
+      "toPort": "epoch"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "particle_capacity",
+      "toNode": 4,
+      "toPort": "particle_capacity"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "particles",
+      "toNode": 5,
+      "toPort": "seed"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "count",
+      "toNode": 5,
+      "toPort": "count"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "ticks",
+      "toNode": 5,
+      "toPort": "ticks"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "epoch",
+      "toNode": 5,
+      "toPort": "epoch"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "simulation_time",
+      "toNode": 5,
+      "toPort": "simulation_time"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "target_time",
+      "toNode": 5,
+      "toPort": "target_time"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "lattice_min_x",
+      "toNode": 6,
+      "toPort": "lattice_min_x"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "lattice_min_y",
+      "toNode": 6,
+      "toPort": "lattice_min_y"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "lattice_min_z",
+      "toNode": 6,
+      "toPort": "lattice_min_z"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "cell_size",
+      "toNode": 6,
+      "toPort": "cell_size"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "nodes_x",
+      "toNode": 6,
+      "toPort": "nodes_x"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "nodes_y",
+      "toNode": 6,
+      "toPort": "nodes_y"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "nodes_z",
+      "toNode": 6,
+      "toPort": "nodes_z"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "interval_duration",
+      "toNode": 6,
+      "toPort": "interval_duration"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "gravity_x",
+      "toNode": 6,
+      "toPort": "gravity_x"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "gravity",
+      "toNode": 6,
+      "toPort": "gravity_y"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "gravity_z",
+      "toNode": 6,
+      "toPort": "gravity_z"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "forces",
+      "toNode": 6,
+      "toPort": "forces"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "impulses",
+      "toNode": 6,
+      "toPort": "impulses"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "field_nodes_x",
+      "toNode": 6,
+      "toPort": "field_nodes_x"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "field_nodes_y",
+      "toNode": 6,
+      "toPort": "field_nodes_y"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "field_nodes_z",
+      "toNode": 6,
+      "toPort": "field_nodes_z"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "field_spacing",
+      "toNode": 6,
+      "toPort": "field_spacing"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "force_lattices",
+      "toNode": 6,
+      "toPort": "force_lattices"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "first_tick",
+      "toNode": 6,
+      "toPort": "first_tick"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "impulse_tick",
+      "toNode": 6,
+      "toPort": "impulse_tick"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "tick_index",
+      "toNode": 6,
+      "toPort": "tick_index"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "bodies",
+      "toNode": 6,
+      "toPort": "bodies"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "shapes",
+      "toNode": 6,
+      "toPort": "shapes"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "atlas",
+      "toNode": 6,
+      "toPort": "atlas"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "body_count",
+      "toNode": 6,
+      "toPort": "body_count"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "dynamic_bodies",
+      "toNode": 6,
+      "toPort": "dynamic_bodies"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "closed_faces",
+      "toNode": 6,
+      "toPort": "closed_faces"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "solve_level",
+      "toNode": 6,
+      "toPort": "solve_level"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "body_rows",
+      "toNode": 6,
+      "toPort": "rows"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "out",
+      "toNode": 6,
+      "toPort": "particles"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "identity",
+      "toNode": 6,
+      "toPort": "identity"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "identity_out",
+      "toNode": 5,
+      "toPort": "identity_in"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "count",
+      "toNode": 6,
+      "toPort": "count"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "reaction",
+      "toNode": 6,
+      "toPort": "reaction"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "regions",
+      "toNode": 6,
+      "toPort": "regions"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "region_count",
+      "toNode": 6,
+      "toPort": "region_count"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "epoch",
+      "toNode": 6,
+      "toPort": "epoch"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "out",
+      "toNode": 7,
+      "toPort": "particles"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "stats",
+      "toNode": 7,
+      "toPort": "stats"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "count",
+      "toNode": 7,
+      "toPort": "count"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "particle_mass",
+      "toNode": 7,
+      "toPort": "particle_mass"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "capped",
+      "toNode": 7,
+      "toPort": "capped"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "out",
+      "toNode": 5,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 7,
+      "fromPort": "stats_out",
+      "toNode": 5,
+      "toPort": "stats_in"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "faces",
+      "toNode": 5,
+      "toPort": "faces_in"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "interior",
+      "toNode": 5,
+      "toPort": "interior_in"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "nodes_x",
+      "toNode": 5,
+      "toPort": "nodes_x"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "nodes_y",
+      "toNode": 5,
+      "toPort": "nodes_y"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "nodes_z",
+      "toNode": 5,
+      "toPort": "nodes_z"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "bodies",
+      "toNode": 8,
+      "toPort": "bodies"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "shapes",
+      "toNode": 8,
+      "toPort": "shapes"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "atlas",
+      "toNode": 8,
+      "toPort": "atlas"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "closed_faces",
+      "toNode": 8,
+      "toPort": "closed_faces"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "body_count",
+      "toNode": 8,
+      "toPort": "body_count"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "lattice_min_x",
+      "toNode": 8,
+      "toPort": "lattice_min_x"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "lattice_min_y",
+      "toNode": 8,
+      "toPort": "lattice_min_y"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "lattice_min_z",
+      "toNode": 8,
+      "toPort": "lattice_min_z"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "cell_size",
+      "toNode": 8,
+      "toPort": "cell_size"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "nodes_x",
+      "toNode": 8,
+      "toPort": "nodes_x"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "nodes_y",
+      "toNode": 8,
+      "toPort": "nodes_y"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "nodes_z",
+      "toNode": 8,
+      "toPort": "nodes_z"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "body_rows",
+      "toNode": 8,
+      "toPort": "rows"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "bodies",
+      "toNode": 9,
+      "toPort": "bodies"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "shapes",
+      "toNode": 9,
+      "toPort": "shapes"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "atlas",
+      "toNode": 9,
+      "toPort": "atlas"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "closed_faces",
+      "toNode": 9,
+      "toPort": "closed_faces"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "body_count",
+      "toNode": 9,
+      "toPort": "body_count"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "cell_size",
+      "toNode": 9,
+      "toPort": "cell_size"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "mesh_min_x",
+      "toNode": 9,
+      "toPort": "lattice_min_x"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "mesh_min_y",
+      "toNode": 9,
+      "toPort": "lattice_min_y"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "mesh_min_z",
+      "toNode": 9,
+      "toPort": "lattice_min_z"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "mesh_nodes_x",
+      "toNode": 9,
+      "toPort": "nodes_x"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "mesh_nodes_y",
+      "toNode": 9,
+      "toPort": "nodes_y"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "mesh_nodes_z",
+      "toNode": 9,
+      "toPort": "nodes_z"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "body_rows",
+      "toNode": 9,
+      "toPort": "rows"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "bodies",
+      "toNode": 10,
+      "toPort": "bodies"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "shapes",
+      "toNode": 10,
+      "toPort": "shapes"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "atlas",
+      "toNode": 10,
+      "toPort": "atlas"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "closed_faces",
+      "toNode": 10,
+      "toPort": "closed_faces"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "body_count",
+      "toNode": 10,
+      "toPort": "body_count"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "lattice_min_x",
+      "toNode": 10,
+      "toPort": "lattice_min_x"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "lattice_min_y",
+      "toNode": 10,
+      "toPort": "lattice_min_y"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "lattice_min_z",
+      "toNode": 10,
+      "toPort": "lattice_min_z"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "cell_size",
+      "toNode": 10,
+      "toPort": "cell_size"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "nodes_x",
+      "toNode": 10,
+      "toPort": "nodes_x"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "nodes_y",
+      "toNode": 10,
+      "toPort": "nodes_y"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "nodes_z",
+      "toNode": 10,
+      "toPort": "nodes_z"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "body_rows",
+      "toNode": 10,
+      "toPort": "rows"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "out",
+      "toNode": 11,
+      "toPort": "particles"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "stats",
+      "toNode": 11,
+      "toPort": "stats"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "identity",
+      "toNode": 11,
+      "toPort": "identity"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "interior",
+      "toNode": 11,
+      "toPort": "interior"
+    },
+    {
+      "fromNode": 9,
+      "fromPort": "solid",
+      "toNode": 11,
+      "toPort": "solid"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "count",
+      "toNode": 11,
+      "toPort": "count"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "lattice_min_x",
+      "toNode": 11,
+      "toPort": "lattice_min_x"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "lattice_min_y",
+      "toNode": 11,
+      "toPort": "lattice_min_y"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "lattice_min_z",
+      "toNode": 11,
+      "toPort": "lattice_min_z"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "cell_size",
+      "toNode": 11,
+      "toPort": "cell_size"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "nodes_x",
+      "toNode": 11,
+      "toPort": "nodes_x"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "nodes_y",
+      "toNode": 11,
+      "toPort": "nodes_y"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "nodes_z",
+      "toNode": 11,
+      "toPort": "nodes_z"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "closed_faces",
+      "toNode": 11,
+      "toPort": "closed_faces"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "simulation_time",
+      "toNode": 11,
+      "toPort": "simulation_time"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "display_time",
+      "toNode": 11,
+      "toPort": "display_time"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "epoch",
+      "toNode": 11,
+      "toPort": "epoch"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "faces",
+      "toNode": 12,
+      "toPort": "faces"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "nodes_x",
+      "toNode": 12,
+      "toPort": "nodes_x"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "nodes_y",
+      "toNode": 12,
+      "toPort": "nodes_y"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "nodes_z",
+      "toNode": 12,
+      "toPort": "nodes_z"
+    },
+    {
+      "fromNode": 12,
+      "fromPort": "out",
+      "toNode": 11,
+      "toPort": "face_u_in"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "faces",
+      "toNode": 13,
+      "toPort": "faces"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "nodes_x",
+      "toNode": 13,
+      "toPort": "nodes_x"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "nodes_y",
+      "toNode": 13,
+      "toPort": "nodes_y"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "nodes_z",
+      "toNode": 13,
+      "toPort": "nodes_z"
+    },
+    {
+      "fromNode": 13,
+      "fromPort": "out",
+      "toNode": 11,
+      "toPort": "face_v_in"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "faces",
+      "toNode": 14,
+      "toPort": "faces"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "nodes_x",
+      "toNode": 14,
+      "toPort": "nodes_x"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "nodes_y",
+      "toNode": 14,
+      "toPort": "nodes_y"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "nodes_z",
+      "toNode": 14,
+      "toPort": "nodes_z"
+    },
+    {
+      "fromNode": 14,
+      "fromPort": "out",
+      "toNode": 11,
+      "toPort": "face_w_in"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "interval_duration",
+      "toNode": 8,
+      "toPort": "tick_seconds"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "interval_duration",
+      "toNode": 9,
+      "toPort": "tick_seconds"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "interval_duration",
+      "toNode": 10,
+      "toPort": "tick_seconds"
+    },
+    {
+      "fromNode": 434,
+      "fromPort": "out",
+      "toNode": 463,
+      "toPort": "camera"
+    },
+    {
+      "fromNode": 436,
+      "fromPort": "out",
+      "toNode": 463,
+      "toPort": "light_0"
+    },
+    {
+      "fromNode": 441,
+      "fromPort": "out",
+      "toNode": 442,
+      "toPort": "material"
+    },
+    {
+      "fromNode": 442,
+      "fromPort": "object",
+      "toNode": 463,
+      "toPort": "object_0"
+    },
+    {
+      "fromNode": 446,
+      "fromPort": "vertices",
+      "toNode": 449,
+      "toPort": "vertices"
+    },
+    {
+      "fromNode": 447,
+      "fromPort": "out",
+      "toNode": 449,
+      "toPort": "material"
+    },
+    {
+      "fromNode": 448,
+      "fromPort": "transform",
+      "toNode": 449,
+      "toPort": "transform"
+    },
+    {
+      "fromNode": 449,
+      "fromPort": "object",
+      "toNode": 463,
+      "toPort": "object_2"
+    },
+    {
+      "fromNode": 450,
+      "fromPort": "vertices",
+      "toNode": 452,
+      "toPort": "vertices"
+    },
+    {
+      "fromNode": 447,
+      "fromPort": "out",
+      "toNode": 452,
+      "toPort": "material"
+    },
+    {
+      "fromNode": 451,
+      "fromPort": "transform",
+      "toNode": 452,
+      "toPort": "transform"
+    },
+    {
+      "fromNode": 452,
+      "fromPort": "object",
+      "toNode": 463,
+      "toPort": "object_3"
+    },
+    {
+      "fromNode": 453,
+      "fromPort": "vertices",
+      "toNode": 455,
+      "toPort": "vertices"
+    },
+    {
+      "fromNode": 447,
+      "fromPort": "out",
+      "toNode": 455,
+      "toPort": "material"
+    },
+    {
+      "fromNode": 454,
+      "fromPort": "transform",
+      "toNode": 455,
+      "toPort": "transform"
+    },
+    {
+      "fromNode": 455,
+      "fromPort": "object",
+      "toNode": 463,
+      "toPort": "object_4"
+    },
+    {
+      "fromNode": 456,
+      "fromPort": "vertices",
+      "toNode": 458,
+      "toPort": "vertices"
+    },
+    {
+      "fromNode": 447,
+      "fromPort": "out",
+      "toNode": 458,
+      "toPort": "material"
+    },
+    {
+      "fromNode": 457,
+      "fromPort": "transform",
+      "toNode": 458,
+      "toPort": "transform"
+    },
+    {
+      "fromNode": 458,
+      "fromPort": "object",
+      "toNode": 463,
+      "toPort": "object_5"
+    },
+    {
+      "fromNode": 466,
+      "fromPort": "out",
+      "toNode": 463,
+      "toPort": "light_1"
+    },
+    {
+      "fromNode": 463,
+      "fromPort": "color",
+      "toNode": 471,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 471,
+      "fromPort": "out",
+      "toNode": 464,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 435,
+      "fromPort": "envmap",
+      "toNode": 474,
+      "toPort": "in_0"
+    },
+    {
+      "fromNode": 472,
+      "fromPort": "out",
+      "toNode": 473,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 473,
+      "fromPort": "out",
+      "toNode": 474,
+      "toPort": "in_1"
+    },
+    {
+      "fromNode": 474,
+      "fromPort": "out",
+      "toNode": 463,
+      "toPort": "envmap"
+    },
+    {
+      "fromNode": 476,
+      "fromPort": "vertices",
+      "toNode": 478,
+      "toPort": "vertices"
+    },
+    {
+      "fromNode": 477,
+      "fromPort": "out",
+      "toNode": 478,
+      "toPort": "material"
+    },
+    {
+      "fromNode": 478,
+      "fromPort": "object",
+      "toNode": 463,
+      "toPort": "object_7"
+    },
+    {
+      "fromNode": 479,
+      "fromPort": "vertices",
+      "toNode": 481,
+      "toPort": "vertices"
+    },
+    {
+      "fromNode": 480,
+      "fromPort": "out",
+      "toNode": 481,
+      "toPort": "material"
+    },
+    {
+      "fromNode": 481,
+      "fromPort": "object",
+      "toNode": 463,
+      "toPort": "object_8"
+    },
+    {
+      "fromNode": 482,
+      "fromPort": "vertices",
+      "toNode": 484,
+      "toPort": "vertices"
+    },
+    {
+      "fromNode": 483,
+      "fromPort": "out",
+      "toNode": 484,
+      "toPort": "material"
+    },
+    {
+      "fromNode": 484,
+      "fromPort": "object",
+      "toNode": 463,
+      "toPort": "object_9"
+    },
+    {
+      "fromNode": 485,
+      "fromPort": "copies",
+      "toNode": 478,
+      "toPort": "instances"
+    },
+    {
+      "fromNode": 486,
+      "fromPort": "copies",
+      "toNode": 481,
+      "toPort": "instances"
+    },
+    {
+      "fromNode": 487,
+      "fromPort": "copies",
+      "toNode": 484,
+      "toPort": "instances"
+    },
+    {
+      "fromNode": 488,
+      "fromPort": "vertices",
+      "toNode": 491,
+      "toPort": "vertices"
+    },
+    {
+      "fromNode": 489,
+      "fromPort": "out",
+      "toNode": 491,
+      "toPort": "material"
+    },
+    {
+      "fromNode": 490,
+      "fromPort": "transform",
+      "toNode": 491,
+      "toPort": "transform"
+    },
+    {
+      "fromNode": 491,
+      "fromPort": "object",
+      "toNode": 463,
+      "toPort": "object_6"
+    },
+    {
+      "fromNode": 495,
+      "fromPort": "out",
+      "toNode": 475,
+      "toPort": "capacity"
+    },
+    {
+      "fromNode": 495,
+      "fromPort": "out",
+      "toNode": 5,
+      "toPort": "whitewater_capacity"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "grid_bounds",
+      "toNode": 475,
+      "toPort": "grid_bounds"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "grid_nodes_x",
+      "toNode": 475,
+      "toPort": "grid_nodes_x"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "grid_nodes_y",
+      "toNode": 475,
+      "toPort": "grid_nodes_y"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "grid_nodes_z",
+      "toNode": 475,
+      "toPort": "grid_nodes_z"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "face_cells_x",
+      "toNode": 475,
+      "toPort": "face_cells_x"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "face_cells_y",
+      "toNode": 475,
+      "toPort": "face_cells_y"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "face_cells_z",
+      "toNode": 475,
+      "toPort": "face_cells_z"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "face_valid_layers",
+      "toNode": 475,
+      "toPort": "face_valid_layers"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "distance",
+      "toNode": 475,
+      "toPort": "distance"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "out",
+      "toNode": 475,
+      "toPort": "particles"
+    },
+    {
+      "fromNode": 8,
+      "fromPort": "solid",
+      "toNode": 475,
+      "toPort": "solid"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "faces",
+      "toNode": 496,
+      "toPort": "faces"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "nodes_x",
+      "toNode": 496,
+      "toPort": "nodes_x"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "nodes_y",
+      "toNode": 496,
+      "toPort": "nodes_y"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "nodes_z",
+      "toNode": 496,
+      "toPort": "nodes_z"
+    },
+    {
+      "fromNode": 496,
+      "fromPort": "out",
+      "toNode": 475,
+      "toPort": "face_u"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "faces",
+      "toNode": 497,
+      "toPort": "faces"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "nodes_x",
+      "toNode": 497,
+      "toPort": "nodes_x"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "nodes_y",
+      "toNode": 497,
+      "toPort": "nodes_y"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "nodes_z",
+      "toNode": 497,
+      "toPort": "nodes_z"
+    },
+    {
+      "fromNode": 497,
+      "fromPort": "out",
+      "toNode": 475,
+      "toPort": "face_v"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "faces",
+      "toNode": 498,
+      "toPort": "faces"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "nodes_x",
+      "toNode": 498,
+      "toPort": "nodes_x"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "nodes_y",
+      "toNode": 498,
+      "toPort": "nodes_y"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "nodes_z",
+      "toNode": 498,
+      "toPort": "nodes_z"
+    },
+    {
+      "fromNode": 498,
+      "fromPort": "out",
+      "toNode": 475,
+      "toPort": "face_w"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "epoch",
+      "toNode": 475,
+      "toPort": "epoch"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "gravity_x",
+      "toNode": 475,
+      "toPort": "gravity_x"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "gravity",
+      "toNode": 475,
+      "toPort": "gravity"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "gravity_z",
+      "toNode": 475,
+      "toPort": "gravity_z"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "tick_index",
+      "toNode": 475,
+      "toPort": "tick_index"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "whitewater_pool",
+      "toNode": 475,
+      "toPort": "pool"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "whitewater_state",
+      "toNode": 475,
+      "toPort": "pool_state"
+    },
+    {
+      "fromNode": 475,
+      "fromPort": "pool_out",
+      "toNode": 5,
+      "toPort": "whitewater_pool_in"
+    },
+    {
+      "fromNode": 475,
+      "fromPort": "state_out",
+      "toNode": 5,
+      "toPort": "whitewater_state_in"
+    },
+    {
+      "fromNode": 475,
+      "fromPort": "counts_out",
+      "toNode": 5,
+      "toPort": "whitewater_counts_in"
+    },
+    {
+      "fromNode": 475,
+      "fromPort": "foam_particles",
+      "toNode": 5,
+      "toPort": "foam_particles_in"
+    },
+    {
+      "fromNode": 475,
+      "fromPort": "bubble_particles",
+      "toNode": 5,
+      "toPort": "bubble_particles_in"
+    },
+    {
+      "fromNode": 475,
+      "fromPort": "spray_particles",
+      "toNode": 5,
+      "toPort": "spray_particles_in"
+    },
+    {
+      "fromNode": 502,
+      "fromPort": "vertices",
+      "toNode": 504,
+      "toPort": "vertices"
+    },
+    {
+      "fromNode": 503,
+      "fromPort": "out",
+      "toNode": 504,
+      "toPort": "material"
+    },
+    {
+      "fromNode": 505,
+      "fromPort": "copies",
+      "toNode": 504,
+      "toPort": "instances"
+    },
+    {
+      "fromNode": 504,
+      "fromPort": "object",
+      "toNode": 463,
+      "toPort": "object_10"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "interval_duration",
+      "toNode": 475,
+      "toPort": "dt"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "particles_a",
+      "toNode": 506,
+      "toPort": "particles_a"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "particles_b",
+      "toNode": 506,
+      "toPort": "particles_b"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "count_a",
+      "toNode": 506,
+      "toPort": "count_a"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "count_b",
+      "toNode": 506,
+      "toPort": "count_b"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "identity_a",
+      "toNode": 506,
+      "toPort": "identity_a"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "identity_b",
+      "toNode": 506,
+      "toPort": "identity_b"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "blend",
+      "toNode": 506,
+      "toPort": "blend"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "span",
+      "toNode": 506,
+      "toPort": "span"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "solid_a",
+      "toNode": 507,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "solid_b",
+      "toNode": 507,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "blend",
+      "toNode": 507,
+      "toPort": "amount"
+    },
+    {
+      "fromNode": 506,
+      "fromPort": "out",
+      "toNode": 508,
+      "toPort": "particles"
+    },
+    {
+      "fromNode": 507,
+      "fromPort": "out",
+      "toNode": 508,
+      "toPort": "solid"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "grid_bounds",
+      "toNode": 509,
+      "toPort": "transform"
+    },
+    {
+      "fromNode": 509,
+      "fromPort": "pos_x",
+      "toNode": 508,
+      "toPort": "center_x"
+    },
+    {
+      "fromNode": 509,
+      "fromPort": "scale_x",
+      "toNode": 508,
+      "toPort": "size_x"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "grid_nodes_x",
+      "toNode": 508,
+      "toPort": "nodes_x"
+    },
+    {
+      "fromNode": 509,
+      "fromPort": "pos_y",
+      "toNode": 508,
+      "toPort": "center_y"
+    },
+    {
+      "fromNode": 509,
+      "fromPort": "scale_y",
+      "toNode": 508,
+      "toPort": "size_y"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "grid_nodes_y",
+      "toNode": 508,
+      "toPort": "nodes_y"
+    },
+    {
+      "fromNode": 509,
+      "fromPort": "pos_z",
+      "toNode": 508,
+      "toPort": "center_z"
+    },
+    {
+      "fromNode": 509,
+      "fromPort": "scale_z",
+      "toNode": 508,
+      "toPort": "size_z"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "grid_nodes_z",
+      "toNode": 508,
+      "toPort": "nodes_z"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "foam_particles",
+      "toNode": 510,
+      "toPort": "particles_b"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "blend",
+      "toNode": 510,
+      "toPort": "blend"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "span",
+      "toNode": 510,
+      "toPort": "span"
+    },
+    {
+      "fromNode": 510,
+      "fromPort": "out",
+      "toNode": 485,
+      "toPort": "particles"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "bubble_particles",
+      "toNode": 511,
+      "toPort": "particles_b"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "blend",
+      "toNode": 511,
+      "toPort": "blend"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "span",
+      "toNode": 511,
+      "toPort": "span"
+    },
+    {
+      "fromNode": 511,
+      "fromPort": "out",
+      "toNode": 486,
+      "toPort": "particles"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "spray_particles",
+      "toNode": 512,
+      "toPort": "particles_b"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "blend",
+      "toNode": 512,
+      "toPort": "blend"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "span",
+      "toNode": 512,
+      "toPort": "span"
+    },
+    {
+      "fromNode": 512,
+      "fromPort": "out",
+      "toNode": 487,
+      "toPort": "particles"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "dust_particles",
+      "toNode": 513,
+      "toPort": "particles_b"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "blend",
+      "toNode": 513,
+      "toPort": "blend"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "span",
+      "toNode": 513,
+      "toPort": "span"
+    },
+    {
+      "fromNode": 513,
+      "fromPort": "out",
+      "toNode": 505,
+      "toPort": "particles"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "gravity_x",
+      "toNode": 512,
+      "toPort": "acceleration_x"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "gravity",
+      "toNode": 512,
+      "toPort": "acceleration_y"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "gravity_z",
+      "toNode": 512,
+      "toPort": "acceleration_z"
+    },
+    {
+      "fromNode": 514,
+      "fromPort": "vertices",
+      "toNode": 516,
+      "toPort": "vertices"
+    },
+    {
+      "fromNode": 515,
+      "fromPort": "out",
+      "toNode": 516,
+      "toPort": "material"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "transform",
+      "toNode": 516,
+      "toPort": "transform"
+    },
+    {
+      "fromNode": 516,
+      "fromPort": "object",
+      "toNode": 463,
+      "toPort": "object_1"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "solid",
+      "toNode": 475,
+      "toPort": "obstacle_source"
+    },
+    {
+      "fromNode": 475,
+      "fromPort": "dust_particles",
+      "toNode": 5,
+      "toPort": "dust_particles_in"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "substep_schedule",
+      "toNode": 475,
+      "toPort": "substep_schedule"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "substep_u",
+      "toNode": 475,
+      "toPort": "substep_u"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "substep_v",
+      "toNode": 475,
+      "toPort": "substep_v"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "substep_w",
+      "toNode": 475,
+      "toPort": "substep_w"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "substep_count",
+      "toNode": 475,
+      "toPort": "substep_count"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "forces",
+      "toNode": 475,
+      "toPort": "forces"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "impulses",
+      "toNode": 475,
+      "toPort": "impulses"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "field_nodes_x",
+      "toNode": 475,
+      "toPort": "field_nodes_x"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "field_nodes_y",
+      "toNode": 475,
+      "toPort": "field_nodes_y"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "field_nodes_z",
+      "toNode": 475,
+      "toPort": "field_nodes_z"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "field_spacing",
+      "toNode": 475,
+      "toPort": "field_spacing"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "force_lattices",
+      "toNode": 475,
+      "toPort": "force_lattices"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "impulse_tick",
+      "toNode": 475,
+      "toPort": "impulse_tick"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "first_tick",
+      "toNode": 475,
+      "toPort": "first_tick"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "regions",
+      "toNode": 475,
+      "toPort": "regions"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "region_count",
+      "toNode": 475,
+      "toPort": "region_count"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "shapes",
+      "toNode": 475,
+      "toPort": "shapes"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "atlas",
+      "toNode": 475,
+      "toPort": "atlas"
+    },
+    {
+      "fromNode": 508,
+      "fromPort": "out",
+      "toNode": 517,
+      "toPort": "particles"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "count_b",
+      "toNode": 517,
+      "toPort": "live_count"
+    },
+    {
+      "fromNode": 517,
+      "fromPort": "copies",
+      "toNode": 442,
+      "toPort": "instances"
+    },
+    {
+      "fromNode": 518,
+      "fromPort": "vertices",
+      "toNode": 442,
+      "toPort": "vertices"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "count_b",
+      "toNode": 442,
+      "toPort": "instance_count"
+    }
+  ]
+}

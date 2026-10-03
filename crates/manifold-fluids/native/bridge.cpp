@@ -1371,6 +1371,15 @@ extern "C" int manifold_fluids_world_set_time_step_options(
     });
 }
 
+extern "C" int manifold_fluids_world_set_marker_speed_limit_interval(void *world, double dt) {
+    return guarded([&] {
+        if (world == nullptr) {
+            throw std::invalid_argument("world pointer must be non-null");
+        }
+        static_cast<NativeWorld *>(world)->simulation->setMarkerSpeedLimitFrameDeltaTime(dt);
+    });
+}
+
 extern "C" int manifold_fluids_world_set_whitewater_options(
     void *world, int enabled, uint32_t max_particles, double wavecrest_rate,
     double turbulence_rate, double min_energy, double max_energy) {

@@ -95,6 +95,9 @@ int manifold_fluids_world_set_liquid_options(void *world, double viscosity,
 int manifold_fluids_world_set_time_step_options(void *world, uint32_t min_substeps,
                                                 uint32_t max_substeps, uint32_t cfl,
                                                 int adaptive_obstacles);
+// Marker speed removal measures each frame against at most dt seconds; 0
+// measures the whole frame.
+int manifold_fluids_world_set_marker_speed_limit_interval(void *world, double dt);
 int manifold_fluids_world_set_whitewater_options(void *world, int enabled,
                                                  uint32_t max_particles, double wavecrest_rate,
                                                  double turbulence_rate, double min_energy,

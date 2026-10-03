@@ -2,7 +2,7 @@
 
 <!-- index: Moves FLIP surface reconstruction to GPU atoms (anisotropic level set + marching cubes) and interpolates a slower solver tick to 60 fps through a producer-agnostic particle-frame seam. -->
 
-**Status:** BUILDING · P1, P2, P5, P6, P6b, P6c built; P6d measured, no lever kept; P6e (distance level set) built; P6f measured; Peter selected engine parity (2026-10-03 audit below). Before the parity port it met the 6 ms gate (5.7 ms p95 at res 64 ×2); current performance is unmeasured; blobs and volume at 4 ms stay a kernel design item (BUG-l24y (GPU liquid surface kernels cost), section 9 P6d). P3 deferred, P4 dropped, P7–P8 not built.
+**Status:** BUILDING · P1–P3 (both passes), P5, P6–P6c, P6e, P6g and Sim Rate built and GPU-proven; P4 dropped; P6d and P6f measured; GPU water follows the FLIP Fluids engine (audit below). Owed: P7–P8, optional-A fusion (BUG-adcx (unwired gather blocks fusion)), surface kernel cost (BUG-l24y (GPU liquid surface kernels cost)) and the res-128 overload rule (BUG-969p6 (overload rule)). See [BUG-upao](#bug-upao--pass-2-and-sim-rate-2026-10-03).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 **Superseded in part (2026-09-29):** live water is GPU MLS-MPM per [GPU_MPM_SOLVER_DESIGN.md](GPU_MPM_SOLVER_DESIGN.md); D1's live-FLIP clause, D3, D9 and P4 no longer apply to live. The seam, atoms and interpolation stand.
 
@@ -46,7 +46,7 @@ defaults where that node omits a value. Its metadata controls contain older defa
 and are not the initial node state. Baseline: `4208155f5`.
 
 This is a source audit, not a GPU or visual parity claim. Counts are table rows
-(related values are grouped): **43 matched, 12 ported, 2 deviations, 7 unported**. The unported rows mean full engine
+(related values are grouped): **43 matched, 19 ported, 2 partly ported, 2 deviations, 3 unported**. The unported rows mean full engine
 parity is not achieved.
 
 The marker volume is `h³/8`; `4πr³/3 = h³/8` gives
@@ -79,10 +79,10 @@ The GPU stores the nearest f32 marker coefficient, `0.31017524`.
 | Velocity projection ghost epsilon | 1e-6 | 1e-9 | 1e-6 | ported | `crates/manifold-fluids/native/flip_engine/pressuresolver.cpp:1112`; `crates/manifold-renderer/src/node_graph/primitives/shaders/gpu_flip_step.wgsl:1764` |
 | Additional density projection | absent | enabled | enabled: deliberate deviation; without it the Dam Break settles 21.5% too deep at 64 (interior 6.6 against 8 a cell after 1800 frames); BUG-irim0 (engine volume mechanism) | deviation | `crates/manifold-fluids/native/flip_engine/fluidsimulation.cpp:6515`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_preset.rs:139` |
 | Open boundary width / closed faces | 2 cells / all six closed | 2 cells / all six closed | 2 cells / all six closed | matched | `crates/manifold-fluids/native/flip_engine/fluidsimulation.h:2584`; `crates/manifold-renderer/src/node_graph/primitives/shaders/gpu_flip_step.wgsl:2102` |
-| CFL number | 5 | 20 m/s travel guard | 5: the clock's substep limit; the 20 m/s guard stays the advection clamp | ported | `crates/manifold-fluids/native/flip_engine/fluidsimulation.h:2294`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_step.rs:2460` |
+| CFL number | 5 | 20 m/s travel guard | 5: the clock's substep limit; the 20 m/s guard stays the advection clamp | ported | `crates/manifold-fluids/native/flip_engine/fluidsimulation.h:2294`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_step.rs:2474` |
 | Frame substeps | adaptive 1..6 | fixed one per tick | adaptive Steps..6 under the CFL limit; Steps defaults to 1 | ported | `crates/manifold-fluids/native/flip_engine/fluidsimulation.h:2290`; `crates/manifold-physics/src/stepping.rs:22` |
 | Sim time / frames / speed | offered frame dt, speed 1 | fixed liquid tick / speed 1 | offered frame interval, speed 1; export keeps exact 60 Hz steps | ported | `crates/manifold-renderer/assets/generator-presets/WaterDamBreak.json:632`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_preset.rs:6` |
-| Velocity extrapolation layers | ceil(sqrt(3)·5)+3 = 12 | derived from travel guard | from the nominal step's travel guard: 14 at the Dam Break; BUG-g75v.8 (step order) sets the engine's 12 | unported | `crates/manifold-fluids/native/flip_engine/fluidsimulation.cpp:4832`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_step.rs:82` |
+| Velocity extrapolation layers | ceil(sqrt(3)·5)+3 = 12 | derived from travel guard | configured CFL 5: 12 layers | ported | `crates/manifold-fluids/native/flip_engine/fluidsimulation.cpp:4832`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_step.rs:2287` |
 | Mesher subdivision | 1 | 1 | 1 | matched | `crates/manifold-renderer/assets/generator-presets/WaterDamBreak.json:636`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_preset.rs:136` |
 | Particle scale | 3 | 3 | 3 | matched | `crates/manifold-renderer/assets/generator-presets/WaterDamBreak.json:648`; `crates/manifold-renderer/src/node_graph/primitives/shape_particle_blobs.rs:67` |
 | Field radius | 3 marker radii = 0.9305257364073314h | capped at 2/3 cell | uncapped native radius | ported | `crates/manifold-fluids/native/flip_engine/particlemesher.cpp:81`; `crates/manifold-renderer/src/node_graph/primitives/shaders/shape_particle_blobs_body.wgsl:90` |
@@ -108,6 +108,10 @@ The GPU stores the nearest f32 marker coefficient, `0.31017524`.
 | Foam advection strength | 1 | 1 | 1 | matched | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:492`; `crates/manifold-renderer/src/node_graph/primitives/shaders/advect_whitewater_body.wgsl:186` |
 | Spray drag / variance / emission speed | 0 / 0.25 / 1 | 0 / 0.25 / 1 | 0 / 0.25 / 1 | matched | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:499`; `crates/manifold-renderer/src/node_graph/primitives/shaders/spawn_whitewater_body.wgsl:19` |
 | Spray friction / restitution | 0 / 0.2 | 0 / 0.2 | 0 / 0.2 | matched | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:502`; `crates/manifold-renderer/src/node_graph/primitives/shaders/advect_whitewater_body.wgsl:27` |
+| Whitewater classification distance | upwind-reinitialised surface phi | raw padded solver phi | engine valid-band/upwind rule before padding | ported; `whitewater_engine_distance_values_and_fusion` passes on the GPU | `particlelevelset.cpp:263`, `levelsetsolver.cpp:82`; `whitewater_distance.rs`, `upwind_distance.rs` |
+| Whitewater motion schedule | each accepted liquid substep | once per outer tick | exact accepted durations and MAC snapshots | motion port; retype/emission/solids remain outer-interval sampled | `diffuseparticlesimulation.cpp:2250`; `liquid/substep_history.rs`, `advect_whitewater.rs` |
+| Whitewater force fields / hits | per-type force sampling; foam follows vmac | gravity only | same domain field buffers and timestamped event indices as liquid | ported; no duplicate physics values; `whitewater_engine_substep_force_hit_values_and_fusion` passes on the GPU | `diffuseparticlesimulation.cpp:2658`; `liquid/fields.rs` |
+| Whitewater mesh drains | strict negative posed source SDF | absent | same region/shape/atlas inputs and strict boundary | final interval pose; intermediate drain crossings remain a deviation | `fluidsimulation.cpp:9034`; `keep_whitewater.rs` |
 | Whitewater max particles per cell | 5000 | 5000 | 5000 | matched | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:504`; `crates/manifold-renderer/src/node_graph/primitives/keep_whitewater.rs:22` |
 | Emitter radius / jitter | 8 marker radii / 1 | 8 marker radii / 1 | 8 marker radii / 1 | matched | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:505`; `crates/manifold-renderer/src/node_graph/primitives/shaders/spawn_whitewater_body.wgsl:22` |
 | Whitewater collision buffer / march | 0.25h / 0.5h | 0.25h / 0.5h | 0.25h / 0.5h | matched | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:464`; `crates/manifold-renderer/src/node_graph/primitives/shaders/advect_whitewater_body.wgsl:27` |
@@ -115,11 +119,26 @@ The GPU stores the nearest f32 marker coefficient, `0.31017524`.
 | Whitewater surface-emitter band | 1.5h | 1.5h | 1.5h | matched | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:463`; `crates/manifold-renderer/src/node_graph/primitives/shaders/wavecrest_potential_body.wgsl:94` |
 | Whitewater maximum velocity factor | 1.1 | 1.1 | 1.1 | matched | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:465`; `crates/manifold-renderer/src/node_graph/primitives/shaders/advect_whitewater_body.wgsl:30` |
 | Wall geometry / collision / last inner face | native padded boundary mesh, marched collision, skipped boundary pressure cells/last inner face | exact wall faces, clamp wall motion, all interior faces | unchanged; geometry/operator port remains | unported | `crates/manifold-fluids/native/flip_engine/fluidsimulation.cpp:5508`; `crates/manifold-renderer/src/node_graph/primitives/shaders/gpu_flip_step.wgsl:2062` |
-| Surface/solid grid origin and extent | 1.5h padding each side; native 67 cells / 68 mesh nodes | 3h padding; 70 cells / 71 nodes | unchanged; native mesh sampling is half a cell offset | unported | `crates/manifold-renderer/src/node_graph/fluid/domain.rs:120`; `crates/manifold-renderer/src/node_graph/liquid/lattice.rs:12` |
-| Marker removal | 250 per cell + extreme-velocity removal | no native per-cell or extreme-velocity removal | unchanged; needs sorted compaction and native ordering proof | unported | `crates/manifold-fluids/native/flip_engine/fluidsimulation.h:2565`; `crates/manifold-renderer/src/node_graph/primitives/shaders/gpu_flip_step.wgsl:2130` |
-| Step operation order | extrapolate then constrain; inflow at step end | constrain then extrapolate; inflow before transfer | unchanged; existing BUG-g75v.8 waits for clock branch merge | unported | `crates/manifold-fluids/native/flip_engine/fluidsimulation.cpp:6658`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_step.rs:384` |
+| Surface/solid grid origin and extent | 1.5h padding each side; native 67 cells / 68 mesh nodes | 3h padding; 70 cells / 71 nodes | 1.5h padding; 67 cells / 68 nodes, native half-cell phase; mesh and clamp share the sampled solid | ported | `crates/manifold-renderer/src/node_graph/fluid/domain.rs:120`; `crates/manifold-renderer/src/node_graph/liquid/lattice.rs` (`surface`); `crates/manifold-fluids/native/flip_engine/particlemesher.cpp:103`; `crates/manifold-fluids/native/flip_engine/polygonizer3d.cpp:361` |
+| Marker removal | 250 per cell + extreme-velocity removal | no native per-cell or extreme-velocity removal | stable cell cap at 250; clock speed limit over the accepted frame, at most one Sim Rate interval of simulated time live; GPU compaction preserves survivor ids | ported | `crates/manifold-fluids/native/flip_engine/fluidsimulation.h:2565`; `crates/manifold-renderer/src/node_graph/primitives/shaders/gpu_flip_step.wgsl:2130` |
+| Step operation order | extrapolate then constrain; inflow at step end | constrain then extrapolate; inflow before transfer | projected velocity extrapolated before both solid constraints; inflow after movement/removal | ported | `crates/manifold-fluids/native/flip_engine/fluidsimulation.cpp:6658`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_step.rs:384` |
+| Inflow placement | after marker advection/removal | before transfer | end of step, first transferred/advected on next step | ported | `fluidsimulation.cpp::_stepFluid`, `_updateFluidObjects`; `gpu_flip_step.rs::encode` |
 | Pressure preconditioner / precision | MIC PCG, f64 | multigrid PCG, f32 | unchanged; equal tolerance/iteration values do not imply identical trajectories | unported | `crates/manifold-fluids/native/flip_engine/pressuresolver.cpp:934`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_pressure.rs:6` |
 | Whitewater emission ordering / overload | native randomized emitter order and capacity truncation | stable GPU order and even thinning when frame emissions exceed capacity | unchanged; a shared random stream and native emitter selection remain | unported | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.cpp:1515`; `crates/manifold-renderer/src/node_graph/primitives/whitewater_step.rs:163` |
+
+BUG-g75v.8 step-order audit (2026-10-03): section 2.5 found stable cell sorting,
+compaction, PrefixScan, and GPU extreme-speed removal already exist. The
+250-marker quota is genuinely new policy inside the existing specialised step
+node; no new catalog atom or fusion boundary. Native removal counts each cell
+place before speed rejection, so ranges are captured before speed removal.
+The threshold uses the accepted frame interval (_currentFrameDeltaTime), not
+the adaptive substep or 1/60 s. A live late frame runs its owed intervals as one
+span, so its frame is capped at one Sim Rate interval of simulated time and the
+span removes only what on-time frames would (BUG-i6niq (late spans lose
+particles)); export steps each interval. New inflow ids remain owned by emit_write.
+CPU reference and extent proofs precede GPU value proofs; GPU execution remains
+lead-owned, so these ports are not yet GPU-verified.
+
 
 `max_capacity=1572864` on the engine node is the mesh-output allocation, not a
 marker population parameter. GPU mesh allocation follows its exact triangle
@@ -150,11 +169,23 @@ native radius/support/border; the manifest test's 0.5 expectation changes to
 0.35 only because that is the engine node value. No tolerance was loosened.
 The fused WGSL snapshot is deliberately left for the lead's GPU regeneration.
 
+BUG-g75v.10 ports the surface grid at `LiquidLattice::surface`: the native
+origin is `domain_min - 1.5h`, with `(cells + 3) * subdivisions + 1` nodes.
+`ParticleMesher::_initialize` and `Polygonizer3d::_getVertexPosition` add no
+further half-cell shift. GPU FLIP publishes separate mesh coordinates for
+`liquid_solid_distance`; `liquid_frame` publishes the same surface bounds and
+nodes. The builder enables Native Mesh Grid on the frame; old embedded graphs
+keep their original simulation-grid solid contract until rebuilt. Whitewater
+retains its separately sampled simulation-grid solid. The interior field uses
+its exact cell count to distinguish native mesh padding from legacy solver padding, with matching CPU, shader and extent validation.
+The shared surface group carries these through splatting, blob bounds,
+smoothing, closing, clamp and marching cubes. Solver padding remains unchanged.
+CPU node/crossing and dispatch-extent proofs justify the changed grid; no
+value golden or tolerance was changed. GPU value proofs are compiled only.
+The fused snapshot needs regeneration by the lead after GPU verification.
+
 Unported mechanisms need separate staged ports, not replacement constants:
-wall geometry changes the pressure operator and seed exclusion; the native
-half-cell surface grid needs a separately sampled solid lattice and graph extent
-contract (changing shared solver padding would alter every liquid consumer); marker removal
-requires compaction preserving native particle order; MIC/f64 is a different
+wall geometry changes the pressure operator and seed exclusion; MIC/f64 is a different
 pressure solver (native uses f64, which native Metal cannot execute); whitewater overload ordering requires a shared random stream
 and native emitter selection. These are not clock-owned exemptions.
 `graph-tool validate` creates `GpuDevice::new_queued`, so it is deferred to the
@@ -278,7 +309,10 @@ by one tick. CPU-mesh graphs keep today's behaviour and present tick B.
 Frames are sorted by strictly increasing id within an identity epoch. One output per B
 record: binary-search A; found → cubic Hermite with tangents `span·v_A` and `span·v_B`;
 not found (a birth) → `x_B − τ·v_B + ½·a·τ²` with `τ = (1 − blend)·span`, radius scaled
-by `blend`, so a birth grows in from nothing. Display time never passes `t_B`. `a` is a
+by `blend`, so a birth grows in from nothing. With A unwired or empty (whitewater
+publishes no A) every record is rewound the same way but keeps its radius: nothing was
+born, and the display blend sits at 0 at each boundary, so scaling would hide the whole
+population. Display time never passes `t_B`. `a` is a
 port-shadowed param, zero for liquid, gravity for spray. Rejected: rewinding every
 particle from B without ids — it pops by `½·a·dt²` at every tick boundary (5 mm under
 gravity at 30 Hz, far more in a splash). Rejected: extrapolating past B to hide the
@@ -770,11 +804,7 @@ is the orchestrating session's.
 
 ### P3 — Interpolation atoms and the particle view (first pixels)
 
-**DEFERRED (2026-09-29).** Trigger: a sub-60 Hz particle producer exists. At 60 Hz the
-newest frame is at most one tick from display time, so the surface reads `particles_b`.
-The `FluidParticle` records moved to P2 (they are the contract).
-`node.particles_to_copies` left this phase: it is built under GPU_MPM_SOLVER_DESIGN.md P1
-(Water kernel, look gates and the cost probe).
+**BUILT — pass 2 and Sim Rate GPU-proven (2026-10-04); owed: optional-A fusion (BUG-adcx (unwired gather blocks fusion)); see [BUG-upao](#bug-upao--pass-2-and-sim-rate-2026-10-03).**
 
 - **Entry state:** P2 merged; `rg -n 'particles_a' crates/manifold-renderer/src/node_graph/primitives/fluid_surface.rs` shows the ports.
 - **Read-back:** D8, D11; sections 4 and 4.1; ADDING_PRIMITIVES.md whole.
@@ -784,7 +814,66 @@ The `FluidParticle` records moved to P2 (they are the contract).
 - **Gesture:** pause and resume transport mid-splash; the particles hold exactly and resume without a jump.
 - **Forbidden:** extrapolation; reusing `Particle`; a fallback when A is missing (A unwired is the move-from-B path by design).
 
-### P4 — Solver rate (seam brief)
+### BUG-upao — pass 2 and Sim Rate (2026-10-03)
+
+**BUILT.** The pass-2 GPU proofs (`particle_publication_gpu_tests`) and the wave's scoped GPU proofs pass. Pass 1 remains three generated atoms
+(interpolation, solid projection and array mix), with value and fusion proofs.
+Pass 2 retains GPU birth allocation beside `liquid_state`, reserves accepted scan
+ranks for inflow and narrow-band births, and publishes a compact ID-sorted copy
+with a cleared tail. Section 2.5 audit: spatial cell sorting cannot order
+arbitrary birth IDs; the publisher reuses `PrefixScan` and persistent scratch.
+No new catalog atom is introduced. Fenced metadata alone supplies live count and
+identity epoch; only accepted frames advance the ring timestamp. Exhausting the
+exact-f32 identity epoch requests a full restart through the existing domain clock
+owner, including coupled rigid state. The landed clock ports are `epoch`,
+`simulation_time`, `display_time`, and `interval_duration` (`tick_interval` below).
+Display time reaches `FrameRing::blend` unchanged. Optional-A whitewater fusion
+remains blocked on BUG-adcx. Sim Rate is built (below).
+
+**Pass 2 consumes these clock outputs only.** These are required seam names/units,
+not claims about the changing branch's private API; bind them at the landed boundary:
+
+| Output | Consumer and meaning |
+| --- | --- |
+| `epoch: u32` | Reset publication on seek/restart; no pair crosses a reset. |
+| `simulation_time: Seconds` | Timestamp of each successfully completed tick, saved with its particle/solid frame. Rejected work never advances publication time. |
+| `display_time: Seconds` | Presentation time in the same simulation-seconds domain, with speed, pause and latency already resolved by the clock. Feed unchanged to `FrameRing::blend`. |
+| `tick_interval: Seconds` | Resolved integration interval and Sim Rate reporting; never the denominator of the published-pair blend. |
+
+The first three retain the existing liquid graph port names. Do not multiply by
+Speed, subtract another tick or read a private accumulator. Use existing
+`display_blend(s, t_A, t_B)`: `alpha = clamp((s - t_A)/(t_B - t_A), 0, 1)` and
+`span = t_B - t_A`. A collapsed pair gives `(1, 0)`; skipped publications widen
+span. The same fraction presents particles, solids and whitewater in live and export.
+Pause holds display time; growth/reset/identity renumbering collapses A onto B.
+
+**Pass 2:** retain a GPU next-birth-id counter beside `liquid_state`; reserve ranges
+by accepted emission rank. Preserve ids through cell sorts, deaths and every substep.
+Before u32 exhaustion renumber live records and advance the identity epoch; exhaustion
+of the exact-f32 epoch range requires a full reset. `liquid_frame` publishes a compact
+id-sorted copy with a cleared tail, retaining each frame's count/time/identity epoch.
+Stop clearing ids only when allocation and sorting land together. Do not reorder
+solver storage or read particles back to the CPU. Reuse persistent scratch storage.
+
+CPU fixtures in `particle_frame_blend_tests::publication_contract` specify reordered
+trajectories, death/birth, empty pools, rollover, sorting and retired tails. They are
+reference oracles, not proof of today's GPU publisher; port them to its pass-2 GPU
+proof. `liquid::frame_ring::tests` exercises production blend metadata at all four
+rates, skipped ticks, pause, restart and growth. Extent tests cover both presets,
+A/B counts, solid storage and unequal mix buffers. Preserve B-only capacity and the
+interpolation/projection fusion proof; resolve BUG-adcx before claiming full fusion.
+
+**Sim Rate (built on the BUG-7qzk (live sim clock) owner):** one authored value,
+`ProjectSettings.physics.simRate`, choices 15/20/30/60 Hz. New projects start at
+30 Hz; a saved project without the value loads at 60 Hz, its old behaviour. Water
+uses its project's rate. The project settings slider edits it through the undoable
+`ChangeSimRateCommand`; live and export read the same value and step on the same
+boundary grid (LIVE_SIM_CLOCK_DESIGN.md D7 (Shared Sim Rate)). A rate edit restarts
+the simulation domains, so the blend pair collapses once. Tooltip: “Simulation
+updates per second. Hits land up to one update late; kicks are read at this rate.”
+This note supersedes the historical P4 proposal below for BUG-upao only.
+
+### P4 — Solver rate (historical seam brief)
 
 **DROPPED (2026-09-29).** The live solver is MLS-MPM at 60 Hz; FLIP keeps its fixed 60 Hz
 tick as the bake engine. The brief below is kept only as the record of what was designed.

@@ -361,7 +361,7 @@ mod cpu_tests {
         bindings.sort_unstable();
         assert_eq!(
             bindings,
-            (0..=12).chain([46]).map(|binding| (0, binding)).collect::<Vec<_>>()
+            (0..=12).chain([46, 47]).map(|binding| (0, binding)).collect::<Vec<_>>()
         );
 
         let params = module
@@ -497,9 +497,13 @@ mod gpu_tests {
         let (faces_slot, _) = harness.array::<FaceSample>(&[], 1);
         let (capped_slot, _) = harness.array::<u32>(&[], 2 * capacity + SOLVER_WORDS as usize);
         let (interior_out_slot, _) = harness.array::<f32>(&[], STEP_CELLS.iter().product());
+        // liquid_state's birth identity as its reset seeds it: next id, epoch,
+        // reserved base, full-reset request.
+        let next = input.iter().map(|p| p.id).max().unwrap_or(0) + 1;
+        let (identity_slot, _) = harness.array::<u32>(&[next, 1, 0, 0], 4);
 
         step.prepare_pipelines(&harness.device);
-        let inputs = vec![("particles", particles_slot), ("count", count_slot)];
+        let inputs = vec![("particles", particles_slot), ("count", count_slot), ("identity", identity_slot)];
         let (_, errors) = harness.run(
             step,
             &inputs,
@@ -1059,6 +1063,8 @@ mod gpu_tests {
                     bind(10, &ranges_buffer),
                     bind(11, &ranks),
                     bind(12, &status),
+                    bind(46, &shared(&device, &[0u32; 12])),
+                    bind(47, &shared(&device, &[0u32, 0, 3, 0])),
                 ],
                 [(8 * cells(N)).div_ceil(256) as u32, 1, 1],
                 "nb-reseed-write",
@@ -1211,6 +1217,8 @@ mod gpu_tests {
                 bind(10, &ranges_buffer),
                 bind(11, &ranks),
                 bind(12, &status),
+                    bind(46, &shared(&device, &[0u32; 12])),
+                    bind(47, &shared(&device, &[0u32, 0, 3, 0])),
             ],
             [(8 * cells(N)).div_ceil(256) as u32, 1, 1],
             "narrow-band-restore-overflow-write",

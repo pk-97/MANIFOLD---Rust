@@ -58,6 +58,13 @@ fn dispatches(n: usize) -> usize {
     2 * count - 1
 }
 
+/// A zeroed clock plan: the gate that never switches a pass off.
+pub(crate) fn open_gate(device: &GpuDevice) -> GpuBuffer {
+    let gate = device.create_buffer_shared(48);
+    gate.zero_fill();
+    gate
+}
+
 /// Words of storage every level of a scan over `n` values needs.
 pub(crate) fn storage_words(n: usize) -> usize {
     let (levels, count) = levels(n);
@@ -78,6 +85,8 @@ pub(crate) struct PrefixScan {
     add: Option<GpuComputePipeline>,
     buffer: Option<GpuBuffer>,
     words: usize,
+    /// Zeros, the gate an ungated scan binds (prefix_scan.wgsl `gate`).
+    open: Option<GpuBuffer>,
 }
 
 /// Dispatch labels: the block and tail passes, and the add passes.
@@ -102,6 +111,9 @@ impl PrefixScan {
         }
         if self.add.is_none() {
             self.add = Some(device.create_compute_pipeline(SHADER, "add_block_totals", "prefix_scan.add"));
+        }
+        if self.open.is_none() {
+            self.open = Some(open_gate(device));
         }
     }
 
@@ -136,7 +148,14 @@ impl PrefixScan {
     /// `prepare` and `buffer` first.
     pub(crate) fn encode_labelled(&self, encoder: &mut manifold_gpu::GpuEncoder, n: usize, labels: ScanLabels) {
         let buffer = self.buffer.as_ref().expect("scan storage prepared");
-        self.encode_levels(encoder, n, buffer, buffer, 0, labels);
+        self.encode_levels(encoder, n, buffer, buffer, 0, labels, None);
+    }
+
+    /// [`Self::encode_labelled`] under a GPU FLIP clock plan: an inactive
+    /// slot's (live, no time to step) scan runs no pass.
+    pub(crate) fn encode_labelled_gated(&self, encoder: &mut manifold_gpu::GpuEncoder, n: usize, labels: ScanLabels, gate: &GpuBuffer) {
+        let buffer = self.buffer.as_ref().expect("scan storage prepared");
+        self.encode_levels(encoder, n, buffer, buffer, 0, labels, Some(gate));
     }
 
     /// Scan `src[0, n)` into `dst[0, n)`, the later levels in the storage.
@@ -148,7 +167,7 @@ impl PrefixScan {
         src: &GpuBuffer,
         dst: &GpuBuffer,
     ) {
-        self.encode_levels(encoder, n, src, dst, n.max(1), ScanLabels::DEFAULT);
+        self.encode_levels(encoder, n, src, dst, n.max(1), ScanLabels::DEFAULT, None);
     }
 
     /// `level0_offset` is where level 0 would sit in the storage's layout:
@@ -161,7 +180,9 @@ impl PrefixScan {
         dst: &GpuBuffer,
         level0_offset: usize,
         labels: ScanLabels,
+        gate: Option<&GpuBuffer>,
     ) {
+        let gate = gate.or(self.open.as_ref()).expect("scan pipelines prepared");
         let blocks = self.blocks.as_ref().expect("scan pipelines prepared");
         let tail = self.tail.as_ref().expect("scan pipelines prepared");
         let add = self.add.as_ref().expect("scan pipelines prepared");
@@ -190,6 +211,7 @@ impl PrefixScan {
                     GpuBinding::Buffer { binding: 1, buffer: src, offset: 0 },
                     GpuBinding::Buffer { binding: 2, buffer: dst, offset: 0 },
                     GpuBinding::Buffer { binding: 3, buffer: parents, offset: 0 },
+                    GpuBinding::Buffer { binding: 4, buffer: gate, offset: 0 },
                 ],
                 [groups, 1, 1],
                 label,

@@ -229,6 +229,51 @@ impl Default for RtQualitySettings {
     }
 }
 
+/// Authored physics settings shared by every solver and the physics API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PhysicsSettings {
+    #[serde(default = "SimRate::legacy")]
+    pub sim_rate: SimRate,
+}
+
+impl PhysicsSettings {
+    /// Files predating authored physics settings retain their 60 Hz rate.
+    pub const fn legacy() -> Self { Self { sim_rate: SimRate::Hz60 } }
+}
+
+/// Simulation updates per transport second, independent of display/export fps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(try_from = "u32", into = "u32")]
+pub enum SimRate {
+    Hz15,
+    Hz20,
+    #[default]
+    Hz30,
+    Hz60,
+}
+
+impl SimRate {
+    pub const ALL: [Self; 4] = [Self::Hz15, Self::Hz20, Self::Hz30, Self::Hz60];
+    pub const fn legacy() -> Self { Self::Hz60 }
+    pub const fn hz(self) -> u32 {
+        match self { Self::Hz15 => 15, Self::Hz20 => 20, Self::Hz30 => 30, Self::Hz60 => 60 }
+    }
+    pub fn interval(self) -> f64 { 1.0 / f64::from(self.hz()) }
+}
+
+impl From<SimRate> for u32 {
+    fn from(rate: SimRate) -> Self { rate.hz() }
+}
+
+impl TryFrom<u32> for SimRate {
+    type Error = String;
+    fn try_from(hz: u32) -> Result<Self, Self::Error> {
+        Self::ALL.into_iter().find(|rate| rate.hz() == hz)
+            .ok_or_else(|| format!("Sim Rate must be 15, 20, 30 or 60 Hz, got {hz}"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

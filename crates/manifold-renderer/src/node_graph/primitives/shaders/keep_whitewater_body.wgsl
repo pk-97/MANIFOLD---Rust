@@ -43,8 +43,32 @@ fn kw_solid(q: vec3<f32>, nodes: vec3<u32>) -> f32 {
     return d;
 }
 
+// Same posed mesh distance and strict boundary as GPU FLIP region_holding.
+// Ported from FLIP Fluids fluidsimulation.cpp::_updateOutflowMeshFluidSource.
+fn liquid_atlas_half(index: u32) -> f32 {
+    let pair = unpack2x16float(buf_atlas[index / 2u]);
+    return select(pair.x, pair.y, (index & 1u) == 1u);
+}
+fn kw_drained(position: vec3<f32>, region_count: f32, region_offset: f32, tick_seconds: f32) -> bool {
+    for (var r = 0u; r < u32(region_count); r = r + 1u) {
+        let row = u32(region_offset) + r;
+        if row >= arrayLength(&buf_regions) { break; }
+        let bd = buf_regions[row];
+        if bd.angular_velocity.w != 3.0 || bd.accel_shape.w < 0.0 { continue; }
+        let shape = u32(bd.accel_shape.w);
+        if shape >= arrayLength(&buf_shapes) { continue; }
+        let sh = buf_shapes[shape];
+        let dims = vec3<u32>(sh.dims_x, sh.dims_y, sh.dims_z);
+        let p = fma(bd.linear_velocity.xyz, vec3<f32>(tick_seconds), bd.position_inv_mass.xyz);
+        let q = liquid_turn(bd.rotation, bd.angular_velocity.xyz, tick_seconds);
+        let g = liquid_lattice_coord(position, p, q, sh.origin_spacing, sh.scale_min.xyz);
+        if liquid_lattice_holds(g, dims) && liquid_lattice_distance(sh.atlas_offset, dims, g) * sh.scale_min.w < 0.0 { return true; }
+    }
+    return false;
+}
+
 // Every check but the cap; the cell in .xyz, 1 in .w when the slot passes.
-fn kw_check(e: Element, origin: vec3<f32>, h: f32, lo: vec3<f32>, hi: vec3<f32>, nodes: vec3<u32>) -> vec4<i32> {
+fn kw_check(e: Element, origin: vec3<f32>, h: f32, lo: vec3<f32>, hi: vec3<f32>, nodes: vec3<u32>, region_count: f32, region_offset: f32, tick_seconds: f32) -> vec4<i32> {
     let p = e.position_lifetime.xyz - origin;
     // By its bits: fast math may fold a NaN comparison away.
     let bits = vec3<u32>(bitcast<u32>(p.x), bitcast<u32>(p.y), bitcast<u32>(p.z)) & vec3<u32>(0x7f800000u);
@@ -54,6 +78,7 @@ fn kw_check(e: Element, origin: vec3<f32>, h: f32, lo: vec3<f32>, hi: vec3<f32>,
     if !(all(p >= lo) && all(p < hi)) || kw_solid(p / h, nodes) < 0.0 {
         return vec4<i32>(0);
     }
+    if kw_drained(e.position_lifetime.xyz, region_count, region_offset, tick_seconds) { return vec4<i32>(0); }
     return vec4<i32>(vec3<i32>(floor(p / h)), 1);
 }
 
@@ -74,6 +99,7 @@ fn body(
     bins_x: i32,
     bins_y: i32,
     bins_z: i32,
+    region_count: f32, region_offset: f32, tick_seconds: f32,
 ) -> u32 {
     let nodes = vec3<u32>(max(vec3<f32>(nodes_x, nodes_y, nodes_z), vec3<f32>(0.0)));
     if any(nodes < vec3<u32>(3u)) || nodes.x * nodes.y * nodes.z > arrayLength(&buf_solid) {
@@ -85,7 +111,7 @@ fn body(
     let origin = vec3<f32>(center_x, center_y, center_z) - 0.5 * size;
     let lo = vec3<f32>(KW_BOX_INSET * h + KW_BOX_EPSILON);
     let hi = vec3<f32>(cells) * h - lo;
-    let mine = kw_check(e_pool, origin, h, lo, hi, nodes);
+    let mine = kw_check(e_pool, origin, h, lo, hi, nodes, region_count, region_offset, tick_seconds);
     if mine.w == 0 {
         return 0u;
     }
@@ -128,7 +154,7 @@ fn body(
             if member >= idx || member >= arrayLength(&buf_binned) {
                 continue;
             }
-            let other = kw_check(buf_binned[member], origin, h, lo, hi, nodes);
+            let other = kw_check(buf_binned[member], origin, h, lo, hi, nodes, region_count, region_offset, tick_seconds);
             if other.w == 1 && all(other.xyz == mine.xyz) {
                 rank = rank + 1u;
             }

@@ -862,6 +862,7 @@ fn solid_known(s: FaceSample, a: i32) -> bool {
 // RigidBoundaryVelocityMap::extrapolate). Run SOLID_LAYERS times.
 @compute @workgroup_size(256)
 fn solid_extrapolate(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !clock_active() { return; }
     let idx = gid.x;
     if idx >= face_total() {
         return;
@@ -1031,6 +1032,7 @@ fn pocket_linked(c: vec3<i32>, d: vec3<i32>, a: i32, n: vec3<i32>, m: vec3<i32>)
 // One thread per cell: dry, sealed, or water touching air.
 @compute @workgroup_size(256)
 fn pocket_seed(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !clock_active() { return; }
     let idx = gid.x;
     if idx >= cell_total() {
         return;
@@ -1061,17 +1063,26 @@ fn pocket_seed(@builtin(global_invocation_id) gid: vec3<u32>) {
     pocket[idx] = select(POCKET_SEALED, POCKET_AIR, air);
 }
 
-// One thread: the first round runs.
+// One thread: the first round runs. In an inactive clock slot no round
+// runs: every sweep's size is 0 and the rounds return.
 @compute @workgroup_size(1)
 fn pocket_start() {
-    pocket_gate[POCKET_CHANGED] = 1u;
     pocket_gate[POCKET_UNRESOLVED] = 0u;
+    if !clock_active() {
+        pocket_gate[POCKET_CHANGED] = 0u;
+        for (var a = 0u; a < 3u; a = a + 1u) {
+            pocket_gate[3u * a] = 0u;
+        }
+        return;
+    }
+    pocket_gate[POCKET_CHANGED] = 1u;
 }
 
 // One thread: this round's sweeps run only when the last round changed a
 // cell.
 @compute @workgroup_size(1)
 fn pocket_round() {
+    if !clock_active() { return; }
     let go = pocket_gate[POCKET_CHANGED] != 0u;
     let n = u.n;
     let lines = vec3<u32>(n.y * n.z, n.z * n.x, n.x * n.y);
@@ -1167,6 +1178,7 @@ fn pocket_neighbour(c: vec3<i32>, state: u32, n: vec3<i32>, m: vec3<i32>) -> boo
 // one that reaches air means the spread hit its cap unfinished.
 @compute @workgroup_size(256)
 fn pocket_check(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !clock_active() { return; }
     let idx = gid.x;
     if idx >= cell_total() {
         return;
@@ -1201,6 +1213,7 @@ fn pocket_check(@builtin(global_invocation_id) gid: vec3<u32>) {
 // neighbour as the subtract pass does.
 @compute @workgroup_size(256)
 fn pocket_pin(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !clock_active() { return; }
     let idx = gid.x;
     if idx >= cell_total() {
         return;
@@ -1281,6 +1294,7 @@ fn separate_update(@builtin(global_invocation_id) gid: vec3<u32>) {
 // One thread per word: the pocket sums start at 0.
 @compute @workgroup_size(256)
 fn pocket_clear(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !clock_active() { return; }
     if gid.x < 3u * cell_total() + 2u {
         atomicStore(&pocket_sum[gid.x], 0u);
     }
@@ -1326,6 +1340,7 @@ var<workgroup> group_sum: array<atomic<u32>, 3>;
 // first sealed cell's label, so a large pocket is not one contended word.
 @compute @workgroup_size(256)
 fn pocket_accumulate(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) lane: u32) {
+    if !clock_active() { return; }
     let idx = gid.x;
     if lane == 0u {
         group_label = 0xffffffffu;
@@ -1367,6 +1382,7 @@ fn pocket_accumulate(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(loc
 // The leader cell adds what its pocket lost to the removed total.
 @compute @workgroup_size(256)
 fn pocket_remove(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !clock_active() { return; }
     let idx = gid.x;
     if idx >= cell_total() || pocket[idx] != POCKET_SEALED {
         return;
@@ -1399,6 +1415,7 @@ fn pocket_flux(word: u32) {
 
 @compute @workgroup_size(1)
 fn pocket_flux_pressure() {
+    if !clock_active() { return; }
     // The density word too: a tick without the density projection reads 0.
     if u.step_in_tick == 0 {
         capped[5u] = 0u;
@@ -1408,6 +1425,7 @@ fn pocket_flux_pressure() {
 
 @compute @workgroup_size(1)
 fn pocket_flux_density() {
+    if !clock_active() { return; }
     pocket_flux(5u);
 }
 
@@ -1440,6 +1458,7 @@ fn level_total(k: u32) -> u32 {
 // One thread per fine cell: no pocket has a leader yet.
 @compute @workgroup_size(256)
 fn pocket_leader_clear(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !clock_active() { return; }
     if gid.x < cell_total() {
         atomicStore(&pocket_leader[gid.x], NO_LEADER);
     }
@@ -1467,6 +1486,7 @@ fn cell_solid(p: vec3<i32>, n: vec3<i32>, m: vec3<i32>) -> bool {
 // inside it; they carry no label and never break the seal.
 @compute @workgroup_size(256)
 fn pocket_coarsen(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !clock_active() { return; }
     let idx = gid.x;
     let k = u.solve_level;
     if idx >= level_total(k) {
@@ -1509,6 +1529,7 @@ fn pocket_coarsen(@builtin(global_invocation_id) gid: vec3<u32>) {
 // One thread per level cell: a sealed cell takes its pocket's leader.
 @compute @workgroup_size(256)
 fn pocket_relabel(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !clock_active() { return; }
     let idx = gid.x;
     if idx >= level_total(u.solve_level) || pocket_coarse[idx] != POCKET_SEALED {
         return;
@@ -1526,6 +1547,7 @@ fn pocket_isolated(c: vec3<i32>, n: vec3<i32>, m: vec3<i32>) -> bool {
 // `faces_out`: each of the six faces of an isolated cell takes velocity 0.
 @compute @workgroup_size(256)
 fn pocket_condition(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !clock_active() { return; }
     let idx = gid.x;
     if idx >= face_total() {
         return;
@@ -1606,6 +1628,7 @@ fn pocket_seed_reason(idx: u32) -> vec4<u32> {
 // spread hit its cap unfinished, and the step's dry, sealed and air cells.
 @compute @workgroup_size(256)
 fn pocket_tally(@builtin(local_invocation_index) lane: u32) {
+    if !clock_active() { return; }
     if lane < 3u {
         atomicStore(&pocket_counts[lane], 0u);
     }
@@ -2357,13 +2380,15 @@ fn emit_flags(@builtin(global_invocation_id) gid: vec3<u32>) {
 // stats' live count reaching the slots, never as an error.
 @compute @workgroup_size(256)
 fn emit_write(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if birth_identity[3] != 0u { return; }
     if !clock_active() { return; }
     let idx = gid.x;
     let s = emit_sites();
     if idx >= s.x * s.y * s.z {
         return;
     }
-    let before = select(0u, emit_scan[idx - 1u], idx > 0u);
+    var before = 0u;
+    if idx > 0u { before = emit_scan[idx - 1u]; }
     if emit_scan[idx] == before {
         return;
     }
@@ -2378,8 +2403,10 @@ fn emit_write(@builtin(global_invocation_id) gid: vec3<u32>) {
     let inflow = region_holding(x, 2.0, true);
     let p = emit_position(idx, inflow);
     // (3 / (4π · 8))^(1/3): the sphere of an eighth of a cell, as the fill's.
-    emitted[slot] = FluidParticle(vec4<f32>(p, 0.31017524 * u.cell_size), region_velocity(inflow, p), slot + 1u);
+    emitted[slot] = FluidParticle(vec4<f32>(p, 0.31017524 * u.cell_size), region_velocity(inflow, p), birth_identity[2] + before);
 }
+
+@group(0) @binding(47) var<storage, read> birth_identity: array<u32>;
 
 // ---- The tile table (GPU_FLIP_SPARSE_BLOCKS_DESIGN.md section 3 (The tile
 // table)). Built every step from the sort's ranges, on the GPU, never read
@@ -2518,9 +2545,12 @@ fn poison_inactive(@builtin(global_invocation_id) gid: vec3<u32>) {
 // cell distance from the tile's box to the nearest particle-holding cell,
 // scanning the box grown by CELL_REACH (12³ cells at most); CELL_REACH + 1
 // when none. Thread 0 flips the ring halves' parity for this step first: no
-// other thread of this pass reads it, and `tiles_rings` runs after.
+// other thread of this pass reads it, and `tiles_rings` runs after. An
+// inactive clock slot runs none of the table's passes, so the next active
+// step's retire measures against the last active step's C.
 @compute @workgroup_size(256)
 fn tiles_classify(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !clock_active() { return; }
     let t = gid.x;
     if t >= tile_total() {
         return;
@@ -2560,6 +2590,7 @@ fn tiles_classify(@builtin(global_invocation_id) gid: vec3<u32>) {
 // within ring_max, else of ring_max + 1. With `all_tiles`, 0 everywhere.
 @compute @workgroup_size(256)
 fn tiles_rings(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !clock_active() { return; }
     let t = gid.x;
     let total = tile_total();
     if t >= total {
@@ -2612,6 +2643,14 @@ fn rank_of(ring: u32, near: u32) -> u32 {
 fn tiles_lists() {
     let total = tile_total();
     let r = u.ring_max;
+    // An inactive clock slot keeps the last step's table (the parity was not
+    // flipped) and switches every list triple off, the retired one too.
+    if !clock_active() {
+        for (var k = 0u; k <= r + 1u; k = k + 1u) {
+            tile_args[3u * k] = 0u;
+        }
+        return;
+    }
     let parity = tile_counts[tile_parity_word()];
     let cur = parity * total;
     let prev = (1u - parity) * total;
@@ -2698,4 +2737,17 @@ fn narrow_tally() {
 @compute @workgroup_size(256)
 fn narrow_disabled(@builtin(global_invocation_id) gid: vec3<u32>) {
     if gid.x < cell_total() { cell_out[gid.x] = f32(u.n.x + u.n.y + u.n.z) * u.cell_size; }
+}
+
+// FLIP Fluids _removeMarkerParticles counts before testing speed.
+// Stable ranges predate speed removal; surviving ids stay unchanged.
+@compute @workgroup_size(256)
+fn remove_crowded_markers(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !clock_active() { return; }
+    let cell = gid.x;
+    if cell >= u.n.x * u.n.y * u.n.z { return; }
+    let range = ranges[cell];
+    for (var k = 250u; k < range.count; k = k + 1u) {
+        emitted[range.start + k].position_radius.w = 0.0;
+    }
 }

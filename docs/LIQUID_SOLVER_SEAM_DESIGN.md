@@ -107,7 +107,7 @@ The surface design's section 3 (The particle-frame contract) stands: 32-byte `Fl
 2. A tick with any non-finite position or velocity is never published. The stats node flags it; the frame keeps the last good tick and the domain shows a named error. The BUG-7qzk clock implementation reseeds live GPU FLIP particles on the next retired fault without resetting its epoch/time; offline and other solver fault policy remains unchanged. The lead must run `liquid_nonfinite_live_flip_reseeds_without_stopping_clock` before this recovery is considered verified (see LIVE_SIM_CLOCK_DESIGN.md section 9). Narrow-band reseed capacity shortage (stats word 27) keeps the last good particles, faces and interior and halts until Reset.
 3. `solid_*` comes from `node.liquid_solid_distance`: walls plus every collider role and coupled body. No preset wires a constant.
 4. Records past `count` have radius 0.
-5. Ids are sorted ascending or all 0. A solver that reorders its state each tick (SWASH's bin sort) publishes 0.
+5. GPU FLIP publishes a compact copy with strictly increasing nonzero birth IDs, a cleared tail, and each accepted frame's count, time and identity epoch; its working state stays cell-sorted. Reset, growth or identity renumbering collapses A onto B. The all-zero ID path remains for producers without persistent identity; see [BUG-upao pass 2](GPU_FLUID_SURFACE_DESIGN.md#bug-upao--pass-2-and-sim-rate-2026-10-03).
 6. `grid_bounds` and `grid_nodes_*` come from `domain_layout` over the domain's own bounds and Resolution. No hard-coded box.
 
 ### 3.2 Grid outputs
@@ -130,6 +130,15 @@ The producer resamples; no consumer sees a native layout:
 The visible surface distance remains a rendering output, exported as `level_set` with its bounds and node counts. GPU FLIP also publishes its particle distance for per-tick whitewater (BUG-215v); whitewater owns resampling or re-distancing onto its lattice.
 
 The Ferstl et al. (2016) narrow-band amendment in `GPU_FLIP_NARROW_BAND_DESIGN.md` permits optional solver interior distance because deep liquid has no particles. `gpu_flip_step.interior` holds exactly nx·ny·nz f32 distances in metres, x fastest, at m+(i+½,j+½,k+½)h. `liquid_state.interior_in` captures it beside the tick particles, and `liquid_frame.interior` publishes `interior_a/b` through the same ring indices, epoch, lattice and failed-tick gate. A disabled field is positive everywhere. The mesher accepts optional `interior`, samples the cell-centred lattice and unions the particle field with interior+h before solid/border constraints. Unwired consumers retain their existing particle path; no solver-specific branch is needed. Stats contain 28 words: the 18-word solver tail preserves separating-floor diagnostics at words 17–26 and appends narrow-band reseed shortages at word 27. Coarse solve stage 3 retains its standalone reference-proven boundary scatter and local projection; Solve Level integration remains stage 4.
+
+Accepted numerical substeps (BUG-g75v.7): a producer may also publish
+`substep_schedule` (four f32 words per row: seconds, elapsed endpoint, bitcast
+one-shot impulse-index/valid-bit, reserved zero), `substep_u/v/w` (concatenated
+MAC arrays in the layout above), and `substep_count`. Duration zero denotes an
+inactive encoded slot. The event high bit marks a hit; remaining bits index the
+domain impulse lattices. This is a solver-neutral consumer seam; a producer
+adapts its private scheduler/velocity layout before publication. Whitewater
+never reads a GPU FLIP private face record or scheduler structure.
 
 ### 3.3 Two-way Box3D coupling
 

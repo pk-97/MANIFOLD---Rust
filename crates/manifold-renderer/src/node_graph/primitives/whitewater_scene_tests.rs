@@ -18,8 +18,9 @@ use manifold_core::params::{Param, ParamManifest};
 use manifold_gpu::GpuTextureFormat;
 use serde_json::{Value, json};
 
-use super::gpu_flip_preset::{WaterScene, render_def};
+use super::gpu_flip_preset::{WHITEWATER_KINDS, WaterScene, render_def};
 use super::gpu_flip_step::face_bytes;
+use crate::frame_status::FrameRenderStatus;
 use crate::gpu_encoder::GpuEncoder;
 use crate::headless_readback::{encode_rgba8_png, readback_srgb_rgba8};
 use crate::node_graph::depth_rule::DepthRule;
@@ -49,7 +50,7 @@ fn float(v: f64) -> Value {
     json!({"type": "Float", "value": v})
 }
 
-type Port = (u64, &'static str);
+type Port<'a> = (u64, &'a str);
 
 const PROBE: &str = "test.scalar_probe";
 const COUNTS_PROBE: &str = "test.whitewater_counts_probe";
@@ -149,13 +150,13 @@ impl Appender {
         self.add(json!({"nodeId": name, "typeId": type_id, "params": params}))
     }
 
-    fn wire(&mut self, from: Port, to: u64, port: &str) {
+    fn wire(&mut self, from: Port<'_>, to: u64, port: &str) {
         let wire = json!({"fromNode": from.0, "fromPort": from.1, "toNode": to, "toPort": port});
         self.def["wires"].as_array_mut().expect("wires").push(wire);
     }
 
     /// A scalar read after the frame as `probe.<label>`.
-    fn probe(&mut self, label: &str, from: Port) {
+    fn probe(&mut self, label: &str, from: Port<'_>) {
         let id = self.node(&format!("probe.{label}"), PROBE, json!({}));
         self.wire(from, id, "value");
     }
@@ -205,9 +206,13 @@ fn whitewater_scene_fuses_without_gpu() {
     registry.register(PROBE, || Box::new(Probe::new()));
     registry.register(COUNTS_PROBE, || Box::new(Probe::whitewater_counts()));
     let report = crate::node_graph::fusion_report(&def, &registry);
-    assert_eq!(report.regions.len(), 1, "the surface chain must remain fusable");
+    assert_eq!(report.regions.len(), 3, "the surface chain, Fill Pits and the display blend must remain fusable");
     let members: Vec<_> = report.nodes.iter().filter(|node| node.fused).map(|node| node.type_id.as_str()).collect();
-    assert_eq!(members, ["node.smooth_lattice", "node.clamp_liquid_to_solids"]);
+    assert_eq!(members, [
+        "node.smooth_lattice", "node.clamp_liquid_to_solids",
+        "node.redistance_lattice", "node.offset_lattice",
+        "node.interpolate_particle_frames", "node.push_out_of_solid",
+    ]);
     let graph = def.clone().into_graph(&registry, &Default::default()).expect("authored scene loads");
     let plan = compile(&graph).expect("probes must not escape the authored tick region");
     let state = graph.nodes().find(|n| n.node_id.as_str() == "state").expect("the liquid boundary").id;
@@ -267,24 +272,42 @@ fn vendored_whitewater_scene_loads_and_compiles_without_gpu() {
 /// L5's side-by-side and O2, which reads the group's inner arrays.
 const VENDORED_GROUP: &str = include_str!("../../../tests/fixtures/whitewater_vendored_group.json");
 
-/// `whitewater_render_def` with the vendored group in place of the node, its
-/// lifecycle reports probed by name.
+/// `whitewater_render_def` with the vendored group in place of the node, on a
+/// frame that publishes the simulation lattice, its lifecycle reports probed
+/// by name.
 fn vendored_render_def(scene: WaterScene) -> EffectGraphDef {
     let mut g = Appender::new(render_def(scene.with_faces()));
     let mut group: Value = serde_json::from_str(VENDORED_GROUP).expect("the vendored group parses");
     let id = g.id("whitewater");
     // The render ids move with the water def's node count; the group takes the node's.
     group["id"] = json!(id);
+    let outputs: Vec<String> = group["group"]["interface"]["outputs"]
+        .as_array()
+        .expect("the group's outputs")
+        .iter()
+        .map(|output| output["name"].as_str().expect("output name").to_owned())
+        .collect();
     let nodes = g.def["nodes"].as_array_mut().expect("nodes");
     *nodes.iter_mut().find(|n| n["nodeId"] == "whitewater").expect("the whitewater node") = group;
-    // b1a1f5f65 moved whitewater_step into the tick region with pool state
-    // and a distance lattice. The vendored lifecycle is still a post-frame
-    // observer. Restore its original frame/surface inputs and direct render
-    // outputs, rather than feeding it the step's incompatible tick interface.
+    // The step runs inside the tick region on pool state and a distance
+    // lattice; the vendored lifecycle is a post-frame observer. It takes its
+    // original frame and surface inputs and drives the render directly,
+    // never the step's tick interface.
     g.def["wires"].as_array_mut().expect("wires")
         .retain(|wire| wire["toNode"] != id && wire["fromNode"] != id);
     g.remove(&["whitewater_face_u", "whitewater_face_v", "whitewater_face_w"]);
+    // Whitewater keeps the simulation lattice and its own solid sampled on
+    // it; the native mesh grid is the surface's (GPU_FLUID_SURFACE_DESIGN.md,
+    // the surface grid port). The group reads its lattice from the frame, so
+    // the frame publishes the simulation lattice and that solid, as embedded
+    // graphs from before the mesh grid do. On the 1.5-cell-padded mesh grid
+    // the face grid cannot sit centred by whole cells, and the group refuses.
     let frame = g.id("frame");
+    g.def["nodes"].as_array_mut().expect("nodes").iter_mut()
+        .find(|n| n["nodeId"] == "frame").expect("the frame")["params"]["native_mesh_grid"] = json!({"type": "Bool", "value": false});
+    g.remove(&["mesh_solid"]);
+    let solid = g.id("solid");
+    g.wire((solid, "solid"), frame, "solid");
     for (source, input) in [("particles_b", "particles"), ("count_b", "count"), ("solid_b", "solid")] {
         g.wire((frame, source), id, input);
     }
@@ -301,15 +324,23 @@ fn vendored_render_def(scene: WaterScene) -> EffectGraphDef {
         g.wire((domain, port), id, port);
     }
     g.wire((domain, "simulation_time"), id, "seed");
-    for (kind, particles, count) in [("foam", "foam_particles", "foam_count"),
-        ("bubble", "bubble_particles", "bubble_count"), ("spray", "spray_particles", "spray_count")] {
-        let copies = g.id(&format!("{kind}_copies"));
-        let object = g.id(&format!("{kind}_object"));
-        g.def["wires"].as_array_mut().expect("wires")
-            .retain(|wire| !(wire["toNode"] == copies && wire["toPort"] == "particles"));
-        g.wire((id, particles), copies, "particles");
-        g.wire((id, count), copies, "live_count");
-        g.wire((id, count), object, "instance_count");
+    // Without the step the state captures no whitewater, and an optional
+    // result is wired at both ends or neither: each population's display
+    // blend, the state result's only reader, goes too. The group's
+    // populations are drawn directly; one it does not publish is not drawn.
+    for kind in WHITEWATER_KINDS {
+        g.remove(&[format!("{kind}_blend").as_str()]);
+        let render = ["copies", "object", "mesh", "material"].map(|part| format!("{kind}_{part}"));
+        let particles = format!("{kind}_particles");
+        if !outputs.contains(&particles) {
+            g.remove(&render.each_ref().map(String::as_str));
+            continue;
+        }
+        let (copies, object) = (g.id(&render[0]), g.id(&render[1]));
+        let count = format!("{kind}_count");
+        g.wire((id, &particles), copies, "particles");
+        g.wire((id, &count), copies, "live_count");
+        g.wire((id, &count), object, "instance_count");
     }
     let target = json!({"kind": "node", "nodeId": "ww.lifecycle", "param": "capacity"});
     for binding in g.def["presetMetadata"]["bindings"].as_array_mut().expect("bindings") {
@@ -458,13 +489,17 @@ impl Show {
         }
         self.runtime.set_profiling(profile);
         let start = Instant::now();
-        {
+        let status = {
             let mut gpu = GpuEncoder::new(&mut enc, &self.device);
             self.runtime.render(&mut gpu, &self.target.texture, &ctx, &self.cards);
-        }
+            gpu.frame_status()
+        };
         let cpu_ms = start.elapsed().as_secs_f64() * 1000.0;
         let result = enc.commit_and_wait_profiled(&self.device);
         assert_eq!(result.failed_command_buffers, 0, "frame {} failed on the GPU", self.frame_count);
+        // A failed frame is not the one the graph describes: a refusing node
+        // drew a fallback, and every probe past it reads nothing computed.
+        assert!(!matches!(status, FrameRenderStatus::Failed(_)), "frame {} failed: {status:?}", self.frame_count);
         let mut whitewater_ms = vec![0.0; self.labels.len()];
         if profile {
             self.runtime.take_step_profiles();
@@ -551,13 +586,28 @@ impl Show {
         let node = self.runtime.graph.nodes().find(|n| n.node_id.as_str() == name).unwrap_or_else(|| panic!("no node {name}"));
         node.node.provided_array_output(port).map_or(0, |buffer| buffer.size)
     }
+
+    /// Live particles (radius above 0) in the storage the named node provides
+    /// on `port`.
+    fn provided_live(&self, name: &str, port: &str) -> u64 {
+        use crate::node_graph::fluid_particles::FluidParticle;
+        let node = self.runtime.graph.nodes().find(|n| n.node_id.as_str() == name).unwrap_or_else(|| panic!("no node {name}"));
+        let buffer = node.node.provided_array_output(port).unwrap_or_else(|| panic!("{name} provides no {port}"));
+        let ptr = buffer.mapped_ptr().expect("shared particle storage");
+        let len = buffer.size as usize / std::mem::size_of::<FluidParticle>();
+        // SAFETY: `frame` waits for GPU completion, and the buffer holds `len` records.
+        let particles = unsafe { std::slice::from_raw_parts(ptr.cast::<FluidParticle>(), len) };
+        particles.iter().filter(|p| p.position_radius[3] > 0.0).count() as u64
+    }
 }
 
 /// Resolution is a live card (BUG-9an1 (resolution change), BUG-o65k (GPU
 /// FLIP lattice wiring)): the shipped preset moves 64 → 32 → 100 under a
 /// running clip. On the first frame at each size the state already holds that
 /// lattice's face grid; within 1.5 s the fill has restarted at that size, the
-/// step's faces are that lattice's and its water throws whitewater.
+/// frame publishes all of its live water (count_b is a live count, and the
+/// fill seeds the box's sites dead), the step's faces are that lattice's and
+/// its water throws whitewater.
 #[test]
 fn gpu_flip_resolution_card_resizes_at_runtime() {
     let scene = WaterScene::dam_break(64);
@@ -586,9 +636,12 @@ fn gpu_flip_resolution_card_resizes_at_runtime() {
             last = show.probes(STEP_REPORTS);
         }
         let [count] = show.probes(["count"]);
-        println!("Resolution {n}: {count} particles, GPU p50 {:.2} ms; foam {} bubble {} spray {}", percentile(&gpu_ms, 0.5), last[0], last[1], last[2]);
+        let live = show.provided_live("fill", "particles");
+        println!("Resolution {n}: {count} particles of the fill's {live} live, GPU p50 {:.2} ms; foam {} bubble {} spray {}", percentile(&gpu_ms, 0.5), last[0], last[1], last[2]);
         assert_eq!(show.provided_bytes(step, "faces"), faces, "Resolution {n}: the step's faces");
-        assert_eq!(count as u64, WaterScene::dam_break(n as usize).particles(), "Resolution {n}: the fill");
+        let record = std::mem::size_of::<crate::node_graph::fluid_particles::FluidParticle>() as u64;
+        assert_eq!(show.provided_bytes("fill", "particles"), WaterScene::dam_break(n as usize).particles() * record, "Resolution {n}: the fill");
+        assert_eq!(count as u64, live, "Resolution {n}: the frame's live water");
         assert!(last[0] + last[1] + last[2] > 0.0, "Resolution {n}: no whitewater by 1.5 s: {last:?}");
     }
     let errors = show.errors();

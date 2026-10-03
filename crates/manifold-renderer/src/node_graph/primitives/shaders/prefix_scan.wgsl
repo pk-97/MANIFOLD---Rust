@@ -21,6 +21,13 @@ struct ScanParams {
 @group(0) @binding(1) var<storage, read> src: array<u32>;
 @group(0) @binding(2) var<storage, read_write> dst: array<u32>;
 @group(0) @binding(3) var<storage, read_write> parents: array<u32>;
+// A GPU FLIP clock plan (gpu_flip_clock.wgsl Plan; word 0 step_dt, word 11
+// live_mode): live with no time to step, every pass returns. Zeros run.
+@group(0) @binding(4) var<storage, read> gate: array<u32>;
+
+fn gated_off() -> bool {
+    return gate[11] != 0u && !(bitcast<f32>(gate[0]) > 0.0);
+}
 
 var<workgroup> tile: array<u32, 256>;
 
@@ -45,6 +52,9 @@ fn scan_blocks(
     @builtin(local_invocation_id) lid: vec3<u32>,
     @builtin(workgroup_id) wid: vec3<u32>,
 ) {
+    if gated_off() {
+        return;
+    }
     let i = gid.x;
     var value = 0u;
     if i < params.n {
@@ -66,6 +76,9 @@ fn scan_blocks(
 // and each run is rescanned from its exclusive start. Never has a parent.
 @compute @workgroup_size(256)
 fn scan_tail(@builtin(local_invocation_id) lid: vec3<u32>) {
+    if gated_off() {
+        return;
+    }
     let k = (params.n + 255u) / 256u;
     let first = lid.x * k;
     var total = 0u;
@@ -91,6 +104,9 @@ fn scan_tail(@builtin(local_invocation_id) lid: vec3<u32>) {
 // Add the (already scanned) total of every earlier block.
 @compute @workgroup_size(256)
 fn add_block_totals(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if gated_off() {
+        return;
+    }
     let i = gid.x;
     let block = i / 256u;
     if i >= params.n || block == 0u {

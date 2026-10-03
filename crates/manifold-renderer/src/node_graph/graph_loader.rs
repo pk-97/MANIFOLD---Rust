@@ -717,20 +717,35 @@ fn wire_liquid_intervals(def: &mut EffectGraphDef) -> bool {
     }
     let mut changed = false;
     for node in &def.nodes {
-        let ports: &[(&str, &str)] = match node.type_id.as_str() {
-            "node.gpu_flip_step" => &[("interval_duration", "interval_duration"), ("clock_obstacles", "clock_obstacles"), ("clock_sources", "clock_sources"), ("clock_obstacle_count", "clock_obstacle_count"), ("clock_source_count", "clock_source_count"), ("live_hits", "live_hits"), ("live_hit_count", "live_hit_count")],
-            "node.matter_state" => &[("interval_duration", "interval_duration"), ("target_time", "target_time"), ("simulation_time", "simulation_time"), ("step_cap_hit", "step_cap_hit")],
-            "node.whitewater_step" => &[("interval_duration", "dt")],
-            "node.liquid_solid_distance" | "node.whitewater_obstacle_source" => &[("interval_duration", "tick_seconds")],
+        let clock_ports: &[(&str, &str)] = match node.type_id.as_str() {
+            "node.gpu_flip_step" => &[("clock_obstacles", "clock_obstacles"), ("clock_sources", "clock_sources"), ("clock_obstacle_count", "clock_obstacle_count"), ("clock_source_count", "clock_source_count"), ("live_hits", "live_hits"), ("live_hit_count", "live_hit_count"), ("limit_interval", "limit_interval")],
+            "node.matter_state" => &[("target_time", "target_time"), ("simulation_time", "simulation_time"), ("step_cap_hit", "step_cap_hit")],
             _ => &[],
         };
+        let intervals = crate::node_graph::liquid::clock::INTERVAL_DURATION_INPUTS.iter()
+            .filter(|(type_id, _)| *type_id == node.type_id.as_str())
+            .map(|&(_, input)| ("interval_duration", input));
         let source = def.wires.iter().filter(|wire| wire.to_node == node.id)
             .find_map(|wire| domains.get(&wire.from_node).copied());
         if let Some(source) = source {
-            for &(output, input) in ports {
+            for (output, input) in intervals.chain(clock_ports.iter().copied()) {
                 if def.wires.iter().any(|wire| wire.to_node == node.id && wire.to_port == input) { continue; }
                 def.wires.push(EffectGraphWire { from_node: source, from_port: output.into(), to_node: node.id, to_port: input.into() });
                 changed = true;
+            }
+        }
+        if matches!(node.type_id.as_str(), "node.gpu_flip_step" | "node.liquid_frame") {
+            let state = def.wires.iter().filter(|w| w.to_node == node.id && w.to_port == "particles")
+                .find_map(|w| def.nodes.iter().find(|n| n.id == w.from_node && n.type_id == "node.liquid_state"));
+            if let Some(state) = state {
+                if !def.wires.iter().any(|w| w.to_node == node.id && w.to_port == "identity") {
+                    def.wires.push(EffectGraphWire { from_node: state.id, from_port: "identity".into(), to_node: node.id, to_port: "identity".into() });
+                    changed = true;
+                }
+                if node.type_id == "node.gpu_flip_step" && !def.wires.iter().any(|w| w.to_node == state.id && w.to_port == "identity_in") {
+                    def.wires.push(EffectGraphWire { from_node: node.id, from_port: "identity_out".into(), to_node: state.id, to_port: "identity_in".into() });
+                    changed = true;
+                }
             }
         }
         if node.type_id == "node.liquid_state" && !def.wires.iter().any(|w| w.to_node == node.id && w.to_port == "clock_status_in") {
@@ -2099,6 +2114,8 @@ mod tests {
         assert!(def.wires.contains(&wire(1, "interval_duration", 3, "interval_duration")));
         assert!(def.wires.contains(&wire(1, "live_hits", 3, "live_hits")));
         assert!(def.wires.contains(&wire(3, "clock_status", 2, "clock_status_in")));
+        assert!(def.wires.contains(&wire(2, "identity", 3, "identity")));
+        assert!(def.wires.contains(&wire(3, "identity_out", 2, "identity_in")));
         assert_eq!(def.wires.iter().filter(|w| w.to_node == 4 && w.to_port == "dt").count(), 1);
         assert!(def.wires.contains(&wire(5, "out", 4, "dt")));
         assert!(!wire_liquid_intervals(&mut def));

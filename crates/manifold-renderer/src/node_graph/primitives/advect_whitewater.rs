@@ -13,13 +13,14 @@ use super::sort_particles_into_cells::float_param;
 use super::standalone_pipeline::standalone_pipeline;
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::freeze::classify::FusedOutputCapacity;
+use crate::node_graph::liquid::fields::{FieldBinding, LIQUID_FIELD};
 use crate::node_graph::liquid::grid::{LIQUID_FACES, face_len};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 use crate::node_graph::whitewater::{WHITEWATER_COMMON, WhitewaterParticle, cell_total, face_offset, particle_grid};
 
 /// Codegen uniform layout: params in PARAMS order, then `dispatch_count`;
-/// 24 words, already a multiple of 16 bytes.
+/// 32 words, already a multiple of 16 bytes.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct AdvectUniforms {
@@ -46,23 +47,43 @@ struct AdvectUniforms {
     spray_drag_variance: f32,
     spray_restitution: f32,
     spray_friction: f32,
+    substep_count: f32,
+    field_nodes_x: f32,
+    field_nodes_y: f32,
+    field_nodes_z: f32,
+    field_spacing: f32,
+    force_lattices: f32,
+    tick_index: f32,
+    first_tick: f32,
     dispatch_count: u32,
 }
 
-const _: () = assert!(std::mem::size_of::<AdvectUniforms>() == 96);
+const _: () = assert!(std::mem::size_of::<AdvectUniforms>() == 128);
 
 const FACE_PORTS: [&str; 3] = ["face_u", "face_v", "face_w"];
 
 crate::primitive! {
     name: AdvectWhitewater,
     type_id: "node.advect_whitewater",
-    purpose: "Moves each live whitewater particle one FLIP tick by its type: spray falls under gravity with per-id drag and bounces off solids (restitution on the normal part, friction on the tangent part); bubbles rise against gravity and drag toward the liquid velocity; foam rides the liquid velocity. The liquid velocity is FLIP's MAC trilinear of the face grid at the old position. Every type then marches its path in half-cell steps and stops a quarter cell clear of the solid or inside FLIP's boundary box, 1.625 cells in from the whitewater grid. A particle that ends up moving faster than 1.1 times its new speed, or whose travel is not finite, dies (lifetime -1e6). Empty slots (kind 3) pass whole.",
+    purpose: "Moves each live whitewater particle over the accepted liquid substeps and their MAC velocities when a schedule is wired, otherwise one supplied duration. Scene acceleration and timestamped hits use the liquid field inputs. By type: spray falls under gravity with per-id drag and bounces off solids (restitution on the normal part, friction on the tangent part); bubbles rise against gravity and drag toward the liquid velocity; foam rides the liquid velocity. The liquid velocity is FLIP's MAC trilinear of the face grid at the old position. Every type then marches its path in half-cell steps and stops a quarter cell clear of the solid or inside FLIP's boundary box, 1.625 cells in from the whitewater grid. A particle that ends up moving faster than 1.1 times its new speed, or whose travel is not finite, dies (lifetime -1e6). Empty slots (kind 3) pass whole.",
     inputs: {
         pool: Array(WhitewaterParticle) required,
         face_u: Array(f32) required,
         face_v: Array(f32) required,
         face_w: Array(f32) required,
         solid: Array(f32) required,
+        substep_schedule: Array(f32) optional,
+        substep_u: Array(f32) optional, substep_v: Array(f32) optional, substep_w: Array(f32) optional,
+        forces: Array(f32) optional, impulses: Array(f32) optional,
+        substep_count: ScalarF32 optional,
+        field_nodes_x: ScalarF32 optional,
+        field_nodes_y: ScalarF32 optional,
+        field_nodes_z: ScalarF32 optional,
+        field_spacing: ScalarF32 optional,
+        force_lattices: ScalarF32 optional,
+        tick_index: ScalarF32 optional,
+        first_tick: ScalarF32 optional,
+
         center_x: ScalarF32 optional, center_y: ScalarF32 optional, center_z: ScalarF32 optional,
         size_x: ScalarF32 optional, size_y: ScalarF32 optional, size_z: ScalarF32 optional,
         nodes_x: ScalarF32 optional, nodes_y: ScalarF32 optional, nodes_z: ScalarF32 optional,
@@ -97,6 +118,14 @@ crate::primitive! {
         float_param!("spray_drag_variance", "Spray Drag Variance", 0.25, 0.0, 1.0),
         float_param!("spray_restitution", "Spray Restitution", 0.2, 0.0, 1.0),
         float_param!("spray_friction", "Spray Friction", 0.0, 0.0, 1.0),
+        float_param!("substep_count", "substep_count", 0.0, 0.0, 16_777_216.0),
+        float_param!("field_nodes_x", "field_nodes_x", 2.0, 0.0, 16_777_216.0),
+        float_param!("field_nodes_y", "field_nodes_y", 2.0, 0.0, 16_777_216.0),
+        float_param!("field_nodes_z", "field_nodes_z", 2.0, 0.0, 16_777_216.0),
+        float_param!("field_spacing", "field_spacing", 0.25, 0.0, 16_777_216.0),
+        float_param!("force_lattices", "force_lattices", 0.0, 0.0, 16_777_216.0),
+        float_param!("tick_index", "tick_index", 0.0, 0.0, 16_777_216.0),
+        float_param!("first_tick", "first_tick", 0.0, 0.0, 16_777_216.0),
     ],
     depth_rule: Terminal,
     composition_notes: "The first step of the GPU whitewater tick, on the pool node.array_feedback carries; retyping, lifetimes and removal follow. face_u/v/w and face_cells_x/y/z from the liquid frame's face grid, solid its solid lattice, center/size from node.transform_components on its grid_bounds, nodes_x/y/z its grid_nodes_x/y/z. FLIP's ballistic and kill limit behaviours are not ported: every side collides.",
@@ -108,9 +137,9 @@ crate::primitive! {
     aliases: ["whitewater advection", "move whitewater", "diffuse particle advection"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/advect_whitewater_body.wgsl"),
-    input_access: [Coincident, BufferGather, BufferGather, BufferGather, BufferGather],
+    input_access: [Coincident, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
     output_capacity: FusedOutputCapacity::FromInput { input: "pool" },
-    wgsl_includes: [WHITEWATER_COMMON, LIQUID_FACES],
+    wgsl_includes: [WHITEWATER_COMMON, LIQUID_FACES, LIQUID_FIELD],
 }
 
 impl Primitive for AdvectWhitewater {
@@ -159,6 +188,10 @@ impl Primitive for AdvectWhitewater {
         let [nodes_x, nodes_y, nodes_z] = grid.nodes.map(|n| n as f32);
         let [face_cells_x, face_cells_y, face_cells_z] = face_cells.map(|n| n as f32);
         let [gravity_x, gravity_y, gravity_z] = gravity;
+        let field = match FieldBinding::read(ctx, ctx.inputs.array("forces"), ctx.inputs.array("impulses"), "Advect Whitewater") {
+            Ok(field) => field,
+            Err(error) => { ctx.error(error); return; }
+        };
         let uniforms = AdvectUniforms {
             center_x,
             center_y,
@@ -183,8 +216,26 @@ impl Primitive for AdvectWhitewater {
             spray_drag_variance: ctx.scalar_or_param("spray_drag_variance", 0.25),
             spray_restitution: ctx.scalar_or_param("spray_restitution", 0.2),
             spray_friction: ctx.scalar_or_param("spray_friction", 0.0),
+            substep_count: ctx.scalar_or_param("substep_count", 0.0),
+            field_nodes_x: field.nodes[0] as f32,
+            field_nodes_y: field.nodes[1] as f32,
+            field_nodes_z: field.nodes[2] as f32,
+            field_spacing: field.spacing,
+            force_lattices: field.force_lattices as f32,
+            tick_index: ctx.scalar_or_param("tick_index", 0.0),
+            first_tick: field.first_tick as f32,
             dispatch_count: count,
         };
+        let steps = uniforms.substep_count as u64;
+        if steps > 0 {
+            for (name, bytes) in [("substep_schedule", steps * 16), ("substep_u", steps * face_len(face_cells,0)*4),
+                ("substep_v", steps * face_len(face_cells,1)*4), ("substep_w", steps * face_len(face_cells,2)*4)] {
+                if ctx.inputs.array(name).is_none_or(|b| b.size < bytes) {
+                    ctx.error(format!("Advect Whitewater: {name} does not cover {steps} accepted substep slots")); return;
+                }
+            }
+        }
+        let extra = ["substep_schedule", "substep_u", "substep_v", "substep_w", "forces", "impulses"].map(|name| ctx.inputs.array(name).unwrap_or(solid));
         let gpu = ctx.gpu_encoder();
         gpu.native_enc.dispatch_compute(
             pipeline,
@@ -195,7 +246,13 @@ impl Primitive for AdvectWhitewater {
                 GpuBinding::Buffer { binding: 3, buffer: v, offset: 0 },
                 GpuBinding::Buffer { binding: 4, buffer: w, offset: 0 },
                 GpuBinding::Buffer { binding: 5, buffer: solid, offset: 0 },
-                GpuBinding::Buffer { binding: 6, buffer: out, offset: 0 },
+                GpuBinding::Buffer { binding: 6, buffer: extra[0], offset: 0 },
+                GpuBinding::Buffer { binding: 7, buffer: extra[1], offset: 0 },
+                GpuBinding::Buffer { binding: 8, buffer: extra[2], offset: 0 },
+                GpuBinding::Buffer { binding: 9, buffer: extra[3], offset: 0 },
+                GpuBinding::Buffer { binding: 10, buffer: extra[4], offset: 0 },
+                GpuBinding::Buffer { binding: 11, buffer: extra[5], offset: 0 },
+                GpuBinding::Buffer { binding: 12, buffer: out, offset: 0 },
             ],
             [count.div_ceil(256), 1, 1],
             "node.advect_whitewater",

@@ -224,8 +224,11 @@ impl LiquidBodies {
     pub fn clock_obstacles(&self) -> &[crate::node_graph::primitives::gpu_flip_clock::GpuFlipBodyVertex] { &self.clock_obstacles }
     pub fn clock_sources(&self) -> &[crate::node_graph::primitives::gpu_flip_clock::GpuFlipBodyVertex] { &self.clock_sources }
 
-    /// Reference CFL samples the actual mesh vertices. Coupled hull vertices
-    /// remain eligible outside the domain, including a hull enclosing it.
+    /// Reference CFL samples the actual mesh vertices. The engine counts an
+    /// obstacle's points only inside the domain; a coupled hull counts every
+    /// vertex while its bounds overlap the domain, so a hull crossing or
+    /// enclosing it with every vertex outside still counts, and a body falling
+    /// far below the water never sets its substeps.
     /// Colliders join the CFL only under rigid coupling, as in FLIP Fluids:
     /// `_getMaximumObstacleSpeed` returns 0 unless rigid coupling or adaptive
     /// obstacle time stepping is on, and the latter is off by default
@@ -242,15 +245,30 @@ impl LiquidBodies {
         let mut region = 0;
         let mut append = |geometry: &PreparedFluidGeometry, scale: [f32; 3], row: LiquidBody, coupled: bool, source: bool, row_index: Option<usize>| {
             let output = if source { &mut self.clock_sources } else { &mut self.clock_obstacles };
-            for vertex in geometry.meshes.iter().flat_map(|mesh| &mesh.vertices) {
+            let world_of = |vertex: &[f32; 3]| -> [f32; 3] {
                 let local = std::array::from_fn(|i| vertex[i] * scale[i]);
                 let q = row.rotation;
                 let cross = |a: [f32; 3], b: [f32; 3]| [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
                 let axis = [q[0], q[1], q[2]];
                 let uv = cross(axis, local);
                 let uuv = cross(axis, uv);
-                let world: [f32; 3] = std::array::from_fn(|i| row.position_inv_mass[i] + local[i] + 2.0*(q[3]*uv[i]+uuv[i]));
-                let eligible = row.accel_shape[3] >= 0.0 && (source || coupled || (0..3).all(|i| world[i] >= min[i] && world[i] <= min[i]+size[i]));
+                std::array::from_fn(|i| row.position_inv_mass[i] + local[i] + 2.0*(q[3]*uv[i]+uuv[i]))
+            };
+            let vertices = || geometry.meshes.iter().flat_map(|mesh| &mesh.vertices);
+            let overlaps = coupled && {
+                let (mut lo, mut hi) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
+                for world in vertices().map(world_of) {
+                    for i in 0..3 {
+                        lo[i] = lo[i].min(world[i]);
+                        hi[i] = hi[i].max(world[i]);
+                    }
+                }
+                (0..3).all(|i| lo[i] <= min[i] + size[i] && hi[i] >= min[i])
+            };
+            for vertex in vertices() {
+                let world = world_of(vertex);
+                let inside = (0..3).all(|i| world[i] >= min[i] && world[i] <= min[i]+size[i]);
+                let eligible = row.accel_shape[3] >= 0.0 && (source || if coupled { overlaps } else { inside });
                 let inherit = if source { row.inv_inertia_x[3] } else { 1.0 };
                 // The fourth velocity word is spare for the clock seam.  A
                 // coupled hull carries its relative body-row index plus one;
@@ -592,7 +610,11 @@ mod tests {
     use crate::node_graph::ports::std430_stride;
 
     fn cube() -> Arc<PreparedFluidGeometry> {
-        let v = |x: usize, y: usize, z: usize| [[-0.5f32, 0.5][x], [-0.5, 0.5][y], [-0.5, 0.5][z]];
+        cube_of(0.5)
+    }
+
+    fn cube_of(half: f32) -> Arc<PreparedFluidGeometry> {
+        let v = |x: usize, y: usize, z: usize| [[-half, half][x], [-half, half][y], [-half, half][z]];
         Arc::new(PreparedFluidGeometry::new(vec![manifold_physics::TriangleMesh {
             vertices: vec![
                 v(0, 0, 0), v(1, 0, 0), v(1, 1, 0), v(0, 1, 0),
@@ -956,5 +978,32 @@ mod tests {
                 assert!(obstacles[8..].iter().all(|v| v.velocity[3] == 2.0), "the hull names its body row");
             }
         }
+    }
+
+    /// A coupled hull joins the clock's CFL while its bounds overlap the
+    /// domain: a hull falling far below the water adds nothing at any speed,
+    /// and a large hull crossing the domain with every vertex outside counts.
+    #[test]
+    fn liquid_clock_vertices_count_a_coupled_hull_only_while_it_overlaps_the_domain() {
+        let hulls = [cube(), cube_of(6.0), cube()];
+        let mut bodies = LiquidBodies::default();
+        ready_coupled(&mut bodies, &[], &hulls);
+        let mut rig = Rig::default();
+        rig.frame(&mut bodies, 0.0, TICK, &|_| Vec::new());
+        let frame = rig.frame(&mut bodies, TICK, TICK, &|_| Vec::new());
+        let falling = |y: f32| LiquidBody {
+            position_inv_mass: [0.0, y, 0.0, 1.0],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            linear_velocity: [0.0, -250.0, 0.0, 0.0],
+            ..LiquidBody::default()
+        };
+        bodies.rows(first_tick(&frame), frame.ticks, &[falling(0.0), falling(0.0), falling(-40.0)]).unwrap();
+        bodies.prepare_clock_vertices([-4.0; 3], [8.0; 3]);
+        let obstacles = bodies.clock_obstacles();
+        assert_eq!(obstacles.len(), 24, "three cubes");
+        assert!(obstacles[..8].iter().all(|v| v.position[3] == 1.0), "a hull inside the domain counts");
+        assert!(obstacles[8..16].iter().all(|v| v.position[3] == 1.0 && v.position[1].abs() > 4.0),
+            "a hull enclosing the domain counts though every vertex is outside");
+        assert!(obstacles[16..].iter().all(|v| v.position[3] == 0.0), "a hull falling below the domain never counts");
     }
 }

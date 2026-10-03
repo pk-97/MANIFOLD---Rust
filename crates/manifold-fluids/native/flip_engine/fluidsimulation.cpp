@@ -2932,6 +2932,16 @@ bool FluidSimulation::isExtremeVelocityRemovalEnabled() {
     return _isExtremeVelocityRemovalEnabled;
 }
 
+void FluidSimulation::setMarkerSpeedLimitFrameDeltaTime(double dt) {
+    if (!std::isfinite(dt) || dt < 0.0) {
+        std::string msg = "Error: marker speed limit frame delta time must be finite and non-negative.\n";
+        msg += "dt: " + _toString(dt) + "\n";
+        throw std::domain_error(msg);
+    }
+
+    _markerSpeedLimitFrameDeltaTime = dt;
+}
+
 void FluidSimulation::setVelocityTransferMethodFLIP() {
     _logfile.log(std::ostringstream().flush() << 
                  _logfile.getTime() << " setVelocityTransferMethodFLIP" << std::endl);
@@ -8553,7 +8563,14 @@ void FluidSimulation::_advanceMarkerParticles(double dt) {
             positions->at(i) = output[i];
         }
 
-        _removeMarkerParticles(_currentFrameDeltaTime);
+        // MANIFOLD: a live frame that spans several configured frames keeps
+        // one configured frame's speed limit, so load never removes a marker
+        // that frame keeps.
+        double speedLimitDeltaTime = _currentFrameDeltaTime;
+        if (_markerSpeedLimitFrameDeltaTime > 0.0) {
+            speedLimitDeltaTime = std::min(speedLimitDeltaTime, _markerSpeedLimitFrameDeltaTime);
+        }
+        _removeMarkerParticles(speedLimitDeltaTime);
 
     }
 
@@ -11180,10 +11197,24 @@ double FluidSimulation::_getMaximumObstacleSpeed(double dt) {
 
         TriangleMesh m = obj->getMesh();
         if (_rigidCoupling && obj->getRigidBoundaryMap() == &_rigidCoupling->boundaryMap()) {
+            // A large proxy can cross the liquid domain while every vertex
+            // lies outside it, so the hull's bounds decide. A body wholly
+            // outside the domain cannot touch the liquid; like the obstacle
+            // points below, it never sets the step.
+            if (m.vertices.empty()) {
+                continue;
+            }
+            AABB hull(m.vertices);
+            vmath::vec3 lo = hull.getMinPoint();
+            vmath::vec3 hi = hull.getMaxPoint();
+            vmath::vec3 dlo = domainBounds.getMinPoint();
+            vmath::vec3 dhi = domainBounds.getMaxPoint();
+            if (lo.x > dhi.x || hi.x < dlo.x || lo.y > dhi.y || hi.y < dlo.y ||
+                    lo.z > dhi.z || hi.z < dlo.z) {
+                continue;
+            }
             const size_t body = obj->getRigidBoundaryBody();
             for (size_t vidx = 0; vidx < m.vertices.size(); vidx++) {
-                // A large proxy can cross the liquid domain while every
-                // vertex lies outside it. Its boundary speed still matters.
                 maxu = fmax(_rigidCoupling->pointSpeed(body, m.vertices[vidx], dt), maxu);
             }
             continue;

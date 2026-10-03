@@ -211,6 +211,8 @@ struct Clock {
     anchor_transport: f64,
     anchor_target: f64,
     speed: f64,
+    /// The anchor before the last Speed edit, for the display one tick back.
+    previous_anchor: (f64, f64, f64),
     target: f64,
     ticks_covered: u64,
     simulation: f64,
@@ -219,6 +221,16 @@ struct Clock {
 impl Clock {
     fn restart(&mut self) {
         self.started = false;
+    }
+
+    /// Simulated time at transport `x` under the last two Speed anchors.
+    fn simulation_at(&self, x: f64) -> f64 {
+        let (transport, target, speed) = if x >= self.anchor_transport {
+            (self.anchor_transport, self.anchor_target, self.speed)
+        } else {
+            self.previous_anchor
+        };
+        target + (x - transport).max(0.0) * speed
     }
 
     /// Mirrors LiquidClock's epoch and speed-anchor semantics. CPU execution
@@ -271,12 +283,14 @@ impl Clock {
             self.simulation = 0.0;
             self.anchor_target = 0.0;
             self.anchor_transport = transport.0;
+            self.previous_anchor = (transport.0, 0.0, speed);
             self.speed = speed;
         } else {
             self.target = self.target.max(
                 self.anchor_target + (transport.0 - self.anchor_transport).max(0.0) * self.speed,
             );
             if speed != self.speed {
+                self.previous_anchor = (self.anchor_transport, self.anchor_target, self.speed);
                 self.speed = speed;
                 self.anchor_target = self.target;
                 self.anchor_transport = transport.0;
@@ -299,7 +313,7 @@ impl Clock {
                 held,
                 target: Seconds(self.target),
                 simulation: Seconds(self.simulation),
-                display: Seconds((self.target - TICK).max(0.0)),
+                display: Seconds(self.simulation_at(transport.0 - TICK).max(0.0)),
                 start: Seconds(start),
                 steps,
                 stretched: Seconds(if steps > 0 {

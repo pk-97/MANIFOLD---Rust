@@ -3,13 +3,15 @@
 //! GPU FLIP, the GPU water solver (docs/GPU_FLIP_PRESSURE_SOLVE.md), as
 //! graphs built for any lattice. `water_def` is a running liquid on the
 //! liquid seam (docs/LIQUID_SOLVER_SEAM_DESIGN.md P7a): node.gpu_flip_domain's clock runs
-//! node.liquid_state's tick region, whose body is one 60 Hz tick of
+//! node.liquid_state's tick region, whose body is one Sim Rate tick of
 //! one node.gpu_flip_step of [`STEPS_PER_TICK`] substeps, then
 //! node.liquid_stats; node.liquid_frame publishes each tick to the liquid
 //! surface. `render_def` puts it in the render of the shipped
-//! `WaterDamBreakGpuFlip.json`, which is its own Dam Break at 64. Every node
-//! reads the domain's lattice off its wires, so a Resolution change reaches
-//! the running graph; the params only seed the planned sizes.
+//! `WaterDamBreakGpuFlip.json`, which is its own Dam Break at 64, and
+//! `particle_view_def` draws that render's particles for the shipped
+//! `WaterDamBreakParticles.json`. Every node reads the domain's lattice off
+//! its wires, so a Resolution change reaches the running graph; the params
+//! only seed the planned sizes.
 
 use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
@@ -21,6 +23,7 @@ use super::gpu_flip_step::{AUTO_PRESSURE_ITERATIONS, DEFAULT_TOP_SPEED, FACE_VAL
 use crate::node_graph::bundled_presets::bundled_preset_json;
 #[cfg(all(test, feature = "gpu-proofs"))]
 use crate::node_graph::fluid::{FluidDomainLayout, domain_layout};
+use crate::node_graph::liquid::clock::INTERVAL_DURATION_INPUTS;
 use crate::node_graph::liquid::grid::FACE_INPUT_PORTS;
 use crate::node_graph::transform::Transform;
 
@@ -28,7 +31,7 @@ use crate::node_graph::transform::Transform;
 /// Size; a scene's own `size` is what every measure reads.
 const DAM_BREAK_METRES: f64 = 4.0;
 
-/// Water substeps per 60 Hz liquid tick, the step node's Steps. A collider
+/// Water substeps per liquid tick, the step node's Steps. A collider
 /// moves per substep: each places it where its tick's row has it at the
 /// substep's end.
 pub(crate) const STEPS_PER_TICK: usize = 1;
@@ -253,7 +256,7 @@ impl WaterScene {
     /// The layers the step extends its projected faces by.
     #[cfg(all(test, feature = "water-race-probes"))]
     pub fn band_layers(&self) -> usize {
-        super::gpu_flip_step::band_layers(self.travel_cells() as u32) as usize
+        super::gpu_flip_step::band_layers(super::gpu_flip_step::ENGINE_CFL) as usize
     }
 
     /// The tank: the domain's layout at this resolution, no domain box.
@@ -339,6 +342,20 @@ impl Builder {
     fn wires(&mut self, from: usize, to: usize, ports: &[&'static str]) {
         for &port in ports {
             self.wire((from, port), to, port);
+        }
+    }
+}
+
+/// Feeds every interval input ([`INTERVAL_DURATION_INPUTS`]) among `nodes`
+/// that no wire feeds yet from `domain`'s accepted interval.
+fn feed_intervals(nodes: &[Value], wires: &mut Vec<Value>, domain: u64) {
+    for node in nodes {
+        for &(type_id, port) in &INTERVAL_DURATION_INPUTS {
+            let id = &node["id"];
+            if node["typeId"] != type_id || wires.iter().any(|w| &w["toNode"] == id && w["toPort"] == port) {
+                continue;
+            }
+            wires.push(json!({"fromNode": domain, "fromPort": "interval_duration", "toNode": id, "toPort": port}));
         }
     }
 }
@@ -444,6 +461,8 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     let particles: Port = (state, "out");
     let step = water_step(&mut b, scene, (domain, state));
     b.wire(particles, step, "particles");
+    b.wire((state, "identity"), step, "identity");
+    b.wire((step, "identity_out"), state, "identity_in");
     b.wire(count, step, "count");
     b.wire((domain, "reaction"), step, "reaction");
     b.wires(domain, step, &["regions", "region_count", "epoch"]);
@@ -466,13 +485,26 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     b.wires(domain, solid, &["bodies", "shapes", "atlas", "closed_faces", "body_count"]);
     b.wires(domain, solid, &LATTICE_WIRES);
     b.wire((domain, "body_rows"), solid, "rows");
+    // Whitewater remains on the simulation lattice. Surface and clamp share
+    // a separately sampled solid at the native half-cell mesh coordinates.
+    let solid = b.node("mesh_solid", "node.liquid_solid_distance", json!({"wall_inset": float(f64::from(crate::node_graph::liquid::lattice::SURFACE_PADDING_CELLS))}));
+    b.wires(domain, solid, &["bodies", "shapes", "atlas", "closed_faces", "body_count"]);
+    b.wire((domain, "cell_size"), solid, "cell_size");
+    for (source, target) in [
+        ("mesh_min_x", "lattice_min_x"), ("mesh_min_y", "lattice_min_y"), ("mesh_min_z", "lattice_min_z"),
+        ("mesh_nodes_x", "nodes_x"), ("mesh_nodes_y", "nodes_y"), ("mesh_nodes_z", "nodes_z"),
+    ] {
+        b.wire((domain, source), solid, target);
+    }
+    b.wire((domain, "body_rows"), solid, "rows");
     let source = b.node("whitewater_obstacle_source", "node.whitewater_obstacle_source", json!({}));
     b.wires(domain, source, &["bodies", "shapes", "atlas", "closed_faces", "body_count"]);
     b.wires(domain, source, &LATTICE_WIRES);
     b.wire((domain, "body_rows"), source, "rows");
-    let frame = b.node("frame", "node.liquid_frame", json!({"face_valid_layers": int(FACE_VALID_LAYERS as usize)}));
+    let frame = b.node("frame", "node.liquid_frame", json!({"face_valid_layers": int(FACE_VALID_LAYERS as usize), "native_mesh_grid": {"type": "Bool", "value": true}}));
     b.wire((state, "out"), frame, "particles");
     b.wire((state, "stats"), frame, "stats");
+    b.wire((state, "identity"), frame, "identity");
     b.wire((state, "interior"), frame, "interior");
     b.wire((solid, "solid"), frame, "solid");
     b.wire(count, frame, "count");
@@ -493,6 +525,9 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
             b.wire((id, "out"), frame, FACE_INPUT_PORTS[axis]);
         }
     }
+    // Solids pose their bodies at the end of the accepted interval, so they
+    // agree with the step at every Sim Rate.
+    feed_intervals(&b.nodes, &mut b.wires, domain as u64);
 
     let output = b.node("output", "system.final_output", json!({}));
     let sink = if scene.surface {
@@ -527,19 +562,112 @@ fn surface_group() -> Value {
     nodes.iter().find(|node| node["nodeId"] == "surface").expect("liquid surface group").clone()
 }
 
-/// The nodes `water_def` makes; every other node of the shipped preset is
-/// its render.
+/// The nodes the builder makes: `water_def`'s, the obstacle's render and the
+/// display presentation. Every other node of the shipped preset is the
+/// authored render `render_def` copies.
 #[cfg(any(test, feature = "gpu-proofs"))]
-fn built_by_water_def(node_id: &str) -> bool {
+fn builder_made(node_id: &str) -> bool {
     let step = node_id.split_once('.').is_some_and(|(step, _)| {
         step.len() > 1 && step.starts_with('s') && step[1..].bytes().all(|b| b.is_ascii_digit())
     });
     step || FACE_NODES.contains(&node_id)
         || OBSTACLE_RENDER.contains(&node_id)
+        || DISPLAY_NODES.iter().any(|(name, _)| *name == node_id)
         || matches!(
             node_id,
-            "domain" | "initial_column" | "obstacle_transform" | "obstacle_collider" | "fill" | "state" | STEP_NODE | "stats" | "solid" | "whitewater_obstacle_source" | "frame" | "surface"
+            "domain" | "initial_column" | "obstacle_transform" | "obstacle_collider" | "fill" | "state" | STEP_NODE | "stats" | "solid" | "mesh_solid" | "whitewater_obstacle_source" | "frame" | "surface"
         )
+}
+
+/// The render's display-time presentation (docs/GPU_FLUID_SURFACE_DESIGN.md
+/// D11): frame B's liquid particles interpolated to the display time and
+/// pushed out of the display-time solid, and each whitewater population
+/// moved from its newest tick to the display time. The builder makes these
+/// on every rendered scene. Name and node type.
+#[cfg(any(test, feature = "gpu-proofs"))]
+const DISPLAY_NODES: [(&str, &str); 8] = [
+    ("particle_blend", "node.interpolate_particle_frames"),
+    ("solid_blend", "node.mix_arrays"),
+    ("particle_push_out", "node.push_out_of_solid"),
+    ("display_lattice_box", "node.transform_components"),
+    ("foam_blend", "node.interpolate_particle_frames"),
+    ("bubble_blend", "node.interpolate_particle_frames"),
+    ("spray_blend", "node.interpolate_particle_frames"),
+    ("dust_blend", "node.interpolate_particle_frames"),
+];
+
+/// The whitewater populations: the state's `{kind}_particles` reach
+/// `{kind}_copies` through `{kind}_blend`.
+#[cfg(any(test, feature = "gpu-proofs"))]
+pub(super) const WHITEWATER_KINDS: [&str; 4] = ["foam", "bubble", "spray", "dust"];
+
+/// `name`'s id in `def`.
+#[cfg(any(test, feature = "gpu-proofs"))]
+fn id_named(def: &Value, name: &str) -> u64 {
+    let nodes = def["nodes"].as_array().expect("nodes");
+    let node = nodes.iter().find(|n| n["nodeId"] == name).unwrap_or_else(|| panic!("no node {name}"));
+    node["id"].as_u64().expect("numeric id")
+}
+
+/// The id after every node of `def`.
+#[cfg(any(test, feature = "gpu-proofs"))]
+fn next_id(def: &Value) -> u64 {
+    def["nodes"].as_array().expect("nodes").iter().filter_map(|n| n["id"].as_u64()).max().expect("nodes") + 1
+}
+
+/// Wires `from` into `to`, replacing whatever fed that input.
+#[cfg(any(test, feature = "gpu-proofs"))]
+fn rewire(def: &mut Value, from: (u64, &str), to: (u64, &str)) {
+    let wires = def["wires"].as_array_mut().expect("wires");
+    wires.retain(|w| w["toNode"] != to.0 || w["toPort"] != to.1);
+    wires.push(json!({"fromNode": from.0, "fromPort": from.1, "toNode": to.0, "toPort": to.1}));
+}
+
+/// Adds [`DISPLAY_NODES`] at the next ids, all on default params, and wires
+/// them from the frame, the state and the domain into the whitewater copies.
+/// The liquid's consumer reads `particle_push_out.out` and `solid_blend.out`.
+#[cfg(any(test, feature = "gpu-proofs"))]
+fn add_display_presentation(def: &mut Value) {
+    let next = next_id(def);
+    for (offset, (name, type_id)) in (0..).zip(DISPLAY_NODES) {
+        def["nodes"].as_array_mut().expect("nodes").push(json!({"id": next + offset, "nodeId": name, "typeId": type_id}));
+    }
+    let [frame, state, domain, particles, solid, push_out, lattice_box] =
+        ["frame", "state", "domain", "particle_blend", "solid_blend", "particle_push_out", "display_lattice_box"]
+            .map(|name| id_named(def, name));
+    let mut feeds: Vec<(u64, String, u64, String)> = Vec::new();
+    let mut feed = |from: u64, output: &str, to: u64, input: &str| feeds.push((from, output.into(), to, input.into()));
+    for port in ["particles_a", "particles_b", "count_a", "count_b", "identity_a", "identity_b", "blend", "span"] {
+        feed(frame, port, particles, port);
+    }
+    feed(frame, "solid_a", solid, "a");
+    feed(frame, "solid_b", solid, "b");
+    feed(frame, "blend", solid, "amount");
+    feed(particles, "out", push_out, "particles");
+    feed(solid, "out", push_out, "solid");
+    // The push-out samples the solid on the frame's lattice, the native mesh
+    // lattice that frame.solid_a/b are sampled on.
+    feed(frame, "grid_bounds", lattice_box, "transform");
+    for axis in ["x", "y", "z"] {
+        feed(lattice_box, &format!("pos_{axis}"), push_out, &format!("center_{axis}"));
+        feed(lattice_box, &format!("scale_{axis}"), push_out, &format!("size_{axis}"));
+        feed(frame, &format!("grid_nodes_{axis}"), push_out, &format!("nodes_{axis}"));
+    }
+    for kind in WHITEWATER_KINDS {
+        let [blend, copies] = [format!("{kind}_blend"), format!("{kind}_copies")].map(|name| id_named(def, &name));
+        feed(state, &format!("{kind}_particles"), blend, "particles_b");
+        feed(frame, "blend", blend, "blend");
+        feed(frame, "span", blend, "span");
+        feed(blend, "out", copies, "particles");
+    }
+    // Spray flies free, so its move back to the display time follows gravity.
+    let spray = id_named(def, "spray_blend");
+    for (output, input) in [("gravity_x", "acceleration_x"), ("gravity", "acceleration_y"), ("gravity_z", "acceleration_z")] {
+        feed(domain, output, spray, input);
+    }
+    for (from, output, to, input) in feeds {
+        rewire(def, (from, &output), (to, &input));
+    }
 }
 
 /// The obstacle's render nodes, which `render_def` adds when the scene has
@@ -555,7 +683,7 @@ const OBSTACLE_SLOT: &str = "object_1";
 /// transform, in `WaterDamBreak.json`'s copper.
 #[cfg(any(test, feature = "gpu-proofs"))]
 fn add_obstacle_render(def: &mut Value, transform: u64, scene: u64) {
-    let next = def["nodes"].as_array().expect("nodes").iter().filter_map(|n| n["id"].as_u64()).max().expect("nodes") + 1;
+    let next = next_id(def);
     let [mesh, material, object] = [next, next + 1, next + 2];
     let material_params = json!({
         "color_r": float(0.52), "color_g": float(0.23), "color_b": float(0.073),
@@ -654,19 +782,14 @@ pub(crate) fn render_def(scene: WaterScene) -> EffectGraphDef {
     // The render's Whitewater group reads the face grid.
     let mut def = serde_json::to_value(water_def(scene.with_surface().with_faces())).expect("water def serialises");
     let preset = shipped_preset();
-    let id_of = |graph: &Value, name: &str| -> u64 {
-        let nodes = graph["nodes"].as_array().expect("nodes");
-        let node = nodes.iter().find(|n| n["nodeId"] == name).unwrap_or_else(|| panic!("no node {name}"));
-        node["id"].as_u64().expect("numeric id")
-    };
-    let harness = [id_of(&def, "mesh_sink"), id_of(&def, "output")];
+    let harness = [id_named(&def, "mesh_sink"), id_named(&def, "output")];
     let ends = |wire: &Value| [wire["fromNode"].as_u64().expect("from"), wire["toNode"].as_u64().expect("to")];
     def["nodes"].as_array_mut().expect("nodes").retain(|n| !harness.contains(&n["id"].as_u64().expect("id")));
     def["wires"].as_array_mut().expect("wires").retain(|w| ends(w).iter().all(|id| !harness.contains(id)));
-    let next = def["nodes"].as_array().expect("nodes").iter().filter_map(|n| n["id"].as_u64()).max().expect("nodes") + 1;
+    let next = next_id(&def);
     let name_of = |node: &Value| node["nodeId"].as_str().expect("node name").to_string();
     let preset_nodes = preset["nodes"].as_array().expect("preset nodes");
-    let render: Vec<&Value> = preset_nodes.iter().filter(|n| !built_by_water_def(&name_of(n))).collect();
+    let render: Vec<&Value> = preset_nodes.iter().filter(|n| !builder_made(&name_of(n))).collect();
     let first = render.iter().filter_map(|n| n["id"].as_u64()).min().expect("the preset has a render");
     // Render ids move up only when this scene's water outgrows the preset's.
     let shift = next.saturating_sub(first);
@@ -678,7 +801,7 @@ pub(crate) fn render_def(scene: WaterScene) -> EffectGraphDef {
     }
     let water_name: Vec<(u64, String)> = preset_nodes
         .iter()
-        .filter(|n| built_by_water_def(&name_of(n)))
+        .filter(|n| builder_made(&name_of(n)))
         .map(|n| (n["id"].as_u64().expect("preset id"), name_of(n)))
         .collect();
     'wires: for wire in preset["wires"].as_array().expect("preset wires") {
@@ -692,35 +815,140 @@ pub(crate) fn render_def(scene: WaterScene) -> EffectGraphDef {
                 id + shift
             } else {
                 let name = &water_name.iter().find(|(water, _)| *water == id).expect("a preset node").1;
-                // The obstacle's render wires are the builder's own, below.
-                if OBSTACLE_RENDER.contains(&name.as_str()) {
+                // The obstacle's render and the display presentation are
+                // wired by the builder, below.
+                if OBSTACLE_RENDER.contains(&name.as_str()) || DISPLAY_NODES.iter().any(|(display, _)| *display == name.as_str()) {
                     continue 'wires;
                 }
-                id_of(&def, name)
+                id_named(&def, name)
             });
         }
-        def["wires"].as_array_mut().expect("wires").push(wire);
+        // A render-stage presentation wire replaces the raw frame wire that
+        // water_def supplies to its surface test harness.
+        let wires = def["wires"].as_array_mut().expect("wires");
+        wires.retain(|old| old["toNode"] != wire["toNode"] || old["toPort"] != wire["toPort"]);
+        wires.push(wire);
     }
+    // Persistent render nodes, then the builder's display nodes, then the
+    // obstacle render: every regeneration assigns the same ids.
+    add_dust_render(&mut def);
+    add_display_presentation(&mut def);
+    let [surface, particles, solid] = ["surface", "particle_push_out", "solid_blend"].map(|name| id_named(&def, name));
+    rewire(&mut def, (particles, "out"), (surface, "particles"));
+    rewire(&mut def, (solid, "out"), (surface, "solid"));
     if scene.obstacle {
-        let transform = id_of(&def, "obstacle_transform");
-        let scene_node = id_of(&def, "scene");
+        let transform = id_named(&def, "obstacle_transform");
+        let scene_node = id_named(&def, "scene");
         add_obstacle_render(&mut def, transform, scene_node);
     }
     for key in ["name", "description"] {
         def[key] = preset[key].clone();
     }
-    let source = id_of(&def, "whitewater_obstacle_source");
-    let whitewater = id_of(&def, "whitewater");
-    let state = id_of(&def, "state");
+    let source = id_named(&def, "whitewater_obstacle_source");
+    let whitewater = id_named(&def, "whitewater");
+    let state = id_named(&def, "state");
+    let step = id_named(&def, STEP_NODE);
+    let domain = id_named(&def, "domain");
+    let nodes = def["nodes"].as_array().expect("nodes").clone();
     let wires = def["wires"].as_array_mut().expect("wires");
+    // Whitewater emits, ages and moves over the accepted interval.
+    feed_intervals(&nodes, wires, domain);
     // Regeneration is idempotent: the source and new capture may already be in the seed preset.
     wires.retain(|w| !(w["toNode"] == whitewater && w["toPort"] == "obstacle_source"
         || w["toNode"] == state && w["toPort"] == "dust_particles_in"));
     wires.push(json!({"fromNode":source, "fromPort":"solid", "toNode":whitewater, "toPort":"obstacle_source"}));
     wires.push(json!({"fromNode":whitewater, "fromPort":"dust_particles", "toNode":state, "toPort":"dust_particles_in"}));
-    add_dust_render(&mut def);
+    for (from, ports) in [
+        (step, &["substep_schedule", "substep_u", "substep_v", "substep_w", "substep_count"][..]),
+        (domain, &["forces", "impulses", "field_nodes_x", "field_nodes_y", "field_nodes_z", "field_spacing", "force_lattices", "impulse_tick", "first_tick", "regions", "region_count", "shapes", "atlas"][..]),
+    ] {
+        for port in ports {
+            wires.retain(|w| !(w["toNode"] == whitewater && w["toPort"] == *port));
+            wires.push(json!({"fromNode":from, "fromPort":port, "toNode":whitewater, "toPort":port}));
+        }
+    }
     def["presetMetadata"] = scene_cards(&preset["presetMetadata"], scene);
     serde_json::from_value(def).expect("render def")
+}
+
+/// The shipped Particle View, which [`particle_view_def`] builds from the
+/// shipped Dam Break (`gpu_flip_particle_view_is_built_from_the_dam_break`).
+#[cfg(test)]
+pub(crate) const PARTICLE_VIEW_PRESET: &str = "WaterDamBreakParticles";
+
+#[cfg(test)]
+const PARTICLE_VIEW_NAME: &str = "Water — Dam Break (Particle View)";
+
+#[cfg(test)]
+const PARTICLE_VIEW_DESCRIPTION: &str = "GPU FLIP dam break drawn as small sphere copies of the blended, solid-clamped liquid particles, with the same display-time whitewater as the surface preset.";
+
+/// The Platonic shape the Particle View draws each particle with, scaled by
+/// the particle's radius.
+#[cfg(test)]
+const ICOSAHEDRON: usize = 3;
+
+/// The Particle View: the shipped Dam Break's render, simulation, scene,
+/// whitewater and dust, with the Liquid Surface replaced by
+/// `particle_push_out`'s particles drawn as instanced spheres by the water
+/// object. Its cards are the Dam Break's, less those that only reached the
+/// surface.
+#[cfg(test)]
+pub(crate) fn particle_view_def() -> EffectGraphDef {
+    let mut def = serde_json::to_value(render_def(WaterScene::dam_break(64).with_faces())).expect("render def serialises");
+    let surface = id_named(&def, "surface");
+    def["nodes"].as_array_mut().expect("nodes").retain(|n| n["id"] != surface);
+    def["wires"].as_array_mut().expect("wires").retain(|w| w["fromNode"] != surface && w["toNode"] != surface);
+    let next = next_id(&def);
+    let (copies, sphere) = (next, next + 1);
+    let nodes = def["nodes"].as_array_mut().expect("nodes");
+    nodes.push(json!({"id": copies, "nodeId": "liquid_particle_copies", "typeId": "node.particles_to_copies"}));
+    nodes.push(json!({
+        "id": sphere, "nodeId": "liquid_particle_mesh", "typeId": "node.platonic_solid_mesh",
+        "params": {"radius": float(1.0), "shape": {"type": "Enum", "value": ICOSAHEDRON}},
+    }));
+    let [frame, particles, water] = ["frame", "particle_push_out", "water_object"].map(|name| id_named(&def, name));
+    for (from, to) in [
+        ((particles, "out"), (copies, "particles")),
+        ((frame, "count_b"), (copies, "live_count")),
+        ((copies, "copies"), (water, "instances")),
+        ((sphere, "vertices"), (water, "vertices")),
+        ((frame, "count_b"), (water, "instance_count")),
+    ] {
+        rewire(&mut def, from, to);
+    }
+    def["name"] = json!(PARTICLE_VIEW_NAME);
+    def["description"] = json!(PARTICLE_VIEW_DESCRIPTION);
+    def["presetMetadata"] = particle_view_cards(&def);
+    serde_json::from_value(def).expect("particle view def")
+}
+
+/// `def`'s cards under the Particle View's id, less every binding whose node
+/// is gone and every card left with none of the bindings it had.
+#[cfg(test)]
+fn particle_view_cards(def: &Value) -> Value {
+    fn names(nodes: &Value, into: &mut Vec<String>) {
+        for node in nodes.as_array().into_iter().flatten() {
+            into.extend(node["nodeId"].as_str().map(str::to_owned));
+            names(&node["group"]["nodes"], into);
+        }
+    }
+    let mut present = Vec::new();
+    names(&def["nodes"], &mut present);
+    let mut metadata = def["presetMetadata"].clone();
+    for (bindings, cards) in [("bindings", "params"), ("stringBindings", "stringParams")] {
+        let Some(list) = metadata[bindings].as_array_mut() else { continue };
+        let bound = |list: &[Value]| list.iter().filter_map(|b| b["id"].as_str().map(str::to_owned)).collect::<Vec<_>>();
+        let before = bound(list.as_slice());
+        list.retain(|b| b["target"]["kind"] != "node" || b["target"]["nodeId"].as_str().is_some_and(|node| present.iter().any(|name| name == node)));
+        let after = bound(list.as_slice());
+        if let Some(cards) = metadata[cards].as_array_mut() {
+            cards.retain(|card| card["id"].as_str().is_none_or(|id| !before.iter().any(|b| b == id) || after.iter().any(|a| a == id)));
+        }
+    }
+    metadata["id"] = json!(PARTICLE_VIEW_PRESET);
+    metadata["displayName"] = json!(PARTICLE_VIEW_NAME);
+    metadata["oscPrefix"] = json!(PARTICLE_VIEW_PRESET.to_lowercase());
+    metadata
 }
 
 /// Dust follows the same particle-frame render path as the other populations.
@@ -968,6 +1196,39 @@ pub(super) mod tests {
     /// (`gpu_flip_dam_break_past_the_count_rail_is_refused`).
     const LATTICES: [usize; 6] = [16, 32, 48, 64, 96, 128];
 
+    #[test]
+    fn gpu_flip_mesh_grid_uses_native_solid_coordinates() {
+        for resolution in [8, 32, 64] {
+            let scene = WaterScene::dam_break(resolution).with_surface();
+            let geometry = scene.geometry();
+            let outputs = geometry.outputs();
+            let read = |name: &str| outputs.iter().find(|(port, _)| *port == name).unwrap().1;
+            let surface = geometry.setup.lattice.surface();
+            let def = water_def(scene);
+            let id = |name: &str| def.nodes.iter().find(|n| n.node_id.as_str() == name).unwrap().id;
+            let domain = id("domain");
+            let solid = id("mesh_solid");
+            let frame = id("frame");
+            assert!(matches!(def.nodes.iter().find(|n| n.id == frame).unwrap().params.get("native_mesh_grid"),
+                Some(manifold_core::effect_graph_def::SerializedParamValue::Bool { value: true })));
+            for (d, axis) in ["x", "y", "z"].into_iter().enumerate() {
+                assert_eq!(read(&format!("mesh_nodes_{axis}")), (resolution + 4) as f32);
+                assert_eq!(read(&format!("mesh_min_{axis}")), surface.min()[d]);
+                for (source, target) in [(format!("mesh_min_{axis}"), format!("lattice_min_{axis}")),
+                                         (format!("mesh_nodes_{axis}"), format!("nodes_{axis}"))] {
+                    assert!(def.wires.iter().any(|w| w.from_node == domain && w.to_node == solid
+                        && w.from_port == source && w.to_port == target));
+                }
+            }
+            assert!(def.wires.iter().any(|w| w.from_node == solid && w.to_node == frame
+                && w.from_port == "solid" && w.to_port == "solid"));
+            // Frame's surface() uses the same source rule; the simulation
+            // lattice continues to carry its original cells and padding.
+            assert_eq!(geometry.setup.lattice.cells(), [resolution as u32; 3]);
+            assert_eq!(geometry.setup.lattice.nodes(), [resolution as u32 + 7; 3]);
+        }
+    }
+
     /// Every running scene at every lattice, and the probes' variants, before
     /// any GPU run of it: the tick region's steps, the stats, the frame and
     /// the surface. The solves run inside each step, so the tick has no
@@ -1020,7 +1281,7 @@ pub(super) mod tests {
         let body: Vec<String> = region.steps.iter().map(|&step| name(step)).collect();
         assert_eq!(body.iter().filter(|node| *node == STEP_NODE).count(), 1, "the tick runs one step node");
         assert!(body.iter().any(|node| node == "stats"), "the stats run every tick");
-        let outside = ["domain", "fill", "solid", "frame", "initial_column"];
+        let outside = ["domain", "fill", "solid", "mesh_solid", "frame", "initial_column"];
         assert!(!body.iter().any(|node| outside.contains(&node.as_str()) || node.starts_with("surface")), "{body:?}");
     }
 
@@ -1176,17 +1437,17 @@ pub(super) mod tests {
     /// never under the valid layers the frame publishes, which the
     /// conformance row's face grid scene holds.
     #[test]
-    fn gpu_flip_band_follows_the_cfl_guard() {
-        use super::super::gpu_flip_step::{band_layers, travel_cells};
+    fn gpu_flip_band_uses_engine_cfl_independent_of_travel() {
+        use super::super::gpu_flip_step::{ENGINE_CFL, band_layers, travel_cells};
         use crate::node_graph::liquid::conformance::FACE_GRID_GPU_FLIP_LAYERS;
         assert_eq!(FACE_GRID_GPU_FLIP_LAYERS, FACE_VALID_LAYERS);
         let at = |n: usize, steps: usize| {
             let s = WaterScene::dam_break(n).with_steps(steps);
             let travel = travel_cells(TOP_SPEED as f32, s.step_dt() as f32, s.cell_size() as f32);
-            (travel, band_layers(travel))
+            (travel, band_layers(ENGINE_CFL))
         };
         let bands = [at(64, 2), at(64, 1), at(128, 2), at(96, 2), at(16, 2)];
-        assert_eq!(bands, [(3, 9), (6, 14), (6, 14), (4, 10), (1, 5)]);
+        assert_eq!(bands, [(3, 12), (6, 12), (6, 12), (4, 12), (1, 12)]);
         assert!(bands.iter().all(|&(_, band)| band >= FACE_VALID_LAYERS));
     }
 
@@ -1250,6 +1511,67 @@ pub(super) mod tests {
         assert!(canonical(&shipped) == canonical(&built), "{SHIPPED_PRESET}.json differs from the builder's Dam Break; rerun with UPDATE_GPU_FLIP_PRESET=1");
     }
 
+    /// The shipped `WaterDamBreakParticles.json` is the builder's Particle
+    /// View of the shipped Dam Break, and its cards bind the graph it ships.
+    /// `UPDATE_GPU_FLIP_PRESET=1` rewrites it; regenerate the Dam Break
+    /// first, since this view is built from it.
+    #[test]
+    fn gpu_flip_particle_view_is_built_from_the_dam_break() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("assets/generator-presets/{PARTICLE_VIEW_PRESET}.json"));
+        let def = particle_view_def();
+        let built = serde_json::to_value(&def).expect("serialise");
+        if std::env::var("UPDATE_GPU_FLIP_PRESET").is_ok() {
+            let mut json = serde_json::to_string_pretty(&built).expect("serialise");
+            json.push('\n');
+            std::fs::write(&path, json).expect("write the Particle View");
+        }
+        let shipped: Value = serde_json::from_str(&std::fs::read_to_string(&path).expect("the Particle View reads")).expect("parses");
+        assert!(canonical(&shipped) == canonical(&built), "{PARTICLE_VIEW_PRESET}.json differs from the builder's Particle View; rerun with UPDATE_GPU_FLIP_PRESET=1");
+        let runtime = crate::preset_runtime::PresetRuntime::from_def(def, &PrimitiveRegistry::with_builtin(), None).expect("the Particle View builds");
+        let shadowed: Vec<_> = runtime.shadowed_def_params().collect();
+        assert!(shadowed.is_empty(), "the Particle View's cards overwrite def params: {shadowed:?}");
+    }
+
+    /// Every per-step duration input in every graph the builder ships is fed
+    /// by its domain's accepted interval. Left on its param, one holds 1/60 s
+    /// at every Sim Rate: at 30 Hz whitewater emits, ages and moves at half
+    /// rate, and export poses moving solids at the wrong time.
+    #[test]
+    fn gpu_flip_builder_graphs_feed_every_interval_input() {
+        let registry = PrimitiveRegistry::with_builtin();
+        for (type_id, port) in INTERVAL_DURATION_INPUTS {
+            let node = registry.construct(type_id).unwrap_or_else(|| panic!("{type_id} is not registered"));
+            assert!(node.inputs().iter().any(|input| input.name == port), "{type_id} has no {port} input");
+        }
+        let bundled = |name: &'static str| -> EffectGraphDef {
+            let json = bundled_preset_json(&PresetTypeId::new(name)).unwrap_or_else(|| panic!("{name} is bundled"));
+            serde_json::from_str(&json).expect("the preset parses")
+        };
+        for (name, def) in [
+            (SHIPPED_PRESET, bundled(SHIPPED_PRESET)),
+            (PARTICLE_VIEW_PRESET, bundled(PARTICLE_VIEW_PRESET)),
+            ("Add Fluid's liquid body", gpu_flip_liquid_body()),
+        ] {
+            let flat = manifold_core::flatten::flatten_groups(&def).expect("flattens");
+            let fed_by_domain = |node: u32, port: &str| {
+                let feeds: Vec<_> = flat.wires.iter().filter(|w| w.to_node == node && w.to_port == port).collect();
+                feeds.len() == 1
+                    && feeds[0].from_port == "interval_duration"
+                    && flat.nodes.iter().any(|n| n.id == feeds[0].from_node && manifold_core::liquid_domain::is_liquid_domain(&n.type_id))
+            };
+            let mut checked = 0;
+            for node in &flat.nodes {
+                for (type_id, port) in INTERVAL_DURATION_INPUTS {
+                    if node.type_id == type_id {
+                        assert!(fed_by_domain(node.id, port), "{name}: {}.{port} is not fed by its domain's interval_duration", node.node_id.as_str());
+                        checked += 1;
+                    }
+                }
+            }
+            assert!(checked > 0, "{name} has no interval inputs");
+        }
+    }
+
     /// BUG-215v: whitewater belongs to the liquid region, consumes the
     /// solver phi, and every persistent or rendered result closes through
     /// the boundary. This checks real preset compilation without a GPU.
@@ -1270,6 +1592,13 @@ pub(super) mod tests {
         let distance = def.wires.iter().find(|w| w.to_node == whitewater.0 && w.to_port == "distance").unwrap();
         assert_eq!(distance.from_port, "distance");
         assert!(def.nodes.iter().any(|n| n.id == distance.from_node && n.type_id == "node.gpu_flip_step"));
+        for port in ["substep_schedule", "substep_u", "substep_v", "substep_w", "substep_count"] {
+            assert!(wire(distance.from_node, port, whitewater.0, port), "missing accepted {port}");
+        }
+        for port in ["forces", "impulses", "field_nodes_x", "field_nodes_y", "field_nodes_z", "field_spacing", "force_lattices", "first_tick", "regions", "region_count", "shapes", "atlas"] {
+            let water=def.wires.iter().find(|w|w.to_node==distance.from_node && w.to_port==port).expect(port);
+            assert!(wire(water.from_node, &water.from_port, whitewater.0, port), "{port} must share the liquid source");
+        }
         for (output, capture, held) in [
             ("pool_out", "whitewater_pool_in", "whitewater_pool"),
             ("state_out", "whitewater_state_in", "whitewater_state"),

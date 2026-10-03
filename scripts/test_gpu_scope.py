@@ -18,6 +18,38 @@ def plan(paths, users=None, repo=None):
 
 
 class ScopeTests(unittest.TestCase):
+    def test_step_order_cpu_reference_selects_gpu_value_proofs(self):
+        path = P + "gpu_flip_extension_tests.rs"
+        result = plan([path], repo=self._repo_with(path))
+        self.assertIn("gpu_flip_step_order_", result.filters)
+        self.assertIn("gpu_flip_extend_faces_", result.filters)
+        self.assertFalse(result.unmapped)
+    def test_mesh_grid_sources_select_native_value_proofs(self):
+        for path in (R + "node_graph/liquid/lattice.rs", P + "liquid_frame.rs",
+                     P + "liquid_solid_distance.rs", P + "shaders/liquid_solid_distance_body.wgsl"):
+            result = plan([path], users=lambda _: [P + "liquid_solid_distance.rs"],
+                          repo=self._repo_with(path))
+            self.assertIn("fluid_mesh_grid_native_", result.filters)
+            self.assertIn("mesh_contact_oblique_wall_and_thin_plate_match_cpu_reference", result.filters)
+            self.assertFalse(result.unmapped)
+    def test_particle_publication_selects_identity_and_pass_one_proofs(self):
+        required = {"particle_publication_gpu_tests::",
+                    "particle_frame_blend_tests::gpu_tests::",
+                    "interpolate_particle_frames::gpu_tests::",
+                    "push_out_of_solid::gpu_tests::", "mix_arrays::gpu_tests::",
+                    "gpu_flip_inflow_emits_at_empty_sites_into_free_slots",
+                    "gpu_flip_narrow_band_publication_repeats_failed_ticks"}
+        for name in ("particle_identity.rs", "particle_publication.rs",
+                     "particle_publication_gpu_tests.rs", "liquid_frame.rs",
+                     "shaders/particle_identity.wgsl", "shaders/particle_publication.wgsl"):
+            with self.subTest(path=name):
+                source = P + name.rsplit("/", 1)[-1].replace(".wgsl", ".rs")
+                result = plan([P + name], users=lambda _: [source],
+                              repo=self._repo_with(P + name))
+                self.assertTrue(required <= result.filters)
+                self.assertFalse(result.unmapped)
+                self.assertFalse(result.broad)
+
     def test_live_clock_and_duration_atoms_select_value_proofs(self):
         for name in ("gpu_flip_clock.rs", "shaders/gpu_flip_clock.wgsl"):
             result = plan([P + name], users=lambda _: [P + "gpu_flip_clock.rs"],
@@ -180,6 +212,18 @@ class ScopeTests(unittest.TestCase):
                      P + "gpu_flip_step.rs", P + "gpu_flip_pressure.rs",
                      R + "node_graph/liquid/bodies.rs", R + "node_graph/liquid/coupling.rs"):
             self.assertIn("gpu_flip_", plan([path]).filters, path)
+
+    def test_gated_sort_scan_and_inverse_pull_the_inactive_slot_proof(self):
+        name = "gpu_flip_inactive_slots_match_the_ungated_step"
+        for path in (P + "sort_particles_into_cells.rs", P + "prefix_scan.rs"):
+            p = plan([path])
+            self.assertIn(name, p.filters, path)
+            self.assertNotIn("gpu_flip_", p.filters, path)
+        for path, user in ((P + "shaders/prefix_scan.wgsl", P + "prefix_scan.rs"),
+                           (P + "shaders/sort_particles_into_cells.wgsl", P + "sort_particles_into_cells.rs"),
+                           (P + "shaders/coarse_inverse.wgsl", P + "gpu_flip_pressure.rs")):
+            p = plan([path], users=lambda _, u=user: [u], repo=self._repo_with(path))
+            self.assertIn(name, p.filters, path)
 
     def test_mixed_diff_keeps_the_broad_row_whole(self):
         p = plan([R + "node_graph/liquid/clock.rs", P + "gpu_flip_step.rs"])

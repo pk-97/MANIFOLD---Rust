@@ -144,7 +144,7 @@ fn all_wgsl_shaders_validate() {
             None => source,
         };
         let source = if path.file_name().is_some_and(|name| {
-            ["gpu_flip_step.wgsl", "liquid_stats.wgsl", "liquid_frame.wgsl", "liquid_frame_faces.wgsl"]
+            ["gpu_flip_step.wgsl", "liquid_stats.wgsl", "particle_publication.wgsl", "liquid_frame_faces.wgsl"]
                 .iter().any(|shader| name == *shader)
         }) {
             manifold_renderer::node_graph::with_liquid_stats_layout(&source)

@@ -775,7 +775,7 @@ impl MatterDomain {
         self.setup = Some(setup);
         let frame = self.clock.advance(
             ctx.time.seconds.0,
-            crate::node_graph::physics::project_frame_interval(),
+            crate::node_graph::physics::simulation_interval(),
             speed,
             ctx.scalar_or_param("reset", 0.0),
             restart,
@@ -833,10 +833,10 @@ impl MatterDomain {
             None => None,
         };
         let nominal_substeps = substeps_per_tick(lattice.cell_size(), wave, v_est as f32, body_limit, None);
-        // A frame without ticks reports what one interval runs, so the
-        // substep count and unit hold steady between ticks.
+        // A frame without ticks reports what one Sim Rate interval runs, so
+        // the substep count and unit hold steady between ticks.
         let duration = if frame.ticks == 0 {
-            Some(crate::node_graph::physics::project_frame_interval())
+            Some(crate::node_graph::physics::simulation_interval())
                 .filter(|interval| interval.is_finite() && *interval > 0.0)
                 .unwrap_or(TICK)
         } else {
@@ -992,5 +992,35 @@ impl MatterDomain {
         let owner = LiquidRigidOwner::new(&observation.inputs, self.coupled.walls, self.coupled.colliders, self.coupled.epochs, self.coupled.owner.as_ref())?;
         self.coupled.owner = Some(owner);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod sim_rate_tests {
+    #[test]
+    fn sim_rate_matter_keeps_stability_subdivisions() {
+        use manifold_physics::{SimRate, clock::SimulationClock};
+        use crate::node_graph::matter::{substeps_for_interval, substep_duration};
+        for rate in SimRate::ALL {
+            let run = |offline| {
+                let mut clock = SimulationClock::default();
+                let mut result = Vec::new();
+                for frame in 0..=60 {
+                    let accepted = clock.advance(f64::from(frame) / 60.0, rate.interval(), 1.0, 0.0, false, offline);
+                    for ordinal in 0..u64::from(accepted.ticks) {
+                        let interval = accepted.interval(ordinal).unwrap().duration().0 as f32;
+                        let steps = substeps_for_interval(interval, 34);
+                        let dt = substep_duration(interval, steps);
+                        assert_eq!(steps, 34 * 60 / rate.hz());
+                        assert!((dt * steps as f32 - interval).abs() < 1e-7);
+                        result.push((steps, dt.to_bits()));
+                    }
+                }
+                result
+            };
+            let live = run(false);
+            assert_eq!(live.len(), rate.hz() as usize);
+            assert_eq!(live, run(true));
+        }
     }
 }

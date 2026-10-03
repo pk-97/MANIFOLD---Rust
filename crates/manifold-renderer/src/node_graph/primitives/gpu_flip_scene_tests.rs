@@ -57,9 +57,21 @@ pub(super) struct Run {
 
 impl Run {
     pub(super) fn new(scene: WaterScene) -> Self {
+        Self::posed(scene, &[])
+    }
+
+    /// `new` with each `(node, param, value)` set before the fill frame, so
+    /// the fill and the first tick share that pose. A body posed after the
+    /// fill crosses the whole move in its first tick, at the move's speed.
+    fn posed(scene: WaterScene, params: &[(&str, &str, f64)]) -> Self {
         let mut registry = PrimitiveRegistry::with_builtin();
         register_substep_test_nodes(&mut registry);
-        Self::with_graph(scene, water_def(scene).into_graph(&registry, &Default::default()).expect("water def builds"))
+        let mut graph = water_def(scene).into_graph(&registry, &Default::default()).expect("water def builds");
+        for &(node, name, value) in params {
+            let node = node_named(&graph, node);
+            graph.set_param(node, name, crate::node_graph::ParamValue::Float(value as f32)).expect(name);
+        }
+        Self::with_graph(scene, graph)
     }
 
     fn with_graph(scene: WaterScene, mut graph: Graph) -> Self {
@@ -1134,13 +1146,12 @@ fn gpu_flip_still_pool_keeps_its_meshed_volume() {
     assert!(drift < 5e-3, "a resting pool's meshed volume moved {:.3}%", 100.0 * drift);
 }
 
-/// A lid as wide as the tank pressed down into a 1 m pool at 1 m/s. No live
-/// particle ever leaves the box. Closed, the water under it is sealed off
-/// from air: every solve converges until the lid first kills water it has
-/// squeezed into itself, and from then on a solve may reach its cap, which
-/// the stats report while the tick runs on. The engine removes only
-/// particles still inside the solid after the push-out, so a slow lid crowds
-/// the sealed water rather than removing it, here as in the engine. With the
+/// A lid as wide as the tank pressed down into a 1 m pool at 1 m/s. It is
+/// posed before the fill, its bottom two cells under the surface, so the
+/// first tick moves it one frame's travel. No live particle ever leaves the
+/// box. Closed, the water under it is sealed off from air: every solve
+/// converges until the lid first kills water, and from then on a solve may
+/// reach its cap, which the stats report while the tick runs on. With the
 /// low-x face open the water escapes through it.
 #[test]
 fn gpu_flip_box_pressed_into_a_full_tank_converges_and_escapes_when_open() {
@@ -1150,8 +1161,8 @@ fn gpu_flip_box_pressed_into_a_full_tank_converges_and_escapes_when_open() {
     // Mass conservation: open, the water the lid displaces leaves through
     // the open face, so the mean outflow there is the lid area times its
     // speed over the open area. Sampled two to four cells in, the profile is
-    // not flat, so half of it is the floor. Sealed, the crowded water churns
-    // by the wall but has no net way out: under a quarter of the open flow.
+    // not flat, so half of it is the floor. Sealed, the water has no way
+    // out, so by the wall it moves at under a quarter of the open flow.
     assert!(open.0 > 0.5 * open.1, "open: the pressed water leaves at {:.3} m/s, under half the displacement rate {:.3}", open.0, open.1);
     assert!(closed.0.abs() < 0.25 * open.0, "sealed: the water by the wall moves out at {:.3} m/s against {:.3} open", closed.0, open.0);
 }
@@ -1167,15 +1178,13 @@ fn lid_pressed_into_pool(mask: u32) -> (f64, f64, f64) {
     let scene = WaterScene::still_pool(64).with_obstacle().with_closed_faces(mask);
     let h = scene.cell_size();
     let side = scene.size;
-    let mut run = Run::new(scene);
-    let transform = node_named(&run.graph, "obstacle_transform");
-    // Overlapping the walls by a cell, so no gap runs between lid and wall.
-    let width = side + 2.0 * h;
-    for (name, value) in [("pos_x", 0.0), ("pos_z", 0.0), ("scale_x", width), ("scale_y", LID_THICKNESS), ("scale_z", width)] {
-        run.graph.set_param(transform, name, crate::node_graph::ParamValue::Float(value as f32)).expect(name);
-    }
     let surface = 1.0;
     let start = surface + 0.5 * LID_THICKNESS - 2.0 * h;
+    // Overlapping the walls by a cell, so no gap runs between lid and wall.
+    let width = side + 2.0 * h;
+    let lid = [("pos_x", 0.0), ("pos_y", start), ("pos_z", 0.0), ("scale_x", width), ("scale_y", LID_THICKNESS), ("scale_z", width)];
+    let mut run = Run::posed(scene, &lid.map(|(name, value)| ("obstacle_transform", name, value)));
+    let transform = node_named(&run.graph, "obstacle_transform");
     let low_x = -0.5 * side;
     let mut outward = Vec::new();
     let mut drive = 0.0;

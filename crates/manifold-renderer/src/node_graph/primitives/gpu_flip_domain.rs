@@ -3,7 +3,8 @@
 //! it speaks `node.fluid_surface`'s scene contract (names, types, meanings)
 //! and turns it into the fixed-tick clock, the fill's sites, gravity, the
 //! Collider roles as body rows, shapes and a distance atlas, and the padded
-//! lattice the solid distance and the particle frame read. Scene
+//! simulation lattice. Separate mesh_min/mesh_nodes outputs carry the native
+//! surface grid for solid sampling; the particle frame derives the same grid. Scene
 //! forces and impulses reach the water through the shared field lattices of
 //! `liquid::fields` (seam P8), sampled over the face grid's box. Paired with
 //! a physics world, the scene's Box3D bodies join the water two ways
@@ -66,9 +67,10 @@ pub(crate) struct GpuFlipGeometry {
 
 impl GpuFlipGeometry {
     /// The scalar outputs fixed by the setup, by name.
-    pub(crate) fn outputs(&self) -> [(&'static str, f32); 16] {
+    pub(crate) fn outputs(&self) -> [(&'static str, f32); 22] {
         let GpuFlipSetup { lattice, pool_sites, box_sites, particle_capacity } = self.setup;
         let h = self.layout.cell_size;
+        let surface = lattice.surface();
         [
             ("lattice_min_x", lattice.min()[0]),
             ("lattice_min_y", lattice.min()[1]),
@@ -86,6 +88,12 @@ impl GpuFlipGeometry {
             ("box_z1", box_sites[2][1] as f32),
             ("particle_mass", (f64::from(WATER_DENSITY) * h * h * h / f64::from(SITES_PER_CELL)) as f32),
             ("particle_capacity", particle_capacity as f32),
+            ("mesh_min_x", surface.min()[0]),
+            ("mesh_min_y", surface.min()[1]),
+            ("mesh_min_z", surface.min()[2]),
+            ("mesh_nodes_x", surface.nodes()[0] as f32),
+            ("mesh_nodes_y", surface.nodes()[1] as f32),
+            ("mesh_nodes_z", surface.nodes()[2] as f32),
         ]
     }
 }
@@ -173,7 +181,7 @@ impl GpuFlipGeometry {
 }
 
 /// Every scalar output, in the order [`GpuFlipDomain::compute`] fills them.
-const OUTPUTS: [&str; 42] = [
+const OUTPUTS: [&str; 49] = [
     "lattice_min_x", "lattice_min_y", "lattice_min_z", "cell_size", "nodes_x", "nodes_y", "nodes_z",
     "closed_faces", "pool_sites", "box_x0", "box_x1", "box_y0", "box_y1", "box_z0", "box_z1",
     "particle_mass", "gravity_x", "gravity", "gravity_z", "ticks", "epoch", "simulation_time",
@@ -181,9 +189,10 @@ const OUTPUTS: [&str; 42] = [
     "field_nodes_y", "field_nodes_z", "field_spacing", "force_lattices", "impulse_tick", "dynamic_bodies",
     "particle_capacity", "region_count", "solve_level",
     "interval_duration",
+    "limit_interval",
     "clock_obstacle_count",
     "clock_source_count",
-    "live_hit_count"];
+    "live_hit_count", "mesh_min_x", "mesh_min_y", "mesh_min_z", "mesh_nodes_x", "mesh_nodes_y", "mesh_nodes_z"];
 const TICKS: usize = 19;
 const IMPULSE_TICK: usize = 33;
 const _: () = assert!(matches!(OUTPUTS[TICKS].as_bytes(), b"ticks"));
@@ -328,6 +337,8 @@ crate::primitive! {
     },
     outputs: {
         lattice_min_x: ScalarF32, lattice_min_y: ScalarF32, lattice_min_z: ScalarF32,
+        mesh_min_x: ScalarF32, mesh_min_y: ScalarF32, mesh_min_z: ScalarF32,
+        mesh_nodes_x: ScalarF32, mesh_nodes_y: ScalarF32, mesh_nodes_z: ScalarF32,
         cell_size: ScalarF32,
         nodes_x: ScalarF32, nodes_y: ScalarF32, nodes_z: ScalarF32,
         closed_faces: ScalarF32,
@@ -341,6 +352,7 @@ crate::primitive! {
         epoch: ScalarF32,
         simulation_time: ScalarF32,
     interval_duration: ScalarF32,
+    limit_interval: ScalarF32,
     clock_obstacle_count: ScalarF32, clock_source_count: ScalarF32,
     clock_obstacles: Array(f32), clock_sources: Array(f32),
     live_hits: Array(f32), live_hit_count: ScalarF32,
@@ -718,7 +730,7 @@ impl GpuFlipDomain {
         self.setup = Some(geometry.setup);
         let frame = self.clock.advance(
             ctx.time.seconds.0,
-            crate::node_graph::physics::project_frame_interval(),
+            crate::node_graph::physics::simulation_interval(),
             speed,
             ctx.scalar_or_param("reset", 0.0),
             restart,
@@ -795,6 +807,11 @@ impl GpuFlipDomain {
             ("epoch", frame.epoch as f32),
             ("simulation_time", frame.simulation_time as f32),
             ("interval_duration", frame.duration().0 as f32),
+            // Export steps each interval, so its limit measures the step (0).
+            (
+                "limit_interval",
+                if frame.offline { 0.0 } else { self.clock.interval_simulated_duration() as f32 },
+            ),
             (
                 "clock_obstacle_count",
                 self.bodies.clock_obstacles().len() as f32,

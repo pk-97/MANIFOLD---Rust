@@ -1136,6 +1136,24 @@ impl Command for ChangeRtQualityCommand {
     }
 }
 
+/// One project-wide simulation cadence, undoable on the content thread.
+#[derive(Debug)]
+pub struct ChangeSimRateCommand {
+    old_rate: manifold_core::settings::SimRate,
+    new_rate: manifold_core::settings::SimRate,
+}
+impl ChangeSimRateCommand {
+    pub fn new(old_rate: manifold_core::settings::SimRate, new_rate: manifold_core::settings::SimRate) -> Self {
+        Self { old_rate, new_rate }
+    }
+}
+impl Command for ChangeSimRateCommand {
+    fn execute(&mut self, project: &mut Project) { project.settings.physics.sim_rate = self.new_rate; }
+    fn undo(&mut self, project: &mut Project) { project.settings.physics.sim_rate = self.old_rate; }
+    fn description(&self) -> &str { "Change Sim Rate" }
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1388,5 +1406,25 @@ mod tests {
             .gen_params()
             .expect("paste must create gen_params on an empty Generator layer");
         assert_eq!(gp.generator_type(), &TEST_PASTE_GEN_B);
+    }
+}
+
+#[cfg(test)]
+mod sim_rate_tests {
+    use super::*;
+    #[test]
+    fn sim_rate_edit_undo_redo() {
+        use manifold_core::settings::SimRate;
+        let mut project = Project::default();
+        let mut editing = crate::service::EditingService::new();
+        for rate in SimRate::ALL {
+            editing.execute(Box::new(ChangeSimRateCommand::new(SimRate::Hz30, rate)), &mut project);
+            assert_eq!(project.settings.physics.sim_rate, rate);
+            assert!(editing.undo(&mut project));
+            assert_eq!(project.settings.physics.sim_rate, SimRate::Hz30);
+            assert!(editing.redo(&mut project));
+            assert_eq!(project.settings.physics.sim_rate, rate);
+            assert!(editing.undo(&mut project));
+        }
     }
 }
