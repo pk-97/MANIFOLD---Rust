@@ -2,7 +2,7 @@
 
 <!-- index: Moves FLIP surface reconstruction to GPU atoms (anisotropic level set + marching cubes) and interpolates a slower solver tick to 60 fps through a producer-agnostic particle-frame seam. -->
 
-**Status:** BUILDING · P3 pass 2 implemented; owed: GPU/visual proofs, optional-A fusion and Sim Rate; see [BUG-upao](#bug-upao--pass-2-and-sim-rate-2026-10-03).
+**Status:** BUILDING · P3 pass 2 and Sim Rate implemented; owed: device/visual proofs and optional-A fusion; see [BUG-upao](#bug-upao--pass-2-and-sim-rate-2026-10-03).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 **Superseded in part (2026-09-29):** live water is GPU MLS-MPM per [GPU_MPM_SOLVER_DESIGN.md](GPU_MPM_SOLVER_DESIGN.md); D1's live-FLIP clause, D3, D9 and P4 no longer apply to live. The seam, atoms and interpolation stand.
 
@@ -796,7 +796,7 @@ is the orchestrating session's.
 
 ### P3 — Interpolation atoms and the particle view (first pixels)
 
-**BUILDING — pass 2 implemented (2026-10-03); owed: optional-A fusion, device/visual proofs and Sim Rate; see [BUG-upao](#bug-upao--pass-2-and-sim-rate-2026-10-03).**
+**BUILDING — pass 2 and Sim Rate implemented (2026-10-03); owed: optional-A fusion and device/visual proofs; see [BUG-upao](#bug-upao--pass-2-and-sim-rate-2026-10-03).**
 
 - **Entry state:** P2 merged; `rg -n 'particles_a' crates/manifold-renderer/src/node_graph/primitives/fluid_surface.rs` shows the ports.
 - **Read-back:** D8, D11; sections 4 and 4.1; ADDING_PRIMITIVES.md whole.
@@ -820,7 +820,7 @@ exact-f32 identity epoch requests a full restart through the existing domain clo
 owner, including coupled rigid state. The landed clock ports are `epoch`,
 `simulation_time`, `display_time`, and `interval_duration` (`tick_interval` below).
 Display time reaches `FrameRing::blend` unchanged. Optional-A whitewater fusion
-remains blocked on BUG-adcx. Sim Rate remains a separate job.
+remains blocked on BUG-adcx. Sim Rate is built (below).
 
 **Pass 2 consumes these clock outputs only.** These are required seam names/units,
 not claims about the changing branch's private API; bind them at the landed boundary:
@@ -855,15 +855,15 @@ rates, skipped ticks, pause, restart and growth. Extent tests cover both presets
 A/B counts, solid storage and unequal mix buffers. Preserve B-only capacity and the
 interpolation/projection fusion proof; resolve BUG-adcx before claiming full fusion.
 
-**Sim Rate follows BUG-7qzk:** one authored `simRate` enum at the landed shared clock
-owner, choices 15/20/30/60 Hz, missing/default value 30 Hz. Reuse parameter UI and
-undoable content commands; live/export read the same serialized value. A rate edit
-starts a clock epoch and collapses the accepted pair once. Tooltip: “Simulation
+**Sim Rate (built on the BUG-7qzk (live sim clock) owner):** one authored value,
+`ProjectSettings.physics.simRate`, choices 15/20/30/60 Hz. New projects start at
+30 Hz; a saved project without the value loads at 60 Hz, its old behaviour. Water
+uses its project's rate. The project settings slider edits it through the undoable
+`ChangeSimRateCommand`; live and export read the same value and step on the same
+boundary grid (LIVE_SIM_CLOCK_DESIGN.md D7 (Shared Sim Rate)). A rate edit restarts
+the simulation domains, so the blend pair collapses once. Tooltip: “Simulation
 updates per second. Hits land up to one update late; kicks are read at this rate.”
-Acceptance: four-rate serialization and undo/redo, trigger sampling at the chosen
-rate, speed applied once, and equal live/export values for equal clock inputs.
-No Sim Rate implementation or second clock in this patch. This note supersedes the
-historical P4 proposal below for BUG-upao only.
+This note supersedes the historical P4 proposal below for BUG-upao only.
 
 ### P4 — Solver rate (historical seam brief)
 
