@@ -4,7 +4,7 @@ MANIFOLD includes code derived from the projects below. Each derived file carrie
 
 ## FLIP Fluids
 
-Source: FLIP Fluids by Ryan L. Guy & Dennis Fassbaender, MIT license. Vendored unchanged at `crates/manifold-fluids/native/flip_engine/` (license copy: `crates/manifold-fluids/native/LICENSE_MIT.md`).
+Source: FLIP Fluids by Ryan L. Guy & Dennis Fassbaender, MIT license. Vendored at `crates/manifold-fluids/native/flip_engine/`, with MANIFOLD integration changes (license copy: `crates/manifold-fluids/native/LICENSE_MIT.md`).
 
 Modules ported from it (all under `crates/manifold-renderer/src/node_graph/primitives/`; each `.rs` has a matching `shaders/<name>_body.wgsl` where one exists):
 

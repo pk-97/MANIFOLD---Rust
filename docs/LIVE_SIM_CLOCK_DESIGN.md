@@ -88,7 +88,7 @@ Live integration chooses the earliest CFL, event or interval endpoint, advances 
 
 Each segment carries step_dt, elapsed pose offset and event metadata. Density rate stays 1/step_dt; pressure coupling retains scaled impulse units. Gravity, forces, body/source motion and RK3 use the same duration. Splitting never reapplies an impulse. Current step_in_tick==0 reset/seed logic must distinguish interval-start from event-start. Adaptive counts beyond 64 need non-aliasing seed progression.
 
-Whitewater rates/spawn travel consume durations; lifecycle ages/advects/preserves over accepted time against the corresponding liquid state. Live time/event equality does not imply equal particle counts or trajectories across fps. PIC/FLIP blend, bubble drag, foam preservation and pressure tolerances need small CPU value proofs; dt plumbing alone is not a fluid-quality proof.
+Whitewater rates/spawn travel consume durations, including the BUG-imy3.1 turbulence and dust counts, dust spawn travel, and influence decay/spread supplied with `StepFrame.dt`; lifecycle ages/advects/preserves over accepted time against the corresponding liquid state. Live time/event equality does not imply equal particle counts or trajectories across fps. PIC/FLIP blend, bubble drag, foam preservation and pressure tolerances need small CPU value proofs; dt plumbing alone is not a fluid-quality proof.
 
 Box3D already accepts longer steps. For segment duration d, use `subStepCount=max(4,ceil(4*d/TICK))`, keeping internal resolution at most TICK/4. Retain animation/collision microstep boundaries, split at hits before PhysicsWorld::step, integrate the reaction over the same interval and apply it once. Both solvers must accept the endpoint before publication. No second fixed accumulator for the coupled pair.
 
@@ -163,7 +163,7 @@ Port the internal FLIP Fluids `nextUpdateTimeStep` rule exactly: when `_currentF
 
 The unreviewed checkpoint `f2f561574` was incomplete: its scheduler was test-only, LiquidClock still dropped time, coupled Box3D retained fixed-tick debt, and cap telemetry had no runtime producer. The slot-1 follow-up at base `320a29848` replaces those paths. GPU proof execution remains a lead obligation; a compile is not behavioral evidence.
 
-Production changes use the shared physics clock, accepted native CPU/Box3D intervals, GPU current-state scheduling, timestamped impulse lattices, actual body sample durations, and retired completion/status readbacks. Existing graphs receive explicit duration/status wires during graph installation. Retired fixed-export branches are removed from the clock and GPU scheduler. No project-format fields, locks or channels were added.
+Production changes use the shared physics clock, accepted native CPU/Box3D intervals, GPU current-state scheduling, timestamped impulse lattices, actual body sample durations, and retired completion/status readbacks. Existing graphs receive explicit duration/status wires during graph installation, including accepted-duration pose sampling for the whitewater obstacle-source grid. Retired fixed-export branches are removed from the clock and GPU scheduler. No project-format fields, locks or channels were added.
 
 P4 uses the shared `perf_metrics_from_content_state` builder for main and editor HUDs. The CPU flow test starts from `ContentState`, updates both UI roots, and checks play/pause, lag, cap and nonfinite flags. It does not claim an observed Metal-backed editor render.
 

@@ -3,6 +3,35 @@
 
 use super::whitewater_particle_cpu::{Box3, face_index};
 
+/// FLIP's influence-scaled rate over one duration, rounded before tick replication.
+pub(super) fn emission_count(
+    energy: f32,
+    potentials: [f32; 2],
+    rates: [f32; 2],
+    influence: f32,
+    points_per_cell: f32,
+    ticks: f32,
+    dt: f32,
+) -> u32 {
+    let per_tick = influence * energy
+        * (rates[0] * potentials[0] + rates[1] * potentials[1])
+        * dt * 8.0 / points_per_cell;
+    if per_tick > 0.0 {
+        (per_tick + 0.5).floor() as u32 * ticks.round().max(0.0) as u32
+    } else {
+        0
+    }
+}
+
+#[test]
+fn turbulence_emission_count_uses_duration_and_rounds_each_tick() {
+    // Engine _getNumberOfEmissionParticles: round(175 * dt) at full potential.
+    assert_eq!(emission_count(1.0, [0.0, 1.0], [175.0; 2], 1.0, 8.0, 1.0, 1.0 / 60.0), 3);
+    assert_eq!(emission_count(1.0, [0.0, 1.0], [175.0; 2], 1.0, 8.0, 1.0, 1.0 / 30.0), 6);
+    // Rounding after multiplying the duration by three would give 17.
+    assert_eq!(emission_count(1.0, [0.0, 1.0], [175.0; 2], 1.0, 8.0, 3.0, 1.0 / 30.0), 18);
+}
+
 #[test]
 fn whitewater_new_emitter_atoms_generate_valid_wgsl() {
     fn check<P: crate::node_graph::primitive::Primitive>() {
@@ -210,11 +239,12 @@ fn whitewater_inside_emission_counts_match_vendored_engine() {
     let phi = vec![-5.0; n * n * n];
     let solid = vec![10.0; (n + 1).pow(3)];
     let markers = vec![[8.0; 3]; 32];
-    for (rate, influence, generation) in [
-        (175.0, 1.0, 1.0),
-        (60.0, 1.0, 1.0),
-        (175.0, 0.5, 1.0),
-        (175.0, 1.0, 0.0),
+    for (rate, influence, generation, dt) in [
+        (175.0, 1.0, 1.0, 1.0 / 60.0),
+        (175.0, 1.0, 1.0, 1.0 / 30.0),
+        (60.0, 1.0, 1.0, 1.0 / 60.0),
+        (175.0, 0.5, 1.0, 1.0 / 60.0),
+        (175.0, 1.0, 0.0, 1.0 / 60.0),
     ] {
         let mut engine = WhitewaterLifecycle::new(
             WhitewaterGrid {
@@ -247,7 +277,7 @@ fn whitewater_inside_emission_counts_match_vendored_engine() {
             &mut engine,
             &vec![0.0; phi.len()],
             &markers,
-            1.0 / 60.0,
+            dt,
             EmissionOptions {
                 turbulence: rate,
                 influence,
@@ -261,12 +291,12 @@ fn whitewater_inside_emission_counts_match_vendored_engine() {
         let expected = if generation == 0.0 {
             0
         } else {
-            (rate * influence / 60.0 + 0.5).floor() as usize * markers.len()
+            emission_count(1.0, [0.0, 1.0], [0.0, rate as f32], influence as f32, 8.0, 1.0, dt as f32) as usize * markers.len()
         };
         assert_eq!(
             particles.len(),
             expected,
-            "rate {rate}, influence {influence}, coin {generation}"
+            "rate {rate}, influence {influence}, coin {generation}, duration {dt}"
         );
         assert!(
             particles

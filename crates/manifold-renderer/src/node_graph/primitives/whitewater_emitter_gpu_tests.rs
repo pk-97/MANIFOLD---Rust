@@ -252,7 +252,9 @@ fn whitewater_inside_dust_counts_and_fusion() {
         ],
         729,
     );
+    let dt = 1.0 / 30.0;
     let v = values(&[
+        ("dt", dt),
         ("dust_enabled", 1.0),
         ("generation_rate", 0.6),
         ("seed", 7.0),
@@ -304,7 +306,9 @@ fn whitewater_inside_dust_counts_and_fusion() {
                 if cpu::random(i, 7.0f32.to_bits(), 0, 10) >= 0.6 {
                     0
                 } else {
-                    (2.0 * 175.0 * potential[i as usize] / 60.0 + 0.5).floor() as u32
+                    super::whitewater_emitter_cpu::emission_count(
+                        1.0, [0.0, potential[i as usize]], [175.0; 2], 2.0, 8.0, 1.0, dt,
+                    )
                 }
             })
             .collect();
@@ -752,7 +756,7 @@ fn whitewater_dust_lifecycle_values_and_fusion() {
     let input = h.array(&particles, 32);
     let f = faces.each_ref().map(|f| h.array(f, 576));
     let s = h.array(&solid, 729);
-    let v = values(&[]);
+    let v = values(&[("dt", 1.0 / 60.0)]);
     let p = params(&v);
     let got: Vec<WhitewaterParticle> = run(
         &mut h,
@@ -903,6 +907,7 @@ fn whitewater_dust_step_publishes_a_distinct_population() {
             shape,
             count: Some(32),
             ticks: 1,
+            dt: 1.0 / 60.0,
             epoch: 0,
             seed: 0.0,
             gravity: [0.0, -9.81, 0.0],

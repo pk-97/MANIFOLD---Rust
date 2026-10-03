@@ -1049,7 +1049,7 @@ impl Step {
             );
         }
         atom::<WhitewaterInfluence>(enc, get(&p.influence),
-            &[("base_level", frame.influence_base), ("decay_rate", frame.influence_decay), ("dt", TICK as f32),
+            &[("base_level", frame.influence_base), ("decay_rate", frame.influence_decay), ("dt", frame.dt),
               ("cell_size", s.cell_size), ("reset", f32::from(u8::from(reset_influence))),
               ("source_present", f32::from(u8::from(inputs.obstacle_source.is_some())))],
             &[&f.influence[0], inputs.solid, inputs.obstacle_source.unwrap_or(&f.empty_source), &f.influence[1]],
@@ -1135,9 +1135,10 @@ impl Step {
         turbulence_params[11] = ("inside_enabled", f32::from(u8::from(frame.inside_emission)));
         atom::<InsideTurbulencePotential>(enc, get(&p.inside), &turbulence_params,
             &[sampled, &f.distance, &f.turbulence, &f.cells, inside], emitters, "node.whitewater_step.inside");
-        let mut count_params = [("", 0.0); 17];
+        let mut count_params = [("", 0.0); 18];
         count_params[..8].copy_from_slice(&[("rate", frame.wavecrest_emission), ("turbulence_rate", frame.turbulence_emission), ("generation_rate", frame.generation_rate), ("seed", frame.seed), ("epoch", epoch), ("points_per_cell", 8.0), ("ticks", frame.ticks as f32), ("live_count", emitters as f32)]);
-        count_params[8..].copy_from_slice(&grid);
+        count_params[8..17].copy_from_slice(&grid);
+        count_params[17] = ("dt", frame.dt);
         atom::<TurbulenceEmissionCount>(
             enc,
             get(&p.emission),
@@ -1190,7 +1191,7 @@ impl Step {
                 &[unscaled, energy, wavecrest, inside, &f.influence[1], offsets], emitters, "node.whitewater_step.dust_count");
             self.emission_scan.encode_labelled(enc, emitters.max(1) as usize, EMISSION_SCAN);
             spawn[14] = ("seed", frame.seed + 104729.0);
-            atom::<SpawnWhitewater>(enc, get(&p.spawn), &spawn[..16],
+            atom::<SpawnWhitewater>(enc, get(&p.spawn), &spawn[..17],
                 &[offsets, unscaled, energy, inputs.faces[0], inputs.faces[1], inputs.faces[2], inputs.solid, &f.spawns],
                 s.capacity, "node.whitewater_step.dust_spawn");
             let mut dust_type = [("", 0.0); 10];

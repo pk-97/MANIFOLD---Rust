@@ -721,7 +721,7 @@ fn wire_liquid_intervals(def: &mut EffectGraphDef) -> bool {
             "node.gpu_flip_step" => &[("interval_duration", "interval_duration"), ("clock_obstacles", "clock_obstacles"), ("clock_sources", "clock_sources"), ("clock_obstacle_count", "clock_obstacle_count"), ("clock_source_count", "clock_source_count"), ("live_hits", "live_hits"), ("live_hit_count", "live_hit_count")],
             "node.matter_state" => &[("interval_duration", "interval_duration"), ("target_time", "target_time"), ("simulation_time", "simulation_time"), ("step_cap_hit", "step_cap_hit")],
             "node.whitewater_step" => &[("interval_duration", "dt")],
-            "node.liquid_solid_distance" => &[("interval_duration", "tick_seconds")],
+            "node.liquid_solid_distance" | "node.whitewater_obstacle_source" => &[("interval_duration", "tick_seconds")],
             _ => &[],
         };
         let source = def.wires.iter().filter(|wire| wire.to_node == node.id)
@@ -2044,6 +2044,27 @@ mod tests {
         assert_eq!(def.wires.iter().filter(|w| w.to_node == 4 && w.to_port == "dt").count(), 1);
         assert!(def.wires.contains(&wire(5, "out", 4, "dt")));
         assert!(!wire_liquid_intervals(&mut def));
+    }
+
+    #[test]
+    fn whitewater_obstacle_source_uses_accepted_duration_without_overwriting_wires() {
+        use manifold_core::effect_graph_def::EffectGraphWire;
+        let wire = |from, output: &str, to, input: &str| EffectGraphWire {
+            from_node: from, from_port: output.into(), to_node: to, to_port: input.into(),
+        };
+        for domain in ["node.gpu_flip_domain", "node.matter_domain"] {
+            let mut def = EffectGraphDef {
+                version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
+                name: None, description: None, preset_metadata: None, scene_modifiers: Vec::new(),
+                nodes: vec![bare_node(1, domain), bare_node(2, "node.whitewater_obstacle_source"), bare_node(3, "node.whitewater_obstacle_source"), bare_node(4, "node.scalar")],
+                wires: vec![wire(1, "bodies", 2, "bodies"), wire(1, "bodies", 3, "bodies"), wire(4, "out", 3, "tick_seconds")],
+            };
+            assert!(wire_liquid_intervals(&mut def));
+            assert!(def.wires.contains(&wire(1, "interval_duration", 2, "tick_seconds")));
+            assert!(def.wires.contains(&wire(4, "out", 3, "tick_seconds")));
+            assert_eq!(def.wires.iter().filter(|w| w.to_node == 3 && w.to_port == "tick_seconds").count(), 1);
+            assert!(!wire_liquid_intervals(&mut def));
+        }
     }
 
     #[test]

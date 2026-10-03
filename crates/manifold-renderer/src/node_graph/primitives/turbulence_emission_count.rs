@@ -19,7 +19,7 @@ pub(crate) const WAVECREST_RATE: f32 = 175.0;
 crate::primitive! {
     name: TurbulenceEmissionCount,
     type_id: "node.turbulence_emission_count",
-    purpose: "FLIP normal whitewater count per particle: round energy times (wavecrest rate times wavecrest potential plus turbulence rate times turbulence potential) times 1/60 times 8/points per cell, then multiply by ticks. Reject empty slots, low energy and speed below 1 mm/s.",
+    purpose: "FLIP normal whitewater count per particle: round energy times (wavecrest rate times wavecrest potential plus turbulence rate times turbulence potential) times Duration times 8/points per cell, then multiply by ticks. Reject empty slots, low energy and speed below 1 mm/s.",
     inputs: {
         particles: Array(FluidParticle) required,
         energy: Array(f32) required,
@@ -35,6 +35,7 @@ crate::primitive! {
         points_per_cell: ScalarF32 optional,
         ticks: ScalarF32 optional,
         live_count: ScalarF32 optional,
+        dt: ScalarF32 optional,
     },
     outputs: {
         out: Array(u32),
@@ -48,6 +49,7 @@ crate::primitive! {
         float_param!("points_per_cell", "Points per Cell", 8.0, 0.001, 1.0e3),
         float_param!("ticks", "Ticks", 1.0, 0.0, 1.0e3),
         float_param!("live_count", "Live Count", 1.0e9, 0.0, 1.0e9),
+        float_param!("dt", "Duration (s)", 1.0 / 60.0, 0.0, 1.0e3),
         float_param!("center_x", "Grid Center X", 0.0, -1.0e4, 1.0e4),
         float_param!("center_y", "Grid Center Y", 0.0, -1.0e4, 1.0e4),
         float_param!("center_z", "Grid Center Z", 0.0, -1.0e4, 1.0e4),
