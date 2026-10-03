@@ -248,6 +248,7 @@ pub trait PrimitiveSpec: Send {
     /// element. It is defined by the primitive's WGSL includes and returns
     /// `0xffffffffu` for an inactive dispatch item.
     const BUFFER_INDEX: Option<&'static str> = None;
+    const DENSE_BUFFER_FUSION: Option<crate::node_graph::effect_node::DenseBufferFusion> = None;
 
     /// How this primitive propagates the depth companion channel the "3D
     /// Shading" toggle synthesizes (design doc `docs/DEPTH_RELIGHT_DESIGN.md`
@@ -1165,6 +1166,9 @@ impl<P: Primitive + 'static> EffectNode for P {
     fn buffer_index(&self) -> Option<&'static str> {
         P::BUFFER_INDEX
     }
+    fn dense_buffer_fusion(&self) -> Option<crate::node_graph::effect_node::DenseBufferFusion> {
+        P::DENSE_BUFFER_FUSION
+    }
 }
 
 /// Runtime view of a primitive's const metadata, suitable for
@@ -1288,6 +1292,7 @@ macro_rules! primitive {
         $( atomic_outputs: [ $($atomic_out:literal),* $(,)? ], )?
         $( owned_outputs: [ $($owned_out:literal),* $(,)? ], )?
         $( buffer_index: $buffer_index:literal, )?
+        $( dense_buffer_fusion: $dense_buffer_fusion:expr, )?
         $( extra_fields: { $($field_name:ident : $field_ty:ty = $field_init:expr),* $(,)? }, )?
     ) => {
         $crate::__primitive_struct! {
@@ -1359,6 +1364,7 @@ macro_rules! primitive {
             $( const ATOMIC_OUTPUTS: &'static [&'static str] = &[ $($atomic_out),* ]; )?
             $( const OWNED_OUTPUTS: &'static [&'static str] = &[ $($owned_out),* ]; )?
             $( const BUFFER_INDEX: Option<&'static str> = Some($buffer_index); )?
+            $( const DENSE_BUFFER_FUSION: Option<$crate::node_graph::effect_node::DenseBufferFusion> = Some($dense_buffer_fusion); )?
 
             fn cached_type_id() -> &'static $crate::node_graph::effect_node::EffectNodeType {
                 static CELL: std::sync::OnceLock<$crate::node_graph::effect_node::EffectNodeType> =
