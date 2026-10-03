@@ -555,13 +555,28 @@ impl Show {
         let node = self.runtime.graph.nodes().find(|n| n.node_id.as_str() == name).unwrap_or_else(|| panic!("no node {name}"));
         node.node.provided_array_output(port).map_or(0, |buffer| buffer.size)
     }
+
+    /// Live particles (radius above 0) in the storage the named node provides
+    /// on `port`.
+    fn provided_live(&self, name: &str, port: &str) -> u64 {
+        use crate::node_graph::fluid_particles::FluidParticle;
+        let node = self.runtime.graph.nodes().find(|n| n.node_id.as_str() == name).unwrap_or_else(|| panic!("no node {name}"));
+        let buffer = node.node.provided_array_output(port).unwrap_or_else(|| panic!("{name} provides no {port}"));
+        let ptr = buffer.mapped_ptr().expect("shared particle storage");
+        let len = buffer.size as usize / std::mem::size_of::<FluidParticle>();
+        // SAFETY: `frame` waits for GPU completion, and the buffer holds `len` records.
+        let particles = unsafe { std::slice::from_raw_parts(ptr.cast::<FluidParticle>(), len) };
+        particles.iter().filter(|p| p.position_radius[3] > 0.0).count() as u64
+    }
 }
 
 /// Resolution is a live card (BUG-9an1 (resolution change), BUG-o65k (GPU
 /// FLIP lattice wiring)): the shipped preset moves 64 → 32 → 100 under a
 /// running clip. On the first frame at each size the state already holds that
 /// lattice's face grid; within 1.5 s the fill has restarted at that size, the
-/// step's faces are that lattice's and its water throws whitewater.
+/// frame publishes all of its live water (count_b is a live count, and the
+/// fill seeds the box's sites dead), the step's faces are that lattice's and
+/// its water throws whitewater.
 #[test]
 fn gpu_flip_resolution_card_resizes_at_runtime() {
     let scene = WaterScene::dam_break(64);
@@ -590,9 +605,12 @@ fn gpu_flip_resolution_card_resizes_at_runtime() {
             last = show.probes(STEP_REPORTS);
         }
         let [count] = show.probes(["count"]);
-        println!("Resolution {n}: {count} particles, GPU p50 {:.2} ms; foam {} bubble {} spray {}", percentile(&gpu_ms, 0.5), last[0], last[1], last[2]);
+        let live = show.provided_live("fill", "particles");
+        println!("Resolution {n}: {count} particles of the fill's {live} live, GPU p50 {:.2} ms; foam {} bubble {} spray {}", percentile(&gpu_ms, 0.5), last[0], last[1], last[2]);
         assert_eq!(show.provided_bytes(step, "faces"), faces, "Resolution {n}: the step's faces");
-        assert_eq!(count as u64, WaterScene::dam_break(n as usize).particles(), "Resolution {n}: the fill");
+        let record = std::mem::size_of::<crate::node_graph::fluid_particles::FluidParticle>() as u64;
+        assert_eq!(show.provided_bytes("fill", "particles"), WaterScene::dam_break(n as usize).particles() * record, "Resolution {n}: the fill");
+        assert_eq!(count as u64, live, "Resolution {n}: the frame's live water");
         assert!(last[0] + last[1] + last[2] > 0.0, "Resolution {n}: no whitewater by 1.5 s: {last:?}");
     }
     let errors = show.errors();
