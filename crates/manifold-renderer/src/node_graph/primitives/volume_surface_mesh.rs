@@ -53,8 +53,9 @@ struct MeshUniforms {
     resolution_scale: i32,
     max_capacity: i32,
     brick_pass: u32,
+    indexed: u32,
     dispatch_count: u32,
-    _pad: [u32; 3],
+    _pad: [u32; 2],
 }
 
 /// The first buffer's capacity in vertices, whole triangles: Starting Mesh
@@ -112,6 +113,7 @@ crate::primitive! {
         scan: Array(u32) required,
         extent: Array(u32) optional,
         bricks: Array(u32) optional,
+        edge_scan: Array(u32) optional,
         total: ScalarF32 optional,
         center_x: ScalarF32 optional, center_y: ScalarF32 optional, center_z: ScalarF32 optional,
         size_x: ScalarF32 optional, size_y: ScalarF32 optional, size_z: ScalarF32 optional,
@@ -119,6 +121,7 @@ crate::primitive! {
     },
     outputs: {
         vertices: Array(MeshVertex),
+        indices: Array(u32),
     },
     params: [
         float_param!("center_x", "Center X", 0.0, -1000.0, 1000.0),
@@ -148,7 +151,7 @@ crate::primitive! {
         },
     ],
     depth_rule: Terminal,
-    composition_notes: "Wire levelset and nodes_x/y/z from node.particle_volume, scan and total from node.running_total over node.count_surface_triangles, extent from the same running total with per_item 3, and the box from the lattice bounds through node.transform_components. resolution_scale must match the volume's; it places UVs on the authored domain (1.5 simulation cells inside the padded lattice) as the CPU fluid mesh does. Slots past the live triangles are zero. Wire total: the vertex buffer grows from it; unwired it holds only its start. Leave Starting Mesh Capacity at 0 so the start follows the lattice. With extent wired the mesh writes only live and last frame's vertices and publishes its live extent, so node.render_scene draws only live triangles. Wire vertices to node.scene_object like the CPU mesh.",
+    composition_notes: "Wire levelset and nodes_x/y/z from node.particle_volume, scan and total from node.running_total over node.count_surface_triangles, extent from the same running total with per_item 3, and the box from the lattice bounds through node.transform_components. resolution_scale must match the volume's; it places UVs on the authored domain (1.5 simulation cells inside the padded lattice) as the CPU fluid mesh does. Slots past the live triangles are zero. Wire total: the vertex buffer grows from it; unwired it holds only its start. Leave Starting Mesh Capacity at 0 so the start follows the lattice. With extent wired the mesh writes only live and last frame's vertices and publishes its live extent, so node.render_scene draws only live triangles. For indexed output, wire the inclusive node.count_surface_edges scan to edge_scan and wire both vertices and indices to node.scene_object. No edge_scan retains triangle-list output. Capacity and overflow rules are identical.",
     examples: [],
     picker: { label: "Volume Surface Mesh", category: Atom },
     summary: "Builds the triangle mesh of a liquid's surface from its density field, ready to render with any material.",
@@ -157,14 +160,16 @@ crate::primitive! {
     aliases: ["marching cubes", "isosurface", "polygonize", "surface mesh", "liquid mesh"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/volume_surface_mesh_body.wgsl"),
-    input_access: [BufferGather, BufferGather, BufferGather, BufferGather],
-    derived_uniforms: ["brick_pass:u32"],
-    wgsl_includes: [MARCHING_CUBES_COMMON, liquid_bricks::COMMON],
-    owned_outputs: ["vertices"],
+    input_access: [BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
+    derived_uniforms: ["brick_pass:u32", "indexed:u32"],
+    wgsl_includes: [MARCHING_CUBES_COMMON, liquid_bricks::COMMON, include_str!("shaders/surface_edge_ownership.wgsl"), include_str!("shaders/surface_edge_index.wgsl")],
+    owned_outputs: ["vertices", "indices"],
     buffer_index: "liquid_cell_brick_index",
     extra_fields: {
         // The vertex buffer this node owns and publishes.
         mesh: Option<GpuBuffer> = None,
+        indices: Option<GpuBuffer> = None,
+        index_stub: Option<GpuBuffer> = None,
         // Identity of the vertex buffer last written; a new one is cleared whole.
         emit_target: usize = 0,
         // Frames written into `emit_target`: the late total describes the
@@ -193,19 +198,30 @@ impl VolumeSurfaceMesh {
         ctx: &mut EffectNodeContext<'_, '_>,
         total: f32,
         nodes: [f32; 3],
+        indexed: bool,
     ) {
         let current = self.mesh.as_ref().map_or(0, |mesh| emit_slots(mesh.size));
         let wanted = grown_capacity(total, current)
             .unwrap_or(0)
             .max(start_capacity(ctx.params, nodes));
-        if wanted <= u64::from(current) {
+        if wanted <= u64::from(current) && (!indexed || self.indices.is_some()) {
             return;
         }
-        let target = (wanted.div_ceil(3) * 3).min(INDEXABLE_VERTICES);
+        let target = (wanted.max(u64::from(current)).div_ceil(3) * 3).min(INDEXABLE_VERTICES);
         let device = ctx.gpu_encoder().device;
         match device.try_create_buffer_shared(target * VERTEX_BYTES) {
             Ok(buffer) => {
+                let indices = if indexed {
+                    match device.try_create_buffer_shared(target * 4) {
+                        Ok(indices) => { indices.zero_fill(); Some(indices) }
+                        Err(error) => {
+                            ctx.error(format!("Volume Surface Mesh: index allocation failed ({error})"));
+                            return;
+                        }
+                    }
+                } else { None };
                 buffer.zero_fill();
+                self.indices = indices;
                 if current > 0 {
                     log::info!("[volume_surface_mesh] vertex buffer grown from {current} to {target} vertices");
                 }
@@ -221,11 +237,11 @@ impl VolumeSurfaceMesh {
 
 impl Primitive for VolumeSurfaceMesh {
     fn provides_array_output(&self, port: &str) -> bool {
-        port == "vertices"
+        matches!(port, "vertices" | "indices")
     }
 
     fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
-        (port == "vertices").then_some(self.mesh.as_ref()).flatten()
+        match port { "vertices" => self.mesh.as_ref(), "indices" => self.indices.as_ref(), _ => None }
     }
 
     /// Provided storage: a one-triangle hint, sized from the surface at run time.
@@ -235,7 +251,7 @@ impl Primitive for VolumeSurfaceMesh {
         _params: &ParamValues,
         _: &[(&str, u32)],
     ) -> Option<u32> {
-        (port == "vertices").then_some(3)
+        matches!(port, "vertices" | "indices").then_some(3)
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
@@ -259,7 +275,16 @@ impl Primitive for VolumeSurfaceMesh {
             ["size_x", "size_y", "size_z"].map(|name| ctx.scalar_or_param(name, 4.0));
         let nodes =
             ["nodes_x", "nodes_y", "nodes_z"].map(|name| ctx.scalar_or_param(name, 2.0).round());
-        self.ensure_capacity(ctx, total, nodes);
+        let indexed = ctx.inputs.slot_of("edge_scan").is_some();
+        if indexed && ctx.inputs.array("edge_scan").is_none() {
+            ctx.error("Volume Surface Mesh: wired edge scan is unavailable");
+            return;
+        }
+        self.ensure_capacity(ctx, total, nodes, indexed);
+        if indexed && self.indices.is_none() { return; }
+        if self.index_stub.is_none() {
+            self.index_stub = Some(ctx.gpu_encoder().device.create_buffer_shared(4));
+        }
         let resolution_scale = match ctx.params.get("resolution_scale") {
             Some(ParamValue::Float(n)) => n.round().clamp(1.0, 8.0) as i32,
             _ => 2,
@@ -302,6 +327,11 @@ impl Primitive for VolumeSurfaceMesh {
             ));
             return;
         };
+        let edge_scan = ctx.inputs.array("edge_scan");
+        if edge_scan.is_some_and(|scan| scan.size / 4 < node_total) {
+            ctx.error("Volume Surface Mesh: edge scan is shorter than the lattice");
+            return;
+        }
         let extent = ctx.inputs.array("extent");
         // A new vertex buffer holds unknown bytes: write every slot once.
         let fresh = vertices.identity_key() != self.emit_target;
@@ -317,7 +347,7 @@ impl Primitive for VolumeSurfaceMesh {
         self.frames = self.frames.saturating_add(1);
         if let Some(extent) = extent {
             ctx.outputs.set_live_extent(
-                "vertices",
+                if indexed { "indices" } else { "vertices" },
                 LiveExtent {
                     counts: extent.clone(),
                     offset: 0,
@@ -325,6 +355,11 @@ impl Primitive for VolumeSurfaceMesh {
                     bound,
                 },
             );
+        }
+        if let Some(edge_scan) = edge_scan {
+            ctx.outputs.set_live_extent("vertices", LiveExtent {
+                counts: edge_scan.clone(), offset: (node_total - 1) * 4, per_item: 1, bound: slots,
+            });
         }
         let uniforms = MeshUniforms {
             center_x,
@@ -339,8 +374,9 @@ impl Primitive for VolumeSurfaceMesh {
             resolution_scale,
             max_capacity: slots as i32,
             brick_pass: 0,
+            indexed: u32::from(indexed),
             dispatch_count: dispatch_cells,
-            _pad: [0; 3],
+            _pad: [0; 2],
         };
         let bricks = ctx.inputs.array("bricks");
         if bricks
@@ -383,8 +419,12 @@ impl Primitive for VolumeSurfaceMesh {
             },
             GpuBinding::Buffer {
                 binding: 5,
-                buffer: vertices,
+                buffer: edge_scan.unwrap_or(scan),
                 offset: 0,
+            },
+            GpuBinding::Buffer { binding: 6, buffer: vertices, offset: 0 },
+            GpuBinding::Buffer {
+                binding: 7, buffer: self.indices.as_ref().unwrap_or(self.index_stub.as_ref().expect("stub prepared")), offset: 0,
             },
         ];
         if let Some(extent) = extent.filter(|_| !fresh) {
@@ -439,8 +479,12 @@ impl Primitive for VolumeSurfaceMesh {
             },
             GpuBinding::Buffer {
                 binding: 5,
-                buffer: vertices,
+                buffer: edge_scan.unwrap_or(scan),
                 offset: 0,
+            },
+            GpuBinding::Buffer { binding: 6, buffer: vertices, offset: 0 },
+            GpuBinding::Buffer {
+                binding: 7, buffer: self.indices.as_ref().unwrap_or(self.index_stub.as_ref().expect("stub prepared")), offset: 0,
             },
         ];
         liquid_bricks::dispatch(

@@ -247,6 +247,8 @@ mod render_mode;
 pub(crate) mod render_scene;
 #[cfg(feature = "gpu-proofs")]
 pub use render_scene::rt_proof::{RtProbeObject, RtProbeScene};
+#[cfg(feature = "gpu-proofs")]
+pub use render_scene::blend_snapshot_proof;
 mod render_filled_rects;
 mod render_lines;
 mod render_text;
@@ -425,6 +427,7 @@ pub(crate) mod gpu_flip_still;
 mod gpu_flip_render_smoke_tests;
 mod clamp_liquid_to_solids;
 mod count_surface_triangles;
+mod count_surface_edges;
 pub(crate) mod volume_surface_mesh;
 mod relax_surface_mesh;
 #[cfg(all(test, feature = "gpu-proofs"))]

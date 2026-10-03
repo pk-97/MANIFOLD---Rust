@@ -384,8 +384,8 @@ fn fixture(resolution: u32) {
                 2,
                 SLOTS,
                 0,
-                SLOTS,
                 0,
+                SLOTS,
                 0,
                 0,
             ];
@@ -397,6 +397,7 @@ fn fixture(resolution: u32) {
                     &clamp_slots[1].1,
                     &scan_slots[1].1,
                     &extent_slots[1].1,
+                    &scan_slots[1].1,
                     &scan_slots[1].1,
                     &dense_mesh,
                 ],
@@ -442,8 +443,8 @@ fn fixture(resolution: u32) {
                     strength.to_bits(),
                     SLOTS,
                     0,
-                    SLOTS,
                     0,
+                    SLOTS,
                 ];
                 dense_mesh_dispatch(
                     &h,
@@ -454,6 +455,7 @@ fn fixture(resolution: u32) {
                         &clamp_slots[1].1,
                         &scan_slots[1].1,
                         &extent_slots[1].1,
+                        &scan_slots[1].1,
                         &scan_slots[1].1,
                         &relaxed[1][step].1,
                     ],

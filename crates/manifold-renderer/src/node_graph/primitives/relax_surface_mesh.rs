@@ -34,8 +34,8 @@ struct RelaxUniforms {
     strength: f32,
     max_capacity: u32,
     brick_pass: u32,
+    indexed: u32,
     dispatch_count: u32,
-    _pad: u32,
 }
 
 crate::primitive! {
@@ -48,6 +48,7 @@ crate::primitive! {
         scan: Array(u32) required,
         extent: Array(u32) optional,
         bricks: Array(u32) optional,
+        edge_scan: Array(u32) optional,
         nodes_x: ScalarF32 optional, nodes_y: ScalarF32 optional, nodes_z: ScalarF32 optional,
         strength: ScalarF32 optional,
     },
@@ -61,7 +62,7 @@ crate::primitive! {
         float_param!("strength", "Strength", 0.5, 0.0, 1.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "Wire vertices from node.volume_surface_mesh (or another relax pass), and the same levelset, scan, extent and nodes_x/y/z that mesh was built from this frame. Chain two or more for more passes, one strength value into all of them; 0 turns relaxation off. Relaxing rounds off marching-cubes facets and lattice stair-steps, and shrinks thin sheets and drops a little, more with every pass. The level-set normals pass through unchanged. Wire relaxed into node.scene_object like the mesh.",
+    composition_notes: "When volume_surface_mesh uses edge_scan, wire the same scan here to relax its compact shared vertices; keep its indices unchanged. Wire vertices from node.volume_surface_mesh (or another relax pass), and the same levelset, scan, extent and nodes_x/y/z that mesh was built from this frame. Chain two or more for more passes, one strength value into all of them; 0 turns relaxation off. Relaxing rounds off marching-cubes facets and lattice stair-steps, and shrinks thin sheets and drops a little, more with every pass. The level-set normals pass through unchanged. Wire relaxed into node.scene_object like the mesh.",
     examples: [],
     picker: { label: "Relax Surface Mesh", category: Atom },
     summary: "Smooths a liquid's surface mesh by easing each point toward its neighbours, rounding off the small facets and steps.",
@@ -70,9 +71,9 @@ crate::primitive! {
     aliases: ["mesh smoothing", "laplacian smooth", "relax mesh", "smooth liquid mesh", "umbrella smoothing"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/relax_surface_mesh_body.wgsl"),
-    input_access: [BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
-    derived_uniforms: ["max_capacity:u32", "brick_pass:u32"],
-    wgsl_includes: [MARCHING_CUBES_COMMON, liquid_bricks::COMMON],
+    input_access: [BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
+    derived_uniforms: ["max_capacity:u32", "brick_pass:u32", "indexed:u32"],
+    wgsl_includes: [MARCHING_CUBES_COMMON, liquid_bricks::COMMON, include_str!("shaders/surface_edge_ownership.wgsl"), include_str!("shaders/surface_edge_index.wgsl")],
     owned_outputs: ["relaxed"],
     buffer_index: "liquid_cell_brick_index",
     extra_fields: {
@@ -160,6 +161,15 @@ impl Primitive for RelaxSurfaceMesh {
             return;
         }
         let max_capacity = slots;
+        let edge_scan = ctx.inputs.array("edge_scan");
+        if ctx.inputs.slot_of("edge_scan").is_some() && edge_scan.is_none() {
+            ctx.error("Relax Surface Mesh: wired edge scan is unavailable");
+            return;
+        }
+        if edge_scan.is_some_and(|scan| scan.size / 4 < node_total) {
+            ctx.error("Relax Surface Mesh: edge scan is shorter than the lattice");
+            return;
+        }
         let extent = ctx.inputs.array("extent");
         let fresh = relaxed.identity_key() != self.emit_target;
         self.emit_target = relaxed.identity_key();
@@ -179,8 +189,8 @@ impl Primitive for RelaxSurfaceMesh {
             strength,
             max_capacity,
             brick_pass: 0,
+            indexed: u32::from(edge_scan.is_some()),
             dispatch_count: dispatch_cells,
-            _pad: 0,
         };
         let bricks = ctx.inputs.array("bricks");
         if bricks
@@ -232,9 +242,10 @@ impl Primitive for RelaxSurfaceMesh {
             },
             GpuBinding::Buffer {
                 binding: 6,
-                buffer: relaxed,
+                buffer: edge_scan.unwrap_or(scan),
                 offset: 0,
             },
+            GpuBinding::Buffer { binding: 7, buffer: relaxed, offset: 0 },
         ];
         if let Some(extent) = extent.filter(|_| !fresh) {
             gpu.native_enc.dispatch_compute_indirect(
@@ -293,9 +304,10 @@ impl Primitive for RelaxSurfaceMesh {
             },
             GpuBinding::Buffer {
                 binding: 6,
-                buffer: relaxed,
+                buffer: edge_scan.unwrap_or(scan),
                 offset: 0,
             },
+            GpuBinding::Buffer { binding: 7, buffer: relaxed, offset: 0 },
         ];
         liquid_bricks::dispatch(
             gpu.native_enc,

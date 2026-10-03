@@ -76,6 +76,7 @@ fn body(
     resolution_scale: i32,
     max_capacity: i32,
     brick_pass: u32,
+    indexed: u32,
 ) {
     let zero = Element(
         vec3<f32>(0.0),
@@ -87,6 +88,7 @@ fn body(
     );
     if brick_pass == 2u {
         var live = 0u;
+        var live_indices = 0u;
         if min(min(nodes_x, nodes_y), nodes_z) >= 2.0 {
             let clear_nodes = vec3<u32>(vec3<f32>(nodes_x, nodes_y, nodes_z));
             let clear_cells = clear_nodes - vec3<u32>(1u);
@@ -94,8 +96,13 @@ fn body(
             let triangles = buf_scan[clear_total - 1u];
             if triangles <= u32(max_capacity) / 3u {
                 live = triangles * 3u;
+                live_indices = live;
+                if indexed != 0u {
+                    live = buf_edge_scan[clear_nodes.x * clear_nodes.y * clear_nodes.z - 1u];
+                }
             }
         }
+        if indexed != 0u && idx >= live_indices { buf_indices[idx] = 0u; }
         if idx >= live {
             buf_vertices[idx] = zero;
         }
@@ -137,6 +144,15 @@ fn body(
     for (var t = 0u; t < triangles; t = t + 1u) {
         for (var corner = 0u; corner < 3u; corner = corner + 1u) {
             let edge = mc_edge(case_index, t * 3u + corner);
+            if indexed != 0u {
+                let vertex = se_vertex(cell, edge, nodes);
+                buf_indices[(first + t) * 3u + corner] = vertex;
+                if !edge_ready[edge] && se_owner(cell, edge, nodes) {
+                    buf_vertices[vertex] = vsm_edge(cell, edge, nodes, spacing, lattice_min, size, resolution_scale);
+                }
+                edge_ready[edge] = true;
+                continue;
+            }
             if !edge_ready[edge] {
                 edge_cache[edge] = vsm_edge(
                     cell, edge, nodes, spacing, lattice_min, size, resolution_scale,

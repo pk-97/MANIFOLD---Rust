@@ -342,6 +342,8 @@ impl Phase {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Variant {
     Shipped,
+    /// Same surface, material and capacity, using the pre-indexing triangle list.
+    Unindexed,
     /// Whitewater Budget at its card minimum (1000 of 100000): the foam,
     /// spray and bubble instanced draws all but vanish.
     WhitewaterMinimum,
@@ -370,13 +372,52 @@ fn gpu_flip_frame_perf_water_unwired() {
     probe(Variant::WaterUnwired);
 }
 
-fn probe(variant: Variant) {
+#[test]
+fn gpu_flip_frame_perf_indexed_parity() {
+    let unindexed = probe(Variant::Unindexed);
+    let indexed = probe(Variant::Shipped);
+    assert_eq!(indexed, unindexed, "indexing must preserve every sampled frame hash");
+}
+
+fn use_triangle_list(json: &mut Value) {
+    let surface = json["nodes"].as_array_mut().expect("nodes").iter_mut()
+        .find(|node| node["id"] == 14).expect("liquid surface group");
+    let group = &mut surface["group"];
+    let nodes = group["nodes"].as_array_mut().expect("surface nodes");
+    let before = nodes.len();
+    nodes.retain(|node| node["id"] != 21 && node["id"] != 22);
+    assert_eq!(before - nodes.len(), 2, "remove edge count and scan only");
+    group["wires"].as_array_mut().expect("surface wires").retain(|wire| {
+        ![21, 22].iter().any(|id| wire["fromNode"] == *id || wire["toNode"] == *id)
+            && wire["fromPort"] != "indices"
+    });
+    group["interface"]["outputs"].as_array_mut().expect("surface outputs")
+        .retain(|port| port["name"] != "indices");
+    let wires = json["wires"].as_array_mut().expect("preset wires");
+    let before = wires.len();
+    wires.retain(|wire| !(wire["fromNode"] == 14 && wire["fromPort"] == "indices"));
+    assert_eq!(before - wires.len(), 1, "remove the water index wire only");
+}
+
+#[test]
+fn indexed_perf_variants_compile_on_cpu() {
+    let registry = PrimitiveRegistry::with_builtin();
+    let mut json: Value = serde_json::from_str(PRESET).unwrap();
+    PresetRuntime::from_json_str(&json.to_string(), &registry).expect("indexed preset compiles");
+    use_triangle_list(&mut json);
+    PresetRuntime::from_json_str(&json.to_string(), &registry).expect("triangle-list preset compiles");
+}
+
+fn probe(variant: Variant) -> Vec<(usize, u64)> {
     let harness = harness::shared();
     let device = &harness.device;
     let sampler = device.create_timestamp_sampler(16384).expect("GPU timestamp sampler");
     let _offline = PhysicsStepScope::for_render(true);
     let target = RenderTarget::new(device, WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float, "gpu-flip-frame-perf");
     let mut json: Value = serde_json::from_str(PRESET).expect("GPU FLIP dam break preset parses");
+    if variant == Variant::Unindexed {
+        use_triangle_list(&mut json);
+    }
     if variant == Variant::WaterUnwired {
         let wires = json["wires"].as_array_mut().expect("preset wires");
         let before = wires.len();
@@ -479,4 +520,5 @@ fn probe(variant: Variant) {
         shadow_frames.is_empty(),
         "the raster shadow map must stay cached: its casters are static, so a re-render means the dirty key moved"
     );
+    hashes
 }

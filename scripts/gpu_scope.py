@@ -178,6 +178,16 @@ EXPLICIT_ROWS = [
       RENDERER_SRC + "node_graph/primitives/shaders/liquid_fill",
       RENDERER_SRC + "node_graph/primitives/shaders/face_sample_component"),
      (["gpu_flip_", "face_grid_tests::"], REPORTER_SKIPS)),
+    # Shared marching-cubes topology: ownership, expanded vertex values, and raster parity.
+    ((RENDERER_SRC + "node_graph/primitives/count_surface_edges",
+      RENDERER_SRC + "node_graph/primitives/volume_surface_mesh",
+      RENDERER_SRC + "node_graph/primitives/relax_surface_mesh",
+      RENDERER_SRC + "node_graph/primitives/shaders/count_surface_edges",
+      RENDERER_SRC + "node_graph/primitives/shaders/surface_edge_",
+      RENDERER_SRC + "node_graph/primitives/shaders/volume_surface_mesh",
+      RENDERER_SRC + "node_graph/primitives/shaders/relax_surface_mesh",
+      PROOFS_DIR + "liquid_indexed.rs"),
+     (["count_surface_edges::gpu_tests::", "fluid_indexed_", "liquid_indexed::"], [])),
     # Graph runtime.
     ((RENDERER_SRC + "node_graph/execution",
       RENDERER_SRC + "node_graph/resource_allocation",

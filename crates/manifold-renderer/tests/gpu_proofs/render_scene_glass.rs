@@ -825,3 +825,26 @@ fn glass_above_a_blend_layer_transmits_the_blended_colour() {
     let expected = over([1.0, 0.2, 0.2], 0.4, [0.15, 0.3, 0.6]);
     assert_rgb_close(center_rgb(&bytes, w, h), expected, 0.025, "glass over blend pane");
 }
+
+/// Compare every output byte with the former Pass B schedule, including a
+/// rough glass layer that samples the snapshot's mip chain. Blend lies both
+/// before and after glass in draw order; offscreen glass keeps Pass B active.
+#[test]
+fn blend_snapshot_elision_is_bit_exact() {
+    use manifold_renderer::node_graph::primitives::blend_snapshot_proof;
+    for (glass_x, glass_y, blend_y) in [(20.0, 1.0, 1.0), (0.0, 2.0, 1.0), (0.0, 1.0, 2.0)] {
+        for roughness in [0.0, 0.6] {
+            let mut graph: serde_json::Value = serde_json::from_str(
+                &blend_pane_with_glass(glass_x, glass_y, blend_y),
+            ).unwrap();
+            let glass = graph["nodes"].as_array_mut().unwrap().iter_mut()
+                .find(|node| node["id"] == 203).unwrap();
+            glass["params"]["roughness"] = serde_json::json!({"type":"Float", "value":roughness});
+            let json = graph.to_string();
+            let legacy = blend_snapshot_proof::with_legacy_snapshots(|| render_readback(&json));
+            let optimized = render_readback(&json);
+            assert_eq!(optimized, legacy,
+                "snapshot elision changed pixels: glass=({glass_x}, {glass_y}), blend={blend_y}, roughness={roughness}");
+        }
+    }
+}
