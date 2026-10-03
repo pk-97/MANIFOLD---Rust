@@ -11,6 +11,9 @@ Modules ported from it (all under `crates/manifold-renderer/src/node_graph/primi
 - `crossing_distance`, `lattice_curvature` — from `particlelevelset.cpp`
 - `emission_count`, `energy_potential`, `jitter_particles`, `liquid_cells`, `spawn_whitewater`, `whitewater_type` — from `diffuseparticlesimulation.cpp`
 - `wavecrest_potential` — from `diffuseparticlesimulation.cpp` and `interpolation.cpp`
+- `turbulence_field` — from `turbulencefield.cpp`
+- `turbulence_emission_count`, `inside_turbulence_potential`, `dust_potential`, `whitewater_emitter_velocity`, `whitewater_emitter_cpu.rs` (CPU reference) — turbulence, inside and dust emission, the spray speed factor and the generation coin from `diffuseparticlesimulation.cpp`
+- `whitewater_influence`, `whitewater_obstacle_source` — the obstacle influence grid from `influencegrid.cpp`, `fluidsimulation.cpp` and `diffuseparticlesimulation.cpp`
 - `extend_lattice` — from `gridutils.h`
 - `sample_faces_at_particles`, `shaders/liquid_faces.wgsl` — from `macvelocityfield.cpp`
 - `whitewater_cpu.rs`, `whitewater_particle_cpu.rs` (CPU references) — from the files above
