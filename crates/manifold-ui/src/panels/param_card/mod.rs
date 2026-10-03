@@ -719,7 +719,8 @@ impl ParamCardPanel {
     /// `is_trigger_gate` ones, so this no longer filters by
     /// `info.is_trigger_gate` — a continuous/Step/Random drawer's meter now
     /// updates exactly like a trigger-gate drawer's. Keyed on
-    /// `(effect_id, param_id)` via `manifold_foundation::
+    /// `(params owner, param_id)` — the card's own instance, or for a scene
+    /// modifier card the generator that owns its host params — via `manifold_foundation::
     /// fire_meter_key_for_param` — the SAME constructor the content-thread
     /// capture uses — so `fire_level` (built at the app boundary from
     /// `ContentState::fire_meters`, a `manifold-core` type `manifold-ui`
@@ -735,12 +736,13 @@ impl ParamCardPanel {
         fire_level: &dyn Fn(u64) -> Option<f32>,
         dt: f32,
     ) {
+        let owner = self.modifier.as_ref().map_or(&self.effect_id, |m| &m.params_owner);
         for (pi, cfg) in self.row_host.audio_configs.iter().enumerate() {
             let Some((dids, _)) = cfg else { continue };
             let Some(info) = self.rows.get(pi) else { continue };
             let Some(Some(meter)) = dids.meters.first() else { continue };
             let key = manifold_foundation::fire_meter_key_for_param(
-                self.effect_id.as_str(),
+                owner.as_str(),
                 info.id.as_ref(),
             );
             let level = fire_level(key).unwrap_or(0.0);
@@ -2391,6 +2393,7 @@ pub(super) mod tests {
         config.modifier = Some(crate::param_surface::ModifierCardInfo {
             instance_id: manifold_foundation::NodeId::new("modifier-1"),
             layer_id: LayerId::new("layer-1"),
+            params_owner: Default::default(),
             enabled_label: "Enabled".into(),
             stack_index: 0,
             stack_len: 1,
@@ -3114,6 +3117,7 @@ pub(super) mod tests {
         c.modifier = Some(crate::param_surface::ModifierCardInfo {
             instance_id: manifold_foundation::NodeId::new("modifier-1"),
             layer_id: manifold_foundation::LayerId::new("layer-a"),
+            params_owner: Default::default(),
             enabled_label: "Enabled".into(),
             stack_index: 1,
             stack_len: 3,
@@ -3237,6 +3241,7 @@ pub(super) mod tests {
         config.modifier = Some(crate::param_surface::ModifierCardInfo {
             instance_id: manifold_foundation::NodeId::new("modifier-camera"),
             layer_id: manifold_foundation::LayerId::new("layer-camera"),
+            params_owner: Default::default(),
             enabled_label: "Camera Travel".into(),
             stack_index: 0,
             stack_len: 1,
