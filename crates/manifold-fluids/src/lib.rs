@@ -446,6 +446,10 @@ unsafe extern "C" {
         cfl: u32,
         adaptive_obstacles: i32,
     ) -> i32;
+    fn manifold_fluids_world_set_marker_speed_limit_interval(
+        world: *mut std::ffi::c_void,
+        dt: f64,
+    ) -> i32;
     fn manifold_fluids_world_set_whitewater_options(
         world: *mut std::ffi::c_void,
         enabled: i32,
@@ -629,6 +633,24 @@ impl FluidWorld {
             )
         };
         native_result(ok, "setting time-step options")
+    }
+
+    /// Measure each frame's marker speed limit against at most `interval`, so
+    /// a live frame spanning several Sim Rate intervals removes only the
+    /// markers one interval's limit removes. Substep selection still divides
+    /// the whole frame. `None` measures the whole frame, as upstream does.
+    pub fn set_speed_limit_interval(&mut self, interval: Option<Seconds>) -> Result<(), FluidError> {
+        let dt = match interval {
+            None => 0.0,
+            Some(interval) if interval.0.is_finite() && interval.0 > 0.0 => interval.0,
+            Some(_) => {
+                return Err(FluidError::input(
+                    "speed limit interval must be finite and positive",
+                ));
+            }
+        };
+        let ok = unsafe { manifold_fluids_world_set_marker_speed_limit_interval(self.native, dt) };
+        native_result(ok, "setting the marker speed limit interval")
     }
 
     pub fn set_whitewater_options(&mut self, options: WhitewaterOptions) -> Result<(), FluidError> {

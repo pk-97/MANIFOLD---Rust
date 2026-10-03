@@ -2932,6 +2932,16 @@ bool FluidSimulation::isExtremeVelocityRemovalEnabled() {
     return _isExtremeVelocityRemovalEnabled;
 }
 
+void FluidSimulation::setMarkerSpeedLimitFrameDeltaTime(double dt) {
+    if (!std::isfinite(dt) || dt < 0.0) {
+        std::string msg = "Error: marker speed limit frame delta time must be finite and non-negative.\n";
+        msg += "dt: " + _toString(dt) + "\n";
+        throw std::domain_error(msg);
+    }
+
+    _markerSpeedLimitFrameDeltaTime = dt;
+}
+
 void FluidSimulation::setVelocityTransferMethodFLIP() {
     _logfile.log(std::ostringstream().flush() << 
                  _logfile.getTime() << " setVelocityTransferMethodFLIP" << std::endl);
@@ -8553,7 +8563,14 @@ void FluidSimulation::_advanceMarkerParticles(double dt) {
             positions->at(i) = output[i];
         }
 
-        _removeMarkerParticles(_currentFrameDeltaTime);
+        // MANIFOLD: a live frame that spans several configured frames keeps
+        // one configured frame's speed limit, so load never removes a marker
+        // that frame keeps.
+        double speedLimitDeltaTime = _currentFrameDeltaTime;
+        if (_markerSpeedLimitFrameDeltaTime > 0.0) {
+            speedLimitDeltaTime = std::min(speedLimitDeltaTime, _markerSpeedLimitFrameDeltaTime);
+        }
+        _removeMarkerParticles(speedLimitDeltaTime);
 
     }
 

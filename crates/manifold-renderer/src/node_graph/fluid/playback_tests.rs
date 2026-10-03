@@ -50,6 +50,7 @@ impl Fixture {
             start_tick: 0,
             count: 6,
             interval: None,
+            speed_limit_interval: None,
             history: [0.0, 6.0 * TICK]
                 .map(|time| Sample {
                     time,
