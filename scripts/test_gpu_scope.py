@@ -174,6 +174,15 @@ class ScopeTests(unittest.TestCase):
         self.assertIn("a::slow: skipped, run nightly only (measured 61s)", p.describe())
         self.assertEqual(p.runs()[0]["skips"], p.final_skips())
 
+    def test_glb_sweep_time_never_skips_or_reports_the_sweep(self):
+        self.with_times({"glb_conformance_sweep": 930.0, "a::slow": 61.0})
+        p = plan([R + "node_graph/gltf_import/mod.rs"])
+        self.assertTrue(p.glb)
+        self.assertNotIn("glb_conformance_sweep", p.final_skips())
+        self.assertNotIn("glb_conformance_sweep", p.describe())
+        self.assertEqual(p.runs()[-1]["skips"], [])
+        self.assertIn("a::slow", p.final_skips())
+
     def test_test_missing_from_times_file_runs(self):
         self.with_times({"a::slow": 500.0})
         self.assertNotIn("brand::new_test", plan([P + "matter_fill.rs"]).final_skips())
