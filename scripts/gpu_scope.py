@@ -133,7 +133,7 @@ NARROW_ROWS = [
     ((RENDERER_SRC + "node_graph/primitives/gpu_flip_narrow_band_tests.rs",
       RENDERER_SRC + "node_graph/primitives/gpu_flip_narrow_band.rs",
       RENDERER_SRC + "node_graph/primitives/shaders/gpu_flip_narrow_band.wgsl"),
-     (["narrow_band"], [])),
+     (["narrow_band", "face_grid_demo_gpu_flip_and_matter_side_by_side"], [])),
     ((RENDERER_SRC + "node_graph/liquid/clock.rs",
       RENDERER_SRC + "node_graph/liquid/fields.rs",
       RENDERER_SRC + "node_graph/liquid/fields/"),
