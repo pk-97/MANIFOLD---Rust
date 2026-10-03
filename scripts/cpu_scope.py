@@ -96,7 +96,17 @@ def plan_for_paths(paths, repo):
                         if relative == t.get("path", "") or
                         (Path(t.get("path", "")).name in {"main.rs", "mod.rs"}
                          and relative.startswith(str(Path(t["path"]).parent) + "/"))]
-            binaries.update(explicit or [Path(parts[3]).stem])
+            if explicit:
+                binaries.update(explicit)
+            elif (len(parts) == 4 or parts[4:] == ("main.rs",)
+                  or (crate / "tests" / parts[3] / "main.rs").exists()):
+                binaries.add(Path(parts[3]).stem)
+            else:
+                # Shared test code (tests/support/): no binary of its own, so
+                # every top-level test that declares or #[path]s the directory.
+                uses = re.compile(rf'\bmod\s+{re.escape(parts[3])}\b|"{re.escape(parts[3])}/')
+                binaries.update(test.stem for test in (crate / "tests").glob("*.rs")
+                                if uses.search(test.read_text()))
         elif parts[2] == "src":
             source, root = (repo / path).resolve(), (crate / "src").resolve()
             binary_filter = ""
