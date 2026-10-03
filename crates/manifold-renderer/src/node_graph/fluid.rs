@@ -519,7 +519,7 @@ pub struct FluidRuntime {
     reset_requested: bool,
     target_time: f64,
     clock: manifold_physics::clock::SimulationClock,
-    export_frames: VecDeque<manifold_physics::clock::ClockFrame>,
+    accepted_frames: VecDeque<manifold_physics::clock::ClockFrame>,
     held: super::physics::HeldClock,
     epoch: u64,
     cancel_epoch: Arc<AtomicU64>,
@@ -574,7 +574,7 @@ impl Default for FluidRuntime {
             reset_requested: false,
             target_time: 0.0,
             clock: Default::default(),
-            export_frames: VecDeque::with_capacity(HISTORY_CAPACITY),
+            accepted_frames: VecDeque::with_capacity(HISTORY_CAPACITY),
             held: Default::default(),
             epoch: 0,
             cancel_epoch: Arc::new(AtomicU64::new(0)),
@@ -694,7 +694,7 @@ impl FluidRuntime {
         }
         self.target_time = 0.0;
         self.clock.restart();
-        self.export_frames.clear();
+        self.accepted_frames.clear();
         self.held = Default::default();
         self.completed_tick = 0;
         self.completed_time = 0.0;
@@ -1013,7 +1013,8 @@ impl FluidRuntime {
             .is_some_and(|previous| previous != reset);
         self.previous_reset = Some(reset);
         let role_topology_changed = !self.role_setup.matches(scene_roles);
-        if self.settings != Some(settings)
+        if self.clock.rate_changed(super::physics::simulation_interval())
+            || self.settings != Some(settings)
             || role_topology_changed
             || coupling_changed
             || self.reset_requested
@@ -1048,7 +1049,7 @@ impl FluidRuntime {
         {
             Some(self.clock.advance(
                 transport.0,
-                super::physics::project_frame_interval(),
+                super::physics::simulation_interval(),
                 speed,
                 reset,
                 false,
@@ -1057,15 +1058,15 @@ impl FluidRuntime {
         } else {
             None
         };
-        if self.cache_mode == CacheMode::Live && super::physics::offline_simulation()
+        if self.cache_mode == CacheMode::Live
             && let Some(frame) = clock_frame.as_ref().filter(|frame| frame.ticks > 0)
         {
-            if self.export_frames.back_mut().is_some_and(|previous| previous.append(frame)) {
-                // Adjacent observations share one retained project schedule.
-            } else if self.export_frames.len() == HISTORY_CAPACITY {
-                return Err("Water export interval history is full; drain accepted intervals before observing more transport".into());
+            if self.accepted_frames.back_mut().is_some_and(|previous| previous.append(frame)) {
+                // Adjacent observations share one retained simulation schedule.
+            } else if self.accepted_frames.len() == HISTORY_CAPACITY {
+                return Err("Water accepted interval history is full; drain accepted intervals before observing more transport".into());
             } else {
-                self.export_frames.push_back(frame.clone());
+                self.accepted_frames.push_back(frame.clone());
             }
         }
         if clock_frame.as_ref().is_some_and(|frame| frame.numerical_error)
@@ -1403,15 +1404,10 @@ impl FluidRuntime {
                     return Ok(());
                 }
             }
-            // Pause and Simulation Speed 0 send no new live request, so
-            // retained time debt cannot drain while held. The batch already
-            // in flight covers played time and still publishes. Offline drains
-            // each frame's debt inside that frame.
-            if self.held.is_held() && self.initialized && !blocking {
-                return Ok(());
-            }
+            // Finish every interval already accepted before a pause. The clock
+            // accepts no further work while held, so this cannot create debt.
         let live_mode = self.cache_mode == CacheMode::Live;
-        let target_time = if live_mode && super::physics::offline_simulation() {
+        let target_time = if live_mode {
             self.clock.accepted_time()
         } else { self.target_time };
         let target_tick = simulation_tick(target_time);
@@ -1420,20 +1416,16 @@ impl FluidRuntime {
                 legacy_tick: target_tick,
             });
             let due = target_tick.saturating_sub(self.completed_tick);
-            while self.export_frames.front().is_some_and(|frame|
+            while self.accepted_frames.front().is_some_and(|frame|
                 self.completed_tick >= frame.first_sequence + u64::from(frame.ticks))
             {
-                self.export_frames.pop_front();
+                self.accepted_frames.pop_front();
             }
             let live_interval = if live_mode && target_time > self.simulation_time() {
-                Some(if super::physics::offline_simulation() {
-                    self.export_frames.front()
-                        .and_then(|frame| self.completed_tick.checked_sub(frame.first_sequence)
-                            .and_then(|ordinal| frame.interval(ordinal)))
-                        .ok_or("Water export is missing its accepted project interval")?
-                } else {
-                    StepInterval::new(Seconds(self.simulation_time()), Seconds(target_time))
-                })
+                Some(self.accepted_frames.front()
+                    .and_then(|frame| self.completed_tick.checked_sub(frame.first_sequence)
+                        .and_then(|ordinal| frame.interval(ordinal)))
+                    .ok_or("Water is missing its accepted simulation interval")?)
             } else { None };
             // A owed particle capture goes before any further stepping, so
             // the frame is the completed tick itself (growth, late wiring).
@@ -2169,7 +2161,7 @@ mod tests {
     #[test]
     fn fluid_held_transport_freezes_live_water_after_accepted_span() {
         let _live = crate::node_graph::physics::PhysicsStepScope::for_render(false);
-        let settings = FluidSettings::default();
+        let settings = FluidSettings { resolution: 8, ..FluidSettings::default() };
         let controls = FluidControls::default();
         let mut runtime = FluidRuntime::default();
         runtime.observe(settings, controls, Seconds(0.0), 1.0, 0.0).unwrap();
@@ -2189,10 +2181,9 @@ mod tests {
             )
         };
         // Wall-clock waits only bound a poll; they never decide an outcome.
-        let wait_for_tick_change = |runtime: &mut FluidRuntime, transport: f64, speed: f32| {
-            let from = runtime.completed_tick;
+        let wait_for_endpoint = |runtime: &mut FluidRuntime, transport: f64, speed: f32, endpoint: f64| {
             let started = std::time::Instant::now();
-            while runtime.completed_tick == from {
+            while runtime.completed_time + 1e-9 < endpoint {
                 assert!(
                     started.elapsed() < std::time::Duration::from_secs(120),
                     "in-flight batch never replied"
@@ -2206,14 +2197,13 @@ mod tests {
         };
         // The batch in flight at pause covers played time, so it publishes;
         // nothing is requested after it.
-        wait_for_tick_change(&mut runtime, 1.0, 1.0);
+        wait_for_endpoint(&mut runtime, 1.0, 1.0, 1.0);
         assert_eq!(runtime.completed_tick, start_tick + 1);
         assert!((runtime.completed_time - 1.0).abs() < 1e-9);
         assert!(!runtime.busy, "held water requested more steps");
         let before = held(&runtime);
         let hold = |runtime: &mut FluidRuntime, transport: f64, speed: f32| {
-            let started = std::time::Instant::now();
-            while started.elapsed() < std::time::Duration::from_millis(1500) {
+            for _ in 0..5 {
                 runtime
                     .observe(settings, controls, Seconds(transport), speed, 0.0)
                     .unwrap();
@@ -2231,7 +2221,7 @@ mod tests {
         assert!(before == held(&runtime), "paused water moved");
         strike(&mut runtime, 1.0, 0);
         // Simulation Speed 0 holds while the transport keeps running.
-        hold(&mut runtime, 2.0, 0.0);
+        wait_for_endpoint(&mut runtime, 2.0, 0.0, 2.0);
         // The first observation at speed zero completes the preceding speed-1
         // interval. Only subsequent held observations must remain unchanged.
         let after_transition = held(&runtime);
@@ -2249,26 +2239,27 @@ mod tests {
         // The first resumed observation at transport 3.0 sees the held
         // speed-zero interval and remains at time 2.0. Transport 4.0 then
         // advances one live interval at speed 1.
-        wait_for_tick_change(&mut runtime, 4.0, 1.0);
+        wait_for_endpoint(&mut runtime, 4.0, 1.0, 3.0);
         assert_eq!(
             runtime.completed_tick,
             after_transition.1 + 1,
-            "resume publishes one batch, not a jump"
+            "resume consumes the chosen cadence"
         );
         assert!((runtime.completed_time - 3.0).abs() < 1e-9);
         assert_eq!(runtime.drain_applied_impulses().count(), 0, "no discarded impulse ran");
     }
 
     #[test]
-    fn fluid_live_runtime_preserves_20_24_30_and_60_fps_endpoints() {
-        let _live = crate::node_graph::physics::PhysicsStepScope::for_render(false);
+    fn sim_rate_cpu_flip_live_cadence() {
         let settings = FluidSettings {
             resolution: 8,
             fill_height: 0.0,
             ..FluidSettings::default()
         };
         let controls = FluidControls::default();
-        for fps in [20.0, 24.0, 30.0, 60.0] {
+        for rate in manifold_physics::SimRate::ALL {
+            let _live = crate::node_graph::physics::PhysicsStepScope::for_settings(false, manifold_physics::PhysicsSettings { sim_rate: rate });
+            let fps = 60.0;
             let mut runtime = FluidRuntime::default();
             runtime.observe(settings, controls, Seconds::ZERO, 1.0, 0.0).unwrap();
             runtime.advance(true).unwrap();
@@ -2278,8 +2269,9 @@ mod tests {
                     .observe(settings, controls, Seconds(transport), 1.0, 0.0)
                     .unwrap();
                 runtime.advance(false).unwrap();
+                let accepted = runtime.clock.accepted_time();
                 let started = std::time::Instant::now();
-                while runtime.completed_time + 1e-9 < transport {
+                while runtime.completed_time + 1e-9 < accepted {
                     assert!(
                         started.elapsed() < std::time::Duration::from_secs(30),
                         "live fluid endpoint stalled at {transport}s for {fps}fps"
@@ -2290,8 +2282,8 @@ mod tests {
                     runtime.advance(false).unwrap();
                     std::thread::sleep(std::time::Duration::from_millis(1));
                 }
-                assert!((runtime.completed_time - transport).abs() < 1e-9);
-                assert_eq!(runtime.completed_tick, frame);
+                assert!((runtime.completed_time - accepted).abs() < 1e-9);
+                assert_eq!(runtime.completed_tick, (frame * u64::from(rate.hz())) / 60);
             }
         }
     }

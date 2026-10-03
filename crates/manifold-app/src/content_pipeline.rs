@@ -2103,13 +2103,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         audio_visuals: Option<&manifold_core::audio_visual::AudioVisualRegistry>,
     ) {
         // Prioritize accurate physics work before drawing, retaining any debt.
-        let preview_fps = engine
-            .project()
-            .map_or(60.0, |p| f64::from(p.settings.frame_rate))
-            .max(1.0);
-        let _physics_scope = manifold_renderer::node_graph::physics::PhysicsStepScope::for_project_rate(
-            export_mode,
-            preview_fps,
+        let physics = engine.project().map_or_else(
+            manifold_core::settings::PhysicsSettings::default,
+            |project| project.settings.physics,
+        );
+        let _physics_scope = manifold_renderer::node_graph::physics::PhysicsStepScope::for_settings(
+            export_mode, physics,
         );
         let _t_frame = std::time::Instant::now();
 

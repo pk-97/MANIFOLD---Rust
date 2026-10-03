@@ -92,9 +92,9 @@ fn fluid_impulse_stamp_tracks_target_time_from_exact_transport() {
 fn fluid_source_samples_preserve_project_intervals_and_audio_hits() {
     use crate::node_graph::physics::PhysicsStepScope;
 
-    for project_fps in [24.0, 60.0] {
-        let _export = PhysicsStepScope::for_project_rate(true, project_fps);
-        let dt = 1.0 / project_fps;
+    for rate in manifold_physics::SimRate::ALL {
+        let _export = PhysicsStepScope::for_settings(true, manifold_physics::PhysicsSettings { sim_rate: rate });
+        let dt = rate.interval();
         let mut runtime = FluidRuntime::default();
         observe(&mut runtime, 0.0, 0.0);
         runtime.advance(true).unwrap();

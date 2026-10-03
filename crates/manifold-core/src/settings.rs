@@ -6,15 +6,18 @@ use crate::types::{
 use crate::units::{Beats, Bpm};
 use serde::{Deserialize, Serialize};
 
-// Re-export RT quality types from foundation (UI's accessible home)
+// Shared settings types are also available to the UI and physics API.
 pub use manifold_foundation::settings::{
-    RtQualityColumn, RtQualitySettings, RtQualityTier, RtRayResolution, RtSpatialDenoise,
+    PhysicsSettings, SimRate, RtQualityColumn, RtQualitySettings, RtQualityTier, RtRayResolution,
+    RtSpatialDenoise,
 };
 
 /// Project-wide settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectSettings {
+    #[serde(default = "PhysicsSettings::legacy")]
+    pub physics: PhysicsSettings,
     #[serde(default = "default_1920")]
     pub output_width: i32,
     #[serde(default = "default_1080")]
@@ -262,6 +265,7 @@ pub struct ProjectSettings {
 impl Default for ProjectSettings {
     fn default() -> Self {
         Self {
+            physics: PhysicsSettings::default(),
             output_width: 1920,
             output_height: 1080,
             frame_rate: 60.0,
@@ -519,6 +523,10 @@ fn default_neg_one_i32() -> i32 {
 }
 fn default_true() -> bool {
     true
+}
+
+impl ProjectSettings {
+    pub fn legacy() -> Self { Self { physics: PhysicsSettings::legacy(), ..Self::default() } }
 }
 
 #[cfg(test)]

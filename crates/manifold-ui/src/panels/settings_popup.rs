@@ -14,12 +14,14 @@
 //! the display's EDR headroom.
 
 use crate::{ProjectAction, RootAction, TransportAction};
-use crate::chrome::{ChromeHost, Pad, Sizing, View, components};
+use crate::chrome::{ChromeHost, Pad, Sizing, SliderSpec, View, components};
 use crate::color;
 use crate::input::{Key, UIEvent};
 use crate::node::*;
 use crate::tree::UITree;
 use crate::types::TonemapCurve;
+use crate::slider::{SliderColors, SliderDragState};
+use manifold_foundation::settings::SimRate;
 
 use super::PanelAction;
 use super::overlay::{
@@ -29,6 +31,12 @@ use super::overlay::{
 // Stable keys for the host-owned modal chrome (background + title strip).
 const KEY_BG: u64 = 71_001;
 const KEY_CLOSE: u64 = 71_002;
+const KEY_SIM_RATE: u64 = 71_003;
+const SIM_RATE_TOOLTIP: &str = "Simulation updates per second. Hits land up to one update late; kicks are read at this rate.";
+
+fn sim_rate_text(index: f32) -> String {
+    format!("{} Hz", SimRate::ALL[index.round().clamp(0.0, 3.0) as usize].hz())
+}
 
 // ── Layout ──
 const PANEL_W: f32 = 340.0;
@@ -42,9 +50,9 @@ const LABEL_W: f32 = 96.0;
 const SEG_GAP: f32 = 4.0;
 const BTN_FONT: u16 = color::FONT_LABEL;
 
-/// Number of control rows under the single "Render" section. Kept in lockstep
+/// Number of control rows under the existing Settings section. Kept in lockstep
 /// with `build_rows` so `body_height` matches the imperative layout.
-const ROW_COUNT: f32 = 7.0;
+const ROW_COUNT: f32 = 8.0;
 
 pub struct SettingsPopup {
     open: bool,
@@ -62,6 +70,8 @@ pub struct SettingsPopup {
     sdr_preview: bool,
     hdr_on: bool,
     split_sections: bool,
+    sim_rate: SimRate,
+    sim_rate_drag: SliderDragState,
 
     /// The `(x, y)` origin `build_at` last resolved from `Anchor::Centered`
     /// — stashed on every `build_at` (still needed so `build_nodes` has an
@@ -90,6 +100,8 @@ impl SettingsPopup {
             sdr_preview: false,
             hdr_on: false,
             split_sections: false,
+            sim_rate: SimRate::default(),
+            sim_rate_drag: SliderDragState::with_range(0.0, 3.0, true),
             last_placement: None,
         }
     }
@@ -144,6 +156,14 @@ impl SettingsPopup {
         self.split_sections = on;
     }
 
+    pub fn sync_sim_rate(&mut self, tree: &mut UITree, rate: SimRate) {
+        self.sim_rate = rate;
+        if !self.sim_rate_drag.is_dragging() {
+            let index = SimRate::ALL.iter().position(|r| *r == rate).expect("rate choice");
+            self.sim_rate_drag.sync(tree, index as f32, &sim_rate_text);
+        }
+    }
+
     fn body_height(&self) -> f32 {
         PAD + TITLE_H
             + SECTION_GAP
@@ -155,7 +175,7 @@ impl SettingsPopup {
 
     // ── Chrome (background + title strip + close), as a host View ──
     fn chrome_view(&self) -> View {
-        View::panel()
+        View::column(0.0)
             .fill()
             .style(UIStyle {
                 bg_color: Color32::new(19, 19, 22, 250),
@@ -189,6 +209,17 @@ impl SettingsPopup {
                             .key(KEY_CLOSE),
                     ),
             )
+            .child(View::spacer().h(Sizing::Fixed(SECTION_GAP + SECTION_H + 7.0 * (ROW_H + ROW_GAP))))
+            .child(View::slider_row(SliderSpec {
+                label: Some("Sim Rate".into()),
+                value: SimRate::ALL.iter().position(|rate| *rate == self.sim_rate).expect("rate choice") as f32 / 3.0,
+                default: 2.0 / 3.0,
+                value_text: format!("{} Hz", self.sim_rate.hz()),
+                colors: SliderColors::default_slider(),
+                font_size: BTN_FONT,
+                label_width: LABEL_W,
+                reset: PanelAction::Project(ProjectAction::SetSimRate(SimRate::Hz30)),
+            }).fill_w().h(Sizing::Fixed(ROW_H)).key(KEY_SIM_RATE))
     }
 
     fn build_nodes(&mut self, tree: &mut UITree, x: f32, y: f32) {
@@ -204,6 +235,14 @@ impl SettingsPopup {
             .node_id_for_key(KEY_CLOSE)
             .unwrap_or(NodeId::PLACEHOLDER);
 
+        if let Some(ids) = self.host.slider_ids(KEY_SIM_RATE) {
+            for id in [ids.label, Some(ids.track), Some(ids.value_text)].into_iter().flatten() {
+                if let Some(node) = tree.get_node_mut(id) {
+                    node.tooltip = Some(SIM_RATE_TOOLTIP.into());
+                }
+            }
+            self.sim_rate_drag.set_ids(ids);
+        }
         let inner_x = x + PAD;
         let inner_w = PANEL_W - PAD * 2.0;
         let ctrl_x = inner_x + LABEL_W;
@@ -217,7 +256,7 @@ impl SettingsPopup {
             cy,
             inner_w,
             SECTION_H,
-            "RENDER",
+            "PROJECT",
             section_style(),
         );
         cy += SECTION_H;
@@ -357,6 +396,7 @@ impl SettingsPopup {
 
     fn owns_node(&self, id: NodeId) -> bool {
         id == self.bg_id || id == self.close_id || self.actions.iter().any(|(n, _)| *n == id)
+            || self.sim_rate_drag.ids().is_some_and(|ids| id == ids.track || id == ids.value_text || ids.label == Some(id))
     }
 }
 
@@ -388,8 +428,24 @@ impl Overlay for SettingsPopup {
         self.build_nodes(tree, placement.rect.x, placement.rect.y);
     }
 
-    fn on_event(&mut self, event: &UIEvent, _tree: &mut UITree) -> OverlayResponse {
+    fn on_event(&mut self, event: &UIEvent, tree: &mut UITree) -> OverlayResponse {
         match event {
+            UIEvent::PointerDown { node_id, pos, .. }
+                if self.sim_rate_drag.try_start_drag(*node_id, pos.x).is_some() => {
+                self.sim_rate_drag.apply_drag(pos.x, tree, &sim_rate_text);
+                OverlayResponse::Consumed(Vec::new())
+            }
+            UIEvent::Drag { pos, .. } if self.sim_rate_drag.is_dragging() => {
+                self.sim_rate_drag.apply_drag(pos.x, tree, &sim_rate_text);
+                OverlayResponse::Consumed(Vec::new())
+            }
+            UIEvent::PointerUp { .. } | UIEvent::DragEnd { .. } if self.sim_rate_drag.end_drag() => {
+                let rate = SimRate::ALL[self.sim_rate_drag.cached_value() as usize];
+                OverlayResponse::Consumed(vec![PanelAction::Project(ProjectAction::SetSimRate(rate))])
+            }
+            UIEvent::RightClick { node_id: Some(id), .. } if self.sim_rate_drag.track_id() == Some(*id) => {
+                OverlayResponse::Consumed(vec![PanelAction::Project(ProjectAction::SetSimRate(SimRate::Hz30))])
+            }
             UIEvent::KeyDown { key: Key::Escape, .. } => {
                 self.open = false;
                 OverlayResponse::Consumed(Vec::new())
