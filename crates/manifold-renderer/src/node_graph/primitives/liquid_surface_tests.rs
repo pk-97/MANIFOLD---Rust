@@ -1803,6 +1803,9 @@ fn fluid_mesh_grid_native_solid_and_clamp_match_engine() {
         let simulation = crate::node_graph::liquid::lattice::LiquidLattice::from_layout(&layout);
         let (particles, _) = harness.array(&[particle([0.0, 1.0, 0.0], 0.1, 1)], 1);
         let (stats, _) = harness.array(&[0u32; super::liquid_stats::LIQUID_STATS_WORDS as usize], super::liquid_stats::LIQUID_STATS_WORDS as usize);
+        // A frame publishes only beside a birth identity: liquid_state's seed
+        // for this one particle is next id 2, epoch 0, no reservation, no reset.
+        let (identity, _) = harness.array::<u32>(&[2, 0, 0, 0], 4);
         let (published, _) = harness.array::<f32>(&[], 1);
         let grid_nodes: [Slot; 3] = std::array::from_fn(|_| harness.scalar());
         let mut frame_params = params(&[
@@ -1814,7 +1817,7 @@ fn fluid_mesh_grid_native_solid_and_clamp_match_engine() {
         let mut frame = super::liquid_frame::LiquidFrame::new();
         frame.prepare_pipelines(&harness.device);
         let (scalars, errors) = harness.run(&mut frame,
-            &[("particles", particles), ("stats", stats), ("solid", solid)],
+            &[("particles", particles), ("stats", stats), ("identity", identity), ("solid", solid)],
             &[("solid_b", published), ("grid_nodes_x", grid_nodes[0]), ("grid_nodes_y", grid_nodes[1]), ("grid_nodes_z", grid_nodes[2])],
             &frame_params);
         assert!(errors.is_empty(), "{errors:?}");
