@@ -40,7 +40,10 @@ const MAX_COARSE_CELLS: u64 = 64;
 /// The longest lattice side the solver takes.
 pub(crate) const MAX_SIDE: u32 = 1024;
 /// Iterations one solve may run: the scalars buffer holds two per iteration.
-pub(crate) const MAX_ITERATIONS: u32 = 900;
+/// Not the engine's 900, which bounds its MIC-preconditioned solve: this
+/// multigrid one converges in 10 to 15, and every round up to the cap is
+/// encoded for each solve of each clock slot whether it runs or not.
+pub(crate) const MAX_ITERATIONS: u32 = 64;
 /// The stop's relative tolerance on |r|∞ / |f|∞, FLIP Fluids'
 /// `_pressureSolveTolerance` unchanged: f32 carries the recursive residual
 /// below it in 11 to 14 iterations on every saved problem

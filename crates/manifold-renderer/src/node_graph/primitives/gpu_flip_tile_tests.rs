@@ -10,11 +10,10 @@ use manifold_gpu::GpuBuffer;
 use super::gpu_flip_preset::WaterScene;
 use super::gpu_flip_scene_tests::Run;
 use super::gpu_flip_step::{
-    CELL_REACH, DEFAULT_TOP_SPEED, FACE_VALID_LAYERS, StepParams, TILE, band_layers, dispatch_pass, ring_max,
-    set_all_tiles, set_poison, tile_counts, tile_total, travel_cells,
+    CELL_REACH, DEFAULT_TOP_SPEED, FACE_VALID_LAYERS, StepParams, TILE, band_layers, dispatch_pass, halo_travel, ring_max,
+    set_all_tiles, set_poison, tile_counts, tile_total,
 };
 use super::liquid_surface_tests::read;
-use crate::node_graph::fluid::TICK;
 use crate::node_graph::fluid_particles::{CellRange, FluidParticle};
 
 /// The step shader's poison entry: NaN into every cell array of the tiles
@@ -242,7 +241,7 @@ fn gpu_flip_tiles_match_the_cpu_classification() {
     let device = crate::test_device();
     let layout = scene.layout();
     let (n, min, h) = (layout.cells, layout.min, layout.cell_size as f32);
-    let travel = travel_cells(DEFAULT_TOP_SPEED, (TICK / scene.steps as f64) as f32, h);
+    let travel = halo_travel(DEFAULT_TOP_SPEED, scene.steps as f32, h);
     let r = ring_max(band_layers(travel).max(FACE_VALID_LAYERS));
     let total = tile_total(n) as usize;
     let params = StepParams { n, box_min: min, cell_size: h, ring_max: r, ..StepParams::default() };

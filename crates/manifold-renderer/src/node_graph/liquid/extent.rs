@@ -60,7 +60,7 @@ use crate::node_graph::primitives::gpu_flip_domain::gpu_flip_geometry;
 use crate::node_graph::primitives::gpu_flip_pressure::{lattice_refusal, scratch_bytes as pressure_scratch_bytes};
 use crate::node_graph::fluid::TICK;
 use crate::node_graph::primitives::gpu_flip_step::{
-    DEFAULT_TOP_SPEED, FACE_VALID_LAYERS, band_layers, face_bytes, ring_max, scratch_bytes as step_scratch_bytes, travel_cells,
+    DEFAULT_TOP_SPEED, FACE_VALID_LAYERS, band_layers, face_bytes, halo_travel, ring_max, scratch_bytes as step_scratch_bytes,
 };
 use crate::node_graph::primitives::volume_surface_mesh::start_capacity;
 use crate::node_graph::resource_allocation::plan_array_allocations;
@@ -1000,8 +1000,8 @@ fn blob_bounds(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.covers("bounds", 8)
 }
 
-fn optional_blob_bounds(x: &AtomExtent<'_>) -> Result<(), Verdict> {
-    if x.wired("bounds") && x.bytes("bounds") != Some(8) {
+fn required_blob_bounds(x: &AtomExtent<'_>) -> Result<(), Verdict> {
+    if x.bytes("bounds") != Some(8) {
         return Err(x.uncovered("bounds must contain exactly two f32 words from Blob Bounds".into()));
     }
     Ok(())
@@ -1023,7 +1023,7 @@ fn particle_volume(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     for (port, n) in ["volume_nodes_x", "volume_nodes_y", "volume_nodes_z"].into_iter().zip(refined) {
         x.publish(port, n as f32);
     }
-    optional_blob_bounds(x)?;
+    required_blob_bounds(x)?;
     searched(x)?;
     brick_schedule(x, refined)?;
     if x.wired("interior") {
@@ -1054,7 +1054,7 @@ fn lattice_bricks(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let bytes = u64::from(layout.words) * 4;
     x.provide("bricks", bytes);
     x.hold(bytes + storage_words(layout.count as usize) as u64 * 4);
-    optional_blob_bounds(x)
+    required_blob_bounds(x)
 }
 
 fn brick_schedule(x: &AtomExtent<'_>, nodes: [u32; 3]) -> Result<(), Verdict> {
@@ -1424,7 +1424,7 @@ fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let steps = x.scalar("steps", 1.0).round().clamp(1.0, 64.0);
     let top_speed = x.scalar("top_speed", DEFAULT_TOP_SPEED);
     let top_speed = if top_speed.is_finite() && top_speed > 0.0 { top_speed } else { DEFAULT_TOP_SPEED };
-    let travel = travel_cells(top_speed, (TICK / f64::from(steps)) as f32, x.lattice()?.cell_size());
+    let travel = halo_travel(top_speed, steps, x.lattice()?.cell_size());
     let ring = ring_max(band_layers(travel).max(FACE_VALID_LAYERS));
     x.hold(faces + pressure_scratch_bytes(cells) + step_scratch_bytes(cells, slots, ring));
     field_reads(x)?;

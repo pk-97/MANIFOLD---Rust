@@ -15,7 +15,7 @@ crate::primitive! {
     outputs: { bounds: Array(f32), },
     params: [],
     depth_rule: Terminal,
-    composition_notes: "Wire the same shaped blobs into this node, particle_volume and lattice_bricks. Both consumers use these two words to search all bins that may contain an influencing blob, independently of bin width. Unwired consumers compute the same maximum directly; this node shares the reduction across lattice samples.",
+    composition_notes: "Wire the same shaped blobs into this node, particle_volume and lattice_bricks. Both consumers require these two words to search all bins that may contain an influencing blob, independently of bin width; one reduction serves every lattice sample. Graphs saved before this node get it at load.",
     examples: [],
     picker: { label: "Blob Bounds", category: Atom },
     summary: "Measures kernel reach for exact particle surface searches.",

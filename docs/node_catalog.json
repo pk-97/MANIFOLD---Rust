@@ -15269,7 +15269,7 @@
           "name": "iterations",
           "range": [
             "0",
-            "900"
+            "64"
           ],
           "type": "int"
         },
@@ -17601,7 +17601,7 @@
         },
         {
           "name": "bounds",
-          "required": false,
+          "required": true,
           "type": "Array"
         },
         {
@@ -26973,8 +26973,7 @@
       "derived_recompute": true,
       "derived_uniforms": [
         "brick_pass:u32",
-        "interior_len:u32",
-        "bounds_len:u32"
+        "interior_len:u32"
       ],
       "examples": [
         "WaterDamBreakGpu",
@@ -27012,7 +27011,7 @@
         },
         {
           "name": "bounds",
-          "required": false,
+          "required": true,
           "type": "Array"
         },
         {
@@ -27258,7 +27257,7 @@
           "type": "float"
         }
       ],
-      "purpose": "The liquid's level set on a lattice: at each node, the distance to the nearest kernel ellipsoid, a·(|G·(x − c)| − 1) with a the kernel's longest axis (exact for spheres), negative inside and initialized to three times the largest kernel radius; each kernel visits the inclusive FLIP grid support box from floor((centre - 1.5r)/spacing) through floor((centre + 1.5r)/spacing)+1; positive band_extra expands support and the exterior distance by that distance plus one lattice-cell diagonal so an offset crossing retains its interpolation support. The lattice is the solid lattice (nodes_x/y/z over the center/size box) refined resolution_scale times per cell. Nodes inside a solid are never inside the liquid; borders follow the same solid-SDF rule as the production FLIP mesher (the preview-only +0.001 closure is not applied). Optional bounds from node.blob_bounds share the maximum reduction; unwired graphs evaluate the same maximum directly.",
+      "purpose": "The liquid's level set on a lattice: at each node, the distance to the nearest kernel ellipsoid, a·(|G·(x − c)| − 1) with a the kernel's longest axis (exact for spheres), negative inside and initialized to three times the largest kernel radius; each kernel visits the inclusive FLIP grid support box from floor((centre - 1.5r)/spacing) through floor((centre + 1.5r)/spacing)+1; positive band_extra expands support and the exterior distance by that distance plus one lattice-cell diagonal so an offset crossing retains its interpolation support. The lattice is the solid lattice (nodes_x/y/z over the center/size box) refined resolution_scale times per cell. Nodes inside a solid are never inside the liquid; borders follow the same solid-SDF rule as the production FLIP mesher (the preview-only +0.001 closure is not applied). The largest kernel radius and support come from node.blob_bounds on the same blobs.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Turns liquid particles into a distance field on a grid, the step before the surface mesh is drawn.",
