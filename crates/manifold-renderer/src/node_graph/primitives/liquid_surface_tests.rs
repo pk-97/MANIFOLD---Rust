@@ -1821,9 +1821,9 @@ fn fluid_clamp_liquid_to_solids_matches_reference_and_passes_through() {
     assert!(errors.iter().any(|e| e.contains("larger than its level set")), "{errors:?}");
 }
 
-/// On stage the clamp runs fused into the last smoothing pass; the editor and
-/// the thumbnail run it unfused. The Still Pool, where it holds the water face
-/// at the front glass, must render the same both ways.
+/// On stage the clamp's dense form fuses into the last smoothing pass; the
+/// editor and thumbnail use its standalone scheduled kernel. The Still Pool,
+/// where it holds the water face at the front glass, must render the same both ways.
 #[test]
 fn fluid_clamp_scheduled_boundary_renders_like_unfrozen() {
     use manifold_core::effect_graph_def::EffectGraphDef;
@@ -1839,8 +1839,8 @@ fn fluid_clamp_scheduled_boundary_renders_like_unfrozen() {
     let fused = crate::node_graph::freeze::install::fuse_generator_view(&canonical, &registry)
         .expect("the Still Pool fuses and builds");
     assert!(
-        fused.def.nodes.iter().any(|n| n.type_id == "node.clamp_liquid_to_solids"),
-        "scheduled clamp retains its generated standalone dispatch"
+        !fused.def.nodes.iter().any(|n| n.type_id == "node.clamp_liquid_to_solids"),
+        "the clamp's declared dense form fuses into the final smoothing pass"
     );
     let arc = device.arc();
     let render = |def: &EffectGraphDef| {

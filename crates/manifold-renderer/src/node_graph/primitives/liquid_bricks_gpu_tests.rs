@@ -66,6 +66,25 @@ fn equal(a: &GpuBuffer, b: &GpuBuffer, total: usize, stage: &str) {
     );
 }
 
+/// Vertex buffers compare bit-for-bit except the two alignment pads after
+/// `position` and `normal`: a whole-struct store copies whatever the kernel's
+/// stack held there, which depends on how the shader compiler inlined the
+/// body, and nothing reads it.
+fn equal_vertices(a: &GpuBuffer, b: &GpuBuffer, total: usize, stage: &str) {
+    const WORDS: usize = std::mem::size_of::<MeshVertex>() / 4;
+    const PAD_LANES: [usize; 2] = [3, 7];
+    let a = read::<u32>(a, total);
+    let b = read::<u32>(b, total);
+    assert_eq!(
+        a.iter()
+            .zip(&b)
+            .enumerate()
+            .position(|(i, (a, b))| a != b && !PAD_LANES.contains(&(i % WORDS))),
+        None,
+        "first bit difference: {stage}"
+    );
+}
+
 fn fixture(resolution: u32) {
     let mut h = Harness::new();
     let solid_nodes = [resolution + 4; 3];
@@ -402,7 +421,7 @@ fn fixture(resolution: u32) {
                 ],
                 SLOTS,
             );
-            equal(
+            equal_vertices(
                 &mesh_buffer,
                 &dense_mesh,
                 mesh_buffer.size as usize / 4,
@@ -459,7 +478,7 @@ fn fixture(resolution: u32) {
                     ],
                     SLOTS,
                 );
-                equal(
+                equal_vertices(
                     &relaxed[0][step].1,
                     &relaxed[1][step].1,
                     dense_mesh.size as usize / 4,
