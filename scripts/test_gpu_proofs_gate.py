@@ -166,6 +166,7 @@ class GpuProofsGateTests(unittest.TestCase):
             return 0, ""
 
         def fake_build(cmd, **kwargs):
+            self.assertEqual(kwargs["env"]["CARGO_INCREMENTAL"], "0")
             events.append(("build", cmd))
             return subprocess.CompletedProcess(cmd, build_exit)
 
