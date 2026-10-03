@@ -2,6 +2,10 @@
 // section 1 (the step)): every pass of one step but the sort, the solid
 // distance and the pressure solve, each a separate entry point. Included
 // after liquid_pose.wgsl, liquid_collider.wgsl and liquid_field.wgsl.
+// Narrow-band transport, sharp coupling and lifecycle integration follow
+// Ferstl et al., Narrow Band FLIP for Liquid Simulations, CGF 35(2), 2016,
+// doi:10.1111/cgf.12825. FLIP Fluids attribution below covers only the
+// explicitly named baseline transfers, boundaries and source operations.
 //
 // Cells are n per axis from the box minimum, x fastest. A face grid is
 // (n + 1)³ FaceSample records indexed like the cells with m = n + 1: record
@@ -85,7 +89,7 @@ struct Params {
     ring_cap: u32,
     // The farthest ring the table holds; ring_max + 1 means none within it.
     ring_max: u32,
-    tile_pad: u32,
+    narrow_band: u32, // Ferstl 2016: 0 dense, 1 initialization, 2 band-masked.
 };
 
 struct CellRange {
@@ -213,6 +217,13 @@ fn particles_to_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
     let n = lattice();
     let m = n + vec3<i32>(1);
     let p = unflatten(idx, m);
+    if u.narrow_band == 2u {
+        let cell = clamp(p, vec3<i32>(0), n - vec3<i32>(1));
+        if !narrow_cell(flatten(cell, n)) {
+            faces_out[idx] = canonical_face(p, n);
+            return;
+        }
+    }
     var out = FaceSample(vec4<f32>(0.0), vec4<f32>(0.0));
     var exists = vec3<bool>(false);
     for (var a = 0; a < 3; a = a + 1) {
@@ -700,7 +711,7 @@ fn closest_body(x: vec3<f32>) -> i32 {
 // external acceleration over tick_seconds plus M⁻¹ times the reaction so
 // far this tick. Velocity w is the record's owner code
 // (gpu_flip_bodies.wgsl): each face's body, counted from this tick's first
-// row.
+// row. Weight w is the known mask: bit a set where axis a was sampled.
 @compute @workgroup_size(256)
 fn solid_face_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
     let idx = gid.x;
@@ -716,29 +727,21 @@ fn solid_face_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
     let h = u.cell_size;
     let first = max(u.rows - u.body_count, 0);
     var code = 0.0;
+    var known = 0.0;
     for (var a = 0; a < 3; a = a + 1) {
         if !face_exists(p, n, a) || p[a] == 0 || p[a] == n[a] {
             continue;
         }
-        // An open face beside a cut cell carries a dynamic body too: its
-        // (c − w) is not zero, so it is in the divergence and the body's
-        // pressure force (the engine extrapolates its rigid boundary map one
-        // layer out, RigidBoundaryVelocityMap::extrapolate). That map holds
-        // only coupled rigid bodies; an animated or fixed solid keeps its cut
-        // faces alone, or it drags the water beside it.
-        var lo = p;
-        lo[a] = p[a] - 1;
-        let cut_beside = solid_faces[flatten(lo, m)].face_weight.w < 1.0 || open.face_weight.w < 1.0;
-        let extended = !(open.face_weight[a] < 1.0);
-        if extended && !cut_beside {
+        // Only a face a solid covers is sampled (weight > 0 in
+        // MeshLevelSet::_computeVelocityGridThread); solid_extrapolate
+        // carries the samples out over the open faces.
+        if !(open.face_weight[a] < 1.0) {
             continue;
         }
+        known = known + f32(1u << u32(a));
         var centre = fma(vec3<f32>(p) + vec3<f32>(0.5), vec3<f32>(h), lattice_min);
         centre[a] = fma(f32(p[a]), h, lattice_min[a]);
         let row = closest_body(centre);
-        if extended && (row < 0 || !(bodies[u32(row)].position_inv_mass.w > 0.0)) {
-            continue;
-        }
         if row >= 0 {
             let bd = bodies[u32(row)];
             let body = row - first;
@@ -770,6 +773,88 @@ fn solid_face_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
         out.face_weight[a] = 0.25 * friction;
     }
     out.face_velocity.w = code;
+    out.face_weight.w = known;
+    faces_out[idx] = out;
+}
+
+// Layers of the solid velocity's extrapolation
+// (MeshLevelSet::_numVelocityExtrapolationLayers).
+const SOLID_LAYERS: u32 = 5u;
+
+// A face on the border of axis a's face lattice: on a box wall, or in the
+// first or last layer across it. The engine holds these done from the
+// start (GridUtils::_initializeStatusGridThread): never extrapolated, never
+// a seed, but counted with their value in a neighbour's mean.
+fn solid_border(p: vec3<i32>, a: i32, n: vec3<i32>) -> bool {
+    var top = n - vec3<i32>(1);
+    top[a] = n[a];
+    return any(p == vec3<i32>(0)) || any(p == top);
+}
+
+fn solid_known(s: FaceSample, a: i32) -> bool {
+    return ((u32(s.face_weight.w) >> u32(a)) & 1u) != 0u;
+}
+
+// One thread per face record, `faces_in` to `faces_out`: one layer of the
+// solid velocity's extrapolation (MACVelocityField::extrapolateVelocityField
+// for every solid, GridUtils::extrapolateGridWithObserver). An unknown inner
+// face with a known neighbour in its axis's lattice takes the mean of its
+// known and border neighbours and is known from the next layer; the owner
+// code goes with the first owned known neighbour, so a dynamic body's
+// reaction reaches the faces its velocity reaches (the engine's
+// RigidBoundaryVelocityMap::extrapolate). Run SOLID_LAYERS times.
+@compute @workgroup_size(256)
+fn solid_extrapolate(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    if idx >= face_total() {
+        return;
+    }
+    let n = lattice();
+    let m = n + vec3<i32>(1);
+    let p = unflatten(idx, m);
+    var out = faces_in[idx];
+    var known = u32(out.face_weight.w);
+    var code = u32(out.face_velocity.w);
+    for (var a = 0; a < 3; a = a + 1) {
+        if !face_exists(p, n, a) || solid_border(p, a, n) || solid_known(out, a) {
+            continue;
+        }
+        var top = n - vec3<i32>(1);
+        top[a] = n[a];
+        var sum = 0.0;
+        var count = 0.0;
+        var seeded = false;
+        var owner = 0u;
+        for (var b = 0; b < 3; b = b + 1) {
+            for (var d = -1; d <= 1; d = d + 2) {
+                var q = p;
+                q[b] = p[b] + d;
+                if q[b] < 0 || q[b] > top[b] {
+                    continue;
+                }
+                let s = faces_in[flatten(q, m)];
+                let border = solid_border(q, a, n);
+                if border || solid_known(s, a) {
+                    sum = sum + s.face_velocity[a];
+                    count = count + 1.0;
+                }
+                if !border && solid_known(s, a) {
+                    seeded = true;
+                    let o = (u32(s.face_velocity.w) >> (8u * u32(a))) & 255u;
+                    if owner == 0u {
+                        owner = o;
+                    }
+                }
+            }
+        }
+        if seeded {
+            out.face_velocity[a] = sum / count;
+            known = known | (1u << u32(a));
+            code = code | (owner << (8u * u32(a)));
+        }
+    }
+    out.face_velocity.w = f32(code);
+    out.face_weight.w = f32(known);
     faces_out[idx] = out;
 }
 
@@ -1065,6 +1150,69 @@ fn pocket_pin(@builtin(global_invocation_id) gid: vec3<u32>) {
     cell_out[idx] = select(water[idx], 0.0, leader);
 }
 
+// Separating solids (GPU_FLIP_PRESSURE_SOLVE.md section 8 (Separating
+// solids)): 1 where a water cell touching a solid is let go, its pressure held
+// at 0 and its leftover divergence free to be outflow. Carried step to step.
+@group(0) @binding(42) var<storage, read_write> let_go: array<f32>;
+
+// A water cell with any face less than fully open: a box wall or a body.
+fn touches_solid(p: vec3<i32>, n: vec3<i32>, m: vec3<i32>) -> bool {
+    for (var a = 0; a < 3; a = a + 1) {
+        var q = p;
+        q[a] = p[a] + 1;
+        if open_at(p, a, n, m) < 1.0 || open_at(q, a, n, m) < 1.0 {
+            return true;
+        }
+    }
+    return false;
+}
+
+// One thread per cell, `water` the solve mask to `cell_out` the contact mask:
+// the let-go set kept only on water touching a solid (and emptied on the
+// first step of the first tick), each let-go cell taken out of the mask.
+@compute @workgroup_size(256)
+fn separate_pin(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    if idx >= cell_total() {
+        return;
+    }
+    let n = lattice();
+    let m = n + vec3<i32>(1);
+    let first = u.tick_index == 0 && u.step_in_tick == 0;
+    let keep = !first && let_go[idx] > 0.5 && water[idx] > 0.5 && touches_solid(unflatten(idx, n), n, m);
+    let_go[idx] = select(0.0, 1.0, keep);
+    cell_out[idx] = select(water[idx], 0.0, keep);
+}
+
+// One thread per cell, after the projection and the bodies' reaction,
+// `water` the contact mask and `cell_out` (read only) the divergence of the
+// projected faces against the solids' updated face velocity: one active-set
+// update. A pressing cell whose pressure came out negative is let go; a
+// let-go cell whose leftover divergence is negative (water pushed into the
+// solid, relative to the solid's own motion) presses again.
+@compute @workgroup_size(256)
+fn separate_update(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    if idx >= cell_total() {
+        return;
+    }
+    let n = lattice();
+    let m = n + vec3<i32>(1);
+    let p = unflatten(idx, n);
+    if water[idx] > 0.5 {
+        if pressure[idx] < 0.0 && touches_solid(p, n, m) {
+            let_go[idx] = 1.0;
+        }
+        return;
+    }
+    if !(let_go[idx] > 0.5) {
+        return;
+    }
+    if cell_out[idx] < 0.0 {
+        let_go[idx] = 0.0;
+    }
+}
+
 // One thread per word: the pocket sums start at 0.
 @compute @workgroup_size(256)
 fn pocket_clear(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -1332,10 +1480,108 @@ fn pocket_condition(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 }
 
-// One thread, `capped` bound at the solver words: steps this tick whose
-// spread hit its cap unfinished.
-@compute @workgroup_size(1)
-fn pocket_tally() {
+// The solver words holding the step's dry, sealed and air cell counts.
+const POCKET_COUNT_WORD: u32 = 7u;
+var<workgroup> pocket_counts: array<atomic<u32>, 3>;
+var<workgroup> pocket_first_seed: atomic<u32>;
+var<workgroup> pocket_dry_floor: atomic<u32>;
+const POCKET_DRY_FLOOR_WORD: u32 = 16u;
+
+// A floor cell (y = 0) reading dry with water in every in-box face neighbour:
+// a hole under the water, not its edge.
+fn dry_floor_hole(idx: u32) -> bool {
+    let n = lattice();
+    let p = unflatten(idx, n);
+    if p.y != 0 || water[idx] > 0.5 {
+        return false;
+    }
+    for (var a = 0; a < 3; a = a + 1) {
+        for (var s = -1; s <= 1; s = s + 2) {
+            var d = p;
+            d[a] = p[a] + s;
+            if d[a] >= 0 && d[a] < n[a] && !(water[flatten(d, n)] > 0.5) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+const POCKET_SEED_WORD: u32 = 10u;
+
+// Why water cell idx touches air, as pocket_seed decides it: the neighbour's
+// index (0xffffffff for an open box face), the face's open fraction bits,
+// and axis * 2 + (1 on the high side); x is 0xffffffff when it does not.
+fn pocket_seed_reason(idx: u32) -> vec4<u32> {
+    let n = lattice();
+    let m = n + vec3<i32>(1);
+    let p = unflatten(idx, n);
+    for (var a = 0; a < 3; a = a + 1) {
+        let low_open = (u.closed_faces & (1u << u32(2 * a))) == 0u;
+        let high_open = (u.closed_faces & (1u << u32(2 * a + 1))) == 0u;
+        if low_open && p[a] == 0 {
+            return vec4<u32>(0xffffffffu, 0u, u32(2 * a), 0u);
+        }
+        if high_open && p[a] == n[a] - 1 {
+            return vec4<u32>(0xffffffffu, 0u, u32(2 * a + 1), 0u);
+        }
+        for (var s = -1; s <= 1; s = s + 2) {
+            var d = p;
+            d[a] = p[a] + s;
+            if d[a] >= 0 && d[a] < n[a] && !(water[flatten(d, n)] > 0.5) && pocket_linked(p, d, a, n, m) {
+                var f = p;
+                f[a] = max(p[a], d[a]);
+                return vec4<u32>(flatten(d, n), bitcast<u32>(open_at(f, a, n, m)), u32(2 * a) + select(0u, 1u, s > 0), 0u);
+            }
+        }
+    }
+    return vec4<u32>(0xffffffffu, 0u, 0xffffffffu, 0u);
+}
+
+// One workgroup, `capped` bound at the solver words: steps this tick whose
+// spread hit its cap unfinished, and the step's dry, sealed and air cells.
+@compute @workgroup_size(256)
+fn pocket_tally(@builtin(local_invocation_index) lane: u32) {
+    if lane < 3u {
+        atomicStore(&pocket_counts[lane], 0u);
+    }
+    if lane == 0u {
+        atomicStore(&pocket_first_seed, 0xffffffffu);
+        atomicStore(&pocket_dry_floor, 0u);
+    }
+    workgroupBarrier();
+    var counts = vec3<u32>(0u);
+    for (var idx = lane; idx < cell_total(); idx = idx + 256u) {
+        counts[min(pocket[idx], 2u)] += 1u;
+        if pocket[idx] == POCKET_AIR && pocket_seed_reason(idx).z != 0xffffffffu {
+            atomicMin(&pocket_first_seed, idx);
+        }
+        if dry_floor_hole(idx) {
+            atomicAdd(&pocket_dry_floor, 1u);
+        }
+    }
+    for (var k = 0u; k < 3u; k = k + 1u) {
+        atomicAdd(&pocket_counts[k], counts[k]);
+    }
+    workgroupBarrier();
+    if lane != 0u {
+        return;
+    }
+    for (var k = 0u; k < 3u; k = k + 1u) {
+        capped[POCKET_COUNT_WORD + k] = atomicLoad(&pocket_counts[k]);
+    }
+    capped[POCKET_DRY_FLOOR_WORD] = atomicLoad(&pocket_dry_floor);
+    let seed = atomicLoad(&pocket_first_seed);
+    capped[POCKET_SEED_WORD] = seed;
+    if seed != 0xffffffffu {
+        let why = pocket_seed_reason(seed);
+        capped[POCKET_SEED_WORD + 1u] = why.x;
+        capped[POCKET_SEED_WORD + 2u] = why.y;
+        capped[POCKET_SEED_WORD + 3u] = why.z;
+        if why.x != 0xffffffffu {
+            capped[POCKET_SEED_WORD + 4u] = bitcast<u32>(phi[why.x]);
+            capped[POCKET_SEED_WORD + 5u] = ranges[why.x].count;
+        }
+    }
     let unresolved = pocket_gate[POCKET_UNRESOLVED];
     if u.step_in_tick == 0 {
         capped[POCKET_WORD] = unresolved;
@@ -1404,6 +1650,10 @@ fn divergence(@builtin(global_invocation_id) gid: vec3<u32>) {
 fn particle_distance(@builtin(global_invocation_id) gid: vec3<u32>) {
     let idx = c_cell_index(gid.x);
     if idx == NO_CELL {
+        return;
+    }
+    if u.narrow_band == 2u && !narrow_cell(idx) {
+        cell_out[idx] = 3.0 * u.cell_size;
         return;
     }
     let n = lattice();
@@ -1588,6 +1838,10 @@ const MAX_DENSITY_ERROR: f32 = 0.5;
 fn density_source(@builtin(global_invocation_id) gid: vec3<u32>) {
     let idx = c_cell_index(gid.x);
     if idx == NO_CELL {
+        return;
+    }
+    if u.narrow_band == 2u && !narrow_cell(idx) {
+        cell_out[idx] = 0.0;
         return;
     }
     if !(water[idx] > 0.5) {
@@ -1874,7 +2128,7 @@ fn faces_to_particles(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let particle = sorted[idx];
     var out = particle;
-    let first = u.step_in_tick == 0;
+    let first = u.step_in_tick == 0 && u.narrow_band == 0u;
     let cfl_before = select(capped[2u * idx], 0u, first);
     let push_before = select(capped[2u * idx + 1u], 0u, first);
     capped[2u * idx] = cfl_before;
@@ -1893,12 +2147,17 @@ fn faces_to_particles(@builtin(global_invocation_id) gid: vec3<u32>) {
     let k2 = guard(s2, per_cell);
     let s3 = sample(q0 + 0.75 * per_cell * k2, n, 0u);
     let k3 = guard(s3, per_cell);
-    capped[2u * idx] = cfl_before + guarded(after, per_cell) + guarded(s2, per_cell) + guarded(s3, per_cell);
+    if u.narrow_band == 0u {
+        capped[2u * idx] = cfl_before + guarded(after, per_cell) + guarded(s2, per_cell) + guarded(s3, per_cell);
+    }
     let edge = vec3<f32>(WALL_MARGIN);
     // The density projection's move, step_dt · (spread(q) − new(q)): position
     // only, never kept as velocity. Zero rate binds `faces_in` as `spread`.
     let moved = per_cell * (sample(q0, n, 2u) - after);
-    let reached = q0 + per_cell * (2.0 * k1 + 3.0 * k2 + 4.0 * k3) / 9.0 + moved;
+    var reached = q0 + moved;
+    if u.narrow_band == 0u {
+        reached = q0 + per_cell * (2.0 * k1 + 3.0 * k2 + 4.0 * k3) / 9.0 + moved;
+    }
     var q1 = select(reached, clamp(reached, edge, vec3<f32>(n) - edge), finite(reached));
     var radius = particle.position_radius.w;
     if u.body_count > 0 && finite(q1) {
@@ -2078,6 +2337,7 @@ fn list_cell(tile: u32, gid: u32) -> u32 {
 // The cell passes run over the cell set C, the first `tile_counts[0]` tiles
 // of `tiles_by_ring`, through the triple at `tile_args[0]`.
 fn c_cell_index(gid: u32) -> u32 {
+    if u.narrow_band != 0u { return select(NO_CELL, gid, gid < cell_total()); }
     return list_cell(tiles_by_ring[gid >> 9u], gid);
 }
 
@@ -2085,6 +2345,7 @@ fn c_cell_index(gid: u32) -> u32 {
 // past the lattice (p[a] == n[a]) belongs to no cell and is a constant: wall
 // faces closed, the others absent (canonical_face), written by tiles_fill.
 fn c_face_index(gid: u32) -> u32 {
+    if u.narrow_band != 0u { return select(NO_CELL, gid, gid < face_total()); }
     let cell = c_cell_index(gid);
     if cell == NO_CELL {
         return NO_CELL;
@@ -2302,4 +2563,54 @@ fn tiles_lists() {
     tile_args[3u * (r + 1u) + 1u] = 1u;
     tile_args[3u * (r + 1u) + 2u] = 1u;
     capped[6u] = bitcast<u32>(f32(tile_counts[0]) / f32(total));
+}
+
+// Ferstl et al. 2016, Narrow Band FLIP: RK4 forward transport before
+// particle-to-grid transfer, paired with RK4 distance/face backtraces.
+// Solid resolution and domain boundaries reuse the existing FLIP step.
+@compute @workgroup_size(256)
+fn narrow_move(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if i >= u.particles { return; }
+    var out = sorted[i];
+    if u.step_in_tick == 0 { capped[2u*i] = 0u; capped[2u*i+1u] = 0u; }
+    if out.position_radius.w <= 0.0 { particles_out[i] = out; return; }
+    let n = lattice();
+    let q = (out.position_radius.xyz - u.box_min) / u.cell_size;
+    let dt = u.step_dt / u.cell_size;
+    let a = sample(q, n, 0u);
+    let b = sample(q + 0.5 * dt * a, n, 0u);
+    let c = sample(q + 0.5 * dt * b, n, 0u);
+    let d = sample(q + dt * c, n, 0u);
+    var reached = q + dt * (a + 2.0*b + 2.0*c + d) / 6.0;
+    let edge = vec3<f32>(WALL_MARGIN);
+    if finite(reached) {
+        reached = clamp(reached, edge, vec3<f32>(n) - edge);
+        if u.body_count > 0 {
+            reached = resolve_solid(q, reached, n, edge);
+            if solid_at(reached, n) < 0.0 { out.position_radius.w = 0.0; }
+            capped[2u*i+1u] += push_refused;
+        }
+    }
+    if open_band(reached, n) { out.position_radius.w = 0.0; }
+    out.position_radius = vec4<f32>(u.box_min + reached*u.cell_size, out.position_radius.w);
+    particles_out[i] = out;
+}
+@group(0) @binding(45) var<storage, read> narrow_mask: array<u32>;
+fn narrow_cell(index: u32) -> bool { return narrow_mask[index] != 0u; }
+@group(0) @binding(43) var<storage, read> narrow_status: array<u32>;
+@group(0) @binding(44) var<storage, read_write> narrow_failure: array<u32>;
+@compute @workgroup_size(1)
+fn narrow_latch() {
+    narrow_failure[0] = max(narrow_failure[0], narrow_status[0]);
+}
+@compute @workgroup_size(1)
+fn narrow_tally() {
+    if u.narrow_band != 0u { capped[6] = bitcast<u32>(1.0); }
+    if u.step_in_tick == 0 { capped[NARROW_BAND_SHORTAGE_TAIL] = 0u; }
+    capped[NARROW_BAND_SHORTAGE_TAIL] += narrow_status[0];
+}
+@compute @workgroup_size(256)
+fn narrow_disabled(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if gid.x < cell_total() { cell_out[gid.x] = f32(u.n.x + u.n.y + u.n.z) * u.cell_size; }
 }

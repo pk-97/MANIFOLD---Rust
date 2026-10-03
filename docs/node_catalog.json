@@ -14494,6 +14494,16 @@
           "name": "solve_level",
           "required": false,
           "type": "f32"
+        },
+        {
+          "name": "narrow_band",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "epoch",
+          "required": false,
+          "type": "f32"
         }
       ],
       "label": "GPU FLIP Step",
@@ -14546,12 +14556,17 @@
           "type": "f32"
         },
         {
+          "capacity": "fixed:1",
+          "name": "interior",
+          "type": "Array"
+        },
+        {
           "capacity": "follows:reaction",
           "name": "reaction_out",
           "type": "Array"
         },
         {
-          "capacity": "inputs:2007@1000,2055@1024",
+          "capacity": "inputs:2018@1000,2066@1024",
           "name": "capped",
           "type": "Array"
         }
@@ -14854,6 +14869,16 @@
           "range": [
             "0",
             "4"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "Narrow Band",
+          "name": "narrow_band",
+          "range": [
+            "0",
+            "1"
           ],
           "type": "int"
         }
@@ -18585,6 +18610,11 @@
           "type": "Array"
         },
         {
+          "name": "interior",
+          "required": false,
+          "type": "Array"
+        },
+        {
           "name": "solid",
           "required": false,
           "type": "Array"
@@ -18675,6 +18705,16 @@
         {
           "capacity": "fixed:1",
           "name": "particles_b",
+          "type": "Array"
+        },
+        {
+          "capacity": "fixed:1",
+          "name": "interior_a",
+          "type": "Array"
+        },
+        {
+          "capacity": "fixed:1",
+          "name": "interior_b",
           "type": "Array"
         },
         {
@@ -18781,7 +18821,7 @@
           "type": "int"
         }
       ],
-      "purpose": "Publish a particle liquid's state as particle frames for the liquid surface: after every simulated tick, write the first `count` records as frame B with id 0 (the previous B becomes A), slots past count at radius 0, with the frame lattice, the blend and span of the one-tick-behind display clock, and the solid lattice: node.liquid_solid_distance's walls and bodies when `solid` is wired, each tick's copy kept beside its frame, otherwise the walls alone. With face_u_in, face_v_in and face_w_in wired, each tick's face grid is published beside frame B as face_u, face_v and face_w over the domain's cells, with face_valid_layers from the param. A tick whose stats flag a non-finite record is never published.",
+      "purpose": "Publish a particle liquid's state as particle frames for the liquid surface: after every simulated tick, write the first `count` records as frame B with id 0 (the previous B becomes A), slots past count at radius 0, with the frame lattice, the blend and span of the one-tick-behind display clock, and the solid lattice: node.liquid_solid_distance's walls and bodies when `solid` is wired, each tick's copy kept beside its frame, otherwise the walls alone. With face_u_in, face_v_in and face_w_in wired, each tick's face grid is published beside frame B as face_u, face_v and face_w over the domain's cells, with face_valid_layers from the param. An optional cell-centred `interior` distance is copied into matching A/B slots. A tick whose stats flag a non-finite record or narrow-band capacity shortage is never published.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Hands a simulated particle liquid to the liquid surface, one frame per simulation tick.",
@@ -19076,6 +19116,11 @@
           "type": "Array"
         },
         {
+          "name": "interior_in",
+          "required": false,
+          "type": "Array"
+        },
+        {
           "name": "count",
           "required": false,
           "type": "f32"
@@ -19119,7 +19164,7 @@
           "type": "Array"
         },
         {
-          "capacity": "fixed:17",
+          "capacity": "fixed:28",
           "name": "stats",
           "type": "Array"
         },
@@ -19159,6 +19204,11 @@
           "type": "Array"
         },
         {
+          "capacity": "fixed:1",
+          "name": "interior",
+          "type": "Array"
+        },
+        {
           "name": "tick_index",
           "type": "f32"
         },
@@ -19172,7 +19222,7 @@
         }
       ],
       "params": [],
-      "purpose": "Hold a particle liquid across frames and run its tick region: seed the particles when the epoch changes, then repeat the region once per due tick with the tick's index. The region's last particles become the state, and its last stats and its last tick's face grid escape with them; a new epoch's faces are zero. A tick with non-finite values halts the liquid with an error until Reset.",
+      "purpose": "Hold a particle liquid across frames and run its tick region: seed the particles when the epoch changes, then repeat the region once per due tick with the tick's index. The region's last particles become the state, and its last stats, face grid and optional cell-centred interior distance escape with them; a new epoch's faces are zero. A tick with non-finite values or narrow-band capacity shortage halts the liquid with an error until Reset.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Keeps a particle liquid between frames and runs one pass of its simulation per tick.",
@@ -26104,9 +26154,10 @@
         "scalar field"
       ],
       "category": "Particles 3D",
-      "derived_recompute": false,
+      "derived_recompute": true,
       "derived_uniforms": [
-        "brick_pass:u32"
+        "brick_pass:u32",
+        "interior_len:u32"
       ],
       "examples": [
         "WaterDamBreakGpu",
@@ -26134,6 +26185,11 @@
         },
         {
           "name": "bricks",
+          "required": false,
+          "type": "Array"
+        },
+        {
+          "name": "interior",
           "required": false,
           "type": "Array"
         },
