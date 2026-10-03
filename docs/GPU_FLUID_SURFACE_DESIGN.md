@@ -2,7 +2,7 @@
 
 <!-- index: Moves FLIP surface reconstruction to GPU atoms (anisotropic level set + marching cubes) and interpolates a slower solver tick to 60 fps through a producer-agnostic particle-frame seam. -->
 
-**Status:** BUILDING · P3 pass 2 and Sim Rate implemented; owed: device/visual proofs and optional-A fusion; see [BUG-upao](#bug-upao--pass-2-and-sim-rate-2026-10-03).
+**Status:** BUILDING · P1–P3 (both passes), P5, P6–P6c, P6e, P6g and Sim Rate built and GPU-proven; P4 dropped; P6d and P6f measured; GPU water follows the FLIP Fluids engine (audit below). Owed: P7–P8, optional-A fusion (BUG-adcx (unwired gather blocks fusion)), surface kernel cost (BUG-l24y (GPU liquid surface kernels cost)) and the res-128 overload rule (BUG-969p6 (overload rule)). See [BUG-upao](#bug-upao--pass-2-and-sim-rate-2026-10-03).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 **Superseded in part (2026-09-29):** live water is GPU MLS-MPM per [GPU_MPM_SOLVER_DESIGN.md](GPU_MPM_SOLVER_DESIGN.md); D1's live-FLIP clause, D3, D9 and P4 no longer apply to live. The seam, atoms and interpolation stand.
 
@@ -816,7 +816,7 @@ is the orchestrating session's.
 
 ### BUG-upao — pass 2 and Sim Rate (2026-10-03)
 
-**IMPLEMENTED, DEVICE VERIFICATION OWED.** Pass 1 remains three generated atoms
+**BUILT.** The pass-2 GPU proofs (`particle_publication_gpu_tests`) and the wave's scoped GPU proofs pass. Pass 1 remains three generated atoms
 (interpolation, solid projection and array mix), with value and fusion proofs.
 Pass 2 retains GPU birth allocation beside `liquid_state`, reserves accepted scan
 ranks for inflow and narrow-band births, and publishes a compact ID-sorted copy
