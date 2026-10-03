@@ -18,6 +18,20 @@ def plan(paths, users=None, repo=None):
 
 
 class ScopeTests(unittest.TestCase):
+    def test_live_clock_and_duration_atoms_select_value_proofs(self):
+        for name in ("gpu_flip_clock.rs", "shaders/gpu_flip_clock.wgsl"):
+            result = plan([P + name], users=lambda _: [P + "gpu_flip_clock.rs"],
+                          repo=self._repo_with(P + name))
+            self.assertIn("gpu_flip_clock::gpu_tests::", result.filters)
+            self.assertNotIn("gpu_flip_", result.filters)
+            self.assertFalse(result.unmapped)
+        for name in ("emission_count.rs", "spawn_whitewater.rs",
+                     "shaders/emission_count_body.wgsl", "shaders/spawn_whitewater_body.wgsl"):
+            result = plan([P + name], users=lambda _: [P + "emission_count.rs"],
+                          repo=self._repo_with(P + name))
+            self.assertIn("whitewater_particle_tests::", result.filters)
+            self.assertFalse(result.unmapped)
+
     def test_narrow_band_isolated_passes_select_their_value_proofs(self):
         for path in (P + "gpu_flip_narrow_band_tests.rs",
                      P + "gpu_flip_narrow_band.rs",
@@ -186,6 +200,15 @@ class ScopeTests(unittest.TestCase):
         self.assertNotIn("a::exact", p.final_skips())
         self.assertIn("a::slow: skipped, run nightly only (measured 61s)", p.describe())
         self.assertEqual(p.runs()[0]["skips"], p.final_skips())
+
+    def test_glb_sweep_time_never_skips_or_reports_the_sweep(self):
+        self.with_times({"glb_conformance_sweep": 930.0, "a::slow": 61.0})
+        p = plan([R + "node_graph/gltf_import/mod.rs"])
+        self.assertTrue(p.glb)
+        self.assertNotIn("glb_conformance_sweep", p.final_skips())
+        self.assertNotIn("glb_conformance_sweep", p.describe())
+        self.assertEqual(p.runs()[-1]["skips"], [])
+        self.assertIn("a::slow", p.final_skips())
 
     def test_test_missing_from_times_file_runs(self):
         self.with_times({"a::slow": 500.0})

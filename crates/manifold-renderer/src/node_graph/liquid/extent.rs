@@ -32,7 +32,7 @@ use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
 use crate::node_graph::freeze::classify::fusion_kind_str;
 use crate::node_graph::liquid::EXACT_F32_COUNT;
 use crate::node_graph::liquid::bodies::{LiquidBody, LiquidShape};
-use crate::node_graph::liquid::clock::MAX_LIVE_TICKS;
+use crate::node_graph::liquid::clock::FIELD_RESERVE_INTERVALS;
 use crate::node_graph::liquid::fields::{FieldFrame, FieldLattice, STAGING_SLOTS as FIELD_STAGING_SLOTS};
 use crate::node_graph::liquid::frame_ring::RING;
 use crate::node_graph::liquid::grid::{FACE_GRID_PORTS, FACE_INPUT_PORTS, face_len};
@@ -676,10 +676,10 @@ fn matter_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     // so the field reads are checked.
     let field = FieldFrame {
         lattice: FieldLattice::of(&geometry.setup.lattice),
-        force_lattices: MAX_LIVE_TICKS,
+        force_lattices: FIELD_RESERVE_INTERVALS,
         impulse_tick: Some(0),
     };
-    let forces = u64::from(MAX_LIVE_TICKS) * field.lattice.bytes();
+    let forces = u64::from(FIELD_RESERVE_INTERVALS) * field.lattice.bytes();
     for (name, value) in field.outputs() {
         x.publish(name, value);
     }
@@ -1194,10 +1194,14 @@ fn gpu_flip_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.publish("body_rows", 0.0);
     x.publish("dynamic_bodies", 0.0);
     x.publish("region_count", 0.0);
+    x.publish("clock_obstacle_count", 0.0);
+    x.publish("clock_source_count", 0.0);
+    x.publish("live_hit_count", 0.0);
+    x.publish("interval_duration", TICK as f32);
     // The walk takes a live frame's most force lattices and an impulse tick,
     // so the field reads are checked.
-    let field = FieldFrame { lattice: geometry.field_lattice(), force_lattices: MAX_LIVE_TICKS, impulse_tick: Some(0) };
-    let forces = u64::from(MAX_LIVE_TICKS) * field.lattice.bytes();
+    let field = FieldFrame { lattice: geometry.field_lattice(), force_lattices: FIELD_RESERVE_INTERVALS, impulse_tick: Some(0) };
+    let forces = u64::from(FIELD_RESERVE_INTERVALS) * field.lattice.bytes();
     for (name, value) in field.outputs() {
         x.publish(name, value);
     }
@@ -1206,6 +1210,9 @@ fn gpu_flip_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
         ("regions", size_of::<LiquidBody>() as u64),
         ("shapes", size_of::<LiquidShape>() as u64),
         ("atlas", 4),
+        ("clock_obstacles", 96),
+        ("clock_sources", 96),
+        ("live_hits", 16),
         ("reaction", (MAX_FLUID_ROLES * REACTION_FLOATS * 4) as u64),
         ("forces", forces),
         ("impulses", field.lattice.bytes()),
@@ -1214,7 +1221,7 @@ fn gpu_flip_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
         x.hold(bytes);
     }
     // The staging ring: the impulse lattice and the force lattices per slot.
-    x.hold(FIELD_STAGING_SLOTS as u64 * (field.lattice.bytes() + forces));
+    x.hold(FIELD_STAGING_SLOTS as u64 * (field.lattice.bytes() + forces + 16));
     Ok(())
 }
 
@@ -1297,7 +1304,9 @@ fn liquid_state(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     }
     let stats = u64::from(LIQUID_STATS_WORDS) * 4;
     // The zeroed stats a new epoch copies, and the readback ring.
-    x.hold(4 * stats);
+    x.hold(4 * stats + 3 * 32);
+    x.covers_if_bound("clock_status_in", 32)?;
+    x.covers_if_bound("clock_status", 32)?;
     x.publish("tick_index", 0.0);
     let records = u64::from(x.count("count", 0.0)?) * PARTICLE;
     // A new epoch copies the fill into the state; each tick's capture copies
@@ -1379,12 +1388,17 @@ fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
         x.publish(port, value as f32);
     }
     let slots = x.items("particles").unwrap_or(0);
+    x.hold(crate::node_graph::primitives::gpu_flip_clock::GpuFlipClock::held_bytes(
+        slots as u32,
+        whole(x, "clock_obstacle_count", 0.0),
+        whole(x, "clock_source_count", 0.0),
+    ));
     let cell_bytes = lattice_total(cells) * 4;
     if x.feeds("interior") { x.provide("interior", cell_bytes); x.hold(cell_bytes); }
     if x.scalar("narrow_band", 0.0) != 0.0 {
         // Four distance arrays, support mask, two face grids, lifecycle
         // particles/status and PrefixScan storage. Ferstl et al. (2016).
-        x.hold(5 * cell_bytes + 2 * faces + slots * PARTICLE + 12);
+        x.hold(6 * cell_bytes + 3 * faces + slots * PARTICLE + 16);
         x.hold(storage_words((lattice_total(cells) * 8) as usize) as u64 * 4);
     }
     let ranges = range_storage_bytes(cells);
@@ -1401,6 +1415,11 @@ fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let ring = ring_max(band_layers(travel).max(FACE_VALID_LAYERS));
     x.hold(faces + pressure_scratch_bytes(cells) + step_scratch_bytes(cells, slots, ring));
     field_reads(x)?;
+    x.covers_if_bound("clock_status", 32)?;
+    for (buffer, count) in [("clock_obstacles", "clock_obstacle_count"), ("clock_sources", "clock_source_count")] {
+        x.covers_if_bound(buffer, u64::from(whole(x, count, 0.0)) * 96)?;
+    }
+    x.covers_if_bound("live_hits", u64::from(whole(x, "live_hit_count", 0.0)) * 16)?;
     let rows = body_rows(x)?;
     x.covers_if_bound("bodies", rows * size_of::<LiquidBody>() as u64)?;
     // A wired reaction holds every body of one tick, as the step clamps

@@ -3602,6 +3602,18 @@
     },
     {
       "fromNode": 0,
+      "fromPort": "simulation_time",
+      "toNode": 5,
+      "toPort": "simulation_time"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "target_time",
+      "toNode": 5,
+      "toPort": "target_time"
+    },
+    {
+      "fromNode": 0,
       "fromPort": "lattice_min_x",
       "toNode": 6,
       "toPort": "lattice_min_x"
@@ -3641,6 +3653,12 @@
       "fromPort": "nodes_z",
       "toNode": 6,
       "toPort": "nodes_z"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "interval_duration",
+      "toNode": 6,
+      "toPort": "interval_duration"
     },
     {
       "fromNode": 0,

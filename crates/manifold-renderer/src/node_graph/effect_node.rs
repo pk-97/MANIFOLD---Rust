@@ -996,6 +996,15 @@ pub trait EffectNode: Send {
         false
     }
 
+    /// The clock's accepted interval for this region iteration. The named
+    /// scalar output publishes its duration before the body executes.
+    fn substep_clock_interval(&self, _iteration: u32) -> Option<(&'static str, manifold_physics::stepping::StepInterval)> {
+        None
+    }
+
+    /// Let a boundary derive its numerical substeps from the clock interval.
+    fn set_substep_interval(&mut self, _interval: manifold_physics::stepping::StepInterval) {}
+
     /// Clock owner of a substep region only (the node wired into the
     /// boundary's [`SubstepBoundaryPorts::clock`](crate::node_graph::substeps::SubstepBoundaryPorts::clock)
     /// port). Asked before body iteration `iteration ≥ 1`:

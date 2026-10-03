@@ -339,3 +339,66 @@ fn assert_identical_across_frame_rates<S: AsRef<str>>(build: fn() -> (PresetRunt
         }
     }
 }
+
+/// At 40 fps a display frame holds three 120 Hz liquid ticks. Each tick of a
+/// Uniform Force card reads the kick envelope at its own time: inside one
+/// frame the three ticks differ, and every tick's force is the card's gain
+/// times the latest hop value at or before that tick.
+#[test]
+fn modifier_card_kick_is_sampled_at_each_tick_inside_one_frame() {
+    TICKS.with_borrow_mut(Vec::clear);
+    let (mut runtime, strength) = modifier_card();
+    let mut project = project(&strength);
+    let fps = 40u32;
+    let mut hops: Vec<manifold_core::audio_mod::HopValue> = Vec::new();
+    let mut next_hop = 1;
+    for frame in 0..=fps {
+        let seconds = f64::from(frame) / f64::from(fps);
+        let delivered = (seconds * f64::from(SAMPLE_RATE) / HOP as f64 + 1e-9).floor() as u64 + 1;
+        let audio = snapshot(next_hop..delivered.max(next_hop), false);
+        next_hop = delivered.max(next_hop);
+        manifold_playback::modulation::evaluate_modulation(
+            &mut project,
+            Beats(seconds * 2.0),
+            Seconds(seconds),
+            Seconds(1.0 / f64::from(fps)),
+            &audio,
+            &mut Vec::new(),
+            &mut Vec::new(),
+            &[],
+            &mut FireMeterCapture::default(),
+        );
+        let generator = project.timeline.layers[0].gen_params().unwrap();
+        hops.extend_from_slice(&generator.audio_mods.as_deref().unwrap()[0].hop_timeline.values);
+        runtime.set_physics_source_instance(Some(generator));
+        runtime.apply_param_values(&generator.params);
+        runtime.execute_frame(FrameTime {
+            seconds: Seconds(seconds),
+            beats: Beats(seconds * 2.0),
+            delta: Seconds(if frame == 0 { 0.0 } else { 1.0 / f64::from(fps) }),
+            frame_count: i64::from(frame),
+        });
+    }
+    let ticks = TICKS.with_borrow_mut(std::mem::take);
+    assert_eq!(ticks.len(), TICK_RATE as usize, "one force per tick");
+    let strength_at = |time: f64| {
+        let n = hops.partition_point(|hop| hop.time.0 <= time + 1e-12);
+        n.checked_sub(1).map_or(1.0, |i| hops[i].value)
+    };
+    // Before the kick the strength is its base value 1.0.
+    let gain = ticks[0].1;
+    assert!(gain.abs() > 0.0);
+    for &(time, force) in &ticks {
+        let expected = gain * strength_at(time);
+        assert!((force - expected).abs() <= 1e-5 * expected.abs().max(1.0), "tick {time}: {force} vs {expected}");
+    }
+    let distinct_frame = (0..fps).any(|frame| {
+        let (start, end) = (f64::from(frame) / f64::from(fps), f64::from(frame + 1) / f64::from(fps));
+        let inside: Vec<f32> = ticks.iter()
+            .filter(|(time, _)| *time > start + 1e-9 && *time <= end + 1e-9)
+            .map(|&(_, force)| force)
+            .collect();
+        inside.len() == 3 && inside[0] != inside[1] && inside[1] != inside[2] && inside[0] != inside[2]
+    });
+    assert!(distinct_frame, "some frame's three ticks must each see a different kick value: {ticks:?}");
+}

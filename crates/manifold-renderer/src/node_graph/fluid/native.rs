@@ -5,6 +5,7 @@ use manifold_fluids::{
     Bounds, CaptureError, FluidWorld, FrameStats, SurfaceVertex, WhitewaterParticle,
 };
 use manifold_physics::FieldInput;
+use manifold_physics::stepping::StepInterval;
 
 use crate::generators::mesh_common::MeshVertex;
 
@@ -43,26 +44,38 @@ pub(super) fn seeded_world(
     domain: super::FluidDomainLayout,
     surface_meshing: bool,
 ) -> Result<FluidWorld, String> {
-    let mut new = FluidWorld::new_seeded(domain.config(settings), settings.seed).map_err(|e| e.to_string())?;
-    new.set_liquid_options(settings.liquid).map_err(|e| e.to_string())?;
-    new.set_time_step_options(settings.time_steps).map_err(|e| e.to_string())?;
-    new.set_surface_options(settings.surface).map_err(|e| e.to_string())?;
-    new.set_surface_reconstruction_enabled(surface_meshing).map_err(|e| e.to_string())?;
-    new.set_whitewater_options(settings.whitewater).map_err(|e| e.to_string())?;
-    new.set_boundary_collisions(settings.boundary_collisions).map_err(|e| e.to_string())?;
+    let mut new = FluidWorld::new_seeded(domain.config(settings), settings.seed)
+        .map_err(|e| e.to_string())?;
+    new.set_liquid_options(settings.liquid)
+        .map_err(|e| e.to_string())?;
+    new.set_time_step_options(settings.time_steps)
+        .map_err(|e| e.to_string())?;
+    new.set_surface_options(settings.surface)
+        .map_err(|e| e.to_string())?;
+    new.set_surface_reconstruction_enabled(surface_meshing)
+        .map_err(|e| e.to_string())?;
+    new.set_whitewater_options(settings.whitewater)
+        .map_err(|e| e.to_string())?;
+    new.set_boundary_collisions(settings.boundary_collisions)
+        .map_err(|e| e.to_string())?;
     if settings.fill_height > 0.0 {
         let min = domain.to_native(domain.min);
         new.add_fluid_box(
             Bounds {
                 min,
-                max: [min[0] + domain.size[0], min[1] + settings.fill_height, min[2] + domain.size[2]],
+                max: [
+                    min[0] + domain.size[0],
+                    min[1] + settings.fill_height,
+                    min[2] + domain.size[2],
+                ],
             },
             [0.0; 3],
         )
         .map_err(|e| e.to_string())?;
     }
     if let Some(volume) = settings.initial_volume {
-        new.add_fluid_box(domain.bounds(volume), [0.0; 3]).map_err(|e| e.to_string())?;
+        new.add_fluid_box(domain.bounds(volume), [0.0; 3])
+            .map_err(|e| e.to_string())?;
     }
     Ok(new)
 }
@@ -120,8 +133,12 @@ impl NativeSimulation {
         request: &'request Request,
         domain: super::FluidDomainLayout,
         tick: u64,
+        sample_time: Seconds,
     ) -> Result<PreparedTick<'request>, String> {
-        let step = FluidRuntime::step_at(&request.history, tick);
+        let step = request.interval.map_or_else(
+            || FluidRuntime::step_at(&request.history, tick),
+            |interval| FluidRuntime::step_at_interval(&request.history, interval),
+        );
         native
             .set_gravity(step.current.gravity)
             .map_err(|e| e.to_string())?;
@@ -149,9 +166,15 @@ impl NativeSimulation {
             &request.history,
             &request.role_history,
             tick,
+            request.interval,
+            sample_time,
             domain,
         )?;
-        let field = FluidRuntime::field_at(&request.history, tick, domain);
+        let field = if request.interval.is_some() {
+            FluidRuntime::field_at_time(&request.history, sample_time, domain)
+        } else {
+            FluidRuntime::field_at(&request.history, tick, domain)
+        };
         let begin = request
             .impulses
             .partition_point(|event| event.applied.tick < tick);
@@ -167,6 +190,86 @@ impl NativeSimulation {
             field,
             impulse,
         })
+    }
+
+    fn step_plain_live_interval<'request>(
+        native: &mut FluidWorld,
+        request: &'request Request,
+        domain: super::FluidDomainLayout,
+        interval: StepInterval,
+        prepared: &PreparedTick<'request>,
+    ) -> Result<FrameStats, String> {
+        let mut frame = native
+            .begin_live_frame(interval.duration())
+            .map_err(|error| error.to_string())?;
+        let events = prepared.impulse.events;
+        let mut segment_start = interval.start.0;
+        let mut active_events = 0;
+        let mut first_active_event = 0;
+        let mut frame_remaining = interval.duration().0;
+        while segment_start < interval.end.0 {
+            while active_events < events.len()
+                && events[active_events].source.time.0 <= segment_start
+            {
+                active_events += 1;
+            }
+            let segment_end = events.get(active_events).map_or(interval.end.0, |event| {
+                event.source.time.0.min(interval.end.0)
+            });
+            if segment_end <= segment_start {
+                break;
+            }
+            let field =
+                FluidRuntime::field_at_time(&request.history, Seconds(segment_start), domain);
+            let duration = Seconds(segment_end - segment_start);
+            let continuous_fields = [FieldInput {
+                field: &field,
+                acceleration: 1.0,
+                delta_velocity: 0.0,
+            }];
+            frame
+                .set_fields(duration, &continuous_fields)
+                .map_err(|error| error.to_string())?;
+            let mut impulse_applied = false;
+            let mut remaining = if segment_end == interval.end.0 { frame_remaining } else { duration.0 };
+            while remaining > 0.0 {
+                let offered = frame
+                    .next_substep()
+                    .map_err(|error| error.to_string())?
+                    .ok_or("Fluid live frame ended before its accepted interval")?;
+                let step = Seconds(offered.0.min(remaining));
+                let impulse = ImpulseSum {
+                    events: if impulse_applied {
+                        &[]
+                    } else {
+                        &events[first_active_event..active_events]
+                    },
+                    origin: domain.native_origin(),
+                };
+                let fields = [
+                    FieldInput {
+                        field: &field,
+                        acceleration: 1.0,
+                        delta_velocity: 0.0,
+                    },
+                    FieldInput {
+                        field: &impulse,
+                        acceleration: 0.0,
+                        delta_velocity: 1.0,
+                    },
+                ];
+                frame
+                    .set_fields(step, &fields)
+                    .map_err(|error| error.to_string())?;
+                frame.advance(step).map_err(|error| error.to_string())?;
+                remaining -= step.0;
+                frame_remaining -= step.0;
+                impulse_applied = true;
+            }
+            segment_start = segment_end;
+            first_active_event = active_events;
+        }
+        frame.finish().map_err(|error| error.to_string())
     }
 
     fn capture_output(
@@ -186,14 +289,16 @@ impl NativeSimulation {
         if request.outputs.surface_meshing {
             native
                 .surface(&mut self.surface)
-                .map_err(|e| e.to_string())?;
+                .map_err(|error| error.to_string())?;
         } else {
             self.surface.clear();
         }
         if self.surface.len() > u32::MAX as usize {
             return Err("Fluid surface exceeds 32-bit GPU vertex indexing".into());
         }
-        request.recycle.try_reserve(self.surface.len())
+        request
+            .recycle
+            .try_reserve(self.surface.len())
             .map_err(|error| format!("Fluid surface CPU allocation failed: {error}"))?;
         request
             .recycle
@@ -410,11 +515,23 @@ impl NativeSimulation {
                     break;
                 }
                 let tick = request.start_tick + index as u64;
+                let interval = request.interval.map(|interval| {
+                    StepInterval::new(Seconds(interval.start.0), Seconds(interval.end.0))
+                });
+                let sample_time = interval.map_or(Seconds(tick as f64 * super::TICK), |interval| {
+                    interval.start
+                });
                 started_tick = tick + 1;
                 let (tick_stats, next_obstacle) = {
                     let native = &mut self.world.as_mut().expect("world initialized").1;
-                    let prepared =
-                        Self::prepare_tick(&self.native_roles, native, &request, domain, tick)?;
+                    let prepared = Self::prepare_tick(
+                        &self.native_roles,
+                        native,
+                        &request,
+                        domain,
+                        tick,
+                        sample_time,
+                    )?;
                     let tick_stats = if let (Some(rigid), Some(coupled)) =
                         (&mut self.coupled, &mut coupled_request)
                     {
@@ -426,12 +543,15 @@ impl NativeSimulation {
                                 epoch: request.epoch,
                                 tick,
                             },
+                            interval,
                             if prepared.field.is_empty() && prepared.impulse.is_empty() {
                                 &[]
                             } else {
                                 &fields
                             },
                             prepared.impulse.events,
+                            &request.history,
+                            domain,
                         )?
                     } else {
                         if prepared
@@ -444,12 +564,35 @@ impl NativeSimulation {
                                 "Fluid coupling: rigid impulses have no native owner".into()
                             );
                         }
-                        if prepared.field.is_empty() && prepared.impulse.is_empty() {
-                            native.step(Seconds(super::TICK))
+                        let duration =
+                            interval.map_or(Seconds(super::TICK), |interval| interval.duration());
+                        if let Some(frame_interval) = interval
+                            && !prepared.impulse.events.is_empty()
+                        {
+                            Self::step_plain_live_interval(
+                                native,
+                                &request,
+                                domain,
+                                frame_interval,
+                                &prepared,
+                            )?
                         } else {
-                            native.step_with_fields(Seconds(super::TICK), &prepared.fields())
+                            let fields = prepared.fields();
+                            let fields = if prepared.field.is_empty() && prepared.impulse.is_empty()
+                            {
+                                &[][..]
+                            } else {
+                                &fields[..]
+                            };
+                            if interval.is_some() {
+                                native.step_live_with_fields(duration, fields)
+                            } else if fields.is_empty() {
+                                native.step(duration)
+                            } else {
+                                native.step_with_fields(duration, fields)
+                            }
+                            .map_err(|e| e.to_string())?
                         }
-                        .map_err(|e| e.to_string())?
                     };
                     (tick_stats, prepared.next_obstacle)
                 };
@@ -474,7 +617,10 @@ impl NativeSimulation {
                 && cancel_epoch.load(Ordering::Acquire) == request.epoch
             {
                 let native = &mut self.world.as_mut().expect("world initialized").1;
-                match slot.capture(native, domain.native_origin(), tick) {
+                let frame_time = request
+                    .interval
+                    .map_or((tick as f64) * super::TICK, |interval| interval.end.0);
+                match slot.capture(native, domain.native_origin(), tick, frame_time) {
                     Ok(()) => {}
                     Err(CaptureError::Capacity { particles, solid }) => {
                         request.outputs.growth = Some((particles, solid));
@@ -486,6 +632,10 @@ impl NativeSimulation {
         })();
         request.coupled = coupled_request;
         let mut error = result.err();
+        let accepted_interval =
+            (error.is_none() && request.interval.is_some() && completed_count > 0)
+                .then_some(request.interval)
+                .flatten();
         if self.take_writer.is_some()
             && let Err(record_error) =
                 self.record_input_prefix(&request, recorded_count, started_tick, error.as_deref())
@@ -500,6 +650,7 @@ impl NativeSimulation {
             source_identity: request.source_identity,
             epoch: request.epoch,
             tick: playback_tick.unwrap_or(request.start_tick + completed_count as u64),
+            accepted_interval,
             started_tick,
             impulses: request.impulses,
             history: request.history,

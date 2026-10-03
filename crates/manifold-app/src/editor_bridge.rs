@@ -1813,6 +1813,10 @@ impl Application {
         // Built last, same as before, so its nodes sit on top of
         // palette/sidebar/preview column.
         ws.ui_root.build_overlays_for_screen(logical_w as f32, logical_h as f32);
+        // The editor root is cacheless and never runs the main-window
+        // `UIRoot::update()` path. Push the already-shared metric snapshot
+        // into the freshly-built HUD nodes before this frame is presented.
+        ws.ui_root.tick_editor_perf_hud();
 
         // The editor rebuilt its whole tree above, clearing every node's flags.
         // Re-apply HOVERED / PRESSED from the input system's durable widget state

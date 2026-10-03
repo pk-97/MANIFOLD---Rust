@@ -101,6 +101,7 @@ crate::primitive! {
         tick_index: ScalarF32 optional,
         level_set_nodes_x: ScalarF32 optional, level_set_nodes_y: ScalarF32 optional, level_set_nodes_z: ScalarF32 optional,
         ticks: ScalarF32 optional,
+        dt: ScalarF32 optional,
         epoch: ScalarF32 optional,
         gravity_x: ScalarF32 optional, gravity: ScalarF32 optional, gravity_z: ScalarF32 optional,
         seed: ScalarF32 optional,
@@ -315,6 +316,8 @@ pub(crate) struct StepFrame {
     /// Live liquid particles; `None` takes every slot.
     pub count: Option<u32>,
     pub ticks: u32,
+    /// Duration of each accepted interval; export supplies exactly 1/60 s.
+    pub dt: f32,
     pub epoch: u32,
     pub seed: f32,
     pub gravity: [f32; 3],
@@ -1152,10 +1155,11 @@ impl Step {
         spawn[11..14].copy_from_slice(&nodes);
         spawn[14] = ("seed", frame.seed);
         spawn[15] = ("epoch", epoch);
+        spawn[16] = ("dt", frame.dt);
         atom::<SpawnWhitewater>(
             enc,
             get(&p.spawn),
-            &spawn[..16],
+            &spawn[..17],
             &[offsets, sampled, energy, inputs.faces[0], inputs.faces[1], inputs.faces[2], inputs.solid, &f.spawns],
             s.capacity,
             "node.whitewater_step.spawn",
@@ -1221,7 +1225,7 @@ impl Step {
         let [sx, sy, sz] = s.size;
         let [fx, fy, fz] = s.face_cells.map(|n| n as f32);
         let [bx, by, bz] = s.bins.map(|n| n as f32);
-        let dt = TICK as f32;
+        let dt = frame.dt;
         let place = [
             ("center_x", cx),
             ("center_y", cy),
@@ -1367,6 +1371,7 @@ impl WhitewaterStep {
             return Err("Whitewater: Max Turbulence must exceed nonnegative Min Turbulence".to_owned());
         }
         Ok(StepFrame {
+            dt: ctx.scalar_or_param("dt", TICK as f32),
             shape,
             count,
             ticks: if ctx.inputs.slot("distance").is_some() { 1 } else { whole(ctx.scalar_or_param("ticks", 0.0)) },

@@ -1528,6 +1528,14 @@ impl UIRoot {
         self.inspector.update(&mut self.tree);
     }
 
+    /// Push values for the editor window's HUD after its cacheless tree has
+    /// been rebuilt. The editor root never runs the main-window `update()`
+    /// path, so this targeted tick keeps the shared overlay live without
+    /// touching main-window-only panels.
+    pub fn tick_editor_perf_hud(&mut self) {
+        self.perf_hud.push_values(&mut self.tree);
+    }
+
     /// Per-frame update — push state changes to panels.
     pub fn update(&mut self) {
         if !self.built {
@@ -1887,4 +1895,5 @@ mod tick_parity_tests {
              this is the exact mechanism BUG-160's card-height overflow came from"
         );
     }
+
 }

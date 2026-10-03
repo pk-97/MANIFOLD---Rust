@@ -47,6 +47,8 @@ Checked against the engine, no engine code in them (each file's header says so):
 
 `crates/manifold-renderer/src/live_sim_clock_reference.rs` ports the CFL duration rule from `fluidsimulation.cpp::_calculateNextTimeStep` (including epsilon, optional surface-tension/color restrictions and equal frame partition). It is a standalone CPU reference, not runtime integration.
 
+`crates/manifold-physics/src/stepping.rs` ports `_calculateNextTimeStep`, the internal final-substep remainder rule in `nextUpdateTimeStep`, and `_getMarkerParticleSpeedLimit`, including MANIFOLD's minimum speed-limit protection. The GPU clock architecture proof (`crates/manifold-renderer/src/node_graph/primitives/gpu_flip_clock.rs` and `shaders/gpu_flip_clock.wgsl`) ports the same CFL scheduling rule, marker/source maximum-speed calculation, and `rigidfluidcoupling.cpp::pointSpeed` endpoint bound. These ports retain the FLIP Fluids MIT attribution to Ryan L. Guy and Dennis Fassbaender. The GPU clock is not yet connected to the runtime solver.
+
 The GPU structure (the step's passes, the multigrid preconditioner) is MANIFOLD's own; the ported parts are the rules above.
 
 ### License

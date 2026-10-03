@@ -379,6 +379,7 @@ mod tests {
         ModifierCardInfo {
             instance_id: NodeId::new("modifier"),
             layer_id: LayerId::new("layer"),
+            params_owner: Default::default(),
             enabled_label: "Enabled".to_string(),
             stack_index: 0,
             stack_len: 1,

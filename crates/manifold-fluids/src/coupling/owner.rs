@@ -125,6 +125,29 @@ impl RigidFluidCoupling {
         })
     }
 
+    /// Begin a live coupled frame whose final native substep consumes the
+    /// remaining interval after the stability cap.
+    pub fn begin_live_frame<'coupling, 'fluid>(
+        &'coupling mut self,
+        fluid: &'fluid mut FluidWorld,
+        duration: Seconds,
+        fields: &[FieldInput<'_>],
+    ) -> Result<CoupledFluidFrame<'coupling, 'fluid>, FluidError> {
+        self.last_stats = None;
+        for &collider in &self.colliders {
+            fluid
+                .mesh_state
+                .validate_handle(collider, Some(MeshRole::Collider))?;
+        }
+        let frame = fluid.begin_live_frame_with_fields(duration, fields)?;
+        Ok(CoupledFluidFrame {
+            coupling: self,
+            frame,
+            pending: None,
+            failed: false,
+        })
+    }
+
     pub fn last_stats(&self) -> Option<FrameStats> {
         self.last_stats
     }
@@ -238,6 +261,17 @@ impl SubstepExchange for CoupledFluidFrame<'_, '_> {
         let stats = self.frame.finish()?;
         self.coupling.last_stats = Some(stats);
         Ok(())
+    }
+}
+
+impl CoupledFluidFrame<'_, '_> {
+    /// Replace the copied force fields for the next accepted live segment.
+    pub fn set_fields(
+        &mut self,
+        dt: Seconds,
+        fields: &[FieldInput<'_>],
+    ) -> Result<(), FluidError> {
+        self.frame.set_fields(dt, fields)
     }
 }
 

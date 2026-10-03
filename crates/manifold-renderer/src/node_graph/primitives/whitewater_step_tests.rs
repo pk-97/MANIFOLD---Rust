@@ -20,7 +20,7 @@ use super::spawn_whitewater::{LIFETIME_VARIANCE, MAX_LIFETIME, MIN_LIFETIME};
 use super::wavecrest_potential::{MAX_CURVATURE, MIN_CURVATURE, SHARPNESS};
 use super::whitewater_cpu::{self as grid_cpu, Grid, Rng};
 use super::whitewater_particle_cpu::{self as particle_cpu, Box3, Crest, Emission, Spawn, SpawnFields};
-use super::whitewater_pool_cpu::{self as pool_cpu, Advect, Age, PoolState, empty_slot};
+use super::whitewater_pool_cpu::{self as pool_cpu, Advect, Age, PoolState, Preserve, empty_slot};
 use super::whitewater_step::{Report, StepShape};
 use crate::node_graph::fluid::{TICK, whitewater_fade};
 use crate::node_graph::fluid_particles::FluidParticle;
@@ -112,6 +112,40 @@ fn whitewater_per_tick_cpu_rows_match_at_every_frame_rate() {
     assert_eq!(run(30, false), at_60);
     assert_eq!(run(120, false), at_60);
     assert_ne!(run(30, true), at_60, "the old frame-batched emission must fail");
+}
+
+/// The accepted duration reaches every whitewater atom: emission count and
+/// spawn travel use the full interval, lifecycle age/preserve scale by it,
+/// and spray drag applies the same duration in its velocity update.
+#[test]
+fn live_interval_whitewater_duration() {
+    let dt = 0.1f32;
+    let particle = FluidParticle { position_radius: [4.0, 4.0, 4.0, 0.05], velocity: [1.0, 0.0, 0.0], id: 1 };
+    let (emitted, margin) = particle_cpu::emission_count(particle, 1.0, 1.0, 0,
+        Emission { dt, rate: 80.0, points_per_cell: 8.0, ticks: 1.0, live_count: 1.0 });
+    assert!(margin > 1e-5);
+    assert_eq!(emitted, 8, "80 particles/s over 0.1 seconds");
+
+    let grid = Box3 { cells: [8; 3], center: [4.0; 3], size: [8.0; 3] };
+    let faces: [Vec<f32>; 3] = std::array::from_fn(|axis| vec![0.0; face_len([8; 3], axis) as usize]);
+    let solid = vec![10.0; 9 * 9 * 9];
+    let spawn_fields = SpawnFields { offsets: &[1], particles: std::slice::from_ref(&particle), energy: &[1.0], faces: faces.each_ref().map(Vec::as_slice), face_cells: [8; 3], solid: &solid };
+    let short = particle_cpu::spawn(0, &spawn_fields, &grid, Spawn { dt: 0.05, capacity: 1, emitters: 1, seed: 3.5, epoch: 2.0, min_lifetime: 1.0, max_lifetime: 1.0, variance: 0.0 }).0;
+    let long = particle_cpu::spawn(0, &spawn_fields, &grid, Spawn { dt, capacity: 1, emitters: 1, seed: 3.5, epoch: 2.0, min_lifetime: 1.0, max_lifetime: 1.0, variance: 0.0 }).0;
+    assert!(short.position_lifetime[3] > 0.0 && long.position_lifetime[3] > 0.0);
+    assert!((long.position_lifetime[0] - short.position_lifetime[0]).abs() > 1e-4, "spawn travel must use accepted duration");
+
+    let foam = WhitewaterParticle { position_lifetime: [4.0, 4.0, 4.0, 2.0], kind: 1, ..WhitewaterParticle::default() };
+    let aged = pool_cpu::age(foam, Age { dt, ..Age::flip() });
+    assert!((aged.position_lifetime[3] - 1.9).abs() < 1e-6, "foam age scales with dt");
+    let dense = vec![WhitewaterParticle { position_lifetime: [4.0, 4.0, 4.0, 2.0], kind: 1, ..WhitewaterParticle::default() }; 45];
+    let preserved = pool_cpu::preserve(&dense, [0.0; 3], 1.0, [8; 3], Preserve { dt, ..Preserve::flip() });
+    assert!((preserved[0].position_lifetime[3] - 2.075).abs() < 1e-6, "foam preservation scales with dt");
+
+    let spray = WhitewaterParticle { position_lifetime: [4.0, 4.0, 4.0, 2.0], velocity: [1.0, 0.0, 0.0], kind: 2, ..WhitewaterParticle::default() };
+    let fields = pool_cpu::Fields { faces: faces.each_ref().map(Vec::as_slice), face_cells: [8; 3], solid: &solid };
+    let dragged = pool_cpu::advect(spray, &fields, &grid, Advect { dt, gravity: [0.0; 3], spray_drag: 2.0, spray_drag_variance: 0.0, ..Advect::flip() }, None).0;
+    assert!((dragged.velocity[0] - 0.8).abs() < 1e-6, "spray drag uses stretched dt");
 }
 
 fn box3(shape: &StepShape) -> Box3 {
@@ -318,7 +352,7 @@ impl Model {
             .collect();
         let energy: Vec<f32> = sampled.iter().map(|&p| particle_cpu::energy(p, MIN_ENERGY, MAX_ENERGY)).collect();
         let crest = Crest { min_curvature: MIN_CURVATURE, max_curvature: MAX_CURVATURE, sharpness: SHARPNESS };
-        let emission = Emission { rate: WAVECREST_RATE, points_per_cell: 8.0, ticks: ticks as f32, live_count: LIVE as f32 };
+        let emission = Emission { dt: 1.0 / 60.0, rate: WAVECREST_RATE, points_per_cell: 8.0, ticks: ticks as f32, live_count: LIVE as f32 };
         let mut offsets = Vec::with_capacity(LIVE as usize);
         let mut total = 0;
         for i in 0..LIVE as usize {
@@ -332,6 +366,7 @@ impl Model {
         let spawn_fields =
             SpawnFields { offsets: &offsets, particles: &sampled, energy: &energy, faces, face_cells: s.face_cells, solid: &self.scene.solid };
         let settings = Spawn {
+            dt: 1.0 / 60.0,
             capacity: CAPACITY,
             emitters: LIVE,
             seed: SEED,
@@ -593,7 +628,7 @@ mod gpu {
                     let f = &faces[tick as usize];
                     let inputs = StepInputs { obstacle_source: None, particles: &particles, solid: &solid,
                         faces: [&f[0], &f[1], &f[2]], level_set: &distance, distance: Some(&distance) };
-                    let settings = StepFrame { shape, count: Some(256), ticks: 1, epoch: 0,
+                    let settings = StepFrame { shape, count: Some(256), ticks: 1, dt: TICK as f32, epoch: 0,
                         seed: tick as f32 * TICK as f32, gravity: GRAVITY,
                         wavecrest_emission: WAVECREST_RATE, turbulence_emission: 175.0, min_turbulence: 100.0, max_turbulence: 200.0, inside_emission: true, generation_rate: 1.0, spray_speed: 1.0, dust_emission: false, boundary_dust: false, dust_rate: 175.0, influence_base: 1.0, influence_decay: 2.0, min_energy: MIN_ENERGY,
                         max_energy: MAX_ENERGY, preserve_foam: false };
@@ -652,6 +687,7 @@ mod gpu {
                 shape: shape(),
                 count: Some(LIVE),
                 ticks,
+                dt: TICK as f32,
                 epoch,
                 seed: SEED,
                 gravity: GRAVITY,

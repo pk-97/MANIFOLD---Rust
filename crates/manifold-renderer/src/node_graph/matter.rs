@@ -243,6 +243,22 @@ pub fn wave_speed(lambda: f64, density: f64) -> f64 {
 pub const ACOUSTIC_CFL: f64 = 1.0 / 3.0;
 /// The substep cap (D4).
 pub const MAX_SUBSTEPS: u32 = 128;
+
+/// Duration of one MPM iteration for an observed frame interval.
+///
+/// Live and export divide the same accepted interval, including when the
+/// substep cap stretches work over the whole interval.
+pub fn substep_duration(interval_duration: f32, substeps: u32) -> f32 {
+    interval_duration / substeps.max(1) as f32
+}
+
+/// Use the same duration representation as the GPU before choosing a count.
+/// Subtracting f64 transport endpoints can straddle an integer by a few
+/// bits even when both intervals encode the same f32 duration.
+pub fn substeps_for_interval(duration: f32, nominal: u32) -> u32 {
+    (f64::from(duration / TICK as f32) * f64::from(nominal)).ceil().max(1.0) as u32
+}
+
 /// Grid velocity clamp per component, in cells per substep
 /// (taichi_elements `g2p2g_allowed_cfl`).
 pub const VELOCITY_CLAMP_CFL: f32 = 0.9;
@@ -334,6 +350,31 @@ mod tests {
     use crate::node_graph::ports::std430_stride;
 
     #[test]
+    fn matter_export_substeps_ignore_frame_partition_roundoff() {
+        use manifold_physics::clock::SimulationClock;
+        let run = |stride: u32| {
+            let mut clock = SimulationClock::default();
+            let mut schedule = Vec::new();
+            for frame in 0..=120 / stride {
+                let accepted = clock.advance(f64::from(frame * stride) * TICK, TICK, 1.0, 0.0, false, true);
+                let substeps = substeps_for_interval(accepted.duration().0 as f32, 34);
+                for i in 0..accepted.ticks {
+                    let dt = substep_duration(accepted.interval(u64::from(i)).unwrap().duration().0 as f32, substeps);
+                    schedule.push((substeps, dt.to_bits()));
+                }
+            }
+            schedule
+        };
+        let reference = run(1);
+        assert!(reference.iter().all(|&(steps, _)| steps == 34));
+        for stride in [2, 3, 4, 6] {
+            assert_eq!(run(stride), reference, "export grouping {stride}");
+        }
+        assert_eq!(substeps_for_interval((2.0 * TICK) as f32, 34), 68);
+        assert_eq!(substeps_for_interval((1.5 * TICK) as f32, 34), 51);
+    }
+
+    #[test]
     fn matter_records_match_their_channel_layouts() {
         assert_eq!(std430_stride(MATTER_POINT_SPECS), 80);
         assert_eq!(std430_stride(MATTER_GRID_NODE_SPECS), 32);
@@ -383,6 +424,37 @@ mod tests {
         let n_above =
             substeps_per_tick(dx as f32, (unit * fitted * 1.001) as f32, v as f32, None, None);
         assert!(n_above > MAX_SUBSTEPS, "{n_above}");
+    }
+
+    #[test]
+    fn live_mpm_substep_duration_covers_display_rates() {
+        for fps in [20.0f32, 24.0, 30.0, 60.0] {
+            let interval = 1.0 / fps;
+            let duration = substep_duration(interval, 4);
+            assert_eq!(duration.to_bits(), (interval / 4.0).to_bits());
+            assert!((duration * 4.0 - interval).abs() < 1.0e-6);
+        }
+    }
+
+    #[test]
+    fn live_mpm_substep_cap_still_covers_the_full_interval() {
+        let interval = 1.0f32 / 20.0;
+        let duration = substep_duration(interval, MAX_SUBSTEPS);
+        assert!((duration * MAX_SUBSTEPS as f32 - interval).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn export_mpm_substep_duration_uses_the_accepted_project_interval() {
+        for interval in [1.0f32 / 24.0, 1.0 / 60.0, 0.25] {
+            for substeps in 1..=MAX_SUBSTEPS {
+                let expected = interval / substeps as f32;
+                assert_eq!(
+                    substep_duration(interval, substeps).to_bits(),
+                    expected.to_bits(),
+                    "substeps={substeps}"
+                );
+            }
+        }
     }
 
     /// U sits at or above dx/dt, and with it the encode and decode scales

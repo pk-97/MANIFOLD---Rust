@@ -65,7 +65,7 @@ Rejected: one entry and a CPU wait, because a live frame never waits on the GPU.
 **D5 — Ordering is today's serial order.** Every recorded command gets `setBarrier`. Each execute is wrapped in `memoryBarrierWithScope(Buffers)` before and after. Anything that touches the compute encoder outside the replay path flushes first: `ensure_compute`, `end_current`, and `compute_memory_barrier_buffers` all flush the pending stretch. Any GPU output is then byte-identical to direct encoding wherever direct encoding is itself deterministic.
 
 **D6 — The Metal store.**
-- ICB chunks of 512 commands: `ConcurrentDispatch`, no inherited pipeline or buffers, 31 kernel buffer slots. Growth adds a chunk and never reallocates one. A stretch that crosses a chunk boundary is two executes. Cap: 64 chunks per entry; past it the span encodes directly.
+- ICB chunks of 512 commands: `ConcurrentDispatch`, no inherited pipeline or buffers, 31 kernel buffer slots. Growth adds a chunk and never reallocates one. A stretch that crosses a chunk boundary is two executes. Chunks and uniform arenas grow to the measured span demand between visits. The fixed maximum-substep FLIP region must fit in full after warm-up; no fixed cache-size ceiling leaves its tail encoding directly.
 - Bytes arenas are shared `GpuBuffer`s from the device's allocation path, so they retire through `retire.rs` if a cache is dropped mid-flight. Slots are 256-byte aligned: the constant-buffer offset rule on non-Apple GPUs, and cheap insurance on Apple ones.
 - Each recorded command retains its pipeline state and buffers, so an address can't be reused while a recording names it.
 - Each execute declares the stretch's buffers with one `useResources` call (read and write) from a reserved scratch list.

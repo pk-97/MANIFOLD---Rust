@@ -7,6 +7,55 @@ use super::gpu_flip_preset::WaterScene;
 use super::gpu_flip_scene_tests::{Run, particle_stats};
 use super::gpu_flip_step::set_separate_off;
 
+/// Inactive CFL slots follow a completed density solve. Its pressure and
+/// rhs are scratch, and must never become next tick's contact history.
+#[test]
+fn gpu_flip_inactive_clock_preserves_separation_history() {
+    use super::gpu_flip_step::{StepParams, dispatch_pass};
+    let device = crate::test_device();
+    const CELLS: usize = 8 * 8 * 8;
+    let values = |data: &[f32]| {
+        let buffer = device.create_buffer_shared(std::mem::size_of_val(data) as u64);
+        unsafe { buffer.write(0, bytemuck::cast_slice(data)); }
+        buffer
+    };
+    let water = values(&[1.0; CELLS]);
+    let rhs = values(&[-1.0; CELLS]);
+    let pressure = values(&[-1.0; CELLS]);
+    let faces = values(&[0.0; 9 * 9 * 9 * 8]);
+    let history = values(&[0.0; CELLS]);
+    let plan = values(&[0.0; 12]);
+    let read = || unsafe {
+        std::slice::from_raw_parts(history.mapped_ptr().unwrap().cast::<f32>(), CELLS).to_vec()
+    };
+    let params = StepParams { n: [8; 3], tick_index: 1, ..StepParams::default() };
+    let update = || dispatch_pass(&device, "separate_update", &params,
+        &[(5, &rhs), (6, &water), (8, &pressure), (10, &faces), (42, &history), (46, &plan)], CELLS as u64);
+    let pin = || dispatch_pass(&device, "separate_pin", &params,
+        &[(5, &rhs), (6, &water), (10, &faces), (42, &history), (46, &plan)], CELLS as u64);
+    let mut words = [0.0f32; 12];
+    words[11] = f32::from_bits(1); // live clock, completed cursor
+    unsafe { plan.write(0, bytemuck::cast_slice(&words)); }
+    update();
+    assert_eq!(read(), vec![0.0; CELLS], "inactive density pressure must not release resting water");
+    words[0] = 1.0 / 60.0;
+    unsafe { plan.write(0, bytemuck::cast_slice(&words)); }
+    update();
+    assert_eq!(read(), vec![1.0; CELLS], "active negative pressure still releases the solid");
+    words[0] = 0.0;
+    unsafe {
+        plan.write(0, bytemuck::cast_slice(&words));
+        water.write(0, bytemuck::cast_slice(&[0.0f32; CELLS]));
+    }
+    pin();
+    update();
+    assert_eq!(read(), vec![1.0; CELLS], "inactive mask and divergence must not reattach water");
+    words[0] = 1.0 / 60.0;
+    unsafe { plan.write(0, bytemuck::cast_slice(&words)); }
+    update();
+    assert_eq!(read(), vec![0.0; CELLS], "active inward divergence still reattaches water");
+}
+
 /// A run whose every frame, the fill included, goes through the lever.
 struct Twin {
     run: Run,

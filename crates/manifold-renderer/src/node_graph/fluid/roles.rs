@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use manifold_fluids::{FluidWorld, InflowOptions, MeshHandle, MeshRole};
 use manifold_physics::input::{input_span, input_span_before};
+use manifold_physics::stepping::StepInterval;
 use manifold_physics::{BodyPose, Seconds, TriangleMesh};
 
 use super::{FluidDomainLayout, HISTORY_CAPACITY, Sample, TICK};
@@ -398,6 +399,7 @@ mod tests {
 
         // Model the consumer completing these samples, without native stepping.
         runtime.completed_tick = 120;
+        runtime.completed_time = 2.0;
         runtime.prune_history().unwrap();
         assert_eq!(runtime.history.len(), 1);
         assert_eq!(runtime.role_history.values.len(), 2);
@@ -551,7 +553,9 @@ mod tests {
                         .flat_map(move |y| [-0.3, 0.3].map(|z| [x, y, z]))
                 })
                 .collect();
-            fill.geometry = Arc::new(PreparedFluidGeometry::new(vec![manifold_physics::cook_hull_mesh(&points).unwrap()]));
+            fill.geometry = Arc::new(PreparedFluidGeometry::new(vec![
+                manifold_physics::cook_hull_mesh(&points).unwrap(),
+            ]));
             fill.transform.pos = [0.0, 1.5, 0.0];
             let settings = FluidSettings {
                 resolution: 16,
@@ -754,17 +758,26 @@ impl NativeRoles {
         samples: &[Sample],
         values: &[Controls],
         tick: u64,
+        interval: Option<StepInterval>,
+        sample_time: Seconds,
         domain: FluidDomainLayout,
     ) -> Result<(), String> {
-        let current_time = tick as f64 * TICK;
+        let current_time = interval.map_or(tick as f64 * TICK, |_| sample_time.0);
+        let separation = interval.map_or(TICK, |span| span.duration().0);
         for (index, role) in setup.roles.iter().enumerate() {
             if role.kind == FluidRoleKind::InitialFill {
                 continue;
             }
             let at = |time| controls_at(samples, values, setup.len(), index, time);
-            let previous = at((current_time - TICK).max(0.0));
+            let previous = at((current_time - separation).max(0.0));
             let current = at(current_time);
-            let next = controls_at_before(samples, values, setup.len(), index, current_time + TICK);
+            let next = controls_at_before(
+                samples,
+                values,
+                setup.len(),
+                index,
+                current_time + separation,
+            );
             for &handle in &self.handles[index] {
                 let native = (|| {
                     world.set_mesh_motion(

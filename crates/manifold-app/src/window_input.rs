@@ -2204,7 +2204,8 @@ impl Application {
         //           field / popover is active (those arms returned above).
         //   Esc → leave the current group (pop one scope level), if
         //         the view is inside a group.
-        //   `   → toggle the debug overlay HUD.
+        //   `   → toggle the graph debug overlay; Shift+` opens the
+        //         performance HUD without changing that existing shortcut.
         //   v   → toggle the P5c 3D viewport (`docs/REALTIME_3D_DESIGN.md`).
         //         Only takes effect once the previewed node is a top-level
         //         `node.render_scene` node (`app_render.rs`'s
@@ -2230,7 +2231,17 @@ impl Application {
                         handled = canvas.exit_group();
                     }
                 }
-                Key::Character(c) if c.as_str() == "`" => {
+                // Preserve the editor canvas' existing debug overlay shortcut
+                // on bare backtick. Shift+backtick opens the performance HUD,
+                // so the new presentation surface does not steal the debug
+                // command that graph editing already exposed.
+                Key::Character(c) if matches!(c.as_str(), "`" | "~") && self.modifiers.is_shift_only() => {
+                    if let Some(ed) = self.graph_editor.as_mut() {
+                        ed.ui_root.perf_hud.toggle();
+                    }
+                    handled = true;
+                }
+                Key::Character(c) if c.as_str() == "`" && self.modifiers.is_none() => {
                     if let Some(canvas) = self.graph_canvas.as_mut() {
                         canvas.toggle_debug_overlay();
                     }

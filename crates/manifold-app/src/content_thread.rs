@@ -1318,6 +1318,8 @@ impl ContentThread {
             physics_cpu_ms: self.physics_metrics.physics_cpu_ms,
             physics_body_count: self.physics_metrics.body_count,
             physics_backlog_seconds: self.physics_metrics.backlog_seconds,
+            sim_step_cap_hit: self.physics_metrics.sim_step_cap_hit,
+            sim_nonfinite: self.physics_metrics.sim_nonfinite,
             active_clips: self.engine.active_clip_count(),
             data_version: version,
             editing_is_dirty: self.editing_service.is_dirty(),

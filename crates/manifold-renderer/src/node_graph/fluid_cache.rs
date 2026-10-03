@@ -699,6 +699,7 @@ fn read_frame(
         substeps: read_u32(reader)?,
         simulation_ms: read_f64(reader)?,
         meshing_ms: read_f64(reader)?,
+        ..FrameStats::default()
     };
     if whitewater.foam.len() + whitewater.bubbles.len() + whitewater.spray.len() > max_whitewater
         || obstacle
@@ -1104,6 +1105,7 @@ mod tests {
                 substeps: 2,
                 simulation_ms: 1.25,
                 meshing_ms: 2.5,
+                ..FrameStats::default()
             },
         )
     }

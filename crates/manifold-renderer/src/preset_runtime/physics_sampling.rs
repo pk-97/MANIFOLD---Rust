@@ -29,7 +29,7 @@ fn gpu_liquid(kind: &str) -> bool {
 
 fn setup_input(kind: &str, port: &str) -> bool {
     if gpu_liquid(kind) {
-        return port != "acceleration_field" && !port.starts_with("role_");
+        return port != "acceleration_field" && port != "speed" && !port.starts_with("role_");
     }
     match kind {
         "node.rigid_body" => matches!(port, "release_count" | "source"),

@@ -21,6 +21,11 @@ struct NbRange { start: u32, count: u32 }
 @group(0) @binding(10) var<storage, read> nb_ranges: array<NbRange>;
 @group(0) @binding(11) var<storage, read_write> nb_scan: array<u32>;
 @group(0) @binding(12) var<storage, read_write> nb_status: array<u32>;
+// Plan words 0 (dt) and 11 (enabled) share gpu_flip_clock's storage layout.
+@group(0) @binding(46) var<storage, read> nb_clock_plan: array<u32>;
+fn nb_step_dt() -> f32 {
+    return select(nb.dt, bitcast<f32>(nb_clock_plan[0]), nb_clock_plan[11] != 0u);
+}
 fn nb_total() -> u32 { return nb.n.x * nb.n.y * nb.n.z; }
 fn nb_index(p: vec3<i32>, n: vec3<i32>) -> u32 { return u32(p.x + n.x * (p.y + n.y * p.z)); }
 fn nb_coords(i: u32, n: vec3<u32>) -> vec3<i32> {
@@ -64,7 +69,7 @@ fn nb_velocity(q: vec3<f32>) -> vec3<f32> {
 }
 // RK4 backtrace, the integration order used for surface tracking in the paper.
 fn nb_backtrace(q: vec3<f32>) -> vec3<f32> {
-    let dt = nb.dt / nb.h;
+    let dt = nb_step_dt() / nb.h;
     let a = nb_velocity(q); let b = nb_velocity(q - 0.5 * dt * a);
     let c = nb_velocity(q - 0.5 * dt * b); let d = nb_velocity(q - dt * c);
     return q - (dt / 6.0) * (a + 2.0 * b + 2.0 * c + d);

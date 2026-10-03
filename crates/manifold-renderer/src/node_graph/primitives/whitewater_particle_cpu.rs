@@ -239,6 +239,7 @@ const FLIP_TWO_PI: f32 = 6.28318;
 /// `node.spawn_whitewater` inputs besides the arrays.
 #[derive(Clone, Copy)]
 pub(super) struct Spawn {
+    pub dt: f32,
     pub capacity: u32,
     pub emitters: u32,
     pub seed: f32,
@@ -316,7 +317,7 @@ pub(super) fn spawn(j: u32, fields: &SpawnFields<'_>, grid: &Box3, s: Spawn) -> 
     let (seed, generation) = (s.seed.to_bits(), s.epoch.round().max(0.0) as u32);
     let r = EMITTER_RADIUS * h * random(j, seed, generation, 4).sqrt();
     let theta = random(j, seed, generation, 5) * FLIP_TWO_PI;
-    let along = random(j, seed, generation, 6) * speed / 60.0;
+    let along = random(j, seed, generation, 6) * speed * s.dt;
     let p: [f32; 3] = std::array::from_fn(|a| {
         emitter.position_radius[a] + r * theta.cos() * e1[a] + r * theta.sin() * e2[a] + along * axis[a]
     });
@@ -395,6 +396,7 @@ pub(super) fn kind(spawn: manifold_fluids::WhitewaterSpawn, distance: &[f32], ce
 /// `node.emission_count` inputs besides the per-particle arrays.
 #[derive(Clone, Copy)]
 pub(super) struct Emission {
+    pub dt: f32,
     pub rate: f32,
     pub points_per_cell: f32,
     pub ticks: f32,
@@ -411,7 +413,7 @@ pub(super) fn emission_count(p: FluidParticle, energy: f32, wavecrest: f32, idx:
     if speed < 1e-3 || energy < 1e-6 || wavecrest <= 0.0 {
         return (0, (speed - 1e-3).abs());
     }
-    let per_tick = e.rate * energy * wavecrest * (1.0 / 60.0) * 8.0 / e.points_per_cell;
+    let per_tick = e.rate * energy * wavecrest * e.dt * 8.0 / e.points_per_cell;
     let edge = ((per_tick + 0.5) - (per_tick + 0.5).round()).abs();
     ((per_tick + 0.5).floor() as u32 * e.ticks.round().max(0.0) as u32, edge.min((speed - 1e-3).abs()))
 }

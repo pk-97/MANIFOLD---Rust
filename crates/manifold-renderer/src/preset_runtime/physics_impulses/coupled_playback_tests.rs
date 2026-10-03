@@ -234,6 +234,13 @@ fn paired_frame(runtime: &PresetRuntime) -> CoupledRigidFrame {
         .clone()
 }
 
+fn observed_fluid_time(runtime: &PresetRuntime, fluid_id: &NodeId, transport: f64) -> Seconds {
+    let fluid = runtime.graph.instance_by_node_id(fluid_id).unwrap();
+    runtime.graph.get_node(fluid).unwrap().node
+        .physics_impulse_stamp(Seconds(transport), 0)
+        .expect("accepted fluid clock observation").time
+}
+
 fn assert_visible_pair(runtime: &PresetRuntime, frame: &CoupledRigidFrame) {
     assert_eq!(
         POSITIONS.get(),
@@ -275,7 +282,9 @@ fn coupled_graph_preview_holds_pair_then_offline_drains_without_double_advanceme
     }
     runtime.execute_frame(time(3.0 * DT));
     let caught_up = paired_frame(&runtime);
-    assert_eq!(caught_up.stamp.tick, 3);
+    // One live interval covers the whole span; its ordinal is not elapsed time.
+    assert_eq!(caught_up.stamp.tick, 1);
+    assert_eq!(observed_fluid_time(&runtime, &NodeId::new("fluid"), 3.0 * DT), Seconds(3.0 * DT));
     assert_eq!(caught_up.stamp.epoch, initial.stamp.epoch);
     assert!(caught_up.poses[0].pos[0] > initial.poses[0].pos[0]);
     assert_visible_pair(&runtime, &caught_up);
@@ -429,7 +438,9 @@ fn authored_add_fluid_shared_controls_play_back_after_reload() {
         "frame execution must retain the shared speed binding"
     );
     let fast = paired_frame_for(&runtime, &fluid_id);
-    assert_eq!(fast.stamp.tick, 2);
+    // Export accepts one project interval, advanced at the authored speed 2.
+    assert_eq!(fast.stamp.tick, 1);
+    assert_eq!(observed_fluid_time(&runtime, &fluid_id, DT), Seconds(2.0 * DT));
     assert_eq!(fast.stamp.epoch, initial.stamp.epoch);
     assert!(fast.poses[0].pos[0] > initial.poses[0].pos[0]);
     assert!(

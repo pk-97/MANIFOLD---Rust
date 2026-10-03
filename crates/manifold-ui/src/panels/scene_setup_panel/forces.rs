@@ -232,6 +232,7 @@ mod tests {
             modifier: Some(ModifierCardInfo {
                 instance_id: manifold_foundation::NodeId::new(id),
                 layer_id: LayerId::new(layer),
+                params_owner: Default::default(),
                 enabled_label: "Enabled".into(),
                 stack_index: 0,
                 stack_len: 1,
