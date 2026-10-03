@@ -14491,6 +14491,43 @@
           "type": "Array"
         },
         {
+          "capacity": "fixed:1",
+          "name": "distance",
+          "type": "Array"
+        },
+        {
+          "name": "grid_bounds",
+          "type": "Transform"
+        },
+        {
+          "name": "grid_nodes_x",
+          "type": "f32"
+        },
+        {
+          "name": "grid_nodes_y",
+          "type": "f32"
+        },
+        {
+          "name": "grid_nodes_z",
+          "type": "f32"
+        },
+        {
+          "name": "face_cells_x",
+          "type": "f32"
+        },
+        {
+          "name": "face_cells_y",
+          "type": "f32"
+        },
+        {
+          "name": "face_cells_z",
+          "type": "f32"
+        },
+        {
+          "name": "face_valid_layers",
+          "type": "f32"
+        },
+        {
           "capacity": "follows:reaction",
           "name": "reaction_out",
           "type": "Array"
@@ -18742,7 +18779,42 @@
           "type": "Array"
         },
         {
+          "name": "whitewater_pool_in",
+          "required": false,
+          "type": "Array"
+        },
+        {
+          "name": "whitewater_state_in",
+          "required": false,
+          "type": "Array"
+        },
+        {
+          "name": "whitewater_counts_in",
+          "required": false,
+          "type": "Array"
+        },
+        {
+          "name": "foam_particles_in",
+          "required": false,
+          "type": "Array"
+        },
+        {
+          "name": "bubble_particles_in",
+          "required": false,
+          "type": "Array"
+        },
+        {
+          "name": "spray_particles_in",
+          "required": false,
+          "type": "Array"
+        },
+        {
           "name": "count",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "whitewater_capacity",
           "required": false,
           "type": "f32"
         },
@@ -18787,6 +18859,36 @@
         {
           "capacity": "fixed:1",
           "name": "faces",
+          "type": "Array"
+        },
+        {
+          "capacity": "fixed:1",
+          "name": "whitewater_pool",
+          "type": "Array"
+        },
+        {
+          "capacity": "fixed:1",
+          "name": "whitewater_state",
+          "type": "Array"
+        },
+        {
+          "capacity": "fixed:1",
+          "name": "whitewater_counts",
+          "type": "Array"
+        },
+        {
+          "capacity": "fixed:1",
+          "name": "foam_particles",
+          "type": "Array"
+        },
+        {
+          "capacity": "fixed:1",
+          "name": "bubble_particles",
+          "type": "Array"
+        },
+        {
+          "capacity": "fixed:1",
+          "name": "spray_particles",
           "type": "Array"
         },
         {
@@ -45991,6 +46093,11 @@
           "type": "f32"
         },
         {
+          "name": "capacity",
+          "required": false,
+          "type": "f32"
+        },
+        {
           "name": "solid",
           "required": true,
           "type": "Array"
@@ -46052,8 +46159,28 @@
         },
         {
           "name": "level_set",
-          "required": true,
+          "required": false,
           "type": "Array"
+        },
+        {
+          "name": "distance",
+          "required": false,
+          "type": "Array"
+        },
+        {
+          "name": "pool",
+          "required": false,
+          "type": "Array"
+        },
+        {
+          "name": "pool_state",
+          "required": false,
+          "type": "Array"
+        },
+        {
+          "name": "tick_index",
+          "required": false,
+          "type": "f32"
         },
         {
           "name": "level_set_nodes_x",
@@ -46103,6 +46230,21 @@
       ],
       "label": "Whitewater Step",
       "outputs": [
+        {
+          "capacity": "param:capacity=100000",
+          "name": "pool_out",
+          "type": "Array"
+        },
+        {
+          "capacity": "fixed:8",
+          "name": "state_out",
+          "type": "Array"
+        },
+        {
+          "capacity": "fixed:8",
+          "name": "counts_out",
+          "type": "Array"
+        },
         {
           "capacity": "param:capacity=100000",
           "name": "foam_particles",
@@ -46215,7 +46357,7 @@
           "type": "bool"
         }
       ],
-      "purpose": "Foam, bubbles and spray for a GPU liquid, all on the GPU as FLIP's whitewater: each frame with ticks, emit from where the surface crests and the water moves fast, then step the pool once per tick (spray falls and bounces, bubbles rise and drag, foam rides the surface, each ages, dies, and leaves when it strays or crowds its cell). Out come foam, bubbles and spray as particle frames, each particle's radius its fade, with their counts. The outputs trail the water by one frame offline and up to three live. A new epoch, grid or capacity clears the pool; ticks 0 holds it. Spawns past the pool's room are counted as pool full; emissions past Capacity in one frame are thinned evenly and counted.",
+      "purpose": "With distance and pool state wired from a liquid tick region, emit and advance exactly one tick and publish through captured boundary results. The legacy level-set interface provides foam, bubbles and spray for a GPU liquid, all on the GPU as FLIP's whitewater: each frame with ticks, emit from where the surface crests and the water moves fast, then step the pool once per tick (spray falls and bounces, bubbles rise and drag, foam rides the surface, each ages, dies, and leaves when it strays or crowds its cell). Out come foam, bubbles and spray as particle frames, each particle's radius its fade, with their counts. The outputs trail the water by one frame offline and up to three live. A new epoch, grid or capacity clears the pool; ticks 0 holds it. Spawns past the pool's room are counted as pool full; emissions past Capacity in one frame are thinned evenly and counted.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Makes and moves the spray, foam and bubbles a liquid throws up, all on the GPU.",
@@ -152343,2107 +152485,2107 @@
         },
         {
           "default": "0.52",
-          "id": "493_color_r",
+          "id": "500_color_r",
           "max": "1",
           "min": "0",
           "name": "Base Colour R"
         },
         {
           "default": "0.23",
-          "id": "493_color_g",
+          "id": "500_color_g",
           "max": "1",
           "min": "0",
           "name": "Base Colour G"
         },
         {
           "default": "0.073",
-          "id": "493_color_b",
+          "id": "500_color_b",
           "max": "1",
           "min": "0",
           "name": "Base Colour B"
         },
         {
           "default": "1",
-          "id": "493_color_a",
+          "id": "500_color_a",
           "max": "1",
           "min": "0",
           "name": "Opacity"
         },
         {
           "default": "0",
-          "id": "493_ambient",
+          "id": "500_ambient",
           "max": "1",
           "min": "0",
           "name": "Ambient"
         },
         {
           "default": "0.94",
-          "id": "493_metallic",
+          "id": "500_metallic",
           "max": "1",
           "min": "0",
           "name": "Metallic"
         },
         {
           "default": "0.19",
-          "id": "493_roughness",
+          "id": "500_roughness",
           "max": "1",
           "min": "0.01",
           "name": "Roughness"
         },
         {
           "default": "1",
-          "id": "493_normal_scale",
+          "id": "500_normal_scale",
           "max": "1",
           "min": "-1",
           "name": "Normal Scale"
         },
         {
           "default": "1",
-          "id": "493_clearcoat_normal_scale",
+          "id": "500_clearcoat_normal_scale",
           "max": "1",
           "min": "-1",
           "name": "Clearcoat Normal Scale"
         },
         {
           "default": "1",
-          "id": "493_occlusion_strength",
+          "id": "500_occlusion_strength",
           "max": "1",
           "min": "0",
           "name": "Occlusion Strength"
         },
         {
           "default": "0",
-          "id": "493_emission_r",
+          "id": "500_emission_r",
           "max": "1",
           "min": "0",
           "name": "Emission R"
         },
         {
           "default": "0",
-          "id": "493_emission_g",
+          "id": "500_emission_g",
           "max": "1",
           "min": "0",
           "name": "Emission G"
         },
         {
           "default": "0",
-          "id": "493_emission_b",
+          "id": "500_emission_b",
           "max": "1",
           "min": "0",
           "name": "Emission B"
         },
         {
           "default": "0",
-          "id": "493_emission_intensity",
+          "id": "500_emission_intensity",
           "max": "10",
           "min": "0",
           "name": "Emission Intensity"
         },
         {
           "default": "0",
-          "id": "493_alpha_mode",
+          "id": "500_alpha_mode",
           "max": "2",
           "min": "0",
           "name": "Alpha Mode"
         },
         {
           "default": "0.5",
-          "id": "493_alpha_cutoff",
+          "id": "500_alpha_cutoff",
           "max": "1",
           "min": "0",
           "name": "Alpha Cutoff"
         },
         {
           "default": "1",
-          "id": "493_specular",
+          "id": "500_specular",
           "max": "1",
           "min": "0",
           "name": "Specular"
         },
         {
           "default": "1",
-          "id": "493_specular_tint_r",
+          "id": "500_specular_tint_r",
           "max": "2",
           "min": "0",
           "name": "Specular Tint R"
         },
         {
           "default": "1",
-          "id": "493_specular_tint_g",
+          "id": "500_specular_tint_g",
           "max": "2",
           "min": "0",
           "name": "Specular Tint G"
         },
         {
           "default": "1",
-          "id": "493_specular_tint_b",
+          "id": "500_specular_tint_b",
           "max": "2",
           "min": "0",
           "name": "Specular Tint B"
         },
         {
           "default": "1.5",
-          "id": "493_ior",
+          "id": "500_ior",
           "max": "3",
           "min": "1",
           "name": "Index of Refraction"
         },
         {
           "default": "0",
-          "id": "493_clearcoat",
+          "id": "500_clearcoat",
           "max": "1",
           "min": "0",
           "name": "Clearcoat"
         },
         {
           "default": "0",
-          "id": "493_clearcoat_roughness",
+          "id": "500_clearcoat_roughness",
           "max": "1",
           "min": "0",
           "name": "Clearcoat Roughness"
         },
         {
           "default": "0",
-          "id": "493_sheen_color_r",
+          "id": "500_sheen_color_r",
           "max": "1",
           "min": "0",
           "name": "Sheen Colour R"
         },
         {
           "default": "0",
-          "id": "493_sheen_color_g",
+          "id": "500_sheen_color_g",
           "max": "1",
           "min": "0",
           "name": "Sheen Colour G"
         },
         {
           "default": "0",
-          "id": "493_sheen_color_b",
+          "id": "500_sheen_color_b",
           "max": "1",
           "min": "0",
           "name": "Sheen Colour B"
         },
         {
           "default": "0",
-          "id": "493_sheen_roughness",
+          "id": "500_sheen_roughness",
           "max": "1",
           "min": "0",
           "name": "Sheen Roughness"
         },
         {
           "default": "0",
-          "id": "493_iridescence",
+          "id": "500_iridescence",
           "max": "1",
           "min": "0",
           "name": "Iridescence"
         },
         {
           "default": "1.3",
-          "id": "493_iridescence_ior",
+          "id": "500_iridescence_ior",
           "max": "3",
           "min": "1",
           "name": "Iridescence IOR"
         },
         {
           "default": "100",
-          "id": "493_iridescence_thickness_min",
+          "id": "500_iridescence_thickness_min",
           "max": "1000",
           "min": "0",
           "name": "Iridescence Thickness Min (nm)"
         },
         {
           "default": "400",
-          "id": "493_iridescence_thickness_max",
+          "id": "500_iridescence_thickness_max",
           "max": "1000",
           "min": "0",
           "name": "Iridescence Thickness Max (nm)"
         },
         {
           "default": "0",
-          "id": "493_anisotropy_strength",
+          "id": "500_anisotropy_strength",
           "max": "1",
           "min": "0",
           "name": "Anisotropy Strength"
         },
         {
           "default": "0",
-          "id": "493_anisotropy_rotation",
+          "id": "500_anisotropy_rotation",
           "max": "3.1415927",
           "min": "-3.1415927",
           "name": "Anisotropy Rotation"
         },
         {
           "default": "0",
-          "id": "493_dispersion",
+          "id": "500_dispersion",
           "max": "1",
           "min": "0",
           "name": "Dispersion"
         },
         {
           "default": "0",
-          "id": "493_transmission",
+          "id": "500_transmission",
           "max": "1",
           "min": "0",
           "name": "Transmission"
         },
         {
           "default": "0",
-          "id": "493_volume_thickness",
+          "id": "500_volume_thickness",
           "max": "1000",
           "min": "0",
           "name": "Volume Thickness"
         },
         {
           "default": "1000000",
-          "id": "493_volume_attenuation_distance",
+          "id": "500_volume_attenuation_distance",
           "max": "1000000",
           "min": "0.001",
           "name": "Volume Attenuation Distance"
         },
         {
           "default": "1",
-          "id": "493_volume_attenuation_color_r",
+          "id": "500_volume_attenuation_color_r",
           "max": "1",
           "min": "0",
           "name": "Volume Attenuation Colour R"
         },
         {
           "default": "1",
-          "id": "493_volume_attenuation_color_g",
+          "id": "500_volume_attenuation_color_g",
           "max": "1",
           "min": "0",
           "name": "Volume Attenuation Colour G"
         },
         {
           "default": "1",
-          "id": "493_volume_attenuation_color_b",
+          "id": "500_volume_attenuation_color_b",
           "max": "1",
           "min": "0",
           "name": "Volume Attenuation Colour B"
         },
         {
           "default": "0",
-          "id": "493_translucency",
+          "id": "500_translucency",
           "max": "1",
           "min": "0",
           "name": "Translucency"
         },
         {
           "default": "1",
-          "id": "493_translucency_color_r",
+          "id": "500_translucency_color_r",
           "max": "1",
           "min": "0",
           "name": "Translucency Colour R"
         },
         {
           "default": "1",
-          "id": "493_translucency_color_g",
+          "id": "500_translucency_color_g",
           "max": "1",
           "min": "0",
           "name": "Translucency Colour G"
         },
         {
           "default": "1",
-          "id": "493_translucency_color_b",
+          "id": "500_translucency_color_b",
           "max": "1",
           "min": "0",
           "name": "Translucency Colour B"
         },
         {
           "default": "1",
-          "id": "493_uv_m00",
+          "id": "500_uv_m00",
           "max": "128",
           "min": "-128",
           "name": "UV Transform M00"
         },
         {
           "default": "0",
-          "id": "493_uv_m01",
+          "id": "500_uv_m01",
           "max": "128",
           "min": "-128",
           "name": "UV Transform M01"
         },
         {
           "default": "0",
-          "id": "493_uv_m10",
+          "id": "500_uv_m10",
           "max": "128",
           "min": "-128",
           "name": "UV Transform M10"
         },
         {
           "default": "1",
-          "id": "493_uv_m11",
+          "id": "500_uv_m11",
           "max": "128",
           "min": "-128",
           "name": "UV Transform M11"
         },
         {
           "default": "0",
-          "id": "493_uv_tx",
+          "id": "500_uv_tx",
           "max": "128",
           "min": "-128",
           "name": "UV Transform Offset X"
         },
         {
           "default": "0",
-          "id": "493_uv_ty",
+          "id": "500_uv_ty",
           "max": "128",
           "min": "-128",
           "name": "UV Transform Offset Y"
         },
         {
           "default": "1",
-          "id": "493_nrm_uv_m00",
+          "id": "500_nrm_uv_m00",
           "max": "128",
           "min": "-128",
           "name": "Normal UV M00"
         },
         {
           "default": "0",
-          "id": "493_nrm_uv_m01",
+          "id": "500_nrm_uv_m01",
           "max": "128",
           "min": "-128",
           "name": "Normal UV M01"
         },
         {
           "default": "0",
-          "id": "493_nrm_uv_m10",
+          "id": "500_nrm_uv_m10",
           "max": "128",
           "min": "-128",
           "name": "Normal UV M10"
         },
         {
           "default": "1",
-          "id": "493_nrm_uv_m11",
+          "id": "500_nrm_uv_m11",
           "max": "128",
           "min": "-128",
           "name": "Normal UV M11"
         },
         {
           "default": "0",
-          "id": "493_nrm_uv_tx",
+          "id": "500_nrm_uv_tx",
           "max": "128",
           "min": "-128",
           "name": "Normal UV Offset X"
         },
         {
           "default": "0",
-          "id": "493_nrm_uv_ty",
+          "id": "500_nrm_uv_ty",
           "max": "128",
           "min": "-128",
           "name": "Normal UV Offset Y"
         },
         {
           "default": "1",
-          "id": "493_mr_uv_m00",
+          "id": "500_mr_uv_m00",
           "max": "128",
           "min": "-128",
           "name": "MR UV M00"
         },
         {
           "default": "0",
-          "id": "493_mr_uv_m01",
+          "id": "500_mr_uv_m01",
           "max": "128",
           "min": "-128",
           "name": "MR UV M01"
         },
         {
           "default": "0",
-          "id": "493_mr_uv_m10",
+          "id": "500_mr_uv_m10",
           "max": "128",
           "min": "-128",
           "name": "MR UV M10"
         },
         {
           "default": "1",
-          "id": "493_mr_uv_m11",
+          "id": "500_mr_uv_m11",
           "max": "128",
           "min": "-128",
           "name": "MR UV M11"
         },
         {
           "default": "0",
-          "id": "493_mr_uv_tx",
+          "id": "500_mr_uv_tx",
           "max": "128",
           "min": "-128",
           "name": "MR UV Offset X"
         },
         {
           "default": "0",
-          "id": "493_mr_uv_ty",
+          "id": "500_mr_uv_ty",
           "max": "128",
           "min": "-128",
           "name": "MR UV Offset Y"
         },
         {
           "default": "1",
-          "id": "493_occ_uv_m00",
+          "id": "500_occ_uv_m00",
           "max": "128",
           "min": "-128",
           "name": "Occlusion UV M00"
         },
         {
           "default": "0",
-          "id": "493_occ_uv_m01",
+          "id": "500_occ_uv_m01",
           "max": "128",
           "min": "-128",
           "name": "Occlusion UV M01"
         },
         {
           "default": "0",
-          "id": "493_occ_uv_m10",
+          "id": "500_occ_uv_m10",
           "max": "128",
           "min": "-128",
           "name": "Occlusion UV M10"
         },
         {
           "default": "1",
-          "id": "493_occ_uv_m11",
+          "id": "500_occ_uv_m11",
           "max": "128",
           "min": "-128",
           "name": "Occlusion UV M11"
         },
         {
           "default": "0",
-          "id": "493_occ_uv_tx",
+          "id": "500_occ_uv_tx",
           "max": "128",
           "min": "-128",
           "name": "Occlusion UV Offset X"
         },
         {
           "default": "0",
-          "id": "493_occ_uv_ty",
+          "id": "500_occ_uv_ty",
           "max": "128",
           "min": "-128",
           "name": "Occlusion UV Offset Y"
         },
         {
           "default": "1",
-          "id": "493_em_uv_m00",
+          "id": "500_em_uv_m00",
           "max": "128",
           "min": "-128",
           "name": "Emissive UV M00"
         },
         {
           "default": "0",
-          "id": "493_em_uv_m01",
+          "id": "500_em_uv_m01",
           "max": "128",
           "min": "-128",
           "name": "Emissive UV M01"
         },
         {
           "default": "0",
-          "id": "493_em_uv_m10",
+          "id": "500_em_uv_m10",
           "max": "128",
           "min": "-128",
           "name": "Emissive UV M10"
         },
         {
           "default": "1",
-          "id": "493_em_uv_m11",
+          "id": "500_em_uv_m11",
           "max": "128",
           "min": "-128",
           "name": "Emissive UV M11"
         },
         {
           "default": "0",
-          "id": "493_em_uv_tx",
+          "id": "500_em_uv_tx",
           "max": "128",
           "min": "-128",
           "name": "Emissive UV Offset X"
         },
         {
           "default": "0",
-          "id": "493_em_uv_ty",
+          "id": "500_em_uv_ty",
           "max": "128",
           "min": "-128",
           "name": "Emissive UV Offset Y"
         },
         {
           "default": "0",
-          "id": "493_wrap_u",
+          "id": "500_wrap_u",
           "max": "2",
           "min": "0",
           "name": "Base Colour Wrap U"
         },
         {
           "default": "0",
-          "id": "493_wrap_v",
+          "id": "500_wrap_v",
           "max": "2",
           "min": "0",
           "name": "Base Colour Wrap V"
         },
         {
           "default": "0",
-          "id": "493_mag_filter",
+          "id": "500_mag_filter",
           "max": "1",
           "min": "0",
           "name": "Base Colour Mag Filter"
         },
         {
           "default": "0",
-          "id": "493_min_filter",
+          "id": "500_min_filter",
           "max": "1",
           "min": "0",
           "name": "Base Colour Min Filter"
         },
         {
           "default": "0",
-          "id": "493_nrm_wrap_u",
+          "id": "500_nrm_wrap_u",
           "max": "2",
           "min": "0",
           "name": "Normal Wrap U"
         },
         {
           "default": "0",
-          "id": "493_nrm_wrap_v",
+          "id": "500_nrm_wrap_v",
           "max": "2",
           "min": "0",
           "name": "Normal Wrap V"
         },
         {
           "default": "0",
-          "id": "493_nrm_mag_filter",
+          "id": "500_nrm_mag_filter",
           "max": "1",
           "min": "0",
           "name": "Normal Mag Filter"
         },
         {
           "default": "0",
-          "id": "493_nrm_min_filter",
+          "id": "500_nrm_min_filter",
           "max": "1",
           "min": "0",
           "name": "Normal Min Filter"
         },
         {
           "default": "0",
-          "id": "493_mr_wrap_u",
+          "id": "500_mr_wrap_u",
           "max": "2",
           "min": "0",
           "name": "MR Wrap U"
         },
         {
           "default": "0",
-          "id": "493_mr_wrap_v",
+          "id": "500_mr_wrap_v",
           "max": "2",
           "min": "0",
           "name": "MR Wrap V"
         },
         {
           "default": "0",
-          "id": "493_mr_mag_filter",
+          "id": "500_mr_mag_filter",
           "max": "1",
           "min": "0",
           "name": "MR Mag Filter"
         },
         {
           "default": "0",
-          "id": "493_mr_min_filter",
+          "id": "500_mr_min_filter",
           "max": "1",
           "min": "0",
           "name": "MR Min Filter"
         },
         {
           "default": "0",
-          "id": "493_occ_wrap_u",
+          "id": "500_occ_wrap_u",
           "max": "2",
           "min": "0",
           "name": "Occlusion Wrap U"
         },
         {
           "default": "0",
-          "id": "493_occ_wrap_v",
+          "id": "500_occ_wrap_v",
           "max": "2",
           "min": "0",
           "name": "Occlusion Wrap V"
         },
         {
           "default": "0",
-          "id": "493_occ_mag_filter",
+          "id": "500_occ_mag_filter",
           "max": "1",
           "min": "0",
           "name": "Occlusion Mag Filter"
         },
         {
           "default": "0",
-          "id": "493_occ_min_filter",
+          "id": "500_occ_min_filter",
           "max": "1",
           "min": "0",
           "name": "Occlusion Min Filter"
         },
         {
           "default": "0",
-          "id": "493_em_wrap_u",
+          "id": "500_em_wrap_u",
           "max": "2",
           "min": "0",
           "name": "Emissive Wrap U"
         },
         {
           "default": "0",
-          "id": "493_em_wrap_v",
+          "id": "500_em_wrap_v",
           "max": "2",
           "min": "0",
           "name": "Emissive Wrap V"
         },
         {
           "default": "0",
-          "id": "493_em_mag_filter",
+          "id": "500_em_mag_filter",
           "max": "1",
           "min": "0",
           "name": "Emissive Mag Filter"
         },
         {
           "default": "0",
-          "id": "493_em_min_filter",
+          "id": "500_em_min_filter",
           "max": "1",
           "min": "0",
           "name": "Emissive Min Filter"
         },
         {
           "default": "0",
-          "id": "493_baked_look",
+          "id": "500_baked_look",
           "max": "1",
           "min": "0",
           "name": "Baked Look"
         },
         {
           "default": "0",
-          "id": "493_coat_mode",
+          "id": "500_coat_mode",
           "max": "3",
           "min": "0",
           "name": "Coat Mode"
         },
         {
           "default": "0",
-          "id": "493_iridescence_mode",
+          "id": "500_iridescence_mode",
           "max": "3",
           "min": "0",
           "name": "Iridescence Mode"
         },
         {
           "default": "0",
-          "id": "493_emission_mode",
+          "id": "500_emission_mode",
           "max": "3",
           "min": "0",
           "name": "Emission Mode"
         },
         {
           "default": "0",
-          "id": "493_glass_mode",
+          "id": "500_glass_mode",
           "max": "3",
           "min": "0",
           "name": "Glass Mode"
         },
         {
           "default": "0",
-          "id": "493_sheen_mode",
+          "id": "500_sheen_mode",
           "max": "3",
           "min": "0",
           "name": "Sheen Mode"
         },
         {
           "default": "0",
-          "id": "493_anisotropy_mode",
+          "id": "500_anisotropy_mode",
           "max": "3",
           "min": "0",
           "name": "Anisotropy Mode"
         },
         {
           "default": "0",
-          "id": "493_translucency_mode",
+          "id": "500_translucency_mode",
           "max": "3",
           "min": "0",
           "name": "Translucency Mode"
         },
         {
           "default": "0",
-          "id": "493_uv_set",
+          "id": "500_uv_set",
           "max": "8",
           "min": "0",
           "name": "Base Colour UV Set"
         },
         {
           "default": "0",
-          "id": "493_mip_filter",
+          "id": "500_mip_filter",
           "max": "2",
           "min": "0",
           "name": "Base Colour Mip Filter"
         },
         {
           "default": "0",
-          "id": "493_nrm_uv_set",
+          "id": "500_nrm_uv_set",
           "max": "8",
           "min": "0",
           "name": "Normal UV Set"
         },
         {
           "default": "0",
-          "id": "493_nrm_mip_filter",
+          "id": "500_nrm_mip_filter",
           "max": "2",
           "min": "0",
           "name": "Normal Mip Filter"
         },
         {
           "default": "0",
-          "id": "493_mr_uv_set",
+          "id": "500_mr_uv_set",
           "max": "8",
           "min": "0",
           "name": "Metallic Roughness UV Set"
         },
         {
           "default": "0",
-          "id": "493_mr_mip_filter",
+          "id": "500_mr_mip_filter",
           "max": "2",
           "min": "0",
           "name": "Metallic Roughness Mip Filter"
         },
         {
           "default": "0",
-          "id": "493_occ_uv_set",
+          "id": "500_occ_uv_set",
           "max": "8",
           "min": "0",
           "name": "Occlusion UV Set"
         },
         {
           "default": "0",
-          "id": "493_occ_mip_filter",
+          "id": "500_occ_mip_filter",
           "max": "2",
           "min": "0",
           "name": "Occlusion Mip Filter"
         },
         {
           "default": "0",
-          "id": "493_em_uv_set",
+          "id": "500_em_uv_set",
           "max": "8",
           "min": "0",
           "name": "Emissive UV Set"
         },
         {
           "default": "0",
-          "id": "493_em_mip_filter",
+          "id": "500_em_mip_filter",
           "max": "2",
           "min": "0",
           "name": "Emissive Mip Filter"
         },
         {
           "default": "1",
-          "id": "493_sheen_color_uv_m00",
+          "id": "500_sheen_color_uv_m00",
           "max": "128",
           "min": "-128",
           "name": "Sheen Color UV M00"
         },
         {
           "default": "0",
-          "id": "493_sheen_color_uv_m01",
+          "id": "500_sheen_color_uv_m01",
           "max": "128",
           "min": "-128",
           "name": "Sheen Color UV M01"
         },
         {
           "default": "0",
-          "id": "493_sheen_color_uv_m10",
+          "id": "500_sheen_color_uv_m10",
           "max": "128",
           "min": "-128",
           "name": "Sheen Color UV M10"
         },
         {
           "default": "1",
-          "id": "493_sheen_color_uv_m11",
+          "id": "500_sheen_color_uv_m11",
           "max": "128",
           "min": "-128",
           "name": "Sheen Color UV M11"
         },
         {
           "default": "0",
-          "id": "493_sheen_color_uv_tx",
+          "id": "500_sheen_color_uv_tx",
           "max": "128",
           "min": "-128",
           "name": "Sheen Color UV TX"
         },
         {
           "default": "0",
-          "id": "493_sheen_color_uv_ty",
+          "id": "500_sheen_color_uv_ty",
           "max": "128",
           "min": "-128",
           "name": "Sheen Color UV TY"
         },
         {
           "default": "0",
-          "id": "493_sheen_color_tex_coord",
+          "id": "500_sheen_color_tex_coord",
           "max": "8",
           "min": "0",
           "name": "Sheen Color UV Set"
         },
         {
           "default": "0",
-          "id": "493_sheen_color_wrap_u",
+          "id": "500_sheen_color_wrap_u",
           "max": "2",
           "min": "0",
           "name": "Sheen Color Wrap U"
         },
         {
           "default": "0",
-          "id": "493_sheen_color_wrap_v",
+          "id": "500_sheen_color_wrap_v",
           "max": "2",
           "min": "0",
           "name": "Sheen Color Wrap V"
         },
         {
           "default": "0",
-          "id": "493_sheen_color_mag_filter",
+          "id": "500_sheen_color_mag_filter",
           "max": "1",
           "min": "0",
           "name": "Sheen Color Mag Filter"
         },
         {
           "default": "0",
-          "id": "493_sheen_color_min_filter",
+          "id": "500_sheen_color_min_filter",
           "max": "1",
           "min": "0",
           "name": "Sheen Color Min Filter"
         },
         {
           "default": "0",
-          "id": "493_sheen_color_mip_filter",
+          "id": "500_sheen_color_mip_filter",
           "max": "2",
           "min": "0",
           "name": "Sheen Color Mip Filter"
         },
         {
           "default": "1",
-          "id": "493_sheen_roughness_uv_m00",
+          "id": "500_sheen_roughness_uv_m00",
           "max": "128",
           "min": "-128",
           "name": "Sheen Roughness UV M00"
         },
         {
           "default": "0",
-          "id": "493_sheen_roughness_uv_m01",
+          "id": "500_sheen_roughness_uv_m01",
           "max": "128",
           "min": "-128",
           "name": "Sheen Roughness UV M01"
         },
         {
           "default": "0",
-          "id": "493_sheen_roughness_uv_m10",
+          "id": "500_sheen_roughness_uv_m10",
           "max": "128",
           "min": "-128",
           "name": "Sheen Roughness UV M10"
         },
         {
           "default": "1",
-          "id": "493_sheen_roughness_uv_m11",
+          "id": "500_sheen_roughness_uv_m11",
           "max": "128",
           "min": "-128",
           "name": "Sheen Roughness UV M11"
         },
         {
           "default": "0",
-          "id": "493_sheen_roughness_uv_tx",
+          "id": "500_sheen_roughness_uv_tx",
           "max": "128",
           "min": "-128",
           "name": "Sheen Roughness UV TX"
         },
         {
           "default": "0",
-          "id": "493_sheen_roughness_uv_ty",
+          "id": "500_sheen_roughness_uv_ty",
           "max": "128",
           "min": "-128",
           "name": "Sheen Roughness UV TY"
         },
         {
           "default": "0",
-          "id": "493_sheen_roughness_tex_coord",
+          "id": "500_sheen_roughness_tex_coord",
           "max": "8",
           "min": "0",
           "name": "Sheen Roughness UV Set"
         },
         {
           "default": "0",
-          "id": "493_sheen_roughness_wrap_u",
+          "id": "500_sheen_roughness_wrap_u",
           "max": "2",
           "min": "0",
           "name": "Sheen Roughness Wrap U"
         },
         {
           "default": "0",
-          "id": "493_sheen_roughness_wrap_v",
+          "id": "500_sheen_roughness_wrap_v",
           "max": "2",
           "min": "0",
           "name": "Sheen Roughness Wrap V"
         },
         {
           "default": "0",
-          "id": "493_sheen_roughness_mag_filter",
+          "id": "500_sheen_roughness_mag_filter",
           "max": "1",
           "min": "0",
           "name": "Sheen Roughness Mag Filter"
         },
         {
           "default": "0",
-          "id": "493_sheen_roughness_min_filter",
+          "id": "500_sheen_roughness_min_filter",
           "max": "1",
           "min": "0",
           "name": "Sheen Roughness Min Filter"
         },
         {
           "default": "0",
-          "id": "493_sheen_roughness_mip_filter",
+          "id": "500_sheen_roughness_mip_filter",
           "max": "2",
           "min": "0",
           "name": "Sheen Roughness Mip Filter"
         },
         {
           "default": "1",
-          "id": "493_iridescence_uv_m00",
+          "id": "500_iridescence_uv_m00",
           "max": "128",
           "min": "-128",
           "name": "Iridescence UV M00"
         },
         {
           "default": "0",
-          "id": "493_iridescence_uv_m01",
+          "id": "500_iridescence_uv_m01",
           "max": "128",
           "min": "-128",
           "name": "Iridescence UV M01"
         },
         {
           "default": "0",
-          "id": "493_iridescence_uv_m10",
+          "id": "500_iridescence_uv_m10",
           "max": "128",
           "min": "-128",
           "name": "Iridescence UV M10"
         },
         {
           "default": "1",
-          "id": "493_iridescence_uv_m11",
+          "id": "500_iridescence_uv_m11",
           "max": "128",
           "min": "-128",
           "name": "Iridescence UV M11"
         },
         {
           "default": "0",
-          "id": "493_iridescence_uv_tx",
+          "id": "500_iridescence_uv_tx",
           "max": "128",
           "min": "-128",
           "name": "Iridescence UV TX"
         },
         {
           "default": "0",
-          "id": "493_iridescence_uv_ty",
+          "id": "500_iridescence_uv_ty",
           "max": "128",
           "min": "-128",
           "name": "Iridescence UV TY"
         },
         {
           "default": "0",
-          "id": "493_iridescence_tex_coord",
+          "id": "500_iridescence_tex_coord",
           "max": "8",
           "min": "0",
           "name": "Iridescence UV Set"
         },
         {
           "default": "0",
-          "id": "493_iridescence_wrap_u",
+          "id": "500_iridescence_wrap_u",
           "max": "2",
           "min": "0",
           "name": "Iridescence Wrap U"
         },
         {
           "default": "0",
-          "id": "493_iridescence_wrap_v",
+          "id": "500_iridescence_wrap_v",
           "max": "2",
           "min": "0",
           "name": "Iridescence Wrap V"
         },
         {
           "default": "0",
-          "id": "493_iridescence_mag_filter",
+          "id": "500_iridescence_mag_filter",
           "max": "1",
           "min": "0",
           "name": "Iridescence Mag Filter"
         },
         {
           "default": "0",
-          "id": "493_iridescence_min_filter",
+          "id": "500_iridescence_min_filter",
           "max": "1",
           "min": "0",
           "name": "Iridescence Min Filter"
         },
         {
           "default": "0",
-          "id": "493_iridescence_mip_filter",
+          "id": "500_iridescence_mip_filter",
           "max": "2",
           "min": "0",
           "name": "Iridescence Mip Filter"
         },
         {
           "default": "1",
-          "id": "493_iridescence_thickness_uv_m00",
+          "id": "500_iridescence_thickness_uv_m00",
           "max": "128",
           "min": "-128",
           "name": "Iridescence Thickness UV M00"
         },
         {
           "default": "0",
-          "id": "493_iridescence_thickness_uv_m01",
+          "id": "500_iridescence_thickness_uv_m01",
           "max": "128",
           "min": "-128",
           "name": "Iridescence Thickness UV M01"
         },
         {
           "default": "0",
-          "id": "493_iridescence_thickness_uv_m10",
+          "id": "500_iridescence_thickness_uv_m10",
           "max": "128",
           "min": "-128",
           "name": "Iridescence Thickness UV M10"
         },
         {
           "default": "1",
-          "id": "493_iridescence_thickness_uv_m11",
+          "id": "500_iridescence_thickness_uv_m11",
           "max": "128",
           "min": "-128",
           "name": "Iridescence Thickness UV M11"
         },
         {
           "default": "0",
-          "id": "493_iridescence_thickness_uv_tx",
+          "id": "500_iridescence_thickness_uv_tx",
           "max": "128",
           "min": "-128",
           "name": "Iridescence Thickness UV TX"
         },
         {
           "default": "0",
-          "id": "493_iridescence_thickness_uv_ty",
+          "id": "500_iridescence_thickness_uv_ty",
           "max": "128",
           "min": "-128",
           "name": "Iridescence Thickness UV TY"
         },
         {
           "default": "0",
-          "id": "493_iridescence_thickness_tex_coord",
+          "id": "500_iridescence_thickness_tex_coord",
           "max": "8",
           "min": "0",
           "name": "Iridescence Thickness UV Set"
         },
         {
           "default": "0",
-          "id": "493_iridescence_thickness_wrap_u",
+          "id": "500_iridescence_thickness_wrap_u",
           "max": "2",
           "min": "0",
           "name": "Iridescence Thickness Wrap U"
         },
         {
           "default": "0",
-          "id": "493_iridescence_thickness_wrap_v",
+          "id": "500_iridescence_thickness_wrap_v",
           "max": "2",
           "min": "0",
           "name": "Iridescence Thickness Wrap V"
         },
         {
           "default": "0",
-          "id": "493_iridescence_thickness_mag_filter",
+          "id": "500_iridescence_thickness_mag_filter",
           "max": "1",
           "min": "0",
           "name": "Iridescence Thickness Mag Filter"
         },
         {
           "default": "0",
-          "id": "493_iridescence_thickness_min_filter",
+          "id": "500_iridescence_thickness_min_filter",
           "max": "1",
           "min": "0",
           "name": "Iridescence Thickness Min Filter"
         },
         {
           "default": "0",
-          "id": "493_iridescence_thickness_mip_filter",
+          "id": "500_iridescence_thickness_mip_filter",
           "max": "2",
           "min": "0",
           "name": "Iridescence Thickness Mip Filter"
         },
         {
           "default": "1",
-          "id": "493_anisotropy_uv_m00",
+          "id": "500_anisotropy_uv_m00",
           "max": "128",
           "min": "-128",
           "name": "Anisotropy UV M00"
         },
         {
           "default": "0",
-          "id": "493_anisotropy_uv_m01",
+          "id": "500_anisotropy_uv_m01",
           "max": "128",
           "min": "-128",
           "name": "Anisotropy UV M01"
         },
         {
           "default": "0",
-          "id": "493_anisotropy_uv_m10",
+          "id": "500_anisotropy_uv_m10",
           "max": "128",
           "min": "-128",
           "name": "Anisotropy UV M10"
         },
         {
           "default": "1",
-          "id": "493_anisotropy_uv_m11",
+          "id": "500_anisotropy_uv_m11",
           "max": "128",
           "min": "-128",
           "name": "Anisotropy UV M11"
         },
         {
           "default": "0",
-          "id": "493_anisotropy_uv_tx",
+          "id": "500_anisotropy_uv_tx",
           "max": "128",
           "min": "-128",
           "name": "Anisotropy UV TX"
         },
         {
           "default": "0",
-          "id": "493_anisotropy_uv_ty",
+          "id": "500_anisotropy_uv_ty",
           "max": "128",
           "min": "-128",
           "name": "Anisotropy UV TY"
         },
         {
           "default": "0",
-          "id": "493_anisotropy_tex_coord",
+          "id": "500_anisotropy_tex_coord",
           "max": "8",
           "min": "0",
           "name": "Anisotropy UV Set"
         },
         {
           "default": "0",
-          "id": "493_anisotropy_wrap_u",
+          "id": "500_anisotropy_wrap_u",
           "max": "2",
           "min": "0",
           "name": "Anisotropy Wrap U"
         },
         {
           "default": "0",
-          "id": "493_anisotropy_wrap_v",
+          "id": "500_anisotropy_wrap_v",
           "max": "2",
           "min": "0",
           "name": "Anisotropy Wrap V"
         },
         {
           "default": "0",
-          "id": "493_anisotropy_mag_filter",
+          "id": "500_anisotropy_mag_filter",
           "max": "1",
           "min": "0",
           "name": "Anisotropy Mag Filter"
         },
         {
           "default": "0",
-          "id": "493_anisotropy_min_filter",
+          "id": "500_anisotropy_min_filter",
           "max": "1",
           "min": "0",
           "name": "Anisotropy Min Filter"
         },
         {
           "default": "0",
-          "id": "493_anisotropy_mip_filter",
+          "id": "500_anisotropy_mip_filter",
           "max": "2",
           "min": "0",
           "name": "Anisotropy Mip Filter"
         },
         {
           "default": "1",
-          "id": "493_clearcoat_uv_m00",
+          "id": "500_clearcoat_uv_m00",
           "max": "128",
           "min": "-128",
           "name": "Clearcoat UV M00"
         },
         {
           "default": "0",
-          "id": "493_clearcoat_uv_m01",
+          "id": "500_clearcoat_uv_m01",
           "max": "128",
           "min": "-128",
           "name": "Clearcoat UV M01"
         },
         {
           "default": "0",
-          "id": "493_clearcoat_uv_m10",
+          "id": "500_clearcoat_uv_m10",
           "max": "128",
           "min": "-128",
           "name": "Clearcoat UV M10"
         },
         {
           "default": "1",
-          "id": "493_clearcoat_uv_m11",
+          "id": "500_clearcoat_uv_m11",
           "max": "128",
           "min": "-128",
           "name": "Clearcoat UV M11"
         },
         {
           "default": "0",
-          "id": "493_clearcoat_uv_tx",
+          "id": "500_clearcoat_uv_tx",
           "max": "128",
           "min": "-128",
           "name": "Clearcoat UV TX"
         },
         {
           "default": "0",
-          "id": "493_clearcoat_uv_ty",
+          "id": "500_clearcoat_uv_ty",
           "max": "128",
           "min": "-128",
           "name": "Clearcoat UV TY"
         },
         {
           "default": "0",
-          "id": "493_clearcoat_tex_coord",
+          "id": "500_clearcoat_tex_coord",
           "max": "8",
           "min": "0",
           "name": "Clearcoat UV Set"
         },
         {
           "default": "0",
-          "id": "493_clearcoat_wrap_u",
+          "id": "500_clearcoat_wrap_u",
           "max": "2",
           "min": "0",
           "name": "Clearcoat Wrap U"
         },
         {
           "default": "0",
-          "id": "493_clearcoat_wrap_v",
+          "id": "500_clearcoat_wrap_v",
           "max": "2",
           "min": "0",
           "name": "Clearcoat Wrap V"
         },
         {
           "default": "0",
-          "id": "493_clearcoat_mag_filter",
+          "id": "500_clearcoat_mag_filter",
           "max": "1",
           "min": "0",
           "name": "Clearcoat Mag Filter"
         },
         {
           "default": "0",
-          "id": "493_clearcoat_min_filter",
+          "id": "500_clearcoat_min_filter",
           "max": "1",
           "min": "0",
           "name": "Clearcoat Min Filter"
         },
         {
           "default": "0",
-          "id": "493_clearcoat_mip_filter",
+          "id": "500_clearcoat_mip_filter",
           "max": "2",
           "min": "0",
           "name": "Clearcoat Mip Filter"
         },
         {
           "default": "1",
-          "id": "493_clearcoat_roughness_uv_m00",
+          "id": "500_clearcoat_roughness_uv_m00",
           "max": "128",
           "min": "-128",
           "name": "Clearcoat Roughness UV M00"
         },
         {
           "default": "0",
-          "id": "493_clearcoat_roughness_uv_m01",
+          "id": "500_clearcoat_roughness_uv_m01",
           "max": "128",
           "min": "-128",
           "name": "Clearcoat Roughness UV M01"
         },
         {
           "default": "0",
-          "id": "493_clearcoat_roughness_uv_m10",
+          "id": "500_clearcoat_roughness_uv_m10",
           "max": "128",
           "min": "-128",
           "name": "Clearcoat Roughness UV M10"
         },
         {
           "default": "1",
-          "id": "493_clearcoat_roughness_uv_m11",
+          "id": "500_clearcoat_roughness_uv_m11",
           "max": "128",
           "min": "-128",
           "name": "Clearcoat Roughness UV M11"
         },
         {
           "default": "0",
-          "id": "493_clearcoat_roughness_uv_tx",
+          "id": "500_clearcoat_roughness_uv_tx",
           "max": "128",
           "min": "-128",
           "name": "Clearcoat Roughness UV TX"
         },
         {
           "default": "0",
-          "id": "493_clearcoat_roughness_uv_ty",
+          "id": "500_clearcoat_roughness_uv_ty",
           "max": "128",
           "min": "-128",
           "name": "Clearcoat Roughness UV TY"
         },
         {
           "default": "0",
-          "id": "493_clearcoat_roughness_tex_coord",
+          "id": "500_clearcoat_roughness_tex_coord",
           "max": "8",
           "min": "0",
           "name": "Clearcoat Roughness UV Set"
         },
         {
           "default": "0",
-          "id": "493_clearcoat_roughness_wrap_u",
+          "id": "500_clearcoat_roughness_wrap_u",
           "max": "2",
           "min": "0",
           "name": "Clearcoat Roughness Wrap U"
         },
         {
           "default": "0",
-          "id": "493_clearcoat_roughness_wrap_v",
+          "id": "500_clearcoat_roughness_wrap_v",
           "max": "2",
           "min": "0",
           "name": "Clearcoat Roughness Wrap V"
         },
         {
           "default": "0",
-          "id": "493_clearcoat_roughness_mag_filter",
+          "id": "500_clearcoat_roughness_mag_filter",
           "max": "1",
           "min": "0",
           "name": "Clearcoat Roughness Mag Filter"
         },
         {
           "default": "0",
-          "id": "493_clearcoat_roughness_min_filter",
+          "id": "500_clearcoat_roughness_min_filter",
           "max": "1",
           "min": "0",
           "name": "Clearcoat Roughness Min Filter"
         },
         {
           "default": "0",
-          "id": "493_clearcoat_roughness_mip_filter",
+          "id": "500_clearcoat_roughness_mip_filter",
           "max": "2",
           "min": "0",
           "name": "Clearcoat Roughness Mip Filter"
         },
         {
           "default": "1",
-          "id": "493_clearcoat_normal_uv_m00",
+          "id": "500_clearcoat_normal_uv_m00",
           "max": "128",
           "min": "-128",
           "name": "Clearcoat Normal UV M00"
         },
         {
           "default": "0",
-          "id": "493_clearcoat_normal_uv_m01",
+          "id": "500_clearcoat_normal_uv_m01",
           "max": "128",
           "min": "-128",
           "name": "Clearcoat Normal UV M01"
         },
         {
           "default": "0",
-          "id": "493_clearcoat_normal_uv_m10",
+          "id": "500_clearcoat_normal_uv_m10",
           "max": "128",
           "min": "-128",
           "name": "Clearcoat Normal UV M10"
         },
         {
           "default": "1",
-          "id": "493_clearcoat_normal_uv_m11",
+          "id": "500_clearcoat_normal_uv_m11",
           "max": "128",
           "min": "-128",
           "name": "Clearcoat Normal UV M11"
         },
         {
           "default": "0",
-          "id": "493_clearcoat_normal_uv_tx",
+          "id": "500_clearcoat_normal_uv_tx",
           "max": "128",
           "min": "-128",
           "name": "Clearcoat Normal UV TX"
         },
         {
           "default": "0",
-          "id": "493_clearcoat_normal_uv_ty",
+          "id": "500_clearcoat_normal_uv_ty",
           "max": "128",
           "min": "-128",
           "name": "Clearcoat Normal UV TY"
         },
         {
           "default": "0",
-          "id": "493_clearcoat_normal_tex_coord",
+          "id": "500_clearcoat_normal_tex_coord",
           "max": "8",
           "min": "0",
           "name": "Clearcoat Normal UV Set"
         },
         {
           "default": "0",
-          "id": "493_clearcoat_normal_wrap_u",
+          "id": "500_clearcoat_normal_wrap_u",
           "max": "2",
           "min": "0",
           "name": "Clearcoat Normal Wrap U"
         },
         {
           "default": "0",
-          "id": "493_clearcoat_normal_wrap_v",
+          "id": "500_clearcoat_normal_wrap_v",
           "max": "2",
           "min": "0",
           "name": "Clearcoat Normal Wrap V"
         },
         {
           "default": "0",
-          "id": "493_clearcoat_normal_mag_filter",
+          "id": "500_clearcoat_normal_mag_filter",
           "max": "1",
           "min": "0",
           "name": "Clearcoat Normal Mag Filter"
         },
         {
           "default": "0",
-          "id": "493_clearcoat_normal_min_filter",
+          "id": "500_clearcoat_normal_min_filter",
           "max": "1",
           "min": "0",
           "name": "Clearcoat Normal Min Filter"
         },
         {
           "default": "0",
-          "id": "493_clearcoat_normal_mip_filter",
+          "id": "500_clearcoat_normal_mip_filter",
           "max": "2",
           "min": "0",
           "name": "Clearcoat Normal Mip Filter"
         },
         {
           "default": "1",
-          "id": "493_specular_uv_m00",
+          "id": "500_specular_uv_m00",
           "max": "128",
           "min": "-128",
           "name": "Specular UV M00"
         },
         {
           "default": "0",
-          "id": "493_specular_uv_m01",
+          "id": "500_specular_uv_m01",
           "max": "128",
           "min": "-128",
           "name": "Specular UV M01"
         },
         {
           "default": "0",
-          "id": "493_specular_uv_m10",
+          "id": "500_specular_uv_m10",
           "max": "128",
           "min": "-128",
           "name": "Specular UV M10"
         },
         {
           "default": "1",
-          "id": "493_specular_uv_m11",
+          "id": "500_specular_uv_m11",
           "max": "128",
           "min": "-128",
           "name": "Specular UV M11"
         },
         {
           "default": "0",
-          "id": "493_specular_uv_tx",
+          "id": "500_specular_uv_tx",
           "max": "128",
           "min": "-128",
           "name": "Specular UV TX"
         },
         {
           "default": "0",
-          "id": "493_specular_uv_ty",
+          "id": "500_specular_uv_ty",
           "max": "128",
           "min": "-128",
           "name": "Specular UV TY"
         },
         {
           "default": "0",
-          "id": "493_specular_tex_coord",
+          "id": "500_specular_tex_coord",
           "max": "8",
           "min": "0",
           "name": "Specular UV Set"
         },
         {
           "default": "0",
-          "id": "493_specular_wrap_u",
+          "id": "500_specular_wrap_u",
           "max": "2",
           "min": "0",
           "name": "Specular Wrap U"
         },
         {
           "default": "0",
-          "id": "493_specular_wrap_v",
+          "id": "500_specular_wrap_v",
           "max": "2",
           "min": "0",
           "name": "Specular Wrap V"
         },
         {
           "default": "0",
-          "id": "493_specular_mag_filter",
+          "id": "500_specular_mag_filter",
           "max": "1",
           "min": "0",
           "name": "Specular Mag Filter"
         },
         {
           "default": "0",
-          "id": "493_specular_min_filter",
+          "id": "500_specular_min_filter",
           "max": "1",
           "min": "0",
           "name": "Specular Min Filter"
         },
         {
           "default": "0",
-          "id": "493_specular_mip_filter",
+          "id": "500_specular_mip_filter",
           "max": "2",
           "min": "0",
           "name": "Specular Mip Filter"
         },
         {
           "default": "1",
-          "id": "493_specular_color_uv_m00",
+          "id": "500_specular_color_uv_m00",
           "max": "128",
           "min": "-128",
           "name": "Specular Color UV M00"
         },
         {
           "default": "0",
-          "id": "493_specular_color_uv_m01",
+          "id": "500_specular_color_uv_m01",
           "max": "128",
           "min": "-128",
           "name": "Specular Color UV M01"
         },
         {
           "default": "0",
-          "id": "493_specular_color_uv_m10",
+          "id": "500_specular_color_uv_m10",
           "max": "128",
           "min": "-128",
           "name": "Specular Color UV M10"
         },
         {
           "default": "1",
-          "id": "493_specular_color_uv_m11",
+          "id": "500_specular_color_uv_m11",
           "max": "128",
           "min": "-128",
           "name": "Specular Color UV M11"
         },
         {
           "default": "0",
-          "id": "493_specular_color_uv_tx",
+          "id": "500_specular_color_uv_tx",
           "max": "128",
           "min": "-128",
           "name": "Specular Color UV TX"
         },
         {
           "default": "0",
-          "id": "493_specular_color_uv_ty",
+          "id": "500_specular_color_uv_ty",
           "max": "128",
           "min": "-128",
           "name": "Specular Color UV TY"
         },
         {
           "default": "0",
-          "id": "493_specular_color_tex_coord",
+          "id": "500_specular_color_tex_coord",
           "max": "8",
           "min": "0",
           "name": "Specular Color UV Set"
         },
         {
           "default": "0",
-          "id": "493_specular_color_wrap_u",
+          "id": "500_specular_color_wrap_u",
           "max": "2",
           "min": "0",
           "name": "Specular Color Wrap U"
         },
         {
           "default": "0",
-          "id": "493_specular_color_wrap_v",
+          "id": "500_specular_color_wrap_v",
           "max": "2",
           "min": "0",
           "name": "Specular Color Wrap V"
         },
         {
           "default": "0",
-          "id": "493_specular_color_mag_filter",
+          "id": "500_specular_color_mag_filter",
           "max": "1",
           "min": "0",
           "name": "Specular Color Mag Filter"
         },
         {
           "default": "0",
-          "id": "493_specular_color_min_filter",
+          "id": "500_specular_color_min_filter",
           "max": "1",
           "min": "0",
           "name": "Specular Color Min Filter"
         },
         {
           "default": "0",
-          "id": "493_specular_color_mip_filter",
+          "id": "500_specular_color_mip_filter",
           "max": "2",
           "min": "0",
           "name": "Specular Color Mip Filter"
         },
         {
           "default": "1",
-          "id": "493_transmission_uv_m00",
+          "id": "500_transmission_uv_m00",
           "max": "128",
           "min": "-128",
           "name": "Transmission UV M00"
         },
         {
           "default": "0",
-          "id": "493_transmission_uv_m01",
+          "id": "500_transmission_uv_m01",
           "max": "128",
           "min": "-128",
           "name": "Transmission UV M01"
         },
         {
           "default": "0",
-          "id": "493_transmission_uv_m10",
+          "id": "500_transmission_uv_m10",
           "max": "128",
           "min": "-128",
           "name": "Transmission UV M10"
         },
         {
           "default": "1",
-          "id": "493_transmission_uv_m11",
+          "id": "500_transmission_uv_m11",
           "max": "128",
           "min": "-128",
           "name": "Transmission UV M11"
         },
         {
           "default": "0",
-          "id": "493_transmission_uv_tx",
+          "id": "500_transmission_uv_tx",
           "max": "128",
           "min": "-128",
           "name": "Transmission UV TX"
         },
         {
           "default": "0",
-          "id": "493_transmission_uv_ty",
+          "id": "500_transmission_uv_ty",
           "max": "128",
           "min": "-128",
           "name": "Transmission UV TY"
         },
         {
           "default": "0",
-          "id": "493_transmission_tex_coord",
+          "id": "500_transmission_tex_coord",
           "max": "8",
           "min": "0",
           "name": "Transmission UV Set"
         },
         {
           "default": "0",
-          "id": "493_transmission_wrap_u",
+          "id": "500_transmission_wrap_u",
           "max": "2",
           "min": "0",
           "name": "Transmission Wrap U"
         },
         {
           "default": "0",
-          "id": "493_transmission_wrap_v",
+          "id": "500_transmission_wrap_v",
           "max": "2",
           "min": "0",
           "name": "Transmission Wrap V"
         },
         {
           "default": "0",
-          "id": "493_transmission_mag_filter",
+          "id": "500_transmission_mag_filter",
           "max": "1",
           "min": "0",
           "name": "Transmission Mag Filter"
         },
         {
           "default": "0",
-          "id": "493_transmission_min_filter",
+          "id": "500_transmission_min_filter",
           "max": "1",
           "min": "0",
           "name": "Transmission Min Filter"
         },
         {
           "default": "0",
-          "id": "493_transmission_mip_filter",
+          "id": "500_transmission_mip_filter",
           "max": "2",
           "min": "0",
           "name": "Transmission Mip Filter"
         },
         {
           "default": "1",
-          "id": "493_volume_thickness_uv_m00",
+          "id": "500_volume_thickness_uv_m00",
           "max": "128",
           "min": "-128",
           "name": "Volume Thickness UV M00"
         },
         {
           "default": "0",
-          "id": "493_volume_thickness_uv_m01",
+          "id": "500_volume_thickness_uv_m01",
           "max": "128",
           "min": "-128",
           "name": "Volume Thickness UV M01"
         },
         {
           "default": "0",
-          "id": "493_volume_thickness_uv_m10",
+          "id": "500_volume_thickness_uv_m10",
           "max": "128",
           "min": "-128",
           "name": "Volume Thickness UV M10"
         },
         {
           "default": "1",
-          "id": "493_volume_thickness_uv_m11",
+          "id": "500_volume_thickness_uv_m11",
           "max": "128",
           "min": "-128",
           "name": "Volume Thickness UV M11"
         },
         {
           "default": "0",
-          "id": "493_volume_thickness_uv_tx",
+          "id": "500_volume_thickness_uv_tx",
           "max": "128",
           "min": "-128",
           "name": "Volume Thickness UV TX"
         },
         {
           "default": "0",
-          "id": "493_volume_thickness_uv_ty",
+          "id": "500_volume_thickness_uv_ty",
           "max": "128",
           "min": "-128",
           "name": "Volume Thickness UV TY"
         },
         {
           "default": "0",
-          "id": "493_volume_thickness_tex_coord",
+          "id": "500_volume_thickness_tex_coord",
           "max": "8",
           "min": "0",
           "name": "Volume Thickness UV Set"
         },
         {
           "default": "0",
-          "id": "493_volume_thickness_wrap_u",
+          "id": "500_volume_thickness_wrap_u",
           "max": "2",
           "min": "0",
           "name": "Volume Thickness Wrap U"
         },
         {
           "default": "0",
-          "id": "493_volume_thickness_wrap_v",
+          "id": "500_volume_thickness_wrap_v",
           "max": "2",
           "min": "0",
           "name": "Volume Thickness Wrap V"
         },
         {
           "default": "0",
-          "id": "493_volume_thickness_mag_filter",
+          "id": "500_volume_thickness_mag_filter",
           "max": "1",
           "min": "0",
           "name": "Volume Thickness Mag Filter"
         },
         {
           "default": "0",
-          "id": "493_volume_thickness_min_filter",
+          "id": "500_volume_thickness_min_filter",
           "max": "1",
           "min": "0",
           "name": "Volume Thickness Min Filter"
         },
         {
           "default": "0",
-          "id": "493_volume_thickness_mip_filter",
+          "id": "500_volume_thickness_mip_filter",
           "max": "2",
           "min": "0",
           "name": "Volume Thickness Mip Filter"
         },
         {
           "default": "1",
-          "id": "493_diffuse_transmission_uv_m00",
+          "id": "500_diffuse_transmission_uv_m00",
           "max": "128",
           "min": "-128",
           "name": "Diffuse Transmission UV M00"
         },
         {
           "default": "0",
-          "id": "493_diffuse_transmission_uv_m01",
+          "id": "500_diffuse_transmission_uv_m01",
           "max": "128",
           "min": "-128",
           "name": "Diffuse Transmission UV M01"
         },
         {
           "default": "0",
-          "id": "493_diffuse_transmission_uv_m10",
+          "id": "500_diffuse_transmission_uv_m10",
           "max": "128",
           "min": "-128",
           "name": "Diffuse Transmission UV M10"
         },
         {
           "default": "1",
-          "id": "493_diffuse_transmission_uv_m11",
+          "id": "500_diffuse_transmission_uv_m11",
           "max": "128",
           "min": "-128",
           "name": "Diffuse Transmission UV M11"
         },
         {
           "default": "0",
-          "id": "493_diffuse_transmission_uv_tx",
+          "id": "500_diffuse_transmission_uv_tx",
           "max": "128",
           "min": "-128",
           "name": "Diffuse Transmission UV TX"
         },
         {
           "default": "0",
-          "id": "493_diffuse_transmission_uv_ty",
+          "id": "500_diffuse_transmission_uv_ty",
           "max": "128",
           "min": "-128",
           "name": "Diffuse Transmission UV TY"
         },
         {
           "default": "0",
-          "id": "493_diffuse_transmission_tex_coord",
+          "id": "500_diffuse_transmission_tex_coord",
           "max": "8",
           "min": "0",
           "name": "Diffuse Transmission UV Set"
         },
         {
           "default": "0",
-          "id": "493_diffuse_transmission_wrap_u",
+          "id": "500_diffuse_transmission_wrap_u",
           "max": "2",
           "min": "0",
           "name": "Diffuse Transmission Wrap U"
         },
         {
           "default": "0",
-          "id": "493_diffuse_transmission_wrap_v",
+          "id": "500_diffuse_transmission_wrap_v",
           "max": "2",
           "min": "0",
           "name": "Diffuse Transmission Wrap V"
         },
         {
           "default": "0",
-          "id": "493_diffuse_transmission_mag_filter",
+          "id": "500_diffuse_transmission_mag_filter",
           "max": "1",
           "min": "0",
           "name": "Diffuse Transmission Mag Filter"
         },
         {
           "default": "0",
-          "id": "493_diffuse_transmission_min_filter",
+          "id": "500_diffuse_transmission_min_filter",
           "max": "1",
           "min": "0",
           "name": "Diffuse Transmission Min Filter"
         },
         {
           "default": "0",
-          "id": "493_diffuse_transmission_mip_filter",
+          "id": "500_diffuse_transmission_mip_filter",
           "max": "2",
           "min": "0",
           "name": "Diffuse Transmission Mip Filter"
         },
         {
           "default": "1",
-          "id": "493_diffuse_transmission_color_uv_m00",
+          "id": "500_diffuse_transmission_color_uv_m00",
           "max": "128",
           "min": "-128",
           "name": "Diffuse Transmission Color UV M00"
         },
         {
           "default": "0",
-          "id": "493_diffuse_transmission_color_uv_m01",
+          "id": "500_diffuse_transmission_color_uv_m01",
           "max": "128",
           "min": "-128",
           "name": "Diffuse Transmission Color UV M01"
         },
         {
           "default": "0",
-          "id": "493_diffuse_transmission_color_uv_m10",
+          "id": "500_diffuse_transmission_color_uv_m10",
           "max": "128",
           "min": "-128",
           "name": "Diffuse Transmission Color UV M10"
         },
         {
           "default": "1",
-          "id": "493_diffuse_transmission_color_uv_m11",
+          "id": "500_diffuse_transmission_color_uv_m11",
           "max": "128",
           "min": "-128",
           "name": "Diffuse Transmission Color UV M11"
         },
         {
           "default": "0",
-          "id": "493_diffuse_transmission_color_uv_tx",
+          "id": "500_diffuse_transmission_color_uv_tx",
           "max": "128",
           "min": "-128",
           "name": "Diffuse Transmission Color UV TX"
         },
         {
           "default": "0",
-          "id": "493_diffuse_transmission_color_uv_ty",
+          "id": "500_diffuse_transmission_color_uv_ty",
           "max": "128",
           "min": "-128",
           "name": "Diffuse Transmission Color UV TY"
         },
         {
           "default": "0",
-          "id": "493_diffuse_transmission_color_tex_coord",
+          "id": "500_diffuse_transmission_color_tex_coord",
           "max": "8",
           "min": "0",
           "name": "Diffuse Transmission Color UV Set"
         },
         {
           "default": "0",
-          "id": "493_diffuse_transmission_color_wrap_u",
+          "id": "500_diffuse_transmission_color_wrap_u",
           "max": "2",
           "min": "0",
           "name": "Diffuse Transmission Color Wrap U"
         },
         {
           "default": "0",
-          "id": "493_diffuse_transmission_color_wrap_v",
+          "id": "500_diffuse_transmission_color_wrap_v",
           "max": "2",
           "min": "0",
           "name": "Diffuse Transmission Color Wrap V"
         },
         {
           "default": "0",
-          "id": "493_diffuse_transmission_color_mag_filter",
+          "id": "500_diffuse_transmission_color_mag_filter",
           "max": "1",
           "min": "0",
           "name": "Diffuse Transmission Color Mag Filter"
         },
         {
           "default": "0",
-          "id": "493_diffuse_transmission_color_min_filter",
+          "id": "500_diffuse_transmission_color_min_filter",
           "max": "1",
           "min": "0",
           "name": "Diffuse Transmission Color Min Filter"
         },
         {
           "default": "0",
-          "id": "493_diffuse_transmission_color_mip_filter",
+          "id": "500_diffuse_transmission_color_mip_filter",
           "max": "2",
           "min": "0",
           "name": "Diffuse Transmission Color Mip Filter"
         },
         {
           "default": "0",
-          "id": "493_subsurface_weight",
+          "id": "500_subsurface_weight",
           "max": "1",
           "min": "0",
           "name": "Subsurface Weight"
         },
         {
           "default": "0.01",
-          "id": "493_subsurface_radius_r",
+          "id": "500_subsurface_radius_r",
           "max": "10",
           "min": "0.00001",
           "name": "Subsurface Radius R"
         },
         {
           "default": "0.005",
-          "id": "493_subsurface_radius_g",
+          "id": "500_subsurface_radius_g",
           "max": "10",
           "min": "0.00001",
           "name": "Subsurface Radius G"
         },
         {
           "default": "0.0025",
-          "id": "493_subsurface_radius_b",
+          "id": "500_subsurface_radius_b",
           "max": "10",
           "min": "0.00001",
           "name": "Subsurface Radius B"
         },
         {
           "default": "0.9",
-          "id": "493_subsurface_color_r",
+          "id": "500_subsurface_color_r",
           "max": "1",
           "min": "0",
           "name": "Subsurface Color R"
         },
         {
           "default": "0.8",
-          "id": "493_subsurface_color_g",
+          "id": "500_subsurface_color_g",
           "max": "1",
           "min": "0",
           "name": "Subsurface Color G"
         },
         {
           "default": "0.7",
-          "id": "493_subsurface_color_b",
+          "id": "500_subsurface_color_b",
           "max": "1",
           "min": "0",
           "name": "Subsurface Color B"
         },
         {
           "default": "0",
-          "id": "493_subsurface_anisotropy",
+          "id": "500_subsurface_anisotropy",
           "max": "0.95",
           "min": "-0.95",
           "name": "Subsurface Anisotropy"
         },
         {
           "default": "0",
-          "id": "493_subsurface_mode",
+          "id": "500_subsurface_mode",
           "max": "1",
           "min": "0",
           "name": "Subsurface Mode"
         },
         {
           "default": "8",
-          "id": "493_subsurface_samples",
+          "id": "500_subsurface_samples",
           "max": "64",
           "min": "1",
           "name": "Subsurface Samples"
         },
         {
           "default": "0",
-          "id": "493_volume_geometry",
+          "id": "500_volume_geometry",
           "max": "1",
           "min": "0",
           "name": "Geometric Volume"
         },
         {
           "default": "0",
-          "id": "493_volume_scattering_density",
+          "id": "500_volume_scattering_density",
           "max": "100",
           "min": "0",
           "name": "Volume Scattering Density"
         },
         {
           "default": "1",
-          "id": "493_volume_scattering_color_r",
+          "id": "500_volume_scattering_color_r",
           "max": "1",
           "min": "0",
           "name": "Volume Scattering Colour R"
         },
         {
           "default": "1",
-          "id": "493_volume_scattering_color_g",
+          "id": "500_volume_scattering_color_g",
           "max": "1",
           "min": "0",
           "name": "Volume Scattering Colour G"
         },
         {
           "default": "1",
-          "id": "493_volume_scattering_color_b",
+          "id": "500_volume_scattering_color_b",
           "max": "1",
           "min": "0",
           "name": "Volume Scattering Colour B"
         },
         {
           "default": "0",
-          "id": "493_volume_particle_density",
+          "id": "500_volume_particle_density",
           "max": "1000",
           "min": "0",
           "name": "Volume Particle Density"
         },
         {
           "default": "0",
-          "id": "493_subsurface_feature_mode",
+          "id": "500_subsurface_feature_mode",
           "max": "3",
           "min": "0",
           "name": "Subsurface Feature"
         },
         {
           "default": "1",
-          "id": "494_visible",
+          "id": "501_visible",
           "max": "1",
           "min": "0",
           "name": "Visible"
         },
         {
           "default": "1",
-          "id": "494_cast_shadows",
+          "id": "501_cast_shadows",
           "max": "1",
           "min": "0",
           "name": "Cast Shadows"
         },
         {
           "default": "1",
-          "id": "494_emission_strength",
+          "id": "501_emission_strength",
           "max": "10",
           "min": "0",
           "name": "Emission Strength"
         },
         {
           "default": "1",
-          "id": "494_gain",
+          "id": "501_gain",
           "max": "4",
           "min": "0",
           "name": "Appearance Gain"
