@@ -49,7 +49,6 @@ use super::liquid_stats::{SOLVER_WORDS, with_stats_layout};
 use super::prefix_scan::ScanLabels;
 use super::sort_particles_into_cells::{LIQUID_PARTICLE_READ, ParticleSorter, SortJob, SortLabels, float_param, int_param};
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
-use crate::node_graph::fluid::TICK;
 use crate::node_graph::fluid_particles::{FaceSample, FluidParticle};
 use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
 use crate::node_graph::liquid::{EXACT_F32_COUNT, WATER_DENSITY};
@@ -2223,7 +2222,11 @@ impl Primitive for GpuFlipStep {
             _ => capacity,
         };
         let steps = ctx.scalar_or_param("steps", 1.0).round().clamp(1.0, 64.0);
-        let interval_duration = f64::from(ctx.scalar_or_param("interval_duration", TICK as f32));
+        // A graph saved without the domain's interval wire runs on the project's Sim Rate.
+        let interval_duration = f64::from(ctx.scalar_or_param(
+            "interval_duration",
+            crate::node_graph::physics::simulation_interval() as f32,
+        ));
         let step_dt = (interval_duration/ f64::from(steps)) as f32;
         let flip = ctx.scalar_or_param("flip", 0.95).clamp(0.0, 1.0);
         let top_speed = ctx.scalar_or_param("top_speed", DEFAULT_TOP_SPEED);

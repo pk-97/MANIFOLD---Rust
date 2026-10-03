@@ -717,17 +717,18 @@ fn wire_liquid_intervals(def: &mut EffectGraphDef) -> bool {
     }
     let mut changed = false;
     for node in &def.nodes {
-        let ports: &[(&str, &str)] = match node.type_id.as_str() {
-            "node.gpu_flip_step" => &[("interval_duration", "interval_duration"), ("clock_obstacles", "clock_obstacles"), ("clock_sources", "clock_sources"), ("clock_obstacle_count", "clock_obstacle_count"), ("clock_source_count", "clock_source_count"), ("live_hits", "live_hits"), ("live_hit_count", "live_hit_count")],
-            "node.matter_state" => &[("interval_duration", "interval_duration"), ("target_time", "target_time"), ("simulation_time", "simulation_time"), ("step_cap_hit", "step_cap_hit")],
-            "node.whitewater_step" => &[("interval_duration", "dt")],
-            "node.liquid_solid_distance" | "node.whitewater_obstacle_source" => &[("interval_duration", "tick_seconds")],
+        let clock_ports: &[(&str, &str)] = match node.type_id.as_str() {
+            "node.gpu_flip_step" => &[("clock_obstacles", "clock_obstacles"), ("clock_sources", "clock_sources"), ("clock_obstacle_count", "clock_obstacle_count"), ("clock_source_count", "clock_source_count"), ("live_hits", "live_hits"), ("live_hit_count", "live_hit_count")],
+            "node.matter_state" => &[("target_time", "target_time"), ("simulation_time", "simulation_time"), ("step_cap_hit", "step_cap_hit")],
             _ => &[],
         };
+        let intervals = crate::node_graph::liquid::clock::INTERVAL_DURATION_INPUTS.iter()
+            .filter(|(type_id, _)| *type_id == node.type_id.as_str())
+            .map(|&(_, input)| ("interval_duration", input));
         let source = def.wires.iter().filter(|wire| wire.to_node == node.id)
             .find_map(|wire| domains.get(&wire.from_node).copied());
         if let Some(source) = source {
-            for &(output, input) in ports {
+            for (output, input) in intervals.chain(clock_ports.iter().copied()) {
                 if def.wires.iter().any(|wire| wire.to_node == node.id && wire.to_port == input) { continue; }
                 def.wires.push(EffectGraphWire { from_node: source, from_port: output.into(), to_node: node.id, to_port: input.into() });
                 changed = true;

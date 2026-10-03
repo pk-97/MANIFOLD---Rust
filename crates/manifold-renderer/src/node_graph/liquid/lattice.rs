@@ -370,7 +370,8 @@ mod tests {
     /// Every bundled Liquid Surface meshes on the lattice a solver's frame
     /// node published: its solid, node counts and box are wired straight from
     /// one node.fluid_surface, node.matter_frame or node.liquid_frame, never
-    /// a hand-made transform or value that could drop the padding.
+    /// a hand-made transform or value that could drop the padding. A
+    /// display-time solid is a node.mix_arrays of that frame's two solids.
     #[test]
     fn liquid_surface_lattice_comes_from_the_frame() {
         const FRAMES: [&str; 3] =
@@ -379,7 +380,12 @@ mod tests {
         for (type_id, flat) in flat_bundled_hosts() {
             let source = |id: u32, port: &str| source(&type_id, &flat, id, port);
             for volume in flat.nodes.iter().filter(|n| n.type_id == "node.particle_volume") {
-                let (frame, port) = source(volume.id, "solid");
+                let (mut frame, mut port) = source(volume.id, "solid");
+                if type_of(&flat, frame) == Some("node.mix_arrays") {
+                    let (a, b) = (source(frame, "a"), source(frame, "b"));
+                    assert_eq!((a.1, b), ("solid_a", (a.0, "solid_b")), "{type_id}: display solid");
+                    (frame, port) = a;
+                }
                 assert!(FRAMES.contains(&type_of(&flat, frame).unwrap_or("")), "{type_id}: solid from {port}");
                 assert!(matches!(port, "solid_a" | "solid_b"), "{type_id}: solid from {port}");
                 let (box_node, _) = source(volume.id, "center_x");

@@ -328,7 +328,9 @@ pub(crate) struct StepFrame {
     /// Live liquid particles; `None` takes every slot.
     pub count: Option<u32>,
     pub ticks: u32,
-    /// Duration of each accepted interval; export supplies exactly 1/60 s.
+    /// Simulation seconds in the accepted interval: one Sim Rate interval of
+    /// transport in export, every owed interval as one span live, both scaled
+    /// by Speed.
     pub dt: f32,
     pub epoch: u32,
     pub seed: f32,
@@ -1433,7 +1435,8 @@ impl WhitewaterStep {
             return Err("Whitewater: Max Turbulence must exceed nonnegative Min Turbulence".to_owned());
         }
         Ok(StepFrame {
-            dt: ctx.scalar_or_param("dt", TICK as f32),
+            // A graph saved without the domain's interval wire runs on the project's Sim Rate.
+            dt: ctx.scalar_or_param("dt", crate::node_graph::physics::simulation_interval() as f32),
             shape,
             count,
             ticks: if ctx.inputs.slot("distance").is_some() { 1 } else { whole(ctx.scalar_or_param("ticks", 0.0)) },
