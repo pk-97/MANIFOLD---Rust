@@ -74,6 +74,34 @@ crate::primitive! {
     output_capacity: FusedOutputCapacity::FromInput { input: "particles" },
 }
 
+/// Shared standalone/extent geometry contract. WGSL uses floor(n + 0.5)
+/// for positive node counts, matching Rust's round (not WGSL's ties-to-even).
+pub(crate) fn solid_shape(read: impl Fn(&str, f32) -> f32) -> Result<([u32; 3], u64), String> {
+    for name in ["center_x", "center_y", "center_z"] {
+        if !read(name, 0.0).is_finite() {
+            return Err(format!("Push Out Of Solid: {name} must be finite"));
+        }
+    }
+    for name in ["size_x", "size_y", "size_z"] {
+        let value = read(name, 4.0);
+        if !value.is_finite() || value <= 0.0 {
+            return Err(format!("Push Out Of Solid: {name} must be finite and positive"));
+        }
+    }
+    let mut nodes = [0; 3];
+    let mut total = 1u32;
+    for (axis, name) in ["nodes_x", "nodes_y", "nodes_z"].into_iter().enumerate() {
+        let value = read(name, 5.0).round();
+        if !(2.0..=16_777_216.0).contains(&value) {
+            return Err(format!("Push Out Of Solid: {name} must round to 2..=16777216"));
+        }
+        nodes[axis] = value as u32;
+        total = total.checked_mul(nodes[axis])
+            .ok_or_else(|| "Push Out Of Solid: lattice exceeds u32 indexing".to_owned())?;
+    }
+    Ok((nodes, u64::from(total) * std::mem::size_of::<f32>() as u64))
+}
+
 impl Primitive for PushOutOfSolid {
     fn array_output_capacity(
         &self,
@@ -106,10 +134,11 @@ impl Primitive for PushOutOfSolid {
         if count == 0 {
             return;
         }
-        let nodes = ["nodes_x", "nodes_y", "nodes_z"]
-            .map(|name| ctx.scalar_or_param(name, 5.0).round().max(2.0) as u32);
-        let lattice_count = u64::from(nodes[0]) * u64::from(nodes[1]) * u64::from(nodes[2]);
-        if lattice_count > solid.size / std::mem::size_of::<f32>() as u64 {
+        let (nodes, solid_bytes) = match solid_shape(|name, default| ctx.scalar_or_param(name, default)) {
+            Ok(shape) => shape,
+            Err(error) => { ctx.error(error); return; }
+        };
+        if solid_bytes > solid.size {
             ctx.error(format!(
                 "Push Out Of Solid: a {:?}-node lattice has fewer solid values than required",
                 nodes
@@ -168,6 +197,19 @@ impl Primitive for PushOutOfSolid {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn solid_shape_rounding_and_invalid_extents() {
+        assert_eq!(solid_shape(|name, default| if name.starts_with("nodes_") { 4.5 } else { default }).unwrap(), ([5; 3], 500));
+        for bad in [f32::NAN, f32::INFINITY, -1.0, 0.0] {
+            assert!(solid_shape(|name, default| if name == "size_x" { bad } else { default }).is_err());
+        }
+        for bad in [f32::NAN, f32::INFINITY, 1.0, 16_777_218.0] {
+            assert!(solid_shape(|name, default| if name == "nodes_x" { bad } else { default }).is_err());
+        }
+        assert!(solid_shape(|name, default| if name.starts_with("nodes_") { 4096.0 } else { default }).is_err());
+        assert!(solid_shape(|name, default| if name == "center_z" { f32::NAN } else { default }).is_err());
+    }
 
     #[test]
     fn generated_wgsl_has_gathered_solid_and_particle_output() {

@@ -118,3 +118,59 @@ impl FrameRing {
         display_blend(display_time, self.t_a, self.t_b)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Exercise the real publication metadata without allocating a Metal buffer.
+    fn publish(ring: &mut FrameRing, at: f64, epoch: u32, count: u32, grown: bool) {
+        let write = RingWrite {
+            write: (0..RING).find(|&i| i != ring.a && i != ring.b).unwrap(),
+            previous: ring.b,
+            previous_count: ring.count_b(),
+            grown,
+            restarted: ring.epoch != Some(epoch),
+        };
+        ring.finish(write, count, epoch, at);
+    }
+
+    #[test]
+    fn particle_blend_uses_fraction_between_published_ticks() {
+        for hz in [15.0, 20.0, 30.0, 60.0] {
+            let mut ring = FrameRing::default();
+            let tick = 1.0 / hz;
+            publish(&mut ring, 10.0, 1, 3, true);
+            assert_eq!(ring.blend(9.0), (1.0, 0.0));
+            // A stalled publisher skips two ticks; span is the accepted pair,
+            // not the selected update interval or the render frame duration.
+            publish(&mut ring, 10.0 + 3.0 * tick, 1, 4, false);
+            assert_eq!((ring.count_a(), ring.count_b()), (3, 4));
+            for fraction in [-0.5_f64, 0.0, 0.25, 0.5, 0.75, 1.0, 2.0] {
+                let (blend, span) = ring.blend(10.0 + fraction * 3.0 * tick);
+                assert!((blend - fraction.clamp(0.0, 1.0) as f32).abs() < 1e-6);
+                assert!((span - (3.0 * tick) as f32).abs() < 1e-6);
+            }
+            let held = ring.blend(10.0 + tick);
+            assert_eq!(ring.blend(10.0 + tick), held, "pause repeats display time");
+            assert!(!ring.wants_tick(1, 10.0 + 3.0 * tick));
+            assert!(ring.wants_tick(1, 10.0 + 4.0 * tick));
+        }
+    }
+
+    #[test]
+    fn particle_blend_collapses_on_restart_or_storage_growth() {
+        let mut ring = FrameRing::default();
+        publish(&mut ring, 1.0, 1, 3, true);
+        publish(&mut ring, 2.0, 1, 4, false);
+        assert_ne!(ring.a(), ring.b());
+        assert!(ring.wants_tick(2, 0.0));
+        publish(&mut ring, 0.0, 2, 2, false);
+        assert_eq!(ring.a(), ring.b());
+        assert_eq!(ring.blend(0.0), (1.0, 0.0));
+        publish(&mut ring, 1.0, 2, 8, true);
+        assert_eq!(ring.a(), ring.b());
+        assert_eq!((ring.count_a(), ring.count_b()), (8, 8));
+        assert_eq!(ring.blend(0.5), (1.0, 0.0));
+    }
+}

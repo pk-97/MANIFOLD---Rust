@@ -542,6 +542,9 @@ impl LiquidPreset {
 
 /// Every node type a liquid preset may hold that touches an array or the GPU.
 pub const LIQUID_EXTENT_RULES: &[ExtentRule] = &[
+    ExtentRule { type_id: "node.interpolate_particle_frames", check: interpolate_particle_frames },
+    ExtentRule { type_id: "node.push_out_of_solid", check: push_out_of_solid },
+    ExtentRule { type_id: "node.mix_arrays", check: mix_arrays },
     ExtentRule { type_id: MATTER_DOMAIN_TYPE_ID, check: matter_domain },
     ExtentRule { type_id: FLIP_DOMAIN_TYPE_ID, check: fluid_surface },
     ExtentRule { type_id: "node.matter_fill", check: matter_fill },
@@ -607,6 +610,40 @@ pub const LIQUID_EXTENT_RULES: &[ExtentRule] = &[
     ExtentRule { type_id: "node.whitewater_step", check: whitewater_step },
     ExtentRule { type_id: "node.particles_to_copies", check: particles_to_copies },
 ];
+
+fn interpolate_particle_frames(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    // Output follows B's capacity, never A+B. Count tails are explicitly zeroed.
+    let bytes = x.bytes("particles_b").ok_or_else(|| x.uncovered("particles_b is unbound".into()))?;
+    x.covers("out", bytes)?;
+    for (port, count, default) in [("particles_a", "count_a", 0.0), ("particles_b", "count_b", -1.0)] {
+        if port == "particles_a" && !x.wired(port) { continue; }
+        let value = x.scalar(count, default);
+        if port == "particles_b" && value == -1.0 { continue; }
+        if !value.is_finite() || !(0.0..=EXACT_F32_COUNT as f32).contains(&value) {
+            return Err(Verdict::Refused(format!("{count} must be a finite count (only count_b accepts -1)")));
+        }
+        // The shader truncates positive counts, it does not round them.
+        x.covers(port, value as u64 * PARTICLE)?;
+    }
+    Ok(())
+}
+
+fn push_out_of_solid(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let (_, bytes) = crate::node_graph::primitives::push_out_of_solid::solid_shape(|name, default| x.scalar(name, default))
+        .map_err(Verdict::Refused)?;
+    x.covers("solid", bytes)?;
+    let particles = x.bytes("particles").ok_or_else(|| x.uncovered("particles is unbound".into()))?;
+    x.covers("out", particles)
+}
+
+fn mix_arrays(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let a = x.bytes("a").ok_or_else(|| x.uncovered("a is unbound".into()))?;
+    let b = x.bytes("b").ok_or_else(|| x.uncovered("b is unbound".into()))?;
+    if a != b {
+        return Err(Verdict::Refused(format!("Mix Arrays: input capacities must match (a={a} bytes, b={b} bytes)")));
+    }
+    x.covers("out", a)
+}
 
 fn nodes_total(nodes: [f32; 3]) -> u64 {
     nodes.iter().map(|&n| n.max(0.0) as u64).product()
@@ -1598,6 +1635,65 @@ mod tests {
         bundled_preset_type_ids(PresetKind::Generator)
             .filter_map(|id| bundled_preset_def(&id).filter(|def| holds_liquid(def)).map(|def| (id.to_string(), def)))
             .collect()
+    }
+
+    fn particle_blend_preset() -> EffectGraphDef {
+        serde_json::from_str(include_str!("../../../assets/generator-presets/WaterDamBreakParticles.json")).unwrap()
+    }
+
+    #[test]
+    fn particle_blend_presets_have_complete_extent_rules() {
+        for text in [
+            include_str!("../../../assets/generator-presets/WaterDamBreakGpuFlip.json"),
+            include_str!("../../../assets/generator-presets/WaterDamBreakParticles.json"),
+        ] {
+            let def = serde_json::from_str(text).unwrap();
+            for resolution in [16, 32] {
+                check_preset_extents(&def, resolution).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn particle_blend_counts_and_solid_storage_are_checked() {
+        use manifold_core::effect_graph_def::SerializedParamValue;
+        for (type_id, port, value) in [
+            ("node.interpolate_particle_frames", "count_a", 16_777_216.0),
+            ("node.interpolate_particle_frames", "count_b", 16_777_216.0),
+            ("node.push_out_of_solid", "nodes_x", 4096.0),
+        ] {
+            let mut def = particle_blend_preset();
+            let node = def.nodes.iter_mut().find(|node| node.type_id == type_id).unwrap();
+            let id = node.id;
+            node.params.insert(port.into(), SerializedParamValue::Float { value });
+            def.wires.retain(|wire| !(wire.to_node == id && wire.to_port == port));
+            match check_preset_extents(&def, 16) {
+                Err(ExtentError::Uncovered { node, .. }) => assert!(node.contains(type_id), "{node}"),
+                other => panic!("{type_id}.{port}: expected uncovered storage, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn particle_blend_mix_refuses_unequal_capacities() {
+        let mut preset = LiquidPreset::build(&particle_blend_preset()).unwrap();
+        let rules: Vec<_> = LIQUID_EXTENT_RULES.iter().map(|rule| {
+            if rule.type_id == "node.liquid_frame" {
+                ExtentRule { type_id: rule.type_id, check: |x| {
+                    liquid_frame(x)?;
+                    // Simulate a malformed frame publisher, without a device.
+                    x.provided.iter_mut().find(|(port, _)| *port == "solid_b").unwrap().1 += 4;
+                    Ok(())
+                }}
+            } else { *rule }
+        }).collect();
+        match check_graph(&mut preset.graph, &preset.plan, &rules) {
+            Err(ExtentError::Refused { node, reason }) => {
+                assert!(node.contains("node.mix_arrays"), "{node}");
+                assert!(reason.contains("input capacities must match"), "{reason}");
+            }
+            other => panic!("expected unequal arrays to be refused, got {other:?}"),
+        }
     }
 
     /// Section 3.7 (Safety rails) rule 1, I9: every liquid preset at every

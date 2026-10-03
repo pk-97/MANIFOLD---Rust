@@ -68,6 +68,125 @@ fn fluid_particle_blend_fused_codegen_validates() {
     .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&generated.wgsl)));
 }
 
+/// Pass-2 CPU reference fixtures, not proof of the current GPU publisher.
+mod publication_contract {
+    use crate::node_graph::fluid_particles::FluidParticle;
+
+    struct ReferenceIds {
+        next: u64,
+        epoch: u32,
+    }
+
+    impl ReferenceIds {
+        fn emit(&mut self, live: &mut Vec<FluidParticle>, positions: &[f32]) {
+            if self.next + positions.len() as u64 > u64::from(u32::MAX) + 1 {
+                self.epoch += 1;
+                for (i, particle) in live.iter_mut().enumerate() {
+                    particle.id = i as u32 + 1;
+                }
+                self.next = live.len() as u64 + 1;
+            }
+            for &x in positions {
+                live.push(FluidParticle {
+                    position_radius: [x, 0.0, 0.0, 0.1],
+                    velocity: [1.0, 0.0, 0.0],
+                    id: self.next as u32,
+                });
+                self.next += 1;
+            }
+        }
+    }
+
+    fn publish(state: &[FluidParticle], capacity: usize) -> (Vec<FluidParticle>, usize) {
+        let mut frame: Vec<_> = state.iter().copied().filter(|p| p.position_radius[3] > 0.0).collect();
+        frame.sort_unstable_by_key(|p| p.id);
+        let count = frame.len();
+        assert!(count <= capacity);
+        frame.resize(capacity, FluidParticle::default());
+        assert!(valid_publication(&frame, count));
+        (frame, count)
+    }
+
+    fn valid_publication(frame: &[FluidParticle], count: usize) -> bool {
+        count <= frame.len()
+            && frame[..count].iter().all(|p| p.id != 0 && p.position_radius[3] > 0.0)
+            && frame[..count].windows(2).all(|p| p[0].id < p[1].id)
+            && frame[count..].iter().all(|p| *p == FluidParticle::default())
+    }
+
+    #[test]
+    fn particle_identity_survives_reorder_death_and_multiple_substeps() {
+        let mut ids = ReferenceIds { next: 1, epoch: 7 };
+        let mut state = Vec::new();
+        ids.emit(&mut state, &[0.0, 10.0, 20.0]);
+        let (a, a_count) = publish(&state, 8);
+        // Changing working slots never changes a surviving birth identity.
+        for _ in 0..3 {
+            state.reverse();
+            for p in &mut state { p.position_radius[0] += 0.25; }
+        }
+        state.retain(|p| p.id != 2);
+        ids.emit(&mut state, &[30.0, 40.0]);
+        let working = state.clone();
+        let (b, b_count) = publish(&state, 8);
+        assert_eq!(state, working, "publication must not reorder solver state");
+        assert_eq!(b[..b_count].iter().map(|p| p.id).collect::<Vec<_>>(), [1, 3, 4, 5]);
+        for p in &b[..b_count] {
+            if let Ok(i) = a[..a_count].binary_search_by_key(&p.id, |p| p.id) {
+                assert_eq!(p.position_radius[0], a[i].position_radius[0] + 0.75);
+            } else {
+                assert!(p.id > 3, "birth must not reuse even a dead identity");
+            }
+        }
+        assert_eq!(ids.epoch, 7);
+        state.clear();
+        ids.emit(&mut state, &[50.0]);
+        assert_eq!(state[0].id, 6, "empty pool must not reset the birth counter");
+    }
+
+    #[test]
+    fn particle_publication_is_compact_sorted_and_clears_retired_tail() {
+        let mut ids = ReferenceIds { next: 1, epoch: 1 };
+        let mut state = Vec::new();
+        ids.emit(&mut state, &[0.0, 1.0, 2.0, 3.0]);
+        state[1].position_radius[3] = 0.0;
+        state.reverse();
+        let (frame, count) = publish(&state, 8);
+        assert_eq!(count, 3);
+        assert_eq!(frame[..count].iter().map(|p| p.id).collect::<Vec<_>>(), [1, 3, 4]);
+        let mut corrupt = frame.clone();
+        corrupt.swap(0, 1);
+        assert!(!valid_publication(&corrupt, count), "cell order is not publication order");
+        corrupt = frame.clone();
+        corrupt[1].id = corrupt[0].id;
+        assert!(!valid_publication(&corrupt, count), "duplicate identity must fail");
+        corrupt = frame.clone();
+        corrupt[0].id = 0;
+        assert!(!valid_publication(&corrupt, count), "id-zero is not an identity frame");
+        corrupt = frame.clone();
+        corrupt[count] = frame[0];
+        assert!(!valid_publication(&corrupt, count), "retired capacity cannot remain visible");
+        assert!(!valid_publication(&frame, frame.len() + 1));
+        assert_eq!(publish(&[], 8), (vec![FluidParticle::default(); 8], 0));
+    }
+
+    #[test]
+    fn particle_identity_rollover_changes_epoch_before_reusing_ids() {
+        let mut ids = ReferenceIds { next: u64::from(u32::MAX), epoch: 12 };
+        let mut state = Vec::new();
+        ids.emit(&mut state, &[10.0]);
+        assert_eq!(state[0].id, u32::MAX);
+        let (a, _) = publish(&state, 4);
+        ids.emit(&mut state, &[20.0, 30.0]);
+        let (b, count) = publish(&state, 4);
+        assert_eq!(ids.epoch, 13);
+        assert_eq!(b[..count].iter().map(|p| p.id).collect::<Vec<_>>(), [1, 2, 3]);
+        assert_eq!(a[0].position_radius, b[0].position_radius);
+        assert_ne!(a[0].id, b[0].id);
+        // The frame ring must collapse/reset before matching this new epoch.
+    }
+}
+
 #[test]
 fn fluid_particle_blend_presets_share_display_clock_and_fuse() {
     use crate::node_graph::{PrimitiveRegistry, fusion_report};
@@ -166,7 +285,9 @@ mod gpu_tests {
             ("blend", 0.5),
             ("span", 0.5),
         ]);
-        let pp = params(&[]);
+        // Halfway counts exposed a standalone/fused rounding mismatch: Rust
+        // round used 5, WGSL round used 4. Both paths must sample the 5³ grid.
+        let pp = params(&[("nodes_x", 4.5), ("nodes_y", 4.5), ("nodes_z", 4.5)]);
         for errors in [
             h.run(
                 &mut InterpolateParticleFrames::new(),

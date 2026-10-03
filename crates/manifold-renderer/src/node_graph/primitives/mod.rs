@@ -1058,7 +1058,7 @@ pub(crate) use gltf_animation_source::quat_to_render_scene_euler;
 mod platonic_mesh;
 
 mod interpolate_particle_frames;
-mod push_out_of_solid;
+pub(crate) mod push_out_of_solid;
 mod mix_arrays;
 pub use interpolate_particle_frames::InterpolateParticleFrames;
 pub use push_out_of_solid::PushOutOfSolid;

@@ -60,8 +60,10 @@ fn body(
     // Match the standalone runtime's scalar policy exactly: live wires may
     // carry fractional values, but lattice dimensions are rounded and have a
     // minimum of two nodes before sizing and bounds checks.
-    let lattice = max(round(vec3<f32>(nodes_x, nodes_y, nodes_z)), vec3<f32>(2.0));
-    if any(lattice < vec3<f32>(2.0)) {
+    let raw_nodes = vec3<f32>(nodes_x, nodes_y, nodes_z);
+    // Avoid adding 0.5 to an already integral large f32, which can round up.
+    let lattice = floor(raw_nodes) + select(vec3<f32>(0.0), vec3<f32>(1.0), fract(raw_nodes) >= vec3<f32>(0.5));
+    if !all(lattice >= vec3<f32>(2.0)) || !all(lattice <= vec3<f32>(16777216.0)) {
         return out;
     }
     let nodes = vec3<u32>(lattice);
@@ -71,11 +73,13 @@ fn body(
         return out;
     }
     let size = vec3<f32>(size_x, size_y, size_z);
-    let spacing = size / vec3<f32>(nodes - vec3<u32>(1u));
-    if spacing.x <= 0.0 || spacing.y <= 0.0 || spacing.z <= 0.0 {
+    let center = vec3<f32>(center_x, center_y, center_z);
+    if !all(size > vec3<f32>(0.0)) || !all(size <= vec3<f32>(3.402823e+38))
+        || !all(abs(center) <= vec3<f32>(3.402823e+38)) {
         return out;
     }
-    let origin = vec3<f32>(center_x, center_y, center_z) - 0.5 * size;
+    let spacing = size / vec3<f32>(nodes - vec3<u32>(1u));
+    let origin = center - 0.5 * size;
     var position = e_particles.position_radius.xyz;
     let top = vec3<f32>(nodes - vec3<u32>(1u));
     // Four fixed normalized-gradient steps cover curvature and trilinear
