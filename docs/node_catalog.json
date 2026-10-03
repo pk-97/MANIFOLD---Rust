@@ -14642,6 +14642,10 @@
           "type": "f32"
         },
         {
+          "name": "limit_interval",
+          "type": "f32"
+        },
+        {
           "name": "clock_obstacle_count",
           "type": "f32"
         },
@@ -15039,6 +15043,11 @@
         },
         {
           "name": "interval_duration",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "limit_interval",
           "required": false,
           "type": "f32"
         },

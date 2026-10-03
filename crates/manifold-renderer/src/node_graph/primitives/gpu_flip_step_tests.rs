@@ -2300,8 +2300,11 @@ fn gpu_flip_step_order_inflow_waits_until_next_step() {
         ("gravity_y", 0.0), ("interval_duration", 0.125), ("volume_projection", 0.0),
         ("region_count", 1.0), ("iterations", 0.0), ("flip", 1.0),
     ]);
+    // liquid_state's birth identity as its reset seeds it: next id, epoch,
+    // reserved base, full-reset request.
+    let identity = h.array::<u32>(&[1, 1, 0, 0], 4);
     let inputs = [("particles", particles.0), ("regions", regions.0),
-        ("shapes", shapes.0), ("atlas", atlas.0), ("bodies", bodies.0)];
+        ("shapes", shapes.0), ("atlas", atlas.0), ("bodies", bodies.0), ("identity", identity.0)];
     let outputs = [("out", particles.0), ("faces", faces.0), ("capped", capped.0)];
     let (_, errors) = h.run(&mut node, &inputs, &outputs, &p);
     assert!(errors.is_empty(), "{errors:?}");
