@@ -16139,11 +16139,11 @@ fn hermite_particle(a: Element, b: Element, t: f32, span: f32) -> Element {
     return Element(vec4<f32>(position, radius), velocity, b.id);
 }
 
-fn birth_particle(b: Element, t: f32, span: f32, acceleration: vec3<f32>) -> Element {
+fn birth_particle(b: Element, t: f32, span: f32, acceleration: vec3<f32>, grow: f32) -> Element {
     let tau = (1.0 - t) * span;
     let position = b.position_radius.xyz - tau * b.velocity + 0.5 * acceleration * tau * tau;
     let velocity = b.velocity - acceleration * tau;
-    return Element(vec4<f32>(position, b.position_radius.w * t), velocity, b.id);
+    return Element(vec4<f32>(position, b.position_radius.w * grow), velocity, b.id);
 }
 
 fn po_node(at: vec3<i32>, nodes: vec3<u32>) -> f32 {
@@ -16242,6 +16242,7 @@ fn n0_body(
         t,
         h,
         vec3<f32>(acceleration_x, acceleration_y, acceleration_z),
+        select(1.0, t, a_limit > 0u),
     );
 }
 
@@ -17012,11 +17013,11 @@ fn hermite_particle(a: Element, b: Element, t: f32, span: f32) -> Element {
     return Element(vec4<f32>(position, radius), velocity, b.id);
 }
 
-fn birth_particle(b: Element, t: f32, span: f32, acceleration: vec3<f32>) -> Element {
+fn birth_particle(b: Element, t: f32, span: f32, acceleration: vec3<f32>, grow: f32) -> Element {
     let tau = (1.0 - t) * span;
     let position = b.position_radius.xyz - tau * b.velocity + 0.5 * acceleration * tau * tau;
     let velocity = b.velocity - acceleration * tau;
-    return Element(vec4<f32>(position, b.position_radius.w * t), velocity, b.id);
+    return Element(vec4<f32>(position, b.position_radius.w * grow), velocity, b.id);
 }
 
 fn po_node(at: vec3<i32>, nodes: vec3<u32>) -> f32 {
@@ -17115,6 +17116,7 @@ fn n0_body(
         t,
         h,
         vec3<f32>(acceleration_x, acceleration_y, acceleration_z),
+        select(1.0, t, a_limit > 0u),
     );
 }
 

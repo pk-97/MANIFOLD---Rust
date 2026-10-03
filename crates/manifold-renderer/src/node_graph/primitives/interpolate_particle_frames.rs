@@ -4,9 +4,9 @@
 //! The output is one record for every slot in frame B.  A's sorted,
 //! non-zero particle ids are searched for a matching B id; matches use cubic
 //! Hermite interpolation, while births are rewound from B by the remaining
-//! part of the tick.  An unwired A frame is an intentional empty-A path (used
-//! by whitewater), so its particles take the same birth rule as any unmatched
-//! B record.
+//! part of the tick and grow in with radius × blend.  An unwired or empty A
+//! frame is an intentional empty-A path (used by whitewater): its particles
+//! are rewound the same way but keep their radius, because nothing was born.
 
 use std::borrow::Cow;
 
@@ -43,7 +43,7 @@ struct InterpolationUniforms {
 crate::primitive! {
     name: InterpolateParticleFrames,
     type_id: "node.interpolate_particle_frames",
-    purpose: "Present frame B's liquid particles at display time. Matching nonzero ids in the same identity epoch use cubic Hermite interpolation with span-scaled endpoint velocities; births are rewound from B by the remaining time and grow in with radius × blend. The output has one slot per particles_b record. An unwired particles_a is an intentional empty-A path, so every B particle follows the birth rule.",
+    purpose: "Present frame B's liquid particles at display time. Matching nonzero ids in the same identity epoch use cubic Hermite interpolation with span-scaled endpoint velocities; births are rewound from B by the remaining time and grow in with radius × blend. The output has one slot per particles_b record. An unwired or empty particles_a is an intentional empty-A path: every B particle is rewound like a birth but keeps its radius.",
     inputs: {
         particles_a: Array(FluidParticle) optional,
         particles_b: Array(FluidParticle) required,
@@ -404,7 +404,7 @@ mod gpu_tests {
                             position[0] as f32,
                             position[1] as f32,
                             position[2] as f32,
-                            (f64::from(b.position_radius[3]) * t) as f32,
+                            (f64::from(b.position_radius[3]) * if a_len > 0 { t } else { 1.0 }) as f32,
                         ],
                         velocity: velocity.map(|value| value as f32),
                         id: b.id,

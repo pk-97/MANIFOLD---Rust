@@ -304,7 +304,10 @@ by one tick. CPU-mesh graphs keep today's behaviour and present tick B.
 Frames are sorted by strictly increasing id within an identity epoch. One output per B
 record: binary-search A; found → cubic Hermite with tangents `span·v_A` and `span·v_B`;
 not found (a birth) → `x_B − τ·v_B + ½·a·τ²` with `τ = (1 − blend)·span`, radius scaled
-by `blend`, so a birth grows in from nothing. Display time never passes `t_B`. `a` is a
+by `blend`, so a birth grows in from nothing. With A unwired or empty (whitewater
+publishes no A) every record is rewound the same way but keeps its radius: nothing was
+born, and the display blend sits at 0 at each boundary, so scaling would hide the whole
+population. Display time never passes `t_B`. `a` is a
 port-shadowed param, zero for liquid, gravity for spray. Rejected: rewinding every
 particle from B without ids — it pops by `½·a·dt²` at every tick boundary (5 mm under
 gravity at 30 Hz, far more in a splash). Rejected: extrapolating past B to hide the
