@@ -1053,7 +1053,7 @@ pub struct ContentPipeline {
     profiling_sampler: Option<manifold_gpu::GpuTimestampSampler>,
     /// The span count `profiling_sampler` was requested with; the device may
     /// have granted fewer.
-    #[cfg(target_os = "macos")]
+    #[cfg(all(target_os = "macos", feature = "perf-soak"))]
     profiling_sampler_request: usize,
     /// Whether `--profile` mode is on this run. Switches both command-buffer
     /// commits to the `_profiled` variant. Off by default — zero cost on the
@@ -1232,7 +1232,7 @@ impl ContentPipeline {
             ),
             #[cfg(target_os = "macos")]
             profiling_sampler: None,
-            #[cfg(target_os = "macos")]
+            #[cfg(all(target_os = "macos", feature = "perf-soak"))]
             profiling_sampler_request: 0,
             profiling_enabled: false,
             #[cfg(target_os = "macos")]
