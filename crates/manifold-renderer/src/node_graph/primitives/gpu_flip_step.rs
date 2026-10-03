@@ -42,6 +42,10 @@ use super::sort_particles_into_cells::{
 };
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::fluid::TICK;
+
+/// Tick-rate probe only: scales the step's tick length (f32 bits, 1.0 = the 60 Hz tick).
+#[cfg(all(test, feature = "water-race-probes"))]
+pub(crate) static TEST_TICK_SCALE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x3f80_0000);
 use crate::node_graph::fluid_particles::{FaceSample, FluidParticle};
 use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
 use crate::node_graph::liquid::WATER_DENSITY;
@@ -1401,6 +1405,8 @@ impl Primitive for GpuFlipStep {
         };
         let steps = ctx.scalar_or_param("steps", 1.0).round().clamp(1.0, 64.0);
         let step_dt = (TICK / f64::from(steps)) as f32;
+        #[cfg(all(test, feature = "water-race-probes"))]
+        let step_dt = step_dt * f32::from_bits(TEST_TICK_SCALE.load(std::sync::atomic::Ordering::Relaxed));
         let flip = ctx.scalar_or_param("flip", 0.95).clamp(0.0, 1.0);
         let top_speed = ctx.scalar_or_param("top_speed", DEFAULT_TOP_SPEED);
         if !(top_speed.is_finite() && top_speed > 0.0) {

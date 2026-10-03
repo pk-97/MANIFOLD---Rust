@@ -877,6 +877,67 @@ fn kick_lift_pool(kick_frames: usize) {
     println!("kick pool {n}³ kicks to {kick_frames}: first frame with no air cell {no_air:?}");
 }
 
+/// 30 Hz vs 60 Hz liquid tick on the kick pool (4 m domain, fill 0.5845, 140 bpm kicks held
+/// over each tick, 5 s of sim time). A: 60 Hz, 1 step. B: 30 Hz, 1 step. C: 30 Hz, 2 steps.
+/// The 30 Hz tick is the step's dt doubled through `TEST_TICK_SCALE` (the clock stays 60 Hz,
+/// one tick a frame), so B and C run 150 frames. Prints GPU ms per sim second and, every
+/// 0.5 s, one line per run.
+#[cfg(feature = "water-race-probes")]
+#[test]
+fn gpu_flip_tick_rate_probe() {
+    use std::sync::atomic::Ordering;
+    let beat = 60.0 / 140.0;
+    for n in [64usize, 128] {
+        for (name, scale, steps) in [("A 60Hz x1", 1.0f32, 1usize), ("B 30Hz x1", 2.0, 1), ("C 30Hz x2", 2.0, 2)] {
+            super::gpu_flip_step::TEST_TICK_SCALE.store(scale.to_bits(), Ordering::Relaxed);
+            let scene = WaterScene::pool(n, 4.0, 0.58450913).with_steps(steps);
+            let mut run = Run::new(scene);
+            let (min, size, h) = (scene.min(), scene.size, scene.cell_size());
+            let tick = f64::from(scale) / 60.0;
+            let frames = (5.0 / tick).round() as usize;
+            let every = (0.5 / tick).round() as usize;
+            let initial = run.liquid_stats().live.max(1);
+            let water0 = run.water_of(&run.particles()).iter().filter(|&&w| w > 0.5).count().max(1);
+            let (mut gpu_total, mut cpu_total) = (0.0, 0.0);
+            for frame in 1..=frames {
+                let since_kick = (frame as f64 * tick) % beat;
+                // Pure vertical lift leaves a flat pool in exact equilibrium (see the forced
+                // pool probe), so the kick also tilts sideways by a quarter of its size.
+                let lift = 2.0 * 20.0 * (-since_kick / 0.072).exp();
+                run.set_gravity(0.25 * lift, -G + lift);
+                let (gpu, cpu) = run.frame();
+                gpu_total += gpu;
+                cpu_total += cpu;
+                if frame % every == 0 {
+                    let s = run.liquid_stats();
+                    let ps = run.particles();
+                    let live: Vec<_> = ps.iter().filter(|p| p.position_radius[3] > 0.0).collect();
+                    let oob = live
+                        .iter()
+                        .filter(|p| (0..3).any(|a| {
+                            let q = f64::from(p.position_radius[a]);
+                            q < min[a] || q > min[a] + size
+                        }))
+                        .count();
+                    let mean_y = live.iter().map(|p| f64::from(p.position_radius[1]) - min[1]).sum::<f64>() / live.len().max(1) as f64;
+                    let water = run.water_of(&ps).iter().filter(|&&w| w > 0.5).count();
+                    println!(
+                        "tick probe {n}³ {name} t={:.1}s: lost {}, out of bounds {oob}, volume kept {:.3}, mean height {mean_y:.4} m, max speed {:.2}, nonfinite {}, pressure its {}",
+                        frame as f64 * tick,
+                        initial.saturating_sub(s.live),
+                        (water as f64 * h.powi(3)) / (water0 as f64 * h.powi(3)),
+                        s.max_speed,
+                        s.nonfinite,
+                        s.pressure_iterations,
+                    );
+                }
+            }
+            println!("tick probe {n}³ {name}: GPU {:.2} ms per sim second ({:.2} ms per tick, {frames} ticks), CPU encode {:.2} ms per sim second", gpu_total / 5.0, gpu_total / frames as f64, cpu_total / 5.0);
+        }
+    }
+    super::gpu_flip_step::TEST_TICK_SCALE.store(1.0f32.to_bits(), Ordering::Relaxed);
+}
+
 /// The Dam Break never gains energy: an inviscid solver with closed walls
 /// can only lose KE + PE (PIC blending, the projection, wall stops), so no
 /// frame may sit above the energy it started with past float noise
