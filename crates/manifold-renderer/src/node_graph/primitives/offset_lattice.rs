@@ -12,7 +12,8 @@ use std::borrow::Cow;
 struct Uniforms {
     offset: f32,
     dispatch_count: u32,
-    _pad: [u32; 2],
+    _pad0: u32,
+    _pad1: u32,
 }
 
 crate::primitive! {
@@ -68,7 +69,8 @@ impl Primitive for OffsetLattice {
         let uniforms = Uniforms {
             offset: ctx.scalar_or_param("offset", 0.0),
             dispatch_count: count,
-            _pad: [0; 2],
+            _pad0: 0,
+            _pad1: 0,
         };
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);

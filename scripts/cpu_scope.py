@@ -16,10 +16,20 @@ INTEGRATION_ROWS = {
     "crates/manifold-renderer/src/node_graph/primitives/mod.rs": ["file_loader_exhaustiveness"],
     "crates/manifold-renderer/src/node_graph/fluid.rs": ["fluid_preset"],
 }
-# Bundled preset JSON is compiled into the renderer; these modules hold its contracts.
-ASSET_ROWS = {
-    "crates/manifold-renderer/assets/": ("manifold-renderer", ["node_graph::bundled_presets"]),
-}
+# Contracts over every file under a prefix, Rust or not:
+# (prefix, suffix, package, test modules, integration binaries).
+PREFIX_ROWS = [
+    # Bundled preset JSON is compiled into the renderer.
+    ("crates/manifold-renderer/assets/", ".json", "manifold-renderer",
+     ["node_graph::bundled_presets"], []),
+    # The layout proofs scan every primitive's uniform mirror and hand shader.
+    ("crates/manifold-renderer/src/node_graph/primitives/", ".rs", "manifold-renderer",
+     [], ["uniform_layout_proof", "uniform_layout_extended"]),
+    ("crates/manifold-renderer/src/node_graph/primitives/", ".wgsl", "manifold-renderer",
+     [], ["uniform_layout_extended"]),
+    # wgsl_validation parses every shader in the crate.
+    ("crates/manifold-renderer/src/", ".wgsl", "manifold-renderer", [], ["wgsl_validation"]),
+]
 PATH_MOD = re.compile(r'#\[path\s*=\s*"([^"]+)"\]\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;')
 
 
@@ -58,10 +68,11 @@ class Plan:
 def plan_for_paths(paths, repo):
     repo, plan, cache = Path(repo), Plan(), {}
     for path in sorted(set(paths)):
-        for prefix, (package, modules) in ASSET_ROWS.items():
-            if path.startswith(prefix) and path.endswith(".json"):
+        for prefix, suffix, package, modules, binaries in PREFIX_ROWS:
+            if path.startswith(prefix) and path.endswith(suffix):
                 plan.packages.add(package)
                 plan.filters.update(f"(package(={package}) & test(/^{module}::/))" for module in modules)
+                plan.filters.update(f"(package(={package}) & binary(={binary}))" for binary in binaries)
         parts = Path(path).parts
         if len(parts) < 4 or parts[0] != "crates" or not path.endswith(".rs"):
             continue
@@ -85,7 +96,17 @@ def plan_for_paths(paths, repo):
                         if relative == t.get("path", "") or
                         (Path(t.get("path", "")).name in {"main.rs", "mod.rs"}
                          and relative.startswith(str(Path(t["path"]).parent) + "/"))]
-            binaries.update(explicit or [Path(parts[3]).stem])
+            if explicit:
+                binaries.update(explicit)
+            elif (len(parts) == 4 or parts[4:] == ("main.rs",)
+                  or (crate / "tests" / parts[3] / "main.rs").exists()):
+                binaries.add(Path(parts[3]).stem)
+            else:
+                # Shared test code (tests/support/): no binary of its own, so
+                # every top-level test that declares or #[path]s the directory.
+                uses = re.compile(rf'\bmod\s+{re.escape(parts[3])}\b|"{re.escape(parts[3])}/')
+                binaries.update(test.stem for test in (crate / "tests").glob("*.rs")
+                                if uses.search(test.read_text()))
         elif parts[2] == "src":
             source, root = (repo / path).resolve(), (crate / "src").resolve()
             binary_filter = ""

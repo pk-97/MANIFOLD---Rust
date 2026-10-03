@@ -315,3 +315,27 @@ pub(crate) fn encode_obstacle_source(
         label,
     );
 }
+
+#[cfg(test)]
+mod tests {
+    use super::WhitewaterSource;
+    use crate::node_graph::ports::{ArrayType, ChannelName, KnownItem, MatchMode, std430_channel};
+    use std::mem::{offset_of, size_of};
+
+    /// The wire record's channels sit where its repr(C) fields do.
+    #[test]
+    fn source_record_matches_its_channels() {
+        let specs = WhitewaterSource::SPECS;
+        let at = |name| {
+            std430_channel(specs, ChannelName::from_str(name)).map(|(offset, _)| offset as usize)
+        };
+        assert_eq!(at("influence"), Some(offset_of!(WhitewaterSource, influence)));
+        assert_eq!(at("dust_strength"), Some(offset_of!(WhitewaterSource, dust_strength)));
+        assert_eq!(at("kind"), Some(offset_of!(WhitewaterSource, kind)));
+        assert_eq!(at("pad0"), Some(offset_of!(WhitewaterSource, pad)));
+        assert_eq!(
+            ArrayType::of_channels(specs, MatchMode::Exact).item_size as usize,
+            size_of::<WhitewaterSource>()
+        );
+    }
+}

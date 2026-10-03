@@ -9,8 +9,10 @@ use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice};
 
 const PAD_DISTANCE_LATTICE_SHADER: &str = include_str!("shaders/pad_distance_lattice.wgsl");
 
-/// The hand-kernel's uniform layout. Cells are source dimensions in x-fastest
-/// order; the output side is `cells + 2 * padding` on every axis.
+/// The hand-kernel's uniform layout, proven against its shader by the custom
+/// ABI cases (`dispatch_count` names only generated layouts). Cells are source
+/// dimensions in x-fastest order; the output side is `cells + 2 * padding` on
+/// every axis.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct PadUniforms {
@@ -19,7 +21,7 @@ struct PadUniforms {
     cells_z: u32,
     padding: u32,
     exterior: f32,
-    dispatch_count: u32,
+    padded_cells: u32,
     _pad0: u32,
     _pad1: u32,
 }
@@ -65,17 +67,17 @@ pub(crate) fn encode_pad_distance_lattice(
     exterior: f32,
 ) {
     let side = padded_extent(cells, padding).expect("validated whitewater lattice");
-    let dispatch_count = cell_count(side).expect("validated whitewater count");
+    let padded_cells = cell_count(side).expect("validated whitewater count");
     let source_count = cell_count(cells).expect("validated solver count");
     assert!(source.size >= u64::from(source_count) * 4);
-    assert!(output.size >= u64::from(dispatch_count) * 4);
+    assert!(output.size >= u64::from(padded_cells) * 4);
     let uniforms = PadUniforms {
         cells_x: cells[0],
         cells_y: cells[1],
         cells_z: cells[2],
         padding,
         exterior,
-        dispatch_count,
+        padded_cells,
         _pad0: 0,
         _pad1: 0,
     };
@@ -97,7 +99,7 @@ pub(crate) fn encode_pad_distance_lattice(
                 offset: 0,
             },
         ],
-        [dispatch_count.div_ceil(256), 1, 1],
+        [padded_cells.div_ceil(256), 1, 1],
         "node.whitewater_step.particle_distance",
     );
 }
