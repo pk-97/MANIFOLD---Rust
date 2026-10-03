@@ -446,7 +446,7 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     b.wire(particles, step, "particles");
     b.wire(count, step, "count");
     b.wire((domain, "reaction"), step, "reaction");
-    b.wires(domain, step, &["regions", "region_count"]);
+    b.wires(domain, step, &["regions", "region_count", "epoch"]);
     let (particles, faces) = ((step, "out"), (step, "faces"));
     let stats = b.node("stats", "node.liquid_stats", json!({}));
     b.wire(particles, stats, "particles");
@@ -459,6 +459,7 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     // The tick's last faces leave the region beside its particles, into the
     // lattice's face grid.
     b.wire(faces, state, "faces_in");
+    b.wire((step, "interior"), state, "interior_in");
     b.wires(domain, state, &["nodes_x", "nodes_y", "nodes_z"]);
 
     let solid = b.node("solid", "node.liquid_solid_distance", json!({}));
@@ -468,6 +469,7 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     let frame = b.node("frame", "node.liquid_frame", json!({"face_valid_layers": int(FACE_VALID_LAYERS as usize)}));
     b.wire((state, "out"), frame, "particles");
     b.wire((state, "stats"), frame, "stats");
+    b.wire((state, "interior"), frame, "interior");
     b.wire((solid, "solid"), frame, "solid");
     b.wire(count, frame, "count");
     b.wires(domain, frame, &LATTICE_WIRES);
@@ -757,6 +759,7 @@ fn surface(b: &mut Builder, scene: WaterScene, frame: usize) -> Port {
     b.nodes.push(group);
     for (from, to) in [
         ("particles_b", "particles"),
+        ("interior_b", "interior"),
         ("count_b", "count"),
         ("solid_b", "solid"),
         ("grid_bounds", "bounds"),

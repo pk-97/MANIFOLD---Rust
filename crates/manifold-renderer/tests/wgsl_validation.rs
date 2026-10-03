@@ -123,6 +123,14 @@ fn all_wgsl_shaders_validate() {
             Some(prefix) => format!("{prefix}\n{source}"),
             None => source,
         };
+        let source = if path.file_name().is_some_and(|name| {
+            ["gpu_flip_step.wgsl", "liquid_stats.wgsl", "liquid_frame.wgsl", "liquid_frame_faces.wgsl"]
+                .iter().any(|shader| name == *shader)
+        }) {
+            manifold_renderer::node_graph::with_liquid_stats_layout(&source)
+        } else {
+            source
+        };
 
         let relative = path.strip_prefix(shader_dir()).unwrap_or(path);
 

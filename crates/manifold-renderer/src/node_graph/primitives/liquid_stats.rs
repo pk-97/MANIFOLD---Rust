@@ -14,7 +14,7 @@ use crate::node_graph::fluid_particles::FluidParticle;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
-const SHADER: &str = include_str!("shaders/liquid_stats.wgsl");
+const SHADER_SOURCE: &str = include_str!("shaders/liquid_stats.wgsl");
 /// Records one workgroup folds: 256 threads × 8.
 const BLOCK: u32 = 256 * 8;
 /// Bytes of one partial record.
@@ -34,13 +34,23 @@ pub(crate) fn partial_bytes(count: u32) -> u64 {
 /// sealed pockets' pressure and density right-hand sides so their solves
 /// have a solution, 16 the share of the lattice's 8³ tiles the cell passes
 /// ran over, 17-19 the last substep's dry, sealed and air cells as the
-/// sealed-pocket pass classed them, 20-23 its lowest water cell that touches air directly (its index, the dry neighbour's index or 0xffffffff for an open box face, the face's open fraction bits, axis * 2 + 1 on the high side, the neighbour's φ bits and its particle count; 0xffffffff when none), 26 its floor cells reading dry with water on every in-box side (8-26 are 0 without a `capped` input).
-/// Floats are stored as bits.
-pub const LIQUID_STATS_WORDS: u32 = 27;
-
-/// The solver's words at the end of a `capped` array, after two words a
-/// particle slot: words 10-26 of the stats.
-pub const SOLVER_WORDS: u32 = 17;
+/// sealed-pocket pass classed them, 20-25 its lowest water cell that touches
+/// air directly (its index, the dry neighbour's index or 0xffffffff for an
+/// open box face, the face's open fraction bits, axis * 2 + 1 on the high
+/// side, the neighbour's phi bits and its particle count), 26 its floor cells
+/// reading dry with water on every in-box side (8-26 are 0 without a `capped`
+/// input). Word 27 is the narrow-band reseed capacity shortage. Floats are
+/// stored as bits.
+/// The first solver word in the published stats array.
+pub const SOLVER_STATS_START: u32 = 10;
+/// The published stats word containing narrow-band reseed shortages.
+pub const NARROW_BAND_SHORTAGE_WORD: u32 = 27;
+/// The number of words in the stats array.
+pub const LIQUID_STATS_WORDS: u32 = NARROW_BAND_SHORTAGE_WORD + 1;
+/// The number of solver words copied from the capped counters.
+pub const SOLVER_WORDS: u32 = LIQUID_STATS_WORDS - SOLVER_STATS_START;
+/// The narrow-band shortage's offset within the solver tail.
+pub const NARROW_BAND_SHORTAGE_TAIL: u32 = NARROW_BAND_SHORTAGE_WORD - SOLVER_STATS_START;
 
 /// One tick's statistics, decoded from the stats words.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -81,6 +91,9 @@ pub struct LiquidTickStats {
     /// The last substep's floor cells reading dry with water on every
     /// in-box side: holes under the water.
     pub dry_floor_cells: u32,
+    /// Narrow-band reseed sites that could not fit in the particle pool this
+    /// tick. A nonzero value faults the liquid and blocks publication.
+    pub narrow_band_shortage: u32,
 }
 
 impl LiquidTickStats {
@@ -105,8 +118,19 @@ impl LiquidTickStats {
             pocket_cells: [w[17], w[18], w[19]],
             first_air_seed: [w[20], w[21], w[22], w[23], w[24], w[25]],
             dry_floor_cells: w[26],
+            narrow_band_shortage: w[NARROW_BAND_SHORTAGE_WORD as usize],
         }
     }
+}
+
+/// Prepend the stats ABI constants to a WGSL source string. This is public so
+/// shader conformance tests and sibling FLIP kernels can validate and compile
+/// the exact layout emitted by the stats writer, keeping Rust readers and GPU
+/// writers on one source of truth.
+pub fn with_stats_layout(source: &str) -> String {
+    format!(
+        "const SOLVER_STATS_START: u32 = {SOLVER_STATS_START}u;\nconst SOLVER_WORDS: u32 = {SOLVER_WORDS}u;\nconst NARROW_BAND_SHORTAGE_WORD: u32 = {NARROW_BAND_SHORTAGE_WORD}u;\nconst NARROW_BAND_SHORTAGE_TAIL: u32 = {NARROW_BAND_SHORTAGE_TAIL}u;\n\n{source}"
+    )
 }
 
 #[repr(C)]
@@ -131,9 +155,10 @@ pub struct StatsPipelines {
 
 impl StatsPipelines {
     fn new(device: &manifold_gpu::GpuDevice) -> Self {
+        let shader = with_stats_layout(SHADER_SOURCE);
         Self {
-            particles: device.create_compute_pipeline(SHADER, "particles_main", "node.liquid_stats.particles"),
-            finish: device.create_compute_pipeline(SHADER, "finish_main", "node.liquid_stats.finish"),
+            particles: device.create_compute_pipeline(&shader, "particles_main", "node.liquid_stats.particles"),
+            finish: device.create_compute_pipeline(&shader, "finish_main", "node.liquid_stats.finish"),
         }
     }
 }
@@ -247,11 +272,12 @@ mod tests {
 
     #[test]
     fn liquid_stats_params_match_the_shader_and_use_no_atomics() {
+        let shader = with_stats_layout(SHADER_SOURCE);
         assert_eq!(std::mem::size_of::<StatsParams>(), 32);
-        assert!(SHADER.contains("struct StatsParams"));
+        assert!(shader.contains("struct StatsParams"));
         assert_eq!(std::mem::size_of::<FluidParticle>(), 32);
-        assert!(!SHADER.contains("atomic"), "GPU FLIP: the tick statistics use no atomics");
-        let module = naga::front::wgsl::parse_str(SHADER).expect("liquid_stats.wgsl parses");
+        assert!(!shader.contains("atomic"), "GPU FLIP: the tick statistics use no atomics");
+        let module = naga::front::wgsl::parse_str(&shader).expect("liquid_stats.wgsl parses");
         naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
             .validate(&module)
             .expect("liquid_stats.wgsl validates");
@@ -259,9 +285,35 @@ mod tests {
 
     #[test]
     fn liquid_stats_words_decode() {
-        let words = [2, 5, 1.5f32.to_bits(), 0.25f32.to_bits(), 1.0f32.to_bits(), (-2.0f32).to_bits(), 0.0f32.to_bits(), 3.0f32.to_bits(), 4, 1, 40, 12, 1, 2, 0.5f32.to_bits(), 0.125f32.to_bits(), 0.3125f32.to_bits(), 3, 4, 5, 6, 7, 0.75f32.to_bits(), 3, 0.5f32.to_bits(), 9, 2];
+        let mut words = [0u32; LIQUID_STATS_WORDS as usize];
+        words[..17].copy_from_slice(&[2, 5, 1.5f32.to_bits(), 0.25f32.to_bits(), 1.0f32.to_bits(), (-2.0f32).to_bits(), 0.0f32.to_bits(), 3.0f32.to_bits(), 4, 1, 40, 12, 1, 2, 0.5f32.to_bits(), 0.125f32.to_bits(), 0.3125f32.to_bits()]);
+        words[17..27].copy_from_slice(&[3, 4, 5, 6, 7, 0.75f32.to_bits(), 3, 0.5f32.to_bits(), 9, 2]);
+        words[NARROW_BAND_SHORTAGE_WORD as usize] = 11;
         let stats = LiquidTickStats::from_words(&words);
-        assert_eq!(stats, LiquidTickStats { nonfinite: 2, live: 5, max_speed: 1.5, mass: 0.25, momentum: [1.0, -2.0, 0.0], kinetic: 3.0, speed_capped: 4, push_refused: 1, pressure_iterations: 40, density_iterations: 12, unconverged: 1, unresolved_pockets: 2, pressure_flux_removed: 0.5, density_flux_removed: 0.125, active_tiles: 0.3125, pocket_cells: [3, 4, 5], first_air_seed: [6, 7, 0.75f32.to_bits(), 3, 0.5f32.to_bits(), 9], dry_floor_cells: 2 });
+        assert_eq!(
+            stats,
+            LiquidTickStats {
+                nonfinite: 2,
+                live: 5,
+                max_speed: 1.5,
+                mass: 0.25,
+                momentum: [1.0, -2.0, 0.0],
+                kinetic: 3.0,
+                speed_capped: 4,
+                push_refused: 1,
+                pressure_iterations: 40,
+                density_iterations: 12,
+                unconverged: 1,
+                unresolved_pockets: 2,
+                pressure_flux_removed: 0.5,
+                density_flux_removed: 0.125,
+                active_tiles: 0.3125,
+                pocket_cells: [3, 4, 5],
+                first_air_seed: [6, 7, 0.75f32.to_bits(), 3, 0.5f32.to_bits(), 9],
+                dry_floor_cells: 2,
+                narrow_band_shortage: 11,
+            }
+        );
         assert_eq!(words.len(), LIQUID_STATS_WORDS as usize);
     }
 }

@@ -358,6 +358,10 @@
             {
               "name": "nodes_z",
               "portType": "Scalar(F32)"
+            },
+            {
+              "name": "interior",
+              "portType": "Array(f32)"
             }
           ],
           "outputs": [
@@ -1461,6 +1465,12 @@
             "fromPort": "bricks",
             "toNode": 19,
             "toPort": "bricks"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "interior",
+            "toNode": 7,
+            "toPort": "interior"
           }
         ]
       },
@@ -3249,6 +3259,12 @@
       "toPort": "region_count"
     },
     {
+      "fromNode": 0,
+      "fromPort": "epoch",
+      "toNode": 6,
+      "toPort": "epoch"
+    },
+    {
       "fromNode": 6,
       "fromPort": "out",
       "toNode": 7,
@@ -3295,6 +3311,12 @@
       "fromPort": "faces",
       "toNode": 5,
       "toPort": "faces_in"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "interior",
+      "toNode": 5,
+      "toPort": "interior_in"
     },
     {
       "fromNode": 0,
@@ -3403,6 +3425,12 @@
       "fromPort": "stats",
       "toNode": 9,
       "toPort": "stats"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "interior",
+      "toNode": 9,
+      "toPort": "interior"
     },
     {
       "fromNode": 8,
@@ -3577,6 +3605,12 @@
       "fromPort": "particles_b",
       "toNode": 14,
       "toPort": "particles"
+    },
+    {
+      "fromNode": 9,
+      "fromPort": "interior_b",
+      "toNode": 14,
+      "toPort": "interior"
     },
     {
       "fromNode": 9,
