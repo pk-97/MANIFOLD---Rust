@@ -15059,7 +15059,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     dst[idx] = r1;
 }
 
-=== generator:WaterDamBreakGpuFlip node:82 ===
+=== generator:WaterDamBreakGpuFlip node:84 ===
 struct Params {
     n0_nodes_x: f32,
     n0_nodes_y: f32,

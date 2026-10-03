@@ -107,7 +107,6 @@ struct Split {
 struct Frame {
     gpu_ms: f64,
     cpu_ms: f64,
-    node_error: bool,
     split: Option<Split>,
 }
 
@@ -163,6 +162,7 @@ fn render(
     let mut encoder = device.create_encoder("gpu flip frame perf");
     if let Some(sampler) = sampler {
         encoder.enable_dispatch_profiling(sampler.clone(), device);
+        manifold_renderer::node_graph::primitives::water_perf::arm();
     }
     runtime.set_profiling(sampler.is_some());
     let encode_started = Instant::now();
@@ -172,14 +172,12 @@ fn render(
         gpu.frame_status()
     };
     let cpu_ms = encode_started.elapsed().as_secs_f64() * 1e3;
-    // A node error (the speed-cap report, BUG-jyot) is still what live shows.
-    assert!(status.presentable(), "frame {} is not presentable: {status:?}", ctx.frame_count);
+    assert_eq!(status, FrameRenderStatus::Complete, "frame {} did not complete", ctx.frame_count);
     let profile = encoder.commit_and_wait_profiled(device);
     assert_eq!(profile.failed_command_buffers, 0, "frame {} failed on the GPU", ctx.frame_count);
     let gpu_ms = profile.total_ms;
-    let node_error = status != FrameRenderStatus::Complete;
     if sampler.is_none() {
-        return Frame { gpu_ms, cpu_ms, node_error, split: None };
+        return Frame { gpu_ms, cpu_ms, split: None };
     }
     assert_eq!(profile.overflow, 0, "every dispatch must be timed");
     let summed: f64 = profile.spans.iter().map(|span| span.millis).sum();
@@ -191,6 +189,35 @@ fn render(
     );
     let steps: BTreeMap<String, String> =
         runtime.take_step_profiles().into_iter().map(|step| (step.tag, step.type_id)).collect();
+    // These are the existing encoder-boundary samples, kept in encode order.
+    // Report signed gaps as well as durations: overlapping stages are not a
+    // serial cost ledger, and Load/resolve hazards can wait inside the next
+    // encoder. No new encoders/barriers perturb the seam being diagnosed.
+    let mut previous_end = None;
+    for span in &profile.spans {
+        if steps.get(&span.tag).is_some_and(|kind| kind == RENDER) {
+            let end = span.start_ms + span.millis;
+            let gap = previous_end.map_or(0.0, |previous| span.start_ms - previous);
+            println!("    water seam {:?} {}: start {:.4} end {end:.4} ms; gap {gap:+.4} ms",
+                span.kind, span.label, span.start_ms);
+            previous_end = Some(end);
+        }
+    }
+    let mut captured_draws = 0;
+    // SAFETY: this frame completed above; no later frame has reused the buffers.
+    unsafe {
+        manifold_renderer::node_graph::primitives::water_perf::finish(|count| {
+            assert!(count.drawn_vertices <= count.capacity_vertices);
+            assert_eq!(count.drawn_vertices % 3, 0);
+            captured_draws += 1;
+            println!("    water draw {}: {} live triangles, {} instances, {} capacity vertices",
+                count.draw, count.drawn_vertices / 3, count.instances,
+                count.capacity_vertices);
+        });
+    }
+    assert_eq!(captured_draws,
+        profile.spans.iter().filter(|span| span.label == "node.render_scene transmissive depth prepass").count(),
+        "every captured water draw must have a valid depth-prepass stamp");
     let mut per_type = BTreeMap::new();
     let mut per_step_label = BTreeMap::new();
     let mut per_render_label = BTreeMap::new();
@@ -213,7 +240,6 @@ fn render(
     Frame {
         gpu_ms,
         cpu_ms,
-        node_error,
         split: Some(Split { per_type, per_step_label, per_render_label, shadow_rendered, hash }),
     }
 }
@@ -316,6 +342,8 @@ impl Phase {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Variant {
     Shipped,
+    /// Same surface, material and capacity, using the pre-indexing triangle list.
+    Unindexed,
     /// Whitewater Budget at its card minimum (1000 of 100000): the foam,
     /// spray and bubble instanced draws all but vanish.
     WhitewaterMinimum,
@@ -344,13 +372,52 @@ fn gpu_flip_frame_perf_water_unwired() {
     probe(Variant::WaterUnwired);
 }
 
-fn probe(variant: Variant) {
+#[test]
+fn gpu_flip_frame_perf_indexed_parity() {
+    let unindexed = probe(Variant::Unindexed);
+    let indexed = probe(Variant::Shipped);
+    assert_eq!(indexed, unindexed, "indexing must preserve every sampled frame hash");
+}
+
+fn use_triangle_list(json: &mut Value) {
+    let surface = json["nodes"].as_array_mut().expect("nodes").iter_mut()
+        .find(|node| node["id"] == 14).expect("liquid surface group");
+    let group = &mut surface["group"];
+    let nodes = group["nodes"].as_array_mut().expect("surface nodes");
+    let before = nodes.len();
+    nodes.retain(|node| node["id"] != 21 && node["id"] != 22);
+    assert_eq!(before - nodes.len(), 2, "remove edge count and scan only");
+    group["wires"].as_array_mut().expect("surface wires").retain(|wire| {
+        ![21, 22].iter().any(|id| wire["fromNode"] == *id || wire["toNode"] == *id)
+            && wire["fromPort"] != "indices"
+    });
+    group["interface"]["outputs"].as_array_mut().expect("surface outputs")
+        .retain(|port| port["name"] != "indices");
+    let wires = json["wires"].as_array_mut().expect("preset wires");
+    let before = wires.len();
+    wires.retain(|wire| !(wire["fromNode"] == 14 && wire["fromPort"] == "indices"));
+    assert_eq!(before - wires.len(), 1, "remove the water index wire only");
+}
+
+#[test]
+fn indexed_perf_variants_compile_on_cpu() {
+    let registry = PrimitiveRegistry::with_builtin();
+    let mut json: Value = serde_json::from_str(PRESET).unwrap();
+    PresetRuntime::from_json_str(&json.to_string(), &registry).expect("indexed preset compiles");
+    use_triangle_list(&mut json);
+    PresetRuntime::from_json_str(&json.to_string(), &registry).expect("triangle-list preset compiles");
+}
+
+fn probe(variant: Variant) -> Vec<(usize, u64)> {
     let harness = harness::shared();
     let device = &harness.device;
     let sampler = device.create_timestamp_sampler(16384).expect("GPU timestamp sampler");
     let _offline = PhysicsStepScope::for_render(true);
     let target = RenderTarget::new(device, WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float, "gpu-flip-frame-perf");
     let mut json: Value = serde_json::from_str(PRESET).expect("GPU FLIP dam break preset parses");
+    if variant == Variant::Unindexed {
+        use_triangle_list(&mut json);
+    }
     if variant == Variant::WaterUnwired {
         let wires = json["wires"].as_array_mut().expect("preset wires");
         let before = wires.len();
@@ -398,7 +465,6 @@ fn probe(variant: Variant) {
     let mut plain_sequence = Vec::new();
     let mut shadow_frames = Vec::new();
     let mut hashes = Vec::new();
-    let mut node_error_frames = 0usize;
     for tick in 0..MEASURED_FRAMES {
         frame += 1;
         let stamped = tick % TIMESTAMP_EVERY == TIMESTAMP_EVERY - 1;
@@ -411,7 +477,6 @@ fn probe(variant: Variant) {
             stamped.then_some(&sampler),
         );
         let counts = Counts::read(&runtime);
-        node_error_frames += usize::from(result.node_error);
         if let Some(split) = &result.split {
             if split.shadow_rendered {
                 shadow_frames.push(tick);
@@ -426,7 +491,6 @@ fn probe(variant: Variant) {
         let for_whole = Frame {
             gpu_ms: result.gpu_ms,
             cpu_ms: result.cpu_ms,
-            node_error: result.node_error,
             split: result.split.as_ref().map(|split| Split {
                 per_type: split.per_type.clone(),
                 per_step_label: split.per_step_label.clone(),
@@ -438,7 +502,6 @@ fn probe(variant: Variant) {
         whole.add(for_whole, counts);
         if tick < SPLASH_END_TICK { splash.add(result, counts) } else { calm.add(result, counts) }
     }
-    println!("  frames with a node error (live still presents them): {node_error_frames} of {MEASURED_FRAMES}");
     println!("  plain-frame GPU ms per tick:");
     for row in plain_sequence.chunks(12) {
         let cells: Vec<String> = row.iter().map(|(tick, ms)| format!("{tick:>3}:{ms:>6.2}")).collect();
@@ -457,4 +520,5 @@ fn probe(variant: Variant) {
         shadow_frames.is_empty(),
         "the raster shadow map must stay cached: its casters are static, so a re-render means the dirty key moved"
     );
+    hashes
 }

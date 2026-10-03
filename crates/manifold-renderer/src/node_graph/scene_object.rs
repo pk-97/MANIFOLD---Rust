@@ -56,6 +56,8 @@ pub struct SceneObject {
     /// unwired — consumers skip the draw the same way an unresolved
     /// `mesh_k` slot is skipped today (`render_scene.rs:2437`).
     pub mesh: Option<Slot>,
+    /// Optional u32 triangle indices into the vertex array.
+    pub indices: Option<Slot>,
     /// Optional per-vertex appearance weights consumed by `render_scene`.
     pub weights: Option<Slot>,
     /// Cut-map slot. The renderer resolves its typed content metadata from
@@ -208,6 +210,7 @@ mod tests {
             parent_transform: None,
             material: None,
             mesh: None,
+            indices: None,
             weights: None,
             topology: None,
             base_color_map: None,

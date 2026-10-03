@@ -51,6 +51,7 @@ fn rsm_neighbour_sum(
     edge: u32,
     cells: vec3<u32>,
     nodes: vec3<u32>,
+    indexed: u32,
 ) -> RsmNeighbourSum {
     var a = home + MC_CORNERS[MC_EDGE_A[edge]];
     var b = home + MC_CORNERS[MC_EDGE_B[edge]];
@@ -90,8 +91,14 @@ fn rsm_neighbour_sum(
                     continue;
                 }
                 let slot = (base + t) * 3u;
-                sum = sum + buf_vertices[slot + (corner + 1u) % 3u].position;
-                sum = sum + buf_vertices[slot + (corner + 2u) % 3u].position;
+                var next = slot + (corner + 1u) % 3u;
+                var previous = slot + (corner + 2u) % 3u;
+                if indexed != 0u {
+                    next = se_vertex(cell, mc_edge(case_index, t * 3u + (corner + 1u) % 3u), nodes);
+                    previous = se_vertex(cell, mc_edge(case_index, t * 3u + (corner + 2u) % 3u), nodes);
+                }
+                sum = sum + buf_vertices[next].position;
+                sum = sum + buf_vertices[previous].position;
                 met = met + 2u;
             }
         }
@@ -118,6 +125,7 @@ fn body(
     strength: f32,
     max_capacity: u32,
     brick_pass: u32,
+    indexed: u32,
 ) {
     let zero = Element(
         vec3<f32>(0.0),
@@ -136,6 +144,9 @@ fn body(
             let triangles = buf_scan[clear_total - 1u];
             if triangles <= max_capacity / 3u {
                 live = triangles * 3u;
+                if indexed != 0u {
+                    live = buf_edge_scan[clear_nodes.x * clear_nodes.y * clear_nodes.z - 1u];
+                }
             }
         }
         if idx >= live {
@@ -172,11 +183,15 @@ fn body(
         for (var corner = 0u; corner < 3u; corner = corner + 1u) {
             let edge_entry = t * 3u + corner;
             let edge = mc_edge(case_index, edge_entry);
+            if indexed != 0u && (!se_owner(home, edge, nodes) || edge_ready[edge]) {
+                continue;
+            }
             if !edge_ready[edge] {
-                edge_cache[edge] = rsm_neighbour_sum(home, edge, cells, nodes);
+                edge_cache[edge] = rsm_neighbour_sum(home, edge, cells, nodes, indexed);
                 edge_ready[edge] = true;
             }
-            let slot = (base + t) * 3u + corner;
+            var slot = (base + t) * 3u + corner;
+            if indexed != 0u { slot = se_vertex(home, edge, nodes); }
             buf_relaxed[slot] = rsm_relax_vertex(slot, strength, edge_cache[edge]);
         }
     }

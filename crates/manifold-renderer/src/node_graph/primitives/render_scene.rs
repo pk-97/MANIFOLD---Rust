@@ -73,6 +73,52 @@ mod volume_optics;
 mod live_draw_args;
 #[cfg(feature = "gpu-proofs")]
 pub mod rt_proof;
+
+// Retains the pre-optimization schedule solely for the byte-exact GPU proof.
+#[cfg(feature = "gpu-proofs")]
+pub mod blend_snapshot_proof {
+    use std::cell::Cell;
+
+    thread_local! {
+        static LEGACY: Cell<bool> = const { Cell::new(false) };
+    }
+
+    pub fn with_legacy_snapshots<R>(run: impl FnOnce() -> R) -> R {
+        struct Restore(bool);
+        impl Drop for Restore {
+            fn drop(&mut self) { LEGACY.set(self.0); }
+        }
+        let _restore = Restore(LEGACY.replace(true));
+        run()
+    }
+
+    pub(super) fn legacy() -> bool { LEGACY.get() }
+}
+
+fn needs_layer_snapshot(is_transmissive: bool) -> bool {
+    #[cfg(feature = "gpu-proofs")]
+    if blend_snapshot_proof::legacy() {
+        return true;
+    }
+    is_transmissive
+}
+
+#[cfg(test)]
+mod blend_snapshot_tests {
+    #[test]
+    fn only_transmissive_layers_need_a_snapshot() {
+        assert!(!super::needs_layer_snapshot(false));
+        assert!(super::needs_layer_snapshot(true));
+        #[cfg(feature = "gpu-proofs")]
+        {
+            super::blend_snapshot_proof::with_legacy_snapshots(|| {
+                assert!(super::needs_layer_snapshot(false));
+                assert!(super::needs_layer_snapshot(true));
+            });
+            assert!(!super::needs_layer_snapshot(false));
+        }
+    }
+}
 use crate::frame_status::{FrameRenderFailure, FrameRenderStatus};
 use crate::node_graph::mesh_change::MeshRevision;
 use crate::node_graph::ContentVersion;
@@ -94,6 +140,89 @@ use crate::node_graph::scene_object::SceneObject;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
 use crate::node_graph::primitive::PrimitiveDescription;
+
+// Diagnostic handles only: the proof reads the actual indirect arguments after
+// commit/wait, before encoding another frame. No copy, extra encoder or heap
+// allocation is added to the measured water seam.
+#[cfg(feature = "fluid-perf-proofs")]
+pub mod water_perf {
+    use std::cell::RefCell;
+    use manifold_gpu::GpuBuffer;
+
+    const MAX_DRAWS: usize = 64;
+    struct Capture {
+        draw: usize,
+        capacity: u32,
+        args: Option<(GpuBuffer, u64)>,
+        instances: u32,
+    }
+    struct Probe {
+        armed: bool,
+        draws: [Option<Capture>; MAX_DRAWS],
+        len: usize,
+    }
+    thread_local! {
+        static PROBE: RefCell<Probe> = const { RefCell::new(Probe {
+            armed: false, draws: [const { None }; MAX_DRAWS], len: 0,
+        }) };
+    }
+
+    /// Arm on the rendering thread before one frame. Fixed storage is reused.
+    pub fn arm() {
+        PROBE.with_borrow_mut(|p| {
+            assert_eq!(p.len, 0, "finish the preceding water probe before arming");
+            p.armed = true;
+        });
+    }
+
+    pub(super) fn record(index: usize, draw: &super::ObjectDraw<'_>) {
+        PROBE.with_borrow_mut(|p| {
+            if !p.armed { return; }
+            assert!(p.len < MAX_DRAWS, "water probe exceeded 64 transmissive draws");
+            p.draws[p.len] = Some(Capture {
+                draw: index, capacity: draw.vertex_count, args: draw.live_args.clone(),
+                instances: draw.instance_count,
+            });
+            p.len += 1;
+        });
+    }
+
+    #[derive(Debug)]
+    pub struct DrawCount {
+        pub draw: usize,
+        pub capacity_vertices: u32,
+        pub drawn_vertices: u32,
+        pub instances: u32,
+    }
+
+    /// Read this frame's shared indirect arguments, without GPU work or waits.
+    ///
+    /// # Safety
+    /// The armed frame must have completed successfully on the GPU, and no
+    /// subsequent frame may have been encoded using its argument buffers.
+    pub unsafe fn finish(mut visit: impl FnMut(DrawCount)) {
+        unsafe fn word(buffer: &GpuBuffer, offset: u64) -> u32 {
+            assert!(offset + 4 <= buffer.size && offset.is_multiple_of(4));
+            let ptr = buffer.mapped_ptr().expect("water probe requires shared arguments");
+            // SAFETY: caller waited for GPU completion; range/alignment checked.
+            unsafe { ptr.cast::<u8>().add(offset as usize).cast::<u32>().read() }
+        }
+        PROBE.with_borrow_mut(|p| {
+            p.armed = false;
+            for slot in &mut p.draws[..p.len] {
+                let c = slot.take().expect("captured draw");
+                let (vertices, instances) = match &c.args {
+                    // SAFETY: finish's caller guarantees completion and no reuse.
+                    Some((buffer, offset)) => unsafe { (word(buffer, *offset), word(buffer, *offset + 4)) },
+                    None => (c.capacity, c.instances),
+                };
+                visit(DrawCount { draw: c.draw, capacity_vertices: c.capacity,
+                    drawn_vertices: vertices, instances });
+            }
+            p.len = 0;
+        });
+    }
+}
 
 // ── RT capture harness: headless RT channel verification ────────
 // The `rt-capture` subcommand (manifold-app, behind perf-soak feature) sets
@@ -1704,6 +1833,8 @@ struct ObjectDraw<'ctx> {
     point_count: u32,
     /// The mesh's live extent, when its producer publishes one.
     live_extent: Option<crate::node_graph::live_extent::LiveExtent>,
+    indices: Option<&'ctx manifold_gpu::GpuBuffer>,
+    indices_content: Option<ContentVersion>,
     /// This frame's GPU-written draw arguments (buffer, byte offset) for an
     /// object with a live extent: raster passes draw indirectly with them.
     live_args: Option<(manifold_gpu::GpuBuffer, u64)>,
@@ -1777,6 +1908,7 @@ impl ObjectDraw<'_> {
     /// `draw`, switched to this object's GPU-written arguments when its mesh
     /// has a live extent.
     fn live<'a>(&'a self, draw: manifold_gpu::DepthMsaaDraw<'a>) -> manifold_gpu::DepthMsaaDraw<'a> {
+        let draw = match self.indices { Some(indices) => draw.indexed(indices), None => draw };
         match &self.live_args {
             Some((args, offset)) => draw.indirect(args, *offset),
             None => draw,
@@ -1786,9 +1918,11 @@ impl ObjectDraw<'_> {
     /// Triangle-list draw count: GPU-written with a live extent, else the
     /// whole buffer.
     fn draw_count(&self) -> manifold_gpu::DrawCount<'_> {
-        match &self.live_args {
-            Some((args, offset)) => manifold_gpu::DrawCount::Indirect { args, offset: *offset },
-            None => manifold_gpu::DrawCount::Direct { vertices: self.vertex_count, instances: self.instance_count },
+        match (self.indices, &self.live_args) {
+            (Some(indices), Some((args, offset))) => manifold_gpu::DrawCount::IndexedIndirect { indices, args, offset: *offset },
+            (Some(indices), None) => manifold_gpu::DrawCount::IndexedDirect { indices, index_count: self.vertex_count, instances: self.instance_count },
+            (None, Some((args, offset))) => manifold_gpu::DrawCount::Indirect { args, offset: *offset },
+            (None, None) => manifold_gpu::DrawCount::Direct { vertices: self.vertex_count, instances: self.instance_count },
         }
     }
 }
@@ -2060,15 +2194,27 @@ impl RenderScene {
             // RENDER_SCENE_PERF_OPTIMIZATION_DESIGN.md D6: this object's
             // `mesh_n` write generation, feeds the shadow cache key below.
             let vertices_content = mesh_slot.and_then(|s| ctx.inputs.content_version_of(s));
-            let live_extent = mesh_slot.and_then(|s| ctx.inputs.live_extent_slot(s));
+            if object.indices.is_some_and(|slot| !ctx.inputs.slot_content_ready(slot)) {
+                self.report_incomplete_frame(ctx);
+                continue;
+            }
+            let indices = object.indices.and_then(|slot| ctx.inputs.array_slot(slot));
+            if object.indices.is_some() && indices.is_none() {
+                ctx.gpu_encoder().merge_frame_status(FrameRenderStatus::Failed(FrameRenderFailure::InvalidGeometry));
+                ctx.error(format!("object_{n}: wired index buffer is unavailable"));
+                return None;
+            }
+            let indices_content = object.indices.and_then(|slot| ctx.inputs.content_version_of(slot));
+            let live_extent = object.indices.or(mesh_slot).and_then(|s| ctx.inputs.live_extent_slot(s));
+            let capacity = indices.map_or_else(|| whole_triangle_vertices(vertices), |buffer| (buffer.size / 4 / 3 * 3).min(u64::from(u32::MAX)) as u32);
             let (object_vertex_count, point_count) = match &live_extent {
                 Some(extent) => {
-                    let bound = extent.bound.min(whole_triangle_vertices(vertices));
+                    let bound = extent.bound.min(capacity);
                     (bound, bound)
                 }
                 None => (
-                    whole_triangle_vertices(vertices),
-                    (vertices.size / std::mem::size_of::<MeshVertex>() as u64) as u32,
+                    capacity,
+                    indices.map_or((vertices.size / std::mem::size_of::<MeshVertex>() as u64) as u32, |_| capacity),
                 ),
             };
             let weights_slot = object.weights;
@@ -2399,11 +2545,13 @@ impl RenderScene {
                 vertex_count: object_vertex_count,
                 point_count,
                 live_extent,
+                indices,
+                indices_content,
                 live_args: None,
                 vertices_content,
                 mesh_revision: mesh_slot.and_then(|s| ctx.inputs.mesh_revision_of(s)),
-                topology_hint: object.topology.and_then(|slot| inputs.content_version_of(slot)),
-                geometry_content_known: [object.mesh, object.instances, object.topology]
+                topology_hint: object.indices.or(object.topology).and_then(|slot| inputs.content_version_of(slot)),
+                geometry_content_known: [object.mesh, object.indices, object.instances, object.topology]
                     .into_iter().flatten().all(|slot| inputs.content_version_of(slot).is_some()),
                 appearance_content_known: [object.base_color_map, object.normal_map, object.mr_map, object.emissive_map, object.anisotropy_map, object.specular_map, object.specular_color_map, object.clearcoat_map, object.clearcoat_roughness_map, object.sheen_color_map, object.sheen_roughness_map, object.transmission_map, object.volume_thickness_map, object.clearcoat_normal_map, object.iridescence_map, object.iridescence_thickness_map, object.diffuse_transmission_map, object.diffuse_transmission_color_map, object.occlusion_map, object.weights]
                     .into_iter().flatten().all(|slot| inputs.content_version_of(slot).is_some()),
@@ -2428,7 +2576,11 @@ impl RenderScene {
             let args = self.live_draw_args.prepare(gpu.device, live);
             for (slot, draw) in draws.iter_mut().filter(|d| d.live_extent.is_some()).enumerate() {
                 let extent = draw.live_extent.as_ref().expect("filtered on live_extent");
-                self.live_draw_args.write(gpu.native_enc, slot, extent, draw.vertices, draw.instance_count);
+                let capacity = draw.indices.map_or_else(
+                    || whole_triangle_vertices(draw.vertices),
+                    |indices| (indices.size / 4 / 3 * 3).min(u64::from(u32::MAX)) as u32,
+                );
+                self.live_draw_args.write(gpu.native_enc, slot, extent, capacity, draw.instance_count);
                 draw.live_args = Some((args.clone(), slot as u64 * live_draw_args::ARGS_BYTES));
             }
         }
@@ -2865,6 +3017,7 @@ impl RenderScene {
                 for d in &caster_draws {
                     hasher.write(bytemuck::bytes_of(&d.uniforms.model));
                     d.vertices_content.hash(&mut hasher);
+                    d.indices_content.hash(&mut hasher);
                     d.instances_content.hash(&mut hasher);
                     d.weights_content.hash(&mut hasher);
                     hasher.write_u32(d.gain.to_bits());
@@ -3120,6 +3273,7 @@ impl RenderScene {
             hasher.write_usize(objects.len());
             for o in objects {
                 o.vertex_buffer.identity_key().hash(&mut hasher);
+                o.index_buffer.map(manifold_gpu::GpuBuffer::identity_key).hash(&mut hasher);
                 hasher.write_u32(o.triangle_count);
                 // RT_INSTANCING_DESIGN.md D2/D9/INV-RTI5 + P1.5: instance-slot
                 // CAPACITY is topology — the TLAS slot count is baked at
@@ -3162,6 +3316,7 @@ impl RenderScene {
             topo_key.hash(&mut content_hasher);
             for d in opaque_draws.clone() {
                 d.vertices_content.hash(&mut content_hasher);
+                d.indices_content.hash(&mut content_hasher);
             }
             let content_key = content_hasher.finish();
             // SCENE_MODIFIER_RT_DESIGN.md §5.2 (P4b): appearance state —
@@ -4928,6 +5083,8 @@ impl RenderScene {
                 let draw = &draws[*draw_index];
                 let nearest_surface = draw.is_transmissive && !draw.points
                     && draw.fill_mode == manifold_gpu::GpuTriangleFillMode::Fill;
+                #[cfg(feature = "fluid-perf-proofs")]
+                if nearest_surface { water_perf::record(*draw_index, draw); }
                 let shadow_uniforms = ShadowUniforms::for_draw(pre.view_proj, draw);
                 let shadow_bindings = [
                     GpuBinding::Bytes {
@@ -4969,6 +5126,8 @@ impl RenderScene {
                 // cannot reveal a triangle behind an opaque surface and depth
                 // testing within the mesh selects its nearest surface.
                 if nearest_surface {
+                    #[cfg(feature = "fluid-perf-proofs")]
+                    gpu.native_enc.profile_next_encoder("node.render_scene water opaque-depth seed");
                     gpu.native_enc.copy_texture_to_texture(
                         opaque_depth_snapshot,
                         transmissive_depth_scratch,
@@ -4986,11 +5145,15 @@ impl RenderScene {
                 // Only a transmissive shader samples the snapshot
                 // (`transmission_factor > 0` gates every read); a plain
                 // Blend layer composites straight onto `resolve_target`.
-                if draw.is_transmissive {
+                if needs_layer_snapshot(draw.is_transmissive) {
+                    #[cfg(feature = "fluid-perf-proofs")]
+                    gpu.native_enc.profile_next_encoder("node.render_scene water scene-color snapshot");
                     gpu.native_enc.copy_texture_to_texture(
                         resolve_target, opaque_scene_color, width, height, 1,
                     );
                     if opaque_scene_color.mip_level_count() > 1 {
+                        #[cfg(feature = "fluid-perf-proofs")]
+                        gpu.native_enc.profile_next_encoder("node.render_scene water scene-color mipmaps");
                         gpu.native_enc.generate_mipmaps(opaque_scene_color);
                     }
                 }
@@ -5563,7 +5726,7 @@ impl RenderScene {
                     vertex_buffer: d.vertices,
                     vertex_stride: std::mem::size_of::<MeshVertex>() as u32,
                     vertex_offset: 0,
-                    index_buffer: None,
+                    index_buffer: d.indices,
                     triangle_count: d.vertex_count / 3,
                     transform: d.uniforms.model,
                     // RT-T1-B: `MeshVertex`'s normal field offset (position
@@ -9078,6 +9241,7 @@ impl RenderScene {
             parent_transform: None,
             material: inputs.material("material"),
             mesh: inputs.slot_of("vertices"),
+            indices: None,
             weights: None,
             topology: None,
             base_color_map: inputs.slot_of("base_color_map"),

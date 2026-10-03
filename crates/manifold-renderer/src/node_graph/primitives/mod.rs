@@ -247,6 +247,8 @@ mod render_mode;
 pub(crate) mod render_scene;
 #[cfg(feature = "gpu-proofs")]
 pub use render_scene::rt_proof::{RtProbeObject, RtProbeScene};
+#[cfg(feature = "gpu-proofs")]
+pub use render_scene::blend_snapshot_proof;
 mod render_filled_rects;
 mod render_lines;
 mod render_text;
@@ -430,6 +432,7 @@ pub(crate) mod gpu_flip_still;
 mod gpu_flip_render_smoke_tests;
 mod clamp_liquid_to_solids;
 mod count_surface_triangles;
+mod count_surface_edges;
 pub(crate) mod volume_surface_mesh;
 mod relax_surface_mesh;
 #[cfg(all(test, feature = "gpu-proofs"))]
@@ -666,6 +669,8 @@ pub use remove_drift_3d::RemoveDrift3D;
 pub use render_3d_mesh::Render3DMesh;
 pub use render_instanced_3d_mesh::RenderInstanced3DMesh;
 pub use render_scene::RenderScene;
+#[cfg(feature = "fluid-perf-proofs")]
+pub use render_scene::water_perf;
 pub use render_scene::{arm_rt_capture, disarm_rt_capture, take_rt_captures, RtCaptureSlot};
 pub use render_filled_rects::RenderFilledRects;
 pub use render_lines::RenderLines;

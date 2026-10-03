@@ -573,6 +573,7 @@ pub const LIQUID_EXTENT_RULES: &[ExtentRule] = &[
     ExtentRule { type_id: "node.smooth_lattice", check: smooth_lattice },
     ExtentRule { type_id: "node.clamp_liquid_to_solids", check: clamp_liquid_to_solids },
     ExtentRule { type_id: "node.count_surface_triangles", check: count_surface_triangles },
+    ExtentRule { type_id: "node.count_surface_edges", check: count_surface_edges },
     ExtentRule { type_id: "node.running_total", check: running_total },
     ExtentRule { type_id: "node.volume_surface_mesh", check: volume_surface_mesh },
     ExtentRule { type_id: "node.relax_surface_mesh", check: relax_surface_mesh },
@@ -733,6 +734,9 @@ fn fluid_surface(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.provide("solid_a", solid);
     x.provide("solid_b", solid);
     x.hold(crate::node_graph::fluid::particle_ring::RING_SLOTS as u64 * (particles + solid));
+    // Tick-zero empty storage stays independent of worker-owned ring slots.
+    // Include it in peak admission while the first real frame is prepared.
+    x.hold(size_of::<FluidParticle>() as u64 + solid);
     // The CPU mesh grows its buffer by half again when a surface needs more,
     // through device admission; whitewater uploads stop at their capacity.
     let vertices = u64::from((x.param("max_capacity", 786_432.0).clamp(3.0, 3_145_728.0) as u32 / 3) * 3) * size_of::<MeshVertex>() as u64;
@@ -1068,6 +1072,15 @@ fn count_surface_triangles(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.covers("counts", nodes_total(nodes.map(|n| n - 1.0)) * 4)
 }
 
+fn count_surface_edges(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let nodes = x.nodes(["nodes_x", "nodes_y", "nodes_z"]);
+    if nodes.iter().any(|&n| n < 2.0) {
+        return Err(x.uncovered(format!("no lattice: nodes {nodes:?}")));
+    }
+    x.covers("levelset", nodes_total(nodes) * 4)?;
+    x.covers("counts", nodes_total(nodes) * 4)
+}
+
 fn running_total(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     // The scan runs over min(count, in, out).
     x.covers("out", x.bytes("in").unwrap_or(0))
@@ -1083,9 +1096,15 @@ fn volume_surface_mesh(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.covers("scan", nodes_total(nodes.map(|n| n - 1.0)) * 4)?;
     // Provided and grown at run time; cell emission checks the live scan total
     // against the buffer's whole-triangle slot count before writing.
-    let start = start_capacity(x.params(), nodes) * size_of::<MeshVertex>() as u64;
+    let slots = start_capacity(x.params(), nodes);
+    let start = slots * size_of::<MeshVertex>() as u64;
+    let indices = if x.wired("edge_scan") {
+        x.covers("edge_scan", nodes_total(nodes) * 4)?;
+        slots * 4
+    } else { 0 };
     x.provide("vertices", start);
-    x.hold(start);
+    x.provide("indices", indices);
+    x.hold(start + indices + 4); // Unindexed ABI stub.
     Ok(())
 }
 
@@ -1097,6 +1116,7 @@ fn relax_surface_mesh(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     brick_schedule(x, nodes.map(|n| n as u32))?;
     x.covers("levelset", nodes_total(nodes) * 4)?;
     x.covers("scan", nodes_total(nodes.map(|n| n - 1.0)) * 4)?;
+    if x.wired("edge_scan") { x.covers("edge_scan", nodes_total(nodes) * 4)?; }
     // Cell-owned intervals and neighbour reads lie below the checked live total.
     let vertices = x.bytes("vertices").ok_or_else(|| x.uncovered("vertices is unbound".into()))?;
     x.covers("relaxed", vertices)

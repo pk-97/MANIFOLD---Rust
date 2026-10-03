@@ -388,6 +388,10 @@
             {
               "name": "level_set_nodes_z",
               "portType": "Scalar(F32)"
+            },
+            {
+              "name": "indices",
+              "portType": "Array(u32)"
             }
           ],
           "params": [
@@ -641,6 +645,18 @@
               }
             },
             "typeId": "node.lattice_bricks"
+          },
+          {
+            "handle": "Count Surface Edges",
+            "id": 21,
+            "nodeId": "liquid_edge_count",
+            "typeId": "node.count_surface_edges"
+          },
+          {
+            "handle": "Edge Offsets",
+            "id": 22,
+            "nodeId": "liquid_edge_offsets",
+            "typeId": "node.running_total"
           }
         ],
         "wires": [
@@ -1471,6 +1487,60 @@
             "fromPort": "interior",
             "toNode": 7,
             "toPort": "interior"
+          },
+          {
+            "fromNode": 16,
+            "fromPort": "clamped",
+            "toNode": 21,
+            "toPort": "levelset"
+          },
+          {
+            "fromNode": 7,
+            "fromPort": "volume_nodes_x",
+            "toNode": 21,
+            "toPort": "nodes_x"
+          },
+          {
+            "fromNode": 7,
+            "fromPort": "volume_nodes_y",
+            "toNode": 21,
+            "toPort": "nodes_y"
+          },
+          {
+            "fromNode": 7,
+            "fromPort": "volume_nodes_z",
+            "toNode": 21,
+            "toPort": "nodes_z"
+          },
+          {
+            "fromNode": 21,
+            "fromPort": "counts",
+            "toNode": 22,
+            "toPort": "in"
+          },
+          {
+            "fromNode": 22,
+            "fromPort": "out",
+            "toNode": 10,
+            "toPort": "edge_scan"
+          },
+          {
+            "fromNode": 22,
+            "fromPort": "out",
+            "toNode": 18,
+            "toPort": "edge_scan"
+          },
+          {
+            "fromNode": 22,
+            "fromPort": "out",
+            "toNode": 19,
+            "toPort": "edge_scan"
+          },
+          {
+            "fromNode": 10,
+            "fromPort": "indices",
+            "toNode": 11,
+            "toPort": "indices"
           }
         ]
       },
@@ -4199,6 +4269,12 @@
       "fromPort": "object",
       "toNode": 463,
       "toPort": "object_1"
+    },
+    {
+      "fromNode": 14,
+      "fromPort": "indices",
+      "toNode": 442,
+      "toPort": "indices"
     }
   ]
 }

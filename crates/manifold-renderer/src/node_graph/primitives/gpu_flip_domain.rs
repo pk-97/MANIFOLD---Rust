@@ -864,6 +864,28 @@ mod tests {
         gpu_flip_geometry(read, None, volume)
     }
 
+    /// The frame publisher reads these CPU outputs before any solver publish.
+    /// This guards the GPU FLIP side of BUG-a1xh independently of the CPU
+    /// FLIP particle ring: neither surface nodes nor bin size need GPU data.
+    #[test]
+    fn first_frame_gpu_flip_lattice_is_valid_before_gpu_publish() {
+        for resolution in [8.0, 32.0, 48.0, 64.0] {
+            let setup = geometry(resolution, 0.16, None).unwrap();
+            let outputs = setup.outputs();
+            let lattice = LiquidLattice::from_scalars(|name, default| {
+                outputs.iter().find(|(port, _)| *port == name).map_or(default, |(_, value)| *value)
+            }).unwrap();
+            assert_eq!(lattice, setup.setup.lattice);
+            assert_eq!(lattice.nodes(), [resolution as u32 + 7; 3]);
+            for (size, nodes) in lattice.bounds().scale.into_iter().zip(lattice.nodes()) {
+                let cell = size / (nodes - 1) as f32;
+                assert!(size.is_finite() && size > 0.0);
+                assert!(cell.is_finite() && cell > 0.0);
+                assert!((cell - lattice.cell_size()).abs() < 1e-6);
+            }
+        }
+    }
+
     /// Any side the slider reaches is a lattice: the solver halves sides
     /// rounding up, so none needs to divide by a power of two.
     #[test]

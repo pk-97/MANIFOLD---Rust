@@ -142,7 +142,7 @@ enum DispatchGrid<'a> {
     Indirect { args: &'a GpuBuffer, offset: u64 },
 }
 
-/// How many vertices and instances one batch draw covers.
+/// How many vertices or indices and instances one batch draw covers.
 #[derive(Clone, Copy)]
 pub enum DrawCount<'a> {
     Direct { vertices: u32, instances: u32 },
@@ -150,11 +150,34 @@ pub enum DrawCount<'a> {
     /// start, base instance) at `offset`, written on the GPU earlier in the
     /// same command buffer: the count is known only to the GPU.
     Indirect { args: &'a GpuBuffer, offset: u64 },
+    /// Direct indexed draw. The index buffer contains `u32` indices starting
+    /// at byte offset zero.
+    IndexedDirect {
+        indices: &'a GpuBuffer,
+        index_count: u32,
+        instances: u32,
+    },
+    /// Indexed draw whose five-word Metal argument block (index count,
+    /// instance count, index start, base vertex, base instance) is written by
+    /// the GPU earlier in the same command buffer. Callers commonly reserve
+    /// 32-byte blocks even though Metal consumes 20 bytes, keeping subsequent
+    /// argument offsets aligned for the surrounding argument layout.
+    IndexedIndirect {
+        indices: &'a GpuBuffer,
+        args: &'a GpuBuffer,
+        offset: u64,
+    },
 }
 
 impl DrawCount<'_> {
     fn is_empty(&self) -> bool {
-        matches!(self, DrawCount::Direct { vertices: 0, .. } | DrawCount::Direct { instances: 0, .. })
+        matches!(
+            self,
+            DrawCount::Direct { vertices: 0, .. }
+                | DrawCount::Direct { instances: 0, .. }
+                | DrawCount::IndexedDirect { index_count: 0, .. }
+                | DrawCount::IndexedDirect { instances: 0, .. }
+        )
     }
 }
 
@@ -184,10 +207,36 @@ pub struct DepthMsaaDraw<'a> {
 }
 
 impl<'a> DepthMsaaDraw<'a> {
+    /// Use `indices` as the `u32` index buffer, preserving whether this draw's
+    /// count is direct or GPU-written. Direct counts use the constructor's
+    /// vertex count as the index count.
+    pub fn indexed(mut self, indices: &'a GpuBuffer) -> Self {
+        self.count = match self.count {
+            DrawCount::Direct { vertices, instances } => DrawCount::IndexedDirect {
+                indices,
+                index_count: vertices,
+                instances,
+            },
+            DrawCount::Indirect { args, offset } => DrawCount::IndexedIndirect { indices, args, offset },
+            DrawCount::IndexedDirect { index_count, instances, .. } => {
+                DrawCount::IndexedDirect { indices, index_count, instances }
+            }
+            DrawCount::IndexedIndirect { args, offset, .. } => {
+                DrawCount::IndexedIndirect { indices, args, offset }
+            }
+        };
+        self
+    }
+
     /// Draw with GPU-written arguments instead of a CPU count: the Metal
-    /// four-word draw arguments at `offset` in `args`.
+    /// four-word draw arguments at `offset` in `args`, or the five-word
+    /// indexed arguments when [`Self::indexed`] was used first.
     pub fn indirect(mut self, args: &'a GpuBuffer, offset: u64) -> Self {
-        self.count = DrawCount::Indirect { args, offset };
+        self.count = match self.count {
+            DrawCount::Direct { .. } | DrawCount::Indirect { .. } => DrawCount::Indirect { args, offset },
+            DrawCount::IndexedDirect { indices, .. } => DrawCount::IndexedIndirect { indices, args, offset },
+            DrawCount::IndexedIndirect { indices, .. } => DrawCount::IndexedIndirect { indices, args, offset },
+        };
         self
     }
 }
@@ -209,6 +258,26 @@ fn encode_draw(
         },
         DrawCount::Indirect { args, offset } => unsafe {
             enc.drawPrimitives_indirectBuffer_indirectBufferOffset(primitive, &args.raw, offset as usize);
+        },
+        DrawCount::IndexedDirect { indices, index_count, instances } => unsafe {
+            enc.drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferOffset_instanceCount(
+                primitive,
+                index_count as usize,
+                MTLIndexType::UInt32,
+                &indices.raw,
+                0,
+                instances as usize,
+            );
+        },
+        DrawCount::IndexedIndirect { indices, args, offset } => unsafe {
+            enc.drawIndexedPrimitives_indexType_indexBuffer_indexBufferOffset_indirectBuffer_indirectBufferOffset(
+                primitive,
+                MTLIndexType::UInt32,
+                &indices.raw,
+                0,
+                &args.raw,
+                offset as usize,
+            );
         },
     }
 }
@@ -335,11 +404,24 @@ impl GpuEncoder {
             spans: Vec::new(),
             tag: String::new(),
             granularity,
+            #[cfg(feature = "gpu-proofs")]
+            next_label: None,
             open_tag: None,
             overflow: 0,
             calib_start,
             committed_buffers: Vec::new(),
         });
+    }
+
+    /// Name the next profiled encoder's existing boundary samples. Proofs use
+    /// this to distinguish otherwise identical blits at a render seam. Adds
+    /// no encoder, sample, barrier or allocation; dormant without profiling.
+    #[cfg(feature = "gpu-proofs")]
+    pub fn profile_next_encoder(&mut self, label: &'static str) {
+        if let Some(profile) = &mut self.profile {
+            assert!(profile.next_label.is_none(), "previous encoder label was not consumed");
+            profile.next_label = Some(label);
+        }
     }
 
     /// Set the attribution tag stamped onto subsequently profiled spans.
