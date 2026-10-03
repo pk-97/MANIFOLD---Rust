@@ -833,12 +833,19 @@ impl MatterDomain {
             None => None,
         };
         let nominal_substeps = substeps_per_tick(lattice.cell_size(), wave, v_est as f32, body_limit, None);
-        let requested = substeps_for_interval(frame.duration().0 as f32, nominal_substeps);
+        // A frame without ticks reports what one interval runs, so the
+        // substep count and unit hold steady between ticks.
+        let duration = if frame.ticks == 0 {
+            Some(crate::node_graph::physics::project_frame_interval())
+                .filter(|interval| interval.is_finite() && *interval > 0.0)
+                .unwrap_or(TICK)
+        } else {
+            frame.duration().0
+        };
+        let requested = substeps_for_interval(duration as f32, nominal_substeps);
         let substeps = requested.min(MAX_SUBSTEPS);
         let lambda = water_lambda(longest, fitted);
-        let unit = momentum_unit(lattice.cell_size(), if frame.ticks == 0 {TICK / f64::from(substeps)} else {
-                frame.duration().0 / f64::from(substeps)
-            });
+        let unit = momentum_unit(lattice.cell_size(), duration / f64::from(substeps));
         let mut display_time = frame.display_time;
         if let Some(owner) = &mut self.coupled.owner {
             if frame.ticks > 0 {
