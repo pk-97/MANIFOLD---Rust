@@ -44,7 +44,7 @@ Re-derive with `rg -n 'TICK|FIXED_TICK|60\.0|tick_seconds|step_dt|simulation_tim
 
 ## 2. Decisions
 
-**D1 — No discarded time.** Apply the existing Speed anchors, then accept the complete observed live interval, once the authored Sim Rate boundary is due (D7). One sequence identifies that interval; it does not measure elapsed time. CFL selects numerical subdivisions; the last allowed FLIP substep takes the entire remainder. Event boundaries split that accepted substep without spending another numerical step. Rejected: dropped-time reanchoring and capped fixed-tick debt bursts, both of which retime the show.
+**D1 — No discarded time.** Apply the existing Speed anchors, then accept every owed Sim Rate interval up to the last boundary transport has reached (D7); a partial interval stays owed until its boundary. Live runs the owed intervals as one span, export runs one tick each. One sequence identifies that span; it does not measure elapsed time. CFL selects numerical subdivisions; the last allowed FLIP substep takes the entire remainder. Event boundaries split that accepted substep without spending another numerical step. Rejected: dropped-time reanchoring and capped fixed-tick debt bursts, both of which retime the show.
 
 **D2 — Budget counts outer intervals.** Event and CFL boundaries can require additional numerical subdivisions. “B long kernels with no splits” is forbidden: it cannot preserve both hit moments and stability. **Consequences, stated honestly:** outer budget does not prove bounded wall time. The numerical cap follows section 8: its last allowed substep consumes the remainder; hit splits remain mandatory.
 
@@ -56,7 +56,7 @@ Re-derive with `rg -n 'TICK|FIXED_TICK|60\.0|tick_seconds|step_dt|simulation_tim
 
 **D6 — Lag uses completed time.** Lag=max(target−completed,0), in ms. Successfully stretched time is not lag, and is never subtracted from target. Submitted GPU time is not completed time. Display delay and audio-analysis latency are separate.
 
-**D7 — Shared Sim Rate (Peter, 2026-10-03).** Live gates full owed spans and export partitions nominal intervals using `ProjectSettings.physics.simRate` (shared `manifold_foundation::settings::PhysicsSettings`, re-exported by the physics API): 15/20/30/60 Hz, new projects 30 Hz, missing saved values 60 Hz, with one epoch per undoable rate edit and unchanged per-solver stability subdivisions.
+**D7 — Shared Sim Rate (Peter, 2026-10-03).** `ProjectSettings.physics.simRate` (shared `manifold_foundation::settings::PhysicsSettings`, re-exported by the physics API) sets one boundary grid for live and export: 15/20/30/60 Hz, new projects 30 Hz, missing saved values 60 Hz, one epoch per undoable rate edit, per-solver stability subdivisions unchanged. Both modes accept the same boundaries, so equal clock inputs give equal intervals; authored values are sampled on them. The display time is the simulation one interval of transport ago, read through the Speed history, so it stays inside the accepted pair however the frames jitter.
 
 
 ## 3. Clock, events and ownership
