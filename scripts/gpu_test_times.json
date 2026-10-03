@@ -2,6 +2,7 @@
   "measured_at": "2026-10-01",
   "sha": "seed: /tmp/gpu_gate_scope/slowest.md + land-batch-gate2.log + land-gate-bodies.log (not a full nightly run)",
   "tests": {
+    "glb_conformance_sweep": 929.8,
     "matter_bodies::matter_collider_penetration_bounded": 309.6,
     "matter_bodies::matter_fill_skips_colliders": 260.9,
     "matter_bodies::matter_body_reaction_counts_field_velocity": 248.6,

@@ -46,6 +46,7 @@ Rationale and incident history live in `.claude/GIT_TREE_DISCIPLINE.md`, the poi
 - **Shared checkout: commit with a pathspec, never the index.** `git commit -m '…' -- <paths>`, always. New files get `git add -- <exact paths>` first. Never `add -A`, never `add .`. Mechanics: `.claude/GIT_TREE_DISCIPLINE.md` section 3b.
 - **`main` is the merge-based trunk.** Work on `wave/`/`lane/`/`feat/` branches. Land by fetch, merge `origin/main` into the branch, run `scripts/landing_gate.py`, `git merge --no-ff` to main, push. Never cherry-pick or re-commit content that exists on a live branch; never delete a branch until `git merge-base --is-ancestor <tip> origin/main` passes. `branch -f main` and force-push to main are anti-patterns (hook asks). Full protocol: `.claude/GIT_TREE_DISCIPLINE.md` section 2.
 - **Agent worktrees come from the slot ring only — hook-enforced.** `scripts/agent-worktree.py acquire <task-label> <branch> [--tip REF]`, one per workstream. `POOL FULL` is a loud stop. Verify the base tip before working (a reused slot can sit behind main); release the slot at session end. Main-checkout edit exemptions and everything denied: `worktree-guard.py` docstring is the source of truth.
+- **One writer per worktree.** An agent that asked a question or reported "completed" may still be editing — check it has really stopped before launching another into that slot. A refused or unrun test is not a pass; report it as unverified.
 
 ## Two-thread model
 
@@ -78,6 +79,7 @@ Dependencies: `foundation` and `gpu` have none; `core` depends only on `foundati
 - `EditingService` is the sole mutation gateway; mutations route through `UndoRedoManager` → `Command`. Undo stack capped at 200.
 - Overlap is a write-time invariant on `Layer` (`enforce_non_overlap()`).
 - Phantom clips: created on NoteOn, committed on NoteOff. 5ms time guard, same-channel filter.
+- Reading the past never changes it. Time already simulated keeps the settings that were live then. Sampling, rendering, or re-rendering never consumes a delivery; one named operation does, exactly once, whatever the frame rate or stall.
 
 ## Hot-path discipline
 

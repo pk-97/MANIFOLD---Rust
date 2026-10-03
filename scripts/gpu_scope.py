@@ -67,6 +67,9 @@ BROAD_FILTERS = RUNTIME_FILTERS + ["render_scene_lights"]
 # into /tmp; a human commits the refresh). A test missing from the file runs.
 SLOW_THRESHOLD_S = 60
 TIMES_PATH = Path(__file__).resolve().parent / "gpu_test_times.json"
+# The glTF sweep has its own unbudgeted run (glb_conformance). Its measured time
+# only sizes the hang watchdog's allowance; it never makes the sweep "slow".
+GLB_TESTS = frozenset({"glb_conformance_sweep"})
 
 
 def load_times(path=None):
@@ -80,7 +83,8 @@ def load_times(path=None):
 def slow_tests(times=None):
     """[(name, seconds)] measured over SLOW_THRESHOLD_S, slowest first."""
     times = load_times() if times is None else times
-    return sorted(((n, s) for n, s in times.items() if s > SLOW_THRESHOLD_S),
+    return sorted(((n, s) for n, s in times.items()
+                   if s > SLOW_THRESHOLD_S and n not in GLB_TESTS),
                   key=lambda t: -t[1])
 
 
@@ -141,7 +145,7 @@ NARROW_ROWS = [
     ((RENDERER_SRC + "node_graph/primitives/gpu_flip_narrow_band_tests.rs",
       RENDERER_SRC + "node_graph/primitives/gpu_flip_narrow_band.rs",
       RENDERER_SRC + "node_graph/primitives/shaders/gpu_flip_narrow_band.wgsl"),
-     (["narrow_band"], [])),
+     (["narrow_band", "face_grid_demo_gpu_flip_and_matter_side_by_side"], [])),
     ((RENDERER_SRC + "node_graph/liquid/clock.rs",
       RENDERER_SRC + "node_graph/liquid/fields.rs",
       RENDERER_SRC + "node_graph/liquid/fields/"),
