@@ -59,7 +59,9 @@ struct MeshUniforms {
     brick_pass: u32,
     indexed: u32,
     dispatch_count: u32,
-    _pad: [u32; 3],
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 /// The first buffer's capacity in vertices, whole triangles: Starting Mesh
@@ -428,7 +430,9 @@ impl Primitive for VolumeSurfaceMesh {
             brick_pass: 0,
             indexed: u32::from(indexed),
             dispatch_count: dispatch_cells,
-            _pad: [0; 3],
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
         };
         let bricks = ctx.inputs.array("bricks");
         if bricks

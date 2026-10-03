@@ -58,7 +58,9 @@ struct SpawnUniforms {
     lifetime_variance: f32,
     dt: f32,
     dispatch_count: u32,
-    _pad: [u32; 3],
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 const FACE_PORTS: [&str; 3] = ["face_u", "face_v", "face_w"];
@@ -211,7 +213,9 @@ impl Primitive for SpawnWhitewater {
             lifetime_variance,
             dt: ctx.scalar_or_param("dt", 1.0 / 60.0),
             dispatch_count: count,
-            _pad: [0; 3],
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
         };
         let gpu = ctx.gpu_encoder();
         gpu.native_enc.dispatch_compute(

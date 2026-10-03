@@ -304,11 +304,17 @@ mod custom {
                     .map(|(f, h)| ((*f).into(), (*h).into())),
             )
             .collect();
-        // These two are vertex payloads, not uniforms. Their vertex descriptor owns
-        // the layout. The fixture files are compiled only under cfg(test).
+        // Not uniforms: two vertex payloads, whose vertex descriptor owns the
+        // layout, and one Channels wire record, whose KnownItem specs own it
+        // (proven in its module). The fixture files are compiled only under
+        // cfg(test).
         let exclusions: BTreeSet<(String, String)> = [
             ("render_lines.rs".into(), "EdgeInstance".into()),
             ("render_value_overlay.rs".into(), "GlyphQuad".into()),
+            (
+                "whitewater_obstacle_source.rs".into(),
+                "WhitewaterSource".into(),
+            ),
             (
                 "test_camera_pointwise_fixture.rs".into(),
                 "TestCameraPointwiseUniforms".into(),
@@ -343,8 +349,8 @@ mod custom {
             }
         }
         assert_eq!(
-            scalar_count, 109,
-            "buffer-family census changed; update its existing proof too (the GPU whitewater lifecycle adds advect_whitewater, retype_whitewater, age_whitewater, preserve_foam and keep_whitewater; Math View adds sample_triangle_grid and sample_mesh_triangles; the GPU liquid surface adds shape_particle_blobs, particle_volume, smooth_lattice, clamp_liquid_to_solids, count_surface_triangles and volume_surface_mesh; GPU MPM adds zero_array, matter_grid_update, grid_to_matter, matter_fill and particles_to_copies, then matter_move_bodies and liquid_solid_distance, then matter_body_reaction; GPU FLIP adds divide_by_value and liquid_fill; the liquid face grid adds face_sample_component and matter_face_component; the whitewater grid adds surface_crossings, nearest_crossing, crossing_distance, liquid_cells, lattice_curvature and extend_lattice, and its emitter jitter_particles, sample_faces_at_particles, energy_potential, wavecrest_potential and emission_count, then spawn_whitewater and whitewater_type; liquid mesh relaxation adds relax_surface_mesh; all covered by uniform_layout_proof)"
+            scalar_count, 117,
+            "buffer-family census changed: a generated layout's dispatch_count mirror is proven by uniform_layout_proof; a hand kernel's struct needs a custom ABI case here and must not name its count dispatch_count"
         );
         assert_eq!(seen_exclusions, exclusions, "stale ABI census exclusion");
         assert!(

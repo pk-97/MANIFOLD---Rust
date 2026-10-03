@@ -382,14 +382,20 @@ class LandingTests(unittest.TestCase):
         self.assertFalse(any(c[:2] == ["cargo", "nextest"] for c in commands))
         self.assertEqual(deps, 0)
 
-    def test_one_primitive_selects_only_its_module(self):
+    def test_one_primitive_selects_its_module_and_the_layout_proofs(self):
         path = "crates/manifold-renderer/src/node_graph/primitives/camera_lens.rs"
         _, _, _, commands, _, output, _ = self.exercise(paths=[path])
-        expected = "(package(=manifold-renderer) & test(/^node_graph::primitives::camera_lens::/))"
+        expected = sorted([
+            "(package(=manifold-renderer) & test(/^node_graph::primitives::camera_lens::/))",
+            "(package(=manifold-renderer) & binary(=uniform_layout_proof))",
+            "(package(=manifold-renderer) & binary(=uniform_layout_extended))",
+        ])
         scoped = [c for c in commands if c[:2] == ["cargo", "nextest"] and "test(regenerates_in_sync)" not in c]
-        self.assertEqual(len(scoped), 2)
-        self.assertTrue(all(c[c.index("-E") + 1] == expected for c in scoped))
-        self.assertIn("[tests] filterset: " + expected, output)
+        builds = [c[c.index("-E") + 1] for c in scoped if "--no-run" in c]
+        runs = sorted(c[c.index("-E") + 1] for c in scoped if "--no-run" not in c)
+        self.assertEqual(builds, [" | ".join(expected)])
+        self.assertEqual(runs, expected)
+        self.assertIn("[tests] filterset: " + " | ".join(expected), output)
 
 
 class DiffScopeTests(unittest.TestCase):
@@ -449,6 +455,25 @@ class DiffScopeTests(unittest.TestCase):
             plan = cpu_scope.plan_for_paths(["crates/manifold-renderer/assets/generator-presets/Water.json"], d)
             self.assertEqual(plan.filterset, "(package(=manifold-renderer) & test(/^node_graph::bundled_presets::/))")
             self.assertEqual(plan.packages, {"manifold-renderer"})
+
+    def test_primitive_source_selects_the_uniform_layout_proofs(self):
+        with tempfile.TemporaryDirectory() as d:
+            plan = cpu_scope.plan_for_paths(
+                ["crates/manifold-renderer/src/node_graph/primitives/blob_bounds.rs"], d)
+            self.assertIn("(package(=manifold-renderer) & binary(=uniform_layout_proof))", plan.filters)
+            self.assertIn("(package(=manifold-renderer) & binary(=uniform_layout_extended))", plan.filters)
+            self.assertNotIn("binary(=wgsl_validation)", plan.filterset)
+
+    def test_shader_selects_wgsl_validation_and_hand_abi_proof(self):
+        with tempfile.TemporaryDirectory() as d:
+            plan = cpu_scope.plan_for_paths(
+                ["crates/manifold-renderer/src/node_graph/primitives/shaders/blob_bounds.wgsl"], d)
+            self.assertEqual(plan.filters, {
+                "(package(=manifold-renderer) & binary(=uniform_layout_extended))",
+                "(package(=manifold-renderer) & binary(=wgsl_validation))",
+            })
+            effect = cpu_scope.plan_for_paths(["crates/manifold-renderer/src/effects/shaders/fx_bloom.wgsl"], d)
+            self.assertEqual(effect.filterset, "(package(=manifold-renderer) & binary(=wgsl_validation))")
 
     def test_flow_scope_uses_only_effective_paths(self):
         import run_ui_flows

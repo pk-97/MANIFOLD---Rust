@@ -208,9 +208,12 @@ fn rust_struct(name: &str, src: &Source, depth: usize) -> Result<Layout, String>
                 }
             })
             .map_err(|e| e.to_string())?;
+        // A cfg on the whole struct decides whether it exists, never its
+        // layout; a cfg on a field is rejected below.
         } else if !attr.path().is_ident("derive")
             && !attr.path().is_ident("doc")
             && !attr.path().is_ident("allow")
+            && !attr.path().is_ident("cfg")
         {
             return Err(format!("unsupported struct attribute on {name}"));
         }
@@ -556,5 +559,7 @@ mod tests {
         ] {
             assert!(compare_source(host, "U", "struct U { a: f32 }", "U", &[]).is_err());
         }
+        let gated = "#[cfg(feature = \"gpu-proofs\")] #[repr(C)] struct U { a: f32 }";
+        assert!(compare_source(gated, "U", "struct U { a: f32 }", "U", &[]).is_ok());
     }
 }

@@ -23,7 +23,9 @@ struct CountUniforms {
     nodes_z: f32,
     brick_pass: u32,
     dispatch_count: u32,
-    _pad: [u32; 3],
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 crate::primitive! {
@@ -104,7 +106,9 @@ impl Primitive for CountSurfaceTriangles {
             nodes_z: nodes[2],
             brick_pass: 0,
             dispatch_count: capacity,
-            _pad: [0; 3],
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
         };
         let bricks = ctx.inputs.array("bricks");
         if bricks
