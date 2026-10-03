@@ -89,6 +89,37 @@ fn fluid_impulse_stamp_tracks_target_time_from_exact_transport() {
 }
 
 #[test]
+fn fluid_source_samples_preserve_project_intervals_and_audio_hits() {
+    use crate::node_graph::physics::PhysicsStepScope;
+
+    for project_fps in [24.0, 60.0] {
+        let _export = PhysicsStepScope::for_project_rate(true, project_fps);
+        let dt = 1.0 / project_fps;
+        let mut runtime = FluidRuntime::default();
+        observe(&mut runtime, 0.0, 0.0);
+        runtime.advance(true).unwrap();
+        observe(&mut runtime, dt, 0.0);
+        runtime.advance(true).unwrap();
+        for (sequence, source) in [dt, 1.5 * dt, 2.0 * dt].into_iter().enumerate() {
+            let _producer = PhysicsStepScope::for_render(false);
+            let _sample = PhysicsAuthoredSampleScope::new();
+            observe(&mut runtime, source, 0.0);
+            let stamp = runtime.impulse_stamp(Seconds(source), sequence as u64).unwrap();
+            runtime.enqueue_impulse(stamp, FieldValue::uniform([1.0, 0.0, 0.0]).unwrap()).unwrap();
+            assert_eq!(runtime.clock.ticks_done(), 1, "sampling must not consume a project interval");
+        }
+        for frame in [2.0, 3.0] {
+            observe(&mut runtime, frame * dt, 0.0);
+            runtime.advance(true).unwrap();
+        }
+        assert_eq!(runtime.simulation_time(), 3.0 * dt);
+        assert_eq!(runtime.completed_tick, 3);
+        let sequences: Vec<_> = runtime.drain_applied_impulses().map(|event| event.source.sequence).collect();
+        assert_eq!(sequences, [0, 1, 2]);
+    }
+}
+
+#[test]
 fn fluid_impulse_stamp_rejects_withheld_authored_settings_and_recovers_in_live_setup() {
     let mut runtime = FluidRuntime::default();
     observe(&mut runtime, 0.0, 0.0);

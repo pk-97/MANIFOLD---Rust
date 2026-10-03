@@ -1038,7 +1038,20 @@ mod tests {
             &mut errors,
         );
         assert!(errors.is_empty(), "{errors:?}");
-        assert!((fluid.runtime.simulation_time() - 2.0 / 60.0).abs() < 1e-8);
+        // A speed edit starts at its observation; the preceding interval
+        // retains speed 1, then the next interval advances at shared speed 2.
+        assert!((fluid.runtime.simulation_time() - 1.0 / 60.0).abs() < 1e-8);
+        assert!(Primitive::coupled_rigid_frame(&fluid).is_some());
+        let third = coupled_observation(2.0 / 60.0, 2.0, 0.0);
+        Primitive::set_coupled_rigid_inputs(
+            &mut fluid,
+            Some(&third),
+            RigidImpulseTargets::default(),
+            None,
+        );
+        run_mock_with_scalars(&mut fluid, &params, &[("speed", 2.0)], 2.0 / 60.0, &mut errors);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert!((fluid.runtime.simulation_time() - 3.0 / 60.0).abs() < 1e-8);
         assert!(Primitive::coupled_rigid_frame(&fluid).is_some());
     }
 
@@ -1099,7 +1112,20 @@ mod tests {
         errors.clear();
         run_mock_with_scalars(&mut fluid, &params, &[("speed", 2.0)], 1.0 / 60.0, &mut errors);
         assert!(errors.is_empty(), "{errors:?}");
-        assert!((fluid.runtime.simulation_time() - 2.0 / 60.0).abs() < 1e-8);
+        // A speed edit starts at its observation; the preceding interval
+        // retains speed 1, then the next interval advances at shared speed 2.
+        assert!((fluid.runtime.simulation_time() - 1.0 / 60.0).abs() < 1e-8);
+        assert!(Primitive::coupled_rigid_frame(&fluid).is_some());
+        let third = coupled_observation(2.0 / 60.0, 2.0, 0.0);
+        Primitive::set_coupled_rigid_inputs(
+            &mut fluid,
+            Some(&third),
+            RigidImpulseTargets::default(),
+            None,
+        );
+        run_mock_with_scalars(&mut fluid, &params, &[("speed", 2.0)], 2.0 / 60.0, &mut errors);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert!((fluid.runtime.simulation_time() - 3.0 / 60.0).abs() < 1e-8);
         assert!(Primitive::coupled_rigid_frame(&fluid).is_some());
     }
 

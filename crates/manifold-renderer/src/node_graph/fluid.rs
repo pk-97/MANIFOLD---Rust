@@ -1039,9 +1039,11 @@ impl FluidRuntime {
         if let Some(error) = &self.failure {
             return Err(error.clone());
         }
+        // Source/history samples map inputs to simulation time without
+        // consuming frame sequences. Only a render or an explicit offline
+        // drain accepts intervals that the worker will actually execute.
         let clock_frame = if self.cache_mode == CacheMode::Live
-            && (!crate::node_graph::physics::offline_simulation()
-                || !super::physics::authored_sample_only()
+            && (!super::physics::authored_sample_only()
                 || super::physics::history_drain_requested())
         {
             Some(self.clock.advance(

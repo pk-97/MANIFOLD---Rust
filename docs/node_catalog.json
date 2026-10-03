@@ -8403,6 +8403,11 @@
           "name": "live_count",
           "required": false,
           "type": "f32"
+        },
+        {
+          "name": "dt",
+          "required": false,
+          "type": "f32"
         }
       ],
       "label": "Emission Count",
@@ -8453,9 +8458,19 @@
             "1000000000"
           ],
           "type": "float"
+        },
+        {
+          "default": "0.016666668",
+          "label": "Duration (s)",
+          "name": "dt",
+          "range": [
+            "0",
+            "1000"
+          ],
+          "type": "float"
         }
       ],
-      "purpose": "How many whitewater particles each liquid particle emits this frame: FLIP's count per tick, Wavecrest Emission × energy potential × wavecrest potential × 1/60 s × 8 / Points per Cell, rounded to a whole number on its own each tick and multiplied by the frame's Ticks. FLIP's rate is set for 8 particles per cell; the 8 / Points per Cell factor keeps the amount the same for any solver's sampling. 0 for slots at or past Live Count, slots with radius 0, and particles slower than 1 mm/s. One u32 per particle slot.",
+      "purpose": "How many whitewater particles each liquid particle emits this frame: FLIP's count per tick, Wavecrest Emission × energy potential × wavecrest potential × Duration × 8 / Points per Cell, rounded to a whole number on its own each tick and multiplied by the frame's Ticks. FLIP's rate is set for 8 particles per cell; the 8 / Points per Cell factor keeps the amount the same for any solver's sampling. 0 for slots at or past Live Count, slots with radius 0, and particles slower than 1 mm/s. One u32 per particle slot.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Works out how many foam, spray and bubble particles each bit of breaking water throws off this frame.",
@@ -14082,6 +14097,41 @@
           "type": "f32"
         },
         {
+          "name": "interval_duration",
+          "type": "f32"
+        },
+        {
+          "name": "clock_obstacle_count",
+          "type": "f32"
+        },
+        {
+          "name": "clock_source_count",
+          "type": "f32"
+        },
+        {
+          "capacity": "fixed:1",
+          "name": "clock_obstacles",
+          "type": "Array"
+        },
+        {
+          "capacity": "fixed:1",
+          "name": "clock_sources",
+          "type": "Array"
+        },
+        {
+          "capacity": "fixed:1",
+          "name": "live_hits",
+          "type": "Array"
+        },
+        {
+          "name": "live_hit_count",
+          "type": "f32"
+        },
+        {
+          "name": "target_time",
+          "type": "f32"
+        },
+        {
           "name": "display_time",
           "type": "f32"
         },
@@ -14441,6 +14491,11 @@
           "type": "f32"
         },
         {
+          "name": "interval_duration",
+          "required": false,
+          "type": "f32"
+        },
+        {
           "name": "bodies",
           "required": false,
           "type": "Array"
@@ -14492,6 +14547,36 @@
         },
         {
           "name": "solve_level",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "clock_obstacles",
+          "required": false,
+          "type": "Array"
+        },
+        {
+          "name": "clock_obstacle_count",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "clock_sources",
+          "required": false,
+          "type": "Array"
+        },
+        {
+          "name": "clock_source_count",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "live_hits",
+          "required": false,
+          "type": "Array"
+        },
+        {
+          "name": "live_hit_count",
           "required": false,
           "type": "f32"
         },
@@ -14568,6 +14653,11 @@
         {
           "capacity": "inputs:2018@1000,2066@1024",
           "name": "capped",
+          "type": "Array"
+        },
+        {
+          "capacity": "fixed:8",
+          "name": "clock_status",
           "type": "Array"
         }
       ],
@@ -19081,6 +19171,11 @@
           "type": "Array"
         },
         {
+          "name": "clock_status_in",
+          "required": false,
+          "type": "Array"
+        },
+        {
           "name": "faces_in",
           "required": true,
           "type": "Array"
@@ -19136,6 +19231,16 @@
           "type": "f32"
         },
         {
+          "name": "simulation_time",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "target_time",
+          "required": false,
+          "type": "f32"
+        },
+        {
           "name": "epoch",
           "required": false,
           "type": "f32"
@@ -19166,6 +19271,11 @@
         {
           "capacity": "fixed:28",
           "name": "stats",
+          "type": "Array"
+        },
+        {
+          "capacity": "fixed:8",
+          "name": "clock_status",
           "type": "Array"
         },
         {
@@ -19222,7 +19332,7 @@
         }
       ],
       "params": [],
-      "purpose": "Hold a particle liquid across frames and run its tick region: seed the particles when the epoch changes, then repeat the region once per due tick with the tick's index. The region's last particles become the state, and its last stats, face grid and optional cell-centred interior distance escape with them; a new epoch's faces are zero. A tick with non-finite values or narrow-band capacity shortage halts the liquid with an error until Reset.",
+      "purpose": "Hold a particle liquid across frames and run its tick region: seed the particles when the epoch changes, then repeat the region once per due tick with the tick's index. The region's last particles become the state, and its last stats, optional interior distance and its last tick's face grid escape with them; a new epoch's faces are zero. Live GPU FLIP non-finite values report an error and reseed particles without stopping the show or resetting simulation time. Narrow-band capacity shortage halts until Reset; other solver fault handling is unchanged.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Keeps a particle liquid between frames and runs one pass of its simulation per tick.",
@@ -21141,6 +21251,18 @@
           "type": "f32"
         },
         {
+          "name": "interval_duration",
+          "type": "f32"
+        },
+        {
+          "name": "target_time",
+          "type": "f32"
+        },
+        {
+          "name": "step_cap_hit",
+          "type": "f32"
+        },
+        {
           "name": "display_time",
           "type": "f32"
         },
@@ -22758,6 +22880,26 @@
         },
         {
           "name": "ticks",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "interval_duration",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "simulation_time",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "target_time",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "step_cap_hit",
           "required": false,
           "type": "f32"
         },
@@ -40650,6 +40792,11 @@
           "name": "epoch",
           "required": false,
           "type": "f32"
+        },
+        {
+          "name": "dt",
+          "required": false,
+          "type": "f32"
         }
       ],
       "label": "Spawn Whitewater",
@@ -40850,9 +40997,19 @@
             "1000"
           ],
           "type": "float"
+        },
+        {
+          "default": "0.016666668",
+          "label": "Duration (s)",
+          "name": "dt",
+          "range": [
+            "0",
+            "1000"
+          ],
+          "type": "float"
         }
       ],
-      "purpose": "Place this frame's new whitewater particles, one per spawn slot, by FLIP's emitter rule. The running total's last entry is the frame's emission count; slot j takes emission j, or past Capacity an even subset (emission ⌊j · total / Capacity⌋). Its emitter is the liquid particle whose running total first passes it. The new particle lands at random in a cylinder about that particle's velocity, 8 of FLIP's marker radii wide and one 60 fps tick of its travel long. It is dropped outside the whitewater grid or within a quarter cell of a solid; its lifetime is Min Lifetime + energy × (Max − Min) ± Lifetime Variance, dropped at or below 0; its velocity is the liquid's at its position. Dropped and unused slots have lifetime 0. Kind is left 0 for node.whitewater_type.",
+      "purpose": "Place this frame's new whitewater particles, one per spawn slot, by FLIP's emitter rule. The running total's last entry is the frame's emission count; slot j takes emission j, or past Capacity an even subset (emission ⌊j · total / Capacity⌋). Its emitter is the liquid particle whose running total first passes it. The new particle lands at random in a cylinder about that particle's velocity, 8 of FLIP's marker radii wide and Duration seconds of its travel long. It is dropped outside the whitewater grid or within a quarter cell of a solid; its lifetime is Min Lifetime + energy × (Max − Min) ± Lifetime Variance, dropped at or below 0; its velocity is the liquid's at its position. Dropped and unused slots have lifetime 0. Kind is left 0 for node.whitewater_type.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Places the new foam, spray and bubble particles around the breaking water that throws them off.",
@@ -46559,6 +46716,11 @@
         },
         {
           "name": "ticks",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "dt",
           "required": false,
           "type": "f32"
         },
