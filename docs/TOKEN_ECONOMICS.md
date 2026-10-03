@@ -91,4 +91,4 @@ Call 600 costs **6x** what call 20 cost, for identical work. Session totals:
 
 **12% of sessions burn 50% of all tokens.**
 
-> **Rotate worker seats at ~200K context (around call 150).** At 500K every subsequent call costs half a megatoken. This is the single largest lever in this document, and `context-ceiling-guard.py` enforces it: warn at 150K, stop at 200K. Workers only; the lead seat is exempt (Peter, 2026-07-24).
+> **Rotate worker seats at ~200K context (around call 150).** At 500K every subsequent call costs half a megatoken. This is the single largest lever in this document. Workers only; the lead seat is exempt (Peter, 2026-07-24). The hook that enforced it was retired 2026-10-03 after 120k fires and zero interventions: well-shaped workers never got near the ceiling.

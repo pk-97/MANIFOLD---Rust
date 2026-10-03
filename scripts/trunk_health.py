@@ -122,6 +122,9 @@ def main():
         # gate made invisible (SCENE_LOOP shipped broken behind one).
         # Cheap, runs first so it files before the long legs.
         ["python3", ".claude/hooks/ignored-test-guard.py", "--scan"],
+        # Stale open beads get one forced verb a night (fix, demote, close)
+        # instead of a nag at every session start.
+        ["python3", "scripts/stale_beads.py"],
         ["cargo", "clippy", "--workspace", "--tests", "--", "-D", "warnings"],
         ["cargo", "nextest", "run", "--workspace"],
         ["cargo", "deny", "check", "bans"],

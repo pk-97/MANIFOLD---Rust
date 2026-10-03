@@ -1,6 +1,6 @@
 # Gate Runtime — verdicts the machine writes, not claims the lanes make
 
-**Status:** SHIPPED 2026-07-25 (L1) — P1–P5 on main (core, pre-wave, linter, pre-land clause + report with the I1 verdict-before-merge hook, SubagentStop firing) plus same-day follow-up fixes, all in beads/git. AMENDED 2026-07-27: D9 gaming scan + fail-streak directive, D10 trail-as-counter + hook-liveness pre-wave checks (Peter + Fable). Owed: P5 SubagentStop live-fire confirm — first executor lane in a new session; payload log `/tmp/manifold_subagent_stop_payloads.jsonl` is the trail. · k3 (lead)
+**Status:** SHIPPED 2026-07-25 (L1) — P1–P5 on main (core, pre-wave, linter, pre-land clause + report with the I1 verdict-before-merge hook, SubagentStop firing; that hook retired 2026-10-03). AMENDED 2026-07-27: D9 gaming scan + fail-streak directive, D10 trail-as-counter + hook-liveness pre-wave checks (Peter + Fable). Owed: none. · k3 (lead)
 **Prerequisites:** none. Self-hosts from P1 onward (P2+ land under their own verdicts).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -114,6 +114,8 @@ Each phase is one session, Flash-executable: the seams are decided above; phases
 - **Forbidden moves:** parsing git log for "task mentions" as coverage (coverage = verdict trail, D6); allowing `--no-verify`-style bypass flags; exempting "small" landings by diff size (D6's honest cost applies to everyone, lead included).
 
 ### P5 — SubagentStop firing (per-lane, harness-native)
+
+Retired 2026-10-03: the hook fired 3.6k times and never blocked a stop. Lanes run their declared gates themselves and report verbatim (AGENT_ROUTING.md section The brief contract); `gate_runner per-lane` stays available for the lead to run on demand.
 
 - **Entry state:** P1–P4 landed. ⚠ VERIFY-AT-IMPL: SubagentStop payload fields — probe with a logging hook first (lane-report-enforcer.py's payload-logging is the precedent); if the payload can't identify the lane's task/branch, this phase escalates, does not improvise.
 - **Read-back:** D2, D4; lane-report-enforcer.py (blocking-hook mechanics on a lane lifecycle event).
