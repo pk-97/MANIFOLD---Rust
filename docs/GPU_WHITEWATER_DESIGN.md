@@ -490,6 +490,7 @@ Phasing completeness: every behaviour in sections 3.1–3.7 lands in one phase a
 
 - **Deliverables:** CPU extent proof for the pool; the GPU lifecycle in the GPU FLIP Dam Break at 64 only; a side-by-side 150-frame per-type count against the vendored lifecycle, read-only.
 - **Notes (2026-10-01):** `whitewater_step_against_vendored_lifecycle_150` (gpu-proofs) runs the same water into the node and into the replaced group, kept as `tests/fixtures/whitewater_vendored_group.json` for this and O2. Foam, bubble and spray populations match on 142 of 150 frames and are never more than 2 particles apart; summed over the run, 290,045 / 68,968 / 67,252 against 290,048 / 68,965 / 67,253. Frame 150: 4,079 / 3,124 / 229 on both. `emitted` differs by definition: the group's counts the emitters' requests before spawn rejection, the node's the spawns it kept.
+- **Notes (2026-10-04):** the step now runs every engine emitter (BUG-imy3.1 (engine emitters)), which the vendored lifecycle lacks, so it makes 1.8–5.9× the vendored count per type over the 150 frames. The test prints the comparison and asserts only that both sides make whitewater; BUG-z0p7p (whitewater parity oracle) owes a reference with the full emitter set.
 
 ### L6 — Retire the CPU lifecycle path
 

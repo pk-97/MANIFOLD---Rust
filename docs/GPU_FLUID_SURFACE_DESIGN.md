@@ -46,7 +46,7 @@ defaults where that node omits a value. Its metadata controls contain older defa
 and are not the initial node state. Baseline: `4208155f5`.
 
 This is a source audit, not a GPU or visual parity claim. Counts are table rows
-(related values are grouped): **43 matched, 17 ported, 4 partly ported, 2 deviations, 3 unported**. The unported rows mean full engine
+(related values are grouped): **43 matched, 19 ported, 2 partly ported, 2 deviations, 3 unported**. The unported rows mean full engine
 parity is not achieved.
 
 The marker volume is `h³/8`; `4πr³/3 = h³/8` gives
@@ -108,9 +108,9 @@ The GPU stores the nearest f32 marker coefficient, `0.31017524`.
 | Foam advection strength | 1 | 1 | 1 | matched | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:492`; `crates/manifold-renderer/src/node_graph/primitives/shaders/advect_whitewater_body.wgsl:186` |
 | Spray drag / variance / emission speed | 0 / 0.25 / 1 | 0 / 0.25 / 1 | 0 / 0.25 / 1 | matched | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:499`; `crates/manifold-renderer/src/node_graph/primitives/shaders/spawn_whitewater_body.wgsl:19` |
 | Spray friction / restitution | 0 / 0.2 | 0 / 0.2 | 0 / 0.2 | matched | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:502`; `crates/manifold-renderer/src/node_graph/primitives/shaders/advect_whitewater_body.wgsl:27` |
-| Whitewater classification distance | upwind-reinitialised surface phi | raw padded solver phi | engine valid-band/upwind rule before padding | CPU reference + compiled GPU proof; execution owed | `particlelevelset.cpp:263`, `levelsetsolver.cpp:82`; `whitewater_distance.rs`, `upwind_distance.rs` |
+| Whitewater classification distance | upwind-reinitialised surface phi | raw padded solver phi | engine valid-band/upwind rule before padding | ported; `whitewater_engine_distance_values_and_fusion` passes on the GPU | `particlelevelset.cpp:263`, `levelsetsolver.cpp:82`; `whitewater_distance.rs`, `upwind_distance.rs` |
 | Whitewater motion schedule | each accepted liquid substep | once per outer tick | exact accepted durations and MAC snapshots | motion port; retype/emission/solids remain outer-interval sampled | `diffuseparticlesimulation.cpp:2250`; `liquid/substep_history.rs`, `advect_whitewater.rs` |
-| Whitewater force fields / hits | per-type force sampling; foam follows vmac | gravity only | same domain field buffers and timestamped event indices as liquid | no duplicate physics values; GPU execution owed | `diffuseparticlesimulation.cpp:2658`; `liquid/fields.rs` |
+| Whitewater force fields / hits | per-type force sampling; foam follows vmac | gravity only | same domain field buffers and timestamped event indices as liquid | ported; no duplicate physics values; `whitewater_engine_substep_force_hit_values_and_fusion` passes on the GPU | `diffuseparticlesimulation.cpp:2658`; `liquid/fields.rs` |
 | Whitewater mesh drains | strict negative posed source SDF | absent | same region/shape/atlas inputs and strict boundary | final interval pose; intermediate drain crossings remain a deviation | `fluidsimulation.cpp:9034`; `keep_whitewater.rs` |
 | Whitewater max particles per cell | 5000 | 5000 | 5000 | matched | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:504`; `crates/manifold-renderer/src/node_graph/primitives/keep_whitewater.rs:22` |
 | Emitter radius / jitter | 8 marker radii / 1 | 8 marker radii / 1 | 8 marker radii / 1 | matched | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:505`; `crates/manifold-renderer/src/node_graph/primitives/shaders/spawn_whitewater_body.wgsl:22` |
