@@ -270,6 +270,23 @@ pub(super) fn sort_and_shape(
     )
 }
 
+/// node.blob_bounds over `blobs`: the bounds the field consumers require,
+/// produced the way the shipped surface group produces them.
+pub(super) fn blob_bounds(harness: &mut Harness, blobs: Slot) -> Slot {
+    let (bounds, _) = harness.array::<f32>(&[], 2);
+    // The executor prepares the reduction before its first run; so does this.
+    let mut node = super::blob_bounds::BlobBounds::new();
+    node.prepare_pipelines(&harness.device);
+    let (_, errors) = harness.run(
+        &mut node,
+        &[("blobs", blobs)],
+        &[("bounds", bounds)],
+        &params(&[]),
+    );
+    assert!(errors.is_empty(), "{errors:?}");
+    bounds
+}
+
 #[test]
 fn fluid_sort_particles_into_cells_is_a_binned_permutation() {
     let mut harness = Harness::new();
@@ -431,9 +448,10 @@ fn fluid_searchers_refuse_bins_past_their_ranges() {
     let (solid, _) = harness.array(&[1.0_f32; 729], 729);
     let (levelset, _) = harness.array::<f32>(&[], 17 * 17 * 17);
     let volume = lattice.params(&[("nodes_x", solid_nodes), ("nodes_y", solid_nodes), ("nodes_z", solid_nodes)]);
+    let bounds = blob_bounds(&mut harness, blobs);
     let (_, errors) = harness.run(
         &mut ParticleVolume::new(),
-        &[("blobs", blobs), ("cell_ranges", short), ("solid", solid)],
+        &[("blobs", blobs), ("cell_ranges", short), ("solid", solid), ("bounds", bounds)],
         &[("levelset", levelset)],
         &volume,
     );
@@ -1082,9 +1100,10 @@ fn volume_distance_on_lattice(band_extra: f32, lattice: Lattice, solid_nodes: [u
     ]);
     node_params.insert(Cow::Borrowed("resolution_scale"), ParamValue::Float(scale as f32));
     let volume_nodes: [Slot; 3] = std::array::from_fn(|_| harness.scalar());
+    let bounds_slot = blob_bounds(&mut harness, blobs_slot);
     let (scalars, errors) = harness.run(
         &mut ParticleVolume::new(),
-        &[("blobs", blobs_slot), ("cell_ranges", ranges_slot), ("solid", solid_slot)],
+        &[("blobs", blobs_slot), ("cell_ranges", ranges_slot), ("solid", solid_slot), ("bounds", bounds_slot)],
         &[
             ("levelset", levelset_slot),
             ("volume_nodes_x", volume_nodes[0]),
@@ -1105,14 +1124,14 @@ fn volume_distance_on_lattice(band_extra: f32, lattice: Lattice, solid_nodes: [u
         let (bricks, _) = harness.array::<u32>(&[], layout.words as usize);
         let (_, errors) = harness.run(
             &mut LatticeBricks::new(),
-            &[("blobs", blobs_slot), ("cell_ranges", ranges_slot), ("solid", solid_slot)],
+            &[("blobs", blobs_slot), ("cell_ranges", ranges_slot), ("solid", solid_slot), ("bounds", bounds_slot)],
             &[("bricks", bricks)], &node_params,
         );
         assert!(errors.is_empty(), "{errors:?}");
         let (sparse, sparse_buf) = harness.array::<f32>(&[], total);
         let (_, errors) = harness.run(
             &mut ParticleVolume::new(),
-            &[("blobs", blobs_slot), ("cell_ranges", ranges_slot), ("solid", solid_slot), ("bricks", bricks)],
+            &[("blobs", blobs_slot), ("cell_ranges", ranges_slot), ("solid", solid_slot), ("bounds", bounds_slot), ("bricks", bricks)],
             &[("levelset", sparse)], &node_params,
         );
         assert!(errors.is_empty(), "{errors:?}");
@@ -1179,9 +1198,10 @@ fn fluid_particle_volume_is_the_distance_to_a_lone_sphere() {
     let total = nodes.iter().product::<u32>() as usize;
     let (levelset_slot, levelset_buf) = harness.array::<f32>(&[], total);
     let volume_nodes: [Slot; 3] = std::array::from_fn(|_| harness.scalar());
+    let bounds_slot = blob_bounds(&mut harness, blobs_slot);
     let (_, errors) = harness.run(
         &mut ParticleVolume::new(),
-        &[("blobs", blobs_slot), ("cell_ranges", ranges_slot), ("solid", solid_slot)],
+        &[("blobs", blobs_slot), ("cell_ranges", ranges_slot), ("solid", solid_slot), ("bounds", bounds_slot)],
         &[
             ("levelset", levelset_slot),
             ("volume_nodes_x", volume_nodes[0]),
@@ -2381,9 +2401,10 @@ fn fluid_liquid_surface_keeps_padding_and_border_air_at_extreme_dials() {
     let (solid_slot, _) = harness.array(&solid, solid.len());
     let (levelset_slot, _) = harness.array::<f32>(&[], capacity);
     let volume_nodes: [Slot; 3] = std::array::from_fn(|_| harness.scalar());
+    let bounds_slot = blob_bounds(&mut harness, blobs_slot);
     let (_, errors) = harness.run(
         &mut ParticleVolume::new(),
-        &[("blobs", blobs_slot), ("cell_ranges", ranges_slot), ("solid", solid_slot)],
+        &[("blobs", blobs_slot), ("cell_ranges", ranges_slot), ("solid", solid_slot), ("bounds", bounds_slot)],
         &[
             ("levelset", levelset_slot),
             ("volume_nodes_x", volume_nodes[0]),

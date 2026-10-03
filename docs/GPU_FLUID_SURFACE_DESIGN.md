@@ -46,7 +46,7 @@ defaults where that node omits a value. Its metadata controls contain older defa
 and are not the initial node state. Baseline: `4208155f5`.
 
 This is a source audit, not a GPU or visual parity claim. Counts are table rows
-(related values are grouped): **43 matched, 10 ported, 1 deviation, 4 clock, 6 unported**. Clock rows belong to BUG-7qzk and are
+(related values are grouped): **43 matched, 9 ported, 2 deviations, 4 clock, 6 unported**. Clock rows belong to BUG-7qzk and are
 unchanged. The unported rows mean full engine parity is not achieved.
 
 The marker volume is `h³/8`; `4πr³/3 = h³/8` gives
@@ -74,7 +74,7 @@ The GPU stores the nearest f32 marker coefficient, `0.31017524`.
 | Obstacle collision buffer / march / maximum push | 0.2h / 0.1h / 5h | 0.2h / 0.1h / 5h | 0.2h / 0.1h / 5h | matched | `crates/manifold-fluids/native/flip_engine/fluidsimulation.h:2566`; `crates/manifold-renderer/src/node_graph/primitives/shaders/gpu_flip_step.wgsl:2006` |
 | Liquid SDF radius / exact band | sqrt(3)/2 h / 3h | sqrt(3)/2 h / 3h | sqrt(3)/2 h / 3h | matched | `crates/manifold-fluids/native/flip_engine/fluidsimulation.h:2305`; `crates/manifold-renderer/src/node_graph/primitives/shaders/gpu_flip_step.wgsl:1669` |
 | Pressure relative tolerance / absolute ceiling | 1e-9 / 1 | 1e-9 / 1 | 1e-9 / 1 | matched | `crates/manifold-fluids/native/flip_engine/fluidsimulation.h:2489`; `crates/manifold-renderer/src/node_graph/primitives/shaders/gpu_flip_pressure.wgsl:1021` |
-| Pressure maximum CG iterations | 900 | 64 | 900 | ported | `crates/manifold-fluids/native/flip_engine/fluidsimulation.h:2491`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_pressure.rs:43` |
+| Pressure maximum CG iterations | 900 | 64 | 64: deliberate deviation; 900 bounds the engine's MIC-preconditioned solve, ours converges in 10–15, and every round to the cap is encoded for each solve of each clock slot, so 900 took a saved 64 layer from 102 to 408 ms GPU a frame; BUG-fwp2n (unused solver rounds cost encode time) restores 900 | deviation | `crates/manifold-fluids/native/flip_engine/fluidsimulation.h:2491`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_pressure.rs:43` |
 | Pressure ghost theta / matrix epsilon | ±25 / 1e-9 | ±25 / 1e-9 | ±25 / 1e-9 | matched | `crates/manifold-fluids/native/flip_engine/pressuresolver.cpp:681`; `crates/manifold-renderer/src/node_graph/primitives/shaders/gpu_flip_pressure.wgsl:304` |
 | Velocity projection ghost epsilon | 1e-6 | 1e-9 | 1e-6 | ported | `crates/manifold-fluids/native/flip_engine/pressuresolver.cpp:1112`; `crates/manifold-renderer/src/node_graph/primitives/shaders/gpu_flip_step.wgsl:1764` |
 | Additional density projection | absent | enabled | enabled: deliberate deviation; without it the Dam Break settles 21.5% too deep at 64 (interior 6.6 against 8 a cell after 1800 frames); BUG-irim0 (engine volume mechanism) | deviation | `crates/manifold-fluids/native/flip_engine/fluidsimulation.cpp:6515`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_preset.rs:139` |
@@ -147,9 +147,11 @@ The new `blob_bounds` operation is a barriered maximum reduction (ADDING_PRIMITI
 exclusion 1). Inventory: existing `peak` reduces textures and cannot consume blob
 records; the sort supplies ranges but does not measure shaped-kernel reach.
 Both `particle_volume` and `lattice_bricks` consume the two-word reduction across
-all five presets. The field remains a codegen BufferGather atom. Saved graphs
-without the optional bound wire explicitly compute the same maximum; no radius
-cap or approximate search is used. `FluidBlob.shape_off.w` now carries centre
+all five presets. The field remains a codegen BufferGather atom. The bounds
+wire is required: a graph saved before it gets the shipped wiring at load
+(`graph_loader.rs` `wire_blob_bounds`), because recomputing the maximum per
+lattice node read the whole blob pool at every node (1.37 s a frame on a saved
+64 layer). No radius cap or approximate search is used. `FluidBlob.shape_off.w` now carries centre
 displacement; its ABI size remains 48 bytes. Fill Pits retains its extra support
 and sparse smoothing/normal halo. Production borders use the solid field;
 `ParticleMesher::getPreviewMesh` alone invokes `_setScalarFieldSolidBorders`.

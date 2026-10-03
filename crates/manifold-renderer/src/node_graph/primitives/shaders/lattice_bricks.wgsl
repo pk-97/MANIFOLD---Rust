@@ -28,7 +28,7 @@ struct Params {
     bricks_z: u32,
     brick_count: u32,
     band_extra: f32,
-    bounds_len: u32,
+    _pad1: u32,
 }
 
 struct Blob {
@@ -78,16 +78,8 @@ fn mark_brick(id: u32) -> u32 {
     let lo = domain_min + vec3<f32>(lo_node) * size / vec3<f32>(nodes - vec3<u32>(1u));
     let hi = domain_min + vec3<f32>(hi_node) * size / vec3<f32>(nodes - vec3<u32>(1u));
     let extra = params.band_extra + select(0.0, length(size / vec3<f32>(nodes - vec3<u32>(1u))), params.band_extra > 0.0);
-    var bound = vec2<f32>(0.0);
-    if params.bounds_len == 2u {
-        bound = vec2<f32>(bounds[0], bounds[1]);
-    } else {
-        for (var k = 0u; k < arrayLength(&blobs); k += 1u) {
-            let blob = blobs[k];
-            let r = blob.center_radius.w;
-            if r > 0.0 { bound = max(bound, vec2<f32>(r, 1.5 * r + blob.shape_off.w)); }
-        }
-    }
+    // node.blob_bounds' largest kernel support sets how many bins to search.
+    let bound = vec2<f32>(bounds[0], bounds[1]);
     let h = size / vec3<f32>(nodes - vec3<u32>(1u));
 
     // A domain border brick is retained even when no blob is present.  This

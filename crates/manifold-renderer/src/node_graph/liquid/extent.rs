@@ -1041,8 +1041,8 @@ fn blob_bounds(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.covers("bounds", 8)
 }
 
-fn optional_blob_bounds(x: &AtomExtent<'_>) -> Result<(), Verdict> {
-    if x.wired("bounds") && x.bytes("bounds") != Some(8) {
+fn required_blob_bounds(x: &AtomExtent<'_>) -> Result<(), Verdict> {
+    if x.bytes("bounds") != Some(8) {
         return Err(x.uncovered("bounds must contain exactly two f32 words from Blob Bounds".into()));
     }
     Ok(())
@@ -1064,7 +1064,7 @@ fn particle_volume(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     for (port, n) in ["volume_nodes_x", "volume_nodes_y", "volume_nodes_z"].into_iter().zip(refined) {
         x.publish(port, n as f32);
     }
-    optional_blob_bounds(x)?;
+    required_blob_bounds(x)?;
     searched(x)?;
     brick_schedule(x, refined)?;
     if x.wired("interior") {
@@ -1091,7 +1091,7 @@ fn lattice_bricks(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let bytes = u64::from(layout.words) * 4;
     x.provide("bricks", bytes);
     x.hold(bytes + storage_words(layout.count as usize) as u64 * 4);
-    optional_blob_bounds(x)
+    required_blob_bounds(x)
 }
 
 fn brick_schedule(x: &AtomExtent<'_>, nodes: [u32; 3]) -> Result<(), Verdict> {

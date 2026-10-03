@@ -44,7 +44,7 @@ struct BrickUniforms {
     bricks_z: u32,
     brick_count: u32,
     band_extra: f32,
-    bounds_len: u32,
+    _pad1: u32,
 }
 
 /// Dimensions and storage size of one brick layout.
@@ -249,7 +249,7 @@ crate::primitive! {
         blobs: Array(FluidBlob) required,
         cell_ranges: Array(CellRange) required,
         solid: Array(f32) required,
-        bounds: Array(f32) optional,
+        bounds: Array(f32) required,
         center_x: ScalarF32 optional, center_y: ScalarF32 optional, center_z: ScalarF32 optional,
         size_x: ScalarF32 optional, size_y: ScalarF32 optional, size_z: ScalarF32 optional,
         nodes_x: ScalarF32 optional, nodes_y: ScalarF32 optional, nodes_z: ScalarF32 optional,
@@ -278,7 +278,7 @@ crate::primitive! {
         float_param!("band_extra", "Extra Distance Band", 0.0, 0.0, 100.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "Wire blobs and cell_ranges from the particle surface's sort and shape nodes, solid from the same lattice capacity as node.particle_volume, and center/size/nodes/cell_size/bins from those same producers. Feed the output to every sparse liquid-surface stage. The header's indirect grid is [2*active_count,1,1], the dense mask clears retired bricks each frame, and the boundary bricks stay active even for an empty frame. This is a barriered producer with a PrefixScan, so it is a graph fusion boundary.",
+    composition_notes: "Wire blobs and cell_ranges from the particle surface's sort and shape nodes, bounds from the node.blob_bounds that feeds node.particle_volume, solid from the same lattice capacity as node.particle_volume, and center/size/nodes/cell_size/bins from those same producers. Feed the output to every sparse liquid-surface stage. The header's indirect grid is [2*active_count,1,1], the dense mask clears retired bricks each frame, and the boundary bricks stay active even for an empty frame. This is a barriered producer with a PrefixScan, so it is a graph fusion boundary.",
     examples: [],
     picker: { label: "Lattice Bricks", category: Atom },
     summary: "Finds the lattice bricks that can affect the liquid surface.",
@@ -331,10 +331,11 @@ impl Primitive for LatticeBricks {
             }
             self.scan.prepare(gpu.device);
         }
-        let (Some(blobs), Some(ranges), Some(solid)) = (
+        let (Some(blobs), Some(ranges), Some(solid), Some(bounds)) = (
             ctx.inputs.array("blobs"),
             ctx.inputs.array("cell_ranges"),
             ctx.inputs.array("solid"),
+            ctx.inputs.array("bounds"),
         ) else {
             return;
         };
@@ -367,8 +368,7 @@ impl Primitive for LatticeBricks {
             ["center_x", "center_y", "center_z"].map(|name| ctx.scalar_or_param(name, 0.0));
         let [size_x, size_y, size_z] =
             ["size_x", "size_y", "size_z"].map(|name| ctx.scalar_or_param(name, 4.0));
-        let bounds = ctx.inputs.array("bounds");
-        if bounds.is_some_and(|b| b.size != 8) {
+        if bounds.size != 8 {
             ctx.error("Lattice Bricks: bounds must contain the two words from Blob Bounds");
             return;
         }
@@ -433,7 +433,7 @@ impl Primitive for LatticeBricks {
             bricks_z: layout.bricks[2],
             brick_count: layout.count,
             band_extra: ctx.scalar_or_param("band_extra", 0.0),
-            bounds_len: if bounds.is_some() { 2 } else { 0 },
+            _pad1: 0,
         };
         let bindings = [
             GpuBinding::Bytes {
@@ -460,7 +460,7 @@ impl Primitive for LatticeBricks {
                 buffer: &bricks,
                 offset: 0,
             },
-            GpuBinding::Buffer { binding: 5, buffer: bounds.unwrap_or(blobs), offset: 0 },
+            GpuBinding::Buffer { binding: 5, buffer: bounds, offset: 0 },
         ];
         let groups = [layout.count.div_ceil(256), 1, 1];
         let gpu = ctx.gpu_encoder();

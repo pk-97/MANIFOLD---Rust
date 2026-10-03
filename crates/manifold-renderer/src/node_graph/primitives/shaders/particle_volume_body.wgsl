@@ -1,20 +1,10 @@
 // Uses the search-radius ratio (1.5 radii) from FLIP Fluids particlemesher.cpp `_searchRadiusFactor` (MIT); see THIRD_PARTY_NOTICES.md.
 // Negative-inside port of FLIP Fluids ParticleMesher: initialize 3r, then
 // visit each kernel's inclusive floor(p - 1.5r)..floor(p + 1.5r)+1 grid box.
-// Bounds is an optional shared maximum reduction, not a quality limit.
+// `bounds` is node.blob_bounds' reduction of the same blobs: the largest kernel
+// radius and support. It sets the search reach, never a quality limit.
 // Solid zeros invert the native sign convention. Preview-only border replacement
 // is not part of the production mesher.
-
-fn pv_bounds(bounds_len: u32) -> vec2<f32> {
-    if bounds_len == 2u { return vec2<f32>(buf_bounds[0], buf_bounds[1]); }
-    var bound = vec2<f32>(0.0);
-    for (var k = 0u; k < arrayLength(&buf_blobs); k += 1u) {
-        let blob = buf_blobs[k];
-        let r = blob.center_radius.w;
-        if r > 0.0 { bound = max(bound, vec2<f32>(r, 1.5 * r + blob.shape_off.w)); }
-    }
-    return bound;
-}
 
 fn pv_solid(p: vec3<f32>, lattice_min: vec3<f32>, spacing: vec3<f32>, nodes: vec3<u32>) -> f32 {
     let g = clamp((p - lattice_min) / spacing, vec3<f32>(0.0), vec3<f32>(nodes - vec3<u32>(1u)));
@@ -79,7 +69,6 @@ fn body(
     band_extra: f32,
     brick_pass: u32,
     interior_len: u32,
-    bounds_len: u32,
 ) -> f32 {
 
     let solid_nodes = max(vec3<u32>(vec3<f32>(nodes_x, nodes_y, nodes_z)), vec3<u32>(2u));
@@ -87,7 +76,7 @@ fn body(
     let nodes = (solid_nodes - vec3<u32>(1u)) * scale + vec3<u32>(1u);
     let margin = length(vec3<f32>(size_x,size_y,size_z) / vec3<f32>(nodes - vec3<u32>(1u)));
     let extra = band_extra + select(0.0, margin, band_extra > 0.0);
-    let bound = pv_bounds(bounds_len);
+    let bound = vec2<f32>(buf_bounds[0], buf_bounds[1]);
     let band = 3.0 * bound.x + extra;
     let bins = vec3<i32>(bins_x, bins_y, bins_z);
     if idx >= nodes.x * nodes.y * nodes.z {

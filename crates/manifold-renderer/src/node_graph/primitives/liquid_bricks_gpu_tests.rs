@@ -148,6 +148,7 @@ fn fixture(resolution: u32) {
     let mut builder = LatticeBricks::new();
     let (bounds_slot, _) = h.array::<f32>(&[], 2);
     let mut bounder = crate::node_graph::primitives::blob_bounds::BlobBounds::new();
+    crate::node_graph::primitive::Primitive::prepare_pipelines(&mut bounder, &h.device);
     let mut scans: [RunningTotal; 2] = std::array::from_fn(|_| RunningTotal::new());
     let scan_slots: [(Slot, GpuBuffer); 2] = std::array::from_fn(|_| h.array::<u32>(&[], total));
     let extent_slots: [(Slot, GpuBuffer); 2] = std::array::from_fn(|_| h.array::<u32>(&[], 4));
