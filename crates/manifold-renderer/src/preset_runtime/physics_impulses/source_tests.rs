@@ -169,9 +169,10 @@ fn scene_impulse_source_maps_speed_edits_and_pause_without_stepping() {
     let mut receipts = Vec::new();
     runtime.drain_scene_impulses(|_, receipt| receipts.push(receipt));
     assert_eq!(receipts.len(), 4);
+    // Project-frame identities: Speed scales duration, not the number of ticks.
     assert_eq!(
         receipts.iter().map(|r| r.applied.tick).collect::<Vec<_>>(),
-        [7, 22, 22, 22]
+        [7, 15, 15, 15]
     );
     assert_eq!(
         runtime

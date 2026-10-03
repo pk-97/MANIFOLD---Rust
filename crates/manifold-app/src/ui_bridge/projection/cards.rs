@@ -870,7 +870,8 @@ pub(crate) fn modifier_surfaces(
             modifier: Some(ModifierCardInfo {
                 instance_id: instance.id.clone(),
                 layer_id: manifold_core::LayerId::new(layer_id),
-                enabled_label: enabled_row.map(|row| row.spec.name.clone()).unwrap_or_else(|| "Enabled".into()),
+                params_owner: gp.id.clone(),
+                enabled_label:enabled_row.map(|row| row.spec.name.clone()).unwrap_or_else(|| "Enabled".into()),
                 stack_index: index,
                 stack_len: def.scene_modifiers.len(),
                 targets_all: object_targeting && matches!(instance.targets, SceneTargetSelection::AllObjects),
@@ -1245,6 +1246,72 @@ mod modifier_audio_projection_tests {
         let host = loaded.timeline.layers[0].gen_params().unwrap();
         let reloaded = modifier_surfaces(host, host.graph.as_ref().unwrap(), &vm, "layer", &[], (manifold_core::Bpm(120.0), 0.0));
         assert!(reloaded[0].rows.iter().find(|row| row.id.as_ref() == strength).unwrap().audio.active);
+    }
+
+    /// A force card's audio-mod meter shows the level the content thread
+    /// captured for that mod. The mod lives on the generator under the host
+    /// binding id, so the card keys its meter on the generator instance, never
+    /// on its own `scene_modifier:` card identity.
+    #[test]
+    fn force_card_audio_meter_resolves_in_the_producer_capture() {
+        use manifold_core::audio_trigger::{FireMeterCapture, fire_meter_key_for_param};
+        let mut graph: EffectGraphDef = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../manifold-renderer/tests/fixtures/scene-modifiers/nested_multimaterial_v2.json"
+        ))).unwrap();
+        let recipe = manifold_renderer::node_graph::bundled_preset_def(&manifold_core::PresetTypeId::new("RadialForce")).unwrap();
+        let modifier = prepare_new_scene_modifier(&graph, recipe, "force".into(),
+            SceneNodeRef { scope: vec![], node: "scan_render".into() }, SceneTargetSelection::AllObjects).unwrap();
+        graph = manifold_core::scene_modifier_edit::insert_scene_modifier(&graph, 0, modifier).unwrap().graph;
+        let mut host = PresetInstance::new_generator(manifold_core::PresetTypeId::new("PhotoscanBaseline"));
+        host.graph = Some(graph.clone());
+        host.refresh_manifest_from_graph();
+        let strength = graph.preset_metadata.as_ref().unwrap().bindings.iter().find(|binding| matches!(
+            &binding.target, manifold_core::effect_graph_def::BindingTarget::SceneModifier { param_id, .. } if param_id == "strength"
+        )).unwrap().id.clone();
+        let send = manifold_core::audio_setup::AudioSend::new("Drums");
+        let mut kick = ParameterAudioMod::new(strength.clone().into(), send.id.clone(),
+            AudioFeature::new(AudioFeatureKind::Amplitude, AudioBand::Full));
+        kick.shape.attack_ms = 0.0;
+        kick.shape.release_ms = 0.0;
+        host.audio_mods = Some(vec![kick]);
+        let mut project = manifold_core::project::Project::default();
+        project.audio_setup.sends.push(send);
+        let mut layer = manifold_core::layer::Layer::new_generator("Scene".into(), host.generator_type().clone(), 0);
+        *layer.gen_params_mut().unwrap() = host;
+        project.timeline.layers.push(layer);
+
+        let mut bands = [manifold_core::BandFeatures::default(); 4];
+        bands[AudioBand::Full.index()].amplitude = 0.8;
+        let snapshot = manifold_core::AudioFeatureSnapshot {
+            sends: vec![manifold_core::SendFeatures { bands, ..Default::default() }],
+            ..Default::default()
+        };
+        let mut fire_meters = FireMeterCapture::default();
+        manifold_playback::modulation::evaluate_all_audio_mods(
+            &mut project, &snapshot, manifold_core::Seconds(1.0 / 60.0),
+            &mut Vec::<manifold_playback::modulation::TriggerPulse>::new(), &[], &mut fire_meters,
+        );
+        let host = project.timeline.layers[0].gen_params().unwrap();
+        let produced = fire_meter_key_for_param(host.id.as_str(), &strength);
+        assert!(fire_meters.get(produced).is_some_and(|level| level > 0.0), "the content thread meters the force card's kick");
+
+        let vm = SceneVm::from_def(&graph).unwrap();
+        let surfaces = modifier_surfaces(host, &graph, &vm, "layer", &[], (manifold_core::Bpm(120.0), 0.0));
+        let mut tree = manifold_ui::UITree::new();
+        let rect = manifold_ui::Rect::new(0.0, 0.0, 320.0, 2000.0);
+        let region = tree.begin_region(rect, manifold_ui::ZTier::Base, "force_card", manifold_ui::UIFlags::empty());
+        let content_start = tree.count();
+        let mut card = manifold_ui::panels::param_card::ParamCardPanel::new();
+        card.configure(&surfaces[0]);
+        card.build(&mut tree, rect);
+        tree.end_region(region, content_start);
+        let requested = std::cell::RefCell::new(Vec::new());
+        card.update_fire_meters(&mut tree, &|key| {
+            requested.borrow_mut().push(key);
+            fire_meters.get(key)
+        }, 1.0 / 60.0);
+        assert_eq!(requested.into_inner(), vec![produced], "the card's kick meter reads the key the content thread fills");
     }
 
     use super::*;

@@ -4,13 +4,16 @@ MANIFOLD includes code derived from the projects below. Each derived file carrie
 
 ## FLIP Fluids
 
-Source: FLIP Fluids by Ryan L. Guy & Dennis Fassbaender, MIT license. Vendored unchanged at `crates/manifold-fluids/native/flip_engine/` (license copy: `crates/manifold-fluids/native/LICENSE_MIT.md`).
+Source: FLIP Fluids by Ryan L. Guy & Dennis Fassbaender, MIT license. Vendored at `crates/manifold-fluids/native/flip_engine/`, with MANIFOLD integration changes (license copy: `crates/manifold-fluids/native/LICENSE_MIT.md`).
 
 Modules ported from it (all under `crates/manifold-renderer/src/node_graph/primitives/`; each `.rs` has a matching `shaders/<name>_body.wgsl` where one exists):
 
 - `crossing_distance`, `lattice_curvature` — from `particlelevelset.cpp`
 - `emission_count`, `energy_potential`, `jitter_particles`, `liquid_cells`, `spawn_whitewater`, `whitewater_type` — from `diffuseparticlesimulation.cpp`
 - `wavecrest_potential` — from `diffuseparticlesimulation.cpp` and `interpolation.cpp`
+- `turbulence_field` — from `turbulencefield.cpp`
+- `turbulence_emission_count`, `inside_turbulence_potential`, `dust_potential`, `whitewater_emitter_velocity`, `whitewater_emitter_cpu.rs` (CPU reference) — turbulence, inside and dust emission, the spray speed factor and the generation coin from `diffuseparticlesimulation.cpp`
+- `whitewater_influence`, `whitewater_obstacle_source` — the obstacle influence grid from `influencegrid.cpp`, `fluidsimulation.cpp` and `diffuseparticlesimulation.cpp`
 - `extend_lattice` — from `gridutils.h`
 - `sample_faces_at_particles`, `shaders/liquid_faces.wgsl` — from `macvelocityfield.cpp`
 - `whitewater_cpu.rs`, `whitewater_particle_cpu.rs` (CPU references) — from the files above
@@ -19,12 +22,13 @@ Modules ported from it (all under `crates/manifold-renderer/src/node_graph/primi
 - `gpu_flip_bodies` (`shaders/gpu_flip_bodies.wgsl`; its CPU references in `gpu_flip_body_tests.rs`) — the bodies' rows in the pressure solve and their captured impulse from `rigidpressurecoupling.h`, the pressure entries and the velocity change on the solid faces from `rigidboundaryvelocity.cpp`, the order of solve, impulse, velocity change and constraint from `rigidfluidcoupling.cpp`; the dynamic bodies' predicted velocity in `gpu_flip_step.wgsl` from `rigidfluidcoupling.cpp`
 - `liquid_fill` (`shaders/liquid_fill_body.wgsl`) — the half-cell seeding lattice, and seeding only where the solid distance is positive, from `fluidsimulation.cpp`
 - `shaders/matter_frame.wgsl` — the marker radius from rest volume, from `fluidsimulation.cpp` (`_initializeParticleRadii`)
+- `volume_surface_mesh.rs`, `shaders/volume_surface_mesh_body.wgsl` — the solid-edge interval constraint and endpoint epsilon from `polygonizer3d.cpp` (`_vertexInterp`), including the CPU f64 reference
 - `shaders/marching_cubes_common.wgsl` — the corner order, edge order and triangle table from `polygonizer3d.cpp` (Paul Bourke's tables)
 - `scripts/mgpcg_reference.py` (the f64 oracle for the pressure solve) — the segment and square inside-fractions from `levelsetutils.cpp`, the operator and stop from `pressuresolver.cpp` and `pcgsolver.h`
 
 Constants taken from the engine (each file's header says which):
 
-- `particle_volume`, `shape_particle_blobs` (and their shaders) — the search-radius ratio from `particlemesher.cpp` (`_searchRadiusFactor`)
+- `particle_volume`, `shape_particle_blobs`, `lattice_bricks`, `clamp_liquid_to_solids` (and their shaders) — the marker radius, inclusive field support, distance band and border/solid rules from `fluidsimulation.cpp`, `particlemesher.cpp` and `scalarfield.cpp`.
 - `relax_surface_mesh` (and its shader) — the neighbour-mean smoothing from `trianglemesh.cpp` (`smooth`)
 - `node_graph/whitewater.rs` — the particle id limit from `diffuseparticlesimulation.h` (`_diffuseParticleIDLimit`)
 - `gpu_flip_preset.rs` — the PIC/FLIP ratio from `fluidsimulation.h` (`_ratioPICFLIP`) and the Dam Break scene values
@@ -43,6 +47,8 @@ Checked against the engine, no engine code in them (each file's header says so):
 - `manifold-fluids/src/whitewater_oracle.rs` — runs the engine's whitewater emitter and curvature as test oracles
 
 `crates/manifold-renderer/src/live_sim_clock_reference.rs` ports the CFL duration rule from `fluidsimulation.cpp::_calculateNextTimeStep` (including epsilon, optional surface-tension/color restrictions and equal frame partition). It is a standalone CPU reference, not runtime integration.
+
+`crates/manifold-physics/src/stepping.rs` ports `_calculateNextTimeStep`, the internal final-substep remainder rule in `nextUpdateTimeStep`, and `_getMarkerParticleSpeedLimit`, including MANIFOLD's minimum speed-limit protection. The GPU clock architecture proof (`crates/manifold-renderer/src/node_graph/primitives/gpu_flip_clock.rs` and `shaders/gpu_flip_clock.wgsl`) ports the same CFL scheduling rule, marker/source maximum-speed calculation, and `rigidfluidcoupling.cpp::pointSpeed` endpoint bound. These ports retain the FLIP Fluids MIT attribution to Ryan L. Guy and Dennis Fassbaender. The GPU clock is not yet connected to the runtime solver.
 
 The GPU structure (the step's passes, the multigrid preconditioner) is MANIFOLD's own; the ported parts are the rules above.
 

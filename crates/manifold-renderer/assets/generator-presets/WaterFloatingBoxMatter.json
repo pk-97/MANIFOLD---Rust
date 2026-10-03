@@ -1,10 +1,10 @@
 {
   "version": 2,
-  "name": "Water \u2014 Floating Box (Live GPU)",
-  "description": "GPU MLS-MPM two-way coupling: a half-density wooden box dropped into a half-metre pool in the Water \u2014 Dam Break basin. The box is a Box3D rigid body in the same scene as the liquid, so the pair steps together: each fixed 60 Hz tick the liquid pushes the box with the grid momentum Body Reaction sums, and the box pushes the liquid back through Move Bodies and Grid Update. It splashes in, bobs, and settles floating half under the waterline. World Speed drives both the liquid and the rigid world, because a coupled pair must share one clock. Fire an impulse at the box to knock it around. The Live Matter group is the same solver as the other live water presets; it shows frame A, the liquid at the tick the box has settled, so water and box are drawn at the same instant.",
+  "name": "Water — Floating Box (Live GPU)",
+  "description": "GPU MLS-MPM two-way coupling: a half-density wooden box dropped into a half-metre pool in the Water — Dam Break basin. The box is a Box3D rigid body in the same scene as the liquid, so the pair steps together: each fixed 60 Hz tick the liquid pushes the box with the grid momentum Body Reaction sums, and the box pushes the liquid back through Move Bodies and Grid Update. It splashes in, bobs, and settles floating half under the waterline. World Speed drives both the liquid and the rigid world, because a coupled pair must share one clock. Fire an impulse at the box to knock it around. The Live Matter group is the same solver as the other live water presets; it shows frame A, the liquid at the tick the box has settled, so water and box are drawn at the same instant.",
   "presetMetadata": {
     "id": "WaterFloatingBoxMatter",
-    "displayName": "Water \u2014 Floating Box (Live GPU)",
+    "displayName": "Water — Floating Box (Live GPU)",
     "category": "Sim",
     "oscPrefix": "waterfloatingboxmatter",
     "available": true,
@@ -195,7 +195,7 @@
         "wholeNumbers": false
       },
       {
-        "defaultValue": 0.5,
+        "defaultValue": 0.35,
         "formatString": "F2",
         "id": "mesh_relaxation",
         "isToggle": false,
@@ -434,7 +434,7 @@
         "convert": {
           "type": "Float"
         },
-        "defaultValue": 0.5,
+        "defaultValue": 0.35,
         "id": "mesh_relaxation",
         "label": "Smoothing Value",
         "target": {
@@ -2827,7 +2827,7 @@
             "params": {
               "value": {
                 "type": "Float",
-                "value": 0.5
+                "value": 0.3499999940395355
               }
             },
             "typeId": "node.value"
@@ -2963,6 +2963,11 @@
               }
             },
             "typeId": "node.math"
+          },
+          {
+            "id": 32,
+            "nodeId": "liquid_blob_bounds",
+            "typeId": "node.blob_bounds"
           }
         ],
         "wires": [
@@ -4003,6 +4008,24 @@
             "fromPort": "out",
             "toNode": 31,
             "toPort": "b"
+          },
+          {
+            "fromNode": 32,
+            "fromPort": "bounds",
+            "toNode": 7,
+            "toPort": "bounds"
+          },
+          {
+            "fromNode": 32,
+            "fromPort": "bounds",
+            "toNode": 20,
+            "toPort": "bounds"
+          },
+          {
+            "fromNode": 6,
+            "fromPort": "blobs",
+            "toNode": 32,
+            "toPort": "blobs"
           }
         ]
       },
@@ -4011,27 +4034,27 @@
           "type": "Float",
           "value": 1.0
         },
+        "fill_pits": {
+          "type": "Float",
+          "value": 0.0
+        },
         "mesh_relaxation": {
           "type": "Float",
-          "value": 0.5
+          "value": 0.3499999940395355
         },
         "particle_scale": {
           "type": "Float",
           "value": 3.0
+        },
+        "smoothing": {
+          "type": "Float",
+          "value": 0.0
         },
         "smoothing_iterations": {
           "type": "Int",
           "value": 2
         },
         "smoothing_passes": {
-          "type": "Float",
-          "value": 0.0
-        },
-        "fill_pits": {
-          "type": "Float",
-          "value": 0.0
-        },
-        "smoothing": {
           "type": "Float",
           "value": 0.0
         },

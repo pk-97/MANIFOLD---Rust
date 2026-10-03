@@ -30,6 +30,8 @@ struct Stored {
     regions: GpuBuffer,
     shapes: GpuBuffer,
     atlas: GpuBuffer,
+    clock_obstacles: GpuBuffer,
+    clock_sources: GpuBuffer,
     version: u64,
 }
 
@@ -65,6 +67,8 @@ impl LiquidBodyBuffers {
             "regions" => self.regions(),
             "shapes" => self.shapes(),
             "atlas" => self.atlas(),
+            "clock_obstacles" => self.stored.as_ref().map(|s| &s.clock_obstacles),
+            "clock_sources" => self.stored.as_ref().map(|s| &s.clock_sources),
             _ => None,
         }
     }
@@ -78,8 +82,11 @@ impl LiquidBodyBuffers {
         let region_bytes = std::mem::size_of_val(bodies.last_region_rows());
         let needs_bodies = self.stored.as_ref().is_none_or(|stored| stored.bodies.size < row_bytes as u64);
         let needs_regions = self.stored.as_ref().is_none_or(|stored| stored.regions.size < region_bytes as u64);
+        let obstacle_bytes = std::mem::size_of_val(bodies.clock_obstacles());
+        let source_bytes = std::mem::size_of_val(bodies.clock_sources());
+        let needs_clock = self.stored.as_ref().is_none_or(|s| s.clock_obstacles.size < obstacle_bytes as u64 || s.clock_sources.size < source_bytes as u64);
         let version = bodies.version;
-        if self.stored.as_ref().is_none_or(|stored| stored.version != version) || needs_bodies || needs_regions {
+        if self.stored.as_ref().is_none_or(|stored| stored.version != version) || needs_bodies || needs_regions || needs_clock {
             let fresh = |bytes: &[u8], least: usize| {
                 let buffer = gpu.device.create_buffer_shared(bytes.len().max(least) as u64);
                 // SAFETY: new shared buffer, not yet visible to the GPU.
@@ -100,6 +107,8 @@ impl LiquidBodyBuffers {
                 regions: keep(old_regions, needs_regions, region_bytes),
                 shapes: fresh(bytemuck::cast_slice(bodies.shapes()), std::mem::size_of::<LiquidShape>()),
                 atlas: fresh(bytemuck::cast_slice(bodies.atlas()), 4),
+                clock_obstacles: gpu.device.create_buffer_shared(obstacle_bytes.max(96) as u64),
+                clock_sources: gpu.device.create_buffer_shared(source_bytes.max(96) as u64),
                 version,
             });
         }
@@ -110,8 +119,12 @@ impl LiquidBodyBuffers {
             .upload
             .get_or_insert_with(|| gpu.device.create_compute_pipeline(UPLOAD_SHADER, "cs_main", label));
         let stored = self.stored.as_ref().expect("allocated above");
-        for (target, rows) in [(&stored.bodies, bodies.last_rows()), (&stored.regions, bodies.last_region_rows())] {
-            let groups: &[[u32; 4]] = bytemuck::cast_slice(rows);
+        for (target, groups) in [
+            (&stored.bodies, bytemuck::cast_slice::<_, [u32;4]>(bodies.last_rows())),
+            (&stored.regions, bytemuck::cast_slice(bodies.last_region_rows())),
+            (&stored.clock_obstacles, bytemuck::cast_slice(bodies.clock_obstacles())),
+            (&stored.clock_sources, bytemuck::cast_slice(bodies.clock_sources())),
+        ] {
             for (chunk_index, chunk) in groups.chunks(UPLOAD_GROUPS).enumerate() {
                 let mut params: UploadParams = bytemuck::Zeroable::zeroed();
                 let UploadParams { start, count, words, .. } = &mut params;

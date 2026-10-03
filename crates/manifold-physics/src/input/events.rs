@@ -206,6 +206,51 @@ impl<T> EventQueue<T> {
         Ok(())
     }
 
+    /// Deliver hits in an accepted live interval. Consumers integrate to each
+    /// source timestamp before applying the hit; sequence is not elapsed time.
+    pub fn begin_interval(
+        &mut self,
+        tick: TickStamp,
+        interval: crate::stepping::StepInterval,
+        mut consume: impl FnMut(AppliedEvent<T>),
+    ) -> Result<(), EventError> {
+        if self.exhausted {
+            return Err(EventError::CapacityOverflow);
+        }
+        if tick.epoch != self.epoch {
+            return Err(EventError::EpochMismatch);
+        }
+        if tick.tick != self.next_tick {
+            return Err(EventError::OutOfOrderTick);
+        }
+        if !interval.start.0.is_finite()
+            || !interval.end.0.is_finite()
+            || interval.end.0 <= interval.start.0
+        {
+            return Err(EventError::InvalidClock);
+        }
+        let following = self
+            .next_tick
+            .checked_add(1)
+            .ok_or(EventError::UnrepresentableTickRange)?;
+        while self
+            .events
+            .front()
+            .is_some_and(|event| event.source.time.0 < interval.end.0)
+        {
+            if let Some(event) = self.events.pop_front() {
+                consume(AppliedEvent {
+                    source: event.source,
+                    applied: tick,
+                    lateness: Seconds((interval.start.0 - event.source.time.0).max(0.0)),
+                    value: event.value,
+                });
+            }
+        }
+        self.next_tick = following;
+        Ok(())
+    }
+
     /// Start a newer epoch and return the number of cancelled unread events.
     /// Validation precedes mutation; storage and tick duration are retained.
     pub fn reset(&mut self, new_epoch: u64, new_origin: Seconds) -> Result<usize, EventError> {
@@ -326,6 +371,25 @@ mod tests {
             time: Seconds(time),
             sequence,
         }
+    }
+
+    #[test]
+    fn live_intervals_preserve_interior_hits_ties_and_end_boundary() {
+        use crate::stepping::StepInterval;
+        let mut queue = EventQueue::new(1, Seconds::ZERO, Seconds(1.0 / 60.0), 8).unwrap();
+        queue.enqueue(stamp(1, 0.02, 0), 1).unwrap();
+        queue.enqueue(stamp(1, 0.02, 1), 2).unwrap();
+        queue.enqueue(stamp(1, 0.05, 2), 3).unwrap();
+        let mut values = Vec::new();
+        queue.begin_interval(queue.next_tick(), StepInterval::new(Seconds::ZERO, Seconds(0.05)), |event| {
+            values.push((event.value, event.source.time.0, event.lateness.0));
+        }).unwrap();
+        assert_eq!(values, [(1, 0.02, 0.0), (2, 0.02, 0.0)]);
+        queue.begin_interval(queue.next_tick(), StepInterval::new(Seconds(0.05), Seconds(0.1)), |event| {
+            values.push((event.value, event.source.time.0, event.lateness.0));
+        }).unwrap();
+        assert_eq!(values[2], (3, 0.05, 0.0));
+        assert!(queue.is_empty());
     }
 
     #[test]

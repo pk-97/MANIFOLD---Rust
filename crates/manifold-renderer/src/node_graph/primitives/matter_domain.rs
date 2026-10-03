@@ -27,10 +27,10 @@ use crate::node_graph::liquid::coupling::{DomainWalls, LiquidRigidOwner, Pending
 use crate::node_graph::liquid::fields::{self, FieldLattice, LiquidFields, LiquidImpulses};
 use crate::node_graph::liquid::lattice::LiquidLattice;
 use crate::node_graph::liquid::tick_samples::TickSamples;
-use crate::node_graph::matter::coupling::{ReactionScale, body_limit, decode};
+use crate::node_graph::matter::coupling::{ReactionScale, decode, live_body_limit};
 use crate::node_graph::matter::{
     MAX_SUBSTEPS, REACTION_WORDS, WATER_DENSITY, block_sort_box, free_fall_speed, lattice_blocks, lattice_nodes,
-    momentum_unit, stiffness_fitting_cap, substeps_per_tick, water_lambda, wave_speed,
+    momentum_unit, substeps_for_interval, substeps_per_tick, water_lambda, wave_speed,
 };
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::physics::{
@@ -128,7 +128,7 @@ pub(crate) fn fill_region(
             return Err("Matter: the initial volume must be a finite box fully inside the domain".into());
         }
         for (d, range) in column.iter_mut().enumerate() {
-            let cell = |x: f32| (((f64::from(x) - f64::from(layout.min[d])) / dx).round().max(0.0) as u32).min(layout.cells[d]);
+            let cell = |x: f32| {(((f64::from(x) - f64::from(layout.min[d])) / dx).round().max(0.0) as u32).min(layout.cells[d])};
             *range = [
                 cell(volume.pos[d] - volume.scale[d] * 0.5),
                 cell(volume.pos[d] + volume.scale[d] * 0.5),
@@ -273,6 +273,8 @@ crate::primitive! {
         substeps_per_tick: ScalarF32,
         epoch: ScalarF32,
         simulation_time: ScalarF32,
+    interval_duration: ScalarF32,
+    target_time: ScalarF32, step_cap_hit: ScalarF32,
         display_time: ScalarF32,
         dropped_seconds: ScalarF32,
         lambda: ScalarF32,
@@ -328,6 +330,8 @@ crate::primitive! {
     boundary_reason: NonGpu,
     extra_fields: {
         clock: LiquidClock = LiquidClock::default(),
+        scheduled_frame: Option<manifold_physics::clock::ClockFrame> = None,
+        scheduled_substeps: u32 = 1,
         setup: Option<MatterSetup> = None,
         limited: bool = false,
         published: Option<[f32; OUTPUTS.len()]> = None,
@@ -378,8 +382,9 @@ pub struct Coupling {
 
 /// A frame of several coupled ticks: the region syncs at each later
 /// tick's first substep, and the domain settles the tick before it there.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct Exchange {
+    frame: manifold_physics::clock::ClockFrame,
     substeps: u32,
     ticks: u32,
     /// The frame's first tick; later ticks differ only in `tick`.
@@ -427,7 +432,7 @@ pub(crate) fn closed_faces(params: &ParamValues) -> u32 {
 }
 
 /// Every scalar output, in the order [`MatterDomain::compute`] fills them.
-const OUTPUTS: [&str; 52] = [
+const OUTPUTS: [&str; 55] = [
     "lattice_min_x", "lattice_min_y", "lattice_min_z", "cell_size", "nodes_x", "nodes_y",
     "nodes_z", "closed_faces", "gravity_x", "gravity", "gravity_z", "pool_cells", "column_x0",
     "column_x1", "column_y0", "column_y1", "column_z0", "column_z1", "points_per_cell",
@@ -437,7 +442,9 @@ const OUTPUTS: [&str; 52] = [
     "block_size_x", "block_size_y", "block_size_z", "block_cell_size", "momentum_unit",
     "body_count", "body_rows", "first_tick", "dynamic_count", "field_nodes_x", "field_nodes_y",
     "field_nodes_z", "field_spacing", "force_lattices", "impulse_tick",
-];
+    "interval_duration",
+    "target_time",
+    "step_cap_hit"];
 /// Wired role ports, in slot order (node.fluid_surface's names).
 const ROLE_PORTS: [&str; MAX_FLUID_ROLES] = [
     "role_0", "role_1", "role_2", "role_3", "role_4", "role_5", "role_6", "role_7", "role_8",
@@ -483,11 +490,17 @@ impl Primitive for MatterDomain {
         self.role_pending
     }
 
+    fn substep_clock_interval(&self, iteration: u32) -> Option<(&'static str, manifold_physics::stepping::StepInterval)> {
+        self.scheduled_frame.as_ref()?.interval(u64::from(iteration / self.scheduled_substeps))
+            .map(|interval| ("interval_duration", interval))
+    }
+
     /// Coupled frames sync at each later tick's first substep.
     fn substep_host_sync(&self, iteration: u32) -> bool {
         self.coupled
             .exchange
-            .is_some_and(|x| iteration.is_multiple_of(x.substeps) && iteration / x.substeps < x.ticks)
+            .as_ref()
+            .is_some_and(|x| {iteration.is_multiple_of(x.substeps) && iteration / x.substeps < x.ticks})
     }
 
     /// Section 5 between two ticks of one frame: settle the tick the
@@ -498,7 +511,7 @@ impl Primitive for MatterDomain {
         iteration: u32,
         _gpu: Option<&mut crate::gpu_encoder::GpuEncoder<'_>>,
     ) -> Result<(), String> {
-        let Some(exchange) = self.coupled.exchange else { return Ok(()) };
+        let Some(exchange) = self.coupled.exchange.clone() else { return Ok(()) };
         let result = self.exchange_tick(iteration / exchange.substeps, exchange);
         if let Err(error) = &result {
             // The pair restarts next frame with a fresh rigid owner.
@@ -520,6 +533,7 @@ impl Primitive for MatterDomain {
         // A physics sample reads the force field and the roles at a tick's
         // start; it never advances time.
         if crate::node_graph::physics::authored_sample_only() {
+            self.clock.observe_speed(ctx.time.seconds.0, ctx.scalar_or_param("speed", 1.0));
             let field = ctx.inputs.vector_field("acceleration_field");
             self.fields.observe_sample(ctx.time.seconds.0, field.as_ref());
             self.bodies.observe_sample(ctx.time.seconds.0, (!role_pending).then_some(&roles[..]));
@@ -537,6 +551,7 @@ impl Primitive for MatterDomain {
         // zero ticks. Before the first good frame there is nothing to hold,
         // so the outputs are declared pending.
         self.coupled.exchange = None;
+        self.scheduled_frame = None;
         let computed = if self.role_pending { Ok(None) } else { self.compute(ctx, &roles) };
         let held = || {
             let mut held = self.published.unwrap_or([0.0; OUTPUTS.len()]);
@@ -649,7 +664,9 @@ impl Primitive for MatterDomain {
         if self.role_pending || self.coupled.failed {
             return Err("Matter impulses: cannot capture an impulse while the liquid is pending or failed".into());
         }
-        self.impulses.stamp(transport.0, sequence)
+        let mut stamp = self.impulses.stamp(transport.0, sequence)?;
+        stamp.time = manifold_core::Seconds(self.clock.simulation_at(transport.0));
+        Ok(stamp)
     }
 
     fn enqueue_physics_impulse(
@@ -709,7 +726,6 @@ impl MatterDomain {
         )?;
         let MatterGeometry { layout, setup } = geometry;
         let lattice = setup.lattice;
-        let dx = f64::from(lattice.cell_size());
         let speed = ctx.scalar_or_param("speed", 1.0);
         let live = ["gravity_x", "gravity", "gravity_z", "stiffness", "cohesion", "liveliness"]
             .map(|name| ctx.scalar_or_param(name, 0.0));
@@ -759,12 +775,16 @@ impl MatterDomain {
         self.setup = Some(setup);
         let frame = self.clock.advance(
             ctx.time.seconds.0,
-            ctx.time.delta.0,
+            crate::node_graph::physics::project_frame_interval(),
             speed,
             ctx.scalar_or_param("reset", 0.0),
             restart,
             offline,
         );
+        self.scheduled_frame = Some(frame.clone());
+        if frame.numerical_error {
+            crate::node_graph::physics_metrics::record_simulation(0.0, 0.0, false, true);
+        }
         if frame.restarted && self.coupled.owner.is_some() && !self.coupled.owner_fresh {
             self.rebuild_owner()?;
         }
@@ -797,7 +817,7 @@ impl MatterDomain {
         let unit_wave = wave_speed(water_lambda(longest, 1.0), f64::from(WATER_DENSITY));
         let v_est = free_fall_speed(f64::from(layout.size[1]));
         let stiffness = f64::from(ctx.scalar_or_param("stiffness", 1.0).clamp(0.5, 3.0));
-        let fitted = stiffness.min(stiffness_fitting_cap(dx, unit_wave, v_est));
+        let fitted = stiffness;
         let limited = fitted < stiffness;
         if limited != self.limited {
             self.limited = limited;
@@ -809,12 +829,23 @@ impl MatterDomain {
         }
         let wave = (unit_wave * fitted) as f32;
         let body_limit = match &self.coupled.owner {
-            Some(owner) => body_limit(owner, lattice.cell_size(), wave, v_est as f32)?,
+            Some(owner) => live_body_limit(owner, lattice.cell_size(), wave),
             None => None,
         };
-        let substeps = substeps_per_tick(lattice.cell_size(), wave, v_est as f32, body_limit, None).min(MAX_SUBSTEPS);
+        let nominal_substeps = substeps_per_tick(lattice.cell_size(), wave, v_est as f32, body_limit, None);
+        // A frame without ticks reports what one interval runs, so the
+        // substep count and unit hold steady between ticks.
+        let duration = if frame.ticks == 0 {
+            Some(crate::node_graph::physics::project_frame_interval())
+                .filter(|interval| interval.is_finite() && *interval > 0.0)
+                .unwrap_or(TICK)
+        } else {
+            frame.duration().0
+        };
+        let requested = substeps_for_interval(duration as f32, nominal_substeps);
+        let substeps = requested.min(MAX_SUBSTEPS);
         let lambda = water_lambda(longest, fitted);
-        let unit = momentum_unit(lattice.cell_size(), TICK / f64::from(substeps));
+        let unit = momentum_unit(lattice.cell_size(), duration / f64::from(substeps));
         let mut display_time = frame.display_time;
         if let Some(owner) = &mut self.coupled.owner {
             if frame.ticks > 0 {
@@ -825,7 +856,9 @@ impl MatterDomain {
                         owner.completed()
                     ));
                 }
-                let pending = PendingTick { tick: first_tick, stamp: clock.as_ref().map_or(0, FrameClock::stamp) };
+                let pending = PendingTick { tick: first_tick, stamp: clock.as_ref().map_or(0, FrameClock::stamp) ,
+                    interval: frame.interval(0).expect("pending interval"),
+                    offline: frame.offline};
                 let scale = ReactionScale {
                     unit,
                     cell_size: lattice.cell_size(),
@@ -834,19 +867,20 @@ impl MatterDomain {
                 owner.set_pending(pending);
                 self.coupled.scale = Some(scale);
                 if frame.ticks > 1 {
-                    self.coupled.exchange = Some(Exchange { substeps, ticks: frame.ticks, pending, scale });
+                    self.coupled.exchange = Some(Exchange { frame: frame.clone(), substeps, ticks: frame.ticks, pending, scale });
                 }
             }
             // The liquid is shown at the tick Box3D has settled, with the
             // bodies' accepted frame, which the scene takes before the region
             // runs this frame's ticks.
-            display_time = owner.completed() as f64 * TICK;
+            display_time = owner.completed_time().0;
         }
         self.coupled.transport = Some(ctx.time.seconds.0);
         let field = self
             .fields
             .prepare(FieldLattice::of(&lattice), self.acceleration.as_ref(), &self.clock, &frame, &self.impulses)?;
 
+        self.scheduled_substeps = substeps;
         let per_frame = [
             ("gravity_x", ctx.scalar_or_param("gravity_x", 0.0)),
             ("gravity", ctx.scalar_or_param("gravity", -9.81)),
@@ -855,6 +889,15 @@ impl MatterDomain {
             ("substeps_per_tick", substeps as f32),
             ("epoch", frame.epoch as f32),
             ("simulation_time", frame.simulation_time as f32),
+            ("interval_duration", frame.duration().0 as f32),
+            ("target_time", frame.target_time as f32),
+            (
+                "step_cap_hit",
+                if !offline && requested >= MAX_SUBSTEPS {
+                    1.0
+                } else {
+                    0.0
+                }),
             ("display_time", display_time as f32),
             ("dropped_seconds", frame.dropped_seconds as f32),
             ("lambda", lambda as f32),
@@ -933,7 +976,11 @@ impl MatterDomain {
         // encoded after this write.
         unsafe { bodies.write(offset, bytes) };
         reaction.zero_fill();
-        owner.set_pending(PendingTick { tick: exchange.pending.tick + u64::from(tick), ..exchange.pending });
+        owner.set_pending(PendingTick {
+            tick: exchange.pending.tick + u64::from(tick),
+            interval: exchange.frame.interval(u64::from(tick)).expect("accepted exchange interval"),
+            ..exchange.pending
+        });
         Ok(())
     }
 

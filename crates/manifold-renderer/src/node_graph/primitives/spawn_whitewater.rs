@@ -56,7 +56,11 @@ struct SpawnUniforms {
     min_lifetime: f32,
     max_lifetime: f32,
     lifetime_variance: f32,
+    dt: f32,
     dispatch_count: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 const FACE_PORTS: [&str; 3] = ["face_u", "face_v", "face_w"];
@@ -64,7 +68,7 @@ const FACE_PORTS: [&str; 3] = ["face_u", "face_v", "face_w"];
 crate::primitive! {
     name: SpawnWhitewater,
     type_id: "node.spawn_whitewater",
-    purpose: "Place this frame's new whitewater particles, one per spawn slot, by FLIP's emitter rule. The running total's last entry is the frame's emission count; slot j takes emission j, or past Capacity an even subset (emission ⌊j · total / Capacity⌋). Its emitter is the liquid particle whose running total first passes it. The new particle lands at random in a cylinder about that particle's velocity, 8 of FLIP's marker radii wide and one 60 fps tick of its travel long. It is dropped outside the whitewater grid or within a quarter cell of a solid; its lifetime is Min Lifetime + energy × (Max − Min) ± Lifetime Variance, dropped at or below 0; its velocity is the liquid's at its position. Dropped and unused slots have lifetime 0. Kind is left 0 for node.whitewater_type.",
+    purpose: "Place this frame's new whitewater particles, one per spawn slot, by FLIP's emitter rule. The running total's last entry is the frame's emission count; slot j takes emission j, or past Capacity an even subset (emission ⌊j · total / Capacity⌋). Its emitter is the liquid particle whose running total first passes it. The new particle lands at random in a cylinder about that particle's velocity, 8 of FLIP's marker radii wide and Duration seconds of its travel long. It is dropped outside the whitewater grid or within a quarter cell of a solid; its lifetime is Min Lifetime + energy × (Max − Min) ± Lifetime Variance, dropped at or below 0; its velocity is the liquid's at its position. Dropped and unused slots have lifetime 0. Kind is left 0 for node.whitewater_type.",
     inputs: {
         offsets: Array(u32) required,
         particles: Array(FluidParticle) required,
@@ -80,6 +84,7 @@ crate::primitive! {
         nodes_x: ScalarF32 optional, nodes_y: ScalarF32 optional, nodes_z: ScalarF32 optional,
         seed: ScalarF32 optional,
         epoch: ScalarF32 optional,
+        dt: ScalarF32 optional,
     },
     outputs: {
         out: Array(WhitewaterSpawn),
@@ -104,6 +109,7 @@ crate::primitive! {
         float_param!("min_lifetime", "Min Lifetime", MIN_LIFETIME, 0.0, 1.0e3),
         float_param!("max_lifetime", "Max Lifetime", MAX_LIFETIME, 0.0, 1.0e3),
         float_param!("lifetime_variance", "Lifetime Variance", LIFETIME_VARIANCE, 0.0, 1.0e3),
+        float_param!("dt", "Duration (s)", 1.0 / 60.0, 0.0, 1.0e3),
     ],
     depth_rule: Terminal,
     composition_notes: "offsets from node.running_total over node.emission_count's counts, emitters the same count the running total ran over (the particle frame's count). particles from node.sample_faces_at_particles and energy from node.energy_potential, so each emitter is read as it was scored. face_u/v/w, face_cells_x/y/z, solid and the grid (center/size from node.transform_components on grid_bounds, nodes_x/y/z from grid_nodes_x/y/z) as the rest of the whitewater chain reads them; seed and epoch as node.jitter_particles takes them. Capacity is the lifecycle's. Feed node.whitewater_type, then node.whitewater_lifecycle's spawns.",
@@ -205,7 +211,11 @@ impl Primitive for SpawnWhitewater {
             min_lifetime,
             max_lifetime,
             lifetime_variance,
+            dt: ctx.scalar_or_param("dt", 1.0 / 60.0),
             dispatch_count: count,
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
         };
         let gpu = ctx.gpu_encoder();
         gpu.native_enc.dispatch_compute(

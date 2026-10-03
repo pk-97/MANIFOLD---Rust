@@ -333,6 +333,7 @@ pub(crate) mod prefix_scan;
 pub(crate) mod sort_particles_into_cells;
 mod running_total;
 mod shape_particle_blobs;
+mod blob_bounds;
 pub(crate) mod particle_volume;
 pub(crate) mod lattice_bricks;
 pub(crate) mod liquid_bricks;
@@ -344,6 +345,7 @@ pub(crate) mod gpu_flip_bodies;
 pub mod gpu_flip_lentine;
 pub(crate) mod gpu_flip_pressure;
 pub(crate) mod gpu_flip_step;
+pub(crate) mod gpu_flip_clock;
 pub(crate) mod gpu_flip_narrow_band;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_flip_pressure_tests;
@@ -363,6 +365,18 @@ mod extend_lattice;
 mod jitter_particles;
 mod sample_faces_at_particles;
 mod energy_potential;
+mod turbulence_field;
+mod whitewater_obstacle_source;
+mod whitewater_emitter_dispatch;
+mod whitewater_influence;
+mod dust_potential;
+mod whitewater_emitter_velocity;
+mod inside_turbulence_potential;
+mod turbulence_emission_count;
+#[cfg(test)]
+mod whitewater_emitter_cpu;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod whitewater_emitter_gpu_tests;
 mod wavecrest_potential;
 mod emission_count;
 mod spawn_whitewater;

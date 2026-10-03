@@ -12,6 +12,7 @@ use crate::node_graph::fluid::TICK;
 use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
 use crate::node_graph::matter::{
     MatterGridNode, MatterPoint, MatterTickStats, REACTION_WORDS, STATS_WORDS, grid_accum_bytes, grid_bytes,
+    substep_duration,
 };
 use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::primitive::Primitive;
@@ -55,6 +56,8 @@ pub struct ReadbackSlot {
     stamp: u64,
     epoch: u32,
     pending: bool,
+    endpoint: f64,
+    cap_hit: bool,
 }
 
 crate::primitive! {
@@ -69,6 +72,9 @@ crate::primitive! {
         count: ScalarF32 optional,
         nodes_x: ScalarF32 optional, nodes_y: ScalarF32 optional, nodes_z: ScalarF32 optional,
         ticks: ScalarF32 optional,
+    interval_duration: ScalarF32 optional,
+    simulation_time: ScalarF32 optional, target_time: ScalarF32 optional,
+    step_cap_hit: ScalarF32 optional,
         substeps_per_tick: ScalarF32 optional,
         epoch: ScalarF32 optional,
     },
@@ -109,15 +115,19 @@ crate::primitive! {
         zero_stats: Option<GpuBuffer> = None,
         readback: Vec<ReadbackSlot> = Vec::new(),
         faulted: bool = false,
+        submitted_time: f64 = 0.0,
+        completed_time: f64 = 0.0,
+        submitted_cap: bool = false,
+        completed_cap: bool = false,
         last_stats: Option<MatterTickStats> = None,
     },
 }
 
 impl MatterState {
     /// Read every retired readback of the current epoch, newest last.
-    fn poll_readbacks(&mut self, clock: Option<&manifold_gpu::FrameClock>) {
+    fn poll_readbacks(&mut self, clock: Option<&manifold_gpu::FrameClock>, live: bool) {
         let Some(epoch) = self.epoch else { return };
-        let mut newest: Option<(u64, MatterTickStats)> = None;
+        let mut newest: Option<(u64, MatterTickStats, f64, bool)> = None;
         for slot in self.readback.iter_mut().filter(|s| s.pending) {
             if !clock.is_none_or(|c| c.is_complete(slot.stamp)) {
                 continue;
@@ -132,14 +142,14 @@ impl MatterState {
                 std::slice::from_raw_parts(ptr.cast::<u32>().cast_const(), STATS_WORDS as usize)
             };
             let stats = MatterTickStats::from_words(words);
-            if newest.is_none_or(|(stamp, _)| slot.stamp >= stamp) {
-                newest = Some((slot.stamp, stats));
+            if newest.is_none_or(|(stamp, _, _, _)| slot.stamp >= stamp) {
+                newest = Some((slot.stamp, stats, slot.endpoint, slot.cap_hit));
             }
         }
-        if let Some((_, stats)) = newest {
-            if stats.nonfinite > 0 {
-                self.faulted = true;
-            }
+        if let Some((_, stats, endpoint, cap_hit)) = newest {
+            self.faulted = stats.nonfinite > 0 || (self.faulted && !live);
+            self.completed_time = endpoint;
+            self.completed_cap = cap_hit;
             self.last_stats = Some(stats);
         }
     }
@@ -194,6 +204,11 @@ impl Primitive for MatterState {
             whole(ctx.scalar_or_param("nodes_y", 71.0)),
             whole(ctx.scalar_or_param("nodes_z", 71.0)),
         ];
+        let live_mode = !crate::node_graph::physics::offline_simulation();
+        self.submitted_time = f64::from(ctx.scalar_or_param("simulation_time", 0.0));
+        let target = f64::from(ctx.scalar_or_param("target_time", self.submitted_time as f32));
+        self.submitted_cap = ctx.scalar_or_param("step_cap_hit", 0.0) > 0.0;
+        let interval_duration = ctx.scalar_or_param("interval_duration", TICK as f32);
         let ticks = whole(ctx.scalar_or_param("ticks", 0.0));
         let substeps = whole(ctx.scalar_or_param("substeps_per_tick", 1.0)).max(1);
         let epoch = whole(ctx.scalar_or_param("epoch", 0.0));
@@ -234,6 +249,8 @@ impl Primitive for MatterState {
         if self.epoch != Some(epoch) {
             self.epoch = Some(epoch);
             self.ticks_done = 0;
+            self.completed_time = 0.0;
+            self.completed_cap = false;
             self.faulted = false;
             self.last_stats = None;
             if let (Some(seed), Some(out)) = (seed, out) {
@@ -249,11 +266,23 @@ impl Primitive for MatterState {
                 gpu.native_enc.copy_buffer_to_buffer(zero_stats, stats, u64::from(STATS_WORDS) * 4);
             }
         }
-        self.poll_readbacks(clock.as_ref());
+        self.poll_readbacks(clock.as_ref(), live_mode);
+        if live_mode
+            && self.faulted
+            && let (Some(seed), Some(out)) = (seed, out)
+        {
+            gpu.native_enc
+                .copy_buffer_to_buffer(seed, out, seed.size.min(out.size));
+        }
+        crate::node_graph::physics_metrics::record_simulation(
+            target,
+            self.completed_time,
+            self.completed_cap,
+            self.faulted);
 
         self.substeps = substeps;
-        self.step_dt = (TICK / f64::from(substeps)) as f32;
-        self.pending = if self.faulted || refused.is_some() { 0 } else { ticks.saturating_mul(substeps) };
+        self.step_dt = substep_duration(interval_duration, substeps);
+        self.pending = if (self.faulted && !live_mode) || refused.is_some() { 0 } else { ticks.saturating_mul(substeps) };
         self.captures = 0;
         let live = self.last_stats.map_or(count, |s| s.live);
         ctx.outputs.set_scalar("live_count", ParamValue::Float(live as f32));
@@ -261,8 +290,15 @@ impl Primitive for MatterState {
         if let Some(error) = refused {
             ctx.error(error);
         } else if self.faulted {
-            ctx.error("Matter: a tick produced non-finite values; the liquid is halted until Reset");
+            ctx.error(if live_mode {
+                "Matter: non-finite values detected; reseeding while the show continues"
+            } else {
+                "Matter: a tick produced non-finite values; the liquid is halted until Reset"});
         }
+    }
+
+    fn set_substep_interval(&mut self, interval: manifold_physics::stepping::StepInterval) {
+        self.step_dt = substep_duration(interval.duration().0 as f32, self.substeps);
     }
 
     fn substep_iteration(&mut self, iteration: u32, scalars: &mut [f32]) -> bool {
@@ -318,6 +354,8 @@ impl Primitive for MatterState {
                     stamp: 0,
                     epoch,
                     pending: false,
+                    endpoint: 0.0,
+                    cap_hit: false,
                 });
                 self.readback.len() - 1
             }
@@ -334,6 +372,8 @@ impl Primitive for MatterState {
         slot.stamp = clock.as_ref().map_or(0, |c| c.stamp());
         slot.epoch = epoch;
         slot.pending = true;
+        slot.endpoint = self.submitted_time;
+        slot.cap_hit = self.submitted_cap;
     }
 }
 

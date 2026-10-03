@@ -285,7 +285,11 @@ fn offline_history_drain_long_gap_matches_native_rigid_frame_sequence() {
 fn offline_history_drain_consumes_preview_debt_before_long_gap() {
     use crate::node_graph::physics::PhysicsStepScope;
     let mut expected_runtime = runtime_with_field(50.0, false, true);
-    frame(&mut expected_runtime, 0.0);
+    {
+        let _preview = PhysicsStepScope::for_render(false);
+        frame(&mut expected_runtime, 0.0);
+        frame(&mut expected_runtime, 0.9);
+    }
     let expected = frame(&mut expected_runtime, 3.0);
 
     let mut jumped = runtime_with_field(50.0, false, true);
@@ -293,12 +297,12 @@ fn offline_history_drain_consumes_preview_debt_before_long_gap() {
         let _preview = PhysicsStepScope::with_preview_budget(false, std::time::Duration::ZERO);
         frame(&mut jumped, 0.0);
         let behind = frame(&mut jumped, 0.9);
-        assert!(behind.pos[1] > 49.0, "preview must leave unpaid ticks");
+        assert!(behind.pos[1] < 49.0, "live preview must consume the full interval even at zero budget");
     }
     let actual = frame(&mut jumped, 3.0);
     for axis in 0..3 {
         assert!((actual.pos[axis] - expected.pos[axis]).abs() < 1e-4,
-            "offline drain lost preview debt: {actual:?} vs {expected:?}");
+            "offline drain changed the accepted live prefix: {actual:?} vs {expected:?}");
     }
 }
 

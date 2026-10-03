@@ -1,3 +1,4 @@
+// Ported from FLIP Fluids polygonizer3d.cpp `_vertexInterp` (MIT); see THIRD_PARTY_NOTICES.md.
 // node.volume_surface_mesh — standalone BUFFER body with cell-owned output.
 // One thread owns one cell and writes that cell's disjoint scan interval.
 // This preserves the inclusive scan's triangle order while removing the

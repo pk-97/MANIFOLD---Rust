@@ -73,7 +73,7 @@ mod cpu_tests {
                                 x as f32 + 0.25 + 0.5 * (site & 1) as f32,
                                 y as f32 + 0.25 + 0.5 * ((site >> 1) & 1) as f32,
                                 z as f32 + 0.25 + 0.5 * ((site >> 2) & 1) as f32,
-                                0.31017,
+                                0.31017524,
                             ],
                             velocity: [0.0; 3],
                             id,
@@ -361,7 +361,7 @@ mod cpu_tests {
         bindings.sort_unstable();
         assert_eq!(
             bindings,
-            (0..=12).map(|binding| (0, binding)).collect::<Vec<_>>()
+            (0..=12).chain([46]).map(|binding| (0, binding)).collect::<Vec<_>>()
         );
 
         let params = module
@@ -600,6 +600,9 @@ mod gpu_tests {
             binding: 0,
             data: bytemuck::bytes_of(uniform),
         }];
+        let clock = device.create_buffer_shared(48);
+        clock.zero_fill();
+        all.push(bind(46, &clock));
         all.extend(bindings);
         let mut encoder = device.create_encoder("gpu-flip-narrow-band-proof");
         encoder.dispatch_compute(&pipeline, &all, [count.div_ceil(256) as u32, 1, 1], entry);
@@ -1084,7 +1087,7 @@ mod gpu_tests {
                     ]
                 );
                 assert_eq!(particle.velocity, [1.0, 2.0, 3.0]);
-                assert_eq!(particle.position_radius[3], 0.31017);
+                assert_eq!(particle.position_radius[3], 0.31017524);
             }
             assert!(written[16..].iter().all(|p| p.position_radius[3] == 0.0));
         }

@@ -48,7 +48,7 @@ fn kw_check(e: Element, origin: vec3<f32>, h: f32, lo: vec3<f32>, hi: vec3<f32>,
     let p = e.position_lifetime.xyz - origin;
     // By its bits: fast math may fold a NaN comparison away.
     let bits = vec3<u32>(bitcast<u32>(p.x), bitcast<u32>(p.y), bitcast<u32>(p.z)) & vec3<u32>(0x7f800000u);
-    if e.kind > 2u || !(e.position_lifetime.w > 0.0) || any(bits == vec3<u32>(0x7f800000u)) {
+    if (e.kind == 3u || e.kind > 4u) || !(e.position_lifetime.w > 0.0) || any(bits == vec3<u32>(0x7f800000u)) {
         return vec4<i32>(0);
     }
     if !(all(p >= lo) && all(p < hi)) || kw_solid(p / h, nodes) < 0.0 {

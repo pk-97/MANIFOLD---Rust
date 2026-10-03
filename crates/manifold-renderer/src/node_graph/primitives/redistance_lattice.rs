@@ -20,7 +20,9 @@ struct Uniforms {
     band: f32,
     enabled: f32,
     dispatch_count: u32,
-    _pad: [u32; 3],
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 crate::primitive! {
@@ -97,7 +99,9 @@ impl Primitive for RedistanceLattice {
             band: ctx.scalar_or_param("band", 1.0),
             enabled: ctx.scalar_or_param("enabled", 1.0),
             dispatch_count: count,
-            _pad: [0; 3],
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
         };
 
         let nodes = [uniforms.nodes_x, uniforms.nodes_y, uniforms.nodes_z];

@@ -16,10 +16,11 @@ const FIRST_PARTICLES: usize = 65_536;
 const PARTICLE_ROUNDING: usize = 4_096;
 
 /// One accepted capture: what the slot holds and for which tick.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct SlotFrame {
     pub info: ParticleFrameInfo,
     pub tick: u64,
+    pub time: f64,
 }
 
 pub(crate) struct ParticleSlot {
@@ -79,6 +80,7 @@ impl ParticleSlot {
         world: &mut FluidWorld,
         offset: [f32; 3],
         tick: u64,
+        time: f64,
     ) -> Result<(), CaptureError> {
         self.frame = None;
         let particle_ptr = self.particles.mapped_ptr().expect("particle slots are shared storage");
@@ -94,7 +96,7 @@ impl ParticleSlot {
             )
         };
         let info = world.capture_particle_frame(offset, as_records(particles), solid)?;
-        self.frame = Some(SlotFrame { info, tick });
+        self.frame = Some(SlotFrame { info, tick, time });
         Ok(())
     }
 

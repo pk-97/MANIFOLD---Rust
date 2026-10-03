@@ -270,6 +270,23 @@ pub(super) fn sort_and_shape(
     )
 }
 
+/// node.blob_bounds over `blobs`: the bounds the field consumers require,
+/// produced the way the shipped surface group produces them.
+pub(super) fn blob_bounds(harness: &mut Harness, blobs: Slot) -> Slot {
+    let (bounds, _) = harness.array::<f32>(&[], 2);
+    // The executor prepares the reduction before its first run; so does this.
+    let mut node = super::blob_bounds::BlobBounds::new();
+    node.prepare_pipelines(&harness.device);
+    let (_, errors) = harness.run(
+        &mut node,
+        &[("blobs", blobs)],
+        &[("bounds", bounds)],
+        &params(&[]),
+    );
+    assert!(errors.is_empty(), "{errors:?}");
+    bounds
+}
+
 #[test]
 fn fluid_sort_particles_into_cells_is_a_binned_permutation() {
     let mut harness = Harness::new();
@@ -431,9 +448,10 @@ fn fluid_searchers_refuse_bins_past_their_ranges() {
     let (solid, _) = harness.array(&[1.0_f32; 729], 729);
     let (levelset, _) = harness.array::<f32>(&[], 17 * 17 * 17);
     let volume = lattice.params(&[("nodes_x", solid_nodes), ("nodes_y", solid_nodes), ("nodes_z", solid_nodes)]);
+    let bounds = blob_bounds(&mut harness, blobs);
     let (_, errors) = harness.run(
         &mut ParticleVolume::new(),
-        &[("blobs", blobs), ("cell_ranges", short), ("solid", solid)],
+        &[("blobs", blobs), ("cell_ranges", short), ("solid", solid), ("bounds", bounds)],
         &[("levelset", levelset)],
         &volume,
     );
@@ -757,7 +775,7 @@ fn fluid_running_total_names_a_total_past_its_capacity() {
 fn reference_blob(
     particles: &[FluidParticle],
     index: usize,
-    cell: f64,
+    _cell: f64,
     particle_scale: f64,
     stretch: f64,
     smoothing: f64,
@@ -767,7 +785,7 @@ fn reference_blob(
     let p = particles[index].position_radius;
     let x = [p[0] as f64, p[1] as f64, p[2] as f64];
     let physical = p[3] as f64;
-    let radius = (particle_scale * physical).min(cell);
+    let radius = particle_scale * physical;
     let (mut weight_sum, mut mean, mut neighbours, mut nearest) = (0.0, [0.0; 3], 0, f64::INFINITY);
     let mut members = Vec::new();
     for (k, other) in particles.iter().enumerate() {
@@ -816,9 +834,6 @@ fn reference_blob(
             basis = vectors;
         }
     }
-    let shift = (0..3).map(|a| (centre[a] - x[a]).powi(2)).sum::<f64>().sqrt();
-    let cap = ((1.0 - LEVEL_SET_BAND) * cell - shift).max(1e-6 * cell);
-    let axes = axes.map(|a| a.min(cap));
     // G = V diag(1/a) Vᵀ with eigenvectors as columns of V (basis[row][col]).
     let g = std::array::from_fn(|r| {
         std::array::from_fn(|col| (0..3).map(|k| basis[r][k] * basis[col][k] / axes[k]).sum())
@@ -981,7 +996,9 @@ fn fluid_shape_particle_blobs_stretch_one_is_an_exact_sphere() {
             f64::from(iso),
             min_n,
         );
-        assert_eq!(blob.shape_off, [0.0; 4], "blob {index} is not a sphere");
+        assert_eq!(&blob.shape_off[..3], &[0.0; 3], "blob {index} is not a sphere");
+        let shift = (0..3).map(|a| (blob.center_radius[a] - sorted[index].position_radius[a]).powi(2)).sum::<f32>().sqrt();
+        assert!((blob.shape_off[3] - shift).abs() < 1e-6, "blob {index} search displacement");
         let diag = blob.shape_diag;
         assert!(diag[0] == diag[1] && diag[1] == diag[2], "blob {index} axes differ: {diag:?}");
         assert!((f64::from(diag[0]) * f64::from(blob.center_radius[3]) - 1.0).abs() < 1e-5, "blob {index} G ≠ 1 / bound");
@@ -1004,7 +1021,13 @@ fn fluid_shape_particle_blobs_stretch_one_is_an_exact_sphere() {
 /// The level set's cap outside the liquid, as a fraction of a bin; the WGSL of
 /// `node.particle_volume` and `node.shape_particle_blobs` both hold it (P6e).
 /// The volume's cap, as a fraction of a bin; the blob reach cap is the rest.
-const LEVEL_SET_BAND: f64 = 1.0 / 3.0;
+fn native_support(ijk: [u32; 3], centre: [f64; 3], radius: f64, min: [f64; 3], h: [f64; 3], extra: f64) -> bool {
+    (0..3).all(|a| {
+        let lo = ((centre[a] - 1.5 * radius - extra - min[a]) / h[a]).floor();
+        let hi = ((centre[a] + 1.5 * radius + extra - min[a]) / h[a]).floor() + 1.0;
+        f64::from(ijk[a]) >= lo && f64::from(ijk[a]) <= hi
+    })
+}
 
 /// The volume against a brute force over every blob, not just the node's
 /// bins: it matches only if no blob the ±1-bin search misses comes within the
@@ -1060,9 +1083,10 @@ fn volume_distance_reference(band_extra: f32) {
     ]);
     node_params.insert(Cow::Borrowed("resolution_scale"), ParamValue::Float(scale as f32));
     let volume_nodes: [Slot; 3] = std::array::from_fn(|_| harness.scalar());
+    let bounds_slot = blob_bounds(&mut harness, blobs_slot);
     let (scalars, errors) = harness.run(
         &mut ParticleVolume::new(),
-        &[("blobs", blobs_slot), ("cell_ranges", ranges_slot), ("solid", solid_slot)],
+        &[("blobs", blobs_slot), ("cell_ranges", ranges_slot), ("solid", solid_slot), ("bounds", bounds_slot)],
         &[
             ("levelset", levelset_slot),
             ("volume_nodes_x", volume_nodes[0]),
@@ -1083,31 +1107,31 @@ fn volume_distance_reference(band_extra: f32) {
         let (bricks, _) = harness.array::<u32>(&[], layout.words as usize);
         let (_, errors) = harness.run(
             &mut LatticeBricks::new(),
-            &[("blobs", blobs_slot), ("cell_ranges", ranges_slot), ("solid", solid_slot)],
+            &[("blobs", blobs_slot), ("cell_ranges", ranges_slot), ("solid", solid_slot), ("bounds", bounds_slot)],
             &[("bricks", bricks)], &node_params,
         );
         assert!(errors.is_empty(), "{errors:?}");
         let (sparse, sparse_buf) = harness.array::<f32>(&[], total);
         let (_, errors) = harness.run(
             &mut ParticleVolume::new(),
-            &[("blobs", blobs_slot), ("cell_ranges", ranges_slot), ("solid", solid_slot), ("bricks", bricks)],
+            &[("blobs", blobs_slot), ("cell_ranges", ranges_slot), ("solid", solid_slot), ("bounds", bounds_slot), ("bricks", bricks)],
             &[("levelset", sparse)], &node_params,
         );
         assert!(errors.is_empty(), "{errors:?}");
         assert_eq!(read::<u32>(&sparse_buf, total), read::<u32>(&levelset_buf, total));
     }
     let h: [f64; 3] = std::array::from_fn(|a| f64::from(lattice.size[a]) / f64::from(nodes[a] - 1));
-    let band = LEVEL_SET_BAND * f64::from(lattice.cell) + f64::from(band_extra)
+    let band = 3.0 * blobs.iter().map(|b| f64::from(b.center_radius[3])).fold(0.0, f64::max) + f64::from(band_extra)
         + if band_extra > 0.0 { h.iter().map(|v| v*v).sum::<f64>().sqrt() } else { 0.0 };
     let (mut inside, mut clamped, mut in_band) = (0, 0, 0);
     for (idx, &value) in levelset.iter().enumerate() {
         let ijk = [idx as u32 % nodes[0], (idx as u32 / nodes[0]) % nodes[1], idx as u32 / (nodes[0] * nodes[1])];
-        let border = (0..3).any(|a| ijk[a] == 0 || ijk[a] == nodes[a] - 1);
         let p: [f64; 3] = std::array::from_fn(|a| f64::from(min[a]) + f64::from(ijk[a]) * h[a]);
         let mut expected = band;
         for blob in &blobs[..particles.len()] {
             let reach = f64::from(blob.center_radius[3]);
-            if reach <= 0.0 {
+            let extra = f64::from(band_extra) + if band_extra > 0.0 { h.iter().map(|v| v*v).sum::<f64>().sqrt() } else { 0.0 };
+            if reach <= 0.0 || !native_support(ijk, std::array::from_fn(|a| f64::from(blob.center_radius[a])), reach, min.map(f64::from), h, extra) {
                 continue;
             }
             let d: [f64; 3] = std::array::from_fn(|a| p[a] - f64::from(blob.center_radius[a]));
@@ -1117,12 +1141,9 @@ fn volume_distance_reference(band_extra: f32) {
             expected = expected.min(reach * (q - 1.0));
         }
         // Solid distance is linear in y, so trilinear interpolation is exact.
-        if !border && p[1] - 0.7 < 0.0 {
+        if p[1] - 0.7 < 0.0 {
             expected = expected.max(0.0);
             clamped += 1;
-        }
-        if border {
-            expected = band;
         }
         if expected < 0.0 {
             inside += 1;
@@ -1147,7 +1168,8 @@ fn fluid_particle_volume_is_the_distance_to_a_lone_sphere() {
     let lattice = Lattice { center: [0.0, 0.0, 0.0], size: [1.0, 1.0, 1.0], cell: 0.25 };
     let solid_nodes = [5u32, 5, 5];
     let centre = [0.03_f32, -0.02, 0.01];
-    let (r, scale) = (0.05_f32, 3.0_f32);
+    // Exact native marker coefficient; scale three exceeds the old bin cap.
+    let (r, scale) = (0.31017524 * lattice.cell, 3.0_f32);
     let particles = [particle(centre, r, 1)];
     let shape = [("particle_scale", scale), ("stretch", 4.0), ("smoothing", 0.0), ("isolated_scale", 1.0), ("min_neighbours", 6.0)];
     let (_, _, _, (_, ranges_slot, blobs_slot)) = sort_and_shape(&mut harness, &lattice, &particles, 1, &shape);
@@ -1159,9 +1181,10 @@ fn fluid_particle_volume_is_the_distance_to_a_lone_sphere() {
     let total = nodes.iter().product::<u32>() as usize;
     let (levelset_slot, levelset_buf) = harness.array::<f32>(&[], total);
     let volume_nodes: [Slot; 3] = std::array::from_fn(|_| harness.scalar());
+    let bounds_slot = blob_bounds(&mut harness, blobs_slot);
     let (_, errors) = harness.run(
         &mut ParticleVolume::new(),
-        &[("blobs", blobs_slot), ("cell_ranges", ranges_slot), ("solid", solid_slot)],
+        &[("blobs", blobs_slot), ("cell_ranges", ranges_slot), ("solid", solid_slot), ("bounds", bounds_slot)],
         &[
             ("levelset", levelset_slot),
             ("volume_nodes_x", volume_nodes[0]),
@@ -1180,14 +1203,13 @@ fn fluid_particle_volume_is_the_distance_to_a_lone_sphere() {
     let min = lattice.min();
     let h = f64::from(lattice.size[0]) / f64::from(nodes[0] - 1);
     let radius = f64::from(scale * r);
-    let band = LEVEL_SET_BAND * f64::from(lattice.cell);
+    let band = 3.0 * radius;
     let mut inside = 0;
     for (idx, &value) in levelset.iter().enumerate() {
         let ijk = [idx as u32 % nodes[0], (idx as u32 / nodes[0]) % nodes[1], idx as u32 / (nodes[0] * nodes[1])];
-        let border = (0..3).any(|a| ijk[a] == 0 || ijk[a] == nodes[a] - 1);
         let p: [f64; 3] = std::array::from_fn(|a| f64::from(min[a]) + f64::from(ijk[a]) * h);
         let distance = (0..3).map(|a| (p[a] - f64::from(centre[a])).powi(2)).sum::<f64>().sqrt() - radius;
-        let expected = if border { band } else { distance.min(band) };
+        let expected = if native_support(ijk, centre.map(f64::from), radius, min.map(f64::from), [h; 3], 0.0) { distance.min(band) } else { band };
         if expected < 0.0 {
             inside += 1;
         }
@@ -2107,15 +2129,12 @@ fn fluid_clamp_liquid_to_solids_matches_reference_and_passes_through() {
     let (_, errors) = run(&mut harness, nodes);
     assert!(errors.is_empty(), "{errors:?}");
     let clamped: Vec<f32> = read(&clamped_buf, values.len());
-    let band = cell / 3.0;
     let h: [f64; 3] = std::array::from_fn(|a| f64::from(size[a]) / f64::from(nodes[a] - 1));
     let (mut border, mut raised, mut kept, mut ambiguous) = (0, 0, 0, 0);
     for (idx, (&value, &out)) in values[..total].iter().zip(&clamped).enumerate() {
         let ijk = [idx as u32 % nodes[0], (idx as u32 / nodes[0]) % nodes[1], idx as u32 / (nodes[0] * nodes[1])];
         if (0..3).any(|a| ijk[a] == 0 || ijk[a] == nodes[a] - 1) {
-            assert_eq!(out.to_bits(), band.to_bits(), "border node {ijk:?}: {out}");
             border += 1;
-            continue;
         }
         let p: [f64; 3] = std::array::from_fn(|a| f64::from(min[a]) + f64::from(ijk[a]) * h[a]);
         let s = solid_sample(&solid, solid_nodes, min, size, p);
@@ -2187,10 +2206,9 @@ fn fluid_clamp_scheduled_boundary_renders_like_unfrozen() {
 /// Resolution Scale 4, Particle Scale 8. Water fills a padded 1 m lattice at
 /// resolution 8 against the floor and four closed walls and, through the open
 /// top, up to the lattice's top edge. After the clamp every padding node
-/// (behind a closed wall) reads air and every border node reads the band;
-/// before it, the padding reads liquid and smoothing has pulled the border
-/// off the band (the volume already holds it there), or the fixture proves
-/// nothing.
+/// (behind a closed wall) reads air, including borders. Open border samples
+/// pass through, as in the native production mesher. The fixture must bring
+/// liquid into solid padding before the final clamp.
 #[test]
 fn fluid_liquid_surface_keeps_padding_and_border_air_at_extreme_dials() {
     use crate::node_graph::liquid::lattice::{LiquidLattice, PADDING_NODES};
@@ -2233,9 +2251,10 @@ fn fluid_liquid_surface_keeps_padding_and_border_air_at_extreme_dials() {
     let (solid_slot, _) = harness.array(&solid, solid.len());
     let (levelset_slot, _) = harness.array::<f32>(&[], capacity);
     let volume_nodes: [Slot; 3] = std::array::from_fn(|_| harness.scalar());
+    let bounds_slot = blob_bounds(&mut harness, blobs_slot);
     let (_, errors) = harness.run(
         &mut ParticleVolume::new(),
-        &[("blobs", blobs_slot), ("cell_ranges", ranges_slot), ("solid", solid_slot)],
+        &[("blobs", blobs_slot), ("cell_ranges", ranges_slot), ("solid", solid_slot), ("bounds", bounds_slot)],
         &[
             ("levelset", levelset_slot),
             ("volume_nodes_x", volume_nodes[0]),
@@ -2277,20 +2296,24 @@ fn fluid_liquid_surface_keeps_padding_and_border_air_at_extreme_dials() {
 
     let smoothed: Vec<f32> = read(&smoothed.expect("three passes"), total);
     let clamped: Vec<f32> = read(&clamped_buf, total);
-    let band = cell / 3.0;
     let h: [f64; 3] = std::array::from_fn(|a| f64::from(lattice.size[a]) / f64::from(nodes[a] - 1));
     let (mut border, mut padding) = (0, 0);
     let (mut border_moved_before, mut padding_liquid_before) = (0, 0);
     for idx in 0..total {
         let ijk = [idx as u32 % nodes[0], (idx as u32 / nodes[0]) % nodes[1], idx as u32 / (nodes[0] * nodes[1])];
+        let p: [f64; 3] = std::array::from_fn(|a| f64::from(min[a]) + f64::from(ijk[a]) * h[a]);
+        let solid_value = solid_sample(&solid, solid_nodes, min, lattice.size, p);
         if (0..3).any(|a| ijk[a] == 0 || ijk[a] == nodes[a] - 1) {
-            assert_eq!(clamped[idx].to_bits(), band.to_bits(), "border node {ijk:?} reads {}", clamped[idx]);
+            if solid_value < -1e-4 {
+                assert!(clamped[idx] >= 0.0, "solid border node {ijk:?} reads liquid");
+            } else if solid_value > 1e-4 {
+                assert_eq!(clamped[idx].to_bits(), smoothed[idx].to_bits(), "open border {ijk:?}");
+            }
             border += 1;
-            border_moved_before += usize::from(smoothed[idx].to_bits() != band.to_bits());
+            border_moved_before += usize::from(smoothed[idx] < 0.0);
             continue;
         }
-        let p: [f64; 3] = std::array::from_fn(|a| f64::from(min[a]) + f64::from(ijk[a]) * h[a]);
-        if solid_sample(&solid, solid_nodes, min, lattice.size, p) < -1e-4 {
+        if solid_value < -1e-4 {
             assert!(clamped[idx] >= 0.0, "padding node {ijk:?} reads liquid: {}", clamped[idx]);
             padding += 1;
             padding_liquid_before += usize::from(smoothed[idx] < 0.0);
@@ -2298,8 +2321,8 @@ fn fluid_liquid_surface_keeps_padding_and_border_air_at_extreme_dials() {
     }
     assert!(border > 1000 && padding > 1000, "border {border}, padding {padding}");
     assert!(
-        border_moved_before > 0 && padding_liquid_before > 0,
-        "smoothing must move the border off the band ({border_moved_before}) and the unclamped surface must reach the padding ({padding_liquid_before})"
+        padding_liquid_before > 0,
+        "smoothing must reach the solid padding; liquid border samples ({border_moved_before}) and the unclamped surface must reach the padding ({padding_liquid_before})"
     );
 }
 

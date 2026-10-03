@@ -67,6 +67,21 @@ struct LiquidBody {
     accel_shape: vec4<f32>,
 };
 
+struct ClockPlan {
+    step_dt: f32,
+    elapsed: f32,
+    remaining: f32,
+    maximum_speed: f32,
+    cap_hit: u32,
+    nonfinite: u32,
+    step_index: u32,
+    event: u32,
+    numerical_end: f32,
+    marker_limit: f32,
+    _pad0: u32,
+    live_mode: u32,
+};
+
 @group(0) @binding(0) var<uniform> u: Params;
 @group(0) @binding(1) var<storage, read> water: array<f32>;
 @group(0) @binding(2) var<storage, read> open: array<FaceSample>;
@@ -83,6 +98,7 @@ struct LiquidBody {
 @group(0) @binding(12) var<storage, read> armed: array<u32>;
 @group(0) @binding(13) var<storage, read> flags: array<u32>;
 @group(0) @binding(14) var<storage, read> lists: array<u32>;
+@group(0) @binding(15) var<storage, read> clock_plan: array<ClockPlan>;
 
 const THREADS: u32 = 256u;
 const TILE: i32 = 8;
@@ -123,6 +139,14 @@ fn listed_partial(gid: u32) -> u32 {
     return 2u * lists[gid >> 9u] + ((gid >> 8u) & 1u);
 }
 
+fn clock_active() -> bool {
+    return clock_plan[0].live_mode == 0u || clock_plan[0].step_dt > 0.0;
+}
+
+fn adaptive_tick_seconds() -> f32 {
+    return select(u.tick_seconds, clock_plan[0].elapsed, clock_plan[0].live_mode != 0u);
+}
+
 fn unflatten(idx: u32, m: vec3<i32>) -> vec3<i32> {
     return vec3<i32>(
         i32(idx % u32(m.x)),
@@ -152,7 +176,7 @@ fn face_centre(p: vec3<i32>, a: i32) -> vec3<f32> {
 // distance poses it.
 fn body_centre(b: u32) -> vec3<f32> {
     let bd = bodies[u.first + b];
-    return bd.position_inv_mass.xyz + bd.linear_velocity.xyz * u.tick_seconds;
+    return bd.position_inv_mass.xyz + bd.linear_velocity.xyz * adaptive_tick_seconds();
 }
 
 // A body that takes a reaction: finite mass and a shape
@@ -215,6 +239,9 @@ fn impulse_partial(
     @builtin(local_invocation_index) li: u32,
     @builtin(workgroup_id) wg: vec3<u32>,
 ) {
+    if !clock_active() {
+        return;
+    }
     let gid = wg.x * THREADS + li;
     if !listed(gid) {
         return;
@@ -270,6 +297,9 @@ fn impulse_finalize(
     @builtin(local_invocation_index) li: u32,
     @builtin(workgroup_id) wg: vec3<u32>,
 ) {
+    if !clock_active() {
+        return;
+    }
     let b = wg.x;
     var mine = array<f32, 6>();
     if b < u.body_count {
@@ -333,6 +363,9 @@ fn impulse_finalize(
 // addMatrixProduct). Every water cell is in an active tile.
 @compute @workgroup_size(256)
 fn body_product(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !clock_active() {
+        return;
+    }
     if !listed(gid.x) {
         return;
     }
@@ -372,6 +405,9 @@ fn body_product(@builtin(global_invocation_id) gid: vec3<u32>) {
 // gives the water the body's velocity after the push.
 @compute @workgroup_size(256)
 fn velocity_change(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !clock_active() {
+        return;
+    }
     let idx = gid.x;
     let n = lattice();
     let m = n + vec3<i32>(1);

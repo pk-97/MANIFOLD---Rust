@@ -211,12 +211,13 @@ fn emission_count_matches_cpu() {
     let mut harness = Harness::new();
     let slot = harness.array(&input, SLOTS);
     let (e, w) = (harness.array(&energy, SLOTS), harness.array(&wavecrest, SLOTS));
-    let emission = Emission { rate: 175.0, points_per_cell: 4.0, ticks: 2.0, live_count: (SLOTS - 50) as f32 };
+    let emission = Emission { dt: 1.0 / 60.0, rate: 175.0, points_per_cell: 4.0, ticks: 2.0, live_count: (SLOTS - 50) as f32 };
     let p = params(&[
         ("rate", emission.rate),
         ("points_per_cell", emission.points_per_cell),
         ("ticks", emission.ticks),
         ("live_count", emission.live_count),
+        ("dt", emission.dt),
     ]);
     let got: Vec<u32> =
         run(&mut harness, &mut EmissionCount::new(), &[("particles", slot.0), ("energy", e.0), ("wavecrest", w.0)], SLOTS, &p);
@@ -231,6 +232,35 @@ fn emission_count_matches_cpu() {
     }
     assert!(emitting > 200, "{emitting} slots emit");
     assert!(got[SLOTS - 50..].iter().all(|&n| n == 0), "slots past the live count emit nothing");
+}
+
+/// A stretched live interval changes the emission count by its accepted
+/// duration; compare the GPU value with the CPU statement at 0.1 seconds.
+#[test]
+fn live_interval_whitewater_emission_duration() {
+    let input: Vec<FluidParticle> = (0..8)
+        .map(|i| FluidParticle { position_radius: [0.0, 0.0, 0.0, 0.05], velocity: [1.0, 0.0, 0.0], id: i + 1 })
+        .collect();
+    let energy = vec![1.0f32; input.len()];
+    let wavecrest = vec![1.0f32; input.len()];
+    let emission = Emission { dt: 0.1, rate: 80.0, points_per_cell: 8.0, ticks: 1.0, live_count: input.len() as f32 };
+    let mut harness = Harness::new();
+    let particles = harness.array(&input, input.len());
+    let energy_buffer = harness.array(&energy, energy.len());
+    let crest_buffer = harness.array(&wavecrest, wavecrest.len());
+    let got: Vec<u32> = run(
+        &mut harness,
+        &mut EmissionCount::new(),
+        &[("particles", particles.0), ("energy", energy_buffer.0), ("wavecrest", crest_buffer.0)],
+        input.len(),
+        &params(&[("rate", emission.rate), ("points_per_cell", emission.points_per_cell), ("ticks", emission.ticks), ("live_count", emission.live_count), ("dt", emission.dt)]),
+    );
+    for (i, (&actual, &particle)) in got.iter().zip(&input).enumerate() {
+        let (expected, margin) = cpu::emission_count(particle, energy[i], wavecrest[i], i as u32, emission);
+        assert!(margin > 1e-5, "fixture sits on an emission threshold at slot {i}");
+        assert_eq!(actual, expected, "slot {i}: duration-aware emission");
+    }
+    assert!(got.iter().all(|&count| count == 8), "0.1 seconds emits eight particles per slot: {got:?}");
 }
 
 /// The five emitter atoms folded into one kernel, as
@@ -268,6 +298,7 @@ fn whitewater_emitter_chain_fused_matches_unfused() {
         ("points_per_cell", 2.0),
         ("ticks", 2.0),
         ("live_count", (SLOTS - 30) as f32),
+        ("dt", 0.1),
     ]
     .into_iter()
     .chain(face_params())
@@ -347,7 +378,7 @@ fn whitewater_emitter_chain_fused_matches_unfused() {
     };
     let fused = generate_fused(&region).expect("the emitter chain fuses");
     assert!(naga::front::wgsl::parse_str(&fused.wgsl).is_ok(), "fused WGSL parses:\n{}", fused.wgsl);
-    let lookup = |name: &str| values.iter().chain(&box_values()).find(|(n, _)| *n == name).map(|(_, v)| *v);
+    let lookup = |name: &str| values.iter().chain(&box_values()).find(|(n, _)| *n == name).map(|(_, v)| *v).or(match name { "spray_speed" => Some(1.0), "dust" => Some(0.0), _ => None });
     let mut words: Vec<u32> = fused
         .param_order
         .iter()
@@ -369,7 +400,7 @@ fn whitewater_emitter_chain_fused_matches_unfused() {
     enc.commit_and_wait_completed();
     let fused_out: Vec<u32> = read(&dst.1, SLOTS);
 
-    let emission = Emission { rate: 175.0, points_per_cell: 2.0, ticks: 2.0, live_count: (SLOTS - 30) as f32 };
+    let emission = Emission { dt: 0.1, rate: 175.0, points_per_cell: 2.0, ticks: 2.0, live_count: (SLOTS - 30) as f32 };
     let crest_limits = Crest { min_curvature: 0.4, max_curvature: 1.0, sharpness: 0.4 };
     let mut emitting = 0;
     for i in 0..SLOTS {
@@ -449,6 +480,7 @@ fn spawn_values(s: cpu::Spawn) -> Vec<(&'static str, f32)> {
         ("min_lifetime", s.min_lifetime),
         ("max_lifetime", s.max_lifetime),
         ("lifetime_variance", s.variance),
+        ("dt", s.dt),
     ];
     values.extend(face_params());
     values
@@ -456,6 +488,7 @@ fn spawn_values(s: cpu::Spawn) -> Vec<(&'static str, f32)> {
 
 fn spawn_settings(capacity: u32) -> cpu::Spawn {
     cpu::Spawn {
+        dt: 1.0 / 60.0,
         capacity,
         emitters: EMITTERS as u32,
         seed: 3.5,
@@ -536,6 +569,41 @@ fn spawn_whitewater_matches_cpu() {
 
 /// Spray outside FLIP's box, then foam, bubble or spray by depth, and no
 /// foam or spray away from air.
+/// A stretched live interval lengthens the emitter cylinder by the accepted
+/// duration. Compare every GPU spawn value with the CPU reference at 0.1 s.
+#[test]
+fn live_interval_whitewater_spawn_duration() {
+    let fixture = SpawnFixture::new(&mut Rng(0x5a4e_0007));
+    let capacity = fixture.total().min(512);
+    let settings = cpu::Spawn { dt: 0.1, capacity, emitters: EMITTERS as u32, seed: 3.5, epoch: 2.0, min_lifetime: 1.0, max_lifetime: 1.0, variance: 0.0 };
+    let g = grid();
+    let mut harness = Harness::new();
+    let offsets = harness.array(&fixture.offsets, EMITTERS);
+    let particles = harness.array(&fixture.particles, EMITTERS);
+    let energy = harness.array(&fixture.energy, EMITTERS);
+    let faces = fixture.faces.each_ref().map(|f| harness.array(f, f.len()));
+    let solid = harness.array(&fixture.solid, fixture.solid.len());
+    let got: Vec<WhitewaterSpawn> = run(
+        &mut harness,
+        &mut SpawnWhitewater::new(),
+        &[("offsets", offsets.0), ("particles", particles.0), ("energy", energy.0),
+          ("face_u", faces[0].0), ("face_v", faces[1].0), ("face_w", faces[2].0), ("solid", solid.0)],
+        capacity as usize,
+        &box_params(&spawn_values(settings)),
+    );
+    let fields = fixture.fields();
+    let mut placed = 0;
+    for (j, actual) in got.iter().enumerate() {
+        let (expected, margin) = cpu::spawn(j as u32, &fields, &g, settings);
+        if margin < 1e-4 {
+            continue;
+        }
+        assert!(spawn_close(actual, &expected, &fixture), "slot {j}: duration-aware spawn GPU {actual:?}, CPU {expected:?}");
+        placed += usize::from(expected.position_lifetime[3] > 0.0);
+    }
+    assert!(placed > 100, "fixture must exercise stretched-duration spawn placement: {placed}");
+}
+
 #[test]
 fn whitewater_type_matches_cpu() {
     let mut rng = Rng(0x7e9e_0001);
@@ -587,7 +655,7 @@ fn whitewater_spawn_chain_fused_matches_unfused() {
     let fixture = SpawnFixture::new(&mut Rng(0xf05e_0003));
     let g = grid();
     let capacity = fixture.total() + 64;
-    let settings = spawn_settings(capacity);
+    let settings = cpu::Spawn { dt: 0.1, ..spawn_settings(capacity) };
     let values = spawn_values(settings);
     let all = box_params(&values);
     let cells = fixture.distance.len();
@@ -661,7 +729,7 @@ fn whitewater_spawn_chain_fused_matches_unfused() {
     };
     let fused = generate_fused(&region).expect("the spawn chain fuses");
     assert!(naga::front::wgsl::parse_str(&fused.wgsl).is_ok(), "fused WGSL parses:\n{}", fused.wgsl);
-    let lookup = |name: &str| values.iter().chain(&box_values()).find(|(n, _)| *n == name).map(|(_, v)| *v);
+    let lookup = |name: &str| values.iter().chain(&box_values()).find(|(n, _)| *n == name).map(|(_, v)| *v).or(match name { "spray_speed" => Some(1.0), "dust" => Some(0.0), _ => None });
     let mut words: Vec<u32> = fused
         .param_order
         .iter()
@@ -715,7 +783,7 @@ fn emission_count_rounds_per_tick() {
     let mut harness = Harness::new();
     let slot = harness.array(&input, 3);
     let (e, w) = (harness.array(&energy, 3), harness.array(&wavecrest, 3));
-    let p = params(&[("rate", 175.0), ("points_per_cell", 8.0), ("ticks", 3.0)]);
+    let p = params(&[("rate", 175.0), ("points_per_cell", 8.0), ("ticks", 3.0), ("dt", 1.0 / 60.0)]);
     let got: Vec<u32> =
         run(&mut harness, &mut EmissionCount::new(), &[("particles", slot.0), ("energy", e.0), ("wavecrest", w.0)], 3, &p);
     assert_eq!(got, [0, 3, 3], "per tick, not per frame ([1, 2, 4])");

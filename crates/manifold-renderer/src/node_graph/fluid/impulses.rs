@@ -4,7 +4,7 @@
 //! after that batch; the reply records which assigned ticks actually began.
 
 use manifold_physics::input::{AppliedEvent, EventQueue, EventStamp};
-use manifold_physics::{FieldValue, TickStamp, VectorField};
+use manifold_physics::{stepping::StepInterval, FieldValue, TickStamp, VectorField};
 
 use super::{FluidRuntime, TICK};
 use crate::node_graph::physics_events::{ImpulseTarget, ResolvedNodeImpulse};
@@ -147,13 +147,35 @@ impl FluidRuntime {
         &mut self,
         start_tick: u64,
         count: usize,
+        interval: Option<StepInterval>,
     ) -> Result<Vec<AppliedEvent<ResolvedNodeImpulse>>, String> {
         let mut events = self
             .spare_impulses
             .take()
             .expect("one recycled impulse batch per worker request");
         events.clear();
+        if let Some(interval) = interval {
+            if count != 1 {
+                self.spare_impulses = Some(events);
+                return Err("Water impulse: live interval must contain one worker frame".into());
+            }
+            let result = self.impulses.begin_interval(
+                TickStamp {
+                    epoch: self.epoch,
+                    tick: start_tick,
+                },
+                interval,
+                |event| events.push(event),
+            );
+            if let Err(error) = result {
+                self.spare_impulses = Some(events);
+                return Err(format!("Water impulse: {error}"));
+            }
+        }
         for index in 0..count {
+            if interval.is_some() {
+                break;
+            }
             let result = self.impulses.begin_tick(
                 TickStamp {
                     epoch: self.epoch,

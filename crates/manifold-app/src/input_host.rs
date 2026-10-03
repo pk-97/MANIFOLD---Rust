@@ -2261,6 +2261,7 @@ mod automation_clipboard_host_tests {
             audio_sends: Vec::new(),
             modifier: Some(manifold_ui::param_surface::ModifierCardInfo {
                 instance_id: modifier_id.clone(), layer_id: layer_id.clone(),
+                params_owner: Default::default(),
                 enabled_label: "Enabled".into(), stack_index: 0, stack_len: 1,
                 targets_all: true, objects: Vec::new(),
             }),
@@ -2362,6 +2363,7 @@ mod automation_clipboard_host_tests {
             modifier: Some(manifold_ui::param_surface::ModifierCardInfo {
                 instance_id: modifier_id.clone(),
                 layer_id: gen_layer_id.clone(),
+                params_owner: Default::default(),
                 enabled_label: "Enabled".into(),
                 stack_index: 0,
                 stack_len: 1,

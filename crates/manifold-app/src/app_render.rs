@@ -16,6 +16,38 @@ use crate::content_command::ContentCommand;
 use crate::content_state::ContentState;
 use manifold_editing::command::Command;
 
+fn perf_metrics_from_content_state(
+    content_state: &ContentState,
+    ui_fps: f32,
+    ui_frame_time_ms: f32,
+    bpm: manifold_core::Bpm,
+    clock_source: &'static str,
+) -> manifold_ui::panels::perf_hud::PerfMetrics {
+    manifold_ui::panels::perf_hud::PerfMetrics {
+        ui_fps,
+        ui_frame_time_ms,
+        render_fps: content_state.content_fps,
+        render_frame_time_ms: content_state.content_frame_time_ms,
+        gpu_fence_wait_ms: content_state.gpu_fence_wait_ms,
+        physics_cpu_ms: content_state.physics_cpu_ms,
+        physics_body_count: content_state.physics_body_count,
+        physics_backlog_seconds: content_state.physics_backlog_seconds,
+        sim_step_cap_hit: content_state.sim_step_cap_hit,
+        sim_nonfinite: content_state.sim_nonfinite,
+        render_target_fps: content_state.frame_rate as f32,
+        active_clips: content_state.active_clips,
+        preparing_clips: 0,
+        current_beat: content_state.current_beat,
+        current_time_secs: content_state.current_time.as_f32(),
+        bpm,
+        clock_source,
+        is_playing: content_state.is_playing,
+        data_version: content_state.data_version,
+        profiling_active: content_state.profiling_active,
+        profiling_frame_count: content_state.profiling_frame_count,
+    }
+}
+
 pub(crate) use crate::frame::present::format_scope_readout;
 pub(crate) use crate::frame::present::fmt_table_cell_seed;
 
@@ -3187,38 +3219,35 @@ impl Application {
             self.ws.ui_root.viewport.invalidate_layer_bitmap(layer_idx);
         }
 
-        // 5. Push performance metrics to HUD
-        if self.ws.ui_root.perf_hud.is_visible() {
+        // 5. Push one per-frame metric snapshot to whichever HUDs are open.
+        // The editor and main window must report the same content frame; keep
+        // the snapshot shared before handing each panel its owned copy.
+        let editor_perf_hud_visible = self
+            .graph_editor
+            .as_ref()
+            .is_some_and(|ed| ed.ui_root.perf_hud.is_visible());
+        if self.ws.ui_root.perf_hud.is_visible() || editor_perf_hud_visible {
             let bpm = Some(&self.local_project)
                 .map(|p| p.settings.bpm)
                 .unwrap_or(manifold_core::Bpm(120.0));
             let clock_source = Some(&self.local_project)
-                .map(|p| p.settings.clock_authority.display_name().to_string())
-                .unwrap_or_else(|| "Internal".to_string());
-            self.ws
-                .ui_root
-                .perf_hud
-                .set_metrics(manifold_ui::panels::perf_hud::PerfMetrics {
-                    ui_fps: self.frame_timer.current_fps() as f32,
-                    ui_frame_time_ms: (self.frame_timer.last_dt() * 1000.0) as f32,
-                    render_fps: self.content_state.content_fps,
-                    render_frame_time_ms: self.content_state.content_frame_time_ms,
-                    gpu_fence_wait_ms: self.content_state.gpu_fence_wait_ms,
-                    physics_cpu_ms: self.content_state.physics_cpu_ms,
-                    physics_body_count: self.content_state.physics_body_count,
-                    physics_backlog_seconds: self.content_state.physics_backlog_seconds,
-                    render_target_fps: self.content_state.frame_rate as f32,
-                    active_clips: self.content_state.active_clips,
-                    preparing_clips: 0,
-                    current_beat: self.content_state.current_beat,
-                    current_time_secs: self.content_state.current_time.as_f32(),
-                    bpm,
-                    clock_source,
-                    is_playing: self.content_state.is_playing,
-                    data_version: self.content_state.data_version,
-                    profiling_active: self.content_state.profiling_active,
-                    profiling_frame_count: self.content_state.profiling_frame_count,
-                });
+                .map(|p| p.settings.clock_authority.display_name())
+                .unwrap_or("Internal");
+            let metrics = perf_metrics_from_content_state(
+                &self.content_state,
+                self.frame_timer.current_fps() as f32,
+                (self.frame_timer.last_dt() * 1000.0) as f32,
+                bpm,
+                clock_source,
+            );
+            if self.ws.ui_root.perf_hud.is_visible() {
+                self.ws.ui_root.perf_hud.set_metrics(metrics);
+            }
+            if editor_perf_hud_visible
+                && let Some(ed) = self.graph_editor.as_mut()
+            {
+                ed.ui_root.perf_hud.set_metrics(metrics);
+            }
         }
 
         // 6. Lightweight update (playhead, insert cursor, layer selection, HUD values)
@@ -3923,5 +3952,74 @@ mod unbound_node_param_drag_tests {
             "undo must restore the true pre-drag value, not whatever execute()'s \
              self-capture would have seen post-drag"
         );
+    }
+}
+
+#[cfg(test)]
+mod live_sim_hud_flow_tests {
+    use super::perf_metrics_from_content_state;
+    use crate::content_state::ContentState;
+    use crate::ui_root::UIRoot;
+
+    fn hud_texts(root: &UIRoot) -> Vec<String> {
+        root.tree
+            .nodes()
+            .iter()
+            .filter_map(|node| node.text.clone())
+            .collect()
+    }
+
+    #[test]
+    fn content_snapshot_updates_main_and_editor_huds_then_holds_when_paused() {
+        let mut main = UIRoot::new();
+        main.resize(640.0, 480.0);
+        main.perf_hud.toggle();
+        main.build();
+
+        let mut editor = UIRoot::new();
+        editor.perf_hud.toggle();
+
+        let mut snapshot = ContentState {
+            is_playing: true,
+            physics_backlog_seconds: 0.125,
+            sim_step_cap_hit: true,
+            sim_nonfinite: true,
+            ..ContentState::default()
+        };
+
+        for (expected_lag, expected_cap, expected_state) in [
+            ("sim behind by 125.0 ms", "step cap: WARNING — CAP HIT", "sim state: ERROR — SHOW RUNNING"),
+            ("sim behind by 250.0 ms", "step cap: OK", "sim state: OK"),
+            ("sim behind by 250.0 ms", "step cap: OK", "sim state: OK"),
+        ] {
+            let metrics = perf_metrics_from_content_state(
+                &snapshot,
+                60.0,
+                16.6,
+                manifold_core::Bpm(snapshot.bpm as f32),
+                "Internal",
+            );
+            main.perf_hud.set_metrics(metrics);
+            editor.perf_hud.set_metrics(metrics);
+
+            // The main window uses UIRoot::update(), while the cacheless graph
+            // editor uses its targeted presentation tick after rebuilding its
+            // overlay tree. Exercise both production update paths.
+            main.update();
+            editor.tree.clear();
+            editor.build_overlays_for_screen(640.0, 480.0);
+            editor.tick_editor_perf_hud();
+
+            for texts in [hud_texts(&main), hud_texts(&editor)] {
+                assert!(texts.iter().any(|text| text == expected_lag));
+                assert!(texts.iter().any(|text| text == expected_cap));
+                assert!(texts.iter().any(|text| text == expected_state));
+            }
+
+            snapshot.physics_backlog_seconds = 0.25;
+            snapshot.is_playing = false;
+            snapshot.sim_step_cap_hit = false;
+            snapshot.sim_nonfinite = false;
+        }
     }
 }

@@ -14,7 +14,7 @@
 // the grid), the solid its node lattice read trilinearly (a node past the
 // lattice reads 0). FLIP's near-solid early-out is dropped
 // (GPU_WHITEWATER_DESIGN.md section 3.9); its range check stays. Slots with
-// kind 3 and up are empty and pass whole.
+// kind 3 is empty; kind 4 is dust, with FLIP's ID-dependent buoyancy and drag.
 //
 // Ported from FLIP Fluids diffuseparticlesimulation.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
 
@@ -156,7 +156,7 @@ fn body(
     spray_friction: f32,
 ) -> Element {
     var out = e_pool;
-    if e_pool.kind > 2u || !(dt > 0.0) {
+    if (e_pool.kind == 3u || e_pool.kind > 4u) || !(dt > 0.0) {
         return out;
     }
     let nodes = vec3<u32>(max(vec3<f32>(nodes_x, nodes_y, nodes_z), vec3<f32>(0.0)));
@@ -187,7 +187,12 @@ fn body(
         nextv = v + gravity * dt + (-drag * v * dt);
     } else {
         let vmac = aw_velocity(p / h, cells, face_cells);
-        if e_pool.kind == 0u {
+        if e_pool.kind == 4u {
+            let factor = f32(e_pool.id) / AW_ID_TOP;
+            let buoyancy = -2.0 + factor * (-6.0 + 2.0);
+            let drag = 0.375 + (1.0 - factor) * (0.625 - 0.375);
+            nextv = v + dt * (-buoyancy * gravity + drag * (vmac - v) / dt);
+        } else if e_pool.kind == 0u {
             nextv = v + dt * (-bubble_buoyancy * gravity + bubble_drag * (vmac - v) / dt);
         } else {
             nextv = foam_advection * vmac;

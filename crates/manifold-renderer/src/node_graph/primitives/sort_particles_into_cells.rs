@@ -34,8 +34,8 @@ const ENTRIES: [&str; 6] = ["clear_counts", "count_particles", "write_ranges", "
 const LIVE_BY_RADIUS: u32 = 0;
 /// Live when the id word is non-zero and the position finite.
 const LIVE_BY_ID: u32 = 1;
-/// Live when the kind word holds a whitewater type (below
-/// [`WHITEWATER_EMPTY`]) and the position is finite: dead particles count until
+/// Live when the kind word holds foam, bubble, spray or dust (4), excluding
+/// [`WHITEWATER_EMPTY`], and the position is finite: dead particles count until
 /// the tick's removal, as in FLIP.
 const LIVE_BY_KIND: u32 = 2;
 // The shader writes the empty kind as 3u.

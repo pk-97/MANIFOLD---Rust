@@ -2,7 +2,7 @@
 
 <!-- index: Moves FLIP surface reconstruction to GPU atoms (anisotropic level set + marching cubes) and interpolates a slower solver tick to 60 fps through a producer-agnostic particle-frame seam. -->
 
-**Status:** BUILDING · P1, P2, P5, P6, P6b, P6c built; P6d measured, no lever kept; P6e (distance level set) built; P6f measured, look call owed (BUG-4snj (Liquid Surface default look)). It meets the 6 ms gate (5.7 ms p95 at res 64 ×2); blobs and volume at 4 ms stay a kernel design item (BUG-l24y (GPU liquid surface kernels cost), section 9 P6d). P3 deferred, P4 dropped, P7–P8 not built.
+**Status:** BUILDING · P1, P2, P5, P6, P6b, P6c built; P6d measured, no lever kept; P6e (distance level set) built; P6f measured; Peter selected engine parity (2026-10-03 audit below). Before the parity port it met the 6 ms gate (5.7 ms p95 at res 64 ×2); current performance is unmeasured; blobs and volume at 4 ms stay a kernel design item (BUG-l24y (GPU liquid surface kernels cost), section 9 P6d). P3 deferred, P4 dropped, P7–P8 not built.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 **Superseded in part (2026-09-29):** live water is GPU MLS-MPM per [GPU_MPM_SOLVER_DESIGN.md](GPU_MPM_SOLVER_DESIGN.md); D1's live-FLIP clause, D3, D9 and P4 no longer apply to live. The seam, atoms and interpolation stand.
 
@@ -37,59 +37,131 @@ Beads: BUG-vglg (CPU FLIP scene physics epic), whose child BUG-vglg.18 is the ba
 cache workflow; BUG-3sta (fluid surfacing: remesh baked motion, tune detached droplets)
 is the slot-9 work this design builds on.
 
-## 2026-10-03 FLIP mesher parity audit (BUG-rlk1i)
+## 2026-10-03 engine parameter parity (Peter's ruling)
 
-Source: vendored `particlemesher.cpp`, `scalarfield.cpp`, `polygonizer3d.cpp`,
-`trianglemesh.cpp`, `fluidsimulation.cpp` / `.h`; normals: `manifold-fluids::decode_surface`.
-The audit starts at `43493cf4a`; the last column records this branch's changes.
-It is a source/CPU parity audit, not an observed visual-parity claim.
+Peter selected FLIP Fluids as the reference. This supersedes the pending look
+decision in the earlier audit and any historical tuning recommendations below.
+The reference is **the engine node** in `WaterDamBreak.json`, then vendored engine
+defaults where that node omits a value. Its metadata controls contain older defaults
+and are not the initial node state. Baseline: `4208155f5`.
 
-| Stage | FLIP Fluids | GPU starting point | Verdict after this change |
-|---|---|---|---|
-| Field kernel / radius | Sphere union `min(length(x-p)-r)`, `r = markerRadius * scale`; default scale 3 | Isotropic defaults select spheres, but radius/reach is capped by bins; scale 2.2 | Default scale matches (3); bin-based radius/reach caps remain pending Peter's look call (details below) |
-| Distance band / solids | Initialize distance to `3r`; visit the grid-aligned `1.5r` support box, then negate the field; positive-inside solid samples become zero | Negative-inside band is bin/3; solid samples use `max(phi,0)` | Solid clamp and strict zero-case convention match after sign conversion. Radius/support and band differ; native border is +0.001 in our convention, versus bin/3 |
-| Grid / subdivision | `(cells * subdivision)+1` nodes, default subdivision 1 | Same formula; default scale and Detail offset 2 | Matches default and mapping (1); existing simulation padding is unchanged |
-| Field smoothing | None | Three optional binomial axes at zero strength | Matches at zero; this is separate from mesh smoothing |
-| Polygonizer | Linear zero crossing limited to nonsolid edge interval; U/V/W edge-owned vertices | BUG-llkb welded indexed output; missing solid interpolation constraint | Sharing retained; solid-edge constraint ported with optional solid lattice input; GPU proofs pending |
-| Mesh smoothing | Jacobi `v += value*(mean of neighbours over incident triangles - v)`, value 0.5, iterations 2 | Same gather, two separate relax nodes | Matches formula/defaults; one stage now owns the uncapped iteration loop |
-| Normals | Sum unnormalized face cross products per welded vertex, normalize after smoothing (`decode_surface`) | Raw field gradient passed through position updates | Missing stage added: area-weighted normals from final triangles |
+This is a source audit, not a GPU or visual parity claim. Counts are table rows
+(related values are grouped): **43 matched, 12 ported, 2 deviations, 7 unported**. The unported rows mean full engine
+parity is not achieved.
 
-Section 2.5 inventory: `facet_normals` exists, but is flat-only and assumes a
-triangle list: welded smooth normals are not one wire away. `neighbor_smooth`
-operates on a regular grid of instance transforms, not incident mesh triangles.
-`relax_surface_mesh` already owns the shared-edge neighbour cache and generated
-standalone pass; both stages reuse it. `smooth_surface_mesh` is the new iteration
-boundary; `surface_mesh_normals` is the genuinely new area-normal gather.
-Existing relax remains available for saved graphs. The production chain replaces
-two relax instances with one smoothing stage and one normal stage. The merged
-Fill Pits chain adds nine nodes: 32 Liquid Surface nodes including group I/O
-in all five water presets; no catalog atom removed.
-Relaxation and normals use `wgsl_body`, BufferGather and owned-output codegen;
-freezing keeps their gathered topology materialized. The smoothing stage reuses
-the prewarmed relaxation kernel and retains one capacity-sized ping-pong buffer.
-The 0–10 smoothing/iteration spans are editable UI ranges, never execution caps.
-Water Detail uses the existing manifest projection and keeps `mesh_relaxation`
-as the stable binding ID for Smoothing Value. Surface control ownership uses
-one traversal of the water's upstream mesh graph. The shipped JSON is the
-surface source: the builder reads it without reapplying mesh edits or
-overriding authored surface metadata.
+The marker volume is `h³/8`; `4πr³/3 = h³/8` gives
+`r/h = (3/(32·3.141592653))^(1/3) = 0.31017524546911046`.
+At particle scale 3 the field radius is `0.9305257364073314h`, not a tuned 0.93.
+The GPU stores the nearest f32 marker coefficient, `0.31017524`.
 
-The integration review read the full native field path. `_computeScalarField`
-negates the sphere distance before `ScalarField::getScalarFieldValue`; native
-`> 0` and GPU `< 0` set identical marching-cubes cases, including solid zeros.
-The previous audit omitted that negation and incorrectly requested a solid-sign
-change. A CPU reference covers both signs, signed zero and all 256 solid masks;
-the existing GPU solid-clamp proof remains the execution check.
+| Parameter | Engine value | GPU before | GPU after | Status | Source file:line (engine; GPU) |
+|---|---|---|---|---|---|
+| Resolution / domain / spacing | 64³ / 4 m / h = 0.0625 m | 64³ / 4 m / h = 0.0625 m | 64³ / 4 m / h = 0.0625 m | matched | `crates/manifold-renderer/assets/generator-presets/WaterDamBreak.json:608`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_preset.rs:29` |
+| Initial pool height | 0.16 m | 0.16 m | 0.16 m | matched | `crates/manifold-renderer/assets/generator-presets/WaterDamBreak.json:616`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_preset.rs:56` |
+| Initial column bounds | [-1.84,-0.66] × [0.16,2.08] × [-1.75,1.75] m | [-1.84,-0.66] × [0.16,2.08] × [-1.75,1.75] m | [-1.84,-0.66] × [0.16,2.08] × [-1.75,1.75] m | matched | `crates/manifold-renderer/assets/generator-presets/WaterDamBreak.json:1068`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_preset.rs:57` |
+| Gravity | (0,-9.81,0) m/s² | (0,-9.81,0) m/s² | (0,-9.81,0) m/s² | matched | `crates/manifold-renderer/assets/generator-presets/WaterDamBreak.json:620`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_domain.rs:360` |
+| Inflow emission / speed | 0 / 0 | 0 / 0 | 0 / 0 | matched | `crates/manifold-renderer/assets/generator-presets/WaterDamBreak.json:624`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_preset.rs:419` |
+| Pressure density (uncoupled) | 1; unused engine member _density=20 is not the pressure density | 1; unused engine member _density=20 is not the pressure density | 1; unused engine member _density=20 is not the pressure density | matched | `crates/manifold-fluids/native/flip_engine/fluidsimulation.cpp:6577`; `crates/manifold-renderer/src/node_graph/primitives/shaders/gpu_flip_step.wgsl:1731` |
+| Coupling physical density | 1000 kg/m³ | 1000 kg/m³ | 1000 kg/m³ | matched | `crates/manifold-renderer/src/node_graph/liquid.rs:48`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_domain.rs:87` |
+| Particle seeding | 8 half-cell sites per cell | 8 half-cell sites per cell | 8 half-cell sites per cell | matched | `crates/manifold-fluids/native/flip_engine/fluidsimulation.cpp:4518`; `crates/manifold-renderer/src/node_graph/primitives/liquid_fill.rs:27` |
+| Marker jitter / surface jitter | 0 / disabled | 0 / disabled | 0 / disabled | matched | `crates/manifold-fluids/native/flip_engine/fluidsimulation.h:2303`; `crates/manifold-renderer/src/node_graph/primitives/shaders/liquid_fill_body.wgsl:102` |
+| Physical marker radius | h·(3/(32·3.141592653))^(1/3) = 0.31017524546911046h | 0.31017h | nearest f32: 0.31017524h | ported | `crates/manifold-fluids/native/flip_engine/fluidsimulation.cpp:4518`; `crates/manifold-renderer/src/node_graph/primitives/shaders/liquid_fill_body.wgsl:106` |
+| Transfer / PIC / FLIP / APIC | FLIP / 0.05 / 0.95 / off | FLIP / 0.05 / 0.95 / off | FLIP / 0.05 / 0.95 / off | matched | `crates/manifold-fluids/native/flip_engine/fluidsimulation.h:2513`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_preset.rs:132` |
+| Viscosity | disabled, 0 (900 / 1e-4 solver defaults inactive) | disabled, 0 (900 / 1e-4 solver defaults inactive) | disabled, 0 (900 / 1e-4 solver defaults inactive) | matched | `crates/manifold-fluids/native/flip_engine/fluidsimulation.h:2473`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_step.rs:1994` |
+| Surface tension | disabled, 0 | disabled, 0 | disabled, 0 | matched | `crates/manifold-fluids/native/flip_engine/fluidsimulation.h:2485`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_step.rs:1994` |
+| Boundary friction | 0 | 0 | 0 | matched | `crates/manifold-fluids/native/flip_engine/fluidsimulation.h:2335`; `crates/manifold-renderer/src/node_graph/primitives/shaders/gpu_flip_step.wgsl:1782` |
+| Obstacle pose / shape | box, position (0.35,0.58,-0.1), size (0.6,1.16,0.85) | box, position (0.35,0.58,-0.1), size (0.6,1.16,0.85) | box, position (0.35,0.58,-0.1), size (0.6,1.16,0.85) | matched | `crates/manifold-renderer/assets/generator-presets/WaterDamBreak.json:696`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_preset.rs:62` |
+| Obstacle collision buffer / march / maximum push | 0.2h / 0.1h / 5h | 0.2h / 0.1h / 5h | 0.2h / 0.1h / 5h | matched | `crates/manifold-fluids/native/flip_engine/fluidsimulation.h:2566`; `crates/manifold-renderer/src/node_graph/primitives/shaders/gpu_flip_step.wgsl:2006` |
+| Liquid SDF radius / exact band | sqrt(3)/2 h / 3h | sqrt(3)/2 h / 3h | sqrt(3)/2 h / 3h | matched | `crates/manifold-fluids/native/flip_engine/fluidsimulation.h:2305`; `crates/manifold-renderer/src/node_graph/primitives/shaders/gpu_flip_step.wgsl:1669` |
+| Pressure relative tolerance / absolute ceiling | 1e-9 / 1 | 1e-9 / 1 | 1e-9 / 1 | matched | `crates/manifold-fluids/native/flip_engine/fluidsimulation.h:2489`; `crates/manifold-renderer/src/node_graph/primitives/shaders/gpu_flip_pressure.wgsl:1021` |
+| Pressure maximum CG iterations | 900 | 64 | 64: deliberate deviation; 900 bounds the engine's MIC-preconditioned solve, ours converges in 10–15, and every round to the cap is encoded for each solve of each clock slot, so 900 took a saved 64 layer from 102 to 408 ms GPU a frame; BUG-fwp2n (unused solver rounds cost encode time) restores 900 | deviation | `crates/manifold-fluids/native/flip_engine/fluidsimulation.h:2491`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_pressure.rs:43` |
+| Pressure ghost theta / matrix epsilon | ±25 / 1e-9 | ±25 / 1e-9 | ±25 / 1e-9 | matched | `crates/manifold-fluids/native/flip_engine/pressuresolver.cpp:681`; `crates/manifold-renderer/src/node_graph/primitives/shaders/gpu_flip_pressure.wgsl:304` |
+| Velocity projection ghost epsilon | 1e-6 | 1e-9 | 1e-6 | ported | `crates/manifold-fluids/native/flip_engine/pressuresolver.cpp:1112`; `crates/manifold-renderer/src/node_graph/primitives/shaders/gpu_flip_step.wgsl:1764` |
+| Additional density projection | absent | enabled | enabled: deliberate deviation; without it the Dam Break settles 21.5% too deep at 64 (interior 6.6 against 8 a cell after 1800 frames); BUG-irim0 (engine volume mechanism) | deviation | `crates/manifold-fluids/native/flip_engine/fluidsimulation.cpp:6515`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_preset.rs:139` |
+| Open boundary width / closed faces | 2 cells / all six closed | 2 cells / all six closed | 2 cells / all six closed | matched | `crates/manifold-fluids/native/flip_engine/fluidsimulation.h:2584`; `crates/manifold-renderer/src/node_graph/primitives/shaders/gpu_flip_step.wgsl:2102` |
+| CFL number | 5 | 20 m/s travel guard | 5: the clock's substep limit; the 20 m/s guard stays the advection clamp | ported | `crates/manifold-fluids/native/flip_engine/fluidsimulation.h:2294`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_step.rs:2460` |
+| Frame substeps | adaptive 1..6 | fixed one per tick | adaptive Steps..6 under the CFL limit; Steps defaults to 1 | ported | `crates/manifold-fluids/native/flip_engine/fluidsimulation.h:2290`; `crates/manifold-physics/src/stepping.rs:22` |
+| Sim time / frames / speed | offered frame dt, speed 1 | fixed liquid tick / speed 1 | offered frame interval, speed 1; export keeps exact 60 Hz steps | ported | `crates/manifold-renderer/assets/generator-presets/WaterDamBreak.json:632`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_preset.rs:6` |
+| Velocity extrapolation layers | ceil(sqrt(3)·5)+3 = 12 | derived from travel guard | from the nominal step's travel guard: 14 at the Dam Break; BUG-g75v.8 (step order) sets the engine's 12 | unported | `crates/manifold-fluids/native/flip_engine/fluidsimulation.cpp:4832`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_step.rs:82` |
+| Mesher subdivision | 1 | 1 | 1 | matched | `crates/manifold-renderer/assets/generator-presets/WaterDamBreak.json:636`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_preset.rs:136` |
+| Particle scale | 3 | 3 | 3 | matched | `crates/manifold-renderer/assets/generator-presets/WaterDamBreak.json:648`; `crates/manifold-renderer/src/node_graph/primitives/shape_particle_blobs.rs:67` |
+| Field radius | 3 marker radii = 0.9305257364073314h | capped at 2/3 cell | uncapped native radius | ported | `crates/manifold-fluids/native/flip_engine/particlemesher.cpp:81`; `crates/manifold-renderer/src/node_graph/primitives/shaders/shape_particle_blobs_body.wgsl:90` |
+| Field support | inclusive floor((p−1.5r)/h)..floor((p+1.5r)/h)+1 box | 27-bin capped reach / sphere rejection | native box; exact bounds reduction sizes bin search | ported | `crates/manifold-fluids/native/flip_engine/particlemesher.cpp:517`; `crates/manifold-renderer/src/node_graph/primitives/shaders/particle_volume_body.wgsl:124` |
+| Exterior distance band | 3r | bin width / 3 | 3 × maximum active kernel radius | ported | `crates/manifold-fluids/native/flip_engine/particlemesher.cpp:379`; `crates/manifold-renderer/src/node_graph/primitives/shaders/particle_volume_body.wgsl:91` |
+| Production field border | same solid-SDF clamp as interior; +0.001 is preview only | bin width / 3 override | removed artificial border override | ported | `crates/manifold-fluids/native/flip_engine/particlemesher.cpp:67`; `crates/manifold-renderer/src/node_graph/primitives/shaders/particle_volume_body.wgsl:154` |
+| Solid field clamp | max(phi,0) in negative-inside convention | max(phi,0) in negative-inside convention | max(phi,0) in negative-inside convention | matched | `crates/manifold-fluids/native/flip_engine/scalarfield.cpp:435`; `crates/manifold-renderer/src/node_graph/primitives/shaders/particle_volume_body.wgsl:154` |
+| Mesh vertex solid clamp | constrain mu to solid root on open side; sequential epsilon bounds 1e-10 | present at b75c12b29; missing contact coverage and credit | retained exact rule; oblique-wall and thin-plate proofs | ported | `crates/manifold-fluids/native/flip_engine/polygonizer3d.cpp:467`; `crates/manifold-renderer/src/node_graph/primitives/shaders/volume_surface_mesh_body.wgsl:54` |
+| Anisotropy / centre smoothing / detached shrink | sphere / 0 / 1 | sphere / 0 / 1 | sphere / 0 / 1 | matched | `crates/manifold-fluids/native/flip_engine/particlemesher.cpp:418`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_preset.rs:519` |
+| Field smoothing / Fill Pits | 0 / 0 (engine has neither) | 0 / 0 (engine has neither) | 0 / 0 (engine has neither) | matched | `crates/manifold-fluids/native/flip_engine/particlemesher.cpp:305`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_preset.rs:519` |
+| Mesh smoothing value | 0.35 preset override (header default 0.5) | 0.5 | 0.35 | ported | `crates/manifold-renderer/assets/generator-presets/WaterDamBreak.json:652`; `crates/manifold-renderer/src/node_graph/primitives/surface_mesh_normals.rs:125` |
+| Mesh smoothing iterations | 2 | 2 | 2 | matched | `crates/manifold-renderer/assets/generator-presets/WaterDamBreak.json:656`; `crates/manifold-renderer/src/node_graph/primitives/smooth_surface_mesh.rs:33` |
+| Whitewater enabled / types | on; foam, bubbles, spray; dust off | on; foam, bubbles, spray; dust off | on; foam, bubbles, spray; dust off | matched | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:461`; `crates/manifold-renderer/src/node_graph/primitives/whitewater_step.rs:142` |
+| Whitewater capacity | 100000 preset override | 100000 preset override | 100000 preset override | matched | `crates/manifold-renderer/assets/generator-presets/WaterDamBreak.json:664`; `crates/manifold-renderer/src/node_graph/primitives/whitewater_step.rs:52` |
+| Wavecrest rate | 175 | 175 | 175 | matched | `crates/manifold-renderer/assets/generator-presets/WaterDamBreak.json:668`; `crates/manifold-renderer/src/node_graph/primitives/emission_count.rs:20` |
+| Turbulence rate / potential | 175 / clamp((T−100)/100,0,1) | absent | 175 / clamp((T−100)/100,0,1) | ported | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:471`; `crates/manifold-renderer/src/node_graph/primitives/turbulence_emission_count.rs` |
+| Energy min / max | 0.1 / 60 | 0.1 / 60 | 0.1 / 60 | matched | `crates/manifold-renderer/assets/generator-presets/WaterDamBreak.json:676`; `crates/manifold-renderer/src/node_graph/primitives/energy_potential.rs:20` |
+| Wavecrest curvature min / max / sharpness | 0.4 / 1 / 0.4 | 0.4 / 1 / 0.4 | 0.4 / 1 / 0.4 | matched | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:466`; `crates/manifold-renderer/src/node_graph/primitives/wavecrest_potential.rs:25` |
+| Whitewater lifetime min / max / variance | 0 / 7 / 3 seconds | 0 / 7 / 3 seconds | 0 / 7 / 3 seconds | matched | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:478`; `crates/manifold-renderer/src/node_graph/primitives/spawn_whitewater.rs:26` |
+| Spray / bubble / foam lifetime modifiers | 2 / 0.333 / 1 | 2 / 0.333 / 1 | 2 / 0.333 / 1 | matched | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:488`; `crates/manifold-renderer/src/node_graph/primitives/age_whitewater.rs:47` |
+| Foam offset / distance / buffer | 0 / 1h / 1h | 0 / 1h / 1h | 0 / 1h / 1h | matched | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:484`; `crates/manifold-renderer/src/node_graph/primitives/shaders/whitewater_type_body.wgsl:19` |
+| Bubble buoyancy / drag | 4 / 1 | 4 / 1 | 4 / 1 | matched | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:493`; `crates/manifold-renderer/src/node_graph/primitives/advect_whitewater.rs:94` |
+| Foam advection strength | 1 | 1 | 1 | matched | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:492`; `crates/manifold-renderer/src/node_graph/primitives/shaders/advect_whitewater_body.wgsl:186` |
+| Spray drag / variance / emission speed | 0 / 0.25 / 1 | 0 / 0.25 / 1 | 0 / 0.25 / 1 | matched | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:499`; `crates/manifold-renderer/src/node_graph/primitives/shaders/spawn_whitewater_body.wgsl:19` |
+| Spray friction / restitution | 0 / 0.2 | 0 / 0.2 | 0 / 0.2 | matched | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:502`; `crates/manifold-renderer/src/node_graph/primitives/shaders/advect_whitewater_body.wgsl:27` |
+| Whitewater max particles per cell | 5000 | 5000 | 5000 | matched | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:504`; `crates/manifold-renderer/src/node_graph/primitives/keep_whitewater.rs:22` |
+| Emitter radius / jitter | 8 marker radii / 1 | 8 marker radii / 1 | 8 marker radii / 1 | matched | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:505`; `crates/manifold-renderer/src/node_graph/primitives/shaders/spawn_whitewater_body.wgsl:22` |
+| Whitewater collision buffer / march | 0.25h / 0.5h | 0.25h / 0.5h | 0.25h / 0.5h | matched | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:464`; `crates/manifold-renderer/src/node_graph/primitives/shaders/advect_whitewater_body.wgsl:27` |
+| Foam preservation / rate / densities | off / 0.75 / 20..45 | off / 0.75 / 20..45 | off / 0.75 / 20..45 | matched | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:509`; `crates/manifold-renderer/src/node_graph/primitives/preserve_foam.rs:65` |
+| Whitewater surface-emitter band | 1.5h | 1.5h | 1.5h | matched | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:463`; `crates/manifold-renderer/src/node_graph/primitives/shaders/wavecrest_potential_body.wgsl:94` |
+| Whitewater maximum velocity factor | 1.1 | 1.1 | 1.1 | matched | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:465`; `crates/manifold-renderer/src/node_graph/primitives/shaders/advect_whitewater_body.wgsl:30` |
+| Wall geometry / collision / last inner face | native padded boundary mesh, marched collision, skipped boundary pressure cells/last inner face | exact wall faces, clamp wall motion, all interior faces | unchanged; geometry/operator port remains | unported | `crates/manifold-fluids/native/flip_engine/fluidsimulation.cpp:5508`; `crates/manifold-renderer/src/node_graph/primitives/shaders/gpu_flip_step.wgsl:2062` |
+| Surface/solid grid origin and extent | 1.5h padding each side; native 67 cells / 68 mesh nodes | 3h padding; 70 cells / 71 nodes | unchanged; native mesh sampling is half a cell offset | unported | `crates/manifold-renderer/src/node_graph/fluid/domain.rs:120`; `crates/manifold-renderer/src/node_graph/liquid/lattice.rs:12` |
+| Marker removal | 250 per cell + extreme-velocity removal | no native per-cell or extreme-velocity removal | unchanged; needs sorted compaction and native ordering proof | unported | `crates/manifold-fluids/native/flip_engine/fluidsimulation.h:2565`; `crates/manifold-renderer/src/node_graph/primitives/shaders/gpu_flip_step.wgsl:2130` |
+| Step operation order | extrapolate then constrain; inflow at step end | constrain then extrapolate; inflow before transfer | unchanged; existing BUG-g75v.8 waits for clock branch merge | unported | `crates/manifold-fluids/native/flip_engine/fluidsimulation.cpp:6658`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_step.rs:384` |
+| Pressure preconditioner / precision | MIC PCG, f64 | multigrid PCG, f32 | unchanged; equal tolerance/iteration values do not imply identical trajectories | unported | `crates/manifold-fluids/native/flip_engine/pressuresolver.cpp:934`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_pressure.rs:6` |
+| Whitewater emission ordering / overload | native randomized emitter order and capacity truncation | stable GPU order and even thinning when frame emissions exceed capacity | unchanged; a shared random stream and native emitter selection remain | unported | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.cpp:1515`; `crates/manifold-renderer/src/node_graph/primitives/whitewater_step.rs:163` |
 
-**Left for Peter's look call, no new issue filed:** removing the current radius
-cap increases the default isotropic radius from 2/3 of a simulation cell to
-about 0.93 cells at particle scale 3. Native support is the inclusive grid box
-`floor((p - 1.5r)/h)` through `floor((p + 1.5r)/h)+1`, not a spherical cutoff;
-its untouched distance is `3r`. Radius, support, distance initialization and
-border distance must be ported together, retaining Fill Pits' extra support and
-the sparse-brick halo. They change sheet thickness, gaps and boundary crossings,
-so this integration leaves the existing field kernels in place. No new cap or
-fallback is introduced. Visual parity and the new mesh GPU proofs are unverified.
+`max_capacity=1572864` on the engine node is the mesh-output allocation, not a
+marker population parameter. GPU mesh allocation follows its exact triangle
+count; no particle or mesh quality cap was added. Inactive/empty blob sets have
+no surface; their GPU exterior is zero rather than native nominal `3r` (the native
+empty-particle mesher returns before field construction).
+
+The new `blob_bounds` operation is a barriered maximum reduction (ADDING_PRIMITIVES
+exclusion 1). Inventory: existing `peak` reduces textures and cannot consume blob
+records; the sort supplies ranges but does not measure shaped-kernel reach.
+Both `particle_volume` and `lattice_bricks` consume the two-word reduction across
+all five presets. The field remains a codegen BufferGather atom. The bounds
+wire is required: a graph saved before it gets the shipped wiring at load
+(`graph_loader.rs` `wire_blob_bounds`), because recomputing the maximum per
+lattice node read the whole blob pool at every node (1.37 s a frame on a saved
+64 layer). No radius cap or approximate search is used. `FluidBlob.shape_off.w` now carries centre
+displacement; its ABI size remains 48 bytes. Fill Pits retains its extra support
+and sparse smoothing/normal halo. Production borders use the solid field;
+`ParticleMesher::getPreviewMesh` alone invokes `_setScalarFieldSolidBorders`.
+
+Derived artifacts: the source Liquid Surface group has **33 nodes**; all other
+four water surface groups copy it. The builder regenerates the rest of
+`WaterDamBreakGpuFlip.json` through `UPDATE_GPU_FLIP_PRESET=1` and its equality
+test. `gen_node_catalog` regenerates both `docs/node_catalog.json` and
+`docs/NODE_CATALOG.md`. The dispatch-tail census remains 228: the new barriered
+reduction is not a codegen per-element atom. Conformance references now use the
+native radius/support/border; the manifest test's 0.5 expectation changes to
+0.35 only because that is the engine node value. No tolerance was loosened.
+The fused WGSL snapshot is deliberately left for the lead's GPU regeneration.
+
+Unported mechanisms need separate staged ports, not replacement constants:
+wall geometry changes the pressure operator and seed exclusion; the native
+half-cell surface grid needs a separately sampled solid lattice and graph extent
+contract (changing shared solver padding would alter every liquid consumer); marker removal
+requires compaction preserving native particle order; MIC/f64 is a different
+pressure solver (native uses f64, which native Metal cannot execute); whitewater overload ordering requires a shared random stream
+and native emitter selection. These are not clock-owned exemptions.
+`graph-tool validate` creates `GpuDevice::new_queued`, so it is deferred to the
+lead; `graph-tool fusion` is CPU-only. GPU execution is required before accepting the changed field proofs.
+
+The snapshot regeneration is for changed source/ABI contracts and requires review;
+a failed value proof is not permission to refresh a golden.
 
 ## 1. Audit — what exists (verified 2026-09-29 at `b88e4c9cf`)
 
@@ -247,9 +319,9 @@ kernel below N_ε neighbours) also applies.
 With our negative-inside values this is `max(phi, 0)`, as implemented. Native
 polygonizer case bits use `> 0`; ours use `< 0`, so zero belongs outside in both.
 The polygonizer separately ports `_vertexInterp`'s solid-edge interval constraint.
-Border magnitude still differs: native writes -0.001 after negation (our +0.001),
-whereas the current GPU field and post-smoothing clamp use bin/3. The coupled
-radius/support/band/border look decision is recorded in the parity audit above.
+Production border nodes use this same solid rule. Native +0.001 after sign
+conversion is only the preview mesh closure, not the production mesh. The old
+bin/3 border override has been removed; the grid-offset gap remains in the audit.
 
 **D16 — Marching cubes is three atoms: count, running total, cell-owned emit.**
 Count writes triangles per cell; running total is an inclusive scan with a
@@ -1036,7 +1108,7 @@ particles; it matches the GPU surface at correlation 0.92 above 2 cells). Settle
 More smoothing passes flatten only the shortest bumps and thicken the liquid; a wider
 covariance makes the anisotropy noisier, not calmer.
 
-**Shape.** `node.particle_volume` writes `min(band, min over blobs of a·(|G·(x − c)| − 1))`,
+**Historical P6e shape (superseded by the 2026-10-03 port above).** `node.particle_volume` writes `min(band, min over blobs of a·(|G·(x − c)| − 1))`,
 where `a` is the blob's longest axis and `band` is a third of a bin: the distance to the
 nearest blob ellipsoid (exact for spheres, scaled by the long axis for stretched blobs),
 negative inside, capped a third of a bin outside. `threshold` goes. D15 stands: solid

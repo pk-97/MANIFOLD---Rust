@@ -39,7 +39,7 @@ struct BlobUniforms {
 crate::primitive! {
     name: ShapeParticleBlobs,
     type_id: "node.shape_particle_blobs",
-    purpose: "Give each sorted liquid particle an ellipsoidal surface kernel (Yu & Turk 2010). Neighbours within particle_scale × radius (at most one bin, cell_size) set a weighted-mean centre (smoothing = 0 keeps the particle, 1 uses the mean) and a covariance; its principal axes set a volume-preserving ellipsoid whose axis ratio is capped at stretch. Fewer than min_neighbours gives a sphere. With no neighbour within two physical radii the kernel shrinks toward isolated_scale by three.",
+    purpose: "Give each sorted liquid particle an ellipsoidal surface kernel (Yu & Turk 2010). Neighbours within particle_scale × radius set a weighted-mean centre (smoothing = 0 keeps the particle, 1 uses the mean) and a covariance; its principal axes set a volume-preserving ellipsoid whose axis ratio is capped at stretch. Fewer than min_neighbours gives a sphere. With no neighbour within two physical radii the kernel shrinks toward isolated_scale by three.",
     inputs: {
         sorted: Array(FluidParticle) required,
         cell_ranges: Array(CellRange) required,
@@ -81,7 +81,7 @@ crate::primitive! {
         bin_param!("bins_z", "Bins Z"),
     ],
     depth_rule: Terminal,
-    composition_notes: "Feed it node.sort_particles_into_cells' outputs with the same box and cell_size, and wire the sort's bins_x/y/z: the bins are the sort's, never worked out again on the GPU, and cell_ranges must hold one range per bin or nothing runs (a named error). All three unwired (a graph from before these wires) takes the sort's CPU rule on the shared box, checked the same way. The kernel never reaches past two thirds of a bin from its particle (the remaining third is the band node.particle_volume's distance cap relies on, half the reach as in FLIP Fluids' mesher), so cell_size bounds both the look and the cost: particle_scale above 2/3 × cell_size / radius has no further effect. A bin of 1.5 × particle_scale × radius puts the kernel exactly at the cap. Stretch 1 writes exact spheres and skips the covariance pass, about half the kernel's cost. Live params: changing any of them reshapes the next frame's surface without touching the simulation. Output slots of inactive particles have radius 0.",
+    composition_notes: "Feed it node.sort_particles_into_cells' outputs with the same box and cell_size, and wire the sort's bins_x/y/z: the bins are the sort's, never worked out again on the GPU, and cell_ranges must hold one range per bin or nothing runs (a named error). All three unwired (a graph from before these wires) takes the sort's CPU rule on the shared box, checked the same way. Kernel size and neighbour searches are uncapped by bin width. shape_off.w carries the centre displacement for node.blob_bounds; wire its bounds to particle_volume and lattice_bricks to accelerate their exact support search. Stretch 1 writes exact spheres and skips the covariance pass, about half the kernel's cost. Live params: changing any of them reshapes the next frame's surface without touching the simulation. Output slots of inactive particles have radius 0.",
     examples: [],
     picker: { label: "Shape Particle Blobs", category: Atom },
     summary: "Stretches each liquid particle along the shape of its neighbours, so thin sheets and streams stay thin instead of turning into beads.",

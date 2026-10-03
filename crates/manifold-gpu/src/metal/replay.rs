@@ -36,7 +36,7 @@ use super::types::{GpuBuffer, GpuComputePipeline};
 use super::SIZES_BUFFER_BINDING;
 use crate::replay::{
     ARENA_BYTES, BYTES_ALIGN, BytesSlot, CHUNK_COMMANDS, DispatchKey, GateKey, GpuReplayStats, KeyBinding,
-    MAX_ARENAS, MAX_CHUNKS, MAX_KEY_BINDINGS, Recording, pick_entry, replay_allowed_by_env,
+    MAX_KEY_BINDINGS, Recording, pick_entry, replay_allowed_by_env,
 };
 use crate::types::GpuBinding;
 
@@ -151,7 +151,7 @@ impl ReplayStore {
     /// when a segment is first recorded (a changed segment structure is a
     /// recording cut, which already allocates nothing while warm).
     fn reserve(&mut self, device: &GpuDevice, stats: &mut GpuReplayStats) {
-        let chunks = (self.chunk_cursor + self.short_commands).div_ceil(CHUNK_COMMANDS).clamp(1, MAX_CHUNKS);
+        let chunks = (self.chunk_cursor + self.short_commands).div_ceil(CHUNK_COMMANDS).max(1);
         while self.chunks.len() < chunks {
             let Some(chunk) = new_chunk(device) else {
                 log::warn!("encode replay: indirect command buffer allocation failed; the span encodes directly");
@@ -162,7 +162,7 @@ impl ReplayStore {
         }
         let used = self.arena_cursor.0 as usize * ARENA_BYTES + self.arena_cursor.1 as usize;
         let arenas = ((used + self.short_bytes).div_ceil(ARENA_BYTES) + usize::from(self.short_bytes > 0))
-            .clamp(1, MAX_ARENAS);
+            .max(1);
         while self.arenas.len() < arenas {
             match device.try_create_buffer_shared(ARENA_BYTES as u64) {
                 Ok(arena) => {

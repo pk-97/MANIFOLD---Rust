@@ -8,6 +8,7 @@ use super::{FluidError, FluidWorld, FrameStats, NativeFrameStats, Seconds, nativ
 
 unsafe extern "C" {
     fn manifold_fluids_world_begin_frame(world: *mut c_void, dt: f64) -> i32;
+    fn manifold_fluids_world_begin_live_frame(world: *mut c_void, dt: f64) -> i32;
     fn manifold_fluids_world_next_substep(world: *mut c_void, dt: *mut f64) -> i32;
     fn manifold_fluids_world_advance_substep(world: *mut c_void, dt: f64) -> i32;
     fn manifold_fluids_world_finish_frame(world: *mut c_void, stats: *mut NativeFrameStats) -> i32;
@@ -26,6 +27,7 @@ unsafe extern "C" {
 pub struct FluidFrame<'a> {
     pub(super) world: &'a mut FluidWorld,
     finished: bool,
+    live: bool,
 }
 
 impl FluidWorld {
@@ -46,11 +48,48 @@ impl FluidWorld {
         Ok(FluidFrame {
             world: self,
             finished: false,
+            live: false,
         })
+    }
+
+    /// Begin a live frame. Its final native substep consumes the remaining
+    /// interval when the stability cap is reached, preserving transport time.
+    pub fn begin_live_frame_with_fields(
+        &mut self,
+        dt: Seconds,
+        fields: &[FieldInput<'_>],
+    ) -> Result<FluidFrame<'_>, FluidError> {
+        self.prepare_live_step_fields(dt, fields)?;
+        let ok = unsafe { manifold_fluids_world_begin_live_frame(self.native, dt.0) };
+        native_result(ok, "beginning the live fluid frame")?;
+        Ok(FluidFrame {
+            world: self,
+            finished: false,
+            live: true,
+        })
+    }
+
+    pub fn begin_live_frame(&mut self, dt: Seconds) -> Result<FluidFrame<'_>, FluidError> {
+        self.begin_live_frame_with_fields(dt, &[])
     }
 }
 
 impl FluidFrame<'_> {
+    /// Replace the force fields for the next owned portion of a live frame.
+    /// Native field storage is copied immediately, so the caller may rebuild
+    /// the borrowed evaluators at each accepted event boundary.
+    pub fn set_fields(
+        &mut self,
+        dt: Seconds,
+        fields: &[FieldInput<'_>],
+    ) -> Result<(), FluidError> {
+        if self.live {
+            self.world.prepare_live_step_fields(dt, fields)
+        } else {
+            self.world.prepare_step_fields(dt, fields)
+        }
+    }
+
     /// Return the native stability bound for the next substep. The owner may
     /// choose a smaller duration to satisfy another backend. Repeated queries
     /// retain the same offer until it is consumed. `None` means finish is ready.

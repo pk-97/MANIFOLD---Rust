@@ -11,7 +11,7 @@ use crate::node::*;
 use crate::tree::UITree;
 
 const HUD_WIDTH: f32 = 250.0;
-const HUD_HEIGHT: f32 = 408.0;
+const HUD_HEIGHT: f32 = 436.0;
 const ROW_HEIGHT: f32 = 14.0;
 const LABEL_FONT: u16 = color::FONT_SMALL;
 const VALUE_FONT: u16 = color::FONT_SMALL;
@@ -26,7 +26,7 @@ const GRAPH_HEIGHT: f32 = 50.0;
 const GRAPH_MAX_MS: f32 = 33.3;
 
 /// Performance metrics pushed from the app each frame.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct PerfMetrics {
     pub ui_fps: f32,
     pub ui_frame_time_ms: f32,
@@ -40,6 +40,10 @@ pub struct PerfMetrics {
     pub physics_body_count: u32,
     /// Maximum unprocessed physics time across worlds, in seconds.
     pub physics_backlog_seconds: f32,
+    /// At least one live simulation frame used its final allowed substep.
+    pub sim_step_cap_hit: bool,
+    /// A live simulation produced genuinely non-finite state. The show keeps running.
+    pub sim_nonfinite: bool,
     /// Target content FPS from project settings (e.g. 60, 120, 240).
     /// Used to scale graph colors relative to the frame budget.
     pub render_target_fps: f32,
@@ -48,7 +52,7 @@ pub struct PerfMetrics {
     pub current_beat: manifold_foundation::Beats,
     pub current_time_secs: f32,
     pub bpm: manifold_foundation::Bpm,
-    pub clock_source: String,
+    pub clock_source: &'static str,
     pub is_playing: bool,
     pub data_version: u64,
     /// Whether a profiling session is actively recording.
@@ -102,6 +106,8 @@ pub struct PerfHudPanel {
     physics_cpu_id: Option<NodeId>,
     physics_body_count_id: Option<NodeId>,
     physics_backlog_id: Option<NodeId>,
+    sim_step_cap_id: Option<NodeId>,
+    sim_nonfinite_id: Option<NodeId>,
     active_clips_id: Option<NodeId>,
     beat_id: Option<NodeId>,
     time_id: Option<NodeId>,
@@ -145,6 +151,8 @@ impl PerfHudPanel {
             physics_cpu_id: None,
             physics_body_count_id: None,
             physics_backlog_id: None,
+            sim_step_cap_id: None,
+            sim_nonfinite_id: None,
             active_clips_id: None,
             beat_id: None,
             time_id: None,
@@ -175,7 +183,6 @@ impl PerfHudPanel {
     }
 
     pub fn set_metrics(&mut self, metrics: PerfMetrics) {
-        // Push new samples into ring buffers
         self.ui_dt_history.push(metrics.ui_frame_time_ms);
         self.render_dt_history.push(metrics.render_frame_time_ms);
         self.metrics = metrics;
@@ -234,7 +241,45 @@ impl PerfHudPanel {
             }
         }
         fmt_set!(self.physics_cpu_id, "{:.1} ms", m.physics_cpu_ms);
-        fmt_set!(self.physics_backlog_id, "{:.2} s", m.physics_backlog_seconds);
+        if let Some(physics_backlog_id) = self.physics_backlog_id {
+            self.fmt_buf.clear();
+            write_sim_lag(&mut self.fmt_buf, m.physics_backlog_seconds);
+            tree.set_text(physics_backlog_id, &self.fmt_buf);
+        }
+        if let Some(sim_step_cap_id) = self.sim_step_cap_id {
+            let (text, text_color) = if m.sim_step_cap_hit {
+                (sim_step_cap_label(true), color::STATUS_WARNING)
+            } else {
+                (sim_step_cap_label(false), color::TEXT_NORMAL)
+            };
+            tree.set_text(sim_step_cap_id, text);
+            tree.set_style(
+                sim_step_cap_id,
+                UIStyle {
+                    text_color,
+                    font_size: VALUE_FONT,
+                    text_align: TextAlign::Right,
+                    ..UIStyle::default()
+                },
+            );
+        }
+        if let Some(sim_nonfinite_id) = self.sim_nonfinite_id {
+            let (text, text_color) = if m.sim_nonfinite {
+                (sim_state_label(true), color::STATUS_BAD)
+            } else {
+                (sim_state_label(false), color::TEXT_NORMAL)
+            };
+            tree.set_text(sim_nonfinite_id, text);
+            tree.set_style(
+                sim_nonfinite_id,
+                UIStyle {
+                    text_color,
+                    font_size: VALUE_FONT,
+                    text_align: TextAlign::Right,
+                    ..UIStyle::default()
+                },
+            );
+        }
         fmt_set!(self.physics_body_count_id, "{}", m.physics_body_count);
         fmt_set!(
             self.active_clips_id,
@@ -251,7 +296,7 @@ impl PerfHudPanel {
         }
         fmt_set!(self.bpm_id, "{:.1}", m.bpm.0);
         if let Some(clock_id) = self.clock_id {
-            tree.set_text(clock_id, &m.clock_source);
+            tree.set_text(clock_id, m.clock_source);
         }
         if let Some(profiling_id) = self.profiling_id {
             if m.profiling_active {
@@ -392,6 +437,33 @@ impl PerfHudPanel {
         (val_id, y + ROW_HEIGHT)
     }
 
+    /// Add a diagnostic row whose value needs the complete inner width. Lag
+    /// and simulation warnings are deliberately self-labelling because their
+    /// text is longer than the ordinary half-width value column.
+    fn add_full_width_row(
+        tree: &mut UITree,
+        x: f32,
+        y: f32,
+        width: f32,
+        initial: &str,
+    ) -> (NodeId, f32) {
+        let val_id = tree.add_label(
+            None,
+            x,
+            y,
+            width,
+            ROW_HEIGHT,
+            initial,
+            UIStyle {
+                text_color: color::TEXT_NORMAL,
+                font_size: VALUE_FONT,
+                text_align: TextAlign::Right,
+                ..UIStyle::default()
+            },
+        );
+        (val_id, y + ROW_HEIGHT)
+    }
+
     /// Build the bar graph nodes for a frame time history.
     /// Each bar is a 2px-wide panel node; height/color updated per frame.
     fn build_graph_bars(tree: &mut UITree, x: f32, y: f32, width: f32) -> Vec<NodeId> {
@@ -413,6 +485,32 @@ impl PerfHudPanel {
             ids.push(id);
         }
         ids
+    }
+}
+
+/// Format the simulation backlog as the amount of time the completed state is
+/// behind the target. The caller owns a reusable buffer so this stays on the
+/// per-frame, allocation-free HUD update path.
+fn write_sim_lag(buf: &mut String, backlog_seconds: f32) {
+    use std::fmt::Write;
+    let _ = write!(buf, "sim behind by {:.1} ms", backlog_seconds * 1000.0);
+}
+
+#[inline]
+fn sim_step_cap_label(hit: bool) -> &'static str {
+    if hit {
+        "step cap: WARNING — CAP HIT"
+    } else {
+        "step cap: OK"
+    }
+}
+
+#[inline]
+fn sim_state_label(nonfinite: bool) -> &'static str {
+    if nonfinite {
+        "sim state: ERROR — SHOW RUNNING"
+    } else {
+        "sim state: OK"
     }
 }
 
@@ -492,8 +590,14 @@ impl PerfHudPanel {
         let (id, ny) = Self::add_row(tree, lx, cy, inner_w, "Physics CPU");
         self.physics_cpu_id = Some(id);
         cy = ny;
-        let (id, ny) = Self::add_row(tree, lx, cy, inner_w, "Physics Lag");
+        let (id, ny) = Self::add_full_width_row(tree, lx, cy, inner_w, "sim behind by 0.0 ms");
         self.physics_backlog_id = Some(id);
+        cy = ny;
+        let (id, ny) = Self::add_full_width_row(tree, lx, cy, inner_w, "step cap: OK");
+        self.sim_step_cap_id = Some(id);
+        cy = ny;
+        let (id, ny) = Self::add_full_width_row(tree, lx, cy, inner_w, "sim state: OK");
+        self.sim_nonfinite_id = Some(id);
         cy = ny;
         let (id, ny) = Self::add_row(tree, lx, cy, inner_w, "Bodies");
         self.physics_body_count_id = Some(id);
@@ -577,5 +681,65 @@ impl Overlay for PerfHudPanel {
     fn on_event(&mut self, _event: &UIEvent, _tree: &mut UITree) -> OverlayResponse {
         // The HUD never consumes input — modeless + always-Ignored = click-through.
         OverlayResponse::Ignored
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HUD_WIDTH, PAD, PerfHudPanel, PerfMetrics, write_sim_lag};
+    use crate::tree::UITree;
+
+    #[test]
+    fn sim_lag_is_reported_in_milliseconds() {
+        let mut text = String::new();
+        write_sim_lag(&mut text, 0.125);
+        assert_eq!(text, "sim behind by 125.0 ms");
+    }
+
+    #[test]
+    fn sim_status_defaults_to_healthy_and_keeps_flags_independent() {
+        let metrics = PerfMetrics::default();
+        assert!(!metrics.sim_step_cap_hit);
+        assert!(!metrics.sim_nonfinite);
+
+        let mut panel = PerfHudPanel::new();
+        panel.set_metrics(PerfMetrics {
+            sim_step_cap_hit: true,
+            sim_nonfinite: true,
+            ..PerfMetrics::default()
+        });
+        assert!(panel.metrics.sim_step_cap_hit);
+        assert!(panel.metrics.sim_nonfinite);
+    }
+
+    #[test]
+    fn sim_status_labels_explain_cap_and_nonfinite_continuation() {
+        assert_eq!(
+            super::sim_step_cap_label(true),
+            "step cap: WARNING — CAP HIT"
+        );
+        assert_eq!(super::sim_step_cap_label(false), "step cap: OK");
+        assert_eq!(
+            super::sim_state_label(true),
+            "sim state: ERROR — SHOW RUNNING"
+        );
+        assert_eq!(super::sim_state_label(false), "sim state: OK");
+    }
+
+    #[test]
+    fn lag_and_status_rows_use_the_full_inner_width() {
+        let mut tree = UITree::new();
+        let mut panel = PerfHudPanel::new();
+        panel.visible = true;
+        panel.build_at_xy(&mut tree, 0.0, 0.0);
+        let expected_width = HUD_WIDTH - PAD * 2.0;
+        for id in [
+            panel.physics_backlog_id,
+            panel.sim_step_cap_id,
+            panel.sim_nonfinite_id,
+        ] {
+            let id = id.expect("diagnostic row is built with the HUD");
+            assert_eq!(tree.get_bounds(id).width, expected_width);
+        }
     }
 }

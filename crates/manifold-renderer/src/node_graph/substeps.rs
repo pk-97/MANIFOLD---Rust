@@ -1617,6 +1617,7 @@ mod tests {
         accepted: f32,
         seeded: bool,
         ports: SubstepBoundaryPorts,
+        interval_duration: f32,
     }
 
     impl SimBoundary {
@@ -1640,6 +1641,7 @@ mod tests {
                 accepted: 0.0,
                 seeded: false,
                 ports: SIM_PORTS,
+                interval_duration: 0.5,
             }
         }
     }
@@ -1678,11 +1680,14 @@ mod tests {
         fn substep_boundary(&self) -> Option<SubstepBoundaryPorts> {
             Some(self.ports)
         }
+        fn set_substep_interval(&mut self, interval: manifold_physics::stepping::StepInterval) {
+            self.interval_duration = interval.duration().0 as f32;
+        }
         fn substep_iteration(&mut self, iteration: u32, scalars: &mut [f32]) -> bool {
             if iteration >= self.pending {
                 return false;
             }
-            scalars[0] = 0.5;
+            scalars[0] = self.interval_duration;
             scalars[1] = iteration as f32;
             true
         }
@@ -1783,6 +1788,7 @@ mod tests {
         outputs: Vec<NodeOutput>,
         log: Log,
         fail_at: Option<u32>,
+        intervals: Option<manifold_physics::clock::ClockFrame>,
     }
 
     impl EffectNode for EagerClock {
@@ -1806,6 +1812,9 @@ mod tests {
         }
         fn substep_host_sync(&self, _iteration: u32) -> bool {
             true
+        }
+        fn substep_clock_interval(&self, iteration: u32) -> Option<(&'static str, manifold_physics::stepping::StepInterval)> {
+            self.intervals.as_ref()?.interval(u64::from(iteration)).map(|interval| ("out", interval))
         }
         fn substep_host_step(
             &mut self,
@@ -1835,6 +1844,11 @@ mod tests {
     }
 
     fn clock_fixture_with_failure(opted: bool, fail_at: Option<u32>) -> SimFixture {
+        clock_fixture_with_intervals(opted, fail_at, None)
+    }
+
+    fn clock_fixture_with_intervals(opted: bool, fail_at: Option<u32>, intervals: Option<manifold_physics::clock::ClockFrame>) -> SimFixture {
+        let sample_intervals = intervals.is_some();
         let log: Log = Arc::default();
         let count = Arc::new(Mutex::new(3));
         let mut graph = Graph::new();
@@ -1845,6 +1859,7 @@ mod tests {
             outputs: vec![output("out", PortType::Scalar(ScalarType::F32))],
             log: log.clone(),
             fail_at,
+            intervals,
         }));
         let mut sim = SimBoundary::new(log.clone(), count.clone());
         if opted {
@@ -1860,7 +1875,7 @@ mod tests {
         graph.connect((boundary, "step_dt"), (add_dt, "b")).unwrap();
         graph.connect((add_dt, "out"), (add_index, "a")).unwrap();
         graph.connect((boundary, "step_index"), (add_index, "b")).unwrap();
-        graph.connect((aux, "out"), (add_index, "c")).unwrap();
+        graph.connect((if sample_intervals { clock } else { aux }, "out"), (add_index, "c")).unwrap();
         graph.connect((add_index, "out"), (boundary, "in")).unwrap();
         graph.connect((boundary, "out"), (consumer, "a")).unwrap();
         let plan = compile(&graph).unwrap();
@@ -2068,6 +2083,24 @@ mod tests {
             ]
         );
         assert_eq!(exec.substep_host_syncs(), 2);
+    }
+
+    #[test]
+    fn substeps_clock_history_sets_each_interval_before_boundary_and_body() {
+        use manifold_physics::clock::SimulationClock;
+        let mut clock = SimulationClock::default();
+        clock.advance(0.0, 0.5, 1.0, 0.0, false, true);
+        clock.observe_speed(0.25, 2.0);
+        let intervals = clock.advance(1.5, 0.5, 2.0, 0.0, false, true);
+        let mut fx = clock_fixture_with_intervals(true, None, Some(intervals));
+        let mut exec = Executor::with_mock();
+        let log = run_frame(&mut fx, &mut exec, 3);
+        assert_eq!(log.last().unwrap(), "consumer a=9.5 b=0 c=none");
+        assert_eq!(region_events(&log), vec![
+            "add_index a=1.75 b=0 c=0.75", "capture 2.5", "host 1",
+            "add_index a=3.5 b=1 c=1", "capture 5.5", "host 2",
+            "add_index a=6.5 b=2 c=1", "capture 9.5",
+        ]);
     }
 
     /// Live coupling uses the same ordered exchanges as export.

@@ -28,8 +28,8 @@ struct CountUniforms {
     points_per_cell: f32,
     ticks: f32,
     live_count: f32,
+    dt: f32,
     dispatch_count: u32,
-    _pad0: u32,
     _pad1: u32,
     _pad2: u32,
 }
@@ -37,7 +37,7 @@ struct CountUniforms {
 crate::primitive! {
     name: EmissionCount,
     type_id: "node.emission_count",
-    purpose: "How many whitewater particles each liquid particle emits this frame: FLIP's count per tick, Wavecrest Emission × energy potential × wavecrest potential × 1/60 s × 8 / Points per Cell, rounded to a whole number on its own each tick and multiplied by the frame's Ticks. FLIP's rate is set for 8 particles per cell; the 8 / Points per Cell factor keeps the amount the same for any solver's sampling. 0 for slots at or past Live Count, slots with radius 0, and particles slower than 1 mm/s. One u32 per particle slot.",
+    purpose: "How many whitewater particles each liquid particle emits this frame: FLIP's count per tick, Wavecrest Emission × energy potential × wavecrest potential × Duration × 8 / Points per Cell, rounded to a whole number on its own each tick and multiplied by the frame's Ticks. FLIP's rate is set for 8 particles per cell; the 8 / Points per Cell factor keeps the amount the same for any solver's sampling. 0 for slots at or past Live Count, slots with radius 0, and particles slower than 1 mm/s. One u32 per particle slot.",
     inputs: {
         particles: Array(FluidParticle) required,
         energy: Array(f32) required,
@@ -46,6 +46,7 @@ crate::primitive! {
         points_per_cell: ScalarF32 optional,
         ticks: ScalarF32 optional,
         live_count: ScalarF32 optional,
+        dt: ScalarF32 optional,
     },
     outputs: {
         out: Array(u32),
@@ -55,6 +56,7 @@ crate::primitive! {
         float_param!("points_per_cell", "Points per Cell", 8.0, 0.001, 1.0e3),
         float_param!("ticks", "Ticks", 1.0, 0.0, 1.0e3),
         float_param!("live_count", "Live Count", 1.0e9, 0.0, 1.0e9),
+        float_param!("dt", "Duration (s)", 1.0 / 60.0, 0.0, 1.0e3),
     ],
     depth_rule: Terminal,
     composition_notes: "Ends the whitewater emitter chain: particles from node.sample_faces_at_particles, energy from node.energy_potential, wavecrest from node.wavecrest_potential. ticks and points_per_cell come from the liquid domain, live_count from the frame's particle count. node.running_total over the counts gives each emitter's first spawn slot.",
@@ -85,7 +87,7 @@ impl Primitive for EmissionCount {
             ticks: ctx.scalar_or_param("ticks", 1.0),
             live_count: ctx.scalar_or_param("live_count", 1.0e9),
             dispatch_count: 0,
-            _pad0: 0,
+            dt: ctx.scalar_or_param("dt", 1.0 / 60.0),
             _pad1: 0,
             _pad2: 0,
         };

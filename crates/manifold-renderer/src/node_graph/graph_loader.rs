@@ -696,6 +696,110 @@ fn migrate_gltf_ao_mask(def: &mut EffectGraphDef) -> bool {
     changed
 }
 
+/// Add explicit interval wires to pre-clock liquid graphs, preserving authored
+/// duration wires and all export settings. Runs once at graph installation.
+fn wire_liquid_intervals(def: &mut EffectGraphDef) -> bool {
+    use manifold_core::effect_graph_def::EffectGraphWire;
+    let mut domains = std::collections::BTreeMap::new();
+    for node in &def.nodes {
+        if matches!(node.type_id.as_str(), "node.gpu_flip_domain" | "node.matter_domain") {
+            domains.insert(node.id, node.id);
+        }
+    }
+    // Follow only solver boundaries, never arbitrary graph ancestry.
+    for _ in 0..3 {
+        for node in &def.nodes {
+            if !matches!(node.type_id.as_str(), "node.liquid_state" | "node.matter_state" | "node.gpu_flip_step") { continue; }
+            let source = def.wires.iter().filter(|wire| wire.to_node == node.id)
+                .filter_map(|wire| domains.get(&wire.from_node).copied()).next();
+            if let Some(source) = source { domains.insert(node.id, source); }
+        }
+    }
+    let mut changed = false;
+    for node in &def.nodes {
+        let ports: &[(&str, &str)] = match node.type_id.as_str() {
+            "node.gpu_flip_step" => &[("interval_duration", "interval_duration"), ("clock_obstacles", "clock_obstacles"), ("clock_sources", "clock_sources"), ("clock_obstacle_count", "clock_obstacle_count"), ("clock_source_count", "clock_source_count"), ("live_hits", "live_hits"), ("live_hit_count", "live_hit_count")],
+            "node.matter_state" => &[("interval_duration", "interval_duration"), ("target_time", "target_time"), ("simulation_time", "simulation_time"), ("step_cap_hit", "step_cap_hit")],
+            "node.whitewater_step" => &[("interval_duration", "dt")],
+            "node.liquid_solid_distance" | "node.whitewater_obstacle_source" => &[("interval_duration", "tick_seconds")],
+            _ => &[],
+        };
+        let source = def.wires.iter().filter(|wire| wire.to_node == node.id)
+            .find_map(|wire| domains.get(&wire.from_node).copied());
+        if let Some(source) = source {
+            for &(output, input) in ports {
+                if def.wires.iter().any(|wire| wire.to_node == node.id && wire.to_port == input) { continue; }
+                def.wires.push(EffectGraphWire { from_node: source, from_port: output.into(), to_node: node.id, to_port: input.into() });
+                changed = true;
+            }
+        }
+        if node.type_id == "node.liquid_state" && !def.wires.iter().any(|w| w.to_node == node.id && w.to_port == "clock_status_in") {
+            let step = def.wires.iter().filter(|w| w.to_node == node.id && w.to_port == "in")
+                .find_map(|w| def.nodes.iter().find(|n| n.id == w.from_node && n.type_id == "node.gpu_flip_step"));
+            if let Some(step) = step {
+                def.wires.push(EffectGraphWire { from_node: step.id, from_port: "clock_status".into(), to_node: node.id, to_port: "clock_status_in".into() });
+                changed = true;
+            }
+        }
+    }
+    changed
+}
+
+/// Give every liquid field consumer saved before `node.blob_bounds` existed
+/// its bounds, the way the shipped Liquid Surface group wires them: one
+/// bounds node per blob source, feeding every consumer of that source.
+/// Runs once at graph installation; a graph that already wires `bounds` is
+/// untouched.
+fn wire_blob_bounds(def: &mut EffectGraphDef) -> bool {
+    const CONSUMERS: [&str; 2] = ["node.particle_volume", "node.lattice_bricks"];
+    let mut next_id = def.nodes.iter().map(|n| n.id).max().map_or(0, |id| id + 1);
+    let consumers: Vec<u32> =
+        def.nodes.iter().filter(|n| CONSUMERS.contains(&n.type_id.as_str())).map(|n| n.id).collect();
+    let mut changed = false;
+    for consumer in consumers {
+        if def.wires.iter().any(|w| w.to_node == consumer && w.to_port == "bounds") {
+            continue;
+        }
+        let Some((from_node, from_port)) =
+            def.wires.iter().find(|w| w.to_node == consumer && w.to_port == "blobs").map(|w| (w.from_node, w.from_port.clone()))
+        else {
+            continue;
+        };
+        let measuring = |w: &EffectGraphWire| {
+            w.from_node == from_node
+                && w.from_port == from_port
+                && w.to_port == "blobs"
+                && def.nodes.iter().any(|n| n.id == w.to_node && n.type_id == "node.blob_bounds")
+        };
+        let bounds = match def.wires.iter().find(|w| measuring(w)).map(|w| w.to_node) {
+            Some(existing) => existing,
+            None => {
+                let id = next_id;
+                next_id += 1;
+                def.nodes.push(EffectGraphNode {
+                    id,
+                    node_id: manifold_core::NodeId::default(),
+                    type_id: "node.blob_bounds".to_string(),
+                    handle: None,
+                    params: Default::default(),
+                    exposed_params: Default::default(),
+                    editor_pos: None,
+                    wgsl_source: None,
+                    title: None,
+                    output_formats: Default::default(),
+                    output_canvas_scales: Default::default(),
+                    group: None,
+                });
+                def.wires.push(EffectGraphWire { from_node, from_port, to_node: id, to_port: "blobs".into() });
+                id
+            }
+        };
+        def.wires.push(EffectGraphWire { from_node: bounds, from_port: "bounds".into(), to_node: consumer, to_port: "bounds".into() });
+        changed = true;
+    }
+    changed
+}
+
 /// Returns the [`NodeInstantiation`] on success. On any error the
 /// graph's state is the union of every successful step before the
 /// failure — both callers handle this by either propagating
@@ -819,6 +923,15 @@ pub fn instantiate_def(
     } else {
         def
     };
+
+    // Older liquid graphs did not carry accepted duration. Upgrade their
+    // existing domain/state/step connections at the common loader seam.
+    let mut interval_wired = def.clone();
+    let def = if wire_liquid_intervals(&mut interval_wired) { &interval_wired } else { def };
+    // Liquid fields saved before node.blob_bounds read their kernel reach
+    // from it like the shipped surface group does; `bounds` is required.
+    let mut bounds_wired = def.clone();
+    let def = if wire_blob_bounds(&mut bounds_wired) { &bounds_wired } else { def };
 
     // For Splice, identify the def's Source and FinalOutput up front so
     // we know which nodes to skip during instantiation and which wires
@@ -1969,6 +2082,152 @@ fn audit_array_resource_bindings(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn live_clock_graph_wires_are_explicit_idempotent_and_preserve_authored_duration() {
+        use manifold_core::effect_graph_def::EffectGraphWire;
+        let wire = |from, output: &str, to, input: &str| EffectGraphWire {
+            from_node: from, from_port: output.into(), to_node: to, to_port: input.into(),
+        };
+        let mut def = EffectGraphDef {
+            version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
+            name: None, description: None, preset_metadata: None, scene_modifiers: Vec::new(),
+            nodes: vec![bare_node(1, "node.gpu_flip_domain"), bare_node(2, "node.liquid_state"), bare_node(3, "node.gpu_flip_step"), bare_node(4, "node.whitewater_step"), bare_node(5, "node.scalar")],
+            wires: vec![wire(1, "ticks", 2, "ticks"), wire(2, "out", 3, "particles"), wire(3, "out", 2, "in"), wire(3, "faces", 4, "faces"), wire(5, "out", 4, "dt")],
+        };
+        assert!(wire_liquid_intervals(&mut def));
+        assert!(def.wires.contains(&wire(1, "interval_duration", 3, "interval_duration")));
+        assert!(def.wires.contains(&wire(1, "live_hits", 3, "live_hits")));
+        assert!(def.wires.contains(&wire(3, "clock_status", 2, "clock_status_in")));
+        assert_eq!(def.wires.iter().filter(|w| w.to_node == 4 && w.to_port == "dt").count(), 1);
+        assert!(def.wires.contains(&wire(5, "out", 4, "dt")));
+        assert!(!wire_liquid_intervals(&mut def));
+    }
+
+    /// Each liquid field consumer's bounds wiring as (consumer type, blob
+    /// source type, blob source port), plus how many bounds nodes feed them.
+    /// Panics unless every consumer reads `bounds` from a node.blob_bounds fed
+    /// the consumer's own blobs.
+    fn blob_bounds_wiring(def: &EffectGraphDef) -> (Vec<(String, String, String)>, usize) {
+        let type_of = |id: u32| def.nodes.iter().find(|n| n.id == id).map(|n| n.type_id.clone()).expect("wired node exists");
+        let source = |to: u32, port: &str| {
+            let w = def.wires.iter().find(|w| w.to_node == to && w.to_port == port).unwrap_or_else(|| panic!("node {to} has no {port} wire"));
+            (w.from_node, w.from_port.clone())
+        };
+        let mut wiring = Vec::new();
+        let mut bounds_nodes = std::collections::BTreeSet::new();
+        for consumer in def.nodes.iter().filter(|n| matches!(n.type_id.as_str(), "node.particle_volume" | "node.lattice_bricks")) {
+            let (bounds, port) = source(consumer.id, "bounds");
+            assert_eq!((type_of(bounds).as_str(), port.as_str()), ("node.blob_bounds", "bounds"));
+            let blobs = source(consumer.id, "blobs");
+            assert_eq!(source(bounds, "blobs"), blobs, "{}: bounds measure other blobs", consumer.type_id);
+            bounds_nodes.insert(bounds);
+            wiring.push((consumer.type_id.clone(), type_of(blobs.0), blobs.1));
+        }
+        wiring.sort();
+        (wiring, bounds_nodes.len())
+    }
+
+    #[test]
+    fn liquid_fields_saved_before_blob_bounds_load_with_the_shipped_wiring() {
+        const SHIPPED: &str = include_str!("../../assets/generator-presets/WaterDamBreakGpuFlip.json");
+        let flat = |doc: serde_json::Value| {
+            let def: EffectGraphDef = serde_json::from_value(doc).expect("parse");
+            manifold_core::flatten::flatten_groups(&def).expect("flattens")
+        };
+        let shipped_doc: serde_json::Value = serde_json::from_str(SHIPPED).expect("shipped preset");
+        let mut shipped = flat(shipped_doc.clone());
+        let expected = blob_bounds_wiring(&shipped);
+        assert_eq!(expected.0.len(), 2, "the shipped surface feeds both field consumers");
+        assert_eq!(expected.1, 1, "one reduction serves both");
+        assert!(!wire_blob_bounds(&mut shipped), "a wired graph is untouched");
+
+        // The same surface group as saved before node.blob_bounds existed.
+        let mut old_doc = shipped_doc;
+        for node in old_doc["nodes"].as_array_mut().expect("nodes") {
+            let Some(group) = node.get_mut("group").filter(|g| !g.is_null()) else { continue };
+            let removed: Vec<serde_json::Value> = group["nodes"].as_array().expect("group nodes").iter()
+                .filter(|n| n["typeId"] == "node.blob_bounds").map(|n| n["id"].clone()).collect();
+            group["nodes"].as_array_mut().expect("group nodes").retain(|n| n["typeId"] != "node.blob_bounds");
+            group["wires"].as_array_mut().expect("group wires")
+                .retain(|w| !removed.iter().any(|id| w["fromNode"] == *id || w["toNode"] == *id));
+        }
+        let old_def: EffectGraphDef = serde_json::from_value(old_doc.clone()).expect("parse");
+        let mut old = flat(old_doc);
+        assert!(old.wires.iter().all(|w| w.to_port != "bounds"), "the fixture is the old shape");
+        assert!(wire_blob_bounds(&mut old));
+        assert_eq!(blob_bounds_wiring(&old), expected);
+        assert!(!wire_blob_bounds(&mut old), "the migration is idempotent");
+
+        // The old shape through the real loader builds and validates.
+        let mut graph = Graph::new();
+        instantiate_def(
+            &mut graph,
+            &old_def,
+            &registry(),
+            HandleScope::Global,
+            BoundaryHandling::Standalone,
+            &crate::node_graph::mesh_change::PreparedMeshRules::default(),
+        )
+        .expect("the old surface builds");
+        let type_of = |id| graph.get_node(id).map(|n| n.node.type_id().as_str().to_owned());
+        let source = |id, port: &str| {
+            graph.wires_into(id).find(|w| w.to.1 == port).map(|w| w.from).unwrap_or_else(|| panic!("{port} unwired"))
+        };
+        let consumers: Vec<_> = graph
+            .nodes()
+            .filter(|n| matches!(n.node.type_id().as_str(), "node.particle_volume" | "node.lattice_bricks"))
+            .map(|n| n.id)
+            .collect();
+        assert_eq!(consumers.len(), 2);
+        let mut bounds_nodes = Vec::new();
+        for consumer in consumers {
+            let (bounds, port) = source(consumer, "bounds");
+            assert_eq!((type_of(bounds).as_deref(), port), (Some("node.blob_bounds"), "bounds"));
+            assert_eq!(source(bounds, "blobs"), source(consumer, "blobs"), "bounds measure the consumer's blobs");
+            if !bounds_nodes.contains(&bounds) {
+                bounds_nodes.push(bounds);
+            }
+        }
+        assert_eq!(bounds_nodes.len(), 1, "one reduction serves both");
+        crate::node_graph::validation::validate(&graph).expect("the migrated surface validates");
+
+        // Peter's saved water layer. Its other pre-1180 params need the project
+        // loader's migrations before the renderer builds it, so its surface is
+        // checked as the loader's flattened document.
+        let mut layer: EffectGraphDef = serde_json::from_str(include_str!(
+            "../../../manifold-io/tests/fixtures/water_layer_graph_v1160.json"
+        ))
+        .expect("saved layer");
+        layer.scene_modifiers.clear();
+        let mut layer = manifold_core::flatten::flatten_groups(&layer).expect("flattens");
+        assert!(layer.wires.iter().all(|w| w.to_port != "bounds"), "the saved layer is the old shape");
+        assert!(wire_blob_bounds(&mut layer));
+        let (wiring, bounds_nodes) = blob_bounds_wiring(&layer);
+        assert_eq!(bounds_nodes, 1, "{wiring:?}");
+        assert!(wiring.iter().all(|(_, source, port)| source == "node.shape_particle_blobs" && port == "blobs"), "{wiring:?}");
+    }
+
+    #[test]
+    fn whitewater_obstacle_source_uses_accepted_duration_without_overwriting_wires() {
+        use manifold_core::effect_graph_def::EffectGraphWire;
+        let wire = |from, output: &str, to, input: &str| EffectGraphWire {
+            from_node: from, from_port: output.into(), to_node: to, to_port: input.into(),
+        };
+        for domain in ["node.gpu_flip_domain", "node.matter_domain"] {
+            let mut def = EffectGraphDef {
+                version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
+                name: None, description: None, preset_metadata: None, scene_modifiers: Vec::new(),
+                nodes: vec![bare_node(1, domain), bare_node(2, "node.whitewater_obstacle_source"), bare_node(3, "node.whitewater_obstacle_source"), bare_node(4, "node.scalar")],
+                wires: vec![wire(1, "bodies", 2, "bodies"), wire(1, "bodies", 3, "bodies"), wire(4, "out", 3, "tick_seconds")],
+            };
+            assert!(wire_liquid_intervals(&mut def));
+            assert!(def.wires.contains(&wire(1, "interval_duration", 2, "tick_seconds")));
+            assert!(def.wires.contains(&wire(4, "out", 3, "tick_seconds")));
+            assert_eq!(def.wires.iter().filter(|w| w.to_node == 3 && w.to_port == "tick_seconds").count(), 1);
+            assert!(!wire_liquid_intervals(&mut def));
+        }
+    }
 
     #[test]
     fn scene_modifier_v3_runtime_requires_attachment_before_node_installation() {

@@ -90,6 +90,10 @@ struct Params {
     // The farthest ring the table holds; ring_max + 1 means none within it.
     ring_max: u32,
     narrow_band: u32, // Ferstl 2016: 0 dense, 1 initialization, 2 band-masked.
+    live_impulse_stride: u32,
+    clock_pad0: u32,
+    clock_pad1: u32,
+    clock_pad2: u32,
 };
 
 struct CellRange {
@@ -128,6 +132,21 @@ struct LiquidShape {
     scale_min: vec4<f32>,
 };
 
+struct ClockPlan {
+    step_dt: f32,
+    elapsed: f32,
+    remaining: f32,
+    maximum_speed: f32,
+    cap_hit: u32,
+    nonfinite: u32,
+    step_index: u32,
+    event: u32,
+    numerical_end: f32,
+    marker_limit: f32,
+    _pad0: u32,
+    live_mode: u32,
+};
+
 @group(0) @binding(0) var<uniform> u: Params;
 @group(0) @binding(1) var<storage, read> ranges: array<CellRange>;
 @group(0) @binding(2) var<storage, read> sorted: array<FluidParticle>;
@@ -164,9 +183,26 @@ struct LiquidShape {
 @group(0) @binding(37) var<storage, read_write> emit_scan: array<u32>;
 // The sorted particles, written past the live ones by emit_write.
 @group(0) @binding(38) var<storage, read_write> emitted: array<FluidParticle>;
+@group(0) @binding(46) var<storage, read> clock_plan: array<ClockPlan>;
 
 // Set by resolve_solid when it refuses a push-out past SOLID_PUSH.
 var<private> push_refused: u32 = 0u;
+
+fn clock_live() -> bool {
+    return clock_plan[0].live_mode != 0u;
+}
+
+fn adaptive_step_dt() -> f32 {
+    return select(u.step_dt, clock_plan[0].step_dt, clock_live());
+}
+
+fn adaptive_tick_seconds() -> f32 {
+    return select(u.tick_seconds, clock_plan[0].elapsed, clock_live());
+}
+
+fn clock_active() -> bool {
+    return !clock_live() || clock_plan[0].step_dt > 0.0;
+}
 
 fn lattice() -> vec3<i32> {
     return vec3<i32>(u.n);
@@ -210,6 +246,7 @@ fn face_exists(p: vec3<i32>, n: vec3<i32>, a: i32) -> bool {
 // solve, its velocity the static solid's).
 @compute @workgroup_size(256)
 fn particles_to_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !clock_active() { return; }
     let idx = c_face_index(gid.x);
     if idx == NO_CELL {
         return;
@@ -298,6 +335,7 @@ fn particles_to_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
 // engine's solid border cells. Keep their fluid samples eligible as seeds.
 @compute @workgroup_size(256)
 fn extend_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !clock_active() { return; }
     let idx = gid.x;
     if idx >= face_total() {
         return;
@@ -356,9 +394,13 @@ fn gravity_force(x: vec3<f32>, origin: vec3<f32>, base: u32, axis: u32) -> f32 {
 
 fn gravity_impulse(x: vec3<f32>, origin: vec3<f32>, axis: u32) -> f32 {
     var sum = 0.0;
+    let event = clock_plan[0].event;
+    let live = (event & 0x80000000u) != 0u && u.live_impulse_stride > 0u;
+    let base = select(0u, (event & 0x7fffffffu) * u.live_impulse_stride, live);
     for (var k = 0u; k < 8u; k = k + 1u) {
         let c = liquid_field_corner(x, origin, u.field_spacing, u.field_nodes, k);
-        sum = fma(impulses[c.index * 4u + axis], c.weight, sum);
+        let value = impulses[base + c.index * 4u + axis];
+        sum = fma(value, c.weight, sum);
     }
     return sum;
 }
@@ -376,8 +418,9 @@ fn region_distance(r: i32, x: vec3<f32>) -> f32 {
     if shape_index < 0 || u32(shape_index) >= u.shapes_len {
         return 1e30;
     }
-    let position = fma(bd.linear_velocity.xyz, vec3<f32>(u.tick_seconds), bd.position_inv_mass.xyz);
-    let q = liquid_turn(bd.rotation, bd.angular_velocity.xyz, u.tick_seconds);
+    let pose_time = adaptive_tick_seconds();
+    let position = fma(bd.linear_velocity.xyz, vec3<f32>(pose_time), bd.position_inv_mass.xyz);
+    let q = liquid_turn(bd.rotation, bd.angular_velocity.xyz, pose_time);
     let sh = shapes[u32(shape_index)];
     let dims = vec3<u32>(sh.dims_x, sh.dims_y, sh.dims_z);
     let g = liquid_lattice_coord(x, position, q, sh.origin_spacing, sh.scale_min.xyz);
@@ -408,7 +451,8 @@ fn region_holding(x: vec3<f32>, code: f32, closed: bool) -> i32 {
 // region's own rigid motion there (the engine's append-object-velocity).
 fn region_velocity(r: i32, x: vec3<f32>) -> vec3<f32> {
     let bd = regions[u32((u.tick_index - u.first_tick) * u.region_count + r)];
-    let position = fma(bd.linear_velocity.xyz, vec3<f32>(u.tick_seconds), bd.position_inv_mass.xyz);
+    let pose_time = adaptive_tick_seconds();
+    let position = fma(bd.linear_velocity.xyz, vec3<f32>(pose_time), bd.position_inv_mass.xyz);
     let rigid = bd.linear_velocity.xyz + cross(bd.angular_velocity.xyz, x - position);
     return bd.inv_inertia_x.xyz + bd.inv_inertia_x.w * rigid;
 }
@@ -420,6 +464,7 @@ fn region_velocity(r: i32, x: vec3<f32>) -> vec3<f32> {
 // through.
 @compute @workgroup_size(256)
 fn face_gravity(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !clock_active() { return; }
     let idx = gid.x;
     if idx >= face_total() {
         return;
@@ -434,7 +479,9 @@ fn face_gravity(@builtin(global_invocation_id) gid: vec3<u32>) {
     if u.force_lattices > 0 {
         force_base = liquid_field_force_base(u.tick_index, u.first_tick, u.force_lattices, u.field_nodes);
     }
-    let impulse = u.tick_index == u.impulse_tick && u.step_in_tick == 0;
+    let live_event = (clock_plan[0].event & 0x80000000u) != 0u;
+    let impulse = select(u.tick_index == u.impulse_tick && u.step_in_tick == 0,
+        live_event, clock_live());
     for (var a = 0; a < 3; a = a + 1) {
         if !face_exists(p, n, a) {
             continue;
@@ -455,7 +502,7 @@ fn face_gravity(@builtin(global_invocation_id) gid: vec3<u32>) {
         if u.region_count > 0 && here.face_weight[a] > 0.0 && region_holding(x, 2.0, false) >= 0 {
             accel = 0.0;
         }
-        var v = fma(accel, u.step_dt, here.face_velocity[a]);
+        var v = fma(accel, adaptive_step_dt(), here.face_velocity[a]);
         if impulse {
             v = v + gravity_impulse(x, origin, u32(a));
         }
@@ -630,6 +677,7 @@ fn cross_axes(a: i32) -> vec2<i32> {
 // are closed. Velocity is 0.
 @compute @workgroup_size(256)
 fn open_fractions(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !clock_active() { return; }
     let idx = gid.x;
     if idx >= face_total() {
         return;
@@ -689,8 +737,9 @@ fn closest_body(x: vec3<f32>) -> i32 {
         if shape_index < 0 || u32(shape_index) >= u.shapes_len {
             continue;
         }
-        let position = fma(bd.linear_velocity.xyz, vec3<f32>(u.tick_seconds), bd.position_inv_mass.xyz);
-        let q = liquid_turn(bd.rotation, bd.angular_velocity.xyz, u.tick_seconds);
+        let pose_time = adaptive_tick_seconds();
+        let position = fma(bd.linear_velocity.xyz, vec3<f32>(pose_time), bd.position_inv_mass.xyz);
+        let q = liquid_turn(bd.rotation, bd.angular_velocity.xyz, pose_time);
         let sh = shapes[u32(shape_index)];
         let dims = vec3<u32>(sh.dims_x, sh.dims_y, sh.dims_z);
         let g = liquid_lattice_coord(x, position, q, sh.origin_spacing, sh.scale_min.xyz);
@@ -720,6 +769,7 @@ fn closest_body(x: vec3<f32>) -> i32 {
 // row. Weight w is the known mask: bit a set where axis a was sampled.
 @compute @workgroup_size(256)
 fn solid_face_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !clock_active() { return; }
     let idx = gid.x;
     if idx >= face_total() {
         return;
@@ -751,15 +801,16 @@ fn solid_face_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
         if row >= 0 {
             let bd = bodies[u32(row)];
             let body = row - first;
-            let position = fma(bd.linear_velocity.xyz, vec3<f32>(u.tick_seconds), bd.position_inv_mass.xyz);
+            let pose_time = adaptive_tick_seconds();
+            let position = fma(bd.linear_velocity.xyz, vec3<f32>(pose_time), bd.position_inv_mass.xyz);
             var linear = bd.linear_velocity.xyz;
             var angular = bd.angular_velocity.xyz;
             if bd.position_inv_mass.w > 0.0 {
                 let r = 8u * u32(body);
                 let push = vec3<f32>(reaction[r], reaction[r + 1u], reaction[r + 2u]);
                 let turn = vec3<f32>(reaction[r + 4u], reaction[r + 5u], reaction[r + 6u]);
-                linear = fma(bd.accel_shape.xyz, vec3<f32>(u.tick_seconds), linear) + bd.position_inv_mass.w * push;
-                angular = fma(vec3<f32>(bd.inv_inertia_x.w, bd.inv_inertia_y.w, bd.inv_inertia_z.w), vec3<f32>(u.tick_seconds), angular)
+                linear = fma(bd.accel_shape.xyz, vec3<f32>(pose_time), linear) + bd.position_inv_mass.w * push;
+                angular = fma(vec3<f32>(bd.inv_inertia_x.w, bd.inv_inertia_y.w, bd.inv_inertia_z.w), vec3<f32>(pose_time), angular)
                     + vec3<f32>(dot(bd.inv_inertia_x.xyz, turn), dot(bd.inv_inertia_y.xyz, turn), dot(bd.inv_inertia_z.xyz, turn));
             }
             out.face_velocity[a] = liquid_body_velocity(linear, angular, position, centre)[a];
@@ -883,6 +934,7 @@ fn solid_centre(p: vec3<i32>, m: vec3<i32>) -> f32 {
 // One thread per cell, in place on `cell_out`: the particles' φ.
 @compute @workgroup_size(256)
 fn phi_into_solids(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !clock_active() { return; }
     let idx = c_cell_index(gid.x);
     if idx == NO_CELL {
         return;
@@ -899,6 +951,7 @@ fn phi_into_solids(@builtin(global_invocation_id) gid: vec3<u32>) {
 // particles rather than stopping at the cells that hold one.
 @compute @workgroup_size(256)
 fn water_from_phi(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !clock_active() { return; }
     let idx = c_cell_index(gid.x);
     if idx == NO_CELL {
         return;
@@ -1182,6 +1235,9 @@ fn separate_pin(@builtin(global_invocation_id) gid: vec3<u32>) {
     if idx >= cell_total() {
         return;
     }
+    // This mask is history, not scratch: inactive clock slots must not
+    // change next step's pressure constraints using stale solve data.
+    if !clock_active() { return; }
     let n = lattice();
     let m = n + vec3<i32>(1);
     let first = u.tick_index == 0 && u.step_in_tick == 0;
@@ -1202,6 +1258,9 @@ fn separate_update(@builtin(global_invocation_id) gid: vec3<u32>) {
     if idx >= cell_total() {
         return;
     }
+    // This mask is history, not scratch: inactive clock slots must not
+    // change next step's pressure constraints using stale solve data.
+    if !clock_active() { return; }
     let n = lattice();
     let m = n + vec3<i32>(1);
     let p = unflatten(idx, n);
@@ -1621,6 +1680,7 @@ fn solid_flux(f: vec3<i32>, a: i32, n: vec3<i32>, m: vec3<i32>, c: f32) -> f32 {
 // cell's open volume; 0 in air.
 @compute @workgroup_size(256)
 fn divergence(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !clock_active() { return; }
     let idx = c_cell_index(gid.x);
     if idx == NO_CELL {
         return;
@@ -1654,6 +1714,7 @@ fn divergence(@builtin(global_invocation_id) gid: vec3<u32>) {
 // value within 0.005h of zero moves to ±0.005h by its sign, zero to −0.005h.
 @compute @workgroup_size(256)
 fn particle_distance(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !clock_active() { return; }
     let idx = c_cell_index(gid.x);
     if idx == NO_CELL {
         return;
@@ -1729,6 +1790,7 @@ fn surface_phi(cell: u32) -> f32 {
 // 0) for the extension to fill.
 @compute @workgroup_size(256)
 fn subtract_pressure(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !clock_active() { return; }
     let idx = gid.x;
     if idx >= face_total() {
         return;
@@ -1761,9 +1823,9 @@ fn subtract_pressure(@builtin(global_invocation_id) gid: vec3<u32>) {
             var p_upper = pressure[upper];
             var p_lower = pressure[lower];
             if !wet_upper {
-                p_upper = clamp(max(surface_phi(upper), 0.0) / (min(surface_phi(lower), surface) + 1e-9), -25.0, 25.0) * p_lower;
+                p_upper = clamp(max(surface_phi(upper), 0.0) / (min(surface_phi(lower), surface) + 1e-6), -25.0, 25.0) * p_lower;
             } else if !wet_lower {
-                p_lower = clamp(max(surface_phi(lower), 0.0) / (min(surface_phi(upper), surface) + 1e-9), -25.0, 25.0) * p_upper;
+                p_lower = clamp(max(surface_phi(lower), 0.0) / (min(surface_phi(upper), surface) + 1e-6), -25.0, 25.0) * p_upper;
             }
             out.face_velocity[a] = here.face_velocity[a] - (p_upper - p_lower) / u.cell_size;
             out.face_weight[a] = 1.0;
@@ -1780,6 +1842,7 @@ fn subtract_pressure(@builtin(global_invocation_id) gid: vec3<u32>) {
 // (FluidSimulation::_constrainVelocityFields). Weights pass through.
 @compute @workgroup_size(256)
 fn constrain_solid_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !clock_active() { return; }
     let idx = gid.x;
     if idx >= face_total() {
         return;
@@ -1842,6 +1905,7 @@ const MAX_DENSITY_ERROR: f32 = 0.5;
 // into sparse ones; 0 outside the water.
 @compute @workgroup_size(256)
 fn density_source(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !clock_active() { return; }
     let idx = c_cell_index(gid.x);
     if idx == NO_CELL {
         return;
@@ -1930,7 +1994,11 @@ fn density_source(@builtin(global_invocation_id) gid: vec3<u32>) {
         density = max(density, REST_DENSITY);
     }
     let error = clamp(density / REST_DENSITY - 1.0, -MAX_DENSITY_ERROR, MAX_DENSITY_ERROR);
-    cell_out[idx] = -u.rate * error;
+    var rate = u.rate;
+    if clock_live() {
+        rate = 1.0 / adaptive_step_dt();
+    }
+    cell_out[idx] = -rate * error;
 }
 
 // A moved particle stays 0.2 cells inside each box wall, as the engine keeps
@@ -1938,15 +2006,23 @@ fn density_source(@builtin(global_invocation_id) gid: vec3<u32>) {
 const WALL_MARGIN: f32 = 0.2;
 
 // The CFL guard: one RK3 stage moves at most max_travel cells. A non-finite
-// v stays non-finite.
+// v stays non-finite. Live stretched intervals expand the authored halo from
+// the GPU-observed speed, so Top Speed cannot truncate an arbitrary current
+// velocity at the final capped step.
+fn adaptive_max_travel() -> f32 {
+    let observed = clock_plan[0].maximum_speed * adaptive_step_dt() / u.cell_size;
+    return max(u.max_travel, observed);
+}
+
 fn guard(v: vec3<f32>, per_cell: f32) -> vec3<f32> {
     let cells = length(v) * per_cell;
-    return select(v, v * (u.max_travel / cells), cells > u.max_travel);
+    let max_travel = adaptive_max_travel();
+    return select(v, v * (max_travel / cells), cells > max_travel);
 }
 
 // 1 when the guard shortens v.
 fn guarded(v: vec3<f32>, per_cell: f32) -> u32 {
-    return select(0u, 1u, length(v) * per_cell > u.max_travel);
+    return select(0u, 1u, length(v) * per_cell > adaptive_max_travel());
 }
 
 // Exponent bits, not x != x: fast math may fold a NaN comparison away.
@@ -2128,6 +2204,7 @@ fn open_band(q: vec3<f32>, n: vec3<i32>) -> bool {
 // Radius and id are kept otherwise; unused slots pass through.
 @compute @workgroup_size(256)
 fn faces_to_particles(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !clock_active() { return; }
     let idx = gid.x;
     if idx >= u.particles {
         return;
@@ -2145,7 +2222,7 @@ fn faces_to_particles(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let n = lattice();
     let lo = u.box_min;
-    let per_cell = u.step_dt / u.cell_size;
+    let per_cell = adaptive_step_dt() / u.cell_size;
     let q0 = (particle.position_radius.xyz - lo) / u.cell_size;
     let after = sample(q0, n, 0u);
     let k1 = guard(after, per_cell);
@@ -2253,6 +2330,7 @@ fn emit_position(idx: u32, inflow: i32) -> vec3<f32> {
 // and wall (solid distance above 0), with its half cell empty.
 @compute @workgroup_size(256)
 fn emit_flags(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !clock_active() { return; }
     let idx = gid.x;
     let s = emit_sites();
     if idx >= s.x * s.y * s.z {
@@ -2279,6 +2357,7 @@ fn emit_flags(@builtin(global_invocation_id) gid: vec3<u32>) {
 // stats' live count reaching the slots, never as an error.
 @compute @workgroup_size(256)
 fn emit_write(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !clock_active() { return; }
     let idx = gid.x;
     let s = emit_sites();
     if idx >= s.x * s.y * s.z {
@@ -2299,7 +2378,7 @@ fn emit_write(@builtin(global_invocation_id) gid: vec3<u32>) {
     let inflow = region_holding(x, 2.0, true);
     let p = emit_position(idx, inflow);
     // (3 / (4π · 8))^(1/3): the sphere of an eighth of a cell, as the fill's.
-    emitted[slot] = FluidParticle(vec4<f32>(p, 0.31017 * u.cell_size), region_velocity(inflow, p), slot + 1u);
+    emitted[slot] = FluidParticle(vec4<f32>(p, 0.31017524 * u.cell_size), region_velocity(inflow, p), slot + 1u);
 }
 
 // ---- The tile table (GPU_FLIP_SPARSE_BLOCKS_DESIGN.md section 3 (The tile
@@ -2583,7 +2662,7 @@ fn narrow_move(@builtin(global_invocation_id) gid: vec3<u32>) {
     if out.position_radius.w <= 0.0 { particles_out[i] = out; return; }
     let n = lattice();
     let q = (out.position_radius.xyz - u.box_min) / u.cell_size;
-    let dt = u.step_dt / u.cell_size;
+    let dt = adaptive_step_dt() / u.cell_size;
     let a = sample(q, n, 0u);
     let b = sample(q + 0.5 * dt * a, n, 0u);
     let c = sample(q + 0.5 * dt * b, n, 0u);

@@ -76,7 +76,7 @@ fn freeze_keeps_surface_stages_and_fuses_the_real_pointwise_tail() {
     let view = crate::node_graph::freeze::install::fuse_generator_view(&def, &registry)
         .expect("the two rotate nodes must produce a frozen region");
 
-    for type_id in ["node.smooth_surface_mesh", "node.surface_mesh_normals"] {
+    for type_id in ["node.volume_surface_mesh", "node.smooth_surface_mesh", "node.surface_mesh_normals"] {
         assert_eq!(
             view.def
                 .nodes
@@ -86,6 +86,11 @@ fn freeze_keeps_surface_stages_and_fuses_the_real_pointwise_tail() {
             1,
             "the materialized surface stage must survive freezing: {type_id}"
         );
+    }
+    let mesh = view.def.nodes.iter().find(|n| n.type_id == "node.volume_surface_mesh").unwrap();
+    for port in ["solid", "solid_nodes_x", "solid_nodes_y", "solid_nodes_z"] {
+        assert!(view.def.wires.iter().any(|w| w.to_node == mesh.id && w.to_port == port),
+            "freeze must preserve mesh contact input {port}");
     }
     assert!(view.node_retarget.contains_key("surface_turn_a"));
     assert_eq!(

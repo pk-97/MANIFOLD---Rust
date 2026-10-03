@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 369 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 377 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -297,17 +297,19 @@ _Generated from the node registry. Do not hand-edit. 369 nodes registered, group
 | Turbulence (simplex) | `node.turbulence` | Filter | Pushes particles around with a flowing noise field, giving organic, swirling motion. The classic turbulence force. |
 | Wrap Around (torus) | `node.wrap_around` | Filter | Wraps particles back to the opposite edge when they leave the frame, so the cloud loops seamlessly instead of escaping. |
 
-### Particles 3D (61)
+### Particles 3D (69)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
 | Add Burst (3D, radial) | `node.add_burst_3d` | Filter | Injects 3D particles in a burst around one of a few fixed zones, puffing new material into a 3D sim on a hit. |
 | Advect Whitewater | `node.advect_whitewater` | Filter | Moves foam, spray and bubbles one step: spray flies and bounces, bubbles rise, foam rides the water. |
 | Age Whitewater | `node.age_whitewater` | Filter | Counts down each whitewater particle's life, spray fastest and bubbles slowest. |
+| Blob Bounds | `node.blob_bounds` | Filter | Measures kernel reach for exact particle surface searches. |
 | Clamp Liquid To Solids | `node.clamp_liquid_to_solids` | Filter | Keeps a liquid surface out of walls and solid bodies and closed at the edge of its grid, after smoothing. |
 | Crossing Distance | `node.crossing_distance` | Filter | Measures how far each grid cell is from the liquid's surface, negative inside the liquid. |
 | Draw Particles (3D scatter) | `node.draw_particles_3d` | Filter | Splats 3D particles into a volume buffer, building up a 3D density field from where they land. The 3D version of Draw Particles. |
 | Draw Particles (camera) | `node.draw_particles_camera` | Filter | Projects 3D particles through a camera and splats them onto a 2D image in one step. The display path for a 3D particle sim. |
+| Dust Potential | `node.dust_potential` | Filter | Finds turbulent dust emitters near solid objects. |
 | Emission Count | `node.emission_count` | Filter | Works out how many foam, spray and bubble particles each bit of breaking water throws off this frame. |
 | Energy Potential | `node.energy_potential` | Filter | Scores how fast each bit of water is moving, from 0 to 1, because faster water throws more foam and spray. |
 | Extend Lattice | `node.extend_lattice` | Filter | Fills the empty cells next to known ones with their neighbours' average, one cell further each time. |
@@ -316,6 +318,7 @@ _Generated from the node registry. Do not hand-edit. 369 nodes registered, group
 | GPU FLIP Domain | `node.gpu_flip_domain` | Source | Sets up a GPU FLIP liquid: its box, resolution, starting fill, gravity and speed. |
 | GPU FLIP Step | `node.gpu_flip_step` | Filter | Moves the water forward one tick, in Steps substeps: gravity, solids, incompressibility and the particles' motion. |
 | Grid to Matter | `node.grid_to_matter` | Filter | Moves each liquid particle with the grid's velocities and updates how compressed it is. |
+| Inside Turbulence Potential | `node.inside_turbulence_potential` | Filter | Finds submerged turbulent emitters, including near-surface particles classified inside by FLIP. |
 | Jitter Particles | `node.jitter_particles` | Filter | Nudges each liquid particle by a small random amount, so foam doesn't line up on the simulation's grid. |
 | Keep In Box (3D) | `node.keep_in_box_3d` | Filter | Holds 3D particles inside their container, either wrapping them around or bouncing them back at the edges. The hard boundary after a move. |
 | Keep Whitewater | `node.keep_whitewater` | Filter | Decides which foam, spray and bubbles survive this step: the dead, the stray and the overcrowded go. |
@@ -358,8 +361,13 @@ _Generated from the node registry. Do not hand-edit. 369 nodes registered, group
 | Surface Crossings | `node.surface_crossings` | Filter | Finds where the liquid's surface passes through each grid cell, the first step to measuring distance to the surface. |
 | Swirl Force (3D, curl) | `node.swirl_force_3d` | Filter | Turns a 3D gradient field into a swirling, divergence-free force, the move that makes 3D particles curl into smoke-like eddies. |
 | Turbulence (3D, simplex) | `node.turbulence_3d` | Filter | Pushes 3D particles around with a flowing 3D noise field for organic, swirling motion through space. |
+| Emission Count | `node.turbulence_emission_count` | Filter | Works out how many foam, spray and bubble particles each bit of breaking water throws off this frame. |
+| Turbulence Field | `node.turbulence_field` | Filter | Measures local liquid agitation for whitewater emission. |
 | Wavecrest Potential | `node.wavecrest_potential` | Filter | Scores how sharply each bit of water is breaking over a wave crest, which is where foam and spray come from. |
+| Whitewater Emitter Velocity | `node.whitewater_emitter_velocity` | Filter | Scales surface emitter velocity by the FLIP spray emission factor. |
+| Whitewater Influence | `node.whitewater_influence` | Filter | Decays obstacle influence and reapplies solid sources. |
 | Whitewater Lifecycle | `node.whitewater_lifecycle` | Filter | Moves and ages spray, foam and bubbles the way FLIP's own whitewater does. |
+| Whitewater Obstacle Source | `node.whitewater_obstacle_source` | Filter | Supplies obstacle properties for dust emission and whitewater influence. |
 | Whitewater Step | `node.whitewater_step` | Filter | Makes and moves the spray, foam and bubbles a liquid throws up, all on the GPU. |
 | Whitewater Type | `node.whitewater_type` | Filter | Decides whether each new whitewater particle is spray, foam or a bubble, from where it sits against the water surface. |
 
@@ -591,7 +599,7 @@ _Generated from the node registry. Do not hand-edit. 369 nodes registered, group
 | `WaterBasin` | Water Basin (CPU) | generator | Sim | 1069 |
 | `WaterDamBreak` | Water — Dam Break | generator | Sim | 2308 |
 | `WaterDamBreakGpu` | Water — Dam Break (GPU Surface) | generator | Sim | 2314 |
-| `WaterDamBreakGpuFlip` | Water — Dam Break (GPU FLIP) | generator | Sim | 2300 |
+| `WaterDamBreakGpuFlip` | Water — Dam Break (GPU FLIP) | generator | Sim | 2613 |
 | `WaterDamBreakMatter` | Water — Dam Break (Live GPU) | generator | Sim | 1397 |
 | `WaterFloatingBoxMatter` | Water — Floating Box (Live GPU) | generator | Sim | 1390 |
 | `WaterStillPoolMatter` | Water — Still Pool (Live GPU) | generator | Sim | 1065 |

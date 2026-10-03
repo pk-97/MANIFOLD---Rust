@@ -1,28 +1,10 @@
 // Uses the search-radius ratio (1.5 radii) from FLIP Fluids particlemesher.cpp `_searchRadiusFactor` (MIT); see THIRD_PARTY_NOTICES.md.
-// node.particle_volume — fusable BUFFER body, GATHER. One thread per level-set
-// node: the distance to the nearest blob ellipsoid in the node's 27 bins,
-// a·(|G·(x − c)| − 1) with a the blob's longest axis (exact for a sphere),
-// negative inside, capped at band = 1/3 bin + extra + cell diagonal outside
-// (extra zero preserves the original 1/3-bin cap exactly) (GPU_FLUID_SURFACE_DESIGN.md
-// D18, P6e; never an atomic splat). node.shape_particle_blobs keeps every blob
-// within 2/3 bin of its particle, so a blob the search misses is at least band
-// away and the cap is exact. Band = half the reach is the FLIP Fluids mesher's
-// ratio (its field is exact out to 1.5 radii). A node inside a solid is capped at 0 — never
-// inside the liquid, as upstream's scalar field caps solid vertices — and the
-// lattice border is outside, so the surface closes (D15). When wired, `interior`
-// is a cell-centred physical distance on the authored `(n - 7)^3` cells: the
-// solid lattice carries three padding nodes on every side.
-// Its half-cell-offset trilinear union is Ferstl et al. (2016), Eq. 4; the
-// simulation spacing comes from `size / (solid_nodes - 1)`, never mesher bins.
-//
-// ABI: `blobs` (FluidBlob → Element), `cell_ranges` (CellRange → Element2),
-// `solid` (f32), optional `bricks` (u32), and optional `interior` (f32) are
-// gathered; the output is one f32 per node. `brick_pass` selects the dense,
-// active-brick, or inactive-brick-clear schedule, and `interior_len` is the
-// derived cell count (zero when unwired).
-// The bin grid is
-// the sort's (`bins_x/y/z`), never ceil(size / cell_size) again: fast-math
-// division can land one bin past the ranges the sort wrote.
+// Negative-inside port of FLIP Fluids ParticleMesher: initialize 3r, then
+// visit each kernel's inclusive floor(p - 1.5r)..floor(p + 1.5r)+1 grid box.
+// `bounds` is node.blob_bounds' reduction of the same blobs: the largest kernel
+// radius and support. It sets the search reach, never a quality limit.
+// Solid zeros invert the native sign convention. Preview-only border replacement
+// is not part of the production mesher.
 
 fn pv_solid(p: vec3<f32>, lattice_min: vec3<f32>, spacing: vec3<f32>, nodes: vec3<u32>) -> f32 {
     let g = clamp((p - lattice_min) / spacing, vec3<f32>(0.0), vec3<f32>(nodes - vec3<u32>(1u)));
@@ -94,7 +76,8 @@ fn body(
     let nodes = (solid_nodes - vec3<u32>(1u)) * scale + vec3<u32>(1u);
     let margin = length(vec3<f32>(size_x,size_y,size_z) / vec3<f32>(nodes - vec3<u32>(1u)));
     let extra = band_extra + select(0.0, margin, band_extra > 0.0);
-    let band = cell_size / 3.0 + extra;
+    let bound = vec2<f32>(buf_bounds[0], buf_bounds[1]);
+    let band = 3.0 * bound.x + extra;
     let bins = vec3<i32>(bins_x, bins_y, bins_z);
     if idx >= nodes.x * nodes.y * nodes.z {
         return band;
@@ -103,9 +86,6 @@ fn body(
         return band;
     }
     let ijk = vec3<u32>(idx % nodes.x, (idx / nodes.x) % nodes.y, idx / (nodes.x * nodes.y));
-    if any(ijk == vec3<u32>(0u)) || any(ijk == nodes - vec3<u32>(1u)) {
-        return band;
-    }
     let size = vec3<f32>(size_x, size_y, size_z);
     let lattice_min = vec3<f32>(center_x, center_y, center_z) - 0.5 * size;
     let p = lattice_min + vec3<f32>(ijk) * size / vec3<f32>(nodes - vec3<u32>(1u));
@@ -113,7 +93,7 @@ fn body(
     var phi = band;
     if brick_pass != 2u {
         let home = clamp(vec3<i32>(floor((p - lattice_min) / cell_size)), vec3<i32>(0), bins - vec3<i32>(1));
-        let reach_bins = i32(ceil(1.0 + extra / cell_size));
+        let reach_bins = i32(ceil((bound.y + extra + margin) / cell_size));
         for (var dz = -reach_bins; dz <= reach_bins; dz = dz + 1) {
             for (var dy = -reach_bins; dy <= reach_bins; dy = dy + 1) {
                 for (var dx = -reach_bins; dx <= reach_bins; dx = dx + 1) {
@@ -126,9 +106,13 @@ fn body(
                         let blob = buf_blobs[k];
                         let reach = blob.center_radius.w;
                         let d = p - blob.center_radius.xyz;
-                        // Past reach + band the blob cannot go below the cap.
-                        let limit = reach + band;
-                        if !(reach > 0.0) || dot(d, d) >= limit * limit {
+                        // Native support is a grid-aligned box including its outer
+                        // interpolation node. Spherical rejection loses the corners.
+                        let h = size / vec3<f32>(nodes - vec3<u32>(1u));
+                        let support = 1.5 * reach + extra;
+                        let first = vec3<i32>(floor((blob.center_radius.xyz - vec3<f32>(support) - lattice_min) / h));
+                        let last = vec3<i32>(floor((blob.center_radius.xyz + vec3<f32>(support) - lattice_min) / h)) + vec3<i32>(1);
+                        if !(reach > 0.0) || any(vec3<i32>(ijk) < first) || any(vec3<i32>(ijk) > last) {
                             continue;
                         }
                         let diag = blob.shape_diag;

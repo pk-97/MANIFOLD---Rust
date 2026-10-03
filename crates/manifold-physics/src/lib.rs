@@ -12,6 +12,8 @@ pub const SOURCE_IDENTITY: &str = env!("MANIFOLD_PHYSICS_SOURCE_IDENTITY");
 pub mod input;
 pub mod interaction;
 pub mod stepping;
+pub mod clock;
+pub mod particle_duration;
 mod field_value;
 pub use field_value::FieldValue;
 pub use interaction::{

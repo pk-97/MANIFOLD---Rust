@@ -18,6 +18,29 @@ def plan(paths, users=None, repo=None):
 
 
 class ScopeTests(unittest.TestCase):
+    def test_live_clock_and_duration_atoms_select_value_proofs(self):
+        for name in ("gpu_flip_clock.rs", "shaders/gpu_flip_clock.wgsl"):
+            result = plan([P + name], users=lambda _: [P + "gpu_flip_clock.rs"],
+                          repo=self._repo_with(P + name))
+            self.assertIn("gpu_flip_clock::gpu_tests::", result.filters)
+            self.assertNotIn("gpu_flip_", result.filters)
+            self.assertFalse(result.unmapped)
+        for name in ("emission_count.rs", "spawn_whitewater.rs",
+                     "shaders/emission_count_body.wgsl", "shaders/spawn_whitewater_body.wgsl"):
+            result = plan([P + name], users=lambda _: [P + "emission_count.rs"],
+                          repo=self._repo_with(P + name))
+            self.assertIn("whitewater_particle_tests::", result.filters)
+            self.assertFalse(result.unmapped)
+
+    def test_blob_bounds_selects_dense_and_sparse_consumers(self):
+        for path in (P + "blob_bounds.rs", P + "shaders/blob_bounds.wgsl"):
+            result = plan([path], users=lambda _: [P + "blob_bounds.rs"],
+                          repo=self._repo_with(path))
+            self.assertTrue({"node_graph::primitives::blob_bounds::",
+                             "liquid_surface_tests::",
+                             "liquid_bricks::tests::gpu_tests::"} <= result.filters)
+            self.assertFalse(result.unmapped)
+
     def test_narrow_band_isolated_passes_select_their_value_proofs(self):
         for path in (P + "gpu_flip_narrow_band_tests.rs",
                      P + "gpu_flip_narrow_band.rs",
@@ -28,6 +51,19 @@ class ScopeTests(unittest.TestCase):
             self.assertNotIn("gpu_flip_", result.filters)
             self.assertFalse(result.broad)
             self.assertFalse(result.unmapped)
+
+    def test_whitewater_emitters_select_shared_value_and_fusion_proofs(self):
+        expected = "node_graph::primitives::whitewater_emitter_gpu_tests::"
+        for atom in ("turbulence_field", "inside_turbulence_potential",
+                     "turbulence_emission_count", "whitewater_emitter_velocity",
+                     "whitewater_obstacle_source", "whitewater_influence", "dust_potential"):
+            source = P + atom + ".rs"
+            shader = P + "shaders/" + atom + "_body.wgsl"
+            for path in (source, shader):
+                result = plan([path], users=lambda _: [source], repo=self._repo_with(path))
+                self.assertIn(expected, result.filters)
+                self.assertFalse(result.unmapped)
+                self.assertFalse(result.broad)
 
     def test_non_gpu_paths_run_nothing(self):
         p = plan(["docs/X.md", "scripts/a.py", "crates/manifold-ui/src/lib.rs"])

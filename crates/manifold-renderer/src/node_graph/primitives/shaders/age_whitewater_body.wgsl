@@ -15,9 +15,10 @@ fn body(
     spray_lifetime_modifier: f32,
 ) -> Element {
     var out = e_pool;
-    if e_pool.kind > 2u {
+    if (e_pool.kind == 3u || e_pool.kind > 4u) {
         return out;
     }
+    if e_pool.kind == 4u { out.position_lifetime.w -= dt; return out; }
     let modifiers = vec3<f32>(bubble_lifetime_modifier, foam_lifetime_modifier, spray_lifetime_modifier);
     out.position_lifetime.w = e_pool.position_lifetime.w - modifiers[e_pool.kind] * dt;
     return out;

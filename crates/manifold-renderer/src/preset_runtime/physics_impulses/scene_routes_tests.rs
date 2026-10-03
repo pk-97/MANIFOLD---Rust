@@ -280,3 +280,40 @@ fn scene_impulse_routes_report_exhaustion_and_recover_after_native_reset() {
     runtime.drain_scene_impulses(|_, _| receipts += 1);
     assert_eq!(receipts, 1, "the reset cancels the exhausted epoch");
 }
+
+/// Audio fires arrive stamped with the frame time the engine just ticked to,
+/// before that frame renders; manual Fire carries the last rendered time.
+/// Rigid and CPU water re-observe at the source time, so both shapes land
+/// once on the following ticks.
+#[test]
+fn scene_impulse_routes_accept_audio_hits_stamped_ahead_of_the_last_render() {
+    for with_fluid in [false, true] {
+        let (mut def, manifest) = scene_fixture(&["part_a", "part_b"]);
+        if with_fluid {
+            def.nodes.push(serde_json::from_value(serde_json::json!({"id":14,"nodeId":"fluid","typeId":manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID,
+                "params":{"resolution":{"type":"Int","value":8},"fill_height":{"type":"Float","value":0.0},"emission":{"type":"Float","value":0.0}}})).unwrap());
+            def.wires.retain(|wire| !(wire.to_node == 9 && wire.to_port == "transform"));
+            def.wires.push(serde_json::from_value(
+                serde_json::json!({"fromNode":14,"fromPort":"vertices","toNode":9,"toPort":"vertices"}),
+            ).unwrap());
+        }
+        let fire = alias(&def, "fire");
+        let mut runtime =
+            PresetRuntime::from_def_for_render(def, &registry(), Some(&manifest), false).unwrap();
+        runtime.execute_frame(time(0.0));
+        runtime.execute_frame(time(DT));
+        let mut sequence = 0;
+        // Manual: the last rendered time.
+        runtime.fire_scene_impulse(&fire, time(DT), &mut sequence).unwrap();
+        // Audio: the next frame's time, before it renders.
+        runtime.fire_scene_impulse(&fire, time(2.0 * DT), &mut sequence).unwrap();
+        runtime.execute_frame(time(2.0 * DT));
+        runtime.execute_frame(time(3.0 * DT));
+        let mut sequences = Vec::new();
+        runtime.drain_scene_impulses(|_, event| sequences.push(event.source.sequence));
+        sequences.sort();
+        assert_eq!(sequences, [0, 1], "fluid {with_fluid}: each hit applies once");
+        // Older than the latest observation: stale, refused.
+        assert!(runtime.fire_scene_impulse(&fire, time(2.0 * DT), &mut sequence).is_err());
+    }
+}

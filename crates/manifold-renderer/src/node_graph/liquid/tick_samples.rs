@@ -22,13 +22,11 @@ pub struct TickSamples<T> {
     /// Transport times the replay must sample before the next frame, with
     /// their ticks, ascending.
     requests: Vec<(f64, u64)>,
-    /// The clock's epoch drop total at the last frame.
-    dropped_seconds: f64,
 }
 
 impl<T> Default for TickSamples<T> {
     fn default() -> Self {
-        Self { ticks: VecDeque::new(), requests: Vec::new(), dropped_seconds: 0.0 }
+        Self { ticks: VecDeque::new(), requests: Vec::new() }
     }
 }
 
@@ -65,30 +63,24 @@ impl<T: Clone> TickSamples<T> {
 
     /// Call right after `clock` advanced to `frame`, with this frame's value.
     /// A restart forgets every sample. The value belongs to any tick starting
-    /// now; every other start was or will be sampled by the replay. A live
-    /// drop moves owed ticks' starts into the past, where nothing sampled
-    /// them, so they read this frame: a tick late, never a stale value.
+    /// now; every other start was or will be sampled by the replay.
     /// `None` (nothing wired) forgets every sample.
     pub fn settle(&mut self, clock: &LiquidClock, frame: &ClockFrame, value: Option<&T>) {
-        // `dropped_seconds` counts the whole epoch; only this frame's drop
-        // moves owed ticks.
-        let dropped = frame.dropped_seconds > self.dropped_seconds;
-        self.dropped_seconds = frame.dropped_seconds;
         let Some(value) = value.filter(|_| !frame.restarted) else {
             self.ticks.clear();
             if let (true, Some(value)) = (frame.restarted, value) {
-                self.settle_now(clock, false, value);
+                self.settle_now(clock, value);
             }
             return;
         };
-        self.settle_now(clock, dropped, value);
+        self.settle_now(clock, value);
     }
 
-    fn settle_now(&mut self, clock: &LiquidClock, dropped: bool, value: &T) {
+    fn settle_now(&mut self, clock: &LiquidClock, value: &T) {
         let now = clock.transport();
         let mut tick = clock.ticks_done();
         while let Some(start) = clock.tick_start(tick).filter(|&start| start <= now + NOW) {
-            if dropped || (start - now).abs() <= NOW {
+            if (start - now).abs() <= NOW {
                 self.record(tick, value);
             }
             tick += 1;
@@ -124,8 +116,7 @@ impl<T: Clone> TickSamples<T> {
         self.ticks.clear();
     }
 
-    /// Later samples of a tick replace earlier ones: a live drop moves a tick
-    /// to a later transport time.
+    /// A later observation of the same boundary replaces its held value.
     fn record(&mut self, tick: u64, value: &T) {
         let at = self.ticks.partition_point(|(recorded, _)| *recorded < tick);
         match self.ticks.get_mut(at) {
