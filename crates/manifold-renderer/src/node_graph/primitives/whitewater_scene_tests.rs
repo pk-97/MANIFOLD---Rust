@@ -221,9 +221,49 @@ fn whitewater_scene_fuses_without_gpu() {
         "fusion must keep the counts bound for late capture");
 }
 
+/// The vendored lifecycle replaces the preset's `node.whitewater_step` at the
+/// same document id. The vendored lifecycle takes Capacity as a param, while
+/// the current step takes a scalar port: the splice must adapt that interface
+/// and retain the card binding to the lifecycle's real capacity control.
+#[test]
+fn vendored_whitewater_scene_loads_and_compiles_without_gpu() {
+    use crate::node_graph::{EffectGraphDefExt, compile};
+    use crate::node_graph::freeze::install::fuse_generator_view;
+
+    let def = vendored_render_def(WaterScene::dam_break(16));
+    let group = def.nodes.iter().find(|node| node.node_id.as_str() == "whitewater").expect("the vendored whitewater group");
+    let body = group.group.as_ref().expect("whitewater is a group");
+    assert!(!body.interface.inputs.iter().any(|input| input.name == "capacity"),
+        "the lifecycle uses a param, not a silently unused capacity input");
+    assert!(!def.wires.iter().any(|wire| wire.to_node == group.id && wire.to_port == "capacity"),
+        "the step-only capacity wire must be removed by the fixture splice");
+    let budget = def.preset_metadata.as_ref().unwrap().bindings.iter()
+        .find(|binding| binding.id == "whitewater_capacity").expect("budget binding");
+    assert_eq!(budget.target, manifold_core::effect_graph_def::BindingTarget::Node {
+        node_id: "ww.lifecycle".into(), param: "capacity".into(),
+    }, "the budget card must still drive the lifecycle");
+    let capacity = body.interface.params.iter().find(|param| param.name == "capacity").expect("the Capacity group param");
+    assert_eq!(capacity.target_handle, "Whitewater Lifecycle");
+    assert_eq!(capacity.target_param, "capacity");
+
+    let mut registry = PrimitiveRegistry::with_builtin();
+    register_substep_test_nodes(&mut registry);
+    registry.register(PROBE, || Box::new(Probe::new()));
+    registry.register(COUNTS_PROBE, || Box::new(Probe::whitewater_counts()));
+    let graph = def.clone().into_graph(&registry, &Default::default()).expect("vendored whitewater scene loads");
+    let lifecycle = graph.nodes().find(|node| node.node_id.as_str() == "ww.lifecycle").expect("the lifecycle survives flattening");
+    assert_eq!(lifecycle.params.get("capacity").and_then(ParamValue::as_scalar), Some(100_000.0),
+        "the group's Capacity param must route to the lifecycle");
+    let plan = compile(&graph).expect("vendored whitewater scene compiles");
+    assert!(plan.steps().iter().any(|step| step.node == lifecycle.id), "the lifecycle must remain in the compiled plan");
+    let fused = fuse_generator_view(&def, &registry).expect("the vendored whitewater scene must fuse");
+    let fused_graph = (*fused.def).clone().into_graph(&registry, &fused.mesh_rules).expect("fused vendored whitewater scene loads");
+    compile(&fused_graph).expect("fused vendored whitewater scene compiles");
+}
+
 /// The preset's Whitewater group before `node.whitewater_step` replaced it:
 /// the GPU emitter atoms feeding the vendored lifecycle (`ww.lifecycle`). Its
-/// external ports are the node's, so it splices in at the same id. Kept for
+/// frame-based ports are adapted by `vendored_render_def`. Kept for
 /// L5's side-by-side and O2, which reads the group's inner arrays.
 const VENDORED_GROUP: &str = include_str!("../../../tests/fixtures/whitewater_vendored_group.json");
 
@@ -237,6 +277,40 @@ fn vendored_render_def(scene: WaterScene) -> EffectGraphDef {
     group["id"] = json!(id);
     let nodes = g.def["nodes"].as_array_mut().expect("nodes");
     *nodes.iter_mut().find(|n| n["nodeId"] == "whitewater").expect("the whitewater node") = group;
+    // b1a1f5f65 moved whitewater_step into the tick region with pool state
+    // and a distance lattice. The vendored lifecycle is still a post-frame
+    // observer. Restore its original frame/surface inputs and direct render
+    // outputs, rather than feeding it the step's incompatible tick interface.
+    g.def["wires"].as_array_mut().expect("wires")
+        .retain(|wire| wire["toNode"] != id && wire["fromNode"] != id);
+    g.remove(&["whitewater_face_u", "whitewater_face_v", "whitewater_face_w"]);
+    let frame = g.id("frame");
+    for (source, input) in [("particles_b", "particles"), ("count_b", "count"), ("solid_b", "solid")] {
+        g.wire((frame, source), id, input);
+    }
+    for port in ["grid_bounds", "grid_nodes_x", "grid_nodes_y", "grid_nodes_z",
+        "face_u", "face_v", "face_w", "face_cells_x", "face_cells_y", "face_cells_z", "face_valid_layers"] {
+        g.wire((frame, port), id, port);
+    }
+    let surface = g.id("surface");
+    for port in ["level_set", "level_set_nodes_x", "level_set_nodes_y", "level_set_nodes_z"] {
+        g.wire((surface, port), id, port);
+    }
+    let domain = g.id("domain");
+    for port in ["ticks", "epoch", "gravity_x", "gravity", "gravity_z"] {
+        g.wire((domain, port), id, port);
+    }
+    g.wire((domain, "simulation_time"), id, "seed");
+    for (kind, particles, count) in [("foam", "foam_particles", "foam_count"),
+        ("bubble", "bubble_particles", "bubble_count"), ("spray", "spray_particles", "spray_count")] {
+        let copies = g.id(&format!("{kind}_copies"));
+        let object = g.id(&format!("{kind}_object"));
+        g.def["wires"].as_array_mut().expect("wires")
+            .retain(|wire| !(wire["toNode"] == copies && wire["toPort"] == "particles"));
+        g.wire((id, particles), copies, "particles");
+        g.wire((id, count), copies, "live_count");
+        g.wire((id, count), object, "instance_count");
+    }
     let target = json!({"kind": "node", "nodeId": "ww.lifecycle", "param": "capacity"});
     for binding in g.def["presetMetadata"]["bindings"].as_array_mut().expect("bindings") {
         if binding["id"] == "whitewater_capacity" {
@@ -246,7 +320,6 @@ fn vendored_render_def(scene: WaterScene) -> EffectGraphDef {
     for report in LIFECYCLE_REPORTS {
         g.probe(report, (id, report));
     }
-    let frame = g.id("frame");
     g.probe("count", (frame, "count_b"));
     g.finish()
 }

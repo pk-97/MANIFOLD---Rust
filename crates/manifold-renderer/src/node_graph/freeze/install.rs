@@ -1867,6 +1867,9 @@ pub(crate) fn fuse_canonical_def_masked(
             body: std::borrow::Cow<'static, str>,
             derived_camera_ext: Option<usize>,
             effective_derived: Vec<&'static str>,
+            node_inputs: Vec<crate::node_graph::ports::NodeInput>,
+            omitted_inputs: Vec<usize>,
+            includes: &'static [&'static str],
         }
         let mut node_keepalive: Vec<Box<dyn crate::node_graph::effect_node::EffectNode>> =
             Vec::with_capacity(all_members.len());
@@ -1877,8 +1880,30 @@ pub(crate) fn fuse_canonical_def_masked(
             // `substituted_body` already returns `Cow<'static, str>` (the
             // `Borrowed` arm is a compile-time WGSL const; the `Owned` arm is
             // a per-fuse-formatted `String`) — own it, no leak needed.
-            let body = crate::node_graph::freeze::region::substituted_body(node.as_ref(), doc_node)?;
-            let derived = node.derived_uniforms();
+            let dense = super::region::dense_buffer_fusion(node.as_ref());
+            let (body, derived, includes) = if let Some(dense) = dense {
+                // Join before namespacing: shared element helpers reference the
+                // member's gathered buffers, so they cannot be global includes.
+                (
+                    std::borrow::Cow::Owned(dense.body_fragments.join("\n")),
+                    &[][..],
+                    &[][..],
+                )
+            } else {
+                (
+                    super::region::substituted_body(node.as_ref(), doc_node)?,
+                    node.derived_uniforms(),
+                    node.wgsl_includes(),
+                )
+            };
+            let omit = |name: &str| dense.is_some_and(|dense| dense.schedule_inputs.contains(&name));
+            let node_inputs = node.inputs().iter()
+                .filter(|input| !omit(&input.name)).cloned().collect();
+            let omitted_inputs = node.inputs().iter()
+                .filter(|input| matches!(input.ty, PortType::Array(_)))
+                .enumerate()
+                .filter_map(|(idx, input)| omit(&input.name).then_some(idx))
+                .collect();
             // D7/P0 amendment: an input port whose unwired fallback is the frame
             // clock must be recomputed every frame in the fused kernel, exactly
             // like a `derived_uniforms()` field. If it is wired in this def,
@@ -1940,7 +1965,9 @@ pub(crate) fn fuse_canonical_def_masked(
                     None => None,
                 }
             };
-            built.push(BuiltMember { body, derived_camera_ext, effective_derived });
+            built.push(BuiltMember {
+                body, derived_camera_ext, effective_derived, node_inputs, omitted_inputs, includes,
+            });
             node_keepalive.push(node);
         }
         // Pass 2: `node_keepalive` has every member's node, fully populated —
@@ -1952,7 +1979,9 @@ pub(crate) fn fuse_canonical_def_masked(
             let inputs: Vec<InputSource> = member
                 .inputs
                 .iter()
-                .map(|ri| match ri {
+                .enumerate()
+                .filter(|(input_idx, _)| !built[idx].omitted_inputs.contains(input_idx))
+                .map(|(_, ri)| match ri {
                     RegionInput::External(e) => InputSource::External(*e),
                     RegionInput::Member(doc) => InputSource::Node(NodeInstanceId(*doc)),
                     RegionInput::MemberPort(doc, port) => {
@@ -1968,10 +1997,14 @@ pub(crate) fn fuse_canonical_def_masked(
                 body: built[idx].body.as_ref(),
                 params: node.parameters(),
                 inputs,
-                input_access: member.input_access.clone(),
-                node_inputs: node.inputs(),
+                input_access: member.input_access.iter().enumerate()
+                    .filter_map(|(input_idx, access)| {
+                        (!built[idx].omitted_inputs.contains(&input_idx)).then_some(*access)
+                    })
+                    .collect(),
+                node_inputs: &built[idx].node_inputs,
                 node_outputs: node.outputs(),
-                node_includes: node.wgsl_includes(),
+                node_includes: built[idx].includes,
                 derived_uniforms: built[idx].effective_derived.as_slice(),
                 type_id: doc_node.type_id.clone(),
                 derived_camera_ext: built[idx].derived_camera_ext,

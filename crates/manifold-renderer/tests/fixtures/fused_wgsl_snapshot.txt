@@ -14927,6 +14927,41 @@ fn smooth_weight(passes: i32, d: i32) -> f32 {
     return rows[offset + passes + d];
 }
 
+fn smooth_lattice_element(idx: u32, count: u32, nodes_x: f32, nodes_y: f32, nodes_z: f32, passes: f32, axis: i32, brick_pass: u32) -> f32 {
+    let value = src_0[idx];
+    let p = i32(clamp(round(passes), 0.0, 3.0));
+    if p == 0 || min(min(nodes_x, nodes_y), nodes_z) < 2.0 {
+        return value;
+    }
+    let nodes = vec3<i32>(vec3<f32>(nodes_x, nodes_y, nodes_z));
+    if idx >= u32(nodes.x) * u32(nodes.y) * u32(nodes.z) {
+        return value;
+    }
+    let node = vec3<i32>(
+        i32(idx % u32(nodes.x)),
+        i32((idx / u32(nodes.x)) % u32(nodes.y)),
+        i32(idx / (u32(nodes.x) * u32(nodes.y))),
+    );
+    if brick_pass == 2u {
+        // Every tap is the same exterior value. Keep the dense multiply/add
+        // sequence: a binomial row summing to one need not return its input
+        // bit-for-bit in f32 (particularly three passes).
+        var exterior = 0.0;
+        for (var d = -p; d <= p; d = d + 1) {
+            exterior = exterior + smooth_weight(p, d) * value;
+        }
+        return exterior;
+    }
+    let a = clamp(axis, 0, 2);
+    var sum = 0.0;
+    for (var d = -p; d <= p; d = d + 1) {
+        var q = node;
+        q[a] = clamp(node[a] + d, 0, nodes[a] - 1);
+        sum = sum + smooth_weight(p, d) * src_0[u32(q.x + nodes.x * (q.y + nodes.y * q.z))];
+    }
+    return sum;
+}
+
 fn clamp_liquid_solid_at(p: vec3<f32>, lattice_min: vec3<f32>, spacing: vec3<f32>, nodes: vec3<u32>) -> f32 {
     let g = clamp((p - lattice_min) / spacing, vec3<f32>(0.0), vec3<f32>(nodes - vec3<u32>(1u)));
     let base = min(vec3<u32>(floor(g)), nodes - vec3<u32>(2u));
@@ -14943,29 +14978,52 @@ fn clamp_liquid_solid_at(p: vec3<f32>, lattice_min: vec3<f32>, spacing: vec3<f32
     return value;
 }
 
-fn n0_body(idx: u32, count: u32, nodes_x: f32, nodes_y: f32, nodes_z: f32, passes: f32, axis: i32) -> f32 {
-    let value = src_0[idx];
-    let p = i32(clamp(round(passes), 0.0, 3.0));
-    if p == 0 || min(min(nodes_x, nodes_y), nodes_z) < 2.0 {
-        return value;
+fn clamp_liquid_to_solids_element(
+    idx: u32,
+    count: u32,
+    e_levelset: f32,
+    center_x: f32,
+    center_y: f32,
+    center_z: f32,
+    size_x: f32,
+    size_y: f32,
+    size_z: f32,
+    nodes_x: f32,
+    nodes_y: f32,
+    nodes_z: f32,
+    solid_nodes_x: f32,
+    solid_nodes_y: f32,
+    solid_nodes_z: f32,
+    cell_size: f32,
+    brick_pass: u32,
+) -> f32 {
+    let lattice = vec3<f32>(nodes_x, nodes_y, nodes_z);
+    let solid_lattice = vec3<f32>(solid_nodes_x, solid_nodes_y, solid_nodes_z);
+    if any(lattice < vec3<f32>(2.0)) || any(solid_lattice < vec3<f32>(2.0)) {
+        return e_levelset;
     }
-    let nodes = vec3<i32>(vec3<f32>(nodes_x, nodes_y, nodes_z));
-    if idx >= u32(nodes.x) * u32(nodes.y) * u32(nodes.z) {
-        return value;
+    let nodes = vec3<u32>(lattice);
+    let solid_nodes = vec3<u32>(solid_lattice);
+    if idx >= nodes.x * nodes.y * nodes.z || solid_nodes.x * solid_nodes.y * solid_nodes.z > arrayLength(&src_1) {
+        return e_levelset;
     }
-    let node = vec3<i32>(
-        i32(idx % u32(nodes.x)),
-        i32((idx / u32(nodes.x)) % u32(nodes.y)),
-        i32(idx / (u32(nodes.x) * u32(nodes.y))),
-    );
-    let a = clamp(axis, 0, 2);
-    var sum = 0.0;
-    for (var d = -p; d <= p; d = d + 1) {
-        var q = node;
-        q[a] = clamp(node[a] + d, 0, nodes[a] - 1);
-        sum = sum + smooth_weight(p, d) * src_0[u32(q.x + nodes.x * (q.y + nodes.y * q.z))];
+    let ijk = vec3<u32>(idx % nodes.x, (idx / nodes.x) % nodes.y, idx / (nodes.x * nodes.y));
+    if any(ijk == vec3<u32>(0u)) || any(ijk == nodes - vec3<u32>(1u)) {
+        return cell_size / 3.0;
     }
-    return sum;
+    if brick_pass == 2u { return e_levelset; }
+    let size = vec3<f32>(size_x, size_y, size_z);
+    let lattice_min = vec3<f32>(center_x, center_y, center_z) - 0.5 * size;
+    let p = lattice_min + vec3<f32>(ijk) * size / vec3<f32>(nodes - vec3<u32>(1u));
+    let spacing = size / vec3<f32>(solid_nodes - vec3<u32>(1u));
+    if clamp_liquid_solid_at(p, lattice_min, spacing, solid_nodes) < 0.0 {
+        return max(e_levelset, 0.0);
+    }
+    return e_levelset;
+}
+
+fn n0_body(idx: u32, count: u32, nodes_x: f32, nodes_y: f32, nodes_z: f32, passes: f32, axis: i32,) -> f32 {
+    return smooth_lattice_element(idx, count, nodes_x, nodes_y, nodes_z, passes, axis, 0u);
 }
 
 fn n1_body(
@@ -14986,28 +15044,7 @@ fn n1_body(
     solid_nodes_z: f32,
     cell_size: f32,
 ) -> f32 {
-    let lattice = vec3<f32>(nodes_x, nodes_y, nodes_z);
-    let solid_lattice = vec3<f32>(solid_nodes_x, solid_nodes_y, solid_nodes_z);
-    if any(lattice < vec3<f32>(2.0)) || any(solid_lattice < vec3<f32>(2.0)) {
-        return e_levelset;
-    }
-    let nodes = vec3<u32>(lattice);
-    let solid_nodes = vec3<u32>(solid_lattice);
-    if idx >= nodes.x * nodes.y * nodes.z || solid_nodes.x * solid_nodes.y * solid_nodes.z > arrayLength(&src_1) {
-        return e_levelset;
-    }
-    let ijk = vec3<u32>(idx % nodes.x, (idx / nodes.x) % nodes.y, idx / (nodes.x * nodes.y));
-    if any(ijk == vec3<u32>(0u)) || any(ijk == nodes - vec3<u32>(1u)) {
-        return cell_size / 3.0;
-    }
-    let size = vec3<f32>(size_x, size_y, size_z);
-    let lattice_min = vec3<f32>(center_x, center_y, center_z) - 0.5 * size;
-    let p = lattice_min + vec3<f32>(ijk) * size / vec3<f32>(nodes - vec3<u32>(1u));
-    let spacing = size / vec3<f32>(solid_nodes - vec3<u32>(1u));
-    if clamp_liquid_solid_at(p, lattice_min, spacing, solid_nodes) < 0.0 {
-        return max(e_levelset, 0.0);
-    }
-    return e_levelset;
+    return clamp_liquid_to_solids_element(idx, count, e_levelset, center_x, center_y, center_z, size_x, size_y, size_z, nodes_x, nodes_y, nodes_z, solid_nodes_x, solid_nodes_y, solid_nodes_z, cell_size, 0u);
 }
 
 @compute @workgroup_size(256)
@@ -15022,7 +15059,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     dst[idx] = r1;
 }
 
-=== generator:WaterDamBreakGpuFlip node:81 ===
+=== generator:WaterDamBreakGpuFlip node:82 ===
 struct Params {
     n0_nodes_x: f32,
     n0_nodes_y: f32,
@@ -15063,6 +15100,41 @@ fn smooth_weight(passes: i32, d: i32) -> f32 {
     return rows[offset + passes + d];
 }
 
+fn smooth_lattice_element(idx: u32, count: u32, nodes_x: f32, nodes_y: f32, nodes_z: f32, passes: f32, axis: i32, brick_pass: u32) -> f32 {
+    let value = src_0[idx];
+    let p = i32(clamp(round(passes), 0.0, 3.0));
+    if p == 0 || min(min(nodes_x, nodes_y), nodes_z) < 2.0 {
+        return value;
+    }
+    let nodes = vec3<i32>(vec3<f32>(nodes_x, nodes_y, nodes_z));
+    if idx >= u32(nodes.x) * u32(nodes.y) * u32(nodes.z) {
+        return value;
+    }
+    let node = vec3<i32>(
+        i32(idx % u32(nodes.x)),
+        i32((idx / u32(nodes.x)) % u32(nodes.y)),
+        i32(idx / (u32(nodes.x) * u32(nodes.y))),
+    );
+    if brick_pass == 2u {
+        // Every tap is the same exterior value. Keep the dense multiply/add
+        // sequence: a binomial row summing to one need not return its input
+        // bit-for-bit in f32 (particularly three passes).
+        var exterior = 0.0;
+        for (var d = -p; d <= p; d = d + 1) {
+            exterior = exterior + smooth_weight(p, d) * value;
+        }
+        return exterior;
+    }
+    let a = clamp(axis, 0, 2);
+    var sum = 0.0;
+    for (var d = -p; d <= p; d = d + 1) {
+        var q = node;
+        q[a] = clamp(node[a] + d, 0, nodes[a] - 1);
+        sum = sum + smooth_weight(p, d) * src_0[u32(q.x + nodes.x * (q.y + nodes.y * q.z))];
+    }
+    return sum;
+}
+
 fn clamp_liquid_solid_at(p: vec3<f32>, lattice_min: vec3<f32>, spacing: vec3<f32>, nodes: vec3<u32>) -> f32 {
     let g = clamp((p - lattice_min) / spacing, vec3<f32>(0.0), vec3<f32>(nodes - vec3<u32>(1u)));
     let base = min(vec3<u32>(floor(g)), nodes - vec3<u32>(2u));
@@ -15079,29 +15151,52 @@ fn clamp_liquid_solid_at(p: vec3<f32>, lattice_min: vec3<f32>, spacing: vec3<f32
     return value;
 }
 
-fn n0_body(idx: u32, count: u32, nodes_x: f32, nodes_y: f32, nodes_z: f32, passes: f32, axis: i32) -> f32 {
-    let value = src_0[idx];
-    let p = i32(clamp(round(passes), 0.0, 3.0));
-    if p == 0 || min(min(nodes_x, nodes_y), nodes_z) < 2.0 {
-        return value;
+fn clamp_liquid_to_solids_element(
+    idx: u32,
+    count: u32,
+    e_levelset: f32,
+    center_x: f32,
+    center_y: f32,
+    center_z: f32,
+    size_x: f32,
+    size_y: f32,
+    size_z: f32,
+    nodes_x: f32,
+    nodes_y: f32,
+    nodes_z: f32,
+    solid_nodes_x: f32,
+    solid_nodes_y: f32,
+    solid_nodes_z: f32,
+    cell_size: f32,
+    brick_pass: u32,
+) -> f32 {
+    let lattice = vec3<f32>(nodes_x, nodes_y, nodes_z);
+    let solid_lattice = vec3<f32>(solid_nodes_x, solid_nodes_y, solid_nodes_z);
+    if any(lattice < vec3<f32>(2.0)) || any(solid_lattice < vec3<f32>(2.0)) {
+        return e_levelset;
     }
-    let nodes = vec3<i32>(vec3<f32>(nodes_x, nodes_y, nodes_z));
-    if idx >= u32(nodes.x) * u32(nodes.y) * u32(nodes.z) {
-        return value;
+    let nodes = vec3<u32>(lattice);
+    let solid_nodes = vec3<u32>(solid_lattice);
+    if idx >= nodes.x * nodes.y * nodes.z || solid_nodes.x * solid_nodes.y * solid_nodes.z > arrayLength(&src_1) {
+        return e_levelset;
     }
-    let node = vec3<i32>(
-        i32(idx % u32(nodes.x)),
-        i32((idx / u32(nodes.x)) % u32(nodes.y)),
-        i32(idx / (u32(nodes.x) * u32(nodes.y))),
-    );
-    let a = clamp(axis, 0, 2);
-    var sum = 0.0;
-    for (var d = -p; d <= p; d = d + 1) {
-        var q = node;
-        q[a] = clamp(node[a] + d, 0, nodes[a] - 1);
-        sum = sum + smooth_weight(p, d) * src_0[u32(q.x + nodes.x * (q.y + nodes.y * q.z))];
+    let ijk = vec3<u32>(idx % nodes.x, (idx / nodes.x) % nodes.y, idx / (nodes.x * nodes.y));
+    if any(ijk == vec3<u32>(0u)) || any(ijk == nodes - vec3<u32>(1u)) {
+        return cell_size / 3.0;
     }
-    return sum;
+    if brick_pass == 2u { return e_levelset; }
+    let size = vec3<f32>(size_x, size_y, size_z);
+    let lattice_min = vec3<f32>(center_x, center_y, center_z) - 0.5 * size;
+    let p = lattice_min + vec3<f32>(ijk) * size / vec3<f32>(nodes - vec3<u32>(1u));
+    let spacing = size / vec3<f32>(solid_nodes - vec3<u32>(1u));
+    if clamp_liquid_solid_at(p, lattice_min, spacing, solid_nodes) < 0.0 {
+        return max(e_levelset, 0.0);
+    }
+    return e_levelset;
+}
+
+fn n0_body(idx: u32, count: u32, nodes_x: f32, nodes_y: f32, nodes_z: f32, passes: f32, axis: i32,) -> f32 {
+    return smooth_lattice_element(idx, count, nodes_x, nodes_y, nodes_z, passes, axis, 0u);
 }
 
 fn n1_body(
@@ -15122,28 +15217,7 @@ fn n1_body(
     solid_nodes_z: f32,
     cell_size: f32,
 ) -> f32 {
-    let lattice = vec3<f32>(nodes_x, nodes_y, nodes_z);
-    let solid_lattice = vec3<f32>(solid_nodes_x, solid_nodes_y, solid_nodes_z);
-    if any(lattice < vec3<f32>(2.0)) || any(solid_lattice < vec3<f32>(2.0)) {
-        return e_levelset;
-    }
-    let nodes = vec3<u32>(lattice);
-    let solid_nodes = vec3<u32>(solid_lattice);
-    if idx >= nodes.x * nodes.y * nodes.z || solid_nodes.x * solid_nodes.y * solid_nodes.z > arrayLength(&src_1) {
-        return e_levelset;
-    }
-    let ijk = vec3<u32>(idx % nodes.x, (idx / nodes.x) % nodes.y, idx / (nodes.x * nodes.y));
-    if any(ijk == vec3<u32>(0u)) || any(ijk == nodes - vec3<u32>(1u)) {
-        return cell_size / 3.0;
-    }
-    let size = vec3<f32>(size_x, size_y, size_z);
-    let lattice_min = vec3<f32>(center_x, center_y, center_z) - 0.5 * size;
-    let p = lattice_min + vec3<f32>(ijk) * size / vec3<f32>(nodes - vec3<u32>(1u));
-    let spacing = size / vec3<f32>(solid_nodes - vec3<u32>(1u));
-    if clamp_liquid_solid_at(p, lattice_min, spacing, solid_nodes) < 0.0 {
-        return max(e_levelset, 0.0);
-    }
-    return e_levelset;
+    return clamp_liquid_to_solids_element(idx, count, e_levelset, center_x, center_y, center_z, size_x, size_y, size_z, nodes_x, nodes_y, nodes_z, solid_nodes_x, solid_nodes_y, solid_nodes_z, cell_size, 0u);
 }
 
 @compute @workgroup_size(256)
@@ -15199,6 +15273,41 @@ fn smooth_weight(passes: i32, d: i32) -> f32 {
     return rows[offset + passes + d];
 }
 
+fn smooth_lattice_element(idx: u32, count: u32, nodes_x: f32, nodes_y: f32, nodes_z: f32, passes: f32, axis: i32, brick_pass: u32) -> f32 {
+    let value = src_0[idx];
+    let p = i32(clamp(round(passes), 0.0, 3.0));
+    if p == 0 || min(min(nodes_x, nodes_y), nodes_z) < 2.0 {
+        return value;
+    }
+    let nodes = vec3<i32>(vec3<f32>(nodes_x, nodes_y, nodes_z));
+    if idx >= u32(nodes.x) * u32(nodes.y) * u32(nodes.z) {
+        return value;
+    }
+    let node = vec3<i32>(
+        i32(idx % u32(nodes.x)),
+        i32((idx / u32(nodes.x)) % u32(nodes.y)),
+        i32(idx / (u32(nodes.x) * u32(nodes.y))),
+    );
+    if brick_pass == 2u {
+        // Every tap is the same exterior value. Keep the dense multiply/add
+        // sequence: a binomial row summing to one need not return its input
+        // bit-for-bit in f32 (particularly three passes).
+        var exterior = 0.0;
+        for (var d = -p; d <= p; d = d + 1) {
+            exterior = exterior + smooth_weight(p, d) * value;
+        }
+        return exterior;
+    }
+    let a = clamp(axis, 0, 2);
+    var sum = 0.0;
+    for (var d = -p; d <= p; d = d + 1) {
+        var q = node;
+        q[a] = clamp(node[a] + d, 0, nodes[a] - 1);
+        sum = sum + smooth_weight(p, d) * src_0[u32(q.x + nodes.x * (q.y + nodes.y * q.z))];
+    }
+    return sum;
+}
+
 fn clamp_liquid_solid_at(p: vec3<f32>, lattice_min: vec3<f32>, spacing: vec3<f32>, nodes: vec3<u32>) -> f32 {
     let g = clamp((p - lattice_min) / spacing, vec3<f32>(0.0), vec3<f32>(nodes - vec3<u32>(1u)));
     let base = min(vec3<u32>(floor(g)), nodes - vec3<u32>(2u));
@@ -15215,29 +15324,52 @@ fn clamp_liquid_solid_at(p: vec3<f32>, lattice_min: vec3<f32>, spacing: vec3<f32
     return value;
 }
 
-fn n0_body(idx: u32, count: u32, nodes_x: f32, nodes_y: f32, nodes_z: f32, passes: f32, axis: i32) -> f32 {
-    let value = src_0[idx];
-    let p = i32(clamp(round(passes), 0.0, 3.0));
-    if p == 0 || min(min(nodes_x, nodes_y), nodes_z) < 2.0 {
-        return value;
+fn clamp_liquid_to_solids_element(
+    idx: u32,
+    count: u32,
+    e_levelset: f32,
+    center_x: f32,
+    center_y: f32,
+    center_z: f32,
+    size_x: f32,
+    size_y: f32,
+    size_z: f32,
+    nodes_x: f32,
+    nodes_y: f32,
+    nodes_z: f32,
+    solid_nodes_x: f32,
+    solid_nodes_y: f32,
+    solid_nodes_z: f32,
+    cell_size: f32,
+    brick_pass: u32,
+) -> f32 {
+    let lattice = vec3<f32>(nodes_x, nodes_y, nodes_z);
+    let solid_lattice = vec3<f32>(solid_nodes_x, solid_nodes_y, solid_nodes_z);
+    if any(lattice < vec3<f32>(2.0)) || any(solid_lattice < vec3<f32>(2.0)) {
+        return e_levelset;
     }
-    let nodes = vec3<i32>(vec3<f32>(nodes_x, nodes_y, nodes_z));
-    if idx >= u32(nodes.x) * u32(nodes.y) * u32(nodes.z) {
-        return value;
+    let nodes = vec3<u32>(lattice);
+    let solid_nodes = vec3<u32>(solid_lattice);
+    if idx >= nodes.x * nodes.y * nodes.z || solid_nodes.x * solid_nodes.y * solid_nodes.z > arrayLength(&src_1) {
+        return e_levelset;
     }
-    let node = vec3<i32>(
-        i32(idx % u32(nodes.x)),
-        i32((idx / u32(nodes.x)) % u32(nodes.y)),
-        i32(idx / (u32(nodes.x) * u32(nodes.y))),
-    );
-    let a = clamp(axis, 0, 2);
-    var sum = 0.0;
-    for (var d = -p; d <= p; d = d + 1) {
-        var q = node;
-        q[a] = clamp(node[a] + d, 0, nodes[a] - 1);
-        sum = sum + smooth_weight(p, d) * src_0[u32(q.x + nodes.x * (q.y + nodes.y * q.z))];
+    let ijk = vec3<u32>(idx % nodes.x, (idx / nodes.x) % nodes.y, idx / (nodes.x * nodes.y));
+    if any(ijk == vec3<u32>(0u)) || any(ijk == nodes - vec3<u32>(1u)) {
+        return cell_size / 3.0;
     }
-    return sum;
+    if brick_pass == 2u { return e_levelset; }
+    let size = vec3<f32>(size_x, size_y, size_z);
+    let lattice_min = vec3<f32>(center_x, center_y, center_z) - 0.5 * size;
+    let p = lattice_min + vec3<f32>(ijk) * size / vec3<f32>(nodes - vec3<u32>(1u));
+    let spacing = size / vec3<f32>(solid_nodes - vec3<u32>(1u));
+    if clamp_liquid_solid_at(p, lattice_min, spacing, solid_nodes) < 0.0 {
+        return max(e_levelset, 0.0);
+    }
+    return e_levelset;
+}
+
+fn n0_body(idx: u32, count: u32, nodes_x: f32, nodes_y: f32, nodes_z: f32, passes: f32, axis: i32,) -> f32 {
+    return smooth_lattice_element(idx, count, nodes_x, nodes_y, nodes_z, passes, axis, 0u);
 }
 
 fn n1_body(
@@ -15258,28 +15390,7 @@ fn n1_body(
     solid_nodes_z: f32,
     cell_size: f32,
 ) -> f32 {
-    let lattice = vec3<f32>(nodes_x, nodes_y, nodes_z);
-    let solid_lattice = vec3<f32>(solid_nodes_x, solid_nodes_y, solid_nodes_z);
-    if any(lattice < vec3<f32>(2.0)) || any(solid_lattice < vec3<f32>(2.0)) {
-        return e_levelset;
-    }
-    let nodes = vec3<u32>(lattice);
-    let solid_nodes = vec3<u32>(solid_lattice);
-    if idx >= nodes.x * nodes.y * nodes.z || solid_nodes.x * solid_nodes.y * solid_nodes.z > arrayLength(&src_1) {
-        return e_levelset;
-    }
-    let ijk = vec3<u32>(idx % nodes.x, (idx / nodes.x) % nodes.y, idx / (nodes.x * nodes.y));
-    if any(ijk == vec3<u32>(0u)) || any(ijk == nodes - vec3<u32>(1u)) {
-        return cell_size / 3.0;
-    }
-    let size = vec3<f32>(size_x, size_y, size_z);
-    let lattice_min = vec3<f32>(center_x, center_y, center_z) - 0.5 * size;
-    let p = lattice_min + vec3<f32>(ijk) * size / vec3<f32>(nodes - vec3<u32>(1u));
-    let spacing = size / vec3<f32>(solid_nodes - vec3<u32>(1u));
-    if clamp_liquid_solid_at(p, lattice_min, spacing, solid_nodes) < 0.0 {
-        return max(e_levelset, 0.0);
-    }
-    return e_levelset;
+    return clamp_liquid_to_solids_element(idx, count, e_levelset, center_x, center_y, center_z, size_x, size_y, size_z, nodes_x, nodes_y, nodes_z, solid_nodes_x, solid_nodes_y, solid_nodes_z, cell_size, 0u);
 }
 
 @compute @workgroup_size(256)
@@ -15335,6 +15446,41 @@ fn smooth_weight(passes: i32, d: i32) -> f32 {
     return rows[offset + passes + d];
 }
 
+fn smooth_lattice_element(idx: u32, count: u32, nodes_x: f32, nodes_y: f32, nodes_z: f32, passes: f32, axis: i32, brick_pass: u32) -> f32 {
+    let value = src_0[idx];
+    let p = i32(clamp(round(passes), 0.0, 3.0));
+    if p == 0 || min(min(nodes_x, nodes_y), nodes_z) < 2.0 {
+        return value;
+    }
+    let nodes = vec3<i32>(vec3<f32>(nodes_x, nodes_y, nodes_z));
+    if idx >= u32(nodes.x) * u32(nodes.y) * u32(nodes.z) {
+        return value;
+    }
+    let node = vec3<i32>(
+        i32(idx % u32(nodes.x)),
+        i32((idx / u32(nodes.x)) % u32(nodes.y)),
+        i32(idx / (u32(nodes.x) * u32(nodes.y))),
+    );
+    if brick_pass == 2u {
+        // Every tap is the same exterior value. Keep the dense multiply/add
+        // sequence: a binomial row summing to one need not return its input
+        // bit-for-bit in f32 (particularly three passes).
+        var exterior = 0.0;
+        for (var d = -p; d <= p; d = d + 1) {
+            exterior = exterior + smooth_weight(p, d) * value;
+        }
+        return exterior;
+    }
+    let a = clamp(axis, 0, 2);
+    var sum = 0.0;
+    for (var d = -p; d <= p; d = d + 1) {
+        var q = node;
+        q[a] = clamp(node[a] + d, 0, nodes[a] - 1);
+        sum = sum + smooth_weight(p, d) * src_0[u32(q.x + nodes.x * (q.y + nodes.y * q.z))];
+    }
+    return sum;
+}
+
 fn clamp_liquid_solid_at(p: vec3<f32>, lattice_min: vec3<f32>, spacing: vec3<f32>, nodes: vec3<u32>) -> f32 {
     let g = clamp((p - lattice_min) / spacing, vec3<f32>(0.0), vec3<f32>(nodes - vec3<u32>(1u)));
     let base = min(vec3<u32>(floor(g)), nodes - vec3<u32>(2u));
@@ -15351,29 +15497,52 @@ fn clamp_liquid_solid_at(p: vec3<f32>, lattice_min: vec3<f32>, spacing: vec3<f32
     return value;
 }
 
-fn n0_body(idx: u32, count: u32, nodes_x: f32, nodes_y: f32, nodes_z: f32, passes: f32, axis: i32) -> f32 {
-    let value = src_0[idx];
-    let p = i32(clamp(round(passes), 0.0, 3.0));
-    if p == 0 || min(min(nodes_x, nodes_y), nodes_z) < 2.0 {
-        return value;
+fn clamp_liquid_to_solids_element(
+    idx: u32,
+    count: u32,
+    e_levelset: f32,
+    center_x: f32,
+    center_y: f32,
+    center_z: f32,
+    size_x: f32,
+    size_y: f32,
+    size_z: f32,
+    nodes_x: f32,
+    nodes_y: f32,
+    nodes_z: f32,
+    solid_nodes_x: f32,
+    solid_nodes_y: f32,
+    solid_nodes_z: f32,
+    cell_size: f32,
+    brick_pass: u32,
+) -> f32 {
+    let lattice = vec3<f32>(nodes_x, nodes_y, nodes_z);
+    let solid_lattice = vec3<f32>(solid_nodes_x, solid_nodes_y, solid_nodes_z);
+    if any(lattice < vec3<f32>(2.0)) || any(solid_lattice < vec3<f32>(2.0)) {
+        return e_levelset;
     }
-    let nodes = vec3<i32>(vec3<f32>(nodes_x, nodes_y, nodes_z));
-    if idx >= u32(nodes.x) * u32(nodes.y) * u32(nodes.z) {
-        return value;
+    let nodes = vec3<u32>(lattice);
+    let solid_nodes = vec3<u32>(solid_lattice);
+    if idx >= nodes.x * nodes.y * nodes.z || solid_nodes.x * solid_nodes.y * solid_nodes.z > arrayLength(&src_1) {
+        return e_levelset;
     }
-    let node = vec3<i32>(
-        i32(idx % u32(nodes.x)),
-        i32((idx / u32(nodes.x)) % u32(nodes.y)),
-        i32(idx / (u32(nodes.x) * u32(nodes.y))),
-    );
-    let a = clamp(axis, 0, 2);
-    var sum = 0.0;
-    for (var d = -p; d <= p; d = d + 1) {
-        var q = node;
-        q[a] = clamp(node[a] + d, 0, nodes[a] - 1);
-        sum = sum + smooth_weight(p, d) * src_0[u32(q.x + nodes.x * (q.y + nodes.y * q.z))];
+    let ijk = vec3<u32>(idx % nodes.x, (idx / nodes.x) % nodes.y, idx / (nodes.x * nodes.y));
+    if any(ijk == vec3<u32>(0u)) || any(ijk == nodes - vec3<u32>(1u)) {
+        return cell_size / 3.0;
     }
-    return sum;
+    if brick_pass == 2u { return e_levelset; }
+    let size = vec3<f32>(size_x, size_y, size_z);
+    let lattice_min = vec3<f32>(center_x, center_y, center_z) - 0.5 * size;
+    let p = lattice_min + vec3<f32>(ijk) * size / vec3<f32>(nodes - vec3<u32>(1u));
+    let spacing = size / vec3<f32>(solid_nodes - vec3<u32>(1u));
+    if clamp_liquid_solid_at(p, lattice_min, spacing, solid_nodes) < 0.0 {
+        return max(e_levelset, 0.0);
+    }
+    return e_levelset;
+}
+
+fn n0_body(idx: u32, count: u32, nodes_x: f32, nodes_y: f32, nodes_z: f32, passes: f32, axis: i32,) -> f32 {
+    return smooth_lattice_element(idx, count, nodes_x, nodes_y, nodes_z, passes, axis, 0u);
 }
 
 fn n1_body(
@@ -15394,28 +15563,7 @@ fn n1_body(
     solid_nodes_z: f32,
     cell_size: f32,
 ) -> f32 {
-    let lattice = vec3<f32>(nodes_x, nodes_y, nodes_z);
-    let solid_lattice = vec3<f32>(solid_nodes_x, solid_nodes_y, solid_nodes_z);
-    if any(lattice < vec3<f32>(2.0)) || any(solid_lattice < vec3<f32>(2.0)) {
-        return e_levelset;
-    }
-    let nodes = vec3<u32>(lattice);
-    let solid_nodes = vec3<u32>(solid_lattice);
-    if idx >= nodes.x * nodes.y * nodes.z || solid_nodes.x * solid_nodes.y * solid_nodes.z > arrayLength(&src_1) {
-        return e_levelset;
-    }
-    let ijk = vec3<u32>(idx % nodes.x, (idx / nodes.x) % nodes.y, idx / (nodes.x * nodes.y));
-    if any(ijk == vec3<u32>(0u)) || any(ijk == nodes - vec3<u32>(1u)) {
-        return cell_size / 3.0;
-    }
-    let size = vec3<f32>(size_x, size_y, size_z);
-    let lattice_min = vec3<f32>(center_x, center_y, center_z) - 0.5 * size;
-    let p = lattice_min + vec3<f32>(ijk) * size / vec3<f32>(nodes - vec3<u32>(1u));
-    let spacing = size / vec3<f32>(solid_nodes - vec3<u32>(1u));
-    if clamp_liquid_solid_at(p, lattice_min, spacing, solid_nodes) < 0.0 {
-        return max(e_levelset, 0.0);
-    }
-    return e_levelset;
+    return clamp_liquid_to_solids_element(idx, count, e_levelset, center_x, center_y, center_z, size_x, size_y, size_z, nodes_x, nodes_y, nodes_z, solid_nodes_x, solid_nodes_y, solid_nodes_z, cell_size, 0u);
 }
 
 @compute @workgroup_size(256)
@@ -15471,6 +15619,41 @@ fn smooth_weight(passes: i32, d: i32) -> f32 {
     return rows[offset + passes + d];
 }
 
+fn smooth_lattice_element(idx: u32, count: u32, nodes_x: f32, nodes_y: f32, nodes_z: f32, passes: f32, axis: i32, brick_pass: u32) -> f32 {
+    let value = src_0[idx];
+    let p = i32(clamp(round(passes), 0.0, 3.0));
+    if p == 0 || min(min(nodes_x, nodes_y), nodes_z) < 2.0 {
+        return value;
+    }
+    let nodes = vec3<i32>(vec3<f32>(nodes_x, nodes_y, nodes_z));
+    if idx >= u32(nodes.x) * u32(nodes.y) * u32(nodes.z) {
+        return value;
+    }
+    let node = vec3<i32>(
+        i32(idx % u32(nodes.x)),
+        i32((idx / u32(nodes.x)) % u32(nodes.y)),
+        i32(idx / (u32(nodes.x) * u32(nodes.y))),
+    );
+    if brick_pass == 2u {
+        // Every tap is the same exterior value. Keep the dense multiply/add
+        // sequence: a binomial row summing to one need not return its input
+        // bit-for-bit in f32 (particularly three passes).
+        var exterior = 0.0;
+        for (var d = -p; d <= p; d = d + 1) {
+            exterior = exterior + smooth_weight(p, d) * value;
+        }
+        return exterior;
+    }
+    let a = clamp(axis, 0, 2);
+    var sum = 0.0;
+    for (var d = -p; d <= p; d = d + 1) {
+        var q = node;
+        q[a] = clamp(node[a] + d, 0, nodes[a] - 1);
+        sum = sum + smooth_weight(p, d) * src_0[u32(q.x + nodes.x * (q.y + nodes.y * q.z))];
+    }
+    return sum;
+}
+
 fn clamp_liquid_solid_at(p: vec3<f32>, lattice_min: vec3<f32>, spacing: vec3<f32>, nodes: vec3<u32>) -> f32 {
     let g = clamp((p - lattice_min) / spacing, vec3<f32>(0.0), vec3<f32>(nodes - vec3<u32>(1u)));
     let base = min(vec3<u32>(floor(g)), nodes - vec3<u32>(2u));
@@ -15487,29 +15670,52 @@ fn clamp_liquid_solid_at(p: vec3<f32>, lattice_min: vec3<f32>, spacing: vec3<f32
     return value;
 }
 
-fn n0_body(idx: u32, count: u32, nodes_x: f32, nodes_y: f32, nodes_z: f32, passes: f32, axis: i32) -> f32 {
-    let value = src_0[idx];
-    let p = i32(clamp(round(passes), 0.0, 3.0));
-    if p == 0 || min(min(nodes_x, nodes_y), nodes_z) < 2.0 {
-        return value;
+fn clamp_liquid_to_solids_element(
+    idx: u32,
+    count: u32,
+    e_levelset: f32,
+    center_x: f32,
+    center_y: f32,
+    center_z: f32,
+    size_x: f32,
+    size_y: f32,
+    size_z: f32,
+    nodes_x: f32,
+    nodes_y: f32,
+    nodes_z: f32,
+    solid_nodes_x: f32,
+    solid_nodes_y: f32,
+    solid_nodes_z: f32,
+    cell_size: f32,
+    brick_pass: u32,
+) -> f32 {
+    let lattice = vec3<f32>(nodes_x, nodes_y, nodes_z);
+    let solid_lattice = vec3<f32>(solid_nodes_x, solid_nodes_y, solid_nodes_z);
+    if any(lattice < vec3<f32>(2.0)) || any(solid_lattice < vec3<f32>(2.0)) {
+        return e_levelset;
     }
-    let nodes = vec3<i32>(vec3<f32>(nodes_x, nodes_y, nodes_z));
-    if idx >= u32(nodes.x) * u32(nodes.y) * u32(nodes.z) {
-        return value;
+    let nodes = vec3<u32>(lattice);
+    let solid_nodes = vec3<u32>(solid_lattice);
+    if idx >= nodes.x * nodes.y * nodes.z || solid_nodes.x * solid_nodes.y * solid_nodes.z > arrayLength(&src_1) {
+        return e_levelset;
     }
-    let node = vec3<i32>(
-        i32(idx % u32(nodes.x)),
-        i32((idx / u32(nodes.x)) % u32(nodes.y)),
-        i32(idx / (u32(nodes.x) * u32(nodes.y))),
-    );
-    let a = clamp(axis, 0, 2);
-    var sum = 0.0;
-    for (var d = -p; d <= p; d = d + 1) {
-        var q = node;
-        q[a] = clamp(node[a] + d, 0, nodes[a] - 1);
-        sum = sum + smooth_weight(p, d) * src_0[u32(q.x + nodes.x * (q.y + nodes.y * q.z))];
+    let ijk = vec3<u32>(idx % nodes.x, (idx / nodes.x) % nodes.y, idx / (nodes.x * nodes.y));
+    if any(ijk == vec3<u32>(0u)) || any(ijk == nodes - vec3<u32>(1u)) {
+        return cell_size / 3.0;
     }
-    return sum;
+    if brick_pass == 2u { return e_levelset; }
+    let size = vec3<f32>(size_x, size_y, size_z);
+    let lattice_min = vec3<f32>(center_x, center_y, center_z) - 0.5 * size;
+    let p = lattice_min + vec3<f32>(ijk) * size / vec3<f32>(nodes - vec3<u32>(1u));
+    let spacing = size / vec3<f32>(solid_nodes - vec3<u32>(1u));
+    if clamp_liquid_solid_at(p, lattice_min, spacing, solid_nodes) < 0.0 {
+        return max(e_levelset, 0.0);
+    }
+    return e_levelset;
+}
+
+fn n0_body(idx: u32, count: u32, nodes_x: f32, nodes_y: f32, nodes_z: f32, passes: f32, axis: i32,) -> f32 {
+    return smooth_lattice_element(idx, count, nodes_x, nodes_y, nodes_z, passes, axis, 0u);
 }
 
 fn n1_body(
@@ -15530,28 +15736,7 @@ fn n1_body(
     solid_nodes_z: f32,
     cell_size: f32,
 ) -> f32 {
-    let lattice = vec3<f32>(nodes_x, nodes_y, nodes_z);
-    let solid_lattice = vec3<f32>(solid_nodes_x, solid_nodes_y, solid_nodes_z);
-    if any(lattice < vec3<f32>(2.0)) || any(solid_lattice < vec3<f32>(2.0)) {
-        return e_levelset;
-    }
-    let nodes = vec3<u32>(lattice);
-    let solid_nodes = vec3<u32>(solid_lattice);
-    if idx >= nodes.x * nodes.y * nodes.z || solid_nodes.x * solid_nodes.y * solid_nodes.z > arrayLength(&src_1) {
-        return e_levelset;
-    }
-    let ijk = vec3<u32>(idx % nodes.x, (idx / nodes.x) % nodes.y, idx / (nodes.x * nodes.y));
-    if any(ijk == vec3<u32>(0u)) || any(ijk == nodes - vec3<u32>(1u)) {
-        return cell_size / 3.0;
-    }
-    let size = vec3<f32>(size_x, size_y, size_z);
-    let lattice_min = vec3<f32>(center_x, center_y, center_z) - 0.5 * size;
-    let p = lattice_min + vec3<f32>(ijk) * size / vec3<f32>(nodes - vec3<u32>(1u));
-    let spacing = size / vec3<f32>(solid_nodes - vec3<u32>(1u));
-    if clamp_liquid_solid_at(p, lattice_min, spacing, solid_nodes) < 0.0 {
-        return max(e_levelset, 0.0);
-    }
-    return e_levelset;
+    return clamp_liquid_to_solids_element(idx, count, e_levelset, center_x, center_y, center_z, size_x, size_y, size_z, nodes_x, nodes_y, nodes_z, solid_nodes_x, solid_nodes_y, solid_nodes_z, cell_size, 0u);
 }
 
 @compute @workgroup_size(256)

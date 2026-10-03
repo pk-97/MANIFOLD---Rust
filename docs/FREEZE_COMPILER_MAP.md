@@ -144,8 +144,12 @@ unfused, which is always correct. Order matters; from `classify_node`:
 out; no texture output; texture *inputs* must be wired sampled 2D/3D (unwired
 optional = boundary — the fused node's port would be required and silently kill
 the dispatch); no atomic outputs (see the atomic-output rule below); same
-wire/control-producer rules. A
-`BufferGather` array input (neighbor_smooth, reflect_array) ADMITS: the
+wire/control-producer rules. Cell-owned outputs remain boundaries. Buffer-index
+schedules also remain boundaries unless the atom declares a proven
+`dense_buffer_fusion` form: the finder excludes its schedule-only ports from
+data and capacity externals, and install emits the dense fragments without
+schedule inputs or pass uniforms. Standalone kernels retain their sparse passes.
+A `BufferGather` array input (neighbor_smooth, reflect_array) ADMITS: the
 gathered wire stays external — the finder never unions a gather-consumed wire,
 `build_region` keeps the producer out (bailing defensively otherwise), and the
 fused buffer codegen binds it as a read-only `src_<slot>` storage array the

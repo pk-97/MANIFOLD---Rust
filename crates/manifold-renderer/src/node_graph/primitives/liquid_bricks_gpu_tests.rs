@@ -4,6 +4,7 @@ use super::dense_source;
 use crate::generators::mesh_common::MeshVertex;
 use crate::node_graph::bindings::Slot;
 use crate::node_graph::fluid_particles::{CellRange, FluidBlob, bin_counts};
+use crate::node_graph::freeze::codegen::ENTRY;
 use crate::node_graph::primitive::PrimitiveSpec;
 use crate::node_graph::primitives::{
     clamp_liquid_to_solids::ClampLiquidToSolids,
@@ -477,4 +478,251 @@ fn fluid_bricks_lattice_and_mesh_bit_identical_dense_64() {
 #[test]
 fn fluid_bricks_lattice_and_mesh_bit_identical_dense_128() {
     fixture(128);
+}
+
+#[test]
+fn fluid_smooth_clamp_dense_fusion_matches_unfused() {
+    // This uses the same partitioner and installer as the live freeze path,
+    // rather than proving a hand-built pair of atoms in isolation.
+    let def = crate::node_graph::primitives::gpu_flip_preset::render_def(
+        crate::node_graph::primitives::gpu_flip_preset::WaterScene::dam_break(64),
+    );
+    let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
+    let report = crate::node_graph::fusion_report(&def, &registry);
+    let smooth_clamp = ["node.smooth_lattice", "node.clamp_liquid_to_solids"];
+    assert!(
+        report.regions.iter().any(|region| {
+            let members: Vec<_> = region
+                .member_node_ids
+                .iter()
+                .map(|id| {
+                    report
+                        .nodes
+                        .iter()
+                        .find(|node| node.node_id == *id)
+                        .expect("region member is in the fusion report")
+                        .type_id
+                        .as_str()
+                })
+                .collect();
+            members.as_slice() == &smooth_clamp[..]
+        }),
+        "the live liquid surface chain must contain a smooth → clamp region: {:?}",
+        report.regions,
+    );
+    let fused = crate::node_graph::freeze::install::fuse_generator_view(&def, &registry)
+        .expect("the liquid surface graph installs its fused region");
+    assert!(
+        fused
+            .def
+            .nodes
+            .iter()
+            .any(|node| node.type_id == "node.wgsl_compute"),
+        "the installed graph must retain a generated fused node"
+    );
+
+    const NODES: [u32; 3] = [8; 3];
+    const CENTER: [f32; 3] = [0.25, 1.0, -0.5];
+    const SIZE: [f32; 3] = [2.0, 1.5, 2.5];
+    const SOLID_NODES: [u32; 3] = [4; 3];
+    const CELL_SIZE: f32 = 0.25;
+    let total = NODES.iter().product::<u32>() as usize;
+    let levelset: Vec<f32> = (0..total)
+        .map(|idx| {
+            let x = idx as u32 % NODES[0];
+            let y = (idx as u32 / NODES[0]) % NODES[1];
+            let z = idx as u32 / (NODES[0] * NODES[1]);
+            ((x * 17 + y * 13 + z * 7) % 11) as f32 / 5.0 - 1.0
+        })
+        .collect();
+    // A signed half-space intersects the interior; the clamp's separate border
+    // rule is exercised by every face of this lattice.
+    let solid_total = SOLID_NODES.iter().product::<u32>() as usize;
+    let solid: Vec<f32> = (0..solid_total)
+        .map(|idx| {
+            let y = (idx as u32 / SOLID_NODES[0]) % SOLID_NODES[1];
+            y as f32 - 1.5
+        })
+        .collect();
+
+    let mut harness = Harness::new();
+    let (levelset_slot, levelset_buffer) = harness.array(&levelset, total);
+    let (solid_slot, solid_buffer) = harness.array(&solid, solid_total);
+    let layout = brick_layout(NODES, 1).expect("8³ lattice has a brick layout");
+    let mask = vec![1; layout.count as usize];
+    let schedule = compact_brick_words(&mask, layout.bricks);
+    let (brick_slot, _) = harness.array(&schedule, layout.words as usize);
+    let (smooth_slot, _) = harness.array::<f32>(&[], total);
+    let (clamp_slot, clamp_buffer) = harness.array::<f32>(&[], total);
+    let (_, fused_buffer) = harness.array::<f32>(&[], total);
+
+    let fused_source = fused
+        .def
+        .nodes
+        .iter()
+        .find(|node| {
+            node.type_id == "node.wgsl_compute"
+                && node.wgsl_source.as_deref().is_some_and(|source| {
+                    source.contains("n0_passes") && source.contains("n1_cell_size")
+                })
+        })
+        .and_then(|node| node.wgsl_source.as_deref())
+        .expect("installed smooth → clamp node carries its generated WGSL");
+    // Clamp's FromInput declaration must survive region construction: the
+    // actual kernel dispatches from levelset capacity even when solid is 4³.
+    assert!(
+        fused_source.contains("@fused_output_capacity")
+            && fused_source.contains("arrayLength(&src_0)"),
+        "installed smooth → clamp kernel must preserve its levelset capacity expression"
+    );
+
+    let params_for = |passes: u32, axis: u32| {
+        let mut values = params(&[
+            ("nodes_x", NODES[0] as f32),
+            ("nodes_y", NODES[1] as f32),
+            ("nodes_z", NODES[2] as f32),
+            ("passes", passes as f32),
+            ("axis", axis as f32),
+        ]);
+        values.extend(params(&[
+            ("center_x", CENTER[0]),
+            ("center_y", CENTER[1]),
+            ("center_z", CENTER[2]),
+            ("size_x", SIZE[0]),
+            ("size_y", SIZE[1]),
+            ("size_z", SIZE[2]),
+            ("nodes_x", NODES[0] as f32),
+            ("nodes_y", NODES[1] as f32),
+            ("nodes_z", NODES[2] as f32),
+            ("solid_nodes_x", SOLID_NODES[0] as f32),
+            ("solid_nodes_y", SOLID_NODES[1] as f32),
+            ("solid_nodes_z", SOLID_NODES[2] as f32),
+            ("cell_size", CELL_SIZE),
+        ]));
+        values
+    };
+
+    for field in [
+        "n0_nodes_x",
+        "n0_nodes_y",
+        "n0_nodes_z",
+        "n0_passes",
+        "n0_axis",
+        "n1_center_x",
+        "n1_center_y",
+        "n1_center_z",
+        "n1_size_x",
+        "n1_size_y",
+        "n1_size_z",
+        "n1_nodes_x",
+        "n1_nodes_y",
+        "n1_nodes_z",
+        "n1_solid_nodes_x",
+        "n1_solid_nodes_y",
+        "n1_solid_nodes_z",
+        "n1_cell_size",
+    ] {
+        assert!(
+            fused_source.contains(field),
+            "installed kernel missing `{field}`"
+        );
+    }
+    let mut words = vec![
+        (NODES[0] as f32).to_bits(),
+        (NODES[1] as f32).to_bits(),
+        (NODES[2] as f32).to_bits(),
+        0.0f32.to_bits(),
+        0,
+        CENTER[0].to_bits(),
+        CENTER[1].to_bits(),
+        CENTER[2].to_bits(),
+        SIZE[0].to_bits(),
+        SIZE[1].to_bits(),
+        SIZE[2].to_bits(),
+        (NODES[0] as f32).to_bits(),
+        (NODES[1] as f32).to_bits(),
+        (NODES[2] as f32).to_bits(),
+        (SOLID_NODES[0] as f32).to_bits(),
+        (SOLID_NODES[1] as f32).to_bits(),
+        (SOLID_NODES[2] as f32).to_bits(),
+        CELL_SIZE.to_bits(),
+    ];
+    while !words.len().is_multiple_of(4) {
+        words.push(0);
+    }
+
+    let pipeline = harness.device.create_compute_pipeline(
+        fused_source,
+        ENTRY,
+        "liquid-smooth-clamp-dense-fused",
+    );
+    let mut smooth = SmoothLattice::new();
+    let mut clamp = ClampLiquidToSolids::new();
+    for passes in 0..=3 {
+        for axis in 0..3 {
+            let p = params_for(passes, axis);
+            let (_, errors) = harness.run(
+                &mut smooth,
+                &[("levelset", levelset_slot), ("bricks", brick_slot)],
+                &[("smoothed", smooth_slot)],
+                &p,
+            );
+            assert!(errors.is_empty(), "smooth {passes}/{axis}: {errors:?}");
+            let (_, errors) = harness.run(
+                &mut clamp,
+                &[
+                    ("levelset", smooth_slot),
+                    ("solid", solid_slot),
+                    ("bricks", brick_slot),
+                ],
+                &[("clamped", clamp_slot)],
+                &p,
+            );
+            assert!(errors.is_empty(), "clamp {passes}/{axis}: {errors:?}");
+
+            let mut fused_words = words.clone();
+            fused_words[3] = (passes as f32).to_bits();
+            fused_words[4] = axis as i32 as u32;
+            let mut encoder = harness
+                .device
+                .create_encoder("liquid-smooth-clamp-dense-fused");
+            encoder.dispatch_compute(
+                &pipeline,
+                &[
+                    GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::cast_slice(&fused_words),
+                    },
+                    GpuBinding::Buffer {
+                        binding: 1,
+                        buffer: &levelset_buffer,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 2,
+                        buffer: &solid_buffer,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 3,
+                        buffer: &fused_buffer,
+                        offset: 0,
+                    },
+                ],
+                [(total as u32).div_ceil(256), 1, 1],
+                "liquid-smooth-clamp-dense-fused",
+            );
+            encoder.commit_and_wait_completed();
+
+            let unfused = read::<f32>(&clamp_buffer, total);
+            let fused = read::<f32>(&fused_buffer, total);
+            for (idx, (got, want)) in fused.iter().zip(&unfused).enumerate() {
+                assert_eq!(
+                    got.to_bits(),
+                    want.to_bits(),
+                    "smooth passes {passes}, axis {axis}, element {idx}: fused {got} standalone {want}"
+                );
+            }
+        }
+    }
 }
