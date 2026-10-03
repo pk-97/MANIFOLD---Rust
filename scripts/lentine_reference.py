@@ -533,16 +533,11 @@ def graph_solve(count, edges, rhs, anchors=None, reverse_gauge=False):
     return pressure
 
 
-def component_projection(count, edges, blocks, source, anchors=None, reverse_gauge=False):
-    """Conservative outer solve and fixed-boundary local Neumann solves.
+def component_coarse(count, edges, blocks, source, anchors=None, reverse_gauge=False):
+    """Stage 2 alone: labels, conservative gather, pressure and outer flux.
 
-    Source is the divergence to REMOVE (raw minus prescribed target). Returned
-    fluxes are subtracted from the original oriented fluid flux; the graph
-    potential is therefore the negative of the runtime pressure convention.
-    Units are integrated fine flux (h=1). P is the component indicator;
-    coarse rows are P^T A_boundary P / 2 for H=2h. Parallel fine subfaces
-    remain distinct edges. Scatter uses that SAME conductance, so each
-    component receives exactly its solved flux, including solid/density source.
+    This is shared by the complete projection and the GPU value oracle. No
+    local correction or boundary velocity mutation is part of this stage.
     """
     anchors = anchors or [0.0] * count
     labels = components(count, edges, blocks)
@@ -556,14 +551,32 @@ def component_projection(count, edges, blocks, source, anchors=None, reverse_gau
     coarse_air = [sum(anchors[i] / 2 for i in range(count) if ids[i] == k)
                   for k in range(len(roots))]
     coarse = graph_solve(len(roots), coarse_edges, coarse_rhs, coarse_air, reverse_gauge)
-    flux = [0.0] * len(edges)
+    flux = [e.weight * (coarse[ids[e.low]] - coarse[ids[e.high]]) / 2
+            if ids[e.low] != ids[e.high] else 0.0 for e in edges]
+    air = [a * coarse[ids[i]] / 2 for i, a in enumerate(anchors)]
+    return labels, roots, coarse_rhs, coarse, flux, air
+
+
+def component_projection(count, edges, blocks, source, anchors=None, reverse_gauge=False):
+    """Conservative outer solve and fixed-boundary local Neumann solves.
+
+    Source is the divergence to REMOVE (raw minus prescribed target). Returned
+    fluxes are subtracted from the original oriented fluid flux; the graph
+    potential is therefore the negative of the runtime pressure convention.
+    Units are integrated fine flux (h=1). P is the component indicator;
+    coarse rows are P^T A_boundary P / 2 for H=2h. Parallel fine subfaces
+    remain distinct edges. Scatter uses that SAME conductance, so each
+    component receives exactly its solved flux, including solid/density source.
+    """
+    labels, roots, coarse_rhs, coarse, flux, air_flux = component_coarse(
+        count, edges, blocks, source, anchors, reverse_gauge)
+    slots = {root: i for i, root in enumerate(roots)}
+    ids = [slots[root] for root in labels]
     remainder = list(source)
     for k, e in enumerate(edges):
         if ids[e.low] != ids[e.high]:
-            flux[k] = e.weight * (coarse[ids[e.low]] - coarse[ids[e.high]]) / 2
             remainder[e.low] -= flux[k]
             remainder[e.high] += flux[k]
-    air_flux = [a * coarse[ids[i]] / 2 for i, a in enumerate(anchors)]
     remainder = [r - a for r, a in zip(remainder, air_flux)]
     worst_compatibility = max(abs(sum(remainder[i] for i in range(count) if ids[i] == k))
                               for k in range(len(roots)))
@@ -662,11 +675,123 @@ def test_component_sealed_two_pockets():
     print("PASS component_sealed_two_pockets: weighted cuts, odd edges, gauges, isolation; error=%.3e" % worst)
 
 
+def gpu_component_fixtures():
+    """Small exact-f32 inputs with independently Cholesky-solved f64 outputs.
+
+    Dyadic weights/sources make sealed compatibility exact at input precision.
+    Dry cells are removed before calling the graph reference, not passed as
+    isolated fluid unknowns. No shader implementation is mirrored here.
+    """
+    cases = []
+    specs = [("cut", (2, 2, 2)), ("sealed", (4, 2, 2)),
+             ("odd", (7, 3, 2)), ("isolation", (7, 3, 2)),
+             ("incompatible", (7, 3, 2)), ("dry", (5, 3, 2)),
+             ("moving_source", (3, 3, 2)), ("isolated", (1, 1, 1)),
+             ("empty", (3, 1, 1)), ("many", (9, 5, 3))]
+    for name, n in specs:
+        points = [(x, y, z) for z in range(n[2]) for y in range(n[1]) for x in range(n[0])]
+        lookup = {p: i for i, p in enumerate(points)}
+        count = len(points)
+        water = [float(name != "empty" and (name != "dry" or p[0] != 1)) for p in points]
+        links = [[0.0] * 4 for _ in points]
+        source = [0.0] * count
+        wet = [i for i in range(count) if water[i]]
+        compact = {i: j for j, i in enumerate(wet)}
+        edges, locations = [], []
+        for i, p in enumerate(points):
+            if not water[i]:
+                continue
+            for a in range(3):
+                q = list(p)
+                q[a] += 1
+                j = lookup.get(tuple(q))
+                if j is None or not water[j]:
+                    continue
+                closed = (name == "cut" and a == 0) or (name in ("sealed", "odd", "isolation", "incompatible") and a == 1 and q[a] == 1)
+                w = 0.0 if closed else (2 + (i + a) % 7) / 16
+                links[i][a] = w
+                edges.append(Edge(compact[i], compact[j], w))
+                locations.append((i, a, j))
+                flux = w * (8 + i + a) / 64
+                source[i] += flux
+                source[j] -= flux
+            if name in ("cut", "dry", "moving_source", "many"):
+                links[i][3] = 0.5
+        if name == "cut":
+            source = [0.0] * count
+            source[0], source[1] = 1.0, -1.0
+        if name == "moving_source":
+            # Explicit unequal-volume moving-solid term on EVERY internal face,
+            # plus a prescribed source. A boundary-only gather cannot match it.
+            volume = [(4 + i % 4) / 8 for i in range(count)]
+            for i, a, j in locations:
+                vs = (i + 2 * a - 7) / 32
+                source[i] += (volume[i] - links[i][a]) * vs
+                source[j] -= (volume[j] - links[i][a]) * vs
+            source = [s - (i % 3 - 1) / 16 for i, s in enumerate(source)]
+        if name == "isolation":
+            source = [s * (2 if points[i][1] == 0 else 1) for i, s in enumerate(source)]
+        if name == "incompatible":
+            source[0] += 0.25
+            source[n[0]] -= 0.25
+        if name == "dry":
+            # Positive stored weights across air must still NOT connect water.
+            # The reference graph above contains wet-to-wet edges only.
+            for i, p in enumerate(points):
+                for a in range(3):
+                    q = list(p)
+                    q[a] += 1
+                    j = lookup.get(tuple(q))
+                    if j is not None and (not water[i] or not water[j]):
+                        links[i][a] = 0.5
+        case = dict(name=name, lattice=n, water=water, links=links, source=source)
+        if not wet:
+            result = ([], [], [], [], [], [])
+        else:
+            try:
+                result = component_coarse(len(wet), edges,
+                    [tuple(v // 2 for v in points[i]) for i in wet],
+                    [source[i] for i in wet], [links[i][3] for i in wet])
+            except IncompatibleSource:
+                assert name == "incompatible"
+                case["status"] = 3
+                cases.append(case)
+                continue
+        labels, roots, rhs, pressure, flux, air = result
+        expected_labels = [0xffffffff] * count
+        expected_rhs, expected_pressure = [0.0] * count, [0.0] * count
+        expected_transfer = [[0.0] * 4 for _ in points]
+        for k, i in enumerate(wet):
+            expected_labels[i] = wet[labels[k]]
+            expected_transfer[i][3] = air[k]
+        for k, root in enumerate(roots):
+            expected_rhs[wet[root]] = rhs[k]
+            expected_pressure[wet[root]] = pressure[k]
+        for (i, a, _), f in zip(locations, flux):
+            expected_transfer[i][a] = f
+        case.update(status=1, labels=expected_labels, rhs=expected_rhs,
+                    pressure=expected_pressure, transfer=expected_transfer)
+        cases.append(case)
+    return cases
+
+
+def test_component_gpu_oracles():
+    cases = gpu_component_fixtures()
+    assert len(cases) == 10
+    assert sum(c["status"] == 3 for c in cases) == 1
+    print("PASS component_gpu_oracles: 10 stage-2 f64 value fixtures")
+
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--filter", default="", help="run self-tests whose names contain this text")
+    parser.add_argument("--gpu-fixtures", action="store_true", help="emit stage-2 f64 GPU oracle JSON")
     args = parser.parse_args()
+    if args.gpu_fixtures:
+        import json
+        print(json.dumps(gpu_component_fixtures(), allow_nan=False))
+        raise SystemExit(0)
     tests = [value for name, value in sorted(globals().copy().items())
              if name.startswith("test_") and args.filter in name]
     if not tests:
@@ -674,4 +799,3 @@ if __name__ == "__main__":
     for test in tests:
         test()
     print("lentine_reference.py: %d self-tests passed" % len(tests))
-
