@@ -16,6 +16,10 @@ INTEGRATION_ROWS = {
     "crates/manifold-renderer/src/node_graph/primitives/mod.rs": ["file_loader_exhaustiveness"],
     "crates/manifold-renderer/src/node_graph/fluid.rs": ["fluid_preset"],
 }
+# Bundled preset JSON is compiled into the renderer; these modules hold its contracts.
+ASSET_ROWS = {
+    "crates/manifold-renderer/assets/": ("manifold-renderer", ["node_graph::bundled_presets"]),
+}
 PATH_MOD = re.compile(r'#\[path\s*=\s*"([^"]+)"\]\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;')
 
 
@@ -54,6 +58,10 @@ class Plan:
 def plan_for_paths(paths, repo):
     repo, plan, cache = Path(repo), Plan(), {}
     for path in sorted(set(paths)):
+        for prefix, (package, modules) in ASSET_ROWS.items():
+            if path.startswith(prefix) and path.endswith(".json"):
+                plan.packages.add(package)
+                plan.filters.update(f"(package(={package}) & test(/^{module}::/))" for module in modules)
         parts = Path(path).parts
         if len(parts) < 4 or parts[0] != "crates" or not path.endswith(".rs"):
             continue

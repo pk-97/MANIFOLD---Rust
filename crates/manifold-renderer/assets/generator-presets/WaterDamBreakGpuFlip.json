@@ -781,6 +781,7 @@
           },
           {
             "id": 32,
+            "nodeId": "liquid_blob_bounds",
             "typeId": "node.blob_bounds"
           }
         ],

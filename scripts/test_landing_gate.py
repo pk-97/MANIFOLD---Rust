@@ -444,6 +444,12 @@ class DiffScopeTests(unittest.TestCase):
             self.assertIn("test(/^node_graph::fluid::checks::/)", plan.filterset)
             self.assertIn("binary(=fluid_preset)", plan.filterset)
 
+    def test_bundled_preset_json_selects_preset_contracts(self):
+        with tempfile.TemporaryDirectory() as d:
+            plan = cpu_scope.plan_for_paths(["crates/manifold-renderer/assets/generator-presets/Water.json"], d)
+            self.assertEqual(plan.filterset, "(package(=manifold-renderer) & test(/^node_graph::bundled_presets::/))")
+            self.assertEqual(plan.packages, {"manifold-renderer"})
+
     def test_flow_scope_uses_only_effective_paths(self):
         import run_ui_flows
         manifest = {"path_triggers": {"crates/manifold-ui/": ["ui"]}}
