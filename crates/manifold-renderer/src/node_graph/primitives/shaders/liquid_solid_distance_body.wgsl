@@ -2,7 +2,7 @@
 // D11, section 3.2). One thread per lattice node, x fastest: the seam's solid
 // lattice, positive in free space and negative inside a solid. It is the
 // smaller of the distance to the nearest closed wall, wall_inset nodes in
-// from the lattice edge (3 on a padded lattice, as node.matter_frame's wall
+// from the lattice edge (1.5 on the native mesh grid; 3 on a solver lattice, as node.matter_frame's wall
 // lattice; 0 on node.gpu_flip_step's cell lattice, whose walls are its
 // edge), and every enabled body's signed distance, sampled from its
 // shape's lattice in the atlas through its pose at the end of this frame's
@@ -50,7 +50,7 @@ fn body(
     nodes_y: i32,
     nodes_z: i32,
     closed_faces: i32,
-    wall_inset: i32,
+    wall_inset: f32,
     body_count: i32,
     rows: i32,
     tick_seconds: f32,
@@ -59,9 +59,9 @@ fn body(
     let coord = vec3<u32>(idx % n.x, (idx / n.x) % n.y, idx / (n.x * n.y));
     let lattice_min = vec3<f32>(lattice_min_x, lattice_min_y, lattice_min_z);
     let x = lattice_min + vec3<f32>(coord) * cell_size;
-    let inset = u32(max(wall_inset, 0));
-    let low = lattice_min + vec3<f32>(f32(inset) * cell_size);
-    let high = low + vec3<f32>(n - vec3<u32>(1u + 2u * inset)) * cell_size;
+    let inset = max(wall_inset, 0.0);
+    let low = lattice_min + vec3<f32>(inset * cell_size);
+    let high = low + (vec3<f32>(n) - vec3<f32>(1.0 + 2.0 * inset)) * cell_size;
     var distance = length(vec3<f32>(n) * cell_size);
     let faces = u32(closed_faces);
     for (var d = 0u; d < 3u; d = d + 1u) {

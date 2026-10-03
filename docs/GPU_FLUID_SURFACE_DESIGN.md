@@ -115,7 +115,7 @@ The GPU stores the nearest f32 marker coefficient, `0.31017524`.
 | Whitewater surface-emitter band | 1.5h | 1.5h | unchanged | owned by BUG-imy3.1 (whitewater emitters) | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:463`; `crates/manifold-renderer/src/node_graph/primitives/shaders/wavecrest_potential_body.wgsl:94` |
 | Whitewater maximum velocity factor | 1.1 | 1.1 | 1.1 | matched | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:465`; `crates/manifold-renderer/src/node_graph/primitives/shaders/advect_whitewater_body.wgsl:30` |
 | Wall geometry / collision / last inner face | native padded boundary mesh, marched collision, skipped boundary pressure cells/last inner face | exact wall faces, clamp wall motion, all interior faces | unchanged; geometry/operator port remains | unported | `crates/manifold-fluids/native/flip_engine/fluidsimulation.cpp:5508`; `crates/manifold-renderer/src/node_graph/primitives/shaders/gpu_flip_step.wgsl:2062` |
-| Surface/solid grid origin and extent | 1.5h padding each side; native 67 cells / 68 mesh nodes | 3h padding; 70 cells / 71 nodes | unchanged; native mesh sampling is half a cell offset | unported | `crates/manifold-renderer/src/node_graph/fluid/domain.rs:120`; `crates/manifold-renderer/src/node_graph/liquid/lattice.rs:12` |
+| Surface/solid grid origin and extent | 1.5h padding each side; native 67 cells / 68 mesh nodes | 3h padding; 70 cells / 71 nodes | 1.5h padding; 67 cells / 68 nodes, native half-cell phase; mesh and clamp share the sampled solid | ported (GPU execution pending) | `crates/manifold-renderer/src/node_graph/fluid/domain.rs:120`; `crates/manifold-renderer/src/node_graph/liquid/lattice.rs` (`surface`); `crates/manifold-fluids/native/flip_engine/particlemesher.cpp:103`; `crates/manifold-fluids/native/flip_engine/polygonizer3d.cpp:361` |
 | Marker removal | 250 per cell + extreme-velocity removal | no native per-cell or extreme-velocity removal | stable cell cap at 250; clock speed limit over accepted frame interval; GPU compaction preserves survivor ids | ported | `crates/manifold-fluids/native/flip_engine/fluidsimulation.h:2565`; `crates/manifold-renderer/src/node_graph/primitives/shaders/gpu_flip_step.wgsl:2130` |
 | Step operation order | extrapolate then constrain; inflow at step end | constrain then extrapolate; inflow before transfer | projected velocity extrapolated before both solid constraints; inflow after movement/removal | ported | `crates/manifold-fluids/native/flip_engine/fluidsimulation.cpp:6658`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_step.rs:384` |
 | Inflow placement | after marker advection/removal | before transfer | end of step, first transferred/advected on next step | ported | `fluidsimulation.cpp::_stepFluid`, `_updateFluidObjects`; `gpu_flip_step.rs::encode` |
@@ -160,10 +160,23 @@ native radius/support/border; the manifest test's 0.5 expectation changes to
 0.35 only because that is the engine node value. No tolerance was loosened.
 The fused WGSL snapshot is deliberately left for the lead's GPU regeneration.
 
+BUG-g75v.10 ports the surface grid at `LiquidLattice::surface`: the native
+origin is `domain_min - 1.5h`, with `(cells + 3) * subdivisions + 1` nodes.
+`ParticleMesher::_initialize` and `Polygonizer3d::_getVertexPosition` add no
+further half-cell shift. GPU FLIP publishes separate mesh coordinates for
+`liquid_solid_distance`; `liquid_frame` publishes the same surface bounds and
+nodes. The builder enables Native Mesh Grid on the frame; old embedded graphs
+keep their original simulation-grid solid contract until rebuilt. Whitewater
+retains its separately sampled simulation-grid solid. The interior field uses
+its exact cell count to distinguish native mesh padding from legacy solver padding, with matching CPU, shader and extent validation.
+The shared surface group carries these through splatting, blob bounds,
+smoothing, closing, clamp and marching cubes. Solver padding remains unchanged.
+CPU node/crossing and dispatch-extent proofs justify the changed grid; no
+value golden or tolerance was changed. GPU value proofs are compiled only.
+The fused snapshot needs regeneration by the lead after GPU verification.
+
 Unported mechanisms need separate staged ports, not replacement constants:
-wall geometry changes the pressure operator and seed exclusion; the native
-half-cell surface grid needs a separately sampled solid lattice and graph extent
-contract (changing shared solver padding would alter every liquid consumer); MIC/f64 is a different
+wall geometry changes the pressure operator and seed exclusion; MIC/f64 is a different
 pressure solver (native uses f64, which native Metal cannot execute); whitewater overload ordering requires a shared random stream
 and native emitter selection. These are not clock-owned exemptions.
 `graph-tool validate` creates `GpuDevice::new_queued`, so it is deferred to the

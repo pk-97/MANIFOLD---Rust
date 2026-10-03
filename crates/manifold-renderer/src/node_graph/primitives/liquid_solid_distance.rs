@@ -28,7 +28,7 @@ struct SolidDistanceUniforms {
     nodes_y: i32,
     nodes_z: i32,
     closed_faces: i32,
-    wall_inset: i32,
+    wall_inset: f32,
     body_count: i32,
     rows: i32,
     tick_seconds: f32,
@@ -67,7 +67,7 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("nodes_y"), label: "Nodes Y", ty: ParamType::Int, default: ParamValue::Float(71.0), range: Some((1.0, 4096.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("nodes_z"), label: "Nodes Z", ty: ParamType::Int, default: ParamValue::Float(71.0), range: Some((1.0, 4096.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("closed_faces"), label: "Closed Faces (bits −X +X −Y +Y −Z +Z)", ty: ParamType::Int, default: ParamValue::Float(63.0), range: Some((0.0, 63.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("wall_inset"), label: "Wall Inset (nodes)", ty: ParamType::Int, default: ParamValue::Float(PADDING_NODES as f32), range: Some((0.0, 64.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("wall_inset"), label: "Wall Inset (nodes)", ty: ParamType::Float, default: ParamValue::Float(PADDING_NODES as f32), range: Some((0.0, 64.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("body_count"), label: "Bodies", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, MAX_FLUID_ROLES as f32)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("rows"), label: "Rows", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16_777_216.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("tick_seconds"), label: "Tick (s)", ty: ParamType::Float, default: ParamValue::Float(TICK as f32), range: Some((0.0, 1.0)), enum_values: &[] },
@@ -114,7 +114,7 @@ impl Primitive for LiquidSolidDistance {
             return;
         };
         let closed_faces = ctx.scalar_or_param("closed_faces", 63.0).round().clamp(0.0, 63.0) as i32;
-        let wall_inset = ctx.scalar_or_param("wall_inset", PADDING_NODES as f32).round().clamp(0.0, 64.0) as i32;
+        let wall_inset = ctx.scalar_or_param("wall_inset", PADDING_NODES as f32).clamp(0.0, 64.0);
         let body_count = ctx.scalar_or_param("body_count", 0.0).round().clamp(0.0, MAX_FLUID_ROLES as f32) as i32;
         let rows = ctx.scalar_or_param("rows", 0.0).round().max(0.0) as i32;
         let tick_seconds = ctx.scalar_or_param("tick_seconds", TICK as f32);
@@ -189,7 +189,7 @@ pub(crate) struct SolidDistanceJob<'a> {
     pub nodes: [u32; 3],
     /// Box walls that count as solid (bits −X +X −Y +Y −Z +Z), `wall_inset` nodes in from the lattice edge.
     pub closed_faces: i32,
-    pub wall_inset: i32,
+    pub wall_inset: f32,
     pub body_count: i32,
     pub rows: i32,
     pub tick_seconds: f32,
@@ -266,7 +266,7 @@ mod tests {
             assert!(wgsl.contains(binding), "{binding}: {wgsl}");
         }
         assert!(
-            wgsl.contains("closed_faces: i32,\n    wall_inset: i32,\n    body_count: i32,")
+            wgsl.contains("closed_faces: i32,\n    wall_inset: f32,\n    body_count: i32,")
                 && wgsl.contains("dispatch_count: u32,\n    _pad0: u32,\n    _pad1: u32,\n    _pad2: u32,"),
             "{wgsl}"
         );
@@ -284,7 +284,7 @@ mod tests {
             .map(|p| p.default.clone());
         assert!(matches!(inset, Some(ParamValue::Float(v)) if v == PADDING_NODES as f32), "{inset:?}");
         let shader = include_str!("shaders/liquid_solid_distance_body.wgsl");
-        assert!(shader.contains("f32(inset) * cell_size") && shader.contains("n - vec3<u32>(1u + 2u * inset)"));
+        assert!(shader.contains("inset * cell_size") && shader.contains("vec3<f32>(n) - vec3<f32>(1.0 + 2.0 * inset)"));
     }
 
     /// The solid atom poses bodies the way node.matter_move_bodies does:

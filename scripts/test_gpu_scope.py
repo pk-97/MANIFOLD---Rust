@@ -24,6 +24,14 @@ class ScopeTests(unittest.TestCase):
         self.assertIn("gpu_flip_step_order_", result.filters)
         self.assertIn("gpu_flip_extend_faces_", result.filters)
         self.assertFalse(result.unmapped)
+    def test_mesh_grid_sources_select_native_value_proofs(self):
+        for path in (R + "node_graph/liquid/lattice.rs", P + "liquid_frame.rs",
+                     P + "liquid_solid_distance.rs", P + "shaders/liquid_solid_distance_body.wgsl"):
+            result = plan([path], users=lambda _: [P + "liquid_solid_distance.rs"],
+                          repo=self._repo_with(path))
+            self.assertIn("fluid_mesh_grid_native_", result.filters)
+            self.assertIn("mesh_contact_oblique_wall_and_thin_plate_match_cpu_reference", result.filters)
+            self.assertFalse(result.unmapped)
 
     def test_live_clock_and_duration_atoms_select_value_proofs(self):
         for name in ("gpu_flip_clock.rs", "shaders/gpu_flip_clock.wgsl"):

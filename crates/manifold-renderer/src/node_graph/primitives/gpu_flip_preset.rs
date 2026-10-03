@@ -465,11 +465,23 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     b.wires(domain, solid, &["bodies", "shapes", "atlas", "closed_faces", "body_count"]);
     b.wires(domain, solid, &LATTICE_WIRES);
     b.wire((domain, "body_rows"), solid, "rows");
+    // Whitewater remains on the simulation lattice. Surface and clamp share
+    // a separately sampled solid at the native half-cell mesh coordinates.
+    let solid = b.node("mesh_solid", "node.liquid_solid_distance", json!({"wall_inset": float(f64::from(crate::node_graph::liquid::lattice::SURFACE_PADDING_CELLS))}));
+    b.wires(domain, solid, &["bodies", "shapes", "atlas", "closed_faces", "body_count"]);
+    b.wire((domain, "cell_size"), solid, "cell_size");
+    for (source, target) in [
+        ("mesh_min_x", "lattice_min_x"), ("mesh_min_y", "lattice_min_y"), ("mesh_min_z", "lattice_min_z"),
+        ("mesh_nodes_x", "nodes_x"), ("mesh_nodes_y", "nodes_y"), ("mesh_nodes_z", "nodes_z"),
+    ] {
+        b.wire((domain, source), solid, target);
+    }
+    b.wire((domain, "body_rows"), solid, "rows");
     let source = b.node("whitewater_obstacle_source", "node.whitewater_obstacle_source", json!({}));
     b.wires(domain, source, &["bodies", "shapes", "atlas", "closed_faces", "body_count"]);
     b.wires(domain, source, &LATTICE_WIRES);
     b.wire((domain, "body_rows"), source, "rows");
-    let frame = b.node("frame", "node.liquid_frame", json!({"face_valid_layers": int(FACE_VALID_LAYERS as usize)}));
+    let frame = b.node("frame", "node.liquid_frame", json!({"face_valid_layers": int(FACE_VALID_LAYERS as usize), "native_mesh_grid": {"type": "Bool", "value": true}}));
     b.wire((state, "out"), frame, "particles");
     b.wire((state, "stats"), frame, "stats");
     b.wire((state, "interior"), frame, "interior");
@@ -537,7 +549,7 @@ fn built_by_water_def(node_id: &str) -> bool {
         || OBSTACLE_RENDER.contains(&node_id)
         || matches!(
             node_id,
-            "domain" | "initial_column" | "obstacle_transform" | "obstacle_collider" | "fill" | "state" | STEP_NODE | "stats" | "solid" | "whitewater_obstacle_source" | "frame" | "surface"
+            "domain" | "initial_column" | "obstacle_transform" | "obstacle_collider" | "fill" | "state" | STEP_NODE | "stats" | "solid" | "mesh_solid" | "whitewater_obstacle_source" | "frame" | "surface"
         )
 }
 
@@ -967,6 +979,39 @@ pub(super) mod tests {
     /// (`gpu_flip_dam_break_past_the_count_rail_is_refused`).
     const LATTICES: [usize; 6] = [16, 32, 48, 64, 96, 128];
 
+    #[test]
+    fn gpu_flip_mesh_grid_uses_native_solid_coordinates() {
+        for resolution in [8, 32, 64] {
+            let scene = WaterScene::dam_break(resolution).with_surface();
+            let geometry = scene.geometry();
+            let outputs = geometry.outputs();
+            let read = |name: &str| outputs.iter().find(|(port, _)| *port == name).unwrap().1;
+            let surface = geometry.setup.lattice.surface();
+            let def = water_def(scene);
+            let id = |name: &str| def.nodes.iter().find(|n| n.node_id.as_str() == name).unwrap().id;
+            let domain = id("domain");
+            let solid = id("mesh_solid");
+            let frame = id("frame");
+            assert!(matches!(def.nodes.iter().find(|n| n.id == frame).unwrap().params.get("native_mesh_grid"),
+                Some(manifold_core::effect_graph_def::SerializedParamValue::Bool { value: true })));
+            for (d, axis) in ["x", "y", "z"].into_iter().enumerate() {
+                assert_eq!(read(&format!("mesh_nodes_{axis}")), (resolution + 4) as f32);
+                assert_eq!(read(&format!("mesh_min_{axis}")), surface.min()[d]);
+                for (source, target) in [(format!("mesh_min_{axis}"), format!("lattice_min_{axis}")),
+                                         (format!("mesh_nodes_{axis}"), format!("nodes_{axis}"))] {
+                    assert!(def.wires.iter().any(|w| w.from_node == domain && w.to_node == solid
+                        && w.from_port == source && w.to_port == target));
+                }
+            }
+            assert!(def.wires.iter().any(|w| w.from_node == solid && w.to_node == frame
+                && w.from_port == "solid" && w.to_port == "solid"));
+            // Frame's surface() uses the same source rule; the simulation
+            // lattice continues to carry its original cells and padding.
+            assert_eq!(geometry.setup.lattice.cells(), [resolution as u32; 3]);
+            assert_eq!(geometry.setup.lattice.nodes(), [resolution as u32 + 7; 3]);
+        }
+    }
+
     /// Every running scene at every lattice, and the probes' variants, before
     /// any GPU run of it: the tick region's steps, the stats, the frame and
     /// the surface. The solves run inside each step, so the tick has no
@@ -1019,7 +1064,7 @@ pub(super) mod tests {
         let body: Vec<String> = region.steps.iter().map(|&step| name(step)).collect();
         assert_eq!(body.iter().filter(|node| *node == STEP_NODE).count(), 1, "the tick runs one step node");
         assert!(body.iter().any(|node| node == "stats"), "the stats run every tick");
-        let outside = ["domain", "fill", "solid", "frame", "initial_column"];
+        let outside = ["domain", "fill", "solid", "mesh_solid", "frame", "initial_column"];
         assert!(!body.iter().any(|node| outside.contains(&node.as_str()) || node.starts_with("surface")), "{body:?}");
     }
 

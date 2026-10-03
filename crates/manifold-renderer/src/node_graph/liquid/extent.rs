@@ -1027,13 +1027,9 @@ fn particle_volume(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     searched(x)?;
     brick_schedule(x, refined)?;
     if x.wired("interior") {
-        let padding = 1 + 2 * crate::node_graph::liquid::lattice::PADDING_NODES;
-        if nodes.iter().any(|&n| n <= padding as f32) {
-            return Err(x.uncovered("interior needs the padded liquid lattice".into()));
-        }
-        let bytes = nodes.iter().map(|&n| (n as u64) - u64::from(padding)).product::<u64>() * 4;
-        if x.bytes("interior") != Some(bytes) {
-            return Err(x.uncovered(format!("interior must hold exactly {bytes} bytes for the cell-centred lattice")));
+        let bytes = x.bytes("interior").unwrap_or(0);
+        if !bytes.is_multiple_of(4) || super::lattice::interior_cells(nodes.map(|n| n as u32), bytes / 4).is_none() {
+            return Err(x.uncovered("interior must hold exactly the native or solver physical cell count".into()));
         }
         x.covers("interior", bytes)?;
     }
@@ -1343,6 +1339,7 @@ fn liquid_stats(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 
 fn liquid_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let lattice = x.lattice()?;
+    let surface = super::lattice::frame_lattice(lattice, x.params());
     let mut interior_check = Ok(());
     if x.wired("interior") {
         let bytes = crate::node_graph::liquid::grid::interior_bytes(lattice.cells());
@@ -1360,7 +1357,7 @@ fn liquid_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     provide_frame_faces(x, &lattice, valid_layers);
     let count = x.count("count", 0.0)?;
     let particles = u64::from(count.max(1)) * PARTICLE;
-    let solid = lattice.solid_bytes();
+    let solid = surface.solid_bytes();
     let wired = x.wired("solid");
     x.hold(if wired { RING as u64 * solid } else { solid });
     x.provide("particles_a", particles);
@@ -1370,8 +1367,8 @@ fn liquid_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.hold(RING as u64 * particles);
     x.publish("count_a", count as f32);
     x.publish("count_b", count as f32);
-    x.publish_transform("grid_bounds", lattice.bounds());
-    for (port, n) in ["grid_nodes_x", "grid_nodes_y", "grid_nodes_z"].into_iter().zip(lattice.nodes()) {
+    x.publish_transform("grid_bounds", surface.bounds());
+    for (port, n) in ["grid_nodes_x", "grid_nodes_y", "grid_nodes_z"].into_iter().zip(surface.nodes()) {
         x.publish(port, n as f32);
     }
     x.covers("particles", u64::from(count) * PARTICLE)?;
@@ -1770,6 +1767,39 @@ mod tests {
     use crate::node_graph::matter::block_sort_box;
     use crate::node_graph::primitives::matter_domain::admit_lattice;
     use manifold_core::preset_def::PresetKind;
+
+    #[test]
+    fn liquid_mesh_grid_native_dispatch_extents_are_covered() {
+        for (size, resolution) in [(4.0, 64), (1.0, 8), (6.0, 32)] {
+            let layout = domain_layout(None, size, resolution).unwrap();
+            let mesh = LiquidLattice::from_layout(&layout).surface();
+            let solid_nodes = mesh.nodes().map(u64::from);
+            let solid_count = solid_nodes.into_iter().product::<u64>();
+            assert_eq!(mesh.solid_bytes(), solid_count * 4);
+            for scale in [1u64, 2, 3, 4] {
+                let nodes = solid_nodes.map(|n| (n - 1) * scale + 1);
+                let count = nodes.into_iter().product::<u64>();
+                let cells = nodes.map(|n| n - 1);
+                let cell_count = cells.into_iter().product::<u64>();
+                // Node dispatches (splat, smoothing, offsets, redistance,
+                // clamp) use count; MC dispatches use cell_count. The last
+                // MC cell's +1 corner is exactly the last allocated node.
+                let last_corner = cells[0] + nodes[0] * (cells[1] + nodes[1] * cells[2]);
+                assert_eq!(last_corner, count - 1);
+                assert!(count * 4 <= u64::from(u32::MAX));
+                assert!(cell_count * 15 <= u64::from(u32::MAX));
+                assert!(count <= count.div_ceil(256) * 256);
+                assert!(count.div_ceil(256) * 256 - count < 256);
+            }
+        }
+        // Walk actual producers and consumers with extent.rs, including
+        // provided solids, frame rings, sparse schedules and mesh outputs.
+        let (_, def) = liquid_presets().into_iter().find(|(id, _)| id == "WaterDamBreakGpuFlip").unwrap();
+        for resolution in [8, 32, 64] {
+            let report = check_preset_extents(def, resolution).unwrap();
+            assert!(report.checked > 20);
+        }
+    }
 
     /// Every bundled generator preset holding a liquid domain.
     fn liquid_presets() -> Vec<(String, &'static EffectGraphDef)> {
