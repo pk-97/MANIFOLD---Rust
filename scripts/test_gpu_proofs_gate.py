@@ -179,6 +179,7 @@ class GpuProofsGateTests(unittest.TestCase):
                 events.append(("hold-exit", label))
         out = io.StringIO()
         with contextlib.ExitStack() as stack:
+            stack.enter_context(patch.object(gate.gate_passes, "proof_pass", return_value=None))
             stack.enter_context(patch.object(sys, "argv", ["gpu_proofs_gate.py", *argv]))
             stack.enter_context(patch.object(gate, "run_gate", side_effect=fake_run_gate))
             stack.enter_context(patch.object(gate.subprocess, "run", side_effect=fake_build))
