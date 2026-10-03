@@ -8,7 +8,6 @@
 use manifold_gpu::GpuBuffer;
 
 use crate::node_graph::effect_node::EffectNodeContext;
-use crate::node_graph::fluid::TICK;
 use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
 use crate::node_graph::matter::{
     MatterGridNode, MatterPoint, MatterTickStats, REACTION_WORDS, STATS_WORDS, grid_accum_bytes, grid_bytes,
@@ -208,7 +207,11 @@ impl Primitive for MatterState {
         self.submitted_time = f64::from(ctx.scalar_or_param("simulation_time", 0.0));
         let target = f64::from(ctx.scalar_or_param("target_time", self.submitted_time as f32));
         self.submitted_cap = ctx.scalar_or_param("step_cap_hit", 0.0) > 0.0;
-        let interval_duration = ctx.scalar_or_param("interval_duration", TICK as f32);
+        // A graph saved without the domain's interval wire runs on the project's Sim Rate.
+        let interval_duration = ctx.scalar_or_param(
+            "interval_duration",
+            crate::node_graph::physics::simulation_interval() as f32,
+        );
         let ticks = whole(ctx.scalar_or_param("ticks", 0.0));
         let substeps = whole(ctx.scalar_or_param("substeps_per_tick", 1.0)).max(1);
         let epoch = whole(ctx.scalar_or_param("epoch", 0.0));

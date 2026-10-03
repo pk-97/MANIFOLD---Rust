@@ -32,6 +32,27 @@ fn turbulence_emission_count_uses_duration_and_rounds_each_tick() {
     assert_eq!(emission_count(1.0, [0.0, 1.0], [175.0; 2], 1.0, 8.0, 3.0, 1.0 / 30.0), 18);
 }
 
+/// A second of full-potential emission keeps the authored per-second rate at
+/// every Sim Rate: each step rounds its own count, so `hz` steps land within
+/// half a particle a step of it.
+#[test]
+fn emission_per_second_holds_at_every_sim_rate() {
+    use super::emission_count::WAVECREST_RATE;
+    for rate in manifold_physics::SimRate::ALL {
+        let dt = rate.interval() as f32;
+        let emitted: u32 = (0..rate.hz())
+            .map(|_| emission_count(1.0, [1.0, 1.0], [WAVECREST_RATE; 2], 1.0, 8.0, 1.0, dt))
+            .sum();
+        let authored = 2.0 * WAVECREST_RATE;
+        let rounding = rate.hz() as f32 / 2.0;
+        assert!(
+            (emitted as f32 - authored).abs() <= rounding,
+            "{} Hz: {emitted} particles in a second against {authored} authored",
+            rate.hz()
+        );
+    }
+}
+
 #[test]
 fn whitewater_new_emitter_atoms_generate_valid_wgsl() {
     fn check<P: crate::node_graph::primitive::Primitive>() {
