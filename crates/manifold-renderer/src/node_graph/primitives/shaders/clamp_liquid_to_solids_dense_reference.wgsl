@@ -1,3 +1,4 @@
+// Test-only pre-brick dense reference, main 4aab34f86.
 // node.clamp_liquid_to_solids — fusable BUFFER body; `levelset` is read at
 // the thread's own node, `solid` is gathered. One thread per level-set node:
 // border nodes read band (1/3 bin, outside), nodes inside a solid read at
@@ -39,7 +40,6 @@ fn body(
     solid_nodes_y: f32,
     solid_nodes_z: f32,
     cell_size: f32,
-    brick_pass: u32,
 ) -> f32 {
     let lattice = vec3<f32>(nodes_x, nodes_y, nodes_z);
     let solid_lattice = vec3<f32>(solid_nodes_x, solid_nodes_y, solid_nodes_z);
@@ -55,7 +55,6 @@ fn body(
     if any(ijk == vec3<u32>(0u)) || any(ijk == nodes - vec3<u32>(1u)) {
         return cell_size / 3.0;
     }
-    if brick_pass == 2u { return e_levelset; }
     let size = vec3<f32>(size_x, size_y, size_z);
     let lattice_min = vec3<f32>(center_x, center_y, center_z) - 0.5 * size;
     let p = lattice_min + vec3<f32>(ijk) * size / vec3<f32>(nodes - vec3<u32>(1u));
@@ -64,9 +63,4 @@ fn body(
         return max(e_levelset, 0.0);
     }
     return e_levelset;
-}
-
-fn liquid_brick_index(invocation: u32) -> u32 {
-    let dims = vec3<u32>(vec3<f32>(params.nodes_x, params.nodes_y, params.nodes_z));
-    return liquid_brick_select(invocation, dims, params.brick_pass);
 }

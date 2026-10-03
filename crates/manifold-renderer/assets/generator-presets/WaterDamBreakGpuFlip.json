@@ -625,6 +625,18 @@
             "id": 19,
             "nodeId": "liquid_relax_2",
             "typeId": "node.relax_surface_mesh"
+          },
+          {
+            "handle": "Occupied Bricks",
+            "id": 20,
+            "nodeId": "liquid_bricks",
+            "params": {
+              "resolution_scale": {
+                "type": "Int",
+                "value": 2
+              }
+            },
+            "typeId": "node.lattice_bricks"
           }
         ],
         "wires": [
@@ -1299,6 +1311,156 @@
             "fromPort": "out",
             "toNode": 14,
             "toPort": "passes"
+          },
+          {
+            "fromNode": 4,
+            "fromPort": "out",
+            "toNode": 20,
+            "toPort": "cell_size"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "cell_ranges",
+            "toNode": 20,
+            "toPort": "cell_ranges"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "bins_x",
+            "toNode": 20,
+            "toPort": "bins_x"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "bins_y",
+            "toNode": 20,
+            "toPort": "bins_y"
+          },
+          {
+            "fromNode": 5,
+            "fromPort": "bins_z",
+            "toNode": 20,
+            "toPort": "bins_z"
+          },
+          {
+            "fromNode": 6,
+            "fromPort": "blobs",
+            "toNode": 20,
+            "toPort": "blobs"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "solid",
+            "toNode": 20,
+            "toPort": "solid"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "nodes_x",
+            "toNode": 20,
+            "toPort": "nodes_x"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "nodes_y",
+            "toNode": 20,
+            "toPort": "nodes_y"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "nodes_z",
+            "toNode": 20,
+            "toPort": "nodes_z"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "pos_x",
+            "toNode": 20,
+            "toPort": "center_x"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "scale_x",
+            "toNode": 20,
+            "toPort": "size_x"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "pos_y",
+            "toNode": 20,
+            "toPort": "center_y"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "scale_y",
+            "toNode": 20,
+            "toPort": "size_y"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "pos_z",
+            "toNode": 20,
+            "toPort": "center_z"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "scale_z",
+            "toNode": 20,
+            "toPort": "size_z"
+          },
+          {
+            "fromNode": 20,
+            "fromPort": "bricks",
+            "toNode": 7,
+            "toPort": "bricks"
+          },
+          {
+            "fromNode": 20,
+            "fromPort": "bricks",
+            "toNode": 8,
+            "toPort": "bricks"
+          },
+          {
+            "fromNode": 20,
+            "fromPort": "bricks",
+            "toNode": 12,
+            "toPort": "bricks"
+          },
+          {
+            "fromNode": 20,
+            "fromPort": "bricks",
+            "toNode": 13,
+            "toPort": "bricks"
+          },
+          {
+            "fromNode": 20,
+            "fromPort": "bricks",
+            "toNode": 14,
+            "toPort": "bricks"
+          },
+          {
+            "fromNode": 20,
+            "fromPort": "bricks",
+            "toNode": 16,
+            "toPort": "bricks"
+          },
+          {
+            "fromNode": 20,
+            "fromPort": "bricks",
+            "toNode": 10,
+            "toPort": "bricks"
+          },
+          {
+            "fromNode": 20,
+            "fromPort": "bricks",
+            "toNode": 18,
+            "toPort": "bricks"
+          },
+          {
+            "fromNode": 20,
+            "fromPort": "bricks",
+            "toNode": 19,
+            "toPort": "bricks"
           }
         ]
       },
@@ -2495,6 +2657,20 @@
           "kind": "node",
           "nodeId": "whitewater_budget",
           "param": "value"
+        }
+      },
+      {
+        "convert": {
+          "type": "IntRound"
+        },
+        "defaultValue": 0.0,
+        "id": "surface_detail",
+        "label": "Surface Detail",
+        "offset": 2.0,
+        "target": {
+          "kind": "node",
+          "nodeId": "liquid_bricks",
+          "param": "resolution_scale"
         }
       }
     ],

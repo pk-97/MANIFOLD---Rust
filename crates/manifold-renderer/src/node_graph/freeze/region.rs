@@ -1205,6 +1205,12 @@ pub(crate) fn classify_node(
     if n.wgsl_body().is_none() {
         return NodeClass::Boundary;
     }
+    // Cell-owned outputs and sparse buffer-indexed dispatches have a runtime
+    // schedule that the fused region wrapper cannot preserve. Keep them as
+    // standalone generated kernels, including their unwired dense schedules.
+    if !n.owned_outputs().is_empty() || n.buffer_index().is_some() {
+        return NodeClass::Boundary;
+    }
 
     // Register-heavy body (a bespoke inlined simplex): fusing it raises the
     // whole kernel's register pressure past the occupancy cliff, so the fused
@@ -1541,6 +1547,9 @@ fn classify_buffer_node(
     def: &EffectGraphDef,
     registry: &PrimitiveRegistry,
 ) -> NodeClass {
+    if !n.owned_outputs().is_empty() || n.buffer_index().is_some() {
+        return NodeClass::Boundary;
+    }
     let arr_in = n.inputs().iter().filter(|i| matches!(i.ty, PortType::Array(_))).count();
     let arr_out = n.outputs().iter().filter(|o| matches!(o.ty, PortType::Array(_))).count();
     // Any atomic output — a scatter's sole output, or a side output next to a

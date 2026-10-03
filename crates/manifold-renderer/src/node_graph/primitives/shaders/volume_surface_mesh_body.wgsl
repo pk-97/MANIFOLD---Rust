@@ -1,9 +1,9 @@
-// node.volume_surface_mesh — fusable BUFFER body, GATHER. One thread per
-// output vertex (GPU_FLUID_SURFACE_DESIGN.md D16): binary-search the running
-// total for the cell that owns triangle idx / 3, look the edge up in the
-// marching-cubes table, interpolate the crossing and the gradient normal.
-// Past the live total the vertex is zero (the zeroed-tail contract); a total
-// past capacity makes the whole mesh empty (the node reports it next frame).
+// node.volume_surface_mesh — standalone BUFFER body with cell-owned output.
+// One thread owns one cell and writes that cell's disjoint scan interval.
+// This preserves the inclusive scan's triangle order while removing the
+// per-vertex binary search. Each cell caches its twelve edge vertices so a
+// triangle's repeated edge references perform the interpolation and gradient
+// arithmetic once, in the same order as the dense vertex oracle.
 //
 // ABI: `levelset` (f32) and `scan` (u32, inclusive running total of per-cell
 // triangle counts) are gathered; the output MeshVertex is Element. Attributes
@@ -26,56 +26,15 @@ fn vsm_gradient(p: vec3<u32>, nodes: vec3<u32>, spacing: vec3<f32>) -> vec3<f32>
     );
 }
 
-fn body(
-    idx: u32,
-    count: u32,
-    center_x: f32,
-    center_y: f32,
-    center_z: f32,
-    size_x: f32,
-    size_y: f32,
-    size_z: f32,
-    nodes_x: f32,
-    nodes_y: f32,
-    nodes_z: f32,
+fn vsm_edge(
+    cell: vec3<u32>,
+    edge: u32,
+    nodes: vec3<u32>,
+    spacing: vec3<f32>,
+    lattice_min: vec3<f32>,
+    size: vec3<f32>,
     resolution_scale: i32,
-    max_capacity: i32,
 ) -> Element {
-    let zero = Element(vec3<f32>(0.0), vec3<f32>(0.0), vec2<f32>(0.0), vec2<f32>(0.0), vec4<f32>(0.0), vec4<f32>(0.0));
-    // Fewer than two nodes on an axis: no lattice yet, an empty mesh.
-    if min(min(nodes_x, nodes_y), nodes_z) < 2.0 {
-        return zero;
-    }
-    let nodes = vec3<u32>(vec3<f32>(nodes_x, nodes_y, nodes_z));
-    let cells = nodes - vec3<u32>(1u);
-    let cell_total = cells.x * cells.y * cells.z;
-    let triangles = buf_scan[cell_total - 1u];
-    if triangles > count / 3u || idx >= triangles * 3u {
-        return zero;
-    }
-    let triangle = idx / 3u;
-    var lo = 0u;
-    var hi = cell_total - 1u;
-    loop {
-        if lo >= hi {
-            break;
-        }
-        let mid = (lo + hi) / 2u;
-        if buf_scan[mid] > triangle {
-            hi = mid;
-        } else {
-            lo = mid + 1u;
-        }
-    }
-    let cell_index = lo;
-    var first = 0u;
-    if cell_index > 0u {
-        first = buf_scan[cell_index - 1u];
-    }
-    let cell = vec3<u32>(cell_index % cells.x, (cell_index / cells.x) % cells.y, cell_index / (cells.x * cells.y));
-    let edge = mc_edge(mc_case(cell, nodes), (triangle - first) * 3u + idx % 3u);
-    // Interpolate every lattice edge from its lower-indexed node, so the two
-    // cells that share it produce bit-identical vertices (no hairline gaps).
     var a = cell + MC_CORNERS[MC_EDGE_A[edge]];
     var b = cell + MC_CORNERS[MC_EDGE_B[edge]];
     if mc_node(b, nodes) < mc_node(a, nodes) {
@@ -86,10 +45,6 @@ fn body(
     let phi_a = vsm_phi(a, nodes);
     let phi_b = vsm_phi(b, nodes);
     let mu = clamp(phi_a / (phi_a - phi_b), 0.0, 1.0);
-
-    let size = vec3<f32>(size_x, size_y, size_z);
-    let lattice_min = vec3<f32>(center_x, center_y, center_z) - 0.5 * size;
-    let spacing = size / vec3<f32>(cells);
     let position = lattice_min + mix(vec3<f32>(a), vec3<f32>(b), mu) * spacing;
     var normal = mix(vsm_gradient(a, nodes, spacing), vsm_gradient(b, nodes, spacing), mu);
     let length_squared = dot(normal, normal);
@@ -104,4 +59,91 @@ fn body(
     let domain_size = size - 3.0 * cell_size;
     let uv = (position.xz - domain_min.xz) / domain_size.xz;
     return Element(position, normal, uv, vec2<f32>(0.0), vec4<f32>(0.0), vec4<f32>(1.0));
+}
+
+fn body(
+    idx: u32,
+    count: u32,
+    center_x: f32,
+    center_y: f32,
+    center_z: f32,
+    size_x: f32,
+    size_y: f32,
+    size_z: f32,
+    nodes_x: f32,
+    nodes_y: f32,
+    nodes_z: f32,
+    resolution_scale: i32,
+    max_capacity: i32,
+    brick_pass: u32,
+) {
+    let zero = Element(
+        vec3<f32>(0.0),
+        vec3<f32>(0.0),
+        vec2<f32>(0.0),
+        vec2<f32>(0.0),
+        vec4<f32>(0.0),
+        vec4<f32>(0.0),
+    );
+    if brick_pass == 2u {
+        var live = 0u;
+        if min(min(nodes_x, nodes_y), nodes_z) >= 2.0 {
+            let clear_nodes = vec3<u32>(vec3<f32>(nodes_x, nodes_y, nodes_z));
+            let clear_cells = clear_nodes - vec3<u32>(1u);
+            let clear_total = clear_cells.x * clear_cells.y * clear_cells.z;
+            let triangles = buf_scan[clear_total - 1u];
+            if triangles <= u32(max_capacity) / 3u {
+                live = triangles * 3u;
+            }
+        }
+        if idx >= live {
+            buf_vertices[idx] = zero;
+        }
+        return;
+    }
+    // Fewer than two nodes on an axis: no lattice yet, an empty mesh.
+    if min(min(nodes_x, nodes_y), nodes_z) < 2.0 {
+        return;
+    }
+    let nodes = vec3<u32>(vec3<f32>(nodes_x, nodes_y, nodes_z));
+    let cells = nodes - vec3<u32>(1u);
+    let cell_total = cells.x * cells.y * cells.z;
+    if idx >= count || idx >= cell_total {
+        return;
+    }
+    let total_triangles = buf_scan[cell_total - 1u];
+    if total_triangles > u32(max_capacity) / 3u {
+        return;
+    }
+    let cell_index = idx;
+    var first = 0u;
+    if cell_index > 0u {
+        first = buf_scan[cell_index - 1u];
+    }
+    let cell = vec3<u32>(cell_index % cells.x, (cell_index / cells.x) % cells.y, cell_index / (cells.x * cells.y));
+    let case_index = mc_case(cell, nodes);
+    let triangles = MC_TRIANGLE_COUNT[case_index];
+    if triangles == 0u {
+        return;
+    }
+    let size = vec3<f32>(size_x, size_y, size_z);
+    let lattice_min = vec3<f32>(center_x, center_y, center_z) - 0.5 * size;
+    let spacing = size / vec3<f32>(cells);
+    var edge_cache: array<Element, 12>;
+    var edge_ready: array<bool, 12>;
+    for (var e = 0u; e < 12u; e = e + 1u) {
+        edge_ready[e] = false;
+    }
+    for (var t = 0u; t < triangles; t = t + 1u) {
+        for (var corner = 0u; corner < 3u; corner = corner + 1u) {
+            let edge = mc_edge(case_index, t * 3u + corner);
+            if !edge_ready[edge] {
+                edge_cache[edge] = vsm_edge(
+                    cell, edge, nodes, spacing, lattice_min, size, resolution_scale,
+                );
+                edge_ready[edge] = true;
+            }
+            buf_vertices[(first + t) * 3u + corner] = edge_cache[edge];
+        }
+    }
 }

@@ -1,8 +1,8 @@
 //! `node.volume_surface_mesh` — the marching-cubes triangle list of a level
-//! set, one thread per output vertex (GPU_FLUID_SURFACE_DESIGN.md D16). It
-//! feeds `node.scene_object.vertices` exactly as the CPU fluid mesh does. A
+//! set, one cell-owned thread per lattice cell. It feeds
+//! `node.scene_object.vertices` exactly as the CPU fluid mesh does. A
 //! per-element gather on the codegen path. With `extent` wired it dispatches
-//! only over live and last frame's vertices and publishes the live extent
+//! only over live and last frame's cells and publishes the live extent
 //! (GPU_FLUID_SURFACE_DESIGN.md P6b).
 //!
 //! The node owns its vertex buffer and grows it from the late triangle total
@@ -15,7 +15,7 @@ use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuBuffer};
 
 use super::count_surface_triangles::MARCHING_CUBES_COMMON;
-use super::running_total::EXTENT_GRID_OFFSET;
+use super::liquid_bricks;
 use super::sort_particles_into_cells::float_param;
 use super::standalone_pipeline::standalone_pipeline;
 use crate::generators::mesh_common::MeshVertex;
@@ -52,7 +52,9 @@ struct MeshUniforms {
     nodes_z: f32,
     resolution_scale: i32,
     max_capacity: i32,
+    brick_pass: u32,
     dispatch_count: u32,
+    _pad: [u32; 3],
 }
 
 /// The first buffer's capacity in vertices, whole triangles: Starting Mesh
@@ -94,17 +96,22 @@ pub(crate) fn grown_capacity(late_triangles: f32, slots: u32) -> Option<u64> {
         return None;
     }
     let wanted = (needed * BOUND_HEADROOM).ceil() as u64;
-    Some((wanted.div_ceil(BOUND_GRAIN) * BOUND_GRAIN).min(INDEXABLE_VERTICES).max(u64::from(slots)))
+    Some(
+        (wanted.div_ceil(BOUND_GRAIN) * BOUND_GRAIN)
+            .min(INDEXABLE_VERTICES)
+            .max(u64::from(slots)),
+    )
 }
 
 crate::primitive! {
     name: VolumeSurfaceMesh,
     type_id: "node.volume_surface_mesh",
-    purpose: "Build the triangle-list mesh of a level set's zero crossing (marching cubes): one output vertex per thread, placed by binary search over the running total of per-cell triangle counts, with a gradient normal pointing outward. Slots past the live triangles are zero. The vertex buffer starts at max_capacity (0: the lattice's box surface) and grows from the late triangle total; a frame whose surface outruns the buffer is an empty mesh and a named error, and the buffer grows.",
+    purpose: "Build the triangle-list mesh of a level set's zero crossing (marching cubes): each lattice cell owns its inclusive scan interval, caches its twelve edge vertices, and emits the existing triangle table order with gradient normals pointing outward. Slots past the live triangles are zero. The vertex buffer starts at max_capacity (0: the lattice's box surface) and grows from the late triangle total; a frame whose surface outruns the buffer is an empty mesh and a named error, and the buffer grows.",
     inputs: {
         levelset: Array(f32) required,
         scan: Array(u32) required,
         extent: Array(u32) optional,
+        bricks: Array(u32) optional,
         total: ScalarF32 optional,
         center_x: ScalarF32 optional, center_y: ScalarF32 optional, center_z: ScalarF32 optional,
         size_x: ScalarF32 optional, size_y: ScalarF32 optional, size_z: ScalarF32 optional,
@@ -150,8 +157,11 @@ crate::primitive! {
     aliases: ["marching cubes", "isosurface", "polygonize", "surface mesh", "liquid mesh"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/volume_surface_mesh_body.wgsl"),
-    input_access: [BufferGather, BufferGather, BufferGather],
-    wgsl_includes: [MARCHING_CUBES_COMMON],
+    input_access: [BufferGather, BufferGather, BufferGather, BufferGather],
+    derived_uniforms: ["brick_pass:u32"],
+    wgsl_includes: [MARCHING_CUBES_COMMON, liquid_bricks::COMMON],
+    owned_outputs: ["vertices"],
+    buffer_index: "liquid_cell_brick_index",
     extra_fields: {
         // The vertex buffer this node owns and publishes.
         mesh: Option<GpuBuffer> = None,
@@ -169,7 +179,8 @@ fn vertex_bound(late_triangles: f32, slots: u32) -> u32 {
     if !late_triangles.is_finite() {
         return slots;
     }
-    let wanted = (f64::from(late_triangles.max(0.0)) * 3.0 * BOUND_HEADROOM).ceil() as u64 + BOUND_GRAIN;
+    let wanted =
+        (f64::from(late_triangles.max(0.0)) * 3.0 * BOUND_HEADROOM).ceil() as u64 + BOUND_GRAIN;
     (wanted.div_ceil(BOUND_GRAIN) * BOUND_GRAIN).min(u64::from(slots)) as u32
 }
 
@@ -177,9 +188,16 @@ impl VolumeSurfaceMesh {
     /// Grow the buffer to the start capacity (it rises with the lattice) or
     /// what the late total asks for. Grow-only; a refused allocation keeps
     /// the current buffer.
-    fn ensure_capacity(&mut self, ctx: &mut EffectNodeContext<'_, '_>, total: f32, nodes: [f32; 3]) {
+    fn ensure_capacity(
+        &mut self,
+        ctx: &mut EffectNodeContext<'_, '_>,
+        total: f32,
+        nodes: [f32; 3],
+    ) {
         let current = self.mesh.as_ref().map_or(0, |mesh| emit_slots(mesh.size));
-        let wanted = grown_capacity(total, current).unwrap_or(0).max(start_capacity(ctx.params, nodes));
+        let wanted = grown_capacity(total, current)
+            .unwrap_or(0)
+            .max(start_capacity(ctx.params, nodes));
         if wanted <= u64::from(current) {
             return;
         }
@@ -211,7 +229,12 @@ impl Primitive for VolumeSurfaceMesh {
     }
 
     /// Provided storage: a one-triangle hint, sized from the surface at run time.
-    fn array_output_capacity(&self, port: &str, _params: &ParamValues, _: &[(&str, u32)]) -> Option<u32> {
+    fn array_output_capacity(
+        &self,
+        port: &str,
+        _params: &ParamValues,
+        _: &[(&str, u32)],
+    ) -> Option<u32> {
         (port == "vertices").then_some(3)
     }
 
@@ -232,27 +255,53 @@ impl Primitive for VolumeSurfaceMesh {
         }
         let [center_x, center_y, center_z] =
             ["center_x", "center_y", "center_z"].map(|name| ctx.scalar_or_param(name, 0.0));
-        let [size_x, size_y, size_z] = ["size_x", "size_y", "size_z"].map(|name| ctx.scalar_or_param(name, 4.0));
-        let nodes = ["nodes_x", "nodes_y", "nodes_z"].map(|name| ctx.scalar_or_param(name, 2.0).round());
+        let [size_x, size_y, size_z] =
+            ["size_x", "size_y", "size_z"].map(|name| ctx.scalar_or_param(name, 4.0));
+        let nodes =
+            ["nodes_x", "nodes_y", "nodes_z"].map(|name| ctx.scalar_or_param(name, 2.0).round());
         self.ensure_capacity(ctx, total, nodes);
         let resolution_scale = match ctx.params.get("resolution_scale") {
             Some(ParamValue::Float(n)) => n.round().clamp(1.0, 8.0) as i32,
             _ => 2,
         };
-        let (Some(levelset), Some(scan), Some(vertices)) =
-            (ctx.inputs.array("levelset"), ctx.inputs.array("scan"), self.mesh.as_ref())
-        else {
+        let (Some(levelset), Some(scan), Some(vertices)) = (
+            ctx.inputs.array("levelset"),
+            ctx.inputs.array("scan"),
+            self.mesh.as_ref(),
+        ) else {
             return;
         };
-        let cells: u64 = nodes.iter().map(|&n| n.max(2.0) as u64 - 1).product();
-        let node_total: u64 = nodes.iter().map(|&n| n.max(2.0) as u64).product();
+        let dimensions = nodes.map(|n| n.max(2.0) as u64);
+        let Some(node_total) = dimensions
+            .into_iter()
+            .try_fold(1u64, |total, n| total.checked_mul(n))
+        else {
+            ctx.error("Volume Surface Mesh: lattice node count overflows the dispatch index");
+            return;
+        };
+        let Some(cells) = nodes
+            .map(|n| n.max(2.0) as u64 - 1)
+            .into_iter()
+            .try_fold(1u64, |total, n| total.checked_mul(n))
+        else {
+            ctx.error("Volume Surface Mesh: lattice cell count overflows the dispatch index");
+            return;
+        };
         let lattice = nodes.iter().all(|&n| n >= 2.0);
         if lattice && (node_total > levelset.size / 4 || cells > scan.size / 4) {
-            ctx.error("Volume Surface Mesh: the lattice is larger than its level set or running total");
+            ctx.error(
+                "Volume Surface Mesh: the lattice is larger than its level set or running total",
+            );
             return;
         }
         // The kernel writes vertex idx only below this; it is the buffer's own size.
         let slots = emit_slots(vertices.size);
+        let Ok(dispatch_cells) = u32::try_from(cells) else {
+            ctx.error(format!(
+                "Volume Surface Mesh: {cells} cells is more than one dispatch carries"
+            ));
+            return;
+        };
         let extent = ctx.inputs.array("extent");
         // A new vertex buffer holds unknown bytes: write every slot once.
         let fresh = vertices.identity_key() != self.emit_target;
@@ -260,12 +309,21 @@ impl Primitive for VolumeSurfaceMesh {
             self.emit_target = vertices.identity_key();
             self.frames = 0;
         }
-        let bound = if self.frames < 2 { slots } else { vertex_bound(total, slots) };
+        let bound = if self.frames < 2 {
+            slots
+        } else {
+            vertex_bound(total, slots)
+        };
         self.frames = self.frames.saturating_add(1);
         if let Some(extent) = extent {
             ctx.outputs.set_live_extent(
                 "vertices",
-                LiveExtent { counts: extent.clone(), offset: 0, per_item: 3, bound },
+                LiveExtent {
+                    counts: extent.clone(),
+                    offset: 0,
+                    per_item: 3,
+                    bound,
+                },
             );
         }
         let uniforms = MeshUniforms {
@@ -280,34 +338,120 @@ impl Primitive for VolumeSurfaceMesh {
             nodes_z: nodes[2],
             resolution_scale,
             max_capacity: slots as i32,
+            brick_pass: 0,
+            dispatch_count: dispatch_cells,
+            _pad: [0; 3],
+        };
+        let bricks = ctx.inputs.array("bricks");
+        if bricks
+            .is_some_and(|b| !liquid_bricks::valid_schedule(b, nodes.map(|n| n.max(2.0) as u32)))
+        {
+            ctx.error("Liquid surface mesh: brick schedule does not match the lattice");
+            return;
+        }
+        let gpu = ctx.gpu_encoder();
+        let pipeline = self.pipeline.as_ref().expect("pipeline built above");
+        let clear_uniforms = MeshUniforms {
+            brick_pass: 2,
             dispatch_count: slots,
+            ..uniforms
+        };
+        let clear_bindings = [
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&clear_uniforms),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: levelset,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: scan,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: extent.unwrap_or(scan),
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 4,
+                buffer: bricks.unwrap_or(scan),
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 5,
+                buffer: vertices,
+                offset: 0,
+            },
+        ];
+        if let Some(extent) = extent.filter(|_| !fresh) {
+            gpu.native_enc.dispatch_compute_indirect(
+                pipeline,
+                &clear_bindings,
+                extent,
+                super::running_total::EXTENT_GRID_OFFSET,
+                "node.volume_surface_mesh.clear_tail",
+            );
+        } else {
+            liquid_bricks::dispatch(
+                gpu.native_enc,
+                pipeline,
+                &clear_bindings,
+                bricks,
+                2,
+                slots,
+                "node.volume_surface_mesh.clear",
+            );
+        }
+        let brick_pass = u32::from(bricks.is_some());
+        let uniforms = MeshUniforms {
+            brick_pass,
+            dispatch_count: dispatch_cells,
+            ..uniforms
         };
         let bindings = [
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-            GpuBinding::Buffer { binding: 1, buffer: levelset, offset: 0 },
-            GpuBinding::Buffer { binding: 2, buffer: scan, offset: 0 },
-            GpuBinding::Buffer { binding: 3, buffer: extent.unwrap_or(scan), offset: 0 },
-            GpuBinding::Buffer { binding: 4, buffer: vertices, offset: 0 },
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&uniforms),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: levelset,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: scan,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: extent.unwrap_or(scan),
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 4,
+                buffer: bricks.unwrap_or(scan),
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 5,
+                buffer: vertices,
+                offset: 0,
+            },
         ];
-        let pipeline = self.pipeline.as_ref().expect("pipeline built above");
-        let gpu = ctx.gpu_encoder();
-        match extent {
-            // The running total's grid covers this frame's and last frame's
-            // vertices: live ones are written, the rest cleared.
-            Some(extent) if !fresh => gpu.native_enc.dispatch_compute_indirect(
-                pipeline,
-                &bindings,
-                extent,
-                EXTENT_GRID_OFFSET,
-                "node.volume_surface_mesh",
-            ),
-            _ => gpu.native_enc.dispatch_compute(
-                pipeline,
-                &bindings,
-                [slots.div_ceil(256), 1, 1],
-                "node.volume_surface_mesh",
-            ),
-        }
+        liquid_bricks::dispatch(
+            gpu.native_enc,
+            pipeline,
+            &bindings,
+            bricks,
+            brick_pass,
+            dispatch_cells,
+            "node.volume_surface_mesh",
+        );
     }
 }
 
@@ -327,28 +471,49 @@ mod tests {
             // Marching cubes places at most five triangles per cell.
             let worst = (cells * 5) as f32;
             let lattice = [nodes as f32; 3];
-            let mut slots = emit_slots(start_capacity(&ParamValues::default(), lattice) * VERTEX_BYTES);
+            let mut slots =
+                emit_slots(start_capacity(&ParamValues::default(), lattice) * VERTEX_BYTES);
             let mut steps = 0;
             let mut late = 1.0f32;
             while late <= worst {
                 if let Some(target) = grown_capacity(late, slots) {
-                    assert!(target > u64::from(slots) || target == INDEXABLE_VERTICES, "grid {resolution}: grows");
+                    assert!(
+                        target > u64::from(slots) || target == INDEXABLE_VERTICES,
+                        "grid {resolution}: grows"
+                    );
                     let bytes = target * VERTEX_BYTES;
                     slots = emit_slots(bytes);
-                    assert!(u64::from(slots) * VERTEX_BYTES <= bytes, "grid {resolution}: slots past the buffer");
-                    assert!(slots as i32 >= 0 && slots.is_multiple_of(3), "grid {resolution}: {slots}");
+                    assert!(
+                        u64::from(slots) * VERTEX_BYTES <= bytes,
+                        "grid {resolution}: slots past the buffer"
+                    );
+                    assert!(
+                        slots as i32 >= 0 && slots.is_multiple_of(3),
+                        "grid {resolution}: {slots}"
+                    );
                     steps += 1;
                 }
                 // The kernel's last thread: idx < dispatch_count = slots.
                 let grid_threads = u64::from(slots).div_ceil(256) * 256;
-                assert!(grid_threads - 1 < u64::from(u32::MAX), "grid {resolution}: thread index wraps");
+                assert!(
+                    grid_threads - 1 < u64::from(u32::MAX),
+                    "grid {resolution}: thread index wraps"
+                );
                 if f64::from(late) * 3.0 <= f64::from(slots) * GROW_AT {
-                    assert!(f64::from(late) * 3.0 <= f64::from(slots), "grid {resolution}: fits without growing");
+                    assert!(
+                        f64::from(late) * 3.0 <= f64::from(slots),
+                        "grid {resolution}: fits without growing"
+                    );
                 }
                 late *= 1.5;
             }
-            assert!(steps > 0, "grid {resolution}: the worst case grows the buffer");
-            println!("grid {resolution}: worst {worst} triangles, {steps} growths, final {slots} vertices");
+            assert!(
+                steps > 0,
+                "grid {resolution}: the worst case grows the buffer"
+            );
+            println!(
+                "grid {resolution}: worst {worst} triangles, {steps} growths, final {slots} vertices"
+            );
         }
     }
 
@@ -356,7 +521,11 @@ mod tests {
     fn growth_is_none_while_the_surface_fits() {
         assert_eq!(grown_capacity(0.0, 300), None);
         assert_eq!(grown_capacity(f32::NAN, 300), None);
-        assert_eq!(grown_capacity(66.0, 300), None, "198 of 300 vertices is under two thirds");
+        assert_eq!(
+            grown_capacity(66.0, 300),
+            None,
+            "198 of 300 vertices is under two thirds"
+        );
         let grown = grown_capacity(67.0, 300).expect("201 of 300 crowds it");
         assert_eq!(grown % BOUND_GRAIN, 0);
         assert!(grown >= 2 * 201);
@@ -366,7 +535,54 @@ mod tests {
     fn emit_slots_never_pass_the_buffer() {
         for bytes in [0u64, 79, 80, 239, 240, 241, 80 * 1000 + 5] {
             let slots = u64::from(emit_slots(bytes));
-            assert!(slots * VERTEX_BYTES <= bytes && slots.is_multiple_of(3),"{bytes} bytes: {slots}");
+            assert!(
+                slots * VERTEX_BYTES <= bytes && slots.is_multiple_of(3),
+                "{bytes} bytes: {slots}"
+            );
         }
+    }
+
+    #[test]
+    fn cell_owned_scan_intervals_are_disjoint_and_preserve_triangle_order() {
+        let counts = [0u32, 2, 1, 4, 0, 3];
+        let mut cursor = 0u32;
+        let mut intervals = Vec::new();
+        for count in counts {
+            let start = cursor;
+            cursor += count * 3;
+            intervals.push((start, cursor));
+        }
+        for pair in intervals.windows(2) {
+            assert_eq!(pair[0].1, pair[1].0);
+        }
+        assert_eq!(cursor, 30);
+        assert_eq!(intervals[1], (0, 6));
+        assert_eq!(intervals[3], (9, 21));
+        assert_eq!(intervals[5], (21, 30));
+    }
+
+    #[test]
+    fn cell_owned_mesh_codegen_has_no_vertex_binary_search() {
+        assert_eq!(
+            std::mem::size_of::<MeshUniforms>(),
+            16 * std::mem::size_of::<u32>()
+        );
+        let source = crate::node_graph::freeze::codegen::standalone_for_spec::<VolumeSurfaceMesh>()
+            .expect("cell-owned mesh standalone codegen");
+        let module =
+            naga::front::wgsl::parse_str(&source).expect("generated mesh kernel must parse");
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .expect("generated mesh kernel must validate");
+        assert!(!source.contains("var lo"));
+        assert!(source.contains("buf_vertices[(first + t) * 3u + corner]"));
+        assert!(source.contains("liquid_cell_brick_index(gid.x)"));
+        assert!(source.contains("if idx == 0xffffffffu"));
+        assert!(source.contains("if brick_pass == 2u"));
+        assert!(source.contains("buf_vertices[idx] = zero"));
+        assert!(!source.contains("buf_vertices[idx] = body"));
     }
 }

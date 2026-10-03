@@ -486,6 +486,18 @@ pub(super) fn generate_standalone_buffer(
     spec: &StandaloneKernelSpec<'_>,
     atomic_outputs: &[&str],
 ) -> Result<String, CodegenError> {
+    generate_standalone_buffer_with_options(spec, atomic_outputs, &[], None)
+}
+
+/// Buffer standalone wrapper with the two variable-length-output extensions:
+/// `owned_outputs` lets a body write its own disjoint output intervals, while
+/// `buffer_index` maps a dense dispatch id to a sparse element schedule.
+pub(super) fn generate_standalone_buffer_with_options(
+    spec: &StandaloneKernelSpec<'_>,
+    atomic_outputs: &[&str],
+    owned_outputs: &[&str],
+    buffer_index: Option<&str>,
+) -> Result<String, CodegenError> {
     let StandaloneKernelSpec {
         body,
         inputs,
@@ -530,9 +542,10 @@ pub(super) fn generate_standalone_buffer(
     // as `array<atomic<T>>` and the body `atomicAdd`s into its global itself
     // (scatter). Only the plain outputs are written by the wrapper at `[idx]`.
     let is_atomic = |name: &str| atomic_outputs.contains(&name);
+    let is_owned = |name: &str| owned_outputs.contains(&name);
     let plain_count = array_outputs
         .iter()
-        .filter(|o| !is_atomic(o.name.as_ref()))
+        .filter(|o| !is_atomic(o.name.as_ref()) && !is_owned(o.name.as_ref()))
         .count();
     // ≥2 plain outputs → the body returns a `BufferOutputs` struct the wrapper
     // unpacks (the buffer analogue of the texture multi-output BodyOutputs path);
@@ -576,8 +589,10 @@ pub(super) fn generate_standalone_buffer(
             return Err(CodegenError::AtomicNonInteger { ty: ety.clone() });
         }
     }
-    let plain_outputs: Vec<&(&str, String)> =
-        out_infos.iter().filter(|(name, _)| !is_atomic(name)).collect();
+    let plain_outputs: Vec<&(&str, String)> = out_infos
+        .iter()
+        .filter(|(name, _)| !is_atomic(name) && !is_owned(name))
+        .collect();
 
     let mut out = String::new();
 
@@ -677,7 +692,12 @@ pub(super) fn generate_standalone_buffer(
     // --- 1D iteration wrapper: guard on the element count, write one element ---
     out.push_str("@compute @workgroup_size(256)\n");
     out.push_str("fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {\n");
-    out.push_str("    let idx = gid.x;\n");
+    if let Some(mapper) = buffer_index {
+        writeln!(out, "    let idx = {mapper}(gid.x);").unwrap();
+        out.push_str("    if idx == 0xffffffffu {\n        return;\n    }\n");
+    } else {
+        out.push_str("    let idx = gid.x;\n");
+    }
     out.push_str("    if idx >= params.dispatch_count {\n        return;\n    }\n");
     // Pre-read each COINCIDENT input's own element `[idx]`; gather inputs are
     // read by the body itself through the bound global.
@@ -711,9 +731,8 @@ pub(super) fn generate_standalone_buffer(
     for tex in &optional_textures {
         args.push(format!("params.use_{}", tex.name));
     }
-    // Atomic outputs are written by the body itself (it computes its own target
-    // cells and `atomicAdd`s into the accumulator globals); the wrapper writes
-    // only the plain outputs, coincident at `[idx]`.
+    // Atomic outputs and owned outputs are written by the body itself. The
+    // wrapper writes only ordinary coincident outputs at `[idx]`.
     match plain_outputs.as_slice() {
         [] => {
             writeln!(out, "    body({});", args.join(", ")).unwrap();

@@ -8,6 +8,7 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
+use super::liquid_bricks;
 use super::sort_particles_into_cells::float_param;
 use super::standalone_pipeline::standalone_pipeline;
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
@@ -23,9 +24,9 @@ struct SmoothUniforms {
     nodes_z: f32,
     passes: f32,
     axis: i32,
+    brick_pass: u32,
     dispatch_count: u32,
     _pad0: u32,
-    _pad1: u32,
 }
 
 crate::primitive! {
@@ -34,6 +35,7 @@ crate::primitive! {
     purpose: "Smooth a scalar lattice held in an Array<f32> (nodes_x/y/z nodes, node (i, j, k) at i + nx·(j + ny·k)) along one axis: `passes` rounds of the [1, 2, 1] / 4 filter, applied as one (2·passes + 1)-tap binomial gather with edge-clamped indices. Chained over axes 0, 1 and 2 it is the full 3D binomial blur. 0 passes, or no lattice, copies the input; values past the lattice pass through.",
     inputs: {
         levelset: Array(f32) required,
+        bricks: Array(u32) optional,
         nodes_x: ScalarF32 optional, nodes_y: ScalarF32 optional, nodes_z: ScalarF32 optional,
         passes: ScalarF32 optional,
     },
@@ -64,7 +66,10 @@ crate::primitive! {
     aliases: ["blur volume", "smooth level set", "binomial blur", "lattice blur"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/smooth_lattice_body.wgsl"),
-    input_access: [BufferGather],
+    input_access: [BufferGather, BufferGather],
+    derived_uniforms: ["brick_pass:u32"],
+    wgsl_includes: [liquid_bricks::COMMON],
+    buffer_index: "liquid_brick_index",
 }
 
 impl Primitive for SmoothLattice {
@@ -75,12 +80,18 @@ impl Primitive for SmoothLattice {
         inputs: &[(&str, u32)],
     ) -> Option<u32> {
         (port == "smoothed")
-            .then(|| inputs.iter().find(|(name, _)| *name == "levelset").map(|&(_, n)| n))
+            .then(|| {
+                inputs
+                    .iter()
+                    .find(|(name, _)| *name == "levelset")
+                    .map(|&(_, n)| n)
+            })
             .flatten()
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let nodes = ["nodes_x", "nodes_y", "nodes_z"].map(|name| ctx.scalar_or_param(name, 2.0).round());
+        let nodes =
+            ["nodes_x", "nodes_y", "nodes_z"].map(|name| ctx.scalar_or_param(name, 2.0).round());
         let passes = ctx.scalar_or_param("passes", 2.0).round().clamp(0.0, 3.0);
         let axis = match ctx.params.get("axis") {
             Some(ParamValue::Float(n)) => n.round().clamp(0.0, 2.0) as i32,
@@ -88,7 +99,9 @@ impl Primitive for SmoothLattice {
         };
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
-        let (Some(levelset), Some(smoothed)) = (ctx.inputs.array("levelset"), ctx.outputs.array("smoothed")) else {
+        let (Some(levelset), Some(smoothed)) =
+            (ctx.inputs.array("levelset"), ctx.outputs.array("smoothed"))
+        else {
             return;
         };
         let node_total: u64 = nodes.iter().map(|&n| n.max(0.0) as u64).product();
@@ -109,20 +122,52 @@ impl Primitive for SmoothLattice {
             nodes_z: nodes[2],
             passes,
             axis,
+            brick_pass: 0,
             dispatch_count: count,
             _pad0: 0,
-            _pad1: 0,
         };
+        let bricks = ctx.inputs.array("bricks");
+        if bricks
+            .is_some_and(|b| !liquid_bricks::valid_schedule(b, nodes.map(|n| n.max(0.0) as u32)))
+        {
+            ctx.error("Liquid lattice: brick schedule does not match the lattice dimensions");
+            return;
+        }
         let gpu = ctx.gpu_encoder();
-        gpu.native_enc.dispatch_compute(
-            pipeline,
-            &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: levelset, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: smoothed, offset: 0 },
-            ],
-            [count.div_ceil(256), 1, 1],
-            "node.smooth_lattice",
-        );
+        for pass in 0..if bricks.is_some() { 2 } else { 1 } {
+            let uniforms = SmoothUniforms {
+                brick_pass: if bricks.is_some() { 2 - pass } else { 0 },
+                ..uniforms
+            };
+            liquid_bricks::dispatch(
+                gpu.native_enc,
+                pipeline,
+                &[
+                    GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&uniforms),
+                    },
+                    GpuBinding::Buffer {
+                        binding: 1,
+                        buffer: levelset,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 2,
+                        buffer: bricks.unwrap_or(levelset),
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 3,
+                        buffer: smoothed,
+                        offset: 0,
+                    },
+                ],
+                bricks,
+                uniforms.brick_pass,
+                count,
+                "node.smooth_lattice",
+            );
+        }
     }
 }

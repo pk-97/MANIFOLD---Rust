@@ -1650,6 +1650,20 @@ pub trait EffectNode: Send {
         &[]
     }
 
+    /// Array outputs written directly by a buffer body's own cell/element
+    /// logic. Such outputs are bound read-write by standalone codegen, but the
+    /// wrapper does not perform a coincident `out[idx] = body(...)` store.
+    fn owned_outputs(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// Optional WGSL function name that maps a dense dispatch id to a sparse
+    /// buffer element. The function is supplied by `wgsl_includes` and returns
+    /// `0xffffffffu` for an inactive item.
+    fn buffer_index(&self) -> Option<&'static str> {
+        None
+    }
+
     /// Texture formats this primitive's input port can natively
     /// consume. Returns `None` (the default) to mean "any format" —
     /// the primitive runs against whatever the upstream producer
