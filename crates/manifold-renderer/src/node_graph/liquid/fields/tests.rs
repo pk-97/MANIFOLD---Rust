@@ -444,7 +444,6 @@ fn liquid_impulse_refusals_are_named() {
     let mut impulses = LiquidImpulses::default();
     assert!(impulses.stamp(0.0, 0).unwrap_err().contains("not started"));
     frame(&mut clock, &mut impulses, 0.0, TICK, 1.0);
-    assert!(impulses.stamp(0.5, 0).unwrap_err().contains("last ran"));
     let stamp = impulses.stamp(0.0, 0).unwrap();
     let rigid = ResolvedNodeImpulse {
         field: FieldValue::uniform([1.0; 3]).unwrap(),
@@ -464,4 +463,30 @@ fn liquid_impulse_refusals_are_named() {
     let restart = clock.advance(TICK, TICK, 1.0, 1.0, false, false);
     impulses.observe_frame(TICK, &restart).unwrap();
     assert!(impulses.stamp(TICK, 0).is_ok());
+}
+
+/// An audio hit is captured after the engine ticked to the next frame's time
+/// but before that frame runs; manual Fire carries the time the liquid last
+/// ran. Both land once on the next frame's first tick; a hit older than the
+/// last run is refused.
+#[test]
+fn liquid_impulse_accepts_hits_stamped_ahead_of_the_last_frame() {
+    let mut clock = LiquidClock::default();
+    let mut impulses = LiquidImpulses::default();
+    frame(&mut clock, &mut impulses, 0.0, TICK, 1.0);
+    frame(&mut clock, &mut impulses, TICK, TICK, 1.0);
+    let manual = hit(&mut impulses, TICK, 1, 1.0);
+    let audio = hit(&mut impulses, 2.0 * TICK, 2, 2.0);
+    assert_eq!((manual.tick, audio.tick), (1, 1));
+    let error = impulses.stamp(0.5 * TICK, 3).unwrap_err();
+    assert!(error.contains("older"), "{error}");
+    frame(&mut clock, &mut impulses, 2.0 * TICK, TICK, 1.0);
+    assert_eq!(impulses.impulse_tick(), Some(1));
+    impulses.commit_frame();
+    let delivered = receipts(&mut impulses);
+    assert_eq!(delivered.iter().map(|event| event.source.sequence).collect::<Vec<_>>(), [1, 2]);
+    assert!(delivered.iter().all(|event| event.applied.tick == 1 && event.lateness == Seconds(0.0)));
+    frame(&mut clock, &mut impulses, 3.0 * TICK, TICK, 1.0);
+    impulses.commit_frame();
+    assert!(receipts(&mut impulses).is_empty(), "no hit applies twice");
 }
