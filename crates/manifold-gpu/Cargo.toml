@@ -28,6 +28,8 @@ manifold-foundation = { path = "../manifold-foundation" }
 # WGSL parsing + validation + MSL output + SPIR-V output
 naga = { version = "28", features = ["wgsl-in", "msl-out", "spv-out"] }
 log = "0.4"
+libc = "0.2"
+uuid = { workspace = true }
 
 # SPIR-V optimization (wraps Google SPIRV-Tools C++)
 spirv-tools = { version = "0.13", features = ["use-compiled-tools"] }

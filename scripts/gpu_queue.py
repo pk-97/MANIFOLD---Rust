@@ -14,8 +14,11 @@ The same lock is taken in-process by `manifold_gpu::queue` the first time a
 `GpuDevice` is created (tests, headless renders, examples), so a raw
 `cargo test --features gpu-proofs` queues even when nobody wrapped it. A GPU
 process whose ancestor holds the lock (this wrapper running cargo running a
-test binary) does not wait for it again: on contention it checks whether the
-holder's pid is one of its own ancestors.
+test binary) does not wait for it again: on contention it first validates the
+inherited MANIFOLD_GPU_LOCK_HOLDER=<pid>:<nonce> against gpu.holder and a live
+holder PID. Each acquisition writes a fresh nonce and exports the token until
+release. Changed records and dead holders invalidate tokens. Without a valid
+token, the ancestor PID walk remains a fallback for unwrapped processes.
 
 When this wrapper is given `cargo test` or `cargo run`, Cargo compilation is
 completed before the GPU lock is acquired. `cargo test` receives `--no-run`
@@ -37,6 +40,7 @@ import contextlib
 import fcntl
 import os
 import signal
+import secrets
 import subprocess
 import sys
 import time
@@ -44,6 +48,7 @@ from pathlib import Path
 
 POLL_SECONDS = 0.25
 REPORT_SECONDS = 30.0
+HOLDER_ENV = "MANIFOLD_GPU_LOCK_HOLDER"
 
 # Same-process nesting: `hold()` inside `hold()` must not block on itself.
 _held_depth = 0
@@ -68,10 +73,10 @@ def read_holder(directory):
     return info
 
 
-def _write_holder(directory, label):
+def _write_holder(directory, label, nonce):
     one_line = " ".join(f"{label}".split())[:300]
     cwd = " ".join(os.getcwd().split())
-    body = f"pid={os.getpid()}\nsince={time.time():.3f}\nlabel={one_line}\ncwd={cwd}\n"
+    body = f"pid={os.getpid()}\nnonce={nonce}\nsince={time.time():.3f}\nlabel={one_line}\ncwd={cwd}\n"
     tmp = directory / f"gpu.holder.tmp.{os.getpid()}"
     tmp.write_text(body)
     os.replace(tmp, directory / "gpu.holder")
@@ -94,6 +99,20 @@ def ancestor_pids():
             break
         pids.append(pid)
     return pids
+
+
+def _token_matches(info):
+    """Accept only a matching per-acquisition token naming a live holder."""
+    pid, nonce = info.get("pid", ""), info.get("nonce", "")
+    if not pid.isdigit() or int(pid) <= 1 or not nonce:
+        return False
+    if os.environ.get(HOLDER_ENV) != f"{pid}:{nonce}":
+        return False
+    try:
+        os.kill(int(pid), 0)
+    except OSError:
+        return False
+    return True
 
 
 def _describe(info):
@@ -133,9 +152,10 @@ def format_age(seconds):
 class Held:
     """What `acquire` returns: the open lock fd, or None when an ancestor holds it."""
 
-    def __init__(self, fd, directory):
+    def __init__(self, fd, directory, previous_token=None):
         self.fd = fd
         self.directory = directory
+        self.previous_token = previous_token
 
     def release(self):
         if self.fd is None:
@@ -148,6 +168,10 @@ class Held:
             (self.directory / "gpu.holder").unlink()
         os.close(self.fd)
         self.fd = None
+        if self.previous_token is None:
+            os.environ.pop(HOLDER_ENV, None)
+        else:
+            os.environ[HOLDER_ENV] = self.previous_token
 
 
 def acquire(label, directory=None, poll=POLL_SECONDS, report=REPORT_SECONDS, out=None):
@@ -167,6 +191,9 @@ def acquire(label, directory=None, poll=POLL_SECONDS, report=REPORT_SECONDS, out
             except BlockingIOError:
                 pass
             info = read_holder(directory)
+            if _token_matches(info):
+                os.close(fd)
+                return Held(None, directory)
             if ancestors is None:
                 ancestors = set(ancestor_pids())
             holder_pid = info.get("pid", "")
@@ -185,8 +212,15 @@ def acquire(label, directory=None, poll=POLL_SECONDS, report=REPORT_SECONDS, out
     if last_report is not None:
         print(f"[gpu-queue] acquired after {format_age(time.monotonic() - started)}",
               file=out, flush=True)
-    _write_holder(directory, label)
-    return Held(fd, directory)
+    nonce = secrets.token_hex(16)
+    previous_token = os.environ.get(HOLDER_ENV)
+    try:
+        _write_holder(directory, label, nonce)
+        os.environ[HOLDER_ENV] = f"{os.getpid()}:{nonce}"
+    except BaseException:
+        os.close(fd)
+        raise
+    return Held(fd, directory, previous_token)
 
 
 @contextlib.contextmanager
@@ -304,6 +338,8 @@ def _ancestor_holds(directory=None):
     holder_pid = info.get("pid", "")
     if not holder_pid.isdigit():
         return False
+    if _token_matches(info):
+        return True
     ancestors = ancestor_pids()
     return not ancestors or int(holder_pid) in ancestors
 

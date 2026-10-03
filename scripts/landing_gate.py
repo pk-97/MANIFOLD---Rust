@@ -504,14 +504,15 @@ def _main(stack):
             results.append(("FAIL", "gpu-proofs", None, message.splitlines()))
             return finish(repo, base_sha, results)
 
-    # All three test legs use the proof feature when proofs are selected, so
-    # Cargo reuses the renderer build across nextest, catalog and cargo test.
-    test_features = ["--features", "manifold-renderer/gpu-proofs"] if run_gpu else []
+    # Nextest must keep the default-feature test set, regardless of proof
+    # scope. Enabling gpu-proofs also admits nested/individually gated tests
+    # and required-features binaries; their names have no common boundary.
+    # An exact default inventory would require its own build anyway. Keep
+    # separate feature builds and let gpu_proofs_gate alone opt into proofs
+    # via scoped, budgeted cargo test runs.
     test_packages = set(cpu_plan.packages)
-    if run_gpu:
-        test_packages.add("manifold-renderer")
-    test_args = [a for p in sorted(test_packages) for a in ("-p", p)] + test_features
-    cpu_args = [*test_args, "-E", cpu_plan.filterset]
+    test_args = [a for p in sorted(test_packages) for a in ("-p", p)]
+    cpu_args = cpu_plan.args()
 
     # Compile every test binary the hold will run before taking it, so the
     # hold covers test time only (BUG-w0hh (landing gate speed)). The legs

@@ -2374,6 +2374,7 @@ dependencies = [
  "ash",
  "block2 0.6.2",
  "bytemuck",
+ "libc",
  "log",
  "manifold-foundation",
  "naga",
@@ -2386,6 +2387,7 @@ dependencies = [
  "raw-window-handle",
  "spirv-cross2",
  "spirv-tools",
+ "uuid",
 ]
 
 [[package]]
