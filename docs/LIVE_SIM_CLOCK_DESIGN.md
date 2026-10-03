@@ -72,9 +72,9 @@ The test-only `live_sim_clock_reference.rs` remains a CPU specification oracle. 
 
 ### Reference engine rule
 
-Vendored repo source `crates/manifold-fluids/native/flip_engine/fluidsimulation.cpp:11088` predicts initial source speed plus force acceleration over dt; `:11112` measures marker maximum; `:11128` considers eligible obstacles including coupled bodies; `:11163` implements `_calculateNextTimeStep`; `:11430` implements `nextUpdateTimeStep`. `fluidsimulation.h:2290`, `:2291`, `:2294` default to min 1, max 6 and CFL 5. These anchors describe the locally modified vendored reference, not current upstream. MIT credit is in the module header and THIRD_PARTY_NOTICES.md.
+Vendored repo source `crates/manifold-fluids/native/flip_engine/fluidsimulation.cpp:11088` predicts initial source speed plus force acceleration over dt; `:11112` measures marker maximum; `:11128` considers eligible obstacles including coupled bodies, but only under rigid coupling or adaptive obstacle time stepping (`_isAdaptiveObstacleTimeSteppingEnabled`, off by default); `:11163` implements `_calculateNextTimeStep`; `:11430` implements `nextUpdateTimeStep`. `fluidsimulation.h:2290`, `:2291`, `:2294` default to min 1, max 6 and CFL 5. These anchors describe the locally modified vendored reference, not current upstream. MIT credit is in the module header and THIRD_PARTY_NOTICES.md.
 
-1. First frame/first substep uses predicted initial speed; later substeps measure current marker maximum. With fluid present/generating, take max with eligible obstacle speed.
+1. First frame/first substep uses predicted initial speed; later substeps measure current marker maximum. With fluid present/generating and a coupled body present, take max with eligible obstacle speed. GPU FLIP has no adaptive-obstacle control, so an uncoupled collider never splits an interval: a collider that jumps between frames would otherwise sweep the water along its path at the jump's speed (`LiquidBodies::prepare_clock_vertices`).
 2. With epsilon exactly 1e-6, `limit = CFL*h/(max_speed+epsilon)`.
 3. Enabled surface tension also limits to `condition*sqrt(h³)*sqrt(1/(constant+epsilon))`; enabled source-color mixing to `1/(rate+epsilon)`.
 4. `count=max(ceil(frame_duration/limit),1)`; return `frame_duration/count`.
