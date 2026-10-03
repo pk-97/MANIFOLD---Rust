@@ -1045,10 +1045,16 @@ pub struct ContentPipeline {
     /// PERF_BUDGET_GATE_DESIGN P2 / D6: per-dispatch GPU timestamp sampler,
     /// created once (sized against the fixture's span count — see
     /// `set_profiling`'s doc) and re-attached to both the Generators and
-    /// Compositor command buffers every profiled frame. `None` when
-    /// profiling is off or unsupported on this device.
+    /// Compositor command buffers every profiled frame. `None` until
+    /// profiling first turns on, or when this device cannot sample. Kept
+    /// while profiling is off, so a run that profiles every other frame
+    /// reuses one sampler.
     #[cfg(target_os = "macos")]
     profiling_sampler: Option<manifold_gpu::GpuTimestampSampler>,
+    /// The span count `profiling_sampler` was requested with; the device may
+    /// have granted fewer.
+    #[cfg(all(target_os = "macos", feature = "perf-soak"))]
+    profiling_sampler_request: usize,
     /// Whether `--profile` mode is on this run. Switches both command-buffer
     /// commits to the `_profiled` variant. Off by default — zero cost on the
     /// live path (no sampler attached, no extra wait). The compositor has a
@@ -1226,6 +1232,8 @@ impl ContentPipeline {
             ),
             #[cfg(target_os = "macos")]
             profiling_sampler: None,
+            #[cfg(all(target_os = "macos", feature = "perf-soak"))]
+            profiling_sampler_request: 0,
             profiling_enabled: false,
             #[cfg(target_os = "macos")]
             profiling_granularity: manifold_gpu::ProfileGranularity::Dispatch,
@@ -1251,13 +1259,17 @@ impl ContentPipeline {
     pub fn set_profiling(&mut self, on: bool, max_spans: usize) {
         self.profiling_enabled = on;
         self.compositor.set_profiling(on);
-        self.profiling_sampler = if on {
-            self.native_device
+        // A process holds few counter buffers (32 on M4 Max), so a new sampler
+        // made while the old one is still held can come back empty: the old one
+        // goes first, and an unchanged request keeps it.
+        if on && (self.profiling_sampler.is_none() || self.profiling_sampler_request != max_spans) {
+            self.profiling_sampler = None;
+            self.profiling_sampler = self
+                .native_device
                 .as_ref()
-                .and_then(|d| d.create_timestamp_sampler(max_spans))
-        } else {
-            None
-        };
+                .and_then(|d| d.create_timestamp_sampler(max_spans));
+            self.profiling_sampler_request = max_spans;
+        }
     }
 
     /// Choose how finely profiled frames are cut. Takes effect on the next

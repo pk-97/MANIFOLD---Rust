@@ -38,8 +38,9 @@ const SOLVE_LEVEL_PARAM: &str = "solve_level";
 const STEP: &str = "node.gpu_flip_step";
 const WHITEWATER: &str = "node.whitewater_step";
 const RENDER: &str = "node.render_scene";
-/// Spans a timestamped frame may hold; a 128 solve dispatches thousands.
-const MAX_SPANS: usize = 32768;
+/// Spans a timestamped frame may hold: the most a process can sample (32
+/// buffers of 2,048 on M4 Max). A calm res-64 GPU FLIP frame stamps ~38,000.
+const MAX_SPANS: usize = 65536;
 
 struct Args {
     project: String,
@@ -254,6 +255,12 @@ impl Phase {
             percentile(&self.stamped_total, 0.95),
             self.overflow,
         );
+        if self.overflow > 0 {
+            println!(
+                "  WARNING: {} spans did not fit the sampler; every per-node and per-dispatch table below is missing the frames' last dispatches",
+                self.overflow
+            );
+        }
         print_split("per node type", &self.per_type);
         print_split("gpu_flip_step per dispatch label", &self.per_step);
         print_split("whitewater_step per dispatch label", &self.per_whitewater);
