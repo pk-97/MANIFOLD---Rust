@@ -85,8 +85,15 @@ crate::primitive! {
     // The solid lattice is coarser than the level set: the count is the level set's alone.
     output_capacity: FusedOutputCapacity::FromInput { input: "levelset" },
     derived_uniforms: ["brick_pass:u32"],
-    wgsl_includes: [liquid_bricks::COMMON],
+    wgsl_includes: [liquid_bricks::COMMON, include_str!("shaders/clamp_liquid_to_solids_element.wgsl")],
     buffer_index: "liquid_brick_index",
+    dense_buffer_fusion: crate::node_graph::effect_node::DenseBufferFusion {
+        body_fragments: &[
+            include_str!("shaders/clamp_liquid_to_solids_element.wgsl"),
+            include_str!("shaders/clamp_liquid_to_solids_dense_body.wgsl"),
+        ],
+        schedule_inputs: &["bricks"],
+    },
 }
 
 impl Primitive for ClampLiquidToSolids {
