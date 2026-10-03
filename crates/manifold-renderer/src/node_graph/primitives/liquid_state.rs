@@ -7,6 +7,8 @@
 //! tick's face grid escapes beside the particles into storage this node owns,
 //! sized from the lattice wires before the region runs, so it is whole from
 //! the first frame and holds while the transport is paused.
+//! The optional interior field uses the Ferstl et al. (2016) narrow-band
+//! positive sentinel when it is unwired or reset.
 
 use manifold_gpu::GpuBuffer;
 
@@ -14,6 +16,7 @@ use super::gpu_flip_step::face_bytes;
 use super::liquid_stats::{LIQUID_STATS_WORDS, LiquidTickStats};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid_particles::{FaceSample, FluidParticle};
+use crate::node_graph::liquid::grid::{interior_bytes, InteriorOps};
 use crate::node_graph::liquid::lattice::LiquidLattice;
 use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::primitive::Primitive;
@@ -22,6 +25,7 @@ use crate::node_graph::substeps::{SubstepBoundaryPorts, SubstepResultPorts};
 const RESULTS: &[SubstepResultPorts] = &[
     SubstepResultPorts { capture: "stats_in", output: "stats" },
     SubstepResultPorts { capture: "faces_in", output: "faces" },
+    SubstepResultPorts { capture: "interior_in", output: "interior" },
 ];
 
 /// The region's contract. The one iteration scalar is the tick's index in
@@ -50,12 +54,13 @@ pub struct ReadbackSlot {
 crate::primitive! {
     name: LiquidState,
     type_id: "node.liquid_state",
-    purpose: "Hold a particle liquid across frames and run its tick region: seed the particles when the epoch changes, then repeat the region once per due tick with the tick's index. The region's last particles become the state, and its last stats and its last tick's face grid escape with them; a new epoch's faces are zero. A tick with non-finite values halts the liquid with an error until Reset.",
+    purpose: "Hold a particle liquid across frames and run its tick region: seed the particles when the epoch changes, then repeat the region once per due tick with the tick's index. The region's last particles become the state, and its last stats, face grid and optional cell-centred interior distance escape with them; a new epoch's faces are zero. A tick with non-finite values or narrow-band capacity shortage halts the liquid with an error until Reset.",
     inputs: {
         seed: Array(FluidParticle) required,
         in: Array(FluidParticle) required,
         stats_in: Array(u32) required,
         faces_in: Array(FaceSample) required,
+        interior_in: Array(f32) optional,
         count: ScalarF32 optional,
         ticks: ScalarF32 optional,
         epoch: ScalarF32 optional,
@@ -67,6 +72,7 @@ crate::primitive! {
         out: Array(FluidParticle),
         stats: Array(u32),
         faces: Array(FaceSample),
+        interior: Array(f32),
         tick_index: ScalarF32,
         live_count: ScalarF32,
         fault: ScalarF32,
@@ -91,6 +97,8 @@ crate::primitive! {
         faulted: bool = false,
         last_stats: Option<LiquidTickStats> = None,
         faces: Option<GpuBuffer> = None,
+        interior: Option<GpuBuffer> = None,
+        interior_ops: InteriorOps = InteriorOps::default(),
     },
 }
 
@@ -117,7 +125,7 @@ impl LiquidState {
             }
         }
         if let Some((_, stats)) = newest {
-            if stats.nonfinite > 0 {
+            if stats.nonfinite > 0 || stats.narrow_band_shortage > 0 {
                 self.faulted = true;
             }
             self.last_stats = Some(stats);
@@ -126,8 +134,12 @@ impl LiquidState {
 }
 
 impl Primitive for LiquidState {
+    fn prepare_pipelines(&mut self, device: &manifold_gpu::GpuDevice) {
+        self.interior_ops.prepare_clear(device);
+    }
+
     fn state_capture_input_ports(&self) -> &'static [&'static str] {
-        &["in", "stats_in", "faces_in"]
+        &["in", "stats_in", "faces_in", "interior_in"]
     }
 
     fn persistent_output_ports(&self) -> &'static [&'static str] {
@@ -135,11 +147,15 @@ impl Primitive for LiquidState {
     }
 
     fn provides_array_output(&self, port: &str) -> bool {
-        port == "faces"
+        matches!(port, "faces" | "interior")
     }
 
     fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
-        (port == "faces").then_some(self.faces.as_ref()).flatten()
+        match port {
+            "faces" => self.faces.as_ref(),
+            "interior" => self.interior.as_ref(),
+            _ => None,
+        }
     }
 
     fn substep_boundary(&self) -> Option<SubstepBoundaryPorts> {
@@ -158,6 +174,7 @@ impl Primitive for LiquidState {
             // Provided storage: a one-record hint, sized at run time from the
             // body's faces, which the plan allocates after this node.
             "faces" => Some(1),
+            "interior" => Some(1),
             _ => None,
         }
     }
@@ -182,6 +199,17 @@ impl Primitive for LiquidState {
             LiquidLattice::from_wires(ctx, "Liquid State").map(|lattice| face_bytes(lattice.cells()))
         }
         .filter(|_| ctx.outputs.array("faces").is_some());
+        let interior_grid = if ctx.inputs.slot("interior_in").is_none() {
+            None
+        } else if ["nodes_x", "nodes_y", "nodes_z"].iter().any(|port| ctx.inputs.slot(port).is_none()) {
+            refused = Some("Liquid State: interior_in needs the lattice on nodes_x, nodes_y and nodes_z".to_string());
+            None
+        } else {
+            LiquidLattice::from_wires(ctx, "Liquid State").map(|lattice| interior_bytes(lattice.cells()))
+        };
+        if interior_grid == Some(0) {
+            refused = Some("Liquid State: interior distance has zero cells".to_string());
+        }
         let gpu = ctx.gpu_encoder();
         let clock = gpu.device.frame_clock();
         let stats_bytes = u64::from(LIQUID_STATS_WORDS) * 4;
@@ -211,11 +239,39 @@ impl Primitive for LiquidState {
             Some(_) => {}
         }
 
+        let mut fresh_interior = false;
+        match interior_grid.filter(|&bytes| bytes != 0) {
+            None => self.interior = None,
+            Some(bytes) if self.interior.as_ref().is_none_or(|field| field.size != bytes) => {
+                let device = gpu.device;
+                self.interior = crate::node_graph::scene_modifier_expand::admit_candidate_bytes(
+                    device.modifier_memory_snapshot(),
+                    bytes,
+                )
+                .map_err(|error| error.to_string())
+                .and_then(|()| device.try_create_buffer_shared(bytes.max(4)))
+                .map_err(|error| {
+                    refused = Some(format!(
+                        "Liquid State: the interior distance needs {bytes} bytes the device cannot give: {error}. Lower Resolution."
+                    ));
+                })
+                .ok();
+                fresh_interior = self.interior.is_some();
+            }
+            Some(_) => {}
+        }
+
         if self.epoch != Some(epoch) || fresh_faces {
             // A new epoch's faces are zero until its first tick.
             if let Some(faces) = &self.faces {
                 gpu.native_enc.clear_buffer(faces);
             }
+        }
+        if (self.epoch != Some(epoch) || fresh_interior)
+            && let Some(interior) = self.interior.as_ref()
+            && let Err(error) = self.interior_ops.clear(gpu, interior)
+        {
+            refused = Some(format!("Liquid State: {error}"));
         }
         if self.epoch != Some(epoch) {
             self.epoch = Some(epoch);
@@ -241,7 +297,12 @@ impl Primitive for LiquidState {
         ctx.outputs.set_scalar("live_count", ParamValue::Float(live as f32));
         ctx.outputs.set_scalar("fault", ParamValue::Float(if self.faulted { 1.0 } else { 0.0 }));
         if self.faulted {
-            ctx.error("Liquid State: a tick produced non-finite values; the liquid is halted until Reset");
+            if self.last_stats.is_some_and(|s| s.nonfinite > 0) {
+                ctx.error("Liquid State: a tick produced non-finite values; the liquid is halted until Reset");
+            }
+            if self.last_stats.is_some_and(|s| s.narrow_band_shortage > 0) {
+                ctx.error("Liquid State: narrow-band particle capacity was insufficient for reseeding; the liquid is halted until Reset");
+            }
         }
         if let Some(error) = refused {
             ctx.error(error);
@@ -287,6 +348,16 @@ impl Primitive for LiquidState {
                 ctx.error(format!(
                     "Liquid State: the tick's faces hold {} bytes; the lattice's face grid is {}",
                     candidate.size, faces.size
+                ));
+            }
+        }
+        if let (Some(candidate), Some(interior)) = (ctx.inputs.array("interior_in"), self.interior.as_ref()) {
+            if candidate.size == interior.size {
+                ctx.gpu_encoder().native_enc.copy_buffer_to_buffer(candidate, interior, interior.size);
+            } else {
+                ctx.error(format!(
+                    "Liquid State: the tick's interior distance holds {} bytes; the lattice's cell-centred field is {}",
+                    candidate.size, interior.size
                 ));
             }
         }

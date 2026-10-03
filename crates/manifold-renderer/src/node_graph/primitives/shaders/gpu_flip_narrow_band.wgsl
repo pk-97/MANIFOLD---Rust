@@ -144,6 +144,27 @@ fn nb_band_mask(@builtin(global_invocation_id) gid: vec3<u32>) {
     nb_mask[gid.x] = select(0u, 1u, abs(liquid) < 3.0 * nb.h ||
         (liquid < 0.0 && nb_scalar(q, true) <= 3.0 * nb.h));
 }
+// Source particles may introduce a disconnected surface outside the old band.
+// Include exactly the existing particle-distance gather's two-cell search
+// support using cell counts; never infer liquid from the old distance alone.
+@compute @workgroup_size(256)
+fn nb_distance_support(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x; if i >= nb_total() { return; }
+    let p = nb_coords(i, nb.n); let n = vec3<i32>(nb.n);
+    let q = vec3<f32>(p) + vec3<f32>(0.5);
+    var supported = abs(nb_phi[i]) < 3.0 * nb.h ||
+        (nb_phi[i] < 0.0 && nb_scalar(q, true) <= 3.0 * nb.h);
+    let first = max(p - vec3<i32>(2), vec3<i32>(0));
+    let last = min(p + vec3<i32>(2), n - vec3<i32>(1));
+    for (var z = first.z; z <= last.z && !supported; z++) {
+        for (var y = first.y; y <= last.y && !supported; y++) {
+            for (var x = first.x; x <= last.x && !supported; x++) {
+                supported = nb_ranges[nb_index(vec3<i32>(x,y,z), n)].count != 0u;
+            }
+        }
+    }
+    nb_mask[i] = select(0u, 1u, supported);
+}
 // Destination holds the particle gather; source holds the advected grid.
 @compute @workgroup_size(256)
 fn nb_combine_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -180,9 +201,17 @@ fn nb_site(cell: vec3<i32>, site: u32) -> vec3<f32> {
 // independent of the number of sites selected in every earlier cell.
 @compute @workgroup_size(256)
 fn nb_reseed_flags(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let i = gid.x; if i >= nb_total() { return; }
+    nb_flags(gid.x, false);
+}
+@compute @workgroup_size(256)
+fn nb_restore_flags(@builtin(global_invocation_id) gid: vec3<u32>) {
+    nb_flags(gid.x, true);
+}
+fn nb_flags(i: u32, restore: bool) {
+    if i >= nb_total() { return; }
     for (var k = 0u; k < 8u; k++) { nb_scan[8u * i + k] = 0u; }
-    if nb_previous_phi[i] > -3.0 * nb.h || nb_phi[i] <= -3.0 * nb.h || nb_phi[i] > -nb.h { return; }
+    if nb_phi[i] > -nb.h { return; }
+    if !restore && (nb_previous_phi[i] > -3.0 * nb.h || nb_phi[i] <= -3.0 * nb.h) { return; }
     let range = nb_ranges[i]; if range.count >= 8u { return; }
     let cell = nb_coords(i, nb.n);
     var occupied = 0u;

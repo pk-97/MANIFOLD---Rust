@@ -2,6 +2,10 @@
 // section 1 (the step)): every pass of one step but the sort, the solid
 // distance and the pressure solve, each a separate entry point. Included
 // after liquid_pose.wgsl, liquid_collider.wgsl and liquid_field.wgsl.
+// Narrow-band transport, sharp coupling and lifecycle integration follow
+// Ferstl et al., Narrow Band FLIP for Liquid Simulations, CGF 35(2), 2016,
+// doi:10.1111/cgf.12825. FLIP Fluids attribution below covers only the
+// explicitly named baseline transfers, boundaries and source operations.
 //
 // Cells are n per axis from the box minimum, x fastest. A face grid is
 // (n + 1)³ FaceSample records indexed like the cells with m = n + 1: record
@@ -85,7 +89,7 @@ struct Params {
     ring_cap: u32,
     // The farthest ring the table holds; ring_max + 1 means none within it.
     ring_max: u32,
-    tile_pad: u32,
+    narrow_band: u32, // Ferstl 2016: 0 dense, 1 initialization, 2 band-masked.
 };
 
 struct CellRange {
@@ -213,6 +217,13 @@ fn particles_to_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
     let n = lattice();
     let m = n + vec3<i32>(1);
     let p = unflatten(idx, m);
+    if u.narrow_band == 2u {
+        let cell = clamp(p, vec3<i32>(0), n - vec3<i32>(1));
+        if !narrow_cell(flatten(cell, n)) {
+            faces_out[idx] = canonical_face(p, n);
+            return;
+        }
+    }
     var out = FaceSample(vec4<f32>(0.0), vec4<f32>(0.0));
     var exists = vec3<bool>(false);
     for (var a = 0; a < 3; a = a + 1) {
@@ -1406,6 +1417,10 @@ fn particle_distance(@builtin(global_invocation_id) gid: vec3<u32>) {
     if idx == NO_CELL {
         return;
     }
+    if u.narrow_band == 2u && !narrow_cell(idx) {
+        cell_out[idx] = 3.0 * u.cell_size;
+        return;
+    }
     let n = lattice();
     let p = unflatten(idx, n);
     let h = u.cell_size;
@@ -1588,6 +1603,10 @@ const MAX_DENSITY_ERROR: f32 = 0.5;
 fn density_source(@builtin(global_invocation_id) gid: vec3<u32>) {
     let idx = c_cell_index(gid.x);
     if idx == NO_CELL {
+        return;
+    }
+    if u.narrow_band == 2u && !narrow_cell(idx) {
+        cell_out[idx] = 0.0;
         return;
     }
     if !(water[idx] > 0.5) {
@@ -1874,7 +1893,7 @@ fn faces_to_particles(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let particle = sorted[idx];
     var out = particle;
-    let first = u.step_in_tick == 0;
+    let first = u.step_in_tick == 0 && u.narrow_band == 0u;
     let cfl_before = select(capped[2u * idx], 0u, first);
     let push_before = select(capped[2u * idx + 1u], 0u, first);
     capped[2u * idx] = cfl_before;
@@ -1893,12 +1912,17 @@ fn faces_to_particles(@builtin(global_invocation_id) gid: vec3<u32>) {
     let k2 = guard(s2, per_cell);
     let s3 = sample(q0 + 0.75 * per_cell * k2, n, 0u);
     let k3 = guard(s3, per_cell);
-    capped[2u * idx] = cfl_before + guarded(after, per_cell) + guarded(s2, per_cell) + guarded(s3, per_cell);
+    if u.narrow_band == 0u {
+        capped[2u * idx] = cfl_before + guarded(after, per_cell) + guarded(s2, per_cell) + guarded(s3, per_cell);
+    }
     let edge = vec3<f32>(WALL_MARGIN);
     // The density projection's move, step_dt · (spread(q) − new(q)): position
     // only, never kept as velocity. Zero rate binds `faces_in` as `spread`.
     let moved = per_cell * (sample(q0, n, 2u) - after);
-    let reached = q0 + per_cell * (2.0 * k1 + 3.0 * k2 + 4.0 * k3) / 9.0 + moved;
+    var reached = q0 + moved;
+    if u.narrow_band == 0u {
+        reached = q0 + per_cell * (2.0 * k1 + 3.0 * k2 + 4.0 * k3) / 9.0 + moved;
+    }
     var q1 = select(reached, clamp(reached, edge, vec3<f32>(n) - edge), finite(reached));
     var radius = particle.position_radius.w;
     if u.body_count > 0 && finite(q1) {
@@ -2078,6 +2102,7 @@ fn list_cell(tile: u32, gid: u32) -> u32 {
 // The cell passes run over the cell set C, the first `tile_counts[0]` tiles
 // of `tiles_by_ring`, through the triple at `tile_args[0]`.
 fn c_cell_index(gid: u32) -> u32 {
+    if u.narrow_band != 0u { return select(NO_CELL, gid, gid < cell_total()); }
     return list_cell(tiles_by_ring[gid >> 9u], gid);
 }
 
@@ -2085,6 +2110,7 @@ fn c_cell_index(gid: u32) -> u32 {
 // past the lattice (p[a] == n[a]) belongs to no cell and is a constant: wall
 // faces closed, the others absent (canonical_face), written by tiles_fill.
 fn c_face_index(gid: u32) -> u32 {
+    if u.narrow_band != 0u { return select(NO_CELL, gid, gid < face_total()); }
     let cell = c_cell_index(gid);
     if cell == NO_CELL {
         return NO_CELL;
@@ -2302,4 +2328,54 @@ fn tiles_lists() {
     tile_args[3u * (r + 1u) + 1u] = 1u;
     tile_args[3u * (r + 1u) + 2u] = 1u;
     capped[6u] = bitcast<u32>(f32(tile_counts[0]) / f32(total));
+}
+
+// Ferstl et al. 2016, Narrow Band FLIP: RK4 forward transport before
+// particle-to-grid transfer, paired with RK4 distance/face backtraces.
+// Solid resolution and domain boundaries reuse the existing FLIP step.
+@compute @workgroup_size(256)
+fn narrow_move(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    if i >= u.particles { return; }
+    var out = sorted[i];
+    if u.step_in_tick == 0 { capped[2u*i] = 0u; capped[2u*i+1u] = 0u; }
+    if out.position_radius.w <= 0.0 { particles_out[i] = out; return; }
+    let n = lattice();
+    let q = (out.position_radius.xyz - u.box_min) / u.cell_size;
+    let dt = u.step_dt / u.cell_size;
+    let a = sample(q, n, 0u);
+    let b = sample(q + 0.5 * dt * a, n, 0u);
+    let c = sample(q + 0.5 * dt * b, n, 0u);
+    let d = sample(q + dt * c, n, 0u);
+    var reached = q + dt * (a + 2.0*b + 2.0*c + d) / 6.0;
+    let edge = vec3<f32>(WALL_MARGIN);
+    if finite(reached) {
+        reached = clamp(reached, edge, vec3<f32>(n) - edge);
+        if u.body_count > 0 {
+            reached = resolve_solid(q, reached, n, edge);
+            if solid_at(reached, n) < 0.0 { out.position_radius.w = 0.0; }
+            capped[2u*i+1u] += push_refused;
+        }
+    }
+    if open_band(reached, n) { out.position_radius.w = 0.0; }
+    out.position_radius = vec4<f32>(u.box_min + reached*u.cell_size, out.position_radius.w);
+    particles_out[i] = out;
+}
+@group(0) @binding(42) var<storage, read> narrow_mask: array<u32>;
+fn narrow_cell(index: u32) -> bool { return narrow_mask[index] != 0u; }
+@group(0) @binding(43) var<storage, read> narrow_status: array<u32>;
+@group(0) @binding(44) var<storage, read_write> narrow_failure: array<u32>;
+@compute @workgroup_size(1)
+fn narrow_latch() {
+    narrow_failure[0] = max(narrow_failure[0], narrow_status[0]);
+}
+@compute @workgroup_size(1)
+fn narrow_tally() {
+    if u.narrow_band != 0u { capped[6] = bitcast<u32>(1.0); }
+    if u.step_in_tick == 0 { capped[7] = 0u; }
+    capped[7] += narrow_status[0];
+}
+@compute @workgroup_size(256)
+fn narrow_disabled(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if gid.x < cell_total() { cell_out[gid.x] = f32(u.n.x + u.n.y + u.n.z) * u.cell_size; }
 }

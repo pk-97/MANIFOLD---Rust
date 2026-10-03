@@ -81,6 +81,13 @@ crate::primitive! {
 }
 
 impl Primitive for MatterFrame {
+    fn prepare_pipelines(&mut self, device: &manifold_gpu::GpuDevice) {
+        if self.convert.is_none() {
+            self.convert = Some(device.create_compute_pipeline(SHADER, "cs_main", "node.matter_frame"));
+        }
+        self.faces.prepare(device);
+    }
+
     fn provides_array_output(&self, port: &str) -> bool {
         matches!(port, "particles_a" | "particles_b" | "solid_a" | "solid_b") || PublishedFaces::provides(port)
     }
@@ -156,9 +163,7 @@ impl Primitive for MatterFrame {
         let published = ring.is_some();
         if let (Some(slot), Some(points), Some(stats)) = (ring, points, stats) {
             let write = slot.write;
-            let pipeline = self.convert.get_or_insert_with(|| {
-                gpu.device.create_compute_pipeline(SHADER, "cs_main", "node.matter_frame")
-            });
+            let pipeline = self.convert.as_ref().expect("matter frame pipeline prepared at install");
             let params = FrameParams {
                 count: count.min((points.size / std::mem::size_of::<MatterPoint>() as u64) as u32),
                 previous_count: slot.previous_count,

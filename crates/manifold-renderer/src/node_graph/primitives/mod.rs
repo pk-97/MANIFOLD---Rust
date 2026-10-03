@@ -338,6 +338,7 @@ mod divide_by_value;
 pub(crate) mod gpu_flip_bodies;
 pub(crate) mod gpu_flip_pressure;
 pub(crate) mod gpu_flip_step;
+pub(crate) mod gpu_flip_narrow_band;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_flip_pressure_tests;
 pub(crate) mod liquid_fill;

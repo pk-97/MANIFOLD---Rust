@@ -90,6 +90,30 @@ class NarrowBandGridProofs(unittest.TestCase):
         # A detached drop survives outside the grid's liquid.
         self.assertEqual(surface_union(3 * h, -0.5 * h, h), -0.5 * h)
 
+    def test_stationary_pool_initial_distance_uses_finite_particle_support(self):
+        # Existing FLIP gather contract: 3h when the adjacent 27 cells have
+        # no live particle (gpu_flip_step.wgsl::particle_distance and its
+        # gpu_flip_particle_distance_is_the_engines_level_set proof).
+        # A planar quarter-site pool fills rows 0..11. Symmetry reduces the
+        # 16^3 field to this column without changing any zero crossing.
+        radius = math.sqrt(3) / 2
+        particle = tuple(
+            math.sqrt(0.125 + (0.25 if y < 12 else 0.75) ** 2) - radius
+            if y <= 12 else 3.0
+            for y in range(16)
+        )
+        initial = redistance(Field((1, 16, 1), (0.5, 0.5, 0.5), 1.0, particle))
+        below = math.sqrt(0.6875) - radius
+        crossing = -below / (3.0 - below)
+        for y, value in enumerate(initial.values):
+            self.assertAlmostEqual(value, y - 12 - crossing, places=13)
+        # The former oracle used an unbounded particle ball at y=13 and
+        # therefore disagreed by ~0.0264h even in f64, not roundoff.
+        unbounded_above = math.sqrt(3.1875) - radius
+        old_crossing = -below / (unbounded_above - below)
+        self.assertGreater(old_crossing - crossing, 0.026)
+        self.assertEqual(particle[13:], (3.0,) * 3)
+
     def test_redistance_handles_non_cubic_planes_on_each_axis(self):
         shape = (4, 5, 3)
         h = 0.25

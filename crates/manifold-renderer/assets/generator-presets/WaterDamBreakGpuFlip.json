@@ -358,6 +358,10 @@
             {
               "name": "nodes_z",
               "portType": "Scalar(F32)"
+            },
+            {
+              "name": "interior",
+              "portType": "Array(f32)"
             }
           ],
           "outputs": [
@@ -1299,6 +1303,12 @@
             "fromPort": "out",
             "toNode": 14,
             "toPort": "passes"
+          },
+          {
+            "fromNode": 0,
+            "fromPort": "interior",
+            "toNode": 7,
+            "toPort": "interior"
           }
         ]
       },
@@ -3879,6 +3889,30 @@
       "fromPort": "object",
       "toNode": 463,
       "toPort": "object_1"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "epoch",
+      "toNode": 6,
+      "toPort": "epoch"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "interior",
+      "toNode": 5,
+      "toPort": "interior_in"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "interior",
+      "toNode": 9,
+      "toPort": "interior"
+    },
+    {
+      "fromNode": 9,
+      "fromPort": "interior_b",
+      "toNode": 14,
+      "toPort": "interior"
     }
   ]
 }

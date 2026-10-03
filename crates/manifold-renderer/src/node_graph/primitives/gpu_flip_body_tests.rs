@@ -14,6 +14,7 @@ use super::gpu_flip_atom_tests::{FACE_FLOATS, assert_close, face_grid_len, rando
 use super::gpu_flip_bodies::{BodyPasses, Bodies};
 use super::gpu_flip_pressure::{PressureSolver, Water};
 use super::gpu_flip_step::{TILE, set_all_tiles, set_poison};
+use super::liquid_stats::SOLVER_WORDS;
 use super::liquid_surface_tests::read;
 use crate::node_graph::liquid::bodies::LiquidBody;
 
@@ -645,10 +646,10 @@ impl BoxRun {
             words
         };
         let capped = self.words("node.gpu_flip_step", "capped");
-        let particles = (capped.len() - 7) / 2;
+        let particles = (capped.len() - SOLVER_WORDS as usize) / 2;
         let particle_words = std::mem::size_of::<crate::node_graph::fluid_particles::FluidParticle>() / 4;
-        // The last solver word is the active-tile share, 1 under the forced
-        // lever by construction; the six before it are the solve's own.
+        // The active-tile share remains the penultimate solver word under the
+        // forced lever; the final word is the narrow-band shortage count.
         let solver = capped[2 * particles..capped.len() - 1].to_vec();
         vec![
             ("body row", cut(self.words(domain, "bodies"), std::mem::size_of::<LiquidBody>() / 4)),
@@ -693,7 +694,7 @@ fn gpu_flip_body_step_sparse_matches_all_tiles() {
             }
         }
         let words = dense.words("node.gpu_flip_step", "capped");
-        let tail = &words[words.len() - 7..];
+        let tail = &words[words.len() - SOLVER_WORDS as usize..];
         println!("{fixture:?} level {level}: 90 ticks bitwise; last solve {} iterations, capped {}", tail[0], tail[2]);
     }
 }

@@ -166,11 +166,28 @@ pub(crate) fn derive_regions(
         }
 
         let mut producers: Vec<NodeInstanceId> = Vec::new();
-        for cap in ports.capture_ports() {
+        for (result, cap) in std::iter::once(None::<&SubstepResultPorts>)
+            .chain(ports.results.iter().map(Some))
+            .zip(ports.capture_ports())
+        {
             let Some(wire) = graph
                 .wires_into(boundary)
                 .find(|w| w.to.1 == cap)
             else {
+                // Optional result captures are genuinely optional feedback
+                // edges: an unwired one must not make an otherwise valid
+                // existing graph fail region derivation. The primary state
+                // capture and required result captures retain the strict
+                // malformed-region error.
+                if result.is_some_and(|result| {
+                    inst.node
+                        .inputs()
+                        .iter()
+                        .find(|input| input.name == result.capture)
+                        .is_some_and(|input| !input.required)
+                }) {
+                    continue;
+                }
                 return Err(malformed(
                     boundary,
                     boundary,
@@ -807,6 +824,18 @@ mod tests {
         ..PORTS
     };
 
+    const OPTIONAL_RESULT: &[SubstepResultPorts] = &[SubstepResultPorts {
+        capture: "optional_in",
+        output: "optional_out",
+    }];
+
+    const PORTS_WITH_OPTIONAL_RESULT: SubstepBoundaryPorts = SubstepBoundaryPorts {
+        results: OPTIONAL_RESULT,
+        ..PORTS
+    };
+
+    const OPTIONAL_CAPTURE_INPUTS: &[&str] = &["in", "optional_in"];
+
     struct TestNode {
         type_id: EffectNodeType,
         inputs: Vec<NodeInput>,
@@ -838,10 +867,11 @@ mod tests {
                 output("step_dt", PortType::Scalar(ScalarType::F32)),
                 output("step_index", PortType::Scalar(ScalarType::F32)),
             ];
-            let capture_inputs: &'static [&'static str] = if ports.results.is_empty() {
+            let has_stats = ports.results.iter().any(|result| result.capture == "stats_in");
+            let capture_inputs: &'static [&'static str] = if !has_stats {
                 &["in"]
             } else {
-                inputs.push(input("stats_in", PortType::Texture2D, false));
+                inputs.push(input("stats_in", PortType::Texture2D, true));
                 outputs.push(output("stats", PortType::Texture2D));
                 &["in", "stats_in"]
             };
@@ -853,6 +883,14 @@ mod tests {
                 capture_inputs,
                 ..Self::new("test.substep_boundary", inputs, outputs)
             }
+        }
+
+        fn boundary_with_optional_result() -> Self {
+            let mut boundary = Self::boundary(PORTS_WITH_OPTIONAL_RESULT);
+            boundary.inputs.push(input("optional_in", PortType::Texture2D, false));
+            boundary.outputs.push(output("optional_out", PortType::Texture2D));
+            boundary.capture_inputs = OPTIONAL_CAPTURE_INPUTS;
+            boundary
         }
 
         fn feedback_style() -> Self {
@@ -1107,9 +1145,50 @@ mod tests {
         graph.connect((body, "out"), (boundary, "in")).unwrap();
         graph.connect((boundary, "out"), (consumer, "tex")).unwrap();
 
-        let (b, _, reason) = malformed_parts(compile(&graph).unwrap_err());
-        assert_eq!(b, boundary);
-        assert!(reason.contains("`stats_in` has no wire"), "{reason}");
+        assert!(matches!(
+            compile(&graph).unwrap_err(),
+            GraphError::RequiredInputUnwired { node, port }
+                if node == boundary && port == "stats_in"
+        ));
+    }
+
+    #[test]
+    fn substeps_region_unwired_optional_result_capture_is_allowed() {
+        let mut graph = Graph::new();
+        let src = source(&mut graph, "src");
+        let boundary = graph.add_node(Box::new(TestNode::boundary_with_optional_result()));
+        let body = pass(&mut graph, "body");
+        let consumer = sink(&mut graph, "consumer");
+        graph.connect((src, "out"), (boundary, "seed")).unwrap();
+        graph.connect((boundary, "out"), (body, "a")).unwrap();
+        graph.connect((body, "out"), (boundary, "in")).unwrap();
+        graph.connect((boundary, "out"), (consumer, "tex")).unwrap();
+
+        let plan = compile(&graph).expect("unwired optional result is legal");
+        let region = &plan.substep_regions()[0];
+        assert_eq!(region.steps.len(), 2);
+    }
+
+    #[test]
+    fn substeps_region_wired_optional_result_capture_stays_in_region() {
+        let mut graph = Graph::new();
+        let src = source(&mut graph, "src");
+        let boundary = graph.add_node(Box::new(TestNode::boundary_with_optional_result()));
+        let body = pass(&mut graph, "body");
+        let optional_body = pass(&mut graph, "optional_body");
+        let consumer = sink(&mut graph, "consumer");
+        graph.connect((src, "out"), (boundary, "seed")).unwrap();
+        graph.connect((boundary, "out"), (body, "a")).unwrap();
+        graph.connect((body, "out"), (boundary, "in")).unwrap();
+        graph.connect((body, "out"), (optional_body, "a")).unwrap();
+        graph.connect((optional_body, "out"), (boundary, "optional_in")).unwrap();
+        graph.connect((boundary, "out"), (consumer, "tex")).unwrap();
+        graph.connect((boundary, "optional_out"), (consumer, "aux")).unwrap();
+
+        let plan = compile(&graph).expect("wired optional result remains legal");
+        let region = &plan.substep_regions()[0];
+        let nodes: Vec<NodeInstanceId> = region.steps.iter().map(|&i| plan.steps()[i].node).collect();
+        assert_eq!(nodes, vec![boundary, body, optional_body]);
     }
 
     #[test]
