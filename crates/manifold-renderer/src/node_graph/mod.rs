@@ -100,6 +100,7 @@ pub mod channel_names;
 
 pub use backend::{Backend, MockBackend};
 pub use primitives::gpu_flip_preset::{LIQUID_BODY_OUTPUT, gpu_flip_liquid_body};
+pub use primitives::liquid_stats::SOLVER_WORDS;
 pub use bindings::{NodeInputs, NodeOutputs, Slot};
 pub use content_revision::{ContentVersion, StorageRevision};
 pub use camera::{Camera, CameraMode};
