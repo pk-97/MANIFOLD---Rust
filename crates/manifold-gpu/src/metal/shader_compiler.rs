@@ -419,11 +419,13 @@ fn compile_spirv_entry_to_msl(
     let mut options = <Msl as spirv_cross2::compile::CompilableTarget>::options();
     options.version = msl::MslVersion::new(2, 4, 0);
     options.platform = msl::MetalPlatform::MacOS;
-    // Native arrays are the established MSL representation. Metal skips the
-    // spirv-opt exhaustive-inlining pass in `shader_common`: SPIRV-Cross's
-    // inlined struct-return path otherwise emits an array-copy helper with
-    // incompatible constant/thread address spaces for local arrays.
-    options.force_native_arrays = true;
+    // Keep arrays as value types in helpers. Native arrays force by-value WGSL
+    // parameters into MSL `thread const T (&)[N]`, but SPIRV-Cross can forward
+    // a constant-space uniform member at the call site (node.gradient).
+    // Value arrays materialize that load before the call. This works with the
+    // no-InlineExhaustive Metal path in shader_common, which avoids a separate
+    // SPIRV-Cross bug hoisting complex constant arrays into thread storage.
+    options.force_native_arrays = false;
 
     // Pin the `arrayLength()` buffer-size buffer to the SAME Metal index our
     // SlotMap reserved (one past the user buffers). SPIRV-Cross otherwise emits
@@ -621,21 +623,81 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 "#,
     );
 
+    // The standalone node.gradient wrapper passes the real table-valued body
+    // a uniform array. With native arrays and no SPIR-V inlining, SPIRV-Cross
+    // used a thread reference but forwarded the constant-space member.
+    const GRADIENT_WGSL: &str = concat!(
+        r#"
+struct Params {
+    domain: f32,
+    stops_count: u32,
+    _pad0: u32,
+    _pad1: u32,
+    stops: array<vec4<f32>, 16>,
+}
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var dst: texture_storage_2d<rgba16float, write>;
+"#,
+        include_str!(
+            "../../../manifold-renderer/src/node_graph/primitives/shaders/gradient_ramp_body.wgsl"
+        ),
+        r#"
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dims = textureDimensions(dst);
+    if id.x >= dims.x || id.y >= dims.y {
+        return;
+    }
+    let uv = (vec2<f32>(id.xy) + vec2<f32>(0.5)) / vec2<f32>(dims);
+    let result = body(uv, vec2<f32>(dims), params.domain, params.stops_count, params.stops);
+    textureStore(dst, vec2<i32>(id.xy), result);
+}
+"#,
+    );
+
+    // A fresh device has no disk cache, so these compile the actual MSL and
+    // create the pipeline without dispatching. SPIRV-Cross alone cannot check
+    // Metal address spaces. Gate them because Metal compilation needs a device.
+    #[cfg(feature = "gpu-proofs")]
+    fn assert_metal_compiles(source: &str, label: &str) {
+        let device = GpuDevice::new_queued(label);
+        let _pipeline = device.create_compute_pipeline(source, "cs_main", label);
+    }
+
+    #[cfg(feature = "gpu-proofs")]
+    #[test]
+    fn gradient_uniform_array_has_valid_msl_address_spaces() {
+        assert_metal_compiles(GRADIENT_WGSL, "gradient-uniform-array-regression");
+    }
+
+    #[cfg(feature = "gpu-proofs")]
     #[test]
     fn volume_surface_mesh_local_arrays_have_valid_msl_address_spaces() {
-        let (_, msl, _, _) = compile_wgsl_to_msl(
+        assert_metal_compiles(
             VOLUME_SURFACE_MESH_WGSL,
-            "cs_main",
             "volume-surface-mesh-array-regression",
-            false,
         );
-        assert!(
-            !msl.contains("spvArrayCopyFromConstantToStack("),
-            "Metal MSL still contains an illegal constant-to-stack array copy:\n{msl}"
-        );
-        assert!(
-            msl.contains("kernel void cs_main"),
-            "SPIRV-Cross did not emit the mesher entry point:\n{msl}"
-        );
+    }
+
+    #[test]
+    fn aggregate_arguments_use_value_arrays_without_local_constant_copies() {
+        for (source, label) in [
+            (GRADIENT_WGSL, "gradient"),
+            (VOLUME_SURFACE_MESH_WGSL, "mesher"),
+        ] {
+            let (_, msl, _, _) = compile_wgsl_to_msl(source, "cs_main", label, false);
+            assert!(msl.contains("kernel void cs_main"), "{label}: {msl}");
+            if label == "mesher" {
+                assert!(
+                    !msl.contains("spvArrayCopyFromConstantToStack("),
+                    "{label}: {msl}"
+                );
+            } else {
+                // A uniform array must be copied to a value array, never
+                // passed directly to a helper's thread-space reference.
+                assert!(msl.contains("spvUnsafeArray<float4, 16>"), "{label}: {msl}");
+                assert!(!msl.contains("thread const float4 (&"), "{label}: {msl}");
+            }
+        }
     }
 }
