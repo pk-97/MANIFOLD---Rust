@@ -2,7 +2,7 @@
 // spatial bins (GPU_FLUID_SURFACE_DESIGN.md D17). Passes, barrier between each:
 // clear_counts → count_particles → prefix_scan (level 0 of `cell_counts`) →
 // write_ranges → clear_tail → scatter → stabilise. The count pass's atomic ranks
-// vary run to run; `stabilise` puts each bin's slots in input-index order, so
+// vary run to run; `stabilise` writes each bin's records in input-index order, so
 // every output is the same on every run. `cell_counts` is the scan storage; after
 // the scan it holds each bin's inclusive end. With `write_order`, `order` gets each
 // sorted slot's input index (NO_RANK past the live total); `sorted` is written only
@@ -44,7 +44,8 @@ struct SortParams {
 @group(0) @binding(4) var<storage, read_write> cell_counts: array<atomic<u32>>;
 @group(0) @binding(5) var<storage, read_write> rank: array<u32>;
 @group(0) @binding(6) var<storage, read_write> order: array<u32>;
-// The input index of each sorted slot, before and after stabilising.
+// The input index the scatter put in each slot, in atomic rank order within
+// a bin. Nothing reads it after the sort.
 @group(0) @binding(7) var<storage, read_write> slot_input: array<u32>;
 // A GPU FLIP clock plan (gpu_flip_clock.wgsl Plan; word 0 step_dt, word 11
 // live_mode): live with no time to step, every pass returns. Zeros run.
@@ -150,70 +151,35 @@ fn scatter(@builtin(global_invocation_id) gid: vec3<u32>) {
     slot_input[slot] = i;
 }
 
-fn swap_slots(a: u32, b: u32) {
-    let t = slot_input[a];
-    slot_input[a] = slot_input[b];
-    slot_input[b] = t;
-}
-
-fn sift_down(base: u32, start: u32, n: u32) {
-    var root = start;
-    loop {
-        let child = 2u * root + 1u;
-        if child >= n {
-            break;
-        }
-        var larger = child;
-        if child + 1u < n && slot_input[base + child + 1u] > slot_input[base + child] {
-            larger = child + 1u;
-        }
-        if slot_input[base + root] >= slot_input[base + larger] {
-            break;
-        }
-        swap_slots(base + root, base + larger);
-        root = larger;
-    }
-}
-
-// One thread per bin: its slots' input indices into ascending order
-// (insertion sort for small bins, heapsort above, so a crowded bin costs
-// n log n), then `sorted` and `order` written from them.
+// One thread per scattered slot. Its input lands at its bin's start plus the
+// number of the bin's inputs with a smaller index: where sorting the bin by
+// input index puts it. `slot_input` is only read here, so every thread
+// counts against the same scatter. Each slot of a bin of n reads n words; the
+// threads of a bin share them, since a bin's slots are adjacent.
 @compute @workgroup_size(256)
 fn stabilise(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let b = gid.x;
-    if gated_off() || b >= params.bin_total {
+    let s = gid.x;
+    if gated_off() || (params.write_sorted == 0u && params.write_order == 0u) {
         return;
     }
+    if s >= atomicLoad(&cell_counts[params.bin_total - 1u]) {
+        return;
+    }
+    let i = slot_input[s];
+    // The bin the count and the scatter put input i in, by the same rule.
+    let b = bin_of(position_of(i));
+    let end = atomicLoad(&cell_counts[b]);
     let start = bin_start(b);
-    let n = atomicLoad(&cell_counts[b]) - start;
-    if n <= 32u {
-        for (var k = 1u; k < n; k = k + 1u) {
-            let key = slot_input[start + k];
-            var j = k;
-            while j > 0u && slot_input[start + j - 1u] > key {
-                slot_input[start + j] = slot_input[start + j - 1u];
-                j = j - 1u;
-            }
-            slot_input[start + j] = key;
-        }
-    } else {
-        for (var r = n / 2u; r > 0u; r = r - 1u) {
-            sift_down(start, r - 1u, n);
-        }
-        for (var end = n - 1u; end > 0u; end = end - 1u) {
-            swap_slots(start, start + end);
-            sift_down(start, 0u, end);
+    var place = start;
+    for (var j = start; j < end; j = j + 1u) {
+        place = place + select(0u, 1u, slot_input[j] < i);
+    }
+    if params.write_sorted != 0u {
+        for (var w = 0u; w < params.stride_words; w = w + 1u) {
+            sorted[place * params.stride_words + w] = particles[i * params.stride_words + w];
         }
     }
-    for (var k = 0u; k < n; k = k + 1u) {
-        let i = slot_input[start + k];
-        if params.write_sorted != 0u {
-            for (var w = 0u; w < params.stride_words; w = w + 1u) {
-                sorted[(start + k) * params.stride_words + w] = particles[i * params.stride_words + w];
-            }
-        }
-        if params.write_order != 0u {
-            order[start + k] = i;
-        }
+    if params.write_order != 0u {
+        order[place] = i;
     }
 }

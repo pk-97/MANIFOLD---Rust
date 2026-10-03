@@ -370,7 +370,7 @@ BUG-8c4w / BUG-l24y replace the former per-vertex binary search; the dense body
 remains a test oracle.
 
 **D17 — Binning is one atom.** `node.sort_particles_into_cells` is atomic count → scan →
-atomic scatter → per-bin stabilise (D21), declared `BarrieredReduction` (precedent
+atomic scatter → stabilise (D21), declared `BarrieredReduction` (precedent
 `spawn_from_mesh.rs:119`). None of its dispatches is barrier-free, none has another consumer, and the scan kernel
 is one Rust module shared with `node.running_total`. Rejected: three graph nodes for one
 counting sort — the graph gains nothing from seeing them.
@@ -398,12 +398,13 @@ warm-up frames. The proof lives in P6.
 
 **D21 — The surface chain is deterministic (lead, 2026-09-30).** Bakes and
 bit-reproducible export need the same input to give the same bytes on every run. The
-sort's atomic ranks vary run to run, so an always-on pass sorts each bin's slots by
-input index before `sorted` and `order` are written. Every float sum downstream then
-adds in a fixed order. Cost: the sort goes from 0.20 to 0.51 ms p95 at res 64 ×2, and
-the surface stays inside D20. Proof: `fluid_sort_particles_into_cells_is_deterministic`
-(three runs byte-identical, bins in input order, crowded and sparse bins). Rejected: an
-opt-in switch, because determinism is an invariant, not a mode.
+sort's atomic ranks vary run to run, so an always-on pass, one thread per slot, writes
+each record at its bin's start plus the number of the bin's inputs with a smaller
+index: each bin in input order. Every float sum downstream then adds in a fixed order,
+and the surface stays inside D20. Proofs: `fluid_sort_particles_into_cells_is_deterministic` (three runs byte-identical,
+bins in input order, crowded and sparse bins) and `sort_particles_into_cells::gpu_tests`
+(every output word against a CPU sort, up to 2²⁰ records and bins past 4000). Rejected:
+an opt-in switch, because determinism is an invariant, not a mode.
 
 **D22 — Occupied bricks schedule the existing dense lattice (BUG-8c4w / BUG-l24y).**
 `node.lattice_bricks` marks 8³-node bricks from blob support plus the positive
