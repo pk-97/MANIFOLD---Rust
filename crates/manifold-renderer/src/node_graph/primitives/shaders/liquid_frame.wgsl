@@ -3,7 +3,10 @@
 // One thread per slot of the frame: records below `count` are copied with id
 // 0, since a solver may reorder its state every tick (amendment 5); slots past
 // it get radius 0 (amendment 4). A tick whose stats flag a non-finite record
-// is never published: the frame repeats the previous one (amendment 2).
+// or narrow-band capacity shortage is never published: the frame
+// repeats the previous one (amendment 2).
+// Interior publication supports Ferstl et al. (2016), Narrow Band FLIP,
+// doi:10.1111/cgf.12825; this publication gate is MANIFOLD integration.
 
 struct FluidParticle {
     position_radius: vec4<f32>,
@@ -34,7 +37,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     f.position_radius = vec4<f32>(0.0);
     f.velocity = vec3<f32>(0.0);
     f.id = 0u;
-    if stats[0] != 0u {
+    if stats[0] != 0u || stats[NARROW_BAND_SHORTAGE_WORD] != 0u {
         if i < params.previous_count {
             f = previous[i];
         }

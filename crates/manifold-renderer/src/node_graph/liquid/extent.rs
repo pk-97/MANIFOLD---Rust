@@ -54,6 +54,7 @@ use crate::node_graph::primitives::matter_domain::{fill_region, matter_geometry}
 use crate::node_graph::primitives::matter_face_component::matter_cells;
 use crate::node_graph::primitives::matter_fill::{fill_cells, fill_count};
 use crate::node_graph::primitives::particle_volume::{refined_nodes, volume_scale};
+use crate::node_graph::primitives::prefix_scan::storage_words;
 use crate::node_graph::primitives::sort_particles_into_cells::range_storage_bytes;
 use crate::node_graph::primitives::gpu_flip_domain::gpu_flip_geometry;
 use crate::node_graph::primitives::gpu_flip_pressure::{lattice_refusal, scratch_bytes as pressure_scratch_bytes};
@@ -997,6 +998,17 @@ fn particle_volume(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     }
     searched(x)?;
     brick_schedule(x, refined)?;
+    if x.wired("interior") {
+        let padding = 1 + 2 * crate::node_graph::liquid::lattice::PADDING_NODES;
+        if nodes.iter().any(|&n| n <= padding as f32) {
+            return Err(x.uncovered("interior needs the padded liquid lattice".into()));
+        }
+        let bytes = nodes.iter().map(|&n| (n as u64) - u64::from(padding)).product::<u64>() * 4;
+        if x.bytes("interior") != Some(bytes) {
+            return Err(x.uncovered(format!("interior must hold exactly {bytes} bytes for the cell-centred lattice")));
+        }
+        x.covers("interior", bytes)?;
+    }
     x.covers("solid", nodes_total(nodes) * 4)?;
     x.covers("levelset", lattice_total(refined) * 4)
 }
@@ -1182,6 +1194,17 @@ fn liquid_state(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     }
     if x.input("whitewater_pool_in").is_some() { x.hold(pool); }
 
+    let mut interior_check = Ok(());
+    if x.wired("interior_in") {
+        let bytes = crate::node_graph::liquid::grid::interior_bytes(x.lattice()?.cells());
+        x.provide("interior", bytes);
+        x.hold(bytes);
+        if x.bytes("interior_in") != Some(bytes) {
+            interior_check = Err(x.uncovered(format!("interior_in must hold exactly {bytes} bytes for the cell-centred lattice")));
+        }
+    } else {
+        x.provide("interior", 0);
+    }
     // The faces are the lattice's face grid, sized before the region runs and
     // held only while something reads them. The tick's faces (written later
     // in the plan: the second pass sees them) must be exactly that grid.
@@ -1217,7 +1240,7 @@ fn liquid_state(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     }
     x.covers("stats", stats)?;
     x.covers("stats_in", stats)?;
-    faces_check.and(whitewater_check)
+    faces_check.and(whitewater_check).and(interior_check)
 }
 
 fn liquid_stats(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
@@ -1230,6 +1253,19 @@ fn liquid_stats(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 
 fn liquid_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let lattice = x.lattice()?;
+    let mut interior_check = Ok(());
+    if x.wired("interior") {
+        let bytes = crate::node_graph::liquid::grid::interior_bytes(lattice.cells());
+        if x.bytes("interior") != Some(bytes) {
+            interior_check = Err(x.uncovered(format!("interior must hold exactly {bytes} bytes for the cell-centred lattice")));
+        }
+        x.provide("interior_a", bytes);
+        x.provide("interior_b", bytes);
+        x.hold(RING as u64 * bytes);
+    } else {
+        x.provide("interior_a", 0);
+        x.provide("interior_b", 0);
+    }
     let valid_layers = x.param("face_valid_layers", 0.0).round().clamp(0.0, 8.0);
     provide_frame_faces(x, &lattice, valid_layers);
     let count = x.count("count", 0.0)?;
@@ -1253,7 +1289,7 @@ fn liquid_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     if wired {
         x.covers("solid", solid)?;
     }
-    cover_frame_faces(x, &lattice)
+    cover_frame_faces(x, &lattice).and(interior_check)
 }
 
 /// One GPU FLIP step: the face grid it provides, the sort, the solver and its
@@ -1275,6 +1311,14 @@ fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
         x.publish(port, value as f32);
     }
     let slots = x.items("particles").unwrap_or(0);
+    let cell_bytes = lattice_total(cells) * 4;
+    if x.feeds("interior") { x.provide("interior", cell_bytes); x.hold(cell_bytes); }
+    if x.scalar("narrow_band", 0.0) != 0.0 {
+        // Four distance arrays, support mask, two face grids, lifecycle
+        // particles/status and PrefixScan storage. Ferstl et al. (2016).
+        x.hold(5 * cell_bytes + 2 * faces + slots * PARTICLE + 12);
+        x.hold(storage_words((lattice_total(cells) * 8) as usize) as u64 * 4);
+    }
     let ranges = range_storage_bytes(cells);
     search_fits(x, cells, ranges)?;
     // The sort's ranges, cell counts, rank and slot scratch.
@@ -1603,6 +1647,16 @@ mod tests {
     /// Section 3.7 (Safety rails) rule 1, I9: every liquid preset at every
     /// resolution its domain admits either refuses by name before any GPU
     /// work, or every buffer covers every dispatch.
+    #[test]
+    fn narrow_band_preset_small_extent_checked() {
+        let (id, def) = liquid_presets().into_iter().find(|(id, _)| id.contains("WaterDamBreakGpuFlip")).expect("GPU FLIP preset");
+        let mut preset = LiquidPreset::build(def).unwrap_or_else(|error| panic!("{id}: {error}"));
+        for resolution in [8, 16] {
+            let report = preset.check(resolution).unwrap_or_else(|error| panic!("{id} at {resolution}: {error}"));
+            assert!(report.checked > 0);
+        }
+    }
+
     #[test]
     fn liquid_presets_all_extent_checked() {
         let presets = liquid_presets();

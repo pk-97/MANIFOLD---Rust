@@ -1390,21 +1390,15 @@ fn cpu_solid_face_velocity(open: &[f64], solids: &Solids, reaction: &[f32]) -> (
             if !(0..3).all(|b| b == a || p[b] < n[b]) || p[a] == 0 || p[a] == n[a] {
                 continue;
             }
-            // An open face beside a cut cell carries a dynamic body too.
-            let mut lo = p;
-            lo[a] -= 1;
-            let lo_index = lo[0] + m[0] * (lo[1] + m[1] * lo[2]);
-            let cut_beside = open[lo_index * FACE_FLOATS + 7] < 1.0 || open[i * FACE_FLOATS + 7] < 1.0;
-            let extended = open[i * FACE_FLOATS + 4 + a] >= 1.0;
-            if extended && !cut_beside {
+            // Only a face a solid covers is sampled; the extrapolation
+            // carries it out.
+            if open[i * FACE_FLOATS + 4 + a] >= 1.0 {
                 continue;
             }
+            out[i * FACE_FLOATS + 7] += f64::from(1u32 << a);
             let mut centre: [f64; 3] = std::array::from_fn(|b| min[b] + (p[b] as f64 + 0.5) * h);
             centre[a] = min[a] + p[a] as f64 * h;
             let (row, clear) = closest(solids, centre);
-            if extended && !row.is_some_and(|row| solids.bodies[row].position_inv_mass[3] > 0.0) {
-                continue;
-            }
             margin = margin.min(clear);
             if let Some(row) = row {
                 let (position, _) = body_pose_at(&solids.bodies[row], SOLID_TICK);
@@ -1481,6 +1475,99 @@ fn gpu_flip_solid_face_velocity_matches_cpu() {
         assert_eq!(f64::from(g[3]), w[3], "owner code of record {record}");
     }
     assert_close(&got, &want, "solid face velocity");
+}
+
+/// One layer of the solid velocity's extrapolation in f64, as
+/// GridUtils::extrapolateGridWithObserver runs it on each axis's face
+/// lattice: border faces are done from the start but never seed; an unknown
+/// face beside a known one takes the mean of its done neighbours.
+fn cpu_solid_extrapolate(records: &[f32], n: [usize; 3]) -> Vec<f64> {
+    let m = n.map(|v| v + 1);
+    let mut out: Vec<f64> = records.iter().map(|&v| f64::from(v)).collect();
+    for i in 0..m.iter().product::<usize>() {
+        let p = [i % m[0], (i / m[0]) % m[1], i / (m[0] * m[1])];
+        let mut known = records[i * FACE_FLOATS + 7] as u32;
+        let mut code = records[i * FACE_FLOATS + 3] as u32;
+        for a in 0..3 {
+            let mut top = n.map(|v| v - 1);
+            top[a] = n[a];
+            if (0..3).any(|b| p[b] > top[b]) {
+                continue;
+            }
+            let border = |q: [usize; 3]| (0..3).any(|b| q[b] == 0 || q[b] == top[b]);
+            let is_known = |r: usize| (records[r * FACE_FLOATS + 7] as u32 >> a) & 1 == 1;
+            if border(p) || is_known(i) {
+                continue;
+            }
+            let (mut sum, mut count, mut owner, mut seeded) = (0.0, 0.0, 0u32, false);
+            for b in 0..3 {
+                for d in [-1i64, 1] {
+                    let mut q = p;
+                    let x = p[b] as i64 + d;
+                    if x < 0 || x > top[b] as i64 {
+                        continue;
+                    }
+                    q[b] = x as usize;
+                    let r = q[0] + m[0] * (q[1] + m[1] * q[2]);
+                    if border(q) || is_known(r) {
+                        sum += f64::from(records[r * FACE_FLOATS + a]);
+                        count += 1.0;
+                    }
+                    if !border(q) && is_known(r) {
+                        seeded = true;
+                        if owner == 0 {
+                            owner = (records[r * FACE_FLOATS + 3] as u32 >> (8 * a)) & 255;
+                        }
+                    }
+                }
+            }
+            if seeded {
+                out[i * FACE_FLOATS + a] = sum / count;
+                known |= 1 << a;
+                code |= owner << (8 * a);
+            }
+        }
+        out[i * FACE_FLOATS + 3] = f64::from(code);
+        out[i * FACE_FLOATS + 7] = f64::from(known);
+    }
+    out
+}
+
+/// One layer of the solid extrapolation against the engine's rule in f64,
+/// on random velocities, a sparse random known set and random owners.
+#[test]
+fn gpu_flip_solid_extrapolate_matches_cpu() {
+    let n = SOLID_N;
+    let mut seed = 0x5e7u32;
+    let mut next = || {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        seed
+    };
+    let records: Vec<f32> = random_values(face_grid_len(n), 0x5e6)
+        .chunks(FACE_FLOATS)
+        .flat_map(|r| {
+            let known = (0..3).filter(|_| next() % 5 == 0).fold(0u32, |k, a| k | (1 << a));
+            let code = (0..3).filter(|a| (known >> a) & 1 == 1).fold(0u32, |c, a| c | ((1 + next() % 3) << (8 * a)));
+            [r[0], r[1], r[2], code as f32, 0.0, 0.0, 0.0, known as f32]
+        })
+        .collect();
+    let got: Vec<f32> = Pass::new()
+        .bind(3, &records)
+        .run("solid_extrapolate", &solid_lattice(), 4, face_grid_len(n), solid_records());
+    let want = cpu_solid_extrapolate(&records, n);
+    let grown = got
+        .chunks(FACE_FLOATS)
+        .zip(records.chunks(FACE_FLOATS))
+        .filter(|(g, r)| g[7] as u32 != r[7] as u32)
+        .count();
+    assert!(grown > 5,"the layer reaches unknown faces: {grown}");
+    for (record, (g, w)) in got.chunks(FACE_FLOATS).zip(want.chunks(FACE_FLOATS)).enumerate() {
+        assert_eq!(f64::from(g[3]), w[3], "owner code of record {record}");
+        assert_eq!(f64::from(g[7]), w[7], "known mask of record {record}");
+    }
+    assert_close(&got, &want, "solid extrapolation");
 }
 
 /// The step's solid constraint in f64.
@@ -1757,11 +1844,19 @@ fn gpu_flip_pocket_spread_reports_an_unfinished_cap() {
     pass.run::<u32>("pocket_start", &params, 24, 11, 1);
     pass.run::<u32>("pocket_check", &params, 24, 11, cell_len());
     assert_eq!(pass.bound::<u32>(24, 11)[10], 1, "an unfinished spread is flagged");
-    pass.bind(22, &[5u32, 6, 7, 9]);
-    let first: Vec<u32> = pass.run("pocket_tally", &StepParams { step_in_tick: 0, ..params }, 22, 4, 1);
-    assert_eq!(first, [5, 6, 7, 1], "the tick's first step sets the word");
-    let second: Vec<u32> = pass.run("pocket_tally", &StepParams { step_in_tick: 1, ..params }, 22, 4, 1);
-    assert_eq!(second, [5, 6, 7, 2], "later steps add to it");
+    // The step's dry, sealed and air counts follow in words 7-9.
+    let pocket = pass.bound::<u32>(23, cell_len());
+    let counts: Vec<u32> = (0..3).map(|k| pocket.iter().filter(|&&s| s == k).count() as u32).collect();
+    assert_eq!(counts, [0, (cell_len() - N[1] * N[2]) as u32, (N[1] * N[2]) as u32], "every cell water, the -X layer touching air");
+    pass.bind(1, &vec![0u32; 2 * cell_len()]).bind(7, &vec![0.0f32; cell_len()]);
+    pass.bind(22, &[5u32, 6, 7, 9, 0, 0, 0, 77, 77, 77, 77, 77, 77, 77, 77, 77, 77]);
+    let first: Vec<u32> = pass.run("pocket_tally", &StepParams { step_in_tick: 0, ..params }, 22, 17, 1);
+    assert_eq!(first[..4], [5, 6, 7, 1], "the tick's first step sets the word");
+    assert_eq!(first[7..10], counts[..], "the step's dry, sealed and air cells");
+    assert_eq!(first[10..14], [0, u32::MAX, 0, 0], "the lowest seed is cell 0, through the open -X box face");
+    assert_eq!(first[16], 0, "every cell water: no dry floor hole");
+    let second: Vec<u32> = pass.run("pocket_tally", &StepParams { step_in_tick: 1, ..params }, 22, 17, 1);
+    assert_eq!(second[..4], [5, 6, 7, 2], "later steps add to it");
     assert_eq!(super::gpu_flip_step::pocket_rounds([6, 5, 4]), 6, "the cap is the longest side");
 }
 

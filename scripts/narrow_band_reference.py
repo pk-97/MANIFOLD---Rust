@@ -4,8 +4,8 @@
 The lifecycle follows Ferstl et al., *Narrow Band FLIP for Liquid
 Simulations*, Computer Graphics Forum 35(2), 2016, sections 3.1--3.3,
 doi:10.1111/cgf.12825: particles are retained near the free surface, cells
-that enter the band are reseeded, and particles that move into the deep
-interior are removed.
+that enter the band are reseeded, particles that move into the deep interior
+are removed, and disabling the band restores the dense interior.
 
 This is an analytic CPU reference for later GPU tests.  It deliberately
 differs from the paper/runtime boundary choices in two ways requested by the
@@ -250,11 +250,11 @@ def delete_and_compact(
     return _compact(kept, h, capacity, origin), deleted
 
 
-def reseed_entering_cells(
+def _reseed_cells(
     particles: Sequence[Optional[Particle]],
     *,
-    old_phi: CellField,
     new_phi: CellField,
+    old_phi: Optional[CellField],
     liquid_phi_at: ParticleField,
     solid_phi_at: ParticleField,
     velocity_at: VelocityField,
@@ -263,13 +263,15 @@ def reseed_entering_cells(
     capacity: int,
     origin: Point = (0.0, 0.0, 0.0),
     next_id: Optional[int] = None,
+    restore: bool,
 ) -> tuple[tuple[Optional[Particle], ...], int]:
-    """Fill entering cells up to eight particles using deterministic sites.
+    """Fill eligible cells up to eight particles using deterministic sites.
 
-    Only a cell crossing ``old_phi <= -3*h`` to
-    ``-3*h < new_phi <= -h`` is eligible.  At most the deficit to eight is
-    selected, with occupied sites, non-liquid sites, and solid sites skipped.
-    New velocities come directly from ``velocity_at`` at the selected site.
+    In entering mode, a cell crossing ``old_phi <= -3*h`` to
+    ``-3*h < new_phi <= -h`` is eligible.  In restore mode, every cell with
+    ``new_phi <= -h`` is eligible.  At most the deficit to eight is selected,
+    with occupied sites, non-liquid sites, and solid sites skipped.  New
+    velocities come directly from ``velocity_at`` at the selected site.
     """
 
     h = _check_h(h)
@@ -298,9 +300,15 @@ def reseed_entering_cells(
         if cell in seen_cells:
             continue
         seen_cells.add(cell)
-        old = _read_cell(old_phi, cell, "old_phi")
         new = _read_cell(new_phi, cell, "new_phi")
-        if not (old <= -3.0 * h and -3.0 * h < new <= -h):
+        if restore:
+            eligible = new <= -h
+        else:
+            if old_phi is None:
+                raise ValueError("entering-cell reseed requires old_phi")
+            old = _read_cell(old_phi, cell, "old_phi")
+            eligible = old <= -3.0 * h and -3.0 * h < new <= -h
+        if not eligible:
             continue
         deficit = max(0, REST_PARTICLES - counts.get(cell, 0))
         if deficit == 0:
@@ -334,6 +342,74 @@ def reseed_entering_cells(
     if len(live) + len(additions) > capacity:
         raise ValueError("particle reseed exceeded explicit capacity")
     return _compact(live + additions, h, capacity, origin), len(additions)
+
+
+def reseed_entering_cells(
+    particles: Sequence[Optional[Particle]],
+    *,
+    old_phi: CellField,
+    new_phi: CellField,
+    liquid_phi_at: ParticleField,
+    solid_phi_at: ParticleField,
+    velocity_at: VelocityField,
+    cells: Iterable[Cell],
+    h: float,
+    capacity: int,
+    origin: Point = (0.0, 0.0, 0.0),
+    next_id: Optional[int] = None,
+) -> tuple[tuple[Optional[Particle], ...], int]:
+    """Fill cells entering the band using the explicit crossing predicate."""
+
+    return _reseed_cells(
+        particles,
+        old_phi=old_phi,
+        new_phi=new_phi,
+        liquid_phi_at=liquid_phi_at,
+        solid_phi_at=solid_phi_at,
+        velocity_at=velocity_at,
+        cells=cells,
+        h=h,
+        capacity=capacity,
+        origin=origin,
+        next_id=next_id,
+        restore=False,
+    )
+
+
+def restore_interior(
+    particles: Sequence[Optional[Particle]],
+    *,
+    new_phi: CellField,
+    liquid_phi_at: ParticleField,
+    solid_phi_at: ParticleField,
+    velocity_at: VelocityField,
+    cells: Iterable[Cell],
+    h: float,
+    capacity: int,
+    origin: Point = (0.0, 0.0, 0.0),
+    next_id: Optional[int] = None,
+) -> tuple[tuple[Optional[Particle], ...], int]:
+    """Restore dense interior particles when narrow-band mode is disabled.
+
+    Every cell with ``new_phi <= -h`` is filled to eight deterministic sites.
+    Existing particles are retained, no particles are deleted, and a capacity
+    shortage raises before returning any appended result.
+    """
+
+    return _reseed_cells(
+        particles,
+        old_phi=None,
+        new_phi=new_phi,
+        liquid_phi_at=liquid_phi_at,
+        solid_phi_at=solid_phi_at,
+        velocity_at=velocity_at,
+        cells=cells,
+        h=h,
+        capacity=capacity,
+        origin=origin,
+        next_id=next_id,
+        restore=True,
+    )
 
 
 def narrow_band_lifecycle(
