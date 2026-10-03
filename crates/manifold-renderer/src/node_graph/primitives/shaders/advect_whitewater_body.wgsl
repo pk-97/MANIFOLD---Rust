@@ -45,7 +45,14 @@ fn aw_face_len(axis: u32) -> u32 {
     return arrayLength(&buf_face_w);
 }
 
-fn aw_face(axis: u32, i: u32) -> f32 {
+fn aw_face(axis: u32, i: u32, step: u32, cells: vec3<u32>) -> f32 {
+    if step != 0xffffffffu {
+        var dims = cells; dims[axis] = dims[axis] + 1u;
+        let at = step * dims.x * dims.y * dims.z + i;
+        if axis == 0u { return buf_substep_u[at]; }
+        if axis == 1u { return buf_substep_v[at]; }
+        return buf_substep_w[at];
+    }
     if axis == 0u {
         return buf_face_u[i];
     }
@@ -56,7 +63,7 @@ fn aw_face(axis: u32, i: u32) -> f32 {
 }
 
 // FLIP's MAC trilinear at grid position q.
-fn aw_velocity(q: vec3<f32>, cells: vec3<u32>, face_cells: vec3<u32>) -> vec3<f32> {
+fn aw_velocity(q: vec3<f32>, cells: vec3<u32>, face_cells: vec3<u32>, step: u32) -> vec3<f32> {
     if any(q < vec3<f32>(0.0)) || any(q >= vec3<f32>(cells)) {
         return vec3<f32>(0.0);
     }
@@ -72,7 +79,7 @@ fn aw_velocity(q: vec3<f32>, cells: vec3<u32>, face_cells: vec3<u32>) -> vec3<f3
         for (var corner = 0u; corner < 8u; corner = corner + 1u) {
             let i = lf_face_index(base + vec3<i32>(ww_corner(corner)), axis, pad, face_cells);
             if i != LF_NONE && i < len {
-                sum = sum + ww_corner_weight(f, corner) * aw_face(axis, i);
+                sum = sum + ww_corner_weight(f, corner) * aw_face(axis, i, step, face_cells);
             }
         }
         v[axis] = sum;
@@ -127,7 +134,7 @@ fn aw_in_near_solid(p: vec3<f32>, h: f32, cells: vec3<u32>) -> bool {
     return all(g >= vec3<f32>(0.0)) && all(g < top);
 }
 
-fn body(
+fn aw_step(
     idx: u32,
     count: u32,
     e_pool: Element,
@@ -154,6 +161,7 @@ fn body(
     spray_drag_variance: f32,
     spray_restitution: f32,
     spray_friction: f32,
+    face_step: u32,
 ) -> Element {
     var out = e_pool;
     if (e_pool.kind == 3u || e_pool.kind > 4u) || !(dt > 0.0) {
@@ -186,7 +194,7 @@ fn body(
         let drag = mind + (1.0 - factor) * (maxd - mind);
         nextv = v + gravity * dt + (-drag * v * dt);
     } else {
-        let vmac = aw_velocity(p / h, cells, face_cells);
+        let vmac = aw_velocity(p / h, cells, face_cells, face_step);
         if e_pool.kind == 4u {
             let factor = f32(e_pool.id) / AW_ID_TOP;
             let buoyancy = -2.0 + factor * (-6.0 + 2.0);
@@ -264,4 +272,80 @@ fn body(
     out.position_lifetime = vec4<f32>(resolved + origin, out.position_lifetime.w);
     out.velocity = nextv;
     return out;
+}
+
+fn body(
+    idx: u32,
+    count: u32,
+    e_pool: Element,
+    center_x: f32,
+    center_y: f32,
+    center_z: f32,
+    size_x: f32,
+    size_y: f32,
+    size_z: f32,
+    nodes_x: f32,
+    nodes_y: f32,
+    nodes_z: f32,
+    face_cells_x: f32,
+    face_cells_y: f32,
+    face_cells_z: f32,
+    gravity_x: f32,
+    gravity_y: f32,
+    gravity_z: f32,
+    dt: f32,
+    foam_advection: f32,
+    bubble_buoyancy: f32,
+    bubble_drag: f32,
+    spray_drag: f32,
+    spray_drag_variance: f32,
+    spray_restitution: f32,
+    spray_friction: f32,
+    substep_count: f32,
+    field_nodes_x: f32,
+    field_nodes_y: f32,
+    field_nodes_z: f32,
+    field_spacing: f32,
+    force_lattices: f32,
+    tick_index: f32,
+    first_tick: f32,
+) -> Element {
+    let steps = u32(max(substep_count, 0.0));
+    let origin = vec3<f32>(center_x,center_y,center_z) - 0.5 * vec3<f32>(size_x,size_y,size_z);
+    let h = size_x / (nodes_x - 1.0);
+    let padding = 0.5 * (nodes_x - 1.0 - face_cells_x);
+    let field_origin = origin + vec3<f32>(padding * h);
+    let dims = vec3<u32>(vec3<f32>(field_nodes_x,field_nodes_y,field_nodes_z));
+    let stride = dims.x * dims.y * dims.z * 4u;
+    let base = liquid_field_force_base(i32(tick_index), i32(first_tick), i32(force_lattices), dims);
+    var particle = e_pool;
+    for (var step = 0u; step < max(steps,1u); step = step + 1u) {
+        var duration = dt;
+        var face_step = 0xffffffffu;
+        var event = 0u;
+        if steps > 0u {
+            duration = buf_substep_schedule[step * 4u];
+            event = bitcast<u32>(buf_substep_schedule[step * 4u + 2u]);
+            face_step = step;
+        }
+        if duration <= 0.0 { continue; }
+        var acceleration = vec3<f32>(gravity_x,gravity_y,gravity_z);
+        var impulse = vec3<f32>(0.0);
+        for (var corner = 0u; corner < 8u; corner = corner + 1u) {
+            let c = liquid_field_corner(particle.position_lifetime.xyz, field_origin, field_spacing, dims, corner);
+            for (var a = 0u; a < 3u; a = a + 1u) {
+                if force_lattices > 0.0 {
+                    acceleration[a] = fma(buf_forces[base + c.index * 4u + a], c.weight, acceleration[a]);
+                }
+                if (event & 0x80000000u) != 0u {
+                    let at = (event & 0x7fffffffu) * stride + c.index * 4u + a;
+                    if at < arrayLength(&buf_impulses) { impulse[a] = fma(buf_impulses[at], c.weight, impulse[a]); }
+                }
+            }
+        }
+        // Foam gets the impulse through the already-forced liquid velocity.
+        if particle.kind != 1u && (event & 0x80000000u) != 0u { particle.velocity = particle.velocity + impulse; }
+        particle = aw_step(idx, count, particle, center_x, center_y, center_z, size_x, size_y, size_z, nodes_x, nodes_y, nodes_z, face_cells_x, face_cells_y, face_cells_z, acceleration.x, acceleration.y, acceleration.z, duration, foam_advection, bubble_buoyancy, bubble_drag, spray_drag, spray_drag_variance, spray_restitution, spray_friction, face_step);
+    }
+    return particle;
 }

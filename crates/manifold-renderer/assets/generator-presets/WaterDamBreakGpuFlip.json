@@ -4998,6 +4998,114 @@
       "fromPort": "dust_particles",
       "toNode": 5,
       "toPort": "dust_particles_in"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "substep_schedule",
+      "toNode": 475,
+      "toPort": "substep_schedule"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "substep_u",
+      "toNode": 475,
+      "toPort": "substep_u"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "substep_v",
+      "toNode": 475,
+      "toPort": "substep_v"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "substep_w",
+      "toNode": 475,
+      "toPort": "substep_w"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "substep_count",
+      "toNode": 475,
+      "toPort": "substep_count"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "forces",
+      "toNode": 475,
+      "toPort": "forces"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "impulses",
+      "toNode": 475,
+      "toPort": "impulses"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "field_nodes_x",
+      "toNode": 475,
+      "toPort": "field_nodes_x"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "field_nodes_y",
+      "toNode": 475,
+      "toPort": "field_nodes_y"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "field_nodes_z",
+      "toNode": 475,
+      "toPort": "field_nodes_z"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "field_spacing",
+      "toNode": 475,
+      "toPort": "field_spacing"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "force_lattices",
+      "toNode": 475,
+      "toPort": "force_lattices"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "impulse_tick",
+      "toNode": 475,
+      "toPort": "impulse_tick"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "first_tick",
+      "toNode": 475,
+      "toPort": "first_tick"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "regions",
+      "toNode": 475,
+      "toPort": "regions"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "region_count",
+      "toNode": 475,
+      "toPort": "region_count"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "shapes",
+      "toNode": 475,
+      "toPort": "shapes"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "atlas",
+      "toNode": 475,
+      "toPort": "atlas"
     }
   ]
 }

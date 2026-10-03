@@ -46,6 +46,8 @@ fn advect_values(s: Advect) -> Vec<(&'static str, f32)> {
         ("spray_drag_variance", s.spray_drag_variance),
         ("spray_restitution", s.spray_restitution),
         ("spray_friction", s.spray_friction),
+        ("substep_count",0.0), ("field_nodes_x",2.0), ("field_nodes_y",2.0), ("field_nodes_z",2.0),
+        ("field_spacing",0.25), ("force_lattices",0.0), ("tick_index",0.0), ("first_tick",0.0),
     ]
 }
 
@@ -149,7 +151,7 @@ fn advect_whitewater_fused_matches_unfused() {
             fusion_kind: <AdvectWhitewater as PrimitiveSpec>::FUSION_KIND,
             body: <AdvectWhitewater as PrimitiveSpec>::WGSL_BODY.expect("body"),
             params: <AdvectWhitewater as PrimitiveSpec>::PARAMS,
-            inputs: (0..5).map(InputSource::External).collect(),
+            inputs: (0..5).chain(std::iter::repeat_n(4,6)).map(InputSource::External).collect(),
             input_access: <AdvectWhitewater as PrimitiveSpec>::INPUT_ACCESS.to_vec(),
             node_inputs: <AdvectWhitewater as PrimitiveSpec>::INPUTS,
             node_outputs: <AdvectWhitewater as PrimitiveSpec>::OUTPUTS,
@@ -386,7 +388,7 @@ fn whitewater_tick_fused_matches_unfused() {
     let node = |n: u32| InputSource::Node(NodeInstanceId(n));
     let region = FusionRegion {
         nodes: vec![
-            member!(0, AdvectWhitewater, (0..5).map(external).collect()),
+            member!(0, AdvectWhitewater, (0..5).chain(std::iter::repeat_n(4,6)).map(external).collect()),
             member!(1, RetypeWhitewater, vec![node(0), external(5), external(6), external(1), external(2), external(3)]),
             member!(2, AgeWhitewater, vec![node(1)]),
         ],

@@ -626,7 +626,7 @@ mod gpu {
                 let mut native = harness.device.create_encoder("whitewater per tick frame");
                 while tick < due {
                     let f = &faces[tick as usize];
-                    let inputs = StepInputs { obstacle_source: None, particles: &particles, solid: &solid,
+                    let inputs = StepInputs { motion: None, obstacle_source: None, particles: &particles, solid: &solid,
                         faces: [&f[0], &f[1], &f[2]], level_set: &distance, distance: Some(&distance) };
                     let settings = StepFrame { shape, count: Some(256), ticks: 1, dt: TICK as f32, epoch: 0,
                         seed: tick as f32 * TICK as f32, gravity: GRAVITY,
@@ -676,7 +676,7 @@ mod gpu {
         let solid = shared(bytemuck::cast_slice(&scene.solid));
         let level = shared(bytemuck::cast_slice(&scene.level));
         let faces: [GpuBuffer; 3] = std::array::from_fn(|a| shared(bytemuck::cast_slice(&scene.faces[a])));
-        let inputs = StepInputs { obstacle_source: None, particles: &particles, solid: &solid, faces: [&faces[0], &faces[1], &faces[2]], level_set: &level, distance: None };
+        let inputs = StepInputs { motion: None, obstacle_source: None, particles: &particles, solid: &solid, faces: [&faces[0], &faces[1], &faces[2]], level_set: &level, distance: None };
         let (want, _) = expected(preserve_foam);
         let fence = HandFence::default();
         let mut step = Step::default();

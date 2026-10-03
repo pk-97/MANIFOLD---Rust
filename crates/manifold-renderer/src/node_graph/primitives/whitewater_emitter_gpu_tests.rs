@@ -49,7 +49,7 @@ fn values(extra: &[(&'static str, f32)]) -> Vec<(&'static str, f32)> {
     v.extend_from_slice(extra);
     v
 }
-fn member<P: PrimitiveSpec>(id: u32, inputs: Vec<InputSource>) -> RegionNode<'static> {
+pub(super) fn member<P: PrimitiveSpec>(id: u32, inputs: Vec<InputSource>) -> RegionNode<'static> {
     RegionNode {
         node_id: NodeInstanceId(id),
         fusion_kind: P::FUSION_KIND,
@@ -68,7 +68,7 @@ fn member<P: PrimitiveSpec>(id: u32, inputs: Vec<InputSource>) -> RegionNode<'st
         quantize_f16: false,
     }
 }
-fn fused<T: bytemuck::Pod + KnownItem>(
+pub(super) fn fused<T: bytemuck::Pod + KnownItem>(
     h: &mut Harness,
     nodes: Vec<RegionNode<'_>>,
     external: &[&GpuBuffer],
@@ -788,7 +788,7 @@ fn whitewater_dust_lifecycle_values_and_fusion() {
     let folded = fused::<WhitewaterParticle>(
         &mut h,
         vec![
-            member::<AdvectWhitewater>(0, (0..5).map(InputSource::External).collect()),
+            member::<AdvectWhitewater>(0, (0..5).chain(std::iter::repeat_n(4,6)).map(InputSource::External).collect()),
             member::<AgeWhitewater>(1, vec![InputSource::Node(NodeInstanceId(0))]),
         ],
         &[&input.1, &f[0].1, &f[1].1, &f[2].1, &s.1],
@@ -927,7 +927,7 @@ fn whitewater_dust_step_publishes_a_distinct_population() {
             max_energy: 60.0,
             preserve_foam: false,
         };
-        let inputs = StepInputs {
+        let inputs = StepInputs { motion: None,
             particles: &particles.1,
             solid: &solid.1,
             obstacle_source: Some(&source.1),

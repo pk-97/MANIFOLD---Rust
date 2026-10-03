@@ -9,6 +9,9 @@ Source: FLIP Fluids by Ryan L. Guy & Dennis Fassbaender, MIT license. Vendored a
 Modules ported from it (all under `crates/manifold-renderer/src/node_graph/primitives/`; each `.rs` has a matching `shaders/<name>_body.wgsl` where one exists):
 
 - `crossing_distance`, `lattice_curvature` — from `particlelevelset.cpp`
+- `upwind_distance`, `whitewater_distance` and their WGSL, `whitewater_engine_cpu.rs` — valid-band construction and upwind reinitialisation from `particlelevelset.cpp::calculateCurvatureGrid` and `levelsetsolver.cpp::reinitializeUpwind`, including the vendored convergence and return rule
+- `advect_whitewater` and its WGSL — accepted-substep motion and per-type field acceleration from `diffuseparticlesimulation.cpp::_advanceSprayParticlesThread`, `_advanceBubbleParticlesThread`, `_advanceFoamParticlesThread`, `_advanceDustParticlesThread` and `_getGravityVector`; timestamped hits use MANIFOLD's liquid field seam
+- `keep_whitewater` and its WGSL — diffuse outflow removal from `fluidsimulation.cpp::_updateOutflowMeshFluidSource`, using the existing GPU liquid posed region/atlas sampling
 - `emission_count`, `energy_potential`, `jitter_particles`, `liquid_cells`, `spawn_whitewater`, `whitewater_type` — from `diffuseparticlesimulation.cpp`
 - `wavecrest_potential` — from `diffuseparticlesimulation.cpp` and `interpolation.cpp`
 - `turbulence_field` — from `turbulencefield.cpp`

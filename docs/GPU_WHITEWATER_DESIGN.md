@@ -29,8 +29,8 @@ Extend, don't redesign. `F/` is `crates/manifold-fluids/native/flip_engine/`, `R
 | Emission | `:1989` (count, `(int)(n + 0.5)` per emitter per substep), `:1912` (cylinder placement, 0.25-cell solid buffer, lifetime) | ported |
 | Type rule | `:2056` (spray outside the boundary; foam within 1 cell of the surface; bubble below; foam or spray not bordering air become bubble) | ported for spawn; the lifecycle keeps its own |
 | Boundary box | `:2159` (the grid shrunk 3 cells) | drives D2 |
-| Curvature | `F/particlelevelset.cpp:196` (reinit `:263`, valid nodes `:692`, formula `:728`); 3 extension layers, band 3, out-of-range 5 cells (`particlelevelset.h:143-145`) | formula ported; reinit replaced (D4) |
-| Upwind reinit | `F/levelsetsolver.cpp:82`, step `:315` | not used (D4) |
+| Curvature | `F/particlelevelset.cpp:196` (reinit `:263`, valid nodes `:692`, formula `:728`); 3 extension layers, band 3, out-of-range 5 cells (`particlelevelset.h:143-145`) | formula and engine upwind reinit ported (BUG-g75v.7; legacy D4 retained) |
+| Upwind reinit | `F/levelsetsolver.cpp:82`, step `:315` | registered upwind sweep plus stage convergence (BUG-g75v.7) |
 | FLIP's inputs | `F/fluidsimulation.cpp:6947` (`_updateDiffuseMaterial`), per substep in `_stepFluid` `:10995` | 1.00 substeps per 1/60 s tick at 64 (measured 2026-09-30) |
 | Marker radius | `F/fluidsimulation.cpp:4517`: cbrt(3h³/(32π)) ≈ 0.31h | the emitter cylinder is 8× this |
 | Engine arrays | `F/macvelocityfield.h:92` (`getRawArrayU/V/W`), `F/particlelevelset.h:71` (`getPhiGrid`), `F/meshlevelset.h:101` (`constructMinimalLevelSet`), `:156` (`getPhiArray3d`), `F/array3d.h:391` (`getRawArray`) | whole-array copy targets (D6) |
@@ -81,11 +81,11 @@ DECOMPOSING_GENERATORS.md section 2.5 (primitive audit): survey `rg 'purpose: "'
 
 **D2 — One whitewater grid: the frame's solid lattice cells.** At res n that is n+6 cells a side from m − 3h (70³ at 64), whose nodes are the solid lattice exactly. The level set, the solid and the faces all sit on it at integer offsets. FLIP's boundary box, where the type rule turns everything outside it to spray, sits 1.625 cells inside the grid (3 cells smaller than the domain, then grown by a quarter cell), so on this grid it lies 1.375 cells outside the tank walls. Rejected: the seam's face grid (n cells at m), because the box would turn whitewater within 10 cm of every wall to spray at 64. Rejected: FLIP's own grid (n+3 cells at m − 1.5h), because it sits half a cell off every GPU lattice. **Consequence, stated honestly:** FLIP's box sits 0.125 cells inside the walls, so FLIP sprays an 8 mm strip along each wall at 64 that ours types by depth.
 
-**D3 — GPU FLIP whitewater reads the solver particle distance each tick (BUG-215v, Peter approved 2026-10-03).** This supersedes the surface-level-set decision. `node.gpu_flip_step.distance` publishes the cell-centred φ written by `gpu_flip.step.distance`. `whitewater_step` copies it into the padded whitewater lattice, filling the exterior with the solver's +3h cap, and uses that same field for the narrow band, curvature, material cells and lifecycle classification. It never rebuilds or smooths a second field from the rendered mesh. The old level-set input remains for saved graphs using the frame-stage interface; the shipped GPU FLIP preset uses the tick interface.
+**D3 — GPU FLIP whitewater reads the solver particle distance each tick (BUG-215v, Peter approved 2026-10-03).** This supersedes the surface-level-set decision. `node.gpu_flip_step.distance` publishes the cell-centred φ written by `gpu_flip.step.distance`. `whitewater_step` copies it into the padded whitewater lattice, filling the exterior with the solver's +3h cap, and retains that raw field for material cells and turbulence. BUG-g75v.7 adds the engine upwind surface distance for the narrow band, curvature and lifecycle classification. It never rebuilds or smooths a second field from the rendered mesh. The old level-set input remains for saved graphs using the frame-stage interface; the shipped GPU FLIP preset uses the tick interface.
 
-**D4 — Re-distance to the tangent plane at the nearest crossing.** Crossings come from the refined lattice, where the field is a true distance inside and up to the cap outside. Each carries the surface normal: the gradient at the crossing edge's liquid end, differenced against liquid neighbours, because an air node may sit at the cap. A crossing's root is the inner of the chord root and the secant root through the next liquid node, since the cap flattens the chord and pushes its root outward by up to 0.07 cell. Three passes spread each cell's nearest crossing, at steps of 2, 1 and 1 cells. The distance is to the crossing's tangent plane, signed by the cell centre's level, clamped at 4 cells. A cell with its own crossing takes its level linearised about that crossing, because the trilinear level near the surface can cross zero where air nodes sit at the cap. The tangent plane's error is second-order in how far the crossing sits to the side of the true nearest point, where the distance to the point itself is first-order. FLIP's liquid-into-solid rule (`F/particlelevelset.cpp:170`) is kept: a cell centred in a solid within half a cell of the surface reads −½ cell, and edges touching solid carry no crossing, so a submerged wall is not a surface. Rejected: the distance to the crossing point, measured 0.24–0.29 cell off at the surface and curvature off 2/r by 0.76–0.88 k·h (p99), BUG-7o8f (whitewater O1 red). Rejected: more passes at step 1, which change nothing after three. Rejected: FLIP's upwind reinit from the capped field, because its sign speed outside the cap is about 0.1, so 6–8 passes leave the air side near half a cell and spray reads as foam. Rejected: a brute-force search of every edge within 3 cells, at about 50× the reads.
+**D4 — Legacy level-set interface only; the solver-distance interface uses engine upwind reinitialisation (BUG-g75v.7).** Re-distance to the tangent plane at the nearest crossing. Crossings come from the refined lattice, where the field is a true distance inside and up to the cap outside. Each carries the surface normal: the gradient at the crossing edge's liquid end, differenced against liquid neighbours, because an air node may sit at the cap. A crossing's root is the inner of the chord root and the secant root through the next liquid node, since the cap flattens the chord and pushes its root outward by up to 0.07 cell. Three passes spread each cell's nearest crossing, at steps of 2, 1 and 1 cells. The distance is to the crossing's tangent plane, signed by the cell centre's level, clamped at 4 cells. A cell with its own crossing takes its level linearised about that crossing, because the trilinear level near the surface can cross zero where air nodes sit at the cap. The tangent plane's error is second-order in how far the crossing sits to the side of the true nearest point, where the distance to the point itself is first-order. FLIP's liquid-into-solid rule (`F/particlelevelset.cpp:170`) is kept: a cell centred in a solid within half a cell of the surface reads −½ cell, and edges touching solid carry no crossing, so a submerged wall is not a surface. Rejected: the distance to the crossing point, measured 0.24–0.29 cell off at the surface and curvature off 2/r by 0.76–0.88 k·h (p99), BUG-7o8f (whitewater O1 red). Rejected: more passes at step 1, which change nothing after three. Rejected: FLIP's upwind reinit from the capped field, because its sign speed outside the cap is about 0.1, so 6–8 passes leave the air side near half a cell and spray reads as foam. Rejected: a brute-force search of every edge within 3 cells, at about 50× the reads.
 
-**D5 — Emit and advance once per liquid tick (BUG-215v, Peter approved 2026-10-03).** This supersedes emission from the frame's last tick. `whitewater_step` is inside `liquid_state`'s substep region. It emits with T = 1, then advances, retypes, ages, preserves foam, removes and compacts once, in `diffuseparticlesimulation.cpp::update` order. Pool records and the GPU state words (including next ID and cumulative counters) close as capture/state `results` pairs after every tick. Population arrays and their count words also publish through boundary results. The tick index supplies the deterministic random seed; display-frame time never does. Zero-tick frames hold the boundary outputs, and epoch changes clear them. A 30 fps frame runs two complete emit/advance/capture sequences; 120 fps alternates held frames and one sequence. No GPU fence or CPU count readback is required between ticks. Rendering consumes the capacity-sized population arrays, whose unused records have zero radius.
+**D5 — Emit once per liquid interval; advance over its accepted substeps (BUG-g75v.7, superseding the motion part of BUG-215v).** This supersedes emission from the frame's last tick. `whitewater_step` is inside `liquid_state`'s substep region. It emits with T = 1, advances over the accepted liquid substep history, then retypes, ages, preserves foam, removes and compacts once, in `diffuseparticlesimulation.cpp::update` order. Pool records and the GPU state words (including next ID and cumulative counters) close as capture/state `results` pairs after every tick. Population arrays and their count words also publish through boundary results. The tick index supplies the deterministic random seed; display-frame time never does. Zero-tick frames hold the boundary outputs, and epoch changes clear them. The live clock supplies actual variable interval and substep durations; the fixed export clock supplies its own schedule. No GPU fence or CPU count readback is required between ticks. Rendering consumes the capacity-sized population arrays, whose unused records have zero radius.
 
 **D6 — Handoff: a GPU snapshot into a ring of shared slots, read after its fence, copied whole into the engine.** Section 3.5 has the rules. Rejected: reading graph arrays in place, because they are pooled and the next frame's GPU work overwrites them while the CPU reads. Rejected: aliasing the engine's arrays onto shared memory, because `Array3d` owns its storage and changing that edits vendored FLIP. **Consequence, stated honestly:** "no copies" becomes "no CPU re-layout": one GPU blit per tick (9.2 MB at 64) and whole-array CPU copies into the engine (7.2 MB, faces row-strided into the padded grid), measured in P6.
 
@@ -106,6 +106,58 @@ DECOMPOSING_GENERATORS.md section 2.5 (primitive audit): survey `rg 'purpose: "'
 **D13 — The chain is one node group, "Whitewater", and SWASH is its host.** SWASH is the water solver; the MPM water presets are test scenes. P1–P4 prove on the Rust SWASH scene builders (`swash_preset.rs`); from P5 the group lives in the SWASH Dam Break preset JSON, which is also P6's SWASH side, and is copied into other scenes like the Liquid Surface group. Scenes wire ports, never atoms. MPM still publishes the face grid (P1), because any producer of the seam gets whitewater.
 
 **D14 — The lifecycle moves to the GPU, superseding D1.** Peter, 2026-10-01: "Unless there is a need for this to be CPU and gives us benefits we should move it to GPU so we can handle larger particles and get it all working faster and unified in memory." Advection by type, collisions, lifetimes, foam preservation and the particle pool become GPU atoms, ported line by line from `diffuseparticlesimulation.cpp` with every deviation named; the vendored CPU lifecycle stays the read-only parity oracle. Every ported file carries a FLIP Fluids credit header (MIT, see THIRD_PARTY_NOTICES.md). D6, D8 and D11 are reopened by this and are rewritten as the port lands.
+
+### Engine physics port — BUG-g75v.7 (2026-10-03)
+
+Verified source anchors: `particlelevelset.cpp:263` invokes upwind reinitialisation;
+`levelsetsolver.cpp:82` owns the iteration/convergence rule and `:315` the sweep;
+`diffuseparticlesimulation.cpp:55`, `:2250`, `:2302`, `:2340`, `:2369` own the
+lifecycle and type-specific motion; `:2658` samples forces; `fluidsimulation.cpp:9034`
+removes diffuse particles in mesh outflows. The engine foam update samples vmac
+and does not add gravity or the force field again.
+
+The tick-distance path now reinitialises the solver cell field before padding it.
+It ports the 6-cell valid blocks, six-neighbour feather, h/2 pseudo-time, six-sweep
+maximum, 0.01h convergence-difference threshold, recomputed sign and clamped
+stencil. It preserves the vendored solver's swap/copy behaviour: the returned
+field includes the final converging sweep (tempPtr is written, then swapped into outputPtr). Invalid cells and padding are +5h. Material cells and turbulence still read raw
+liquid phi, matching the separate liquid and surface distance inputs of the engine.
+This supersedes D3's raw-distance classification. The saved-graph level-set path
+retains its existing crossing-distance construction.
+
+Section 2.5 audit: `redistance_lattice` finds nearest marching-cubes triangles;
+`offset_lattice` shifts values. Neither computes this engine rule. `upwind_distance`
+is the new registered, pure stencil atom on the freeze path; the stage owns only
+valid-band construction and convergence reduction. `advect_whitewater` and
+`keep_whitewater` are extended; face capture reuses `face_sample_component` and
+force/collider sampling reuses `LIQUID_FIELD`, `LIQUID_POSE`, `LIQUID_COLLIDER`.
+
+The solver publishes accepted durations/endpoints/event indices and each accepted
+substep's MAC velocities through `substep_schedule`, `substep_u/v/w` and
+`substep_count`. Whitewater remains one separate solver-neutral stage. Its advect
+atom applies the engine's semi-implicit spray, bubble/dust drag and foam sampling
+once for every positive-duration row. Inactive rows are identities. Exact snapshots
+were chosen over endpoint interpolation, which cannot reproduce intermediate
+projected velocities or hit responses. At 64³, six slots use 19,169,376 bytes;
+each additional event slot costs 3,194,896 bytes. Buffers retain their high-water
+capacity and grow only when the grid or required slot capacity changes.
+
+The same domain wires that feed GPU FLIP feed whitewater's `FieldBinding`.
+Gravity plus field acceleration follows the reference's per-type dynamics; hits
+use the schedule's one-shot event index. Foam receives both through the already
+forced liquid velocity. Outflow removal uses the same domain region rows, shape
+atlas and posed negative-distance rule as liquid removal; every whitewater type
+is removed strictly inside the mesh, not on its zero surface.
+
+Remaining deviations: emission, retyping, lifetime/preservation and compaction
+still run once per accepted outer interval; the motion loop holds the interval's
+final solid lattice, and drains sample the final posed regions. This is exact
+substep motion against published liquid velocities, not complete per-substep
+lifecycle parity. Moving-solid/type-transition/drain-crossing differences remain
+explicit follow-up work; the old padded boundary-box deviation also remains.
+GPU value/fusion proofs are `whitewater_engine_gpu_tests`; CPU arithmetic,
+shader validation and extent proofs are `whitewater_engine_cpu` and
+`liquid::substep_history::tests`. GPU execution is lead-owned.
 
 ## 3. Design body
 
@@ -462,7 +514,7 @@ Phasing completeness: every behaviour in sections 3.1–3.7 lands in one phase a
 
 | Item | Revives when |
 |---|---|
-| Forces and impulses on whitewater | the seam's P8 (Forces and impulses for GPU liquids) lands |
+| Per-substep type/solid/outflow lifecycle | BUG-g75v.7 follow-up; motion now consumes exact accepted face snapshots |
 | Presenting whitewater at display time | the side-by-side shows foam trailing the front |
 | `liquid_frame` publishing the grid | the seam's P7a lands |
 | Resolutions above 64 | the resolution campaign, one size at a time with extent proofs |
