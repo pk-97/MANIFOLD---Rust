@@ -460,8 +460,7 @@ fn fluid_searchers_refuse_bins_past_their_ranges() {
 
 /// Determinism is an invariant (bakes, bit-reproducible export): runs on the same
 /// input give byte-identical outputs, and each bin lists its particles in input
-/// order. Half-bin cells give crowded bins (the heapsort path), quarter-bin
-/// cells sparse ones (insertion sort).
+/// order. Half-bin cells give crowded bins, quarter-bin cells sparse ones.
 #[test]
 fn fluid_sort_particles_into_cells_is_deterministic() {
     let mut harness = Harness::new();

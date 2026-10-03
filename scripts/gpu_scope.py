@@ -241,6 +241,14 @@ EXPLICIT_ROWS = [
       RENDERER_SRC + "node_graph/primitives/shaders/prefix_scan",
       RENDERER_SRC + "node_graph/primitives/shaders/coarse_inverse"),
      (["gpu_flip_inactive_slots_match_the_ungated_step"], [])),
+    # The counting sort word for word against its CPU oracle, and the proofs
+    # that drive the sorter directly: the node, and the step's crowding cap.
+    ((RENDERER_SRC + "node_graph/primitives/sort_particles_into_cells",
+      RENDERER_SRC + "node_graph/primitives/prefix_scan",
+      RENDERER_SRC + "node_graph/primitives/shaders/sort_particles_into_cells",
+      RENDERER_SRC + "node_graph/primitives/shaders/prefix_scan"),
+     (["sort_particles_into_cells::gpu_tests::", "fluid_sort_particles_into_cells_",
+       "gpu_flip_step_order_cell_cap_compacts_preserving_ids"], [])),
     # Shared marching-cubes topology: ownership, solid-contact CPU value parity
     # (volume_surface_mesh::gpu_tests::mesh_contact_*), and raster parity.
     ((RENDERER_SRC + "node_graph/primitives/count_surface_edges",

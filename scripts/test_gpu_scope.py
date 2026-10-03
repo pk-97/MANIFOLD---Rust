@@ -225,6 +225,17 @@ class ScopeTests(unittest.TestCase):
             p = plan([path], users=lambda _, u=user: [u], repo=self._repo_with(path))
             self.assertIn(name, p.filters, path)
 
+    def test_sort_and_scan_pull_the_sort_oracle_proof(self):
+        wanted = {"sort_particles_into_cells::gpu_tests::", "fluid_sort_particles_into_cells_",
+                  "gpu_flip_step_order_cell_cap_compacts_preserving_ids"}
+        for path in (P + "sort_particles_into_cells.rs", P + "sort_particles_into_cells_gpu_tests.rs",
+                     P + "prefix_scan.rs"):
+            self.assertTrue(wanted <= plan([path]).filters, path)
+        for path, user in ((P + "shaders/sort_particles_into_cells.wgsl", P + "sort_particles_into_cells.rs"),
+                           (P + "shaders/prefix_scan.wgsl", P + "prefix_scan.rs")):
+            p = plan([path], users=lambda _, u=user: [u], repo=self._repo_with(path))
+            self.assertTrue(wanted <= p.filters, path)
+
     def test_mixed_diff_keeps_the_broad_row_whole(self):
         p = plan([R + "node_graph/liquid/clock.rs", P + "gpu_flip_step.rs"])
         self.assertIn("gpu_flip_", p.filters)

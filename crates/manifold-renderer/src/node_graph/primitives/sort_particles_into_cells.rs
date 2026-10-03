@@ -238,7 +238,8 @@ impl ParticleSorter {
         encoder.compute_memory_barrier_buffers();
         encoder.dispatch_compute(scatter, &bindings, groups(count), labels.scatter);
         encoder.compute_memory_barrier_buffers();
-        encoder.dispatch_compute(stabilise, &bindings, groups(bin_total), labels.stabilise);
+        // One thread per scattered slot; there are at most `count`.
+        encoder.dispatch_compute(stabilise, &bindings, groups(count), labels.stabilise);
         Ok(())
     }
 }
@@ -516,3 +517,7 @@ impl Primitive for SortParticlesIntoCells {
         }
     }
 }
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+#[path = "sort_particles_into_cells_gpu_tests.rs"]
+mod gpu_tests;
