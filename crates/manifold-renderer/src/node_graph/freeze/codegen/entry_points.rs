@@ -2,7 +2,8 @@ use crate::node_graph::ports::PortType;
 
 use super::types::{is_texture_input, CodegenError};
 use super::standalone::{
-    generate_standalone, generate_standalone_buffer, generate_standalone_resolve,
+    generate_standalone, generate_standalone_buffer_with_options,
+    generate_standalone_resolve,
     StandaloneKernelSpec,
 };
 
@@ -30,7 +31,12 @@ pub fn standalone_for_spec<P: crate::node_graph::primitive::PrimitiveSpec>(
     // `DERIVED_UNIFORMS` (frame-derived non-param uniform fields). The texture
     // path's public `generate_standalone` signature stays untouched.
     if P::OUTPUTS.iter().any(|o| matches!(o.ty, PortType::Array(_))) {
-        return generate_standalone_buffer(&spec, P::ATOMIC_OUTPUTS);
+        return generate_standalone_buffer_with_options(
+            &spec,
+            P::ATOMIC_OUTPUTS,
+            P::OWNED_OUTPUTS,
+            P::BUFFER_INDEX,
+        );
     }
     // BUFFER→TEXTURE resolve: an Array input with NO texture input, feeding a
     // texture output — the accumulator-to-density bridge
@@ -181,7 +187,12 @@ pub fn standalone_for_node(
         includes: node.wgsl_includes(),
     };
     if node.outputs().iter().any(|o| matches!(o.ty, PortType::Array(_))) {
-        return generate_standalone_buffer(&spec, node.atomic_outputs());
+        return generate_standalone_buffer_with_options(
+            &spec,
+            node.atomic_outputs(),
+            node.owned_outputs(),
+            node.buffer_index(),
+        );
     }
     if node.inputs().iter().any(|i| matches!(i.ty, PortType::Array(_)))
         && !node.inputs().iter().any(is_texture_input)

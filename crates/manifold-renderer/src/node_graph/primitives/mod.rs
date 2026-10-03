@@ -332,6 +332,8 @@ pub(crate) mod sort_particles_into_cells;
 mod running_total;
 mod shape_particle_blobs;
 pub(crate) mod particle_volume;
+pub(crate) mod lattice_bricks;
+pub(crate) mod liquid_bricks;
 mod smooth_lattice;
 pub(crate) mod dot_products;
 mod divide_by_value;
@@ -371,6 +373,7 @@ mod whitewater_pool_cpu;
 mod whitewater_pool_tests;
 pub(crate) mod whitewater_lifecycle;
 pub(crate) mod whitewater_step;
+mod pad_distance_lattice;
 #[cfg(test)]
 mod whitewater_step_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
@@ -402,6 +405,8 @@ mod gpu_flip_atom_tests;
 mod gpu_flip_body_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_flip_step_tests;
+#[cfg(test)]
+mod gpu_flip_narrow_band_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_flip_scene_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]

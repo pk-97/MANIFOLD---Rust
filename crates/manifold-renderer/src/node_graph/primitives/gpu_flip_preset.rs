@@ -730,12 +730,12 @@ fn scene_cards(metadata: &Value, scene: WaterScene) -> Value {
     metadata
 }
 
-/// Sets `resolution_scale` on every surface volume and mesh node in `value`,
+/// Sets `resolution_scale` on the surface schedule, volume and mesh in `value`,
 /// however deep the group nests them.
 fn set_surface_scale(value: &mut Value, scale: usize) {
     match value {
         Value::Object(map) => {
-            let surface = map.get("nodeId").is_some_and(|id| id == "liquid_volume" || id == "liquid_mesh");
+            let surface = map.get("nodeId").is_some_and(|id| id == "liquid_volume" || id == "liquid_mesh" || id == "liquid_bricks");
             if surface && let Some(params) = map.get_mut("params") {
                 params["resolution_scale"] = int(scale);
             }
@@ -1144,6 +1144,42 @@ pub(super) mod tests {
         }
         let shipped: Value = serde_json::from_str(&std::fs::read_to_string(&path).expect("the shipped preset reads")).expect("parses");
         assert!(canonical(&shipped) == canonical(&built), "{SHIPPED_PRESET}.json differs from the builder's Dam Break; rerun with UPDATE_GPU_FLIP_PRESET=1");
+    }
+
+    /// BUG-215v: whitewater belongs to the liquid region, consumes the
+    /// solver phi, and every persistent or rendered result closes through
+    /// the boundary. This checks real preset compilation without a GPU.
+    #[test]
+    fn whitewater_per_tick_preset_closes_the_liquid_region() {
+        let def = render_def(WaterScene::dam_break(16).with_faces());
+        let (graph, plan) = built(&def);
+        let whitewater_node = graph.nodes().find(|n| n.node_id.as_str() == "whitewater").unwrap();
+        let whitewater = whitewater_node.id;
+        let region = plan.substep_regions().iter().find(|r|
+            r.steps.iter().any(|&i| plan.steps()[i].node == whitewater)).expect("whitewater is per tick");
+        let wire = |from, from_port: &str, to, to_port: &str| def.wires.iter().any(|w|
+            w.from_node == from && w.from_port == from_port && w.to_node == to && w.to_port == to_port);
+        let boundary_name = &graph.get_node(region.boundary).unwrap().node_id;
+        let boundary = def.nodes.iter().find(|n| &n.node_id == boundary_name).unwrap().id;
+        let whitewater = crate::node_graph::NodeInstanceId(def.nodes.iter()
+            .find(|n| n.node_id.as_str() == "whitewater").unwrap().id);
+        let distance = def.wires.iter().find(|w| w.to_node == whitewater.0 && w.to_port == "distance").unwrap();
+        assert_eq!(distance.from_port, "distance");
+        assert!(def.nodes.iter().any(|n| n.id == distance.from_node && n.type_id == "node.gpu_flip_step"));
+        for (output, capture, held) in [
+            ("pool_out", "whitewater_pool_in", "whitewater_pool"),
+            ("state_out", "whitewater_state_in", "whitewater_state"),
+            ("counts_out", "whitewater_counts_in", "whitewater_counts"),
+            ("foam_particles", "foam_particles_in", "foam_particles"),
+            ("bubble_particles", "bubble_particles_in", "bubble_particles"),
+            ("spray_particles", "spray_particles_in", "spray_particles"),
+        ] {
+            assert!(wire(whitewater.0, output, boundary, capture), "missing {capture}");
+            assert!(!def.wires.iter().any(|w| w.from_node == whitewater.0 && w.from_port == output && w.to_node != boundary), "{held} escapes the boundary");
+        }
+        for frozen in [false, true] {
+            walked(&def, frozen, "16³ per-tick whitewater");
+        }
     }
 
     /// The shipped preset loads, saves and reloads unchanged, the Whitewater

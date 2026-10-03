@@ -42,6 +42,8 @@ Checked against the engine, no engine code in them (each file's header says so):
 - `liquid/conformance.rs`, `tests/gpu_proofs/liquid_conformance.rs` — the engine's coupled tank (its gravity tests)
 - `manifold-fluids/src/whitewater_oracle.rs` — runs the engine's whitewater emitter and curvature as test oracles
 
+`crates/manifold-renderer/src/live_sim_clock_reference.rs` ports the CFL duration rule from `fluidsimulation.cpp::_calculateNextTimeStep` (including epsilon, optional surface-tension/color restrictions and equal frame partition). It is a standalone CPU reference, not runtime integration.
+
 The GPU structure (the step's passes, the multigrid preconditioner) is MANIFOLD's own; the ported parts are the rules above.
 
 ### License

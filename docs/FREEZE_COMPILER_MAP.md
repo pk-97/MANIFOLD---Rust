@@ -144,8 +144,12 @@ unfused, which is always correct. Order matters; from `classify_node`:
 out; no texture output; texture *inputs* must be wired sampled 2D/3D (unwired
 optional = boundary — the fused node's port would be required and silently kill
 the dispatch); no atomic outputs (see the atomic-output rule below); same
-wire/control-producer rules. A
-`BufferGather` array input (neighbor_smooth, reflect_array) ADMITS: the
+wire/control-producer rules. Cell-owned outputs remain boundaries. Buffer-index
+schedules also remain boundaries unless the atom declares a proven
+`dense_buffer_fusion` form: the finder excludes its schedule-only ports from
+data and capacity externals, and install emits the dense fragments without
+schedule inputs or pass uniforms. Standalone kernels retain their sparse passes.
+A `BufferGather` array input (neighbor_smooth, reflect_array) ADMITS: the
 gathered wire stays external — the finder never unions a gather-consumed wire,
 `build_region` keeps the producer out (bailing defensively otherwise), and the
 fused buffer codegen binds it as a read-only `src_<slot>` storage array the
@@ -481,9 +485,10 @@ invariant a fused def must respect:
     scalars; they never contain a node from outside the body (section 4).
     Regions do not nest: a boundary inside another region's body is a compile
     error (`substeps_region_nested_boundary_rejected`).
-    A boundary may opt in to host syncs by naming a clock port; offline only,
+    A boundary may opt in to host syncs by naming a clock port;
     the executor may then commit, wait and run the clock owner's host step
-    between two iterations. A region that has not opted in never commits or
+    between two iterations, including coupled live ticks (at most three per frame).
+    A region that has not opted in never commits or
     waits mid-region, so a fused body can rely on one uninterrupted encode.
 
 ## 10. Test surface & how to debug

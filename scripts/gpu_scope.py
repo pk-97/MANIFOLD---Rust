@@ -107,6 +107,7 @@ REPORTER_SKIPS = [
 # touched path selected.
 LIQUID_FORCE_FILTERS = [
     "liquid_conformance::liquid_coupled_world_steps",
+    "liquid_conformance::liquid_coupled_live_frame_rate",
     "liquid_conformance::liquid_free_flight",
     "liquid_conformance::liquid_pause_",
     "liquid_conformance::liquid_export_",
@@ -129,6 +130,9 @@ MATTER_DOMAIN_FILTERS = ["matter_scene::", "matter_coupling::", "matter_look::",
 
 # Narrow rows win over EXPLICIT_ROWS: a path matching one gets only that row.
 NARROW_ROWS = [
+    ((RENDERER_SRC + "node_graph/primitives/gpu_flip_narrow_band_tests.rs",
+      RENDERER_SRC + "node_graph/primitives/shaders/gpu_flip_narrow_band.wgsl"),
+     (["gpu_flip_narrow_band_"], [])),
     ((RENDERER_SRC + "node_graph/liquid/clock.rs",
       RENDERER_SRC + "node_graph/liquid/fields.rs",
       RENDERER_SRC + "node_graph/liquid/fields/"),

@@ -25,7 +25,7 @@ use crate::headless_readback::{encode_rgba8_png, readback_srgb_rgba8};
 use crate::node_graph::depth_rule::DepthRule;
 use crate::node_graph::effect_node::{EffectNode, EffectNodeContext, EffectNodeType};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
+use crate::node_graph::ports::{ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
 use crate::node_graph::substeps::test_nodes::register_substep_test_nodes;
 use crate::node_graph::PrimitiveRegistry;
 use crate::preset_context::PresetContext;
@@ -52,17 +52,18 @@ fn float(v: f64) -> Value {
 type Port = (u64, &'static str);
 
 const PROBE: &str = "test.scalar_probe";
+const COUNTS_PROBE: &str = "test.whitewater_counts_probe";
 
-/// Reads one scalar and nothing reads it. A liveness root, so the planner
-/// keeps it and gives the scalar storage; its `value` param shadows the
-/// input, so the runtime's live parameter tap reports the wire's value.
-struct ScalarProbe {
+/// A liveness root that keeps the observed output bound. Scalar probes
+/// shadow their input with `value` for the runtime's live parameter tap;
+/// the count-buffer probe retains the boundary's completed tick reports.
+struct Probe {
     type_id: EffectNodeType,
     inputs: Vec<NodeInput>,
     params: Vec<ParamDef>,
 }
 
-impl ScalarProbe {
+impl Probe {
     fn new() -> Self {
         Self {
             type_id: EffectNodeType::new(PROBE),
@@ -77,9 +78,19 @@ impl ScalarProbe {
             }],
         }
     }
+
+    /// Keep the boundary's count output bound for late capture. The CPU
+    /// reads its shared buffer only after the frame completes.
+    fn whitewater_counts() -> Self {
+        Self {
+            type_id: EffectNodeType::new(COUNTS_PROBE),
+            inputs: vec![NodePort { name: Cow::Borrowed("counts"), ty: PortType::Array(ArrayType::of_known::<u32>()), kind: PortKind::Input, required: true }],
+            params: Vec::new(),
+        }
+    }
 }
 
-impl EffectNode for ScalarProbe {
+impl EffectNode for Probe {
     fn type_id(&self) -> &EffectNodeType {
         &self.type_id
     }
@@ -170,21 +181,89 @@ impl Appender {
 
 /// `render_def` of `scene` with its faces published, which for the Dam Break
 /// at 64 is the shipped preset with its `node.whitewater_step`. The node's
-/// reports are probed by name, the frame's particle count as `count`.
+/// reports are read from the boundary's captured counts after the frame;
+/// the frame's particle count is probed as `count`.
 pub(super) fn whitewater_render_def(scene: WaterScene) -> EffectGraphDef {
     let mut g = Appender::new(render_def(scene.with_faces()));
-    let node = g.id("whitewater");
-    for report in STEP_REPORTS {
-        g.probe(report, (node, report));
-    }
+    let state = g.id("state");
+    let counts = g.node("whitewater_reports", COUNTS_PROBE, json!({}));
+    g.wire((state, "whitewater_counts"), counts, "counts");
     let frame = g.id("frame");
     g.probe("count", (frame, "count_b"));
     g.finish()
 }
 
+/// CPU-only regression: the probed scene must remain compilable after fusion.
+#[test]
+fn whitewater_scene_fuses_without_gpu() {
+    use crate::node_graph::{EffectGraphDefExt, compile};
+    use crate::node_graph::freeze::install::fuse_generator_view;
+
+    let def = whitewater_render_def(WaterScene::dam_break(64));
+    let mut registry = PrimitiveRegistry::with_builtin();
+    register_substep_test_nodes(&mut registry);
+    registry.register(PROBE, || Box::new(Probe::new()));
+    registry.register(COUNTS_PROBE, || Box::new(Probe::whitewater_counts()));
+    let report = crate::node_graph::fusion_report(&def, &registry);
+    assert_eq!(report.regions.len(), 1, "the surface chain must remain fusable");
+    let members: Vec<_> = report.nodes.iter().filter(|node| node.fused).map(|node| node.type_id.as_str()).collect();
+    assert_eq!(members, ["node.smooth_lattice", "node.clamp_liquid_to_solids"]);
+    let graph = def.clone().into_graph(&registry, &Default::default()).expect("authored scene loads");
+    let plan = compile(&graph).expect("probes must not escape the authored tick region");
+    let state = graph.nodes().find(|n| n.node_id.as_str() == "state").expect("the liquid boundary").id;
+    assert!(plan.steps().iter().find(|s| s.node == state).unwrap().outputs.iter().any(|(port, _)| *port == "whitewater_counts"),
+        "the counts must stay bound for late capture");
+    let fused = fuse_generator_view(&def, &registry).expect("the whitewater scene must fuse");
+    let graph = (*fused.def).clone().into_graph(&registry, &fused.mesh_rules).expect("fused scene loads");
+    let plan = compile(&graph).expect("probes must not escape the fused tick region");
+    let state = graph.nodes().find(|n| n.node_id.as_str() == "state").expect("the liquid boundary survives fusion").id;
+    assert!(plan.steps().iter().find(|s| s.node == state).unwrap().outputs.iter().any(|(port, _)| *port == "whitewater_counts"),
+        "fusion must keep the counts bound for late capture");
+}
+
+/// The vendored lifecycle replaces the preset's `node.whitewater_step` at the
+/// same document id. The vendored lifecycle takes Capacity as a param, while
+/// the current step takes a scalar port: the splice must adapt that interface
+/// and retain the card binding to the lifecycle's real capacity control.
+#[test]
+fn vendored_whitewater_scene_loads_and_compiles_without_gpu() {
+    use crate::node_graph::{EffectGraphDefExt, compile};
+    use crate::node_graph::freeze::install::fuse_generator_view;
+
+    let def = vendored_render_def(WaterScene::dam_break(16));
+    let group = def.nodes.iter().find(|node| node.node_id.as_str() == "whitewater").expect("the vendored whitewater group");
+    let body = group.group.as_ref().expect("whitewater is a group");
+    assert!(!body.interface.inputs.iter().any(|input| input.name == "capacity"),
+        "the lifecycle uses a param, not a silently unused capacity input");
+    assert!(!def.wires.iter().any(|wire| wire.to_node == group.id && wire.to_port == "capacity"),
+        "the step-only capacity wire must be removed by the fixture splice");
+    let budget = def.preset_metadata.as_ref().unwrap().bindings.iter()
+        .find(|binding| binding.id == "whitewater_capacity").expect("budget binding");
+    assert_eq!(budget.target, manifold_core::effect_graph_def::BindingTarget::Node {
+        node_id: "ww.lifecycle".into(), param: "capacity".into(),
+    }, "the budget card must still drive the lifecycle");
+    let capacity = body.interface.params.iter().find(|param| param.name == "capacity").expect("the Capacity group param");
+    assert_eq!(capacity.target_handle, "Whitewater Lifecycle");
+    assert_eq!(capacity.target_param, "capacity");
+
+    let mut registry = PrimitiveRegistry::with_builtin();
+    register_substep_test_nodes(&mut registry);
+    registry.register(PROBE, || Box::new(Probe::new()));
+    registry.register(COUNTS_PROBE, || Box::new(Probe::whitewater_counts()));
+    let graph = def.clone().into_graph(&registry, &Default::default()).expect("vendored whitewater scene loads");
+    let lifecycle = graph.nodes().find(|node| node.node_id.as_str() == "ww.lifecycle").expect("the lifecycle survives flattening");
+    assert_eq!(lifecycle.params.get("capacity").and_then(ParamValue::as_scalar), Some(100_000.0),
+        "the group's Capacity param must route to the lifecycle");
+    let plan = compile(&graph).expect("vendored whitewater scene compiles");
+    assert!(plan.steps().iter().any(|step| step.node == lifecycle.id), "the lifecycle must remain in the compiled plan");
+    let fused = fuse_generator_view(&def, &registry).expect("the vendored whitewater scene must fuse");
+    let fused_graph = (*fused.def).clone().into_graph(&registry, &fused.mesh_rules).expect("fused vendored whitewater scene loads");
+    compile(&fused_graph).expect("fused vendored whitewater scene compiles");
+}
+
 /// The preset's Whitewater group before `node.whitewater_step` replaced it:
 /// the GPU emitter atoms feeding the vendored lifecycle (`ww.lifecycle`). Its
-/// external ports are the node's, so it splices in at the same id. Kept for
+/// frame-based ports are adapted by `vendored_render_def`. Kept for
 /// L5's side-by-side and O2, which reads the group's inner arrays.
 const VENDORED_GROUP: &str = include_str!("../../../tests/fixtures/whitewater_vendored_group.json");
 
@@ -198,6 +277,40 @@ fn vendored_render_def(scene: WaterScene) -> EffectGraphDef {
     group["id"] = json!(id);
     let nodes = g.def["nodes"].as_array_mut().expect("nodes");
     *nodes.iter_mut().find(|n| n["nodeId"] == "whitewater").expect("the whitewater node") = group;
+    // b1a1f5f65 moved whitewater_step into the tick region with pool state
+    // and a distance lattice. The vendored lifecycle is still a post-frame
+    // observer. Restore its original frame/surface inputs and direct render
+    // outputs, rather than feeding it the step's incompatible tick interface.
+    g.def["wires"].as_array_mut().expect("wires")
+        .retain(|wire| wire["toNode"] != id && wire["fromNode"] != id);
+    g.remove(&["whitewater_face_u", "whitewater_face_v", "whitewater_face_w"]);
+    let frame = g.id("frame");
+    for (source, input) in [("particles_b", "particles"), ("count_b", "count"), ("solid_b", "solid")] {
+        g.wire((frame, source), id, input);
+    }
+    for port in ["grid_bounds", "grid_nodes_x", "grid_nodes_y", "grid_nodes_z",
+        "face_u", "face_v", "face_w", "face_cells_x", "face_cells_y", "face_cells_z", "face_valid_layers"] {
+        g.wire((frame, port), id, port);
+    }
+    let surface = g.id("surface");
+    for port in ["level_set", "level_set_nodes_x", "level_set_nodes_y", "level_set_nodes_z"] {
+        g.wire((surface, port), id, port);
+    }
+    let domain = g.id("domain");
+    for port in ["ticks", "epoch", "gravity_x", "gravity", "gravity_z"] {
+        g.wire((domain, port), id, port);
+    }
+    g.wire((domain, "simulation_time"), id, "seed");
+    for (kind, particles, count) in [("foam", "foam_particles", "foam_count"),
+        ("bubble", "bubble_particles", "bubble_count"), ("spray", "spray_particles", "spray_count")] {
+        let copies = g.id(&format!("{kind}_copies"));
+        let object = g.id(&format!("{kind}_object"));
+        g.def["wires"].as_array_mut().expect("wires")
+            .retain(|wire| !(wire["toNode"] == copies && wire["toPort"] == "particles"));
+        g.wire((id, particles), copies, "particles");
+        g.wire((id, count), copies, "live_count");
+        g.wire((id, count), object, "instance_count");
+    }
     let target = json!({"kind": "node", "nodeId": "ww.lifecycle", "param": "capacity"});
     for binding in g.def["presetMetadata"]["bindings"].as_array_mut().expect("bindings") {
         if binding["id"] == "whitewater_capacity" {
@@ -207,7 +320,6 @@ fn vendored_render_def(scene: WaterScene) -> EffectGraphDef {
     for report in LIFECYCLE_REPORTS {
         g.probe(report, (id, report));
     }
-    let frame = g.id("frame");
     g.probe("count", (frame, "count_b"));
     g.finish()
 }
@@ -268,7 +380,8 @@ impl Show {
     pub(super) fn new(def: EffectGraphDef, size: (u32, u32), frozen: bool, held: &[String]) -> Self {
         let mut registry = PrimitiveRegistry::with_builtin();
         register_substep_test_nodes(&mut registry);
-        registry.register(PROBE, || Box::new(ScalarProbe::new()));
+        registry.register(PROBE, || Box::new(Probe::new()));
+        registry.register(COUNTS_PROBE, || Box::new(Probe::whitewater_counts()));
         let (def, retarget) = match frozen.then(|| super::gpu_flip_preset::fused_as_rendered(&def, &registry)).flatten() {
             Some(view) => ((*view.def).clone(), view.node_retarget.clone()),
             None => (def, Default::default()),
@@ -381,12 +494,23 @@ impl Show {
         self.frame_count = 0;
     }
 
-    /// This frame's values at the named probes.
+    /// This frame's values at the named probes. Per-tick whitewater reports
+    /// come from the liquid boundary, after `frame` has waited for the GPU.
     fn probes<const N: usize>(&self, labels: [&str; N]) -> [f32; N] {
         let live = self.runtime.live_node_params_watched();
         labels.map(|label| {
             let name = format!("probe.{label}");
-            let values = live.iter().find(|(id, _)| id.as_str() == name).map(|(_, values)| values).unwrap_or_else(|| panic!("no {name}"));
+            let values = live.iter().find(|(id, _)| id.as_str() == name).map(|(_, values)| values);
+            let Some(values) = values else {
+                let word = STEP_REPORTS.iter().position(|&report| report == label).unwrap_or_else(|| panic!("no {name}"));
+                let state = self.runtime.graph.nodes().find(|n| n.node_id.as_str() == "state").expect("the liquid boundary");
+                let counts = state.node.provided_array_output("whitewater_counts").expect("the boundary captures whitewater reports");
+                assert!(counts.size >= (STEP_REPORTS.len() * std::mem::size_of::<u32>()) as u64);
+                let ptr = counts.mapped_ptr().expect("shared whitewater counts");
+                // SAFETY: `frame` waits for GPU completion, and the boundary
+                // owns at least six u32 count words, checked above.
+                return unsafe { *ptr.cast::<u32>().add(word) } as f32;
+            };
             let value = values.iter().find(|(param, _)| *param == "value").map(|&(_, v)| v).expect("the probe reads value");
             assert!(value.is_finite(), "{name} saw no value this frame");
             value
@@ -550,9 +674,9 @@ fn gpu_flip_whitewater_holds_while_paused() {
     let (still, still_image) = (show.probes(STEP_REPORTS), show.readback());
     let changed = image.chunks_exact(4).zip(still_image.chunks_exact(4)).filter(|(a, b)| a != b).count();
     println!("WHITEWATER pause: playing {playing:?}; paused {held:?} then {still:?}; {changed} pixels changed over 3 paused frames");
-    // The first paused frame publishes the last playing tick: the node
-    // publishes the slot written a frame before.
-    assert!(held[3] >= playing[3], "the first paused frame lost emission: {held:?}");
+    // Counts are captured at each tick boundary, so even the first paused
+    // frame must preserve the last completed playing tick.
+    assert_eq!(held, playing, "the first paused frame changed whitewater counts");
     assert_eq!(still[..6], held[..6], "paused frames moved the whitewater");
     assert_eq!(changed, 0, "paused frames changed the picture");
     show.paused = false;

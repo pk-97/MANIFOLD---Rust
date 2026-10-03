@@ -1279,6 +1279,11 @@ crate::primitive! {
     outputs: {
         out: Array(FluidParticle),
         faces: Array(FaceSample),
+        distance: Array(f32),
+        grid_bounds: Transform,
+        grid_nodes_x: ScalarF32, grid_nodes_y: ScalarF32, grid_nodes_z: ScalarF32,
+        face_cells_x: ScalarF32, face_cells_y: ScalarF32, face_cells_z: ScalarF32,
+        face_valid_layers: ScalarF32,
         reaction_out: Array(f32),
         capped: Array(u32),
     },
@@ -1344,18 +1349,22 @@ impl Primitive for GpuFlipStep {
     }
 
     fn provides_array_output(&self, port: &str) -> bool {
-        port == "faces"
+        matches!(port, "faces" | "distance")
     }
 
     fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
-        (port == "faces").then_some(self.state.faces.as_ref()).flatten()
+        match port {
+            "faces" => self.state.faces.as_ref(),
+            "distance" => self.state.lattice.as_ref().map(|l| &l.phi),
+            _ => None,
+        }
     }
 
     fn array_output_capacity(&self, port: &str, _params: &ParamValues, inputs: &[(&str, u32)]) -> Option<u32> {
         match port {
             "out" => inputs.iter().find(|(name, _)| *name == "particles").map(|&(_, n)| n),
             // Provided storage: a one-record hint, sized to the lattice at run time.
-            "faces" => Some(1),
+            "faces" | "distance" => Some(1),
             "reaction_out" => inputs.iter().find(|(name, _)| *name == "reaction").map(|&(_, n)| n),
             "capped" => inputs.iter().find(|(name, _)| *name == "particles").map(|&(_, n)| n.saturating_mul(2).saturating_add(SOLVER_WORDS)),
             _ => None,
@@ -1371,6 +1380,12 @@ impl Primitive for GpuFlipStep {
             return;
         };
         let cells = lattice.cells();
+        ctx.outputs.set_transform("grid_bounds", lattice.bounds());
+        for (port, value) in ["grid_nodes_x", "grid_nodes_y", "grid_nodes_z"].into_iter().zip(lattice.nodes())
+            .chain(["face_cells_x", "face_cells_y", "face_cells_z"].into_iter().zip(cells))
+            .chain([("face_valid_layers", FACE_VALID_LAYERS)]) {
+            ctx.outputs.set_scalar(port, ParamValue::Float(value as f32));
+        }
         if let Some(reason) = lattice_refusal(cells) {
             ctx.error(format!("{NAME}: {reason}. Lower Resolution."));
             return;

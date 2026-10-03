@@ -367,6 +367,24 @@ primitive! {
 - `picker: { label, category }` declares how the palette and effect-card UI surface this primitive. Categories used today: `Color`, `Spatial`, `Stylize`, `Filmic`, `Driver` (texture→scalar bridges), `Math` (scalar arithmetic / LFO / BeatGate), `Source` (constants / generators), `Diagnostic`.
 - `composition_notes`, `examples`, `picker`, and `extra_fields` are optional. Omit the keyword entirely if you don't need it.
 
+Buffer scheduling extensions: `buffer_index: "function_name"` maps a
+dispatched invocation to a dense element index before coincident reads and
+writes; `0xffffffffu` skips it. The mapped index is guarded by
+`dispatch_count`. `owned_outputs: ["port"]` binds ordinary writable arrays
+whose disjoint intervals the body writes itself, without wrapper stores.
+These are generated standalone schedules, not fused coincident registers.
+They require ownership/bounds proofs and explicit clearing of unwritten
+output regions. Liquid Surface uses them for sparse bricks and cell-owned
+marching cubes; its separate exterior/tail pass clears retired output regions.
+
+An element kernel may declare `dense_buffer_fusion` when its scheduled and
+dense forms produce the same values for every valid schedule. Its
+`body_fragments` share arithmetic helpers with the standalone body and are
+namespaced together. Fusion omits the declared optional `schedule_inputs`
+and pass uniforms, including when the schedule is wired. Smooth Lattice and
+Clamp Liquid To Solids use this contract; cell-owned outputs remain boundaries.
+Prove scheduled/dense/fused parity before adding another declaration.
+
 ### Stateful primitives
 
 Per-frame state (a previous frame's texture, a one-pole filter's running value, a background worker handle) lives in the `StateStore` keyed by `(owner_key, node_id)`. Two patterns:

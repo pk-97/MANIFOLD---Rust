@@ -169,13 +169,11 @@ pub fn refinement(nodes: [u32; 3], level_nodes: [u32; 3]) -> Result<u32, String>
 /// every axis (section 3.1), or the placement is a named refusal.
 pub fn face_offset(nodes: [u32; 3], face_cells: [u32; 3]) -> Result<[u32; 3], String> {
     let cells = grid_cells(nodes).ok_or_else(|| format!("a {nodes:?} solid lattice has too few or too many nodes"))?;
-    let pad: Vec<Option<u32>> = (0..3)
-        .map(|a| {
-            let spare = cells[a].checked_sub(face_cells[a])?;
-            (face_cells[a] > 0 && spare % 2 == 0).then_some(spare / 2)
-        })
-        .collect();
-    match pad[..] {
+    let pad: [Option<u32>; 3] = std::array::from_fn(|a| {
+        let spare = cells[a].checked_sub(face_cells[a])?;
+        (face_cells[a] > 0 && spare % 2 == 0).then_some(spare / 2)
+    });
+    match pad {
         [Some(x), Some(y), Some(z)] if x == y && y == z => Ok([x; 3]),
         _ => Err(format!(
             "a {face_cells:?}-cell face grid does not sit centred on the {cells:?}-cell whitewater grid by one whole number of cells on every axis"

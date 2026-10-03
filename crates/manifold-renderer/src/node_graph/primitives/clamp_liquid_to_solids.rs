@@ -9,6 +9,7 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
+use super::liquid_bricks;
 use super::sort_particles_into_cells::float_param;
 use super::standalone_pipeline::standalone_pipeline;
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
@@ -33,9 +34,9 @@ struct ClampUniforms {
     solid_nodes_y: f32,
     solid_nodes_z: f32,
     cell_size: f32,
+    brick_pass: u32,
     dispatch_count: u32,
     _pad0: u32,
-    _pad1: u32,
 }
 
 crate::primitive! {
@@ -45,6 +46,7 @@ crate::primitive! {
     inputs: {
         levelset: Array(f32) required,
         solid: Array(f32) required,
+        bricks: Array(u32) optional,
         center_x: ScalarF32 optional, center_y: ScalarF32 optional, center_z: ScalarF32 optional,
         size_x: ScalarF32 optional, size_y: ScalarF32 optional, size_z: ScalarF32 optional,
         nodes_x: ScalarF32 optional, nodes_y: ScalarF32 optional, nodes_z: ScalarF32 optional,
@@ -79,9 +81,19 @@ crate::primitive! {
     aliases: ["solid clamp", "wall clamp", "level set clamp", "close liquid surface"],
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/clamp_liquid_to_solids_body.wgsl"),
-    input_access: [Coincident, BufferGather],
+    input_access: [Coincident, BufferGather, BufferGather],
     // The solid lattice is coarser than the level set: the count is the level set's alone.
     output_capacity: FusedOutputCapacity::FromInput { input: "levelset" },
+    derived_uniforms: ["brick_pass:u32"],
+    wgsl_includes: [liquid_bricks::COMMON, include_str!("shaders/clamp_liquid_to_solids_element.wgsl")],
+    buffer_index: "liquid_brick_index",
+    dense_buffer_fusion: crate::node_graph::effect_node::DenseBufferFusion {
+        body_fragments: &[
+            include_str!("shaders/clamp_liquid_to_solids_element.wgsl"),
+            include_str!("shaders/clamp_liquid_to_solids_dense_body.wgsl"),
+        ],
+        schedule_inputs: &["bricks"],
+    },
 }
 
 impl Primitive for ClampLiquidToSolids {
@@ -92,23 +104,32 @@ impl Primitive for ClampLiquidToSolids {
         inputs: &[(&str, u32)],
     ) -> Option<u32> {
         (port == "clamped")
-            .then(|| inputs.iter().find(|(name, _)| *name == "levelset").map(|&(_, n)| n))
+            .then(|| {
+                inputs
+                    .iter()
+                    .find(|(name, _)| *name == "levelset")
+                    .map(|&(_, n)| n)
+            })
             .flatten()
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        let nodes = ["nodes_x", "nodes_y", "nodes_z"].map(|name| ctx.scalar_or_param(name, 2.0).round());
-        let solid_nodes =
-            ["solid_nodes_x", "solid_nodes_y", "solid_nodes_z"].map(|name| ctx.scalar_or_param(name, 2.0).round());
+        let nodes =
+            ["nodes_x", "nodes_y", "nodes_z"].map(|name| ctx.scalar_or_param(name, 2.0).round());
+        let solid_nodes = ["solid_nodes_x", "solid_nodes_y", "solid_nodes_z"]
+            .map(|name| ctx.scalar_or_param(name, 2.0).round());
         let [center_x, center_y, center_z] =
             ["center_x", "center_y", "center_z"].map(|name| ctx.scalar_or_param(name, 0.0));
-        let [size_x, size_y, size_z] = ["size_x", "size_y", "size_z"].map(|name| ctx.scalar_or_param(name, 4.0));
+        let [size_x, size_y, size_z] =
+            ["size_x", "size_y", "size_z"].map(|name| ctx.scalar_or_param(name, 4.0));
         let cell_size = ctx.scalar_or_param("cell_size", 0.0625);
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
-        let (Some(levelset), Some(solid), Some(clamped)) =
-            (ctx.inputs.array("levelset"), ctx.inputs.array("solid"), ctx.outputs.array("clamped"))
-        else {
+        let (Some(levelset), Some(solid), Some(clamped)) = (
+            ctx.inputs.array("levelset"),
+            ctx.inputs.array("solid"),
+            ctx.outputs.array("clamped"),
+        ) else {
             return;
         };
         let product = |n: [f32; 3]| n.iter().map(|&v| v.max(0.0) as u64).product::<u64>();
@@ -144,21 +165,57 @@ impl Primitive for ClampLiquidToSolids {
             solid_nodes_y: solid_nodes[1],
             solid_nodes_z: solid_nodes[2],
             cell_size,
+            brick_pass: 0,
             dispatch_count: count,
             _pad0: 0,
-            _pad1: 0,
         };
+        let bricks = ctx.inputs.array("bricks");
+        if bricks
+            .is_some_and(|b| !liquid_bricks::valid_schedule(b, nodes.map(|n| n.max(0.0) as u32)))
+        {
+            ctx.error("Liquid lattice: brick schedule does not match the lattice dimensions");
+            return;
+        }
         let gpu = ctx.gpu_encoder();
-        gpu.native_enc.dispatch_compute(
-            pipeline,
-            &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&uniforms) },
-                GpuBinding::Buffer { binding: 1, buffer: levelset, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: solid, offset: 0 },
-                GpuBinding::Buffer { binding: 3, buffer: clamped, offset: 0 },
-            ],
-            [count.div_ceil(256), 1, 1],
-            "node.clamp_liquid_to_solids",
-        );
+        for pass in 0..if bricks.is_some() { 2 } else { 1 } {
+            let uniforms = ClampUniforms {
+                brick_pass: if bricks.is_some() { 2 - pass } else { 0 },
+                ..uniforms
+            };
+            liquid_bricks::dispatch(
+                gpu.native_enc,
+                pipeline,
+                &[
+                    GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&uniforms),
+                    },
+                    GpuBinding::Buffer {
+                        binding: 1,
+                        buffer: levelset,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 2,
+                        buffer: solid,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 3,
+                        buffer: bricks.unwrap_or(levelset),
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 4,
+                        buffer: clamped,
+                        offset: 0,
+                    },
+                ],
+                bricks,
+                uniforms.brick_pass,
+                count,
+                "node.clamp_liquid_to_solids",
+            );
+        }
     }
 }

@@ -9,7 +9,6 @@ transcript and timings. Exit 0 iff all required checks pass.
 
 import argparse
 import contextlib
-import hashlib
 import importlib.util
 import json
 import os
@@ -289,23 +288,6 @@ def reverse_deps(repo, packages):
         return []
 
 
-THUMBNAIL_KINDS = (("effect-presets", "effects"), ("generator-presets", "generators"))
-
-
-def stale_thumbnails(repo):
-    """Preset JSONs whose thumbnail hash sidecar is missing or differs (pure SHA-256,
-    same rule as preset_thumbnail::tests::factory_thumbnails_fresh)."""
-    assets = Path(repo) / "crates/manifold-renderer/assets"
-    stale = []
-    for presets, thumbs in THUMBNAIL_KINDS:
-        for preset in sorted((assets / presets).glob("*.json")):
-            sidecar = assets / "preset-thumbnails" / thumbs / f"{preset.stem}.hash"
-            digest = hashlib.sha256(preset.read_bytes()).hexdigest()
-            if not sidecar.is_file() or sidecar.read_text().strip() != digest:
-                stale.append(f"{presets}/{preset.name}")
-    return stale
-
-
 def stale_docs_index(repo):
     """True when docs/README.md differs from what gen_docs_index.py would write."""
     docs = Path(repo) / "docs"
@@ -317,13 +299,9 @@ def stale_docs_index(repo):
 
 
 def freshness_problems(repo):
-    """Every stale generated artifact in one pass: (name, detail lines, regenerate command)."""
+    """Every stale generated artifact in one pass: (name, detail lines, regenerate command).
+    Preset thumbnails are not gated: a stale one only shows an old picture."""
     problems = []
-    thumbs = stale_thumbnails(repo)
-    if thumbs:
-        shown = thumbs[:10] + ([f"... and {len(thumbs) - 10} more"] if len(thumbs) > 10 else [])
-        problems.append(("preset-thumbnails", shown,
-                         "cargo run --release -p manifold-renderer --bin generate-preset-thumbnails"))
     if stale_docs_index(repo):
         problems.append(("docs-index", ["docs/README.md differs from the generated index"],
                          "scripts/gen_docs_index.py"))

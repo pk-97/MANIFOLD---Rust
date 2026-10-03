@@ -370,18 +370,16 @@ fn liquid_impulse_once_per_tick_across_substeps() {
     assert!(receipts(&mut impulses).is_empty());
 }
 
-/// A coupled hold or a frame with no tick due keeps the hit; it lands on the
+/// A frame with no tick due keeps the hit; it lands on the
 /// next tick that runs.
 #[test]
 fn liquid_impulse_waits_for_the_next_tick() {
     let mut clock = LiquidClock::default();
     let mut impulses = LiquidImpulses::default();
     frame(&mut clock, &mut impulses, 0.0, TICK, 1.0);
-    clock.set_tick_cap(Some(0));
-    let held = frame(&mut clock, &mut impulses, TICK, TICK, 1.0);
+    let held = frame(&mut clock, &mut impulses, 0.5 * TICK, 0.5 * TICK, 1.0);
     assert!(!held.held && held.ticks == 0);
-    hit(&mut impulses, TICK, 1, 1.0);
-    clock.set_tick_cap(Some(1));
+    hit(&mut impulses, 0.5 * TICK, 1, 1.0);
     frame(&mut clock, &mut impulses, 2.0 * TICK, TICK, 1.0);
     assert_eq!(impulses.impulse_tick(), Some(0));
     impulses.commit_frame();

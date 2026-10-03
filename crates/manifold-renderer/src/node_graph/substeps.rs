@@ -33,7 +33,7 @@ use crate::node_graph::validation::GraphError;
 /// `results` are further capture→output back-edge pairs whose final values
 /// escape the region alongside `state` (per-tick statistics, coupling sums).
 /// `clock` opts the region into host syncs: it names the boundary input
-/// wired from the region's clock owner, which offline may ask for a GPU sync
+/// wired from the region's clock owner, which may ask for a GPU sync
 /// and a host step between iterations
 /// ([`EffectNode::substep_host_sync`](crate::node_graph::effect_node::EffectNode::substep_host_sync)).
 /// `None`, the default for every other region, means the executor never
@@ -60,6 +60,8 @@ impl SubstepBoundaryPorts {
 pub struct SubstepResultPorts {
     pub capture: &'static str,
     pub output: &'static str,
+    /// May be absent only when both capture and output are unwired.
+    pub optional: bool,
 }
 
 /// One contracted repeat region of an
@@ -166,19 +168,38 @@ pub(crate) fn derive_regions(
         }
 
         let mut producers: Vec<NodeInstanceId> = Vec::new();
-        for cap in ports.capture_ports() {
-            let Some(wire) = graph
-                .wires_into(boundary)
-                .find(|w| w.to.1 == cap)
-            else {
+        for result in ports.results {
+            let capture = graph.wires_into(boundary).find(|w| w.to.1 == result.capture);
+            if capture.is_none() && result.optional {
+                if graph.wires_from(boundary).any(|w| w.from.1 == result.output) {
+                    return Err(malformed(
+                        boundary,
+                        boundary,
+                        format!(
+                            "optional result output `{}` is wired but capture port `{}` has no wire",
+                            result.output, result.capture
+                        ),
+                    ));
+                }
+                continue;
+            }
+            let Some(wire) = capture else {
                 return Err(malformed(
                     boundary,
                     boundary,
-                    format!("capture port `{cap}` has no wire"),
+                    format!("capture port `{}` has no wire", result.capture),
                 ));
             };
             producers.push(wire.from.0);
         }
+        let Some(wire) = graph.wires_into(boundary).find(|w| w.to.1 == ports.capture) else {
+            return Err(malformed(
+                boundary,
+                boundary,
+                format!("capture port `{}` has no wire", ports.capture),
+            ));
+        };
+        producers.insert(0, wire.from.0);
         declared.push((boundary, ports, producers));
     }
 
@@ -791,6 +812,7 @@ mod tests {
     const STATS: &[SubstepResultPorts] = &[SubstepResultPorts {
         capture: "stats_in",
         output: "stats",
+        optional: false,
     }];
 
     const PORTS: SubstepBoundaryPorts = SubstepBoundaryPorts {
@@ -804,6 +826,17 @@ mod tests {
 
     const PORTS_WITH_STATS: SubstepBoundaryPorts = SubstepBoundaryPorts {
         results: STATS,
+        ..PORTS
+    };
+
+    const OPTIONAL_WHITEWATER: &[SubstepResultPorts] = &[SubstepResultPorts {
+        capture: "whitewater_pool_in",
+        output: "whitewater_pool",
+        optional: true,
+    }];
+
+    const PORTS_WITH_OPTIONAL_WHITEWATER: SubstepBoundaryPorts = SubstepBoundaryPorts {
+        results: OPTIONAL_WHITEWATER,
         ..PORTS
     };
 
@@ -867,6 +900,26 @@ mod tests {
                     vec![output("out", PortType::Texture2D)],
                 )
             }
+        }
+
+        fn boundary_with_optional_whitewater() -> Self {
+            let mut node = Self::new(
+                "test.substep_boundary_optional_whitewater",
+                vec![
+                    input("seed", PortType::Texture2D, false),
+                    input("in", PortType::Texture2D, false),
+                    input("whitewater_pool_in", PortType::Texture2D, false),
+                ],
+                vec![
+                    output("out", PortType::Texture2D),
+                    output("step_dt", PortType::Scalar(ScalarType::F32)),
+                    output("step_index", PortType::Scalar(ScalarType::F32)),
+                    output("whitewater_pool", PortType::Texture2D),
+                ],
+            );
+            node.boundary = Some(PORTS_WITH_OPTIONAL_WHITEWATER);
+            node.capture_inputs = &["in", "whitewater_pool_in"];
+            node
         }
     }
 
@@ -1110,6 +1163,41 @@ mod tests {
         let (b, _, reason) = malformed_parts(compile(&graph).unwrap_err());
         assert_eq!(b, boundary);
         assert!(reason.contains("`stats_in` has no wire"), "{reason}");
+    }
+
+    #[test]
+    fn substeps_region_unwired_optional_capture_is_allowed() {
+        let mut graph = Graph::new();
+        let src = source(&mut graph, "src");
+        let boundary = graph.add_node(Box::new(TestNode::boundary_with_optional_whitewater()));
+        let body = pass(&mut graph, "body");
+        let consumer = sink(&mut graph, "consumer");
+        graph.connect((src, "out"), (boundary, "seed")).unwrap();
+        graph.connect((boundary, "out"), (body, "a")).unwrap();
+        graph.connect((body, "out"), (boundary, "in")).unwrap();
+        graph.connect((boundary, "out"), (consumer, "tex")).unwrap();
+
+        let plan = compile(&graph).expect("unwired optional result is absent");
+        assert_eq!(plan.substep_regions().len(), 1);
+    }
+
+    #[test]
+    fn substeps_region_optional_output_without_capture_is_rejected() {
+        let mut graph = Graph::new();
+        let src = source(&mut graph, "src");
+        let boundary = graph.add_node(Box::new(TestNode::boundary_with_optional_whitewater()));
+        let body = pass(&mut graph, "body");
+        let consumer = sink(&mut graph, "consumer");
+        graph.connect((src, "out"), (boundary, "seed")).unwrap();
+        graph.connect((boundary, "out"), (body, "a")).unwrap();
+        graph.connect((body, "out"), (boundary, "in")).unwrap();
+        graph.connect((boundary, "out"), (consumer, "tex")).unwrap();
+        graph.connect((boundary, "whitewater_pool"), (consumer, "aux")).unwrap();
+
+        let (b, _, reason) = malformed_parts(compile(&graph).unwrap_err());
+        assert_eq!(b, boundary);
+        assert!(reason.contains("optional result output `whitewater_pool`"), "{reason}");
+        assert!(reason.contains("whitewater_pool_in"), "{reason}");
     }
 
     #[test]
@@ -1631,6 +1719,7 @@ mod tests {
         type_id: EffectNodeType,
         outputs: Vec<NodeOutput>,
         log: Log,
+        fail_at: Option<u32>,
     }
 
     impl EffectNode for EagerClock {
@@ -1661,6 +1750,9 @@ mod tests {
             _gpu: Option<&mut crate::gpu_encoder::GpuEncoder<'_>>,
         ) -> Result<(), String> {
             self.log.lock().unwrap().push(format!("host {iteration}"));
+            if self.fail_at == Some(iteration) {
+                return Err("test reaction failed".into());
+            }
             Ok(())
         }
     }
@@ -1676,6 +1768,10 @@ mod tests {
     /// `sim_fixture` with an eager clock owner wired into the boundary's
     /// `clock` input; `opted` says whether the boundary names it.
     fn clock_fixture(opted: bool) -> SimFixture {
+        clock_fixture_with_failure(opted, None)
+    }
+
+    fn clock_fixture_with_failure(opted: bool, fail_at: Option<u32>) -> SimFixture {
         let log: Log = Arc::default();
         let count = Arc::new(Mutex::new(3));
         let mut graph = Graph::new();
@@ -1685,6 +1781,7 @@ mod tests {
             type_id: EffectNodeType::new("test.eager_clock"),
             outputs: vec![output("out", PortType::Scalar(ScalarType::F32))],
             log: log.clone(),
+            fail_at,
         }));
         let mut sim = SimBoundary::new(log.clone(), count.clone());
         if opted {
@@ -1879,7 +1976,7 @@ mod tests {
         assert_eq!(next.last().unwrap(), "consumer a=5.5 b=0 c=none");
     }
 
-    // ─── Host syncs: opt-in per boundary, offline only ───
+    // ─── Host syncs: opt-in per boundary ───
 
     fn region_events(log: &[String]) -> Vec<&str> {
         log.iter()
@@ -1910,17 +2007,23 @@ mod tests {
         assert_eq!(exec.substep_host_syncs(), 2);
     }
 
-    /// Live never waits: an opted-in region with an eager clock owner
-    /// encodes the whole frame without a mid-region commit.
+    /// Live coupling uses the same ordered exchanges as export.
     #[test]
-    fn substeps_host_sync_never_runs_live() {
+    fn substeps_host_sync_runs_live_between_iterations() {
         let _live = crate::node_graph::physics::PhysicsStepScope::for_render(false);
         let mut fx = clock_fixture(true);
         let mut exec = Executor::with_mock();
         let log = run_frame(&mut fx, &mut exec, 3);
-        assert!(log.iter().all(|e| !e.starts_with("host")), "{log:?}");
+        assert_eq!(
+            region_events(&log),
+            vec![
+                "add_index a=1.5 b=0 c=0", "capture 1.5", "host 1",
+                "add_index a=2 b=1 c=0", "capture 3", "host 2",
+                "add_index a=3.5 b=2 c=0", "capture 5.5",
+            ]
+        );
         assert_eq!(log.last().unwrap(), "consumer a=5.5 b=0 c=none");
-        assert_eq!(exec.substep_host_syncs(), 0);
+        assert_eq!(exec.substep_host_syncs(), 2);
     }
 
     /// A boundary that has not opted in never commits or waits mid-region,
@@ -1934,6 +2037,17 @@ mod tests {
         assert!(log.iter().all(|e| !e.starts_with("host")), "{log:?}");
         assert_eq!(log.last().unwrap(), "consumer a=5.5 b=0 c=none");
         assert_eq!(exec.substep_host_syncs(), 0);
+    }
+
+    #[test]
+    fn substeps_host_sync_failure_stops_before_reusing_tick_state() {
+        let _live = crate::node_graph::physics::PhysicsStepScope::for_render(false);
+        let mut fx = clock_fixture_with_failure(true, Some(1));
+        let mut exec = Executor::with_mock();
+        let log = run_frame(&mut fx, &mut exec, 3);
+        assert_eq!(region_events(&log), vec!["add_index a=1.5 b=0 c=0", "capture 1.5", "host 1"]);
+        assert!(!log.iter().any(|entry| entry.starts_with("consumer")), "{log:?}");
+        assert_eq!(exec.substep_host_syncs(), 1);
     }
 
     #[test]

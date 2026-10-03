@@ -1205,6 +1205,13 @@ pub(crate) fn classify_node(
     if n.wgsl_body().is_none() {
         return NodeClass::Boundary;
     }
+    // Cell-owned outputs stay standalone. Scheduled element kernels may fuse
+    // only through an explicitly declared equivalent dense form.
+    if !n.owned_outputs().is_empty()
+        || (n.buffer_index().is_some() && dense_buffer_fusion(n.as_ref()).is_none())
+    {
+        return NodeClass::Boundary;
+    }
 
     // Register-heavy body (a bespoke inlined simplex): fusing it raises the
     // whole kernel's register pressure past the occupancy cliff, so the fused
@@ -1482,6 +1489,24 @@ pub(crate) fn classify_node(
     }
 }
 
+/// Validate the declared dense equivalent of an element schedule. Its omitted
+/// ports must be optional arrays that affect scheduling only, never values.
+pub(crate) fn dense_buffer_fusion(
+    n: &dyn crate::node_graph::effect_node::EffectNode,
+) -> Option<crate::node_graph::effect_node::DenseBufferFusion> {
+    if n.buffer_index().is_none() || !n.owned_outputs().is_empty() {
+        return None;
+    }
+    let dense = n.dense_buffer_fusion()?;
+    for &name in dense.schedule_inputs {
+        let input = n.inputs().iter().find(|input| input.name == name)?;
+        if input.required || !matches!(input.ty, PortType::Array(_)) {
+            return None;
+        }
+    }
+    Some(dense)
+}
+
 /// The atom's `wgsl_body` with its declared specialization tokens substituted
 /// by the def node's STATIC param values — the exact text every freeze path
 /// (classify parse gate, install, fused codegen) works from. `None` when the
@@ -1541,6 +1566,11 @@ fn classify_buffer_node(
     def: &EffectGraphDef,
     registry: &PrimitiveRegistry,
 ) -> NodeClass {
+    if !n.owned_outputs().is_empty()
+        || (n.buffer_index().is_some() && dense_buffer_fusion(n).is_none())
+    {
+        return NodeClass::Boundary;
+    }
     let arr_in = n.inputs().iter().filter(|i| matches!(i.ty, PortType::Array(_))).count();
     let arr_out = n.outputs().iter().filter(|o| matches!(o.ty, PortType::Array(_))).count();
     // Any atomic output — a scatter's sole output, or a side output next to a
@@ -1718,6 +1748,17 @@ fn build_region(
         let mut input_access: Vec<InputAccess> = Vec::with_capacity(tex_ports.len());
         for (idx, port) in tex_ports.iter().enumerate() {
             let access = access_list.get(idx).copied().unwrap_or(InputAccess::Coincident);
+            if dense_buffer_fusion(constructed.as_ref())
+                .is_some_and(|dense| dense.schedule_inputs.contains(port))
+            {
+                // Keep declared port positions for capacity/alias analysis.
+                // The dense body does not read schedules; install omits this
+                // slot before codegen, whether the standalone schedule is wired
+                // or not. It must not become a data/capacity external.
+                inputs.push(RegionInput::Unwired);
+                input_access.push(access);
+                continue;
+            }
             let Some(wire) = def
                 .wires
                 .iter()

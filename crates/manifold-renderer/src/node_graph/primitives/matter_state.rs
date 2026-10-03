@@ -22,8 +22,8 @@ use crate::node_graph::substeps::{SubstepBoundaryPorts, SubstepResultPorts};
 /// substep; the words themselves live in the domain's reaction slot, which
 /// the domain reads back.
 const RESULTS: &[SubstepResultPorts] = &[
-    SubstepResultPorts { capture: "stats_in", output: "stats" },
-    SubstepResultPorts { capture: "reaction_in", output: "reaction" },
+    SubstepResultPorts { capture: "stats_in", output: "stats", optional: false },
+    SubstepResultPorts { capture: "reaction_in", output: "reaction", optional: false },
 ];
 
 /// The region's contract. Iteration scalars, in order: substep length in

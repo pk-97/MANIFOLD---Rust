@@ -215,7 +215,7 @@ class LandingTests(unittest.TestCase):
                 self.assertEqual(env["CARGO_INCREMENTAL"], "0")
                 self.assertEqual(env["CARGO_BUILD_JOBS"], "4")
 
-    def test_stale_thumbnail_and_docs_reported_together_before_any_build(self):
+    def test_stale_docs_reported_but_stale_thumbnails_ignored(self):
         with tempfile.TemporaryDirectory() as d:
             assets = Path(d) / "crates/manifold-renderer/assets"
             for sub in ("effect-presets", "preset-thumbnails/effects"):
@@ -226,13 +226,10 @@ class LandingTests(unittest.TestCase):
             (Path(d) / "docs/README.md").write_text("old")
             (Path(d) / "docs/A.md").write_text("# A\n\nA long enough summary line for the index here.\n")
             names = [n for n, _, _ in landing_gate.freshness_problems(d)]
-            self.assertEqual(names, ["preset-thumbnails", "docs-index"])
-            (assets / "preset-thumbnails/effects/Bloom.hash").write_text(
-                landing_gate.hashlib.sha256(b"{}").hexdigest() + "\n")
-            self.assertEqual(landing_gate.stale_thumbnails(d), [])
+            self.assertEqual(names, ["docs-index"])
 
     def test_stale_artifacts_fail_gate_with_regenerate_commands(self):
-        problems = [("preset-thumbnails", ["x.json"], "regen-cmd")]
+        problems = [("docs-index", ["docs/README.md"], "regen-cmd")]
         with patch.object(landing_gate, "freshness_problems", return_value=problems):
             code, called, timings, _, _, output, _ = self.exercise()
         self.assertEqual(code, 1)

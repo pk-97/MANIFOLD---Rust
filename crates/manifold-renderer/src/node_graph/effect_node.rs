@@ -647,6 +647,17 @@ impl NodeRequires {
     }
 }
 
+/// Dense semantics for a buffer atom whose standalone implementation schedules
+/// sparse passes. The author guarantees identical element values with every
+/// valid schedule (including no schedule); schedule inputs affect work only.
+/// All fragments are namespaced together by fusion codegen, so
+/// the dense and scheduled entry points can share the same arithmetic helpers.
+#[derive(Clone, Copy)]
+pub struct DenseBufferFusion {
+    pub body_fragments: &'static [&'static str],
+    pub schedule_inputs: &'static [&'static str],
+}
+
 /// One unit of GPU work in the effect graph.
 ///
 /// Implemented by:
@@ -987,10 +998,11 @@ pub trait EffectNode: Send {
 
     /// Clock owner of a substep region only (the node wired into the
     /// boundary's [`SubstepBoundaryPorts::clock`](crate::node_graph::substeps::SubstepBoundaryPorts::clock)
-    /// port). Asked offline only, before body iteration `iteration ≥ 1`:
+    /// port). Asked before body iteration `iteration ≥ 1`:
     /// `true` makes the executor commit the frame's encoder, wait for the GPU
     /// to finish it, call [`substep_host_step`](Self::substep_host_step) and
-    /// continue encoding. Live frames never ask. Default: `false`.
+    /// continue encoding. Live clock owners must bound their tick count.
+    /// Default: `false`.
     fn substep_host_sync(&self, _iteration: u32) -> bool {
         false
     }
@@ -999,7 +1011,7 @@ pub trait EffectNode: Send {
     /// GPU has completed everything encoded so far, so shared storage the
     /// region wrote is readable and writable from the CPU; anything encoded
     /// through `gpu` runs before iteration `iteration`. An error is reported
-    /// and the region carries on.
+    /// and execution stops before the next iteration.
     fn substep_host_step(
         &mut self,
         _iteration: u32,
@@ -1647,6 +1659,27 @@ pub trait EffectNode: Send {
     /// `P::ATOMIC_OUTPUTS`.
     fn atomic_outputs(&self) -> &'static [&'static str] {
         &[]
+    }
+
+    /// Array outputs written directly by a buffer body's own cell/element
+    /// logic. Such outputs are bound read-write by standalone codegen, but the
+    /// wrapper does not perform a coincident `out[idx] = body(...)` store.
+    fn owned_outputs(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// Optional WGSL function name that maps a dense dispatch id to a sparse
+    /// buffer element. The function is supplied by `wgsl_includes` and returns
+    /// `0xffffffffu` for an inactive item.
+    fn buffer_index(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// An equivalent dense per-element form of a scheduled buffer kernel.
+    /// Schedule-only inputs disappear from fused dataflow; cell-owned outputs
+    /// still cannot fuse. The dense form uses ordinary params, no pass uniforms.
+    fn dense_buffer_fusion(&self) -> Option<DenseBufferFusion> {
+        None
     }
 
     /// Texture formats this primitive's input port can natively

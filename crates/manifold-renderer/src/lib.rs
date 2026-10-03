@@ -133,3 +133,7 @@ pub(crate) fn clear_texture_committed(
     }
     enc.commit_and_wait_completed();
 }
+
+// Standalone CPU specification; deliberately absent from runtime builds.
+#[cfg(test)]
+mod live_sim_clock_reference;
