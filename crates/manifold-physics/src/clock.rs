@@ -537,6 +537,32 @@ mod tests {
         }
     }
 
+    /// A live frame between boundaries (24 fps at 60 Hz) ends on the last
+    /// boundary it reached. The partial interval stays owed and the next
+    /// boundary accepts it, so spans stay contiguous, the lag stays under one
+    /// interval, and a second of transport is a second of water (D1, D7).
+    #[test]
+    fn live_frames_between_boundaries_owe_the_partial_interval() {
+        for rate in crate::SimRate::ALL {
+            for fps in [20u32, 24, 30, 60] {
+                let mut clock = SimulationClock::default();
+                clock.advance(0.0, rate.interval(), 1.0, 0.0, false, false);
+                let mut completed = 0.0;
+                for frame in 1..=fps {
+                    let transport = f64::from(frame) / f64::from(fps);
+                    let accepted = clock.advance(transport, rate.interval(), 1.0, 0.0, false, false);
+                    let boundary = (transport / rate.interval() + 1e-9).floor() * rate.interval();
+                    let at = format!("{} Hz, {fps} fps frame {frame}", rate.hz());
+                    assert_eq!(accepted.plan.start.0, completed, "{at}: a gap before the span");
+                    assert!((accepted.simulation_time - boundary).abs() < 1e-12, "{at}: not the last boundary");
+                    assert!(transport - accepted.simulation_time < rate.interval(), "{at}: owes a whole interval");
+                    completed = accepted.plan.end.0;
+                }
+                assert!((completed - 1.0).abs() < 1e-12, "{} Hz, {fps} fps: lost time", rate.hz());
+            }
+        }
+    }
+
     #[test]
     fn late_live_span_reports_one_interval_of_simulated_time() {
         // A frame 0.4 s late at 30 Hz runs twelve intervals as one span; the
