@@ -151,7 +151,10 @@ Local changes:
   with density to preserve the existing kinematic control. Coupled boundaries
   rebuild their derivative each substep. Boundary velocity includes queued
   external acceleration over the accepted substep; CFL bounds both initial and
-  predicted speeds even when legacy obstacle adaptivity is disabled. The owner
+  predicted speeds even when legacy obstacle adaptivity is disabled. A coupled
+  body bounds the CFL only while its hull's bounds overlap the domain, as the
+  engine counts obstacle points only inside it; a body wholly outside cannot
+  touch the liquid, so one falling far below never splits the frame. The owner
   applies only the fluid reaction, then Box3D integrates its queued forces once.
   This prediction excludes damping, gyroscopic torque and contact response.
   The native
@@ -176,7 +179,8 @@ the FLIP-solved changes within 2.19e-7 (limit 5e-5). Inputs update each substep;
 Box3D advances its pose after accepting the reaction. Empty/disabled recipients,
 prescribed density scaling, invalid inputs, stale reactions and abandonment
 are covered, along with two-body exchange order, preparation/retry and CFL
-bounds for prescribed proxies crossing the domain with every vertex outside.
+bounds for prescribed proxies crossing the domain with every vertex outside
+and none for a body wholly outside it.
 A one-second neutral-body test additionally covers gravity prediction at 60/120 Hz:
 vertical drift is 0.02283/0.02235 m on a dx 0.05 m grid, with once-only native
 force/impulse response error below 7.9e-9. A same-grid old-velocity control drifts

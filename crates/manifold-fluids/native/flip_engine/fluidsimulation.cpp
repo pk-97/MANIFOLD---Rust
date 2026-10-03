@@ -11197,10 +11197,24 @@ double FluidSimulation::_getMaximumObstacleSpeed(double dt) {
 
         TriangleMesh m = obj->getMesh();
         if (_rigidCoupling && obj->getRigidBoundaryMap() == &_rigidCoupling->boundaryMap()) {
+            // A large proxy can cross the liquid domain while every vertex
+            // lies outside it, so the hull's bounds decide. A body wholly
+            // outside the domain cannot touch the liquid; like the obstacle
+            // points below, it never sets the step.
+            if (m.vertices.empty()) {
+                continue;
+            }
+            AABB hull(m.vertices);
+            vmath::vec3 lo = hull.getMinPoint();
+            vmath::vec3 hi = hull.getMaxPoint();
+            vmath::vec3 dlo = domainBounds.getMinPoint();
+            vmath::vec3 dhi = domainBounds.getMaxPoint();
+            if (lo.x > dhi.x || hi.x < dlo.x || lo.y > dhi.y || hi.y < dlo.y ||
+                    lo.z > dhi.z || hi.z < dlo.z) {
+                continue;
+            }
             const size_t body = obj->getRigidBoundaryBody();
             for (size_t vidx = 0; vidx < m.vertices.size(); vidx++) {
-                // A large proxy can cross the liquid domain while every
-                // vertex lies outside it. Its boundary speed still matters.
                 maxu = fmax(_rigidCoupling->pointSpeed(body, m.vertices[vidx], dt), maxu);
             }
             continue;

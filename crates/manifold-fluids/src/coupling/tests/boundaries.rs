@@ -382,6 +382,51 @@ fn production_coupling_boundary_cfl_counts_prescribed_speed_outside_domain_verti
     );
 }
 
+/// A coupled body wholly outside the domain cannot touch the liquid, so a
+/// body falling far below it at 250 m/s leaves the liquid its whole frame.
+#[test]
+fn production_coupling_boundary_cfl_ignores_a_body_wholly_outside_the_domain() {
+    let mesh = proxy();
+    let mut rigid = PhysicsWorld::new([0.0; 3]).unwrap();
+    let body = rigid
+        .add_hull(
+            &mesh.vertices,
+            BodyConfig {
+                kind: BodyKind::Animated,
+                position: [1.0, -5.0, 1.0],
+                ..BodyConfig::default()
+            },
+        )
+        .unwrap();
+    let mut fluid = small_fluid();
+    let collider = fluid
+        .add_mesh(&mesh, MeshRole::Collider, rigid.pose(body).unwrap())
+        .unwrap();
+    fluid
+        .add_fluid_box(
+            Bounds {
+                min: [0.5; 3],
+                max: [1.5; 3],
+            },
+            [0.0; 3],
+        )
+        .unwrap();
+    fluid.prepare_rigid_coupling(&[collider], 1000.0).unwrap();
+
+    let mut body_state = state(&rigid, body);
+    body_state.dynamics.linear_velocity = [0.0, -250.0, 0.0];
+    let mut frame = fluid.begin_frame(DT).unwrap();
+    frame.set_rigid_bodies(&[body_state]).unwrap();
+    let offered = frame
+        .next_substep()
+        .unwrap()
+        .expect("liquid offers a CFL step");
+    assert!(
+        (offered.0 - DT.0).abs() < 1e-12,
+        "offered {offered:?}; a body outside the domain must not split the {DT:?} frame"
+    );
+}
+
 #[test]
 fn production_coupling_boundary_cfl_counts_pending_external_acceleration() {
     let (mut fluid, rigid, body, collider) = body_fixture();
