@@ -52,7 +52,40 @@ def run_landing_gate(cmd, cwd, log_path):
             log.write(line)
             log.flush()
             print(line, end="", flush=True)
-        return proc.wait()
+    return proc.wait()
+
+
+def merge_gated_tree(branch, worktree, message, gate_cmd, gate_log, gated_commit):
+    """Commit only the gated tree, including when main moves during the gate.
+
+    --no-commit leaves the proposed merge inspectable before it becomes trunk.
+    A changed merge tree is aborted, merged into the slot, and gated again.
+    Content-addressed leg passes make that retry proportional to the change.
+    """
+    while True:
+        gated = step('gated tree', ['git', 'rev-parse', f'{gated_commit}^{{tree}}'], worktree).stdout.strip()
+        merged = step('merge --no-ff to main',
+                      ['git', 'merge', '--no-ff', '--no-commit', gated_commit, '-m', message], MAIN,
+                      check=False)
+        if merged.returncode:
+            step('abort failed landing merge', ['git', 'merge', '--abort'], MAIN, check=False)
+            print('[land] main merge conflicted; resolve current main in the slot and retry.', file=sys.stderr)
+            sys.exit(1)
+        tree = step('verify merge tree', ['git', 'write-tree'], MAIN).stdout.strip()
+        if tree == gated:
+            pending = step('pending merge', ['git', 'rev-parse', '-q', '--verify', 'MERGE_HEAD'],
+                           MAIN, check=False)
+            if pending.returncode == 0:
+                step('commit gated merge', ['git', 'commit', '--no-edit'], MAIN)
+            return
+        step('abort changed merge tree', ['git', 'merge', '--abort'], MAIN)
+        step('merge moved main into branch', ['git', 'merge', 'main', '--no-edit'], worktree)
+        gated_commit = step('pin gate commit', ['git', 'rev-parse', 'HEAD'], worktree).stdout.strip()
+        # Even a named-red override was for the earlier tree. A changed tree
+        # must earn green or return to the lead for another named-red review.
+        if run_landing_gate(gate_cmd, worktree, gate_log):
+            print('[land] moved-main gate red; stopping before main changes.', file=sys.stderr)
+            sys.exit(1)
 
 
 def main():
@@ -86,6 +119,7 @@ def main():
     log_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
     gate_log = (log_dir / f"landing-gate-{stamp}-{time.time_ns()}.log").resolve()
+    gated_commit = step('pin gate commit', ['git', 'rev-parse', 'HEAD'], wt).stdout.strip()
     gate_returncode = run_landing_gate(gate_cmd, wt, gate_log)
     if gate_returncode != 0:
         if a.skip_gpu or not (a.named_red and a.reason):
@@ -99,7 +133,7 @@ def main():
                                 f"beads: no-gate verdict on {a.named_red} for landing {a.branch}. {a.lead}",
                                 "--", ".beads/interactions.jsonl"], MAIN, check=False)
 
-    step("merge --no-ff to main", ["git", "merge", "--no-ff", a.branch, "-m", a.message], MAIN)
+    merge_gated_tree(a.branch, wt, a.message, gate_cmd, gate_log, gated_commit)
     step("push main", ["git", "push", "origin", "main"], MAIN)
 
     for bead in a.close_bead:

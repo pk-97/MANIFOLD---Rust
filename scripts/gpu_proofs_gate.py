@@ -25,6 +25,9 @@ slowest tests. Scoped runs skip tests measured over
 gpu_scope.SLOW_THRESHOLD_S (scripts/gpu_test_times.json); `--record-times PATH` writes
 fresh measurements. The chosen mode and why are always printed.
 
+Scoped and explicit runs reuse shared content-addressed passes before building
+or taking the GPU lock. --all and measurement requests always execute.
+
 HANG WATCHDOG: the output is streamed and the one running test is timed. A test
 that starts and does not finish (ok / FAILED / ignored) within its allowance
 gets its process group killed and the gate fails with `GPU-PROOFS GATE: HUNG
@@ -57,6 +60,7 @@ from pathlib import Path
 import gpu_queue
 import gpu_scope
 import diff_scope
+import gate_passes
 
 # Matches glb_conformance.rs's check_golden() mismatch message:
 #   "golden mismatch: mean_abs_diff {mean_abs:.4} > tol {mean_abs_tol} \
@@ -619,7 +623,22 @@ def main() -> int:
             print(f"  note: {note}")
         runs = [dict(r, full=False) for r in plan.runs()]
 
-    build_code = build_tests(manifest_path, runs)
+    # Nightly/full sweeps and measurement requests always execute. The key is
+    # per cargo invocation, so queue-wrapped standalone runs count too.
+    reuse = not (args.all_tests or args.record_times or args.timings_md or args.hang_allowance)
+    passes = [gate_passes.proof_pass(repo, run) if reuse else None for run in runs]
+    cached_seconds = sum(p.record['seconds'] for p, run in zip(passes, runs)
+                         if p and p.record and run['budgeted'])
+    if args.budget is not None and cached_seconds > args.budget:
+        # A cached functional pass is not a pass of a tighter time budget.
+        for p in passes:
+            if p:
+                p.record = None
+    pending = [run for run, p in zip(runs, passes) if not (p and p.record)]
+    for p in passes:
+        if p:
+            p.reused()
+    build_code = build_tests(manifest_path, pending) if pending else 0
     if build_code:
         print(f"GPU-PROOFS GATE: FAIL (test build failed, exit {build_code}; no GPU lock taken)")
         return build_code
@@ -630,12 +649,18 @@ def main() -> int:
     exit_code, outputs, all_timings, hung = 0, [], [], []
     # One GPU run on the machine at a time (scripts/gpu_queue.py). Held for all
     # cargo runs so another run cannot interleave between test binaries.
-    with gpu_queue.hold("gpu_proofs_gate"):
-        for run in runs:
+    measured = []
+    with gpu_queue.hold("gpu_proofs_gate") if pending else contextlib.nullcontext():
+        for run, passed in zip(runs, passes):
+            if passed and passed.record:
+                all_timings.append(('reused proof set', passed.record['seconds'],
+                                    ','.join(run['targets'] or []), run['budgeted']))
+                continue
             run_timings: list = []
             code, output = run_gate(manifest_path, run["filters"], run["skips"], run["targets"],
                                     run["full"], run["lib"], run_timings, hung,
                                     args.hang_allowance)
+            measured.append((passed, code, sum(t[1] for t in run_timings)))
             exit_code = exit_code or code
             outputs.append(output)
             all_timings += [(n, s, b, run["budgeted"]) for n, s, b in run_timings]
@@ -646,7 +671,13 @@ def main() -> int:
         write_timings_md(args.timings_md, all_timings)
     if args.record_times:
         print(write_times_json(args.record_times, all_timings))
-    return print_summary(output, exit_code, all_timings, args.budget, hung)
+    verdict = print_summary(output, exit_code, all_timings, args.budget, hung)
+    for passed, code, seconds in measured:
+        if passed:
+            # A failed invocation is never recorded. Budget/hang failures must
+            # also execute again, even if Cargo itself exited successfully.
+            passed.save(code or (verdict if verdict in (3, 4) else 0), seconds)
+    return verdict
 
 
 if __name__ == "__main__":

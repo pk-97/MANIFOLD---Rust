@@ -9,6 +9,7 @@ transcript and timings. Exit 0 iff all required checks pass.
 
 import argparse
 import contextlib
+import contextvars
 import importlib.util
 import json
 import os
@@ -24,6 +25,7 @@ from pathlib import Path
 import gpu_queue
 
 MAIN_CHECKOUT = Path("/Users/peterkiemann/MANIFOLD - Rust")
+GATED_HEAD = contextvars.ContextVar('gated_head', default=None)
 
 # GPU-proofs scope (touched paths -> focused tests + smoke, time budget, no
 # run-everything fallback) lives in scripts/gpu_scope.py; the full suite runs
@@ -31,6 +33,7 @@ MAIN_CHECKOUT = Path("/Users/peterkiemann/MANIFOLD - Rust")
 import gpu_scope
 import cpu_scope
 import diff_scope
+import gate_passes
 
 
 def build_environment(cmd, cwd):
@@ -143,7 +146,7 @@ def run_cmd(cmd, cwd, timeout, live_log=None):
         return 2, "", refusal, time.time() - start
     proc = subprocess.Popen(cmd, cwd=str(cwd), stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True, errors="replace",
-                            env=environment)
+                            env=environment, start_new_session=True)
     streams = {"out": [], "err": []}
     log = open(live_log, "w") if live_log else None
     log_lock = threading.Lock()
@@ -169,9 +172,15 @@ def run_cmd(cmd, cwd, timeout, live_log=None):
     except subprocess.TimeoutExpired:
         timed_out = True
         kill_tree(proc.pid)
+        # The process group also catches children when sandboxed ps cannot
+        # enumerate descendants. This group belongs only to this check.
+        with contextlib.suppress(OSError):
+            os.killpg(proc.pid, signal.SIGKILL)
         proc.wait()
     except BaseException:
         kill_tree(proc.pid)
+        with contextlib.suppress(OSError):
+            os.killpg(proc.pid, signal.SIGKILL)
         raise
     finally:
         for reader, pipe in zip(readers, (proc.stdout, proc.stderr)):
@@ -203,10 +212,36 @@ def write_landing_log(repo, label, stdout, stderr):
 
 
 def run_check(label, cmd, cwd, timeout):
+    # Proofs own their canonical per-invocation records (also used by gpu_queue).
+    # Build receipts alone cannot guarantee artifacts still exist after reclaim.
+    cacheable = (label != 'gpu-proofs' and '--no-run' not in cmd
+                 and '--build-only' not in cmd)
+    passed = gate_passes.command_pass(cwd, label, cmd) if cacheable else None
+    if passed and passed.reused():
+        if label == 'flow-gate':
+            import run_ui_flows
+            previous = run_ui_flows.ROOT
+            try:
+                run_ui_flows.ROOT = str(cwd)
+                manifest = json.loads((Path(cwd) / 'scripts/ui-flows/manifest.json').read_text())
+                filters, _ = run_ui_flows.filters_for_touched(cmd[-1], manifest)
+                run_ui_flows.write_gate_marker(cmd[-1], filters, True)
+            finally:
+                run_ui_flows.ROOT = previous
+        return 0, '[REUSED] ' + label, '', 0.0
     live = landing_log_path(cwd, label.replace("/", "-"))
     print(f"[RUN] {label}  (live transcript: {live})", flush=True)
     result = run_cmd(cmd, cwd, timeout, live_log=live)
-    exit_, out, err, _ = result
+    exit_, out, err, seconds = result
+    if label == 'docs-index' and exit_ == 0:
+        stale = run_cmd(['git', 'diff', '--name-only', '--', 'docs/README.md'],
+                        cwd=cwd, timeout=300)[1].strip()
+        if stale:
+            exit_ = 1
+            err += '\ndocs index was stale — commit the regenerated index'
+            result = exit_, out, err, seconds
+    if passed:
+        passed.save(exit_, seconds)
     if exit_ and label != "gpu-proofs":
         # Rewritten as stdout then stderr, the layout every landing log has.
         # GPU proofs retain their transcript on both success and failure below.
@@ -326,8 +361,12 @@ def print_result(label, status, duration=None, tail=None):
 
 
 def main():
-    with contextlib.ExitStack() as stack:
-        return _main(stack)
+    token = GATED_HEAD.set(None)
+    try:
+        with contextlib.ExitStack() as stack:
+            return _main(stack)
+    finally:
+        GATED_HEAD.reset(token)
 
 
 def _main(stack):
@@ -356,6 +395,12 @@ def _main(stack):
         print(f"[FAIL] HEAD == {args.base} at {repo}: nothing to gate. "
               "Pass --repo <worktree path> of the branch being landed.")
         return 1
+    dirty = run_cmd(['git', 'status', '--porcelain', '--untracked-files=normal'],
+                    cwd=repo, timeout=30)
+    if dirty[0] or dirty[1].strip():
+        print('[FAIL] landing needs a clean committed tree; standalone proof passes can precede the commit')
+        return 1
+    GATED_HEAD.set(head_sha)
 
     try:
         paths, ignored_paths = diff_scope.effective_paths(repo, base_sha)
@@ -376,7 +421,11 @@ def _main(stack):
 
     # Stale generated artifacts are knowable in seconds; report all of them
     # before any build instead of one per 15-minute rerun.
-    problems = freshness_problems(repo)
+    fresh = gate_passes.Pass(repo, 'fresh-docs-index',
+                            lambda: (['docs', 'scripts'], ['fresh-docs-index'], False))
+    problems = [] if fresh.reused() else freshness_problems(repo)
+    if not problems and not fresh.record:
+        fresh.save(0)
     if problems:
         for name, detail, command in problems:
             tail = [*detail, f"regenerate: {command}"]
@@ -462,17 +511,16 @@ def _main(stack):
 
     # e. clippy (if packages touched)
     if gate_packages:
-        pkg_args = []
-        for p in gate_packages:
-            pkg_args.extend(["-p", p])
-        cmd = ["cargo", "clippy", *pkg_args, "--tests", "--", "-D", "warnings"]
-        exit_, out, err, duration = run_check("clippy", cmd, cwd=repo, timeout=3600)
-        tail = (out + err).rstrip().splitlines()[-20:]
-        status = "PASS" if exit_ == 0 else "FAIL"
-        results.append((status, "clippy", duration, tail))
-        print_result("clippy", status, duration, tail if exit_ != 0 else None)
-        if status == "FAIL" and not args.keep_going:
-            return finish(repo, base_sha, results)
+        for package in gate_packages:
+            label = 'clippy' if len(gate_packages) == 1 else f'clippy/{package}'
+            cmd = ['cargo', 'clippy', '-p', package, '--tests', '--', '-D', 'warnings']
+            exit_, out, err, duration = run_check(label, cmd, cwd=repo, timeout=3600)
+            tail = (out + err).rstrip().splitlines()[-20:]
+            status = 'PASS' if exit_ == 0 else 'FAIL'
+            results.append((status, label, duration, tail))
+            print_result(label, status, duration, tail if exit_ else None)
+            if status == 'FAIL' and not args.keep_going:
+                return finish(repo, base_sha, results)
     else:
         skip(results, "clippy", scope_reason)
 
@@ -510,18 +558,40 @@ def _main(stack):
     # An exact default inventory would require its own build anyway. Keep
     # separate feature builds and let gpu_proofs_gate alone opt into proofs
     # via scoped, budgeted cargo test runs.
-    test_packages = set(cpu_plan.packages)
-    test_args = [a for p in sorted(test_packages) for a in ("-p", p)]
-    cpu_args = cpu_plan.args()
+
+    test_legs = []
+    for index, filterset in enumerate(sorted(cpu_plan.filters)):
+        package = re.search(r'package\(=([^)]*)\)', filterset).group(1)
+        label = 'tests' if len(cpu_plan.filters) == 1 else f'tests/{index + 1}'
+        cmd = ['cargo', 'nextest', 'run', '--no-fail-fast', '--no-tests=pass',
+               '-p', package, '-E', filterset]
+        passed = gate_passes.command_pass(repo, label, cmd)
+        test_legs.append((label, cmd, passed))
+    pending_tests = [(label, cmd, p) for label, cmd, p in test_legs if not p.record]
+    proof_passes = [gate_passes.proof_pass(repo, run) for run in plan.runs()] if run_gpu else []
+    proof_cached = bool(proof_passes) and all(p.record for p in proof_passes)
+    if proof_cached:
+        proof_cached = sum(p.record['seconds'] for p, run in zip(proof_passes, plan.runs())
+                           if run['budgeted']) <= gpu_scope.LANDING_BUDGET_S
 
     # Compile every test binary the hold will run before taking it, so the
     # hold covers test time only (BUG-w0hh (landing gate speed)). The legs
     # under the hold then find everything built and go straight to testing.
     print("[tests] " + cpu_plan.describe().replace("\n", "\n[tests] "), flush=True)
-    if cpu_plan.filters:
-        if build_leg(results, "tests-build", ["cargo", "nextest", "run", "--no-run", *cpu_args],
-                     repo) == "FAIL" and not args.keep_going:
-            return finish(repo, base_sha, results)
+    if pending_tests:
+        builds = {}
+        for _, cmd, _ in pending_tests:
+            builds.setdefault(cmd[cmd.index('-p') + 1], []).append(cmd[cmd.index('-E') + 1])
+        for package, filters in sorted(builds.items()):
+            # Match each run's package selection. Building a union of packages
+            # can unify extra dependency features and force a rebuild in the hold.
+            label = 'tests-build' if len(builds) == 1 else f'tests-build/{package}'
+            if build_leg(results, label, ['cargo', 'nextest', 'run', '--no-run',
+                                         '-p', package, '-E', ' | '.join(filters)],
+                         repo) == 'FAIL' and not args.keep_going:
+                return finish(repo, base_sha, results)
+    elif test_legs:
+        skip(results, 'tests-build', 'all selected tests already passed; no artifacts needed')
     else:
         skip(results, "tests-build", "no changed Rust modules or mapped integration binaries")
     # Catalog freshness is relevant to node declarations and catalog output,
@@ -534,8 +604,7 @@ def _main(stack):
     if any(path.startswith(catalog_paths) for path in paths):
         exit_, out, err, duration = run_check(
             "catalog-fresh",
-            ["cargo", "nextest", "run", *test_args,
-             *([] if "manifold-renderer" in test_packages else ["-p", "manifold-renderer"]),
+            ["cargo", "nextest", "run", "-p", "manifold-renderer",
              "-E", "test(regenerates_in_sync)"], cwd=repo, timeout=600)
         tail = (out + err).rstrip().splitlines()[-20:]
         status = "PASS" if exit_ == 0 else "FAIL"
@@ -547,7 +616,9 @@ def _main(stack):
             return finish(repo, base_sha, results)
     if run_gpu:
         gpu_args = [arg for path in paths for arg in ("--path", path)]
-        if build_leg(results, "gpu-proofs-build",
+        if proof_cached:
+            skip(results, 'gpu-proofs-build', 'all selected proofs already passed; no artifacts needed')
+        if not proof_cached and build_leg(results, "gpu-proofs-build",
                      ["python3", "scripts/gpu_proofs_gate.py", *gpu_args, "--build-only"],
                      repo) == "FAIL" and not args.keep_going:
             return finish(repo, base_sha, results)
@@ -560,20 +631,20 @@ def _main(stack):
     # so the landing waits once (visibly, on stdout) then runs straight through.
     # Keep the hold for scoped nextest: transitive helpers can open a device,
     # so source-path inspection alone cannot prove a selected test CPU-only.
-    if cpu_plan.filters or run_gpu:
+    if pending_tests or (run_gpu and not proof_cached):
         print("[gpu-queue] taking the GPU lock for the tests and gpu-proofs legs", flush=True)
         stack.enter_context(gpu_queue.hold("landing_gate tests+gpu-proofs", out=sys.stdout))
 
     # f. tests (if packages touched)
-    if cpu_plan.filters:
-        cmd = ["cargo", "nextest", "run", "--no-fail-fast", "--no-tests=pass", *cpu_args]
-        exit_, out, err, duration = run_check("tests", cmd, cwd=repo, timeout=3600)
-        tail = (out + err).rstrip().splitlines()[-20:]
-        status = "PASS" if exit_ == 0 else "FAIL"
-        results.append((status, "tests", duration, tail))
-        print_result("tests", status, duration, tail if exit_ != 0 else None)
-        if status == "FAIL" and not args.keep_going:
-            return finish(repo, base_sha, results)
+    if test_legs:
+        for label, cmd, _ in test_legs:
+            exit_, out, err, duration = run_check(label, cmd, cwd=repo, timeout=3600)
+            tail = (out + err).rstrip().splitlines()[-20:]
+            status = 'PASS' if exit_ == 0 else 'FAIL'
+            results.append((status, label, duration, tail))
+            print_result(label, status, duration, tail if exit_ else None)
+            if status == 'FAIL' and not args.keep_going:
+                return finish(repo, base_sha, results)
     else:
         skip(results, "tests", "no changed Rust modules or mapped integration binaries")
 
@@ -587,7 +658,15 @@ def _main(stack):
             cmd = ["python3", "scripts/gpu_proofs_gate.py", *gpu_args,
                    "--budget", str(gpu_scope.LANDING_BUDGET_S)]
             # The GPU hold was taken before the tests leg and is still held.
-            exit_, out, err, duration = run_check("gpu-proofs", cmd, cwd=repo, timeout=7200)
+            if proof_cached:
+                for passed in proof_passes:
+                    passed.reused()
+                exit_, out, err, duration = 0, '[REUSED] gpu-proofs', '', 0.0
+            else:
+                exit_, out, err, duration = run_check("gpu-proofs", cmd, cwd=repo, timeout=7200)
+                for line in out.splitlines():
+                    if line.startswith('[REUSED]'):
+                        print(line, flush=True)
             transcript = write_landing_log(repo, "gpu-proofs", out, err)
             print(f"[gpu-proofs] complete transcript: {transcript}")
             # On failure the tail MUST name the failing tests. gpu_proofs_gate's
@@ -622,8 +701,16 @@ def _main(stack):
 
 
 def finish(repo, base_sha, results):
+    if GATED_HEAD.get():
+        current = run_cmd(['git', 'rev-parse', 'HEAD'], cwd=repo, timeout=30)
+        dirty = run_cmd(['git', 'status', '--porcelain', '--untracked-files=normal'],
+                        cwd=repo, timeout=30)
+        if current[0] or dirty[0] or current[1].strip() != GATED_HEAD.get() or dirty[1].strip():
+            results.append(('FAIL', 'stable-tree', None, ['tree changed during the gate; rerun to reuse unaffected passes']))
+    results = [('REUSED' if status == 'PASS' and any(line.startswith('[REUSED]') for line in tail)
+                else status, label, duration, tail) for status, label, duration, tail in results]
     # Summary
-    passed = sum(1 for s, _, _, _ in results if s == "PASS")
+    passed = sum(1 for s, _, _, _ in results if s in {"PASS", "REUSED"})
     failed = sum(1 for s, _, _, _ in results if s == "FAIL")
     skipped = sum(1 for s, _, _, _ in results if s == "SKIP")
     for status, label, duration, tail in results:
