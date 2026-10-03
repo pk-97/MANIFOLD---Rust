@@ -213,6 +213,18 @@ class ScopeTests(unittest.TestCase):
                      R + "node_graph/liquid/bodies.rs", R + "node_graph/liquid/coupling.rs"):
             self.assertIn("gpu_flip_", plan([path]).filters, path)
 
+    def test_gated_sort_scan_and_inverse_pull_the_inactive_slot_proof(self):
+        name = "gpu_flip_inactive_slots_match_the_ungated_step"
+        for path in (P + "sort_particles_into_cells.rs", P + "prefix_scan.rs"):
+            p = plan([path])
+            self.assertIn(name, p.filters, path)
+            self.assertNotIn("gpu_flip_", p.filters, path)
+        for path, user in ((P + "shaders/prefix_scan.wgsl", P + "prefix_scan.rs"),
+                           (P + "shaders/sort_particles_into_cells.wgsl", P + "sort_particles_into_cells.rs"),
+                           (P + "shaders/coarse_inverse.wgsl", P + "gpu_flip_pressure.rs")):
+            p = plan([path], users=lambda _, u=user: [u], repo=self._repo_with(path))
+            self.assertIn(name, p.filters, path)
+
     def test_mixed_diff_keeps_the_broad_row_whole(self):
         p = plan([R + "node_graph/liquid/clock.rs", P + "gpu_flip_step.rs"])
         self.assertIn("gpu_flip_", p.filters)

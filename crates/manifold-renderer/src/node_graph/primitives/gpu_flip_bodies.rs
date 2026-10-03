@@ -44,6 +44,18 @@ const SUM_BYTES: u64 = MAX_FLUID_ROLES as u64 * SUM_FLOATS * 4;
 /// cells and partial slots through: the gate triples, the flags, the lists.
 pub(crate) type Tiles<'a> = [&'a GpuBuffer; 3];
 
+/// Where a solve's gate holds the body product's group counts
+/// (gpu_flip_pressure.rs Slots): byte offsets of the impulse partial's
+/// triple (the fine level's live workgroups by the bodies), the finalize's
+/// (the bodies) and the product's (the fine level's live workgroups). A
+/// stopped solve, or an inactive clock slot, zeroes all three.
+pub(crate) struct BodyGate<'a> {
+    pub buffer: &'a GpuBuffer,
+    pub partial: u64,
+    pub finalize: u64,
+    pub product: u64,
+}
+
 /// The bodies a step couples into its solve, and what their passes read.
 pub(crate) struct Bodies<'a> {
     pub lattice: [u32; 3],
@@ -228,7 +240,7 @@ impl BodyPasses {
     }
 
     /// Each body's pressure impulse from `pressure` into the sums; with
-    /// `reaction`, also added into it.
+    /// `reaction`, also added into it. With `gate`, on the solve's gate.
     fn impulse(
         &self,
         enc: &mut GpuEncoder,
@@ -236,6 +248,7 @@ impl BodyPasses {
         tiles: Tiles<'_>,
         pressure: &GpuBuffer,
         reaction: Option<&GpuBuffer>,
+        gate: Option<&BodyGate<'_>>,
     ) -> Result<(), String> {
         let (pipes, partials, sums) = self.parts()?;
         if partials.size < partial_bytes(bodies.lattice, bodies.count) {
@@ -243,23 +256,23 @@ impl BodyPasses {
         }
         let params = Self::params(bodies, reaction.is_some());
         let data = bytemuck::bytes_of(&params);
-        enc.dispatch_compute(
-            &pipes.partial,
-            &[
-                GpuBinding::Bytes { binding: 0, data },
-                buffer(1, bodies.water),
-                buffer(2, bodies.open),
-                buffer(3, bodies.solid),
-                buffer(4, bodies.bodies),
-                buffer(5, pressure),
-                buffer(7, partials),
-                buffer(12, tiles[0]),
-                buffer(14, tiles[2]),
-                self.clock_binding(),
-            ],
-            [tile_groups(bodies.lattice), bodies.count.max(1), 1],
-            "gpu_flip.bodies.partial",
-        );
+        let partial = [
+            GpuBinding::Bytes { binding: 0, data },
+            buffer(1, bodies.water),
+            buffer(2, bodies.open),
+            buffer(3, bodies.solid),
+            buffer(4, bodies.bodies),
+            buffer(5, pressure),
+            buffer(7, partials),
+            buffer(12, tiles[0]),
+            buffer(14, tiles[2]),
+            self.clock_binding(),
+        ];
+        let groups = [tile_groups(bodies.lattice), bodies.count.max(1), 1];
+        match gate {
+            Some(gate) => enc.dispatch_compute_gated(&pipes.partial, &partial, groups, gate.buffer, gate.partial, "gpu_flip.bodies.partial"),
+            None => enc.dispatch_compute(&pipes.partial, &partial, groups, "gpu_flip.bodies.partial"),
+        }
         // A fixed array, not a Vec: this runs every step. Without a reaction
         // binding 9 is left off.
         let finalize = [
@@ -272,7 +285,11 @@ impl BodyPasses {
             buffer(9, reaction.unwrap_or(sums)),
         ];
         let bound = if reaction.is_some() { finalize.len() } else { finalize.len() - 1 };
-        enc.dispatch_compute(&pipes.finalize, &finalize[..bound], [bodies.count.max(1), 1, 1], "gpu_flip.bodies.finalize");
+        let groups = [bodies.count.max(1), 1, 1];
+        match gate {
+            Some(gate) => enc.dispatch_compute_gated(&pipes.finalize, &finalize[..bound], groups, gate.buffer, gate.finalize, "gpu_flip.bodies.finalize"),
+            None => enc.dispatch_compute(&pipes.finalize, &finalize[..bound], groups, "gpu_flip.bodies.finalize"),
+        }
         Ok(())
     }
 
@@ -287,26 +304,52 @@ impl BodyPasses {
         direction: &GpuBuffer,
         s: &GpuBuffer,
     ) -> Result<(), String> {
-        self.impulse(enc, bodies, tiles, direction, None)?;
+        self.apply_on(enc, bodies, tiles, direction, s, None)
+    }
+
+    /// [`Self::apply`] on the solve's gate: a round the stop switched off,
+    /// or an inactive clock slot, runs none of its three passes.
+    pub(crate) fn apply_gated(
+        &self,
+        enc: &mut GpuEncoder,
+        bodies: &Bodies<'_>,
+        tiles: Tiles<'_>,
+        direction: &GpuBuffer,
+        s: &GpuBuffer,
+        gate: &BodyGate<'_>,
+    ) -> Result<(), String> {
+        self.apply_on(enc, bodies, tiles, direction, s, Some(gate))
+    }
+
+    fn apply_on(
+        &self,
+        enc: &mut GpuEncoder,
+        bodies: &Bodies<'_>,
+        tiles: Tiles<'_>,
+        direction: &GpuBuffer,
+        s: &GpuBuffer,
+        gate: Option<&BodyGate<'_>>,
+    ) -> Result<(), String> {
+        self.impulse(enc, bodies, tiles, direction, None, gate)?;
         let (pipes, _, sums) = self.parts()?;
         let params = Self::params(bodies, false);
-        enc.dispatch_compute(
-            &pipes.product,
-            &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&params) },
-                buffer(1, bodies.water),
-                buffer(2, bodies.open),
-                buffer(3, bodies.solid),
-                buffer(4, bodies.bodies),
-                buffer(8, sums),
-                buffer(10, s),
-                buffer(12, tiles[0]),
-                buffer(14, tiles[2]),
-                self.clock_binding(),
-            ],
-            [tile_groups(bodies.lattice), 1, 1],
-            "gpu_flip.bodies.product",
-        );
+        let product = [
+            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&params) },
+            buffer(1, bodies.water),
+            buffer(2, bodies.open),
+            buffer(3, bodies.solid),
+            buffer(4, bodies.bodies),
+            buffer(8, sums),
+            buffer(10, s),
+            buffer(12, tiles[0]),
+            buffer(14, tiles[2]),
+            self.clock_binding(),
+        ];
+        let groups = [tile_groups(bodies.lattice), 1, 1];
+        match gate {
+            Some(gate) => enc.dispatch_compute_gated(&pipes.product, &product, groups, gate.buffer, gate.product, "gpu_flip.bodies.product"),
+            None => enc.dispatch_compute(&pipes.product, &product, groups, "gpu_flip.bodies.product"),
+        }
         Ok(())
     }
 
@@ -321,7 +364,7 @@ impl BodyPasses {
         pressure: &GpuBuffer,
         reaction: &GpuBuffer,
     ) -> Result<(), String> {
-        self.impulse(enc, bodies, tiles, pressure, Some(reaction))?;
+        self.impulse(enc, bodies, tiles, pressure, Some(reaction), None)?;
         let (pipes, _, sums) = self.parts()?;
         let params = Self::params(bodies, false);
         enc.dispatch_compute(

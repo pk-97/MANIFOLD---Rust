@@ -242,6 +242,29 @@ fn separating() -> bool {
     }
 }
 
+/// Test-only lever for the inactive-slot proof (BUG-e6z6s (inactive FLIP
+/// slots)): with it set, every pass of an inactive clock slot runs as it did
+/// before the slots were gated. The gate plan is zeros, so only the passes
+/// that always read the clock see the slot as inactive.
+#[cfg(all(test, feature = "gpu-proofs"))]
+static GATE_OFF: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+pub(crate) fn set_gate_off(on: bool) {
+    GATE_OFF.store(on, std::sync::atomic::Ordering::SeqCst);
+}
+
+pub(super) fn gating() -> bool {
+    #[cfg(all(test, feature = "gpu-proofs"))]
+    {
+        !GATE_OFF.load(std::sync::atomic::Ordering::SeqCst)
+    }
+    #[cfg(not(all(test, feature = "gpu-proofs")))]
+    {
+        true
+    }
+}
+
 /// The lattice's cell-sized arrays (`LatticeBuffers`): water, φ, the
 /// right-hand side, the pressure, the pocket state and label, the solve
 /// mask, the contact mask and the let-go set.
@@ -492,18 +515,19 @@ impl TileTable {
 
 /// The table for this step, after the sort: nearness per tile, rings, then
 /// the lists, counts, triples and the active-fraction stats word (`capped`
-/// at the solver words).
-fn encode_tiles(enc: &mut GpuEncoder, pipes: &Pipelines, params: &StepParams, t: &TileTable, ranges: &GpuBuffer, capped: &GpuBuffer, tally: u64) {
+/// at the solver words). An inactive slot of `plan` keeps the last active
+/// step's table and zeroes its triples.
+fn encode_tiles(enc: &mut GpuEncoder, pipes: &Pipelines, params: &StepParams, t: &TileTable, ranges: &GpuBuffer, capped: &GpuBuffer, tally: u64, plan: &GpuBuffer) {
     let tiles = groups(tile_total(params.n));
     enc.dispatch_compute(
         &pipes.tiles_classify,
-        &[uniform(params), buffer(1, ranges), buffer(27, &t.near), buffer(30, &t.counts)],
+        &[uniform(params), buffer(1, ranges), buffer(27, &t.near), buffer(30, &t.counts), buffer(46, plan)],
         tiles,
         "gpu_flip.step.tiles.classify",
     );
     enc.dispatch_compute(
         &pipes.tiles_rings,
-        &[uniform(params), buffer(27, &t.near), buffer(28, &t.rank), buffer(30, &t.counts)],
+        &[uniform(params), buffer(27, &t.near), buffer(28, &t.rank), buffer(30, &t.counts), buffer(46, plan)],
         tiles,
         "gpu_flip.step.tiles.rings",
     );
@@ -511,6 +535,7 @@ fn encode_tiles(enc: &mut GpuEncoder, pipes: &Pipelines, params: &StepParams, t:
         &pipes.tiles_lists,
         &[
             uniform(params),
+            buffer(46, plan),
             buffer(27, &t.near),
             buffer(28, &t.rank),
             buffer(29, &t.by_ring),
@@ -786,17 +811,18 @@ fn encode_pockets(
     cells: [u32; 3],
     capped: &GpuBuffer,
     tally: u64,
+    plan: &GpuBuffer,
 ) {
     let cell_count: u64 = cells.iter().map(|&n| u64::from(n)).product();
     enc.dispatch_compute(
         &pipes.pocket_seed,
-        &[uniform(params), buffer(6, &l.water), buffer(10, &l.s), buffer(23, &l.pocket), buffer(25, &l.pocket_label)],
+        &[uniform(params), buffer(6, &l.water), buffer(10, &l.s), buffer(23, &l.pocket), buffer(25, &l.pocket_label), buffer(46, plan)],
         groups(cell_count),
         "gpu_flip.step.pocket_seed",
     );
-    enc.dispatch_compute(&pipes.pocket_start, &[buffer(24, &l.pocket_gate)], [1, 1, 1], "gpu_flip.step.pocket_start");
+    enc.dispatch_compute(&pipes.pocket_start, &[buffer(24, &l.pocket_gate), buffer(46, plan)], [1, 1, 1], "gpu_flip.step.pocket_start");
     for _ in 0..pocket_rounds(cells) {
-        enc.dispatch_compute(&pipes.pocket_round, &[uniform(params), buffer(24, &l.pocket_gate)], [1, 1, 1], "gpu_flip.step.pocket_round");
+        enc.dispatch_compute(&pipes.pocket_round, &[uniform(params), buffer(24, &l.pocket_gate), buffer(46, plan)], [1, 1, 1], "gpu_flip.step.pocket_round");
         for (axis, sweep) in pipes.pocket_sweep.iter().enumerate() {
             enc.dispatch_compute_indirect(
                 sweep,
@@ -809,7 +835,7 @@ fn encode_pockets(
     }
     enc.dispatch_compute(
         &pipes.pocket_check,
-        &[uniform(params), buffer(10, &l.s), buffer(23, &l.pocket), buffer(24, &l.pocket_gate), buffer(25, &l.pocket_label)],
+        &[uniform(params), buffer(10, &l.s), buffer(23, &l.pocket), buffer(24, &l.pocket_gate), buffer(25, &l.pocket_label), buffer(46, plan)],
         groups(cell_count),
         "gpu_flip.step.pocket_check",
     );
@@ -817,7 +843,7 @@ fn encode_pockets(
     // tick's first step, and writes the step's dry, sealed and air counts.
     enc.dispatch_compute(
         &pipes.pocket_tally,
-        &[uniform(params), buffer(1, ranges), buffer(6, &l.water), buffer(7, &l.phi), buffer(10, &l.s), buffer(23, &l.pocket), buffer(24, &l.pocket_gate), GpuBinding::Buffer { binding: 22, buffer: capped, offset: tally }],
+        &[uniform(params), buffer(1, ranges), buffer(6, &l.water), buffer(7, &l.phi), buffer(10, &l.s), buffer(23, &l.pocket), buffer(24, &l.pocket_gate), GpuBinding::Buffer { binding: 22, buffer: capped, offset: tally }, buffer(46, plan)],
         [1, 1, 1],
         "gpu_flip.step.pocket_tally",
     );
@@ -856,11 +882,11 @@ impl LatticeBuffers {
 /// for a right-hand side summing to 0. What was removed goes to solver word
 /// 4 (`solve` 0, pressure) or 5 (1, density): h³ of the lattice's cell
 /// size, so a coarse level adds its own volume rate.
-fn encode_pocket_mean(enc: &mut GpuEncoder, pipes: &Pipelines, params: &StepParams, pockets: Pockets<'_>, rhs: &GpuBuffer, solve: usize, capped: &GpuBuffer, tally: u64) {
+fn encode_pocket_mean(enc: &mut GpuEncoder, pipes: &Pipelines, params: &StepParams, pockets: Pockets<'_>, rhs: &GpuBuffer, solve: usize, capped: &GpuBuffer, tally: u64, plan: &GpuBuffer) {
     let cell_count: u64 = params.n.iter().map(|&n| u64::from(n)).product();
-    let sums = [uniform(params), buffer(26, pockets.sums)];
+    let sums = [uniform(params), buffer(26, pockets.sums), buffer(46, plan)];
     enc.dispatch_compute(&pipes.pocket_clear, &sums, groups(3 * cell_count + 2), "gpu_flip.step.pocket_clear");
-    let cells = [uniform(params), buffer(5, rhs), buffer(23, pockets.state), buffer(25, pockets.label), buffer(26, pockets.sums)];
+    let cells = [uniform(params), buffer(5, rhs), buffer(23, pockets.state), buffer(25, pockets.label), buffer(26, pockets.sums), buffer(46, plan)];
     enc.dispatch_compute(&pipes.pocket_accumulate, &cells, groups(cell_count), "gpu_flip.step.pocket_accumulate");
     enc.dispatch_compute(&pipes.pocket_remove, &cells, groups(cell_count), "gpu_flip.step.pocket_remove");
     enc.dispatch_compute(
@@ -873,6 +899,7 @@ fn encode_pocket_mean(enc: &mut GpuEncoder, pipes: &Pipelines, params: &StepPara
                 buffer: capped,
                 offset: tally,
             },
+            buffer(46, plan),
         ],
         [1, 1, 1],
         "gpu_flip.step.pocket_flux",
@@ -883,13 +910,13 @@ fn encode_pocket_mean(enc: &mut GpuEncoder, pipes: &Pipelines, params: &StepPara
 /// (gpu_flip_step.wgsl pocket_coarsen): a level cell is sealed when every
 /// fine cell under it is sealed with one label, and takes the lowest such
 /// level cell of its pocket as its label.
-fn encode_pocket_coarsen(enc: &mut GpuEncoder, pipes: &Pipelines, params: &StepParams, l: &LatticeBuffers) {
+fn encode_pocket_coarsen(enc: &mut GpuEncoder, pipes: &Pipelines, params: &StepParams, l: &LatticeBuffers, plan: &GpuBuffer) {
     let level = params.solve_level as usize;
     let coarse_count: u64 = level_lattices(l.cells)[level].iter().map(|&n| u64::from(n)).product();
     let cell_count: u64 = l.cells.iter().map(|&n| u64::from(n)).product();
     enc.dispatch_compute(
         &pipes.pocket_coarse[0],
-        &[uniform(params), buffer(41, &l.pocket_leader)],
+        &[uniform(params), buffer(41, &l.pocket_leader), buffer(46, plan)],
         groups(cell_count),
         "gpu_flip.step.pocket_leader_clear",
     );
@@ -902,6 +929,7 @@ fn encode_pocket_coarsen(enc: &mut GpuEncoder, pipes: &Pipelines, params: &StepP
         buffer(39, &l.pocket_coarse),
         buffer(40, &l.pocket_coarse_label),
         buffer(41, &l.pocket_leader),
+        buffer(46, plan),
     ];
     enc.dispatch_compute(&pipes.pocket_coarse[1], &bindings, groups(coarse_count), "gpu_flip.step.pocket_coarsen");
     enc.dispatch_compute(&pipes.pocket_coarse[2], &bindings, groups(coarse_count), "gpu_flip.step.pocket_relabel");
@@ -1187,6 +1215,11 @@ impl StepState {
         let cells = l.cells;
         let p = step.params;
         let capacity = p.capacity;
+        // What reads this slot's activity beyond the passes that always did:
+        // the clock plan, or zeros (always active) for the narrow band, whose
+        // passes are not all clock-aware, and under the test lever.
+        let gated = gating() && !step.narrow_enabled && !step.restore_narrow;
+        let gate_plan = if gated { step.clock_plan } else { self.zeros.as_ref().expect("zero storage prepared") };
         let sort_job = |particles, sorted| SortJob {
             particles,
             read: LIQUID_PARTICLE_READ,
@@ -1197,6 +1230,7 @@ impl StepState {
             bins: cells,
             sorted: Some(sorted),
             order: None,
+            gate: Some(gate_plan),
         };
         // Copies of the params, so each Bytes binding borrows a value that
         // lives across its dispatch.  Narrow mode 1 is the one-time full
@@ -1396,7 +1430,7 @@ impl StepState {
         // defined-value rule)): filled once per lattice, restored by the
         // retire when a tile leaves C.
         if !step.narrow_enabled {
-            encode_tiles(enc, pipes, &base, tiles, ranges, step.capped, step.tally);
+            encode_tiles(enc, pipes, &base, tiles, ranges, step.capped, step.tally, gate_plan);
         }
         if !step.narrow_enabled && !self.filled {
             enc.dispatch_compute(&pipes.tiles_fill, &canonical(l, vec![uniform(&base)]), face_groups, "gpu_flip.step.tiles.fill");
@@ -1547,7 +1581,7 @@ impl StepState {
             let (from, to) = if layer % 2 == 0 { (&l.b, &l.v) } else { (&l.v, &l.b) };
             enc.dispatch_compute(
                 &pipes.solid_extrapolate,
-                &[uniform(&base), buffer(3, from), buffer(4, to)],
+                &[uniform(&base), buffer(3, from), buffer(4, to), buffer(46, gate_plan)],
                 face_groups,
                 "gpu_flip.step.solid_extrapolate",
             );
@@ -1565,10 +1599,10 @@ impl StepState {
         // Which water reaches air holds every step: the density source reads
         // it too. As the engine does, the solid velocity's zeroing is skipped
         // when the bodies are in the solve: their mass resolves the pocket.
-        encode_pockets(enc, pipes, &base, l, ranges, cells, step.capped, step.tally);
+        encode_pockets(enc, pipes, &base, l, ranges, cells, step.capped, step.tally, gate_plan);
         enc.dispatch_compute(
             &pipes.pocket_pin,
-            &[uniform(&base), buffer(6, &l.water), buffer(23, &l.pocket), buffer(25, &l.pocket_label), buffer(5, &l.solve_water)],
+            &[uniform(&base), buffer(6, &l.water), buffer(23, &l.pocket), buffer(25, &l.pocket_label), buffer(5, &l.solve_water), buffer(46, gate_plan)],
             cells_groups,
             "gpu_flip.step.pocket_pin",
         );
@@ -1588,12 +1622,12 @@ impl StepState {
             &l.solve_water
         };
         if step.level > 0 {
-            encode_pocket_coarsen(enc, pipes, &base, l);
+            encode_pocket_coarsen(enc, pipes, &base, l, gate_plan);
         }
         if solids && !step.dynamic {
             enc.dispatch_compute(
                 &pipes.pocket_condition,
-                &[uniform(&base), buffer(4, &l.v), buffer(10, &l.s), buffer(23, &l.pocket)],
+                &[uniform(&base), buffer(4, &l.v), buffer(10, &l.s), buffer(23, &l.pocket), buffer(46, gate_plan)],
                 face_groups,
                 "gpu_flip.step.pocket_condition",
             );
@@ -1605,7 +1639,7 @@ impl StepState {
             cells_groups,
             "gpu_flip.step.divergence",
         );
-        encode_pocket_mean(enc, pipes, &base, l.fine_pockets(), &l.rhs, 0, step.capped, step.tally);
+        encode_pocket_mean(enc, pipes, &base, l.fine_pockets(), &l.rhs, 0, step.capped, step.tally, gate_plan);
         // At a coarse solve level the restricted right-hand side loses each
         // pocket's zero sum (design section 11), so the mean comes off once
         // more there; as a later substep's would, its flux adds to the word.
@@ -1617,7 +1651,7 @@ impl StepState {
                     step_in_tick: 1,
                     ..base
                 };
-                encode_pocket_mean(enc, pipes, &params, l.coarse_pockets(), rhs, solve, step.capped, step.tally);
+                encode_pocket_mean(enc, pipes, &params, l.coarse_pockets(), rhs, solve, step.capped, step.tally, gate_plan);
             }
         };
         let water = Water {
@@ -1627,6 +1661,7 @@ impl StepState {
             faces: &l.s,
             phi: step.ghost.then_some(&l.phi),
         };
+        self.solver.set_clock_plan(gate_plan);
         self.solver.prepare(device, enc, &water)?;
         // Dynamic bodies join the solve as the engine's mass-aware PCG
         // (RigidFluidCoupling) has them; their tick rows start at `first`.
@@ -1751,7 +1786,7 @@ impl StepState {
                     "gpu_flip.step.density_source",
                 );
             }
-            encode_pocket_mean(enc, pipes, &base, l.fine_pockets(), &l.rhs, 1, step.capped, step.tally);
+            encode_pocket_mean(enc, pipes, &base, l.fine_pockets(), &l.rhs, 1, step.capped, step.tally, gate_plan);
             // The density solve stays plain: every water cell in it, let go
             // or not, so its rows are rebuilt on the pocket-only mask.
             let plain_water = Water { water: &l.solve_water, ..water };
@@ -1928,9 +1963,9 @@ impl StepState {
                 buffer(36, step.regions), buffer(46, step.clock_plan), buffer(37, &scan),
             ], groups(sites), "gpu_flip.step.emit_flags");
             enc.compute_memory_barrier_buffers();
-            self.emit_scan.encode_labelled(enc, sites as usize, ScanLabels {
+            self.emit_scan.encode_labelled_gated(enc, sites as usize, ScanLabels {
                 blocks: "gpu_flip.step.emit_scan.blocks", add: "gpu_flip.step.emit_scan.add",
-            });
+            }, gate_plan);
             self.identity_ops.reserve(enc, super::particle_identity::BirthReservation {
                 particles: step.out, identity: step.identity, ranges, scan: &scan, plan: step.clock_plan,
                 params: [emission.capacity, cells.iter().product(), sites as u32, 1],

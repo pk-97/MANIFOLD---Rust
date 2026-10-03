@@ -2262,7 +2262,7 @@ fn gpu_flip_step_order_cell_cap_compacts_preserving_ids() {
     sorter.encode(&pass.device, &mut enc, &SortJob {
         particles: input, read: LIQUID_PARTICLE_READ, capacity: 300, count: 300,
         bin_min: MIN, inv_cell: 1.0 / H, bins: N.map(|n| n as u32),
-        sorted: Some(&output), order: None,
+        sorted: Some(&output), order: None, gate: None,
     }, &labels).unwrap();
     enc.commit_and_wait_completed();
     let compacted: Vec<FluidParticle> = read(&output, 300);

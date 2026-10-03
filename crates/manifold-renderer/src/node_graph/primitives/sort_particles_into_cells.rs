@@ -110,6 +110,9 @@ pub(crate) struct SortJob<'a> {
     /// Liquid particle records only; `None` leaves it unwritten.
     pub sorted: Option<&'a GpuBuffer>,
     pub order: Option<&'a GpuBuffer>,
+    /// A GPU FLIP clock plan: an inactive slot's (live, no time to step)
+    /// sort runs no pass and leaves every output as it was. `None` always sorts.
+    pub gate: Option<&'a GpuBuffer>,
 }
 
 /// The counting sort itself, shared by `node.sort_particles_into_cells` and
@@ -122,6 +125,8 @@ pub(crate) struct ParticleSorter {
     rank: Option<GpuBuffer>,
     slot_input: Option<GpuBuffer>,
     ranges: Option<GpuBuffer>,
+    /// Zeros, the gate an ungated sort binds.
+    open: Option<GpuBuffer>,
 }
 
 impl ParticleSorter {
@@ -133,6 +138,9 @@ impl ParticleSorter {
             }
         }
         self.scan.prepare(device);
+        if self.open.is_none() {
+            self.open = Some(super::prefix_scan::open_gate(device));
+        }
     }
 
     /// One range per bin of `bins`, at `range_storage_bytes(bins)` or more.
@@ -183,6 +191,7 @@ impl ParticleSorter {
             self.slot_input = Some(device.create_buffer(rank_bytes));
         }
         let ranges = self.ranges.as_ref().ok_or("the cell ranges were not reserved")?;
+        let gate = job.gate.or(self.open.as_ref()).expect("sort pipelines prepared");
         let rank = self.rank.as_ref().expect("rank scratch allocated");
         let slot_input = self.slot_input.as_ref().expect("slot scratch allocated");
         let read = job.read;
@@ -210,6 +219,7 @@ impl ParticleSorter {
             GpuBinding::Buffer { binding: 5, buffer: rank, offset: 0 },
             GpuBinding::Buffer { binding: 6, buffer: job.order.unwrap_or(rank), offset: 0 },
             GpuBinding::Buffer { binding: 7, buffer: slot_input, offset: 0 },
+            GpuBinding::Buffer { binding: 8, buffer: gate, offset: 0 },
         ];
         let groups = |n: u32| [n.div_ceil(256).max(1), 1, 1];
         let [clear, count_pass, write_ranges, clear_tail, scatter, stabilise] = &self.pipelines[..] else {
@@ -219,7 +229,10 @@ impl ParticleSorter {
         encoder.compute_memory_barrier_buffers();
         encoder.dispatch_compute(count_pass, &bindings, groups(count), labels.count);
         encoder.compute_memory_barrier_buffers();
-        self.scan.encode_labelled(encoder, bin_total as usize, labels.scan);
+        match job.gate {
+            Some(gate) => self.scan.encode_labelled_gated(encoder, bin_total as usize, labels.scan, gate),
+            None => self.scan.encode_labelled(encoder, bin_total as usize, labels.scan),
+        }
         encoder.dispatch_compute(write_ranges, &bindings, groups(bin_total), labels.ranges);
         encoder.dispatch_compute(clear_tail, &bindings, groups(sorted_capacity), labels.tail);
         encoder.compute_memory_barrier_buffers();
@@ -493,6 +506,7 @@ impl Primitive for SortParticlesIntoCells {
             bins,
             sorted,
             order,
+            gate: None,
         };
         let gpu = ctx.gpu_encoder();
         let encoded = self.sorter.encode(gpu.device, gpu.native_enc, &job, &NODE_LABELS);

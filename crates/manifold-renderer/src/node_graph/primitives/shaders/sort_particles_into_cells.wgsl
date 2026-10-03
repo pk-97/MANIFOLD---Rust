@@ -46,6 +46,13 @@ struct SortParams {
 @group(0) @binding(6) var<storage, read_write> order: array<u32>;
 // The input index of each sorted slot, before and after stabilising.
 @group(0) @binding(7) var<storage, read_write> slot_input: array<u32>;
+// A GPU FLIP clock plan (gpu_flip_clock.wgsl Plan; word 0 step_dt, word 11
+// live_mode): live with no time to step, every pass returns. Zeros run.
+@group(0) @binding(8) var<storage, read> gate: array<u32>;
+
+fn gated_off() -> bool {
+    return gate[11] != 0u && !(bitcast<f32>(gate[0]) > 0.0);
+}
 
 const NO_RANK: u32 = 0xffffffffu;
 
@@ -85,7 +92,7 @@ fn bin_start(b: u32) -> u32 {
 
 @compute @workgroup_size(256)
 fn clear_counts(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if gid.x < params.bin_total {
+    if !gated_off() && gid.x < params.bin_total {
         atomicStore(&cell_counts[gid.x], 0u);
     }
 }
@@ -93,7 +100,7 @@ fn clear_counts(@builtin(global_invocation_id) gid: vec3<u32>) {
 @compute @workgroup_size(256)
 fn count_particles(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
-    if i >= params.count {
+    if gated_off() || i >= params.count {
         return;
     }
     if !is_live(i) {
@@ -106,7 +113,7 @@ fn count_particles(@builtin(global_invocation_id) gid: vec3<u32>) {
 @compute @workgroup_size(256)
 fn write_ranges(@builtin(global_invocation_id) gid: vec3<u32>) {
     let b = gid.x;
-    if b >= params.bin_total {
+    if gated_off() || b >= params.bin_total {
         return;
     }
     let start = bin_start(b);
@@ -118,7 +125,7 @@ fn write_ranges(@builtin(global_invocation_id) gid: vec3<u32>) {
 @compute @workgroup_size(256)
 fn clear_tail(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
-    if i >= params.sorted_capacity {
+    if gated_off() || i >= params.sorted_capacity {
         return;
     }
     if i >= atomicLoad(&cell_counts[params.bin_total - 1u]) {
@@ -136,7 +143,7 @@ fn clear_tail(@builtin(global_invocation_id) gid: vec3<u32>) {
 @compute @workgroup_size(256)
 fn scatter(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
-    if i >= params.count || rank[i] == NO_RANK {
+    if gated_off() || i >= params.count || rank[i] == NO_RANK {
         return;
     }
     let slot = bin_start(bin_of(position_of(i))) + rank[i];
@@ -174,7 +181,7 @@ fn sift_down(base: u32, start: u32, n: u32) {
 @compute @workgroup_size(256)
 fn stabilise(@builtin(global_invocation_id) gid: vec3<u32>) {
     let b = gid.x;
-    if b >= params.bin_total {
+    if gated_off() || b >= params.bin_total {
         return;
     }
     let start = bin_start(b);

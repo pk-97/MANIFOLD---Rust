@@ -233,6 +233,14 @@ EXPLICIT_ROWS = [
       RENDERER_SRC + "node_graph/primitives/shaders/liquid_fill",
       RENDERER_SRC + "node_graph/primitives/shaders/face_sample_component"),
      (["gpu_flip_", "face_grid_tests::"], REPORTER_SKIPS)),
+    # The GPU FLIP step runs its sort, scans and coarse inverse gated on the
+    # clock's slot plan; only the inactive-slot proof runs them gated.
+    ((RENDERER_SRC + "node_graph/primitives/sort_particles_into_cells",
+      RENDERER_SRC + "node_graph/primitives/prefix_scan",
+      RENDERER_SRC + "node_graph/primitives/shaders/sort_particles_into_cells",
+      RENDERER_SRC + "node_graph/primitives/shaders/prefix_scan",
+      RENDERER_SRC + "node_graph/primitives/shaders/coarse_inverse"),
+     (["gpu_flip_inactive_slots_match_the_ungated_step"], [])),
     # Shared marching-cubes topology: ownership, solid-contact CPU value parity
     # (volume_surface_mesh::gpu_tests::mesh_contact_*), and raster parity.
     ((RENDERER_SRC + "node_graph/primitives/count_surface_edges",
