@@ -1,10 +1,10 @@
-# Live sim clock — water keeps transport time under load
+# Live sim clock — capped fixed steps, slow motion under overload
 
-**Status:** SHIPPED · 2026-10-03 · BUG-7qzk (one live sim clock). Owed: an observed editor render of the HUD rows. See [section 9](#9-implementation-seam).
+**Status:** APPROVED rework, not built · 2026-10-04 · the shipped catch-up clock is retired; the capped fixed-step clock is BUG-g75v.11 (capped live clock rework) in BUG-g75v (GPU water campaign). Owed: that rework and an observed editor render of the HUD rows. See section 8 (Resolved decisions).
 
-<!-- index: GPU FLIP timing audit, transport-locked live intervals, timestamped hits, reference-engine CFL rule, Box3D substeps and editor HUD lag; shared runtime intervals, duration-aware whitewater and completed-time HUD plumbing. -->
+<!-- index: Live physics clock: fixed Sim Rate steps capped per frame, leftover time dropped under overload (rework approved 2026-10-04); timestamped hits, reference-engine CFL rule, Box3D substeps and editor HUD lag. -->
 
-Peter's ruling: “live sims are never in slow motion.” “When a frame owes more ticks than its live budget, run the budgeted steps with each covering more time, so sim time stays locked to the transport.” “A hit (audio or force trigger) that falls inside a stretched step still applies at its own moment.” Live water cannot silently lose seconds. Authored Simulation Speed remains intentional time scaling.
+Peter's ruling, 2026-10-04: live sims follow the real-time sim and fluid-tool model (games, EmberGen, Notch, TouchDesigner). Each frame runs at most two fixed Sim Rate steps and drops any leftover time, so an overloaded machine plays the water in slow motion instead of exploding it. “Never go slow Mo was too ambitious and physically not possible.” Hits still apply at their own moments. Authored Simulation Speed remains intentional time scaling. The audit, decisions and implementation seam below describe the shipped catch-up clock this ruling retires; section 8 (Resolved decisions) is the contract.
 
 Scope is **every live physics consumer**: GPU FLIP and whitewater, MPM, coupled and uncoupled Box3D, CPU FLIP, and stateless particle steps. The binding constraints are timing correctness, no per-frame allocation or blocking readback, and existing content-thread ownership. This groundwork adds no serialized project state, commands, identities, locks, threads or channels.
 
@@ -141,28 +141,28 @@ P4 resolves BUG-az3: feed metrics and explicitly tick/push the editor's own HUD 
 
 ## 7. Decided — do not reopen
 
-1. Live covers owed time with longer budgeted outer intervals; never dropped-time reanchoring.
+1. Live runs at most two fixed Sim Rate steps per frame and drops the leftover time (2026-10-04). Retired: covering owed time with longer stretched intervals.
 2. Export follows D7.
 3. Hits split at their own moments, including multiple moments per frame.
-4. Port reference CFL; Box3D uses longer steps with more substeps.
-5. Preserve Speed/pause/epoch rules; scheduling delay is not authored slow motion.
+4. Port reference CFL inside each fixed step; Box3D steps the same fixed intervals.
+5. Preserve Speed/pause/epoch rules; overload slow motion is reported on the HUD and never mistaken for authored Speed.
 6. Reuse editor HUD, report target−completed, address BUG-az3.
 7. Runtime timing claims require the current CPU proofs and lead-run GPU evidence; historical checkpoint checks do not verify this follow-up.
 
 ## 8. Resolved decisions and deferred scope
 
-**Peter's ruling, 2026-10-03 — binding for P1–P4:** live simulations never run in unintended slow motion, discard time, crash, panic, stop or freeze the show. Simulation time stays locked to transport (with authored Simulation Speed). CFL and hit boundaries may require more work than the live outer budget: execute the work and let the frame run long. The perf HUD reports completed-time lag and clearly warns whenever the frame hits its numerical substep cap.
+**Peter's ruling, 2026-10-04 — the contract for BUG-g75v.11 (capped live clock rework), part of BUG-g75v (GPU water campaign):** live physics uses fixed Sim Rate steps. Each frame runs at most two of them; time beyond that is dropped and the clock reanchors, so an overloaded machine plays in slow motion. The HUD shows the dropped time as “sim behind” and warns while it happens. No step is ever stretched to catch up. Within one fixed step, FLIP substeps follow the FLIP Fluids CFL rule exactly as the engine runs one frame, so any final-substep remainder is bounded by one Sim Rate step, as in the engine. The frame records only the substeps that run; a frame never pays for unused substeps. Export keeps exact steps (D7). Only genuinely non-finite state reports a numerical error, and the show continues with the HUD reporting it.
 
-Port the internal FLIP Fluids `nextUpdateTimeStep` rule exactly: when `_currentFrameTimeStepNumber == _maxFrameTimeSteps - 1`, that final numerical substep takes **all remaining frame time**, even when this bends CFL. Never port the externally-stepped cap-exhaustion throw to live. Hits inside that final stretched step still split integration at their own timestamps; event boundaries do not discard its remainder. Port `_getMarkerParticleSpeedLimit` including MANIFOLD's final `max(maxspeed, _maxFrameTimeSteps * speedLimitStep)`: a relative outlier that fits the configured frame's CFL/substep allowance must survive. Only genuinely non-finite state may report a numerical error, and the show must continue with the HUD reporting it.
+How substeps are counted without recording unused ones is open: measure first (the rework bead lists the comparison against pre-overnight main), then choose. A count sized from the last completed step's top speed, read when its fence retires, is acceptable; stalling the content thread for a readback is not.
 
-**Maxima decision — GPU-local current-state reduction:** reduce current marker velocities and eligible obstacle point velocities immediately before GPU timestep selection, in encoder order. First frame/first substep uses source-speed prediction plus constant-force acceleration over the frame, as the reference does. The result stays in GPU storage; the timestep scheduler consumes it there. Neither Top Speed nor last-frame readback substitutes for current maxima. Existing completion fences may retire diagnostic flags/endpoints; they must never stall the content thread to fetch a CFL maximum. The exact storage/consumer seam and value tests are recorded in P2 below as they are implemented.
+**Retired 2026-10-04:** the 2026-10-03 never-slow-motion ruling, the final substep taking all remaining time of an unbounded live span, the marker speed limit measured over a multi-interval span, and the GPU-local maxima decision that made every frame record all six substep slots. Why: on a machine that cannot simulate a second of water in a second of GPU, keeping time and keeping the water stable cannot both hold. The stretched step made res 128 explode within six steps (60–90x the stable step; evidence in BUG-969p6 (overload rule)), catch-up made late frames later, and live GPU cost in the app rose above pre-overnight main (Peter, 2026-10-04).
 
 **Included by Peter’s follow-up:** CPU fluids, Matter, particles and uncoupled Box3D adopt the common contract. Audio-analysis latency is separate. Loaded live playback can still differ from a full-project-rate run. GPU/visual execution belongs to the lead. No serialized project-format change or new quality control is authorized.
 
 
 ## 9. Implementation seam
 
-Production uses the shared physics clock, accepted native CPU and Box3D intervals, GPU current-state scheduling, timestamped impulse lattices, actual body sample durations, and retired completion and status readbacks. Graph installation gives existing graphs their duration and status wires, including accepted-duration pose sampling for the whitewater obstacle-source grid. No project-format fields, locks or channels were added. The fixed-export branches and the live time-drop and debt-burst policies are gone.
+This section describes the shipped catch-up clock that the 2026-10-04 ruling replaces. Production uses the shared physics clock, accepted native CPU and Box3D intervals, GPU current-state scheduling, timestamped impulse lattices, actual body sample durations, and retired completion and status readbacks. Graph installation gives existing graphs their duration and status wires, including accepted-duration pose sampling for the whitewater obstacle-source grid. No project-format fields, locks or channels were added. The fixed-export branches and the live time-drop and debt-burst policies are gone.
 
 `liquid/clock.rs` is a small compatibility adapter and `live_sim_clock_reference.rs` a test-only oracle; neither is a second runtime clock. The main and editor HUDs share `perf_metrics_from_content_state`; a CPU flow test drives both from `ContentState` through play and pause, lag, cap and nonfinite flags.
 

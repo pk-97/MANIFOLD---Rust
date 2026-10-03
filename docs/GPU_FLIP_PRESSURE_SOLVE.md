@@ -31,7 +31,7 @@ The builder is `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_pres
 
 The step's time rules:
 
-- **Step count.** The GPU-local clock ports the engine's CFL 5 schedule, authored minimum and six-step final-remainder rule. All integration uses its accepted durations; see LIVE_SIM_CLOCK_DESIGN.md.
+- **Step count.** The GPU-local clock ports the engine's CFL 5 schedule, authored minimum and six-step final-remainder rule. All integration uses its accepted durations; see LIVE_SIM_CLOCK_DESIGN.md. The 2026-10-04 ruling bounds that rule to one fixed Sim Rate step and records only the substeps that run (LIVE_SIM_CLOCK_DESIGN.md section 8 (Resolved decisions)).
 - **Extrapolation count.** Both face grids extend ceil(sqrt(3) * CFL) + 3 layers: 12 at the configured CFL 5. This follows `_extrapolateFluidVelocities` exactly and is independent of measured travel, resolution, authored Steps and a stretched final interval. The existing RK3 travel guard remains separate from this count.
 - **FLIP share per step.** `flip` is the FLIP share every step keeps, 0.95, as the engine's `_ratioPICFLIP` = 0.05 blends PIC into every substep. More Steps means more PIC damping per second, as in the engine.
 

@@ -2,7 +2,7 @@
 
 <!-- index: Moves FLIP surface reconstruction to GPU atoms (anisotropic level set + marching cubes) and interpolates a slower solver tick to 60 fps through a producer-agnostic particle-frame seam. -->
 
-**Status:** BUILDING · P1–P3 (both passes), P5, P6–P6c, P6e, P6g and Sim Rate built and GPU-proven; P4 dropped; P6d and P6f measured; GPU water follows the FLIP Fluids engine (audit below). Owed: P7–P8, optional-A fusion (BUG-adcx (unwired gather blocks fusion)), surface kernel cost (BUG-l24y (GPU liquid surface kernels cost)) and the res-128 overload rule (BUG-969p6 (overload rule)). See [BUG-upao](#bug-upao--pass-2-and-sim-rate-2026-10-03).
+**Status:** BUILDING · P1–P3 (both passes), P5, P6–P6c, P6e, P6g and Sim Rate built and GPU-proven; P4 dropped; P6d and P6f measured; GPU water follows the FLIP Fluids engine (audit below). Owed: P7–P8, optional-A fusion (BUG-adcx (unwired gather blocks fusion)), surface kernel cost (BUG-l24y (GPU liquid surface kernels cost)) and the capped live clock (BUG-g75v.11 (capped live clock rework) in BUG-g75v (GPU water campaign)). See [BUG-upao](#bug-upao--pass-2-and-sim-rate-2026-10-03).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 **Superseded in part (2026-09-29):** live water is GPU MLS-MPM per [GPU_MPM_SOLVER_DESIGN.md](GPU_MPM_SOLVER_DESIGN.md); D1's live-FLIP clause, D3, D9 and P4 no longer apply to live. The seam, atoms and interpolation stand.
 
@@ -135,7 +135,9 @@ The threshold uses the accepted frame interval (_currentFrameDeltaTime), not
 the adaptive substep or 1/60 s. A live late frame runs its owed intervals as one
 span, so its frame is capped at one Sim Rate interval of simulated time and the
 span removes only what on-time frames would (BUG-i6niq (late spans lose
-particles)); export steps each interval. New inflow ids remain owned by emit_write.
+particles)); export steps each interval. The 2026-10-04 clock ruling retires
+multi-interval spans: live runs at most two fixed Sim Rate steps a frame, so the
+limit is always one step's (LIVE_SIM_CLOCK_DESIGN.md section 8 (Resolved decisions)). New inflow ids remain owned by emit_write.
 CPU reference and extent proofs precede GPU value proofs; GPU execution remains
 lead-owned, so these ports are not yet GPU-verified.
 
