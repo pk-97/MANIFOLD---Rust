@@ -18,6 +18,24 @@ def plan(paths, users=None, repo=None):
 
 
 class ScopeTests(unittest.TestCase):
+    def test_particle_publication_selects_identity_and_pass_one_proofs(self):
+        required = {"particle_publication_gpu_tests::",
+                    "particle_frame_blend_tests::gpu_tests::",
+                    "interpolate_particle_frames::gpu_tests::",
+                    "push_out_of_solid::gpu_tests::", "mix_arrays::gpu_tests::",
+                    "gpu_flip_inflow_emits_at_empty_sites_into_free_slots",
+                    "gpu_flip_narrow_band_publication_repeats_failed_ticks"}
+        for name in ("particle_identity.rs", "particle_publication.rs",
+                     "particle_publication_gpu_tests.rs", "liquid_frame.rs",
+                     "shaders/particle_identity.wgsl", "shaders/particle_publication.wgsl"):
+            with self.subTest(path=name):
+                source = P + name.rsplit("/", 1)[-1].replace(".wgsl", ".rs")
+                result = plan([P + name], users=lambda _: [source],
+                              repo=self._repo_with(P + name))
+                self.assertTrue(required <= result.filters)
+                self.assertFalse(result.unmapped)
+                self.assertFalse(result.broad)
+
     def test_live_clock_and_duration_atoms_select_value_proofs(self):
         for name in ("gpu_flip_clock.rs", "shaders/gpu_flip_clock.wgsl"):
             result = plan([P + name], users=lambda _: [P + "gpu_flip_clock.rs"],

@@ -361,7 +361,7 @@ mod cpu_tests {
         bindings.sort_unstable();
         assert_eq!(
             bindings,
-            (0..=12).chain([46]).map(|binding| (0, binding)).collect::<Vec<_>>()
+            (0..=12).chain([46, 47]).map(|binding| (0, binding)).collect::<Vec<_>>()
         );
 
         let params = module
@@ -1059,6 +1059,8 @@ mod gpu_tests {
                     bind(10, &ranges_buffer),
                     bind(11, &ranks),
                     bind(12, &status),
+                    bind(46, &shared(&device, &[0u32; 12])),
+                    bind(47, &shared(&device, &[0u32, 0, 3, 0])),
                 ],
                 [(8 * cells(N)).div_ceil(256) as u32, 1, 1],
                 "nb-reseed-write",
@@ -1211,6 +1213,8 @@ mod gpu_tests {
                 bind(10, &ranges_buffer),
                 bind(11, &ranks),
                 bind(12, &status),
+                    bind(46, &shared(&device, &[0u32; 12])),
+                    bind(47, &shared(&device, &[0u32, 0, 3, 0])),
             ],
             [(8 * cells(N)).div_ceil(256) as u32, 1, 1],
             "narrow-band-restore-overflow-write",

@@ -236,8 +236,8 @@ fn whitewater_inside_dust_counts_and_fusion() {
     let phi = h.array(&vec![-4.0f32; 512], 512);
     let turb = h.array(&vec![150.0f32; 512], 512);
     let cells = h.array(&vec![1u32; 512], 512);
-    let energy = h.array(&vec![1.0f32; 32], 32);
-    let wave = h.array(&vec![0.0f32; 32], 32);
+    let energy = h.array(&[1.0f32; 32], 32);
+    let wave = h.array(&[0.0f32; 32], 32);
     let influence = h.array(&vec![2.0f32; 729], 729);
     let solid = h.array(&vec![1.0f32; 729], 729);
     let source = h.array(
@@ -903,6 +903,7 @@ fn whitewater_dust_step_publishes_a_distinct_population() {
             shape,
             count: Some(32),
             ticks: 1,
+            dt: crate::node_graph::fluid::TICK as f32,
             epoch: 0,
             seed: 0.0,
             gravity: [0.0, -9.81, 0.0],

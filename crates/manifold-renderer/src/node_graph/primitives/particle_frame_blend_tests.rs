@@ -69,7 +69,7 @@ fn fluid_particle_blend_fused_codegen_validates() {
 }
 
 /// Pass-2 CPU reference fixtures, not proof of the current GPU publisher.
-mod publication_contract {
+pub(super) mod publication_contract {
     use crate::node_graph::fluid_particles::FluidParticle;
 
     struct ReferenceIds {
@@ -97,7 +97,7 @@ mod publication_contract {
         }
     }
 
-    fn publish(state: &[FluidParticle], capacity: usize) -> (Vec<FluidParticle>, usize) {
+    pub(crate) fn publish(state: &[FluidParticle], capacity: usize) -> (Vec<FluidParticle>, usize) {
         let mut frame: Vec<_> = state.iter().copied().filter(|p| p.position_radius[3] > 0.0).collect();
         frame.sort_unstable_by_key(|p| p.id);
         let count = frame.len();
@@ -226,21 +226,30 @@ fn fluid_particle_blend_presets_share_display_clock_and_fuse() {
                     && w["toPort"] == input
             })
         };
-        for display in [502, 506, 507, 508] {
-            assert!(has(9, "blend", display, "blend"));
-            assert!(has(9, "span", display, "span"));
+        let id = |name: &str| -> u32 {
+            json["nodes"].as_array().unwrap().iter().find(|n| n["nodeId"] == name)
+                .unwrap_or_else(|| panic!("missing {name}"))["id"].as_u64().unwrap() as u32
+        };
+        let frame = id("frame");
+        for display in ["particle_blend", "foam_blend", "bubble_blend", "spray_blend"] {
+            assert!(has(frame, "blend", id(display), "blend"));
+            assert!(has(frame, "span", id(display), "span"));
         }
-        assert!(has(503, "out", 504, "solid"));
-        assert!(has(502, "out", 504, "particles"));
-        for (display, copies) in [(506, 485), (507, 486), (508, 487)] {
-            assert!(has(display, "out", copies, "particles"));
+        assert!(has(id("solid_blend"), "out", id("particle_push_out"), "solid"));
+        assert!(has(id("particle_blend"), "out", id("particle_push_out"), "particles"));
+        for (display, copies) in [("foam_blend", "foam_copies"), ("bubble_blend", "bubble_copies"), ("spray_blend", "spray_copies")] {
+            assert!(has(id(display), "out", id(copies), "particles"));
         }
         if json["presetMetadata"]["id"] == "WaterDamBreakGpuFlip" {
-            assert!(has(504, "out", 14, "particles"));
-            assert!(has(503, "out", 14, "solid"));
+            assert!(has(frame, "blend", id("dust_blend"), "blend"));
+            assert!(has(frame, "span", id("dust_blend"), "span"));
+            assert!(has(id("dust_blend"), "out", id("dust_copies"), "particles"));
+            assert!(has(id("particle_push_out"), "out", id("surface"), "particles"));
+            assert!(has(id("solid_blend"), "out", id("surface"), "solid"));
+            assert!(has(id("state"), "identity", frame, "identity"));
         } else {
-            assert!(has(504, "out", 509, "particles"));
-            assert!(has(509, "copies", 442, "instances"));
+            assert!(has(id("particle_push_out"), "out", id("liquid_particle_copies"), "particles"));
+            assert!(has(id("liquid_particle_copies"), "copies", id("water_object"), "instances"));
         }
     }
 }

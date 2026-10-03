@@ -2,7 +2,7 @@
 
 <!-- index: Moves FLIP surface reconstruction to GPU atoms (anisotropic level set + marching cubes) and interpolates a slower solver tick to 60 fps through a producer-agnostic particle-frame seam. -->
 
-**Status:** BUILDING · P1, P2, P5, P6, P6b, P6c built; P6d measured, no lever kept; P6e (distance level set) built; P6f measured; Peter selected engine parity (2026-10-03 audit below). Before the parity port it met the 6 ms gate (5.7 ms p95 at res 64 ×2); current performance is unmeasured; blobs and volume at 4 ms stay a kernel design item (BUG-l24y (GPU liquid surface kernels cost), section 9 P6d). P3 building (atoms and particle view); owed: GPU FLIP identity, GPU proofs and visual verification. Historical P4 dropped; BUG-upao Sim Rate designed below, building on the live sim clock. P7–P8 not built.
+**Status:** BUILDING · P3 pass 2 implemented; owed: GPU/visual proofs, optional-A fusion and Sim Rate; see [BUG-upao](#bug-upao--pass-2-and-sim-rate-2026-10-03).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 **Superseded in part (2026-09-29):** live water is GPU MLS-MPM per [GPU_MPM_SOLVER_DESIGN.md](GPU_MPM_SOLVER_DESIGN.md); D1's live-FLIP clause, D3, D9 and P4 no longer apply to live. The seam, atoms and interpolation stand.
 
@@ -767,7 +767,7 @@ is the orchestrating session's.
 
 ### P3 — Interpolation atoms and the particle view (first pixels)
 
-**BUILDING — CPU VERIFIED (2026-10-03).** Owed: GPU FLIP identity publication, optional-A fusion (BUG-adcx), Metal preset validation, GPU value/fusion proof execution and particle-view stills; solver-rate control follows the live sim clock.
+**BUILDING — pass 2 implemented (2026-10-03); owed: optional-A fusion, device/visual proofs and Sim Rate; see [BUG-upao](#bug-upao--pass-2-and-sim-rate-2026-10-03).**
 
 - **Entry state:** P2 merged; `rg -n 'particles_a' crates/manifold-renderer/src/node_graph/primitives/fluid_surface.rs` shows the ports.
 - **Read-back:** D8, D11; sections 4 and 4.1; ADDING_PRIMITIVES.md whole.
@@ -779,13 +779,19 @@ is the orchestrating session's.
 
 ### BUG-upao — pass 2 and Sim Rate (2026-10-03)
 
-**DESIGNED, NOT IMPLEMENTED.** Pass 1 is checkpoint `cea2466e6`. The audit keeps
-three independent generated atoms: interpolation, solid projection and array mix.
-They reuse `FluidParticle`, standalone codegen and registry-wide startup prewarm;
-value `gpu_tests` and fused-versus-standalone proofs cover all three. Optional-A
-whitewater fusion remains blocked on BUG-adcx. This audit adds named extent rules
-and fixes projection's halfway-node rounding mismatch. BUG-7qzk still owns the
-changing clock interval/speed contract; its branch is neither merged nor consulted.
+**IMPLEMENTED, DEVICE VERIFICATION OWED.** Pass 1 remains three generated atoms
+(interpolation, solid projection and array mix), with value and fusion proofs.
+Pass 2 retains GPU birth allocation beside `liquid_state`, reserves accepted scan
+ranks for inflow and narrow-band births, and publishes a compact ID-sorted copy
+with a cleared tail. Section 2.5 audit: spatial cell sorting cannot order
+arbitrary birth IDs; the publisher reuses `PrefixScan` and persistent scratch.
+No new catalog atom is introduced. Fenced metadata alone supplies live count and
+identity epoch; only accepted frames advance the ring timestamp. Exhausting the
+exact-f32 identity epoch requests a full restart through the existing domain clock
+owner, including coupled rigid state. The landed clock ports are `epoch`,
+`simulation_time`, `display_time`, and `interval_duration` (`tick_interval` below).
+Display time reaches `FrameRing::blend` unchanged. Optional-A whitewater fusion
+remains blocked on BUG-adcx. Sim Rate remains a separate job.
 
 **Pass 2 consumes these clock outputs only.** These are required seam names/units,
 not claims about the changing branch's private API; bind them at the landed boundary:

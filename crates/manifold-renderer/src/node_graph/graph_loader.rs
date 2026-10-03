@@ -733,6 +733,20 @@ fn wire_liquid_intervals(def: &mut EffectGraphDef) -> bool {
                 changed = true;
             }
         }
+        if matches!(node.type_id.as_str(), "node.gpu_flip_step" | "node.liquid_frame") {
+            let state = def.wires.iter().filter(|w| w.to_node == node.id && w.to_port == "particles")
+                .find_map(|w| def.nodes.iter().find(|n| n.id == w.from_node && n.type_id == "node.liquid_state"));
+            if let Some(state) = state {
+                if !def.wires.iter().any(|w| w.to_node == node.id && w.to_port == "identity") {
+                    def.wires.push(EffectGraphWire { from_node: state.id, from_port: "identity".into(), to_node: node.id, to_port: "identity".into() });
+                    changed = true;
+                }
+                if node.type_id == "node.gpu_flip_step" && !def.wires.iter().any(|w| w.to_node == state.id && w.to_port == "identity_in") {
+                    def.wires.push(EffectGraphWire { from_node: node.id, from_port: "identity_out".into(), to_node: state.id, to_port: "identity_in".into() });
+                    changed = true;
+                }
+            }
+        }
         if node.type_id == "node.liquid_state" && !def.wires.iter().any(|w| w.to_node == node.id && w.to_port == "clock_status_in") {
             let step = def.wires.iter().filter(|w| w.to_node == node.id && w.to_port == "in")
                 .find_map(|w| def.nodes.iter().find(|n| n.id == w.from_node && n.type_id == "node.gpu_flip_step"));
@@ -2041,6 +2055,8 @@ mod tests {
         assert!(def.wires.contains(&wire(1, "interval_duration", 3, "interval_duration")));
         assert!(def.wires.contains(&wire(1, "live_hits", 3, "live_hits")));
         assert!(def.wires.contains(&wire(3, "clock_status", 2, "clock_status_in")));
+        assert!(def.wires.contains(&wire(2, "identity", 3, "identity")));
+        assert!(def.wires.contains(&wire(3, "identity_out", 2, "identity_in")));
         assert_eq!(def.wires.iter().filter(|w| w.to_node == 4 && w.to_port == "dt").count(), 1);
         assert!(def.wires.contains(&wire(5, "out", 4, "dt")));
         assert!(!wire_liquid_intervals(&mut def));

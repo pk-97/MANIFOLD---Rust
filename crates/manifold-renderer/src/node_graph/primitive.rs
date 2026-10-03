@@ -619,6 +619,8 @@ pub trait Primitive: PrimitiveSpec {
         false
     }
 
+    fn take_substep_restart_request(&mut self) -> bool { false }
+
     /// The clock's accepted interval for this region iteration. The named
     /// scalar output publishes its duration before the body executes.
     fn substep_clock_interval(&self, _iteration: u32) -> Option<(&'static str, manifold_physics::stepping::StepInterval)> {
@@ -1062,6 +1064,10 @@ impl<P: Primitive + 'static> EffectNode for P {
     }
     fn substep_iteration(&mut self, iteration: u32, scalars: &mut [f32]) -> bool {
         Primitive::substep_iteration(self, iteration, scalars)
+    }
+
+    fn take_substep_restart_request(&mut self) -> bool {
+        Primitive::take_substep_restart_request(self)
     }
     fn substep_clock_interval(&self, iteration: u32) -> Option<(&'static str, manifold_physics::stepping::StepInterval)> {
         Primitive::substep_clock_interval(self, iteration)

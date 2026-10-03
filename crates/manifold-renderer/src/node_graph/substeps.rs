@@ -1647,6 +1647,10 @@ mod tests {
     }
 
     impl EffectNode for SimBoundary {
+        fn take_substep_restart_request(&mut self) -> bool {
+            let mut count = self.count.lock().unwrap();
+            if *count == u32::MAX { *count = 0; true } else { false }
+        }
         fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
             crate::node_graph::depth_rule::DepthRule::Terminal
         }
@@ -1792,6 +1796,9 @@ mod tests {
     }
 
     impl EffectNode for EagerClock {
+        fn clear_state(&mut self) {
+            self.log.lock().unwrap().push("restart clock".into());
+        }
         fn depth_rule(&self) -> crate::node_graph::depth_rule::DepthRule {
             crate::node_graph::depth_rule::DepthRule::Terminal
         }
@@ -1927,6 +1934,18 @@ mod tests {
         fx.log.lock().unwrap().clear();
         exec.execute_frame(&mut fx.graph, &fx.plan, frame_time());
         fx.log.lock().unwrap().clone()
+    }
+
+    #[test]
+    fn substeps_identity_exhaustion_restarts_clock_once_before_more_work() {
+        let mut fx = clock_fixture(true);
+        let mut exec = Executor::with_mock();
+        let log = run_frame(&mut fx, &mut exec, u32::MAX);
+        assert_eq!(log.iter().filter(|s| s.as_str() == "restart clock").count(), 1);
+        assert!(!log.iter().any(|s| s.starts_with("capture ")));
+        let log = run_frame(&mut fx, &mut exec, 1);
+        assert!(!log.iter().any(|s| s == "restart clock"));
+        assert_eq!(log.iter().filter(|s| s.starts_with("capture ")).count(), 1);
     }
 
     #[test]

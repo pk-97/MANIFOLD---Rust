@@ -1293,6 +1293,9 @@ fn liquid_fill(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 }
 
 fn liquid_state(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    x.provide("identity", 16);
+    x.hold(4 * 16); // persistent identity and the three fenced metadata copies
+    x.covers_if_bound("identity_in", 16)?;
     let mut whitewater_check = Ok(());
     let capacity = x.count("whitewater_capacity", STEP_CAPACITY as f32)?;
     if !(1..=STEP_MAX_CAPACITY).contains(&capacity) {
@@ -1379,7 +1382,11 @@ fn liquid_stats(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 }
 
 fn liquid_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    x.covers("identity", 16)?;
     let lattice = x.lattice()?;
+    for (axis, input) in FACE_INPUT_PORTS.into_iter().enumerate() {
+        if x.wired(input) { x.hold((RING - 1) as u64 * face_len(lattice.cells(), axis) * 4); }
+    }
     let mut interior_check = Ok(());
     if x.wired("interior") {
         let bytes = crate::node_graph::liquid::grid::interior_bytes(lattice.cells());
@@ -1398,6 +1405,7 @@ fn liquid_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let count = x.count("count", 0.0)?;
     let particles = u64::from(count.max(1)) * PARTICLE;
     let solid = lattice.solid_bytes();
+    x.hold(crate::node_graph::primitives::particle_publication::scratch_bytes(count) + RING as u64 * 16);
     let wired = x.wired("solid");
     x.hold(if wired { RING as u64 * solid } else { solid });
     x.provide("particles_a", particles);
@@ -1423,6 +1431,8 @@ fn liquid_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 /// own scratch at the wired lattice, the field and body reads, and every
 /// particle carried through.
 fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    x.covers("identity", 16)?;
+    x.covers_if_bound("identity_out", 16)?;
     let cells = x.lattice()?.cells();
     if let Some(reason) = lattice_refusal(cells) {
         return Err(Verdict::Refused(format!("GPU FLIP Step: {reason}. Lower Resolution.")));

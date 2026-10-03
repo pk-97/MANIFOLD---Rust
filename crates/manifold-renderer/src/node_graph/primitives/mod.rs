@@ -353,6 +353,10 @@ pub(crate) mod liquid_fill;
 pub(crate) mod liquid_state;
 pub(crate) mod liquid_stats;
 mod liquid_frame;
+pub(crate) mod particle_identity;
+pub(crate) mod particle_publication;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod particle_publication_gpu_tests;
 pub(crate) mod gpu_flip_domain;
 pub(crate) mod face_sample_component;
 pub(crate) mod matter_face_component;

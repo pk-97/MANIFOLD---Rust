@@ -2877,14 +2877,54 @@
       "typeId": "node.particles_to_copies"
     },
     {
+      "id": 509,
+      "nodeId": "particle_blend",
+      "typeId": "node.interpolate_particle_frames"
+    },
+    {
+      "id": 510,
+      "nodeId": "solid_blend",
+      "typeId": "node.mix_arrays"
+    },
+    {
+      "id": 511,
+      "nodeId": "particle_push_out",
+      "typeId": "node.push_out_of_solid"
+    },
+    {
+      "id": 512,
+      "nodeId": "display_lattice_box",
+      "typeId": "node.transform_components"
+    },
+    {
+      "id": 513,
+      "nodeId": "foam_blend",
+      "typeId": "node.interpolate_particle_frames"
+    },
+    {
+      "id": 514,
+      "nodeId": "bubble_blend",
+      "typeId": "node.interpolate_particle_frames"
+    },
+    {
+      "id": 515,
+      "nodeId": "spray_blend",
+      "typeId": "node.interpolate_particle_frames"
+    },
+    {
+      "id": 519,
+      "nodeId": "dust_blend",
+      "typeId": "node.interpolate_particle_frames"
+    },
+    {
       "handle": "Obstacle Mesh",
-      "id": 506,
+      "id": 520,
       "nodeId": "obstacle_mesh",
       "typeId": "node.cube_mesh"
     },
     {
       "handle": "Obstacle Material",
-      "id": 507,
+      "id": 521,
       "nodeId": "obstacle_material",
       "params": {
         "ambient": {
@@ -2916,7 +2956,7 @@
     },
     {
       "handle": "Obstacle",
-      "id": 508,
+      "id": 522,
       "nodeId": "obstacle_object",
       "typeId": "node.scene_object"
     }
@@ -3815,6 +3855,18 @@
       "toPort": "particles"
     },
     {
+      "fromNode": 5,
+      "fromPort": "identity",
+      "toNode": 6,
+      "toPort": "identity"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "identity_out",
+      "toNode": 5,
+      "toPort": "identity_in"
+    },
+    {
       "fromNode": 4,
       "fromPort": "count",
       "toNode": 6,
@@ -4086,6 +4138,12 @@
     },
     {
       "fromNode": 5,
+      "fromPort": "identity",
+      "toNode": 10,
+      "toPort": "identity"
+    },
+    {
+      "fromNode": 5,
       "fromPort": "interior",
       "toNode": 10,
       "toPort": "interior"
@@ -4260,12 +4318,6 @@
     },
     {
       "fromNode": 10,
-      "fromPort": "particles_b",
-      "toNode": 15,
-      "toPort": "particles"
-    },
-    {
-      "fromNode": 10,
       "fromPort": "interior_b",
       "toNode": 15,
       "toPort": "interior"
@@ -4275,12 +4327,6 @@
       "fromPort": "count_b",
       "toNode": 15,
       "toPort": "count"
-    },
-    {
-      "fromNode": 10,
-      "fromPort": "solid_b",
-      "toNode": 15,
-      "toPort": "solid"
     },
     {
       "fromNode": 10,
@@ -4529,34 +4575,16 @@
       "toPort": "object_9"
     },
     {
-      "fromNode": 5,
-      "fromPort": "foam_particles",
-      "toNode": 485,
-      "toPort": "particles"
-    },
-    {
       "fromNode": 485,
       "fromPort": "copies",
       "toNode": 478,
       "toPort": "instances"
     },
     {
-      "fromNode": 5,
-      "fromPort": "bubble_particles",
-      "toNode": 486,
-      "toPort": "particles"
-    },
-    {
       "fromNode": 486,
       "fromPort": "copies",
       "toNode": 481,
       "toPort": "instances"
-    },
-    {
-      "fromNode": 5,
-      "fromPort": "spray_particles",
-      "toNode": 487,
-      "toPort": "particles"
     },
     {
       "fromNode": 487,
@@ -4853,12 +4881,6 @@
       "toPort": "material"
     },
     {
-      "fromNode": 5,
-      "fromPort": "dust_particles",
-      "toNode": 505,
-      "toPort": "particles"
-    },
-    {
       "fromNode": 505,
       "fromPort": "copies",
       "toNode": 504,
@@ -4871,25 +4893,289 @@
       "toPort": "object_10"
     },
     {
-      "fromNode": 506,
+      "fromNode": 511,
+      "fromPort": "out",
+      "toNode": 15,
+      "toPort": "particles"
+    },
+    {
+      "fromNode": 510,
+      "fromPort": "out",
+      "toNode": 15,
+      "toPort": "solid"
+    },
+    {
+      "fromNode": 513,
+      "fromPort": "out",
+      "toNode": 485,
+      "toPort": "particles"
+    },
+    {
+      "fromNode": 514,
+      "fromPort": "out",
+      "toNode": 486,
+      "toPort": "particles"
+    },
+    {
+      "fromNode": 515,
+      "fromPort": "out",
+      "toNode": 487,
+      "toPort": "particles"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "particles_a",
+      "toNode": 509,
+      "toPort": "particles_a"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "particles_b",
+      "toNode": 509,
+      "toPort": "particles_b"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "count_a",
+      "toNode": 509,
+      "toPort": "count_a"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "count_b",
+      "toNode": 509,
+      "toPort": "count_b"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "identity_a",
+      "toNode": 509,
+      "toPort": "identity_a"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "identity_b",
+      "toNode": 509,
+      "toPort": "identity_b"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "blend",
+      "toNode": 509,
+      "toPort": "blend"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "span",
+      "toNode": 509,
+      "toPort": "span"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "solid_a",
+      "toNode": 510,
+      "toPort": "a"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "solid_b",
+      "toNode": 510,
+      "toPort": "b"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "blend",
+      "toNode": 510,
+      "toPort": "amount"
+    },
+    {
+      "fromNode": 509,
+      "fromPort": "out",
+      "toNode": 511,
+      "toPort": "particles"
+    },
+    {
+      "fromNode": 510,
+      "fromPort": "out",
+      "toNode": 511,
+      "toPort": "solid"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "grid_bounds",
+      "toNode": 512,
+      "toPort": "transform"
+    },
+    {
+      "fromNode": 512,
+      "fromPort": "pos_x",
+      "toNode": 511,
+      "toPort": "center_x"
+    },
+    {
+      "fromNode": 512,
+      "fromPort": "scale_x",
+      "toNode": 511,
+      "toPort": "size_x"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "grid_nodes_x",
+      "toNode": 511,
+      "toPort": "nodes_x"
+    },
+    {
+      "fromNode": 512,
+      "fromPort": "pos_y",
+      "toNode": 511,
+      "toPort": "center_y"
+    },
+    {
+      "fromNode": 512,
+      "fromPort": "scale_y",
+      "toNode": 511,
+      "toPort": "size_y"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "grid_nodes_y",
+      "toNode": 511,
+      "toPort": "nodes_y"
+    },
+    {
+      "fromNode": 512,
+      "fromPort": "pos_z",
+      "toNode": 511,
+      "toPort": "center_z"
+    },
+    {
+      "fromNode": 512,
+      "fromPort": "scale_z",
+      "toNode": 511,
+      "toPort": "size_z"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "grid_nodes_z",
+      "toNode": 511,
+      "toPort": "nodes_z"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "foam_particles",
+      "toNode": 513,
+      "toPort": "particles_b"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "blend",
+      "toNode": 513,
+      "toPort": "blend"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "span",
+      "toNode": 513,
+      "toPort": "span"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "bubble_particles",
+      "toNode": 514,
+      "toPort": "particles_b"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "blend",
+      "toNode": 514,
+      "toPort": "blend"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "span",
+      "toNode": 514,
+      "toPort": "span"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "spray_particles",
+      "toNode": 515,
+      "toPort": "particles_b"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "blend",
+      "toNode": 515,
+      "toPort": "blend"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "span",
+      "toNode": 515,
+      "toPort": "span"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "gravity_x",
+      "toNode": 515,
+      "toPort": "acceleration_x"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "gravity",
+      "toNode": 515,
+      "toPort": "acceleration_y"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "gravity_z",
+      "toNode": 515,
+      "toPort": "acceleration_z"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "dust_particles",
+      "toNode": 519,
+      "toPort": "particles_b"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "blend",
+      "toNode": 519,
+      "toPort": "blend"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "span",
+      "toNode": 519,
+      "toPort": "span"
+    },
+    {
+      "fromNode": 519,
+      "fromPort": "out",
+      "toNode": 505,
+      "toPort": "particles"
+    },
+    {
+      "fromNode": 520,
       "fromPort": "vertices",
-      "toNode": 508,
+      "toNode": 522,
       "toPort": "vertices"
     },
     {
-      "fromNode": 507,
+      "fromNode": 521,
       "fromPort": "out",
-      "toNode": 508,
+      "toNode": 522,
       "toPort": "material"
     },
     {
       "fromNode": 2,
       "fromPort": "transform",
-      "toNode": 508,
+      "toNode": 522,
       "toPort": "transform"
     },
     {
-      "fromNode": 508,
+      "fromNode": 522,
       "fromPort": "object",
       "toNode": 463,
       "toPort": "object_1"

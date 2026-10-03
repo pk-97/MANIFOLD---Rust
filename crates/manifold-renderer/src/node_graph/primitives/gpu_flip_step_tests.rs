@@ -1941,6 +1941,7 @@ fn gpu_flip_inflow_emits_at_empty_sites_into_free_slots() {
         .bind(36, &[row])
         .bind(37, &scan)
         .bind(38, &pool)
+        .bind(47, &[0u32, 0, 1000, 0])
         .run("emit_write", &params, 38, pool.len(), site_count);
     assert_eq!(written[..sorted.len()], sorted[..], "the live prefix is untouched");
     assert!(written[capacity..].iter().all(|p| *p == FluidParticle::default()), "nothing past the pool's slots");
@@ -1953,7 +1954,7 @@ fn gpu_flip_inflow_emits_at_empty_sites_into_free_slots() {
             close(p.velocity[a], f64::from(velocity[a]), 1.0, "emitted velocity");
         }
         close(p.position_radius[3], 0.31017524 * f64::from(H), 1.0, "emitted radius");
-        assert_eq!(p.id, slot as u32 + 1);
+        assert_eq!(p.id, 1000 + (slot - sorted.len()) as u32);
     }
     let live_after = written.iter().filter(|p| p.position_radius[3] > 0.0).count();
     assert_eq!(live_after, capacity, "the count is the live prefix plus the emitted, up to the pool");
@@ -1970,6 +1971,7 @@ fn gpu_flip_inflow_emits_at_empty_sites_into_free_slots() {
         .bind(36, &[row])
         .bind(37, &scan)
         .bind(38, &pool)
+        .bind(47, &[0u32, 0, 1000, 0])
         .run("emit_write", &params, 38, pool.len(), site_count);
     let substep = 3u32 * 64 + 1;
     let mut spread = 0.0f64;
