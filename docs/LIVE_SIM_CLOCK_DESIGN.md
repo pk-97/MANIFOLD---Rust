@@ -1,8 +1,8 @@
 # Live sim clock — water keeps transport time under load
 
-**Status:** SHIPPED · 2026-10-03 · BUG-7qzk. Owed: lead GPU and visual verification. See [section 9](#9-current-implementation-seam-and-outstanding-work).
+**Status:** SHIPPED · 2026-10-03 · BUG-7qzk (one live sim clock). Owed: an observed editor render of the HUD rows. See [section 9](#9-implementation-seam).
 
-<!-- index: GPU FLIP timing audit, transport-locked live intervals, timestamped hits, reference-engine CFL rule, Box3D substeps and editor HUD lag; shared runtime intervals, duration-aware whitewater and completed-time HUD plumbing; lead GPU verification pending. -->
+<!-- index: GPU FLIP timing audit, transport-locked live intervals, timestamped hits, reference-engine CFL rule, Box3D substeps and editor HUD lag; shared runtime intervals, duration-aware whitewater and completed-time HUD plumbing. -->
 
 Peter's ruling: “live sims are never in slow motion.” “When a frame owes more ticks than its live budget, run the budgeted steps with each covering more time, so sim time stays locked to the transport.” “A hit (audio or force trigger) that falls inside a stretched step still applies at its own moment.” Live water cannot silently lose seconds. Authored Simulation Speed remains intentional time scaling.
 
@@ -159,36 +159,10 @@ Port the internal FLIP Fluids `nextUpdateTimeStep` rule exactly: when `_currentF
 **Included by Peter’s follow-up:** CPU fluids, Matter, particles and uncoupled Box3D adopt the common contract. Audio-analysis latency is separate. Loaded live playback can still differ from a full-project-rate run. GPU/visual execution belongs to the lead. No serialized project-format change or new quality control is authorized.
 
 
-## 9. Current implementation seam and outstanding work
+## 9. Implementation seam
 
-The unreviewed checkpoint `f2f561574` was incomplete: its scheduler was test-only, LiquidClock still dropped time, coupled Box3D retained fixed-tick debt, and cap telemetry had no runtime producer. The slot-1 follow-up at base `320a29848` replaces those paths. GPU proof execution remains a lead obligation; a compile is not behavioral evidence.
+Production uses the shared physics clock, accepted native CPU and Box3D intervals, GPU current-state scheduling, timestamped impulse lattices, actual body sample durations, and retired completion and status readbacks. Graph installation gives existing graphs their duration and status wires, including accepted-duration pose sampling for the whitewater obstacle-source grid. No project-format fields, locks or channels were added. The fixed-export branches and the live time-drop and debt-burst policies are gone.
 
-Production changes use the shared physics clock, accepted native CPU/Box3D intervals, GPU current-state scheduling, timestamped impulse lattices, actual body sample durations, and retired completion/status readbacks. Existing graphs receive explicit duration/status wires during graph installation, including accepted-duration pose sampling for the whitewater obstacle-source grid. Retired fixed-export branches are removed from the clock and GPU scheduler. No project-format fields, locks or channels were added.
+`liquid/clock.rs` is a small compatibility adapter and `live_sim_clock_reference.rs` a test-only oracle; neither is a second runtime clock. The main and editor HUDs share `perf_metrics_from_content_state`; a CPU flow test drives both from `ContentState` through play and pause, lag, cap and nonfinite flags.
 
-P4 uses the shared `perf_metrics_from_content_state` builder for main and editor HUDs. The CPU flow test starts from `ContentState`, updates both UI roots, and checks play/pause, lag, cap and nonfinite flags. It does not claim an observed Metal-backed editor render.
-
-At the P1–P4 checkpoint, focused clippy with tests and `-D warnings` passed for `manifold-physics`, `manifold-fluids`, `manifold-renderer` and `manifold-app`. Checkpoint CPU checks passed for the shared clock/scheduler/events/particle durations, native FLIP, renderer fluid/liquid/rigid/Matter modules, reference scheduler, graph wiring, WGSL validation and the content-to-HUD flow. Those checkpoint checks covered live 20/24/30/60 fps endpoints and full cap-hit spans; the export contract was subsequently replaced by D7. The cache-reader test requires `RUST_MIN_STACK=8388608`; it overflowed the default test-thread stack. Both GPU-proof targets compiled with `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 RUSTC_WRAPPER= cargo test -p manifold-renderer --features gpu-proofs --no-run --lib --test gpu_proofs`. No GPU test or app was run by this lane, so GPU trajectory equality and rendered behaviour are not verified here.
-
-No whole files are established as redundant. `liquid/clock.rs` is now a small compatibility adapter; `live_sim_clock_reference.rs` is a test oracle. Neither is deleted. The obsolete live time-drop and debt-burst policies are replaced in code.
-
-The scoped GPU gate (includes the fixed smoke set) is the lead's landing check:
-
-```sh
-RUST_MIN_STACK=8388608 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 RUSTC_WRAPPER= python3 scripts/gpu_proofs_gate.py --base 320a29848 --budget 360
-```
-
-The lead can verify the merged clock and project-rate export seams in one queued GPU run (no GPU execution is available in the worker sandbox):
-
-```sh
-cd '/Users/peterkiemann/MANIFOLD - Rust/.claude/worktrees/slot-1'
-RUST_MIN_STACK=8388608 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 RUSTC_WRAPPER= python3 scripts/gpu_queue.py --label live-clock-export -- cargo test -p manifold-renderer --features gpu-proofs --lib --test gpu_proofs -- gpu_flip_clock::gpu_tests:: liquid_conformance::liquid_export_matches_live_project_schedule liquid_conformance::liquid_coupled_live_frame_rate liquid_conformance::liquid_nonfinite --test-threads=1
-```
-
-For the remaining editor visual observation:
-
-```sh
-cd '/Users/peterkiemann/MANIFOLD - Rust/.claude/worktrees/slot-1'
-CARGO_BUILD_JOBS=4 RUSTC_WRAPPER= python3 scripts/gpu_queue.py --label live-clock-editor -- cargo run -p manifold-app
-```
-
-No commit or push is authorized for this lane. The lead retains the active slot for review and landing.
+Verification lives in the scoped GPU gate: `gpu_flip_clock::gpu_tests::`, the still pool, hydrostatic column, replay and body reaction proofs, Matter's 30/60 fps export, and the liquid conformance export, coupled frame rate and nonfinite proofs. The cache-reader test needs `RUST_MIN_STACK=8388608`. Owed: an observed editor render of the HUD rows.
