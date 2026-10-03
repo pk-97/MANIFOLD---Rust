@@ -869,7 +869,7 @@
         },
         "volume_attenuation_distance": {
           "type": "Float",
-          "value": 2.5
+          "value": 3.0
         },
         "volume_attenuation_color_r": {
           "type": "Float",
@@ -877,11 +877,11 @@
         },
         "volume_attenuation_color_g": {
           "type": "Float",
-          "value": 0.76
+          "value": 0.72
         },
         "volume_attenuation_color_b": {
           "type": "Float",
-          "value": 0.76
+          "value": 0.8
         },
         "volume_geometry": {
           "type": "Float",
@@ -889,19 +889,19 @@
         },
         "volume_scattering_density": {
           "type": "Float",
-          "value": 0.1
+          "value": 0.055
         },
         "volume_scattering_color_r": {
           "type": "Float",
-          "value": 0.7
+          "value": 0.68
         },
         "volume_scattering_color_g": {
           "type": "Float",
-          "value": 0.88
+          "value": 0.86
         },
         "volume_scattering_color_b": {
           "type": "Float",
-          "value": 0.88
+          "value": 0.92
         }
       }
     },
