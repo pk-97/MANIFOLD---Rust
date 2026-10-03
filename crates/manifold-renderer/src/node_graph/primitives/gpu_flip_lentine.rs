@@ -1,9 +1,9 @@
-//! Standalone stage-2 component coarse projection (BUG-lxxl).
+//! Standalone component coarse and local projection (BUG-lxxl).
 //!
-//! Not called by the step until boundary scatter and local projection exist.
+//! Not called by the step; Solve Level integration is stage 4.
 //! The graph is Pᵀ A_boundary P / 2 in integrated fine-flux units at h=1,
 //! exactly as scripts/lentine_reference.py. Its potential has the opposite
-//! sign to the step pressure. No velocity is modified here.
+//! sign to the step pressure. Projection outputs leave caller inputs unchanged.
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 
 const SHADER: &str = include_str!("shaders/gpu_flip_lentine.wgsl");
@@ -219,6 +219,164 @@ impl ComponentSolver {
     }
 }
 
+const PROJECTION_ENTRIES: [&str; 5] = [
+    "scatter_main",
+    "local_main",
+    "project_main",
+    "projection_finish_main",
+    "projection_publish_main",
+];
+
+/// Standalone stages 2–3. Velocity records match `links`: xyz are positive
+/// faces and w is the outward velocity of the explicit aggregate anchor.
+/// Missing, closed and dry faces are copied unchanged. Low domain walls are
+/// prescribed and absent from this layout; their complete source belongs in
+/// `ComponentInput::source`. This is not the mixed free-surface solve.
+///
+/// The alpha-zero scatter preserves subface variation. A gauged Cholesky
+/// solve per 2³ block component changes only internal open wet-to-wet faces.
+/// No iteration/size cap, pivot floor, mean removal or fallback is added.
+pub struct ComponentProjection {
+    pub coarse: ComponentSolver,
+    pub boundary_velocity: GpuBuffer,
+    pub velocity: GpuBuffer,
+    pub local_pressure: GpuBuffer,
+    /// ComponentStatus, first failing fine-cell slot (u32::MAX on success),
+    /// true final max absolute integrated residual (f32), reserved.
+    /// Non-converged coarse status propagates; any failure poisons all outputs.
+    pub progress: GpuBuffer,
+    local_status: GpuBuffer,
+    pipelines: [GpuComputePipeline; 5],
+}
+
+impl ComponentProjection {
+    pub fn new(device: &GpuDevice, lattice: [u32; 3]) -> Result<Self, String> {
+        let coarse = ComponentSolver::new(device, lattice)?;
+        let bytes = u64::from(coarse.params.count) * 4;
+        Ok(Self {
+            coarse,
+            boundary_velocity: device.create_buffer_shared(bytes * 4),
+            velocity: device.create_buffer_shared(bytes * 4),
+            local_pressure: device.create_buffer_shared(bytes),
+            progress: device.create_buffer_shared(16),
+            local_status: device.create_buffer_shared(bytes),
+            pipelines: PROJECTION_ENTRIES
+                .map(|entry| device.create_compute_pipeline(SHADER, entry, entry)),
+        })
+    }
+
+    /// Includes stage-2 storage; excludes caller inputs.
+    pub fn scratch_bytes(lattice: [u32; 3]) -> u64 {
+        ComponentSolver::scratch_bytes(lattice)
+            + lattice.into_iter().map(u64::from).product::<u64>() * 40
+            + 16
+    }
+
+    /// Encode the complete coarse/scatter/local projection without allocation
+    /// or readback. `source` must describe these velocities plus all solid and
+    /// prescribed sources. Inputs must not alias this solver's output buffers.
+    pub fn encode(
+        &self,
+        encoder: &mut GpuEncoder,
+        input: ComponentInput<'_>,
+        velocity: &GpuBuffer,
+    ) -> Result<(), String> {
+        let required = u64::from(self.coarse.params.count) * 16;
+        if velocity.size() < required {
+            return Err(format!(
+                "component velocity needs {required} bytes, got {}",
+                velocity.size()
+            ));
+        }
+        let bindings = [
+            GpuBinding::Bytes {
+                binding: 0,
+                data: bytemuck::bytes_of(&self.coarse.params),
+            },
+            GpuBinding::Buffer {
+                binding: 1,
+                buffer: input.water,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 2,
+                buffer: input.links,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 3,
+                buffer: input.source,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 4,
+                buffer: &self.coarse.labels,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 6,
+                buffer: &self.coarse.pressure,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 11,
+                buffer: &self.coarse.progress,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 13,
+                buffer: velocity,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 14,
+                buffer: &self.boundary_velocity,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 15,
+                buffer: &self.local_pressure,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 16,
+                buffer: &self.velocity,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 17,
+                buffer: &self.local_status,
+                offset: 0,
+            },
+            GpuBinding::Buffer {
+                binding: 18,
+                buffer: &self.progress,
+                offset: 0,
+            },
+        ];
+        self.coarse.encode(encoder, input)?;
+        let cells = [self.coarse.params.count.div_ceil(256), 1, 1];
+        let blocks: u32 = self
+            .coarse
+            .params
+            .n
+            .into_iter()
+            .map(|n| n.div_ceil(2))
+            .product();
+        // One invocation owns a complete local matrix; no shared-state races.
+        let groups = [cells, [blocks.div_ceil(64), 1, 1], cells, [1; 3], cells];
+        for (index, groups) in groups.into_iter().enumerate() {
+            encoder.dispatch_compute(
+                &self.pipelines[index],
+                &bindings,
+                groups,
+                PROJECTION_ENTRIES[index],
+            );
+        }
+        Ok(())
+    }
+}
+
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::super::liquid_surface_tests::read;
@@ -253,6 +411,303 @@ mod gpu_tests {
         assert!(
             actual.is_finite() && (actual - expected).abs() <= 2e-5 * scale.max(1.0),
             "{message}: {actual} != {expected}"
+        );
+    }
+
+    #[derive(serde::Deserialize)]
+    struct ProjectionFixture {
+        #[serde(flatten)]
+        coarse: Fixture,
+        velocity: Vec<[f32; 4]>,
+        #[serde(default)]
+        boundary_velocity: Vec<[f32; 4]>,
+        #[serde(default)]
+        projected_velocity: Vec<[f32; 4]>,
+        #[serde(default)]
+        local_pressure: Vec<f32>,
+        solid_source: Vec<f64>,
+        prescribed: Vec<f64>,
+    }
+
+    fn projection_run(
+        device: &GpuDevice,
+        solver: &ComponentProjection,
+        fixture: &ProjectionFixture,
+    ) -> Vec<u32> {
+        let water = upload(device, &fixture.coarse.water);
+        let links = upload(device, &fixture.coarse.links);
+        let source = upload(device, &fixture.coarse.source);
+        let velocity = upload(device, &fixture.velocity);
+        let mut encoder = device.create_encoder("gpu-flip-lentine-local-proof");
+        solver
+            .encode(
+                &mut encoder,
+                ComponentInput {
+                    water: &water,
+                    links: &links,
+                    source: &source,
+                },
+                &velocity,
+            )
+            .unwrap();
+        encoder.commit_and_wait_completed();
+        // Bit comparison includes intentionally invalid NaNs in rejection cases.
+        for (buffer, expected) in [
+            (
+                &water,
+                bytemuck::cast_slice::<_, u8>(fixture.coarse.water.as_slice()),
+            ),
+            (
+                &links,
+                bytemuck::cast_slice::<_, u8>(fixture.coarse.links.as_slice()),
+            ),
+            (
+                &source,
+                bytemuck::cast_slice::<_, u8>(fixture.coarse.source.as_slice()),
+            ),
+            (
+                &velocity,
+                bytemuck::cast_slice::<_, u8>(fixture.velocity.as_slice()),
+            ),
+        ] {
+            assert_eq!(read::<u8>(buffer, expected.len()), expected);
+        }
+        read::<u32>(&solver.progress, 4)
+    }
+
+    fn assert_projection_poisoned(solver: &ComponentProjection, count: usize) {
+        assert!(
+            read::<f32>(&solver.local_pressure, count)
+                .iter()
+                .all(|x| x.is_nan())
+        );
+        for buffer in [&solver.boundary_velocity, &solver.velocity] {
+            assert!(read::<f32>(buffer, count * 4).iter().all(|x| x.is_nan()));
+        }
+    }
+
+    #[test]
+    fn component_projection_matches_reference() {
+        let output = std::process::Command::new("python3")
+            .arg(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../scripts/lentine_reference.py"),
+            )
+            .arg("--gpu-projection-fixtures")
+            .output()
+            .expect("run f64 projection reference");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let fixtures: Vec<ProjectionFixture> =
+            serde_json::from_slice(&output.stdout).expect("projection fixture JSON");
+        assert_eq!(fixtures.len(), 10);
+        let device = crate::test_device();
+        for fixture in fixtures {
+            let f = &fixture.coarse;
+            let count = f.water.len();
+            let solver = ComponentProjection::new(&device, f.lattice).unwrap();
+            for repeat in 0..2 {
+                for buffer in [
+                    &solver.coarse.labels,
+                    &solver.coarse.pressure,
+                    &solver.coarse.rhs,
+                    &solver.coarse.transfer,
+                    &solver.coarse.progress,
+                    &solver.coarse.pockets,
+                    &solver.coarse.sums,
+                    &solver.coarse.compensation,
+                    &solver.coarse.vectors,
+                    &solver.boundary_velocity,
+                    &solver.velocity,
+                    &solver.local_pressure,
+                    &solver.local_status,
+                    &solver.progress,
+                ] {
+                    // SAFETY: no work in flight; the poison fills the allocation exactly.
+                    unsafe {
+                        buffer.write(0, &vec![0xff; buffer.size() as usize]);
+                    }
+                }
+                let progress = projection_run(&device, &solver, &fixture);
+                assert_eq!(
+                    progress[0], f.status,
+                    "{} repeat {repeat}: {progress:?}",
+                    f.name
+                );
+                if f.status != ComponentStatus::Converged as u32 {
+                    assert_projection_poisoned(&solver, count);
+                    continue;
+                }
+                assert_eq!(progress[1], u32::MAX, "{} no failing component", f.name);
+                let boundary = read::<[f32; 4]>(&solver.boundary_velocity, count);
+                let velocity = read::<[f32; 4]>(&solver.velocity, count);
+                let pressure = read::<f32>(&solver.local_pressure, count);
+                let labels = read::<u32>(&solver.coarse.labels, count);
+                let pressure_scale = fixture
+                    .local_pressure
+                    .iter()
+                    .fold(0.0_f32, |m, p| m.max(p.abs()));
+                let velocity_scale = fixture
+                    .projected_velocity
+                    .iter()
+                    .chain(&fixture.boundary_velocity)
+                    .flatten()
+                    .fold(0.0_f32, |m, p| m.max(p.abs()));
+                let source_scale = f.source.iter().fold(0.0_f32, |m, p| m.max(p.abs()));
+                let mut divergence = vec![0.0_f64; count];
+                let mut residual: Vec<f64> = f.source.iter().map(|&x| f64::from(x)).collect();
+                let n = f.lattice.map(|v| v as usize);
+                for i in 0..count {
+                    close(
+                        pressure[i],
+                        fixture.local_pressure[i],
+                        pressure_scale,
+                        &format!("{} local {i}", f.name),
+                    );
+                    if labels[i] == i as u32 || f.water[i] <= 0.5 {
+                        assert_eq!(pressure[i], 0.0);
+                    }
+                    let p = [i % n[0], (i / n[0]) % n[1], i / (n[0] * n[1])];
+                    for a in 0..4 {
+                        close(
+                            boundary[i][a],
+                            fixture.boundary_velocity[i][a],
+                            velocity_scale,
+                            &format!("{} boundary {i}:{a}", f.name),
+                        );
+                        close(
+                            velocity[i][a],
+                            fixture.projected_velocity[i][a],
+                            velocity_scale,
+                            &format!("{} velocity {i}:{a}", f.name),
+                        );
+                        let j = if a < 3 && p[a] + 1 < n[a] {
+                            Some(i + [1, n[0], n[0] * n[1]][a])
+                        } else {
+                            None
+                        };
+                        let open = f.water[i] > 0.5
+                            && f.links[i][a] > 0.0
+                            && (a == 3 || j.is_some_and(|j| f.water[j] > 0.5));
+                        let interior = open && a < 3 && p[a] % 2 == 0;
+                        if !interior {
+                            assert_eq!(
+                                velocity[i][a].to_bits(),
+                                boundary[i][a].to_bits(),
+                                "local altered outer face"
+                            );
+                        }
+                        if interior || !open {
+                            assert_eq!(
+                                boundary[i][a].to_bits(),
+                                fixture.velocity[i][a].to_bits(),
+                                "scatter altered fixed face"
+                            );
+                        }
+                        if !open {
+                            assert_eq!(velocity[i][a].to_bits(), fixture.velocity[i][a].to_bits());
+                            continue;
+                        }
+                        let weight = f64::from(f.links[i][a]);
+                        let flux = weight * f64::from(velocity[i][a]);
+                        let removed = weight
+                            * (f64::from(fixture.velocity[i][a]) - f64::from(velocity[i][a]));
+                        divergence[i] += flux;
+                        residual[i] -= removed;
+                        if a < 3 {
+                            let j = j.unwrap();
+                            divergence[j] -= flux;
+                            residual[j] += removed;
+                        }
+                    }
+                }
+                let mut worst = 0.0_f32;
+                for i in 0..count {
+                    if f.water[i] <= 0.5 {
+                        continue;
+                    }
+                    close(
+                        residual[i] as f32,
+                        0.0,
+                        source_scale,
+                        &format!("{} fine residual {i}", f.name),
+                    );
+                    close(
+                        (divergence[i] + fixture.solid_source[i] - fixture.prescribed[i]) as f32,
+                        0.0,
+                        source_scale,
+                        &format!("{} physical source {i}", f.name),
+                    );
+                    worst = worst.max(residual[i].abs() as f32);
+                }
+                close(
+                    f32::from_bits(progress[2]),
+                    worst,
+                    source_scale,
+                    "reported true fine residual",
+                );
+            }
+        }
+        // An anchored isolated cell also exercises loss of the boundary delta
+        // at finite input precision: reject its local incompatibility, never
+        // silently subtract a mean or claim the unmodified velocity solved it.
+        let mut fixture = ProjectionFixture {
+            coarse: Fixture {
+                name: "rejection-reuse".into(),
+                lattice: [1; 3],
+                water: vec![1.0],
+                links: vec![[0.0, 0.0, 0.0, 0.5]],
+                source: vec![1.0],
+                status: 1,
+                labels: vec![],
+                rhs: vec![],
+                pressure: vec![],
+                transfer: vec![],
+            },
+            velocity: vec![[0.0; 4]],
+            boundary_velocity: vec![],
+            projected_velocity: vec![],
+            local_pressure: vec![],
+            solid_source: vec![],
+            prescribed: vec![],
+        };
+        let solver = ComponentProjection::new(&device, [1; 3]).unwrap();
+        for invalid in 0..6 {
+            fixture.velocity[0] = [0.0; 4];
+            fixture.coarse.source[0] = 1.0;
+            fixture.coarse.links[0][3] = 0.5;
+            fixture.coarse.water[0] = 1.0;
+            match invalid {
+                0 => fixture.velocity[0][0] = f32::NAN,
+                1 => fixture.velocity[0][3] = f32::INFINITY,
+                2 => fixture.coarse.links[0][3] = -0.5,
+                3 => fixture.coarse.source[0] = f32::NAN,
+                4 => fixture.coarse.water[0] = f32::NAN,
+                _ => fixture.velocity[0][3] = 2.0_f32.powi(40),
+            }
+            let progress = projection_run(&device, &solver, &fixture);
+            let expected = if invalid == 5 {
+                ComponentStatus::Incompatible
+            } else {
+                ComponentStatus::InvalidInput
+            };
+            assert_eq!(
+                progress[0], expected as u32,
+                "invalid {invalid}: {progress:?}"
+            );
+            assert_projection_poisoned(&solver, 1);
+        }
+        fixture.velocity[0] = [0.0; 4];
+        assert_eq!(
+            projection_run(&device, &solver, &fixture)[0],
+            ComponentStatus::Converged as u32
+        );
+        assert_eq!(
+            read::<[f32; 4]>(&solver.velocity, 1)[0],
+            [0.0, 0.0, 0.0, -2.0]
         );
     }
 
@@ -411,6 +866,24 @@ mod gpu_tests {
 mod tests {
     use super::*;
     #[test]
+    fn projection_reference_invariants() {
+        let output = std::process::Command::new("python3")
+            .arg(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../scripts/lentine_reference.py"),
+            )
+            .args(["--filter", "projection"])
+            .output()
+            .expect("run f64 CPU projection proofs");
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
     fn component_shader_validates() {
         let module = naga::front::wgsl::parse_str(SHADER)
             .unwrap_or_else(|e| panic!("{}", e.emit_to_string(SHADER)));
@@ -420,7 +893,11 @@ mod tests {
         )
         .validate(&module)
         .unwrap();
-        assert_eq!(module.entry_points.len(), ENTRIES.len());
+        assert_eq!(
+            module.entry_points.len(),
+            ENTRIES.len() + PROJECTION_ENTRIES.len()
+        );
+        assert_eq!(ComponentProjection::scratch_bytes([7, 3, 2]), 42 * 120 + 80);
         assert_eq!(size_of::<Params>(), 32);
         assert_eq!(ComponentSolver::scratch_bytes([7, 3, 2]), 42 * 80 + 64);
         assert!(super::super::gpu_flip_step::atomic_sites_outside(SHADER, &[]).is_empty());

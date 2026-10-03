@@ -29,7 +29,7 @@ reaction remain outside this reference.
 """
 
 from dataclasses import dataclass, replace
-from math import sqrt
+from math import isfinite, sqrt
 
 
 # Keep the reference readable on Python versions without a vector package.
@@ -599,6 +599,163 @@ def component_projection(count, edges, blocks, source, anchors=None, reverse_gau
     return labels, flux, air_flux, error
 
 
+def _projection_topology(case):
+    """Recover the compact wet graph and fine locations from a stage-2 case."""
+    n = tuple(case["lattice"])
+    water = case["water"]
+    links = case["links"]
+    points = [(x, y, z) for z in range(n[2])
+              for y in range(n[1]) for x in range(n[0])]
+    wet = [i for i, value in enumerate(water) if value > 0.5]
+    compact = {i: j for j, i in enumerate(wet)}
+    lookup = {point: i for i, point in enumerate(points)}
+    edges, locations = [], []
+    for i in wet:
+        p = points[i]
+        for axis in range(3):
+            q = list(p)
+            q[axis] += 1
+            j = lookup.get(tuple(q))
+            if j is None or j not in compact:
+                continue
+            edges.append(Edge(compact[i], compact[j], float(links[i][axis])))
+            locations.append((i, axis, j))
+    blocks = [tuple(points[i][axis] // 2 for axis in range(3)) for i in wet]
+    return n, points, wet, compact, edges, locations, blocks
+
+
+def _validate_projection_inputs(water, links, velocity, solid_source, prescribed):
+    """Reject invalid host data before any graph construction or arithmetic."""
+    count = len(water)
+    if len(links) != count or len(velocity) != count:
+        raise ReferenceError("projection arrays have different cell counts")
+    if len(solid_source) != count or len(prescribed) != count:
+        raise ReferenceError("projection source arrays have different cell counts")
+    for i in range(count):
+        if not isfinite(water[i]) or water[i] < 0.0:
+            raise ReferenceError("water must be finite and non-negative")
+        if len(links[i]) != 4 or len(velocity[i]) != 4:
+            raise ReferenceError("projection cells need four link and velocity values")
+        if any(not isfinite(value) or value < 0.0 for value in links[i]):
+            raise ReferenceError("links must be finite and non-negative")
+        if any(not isfinite(value) for value in velocity[i]):
+            raise ReferenceError("velocity must be finite")
+        if not isfinite(solid_source[i]) or not isfinite(prescribed[i]):
+            raise ReferenceError("sources must be finite")
+
+
+def _validate_case_source(case):
+    source = case.get("source", ())
+    if len(source) != len(case["water"]) or any(not isfinite(value) for value in source):
+        raise ReferenceError("source must be finite and match the lattice")
+
+
+def _velocity_divergence(case, velocity):
+    """Compute divergence of the input fluid and anchor velocities."""
+    n, points, wet, compact, edges, locations, _ = _projection_topology(case)
+    out = [0.0] * len(wet)
+    for edge, (low, axis, high) in zip(edges, locations):
+        flux = edge.weight * velocity[low][axis]
+        out[edge.low] += flux
+        out[edge.high] -= flux
+    for compact_cell, cell in enumerate(wet):
+        out[compact_cell] += case["links"][cell][3] * velocity[cell][3]
+    full = [0.0] * len(case["water"])
+    for compact_cell, cell in enumerate(wet):
+        full[cell] = out[compact_cell]
+    return full
+
+
+def _projection_details(case, velocity, solid_source, prescribed, reverse_gauge=False):
+    """Return outer scatter, local pressure and final face velocities."""
+    _validate_case_source(case)
+    _validate_projection_inputs(case["water"], case["links"], velocity,
+                                solid_source, prescribed)
+    n, points, wet, compact, edges, locations, blocks = _projection_topology(case)
+    count = len(wet)
+    if not wet:
+        return ([list(row) for row in velocity], [list(row) for row in velocity],
+                [0.0] * len(velocity), 0.0)
+    source = [case["source"][cell] for cell in wet]
+    anchors = [case["links"][cell][3] for cell in wet]
+    labels, roots, coarse_rhs, coarse, outer_flux, air_flux = component_coarse(
+        count, edges, blocks, source, anchors, reverse_gauge)
+    slots = {root: i for i, root in enumerate(roots)}
+    ids = [slots[root] for root in labels]
+    remainder = list(source)
+    for k, edge in enumerate(edges):
+        if ids[edge.low] != ids[edge.high]:
+            remainder[edge.low] -= outer_flux[k]
+            remainder[edge.high] += outer_flux[k]
+    remainder = [value - correction for value, correction in zip(remainder, air_flux)]
+    interior = [edge for edge in edges if blocks[edge.low] == blocks[edge.high]]
+    local = graph_solve(count, interior, remainder, reverse_gauge=reverse_gauge)
+    total_flux = list(outer_flux)
+    for k, edge in enumerate(edges):
+        if blocks[edge.low] == blocks[edge.high]:
+            total_flux[k] += edge.weight * (local[edge.low] - local[edge.high])
+
+    boundary_velocity = [list(row) for row in velocity]
+    projected_velocity = [list(row) for row in velocity]
+    for k, (low, axis, high) in enumerate(locations):
+        if edges[k].weight <= 0.0:
+            continue
+        if blocks[edges[k].low] != blocks[edges[k].high]:
+            boundary_velocity[low][axis] -= outer_flux[k] / edges[k].weight
+        projected_velocity[low][axis] -= total_flux[k] / edges[k].weight
+    for compact_cell, cell in enumerate(wet):
+        anchor = anchors[compact_cell]
+        if anchor > 0.0:
+            boundary_velocity[cell][3] -= air_flux[compact_cell] / anchor
+            projected_velocity[cell][3] -= air_flux[compact_cell] / anchor
+    local_full = [0.0] * len(velocity)
+    for compact_cell, cell in enumerate(wet):
+        local_full[cell] = local[compact_cell]
+    actual = [0.0] * count
+    for k, edge in enumerate(edges):
+        actual[edge.low] += total_flux[k]
+        actual[edge.high] -= total_flux[k]
+    for i, correction in enumerate(air_flux):
+        actual[i] += correction
+    error = max(abs(a - b) for a, b in zip(actual, source))
+    assert error < 5e-12, error
+    return boundary_velocity, projected_velocity, local_full, error
+
+
+def _projection_case(case):
+    """Add stage-3 f64 expectations while leaving the stage-2 case intact."""
+    _validate_case_source(case)
+    n, points, wet, compact, edges, locations, blocks = _projection_topology(case)
+    count = len(case["water"])
+    velocity = []
+    for i in range(count):
+        velocity.append([
+            (3 + i + 2 * axis) / 64 for axis in range(3)
+        ] + [(i % 5 - 2) / 32])
+    solid_source = [0.0] * count
+    if case["name"] == "moving_source":
+        volume = [(4 + i % 4) / 8 for i in range(count)]
+        for edge, (i, axis, j) in zip(edges, locations):
+            solid_velocity = (i + 2 * axis - 7) / 32
+            solid_source[i] += (volume[i] - edge.weight) * solid_velocity
+            solid_source[j] -= (volume[j] - edge.weight) * solid_velocity
+    divergence = _velocity_divergence(case, velocity)
+    prescribed = [divergence[i] + solid_source[i] - case["source"][i]
+                  for i in range(count)]
+    _validate_projection_inputs(case["water"], case["links"], velocity,
+                                solid_source, prescribed)
+    result = dict(case, velocity=velocity, solid_source=solid_source,
+                  prescribed=prescribed)
+    if case["status"] == 3:
+        return result
+    boundary_velocity, projected_velocity, local_pressure, _ = _projection_details(
+        case, velocity, solid_source, prescribed)
+    result.update(boundary_velocity=boundary_velocity,
+                  projected_velocity=projected_velocity,
+                  local_pressure=local_pressure)
+    return result
+
+
 def test_component_cut_counterexample():
     volumes, original_internal, original_boundary = fixture()
     volumes = (1.0,) * 8
@@ -782,15 +939,185 @@ def test_component_gpu_oracles():
     print("PASS component_gpu_oracles: 10 stage-2 f64 value fixtures")
 
 
+def gpu_projection_fixtures():
+    """Stage-3 expectations layered over the unchanged stage-2 fixtures."""
+    return [_projection_case(case) for case in gpu_component_fixtures()]
+
+
+def test_projection_fixture_oracles():
+    cases = gpu_projection_fixtures()
+    assert len(cases) == 10
+    assert sum(case["status"] == 3 for case in cases) == 1
+    for case in cases:
+        count = len(case["water"])
+        assert len(case["velocity"]) == count
+        if case["status"] == 1:
+            assert len(case["boundary_velocity"]) == count
+            assert len(case["projected_velocity"]) == count
+            assert len(case["local_pressure"]) == count
+        expected = [case["source"][i] - case["solid_source"][i] +
+                    case["prescribed"][i] for i in range(count)]
+        assert max(abs(a - b) for a, b in zip(
+            _velocity_divergence(case, case["velocity"]), expected)) < 1e-14
+    print("PASS projection_fixture_oracles: 10 stage-3 f64 value fixtures")
+
+
+def test_projection_fixed_boundaries():
+    case = next(c for c in gpu_projection_fixtures() if c["name"] == "many")
+    n, points, wet, compact, edges, locations, blocks = _projection_topology(case)
+    for k, edge in enumerate(edges):
+        low, axis, high = locations[k]
+        if blocks[edge.low] == blocks[edge.high] or edge.weight == 0.0:
+            assert case["boundary_velocity"][low][axis] == case["velocity"][low][axis]
+        else:
+            assert case["boundary_velocity"][low][axis] != case["velocity"][low][axis]
+        if blocks[edge.low] != blocks[edge.high]:
+            assert abs(case["projected_velocity"][low][axis] -
+                       case["boundary_velocity"][low][axis]) < 1e-13
+    print("PASS projection_fixed_boundaries: local solve leaves scattered faces fixed")
+
+
+def test_projection_alpha_zero_parallel_subfaces():
+    case = next(c for c in gpu_projection_fixtures() if c["name"] == "odd")
+    _, _, _, _, edges, locations, blocks = _projection_topology(case)
+    deltas = {}
+    samples = {}
+    parallel_compared = False
+    for k, edge in enumerate(edges):
+        low, axis, high = locations[k]
+        if edge.weight <= 0.0 or blocks[edge.low] == blocks[edge.high]:
+            continue
+        key = (case["labels"][low], case["labels"][high])
+        delta = case["velocity"][low][axis] - case["boundary_velocity"][low][axis]
+        if key in deltas:
+            parallel_compared = True
+            assert abs(delta - deltas[key]) < 1e-13
+            # A shared scatter delta must preserve the input variation.
+            other_low, other_axis, _ = samples[key]
+            assert abs((case["velocity"][low][axis] - case["velocity"][other_low][other_axis]) -
+                       (case["boundary_velocity"][low][axis] -
+                        case["boundary_velocity"][other_low][other_axis])) < 1e-13
+        else:
+            deltas[key] = delta
+            samples[key] = (low, axis, high)
+    assert deltas and parallel_compared
+    print("PASS projection_alpha_zero_parallel_subfaces: shared deltas preserve variation")
+
+
+def test_projection_weighted_disconnected_cuts():
+    cases = gpu_projection_fixtures()
+    cut = next(c for c in cases if c["name"] == "cut")
+    assert cut["status"] == 1
+    assert cut["labels"] == [0, 1, 0, 1, 0, 1, 0, 1]
+    sealed = next(c for c in cases if c["name"] == "sealed")
+    assert len(set(label for label in sealed["labels"] if label != 0xffffffff)) > 2
+    print("PASS projection_weighted_disconnected_cuts: component gauges and weighted cuts")
+
+
+def test_projection_odd_blocks_and_gauge_invariance():
+    cases = gpu_projection_fixtures()
+    odd = next(c for c in cases if c["name"] == "odd")
+    assert tuple(odd["lattice"]) == (7, 3, 2)
+    _, a, _, _ = _projection_details(odd, odd["velocity"], odd["solid_source"],
+                                     odd["prescribed"])
+    _, b, _, _ = _projection_details(odd, odd["velocity"], odd["solid_source"],
+                                     odd["prescribed"], reverse_gauge=True)
+    assert max(abs(x - y) for row_a, row_b in zip(a, b)
+               for x, y in zip(row_a, row_b)) < 5e-12
+    isolated = next(c for c in cases if c["name"] == "isolated")
+    empty = next(c for c in cases if c["name"] == "empty")
+    assert isolated["local_pressure"][0] == 0.0
+    assert empty["local_pressure"] == [0.0] * len(empty["water"])
+    print("PASS projection_odd_blocks_gauge_isolation: odd edges, gauges, isolated and empty")
+
+
+def test_projection_incompatible_and_invalid_inputs():
+    bad = next(c for c in gpu_projection_fixtures() if c["name"] == "incompatible")
+    assert bad["status"] == 3
+    assert "local_pressure" not in bad
+    try:
+        _projection_details(bad, bad["velocity"], bad["solid_source"],
+                            bad["prescribed"])
+    except IncompatibleSource:
+        pass
+    else:
+        raise AssertionError("incompatible projection source was accepted")
+    valid = next(c for c in gpu_projection_fixtures() if c["name"] == "many")
+    try:
+        _validate_projection_inputs(valid["water"],
+                                    [list(row) for row in valid["links"]],
+                                    valid["velocity"], valid["solid_source"],
+                                    valid["prescribed"])
+        links = [list(row) for row in valid["links"]]
+        links[0][0] = -1.0
+        _validate_projection_inputs(valid["water"], links, valid["velocity"],
+                                    valid["solid_source"], valid["prescribed"])
+    except ReferenceError:
+        pass
+    else:
+        raise AssertionError("negative link was accepted")
+    velocity = [list(row) for row in valid["velocity"]]
+    velocity[0][0] = float("nan")
+    try:
+        _validate_projection_inputs(valid["water"], valid["links"], velocity,
+                                    valid["solid_source"], valid["prescribed"])
+    except ReferenceError:
+        pass
+    else:
+        raise AssertionError("non-finite velocity was accepted")
+    water = list(valid["water"])
+    water[0] = -1.0
+    try:
+        _validate_projection_inputs(water, valid["links"], valid["velocity"],
+                                    valid["solid_source"], valid["prescribed"])
+    except ReferenceError:
+        pass
+    else:
+        raise AssertionError("negative water was accepted")
+    water[0] = float("nan")
+    try:
+        _validate_projection_inputs(water, valid["links"], valid["velocity"],
+                                    valid["solid_source"], valid["prescribed"])
+    except ReferenceError:
+        pass
+    else:
+        raise AssertionError("non-finite water was accepted")
+    source_case = dict(valid, source=list(valid["source"]))
+    source_case["source"][0] = float("nan")
+    try:
+        _validate_case_source(source_case)
+    except ReferenceError:
+        pass
+    else:
+        raise AssertionError("non-finite source was accepted")
+    print("PASS projection_rejects_incompatible_invalid: explicit status and input rejection")
+
+
+def test_projection_moving_source_conservation():
+    case = next(c for c in gpu_projection_fixtures() if c["name"] == "moving_source")
+    assert any(value != 0.0 for value in case["solid_source"])
+    divergence = _velocity_divergence(case, case["projected_velocity"])
+    error = max(abs(divergence[i] + case["solid_source"][i] - case["prescribed"][i])
+                for i in range(len(divergence)))
+    assert error < 5e-12
+    print("PASS projection_moving_source_conservation: divergence + solid source = prescribed")
+
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--filter", default="", help="run self-tests whose names contain this text")
     parser.add_argument("--gpu-fixtures", action="store_true", help="emit stage-2 f64 GPU oracle JSON")
+    parser.add_argument("--gpu-projection-fixtures", action="store_true",
+                        help="emit stage-3 f64 GPU oracle JSON")
     args = parser.parse_args()
     if args.gpu_fixtures:
         import json
         print(json.dumps(gpu_component_fixtures(), allow_nan=False))
+        raise SystemExit(0)
+    if args.gpu_projection_fixtures:
+        import json
+        print(json.dumps(gpu_projection_fixtures(), allow_nan=False))
         raise SystemExit(0)
     tests = [value for name, value in sorted(globals().copy().items())
              if name.startswith("test_") and args.filter in name]

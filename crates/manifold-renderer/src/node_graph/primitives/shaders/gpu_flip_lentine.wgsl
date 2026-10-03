@@ -236,3 +236,194 @@ fn transfer_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     transfer[i] = f;
 }
+
+@group(0) @binding(13) var<storage, read> input_velocity: array<vec4<f32>>;
+@group(0) @binding(14) var<storage, read_write> boundary_velocity: array<vec4<f32>>;
+@group(0) @binding(15) var<storage, read_write> local_pressure: array<f32>;
+@group(0) @binding(16) var<storage, read_write> projected_velocity: array<vec4<f32>>;
+@group(0) @binding(17) var<storage, read_write> local_status: array<u32>;
+struct ProjectionProgress { status: u32, failed: u32, residual: f32, pad: u32 }
+@group(0) @binding(18) var<storage, read_write> projection: ProjectionProgress;
+
+fn nan_value() -> f32 { return bitcast<f32>(0x7fc00000u); }
+fn internal_edge(i: u32, j: u32) -> bool {
+    if !wet(i) || !wet(j) { return false; }
+    return all(xyz(i, params.n) / 2u == xyz(j, params.n) / 2u);
+}
+
+// Eq. (14), alpha=0: subtract the same delta on each open subface joining
+// the same pair of components. Never divide a flux by a closed face weight.
+@compute @workgroup_size(256)
+fn scatter_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x; if i >= params.count { return; }
+    local_status[i] = progress.status;
+    local_pressure[i] = 0.0;
+    var v = input_velocity[i];
+    if progress.status != 1u { boundary_velocity[i] = vec4(nan_value()); return; }
+    if !all(abs(v) <= vec4(3.402823466e38)) || !finite(source[i])
+        || water[i] < 0.0 || any(links[i] < vec4(0.0)) || !all(abs(links[i]) <= vec4(3.402823466e38)) {
+        local_status[i] = 5u; boundary_velocity[i] = vec4(nan_value()); return;
+    }
+    if wet(i) {
+        let p = pressure[labels[i]];
+        if links[i].w > 0.0 { v.w -= p * 0.5; }
+        for (var a = 0u; a < 3u; a++) {
+            let j = neighbor(i, a, true);
+            if !wet(j) || links[i][a] <= 0.0 { continue; }
+            if labels[i] != labels[j] { v[a] -= (p - pressure[labels[j]]) * 0.5; }
+        }
+    }
+    if !all(abs(v) <= vec4(3.402823466e38)) { local_status[i] = 4u; }
+    boundary_velocity[i] = v;
+}
+
+// Actual represented velocity changes, not ideal coarse transfers: rounding
+// in the scatter must not be hidden by the local compatibility check.
+fn removed_flux(i: u32, a: u32, final_velocity: bool) -> f32 {
+    var v = boundary_velocity[i][a];
+    if final_velocity { v = projected_velocity[i][a]; }
+    return links[i][a] * (input_velocity[i][a] - v);
+}
+fn remaining_source(i: u32, final_velocity: bool) -> vec2<f32> {
+    var r = source[i]; var scale = abs(r);
+    if links[i].w > 0.0 {
+        let f = removed_flux(i, 3u, final_velocity); r -= f; scale += abs(f);
+    }
+    for (var a = 0u; a < 3u; a++) {
+        for (var side = 0u; side < 2u; side++) {
+            let j = neighbor(i, a, side == 1u); if !wet(j) { continue; }
+            let owner = select(j, i, side == 1u);
+            if links[owner][a] <= 0.0 { continue; }
+            let f = removed_flux(owner, a, final_velocity);
+            r -= select(-f, f, side == 1u); scale += abs(f);
+        }
+    }
+    return vec2(r, scale);
+}
+
+// Section 3.5: direct SPD solve after removing one degree of freedom per
+// connected component. Eight slots are the 2³ block, including odd edges.
+// Gauges/dry/absent slots use identity rows; no pivot floors or mean removal.
+@compute @workgroup_size(64)
+fn local_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let n = (params.n + vec3(1u)) / 2u;
+    if gid.x >= n.x * n.y * n.z { return; }
+    let base = xyz(gid.x, n) * 2u;
+    var ids: array<u32, 8>;
+    var unknown: array<bool, 8>;
+    var b: array<f32, 8>;
+    var scale: array<f32, 8>;
+    var matrix: array<f32, 64>;
+    var x: array<f32, 8>;
+    var status = progress.status;
+    for (var k = 0u; k < 8u; k++) {
+        let i = child(base, k); ids[k] = i;
+        if i == NONE { continue; }
+        if local_status[i] != 1u { status = local_status[i]; }
+    }
+    if status == 1u {
+        for (var k = 0u; k < 8u; k++) {
+            let i = ids[k]; if !wet(i) { continue; }
+            unknown[k] = labels[i] != i;
+            let r = remaining_source(i, false); b[k] = r.x; scale[k] = r.y;
+            if !finite(r.x) || !finite(r.y) { status = 4u; }
+        }
+        for (var k = 0u; k < 8u; k++) {
+            let i = ids[k]; if !wet(i) { continue; }
+            if labels[i] != i { continue; }
+            var total = 0.0; var magnitude = 0.0;
+            for (var j = 0u; j < 8u; j++) {
+                if !wet(ids[j]) { continue; }
+                if labels[ids[j]] == i { total += b[j]; magnitude += scale[j]; }
+            }
+            // Same eight-child f32 summation allowance as stage 2; the
+            // mismatch is retained in the final true residual, never removed.
+            if abs(total) > 8.0 * EPSILON * magnitude { status = 3u; }
+        }
+    }
+    if status == 1u {
+        for (var k = 0u; k < 8u; k++) {
+            if !unknown[k] { matrix[k * 8u + k] = 1.0; b[k] = 0.0; continue; }
+            for (var a = 0u; a < 3u; a++) {
+                let j = k ^ (1u << a);
+                if !wet(ids[j]) { continue; }
+                let owner = min(ids[k], ids[j]); let w = links[owner][a];
+                if w <= 0.0 { continue; }
+                matrix[k * 8u + k] += w;
+                if unknown[j] { matrix[k * 8u + j] = -w; }
+            }
+        }
+        for (var k = 0u; k < 8u; k++) {
+            for (var j = 0u; j <= k; j++) {
+                var v = matrix[k * 8u + j];
+                for (var t = 0u; t < j; t++) { v -= matrix[k * 8u + t] * matrix[j * 8u + t]; }
+                if k == j {
+                    if !(v > 0.0) || !finite(v) { status = 4u; break; }
+                    matrix[k * 8u + j] = sqrt(v);
+                } else { matrix[k * 8u + j] = v / matrix[j * 8u + j]; }
+            }
+            if status != 1u { break; }
+        }
+    }
+    if status == 1u {
+        for (var k = 0u; k < 8u; k++) {
+            var v = b[k];
+            for (var j = 0u; j < k; j++) { v -= matrix[k * 8u + j] * x[j]; }
+            x[k] = v / matrix[k * 8u + k];
+        }
+        for (var reverse = 0u; reverse < 8u; reverse++) {
+            let k = 7u - reverse; var v = x[k];
+            for (var j = k + 1u; j < 8u; j++) { v -= matrix[j * 8u + k] * x[j]; }
+            x[k] = v / matrix[k * 8u + k];
+            if !finite(x[k]) { status = 4u; }
+        }
+    }
+    for (var k = 0u; k < 8u; k++) {
+        let i = ids[k]; if i == NONE { continue; }
+        local_status[i] = status;
+        local_pressure[i] = select(nan_value(), x[k], status == 1u);
+    }
+}
+
+@compute @workgroup_size(256)
+fn project_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x; if i >= params.count { return; }
+    var v = boundary_velocity[i];
+    if local_status[i] != 1u { projected_velocity[i] = vec4(nan_value()); return; }
+    for (var a = 0u; a < 3u; a++) {
+        let j = neighbor(i, a, true);
+        if internal_edge(i, j) && links[i][a] > 0.0 { v[a] -= local_pressure[i] - local_pressure[j]; }
+    }
+    if !all(abs(v) <= vec4(3.402823466e38)) { local_status[i] = 4u; }
+    projected_velocity[i] = v;
+}
+
+@compute @workgroup_size(1)
+fn projection_finish_main() {
+    projection.status = progress.status; projection.failed = progress.failed;
+    projection.residual = nan_value(); projection.pad = 0u;
+    if progress.status != 1u { return; }
+    // Invalid input takes precedence over a neighbouring block observing its NaNs.
+    for (var i = 0u; i < params.count; i++) {
+        if local_status[i] == 5u { projection.status = 5u; projection.failed = i; return; }
+    }
+    for (var i = 0u; i < params.count; i++) {
+        if local_status[i] != 1u { projection.status = local_status[i]; projection.failed = i; return; }
+    }
+    var worst = 0.0;
+    for (var i = 0u; i < params.count; i++) {
+        if !wet(i) { continue; }
+        let r = remaining_source(i, true).x;
+        if !finite(r) { projection.status = 4u; projection.failed = i; return; }
+        worst = max(worst, abs(r));
+    }
+    projection.residual = worst;
+}
+
+@compute @workgroup_size(256)
+fn projection_publish_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x; if i >= params.count || projection.status == 1u { return; }
+    // Failure is global: never expose a partially projected field as usable.
+    boundary_velocity[i] = vec4(nan_value());
+    projected_velocity[i] = vec4(nan_value()); local_pressure[i] = nan_value();
+}
