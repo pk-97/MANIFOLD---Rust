@@ -147,7 +147,8 @@
     "Assert": {
       "selector": {
         "Query": {
-          "name": "param_row.40_reset"
+          "name": "param_row.40_reset",
+          "nth": 0
         }
       },
       "check": {
@@ -159,7 +160,8 @@
     "Pointer": {
       "target": {
         "Query": {
-          "name": "param_row.40_reset"
+          "name": "param_row.40_reset",
+          "nth": 0
         }
       },
       "gesture": {
