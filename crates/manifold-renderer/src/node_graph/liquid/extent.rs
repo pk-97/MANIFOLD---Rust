@@ -569,6 +569,8 @@ pub const LIQUID_EXTENT_RULES: &[ExtentRule] = &[
     ExtentRule { type_id: "node.sort_particles_into_cells", check: sort_particles_into_cells },
     ExtentRule { type_id: "node.shape_particle_blobs", check: shape_particle_blobs },
     ExtentRule { type_id: "node.particle_volume", check: particle_volume },
+    ExtentRule { type_id: "node.offset_lattice", check: offset_lattice },
+    ExtentRule { type_id: "node.redistance_lattice", check: redistance_lattice },
     ExtentRule { type_id: "node.lattice_bricks", check: lattice_bricks },
     ExtentRule { type_id: "node.smooth_lattice", check: smooth_lattice },
     ExtentRule { type_id: "node.clamp_liquid_to_solids", check: clamp_liquid_to_solids },
@@ -1040,6 +1042,19 @@ fn brick_schedule(x: &AtomExtent<'_>, nodes: [u32; 3]) -> Result<(), Verdict> {
     let words = crate::node_graph::primitives::liquid_bricks::schedule_words(nodes)
         .ok_or_else(|| x.uncovered("brick schedule size overflow".into()))?;
     x.covers("bricks", words * 4)
+}
+
+fn offset_lattice(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    x.covers("out", x.bytes("levelset").unwrap_or(0))
+}
+
+fn redistance_lattice(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let nodes = x.nodes(["nodes_x", "nodes_y", "nodes_z"]);
+    if nodes.iter().any(|&n| n < 2.0) {
+        return Err(x.uncovered(format!("no lattice: nodes {nodes:?}")));
+    }
+    x.covers("levelset", nodes_total(nodes) * 4)?;
+    offset_lattice(x)
 }
 
 fn smooth_lattice(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
@@ -1762,7 +1777,10 @@ mod tests {
         let mut flat = manifold_core::flatten::flatten_groups(def).expect("flattens");
         let counter = flat.nodes.iter().find(|node| node.type_id == "node.count_surface_triangles").map(|node| node.id).expect("a counter");
         let lattice = ["nodes_x", "nodes_y", "nodes_z"];
-        flat.wires.retain(|wire| !(wire.to_node == counter && lattice.contains(&wire.to_port.as_str())));
+        // Exercise the dense level-set bound specifically. With a sparse
+        // schedule wired, its smaller brick bound correctly refuses first.
+        flat.wires.retain(|wire| !(wire.to_node == counter
+            && (lattice.contains(&wire.to_port.as_str()) || wire.to_port == "bricks")));
         let node = flat.nodes.iter_mut().find(|node| node.id == counter).expect("counter");
         for port in lattice {
             node.params.insert(port.into(), SerializedParamValue::Float { value: 4096.0 });

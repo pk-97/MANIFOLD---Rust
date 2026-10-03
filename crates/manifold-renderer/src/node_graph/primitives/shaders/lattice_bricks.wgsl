@@ -27,7 +27,7 @@ struct Params {
     bricks_y: u32,
     bricks_z: u32,
     brick_count: u32,
-    _pad0: u32,
+    band_extra: f32,
     _pad1: u32,
 }
 
@@ -75,7 +75,8 @@ fn mark_brick(id: u32) -> u32 {
     let size = vec3<f32>(params.size_x, params.size_y, params.size_z);
     let lo = domain_min + vec3<f32>(lo_node) * size / vec3<f32>(nodes - vec3<u32>(1u));
     let hi = domain_min + vec3<f32>(hi_node) * size / vec3<f32>(nodes - vec3<u32>(1u));
-    let band = params.cell_size / 3.0;
+    let extra = params.band_extra + select(0.0, length(size / vec3<f32>(nodes - vec3<u32>(1u))), params.band_extra > 0.0);
+    let band = params.cell_size / 3.0 + extra;
 
     // A domain border brick is retained even when no blob is present.  This
     // is what makes an empty frame write the same exterior field as the dense
@@ -86,8 +87,9 @@ fn mark_brick(id: u32) -> u32 {
 
     let bin_lo_f = (lo - domain_min) / vec3<f32>(params.cell_size);
     let bin_hi_f = (hi - domain_min) / vec3<f32>(params.cell_size);
-    let bin_lo = vec3<i32>(floor(bin_lo_f)) - vec3<i32>(1);
-    let bin_hi = vec3<i32>(floor(bin_hi_f)) + vec3<i32>(1);
+    let reach_bins = i32(ceil(1.0 + extra / params.cell_size));
+    let bin_lo = vec3<i32>(floor(bin_lo_f)) - vec3<i32>(reach_bins);
+    let bin_hi = vec3<i32>(floor(bin_hi_f)) + vec3<i32>(reach_bins);
     let first = vec3<u32>(
         clamp_bin(bin_lo.x, params.bins_x),
         clamp_bin(bin_lo.y, params.bins_y),

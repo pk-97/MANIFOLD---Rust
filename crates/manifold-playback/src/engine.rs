@@ -3290,6 +3290,7 @@ mod tests {
         let mut effect =
             manifold_core::effects::PresetInstance::new(PresetTypeId::new("TriggerDeliveryFx"));
         effect.params.push(Param::bundled(ParamSpecDef {
+            tooltip: None,
             id: "fire".to_string(),
             name: "Fire".to_string(),
             min: 0.0,

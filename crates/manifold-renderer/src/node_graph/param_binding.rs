@@ -890,6 +890,7 @@ mod tests {
     /// reads by id instead of by position.
     fn slot(id: &str, value: f32, exposed: bool) -> Param {
         let mut p = Param::bundled(ParamSpecDef {
+            tooltip: None,
             id: id.into(),
             name: id.into(),
             min: 0.0,

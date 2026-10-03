@@ -2826,6 +2826,7 @@ mod tests {
 
     fn user_spec(id: &str) -> manifold_core::effect_graph_def::ParamSpecDef {
         manifold_core::effect_graph_def::ParamSpecDef {
+            tooltip: None,
             id: id.to_string(),
             name: id.to_string(),
             min: 0.0,

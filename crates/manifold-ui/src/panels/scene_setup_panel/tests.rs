@@ -856,6 +856,7 @@
             rows: vec![ParamRow {
                 id: manifold_foundation::ParamId::from("translate_x"),
                 spec: RowSpec {
+                    tooltip: None,
                     name: "Translate X".to_string(),
                     min: -100.0,
                     max: 100.0,

@@ -1011,6 +1011,15 @@ const LEVEL_SET_BAND: f64 = 1.0 / 3.0;
 /// cap, which is the blob atom's reach contract.
 #[test]
 fn fluid_particle_volume_matches_brute_force_distance_and_solid_clamp() {
+    volume_distance_reference(0.0);
+}
+
+#[test]
+fn fluid_fill_pits_expanded_band_matches_all_blobs() {
+    volume_distance_reference(0.5);
+}
+
+fn volume_distance_reference(band_extra: f32) {
     let mut harness = Harness::new();
     let lattice = Lattice { center: [0.0, 1.0, 0.0], size: [2.0, 2.0, 2.0], cell: 0.25 };
     let solid_nodes = [9u32, 9, 9];
@@ -1047,6 +1056,7 @@ fn fluid_particle_volume_matches_brute_force_distance_and_solid_clamp() {
         ("nodes_y", solid_nodes[1] as f32),
         ("nodes_z", solid_nodes[2] as f32),
         ("resolution_scale", scale as f32),
+        ("band_extra", band_extra),
     ]);
     node_params.insert(Cow::Borrowed("resolution_scale"), ParamValue::Float(scale as f32));
     let volume_nodes: [Slot; 3] = std::array::from_fn(|_| harness.scalar());
@@ -1067,8 +1077,28 @@ fn fluid_particle_volume_matches_brute_force_distance_and_solid_clamp() {
         assert_eq!(value, Some(ParamValue::Float(expected as f32)));
     }
     let levelset: Vec<f32> = read(&levelset_buf, total);
+    if band_extra > 0.0 {
+        use super::lattice_bricks::{LatticeBricks, brick_layout};
+        let layout = brick_layout(solid_nodes, scale).unwrap();
+        let (bricks, _) = harness.array::<u32>(&[], layout.words as usize);
+        let (_, errors) = harness.run(
+            &mut LatticeBricks::new(),
+            &[("blobs", blobs_slot), ("cell_ranges", ranges_slot), ("solid", solid_slot)],
+            &[("bricks", bricks)], &node_params,
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        let (sparse, sparse_buf) = harness.array::<f32>(&[], total);
+        let (_, errors) = harness.run(
+            &mut ParticleVolume::new(),
+            &[("blobs", blobs_slot), ("cell_ranges", ranges_slot), ("solid", solid_slot), ("bricks", bricks)],
+            &[("levelset", sparse)], &node_params,
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(read::<u32>(&sparse_buf, total), read::<u32>(&levelset_buf, total));
+    }
     let h: [f64; 3] = std::array::from_fn(|a| f64::from(lattice.size[a]) / f64::from(nodes[a] - 1));
-    let band = LEVEL_SET_BAND * f64::from(lattice.cell);
+    let band = LEVEL_SET_BAND * f64::from(lattice.cell) + f64::from(band_extra)
+        + if band_extra > 0.0 { h.iter().map(|v| v*v).sum::<f64>().sqrt() } else { 0.0 };
     let (mut inside, mut clamped, mut in_band) = (0, 0, 0);
     for (idx, &value) in levelset.iter().enumerate() {
         let ijk = [idx as u32 % nodes[0], (idx as u32 / nodes[0]) % nodes[1], idx as u32 / (nodes[0] * nodes[1])];
@@ -2094,7 +2124,15 @@ fn fluid_clamp_liquid_to_solids_matches_reference_and_passes_through() {
             ambiguous += 1;
             continue;
         }
-        let expected = if s < 0.0 { value.max(0.0) } else { value };
+        // ParticleMesher::_computeScalarField negates its distance, then
+        // ScalarField::getScalarFieldValue clips positive-inside solid values.
+        // Convert back to this graph's negative-inside convention; canonicalize
+        // threshold zero because the GPU max returns positive zero.
+        let mut native = -f64::from(value);
+        if s < 0.0 && native > 0.0 {
+            native = 0.0;
+        }
+        let expected = if native == 0.0 { 0.0 } else { -native as f32 };
         if s < 0.0 && value < 0.0 {
             raised += 1;
         } else if s > 0.0 {

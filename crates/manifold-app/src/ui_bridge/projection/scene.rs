@@ -636,6 +636,47 @@ mod ownership_tests {
     }
 
     #[test]
+    fn gpu_flip_water_surface_shape_sliders_route_from_water_detail() {
+        use manifold_core::effect_graph_def::BindingTarget;
+        use manifold_renderer::node_graph::scene_vm::{SceneObjectVm, SceneVm};
+        let def = manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new("WaterDamBreakGpuFlip")).unwrap();
+        let vm = SceneVm::from_def(def).unwrap();
+        let water = vm.objects.iter().find_map(|object| match object {
+            SceneObjectVm::Known(row) if row.liquid_domain.is_some() => Some(row),
+            _ => None,
+        }).expect("water object");
+        let owned = object_controls(Some(def), water);
+        let specs: Vec<_> = owned_specs(Some(def), &owned).collect();
+        let meta = def.preset_metadata.as_ref().unwrap();
+        let mut instance = manifold_core::effects::PresetInstance::new(PresetTypeId::new("WaterDamBreakGpuFlip"));
+        instance.params = manifold_core::params::ParamManifest::from_params(
+            meta.params.iter().cloned().map(manifold_core::params::Param::bundled).collect());
+        let surface = crate::ui_bridge::projection::cards::gen_params_to_surface(&instance, "water", None, &[],
+            crate::ui_bridge::projection::cards::SurfaceVisibility::All, (manifold_core::Bpm(120.0), 4.0));
+        for (id, label, node, param, default) in [
+            ("surface_stretch", "Stretch", "liquid_blobs", "stretch", 1.0),
+            ("surface_centre_smoothing", "Centre Smoothing", "liquid_blobs", "smoothing", 0.0),
+            ("surface_fill_pits", "Fill Pits", "liquid_fill_pits", "value", 0.0),
+        ] {
+            let spec = specs.iter().find(|spec| spec.id == id).expect("water owns the slider");
+            assert_eq!(spec.name, label);
+            assert!(spec.tooltip.as_deref().is_some_and(|help| !help.is_empty()));
+            let row = surface.rows.iter().find(|row| row.id == id).expect("manifest row");
+            assert_eq!(row.spec.tooltip, spec.tooltip);
+            assert_eq!(row.spec.section.as_deref(), Some("Water Detail"));
+            assert_eq!(spec.section.as_deref(), Some("Water Detail"));
+            assert_eq!(spec.default_value, default);
+            assert!(!spec.is_toggle && !spec.whole_numbers);
+            let binding = meta.bindings.iter().find(|binding| binding.id == id).unwrap();
+            assert!(matches!(&binding.target, BindingTarget::Node { node_id, param: target }
+                if node_id.as_str() == node && target == param));
+        }
+        for id in ["surface_particle_scale", "mesh_relaxation"] {
+            assert!(specs.iter().any(|spec| spec.id == id && spec.section.as_deref() == Some("Water Detail")));
+        }
+    }
+
+    #[test]
     fn imported_gltf_scene_controls_have_one_owner() {
         for fixture in ["cc0__oomurasaki_azalea_r._x_pulchrum.glb", "cc0___mushroom.glb"] {
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

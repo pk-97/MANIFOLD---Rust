@@ -119,7 +119,7 @@ impl Primitive for ShapeParticleBlobs {
             cell_size: ctx.scalar_or_param("cell_size", 0.0625),
             particle_scale: ctx.scalar_or_param("particle_scale", 3.0),
             stretch: ctx.scalar_or_param("stretch", 4.0),
-            smoothing: ctx.scalar_or_param("smoothing", 0.9).clamp(0.0, 1.0),
+            smoothing: ctx.scalar_or_param("smoothing", 0.9),
             isolated_scale: ctx.scalar_or_param("isolated_scale", 1.0).clamp(0.25, 1.0),
             min_neighbours: ctx.scalar_or_param("min_neighbours", 8.0).round() as i32,
             bins_x: 0,
@@ -165,3 +165,8 @@ impl Primitive for ShapeParticleBlobs {
         );
     }
 }
+
+crate::param_tooltips!("node.shape_particle_blobs", {
+    "stretch" => "Stretch nearby particles along the flow to shape sheets and splashes.",
+    "smoothing" => "Move particle centres toward their neighbours for a calmer surface.",
+});

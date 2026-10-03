@@ -2305,6 +2305,7 @@ mod binding_reroute_tests {
                 is_line_based: false,
                     layer_types: None,
                 params: vec![ParamSpecDef {
+                    tooltip: None,
                     id: "amount".into(),
                     name: "Amount".into(),
                     min: 0.0,

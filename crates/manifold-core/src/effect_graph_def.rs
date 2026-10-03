@@ -479,6 +479,9 @@ fn default_available() -> bool {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ParamSpecDef {
+    /// Short performer-facing help, shared by every manifest-backed surface.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tooltip: Option<String>,
     pub id: String,
     pub name: String,
     pub min: f32,
@@ -586,6 +589,7 @@ fn is_true(b: &bool) -> bool {
 impl Default for ParamSpecDef {
     fn default() -> Self {
         Self {
+            tooltip: None,
             id: String::new(),
             name: String::new(),
             min: 0.0,
@@ -828,6 +832,7 @@ mod tests {
 
     fn sample_param_spec() -> ParamSpecDef {
         ParamSpecDef {
+            tooltip: None,
             id: "speed".to_string(),
             name: "Speed".to_string(),
             min: 0.1,
@@ -1203,6 +1208,7 @@ mod tests {
             is_line_based: false,
             layer_types: None,
             params: vec![ParamSpecDef {
+                tooltip: None,
                 id: "amount".to_string(),
                 name: "Amount".to_string(),
                 min: 0.0,

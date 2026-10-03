@@ -14,6 +14,7 @@
     /// slice `apply_param_values` used to take.
     fn slot(id: &str, value: f32) -> Param {
         let mut p = Param::bundled(ParamSpecDef {
+            tooltip: None,
             id: id.into(),
             name: id.into(),
             min: 0.0,

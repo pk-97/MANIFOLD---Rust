@@ -419,6 +419,21 @@
               "name": "smoothing_iterations",
               "targetHandle": "Smooth Surface Mesh",
               "targetParam": "iterations"
+            },
+            {
+              "name": "stretch",
+              "targetHandle": "Particle Blobs",
+              "targetParam": "stretch"
+            },
+            {
+              "name": "smoothing",
+              "targetHandle": "Particle Blobs",
+              "targetParam": "smoothing"
+            },
+            {
+              "name": "fill_pits",
+              "targetHandle": "Fill Pits",
+              "targetParam": "value"
             }
           ]
         },
@@ -668,6 +683,96 @@
             "id": 22,
             "nodeId": "liquid_edge_offsets",
             "typeId": "node.running_total"
+          },
+          {
+            "handle": "Fill Pits",
+            "id": 23,
+            "nodeId": "liquid_fill_pits",
+            "params": {
+              "value": {
+                "type": "Float",
+                "value": 0.0
+              }
+            },
+            "typeId": "node.value"
+          },
+          {
+            "handle": "Fill Distance",
+            "id": 24,
+            "nodeId": "liquid_fill_distance",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 2
+              }
+            },
+            "typeId": "node.math"
+          },
+          {
+            "handle": "Grow Distance",
+            "id": 25,
+            "nodeId": "liquid_fill_negative",
+            "params": {
+              "scale": {
+                "type": "Float",
+                "value": -1.0
+              }
+            },
+            "typeId": "node.scale_offset_value"
+          },
+          {
+            "handle": "Closing Band",
+            "id": 26,
+            "nodeId": "liquid_fill_band",
+            "params": {
+              "scale": {
+                "type": "Float",
+                "value": 2.0
+              }
+            },
+            "typeId": "node.scale_offset_value"
+          },
+          {
+            "handle": "Redistance Band",
+            "id": 27,
+            "nodeId": "liquid_redistance_band",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 0
+              }
+            },
+            "typeId": "node.math"
+          },
+          {
+            "handle": "Grow Surface",
+            "id": 28,
+            "nodeId": "liquid_grow",
+            "typeId": "node.offset_lattice"
+          },
+          {
+            "handle": "Rebuild Surface Distance",
+            "id": 29,
+            "nodeId": "liquid_redistance",
+            "typeId": "node.redistance_lattice"
+          },
+          {
+            "handle": "Shrink Surface",
+            "id": 30,
+            "nodeId": "liquid_shrink",
+            "typeId": "node.offset_lattice"
+          },
+          {
+            "handle": "Closing Brick Band",
+            "id": 31,
+            "nodeId": "liquid_brick_band",
+            "params": {
+              "op": {
+                "type": "Enum",
+                "value": 0
+              }
+            },
+            "typeId": "node.math"
           }
         ],
         "wires": [
@@ -1248,12 +1353,6 @@
             "toPort": "size_z"
           },
           {
-            "fromNode": 7,
-            "fromPort": "levelset",
-            "toNode": 12,
-            "toPort": "levelset"
-          },
-          {
             "fromNode": 12,
             "fromPort": "smoothed",
             "toNode": 13,
@@ -1570,6 +1669,150 @@
             "fromPort": "out",
             "toNode": 19,
             "toPort": "edge_scan"
+          },
+          {
+            "fromNode": 7,
+            "fromPort": "levelset",
+            "toNode": 28,
+            "toPort": "levelset"
+          },
+          {
+            "fromNode": 30,
+            "fromPort": "out",
+            "toNode": 12,
+            "toPort": "levelset"
+          },
+          {
+            "fromNode": 23,
+            "fromPort": "out",
+            "toNode": 24,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 4,
+            "fromPort": "out",
+            "toNode": 24,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 24,
+            "fromPort": "out",
+            "toNode": 25,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 24,
+            "fromPort": "out",
+            "toNode": 26,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 26,
+            "fromPort": "out",
+            "toNode": 7,
+            "toPort": "band_extra"
+          },
+          {
+            "fromNode": 31,
+            "fromPort": "out",
+            "toNode": 20,
+            "toPort": "band_extra"
+          },
+          {
+            "fromNode": 24,
+            "fromPort": "out",
+            "toNode": 27,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 4,
+            "fromPort": "out",
+            "toNode": 27,
+            "toPort": "b"
+          },
+          {
+            "fromNode": 25,
+            "fromPort": "out",
+            "toNode": 28,
+            "toPort": "offset"
+          },
+          {
+            "fromNode": 24,
+            "fromPort": "out",
+            "toNode": 30,
+            "toPort": "offset"
+          },
+          {
+            "fromNode": 24,
+            "fromPort": "out",
+            "toNode": 29,
+            "toPort": "enabled"
+          },
+          {
+            "fromNode": 27,
+            "fromPort": "out",
+            "toNode": 29,
+            "toPort": "band"
+          },
+          {
+            "fromNode": 28,
+            "fromPort": "out",
+            "toNode": 29,
+            "toPort": "levelset"
+          },
+          {
+            "fromNode": 29,
+            "fromPort": "out",
+            "toNode": 30,
+            "toPort": "levelset"
+          },
+          {
+            "fromNode": 7,
+            "fromPort": "volume_nodes_x",
+            "toNode": 29,
+            "toPort": "nodes_x"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "scale_x",
+            "toNode": 29,
+            "toPort": "size_x"
+          },
+          {
+            "fromNode": 7,
+            "fromPort": "volume_nodes_y",
+            "toNode": 29,
+            "toPort": "nodes_y"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "scale_y",
+            "toNode": 29,
+            "toPort": "size_y"
+          },
+          {
+            "fromNode": 7,
+            "fromPort": "volume_nodes_z",
+            "toNode": 29,
+            "toPort": "nodes_z"
+          },
+          {
+            "fromNode": 1,
+            "fromPort": "scale_z",
+            "toNode": 29,
+            "toPort": "size_z"
+          },
+          {
+            "fromNode": 26,
+            "fromPort": "out",
+            "toNode": 31,
+            "toPort": "a"
+          },
+          {
+            "fromNode": 4,
+            "fromPort": "out",
+            "toNode": 31,
+            "toPort": "b"
           }
         ]
       },
@@ -1581,6 +1824,10 @@
           "type": "Float",
           "value": 1.0
         },
+        "fill_pits": {
+          "type": "Float",
+          "value": 0.0
+        },
         "mesh_relaxation": {
           "type": "Float",
           "value": 0.5
@@ -1589,6 +1836,10 @@
           "type": "Float",
           "value": 3.0
         },
+        "smoothing": {
+          "type": "Float",
+          "value": 0.0
+        },
         "smoothing_iterations": {
           "type": "Int",
           "value": 2
@@ -1596,6 +1847,10 @@
         "smoothing_passes": {
           "type": "Float",
           "value": 0.0
+        },
+        "stretch": {
+          "type": "Float",
+          "value": 1.0
         }
       },
       "typeId": "group"
@@ -2798,6 +3053,45 @@
           "nodeId": "liquid_smooth_mesh",
           "param": "iterations"
         }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultValue": 1.0,
+        "id": "surface_stretch",
+        "label": "Stretch",
+        "target": {
+          "kind": "node",
+          "nodeId": "liquid_blobs",
+          "param": "stretch"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultValue": 0.0,
+        "id": "surface_centre_smoothing",
+        "label": "Centre Smoothing",
+        "target": {
+          "kind": "node",
+          "nodeId": "liquid_blobs",
+          "param": "smoothing"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultValue": 0.0,
+        "id": "surface_fill_pits",
+        "label": "Fill Pits",
+        "target": {
+          "kind": "node",
+          "nodeId": "liquid_fill_pits",
+          "param": "value"
+        }
       }
     ],
     "category": "Sim",
@@ -2999,6 +3293,45 @@
         "name": "Smoothing Iterations",
         "section": "Water Detail",
         "wholeNumbers": true
+      },
+      {
+        "defaultValue": 1.0,
+        "formatString": "F2",
+        "id": "surface_stretch",
+        "isToggle": false,
+        "isTrigger": false,
+        "max": 16.0,
+        "min": 1.0,
+        "name": "Stretch",
+        "section": "Water Detail",
+        "tooltip": "Stretch particles along the local flow to join the surface.",
+        "wholeNumbers": false
+      },
+      {
+        "defaultValue": 0.0,
+        "formatString": "F2",
+        "id": "surface_centre_smoothing",
+        "isToggle": false,
+        "isTrigger": false,
+        "max": 1.0,
+        "min": 0.0,
+        "name": "Centre Smoothing",
+        "section": "Water Detail",
+        "tooltip": "Move surface particles toward their neighbours for a smoother sheet.",
+        "wholeNumbers": false
+      },
+      {
+        "defaultValue": 0.0,
+        "formatString": "F2",
+        "id": "surface_fill_pits",
+        "isToggle": false,
+        "isTrigger": false,
+        "max": 1.0,
+        "min": 0.0,
+        "name": "Fill Pits",
+        "section": "Water Detail",
+        "tooltip": "Fill surface dips; distance is measured in particle bins.",
+        "wholeNumbers": false
       }
     ],
     "stringBindings": [

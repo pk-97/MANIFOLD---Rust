@@ -329,6 +329,7 @@ mod tests {
 
     fn user_spec(id: &str) -> ParamSpecDef {
         ParamSpecDef {
+            tooltip: None,
             id: id.to_string(),
             name: id.to_string(),
             min: 0.0,

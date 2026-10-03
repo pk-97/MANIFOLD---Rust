@@ -265,6 +265,7 @@ mod tests {
 
     fn spec(id: &str, default: f32) -> ParamSpecDef {
         ParamSpecDef {
+            tooltip: None,
             id: id.to_string(),
             name: id.to_string(),
             min: 0.0,

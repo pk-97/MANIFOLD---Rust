@@ -416,3 +416,36 @@ impl Fixture {
             .collect()
     }
 }
+
+/// ParticleMesher::_computeScalarField negates the distance before
+/// ScalarField::getScalarFieldValue clamps positive-inside solid samples.
+/// Polygonizer3d sets case bits with > 0; our negative-inside field uses < 0.
+#[test]
+fn flip_field_solid_sign_and_zero_cases_match_negative_inside_convention() {
+    for distance in [-3.0_f64, -0.25, -0.0, 0.0, 0.25, 3.0] {
+        for solid in [false, true] {
+            let mut native = -distance;
+            if solid && native > 0.0 {
+                native = 0.0;
+            }
+            let gpu = if solid { distance.max(0.0) } else { distance };
+            assert_eq!(gpu, -native);
+            assert_eq!(gpu < 0.0, native > 0.0);
+        }
+    }
+    // Mixed solid/fluid corner cases retain exactly the same MC case,
+    // including zeros: a sign flip of the solid clamp would fail these.
+    for solid_mask in 0..256 {
+        let distances = [-0.75_f64, 0.5, 0.0, -0.0, -0.125, 0.25, -1.0, 3.0];
+        let mut native_case = 0;
+        let mut gpu_case = 0;
+        for (corner, distance) in distances.into_iter().enumerate() {
+            let solid = solid_mask & (1 << corner) != 0;
+            let native = if solid { (-distance).min(0.0) } else { -distance };
+            let gpu = if solid { distance.max(0.0) } else { distance };
+            native_case |= usize::from(native > 0.0) << corner;
+            gpu_case |= usize::from(gpu < 0.0) << corner;
+        }
+        assert_eq!(native_case, gpu_case);
+    }
+}

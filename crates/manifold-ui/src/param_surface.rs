@@ -138,6 +138,7 @@ pub use crate::panels::actions::MaterialLook;
 /// never from hand tables (INV-1).
 #[derive(Debug, Clone, PartialEq)]
 pub struct RowSpec {
+    pub tooltip: Option<String>,
     pub name: String,
     pub min: f32,
     pub max: f32,
