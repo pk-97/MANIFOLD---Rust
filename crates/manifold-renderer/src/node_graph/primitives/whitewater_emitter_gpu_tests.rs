@@ -940,20 +940,31 @@ fn whitewater_dust_step_publishes_a_distinct_population() {
             true,
         )
         .unwrap();
+        // Tick outputs are private storage; read them through shared copies.
+        let counts_out = h.array(&[0u32; 9], 9);
+        let pool_out = h.array(&vec![super::whitewater_pool_cpu::empty_slot(); 256], 256);
+        let dust_out = h.array::<FluidParticle>(&[], 256);
+        for (port, destination) in [
+            ("counts_out", &counts_out.1),
+            ("pool_out", &pool_out.1),
+            ("dust_particles", &dust_out.1),
+        ] {
+            native.copy_buffer_to_buffer(step.tick_output(port).unwrap(), destination, destination.size);
+        }
         native.commit_and_wait_completed();
-        let counts: Vec<u32> = read(step.tick_output("counts_out").unwrap(), 9);
+        let counts: Vec<u32> = read(&counts_out.1, 9);
         assert!(counts[1] > 0, "inside bubbles must emit: {counts:?}");
         assert_eq!(
             counts[8] > 0,
             dust,
             "dust toggle controls the separate population: {counts:?}"
         );
-        let rows: Vec<WhitewaterParticle> = read(step.tick_output("pool_out").unwrap(), 256);
+        let rows: Vec<WhitewaterParticle> = read(&pool_out.1, 256);
         assert_eq!(
             rows.iter().filter(|p| p.kind == 4).count(),
             counts[8] as usize
         );
-        let visible: Vec<FluidParticle> = read(step.tick_output("dust_particles").unwrap(), 256);
+        let visible: Vec<FluidParticle> = read(&dust_out.1, 256);
         assert_eq!(
             visible
                 .iter()
