@@ -72,8 +72,9 @@ Method, in order:
 
 - **Vocabulary sweep** — `rg` for the domain's words. You're looking for the names the
   codebase already uses, because your design must speak them.
-- **Structure sweep** — LSP (`goToDefinition`, `findReferences`, `incomingCalls`) on
-  the load-bearing symbols. Text search lies about trait dispatch; the LSP doesn't.
+- **Structure sweep** — `ast-grep` on the load-bearing symbols, and the compiler as the
+  final oracle (rename the symbol, `cargo check`, read the errors). Text search lies
+  about trait dispatch; the compiler doesn't.
 - **Read the nearest existing feature end-to-end.** Whatever you're designing, some
   shipped feature is its closest relative. Read it whole — the way section 2.5 makes you open
   the reference preset and follow every wire. Skimming its API and inferring the rest

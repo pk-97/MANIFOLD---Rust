@@ -17,7 +17,9 @@ use manifold_physics::stepping::{StepCoupling, SubstepExchange, Uncoupled};
 use manifold_physics::{BodyHandle, BodyImpulse, PhysicsWorld, Seconds, TickStamp};
 
 use super::bodies::LiquidBody;
-use crate::node_graph::fluid::{CoupledRigidFrame, CoupledRigidLayout, FluidDomainLayout, TICK};
+#[cfg(test)]
+use crate::node_graph::fluid::TICK;
+use crate::node_graph::fluid::{CoupledRigidFrame, CoupledRigidLayout, FluidDomainLayout};
 use crate::node_graph::fluid_role::PreparedFluidGeometry;
 use crate::node_graph::physics::{RigidBody, RigidImpulseTargets, RigidSceneInputs, RigidSimulation};
 use crate::node_graph::transform::Transform;
@@ -355,12 +357,7 @@ impl LiquidRigidOwner {
         };
         self.walled.clone_from(inputs);
         self.walls.install(&mut self.walled)?;
-        if pending.offline {
-            let now = Seconds((self.completed + 1) as f64 * TICK);
-            self.rigid.advance_worker(&self.walled, now, 1, &mut coupling)?;
-        } else {
-            self.rigid.advance_worker_interval(&self.walled, pending.interval, &[], &mut coupling)?;
-        }
+        self.rigid.advance_worker_interval(&self.walled, pending.interval, &[], &mut coupling)?;
         if !coupling.finished {
             return Err("Liquid coupling: the rigid owner did not step the settled tick".into());
         }

@@ -206,6 +206,7 @@ impl NativeSimulation {
         let mut segment_start = interval.start.0;
         let mut active_events = 0;
         let mut first_active_event = 0;
+        let mut frame_remaining = interval.duration().0;
         while segment_start < interval.end.0 {
             while active_events < events.len()
                 && events[active_events].source.time.0 <= segment_start
@@ -230,12 +231,13 @@ impl NativeSimulation {
                 .set_fields(duration, &continuous_fields)
                 .map_err(|error| error.to_string())?;
             let mut impulse_applied = false;
-            while segment_start < segment_end {
+            let mut remaining = if segment_end == interval.end.0 { frame_remaining } else { duration.0 };
+            while remaining > 0.0 {
                 let offered = frame
                     .next_substep()
                     .map_err(|error| error.to_string())?
                     .ok_or("Fluid live frame ended before its accepted interval")?;
-                let step = Seconds(offered.0.min(segment_end - segment_start));
+                let step = Seconds(offered.0.min(remaining));
                 let impulse = ImpulseSum {
                     events: if impulse_applied {
                         &[]
@@ -260,9 +262,11 @@ impl NativeSimulation {
                     .set_fields(step, &fields)
                     .map_err(|error| error.to_string())?;
                 frame.advance(step).map_err(|error| error.to_string())?;
-                segment_start = (segment_start + step.0).min(segment_end);
+                remaining -= step.0;
+                frame_remaining -= step.0;
                 impulse_applied = true;
             }
+            segment_start = segment_end;
             first_active_event = active_events;
         }
         frame.finish().map_err(|error| error.to_string())

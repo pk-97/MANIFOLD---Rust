@@ -23,7 +23,7 @@ use super::gpu_flip_step::read_solve_level;
 use super::liquid_fill::{SITES_PER_CELL, filled_sites, site_range};
 use super::matter_domain::closed_faces;
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
-use crate::node_graph::fluid::{CoupledRigidFrame, CoupledRigidInputs, FluidDomainLayout, TICK, domain_layout};
+use crate::node_graph::fluid::{CoupledRigidFrame, CoupledRigidInputs, FluidDomainLayout, domain_layout};
 use crate::node_graph::fluid_role::{FluidRole, MAX_FLUID_ROLES};
 use crate::node_graph::liquid::bodies::{BodiesStatus, LiquidBodies, LiquidBody, LiquidShape};
 use crate::node_graph::liquid::body_buffers::LiquidBodyBuffers;
@@ -231,6 +231,7 @@ impl Coupling {
 /// later tick, and the domain settles the tick before it there.
 #[derive(Clone, Copy)]
 struct Exchange {
+    frame: manifold_physics::clock::ClockFrame,
     ticks: u32,
     /// The frame's first tick; later ticks differ only in `tick`.
     pending: PendingTick,
@@ -707,7 +708,7 @@ impl GpuFlipDomain {
         self.setup = Some(geometry.setup);
         let frame = self.clock.advance(
             ctx.time.seconds.0,
-            ctx.time.delta.0,
+            crate::node_graph::physics::project_frame_interval(),
             speed,
             ctx.scalar_or_param("reset", 0.0),
             restart,
@@ -751,20 +752,13 @@ impl GpuFlipDomain {
                     ));
                 }
                 let pending = PendingTick { tick: first_tick, stamp: clock.as_ref().map_or(0, FrameClock::stamp) ,
-                    interval: manifold_physics::stepping::StepInterval::new(
-                        frame.plan.start,
-                        manifold_core::Seconds(if frame.offline {
-                            frame.plan.start.0 + TICK
-                        } else {
-                            frame.plan.end.0
-                        }),
-                    ),
+                    interval: frame.interval(0).expect("pending interval"),
                     offline: frame.offline};
                 let offset = self.bodies.count() - owner.rows().len();
                 owner.set_pending(pending);
                 self.coupled.offset = Some(offset);
                 if frame.ticks > 1 {
-                    self.coupled.exchange = Some(Exchange { ticks: frame.ticks, pending, offset });
+                    self.coupled.exchange = Some(Exchange { frame, ticks: frame.ticks, pending, offset });
                 }
             }
             // The water is shown at the tick Box3D has settled, with the
@@ -874,9 +868,7 @@ impl GpuFlipDomain {
         unsafe { bodies.write(offset, bytes) };
         reaction.zero_fill();
         owner.set_pending(PendingTick { tick: exchange.pending.tick + u64::from(tick),
-            interval: manifold_physics::stepping::StepInterval::new(
-                manifold_core::Seconds(exchange.pending.interval.start.0 + f64::from(tick) * TICK),
-                manifold_core::Seconds(exchange.pending.interval.end.0 + f64::from(tick) * TICK)), ..exchange.pending });
+            interval: exchange.frame.interval(u64::from(tick)).expect("accepted exchange interval"), ..exchange.pending });
         Ok(())
     }
 

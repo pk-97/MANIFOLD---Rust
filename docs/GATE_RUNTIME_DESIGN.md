@@ -1,6 +1,6 @@
 # Gate Runtime — verdicts the machine writes, not claims the lanes make
 
-**Status:** SHIPPED 2026-07-25 (L1) — P1–P5 on main (core, pre-wave, linter, pre-land clause + report with the I1 verdict-before-merge hook, SubagentStop firing) plus same-day follow-up fixes, all in beads/git. AMENDED 2026-07-27: D9 gaming scan + fail-streak directive, D10 trail-as-counter + hook-liveness pre-wave checks (Peter + Fable). Owed: P5 SubagentStop live-fire confirm — first executor lane in a new session; payload log `/tmp/manifold_subagent_stop_payloads.jsonl` is the trail. · k3 (lead)
+**Status:** SHIPPED 2026-07-25 (L1) — P1–P5 on main (core, pre-wave, linter, pre-land clause + report with the I1 verdict-before-merge hook, SubagentStop firing; that hook retired 2026-10-03). AMENDED 2026-07-27: D9 gaming scan + fail-streak directive, D10 trail-as-counter + hook-liveness pre-wave checks (Peter + Fable). Owed: none. · k3 (lead)
 **Prerequisites:** none. Self-hosts from P1 onward (P2+ land under their own verdicts).
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -9,6 +9,8 @@ The wave IR (`docs/archive/SEMANTIC_WORKFLOW_PROGRAMS.md` section 2 (The wave IR
 Companion docs: `docs/archive/SEMANTIC_WORKFLOW_PROGRAMS.md` (the IR this implements — GATE, plus the soft→hook migration program of section 3 (The enforcement table — the key analytical tool)/section 9 (Open questions / next steps)) · `docs/AGENT_ROUTING.md` (the running roster this serves) · `.claude/orchestration/rt-reflections-r2-queue.md` (R2's pre-flight already carries two items this design subsumes mechanically: verdict rationale, gate discipline).
 
 ## 1. Audit — what exists (verified 2026-07-25, main @ e692762c)
+
+The hooks this audit and the phase briefs below cite as precedents (`agent-tier-spawn-guard.py`, `workflow-gate.py`, `lane-report-enforcer.py`, `subagent-stop-gate.py`) were retired 2026-10-03 with the proxy-era fleet; the names are history, not live files. `agent-launch-guard.py` and `worktree-guard.py` remain.
 
 | Piece | Where | State |
 |---|---|---|
@@ -114,6 +116,8 @@ Each phase is one session, Flash-executable: the seams are decided above; phases
 - **Forbidden moves:** parsing git log for "task mentions" as coverage (coverage = verdict trail, D6); allowing `--no-verify`-style bypass flags; exempting "small" landings by diff size (D6's honest cost applies to everyone, lead included).
 
 ### P5 — SubagentStop firing (per-lane, harness-native)
+
+Retired 2026-10-03: the hook fired 3.6k times and never blocked a stop. Lanes run their declared gates themselves and report verbatim (AGENT_ROUTING.md section The brief contract); `gate_runner per-lane` stays available for the lead to run on demand.
 
 - **Entry state:** P1–P4 landed. ⚠ VERIFY-AT-IMPL: SubagentStop payload fields — probe with a logging hook first (lane-report-enforcer.py's payload-logging is the precedent); if the payload can't identify the lane's task/branch, this phase escalates, does not improvise.
 - **Read-back:** D2, D4; lane-report-enforcer.py (blocking-hook mechanics on a lane lifecycle event).

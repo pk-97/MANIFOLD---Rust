@@ -805,6 +805,84 @@ fn coarsen_faces_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     out_faces[idx] = record;
 }
 
+// Lentine, Zheng & Fedkiw (2010), sections 3.2--3.3:
+// https://physbam.stanford.edu/papers/stanford2010-02.pdf
+// Conservative outer-projection gather; the MG gather stays unchanged.
+// faces: solid weights/volumes; src: fluid FaceSample words; aux: solid
+// velocity FaceSample words. velocity.xyz stores fluid flux / coarse area;
+// velocity.w stores the complete child solid source / coarse volume,
+// including internal (c_low - c_high) v_s terms. weight.xyz is open area.
+@compute @workgroup_size(256, 1, 1)
+fn lentine_flux_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let n = lattice();
+    let c = coarse_lattice();
+    let m = c + vec3<i32>(1);
+    let idx = gid.x;
+    if idx >= u32(m.x * m.y * m.z) {
+        return;
+    }
+    let p = coords(idx, m);
+    let fm = n + vec3<i32>(1);
+    var record = FaceSample(vec4<f32>(0.0), vec4<f32>(0.0));
+    for (var a = 0; a < 3; a = a + 1) {
+        var across = p;
+        across[a] = 0;
+        if !all(across < c) || p[a] == 0 || p[a] == c[a] {
+            continue;
+        }
+        var area = 0.0;
+        var flux = 0.0;
+        for (var k = 0; k < 4; k = k + 1) {
+            var q = 2 * p;
+            var bit = 0;
+            for (var b = 0; b < 3; b = b + 1) {
+                if b != a {
+                    q[b] = q[b] + ((k >> u32(bit)) & 1);
+                    bit = bit + 1;
+                }
+            }
+            var inside = q;
+            inside[a] = 0;
+            if all(inside < n) {
+                let face = cell(q, fm);
+                let w = faces[face].weight[a];
+                area = area + w;
+                flux = flux + w * src[8u * face + u32(a)];
+            }
+        }
+        record.weight[a] = area * 0.25;
+        record.velocity[a] = flux * 0.25;
+    }
+    if all(p < c) {
+        var solid_source = 0.0;
+        var volume = 0.0;
+        for (var k = 0u; k < 8u; k = k + 1u) {
+            let q = 2 * p + coords(k, vec3<i32>(2));
+            if any(q >= n) || !(water[cell(q, n)] > 0.5) {
+                continue;
+            }
+            let open_volume = faces[cell(q, fm)].weight.w;
+            volume = volume + open_volume;
+            for (var a = 0; a < 3; a = a + 1) {
+                for (var side = 0; side < 2; side = side + 1) {
+                    var f = q;
+                    f[a] = f[a] + side;
+                    if f[a] == 0 || f[a] == n[a] {
+                        continue;
+                    }
+                    let face = cell(f, fm);
+                    let sign = f32(2 * side - 1);
+                    solid_source = solid_source + sign *
+                        (open_volume - faces[face].weight[a]) * aux[8u * face + u32(a)];
+                }
+            }
+        }
+        record.velocity.w = solid_source / (8.0 * u.cell_size);
+        record.weight.w = volume * 0.125;
+    }
+    out_faces[idx] = record;
+}
+
 // The coarsest level's exact solve, e = −h² A⁻¹ rhs: the inverse in `src`
 // (cells² row-major, from coarse_inverse.wgsl), rhs in `aux`, e to `out`.
 @compute @workgroup_size(64, 1, 1)

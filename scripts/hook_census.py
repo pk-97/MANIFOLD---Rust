@@ -128,7 +128,7 @@ def _extract_hook_names(command: str) -> list[str]:
     """Hook filenames in a command string.
 
     Handles:
-      python3 "...hook_telemetry.py" preToolUseBash.py lsp-nudge.py
+      python3 "...hook_telemetry.py" preToolUseBash.py context-nudge.py
       python3 "...direct-hook.py"
     """
     names = [p.strip("\"'").split("/")[-1] for p in command.strip().split() if p.endswith(".py")]

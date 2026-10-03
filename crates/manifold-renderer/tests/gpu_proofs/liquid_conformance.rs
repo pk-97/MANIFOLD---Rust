@@ -275,6 +275,7 @@ struct LiquidRun {
     /// Ticks per frame: 1 is 60 fps, 2 is 30 fps, 2.5 is 24 fps.
     stride: f64,
     live: bool,
+    project_fps: f64,
     /// The check provokes a node error, so a frame it fails is expected.
     errors_expected: bool,
     /// What the last warm-up frame published.
@@ -332,8 +333,20 @@ impl LiquidRun {
         dry: bool,
         clock: Option<Clocked>,
     ) -> Self {
+        Self::on_project_rate(row, def, stride, live, dry, clock, 60.0)
+    }
+
+    fn on_project_rate(
+        row: &'static LiquidSolverRow,
+        def: EffectGraphDef,
+        stride: f64,
+        live: bool,
+        dry: bool,
+        clock: Option<Clocked>,
+        project_fps: f64,
+    ) -> Self {
         let device = clock.as_ref().map_or_else(|| Arc::clone(&harness::shared().device), |clock| Arc::clone(&clock.device));
-        let scope = PhysicsStepScope::for_render(!live);
+        let scope = PhysicsStepScope::for_project_rate(!live, project_fps);
         let registry = registry();
         let Prepared { def, cards, publisher } = prepare(row, &def, &registry, dry);
         let manifest = ParamManifest::from_params(
@@ -363,6 +376,7 @@ impl LiquidRun {
             transport: 0.0,
             stride,
             live,
+            project_fps,
             errors_expected: false,
             start: Probe::EMPTY,
             clock,
@@ -382,6 +396,7 @@ impl LiquidRun {
     }
 
     fn render(&mut self, warming: bool) -> Probe {
+        let _scope = PhysicsStepScope::for_project_rate(!self.live, self.project_fps);
         let time = self.transport * TICK;
         let ctx = PresetContext {
             time,
@@ -789,6 +804,36 @@ fn liquid_coupling_collision() {
     }
 }
 
+/// A non-60 project exercises the production scope, clock, CFL scheduler,
+/// narrow-band history and renderer output sampling without output-rate retuning.
+#[test]
+fn liquid_export_matches_live_project_schedule() {
+    let row = LIQUID_SOLVERS.iter().find(|row| row.type_id == GPU_FLIP_DOMAIN_TYPE_ID).unwrap();
+    for project_fps in [24.0, 60.0] {
+        for narrow in [false, true] {
+            let make = |fps: f64, live| {
+                let mut def = scene(row, Fixture::FaceGrid);
+                set_type_param(&mut def, GPU_FLIP_DOMAIN_TYPE_ID, "resolution", SerializedParamValue::Int { value: 8 });
+                set_type_param(&mut def, "node.gpu_flip_step", "narrow_band", SerializedParamValue::Float { value: if narrow { 1.0 } else { 0.0 } });
+                LiquidRun::on_project_rate(row, def, 60.0 / fps, live, false, None, project_fps)
+            };
+            let mut live = make(project_fps, true);
+            live.steps(project_fps as u32 / 2);
+            let expected = live.particles("particles_b");
+            for export_fps in [20.0, 24.0, 30.0, 60.0] {
+                let mut export = make(export_fps, false);
+                // Use the same half-second span at every output cadence.
+                // Capture only at a shared endpoint; presentation delay is separate.
+                export.steps(export_fps as u32 / 2);
+                assert_eq!(bytemuck::cast_slice::<_, u32>(&export.particles("particles_b")),
+                    bytemuck::cast_slice::<_, u32>(&expected),
+                    "project {project_fps}, export {export_fps}, narrow {narrow}");
+            }
+            assert!(!expected.is_empty());
+        }
+    }
+}
+
 /// I5: a box at half the liquid's density, dropped tilted into the pool,
 /// settles with its centre at the waterline (a half-density cube's draft in
 /// any orientation), within half a cell. The waterline is the free surface
@@ -1087,11 +1132,10 @@ struct Push {
 }
 
 /// The step's solver words for the tick: pressure iterations, density
-/// iterations, capped solves (liquid_stats.rs `SOLVER_WORDS`, the tail of the
-/// capped array).
+/// iterations, capped solves (the `SOLVER_WORDS` tail of the capped array).
 fn solver_words(run: &LiquidRun) -> [u32; 3] {
     let words: Vec<u32> = run.read("node.gpu_flip_step", "capped");
-    let tail = &words[words.len() - 7..];
+    let tail = &words[words.len() - manifold_renderer::node_graph::SOLVER_WORDS as usize..];
     [tail[0], tail[1], tail[2]]
 }
 

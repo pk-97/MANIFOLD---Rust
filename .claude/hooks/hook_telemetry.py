@@ -286,7 +286,7 @@ _WORKER_REROUTE = (
 def worker_no_prompt(payload: dict, out: bytes) -> bytes:
     """Worker seats never prompt: a final PreToolUse `ask` from a subagent/teammate
     becomes a `deny` carrying the original reason plus the reroute note. Lead
-    payloads (no agent marker — same discriminator as worker-seat-charge.py) pass
+    payloads (no agent marker — same discriminator as permission-request-guard.py) pass
     through untouched. `allow`/`deny`/no-verdict are never changed, so this can only
     narrow what runs. Never raises; on any doubt returns `out` as-is."""
     try:

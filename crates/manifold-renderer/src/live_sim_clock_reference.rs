@@ -230,7 +230,6 @@ impl Clock {
             speed,
             reset,
             setup_changed,
-            offline,
             budget,
         } = input;
         let mut diagnostic = None;
@@ -286,18 +285,12 @@ impl Clock {
         self.last_transport = transport.0;
         let start = self.simulation;
         let reached = (self.target / TICK + 1e-9).floor() as u64;
-        let due = if offline { reached.saturating_sub(self.ticks_covered) }
-            else { ((self.target - start) / TICK).ceil().max(0.0) as u64 };
-        // Zero allowance means blocked, not time discarded. Offline ignores
-        // the live budget entirely, including zero.
-        let steps = if offline {
-            due
-        } else {
-            due.min(u64::from(budget))
-        };
+        let due = ((self.target - start) / TICK).ceil().max(0.0) as u64;
+        // A zero test budget models blocked work without dropping time.
+        let steps = due.min(u64::from(budget));
         if steps > 0 {
             self.ticks_covered = reached;
-            self.simulation = if offline { reached as f64 * TICK } else { self.target };
+            self.simulation = self.target;
         }
         LiveStepOutcome {
             value: Frame {
@@ -326,7 +319,6 @@ struct Input {
     speed: f64,
     reset: f32,
     setup_changed: bool,
-    offline: bool,
     budget: u32,
 }
 
@@ -427,7 +419,6 @@ fn input(time: f64, budget: u32) -> Input {
         speed: 1.0,
         reset: 0.0,
         setup_changed: false,
-        offline: false,
         budget,
     }
 }
@@ -493,27 +484,6 @@ fn live_sim_clock_hits_land_inside_long_steps() {
         }
     });
     assert_eq!(applied, [0, 1, 2, 3, 4, 5]);
-}
-
-#[test]
-fn live_sim_clock_export_unchanged() {
-    use crate::node_graph::liquid::clock::LiquidClock;
-    let mut current = LiquidClock::default();
-    let mut reference = Clock::default();
-    for time in [0.0, TICK, 0.041, 0.5, 1.0, 2.0] {
-        let out = reference.advance(Input {
-            offline: true,
-            ..input(time, 0)
-        });
-        let old = current.advance(time, TICK, 1.0, 0.0, false, true);
-        assert_eq!(out.steps, u64::from(old.ticks));
-        assert_eq!(out.simulation.0, old.simulation_time);
-        assert_eq!(out.target.0, old.target_time);
-        assert_eq!(out.stretched.0, 0.0);
-        for i in 0..out.steps {
-            assert!((out.step(i).duration().0 - TICK).abs() < 1e-12);
-        }
-    }
 }
 
 #[test]

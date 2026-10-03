@@ -187,6 +187,11 @@ impl Primitive for MatterGridUpdate {
             _ => (grid, grid, grid, 0),
         };
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
+        let impulse_bytes = field.nodes.iter().map(|&n| n as u64).product::<u64>() * 16;
+        let impulse_offset = tick_index.checked_sub(field.impulse_tick)
+            .filter(|&ordinal| field.impulse_tick >= 0 && ordinal >= 0)
+            .map(|ordinal| ordinal as u64 * impulse_bytes)
+            .filter(|&offset| field.impulses.is_some_and(|buffer| offset + impulse_bytes <= buffer.size));
         let uniforms = GridUpdateUniforms {
             nodes_x: lattice.nodes()[0] as i32,
             nodes_y: lattice.nodes()[1] as i32,
@@ -209,7 +214,7 @@ impl Primitive for MatterGridUpdate {
             field_nodes_z: field.nodes[2],
             field_spacing: field.spacing,
             force_lattices: field.force_lattices,
-            impulse_tick: field.impulse_tick,
+            impulse_tick: if impulse_offset.is_some() { tick_index } else { -1 },
             first_tick: field.first_tick,
             dispatch_count: nodes,
         };
@@ -224,7 +229,7 @@ impl Primitive for MatterGridUpdate {
                 GpuBinding::Buffer { binding: 4, buffer: shapes, offset: 0 },
                 GpuBinding::Buffer { binding: 5, buffer: atlas, offset: 0 },
                 GpuBinding::Buffer { binding: 6, buffer: field.forces.unwrap_or(grid), offset: 0 },
-                GpuBinding::Buffer { binding: 7, buffer: field.impulses.unwrap_or(grid), offset: 0 },
+                GpuBinding::Buffer { binding: 7, buffer: field.impulses.unwrap_or(grid), offset: impulse_offset.unwrap_or(0) },
                 GpuBinding::Buffer { binding: 8, buffer: grid, offset: 0 },
             ],
             [nodes.div_ceil(256), 1, 1],

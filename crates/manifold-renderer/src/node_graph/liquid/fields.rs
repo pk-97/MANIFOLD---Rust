@@ -16,7 +16,7 @@
 //!   [`FieldLattice`], a quarter of the solver's resolution per axis: one
 //!   lattice while the ticks agree, one per tick otherwise, so a tick reads
 //!   the same forces at any frame rate. A tick nobody sampled is an error.
-//!   Fixed export impulses use one additional lattice. GPU FLIP live hits
+//!   Matter impulses use one lattice per accepted interval. GPU FLIP hits
 //!   retain distinct timestamps and use one lattice per timestamp; ties sum
 //!   in source order.
 //! - [`LiquidFields::upload`] copies what changed into the stable `forces` and
@@ -276,9 +276,7 @@ impl LiquidImpulses {
         let pending = &mut self.pending;
         for tick in first..first + u64::from(frame.ticks) {
             let stamp = TickStamp { epoch: self.epoch, tick };
-            let result = if frame.offline {
-                queue.begin_tick(stamp, |event| pending.push(event))
-            } else if let Some(interval) = frame.interval(tick - first) {
+            let result = if let Some(interval) = frame.interval(tick - first) {
                 queue.begin_interval(stamp, interval, |event| pending.push(event))
             } else {
                 Ok(())
@@ -289,14 +287,8 @@ impl LiquidImpulses {
                 return Err(error);
             }
         }
-        // One impulse lattice per frame: every hit of the frame shares a tick.
-        let mut ticks = self.pending.iter().map(|event| event.applied.tick);
-        self.impulse_tick = ticks.next();
-        if ticks.any(|tick| Some(tick) != self.impulse_tick) {
-            let error = "Liquid impulses: hits for two ticks of one frame; one frame applies one impulse tick".to_string();
-            self.failure = Some(error.clone());
-            return Err(error);
-        }
+        // The timestamped GPU path carries each event's accepted interval.
+        self.impulse_tick = self.pending.first().map(|event| event.applied.tick);
         Ok(())
     }
 
@@ -472,7 +464,9 @@ pub struct LiquidFields {
     force_lattices: usize,
     impulses: Vec<[f32; 4]>,
     live_hits: Vec<[u32; 4]>,
-    live_start: Option<f64>,
+    live_frame: Option<ClockFrame>,
+    frame_first: u64,
+    frame_ticks: u32,
     split_live_hits: bool,
     /// The field every lattice holds while it holds still.
     force_source: Option<FieldValue>,
@@ -499,7 +493,9 @@ impl LiquidFields {
         impulses: &LiquidImpulses,
     ) -> Result<FieldFrame, String> {
         let count = lattice.node_count();
-        self.live_start = (self.split_live_hits && !frame.offline).then_some(frame.plan.start.0);
+        self.live_frame = self.split_live_hits.then_some(*frame);
+        self.frame_first = frame.first_sequence;
+        self.frame_ticks = frame.ticks;
         if self.lattice != Some(lattice) {
             self.forces.clear();
             self.force_lattices = 0;
@@ -558,23 +554,26 @@ impl LiquidFields {
     }
 
     fn finish(&mut self, lattice: FieldLattice, impulses: &LiquidImpulses) -> Result<FieldFrame, String> {
-        let impulse_tick = impulses.impulse_tick();
+        let mut impulse_tick = impulses.impulse_tick();
         self.live_hits.clear();
         let events = impulses.frame_events();
         let count = lattice.node_count();
-        let lattice_count = if self.live_start.is_some() { events.len().max(1) } else { 1 };
+        let lattice_count = if self.live_frame.is_some() { events.len().max(1) } else { self.frame_ticks.max(1) as usize };
         self.impulses.resize(count * lattice_count, [0.0; 4]);
         if impulse_tick.is_some() {
-            if let Some(start) = self.live_start {
+            if let Some(frame) = self.live_frame {
                 let mut first = 0;
                 while first < events.len() {
+                    let tick = events[first].applied.tick;
+                    let interval = frame.interval(tick - frame.first_sequence).expect("event belongs to accepted interval");
+                    let start = interval.start.0;
                     let relative = (events[first].source.time.0 - start).max(0.0) as f32;
                     let mut end = first + 1;
-                    while end < events.len() && ((events[end].source.time.0 - start).max(0.0) as f32).to_bits() == relative.to_bits() {
+                    while end < events.len() && events[end].applied.tick == tick && ((events[end].source.time.0 - start).max(0.0) as f32).to_bits() == relative.to_bits() {
                         end += 1;
                     }
                     let index = self.live_hits.len();
-                    self.live_hits.push([relative.to_bits(), index as u32, 0, 0]);
+                    self.live_hits.push([relative.to_bits(), index as u32, tick as u32, 0]);
                     fill(&lattice, &mut self.impulses[index * count..(index + 1) * count], |x| {
                         let mut sum = [0.0; 3];
                         for event in &events[first..end] {
@@ -588,14 +587,18 @@ impl LiquidFields {
                     first = end;
                 }
             } else {
-                fill(&lattice, &mut self.impulses, |x| {
+                impulse_tick = Some(self.frame_first);
+                for (ordinal, values) in self.impulses.chunks_exact_mut(count).enumerate() {
+                let tick = self.frame_first + ordinal as u64;
+                fill(&lattice, values, |x| {
                     let mut sum = [0.0f32; 3];
-                    for event in events.iter().filter(|event| event.value.target.affects_fluid()) {
+                    for event in events.iter().filter(|event| event.applied.tick == tick && event.value.target.affects_fluid()) {
                         let v = event.value.field.sample(x);
                         for axis in 0..3 { sum[axis] += v[axis]; }
                     }
                     sum
                 }).map_err(|_| "Liquid impulses: the impulse field is not finite inside the domain".to_string())?;
+                }
             }
             self.impulses_dirty = true;
         }

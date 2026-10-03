@@ -72,7 +72,7 @@ impl Rig {
             self.fields.observe_sample(transport, Some(&field(transport)));
         }
         self.last = Some(transport);
-        let frame = self.clock.advance(transport, interval, speed, 0.0, false, offline);
+        let frame = self.clock.advance(transport, if offline { TICK } else { interval }, speed, 0.0, false, offline);
         self.impulses.observe_frame(transport, &frame)?;
         let laid = self.fields.prepare(lattice(), Some(&field(transport)), &self.clock, &frame, &self.impulses)?;
         Ok((frame, laid))
@@ -262,6 +262,53 @@ fn liquid_fields_split_live_hits_by_timestamp_and_end_boundary() {
     assert_eq!(fields.live_hit_count(), 1);
     assert_eq!(fields.live_hits[0][0], 0.0f32.to_bits());
     assert_eq!(fields.impulses()[0][0], 8.0);
+}
+
+#[test]
+fn export_hits_match_live_project_interval_times_and_lattices() {
+    for split in [false, true] {
+    let run = |fps: u32, offline| {
+        let mut clock = LiquidClock::default();
+        let mut impulses = LiquidImpulses::default();
+        let mut fields = LiquidFields::default();
+        if split { fields.split_live_hits(); }
+        let first = clock.advance(0.0, TICK, 1.0, 0.0, false, offline);
+        impulses.observe_frame(0.0, &first).unwrap();
+        let epoch = impulses.epoch().unwrap();
+        for (sequence, time) in [0.0, 0.02, 0.06, 0.1, 0.4, 0.5, 0.99].into_iter().enumerate() {
+            impulses.queue.as_mut().unwrap().enqueue(
+                EventStamp { epoch, time: Seconds(time), sequence: sequence as u64 },
+                fluid(FieldValue::uniform([sequence as f32 + 1.0, 0.0, 0.0]).unwrap()),
+            ).unwrap();
+        }
+        let mut result = Vec::new();
+        for index in 1..=fps {
+            let transport = index as f64 * (1.0 / fps as f64);
+            let frame = clock.advance(transport, TICK, 1.0, 0.0, false, offline);
+            impulses.observe_frame(transport, &frame).unwrap();
+            let prepared = fields.prepare(lattice(), None, &clock, &frame, &impulses).unwrap();
+            if split {
+                for hit in &fields.live_hits {
+                    let value = fields.impulses[hit[1] as usize * lattice().node_count()][0];
+                    result.push((hit[0], hit[2], value.to_bits()));
+                }
+            } else if prepared.impulse_tick.is_some() {
+                for (ordinal, values) in fields.impulses.chunks_exact(lattice().node_count()).enumerate() {
+                    if values[0][0] != 0.0 {
+                        result.push((0, (frame.first_sequence + ordinal as u64) as u32, values[0][0].to_bits()));
+                    }
+                }
+            }
+            impulses.commit_frame();
+        }
+        result
+    };
+    let live = run(60, false);
+    assert_eq!(live.len(), 7);
+    for fps in [20, 24, 30, 60] {
+        assert_eq!(run(fps, true), live, "{fps} fps export; split={split}");
+    }
+    }
 }
 
 /// BUG-cykz (receipts only for ticks that ran): a frame whose fields fail

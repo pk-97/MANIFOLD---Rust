@@ -6177,7 +6177,9 @@ void FluidSimulation::_getInflowConstrainedVelocityComponents(ValidVelocityCompo
 }
 
 void FluidSimulation::_updateForceFieldGrid(double dt) {
-    if (!_isAdaptiveForceFieldTimeSteppingEnabled && _currentFrameTimeStepNumber != 0) {
+    // Interval owners may change fields at a timestamped event boundary.
+    // Refresh the grid for each accepted segment, including removal of a hit.
+    if (!_isLiveExternallySteppedUpdate && !_isAdaptiveForceFieldTimeSteppingEnabled && _currentFrameTimeStepNumber != 0) {
         return;
     }
 

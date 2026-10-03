@@ -7,6 +7,8 @@
 //! tick's face grid escapes beside the particles into storage this node owns,
 //! sized from the lattice wires before the region runs, so it is whole from
 //! the first frame and holds while the transport is paused.
+//! The optional interior field uses the Ferstl et al. (2016) narrow-band
+//! positive sentinel when it is unwired or reset.
 
 use manifold_gpu::{GpuBuffer, GpuDevice};
 
@@ -15,6 +17,7 @@ use super::liquid_stats::{LIQUID_STATS_WORDS, LiquidTickStats};
 use super::whitewater_step::{DEFAULT_CAPACITY as WHITEWATER_DEFAULT_CAPACITY, MAX_CAPACITY as WHITEWATER_MAX_CAPACITY};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid_particles::{FaceSample, FluidParticle};
+use crate::node_graph::liquid::grid::{interior_bytes, InteriorOps};
 use crate::node_graph::liquid::lattice::LiquidLattice;
 use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::primitive::Primitive;
@@ -34,6 +37,7 @@ const RESULTS: &[SubstepResultPorts] = &[
     SubstepResultPorts { capture: "foam_particles_in", output: "foam_particles", optional: true },
     SubstepResultPorts { capture: "bubble_particles_in", output: "bubble_particles", optional: true },
     SubstepResultPorts { capture: "spray_particles_in", output: "spray_particles", optional: true },
+    SubstepResultPorts { capture: "interior_in", output: "interior", optional: true },
 ];
 
 /// The region's contract. The one iteration scalar is the tick's index in
@@ -53,6 +57,8 @@ pub const LIQUID_STATE_PORTS: SubstepBoundaryPorts = SubstepBoundaryPorts {
 const READBACK_SLOTS: usize = 3;
 const WHITEWATER_STATE_WORDS: u32 = 8;
 const WHITEWATER_COUNT_WORDS: u32 = 8;
+const WHITEWATER_RESULT_START: usize = 2;
+const WHITEWATER_RESULT_COUNT: usize = 6;
 
 pub struct ReadbackSlot {
     buffer: GpuBuffer,
@@ -72,7 +78,7 @@ fn create_shared_buffer(device: &GpuDevice, bytes: u64) -> Result<GpuBuffer, Str
 crate::primitive! {
     name: LiquidState,
     type_id: "node.liquid_state",
-    purpose: "Hold a particle liquid across frames and run its tick region: seed the particles when the epoch changes, then repeat the region once per due tick with the tick's index. The region's last particles become the state, and its last stats and its last tick's face grid escape with them; a new epoch's faces are zero. Live GPU FLIP non-finite values report an error and reseed particles without stopping the show or resetting simulation time. Offline and other solver fault handling is unchanged.",
+    purpose: "Hold a particle liquid across frames and run its tick region: seed the particles when the epoch changes, then repeat the region once per due tick with the tick's index. The region's last particles become the state, and its last stats, optional interior distance and its last tick's face grid escape with them; a new epoch's faces are zero. Live GPU FLIP non-finite values report an error and reseed particles without stopping the show or resetting simulation time. Narrow-band capacity shortage halts until Reset; other solver fault handling is unchanged.",
     inputs: {
         seed: Array(FluidParticle) required,
         in: Array(FluidParticle) required,
@@ -85,6 +91,7 @@ crate::primitive! {
         foam_particles_in: Array(FluidParticle) optional,
         bubble_particles_in: Array(FluidParticle) optional,
         spray_particles_in: Array(FluidParticle) optional,
+        interior_in: Array(f32) optional,
         count: ScalarF32 optional,
         whitewater_capacity: ScalarF32 optional,
         ticks: ScalarF32 optional,
@@ -106,6 +113,7 @@ crate::primitive! {
         foam_particles: Array(FluidParticle),
         bubble_particles: Array(FluidParticle),
         spray_particles: Array(FluidParticle),
+        interior: Array(f32),
         tick_index: ScalarF32,
         live_count: ScalarF32,
         fault: ScalarF32,
@@ -130,6 +138,7 @@ crate::primitive! {
         zero_stats: Option<GpuBuffer> = None,
         readback: Vec<ReadbackSlot> = Vec::new(),
         faulted: bool = false,
+        capacity_faulted: bool = false,
         cap_hit: bool = false,
         clock_nonfinite: bool = false,
         last_stats: Option<LiquidTickStats> = None,
@@ -142,6 +151,8 @@ crate::primitive! {
         bubble_particles: Option<GpuBuffer> = None,
         spray_particles: Option<GpuBuffer> = None,
         whitewater_capacity: u32 = 0,
+        interior: Option<GpuBuffer> = None,
+        interior_ops: InteriorOps = InteriorOps::default(),
     },
 }
 
@@ -225,16 +236,21 @@ impl LiquidState {
         if let Some((_, stats, endpoint, cap_hit, nonfinite)) = newest {
             self.cap_hit = cap_hit;
             self.clock_nonfinite = nonfinite;
-            self.faulted = stats.nonfinite > 0 || (self.faulted && !live_recovery);
+            self.capacity_faulted |= stats.narrow_band_shortage > 0;
+            self.faulted = self.capacity_faulted || stats.nonfinite > 0 || (self.faulted && !live_recovery);
             self.completed_time = endpoint;
             self.last_stats = Some(stats);
-            return self.faulted && live_recovery;
+            return self.faulted && live_recovery && !self.capacity_faulted;
         }
         false
     }
 }
 
 impl Primitive for LiquidState {
+    fn prepare_pipelines(&mut self, device: &manifold_gpu::GpuDevice) {
+        self.interior_ops.prepare_clear(device);
+    }
+
     fn state_capture_input_ports(&self) -> &'static [&'static str] {
         &[
             "in",
@@ -246,6 +262,7 @@ impl Primitive for LiquidState {
             "foam_particles_in",
             "bubble_particles_in",
             "spray_particles_in",
+            "interior_in",
         ]
     }
 
@@ -273,6 +290,7 @@ impl Primitive for LiquidState {
                 | "foam_particles"
                 | "bubble_particles"
                 | "spray_particles"
+                | "interior"
         )
     }
 
@@ -285,6 +303,7 @@ impl Primitive for LiquidState {
             "foam_particles" => self.foam_particles.as_ref(),
             "bubble_particles" => self.bubble_particles.as_ref(),
             "spray_particles" => self.spray_particles.as_ref(),
+            "interior" => self.interior.as_ref(),
             _ => None,
         }
     }
@@ -311,7 +330,8 @@ impl Primitive for LiquidState {
             | "whitewater_counts"
             | "foam_particles"
             | "bubble_particles"
-            | "spray_particles" => Some(1),
+            | "spray_particles"
+            | "interior" => Some(1),
             _ => None,
         }
     }
@@ -348,7 +368,22 @@ impl Primitive for LiquidState {
             LiquidLattice::from_wires(ctx, "Liquid State").map(|lattice| face_bytes(lattice.cells()))
         }
         .filter(|_| ctx.outputs.array("faces").is_some());
-        let whitewater_active = std::array::from_fn(|i| ctx.inputs.slot(RESULTS[i + 2].capture).is_some());
+        let whitewater_active: [bool; WHITEWATER_RESULT_COUNT] = std::array::from_fn(|i| {
+            ctx.inputs
+                .slot(RESULTS[WHITEWATER_RESULT_START + i].capture)
+                .is_some()
+        });
+        let interior_grid = if ctx.inputs.slot("interior_in").is_none() {
+            None
+        } else if ["nodes_x", "nodes_y", "nodes_z"].iter().any(|port| ctx.inputs.slot(port).is_none()) {
+            refused = Some("Liquid State: interior_in needs the lattice on nodes_x, nodes_y and nodes_z".to_string());
+            None
+        } else {
+            LiquidLattice::from_wires(ctx, "Liquid State").map(|lattice| interior_bytes(lattice.cells()))
+        };
+        if interior_grid == Some(0) {
+            refused = Some("Liquid State: interior distance has zero cells".to_string());
+        }
         let gpu = ctx.gpu_encoder();
         let clock = gpu.device.frame_clock();
         let stats_bytes = u64::from(LIQUID_STATS_WORDS) * 4;
@@ -387,6 +422,28 @@ impl Primitive for LiquidState {
             Some(_) => {}
         }
 
+        let mut fresh_interior = false;
+        match interior_grid.filter(|&bytes| bytes != 0) {
+            None => self.interior = None,
+            Some(bytes) if self.interior.as_ref().is_none_or(|field| field.size != bytes) => {
+                let device = gpu.device;
+                self.interior = crate::node_graph::scene_modifier_expand::admit_candidate_bytes(
+                    device.modifier_memory_snapshot(),
+                    bytes,
+                )
+                .map_err(|error| error.to_string())
+                .and_then(|()| device.try_create_buffer_shared(bytes.max(4)))
+                .map_err(|error| {
+                    refused = Some(format!(
+                        "Liquid State: the interior distance needs {bytes} bytes the device cannot give: {error}. Lower Resolution."
+                    ));
+                })
+                .ok();
+                fresh_interior = self.interior.is_some();
+            }
+            Some(_) => {}
+        }
+
         if self.epoch != Some(epoch) || fresh_faces {
             // A new epoch's faces are zero until its first tick.
             if let Some(faces) = &self.faces {
@@ -394,11 +451,18 @@ impl Primitive for LiquidState {
             }
         }
         let epoch_reset = self.epoch != Some(epoch);
+        if (self.epoch != Some(epoch) || fresh_interior)
+            && let Some(interior) = self.interior.as_ref()
+            && let Err(error) = self.interior_ops.clear(gpu, interior)
+        {
+            refused = Some(format!("Liquid State: {error}"));
+        }
         if epoch_reset {
             self.completed_time = 0.0;
             self.epoch = Some(epoch);
             self.ticks_done = 0;
             self.faulted = false;
+            self.capacity_faulted = false;
             self.cap_hit = false;
             self.clock_nonfinite = false;
             self.last_stats = None;
@@ -444,17 +508,22 @@ impl Primitive for LiquidState {
             crate::node_graph::physics_metrics::record_simulation(target, self.completed_time, self.cap_hit, self.faulted|| self.clock_nonfinite);
         }
 
-        self.pending = if refused.is_some() || (self.faulted && !live_recovery) { 0 } else { ticks };
+        self.pending = if refused.is_some() || self.capacity_faulted || (self.faulted && !live_recovery) { 0 } else { ticks };
         self.captures = 0;
         let live = self.last_stats.map_or(count, |s| s.live);
         ctx.outputs.set_scalar("live_count", ParamValue::Float(live as f32));
         ctx.outputs.set_scalar("fault", ParamValue::Float(if self.faulted { 1.0 } else { 0.0 }));
         if self.faulted {
+            if self.last_stats.is_some_and(|s| s.nonfinite > 0) {
             ctx.error(if live_recovery {
                 "Liquid State: non-finite values detected; reseeding water while the show continues"
             } else {
                 "Liquid State: a tick produced non-finite values; the liquid is halted until Reset"
             });
+            }
+            if self.last_stats.is_some_and(|s| s.narrow_band_shortage > 0) {
+                ctx.error("Liquid State: narrow-band particle capacity was insufficient for reseeding; the liquid is halted until Reset");
+            }
         }
         if let Some(error) = refused {
             ctx.error(error);
@@ -510,6 +579,16 @@ impl Primitive for LiquidState {
                 ctx.error(format!(
                     "Liquid State: the tick's faces hold {} bytes; the lattice's face grid is {}",
                     candidate.size, faces.size
+                ));
+            }
+        }
+        if let (Some(candidate), Some(interior)) = (ctx.inputs.array("interior_in"), self.interior.as_ref()) {
+            if candidate.size == interior.size {
+                ctx.gpu_encoder().native_enc.copy_buffer_to_buffer(candidate, interior, interior.size);
+            } else {
+                ctx.error(format!(
+                    "Liquid State: the tick's interior distance holds {} bytes; the lattice's cell-centred field is {}",
+                    candidate.size, interior.size
                 ));
             }
         }

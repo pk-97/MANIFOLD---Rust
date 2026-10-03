@@ -38,6 +38,7 @@ pub(crate) fn particle_frame_duration(delta: Seconds) -> f32 {
 thread_local! {
     // A preview budget only yields work; it never discards simulation time.
     static PREVIEW_STEP_BUDGET: std::cell::Cell<Option<std::time::Duration>> = const { std::cell::Cell::new(None) };
+    static PROJECT_INTERVAL: std::cell::Cell<f64> = const { std::cell::Cell::new(1.0 / 60.0) };
     static SAMPLE_AUTHORED_ONLY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static HISTORY_DRAIN_REQUESTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
@@ -83,6 +84,10 @@ impl HeldClock {
 }
 
 /// Fluid workers use the same preview/offline scope as rigid bodies.
+pub(crate) fn project_frame_interval() -> f64 {
+    PROJECT_INTERVAL.get()
+}
+
 pub(crate) fn offline_simulation() -> bool {
     PREVIEW_STEP_BUDGET.with(|budget| budget.get().is_none())
 }
@@ -146,24 +151,34 @@ impl Drop for PhysicsHistoryDrainScope {
     }
 }
 
-/// Select live accepted intervals or the original fixed export ticks.
+/// Select live or deterministic export execution and retain the project cadence.
 #[must_use]
 pub struct PhysicsStepScope {
+    previous_interval: f64,
     previous: Option<std::time::Duration>,
     _thread_bound: std::marker::PhantomData<std::rc::Rc<()>>,
 }
 
 impl PhysicsStepScope {
     pub fn for_render(export_mode: bool) -> Self {
-        Self::with_preview_budget(export_mode, std::time::Duration::from_secs_f64(1.0 / 60.0))
+        Self::for_project_rate(export_mode, 60.0)
+    }
+
+    /// The project rate is independent of the export output rate.
+    pub fn for_project_rate(export_mode: bool, project_fps: f64) -> Self {
+        let scope = Self::with_preview_budget(export_mode, std::time::Duration::from_secs_f64(1.0 / project_fps));
+        PROJECT_INTERVAL.set(1.0 / project_fps);
+        scope
     }
 
     /// Retain the preview-scope API; live intervals always consume their full span.
     pub fn with_preview_budget(export_mode: bool, budget: std::time::Duration) -> Self {
+        let previous_interval = PROJECT_INTERVAL.with(|current| current.replace(1.0 / 60.0));
         let previous =
             PREVIEW_STEP_BUDGET.with(|current| current.replace((!export_mode).then_some(budget)));
         Self {
             previous,
+            previous_interval,
             _thread_bound: std::marker::PhantomData,
         }
     }
@@ -172,6 +187,7 @@ impl PhysicsStepScope {
 impl Drop for PhysicsStepScope {
     fn drop(&mut self) {
         PREVIEW_STEP_BUDGET.with(|budget| budget.set(self.previous));
+        PROJECT_INTERVAL.set(self.previous_interval);
     }
 }
 
@@ -440,6 +456,7 @@ pub(crate) fn installed_volume(world: &PhysicsWorld, handle: BodyHandle) -> Resu
 }
 
 pub struct RigidSimulation {
+    export_clock: manifold_physics::clock::SimulationClock,
     world: Option<PhysicsWorld>,
     handles: [Option<BodyHandle>; MAX_BODIES],
     descriptions: [Option<RigidBody>; MAX_BODIES],
@@ -533,6 +550,7 @@ impl Default for RigidSimulation {
             impulse_failure: None,
             impulse_overflow_latched: false,
             accepted_observation: None,
+            export_clock: Default::default(),
             held: HeldClock::default(),
             worker_epoch: None,
             advancement_policy: AdvancementPolicy::Preview,
@@ -1086,6 +1104,10 @@ impl RigidSimulation {
         // Ordinary live rigid worlds cover the complete observed simulation
         // span in one accepted interval. An explicitly bounded fixed worker
         // remains separate from the live transport policy.
+        let export_frame = (accepted_interval.is_none()
+            && offline_simulation()
+            && matches!(self.advancement_policy, AdvancementPolicy::Preview))
+            .then(|| self.export_clock.advance(now.0, project_frame_interval(), 1.0, reset_count, rebuild, true));
         let accepted_interval = accepted_interval.or_else(|| {
             (!offline_simulation()
                 && matches!(self.advancement_policy, AdvancementPolicy::Preview)
@@ -1101,7 +1123,9 @@ impl RigidSimulation {
                     .interval(0)
                 }).flatten()
         });
-        let steps = if accepted_interval.is_some() {
+        let steps = if let Some(frame) = export_frame {
+            if speed > 0.0 { frame.ticks as usize } else { 0 }
+        } else if accepted_interval.is_some() {
             1
         } else {
             match self.advancement_policy {
@@ -1177,7 +1201,11 @@ impl RigidSimulation {
         self.sync_released_fragment_properties(&bodies)?;
         let physics_start = std::time::Instant::now();
         let mut completed = 0;
-        for _ in 0..steps {
+        for ordinal in 0..steps {
+            let accepted_interval = export_frame.and_then(|frame| frame.interval(ordinal as u64))
+                .map(|interval| StepInterval::new(Seconds(self.physics_time),
+                    Seconds(self.physics_time + interval.duration().0 * f64::from(speed))))
+                .or(accepted_interval);
             let result = (|| -> Result<(), String> {
                 let (step_start, step_end) = accepted_interval.map_or_else(
                     || (self.physics_time, self.physics_time + FIXED_TICK.0),
@@ -1227,6 +1255,14 @@ impl RigidSimulation {
                         .map_err(|error| {
                             format!("Physics: failed to begin impulse interval: {error}")
                         })?;
+                    if let Some(events) = assigned_impulses {
+                        self.impulse_receipts.extend(events.iter().map(|event| AppliedEvent {
+                            source: event.source,
+                            applied: event.applied,
+                            lateness: event.lateness,
+                            value: event.value.clone(),
+                        }));
+                    }
                     tick
                 } else {
                     self.begin_impulse_tick()?
@@ -1271,6 +1307,7 @@ impl RigidSimulation {
                 if accepted_interval.is_some() {
                     let event_count = self.impulse_receipts.len();
                     let mut cursor = step_start;
+                    let mut frame_remaining = step_duration;
                     let mut index = interval_receipt_start;
                     while index < event_count {
                         let event_time = self.impulse_receipts[index].source.time.0.max(step_start);
@@ -1278,6 +1315,8 @@ impl RigidSimulation {
                             &mut exchange,
                             cursor,
                             event_time,
+                            &mut frame_remaining,
+                            false,
                             microsteps,
                             solver_substeps,
                             &bodies,
@@ -1307,6 +1346,8 @@ impl RigidSimulation {
                         &mut exchange,
                         cursor,
                         step_end,
+                        &mut frame_remaining,
+                        true,
                         microsteps,
                         solver_substeps,
                         &bodies,
@@ -1315,8 +1356,7 @@ impl RigidSimulation {
                         targeted_indices,
                     )?;
                 } else {
-                    // Preserve export arithmetic/order byte-for-byte: in
-                    // particular subtract the accepted remainder as before.
+                    // Explicit fixed-tick workers retain their recording schedule.
                     let microstep_time = TICK / microsteps as f64;
                 let mut tick_remaining = TICK;
                 for microstep in 1..=microsteps {
@@ -1365,13 +1405,19 @@ impl RigidSimulation {
             })();
             // Delivery records survive a failed native step too. Starting a
             // tick consumes its inputs, but does not assert successful physics.
-            self.finish_impulse_tick();
+            if accepted_interval.is_some() {
+                // Interval receipts were recorded at begin_interval, including
+                // failed native delivery; scratch must not append them twice.
+                self.impulse_tick_events.clear();
+            } else {
+                self.finish_impulse_tick();
+            }
             if let Err(error) = result {
                 self.impulse_failure = Some(error.clone());
                 return Err(error);
             }
         }
-        self.pending_time = if accepted_interval.is_some() {
+        self.pending_time = if accepted_interval.is_some() || export_frame.is_some() {
             Seconds::ZERO
         } else {
             Seconds((due_steps - completed) as f64 * TICK)
@@ -1394,7 +1440,9 @@ impl RigidSimulation {
             self.last_overload_warning = Some(std::time::Instant::now());
         }
         // Live accepted spans finish here; bounded fixed workers retain their remainder.
-        self.accumulator = if accepted_interval.is_some() {
+        self.accumulator = if export_frame.is_some() {
+            (self.authored_time - self.physics_time).max(0.0)
+        } else if accepted_interval.is_some() {
             0.0
         } else {
             (accumulated - completed as f64 * TICK).max(0.0)
@@ -1497,6 +1545,8 @@ impl RigidSimulation {
         exchange: &mut E,
         start: f64,
         end: f64,
+        frame_remaining: &mut f64,
+        final_segment: bool,
         microsteps: usize,
         _solver_substeps: u32,
         bodies: &[Option<RigidBody>; MAX_BODIES],
@@ -1509,7 +1559,7 @@ impl RigidSimulation {
             return Ok(());
         }
         let microstep_time = duration / microsteps as f64;
-        let mut elapsed = 0.0;
+        let mut segment_remaining = if final_segment { *frame_remaining } else { duration };
         for microstep in 1..=microsteps {
             let target_time = start
                 + if microstep == microsteps {
@@ -1517,11 +1567,7 @@ impl RigidSimulation {
                 } else {
                     microstep_time * microstep as f64
                 };
-            let mut remaining = if microstep == microsteps {
-                duration - elapsed
-            } else {
-                microstep_time
-            };
+            let mut remaining = if microstep == microsteps { segment_remaining } else { microstep_time };
             while remaining > 0.0 {
                 self.prepare_substep(
                     bodies,
@@ -1549,7 +1595,8 @@ impl RigidSimulation {
                     .step(accepted, box3d_substep_count(accepted).value)
                     .map_err(|error| error.to_string())?;
                 remaining -= accepted.0;
-                elapsed += accepted.0;
+                segment_remaining -= accepted.0;
+                *frame_remaining -= accepted.0;
             }
         }
         Ok(())
@@ -4262,6 +4309,26 @@ mod tests {
             }
             assert_eq!(simulation.pending_time, Seconds::ZERO, "fps={fps}");
             assert!((simulation.physics_time - 1.0).abs() < 1e-12, "fps={fps}");
+        }
+    }
+
+    #[test]
+    fn export_rigid_matches_live_at_project_rate() {
+        for project_fps in [24, 60] {
+            let run = |fps, offline| {
+                let _scope = PhysicsStepScope::for_project_rate(offline, project_fps as f64);
+                let mut simulation = RigidSimulation::default();
+                let bodies = one_body([0.0, 4.0, 0.0]);
+                for frame in 0..=fps {
+                    simulation.advance(bodies.clone(), GRAVITY,
+                        Seconds(frame as f64 * (1.0 / fps as f64)), 1.0, 0.0).unwrap();
+                }
+                (simulation.physics_time, simulation.poses)
+            };
+            let live = run(project_fps, false);
+            for fps in [20, 24, 30, 60] {
+                assert_eq!(run(fps, true), live, "project {project_fps}, export {fps}");
+            }
         }
     }
 

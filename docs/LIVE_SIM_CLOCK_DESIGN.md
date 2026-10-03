@@ -6,7 +6,7 @@
 
 <!-- index: GPU FLIP timing audit, transport-locked live intervals, timestamped hits, reference-engine CFL rule, Box3D substeps and editor HUD lag; shared runtime intervals, duration-aware whitewater and completed-time HUD plumbing; lead GPU verification pending. -->
 
-Peter's ruling: “live sims are never in slow motion.” “When a frame owes more ticks than its live budget, run the budgeted steps with each covering more time, so sim time stays locked to the transport.” “Export keeps exact fixed 60 Hz ticks.” “A hit (audio or force trigger) that falls inside a stretched step still applies at its own moment.” Live water may take a different numerical trajectory from export, but cannot silently lose seconds. Authored Simulation Speed remains intentional time scaling.
+Peter's ruling: “live sims are never in slow motion.” “When a frame owes more ticks than its live budget, run the budgeted steps with each covering more time, so sim time stays locked to the transport.” “A hit (audio or force trigger) that falls inside a stretched step still applies at its own moment.” Live water cannot silently lose seconds. Authored Simulation Speed remains intentional time scaling.
 
 Scope is **every live physics consumer**: GPU FLIP and whitewater, MPM, coupled and uncoupled Box3D, CPU FLIP, and stateless particle steps. The binding constraints are timing correctness, no per-frame allocation or blocking readback, and existing content-thread ownership. This groundwork adds no serialized project state, commands, identities, locks, threads or channels.
 
@@ -34,10 +34,10 @@ Initial P1 snapshot: slot-1, `feat/live-sim-clock`, base `cbb4be66f`. Execution 
 | Pressure solver | `node_graph/primitives/shaders/gpu_flip_pressure.wgsl:1`; `node_graph/primitives/gpu_flip_step.rs:1513` | Exists. Scaled pressure, no separate fixed tick literal; density source supplies inverse duration. Prove dimensional units under variable dt. |
 | Solid distance at end pose | `node_graph/primitives/liquid_solid_distance.rs:72`, `:118`; `node_graph/primitives/shaders/liquid_solid_distance_body.wgsl:35`, `:66` | Exists. Rust defaults to TICK; WGSL translates/rotates by tick_seconds. Wire actual pose offset. |
 | Whitewater orchestration | `node_graph/primitives/whitewater_step.rs:297`, `:791`, `:805`, `:988`, `:1039`, `:1057`, `:1068`, `:1092` | Exists. Emits once per frame scaled by ticks, runs lifecycle once per tick with dt=TICK. Emission/advection/age/preserve need accepted durations and corresponding liquid state. |
-| Hidden whitewater fixed durations | `node_graph/primitives/shaders/emission_count_body.wgsl:10`, `:29`, `:33`; `node_graph/primitives/shaders/spawn_whitewater_body.wgsl:19`, `:197` | Exists. EC_TICK sets emission rate, rounded per tick then multiplied by ticks. SW_TICK sets spawn-cylinder travel. Both need explicit dt; export must retain per-tick rounding order. |
+| Hidden whitewater fixed durations | `node_graph/primitives/shaders/emission_count_body.wgsl:10`, `:29`, `:33`; `node_graph/primitives/shaders/spawn_whitewater_body.wgsl:19`, `:197` | Exists. EC_TICK sets emission rate, rounded per tick then multiplied by ticks. SW_TICK sets spawn-cylinder travel. Both need explicit dt. |
 | Whitewater duration-aware atoms | `node_graph/primitives/advect_whitewater.rs:92`, `:132`; `node_graph/primitives/age_whitewater.rs:46`, `:80`; `node_graph/primitives/shaders/advect_whitewater_body.wgsl:149`, `:187`, `:191`, `:196`, `:254`, `:256`; `node_graph/primitives/shaders/age_whitewater_body.wgsl:12`, `:22` | Exists. dt inputs already exist, Rust defaults to 1/60. Preserve receives dt at whitewater_step:1092. Per-update drag/blend/probability still need proofs. |
 | Foam preservation | `node_graph/primitives/preserve_foam.rs:64`, `:128`; `node_graph/primitives/shaders/preserve_foam_body.wgsl:46`, `:83` | Exists. Rust defaults dt to 1/60; shader increases lifetime by rate × density factor × dt. Supply accepted duration. |
-| Whitewater CPU oracles | `node_graph/primitives/whitewater_particle_cpu.rs:319`, `:414`; `node_graph/primitives/whitewater_pool_cpu.rs:50`, `:423`, `:449` | Exists. Spawn/emission use literal 60; lifecycle defaults use fixed dt. Parameterize live oracles alongside WGSL; retain fixed export fixtures. |
+| Whitewater CPU oracles | `node_graph/primitives/whitewater_particle_cpu.rs:319`, `:414`; `node_graph/primitives/whitewater_pool_cpu.rs:50`, `:423`, `:449` | Exists. Spawn/emission use literal 60; lifecycle defaults use fixed dt. Parameterize live oracles alongside WGSL. |
 | Display publication and ring | `node_graph/primitives/liquid_frame.rs:114`, `:147`, `:211`, `:216`; `node_graph/liquid/frame_ring.rs:42`, `:77`, `:117` | Exists. Timestamped frames already interpolate unequal spacing. Retire to actual completed time, never new interval count × TICK. |
 | Existing HUD | repo `crates/manifold-app/src/content_state.rs:133`, `crates/manifold-app/src/app_render.rs:3201`, `:3209`, `crates/manifold-ui/src/panels/perf_hud.rs:42`, `:186`, `:237` | Exists. Snapshot/PerfMetrics have physics_backlog_seconds; row displays seconds. Extend coverage and display “sim behind by X ms”. BUG-az3 records that the editor's own HUD never ticks. |
 | CPU specification | `live_sim_clock_reference.rs` (Clock, Frame, Step, cfl_step) | Genuinely new, test-only. Reuses typed Seconds and compares unaffected behaviour against LiquidClock; no runtime alternate path. |
@@ -46,7 +46,7 @@ Re-derive with `rg -n 'TICK|FIXED_TICK|60\.0|tick_seconds|step_dt|simulation_tim
 
 ## 2. Decisions
 
-**D1 — No discarded time.** Apply the existing Speed anchors, then accept the complete observed live interval, including spans shorter than one nominal tick. One sequence identifies that interval; it does not measure elapsed time. Export retains its exact nominal tick sequence. CFL selects numerical subdivisions; the last allowed FLIP substep takes the entire remainder. Event boundaries split that accepted substep without spending another numerical step. Rejected: dropped-time reanchoring and capped fixed-tick debt bursts, both of which retime the show.
+**D1 — No discarded time.** Apply the existing Speed anchors, then accept the complete observed live interval, including spans shorter than one nominal tick. One sequence identifies that interval; it does not measure elapsed time. CFL selects numerical subdivisions; the last allowed FLIP substep takes the entire remainder. Event boundaries split that accepted substep without spending another numerical step. Rejected: dropped-time reanchoring and capped fixed-tick debt bursts, both of which retime the show.
 
 **D2 — Budget counts outer intervals.** Event and CFL boundaries can require additional numerical subdivisions. “B long kernels with no splits” is forbidden: it cannot preserve both hit moments and stability. **Consequences, stated honestly:** outer budget does not prove bounded wall time. The numerical cap follows section 8: its last allowed substep consumes the remainder; hit splits remain mandatory.
 
@@ -54,15 +54,17 @@ Re-derive with `rg -n 'TICK|FIXED_TICK|60\.0|tick_seconds|step_dt|simulation_tim
 
 **D4 — Preserve control semantics.** Reset counter changes (undo included), setup changes, explicit restart and backward seek reseed once. Pause retains epoch and water. Speed edits affect the interval after observation; Speed 0 marks input held but can complete the preceding interval at its previous speed, as LiquidClock does. Beats remain transport authority; Seconds belong at the sim seam. No serialization changes.
 
-**D5 — Port CFL, do not invent it.** Use section 4's reference rule. Existing travel_cells sizes the spatial halo after dt selection; it is not a replacement timestep heuristic. Export retains fixed outer ticks and existing solver settings/ordering; adaptive live stepping must not silently retune export.
+**D5 — Port CFL, do not invent it.** Use section 4's reference rule. Existing travel_cells sizes the spatial halo after dt selection; it is not a replacement timestep heuristic.
 
 **D6 — Lag uses completed time.** Lag=max(target−completed,0), in ms. Successfully stretched time is not lag, and is never subtracted from target. Submitted GPU time is not completed time. Display delay and audio-analysis latency are separate.
+
+**D7 — Export schedule (Peter, 2026-10-03, BUG-7qzk).** Export partitions transport into complete intervals of `1 / project frame rate`, independent of output fps, and samples the simulation reached at each export frame. Each interval uses the same CFL rule, authored minimum, maximum-substep cap and final-step remainder as one full-rate live frame. No wall-clock input participates. Thus a 24 fps export of a 60 fps project runs 60 project intervals per transport second. Live remains one interval per observed display frame. The original fixed-60-Hz export contract and its bit-preservation tests are retired.
 
 ## 3. Clock, events and ownership
 
 `manifold_physics::clock::SimulationClock` owns transport/Speed anchors, epochs and accepted `ClockFrame` intervals. `manifold_physics::stepping` owns `FramePlan`, `StepInterval`, CFL/minimum/final-cap scheduling, event traversal and completion receipts. Numerical helpers return `LiveStepOutcome<T>`: a defined value plus an advisory diagnostic, never a live-frame stopping `Err`. Stateless particle consumers use the physics duration adapter on the playback-owned delta.
 
-Live ordinals identify accepted work; export ordinals retain their original nominal tick meaning. Authored samples and pose velocities use accepted interval boundaries. `EventQueue::begin_interval` delivers original source timestamps in half-open intervals; fixed `begin_tick` remains the export path. GPU scheduling consumes current-state maxima directly in encoder order. Fenced state readbacks carry completion endpoints and cap/error flags; submission alone never establishes completion. Coupled rigid settlement uses the fluid interval stored in `PendingTick`.
+Ordinals identify accepted work in both modes. Authored samples and pose velocities use accepted interval boundaries. `EventQueue::begin_interval` delivers original source timestamps in half-open intervals. GPU scheduling consumes current-state maxima directly in encoder order. Fenced state readbacks carry completion endpoints and cap/error flags; submission alone never establishes completion. Coupled rigid settlement uses the fluid interval stored in `PendingTick`.
 
 The test-only `live_sim_clock_reference.rs` remains a CPU specification oracle. It is not a second runtime clock. GPU FLIP retains the reference maximum of six numerical steps even if authored Steps requests a larger minimum; the native final-step rule then owns the remainder.
 
@@ -86,7 +88,7 @@ Live integration chooses the earliest CFL, event or interval endpoint, advances 
 
 Each segment carries step_dt, elapsed pose offset and event metadata. Density rate stays 1/step_dt; pressure coupling retains scaled impulse units. Gravity, forces, body/source motion and RK3 use the same duration. Splitting never reapplies an impulse. Current step_in_tick==0 reset/seed logic must distinguish interval-start from event-start. Adaptive counts beyond 64 need non-aliasing seed progression.
 
-Whitewater rates/spawn travel consume durations; lifecycle ages/advects/preserves over accepted time against the corresponding liquid state. Preserve export's nominal-tick rounding and generation order. Live time/event equality does not imply equal particle counts or trajectories across fps. PIC/FLIP blend, bubble drag, foam preservation and pressure tolerances need small CPU value proofs; dt plumbing alone is not a fluid-quality proof.
+Whitewater rates/spawn travel consume durations; lifecycle ages/advects/preserves over accepted time against the corresponding liquid state. Live time/event equality does not imply equal particle counts or trajectories across fps. PIC/FLIP blend, bubble drag, foam preservation and pressure tolerances need small CPU value proofs; dt plumbing alone is not a fluid-quality proof.
 
 Box3D already accepts longer steps. For segment duration d, use `subStepCount=max(4,ceil(4*d/TICK))`, keeping internal resolution at most TICK/4. Retain animation/collision microstep boundaries, split at hits before PhysicsWorld::step, integrate the reaction over the same interval and apply it once. Both solvers must accept the endpoint before publication. No second fixed accumulator for the coupled pair.
 
@@ -102,13 +104,13 @@ P4 resolves BUG-az3: feed metrics and explicitly tick/push the editor's own HUD 
 |---|---|
 | Equal time at 20/24/30/60 fps and budgets 1/2/3 | `live_sim_clock_same_time_at_20_24_30_60_fps` |
 | Interior hits, ties and end boundaries apply at their moments | `live_sim_clock_hits_land_inside_long_steps` checks impulse-driven displacement |
-| Export exact ticks independent of live budget | `live_sim_clock_export_unchanged` compares values with LiquidClock |
+| Export schedule matches full-rate live | `export_matches_live_project_intervals_and_cfl_steps` compares interval and CFL step sequences at multiple project and export rates |
 | Pause, Speed, seeks, reset/setup/explicit restart | `live_sim_clock_pause_seek_speed_reset_match_today`, `live_sim_clock_pause_resume_same_epoch` |
 | Blocked target/debt retained, then stretched catch-up | `live_sim_clock_blocked_retains_debt_then_stretches` |
 | Reference CFL epsilon/ceil/restrictions | `live_sim_clock_cfl_reference_rule` |
 | Submitted is not completed; coupled receipts/endpoints agree | `live_interval_completion_receipts`, `live_interval_coupled_endpoints`; lead GPU conformance still required |
 | Main/editor HUD consumes content lag, cap and error flags | `content_snapshot_updates_main_and_editor_huds_then_holds_when_paused`; rendered observation remains lead-owned |
-| Live runtime clock is shared; export retains exact arithmetic | Physics clock/particle tests, native owner-frame bit comparisons, fixed rigid partition tests; lead GPU export proof still required |
+| Runtime clock and scheduling settings are shared | Physics clock/particle tests and native interval proofs; lead GPU export proof still required |
 
 ## 6. Phasing
 
@@ -126,7 +128,7 @@ P4 resolves BUG-az3: feed metrics and explicitly tick/push the editor's own HUD 
 
 ### P3 — One accepted interval through GPU FLIP and coupled Box3D
 
-**Entry/read-back:** P2 full seam brief/proofs green, blockers resolved; reread all timing consumers from fresh anchors. Restate duration/endpoint mappings, event consumption and export contract. **Deliverables:** shared plans, variable GPU steps, event splits, whitewater durations, longer Box3D steps/substeps, completion receipts and affected contract updates; CPU tests named `live_interval_completion_receipts`, `live_interval_coupled_endpoints`, `live_interval_whitewater_duration`, `live_interval_export_fixed`, plus GPU value proofs. **Gate:** focused check/clippy/CPU tests; Codex compiles GPU proofs only with `cargo test -p manifold-renderer --no-run --features gpu-proofs`; lead runs scoped scripts/gpu_proofs_gate.py. P2 freezes exact commands and filters before dispatch. **Negative gate:** no TICK-derived elapsed time or dropped-target path on migrated live GPU FLIP sites; Matter, CPU FLIP, particles and uncoupled Box3D share the duration contract. **Demo:** bounded lead-run coupled-water timing trace at 20/24/30/60 fps, numeric target/completed/event comparisons plus Peter's observation (L2 target). **Forbidden:** app/GPU exploration by this lane, dropped time, fixed-only fallback, batch-applied interior hits, ordinal×TICK completion. No serialized changes; retain fixed export fixtures.
+**Entry/read-back:** P2 full seam brief/proofs green, blockers resolved; reread all timing consumers from fresh anchors. Restate duration/endpoint mappings, event consumption and export contract. **Deliverables:** shared plans, variable GPU steps, event splits, whitewater durations, longer Box3D steps/substeps, completion receipts and affected contract updates; CPU tests named `live_interval_completion_receipts`, `live_interval_coupled_endpoints`, `live_interval_whitewater_duration`, `export_matches_live_project_intervals_and_cfl_steps`, plus GPU value proofs. **Gate:** focused check/clippy/CPU tests; Codex compiles GPU proofs only with `cargo test -p manifold-renderer --no-run --features gpu-proofs`; lead runs scoped scripts/gpu_proofs_gate.py. P2 freezes exact commands and filters before dispatch. **Negative gate:** no TICK-derived elapsed time or dropped-target path on migrated live GPU FLIP sites; Matter, CPU FLIP, particles and uncoupled Box3D share the duration contract. **Demo:** bounded lead-run coupled-water timing trace at 20/24/30/60 fps, numeric target/completed/event comparisons plus Peter's observation (L2 target). **Forbidden:** app/GPU exploration by this lane, dropped time, fixed-only fallback, batch-applied interior hits, ordinal×TICK completion. No serialized changes.
 
 **Phase note (2026-10-03):** The checkpoint evidence is historical. Current runtime changes and verification obligations are in section 9.
 
@@ -139,7 +141,7 @@ P4 resolves BUG-az3: feed metrics and explicitly tick/push the editor's own HUD 
 ## 7. Decided — do not reopen
 
 1. Live covers owed time with longer budgeted outer intervals; never dropped-time reanchoring.
-2. Export retains exact 60 Hz ticks and solver settings/ordering.
+2. Export follows D7.
 3. Hits split at their own moments, including multiple moments per frame.
 4. Port reference CFL; Box3D uses longer steps with more substeps.
 5. Preserve Speed/pause/epoch rules; scheduling delay is not authored slow motion.
@@ -150,22 +152,22 @@ P4 resolves BUG-az3: feed metrics and explicitly tick/push the editor's own HUD 
 
 **Peter's ruling, 2026-10-03 — binding for P1–P4:** live simulations never run in unintended slow motion, discard time, crash, panic, stop or freeze the show. Simulation time stays locked to transport (with authored Simulation Speed). CFL and hit boundaries may require more work than the live outer budget: execute the work and let the frame run long. The perf HUD reports completed-time lag and clearly warns whenever the frame hits its numerical substep cap.
 
-Port the internal FLIP Fluids `nextUpdateTimeStep` rule exactly: when `_currentFrameTimeStepNumber == _maxFrameTimeSteps - 1`, that final numerical substep takes **all remaining frame time**, even when this bends CFL. Never port the externally-stepped cap-exhaustion throw to live. Hits inside that final stretched step still split integration at their own timestamps; event boundaries do not discard its remainder. Port `_getMarkerParticleSpeedLimit` including MANIFOLD's final `max(maxspeed, _maxFrameTimeSteps * speedLimitStep)`: a relative outlier that fits the configured frame's CFL/substep allowance must survive. Only genuinely non-finite state may report a numerical error, and the show must continue with the HUD reporting it. Export remains exact fixed 60 Hz outer ticks and keeps its ordering/settings.
+Port the internal FLIP Fluids `nextUpdateTimeStep` rule exactly: when `_currentFrameTimeStepNumber == _maxFrameTimeSteps - 1`, that final numerical substep takes **all remaining frame time**, even when this bends CFL. Never port the externally-stepped cap-exhaustion throw to live. Hits inside that final stretched step still split integration at their own timestamps; event boundaries do not discard its remainder. Port `_getMarkerParticleSpeedLimit` including MANIFOLD's final `max(maxspeed, _maxFrameTimeSteps * speedLimitStep)`: a relative outlier that fits the configured frame's CFL/substep allowance must survive. Only genuinely non-finite state may report a numerical error, and the show must continue with the HUD reporting it.
 
 **Maxima decision — GPU-local current-state reduction:** reduce current marker velocities and eligible obstacle point velocities immediately before GPU timestep selection, in encoder order. First frame/first substep uses source-speed prediction plus constant-force acceleration over the frame, as the reference does. The result stays in GPU storage; the timestep scheduler consumes it there. Neither Top Speed nor last-frame readback substitutes for current maxima. Existing completion fences may retire diagnostic flags/endpoints; they must never stall the content thread to fetch a CFL maximum. The exact storage/consumer seam and value tests are recorded in P2 below as they are implemented.
 
-**Included by Peter’s follow-up:** CPU fluids, Matter, particles and uncoupled Box3D adopt the common contract. Audio-analysis latency is separate. Live/export trajectory or bitwise equality is not promised. GPU/visual execution belongs to the lead. No serialized project-format change or new quality control is authorized.
+**Included by Peter’s follow-up:** CPU fluids, Matter, particles and uncoupled Box3D adopt the common contract. Audio-analysis latency is separate. Loaded live playback can still differ from a full-project-rate run. GPU/visual execution belongs to the lead. No serialized project-format change or new quality control is authorized.
 
 
 ## 9. Current implementation seam and outstanding work
 
 The unreviewed checkpoint `f2f561574` was incomplete: its scheduler was test-only, LiquidClock still dropped time, coupled Box3D retained fixed-tick debt, and cap telemetry had no runtime producer. The slot-1 follow-up at base `320a29848` replaces those paths. GPU proof execution remains a lead obligation; a compile is not behavioral evidence.
 
-Production changes use the shared physics clock, accepted native CPU/Box3D intervals, GPU current-state scheduling, timestamped impulse lattices, actual body sample durations, and retired completion/status readbacks. Existing graphs receive explicit duration/status wires during graph installation. Fixed export branches preserve original arithmetic and iteration order. No project-format fields, locks or channels were added.
+Production changes use the shared physics clock, accepted native CPU/Box3D intervals, GPU current-state scheduling, timestamped impulse lattices, actual body sample durations, and retired completion/status readbacks. Existing graphs receive explicit duration/status wires during graph installation. Retired fixed-export branches are removed from the clock and GPU scheduler. No project-format fields, locks or channels were added.
 
 P4 uses the shared `perf_metrics_from_content_state` builder for main and editor HUDs. The CPU flow test starts from `ContentState`, updates both UI roots, and checks play/pause, lag, cap and nonfinite flags. It does not claim an observed Metal-backed editor render.
 
-Focused clippy with tests and `-D warnings` passes for `manifold-physics`, `manifold-fluids`, `manifold-renderer` and `manifold-app`. CPU checks pass for the shared clock/scheduler/events/particle durations, native FLIP, renderer fluid/liquid/rigid/Matter modules, reference scheduler, graph wiring, WGSL validation and the content-to-HUD flow. These include live 20/24/30/60 fps endpoints, full cap-hit spans and strict fixed-export arithmetic/partition comparisons. The cache-reader test requires `RUST_MIN_STACK=8388608`; it overflowed the default test-thread stack. Both GPU-proof targets compiled with `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 RUSTC_WRAPPER= cargo test -p manifold-renderer --features gpu-proofs --no-run --lib --test gpu_proofs`. No GPU test or app was run by this lane, so GPU export bits and rendered behaviour are not verified here.
+At the P1–P4 checkpoint, focused clippy with tests and `-D warnings` passed for `manifold-physics`, `manifold-fluids`, `manifold-renderer` and `manifold-app`. Checkpoint CPU checks passed for the shared clock/scheduler/events/particle durations, native FLIP, renderer fluid/liquid/rigid/Matter modules, reference scheduler, graph wiring, WGSL validation and the content-to-HUD flow. Those checkpoint checks covered live 20/24/30/60 fps endpoints and full cap-hit spans; the export contract was subsequently replaced by D7. The cache-reader test requires `RUST_MIN_STACK=8388608`; it overflowed the default test-thread stack. Both GPU-proof targets compiled with `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 RUSTC_WRAPPER= cargo test -p manifold-renderer --features gpu-proofs --no-run --lib --test gpu_proofs`. No GPU test or app was run by this lane, so GPU trajectory equality and rendered behaviour are not verified here.
 
 No whole files are established as redundant. `liquid/clock.rs` is now a small compatibility adapter; `live_sim_clock_reference.rs` is a test oracle. Neither is deleted. The obsolete live time-drop and debt-burst policies are replaced in code.
 
@@ -175,14 +177,11 @@ The scoped GPU gate (includes the fixed smoke set) is the lead's landing check:
 RUST_MIN_STACK=8388608 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 RUSTC_WRAPPER= python3 scripts/gpu_proofs_gate.py --base 320a29848 --budget 360
 ```
 
-For individual review of the new seams, run these from slot-1 one at a time; passed checks need not be repeated:
+The lead can verify the merged clock and project-rate export seams in one queued GPU run (no GPU execution is available in the worker sandbox):
 
 ```sh
-CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 RUSTC_WRAPPER= python3 scripts/gpu_queue.py --label live-clock-p2 -- cargo test -p manifold-renderer --features gpu-proofs --lib gpu_flip_clock::gpu_tests:: -- --test-threads=1
-CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 RUSTC_WRAPPER= python3 scripts/gpu_queue.py --label live-clock-p3 -- cargo test -p manifold-renderer --features gpu-proofs --lib whitewater_particle_tests:: -- --test-threads=1
-CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 RUSTC_WRAPPER= python3 scripts/gpu_queue.py --label live-clock-coupled -- cargo test -p manifold-renderer --features gpu-proofs --test gpu_proofs liquid_conformance::liquid_coupled_live_frame_rate -- --test-threads=1
-CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 RUSTC_WRAPPER= python3 scripts/gpu_queue.py --label live-clock-export -- cargo test -p manifold-renderer --features gpu-proofs --test gpu_proofs liquid_conformance::liquid_export_frame_rate_independent -- --test-threads=1
-CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 RUSTC_WRAPPER= python3 scripts/gpu_queue.py --label live-clock-recovery -- cargo test -p manifold-renderer --features gpu-proofs --test gpu_proofs liquid_conformance::liquid_nonfinite -- --test-threads=1
+cd '/Users/peterkiemann/MANIFOLD - Rust/.claude/worktrees/slot-1'
+RUST_MIN_STACK=8388608 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4 RUSTC_WRAPPER= python3 scripts/gpu_queue.py --label live-clock-export -- cargo test -p manifold-renderer --features gpu-proofs --lib --test gpu_proofs -- gpu_flip_clock::gpu_tests:: liquid_conformance::liquid_export_matches_live_project_schedule liquid_conformance::liquid_coupled_live_frame_rate liquid_conformance::liquid_nonfinite --test-threads=1
 ```
 
 For the remaining editor visual observation:
@@ -192,4 +191,4 @@ cd '/Users/peterkiemann/MANIFOLD - Rust/.claude/worktrees/slot-1'
 CARGO_BUILD_JOBS=4 RUSTC_WRAPPER= python3 scripts/gpu_queue.py --label live-clock-editor -- cargo run -p manifold-app
 ```
 
-No commit, push or file deletion is authorized for this lane. The lead retains the active slot for review and landing.
+No commit or push is authorized for this lane. The lead retains the active slot for review and landing.

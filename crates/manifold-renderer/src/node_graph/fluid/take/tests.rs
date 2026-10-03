@@ -156,6 +156,7 @@ pub(in crate::node_graph::fluid) fn request() -> Request {
             .unwrap();
     }
     request.count = 6;
+    request.interval = None;
     request
 }
 

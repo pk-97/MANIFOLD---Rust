@@ -472,7 +472,7 @@ impl Exchange<'_> {
                 delta_velocity: 1.0,
             },
         ];
-        let field_duration = if include_impulses {
+        let field_duration = if include_impulses || self.live_active_events == self.live_impulses.len() {
             duration
         } else {
             Seconds(segment_duration.0.min(duration.0))
@@ -491,25 +491,11 @@ impl SubstepExchange for Exchange<'_> {
     fn next_substep(&mut self, rigid: &PhysicsWorld, maximum: Seconds) -> Result<Seconds, String> {
         let maximum = if let Some(interval) = self.live_interval {
             if !self.live_fields_prepared {
-                self.set_live_fields(
-                    Seconds(
-                        self.live_impulses
-                            .get(self.live_active_events)
-                            .map_or(interval.end.0, |event| {
-                                event.source.time.0.min(interval.end.0)
-                            })
-                            - self.live_current.0,
-                    ),
-                    false,
-                )?;
+                self.set_live_fields(maximum, false)?;
             }
-            let event_end = self
-                .live_impulses
-                .get(self.live_active_events)
-                .map_or(interval.end.0, |event| {
-                    event.source.time.0.min(interval.end.0)
-                });
-            Seconds(maximum.0.min((event_end - self.live_current.0).max(0.0)))
+            self.live_impulses.get(self.live_active_events).map_or(maximum, |event| {
+                Seconds(maximum.0.min((event.source.time.0.min(interval.end.0) - self.live_current.0).max(0.0)))
+            })
         } else {
             maximum
         };

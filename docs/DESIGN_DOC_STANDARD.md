@@ -286,7 +286,7 @@ Any phase that changes an existing API includes a seam brief:
 
 - **Old → new, written out.** The actual before/after signatures and the field/call
   mapping. "Replace X with Y" without both shapes is not a seam brief.
-- **Call-site inventory, done at design time.** The rg/LSP sweep results in the doc:
+- **Call-site inventory, done at design time.** The rg/ast-grep sweep results in the doc:
   file:line list, count, sorted into *mechanical rewrite* (with one worked example
   per category) vs *needs the new pattern* (each individually specified). Plus the
   **re-derivation command** and the rule: *re-run it at execution time; if the count

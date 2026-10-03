@@ -229,7 +229,6 @@ impl Run {
     /// The force hook: the domain's uniform acceleration (Gravity X and Y),
     /// m/s², from the next frame on. A uniform force field and gravity enter
     /// the step identically, at every face.
-    #[cfg(feature = "water-race-probes")]
     pub(super) fn set_gravity(&mut self, x: f64, y: f64) {
         let domain = node_named(&self.graph, "domain");
         self.graph.set_param(domain, "gravity_x", crate::node_graph::ParamValue::Float(x as f32)).expect("gravity_x");
@@ -454,6 +453,7 @@ fn gpu_flip_still_pool() {
     let mut fastest = Vec::new();
     for frame in 0..120 {
         run.frame();
+        println!("GPU FLIP still pool frame {frame:3}: dry floor holes {}", run.liquid_stats().dry_floor_cells);
         if frame % 10 == 9 {
             let stats = particle_stats(&run.particles());
             let (rms, max) = divergence(&run.faces(), &run.water(), run.n(), scene.cell_size());
@@ -1187,8 +1187,8 @@ fn lid_pressed_into_pool(mask: u32) -> (f64, f64, f64) {
         run.frame();
         let stats = run.liquid_stats();
         println!(
-            "GPU FLIP pressed lid mask {mask} frame {frame:2}: {} live, {} pressure iterations, {} density, {} unconverged, {} unresolved, {:.3e}/{:.3e} m³/s removed from sealed pressure/density",
-            stats.live, stats.pressure_iterations, stats.density_iterations, stats.unconverged, stats.unresolved_pockets, stats.pressure_flux_removed, stats.density_flux_removed
+            "GPU FLIP pressed lid mask {mask} frame {frame:2}: dry floor holes {}, {} live, {} pressure iterations, {} density, {} unconverged, {} unresolved, {:.3e}/{:.3e} m³/s removed from sealed pressure/density, dry/sealed/air cells {:?}, first air seed {:?} (dry neighbour phi/h {:.3}, particles {})",
+            stats.dry_floor_cells, stats.live, stats.pressure_iterations, stats.density_iterations, stats.unconverged, stats.unresolved_pockets, stats.pressure_flux_removed, stats.density_flux_removed, stats.pocket_cells, stats.first_air_seed, f32::from_bits(stats.first_air_seed[4]) as f64 / h, stats.first_air_seed[5]
         );
         removed += f64::from(stats.pressure_flux_removed);
         let half = (0.5 * side) as f32;

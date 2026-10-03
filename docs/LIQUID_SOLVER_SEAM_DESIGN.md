@@ -104,7 +104,7 @@ Survey: `rg 'purpose: "' crates/manifold-renderer/src/node_graph/primitives/ -g 
 The surface design's section 3 (The particle-frame contract) stands: 32-byte `FluidParticle` (`R/fluid_particles.rs:12`), ports `particles_a/b`, `count_a/b`, `identity_a/b`, `solid_a/b`, `grid_bounds`, `grid_nodes_x/y/z`, `blend`, `span`, display one tick behind (s = target − tick). Amendments:
 
 1. A producer publishes through a frame node (`node.matter_frame`, `node.liquid_frame`), never raw solver state. The frame node owns the A/B ring (`R/liquid/frame_ring.rs`) and holds while the clock is held.
-2. A tick with any non-finite position or velocity is never published. The stats node flags it; the frame keeps the last good tick and the domain shows a named error. The partial BUG-7qzk implementation reseeds live GPU FLIP particles on the next retired fault without resetting its epoch/time; offline and other solver fault policy remains unchanged. The lead must run `liquid_nonfinite_live_flip_reseeds_without_stopping_clock` before this recovery is considered verified (see LIVE_SIM_CLOCK_DESIGN.md section 9).
+2. A tick with any non-finite position or velocity is never published. The stats node flags it; the frame keeps the last good tick and the domain shows a named error. The partial BUG-7qzk implementation reseeds live GPU FLIP particles on the next retired fault without resetting its epoch/time; offline and other solver fault policy remains unchanged. The lead must run `liquid_nonfinite_live_flip_reseeds_without_stopping_clock` before this recovery is considered verified (see LIVE_SIM_CLOCK_DESIGN.md section 9). Narrow-band reseed capacity shortage (stats word 27) keeps the last good particles, faces and interior and halts until Reset.
 3. `solid_*` comes from `node.liquid_solid_distance`: walls plus every collider role and coupled body. No preset wires a constant.
 4. Records past `count` have radius 0.
 5. Ids are sorted ascending or all 0. A solver that reorders its state each tick (SWASH's bin sort) publishes 0.
@@ -127,7 +127,9 @@ The producer resamples; no consumer sees a native layout:
 - MPM: `node.matter_face_component` averages the four grid nodes around each face centre, after the lattice padding (`R/matter.rs:287`, `:300`).
 - FLIP: no grid (D3).
 
-The surface distance remains a rendering output. GPU FLIP additionally publishes its existing particle distance for per-tick whitewater (BUG-215v). The Liquid Surface group already builds it (`R/primitives/particle_volume.rs:54`: distance to the nearest blob, negative inside, capped at a tenth of a bin outside). The group exports it as `level_set` with `level_set_bounds` and `level_set_nodes_x/y/z`. Whitewater owns the one atom that resamples or re-distances it onto the lattice it needs.
+The visible surface distance remains a rendering output, exported as `level_set` with its bounds and node counts. GPU FLIP also publishes its particle distance for per-tick whitewater (BUG-215v); whitewater owns resampling or re-distancing onto its lattice.
+
+The Ferstl et al. (2016) narrow-band amendment in `GPU_FLIP_NARROW_BAND_DESIGN.md` permits optional solver interior distance because deep liquid has no particles. `gpu_flip_step.interior` holds exactly nx·ny·nz f32 distances in metres, x fastest, at m+(i+½,j+½,k+½)h. `liquid_state.interior_in` captures it beside the tick particles, and `liquid_frame.interior` publishes `interior_a/b` through the same ring indices, epoch, lattice and failed-tick gate. A disabled field is positive everywhere. The mesher accepts optional `interior`, samples the cell-centred lattice and unions the particle field with interior+h before solid/border constraints. Unwired consumers retain their existing particle path; no solver-specific branch is needed. Stats contain 28 words: the 18-word solver tail preserves separating-floor diagnostics at words 17–26 and appends narrow-band reseed shortages at word 27. Coarse solve stage 3 retains its standalone reference-proven boundary scatter and local projection; Solve Level integration remains stage 4.
 
 ### 3.3 Two-way Box3D coupling
 
@@ -281,7 +283,7 @@ pub const FACE_GRID_PORTS: [&str; 7] =
 - Holding a body fixed in an incompressible solve and applying the reaction afterwards.
 - An analytic box clip for solids.
 - Mux-gated step copies to fake pause or Speed.
-- A solver publishing its own distance field.
+- A solver publishing a distance field outside the optional narrow-band interior contract in section 3.2.
 - A consumer that branches on which solver made the grid.
 - `Arc<Mutex>` for a readback.
 - `pub use` aliases for renamed items.

@@ -254,19 +254,14 @@ impl RigidSimulation {
 
         let previous_policy = self.advancement_policy;
         {
-            let queue = self
+            self
                 .impulse_queue
-                .as_mut()
+                .as_ref()
                 .ok_or("Physics worker interval requires an initialized impulse queue")?;
             if !self.impulse_receipts.is_empty() || !self.impulse_tick_events.is_empty() {
                 return Err(
                     "Physics worker cannot start an interval with pending impulse receipts".into(),
                 );
-            }
-            for event in events {
-                queue
-                    .enqueue(event.source, event.value.clone())
-                    .map_err(|error| format!("Physics worker interval impulse: {error}"))?;
             }
         }
         self.advancement_policy = AdvancementPolicy::Worker { max_ticks: 1 };
@@ -283,7 +278,7 @@ impl RigidSimulation {
             0.0,
             inputs.acceleration_field.clone(),
             &inputs.targeted_fields,
-            None,
+            Some(events),
             Some(interval),
             coupling,
         );
@@ -656,7 +651,10 @@ mod tests {
         inputs.acceleration_field = Some(FieldValue::uniform([1.0, 0.0, 0.0]).unwrap());
         let total_time = 3.0 * super::super::FIXED_TICK.0;
 
-        let mut ordinary = RigidSimulation::default();
+        let mut ordinary = RigidSimulation {
+            advancement_policy: AdvancementPolicy::Worker { max_ticks: 3 },
+            ..Default::default()
+        };
         let mut ordinary_coupling = Uncoupled;
         ordinary
             .advance_with_fields(

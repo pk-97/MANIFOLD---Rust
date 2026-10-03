@@ -31,10 +31,10 @@ mod tests {
     }
 
     #[test]
-    fn liquid_clock_export_runs_every_tick() {
+    fn liquid_clock_export_runs_every_project_interval() {
         let mut clock = LiquidClock::default();
         clock.advance(0.0, TICK, 1.0, 0.0, false, true);
-        let frame = clock.advance(1.0, 1.0, 1.0, 0.0, false, true);
+        let frame = clock.advance(1.0, TICK, 1.0, 0.0, false, true);
         assert_eq!(frame.ticks, 60);
         assert_eq!(frame.dropped_seconds, 0.0);
     }
@@ -199,7 +199,7 @@ mod tests {
     fn liquid_clock_restart_starts_a_new_epoch() {
         let mut clock = LiquidClock::default();
         clock.advance(0.0, TICK, 1.0, 0.0, false, true);
-        let played = clock.advance(10.0 * TICK, 10.0 * TICK, 1.0, 0.0, false, true);
+        let played = clock.advance(10.0 * TICK, TICK, 1.0, 0.0, false, true);
         clock.restart();
         let restarted = clock.advance(11.0 * TICK, TICK, 1.0, 0.0, false, true);
         assert!(restarted.restarted);

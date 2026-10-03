@@ -52,7 +52,7 @@ pub struct GpuFlipClockParams {
     pub min_frame_steps: u32,
     pub max_frame_steps: u32,
     pub flags: u32,
-    pub _pad1: u32,
+    pub interval_sequence: u32,
     /// Constant acceleration added to predicted source velocity.
     pub constant_force: [f32; 4],
 }
@@ -783,7 +783,7 @@ mod gpu_tests {
             min_frame_steps: 1,
             max_frame_steps: 6,
             flags: 0,
-            _pad1: 0,
+            interval_sequence: 0,
             constant_force: [0.0; 4],
         }
     }
@@ -1266,10 +1266,13 @@ mod gpu_tests {
         let before_hit = device.create_buffer_shared(32);
         let after_hit = device.create_buffer_shared(32);
         let empty = device.create_buffer_shared(96);
-        let hits = device.create_buffer_shared(16);
+        let hits = device.create_buffer_shared(32);
         let impulses = device.create_buffer_shared(32 * 4);
         let readbacks: Vec<_> = (0..7).map(|_| device.create_buffer_shared(48)).collect();
-        let hit = [0.02_f32, 0.0, 0.0, 0.0];
+        // Another interval's earlier event must neither split this interval
+        // nor contribute to its predicted impulse velocity.
+        let hit = [0.01_f32, 0.0, f32::from_bits(6), 0.0,
+                   0.02_f32, 0.0, f32::from_bits(7), 0.0];
         unsafe {
             hits.write(0, bytemuck::cast_slice(&hit));
             let mut lattice = [0.0_f32; 32];
@@ -1284,6 +1287,7 @@ mod gpu_tests {
             frame_duration: 0.1,
             min_frame_steps: 1,
             max_frame_steps: 6,
+            interval_sequence: 7,
             ..params()
         };
         let mut enc = device.create_encoder("flip-clock live event proof");
@@ -1304,7 +1308,7 @@ mod gpu_tests {
                     source_vertices: &empty,
                     source_count: 0,
                     live_hits: &hits,
-                    live_hit_count: 1,
+                    live_hit_count: 2,
                     event_impulses: &impulses,
                     impulse_stride: 32,
                     impulse_nodes: [2, 2, 2],

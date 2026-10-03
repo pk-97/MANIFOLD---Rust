@@ -544,12 +544,12 @@ fn fluid_coupled_event_late_arrival_waits_for_the_next_worker_batch() {
     let first = requests.recv().unwrap();
     let target = combined_target();
     let assigned = enqueue_scene(&mut runtime, 1, 0.0, target, 1.0);
-    assert_eq!(assigned.tick, 2);
+    assert_eq!(assigned.tick, 1);
     replies
         .send(native.process(first, &runtime.cancel_epoch))
         .unwrap();
     runtime.advance(false).unwrap();
-    assert_eq!(runtime.completed_tick, 2);
+    assert_eq!(runtime.completed_tick, 1);
     let before = runtime.coupled_rigid_frame().unwrap().poses[0].pos[0];
     assert_eq!(runtime.drain_scene_impulses().count(), 0);
     observe(&mut runtime, &fixture, 3.0 * TICK, 0.0, false);
@@ -564,7 +564,7 @@ fn fluid_coupled_event_late_arrival_waits_for_the_next_worker_batch() {
     assert_eq!(receipts.len(), 1);
     assert_eq!(receipts[0].applied, assigned);
     assert_eq!(receipts[0].source.time, Seconds::ZERO);
-    assert_eq!(receipts[0].lateness, Seconds(2.0 * TICK));
+    assert_eq!(receipts[0].lateness, Seconds(TICK));
     assert_eq!(receipts[0].value.target, target);
 }
 

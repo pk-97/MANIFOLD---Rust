@@ -28,6 +28,7 @@ pub mod raytrace;
 mod replay;
 mod retire;
 mod shader_compiler;
+mod spirv_msl_fixup;
 pub mod surface;
 mod texture_pool;
 pub mod defer_drop;

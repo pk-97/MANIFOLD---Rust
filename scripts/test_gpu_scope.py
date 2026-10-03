@@ -34,10 +34,11 @@ class ScopeTests(unittest.TestCase):
 
     def test_narrow_band_isolated_passes_select_their_value_proofs(self):
         for path in (P + "gpu_flip_narrow_band_tests.rs",
+                     P + "gpu_flip_narrow_band.rs",
                      P + "shaders/gpu_flip_narrow_band.wgsl"):
             result = plan([path], users=lambda _: [P + "gpu_flip_narrow_band_tests.rs"],
                           repo=self._repo_with(path))
-            self.assertTrue(set(g.SMOKE_FILTERS + ["gpu_flip_narrow_band_"]) <= set(result.final_filters()))
+            self.assertTrue(set(g.SMOKE_FILTERS + ["narrow_band"]) <= set(result.final_filters()))
             self.assertNotIn("gpu_flip_", result.filters)
             self.assertFalse(result.broad)
             self.assertFalse(result.unmapped)

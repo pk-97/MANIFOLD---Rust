@@ -222,9 +222,9 @@ fn fluid_impulses_busy_handoff_seals_ticks_and_reports_late_delivery() {
     observe(&mut runtime, TICK * 4.0, 0.0);
     runtime.advance(false).unwrap();
     let busy = requests.recv().unwrap();
-    assert_eq!(busy.count, 4);
+    assert_eq!(busy.count, 1);
     let planned = enqueue(&mut runtime, 1, TICK * 0.5, 1.0);
-    assert_eq!(planned.tick, 4, "cannot rewrite the worker-owned batch");
+    assert_eq!(planned.tick, 1, "cannot rewrite the worker-owned interval");
     assert_eq!(runtime.drain_applied_impulses().count(), 0);
     replies.send(completed(busy)).unwrap();
     runtime.advance(false).unwrap();
@@ -242,7 +242,7 @@ fn fluid_impulses_busy_handoff_seals_ticks_and_reports_late_delivery() {
     runtime.advance(false).unwrap();
     let receipt = runtime.drain_applied_impulses().next().unwrap();
     assert_eq!(receipt.applied, planned);
-    assert_eq!(receipt.lateness, Seconds(3.5 * TICK));
+    assert_eq!(receipt.lateness, Seconds(0.5 * TICK));
 }
 
 #[test]
@@ -433,8 +433,12 @@ fn fluid_impulses_move_native_liquid_once_across_substeps_and_batches() {
         let mut runtime = FluidRuntime::default();
         let field = accelerated.then(|| FieldValue::uniform([0.0, -60.0, 0.0]).unwrap());
         runtime
-            .observe_scene_with_field(settings, controls(), &[], field, Seconds::ZERO, 1.0, 0.0)
+            .observe_scene_with_field(settings, controls(), &[], None, Seconds::ZERO, 1.0, 0.0)
             .unwrap();
+        // Native initial volumes seed at the end of their first substep.
+        // Exercise a hit on existing liquid, after that initialization frame.
+        runtime.observe_scene_with_field(settings, controls(), &[], field, Seconds(TICK), 1.0, 0.0).unwrap();
+        runtime.advance(true).unwrap();
         if impulse {
             let epoch = runtime.impulse_epoch().unwrap();
             for (sequence, strength) in [(1, -0.25), (2, -0.75)] {
@@ -442,7 +446,7 @@ fn fluid_impulses_move_native_liquid_once_across_substeps_and_batches() {
                     .enqueue_impulse(
                         EventStamp {
                             epoch,
-                            time: Seconds(TICK * 0.25),
+                            time: Seconds(TICK * 1.25),
                             sequence,
                         },
                         FieldValue::uniform([0.0, strength, 0.0]).unwrap(),
@@ -453,12 +457,12 @@ fn fluid_impulses_move_native_liquid_once_across_substeps_and_batches() {
         // The acceleration reference lasts exactly one outer tick. Subsequent
         // motion is free, so repeated impulses/substep multiplication diverge.
         runtime
-            .observe_scene_with_field(settings, controls(), &[], None, Seconds(TICK), 1.0, 0.0)
+            .observe_scene_with_field(settings, controls(), &[], None, Seconds(2.0 * TICK), 1.0, 0.0)
             .unwrap();
         if !batched {
             runtime.advance(true).unwrap();
         }
-        for tick in 2..=6 {
+        for tick in 3..=7 {
             runtime
                 .observe(settings, controls(), Seconds(tick as f64 * TICK), 1.0, 0.0)
                 .unwrap();
@@ -467,7 +471,7 @@ fn fluid_impulses_move_native_liquid_once_across_substeps_and_batches() {
             }
         }
         runtime.advance(true).unwrap();
-        assert_eq!(runtime.completed_tick, 6);
+        assert_eq!(runtime.completed_tick, 7);
         assert!(!runtime.vertices.is_empty());
         assert_eq!(
             runtime.drain_applied_impulses().count(),

@@ -26,7 +26,7 @@ struct ClockParams {
     min_frame_steps: u32,
     max_frame_steps: u32,
     flags: u32,
-    _pad1: u32,
+    interval_sequence: u32,
     constant_force: vec4<f32>,
 };
 
@@ -386,6 +386,7 @@ fn current_event_index() -> u32 {
     let consumed_valid = (state.event & 0x80000000u) != 0u;
     for (var i = 0u; i < live_hit_count.x; i = i + 1u) {
         let hit = live_hits[i];
+        if (bitcast<u32>(hit.z) != clock.interval_sequence) { continue; }
         if (finite1(hit.x) && hit.x == state.elapsed) {
             let index = bitcast<u32>(hit.y);
             if (!consumed_valid || index != consumed) {
@@ -479,6 +480,7 @@ fn schedule() {
     var next_event = clock.frame_duration + 1.0;
     for (var i = 0u; i < live_hit_count.x; i = i + 1u) {
         let hit = live_hits[i];
+        if (bitcast<u32>(hit.z) != clock.interval_sequence) { continue; }
         if (!finite1(hit.x) || hit.x < 0.0 || hit.x > clock.frame_duration) {
             continue;
         }

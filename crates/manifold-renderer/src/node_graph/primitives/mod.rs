@@ -338,9 +338,12 @@ mod smooth_lattice;
 pub(crate) mod dot_products;
 mod divide_by_value;
 pub(crate) mod gpu_flip_bodies;
+// Standalone staged encoder; the step keeps its existing pressure path.
+pub mod gpu_flip_lentine;
 pub(crate) mod gpu_flip_pressure;
 pub(crate) mod gpu_flip_step;
 pub(crate) mod gpu_flip_clock;
+pub(crate) mod gpu_flip_narrow_band;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_flip_pressure_tests;
 pub(crate) mod liquid_fill;
@@ -412,6 +415,8 @@ mod gpu_flip_narrow_band_tests;
 mod gpu_flip_scene_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_flip_tile_tests;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod gpu_flip_separate_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod whitewater_scene_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]

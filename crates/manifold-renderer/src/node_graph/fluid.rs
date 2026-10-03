@@ -1,5 +1,6 @@
 //! CPU FLIP reference runtime. Native state belongs exclusively to a worker;
 //! the content thread retains bounded control history and immutable mesh frames.
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -518,6 +519,7 @@ pub struct FluidRuntime {
     reset_requested: bool,
     target_time: f64,
     clock: manifold_physics::clock::SimulationClock,
+    export_frames: VecDeque<manifold_physics::clock::ClockFrame>,
     held: super::physics::HeldClock,
     epoch: u64,
     cancel_epoch: Arc<AtomicU64>,
@@ -572,6 +574,7 @@ impl Default for FluidRuntime {
             reset_requested: false,
             target_time: 0.0,
             clock: Default::default(),
+            export_frames: VecDeque::with_capacity(HISTORY_CAPACITY),
             held: Default::default(),
             epoch: 0,
             cancel_epoch: Arc::new(AtomicU64::new(0)),
@@ -691,6 +694,7 @@ impl FluidRuntime {
         }
         self.target_time = 0.0;
         self.clock.restart();
+        self.export_frames.clear();
         self.held = Default::default();
         self.completed_tick = 0;
         self.completed_time = 0.0;
@@ -1036,19 +1040,32 @@ impl FluidRuntime {
             return Err(error.clone());
         }
         let clock_frame = if self.cache_mode == CacheMode::Live
-            && !crate::node_graph::physics::offline_simulation()
+            && (!crate::node_graph::physics::offline_simulation()
+                || !super::physics::authored_sample_only()
+                || super::physics::history_drain_requested())
         {
             Some(self.clock.advance(
                 transport.0,
-                0.0,
+                super::physics::project_frame_interval(),
                 speed,
                 reset,
                 false,
-                false,
+                super::physics::offline_simulation(),
             ))
         } else {
             None
         };
+        if super::physics::offline_simulation()
+            && let Some(frame) = clock_frame.filter(|frame| frame.ticks > 0)
+        {
+            if self.export_frames.back_mut().is_some_and(|previous| previous.append(frame)) {
+                // Adjacent observations share one retained project schedule.
+            } else if self.export_frames.len() == HISTORY_CAPACITY {
+                return Err("Water export interval history is full; drain accepted intervals before observing more transport".into());
+            } else {
+                self.export_frames.push_back(frame);
+            }
+        }
         if clock_frame.is_some_and(|frame| frame.numerical_error)
             && !crate::node_graph::physics::offline_simulation()
         {
@@ -1393,22 +1410,28 @@ impl FluidRuntime {
             if self.held.is_held() && self.initialized && !blocking {
                 return Ok(());
             }
-        let live_mode = self.cache_mode == CacheMode::Live
-            && !crate::node_graph::physics::offline_simulation();
+        let live_mode = self.cache_mode == CacheMode::Live;
         let target_tick = simulation_tick(self.target_time);
             let playback = (self.cache_mode == CacheMode::Playback).then(|| PlaybackAddress {
                 transport: Seconds(self.last_transport.expect("observed transport")),
                 legacy_tick: target_tick,
             });
             let due = target_tick.saturating_sub(self.completed_tick);
-            let live_interval = (live_mode
-                && self.target_time > self.simulation_time())
-                .then(|| {
-                    StepInterval::new(
-                        Seconds(self.simulation_time()),
-                        Seconds(self.target_time),
-                    )
-                });
+            while self.export_frames.front().is_some_and(|frame|
+                self.completed_tick >= frame.first_sequence + u64::from(frame.ticks))
+            {
+                self.export_frames.pop_front();
+            }
+            let live_interval = if live_mode && self.target_time > self.simulation_time() {
+                Some(if super::physics::offline_simulation() {
+                    self.export_frames.front()
+                        .and_then(|frame| self.completed_tick.checked_sub(frame.first_sequence)
+                            .and_then(|ordinal| frame.interval(ordinal)))
+                        .ok_or("Water export is missing its accepted project interval")?
+                } else {
+                    StepInterval::new(Seconds(self.simulation_time()), Seconds(self.target_time))
+                })
+            } else { None };
             // A owed particle capture goes before any further stepping, so
             // the frame is the completed tick itself (growth, late wiring).
             let capture_only = self.particle_capture_pending();
@@ -1498,14 +1521,7 @@ impl FluidRuntime {
                     self.completed_tick
                 },
                 count,
-                interval: if live_mode && count > 0 {
-                    Some(StepInterval::new(
-                        Seconds(self.simulation_time()),
-                        Seconds(self.target_time),
-                    ))
-                } else {
-                    None
-                },
+                interval: if count > 0 { live_interval } else { None },
                 history,
                 impulses,
                 role_setup: Arc::clone(&self.role_setup),

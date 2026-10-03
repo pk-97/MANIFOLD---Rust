@@ -27,10 +27,10 @@ use crate::node_graph::liquid::coupling::{DomainWalls, LiquidRigidOwner, Pending
 use crate::node_graph::liquid::fields::{self, FieldLattice, LiquidFields, LiquidImpulses};
 use crate::node_graph::liquid::lattice::LiquidLattice;
 use crate::node_graph::liquid::tick_samples::TickSamples;
-use crate::node_graph::matter::coupling::{ReactionScale, body_limit, decode, live_body_limit};
+use crate::node_graph::matter::coupling::{ReactionScale, decode, live_body_limit};
 use crate::node_graph::matter::{
     MAX_SUBSTEPS, REACTION_WORDS, WATER_DENSITY, block_sort_box, free_fall_speed, lattice_blocks, lattice_nodes,
-    momentum_unit, stiffness_fitting_cap, substeps_per_tick, water_lambda, wave_speed,
+    momentum_unit, substeps_per_tick, water_lambda, wave_speed,
 };
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::physics::{
@@ -382,6 +382,7 @@ pub struct Coupling {
 /// tick's first substep, and the domain settles the tick before it there.
 #[derive(Clone, Copy)]
 struct Exchange {
+    frame: manifold_physics::clock::ClockFrame,
     substeps: u32,
     ticks: u32,
     /// The frame's first tick; later ticks differ only in `tick`.
@@ -713,7 +714,6 @@ impl MatterDomain {
         )?;
         let MatterGeometry { layout, setup } = geometry;
         let lattice = setup.lattice;
-        let dx = f64::from(lattice.cell_size());
         let speed = ctx.scalar_or_param("speed", 1.0);
         let live = ["gravity_x", "gravity", "gravity_z", "stiffness", "cohesion", "liveliness"]
             .map(|name| ctx.scalar_or_param(name, 0.0));
@@ -763,7 +763,7 @@ impl MatterDomain {
         self.setup = Some(setup);
         let frame = self.clock.advance(
             ctx.time.seconds.0,
-            ctx.time.delta.0,
+            crate::node_graph::physics::project_frame_interval(),
             speed,
             ctx.scalar_or_param("reset", 0.0),
             restart,
@@ -804,11 +804,7 @@ impl MatterDomain {
         let unit_wave = wave_speed(water_lambda(longest, 1.0), f64::from(WATER_DENSITY));
         let v_est = free_fall_speed(f64::from(layout.size[1]));
         let stiffness = f64::from(ctx.scalar_or_param("stiffness", 1.0).clamp(0.5, 3.0));
-        let fitted = if offline {
-            stiffness.min(stiffness_fitting_cap(dx, unit_wave, v_est))
-        } else {
-            stiffness
-        };
+        let fitted = stiffness;
         let limited = fitted < stiffness;
         if limited != self.limited {
             self.limited = limited;
@@ -820,16 +816,11 @@ impl MatterDomain {
         }
         let wave = (unit_wave * fitted) as f32;
         let body_limit = match &self.coupled.owner {
-            Some(owner) if offline => body_limit(owner, lattice.cell_size(), wave, v_est as f32)?,
             Some(owner) => live_body_limit(owner, lattice.cell_size(), wave),
             None => None,
         };
         let nominal_substeps = substeps_per_tick(lattice.cell_size(), wave, v_est as f32, body_limit, None);
-        let requested = if offline {
-            nominal_substeps
-        } else {
-            ((frame.duration().0 / TICK * f64::from(nominal_substeps)).ceil() as u32).max(1)
-        };
+        let requested = ((frame.duration().0 / TICK * f64::from(nominal_substeps)).ceil() as u32).max(1);
         let substeps = requested.min(MAX_SUBSTEPS);
         let lambda = water_lambda(longest, fitted);
         let unit = momentum_unit(lattice.cell_size(), if frame.ticks == 0 {TICK / f64::from(substeps)} else {
@@ -846,14 +837,7 @@ impl MatterDomain {
                     ));
                 }
                 let pending = PendingTick { tick: first_tick, stamp: clock.as_ref().map_or(0, FrameClock::stamp) ,
-                    interval: manifold_physics::stepping::StepInterval::new(
-                        frame.plan.start,
-                        manifold_core::Seconds(if frame.offline {
-                            frame.plan.start.0 + TICK
-                        } else {
-                            frame.plan.end.0
-                        }),
-                    ),
+                    interval: frame.interval(0).expect("pending interval"),
                     offline: frame.offline};
                 let scale = ReactionScale {
                     unit,
@@ -863,7 +847,7 @@ impl MatterDomain {
                 owner.set_pending(pending);
                 self.coupled.scale = Some(scale);
                 if frame.ticks > 1 {
-                    self.coupled.exchange = Some(Exchange { substeps, ticks: frame.ticks, pending, scale });
+                    self.coupled.exchange = Some(Exchange { frame, substeps, ticks: frame.ticks, pending, scale });
                 }
             }
             // The liquid is shown at the tick Box3D has settled, with the
@@ -971,10 +955,11 @@ impl MatterDomain {
         // encoded after this write.
         unsafe { bodies.write(offset, bytes) };
         reaction.zero_fill();
-        owner.set_pending(PendingTick { tick: exchange.pending.tick + u64::from(tick), interval: manifold_physics::stepping::StepInterval::new(
-                manifold_core::Seconds(exchange.pending.interval.start.0 + f64::from(tick) * TICK),
-                manifold_core::Seconds(exchange.pending.interval.end.0 + f64::from(tick) * TICK),
-            ),..exchange.pending });
+        owner.set_pending(PendingTick {
+            tick: exchange.pending.tick + u64::from(tick),
+            interval: exchange.frame.interval(u64::from(tick)).expect("accepted exchange interval"),
+            ..exchange.pending
+        });
         Ok(())
     }
 
