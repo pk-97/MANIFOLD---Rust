@@ -23,6 +23,7 @@ Modules ported from it (all under `crates/manifold-renderer/src/node_graph/primi
 - `liquid_fill` (`shaders/liquid_fill_body.wgsl`) — the half-cell seeding lattice, and seeding only where the solid distance is positive, from `fluidsimulation.cpp`
 - `shaders/matter_frame.wgsl` — the marker radius from rest volume, from `fluidsimulation.cpp` (`_initializeParticleRadii`)
 - `volume_surface_mesh.rs`, `shaders/volume_surface_mesh_body.wgsl` — the solid-edge interval constraint and endpoint epsilon from `polygonizer3d.cpp` (`_vertexInterp`), including the CPU f64 reference
+- `liquid/lattice.rs` (`LiquidLattice::surface`), `gpu_flip_domain`, `liquid_frame`, and `liquid_solid_distance` — the native mesh origin/padding and node count from `fluidsimulation.cpp` (`_getBoundaryAABB`, `_generateOutputSurface`), `particlemesher.cpp` (`_initialize`), and `polygonizer3d.cpp` (`_getVertexPosition`), composed with MANIFOLD native-domain coordinates.
 - `shaders/marching_cubes_common.wgsl` — the corner order, edge order and triangle table from `polygonizer3d.cpp` (Paul Bourke's tables)
 - `scripts/mgpcg_reference.py` (the f64 oracle for the pressure solve) — the segment and square inside-fractions from `levelsetutils.cpp`, the operator and stop from `pressuresolver.cpp` and `pcgsolver.h`
 

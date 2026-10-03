@@ -224,23 +224,12 @@ impl Primitive for ParticleVolume {
             return;
         }
         let interior_wired = interior_input;
-        if interior_wired.is_some() && nodes.iter().any(|&n| n < 8.0) {
-            ctx.error(format!(
-                "Particle Volume: interior needs at least 8 solid nodes on every axis (three padding nodes per side); got {}×{}×{}.",
-                nodes[0], nodes[1], nodes[2]
-            ));
-            return;
-        }
-        let interior_total = nodes
-            .map(|n| (n as u64).saturating_sub(7))
-            .into_iter()
-            .product::<u64>();
         let (interior, interior_len) = if let Some(buffer) = interior_wired {
             let actual = buffer.size / 4;
-            if !buffer.size.is_multiple_of(4) || actual != interior_total {
+            if !buffer.size.is_multiple_of(4) || crate::node_graph::liquid::lattice::interior_cells(nodes.map(|n| n as u32), actual).is_none() {
                 ctx.error(format!(
-                    "Particle Volume: interior has {actual} f32 values; expected {interior_total} cell-centred values for the {}×{}×{} physical cells inside the padded solid lattice.",
-                    nodes[0] - 7.0, nodes[1] - 7.0, nodes[2] - 7.0
+                    "Particle Volume: interior has {actual} f32 values; expected the exact physical cell count for native (nodes minus 4) or solver (nodes minus 7) padding at {}×{}×{} nodes.",
+                    nodes[0], nodes[1], nodes[2]
                 ));
                 return;
             }
@@ -350,14 +339,14 @@ mod cpu_tests {
         size: [f32; 3],
         solid_nodes: [usize; 3],
     ) -> f32 {
-        let cells = solid_nodes.map(|n| n - 7);
+        let cells = crate::node_graph::liquid::lattice::interior_cells(solid_nodes.map(|n| n as u32), interior.len() as u64).expect("valid interior grid").map(|n| n as usize);
         assert_eq!(interior.len(), cells.iter().product::<usize>());
         let spacing: [f32; 3] =
             std::array::from_fn(|axis| size[axis] / (solid_nodes[axis] - 1) as f32);
         let top = cells.map(|n| n - 1);
         let mut g = [0.0; 3];
         for axis in 0..3 {
-            let physical_min = lattice_min[axis] + 3.0 * spacing[axis];
+            let physical_min = lattice_min[axis] + (solid_nodes[axis] - cells[axis] - 1) as f32 * 0.5 * spacing[axis];
             g[axis] = ((p[axis] - physical_min) / spacing[axis] - 0.5).clamp(0.0, top[axis] as f32);
         }
         let base = g.map(|v| v.floor() as usize);
@@ -403,6 +392,18 @@ mod cpu_tests {
         let interior = vec![-3.0; 2 * 2 * 2];
         let phi = union(0.25, Some(&interior), [1.0; 3], [0.0; 3], [2.0; 3], [9; 3]);
         assert_eq!(phi, -2.75);
+    }
+
+    #[test]
+    fn native_mesh_interior_samples_simulation_cell_centres() {
+        let layout = crate::node_graph::fluid::domain_layout(None, 2.0, 8).unwrap();
+        let mesh = crate::node_graph::liquid::lattice::LiquidLattice::from_layout(&layout).surface();
+        let field: Vec<f32> = (0..8u32.pow(3)).map(|i| (i % 8) as f32 + 0.5).collect();
+        for i in 0..8 {
+            let p = [layout.min[0] + (i as f32 + 0.5) * 0.25, 1.0, 0.0];
+            let value = trilinear_interior(&field, p, mesh.min(), mesh.bounds().scale, mesh.nodes().map(|n| n as usize));
+            assert_eq!(value, i as f32 + 0.5);
+        }
     }
 
     #[test]
@@ -672,5 +673,27 @@ mod gpu_tests {
             &rectangular_actual,
             &expected(&rectangular, rectangular_nodes, Some(&rectangular_interior), None),
         );
+    }
+
+    #[test]
+    fn fluid_mesh_grid_native_interior_matches_cell_centred_plane() {
+        for resolution in [8, 16] {
+            let layout = crate::node_graph::fluid::domain_layout(None, 2.0, resolution).unwrap();
+            let mesh = crate::node_graph::liquid::lattice::LiquidLattice::from_layout(&layout).surface();
+            let lattice = Lattice { center: mesh.bounds().pos, size: mesh.bounds().scale, cell: mesh.cell_size() };
+            let field: Vec<f32> = (0..resolution.pow(3)).map(|i| {
+                layout.min[0] + (i % resolution) as f32 * mesh.cell_size() + 0.5 * mesh.cell_size() - 0.3
+            }).collect();
+            let actual = run_volume(&lattice, mesh.nodes().map(|n| n as usize), Some(&field), None);
+            for (i, got) in actual.into_iter().enumerate() {
+                let x = f64::from(mesh.min()[0]) + (i as u32 % mesh.nodes()[0]) as f64 * layout.cell_size;
+                // Trilinear interpolation of a plane is analytic; outside
+                // the cell-centre domain the engine extends the end sample.
+                let lo = f64::from(layout.min[0]) + 0.5 * layout.cell_size;
+                let hi = f64::from(layout.min[0]) + 2.0 - 0.5 * layout.cell_size;
+                let want = (x.clamp(lo, hi) - 0.3 + layout.cell_size).min(0.0);
+                assert!((f64::from(got) - want).abs() < 1e-6, "node {i}: {got} vs {want}");
+            }
+        }
     }
 }

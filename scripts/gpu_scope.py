@@ -134,6 +134,16 @@ MATTER_DOMAIN_FILTERS = ["matter_scene::", "matter_coupling::", "matter_look::",
 
 # Narrow rows win over EXPLICIT_ROWS: a path matching one gets only that row.
 NARROW_ROWS = [
+    ((RENDERER_SRC + "node_graph/liquid/lattice.rs",
+      RENDERER_SRC + "node_graph/primitives/liquid_frame.rs",
+      RENDERER_SRC + "node_graph/primitives/liquid_solid_distance.rs",
+      RENDERER_SRC + "node_graph/primitives/particle_volume.rs",
+      RENDERER_SRC + "node_graph/primitives/shaders/particle_volume_body.wgsl",
+      RENDERER_SRC + "node_graph/primitives/shaders/liquid_solid_distance_body.wgsl"),
+     (["fluid_mesh_grid_native_", "liquid_frame::gpu_tests::",
+       "gpu_flip_narrow_band_mesher_values",
+       "mesh_contact_oblique_wall_and_thin_plate_match_cpu_reference",
+       "fluid_clamp_scheduled_boundary_renders_like_unfrozen"], [])),
     ((RENDERER_SRC + "node_graph/primitives/gpu_flip_clock.rs",
       RENDERER_SRC + "node_graph/primitives/shaders/gpu_flip_clock.wgsl"),
      (["gpu_flip_clock::gpu_tests::"], [])),
@@ -151,7 +161,7 @@ NARROW_ROWS = [
       RENDERER_SRC + "node_graph/liquid/fields/"),
      (LIQUID_FORCE_FILTERS, REPORTER_SKIPS)),
     ((RENDERER_SRC + "node_graph/primitives/gpu_flip_domain.rs",),
-     (LIQUID_DOMAIN_FILTERS, REPORTER_SKIPS)),
+     (LIQUID_DOMAIN_FILTERS + ["fluid_mesh_grid_native_"], REPORTER_SKIPS)),
     ((RENDERER_SRC + "node_graph/primitives/matter_domain.rs",),
      (MATTER_DOMAIN_FILTERS, REPORTER_SKIPS)),
 ]

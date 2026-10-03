@@ -1230,7 +1230,7 @@ impl StepState {
                 cell_size: p.cell_size,
                 nodes: corners,
                 closed_faces: 63,
-                wall_inset: 0,
+                wall_inset: 0.0,
                 body_count: p.body_count,
                 rows: p.rows,
                 tick_seconds: p.tick_seconds,

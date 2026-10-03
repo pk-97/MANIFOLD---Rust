@@ -14382,6 +14382,30 @@
           "type": "f32"
         },
         {
+          "name": "mesh_min_x",
+          "type": "f32"
+        },
+        {
+          "name": "mesh_min_y",
+          "type": "f32"
+        },
+        {
+          "name": "mesh_min_z",
+          "type": "f32"
+        },
+        {
+          "name": "mesh_nodes_x",
+          "type": "f32"
+        },
+        {
+          "name": "mesh_nodes_y",
+          "type": "f32"
+        },
+        {
+          "name": "mesh_nodes_z",
+          "type": "f32"
+        },
+        {
           "name": "cell_size",
           "type": "f32"
         },
@@ -19503,6 +19527,12 @@
       ],
       "params": [
         {
+          "default": "false",
+          "label": "Native Mesh Grid",
+          "name": "native_mesh_grid",
+          "type": "bool"
+        },
+        {
           "default": "63",
           "label": "Closed Faces (bits −X +X −Y +Y −Z +Z)",
           "name": "closed_faces",
@@ -19523,7 +19553,7 @@
           "type": "int"
         }
       ],
-      "purpose": "Publish a particle liquid's state as particle frames for the liquid surface: after every simulated tick, write the first `count` records as frame B with id 0 (the previous B becomes A), slots past count at radius 0, with the frame lattice, the blend and span of the one-tick-behind display clock, and the solid lattice: node.liquid_solid_distance's walls and bodies when `solid` is wired, each tick's copy kept beside its frame, otherwise the walls alone. With face_u_in, face_v_in and face_w_in wired, each tick's face grid is published beside frame B as face_u, face_v and face_w over the domain's cells, with face_valid_layers from the param. An optional cell-centred `interior` distance is copied into matching A/B slots. A tick whose stats flag a non-finite record or narrow-band capacity shortage is never published.",
+      "purpose": "Publish a particle liquid's state as particle frames for the liquid surface: after every simulated tick, write the first `count` records as frame B with id 0 (the previous B becomes A), slots past count at radius 0, with the native FLIP mesh lattice (1.5-cell padding) when Native Mesh Grid is enabled, otherwise the legacy simulation lattice, the blend and span of the one-tick-behind display clock, and the solid lattice: node.liquid_solid_distance's walls and bodies when `solid` is wired, each tick's copy kept beside its frame, otherwise the walls alone. With face_u_in, face_v_in and face_w_in wired, each tick's face grid is published beside frame B as face_u, face_v and face_w over the domain's cells, with face_valid_layers from the param. An optional cell-centred `interior` distance is copied into matching A/B slots. A tick whose stats flag a non-finite record or narrow-band capacity shortage is never published.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Hands a simulated particle liquid to the liquid surface, one frame per simulation tick.",
@@ -19716,7 +19746,7 @@
             "0",
             "64"
           ],
-          "type": "int"
+          "type": "float"
         },
         {
           "default": "0",
