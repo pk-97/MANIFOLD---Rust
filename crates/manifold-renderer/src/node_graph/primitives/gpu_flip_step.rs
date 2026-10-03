@@ -78,6 +78,15 @@ pub(crate) fn travel_cells(top_speed: f32, step_dt: f32, cell_size: f32) -> u32 
     (f64::from(top_speed) * f64::from(step_dt) / f64::from(cell_size) - 1e-4).ceil().max(1.0) as u32
 }
 
+/// The halo's travel: the CFL guard over one nominal step, TICK / Steps. The
+/// live clock's GPU schedule picks each substep's length; the extend band, the
+/// tile rings and the storage the planner admits for them are sized once from
+/// the nominal step, as the reference sizes its extrapolation from its CFL
+/// number and never from a stretched remainder. A slow frame never resizes them.
+pub(crate) fn halo_travel(top_speed: f32, steps: f32, cell_size: f32) -> u32 {
+    travel_cells(top_speed, (TICK / f64::from(steps)) as f32, cell_size)
+}
+
 /// Layers both face grids are extended by, the saved one after the transfer
 /// and the projected one after the solve: FLIP Fluids'
 /// `_extrapolateFluidVelocities`, ⌈√3 · CFL⌉ + 3, with the CFL guard's
@@ -2229,7 +2238,7 @@ impl Primitive for GpuFlipStep {
             return;
         }
         let h = lattice.cell_size();
-        let travel = travel_cells(top_speed, step_dt, h);
+        let travel = halo_travel(top_speed, steps, h);
         let gravity = [("gravity_x", 0.0), ("gravity_y", -9.81), ("gravity_z", 0.0)].map(|(name, default)| ctx.scalar_or_param(name, default));
         let tick_index = ctx.scalar_or_param("tick_index", 0.0).round().max(0.0) as i32;
         let epoch = if ctx.inputs.slot("epoch").is_some() {
