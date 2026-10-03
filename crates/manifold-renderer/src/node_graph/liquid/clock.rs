@@ -23,10 +23,10 @@ mod tests {
         let out = run(&mut clock, &frames, false);
         assert!(out[0].restarted);
         assert!(out[1..].iter().all(|f| f.ticks == 1 && !f.restarted));
-        let stalled = clock.advance(10.0 * TICK + 1.0, 1.0, 1.0, 0.0, false, false);
+        let stalled = clock.advance(10.0 * TICK + 1.0, TICK, 1.0, 0.0, false, false);
         assert_eq!(stalled.ticks, 1);
         assert_eq!(stalled.dropped_seconds, 0.0);
-        assert_eq!(stalled.duration().0, 1.0);
+        assert!((stalled.plan.end.0 - stalled.plan.start.0 - 1.0).abs() < 1e-12);
         assert_eq!(stalled.simulation_time, stalled.target_time);
     }
 
@@ -47,7 +47,7 @@ mod tests {
         assert_eq!(a.ticks, 1);
         assert!(!a.held);
         // Paused transport holds.
-        let held = clock.advance(TICK, 0.0, 1.0, 0.0, false, false);
+        let held = clock.advance(TICK, TICK, 1.0, 0.0, false, false);
         assert_eq!(held.ticks, 0);
         assert!(held.held);
         assert_eq!(held.simulation_time, a.simulation_time);
@@ -93,8 +93,8 @@ mod tests {
         let before = paused.advance(10.0 * TICK, TICK, 1.0, 0.0, false, false);
         // The host keeps drawing with real frame deltas while the transport
         // stands still, including a long stall.
-        for interval in [TICK, TICK, 0.5, TICK, 0.0, 2.0] {
-            let held = paused.advance(10.0 * TICK, interval, 1.0, 0.0, false, false);
+        for _ in 0..6 {
+            let held = paused.advance(10.0 * TICK, TICK, 1.0, 0.0, false, false);
             assert_eq!(held.ticks, 0);
             assert_eq!(held, before);
         }
@@ -126,13 +126,13 @@ mod tests {
                     false,
                 );
                 assert_eq!(frame.plan.start.0, previous_end, "{fps} fps frame {frame_index}");
-                assert_eq!(frame.plan.end.0, transport, "{fps} fps frame {frame_index}");
+                assert!((frame.plan.end.0 - transport).abs() < 1e-12, "{fps} fps frame {frame_index}");
                 assert_eq!(frame.dropped_seconds, 0.0);
                 if frame.ticks == 1 {
                     assert_eq!(frame.first_sequence, frame_index as u64 - 1);
                     let interval = frame.interval(0).expect("live frame interval");
                     assert_eq!(interval.start.0, previous_end);
-                    assert_eq!(interval.end.0, transport);
+                    assert!((interval.end.0 - transport).abs() < 1e-12);
                 }
                 previous_end = frame.plan.end.0;
             }
@@ -165,7 +165,7 @@ mod tests {
                 assert!(out.ticks <= 1);
                 assert_eq!(out.plan.start.0, completed);
                 completed = out.plan.end.0;
-                assert_eq!(completed, frame as f64 / fps as f64);
+                assert!((completed - frame as f64 / fps as f64).abs() < 1e-12);
             }
             assert_eq!(completed, 1.0, "{fps} fps");
         }
@@ -182,7 +182,7 @@ mod tests {
         for step in 0..400 {
             let interval = TICK * intervals[step % intervals.len()];
             transport += interval;
-            let frame = clock.advance(transport, interval, 1.0, 0.0, false, false);
+            let frame = clock.advance(transport, TICK, 1.0, 0.0, false, false);
             assert!(!frame.restarted, "frame {step}");
             assert!(frame.target_time >= previous.target_time - 1e-12, "frame {step}: target went back");
             assert!(frame.target_time <= transport + 1e-9, "frame {step}: target ran ahead of transport");
@@ -191,7 +191,7 @@ mod tests {
             previous = frame;
         }
         assert_eq!(previous.dropped_seconds, 0.0);
-        assert_eq!(previous.simulation_time, transport);
+        assert!(transport - previous.simulation_time < TICK + 1e-9);
     }
 
     /// A state reset restarts once in a new epoch while the transport runs on.

@@ -346,7 +346,9 @@ impl LiquidRun {
         project_fps: f64,
     ) -> Self {
         let device = clock.as_ref().map_or_else(|| Arc::clone(&harness::shared().device), |clock| Arc::clone(&clock.device));
-        let scope = PhysicsStepScope::for_project_rate(!live, project_fps);
+        let scope = PhysicsStepScope::for_settings(!live, manifold_physics::PhysicsSettings {
+            sim_rate: manifold_physics::SimRate::try_from(project_fps as u32).expect("authored rate"),
+        });
         let registry = registry();
         let Prepared { def, cards, publisher } = prepare(row, &def, &registry, dry);
         let manifest = ParamManifest::from_params(
@@ -396,7 +398,9 @@ impl LiquidRun {
     }
 
     fn render(&mut self, warming: bool) -> Probe {
-        let _scope = PhysicsStepScope::for_project_rate(!self.live, self.project_fps);
+        let _scope = PhysicsStepScope::for_settings(!self.live, manifold_physics::PhysicsSettings {
+            sim_rate: manifold_physics::SimRate::try_from(self.project_fps as u32).expect("authored rate"),
+        });
         let time = self.transport * TICK;
         let ctx = PresetContext {
             time,
@@ -804,12 +808,13 @@ fn liquid_coupling_collision() {
     }
 }
 
-/// A non-60 project exercises the production scope, clock, CFL scheduler,
+/// Every authored Sim Rate exercises the production scope, clock, CFL scheduler,
 /// narrow-band history and renderer output sampling without output-rate retuning.
 #[test]
 fn liquid_export_matches_live_project_schedule() {
     let row = LIQUID_SOLVERS.iter().find(|row| row.type_id == GPU_FLIP_DOMAIN_TYPE_ID).unwrap();
-    for project_fps in [24.0, 60.0] {
+    for rate in manifold_physics::SimRate::ALL {
+        let project_fps = f64::from(rate.hz());
         for narrow in [false, true] {
             let make = |fps: f64, live| {
                 let mut def = scene(row, Fixture::FaceGrid);
@@ -817,8 +822,8 @@ fn liquid_export_matches_live_project_schedule() {
                 set_type_param(&mut def, "node.gpu_flip_step", "narrow_band", SerializedParamValue::Float { value: if narrow { 1.0 } else { 0.0 } });
                 LiquidRun::on_project_rate(row, def, 60.0 / fps, live, false, None, project_fps)
             };
-            let mut live = make(project_fps, true);
-            live.steps(project_fps as u32 / 2);
+            let mut live = make(60.0, true);
+            live.steps(30);
             let expected = live.particles("particles_b");
             for export_fps in [20.0, 24.0, 30.0, 60.0] {
                 let mut export = make(export_fps, false);

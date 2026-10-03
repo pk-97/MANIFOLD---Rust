@@ -1,7 +1,7 @@
 //! Value descriptions on graph wires; native simulation ownership stays in the world node.
 use manifold_core::Seconds;
 use manifold_physics::stepping::{
-    box3d_substep_count, FramePlan, StepCoupling, StepInterval, SubstepExchange, Uncoupled,
+    box3d_substep_count, StepCoupling, StepInterval, SubstepExchange, Uncoupled,
 };
 use manifold_physics::{
     input::{
@@ -38,7 +38,7 @@ pub(crate) fn particle_frame_duration(delta: Seconds) -> f32 {
 thread_local! {
     // A preview budget only yields work; it never discards simulation time.
     static PREVIEW_STEP_BUDGET: std::cell::Cell<Option<std::time::Duration>> = const { std::cell::Cell::new(None) };
-    static PROJECT_INTERVAL: std::cell::Cell<f64> = const { std::cell::Cell::new(1.0 / 60.0) };
+    static SIMULATION_INTERVAL: std::cell::Cell<f64> = const { std::cell::Cell::new(1.0 / 60.0) };
     static SAMPLE_AUTHORED_ONLY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static HISTORY_DRAIN_REQUESTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
@@ -84,8 +84,8 @@ impl HeldClock {
 }
 
 /// Fluid workers use the same preview/offline scope as rigid bodies.
-pub(crate) fn project_frame_interval() -> f64 {
-    PROJECT_INTERVAL.get()
+pub(crate) fn simulation_interval() -> f64 {
+    SIMULATION_INTERVAL.get()
 }
 
 pub(crate) fn offline_simulation() -> bool {
@@ -161,19 +161,20 @@ pub struct PhysicsStepScope {
 
 impl PhysicsStepScope {
     pub fn for_render(export_mode: bool) -> Self {
-        Self::for_project_rate(export_mode, 60.0)
+        Self::with_preview_budget(export_mode, std::time::Duration::from_secs_f64(simulation_interval()))
     }
 
-    /// The project rate is independent of the export output rate.
-    pub fn for_project_rate(export_mode: bool, project_fps: f64) -> Self {
-        let scope = Self::with_preview_budget(export_mode, std::time::Duration::from_secs_f64(1.0 / project_fps));
-        PROJECT_INTERVAL.set(1.0 / project_fps);
+    /// Pass the shared project physics settings to every consumer.
+    pub fn for_settings(export_mode: bool, settings: manifold_physics::PhysicsSettings) -> Self {
+        let interval = settings.sim_rate.interval();
+        let scope = Self::with_preview_budget(export_mode, std::time::Duration::from_secs_f64(interval));
+        SIMULATION_INTERVAL.set(interval);
         scope
     }
 
     /// Retain the preview-scope API; live intervals always consume their full span.
     pub fn with_preview_budget(export_mode: bool, budget: std::time::Duration) -> Self {
-        let previous_interval = PROJECT_INTERVAL.with(|current| current.replace(1.0 / 60.0));
+        let previous_interval = SIMULATION_INTERVAL.get();
         let previous =
             PREVIEW_STEP_BUDGET.with(|current| current.replace((!export_mode).then_some(budget)));
         Self {
@@ -187,7 +188,7 @@ impl PhysicsStepScope {
 impl Drop for PhysicsStepScope {
     fn drop(&mut self) {
         PREVIEW_STEP_BUDGET.with(|budget| budget.set(self.previous));
-        PROJECT_INTERVAL.set(self.previous_interval);
+        SIMULATION_INTERVAL.set(self.previous_interval);
     }
 }
 
@@ -895,7 +896,8 @@ impl RigidSimulation {
         };
         let prototype_activation_changed = prototype.as_ref().map(|body| body.enabled)
             != self.copy_description.as_ref().map(|body| body.enabled);
-        let rebuild = self.world.is_none() || topology_changed || copy_topology_changed || reset;
+        let rebuild = self.world.is_none() || topology_changed || copy_topology_changed || reset
+            || (accepted_interval.is_none() && self.clock.rate_changed(simulation_interval()));
         if !rebuild {
             if let Some(error) = &self.impulse_failure {
                 return Err(error.clone());
@@ -1081,7 +1083,7 @@ impl RigidSimulation {
             }
         }
         let clock_frame = if accepted_interval.is_none() {
-            Some(self.clock.advance(now.0, project_frame_interval(), speed, reset_count, rebuild,
+            Some(self.clock.advance(now.0, simulation_interval(), speed, reset_count, rebuild,
                 offline_simulation()))
         } else {
             None
@@ -1107,26 +1109,10 @@ impl RigidSimulation {
         const TICK: f64 = FIXED_TICK.0;
         let due_steps = ((accumulated + 1e-9) / TICK).floor() as usize;
         let preview_budget = PREVIEW_STEP_BUDGET.with(std::cell::Cell::get);
-        // Ordinary live rigid worlds cover the complete observed simulation
-        // span in one accepted interval. An explicitly bounded fixed worker
-        // remains separate from the live transport policy.
-        let export_frame = clock_frame.as_ref().filter(|_| offline_simulation()
-            && matches!(self.advancement_policy, AdvancementPolicy::Preview));
-        let accepted_interval = accepted_interval.or_else(|| {
-            (!offline_simulation()
-                && matches!(self.advancement_policy, AdvancementPolicy::Preview)
-                && accumulated > 0.0)
-                .then(|| {
-                    FramePlan::new(
-                        Seconds(self.physics_time),
-                        Seconds(self.physics_time + accumulated),
-                        1,
-                    )
-                    .value
-                    .interval(0)
-                }).flatten()
-        });
-        let steps = if let Some(frame) = export_frame {
+        // Live and export consume the same accepted rate intervals. Explicit
+        // fixed workers remain the cache-recording compatibility path.
+        let scheduled_frame = clock_frame.as_ref().filter(|_| matches!(self.advancement_policy, AdvancementPolicy::Preview));
+        let steps = if let Some(frame) = scheduled_frame {
             frame.ticks as usize
         } else if accepted_interval.is_some() {
             1
@@ -1205,7 +1191,7 @@ impl RigidSimulation {
         let physics_start = std::time::Instant::now();
         let mut completed = 0;
         for ordinal in 0..steps {
-            let accepted_interval = export_frame.and_then(|frame| frame.interval(ordinal as u64))
+            let accepted_interval = scheduled_frame.and_then(|frame| frame.interval(ordinal as u64))
                 .or(accepted_interval);
             let result = (|| -> Result<(), String> {
                 let (step_start, step_end) = accepted_interval.map_or_else(
@@ -1418,7 +1404,7 @@ impl RigidSimulation {
                 return Err(error);
             }
         }
-        self.pending_time = if accepted_interval.is_some() || export_frame.is_some() {
+        self.pending_time = if accepted_interval.is_some() || scheduled_frame.is_some() {
             Seconds::ZERO
         } else {
             Seconds((due_steps - completed) as f64 * TICK)
@@ -1441,7 +1427,7 @@ impl RigidSimulation {
             self.last_overload_warning = Some(std::time::Instant::now());
         }
         // Live accepted spans finish here; bounded fixed workers retain their remainder.
-        self.accumulator = if export_frame.is_some() {
+        self.accumulator = if scheduled_frame.is_some() {
             (self.authored_time - self.physics_time).max(0.0)
         } else if accepted_interval.is_some() {
             0.0
@@ -3937,20 +3923,24 @@ mod tests {
     }
 
     #[test]
-    fn live_accepts_the_full_observed_span_without_pending_backlog() {
+    fn live_accepts_owed_intervals_to_the_last_boundary_without_backlog() {
         let _live = PhysicsStepScope::for_render(false);
         let bodies = one_body([0.0, 4.0, 0.0]);
         let mut simulation = RigidSimulation::default();
         simulation.advance(bodies.clone(), GRAVITY, Seconds::ZERO, 1.0, 0.0).unwrap();
+        // Half a Sim Rate interval past 3 s: the late frame takes every owed
+        // interval as one span ending on the 3 s boundary.
         let now = Seconds(3.0 + FRAME / 2.0);
         simulation.advance(bodies.clone(), GRAVITY, now, 1.0, 0.0).unwrap();
         assert_eq!(simulation.pending_time, Seconds::ZERO);
-        assert!((simulation.physics_time - now.0).abs() < 1e-12);
+        assert!((simulation.physics_time - 3.0).abs() < 1e-12);
         let accepted_pose = simulation.poses;
         simulation.advance(bodies.clone(), GRAVITY, now, 0.0, 0.0).unwrap();
         assert_eq!(simulation.pending_time, Seconds::ZERO);
-        assert_eq!(simulation.physics_time, now.0);
+        assert!((simulation.physics_time - 3.0).abs() < 1e-12);
         assert_eq!(simulation.poses, accepted_pose);
+        // The next boundary closes the half interval run at Speed 1; Speed 0
+        // from `now` adds nothing.
         let next = Seconds(now.0 + FRAME);
         simulation.advance(bodies, GRAVITY, next, 1.0, 0.0).unwrap();
         assert_eq!(simulation.pending_time, Seconds::ZERO);
@@ -4322,10 +4312,11 @@ mod tests {
     }
 
     #[test]
-    fn export_rigid_matches_live_at_project_rate() {
-        for project_fps in [24, 60] {
+    fn sim_rate_rigid_export_matches_live() {
+        for rate in manifold_physics::SimRate::ALL {
+            let project_fps = rate.hz();
             let run = |fps, offline| {
-                let _scope = PhysicsStepScope::for_project_rate(offline, project_fps as f64);
+                let _scope = PhysicsStepScope::for_settings(offline, manifold_physics::PhysicsSettings { sim_rate: rate });
                 let mut simulation = RigidSimulation::default();
                 let bodies = one_body([0.0, 4.0, 0.0]);
                 for frame in 0..=fps {
@@ -4334,7 +4325,7 @@ mod tests {
                 }
                 (simulation.physics_time, simulation.poses)
             };
-            let live = run(project_fps, false);
+            let live = run(60, false);
             for fps in [20, 24, 30, 60] {
                 assert_eq!(run(fps, true), live, "project {project_fps}, export {fps}");
             }

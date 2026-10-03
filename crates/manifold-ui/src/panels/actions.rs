@@ -379,6 +379,7 @@ pub enum ProjectAction {
     SetMidiTriggerMode(LayerId, MidiTriggerMode),
     SetResolution(usize),           // preset index
     SetDisplayResolution(i32, i32), // direct width, height (no undo, matches Unity)
+    SetSimRate(manifold_foundation::settings::SimRate),
     SetRenderScale(f32),            // render scale: 1.0 (native), 0.75 (quality), 0.5 (performance)
     SetTonemapCurve(TonemapCurve),
     SetTonemapEnabled(bool),

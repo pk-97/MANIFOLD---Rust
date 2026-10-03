@@ -718,7 +718,7 @@ impl GpuFlipDomain {
         self.setup = Some(geometry.setup);
         let frame = self.clock.advance(
             ctx.time.seconds.0,
-            crate::node_graph::physics::project_frame_interval(),
+            crate::node_graph::physics::simulation_interval(),
             speed,
             ctx.scalar_or_param("reset", 0.0),
             restart,

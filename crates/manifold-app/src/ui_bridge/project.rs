@@ -209,6 +209,15 @@ pub(super) fn dispatch_project(
             ContentCommand::send(content_tx, ContentCommand::SetDisplayResolution(*w, *h));
             DispatchResult::handled()
         }
+        ProjectAction::SetSimRate(rate) => {
+            if project.settings.physics.sim_rate != *rate {
+                let command = manifold_editing::commands::settings::ChangeSimRateCommand::new(
+                    project.settings.physics.sim_rate, *rate,
+                );
+                ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(command)));
+            }
+            DispatchResult::handled()
+        }
         ProjectAction::SetRenderScale(scale) => {
             ContentCommand::send(content_tx, ContentCommand::SetRenderScale(*scale));
             DispatchResult::handled()
@@ -2455,6 +2464,58 @@ mod tests {
         retarget.execute(&mut project);
         remove.execute(&mut project);
         assert_eq!(effective_def(&project, &layer_id), removed);
+    }
+
+    #[test]
+    fn sim_rate_slider_routes_to_content_and_undo() {
+        use crate::content_command::ContentCommand;
+        use manifold_core::settings::SimRate;
+        use manifold_ui::panels::overlay::{Overlay, OverlayPlacement, OverlayResponse};
+        use manifold_ui::{PanelAction, PointerAction, Rect, UIInputSystem, UITree, Vec2};
+        let mut project = Project::default();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let state = crate::content_state::ContentState::default();
+        let mut ui = UIRoot::new();
+        let mut selection = manifold_ui::UIState::new();
+        let mut active = None;
+        let mut prefs = UserPrefs::in_memory();
+        let mut tree = UITree::new();
+        let mut input = UIInputSystem::new();
+        ui.settings_popup.open();
+        let size = ui.settings_popup.desired_size();
+        let region = tree.begin_region(Rect::new(0.0, 0.0, 1280.0, 720.0),
+            manifold_ui::tree::ZTier::Overlay, "settings", manifold_ui::UIFlags::empty());
+        let start = tree.count();
+        ui.settings_popup.build_at(&mut tree, OverlayPlacement {
+            rect: Rect::new(0.0, 0.0, size.x, size.y), screen: Vec2::new(1280.0, 720.0),
+        });
+        tree.end_region(region, start);
+        let track = tree.nodes().iter().find(|node| node.tooltip.as_deref() == Some(
+            "Simulation updates per second. Hits land up to one update late; kicks are read at this rate."
+        ) && node.text.is_none() && node.flags.contains(manifold_ui::UIFlags::INTERACTIVE)).expect("shared slider track").bounds;
+        let point = Vec2::new(track.x + track.width - 1.0, track.y + track.height * 0.5);
+        input.process_pointer(&mut tree, point, PointerAction::Down, 0.0);
+        input.process_pointer(&mut tree, point, PointerAction::Up, 0.1);
+        for event in input.drain_events() {
+            if let OverlayResponse::Consumed(actions) = ui.settings_popup.on_event(&event, &mut tree) {
+                for action in actions {
+                    if let PanelAction::Project(action) = action {
+                        dispatch_project(&action, &mut project, &tx, &state, &mut ui,
+                            &mut selection, &mut active, &mut prefs);
+                    }
+                }
+            }
+        }
+        assert_eq!(project.settings.physics.sim_rate, SimRate::Hz30, "UI never writes the model");
+        let ContentCommand::Execute(command) = rx.try_recv().expect("rate command") else { panic!("undoable execute"); };
+        assert!(rx.try_recv().is_err(), "one edit per gesture");
+        let mut editing = manifold_editing::service::EditingService::new();
+        editing.execute(command, &mut project);
+        assert_eq!(project.settings.physics.sim_rate, SimRate::Hz60);
+        assert!(editing.undo(&mut project));
+        assert_eq!(project.settings.physics.sim_rate, SimRate::Hz30);
+        assert!(editing.redo(&mut project));
+        assert_eq!(project.settings.physics.sim_rate, SimRate::Hz60);
     }
 
     #[test]

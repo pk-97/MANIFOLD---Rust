@@ -12,8 +12,8 @@ fn lattice() -> FieldLattice {
 }
 
 /// One display frame at `transport`: advance the clock, then the impulses.
-fn frame(clock: &mut LiquidClock, impulses: &mut LiquidImpulses, transport: f64, interval: f64, speed: f32) -> ClockFrame {
-    let frame = clock.advance(transport, interval, speed, 0.0, false, false);
+fn frame(clock: &mut LiquidClock, impulses: &mut LiquidImpulses, transport: f64, _interval: f64, speed: f32) -> ClockFrame {
+    let frame = clock.advance(transport, TICK, speed, 0.0, false, false);
     impulses.observe_frame(transport, &frame).unwrap();
     frame
 }
@@ -72,7 +72,7 @@ impl Rig {
             self.fields.observe_sample(transport, Some(&field(transport)));
         }
         self.last = Some(transport);
-        let frame = self.clock.advance(transport, if offline { TICK } else { interval }, speed, 0.0, false, offline);
+        let frame = self.clock.advance(transport, interval, speed, 0.0, false, offline);
         self.impulses.observe_frame(transport, &frame)?;
         let laid = self.fields.prepare(lattice(), Some(&field(transport)), &self.clock, &frame, &self.impulses)?;
         Ok((frame, laid))
@@ -119,7 +119,7 @@ fn run_at(fps: f64, speed: f32, offline: bool, seconds: f64) -> Vec<(u64, f64, V
     let frames = (seconds * fps).round() as u64;
     for index in 0..=frames {
         let transport = index as f64 / fps;
-        let (frame, laid) = rig.frame(transport, 1.0 / fps, speed, offline, &modulated).unwrap();
+        let (frame, laid) = rig.frame(transport, if offline { TICK } else { 1.0 / fps }, speed, offline, &modulated).unwrap();
         assert_eq!(frame.dropped_seconds, 0.0, "{fps} fps dropped time");
         let first = first_tick(&frame);
         assert_eq!(first, out.len() as u64, "ticks run in order, none skipped or merged");
@@ -200,21 +200,22 @@ fn liquid_forces_per_tick_cover_late_frames() {
     for step in 0..120 {
         let interval = TICK * intervals[step % intervals.len()];
         transport += interval;
-        let (frame, laid) = rig.frame(transport, interval, 1.0, false, &modulated).unwrap();
+        let (frame, laid) = rig.frame(transport, TICK, 1.0, false, &modulated).unwrap();
         assert_eq!(first_tick(&frame), ran, "frame {step}: no tick skipped or merged");
-        assert_eq!(frame.ticks, 1, "frame {step}: one live interval");
+        assert!(frame.ticks <= 1, "frame {step}: at most one accepted live interval");
         assert_eq!(frame.dropped_seconds, 0.0, "frame {step}: live time was dropped");
         assert_eq!(frame.plan.start.0, completed, "frame {step}: interval start");
+        let boundary = (transport / TICK + 1e-9).floor() * TICK;
         for (offset, lattice) in rig.tick_lattices(&frame, &laid).into_iter().enumerate() {
             let interval = frame.interval(offset as u64).unwrap();
-            assert_eq!(interval.end.0, transport, "frame {step}: full span");
+            assert!((interval.end.0 - boundary).abs() < 1e-12, "frame {step}: owed span ends on the last boundary");
             assert_eq!(lattice, expected(interval.start.0), "frame {step}: interval start");
         }
         completed = frame.plan.end.0;
         ran += u64::from(frame.ticks);
     }
     assert_eq!(rig.clock.ticks_done(), ran);
-    assert_eq!(completed, transport);
+    assert!(transport - completed < TICK);
 }
 
 /// Live impulse lattices split by source timestamp. Ties share one lattice,
@@ -599,4 +600,22 @@ fn liquid_impulse_accepts_hits_stamped_ahead_of_the_last_frame() {
     frame(&mut clock, &mut impulses, 3.0 * TICK, TICK, 1.0);
     impulses.commit_frame();
     assert!(receipts(&mut impulses).is_empty(), "no hit applies twice");
+}
+
+#[test]
+fn sim_rate_force_cards_sample_only_accepted_boundaries() {
+    for rate in manifold_physics::SimRate::ALL {
+        let mut rig = Rig::new();
+        let mut updates = 0;
+        for display in 0..=60 {
+            let transport = f64::from(display) / 60.0;
+            let (frame, laid) = rig.frame(transport, rate.interval(), 1.0, false, &modulated).unwrap();
+            for (ordinal, lattice) in rig.tick_lattices(&frame, &laid).iter().enumerate() {
+                let interval = frame.interval(ordinal as u64).unwrap();
+                assert_lattice_exact(lattice, &expected(interval.start.0), "accepted force sample");
+                updates += 1;
+            }
+        }
+        assert_eq!(updates, rate.hz());
+    }
 }

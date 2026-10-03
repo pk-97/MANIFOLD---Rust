@@ -85,7 +85,7 @@ pub struct Project {
     /// `docs/AUDIO_MODULATION_DESIGN.md`.
     #[serde(default, skip_serializing_if = "crate::audio_setup::AudioSetup::is_empty")]
     pub audio_setup: crate::audio_setup::AudioSetup,
-    #[serde(default)]
+    #[serde(default = "ProjectSettings::legacy")]
     pub settings: ProjectSettings,
     #[serde(default)]
     pub tempo_map: TempoMap,

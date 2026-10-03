@@ -393,6 +393,7 @@ pub fn push_state(
 
         // Settings popup hosts the render config — feed the same state so its
         // segmented controls highlight the active option.
+        ui.settings_popup.sync_sim_rate(tree, project.settings.physics.sim_rate);
         ui.settings_popup.set_resolution_text(&res_label);
         ui.settings_popup
             .set_render_scale(project.settings.render_scale);
