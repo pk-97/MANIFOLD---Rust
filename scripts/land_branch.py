@@ -128,12 +128,15 @@ def main():
             sys.exit(1)
         step("no-gate verdict", ["scripts/gate_runner.py", "no-gate", "--task", a.named_red,
                                  "--reason", f"{a.reason} {a.lead}"], MAIN)
+
+    merge_gated_tree(a.branch, wt, a.message, gate_cmd, gate_log, gated_commit)
+    if gate_returncode != 0:
+        # After the merge: a verdict commit before it moves main, so the
+        # merge tree no longer matches the gated tree and the gate reruns red.
         step("commit verdict", ["git", "add", "--", ".beads/interactions.jsonl"], MAIN, check=False)
         step("commit verdict", ["git", "commit", "-m",
                                 f"beads: no-gate verdict on {a.named_red} for landing {a.branch}. {a.lead}",
                                 "--", ".beads/interactions.jsonl"], MAIN, check=False)
-
-    merge_gated_tree(a.branch, wt, a.message, gate_cmd, gate_log, gated_commit)
     step("push main", ["git", "push", "origin", "main"], MAIN)
 
     for bead in a.close_bead:
