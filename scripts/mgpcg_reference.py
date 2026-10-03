@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Ported from FLIP Fluids levelsetutils.cpp, pressuresolver.cpp and pcgsolver.h (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
+# Multigrid after McAdams, Sifakis & Teran 2010.
 """The GPU FLIP pressure solve in f64: the oracle for the pinned residuals in
 crates/manifold-renderer/src/node_graph/primitives/gpu_flip_pressure_tests.rs.
 
@@ -7,7 +9,9 @@ step for step as the graph runs it (docs/GPU_FLIP_PRESSURE_SOLVE.md): the
 masked Poisson equation L p = f on water cells, p = 0 on air, box walls
 closed, each face weighted by its open fraction (1 without solids). One
 V-cycle per iteration: red-black Gauss-Seidel, 2 sweeps before and 2 after,
-trilinear transfers, a coarse cell is air if any child is air. A coarse
+trilinear transfers, the cell types coarsened as the paper does: a coarse
+cell is air if any child is air, solid if every child is solid, else water;
+on the fine lattice a cell with every face closed is solid. A coarse
 face's weight is the mean of the four fine faces it covers
 (the pressure solver's face coarsening); a cell whose faces are all closed drops out.
 By default each level halves every side, rounding up, until every side is
@@ -20,7 +24,7 @@ coarsest smoothed by 16 rounds each way.
 
 Usage: scripts/mgpcg_reference.py crates/manifold-renderer/tests/fixtures/dambreak_pressure_problems.bin.zst
            [--refine 2 | --coarsen 2 | --side 25,37] [--iterations 4,6,8] [--tol 1e-5] [--symmetry]
-           [--depth 5 --coarse-sweeps 16] [--box 0.5,0.25,0.5,0.12,0.12,0.12]
+           [--depth 5 --coarse-sweeps 16] [--box 0.5,0.25,0.5,0.12,0.12,0.12] [--solve-level 1]
        scripts/mgpcg_reference.py --frames DUMP.bin [...]
 The second form reads solves dumped from a running scene (per record:
 u32 frame, step, kind, n; then water, f and another solver's pressure as n³
@@ -163,12 +167,24 @@ def pad_to_even(x, axes, value):
     return np.pad(x, pad, constant_values=value)
 
 
-def coarsen_water(water):
-    """A coarse cell is air if any child is air; a virtual child (an odd
-    side's padding) is solid, never air."""
-    water = pad_to_even(water, range(3), True)
+def fine_solid(water, faces):
+    """The fine lattice's solid cells: not water, every face closed (inside
+    a body or a wall). The GPU reads them the same way (gpu_flip_pressure.wgsl kind)."""
+    return ~water & (diagonal(faces) == 0)
+
+
+def coarsen_water(water, solid):
+    """McAdams, Sifakis & Teran 2010's cell-type coarsening: a coarse cell is
+    air if any child is air, solid if every child is solid, else water. A
+    virtual child (an odd side's padding) is solid. (water, solid) out."""
+    water = pad_to_even(water, range(3), False)
+    solid = pad_to_even(solid, range(3), True)
     nz, ny, nx = water.shape
-    return water.reshape(nz // 2, 2, ny // 2, 2, nx // 2, 2).all(axis=(1, 3, 5))
+    shape = (nz // 2, 2, ny // 2, 2, nx // 2, 2)
+    air = ~(water | solid)
+    any_air = air.reshape(shape).any(axis=(1, 3, 5))
+    all_solid = solid.reshape(shape).all(axis=(1, 3, 5))
+    return ~any_air & ~all_solid, all_solid
 
 
 def coarsen_faces(faces):
@@ -267,13 +283,14 @@ class Multigrid:
     def __init__(self, water, h, faces, depth=None, coarse_sweeps=None):
         self.levels = [Level(water, h, faces)]
         self.P = []
+        solid = fine_solid(water, faces)
         def halve(shape):
             if depth is not None:
                 return len(self.levels) < depth
             return max(shape) > 4
         while halve(water.shape):
             fine = water.shape
-            water = coarsen_water(water)
+            water, solid = coarsen_water(water, solid)
             faces = coarsen_faces(faces)
             h *= 2
             self.P.append([prolong_1d(nc, nf) for nc, nf in zip(water.shape, fine)])
@@ -306,17 +323,47 @@ def true_residual(p, water, f, h, faces):
     return np.linalg.norm(lv.laplacian(p) - f * lv.w) / np.linalg.norm(f * lv.w)
 
 
-def solve(water, f, h, iterations, faces, keep=False, depth=None, coarse_sweeps=None):
-    """Residual after each iteration, as the graph's fixed-count loop runs."""
+def restrict_to(mg, f, level):
+    """f·w carried to `level` by the V-cycle's own restriction, Rᵀ (the
+    transpose of prolongation over 8, masked to each level's water): the
+    coarse right-hand side a solve started on that level takes."""
+    r = f * mg.levels[0].w
+    for l in range(level):
+        r = apply_axes([M.T / 2.0 for M in mg.P[l]], r) * mg.levels[l + 1].w
+    return r
+
+
+def prolong_to_fine(mg, x, level):
+    """x on `level` carried to the fine lattice by the V-cycle's
+    prolongation, masked to each level's water."""
+    for l in reversed(range(level)):
+        x = apply_axes(mg.P[l], x) * mg.levels[l].w
+    return x
+
+
+def solve_level_check(mg, level):
+    """A solve runs on a level with a V-cycle under it: never the coarsest,
+    whose exact inverse is no gradient (the GPU's rule, levels − 2 at most)."""
+    assert 0 <= level <= len(mg.levels) - 2, f"solve level {level} on {len(mg.levels)} levels"
+
+
+def solve(water, f, h, iterations, faces, keep=False, depth=None, coarse_sweeps=None, level=0):
+    """Residual after each iteration, as the graph's fixed-count loop runs.
+    With `level` k the gradient runs on V-cycle level k against the
+    Rᵀ-restricted right-hand side, the cycle below it; the residual is level
+    k's own (its lattice, cell size and faces), and `keep` hands back the
+    fine pressure, the level's prolonged."""
     mg = Multigrid(water, h, faces, depth, coarse_sweeps)
-    lv = mg.levels[0]
-    x = np.zeros_like(f)
-    r = f * lv.w
-    p = np.zeros_like(f)
+    solve_level_check(mg, level)
+    lv = mg.levels[level]
+    f_k = restrict_to(mg, f, level)
+    x = np.zeros_like(f_k)
+    r = f_k.copy()
+    p = np.zeros_like(f_k)
     rz_old = 0.0
     out = []
     for _ in range(iterations):
-        z = mg.vcycle(0, r)
+        z = mg.vcycle(level, r)
         rz = np.sum(r * z)
         beta = rz / rz_old if abs(rz_old) >= 1e-30 else 0.0
         p = z + beta * p
@@ -326,8 +373,8 @@ def solve(water, f, h, iterations, faces, keep=False, depth=None, coarse_sweeps=
         x = x - alpha * p
         r = r - alpha * s
         rz_old = rz
-        out.append(true_residual(x, water, f, h, faces))
-    return (out, len(mg.levels), x) if keep else (out, len(mg.levels))
+        out.append(true_residual(x, lv.water, f_k, lv.h, lv.faces))
+    return (out, len(mg.levels), prolong_to_fine(mg, x, level)) if keep else (out, len(mg.levels))
 
 
 def segment(left, right):
@@ -512,25 +559,31 @@ def body_divergence(u, w, cell_open, vs, water, h):
     return d / h * water
 
 
-def body_solve(lv, mg, body, f, h, iterations):
+def body_solve(lv, mg, body, f, h, iterations, level=0):
     """The graph's PCG with s = −L p + the body term; the V-cycle sees the
-    fluid block only."""
-    x = np.zeros_like(f)
-    r = f * lv.w
-    p = np.zeros_like(f)
+    fluid block only. On solve level k the operator is L_k + Pᵀ B P: the
+    direction prolonged to the fine lattice, the fine body product, restricted
+    back (the GPU's coarse body term); the fine pressure comes back."""
+    solve_level_check(mg, level)
+    lk = mg.levels[level]
+    f_k = restrict_to(mg, f, level)
+    x = np.zeros_like(f_k)
+    r = f_k.copy()
+    p = np.zeros_like(f_k)
     rz_old = 0.0
     for _ in range(iterations):
-        z = mg.vcycle(0, r)
+        z = mg.vcycle(level, r)
         rz = np.sum(r * z)
         beta = rz / rz_old if abs(rz_old) >= 1e-30 else 0.0
         p = z + beta * p
-        s = lv.residual(0.0, p) + body.product(p, h) * lv.w
+        fine = body.product(prolong_to_fine(mg, p, level), h) * lv.w
+        s = lk.residual(0.0, p) + restrict_to(mg, fine, level)
         ps = np.sum(p * s)
         alpha = rz / ps if abs(ps) >= 1e-30 else 0.0
         x = x - alpha * p
         r = r - alpha * s
         rz_old = rz
-    return x
+    return prolong_to_fine(mg, x, level)
 
 
 def body_direct(lv, body, f, h):
@@ -555,7 +608,7 @@ def body_direct(lv, body, f, h):
     return x.reshape(lv.water.shape)
 
 
-def body_gate(n, box, fill, ratios, counts):
+def body_gate(n, box, fill, ratios, counts, level=0):
     """docs/GPU_FLIP_PRESSURE_SOLVE.md section 8 (solids in the water), D7's
     body rows: a still pool to `fill` with a box, one step of gravity. Per
     density ratio (0 = prescribed): the divergence after the projection and
@@ -611,7 +664,7 @@ def body_gate(n, box, fill, ratios, counts):
         ref = body.impulse(x, h)
         parts = []
         for k in counts:
-            xk = body_solve(lv, mg, body, f, h, k)
+            xk = body_solve(lv, mg, body, f, h, k, level)
             ik = body.impulse(xk, h)
             parts.append(f"{k}: {100 * np.linalg.norm(ik - ref) / np.linalg.norm(ref):.2f}%")
         line.append("impulse error at " + ", ".join(parts))
@@ -732,6 +785,7 @@ def main():
     ap.add_argument("--side", help="resample each problem to these sides, odd included (e.g. 24,25,37,40)")
     ap.add_argument("--symmetry", action="store_true", help="also check the preconditioner is symmetric and negative definite")
     ap.add_argument("--separating", help="n,fill,dt: the separating-solid gate on a pool under ±20 m/s²")
+    ap.add_argument("--solve-level", type=int, default=0, help="run the gradient on this V-cycle level against the R^T-restricted right-hand side (the step's Solve Level)")
     args = ap.parse_args()
     if args.separating:
         v = args.separating.split(",")
@@ -740,7 +794,7 @@ def main():
     counts = [int(k) for k in args.iterations.split(",")]
     if args.body:
         v = [float(t) for t in args.body.split(",")]
-        body_gate(int(v[0]), v[1:7], v[7], [float(r) for r in args.ratios.split(",")], counts)
+        body_gate(int(v[0]), v[1:7], v[7], [float(r) for r in args.ratios.split(",")], counts, args.solve_level)
         return
     probs = frames(args.frames) if args.frames else load(args.fixture)
     if args.side:
@@ -758,7 +812,7 @@ def main():
         if args.symmetry:
             worst, top, sides = symmetry(water, h, open_)
             print(f"{water.shape[0]}^3 {name}: levels {sides}; asymmetry {worst:.1e}, largest a·Va/|a|² {top:.3e}", flush=True)
-        res, levels = solve(water, f, h, max(counts), open_, depth=args.depth, coarse_sweeps=args.coarse_sweeps)
+        res, levels = solve(water, f, h, max(counts), open_, depth=args.depth, coarse_sweeps=args.coarse_sweeps, level=args.solve_level)
         line = ", ".join(f"{k}: {res[k - 1]:.3e}" for k in counts)
         old_line = "" if old is None else f"; old solver {true_residual(old, water, f, h, open_):.3e}"
         tol_line = ""

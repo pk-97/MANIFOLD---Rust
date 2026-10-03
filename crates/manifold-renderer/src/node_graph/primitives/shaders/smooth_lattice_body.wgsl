@@ -17,7 +17,7 @@ fn smooth_weight(passes: i32, d: i32) -> f32 {
     return rows[offset + passes + d];
 }
 
-fn body(idx: u32, count: u32, nodes_x: f32, nodes_y: f32, nodes_z: f32, passes: f32, axis: i32) -> f32 {
+fn body(idx: u32, count: u32, nodes_x: f32, nodes_y: f32, nodes_z: f32, passes: f32, axis: i32, brick_pass: u32) -> f32 {
     let value = buf_levelset[idx];
     let p = i32(clamp(round(passes), 0.0, 3.0));
     if p == 0 || min(min(nodes_x, nodes_y), nodes_z) < 2.0 {
@@ -32,6 +32,16 @@ fn body(idx: u32, count: u32, nodes_x: f32, nodes_y: f32, nodes_z: f32, passes: 
         i32((idx / u32(nodes.x)) % u32(nodes.y)),
         i32(idx / (u32(nodes.x) * u32(nodes.y))),
     );
+    if brick_pass == 2u {
+        // Every tap is the same exterior value. Keep the dense multiply/add
+        // sequence: a binomial row summing to one need not return its input
+        // bit-for-bit in f32 (particularly three passes).
+        var exterior = 0.0;
+        for (var d = -p; d <= p; d = d + 1) {
+            exterior = exterior + smooth_weight(p, d) * value;
+        }
+        return exterior;
+    }
     let a = clamp(axis, 0, 2);
     var sum = 0.0;
     for (var d = -p; d <= p; d = d + 1) {
@@ -40,4 +50,9 @@ fn body(idx: u32, count: u32, nodes_x: f32, nodes_y: f32, nodes_z: f32, passes: 
         sum = sum + smooth_weight(p, d) * buf_levelset[u32(q.x + nodes.x * (q.y + nodes.y * q.z))];
     }
     return sum;
+}
+
+fn liquid_brick_index(invocation: u32) -> u32 {
+    let dims = vec3<u32>(vec3<f32>(params.nodes_x, params.nodes_y, params.nodes_z));
+    return liquid_brick_select(invocation, dims, params.brick_pass);
 }

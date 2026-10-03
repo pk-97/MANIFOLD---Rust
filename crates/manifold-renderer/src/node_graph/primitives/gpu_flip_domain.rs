@@ -19,6 +19,7 @@ use manifold_gpu::{FrameClock, GpuBuffer};
 use manifold_physics::FieldValue;
 
 use super::gpu_flip_pressure::lattice_refusal;
+use super::gpu_flip_step::read_solve_level;
 use super::liquid_fill::{SITES_PER_CELL, filled_sites, site_range};
 use super::matter_domain::closed_faces;
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
@@ -32,9 +33,10 @@ use crate::node_graph::liquid::coupling::{
 };
 use crate::node_graph::liquid::fields::{self, FieldLattice, LiquidFields, LiquidImpulses};
 use crate::node_graph::liquid::lattice::LiquidLattice;
+use crate::node_graph::liquid::tick_samples::TickSamples;
 use crate::node_graph::liquid::{EXACT_F32_COUNT, ROLE_PORTS, WATER_DENSITY};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
-use crate::node_graph::physics::{RigidImpulseTargets, RigidSceneObservation, offline_simulation};
+use crate::node_graph::physics::{RigidImpulseTargets, RigidSceneInputs, RigidSceneObservation, offline_simulation};
 use crate::node_graph::physics_events::ResolvedNodeImpulse;
 use crate::node_graph::primitive::Primitive;
 use crate::node_graph::transform::Transform;
@@ -57,6 +59,9 @@ pub(crate) struct GpuFlipGeometry {
     pub(crate) layout: FluidDomainLayout,
     pub(crate) setup: GpuFlipSetup,
     pub(crate) particles: u64,
+    /// The V-cycle level the pressure solves run on; live, so not in the
+    /// setup.
+    pub(crate) solve_level: usize,
 }
 
 impl GpuFlipGeometry {
@@ -124,8 +129,9 @@ fn fill_sites(
 
 /// The domain box, lattice and fill from the domain's params and wires
 /// (`read` is `scalar_or_param`). Refused by name, in this order: a lattice
-/// the pressure solve cannot take, a fill that does not fit the domain, and
-/// a fill past the count a wire carries exactly.
+/// the pressure solve cannot take, a solve level the lattice lacks, a fill
+/// that does not fit the domain, and a fill past the count a wire carries
+/// exactly.
 pub(crate) fn gpu_flip_geometry(
     read: impl Fn(&str, f32) -> f32,
     domain: Option<Transform>,
@@ -136,6 +142,7 @@ pub(crate) fn gpu_flip_geometry(
     if let Some(reason) = lattice_refusal(layout.cells) {
         return Err(format!("GPU FLIP: {reason}. Lower Resolution."));
     }
+    let solve_level = read_solve_level(read("solve_level", 0.0), layout.cells).map_err(|reason| format!("GPU FLIP: {reason}"))?;
     let (pool_sites, box_sites) = fill_sites(&layout, read("fill_height", 0.4), initial_volume)?;
     let capacity = read("particle_capacity", 0.0);
     if !capacity.is_finite() || capacity < 0.0 {
@@ -154,7 +161,7 @@ pub(crate) fn gpu_flip_geometry(
         box_sites,
         particle_capacity: particle_capacity as u32,
     };
-    Ok(GpuFlipGeometry { layout, setup, particles })
+    Ok(GpuFlipGeometry { layout, setup, particles, solve_level })
 }
 
 impl GpuFlipGeometry {
@@ -166,13 +173,13 @@ impl GpuFlipGeometry {
 }
 
 /// Every scalar output, in the order [`GpuFlipDomain::compute`] fills them.
-const OUTPUTS: [&str; 36] = [
+const OUTPUTS: [&str; 37] = [
     "lattice_min_x", "lattice_min_y", "lattice_min_z", "cell_size", "nodes_x", "nodes_y", "nodes_z",
     "closed_faces", "pool_sites", "box_x0", "box_x1", "box_y0", "box_y1", "box_z0", "box_z1",
     "particle_mass", "gravity_x", "gravity", "gravity_z", "ticks", "epoch", "simulation_time",
     "display_time", "dropped_seconds", "body_count", "body_rows", "first_tick", "field_nodes_x",
     "field_nodes_y", "field_nodes_z", "field_spacing", "force_lattices", "impulse_tick", "dynamic_bodies",
-    "particle_capacity", "region_count",
+    "particle_capacity", "region_count", "solve_level",
 ];
 const TICKS: usize = 19;
 const IMPULSE_TICK: usize = 32;
@@ -185,6 +192,9 @@ const _: () = assert!(matches!(OUTPUTS[IMPULSE_TICK].as_bytes(), b"impulse_tick"
 pub struct Coupling {
     mode: bool,
     observation: Option<RigidSceneObservation>,
+    /// The paired world's authored scene at each tick's start: Box3D steps a
+    /// tick toward the scene at its end, so animated bodies move per tick.
+    scenes: TickSamples<RigidSceneInputs>,
     colliders: RigidImpulseTargets,
     error: Option<String>,
     previous_reset: Option<f32>,
@@ -200,7 +210,7 @@ pub struct Coupling {
     epochs: u64,
     /// This frame's compute failed; nothing is published to the pair.
     failed: bool,
-    /// This offline frame runs several coupled ticks, exchanging with Box3D
+    /// This frame runs several coupled ticks, exchanging with Box3D
     /// between them.
     exchange: Option<Exchange>,
     /// A host step failed; the next frame reports it and restarts the pair.
@@ -214,7 +224,7 @@ impl Coupling {
     }
 }
 
-/// An offline frame of several coupled ticks: the region syncs before each
+/// A frame of several coupled ticks: the region syncs before each
 /// later tick, and the domain settles the tick before it there.
 #[derive(Clone, Copy)]
 struct Exchange {
@@ -336,12 +346,14 @@ crate::primitive! {
         impulse_tick: ScalarF32,
         particle_capacity: ScalarF32,
         region_count: ScalarF32,
+        solve_level: ScalarF32,
         bodies: Array(LiquidBody), regions: Array(LiquidBody), shapes: Array(LiquidShape), atlas: Array(u32),
         reaction: Array(f32),
         forces: Array(f32), impulses: Array(f32),
     },
     params: [
         ParamDef { name: Cow::Borrowed("resolution"), label: "Resolution", ty: ParamType::Int, default: ParamValue::Float(64.0), range: Some((8.0, 512.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("solve_level"), label: "Solve Level", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 4.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("domain_size"), label: "Domain Size", ty: ParamType::Float, default: ParamValue::Float(4.0), range: Some((0.5, 20.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("fill_height"), label: "Initial Fill Height", ty: ParamType::Float, default: ParamValue::Float(0.4), range: Some((0.0, 20.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("gravity_x"), label: "Gravity X", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-20.0, 20.0)), enum_values: &[] },
@@ -412,12 +424,12 @@ impl Primitive for GpuFlipDomain {
         self.role_pending
     }
 
-    /// Offline coupled frames sync before each later tick of the frame.
+    /// Coupled frames sync before each later tick of the frame.
     fn substep_host_sync(&self, iteration: u32) -> bool {
         self.coupled.exchange.is_some_and(|x| iteration < x.ticks)
     }
 
-    /// Between two ticks of one offline frame: settle the tick the GPU just
+    /// Between two ticks of one frame: settle the tick the GPU just
     /// finished, step Box3D over it, and hand the next tick the bodies' new
     /// state and a cleared reaction.
     fn substep_host_step(
@@ -445,6 +457,10 @@ impl Primitive for GpuFlipDomain {
 
     fn request_physics_samples(&mut self, from: f64, until: f64, out: &mut Vec<f64>) {
         self.fields.request_samples(&self.clock, from, until, out);
+        self.bodies.request_samples(&self.clock, from, until, out);
+        if self.coupled.mode {
+            self.coupled.scenes.request(&self.clock, from, until, out);
+        }
     }
 
     fn set_coupled_physics(&mut self, enabled: bool) {
@@ -460,6 +476,14 @@ impl Primitive for GpuFlipDomain {
         colliders: RigidImpulseTargets,
         error: Option<&str>,
     ) {
+        // A replay sample records the scene at a tick's start; a pending one
+        // records nothing, and `run` closes the sample.
+        if crate::node_graph::physics::authored_sample_only() {
+            if let Some(observation) = observation.filter(|_| error.is_none()) {
+                self.coupled.scenes.observe(observation.transport.0, Some(&observation.inputs));
+            }
+            return;
+        }
         self.set_coupled_physics(true);
         self.coupled.observation = observation.cloned();
         self.coupled.colliders = colliders;
@@ -480,21 +504,18 @@ impl Primitive for GpuFlipDomain {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        // A physics sample reads the force field at a tick's start; it never
-        // advances time.
+        let mut roles: [Option<FluidRole>; MAX_FLUID_ROLES] = std::array::from_fn(|_| None);
+        let role_pending = crate::node_graph::liquid::read_roles(&ctx.inputs, &ROLE_PORTS, &mut roles);
+        // A physics sample reads the force field and the roles at a tick's
+        // start; it never advances time.
         if crate::node_graph::physics::authored_sample_only() {
             let field = ctx.inputs.vector_field("acceleration_field");
             self.fields.observe_sample(ctx.time.seconds.0, field.as_ref());
+            self.bodies.observe_sample(ctx.time.seconds.0, (!role_pending).then_some(&roles[..]));
+            self.coupled.scenes.observe(ctx.time.seconds.0, None);
             return;
         }
-        let mut roles: [Option<FluidRole>; MAX_FLUID_ROLES] = std::array::from_fn(|_| None);
-        self.role_pending = ctx.inputs.any_pending();
-        for (slot, port) in ROLE_PORTS.iter().enumerate() {
-            if ctx.inputs.slot(port).is_some() {
-                roles[slot] = ctx.inputs.fluid_role(port);
-                self.role_pending |= roles[slot].is_none();
-            }
-        }
+        self.role_pending = ctx.inputs.any_pending() || role_pending;
         self.acceleration = ctx.inputs.vector_field("acceleration_field");
         if ctx.inputs.slot("acceleration_field").is_some() {
             self.role_pending |= self.acceleration.is_none();
@@ -645,39 +666,31 @@ impl GpuFlipDomain {
             return Ok(None);
         }
         let restart = self.setup != Some(geometry.setup) || self.coupled.owner_fresh;
-        // Live, the water runs at most the one tick whose bodies Box3D has
-        // settled, and none while the last tick's reaction is in flight.
-        // Offline waits for it, then runs every due tick, exchanging with
-        // Box3D between them through the region's host syncs.
-        let cap = match (&mut self.coupled.owner, &self.coupled.observation) {
-            (Some(owner), Some(observation)) if !restart => {
-                let reaction = self.reaction.as_ref();
-                let offset = self.coupled.offset;
-                // This frame's clear is encoded after this read.
-                let settled = owner.settle(
-                    &observation.inputs,
-                    |stamp| clock.as_ref().is_none_or(|clock| if offline { clock.wait(stamp) } else { clock.is_complete(stamp) }),
-                    |_, rows, impulses| {
-                        let offset = offset.ok_or("GPU FLIP coupling: the pending tick has no body offset")?;
-                        decode_reaction(offset, rows, reaction_floats(reaction), impulses)
-                    },
-                );
-                match settled {
-                    Ok(ticks) => {
-                        if offline && ticks > 0 { None } else { Some(ticks) }
-                    }
-                    Err(error) => {
-                        // A dead reaction or a failed step: the pair restarts
-                        // with a fresh rigid owner, the error reported.
-                        self.coupled.owner = None;
-                        return Err(error);
-                    }
-                }
+        // Finish the prior reaction before reusing its buffer. Live and
+        // offline share per-tick exchanges; only the clock limits live work.
+        if !restart
+            && let (Some(owner), Some(_)) = (&mut self.coupled.owner, &self.coupled.observation)
+        {
+            let reaction = self.reaction.as_ref();
+            let offset = self.coupled.offset;
+            // This frame's clear is encoded after this read.
+            let settled = owner.settle_ready(
+                self.coupled.scenes.get(owner.completed() + 1),
+                |stamp| clock.as_ref().is_none_or(|clock| {
+                    clock.is_complete(stamp) || (clock.wait(stamp) && clock.is_complete(stamp))
+                }),
+                |_, rows, impulses| {
+                    let offset = offset.ok_or("GPU FLIP coupling: the pending tick has no body offset")?;
+                    decode_reaction(offset, rows, reaction_floats(reaction), impulses)
+                },
+            );
+            if let Err(error) = settled {
+                // A dead reaction or a failed step: the pair restarts
+                // with a fresh rigid owner, the error reported.
+                self.coupled.owner = None;
+                return Err(error);
             }
-            (Some(_), _) => Some(1),
-            (None, _) => None,
-        };
-        self.clock.set_tick_cap(cap);
+        }
         self.setup = Some(geometry.setup);
         let frame = self.clock.advance(
             ctx.time.seconds.0,
@@ -691,9 +704,13 @@ impl GpuFlipDomain {
             self.rebuild_owner()?;
         }
         self.coupled.owner_fresh = false;
+        if let Some(owner) = &self.coupled.owner {
+            let scene = self.coupled.observation.as_ref().map(|observation| &observation.inputs);
+            self.coupled.scenes.settle(&self.clock, &frame, scene);
+            self.coupled.scenes.prune_before(owner.completed());
+        }
         self.impulses.observe_frame(ctx.time.seconds.0, &frame)?;
-        let consumed = frame.simulation_time - f64::from(frame.ticks) * TICK;
-        self.bodies.observe(roles, frame.epoch, frame.target_time, consumed)?;
+        self.bodies.settle(roles, &self.clock, &frame);
         let first_tick = fields::first_tick(&frame);
         // A restart runs no tick yet still publishes the first tick's rows: the
         // fill seeds around the bodies' starting poses. Otherwise a frame
@@ -702,13 +719,13 @@ impl GpuFlipDomain {
         self.rows_fresh = row_ticks > 0;
         let coupled_rows = self.coupled.owner.as_ref().map_or(&[][..], LiquidRigidOwner::rows);
         if row_ticks > 0 {
-            self.body_rows = self.bodies.rows(first_tick, row_ticks, coupled_rows).len() as f32;
+            self.body_rows = self.bodies.rows(first_tick, frame.ticks, coupled_rows)?.len() as f32;
         }
         let dynamic_bodies = coupled_rows.iter().filter(|row| takes_reaction(row)).count();
         let mut display_time = frame.display_time;
         if let Some(owner) = &mut self.coupled.owner {
             if frame.ticks > 0 {
-                if (frame.ticks != 1 && !offline) || first_tick != owner.completed() {
+                if first_tick != owner.completed() {
                     return Err(format!(
                         "GPU FLIP coupling: water ticks {first_tick}+{} do not follow rigid tick {}",
                         frame.ticks,
@@ -737,6 +754,7 @@ impl GpuFlipDomain {
         )?;
         let per_frame = [
             ("closed_faces", closed_faces(ctx.params) as f32),
+            ("solve_level", geometry.solve_level as f32),
             ("gravity_x", gravity[0]),
             ("gravity", gravity[1]),
             ("gravity_z", gravity[2]),
@@ -797,10 +815,12 @@ impl GpuFlipDomain {
     /// the GPU has finished tick `tick − 1`, so its reaction is final and the
     /// body rows are free to rewrite.
     fn exchange_tick(&mut self, tick: u32, exchange: Exchange) -> Result<(), String> {
-        let observation = self.coupled.observation.as_ref().ok_or("GPU FLIP coupling: the rigid observation is missing")?;
         let owner = self.coupled.owner.as_mut().ok_or("GPU FLIP coupling: no coupled rigid world")?;
         let reaction = self.reaction.as_ref().ok_or("GPU FLIP coupling: the reaction is missing")?;
-        owner.settle(&observation.inputs, |_| true, |_, rows, impulses| {
+        // A tick running this frame started by now, so the tick before it
+        // has its end sampled.
+        let end = self.coupled.scenes.get(owner.completed() + 1);
+        owner.settle_ready(end, |_| true, |_, rows, impulses| {
             decode_reaction(exchange.offset, rows, reaction_floats(Some(reaction)), impulses)
         })?;
         let (offset, rows) = self.bodies.set_coupled_rows(tick as usize, owner.rows())?;
@@ -878,5 +898,26 @@ mod tests {
         // 256³ with a 2.5 m pool is 8 · 256² · 160 particles, past 2^24.
         let over = refused(geometry(256.0, 2.5, None));
         assert!(over.contains("Resolution") && over.contains("Initial Fill Height"), "{over}");
+    }
+
+    /// Solve Level is refused past the lattice's levels, never clamped: 64
+    /// has levels 64, 32, 16, 8, 4, so 3 is the deepest gradient level.
+    #[test]
+    fn gpu_flip_domain_refuses_a_solve_level_the_lattice_lacks() {
+        let at = |resolution: f32, level: f32| {
+            let read = |name: &str, default: f32| match name {
+                "resolution" => resolution,
+                "fill_height" => 0.16,
+                "solve_level" => level,
+                _ => default,
+            };
+            gpu_flip_geometry(read, None, None)
+        };
+        assert_eq!(at(64.0, 3.0).expect("level 3 at 64").solve_level, 3);
+        assert_eq!(at(64.0, 0.0).expect("level 0").solve_level, 0);
+        let refused = at(64.0, 4.0).expect_err("level 4 at 64");
+        assert!(refused.contains("Solve Level must be 0 to 3"), "{refused}");
+        let fraction = at(64.0, 1.5).expect_err("a fraction");
+        assert!(fraction.contains("Solve Level must be a whole number"), "{fraction}");
     }
 }

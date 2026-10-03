@@ -128,11 +128,16 @@ Obsolete when: main stops being a locally-landed shared trunk (PR/CI-gated merge
   hook-enforced: the run writes `.claude/orchestration/flow-gate-marker.json`
   in the main checkout and `preToolUseBash.py` (`flow_gate_guard`) denies a
   merge into main whose branch touches flow-mapped paths without a green
-  marker at that exact tip), `cargo deny check bans`, touched-crate clippy
-  `--tests` + touched-crate nextest, and `scripts/gpu_proofs_gate.py` when
+  marker at that exact tip), `cargo deny check bans`, changed-code clippy
+  `--tests` + module-scoped nextest filtersets (including sibling test modules
+  and mapped integration binaries), and `scripts/gpu_proofs_gate.py` when
   the diff touches GPU paths (scoped: mapped tests + smoke set from
-  `scripts/gpu_scope.py`, 300s test-time budget, unmapped GPU path fails,
+  `scripts/gpu_scope.py`, 360s test-time budget, unmapped GPU path fails,
   `glb_conformance` only for glTF paths; the whole suite is `--all`, nightly).
+  Comment/blank-only and docs-only diffs skip the build, clippy, CPU-test, and
+  GPU-proof legs. The selected CPU tests retain the GPU lock because device use
+  cannot be known cheaply; builds run outside that hold. Full touched-crate and
+  workspace CPU suites run nightly through `trunk_health.py`.
   Scoped runs skip any test measured over 60s in the committed
   `scripts/gpu_test_times.json` (tests missing from it run). Nightly
   `trunk_health.py` runs `--all --record-times /tmp/gpu_test_times.nightly.json`
@@ -249,7 +254,8 @@ Measured basis: ~80% of a phase's wall-clock is cargo compile/test (playbook,
    worker briefs — the build runs while the worker reads its docs. Free
    overlap on every cold or profile-invalidated start.
 5. **Test runner + cache size (added 2026-07-11).** CPU-focused gates run
-   `cargo nextest run -p <crate> --lib`; GPU-proofs suites STAY on
+   `cargo nextest` with filtersets for changed modules and mapped integration
+   binaries; GPU-proofs suites STAY on
    `cargo test` — the in-process `test_device` lock is the device serializer
    and nextest's process-per-test model would defeat it.
    `SCCACHE_CACHE_SIZE = "30G"` (`.cargo/config.toml` `[env]`) stops

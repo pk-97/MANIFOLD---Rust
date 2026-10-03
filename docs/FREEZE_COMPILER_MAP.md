@@ -481,9 +481,10 @@ invariant a fused def must respect:
     scalars; they never contain a node from outside the body (section 4).
     Regions do not nest: a boundary inside another region's body is a compile
     error (`substeps_region_nested_boundary_rejected`).
-    A boundary may opt in to host syncs by naming a clock port; offline only,
+    A boundary may opt in to host syncs by naming a clock port;
     the executor may then commit, wait and run the clock owner's host step
-    between two iterations. A region that has not opted in never commits or
+    between two iterations, including coupled live ticks (at most three per frame).
+    A region that has not opted in never commits or
     waits mid-region, so a fused body can rely on one uninterrupted encode.
 
 ## 10. Test surface & how to debug

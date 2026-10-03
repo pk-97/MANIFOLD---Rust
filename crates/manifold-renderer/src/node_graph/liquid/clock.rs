@@ -2,17 +2,7 @@
 //! (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` section 3.4; GPU_MPM_SOLVER_DESIGN.md
 //! D8). Box3D and FLIP keep `HeldClock` (D9).
 
-use manifold_physics::input::{InputHistory, Timestamped};
-
 use crate::node_graph::fluid::TICK;
-
-/// The time to record this frame's authored inputs at: the frame's target,
-/// never earlier than the history's last sample. Every seam that records
-/// against a `ClockFrame` goes through here, so none can reject a frame the
-/// clock produced.
-pub fn sample_time<T: Timestamped>(history: &InputHistory<T>, target_time: f64) -> f64 {
-    history.back().map_or(target_time, |back| target_time.max(back.time().0))
-}
 
 /// One frame of the clock: how many fixed ticks to run and where the display
 /// sits.
@@ -56,7 +46,6 @@ pub struct LiquidClock {
     target_time: f64,
     ticks_done: u64,
     dropped_seconds: f64,
-    tick_cap: Option<u32>,
     /// Speed over the interval after the last frame. Like every replayed
     /// control, a Speed edit takes effect from the frame that observes it.
     speed: f64,
@@ -99,14 +88,6 @@ impl LiquidClock {
         }
     }
 
-    /// Cap the ticks of the frames that follow, live and offline alike: at most
-    /// `cap` run, one tick of debt is kept and the rest is dropped, reported.
-    /// A coupled domain caps at 0 while its body reaction is pending and at 1
-    /// otherwise (section 3.3). `None` restores the uncapped clock.
-    pub fn set_tick_cap(&mut self, cap: Option<u32>) {
-        self.tick_cap = cap;
-    }
-
     /// Make the next frame a restart in a new epoch. The domain's
     /// `clear_state` calls this: the runtime's state reset (export start,
     /// resize, an idle chain) must reseed the liquid even when the transport
@@ -135,8 +116,8 @@ impl LiquidClock {
             || transport < self.last_transport - 1e-9;
         let mut held = false;
         // Authored inputs were sampled at the last frame's target; within an
-        // epoch the target never moves back past it, so a drop under a tick
-        // cap can only give back this frame's advance.
+        // epoch the target never moves back past it, so a drop under live
+        // overload can only give back this frame's advance.
         let mut floor = self.target_time;
         let speed = f64::from(speed);
         if restarted {
@@ -162,13 +143,10 @@ impl LiquidClock {
         }
         self.last_transport = transport;
         let due = ((self.target_time / TICK + 1e-9).floor() as u64).saturating_sub(self.ticks_done);
-        let ticks = if offline && self.tick_cap.is_none() {
+        let ticks = if offline {
             due
         } else {
-            let allowance = match self.tick_cap {
-                Some(cap) => u64::from(cap),
-                None => ((frame_interval / TICK) - 1e-6).ceil().clamp(1.0, f64::from(MAX_LIVE_TICKS)) as u64,
-            };
+            let allowance = ((frame_interval / TICK) - 1e-6).ceil().clamp(1.0, f64::from(MAX_LIVE_TICKS)) as u64;
             let run = due.min(allowance);
             // Keep one tick of scheduling jitter; drop the rest visibly. What
             // the floor keeps stays owed and runs on later frames.
@@ -340,51 +318,43 @@ mod tests {
         }
     }
 
-    /// A coupled domain's cap: 0 holds without dropping the owed tick, 1 runs
-    /// one; offline obeys the cap too and drops beyond one tick of debt.
+    /// The same live policy serves coupled and uncoupled domains.
     #[test]
-    fn liquid_clock_tick_cap_holds_and_limits() {
-        let mut clock = LiquidClock::default();
-        clock.set_tick_cap(Some(1));
-        clock.advance(0.0, TICK, 1.0, 0.0, false, false);
-        clock.set_tick_cap(Some(0));
-        let held = clock.advance(TICK, TICK, 1.0, 0.0, false, false);
-        assert_eq!((held.ticks, held.dropped_seconds), (0, 0.0));
-        clock.set_tick_cap(Some(1));
-        let caught = clock.advance(2.0 * TICK, TICK, 1.0, 0.0, false, false);
-        assert_eq!((caught.ticks, caught.dropped_seconds), (1, 0.0));
-        let offline = clock.advance(5.0 * TICK, 3.0 * TICK, 1.0, 0.0, false, true);
-        assert_eq!(offline.ticks, 1);
-        // Four due (one still owed from the catch-up): one runs, one stays
-        // owed, two drop.
-        assert!((offline.dropped_seconds - 2.0 * TICK).abs() < 1e-9);
-        clock.set_tick_cap(None);
-        let uncapped = clock.advance(8.0 * TICK, 3.0 * TICK, 1.0, 0.0, false, true);
-        assert_eq!(uncapped.ticks, 4);
+    fn liquid_clock_live_24_30_60_fps_cover_the_same_ticks() {
+        for fps in [24, 30, 60] {
+            let mut clock = LiquidClock::default();
+            let mut counts = Vec::new();
+            for frame in 0..=fps {
+                let out = clock.advance(frame as f64 / fps as f64, 1.0 / fps as f64, 1.0, 0.0, false, false);
+                assert_eq!(out.dropped_seconds, 0.0);
+                assert!(out.ticks <= MAX_LIVE_TICKS);
+                counts.push(out.ticks);
+            }
+            assert_eq!(clock.ticks_done(), 60, "{fps} fps");
+            if fps == 24 {
+                assert_eq!(&counts[1..5], &[2, 3, 2, 3]);
+            }
+        }
     }
 
-    /// A coupled domain holding under cap 0 with jittery frames (one tick's
-    /// GPU work spanning several display frames) never moves the target back
-    /// past the last frame's: the body history records every frame.
+    /// Jitter and overload never move the sampled target backwards.
     #[test]
-    fn liquid_clock_target_never_regresses_under_tick_cap_zero() {
+    fn liquid_clock_target_never_regresses_under_live_overload() {
         let mut clock = LiquidClock::default();
         let mut transport = 0.0;
-        let intervals = [2.5, 2.5, 2.5, 0.07, 0.2, 1.9, 2.5, 0.1, 3.0, 0.05, 2.5, 2.5];
-        let caps = [Some(1), Some(0), Some(0), Some(1), Some(0), Some(0), Some(1), Some(0)];
+        let intervals = [12.5, 8.5, 2.5, 0.07, 0.2, 1.9, 2.5, 0.1, 3.0, 0.05, 2.5, 2.5];
         let mut previous = clock.advance(0.0, TICK, 1.0, 0.0, false, false);
         for step in 0..400 {
             let interval = TICK * intervals[step % intervals.len()];
             transport += interval;
-            clock.set_tick_cap(caps[step % caps.len()]);
             let frame = clock.advance(transport, interval, 1.0, 0.0, false, false);
             assert!(!frame.restarted, "frame {step}");
             assert!(frame.target_time >= previous.target_time - 1e-12, "frame {step}: target went back");
-            assert!(frame.target_time <= transport + 1e-9, "frame {step}: target ran ahead of the transport");
+            assert!(frame.target_time <= transport + 1e-9, "frame {step}: target ran ahead of transport");
             assert!(frame.dropped_seconds >= previous.dropped_seconds, "frame {step}: dropped time shrank");
             previous = frame;
         }
-        assert!(previous.dropped_seconds > 0.0, "the cap must have dropped something");
+        assert!(previous.dropped_seconds > 0.0, "overload must have dropped something");
     }
 
     /// A state reset restarts once in a new epoch while the transport runs on.

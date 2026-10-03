@@ -3,6 +3,7 @@
 import contextlib
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -15,6 +16,8 @@ from unittest.mock import patch
 import landing_gate
 import land_branch
 import trunk_health
+import cpu_scope
+import diff_scope
 
 
 def process_alive(pid):
@@ -28,7 +31,8 @@ class LandingTests(unittest.TestCase):
     checks = ["tooling", "design-status", "docs-index", "deny", "ignored-tests",
               "clippy", "flow-gate", "tests-build", "gpu-proofs-build", "tests", "gpu-proofs"]
 
-    def exercise(self, failed=None, extra=(), stale_docs=False, packages=True, head="head", paths=None):
+    def exercise(self, failed=None, extra=(), stale_docs=False, packages=True, head="head", paths=None,
+                 comment=False):
         called, commands = [], []
         self.events = events = []
         paths = paths or ["crates/manifold-gpu/src/metal/device.rs"]
@@ -67,6 +71,8 @@ class LandingTests(unittest.TestCase):
                 return 0, out, "", 0.01
             label = ({"nextest": "tests"}.get(cmd[1], cmd[1]) if cmd[0] == "cargo"
                      else labels[Path(cmd[1]).name])
+            if "test(regenerates_in_sync)" in cmd:
+                label = "catalog-fresh"
             if "--no-run" in cmd or "--build-only" in cmd:
                 label += "-build"
             called.append(label)
@@ -75,6 +81,12 @@ class LandingTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as d, contextlib.ExitStack() as stack:
             root = Path(d)
+            if packages:
+                for path in paths:
+                    if path.startswith("crates/"):
+                        crate = root / "crates" / path.split("/")[1]
+                        crate.mkdir(parents=True, exist_ok=True)
+                        (crate / "Cargo.toml").write_text(f'[package]\nname = "{crate.name}"\n')
             output = stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
             stack.enter_context(patch.object(sys, "argv", ["landing_gate.py", "--repo", d, *extra]))
             stack.enter_context(patch.object(landing_gate, "MAIN_CHECKOUT", root))
@@ -82,10 +94,10 @@ class LandingTests(unittest.TestCase):
             # A tooling self-test must never wait on the machine-wide GPU lock.
             stack.enter_context(patch.object(landing_gate.gpu_queue, "hold",
                                              side_effect=recording_hold))
-            stack.enter_context(patch.object(landing_gate, "get_touched_packages",
-                                            return_value=["manifold-gpu"] if packages else []))
+            stack.enter_context(patch.object(diff_scope, "effective_paths",
+                                            return_value=([], paths) if comment else (paths, [])))
             deps = stack.enter_context(patch.object(landing_gate, "reverse_deps", return_value=[]))
-            stack.enter_context(patch("codex_checks.tooling_checks", return_value=[{
+            stack.enter_context(patch("codex_checks.tooling_checks", return_value=[] if comment else [{
                 "name": "tooling", "argv": ["python3", "fake-tool-test.py"],
             }]))
             code = landing_gate.main()
@@ -119,8 +131,8 @@ class LandingTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(called, self.checks)
         self.assertEqual(timings["failed"], 0)
-        self.assertIn(["python3", "scripts/gpu_proofs_gate.py", "--base", "origin/main",
-                       "--budget", "300"], commands)
+        self.assertIn(["python3", "scripts/gpu_proofs_gate.py", "--path", "crates/manifold-gpu/src/metal/device.rs",
+                       "--budget", "360"], commands)
         self.assertTrue(all("--all" not in c and "--full-suite" not in c for c in commands))
         self.assertIn("[gpu-proofs] mode: scoped", output)
         self.assertIn("manifold-gpu core", output)
@@ -143,12 +155,68 @@ class LandingTests(unittest.TestCase):
     def test_builds_compile_exactly_what_the_held_legs_run(self):
         _, _, _, commands, *_ = self.exercise()
         nextest = [c for c in commands if c[:2] == ["cargo", "nextest"]]
-        self.assertEqual(nextest, [["cargo", "nextest", "run", "--no-run", "-p", "manifold-gpu"],
-                                   ["cargo", "nextest", "run", "-p", "manifold-gpu"]])
+        selection = ["-p", "manifold-gpu", "-p", "manifold-renderer",
+                     "--features", "manifold-renderer/gpu-proofs",
+                     "-E", "(package(=manifold-gpu) & test(/^metal::device::/))"]
+        self.assertEqual(nextest, [["cargo", "nextest", "run", "--no-run", *selection],
+                                   ["cargo", "nextest", "run", "--no-fail-fast", "--no-tests=pass", *selection]])
         proofs = [c for c in commands if c[1:2] == ["scripts/gpu_proofs_gate.py"]]
         self.assertEqual(proofs, [
-            ["python3", "scripts/gpu_proofs_gate.py", "--base", "origin/main", "--build-only"],
-            ["python3", "scripts/gpu_proofs_gate.py", "--base", "origin/main", "--budget", "300"]])
+            ["python3", "scripts/gpu_proofs_gate.py", "--path", "crates/manifold-gpu/src/metal/device.rs", "--build-only"],
+            ["python3", "scripts/gpu_proofs_gate.py", "--path", "crates/manifold-gpu/src/metal/device.rs", "--budget", "360"]])
+
+    def test_catalog_check_skipped_when_renderer_untouched(self):
+        _, _, _, commands, *_ = self.exercise()
+        self.assertFalse(any("test(regenerates_in_sync)" in c for c in commands))
+
+    def test_renderer_test_and_catalog_builds_share_proof_features(self):
+        code, _, _, commands, *_ = self.exercise(
+            paths=["crates/manifold-renderer/src/node_graph/primitives/invert.rs"])
+        self.assertEqual(code, 0)
+        nextest = [c for c in commands if c[:2] == ["cargo", "nextest"]]
+        self.assertEqual(len(nextest), 3)
+        for cmd in nextest:
+            self.assertEqual(cmd[cmd.index("--features") + 1], "manifold-renderer/gpu-proofs")
+            self.assertEqual(cmd.count("manifold-renderer"), 1)
+        self.assertIn("test(regenerates_in_sync)", nextest[1])
+
+    def test_skipped_proofs_do_not_enable_proof_features(self):
+        code, _, _, commands, *_ = self.exercise(extra=["--skip-gpu", "deferred"])
+        self.assertEqual(code, 0)
+        self.assertTrue(all("--features" not in c for c in commands))
+
+    def test_gate_builds_disable_incremental_and_preserve_jobs(self):
+        from storage_budget import BuildCheck
+        root = Path.cwd()
+        with patch.dict(os.environ, {"CARGO_INCREMENTAL": "1", "CARGO_BUILD_JOBS": "4"}, clear=True), \
+                patch("storage_budget.check_build", return_value=BuildCheck(True, root / "target", 200 * 2**30)):
+            for cmd in (["cargo", "nextest"], ["python3", "scripts/gpu_proofs_gate.py"],
+                        ["python3", "scripts/run_ui_flows.py"]):
+                env, refusal = landing_gate.build_environment(cmd, root)
+                self.assertIsNone(refusal)
+                self.assertEqual(env["CARGO_INCREMENTAL"], "0")
+                self.assertEqual(env["CARGO_BUILD_JOBS"], "4")
+
+    def test_stale_docs_reported_but_stale_thumbnails_ignored(self):
+        with tempfile.TemporaryDirectory() as d:
+            assets = Path(d) / "crates/manifold-renderer/assets"
+            for sub in ("effect-presets", "preset-thumbnails/effects"):
+                (assets / sub).mkdir(parents=True)
+            (assets / "effect-presets/Bloom.json").write_text("{}")
+            (assets / "preset-thumbnails/effects/Bloom.hash").write_text("deadbeef")
+            (Path(d) / "docs").mkdir()
+            (Path(d) / "docs/README.md").write_text("old")
+            (Path(d) / "docs/A.md").write_text("# A\n\nA long enough summary line for the index here.\n")
+            names = [n for n, _, _ in landing_gate.freshness_problems(d)]
+            self.assertEqual(names, ["docs-index"])
+
+    def test_stale_artifacts_fail_gate_with_regenerate_commands(self):
+        problems = [("docs-index", ["docs/README.md"], "regen-cmd")]
+        with patch.object(landing_gate, "freshness_problems", return_value=problems):
+            code, called, timings, _, _, output, _ = self.exercise()
+        self.assertEqual(code, 1)
+        self.assertEqual(called, [])
+        self.assertIn("regenerate: regen-cmd", output)
 
     def test_build_failure_stops_before_the_hold(self):
         for failed in ("tests-build", "gpu-proofs-build"):
@@ -194,7 +262,7 @@ class LandingTests(unittest.TestCase):
     def test_every_skip_names_its_reason(self):
         *_, output, _ = self.exercise(packages=False, extra=["--skip-gpu", "deferred"])
         self.assertIn("[SKIP] clippy (no touched packages)", output)
-        self.assertIn("[SKIP] tests (no touched packages)", output)
+        self.assertIn("[SKIP] tests (no changed Rust modules or mapped integration binaries)", output)
         self.assertIn("[SKIP] gpu-proofs (skipped by flag: deferred)", output)
         self.assertIn("SKIP clippy (no touched packages)\n", output)
 
@@ -276,6 +344,87 @@ class LandingTests(unittest.TestCase):
                                             return_value=subprocess.CompletedProcess([], 0, "", "")))
             self.assertEqual(trunk_health.main(), 0)
         self.assertIn("would run: python3 scripts/gpu_proofs_gate.py --all", output.getvalue())
+        self.assertIn("would run: cargo nextest run --workspace", output.getvalue())
+
+    def test_comment_only_rust_skips_builds_tests_and_gpu_without_hold(self):
+        code, called, _, commands, _, output, deps = self.exercise(comment=True)
+        self.assertEqual(code, 0)
+        for label in ("clippy", "tests-build", "gpu-proofs-build", "tests", "gpu-proofs"):
+            self.assertNotIn(label, called)
+            self.assertIn(f"[SKIP] {label} (docs/comment-only diff)", output)
+        self.assertFalse(any(e.startswith("hold") for e in self.events))
+        self.assertFalse(any(c[:2] == ["cargo", "nextest"] for c in commands))
+        self.assertEqual(deps, 0)
+
+    def test_one_primitive_selects_only_its_module(self):
+        path = "crates/manifold-renderer/src/node_graph/primitives/camera_lens.rs"
+        _, _, _, commands, _, output, _ = self.exercise(paths=[path])
+        expected = "(package(=manifold-renderer) & test(/^node_graph::primitives::camera_lens::/))"
+        scoped = [c for c in commands if c[:2] == ["cargo", "nextest"] and "test(regenerates_in_sync)" not in c]
+        self.assertEqual(len(scoped), 2)
+        self.assertTrue(all(c[c.index("-E") + 1] == expected for c in scoped))
+        self.assertIn("[tests] filterset: " + expected, output)
+
+
+class DiffScopeTests(unittest.TestCase):
+    def check_diff(self, before, after, suffix=".rs"):
+        import difflib
+        patch_text = "".join(difflib.unified_diff(before.splitlines(True), after.splitlines(True), n=0))
+        return diff_scope.comment_only(patch_text, before, after, suffix)
+
+    def test_comments_and_block_interiors(self):
+        for before, after, suffix in [
+            ("// old\nfn f() {}\n", "/// new\nfn f() {}\n", ".rs"),
+            ("//! old\n", "//! new\n\n", ".rs"),
+            ("/*\nold\n*/\nfn f() {}\n", "/*\nnew\n*/\nfn f() {}\n", ".rs"),
+            ("/* a /* nested */ b */\n", "/* x /* nested */ y */\n", ".rs"),
+            ("// old\n", "// new\n", ".wgsl"),
+            ("# old\nx = 1\n", "# new\nx = 1\n", ".py"),
+        ]:
+            with self.subTest(suffix=suffix, before=before):
+                self.assertTrue(self.check_diff(before, after, suffix))
+
+    def test_code_strings_and_comment_delimiters_stay_active(self):
+        for before, after, suffix in [
+            ("fn f() {} // old\n", "fn f() {} // new\n", ".rs"),
+            ('let s = r#"\n// old\n"#;\n', 'let s = r#"\n// new\n"#;\n', ".rs"),
+            ('let s = "\n\n";\n', 'let s = "\n\n\n";\n', ".rs"),
+            ('s = """\n# old\n"""\n', 's = """\n# new\n"""\n', ".py"),
+            ("/*\n*/\nfn f() {}\n", "/*\nfn f() {}\n*/\n", ".rs"),
+        ]:
+            with self.subTest(before=before):
+                self.assertFalse(self.check_diff(before, after, suffix))
+
+    def test_changed_lines_drive_path_exclusion(self):
+        path = "crates/manifold-renderer/src/node_graph/primitives/blur.rs"
+        def git(repo, *args):
+            if "--name-only" in args:
+                return path + "\0"
+            if args[0] == "diff":
+                return "@@ -1 +1 @@\n-// old\n+// new\n"
+            return "// old\nfn f() {}\n" if args[1].startswith("base:") else "// new\nfn f() {}\n"
+        with patch.object(diff_scope, "git", side_effect=git):
+            self.assertEqual(diff_scope.effective_paths(Path.cwd(), "base"), ([], [path]))
+
+    def test_sibling_alias_and_integration_mapping(self):
+        with tempfile.TemporaryDirectory() as d:
+            crate = Path(d) / "crates/manifold-renderer"
+            src = crate / "src/node_graph"
+            src.mkdir(parents=True)
+            (crate / "Cargo.toml").write_text('[package]\nname = "manifold-renderer"\n')
+            (src / "fluid.rs").write_text('#[path = "fluid_tests.rs"]\nmod checks;\n')
+            (src / "fluid_tests.rs").write_text("")
+            plan = cpu_scope.plan_for_paths(["crates/manifold-renderer/src/node_graph/fluid.rs"], d)
+            self.assertIn("test(/^node_graph::fluid::checks::/)", plan.filterset)
+            self.assertIn("binary(=fluid_preset)", plan.filterset)
+
+    def test_flow_scope_uses_only_effective_paths(self):
+        import run_ui_flows
+        manifest = {"path_triggers": {"crates/manifold-ui/": ["ui"]}}
+        with patch.object(diff_scope, "git", return_value="base\n"), \
+                patch.object(diff_scope, "effective_paths", return_value=([], ["crates/manifold-ui/src/lib.rs"])) as scope:
+            self.assertEqual(run_ui_flows.filters_for_touched("origin/main...HEAD", manifest), ([], {}))
+            scope.assert_called_once_with(run_ui_flows.ROOT, "base", "HEAD")
 
 
 class DeliveryTests(unittest.TestCase):

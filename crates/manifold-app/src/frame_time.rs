@@ -1,5 +1,5 @@
 //! `manifold frame-time <project.manifold> --frames N [--resolution R]
-//! [--stamp-every K] [--splash-frames S] [--png-frame T --png <path>]` —
+//! [--solve-level L] [--stamp-every K] [--splash-frames S] [--png-frame T --png <path>]` —
 //! the whole frame of a real project the way the app runs it: the
 //! production loader, the headless content thread, the project's own frame
 //! rate and output size, from the clip's start. Every frame reports what
@@ -18,8 +18,9 @@
 //! work outlasts the tick interval (every one of them at 128). Measure a
 //! coupled project with `--stamp-every 1`.
 //! The first `S` frames are the splash, the rest
-//! the calm; both tables print. `--resolution` overrides the GPU FLIP
-//! generator's `resolution` card in memory, never on disk.
+//! the calm; both tables print. `--resolution` and `--solve-level` override
+//! the GPU FLIP generator's `resolution` and `solve_level` cards in memory,
+//! never on disk.
 //! Presentation is not timed here (no window); the pacing doc's vsync
 //! quantisation applies on top of these numbers.
 
@@ -33,6 +34,7 @@ use crate::perf_soak::{prepare_project_edited, PreparedProject};
 
 const GENERATOR: &str = "WaterDamBreakGpuFlip";
 const RESOLUTION_PARAM: &str = "resolution";
+const SOLVE_LEVEL_PARAM: &str = "solve_level";
 const STEP: &str = "node.gpu_flip_step";
 const WHITEWATER: &str = "node.whitewater_step";
 const RENDER: &str = "node.render_scene";
@@ -43,6 +45,7 @@ struct Args {
     project: String,
     frames: usize,
     resolution: Option<f32>,
+    solve_level: Option<f32>,
     stamp_every: usize,
     granularity: ProfileGranularity,
     splash_frames: usize,
@@ -52,7 +55,7 @@ struct Args {
 fn usage_exit(msg: &str) -> ! {
     eprintln!("frame-time: {msg}");
     eprintln!(
-        "usage: manifold frame-time <project.manifold> --frames N [--resolution R] \
+        "usage: manifold frame-time <project.manifold> --frames N [--resolution R] [--solve-level L] \
          [--stamp-every K] [--stamp-granularity dispatch|node] [--splash-frames S] \
          [--png-frame T --png <path>]"
     );
@@ -89,12 +92,14 @@ fn parse(args: &[String]) -> Args {
     let splash_frames = number("--splash-frames", Some(frames / 2));
     let resolution = value(args, "--resolution")
         .map(|s| s.parse::<f32>().unwrap_or_else(|_| usage_exit("--resolution must be a number")));
+    let solve_level = value(args, "--solve-level")
+        .map(|s| s.parse::<f32>().unwrap_or_else(|_| usage_exit("--solve-level must be a number")));
     let png = match (value(args, "--png-frame"), value(args, "--png")) {
         (None, None) => None,
         (Some(_), None) | (None, Some(_)) => usage_exit("--png-frame and --png go together"),
         (Some(_), Some(path)) => Some((number("--png-frame", None), path)),
     };
-    Args { project, frames, resolution, stamp_every, granularity, splash_frames, png }
+    Args { project, frames, resolution, solve_level, stamp_every, granularity, splash_frames, png }
 }
 
 #[cfg(test)]
@@ -332,22 +337,27 @@ fn probe(args: &Args) -> Result<(), String> {
     let mut overridden = 0usize;
     let PreparedProject { mut ct, cmd_tx, cmd_rx, state_tx, drain, width, height, frame_rate, .. } =
         prepare_project_edited(&args.project, "frame-time", &mut |project| {
-            let Some(resolution) = args.resolution else { return };
+            let overrides = [(RESOLUTION_PARAM, args.resolution), (SOLVE_LEVEL_PARAM, args.solve_level)];
             for layer in &mut project.timeline.layers {
                 if !layer.hosts_generator() || layer.generator_type().as_str() != GENERATOR {
                     continue;
                 }
-                if let Some(params) = layer.gen_params_mut()
-                    && params.set_base_param(RESOLUTION_PARAM, resolution)
-                {
-                    overridden += 1;
+                let Some(params) = layer.gen_params_mut() else { continue };
+                for (name, value) in overrides {
+                    if let Some(value) = value
+                        && params.set_base_param(name, value)
+                    {
+                        overridden += 1;
+                    }
                 }
             }
         })?;
-    if args.resolution.is_some() && overridden == 0 {
-        return Err(format!("no {GENERATOR} layer took the resolution override"));
+    let asked = usize::from(args.resolution.is_some()) + usize::from(args.solve_level.is_some());
+    if asked > 0 && overridden < asked {
+        return Err(format!("a {GENERATOR} layer took {overridden} of the {asked} overrides (resolution, solve level)"));
     }
-    let resolution_note = args.resolution.map_or("the file's resolution".to_owned(), |r| format!("resolution {r}"));
+    let resolution_note = args.resolution.map_or("the file's resolution".to_owned(), |r| format!("resolution {r}"))
+        + &args.solve_level.map_or(String::new(), |l| format!(", solve level {l}"));
     let device_name = ct.content_pipeline.native_device().map_or("unknown".to_owned(), |d| d.device_name());
     println!(
         "frame-time: {} at {width}x{height} @ {frame_rate} fps, {resolution_note}, {} frames, every {}th timestamped per {}, splash = first {} frames, on {device_name}",

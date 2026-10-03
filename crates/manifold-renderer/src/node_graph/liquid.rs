@@ -21,8 +21,24 @@ pub mod grid;
 pub mod lattice;
 #[cfg(test)]
 mod scene_contract;
+pub mod tick_samples;
 
-use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
+use crate::node_graph::NodeInputs;
+use crate::node_graph::fluid_role::{FluidRole, MAX_FLUID_ROLES};
+
+/// Read every wired role port into its slot; true when a wired role is not
+/// ready yet.
+pub fn read_roles(inputs: &NodeInputs<'_>, ports: &[&str], roles: &mut [Option<FluidRole>]) -> bool {
+    let mut pending = false;
+    for (port, role) in ports.iter().zip(roles.iter_mut()) {
+        *role = None;
+        if inputs.slot(port).is_some() {
+            *role = inputs.fluid_role(port);
+            pending |= role.is_none();
+        }
+    }
+    pending
+}
 
 /// The largest count a scalar wire carries exactly: wires are f32, and past
 /// 2^24 a count can round up past the storage sized from the true count.

@@ -2,17 +2,16 @@
 //! GPU_MPM_SOLVER_DESIGN.md D11): Collider roles become one [`LiquidBody`]
 //! row per body per tick from their authored motion, and their geometry's
 //! distance lattices one packed atlas with a [`LiquidShape`] per role.
-//! Motion is sampled from display-frame observations through the shared
-//! `InputHistory`, as FLIP roles are.
+//! Motion is the authored roles replayed at each tick's start
+//! ([`TickSamples`]), never observed per display frame, so a collider moves
+//! the same at any frame rate.
 
 use std::sync::Arc;
 
-use manifold_physics::Seconds;
-use manifold_physics::input::{InputHistory, Timestamped, input_span, input_span_before};
-
 use crate::node_graph::channel_names::well_known;
 use crate::node_graph::fluid::TICK;
-use crate::node_graph::liquid::clock::sample_time;
+use crate::node_graph::liquid::clock::{ClockFrame, LiquidClock};
+use crate::node_graph::liquid::tick_samples::TickSamples;
 use crate::node_graph::fluid_role::{
     DistanceState, FluidRole, FluidRoleKind, MAX_FLUID_ROLES, PreparedFluidGeometry,
 };
@@ -161,39 +160,23 @@ impl Controls {
             inherit_motion: role.inherit_motion,
         }
     }
-
-    /// As FLIP roles interpolate: position and Euler angles lerp, a switch
-    /// takes effect at the later sample.
-    fn interpolate(self, next: Self, alpha: f32) -> Self {
-        let lerp = |a: f32, b: f32| a + alpha * (b - a);
-        Self {
-            transform: Transform {
-                pos: std::array::from_fn(|i| lerp(self.transform.pos[i], next.transform.pos[i])),
-                rot_euler: std::array::from_fn(|i| lerp(self.transform.rot_euler[i], next.transform.rot_euler[i])),
-                ..self.transform
-            },
-            enabled: if alpha >= 1.0 { next.enabled } else { self.enabled },
-            friction: lerp(self.friction, next.friction),
-            velocity: std::array::from_fn(|i| lerp(self.velocity[i], next.velocity[i])),
-            inherit_motion: lerp(self.inherit_motion, next.inherit_motion),
-        }
-    }
 }
 
 /// Region codes in a region row's `angular_velocity.w`.
 pub const REGION_INFLOW: f32 = 2.0;
 pub const REGION_OUTFLOW: f32 = 3.0;
 
-#[derive(Clone, Copy)]
-struct Sample {
-    time: Seconds,
-    controls: [Controls; MAX_FLUID_ROLES],
-}
+/// Every role slot's controls at one tick's start.
+type Poses = [Controls; MAX_FLUID_ROLES];
 
-impl Timestamped for Sample {
-    fn time(&self) -> Seconds {
-        self.time
+fn controls_of(roles: &[Option<FluidRole>]) -> Poses {
+    let mut controls = [Controls::default(); MAX_FLUID_ROLES];
+    for (slot, role) in roles.iter().enumerate().take(MAX_FLUID_ROLES) {
+        if let Some(role) = role {
+            controls[slot] = Controls::from_role(role);
+        }
     }
+    controls
 }
 
 struct BodyRole {
@@ -218,8 +201,9 @@ pub struct LiquidBodies {
     /// Coupled rigid bodies' hulls, in the rigid world's order, after the
     /// roles: their shapes follow the roles' and their rows each tick's.
     coupled: Vec<Arc<PreparedFluidGeometry>>,
-    history: Option<InputHistory<Sample>>,
-    epoch: Option<u32>,
+    /// The roles' controls at each tick's start, from the oldest tick not
+    /// yet run.
+    samples: TickSamples<Poses>,
     shapes: Vec<LiquidShape>,
     atlas: Vec<u32>,
     /// Bumped whenever `shapes` or `atlas` is rebuilt.
@@ -390,74 +374,69 @@ impl LiquidBodies {
         self.version += 1;
     }
 
-    /// Record this frame's controls at the simulation time the frame reached
-    /// (`target_time`); a new epoch starts a new history.
-    pub fn observe(
-        &mut self,
-        roles: &[Option<FluidRole>],
-        epoch: u32,
-        target_time: f64,
-        consumed_until: f64,
-    ) -> Result<(), String> {
-        if self.epoch != Some(epoch) {
-            self.epoch = Some(epoch);
-            if let Some(history) = &mut self.history {
-                history.clear();
-            }
-        }
-        let history = match &mut self.history {
-            Some(history) => history,
-            None => self.history.insert(InputHistory::with_growing_capacity(8).map_err(|e| e.to_string())?),
-        };
-        let mut controls = [Controls::default(); MAX_FLUID_ROLES];
-        for (slot, role) in roles.iter().enumerate().take(MAX_FLUID_ROLES) {
-            if let Some(role) = role {
-                controls[slot] = Controls::from_role(role);
-            }
-        }
-        let time = Seconds(sample_time(history, target_time));
-        history
-            .record(Sample { time, controls }, Seconds(consumed_until))
-            .map(|_| ())
-            .map_err(|e| format!("Liquid: {e}"))
+    /// The transport times the history replay must sample before the next
+    /// frame: each tick's start under `clock`, in `(from, until]`.
+    pub fn request_samples(&mut self, clock: &LiquidClock, from: f64, until: f64, out: &mut Vec<f64>) {
+        self.samples.request(clock, from, until, out);
+    }
+
+    /// A history replay sample of the roles at transport `now`; `None` while
+    /// a role is still pending.
+    pub fn observe_sample(&mut self, now: f64, roles: Option<&[Option<FluidRole>]>) {
+        let controls = roles.map(controls_of);
+        self.samples.observe(now, controls.as_ref());
+    }
+
+    /// This frame's roles, right after `clock` advanced to `frame`: they
+    /// belong to a tick that starts now.
+    pub fn settle(&mut self, roles: &[Option<FluidRole>], clock: &LiquidClock, frame: &ClockFrame) {
+        self.samples.settle(clock, frame, Some(&controls_of(roles)));
     }
 
     /// One row per body for each of this frame's ticks, `first_tick..`, tick
     /// major: each role's pose at the tick's start and the velocities that
-    /// reach the pose at its end, then `coupled`, the coupled bodies'
-    /// tick-start state. Every tick gets the same coupled rows; an offline
-    /// frame of several coupled ticks rewrites each later tick's with
-    /// [`Self::set_coupled_rows`] once Box3D has stepped the tick before. A
-    /// coupled row's shape index counts from the first coupled body, or is −1.
-    /// Consumed samples are pruned afterwards.
-    pub fn rows(&mut self, first_tick: u64, ticks: u32, coupled: &[LiquidBody]) -> &[LiquidBody] {
+    /// reach the pose at its end (the next tick's start), then `coupled`, the
+    /// coupled bodies' tick-start state. `ticks` 0 publishes the first tick's
+    /// start poses at rest, which a restart seeds around. Every tick gets the
+    /// same coupled rows; a frame of several coupled ticks rewrites
+    /// each later tick's with [`Self::set_coupled_rows`] once Box3D has
+    /// stepped the tick before. A coupled row's shape index counts from the
+    /// first coupled body, or is −1. Run ticks' samples are pruned afterwards.
+    pub fn rows(&mut self, first_tick: u64, ticks: u32, coupled: &[LiquidBody]) -> Result<&[LiquidBody], String> {
         self.rows.clear();
         self.region_rows.clear();
-        let Some(history) = &mut self.history else {
-            return &self.rows;
-        };
         debug_assert_eq!(coupled.len(), self.coupled.len(), "one row per prepared coupled body");
         let offset = self.roles.len() as f32;
-        for tick in first_tick..first_tick + u64::from(ticks) {
-            let start_time = Seconds(tick as f64 * TICK);
-            let end_time = Seconds((tick + 1) as f64 * TICK);
+        let row_ticks = ticks.max(1) as usize;
+        if self.roles.is_empty() {
+            for _ in 0..row_ticks {
+                self.rows.extend(coupled.iter().map(|row| coupled_row(row, offset)));
+            }
+            return Ok(&self.rows);
+        }
+        // A tick's end pose is the next tick's start; a seed row has none.
+        let mut poses = self
+            .samples
+            .span(first_tick, ticks as usize + 1)
+            .map_err(|tick| {
+                format!("Liquid bodies: tick {tick} was never sampled; the host must replay physics history before each frame")
+            })?;
+        let mut start = &poses.next().expect("the span holds the first tick").1;
+        for _ in 0..row_ticks {
+            let end = if ticks > 0 { &poses.next().expect("the span holds each tick's end").1 } else { start };
             for (index, role) in self.roles.iter().enumerate() {
-                let at = |span: Option<manifold_physics::input::InputSpan<'_, Sample>>| {
-                    let span = span.expect("observe before rows");
-                    span.before.controls[role.slot].interpolate(span.after.controls[role.slot], span.alpha)
-                };
-                let start = at(input_span(history.iter(), start_time));
-                let end = at(input_span_before(history.iter(), end_time));
-                let row = body_row(start, end, index as f32);
+                let from = start[role.slot];
+                let row = body_row(from, end[role.slot], index as f32);
                 match role.kind {
-                    FluidRoleKind::Inflow | FluidRoleKind::Outflow => self.region_rows.push(region_row(row, role.kind, start)),
+                    FluidRoleKind::Inflow | FluidRoleKind::Outflow => self.region_rows.push(region_row(row, role.kind, from)),
                     _ => self.rows.push(row),
                 }
             }
             self.rows.extend(coupled.iter().map(|row| coupled_row(row, offset)));
+            start = end;
         }
-        let _ = history.prune_before(Seconds((first_tick + u64::from(ticks)) as f64 * TICK));
-        &self.rows
+        self.samples.prune_before(first_tick + u64::from(ticks));
+        Ok(&self.rows)
     }
 
     /// Replace tick `tick`'s coupled rows (counted from this frame's first
@@ -614,25 +593,71 @@ mod tests {
         assert_eq!(unpack(words[1] >> 16), f32::INFINITY);
     }
 
-    /// A collider observed at two display frames 1/30 s apart runs two ticks
-    /// between them: each tick's row starts where the authored motion is at
-    /// the tick's start, and its velocities land on the pose at its end.
+    /// Drives bodies as the host does: before each frame the history replay
+    /// samples the roles (here a function of transport time) at every
+    /// requested tick start and closes the interval at the frame's own time;
+    /// the frame then advances the clock and settles.
+    #[derive(Default)]
+    struct Rig {
+        clock: LiquidClock,
+        last: Option<f64>,
+        times: Vec<f64>,
+    }
+
+    impl Rig {
+        fn frame(
+            &mut self,
+            bodies: &mut LiquidBodies,
+            transport: f64,
+            interval: f64,
+            roles_at: &dyn Fn(f64) -> Vec<Option<FluidRole>>,
+        ) -> ClockFrame {
+            if let Some(last) = self.last.filter(|&last| transport > last) {
+                self.times.clear();
+                bodies.request_samples(&self.clock, last, transport, &mut self.times);
+                for &time in self.times.iter().filter(|&&time| time < transport) {
+                    bodies.observe_sample(time, Some(&roles_at(time)));
+                }
+                bodies.observe_sample(transport, Some(&roles_at(transport)));
+            }
+            self.last = Some(transport);
+            let frame = self.clock.advance(transport, interval, 1.0, 0.0, false, false);
+            bodies.settle(&roles_at(transport), &self.clock, &frame);
+            frame
+        }
+    }
+
+    fn first_tick(frame: &ClockFrame) -> u64 {
+        crate::node_graph::liquid::fields::first_tick(frame)
+    }
+
+    /// A collider moving linearly, shown at 30 fps, runs two ticks a frame:
+    /// each tick's row starts where the authored motion is at the tick's
+    /// start, and its velocities land on the pose at its end. A switch takes
+    /// effect at the first tick starting after it.
     #[test]
     fn liquid_body_rows_follow_authored_motion() {
         let geometry = cube();
-        let mut roles = vec![None; 3];
-        roles[2] = collider(&geometry, [0.0, 1.0, 0.0], 0.0);
+        let roles_at = |t: f64| {
+            let alpha = (t / (2.0 * TICK)) as f32;
+            let mut roles = vec![None; 3];
+            roles[2] = collider(&geometry, [0.3 * alpha, 1.0, -0.15 * alpha], 0.6 * alpha);
+            roles[2].as_mut().unwrap().enabled = t < 2.5 * TICK;
+            roles
+        };
         let mut bodies = LiquidBodies::default();
-        ready(&mut bodies, &roles);
+        ready(&mut bodies, &roles_at(0.0));
         assert_eq!(bodies.count(), 1);
         assert_eq!(bodies.shapes()[0].scale_min, [0.4, 0.2, 0.3, 0.2]);
         assert_eq!(bodies.shapes()[0].atlas_offset, 0);
         let words = bodies.atlas().len();
         assert_eq!(words, (37usize.pow(3)).div_ceil(2));
-        bodies.observe(&roles, 0, 0.0, 0.0).unwrap();
-        roles[2] = collider(&geometry, [0.3, 1.0, -0.15], 0.6);
-        bodies.observe(&roles, 0, 2.0 * TICK, 0.0).unwrap();
-        let rows = bodies.rows(0, 2, &[]).to_vec();
+        let mut rig = Rig::default();
+        let interval = 2.0 * TICK;
+        let restart = rig.frame(&mut bodies, 0.0, interval, &roles_at);
+        assert_eq!(bodies.rows(0, restart.ticks, &[]).unwrap()[0].linear_velocity[..3], [0.0; 3], "a seed row is at rest");
+        let frame = rig.frame(&mut bodies, interval, interval, &roles_at);
+        let rows = bodies.rows(first_tick(&frame), frame.ticks, &[]).unwrap().to_vec();
         assert_eq!(rows.len(), 2);
         let tick = TICK as f32;
         for (k, row) in rows.iter().enumerate() {
@@ -653,13 +678,68 @@ mod tests {
             assert_eq!(row.linear_velocity[3], 0.25);
             assert_eq!(row.accel_shape[3], 0.0);
         }
-        // Consumed samples go; the last stays as the next frame's bracket.
-        roles[2].as_mut().unwrap().enabled = false;
-        bodies.observe(&roles, 0, 3.0 * TICK, 2.0 * TICK).unwrap();
-        let rows = bodies.rows(2, 1, &[]).to_vec();
-        assert_eq!(rows[0].accel_shape[3], 0.0, "a switch takes effect at the later sample");
-        bodies.observe(&roles, 0, 4.0 * TICK, 3.0 * TICK).unwrap();
-        assert_eq!(bodies.rows(3, 1, &[])[0].accel_shape[3], -1.0);
+        let frame = rig.frame(&mut bodies, 2.0 * interval, interval, &roles_at);
+        let rows = bodies.rows(first_tick(&frame), frame.ticks, &[]).unwrap().to_vec();
+        assert_eq!((rows[0].accel_shape[3], rows[1].accel_shape[3]), (0.0, -1.0));
+    }
+
+    /// A tick nobody sampled is an error, never a guess.
+    #[test]
+    fn liquid_body_rows_refuse_an_unsampled_tick() {
+        let geometry = cube();
+        let roles = vec![collider(&geometry, [0.0; 3], 0.0)];
+        let mut bodies = LiquidBodies::default();
+        ready(&mut bodies, &roles);
+        let mut clock = LiquidClock::default();
+        let frame = clock.advance(0.0, TICK, 1.0, 0.0, false, false);
+        bodies.settle(&roles, &clock, &frame);
+        let frame = clock.advance(2.0 * TICK, TICK, 1.0, 0.0, false, false);
+        bodies.settle(&roles, &clock, &frame);
+        let error = bodies.rows(first_tick(&frame), frame.ticks, &[]).unwrap_err();
+        assert!(error.contains("tick 1 was never sampled"), "{error}");
+    }
+
+    /// The proof that a collider's motion is independent of the display rate:
+    /// on an eased, curved path every tick's row is the same at 24, 30 and
+    /// 60 fps.
+    #[test]
+    fn liquid_body_rows_match_at_every_frame_rate() {
+        let geometry = cube();
+        let roles_at = |t: f64| {
+            // Smoothstep ease along an arc that turns as it goes.
+            let s = (t / 0.8).clamp(0.0, 1.0);
+            let eased = (s * s * (3.0 - 2.0 * s)) as f32;
+            let angle = std::f32::consts::PI * eased;
+            vec![None, collider(&geometry, [angle.cos(), 1.0 + 0.5 * angle.sin(), 0.2 * eased], 1.3 * angle)]
+        };
+        let run = |fps: f64| {
+            let mut bodies = LiquidBodies::default();
+            ready(&mut bodies, &roles_at(0.0));
+            let mut rig = Rig::default();
+            let mut out = Vec::new();
+            for index in 0..=(fps as u64) {
+                let frame = rig.frame(&mut bodies, index as f64 / fps, 1.0 / fps, &roles_at);
+                assert_eq!(frame.dropped_seconds, 0.0, "{fps} fps dropped time");
+                if frame.ticks == 0 {
+                    continue;
+                }
+                assert_eq!(first_tick(&frame), out.len() as u64, "ticks run in order");
+                out.extend_from_slice(bodies.rows(first_tick(&frame), frame.ticks, &[]).unwrap());
+            }
+            out
+        };
+        let reference = run(60.0);
+        assert_eq!(reference.len(), 60);
+        for fps in [24.0, 30.0] {
+            let rows = run(fps);
+            assert_eq!(rows.len(), reference.len(), "{fps} fps tick count");
+            for (tick, (row, expected)) in rows.iter().zip(&reference).enumerate() {
+                let fields = |b: &LiquidBody| [b.position_inv_mass, b.rotation, b.linear_velocity, b.angular_velocity];
+                for (a, e) in fields(row).iter().zip(fields(expected)) {
+                    assert!((0..4).all(|i| (a[i] - e[i]).abs() < 1e-5), "{fps} fps tick {tick}: {a:?} vs {e:?}");
+                }
+            }
+        }
     }
 
     /// Coupled bodies' shapes follow the roles' at scale 1, and their rows
@@ -679,9 +759,11 @@ mod tests {
         let version = bodies.version;
         ready_coupled(&mut bodies, &roles, &[Arc::clone(&hull), Arc::clone(&hull)]);
         assert_eq!(bodies.version, version, "unchanged hulls rebuild nothing");
-        bodies.observe(&roles, 0, TICK, 0.0).unwrap();
+        let mut rig = Rig::default();
+        rig.frame(&mut bodies, 0.0, TICK, &|_| roles.clone());
+        rig.frame(&mut bodies, TICK, TICK, &|_| roles.clone());
         let body = |shape: f32| LiquidBody { position_inv_mass: [0.0, 1.0, 0.0, 0.5], accel_shape: [0.0, -9.81, 0.0, shape], ..LiquidBody::default() };
-        let rows = bodies.rows(0, 1, &[body(0.0), body(-1.0)]).to_vec();
+        let rows = bodies.rows(0, 1, &[body(0.0), body(-1.0)]).unwrap().to_vec();
         assert_eq!(rows.len(), 3);
         assert_eq!(rows[1].accel_shape, [0.0, -9.81, 0.0, 1.0]);
         assert_eq!(rows[2].accel_shape[3], -1.0);
@@ -747,19 +829,30 @@ mod tests {
         let mut bodies = LiquidBodies::with_regions();
         ready_coupled(&mut bodies, &roles, &[Arc::clone(&hull)]);
         assert_eq!((bodies.count(), bodies.region_count(), bodies.shapes().len()), (2, 2, 4));
-        bodies.observe(&roles, 0, 2.0 * TICK, 0.0).unwrap();
+        let mut rig = Rig::default();
+        rig.frame(&mut bodies, 0.0, 3.0 * TICK, &|_| roles.clone());
+        rig.frame(&mut bodies, 3.0 * TICK, 3.0 * TICK, &|_| roles.clone());
         let coupled = LiquidBody { accel_shape: [0.0, 0.0, 0.0, 0.0], ..LiquidBody::default() };
-        let rows = bodies.rows(0, 2, &[coupled]).to_vec();
-        assert_eq!(rows.len(), 4);
+        let rows = bodies.rows(0, 3, &[coupled]).unwrap().to_vec();
+        assert_eq!(rows.len(), 6);
         assert_eq!((rows[0].accel_shape[3], rows[1].accel_shape[3]), (1.0, 3.0));
         let regions = bodies.last_region_rows();
-        assert_eq!(regions.len(), 4);
+        assert_eq!(regions.len(), 6);
         assert_eq!(regions[0].angular_velocity[3], REGION_INFLOW);
         assert_eq!(regions[1].angular_velocity[3], REGION_OUTFLOW);
         assert_eq!((regions[0].accel_shape[3], regions[1].accel_shape[3]), (0.0, 2.0));
         assert_eq!(regions[0].inv_inertia_x, [0.0, -2.0, 1.0, 0.5]);
         assert_eq!(regions[2].position_inv_mass[..3], [0.0, 2.0, 0.0]);
-        let (offset, _) = bodies.set_coupled_rows(1, &[coupled]).unwrap();
-        assert_eq!(offset, 3 * std::mem::size_of::<LiquidBody>() as u64);
+        for tick in 1..3 {
+            let moved = LiquidBody { position_inv_mass: [tick as f32, 0.0, 0.0, 1.0], ..coupled };
+            let (offset, written) = bodies.set_coupled_rows(tick, &[moved]).unwrap();
+            assert_eq!(offset, ((2 * tick + 1) * std::mem::size_of::<LiquidBody>()) as u64);
+            assert_eq!(written[0].position_inv_mass, moved.position_inv_mass);
+        }
+        for tick in 0..3 {
+            assert_eq!(bodies.last_rows()[2 * tick].position_inv_mass, rows[2 * tick].position_inv_mass);
+            assert_eq!(bodies.last_rows()[2 * tick + 1].position_inv_mass[0], tick as f32);
+            assert_eq!(bodies.last_rows()[2 * tick + 1].accel_shape[3], 3.0);
+        }
     }
 }

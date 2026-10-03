@@ -182,8 +182,8 @@ impl FrameClock {
         stamp == 0 || self.event.signaled_value() >= stamp
     }
 
-    /// Offline paths only: block until `stamp` retires, up to five seconds.
-    /// Live callers check [`Self::is_complete`] and skip instead. `stamp` must
+    /// Block until `stamp` retires, up to five seconds. Coupled liquid ticks
+    /// may wait live; other live callers check [`Self::is_complete`]. `stamp` must
     /// come from an earlier, committed frame; a stamp past the last commit
     /// never signals, so it is clamped to that commit.
     pub fn wait(&self, stamp: u64) -> bool {
@@ -196,7 +196,7 @@ impl FrameClock {
     }
 
     /// GPU proofs: how many times this thread has called [`Self::wait`].
-    /// Live frames must leave it unchanged.
+    /// Uncoupled live frames must leave it unchanged.
     #[cfg(feature = "gpu-proofs")]
     pub fn waits_on_this_thread() -> u64 {
         WAITS.get()

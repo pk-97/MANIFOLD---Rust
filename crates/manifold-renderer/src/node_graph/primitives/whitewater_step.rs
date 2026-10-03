@@ -1,19 +1,8 @@
-//! `node.whitewater_step` — FLIP's whitewater on the GPU, emit and lifecycle
-//! in one node (`docs/GPU_WHITEWATER_DESIGN.md` section 3.9). Each frame
-//! with ticks it reads the liquid's level set, faces and particles, emits
-//! spawns into its own pool, then steps the pool once per tick: advect,
-//! retype, age, sort, preserve foam, remove, compact. Out come foam, bubbles
-//! and spray as particle frames.
-//!
-//! One node because the pool is cross-frame state with its own id counter
-//! and counts, and every pass reads what the last wrote. Inside, every
-//! barrier-free pass is a codegen atom's standalone kernel; the cell sort is
-//! the sort node's own passes; the seed, append, compaction and split are
-//! `shaders/whitewater_step.wgsl`, atomic-free.
-//!
-//! The counts the outputs carry are read back from the GPU, so the outputs
-//! are published once the frame that wrote them retired: one frame behind
-//! offline, which waits for it, and one to three live, which never waits.
+//! `node.whitewater_step` — FLIP whitewater emission and lifecycle.
+//! GPU FLIP runs this stage once per liquid tick using solver particle phi.
+//! The liquid boundary captures the pool, IDs, counters and rendering arrays
+//! after each tick; the stage owns reusable scratch. The legacy level-set
+//! interface retains its frame publication ring for existing saved graphs.
 //!
 //! Ported from FLIP Fluids diffuseparticlesimulation.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
 
@@ -33,6 +22,7 @@ use super::keep_whitewater::KeepWhitewater;
 use super::lattice_curvature::LatticeCurvature;
 use super::liquid_cells::LiquidCells;
 use super::nearest_crossing::NearestCrossing;
+use super::pad_distance_lattice::{encode_pad_distance_lattice, prepare_pad_distance_lattice};
 use super::prefix_scan::{PrefixScan, ScanLabels, storage_words};
 use super::preserve_foam::PreserveFoam;
 use super::retype_whitewater::RetypeWhitewater;
@@ -85,17 +75,22 @@ const KNOWN_VALUE: u64 = std::mem::size_of::<KnownValue>() as u64;
 crate::primitive! {
     name: WhitewaterStep,
     type_id: "node.whitewater_step",
-    purpose: "Foam, bubbles and spray for a GPU liquid, all on the GPU as FLIP's whitewater: each frame with ticks, emit from where the surface crests and the water moves fast, then step the pool once per tick (spray falls and bounces, bubbles rise and drag, foam rides the surface, each ages, dies, and leaves when it strays or crowds its cell). Out come foam, bubbles and spray as particle frames, each particle's radius its fade, with their counts. The outputs trail the water by one frame offline and up to three live. A new epoch, grid or capacity clears the pool; ticks 0 holds it. Spawns past the pool's room are counted as pool full; emissions past Capacity in one frame are thinned evenly and counted.",
+    purpose: "With distance and pool state wired from a liquid tick region, emit and advance exactly one tick and publish through captured boundary results. The legacy level-set interface provides foam, bubbles and spray for a GPU liquid, all on the GPU as FLIP's whitewater: each frame with ticks, emit from where the surface crests and the water moves fast, then step the pool once per tick (spray falls and bounces, bubbles rise and drag, foam rides the surface, each ages, dies, and leaves when it strays or crowds its cell). Out come foam, bubbles and spray as particle frames, each particle's radius its fade, with their counts. The outputs trail the water by one frame offline and up to three live. A new epoch, grid or capacity clears the pool; ticks 0 holds it. Spawns past the pool's room are counted as pool full; emissions past Capacity in one frame are thinned evenly and counted.",
     inputs: {
         particles: Array(FluidParticle) required,
         count: ScalarF32 optional,
+        capacity: ScalarF32 optional,
         solid: Array(f32) required,
         grid_bounds: Transform optional,
         grid_nodes_x: ScalarF32 optional, grid_nodes_y: ScalarF32 optional, grid_nodes_z: ScalarF32 optional,
         face_u: Array(f32) required, face_v: Array(f32) required, face_w: Array(f32) required,
         face_cells_x: ScalarF32 optional, face_cells_y: ScalarF32 optional, face_cells_z: ScalarF32 optional,
         face_valid_layers: ScalarF32 optional,
-        level_set: Array(f32) required,
+        level_set: Array(f32) optional,
+        distance: Array(f32) optional,
+        pool: Array(WhitewaterParticle) optional,
+        pool_state: Array(u32) optional,
+        tick_index: ScalarF32 optional,
         level_set_nodes_x: ScalarF32 optional, level_set_nodes_y: ScalarF32 optional, level_set_nodes_z: ScalarF32 optional,
         ticks: ScalarF32 optional,
         epoch: ScalarF32 optional,
@@ -103,6 +98,9 @@ crate::primitive! {
         seed: ScalarF32 optional,
     },
     outputs: {
+        pool_out: Array(WhitewaterParticle),
+        state_out: Array(u32),
+        counts_out: Array(u32),
         foam_particles: Array(FluidParticle),
         bubble_particles: Array(FluidParticle),
         spray_particles: Array(FluidParticle),
@@ -172,7 +170,7 @@ crate::primitive! {
         },
     ],
     depth_rule: Terminal,
-    composition_notes: "Whitewater Off unpublishes the pool and skips every pass (the outputs count 0); On starts it over. Whitewater Amount scales Wavecrest Emission live, 0 emitting nothing while the pool it already holds plays out. Wire everything from the liquid: particles and count from its particle frame (count_b), solid, grid_bounds and grid_nodes_x/y/z from the particle frame's solid lattice, face_u/v/w, face_cells_x/y/z and face_valid_layers from its face grid (at least one valid layer), level_set and level_set_nodes_x/y/z from its level set (a whole refinement of the lattice), ticks, epoch and gravity_x/gravity/gravity_z from the domain, seed from anything that changes per run (simulation time). The face grid must sit centred on the lattice's cells by a whole number of cells. Draw each particles output with node.particles_to_copies, its count wired to live_count. emitted, thinned and pool_full count since the epoch began.",
+    composition_notes: "For per-tick GPU FLIP, wire the solver distance, particles and projected face components; wire pool and pool_state from liquid_state, and close pool_out, state_out, counts_out and the three population arrays through its capture results. tick_index is the boundary clock; each invocation emits and advances one tick. The boundary publishes capacity-sized populations with zero-radius unused records, so particles_to_copies needs no CPU live_count. Wire capacity to both the stage and boundary. The legacy level_set interface keeps its frame ticks, seed, scalar counts and retired output ring for saved graphs. Amount scales emission, while zero leaves the existing pool advancing; disabling clears the pool on the next tick.",
     examples: [],
     picker: { label: "Whitewater Step", category: Atom },
     summary: "Makes and moves the spray, foam and bubbles a liquid throws up, all on the GPU.",
@@ -182,6 +180,7 @@ crate::primitive! {
     boundary_reason: CrossFrameState,
     extra_fields: {
         step: Step = Step::default(),
+        tick_mode: bool = false,
     },
 }
 
@@ -309,13 +308,14 @@ pub(crate) struct StepInputs<'a> {
     pub solid: &'a GpuBuffer,
     pub faces: [&'a GpuBuffer; 3],
     pub level_set: &'a GpuBuffer,
+    pub distance: Option<&'a GpuBuffer>,
 }
 
 /// Each input holds at least what the shape reads from it.
 fn require_inputs(shape: &StepShape, inputs: &StepInputs<'_>) -> Result<(), String> {
     let wanted = [
         ("solid", inputs.solid, shape.solid_bytes()),
-        ("level_set", inputs.level_set, shape.level_bytes()),
+        ("liquid distance", inputs.distance.unwrap_or(inputs.level_set), if inputs.distance.is_some() { cell_total(shape.face_cells) * 4 } else { shape.level_bytes() }),
         ("face_u", inputs.faces[0], shape.face_bytes(0)),
         ("face_v", inputs.faces[1], shape.face_bytes(1)),
         ("face_w", inputs.faces[2], shape.face_bytes(2)),
@@ -459,6 +459,7 @@ fn atom_then<P: Primitive>(
 
 #[derive(Default)]
 struct Pipelines {
+    pad_distance: Option<GpuComputePipeline>,
     crossings: Option<GpuComputePipeline>,
     nearest: Option<GpuComputePipeline>,
     distance: Option<GpuComputePipeline>,
@@ -529,6 +530,7 @@ const SPLIT_SCAN: ScanLabels =
 
 impl Pipelines {
     fn prepare(&mut self, device: &GpuDevice) {
+        prepare_pad_distance_lattice(&mut self.pad_distance, device);
         standalone_pipeline::<SurfaceCrossings>(&mut self.crossings, device);
         standalone_pipeline::<NearestCrossing>(&mut self.nearest, device);
         standalone_pipeline::<CrossingDistance>(&mut self.distance, device);
@@ -766,18 +768,7 @@ impl Step {
         let shape = frame.shape;
         require_inputs(&shape, inputs)?;
         let reseed = self.shape != Some(shape) || self.epoch != Some(frame.epoch);
-        if self.shape != Some(shape) {
-            self.shape = None;
-            self.fields = None;
-            self.outputs = Outputs::default();
-            let held = shape.held_bytes(inputs.particles.size / PARTICLE);
-            crate::node_graph::scene_modifier_expand::admit_candidate_bytes(device.modifier_memory_snapshot(), held)
-                .map_err(|error| format!("the pool and its scratch need {held} bytes: {error}"))?;
-            let scan = self.slot_scan.buffer(device, shape.slot_scan_values())?.clone();
-            self.fields = Some(Fields::new(device, &shape, scan)?);
-            self.sort.reserve_ranges(device, shape.bins)?;
-            self.shape = Some(shape);
-        }
+        self.reserve(device, shape, inputs.particles.size / PARTICLE)?;
         if reseed {
             self.epoch = Some(frame.epoch);
             self.outputs.clear();
@@ -815,6 +806,75 @@ impl Step {
             self.owed = false;
         }
         Ok(self.outputs.report)
+    }
+
+    fn reserve(&mut self, device: &GpuDevice, shape: StepShape, particles: u64) -> Result<(), String> {
+        if self.shape != Some(shape) {
+            self.shape = None;
+            self.fields = None;
+            self.outputs = Outputs::default();
+            let held = shape.held_bytes(particles);
+            crate::node_graph::scene_modifier_expand::admit_candidate_bytes(device.modifier_memory_snapshot(), held)
+                .map_err(|error| format!("the pool and its scratch need {held} bytes: {error}"))?;
+            let scan = self.slot_scan.buffer(device, shape.slot_scan_values())?.clone();
+            self.fields = Some(Fields::new(device, &shape, scan)?);
+            self.sort.reserve_ranges(device, shape.bins)?;
+            self.shape = Some(shape);
+        }
+        Ok(())
+    }
+
+    /// One liquid tick, with all persistent pool words supplied by the
+    /// boundary. No CPU readback or display-frame clock participates.
+    pub(crate) fn advance_tick(
+        &mut self,
+        gpu: &mut GpuEncoder<'_>,
+        frame: &StepFrame,
+        inputs: &StepInputs<'_>,
+        pool: &GpuBuffer,
+        state: &GpuBuffer,
+        enabled: bool,
+    ) -> Result<(), String> {
+        let shape = frame.shape;
+        require_inputs(&shape, inputs)?;
+        if pool.size != shape.pool_bytes() || state.size < STATE_WORDS * 4 {
+            return Err("the boundary whitewater pool capacity or state words do not match the step".into());
+        }
+        self.pipelines.prepare(gpu.device);
+        self.emission_scan.prepare(gpu.device);
+        self.slot_scan.prepare(gpu.device);
+        self.sort.prepare(gpu.device);
+        self.reserve(gpu.device, shape, inputs.particles.size / PARTICLE)?;
+        if self.outputs.slots.is_empty() {
+            self.outputs.free(gpu.device, &Retired, &shape)?;
+        }
+        self.current = 0;
+        let enc = &mut *gpu.native_enc;
+        if enabled {
+            let f = self.fields();
+            enc.copy_buffer_to_buffer(pool, &f.pools[0], shape.pool_bytes());
+            enc.copy_buffer_to_buffer(state, &f.state, STATE_WORDS * 4);
+            let slots = (inputs.particles.size / PARTICLE) as u32;
+            let emitters = frame.count.map_or(slots, |count| count.min(slots));
+            let scratch = self.particles.reserve(gpu.device, slots)?.clone();
+            let offsets = self.emission_scan.buffer(gpu.device, emitters.max(1) as usize)?.clone();
+            self.emit(enc, frame, inputs, &scratch, &offsets, emitters);
+            self.tick(enc, gpu.device, frame, inputs)?;
+        } else {
+            self.seed(enc, &shape);
+        }
+        self.publish(enc, &shape, 0);
+        Ok(())
+    }
+
+    pub(crate) fn tick_output(&self, port: &str) -> Option<&GpuBuffer> {
+        match port {
+            "pool_out" => self.fields.as_ref().map(|f| &f.pools[self.current]),
+            "state_out" => self.fields.as_ref().map(|f| &f.state),
+            "counts_out" => self.outputs.slots.first().map(|s| &s.counts),
+            _ => OUTPUTS.iter().position(|&name| name == port)
+                .and_then(|i| self.outputs.slots.first().map(|s| &s.buffers[i])),
+        }
     }
 
     /// Whitewater switched off: unpublish the pool so nothing downstream
@@ -888,34 +948,41 @@ impl Step {
                 _ => "node.whitewater_step.extend_curvature",
             }
         };
-        atom::<SurfaceCrossings>(
-            enc,
-            get(&p.crossings),
-            &[nodes[0], nodes[1], nodes[2], ("level_nodes_x", lx), ("level_nodes_y", ly), ("level_nodes_z", lz)],
-            &[inputs.level_set, inputs.solid, &f.crossings[0]],
-            cells,
-            label("crossings"),
-        );
-        let mut crossing = 0;
-        for step in SPREAD_STEPS {
-            atom::<NearestCrossing>(
+        if let Some(distance) = inputs.distance {
+            let padding = face_offset(s.nodes, s.face_cells).expect("validated face placement")[0];
+            encode_pad_distance_lattice(enc, get(&p.pad_distance), distance, &f.distance,
+                s.face_cells, padding, 3.0 * s.cell_size);
+            enc.compute_memory_barrier_buffers();
+        } else {
+            atom::<SurfaceCrossings>(
                 enc,
-                get(&p.nearest),
-                &[nodes[0], nodes[1], nodes[2], ("step", step)],
-                &[&f.crossings[crossing], &f.crossings[1 - crossing]],
+                get(&p.crossings),
+                &[nodes[0], nodes[1], nodes[2], ("level_nodes_x", lx), ("level_nodes_y", ly), ("level_nodes_z", lz)],
+                &[inputs.level_set, inputs.solid, &f.crossings[0]],
                 cells,
-                label("spread"),
+                label("crossings"),
             );
-            crossing = 1 - crossing;
+            let mut crossing = 0;
+            for step in SPREAD_STEPS {
+                atom::<NearestCrossing>(
+                    enc,
+                    get(&p.nearest),
+                    &[nodes[0], nodes[1], nodes[2], ("step", step)],
+                    &[&f.crossings[crossing], &f.crossings[1 - crossing]],
+                    cells,
+                    label("spread"),
+                );
+                crossing = 1 - crossing;
+            }
+            atom::<CrossingDistance>(
+                enc,
+                get(&p.distance),
+                &[nodes[0], nodes[1], nodes[2], ("cell_size", s.cell_size)],
+                &[&f.crossings[crossing], inputs.solid, &f.distance],
+                cells,
+                label("distance"),
+            );
         }
-        atom::<CrossingDistance>(
-            enc,
-            get(&p.distance),
-            &[nodes[0], nodes[1], nodes[2], ("cell_size", s.cell_size)],
-            &[&f.crossings[crossing], inputs.solid, &f.distance],
-            cells,
-            label("distance"),
-        );
         // Liquid cells and curvature both read the distance; neither reads
         // the other, so one barrier after the pair.
         atom_then::<LiquidCells>(enc, get(&p.liquid), &nodes, &[&f.distance, inputs.solid, &f.cells], cells, label("liquid"), Barrier::None);
@@ -1156,7 +1223,7 @@ impl WhitewaterStep {
     fn frame(ctx: &EffectNodeContext<'_, '_>) -> Result<StepFrame, String> {
         let whole = |v: f32| v.round().max(0.0) as u32;
         let triple = |names: [&str; 3]| names.map(|name| whole(ctx.scalar_or_param(name, 0.0)));
-        let capacity = ctx.param_f32("capacity", DEFAULT_CAPACITY as f32).round();
+        let capacity = ctx.scalar_or_param("capacity", DEFAULT_CAPACITY as f32).round();
         if !(1.0..=MAX_CAPACITY as f32).contains(&capacity) {
             return Err(format!("capacity {capacity} is outside 1 to {MAX_CAPACITY}"));
         }
@@ -1166,7 +1233,11 @@ impl WhitewaterStep {
         }
         let shape = StepShape::new(
             triple(["grid_nodes_x", "grid_nodes_y", "grid_nodes_z"]),
-            triple(["level_set_nodes_x", "level_set_nodes_y", "level_set_nodes_z"]),
+            if ctx.inputs.slot("distance").is_some() {
+                triple(["grid_nodes_x", "grid_nodes_y", "grid_nodes_z"])
+            } else {
+                triple(["level_set_nodes_x", "level_set_nodes_y", "level_set_nodes_z"])
+            },
             triple(["face_cells_x", "face_cells_y", "face_cells_z"]),
             ctx.scalar_or_param("face_valid_layers", 0.0),
             ctx.inputs.transform("grid_bounds"),
@@ -1176,9 +1247,9 @@ impl WhitewaterStep {
         Ok(StepFrame {
             shape,
             count,
-            ticks: whole(ctx.scalar_or_param("ticks", 0.0)),
+            ticks: if ctx.inputs.slot("distance").is_some() { 1 } else { whole(ctx.scalar_or_param("ticks", 0.0)) },
             epoch: whole(ctx.scalar_or_param("epoch", 0.0)),
-            seed: ctx.scalar_or_param("seed", 0.0),
+            seed: if ctx.inputs.slot("distance").is_some() { ctx.scalar_or_param("tick_index", 0.0) * TICK as f32 } else { ctx.scalar_or_param("seed", 0.0) },
             gravity: [ctx.scalar_or_param("gravity_x", 0.0), ctx.scalar_or_param("gravity", -9.81), ctx.scalar_or_param("gravity_z", 0.0)],
             wavecrest_emission: ctx.param_f32("wavecrest_emission", WAVECREST_RATE) * amount,
             min_energy: ctx.param_f32("min_energy", MIN_ENERGY),
@@ -1189,25 +1260,37 @@ impl WhitewaterStep {
 }
 
 impl Primitive for WhitewaterStep {
+    fn prepare_pipelines(&mut self, device: &GpuDevice) {
+        self.step.pipelines.prepare(device);
+        self.step.emission_scan.prepare(device);
+        self.step.slot_scan.prepare(device);
+        self.step.sort.prepare(device);
+    }
+
     fn provides_array_output(&self, port: &str) -> bool {
-        OUTPUTS.contains(&port)
+        OUTPUTS.contains(&port) || matches!(port, "pool_out" | "state_out" | "counts_out")
     }
 
     fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
+        if self.tick_mode {
+            return self.step.tick_output(port);
+        }
         let population = OUTPUTS.iter().position(|&name| name == port)?;
         self.step.outputs.current().map(|slot| &slot.buffers[population])
     }
 
     /// Each population output holds the whole pool.
     fn array_output_capacity(&self, port: &str, params: &ParamValues, _inputs: &[(&str, u32)]) -> Option<u32> {
-        OUTPUTS.contains(&port).then(|| match params.get("capacity") {
+        if matches!(port, "state_out" | "counts_out") { return Some(STATE_WORDS as u32); }
+        (OUTPUTS.contains(&port) || port == "pool_out").then(|| match params.get("capacity") {
             Some(ParamValue::Float(v)) => (v.round().max(1.0) as u32).min(MAX_CAPACITY),
             _ => DEFAULT_CAPACITY,
         })
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
-        if ctx.param_f32("enabled", 1.0) < 0.5 {
+        self.tick_mode = ctx.inputs.slot("distance").is_some();
+        if !self.tick_mode && ctx.param_f32("enabled", 1.0) < 0.5 {
             self.step.stop();
             for name in OUTPUT_COUNTS.iter().chain(["emitted", "thinned", "pool_full"].iter()) {
                 ctx.outputs.set_scalar(name, ParamValue::Float(0.0));
@@ -1227,12 +1310,23 @@ impl Primitive for WhitewaterStep {
             ctx.inputs.array("face_u"),
             ctx.inputs.array("face_v"),
             ctx.inputs.array("face_w"),
-            ctx.inputs.array("level_set"),
+            ctx.inputs.array("distance").or_else(|| ctx.inputs.array("level_set")),
         ) else {
             ctx.error("Whitewater Step: particles, solid, face_u/v/w and level_set must all be wired");
             return;
         };
-        let inputs = StepInputs { particles, solid, faces: [face_u, face_v, face_w], level_set };
+        let inputs = StepInputs { particles, solid, faces: [face_u, face_v, face_w], level_set, distance: ctx.inputs.array("distance") };
+        if self.tick_mode {
+            let (Some(pool), Some(state)) = (ctx.inputs.array("pool"), ctx.inputs.array("pool_state")) else {
+                ctx.error("Whitewater Step: per-tick distance requires pool and pool_state from the liquid boundary");
+                return;
+            };
+            let enabled = ctx.param_f32("enabled", 1.0) >= 0.5;
+            if let Err(error) = self.step.advance_tick(ctx.gpu_encoder(), &frame, &inputs, pool, state, enabled) {
+                ctx.error(format!("Whitewater Step: {error}"));
+            }
+            return;
+        }
         let offline = offline_simulation();
         let gpu = ctx.gpu_encoder();
         let clock = gpu.device.frame_clock();

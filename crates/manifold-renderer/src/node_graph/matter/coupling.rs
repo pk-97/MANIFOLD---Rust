@@ -107,14 +107,14 @@ mod tests {
         words[1] = (16_777_216.0 / f64::from(scale.unit)) as i32;
         owner.set_pending(PendingTick { tick: 0, stamp: 0 });
         owner
-            .settle(&scene, |_| true, |_, rows, impulses| decode(scale, rows, Some(&words[..]), impulses))
+            .settle_ready(Some(&scene), |_| true, |_, rows, impulses| decode(scale, rows, Some(&words[..]), impulses))
             .unwrap();
         let v = owner.rows()[0].linear_velocity[1];
         assert!((v - (1.0 - 9.81 * TICK as f32)).abs() < 1e-3, "{v}");
         let short = [0i32; 8];
         owner.set_pending(PendingTick { tick: 1, stamp: 0 });
         let error = owner
-            .settle(&scene, |_| true, |_, rows, impulses| decode(scale, rows, Some(&short[..]), impulses))
+            .settle_ready(Some(&scene), |_| true, |_, rows, impulses| decode(scale, rows, Some(&short[..]), impulses))
             .unwrap_err();
         assert!(error.contains("smaller than the bodies"), "{error}");
     }

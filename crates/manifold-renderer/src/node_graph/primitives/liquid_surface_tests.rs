@@ -1,3 +1,4 @@
+//! Checked against FLIP Fluids polygonizer3d.cpp (MIT); see THIRD_PARTY_NOTICES.md.
 //! GPU value proofs for the liquid-surface atoms (GPU_FLUID_SURFACE_DESIGN.md
 //! P5–P6) against CPU f64 references. Each atom runs through its own `run()`
 //! on a real device with pre-bound shared buffers; scalar inputs arrive as the
@@ -1824,7 +1825,7 @@ fn fluid_clamp_liquid_to_solids_matches_reference_and_passes_through() {
 /// the thumbnail run it unfused. The Still Pool, where it holds the water face
 /// at the front glass, must render the same both ways.
 #[test]
-fn fluid_clamp_fused_with_smoothing_renders_like_unfused() {
+fn fluid_clamp_scheduled_boundary_renders_like_unfrozen() {
     use manifold_core::effect_graph_def::EffectGraphDef;
     use manifold_core::preset_def::PresetKind;
 
@@ -1838,9 +1839,8 @@ fn fluid_clamp_fused_with_smoothing_renders_like_unfused() {
     let fused = crate::node_graph::freeze::install::fuse_generator_view(&canonical, &registry)
         .expect("the Still Pool fuses and builds");
     assert!(
-        fused.def.nodes.iter().any(|n| n.type_id == "node.wgsl_compute"
-            && n.wgsl_source.as_deref().is_some_and(|s| s.contains("clamp_liquid_solid_at"))),
-        "the clamp must fuse into a kernel, or this proves nothing"
+        fused.def.nodes.iter().any(|n| n.type_id == "node.clamp_liquid_to_solids"),
+        "scheduled clamp retains its generated standalone dispatch"
     );
     let arc = device.arc();
     let render = |def: &EffectGraphDef| {

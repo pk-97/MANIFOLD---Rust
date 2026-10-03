@@ -1,3 +1,4 @@
+//! Checked against FLIP Fluids pressuresolver.cpp and pcgsolver.h (MIT); see THIRD_PARTY_NOTICES.md.
 //! The pressure solver module against the f64 reference
 //! (`scripts/mgpcg_reference.py`, the default rule: halve rounding up to 4
 //! or less, then the exact inverse) on the saved Dam Break and deep pool
@@ -7,7 +8,8 @@
 
 use manifold_gpu::{GpuBuffer, GpuReplayCache};
 
-use super::gpu_flip_pressure::{MAX_ITERATIONS, PROGRESS_FLOATS, PressureSolver, ROW_FLOATS, Stop, Water, level_lattices, passes};
+use super::gpu_flip_pressure::{MAX_ITERATIONS, PROGRESS_FLOATS, PressureSolver, ROW_FLOATS, Solve, Stop, Water, level_lattices, max_solve_level, passes};
+use super::liquid_surface_tests::read;
 
 /// One saved problem: water cells and the divergence f (zero in air).
 pub(crate) struct Problem {
@@ -118,6 +120,14 @@ const BOX_METRES: f64 = 4.0;
 /// reference keeps falling and the GPU cannot follow.
 const F32_FLOOR: f64 = 3e-5;
 
+/// One solve of a rig's problem at its level, no bodies; a macro so the
+/// solver stays borrowable beside the rig's buffers.
+macro_rules! run_at {
+    ($rig:expr, $stop:expr) => {
+        Solve { rhs: &$rig.rhs, pressure: &$rig.pressure, stop: $stop, bodies: None, level: $rig.level, coarse_rhs: None }
+    };
+}
+
 /// The solver on one cubic lattice, its inputs in shared buffers.
 struct Rig {
     n: usize,
@@ -129,9 +139,16 @@ struct Rig {
     pressure: GpuBuffer,
     /// The free surface's distance, when the rig solves the ghost rows.
     phi: Option<GpuBuffer>,
+    /// The V-cycle level the gradient runs on; 0 is the fine lattice.
+    level: usize,
 }
 
 impl Rig {
+    fn at_level(mut self, level: usize) -> Self {
+        self.level = level;
+        self
+    }
+
     fn new(n: usize) -> Self {
         let device = crate::test_device();
         let cells = (n * n * n * 4) as u64;
@@ -150,6 +167,7 @@ impl Rig {
             device,
             solver,
             phi: None,
+            level: 0,
         }
     }
 
@@ -187,18 +205,66 @@ impl Rig {
         let n = self.n as u32;
         let lattice = Water { lattice: [n; 3], cell_size: self.cell_size() as f32, water: &self.water, faces: &self.faces, phi: self.phi.as_ref() };
         self.solver.prepare(&self.device, &mut enc, &lattice).expect("prepares");
-        self.solver.solve(&mut enc, &lattice, &self.rhs, &self.pressure, Stop::Fixed(iterations), None).expect("solves");
+        self.solver.solve(&mut enc, &lattice, run_at!(self, Stop::Fixed(iterations))).expect("solves");
         enc.commit_and_wait_profiled(&self.device)
     }
 
+    /// The last solve's residual on the fine lattice, as the problem is posed.
     fn residual_of(&self, p: &Problem) -> f64 {
         residual(self.pressure(), &p.water, &p.f, self.n, self.cell_size())
     }
 
+    /// The last solve's residual on its own level: the fine one at level 0,
+    /// else level k's rows against its restricted right-hand side.
+    fn level_residual_of(&self, p: &Problem) -> f64 {
+        if self.level == 0 {
+            return self.residual_of(p);
+        }
+        let lattice = level_lattices([self.n as u32; 3])[self.level];
+        let cells = lattice.iter().map(|&v| v as usize).product::<usize>();
+        let rows = self.device.create_buffer_shared((cells * ROW_FLOATS * 4) as u64);
+        let rhs = self.device.create_buffer_shared((cells * 4) as u64);
+        let e = self.device.create_buffer_shared((cells * 4) as u64);
+        let mut enc = self.device.create_encoder("gpu-flip-pressure-level");
+        let (n, h) = self.solver.copy_level(&mut enc, self.level, &rows, &rhs, &e);
+        enc.commit_and_wait_completed();
+        assert_eq!(n, lattice);
+        let rows: Vec<f32> = read(&rows, cells * ROW_FLOATS);
+        row_residual(&rows, &read(&rhs, cells), &read(&e, cells), lattice, f64::from(h))
+    }
+
     fn solve(&mut self, p: &Problem, iterations: u32) -> f64 {
         self.run(p, iterations, false);
-        self.residual_of(p)
+        self.level_residual_of(p)
     }
+}
+
+/// |L_k p − f_k| / |f_k| on one level's own rows (gpu_flip_pressure.wgsl
+/// Row: six weights to water neighbours, low then high per axis, the ghost
+/// and the plain diagonal), its right-hand side and its solution; a cell
+/// with a zero plain diagonal is off the level's water.
+fn row_residual(rows: &[f32], rhs: &[f32], p: &[f32], n: [u32; 3], h: f64) -> f64 {
+    let n = n.map(|v| v as usize);
+    let stride = [1, n[0], n[0] * n[1]];
+    let (mut miss, mut size) = (0.0, 0.0);
+    for c in 0..n[0] * n[1] * n[2] {
+        let row = &rows[c * ROW_FLOATS..(c + 1) * ROW_FLOATS];
+        if row[7] <= 0.0 {
+            continue;
+        }
+        let mut sum = -f64::from(row[7]) * f64::from(p[c]);
+        for (k, &w) in row.iter().enumerate().take(6) {
+            if w == 0.0 {
+                continue;
+            }
+            let q = if k % 2 == 0 { c - stride[k / 2] } else { c + stride[k / 2] };
+            sum += f64::from(w) * f64::from(p[q]);
+        }
+        let f = f64::from(rhs[c]);
+        miss += (sum / (h * h) - f).powi(2);
+        size += f * f;
+    }
+    (miss / size).sqrt()
 }
 
 /// Solve every problem at `m` cells a side. At 3 iterations the GPU runs the
@@ -208,9 +274,16 @@ impl Rig {
 /// are (frame, residual after 3, after 8) from
 /// `scripts/mgpcg_reference.py FIXTURE [--refine 2 | --side M] --iterations 3,8,16`.
 fn check(fixture: &str, m: usize, pinned: &[(u32, f64, f64)]) {
+    check_at(fixture, m, 0, pinned);
+}
+
+/// [`check`] with the gradient on V-cycle level `level`: the residual is the
+/// level's own, on its rows against its restricted right-hand side, as
+/// `scripts/mgpcg_reference.py --solve-level LEVEL` measures it.
+fn check_at(fixture: &str, m: usize, level: usize, pinned: &[(u32, f64, f64)]) {
     let (n, problems) = load_fixture(fixture);
     assert_eq!(problems.len(), pinned.len(), "{fixture}: one pin per problem");
-    let mut rig = Rig::new(m);
+    let mut rig = Rig::new(m).at_level(level);
     let mut failures = Vec::new();
     for (problem, &(frame, at3, at8)) in problems.iter().zip(pinned) {
         assert_eq!(problem.frame, frame);
@@ -220,7 +293,7 @@ fn check(fixture: &str, m: usize, pinned: &[(u32, f64, f64)]) {
         let got8 = rig.solve(&problem, 8);
         let again = rig.solve(&problem, 8);
         println!(
-            "pressure module {fixture} {m}³ frame {frame:3}: 3 iterations {got3:.3e} (f64 {at3:.3e}, {:.3}×); 8 iterations {got8:.3e} (f64 {at8:.3e}, f32 floor {floor:.3e})",
+            "pressure module {fixture} {m}³ level {level} frame {frame:3}: 3 iterations {got3:.3e} (f64 {at3:.3e}, {:.3}×); 8 iterations {got8:.3e} (f64 {at8:.3e}, f32 floor {floor:.3e})",
             got3 / at3
         );
         assert_eq!(got8, again, "frame {frame}: repeat solves differ");
@@ -420,7 +493,7 @@ fn rz(rig: &mut Rig, p: &Problem, iterations: u32) -> Vec<(f32, f32)> {
     let n = rig.n as u32;
     let lattice = Water { lattice: [n; 3], cell_size: rig.cell_size() as f32, water: &rig.water, faces: &rig.faces, phi: rig.phi.as_ref() };
     rig.solver.prepare(&rig.device, &mut enc, &lattice).expect("prepares");
-    rig.solver.solve(&mut enc, &lattice, &rig.rhs, &rig.pressure, Stop::Fixed(iterations), None).expect("solves");
+    rig.solver.solve(&mut enc, &lattice, run_at!(rig, Stop::Fixed(iterations))).expect("solves");
     rig.solver.copy_scalars(&mut enc, &scalars);
     enc.commit_and_wait_completed();
     let ptr = scalars.mapped_ptr().expect("shared scalars");
@@ -502,7 +575,7 @@ fn converge(rig: &mut Rig, p: &Problem, cap: u32) -> Converged {
     let n = rig.n as u32;
     let lattice = Water { lattice: [n; 3], cell_size: rig.cell_size() as f32, water: &rig.water, faces: &rig.faces, phi: rig.phi.as_ref() };
     rig.solver.prepare(&rig.device, &mut enc, &lattice).expect("prepares");
-    rig.solver.solve(&mut enc, &lattice, &rig.rhs, &rig.pressure, Stop::Converged(cap), None).expect("solves");
+    rig.solver.solve(&mut enc, &lattice, run_at!(rig, Stop::Converged(cap))).expect("solves");
     let progress = rig.solver.progress().expect("prepared");
     enc.copy_buffer_to_buffer(progress, &record, record.size);
     enc.commit_and_wait_completed();
@@ -537,9 +610,9 @@ fn solve_bits_under(rig: &mut Rig, p: &Problem, stop: Stop, cache: &mut Option<G
     let lattice = Water { lattice: [n; 3], cell_size: rig.cell_size() as f32, water: &rig.water, faces: &rig.faces, phi: rig.phi.as_ref() };
     rig.solver.prepare(&rig.device, &mut enc, &lattice).expect("prepares");
     if poison {
-        rig.solver.poison(&mut enc);
+        rig.solver.poison(&mut enc, rig.level);
     }
-    rig.solver.solve(&mut enc, &lattice, &rig.rhs, &rig.pressure, stop, None).expect("solves");
+    rig.solver.solve(&mut enc, &lattice, run_at!(rig, stop)).expect("solves");
     if spanned {
         *cache = Some(enc.end_replay());
     }
@@ -609,18 +682,19 @@ fn pressure_module_replay_matches_direct() {
 /// 64³ and 25³ (odd sides: partial edge tiles); and the same with NaN
 /// written into every vector cell and fine partial outside the active tiles
 /// before the solve, so nothing the solve reads lies outside its lists
-/// (docs/GPU_FLIP_SPARSE_BLOCKS_DESIGN.md section 7 (Phase 2)).
+/// (docs/GPU_FLIP_SPARSE_BLOCKS_DESIGN.md section 7 (Phase 2)); at Solve
+/// Level 0 and 1 (section 11 (Solve Level)).
 #[test]
 fn pressure_module_sparse_matches_all_tiles() {
     use super::gpu_flip_step::set_all_tiles;
     let (n, saved) = load_fixture(DAM_BREAK);
-    for m in [64, 25] {
+    for (m, level) in [(64, 0), (25, 0), (64, 1), (25, 1)] {
         let problems: Vec<Problem> = saved.iter().take(3).map(|p| resample(p, n, m)).collect();
         for stop in [Stop::Converged(MAX_ITERATIONS), Stop::Fixed(16)] {
-            let mut dense = Rig::new(m);
-            let mut sparse = Rig::new(m);
-            let mut poisoned = Rig::new(m);
-            let mut replay = Rig::new(m);
+            let mut dense = Rig::new(m).at_level(level);
+            let mut sparse = Rig::new(m).at_level(level);
+            let mut poisoned = Rig::new(m).at_level(level);
+            let mut replay = Rig::new(m).at_level(level);
             let mut cache = Some(GpuReplayCache::default());
             let mut none = None;
             for frame in 0..4 {
@@ -632,12 +706,12 @@ fn pressure_module_sparse_matches_all_tiles() {
                 let (pp, pr) = solve_bits_under(&mut poisoned, p, stop, &mut none, true);
                 let (rp, rr) = solve_bits_under(&mut replay, p, stop, &mut cache, true);
                 let iterations = f32::from_bits(sr[1]);
-                println!("{m}³ {stop:?} frame {frame}: {iterations} iterations");
+                println!("{m}³ level {level} {stop:?} frame {frame}: {iterations} iterations");
                 for (name, (xp, xr)) in [("sparse", (&sp, &sr)), ("poisoned", (&pp, &pr)), ("poisoned replay", (&rp, &rr))] {
-                    assert_eq!(&dr, xr, "{m}³ {stop:?} frame {frame}: the {name} stop record differs from all tiles");
+                    assert_eq!(&dr, xr, "{m}³ level {level} {stop:?} frame {frame}: the {name} stop record differs from all tiles");
                     if let Some(i) = (0..dp.len()).find(|&i| dp[i] != xp[i]) {
                         panic!(
-                            "{m}³ {stop:?} frame {frame}: the {name} pressure differs from all tiles first at cell {i} [{}, {}, {}]: {} vs {}",
+                            "{m}³ level {level} {stop:?} frame {frame}: the {name} pressure differs from all tiles first at cell {i} [{}, {}, {}]: {} vs {}",
                             i % m,
                             (i / m) % m,
                             i / (m * m),
@@ -894,4 +968,323 @@ fn pressure_module_separating_matches_reference() {
         let tolerance = if p_min == 0.0 { 1e-6 } else { 1e-3 * p_min };
         assert!((low - p_min).abs() <= tolerance, "{m}³ g {g}: pressure min {low} against the reference {p_min}");
     }
+}
+
+// ── Solve Level (docs/GPU_FLIP_SPARSE_BLOCKS_DESIGN.md section 11) ──────────
+
+/// FNV-1a over words: a run's bits as one number to pin.
+fn fingerprint(words: &[u32]) -> u64 {
+    words.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &w| (h ^ u64::from(w)).wrapping_mul(0x0000_0100_0000_01b3))
+}
+
+/// Solve Level 0 is the fine solve: on the first three Dam Break problems at
+/// 64³ the engine's stop lands within one iteration of the count before the
+/// level existed (12, 12, 13), never on the cap, and a run repeats bit for
+/// bit. The value-level pin is [`pressure_module_matches_reference_64`]
+/// (3 and 8 iterations against the f64 reference). The bitwise pin against
+/// main went when the paper's cell-type coarsening came in (section 11
+/// (Solve Level)): a coarse cell over water and solid children is water
+/// now, which moves every level's rows under a body or a floor.
+#[test]
+fn gpu_flip_solve_level_zero_is_the_fine_step() {
+    const BEFORE: [(u32, u32); 3] = [(0, 12), (15, 12), (30, 13)];
+    let (n, saved) = load_fixture(DAM_BREAK);
+    let mut rig = Rig::new(64);
+    assert_eq!(rig.level, 0);
+    let mut none = None;
+    let mut failures = Vec::new();
+    for (p, &(frame, before)) in saved.iter().zip(&BEFORE) {
+        assert_eq!(p.frame, frame);
+        let problem = resample(p, n, 64);
+        let c = converge(&mut rig, &problem, MAX_ITERATIONS);
+        let (pressure, record) = solve_bits(&mut rig, &problem, Stop::Converged(MAX_ITERATIONS), &mut none);
+        let again = solve_bits(&mut rig, &problem, Stop::Converged(MAX_ITERATIONS), &mut none);
+        println!(
+            "solve level 0 frame {frame}: {} iterations (before the paper's coarsening {before}), stopped {}, pressure {:#018x} record {:#018x}",
+            c.iterations,
+            c.stopped,
+            fingerprint(&pressure),
+            fingerprint(&record)
+        );
+        if !c.stopped || c.iterations.abs_diff(before) > 1 {
+            failures.push(format!("frame {frame}: {} iterations, stopped {}, against {before} before", c.iterations, c.stopped));
+        }
+        if (pressure, record) != again {
+            failures.push(format!("frame {frame}: a repeated solve differs"));
+        }
+    }
+    assert!(failures.is_empty(), "level 0 moved: {failures:#?}");
+}
+
+/// The solve on V-cycle level 1 against the reference run there
+/// (`scripts/mgpcg_reference.py FIXTURE --solve-level 1 --iterations 3,8,16`):
+/// the level's own residual, at the fine pins' bars.
+#[test]
+fn pressure_module_solve_level_matches_reference_64() {
+    check_at(
+        DAM_BREAK,
+        64,
+        1,
+        &[
+            (0, 4.898e-03, 7.396e-08),
+            (15, 1.253e-02, 5.298e-07),
+            (30, 2.716e-02, 6.876e-07),
+            (45, 9.892e-03, 1.073e-06),
+            (60, 2.282e-02, 1.595e-06),
+            (90, 1.042e-02, 3.412e-07),
+            (120, 9.030e-03, 1.300e-06),
+        ],
+    );
+}
+
+#[test]
+fn pressure_module_solve_level_matches_reference_128() {
+    check_at(
+        DAM_BREAK,
+        128,
+        1,
+        &[
+            (0, 1.500e-02, 5.702e-07),
+            (15, 2.760e-02, 4.391e-06),
+            (30, 7.460e-02, 1.074e-05),
+            (45, 3.245e-02, 9.446e-06),
+            (60, 3.688e-02, 1.074e-05),
+            (90, 1.972e-02, 5.322e-06),
+            (120, 1.942e-02, 8.970e-06),
+        ],
+    );
+}
+
+/// Odd and uneven sides at level 1: the virtual solid cell past an odd side
+/// restricts as the script pads it.
+#[test]
+fn pressure_module_solve_level_matches_reference_odd_sides() {
+    check_at(
+        DAM_BREAK,
+        25,
+        1,
+        &[
+            (0, 3.575e-04, 1.371e-10),
+            (15, 8.813e-04, 8.661e-10),
+            (30, 1.163e-03, 1.613e-09),
+            (45, 1.510e-03, 3.253e-09),
+            (60, 1.838e-03, 7.043e-09),
+            (90, 1.755e-03, 1.049e-08),
+            (120, 4.252e-04, 1.184e-09),
+        ],
+    );
+    check_at(
+        DAM_BREAK,
+        37,
+        1,
+        &[
+            (0, 2.826e-03, 2.159e-08),
+            (15, 2.816e-03, 3.288e-08),
+            (30, 6.902e-03, 1.761e-07),
+            (45, 4.523e-03, 3.903e-08),
+            (60, 2.012e-03, 1.056e-08),
+            (90, 4.742e-03, 2.070e-08),
+            (120, 4.631e-03, 7.286e-08),
+        ],
+    );
+    check_at(
+        DAM_BREAK,
+        40,
+        1,
+        &[
+            (0, 4.102e-03, 6.875e-08),
+            (15, 4.303e-03, 3.565e-08),
+            (30, 6.129e-03, 7.271e-08),
+            (45, 5.492e-03, 2.154e-07),
+            (60, 4.579e-03, 7.953e-08),
+            (90, 7.210e-03, 1.326e-07),
+            (120, 4.939e-03, 2.259e-07),
+        ],
+    );
+}
+
+/// The divergence left on the fine faces after a project from the fine
+/// pressure P·p₁: per cell f − L₀(P p₁) on the box (the step's project is
+/// that subtraction, the walls closed), as |·|∞ over |f|∞, its 2-norm over
+/// |f|₂, and the largest box mean over a coarse cell's water children over
+/// |f|∞, beside the same box mean of f itself. Level 0 is the side column.
+/// The coarse solve guarantees the Rᵀ-weighted means, not the box means or
+/// the fine remainder, and a particle divergence is mostly finer than a
+/// coarse cell: level 1 leaves the cell-scale divergence in place (the
+/// measured ratios sit near 1), which is the trade the level makes. The
+/// ceilings are pinned from the run that introduced the level (every Dam
+/// Break problem at 64³ on the engine's stop); a change that raises one
+/// fails.
+#[test]
+fn gpu_flip_solve_level_divergence_bound() {
+    // (frame, |r|∞/|f|∞ at level 1, largest box mean / |f|∞ at level 1) plus 5%.
+    const CEILINGS: [(u32, f64, f64); 7] = [
+        (0, 1.542, 1.379),
+        (15, 1.220, 0.7301),
+        (30, 1.050, 0.5687),
+        (45, 1.172, 0.5434),
+        (60, 1.055, 0.8567),
+        (90, 1.017, 0.8210),
+        (120, 1.043, 0.9151),
+    ];
+    let (n, saved) = load_fixture(DAM_BREAK);
+    let m = 64;
+    let mut rigs = [Rig::new(m), Rig::new(m).at_level(1)];
+    let mut failures = Vec::new();
+    for (p, &(frame, inf_ceiling, mean_ceiling)) in saved.iter().zip(&CEILINGS) {
+        assert_eq!(p.frame, frame);
+        let problem = resample(p, n, m);
+        let f_inf = problem.f.iter().map(|v| f64::from(v.abs())).fold(0.0, f64::max);
+        let f64s: Vec<f64> = problem.f.iter().map(|&v| f64::from(v)).collect();
+        let f_mean = box_means(&f64s, &problem.water, m).into_iter().map(f64::abs).fold(0.0, f64::max) / f_inf;
+        println!("divergence bound frame {frame:3}: largest box mean of f/|f|∞ {f_mean:.4e}");
+        let mut got = [(0.0, 0.0, 0.0); 2];
+        for (level, rig) in rigs.iter_mut().enumerate() {
+            let c = converge(rig, &problem, MAX_ITERATIONS);
+            assert!(c.stopped, "frame {frame} level {level}: {} iterations to the cap", c.iterations);
+            let r = fine_remainder(rig.pressure(), &problem.water, &problem.f, m, rig.cell_size());
+            let inf = r.iter().map(|v| v.abs()).fold(0.0, f64::max) / f_inf;
+            let two = residual(rig.pressure(), &problem.water, &problem.f, m, rig.cell_size());
+            let mean = box_means(&r, &problem.water, m).into_iter().map(f64::abs).fold(0.0, f64::max) / f_inf;
+            got[level] = (inf, two, mean);
+            println!(
+                "divergence bound frame {frame:3} level {level}: {} iterations; |r|∞/|f|∞ {inf:.4e}, |r|₂/|f|₂ {two:.4e}, largest box mean/|f|∞ {mean:.4e}",
+                c.iterations
+            );
+        }
+        let (inf, _, mean) = got[1];
+        if inf > inf_ceiling || mean > mean_ceiling {
+            failures.push(format!("frame {frame}: |r|∞/|f|∞ {inf:.4e} (ceiling {inf_ceiling:.4e}), box mean {mean:.4e} (ceiling {mean_ceiling:.4e})"));
+        }
+    }
+    assert!(failures.is_empty(), "the level 1 remainder rose: {failures:#?}");
+}
+
+/// Per cell f − L p on the water (zero off it): the divergence a project
+/// from `p` leaves, with air at zero pressure and the box walls closed.
+fn fine_remainder(p: &[f32], water: &[bool], f: &[f32], n: usize, h: f64) -> Vec<f64> {
+    let stride = [1, n, n * n];
+    (0..n * n * n)
+        .map(|c| {
+            if !water[c] {
+                return 0.0;
+            }
+            let at = [c % n, (c / n) % n, c / (n * n)];
+            let centre = f64::from(p[c]);
+            let mut sum = 0.0;
+            for a in 0..3 {
+                for next in [at[a].checked_sub(1), Some(at[a] + 1).filter(|&q| q < n)].into_iter().flatten() {
+                    let q = c + next * stride[a] - at[a] * stride[a];
+                    sum += if water[q] { f64::from(p[q]) } else { 0.0 } - centre;
+                }
+            }
+            f64::from(f[c]) - sum / (h * h)
+        })
+        .collect()
+}
+
+/// The mean of `r` over each level-1 cell's water children (zero with none).
+fn box_means(r: &[f64], water: &[bool], n: usize) -> Vec<f64> {
+    let c = n.div_ceil(2);
+    (0..c * c * c)
+        .map(|i| {
+            let at = [i % c, (i / c) % c, i / (c * c)];
+            let (mut sum, mut count) = (0.0, 0);
+            for child in 0..8 {
+                let q = [2 * at[0] + (child & 1), 2 * at[1] + (child >> 1 & 1), 2 * at[2] + (child >> 2)];
+                if q.iter().any(|&v| v >= n) {
+                    continue;
+                }
+                let cell = q[0] + n * (q[1] + n * q[2]);
+                if water[cell] {
+                    sum += r[cell];
+                    count += 1;
+                }
+            }
+            if count == 0 { 0.0 } else { sum / f64::from(count) }
+        })
+        .collect()
+}
+
+/// The engine's stop at Solve Level 1 on every shipped problem: each solve
+/// stops on the tolerance, never the cap, within the fine level's bar; the
+/// counts beside the fine ones. The deepest level each lattice offers is
+/// levels − 2, and that level stops too. Level 0 lands within one iteration
+/// of its count before the paper's cell-type coarsening came in (BEFORE,
+/// measured on the same problems): the rule may move the rows under a body
+/// or a floor, never the convergence on these.
+#[test]
+fn pressure_module_solve_level_converges_on_the_engine_tolerance() {
+    const BEFORE: [(&str, u32, u32); 12] = [
+        (DAM_BREAK, 0, 12),
+        (DAM_BREAK, 15, 12),
+        (DAM_BREAK, 30, 13),
+        (DAM_BREAK, 45, 14),
+        (DAM_BREAK, 60, 13),
+        (DAM_BREAK, 90, 12),
+        (DAM_BREAK, 120, 14),
+        ("deep_pool_pressure_problems", 60, 11),
+        ("deep_pool_density_problems", 30, 12),
+        ("deep_pool_density_problems", 60, 12),
+        ("still_pool", 0, 11),
+        ("resting_pool", 0, 11),
+    ];
+    let mut failures = Vec::new();
+    let mut problems: Vec<(String, Problem)> = Vec::new();
+    for fixture in [DAM_BREAK, "deep_pool_pressure_problems", "deep_pool_density_problems"] {
+        let (n, saved) = load_fixture(fixture);
+        for p in &saved {
+            problems.push((fixture.to_string(), resample(p, n, 64)));
+        }
+    }
+    problems.push(("still_pool".into(), still_pool_problem(64)));
+    problems.push(("resting_pool".into(), resting_pool_problem(64)));
+    let deepest = max_solve_level([64; 3]);
+    assert_eq!(deepest, 3, "64³ halves to 32, 16, 8, 4: the gradient runs on 0 to 3");
+    for (name, p) in &problems {
+        let mut counts = Vec::new();
+        for level in [0, 1, deepest] {
+            let mut rig = Rig::new(64).at_level(level);
+            let c = converge(&mut rig, p, MAX_ITERATIONS);
+            let limit = if name.ends_with("pool") { 12 } else { 16 };
+            if !c.stopped || (level <= 1 && c.iterations > limit) {
+                failures.push(format!("{name} frame {} level {level}: {} iterations, stopped {}", p.frame, c.iterations, c.stopped));
+            }
+            if level == 0 {
+                let before = BEFORE.iter().find(|row| row.0 == name && row.1 == p.frame).map(|row| row.2).expect("a count before the rule per problem");
+                if c.iterations.abs_diff(before) > 1 {
+                    failures.push(format!("{name} frame {} level 0: {} iterations against {before} before the paper's coarsening", p.frame, c.iterations));
+                }
+            }
+            counts.push(format!("level {level}: {} iterations{}", c.iterations, if c.stopped { "" } else { " (capped)" }));
+        }
+        println!("solve level counts {name} frame {}: {}", p.frame, counts.join(", "));
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// A level the lattice lacks is refused by name before any GPU work, at the
+/// solver and at the step's reading of the param; the deepest level is the
+/// one above the exactly-solved coarsest.
+#[test]
+fn pressure_module_refuses_a_level_past_the_coarsest() {
+    use super::gpu_flip_step::read_solve_level;
+    let (n, saved) = load_fixture(DAM_BREAK);
+    let problem = resample(&saved[0], n, 64);
+    let mut rig = Rig::new(64).at_level(4);
+    let water: Vec<f32> = problem.water.iter().map(|&w| f32::from(u8::from(w))).collect();
+    // SAFETY: shared buffers sized for the lattice; nothing is in flight.
+    unsafe {
+        rig.water.write(0, bytemuck::cast_slice(&water));
+        rig.rhs.write(0, bytemuck::cast_slice(&problem.f));
+    }
+    let mut enc = rig.device.create_encoder("gpu-flip-pressure-refusal");
+    let lattice = Water { lattice: [64; 3], cell_size: rig.cell_size() as f32, water: &rig.water, faces: &rig.faces, phi: None };
+    rig.solver.prepare(&rig.device, &mut enc, &lattice).expect("prepares");
+    let refused = rig.solver.solve(&mut enc, &lattice, run_at!(rig, Stop::Fixed(1))).expect_err("level 4 on 64³");
+    assert_eq!(refused, "Solve Level must be 0 to 3 on a [64, 64, 64] lattice, not 4");
+    assert_eq!(read_solve_level(4.0, [64; 3]).expect_err("the step's reading"), refused);
+    assert_eq!(read_solve_level(3.0, [64; 3]), Ok(3));
+    assert_eq!(read_solve_level(1.0, [25; 3]), Ok(1));
+    assert!(read_solve_level(3.0, [25; 3]).is_err(), "25³ halves to 13, 7, 4: level 3 is the coarsest");
 }

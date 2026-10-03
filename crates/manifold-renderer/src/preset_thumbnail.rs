@@ -567,56 +567,6 @@ pub fn decode_png_rgba8(path: &Path) -> Result<(u32, u32, Vec<u8>), String> {
 mod tests {
     use super::*;
 
-    /// D7 freshness gate (STATIC_THUMBNAILS_DESIGN §3.3): every factory preset
-    /// has a committed thumbnail whose `.hash` sidecar matches the SHA-256 of
-    /// the preset JSON on disk. CPU-only, default suite — editing a preset
-    /// without re-running the bin fails here.
-    #[test]
-    fn factory_thumbnails_fresh() {
-        use sha2::Digest;
-        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let kinds = [
-            ("effect-presets", PresetKind::Effect),
-            ("generator-presets", PresetKind::Generator),
-        ];
-        let mut checked = 0usize;
-        for (subdir, kind) in kinds {
-            let dir = manifest.join("assets").join(subdir);
-            let mut entries: Vec<PathBuf> = std::fs::read_dir(&dir)
-                .unwrap_or_else(|e| panic!("read {}: {e}", dir.display()))
-                .flatten()
-                .map(|e| e.path())
-                .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("json"))
-                .collect();
-            entries.sort();
-            assert!(!entries.is_empty(), "no factory presets in {subdir}");
-            for path in entries {
-                let id = path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .expect("preset file stem")
-                    .to_string();
-                let json_bytes = std::fs::read(&path).expect("read preset JSON");
-                let digest = format!("{:x}", sha2::Sha256::digest(&json_bytes));
-
-                let png = factory_thumbnail_path(kind, &id)
-                    .unwrap_or_else(|| panic!("thumbnail path for {id}"));
-                assert!(png.is_file(), "{id}: missing committed thumbnail {png:?}");
-
-                let hash_path = png.with_extension("hash");
-                assert!(hash_path.is_file(), "{id}: missing hash sidecar {hash_path:?}");
-                let recorded = std::fs::read_to_string(&hash_path).expect("read hash sidecar");
-                assert_eq!(
-                    recorded.trim(),
-                    digest,
-                    "{id}: stale thumbnail — re-run generate-preset-thumbnails"
-                );
-                checked += 1;
-            }
-        }
-        assert!(checked >= 75, "expected at least 75 factory presets, walked {checked}");
-    }
-
     /// D2 gate, CPU-only: the card has all four regions — gradient ramp, hue
     /// bars, stripes, checker — plus the overlaying white circle, computed at
     /// probe pixels. Catches a layout regression without a GPU.

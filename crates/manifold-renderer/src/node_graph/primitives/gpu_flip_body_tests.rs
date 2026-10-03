@@ -1,3 +1,4 @@
+//! Checked against FLIP Fluids rigidfluidcoupling.cpp (MIT); see THIRD_PARTY_NOTICES.md.
 //! GPU value proofs for the passes that put dynamic bodies inside the GPU
 //! FLIP pressure solve (docs/GPU_FLIP_PRESSURE_SOLVE.md section 8 (solids in
 //! the water)) against CPU f64 references: each body's impulse, the bodies'
@@ -543,8 +544,11 @@ fn box_def(fixture: crate::node_graph::liquid::conformance::Fixture) -> manifold
 }
 
 impl BoxRun {
-    fn new(fixture: crate::node_graph::liquid::conformance::Fixture, all: bool, poison: bool) -> Self {
-        Self::of(box_def(fixture), all, poison, false)
+    fn new(fixture: crate::node_graph::liquid::conformance::Fixture, all: bool, poison: bool, level: i32) -> Self {
+        let mut def = box_def(fixture);
+        let domain = def.nodes.iter_mut().find(|node| node.node_id.as_str() == "domain").expect("domain");
+        domain.params.insert("solve_level".into(), manifold_core::effect_graph_def::SerializedParamValue::Int { value: level });
+        Self::of(def, all, poison, false)
     }
 
     fn of(def: manifold_core::effect_graph_def::EffectGraphDef, all: bool, poison: bool, off: bool) -> Self {
@@ -672,15 +676,16 @@ impl BoxRun {
 /// A step with a Box3D body over its active tiles equals the step over
 /// every tile, bit for bit, in the body rows, the reaction, the particles
 /// and the solver words, tick after tick over the submerged and the floating
-/// box; and the same with the step's poison on, which also writes NaN into
-/// every body partial slot before the solve.
+/// box, at Solve Level 0 and 1 (the coarse body term Pᵀ B P, section 11
+/// (Solve Level)); and the same with the step's poison on, which also writes
+/// NaN into every body partial slot before the solve.
 #[test]
 fn gpu_flip_body_step_sparse_matches_all_tiles() {
     use crate::node_graph::liquid::conformance::Fixture;
-    for fixture in [Fixture::SubmergedBox, Fixture::FloatingBox] {
-        let mut dense = BoxRun::new(fixture, true, false);
-        let mut sparse = BoxRun::new(fixture, false, false);
-        let mut poisoned = BoxRun::new(fixture, false, true);
+    for (fixture, level) in [(Fixture::SubmergedBox, 0), (Fixture::FloatingBox, 0), (Fixture::SubmergedBox, 1), (Fixture::FloatingBox, 1)] {
+        let mut dense = BoxRun::new(fixture, true, false, level);
+        let mut sparse = BoxRun::new(fixture, false, false, level);
+        let mut poisoned = BoxRun::new(fixture, false, true, level);
         for tick in 1..=90 {
             dense.step();
             sparse.step();
@@ -688,10 +693,10 @@ fn gpu_flip_body_step_sparse_matches_all_tiles() {
             let want = dense.left();
             for (name, run) in [("sparse", &sparse), ("poisoned", &poisoned)] {
                 for ((what, a), (_, b)) in want.iter().zip(run.left()) {
-                    assert_eq!(a.len(), b.len(), "{fixture:?} tick {tick}: {name} {what} is sized differently");
+                    assert_eq!(a.len(), b.len(), "{fixture:?} level {level} tick {tick}: {name} {what} is sized differently");
                     if let Some(i) = first_differing(a, &b) {
                         panic!(
-                            "{fixture:?} tick {tick}: {name} {what} differs from all tiles first at word {i}: {} ({}) vs {} ({})",
+                            "{fixture:?} level {level} tick {tick}: {name} {what} differs from all tiles first at word {i}: {} ({}) vs {} ({})",
                             a[i],
                             f32::from_bits(a[i]),
                             b[i],
@@ -703,7 +708,7 @@ fn gpu_flip_body_step_sparse_matches_all_tiles() {
         }
         let words = dense.words("node.gpu_flip_step", "capped");
         let tail = &words[words.len() - 7..];
-        println!("{fixture:?}: 90 ticks bitwise; last solve {} iterations, capped {}", tail[0], tail[2]);
+        println!("{fixture:?} level {level}: 90 ticks bitwise; last solve {} iterations, capped {}", tail[0], tail[2]);
     }
 }
 

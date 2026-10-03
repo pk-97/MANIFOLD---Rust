@@ -1,3 +1,4 @@
+// Uses the neighbour-mean mesh smoothing from FLIP Fluids trianglemesh.cpp `smooth` (MIT); see THIRD_PARTY_NOTICES.md.
 // node.relax_surface_mesh — fusable BUFFER body, GATHER. One umbrella
 // relaxation pass over node.volume_surface_mesh's triangle list:
 // v += strength × (mean of v's neighbours − v). One thread per vertex slot.
@@ -40,45 +41,17 @@ fn rsm_cell_edge(p: u32, q: u32) -> u32 {
     return 12u;
 }
 
-fn body(idx: u32, count: u32, nodes_x: f32, nodes_y: f32, nodes_z: f32, strength: f32) -> Element {
-    let zero = Element(vec3<f32>(0.0), vec3<f32>(0.0), vec2<f32>(0.0), vec2<f32>(0.0), vec4<f32>(0.0), vec4<f32>(0.0));
-    if min(min(nodes_x, nodes_y), nodes_z) < 2.0 {
-        return zero;
-    }
-    let nodes = vec3<u32>(vec3<f32>(nodes_x, nodes_y, nodes_z));
-    let cells = nodes - vec3<u32>(1u);
-    let cell_total = cells.x * cells.y * cells.z;
-    let triangles = buf_scan[cell_total - 1u];
-    if triangles > count / 3u || idx >= triangles * 3u {
-        return zero;
-    }
-    let v = buf_vertices[idx];
-    let unmoved = Element(v.position, v.normal, v.uv, v.uv1, v.tangent, v.color);
-    if strength == 0.0 {
-        return unmoved;
-    }
+struct RsmNeighbourSum {
+    sum: vec3<f32>,
+    met: u32,
+}
 
-    // This vertex's cell and lattice edge, as the mesh found them.
-    let triangle = idx / 3u;
-    var lo = 0u;
-    var hi = cell_total - 1u;
-    loop {
-        if lo >= hi {
-            break;
-        }
-        let mid = (lo + hi) / 2u;
-        if buf_scan[mid] > triangle {
-            hi = mid;
-        } else {
-            lo = mid + 1u;
-        }
-    }
-    var first = 0u;
-    if lo > 0u {
-        first = buf_scan[lo - 1u];
-    }
-    let home = vec3<u32>(lo % cells.x, (lo / cells.x) % cells.y, lo / (cells.x * cells.y));
-    let edge = mc_edge(mc_case(home, nodes), (triangle - first) * 3u + idx % 3u);
+fn rsm_neighbour_sum(
+    home: vec3<u32>,
+    edge: u32,
+    cells: vec3<u32>,
+    nodes: vec3<u32>,
+) -> RsmNeighbourSum {
     var a = home + MC_CORNERS[MC_EDGE_A[edge]];
     var b = home + MC_CORNERS[MC_EDGE_B[edge]];
     if mc_node(b, nodes) < mc_node(a, nodes) {
@@ -87,11 +60,10 @@ fn body(idx: u32, count: u32, nodes_x: f32, nodes_y: f32, nodes_z: f32, strength
         b = swap;
     }
     // The lattice edge runs from `a` one node up along `step`; the four cells
-    // around it sit at `a` minus 0 or 1 along each of the other two axes.
+    // around it are visited in the exact order used by the dense oracle.
     let step = b - a;
     let side_u = select(vec3<u32>(1u, 0u, 0u), vec3<u32>(0u, 1u, 0u), step.x == 1u);
     let side_v = select(vec3<u32>(0u, 0u, 1u), vec3<u32>(0u, 1u, 0u), step.z == 1u);
-
     var sum = vec3<f32>(0.0);
     var met = 0u;
     for (var around = 0u; around < 4u; around = around + 1u) {
@@ -124,9 +96,88 @@ fn body(idx: u32, count: u32, nodes_x: f32, nodes_y: f32, nodes_z: f32, strength
             }
         }
     }
-    if met == 0u {
+    return RsmNeighbourSum(sum, met);
+}
+
+fn rsm_relax_vertex(idx: u32, strength: f32, neighbours: RsmNeighbourSum) -> Element {
+    let v = buf_vertices[idx];
+    let unmoved = Element(v.position, v.normal, v.uv, v.uv1, v.tangent, v.color);
+    if strength == 0.0 || neighbours.met == 0u {
         return unmoved;
     }
-    let mean = sum / f32(met);
+    let mean = neighbours.sum / f32(neighbours.met);
     return Element(v.position + strength * (mean - v.position), v.normal, v.uv, v.uv1, v.tangent, v.color);
+}
+
+fn body(
+    idx: u32,
+    count: u32,
+    nodes_x: f32,
+    nodes_y: f32,
+    nodes_z: f32,
+    strength: f32,
+    max_capacity: u32,
+    brick_pass: u32,
+) {
+    let zero = Element(
+        vec3<f32>(0.0),
+        vec3<f32>(0.0),
+        vec2<f32>(0.0),
+        vec2<f32>(0.0),
+        vec4<f32>(0.0),
+        vec4<f32>(0.0),
+    );
+    if brick_pass == 2u {
+        var live = 0u;
+        if min(min(nodes_x, nodes_y), nodes_z) >= 2.0 {
+            let clear_nodes = vec3<u32>(vec3<f32>(nodes_x, nodes_y, nodes_z));
+            let clear_cells = clear_nodes - vec3<u32>(1u);
+            let clear_total = clear_cells.x * clear_cells.y * clear_cells.z;
+            let triangles = buf_scan[clear_total - 1u];
+            if triangles <= max_capacity / 3u {
+                live = triangles * 3u;
+            }
+        }
+        if idx >= live {
+            buf_relaxed[idx] = zero;
+        }
+        return;
+    }
+    if min(min(nodes_x, nodes_y), nodes_z) < 2.0 {
+        return;
+    }
+    let nodes = vec3<u32>(vec3<f32>(nodes_x, nodes_y, nodes_z));
+    let cells = nodes - vec3<u32>(1u);
+    let cell_total = cells.x * cells.y * cells.z;
+    if idx >= count || idx >= cell_total {
+        return;
+    }
+    let triangles = buf_scan[cell_total - 1u];
+    if triangles > max_capacity / 3u {
+        return;
+    }
+    let home = vec3<u32>(idx % cells.x, (idx / cells.x) % cells.y, idx / (cells.x * cells.y));
+    let case_index = mc_case(home, nodes);
+    let cell_triangles = MC_TRIANGLE_COUNT[case_index];
+    var base = 0u;
+    if idx > 0u {
+        base = buf_scan[idx - 1u];
+    }
+    var edge_cache: array<RsmNeighbourSum, 12>;
+    var edge_ready: array<bool, 12>;
+    for (var e = 0u; e < 12u; e = e + 1u) {
+        edge_ready[e] = false;
+    }
+    for (var t = 0u; t < cell_triangles; t = t + 1u) {
+        for (var corner = 0u; corner < 3u; corner = corner + 1u) {
+            let edge_entry = t * 3u + corner;
+            let edge = mc_edge(case_index, edge_entry);
+            if !edge_ready[edge] {
+                edge_cache[edge] = rsm_neighbour_sum(home, edge, cells, nodes);
+                edge_ready[edge] = true;
+            }
+            let slot = (base + t) * 3u + corner;
+            buf_relaxed[slot] = rsm_relax_vertex(slot, strength, edge_cache[edge]);
+        }
+    }
 }

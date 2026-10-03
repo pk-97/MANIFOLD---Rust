@@ -10,7 +10,9 @@ completion with `--no-fail-fast`. Never nextest — process-per-test
 defeats the GPU device lock. The test binaries are compiled first with no
 lock held (`cargo test --no-run`, same arguments); then the test run holds the
 machine-wide GPU queue (scripts/gpu_queue.py) and waits its turn behind any
-other GPU run. `--build-only` stops after the compile.
+other GPU run. `--build-only` stops after the compile. Landing nextest and
+catalog checks use the same proof feature to reuse the renderer artifacts.
+Builds disable incremental compilation so sccache can cache workspace crates.
 
 Default mode is SCOPED: the branch's diff against `--base` (default
 origin/main, plus uncommitted and untracked files) is mapped by
@@ -54,6 +56,7 @@ from pathlib import Path
 
 import gpu_queue
 import gpu_scope
+import diff_scope
 
 # Matches glb_conformance.rs's check_golden() mismatch message:
 #   "golden mismatch: mean_abs_diff {mean_abs:.4} > tol {mean_abs_tol} \
@@ -133,6 +136,12 @@ def cargo_test_cmd(
     return cmd
 
 
+def build_environment():
+    environment = os.environ.copy()
+    environment["CARGO_INCREMENTAL"] = "0"
+    return environment
+
+
 def build_tests(manifest_path: Path, runs: list[dict]) -> int:
     """Compile every run's test binaries with no GPU lock held, so the hold
     covers test time only: the run that follows re-checks fingerprints and
@@ -144,7 +153,7 @@ def build_tests(manifest_path: Path, runs: list[dict]) -> int:
             continue
         built.append(cmd)
         print(f"$ {' '.join(cmd)}", flush=True)
-        code = subprocess.run(cmd).returncode
+        code = subprocess.run(cmd, env=build_environment()).returncode
         if code:
             return code
     return 0
@@ -183,6 +192,7 @@ def run_gate(
         stderr=subprocess.STDOUT,
         bufsize=0,
         start_new_session=True,
+        env=build_environment(),
     )
     assert proc.stdout is not None
     watchdog = Watchdog(gpu_scope.load_times(), hang_floor)
@@ -506,9 +516,15 @@ def changed_paths(repo: Path, base: str) -> list[str]:
     if mb.returncode != 0 or not mb.stdout.strip():
         raise RuntimeError(f"cannot resolve merge-base with {base}: {mb.stderr.strip()}; "
                            "fetch it, or pass --base / --path / --all explicitly")
-    paths = set(git_lines(repo, "diff", "--name-only", "--no-renames", "-z", f"{mb.stdout.strip()}..HEAD"))
-    paths |= set(git_lines(repo, "diff", "--name-only", "--no-renames", "-z", "HEAD"))
-    paths |= set(git_lines(repo, "ls-files", "--others", "--exclude-standard", "-z"))
+    paths = set(diff_scope.effective_paths(repo, mb.stdout.strip(), head=None)[0])
+    for path in git_lines(repo, "ls-files", "--others", "--exclude-standard", "-z"):
+        suffix = Path(path).suffix
+        if suffix in {".md", ".txt"}:
+            continue
+        if suffix in {".rs", ".wgsl", ".py"} and not any(
+                s.strip() for s in diff_scope.code_lines((repo / path).read_text(), suffix)):
+            continue
+        paths.add(path)
     return sorted(paths)
 
 

@@ -1,3 +1,4 @@
+//! Ported from FLIP Fluids fluidsimulation.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
 //! `node.liquid_fill` — a liquid's starting particles: a pool on the floor
 //! plus one box, one particle per half-cell site, at rest
 //! (docs/GPU_FLIP_PRESSURE_SOLVE.md section 1 (the step)). The sites are the FLIP Fluids

@@ -76,7 +76,7 @@ One function, ~60 lines. The 16:9 cell crop shows all four regions.
 
 ### 3.3 Freshness sidecar
 
-Each committed thumbnail gets `<id>.hash` beside it (the SHA-256 of the preset JSON bytes, written by the bin). Test `factory_thumbnails_fresh` in `manifold-renderer` (default suite, CPU-only): for every id in the factory registry, the PNG exists, the `.hash` exists, and the hash matches the JSON on disk. The bin is re-run by the phase that changes any preset; the test is the enforcement.
+Each committed thumbnail gets `<id>.hash` beside it (the SHA-256 of the preset JSON bytes, written by the bin). Nothing gates on it: a stale thumbnail only shows an old picture, so no test or landing check fails on it (Peter, 2026-10-03). Re-run the bin when a preset's look changes enough to matter.
 
 ### 3.4 Browser simplification (P3)
 
@@ -90,7 +90,6 @@ Consequences, stated honestly: the picker loses "what does this effect do to my 
 
 | Invariant | Enforcement |
 |---|---|
-| Every factory preset has a committed, fresh thumbnail | `factory_thumbnails_fresh` test (P2) — default suite, fails on missing PNG or stale hash |
 | Wet/dry defaults are 1.0 | `factory_amount_defaults_full` test (P1) — walks factory JSONs, asserts every `amount`/`mix` id defaults to 1.0 |
 | Thumbnails are deterministic | `thumbnail_render_deterministic` (gpu-proofs, P2) — renders Bloom + FluidSim twice, asserts byte-identical PNGs |
 | No transparency reaches a cell | Same gpu-proofs test asserts output alpha == 255 on every pixel |

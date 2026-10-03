@@ -568,6 +568,7 @@ pub const LIQUID_EXTENT_RULES: &[ExtentRule] = &[
     ExtentRule { type_id: "node.sort_particles_into_cells", check: sort_particles_into_cells },
     ExtentRule { type_id: "node.shape_particle_blobs", check: shape_particle_blobs },
     ExtentRule { type_id: "node.particle_volume", check: particle_volume },
+    ExtentRule { type_id: "node.lattice_bricks", check: lattice_bricks },
     ExtentRule { type_id: "node.smooth_lattice", check: smooth_lattice },
     ExtentRule { type_id: "node.clamp_liquid_to_solids", check: clamp_liquid_to_solids },
     ExtentRule { type_id: "node.count_surface_triangles", check: count_surface_triangles },
@@ -995,8 +996,32 @@ fn particle_volume(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
         x.publish(port, n as f32);
     }
     searched(x)?;
+    brick_schedule(x, refined)?;
     x.covers("solid", nodes_total(nodes) * 4)?;
     x.covers("levelset", lattice_total(refined) * 4)
+}
+
+fn lattice_bricks(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    use crate::node_graph::primitives::{lattice_bricks::brick_layout, prefix_scan::storage_words};
+    let nodes = x.nodes(["nodes_x", "nodes_y", "nodes_z"]);
+    if nodes.iter().any(|&n| n < 2.0) {
+        return Err(x.uncovered(format!("no lattice: nodes {nodes:?}")));
+    }
+    let layout = brick_layout(nodes.map(|n| n as u32), volume_scale(x.params()))
+        .ok_or_else(|| x.uncovered("brick lattice cannot be indexed in u32".into()))?;
+    searched(x)?;
+    x.covers("solid", nodes_total(nodes) * 4)?;
+    let bytes = u64::from(layout.words) * 4;
+    x.provide("bricks", bytes);
+    x.hold(bytes + storage_words(layout.count as usize) as u64 * 4);
+    Ok(())
+}
+
+fn brick_schedule(x: &AtomExtent<'_>, nodes: [u32; 3]) -> Result<(), Verdict> {
+    if !x.wired("bricks") { return Ok(()); }
+    let words = crate::node_graph::primitives::liquid_bricks::schedule_words(nodes)
+        .ok_or_else(|| x.uncovered("brick schedule size overflow".into()))?;
+    x.covers("bricks", words * 4)
 }
 
 fn smooth_lattice(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
@@ -1004,6 +1029,7 @@ fn smooth_lattice(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     if nodes.iter().any(|&n| n < 2.0) {
         return Err(x.uncovered(format!("no lattice: nodes {nodes:?}")));
     }
+    brick_schedule(x, nodes.map(|n| n as u32))?;
     x.covers("levelset", nodes_total(nodes) * 4)?;
     x.covers("smoothed", nodes_total(nodes) * 4)
 }
@@ -1014,6 +1040,7 @@ fn clamp_liquid_to_solids(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     if nodes.iter().chain(&solid).any(|&n| n < 2.0) {
         return Err(x.uncovered(format!("no lattice: nodes {nodes:?}, solid {solid:?}")));
     }
+    brick_schedule(x, nodes.map(|n| n as u32))?;
     x.covers("levelset", nodes_total(nodes) * 4)?;
     x.covers("clamped", nodes_total(nodes) * 4)?;
     x.covers("solid", nodes_total(solid) * 4)
@@ -1024,6 +1051,7 @@ fn count_surface_triangles(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     if nodes.iter().any(|&n| n < 2.0) {
         return Err(x.uncovered(format!("no lattice: nodes {nodes:?}")));
     }
+    brick_schedule(x, nodes.map(|n| n as u32))?;
     x.covers("levelset", nodes_total(nodes) * 4)?;
     x.covers("counts", nodes_total(nodes.map(|n| n - 1.0)) * 4)
 }
@@ -1038,10 +1066,11 @@ fn volume_surface_mesh(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     if nodes.iter().any(|&n| n < 2.0) {
         return Err(x.uncovered(format!("no lattice: nodes {nodes:?}")));
     }
+    brick_schedule(x, nodes.map(|n| n as u32))?;
     x.covers("levelset", nodes_total(nodes) * 4)?;
     x.covers("scan", nodes_total(nodes.map(|n| n - 1.0)) * 4)?;
-    // Provided and grown at run time; the kernel's dispatch count is the
-    // buffer's own whole-triangle slot count (`emit_slots`), so any size covers.
+    // Provided and grown at run time; cell emission checks the live scan total
+    // against the buffer's whole-triangle slot count before writing.
     let start = start_capacity(x.params(), nodes) * size_of::<MeshVertex>() as u64;
     x.provide("vertices", start);
     x.hold(start);
@@ -1053,9 +1082,10 @@ fn relax_surface_mesh(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     if nodes.iter().any(|&n| n < 2.0) {
         return Err(x.uncovered(format!("no lattice: nodes {nodes:?}")));
     }
+    brick_schedule(x, nodes.map(|n| n as u32))?;
     x.covers("levelset", nodes_total(nodes) * 4)?;
     x.covers("scan", nodes_total(nodes.map(|n| n - 1.0)) * 4)?;
-    // One thread per input slot; neighbours lie below the live total, inside it.
+    // Cell-owned intervals and neighbour reads lie below the checked live total.
     let vertices = x.bytes("vertices").ok_or_else(|| x.uncovered("vertices is unbound".into()))?;
     x.covers("relaxed", vertices)
 }
@@ -1127,6 +1157,31 @@ fn liquid_fill(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 }
 
 fn liquid_state(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let mut whitewater_check = Ok(());
+    let capacity = x.count("whitewater_capacity", STEP_CAPACITY as f32)?;
+    if !(1..=STEP_MAX_CAPACITY).contains(&capacity) {
+        return Err(Verdict::Refused(format!("whitewater capacity {capacity} is outside 1 to {STEP_MAX_CAPACITY}")));
+    }
+    let pool = u64::from(capacity) * size_of::<crate::node_graph::whitewater::WhitewaterParticle>() as u64;
+    for (capture, output, bytes) in [
+        ("whitewater_pool_in", "whitewater_pool", pool),
+        ("whitewater_state_in", "whitewater_state", 32),
+        ("whitewater_counts_in", "whitewater_counts", 32),
+        ("foam_particles_in", "foam_particles", u64::from(capacity) * PARTICLE),
+        ("bubble_particles_in", "bubble_particles", u64::from(capacity) * PARTICLE),
+        ("spray_particles_in", "spray_particles", u64::from(capacity) * PARTICLE),
+    ] {
+        let active = x.input(capture).is_some();
+        x.provide(output, if active { bytes } else { 0 });
+        if active {
+            x.hold(bytes);
+            // Captures become bound on the second walk. Publish ALL sizes
+            // before returning an uncovered capture from the first walk.
+            whitewater_check = whitewater_check.and(x.covers(capture, bytes));
+        }
+    }
+    if x.input("whitewater_pool_in").is_some() { x.hold(pool); }
+
     // The faces are the lattice's face grid, sized before the region runs and
     // held only while something reads them. The tick's faces (written later
     // in the plan: the second pass sees them) must be exactly that grid.
@@ -1162,7 +1217,7 @@ fn liquid_state(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     }
     x.covers("stats", stats)?;
     x.covers("stats_in", stats)?;
-    faces_check
+    faces_check.and(whitewater_check)
 }
 
 fn liquid_stats(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
@@ -1211,6 +1266,14 @@ fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     }
     let faces = face_bytes(cells);
     x.provide("faces", faces);
+    x.provide("distance", cell_total(cells) * 4);
+    let lattice = x.lattice()?;
+    x.publish_transform("grid_bounds", lattice.bounds());
+    for (port, value) in ["grid_nodes_x", "grid_nodes_y", "grid_nodes_z"].into_iter().zip(lattice.nodes())
+        .chain(["face_cells_x", "face_cells_y", "face_cells_z"].into_iter().zip(cells))
+        .chain([("face_valid_layers", FACE_VALID_LAYERS)]) {
+        x.publish(port, value as f32);
+    }
     let slots = x.items("particles").unwrap_or(0);
     let ranges = range_storage_bytes(cells);
     search_fits(x, cells, ranges)?;
@@ -1475,14 +1538,18 @@ fn whitewater_lifecycle(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 /// refusal by name, each input covering what the grid reads, each
 /// population provided at Capacity, and everything else held.
 fn whitewater_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let capacity = x.param("capacity", STEP_CAPACITY as f32).round();
+    let capacity = x.scalar("capacity", STEP_CAPACITY as f32).round();
     if !(1.0..=STEP_MAX_CAPACITY as f32).contains(&capacity) {
         return Err(Verdict::Refused(format!("capacity {capacity} is outside 1 to {STEP_MAX_CAPACITY}")));
     }
     let triple = |x: &AtomExtent<'_>, names: [&str; 3]| names.map(|name| whole(x, name, 0.0));
     let shape = StepShape::new(
         triple(x, ["grid_nodes_x", "grid_nodes_y", "grid_nodes_z"]),
-        triple(x, ["level_set_nodes_x", "level_set_nodes_y", "level_set_nodes_z"]),
+        if x.input("distance").is_some() {
+            triple(x, ["grid_nodes_x", "grid_nodes_y", "grid_nodes_z"])
+        } else {
+            triple(x, ["level_set_nodes_x", "level_set_nodes_y", "level_set_nodes_z"])
+        },
         triple(x, ["face_cells_x", "face_cells_y", "face_cells_z"]),
         x.scalar("face_valid_layers", 0.0),
         x.transform("grid_bounds"),
@@ -1496,7 +1563,16 @@ fn whitewater_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     for (axis, port) in ["face_u", "face_v", "face_w"].into_iter().enumerate() {
         x.covers(port, shape.face_bytes(axis))?;
     }
-    x.covers("level_set", shape.level_bytes())?;
+    x.provide("pool_out", shape.pool_bytes());
+    x.provide("state_out", 32);
+    x.provide("counts_out", 32);
+    if x.input("distance").is_some() {
+        x.covers("distance", cell_total(shape.face_cells) * 4)?;
+        x.covers("pool", shape.pool_bytes())?;
+        x.covers("pool_state", 32)?;
+    } else {
+        x.covers("level_set", shape.level_bytes())?;
+    }
     x.covers("solid", shape.solid_bytes())
 }
 

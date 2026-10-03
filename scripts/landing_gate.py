@@ -29,6 +29,8 @@ MAIN_CHECKOUT = Path("/Users/peterkiemann/MANIFOLD - Rust")
 # run-everything fallback) lives in scripts/gpu_scope.py; the full suite runs
 # nightly via trunk_health.py.
 import gpu_scope
+import cpu_scope
+import diff_scope
 
 
 def build_environment(cmd, cwd):
@@ -47,6 +49,7 @@ def build_environment(cmd, cwd):
     from storage_budget import check_build
     repo = Path(cwd).resolve()
     environment = os.environ.copy()
+    environment["CARGO_INCREMENTAL"] = "0"
     overrides = [environment[name] for name in
                  ("CARGO_TARGET_DIR", "CARGO_BUILD_TARGET_DIR") if environment.get(name)]
     targets = {Path(os.path.abspath(repo / value)) for value in overrides}
@@ -246,21 +249,6 @@ def packages_for_paths(repo, paths):
     return packages
 
 
-def get_touched_packages(repo, base_sha):
-    """Parse changed crate names from diff --name-only."""
-    changed = run_cmd(["git", "diff", "--name-only", f"{base_sha}..HEAD"],
-                      cwd=repo, timeout=300)[1]
-    return packages_for_paths(repo, [line.strip() for line in changed.splitlines() if line.strip()])
-
-
-def touches_gpu_path(repo, base_sha):
-    """Check if diff touches GPU-path files."""
-    changed = run_cmd(["git", "diff", "--name-only", f"{base_sha}..HEAD"],
-                      cwd=repo, timeout=300)[1]
-    return any(gpu_scope.is_gpu_path(line.strip())
-               for line in changed.strip().splitlines() if line.strip())
-
-
 def reverse_deps(repo, packages):
     """Find workspace packages that directly depend on any package in packages."""
     try:
@@ -298,6 +286,26 @@ def reverse_deps(repo, packages):
     except Exception as e:
         print(f"[WARN] cargo metadata failed — gating touched crates only")
         return []
+
+
+def stale_docs_index(repo):
+    """True when docs/README.md differs from what gen_docs_index.py would write."""
+    docs = Path(repo) / "docs"
+    index = docs / "README.md"
+    if not index.is_file():
+        return False
+    import gen_docs_index
+    return gen_docs_index.render(docs)[0] != index.read_text(encoding="utf-8")
+
+
+def freshness_problems(repo):
+    """Every stale generated artifact in one pass: (name, detail lines, regenerate command).
+    Preset thumbnails are not gated: a stale one only shows an old picture."""
+    problems = []
+    if stale_docs_index(repo):
+        problems.append(("docs-index", ["docs/README.md differs from the generated index"],
+                         "scripts/gen_docs_index.py"))
+    return problems
 
 
 def skip(results, label, reason):
@@ -349,23 +357,36 @@ def _main(stack):
               "Pass --repo <worktree path> of the branch being landed.")
         return 1
 
-    packages = get_touched_packages(repo, base_sha)
+    try:
+        paths, ignored_paths = diff_scope.effective_paths(repo, base_sha)
+    except RuntimeError as error:
+        print(f"[FAIL] diff scope: {error}")
+        return 1
+    if ignored_paths:
+        print(f"[scope] excluded {len(ignored_paths)} docs/comment-only file(s)")
+    packages = packages_for_paths(repo, paths)
+    cpu_plan = cpu_scope.plan_for_paths(paths, repo)
+    scope_reason = "docs/comment-only diff" if not paths else "no touched packages"
     touches_docs = run_cmd(["git", "diff", "--name-only", "--diff-filter=AR",
                             f"{base_sha}..HEAD", "--", "docs/"],
                            cwd=repo, timeout=300)[1].strip() != ""
-    touches_gpu = touches_gpu_path(repo, base_sha)
+    touches_gpu = any(gpu_scope.is_gpu_path(path) for path in paths)
 
     results = []
 
+    # Stale generated artifacts are knowable in seconds; report all of them
+    # before any build instead of one per 15-minute rerun.
+    problems = freshness_problems(repo)
+    if problems:
+        for name, detail, command in problems:
+            tail = [*detail, f"regenerate: {command}"]
+            results.append(("FAIL", f"fresh-{name}", None, tail))
+            print_result(f"fresh-{name}", "FAIL", None, tail)
+        return finish(repo, base_sha, results)
+
     # Harness changes use the same focused tests advertised in worker briefs.
     from codex_checks import tooling_checks
-    exit_, changed, err, _ = run_cmd(
-        ["git", "diff", "--name-only", "--no-renames", "-z", f"{base_sha}..HEAD"],
-        cwd=repo, timeout=300)
-    if exit_:
-        print(f"[FAIL] harness scope: {err}")
-        return 1
-    for check in tooling_checks(repo, [p for p in changed.split("\0") if p]):
+    for check in tooling_checks(repo, paths):
         exit_, out, err, duration = run_check(check["name"], check["argv"], cwd=repo, timeout=120)
         tail = (out + err).rstrip().splitlines()[-20:]
         status = "PASS" if exit_ == 0 else "FAIL"
@@ -453,9 +474,10 @@ def _main(stack):
         if status == "FAIL" and not args.keep_going:
             return finish(repo, base_sha, results)
     else:
-        skip(results, "clippy", "no touched packages")
+        skip(results, "clippy", scope_reason)
 
-    # c. flow-gate
+    # c. flow-gate uses the same comment-aware diff and writes its landing
+    # marker even when no flows need a build or run.
     exit_, out, err, duration = run_check("flow-gate",
         ["python3", "scripts/run_ui_flows.py", "--touched", f"{base_sha}...HEAD"],
         cwd=repo, timeout=3600)
@@ -466,13 +488,15 @@ def _main(stack):
     if status == "FAIL" and not args.keep_going:
         return finish(repo, base_sha, results)
 
+    if not paths:
+        for label in ("tests-build", "catalog-fresh", "gpu-proofs-build", "tests", "gpu-proofs"):
+            skip(results, label, scope_reason)
+        return finish(repo, base_sha, results)
+
     # GPU-proofs scope is settled before anything builds: an unmapped path
     # fails here, not after a compile.
     run_gpu = touches_gpu and not args.skip_gpu
     if run_gpu:
-        changed = run_cmd(["git", "diff", "--name-only", f"{base_sha}..HEAD"],
-                          cwd=repo, timeout=300)[1]
-        paths = [l.strip() for l in changed.strip().splitlines() if l.strip()]
         plan = gpu_scope.plan_for_paths(paths, repo)
         if plan.unmapped:
             message = gpu_scope.unmapped_message(plan)
@@ -480,36 +504,68 @@ def _main(stack):
             results.append(("FAIL", "gpu-proofs", None, message.splitlines()))
             return finish(repo, base_sha, results)
 
+    # All three test legs use the proof feature when proofs are selected, so
+    # Cargo reuses the renderer build across nextest, catalog and cargo test.
+    test_features = ["--features", "manifold-renderer/gpu-proofs"] if run_gpu else []
+    test_packages = set(cpu_plan.packages)
+    if run_gpu:
+        test_packages.add("manifold-renderer")
+    test_args = [a for p in sorted(test_packages) for a in ("-p", p)] + test_features
+    cpu_args = [*test_args, "-E", cpu_plan.filterset]
+
     # Compile every test binary the hold will run before taking it, so the
     # hold covers test time only (BUG-w0hh (landing gate speed)). The legs
     # under the hold then find everything built and go straight to testing.
-    if gate_packages:
-        pkg_args = []
-        for p in gate_packages:
-            pkg_args.extend(["-p", p])
-        if build_leg(results, "tests-build", ["cargo", "nextest", "run", "--no-run", *pkg_args],
+    print("[tests] " + cpu_plan.describe().replace("\n", "\n[tests] "), flush=True)
+    if cpu_plan.filters:
+        if build_leg(results, "tests-build", ["cargo", "nextest", "run", "--no-run", *cpu_args],
                      repo) == "FAIL" and not args.keep_going:
+            return finish(repo, base_sha, results)
+    else:
+        skip(results, "tests-build", "no changed Rust modules or mapped integration binaries")
+    # Catalog freshness is relevant to node declarations and catalog output,
+    # not every change in a renderer dependency.
+    catalog_paths = ("crates/manifold-renderer/src/node_graph/primitives/",
+                     "crates/manifold-renderer/src/node_graph/catalog_gen.rs",
+                     "crates/manifold-renderer/src/node_graph/descriptor.rs",
+                     "crates/manifold-renderer/src/node_graph/registry.rs",
+                     "docs/node_catalog")
+    if any(path.startswith(catalog_paths) for path in paths):
+        exit_, out, err, duration = run_check(
+            "catalog-fresh",
+            ["cargo", "nextest", "run", *test_args,
+             *([] if "manifold-renderer" in test_packages else ["-p", "manifold-renderer"]),
+             "-E", "test(regenerates_in_sync)"], cwd=repo, timeout=600)
+        tail = (out + err).rstrip().splitlines()[-20:]
+        status = "PASS" if exit_ == 0 else "FAIL"
+        if exit_:
+            tail.append("regenerate: cargo run -p manifold-renderer --bin gen_node_catalog")
+        results.append((status, "catalog-fresh", duration, tail))
+        print_result("catalog-fresh", status, duration, tail if exit_ else None)
+        if status == "FAIL" and not args.keep_going:
             return finish(repo, base_sha, results)
     if run_gpu:
+        gpu_args = [arg for path in paths for arg in ("--path", path)]
         if build_leg(results, "gpu-proofs-build",
-                     ["python3", "scripts/gpu_proofs_gate.py", "--base", args.base, "--build-only"],
+                     ["python3", "scripts/gpu_proofs_gate.py", *gpu_args, "--build-only"],
                      repo) == "FAIL" and not args.keep_going:
             return finish(repo, base_sha, results)
+    else:
+        skip(results, "gpu-proofs-build", "no GPU paths touched" if not touches_gpu else args.skip_gpu)
 
     # Nextest tests call GpuDevice::new_queued; each would queue behind every
     # agent's GPU run on its own. Hold the machine-wide GPU lock once, from
     # here through gpu-proofs: child test processes inherit an ancestor's hold,
     # so the landing waits once (visibly, on stdout) then runs straight through.
-    if gate_packages or run_gpu:
+    # Keep the hold for scoped nextest: transitive helpers can open a device,
+    # so source-path inspection alone cannot prove a selected test CPU-only.
+    if cpu_plan.filters or run_gpu:
         print("[gpu-queue] taking the GPU lock for the tests and gpu-proofs legs", flush=True)
         stack.enter_context(gpu_queue.hold("landing_gate tests+gpu-proofs", out=sys.stdout))
 
     # f. tests (if packages touched)
-    if gate_packages:
-        pkg_args = []
-        for p in gate_packages:
-            pkg_args.extend(["-p", p])
-        cmd = ["cargo", "nextest", "run", *pkg_args]
+    if cpu_plan.filters:
+        cmd = ["cargo", "nextest", "run", "--no-fail-fast", "--no-tests=pass", *cpu_args]
         exit_, out, err, duration = run_check("tests", cmd, cwd=repo, timeout=3600)
         tail = (out + err).rstrip().splitlines()[-20:]
         status = "PASS" if exit_ == 0 else "FAIL"
@@ -518,7 +574,7 @@ def _main(stack):
         if status == "FAIL" and not args.keep_going:
             return finish(repo, base_sha, results)
     else:
-        skip(results, "tests", "no touched packages")
+        skip(results, "tests", "no changed Rust modules or mapped integration binaries")
 
     # g. gpu-proofs
     if touches_gpu:
@@ -527,7 +583,7 @@ def _main(stack):
         else:
             print("[gpu-proofs] mode: scoped (focused tests + smoke; --all is nightly only)")
             print("[gpu-proofs] " + plan.describe().replace("\n", "\n[gpu-proofs] "), flush=True)
-            cmd = ["python3", "scripts/gpu_proofs_gate.py", "--base", args.base,
+            cmd = ["python3", "scripts/gpu_proofs_gate.py", *gpu_args,
                    "--budget", str(gpu_scope.LANDING_BUDGET_S)]
             # The GPU hold was taken before the tests leg and is still held.
             exit_, out, err, duration = run_check("gpu-proofs", cmd, cwd=repo, timeout=7200)
