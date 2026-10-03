@@ -599,7 +599,7 @@ const DISPLAY_NODES: [(&str, &str); 8] = [
 /// The whitewater populations: the state's `{kind}_particles` reach
 /// `{kind}_copies` through `{kind}_blend`.
 #[cfg(any(test, feature = "gpu-proofs"))]
-const WHITEWATER_KINDS: [&str; 4] = ["foam", "bubble", "spray", "dust"];
+pub(super) const WHITEWATER_KINDS: [&str; 4] = ["foam", "bubble", "spray", "dust"];
 
 /// `name`'s id in `def`.
 #[cfg(any(test, feature = "gpu-proofs"))]
