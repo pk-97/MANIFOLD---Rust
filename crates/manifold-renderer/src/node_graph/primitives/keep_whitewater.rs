@@ -44,7 +44,9 @@ struct KeepUniforms {
     region_offset: f32,
     tick_seconds: f32,
     dispatch_count: u32,
-    _pad: [u32; 3],
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 const _: () = assert!(std::mem::size_of::<KeepUniforms>() == 80);
@@ -175,7 +177,9 @@ impl Primitive for KeepWhitewater {
             region_offset: ctx.scalar_or_param("region_offset", 0.0),
             tick_seconds: ctx.scalar_or_param("tick_seconds", 0.0),
             dispatch_count: count,
-            _pad: [0; 3],
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
         };
         if uniforms.region_count > 0.0 {
             for name in ["regions", "shapes", "atlas"] {

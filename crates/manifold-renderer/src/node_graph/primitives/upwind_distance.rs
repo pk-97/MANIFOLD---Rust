@@ -11,6 +11,36 @@ use crate::node_graph::primitive::Primitive;
 use manifold_gpu::GpuBinding;
 use std::borrow::Cow;
 
+/// The generated sweep's uniforms, uploaded by this node and by the
+/// whitewater stage's convergence loop.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub(super) struct UpwindUniforms {
+    nodes_x: f32,
+    nodes_y: f32,
+    nodes_z: f32,
+    cell_size: f32,
+    dispatch_count: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
+}
+
+impl UpwindUniforms {
+    pub(super) fn new(nodes: [f32; 3], cell_size: f32, dispatch_count: u32) -> Self {
+        Self {
+            nodes_x: nodes[0],
+            nodes_y: nodes[1],
+            nodes_z: nodes[2],
+            cell_size,
+            dispatch_count,
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
+        }
+    }
+}
+
 crate::primitive! {
     name: UpwindDistance,
     type_id: "node.upwind_distance",
@@ -81,16 +111,7 @@ impl Primitive for UpwindDistance {
             ctx.error("Upwind Distance: incomplete lattice or invalid spacing");
             return;
         }
-        let uniforms = [
-            dims[0].to_bits(),
-            dims[1].to_bits(),
-            dims[2].to_bits(),
-            h.to_bits(),
-            count,
-            0,
-            0,
-            0,
-        ];
+        let uniforms = UpwindUniforms::new(dims, h, count);
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         gpu.native_enc.dispatch_compute(
@@ -98,7 +119,7 @@ impl Primitive for UpwindDistance {
             &[
                 GpuBinding::Bytes {
                     binding: 0,
-                    data: bytemuck::cast_slice(&uniforms),
+                    data: bytemuck::bytes_of(&uniforms),
                 },
                 GpuBinding::Buffer {
                     binding: 1,

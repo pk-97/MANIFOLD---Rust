@@ -1,7 +1,10 @@
 //! Engine whitewater surface distance orchestration. The stencil is the
 //! registered codegen atom UpwindDistance; reduction is stage-local.
 //! FLIP Fluids particlelevelset.cpp / levelsetsolver.cpp, MIT; see notices.
-use super::{standalone_pipeline::standalone_pipeline, upwind_distance::UpwindDistance};
+use super::{
+    standalone_pipeline::standalone_pipeline,
+    upwind_distance::{UpwindDistance, UpwindUniforms},
+};
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 
 pub(crate) fn scratch_bytes(cells: [u32; 3]) -> u64 {
@@ -133,22 +136,13 @@ impl SurfaceDistance {
         pass(enc, 1, 0, count.div_ceil(256));
         for iteration in 0..6 {
             pass(enc, 2, iteration, 1);
-            let words = [
-                (nx as f32).to_bits(),
-                (ny as f32).to_bits(),
-                (nz as f32).to_bits(),
-                h.to_bits(),
-                count,
-                0,
-                0,
-                0,
-            ];
+            let uniforms = UpwindUniforms::new([nx, ny, nz].map(|n| n as f32), h, count);
             enc.dispatch_compute(
                 self.sweep.as_ref().expect("sweep prepared"),
                 &[
                     GpuBinding::Bytes {
                         binding: 0,
-                        data: bytemuck::cast_slice(&words),
+                        data: bytemuck::bytes_of(&uniforms),
                     },
                     GpuBinding::Buffer {
                         binding: 1,
