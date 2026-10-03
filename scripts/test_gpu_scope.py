@@ -18,6 +18,20 @@ def plan(paths, users=None, repo=None):
 
 
 class ScopeTests(unittest.TestCase):
+    def test_live_clock_and_duration_atoms_select_value_proofs(self):
+        for name in ("gpu_flip_clock.rs", "shaders/gpu_flip_clock.wgsl"):
+            result = plan([P + name], users=lambda _: [P + "gpu_flip_clock.rs"],
+                          repo=self._repo_with(P + name))
+            self.assertIn("gpu_flip_clock::gpu_tests::", result.filters)
+            self.assertNotIn("gpu_flip_", result.filters)
+            self.assertFalse(result.unmapped)
+        for name in ("emission_count.rs", "spawn_whitewater.rs",
+                     "shaders/emission_count_body.wgsl", "shaders/spawn_whitewater_body.wgsl"):
+            result = plan([P + name], users=lambda _: [P + "emission_count.rs"],
+                          repo=self._repo_with(P + name))
+            self.assertIn("whitewater_particle_tests::", result.filters)
+            self.assertFalse(result.unmapped)
+
     def test_narrow_band_isolated_passes_select_their_value_proofs(self):
         for path in (P + "gpu_flip_narrow_band_tests.rs",
                      P + "shaders/gpu_flip_narrow_band.wgsl"):

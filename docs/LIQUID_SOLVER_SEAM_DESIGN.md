@@ -104,7 +104,7 @@ Survey: `rg 'purpose: "' crates/manifold-renderer/src/node_graph/primitives/ -g 
 The surface design's section 3 (The particle-frame contract) stands: 32-byte `FluidParticle` (`R/fluid_particles.rs:12`), ports `particles_a/b`, `count_a/b`, `identity_a/b`, `solid_a/b`, `grid_bounds`, `grid_nodes_x/y/z`, `blend`, `span`, display one tick behind (s = target − tick). Amendments:
 
 1. A producer publishes through a frame node (`node.matter_frame`, `node.liquid_frame`), never raw solver state. The frame node owns the A/B ring (`R/liquid/frame_ring.rs`) and holds while the clock is held.
-2. A tick with any non-finite position or velocity is never published. The stats node flags it; the frame keeps the last good tick and the domain shows a named error.
+2. A tick with any non-finite position or velocity is never published. The stats node flags it; the frame keeps the last good tick and the domain shows a named error. The partial BUG-7qzk implementation reseeds live GPU FLIP particles on the next retired fault without resetting its epoch/time; offline and other solver fault policy remains unchanged. The lead must run `liquid_nonfinite_live_flip_reseeds_without_stopping_clock` before this recovery is considered verified (see LIVE_SIM_CLOCK_DESIGN.md section 9).
 3. `solid_*` comes from `node.liquid_solid_distance`: walls plus every collider role and coupled body. No preset wires a constant.
 4. Records past `count` have radius 0.
 5. Ids are sorted ascending or all 0. A solver that reorders its state each tick (SWASH's bin sort) publishes 0.

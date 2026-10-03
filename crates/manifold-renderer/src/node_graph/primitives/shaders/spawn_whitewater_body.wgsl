@@ -5,7 +5,7 @@
 //   capacity) takes emission m = j, or ⌊j · total / capacity⌋ past capacity
 //   (a uniform subset), and m's emitter e is the first with offsets[e] > m;
 //   the particle lands in a cylinder about e's velocity: radius 8 marker
-//   radii · √Xr, angle 2π·Xt, height Xh · |v| · 1/60 s along it;
+//   radii · √Xr, angle 2π·Xt, height Xh · |v| · dt along it (export supplies 1/60 s);
 //   it is dropped outside the grid, or where the solid lattice's distance is
 //   under a quarter cell;
 //   lifetime = min + Ie·(max − min) ± variance, dropped at or below 0;
@@ -16,7 +16,6 @@
 //
 // Ported from FLIP Fluids diffuseparticlesimulation.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
 
-const SW_TICK: f32 = 1.0 / 60.0;
 // FLIP's emitter radius over the cell size: 8 marker radii, a marker being
 // the sphere of an eighth of a cell, (3 / 32π)^(1/3).
 const SW_EMITTER_RADIUS: f32 = 2.481402;
@@ -146,6 +145,7 @@ fn body(
     min_lifetime: f32,
     max_lifetime: f32,
     lifetime_variance: f32,
+    dt: f32,
 ) -> Element2 {
     let empty = Element2(vec4<f32>(0.0), vec3<f32>(0.0), 0u);
     let n = min(u32(max(round(emitters), 0.0)), arrayLength(&buf_offsets));
@@ -194,7 +194,7 @@ fn body(
     let generation = u32(max(round(epoch), 0.0));
     let r = SW_EMITTER_RADIUS * h * sqrt(ww_random(idx, s, generation, 4u));
     let theta = ww_random(idx, s, generation, 5u) * SW_TWO_PI;
-    let along = ww_random(idx, s, generation, 6u) * length(SW_TICK * v);
+    let along = ww_random(idx, s, generation, 6u) * length(dt * v);
     let p = emitter.position_radius.xyz + r * cos(theta) * e1 + r * sin(theta) * e2 + along * axis;
     let q = ww_grid_position(p, vec3<f32>(center_x, center_y, center_z), size, cells);
     if !ww_in_grid(vec3<i32>(floor(q)), cells) {

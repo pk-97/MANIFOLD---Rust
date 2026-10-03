@@ -3187,38 +3187,51 @@ impl Application {
             self.ws.ui_root.viewport.invalidate_layer_bitmap(layer_idx);
         }
 
-        // 5. Push performance metrics to HUD
-        if self.ws.ui_root.perf_hud.is_visible() {
+        // 5. Push one per-frame metric snapshot to whichever HUDs are open.
+        // The editor and main window must report the same content frame; keep
+        // the snapshot shared before handing each panel its owned copy.
+        let editor_perf_hud_visible = self
+            .graph_editor
+            .as_ref()
+            .is_some_and(|ed| ed.ui_root.perf_hud.is_visible());
+        if self.ws.ui_root.perf_hud.is_visible() || editor_perf_hud_visible {
             let bpm = Some(&self.local_project)
                 .map(|p| p.settings.bpm)
                 .unwrap_or(manifold_core::Bpm(120.0));
             let clock_source = Some(&self.local_project)
-                .map(|p| p.settings.clock_authority.display_name().to_string())
-                .unwrap_or_else(|| "Internal".to_string());
-            self.ws
-                .ui_root
-                .perf_hud
-                .set_metrics(manifold_ui::panels::perf_hud::PerfMetrics {
-                    ui_fps: self.frame_timer.current_fps() as f32,
-                    ui_frame_time_ms: (self.frame_timer.last_dt() * 1000.0) as f32,
-                    render_fps: self.content_state.content_fps,
-                    render_frame_time_ms: self.content_state.content_frame_time_ms,
-                    gpu_fence_wait_ms: self.content_state.gpu_fence_wait_ms,
-                    physics_cpu_ms: self.content_state.physics_cpu_ms,
-                    physics_body_count: self.content_state.physics_body_count,
-                    physics_backlog_seconds: self.content_state.physics_backlog_seconds,
-                    render_target_fps: self.content_state.frame_rate as f32,
-                    active_clips: self.content_state.active_clips,
-                    preparing_clips: 0,
-                    current_beat: self.content_state.current_beat,
-                    current_time_secs: self.content_state.current_time.as_f32(),
-                    bpm,
-                    clock_source,
-                    is_playing: self.content_state.is_playing,
-                    data_version: self.content_state.data_version,
-                    profiling_active: self.content_state.profiling_active,
-                    profiling_frame_count: self.content_state.profiling_frame_count,
-                });
+                .map(|p| p.settings.clock_authority.display_name())
+                .unwrap_or("Internal");
+            let metrics = manifold_ui::panels::perf_hud::PerfMetrics {
+                ui_fps: self.frame_timer.current_fps() as f32,
+                ui_frame_time_ms: (self.frame_timer.last_dt() * 1000.0) as f32,
+                render_fps: self.content_state.content_fps,
+                render_frame_time_ms: self.content_state.content_frame_time_ms,
+                gpu_fence_wait_ms: self.content_state.gpu_fence_wait_ms,
+                physics_cpu_ms: self.content_state.physics_cpu_ms,
+                physics_body_count: self.content_state.physics_body_count,
+                physics_backlog_seconds: self.content_state.physics_backlog_seconds,
+                sim_step_cap_hit: self.content_state.sim_step_cap_hit,
+                sim_nonfinite: self.content_state.sim_nonfinite,
+                render_target_fps: self.content_state.frame_rate as f32,
+                active_clips: self.content_state.active_clips,
+                preparing_clips: 0,
+                current_beat: self.content_state.current_beat,
+                current_time_secs: self.content_state.current_time.as_f32(),
+                bpm,
+                clock_source,
+                is_playing: self.content_state.is_playing,
+                data_version: self.content_state.data_version,
+                profiling_active: self.content_state.profiling_active,
+                profiling_frame_count: self.content_state.profiling_frame_count,
+            };
+            if self.ws.ui_root.perf_hud.is_visible() {
+                self.ws.ui_root.perf_hud.set_metrics(metrics);
+            }
+            if editor_perf_hud_visible
+                && let Some(ed) = self.graph_editor.as_mut()
+            {
+                ed.ui_root.perf_hud.set_metrics(metrics);
+            }
         }
 
         // 6. Lightweight update (playhead, insert cursor, layer selection, HUD values)

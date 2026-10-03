@@ -340,6 +340,9 @@ mod divide_by_value;
 pub(crate) mod gpu_flip_bodies;
 pub(crate) mod gpu_flip_pressure;
 pub(crate) mod gpu_flip_step;
+// Architecture/value proof until the accepted-interval runtime seam is migrated.
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod gpu_flip_clock;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_flip_pressure_tests;
 pub(crate) mod liquid_fill;

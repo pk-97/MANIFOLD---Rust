@@ -1528,6 +1528,14 @@ impl UIRoot {
         self.inspector.update(&mut self.tree);
     }
 
+    /// Push values for the editor window's HUD after its cacheless tree has
+    /// been rebuilt. The editor root never runs the main-window `update()`
+    /// path, so this targeted tick keeps the shared overlay live without
+    /// touching main-window-only panels.
+    pub fn tick_editor_perf_hud(&mut self) {
+        self.perf_hud.push_values(&mut self.tree);
+    }
+
     /// Per-frame update — push state changes to panels.
     pub fn update(&mut self) {
         if !self.built {
@@ -1885,5 +1893,34 @@ mod tick_parity_tests {
              (height_after_tick={height_after_tick}, height_expanded={height_expanded}) — \
              this is the exact mechanism BUG-160's card-height overflow came from"
         );
+    }
+
+    /// The graph editor's cacheless root uses the same overlay builder as the
+    /// live window but cannot call `UIRoot::update()` because it never becomes
+    /// `built`. This drives the real build + targeted tick seam and proves the
+    /// live-sim diagnostics reach the editor tree.
+    #[test]
+    fn editor_tick_pushes_live_sim_hud_values() {
+        let mut root = UIRoot::new();
+        root.perf_hud.toggle();
+        root.perf_hud
+            .set_metrics(manifold_ui::panels::perf_hud::PerfMetrics {
+                physics_backlog_seconds: 0.125,
+                sim_step_cap_hit: true,
+                sim_nonfinite: true,
+                ..Default::default()
+            });
+        root.build_overlays_for_screen(640.0, 480.0);
+        root.tick_editor_perf_hud();
+
+        let texts: Vec<&str> = root
+            .tree
+            .nodes()
+            .iter()
+            .filter_map(|node| node.text.as_deref())
+            .collect();
+        assert!(texts.contains(&"sim behind by 125.0 ms"));
+        assert!(texts.contains(&"step cap: WARNING — CAP HIT"));
+        assert!(texts.contains(&"sim state: ERROR — SHOW RUNNING"));
     }
 }

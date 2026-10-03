@@ -173,16 +173,16 @@ impl GpuFlipGeometry {
 }
 
 /// Every scalar output, in the order [`GpuFlipDomain::compute`] fills them.
-const OUTPUTS: [&str; 37] = [
+const OUTPUTS: [&str; 38] = [
     "lattice_min_x", "lattice_min_y", "lattice_min_z", "cell_size", "nodes_x", "nodes_y", "nodes_z",
     "closed_faces", "pool_sites", "box_x0", "box_x1", "box_y0", "box_y1", "box_z0", "box_z1",
     "particle_mass", "gravity_x", "gravity", "gravity_z", "ticks", "epoch", "simulation_time",
-    "display_time", "dropped_seconds", "body_count", "body_rows", "first_tick", "field_nodes_x",
+    "display_time", "target_time", "dropped_seconds", "body_count", "body_rows", "first_tick", "field_nodes_x",
     "field_nodes_y", "field_nodes_z", "field_spacing", "force_lattices", "impulse_tick", "dynamic_bodies",
     "particle_capacity", "region_count", "solve_level",
 ];
 const TICKS: usize = 19;
-const IMPULSE_TICK: usize = 32;
+const IMPULSE_TICK: usize = 33;
 const _: () = assert!(matches!(OUTPUTS[TICKS].as_bytes(), b"ticks"));
 const _: () = assert!(matches!(OUTPUTS[IMPULSE_TICK].as_bytes(), b"impulse_tick"));
 
@@ -336,6 +336,7 @@ crate::primitive! {
         ticks: ScalarF32,
         epoch: ScalarF32,
         simulation_time: ScalarF32,
+        target_time: ScalarF32,
         display_time: ScalarF32,
         dropped_seconds: ScalarF32,
         body_count: ScalarF32, body_rows: ScalarF32, dynamic_bodies: ScalarF32,
@@ -761,6 +762,7 @@ impl GpuFlipDomain {
             ("ticks", frame.ticks as f32),
             ("epoch", frame.epoch as f32),
             ("simulation_time", frame.simulation_time as f32),
+            ("target_time", frame.target_time as f32),
             ("display_time", display_time as f32),
             ("dropped_seconds", frame.dropped_seconds as f32),
             ("body_count", self.bodies.count() as f32),

@@ -440,7 +440,7 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     let state = b.node("state", "node.liquid_state", json!({}));
     b.wire((fill, "particles"), state, "seed");
     b.wire(count, state, "count");
-    b.wires(domain, state, &["ticks", "epoch"]);
+    b.wires(domain, state, &["ticks", "epoch", "simulation_time", "target_time"]);
     let particles: Port = (state, "out");
     let step = water_step(&mut b, scene, (domain, state));
     b.wire(particles, step, "particles");

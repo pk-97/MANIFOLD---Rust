@@ -1573,6 +1573,32 @@ fn liquid_nonfinite_tick_not_published() {
     }
 }
 
+/// Live GPU FLIP reports a bad state and recovers without an epoch reset or
+/// lost transport time. Offline I8 above deliberately retains its old policy.
+#[test]
+fn liquid_nonfinite_live_flip_reseeds_without_stopping_clock() {
+    let row = LIQUID_SOLVERS.iter().find(|row| row.type_id == GPU_FLIP_DOMAIN_TYPE_ID).unwrap();
+    let mut def = scene(row, Fixture::StillPool);
+    set_type_param(&mut def, GPU_FLIP_DOMAIN_TYPE_ID, "resolution", SerializedParamValue::Int { value: 16 });
+    let tap = NodeErrorTap::new();
+    let mut run = LiquidRun::new(row, def, 1, true, false);
+    let before = run.steps(3);
+    assert!(tap.take().is_empty());
+    run.errors_expected = true;
+    run.poison(row, 100);
+    run.step();
+    assert!(run.totals(row).nonfinite > 0, "the fixture must reach the non-finite path");
+    let recovered = run.steps(3);
+    assert_eq!(recovered.get("epoch"), before.get("epoch"), "recovery must not reset time");
+    let expected = f64::from(before.get("simulation_time")) + 4.0 * TICK;
+    assert!((f64::from(recovered.get("simulation_time")) - expected).abs() < 1e-6);
+    assert_eq!(run.totals(row).nonfinite, 0, "reseeded state must be finite");
+    assert!(run.particles("particles_b").iter().all(|p| {
+        p.position_radius.iter().chain(p.velocity.iter()).all(|v| v.is_finite())
+    }));
+    assert!(tap.take().iter().any(|error| error.contains("non-finite") && error.contains("show continues")));
+}
+
 /// I11: a run-time capacity overflow is counted and reported as a named
 /// error carrying the count, within a frame of the liquid first needing it.
 #[test]

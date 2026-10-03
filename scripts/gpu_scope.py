@@ -130,6 +130,14 @@ MATTER_DOMAIN_FILTERS = ["matter_scene::", "matter_coupling::", "matter_look::",
 
 # Narrow rows win over EXPLICIT_ROWS: a path matching one gets only that row.
 NARROW_ROWS = [
+    ((RENDERER_SRC + "node_graph/primitives/gpu_flip_clock.rs",
+      RENDERER_SRC + "node_graph/primitives/shaders/gpu_flip_clock.wgsl"),
+     (["gpu_flip_clock::gpu_tests::"], [])),
+    ((RENDERER_SRC + "node_graph/primitives/emission_count.rs",
+      RENDERER_SRC + "node_graph/primitives/spawn_whitewater.rs",
+      RENDERER_SRC + "node_graph/primitives/shaders/emission_count_body.wgsl",
+      RENDERER_SRC + "node_graph/primitives/shaders/spawn_whitewater_body.wgsl"),
+     (["whitewater_particle_tests::"], [])),
     ((RENDERER_SRC + "node_graph/primitives/gpu_flip_narrow_band_tests.rs",
       RENDERER_SRC + "node_graph/primitives/shaders/gpu_flip_narrow_band.wgsl"),
      (["gpu_flip_narrow_band_"], [])),

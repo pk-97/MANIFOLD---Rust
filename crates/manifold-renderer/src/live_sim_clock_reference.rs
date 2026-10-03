@@ -2,9 +2,14 @@
 //! Not connected to LiquidClock, the renderer, or a GPU solver.
 //! CFL step selection is ported from FLIP Fluids' fluidsimulation.cpp
 //! (_calculateNextTimeStep), Ryan L. Guy & Dennis Fassbaender, MIT.
+//! Live work-limit behavior follows FluidSimulation::nextUpdateTimeStep's
+//! minimum/max-step schedule and final remainder branch (fluidsimulation.cpp:
+//! 11430-11463): six positive numerical steps are allowed, and the sixth
+//! consumes all remaining frame time when more stability work is owed.
 //! See THIRD_PARTY_NOTICES.md and docs/LIVE_SIM_CLOCK_DESIGN.md.
 
 use manifold_physics::Seconds;
+use manifold_physics::stepping::{LiveStepSchedule, StepAction, StepInterval};
 
 const TICK: f64 = 1.0 / 60.0;
 
@@ -44,6 +49,86 @@ impl Step {
                 start: at,
                 end: self.end,
             }));
+        }
+    }
+
+    /// Visit CFL-limited numerical work for one live interval. The last
+    /// allowed numerical step consumes its complete remainder; hits inside it
+    /// split the accepted interval without consuming another numerical step.
+    fn visit_live(
+        self,
+        hits: &[Seconds],
+        cell_size: f64,
+        cfl: f64,
+        mut max_speed: impl FnMut() -> f64,
+        mut visit: impl FnMut(Action),
+    ) -> u32 {
+        assert!(self.start.0.is_finite() && self.end.0.is_finite());
+        assert!(self.start.0 <= self.end.0);
+        assert!(hits.windows(2).all(|pair| pair[0].0 <= pair[1].0));
+        assert!(hits.iter().all(|hit| hit.0.is_finite()));
+
+        let mut hit_index = hits.partition_point(|hit| hit.0 < self.start.0);
+        let mut at = self.start;
+        let mut numerical_steps = 0u32;
+
+        loop {
+            // A hit at the current boundary is instantaneous. In particular,
+            // tied hits do not consume numerical work or move the endpoint.
+            while hit_index < hits.len()
+                && hits[hit_index].0 == at.0
+                && hits[hit_index].0 < self.end.0
+            {
+                visit(Action::Hit(hit_index));
+                hit_index += 1;
+            }
+
+            if at.0 == self.end.0 {
+                return numerical_steps;
+            }
+
+            let remaining = Seconds(self.end.0 - at.0);
+            let cfl_duration = cfl_step(self.duration(), cell_size, cfl, max_speed(), None, None);
+            let mut schedule = LiveStepSchedule::new(at, remaining, 1, 6 - numerical_steps)
+                .expect("finite live interval and positive remaining step budget");
+            let planned = schedule
+                .next(cfl_duration)
+                .expect("finite positive CFL duration")
+                .expect("remaining live interval");
+
+            if planned.hit_cap {
+                let base = hit_index;
+                planned
+                    .interval
+                    .visit_hits(&hits[base..], |action| match action {
+                        StepAction::Integrate(interval) => visit(Action::Integrate(Step {
+                            start: interval.start,
+                            end: interval.end,
+                        })),
+                        StepAction::Hit(index) => visit(Action::Hit(base + index)),
+                    });
+                while hit_index < hits.len() && hits[hit_index].0 < self.end.0 {
+                    hit_index += 1;
+                }
+                at = self.end;
+            } else if let Some(&boundary) = hits
+                .get(hit_index)
+                .filter(|hit| hit.0 < planned.interval.end.0)
+            {
+                let interval = StepInterval::new(at, boundary);
+                visit(Action::Integrate(Step {
+                    start: interval.start,
+                    end: interval.end,
+                }));
+                at = boundary;
+            } else {
+                visit(Action::Integrate(Step {
+                    start: planned.interval.start,
+                    end: planned.interval.end,
+                }));
+                at = planned.interval.end;
+            }
+            numerical_steps += 1;
         }
     }
 }
@@ -405,4 +490,150 @@ fn live_sim_clock_cfl_reference_rule() {
     assert_eq!(tension.0, 0.025);
     let color = cfl_step(Seconds(0.1), 0.1, 2.0, 0.0, None, Some(40.0));
     assert_eq!(color.0, 0.02);
+}
+
+#[test]
+fn live_sim_clock_gpu_shader_parses_and_validates() {
+    let source = include_str!("node_graph/primitives/shaders/gpu_flip_clock.wgsl");
+    let module = naga::front::wgsl::parse_str(source).expect("live clock WGSL must parse");
+    naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::all(),
+    )
+    .validate(&module)
+    .expect("live clock WGSL must validate");
+}
+
+#[test]
+fn live_sim_clock_live_step_budget_allows_six_positive_steps() {
+    let outer = Step {
+        start: Seconds(0.0),
+        end: Seconds(6.0 * TICK),
+    };
+    let hits: Vec<_> = (1..6).map(|tick| Seconds(f64::from(tick) * TICK)).collect();
+    let mut integrations = Vec::new();
+    let steps = outer.visit_live(
+        &hits,
+        1.0,
+        5.0,
+        || 0.0,
+        |action| {
+            if let Action::Integrate(step) = action {
+                integrations.push(step);
+            }
+        },
+    );
+
+    assert_eq!(steps, 6);
+    assert_eq!(integrations.len(), 6);
+    assert_eq!(integrations.first().unwrap().start, outer.start);
+    assert_eq!(integrations.last().unwrap().end, outer.end);
+}
+
+#[test]
+fn live_sim_clock_live_step_cap_keeps_time_and_splits_hit() {
+    let outer = Step {
+        start: Seconds(0.0),
+        end: Seconds(7.0 * TICK),
+    };
+    let hits: Vec<_> = (1..7).map(|tick| Seconds(f64::from(tick) * TICK)).collect();
+    let mut integrations = Vec::new();
+    let mut x = 0.0;
+    let mut velocity = 0.0;
+    let steps = outer.visit_live(
+        &hits,
+        1.0,
+        5.0,
+        || 0.0,
+        |action| match action {
+            Action::Integrate(step) => {
+                x += velocity * step.duration().0;
+                integrations.push(step);
+            }
+            Action::Hit(5) => velocity += 1.0,
+            Action::Hit(_) => {}
+        },
+    );
+
+    assert_eq!(steps, 6);
+    assert_eq!(integrations.len(), 7);
+    assert_eq!(integrations.first().unwrap().start, outer.start);
+    assert_eq!(integrations.last().unwrap().end, outer.end);
+    assert!(
+        (x - TICK).abs() < 1e-12,
+        "the hit in the final stretched step applies at its moment"
+    );
+}
+
+#[test]
+fn live_sim_clock_live_step_recomputes_cfl_after_hit() {
+    use std::cell::Cell;
+
+    let speed = Cell::new(0.0);
+    let outer = Step {
+        start: Seconds(0.0),
+        end: Seconds(0.1),
+    };
+    let hits = [Seconds(0.05)];
+    let mut integrations = Vec::new();
+    let steps = outer.visit_live(
+        &hits,
+        1.0,
+        5.0,
+        || speed.get(),
+        |action| match action {
+            Action::Integrate(step) => integrations.push(step),
+            Action::Hit(0) => speed.set(100.0),
+            Action::Hit(_) => unreachable!("the test has one hit"),
+        },
+    );
+
+    assert_eq!(steps, 3);
+    assert_eq!(integrations.len(), 3);
+    assert_eq!(
+        integrations[0],
+        Step {
+            start: Seconds(0.0),
+            end: Seconds(0.05),
+        }
+    );
+    assert_eq!(integrations[1].start, Seconds(0.05));
+    assert_eq!(integrations.last().unwrap().end, outer.end);
+}
+
+#[test]
+fn live_sim_clock_live_step_tied_hits_and_exact_endpoint() {
+    let outer = Step {
+        start: Seconds(0.0),
+        end: Seconds(2.0 * TICK),
+    };
+    let hits = [
+        Seconds(0.0),
+        Seconds(0.0),
+        Seconds(TICK),
+        Seconds(TICK),
+        Seconds(2.0 * TICK),
+    ];
+    let mut actions = Vec::new();
+    let steps = outer.visit_live(&hits, 1.0, 5.0, || 0.0, |action| actions.push(action));
+
+    assert_eq!(steps, 2);
+    assert_eq!(
+        actions,
+        [
+            Action::Hit(0),
+            Action::Hit(1),
+            Action::Integrate(Step {
+                start: Seconds(0.0),
+                end: Seconds(TICK),
+            }),
+            Action::Hit(2),
+            Action::Hit(3),
+            Action::Integrate(Step {
+                start: Seconds(TICK),
+                end: outer.end,
+            }),
+        ]
+    );
+    assert!(!actions.contains(&Action::Hit(4)));
 }

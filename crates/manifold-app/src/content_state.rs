@@ -132,6 +132,10 @@ pub struct ContentState {
     pub physics_body_count: u32,
     /// Maximum unprocessed physics time across worlds, in seconds.
     pub physics_backlog_seconds: f32,
+    /// At least one live simulation frame used its final allowed substep.
+    pub sim_step_cap_hit: bool,
+    /// A live simulation produced genuinely non-finite state. The show keeps running.
+    pub sim_nonfinite: bool,
     pub active_clips: usize,
 
     // ── Editing ────────────────────────────────────────────────────
@@ -537,6 +541,8 @@ impl Default for ContentState {
             physics_cpu_ms: 0.0,
             physics_body_count: 0,
             physics_backlog_seconds: 0.0,
+            sim_step_cap_hit: false,
+            sim_nonfinite: false,
             active_clips: 0,
             data_version: 0,
             editing_is_dirty: false,
