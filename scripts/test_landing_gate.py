@@ -155,8 +155,7 @@ class LandingTests(unittest.TestCase):
     def test_builds_compile_exactly_what_the_held_legs_run(self):
         _, _, _, commands, *_ = self.exercise()
         nextest = [c for c in commands if c[:2] == ["cargo", "nextest"]]
-        selection = ["-p", "manifold-gpu", "-p", "manifold-renderer",
-                     "--features", "manifold-renderer/gpu-proofs",
+        selection = ["-p", "manifold-gpu",
                      "-E", "(package(=manifold-gpu) & test(/^metal::device::/))"]
         self.assertEqual(nextest, [["cargo", "nextest", "run", "--no-run", *selection],
                                    ["cargo", "nextest", "run", "--no-fail-fast", "--no-tests=pass", *selection]])
@@ -169,16 +168,35 @@ class LandingTests(unittest.TestCase):
         _, _, _, commands, *_ = self.exercise()
         self.assertFalse(any("test(regenerates_in_sync)" in c for c in commands))
 
-    def test_renderer_test_and_catalog_builds_share_proof_features(self):
-        code, _, _, commands, *_ = self.exercise(
-            paths=["crates/manifold-renderer/src/node_graph/primitives/invert.rs"])
-        self.assertEqual(code, 0)
-        nextest = [c for c in commands if c[:2] == ["cargo", "nextest"]]
-        self.assertEqual(len(nextest), 3)
-        for cmd in nextest:
-            self.assertEqual(cmd[cmd.index("--features") + 1], "manifold-renderer/gpu-proofs")
-            self.assertEqual(cmd.count("manifold-renderer"), 1)
-        self.assertIn("test(regenerates_in_sync)", nextest[1])
+    def test_proofs_do_not_change_nextest_selection(self):
+        # Cover nested gpu_tests, scene modules, individually gated tests,
+        # required-features binaries, and the transitive manifold-gpu feature.
+        # Compare entire argv: no feature, package or filter changes may leak
+        # from proof selection into nextest (including build/catalog commands).
+        for path in (
+            "crates/manifold-renderer/src/node_graph/primitives/invert.rs",
+            "crates/manifold-renderer/src/node_graph/primitives/mod.rs",
+            "crates/manifold-renderer/src/node_graph/primitives/gpu_flip_scene_tests.rs",
+            "crates/manifold-renderer/src/node_graph/bundled_presets.rs",
+            "crates/manifold-renderer/tests/gpu_proofs/main.rs",
+            "crates/manifold-renderer/tests/glb_conformance.rs",
+            "crates/manifold-gpu/src/metal/device.rs",
+        ):
+            with self.subTest(path=path):
+                code, _, _, enabled, *_ = self.exercise(paths=[path])
+                self.assertEqual(code, 0)
+                code, _, _, disabled, *_ = self.exercise(
+                    paths=[path], extra=["--skip-gpu", "deferred"])
+                self.assertEqual(code, 0)
+                nextest = lambda commands: [c for c in commands if c[:2] == ["cargo", "nextest"]]
+                self.assertTrue(nextest(enabled))
+                self.assertEqual(nextest(enabled), nextest(disabled))
+                for cmd in nextest(enabled):
+                    self.assertNotIn("--features", cmd)
+                    self.assertNotIn("--all-features", cmd)
+                self.assertIn(
+                    ["python3", "scripts/gpu_proofs_gate.py", "--path", path,
+                     "--budget", "360"], enabled)
 
     def test_skipped_proofs_do_not_enable_proof_features(self):
         code, _, _, commands, *_ = self.exercise(extra=["--skip-gpu", "deferred"])

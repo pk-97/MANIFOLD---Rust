@@ -419,6 +419,10 @@ fn compile_spirv_entry_to_msl(
     let mut options = <Msl as spirv_cross2::compile::CompilableTarget>::options();
     options.version = msl::MslVersion::new(2, 4, 0);
     options.platform = msl::MetalPlatform::MacOS;
+    // Native arrays are the established MSL representation. Metal skips the
+    // spirv-opt exhaustive-inlining pass in `shader_common`: SPIRV-Cross's
+    // inlined struct-return path otherwise emits an array-copy helper with
+    // incompatible constant/thread address spaces for local arrays.
     options.force_native_arrays = true;
 
     // Pin the `arrayLength()` buffer-size buffer to the SAME Metal index our
@@ -528,4 +532,110 @@ pub(super) fn find_entry_function(
         }
     }
     panic!("{label}: {stage} function '{entry_name}' not found. Available: {available:?}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Regression: 70ea38446 added this edge-cache shape to the sparse liquid
+    // surface mesh. InlineExhaustive turns its helper/early-return path into
+    // SPIRV-Cross array copies with incompatible Metal address spaces. Keep
+    // the actual generated standalone mesher source here so the test covers
+    // the constants, bindings, and local arrays that trigger the bug.
+    const VOLUME_SURFACE_MESH_WGSL: &str = concat!(
+        r#"
+struct Element {
+    position: vec3<f32>,
+    normal: vec3<f32>,
+    uv: vec2<f32>,
+    uv1: vec2<f32>,
+    tangent: vec4<f32>,
+    color: vec4<f32>,
+}
+
+struct Params {
+    center_x: f32,
+    center_y: f32,
+    center_z: f32,
+    size_x: f32,
+    size_y: f32,
+    size_z: f32,
+    nodes_x: f32,
+    nodes_y: f32,
+    nodes_z: f32,
+    resolution_scale: i32,
+    max_capacity: i32,
+    brick_pass: u32,
+    dispatch_count: u32,
+    _pad: vec3<u32>,
+}
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> buf_levelset: array<f32>;
+@group(0) @binding(2) var<storage, read> buf_scan: array<u32>;
+@group(0) @binding(3) var<storage, read> buf_extent: array<u32>;
+@group(0) @binding(4) var<storage, read> buf_bricks: array<u32>;
+@group(0) @binding(5) var<storage, read_write> buf_vertices: array<Element>;
+
+"#,
+        include_str!(
+            "../../../manifold-renderer/src/node_graph/primitives/shaders/marching_cubes_common.wgsl"
+        ),
+        "\n",
+        include_str!(
+            "../../../manifold-renderer/src/node_graph/primitives/shaders/liquid_bricks_common.wgsl"
+        ),
+        "\n",
+        include_str!(
+            "../../../manifold-renderer/src/node_graph/primitives/shaders/volume_surface_mesh_body.wgsl"
+        ),
+        r#"
+
+@compute @workgroup_size(256)
+fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = liquid_cell_brick_index(gid.x);
+    if idx == 0xffffffffu {
+        return;
+    }
+    if idx >= params.dispatch_count {
+        return;
+    }
+    body(
+        idx,
+        params.dispatch_count,
+        params.center_x,
+        params.center_y,
+        params.center_z,
+        params.size_x,
+        params.size_y,
+        params.size_z,
+        params.nodes_x,
+        params.nodes_y,
+        params.nodes_z,
+        params.resolution_scale,
+        params.max_capacity,
+        params.brick_pass,
+    );
+}
+"#,
+    );
+
+    #[test]
+    fn volume_surface_mesh_local_arrays_have_valid_msl_address_spaces() {
+        let (_, msl, _, _) = compile_wgsl_to_msl(
+            VOLUME_SURFACE_MESH_WGSL,
+            "cs_main",
+            "volume-surface-mesh-array-regression",
+            false,
+        );
+        assert!(
+            !msl.contains("spvArrayCopyFromConstantToStack("),
+            "Metal MSL still contains an illegal constant-to-stack array copy:\n{msl}"
+        );
+        assert!(
+            msl.contains("kernel void cs_main"),
+            "SPIRV-Cross did not emit the mesher entry point:\n{msl}"
+        );
+    }
 }

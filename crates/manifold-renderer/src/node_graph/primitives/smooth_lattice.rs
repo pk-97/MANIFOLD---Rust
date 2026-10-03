@@ -68,8 +68,15 @@ crate::primitive! {
     wgsl_body: include_str!("shaders/smooth_lattice_body.wgsl"),
     input_access: [BufferGather, BufferGather],
     derived_uniforms: ["brick_pass:u32"],
-    wgsl_includes: [liquid_bricks::COMMON],
+    wgsl_includes: [liquid_bricks::COMMON, include_str!("shaders/smooth_lattice_element.wgsl")],
     buffer_index: "liquid_brick_index",
+    dense_buffer_fusion: crate::node_graph::effect_node::DenseBufferFusion {
+        body_fragments: &[
+            include_str!("shaders/smooth_lattice_element.wgsl"),
+            include_str!("shaders/smooth_lattice_dense_body.wgsl"),
+        ],
+        schedule_inputs: &["bricks"],
+    },
 }
 
 impl Primitive for SmoothLattice {

@@ -647,6 +647,17 @@ impl NodeRequires {
     }
 }
 
+/// Dense semantics for a buffer atom whose standalone implementation schedules
+/// sparse passes. The author guarantees identical element values with every
+/// valid schedule (including no schedule); schedule inputs affect work only.
+/// All fragments are namespaced together by fusion codegen, so
+/// the dense and scheduled entry points can share the same arithmetic helpers.
+#[derive(Clone, Copy)]
+pub struct DenseBufferFusion {
+    pub body_fragments: &'static [&'static str],
+    pub schedule_inputs: &'static [&'static str],
+}
+
 /// One unit of GPU work in the effect graph.
 ///
 /// Implemented by:
@@ -1661,6 +1672,13 @@ pub trait EffectNode: Send {
     /// buffer element. The function is supplied by `wgsl_includes` and returns
     /// `0xffffffffu` for an inactive item.
     fn buffer_index(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// An equivalent dense per-element form of a scheduled buffer kernel.
+    /// Schedule-only inputs disappear from fused dataflow; cell-owned outputs
+    /// still cannot fuse. The dense form uses ordinary params, no pass uniforms.
+    fn dense_buffer_fusion(&self) -> Option<DenseBufferFusion> {
         None
     }
 

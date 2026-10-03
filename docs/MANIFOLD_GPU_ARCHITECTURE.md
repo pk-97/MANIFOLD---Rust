@@ -37,7 +37,7 @@ manifold-gpu/
 
 **API surface:** ~15 core methods. create_texture, create_buffer, create_pipeline, create_sampler, dispatch_compute, begin/end_render_pass, copy_texture, clear_texture, submit, signal_event. Purpose-built for MANIFOLD, not general-purpose.
 
-**Shaders:** WGSL everywhere. Pipeline: WGSL → naga → SPIR-V → spirv-opt (22 optimization passes) → SPIRV-Cross → MSL. Intermediate MSL cached on disk (`msl_cache.rs`). Compiled GPU binaries cached via MTLBinaryArchive. Compilation runs at pipeline creation (startup), not per-frame.
+**Shaders:** WGSL everywhere. Pipeline: WGSL → naga → SPIR-V → spirv-opt → SPIRV-Cross → MSL. Metal skips SPIR-V exhaustive inlining because SPIRV-Cross mislowers the resulting local-array copies across address spaces; its emitted `always_inline` helpers leave inlining to Metal. Intermediate MSL is cached on disk (`msl_cache.rs`), with versioned shader keys invalidated when translation changes. Compiled GPU binaries are cached via MTLBinaryArchive. Compilation runs at pipeline creation (startup), not per-frame.
 
 Render cache identity separates shader translation from pipeline state. The MSL
 key includes source, entry points and the point-size output rewrite. Every render
