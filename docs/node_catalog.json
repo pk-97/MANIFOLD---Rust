@@ -107243,7 +107243,7 @@
           "name": "Whitewater"
         },
         {
-          "default": "2.2",
+          "default": "3",
           "id": "surface_particle_scale",
           "max": "4",
           "min": "1",
@@ -123436,14 +123436,14 @@
           "name": "Spray Size"
         },
         {
-          "default": "2.5",
+          "default": "3",
           "id": "water_attenuation",
           "max": "20",
           "min": "0.1",
           "name": "Water Absorption Distance"
         },
         {
-          "default": "0.1",
+          "default": "0.055",
           "id": "water_scattering",
           "max": "2",
           "min": "0",
@@ -124255,14 +124255,14 @@
           "name": "Volume Attenuation Colour R"
         },
         {
-          "default": "0.76",
+          "default": "0.72",
           "id": "8_volume_attenuation_color_g",
           "max": "1",
           "min": "0",
           "name": "Volume Attenuation Colour G"
         },
         {
-          "default": "0.76",
+          "default": "0.8",
           "id": "8_volume_attenuation_color_b",
           "max": "1",
           "min": "0",
@@ -126026,21 +126026,21 @@
           "name": "Geometric Volume"
         },
         {
-          "default": "0.7",
+          "default": "0.68",
           "id": "8_volume_scattering_color_r",
           "max": "1",
           "min": "0",
           "name": "Volume Scattering Colour R"
         },
         {
-          "default": "0.88",
+          "default": "0.86",
           "id": "8_volume_scattering_color_g",
           "max": "1",
           "min": "0",
           "name": "Volume Scattering Colour G"
         },
         {
-          "default": "0.88",
+          "default": "0.92",
           "id": "8_volume_scattering_color_b",
           "max": "1",
           "min": "0",
@@ -139629,14 +139629,14 @@
           "name": "Smoothing Value"
         },
         {
-          "default": "2.5",
+          "default": "3",
           "id": "water_attenuation",
           "max": "20",
           "min": "0.1",
           "name": "Water Absorption Distance"
         },
         {
-          "default": "0.1",
+          "default": "0.055",
           "id": "water_scattering",
           "max": "2",
           "min": "0",
@@ -140420,14 +140420,14 @@
           "name": "Volume Attenuation Colour R"
         },
         {
-          "default": "0.76",
+          "default": "0.72",
           "id": "441_volume_attenuation_color_g",
           "max": "1",
           "min": "0",
           "name": "Volume Attenuation Colour G"
         },
         {
-          "default": "0.76",
+          "default": "0.8",
           "id": "441_volume_attenuation_color_b",
           "max": "1",
           "min": "0",
@@ -142191,21 +142191,21 @@
           "name": "Geometric Volume"
         },
         {
-          "default": "0.7",
+          "default": "0.68",
           "id": "441_volume_scattering_color_r",
           "max": "1",
           "min": "0",
           "name": "Volume Scattering Colour R"
         },
         {
-          "default": "0.88",
+          "default": "0.86",
           "id": "441_volume_scattering_color_g",
           "max": "1",
           "min": "0",
           "name": "Volume Scattering Colour G"
         },
         {
-          "default": "0.88",
+          "default": "0.92",
           "id": "441_volume_scattering_color_b",
           "max": "1",
           "min": "0",
