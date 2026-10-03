@@ -48,6 +48,19 @@ const PARTIAL_SHADERS: &[&str] = &[
     // and the kernel's own `liquid_atlas_half`. Their generated kernels are
     // validated by each atom's codegen test and the matter GPU proofs.
     "liquid_collider.wgsl",
+    // Liquid-brick `wgsl_includes` and dense reference kernels: they read the
+    // generated kernel's bindings (`buf_levelset`, `buf_solid`, `buf_bricks`,
+    // the marching-cubes tables). Their composed forms are validated by
+    // `liquid_bricks_tests::fluid_bricks_generated_consumers_validate_on_cpu`.
+    "liquid_bricks_common.wgsl",
+    "smooth_lattice_element.wgsl",
+    "clamp_liquid_to_solids_element.wgsl",
+    "smooth_lattice_dense_reference.wgsl",
+    "clamp_liquid_to_solids_dense_reference.wgsl",
+    "particle_volume_dense_reference.wgsl",
+    "count_surface_triangles_dense_reference.wgsl",
+    "volume_surface_mesh_dense_reference.wgsl",
+    "relax_surface_mesh_dense_reference.wgsl",
 ];
 
 const NOISE_COMMON: &str = include_str!("../src/generators/shaders/noise_common.wgsl");
