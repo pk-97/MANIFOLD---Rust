@@ -232,7 +232,7 @@
         },
         "volume_projection": {
           "type": "Int",
-          "value": 0
+          "value": 1
         }
       },
       "typeId": "node.gpu_flip_step"
@@ -796,6 +796,7 @@
           },
           {
             "id": 32,
+            "nodeId": "liquid_blob_bounds",
             "typeId": "node.blob_bounds"
           }
         ],
@@ -5004,6 +5005,12 @@
       "toPort": "object_10"
     },
     {
+      "fromNode": 0,
+      "fromPort": "interval_duration",
+      "toNode": 475,
+      "toPort": "dt"
+    },
+    {
       "fromNode": 11,
       "fromPort": "particles_a",
       "toNode": 506,
@@ -5290,12 +5297,6 @@
       "fromPort": "object",
       "toNode": 463,
       "toPort": "object_1"
-    },
-    {
-      "fromNode": 0,
-      "fromPort": "interval_duration",
-      "toNode": 475,
-      "toPort": "dt"
     },
     {
       "fromNode": 10,

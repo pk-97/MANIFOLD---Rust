@@ -61,6 +61,13 @@ const PARTIAL_SHADERS: &[&str] = &[
     "count_surface_triangles_dense_reference.wgsl",
     "volume_surface_mesh_dense_reference.wgsl",
     "relax_surface_mesh_dense_reference.wgsl",
+    // Welded-mesh `wgsl_includes`: they read the marching-cubes tables and the
+    // kernel's `buf_levelset` / `buf_edge_scan`. Each user's generated kernel
+    // validates on the CPU in its own module (count_surface_edges,
+    // volume_surface_mesh, relax_surface_mesh, surface_mesh_normals).
+    "surface_edge_index.wgsl",
+    "surface_edge_ownership.wgsl",
+    "surface_mesh_adjacency.wgsl",
 ];
 
 const NOISE_COMMON: &str = include_str!("../src/generators/shaders/noise_common.wgsl");

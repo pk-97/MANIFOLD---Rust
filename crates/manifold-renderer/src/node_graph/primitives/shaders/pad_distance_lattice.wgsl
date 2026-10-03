@@ -9,7 +9,7 @@ struct Params {
     cells_z: u32,
     padding: u32,
     exterior: f32,
-    dispatch_count: u32,
+    padded_cells: u32,
     _pad0: u32,
     _pad1: u32,
 };
@@ -21,7 +21,7 @@ struct Params {
 @compute @workgroup_size(256)
 fn pad_distance_lattice(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
-    if idx >= params.dispatch_count {
+    if idx >= params.padded_cells {
         return;
     }
 

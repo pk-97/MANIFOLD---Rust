@@ -96,8 +96,9 @@ pub(crate) struct WaterScene {
     /// (ghost fluid). Off wires zero distances: air at zero pressure on its
     /// cell centres, the race's comparison.
     pub ghost_fluid: bool,
-    /// The step's density projection (Volume Projection); off is the
-    /// comparison without it.
+    /// The step's density projection (Volume Projection). The engine has
+    /// none, but without it the GPU Dam Break settles 21.5% too deep at 64
+    /// (interior 6.6 against 8 a cell after 1800 frames), so it stays on.
     pub volume_projection: bool,
     /// The Dam Break's box as a Collider role (`obstacle_transform` into
     /// `obstacle_collider` into the domain's `role_0`).
@@ -139,7 +140,7 @@ impl WaterScene {
             surface_scale: 1,
             faces: false,
             ghost_fluid: true,
-            volume_projection: false,
+            volume_projection: true,
             obstacle: true,
             closed_faces: 63,
         }

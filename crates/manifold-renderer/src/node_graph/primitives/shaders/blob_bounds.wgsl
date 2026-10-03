@@ -1,4 +1,4 @@
-struct Params { count: u32, a: u32, b: u32, c: u32, }
+struct Params { count: u32, _pad0: u32, _pad1: u32, _pad2: u32, }
 struct Blob { center_radius: vec4<f32>, shape_diag: vec4<f32>, shape_off: vec4<f32>, }
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var<storage, read> blobs: array<Blob>;

@@ -377,16 +377,7 @@ fn hand_uniform_structs_match_codegen_layout() {
                             continue;
                         }
                         let mut fields = layout.fields;
-                        // Codegen prefixes reserved param names with p_. Only
-                        // normalize a prefix that names a real raw field.
-                        for field in &mut fields {
-                            if let Some(raw) = field.name.strip_prefix("p_")
-                                && !raw_fields.iter().any(|f| f.name == field.name)
-                                && raw_fields.iter().any(|f| f.name == raw)
-                            {
-                                field.name = raw.to_string();
-                            }
-                        }
+                        unprefix_reserved(&mut fields, &raw_fields);
                         fields
                     }
                     Err(error) => {
@@ -476,8 +467,101 @@ fn cut_remap_generated_params_match_shared_four_word_upload() {
     }
 }
 
-// These nodes do not use the standalone dispatch_count ABI. Keep exceptions
-// explicit: adding/removing an exception requires inspecting the run() path.
+/// Codegen prefixes reserved param names with p_. Only normalize a prefix
+/// that names a real raw field.
+fn unprefix_reserved(fields: &mut [Field], raw_fields: &[Field]) {
+    for field in fields {
+        if let Some(raw) = field.name.strip_prefix("p_")
+            && !raw_fields.iter().any(|f| f.name == field.name)
+            && raw_fields.iter().any(|f| f.name == raw)
+        {
+            field.name = raw.to_string();
+        }
+    }
+}
+
+/// `type_id`'s generated Params, required to be packed scalars.
+fn generated_fields(registry: &PrimitiveRegistry, type_id: &str, raw: &[Field]) -> Vec<Field> {
+    let node = registry.construct(type_id).expect("registered primitive");
+    let layout = shader_fields(node.as_ref()).unwrap_or_else(|e| panic!("{type_id}: {e}"));
+    assert!(
+        layout.is_packed_scalars(),
+        "{type_id}: Params offsets/span invalid: {:?}, span={}",
+        layout.offsets,
+        layout.span
+    );
+    let mut fields = layout.fields;
+    unprefix_reserved(&mut fields, raw);
+    fields
+}
+
+/// `SurfaceMeshPass` uploads one `RelaxUniforms` for every kernel it runs:
+/// relax_surface_mesh's (also smooth_surface_mesh's) and surface_mesh_normals'.
+#[test]
+fn surface_mesh_pass_uniforms_match_every_kernel_it_dispatches() {
+    let text = std::fs::read_to_string(primitives_dir().join("relax_surface_mesh.rs"))
+        .expect("relax_surface_mesh.rs");
+    let (_, structs) = parse_source(&text);
+    let hand = structs
+        .iter()
+        .find(|s| s.name == "RelaxUniforms")
+        .expect("RelaxUniforms is a dispatch-family hand struct");
+    let registry = PrimitiveRegistry::with_builtin();
+    for type_id in ["node.relax_surface_mesh", "node.surface_mesh_normals"] {
+        let got = generated_fields(&registry, type_id, &hand.fields);
+        assert!(
+            layout_eq(&hand.fields, &got),
+            "{type_id}: generated {got:?}\n  RelaxUniforms {:?}",
+            hand.fields
+        );
+    }
+}
+
+/// `whitewater_emitter_dispatch` uploads every float param in PARAMS order,
+/// then the count, zero-padded to whole 16-byte rows of its 32-word buffer.
+#[test]
+fn whitewater_emitter_dispatch_packs_the_generated_params() {
+    let registry = PrimitiveRegistry::with_builtin();
+    for type_id in ["node.whitewater_influence", "node.turbulence_emission_count"] {
+        let node = registry.construct(type_id).expect("registered emitter atom");
+        let mut packed: Vec<Field> = node
+            .parameters()
+            .iter()
+            .map(|p| {
+                assert!(
+                    matches!(p.ty, ParamType::Float),
+                    "{type_id}: the packer writes floats only, {} is not one",
+                    p.name
+                );
+                Field {
+                    name: p.name.as_ref().to_string(),
+                    ty: "f32",
+                }
+            })
+            .collect();
+        packed.push(Field {
+            name: "dispatch_count".into(),
+            ty: "u32",
+        });
+        let words = packed.len().next_multiple_of(4);
+        assert!(words <= 32, "{type_id}: {words} words overflow the packer");
+        for pad in 0..words - packed.len() {
+            packed.push(Field {
+                name: format!("_pad{pad}"),
+                ty: "u32",
+            });
+        }
+        let got = generated_fields(&registry, type_id, &packed);
+        assert!(
+            layout_eq(&packed, &got),
+            "{type_id}: generated {got:?}\n  packed {packed:?}"
+        );
+    }
+}
+
+// These nodes do not use the standalone dispatch_count ABI, or upload it from
+// a shared packer proven above. Keep exceptions explicit: adding/removing an
+// exception requires inspecting the run() path.
 const NON_STANDALONE: &[&str] = &[
     // CPU/control/state implementations.
     "node.array_feedback",
@@ -554,6 +638,17 @@ const NON_STANDALONE: &[&str] = &[
     // The whitewater lifecycle runs FLIP's C++ on the CPU and writes its
     // outputs from there: no GPU kernel of its own, only buffer copies.
     "node.whitewater_lifecycle",
+    // The water surface's barriered brick mark/scan/compact and its blob
+    // bounds reduction: BrickUniforms and BoundsParams are reflected in
+    // uniform_layout_extended.
+    "node.lattice_bricks",
+    "node.blob_bounds",
+    // SurfaceMeshPass's shared RelaxUniforms, proven above for both kernels.
+    "node.smooth_surface_mesh",
+    "node.surface_mesh_normals",
+    // The whitewater emitter packer, proven above.
+    "node.whitewater_influence",
+    "node.turbulence_emission_count",
 ];
 
 fn coverage_errors(uncovered: &[String]) -> Vec<String> {

@@ -2157,7 +2157,21 @@ mod tests {
         }).expect("fluid is a selectable scene object");
         let domain = row.liquid_domain.as_ref().unwrap().resolve(&added).expect("the domain resolves");
         assert_eq!(domain.type_id, manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID, "Add Fluid authors GPU FLIP");
-        assert_eq!(row.fluid_controls.len(), 2, "simulation and initial volume controls");
+        // The water also owns the whitewater on its clock and the surface its
+        // mesh consumes, so the count follows the template; ownership does not.
+        fn stable_ids(nodes: &[manifold_core::effect_graph_def::EffectGraphNode], out: &mut Vec<manifold_core::NodeId>) {
+            for node in nodes {
+                out.push(node.node_id.clone());
+                if let Some(group) = node.group.as_deref() {
+                    stable_ids(&group.nodes, out);
+                }
+            }
+        }
+        let mut existing = Vec::new();
+        stable_ids(&original.nodes, &mut existing);
+        assert_eq!(row.fluid_controls.first(), Some(&domain.node_id), "the simulation leads the water's controls");
+        assert!(row.fluid_controls.iter().all(|id| !existing.contains(id)),
+            "every water control is a node Add Fluid inserted");
         let layout = row.fluid_domain.unwrap();
         assert_eq!((layout.size, layout.cells), ([4.0; 3], [64; 3]));
         let sections = crate::ui_bridge::projection::scene::sections_for_nodes(

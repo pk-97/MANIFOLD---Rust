@@ -205,7 +205,11 @@ pub const CASES: &[CustomAbiCase] = &[
         rust_struct: "StepParams",
         shader: "shaders/gpu_flip_step.wgsl",
         shader_struct: "Params",
-        aliases: &[],
+        aliases: &[
+            ("clock_pad[0]", "clock_pad0"),
+            ("clock_pad[1]", "clock_pad1"),
+            ("clock_pad[2]", "clock_pad2"),
+        ],
     },
     CustomAbiCase {
         source: "whitewater_step.rs",
@@ -437,6 +441,94 @@ pub const CASES: &[CustomAbiCase] = &[
         rust_struct: "WatercolorUniforms",
         shader: "../../effects/shaders/fx_watercolor_compute.wgsl",
         shader_struct: "Uniforms",
+        aliases: &[],
+    },
+    // The GPU water surface's barriered kernels and the whitewater stage's
+    // internal padding pass.
+    CustomAbiCase {
+        source: "lattice_bricks.rs",
+        rust_struct: "BrickUniforms",
+        shader: "shaders/lattice_bricks.wgsl",
+        shader_struct: "Params",
+        aliases: &[],
+    },
+    CustomAbiCase {
+        source: "blob_bounds.rs",
+        rust_struct: "BoundsParams",
+        shader: "shaders/blob_bounds.wgsl",
+        shader_struct: "Params",
+        aliases: &[],
+    },
+    CustomAbiCase {
+        source: "pad_distance_lattice.rs",
+        rust_struct: "PadUniforms",
+        shader: "shaders/pad_distance_lattice.wgsl",
+        shader_struct: "Params",
+        aliases: &[],
+    },
+    // GPU FLIP's live clock, narrow band and Lentine coarse solve, with the
+    // records their value proofs upload.
+    CustomAbiCase {
+        source: "gpu_flip_clock.rs",
+        rust_struct: "GpuFlipClockParams",
+        shader: "shaders/gpu_flip_clock.wgsl",
+        shader_struct: "ClockParams",
+        aliases: &[],
+    },
+    CustomAbiCase {
+        source: "gpu_flip_clock.rs",
+        rust_struct: "GpuFlipBodyVertex",
+        shader: "shaders/gpu_flip_clock.wgsl",
+        shader_struct: "BodyVertex",
+        aliases: &[],
+    },
+    CustomAbiCase {
+        source: "gpu_flip_clock.rs",
+        rust_struct: "EventFieldParams",
+        shader: "shaders/gpu_flip_clock.wgsl",
+        shader_struct: "EventFieldParams",
+        aliases: &[],
+    },
+    CustomAbiCase {
+        source: "gpu_flip_narrow_band.rs",
+        rust_struct: "NbParams",
+        shader: "shaders/gpu_flip_narrow_band.wgsl",
+        shader_struct: "NbParams",
+        aliases: &[],
+    },
+    CustomAbiCase {
+        source: "gpu_flip_narrow_band_tests.rs",
+        rust_struct: "NbFace",
+        shader: "shaders/gpu_flip_narrow_band.wgsl",
+        shader_struct: "NbFace",
+        aliases: &[],
+    },
+    CustomAbiCase {
+        source: "gpu_flip_narrow_band_tests.rs",
+        rust_struct: "NbParticle",
+        shader: "shaders/gpu_flip_narrow_band.wgsl",
+        shader_struct: "NbParticle",
+        aliases: &[],
+    },
+    CustomAbiCase {
+        source: "gpu_flip_narrow_band_tests.rs",
+        rust_struct: "NbRange",
+        shader: "shaders/gpu_flip_narrow_band.wgsl",
+        shader_struct: "NbRange",
+        aliases: &[],
+    },
+    CustomAbiCase {
+        source: "gpu_flip_lentine.rs",
+        rust_struct: "Params",
+        shader: "shaders/gpu_flip_lentine.wgsl",
+        shader_struct: "Params",
+        aliases: &[],
+    },
+    CustomAbiCase {
+        source: "gpu_flip_pressure_tests.rs",
+        rust_struct: "LentineFluxParams",
+        shader: "shaders/gpu_flip_pressure.wgsl",
+        shader_struct: "Params",
         aliases: &[],
     },
 ];

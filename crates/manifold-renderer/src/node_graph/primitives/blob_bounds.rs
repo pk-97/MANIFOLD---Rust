@@ -7,6 +7,15 @@ use crate::node_graph::primitive::Primitive;
 
 const SHADER: &str = include_str!("shaders/blob_bounds.wgsl");
 
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct BoundsParams {
+    count: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
+}
+
 crate::primitive! {
     name: BlobBounds,
     type_id: "node.blob_bounds",
@@ -36,10 +45,10 @@ impl Primitive for BlobBounds {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let (Some(blobs), Some(bounds)) = (ctx.inputs.array("blobs"), ctx.outputs.array("bounds")) else { return };
         let count = (blobs.size / size_of::<FluidBlob>() as u64) as u32;
-        let params = [count, 0, 0, 0];
+        let params = BoundsParams { count, _pad0: 0, _pad1: 0, _pad2: 0 };
         let gpu = ctx.gpu_encoder();
         gpu.native_enc.dispatch_compute(self.reduction.as_ref().expect("installed blob bounds"), &[
-            GpuBinding::Bytes { binding: 0, data: bytemuck::cast_slice(&params) },
+            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&params) },
             GpuBinding::Buffer { binding: 1, buffer: blobs, offset: 0 },
             GpuBinding::Buffer { binding: 2, buffer: bounds, offset: 0 },
         ], [1, 1, 1], "node.blob_bounds");
