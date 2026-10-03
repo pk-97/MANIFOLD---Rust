@@ -156,7 +156,7 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     let speed_limit_step = marker_clock_params.cfl * marker_clock_params.cell_size /
-        marker_clock_params.limit_interval;
+        speed_limit_duration(marker_clock_params);
     let bin = min(u32(floor(speed / speed_limit_step)),
         max(marker_clock_params.max_frame_steps, 1u) - 1u);
     atomicAdd(&marker_histogram_atomic[bin], 1u);
@@ -169,19 +169,25 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 }
 
+// The frame the marker speed limit is measured against. Native removal uses
+// the whole frame (_currentFrameDeltaTime), even at a CFL/event split. A late
+// live frame runs several Sim Rate intervals as one span; it is measured as
+// one interval of simulated time (limit_interval > 0), so the limit never
+// falls with load. Export passes 0 and measures its own step.
+fn speed_limit_duration(p: ClockParams) -> f32 {
+    return select(p.frame_duration, min(p.frame_duration, p.limit_interval), p.limit_interval > 0.0);
+}
+
 // Finish the native _getMarkerParticleSpeedLimit policy after the scheduler
-// has selected this numerical interval. Native removal uses the whole frame
-// (_currentFrameDeltaTime), even at a CFL/event split; a late live span is
-// measured as its configured interval (limit_interval), so the limit never
-// falls with load. The limit is consumed by the particle write pass after
-// advection; it never changes the CFL maximum.
+// has selected this numerical interval. The limit is consumed by the particle
+// write pass after advection; it never changes the CFL maximum.
 @compute @workgroup_size(1)
 fn finalize_marker_limit() {
     let state = output_plan[0];
     if state.live_mode == 0u || state.step_dt <= 0.0 {
         return;
     }
-    let speed_limit_step = clock.cfl * clock.cell_size / clock.limit_interval;
+    let speed_limit_step = clock.cfl * clock.cell_size / speed_limit_duration(clock);
     let max_steps = max(clock.max_frame_steps, 1u);
     var live_count = 0u;
     for (var b = 0u; b < max_steps; b = b + 1u) {

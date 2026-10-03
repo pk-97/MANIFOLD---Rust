@@ -131,6 +131,15 @@ impl SimulationClock {
         map_transport(&self.speed_history, transport)
     }
 
+    /// Simulated seconds of one Sim Rate interval at the current Speed: the
+    /// frame a live marker speed limit is measured against. A late frame runs
+    /// its owed intervals as one span; measured whole, the limit would fall
+    /// with load and delete ordinary water. 0 before the first frame and
+    /// while Speed is 0.
+    pub fn interval_simulated_duration(&self) -> f64 {
+        self.simulation_interval * self.speed
+    }
+
     // Reuse retired immutable snapshots instead of allocating in the frame
     // path. Consumers keep their accepted view until they have drained it.
     fn snapshot_history(&mut self) -> Arc<Vec<SpeedAnchor>> {
@@ -525,6 +534,22 @@ mod tests {
                 assert_eq!(frame.dropped_seconds, 0.0);
             }
             assert!((completed - 1.0).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn late_live_span_reports_one_interval_of_simulated_time() {
+        // A frame 0.4 s late at 30 Hz runs twelve intervals as one span; the
+        // speed limit's frame is still one interval of simulated time, what
+        // an export step covers at that Speed.
+        let interval = 1.0 / 30.0;
+        for speed in [0.25f32, 1.0, 2.0] {
+            let mut clock = SimulationClock::default();
+            clock.advance(0.0, interval, speed, 0.0, false, false);
+            let frame = clock.advance(0.4, interval, speed, 0.0, false, false);
+            let expected = interval * f64::from(speed);
+            assert!((frame.duration().0 - 12.0 * expected).abs() < 1e-9, "speed {speed}: one span");
+            assert!((clock.interval_simulated_duration() - expected).abs() < 1e-12, "speed {speed}");
         }
     }
 

@@ -48,10 +48,10 @@ pub struct GpuFlipClockParams {
     pub surface_constant: f32,
     pub color_mixing_rate: f32,
     pub _pad_prediction: f32,
-    /// The frame the marker speed limit is measured against: the configured
-    /// Sim Rate interval, or the accepted frame when shorter. A late live
-    /// frame's longer span never lowers the limit, so loaded playback removes
-    /// the same outliers export does.
+    /// One Sim Rate interval of simulated time for a live frame, or 0 to
+    /// measure the marker speed limit against the whole frame (export). The
+    /// kernel uses the shorter of the two, so a late live span never lowers
+    /// the limit and loaded playback removes the same outliers export does.
     pub limit_interval: f32,
     pub min_frame_steps: u32,
     pub max_frame_steps: u32,
@@ -952,10 +952,11 @@ mod gpu_tests {
         // of play. At 1 s they share the top bin with one 3.25 m/s marker:
         // 300 markers have no removal budget, so the six-step floor removes
         // it; 0.05% of 21,000 is 10.5, so the budget admits the top bin and
-        // the limit walks down to (bin + 4) widths, which keeps it. A late live
-        // frame (the 4x spans) is measured as its configured interval: it
-        // removes exactly what that frame removes, where the span's own width
-        // would lower the limit and delete ordinary water.
+        // the limit walks down to (bin + 4) widths, which keeps it. Each case
+        // runs as export (limit_interval 0 measures the frame) and as a late
+        // live frame four intervals long, measured as one interval: it removes
+        // exactly what export removes, where the span's own width would lower
+        // the limit and delete ordinary water.
         use manifold_core::Seconds;
         use manifold_physics::stepping::{marker_particle_speed_limit, MarkerSpeedLimitConfig};
         let device = crate::test_device();
@@ -974,7 +975,8 @@ mod gpu_tests {
             unsafe {
                 markers.write(0, bytemuck::cast_slice(&particles));
             }
-            let p = GpuFlipClockParams { frame_duration: duration * span, limit_interval: duration, ..params() };
+            let limit_interval = if span == 1.0 { 0.0 } else { duration };
+            let p = GpuFlipClockParams { frame_duration: duration * span, limit_interval, ..params() };
             let mut enc = device.create_encoder("flip-clock marker histogram proof");
             clock.begin_frame(&mut enc, &p);
             let plan = clock.dispatch(
@@ -1017,7 +1019,7 @@ mod gpu_tests {
             } else {
                 assert_ne!(cpu_limit(p.frame_duration), limit, "{case}: span width agrees");
             }
-            assert_eq!(cpu_limit(p.limit_interval), limit, "{case}: CPU");
+            assert_eq!(cpu_limit(duration), limit, "{case}: CPU");
             assert_eq!(result.marker_limit, limit, "{case}: GPU");
             let got = unsafe { std::slice::from_raw_parts(markers.mapped_ptr().unwrap().cast::<FluidParticle>(), count as usize) };
             for (before, after) in particles.iter().zip(got) {

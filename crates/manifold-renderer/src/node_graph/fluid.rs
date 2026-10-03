@@ -397,9 +397,10 @@ struct Request {
     start_tick: u64,
     count: usize,
     interval: Option<StepInterval>,
-    /// The Sim Rate interval a live interval's marker speed limit is measured
-    /// against, so a late span removes only what one interval removes. None
-    /// for fixed ticks.
+    /// One Sim Rate interval of simulated time, which a live span's marker
+    /// speed limit is measured against, so a late span removes only what one
+    /// interval removes. None for export and fixed ticks: they measure their
+    /// own step, as the engine does.
     speed_limit_interval: Option<Seconds>,
     history: Vec<Sample>,
     impulses: Vec<AppliedEvent<ResolvedNodeImpulse>>,
@@ -1530,7 +1531,9 @@ impl FluidRuntime {
                 count,
                 interval,
                 speed_limit_interval: interval
-                    .map(|_| Seconds(super::physics::simulation_interval())),
+                    .filter(|_| !super::physics::offline_simulation())
+                    .map(|_| Seconds(self.clock.interval_simulated_duration()))
+                    .filter(|limit| limit.0 > 0.0),
                 history,
                 impulses,
                 role_setup: Arc::clone(&self.role_setup),
@@ -2312,8 +2315,10 @@ mod tests {
         let controls = FluidControls::default();
         let rate = manifold_physics::SimRate::Hz30;
         let interval = rate.interval();
-        // Live owes four intervals as one span; export steps the first alone.
-        for (offline, owed) in [(false, 4.0), (true, 1.0)] {
+        // Live owes four intervals as one span and measures one interval of
+        // simulated time at its Speed; export steps the first alone and
+        // measures that step.
+        for (offline, owed, speed) in [(false, 4.0, 1.0), (false, 4.0, 0.5), (true, 1.0, 1.0)] {
             let _scope = crate::node_graph::physics::PhysicsStepScope::for_settings(
                 offline,
                 manifold_physics::PhysicsSettings { sim_rate: rate },
@@ -2321,7 +2326,7 @@ mod tests {
             let (requests, received) = mpsc::sync_channel::<Request>(1);
             let (_replies, replies) = mpsc::sync_channel::<Reply>(1);
             let mut runtime = FluidRuntime::default();
-            runtime.observe(settings, controls, Seconds::ZERO, 1.0, 0.0).unwrap();
+            runtime.observe(settings, controls, Seconds::ZERO, speed, 0.0).unwrap();
             runtime.worker = Some(Worker {
                 requests,
                 replies,
@@ -2334,13 +2339,18 @@ mod tests {
             runtime.accept(native.process(initial, &runtime.cancel_epoch)).unwrap();
 
             runtime
-                .observe(settings, controls, Seconds(4.0 * interval), 1.0, 0.0)
+                .observe(settings, controls, Seconds(4.0 * interval), speed, 0.0)
                 .unwrap();
             runtime.advance(false).unwrap();
             let request = received.recv().unwrap();
             let span = request.interval.expect("an owed live interval");
-            assert!((span.duration().0 - owed * interval).abs() < 1e-12, "offline={offline}");
-            assert_eq!(request.speed_limit_interval, Some(Seconds(interval)));
+            let step = interval * f64::from(speed);
+            let case = format!("offline={offline} speed={speed}");
+            assert!((span.duration().0 - owed * step).abs() < 1e-12, "{case}");
+            let expected = (!offline).then_some(step);
+            let got = request.speed_limit_interval.map(|limit| limit.0);
+            assert!(got.zip(expected).is_none_or(|(got, expected)| (got - expected).abs() < 1e-12)
+                && got.is_some() == expected.is_some(), "{case}: {got:?}");
             let reply = native.process(request, &runtime.cancel_epoch);
             assert_eq!(reply.error, None);
             assert_eq!(reply.accepted_interval, Some(span));

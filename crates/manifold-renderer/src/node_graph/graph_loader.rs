@@ -718,7 +718,7 @@ fn wire_liquid_intervals(def: &mut EffectGraphDef) -> bool {
     let mut changed = false;
     for node in &def.nodes {
         let clock_ports: &[(&str, &str)] = match node.type_id.as_str() {
-            "node.gpu_flip_step" => &[("clock_obstacles", "clock_obstacles"), ("clock_sources", "clock_sources"), ("clock_obstacle_count", "clock_obstacle_count"), ("clock_source_count", "clock_source_count"), ("live_hits", "live_hits"), ("live_hit_count", "live_hit_count")],
+            "node.gpu_flip_step" => &[("clock_obstacles", "clock_obstacles"), ("clock_sources", "clock_sources"), ("clock_obstacle_count", "clock_obstacle_count"), ("clock_source_count", "clock_source_count"), ("live_hits", "live_hits"), ("live_hit_count", "live_hit_count"), ("limit_interval", "limit_interval")],
             "node.matter_state" => &[("target_time", "target_time"), ("simulation_time", "simulation_time"), ("step_cap_hit", "step_cap_hit")],
             _ => &[],
         };

@@ -181,7 +181,7 @@ impl GpuFlipGeometry {
 }
 
 /// Every scalar output, in the order [`GpuFlipDomain::compute`] fills them.
-const OUTPUTS: [&str; 48] = [
+const OUTPUTS: [&str; 49] = [
     "lattice_min_x", "lattice_min_y", "lattice_min_z", "cell_size", "nodes_x", "nodes_y", "nodes_z",
     "closed_faces", "pool_sites", "box_x0", "box_x1", "box_y0", "box_y1", "box_z0", "box_z1",
     "particle_mass", "gravity_x", "gravity", "gravity_z", "ticks", "epoch", "simulation_time",
@@ -189,6 +189,7 @@ const OUTPUTS: [&str; 48] = [
     "field_nodes_y", "field_nodes_z", "field_spacing", "force_lattices", "impulse_tick", "dynamic_bodies",
     "particle_capacity", "region_count", "solve_level",
     "interval_duration",
+    "limit_interval",
     "clock_obstacle_count",
     "clock_source_count",
     "live_hit_count", "mesh_min_x", "mesh_min_y", "mesh_min_z", "mesh_nodes_x", "mesh_nodes_y", "mesh_nodes_z"];
@@ -351,6 +352,7 @@ crate::primitive! {
         epoch: ScalarF32,
         simulation_time: ScalarF32,
     interval_duration: ScalarF32,
+    limit_interval: ScalarF32,
     clock_obstacle_count: ScalarF32, clock_source_count: ScalarF32,
     clock_obstacles: Array(f32), clock_sources: Array(f32),
     live_hits: Array(f32), live_hit_count: ScalarF32,
@@ -805,6 +807,11 @@ impl GpuFlipDomain {
             ("epoch", frame.epoch as f32),
             ("simulation_time", frame.simulation_time as f32),
             ("interval_duration", frame.duration().0 as f32),
+            // Export steps each interval, so its limit measures the step (0).
+            (
+                "limit_interval",
+                if frame.offline { 0.0 } else { self.clock.interval_simulated_duration() as f32 },
+            ),
             (
                 "clock_obstacle_count",
                 self.bodies.clock_obstacles().len() as f32,

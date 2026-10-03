@@ -2030,7 +2030,8 @@ crate::primitive! {
         impulse_tick: ScalarF32 optional,
         first_tick: ScalarF32 optional,
         tick_index: ScalarF32 optional,
-        interval_duration: ScalarF32 optional, bodies: Array(LiquidBody) optional,
+        interval_duration: ScalarF32 optional, limit_interval: ScalarF32 optional,
+        bodies: Array(LiquidBody) optional,
         shapes: Array(LiquidShape) optional,
         atlas: Array(u32) optional,
         body_count: ScalarF32 optional,
@@ -2228,6 +2229,10 @@ impl Primitive for GpuFlipStep {
             crate::node_graph::physics::simulation_interval() as f32,
         ));
         let step_dt = (interval_duration/ f64::from(steps)) as f32;
+        // 0 (export, or a graph without the wire) measures the whole frame.
+        let limit_interval = Some(ctx.scalar_or_param("limit_interval", 0.0))
+            .filter(|limit| limit.is_finite() && *limit > 0.0)
+            .unwrap_or(0.0);
         let flip = ctx.scalar_or_param("flip", 0.95).clamp(0.0, 1.0);
         let top_speed = ctx.scalar_or_param("top_speed", DEFAULT_TOP_SPEED);
         if !(top_speed.is_finite() && top_speed > 0.0) {
@@ -2471,7 +2476,7 @@ impl Primitive for GpuFlipStep {
             surface_constant: 1.0,
             color_mixing_rate: 0.0,
             _pad_prediction: 0.0,
-            limit_interval: (interval_duration as f32).min(crate::node_graph::physics::simulation_interval() as f32),
+            limit_interval,
             min_frame_steps: steps as u32,
             max_frame_steps: manifold_physics::stepping::LIVE_DEFAULT_MAX_STEPS,
             flags: if tick_index == 0 {
