@@ -401,7 +401,8 @@ fn compile_spirv_entry_to_msl(
     use spirv_cross2::Module;
     use spirv_cross2::targets::Msl;
 
-    let sc_module = Module::from_words(spv_words);
+    let spv_words = super::spirv_msl_fixup::materialize_complex_constant_array_stores(spv_words);
+    let sc_module = Module::from_words(&spv_words);
     let mut compiler: Compiler<Msl> = Compiler::new(sc_module)
         .unwrap_or_else(|e| panic!("{label}: SPIRV-Cross compiler creation error: {e}"));
 
@@ -419,13 +420,10 @@ fn compile_spirv_entry_to_msl(
     let mut options = <Msl as spirv_cross2::compile::CompilableTarget>::options();
     options.version = msl::MslVersion::new(2, 4, 0);
     options.platform = msl::MetalPlatform::MacOS;
-    // Keep arrays as value types in helpers. Native arrays force by-value WGSL
-    // parameters into MSL `thread const T (&)[N]`, but SPIRV-Cross can forward
-    // a constant-space uniform member at the call site (node.gradient).
-    // Value arrays materialize that load before the call. This works with the
-    // no-InlineExhaustive Metal path in shader_common, which avoids a separate
-    // SPIRV-Cross bug hoisting complex constant arrays into thread storage.
-    options.force_native_arrays = false;
+    // Native arrays: SPIRV-Cross copies arrays of offset-decorated structs
+    // (every naga struct) with its raw-array helpers even when value arrays
+    // are on, so value-array declarations would not bind to them.
+    options.force_native_arrays = true;
 
     // Pin the `arrayLength()` buffer-size buffer to the SAME Metal index our
     // SlotMap reserved (one past the user buffers). SPIRV-Cross otherwise emits
@@ -540,11 +538,9 @@ pub(super) fn find_entry_function(
 mod tests {
     use super::*;
 
-    // Regression: 70ea38446 added this edge-cache shape to the sparse liquid
-    // surface mesh. InlineExhaustive turns its helper/early-return path into
-    // SPIRV-Cross array copies with incompatible Metal address spaces. Keep
-    // the actual generated standalone mesher source here so the test covers
-    // the constants, bindings, and local arrays that trigger the bug.
+    // The real standalone mesher: its inlined local `array<Element, 12>` is
+    // zero-initialised by a store of a constant struct array, the shape
+    // `spirv_msl_fixup` rewrites.
     const VOLUME_SURFACE_MESH_WGSL: &str = concat!(
         r#"
 struct Element {
@@ -624,8 +620,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     );
 
     // The standalone node.gradient wrapper passes the real table-valued body
-    // a uniform array. With native arrays and no SPIR-V inlining, SPIRV-Cross
-    // used a thread reference but forwarded the constant-space member.
+    // a uniform array, which inlining turns into a constant-to-thread copy.
     const GRADIENT_WGSL: &str = concat!(
         r#"
 struct Params {
@@ -680,24 +675,33 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
 
     #[test]
-    fn aggregate_arguments_use_value_arrays_without_local_constant_copies() {
-        for (source, label) in [
-            (GRADIENT_WGSL, "gradient"),
-            (VOLUME_SURFACE_MESH_WGSL, "mesher"),
+    fn constant_array_copies_read_from_constant_address_space() {
+        // Metal's rule, checked on the text: a constant-source copy helper's
+        // source must be a global declared `constant` or a member of a
+        // constant-bound buffer, never a thread local.
+        for (source, label, min_copies) in [
+            (GRADIENT_WGSL, "gradient", 1),
+            (VOLUME_SURFACE_MESH_WGSL, "mesher", 1),
         ] {
             let (_, msl, _, _) = compile_wgsl_to_msl(source, "cs_main", label, false);
-            assert!(msl.contains("kernel void cs_main"), "{label}: {msl}");
-            if label == "mesher" {
+            let constant_globals: Vec<&str> = msl
+                .lines()
+                .filter_map(|l| l.strip_prefix("constant "))
+                .filter_map(|decl| decl.split('[').next()?.split_whitespace().last())
+                .collect();
+            let call = "spvArrayCopyFromConstantToStack(";
+            let mut copies = 0;
+            for line in msl.lines().filter(|l| l.trim_start().starts_with(call)) {
+                let args = &line.trim_start()[call.len()..];
+                let src = args.split(',').nth(1).unwrap().trim().trim_end_matches(");");
+                let is_buffer_member = src.contains('.');
                 assert!(
-                    !msl.contains("spvArrayCopyFromConstantToStack("),
-                    "{label}: {msl}"
+                    is_buffer_member || constant_globals.contains(&src),
+                    "{label}: copy source '{src}' is not in constant space: {line}"
                 );
-            } else {
-                // A uniform array must be copied to a value array, never
-                // passed directly to a helper's thread-space reference.
-                assert!(msl.contains("spvUnsafeArray<float4, 16>"), "{label}: {msl}");
-                assert!(!msl.contains("thread const float4 (&"), "{label}: {msl}");
+                copies += 1;
             }
+            assert!(copies >= min_copies, "{label}: expected a constant copy\n{msl}");
         }
     }
 }

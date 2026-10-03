@@ -1,10 +1,7 @@
 //! Backend-neutral shader compilation primitives.
 //!
-//! The pipeline from WGSL source to optimised SPIR-V is shared by both
-//! backends, with one intentional backend-specific pass difference: Metal
-//! skips spirv-opt's `InlineExhaustive` because SPIRV-Cross can lower the
-//! resulting inlined local-array copies to invalid MSL address spaces. The
-//! Metal backend emits always-inline helper functions itself.
+//! The pipeline from WGSL source to optimised SPIR-V is identical on every
+//! backend — only the final "SPIR-V → X" step diverges:
 //!
 //! * Metal: SPIR-V → SPIRV-Cross → MSL → `MTLLibrary` (see `metal/shader_compiler.rs`)
 //! * Vulkan: SPIR-V → `vkCreateShaderModule` directly (see `vulkan/shader_compiler.rs`)
@@ -169,24 +166,15 @@ fn optimize_spirv(spv_words: &[u32], label: &str, use_half: bool) -> Vec<u32> {
         .register_pass(opt::Passes::DeadBranchElim)
         // MergeReturn next: it rewrites functions with early `return`s
         // (mix's blend_rgb/safe_div/overlay_channel, colorize masks, the
-        // fused-kernel bodies) into single-return form. Vulkan keeps the
-        // exhaustive inliner below, preserving its established optimization
-        // pipeline. Metal deliberately leaves this pass out: SPIRV-Cross's
-        // MSL lowering turns an inlined helper that returns a struct into
-        // whole-array copies. Its copy helper then pairs thread-local arrays
-        // with `constant` sources (or passes `spvUnsafeArray` wrappers where
-        // raw arrays are required), producing MSL that Metal rejects. The
-        // MSL backend emits `always_inline` helpers itself, so this preserves
-        // inlining at the target compiler without creating invalid address
-        // spaces. This is a correctness workaround for SPIRV-Cross, not a
-        // shader-specific optimization choice.
-        .register_pass(opt::Passes::MergeReturn);
-
-    if cfg!(feature = "vulkan") {
-        optimizer.register_pass(opt::Passes::InlineExhaustive);
-    }
-
-    optimizer
+        // fused-kernel bodies) into single-return form so InlineExhaustive
+        // can actually inline them. Without it spirv-opt logs
+        // "could not be inlined because the return instruction is not at the
+        // end of the function" and leaves those helpers as calls — correct,
+        // but it forfeits the intra-kernel register-threading win and spams
+        // the console on every chain rebuild. This is the pass the warning
+        // itself recommends (design section 12.3 step 6).
+        .register_pass(opt::Passes::MergeReturn)
+        .register_pass(opt::Passes::InlineExhaustive)
         .register_pass(opt::Passes::EliminateDeadFunctions)
         .register_pass(opt::Passes::EliminateDeadConstant)
         .register_pass(opt::Passes::EliminateDeadMembers)

@@ -120,12 +120,12 @@ impl GpuPipelineArchive {
 
 /// Compute a stable hash for a compute pipeline's identity. It keys the
 /// shared on-disk MSL cache, so the namespace string changes whenever the
-/// same WGSL starts translating to different MSL (v4: value arrays for Metal
-/// helper arguments, without SPIR-V exhaustive inlining); every checkout reads
+/// same WGSL starts translating to different MSL (v5: constant
+/// struct-array stores rewritten before SPIRV-Cross); every checkout reads
 /// its own translation.
 pub fn pipeline_hash(wgsl_source: &str, entry_point: &str, use_half: bool) -> u64 {
     let mut hasher = DefaultHasher::new();
-    "compute-shader-v4".hash(&mut hasher);
+    "compute-shader-v5".hash(&mut hasher);
     wgsl_source.hash(&mut hasher);
     entry_point.hash(&mut hasher);
     use_half.hash(&mut hasher);
@@ -142,7 +142,7 @@ pub(crate) fn render_shader_hash(
     point_size_location: Option<u32>,
 ) -> u64 {
     let mut hasher = DefaultHasher::new();
-    "render-shader-v4".hash(&mut hasher);
+    "render-shader-v5".hash(&mut hasher);
     wgsl_source.hash(&mut hasher);
     vs_entry.hash(&mut hasher);
     fs_entry.hash(&mut hasher);
