@@ -347,7 +347,7 @@ fn whitewater_emitter_chain_fused_matches_unfused() {
     };
     let fused = generate_fused(&region).expect("the emitter chain fuses");
     assert!(naga::front::wgsl::parse_str(&fused.wgsl).is_ok(), "fused WGSL parses:\n{}", fused.wgsl);
-    let lookup = |name: &str| values.iter().chain(&box_values()).find(|(n, _)| *n == name).map(|(_, v)| *v);
+    let lookup = |name: &str| values.iter().chain(&box_values()).find(|(n, _)| *n == name).map(|(_, v)| *v).or(match name { "spray_speed" => Some(1.0), "dust" => Some(0.0), _ => None });
     let mut words: Vec<u32> = fused
         .param_order
         .iter()
@@ -661,7 +661,7 @@ fn whitewater_spawn_chain_fused_matches_unfused() {
     };
     let fused = generate_fused(&region).expect("the spawn chain fuses");
     assert!(naga::front::wgsl::parse_str(&fused.wgsl).is_ok(), "fused WGSL parses:\n{}", fused.wgsl);
-    let lookup = |name: &str| values.iter().chain(&box_values()).find(|(n, _)| *n == name).map(|(_, v)| *v);
+    let lookup = |name: &str| values.iter().chain(&box_values()).find(|(n, _)| *n == name).map(|(_, v)| *v).or(match name { "spray_speed" => Some(1.0), "dust" => Some(0.0), _ => None });
     let mut words: Vec<u32> = fused
         .param_order
         .iter()

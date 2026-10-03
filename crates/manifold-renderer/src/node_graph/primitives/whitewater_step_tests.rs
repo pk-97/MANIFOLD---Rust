@@ -390,7 +390,7 @@ impl Model {
                 })
                 .collect::<Vec<_>>()
         });
-        let report = Report {
+        let report = Report { dust: 0,
             counts: populations.each_ref().map(|p| p.len() as u32),
             emitted: self.state.emitted,
             thinned: self.state.thinned,
@@ -591,11 +591,11 @@ mod gpu {
                 let mut native = harness.device.create_encoder("whitewater per tick frame");
                 while tick < due {
                     let f = &faces[tick as usize];
-                    let inputs = StepInputs { particles: &particles, solid: &solid,
+                    let inputs = StepInputs { obstacle_source: None, particles: &particles, solid: &solid,
                         faces: [&f[0], &f[1], &f[2]], level_set: &distance, distance: Some(&distance) };
                     let settings = StepFrame { shape, count: Some(256), ticks: 1, epoch: 0,
                         seed: tick as f32 * TICK as f32, gravity: GRAVITY,
-                        wavecrest_emission: WAVECREST_RATE, min_energy: MIN_ENERGY,
+                        wavecrest_emission: WAVECREST_RATE, turbulence_emission: 175.0, min_turbulence: 100.0, max_turbulence: 200.0, inside_emission: true, generation_rate: 1.0, spray_speed: 1.0, dust_emission: false, boundary_dust: false, dust_rate: 175.0, influence_base: 1.0, influence_decay: 2.0, min_energy: MIN_ENERGY,
                         max_energy: MAX_ENERGY, preserve_foam: false };
                     stage.advance_tick(&mut GpuEncoder::new(&mut native, &harness.device),
                         &settings, &inputs, &pool, &state, true).unwrap();
@@ -641,7 +641,7 @@ mod gpu {
         let solid = shared(bytemuck::cast_slice(&scene.solid));
         let level = shared(bytemuck::cast_slice(&scene.level));
         let faces: [GpuBuffer; 3] = std::array::from_fn(|a| shared(bytemuck::cast_slice(&scene.faces[a])));
-        let inputs = StepInputs { particles: &particles, solid: &solid, faces: [&faces[0], &faces[1], &faces[2]], level_set: &level, distance: None };
+        let inputs = StepInputs { obstacle_source: None, particles: &particles, solid: &solid, faces: [&faces[0], &faces[1], &faces[2]], level_set: &level, distance: None };
         let (want, _) = expected(preserve_foam);
         let fence = HandFence::default();
         let mut step = Step::default();
@@ -655,7 +655,7 @@ mod gpu {
                 epoch,
                 seed: SEED,
                 gravity: GRAVITY,
-                wavecrest_emission: WAVECREST_RATE,
+                wavecrest_emission: WAVECREST_RATE, turbulence_emission: 175.0, min_turbulence: 100.0, max_turbulence: 200.0, inside_emission: true, generation_rate: 1.0, spray_speed: 1.0, dust_emission: false, boundary_dust: false, dust_rate: 175.0, influence_base: 1.0, influence_decay: 2.0,
                 min_energy: MIN_ENERGY,
                 max_energy: MAX_ENERGY,
                 preserve_foam,

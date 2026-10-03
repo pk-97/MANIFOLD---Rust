@@ -8,6 +8,13 @@ use std::ffi::c_void;
 use crate::{FluidError, WhitewaterLifecycle, native_result};
 
 unsafe extern "C" {
+    fn manifold_fluids_oracle_turbulence(lifecycle: *mut c_void, values: *mut f32,
+        positions: *const f32, count: usize, samples: *mut f32) -> i32;
+    fn manifold_fluids_oracle_emission_options(lifecycle: *mut c_void,
+        wavecrest: f64, turbulence: f64, minimum: f64, maximum: f64,
+        generation: f64, speed: f64, influence: f64) -> i32;
+    fn manifold_fluids_oracle_emit_configured(lifecycle: *mut c_void,
+        curvature: *const f32, positions: *const f32, count: usize, dt: f64) -> i32;
     fn manifold_fluids_oracle_curvature(
         phi: *const f32,
         isize: u32,
@@ -24,6 +31,58 @@ unsafe extern "C" {
         count: usize,
         dt: f64,
     ) -> i32;
+}
+
+/// Test controls for the vendored emitter; defaults from diffuseparticlesimulation.h.
+#[derive(Clone, Copy, Debug)]
+pub struct EmissionOptions {
+    pub wavecrest: f64,
+    pub turbulence: f64,
+    pub minimum: f64,
+    pub maximum: f64,
+    pub generation: f64,
+    pub speed: f64,
+    pub influence: f64,
+}
+
+impl Default for EmissionOptions {
+    fn default() -> Self {
+        Self { wavecrest: 175.0, turbulence: 175.0, minimum: 100.0, maximum: 200.0,
+            generation: 1.0, speed: 1.0, influence: 1.0 }
+    }
+}
+
+/// The vendored turbulence lattice and its trilinear samples on the last fields.
+pub fn turbulence(lifecycle: &mut WhitewaterLifecycle, positions: &[[f32; 3]]) -> Result<(Vec<f32>, Vec<f32>), FluidError> {
+    let mut values = vec![0.0; lifecycle.grid().cell_count()];
+    let mut samples = vec![0.0; positions.len()];
+    // SAFETY: live handle, correctly sized lattice and matching sample slices.
+    let ok = unsafe { manifold_fluids_oracle_turbulence(lifecycle.native_handle(), values.as_mut_ptr(),
+        positions.as_ptr().cast(), positions.len(), samples.as_mut_ptr()) };
+    native_result(ok, "oracle turbulence")?;
+    Ok((values, samples))
+}
+
+/// Run the engine emitter with explicit controls, then its lifecycle.
+pub fn emit_configured(lifecycle: &mut WhitewaterLifecycle, curvature: &[f32], positions: &[[f32; 3]],
+    dt: f64, options: EmissionOptions) -> Result<(), FluidError> {
+    if curvature.len() != lifecycle.grid().cell_count() {
+        return Err(FluidError::input("oracle curvature length differs from grid"));
+    }
+    if ![options.wavecrest, options.turbulence, options.minimum, options.maximum,
+        options.generation, options.speed, options.influence].iter().all(|x| x.is_finite() && *x >= 0.0)
+        || options.maximum <= options.minimum || options.generation > 1.0 || options.speed < 1.0 {
+        return Err(FluidError::input("invalid oracle emission controls"));
+    }
+    // SAFETY: live handle; scalar options are consumed synchronously.
+    let ok = unsafe { manifold_fluids_oracle_emission_options(lifecycle.native_handle(),
+        options.wavecrest, options.turbulence, options.minimum, options.maximum,
+        options.generation, options.speed, options.influence) };
+    native_result(ok, "oracle emission options")?;
+    // SAFETY: curvature covers the grid; positions is a slice of triples.
+    let ok = unsafe { manifold_fluids_oracle_emit_configured(lifecycle.native_handle(),
+        curvature.as_ptr(), positions.as_ptr().cast(), positions.len(), dt) };
+    native_result(ok, "oracle configured emit")
 }
 
 /// FLIP's own emitter on the lifecycle's last fields, then one update of

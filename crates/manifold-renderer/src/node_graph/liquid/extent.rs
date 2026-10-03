@@ -596,6 +596,13 @@ pub const LIQUID_EXTENT_RULES: &[ExtentRule] = &[
     ExtentRule { type_id: "node.crossing_distance", check: crossing_distance },
     ExtentRule { type_id: "node.liquid_cells", check: liquid_cells },
     ExtentRule { type_id: "node.lattice_curvature", check: lattice_curvature },
+    ExtentRule { type_id: "node.turbulence_field", check: turbulence_field },
+    ExtentRule { type_id: "node.inside_turbulence_potential", check: inside_turbulence_potential },
+    ExtentRule { type_id: "node.turbulence_emission_count", check: turbulence_emission_count },
+    ExtentRule { type_id: "node.whitewater_emitter_velocity", check: whitewater_emitter_velocity },
+    ExtentRule { type_id: "node.whitewater_obstacle_source", check: whitewater_obstacle_source },
+    ExtentRule { type_id: "node.whitewater_influence", check: whitewater_influence },
+    ExtentRule { type_id: "node.dust_potential", check: dust_potential },
     ExtentRule { type_id: "node.extend_lattice", check: extend_lattice },
     ExtentRule { type_id: "node.jitter_particles", check: particle_map },
     ExtentRule { type_id: "node.sample_faces_at_particles", check: sample_faces_at_particles },
@@ -1238,10 +1245,11 @@ fn liquid_state(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     for (capture, output, bytes) in [
         ("whitewater_pool_in", "whitewater_pool", pool),
         ("whitewater_state_in", "whitewater_state", 32),
-        ("whitewater_counts_in", "whitewater_counts", 32),
+        ("whitewater_counts_in", "whitewater_counts", 36),
         ("foam_particles_in", "foam_particles", u64::from(capacity) * PARTICLE),
         ("bubble_particles_in", "bubble_particles", u64::from(capacity) * PARTICLE),
         ("spray_particles_in", "spray_particles", u64::from(capacity) * PARTICLE),
+        ("dust_particles_in", "dust_particles", u64::from(capacity) * PARTICLE),
     ] {
         let active = x.input(capture).is_some();
         x.provide(output, if active { bytes } else { 0 });
@@ -1497,6 +1505,46 @@ fn liquid_cells(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.covers("out", cells * 4)
 }
 
+fn turbulence_field(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let (nodes, cells) = whitewater_lattice(x, ["nodes_x", "nodes_y", "nodes_z"])?;
+    whitewater_faces(x, nodes, ["face_cells_x", "face_cells_y", "face_cells_z"])?;
+    x.covers("distance", cell_total(cells) * 4)?;
+    x.covers("out", cell_total(cells) * 4)
+}
+fn inside_turbulence_potential(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let (_, cells) = whitewater_grid(x)?;
+    for p in ["distance", "turbulence", "cells"] { x.covers(p, cells * 4)?; }
+    particle_values(x)
+}
+fn whitewater_emitter_velocity(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let (_, cells) = whitewater_grid(x)?;
+    for p in ["distance", "cells"] { x.covers(p, cells * 4)?; }
+    particle_map(x)
+}
+fn turbulence_emission_count(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    emission_count(x)?;
+    x.covers("turbulence", x.items("particles").unwrap_or(0) * 4)?;
+    let (nodes, _) = whitewater_grid(x)?;
+    x.covers("influence", nodes * 4)
+}
+fn whitewater_obstacle_source(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let bytes = x.lattice()?.solid_bytes() * 4;
+    x.provide("solid", bytes); x.hold(bytes); Ok(())
+}
+fn whitewater_influence(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let bytes = x.bytes("values").unwrap_or(0);
+    x.covers("solid", bytes)?;
+    x.covers("source", bytes * 4)?;
+    x.covers("out", bytes)
+}
+fn dust_potential(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let (nodes, cells) = whitewater_grid(x)?;
+    x.covers("solid", nodes * 4)?;
+    x.covers("source", nodes * 16)?;
+    x.covers("turbulence", cells * 4)?;
+    particle_values(x)
+}
+
 fn lattice_curvature(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let (_, cells) = whitewater_grid(x)?;
     x.covers("distance", cells * 4)?;
@@ -1619,7 +1667,7 @@ fn keep_whitewater(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 fn whitewater_lifecycle(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let capacity = whole(x, "capacity", DEFAULT_CAPACITY as f32).clamp(1, MAX_CAPACITY);
     let population = u64::from(capacity) * PARTICLE;
-    for port in ["foam_particles", "bubble_particles", "spray_particles"] {
+    for port in ["foam_particles", "bubble_particles", "spray_particles", "dust_particles"] {
         x.provide(port, population);
     }
     x.hold(OUTPUT_SLOTS as u64 * 3 * population);
@@ -1660,7 +1708,7 @@ fn whitewater_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
         capacity as u32,
     )
     .map_err(Verdict::Refused)?;
-    for port in ["foam_particles", "bubble_particles", "spray_particles"] {
+    for port in ["foam_particles", "bubble_particles", "spray_particles", "dust_particles"] {
         x.provide(port, shape.population_bytes());
     }
     x.hold(shape.held_bytes(x.items("particles").unwrap_or(0)));
@@ -1669,7 +1717,8 @@ fn whitewater_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     }
     x.provide("pool_out", shape.pool_bytes());
     x.provide("state_out", 32);
-    x.provide("counts_out", 32);
+    x.provide("counts_out", 36);
+    if x.input("obstacle_source").is_some() { x.covers("obstacle_source", shape.solid_bytes() * 4)?; }
     if x.input("distance").is_some() {
         x.covers("distance", cell_total(shape.face_cells) * 4)?;
         x.covers("pool", shape.pool_bytes())?;

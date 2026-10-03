@@ -29,6 +29,19 @@ class ScopeTests(unittest.TestCase):
             self.assertFalse(result.broad)
             self.assertFalse(result.unmapped)
 
+    def test_whitewater_emitters_select_shared_value_and_fusion_proofs(self):
+        expected = "node_graph::primitives::whitewater_emitter_gpu_tests::"
+        for atom in ("turbulence_field", "inside_turbulence_potential",
+                     "turbulence_emission_count", "whitewater_emitter_velocity",
+                     "whitewater_obstacle_source", "whitewater_influence", "dust_potential"):
+            source = P + atom + ".rs"
+            shader = P + "shaders/" + atom + "_body.wgsl"
+            for path in (source, shader):
+                result = plan([path], users=lambda _: [source], repo=self._repo_with(path))
+                self.assertIn(expected, result.filters)
+                self.assertFalse(result.unmapped)
+                self.assertFalse(result.broad)
+
     def test_non_gpu_paths_run_nothing(self):
         p = plan(["docs/X.md", "scripts/a.py", "crates/manifold-ui/src/lib.rs"])
         self.assertFalse(p.active)

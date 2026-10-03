@@ -93,7 +93,7 @@ DECOMPOSING_GENERATORS.md section 2.5 (primitive audit): survey `rg 'purpose: "'
 
 **D8 — Capacity is FLIP's budget, never an error.** Spawn slots = the lifecycle capacity C (default 100,000, FLIP's). Past C, slot j takes emission index ⌊j · total / C⌋, a uniform subset; loads are trimmed to C − live the same way. Both counts are reported as `thinned`.
 
-**D9 — Dropped:** turbulence and inside emitters (inert at 175), dust, the obstacle influence grid (uniform 1), the spray emission speed factor (1 is a no-op), the emitter generation coin (rate 1); foam preservation was dropped here and is ported by D14, off by default as in FLIP. The emitter gap is tracked as a child of BUG-imy3 (GPU whitewater, solver-agnostic): BUG-imy3.1, so a side-by-side that misses bubbles or foam has a named cause.
+**D9 — Superseded by Peter, 2026-10-03 (BUG-imy3.1).** GPU whitewater retains every FLIP emitter. A scene that happens not to emit turbulence is not grounds to remove it. The port restores the turbulence field, inside turbulence emitters, dust, obstacle influence, spray-speed draws and emitter-generation coin. Foam preservation remains D14's implementation. See the emitter contract below.
 
 **D10 — Randomness:** stateless hashes of (index, seed, epoch) on the GPU; the lifecycle's own RNG seeded with the epoch (`setRandomSeed`). There is no bit-exact oracle; the FLIP oracles are statistical over seeds (BUG-imy3 notes).
 
@@ -271,7 +271,7 @@ Rules: live never calls `wait` and never blocks on the worker; the worker touche
 
 ### 3.9 GPU lifecycle (D14)
 
-Ported line by line from `F/diffuseparticlesimulation.cpp` `update` (:55): emit, advance by type (:2250–:2398), retype (:2033), age and preserve foam (:2101, :2123), remove (:2761). Dust and the force-field grid stay dropped (D9); gravity is the domain's (D12). Every per-particle step is a barrier-free atom on the codegen path with a CPU line-for-line reference, gpu_tests against it, and a fused-vs-unfused proof.
+Ported line by line from `F/diffuseparticlesimulation.cpp` `update` (:55): emit, advance by type (:2250–:2398), retype (:2033), age and preserve foam (:2101, :2123), remove (:2761). Dust is restored by BUG-imy3.1 below; the force-field grid remains deferred and gravity is the domain's (D12). Every per-particle step is a barrier-free atom on the codegen path with a CPU line-for-line reference, gpu_tests against it, and a fused-vs-unfused proof.
 
 **The pool.** One fixed-capacity `Array(WhitewaterParticle)` (position, velocity, lifetime, type, id) captured after each liquid tick by the liquid boundary. Order in the pool is age order: survivors first in their old order, then this frame's spawns in emission order.
 
@@ -289,7 +289,19 @@ Ported line by line from `F/diffuseparticlesimulation.cpp` `update` (:55): emit,
 - **Foam density is the sort's bin.** The sort runs over the pool with the whitewater grid as its box and the cell as its bin, so a bin is FLIP's cell. `node.preserve_foam` recomputes the bin, and because fast-math rounding at a bin face can land one bin off, it confirms its own index among that bin's members (else the 26 around it), so it always counts the bin the sort used. A foam position outside the grid clamps to an edge bin, which FLIP leaves undefined; every such particle is removed the same tick.
 - **Thinning.** D8's uniform thinning belonged to the CPU handoff and leaves with it; capacity is the pool's, handled by the rules above.
 
-**Inside emission (BUG-imy3.1) is deferred** (section 7 (Deferred)): it emits nothing on the Dam Break at the engine's defaults. When it revives, a turbulence-field atom ports `F/turbulencefield.cpp` (cell-centre MAC velocity, liquid cells where the field < 0, radius √(3·(2h)²), the engine's asymmetric neighbour window i−2 … i+1, trilinear at p − h/2 with out-of-range corners 0). Inside particles (not surface per :1571) emit at `turbulence_rate · Ie · It`, It clamped to [min, max] turbulence and normalised (:1748).
+**Reference emitter contract (BUG-imy3.1, supersedes D9).** `node.turbulence_field` ports `F/turbulencefield.cpp:100–198`: cell-centre MAC velocity; liquid distance < 0; radius √(3·(2h)²); the asymmetric i−2 … i+1 window with the final grid index excluded by the engine's exclusive bound; trilinear sampling at p − h/2 with zero out-of-range corners. It materializes before particle gathers.
+
+The vendored source distinguishes the surface set (`diffuseparticlesimulation.cpp:1571`) from inside markers. `_getSurfaceDiffuseParticleEmitters` (:1688) sets wavecrest potential and **zero turbulence potential**; `_getInsideDiffuseParticleEmitters` (:1748) sets turbulence and zero wavecrest. The port preserves this split, including near-surface markers that do not border air. Inside emission is `turbulence_rate × Ie × It`; the default rate is 175 and normalization bounds are 100/200. Disabling inside emission masks only this source.
+
+Seven codegen atoms implement the restored paths: `turbulence_field`, `inside_turbulence_potential`, `turbulence_emission_count`, `whitewater_emitter_velocity`, `whitewater_obstacle_source`, `whitewater_influence`, `dust_potential`. The obstacle metadata grid follows the solid lattice, records the nearest domain/obstacle and supplies influence and dust strength (defaults 1); equivalent per-object metadata may feed the same typed input. Influence moves toward base 1 at 2/second and reapplies sources within 3h (`influencegrid.cpp:88–101,170–190`). The engine's spread flag defaults false. Counts sample influence by the emitter's cell index (:1989).
+
+Dust defaults off; boundary dust defaults off. Enabled dust requires solid distance in [0,2.5h], a dust-enabled closest object, normalized turbulence in [0.75×min,max] times object strength, and the same energy and generation coin (:1806). Domain dust also requires local z ≤ 3h. Dust has a distinct GPU kind **4**, preserving the existing empty sentinel 3; it keeps its type, ages at 1/second and uses the engine's dust buoyancy/drag and ID-dependent variance (:2356). It is captured as `dust_particles` and rendered through the existing particle-copy path.
+
+The surface-emitter speed draw (:1699) precedes energy evaluation. Fresh spray receives the independent speed draw after MAC resampling (:2019). Both default to factor 1. The emitter-generation coin defaults to 1 and gates normal and dust emitters independently. RNG follows D10; it is not the engine's sequential stream.
+
+The whitewater card uses the existing manifest-backed parameter surface for wavecrest and turbulence rates, normalization bounds, inside/dust toggles and emission controls. `whitewater_emitter_cpu` compares every turbulence cell and edge/interior sample against the unchanged vendored C++ engine on 8³, and exact inside-emission totals on 16³ (96/32/32/0 for default/reduced rate/reduced influence/zero generation). These CPU proofs preceded GPU proof authoring. GPU value and fused-vs-unfused proofs live in `whitewater_emitter_gpu_tests`; compiling them is not execution or visual verification.
+
+Cost is uncapped by resolution: the direct turbulence gather performs at most 64 neighbor visits and 390 scalar face reads per liquid cell, plus O(markers) emitter passes and O(lattice nodes) influence/source work. Dust adds potential/count/scan/spawn/append passes only when enabled. No GPU tick timing is claimed. Regenerate the preset from `gpu_flip_preset.rs` (`UPDATE_GPU_FLIP_PRESET=1`), catalog from `gen_node_catalog`, and census/mappings from the registered atoms. The GPU-owning lead regenerates the fused snapshot and look/thumbnail artifacts.
 
 ## 4. Invariants & enforcement
 
@@ -438,7 +450,7 @@ Phasing completeness: every behaviour in sections 3.1–3.7 lands in one phase a
 5. Snapshot ring, fenced reads, whole-array copies; live never waits (D6).
 6. Output in the surface design's P8 shape (D7).
 7. Capacity thins and reports (D8).
-8. Turbulence, dust, influence, speed factor and generation coin dropped (D9); foam preservation ported, off by default as in FLIP (D14).
+8. D9 superseded: turbulence/inside, dust, influence, spray speed and generation coin restored at FLIP defaults; foam preservation remains D14.
 9. Statistical oracles against FLIP's own code through its public API (D10).
 10. The lifecycle on its own thread, slots loaned by value, no lock (D11).
 11. Time, epoch and gravity from the domain (D12).
@@ -448,9 +460,7 @@ Phasing completeness: every behaviour in sections 3.1–3.7 lands in one phase a
 
 | Item | Revives when |
 |---|---|
-| Turbulence and inside emitters (BUG-imy3.1, child of BUG-imy3 (GPU whitewater, solver-agnostic)); dropped from the D14 port because they emit nothing on the Dam Break at the engine's defaults | the side-by-side misses bubbles, or Peter wants turbulence foam; the port notes are in section 3.9 (GPU lifecycle (D14)) |
 | Forces and impulses on whitewater | the seam's P8 (Forces and impulses for GPU liquids) lands |
-| Obstacle influence grid | GPU liquids get obstacle roles |
 | Presenting whitewater at display time | the side-by-side shows foam trailing the front |
 | `liquid_frame` publishing the grid | the seam's P7a lands |
 | Resolutions above 64 | the resolution campaign, one size at a time with extent proofs |

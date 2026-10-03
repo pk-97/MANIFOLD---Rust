@@ -221,6 +221,8 @@ pub mod well_known {
         // GPU_WHITEWATER_DESIGN.md section 3.4: a spawn record for the lifecycle
         POSITION_LIFETIME = "position_lifetime";
         KIND = "kind";
+        INFLUENCE = "influence";
+        DUST_STRENGTH = "dust_strength";
 
         // ─── 4x4 matrix columns (joint palette buffers) ──────────────
         // GLTF_ANIMATION_DESIGN.md A2: node.gltf_skeleton_pose's

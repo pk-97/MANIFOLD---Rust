@@ -186,7 +186,9 @@ fn dispatch_tail_census_is_stable() {
     // count_surface_edges and surface_mesh_normals. smooth_surface_mesh is
     // an iteration boundary, not a standalone atom; relax_surface_mesh remains
     // registered for saved graphs. No standalone atom is removed.
-    assert_eq!(total, 228, "standalone atom census drifted");
+    // BUG-imy3.1 adds turbulence_field, inside_turbulence_potential, turbulence_emission_count,
+    // whitewater_emitter_velocity, whitewater_obstacle_source, whitewater_influence and dust_potential.
+    assert_eq!(total, 235, "standalone atom census drifted");
     assert_eq!(
         qualifying, 93,
         "canonical texture-path population drifted"

@@ -7,7 +7,7 @@
 // except that foam turning bubble stays foam until it sinks a further cell
 // (_foamBufferWidth). A bubble that turns foam or spray takes the liquid
 // velocity at its position (FLIP's MAC trilinear, 0 outside the grid).
-// Empty slots (kind 3 and up) pass whole; a dead particle is still retyped, as FLIP retypes it before removal.
+// Dust (kind 4) and empty slots (kind 3) pass whole; a dead particle is still retyped, as FLIP retypes it before removal.
 //
 // Ported from FLIP Fluids diffuseparticlesimulation.cpp (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
 

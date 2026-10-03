@@ -33,6 +33,7 @@ const RESULTS: &[SubstepResultPorts] = &[
     SubstepResultPorts { capture: "foam_particles_in", output: "foam_particles", optional: true },
     SubstepResultPorts { capture: "bubble_particles_in", output: "bubble_particles", optional: true },
     SubstepResultPorts { capture: "spray_particles_in", output: "spray_particles", optional: true },
+    SubstepResultPorts { capture: "dust_particles_in", output: "dust_particles", optional: true },
     SubstepResultPorts { capture: "interior_in", output: "interior", optional: true },
 ];
 
@@ -52,9 +53,9 @@ pub const LIQUID_STATE_PORTS: SubstepBoundaryPorts = SubstepBoundaryPorts {
 /// region, the CPU reads it once the frame clock says that frame retired.
 const READBACK_SLOTS: usize = 3;
 const WHITEWATER_STATE_WORDS: u32 = 8;
-const WHITEWATER_COUNT_WORDS: u32 = 8;
+const WHITEWATER_COUNT_WORDS: u32 = 9;
 const WHITEWATER_RESULT_START: usize = 2;
-const WHITEWATER_RESULT_COUNT: usize = 6;
+const WHITEWATER_RESULT_COUNT: usize = 7;
 
 pub struct ReadbackSlot {
     buffer: GpuBuffer,
@@ -84,6 +85,7 @@ crate::primitive! {
         foam_particles_in: Array(FluidParticle) optional,
         bubble_particles_in: Array(FluidParticle) optional,
         spray_particles_in: Array(FluidParticle) optional,
+        dust_particles_in: Array(FluidParticle) optional,
         interior_in: Array(f32) optional,
         count: ScalarF32 optional,
         whitewater_capacity: ScalarF32 optional,
@@ -103,6 +105,7 @@ crate::primitive! {
         foam_particles: Array(FluidParticle),
         bubble_particles: Array(FluidParticle),
         spray_particles: Array(FluidParticle),
+        dust_particles: Array(FluidParticle),
         interior: Array(f32),
         tick_index: ScalarF32,
         live_count: ScalarF32,
@@ -135,6 +138,7 @@ crate::primitive! {
         foam_particles: Option<GpuBuffer> = None,
         bubble_particles: Option<GpuBuffer> = None,
         spray_particles: Option<GpuBuffer> = None,
+        dust_particles: Option<GpuBuffer> = None,
         whitewater_capacity: u32 = 0,
         interior: Option<GpuBuffer> = None,
         interior_ops: InteriorOps = InteriorOps::default(),
@@ -145,10 +149,10 @@ impl LiquidState {
     fn ensure_whitewater_buffers(
         &mut self,
         device: &GpuDevice,
-        active: [bool; 6],
+        active: [bool; 7],
         capacity: u32,
     ) -> Result<bool, String> {
-        let [pool_active, state_active, counts_active, foam_active, bubble_active, spray_active] = active;
+        let [pool_active, state_active, counts_active, foam_active, bubble_active, spray_active, dust_active] = active;
         let pool_bytes = u64::from(capacity) * std::mem::size_of::<WhitewaterParticle>() as u64;
         let particle_bytes = u64::from(capacity) * std::mem::size_of::<FluidParticle>() as u64;
         let state_bytes = u64::from(WHITEWATER_STATE_WORDS) * 4;
@@ -172,6 +176,7 @@ impl LiquidState {
         ensure(&mut self.foam_particles, foam_active, particle_bytes)?;
         ensure(&mut self.bubble_particles, bubble_active, particle_bytes)?;
         ensure(&mut self.spray_particles, spray_active, particle_bytes)?;
+        ensure(&mut self.dust_particles, dust_active, particle_bytes)?;
 
         if pool_active && self.whitewater_empty.as_ref().is_none_or(|buffer| buffer.size != pool_bytes) {
             let template = create_shared_buffer(device, pool_bytes.max(4))?;
@@ -237,6 +242,7 @@ impl Primitive for LiquidState {
             "foam_particles_in",
             "bubble_particles_in",
             "spray_particles_in",
+            "dust_particles_in",
             "interior_in",
         ]
     }
@@ -251,6 +257,7 @@ impl Primitive for LiquidState {
             "foam_particles",
             "bubble_particles",
             "spray_particles",
+            "dust_particles",
         ]
     }
 
@@ -264,6 +271,7 @@ impl Primitive for LiquidState {
                 | "foam_particles"
                 | "bubble_particles"
                 | "spray_particles"
+                | "dust_particles"
                 | "interior"
         )
     }
@@ -277,6 +285,7 @@ impl Primitive for LiquidState {
             "foam_particles" => self.foam_particles.as_ref(),
             "bubble_particles" => self.bubble_particles.as_ref(),
             "spray_particles" => self.spray_particles.as_ref(),
+            "dust_particles" => self.dust_particles.as_ref(),
             "interior" => self.interior.as_ref(),
             _ => None,
         }
@@ -304,6 +313,7 @@ impl Primitive for LiquidState {
             | "foam_particles"
             | "bubble_particles"
             | "spray_particles"
+                | "dust_particles"
             | "interior" => Some(1),
             _ => None,
         }
@@ -451,6 +461,7 @@ impl Primitive for LiquidState {
                 self.foam_particles.as_ref(),
                 self.bubble_particles.as_ref(),
                 self.spray_particles.as_ref(),
+                self.dust_particles.as_ref(),
             ]
             .into_iter()
             .flatten()
@@ -506,6 +517,7 @@ impl Primitive for LiquidState {
             ("foam_particles_in", "foam_particles"),
             ("bubble_particles_in", "bubble_particles"),
             ("spray_particles_in", "spray_particles"),
+            ("dust_particles_in", "dust_particles"),
         ] {
             if let (Some(candidate), Some(state)) = (ctx.inputs.array(candidate), ctx.outputs.array(state))
                 && !candidate.ptr_eq(state)

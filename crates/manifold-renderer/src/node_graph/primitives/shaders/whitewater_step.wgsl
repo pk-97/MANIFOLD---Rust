@@ -50,6 +50,7 @@ struct StepParams {
 @group(0) @binding(8) var<storage, read_write> bubble: array<Fluid>;
 @group(0) @binding(9) var<storage, read_write> spray: array<Fluid>;
 @group(0) @binding(10) var<storage, read_write> counts: array<u32>;
+@group(0) @binding(11) var<storage, read_write> dust: array<Fluid>;
 
 const EMPTY: u32 = 3u;
 // FLIP's _diffuseParticleIDLimit.
@@ -57,6 +58,7 @@ const ID_LIMIT: u32 = 256u;
 const STATE_WORDS: u32 = 8u;
 // Populations in output order: foam (1), bubbles (0), spray (2).
 fn population_kind(p: u32) -> u32 {
+    if p == 3u { return 4u; }
     return select(select(2u, 0u, p == 1u), 1u, p == 0u);
 }
 
@@ -180,7 +182,7 @@ fn compact_state() {
 @compute @workgroup_size(256)
 fn split_flags(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
-    if i >= 3u * params.capacity {
+    if i >= 4u * params.capacity {
         return;
     }
     let p = i / params.capacity;
@@ -204,9 +206,9 @@ fn write_population(p: u32, slot: u32, value: Fluid) {
         foam[slot] = value;
     } else if p == 1u {
         bubble[slot] = value;
-    } else {
+    } else if p == 2u {
         spray[slot] = value;
-    }
+    } else { dust[slot] = value; }
 }
 
 // Each population's particles to the front of its output in pool order,
@@ -218,7 +220,7 @@ fn write_population(p: u32, slot: u32, value: Fluid) {
 @compute @workgroup_size(256)
 fn split(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
-    if i >= 3u * params.capacity {
+    if i >= 4u * params.capacity {
         return;
     }
     let p = i / params.capacity;
@@ -233,7 +235,7 @@ fn split(@builtin(global_invocation_id) gid: vec3<u32>) {
         out.id = 0u;
         write_population(p, scan[i] - 1u - start, out);
     }
-    if s >= population_end(p) - start && s < counts[p] {
+    if s >= population_end(p) - start && s < counts[select(p, 8u, p == 3u)] {
         var zero: Fluid;
         write_population(p, s, zero);
     }
@@ -251,4 +253,5 @@ fn publish_counts() {
     counts[5] = state[2];
     counts[6] = state[0];
     counts[7] = state[1];
+    counts[8] = population_end(3u) - population_start(3u);
 }

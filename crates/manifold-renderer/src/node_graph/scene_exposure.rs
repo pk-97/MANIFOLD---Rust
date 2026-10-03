@@ -104,7 +104,7 @@ pub fn metadata_for_node_type(type_id: &str) -> Vec<SceneParamMetadata> {
         .filter(|pd| type_id != "node.rigid_body" || matches!(pd.name.as_ref(), "shape" | "motion" | "density" | "friction" | "bounce" | "collider_parts"))
         .filter(|pd| type_id != "node.scene_object" || pd.name.as_ref() != "parent_visible")
         .filter(|pd| liquid_dial_params(type_id).is_none_or(|dials| dials.contains(&pd.name.as_ref())))
-        .filter(|pd| type_id != "node.whitewater_step" || matches!(pd.name.as_ref(), "enabled" | "amount"))
+        .filter(|pd| type_id != "node.whitewater_step" || matches!(pd.name.as_ref(), "enabled" | "amount" | "wavecrest_emission" | "turbulence_emission" | "min_turbulence" | "max_turbulence" | "inside_emission" | "dust_emission" | "boundary_dust" | "dust_rate" | "spray_speed" | "generation_rate" | "influence_base" | "influence_decay"))
         .filter(|pd| type_id != "node.fluid_role_source" || matches!(pd.name.as_ref(),
             "role" | "enabled" | "geometry" | "shape" | "radius"
                 | "velocity_x" | "velocity_y" | "velocity_z" | "inherit_motion"
@@ -668,14 +668,19 @@ mod tests {
         );
     }
 
-    /// The scene panel shows the GPU whitewater's switch and amount, nothing
-    /// else of the node: rates and energies stay graph-side, the budget is
-    /// the preset's hand-curated card.
+    /// Reference emitter controls share the existing manifest-backed
+    /// Whitewater card, with FLIP defaults and no separate widget path.
     #[test]
-    fn whitewater_step_exposes_its_switch_and_amount_only() {
+    fn whitewater_step_exposes_reference_emitter_controls() {
         let metadata = metadata_for_node_type("node.whitewater_step");
         let names: Vec<&str> = metadata.iter().map(|param| param.name.as_str()).collect();
-        assert_eq!(names, ["enabled", "amount"]);
+        for name in ["enabled", "amount", "wavecrest_emission", "turbulence_emission", "min_turbulence", "max_turbulence", "inside_emission", "dust_emission"] {
+            assert!(names.contains(&name), "missing {name}: {names:?}");
+        }
+        for (name, expected) in [("wavecrest_emission", 175.0), ("turbulence_emission", 175.0), ("min_turbulence", 100.0), ("max_turbulence", 200.0)] {
+            let value = metadata.iter().find(|p| p.name == name).unwrap();
+            assert_eq!(value.default_value, manifold_core::effect_graph_def::SerializedParamValue::Float { value: expected });
+        }
         let enabled = &metadata[0];
         assert!(!enabled.whole_numbers);
         assert!(matches!(enabled.convert, manifold_core::effects::ParamConvert::Float));

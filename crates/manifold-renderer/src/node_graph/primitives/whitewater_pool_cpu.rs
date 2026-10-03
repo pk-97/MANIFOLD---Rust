@@ -302,7 +302,7 @@ pub(super) fn advect(
     near: Option<&NearSolid>,
 ) -> (WhitewaterParticle, f32) {
     let mut out = particle;
-    if particle.kind > 2 || s.dt <= 0.0 {
+    if (particle.kind == 3 || particle.kind > 4) || s.dt <= 0.0 {
         return (out, f32::INFINITY);
     }
     let h = grid.cell_size();
@@ -319,7 +319,13 @@ pub(super) fn advect(
         add(add(v, scale(g, s.dt)), scale(v, -drag * s.dt))
     } else {
         let vmac = velocity(p.map(|c| c / h), f, grid);
-        if particle.kind == 0 {
+        if particle.kind == 4 {
+            let f = particle.id as f32 / 255.0;
+            let buoyancy = -2.0 - 4.0 * f;
+            let drag = 0.375 + (1.0 - f) * 0.25;
+            let push: [f32; 3] = std::array::from_fn(|a| -buoyancy * g[a] + drag * (vmac[a] - v[a]) / s.dt);
+            add(v, scale(push, s.dt))
+        } else if particle.kind == 0 {
             let push: [f32; 3] = std::array::from_fn(|a| -s.bubble_buoyancy * g[a] + s.bubble_drag * (vmac[a] - v[a]) / s.dt);
             add(v, scale(push, s.dt))
         } else {
@@ -427,7 +433,8 @@ impl Age {
 /// `node.age_whitewater` for one slot.
 pub(super) fn age(particle: WhitewaterParticle, s: Age) -> WhitewaterParticle {
     let mut out = particle;
-    if particle.kind > 2 {
+    if particle.kind == 4 { out.position_lifetime[3] -= s.dt; return out; }
+    if particle.kind == 3 || particle.kind > 4 {
         return out;
     }
     out.position_lifetime[3] -= [s.bubble, s.foam, s.spray][particle.kind as usize] * s.dt;
@@ -500,7 +507,7 @@ pub(super) fn keep(pool: &[WhitewaterParticle], solid: &[f32], grid: &Box3, cap:
     for p in pool {
         let local: [f32; 3] = std::array::from_fn(|a| p.position_lifetime[a] - origin[a]);
         let finite = local.iter().all(|v| v.is_finite());
-        if p.kind > 2 || p.position_lifetime[3] <= 0.0 || !finite {
+        if (p.kind == 3 || p.kind > 4) || p.position_lifetime[3] <= 0.0 || !finite {
             flags.push(0);
             margins.push(f32::INFINITY);
             continue;

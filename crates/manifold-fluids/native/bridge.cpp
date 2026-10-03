@@ -2351,13 +2351,55 @@ extern "C" int manifold_fluids_oracle_curvature(const float *phi, uint32_t isize
     });
 }
 
-// FLIP's own emitter on a lifecycle's last fields (GPU_WHITEWATER_DESIGN.md
-// section 3.7, O2): the liquid particles at `positions` (scene metres, three
-// floats each) become the markers, `curvature` (cell centres) the curvature
-// grid, and one update runs with emission on, turbulence emission 0 and
-// lifetime variance 0, so it emits, advances, retypes and ages as FLIP does.
-// Emission is off again afterwards.
-extern "C" int manifold_fluids_oracle_emit(void *lifecycle, const float *curvature,
+// Test-only lattice values and samples from the unchanged TurbulenceField.
+extern "C" int manifold_fluids_oracle_turbulence(void *lifecycle, float *values,
+                                                const float *positions, size_t count,
+                                                float *samples) {
+    return guarded([&] {
+        NativeWhitewater &native = whitewater_of(lifecycle);
+        if (!native.fields_set || values == nullptr ||
+            (count && (positions == nullptr || samples == nullptr))) {
+            throw std::invalid_argument("oracle turbulence needs fields and outputs");
+        }
+        TurbulenceField field;
+        field.calculateTurbulenceField(&native.velocity, native.liquid);
+        for (int k = 0; k < native.ksize; ++k) {
+            for (int j = 0; j < native.jsize; ++j) {
+                for (int i = 0; i < native.isize; ++i) {
+                    values[i + native.isize * (j + native.jsize * k)] = field(i, j, k);
+                }
+            }
+        }
+        for (size_t i = 0; i < count; ++i) {
+            const float *p = positions + 3 * i;
+            vmath::vec3 local = vmath::vec3(p[0], p[1], p[2]) - native.origin;
+            if (!finite3(p) || !Grid3d::isPositionInGrid(local, native.dx,
+                native.isize, native.jsize, native.ksize)) {
+                throw std::invalid_argument("oracle turbulence sample outside grid");
+            }
+            samples[i] = field.evaluateTurbulenceAtPosition(local);
+        }
+    });
+}
+
+// Test-only controls through the public API; the vendored code stays unchanged.
+extern "C" int manifold_fluids_oracle_emission_options(void *lifecycle,
+    double wavecrest, double turbulence, double minimum, double maximum,
+    double generation, double speed, double influence) {
+    return guarded([&] {
+        NativeWhitewater &native = whitewater_of(lifecycle);
+        auto &sim = *native.simulation;
+        sim.setDiffuseParticleWavecrestEmissionRate(wavecrest);
+        sim.setDiffuseParticleTurbulenceEmissionRate(turbulence);
+        sim.setMinTurbulence(minimum);
+        sim.setMaxTurbulence(maximum);
+        sim.setEmitterGenerationRate(generation);
+        sim.setSprayEmissionSpeed(speed);
+        native.influence.fill(influence);
+    });
+}
+
+extern "C" int manifold_fluids_oracle_emit_configured(void *lifecycle, const float *curvature,
                                            const float *positions, size_t count, double dt) {
     return guarded([&] {
         NativeWhitewater &native = whitewater_of(lifecycle);
@@ -2386,11 +2428,17 @@ extern "C" int manifold_fluids_oracle_emit(void *lifecycle, const float *curvatu
         simulation.setEmitterGenerationBounds(AABB(0.0, 0.0, 0.0, native.isize * native.dx,
                                                    native.jsize * native.dx,
                                                    native.ksize * native.dx));
-        simulation.setDiffuseParticleTurbulenceEmissionRate(0.0);
         simulation.setDiffuseParticleLifetimeVariance(0.0);
         simulation.update(params);
         simulation.disableDiffuseParticleEmission();
         native.markers = ParticleSystem();
     });
+}
+extern "C" int manifold_fluids_oracle_emit(void *lifecycle, const float *curvature,
+                                           const float *positions, size_t count, double dt) {
+    const int configured = manifold_fluids_oracle_emission_options(
+        lifecycle, 175.0, 0.0, 100.0, 200.0, 1.0, 1.0, 1.0);
+    if (!configured) { return configured; }
+    return manifold_fluids_oracle_emit_configured(lifecycle, curvature, positions, count, dt);
 }
 #endif

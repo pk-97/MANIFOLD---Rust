@@ -46,6 +46,14 @@ fn wt_borders_air(c: vec3<i32>, cells: vec3<u32>) -> bool {
     return false;
 }
 
+fn wt_finish(p: Element, idx: u32, speed: f32, seed: f32, epoch: f32) -> Element {
+    var out = p;
+    if out.kind == 2u {
+        out.velocity *= 1.0 + (speed - 1.0) * ww_random(idx, bitcast<u32>(seed), u32(max(round(epoch), 0.0)), 11u);
+    }
+    return out;
+}
+
 fn body(
     idx: u32,
     count: u32,
@@ -59,11 +67,13 @@ fn body(
     nodes_x: f32,
     nodes_y: f32,
     nodes_z: f32,
+    spray_speed: f32, seed: f32, epoch: f32, dust: f32,
 ) -> Element {
     var spawn = e_spawns;
     if !(spawn.position_lifetime.w > 0.0) {
         return spawn;
     }
+    if dust > 0.5 { spawn.kind = 4u; return spawn; }
     let nodes = vec3<u32>(max(vec3<f32>(nodes_x, nodes_y, nodes_z), vec3<f32>(0.0)));
     if any(nodes < vec3<u32>(3u)) {
         return spawn;
@@ -80,7 +90,7 @@ fn body(
     let hi = vec3<f32>(cells) - lo;
     if any(q < lo) || any(q >= hi) {
         spawn.kind = 2u;
-        return spawn;
+        return wt_finish(spawn, idx, spray_speed, seed, epoch);
     }
     let s = q - vec3<f32>(0.5);
     let lower = floor(s);
@@ -102,5 +112,5 @@ fn body(
         kind = 0u;
     }
     spawn.kind = kind;
-    return spawn;
+    return wt_finish(spawn, idx, spray_speed, seed, epoch);
 }

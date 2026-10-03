@@ -465,6 +465,10 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     b.wires(domain, solid, &["bodies", "shapes", "atlas", "closed_faces", "body_count"]);
     b.wires(domain, solid, &LATTICE_WIRES);
     b.wire((domain, "body_rows"), solid, "rows");
+    let source = b.node("whitewater_obstacle_source", "node.whitewater_obstacle_source", json!({}));
+    b.wires(domain, source, &["bodies", "shapes", "atlas", "closed_faces", "body_count"]);
+    b.wires(domain, source, &LATTICE_WIRES);
+    b.wire((domain, "body_rows"), source, "rows");
     let frame = b.node("frame", "node.liquid_frame", json!({"face_valid_layers": int(FACE_VALID_LAYERS as usize)}));
     b.wire((state, "out"), frame, "particles");
     b.wire((state, "stats"), frame, "stats");
@@ -533,7 +537,7 @@ fn built_by_water_def(node_id: &str) -> bool {
         || OBSTACLE_RENDER.contains(&node_id)
         || matches!(
             node_id,
-            "domain" | "initial_column" | "obstacle_transform" | "obstacle_collider" | "fill" | "state" | STEP_NODE | "stats" | "solid" | "frame" | "surface"
+            "domain" | "initial_column" | "obstacle_transform" | "obstacle_collider" | "fill" | "state" | STEP_NODE | "stats" | "solid" | "whitewater_obstacle_source" | "frame" | "surface"
         )
 }
 
@@ -704,8 +708,59 @@ pub(crate) fn render_def(scene: WaterScene) -> EffectGraphDef {
     for key in ["name", "description"] {
         def[key] = preset[key].clone();
     }
+    let source = id_of(&def, "whitewater_obstacle_source");
+    let whitewater = id_of(&def, "whitewater");
+    let state = id_of(&def, "state");
+    let wires = def["wires"].as_array_mut().expect("wires");
+    // Regeneration is idempotent: the source and new capture may already be in the seed preset.
+    wires.retain(|w| !(w["toNode"] == whitewater && w["toPort"] == "obstacle_source"
+        || w["toNode"] == state && w["toPort"] == "dust_particles_in"));
+    wires.push(json!({"fromNode":source, "fromPort":"solid", "toNode":whitewater, "toPort":"obstacle_source"}));
+    wires.push(json!({"fromNode":whitewater, "fromPort":"dust_particles", "toNode":state, "toPort":"dust_particles_in"}));
+    add_dust_render(&mut def);
     def["presetMetadata"] = scene_cards(&preset["presetMetadata"], scene);
     serde_json::from_value(def).expect("render def")
+}
+
+/// Dust follows the same particle-frame render path as the other populations.
+#[cfg(any(test, feature = "gpu-proofs"))]
+fn add_dust_render(def: &mut Value) {
+    for node in def["nodes"].as_array_mut().expect("nodes") {
+        if node["nodeId"].as_str().is_some_and(|name| name.starts_with("dust_"))
+            && let Some(handle) = node["handle"].as_str() {
+            node["handle"] = json!(handle.replace("Foam", "Dust"));
+        }
+    }
+    let nodes = def["nodes"].as_array().expect("nodes");
+    if nodes.iter().any(|n| n["nodeId"] == "dust_copies") { return; }
+    let first = nodes.iter().map(|n| n["id"].as_u64().expect("id")).max().expect("nodes") + 1;
+    let mut map = Vec::new();
+    let mut added = Vec::new();
+    for (i, name) in ["foam_mesh", "foam_material", "foam_object", "foam_copies"].iter().enumerate() {
+        let mut n = nodes.iter().find(|n| n["nodeId"] == *name).expect("foam render").clone();
+        map.push((n["id"].as_u64().expect("id"), first + i as u64));
+        n["id"] = json!(first + i as u64);
+        n["nodeId"] = json!(name.replace("foam_", "dust_"));
+        if let Some(handle) = n["handle"].as_str() { n["handle"] = json!(handle.replace("Foam", "Dust")); }
+        added.push(n);
+    }
+    let scene = nodes.iter().find(|n| n["nodeId"] == "scene").expect("scene")["id"].clone();
+    let mut wires = Vec::new();
+    for w in def["wires"].as_array().expect("wires") {
+        let from = w["fromNode"].as_u64().expect("from");
+        let to = w["toNode"].as_u64().expect("to");
+        if !map.iter().any(|(old, _)| *old == to) { continue; }
+        let mut w = w.clone();
+        if let Some((_, new)) = map.iter().find(|(old, _)| *old == from) { w["fromNode"] = json!(new); }
+        w["toNode"] = json!(map.iter().find(|(old, _)| *old == to).expect("target").1);
+        if w["fromPort"] == "foam_particles" { w["fromPort"] = json!("dust_particles"); }
+        wires.push(w);
+    }
+    wires.push(json!({"fromNode":first+2,"fromPort":"object","toNode":scene,"toPort":"object_10"}));
+    def["nodes"].as_array_mut().expect("nodes").extend(added);
+    def["wires"].as_array_mut().expect("wires").extend(wires);
+    let scene = def["nodes"].as_array_mut().expect("nodes").iter_mut().find(|n| n["nodeId"] == "scene").expect("scene");
+    scene["params"]["objects"] = int(11);
 }
 
 /// The shipped cards with every default at the value this scene's def bakes,
@@ -1209,6 +1264,7 @@ pub(super) mod tests {
             ("foam_particles", "foam_particles_in", "foam_particles"),
             ("bubble_particles", "bubble_particles_in", "bubble_particles"),
             ("spray_particles", "spray_particles_in", "spray_particles"),
+            ("dust_particles", "dust_particles_in", "dust_particles"),
         ] {
             assert!(wire(whitewater.0, output, boundary, capture), "missing {capture}");
             assert!(!def.wires.iter().any(|w| w.from_node == whitewater.0 && w.from_port == output && w.to_node != boundary), "{held} escapes the boundary");

@@ -249,6 +249,19 @@ LIB_PROOF_ROWS = {
     ],
 }
 
+# BUG-imy3.1: per-element emitters share CPU-reference and fused value proofs.
+for _whitewater_atom in (
+    "turbulence_field", "inside_turbulence_potential", "turbulence_emission_count",
+    "whitewater_emitter_velocity", "whitewater_obstacle_source", "whitewater_influence",
+    "dust_potential", "whitewater_emitter_dispatch", "whitewater_emitter_cpu",
+    "whitewater_emitter_gpu_tests",
+):
+    LIB_PROOF_ROWS[RENDERER_SRC + f"node_graph/primitives/{_whitewater_atom}.rs"] = [
+        "node_graph::primitives::whitewater_emitter_gpu_tests::",
+        "node_graph::primitives::whitewater_step_tests::",
+    ]
+del _whitewater_atom
+
 PATH_ATTR_MOD = re.compile(r'#\[path\s*=\s*"tests/([\w.]+)"\]\s*mod\s+(\w+)\s*;')
 
 
@@ -450,7 +463,7 @@ def _map_wgsl(plan, path, repo, shader_users):
         return
     for user in users:
         if user.startswith(RENDERER_SRC):
-            plan.filters.update(module_filters(user))
+            plan.filters.update(LIB_PROOF_ROWS.get(user, module_filters(user)))
         else:
             plan.notes.append(f"{path}: user {user} outside renderer")
 
