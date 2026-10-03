@@ -18,6 +18,13 @@ def plan(paths, users=None, repo=None):
 
 
 class ScopeTests(unittest.TestCase):
+    def test_step_order_cpu_reference_selects_gpu_value_proofs(self):
+        path = P + "gpu_flip_extension_tests.rs"
+        result = plan([path], repo=self._repo_with(path))
+        self.assertIn("gpu_flip_step_order_", result.filters)
+        self.assertIn("gpu_flip_extend_faces_", result.filters)
+        self.assertFalse(result.unmapped)
+
     def test_live_clock_and_duration_atoms_select_value_proofs(self):
         for name in ("gpu_flip_clock.rs", "shaders/gpu_flip_clock.wgsl"):
             result = plan([P + name], users=lambda _: [P + "gpu_flip_clock.rs"],

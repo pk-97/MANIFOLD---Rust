@@ -82,7 +82,7 @@ The GPU stores the nearest f32 marker coefficient, `0.31017524`.
 | CFL number | 5 | 20 m/s travel guard | owned by the clock | clock | `crates/manifold-fluids/native/flip_engine/fluidsimulation.h:2294`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_step.rs:68` |
 | Frame substeps | adaptive 1..6 | fixed one per tick | owned by the clock | clock | `crates/manifold-fluids/native/flip_engine/fluidsimulation.h:2290`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_preset.rs:34` |
 | Sim time / frames / speed | offered frame dt, speed 1 | fixed liquid tick / speed 1 | owned by the clock | clock | `crates/manifold-renderer/assets/generator-presets/WaterDamBreak.json:632`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_preset.rs:6` |
-| Velocity extrapolation layers | ceil(sqrt(3)·5)+3 = 12 | derived from travel guard | owned by the clock | clock | `crates/manifold-fluids/native/flip_engine/fluidsimulation.cpp:4832`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_step.rs:82` |
+| Velocity extrapolation layers | ceil(sqrt(3)·5)+3 = 12 | derived from travel guard | configured CFL 5: 12 layers | ported | `crates/manifold-fluids/native/flip_engine/fluidsimulation.cpp:4832`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_step.rs:82` |
 | Mesher subdivision | 1 | 1 | 1 | matched | `crates/manifold-renderer/assets/generator-presets/WaterDamBreak.json:636`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_preset.rs:136` |
 | Particle scale | 3 | 3 | 3 | matched | `crates/manifold-renderer/assets/generator-presets/WaterDamBreak.json:648`; `crates/manifold-renderer/src/node_graph/primitives/shape_particle_blobs.rs:67` |
 | Field radius | 3 marker radii = 0.9305257364073314h | capped at 2/3 cell | uncapped native radius | ported | `crates/manifold-fluids/native/flip_engine/particlemesher.cpp:81`; `crates/manifold-renderer/src/node_graph/primitives/shaders/shape_particle_blobs_body.wgsl:90` |
@@ -116,10 +116,22 @@ The GPU stores the nearest f32 marker coefficient, `0.31017524`.
 | Whitewater maximum velocity factor | 1.1 | 1.1 | 1.1 | matched | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:465`; `crates/manifold-renderer/src/node_graph/primitives/shaders/advect_whitewater_body.wgsl:30` |
 | Wall geometry / collision / last inner face | native padded boundary mesh, marched collision, skipped boundary pressure cells/last inner face | exact wall faces, clamp wall motion, all interior faces | unchanged; geometry/operator port remains | unported | `crates/manifold-fluids/native/flip_engine/fluidsimulation.cpp:5508`; `crates/manifold-renderer/src/node_graph/primitives/shaders/gpu_flip_step.wgsl:2062` |
 | Surface/solid grid origin and extent | 1.5h padding each side; native 67 cells / 68 mesh nodes | 3h padding; 70 cells / 71 nodes | unchanged; native mesh sampling is half a cell offset | unported | `crates/manifold-renderer/src/node_graph/fluid/domain.rs:120`; `crates/manifold-renderer/src/node_graph/liquid/lattice.rs:12` |
-| Marker removal | 250 per cell + extreme-velocity removal | no native per-cell or extreme-velocity removal | unchanged; needs sorted compaction and native ordering proof | unported | `crates/manifold-fluids/native/flip_engine/fluidsimulation.h:2565`; `crates/manifold-renderer/src/node_graph/primitives/shaders/gpu_flip_step.wgsl:2130` |
-| Step operation order | extrapolate then constrain; inflow at step end | constrain then extrapolate; inflow before transfer | unchanged; existing BUG-g75v.8 waits for clock branch merge | unported | `crates/manifold-fluids/native/flip_engine/fluidsimulation.cpp:6658`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_step.rs:384` |
+| Marker removal | 250 per cell + extreme-velocity removal | no native per-cell or extreme-velocity removal | stable cell cap at 250; clock speed limit over accepted frame interval; GPU compaction preserves survivor ids | ported | `crates/manifold-fluids/native/flip_engine/fluidsimulation.h:2565`; `crates/manifold-renderer/src/node_graph/primitives/shaders/gpu_flip_step.wgsl:2130` |
+| Step operation order | extrapolate then constrain; inflow at step end | constrain then extrapolate; inflow before transfer | projected velocity extrapolated before both solid constraints; inflow after movement/removal | ported | `crates/manifold-fluids/native/flip_engine/fluidsimulation.cpp:6658`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_step.rs:384` |
+| Inflow placement | after marker advection/removal | before transfer | end of step, first transferred/advected on next step | ported | `fluidsimulation.cpp::_stepFluid`, `_updateFluidObjects`; `gpu_flip_step.rs::encode` |
 | Pressure preconditioner / precision | MIC PCG, f64 | multigrid PCG, f32 | unchanged; equal tolerance/iteration values do not imply identical trajectories | unported | `crates/manifold-fluids/native/flip_engine/pressuresolver.cpp:934`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_pressure.rs:6` |
 | Whitewater emission ordering / overload | native randomized emitter order and capacity truncation | stable GPU order and even thinning when frame emissions exceed capacity | unchanged | owned by BUG-imy3.1 (whitewater emitters) | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.cpp:1515`; `crates/manifold-renderer/src/node_graph/primitives/whitewater_step.rs:163` |
+
+BUG-g75v.8 step-order audit (2026-10-03): section 2.5 found stable cell sorting,
+compaction, PrefixScan, and GPU extreme-speed removal already exist. The
+250-marker quota is genuinely new policy inside the existing specialised step
+node; no new catalog atom or fusion boundary. Native removal counts each cell
+place before speed rejection, so ranges are captured before speed removal.
+The threshold uses the accepted frame interval (_currentFrameDeltaTime), not
+the adaptive substep or 1/60 s. New inflow ids remain owned by emit_write.
+CPU reference and extent proofs precede GPU value proofs; GPU execution remains
+lead-owned, so these ports are not yet GPU-verified.
+
 
 `max_capacity=1572864` on the engine node is the mesh-output allocation, not a
 marker population parameter. GPU mesh allocation follows its exact triangle
@@ -151,8 +163,7 @@ The fused WGSL snapshot is deliberately left for the lead's GPU regeneration.
 Unported mechanisms need separate staged ports, not replacement constants:
 wall geometry changes the pressure operator and seed exclusion; the native
 half-cell surface grid needs a separately sampled solid lattice and graph extent
-contract (changing shared solver padding would alter every liquid consumer); marker removal
-requires compaction preserving native particle order; MIC/f64 is a different
+contract (changing shared solver padding would alter every liquid consumer); MIC/f64 is a different
 pressure solver (native uses f64, which native Metal cannot execute); whitewater overload ordering requires a shared random stream
 and native emitter selection. These are not clock-owned exemptions.
 `graph-tool validate` creates `GpuDevice::new_queued`, so it is deferred to the

@@ -60,7 +60,7 @@ use crate::node_graph::primitives::gpu_flip_domain::gpu_flip_geometry;
 use crate::node_graph::primitives::gpu_flip_pressure::{lattice_refusal, scratch_bytes as pressure_scratch_bytes};
 use crate::node_graph::fluid::TICK;
 use crate::node_graph::primitives::gpu_flip_step::{
-    DEFAULT_TOP_SPEED, FACE_VALID_LAYERS, band_layers, face_bytes, ring_max, scratch_bytes as step_scratch_bytes, travel_cells,
+    ENGINE_CFL, FACE_VALID_LAYERS, band_layers, face_bytes, ring_max, scratch_bytes as step_scratch_bytes,
 };
 use crate::node_graph::primitives::volume_surface_mesh::start_capacity;
 use crate::node_graph::resource_allocation::plan_array_allocations;
@@ -1414,18 +1414,15 @@ fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
         x.hold(6 * cell_bytes + 3 * faces + slots * PARTICLE + 16);
         x.hold(storage_words((lattice_total(cells) * 8) as usize) as u64 * 4);
     }
+    if x.wired("regions") {
+        x.hold(storage_words(crate::node_graph::primitives::gpu_flip_step::emit_sites(cells) as usize) as u64 * 4);
+    }
     let ranges = range_storage_bytes(cells);
     search_fits(x, cells, ranges)?;
     // The sort's ranges, cell counts, rank and slot scratch.
     x.hold(ranges + bin_total(cells) * 4 + 2 * slots.max(1) * 4);
-    // The tile table's size follows the band the step runs with (ring_max),
-    // read the way the step reads it; an unwired or unresolved scalar is the
-    // default.
-    let steps = x.scalar("steps", 1.0).round().clamp(1.0, 64.0);
-    let top_speed = x.scalar("top_speed", DEFAULT_TOP_SPEED);
-    let top_speed = if top_speed.is_finite() && top_speed > 0.0 { top_speed } else { DEFAULT_TOP_SPEED };
-    let travel = travel_cells(top_speed, (TICK / f64::from(steps)) as f32, x.lattice()?.cell_size());
-    let ring = ring_max(band_layers(travel).max(FACE_VALID_LAYERS));
+    // Same configured CFL as the step, never particle travel.
+    let ring = ring_max(band_layers(ENGINE_CFL).max(FACE_VALID_LAYERS));
     x.hold(faces + pressure_scratch_bytes(cells) + step_scratch_bytes(cells, slots, ring));
     field_reads(x)?;
     x.covers_if_bound("clock_status", 32)?;

@@ -252,7 +252,7 @@ impl WaterScene {
     /// The layers the step extends its projected faces by.
     #[cfg(all(test, feature = "water-race-probes"))]
     pub fn band_layers(&self) -> usize {
-        super::gpu_flip_step::band_layers(self.travel_cells() as u32) as usize
+        super::gpu_flip_step::band_layers(super::gpu_flip_step::ENGINE_CFL) as usize
     }
 
     /// The tank: the domain's layout at this resolution, no domain box.
@@ -1175,17 +1175,17 @@ pub(super) mod tests {
     /// never under the valid layers the frame publishes, which the
     /// conformance row's face grid scene holds.
     #[test]
-    fn gpu_flip_band_follows_the_cfl_guard() {
-        use super::super::gpu_flip_step::{band_layers, travel_cells};
+    fn gpu_flip_band_uses_engine_cfl_independent_of_travel() {
+        use super::super::gpu_flip_step::{ENGINE_CFL, band_layers, travel_cells};
         use crate::node_graph::liquid::conformance::FACE_GRID_GPU_FLIP_LAYERS;
         assert_eq!(FACE_GRID_GPU_FLIP_LAYERS, FACE_VALID_LAYERS);
         let at = |n: usize, steps: usize| {
             let s = WaterScene::dam_break(n).with_steps(steps);
             let travel = travel_cells(TOP_SPEED as f32, s.step_dt() as f32, s.cell_size() as f32);
-            (travel, band_layers(travel))
+            (travel, band_layers(ENGINE_CFL))
         };
         let bands = [at(64, 2), at(64, 1), at(128, 2), at(96, 2), at(16, 2)];
-        assert_eq!(bands, [(3, 9), (6, 14), (6, 14), (4, 10), (1, 5)]);
+        assert_eq!(bands, [(3, 12), (6, 12), (6, 12), (4, 12), (1, 12)]);
         assert!(bands.iter().all(|&(_, band)| band >= FACE_VALID_LAYERS));
     }
 
