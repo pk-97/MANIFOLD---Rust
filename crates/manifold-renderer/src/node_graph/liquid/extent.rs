@@ -732,6 +732,9 @@ fn fluid_surface(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.provide("solid_a", solid);
     x.provide("solid_b", solid);
     x.hold(crate::node_graph::fluid::particle_ring::RING_SLOTS as u64 * (particles + solid));
+    // Tick-zero empty storage stays independent of worker-owned ring slots.
+    // Include it in peak admission while the first real frame is prepared.
+    x.hold(size_of::<FluidParticle>() as u64 + solid);
     // The CPU mesh grows its buffer by half again when a surface needs more,
     // through device admission; whitewater uploads stop at their capacity.
     let vertices = u64::from((x.param("max_capacity", 786_432.0).clamp(3.0, 3_145_728.0) as u32 / 3) * 3) * size_of::<MeshVertex>() as u64;

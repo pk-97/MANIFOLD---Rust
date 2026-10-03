@@ -95,6 +95,89 @@ use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
 use crate::node_graph::primitive::PrimitiveDescription;
 
+// Diagnostic handles only: the proof reads the actual indirect arguments after
+// commit/wait, before encoding another frame. No copy, extra encoder or heap
+// allocation is added to the measured water seam.
+#[cfg(feature = "fluid-perf-proofs")]
+pub mod water_perf {
+    use std::cell::RefCell;
+    use manifold_gpu::GpuBuffer;
+
+    const MAX_DRAWS: usize = 64;
+    struct Capture {
+        draw: usize,
+        capacity: u32,
+        args: Option<(GpuBuffer, u64)>,
+        instances: u32,
+    }
+    struct Probe {
+        armed: bool,
+        draws: [Option<Capture>; MAX_DRAWS],
+        len: usize,
+    }
+    thread_local! {
+        static PROBE: RefCell<Probe> = const { RefCell::new(Probe {
+            armed: false, draws: [const { None }; MAX_DRAWS], len: 0,
+        }) };
+    }
+
+    /// Arm on the rendering thread before one frame. Fixed storage is reused.
+    pub fn arm() {
+        PROBE.with_borrow_mut(|p| {
+            assert_eq!(p.len, 0, "finish the preceding water probe before arming");
+            p.armed = true;
+        });
+    }
+
+    pub(super) fn record(index: usize, draw: &super::ObjectDraw<'_>) {
+        PROBE.with_borrow_mut(|p| {
+            if !p.armed { return; }
+            assert!(p.len < MAX_DRAWS, "water probe exceeded 64 transmissive draws");
+            p.draws[p.len] = Some(Capture {
+                draw: index, capacity: draw.vertex_count, args: draw.live_args.clone(),
+                instances: draw.instance_count,
+            });
+            p.len += 1;
+        });
+    }
+
+    #[derive(Debug)]
+    pub struct DrawCount {
+        pub draw: usize,
+        pub capacity_vertices: u32,
+        pub drawn_vertices: u32,
+        pub instances: u32,
+    }
+
+    /// Read this frame's shared indirect arguments, without GPU work or waits.
+    ///
+    /// # Safety
+    /// The armed frame must have completed successfully on the GPU, and no
+    /// subsequent frame may have been encoded using its argument buffers.
+    pub unsafe fn finish(mut visit: impl FnMut(DrawCount)) {
+        unsafe fn word(buffer: &GpuBuffer, offset: u64) -> u32 {
+            assert!(offset + 4 <= buffer.size && offset.is_multiple_of(4));
+            let ptr = buffer.mapped_ptr().expect("water probe requires shared arguments");
+            // SAFETY: caller waited for GPU completion; range/alignment checked.
+            unsafe { ptr.cast::<u8>().add(offset as usize).cast::<u32>().read() }
+        }
+        PROBE.with_borrow_mut(|p| {
+            p.armed = false;
+            for slot in &mut p.draws[..p.len] {
+                let c = slot.take().expect("captured draw");
+                let (vertices, instances) = match &c.args {
+                    // SAFETY: finish's caller guarantees completion and no reuse.
+                    Some((buffer, offset)) => unsafe { (word(buffer, *offset), word(buffer, *offset + 4)) },
+                    None => (c.capacity, c.instances),
+                };
+                visit(DrawCount { draw: c.draw, capacity_vertices: c.capacity,
+                    drawn_vertices: vertices, instances });
+            }
+            p.len = 0;
+        });
+    }
+}
+
 // ── RT capture harness: headless RT channel verification ────────
 // The `rt-capture` subcommand (manifold-app, behind perf-soak feature) sets
 // these flags to snapshot internal RT textures from render_scene::evaluate.
@@ -4928,6 +5011,8 @@ impl RenderScene {
                 let draw = &draws[*draw_index];
                 let nearest_surface = draw.is_transmissive && !draw.points
                     && draw.fill_mode == manifold_gpu::GpuTriangleFillMode::Fill;
+                #[cfg(feature = "fluid-perf-proofs")]
+                if nearest_surface { water_perf::record(*draw_index, draw); }
                 let shadow_uniforms = ShadowUniforms::for_draw(pre.view_proj, draw);
                 let shadow_bindings = [
                     GpuBinding::Bytes {
@@ -4969,6 +5054,8 @@ impl RenderScene {
                 // cannot reveal a triangle behind an opaque surface and depth
                 // testing within the mesh selects its nearest surface.
                 if nearest_surface {
+                    #[cfg(feature = "fluid-perf-proofs")]
+                    gpu.native_enc.profile_next_encoder("node.render_scene water opaque-depth seed");
                     gpu.native_enc.copy_texture_to_texture(
                         opaque_depth_snapshot,
                         transmissive_depth_scratch,
@@ -4987,10 +5074,14 @@ impl RenderScene {
                 // (`transmission_factor > 0` gates every read); a plain
                 // Blend layer composites straight onto `resolve_target`.
                 if draw.is_transmissive {
+                    #[cfg(feature = "fluid-perf-proofs")]
+                    gpu.native_enc.profile_next_encoder("node.render_scene water scene-color snapshot");
                     gpu.native_enc.copy_texture_to_texture(
                         resolve_target, opaque_scene_color, width, height, 1,
                     );
                     if opaque_scene_color.mip_level_count() > 1 {
+                        #[cfg(feature = "fluid-perf-proofs")]
+                        gpu.native_enc.profile_next_encoder("node.render_scene water scene-color mipmaps");
                         gpu.native_enc.generate_mipmaps(opaque_scene_color);
                     }
                 }

@@ -661,6 +661,8 @@ pub use remove_drift_3d::RemoveDrift3D;
 pub use render_3d_mesh::Render3DMesh;
 pub use render_instanced_3d_mesh::RenderInstanced3DMesh;
 pub use render_scene::RenderScene;
+#[cfg(feature = "fluid-perf-proofs")]
+pub use render_scene::water_perf;
 pub use render_scene::{arm_rt_capture, disarm_rt_capture, take_rt_captures, RtCaptureSlot};
 pub use render_filled_rects::RenderFilledRects;
 pub use render_lines::RenderLines;

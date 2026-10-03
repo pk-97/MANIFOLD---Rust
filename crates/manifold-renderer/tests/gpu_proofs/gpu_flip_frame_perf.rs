@@ -107,7 +107,6 @@ struct Split {
 struct Frame {
     gpu_ms: f64,
     cpu_ms: f64,
-    node_error: bool,
     split: Option<Split>,
 }
 
@@ -163,6 +162,7 @@ fn render(
     let mut encoder = device.create_encoder("gpu flip frame perf");
     if let Some(sampler) = sampler {
         encoder.enable_dispatch_profiling(sampler.clone(), device);
+        manifold_renderer::node_graph::primitives::water_perf::arm();
     }
     runtime.set_profiling(sampler.is_some());
     let encode_started = Instant::now();
@@ -172,14 +172,12 @@ fn render(
         gpu.frame_status()
     };
     let cpu_ms = encode_started.elapsed().as_secs_f64() * 1e3;
-    // A node error (the speed-cap report, BUG-jyot) is still what live shows.
-    assert!(status.presentable(), "frame {} is not presentable: {status:?}", ctx.frame_count);
+    assert_eq!(status, FrameRenderStatus::Complete, "frame {} did not complete", ctx.frame_count);
     let profile = encoder.commit_and_wait_profiled(device);
     assert_eq!(profile.failed_command_buffers, 0, "frame {} failed on the GPU", ctx.frame_count);
     let gpu_ms = profile.total_ms;
-    let node_error = status != FrameRenderStatus::Complete;
     if sampler.is_none() {
-        return Frame { gpu_ms, cpu_ms, node_error, split: None };
+        return Frame { gpu_ms, cpu_ms, split: None };
     }
     assert_eq!(profile.overflow, 0, "every dispatch must be timed");
     let summed: f64 = profile.spans.iter().map(|span| span.millis).sum();
@@ -191,6 +189,35 @@ fn render(
     );
     let steps: BTreeMap<String, String> =
         runtime.take_step_profiles().into_iter().map(|step| (step.tag, step.type_id)).collect();
+    // These are the existing encoder-boundary samples, kept in encode order.
+    // Report signed gaps as well as durations: overlapping stages are not a
+    // serial cost ledger, and Load/resolve hazards can wait inside the next
+    // encoder. No new encoders/barriers perturb the seam being diagnosed.
+    let mut previous_end = None;
+    for span in &profile.spans {
+        if steps.get(&span.tag).is_some_and(|kind| kind == RENDER) {
+            let end = span.start_ms + span.millis;
+            let gap = previous_end.map_or(0.0, |previous| span.start_ms - previous);
+            println!("    water seam {:?} {}: start {:.4} end {end:.4} ms; gap {gap:+.4} ms",
+                span.kind, span.label, span.start_ms);
+            previous_end = Some(end);
+        }
+    }
+    let mut captured_draws = 0;
+    // SAFETY: this frame completed above; no later frame has reused the buffers.
+    unsafe {
+        manifold_renderer::node_graph::primitives::water_perf::finish(|count| {
+            assert!(count.drawn_vertices <= count.capacity_vertices);
+            assert_eq!(count.drawn_vertices % 3, 0);
+            captured_draws += 1;
+            println!("    water draw {}: {} live triangles, {} instances, {} capacity vertices",
+                count.draw, count.drawn_vertices / 3, count.instances,
+                count.capacity_vertices);
+        });
+    }
+    assert_eq!(captured_draws,
+        profile.spans.iter().filter(|span| span.label == "node.render_scene transmissive depth prepass").count(),
+        "every captured water draw must have a valid depth-prepass stamp");
     let mut per_type = BTreeMap::new();
     let mut per_step_label = BTreeMap::new();
     let mut per_render_label = BTreeMap::new();
@@ -213,7 +240,6 @@ fn render(
     Frame {
         gpu_ms,
         cpu_ms,
-        node_error,
         split: Some(Split { per_type, per_step_label, per_render_label, shadow_rendered, hash }),
     }
 }
@@ -398,7 +424,6 @@ fn probe(variant: Variant) {
     let mut plain_sequence = Vec::new();
     let mut shadow_frames = Vec::new();
     let mut hashes = Vec::new();
-    let mut node_error_frames = 0usize;
     for tick in 0..MEASURED_FRAMES {
         frame += 1;
         let stamped = tick % TIMESTAMP_EVERY == TIMESTAMP_EVERY - 1;
@@ -411,7 +436,6 @@ fn probe(variant: Variant) {
             stamped.then_some(&sampler),
         );
         let counts = Counts::read(&runtime);
-        node_error_frames += usize::from(result.node_error);
         if let Some(split) = &result.split {
             if split.shadow_rendered {
                 shadow_frames.push(tick);
@@ -426,7 +450,6 @@ fn probe(variant: Variant) {
         let for_whole = Frame {
             gpu_ms: result.gpu_ms,
             cpu_ms: result.cpu_ms,
-            node_error: result.node_error,
             split: result.split.as_ref().map(|split| Split {
                 per_type: split.per_type.clone(),
                 per_step_label: split.per_step_label.clone(),
@@ -438,7 +461,6 @@ fn probe(variant: Variant) {
         whole.add(for_whole, counts);
         if tick < SPLASH_END_TICK { splash.add(result, counts) } else { calm.add(result, counts) }
     }
-    println!("  frames with a node error (live still presents them): {node_error_frames} of {MEASURED_FRAMES}");
     println!("  plain-frame GPU ms per tick:");
     for row in plain_sequence.chunks(12) {
         let cells: Vec<String> = row.iter().map(|(tick, ms)| format!("{tick:>3}:{ms:>6.2}")).collect();

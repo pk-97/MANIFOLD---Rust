@@ -161,6 +161,9 @@ pub(crate) struct ProfileState {
     pub(crate) spans: Vec<PendingSpan>,
     pub(crate) tag: String,
     pub(crate) granularity: ProfileGranularity,
+    /// Proof-only name for the next sampled encoder, without adding a pass.
+    #[cfg(feature = "gpu-proofs")]
+    pub(crate) next_label: Option<&'static str>,
     /// The tag of the sampled compute encoder currently open, if one is.
     pub(crate) open_tag: Option<String>,
     pub(crate) overflow: usize,
@@ -178,6 +181,8 @@ impl ProfileState {
         kind: GpuWorkKind,
         threadgroup_bytes: u32,
     ) -> Option<SpanSlot> {
+        #[cfg(feature = "gpu-proofs")]
+        let label = self.next_label.take().unwrap_or(label);
         let idx = self.spans.len() * 2;
         if idx + 1 >= self.sampler.capacity {
             self.overflow += 1;

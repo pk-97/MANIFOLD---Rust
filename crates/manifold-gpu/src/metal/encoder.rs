@@ -335,11 +335,24 @@ impl GpuEncoder {
             spans: Vec::new(),
             tag: String::new(),
             granularity,
+            #[cfg(feature = "gpu-proofs")]
+            next_label: None,
             open_tag: None,
             overflow: 0,
             calib_start,
             committed_buffers: Vec::new(),
         });
+    }
+
+    /// Name the next profiled encoder's existing boundary samples. Proofs use
+    /// this to distinguish otherwise identical blits at a render seam. Adds
+    /// no encoder, sample, barrier or allocation; dormant without profiling.
+    #[cfg(feature = "gpu-proofs")]
+    pub fn profile_next_encoder(&mut self, label: &'static str) {
+        if let Some(profile) = &mut self.profile {
+            assert!(profile.next_label.is_none(), "previous encoder label was not consumed");
+            profile.next_label = Some(label);
+        }
     }
 
     /// Set the attribution tag stamped onto subsequently profiled spans.
