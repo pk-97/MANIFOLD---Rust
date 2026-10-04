@@ -1634,6 +1634,101 @@ fn gpu_flip_no_body_solid_clear_matches_six_passes() {
     }
 }
 
+/// The pocket sweep segment matches its original indirect dispatches across
+/// active/inactive numerical slots, warmed replay and changed clock gates.
+#[test]
+fn gpu_flip_pocket_segments_match_indirect_sweeps() {
+    struct ForceIndirectPockets;
+    impl Drop for ForceIndirectPockets {
+        fn drop(&mut self) {
+            super::gpu_flip_step::set_force_indirect_pockets(false);
+        }
+    }
+    fn original_frame(run: &mut Run) {
+        super::gpu_flip_step::set_force_indirect_pockets(true);
+        let _reset = ForceIndirectPockets;
+        run.frame();
+    }
+    fn compare(segmented: &Run, indirect: &Run, steps: u32, frame: usize) {
+        let a: Vec<u32> = segmented.read(STEP_NODE, "clock_status", 8);
+        let b: Vec<u32> = indirect.read(STEP_NODE, "clock_status", 8);
+        assert_eq!(a, b, "frame{frame}: all clock words");
+        assert_eq!(a[0], 0.0f32.to_bits(), "six-slot path ends inactive");
+        assert_eq!(a[1], (1.0f32 / 60.0).to_bits(), "full interval completed");
+        assert_eq!(a[2], 0.0f32.to_bits(), "no unfinished interval");
+        assert_eq!(a[6], steps, "active steps before inactive tail");
+        assert_eq!((a[4], a[5]), (0, 0), "no cap or nonfinite clock input");
+        let count = segmented.scene.particles() as usize;
+        let segmented_step: Vec<FluidParticle> = segmented.read(STEP_NODE, "out", count);
+        let indirect_step: Vec<FluidParticle> = indirect.read(STEP_NODE, "out", count);
+        for (label, a, b) in [
+            ("published particles", segmented.particles(), indirect.particles()),
+            ("step particles", segmented_step, indirect_step),
+        ] {
+            assert_eq!(bytemuck::cast_slice::<_, u32>(&a), bytemuck::cast_slice::<_, u32>(&b), "frame{frame}: {label}");
+            for particles in [&a, &b] {
+                let stats = particle_stats(particles);
+                assert_eq!((stats.live, stats.bad), (count, 0), "frame{frame}: {label} remain live and finite");
+            }
+        }
+        assert_eq!(bytemuck::cast_slice::<_, u32>(&segmented.faces()), bytemuck::cast_slice::<_, u32>(&indirect.faces()), "frame{frame}: faces");
+        for (node, port, words) in [
+            ("stats", "stats_out", LIQUID_STATS_WORDS as usize),
+            (STEP_NODE, "capped", 2 * count + SOLVER_WORDS as usize),
+        ] {
+            assert_eq!(segmented.read::<u32>(node, port, words), indirect.read::<u32>(node, port, words), "frame{frame}: {port}");
+        }
+    }
+    super::gpu_flip_step::set_force_indirect_pockets(false);
+    let scene = WaterScene::still_pool(16).with_steps(2);
+    // Unwired retired speed keeps all six numerical slots: each interval
+    // records active work, an inactive tail, then active work next interval.
+    let mut segmented = run_with_retired_speed(scene, false);
+    let mut indirect = run_with_retired_speed(scene, false);
+    segmented.set_encode_replay(true);
+    indirect.set_encode_replay(true);
+    let mut warm = None;
+    for frame in 0..14 {
+        let steps = if frame < 10 { 2 } else { 1 };
+        if frame == 10 {
+            for run in [&mut segmented, &mut indirect] {
+                let step = node_named(&run.graph, STEP_NODE);
+                run.graph.set_param(step, "steps", crate::node_graph::ParamValue::Float(1.0)).expect("steps");
+            }
+        }
+        if frame % 2 == 0 {
+            segmented.frame();
+            original_frame(&mut indirect);
+        } else {
+            original_frame(&mut indirect);
+            segmented.frame();
+        }
+        compare(&segmented, &indirect, steps, frame);
+        if frame == 9 { warm = Some([segmented.replay_stats(), indirect.replay_stats()]); }
+    }
+    let warm = warm.expect("ten warmup visits");
+    for (label, run, before) in [("segmented", &segmented, warm[0]), ("indirect", &indirect, warm[1])] {
+        let after = run.replay_stats();
+        assert!(after.replayed > before.replayed, "{label}: changed clock gates exercise warmed replay");
+        assert!(after.segments_replayed > before.segments_replayed, "{label}: warmed solver rounds replay");
+        assert_eq!(after.recorded, before.recorded, "{label}: changed gates do not record new commands");
+        assert_eq!(after.store_allocations, before.store_allocations, "{label}: changed gates reuse replay storage");
+    }
+    assert!(segmented.replay_stats().segments_replayed - warm[0].segments_replayed
+        > indirect.replay_stats().segments_replayed - warm[1].segments_replayed,
+        "pocket sweeps add replayed segments");
+    segmented.set_encode_replay(false);
+    indirect.set_encode_replay(false);
+    let before = [segmented.replay_stats(), indirect.replay_stats()];
+    segmented.frame();
+    original_frame(&mut indirect);
+    compare(&segmented, &indirect, 1, 14);
+    for (run, before) in [(&segmented, before[0]), (&indirect, before[1])] {
+        assert_eq!(run.replay_stats().replayed, before.replayed, "direct frame replays no command chains");
+        assert_eq!(run.replay_stats().segments_replayed, before.segments_replayed, "direct frame replays no segments");
+    }
+}
+
 /// Later inactive numerical slots can skip dense extension dispatches while
 /// retaining every active layer and the ordinary replayed frame's results.
 #[test]

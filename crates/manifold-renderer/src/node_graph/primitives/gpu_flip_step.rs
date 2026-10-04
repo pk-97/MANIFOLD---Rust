@@ -635,7 +635,10 @@ struct LatticeBuffers {
 }
 
 /// Words of the pocket spread's gate (gpu_flip_step.wgsl `pocket_gate`).
-const POCKET_GATE_WORDS: u64 = 11;
+pub(crate) const POCKET_GATE_WORDS: u64 = 17;
+/// The aligned replay range at gate words 12 and 13, after the flags.
+const POCKET_RANGE_INDEX: u32 = 6;
+const POCKET_ROUND_OFFSET: u64 = 14 * 4;
 
 fn allocate(device: &GpuDevice, bytes: u64) -> Result<GpuBuffer, String> {
     crate::node_graph::scene_modifier_expand::admit_candidate_bytes(device.modifier_memory_snapshot(), bytes)
@@ -870,6 +873,22 @@ pub(crate) fn pocket_rounds(cells: [u32; 3]) -> u32 {
     cells.into_iter().max().unwrap_or(1)
 }
 
+#[cfg(all(test, feature = "gpu-proofs"))]
+static FORCE_INDIRECT_POCKETS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+pub(crate) fn set_force_indirect_pockets(on: bool) {
+    FORCE_INDIRECT_POCKETS.store(on, std::sync::atomic::Ordering::SeqCst);
+}
+
+fn segment_pockets() -> bool {
+    #[cfg(all(test, feature = "gpu-proofs"))]
+    if FORCE_INDIRECT_POCKETS.load(std::sync::atomic::Ordering::SeqCst) {
+        return false;
+    }
+    true
+}
+
 /// Which water reaches air (gpu_flip_step.wgsl pocket_*): seed, up to
 /// [`pocket_rounds`] rounds of indirect sweeps that stop once a round changes
 /// nothing, the unfinished check, then the tally.
@@ -892,16 +911,33 @@ fn encode_pockets(
         "gpu_flip.step.pocket_seed",
     );
     enc.dispatch_compute(&pipes.pocket_start, &[buffer(24, &l.pocket_gate), buffer(46, plan)], [1, 1, 1], "gpu_flip.step.pocket_start");
+    let segmented = segment_pockets();
+    let lines = [u64::from(cells[1]) * u64::from(cells[2]), u64::from(cells[2]) * u64::from(cells[0]), u64::from(cells[0]) * u64::from(cells[1])];
+    let round_bindings = [uniform(params), buffer(24, &l.pocket_gate), buffer(46, plan)];
+    if segmented {
+        enc.dispatch_compute(&pipes.pocket_round, &round_bindings, [1, 1, 1], "gpu_flip.step.pocket_round");
+    }
     for _ in 0..pocket_rounds(cells) {
-        enc.dispatch_compute(&pipes.pocket_round, &[uniform(params), buffer(24, &l.pocket_gate), buffer(46, plan)], [1, 1, 1], "gpu_flip.step.pocket_round");
+        if segmented {
+            // The last command prepares the next round. Once no cell changes,
+            // subsequent segments skip their sweeps and their setup together.
+            // The final unused setup only updates dispatch metadata; the cap
+            // check below inspects the cells and labels independently.
+            enc.begin_gated_segment(&l.pocket_gate, POCKET_RANGE_INDEX, 4);
+        } else {
+            enc.dispatch_compute(&pipes.pocket_round, &round_bindings, [1, 1, 1], "gpu_flip.step.pocket_round");
+        }
         for (axis, sweep) in pipes.pocket_sweep.iter().enumerate() {
-            enc.dispatch_compute_indirect(
-                sweep,
-                &[uniform(params), buffer(10, &l.s), buffer(23, &l.pocket), buffer(24, &l.pocket_gate), buffer(25, &l.pocket_label)],
-                &l.pocket_gate,
-                12 * axis as u64,
-                "gpu_flip.step.pocket_sweep",
-            );
+            let bindings = [uniform(params), buffer(10, &l.s), buffer(23, &l.pocket), buffer(24, &l.pocket_gate), buffer(25, &l.pocket_label)];
+            if segmented {
+                enc.dispatch_compute_gated(sweep, &bindings, groups(lines[axis]), &l.pocket_gate, 12 * axis as u64, "gpu_flip.step.pocket_sweep");
+            } else {
+                enc.dispatch_compute_indirect(sweep, &bindings, &l.pocket_gate, 12 * axis as u64, "gpu_flip.step.pocket_sweep");
+            }
+        }
+        if segmented {
+            enc.dispatch_compute_gated(&pipes.pocket_round, &round_bindings, [1, 1, 1], &l.pocket_gate, POCKET_ROUND_OFFSET, "gpu_flip.step.pocket_round");
+            enc.end_gated_segments();
         }
     }
     enc.dispatch_compute(

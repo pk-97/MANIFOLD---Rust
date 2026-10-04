@@ -12,7 +12,7 @@
 use manifold_gpu::GpuBuffer;
 
 use super::gpu_flip_atom_tests::{FACE_FLOATS, assert_close, face_grid_len, random_values};
-use super::gpu_flip_step::{StepParams, dispatch_pass, tile_total};
+use super::gpu_flip_step::{POCKET_GATE_WORDS, StepParams, dispatch_pass, tile_total};
 use super::liquid_fill::LiquidFill;
 use super::liquid_surface_tests::{Harness, params, read};
 use crate::node_graph::fluid_particles::{CellRange, FaceSample, FluidParticle};
@@ -1689,28 +1689,28 @@ fn gpu_pockets(water: &[f32], open: &[FaceSample], moving: &[FaceSample], mask: 
     pass.bind(6, water)
         .bind(10, open)
         .bind(23, &vec![0u32; cell_len()])
-        .bind(24, &[0u32; 11])
+        .bind(24, &[0u32; POCKET_GATE_WORDS as usize])
         .bind(4, moving)
         .bind(25, &vec![0u32; cell_len()])
         .bind(5, rhs)
         .bind(26, &vec![7u32; 3 * cell_len() + 2])
         .bind(22, &[9u32; 6]);
     pass.run::<u32>("pocket_seed", &params, 23, cell_len(), cell_len());
-    pass.run::<u32>("pocket_start", &params, 24, 11, 1);
+    pass.run::<u32>("pocket_start", &params, 24, POCKET_GATE_WORDS as usize, 1);
     let mut rounds = 0;
     loop {
-        pass.run::<u32>("pocket_round", &params, 24, 11, 1);
+        pass.run::<u32>("pocket_round", &params, 24, POCKET_GATE_WORDS as usize, 1);
         for sweep in ["pocket_sweep_x", "pocket_sweep_y", "pocket_sweep_z"] {
-            pass.run::<u32>(sweep, &params, 24, 11, lines);
+            pass.run::<u32>(sweep, &params, 24, POCKET_GATE_WORDS as usize, lines);
         }
-        if pass.bound::<u32>(24, 11)[9] == 0 {
+        if pass.bound::<u32>(24, POCKET_GATE_WORDS as usize)[9] == 0 {
             break;
         }
         rounds += 1;
         assert!(rounds <= cell_len(), "the spread never settled");
     }
-    pass.run::<u32>("pocket_check", &params, 24, 11, cell_len());
-    assert_eq!(pass.bound::<u32>(24, 11)[10], 0, "a settled spread leaves no sealed cell linked to air");
+    pass.run::<u32>("pocket_check", &params, 24, POCKET_GATE_WORDS as usize, cell_len());
+    assert_eq!(pass.bound::<u32>(24, POCKET_GATE_WORDS as usize)[10], 0, "a settled spread leaves no sealed cell linked to air");
     let got = pass.run::<FaceSample>("pocket_condition", &params, 4, face_len(), face_len());
     pass.run::<u32>("pocket_clear", &params, 26, 3 * cell_len() + 2, 3 * cell_len() + 2);
     pass.run::<u32>("pocket_accumulate", &params, 26, 3 * cell_len() + 2, cell_len());
@@ -1811,6 +1811,61 @@ fn gpu_flip_sealed_pockets_zero_the_solid_velocity_as_the_engine() {
     assert!(zeroed > 0, "some pocket was sealed");
 }
 
+/// Pocket sweeps' original triples and appended replay range agree through
+/// changed, quiet and inactive rounds, even with a stale active range.
+#[test]
+fn gpu_flip_pocket_round_initializes_replay_gate() {
+    fn write(pass: &Pass, binding: u32, values: &[u32]) {
+        let buffer = &pass.bound.iter().find(|(b, _)| *b == binding).expect("bound").1;
+        assert_eq!(buffer.size, (values.len() * 4) as u64);
+        // SAFETY: each Pass::run retired its command buffer before this write.
+        unsafe { buffer.write(0, bytemuck::cast_slice(values)) };
+    }
+    let params = lattice();
+    let words = POCKET_GATE_WORDS as usize;
+    assert_eq!(words, 17, "eleven original words, pad, two replay range words and setup triple");
+    let mut clock = [0u32; 12];
+    clock[0] = (1.0f32 / 60.0).to_bits();
+    clock[11] = 1;
+    let mut pass = Pass::new();
+    pass.bind(24, &vec![73u32; words]).bind(46, &clock);
+    let mut expected = vec![73u32; words];
+    expected[9] = 1;
+    expected[10] = 0;
+    expected[12..14].copy_from_slice(&[0, 0]);
+    expected[14..17].copy_from_slice(&[0, 1, 1]);
+    assert_eq!(pass.run::<u32>("pocket_start", &params, 24, words, 1), expected, "active start clears the range and preserves original triple words");
+    let lines = [N[1] * N[2], N[2] * N[0], N[0] * N[1]];
+    for (axis, count) in lines.into_iter().enumerate() {
+        expected[3 * axis..3 * axis + 3].copy_from_slice(&[count.div_ceil(256) as u32, 1, 1]);
+    }
+    expected[9] = 0;
+    expected[12..14].copy_from_slice(&[0, 4]);
+    expected[14] = 1;
+    assert_eq!(pass.run::<u32>("pocket_round", &params, 24, words, 1), expected, "changed round enables three sweeps and next setup");
+    for axis in 0..3 { expected[3 * axis] = 0; }
+    expected[12..14].copy_from_slice(&[0, 0]);
+    expected[14] = 0;
+    assert_eq!(pass.run::<u32>("pocket_round", &params, 24, words, 1), expected, "quiet round enables no sweep");
+
+    // An inactive slot always starts before its rounds. Start clears the
+    // preceding active slot's range; each inactive round keeps it cleared.
+    let mut stale = vec![73u32; words];
+    stale[9] = 1;
+    stale[12..14].copy_from_slice(&[0, 4]);
+    stale[14..17].copy_from_slice(&[1, 1, 1]);
+    write(&pass, 24, &stale);
+    clock[0] = 0;
+    write(&pass, 46, &clock);
+    for axis in 0..3 { stale[3 * axis] = 0; }
+    stale[9] = 0;
+    stale[10] = 0;
+    stale[12..14].copy_from_slice(&[0, 0]);
+    stale[14] = 0;
+    assert_eq!(pass.run::<u32>("pocket_start", &params, 24, words, 1), stale, "inactive start clears stale execution and retains original word semantics");
+    assert_eq!(pass.run::<u32>("pocket_round", &params, 24, words, 1), stale, "inactive round preserves the cleared execution range");
+}
+
 #[test]
 fn gpu_flip_pocket_spread_reports_an_unfinished_cap() {
     // Every cell water and every link open, air only past the open -X face:
@@ -1819,11 +1874,11 @@ fn gpu_flip_pocket_spread_reports_an_unfinished_cap() {
     let water = vec![1.0f32; cell_len()];
     let open = solid_faces(0x5e9, false);
     let mut pass = Pass::new();
-    pass.bind(6, &water).bind(10, &open).bind(23, &vec![0u32; cell_len()]).bind(24, &[0u32; 11]).bind(25, &vec![0u32; cell_len()]);
+    pass.bind(6, &water).bind(10, &open).bind(23, &vec![0u32; cell_len()]).bind(24, &[0u32; POCKET_GATE_WORDS as usize]).bind(25, &vec![0u32; cell_len()]);
     pass.run::<u32>("pocket_seed", &params, 23, cell_len(), cell_len());
-    pass.run::<u32>("pocket_start", &params, 24, 11, 1);
-    pass.run::<u32>("pocket_check", &params, 24, 11, cell_len());
-    assert_eq!(pass.bound::<u32>(24, 11)[10], 1, "an unfinished spread is flagged");
+    pass.run::<u32>("pocket_start", &params, 24, POCKET_GATE_WORDS as usize, 1);
+    pass.run::<u32>("pocket_check", &params, 24, POCKET_GATE_WORDS as usize, cell_len());
+    assert_eq!(pass.bound::<u32>(24, POCKET_GATE_WORDS as usize)[10], 1, "an unfinished spread is flagged");
     // The step's dry, sealed and air counts follow in words 7-9.
     let pocket = pass.bound::<u32>(23, cell_len());
     let counts: Vec<u32> = (0..3).map(|k| pocket.iter().filter(|&&s| s == k).count() as u32).collect();
@@ -2040,20 +2095,20 @@ fn fine_pockets(water: &[f32], open: &[FaceSample]) -> (Vec<u32>, Vec<u32>) {
     let params = lattice();
     let lines = (N[1] * N[2]).max(N[0] * N[2]).max(N[0] * N[1]);
     let mut pass = Pass::new();
-    pass.bind(6, water).bind(10, open).bind(23, &vec![0u32; cell_len()]).bind(24, &[0u32; 11]).bind(25, &vec![0u32; cell_len()]);
+    pass.bind(6, water).bind(10, open).bind(23, &vec![0u32; cell_len()]).bind(24, &[0u32; POCKET_GATE_WORDS as usize]).bind(25, &vec![0u32; cell_len()]);
     pass.run::<u32>("pocket_seed", &params, 23, cell_len(), cell_len());
-    pass.run::<u32>("pocket_start", &params, 24, 11, 1);
+    pass.run::<u32>("pocket_start", &params, 24, POCKET_GATE_WORDS as usize, 1);
     for _ in 0..=cell_len() {
-        pass.run::<u32>("pocket_round", &params, 24, 11, 1);
+        pass.run::<u32>("pocket_round", &params, 24, POCKET_GATE_WORDS as usize, 1);
         for sweep in ["pocket_sweep_x", "pocket_sweep_y", "pocket_sweep_z"] {
-            pass.run::<u32>(sweep, &params, 24, 11, lines);
+            pass.run::<u32>(sweep, &params, 24, POCKET_GATE_WORDS as usize, lines);
         }
-        if pass.bound::<u32>(24, 11)[9] == 0 {
+        if pass.bound::<u32>(24, POCKET_GATE_WORDS as usize)[9] == 0 {
             break;
         }
     }
-    pass.run::<u32>("pocket_check", &params, 24, 11, cell_len());
-    assert_eq!(pass.bound::<u32>(24, 11)[10], 0, "a settled spread leaves no sealed cell linked to air");
+    pass.run::<u32>("pocket_check", &params, 24, POCKET_GATE_WORDS as usize, cell_len());
+    assert_eq!(pass.bound::<u32>(24, POCKET_GATE_WORDS as usize)[10], 0, "a settled spread leaves no sealed cell linked to air");
     (pass.bound(23, cell_len()), pass.bound(25, cell_len()))
 }
 

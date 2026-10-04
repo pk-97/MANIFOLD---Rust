@@ -989,7 +989,9 @@ fn water_from_phi(@builtin(global_invocation_id) gid: vec3<u32>) {
 @group(0) @binding(23) var<storage, read_write> pocket: array<u32>;
 // Words 0-8: the three sweeps' indirect dispatch sizes (x, y, z); 9: a
 // sweep changed a cell this round; 10: a sealed cell still links to one
-// that reaches air (the spread stopped at its cap unfinished).
+// that reaches air (the spread stopped at its cap unfinished); 11: padding;
+// 12-13: the sweep-and-setup replay range {0, 4} or {0, 0};
+// 14-16: the next round setup's indirect dispatch size.
 @group(0) @binding(24) var<storage, read_write> pocket_gate: array<u32>;
 // Each water cell's pocket: the lowest cell index of the sealed water it
 // links to. A pocket's label is its leader cell.
@@ -1037,6 +1039,9 @@ const POCKET_AIR: u32 = 2u;
 const POCKET_LINK: f32 = 1e-6;
 const POCKET_CHANGED: u32 = 9u;
 const POCKET_UNRESOLVED: u32 = 10u;
+// Eight-byte aligned {first command, command count} for sweeps and setup.
+const POCKET_RANGE: u32 = 12u;
+const POCKET_ROUND_ARGS: u32 = 14u;
 // The pocket count's word among the solver words `capped` is bound at.
 const POCKET_WORD: u32 = 3u;
 
@@ -1086,6 +1091,11 @@ fn pocket_seed(@builtin(global_invocation_id) gid: vec3<u32>) {
 @compute @workgroup_size(1)
 fn pocket_start() {
     pocket_gate[POCKET_UNRESOLVED] = 0u;
+    pocket_gate[POCKET_RANGE] = 0u;
+    pocket_gate[POCKET_RANGE + 1u] = 0u;
+    pocket_gate[POCKET_ROUND_ARGS] = 0u;
+    pocket_gate[POCKET_ROUND_ARGS + 1u] = 1u;
+    pocket_gate[POCKET_ROUND_ARGS + 2u] = 1u;
     if !clock_active() {
         pocket_gate[POCKET_CHANGED] = 0u;
         for (var a = 0u; a < 3u; a = a + 1u) {
@@ -1102,6 +1112,9 @@ fn pocket_start() {
 fn pocket_round() {
     if !clock_active() { return; }
     let go = pocket_gate[POCKET_CHANGED] != 0u;
+    pocket_gate[POCKET_RANGE] = 0u;
+    pocket_gate[POCKET_RANGE + 1u] = select(0u, 4u, go);
+    pocket_gate[POCKET_ROUND_ARGS] = select(0u, 1u, go);
     let n = u.n;
     let lines = vec3<u32>(n.y * n.z, n.z * n.x, n.x * n.y);
     for (var a = 0u; a < 3u; a = a + 1u) {
