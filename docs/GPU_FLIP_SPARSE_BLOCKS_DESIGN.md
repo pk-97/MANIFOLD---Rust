@@ -66,10 +66,12 @@ Buffers (all `u32`, in `TileTable` beside `LatticeBuffers`, counted in `scratch_
 | `tile_rank` | 2·T³, halves by the parity word | `tiles_rings` | `tiles_lists` (both halves), the poison; Phase 2's per-level lists |
 | `tiles_by_ring` | T³ | `tiles_lists` | every sparse pass (thread → tile) |
 | `tile_counts` | ring_max+4: |C|, ring ≤ k for k = 1..=ring_max+1, retired count, parity | `tiles_lists` (parity: `tiles_classify`) | proofs |
-| `tile_args` | 3·(ring_max+2) indirect triples (C, each ring cap, retired) | `tiles_lists` | `dispatch_compute_indirect` |
+| `tile_args` | C/ring/retired triples, one full-face triple, padding to 8 bytes, then one 2-word extension replay range | `tiles_lists` | indirect dispatch and gated replay |
 | `tiles_retired` | T³ | `tiles_lists` | `tiles_retire` |
 
 `tile_rank` and `tile_counts` carry state across steps, so they are shared buffers zero-filled once; the table is rebuilt when the lattice or `ring_max` changes.
+
+The appended full-face triple and replay range switch later inactive clock slots off without changing active extension layers. The first slot retains ordinary replay. Later dense extensions use the existing gated replay segment, with indirect dispatch as its direct-encoding fallback; narrow-band extensions retain their existing path. `tiles_lists` writes both decisions from the same clock activity before its inactive return. The argument storage has `2·ceil(3·(ring_max+3)/2)+2` words, included in the extent hold; no new pass or readback is needed.
 
 Thread mapping in every sparse pass (`list_cell`, `c_cell_index`):
 

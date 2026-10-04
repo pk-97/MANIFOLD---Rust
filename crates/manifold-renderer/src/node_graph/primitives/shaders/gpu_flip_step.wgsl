@@ -86,7 +86,7 @@ struct Params {
     // 1: every tile is active (the test-only oracle).
     all_tiles: u32,
     // The ring a sparse pass's reads are capped at.
-    ring_cap: u32,
+    extension_layers: u32,
     // The farthest ring the table holds; ring_max + 1 means none within it.
     ring_max: u32,
     narrow_band: u32, // Ferstl 2016: 0 dense, 1 initialization, 2 band-masked.
@@ -2644,7 +2644,17 @@ fn tiles_lists() {
     let total = tile_total();
     let r = u.ring_max;
     // An inactive clock slot keeps the last step's table (the parity was not
-    // flipped) and switches every list triple off, the retired one too.
+    // flipped) and switches every list triple off, including retired and
+    // full-face dispatches. Active full-face passes retain the dense grid.
+    let m = u.n + vec3<u32>(1u);
+    tile_args[3u * (r + 2u)] = select(0u, (m.x * m.y * m.z + 255u) / 256u, clock_active());
+    tile_args[3u * (r + 2u) + 1u] = 1u;
+    tile_args[3u * (r + 2u) + 2u] = 1u;
+    let end_triples = 3u * (r + 3u);
+    let range_word = (end_triples + 1u) & ~1u;
+    if range_word != end_triples { tile_args[end_triples] = 0u; }
+    tile_args[range_word] = 0u;
+    tile_args[range_word + 1u] = select(0u, u.extension_layers, clock_active());
     if !clock_active() {
         for (var k = 0u; k <= r + 1u; k = k + 1u) {
             tile_args[3u * k] = 0u;

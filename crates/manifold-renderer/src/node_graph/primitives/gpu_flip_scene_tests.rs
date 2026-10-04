@@ -1634,6 +1634,129 @@ fn gpu_flip_no_body_solid_clear_matches_six_passes() {
     }
 }
 
+/// Later inactive numerical slots can skip dense extension dispatches while
+/// retaining every active layer and the ordinary replayed frame's results.
+#[test]
+fn gpu_flip_inactive_extension_dispatch_matches_dense() {
+    const WARMUP: usize = 4;
+    const MEASURED: usize = 8;
+    struct ForceDenseExtend;
+    impl Drop for ForceDenseExtend {
+        fn drop(&mut self) {
+            super::gpu_flip_step::set_force_dense_extend(false);
+        }
+    }
+    fn original_frame(run: &mut Run) -> (f64, f64) {
+        super::gpu_flip_step::set_force_dense_extend(true);
+        let _reset = ForceDenseExtend;
+        run.timed_frame()
+    }
+    fn median(values: &mut [f64]) -> f64 {
+        values.sort_by(f64::total_cmp);
+        (values[values.len() / 2 - 1] + values[values.len() / 2]) * 0.5
+    }
+    fn compare(optimized: &Run, original: &Run, fresh: bool, frame: usize) {
+        let scene = optimized.scene;
+        let at = format!("{}³ Steps {} fresh {fresh} tick {frame}", scene.pressure.n, scene.steps);
+        let a: Vec<u32> = optimized.read(STEP_NODE, "clock_status", 8);
+        let b: Vec<u32> = original.read(STEP_NODE, "clock_status", 8);
+        assert_eq!(a, b, "{at}: complete clock status differs");
+        let final_dt = if fresh && scene.steps == 1 && frame > 0 { 1.0f32 / 60.0 } else { 0.0 };
+        assert_eq!(a[0], final_dt.to_bits(), "{at}: expected recording path");
+        assert_eq!(a[1], (1.0f32 / 60.0).to_bits(), "{at}: exact completed time");
+        assert_eq!(a[2], 0.0f32.to_bits(), "{at}: no unfinished interval");
+        assert_eq!(a[6], scene.steps as u32, "{at}: authored Steps accepted exactly");
+        assert_eq!((a[4], a[5]), (0, 0), "{at}: no cap or nonfinite input");
+        let count = scene.particles() as usize;
+        let optimized_step: Vec<FluidParticle> = optimized.read(STEP_NODE, "out", count);
+        let original_step: Vec<FluidParticle> = original.read(STEP_NODE, "out", count);
+        for (what, a, b) in [
+            ("published particles", optimized.particles(), original.particles()),
+            ("step particles", optimized_step, original_step),
+        ] {
+            assert!(bytemuck::cast_slice::<_, u32>(&a) == bytemuck::cast_slice::<_, u32>(&b), "{at}: {what} bits differ");
+            for particles in [&a, &b] {
+                let stats = particle_stats(particles);
+                assert_eq!((stats.live, stats.bad), (count, 0), "{at}: every {what} record remains live and finite");
+            }
+        }
+        let (a, b) = (optimized.faces(), original.faces());
+        assert!(bytemuck::cast_slice::<_, u32>(&a) == bytemuck::cast_slice::<_, u32>(&b), "{at}: face bits differ");
+        let a: Vec<u32> = optimized.read("stats", "stats_out", LIQUID_STATS_WORDS as usize);
+        let b: Vec<u32> = original.read("stats", "stats_out", LIQUID_STATS_WORDS as usize);
+        assert_eq!(a, b, "{at}: full liquid stats differ");
+        let capped_words = 2 * count + SOLVER_WORDS as usize;
+        let a: Vec<u32> = optimized.read(STEP_NODE, "capped", capped_words);
+        let b: Vec<u32> = original.read(STEP_NODE, "capped", capped_words);
+        assert!(a == b, "{at}: full capped words differ");
+    }
+    super::gpu_flip_step::set_force_dense_extend(false);
+    for (n, steps, fresh) in [(16, 1, true), (16, 2, false), (64, 1, false)] {
+        let scene = WaterScene::still_pool(n).with_steps(steps);
+        let mut optimized = run_with_retired_speed(scene, fresh);
+        let mut original = run_with_retired_speed(scene, fresh);
+        optimized.set_encode_replay(true);
+        original.set_encode_replay(true);
+        let mut optimized_gpu = Vec::with_capacity(MEASURED);
+        let mut optimized_cpu = Vec::with_capacity(MEASURED);
+        let mut original_gpu = Vec::with_capacity(MEASURED);
+        let mut original_cpu = Vec::with_capacity(MEASURED);
+        let mut warm_replay = [manifold_gpu::GpuReplayStats::default(); 2];
+        for frame in 0..WARMUP + MEASURED {
+            super::gpu_flip_step::set_force_dense_extend(false);
+            let (optimized_time, original_time) = if frame % 2 == 0 {
+                (optimized.timed_frame(), original_frame(&mut original))
+            } else {
+                let original_time = original_frame(&mut original);
+                (optimized.timed_frame(), original_time)
+            };
+            for (label, time) in [("indirect", optimized_time), ("dense", original_time)] {
+                assert!(time.0.is_finite() && time.0 > 0.0, "{n}³ Steps {steps}, {label}: positive finite GPU chunk span");
+                assert!(time.1.is_finite() && time.1 > 0.0, "{n}³ Steps {steps}, {label}: positive finite CPU encode time");
+            }
+            if frame >= WARMUP {
+                optimized_gpu.push(optimized_time.0);
+                optimized_cpu.push(optimized_time.1);
+                original_gpu.push(original_time.0);
+                original_cpu.push(original_time.1);
+            }
+            compare(&optimized, &original, fresh, frame);
+            if frame + 1 == WARMUP {
+                warm_replay = [optimized.replay_stats(), original.replay_stats()];
+            }
+        }
+        println!(
+            "GPU FLIP {n}³ inactive extension, Steps {steps} fresh {fresh}, {WARMUP} warmup + {MEASURED} measured ticks/run: median gated GPU {:.3} ms CPU {:.3} ms; dense GPU {:.3} ms CPU {:.3} ms",
+            median(&mut optimized_gpu), median(&mut optimized_cpu), median(&mut original_gpu), median(&mut original_cpu),
+        );
+        for (label, run, warm) in [("indirect", &optimized, warm_replay[0]), ("dense", &original, warm_replay[1])] {
+            let replay = run.replay_stats();
+            println!("GPU FLIP {n}³ inactive extension, Steps {steps}, {label} replay: after warmup {warm:?}; final {replay:?}");
+            assert!(replay.replayed > warm.replayed && replay.segments_replayed > warm.segments_replayed,
+                "{n}³ Steps {steps}, {label}: measured ticks must exercise ordinary encode replay");
+        }
+        if !fresh {
+            let gated_segments = optimized.replay_stats().segments_replayed - warm_replay[0].segments_replayed;
+            let dense_segments = original.replay_stats().segments_replayed - warm_replay[1].segments_replayed;
+            assert!(gated_segments > dense_segments, "{n}³ Steps {steps}: extension layers must use gated replay segments");
+        }
+        if n == 16 && steps == 2 {
+            optimized.set_encode_replay(false);
+            original.set_encode_replay(false);
+            let direct_before = [optimized.replay_stats(), original.replay_stats()];
+            super::gpu_flip_step::set_force_dense_extend(false);
+            optimized.timed_frame();
+            original_frame(&mut original);
+            compare(&optimized, &original, fresh, WARMUP + MEASURED);
+            for (label, run, before) in [("indirect", &optimized, direct_before[0]), ("dense", &original, direct_before[1])] {
+                let after = run.replay_stats();
+                assert_eq!(after.replayed, before.replayed, "{label}: the direct frame replayed no command chains");
+                assert_eq!(after.segments_replayed, before.segments_replayed, "{label}: the direct frame replayed no pressure rounds");
+            }
+        }
+    }
+}
+
 #[test]
 fn gpu_flip_fresh_speed_preserves_force_changes_and_multiple_intervals() {
     let scene = WaterScene::still_pool(32).with_steps(1);

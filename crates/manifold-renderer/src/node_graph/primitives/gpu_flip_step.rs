@@ -149,10 +149,10 @@ fn tile_count_words(ring_max: u32) -> u64 {
     u64::from(ring_max) + 4
 }
 
-/// Words of the indirect triples: one per count word 0..=ring_max (C, then
-/// each ring cap), one for the retired list.
+/// Indirect triples for C, each ring cap, retired tiles and full faces,
+/// followed by one aligned replay range for the extension layers.
 fn tile_args_words(ring_max: u32) -> u64 {
-    3 * (u64::from(ring_max) + 2)
+    2 * (u64::from(extension_range_index(ring_max)) + 1)
 }
 
 /// Bytes of the tile table at `cells` for `ring_max`: the nearness, two
@@ -346,9 +346,8 @@ pub(crate) struct StepParams {
     pub(crate) solve_level: u32,
     /// 1: every tile is active (the test-only oracle, [`set_all_tiles`]).
     pub(crate) all_tiles: u32,
-    /// The ring a sparse pass's reads are capped at. Unused while the extend
-    /// is dense (design D-4); Phase 2's coarse levels take it.
-    pub(crate) ring_cap: u32,
+    /// Dispatches in each velocity-extension replay segment.
+    pub(crate) extension_layers: u32,
     /// [`ring_max`] for this step: the table's extent.
     pub(crate) ring_max: u32,
     /// Ferstl 2016: 0 dense, 1 full-history initialization, 2 masked band.
@@ -520,6 +519,15 @@ struct TileTable {
 /// Byte offset of the retired list's indirect triple in `args`.
 fn retired_args_offset(ring_max: u32) -> u64 {
     12 * (u64::from(ring_max) + 1)
+}
+
+fn face_args_offset(ring_max: u32) -> u64 {
+    retired_args_offset(ring_max) + 12
+}
+
+/// Index of the 8-byte replay range after the indirect triples.
+fn extension_range_index(ring_max: u32) -> u32 {
+    (3 * (ring_max + 3)).div_ceil(2)
 }
 
 /// `bound` plus the arrays the fill, the retire and the poison write: the
@@ -805,7 +813,7 @@ fn narrow_redistance(enc: &mut GpuEncoder, pipes: &BandPipelines, params: &NbPar
 /// `layers` extension passes from `source` into `target`, ping-ponging
 /// through `scratch` so the last pass lands in `target`. `source` may be
 /// `target`: an even count's first pass writes `scratch`, an odd one starts from a copy there.
-fn extend(enc: &mut GpuEncoder, pipes: &Pipelines, clock_plan: &GpuBuffer, params: &StepParams, face_groups: [u32; 3], [source, target, scratch]: [&GpuBuffer; 3], layers: u32, label: &str) {
+fn extend(enc: &mut GpuEncoder, pipes: &Pipelines, clock_plan: &GpuBuffer, params: &StepParams, face_groups: [u32; 3], table: Option<&TileTable>, [source, target, scratch]: [&GpuBuffer; 3], layers: u32, label: &str) {
     let mut from = source;
     // In place with an odd count, the first pass would write its own source:
     // start from a copy in `scratch` instead, which that pass does not write.
@@ -813,11 +821,43 @@ fn extend(enc: &mut GpuEncoder, pipes: &Pipelines, clock_plan: &GpuBuffer, param
         enc.copy_buffer_to_buffer(source, scratch, source.size.min(scratch.size));
         from = scratch;
     }
+    let gate = table.filter(|_| params.step_in_tick > 0 && indirect_extend());
+    if let Some(table) = gate {
+        debug_assert_eq!(params.extension_layers, layers);
+        enc.begin_gated_segment(&table.args, extension_range_index(table.ring_max), layers);
+    }
     for i in 0..layers {
         let to = if (layers - i) % 2 == 1 { target } else { scratch };
-        enc.dispatch_compute(&pipes.extend, &[buffer(46, clock_plan), uniform(params), buffer(3, from), buffer(4, to)], face_groups, label);
+        let bindings = [buffer(46, clock_plan), uniform(params), buffer(3, from), buffer(4, to)];
+        if let Some(table) = gate {
+            // The first slot is normally active and keeps ordinary replay.
+            // Later slots use the same full grid when active, zero groups
+            // otherwise; tiles_lists already writes that decision each slot.
+            enc.dispatch_compute_gated(&pipes.extend, &bindings, face_groups, &table.args, face_args_offset(table.ring_max), label);
+        } else {
+            enc.dispatch_compute(&pipes.extend, &bindings, face_groups, label);
+        }
         from = to;
     }
+    if gate.is_some() {
+        enc.end_gated_segments();
+    }
+}
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+static FORCE_DENSE_EXTEND: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+pub(crate) fn set_force_dense_extend(on: bool) {
+    FORCE_DENSE_EXTEND.store(on, std::sync::atomic::Ordering::SeqCst);
+}
+
+fn indirect_extend() -> bool {
+    #[cfg(all(test, feature = "gpu-proofs"))]
+    if FORCE_DENSE_EXTEND.load(std::sync::atomic::Ordering::SeqCst) {
+        return false;
+    }
+    true
 }
 
 /// Layers of the solid velocity's extrapolation (gpu_flip_step.wgsl
@@ -1318,7 +1358,7 @@ impl StepState {
                     "gpu_flip.step.narrow.initialize_gather",
                 );
                 enc.compute_memory_barrier_buffers();
-                extend(enc, pipes, step.clock_plan, &base, face_groups, [&l.g, &nb.previous_faces, &l.b], step.band, "gpu_flip.step.narrow.initialize_faces");
+                extend(enc, pipes, step.clock_plan, &base, face_groups, None, [&l.g, &nb.previous_faces, &l.b], step.band, "gpu_flip.step.narrow.initialize_faces");
                 narrow_redistance(enc, nb_pipes, &nb_params, &l.phi, &nb.previous_phi, cells, "gpu_flip.step.narrow.initialize_distance");
                 enc.copy_buffer_to_buffer(&nb.previous_phi, &l.phi, l.phi.size);
             } else {
@@ -1546,7 +1586,7 @@ impl StepState {
         // The saved faces: the particles' own, extended so FLIP's change is
         // measured wherever a particle samples.
         if step.narrow_enabled {
-            extend(enc, pipes, step.clock_plan, &base, face_groups, [&l.g, &l.a, &l.b], step.band, "gpu_flip.step.narrow.extend_old");
+            extend(enc, pipes, step.clock_plan, &base, face_groups, None, [&l.g, &l.a, &l.b], step.band, "gpu_flip.step.narrow.extend_old");
             let nb = self.narrow.buffers.as_ref().ok_or("narrow-band storage was not reserved")?;
             let nb_pipes = self.narrow.pipes.as_ref().ok_or("narrow-band pipelines were not prepared")?;
             enc.dispatch_compute(
@@ -1555,9 +1595,9 @@ impl StepState {
                 face_groups,
                 "gpu_flip.step.narrow.combine",
             );
-            extend(enc, pipes, step.clock_plan, &base, face_groups, [&l.g, &l.g, &l.b], step.band, "gpu_flip.step.narrow.extend_combined");
+            extend(enc, pipes, step.clock_plan, &base, face_groups, None, [&l.g, &l.g, &l.b], step.band, "gpu_flip.step.narrow.extend_combined");
         } else {
-            extend(enc, pipes, step.clock_plan, &base, face_groups, [&l.g, &l.a, &l.b], step.band, "gpu_flip.step.extend_old");
+            extend(enc, pipes, step.clock_plan, &base, face_groups, (!step.narrow_enabled).then_some(tiles), [&l.g, &l.a, &l.b], step.band, "gpu_flip.step.extend_old");
         }
         let force_faces = if step.narrow_enabled { &l.g } else { &l.a };
         enc.dispatch_compute(
@@ -1754,7 +1794,7 @@ impl StepState {
         }
         #[cfg(feature = "water-race-probes")]
         enc.set_profile_tag("gpu_flip.stage.project_extend");
-        extend(enc, pipes, step.clock_plan, &base, face_groups, [&l.f, out_faces, &l.b], step.band, "gpu_flip.step.extend_new");
+        extend(enc, pipes, step.clock_plan, &base, face_groups, (!step.narrow_enabled).then_some(tiles), [&l.f, out_faces, &l.b], step.band, "gpu_flip.step.extend_new");
         enc.compute_memory_barrier_buffers();
         // The engine constrains its velocity and its saved velocity to the
         // solids after the pressure solve, so FLIP's change is measured
@@ -1847,7 +1887,7 @@ impl StepState {
             self.solver.tally(enc, step.pressure, step.capped, tally, 1, false)?;
             let plain = StepParams { ghost: 0, ..base };
             subtract(enc, &plain, &l.water, &l.f, "gpu_flip.step.density_project");
-            extend(enc, pipes, step.clock_plan, &base, face_groups, [&l.f, &l.f, &l.b], step.band, "gpu_flip.step.extend_spread");
+            extend(enc, pipes, step.clock_plan, &base, face_groups, (!step.narrow_enabled).then_some(tiles), [&l.f, &l.f, &l.b], step.band, "gpu_flip.step.extend_spread");
             &l.f
         } else {
             out_faces
@@ -2495,7 +2535,7 @@ impl Primitive for GpuFlipStep {
                 emit_jitter: 0.25 * inflow_jitter,
                 solve_level: level as u32,
                 all_tiles: u32::from(all_tiles()),
-                ring_cap: 0,
+                extension_layers: band,
                 ring_max: ring_max(band),
                 live_impulse_stride: field
                     .nodes
@@ -2925,8 +2965,9 @@ mod tests {
         for (cells, tiles) in [([64, 64, 64], 512u64), ([63, 100, 8], 104), ([128, 128, 128], 4096), ([1, 9, 17], 6)] {
             for r in 1..5u32 {
                 let counts = u64::from(r) + 2 + 1 + 1;
-                let triples = 3 * (u64::from(r) + 1 + 1);
-                assert_eq!(tile_scratch_bytes(cells, r), (5 * tiles + counts + triples) * 4, "{cells:?} ring_max {r}");
+                let triples = 3 * (u64::from(r) + 1 + 1 + 1);
+                let arguments = triples + triples % 2 + 2;
+                assert_eq!(tile_scratch_bytes(cells, r), (5 * tiles + counts + arguments) * 4, "{cells:?} ring_max {r}");
                 assert_eq!(
                     scratch_bytes(cells, 1000, r) - tile_scratch_bytes(cells, r),
                     scratch_bytes(cells, 1000, 1) - tile_scratch_bytes(cells, 1)

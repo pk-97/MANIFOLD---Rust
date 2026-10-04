@@ -32,6 +32,11 @@ struct Model {
     retired: Vec<u32>,
 }
 
+fn argument_words(r: usize) -> usize {
+    let triples = 3 * (r + 3);
+    triples + triples % 2 + 2
+}
+
 /// Particles per cell, binned as the sort bins them (clamped to the edge
 /// cells, radius 0 is not live).
 fn cell_counts(particles: &[FluidParticle], n: [u32; 3], min: [f32; 3], h: f32) -> Vec<u32> {
@@ -122,6 +127,10 @@ fn model(counts: &[u32], n: [u32; 3], r: u32, prev_rank: &[u32], all: bool) -> M
         args.extend([2 * count, 1, 1]);
     }
     args.extend([2 * retired.len() as u32, 1, 1]);
+    let faces = n.into_iter().map(|side| side + 1).product::<u32>();
+    args.extend([faces.div_ceil(256), 1, 1]);
+    args.resize(argument_words(r as usize) - 2, 0);
+    args.extend([0, band_layers(ENGINE_CFL).max(FACE_VALID_LAYERS)]);
     Model { near, rank: ranks, by_ring, counts: counts_out, args, retired }
 }
 
@@ -153,7 +162,7 @@ impl Table {
             rank: words(2 * total),
             by_ring: words(total),
             counts: words(r as usize + 4),
-            args: words(3 * (r as usize + 2)),
+            args: words(argument_words(r as usize)),
             retired: words(total),
             capped: words(7),
             total,
@@ -204,7 +213,7 @@ impl Table {
             rank: rank[half..half + self.total].to_vec(),
             by_ring: by_ring[..counts[self.r as usize + 1] as usize].to_vec(),
             counts: counts[..self.r as usize + 3].to_vec(),
-            args: read(&self.args, 3 * (self.r as usize + 2)),
+            args: read(&self.args, argument_words(self.r as usize)),
             retired: retired[..counts[self.r as usize + 2] as usize].to_vec(),
         }
     }
@@ -243,7 +252,7 @@ fn gpu_flip_tiles_match_the_cpu_classification() {
     let (n, min, h) = (layout.cells, layout.min, layout.cell_size as f32);
     let r = ring_max(band_layers(ENGINE_CFL).max(FACE_VALID_LAYERS));
     let total = tile_total(n) as usize;
-    let params = StepParams { n, box_min: min, cell_size: h, ring_max: r, ..StepParams::default() };
+    let params = StepParams { n, box_min: min, cell_size: h, ring_max: r, extension_layers: band_layers(ENGINE_CFL).max(FACE_VALID_LAYERS), ..StepParams::default() };
     let table = Table::new(&device, n, r);
     let mut prev = vec![0u32; total];
     let mut frame = 0;
@@ -283,6 +292,25 @@ fn gpu_flip_tiles_match_the_cpu_classification() {
     assert_eq!(run.liquid_stats().active_tiles, 1.0, "the step under all_tiles");
     run.frame();
     assert!(run.liquid_stats().active_tiles < 1.0, "the lever released");
+
+    // An inactive slot must actually zero both execution decisions; unchanged
+    // particle results alone could hide full-grid launches that return early.
+    let clock = device.create_buffer_shared(48);
+    let mut plan = [0u32; 12];
+    plan[11] = 1; // live mode, no accepted duration
+    // SAFETY: the shared buffer has exactly these 48 bytes and is not in flight.
+    unsafe { std::ptr::copy_nonoverlapping(plan.as_ptr().cast::<u8>(), clock.mapped_ptr().expect("shared"), 48) };
+    dispatch_pass(&device, "tiles_lists", &dense, &[
+        (27, &table.near), (28, &table.rank), (29, &table.by_ring),
+        (30, &table.counts), (31, &table.args), (32, &table.retired),
+        (22, &table.capped), (46, &clock),
+    ], 1);
+    let mut inactive = cpu;
+    for triple in 0..r as usize + 3 {
+        inactive.args[3 * triple] = 0;
+    }
+    *inactive.args.last_mut().expect("extension range length") = 0;
+    assert_model(&table.model(), &inactive, "inactive slot gates triples and replay, preserving the table");
 }
 
 /// A run of `dam_break(64)` whose every frame, the fill included, goes
