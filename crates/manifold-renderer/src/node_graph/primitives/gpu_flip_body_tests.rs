@@ -803,6 +803,82 @@ fn gpu_flip_inactive_slots_match_the_ungated_step() {
     }
 }
 
+/// Fresh one-step recording equals the complete GPU scheduler with two-way
+/// coupling. An authored negative speed keeps the baseline on its six-slot
+/// loop without changing Steps, CFL, numerical caps or body controls.
+#[test]
+fn gpu_flip_fresh_speed_preserves_coupled_bodies() {
+    use crate::node_graph::liquid::conformance::Fixture;
+    const STEP: &str = "node.gpu_flip_step";
+    const TICKS: u32 = 8;
+    fn baseline(mut def: manifold_core::effect_graph_def::EffectGraphDef) -> manifold_core::effect_graph_def::EffectGraphDef {
+        use manifold_core::effect_graph_def::EffectGraphWire;
+        let steps: Vec<_> = def.nodes.iter().filter(|node| node.type_id == STEP).map(|node| node.id).collect();
+        let [step] = steps[..] else { panic!("coupled proof requires exactly one GPU FLIP step") };
+        let id = def.nodes.iter().map(|node| node.id).max().expect("box scene nodes")
+            .checked_add(1).expect("room for baseline scalar id");
+        def.nodes.push(serde_json::from_value(serde_json::json!({
+            "id": id,
+            "nodeId": "full_gpu_clock",
+            "typeId": "node.value",
+            "params": {"value": {"type": "Float", "value": -1.0}}
+        })).expect("baseline negative speed scalar"));
+        def.wires.retain(|wire| !(wire.to_node == step && wire.to_port == "retired_max_speed"));
+        def.wires.push(EffectGraphWire {
+            from_node: id, from_port: "out".into(),
+            to_node: step, to_port: "retired_max_speed".into(),
+        });
+        def
+    }
+    for fixture in [Fixture::SubmergedBox, Fixture::FloatingBox] {
+        let def = BoxRun::at_level(fixture, 0);
+        let mut automatic = BoxRun::of(def.clone(), false, false, false);
+        let mut full = BoxRun::of(baseline(def), false, false, false);
+        let (mut shortcuts, mut reacting_ticks) = (0u32, 0u32);
+        for tick in 1..=TICKS {
+            automatic.step();
+            full.step();
+            let at = format!("{fixture:?} level 0 tick {tick}");
+            let (mut got, mut want) = (automatic.left(), full.left());
+            let reaction = &got.iter().find(|(what, _)| *what == "reaction").expect("body reaction").1;
+            reacting_ticks += u32::from(reaction.iter().any(|&word| {
+                let value = f32::from_bits(word);
+                value.is_finite() && value != 0.0
+            }));
+            for (what, type_id, port) in [
+                ("full capped", STEP, "capped"),
+                ("faces", STEP, "faces"),
+                ("full stats", "node.liquid_stats", "stats_out"),
+            ] {
+                got.push((what, automatic.words(type_id, port)));
+                want.push((what, full.words(type_id, port)));
+            }
+            for ((what, a), (expected_what, b)) in got.iter().zip(&want) {
+                assert_eq!(what, expected_what, "{at}: matching array labels");
+                assert_eq!(a.len(), b.len(), "{at}: {what} is sized differently");
+                if let Some(i) = first_differing(a, b) {
+                    panic!("{at}: automatic {what} differs first at word {i}: {} ({}) vs full scheduler {} ({})",
+                        a[i], f32::from_bits(a[i]), b[i], f32::from_bits(b[i]));
+                }
+            }
+            let (a, b) = (automatic.words(STEP, "clock_status"), full.words(STEP, "clock_status"));
+            assert!(a.len() >= 8 && b.len() >= 8, "{at}: complete clock status");
+            assert_eq!(&a[1..8], &b[1..8], "{at}: identical completed interval and clock diagnostics");
+            for (label, status) in [("automatic", &a), ("full scheduler", &b)] {
+                assert_eq!(status[2], 0.0f32.to_bits(), "{at}: {label} completed the interval");
+                assert_eq!(status[5], 0, "{at}: {label} has no nonfinite clock input");
+            }
+            assert_eq!(b[0], 0.0f32.to_bits(), "{at}: baseline must retain its inactive tail slots");
+            if f32::from_bits(a[0]) > 0.0 && a[6] == 1 {
+                shortcuts += 1;
+            }
+        }
+        assert!(shortcuts > 0, "{fixture:?}: automatic recording never took the fresh one-step path");
+        assert!(reacting_ticks > 0, "{fixture:?}: no nonzero finite body reaction, so coupling was not exercised");
+        println!("{fixture:?} level 0: {TICKS} coupled ticks bitwise; {shortcuts} fresh one-step ticks; {reacting_ticks} ticks with body reaction");
+    }
+}
+
 impl BoxRun {
     fn body_height(&self) -> f64 {
         let words = self.words(manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID, "bodies");

@@ -224,6 +224,45 @@ impl LiquidBodies {
     pub fn clock_obstacles(&self) -> &[crate::node_graph::primitives::gpu_flip_clock::GpuFlipBodyVertex] { &self.clock_obstacles }
     pub fn clock_sources(&self) -> &[crate::node_graph::primitives::gpu_flip_clock::GpuFlipBodyVertex] { &self.clock_sources }
 
+    /// Conservative initial obstacle speed for the first accepted interval.
+    /// This uses its prepared body rows with zero initial reaction, and is
+    /// useful only beside a fresh marker sample of the matching incoming tick.
+    /// It does not predict reactions from subsequent pressure solves.
+    pub fn initial_clock_obstacle_speed(&self, interval: f32) -> f32 {
+        if !interval.is_finite() || interval <= 0.0 {
+            return -1.0;
+        }
+        let norm = |xyz: [f64; 3]| xyz.into_iter().map(|value| value * value).sum::<f64>().sqrt();
+        let xyz = |values: [f32; 4]| std::array::from_fn(|axis| f64::from(values[axis]));
+        let mut maximum = 0.0f64;
+        for vertex in &self.clock_obstacles {
+            if vertex.position[3] == 0.0 {
+                continue;
+            }
+            if !vertex.position[3].is_finite() { return -1.0; }
+            if ![vertex.position, vertex.centroid, vertex.velocity, vertex.angular_velocity,
+                vertex.acceleration, vertex.angular_acceleration].into_iter()
+                .all(|values| values[..3].iter().all(|value| value.is_finite())) {
+                return -1.0;
+            }
+            let radius = norm(std::array::from_fn(|axis| {
+                f64::from(vertex.position[axis]) - f64::from(vertex.centroid[axis])
+            }));
+            let speed = norm(xyz(vertex.velocity)) + norm(xyz(vertex.angular_velocity)) * radius
+                + f64::from(interval) * (norm(xyz(vertex.acceleration)) + norm(xyz(vertex.angular_acceleration)) * radius);
+            maximum = maximum.max(speed);
+        }
+        let mut bound = maximum as f32;
+        if !bound.is_finite() {
+            return -1.0;
+        }
+        // Casting rounds to nearest; move one positive float upward if needed.
+        if f64::from(bound) < maximum {
+            bound = f32::from_bits(bound.to_bits() + 1);
+        }
+        if bound.is_finite() { bound } else { -1.0 }
+    }
+
     /// Reference CFL samples the actual mesh vertices. The engine counts an
     /// obstacle's points only inside the domain; a coupled hull counts every
     /// vertex while its bounds overlap the domain, so a hull crossing or
@@ -1036,6 +1075,116 @@ mod tests {
                 assert!(obstacles[..8].iter().all(|v| v.position[3] == 1.0 && (v.velocity[0] - 60.0).abs() < 1e-3));
                 assert!(obstacles[8..].iter().all(|v| v.velocity[3] == 2.0), "the hull names its body row");
             }
+        }
+    }
+
+    fn initial_obstacle(vertex: crate::node_graph::primitives::gpu_flip_clock::GpuFlipBodyVertex) -> LiquidBodies {
+        LiquidBodies { clock_obstacles: vec![vertex], ..LiquidBodies::default() }
+    }
+
+    fn eligible_vertex() -> crate::node_graph::primitives::gpu_flip_clock::GpuFlipBodyVertex {
+        crate::node_graph::primitives::gpu_flip_clock::GpuFlipBodyVertex {
+            position: [0.0, 0.0, 0.0, 1.0],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn liquid_initial_obstacle_speed_bounds_translation_and_angular_radius() {
+        let mut vertex = eligible_vertex();
+        vertex.velocity = [3.0, 4.0, 0.0, 0.0];
+        assert_eq!(initial_obstacle(vertex).initial_clock_obstacle_speed(0.5), 5.0);
+        vertex.position = [3.0, 4.0, 0.0, 1.0];
+        vertex.angular_velocity = [0.0, 0.0, 2.0, 0.0];
+        assert_eq!(initial_obstacle(vertex).initial_clock_obstacle_speed(0.5), 15.0);
+        vertex.angular_acceleration = [0.0, 0.0, 4.0, 0.0];
+        assert_eq!(initial_obstacle(vertex).initial_clock_obstacle_speed(0.5), 25.0);
+    }
+
+    #[test]
+    fn liquid_initial_obstacle_speed_bounds_acceleration_and_deceleration() {
+        for acceleration in [-4.0, 4.0] {
+            let mut vertex = eligible_vertex();
+            vertex.velocity = [3.0, 0.0, 0.0, 0.0];
+            vertex.acceleration = [acceleration, 0.0, 0.0, 0.0];
+            assert_eq!(initial_obstacle(vertex).initial_clock_obstacle_speed(0.5), 5.0);
+        }
+    }
+
+    #[test]
+    fn liquid_initial_obstacle_speed_ignores_ineligible_vertices() {
+        assert_eq!(LiquidBodies::default().initial_clock_obstacle_speed(0.5), 0.0);
+        let mut vertex = eligible_vertex();
+        vertex.position[3] = 0.0;
+        vertex.velocity[0] = f32::NAN;
+        let mut bodies = initial_obstacle(vertex);
+        assert_eq!(bodies.initial_clock_obstacle_speed(0.5), 0.0);
+        let mut valid = eligible_vertex();
+        valid.velocity[0] = 2.0;
+        bodies.clock_obstacles.push(valid);
+        assert_eq!(bodies.initial_clock_obstacle_speed(0.5), 2.0);
+    }
+
+    #[test]
+    fn liquid_initial_obstacle_speed_rejects_nonfinite_inputs_and_overflow() {
+        for interval in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            assert_eq!(initial_obstacle(eligible_vertex()).initial_clock_obstacle_speed(interval), -1.0);
+        }
+        for field in 0..6 {
+            for invalid in [f32::NAN, f32::INFINITY] {
+                let mut vertex = eligible_vertex();
+                let values = match field {
+                    0 => &mut vertex.position,
+                    1 => &mut vertex.centroid,
+                    2 => &mut vertex.velocity,
+                    3 => &mut vertex.angular_velocity,
+                    4 => &mut vertex.acceleration,
+                    5 => &mut vertex.angular_acceleration,
+                    _ => unreachable!(),
+                };
+                values[0] = invalid;
+                assert_eq!(initial_obstacle(vertex).initial_clock_obstacle_speed(0.5), -1.0, "field {field}");
+            }
+        }
+        let mut vertex = eligible_vertex();
+        vertex.velocity = [f32::MAX, f32::MAX, 0.0, 0.0];
+        assert_eq!(initial_obstacle(vertex).initial_clock_obstacle_speed(0.5), -1.0);
+    }
+
+    #[test]
+    fn liquid_initial_obstacle_speed_rounds_up_to_a_finite_float() {
+        let mut vertex = eligible_vertex();
+        vertex.velocity = [1.0, 1.0, 0.0, 0.0];
+        let bound = initial_obstacle(vertex).initial_clock_obstacle_speed(0.5);
+        assert!(f64::from(bound) >= 2.0f64.sqrt());
+        assert!(f64::from(f32::from_bits(bound.to_bits() - 1)) < 2.0f64.sqrt());
+    }
+
+    #[test]
+    fn liquid_initial_obstacle_speed_dominates_sampled_affine_point_velocities() {
+        let cross = |a: [f64; 3], b: [f64; 3]| [
+            a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0],
+        ];
+        let mut vertex = eligible_vertex();
+        vertex.position = [3.0, -2.0, 5.0, 1.0];
+        vertex.centroid = [1.0, 2.0, 1.0, 0.0];
+        vertex.velocity = [2.0, -3.0, 1.0, 0.0];
+        vertex.angular_velocity = [-0.5, 0.25, 2.0, 0.0];
+        vertex.acceleration = [-4.0, 1.0, 0.5, 0.0];
+        vertex.angular_acceleration = [1.0, -0.5, 0.25, 0.0];
+        let interval = 1.25;
+        let bound = f64::from(initial_obstacle(vertex).initial_clock_obstacle_speed(interval));
+        let radius = std::array::from_fn(|axis| f64::from(vertex.position[axis]) - f64::from(vertex.centroid[axis]));
+        let angular = cross(std::array::from_fn(|axis| f64::from(vertex.angular_velocity[axis])), radius);
+        let angular_acceleration = cross(std::array::from_fn(|axis| f64::from(vertex.angular_acceleration[axis])), radius);
+        for fraction in [0.0, 0.125, 0.5, 0.875, 1.0] {
+            let time = f64::from(interval) * fraction;
+            let speed = (0..3).map(|axis| {
+                let value = f64::from(vertex.velocity[axis]) + angular[axis]
+                    + time * (f64::from(vertex.acceleration[axis]) + angular_acceleration[axis]);
+                value * value
+            }).sum::<f64>().sqrt();
+            assert!(speed <= bound, "time {time}: {speed} exceeds {bound}");
         }
     }
 

@@ -77,12 +77,14 @@ pub(crate) const ENGINE_CFL: u32 = 5;
 /// GPU scheduler's first step consumes the entire interval. Keep a 1% margin
 /// from its ceil boundary for CPU/GPU length and division rounding. This only
 /// decides whether to omit unused command chains; GPU CFL and max steps stay
-/// unchanged. The caller excludes first-tick prediction, bodies and events.
-fn one_step_cfl_safe(max_speed: f32, interval: f32, cell_size: f32) -> bool {
-    max_speed.is_finite() && max_speed >= 0.0
+/// unchanged. The caller excludes first-tick prediction and events, and the
+/// obstacle bound must describe the same initial state with zero reaction.
+fn one_step_cfl_safe(marker_speed: f32, obstacle_speed: f32, interval: f32, cell_size: f32) -> bool {
+    marker_speed.is_finite() && marker_speed >= 0.0
+        && obstacle_speed.is_finite() && obstacle_speed >= 0.0
         && interval.is_finite() && interval > 0.0
         && cell_size.is_finite() && cell_size > 0.0
-        && f64::from(interval) * (f64::from(max_speed) + manifold_physics::stepping::LIVE_CFL_EPSILON) * 1.01
+        && f64::from(interval) * (f64::from(marker_speed.max(obstacle_speed)) + manifold_physics::stepping::LIVE_CFL_EPSILON) * 1.01
             < f64::from(ENGINE_CFL) * f64::from(cell_size)
 }
 
@@ -2074,6 +2076,7 @@ crate::primitive! {
         solve_level: ScalarF32 optional,
         clock_obstacles: Array(f32) optional,
         clock_obstacle_count: ScalarF32 optional,
+        initial_obstacle_speed: ScalarF32 optional,
         clock_sources: Array(f32) optional,
         clock_source_count: ScalarF32 optional,
         live_hits: Array(f32) optional,
@@ -2492,11 +2495,17 @@ impl Primitive for GpuFlipStep {
         // readbacks, reset/recovery, and an unwired custom graph take the full
         // GPU-adaptive path. Forces applied inside this step do not change the
         // first scheduler decision: it reads the incoming markers. Dynamic
-        // bodies/events and narrow-band restoration remain GPU-owned here.
+        // body reactions later in the step do not retroactively change that
+        // decision. Domain's initial obstacle bound includes current linear,
+        // angular and external acceleration, with reaction cleared before this
+        // first interval. A missing bound retains the full adaptive loop.
+        let obstacle_speed = if obstacle_count == 0 { 0.0 } else {
+            ctx.scalar_or_param("initial_obstacle_speed", -1.0)
+        };
         let one_step = tick_index > 0 && steps == 1.0
-            && live_hit_count == 0 && obstacle_count == 0 && source_count == 0
-            && !dynamic && !narrow_enabled && !restore_narrow
-            && one_step_cfl_safe(ctx.scalar_or_param("retired_max_speed", -1.0), interval_duration as f32, h);
+            && live_hit_count == 0 && source_count == 0
+            && !narrow_enabled && !restore_narrow
+            && one_step_cfl_safe(ctx.scalar_or_param("retired_max_speed", -1.0), obstacle_speed, interval_duration as f32, h);
         let history_slots = if one_step { 1 } else {
             manifold_physics::stepping::LIVE_DEFAULT_MAX_STEPS + live_hit_count
         };
@@ -2651,7 +2660,7 @@ mod tests {
                 let edge = ENGINE_CFL as f32 * cell_size / interval;
                 for fraction in [0.0, 0.5, 0.98, 0.999, 1.0, 1.01, 2.0] {
                     let speed = edge * fraction;
-                    let safe = one_step_cfl_safe(speed, interval, cell_size);
+                    let safe = one_step_cfl_safe(speed, 0.0, interval, cell_size);
                     if safe {
                         let reference = CflPolicy { cell_size: f64::from(cell_size), ..Default::default() }
                             .duration(Seconds(f64::from(interval)), f64::from(speed), CflRestrictions::default());
@@ -2659,16 +2668,18 @@ mod tests {
                         assert_eq!(reference.value.0, f64::from(interval));
                     }
                     assert_eq!(safe, fraction < 0.99, "speed fraction {fraction}");
+                    assert_eq!(one_step_cfl_safe(0.0, speed, interval, cell_size), safe, "obstacles share CFL maximum");
                 }
             }
         }
         for bad in [-1.0, f32::NAN, f32::INFINITY] {
-            assert!(!one_step_cfl_safe(bad, 1.0 / 60.0, 0.1));
-            assert!(!one_step_cfl_safe(0.0, bad, 0.1));
-            assert!(!one_step_cfl_safe(0.0, 1.0 / 60.0, bad));
+            assert!(!one_step_cfl_safe(bad, 0.0, 1.0 / 60.0, 0.1));
+            assert!(!one_step_cfl_safe(0.0, bad, 1.0 / 60.0, 0.1));
+            assert!(!one_step_cfl_safe(0.0, 0.0, bad, 0.1));
+            assert!(!one_step_cfl_safe(0.0, 0.0, 1.0 / 60.0, bad));
         }
-        assert!(!one_step_cfl_safe(0.0, 0.0, 0.1));
-        assert!(!one_step_cfl_safe(0.0, 1.0 / 60.0, 0.0));
+        assert!(!one_step_cfl_safe(0.0, 0.0, 0.0, 0.1));
+        assert!(!one_step_cfl_safe(0.0, 0.0, 1.0 / 60.0, 0.0));
     }
 
     #[test]
