@@ -98,6 +98,7 @@ mod instrumentation;
 mod scene_viewport;
 mod modifier_preview;
 mod modifier_runtime;
+mod gpu_flip_surface;
 pub use modifier_preview::{ModifierPreviewContext, ModifierPreviewError};
 
 #[cfg(all(test, feature = "gpu-proofs"))]

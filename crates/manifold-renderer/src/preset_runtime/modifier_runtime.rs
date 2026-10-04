@@ -81,6 +81,8 @@ impl PresetRuntime {
             Option<crate::node_graph::scene_modifier_expand::LegacyMathViewScope>,
         )>,
     ) -> Result<Self, JsonGeneratorLoadError> {
+        let mut doc = doc;
+        super::gpu_flip_surface::prepare(&mut doc);
         let (render_def, authoring) =
             if manifold_core::scene_modifier_preset::has_scene_modifier_data(&doc)
                 || crate::node_graph::scene_modifier_expand::contains_fragments(&doc)
