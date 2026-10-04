@@ -11,7 +11,7 @@ On stage: water that doesn't squash or fizz. A dam collapses, sloshes and settle
 
 Companions: `LIQUID_SOLVER_SEAM_DESIGN.md` (the scene contract the domain speaks; P7a (GPU FLIP on the contract)), `GPU_WHITEWATER_DESIGN.md` (spray, foam and bubbles on GPU FLIP's face grid), `GPU_FLUID_SURFACE_DESIGN.md` (the surface the particles are meshed into).
 
-The 2026-10-03 [engine parity table](GPU_FLUID_SURFACE_DESIGN.md#2026-10-03-engine-parameter-parity-peters-ruling) is authoritative for current Dam Break defaults. Older measurements below predate that port.
+The [engine parity audit](GPU_FLUID_SURFACE_DESIGN.md#2026-10-03-engine-parameter-parity-peters-ruling) has 2026-10-05 corrections: effective card bindings, seed rejection and jitter must be included. Historical measurements below do not establish current parity. Acceptance now targets native reference agreement; excess wall run-up or tighter volume conservation alone is not a success criterion.
 
 ## 1. The step
 
@@ -91,10 +91,10 @@ Deviations from the engine, each named:
 |---|---|---|
 | pressure cells skip the border cells | every cell | the engine's border cells are solid; our walls are the outermost faces, so every cell is inside |
 | φ_i < 0 for every liquid cell | a water cell's φ taken at most −0.005h, an air cell's at least 0 | with water = φ < 0 both hold already; the clamps are for φ that is not a level set (zero φ, the plain rows) |
-| φ from every particle whose box reaches the cell | a cell with no live particle in its 27 neighbouring bins stays 3h | the solve reads φ only at water cells and their neighbours, which always have one; skipping the outer ring elsewhere took the gather from 1.67 to 1.40 ms a profiled 64³ frame |
+| φ from every particle whose box reaches the cell | Same scatter support, gathered over up to 125 bins | Repaired 2026-10-05: an empty inner ring does not permit skipping ring two. A ring-two-only air cell can neighbour water and affect the ghost-pressure ratio. CPU and GPU tests compare every cell to native scatter. |
 | ε 1e-6 in the velocity update, 1e-9 in the matrix | Same, ported 2026-10-03 | Native constants, including the resulting projection residual; no tuned common epsilon |
 | ghost rows on every level | the finest level and its conjugate gradient only; coarse levels plain Dirichlet | coarse water is all-eight-children water, so a coarse surface has no φ; the V-cycle stays symmetric, only a weaker preconditioner at the surface |
-| no density solve | Disabled in shipped Dam Break (2026-10-03) | The optional existing projection remains available to authored graphs |
+| no density solve | Enabled in current shipped Dam Break | Non-reference correction; removal requires separating its effects from remaining boundary/grid differences (BUG-irim0). |
 | surface tension, density ratio | none here | off in the scenes we race |
 | skips the last inner face of each axis in the velocity update | every inner face | the skip is an engine boundary quirk; our wall faces are their own rule |
 
@@ -223,9 +223,13 @@ The standing wave's period is 2.817 s against 2.80 s. A still pool and the pool 
 | meshed volume, max / last | — | 9.7% / +5.0% | 11.6% / +6.0% | 9.2% / +4.9% |
 | fastest water, cells a step | about 3 | 1.6 | 2.1 | 4.3 |
 
-One step and two now touch the lid about equally, so extra steps no longer make water stick. One step a tick ships (Peter, 2026-10-02); at one step a 64³ splash crosses 4.3 cells, so the CFL guard fires and is reported (section 1). GPU FLIP's wave still runs up faster and higher than the engine's. That is livelier water, not water held at the lid: the lid is empty by frame 104 in both. Matching the engine's damping is not a goal.
+Historical result: one step and two touched the lid about equally, and the lid was empty by frame 104. The faster, higher GPU wave is a reference mismatch, not an acceptance criterion. Matching native motion and damping is part of the current goal.
 
-**Pool height: do not tune toward the engine.** The engine's settled pool stands about 16% above the true depth, because its water gains volume: it marks liquid from a particle distance that reaches about 0.37 cells past the particles, and it has no volume control. GPU FLIP settles at the true depth (3.24 against 3.217 by the parity audit's level measure). The engine's meshed volume is +13.9% at 64³ and +10.4% at 128³ in the race table. A GPU FLIP pool lower than the engine's is correct.
+**Pool height: historical tuning is not a reference test.** The earlier level measure used column maxima plus a quarter-cell allowance; it does not directly measure liquid volume. The GPU mesh harness also read indexed vertices as triangle triples and bypassed smoothing until the 2026-10-05 repair. Its old volume results must not choose solver defaults. The repaired readback has an indexed/triangle-list agreement proof; absolute volume accuracy and native agreement remain separate requirements.
+
+**Bounded reference diagnostic (2026-10-05).** `gpu_flip_native_dam_break_reference` runs an obstacle-free 16³ Dam Break for 90 intervals of 1/60 s without meshing or rendering. Each fresh GPU arm receives complete captured native particle records, including the tiny native jitter and four corner-site exclusions. This isolates the solver; it does not prove production seed parity. Both clocks complete one substep per interval; all 5500 particles survive, with no caps, refused push-outs or unconverged solves.
+
+With wall release off, density off/on measured GPU medians 2.795/4.261 ms and CPU encode medians 3.468/5.236 ms. At 1.5 s, native height p99 was 2.209 m, versus 2.576/2.173 m; mean energy was 6.290 J/kg, versus 6.834/6.312 J/kg. Density improved those measures but worsened the final RMS-speed difference. Wall release changed this case only modestly. These small-grid observations justify investigating the underlying differences before removing correction; they are not 64³ performance or visual evidence.
 
 **The free surface** (`gpu_flip_ghost_fluid_64`, `_refined`: the meshed Dam Break, 300 frames, the same tree with the ghost rows off and on; the engine from `gpu_flip_engine_splash_64` and `gpu_flip_engine_race_refined`). Breakup is the share of particles detached from the main body, over frames 30–150; pieces counts the detached clumps.
 

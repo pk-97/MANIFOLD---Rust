@@ -1200,6 +1200,219 @@ fn gpu_flip_frame_by_node_type() {
     }
 }
 
+/// Small native/GPU comparisons share seed geometry and simulation time.
+mod native_reference {
+    use super::*;
+    use manifold_fluids::{Bounds, CaptureError, Config, FluidWorld, ParticleRecord};
+
+    fn world(scene: WaterScene) -> (FluidWorld, [f32; 3]) {
+        assert!(!scene.obstacle && !scene.surface);
+        let layout = scene.layout();
+        // Native mapping: 1.5 solid cells outside each authored wall.
+        let offset = layout.min.map(|v| v - (1.5 * layout.cell_size) as f32);
+        let local = |p: [f32; 3]| std::array::from_fn(|a| p[a] - offset[a]);
+        let mut world = FluidWorld::new_seeded(Config {
+            cells: layout.cells.map(|n| n + 3), cell_size: layout.cell_size,
+            surface_subdivisions: 0, apic: false,
+        }, 0).expect("native world");
+        world.set_surface_reconstruction_enabled(false).expect("disable meshing");
+        world.set_gravity([0.0, -9.81, 0.0]).expect("gravity");
+        if scene.fill_height > 0.0 {
+            let min = local(layout.min);
+            world.add_fluid_box(Bounds { min, max: [
+                min[0] + layout.size[0], min[1] + scene.fill_height as f32, min[2] + layout.size[2],
+            ] }, [0.0; 3]).expect("pool");
+        }
+        if scene.initial_volume().is_some() {
+            world.add_fluid_box(Bounds {
+                min: local(scene.column.map(|p| p[0] as f32)),
+                max: local(scene.column.map(|p| p[1] as f32)),
+            }, [0.0; 3]).expect("column");
+        }
+        // Native inserts queued fluid at the end of its first step; GPU Run
+        // publishes its fill without stepping. Both now start at rest at t=0.
+        world.step(Seconds(1.0 / 60.0)).expect("insert native seed");
+        (world, offset)
+    }
+
+    fn snapshot(world: &mut FluidWorld, offset: [f32; 3]) -> (Vec<FluidParticle>, Vec<f32>, [u32; 3]) {
+        let (mut records, mut solid) = (Vec::new(), Vec::new());
+        let info = loop {
+            match world.capture_particle_frame(offset, &mut records, &mut solid) {
+                Ok(info) => break info,
+                Err(CaptureError::Capacity { particles, solid: nodes }) => {
+                    records.resize(particles as usize, ParticleRecord::default());
+                    solid.resize(nodes, 0.0);
+                }
+                Err(CaptureError::Fluid(error)) => panic!("native capture: {error}"),
+            }
+        };
+        let particles = records[..info.count as usize].iter().map(|p| FluidParticle {
+            position_radius: p.position_radius, velocity: p.velocity, id: p.id,
+        }).collect();
+        (particles, solid, info.solid_nodes)
+    }
+
+    #[cfg(feature = "water-race-probes")]
+    fn capture(world: &mut FluidWorld, offset: [f32; 3]) -> Vec<FluidParticle> {
+        snapshot(world, offset).0
+    }
+
+    fn seed_site(scene: WaterScene, p: &FluidParticle) -> [u32; 3] {
+        assert_eq!(p.velocity, [0.0; 3], "seed must be at rest");
+        std::array::from_fn(|a| {
+            let site = 2.0 * (f64::from(p.position_radius[a]) - scene.min()[a]) / scene.cell_size() - 0.5;
+            // Native uses .25 * (jitter_factor - .001) * h, even with
+            // jitter_factor=0. Its interior positions differ by <= .00025h.
+            assert!((site - site.round()).abs() < 0.00051, "seed off half-cell lattice: {site}");
+            assert!(site.round() >= 0.0);
+            site.round() as u32
+        })
+    }
+
+    fn seed_sites(scene: WaterScene, particles: &[FluidParticle]) -> Vec<[u32; 3]> {
+        let mut sites: Vec<_> = particles.iter().filter(|p| p.position_radius[3] > 0.0).map(|p| seed_site(scene, p)).collect();
+        sites.sort_unstable();
+        sites
+    }
+
+    #[test]
+    fn native_seed_matches_authored_sites_outside_native_solid() {
+        for n in [8, 16] {
+            let scene = WaterScene::race_dam_break(n);
+            let (mut native, offset) = world(scene);
+            let (particles, solid, nodes) = snapshot(&mut native, offset);
+            let got = seed_sites(scene, &particles);
+            let geometry = scene.geometry();
+            let column = geometry.setup.box_sites;
+            let mut expected = Vec::new();
+            for x in 0..2 * n as u32 {
+                for y in 0..2 * n as u32 {
+                    for z in 0..2 * n as u32 {
+                        let site = [x, y, z];
+                        if y < geometry.setup.pool_sites || (0..3).all(|a| (column[a][0]..column[a][1]).contains(&site[a])) {
+                            expected.push(site);
+                        }
+                    }
+                }
+            }
+            expected.sort_unstable();
+            let authored = expected.len();
+            expected.retain(|site| {
+                // Native seed rejection reads its trilinear solid SDF. The
+                // half-cell phase makes corner rejection differ from GPU fill.
+                let q = site.map(|s| 1.5 + 0.25 + 0.5 * s as f32);
+                let base = q.map(|v| v.floor() as u32);
+                let t: [f32; 3] = std::array::from_fn(|a| q[a] - base[a] as f32);
+                let mut phi = 0.0;
+                for corner in 0..8 {
+                    let c: [u32; 3] = std::array::from_fn(|a| base[a] + ((corner >> a) & 1));
+                    let weight: f32 = (0..3).map(|a| if corner & (1 << a) == 0 { 1.0 - t[a] } else { t[a] }).product();
+                    phi += weight * solid[(c[0] + nodes[0] * (c[1] + nodes[1] * c[2])) as usize];
+                }
+                phi > 0.0
+            });
+            println!("{n}³ native={} authored={authored} excluded by native solid={}", got.len(), authored - expected.len());
+            assert_eq!(got, expected, "{n}³ native sites after native solid rejection");
+        }
+    }
+
+    /// 1.5 simulated seconds at 16³ from captured native particle records:
+    /// observe motion and cost without meshing or rendering. This isolates
+    /// solver behaviour; it does not claim the production fills match.
+    #[cfg(feature = "water-race-probes")]
+    #[test]
+    fn gpu_flip_native_dam_break_reference() {
+        use super::super::gpu_flip_step::set_separate_off;
+        struct SeparationReset;
+        impl Drop for SeparationReset {
+            fn drop(&mut self) { set_separate_off(false); }
+        }
+        fn median(mut values: Vec<f64>) -> f64 {
+            values.sort_by(f64::total_cmp);
+            values[values.len() / 2]
+        }
+        fn measures(particles: &[FluidParticle]) -> [f64; 5] {
+            let stats = particle_stats(particles);
+            assert_eq!(stats.bad, 0);
+            assert!(stats.live > 0);
+            let live: Vec<_> = particles.iter().filter(|p| p.position_radius[3] > 0.0).collect();
+            let mut heights: Vec<_> = live.iter().map(|p| f64::from(p.position_radius[1])).collect();
+            heights.sort_by(f64::total_cmp);
+            let x = live.iter().map(|p| f64::from(p.position_radius[0])).sum::<f64>() / stats.live as f64;
+            let speed2 = live.iter().flat_map(|p| p.velocity).map(|v| f64::from(v).powi(2)).sum::<f64>() / stats.live as f64;
+            [x, stats.mean_height, heights[heights.len() * 99 / 100], speed2.sqrt(), energy(particles, 0.0) / stats.live as f64]
+        }
+        let scene = WaterScene::race_dam_break(16);
+        let (mut native, offset) = world(scene);
+        let seed = capture(&mut native, offset);
+        let sites = seed_sites(scene, &seed);
+        assert!(sites.windows(2).all(|p| p[0] != p[1]), "unique native seed sites");
+        let (mut reference, mut wall_ms) = (Vec::new(), Vec::new());
+        let started = std::time::Instant::now();
+        println!("motion metrics: mean_x, mean_y, y99 (metres), rms_speed (m/s), mean_energy (J/kg)");
+        for frame in 1..=90 {
+            let start = std::time::Instant::now();
+            let stats = native.step(Seconds(1.0 / 60.0)).expect("native step");
+            wall_ms.push(start.elapsed().as_secs_f64() * 1000.0);
+            assert_eq!(stats.substeps, 1, "16³ fixture should not require native CFL subdivision");
+            if frame % 30 == 0 {
+                let particles = capture(&mut native, offset);
+                let measure = measures(&particles);
+                println!("native frame {frame}: n={} metrics={measure:?}", particles.len());
+                reference.push(measure);
+            }
+        }
+        println!("native solver wall median {:.3}ms", median(wall_ms));
+        for (density, separation) in [(false, false), (true, false), (false, true), (true, true)] {
+            // Run owns the test device lock before touching the global lever.
+            let mut run = run_with_retired_speed(WaterScene { volume_projection: density, ..scene }, true);
+            // The seed-only frame has zero velocity/history, no accepted
+            // steps and no births. Replace its persistent particle state,
+            // including radius/id, while retaining zero unused capacity.
+            // The step iterates capacity and skips nonpositive live radii.
+            let mut common = vec![FluidParticle { position_radius: [0.0; 4], velocity: [0.0; 3], id: 0 }; scene.particles() as usize];
+            common[..seed.len()].copy_from_slice(&seed);
+            let state = output_of(&run.plan, node_named(&run.graph, "state"), "out");
+            let buffer = run.exec.host_array_buffer(&run.graph, &run.plan, state).expect("dedicated particle state");
+            // SAFETY: fill frame completed; dedicated shared state is large
+            // enough and no GPU command is outstanding.
+            assert!(buffer.size as usize >= std::mem::size_of_val(common.as_slice()));
+            unsafe { buffer.write(0, bytemuck::cast_slice(&common)); }
+            assert_eq!(bytemuck::cast_slice::<_, u8>(&run.particles()), bytemuck::cast_slice::<_, u8>(&common));
+            let _reset = SeparationReset;
+            set_separate_off(!separation);
+            let (mut gpu_ms, mut encode_ms) = (Vec::new(), Vec::new());
+            let (mut capped, mut refused, mut unconverged) = (0u64, 0u64, 0u64);
+            for frame in 1..=90 {
+                assert!(started.elapsed().as_secs() < 120, "bounded reference probe exceeded 120s");
+                let (gpu, cpu) = run.timed_frame();
+                assert!(gpu.is_finite() && gpu > 0.0 && cpu.is_finite());
+                gpu_ms.push(gpu);
+                encode_ms.push(cpu);
+                let stats = run.liquid_stats();
+                assert_eq!(stats.nonfinite, 0);
+                if frame == 1 { assert_eq!(stats.live as usize, seed.len(), "first tick consumes native live count"); }
+                let clock: Vec<u32> = run.read(STEP_NODE, "clock_status", 8);
+                assert_eq!(clock[1], (1.0f32 / 60.0).to_bits(), "complete reference interval");
+                assert_eq!(clock[2], 0, "no remaining time");
+                assert_eq!(clock[6], 1, "same single substep as native");
+                assert_eq!((clock[4], clock[5]), (0, 0), "no clock cap or invalid input");
+                capped += u64::from(stats.speed_capped);
+                refused += u64::from(stats.push_refused);
+                unconverged += u64::from(stats.unconverged);
+                if frame % 30 == 0 {
+                    let particles = run.particles();
+                    let measure = measures(&particles);
+                    let delta: [f64; 5] = std::array::from_fn(|a| measure[a] - reference[frame / 30 - 1][a]);
+                    println!("gpu density={density} separation={separation} frame {frame}: n={} metrics={measure:?} delta={delta:?}", stats.live);
+                }
+            }
+            println!("gpu density={density} separation={separation}: gpu median {:.3}ms encode median {:.3}ms capped={capped} refused={refused} unconverged={unconverged}", median(gpu_ms), median(encode_ms));
+        }
+    }
+}
+
 /// The measurement must follow the rendered topology and smoothing, in both
 /// supported mesh layouts. One fill frame suffices; no simulation or render.
 #[test]

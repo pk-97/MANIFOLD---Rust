@@ -41,9 +41,21 @@ is the slot-9 work this design builds on.
 
 Peter selected FLIP Fluids as the reference. This supersedes the pending look
 decision in the earlier audit and any historical tuning recommendations below.
-The reference is **the engine node** in `WaterDamBreak.json`, then vendored engine
-defaults where that node omits a value. Its metadata controls contain older defaults
-and are not the initial node state. Baseline: `4208155f5`.
+The reference is the effective instantiated `WaterDamBreak.json`, then vendored
+engine defaults for omitted values. **2026-10-05 correction:** bindings apply
+their `defaultValue` in `preset_runtime/build.rs` and `node_graph/bound_graph.rs`
+unless `defaultMirrorsNodeParam` is set. Native Dam Break therefore starts at
+particle scale **2.2**, overriding its node value 3.0; GPU Dam Break starts at
+3.0. Native Surface Detail 1 means subdivision 2, while GPU defaults to Detail
+0/subdivision 1. The earlier node-only audit missed these differences.
+
+Native seed capture also rejects four bottom-corner sites at both 8³ and 16³
+through its interpolated solid field; GPU fill keeps them. Native interior
+markers jitter by up to 0.00025h even at jitter factor zero. The new CPU seed
+proof checks actual native capture against authored sites and sampled solid.
+Boundary/grid matching remains open in BUG-g75v.17. The table below is the
+historical `4208155f5` audit, not a current claim of complete default or
+behavioural parity.
 
 This is a source audit, not a GPU or visual parity claim. Counts are table rows
 (related values are grouped): **43 matched, 19 ported, 2 partly ported, 2 deviations, 3 unported**. The unported rows mean full engine
