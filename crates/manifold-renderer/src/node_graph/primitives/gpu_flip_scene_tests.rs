@@ -119,6 +119,8 @@ impl Run {
         if scene.surface {
             read.push((node_ending(&graph, "liquid_offsets"), "extent"));
             read.push((node_ending(&graph, "liquid_mesh"), "vertices"));
+            read.push((node_ending(&graph, "liquid_mesh"), "indices"));
+            read.push((node_ending(&graph, "liquid_normals"), "out"));
         }
         if scene.faces {
             read.extend(FACE_NODES.map(|name| (node_named(&graph, name), "out")));
@@ -138,13 +140,24 @@ impl Run {
         run
     }
 
-    /// The surface mesh's live triangles.
+    /// The rendered surface's live triangles, after smoothing. The shipped
+    /// surface shares vertices across triangles; the index buffer supplies
+    /// topology, not consecutive triples of unique vertices.
     pub(super) fn surface(&self) -> Vec<[[f32; 3]; 3]> {
         // The running total's `extent` starts with the grand total: triangles.
         let extent: Vec<u32> = self.read_at(node_ending(&self.graph, "liquid_offsets"), "extent", 1);
+        let mesh = node_ending(&self.graph, "liquid_mesh");
+        let count = 3 * extent[0] as usize;
+        let indexed = self.graph.wires_into(mesh).any(|wire| wire.to.1 == "edge_scan");
+        let indices: Vec<u32> = if indexed {
+            self.read_at(mesh, "indices", count)
+        } else {
+            (0..count as u32).collect()
+        };
+        let vertex_count = indices.iter().max().map_or(0, |&index| index as usize + 1);
         let vertices: Vec<crate::generators::mesh_common::MeshVertex> =
-            self.read_at(node_ending(&self.graph, "liquid_mesh"), "vertices", 3 * extent[0] as usize);
-        vertices.chunks_exact(3).map(|t| [0, 1, 2].map(|i| t[i].position)).collect()
+            self.read_at(node_ending(&self.graph, "liquid_normals"), "out", vertex_count);
+        indices.chunks_exact(3).map(|triangle| [0, 1, 2].map(|i| vertices[triangle[i] as usize].position)).collect()
     }
 
     /// The volume the surface mesh holds in the tank and its free surface's area.
@@ -1185,6 +1198,40 @@ fn gpu_flip_frame_by_node_type() {
     for (ty, ms) in by_type.iter().take(15) {
         println!("GPU FLIP frame by type:   {ty:32} {ms:7.2} ms");
     }
+}
+
+/// The measurement must follow the rendered topology and smoothing, in both
+/// supported mesh layouts. One fill frame suffices; no simulation or render.
+#[test]
+fn gpu_flip_surface_readback_matches_triangle_list() {
+    let scene = WaterScene::still_pool(8).with_surface();
+    let indexed = Run::new(scene);
+    let mut registry = PrimitiveRegistry::with_builtin();
+    register_substep_test_nodes(&mut registry);
+    let mut graph = water_def(scene).into_graph(&registry, &Default::default()).expect("water graph");
+    for name in ["liquid_mesh", "liquid_smooth_mesh", "liquid_normals"] {
+        let node = node_ending(&graph, name);
+        assert!(graph.disconnect((node, "edge_scan")).is_some());
+    }
+    let plain = Run::with_graph(scene, graph);
+    let (a, b) = (indexed.surface(), plain.surface());
+    assert!(!a.is_empty(), "seeded pool must have a surface");
+    assert_eq!(a.len(), b.len());
+    for (triangle, (a, b)) in a.iter().zip(&b).enumerate() {
+        for (a, b) in a.iter().flatten().zip(b.iter().flatten()) {
+            assert!(a.is_finite() && b.is_finite());
+            assert!((a - b).abs() < 1e-5, "triangle {triangle}: indexed {a}, triangle-list {b}");
+        }
+    }
+    let (volume, area) = indexed.surface_measure();
+    let (plain_volume, plain_area) = plain.surface_measure();
+    assert!(volume > 0.0 && area > 0.0);
+    assert!((volume - plain_volume).abs() < 1e-5);
+    assert!((area - plain_area).abs() < 1e-5);
+    let raw: Vec<crate::generators::mesh_common::MeshVertex> =
+        plain.read_at(node_ending(&plain.graph, "liquid_mesh"), "vertices", 3 * b.len());
+    assert!(raw.iter().zip(b.iter().flatten()).any(|(raw, smoothed)| raw.position != *smoothed),
+        "fixture must distinguish raw and smoothed positions");
 }
 
 /// The volume oracle on water that must not change: a resting pool's meshed

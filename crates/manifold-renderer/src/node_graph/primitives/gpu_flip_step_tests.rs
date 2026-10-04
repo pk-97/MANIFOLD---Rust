@@ -663,22 +663,9 @@ fn snap(phi: Vec<f64>) -> Vec<f64> {
     phi.into_iter().map(|v| if v.abs() < eps { if v > 0.0 { eps } else { -eps } } else { v }).collect()
 }
 
-/// Whether a live particle sits in cell `c` or its 26 neighbours.
-fn has_near_particle(c: usize, sorted: &[FluidParticle], ranges: &[CellRange]) -> bool {
-    let p = cell_coords(c);
-    (p[2].saturating_sub(1)..=(p[2] + 1).min(N[2] - 1)).any(|z| {
-        (p[1].saturating_sub(1)..=(p[1] + 1).min(N[1] - 1)).any(|y| {
-            (p[0].saturating_sub(1)..=(p[0] + 1).min(N[0] - 1)).any(|x| {
-                let r = ranges[cell_index([x, y, z])];
-                sorted[r.start as usize..(r.start + r.count) as usize].iter().any(|q| q.position_radius[3] > 0.0)
-            })
-        })
-    })
-}
-
 /// The particle distance pass's own reading: the min over the 125 bins around
 /// each cell, from the sort's ranges, keeping a particle only when the cell
-/// is inside its box; 3h with no live particle in the 27 bins.
+/// is inside its box; 3h when no particle contributes.
 fn cpu_gather_distance(sorted: &[FluidParticle], ranges: &[CellRange]) -> Vec<f64> {
     let h = f64::from(H);
     let phi = (0..cell_len())
@@ -686,9 +673,6 @@ fn cpu_gather_distance(sorted: &[FluidParticle], ranges: &[CellRange]) -> Vec<f6
             let p = cell_coords(c);
             let centre: [f64; 3] = std::array::from_fn(|a| f64::from(MIN[a]) + (p[a] as f64 + 0.5) * h);
             let mut phi = 3.0 * h;
-            if !has_near_particle(c, sorted, ranges) {
-                return phi;
-            }
             for z in p[2].saturating_sub(2)..=(p[2] + 2).min(N[2] - 1) {
                 for y in p[1].saturating_sub(2)..=(p[1] + 2).min(N[1] - 1) {
                     for x in p[0].saturating_sub(2)..=(p[0] + 2).min(N[0] - 1) {
@@ -713,42 +697,47 @@ fn cpu_gather_distance(sorted: &[FluidParticle], ranges: &[CellRange]) -> Vec<f6
     snap(phi)
 }
 
-/// The gather is the engine's scatter, cell for cell, wherever a live
-/// particle sits within one cell; elsewhere it reads 3h. A cell holding a
-/// live particle is always inside the liquid. A particle 0.499h from its
-/// cell's centre along each axis (0.0017h inside its ball's reach) puts
-/// that cell at −0.005h and the empty cell across the corner, 0.0017h
-/// outside, at +0.005h. In "boxed", cell (3, 1, 1) has a particle in its 27
-/// bins at 1.73h, and one two cells out along x at 1.53h whose box stops at
-/// cell 2: the cell reads 1.73h, as the engine's does.
-#[test]
-fn gpu_flip_particle_distance_is_the_engines_level_set() {
-    let h = f64::from(H);
+fn distance_fixtures() -> Vec<(&'static str, Vec<FluidParticle>)> {
     let particle = |q: [f32; 3]| FluidParticle { position_radius: [q[0], q[1], q[2], 0.08], velocity: [0.0; 3], id: 1 };
     let centre = |p: [usize; 3]| -> [f32; 3] { std::array::from_fn(|a| MIN[a] + (p[a] as f32 + 0.5) * H) };
     let at = |cells: [f32; 3]| -> [f32; 3] { std::array::from_fn(|a| MIN[a] + cells[a] * H) };
     let corner = centre([2, 1, 1]).map(|v| v + 0.499 * H);
-    let sets = [
+    vec![
         ("random", random_particles(0xd157, 70)),
         ("corner", vec![particle(corner)]),
         ("boxed", vec![particle(at([2.001, 0.001, 0.001])), particle(at([1.1, 1.5, 1.5]))]),
-    ];
-    for (name, particles) in sets {
+        ("ring_two_only", vec![particle(at([2.05, 2.5, 1.5]))]),
+    ]
+}
+
+/// CPU gather must reproduce the native scatter in every cell, including
+/// air cells with only ring-two contributors beside a wet cell. Those air
+/// distances set the ghost-fluid pressure ratio.
+#[test]
+fn particle_distance_gather_matches_native_scatter() {
+    for (name, particles) in distance_fixtures() {
         let (sorted, ranges) = cpu_sort(&particles);
-        let want = cpu_gather_distance(&sorted, &ranges);
+        let gather = cpu_gather_distance(&sorted, &ranges);
         let engine = cpu_scatter_distance(&particles);
-        let mut far = 0;
-        for (c, (a, b)) in want.iter().zip(&engine).enumerate() {
-            if has_near_particle(c, &sorted, &ranges) {
-                assert!((a - b).abs() < 1e-12, "{name} cell {:?}: gather {a} vs scatter {b}", cell_coords(c));
-            } else {
-                assert_eq!(*a, 3.0 * h, "{name} cell {:?}: no particle within a cell", cell_coords(c));
-                far += usize::from(*b < 3.0 * h);
-            }
+        for (c, (a, b)) in gather.iter().zip(&engine).enumerate() {
+            assert!((a - b).abs() < 1e-12, "{name} cell {:?}: gather {a} vs scatter {b}", cell_coords(c));
         }
-        if name == "corner" {
-            assert!(far > 0, "the lone particle reaches cells two out, which read 3h here");
+        if name == "ring_two_only" {
+            let h = f64::from(H);
+            assert!((engine[cell_index([0, 2, 1])] - (1.55 * h - sdf_radius())).abs() < 1e-6);
+            assert!(engine[cell_index([1, 2, 1])] < 0.0, "adjacent cell must be wet");
         }
+    }
+}
+
+/// GPU distances match the native scatter oracle in every cell. Fixtures
+/// exercise zero snapping, exact scatter-box support, and sparse ring two.
+#[test]
+fn gpu_flip_particle_distance_is_the_engines_level_set() {
+    let h = f64::from(H);
+    for (name, particles) in distance_fixtures() {
+        let (sorted, ranges) = cpu_sort(&particles);
+        let want = cpu_scatter_distance(&particles);
         let step = StepParams { capacity: sorted.len() as u32, ..lattice() };
         let mut pass = Pass::new();
         let threads = pass.every_tile();

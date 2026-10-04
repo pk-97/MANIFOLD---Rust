@@ -1764,7 +1764,8 @@ fn divergence(@builtin(global_invocation_id) gid: vec3<u32>) {
 // the cell's centre, each live particle a ball of radius r = √3·h/2, the
 // engine's scatter box [floor((q − 2r − min) / h), floor((q + 2r − min) / h)]
 // taken as a gather. Starts at 3h; reads the 27 cells around the cell, then
-// the ring two out when a particle was near and φ is still over 1.5h − r. A
+// the ring two out when φ is still over 1.5h − r. Even an empty first ring
+// can have a contributing particle in ring two. A
 // value within 0.005h of zero moves to ±0.005h by its sign, zero to −0.005h.
 @compute @workgroup_size(256)
 fn particle_distance(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -1785,9 +1786,8 @@ fn particle_distance(@builtin(global_invocation_id) gid: vec3<u32>) {
     let search = 2.0 * radius;
     let slots = u.capacity;
     var distance = 3.0 * h;
-    var near = false;
     for (var ring = 1; ring <= 2; ring = ring + 1) {
-        if ring == 2 && (!near || distance <= 1.5 * h - radius) {
+        if ring == 2 && distance <= 1.5 * h - radius {
             break;
         }
         let first = max(p - vec3<i32>(ring), vec3<i32>(0));
@@ -1807,7 +1807,6 @@ fn particle_distance(@builtin(global_invocation_id) gid: vec3<u32>) {
                         if !(particle.position_radius.w > 0.0) {
                             continue;
                         }
-                        near = true;
                         let q = particle.position_radius.xyz;
                         let low = vec3<i32>(floor((q - vec3<f32>(search) - u.box_min) / h));
                         let high = vec3<i32>(floor((q + vec3<f32>(search) - u.box_min) / h));
