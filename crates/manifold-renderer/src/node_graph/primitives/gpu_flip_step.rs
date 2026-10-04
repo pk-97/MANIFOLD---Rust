@@ -278,6 +278,24 @@ pub(super) fn gating() -> bool {
     }
 }
 
+// The proof compares the no-body clear with the existing solid kernels.
+// This switch and its load are absent from production builds.
+#[cfg(all(test, feature = "gpu-proofs"))]
+static FORCE_SOLID_VELOCITY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+pub(crate) fn set_force_solid_velocity(on: bool) {
+    FORCE_SOLID_VELOCITY.store(on, std::sync::atomic::Ordering::SeqCst);
+}
+
+fn solid_velocity_needed(body_count: i32) -> bool {
+    #[cfg(all(test, feature = "gpu-proofs"))]
+    if FORCE_SOLID_VELOCITY.load(std::sync::atomic::Ordering::SeqCst) {
+        return true;
+    }
+    body_count > 0
+}
+
 /// The lattice's cell-sized arrays (`LatticeBuffers`): water, φ, the
 /// right-hand side, the pressure, the pocket state and label, the solve
 /// mask, the contact mask and the let-go set.
@@ -685,6 +703,8 @@ pub(crate) struct StepState {
     /// The lattice's cell arrays and gathered faces hold canonical values
     /// everywhere (`tiles_fill` ran); false until the first step on a lattice.
     filled: bool,
+    /// No-body solid scratch stays zero until a body pass writes it.
+    solid_velocity_is_zero: bool,
     sorted: Option<GpuBuffer>,
     /// The emission flags' scan, one word a half-cell site.
     emit_scan: PrefixScan,
@@ -1090,6 +1110,7 @@ impl StepState {
             self.lattice = None;
             self.tiles = None;
             self.filled = false;
+            self.solid_velocity_is_zero = false;
             self.lattice = Some(LatticeBuffers::new(device, cells)?);
         }
         if self.tiles.as_ref().is_none_or(|t| t.ring_max != ring_max) {
@@ -1556,33 +1577,43 @@ impl StepState {
             "gpu_flip.step.forces",
         );
         enc.dispatch_compute(&pipes.open, &[buffer(46, step.clock_plan), uniform(&base), buffer(9, &l.corners), buffer(4, &l.s)], face_groups, "gpu_flip.step.open_fractions");
-        enc.dispatch_compute(
-            &pipes.solid_velocity,
-            &[
-                uniform(&base),
-                buffer(10, &l.s),
-                buffer(4, &l.b),
-                buffer(14, step.bodies),
-                buffer(15, step.shapes),
-                buffer(16, step.atlas),
-                buffer(21, step.reaction),
-                buffer(46, step.clock_plan),
-            ],
-            face_groups,
-            "gpu_flip.step.solid_velocity",
-        );
-        // The samples carried out over the open faces, every solid alike
-        // (meshlevelset.cpp normalizeVelocityGrid): an odd layer count from
-        // the scratch ends in `l.v`.
-        const _: () = assert!(SOLID_LAYERS % 2 == 1);
-        for layer in 0..SOLID_LAYERS {
-            let (from, to) = if layer % 2 == 0 { (&l.b, &l.v) } else { (&l.v, &l.b) };
+        if solid_velocity_needed(p.body_count) {
+            self.solid_velocity_is_zero = false;
             enc.dispatch_compute(
-                &pipes.solid_extrapolate,
-                &[uniform(&base), buffer(3, from), buffer(4, to), buffer(46, gate_plan)],
+                &pipes.solid_velocity,
+                &[
+                    uniform(&base),
+                    buffer(10, &l.s),
+                    buffer(4, &l.b),
+                    buffer(14, step.bodies),
+                    buffer(15, step.shapes),
+                    buffer(16, step.atlas),
+                    buffer(21, step.reaction),
+                    buffer(46, step.clock_plan),
+                ],
                 face_groups,
-                "gpu_flip.step.solid_extrapolate",
+                "gpu_flip.step.solid_velocity",
             );
+            // The samples carried out over the open faces, every solid alike
+            // (meshlevelset.cpp normalizeVelocityGrid): an odd layer count
+            // from the scratch ends in `l.v`.
+            const _: () = assert!(SOLID_LAYERS % 2 == 1);
+            for layer in 0..SOLID_LAYERS {
+                let (from, to) = if layer % 2 == 0 { (&l.b, &l.v) } else { (&l.v, &l.b) };
+                enc.dispatch_compute(
+                    &pipes.solid_extrapolate,
+                    &[uniform(&base), buffer(3, from), buffer(4, to), buffer(46, gate_plan)],
+                    face_groups,
+                    "gpu_flip.step.solid_extrapolate",
+                );
+            }
+        } else if !self.solid_velocity_is_zero {
+            // Domain walls have zero velocity and friction. The extrapolation
+            // known-mask is unused by all remaining no-body consumers. Clear
+            // after allocation or body removal; no-body consumers never write
+            // this scratch, so later intervals can retain its zero contents.
+            enc.clear_buffer(&l.v);
+            self.solid_velocity_is_zero = true;
         }
         if solids {
             over_c(

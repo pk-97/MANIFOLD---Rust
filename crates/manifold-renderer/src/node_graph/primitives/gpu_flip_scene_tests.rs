@@ -1532,6 +1532,108 @@ fn gpu_flip_one_active_slot_matches_six_recorded_slots_cost_proof() {
     }
 }
 
+/// With no bodies, clearing solid velocity equals its original six passes,
+/// including inactive slots. Time ordinary replayed frames without profiling.
+#[test]
+fn gpu_flip_no_body_solid_clear_matches_six_passes() {
+    const WARMUP: usize = 4;
+    const MEASURED: usize = 8;
+    struct ForceSolidVelocity;
+    impl Drop for ForceSolidVelocity {
+        fn drop(&mut self) {
+            super::gpu_flip_step::set_force_solid_velocity(false);
+        }
+    }
+    fn original_frame(run: &mut Run) -> (f64, f64) {
+        super::gpu_flip_step::set_force_solid_velocity(true);
+        let _reset = ForceSolidVelocity;
+        run.timed_frame()
+    }
+    fn median(values: &mut [f64]) -> f64 {
+        values.sort_by(f64::total_cmp);
+        (values[values.len() / 2 - 1] + values[values.len() / 2]) * 0.5
+    }
+    super::gpu_flip_step::set_force_solid_velocity(false);
+    for (n, fresh) in [(16, true), (16, false), (64, true)] {
+        let scene = WaterScene::still_pool(n).with_steps(1);
+        let mut optimized = run_with_retired_speed(scene, fresh);
+        let mut original = run_with_retired_speed(scene, fresh);
+        optimized.set_encode_replay(true);
+        original.set_encode_replay(true);
+        let mut optimized_gpu = Vec::with_capacity(MEASURED);
+        let mut optimized_cpu = Vec::with_capacity(MEASURED);
+        let mut original_gpu = Vec::with_capacity(MEASURED);
+        let mut original_cpu = Vec::with_capacity(MEASURED);
+        let mut warm_replay = [manifold_gpu::GpuReplayStats::default(); 2];
+        for frame in 0..WARMUP + MEASURED {
+            let (optimized_time, original_time) = if frame % 2 == 0 {
+                (optimized.timed_frame(), original_frame(&mut original))
+            } else {
+                let original_time = original_frame(&mut original);
+                (optimized.timed_frame(), original_time)
+            };
+            for (label, time) in [("clear", optimized_time), ("six passes", original_time)] {
+                assert!(time.0.is_finite() && time.0 > 0.0,
+                    "{n}³ fresh {fresh} tick {frame}, {label}: positive finite GPU chunk span, got {}", time.0);
+                assert!(time.1.is_finite() && time.1 > 0.0,
+                    "{n}³ fresh {fresh} tick {frame}, {label}: positive finite CPU encode time, got {}", time.1);
+            }
+            if frame >= WARMUP {
+                optimized_gpu.push(optimized_time.0);
+                optimized_cpu.push(optimized_time.1);
+                original_gpu.push(original_time.0);
+                original_cpu.push(original_time.1);
+            }
+            let a: Vec<u32> = optimized.read(STEP_NODE, "clock_status", 8);
+            let b: Vec<u32> = original.read(STEP_NODE, "clock_status", 8);
+            assert_eq!(a, b, "{n}³ fresh {fresh} tick {frame}: complete clock status differs");
+            let final_dt = if fresh && frame > 0 { 1.0f32 / 60.0 } else { 0.0 };
+            assert_eq!(a[0], final_dt.to_bits(), "{n}³ fresh {fresh} tick {frame}: expected recording path");
+            assert_eq!(a[1], (1.0f32 / 60.0).to_bits(), "{n}³ fresh {fresh} tick {frame}: exact completed time");
+            assert_eq!(a[2], 0.0f32.to_bits(), "{n}³ fresh {fresh} tick {frame}: no unfinished interval");
+            assert_eq!(a[6], 1, "{n}³ fresh {fresh} tick {frame}: exactly one active step");
+            assert_eq!((a[4], a[5]), (0, 0), "{n}³ fresh {fresh} tick {frame}: no cap or nonfinite input");
+            let optimized_step: Vec<FluidParticle> = optimized.read(STEP_NODE, "out", scene.particles() as usize);
+            let original_step: Vec<FluidParticle> = original.read(STEP_NODE, "out", scene.particles() as usize);
+            for (what, a, b) in [
+                ("published particles", optimized.particles(), original.particles()),
+                ("step particles", optimized_step, original_step),
+            ] {
+                assert_eq!(bytemuck::cast_slice::<_, u32>(&a), bytemuck::cast_slice::<_, u32>(&b),
+                    "{n}³ fresh {fresh} tick {frame}: {what} bits differ");
+                for particles in [&a, &b] {
+                    let stats = particle_stats(particles);
+                    assert_eq!((stats.live, stats.bad), (scene.particles() as usize, 0),
+                        "{n}³ fresh {fresh} tick {frame}: every {what} record remains live and finite");
+                }
+            }
+            let (a, b) = (optimized.faces(), original.faces());
+            assert_eq!(bytemuck::cast_slice::<_, u32>(&a), bytemuck::cast_slice::<_, u32>(&b),
+                "{n}³ fresh {fresh} tick {frame}: face bits differ");
+            let a: Vec<u32> = optimized.read("stats", "stats_out", LIQUID_STATS_WORDS as usize);
+            let b: Vec<u32> = original.read("stats", "stats_out", LIQUID_STATS_WORDS as usize);
+            assert_eq!(a, b, "{n}³ fresh {fresh} tick {frame}: full liquid stats differ");
+            let capped_words = 2 * scene.particles() as usize + SOLVER_WORDS as usize;
+            let a: Vec<u32> = optimized.read(STEP_NODE, "capped", capped_words);
+            let b: Vec<u32> = original.read(STEP_NODE, "capped", capped_words);
+            assert_eq!(a, b, "{n}³ fresh {fresh} tick {frame}: full capped words differ");
+            if frame + 1 == WARMUP {
+                warm_replay = [optimized.replay_stats(), original.replay_stats()];
+            }
+        }
+        println!(
+            "GPU FLIP {n}³ no-body solid velocity, fresh {fresh}, {WARMUP} warmup + {MEASURED} measured ticks/run: median clear GPU {:.3} ms CPU {:.3} ms; six passes GPU {:.3} ms CPU {:.3} ms",
+            median(&mut optimized_gpu), median(&mut optimized_cpu), median(&mut original_gpu), median(&mut original_cpu),
+        );
+        for (label, run, warm) in [("clear", &optimized, warm_replay[0]), ("six passes", &original, warm_replay[1])] {
+            let replay = run.replay_stats();
+            println!("GPU FLIP {n}³ no-body solid velocity, fresh {fresh}, {label} replay: after warmup {warm:?}; final {replay:?}");
+            assert!(replay.replayed > warm.replayed && replay.segments_replayed > warm.segments_replayed,
+                "{n}³ fresh {fresh}, {label}: measured ticks must exercise ordinary encode replay");
+        }
+    }
+}
+
 #[test]
 fn gpu_flip_fresh_speed_preserves_force_changes_and_multiple_intervals() {
     let scene = WaterScene::still_pool(32).with_steps(1);
