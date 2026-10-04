@@ -12,6 +12,7 @@ use manifold_fluids::{
     WhitewaterParticle,
 };
 use manifold_physics::FieldValue;
+use manifold_physics::clock::ClockFrame;
 use manifold_physics::stepping::StepInterval;
 use manifold_physics::input::{
     AppliedEvent, EventQueue, HistoryWrite, InputHistory, Timestamped, input_span,
@@ -395,13 +396,9 @@ struct Request {
     settings: FluidSettings,
     initial: FluidControls,
     start_tick: u64,
+    start_time: Seconds,
     count: usize,
-    interval: Option<StepInterval>,
-    /// One Sim Rate interval of simulated time, which a live span's marker
-    /// speed limit is measured against, so a late span removes only what one
-    /// interval removes. None for export and fixed ticks: they measure their
-    /// own step, as the engine does.
-    speed_limit_interval: Option<Seconds>,
+    schedule: Option<ClockFrame>,
     history: Vec<Sample>,
     impulses: Vec<AppliedEvent<ResolvedNodeImpulse>>,
     role_setup: Arc<roles::Setup>,
@@ -413,6 +410,22 @@ struct Request {
     coupled: Option<coupled::Request>,
     timing: take::TimingHandoff,
     playback: Option<PlaybackRequest>,
+}
+
+impl Request {
+    fn interval(&self, tick: u64) -> Option<StepInterval> {
+        let frame = self.schedule.as_ref()?;
+        frame.interval(tick.checked_sub(frame.first_sequence)?)
+    }
+
+    fn particle_time(&self, completed_count: usize) -> f64 {
+        if completed_count == 0 {
+            return self.start_time.0;
+        }
+        let tick = self.start_tick + completed_count as u64;
+        self.interval(tick - 1)
+            .map_or(tick as f64 * TICK, |interval| interval.end.0)
+    }
 }
 
 struct Reply {
@@ -524,7 +537,8 @@ pub struct FluidRuntime {
     reset_requested: bool,
     target_time: f64,
     clock: manifold_physics::clock::SimulationClock,
-    export_frames: VecDeque<manifold_physics::clock::ClockFrame>,
+    accepted_frames: VecDeque<manifold_physics::clock::ClockFrame>,
+    dropped_time: super::physics_metrics::DroppedTimeTracker,
     held: super::physics::HeldClock,
     epoch: u64,
     cancel_epoch: Arc<AtomicU64>,
@@ -579,7 +593,8 @@ impl Default for FluidRuntime {
             reset_requested: false,
             target_time: 0.0,
             clock: Default::default(),
-            export_frames: VecDeque::with_capacity(HISTORY_CAPACITY),
+            accepted_frames: VecDeque::with_capacity(HISTORY_CAPACITY),
+            dropped_time: Default::default(),
             held: Default::default(),
             epoch: 0,
             cancel_epoch: Arc::new(AtomicU64::new(0)),
@@ -699,7 +714,8 @@ impl FluidRuntime {
         }
         self.target_time = 0.0;
         self.clock.restart();
-        self.export_frames.clear();
+        self.accepted_frames.clear();
+        self.dropped_time.reset();
         self.held = Default::default();
         self.completed_tick = 0;
         self.completed_time = 0.0;
@@ -1048,7 +1064,15 @@ impl FluidRuntime {
         // Source/history samples map inputs to simulation time without
         // consuming frame sequences. Only a render or an explicit offline
         // drain accepts intervals that the worker will actually execute.
-        let clock_frame = if self.cache_mode != CacheMode::Playback
+        while self.accepted_frames.front().is_some_and(|frame|
+            self.completed_tick >= frame.first_sequence + u64::from(frame.ticks))
+        {
+            self.accepted_frames.pop_front();
+        }
+        let can_accept = self.cache_mode != CacheMode::Live
+            || super::physics::offline_simulation()
+            || (!self.busy && self.accepted_frames.is_empty());
+        let clock_frame = if self.cache_mode != CacheMode::Playback && can_accept
             && (!super::physics::authored_sample_only()
                 || super::physics::history_drain_requested())
         {
@@ -1063,21 +1087,34 @@ impl FluidRuntime {
         } else {
             None
         };
-        if self.cache_mode == CacheMode::Live && super::physics::offline_simulation()
+        if self.cache_mode == CacheMode::Live
             && let Some(frame) = clock_frame.as_ref().filter(|frame| frame.ticks > 0)
         {
-            if self.export_frames.back_mut().is_some_and(|previous| previous.append(frame)) {
+            if self.accepted_frames.back_mut().is_some_and(|previous| previous.append(frame)) {
                 // Adjacent observations share one retained simulation schedule.
-            } else if self.export_frames.len() == HISTORY_CAPACITY {
-                return Err("Water export interval history is full; drain accepted intervals before observing more transport".into());
+            } else if self.accepted_frames.len() == HISTORY_CAPACITY {
+                return Err("Water accepted interval history is full; drain accepted intervals before observing more transport".into());
             } else {
-                self.export_frames.push_back(frame.clone());
+                self.accepted_frames.push_back(frame.clone());
             }
         }
-        if clock_frame.as_ref().is_some_and(|frame| frame.numerical_error)
-            && !crate::node_graph::physics::offline_simulation()
+        if self.cache_mode == CacheMode::Live && !super::physics::offline_simulation()
+            && let Some(frame) = clock_frame.as_ref()
         {
-            crate::node_graph::physics_metrics::record_simulation(0.0, 0.0, false, true);
+            if frame.restarted {
+                self.dropped_time.reset();
+            }
+            self.dropped_time.record(
+                frame.target_time,
+                self.completed_time,
+                frame.dropped_seconds,
+                false,
+                frame.numerical_error,
+            );
+        } else if !super::physics::offline_simulation()
+            && clock_frame.as_ref().is_some_and(|frame| frame.numerical_error)
+        {
+            super::physics_metrics::record_simulation(0.0, 0.0, false, true);
         }
         let target_time = if self.cache_mode == CacheMode::Playback {
             (transport.0 * speed as f64).max(0.0)
@@ -1088,7 +1125,7 @@ impl FluidRuntime {
         } else {
             self.target_time
         };
-        self.held.observe(target_time);
+        self.held.observe(transport.0, speed);
         if self.cache_mode == CacheMode::Playback {
             // The worker resolves timed takes from project transport. Retain
             // the absolute speed-scaled address only for untimed legacy caches.
@@ -1411,33 +1448,30 @@ impl FluidRuntime {
             }
             // Finish every interval already accepted before a pause. The clock
             // accepts no further work while held, so this cannot create debt.
-        let live_mode = self.cache_mode == CacheMode::Live;
-        let target_time = if live_mode {
-            self.clock.accepted_time()
-        } else { self.target_time };
-        let target_tick = simulation_tick(target_time);
+            let live_mode = self.cache_mode == CacheMode::Live;
+            let target_time = if live_mode {
+                self.clock.accepted_time()
+            } else { self.target_time };
+            let target_tick = simulation_tick(target_time);
             let playback = (self.cache_mode == CacheMode::Playback).then(|| PlaybackAddress {
                 transport: Seconds(self.last_transport.expect("observed transport")),
                 legacy_tick: target_tick,
             });
             let due = target_tick.saturating_sub(self.completed_tick);
-            while self.export_frames.front().is_some_and(|frame|
+            while self.accepted_frames.front().is_some_and(|frame|
                 self.completed_tick >= frame.first_sequence + u64::from(frame.ticks))
             {
-                self.export_frames.pop_front();
+                self.accepted_frames.pop_front();
             }
-            // Export steps each accepted interval. A live worker that fell
-            // behind takes everything it owes as one span, so it never queues
-            // a backlog behind the show.
-            let live_interval = if live_mode && target_time > self.simulation_time() {
-                Some(if super::physics::offline_simulation() {
-                    self.export_frames.front()
-                        .and_then(|frame| self.completed_tick.checked_sub(frame.first_sequence)
-                            .and_then(|ordinal| frame.interval(ordinal)))
-                        .ok_or("Water export is missing its accepted simulation interval")?
-                } else {
-                    StepInterval::new(Seconds(self.simulation_time()), Seconds(target_time))
-                })
+            // Live submits its one bounded accepted frame together. Export
+            // retains every schedule and drains one exact interval at a time.
+            let schedule = if live_mode && target_time > self.simulation_time() {
+                let frame = self.accepted_frames.front()
+                    .ok_or("Water is missing its accepted simulation schedule")?;
+                if self.completed_tick < frame.first_sequence {
+                    return Err("Water accepted simulation schedule skips the next worker tick".into());
+                }
+                Some(frame.clone())
             } else { None };
             // A owed particle capture goes before any further stepping, so
             // the frame is the completed tick itself (growth, late wiring).
@@ -1463,7 +1497,11 @@ impl FluidRuntime {
             let count = if capture_only {
                 0
             } else if live_mode {
-                usize::from(live_interval.is_some())
+                schedule.as_ref().map_or(0, |frame| {
+                    if super::physics::offline_simulation() { 1 } else {
+                        (frame.first_sequence + u64::from(frame.ticks) - self.completed_tick) as usize
+                    }
+                })
             } else {
                 request_count(self.cache_mode, due, target_tick, self.initialized)?
             };
@@ -1483,7 +1521,7 @@ impl FluidRuntime {
                 match self.prepare_impulse_batch(
                     self.completed_tick,
                     count,
-                    live_mode.then_some(live_interval).flatten(),
+                    schedule.as_ref(),
                 ) {
                     Ok(events) => events,
                     Err(error) => {
@@ -1510,7 +1548,7 @@ impl FluidRuntime {
                 .take()
                 .expect("one recycled role history per request");
             self.role_history.snapshot(&mut role_history);
-            let interval = if count > 0 { live_interval } else { None };
+            let schedule = if count > 0 { schedule } else { None };
             let request = Request {
                 outputs: Outputs {
                     surface_meshing: self.effective_surface_meshing(),
@@ -1529,11 +1567,8 @@ impl FluidRuntime {
                     self.completed_tick
                 },
                 count,
-                interval,
-                speed_limit_interval: interval
-                    .filter(|_| !super::physics::offline_simulation())
-                    .map(|_| Seconds(self.clock.interval_simulated_duration()))
-                    .filter(|limit| limit.0 > 0.0),
+                start_time: Seconds(self.completed_time),
+                schedule,
                 history,
                 impulses,
                 role_setup: Arc::clone(&self.role_setup),
@@ -2126,11 +2161,11 @@ mod tests {
         runtime
             .observe(settings, controls, Seconds(10.25), 2.0, 0.0)
             .unwrap();
-        assert!((runtime.target_time - 0.25).abs() < 1e-9);
+        assert!((runtime.target_time - 2.0 * TICK).abs() < 1e-9);
         runtime
             .observe(settings, controls, Seconds(10.25), 2.0, 0.0)
             .unwrap();
-        assert!((runtime.target_time - 0.25).abs() < 1e-9);
+        assert!((runtime.target_time - 2.0 * TICK).abs() < 1e-9);
         runtime
             .observe(settings, controls, Seconds(10.5), 1.0, 1.0)
             .unwrap();
@@ -2139,7 +2174,7 @@ mod tests {
             .observe(settings, controls, Seconds(10.6), 1.0, 1.0)
             .unwrap();
         assert!(
-            (runtime.target_time - 0.1).abs() < 1e-9,
+            (runtime.target_time - 2.0 * TICK).abs() < 1e-9,
             "held trigger must not reset repeatedly"
         );
         let first_reset_epoch = runtime.epoch;
@@ -2156,7 +2191,7 @@ mod tests {
             .observe(settings, controls, Seconds(10.8), 1.0, 2.0)
             .unwrap();
         assert_eq!(runtime.epoch, second_reset_epoch);
-        assert!((runtime.target_time - 0.1).abs() < 1e-9);
+        assert!((runtime.target_time - 2.0 * TICK).abs() < 1e-9);
         runtime
             .observe(settings, controls, Seconds(10.8), 1.0, 1.0)
             .unwrap();
@@ -2184,7 +2219,7 @@ mod tests {
         runtime.observe(settings, controls, Seconds(0.0), 1.0, 0.0).unwrap();
         runtime.advance(true).unwrap();
         assert!(runtime.initialized);
-        // The live request carries the complete observed second.
+        // The late live request carries only its two accepted intervals.
         runtime.observe(settings, controls, Seconds(1.0), 1.0, 0.0).unwrap();
         runtime.advance(false).unwrap();
         assert!(runtime.busy);
@@ -2212,11 +2247,11 @@ mod tests {
                 std::thread::sleep(std::time::Duration::from_millis(1));
             }
         };
-        // The batch in flight at pause covers played time, so it publishes;
+        // The batch in flight at pause covers accepted time, so it publishes;
         // nothing is requested after it.
-        wait_for_endpoint(&mut runtime, 1.0, 1.0, 1.0);
-        assert_eq!(runtime.completed_tick, start_tick + 1);
-        assert!((runtime.completed_time - 1.0).abs() < 1e-9);
+        wait_for_endpoint(&mut runtime, 1.0, 1.0, 2.0 * TICK);
+        assert_eq!(runtime.completed_tick, start_tick + 2);
+        assert!((runtime.completed_time - 2.0 * TICK).abs() < 1e-9);
         assert!(!runtime.busy, "held water requested more steps");
         let before = held(&runtime);
         let hold = |runtime: &mut FluidRuntime, transport: f64, speed: f32| {
@@ -2238,13 +2273,13 @@ mod tests {
         assert!(before == held(&runtime), "paused water moved");
         strike(&mut runtime, 1.0, 0);
         // Simulation Speed 0 holds while the transport keeps running.
-        wait_for_endpoint(&mut runtime, 2.0, 0.0, 2.0);
+        wait_for_endpoint(&mut runtime, 2.0, 0.0, 4.0 * TICK);
         // The first observation at speed zero completes the preceding speed-1
         // interval. Only subsequent held observations must remain unchanged.
         let after_transition = held(&runtime);
         hold(&mut runtime, 2.0, 0.0);
         assert!(after_transition == held(&runtime), "speed-zero water moved");
-        assert!((runtime.target_time - 2.0).abs() < 1e-9, "held time adds no debt");
+        assert!((runtime.target_time - 4.0 * TICK).abs() < 1e-9, "held time adds no debt");
         strike(&mut runtime, 2.0, 1);
         assert_eq!(runtime.impulse_outstanding, 0, "held impulses are discarded");
 
@@ -2254,15 +2289,15 @@ mod tests {
             .unwrap();
         runtime.advance(false).unwrap();
         // The first resumed observation at transport 3.0 sees the held
-        // speed-zero interval and remains at time 2.0. Transport 4.0 then
-        // advances one live interval at speed 1.
-        wait_for_endpoint(&mut runtime, 4.0, 1.0, 3.0);
+        // speed-zero interval and keeps its accepted endpoint. Transport 4.0
+        // then advances two bounded live intervals at speed 1.
+        wait_for_endpoint(&mut runtime, 4.0, 1.0, 6.0 * TICK);
         assert_eq!(
             runtime.completed_tick,
-            after_transition.1 + 1,
+            after_transition.1 + 2,
             "resume consumes the chosen cadence"
         );
-        assert!((runtime.completed_time - 3.0).abs() < 1e-9);
+        assert!((runtime.completed_time - 6.0 * TICK).abs() < 1e-9);
         assert_eq!(runtime.drain_applied_impulses().count(), 0, "no discarded impulse ran");
     }
 
@@ -2306,7 +2341,7 @@ mod tests {
     }
 
     #[test]
-    fn live_span_measures_its_speed_limit_against_one_sim_rate_interval() {
+    fn cpu_flip_requests_keep_exact_parent_intervals_at_each_speed() {
         let settings = FluidSettings {
             resolution: 8,
             fill_height: 0.0,
@@ -2315,10 +2350,9 @@ mod tests {
         let controls = FluidControls::default();
         let rate = manifold_physics::SimRate::Hz30;
         let interval = rate.interval();
-        // Live owes four intervals as one span and measures one interval of
-        // simulated time at its Speed; export steps the first alone and
-        // measures that step.
-        for (offline, owed, speed) in [(false, 4.0, 1.0), (false, 4.0, 0.5), (true, 1.0, 1.0)] {
+        // Live drops the excess after two intervals; export drains one
+        // interval from its retained schedule per request.
+        for (offline, count, speed) in [(false, 2, 1.0), (false, 2, 0.5), (true, 1, 1.0)] {
             let _scope = crate::node_graph::physics::PhysicsStepScope::for_settings(
                 offline,
                 manifold_physics::PhysicsSettings { sim_rate: rate },
@@ -2335,7 +2369,8 @@ mod tests {
             let mut native = NativeSimulation::default();
             runtime.advance(false).unwrap();
             let initial = received.recv().unwrap();
-            assert_eq!((initial.count, initial.speed_limit_interval), (0, None));
+            assert_eq!(initial.count, 0);
+            assert!(initial.schedule.is_none());
             runtime.accept(native.process(initial, &runtime.cancel_epoch)).unwrap();
 
             runtime
@@ -2343,18 +2378,165 @@ mod tests {
                 .unwrap();
             runtime.advance(false).unwrap();
             let request = received.recv().unwrap();
-            let span = request.interval.expect("an owed live interval");
+            assert_eq!(request.count, count);
             let step = interval * f64::from(speed);
             let case = format!("offline={offline} speed={speed}");
-            assert!((span.duration().0 - owed * step).abs() < 1e-12, "{case}");
-            let expected = (!offline).then_some(step);
-            let got = request.speed_limit_interval.map(|limit| limit.0);
-            assert!(got.zip(expected).is_none_or(|(got, expected)| (got - expected).abs() < 1e-12)
-                && got.is_some() == expected.is_some(), "{case}: {got:?}");
+            for ordinal in 0..count {
+                let accepted = request.interval(request.start_tick + ordinal as u64).unwrap();
+                assert!((accepted.start.0 - ordinal as f64 * step).abs() < 1e-12, "{case}");
+                assert!((accepted.duration().0 - step).abs() < 1e-12, "{case}");
+            }
+            let last = request.interval(request.start_tick + count as u64 - 1).unwrap();
             let reply = native.process(request, &runtime.cancel_epoch);
             assert_eq!(reply.error, None);
-            assert_eq!(reply.accepted_interval, Some(span));
+            assert_eq!(reply.accepted_interval, Some(last));
             runtime.accept(reply).unwrap();
+        }
+    }
+
+    fn intercepted_runtime() -> (FluidRuntime, Receiver<Request>) {
+        let mut runtime = FluidRuntime::default();
+        runtime.observe(
+            FluidSettings { resolution: 8, fill_height: 0.0, ..FluidSettings::default() },
+            FluidControls::default(), Seconds::ZERO, 1.0, 0.0,
+        ).unwrap();
+        let (requests, received) = mpsc::sync_channel(1);
+        let (_sender, replies) = mpsc::sync_channel(1);
+        runtime.worker = Some(Worker { requests, replies, cancel_epoch: Arc::clone(&runtime.cancel_epoch) });
+        runtime.advance(false).unwrap();
+        complete_intercepted(&mut runtime, received.recv().unwrap());
+        (runtime, received)
+    }
+
+    fn complete_intercepted(runtime: &mut FluidRuntime, request: Request) {
+        let tick = request.start_tick + request.count as u64;
+        let interval = (request.count > 0).then(|| request.interval(tick - 1)).flatten();
+        let mut reply = cancelled_reply(request);
+        reply.tick = tick;
+        reply.started_tick = tick;
+        reply.accepted_interval = interval;
+        runtime.accept(reply).unwrap();
+    }
+
+    #[test]
+    fn cpu_flip_recapture_keeps_accepted_time_after_speed_and_overload() {
+        let _live = crate::node_graph::physics::PhysicsStepScope::for_settings(
+            false,
+            manifold_physics::PhysicsSettings { sim_rate: manifold_physics::SimRate::Hz30 },
+        );
+        let (mut runtime, received) = intercepted_runtime();
+        let settings = runtime.settings.unwrap();
+        let controls = FluidControls::default();
+        runtime.observe(settings, controls, Seconds::ZERO, 2.0, 0.0).unwrap();
+        runtime.observe(settings, controls, Seconds(0.7), 2.0, 0.0).unwrap();
+        runtime.advance(false).unwrap();
+        let request = received.recv().unwrap();
+        assert_eq!(request.count, 2);
+        let endpoint = request.particle_time(2);
+        assert!((endpoint - 4.0 / 30.0).abs() < 1e-12);
+        complete_intercepted(&mut runtime, request);
+
+        runtime.observe(settings, controls, Seconds(0.7 + 1.0 / 30.0), 2.0, 0.0).unwrap();
+        runtime.advance(false).unwrap();
+        let request = received.recv().unwrap();
+        // A recapture takes no step and has no schedule to recover an endpoint
+        // from. Its timestamp is the completed state, never tick identity / 60.
+        assert_eq!(request.particle_time(0), endpoint);
+        assert_ne!(request.particle_time(0), request.start_tick as f64 * TICK);
+    }
+
+    #[test]
+    fn cpu_flip_busy_observations_preserve_one_bounded_schedule_and_resume() {
+        let _live = crate::node_graph::physics::PhysicsStepScope::for_render(false);
+        let (mut runtime, received) = intercepted_runtime();
+        let settings = runtime.settings.unwrap();
+        let controls = FluidControls::default();
+        runtime.observe(settings, controls, Seconds(0.7), 1.0, 0.0).unwrap();
+        assert_eq!(runtime.clock.ticks_done(), 2);
+        runtime.observe(settings, controls, Seconds(0.9), 1.0, 0.0).unwrap();
+        assert_eq!(runtime.accepted_frames.len(), 1, "an unconsumed frame blocks acceptance");
+        assert_eq!(runtime.clock.ticks_done(), 2);
+        runtime.advance(false).unwrap();
+        let request = received.recv().unwrap();
+        assert_eq!(request.count, 2);
+        for tick in 0..2 {
+            let interval = request.interval(tick).unwrap();
+            assert!((interval.start.0 - tick as f64 * TICK).abs() < 1e-12);
+            assert!((interval.duration().0 - TICK).abs() < 1e-12);
+        }
+        for transport in [1.0, 1.4, 2.0] {
+            runtime.observe(settings, controls, Seconds(transport), 1.0, 0.0).unwrap();
+            assert_eq!(runtime.clock.ticks_done(), 2);
+            assert!((runtime.clock.accepted_time() - 2.0 * TICK).abs() < 1e-12);
+            assert_eq!(runtime.accepted_frames.len(), 1);
+        }
+        complete_intercepted(&mut runtime, request);
+        assert_eq!(runtime.completed_tick, 2);
+        runtime.observe(settings, controls, Seconds(2.0), 1.0, 0.0).unwrap();
+        runtime.advance(false).unwrap();
+        let resumed = received.recv().unwrap();
+        assert_eq!((resumed.start_tick, resumed.count), (2, 2));
+        assert!((resumed.interval(2).unwrap().start.0 - 2.0 * TICK).abs() < 1e-12);
+        complete_intercepted(&mut runtime, resumed);
+        runtime.observe(settings, controls, Seconds(2.0 + TICK), 1.0, 0.0).unwrap();
+        runtime.advance(false).unwrap();
+        let next = received.recv().unwrap();
+        assert_eq!((next.start_tick, next.count), (4, 1));
+        assert!((next.interval(4).unwrap().start.0 - 4.0 * TICK).abs() < 1e-12);
+        complete_intercepted(&mut runtime, next);
+        assert!((runtime.completed_time - 5.0 * TICK).abs() < 1e-12);
+    }
+
+    #[test]
+    fn cpu_flip_fixed_schedule_delivers_each_hit_once_at_its_interval() {
+        let _live = crate::node_graph::physics::PhysicsStepScope::for_render(false);
+        let (mut runtime, received) = intercepted_runtime();
+        let settings = runtime.settings.unwrap();
+        let controls = FluidControls::default();
+        let epoch = runtime.impulse_epoch().unwrap();
+        for (time, sequence) in [(0.0, 1), (TICK, 2), (2.0 * TICK, 3)] {
+            runtime.enqueue_impulse(
+                manifold_physics::input::EventStamp { epoch, time: Seconds(time), sequence },
+                FieldValue::uniform([1.0, 0.0, 0.0]).unwrap(),
+            ).unwrap();
+        }
+        runtime.observe(settings, controls, Seconds(0.7), 1.0, 0.0).unwrap();
+        runtime.advance(false).unwrap();
+        let request = received.recv().unwrap();
+        assert_eq!(request.impulses.iter().map(|event| (event.source.sequence, event.applied.tick)).collect::<Vec<_>>(), [(1, 0), (2, 1)]);
+        complete_intercepted(&mut runtime, request);
+        assert_eq!(runtime.drain_applied_impulses().map(|event| event.source.sequence).collect::<Vec<_>>(), [1, 2]);
+        runtime.observe(settings, controls, Seconds(0.7 + TICK), 1.0, 0.0).unwrap();
+        runtime.advance(false).unwrap();
+        let request = received.recv().unwrap();
+        assert_eq!(request.count, 1);
+        assert_eq!(request.impulses.iter().map(|event| (event.source.sequence, event.applied.tick)).collect::<Vec<_>>(), [(3, 2)]);
+        complete_intercepted(&mut runtime, request);
+        assert_eq!(runtime.drain_applied_impulses().map(|event| event.source.sequence).collect::<Vec<_>>(), [3]);
+        assert_eq!(runtime.impulse_outstanding, 0);
+    }
+
+    #[test]
+    fn cpu_flip_offline_schedules_keep_every_fixed_interval_at_display_rates() {
+        let _offline = crate::node_graph::physics::PhysicsStepScope::for_render(true);
+        for fps in [20, 24, 30, 60] {
+            let (mut runtime, received) = intercepted_runtime();
+            let settings = runtime.settings.unwrap();
+            for frame in 1..=fps {
+                runtime.observe(settings, FluidControls::default(), Seconds(f64::from(frame) / f64::from(fps)), 1.0, 0.0).unwrap();
+            }
+            assert_eq!(runtime.clock.ticks_done(), 60);
+            for tick in 0..60 {
+                runtime.advance(false).unwrap();
+                let request = received.recv().unwrap();
+                assert_eq!((request.start_tick, request.count), (tick, 1), "{fps} fps");
+                let interval = request.interval(tick).unwrap();
+                assert!((interval.start.0 - tick as f64 * TICK).abs() < 1e-12, "{fps} fps");
+                assert!((interval.end.0 - (tick + 1) as f64 * TICK).abs() < 1e-12, "{fps} fps");
+                complete_intercepted(&mut runtime, request);
+            }
+            assert_eq!(runtime.completed_tick, 60);
+            assert!((runtime.completed_time - 1.0).abs() < 1e-12);
         }
     }
 

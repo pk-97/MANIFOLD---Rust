@@ -204,7 +204,7 @@ pub struct LiquidBodies {
     /// The roles' controls at each tick's start, from the oldest tick not
     /// yet run.
     samples: TickSamples<Poses>,
-    interval_duration: f64,
+    frame: Option<ClockFrame>,
     clock_obstacles: Vec<crate::node_graph::primitives::gpu_flip_clock::GpuFlipBodyVertex>,
     clock_sources: Vec<crate::node_graph::primitives::gpu_flip_clock::GpuFlipBodyVertex>,
     shapes: Vec<LiquidShape>,
@@ -478,7 +478,7 @@ impl LiquidBodies {
     /// This frame's roles, right after `clock` advanced to `frame`: they
     /// belong to a tick that starts now.
     pub fn settle(&mut self, roles: &[Option<FluidRole>], clock: &LiquidClock, frame: &ClockFrame) {
-        self.interval_duration = frame.duration().0;
+        self.frame = Some(frame.clone());
         self.samples.settle(clock, frame, Some(&controls_of(roles)));
     }
 
@@ -503,26 +503,36 @@ impl LiquidBodies {
             }
             return Ok(&self.rows);
         }
-        // A tick's end pose is the next tick's start; a seed row has none.
-        let mut poses = self
+        // A reanchor separates the accepted closing pose from the next start.
+        // A seed row has no motion.
+        let poses = self
             .samples
-            .span(first_tick, ticks as usize + 1)
+            .span(first_tick, row_ticks)
             .map_err(|tick| {
                 format!("Liquid bodies: tick {tick} was never sampled; the host must replay physics history before each frame")
             })?;
-        let mut start = &poses.next().expect("the span holds the first tick").1;
-        for _ in 0..row_ticks {
-            let end = if ticks > 0 { &poses.next().expect("the span holds each tick's end").1 } else { start };
+        for (ordinal, (_, start)) in poses.enumerate() {
+            let (end, duration) = if ticks > 0 {
+                let tick = first_tick + ordinal as u64;
+                let end = self.samples.endpoint(tick + 1).ok_or_else(|| {
+                    format!("Liquid bodies: tick {} end was never sampled; the host must replay physics history before each frame", tick + 1)
+                })?;
+                let interval = self.frame.as_ref().and_then(|frame| {
+                    tick.checked_sub(frame.first_sequence).and_then(|ordinal| frame.interval(ordinal))
+                }).ok_or_else(|| format!("Liquid bodies: tick {tick} has no accepted clock interval"))?;
+                (end, interval.duration().0)
+            } else {
+                (start, 0.0)
+            };
             for (index, role) in self.roles.iter().enumerate() {
                 let from = start[role.slot];
-                let row = body_row(from, end[role.slot], index as f32, self.interval_duration);
+                let row = body_row(from, end[role.slot], index as f32, duration);
                 match role.kind {
                     FluidRoleKind::Inflow | FluidRoleKind::Outflow => self.region_rows.push(region_row(row, role.kind, from)),
                     _ => self.rows.push(row),
                 }
             }
             self.rows.extend(coupled.iter().map(|row| coupled_row(row, offset)));
-            start = end;
         }
         self.samples.prune_before(first_tick + u64::from(ticks));
         Ok(&self.rows)
@@ -724,8 +734,7 @@ mod tests {
         crate::node_graph::liquid::fields::first_tick(frame)
     }
 
-    /// A collider moving linearly over a stretched live frame gets one row
-    /// whose velocity spans the accepted interval.
+    /// A collider moving linearly gets one row over each accepted interval.
     #[test]
     fn liquid_body_rows_follow_authored_motion() {
         let geometry = cube();
@@ -775,20 +784,70 @@ mod tests {
         assert_eq!(rows[0].accel_shape[3], 0.0);
     }
 
-    /// A live frame is one accepted interval, even when it spans nominal ticks.
     #[test]
-    fn liquid_body_rows_accept_a_stretched_live_interval() {
+    fn liquid_body_rows_accept_two_live_intervals() {
         let geometry = cube();
         let roles = vec![collider(&geometry, [0.0; 3], 0.0)];
         let mut bodies = LiquidBodies::default();
         ready(&mut bodies, &roles);
-        let mut clock = LiquidClock::default();
-        let frame = clock.advance(0.0, TICK, 1.0, 0.0, false, false);
-        bodies.settle(&roles, &clock, &frame);
-        let frame = clock.advance(2.0 * TICK, TICK, 1.0, 0.0, false, false);
-        bodies.settle(&roles, &clock, &frame);
+        let mut rig = Rig::default();
+        rig.frame(&mut bodies, 0.0, TICK, &|_| roles.clone());
+        let frame = rig.frame(&mut bodies, 2.0 * TICK, TICK, &|_| roles.clone());
         let rows = bodies.rows(first_tick(&frame), frame.ticks, &[]).unwrap();
-        assert_eq!(rows.len(), 1);
+        assert_eq!(rows.len(), 2);
+    }
+
+    #[test]
+    fn liquid_body_rows_do_not_compress_discarded_collider_motion() {
+        let geometry = cube();
+        let roles_at = |transport: f64| {
+            vec![collider(&geometry, [transport as f32, 0.0, 0.0], transport as f32)]
+        };
+        let mut bodies = LiquidBodies::default();
+        ready(&mut bodies, &roles_at(0.0));
+        let mut rig = Rig::default();
+        rig.frame(&mut bodies, 0.0, TICK, &roles_at);
+        let frame = rig.frame(&mut bodies, 0.7, TICK, &roles_at);
+        assert!(frame.reanchored);
+        assert_eq!(frame.ticks, 2);
+        let rows = bodies.rows(first_tick(&frame), frame.ticks, &[]).unwrap();
+        assert_eq!(rows.len(), 2);
+        for (ordinal, row) in rows.iter().enumerate() {
+            let interval = frame.interval(ordinal as u64).unwrap();
+            assert!((row.position_inv_mass[0] - interval.start.0 as f32).abs() < 1e-6);
+            assert!((row.linear_velocity[0] - 1.0).abs() < 1e-5);
+            assert!((row.angular_velocity[1] - 1.0).abs() < 1e-5);
+            let (position, _) = body_pose_at(row, interval.duration().0 as f32);
+            assert!((position[0] - interval.end.0 as f32).abs() < 1e-6);
+        }
+
+        let frame = rig.frame(&mut bodies, 0.7 + TICK, TICK, &roles_at);
+        assert_eq!(frame.ticks, 1);
+        let row = bodies.rows(first_tick(&frame), frame.ticks, &[]).unwrap()[0];
+        assert!((row.position_inv_mass[0] - 0.7).abs() < 1e-6);
+        assert!((row.linear_velocity[0] - 1.0).abs() < 1e-5);
+        assert!((row.angular_velocity[1] - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn liquid_body_rows_use_each_speed_interval_duration() {
+        let geometry = cube();
+        let roles_at = |transport: f64| vec![collider(&geometry, [transport as f32, 0.0, 0.0], 0.0)];
+        let mut bodies = LiquidBodies::default();
+        ready(&mut bodies, &roles_at(0.0));
+        let mut rig = Rig::default();
+        rig.frame(&mut bodies, 0.0, TICK, &roles_at);
+        rig.clock.observe_speed(TICK, 2.0);
+        let frame = rig.frame(&mut bodies, 2.0 * TICK, TICK, &roles_at);
+        assert_eq!(frame.ticks, 2);
+        assert!((frame.interval(0).unwrap().duration().0 - TICK).abs() < 1e-9);
+        assert!((frame.interval(1).unwrap().duration().0 - 2.0 * TICK).abs() < 1e-9);
+        let rows = bodies.rows(first_tick(&frame), frame.ticks, &[]).unwrap();
+        for (ordinal, (row, speed)) in rows.iter().zip([1.0, 0.5]).enumerate() {
+            assert!((row.linear_velocity[0] - speed).abs() < 1e-5);
+            let (position, _) = body_pose_at(row, frame.interval(ordinal as u64).unwrap().duration().0 as f32);
+            assert!((position[0] - (ordinal + 1) as f32 * TICK as f32).abs() < 1e-6);
+        }
     }
 
     /// Every accepted live interval gets one row at the authored interval

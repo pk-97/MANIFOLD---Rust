@@ -60,10 +60,9 @@ pub(crate) fn authored_sample_only() -> bool {
     SAMPLE_AUTHORED_ONLY.with(std::cell::Cell::get)
 }
 
-/// Transport paused or simulation speed zero: a full render observation left
-/// the simulation target where the previous one put it. Historical input
-/// samples move the target between render frames, so only full observations
-/// judge. Reset with the simulation.
+/// Transport paused or simulation speed zero. A capped simulation timestamp
+/// can remain unchanged while transport advances, so it cannot diagnose pause.
+/// Only full render observations judge; reset with the simulation.
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct HeldClock {
     observed: Option<f64>,
@@ -71,10 +70,10 @@ pub(crate) struct HeldClock {
 }
 
 impl HeldClock {
-    pub(crate) fn observe(&mut self, target: f64) {
+    pub(crate) fn observe(&mut self, transport: f64, speed: f32) {
         if !authored_sample_only() {
-            self.held = self.observed == Some(target);
-            self.observed = Some(target);
+            self.held = self.observed == Some(transport) || speed == 0.0;
+            self.observed = Some(transport);
         }
     }
 
@@ -504,6 +503,7 @@ pub struct RigidSimulation {
     impulse_overflow_latched: bool,
     accepted_observation: Option<(f64, f64)>,
     held: HeldClock,
+    dropped_time: super::physics_metrics::DroppedTimeTracker,
     worker_epoch: Option<u64>,
     advancement_policy: AdvancementPolicy,
 }
@@ -553,6 +553,7 @@ impl Default for RigidSimulation {
             accepted_observation: None,
             clock: Default::default(),
             held: HeldClock::default(),
+            dropped_time: Default::default(),
             worker_epoch: None,
             advancement_policy: AdvancementPolicy::Preview,
         }
@@ -1053,6 +1054,7 @@ impl RigidSimulation {
             self.accumulator = 0.0;
             self.authored_time = 0.0;
             self.held = HeldClock::default();
+            self.dropped_time.reset();
             self.physics_time = 0.0;
             self.authored_samples.clear();
             self.targeted_fields.clear();
@@ -1102,9 +1104,7 @@ impl RigidSimulation {
             targeted_fields,
         )?;
         self.authored_time = authored_time;
-        self.held.observe(authored_time);
-        // A stop edit holds new input even while the preceding span finishes.
-        self.held.held |= speed == 0.0;
+        self.held.observe(now.0, speed);
         let accumulated = self.accumulator + elapsed_simulation;
         const TICK: f64 = FIXED_TICK.0;
         let due_steps = ((accumulated + 1e-9) / TICK).floor() as usize;
@@ -1521,7 +1521,12 @@ impl RigidSimulation {
         self.copy_description = prototype.clone();
         self.physics_ms = physics_start.elapsed().as_secs_f32() * 1000.0;
         if !offline_simulation() {
-            crate::node_graph::physics_metrics::record_simulation(self.authored_time, self.physics_time, false, false);
+            if let Some(frame) = &clock_frame {
+                self.dropped_time.record(self.authored_time, self.physics_time,
+                    frame.dropped_seconds, false, frame.numerical_error);
+            } else {
+                crate::node_graph::physics_metrics::record_simulation(self.authored_time, self.physics_time, false, false);
+            }
         }
         self.accepted_observation = Some((now.0, self.authored_time));
         Ok(())
@@ -3644,12 +3649,15 @@ mod tests {
             .unwrap();
         assert!(simulation.fragment_parent_released[0]);
         assert_eq!(simulation.pending_time, Seconds::ZERO);
-        assert!((simulation.physics_time - boundary).abs() < 1e-12);
+        // The first late observation accepted two intervals; the authored
+        // release boundary closes the third, without replaying discarded time.
+        assert!((simulation.physics_time - 3.0 * FRAME).abs() < 1e-12);
         simulation
             .advance(released, GRAVITY, Seconds(boundary + FRAME), 1.0, 0.0)
             .unwrap();
         assert!(simulation.fragment_parent_released[0]);
         assert_eq!(simulation.pending_time, Seconds::ZERO);
+        assert!((simulation.physics_time - 4.0 * FRAME).abs() < 1e-12);
     }
 
     #[test]
@@ -3923,28 +3931,29 @@ mod tests {
     }
 
     #[test]
-    fn live_accepts_owed_intervals_to_the_last_boundary_without_backlog() {
+    fn live_accepts_two_fixed_intervals_then_reanchors_without_backlog() {
         let _live = PhysicsStepScope::for_render(false);
         let bodies = one_body([0.0, 4.0, 0.0]);
         let mut simulation = RigidSimulation::default();
         simulation.advance(bodies.clone(), GRAVITY, Seconds::ZERO, 1.0, 0.0).unwrap();
-        // Half a Sim Rate interval past 3 s: the late frame takes every owed
-        // interval as one span ending on the 3 s boundary.
+        // Discard the overload, including its fractional remainder.
         let now = Seconds(3.0 + FRAME / 2.0);
         simulation.advance(bodies.clone(), GRAVITY, now, 1.0, 0.0).unwrap();
         assert_eq!(simulation.pending_time, Seconds::ZERO);
-        assert!((simulation.physics_time - 3.0).abs() < 1e-12);
+        assert!((simulation.physics_time - 2.0 * FRAME).abs() < 1e-12);
         let accepted_pose = simulation.poses;
         simulation.advance(bodies.clone(), GRAVITY, now, 0.0, 0.0).unwrap();
         assert_eq!(simulation.pending_time, Seconds::ZERO);
-        assert!((simulation.physics_time - 3.0).abs() < 1e-12);
+        assert!((simulation.physics_time - 2.0 * FRAME).abs() < 1e-12);
         assert_eq!(simulation.poses, accepted_pose);
-        // The next boundary closes the half interval run at Speed 1; Speed 0
-        // from `now` adds nothing.
+        // The reanchored interval ran at Speed 0 and adds nothing. Resume
+        // takes effect from this new observation onward.
         let next = Seconds(now.0 + FRAME);
-        simulation.advance(bodies, GRAVITY, next, 1.0, 0.0).unwrap();
+        simulation.advance(bodies.clone(), GRAVITY, next, 1.0, 0.0).unwrap();
         assert_eq!(simulation.pending_time, Seconds::ZERO);
-        assert!((simulation.physics_time - now.0).abs() < 1e-12);
+        assert!((simulation.physics_time - 2.0 * FRAME).abs() < 1e-12);
+        simulation.advance(bodies, GRAVITY, Seconds(next.0 + FRAME), 1.0, 0.0).unwrap();
+        assert!((simulation.physics_time - 3.0 * FRAME).abs() < 1e-12);
     }
 
     #[test]
@@ -3962,11 +3971,11 @@ mod tests {
         moving[0].as_mut().unwrap().transform.pos[0] = -0.55;
         simulation.advance(moving.clone(), [0.0; 3], Seconds(0.5), 1.0, 0.0).unwrap();
         assert_eq!(simulation.pending_time, Seconds::ZERO);
-        assert!((simulation.physics_time - 0.5).abs() < 1e-12);
+        assert!((simulation.physics_time - 2.0 * FRAME).abs() < 1e-12);
         moving[0].as_mut().unwrap().transform.pos[0] = 0.2;
         simulation.advance(moving, [0.0; 3], Seconds(1.0), 1.0, 0.0).unwrap();
         assert_eq!(simulation.pending_time, Seconds::ZERO);
-        assert!((simulation.physics_time - 1.0).abs() < 1e-12);
+        assert!((simulation.physics_time - 4.0 * FRAME).abs() < 1e-12);
 
         let mut rotating = std::array::from_fn(|_| None);
         rotating[0] = Some(RigidBody {
@@ -3982,7 +3991,7 @@ mod tests {
         rotating[0].as_mut().unwrap().transform.rot_euler[1] = std::f32::consts::FRAC_PI_2;
         rotation_simulation.advance(rotating, [0.0; 3], Seconds(1.0), 1.0, 0.0).unwrap();
         assert_eq!(rotation_simulation.pending_time, Seconds::ZERO);
-        assert!((rotation_simulation.physics_time - 1.0).abs() < 1e-12);
+        assert!((rotation_simulation.physics_time - 4.0 * FRAME).abs() < 1e-12);
     }
 
     #[test]
@@ -4289,7 +4298,7 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_live_covers_the_full_observed_span_at_common_frame_rates() {
+    fn ordinary_live_caps_progress_at_two_intervals_per_display_frame() {
         let _live = PhysicsStepScope::for_render(false);
         let bodies = one_body([0.0, 4.0, 0.0]);
         for fps in [20, 24, 30, 60] {
@@ -4307,7 +4316,8 @@ mod tests {
                     .unwrap();
             }
             assert_eq!(simulation.pending_time, Seconds::ZERO, "fps={fps}");
-            assert!((simulation.physics_time - 1.0).abs() < 1e-12, "fps={fps}");
+            let expected = (2.0 * f64::from(fps) * FRAME).min(1.0);
+            assert!((simulation.physics_time - expected).abs() < 1e-12, "fps={fps}");
         }
     }
 
@@ -4340,14 +4350,14 @@ mod tests {
         simulation.advance(bodies.clone(), GRAVITY, Seconds::ZERO, 1.0, 0.0).unwrap();
         simulation.advance(bodies.clone(), GRAVITY, Seconds(3.0), 1.0, 0.0).unwrap();
         assert_eq!(simulation.pending_time, Seconds::ZERO);
-        assert!((simulation.physics_time - 3.0).abs() < 1e-12);
+        assert!((simulation.physics_time - 2.0 * FRAME).abs() < 1e-12);
         let accepted_pose = simulation.poses;
         simulation.advance(bodies.clone(), GRAVITY, Seconds(3.0), 0.0, 0.0).unwrap();
         assert_eq!(simulation.pending_time, Seconds::ZERO);
         assert_eq!(simulation.poses, accepted_pose);
         simulation.advance(bodies.clone(), GRAVITY, Seconds(6.0), 1.0, 0.0).unwrap();
         assert_eq!(simulation.pending_time, Seconds::ZERO);
-        assert!((simulation.physics_time - 3.0).abs() < 1e-12);
+        assert!((simulation.physics_time - 2.0 * FRAME).abs() < 1e-12);
         simulation.advance(bodies, GRAVITY, Seconds(6.0), 1.0, 1.0).unwrap();
         assert_eq!(simulation.pending_time, Seconds::ZERO);
         assert_eq!(simulation.poses[0].pos, [0.0, 4.0, 0.0]);

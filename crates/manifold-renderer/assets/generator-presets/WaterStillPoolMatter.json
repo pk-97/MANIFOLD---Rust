@@ -1527,6 +1527,12 @@
           },
           {
             "fromNode": 1,
+            "fromPort": "dropped_seconds",
+            "toNode": 3,
+            "toPort": "dropped_seconds"
+          },
+          {
+            "fromNode": 1,
             "fromPort": "simulation_time",
             "toNode": 9,
             "toPort": "simulation_time"

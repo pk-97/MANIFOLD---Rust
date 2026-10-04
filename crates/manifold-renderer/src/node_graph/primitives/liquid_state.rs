@@ -21,6 +21,7 @@ use crate::node_graph::fluid_particles::{FaceSample, FluidParticle};
 use crate::node_graph::liquid::grid::{interior_bytes, InteriorOps};
 use crate::node_graph::liquid::lattice::LiquidLattice;
 use crate::node_graph::parameters::ParamValue;
+use crate::node_graph::physics_metrics::DroppedTimeTracker;
 use crate::node_graph::primitive::Primitive;
 use crate::node_graph::substeps::{SubstepBoundaryPorts, SubstepResultPorts};
 use crate::node_graph::whitewater::{WHITEWATER_EMPTY, WhitewaterParticle};
@@ -103,6 +104,7 @@ crate::primitive! {
         ticks: ScalarF32 optional,
         simulation_time: ScalarF32 optional,
         target_time: ScalarF32 optional,
+        dropped_seconds: ScalarF32 optional,
         epoch: ScalarF32 optional,
         nodes_x: ScalarF32 optional,
         nodes_y: ScalarF32 optional,
@@ -145,6 +147,7 @@ crate::primitive! {
         ticks_done: u64 = 0,
         submitted_time: f64 = 0.0,
         completed_time: f64 = 0.0,
+        dropped_time: DroppedTimeTracker = DroppedTimeTracker::default(),
         captures: u32 = 0,
         zero_stats: Option<GpuBuffer> = None,
         readback: Vec<ReadbackSlot> = Vec::new(),
@@ -384,6 +387,7 @@ impl Primitive for LiquidState {
             ParamValue::Float(time) => Some(f64::from(time)),
             _ => None,
         });
+        let dropped_seconds = f64::from(ctx.scalar_or_param("dropped_seconds", 0.0));
         let epoch = whole(ctx.scalar_or_param("epoch", 0.0));
         let seed = ctx.inputs.array("seed");
         let out = ctx.outputs.array("out");
@@ -504,6 +508,7 @@ impl Primitive for LiquidState {
         }
         if epoch_reset {
             self.completed_time = 0.0;
+            self.dropped_time.reset();
             self.epoch = Some(epoch);
             self.ticks_done = 0;
             self.faulted = false;
@@ -554,7 +559,13 @@ impl Primitive for LiquidState {
         }
         self.identity_reset = false;
         if let Some(target) = target_time {
-            crate::node_graph::physics_metrics::record_simulation(target, self.completed_time, self.cap_hit, self.faulted|| self.clock_nonfinite);
+            self.dropped_time.record(
+                target,
+                self.completed_time,
+                dropped_seconds,
+                self.cap_hit,
+                self.faulted || self.clock_nonfinite,
+            );
         }
 
         self.pending = if refused.is_some() || self.capacity_faulted || (self.faulted && !live_recovery) { 0 } else { ticks };

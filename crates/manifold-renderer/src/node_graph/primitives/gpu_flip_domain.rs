@@ -711,7 +711,7 @@ impl GpuFlipDomain {
             let offset = self.coupled.offset;
             // This frame's clear is encoded after this read.
             let settled = owner.settle_ready(
-                self.coupled.scenes.get(owner.completed() + 1),
+                self.coupled.scenes.endpoint(owner.completed() + 1),
                 |stamp| clock.as_ref().is_none_or(|clock| {
                     clock.is_complete(stamp) || (clock.wait(stamp) && clock.is_complete(stamp))
                 }),
@@ -725,6 +725,9 @@ impl GpuFlipDomain {
                 // with a fresh rigid owner, the error reported.
                 self.coupled.owner = None;
                 return Err(error);
+            }
+            if let Some(start) = self.coupled.scenes.reanchored_start(owner.completed()) {
+                owner.reanchor_start(start)?;
             }
         }
         self.setup = Some(geometry.setup);
@@ -810,7 +813,9 @@ impl GpuFlipDomain {
             // Export steps each interval, so its limit measures the step (0).
             (
                 "limit_interval",
-                if frame.offline { 0.0 } else { self.clock.interval_simulated_duration() as f32 },
+                // Compatibility output for saved graphs. Each solver call is
+                // now exactly one accepted interval, so no span override is needed.
+                0.0,
             ),
             (
                 "clock_obstacle_count",
@@ -880,7 +885,7 @@ impl GpuFlipDomain {
         let reaction = self.reaction.as_ref().ok_or("GPU FLIP coupling: the reaction is missing")?;
         // A tick running this frame started by now, so the tick before it
         // has its end sampled.
-        let end = self.coupled.scenes.get(owner.completed() + 1);
+        let end = self.coupled.scenes.endpoint(owner.completed() + 1);
         owner.settle_ready(end, |_| true, |_, rows, impulses| {
             decode_reaction(exchange.offset, rows, reaction_floats(Some(reaction)), impulses)
         })?;

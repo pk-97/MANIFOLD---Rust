@@ -457,7 +457,7 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     let state = b.node("state", "node.liquid_state", json!({}));
     b.wire((fill, "particles"), state, "seed");
     b.wire(count, state, "count");
-    b.wires(domain, state, &["ticks", "epoch", "simulation_time", "target_time"]);
+    b.wires(domain, state, &["ticks", "epoch", "simulation_time", "target_time", "dropped_seconds"]);
     let particles: Port = (state, "out");
     let step = water_step(&mut b, scene, (domain, state));
     b.wire(particles, step, "particles");
@@ -1569,6 +1569,32 @@ pub(super) mod tests {
                 }
             }
             assert!(checked > 0, "{name} has no interval inputs");
+        }
+    }
+
+    #[test]
+    fn liquid_presets_feed_state_dropped_time_from_their_clock_domain() {
+        let mut graphs = vec![
+            ("GPU FLIP builder", render_def(WaterScene::dam_break(16).with_faces())),
+            ("Add Fluid's liquid body", gpu_flip_liquid_body()),
+        ];
+        for name in [SHIPPED_PRESET, PARTICLE_VIEW_PRESET, "WaterDamBreakMatter", "WaterStillPoolMatter", "WaterFloatingBoxMatter"] {
+            let json = bundled_preset_json(&PresetTypeId::new(name)).unwrap_or_else(|| panic!("{name} is bundled"));
+            graphs.push((name, serde_json::from_str(&json).expect("the preset parses")));
+        }
+        for (name, def) in graphs {
+            let flat = manifold_core::flatten::flatten_groups(&def).expect("flattens");
+            let mut checked = 0;
+            for state in flat.nodes.iter().filter(|node| matches!(node.type_id.as_str(), "node.liquid_state" | "node.matter_state")) {
+                let feeds: Vec<_> = flat.wires.iter().filter(|w| w.to_node == state.id && w.to_port == "dropped_seconds").collect();
+                assert_eq!(feeds.len(), 1, "{name}: {} needs one dropped_seconds wire", state.node_id.as_str());
+                assert_eq!(feeds[0].from_port, "dropped_seconds");
+                let tick_source = flat.wires.iter().find(|w| w.to_node == state.id && w.to_port == "ticks").expect("state has a clock");
+                assert_eq!(feeds[0].from_node, tick_source.from_node, "{name}: dropped time belongs to the state's clock");
+                assert!(flat.nodes.iter().any(|node| node.id == feeds[0].from_node && manifold_core::liquid_domain::is_liquid_domain(&node.type_id)));
+                checked += 1;
+            }
+            assert!(checked > 0, "{name} has no liquid state");
         }
     }
 

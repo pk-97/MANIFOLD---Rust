@@ -1633,6 +1633,48 @@ fn liquid_nonfinite_tick_not_published() {
     }
 }
 
+/// BUG-g75v.11: a late displayed frame at 128 keeps resting water intact
+/// and performs exactly the same work as two ordinary fixed intervals.
+#[test]
+fn liquid_live_700ms_frame_preserves_128_pool_and_matches_two_fixed_steps() {
+    let row = LIQUID_SOLVERS.iter().find(|row| row.type_id == GPU_FLIP_DOMAIN_TYPE_ID).unwrap();
+    let make = || {
+        let mut def = scene(row, Fixture::StillPool);
+        set_type_param(&mut def, GPU_FLIP_DOMAIN_TYPE_ID, "resolution", SerializedParamValue::Int { value: 128 });
+        LiquidRun::on(row, def, 1, true, false, Some(Clocked::new()))
+    };
+    let (expected, expected_totals) = {
+        let mut reference = make();
+        reference.steps(2);
+        (reference.read::<FluidParticle>("node.liquid_state", "out"), reference.totals(row))
+    };
+    let mut overloaded = make();
+    // Read the solver state directly: the live display ring may not have
+    // published its first fenced frame during asset warm-up.
+    let initial = overloaded.read::<FluidParticle>("node.liquid_state", "out");
+    let live_count = |particles: &[FluidParticle]| particles.iter().filter(|p| p.position_radius[3] > 0.0).count();
+    let seeded = live_count(&initial);
+    assert!(seeded > 0);
+    overloaded.stride = 42.0;
+    let frame = overloaded.step();
+    assert_eq!(frame.get("ticks"), 2.0);
+    assert!((f64::from(frame.get("simulation_time")) - 2.0 * TICK).abs() < 1e-8);
+    let particles = overloaded.read::<FluidParticle>("node.liquid_state", "out");
+    let totals = overloaded.totals(row);
+    assert_eq!(live_count(&particles), seeded, "overload removed resting water");
+    assert_eq!(totals.nonfinite, 0);
+    assert_eq!(bytemuck::cast_slice::<_, u32>(&particles), bytemuck::cast_slice::<_, u32>(&expected),
+        "a 700 ms display frame must produce exactly the same water as two fixed intervals");
+    assert_eq!(totals, expected_totals);
+    // Same resting-water speed threshold as gpu_flip_still_pool: 1 mm/s.
+    let fastest = particles.iter().filter(|p| p.position_radius[3] > 0.0)
+        .map(|p| p.velocity.iter().map(|&v| f64::from(v).powi(2)).sum::<f64>().sqrt())
+        .fold(0.0, f64::max);
+    assert!(fastest < 1e-3, "resting water gained speed: {fastest} m/s");
+    assert!(totals.energy <= 0.5 * totals.mass * 1e-6, "resting water gained kinetic energy: {totals:?}");
+    println!("128 pool after 700 ms overload: {seeded} particles retained, fastest {fastest:.3e} m/s, energy {:.3e} J; bitwise equal to two fixed steps", totals.energy);
+}
+
 /// Live GPU FLIP reports a bad state and recovers without an epoch reset or
 /// lost transport time. Offline I8 above deliberately retains its old policy.
 #[test]

@@ -756,7 +756,7 @@ impl MatterDomain {
             let scale = self.coupled.scale;
             // This frame's clear is encoded after this read.
             let settled = owner.settle_ready(
-                self.coupled.scenes.get(owner.completed() + 1),
+                self.coupled.scenes.endpoint(owner.completed() + 1),
                 |stamp| clock.as_ref().is_none_or(|clock| {
                     clock.is_complete(stamp) || (clock.wait(stamp) && clock.is_complete(stamp))
                 }),
@@ -770,6 +770,9 @@ impl MatterDomain {
                 // with a fresh rigid owner, the error reported.
                 self.coupled.owner = None;
                 return Err(error);
+            }
+            if let Some(start) = self.coupled.scenes.reanchored_start(owner.completed()) {
+                owner.reanchor_start(start)?;
             }
         }
         self.setup = Some(setup);
@@ -961,7 +964,7 @@ impl MatterDomain {
         let reaction = self.reaction.as_ref().ok_or("Matter coupling: the reaction array is missing")?;
         // A tick running this frame started by now, so the tick before it
         // has its end sampled.
-        let end = self.coupled.scenes.get(owner.completed() + 1);
+        let end = self.coupled.scenes.endpoint(owner.completed() + 1);
         owner.settle_ready(end, |_| true, |_, rows, impulses| {
             decode(exchange.scale, rows, reaction_words(Some(reaction)), impulses)
         })?;

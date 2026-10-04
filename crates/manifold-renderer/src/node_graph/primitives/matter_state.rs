@@ -14,6 +14,7 @@ use crate::node_graph::matter::{
     substep_duration,
 };
 use crate::node_graph::parameters::ParamValue;
+use crate::node_graph::physics_metrics::DroppedTimeTracker;
 use crate::node_graph::primitive::Primitive;
 use crate::node_graph::substeps::{SubstepBoundaryPorts, SubstepResultPorts};
 
@@ -73,6 +74,7 @@ crate::primitive! {
         ticks: ScalarF32 optional,
     interval_duration: ScalarF32 optional,
     simulation_time: ScalarF32 optional, target_time: ScalarF32 optional,
+        dropped_seconds: ScalarF32 optional,
     step_cap_hit: ScalarF32 optional,
         substeps_per_tick: ScalarF32 optional,
         epoch: ScalarF32 optional,
@@ -116,6 +118,7 @@ crate::primitive! {
         faulted: bool = false,
         submitted_time: f64 = 0.0,
         completed_time: f64 = 0.0,
+        dropped_time: DroppedTimeTracker = DroppedTimeTracker::default(),
         submitted_cap: bool = false,
         completed_cap: bool = false,
         last_stats: Option<MatterTickStats> = None,
@@ -206,6 +209,7 @@ impl Primitive for MatterState {
         let live_mode = !crate::node_graph::physics::offline_simulation();
         self.submitted_time = f64::from(ctx.scalar_or_param("simulation_time", 0.0));
         let target = f64::from(ctx.scalar_or_param("target_time", self.submitted_time as f32));
+        let dropped_seconds = f64::from(ctx.scalar_or_param("dropped_seconds", 0.0));
         self.submitted_cap = ctx.scalar_or_param("step_cap_hit", 0.0) > 0.0;
         // A graph saved without the domain's interval wire runs on the project's Sim Rate.
         let interval_duration = ctx.scalar_or_param(
@@ -253,6 +257,7 @@ impl Primitive for MatterState {
             self.epoch = Some(epoch);
             self.ticks_done = 0;
             self.completed_time = 0.0;
+            self.dropped_time.reset();
             self.completed_cap = false;
             self.faulted = false;
             self.last_stats = None;
@@ -277,11 +282,13 @@ impl Primitive for MatterState {
             gpu.native_enc
                 .copy_buffer_to_buffer(seed, out, seed.size.min(out.size));
         }
-        crate::node_graph::physics_metrics::record_simulation(
+        self.dropped_time.record(
             target,
             self.completed_time,
+            dropped_seconds,
             self.completed_cap,
-            self.faulted);
+            self.faulted,
+        );
 
         self.substeps = substeps;
         self.step_dt = substep_duration(interval_duration, substeps);

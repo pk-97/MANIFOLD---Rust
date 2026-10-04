@@ -696,8 +696,8 @@ fn migrate_gltf_ao_mask(def: &mut EffectGraphDef) -> bool {
     changed
 }
 
-/// Add explicit interval wires to pre-clock liquid graphs, preserving authored
-/// duration wires and all export settings. Runs once at graph installation.
+/// Add explicit interval and clock telemetry wires to pre-clock liquid graphs,
+/// preserving authored wires and all export settings. Runs once at installation.
 fn wire_liquid_intervals(def: &mut EffectGraphDef) -> bool {
     use manifold_core::effect_graph_def::EffectGraphWire;
     let mut domains = std::collections::BTreeMap::new();
@@ -719,7 +719,8 @@ fn wire_liquid_intervals(def: &mut EffectGraphDef) -> bool {
     for node in &def.nodes {
         let clock_ports: &[(&str, &str)] = match node.type_id.as_str() {
             "node.gpu_flip_step" => &[("clock_obstacles", "clock_obstacles"), ("clock_sources", "clock_sources"), ("clock_obstacle_count", "clock_obstacle_count"), ("clock_source_count", "clock_source_count"), ("live_hits", "live_hits"), ("live_hit_count", "live_hit_count"), ("limit_interval", "limit_interval")],
-            "node.matter_state" => &[("target_time", "target_time"), ("simulation_time", "simulation_time"), ("step_cap_hit", "step_cap_hit")],
+            "node.liquid_state" => &[("dropped_seconds", "dropped_seconds")],
+            "node.matter_state" => &[("target_time", "target_time"), ("simulation_time", "simulation_time"), ("step_cap_hit", "step_cap_hit"), ("dropped_seconds", "dropped_seconds")],
             _ => &[],
         };
         let intervals = crate::node_graph::liquid::clock::INTERVAL_DURATION_INPUTS.iter()
@@ -2119,6 +2120,36 @@ mod tests {
         assert_eq!(def.wires.iter().filter(|w| w.to_node == 4 && w.to_port == "dt").count(), 1);
         assert!(def.wires.contains(&wire(5, "out", 4, "dt")));
         assert!(!wire_liquid_intervals(&mut def));
+    }
+
+    #[test]
+    fn dropped_time_wires_are_added_once_and_preserve_authored_inputs() {
+        use manifold_core::effect_graph_def::EffectGraphWire;
+        let wire = |from, output: &str, to, input: &str| EffectGraphWire {
+            from_node: from, from_port: output.into(), to_node: to, to_port: input.into(),
+        };
+        for (domain, state) in [
+            ("node.gpu_flip_domain", "node.liquid_state"),
+            ("node.matter_domain", "node.matter_state"),
+        ] {
+            let authored = wire(4, "out", 3, "dropped_seconds");
+            let mut def = EffectGraphDef {
+                version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
+                name: None, description: None, preset_metadata: None, scene_modifiers: Vec::new(),
+                nodes: vec![bare_node(1, domain), bare_node(2, state), bare_node(3, state), bare_node(4, "node.scalar"), bare_node(5, state)],
+                wires: vec![wire(1, "ticks", 2, "ticks"), wire(1, "ticks", 3, "ticks"), authored.clone()],
+            };
+            assert!(wire_liquid_intervals(&mut def));
+            assert!(def.wires.contains(&wire(1, "dropped_seconds", 2, "dropped_seconds")));
+            assert!(def.wires.contains(&authored));
+            for state in [2, 3] {
+                assert_eq!(def.wires.iter().filter(|w| w.to_node == state && w.to_port == "dropped_seconds").count(), 1);
+            }
+            assert!(!def.wires.iter().any(|w| w.to_node == 5), "an unowned state has no inferred clock");
+            let migrated = def.wires.clone();
+            assert!(!wire_liquid_intervals(&mut def));
+            assert_eq!(def.wires, migrated);
+        }
     }
 
     /// Each liquid field consumer's bounds wiring as (consumer type, blob

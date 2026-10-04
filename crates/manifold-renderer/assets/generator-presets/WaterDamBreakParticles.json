@@ -1954,6 +1954,12 @@
     },
     {
       "fromNode": 0,
+      "fromPort": "dropped_seconds",
+      "toNode": 5,
+      "toPort": "dropped_seconds"
+    },
+    {
+      "fromNode": 0,
       "fromPort": "lattice_min_x",
       "toNode": 6,
       "toPort": "lattice_min_x"

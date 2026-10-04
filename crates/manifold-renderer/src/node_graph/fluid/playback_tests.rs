@@ -48,9 +48,9 @@ impl Fixture {
             settings,
             initial,
             start_tick: 0,
+            start_time: Seconds::ZERO,
             count: 6,
-            interval: None,
-            speed_limit_interval: None,
+            schedule: None,
             history: [0.0, 6.0 * TICK]
                 .map(|time| Sample {
                     time,

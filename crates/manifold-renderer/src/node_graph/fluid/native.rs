@@ -135,14 +135,15 @@ impl NativeSimulation {
         tick: u64,
         sample_time: Seconds,
     ) -> Result<PreparedTick<'request>, String> {
-        let step = request.interval.map_or_else(
+        let interval = request.interval(tick);
+        let step = interval.map_or_else(
             || FluidRuntime::step_at(&request.history, tick),
             |interval| FluidRuntime::step_at_interval(&request.history, interval),
         );
         // Every step path below runs after this: plain, impulse-split and
-        // coupled live frames all keep one Sim Rate interval's speed limit.
+        // coupled frames measure split-hit segments against their parent interval.
         native
-            .set_speed_limit_interval(request.speed_limit_interval)
+            .set_speed_limit_interval(interval.map(StepInterval::duration))
             .map_err(|e| e.to_string())?;
         native
             .set_gravity(step.current.gravity)
@@ -171,11 +172,11 @@ impl NativeSimulation {
             &request.history,
             &request.role_history,
             tick,
-            request.interval,
+            interval,
             sample_time,
             domain,
         )?;
-        let field = if request.interval.is_some() {
+        let field = if interval.is_some() {
             FluidRuntime::field_at_time(&request.history, sample_time, domain)
         } else {
             FluidRuntime::field_at(&request.history, tick, domain)
@@ -520,9 +521,10 @@ impl NativeSimulation {
                     break;
                 }
                 let tick = request.start_tick + index as u64;
-                let interval = request.interval.map(|interval| {
-                    StepInterval::new(Seconds(interval.start.0), Seconds(interval.end.0))
-                });
+                let interval = request.interval(tick);
+                if request.schedule.is_some() && interval.is_none() {
+                    return Err(format!("Water worker: tick {tick} has no accepted interval"));
+                }
                 let sample_time = interval.map_or(Seconds(tick as f64 * super::TICK), |interval| {
                     interval.start
                 });
@@ -617,14 +619,12 @@ impl NativeSimulation {
             // The particle frame is the batch's last completed tick, or the
             // current tick for a capture-only request.
             let tick = request.start_tick + completed_count as u64;
+            let frame_time = request.particle_time(completed_count);
             if let Some(slot) = request.outputs.particles.as_mut()
                 && tick > 0
                 && cancel_epoch.load(Ordering::Acquire) == request.epoch
             {
                 let native = &mut self.world.as_mut().expect("world initialized").1;
-                let frame_time = request
-                    .interval
-                    .map_or((tick as f64) * super::TICK, |interval| interval.end.0);
                 match slot.capture(native, domain.native_origin(), tick, frame_time) {
                     Ok(()) => {}
                     Err(CaptureError::Capacity { particles, solid }) => {
@@ -637,10 +637,9 @@ impl NativeSimulation {
         })();
         request.coupled = coupled_request;
         let mut error = result.err();
-        let accepted_interval =
-            (error.is_none() && request.interval.is_some() && completed_count > 0)
-                .then_some(request.interval)
-                .flatten();
+        let accepted_interval = if error.is_none() && completed_count > 0 {
+            request.interval(request.start_tick + completed_count as u64 - 1)
+        } else { None };
         if self.take_writer.is_some()
             && let Err(record_error) =
                 self.record_input_prefix(&request, recorded_count, started_tick, error.as_deref())
