@@ -1,6 +1,6 @@
 {
-  "measured_at": "2026-10-01",
-  "sha": "seed: /tmp/gpu_gate_scope/slowest.md + land-batch-gate2.log + land-gate-bodies.log (not a full nightly run)",
+  "measured_at": "2026-10-05",
+  "sha": "Partial catalog: 2026-10-01 seed from /tmp/gpu_gate_scope/slowest.md + land-batch-gate2.log + land-gate-bodies.log; only gpu_flip_body_step_sparse_matches_all_tiles added from 977968507 scoped landing log slot-2/target/landing-logs/gpu-proofs-20261004T233307.034337Z-1791156787034364000.log (not a full nightly run)",
   "tests": {
     "glb_conformance_sweep": 929.8,
     "matter_bodies::matter_collider_penetration_bounded": 309.6,
@@ -11,6 +11,7 @@
     "node_graph::primitives::render_scene::gpu_tests::prewarm_pipelines_populates_the_shared_render_cache": 174.1,
     "matter_look::matter_look_lattice_alignment": 104.3,
     "node_graph::primitives::gpu_flip_scene_tests::gpu_flip_dam_break_settles_to_its_volume": 62.6,
+    "node_graph::primitives::gpu_flip_body_tests::gpu_flip_body_step_sparse_matches_all_tiles": 69.6,
     "matter_look::matter_look_volume_drift": 117.4,
     "liquid_conformance::liquid_thumbnail_ignores_contention": 234.0,
     "liquid_conformance::gpu_flip_body_push_against_iterations": 85.1,
