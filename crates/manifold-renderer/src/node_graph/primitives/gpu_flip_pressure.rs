@@ -670,7 +670,7 @@ impl PressureSolver {
             enc.dispatch_compute(
                 &pipes.classify,
                 &[bytes(&params), buffer(1, touched), buffer(19, &b.flags), buffer(21, plan)],
-                groups(u64::from(tile_total(lattice))),
+                groups(u64::from(tile_total(lattice)) * 32),
                 "gpu_flip.pressure.classify",
             );
             enc.dispatch_compute(

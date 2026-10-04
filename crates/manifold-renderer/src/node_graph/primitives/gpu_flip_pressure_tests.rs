@@ -765,6 +765,117 @@ fn pressure_module_solves_the_ghost_rows() {
     assert!(failures.is_empty(), "{failures:#?}");
 }
 
+/// The original classifier's boolean rule, independently scanning each
+/// clipped tile box grown by one cell. No lane partition or reduction here.
+fn pressure_tile_flags(n: [usize; 3], water: &[f32], all_tiles: bool) -> Vec<u32> {
+    let tiles = n.map(|side| side.div_ceil(8));
+    (0..tiles.iter().product()).map(|tile| {
+        if all_tiles { return 1; }
+        let origin = lattice_coords(tile, tiles).map(|v| 8 * v);
+        let first = origin.map(|v| v.saturating_sub(1));
+        let last: [usize; 3] = std::array::from_fn(|a| (origin[a] + 8).min(n[a] - 1));
+        for z in first[2]..=last[2] {
+            for y in first[1]..=last[1] {
+                for x in first[0]..=last[0] {
+                    if water[lattice_index([x, y, z], n)] > 0.5 { return 1; }
+                }
+            }
+        }
+        0
+    }).collect()
+}
+
+#[test]
+fn pressure_module_parallel_classification_matches_serial_boolean_oracle() {
+    fn buffer(binding: u32, buffer: &GpuBuffer) -> GpuBinding<'_> {
+        GpuBinding::Buffer { binding, buffer, offset: 0 }
+    }
+    let device = crate::test_device();
+    let shader = include_str!("shaders/gpu_flip_pressure.wgsl");
+    let classify = device.create_compute_pipeline(shader, "classify_main", "pressure.classify.proof");
+    let lists = device.create_compute_pipeline(shader, "lists_main", "pressure.lists.proof");
+    const BASE: usize = 3;
+    const SENTINEL: u32 = 0xa17e_5afe;
+    for n in [[1, 1, 1], [7, 9, 5], [17, 10, 25], [64, 64, 64], [128, 128, 128]] {
+        let cells: usize = n.iter().product();
+        let total: usize = n.map(|v| v.div_ceil(8)).iter().product();
+        let water_buffer = device.create_buffer_shared((cells * 4) as u64);
+        let flags = device.create_buffer_shared(((total + 2 * BASE) * 4) as u64);
+        let active_list = device.create_buffer_shared(flags.size);
+        let armed = device.create_buffer_shared(9 * 4);
+        let plan = device.create_buffer_shared(16 * 4);
+        let mut expected_flags = vec![SENTINEL; total + 2 * BASE];
+        let mut expected_list = expected_flags.clone();
+        let mut expected_armed = vec![SENTINEL; 9];
+        // SAFETY: shared buffers hold these words and no GPU work is queued.
+        unsafe {
+            flags.write(0, bytemuck::cast_slice(&expected_flags));
+            active_list.write(0, bytemuck::cast_slice(&expected_list));
+            armed.write(0, bytemuck::cast_slice(&expected_armed));
+        }
+        // Empty -> full -> sparse -> halo-only -> empty reuses the storage, then
+        // all_tiles and an inactive clock prove the override and preservation.
+        for (mask, all_tiles, inactive) in [
+            (0, false, false), (1, false, false), (2, false, false),
+            (3, false, false), (0, false, false), (0, true, false),
+            (0, false, true), (3, false, false),
+        ] {
+            let mut water = vec![if mask == 1 { 1.0_f32 } else { 0.0 }; cells];
+            if mask == 2 {
+                for p in [[0; 3], n.map(|v| v - 1), n.map(|v| 7.min(v - 1)), n.map(|v| 9.min(v - 1))] {
+                    water[lattice_index(p, n)] = 1.0;
+                }
+                // Exactly 0.5 is air; its next representable neighbour is wet.
+                for (index, value) in [0.5_f32, 0.5_f32.next_down(), 0.5_f32.next_up(), -1.0, f32::NAN].into_iter().enumerate().take(cells) {
+                    water[index] = value;
+                }
+            } else if mask == 3 {
+                // At x=8, this cell touches both tile 0's halo and tile 1.
+                water[lattice_index([8.min(n[0] - 1), 0, 0], n)] = 1.0;
+            }
+            let mut clock = [0u32; 16];
+            clock[11] = 1;
+            clock[0] = if inactive { 0.0_f32 } else { 1.0_f32 / 60.0 }.to_bits();
+            // SAFETY: previous command buffer completed; storage covers all values.
+            unsafe {
+                water_buffer.write(0, bytemuck::cast_slice(&water));
+                plan.write(0, bytemuck::cast_slice(&clock));
+            }
+            let params = LentineFluxParams {
+                nx: n[0] as u32, ny: n[1] as u32, nz: n[2] as u32,
+                list_base: BASE as u32, level: 1, all_tiles: u32::from(all_tiles),
+                ..LentineFluxParams::default()
+            };
+            let mut enc = device.create_encoder("pressure classifier boolean proof");
+            enc.dispatch_compute(&classify, &[
+                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&params) },
+                buffer(1, &water_buffer), buffer(19, &flags), buffer(21, &plan),
+            ], [((total * 32).div_ceil(256)) as u32, 1, 1], "pressure.classify.proof");
+            enc.dispatch_compute(&lists, &[
+                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&params) },
+                buffer(14, &armed), buffer(19, &flags), buffer(20, &active_list), buffer(21, &plan),
+            ], [1, 1, 1], "pressure.lists.proof");
+            enc.commit_and_wait_completed();
+            if !inactive {
+                let oracle = pressure_tile_flags(n, &water, all_tiles);
+                expected_flags[BASE..BASE + total].copy_from_slice(&oracle);
+                let mut count = 0;
+                for (tile, &lit) in oracle.iter().enumerate() {
+                    if lit != 0 {
+                        expected_list[BASE + count] = tile as u32;
+                        count += 1;
+                    }
+                }
+                expected_armed[3..6].copy_from_slice(&[2 * count as u32, 1, 1]);
+            }
+            let context = format!("{n:?} mask {mask}, all_tiles {all_tiles}, inactive {inactive}");
+            assert_eq!(read::<u32>(&flags, expected_flags.len()), expected_flags, "flags: {context}");
+            assert_eq!(read::<u32>(&active_list, expected_list.len()), expected_list, "lists and retained tail: {context}");
+            assert_eq!(read::<u32>(&armed, expected_armed.len()), expected_armed, "armed counts: {context}");
+        }
+    }
+}
+
 /// The solve encodes exactly the passes `passes` counts, every one labelled
 /// as the solver's; and its GPU time per solve, printed.
 #[test]
@@ -776,6 +887,17 @@ fn pressure_module_passes_match_the_count() {
         rig.run(&problem, 8, false);
         let profile = rig.run(&problem, 8, true);
         assert_eq!(profile.overflow, 0);
+        assert_eq!(profile.invalid, 0);
+        assert_eq!(profile.failed_command_buffers, 0);
+        let mut costs = std::collections::BTreeMap::<&str, (usize, f64)>::new();
+        for span in &profile.spans {
+            let row = costs.entry(&span.label).or_default();
+            row.0 += 1;
+            row.1 += span.millis;
+        }
+        for (label, (count, ms)) in costs {
+            println!("pressure active-pass {m}: {label} count {count} sampled_ms {ms:.5}");
+        }
         let (prepare, solve) = passes([m as u32; 3], 8);
         assert_eq!(profile.spans.len(), prepare + solve, "{m}³ ({} levels)", level_lattices([m as u32; 3]).len());
         assert!(profile.spans.iter().all(|s| s.label.starts_with("gpu_flip.pressure.")), "{m}³: an unlabelled pass");

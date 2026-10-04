@@ -686,36 +686,41 @@ fn coarsen_water_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     out2[idx] = select(0.0, 1.0, touched);
 }
 
-// One thread per tile of this level: active (1) when a touched cell (`water`
+// 32 lanes per tile of this level: active (1) when a touched cell (`water`
 // binds the level's touched mask) lies in the tile's box grown by one cell,
 // into flags from list_base; every tile with `all_tiles`.
 @compute @workgroup_size(256, 1, 1)
-fn classify_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn classify_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) li: u32) {
     if slot_inactive() {
         return;
     }
     let n = lattice();
-    let t = gid.x;
-    if t >= tile_total(n) {
-        return;
-    }
-    var lit = u.all_tiles != 0u;
-    if !lit {
+    // Eight tiles per workgroup, with 32 lanes sharing each tile's 10³ halo.
+    // Invalid edge tiles contribute zero and still reach every barrier.
+    let t = gid.x >> 5u;
+    let lane = gid.x & 31u;
+    let valid = t < tile_total(n);
+    var lit = valid && u.all_tiles != 0u;
+    if valid && !lit {
         let origin = coords(t, tile_dims(n)) * TILE;
-        let first = max(origin - vec3<i32>(1), vec3<i32>(0));
-        let last = min(origin + vec3<i32>(TILE), n - vec3<i32>(1));
-        for (var z = first.z; z <= last.z && !lit; z = z + 1) {
-            for (var y = first.y; y <= last.y && !lit; y = y + 1) {
-                for (var x = first.x; x <= last.x; x = x + 1) {
-                    if is_water(cell(vec3<i32>(x, y, z), n)) {
-                        lit = true;
-                        break;
-                    }
-                }
+        for (var k = lane; k < 1000u && !lit; k = k + 32u) {
+            let p = origin - vec3<i32>(1) + coords(k, vec3<i32>(10));
+            if all(p >= vec3<i32>(0)) && all(p < n) {
+                lit = is_water(cell(p, n));
             }
         }
     }
-    flags[u.list_base + t] = u32(lit);
+    scan[li] = u32(lit);
+    workgroupBarrier();
+    for (var width = 16u; width > 0u; width = width >> 1u) {
+        if lane < width {
+            scan[li] = scan[li] | scan[li + width];
+        }
+        workgroupBarrier();
+    }
+    if lane == 0u && valid {
+        flags[u.list_base + t] = scan[li];
+    }
 }
 
 // One workgroup per level: the level's active tiles in tile order into
