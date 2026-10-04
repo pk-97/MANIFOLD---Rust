@@ -1,22 +1,27 @@
-//! `manifold frame-time <project.manifold> --frames N [--resolution R]
+//! `manifold frame-time <project.manifold> --frames N [--frame-clock] [--resolution R]
 //! [--solve-level L] [--sim-rate HZ] [--stamp-every K] [--splash-frames S] [--png-frame T --png <path>]` —
 //! the whole frame of a real project the way the app runs it: the
 //! production loader, the headless content thread, the project's own frame
-//! rate and output size, from the clip's start. Every frame reports what
-//! Peter's FPS counter sees (the wall interval between ticks) and the GPU
-//! surface wait; every `K`th frame also carries per-dispatch GPU timestamps
+//! rate and output size, from the clip's start. By default it uses production
+//! pacing and reports the wall interval between ticks and the GPU surface
+//! wait. `--frame-clock` advances exactly one project frame per tick without
+//! real-time pacing and waits for GPU completion after every tick, including
+//! coupled reactions. Its wall sample is tick plus GPU fence, never window
+//! FPS. Plain GPU time is the sum of the Generators and Compositor command-
+//! buffer spans, each from its first chunk's start to its last chunk's end.
+//! Every `K`th frame also carries per-dispatch GPU timestamps
 //! split per node type, per dispatch label inside the solver and the
 //! whitewater, and per pass label inside render_scene. Timestamped frames
 //! open one encoder per dispatch with encode replay off, so their split is a
 //! ratio, never the budget. `--stamp-granularity node` keeps one sampled
-//! encoder per graph step instead, so the per-node-type table is the plain
-//! frame's breakdown (replay still off; the inner tables are then empty).
-//! A timestamped frame waits for its GPU work, a plain frame does not, and
+//! encoder per graph step instead (replay still off; inner labels are grouped).
+//! In paced mode a timestamped frame waits for its GPU work, a plain frame
+//! does not, and
 //! a liquid coupled to a body runs no tick while the last tick's reaction
 //! is in flight: with plain and timestamped frames interleaved on such a
 //! project the timestamped frames skip the step once the plain frame's GPU
 //! work outlasts the tick interval (every one of them at 128). Measure a
-//! coupled project with `--stamp-every 1`.
+//! coupled project with `--stamp-every 1` or use `--frame-clock`.
 //! The first `S` frames are the splash, the rest
 //! the calm; both tables print. `--resolution` and `--solve-level` override
 //! the GPU FLIP generator's `resolution` and `solve_level` cards in memory,
@@ -46,6 +51,7 @@ const MAX_SPANS: usize = 65536;
 struct Args {
     project: String,
     frames: usize,
+    frame_clock: bool,
     resolution: Option<f32>,
     solve_level: Option<f32>,
     sim_rate: Option<manifold_core::settings::SimRate>,
@@ -58,7 +64,7 @@ struct Args {
 fn usage_exit(msg: &str) -> ! {
     eprintln!("frame-time: {msg}");
     eprintln!(
-        "usage: manifold frame-time <project.manifold> --frames N [--resolution R] [--solve-level L] [--sim-rate 15|20|30|60] \
+        "usage: manifold frame-time <project.manifold> --frames N [--frame-clock] [--resolution R] [--solve-level L] [--sim-rate 15|20|30|60] \
          [--stamp-every K] [--stamp-granularity dispatch|node] [--splash-frames S] \
          [--png-frame T --png <path>]"
     );
@@ -90,6 +96,7 @@ fn parse(args: &[String]) -> Args {
         }
     };
     let frames = number("--frames", None);
+    let frame_clock = args.iter().any(|arg| arg == "--frame-clock");
     let stamp_every = number("--stamp-every", Some(5)).max(1);
     let granularity = granularity(value(args, "--stamp-granularity").as_deref()).unwrap_or_else(|e| usage_exit(&e));
     let splash_frames = number("--splash-frames", Some(frames / 2));
@@ -106,12 +113,20 @@ fn parse(args: &[String]) -> Args {
         (Some(_), None) | (None, Some(_)) => usage_exit("--png-frame and --png go together"),
         (Some(_), Some(path)) => Some((number("--png-frame", None), path)),
     };
-    Args { project, frames, resolution, solve_level, sim_rate, stamp_every, granularity, splash_frames, png }
+    Args { project, frames, frame_clock, resolution, solve_level, sim_rate, stamp_every, granularity, splash_frames, png }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frame_clock_flag_defaults_off_and_parses() {
+        let mut args: Vec<String> = ["frame-time", "water.manifold", "--frames", "2"].into_iter().map(str::to_owned).collect();
+        assert!(!parse(&args).frame_clock);
+        args.push("--frame-clock".into());
+        assert!(parse(&args).frame_clock);
+    }
 
     #[test]
     fn stamp_granularity_flag_parses() {
@@ -170,13 +185,13 @@ mod tests {
     }
 }
 
-/// One frame's numbers. Every frame has the wall interval and the surface
-/// wait; a timestamped frame also has its split.
+/// One frame's numbers: paced tick interval/surface wait, or fixed-clock
+/// tick plus fence/completion wait. A timestamped frame also has its split.
 struct Frame {
     interval_ms: f64,
     fence_ms: f64,
-    /// Plain (unprofiled) frames only: true GPU ms of the Generators and
-    /// Compositor command buffers, from their completion handlers.
+    /// Plain frames only: Generators and Compositor command-buffer spans,
+    /// from their completion handlers, including gaps between their chunks.
     plain_gpu_ms: Option<(f64, f64)>,
     split: Option<Split>,
 }
@@ -298,19 +313,23 @@ impl Phase {
         }
     }
 
-    fn report(&self, name: &str) {
+    fn report(&self, name: &str, frame_clock: bool) {
         println!("== {name} ==");
+        let (wall_label, wait_label, rate_note) = if frame_clock {
+            ("tick + GPU fence", "post-tick GPU completion wait", String::new())
+        } else {
+            ("tick interval", "GPU surface wait", format!(" (fps p50 {:.1})", 1000.0 / percentile(&self.interval, 0.5)))
+        };
         println!(
-            "  frames ({}): tick interval p50 {:.2} ms p95 {:.2} ms (fps p50 {:.1}) | GPU surface wait p50 {:.2} ms p95 {:.2} ms",
+            "  frames ({}): {wall_label} p50 {:.2} ms p95 {:.2} ms{rate_note} | {wait_label} p50 {:.2} ms p95 {:.2} ms",
             self.interval.len(),
             percentile(&self.interval, 0.5),
             percentile(&self.interval, 0.95),
-            1000.0 / percentile(&self.interval, 0.5),
             percentile(&self.fence, 0.5),
             percentile(&self.fence, 0.95),
         );
         println!(
-            "  plain frames ({}): true GPU ms  total p50 {:.2} p95 {:.2} max {:.2} | generators p50 {:.2} p95 {:.2} | compositor p50 {:.2} p95 {:.2}",
+            "  plain frames ({}): command-buffer GPU spans, ms  sum p50 {:.2} p95 {:.2} max {:.2} | generators p50 {:.2} p95 {:.2} | compositor p50 {:.2} p95 {:.2}",
             self.plain_total.len(),
             percentile(&self.plain_total, 0.5),
             percentile(&self.plain_total, 0.95),
@@ -455,6 +474,7 @@ pub fn run(args: &[String]) -> ! {
 }
 
 fn probe(args: &Args) -> Result<(), String> {
+    let initial_faults = manifold_gpu::gpu_fault::fault_count();
     let mut overridden = 0usize;
     let mut sim_rate = manifold_core::settings::SimRate::default();
     let PreparedProject { mut ct, cmd_tx, cmd_rx, state_tx, drain, width, height, frame_rate, .. } =
@@ -486,8 +506,13 @@ fn probe(args: &Args) -> Result<(), String> {
         + &args.solve_level.map_or(String::new(), |l| format!(", solve level {l}"))
         + &format!(", sim rate {} Hz", sim_rate.hz());
     let device_name = ct.content_pipeline.native_device().map_or("unknown".to_owned(), |d| d.device_name());
+    let mode = if args.frame_clock {
+        "frame clock, no pacing, completion wait every frame; wall = tick + GPU fence"
+    } else {
+        "real-time paced; wall = tick interval"
+    };
     println!(
-        "frame-time: {} at {width}x{height} @ {frame_rate} fps, {resolution_note}, {} frames, every {}th timestamped per {}, splash = first {} frames, on {device_name}",
+        "frame-time: {mode}; {} at {width}x{height} @ {frame_rate} project fps, {resolution_note}, {} frames, every {}th timestamped per {}, splash = first {} frames, on {device_name}",
         args.project,
         args.frames,
         args.stamp_every,
@@ -499,6 +524,7 @@ fn probe(args: &Args) -> Result<(), String> {
     );
     ct.content_pipeline.set_profiling_granularity(args.granularity);
 
+    ct.timer.set_frame_clocked(args.frame_clock);
     ct.timer.resume_after_load();
     ct.handle_command(ContentCommand::Play);
     let (gpu_time_tx, gpu_time_rx) = crossbeam_channel::unbounded::<(&'static str, f64, f64)>();
@@ -508,13 +534,26 @@ fn probe(args: &Args) -> Result<(), String> {
     for index in 0..args.frames {
         let stamped = index % args.stamp_every == args.stamp_every - 1;
         set_profiling(&mut ct, stamped);
-        if ct.run_paced_frame(&cmd_tx, &cmd_rx, &state_tx) {
-            return Err("shutdown requested mid-run".into());
-        }
-        let now = Instant::now();
-        let interval_ms = now.duration_since(last).as_secs_f64() * 1e3;
-        last = now;
-        let fence_ms = ct.content_pipeline.last_fence_wait_ms();
+        let (interval_ms, fence_ms) = if args.frame_clock {
+            let start = Instant::now();
+            ct.timer.ensure_thread_policy();
+            objc2::rc::autoreleasepool(|_| ct.tick_frame(&state_tx));
+            let fence_start = Instant::now();
+            ct.content_pipeline.wait_for_render_complete();
+            // The live waiter may time out or wake early. Reuse the existing
+            // checked fence before accepting an equal-progress sample.
+            ct.content_pipeline.wait_for_export_complete(initial_faults)?;
+            let fence_ms = fence_start.elapsed().as_secs_f64() * 1e3;
+            (start.elapsed().as_secs_f64() * 1e3, fence_ms)
+        } else {
+            if ct.run_paced_frame(&cmd_tx, &cmd_rx, &state_tx) {
+                return Err("shutdown requested mid-run".into());
+            }
+            let now = Instant::now();
+            let interval_ms = now.duration_since(last).as_secs_f64() * 1e3;
+            last = now;
+            (interval_ms, ct.content_pipeline.last_fence_wait_ms())
+        };
         let frame_split = stamped.then(|| split(&mut ct, args.granularity));
         if let Some((at, path)) = &args.png
             && *at == index
@@ -524,6 +563,7 @@ fn probe(args: &Args) -> Result<(), String> {
         frames.push(Frame { interval_ms, fence_ms, plain_gpu_ms: None, split: frame_split });
     }
     set_profiling(&mut ct, false);
+    ct.content_pipeline.wait_for_render_complete();
     ct.content_pipeline.set_gpu_time_tap(None);
     drop(state_tx);
     drain.join().map_err(|_| "drain thread panicked".to_string())?;
@@ -532,9 +572,10 @@ fn probe(args: &Args) -> Result<(), String> {
     // them in that same order. A frame is every Generators chunk, then every
     // Compositor chunk (chunking splits each encoder into several buffers);
     // a Generators chunk after a Compositor one starts the next frame. The
-    // chunks of one frame overlap on the GPU, so a frame's time is the span
-    // from its first start to its last end, not the sum of durations. Let
-    // the last buffers land before grouping.
+    // chunks of each encoder overlap on the GPU, so its time is the span
+    // from its first start to its last end, not the sum of chunk durations.
+    // The reported plain sum adds the two encoder spans. Allow completion
+    // handlers to deliver the final taps before grouping.
     std::thread::sleep(Duration::from_millis(500));
     let mut plain = frames.iter_mut().filter(|f| f.split.is_none());
     let (mut generators, mut compositor) = (Span::default(), Span::default());
@@ -556,10 +597,14 @@ fn probe(args: &Args) -> Result<(), String> {
     }
     let unpaired = frames.iter().filter(|f| f.split.is_none() && f.plain_gpu_ms.is_none()).count();
     if unpaired > 0 {
+        if args.frame_clock {
+            return Err(format!("{unpaired} fixed-clock frames got no GPU completion time"));
+        }
         println!("  WARNING: {unpaired} plain frames got no GPU completion time");
     }
 
-    println!("  per frame: wall interval ms / true GPU ms (* = timestamped: one encoder per dispatch, no plain GPU time):");
+    let wall_label = if args.frame_clock { "tick + GPU fence" } else { "wall interval" };
+    println!("  per frame: {wall_label} ms / command-buffer GPU span sum ms (* = timestamped, replay off, no plain GPU time):");
     for (row_index, row) in frames.chunks(8).enumerate() {
         let cells: Vec<String> = row
             .iter()
@@ -579,8 +624,8 @@ fn probe(args: &Args) -> Result<(), String> {
         whole.add(frame);
         if index < args.splash_frames { splash.add(frame) } else { calm.add(frame) }
     }
-    whole.report("whole run");
-    splash.report(&format!("splash (frames 0..{})", args.splash_frames));
-    calm.report(&format!("calm (frames {}..{})", args.splash_frames, args.frames));
+    whole.report("whole run", args.frame_clock);
+    splash.report(&format!("splash (frames 0..{})", args.splash_frames), args.frame_clock);
+    calm.report(&format!("calm (frames {}..{})", args.splash_frames, args.frames), args.frame_clock);
     Ok(())
 }
