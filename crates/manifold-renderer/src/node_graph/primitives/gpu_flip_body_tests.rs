@@ -9,11 +9,11 @@
 //! on their own and through a step with a Box3D body
 //! (docs/GPU_FLIP_SPARSE_BLOCKS_DESIGN.md D-9).
 
-use manifold_gpu::{GpuBuffer, GpuDevice};
+use manifold_gpu::{GpuBuffer, GpuDevice, GpuReplayCache};
 
 use super::gpu_flip_atom_tests::{FACE_FLOATS, assert_close, face_grid_len, random_values, random_water};
 use super::gpu_flip_bodies::{BodyPasses, Bodies};
-use super::gpu_flip_pressure::{PressureSolver, Water};
+use super::gpu_flip_pressure::{PROGRESS_FLOATS, PressureSolver, Solve, Stop, Water};
 use super::gpu_flip_step::{TILE, set_all_tiles, set_gate_off, set_poison, set_separate_off};
 use super::liquid_surface_tests::read;
 use crate::node_graph::liquid::bodies::LiquidBody;
@@ -402,6 +402,112 @@ fn gpu_flip_body_reaction_matches_cpu() {
         })
         .collect();
     assert_close(&got, &want, "reaction");
+}
+
+/// The coupled fine round is one replay segment, including the body product.
+/// Stopped and inactive rounds preserve the direct dispatch results exactly.
+#[test]
+fn gpu_flip_coupled_round_replay_matches_direct() {
+    const ROUNDS: u32 = 3;
+
+    struct Run {
+        scene: Scene,
+        solver: PressureSolver,
+        rhs: GpuBuffer,
+        pressure: GpuBuffer,
+        progress: GpuBuffer,
+        plan: GpuBuffer,
+        cache: Option<GpuReplayCache>,
+    }
+
+    impl Run {
+        fn new(replay: bool) -> Self {
+            let mut scene = Scene::with_water(0xc09e, random_water(N.iter().product(), 0xc09f), false);
+            let cells = N.iter().product::<usize>();
+            let rhs = shared(&scene.device, &vec![0.0_f32; cells]);
+            let pressure = shared(&scene.device, &vec![0.0_f32; cells]);
+            let progress = shared(&scene.device, &vec![0_u32; PROGRESS_FLOATS as usize]);
+            let plan = shared(&scene.device, &[0_u32; 12]);
+            scene.passes.set_clock_plan(&plan);
+            let mut solver = PressureSolver::default();
+            solver.prepare_pipelines(&scene.device);
+            solver.set_clock_plan(&plan);
+            Self { scene, solver, rhs, pressure, progress, plan, cache: replay.then(GpuReplayCache::default) }
+        }
+
+        fn solve(&mut self, rhs: &[f32], stop: Stop, active: bool) -> (Vec<u32>, Vec<u32>, Vec<u32>) {
+            let mut plan = [0_u32; 12];
+            plan[0] = if active { TICK.to_bits() } else { 0 };
+            plan[11] = 1;
+            // SAFETY: shared buffers sized for these values; the previous solve completed.
+            unsafe {
+                self.rhs.write(0, bytemuck::cast_slice(rhs));
+                self.plan.write(0, bytemuck::cast_slice(&plan));
+            }
+            let mut enc = self.scene.device.create_encoder("coupled pressure replay");
+            let replay = self.cache.take().map(|cache| enc.begin_replay(&self.scene.device, cache)).is_some();
+            let water = Water {
+                lattice: N.map(|v| v as u32), cell_size: H,
+                water: &self.scene.buffers[0], faces: &self.scene.buffers[1], phi: None,
+            };
+            self.solver.prepare(&self.scene.device, &mut enc, &water).expect("prepare coupled solve");
+            self.solver.solve(&mut enc, &water, Solve {
+                rhs: &self.rhs, pressure: &self.pressure, stop,
+                bodies: Some((&self.scene.passes, &self.scene.bodies())), level: 0, coarse_rhs: None,
+            }).expect("coupled solve");
+            if replay {
+                self.cache = Some(enc.end_replay());
+            }
+            enc.copy_buffer_to_buffer(self.solver.progress().expect("prepared"), &self.progress, self.progress.size);
+            enc.commit_and_wait_completed();
+            (
+                read(&self.pressure, N.iter().product()),
+                bits(&self.scene.sums()),
+                read(&self.progress, PROGRESS_FLOATS as usize),
+            )
+        }
+    }
+
+    let rhs = random_values(N.iter().product(), 0xc0a0);
+    let zero = vec![0.0_f32; rhs.len()];
+    let mut direct = Run::new(false);
+    let mut replay = Run::new(true);
+    let mut last = GpuReplayCache::default().stats();
+    let mut stopped = None;
+    for visit in 0..7 {
+        let (input, stop, active) = match visit {
+            4 => (&zero, Stop::Converged(ROUNDS), true),
+            5 => (&rhs, Stop::Fixed(ROUNDS), false),
+            _ => (&rhs, Stop::Fixed(ROUNDS), true),
+        };
+        let want = direct.solve(input, stop, active);
+        let got = replay.solve(input, stop, active);
+        assert_eq!(got, want, "visit {visit}: pressure, body sums and progress match direct bits");
+        assert!(got.0.iter().chain(&got.1).all(|&v| f32::from_bits(v).is_finite()), "visit {visit}: finite outputs");
+        if visit == 4 {
+            assert!(got.0.iter().all(|&v| v == 0), "zero RHS leaves zero pressure");
+            assert_eq!(got.2[0], 0);
+            assert_eq!(got.2[1], 0, "zero RHS stops before the first iteration");
+            assert_eq!(got.2[2], 1.0_f32.to_bits());
+            stopped = Some(got.clone());
+        } else if visit == 5 {
+            assert_eq!(Some(&got), stopped.as_ref(), "inactive slot preserves pressure, body sums and progress");
+        } else {
+            assert_eq!(got.2[1], (ROUNDS as f32).to_bits(), "visit {visit}: all fixed rounds ran");
+            assert_eq!(got.2[2], 0, "fixed solve has no convergence stop");
+            assert!(got.0.iter().any(|&v| f32::from_bits(v).abs() > 1e-6), "visit {visit}: nonzero pressure");
+            assert!(got.1[..3].iter().any(|&v| f32::from_bits(v).abs() > 1e-6), "visit {visit}: the dynamic body participates");
+        }
+        let stats = replay.cache.as_ref().expect("replay cache returned").stats();
+        // The first visit records its entry; the second grows the recording.
+        if visit >= 2 {
+            assert_eq!(stats.recorded, last.recorded, "visit {visit}: warm recordings unchanged");
+            assert_eq!(stats.store_allocations, last.store_allocations, "visit {visit}: warm storage unchanged");
+            assert_eq!(stats.segments_direct, last.segments_direct, "visit {visit}: no direct round dispatches");
+            assert_eq!(stats.segments_replayed - last.segments_replayed, u64::from(ROUNDS), "visit {visit}: one merged segment per round, including stopped/inactive rounds");
+        }
+        last = stats;
+    }
 }
 
 // ── Sparse against every tile ──────────────────────────────────────────────

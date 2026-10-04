@@ -153,7 +153,7 @@ pub(crate) fn passes(lattice: [u32; 3], iterations: u32) -> (usize, usize) {
 enum BodyRound {
     /// No bodies: the operator pass folds p · s and the round is one piece.
     Without,
-    /// The body passes open the round's second piece, on the gate.
+    /// The body passes share the round's single gated segment.
     Gated,
     /// The body product runs between the pieces, plain: at a coarse solve
     /// level its transfer chain has no gate triples.
@@ -162,14 +162,15 @@ enum BodyRound {
 
 /// A conjugate gradient round's gated dispatches with `coarse` levels below
 /// the fine one: those up to and including the operator product, then
-/// those after it. With bodies p · s needs its own pass after the body
-/// product; without, the operator pass folds it and the round is one piece.
+/// those after it. Gated body passes fit in the first piece; only a plain
+/// body product needs a boundary. With bodies p · s needs its own pass
+/// after the body product; without, the operator pass folds it.
 fn round_commands(coarse: usize, bodies: BodyRound) -> (u32, u32) {
     let v_cycle = (coarse * (4 * SMOOTH_ROUNDS + 3) + 1) as u32;
     // v_cycle (r·z folded), finalize, direction, apply | update (|r|∞ folded), check
     match bodies {
-        // apply plain | impulse partial, finalize, body product, p·s partial, finalize
-        BodyRound::Gated => (v_cycle + 3, 7),
+        // apply, impulse partial, finalize, body product, p·s partial, finalize
+        BodyRound::Gated => (v_cycle + 10, 0),
         // apply plain | p·s partial, finalize
         BodyRound::Plain => (v_cycle + 3, 4),
         // apply folds p·s | finalize
@@ -778,7 +779,7 @@ impl PressureSolver {
                 hook(enc, rhs_k, top.lattice, top.cell_size);
             }
         }
-        // Each round is one replayed segment, or two with bodies: the arm
+        // Each round is one replayed segment, or two for a plain body product: the arm
         // writes every round's range entries as live and the stop zeroes the
         // rounds after it, with the gate. On the fine level the body passes
         // ride the gate, so a stopped solve's later rounds run none of them.
@@ -857,17 +858,17 @@ impl PressureSolver {
             // the direction goes down to the fine lattice (the fine pressure
             // is spare until the end) and the product comes back up.
             if let Some((passes, bodies)) = bodies {
-                enc.end_gated_segments();
                 match round {
                     BodyRound::Gated => {
-                        g.begin_round(enc, 2 * i + 1, after);
                         passes.apply_gated(enc, bodies, g.tiles, &b.p, &b.scratch, &body_gate)?;
                     }
                     _ if k == 0 => {
+                        enc.end_gated_segments();
                         passes.apply(enc, bodies, g.tiles, &b.p, &b.scratch)?;
                         g.begin_round(enc, 2 * i + 1, after);
                     }
                     _ => {
+                        enc.end_gated_segments();
                         chain.prolong_down(enc, &b.p, pressure, Spare::E);
                         zero(enc, pipes, n, &b.body, plan);
                         passes.apply(enc, bodies, g.tiles, pressure, &b.body)?;
@@ -1348,7 +1349,7 @@ mod tests {
         assert_eq!(passes([3; 3], 3), (4, 3 + 3 * 7));
         assert_eq!(round_commands(4, BodyRound::Without), (4 * 11 + 1 + 6, 0));
         assert_eq!(round_commands(4, BodyRound::Plain), (4 * 11 + 1 + 3, 4));
-        assert_eq!(round_commands(4, BodyRound::Gated), (4 * 11 + 1 + 3, 7));
+        assert_eq!(round_commands(4, BodyRound::Gated), (4 * 11 + 1 + 10, 0));
         let slots = Slots { levels: 5 };
         assert_eq!((slots.body_partial(), slots.body_finalize(), slots.triples()), (6, 7, 8));
         assert_eq!(slots.armed() as usize, armed_groups(&level_lattices([64; 3])).len());
