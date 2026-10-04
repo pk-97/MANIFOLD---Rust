@@ -1141,6 +1141,156 @@ fn stencil(idx: u32, source: u32) -> Stencil {
     }
 }
 
+/// Paired x cells retain the original smoother's arithmetic and reduction
+/// positions, including sparse partial tiles, ghost rows and warmed replay.
+#[test]
+fn gpu_flip_paired_smoother_matches_original() {
+    // Exact smooth_main declaration/body from 5bc9e128c; every other shader
+    // function remains current, so this oracle isolates cell pairing.
+    const ORIGINAL: &str = r#"@compute @workgroup_size(256, 1, 1)
+fn smooth_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) li: u32) {
+    if !listed(gid.x) {
+        return;
+    }
+    let n = lattice();
+    let idx = listed_cell(gid.x, n);
+    var product = 0.0;
+    if idx != NO_CELL {
+        let p = coords(idx, n);
+        let swept = is_water(idx) && u32(p.x + p.y + p.z) % 2u == u.color;
+        var e = out[idx];
+        if swept {
+            let h2 = u.cell_size * u.cell_size;
+            let s = stencil(idx, select(0u, 2u, from_zero()));
+            e = select(0.0, (s.sum - h2 * src[idx]) / s.diagonal, s.diagonal > 0.0);
+            out[idx] = e;
+        } else if from_zero() {
+            e = 0.0;
+            out[idx] = e;
+        }
+        product = src[idx] * e;
+    }
+    if reduces() {
+        fold_sum(li, listed_partial(gid.x), product);
+    }
+}
+"#;
+    const N: [usize; 3] = [17, 15, 13];
+    const H: f32 = 0.25;
+    const ROUNDS: u32 = 32;
+
+    struct Run {
+        device: crate::TestDevice,
+        solver: PressureSolver,
+        // Water, faces, rhs, phi, pressure, scalar copy, progress copy, fine flags.
+        buffers: [GpuBuffer; 8],
+        ghost: bool,
+        cache: Option<GpuReplayCache>,
+    }
+    impl Run {
+        fn new(water: &[f32], faces: &[[f32; 8]], phi: &[f32], ghost: bool, original: Option<&str>, replay: bool) -> Self {
+            let device = crate::test_device();
+            let counts = [water.len(), faces.len() * 8, water.len(), phi.len(), water.len(), 2 * MAX_ITERATIONS as usize, PROGRESS_FLOATS as usize, 12];
+            let buffers = counts.map(|count| device.create_buffer_shared((count * 4) as u64));
+            // SAFETY: shared buffers sized above; no GPU work is queued.
+            unsafe {
+                buffers[0].write(0, bytemuck::cast_slice(water));
+                buffers[1].write(0, bytemuck::cast_slice(faces));
+                buffers[3].write(0, bytemuck::cast_slice(phi));
+            }
+            let mut solver = PressureSolver::default();
+            solver.prepare_pipelines(&device);
+            if let Some(shader) = original {
+                solver.set_stencil_shader_for_proof(&device, shader);
+            }
+            Self { device, solver, buffers, ghost, cache: replay.then(GpuReplayCache::default) }
+        }
+
+        fn solve(&mut self, rhs: &[f32], stop: Stop) -> (Vec<u32>, Vec<u32>, Vec<u32>) {
+            // SAFETY: shared rhs sized for the lattice; the last solve completed.
+            unsafe { self.buffers[2].write(0, bytemuck::cast_slice(rhs)) };
+            let mut enc = self.device.create_encoder("paired pressure smoother proof");
+            let replay = self.cache.take().map(|cache| enc.begin_replay(&self.device, cache)).is_some();
+            let water = Water {
+                lattice: N.map(|v| v as u32), cell_size: H, water: &self.buffers[0], faces: &self.buffers[1],
+                phi: self.ghost.then_some(&self.buffers[3]),
+            };
+            self.solver.prepare(&self.device, &mut enc, &water).expect("prepares odd sparse lattice");
+            self.solver.solve(&mut enc, &water, Solve {
+                rhs: &self.buffers[2], pressure: &self.buffers[4], stop, bodies: None, level: 0, coarse_rhs: None,
+            }).expect("solves odd sparse lattice");
+            if replay {
+                self.cache = Some(enc.end_replay());
+            }
+            self.solver.copy_scalars(&mut enc, &self.buffers[5]);
+            enc.copy_buffer_to_buffer(self.solver.progress().expect("prepared"), &self.buffers[6], self.buffers[6].size);
+            enc.copy_buffer_to_buffer(self.solver.tiles().expect("prepared")[1], &self.buffers[7], self.buffers[7].size);
+            enc.commit_and_wait_completed();
+            let flags: Vec<u32> = read(&self.buffers[7], 12);
+            assert!(flags.contains(&0) && flags.contains(&1), "fine tiles include active and inactive tiles");
+            assert_eq!(flags[11], 1, "the partial high corner tile is active");
+            (read(&self.buffers[4], N.iter().product()), read(&self.buffers[5], 2 * MAX_ITERATIONS as usize), read(&self.buffers[6], PROGRESS_FLOATS as usize))
+        }
+    }
+
+    let shader = include_str!("shaders/gpu_flip_pressure.wgsl");
+    let declaration = shader.find("fn smooth_main(").expect("current smoother");
+    let start = shader[..declaration].rfind("@compute").expect("smoother workgroup declaration");
+    let end = declaration + shader[declaration..].find("\n}\n").expect("smoother body end") + 3;
+    let mut original = shader.to_owned();
+    original.replace_range(start..end, ORIGINAL);
+
+    let cells = N.iter().product::<usize>();
+    let water: Vec<f32> = (0..cells).map(|i| {
+        let [x, y, z] = lattice_coords(i, N);
+        f32::from(u8::from(x >= 10 && y >= 8 && z >= 5))
+    }).collect();
+    let faces_n = N.map(|v| v + 1);
+    let faces: Vec<[f32; 8]> = (0..faces_n.iter().product()).map(|i| {
+        let p = lattice_coords(i, faces_n);
+        let open = |a: usize| f32::from(u8::from((0..3).all(|b| b == a || p[b] < N[b]) && p[a] > 0 && p[a] < N[a]));
+        [0.0, 0.0, 0.0, 0.0, open(0), open(1), open(2), 0.0]
+    }).collect();
+    let phi: Vec<f32> = water.iter().map(|&w| if w > 0.5 { -0.11 } else { 0.14 }).collect();
+    for ghost in [false, true] {
+        let mut direct = Run::new(&water, &faces, &phi, ghost, None, false);
+        let mut reference = Run::new(&water, &faces, &phi, ghost, Some(&original), false);
+        let mut replay = Run::new(&water, &faces, &phi, ghost, None, true);
+        let mut last = GpuReplayCache::default().stats();
+        for visit in 0..4 {
+            let rhs: Vec<f32> = (0..cells).map(|i| {
+                if visit == 3 || water[i] < 0.5 { 0.0 } else { ((i * 17 + visit * 13) % 41) as f32 * 0.037 - 0.6 }
+            }).collect();
+            let stop = if visit < 2 { Stop::Fixed(ROUNDS) } else { Stop::Converged(ROUNDS) };
+            let want = reference.solve(&rhs, stop);
+            let got = direct.solve(&rhs, stop);
+            let cached = replay.solve(&rhs, stop);
+            assert_eq!(got, want, "ghost{ghost} visit{visit}: full pressure/scalars/progress equal original smoother");
+            assert_eq!(cached, want, "ghost{ghost} visit{visit}: replay equals original direct bits");
+            assert!(got.0.iter().all(|&v| f32::from_bits(v).is_finite()), "finite pressure");
+            if visit < 2 {
+                assert_eq!(got.2[1], (ROUNDS as f32).to_bits(), "fixed iteration count");
+                assert!(got.0.iter().any(|&v| f32::from_bits(v).abs() > 1e-6), "nontrivial pressure");
+            } else if visit == 2 {
+                assert_eq!(got.2[2], 1.0_f32.to_bits(), "nonzero RHS converges");
+                let iterations = f32::from_bits(got.2[1]);
+                assert!(iterations > 0.0 && iterations < ROUNDS as f32, "nonzero RHS stops inside the cap");
+            } else if visit == 3 {
+                assert_eq!(got.2[1], 0, "zero RHS stops before smoothing");
+                assert_eq!(got.2[2], 1.0_f32.to_bits(), "converged early stop");
+            }
+            let stats = replay.cache.as_ref().expect("replay cache returned").stats();
+            if visit >= 2 {
+                assert_eq!(stats.recorded, last.recorded, "warm solve records nothing");
+                assert_eq!(stats.store_allocations, last.store_allocations, "warm solve allocates no replay storage");
+                assert_eq!(stats.segments_direct, last.segments_direct, "warm rounds never dispatch directly");
+                assert_eq!(stats.segments_replayed - last.segments_replayed, u64::from(ROUNDS), "every scheduled round is replayed");
+            }
+            last = stats;
+        }
+    }
+}
+
 /// A solve replayed from a recording (every round one gated segment the
 /// GPU switches off once the stop fires) gives the same pressure and the
 /// same stop record, bit for bit, as encoding it directly, on the engine's

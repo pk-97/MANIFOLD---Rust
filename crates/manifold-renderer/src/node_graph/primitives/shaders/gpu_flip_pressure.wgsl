@@ -27,7 +27,8 @@
 // tiles)): 8³ tiles, a tile active when a touched cell lies in its box grown
 // by one cell, touched meaning water on the fine level and any touched child
 // on a coarse one (classify_main). The list of active tiles in tile order
-// (lists_main) maps a thread to a cell: 512 threads a tile, two workgroups.
+// (lists_main) covers 512 cells per tile, in two workgroups. The smoother
+// pairs adjacent x cells in each thread; other passes use one thread per cell.
 // Every read of a vector is inside the active tiles: the stencil reads water
 // neighbours only, restriction reads one cell past coarse water's children,
 // prolongation one coarse cell past a fine water cell's parent. The vectors
@@ -386,23 +387,27 @@ fn stencil(idx: u32, source: u32) -> Stencil {
 // One red-black Gauss-Seidel sweep of L e = rhs in place in `out` (e), rhs
 // in `src`. A water cell of the swept color becomes
 // (Σ w · water neighbours' e − h² · rhs) / diagonal, or 0 with no open face.
-// From zero (mode bit 0) every other cell is written 0 and neighbours read
-// 0. With REDUCE, the solve's last fine sweep, each thread also folds
-// rhs · e of its cell (r · z, the unswept color's e final since the sweep
-// before) into the workgroup's partial.
-@compute @workgroup_size(256, 1, 1)
+// Each thread owns adjacent x cells: one of each color. A group still covers
+// the same 256 cells of a tile, with half as many threads. From zero (mode
+// bit 0) the other cell is written 0 and neighbours read 0. With REDUCE,
+// both products occupy their original 256-element reduction positions, so
+// the tree and partials stay bit-for-bit identical to one thread per cell.
+@compute @workgroup_size(128, 1, 1)
 fn smooth_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) li: u32) {
-    if !listed(gid.x) {
+    let pair = 2u * gid.x;
+    if !listed(pair) {
         return;
     }
     let n = lattice();
-    let idx = listed_cell(gid.x, n);
+    // Tile origins are multiples of 8 and pair.x is even, so y/z alone
+    // determine which member has the requested global checkerboard color.
+    let offset = u.color ^ (((pair >> 3u) ^ (pair >> 6u)) & 1u);
+    let idx = listed_cell(pair + offset, n);
+    let other = listed_cell(pair + (offset ^ 1u), n);
     var product = 0.0;
     if idx != NO_CELL {
-        let p = coords(idx, n);
-        let swept = is_water(idx) && u32(p.x + p.y + p.z) % 2u == u.color;
         var e = out[idx];
-        if swept {
+        if is_water(idx) {
             let h2 = u.cell_size * u.cell_size;
             let s = stencil(idx, select(0u, 2u, from_zero()));
             e = select(0.0, (s.sum - h2 * src[idx]) / s.diagonal, s.diagonal > 0.0);
@@ -413,8 +418,28 @@ fn smooth_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_inv
         }
         product = src[idx] * e;
     }
+    var other_product = 0.0;
+    if other != NO_CELL {
+        if from_zero() {
+            out[other] = 0.0;
+        }
+        if reduces() {
+            other_product = src[other] * out[other];
+        }
+    }
     if reduces() {
-        fold_sum(li, listed_partial(gid.x), product);
+        sums[2u * li + offset] = product;
+        sums[2u * li + (offset ^ 1u)] = other_product;
+        workgroupBarrier();
+        for (var width = 128u; width > 0u; width = width >> 1u) {
+            if li < width {
+                sums[li] = sums[li] + sums[li + width];
+            }
+            workgroupBarrier();
+        }
+        if li == 0u {
+            partials[listed_partial(pair)] = sums[0];
+        }
     }
 }
 
