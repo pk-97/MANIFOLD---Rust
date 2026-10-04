@@ -1995,6 +1995,11 @@ fn density_source(@builtin(global_invocation_id) gid: vec3<u32>) {
                     // A particle the solid has swept over is removed by this
                     // step's move; the solid's rest sites below already count
                     // that volume, so counting it too reads as crowding.
+                    // Outside the one-cell support its contribution is exactly
+                    // zero. Keep nonfinite queries on the original path.
+                    if finite(q) && any(abs(centre - q) >= vec3<f32>(1.0)) {
+                        continue;
+                    }
                     if u.body_count > 0 && solid_at(q, n) < 0.0 {
                         continue;
                     }
