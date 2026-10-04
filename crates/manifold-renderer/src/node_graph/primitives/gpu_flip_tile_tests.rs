@@ -5,16 +5,386 @@
 //! sparse step against the dense one through the same kernels, bitwise, and
 //! under the NaN poison (section 4 (The defined-value rule)).
 
-use manifold_gpu::GpuBuffer;
+use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice};
 
 use super::gpu_flip_preset::WaterScene;
 use super::gpu_flip_scene_tests::Run;
 use super::gpu_flip_step::{
-    CELL_REACH, ENGINE_CFL, FACE_VALID_LAYERS, StepParams, TILE, band_layers, dispatch_pass, ring_max,
-    set_all_tiles, set_poison, tile_counts, tile_total,
+    CELL_REACH, ENGINE_CFL, FACE_VALID_LAYERS, StepParams, TILE, band_layers, dispatch_pass,
+    ring_max, set_all_tiles, set_poison, tile_counts, tile_total,
 };
+use super::liquid_stats::with_stats_layout;
 use super::liquid_surface_tests::read;
 use crate::node_graph::fluid_particles::{CellRange, FluidParticle};
+use crate::node_graph::liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE};
+use crate::node_graph::liquid::fields::LIQUID_FIELD;
+
+fn gather_sources() -> [String; 2] {
+    let source = include_str!("shaders/gpu_flip_step.wgsl");
+    // Restore the original dynamic-axis gather only in the test oracle.
+    // Keep its support decisions and floating-point accumulation verbatim.
+    let inner = r#"                    for (var a = 0; a < 3; a = a + 1) {
+                        if !exists[a] {
+                            continue;
+                        }
+                        var face = vec3<f32>(p) + vec3<f32>(0.5);
+                        face[a] = f32(p[a]);
+                        let v = face - q;
+                        let d2 = dot(v, v);
+                        if !(d2 < rsq) {
+                            continue;
+                        }
+                        let w = 1.0 - coef1 * d2 * d2 * d2 + coef2 * d2 * d2 - coef3 * d2;
+                        weight[a] = weight[a] + w;
+                        momentum[a] = momentum[a] + w * particle.velocity[a];
+                    }"#;
+    let mut unrolled = String::new();
+    let mut centres = String::new();
+    for axis in ["x", "y", "z"] {
+        centres.push_str(&format!("    var face_{axis} = vec3<f32>(p) + vec3<f32>(0.5);\n    face_{axis}.{axis} = f32(p.{axis});\n"));
+        unrolled.push_str(&format!(
+            r#"                    if exists.{axis} {{
+                        let v = face_{axis} - q;
+                        let d2 = dot(v, v);
+                        if d2 < rsq {{
+                            let w = 1.0 - coef1 * d2 * d2 * d2 + coef2 * d2 * d2 - coef3 * d2;
+                            weight.{axis} = weight.{axis} + w;
+                            momentum.{axis} = momentum.{axis} + w * particle.velocity.{axis};
+                        }}
+                    }}
+"#
+        ));
+    }
+    let anchor = "    var weight = vec3<f32>(0.0);\n    var momentum = vec3<f32>(0.0);";
+    assert_eq!(
+        source.matches(anchor).count(),
+        1,
+        "gather accumulation anchor"
+    );
+    let unrolled = unrolled.trim_end();
+    assert_eq!(
+        source.matches(unrolled).count(),
+        1,
+        "production gather inner loop"
+    );
+    assert_eq!(
+        source.matches(&centres).count(),
+        1,
+        "production gather centres"
+    );
+    let original = source.replace(unrolled, inner).replace(&centres, "");
+    [original.as_str(), source].map(|shader| {
+        with_stats_layout(&format!(
+            "{LIQUID_POSE}\n{LIQUID_COLLIDER}\n{LIQUID_FIELD}\n{shader}"
+        ))
+    })
+}
+
+#[test]
+fn gpu_flip_gather_unrolled_shader_validates() {
+    for source in gather_sources() {
+        let module = naga::front::wgsl::parse_str(&source).expect("gather shader parses");
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .expect("gather shader validates");
+    }
+}
+
+fn gather_pipelines(device: &GpuDevice) -> [GpuComputePipeline; 2] {
+    gather_sources().map(|source| {
+        device.create_compute_pipeline(&source, "particles_to_faces", "gather-unroll-proof")
+    })
+}
+
+fn gather_pass(
+    device: &GpuDevice,
+    pipeline: &GpuComputePipeline,
+    p: &StepParams,
+    buffers: &[(u32, &GpuBuffer)],
+) -> f64 {
+    assert_eq!(
+        p.narrow_band, 1,
+        "direct dense face indexing, without band masking"
+    );
+    let mut bindings = vec![GpuBinding::Bytes {
+        binding: 0,
+        data: bytemuck::bytes_of(p),
+    }];
+    bindings.extend(buffers.iter().map(|&(binding, buffer)| GpuBinding::Buffer {
+        binding,
+        buffer,
+        offset: 0,
+    }));
+    let faces = p.n.into_iter().map(|n| n + 1).product::<u32>();
+    let mut enc = device.create_encoder("gather-unroll-proof");
+    enc.dispatch_compute(
+        pipeline,
+        &bindings,
+        [faces.div_ceil(256), 1, 1],
+        "particles_to_faces",
+    );
+    enc.commit_and_wait_profiled(device).total_ms
+}
+
+fn gather_buffer<T: bytemuck::Pod>(device: &GpuDevice, values: &[T]) -> GpuBuffer {
+    let buffer = device.create_buffer_shared((std::mem::size_of_val(values) as u64).max(32));
+    buffer.zero_fill();
+    // SAFETY: no GPU work is in flight and the buffer holds every supplied record.
+    unsafe {
+        buffer.write(0, bytemuck::cast_slice(values));
+    }
+    buffer
+}
+
+fn gather_population(
+    n: [u32; 3],
+    min: [f32; 3],
+    h: f32,
+    half: bool,
+) -> (Vec<CellRange>, Vec<FluidParticle>) {
+    let cells = n.into_iter().product::<u32>() as usize;
+    let count = if half { cells / 2 } else { cells } * 8;
+    let mut particles = Vec::with_capacity(count);
+    let mut ranges = Vec::with_capacity(cells);
+    for z in 0..n[2] {
+        for y in 0..n[1] {
+            for x in 0..n[0] {
+                let start = particles.len() as u32;
+                if !half || x < n[0] / 2 {
+                    for site in 0..8 {
+                        let cell = [x, y, z];
+                        let q: [f32; 3] = std::array::from_fn(|a| {
+                            cell[a] as f32 + if site & (1 << a) == 0 { 0.25 } else { 0.75 }
+                        });
+                        let world: [f32; 3] = std::array::from_fn(|a| min[a] + h * q[a]);
+                        particles.push(FluidParticle {
+                            position_radius: [world[0], world[1], world[2], 0.125 * h],
+                            velocity: [
+                                x as f32 * 0.125 - 1.0,
+                                y as f32 * -0.25 + 0.5,
+                                z as f32 * 0.0625 + site as f32 * 0.125,
+                            ],
+                            id: particles.len() as u32 + 1,
+                        });
+                    }
+                }
+                ranges.push(CellRange {
+                    start,
+                    count: particles.len() as u32 - start,
+                });
+            }
+        }
+    }
+    (ranges, particles)
+}
+
+#[test]
+fn gpu_flip_gather_unrolled_matches_original_every_face_word() {
+    let device = crate::test_device();
+    let pipelines = gather_pipelines(&device);
+    for (n, min, h) in [
+        ([1, 1, 1], [0.0; 3], 1.0),
+        ([7, 5, 3], [0.0; 3], 1.0),
+        ([3, 7, 5], [-4.0, 8.0, -2.0], 0.125),
+    ] {
+        let (_, mut particles) = gather_population(n, min, h, false);
+        // Face centres at both box walls, and adjacent f32 positions at the
+        // Wyvill support edge. The original GPU is the arithmetic oracle.
+        for axis in 0..3 {
+            for edge in [0.0, n[axis] as f32] {
+                let mut q = [0.5; 3];
+                q[axis] = edge;
+                let mut marker = particles[0];
+                for (a, coordinate) in q.into_iter().enumerate() {
+                    marker.position_radius[a] = min[a] + h * coordinate;
+                }
+                particles.push(marker);
+            }
+            // Three half-cell offsets give d2 == 0.75 exactly; vary one
+            // coordinate by an adjacent f32 word on each side of support.
+            let coordinate: f32 = if n[axis] > 1 { 1.5 } else { 0.5 };
+            for edge in [
+                f32::from_bits(coordinate.to_bits() - 1),
+                coordinate,
+                f32::from_bits(coordinate.to_bits() + 1),
+            ] {
+                let mut q = [1.0; 3];
+                q[axis] = edge;
+                let mut marker = particles[0];
+                for (a, coordinate) in q.into_iter().enumerate() {
+                    marker.position_radius[a] = min[a] + h * coordinate;
+                }
+                particles.push(marker);
+            }
+        }
+        for kind in 0..6 {
+            let mut marker = particles[0];
+            match kind {
+                0 => marker.position_radius[3] = 0.0,
+                1 => marker.position_radius[3] = -1.0,
+                2 => marker.position_radius[3] = f32::NAN,
+                3 => marker.position_radius[0] = f32::NAN,
+                4 => marker.velocity[1] = f32::from_bits(0x7fc0_1234),
+                _ => marker.velocity[2] = f32::INFINITY,
+            }
+            particles.push(marker);
+        }
+        let bin = |marker: &FluidParticle| {
+            let cell: [u32; 3] = std::array::from_fn(|a| {
+                (((marker.position_radius[a] - min[a]) / h).floor() as i64)
+                    .clamp(0, i64::from(n[a]) - 1) as u32
+            });
+            (cell[0] + n[0] * (cell[1] + n[1] * cell[2])) as usize
+        };
+        particles.sort_by_key(bin);
+        let mut ranges = vec![CellRange::default(); n.into_iter().product::<u32>() as usize];
+        for (i, marker) in particles.iter().enumerate() {
+            let range = &mut ranges[bin(marker)];
+            if range.count == 0 {
+                range.start = i as u32;
+            }
+            range.count += 1;
+        }
+        let p = StepParams {
+            n,
+            box_min: min,
+            cell_size: h,
+            capacity: particles.len() as u32,
+            narrow_band: 1,
+            step_dt: 1.0 / 60.0,
+            ..StepParams::default()
+        };
+        let ranges = gather_buffer(&device, &ranges);
+        let sorted = gather_buffer(&device, &particles);
+        let words = n.into_iter().map(|v| v as usize + 1).product::<usize>() * 8;
+        let faces = [
+            device.create_buffer_shared(words as u64 * 4),
+            device.create_buffer_shared(words as u64 * 4),
+        ];
+        // These bindings remain in the reflected entry, but modes 0 and 2
+        // cannot read them here. Full cell extent keeps the storage valid.
+        let unused = gather_buffer(
+            &device,
+            &vec![0u32; n.into_iter().product::<u32>() as usize],
+        );
+        let clock = device.create_buffer_shared(48);
+        let seed: Vec<u32> = (0..words)
+            .map(|i| 0x7fc0_0000 | (i as u32 & 0x003f_ffff))
+            .collect();
+        for active in [true, false, true] {
+            let mut plan = [0u32; 12];
+            plan[11] = 1;
+            plan[0] = if active { p.step_dt } else { 0.0 }.to_bits();
+            unsafe {
+                clock.write(0, bytemuck::cast_slice(&plan));
+            }
+            for (pipeline, output) in pipelines.iter().zip(&faces) {
+                unsafe {
+                    output.write(0, bytemuck::cast_slice(&seed));
+                }
+                gather_pass(
+                    &device,
+                    pipeline,
+                    &p,
+                    &[
+                        (1, &ranges),
+                        (2, &sorted),
+                        (4, output),
+                        (29, &unused),
+                        (45, &unused),
+                        (46, &clock),
+                    ],
+                );
+            }
+            let old = read::<u32>(&faces[0], words);
+            let new = read::<u32>(&faces[1], words);
+            assert_eq!(
+                old, new,
+                "{n:?}, min {min:?}, h {h}, active {active}: every face word"
+            );
+            if active {
+                assert_ne!(old, seed, "active and resumed gather overwrites faces");
+                assert!(
+                    old.chunks_exact(8).all(|face| face[3] == 0 && face[7] == 0),
+                    "every active face record overwrites its seeded padding"
+                );
+            } else {
+                assert_eq!(old, seed, "inactive gather preserves seeded face words");
+            }
+        }
+    }
+}
+
+#[test]
+#[cfg(feature = "water-race-probes")]
+fn gpu_flip_gather_unrolled_bounded_timing() {
+    let device = crate::test_device();
+    let pipelines = gather_pipelines(&device);
+    for side in [64, 128] {
+        let n = [side; 3];
+        let (ranges, particles) = gather_population(n, [0.0; 3], 0.125, true);
+        let p = StepParams {
+            n,
+            capacity: particles.len() as u32,
+            cell_size: 0.125,
+            narrow_band: 1,
+            step_dt: 1.0 / 60.0,
+            ..StepParams::default()
+        };
+        let ranges = gather_buffer(&device, &ranges);
+        let sorted = gather_buffer(&device, &particles);
+        drop(particles);
+        let unused = gather_buffer(&device, &vec![0u32; side.pow(3) as usize]);
+        let mut plan = [0u32; 12];
+        plan[0] = p.step_dt.to_bits();
+        plan[11] = 1;
+        let clock = gather_buffer(&device, &plan);
+        let words = (side as usize + 1).pow(3) * 8;
+        let faces = [
+            device.create_buffer_shared(words as u64 * 4),
+            device.create_buffer_shared(words as u64 * 4),
+        ];
+        let mut samples = [Vec::with_capacity(8), Vec::with_capacity(8)];
+        for sample in 0..12 {
+            for i in if sample % 2 == 0 { [0, 1] } else { [1, 0] } {
+                let millis = gather_pass(
+                    &device,
+                    &pipelines[i],
+                    &p,
+                    &[
+                        (1, &ranges),
+                        (2, &sorted),
+                        (4, &faces[i]),
+                        (29, &unused),
+                        (45, &unused),
+                        (46, &clock),
+                    ],
+                );
+                if sample >= 4 {
+                    samples[i].push(millis);
+                }
+            }
+            assert_eq!(
+                read::<u32>(&faces[0], words),
+                read::<u32>(&faces[1], words),
+                "{side}³, sample {sample}: exact face words"
+            );
+        }
+        for times in &mut samples {
+            times.sort_by(f64::total_cmp);
+        }
+        let median = |times: &[f64]| (times[3] + times[4]) * 0.5;
+        eprintln!(
+            "GATHER_UNROLL n={side} markers={} half_volume=true warm=4 measured=8 old_median_ms={:.6} unrolled_median_ms={:.6} exact=true",
+            p.capacity,
+            median(&samples[0]),
+            median(&samples[1])
+        );
+    }
+}
 
 /// The step shader's poison entry: NaN into every cell array of the tiles
 /// outside rings 0 and 1, after the retire. Named here only, so the step's

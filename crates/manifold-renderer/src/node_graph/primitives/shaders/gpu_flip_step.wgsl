@@ -278,6 +278,12 @@ fn particles_to_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
     let coef1 = (4.0 / 9.0) / (rsq * rsq * rsq);
     let coef2 = (17.0 / 9.0) / (rsq * rsq);
     let coef3 = (22.0 / 9.0) / rsq;
+    var face_x = vec3<f32>(p) + vec3<f32>(0.5);
+    face_x.x = f32(p.x);
+    var face_y = vec3<f32>(p) + vec3<f32>(0.5);
+    face_y.y = f32(p.y);
+    var face_z = vec3<f32>(p) + vec3<f32>(0.5);
+    face_z.z = f32(p.z);
     var weight = vec3<f32>(0.0);
     var momentum = vec3<f32>(0.0);
     for (var z = first.z; z <= last.z; z = z + 1) {
@@ -292,20 +298,32 @@ fn particles_to_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
                         continue;
                     }
                     let q = (particle.position_radius.xyz - u.box_min) * inv_h;
-                    for (var a = 0; a < 3; a = a + 1) {
-                        if !exists[a] {
-                            continue;
-                        }
-                        var face = vec3<f32>(p) + vec3<f32>(0.5);
-                        face[a] = f32(p[a]);
-                        let v = face - q;
+                    if exists.x {
+                        let v = face_x - q;
                         let d2 = dot(v, v);
-                        if !(d2 < rsq) {
-                            continue;
+                        if d2 < rsq {
+                            let w = 1.0 - coef1 * d2 * d2 * d2 + coef2 * d2 * d2 - coef3 * d2;
+                            weight.x = weight.x + w;
+                            momentum.x = momentum.x + w * particle.velocity.x;
                         }
-                        let w = 1.0 - coef1 * d2 * d2 * d2 + coef2 * d2 * d2 - coef3 * d2;
-                        weight[a] = weight[a] + w;
-                        momentum[a] = momentum[a] + w * particle.velocity[a];
+                    }
+                    if exists.y {
+                        let v = face_y - q;
+                        let d2 = dot(v, v);
+                        if d2 < rsq {
+                            let w = 1.0 - coef1 * d2 * d2 * d2 + coef2 * d2 * d2 - coef3 * d2;
+                            weight.y = weight.y + w;
+                            momentum.y = momentum.y + w * particle.velocity.y;
+                        }
+                    }
+                    if exists.z {
+                        let v = face_z - q;
+                        let d2 = dot(v, v);
+                        if d2 < rsq {
+                            let w = 1.0 - coef1 * d2 * d2 * d2 + coef2 * d2 * d2 - coef3 * d2;
+                            weight.z = weight.z + w;
+                            momentum.z = momentum.z + w * particle.velocity.z;
+                        }
                     }
                 }
             }
