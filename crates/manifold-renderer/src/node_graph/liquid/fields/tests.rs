@@ -186,36 +186,44 @@ fn liquid_forces_per_tick_follow_simulation_speed() {
     }
 }
 
-/// Late and jittery live frames still accept one interval covering the whole
-/// observed span. The field is sampled at that interval's authored start and
-/// no transport time is dropped.
+/// Late and jittery live frames accept at most two fixed intervals. Fields
+/// retain their authored transport samples while excess time is discarded.
 #[test]
-fn liquid_forces_per_tick_cover_late_frames() {
+fn liquid_forces_per_tick_keep_fixed_intervals_under_overload() {
     let mut rig = Rig::new();
     let mut transport = 0.0;
     let mut ran = 0u64;
     let mut completed = 0.0;
+    let mut dropped = 0.0;
     let intervals = [1.0, 2.6, 0.4, 1.9, 30.0, 1.0, 2.2, 0.7, 3.4, 1.0];
     rig.frame(0.0, TICK, 1.0, false, &modulated).unwrap();
     for step in 0..120 {
         let interval = TICK * intervals[step % intervals.len()];
         transport += interval;
+        let starts: Vec<_> = (ran..ran + 2).map(|tick| rig.clock.tick_start(tick).unwrap()).collect();
         let (frame, laid) = rig.frame(transport, TICK, 1.0, false, &modulated).unwrap();
         assert_eq!(first_tick(&frame), ran, "frame {step}: no tick skipped or merged");
-        assert!(frame.ticks <= 1, "frame {step}: at most one accepted live interval");
-        assert_eq!(frame.dropped_seconds, 0.0, "frame {step}: live time was dropped");
+        assert!(frame.ticks <= 2, "frame {step}: at most two accepted live intervals");
+        assert!(frame.dropped_seconds >= dropped, "frame {step}: cumulative discarded time");
+        if frame.reanchored {
+            assert_eq!(frame.ticks, 2);
+            assert!(frame.dropped_seconds > dropped);
+        }
+        assert!((frame.target_time + frame.dropped_seconds - transport).abs() < 1e-12);
         assert_eq!(frame.plan.start.0, completed, "frame {step}: interval start");
-        let boundary = (transport / TICK + 1e-9).floor() * TICK;
         for (offset, lattice) in rig.tick_lattices(&frame, &laid).into_iter().enumerate() {
             let interval = frame.interval(offset as u64).unwrap();
-            assert!((interval.end.0 - boundary).abs() < 1e-12, "frame {step}: owed span ends on the last boundary");
-            assert_eq!(lattice, expected(interval.start.0), "frame {step}: interval start");
+            assert!((interval.start.0 - (completed + offset as f64 * TICK)).abs() < 1e-12);
+            assert!((interval.duration().0 - TICK).abs() < 1e-12, "frame {step}: fixed interval");
+            assert_eq!(lattice, expected(starts[offset]), "frame {step}: authored interval start");
         }
         completed = frame.plan.end.0;
+        dropped = frame.dropped_seconds;
         ran += u64::from(frame.ticks);
     }
     assert_eq!(rig.clock.ticks_done(), ran);
-    assert!(transport - completed < TICK);
+    assert!(dropped > 0.0);
+    assert!(transport - completed - dropped < TICK + 1e-12);
 }
 
 /// Live impulse lattices split by source timestamp. Ties share one lattice,
@@ -229,7 +237,7 @@ fn liquid_fields_split_live_hits_by_timestamp_and_end_boundary() {
     frame(&mut clock, &mut impulses, 0.0, TICK, 1.0);
     let epoch = impulses.epoch().unwrap();
     let queue = impulses.queue.as_mut().unwrap();
-    for (time, sequence, x) in [(0.02, 1, 1.0), (0.02, 2, 2.0), (0.06, 3, 4.0), (0.1, 4, 8.0)] {
+    for (time, sequence, x) in [(0.005, 1, 1.0), (0.005, 2, 2.0), (0.02, 3, 4.0), (2.0 * TICK, 4, 8.0)] {
         queue
             .enqueue(
                 EventStamp {
@@ -243,13 +251,18 @@ fn liquid_fields_split_live_hits_by_timestamp_and_end_boundary() {
     }
 
     let first = frame(&mut clock, &mut impulses, 0.1, 0.1, 1.0);
+    assert_eq!(first.ticks, 2);
+    assert!(first.reanchored);
+    assert!((first.plan.end.0 - 2.0 * TICK).abs() < 1e-12);
     let first_frame = fields
         .prepare(lattice(), None, &clock, &first, &impulses)
         .unwrap();
     assert_eq!(first_frame.impulse_tick, Some(0));
     assert_eq!(fields.live_hit_count(), 2);
-    assert_eq!(fields.live_hits[0][0], (0.02f32).to_bits());
-    assert_eq!(fields.live_hits[1][0], (0.06f32).to_bits());
+    assert_eq!(fields.live_hits[0][0], (0.005f32).to_bits());
+    assert_eq!(fields.live_hits[0][2], 0);
+    assert_eq!(fields.live_hits[1][0], ((0.02 - TICK) as f32).to_bits());
+    assert_eq!(fields.live_hits[1][2], 1);
     let count = lattice().node_count();
     assert_eq!(fields.impulses()[0][0], 3.0);
     assert_eq!(fields.impulses()[count][0], 4.0);
@@ -259,9 +272,10 @@ fn liquid_fields_split_live_hits_by_timestamp_and_end_boundary() {
     let second_frame = fields
         .prepare(lattice(), None, &clock, &second, &impulses)
         .unwrap();
-    assert_eq!(second_frame.impulse_tick, Some(1));
+    assert_eq!(second_frame.impulse_tick, Some(2));
     assert_eq!(fields.live_hit_count(), 1);
     assert_eq!(fields.live_hits[0][0], 0.0f32.to_bits());
+    assert_eq!(fields.live_hits[0][2], 2);
     assert_eq!(fields.impulses()[0][0], 8.0);
 }
 
@@ -420,16 +434,20 @@ fn liquid_force_lattice_refuses_a_non_finite_field() {
     assert!(error.contains("not finite"), "{error}");
 }
 
-/// A stretched live frame is accepted as one interval, without a nominal
-/// tick needing a separate history sample.
+/// Two accepted fixed intervals share one lattice when their sampled forces
+/// are identical; the clock still reports both intervals.
 #[test]
-fn liquid_forces_accept_a_stretched_live_interval() {
+fn liquid_forces_reuse_identical_lattice_across_two_fixed_intervals() {
     let field = FieldValue::uniform([1.0, 0.0, 0.0]).unwrap();
     let sample = |_: f64| field.clone();
     let mut rig = Rig::new();
     rig.frame(0.0, TICK, 1.0, false, &sample).unwrap();
     let (next, laid) = rig.frame(2.0 * TICK, TICK, 1.0, false, &sample).unwrap();
-    assert_eq!(next.ticks, 1);
+    assert_eq!(next.ticks, 2);
+    assert!(!next.reanchored);
+    for ordinal in 0..2 {
+        assert!((next.interval(ordinal).unwrap().duration().0 - TICK).abs() < 1e-12);
+    }
     assert_eq!(laid.force_lattices, 1);
 }
 
@@ -443,16 +461,19 @@ fn liquid_impulse_once_per_tick_across_substeps() {
     frame(&mut clock, &mut impulses, TICK, TICK, 1.0);
     let planned = hit(&mut impulses, TICK, 1, 2.0);
     assert_eq!(planned.tick, 1);
-    // The stretched live frame accepts one interval; the hit lands inside it.
+    // The live frame accepts two intervals; the hit belongs only to the first.
     let next = frame(&mut clock, &mut impulses, 3.0 * TICK, 2.0 * TICK, 1.0);
-    assert_eq!(next.ticks, 1);
+    assert_eq!(next.ticks, 2);
     assert_eq!(impulses.impulse_tick(), Some(1));
     let mut fields = LiquidFields::default();
     let lattice = lattice();
     let field_frame = fields.prepare(lattice, None, &clock, &next, &impulses).unwrap();
     impulses.commit_frame();
     assert_eq!(field_frame.impulse_tick, Some(1));
-    assert!(fields.impulses().iter().all(|v| *v == [2.0, 0.0, 0.0, 0.0]));
+    let count = lattice.node_count();
+    assert_eq!(fields.impulses().len(), 2 * count);
+    assert!(fields.impulses()[..count].iter().all(|v| *v == [2.0, 0.0, 0.0, 0.0]));
+    assert!(fields.impulses()[count..].iter().all(|v| *v == [0.0; 4]));
     // The atoms' gate: the impulse tick's first substep, and nothing else.
     let substeps = 34;
     let planned_tick = first_tick(&next);

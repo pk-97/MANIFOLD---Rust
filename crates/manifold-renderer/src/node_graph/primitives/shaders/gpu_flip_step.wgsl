@@ -86,7 +86,7 @@ struct Params {
     // 1: every tile is active (the test-only oracle).
     all_tiles: u32,
     // The ring a sparse pass's reads are capped at.
-    ring_cap: u32,
+    extension_layers: u32,
     // The farthest ring the table holds; ring_max + 1 means none within it.
     ring_max: u32,
     narrow_band: u32, // Ferstl 2016: 0 dense, 1 initialization, 2 band-masked.
@@ -278,6 +278,12 @@ fn particles_to_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
     let coef1 = (4.0 / 9.0) / (rsq * rsq * rsq);
     let coef2 = (17.0 / 9.0) / (rsq * rsq);
     let coef3 = (22.0 / 9.0) / rsq;
+    var face_x = vec3<f32>(p) + vec3<f32>(0.5);
+    face_x.x = f32(p.x);
+    var face_y = vec3<f32>(p) + vec3<f32>(0.5);
+    face_y.y = f32(p.y);
+    var face_z = vec3<f32>(p) + vec3<f32>(0.5);
+    face_z.z = f32(p.z);
     var weight = vec3<f32>(0.0);
     var momentum = vec3<f32>(0.0);
     for (var z = first.z; z <= last.z; z = z + 1) {
@@ -292,20 +298,32 @@ fn particles_to_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
                         continue;
                     }
                     let q = (particle.position_radius.xyz - u.box_min) * inv_h;
-                    for (var a = 0; a < 3; a = a + 1) {
-                        if !exists[a] {
-                            continue;
-                        }
-                        var face = vec3<f32>(p) + vec3<f32>(0.5);
-                        face[a] = f32(p[a]);
-                        let v = face - q;
+                    if exists.x {
+                        let v = face_x - q;
                         let d2 = dot(v, v);
-                        if !(d2 < rsq) {
-                            continue;
+                        if d2 < rsq {
+                            let w = 1.0 - coef1 * d2 * d2 * d2 + coef2 * d2 * d2 - coef3 * d2;
+                            weight.x = weight.x + w;
+                            momentum.x = momentum.x + w * particle.velocity.x;
                         }
-                        let w = 1.0 - coef1 * d2 * d2 * d2 + coef2 * d2 * d2 - coef3 * d2;
-                        weight[a] = weight[a] + w;
-                        momentum[a] = momentum[a] + w * particle.velocity[a];
+                    }
+                    if exists.y {
+                        let v = face_y - q;
+                        let d2 = dot(v, v);
+                        if d2 < rsq {
+                            let w = 1.0 - coef1 * d2 * d2 * d2 + coef2 * d2 * d2 - coef3 * d2;
+                            weight.y = weight.y + w;
+                            momentum.y = momentum.y + w * particle.velocity.y;
+                        }
+                    }
+                    if exists.z {
+                        let v = face_z - q;
+                        let d2 = dot(v, v);
+                        if d2 < rsq {
+                            let w = 1.0 - coef1 * d2 * d2 * d2 + coef2 * d2 * d2 - coef3 * d2;
+                            weight.z = weight.z + w;
+                            momentum.z = momentum.z + w * particle.velocity.z;
+                        }
                     }
                 }
             }
@@ -971,7 +989,9 @@ fn water_from_phi(@builtin(global_invocation_id) gid: vec3<u32>) {
 @group(0) @binding(23) var<storage, read_write> pocket: array<u32>;
 // Words 0-8: the three sweeps' indirect dispatch sizes (x, y, z); 9: a
 // sweep changed a cell this round; 10: a sealed cell still links to one
-// that reaches air (the spread stopped at its cap unfinished).
+// that reaches air (the spread stopped at its cap unfinished); 11: padding;
+// 12-13: the sweep-and-setup replay range {0, 4} or {0, 0};
+// 14-16: the next round setup's indirect dispatch size.
 @group(0) @binding(24) var<storage, read_write> pocket_gate: array<u32>;
 // Each water cell's pocket: the lowest cell index of the sealed water it
 // links to. A pocket's label is its leader cell.
@@ -1019,6 +1039,9 @@ const POCKET_AIR: u32 = 2u;
 const POCKET_LINK: f32 = 1e-6;
 const POCKET_CHANGED: u32 = 9u;
 const POCKET_UNRESOLVED: u32 = 10u;
+// Eight-byte aligned {first command, command count} for sweeps and setup.
+const POCKET_RANGE: u32 = 12u;
+const POCKET_ROUND_ARGS: u32 = 14u;
 // The pocket count's word among the solver words `capped` is bound at.
 const POCKET_WORD: u32 = 3u;
 
@@ -1068,6 +1091,11 @@ fn pocket_seed(@builtin(global_invocation_id) gid: vec3<u32>) {
 @compute @workgroup_size(1)
 fn pocket_start() {
     pocket_gate[POCKET_UNRESOLVED] = 0u;
+    pocket_gate[POCKET_RANGE] = 0u;
+    pocket_gate[POCKET_RANGE + 1u] = 0u;
+    pocket_gate[POCKET_ROUND_ARGS] = 0u;
+    pocket_gate[POCKET_ROUND_ARGS + 1u] = 1u;
+    pocket_gate[POCKET_ROUND_ARGS + 2u] = 1u;
     if !clock_active() {
         pocket_gate[POCKET_CHANGED] = 0u;
         for (var a = 0u; a < 3u; a = a + 1u) {
@@ -1084,6 +1112,9 @@ fn pocket_start() {
 fn pocket_round() {
     if !clock_active() { return; }
     let go = pocket_gate[POCKET_CHANGED] != 0u;
+    pocket_gate[POCKET_RANGE] = 0u;
+    pocket_gate[POCKET_RANGE + 1u] = select(0u, 4u, go);
+    pocket_gate[POCKET_ROUND_ARGS] = select(0u, 1u, go);
     let n = u.n;
     let lines = vec3<u32>(n.y * n.z, n.z * n.x, n.x * n.y);
     for (var a = 0u; a < 3u; a = a + 1u) {
@@ -1964,6 +1995,11 @@ fn density_source(@builtin(global_invocation_id) gid: vec3<u32>) {
                     // A particle the solid has swept over is removed by this
                     // step's move; the solid's rest sites below already count
                     // that volume, so counting it too reads as crowding.
+                    // Outside the one-cell support its contribution is exactly
+                    // zero. Keep nonfinite queries on the original path.
+                    if finite(q) && any(abs(centre - q) >= vec3<f32>(1.0)) {
+                        continue;
+                    }
                     if u.body_count > 0 && solid_at(q, n) < 0.0 {
                         continue;
                     }
@@ -2541,7 +2577,9 @@ fn poison_inactive(@builtin(global_invocation_id) gid: vec3<u32>) {
     tile_rhs[idx] = nan;
 }
 
-// One thread per tile, the sort's bin counts to `tile_near`: the Chebyshev
+var<workgroup> tile_near_min: array<u32, 256>;
+
+// 32 lanes per tile, the sort's bin counts to `tile_near`: the Chebyshev
 // cell distance from the tile's box to the nearest particle-holding cell,
 // scanning the box grown by CELL_REACH (12³ cells at most); CELL_REACH + 1
 // when none. Thread 0 flips the ring halves' parity for this step first: no
@@ -2549,40 +2587,46 @@ fn poison_inactive(@builtin(global_invocation_id) gid: vec3<u32>) {
 // inactive clock slot runs none of the table's passes, so the next active
 // step's retire measures against the last active step's C.
 @compute @workgroup_size(256)
-fn tiles_classify(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn tiles_classify(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) li: u32) {
     if !clock_active() { return; }
-    let t = gid.x;
-    if t >= tile_total() {
-        return;
-    }
-    if t == 0u {
+    let t = gid.x >> 5u;
+    let lane = gid.x & 31u;
+    let valid = t < tile_total();
+    if gid.x == 0u {
         tile_counts[tile_parity_word()] = 1u - tile_counts[tile_parity_word()];
     }
-    if u.all_tiles != 0u {
-        tile_near[t] = 0u;
-        return;
-    }
-    let n = lattice();
-    let reach = i32(CELL_REACH);
-    let origin = unflatten(t, vec3<i32>(tile_dims())) * i32(TILE);
-    let box_last = min(origin + vec3<i32>(i32(TILE) - 1), n - vec3<i32>(1));
-    let first = max(origin - vec3<i32>(reach), vec3<i32>(0));
-    let last = min(box_last + vec3<i32>(reach), n - vec3<i32>(1));
     var near = CELL_REACH + 1u;
-    for (var z = first.z; z <= last.z; z = z + 1) {
-        for (var y = first.y; y <= last.y; y = y + 1) {
-            for (var x = first.x; x <= last.x; x = x + 1) {
-                let c = vec3<i32>(x, y, z);
-                if ranges[flatten(c, n)].count == 0u {
-                    continue;
+    if valid && u.all_tiles != 0u {
+        near = 0u;
+    } else if valid {
+        let n = lattice();
+        let reach = i32(CELL_REACH);
+        let origin = unflatten(t, vec3<i32>(tile_dims())) * i32(TILE);
+        let box_last = min(origin + vec3<i32>(i32(TILE) - 1), n - vec3<i32>(1));
+        let side = TILE + 2u * CELL_REACH;
+        for (var k = lane; k < side * side * side && near != 0u; k = k + 32u) {
+            let c = origin - vec3<i32>(reach) + unflatten(k, vec3<i32>(i32(side)));
+            if all(c >= vec3<i32>(0)) && all(c < n) {
+                if ranges[flatten(c, n)].count != 0u {
+                    // Distance to the original clipped tile box, unchanged.
+                    let d = max(max(origin - c, c - box_last), vec3<i32>(0));
+                    near = min(near, u32(max(max(d.x, d.y), d.z)));
                 }
-                // Distance from the cell to the box: 0 inside it.
-                let d = max(max(origin - c, c - box_last), vec3<i32>(0));
-                near = min(near, u32(max(max(d.x, d.y), d.z)));
             }
         }
     }
-    tile_near[t] = near;
+    // Eight independent min trees; invalid tiles still reach every barrier.
+    tile_near_min[li] = near;
+    workgroupBarrier();
+    for (var width = 16u; width > 0u; width = width >> 1u) {
+        if lane < width {
+            tile_near_min[li] = min(tile_near_min[li], tile_near_min[li + width]);
+        }
+        workgroupBarrier();
+    }
+    if lane == 0u && valid {
+        tile_near[t] = tile_near_min[li];
+    }
 }
 
 // One thread per tile, `tile_near` to the current half of `tile_rank`: the
@@ -2644,7 +2688,17 @@ fn tiles_lists() {
     let total = tile_total();
     let r = u.ring_max;
     // An inactive clock slot keeps the last step's table (the parity was not
-    // flipped) and switches every list triple off, the retired one too.
+    // flipped) and switches every list triple off, including retired and
+    // full-face dispatches. Active full-face passes retain the dense grid.
+    let m = u.n + vec3<u32>(1u);
+    tile_args[3u * (r + 2u)] = select(0u, (m.x * m.y * m.z + 255u) / 256u, clock_active());
+    tile_args[3u * (r + 2u) + 1u] = 1u;
+    tile_args[3u * (r + 2u) + 2u] = 1u;
+    let end_triples = 3u * (r + 3u);
+    let range_word = (end_triples + 1u) & ~1u;
+    if range_word != end_triples { tile_args[end_triples] = 0u; }
+    tile_args[range_word] = 0u;
+    tile_args[range_word + 1u] = select(0u, u.extension_layers, clock_active());
     if !clock_active() {
         for (var k = 0u; k <= r + 1u; k = k + 1u) {
             tile_args[3u * k] = 0u;

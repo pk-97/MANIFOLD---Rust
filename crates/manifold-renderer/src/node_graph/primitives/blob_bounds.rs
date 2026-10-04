@@ -1,17 +1,20 @@
 //! Exact bounds for indexed blob gathers. Shared by the field and its sparse
 //! schedule; spatial bins never impose a radius or quality limit.
-use manifold_gpu::{GpuBinding, GpuComputePipeline};
+use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::fluid_particles::FluidBlob;
 use crate::node_graph::primitive::Primitive;
 
 const SHADER: &str = include_str!("shaders/blob_bounds.wgsl");
+const THREADS: u32 = 256;
+const MAX_GROUPS: u32 = 256;
+const PARTIAL_BYTES: u64 = MAX_GROUPS as u64 * 2 * size_of::<f32>() as u64;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct BoundsParams {
     count: u32,
-    _pad0: u32,
+    groups: u32,
     _pad1: u32,
     _pad2: u32,
 }
@@ -32,12 +35,19 @@ crate::primitive! {
     role: Filter,
     aliases: ["kernel bounds", "surface support"],
     boundary_reason: BarrieredReduction,
-    extra_fields: { reduction: Option<GpuComputePipeline> = None, },
+    extra_fields: {
+        reduction: Option<GpuComputePipeline> = None,
+        partial_reduction: Option<GpuComputePipeline> = None,
+        finish_reduction: Option<GpuComputePipeline> = None,
+        partials: Option<GpuBuffer> = None,
+    },
 }
 
 impl Primitive for BlobBounds {
     fn prepare_pipelines(&mut self, device: &manifold_gpu::GpuDevice) {
         self.reduction.get_or_insert_with(|| device.create_compute_pipeline(SHADER, "main", "node.blob_bounds"));
+        self.partial_reduction.get_or_insert_with(|| device.create_compute_pipeline(SHADER, "partial_main", "node.blob_bounds.partial"));
+        self.finish_reduction.get_or_insert_with(|| device.create_compute_pipeline(SHADER, "finish_main", "node.blob_bounds.finish"));
     }
     fn array_output_capacity(&self, port: &str, _: &ParamValues, _: &[(&str, u32)]) -> Option<u32> {
         (port == "bounds").then_some(2)
@@ -45,13 +55,29 @@ impl Primitive for BlobBounds {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let (Some(blobs), Some(bounds)) = (ctx.inputs.array("blobs"), ctx.outputs.array("bounds")) else { return };
         let count = (blobs.size / size_of::<FluidBlob>() as u64) as u32;
-        let params = BoundsParams { count, _pad0: 0, _pad1: 0, _pad2: 0 };
+        let groups = count.div_ceil(THREADS).min(MAX_GROUPS);
+        let params = BoundsParams { count, groups, _pad1: 0, _pad2: 0 };
         let gpu = ctx.gpu_encoder();
-        gpu.native_enc.dispatch_compute(self.reduction.as_ref().expect("installed blob bounds"), &[
-            GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&params) },
-            GpuBinding::Buffer { binding: 1, buffer: blobs, offset: 0 },
-            GpuBinding::Buffer { binding: 2, buffer: bounds, offset: 0 },
-        ], [1, 1, 1], "node.blob_bounds");
+        if count <= THREADS {
+            gpu.native_enc.dispatch_compute(self.reduction.as_ref().expect("installed blob bounds"), &[
+                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&params) },
+                GpuBinding::Buffer { binding: 1, buffer: blobs, offset: 0 },
+                GpuBinding::Buffer { binding: 2, buffer: bounds, offset: 0 },
+            ], [1, 1, 1], "node.blob_bounds");
+        } else {
+            let partials = self.partials.get_or_insert_with(|| gpu.device.create_buffer(PARTIAL_BYTES));
+            gpu.native_enc.dispatch_compute(self.partial_reduction.as_ref().expect("installed partial blob bounds"), &[
+                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&params) },
+                GpuBinding::Buffer { binding: 1, buffer: blobs, offset: 0 },
+                GpuBinding::Buffer { binding: 3, buffer: partials, offset: 0 },
+            ], [groups, 1, 1], "node.blob_bounds.partial");
+            gpu.native_enc.compute_memory_barrier_buffers();
+            gpu.native_enc.dispatch_compute(self.finish_reduction.as_ref().expect("installed final blob bounds"), &[
+                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&params) },
+                GpuBinding::Buffer { binding: 2, buffer: bounds, offset: 0 },
+                GpuBinding::Buffer { binding: 3, buffer: partials, offset: 0 },
+            ], [1, 1, 1], "node.blob_bounds.finish");
+        }
     }
 }
 
@@ -62,5 +88,85 @@ mod tests {
         let module = naga::front::wgsl::parse_str(super::SHADER).expect("blob bounds WGSL");
         naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
             .validate(&module).expect("blob bounds validates");
+        for entry in ["main", "partial_main", "finish_main"] {
+            assert!(module.entry_points.iter().any(|point| point.name == entry), "missing {entry}");
+        }
+        assert_eq!(size_of::<super::BoundsParams>(), 16);
+    }
+}
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod gpu_tests {
+    use super::*;
+    use crate::node_graph::primitives::liquid_surface_tests::{Harness, read};
+
+    fn reference(blobs: &[FluidBlob]) -> [u32; 2] {
+        let mut bounds = [0.0f32; 2];
+        for blob in blobs {
+            let r = blob.center_radius[3];
+            assert!(r.is_finite() && blob.shape_off[3].is_finite());
+            if r > 0.0 {
+                let support = 1.5 * r + blob.shape_off[3];
+                assert!(support.is_finite() && support >= 0.0);
+                bounds[0] = bounds[0].max(r);
+                bounds[1] = bounds[1].max(support);
+            }
+        }
+        bounds.map(f32::to_bits)
+    }
+
+    #[test]
+    fn liquid_blob_bounds_hierarchical_matches_cpu_across_counts_and_reuse() {
+        let mut harness = Harness::new();
+        let mut node = BlobBounds::new();
+        node.prepare_pipelines(&harness.device);
+        let (bounds_slot, bounds_buffer) = harness.array::<f32>(&[], 2);
+        let mut scratch: Option<GpuBuffer> = None;
+        // The last two inputs shrink the allocation and number of partials
+        // after the capped 256-group path, while reusing the same primitive.
+        for count in [1, 255, 256, 257, 1025, 65_537, 257, 1] {
+            let mut blobs = vec![FluidBlob::default(); count];
+            for (i, blob) in blobs.iter_mut().enumerate() {
+                blob.center_radius[3] = if i % 11 == 0 { -1.0 } else { (i % 7 + 1) as f32 * 0.125 };
+                blob.shape_off[3] = if i % 11 == 0 { 1024.0 } else { (i % 5) as f32 * 0.25 };
+            }
+            // Radius maximum in the final record; support maximum elsewhere.
+            // Binary fractions keep the CPU and shader arithmetic exact.
+            blobs[count - 1].center_radius[3] = 8.0;
+            blobs[count - 1].shape_off[3] = 0.0;
+            if count > 1 {
+                blobs[count / 2].center_radius[3] = 2.0;
+                blobs[count / 2].shape_off[3] = 32.0;
+            }
+            let (blob_slot, blob_buffer) = harness.array(&blobs, count);
+            for population in 0..3 {
+                if population == 1 {
+                    for blob in &mut blobs {
+                        blob.center_radius[3] = 0.25;
+                        blob.shape_off[3] = 0.125;
+                    }
+                } else if population == 2 {
+                    for (i, blob) in blobs.iter_mut().enumerate() {
+                        blob.center_radius[3] = if i % 2 == 0 { 0.0 } else { -1.0 };
+                        blob.shape_off[3] = 1024.0;
+                    }
+                }
+                // SAFETY: Harness waits after each run, and this buffer holds count records.
+                unsafe { blob_buffer.write(0, bytemuck::cast_slice(&blobs)); }
+                let (_, errors) = harness.run(&mut node, &[("blobs", blob_slot)], &[("bounds", bounds_slot)], &ParamValues::default());
+                assert!(errors.is_empty(), "count {count}, population {population}: {errors:?}");
+                assert_eq!(read::<u32>(&bounds_buffer, 2), reference(&blobs), "count {count}, population {population}");
+                if let Some(partials) = &node.partials {
+                    assert_eq!(partials.size, PARTIAL_BYTES);
+                    if let Some(scratch) = &scratch {
+                        assert!(partials.ptr_eq(scratch), "resized populations reuse the fixed scratch buffer");
+                    } else {
+                        scratch = Some(partials.clone());
+                    }
+                } else {
+                    assert!(count <= THREADS as usize, "large input allocates scratch once");
+                }
+            }
+        }
     }
 }

@@ -19,6 +19,9 @@ pub struct TickSamples<T> {
     /// The value at each tick's start, ascending by tick, from the oldest
     /// tick still needed.
     ticks: VecDeque<(u64, T)>,
+    /// A closing endpoint before discarded transport reanchored the next
+    /// tick's start under the same ordinal.
+    previous_endpoint: Option<(u64, T)>,
     /// Transport times the replay must sample before the next frame, with
     /// their ticks, ascending.
     requests: Vec<(f64, u64)>,
@@ -26,7 +29,7 @@ pub struct TickSamples<T> {
 
 impl<T> Default for TickSamples<T> {
     fn default() -> Self {
-        Self { ticks: VecDeque::new(), requests: Vec::new() }
+        Self { ticks: VecDeque::new(), previous_endpoint: None, requests: Vec::new() }
     }
 }
 
@@ -67,12 +70,27 @@ impl<T: Clone> TickSamples<T> {
     /// `None` (nothing wired) forgets every sample.
     pub fn settle(&mut self, clock: &LiquidClock, frame: &ClockFrame, value: Option<&T>) {
         let Some(value) = value.filter(|_| !frame.restarted) else {
-            self.ticks.clear();
+            self.clear();
             if let (true, Some(value)) = (frame.restarted, value) {
                 self.settle_now(clock, value);
             }
             return;
         };
+        if frame.reanchored {
+            let tick = clock.ticks_done();
+            let at = self.ticks.partition_point(|(recorded, _)| *recorded < tick);
+            if let Some((_, value)) = self.ticks.get(at).filter(|(recorded, _)| *recorded == tick) {
+                match &mut self.previous_endpoint {
+                    Some((recorded, held)) => {
+                        *recorded = tick;
+                        held.clone_from(value);
+                    }
+                    None => self.previous_endpoint = Some((tick, value.clone())),
+                }
+            } else {
+                self.previous_endpoint = None;
+            }
+        }
         self.settle_now(clock, value);
     }
 
@@ -105,6 +123,19 @@ impl<T: Clone> TickSamples<T> {
         self.span(tick, 1).ok().and_then(|mut span| span.next()).map(|(_, value)| value)
     }
 
+    /// The closing value at `tick`, before any discarded transport gap.
+    pub fn endpoint(&self, tick: u64) -> Option<&T> {
+        self.previous_endpoint.as_ref().filter(|(recorded, _)| *recorded == tick)
+            .map(|(_, value)| value).or_else(|| self.get(tick))
+    }
+
+    /// A fresh authored start at the same simulation time as the end of a
+    /// discarded transport gap. The previous endpoint must settle first.
+    pub fn reanchored_start(&self, tick: u64) -> Option<&T> {
+        self.previous_endpoint.as_ref().filter(|(recorded, _)| *recorded == tick)
+            .and_then(|_| self.get(tick))
+    }
+
     /// Forget ticks before `tick`.
     pub fn prune_before(&mut self, tick: u64) {
         while self.ticks.front().is_some_and(|(recorded, _)| *recorded < tick) {
@@ -114,6 +145,7 @@ impl<T: Clone> TickSamples<T> {
 
     pub fn clear(&mut self) {
         self.ticks.clear();
+        self.previous_endpoint = None;
     }
 
     /// A later observation of the same boundary replaces its held value.
@@ -122,6 +154,75 @@ impl<T: Clone> TickSamples<T> {
         match self.ticks.get_mut(at) {
             Some((recorded, held)) if *recorded == tick => held.clone_from(value),
             _ => self.ticks.insert(at, (tick, value.clone())),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use manifold_physics::clock::TICK;
+
+    #[test]
+    fn tick_samples_keep_accepted_endpoint_before_reanchored_start() {
+        let mut clock = LiquidClock::default();
+        let mut samples = TickSamples::default();
+        let frame = clock.advance(0.0, TICK, 1.0, 0.0, false, false);
+        samples.settle(&clock, &frame, Some(&0.0));
+        let mut times = Vec::new();
+        samples.request(&clock, 0.0, 0.7, &mut times);
+        assert_eq!(times, [TICK, 2.0 * TICK]);
+        for &time in &times {
+            samples.observe(time, Some(&time));
+        }
+        let frame = clock.advance(0.7, TICK, 1.0, 0.0, false, false);
+        assert!(frame.reanchored);
+        assert_eq!(frame.ticks, 2);
+        samples.settle(&clock, &frame, Some(&0.7));
+        assert_eq!(samples.endpoint(2), Some(&(2.0 * TICK)));
+        assert_eq!(samples.get(2), Some(&0.7));
+        samples.prune_before(2);
+        assert_eq!(samples.endpoint(2), Some(&(2.0 * TICK)));
+
+        let next = 0.7 + TICK;
+        times.clear();
+        samples.request(&clock, 0.7, next, &mut times);
+        for &time in &times {
+            samples.observe(time, Some(&time));
+        }
+        let frame = clock.advance(next, TICK, 1.0, 0.0, false, false);
+        samples.settle(&clock, &frame, Some(&next));
+        assert!(!frame.reanchored);
+        assert_eq!(samples.endpoint(2), Some(&(2.0 * TICK)));
+        assert_eq!(samples.get(2), Some(&0.7));
+        assert_eq!(samples.endpoint(3), Some(&next));
+
+        let frame = clock.advance(next, TICK, 1.0, 1.0, false, false);
+        samples.settle(&clock, &frame, Some(&next));
+        assert!(frame.restarted);
+        assert_eq!(samples.endpoint(2), None);
+        samples.clear();
+        assert_eq!(samples.endpoint(0), None);
+    }
+
+    #[test]
+    fn tick_samples_offline_endpoints_remain_tick_starts() {
+        let mut clock = LiquidClock::default();
+        let mut samples = TickSamples::default();
+        let frame = clock.advance(0.0, TICK, 1.0, 0.0, false, true);
+        samples.settle(&clock, &frame, Some(&0.0));
+        let mut times = Vec::new();
+        samples.request(&clock, 0.0, 0.7, &mut times);
+        for &time in &times {
+            samples.observe(time, Some(&time));
+        }
+        let frame = clock.advance(0.7, TICK, 1.0, 0.0, false, true);
+        samples.settle(&clock, &frame, Some(&0.7));
+        assert!(!frame.reanchored);
+        assert_eq!(frame.ticks, 42);
+        for tick in 1..=u64::from(frame.ticks) {
+            assert_eq!(samples.endpoint(tick), samples.get(tick));
+            assert!((samples.endpoint(tick).unwrap() - tick as f64 * TICK).abs() < NOW);
         }
     }
 }

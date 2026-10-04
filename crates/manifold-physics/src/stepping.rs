@@ -790,7 +790,7 @@ pub fn marker_particle_speed_limit(
 }
 
 /// Box3D's longer accepted interval is internally kept at no more than one
-/// quarter of the nominal 60 Hz tick, with the reference minimum of four.
+/// quarter of the native nominal 60 Hz tick, with the reference minimum of four.
 pub fn box3d_substep_count(duration: Seconds) -> LiveStepOutcome<u32> {
     let duration = if duration.0.is_finite() && duration.0 > 0.0 {
         duration.0
@@ -804,7 +804,11 @@ pub fn box3d_substep_count(duration: Seconds) -> LiveStepOutcome<u32> {
             },
         );
     };
-    let count = (4.0 * duration / NOMINAL_TICK_SECONDS).ceil().max(4.0);
+    // PhysicsWorld::step passes f32 seconds to Box3D. Select its count from
+    // that same duration and nominal tick: subtracting f64 clock endpoints
+    // can otherwise turn an identical native step into four or five substeps
+    // depending on how display frames grouped the accepted intervals.
+    let count = (4.0 * f64::from(duration as f32) / f64::from(NOMINAL_TICK_SECONDS as f32)).ceil().max(4.0);
     if !count.is_finite() || count > f64::from(u32::MAX) {
         return LiveStepOutcome::diagnostic(
             u32::MAX,
@@ -1035,6 +1039,30 @@ mod tests {
         assert_eq!(pressure_impulse_delta_velocity(12.0, 0.25), 3.0);
         assert_eq!(box3d_substep_count(Seconds(TICK)).value, 4);
         assert_eq!(box3d_substep_count(Seconds(0.1)).value, 24);
+    }
+
+    #[test]
+    fn box3d_substeps_are_independent_of_live_frame_grouping() {
+        for (rate, speed, expected) in [(60, 1.0, 4), (60, 2.0, 8), (30, 1.0, 8), (60, 4.0, 16), (120, 1.0, 4)] {
+            let interval = 1.0 / f64::from(rate);
+            for fps in [20u32, 24, 30, 60] {
+                let mut clock = crate::clock::SimulationClock::default();
+                clock.advance(0.0, interval, speed, 0.0, false, false);
+                for frame in 1..=fps {
+                    let accepted = clock.advance(f64::from(frame) / f64::from(fps), interval, speed, 0.0, false, false);
+                    for ordinal in 0..u64::from(accepted.ticks) {
+                        let duration = accepted.interval(ordinal).unwrap().duration();
+                        assert_eq!(duration.0 as f32, (interval * f64::from(speed)) as f32,
+                            "the native solver receives the same fixed duration");
+                        assert_eq!(box3d_substep_count(duration).value, expected,
+                            "{rate} Hz speed {speed}, {fps} fps frame {frame} interval {ordinal}: {duration:?}");
+                    }
+                }
+            }
+        }
+        // A genuinely longer native interval must still get another substep.
+        let above_tick = f32::from_bits((TICK as f32).to_bits() + 1);
+        assert_eq!(box3d_substep_count(Seconds(f64::from(above_tick))).value, 5);
     }
 
     #[test]

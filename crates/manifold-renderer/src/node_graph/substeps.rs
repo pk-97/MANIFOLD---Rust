@@ -23,6 +23,46 @@ use crate::node_graph::freeze::classify::BoundaryReason;
 use crate::node_graph::graph::{Graph, WireWalkMode};
 use crate::node_graph::validation::GraphError;
 
+/// One accepted clock interval and its place in this frame's numerical loop.
+/// Iteration identity does not imply a fixed number of subdivisions per interval.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SubstepInterval {
+    pub interval: manifold_physics::stepping::StepInterval,
+    pub ordinal: u32,
+    pub first_iteration: u32,
+    pub iterations: u32,
+    pub total_iterations: u32,
+}
+
+/// Clock outputs refreshed before a region iteration. Additional scalars use
+/// the clock's existing output ports, so saved graphs keep the same wiring.
+pub struct SubstepClockOutput<'a> {
+    pub duration_port: &'static str,
+    pub timing: SubstepInterval,
+    pub scalars: &'a [(&'static str, f32)],
+}
+
+impl SubstepClockOutput<'_> {
+    pub fn single(
+        duration_port: &'static str,
+        interval: manifold_physics::stepping::StepInterval,
+        ordinal: u32,
+        total_iterations: u32,
+    ) -> Self {
+        Self {
+            duration_port,
+            timing: SubstepInterval {
+                interval,
+                ordinal,
+                first_iteration: ordinal,
+                iterations: 1,
+                total_iterations,
+            },
+            scalars: &[],
+        }
+    }
+}
+
 /// Port names a substep boundary declares to the plan compiler and executor.
 ///
 /// `seed` is the one-shot initial state; `capture`/`state` are the primary
@@ -1684,8 +1724,8 @@ mod tests {
         fn substep_boundary(&self) -> Option<SubstepBoundaryPorts> {
             Some(self.ports)
         }
-        fn set_substep_interval(&mut self, interval: manifold_physics::stepping::StepInterval) {
-            self.interval_duration = interval.duration().0 as f32;
+        fn set_substep_interval(&mut self, interval: SubstepInterval) {
+            self.interval_duration = interval.interval.duration().0 as f32;
         }
         fn substep_iteration(&mut self, iteration: u32, scalars: &mut [f32]) -> bool {
             if iteration >= self.pending {
@@ -1820,8 +1860,9 @@ mod tests {
         fn substep_host_sync(&self, _iteration: u32) -> bool {
             true
         }
-        fn substep_clock_interval(&self, iteration: u32) -> Option<(&'static str, manifold_physics::stepping::StepInterval)> {
-            self.intervals.as_ref()?.interval(u64::from(iteration)).map(|interval| ("out", interval))
+        fn substep_clock_interval(&self, iteration: u32) -> Option<SubstepClockOutput<'_>> {
+            let frame = self.intervals.as_ref()?;
+            frame.interval(u64::from(iteration)).map(|interval| SubstepClockOutput::single("out", interval, iteration, frame.ticks))
         }
         fn substep_host_step(
             &mut self,

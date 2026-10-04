@@ -73,6 +73,21 @@ pub(crate) const DEFAULT_TOP_SPEED: f32 = 20.0;
 /// Configured engine CFL, shared with the clock.
 pub(crate) const ENGINE_CFL: u32 = 5;
 
+/// A fenced maximum for the exact incoming marker state can prove that the
+/// GPU scheduler's first step consumes the entire interval. Keep a 1% margin
+/// from its ceil boundary for CPU/GPU length and division rounding. This only
+/// decides whether to omit unused command chains; GPU CFL and max steps stay
+/// unchanged. The caller excludes first-tick prediction and events, and the
+/// obstacle bound must describe the same initial state with zero reaction.
+fn one_step_cfl_safe(marker_speed: f32, obstacle_speed: f32, interval: f32, cell_size: f32) -> bool {
+    marker_speed.is_finite() && marker_speed >= 0.0
+        && obstacle_speed.is_finite() && obstacle_speed >= 0.0
+        && interval.is_finite() && interval > 0.0
+        && cell_size.is_finite() && cell_size > 0.0
+        && f64::from(interval) * (f64::from(marker_speed.max(obstacle_speed)) + manifold_physics::stepping::LIVE_CFL_EPSILON) * 1.01
+            < f64::from(ENGINE_CFL) * f64::from(cell_size)
+}
+
 /// The CFL guard: the farthest one RK3 stage moves a particle, in cells,
 /// `top_speed` over one step rounded up. The inputs are f32, so a ratio
 /// within 1e-4 of a whole cell is that cell, not the next.
@@ -134,10 +149,10 @@ fn tile_count_words(ring_max: u32) -> u64 {
     u64::from(ring_max) + 4
 }
 
-/// Words of the indirect triples: one per count word 0..=ring_max (C, then
-/// each ring cap), one for the retired list.
+/// Indirect triples for C, each ring cap, retired tiles and full faces,
+/// followed by one aligned replay range for the extension layers.
 fn tile_args_words(ring_max: u32) -> u64 {
-    3 * (u64::from(ring_max) + 2)
+    2 * (u64::from(extension_range_index(ring_max)) + 1)
 }
 
 /// Bytes of the tile table at `cells` for `ring_max`: the nearness, two
@@ -169,9 +184,7 @@ pub(crate) fn scratch_bytes(cells: [u32; 3], slots: u64, ring_max: u32) -> u64 {
 #[cfg(any(test, feature = "gpu-proofs"))]
 fn mask_saved_bytes(cells: [u32; 3], slots: u64) -> u64 {
     slots * size_of::<FluidParticle>() as u64
-        + face_bytes(cells)
         + cell_bytes(cells)
-        + ZERO_BYTES
         + (slots * 8 + u64::from(SOLVER_WORDS) * 4)
 }
 
@@ -265,6 +278,24 @@ pub(super) fn gating() -> bool {
     }
 }
 
+// The proof compares the no-body clear with the existing solid kernels.
+// This switch and its load are absent from production builds.
+#[cfg(all(test, feature = "gpu-proofs"))]
+static FORCE_SOLID_VELOCITY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+pub(crate) fn set_force_solid_velocity(on: bool) {
+    FORCE_SOLID_VELOCITY.store(on, std::sync::atomic::Ordering::SeqCst);
+}
+
+fn solid_velocity_needed(body_count: i32) -> bool {
+    #[cfg(all(test, feature = "gpu-proofs"))]
+    if FORCE_SOLID_VELOCITY.load(std::sync::atomic::Ordering::SeqCst) {
+        return true;
+    }
+    body_count > 0
+}
+
 /// The lattice's cell-sized arrays (`LatticeBuffers`): water, φ, the
 /// right-hand side, the pressure, the pocket state and label, the solve
 /// mask, the contact mask and the let-go set.
@@ -315,9 +346,8 @@ pub(crate) struct StepParams {
     pub(crate) solve_level: u32,
     /// 1: every tile is active (the test-only oracle, [`set_all_tiles`]).
     pub(crate) all_tiles: u32,
-    /// The ring a sparse pass's reads are capped at. Unused while the extend
-    /// is dense (design D-4); Phase 2's coarse levels take it.
-    pub(crate) ring_cap: u32,
+    /// Dispatches in each velocity-extension replay segment.
+    pub(crate) extension_layers: u32,
     /// [`ring_max`] for this step: the table's extent.
     pub(crate) ring_max: u32,
     /// Ferstl 2016: 0 dense, 1 full-history initialization, 2 masked band.
@@ -491,6 +521,15 @@ fn retired_args_offset(ring_max: u32) -> u64 {
     12 * (u64::from(ring_max) + 1)
 }
 
+fn face_args_offset(ring_max: u32) -> u64 {
+    retired_args_offset(ring_max) + 12
+}
+
+/// Index of the 8-byte replay range after the indirect triples.
+fn extension_range_index(ring_max: u32) -> u32 {
+    (3 * (ring_max + 3)).div_ceil(2)
+}
+
 /// `bound` plus the arrays the fill, the retire and the poison write: the
 /// gathered faces and the C passes' cell arrays.
 fn canonical<'a>(l: &'a LatticeBuffers, mut bound: Vec<GpuBinding<'a>>) -> Vec<GpuBinding<'a>> {
@@ -522,7 +561,7 @@ fn encode_tiles(enc: &mut GpuEncoder, pipes: &Pipelines, params: &StepParams, t:
     enc.dispatch_compute(
         &pipes.tiles_classify,
         &[uniform(params), buffer(1, ranges), buffer(27, &t.near), buffer(30, &t.counts), buffer(46, plan)],
-        tiles,
+        groups(tile_total(params.n) * 32),
         "gpu_flip.step.tiles.classify",
     );
     enc.dispatch_compute(
@@ -596,7 +635,10 @@ struct LatticeBuffers {
 }
 
 /// Words of the pocket spread's gate (gpu_flip_step.wgsl `pocket_gate`).
-const POCKET_GATE_WORDS: u64 = 11;
+pub(crate) const POCKET_GATE_WORDS: u64 = 17;
+/// The aligned replay range at gate words 12 and 13, after the flags.
+const POCKET_RANGE_INDEX: u32 = 6;
+const POCKET_ROUND_OFFSET: u64 = 14 * 4;
 
 fn allocate(device: &GpuDevice, bytes: u64) -> Result<GpuBuffer, String> {
     crate::node_graph::scene_modifier_expand::admit_candidate_bytes(device.modifier_memory_snapshot(), bytes)
@@ -672,6 +714,8 @@ pub(crate) struct StepState {
     /// The lattice's cell arrays and gathered faces hold canonical values
     /// everywhere (`tiles_fill` ran); false until the first step on a lattice.
     filled: bool,
+    /// No-body solid scratch stays zero until a body pass writes it.
+    solid_velocity_is_zero: bool,
     sorted: Option<GpuBuffer>,
     /// The emission flags' scan, one word a half-cell site.
     emit_scan: PrefixScan,
@@ -679,9 +723,7 @@ pub(crate) struct StepState {
     faces: Option<GpuBuffer>,
     /// [`ZERO_BYTES`] zero bytes bound where an optional input is unwired.
     saved_particles: Option<GpuBuffer>,
-    saved_faces: Option<GpuBuffer>,
     saved_distance: Option<GpuBuffer>,
-    saved_reaction: Option<GpuBuffer>,
     saved_capped: Option<GpuBuffer>,
     saved_narrow_phi: Option<GpuBuffer>,
     saved_narrow_faces: Option<GpuBuffer>,
@@ -774,7 +816,7 @@ fn narrow_redistance(enc: &mut GpuEncoder, pipes: &BandPipelines, params: &NbPar
 /// `layers` extension passes from `source` into `target`, ping-ponging
 /// through `scratch` so the last pass lands in `target`. `source` may be
 /// `target`: an even count's first pass writes `scratch`, an odd one starts from a copy there.
-fn extend(enc: &mut GpuEncoder, pipes: &Pipelines, clock_plan: &GpuBuffer, params: &StepParams, face_groups: [u32; 3], [source, target, scratch]: [&GpuBuffer; 3], layers: u32, label: &str) {
+fn extend(enc: &mut GpuEncoder, pipes: &Pipelines, clock_plan: &GpuBuffer, params: &StepParams, face_groups: [u32; 3], table: Option<&TileTable>, [source, target, scratch]: [&GpuBuffer; 3], layers: u32, label: &str) {
     let mut from = source;
     // In place with an odd count, the first pass would write its own source:
     // start from a copy in `scratch` instead, which that pass does not write.
@@ -782,11 +824,43 @@ fn extend(enc: &mut GpuEncoder, pipes: &Pipelines, clock_plan: &GpuBuffer, param
         enc.copy_buffer_to_buffer(source, scratch, source.size.min(scratch.size));
         from = scratch;
     }
+    let gate = table.filter(|_| params.step_in_tick > 0 && indirect_extend());
+    if let Some(table) = gate {
+        debug_assert_eq!(params.extension_layers, layers);
+        enc.begin_gated_segment(&table.args, extension_range_index(table.ring_max), layers);
+    }
     for i in 0..layers {
         let to = if (layers - i) % 2 == 1 { target } else { scratch };
-        enc.dispatch_compute(&pipes.extend, &[buffer(46, clock_plan), uniform(params), buffer(3, from), buffer(4, to)], face_groups, label);
+        let bindings = [buffer(46, clock_plan), uniform(params), buffer(3, from), buffer(4, to)];
+        if let Some(table) = gate {
+            // The first slot is normally active and keeps ordinary replay.
+            // Later slots use the same full grid when active, zero groups
+            // otherwise; tiles_lists already writes that decision each slot.
+            enc.dispatch_compute_gated(&pipes.extend, &bindings, face_groups, &table.args, face_args_offset(table.ring_max), label);
+        } else {
+            enc.dispatch_compute(&pipes.extend, &bindings, face_groups, label);
+        }
         from = to;
     }
+    if gate.is_some() {
+        enc.end_gated_segments();
+    }
+}
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+static FORCE_DENSE_EXTEND: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+pub(crate) fn set_force_dense_extend(on: bool) {
+    FORCE_DENSE_EXTEND.store(on, std::sync::atomic::Ordering::SeqCst);
+}
+
+fn indirect_extend() -> bool {
+    #[cfg(all(test, feature = "gpu-proofs"))]
+    if FORCE_DENSE_EXTEND.load(std::sync::atomic::Ordering::SeqCst) {
+        return false;
+    }
+    true
 }
 
 /// Layers of the solid velocity's extrapolation (gpu_flip_step.wgsl
@@ -797,6 +871,22 @@ const SOLID_LAYERS: u32 = 5;
 /// lattice along each axis, so the cap is the longest side.
 pub(crate) fn pocket_rounds(cells: [u32; 3]) -> u32 {
     cells.into_iter().max().unwrap_or(1)
+}
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+static FORCE_INDIRECT_POCKETS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+pub(crate) fn set_force_indirect_pockets(on: bool) {
+    FORCE_INDIRECT_POCKETS.store(on, std::sync::atomic::Ordering::SeqCst);
+}
+
+fn segment_pockets() -> bool {
+    #[cfg(all(test, feature = "gpu-proofs"))]
+    if FORCE_INDIRECT_POCKETS.load(std::sync::atomic::Ordering::SeqCst) {
+        return false;
+    }
+    true
 }
 
 /// Which water reaches air (gpu_flip_step.wgsl pocket_*): seed, up to
@@ -821,16 +911,33 @@ fn encode_pockets(
         "gpu_flip.step.pocket_seed",
     );
     enc.dispatch_compute(&pipes.pocket_start, &[buffer(24, &l.pocket_gate), buffer(46, plan)], [1, 1, 1], "gpu_flip.step.pocket_start");
+    let segmented = segment_pockets();
+    let lines = [u64::from(cells[1]) * u64::from(cells[2]), u64::from(cells[2]) * u64::from(cells[0]), u64::from(cells[0]) * u64::from(cells[1])];
+    let round_bindings = [uniform(params), buffer(24, &l.pocket_gate), buffer(46, plan)];
+    if segmented {
+        enc.dispatch_compute(&pipes.pocket_round, &round_bindings, [1, 1, 1], "gpu_flip.step.pocket_round");
+    }
     for _ in 0..pocket_rounds(cells) {
-        enc.dispatch_compute(&pipes.pocket_round, &[uniform(params), buffer(24, &l.pocket_gate), buffer(46, plan)], [1, 1, 1], "gpu_flip.step.pocket_round");
+        if segmented {
+            // The last command prepares the next round. Once no cell changes,
+            // subsequent segments skip their sweeps and their setup together.
+            // The final unused setup only updates dispatch metadata; the cap
+            // check below inspects the cells and labels independently.
+            enc.begin_gated_segment(&l.pocket_gate, POCKET_RANGE_INDEX, 4);
+        } else {
+            enc.dispatch_compute(&pipes.pocket_round, &round_bindings, [1, 1, 1], "gpu_flip.step.pocket_round");
+        }
         for (axis, sweep) in pipes.pocket_sweep.iter().enumerate() {
-            enc.dispatch_compute_indirect(
-                sweep,
-                &[uniform(params), buffer(10, &l.s), buffer(23, &l.pocket), buffer(24, &l.pocket_gate), buffer(25, &l.pocket_label)],
-                &l.pocket_gate,
-                12 * axis as u64,
-                "gpu_flip.step.pocket_sweep",
-            );
+            let bindings = [uniform(params), buffer(10, &l.s), buffer(23, &l.pocket), buffer(24, &l.pocket_gate), buffer(25, &l.pocket_label)];
+            if segmented {
+                enc.dispatch_compute_gated(sweep, &bindings, groups(lines[axis]), &l.pocket_gate, 12 * axis as u64, "gpu_flip.step.pocket_sweep");
+            } else {
+                enc.dispatch_compute_indirect(sweep, &bindings, &l.pocket_gate, 12 * axis as u64, "gpu_flip.step.pocket_sweep");
+            }
+        }
+        if segmented {
+            enc.dispatch_compute_gated(&pipes.pocket_round, &round_bindings, [1, 1, 1], &l.pocket_gate, POCKET_ROUND_OFFSET, "gpu_flip.step.pocket_round");
+            enc.end_gated_segments();
         }
     }
     enc.dispatch_compute(
@@ -1058,14 +1165,6 @@ impl StepState {
         {
             self.saved_particles = Some(allocate(device, saved_particle_bytes)?);
         }
-        let saved_face_bytes = face_bytes(cells);
-        if self
-            .saved_faces
-            .as_ref()
-            .is_none_or(|buffer| buffer.size < saved_face_bytes)
-        {
-            self.saved_faces = Some(allocate(device, saved_face_bytes)?);
-        }
         let saved_distance_bytes = cell_bytes(cells);
         if self
             .saved_distance
@@ -1073,13 +1172,6 @@ impl StepState {
             .is_none_or(|buffer| buffer.size < saved_distance_bytes)
         {
             self.saved_distance = Some(allocate(device, saved_distance_bytes)?);
-        }
-        if self
-            .saved_reaction
-            .as_ref()
-            .is_none_or(|buffer| buffer.size < ZERO_BYTES)
-        {
-            self.saved_reaction = Some(allocate(device, ZERO_BYTES)?);
         }
         let saved_capped_bytes = slots.max(1) * 8 + u64::from(SOLVER_WORDS) * 4;
         if self
@@ -1094,6 +1186,7 @@ impl StepState {
             self.lattice = None;
             self.tiles = None;
             self.filled = false;
+            self.solid_velocity_is_zero = false;
             self.lattice = Some(LatticeBuffers::new(device, cells)?);
         }
         if self.tiles.as_ref().is_none_or(|t| t.ring_max != ring_max) {
@@ -1208,6 +1301,8 @@ impl StepState {
     }
 
     fn encode(&mut self, device: &GpuDevice, enc: &mut GpuEncoder, step: &Step<'_>, clock_params: &GpuFlipClockParams) -> Result<(), String> {
+        #[cfg(feature = "water-race-probes")]
+        enc.set_profile_tag("gpu_flip.stage.prepare");
         let pipes = self.pipelines.as_ref().expect("step pipelines built by prepare_pipelines at install");
         let (Some(l), Some(tiles), Some(sorted), Some(out_faces)) = (self.lattice.as_ref(), self.tiles.as_ref(), self.sorted.as_ref(), self.faces.as_ref()) else {
             return Err("the step's storage was not reserved".into());
@@ -1286,20 +1381,22 @@ impl StepState {
             let nb_pipes = self.narrow.pipes.as_ref().ok_or("narrow-band pipelines were not prepared")?;
             let ranges = self.sorter.ranges().ok_or("the cell ranges were not reserved")?;
             if narrow_initial {
+                // Dense narrow-band indexing bypasses the tile list at runtime,
+                // but the compiled shader still requires its buffer binding.
                 enc.dispatch_compute(
                     &pipes.band_distance,
-                    &[uniform(&base), buffer(1, ranges), buffer(2, sorted), buffer(5, &l.phi), buffer(45, &nb.mask)],
+                    &[uniform(&base), buffer(1, ranges), buffer(2, sorted), buffer(5, &l.phi), buffer(29, &tiles.by_ring), buffer(45, &nb.mask), buffer(46, step.clock_plan)],
                     cells_groups,
                     "gpu_flip.step.narrow.initialize_distance",
                 );
                 enc.dispatch_compute(
                     &pipes.band_gather,
-                    &[uniform(&base), buffer(1, ranges), buffer(2, sorted), buffer(4, &l.g), buffer(45, &nb.mask)],
+                    &[uniform(&base), buffer(1, ranges), buffer(2, sorted), buffer(4, &l.g), buffer(29, &tiles.by_ring), buffer(45, &nb.mask), buffer(46, step.clock_plan)],
                     face_groups,
                     "gpu_flip.step.narrow.initialize_gather",
                 );
                 enc.compute_memory_barrier_buffers();
-                extend(enc, pipes, step.clock_plan, &base, face_groups, [&l.g, &nb.previous_faces, &l.b], step.band, "gpu_flip.step.narrow.initialize_faces");
+                extend(enc, pipes, step.clock_plan, &base, face_groups, None, [&l.g, &nb.previous_faces, &l.b], step.band, "gpu_flip.step.narrow.initialize_faces");
                 narrow_redistance(enc, nb_pipes, &nb_params, &l.phi, &nb.previous_phi, cells, "gpu_flip.step.narrow.initialize_distance");
                 enc.copy_buffer_to_buffer(&nb.previous_phi, &l.phi, l.phi.size);
             } else {
@@ -1455,13 +1552,11 @@ impl StepState {
             );
         }
         let over_c = |enc: &mut GpuEncoder, pipeline: &GpuComputePipeline, bindings: Vec<GpuBinding<'_>>, threads: [u32; 3], label: &str| {
+            let mut bound = vec![uniform(&base), buffer(29, &tiles.by_ring), buffer(46, step.clock_plan)];
+            bound.extend(bindings);
             if step.narrow_enabled {
-                let mut bound = vec![uniform(&base), buffer(46, step.clock_plan)];
-                bound.extend(bindings);
                 enc.dispatch_compute(pipeline, &bound, threads, label);
             } else {
-                let mut bound = vec![uniform(&base), buffer(29, &tiles.by_ring), buffer(46, step.clock_plan)];
-                bound.extend(bindings);
                 enc.dispatch_compute_indirect(pipeline, &bound, &tiles.args, 0, label);
             }
         };
@@ -1527,7 +1622,7 @@ impl StepState {
         // The saved faces: the particles' own, extended so FLIP's change is
         // measured wherever a particle samples.
         if step.narrow_enabled {
-            extend(enc, pipes, step.clock_plan, &base, face_groups, [&l.g, &l.a, &l.b], step.band, "gpu_flip.step.narrow.extend_old");
+            extend(enc, pipes, step.clock_plan, &base, face_groups, None, [&l.g, &l.a, &l.b], step.band, "gpu_flip.step.narrow.extend_old");
             let nb = self.narrow.buffers.as_ref().ok_or("narrow-band storage was not reserved")?;
             let nb_pipes = self.narrow.pipes.as_ref().ok_or("narrow-band pipelines were not prepared")?;
             enc.dispatch_compute(
@@ -1536,9 +1631,9 @@ impl StepState {
                 face_groups,
                 "gpu_flip.step.narrow.combine",
             );
-            extend(enc, pipes, step.clock_plan, &base, face_groups, [&l.g, &l.g, &l.b], step.band, "gpu_flip.step.narrow.extend_combined");
+            extend(enc, pipes, step.clock_plan, &base, face_groups, None, [&l.g, &l.g, &l.b], step.band, "gpu_flip.step.narrow.extend_combined");
         } else {
-            extend(enc, pipes, step.clock_plan, &base, face_groups, [&l.g, &l.a, &l.b], step.band, "gpu_flip.step.extend_old");
+            extend(enc, pipes, step.clock_plan, &base, face_groups, (!step.narrow_enabled).then_some(tiles), [&l.g, &l.a, &l.b], step.band, "gpu_flip.step.extend_old");
         }
         let force_faces = if step.narrow_enabled { &l.g } else { &l.a };
         enc.dispatch_compute(
@@ -1558,33 +1653,43 @@ impl StepState {
             "gpu_flip.step.forces",
         );
         enc.dispatch_compute(&pipes.open, &[buffer(46, step.clock_plan), uniform(&base), buffer(9, &l.corners), buffer(4, &l.s)], face_groups, "gpu_flip.step.open_fractions");
-        enc.dispatch_compute(
-            &pipes.solid_velocity,
-            &[
-                uniform(&base),
-                buffer(10, &l.s),
-                buffer(4, &l.b),
-                buffer(14, step.bodies),
-                buffer(15, step.shapes),
-                buffer(16, step.atlas),
-                buffer(21, step.reaction),
-                buffer(46, step.clock_plan),
-            ],
-            face_groups,
-            "gpu_flip.step.solid_velocity",
-        );
-        // The samples carried out over the open faces, every solid alike
-        // (meshlevelset.cpp normalizeVelocityGrid): an odd layer count from
-        // the scratch ends in `l.v`.
-        const _: () = assert!(SOLID_LAYERS % 2 == 1);
-        for layer in 0..SOLID_LAYERS {
-            let (from, to) = if layer % 2 == 0 { (&l.b, &l.v) } else { (&l.v, &l.b) };
+        if solid_velocity_needed(p.body_count) {
+            self.solid_velocity_is_zero = false;
             enc.dispatch_compute(
-                &pipes.solid_extrapolate,
-                &[uniform(&base), buffer(3, from), buffer(4, to), buffer(46, gate_plan)],
+                &pipes.solid_velocity,
+                &[
+                    uniform(&base),
+                    buffer(10, &l.s),
+                    buffer(4, &l.b),
+                    buffer(14, step.bodies),
+                    buffer(15, step.shapes),
+                    buffer(16, step.atlas),
+                    buffer(21, step.reaction),
+                    buffer(46, step.clock_plan),
+                ],
                 face_groups,
-                "gpu_flip.step.solid_extrapolate",
+                "gpu_flip.step.solid_velocity",
             );
+            // The samples carried out over the open faces, every solid alike
+            // (meshlevelset.cpp normalizeVelocityGrid): an odd layer count
+            // from the scratch ends in `l.v`.
+            const _: () = assert!(SOLID_LAYERS % 2 == 1);
+            for layer in 0..SOLID_LAYERS {
+                let (from, to) = if layer % 2 == 0 { (&l.b, &l.v) } else { (&l.v, &l.b) };
+                enc.dispatch_compute(
+                    &pipes.solid_extrapolate,
+                    &[uniform(&base), buffer(3, from), buffer(4, to), buffer(46, gate_plan)],
+                    face_groups,
+                    "gpu_flip.step.solid_extrapolate",
+                );
+            }
+        } else if !self.solid_velocity_is_zero {
+            // Domain walls have zero velocity and friction. The extrapolation
+            // known-mask is unused by all remaining no-body consumers. Clear
+            // after allocation or body removal; no-body consumers never write
+            // this scratch, so later intervals can retain its zero contents.
+            enc.clear_buffer(&l.v);
+            self.solid_velocity_is_zero = true;
         }
         if solids {
             over_c(
@@ -1599,6 +1704,8 @@ impl StepState {
         // Which water reaches air holds every step: the density source reads
         // it too. As the engine does, the solid velocity's zeroing is skipped
         // when the bodies are in the solve: their mass resolves the pocket.
+        #[cfg(feature = "water-race-probes")]
+        enc.set_profile_tag("gpu_flip.stage.pockets");
         encode_pockets(enc, pipes, &base, l, ranges, cells, step.capped, step.tally, gate_plan);
         enc.dispatch_compute(
             &pipes.pocket_pin,
@@ -1654,6 +1761,8 @@ impl StepState {
                 encode_pocket_mean(enc, pipes, &params, l.coarse_pockets(), rhs, solve, step.capped, step.tally, gate_plan);
             }
         };
+        #[cfg(feature = "water-race-probes")]
+        enc.set_profile_tag("gpu_flip.stage.pressure");
         let water = Water {
             lattice: cells,
             cell_size: p.cell_size,
@@ -1719,7 +1828,9 @@ impl StepState {
         if step.dynamic {
             self.bodies.react(enc, &coupled, self.solver.tiles()?, &l.pressure, step.reaction)?;
         }
-        extend(enc, pipes, step.clock_plan, &base, face_groups, [&l.f, out_faces, &l.b], step.band, "gpu_flip.step.extend_new");
+        #[cfg(feature = "water-race-probes")]
+        enc.set_profile_tag("gpu_flip.stage.project_extend");
+        extend(enc, pipes, step.clock_plan, &base, face_groups, (!step.narrow_enabled).then_some(tiles), [&l.f, out_faces, &l.b], step.band, "gpu_flip.step.extend_new");
         enc.compute_memory_barrier_buffers();
         // The engine constrains its velocity and its saved velocity to the
         // solids after the pressure solve, so FLIP's change is measured
@@ -1759,6 +1870,8 @@ impl StepState {
         // The density projection (module doc): its pressure's gradient is
         // taken off a copy of the new faces in `l.f`, and the move reads the
         // difference as a displacement. Air sits at zero at its centres.
+        #[cfg(feature = "water-race-probes")]
+        enc.set_profile_tag("gpu_flip.stage.density");
         let spread = if step.density {
             if step.narrow_enabled {
                 let nb = self.narrow.buffers.as_ref().ok_or("narrow-band storage was not reserved")?;
@@ -1810,11 +1923,13 @@ impl StepState {
             self.solver.tally(enc, step.pressure, step.capped, tally, 1, false)?;
             let plain = StepParams { ghost: 0, ..base };
             subtract(enc, &plain, &l.water, &l.f, "gpu_flip.step.density_project");
-            extend(enc, pipes, step.clock_plan, &base, face_groups, [&l.f, &l.f, &l.b], step.band, "gpu_flip.step.extend_spread");
+            extend(enc, pipes, step.clock_plan, &base, face_groups, (!step.narrow_enabled).then_some(tiles), [&l.f, &l.f, &l.b], step.band, "gpu_flip.step.extend_spread");
             &l.f
         } else {
             out_faces
         };
+        #[cfg(feature = "water-race-probes")]
+        enc.set_profile_tag("gpu_flip.stage.move");
         enc.dispatch_compute(
             &pipes.advect,
             &[
@@ -2065,6 +2180,7 @@ crate::primitive! {
         impulse_tick: ScalarF32 optional,
         first_tick: ScalarF32 optional,
         tick_index: ScalarF32 optional,
+        retired_max_speed: ScalarF32 optional,
         interval_duration: ScalarF32 optional, limit_interval: ScalarF32 optional,
         bodies: Array(LiquidBody) optional,
         shapes: Array(LiquidShape) optional,
@@ -2079,6 +2195,7 @@ crate::primitive! {
         solve_level: ScalarF32 optional,
         clock_obstacles: Array(f32) optional,
         clock_obstacle_count: ScalarF32 optional,
+        initial_obstacle_speed: ScalarF32 optional,
         clock_sources: Array(f32) optional,
         clock_source_count: ScalarF32 optional,
         live_hits: Array(f32) optional,
@@ -2454,7 +2571,7 @@ impl Primitive for GpuFlipStep {
                 emit_jitter: 0.25 * inflow_jitter,
                 solve_level: level as u32,
                 all_tiles: u32::from(all_tiles()),
-                ring_cap: 0,
+                extension_layers: band,
                 ring_max: ring_max(band),
                 live_impulse_stride: field
                     .nodes
@@ -2492,7 +2609,28 @@ impl Primitive for GpuFlipStep {
         let body_row_offset = u64::try_from(rows.saturating_sub(body_count).max(0))
             .unwrap_or(0)
             .saturating_mul(size_of::<LiquidBody>() as u64);
-        let history_slots = manifold_physics::stepping::LIVE_DEFAULT_MAX_STEPS + live_hit_count;
+        // LiquidState supplies -1 unless its fenced stats describe these exact
+        // incoming particles. Later intervals in the same frame, skipped
+        // readbacks, reset/recovery, and an unwired custom graph take the full
+        // GPU-adaptive path. Forces applied inside this step do not change the
+        // first scheduler decision: it reads the incoming markers. Dynamic
+        // body reactions later in the step do not retroactively change that
+        // decision. Domain's initial obstacle bound includes current linear,
+        // angular and external acceleration, with reaction cleared before this
+        // first interval. A missing bound retains the full adaptive loop.
+        let obstacle_speed = if obstacle_count == 0 { 0.0 } else {
+            ctx.scalar_or_param("initial_obstacle_speed", -1.0)
+        };
+        let one_step = tick_index > 0 && steps == 1.0
+            && live_hit_count == 0 && source_count == 0
+            && !narrow_enabled && !restore_narrow
+            && one_step_cfl_safe(ctx.scalar_or_param("retired_max_speed", -1.0), obstacle_speed, interval_duration as f32, h);
+        let history_slots = if one_step { 1 } else {
+            manifold_physics::stepping::LIVE_DEFAULT_MAX_STEPS + live_hit_count
+        };
+        log::debug!(target: "gpu_flip::schedule",
+            "tick={tick_index} slots={history_slots} interval={interval_duration} h={h} marker={} obstacle={obstacle_speed} minimum={steps} hits={live_hit_count} sources={source_count} narrow={narrow_enabled} restore={restore_narrow}",
+            ctx.scalar_or_param("retired_max_speed", -1.0));
         ctx.outputs.set_scalar("substep_count", ParamValue::Float(history_slots as f32));
         let gpu = ctx.gpu_encoder();
         self.state.history.prepare(gpu.device);
@@ -2523,7 +2661,7 @@ impl Primitive for GpuFlipStep {
             constant_force: [gravity[0], gravity[1], gravity[2], 0.0],
         };
         let mut last_clock_plan = zeros.clone();
-        let encoded_steps = manifold_physics::stepping::LIVE_DEFAULT_MAX_STEPS as f32 + live_hit_count as f32;
+        let encoded_steps = history_slots;
         {
             let clock = self.state.clock.as_ref().expect("live clock prepared");
             clock.begin_frame(gpu.native_enc, &clock_params);
@@ -2548,7 +2686,9 @@ impl Primitive for GpuFlipStep {
                             obstacle_vertices: clock_obstacles,
                             obstacle_count,
                             source_vertices: clock_sources,
-                            source_count,
+                            // Only the first numerical slot can use initial
+                            // source prediction. Later slots use markers.
+                            source_count: if k == 0 { source_count } else { 0 },
                             live_hits,
                             live_hit_count,
                             event_impulses: field.impulses.unwrap_or(&zeros),
@@ -2574,6 +2714,8 @@ impl Primitive for GpuFlipStep {
                 ctx.error(format!("{NAME}: {error}"));
                 return;
             }
+                #[cfg(feature = "water-race-probes")]
+                gpu.native_enc.set_profile_tag("gpu_flip.stage.finish");
                 self.state.commit_mask(
                     gpu.native_enc,
                     &plan_buffer,
@@ -2584,13 +2726,9 @@ impl Primitive for GpuFlipStep {
                         .expect("particle mask prepared"),
                     "gpu_flip.step.mask.particles",
                 );
-                self.state.commit_mask(
-                    gpu.native_enc,
-                    &plan_buffer,
-                    self.state.faces.as_ref().expect("face mask prepared"),
-                    self.state.saved_faces.as_ref().expect("face mask prepared"),
-                    "gpu_flip.step.mask.faces",
-                );
+                // Public faces and body reactions already gate every write
+                // on the actual clock plan. Inactive slots leave them intact;
+                // they need neither an active-step backup nor a restore pass.
                 self.state.commit_mask(
                     gpu.native_enc,
                     &plan_buffer,
@@ -2600,16 +2738,6 @@ impl Primitive for GpuFlipStep {
                         .as_ref()
                         .expect("distance mask prepared"),
                     "gpu_flip.step.mask.distance",
-                );
-                self.state.commit_mask(
-                    gpu.native_enc,
-                    &plan_buffer,
-                    step.reaction,
-                    self.state
-                        .saved_reaction
-                        .as_ref()
-                        .expect("reaction mask prepared"),
-                    "gpu_flip.step.mask.reaction",
                 );
                 self.state.commit_mask(
                     gpu.native_enc,
@@ -2649,6 +2777,36 @@ impl Primitive for GpuFlipStep {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn one_step_bound_requires_a_whole_reference_interval() {
+        use manifold_physics::{Seconds, stepping::{CflPolicy, CflRestrictions}};
+        for interval in [1.0f32 / 24.0, 1.0 / 60.0, 1.0 / 120.0] {
+            for cell_size in [0.01f32, 0.1, 1.0] {
+                let edge = ENGINE_CFL as f32 * cell_size / interval;
+                for fraction in [0.0, 0.5, 0.98, 0.999, 1.0, 1.01, 2.0] {
+                    let speed = edge * fraction;
+                    let safe = one_step_cfl_safe(speed, 0.0, interval, cell_size);
+                    if safe {
+                        let reference = CflPolicy { cell_size: f64::from(cell_size), ..Default::default() }
+                            .duration(Seconds(f64::from(interval)), f64::from(speed), CflRestrictions::default());
+                        assert!(reference.diagnostic.is_none());
+                        assert_eq!(reference.value.0, f64::from(interval));
+                    }
+                    assert_eq!(safe, fraction < 0.99, "speed fraction {fraction}");
+                    assert_eq!(one_step_cfl_safe(0.0, speed, interval, cell_size), safe, "obstacles share CFL maximum");
+                }
+            }
+        }
+        for bad in [-1.0, f32::NAN, f32::INFINITY] {
+            assert!(!one_step_cfl_safe(bad, 0.0, 1.0 / 60.0, 0.1));
+            assert!(!one_step_cfl_safe(0.0, bad, 1.0 / 60.0, 0.1));
+            assert!(!one_step_cfl_safe(0.0, 0.0, bad, 0.1));
+            assert!(!one_step_cfl_safe(0.0, 0.0, 1.0 / 60.0, bad));
+        }
+        assert!(!one_step_cfl_safe(0.0, 0.0, 0.0, 0.1));
+        assert!(!one_step_cfl_safe(0.0, 0.0, 1.0 / 60.0, 0.0));
+    }
 
     #[test]
     fn narrow_band_history_restores_once_and_resets_identity() {
@@ -2843,8 +3001,9 @@ mod tests {
         for (cells, tiles) in [([64, 64, 64], 512u64), ([63, 100, 8], 104), ([128, 128, 128], 4096), ([1, 9, 17], 6)] {
             for r in 1..5u32 {
                 let counts = u64::from(r) + 2 + 1 + 1;
-                let triples = 3 * (u64::from(r) + 1 + 1);
-                assert_eq!(tile_scratch_bytes(cells, r), (5 * tiles + counts + triples) * 4, "{cells:?} ring_max {r}");
+                let triples = 3 * (u64::from(r) + 1 + 1 + 1);
+                let arguments = triples + triples % 2 + 2;
+                assert_eq!(tile_scratch_bytes(cells, r), (5 * tiles + counts + arguments) * 4, "{cells:?} ring_max {r}");
                 assert_eq!(
                     scratch_bytes(cells, 1000, r) - tile_scratch_bytes(cells, r),
                     scratch_bytes(cells, 1000, 1) - tile_scratch_bytes(cells, 1)

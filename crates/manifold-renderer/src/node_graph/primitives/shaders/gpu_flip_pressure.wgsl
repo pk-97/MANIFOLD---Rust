@@ -27,7 +27,8 @@
 // tiles)): 8³ tiles, a tile active when a touched cell lies in its box grown
 // by one cell, touched meaning water on the fine level and any touched child
 // on a coarse one (classify_main). The list of active tiles in tile order
-// (lists_main) maps a thread to a cell: 512 threads a tile, two workgroups.
+// (lists_main) covers 512 cells per tile, in two workgroups. The smoother
+// pairs adjacent x cells in each thread; other passes use one thread per cell.
 // Every read of a vector is inside the active tiles: the stencil reads water
 // neighbours only, restriction reads one cell past coarse water's children,
 // prolongation one coarse cell past a fine water cell's parent. The vectors
@@ -126,20 +127,6 @@ struct Row {
     lo: vec4<f32>,
     hi: vec4<f32>,
 };
-
-fn row_weight(row: Row, k: u32) -> f32 {
-    if k < 4u {
-        return row.lo[k];
-    }
-    return row.hi[k - 4u];
-}
-
-// Cell idx's neighbour across face k (axis k / 2, low side for even k):
-// the weight is positive only inside the box, so this never leaves it.
-fn across(idx: u32, k: u32) -> u32 {
-    let stride = select(select(u.nx * u.ny, u.nx, k < 4u), 1u, k < 2u);
-    return select(idx + stride, idx - stride, (k & 1u) == 0u);
-}
 
 const DIVISOR_FLOOR: f32 = 1e-30;
 // Rounds a solve may run: the solver's MAX_ITERATIONS.
@@ -369,46 +356,58 @@ struct Stencil {
     sum: f32,
 };
 
+// A zero weight must not read its neighbour (which may be outside the box).
+// Keep the six additions in the original face order without a dynamic loop
+// or dynamic vector-component indexing in each smoothing/operator pass.
+fn stencil_add(sum: f32, source: u32, weight: f32, at: u32) -> f32 {
+    if !(weight > 0.0) {
+        return sum;
+    }
+    if source == 0u {
+        return sum + weight * out[at];
+    }
+    return sum + weight * aux[at];
+}
+
 fn stencil(idx: u32, source: u32) -> Stencil {
     let row = rows[idx];
     var s = Stencil(select(row.hi.w, row.hi.z, u.ghost == 1u), 0.0);
     if source == 2u {
         return s;
     }
-    for (var k = 0u; k < 6u; k = k + 1u) {
-        let w = row_weight(row, k);
-        if w > 0.0 {
-            let at = across(idx, k);
-            if source == 0u {
-                s.sum = s.sum + w * out[at];
-            } else {
-                s.sum = s.sum + w * aux[at];
-            }
-        }
-    }
+    s.sum = stencil_add(s.sum, source, row.lo.x, idx - 1u);
+    s.sum = stencil_add(s.sum, source, row.lo.y, idx + 1u);
+    s.sum = stencil_add(s.sum, source, row.lo.z, idx - u.nx);
+    s.sum = stencil_add(s.sum, source, row.lo.w, idx + u.nx);
+    s.sum = stencil_add(s.sum, source, row.hi.x, idx - u.nx * u.ny);
+    s.sum = stencil_add(s.sum, source, row.hi.y, idx + u.nx * u.ny);
     return s;
 }
 
 // One red-black Gauss-Seidel sweep of L e = rhs in place in `out` (e), rhs
 // in `src`. A water cell of the swept color becomes
 // (Σ w · water neighbours' e − h² · rhs) / diagonal, or 0 with no open face.
-// From zero (mode bit 0) every other cell is written 0 and neighbours read
-// 0. With REDUCE, the solve's last fine sweep, each thread also folds
-// rhs · e of its cell (r · z, the unswept color's e final since the sweep
-// before) into the workgroup's partial.
-@compute @workgroup_size(256, 1, 1)
+// Each thread owns adjacent x cells: one of each color. A group still covers
+// the same 256 cells of a tile, with half as many threads. From zero (mode
+// bit 0) the other cell is written 0 and neighbours read 0. With REDUCE,
+// both products occupy their original 256-element reduction positions, so
+// the tree and partials stay bit-for-bit identical to one thread per cell.
+@compute @workgroup_size(128, 1, 1)
 fn smooth_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) li: u32) {
-    if !listed(gid.x) {
+    let pair = 2u * gid.x;
+    if !listed(pair) {
         return;
     }
     let n = lattice();
-    let idx = listed_cell(gid.x, n);
+    // Tile origins are multiples of 8 and pair.x is even, so y/z alone
+    // determine which member has the requested global checkerboard color.
+    let offset = u.color ^ (((pair >> 3u) ^ (pair >> 6u)) & 1u);
+    let idx = listed_cell(pair + offset, n);
+    let other = listed_cell(pair + (offset ^ 1u), n);
     var product = 0.0;
     if idx != NO_CELL {
-        let p = coords(idx, n);
-        let swept = is_water(idx) && u32(p.x + p.y + p.z) % 2u == u.color;
         var e = out[idx];
-        if swept {
+        if is_water(idx) {
             let h2 = u.cell_size * u.cell_size;
             let s = stencil(idx, select(0u, 2u, from_zero()));
             e = select(0.0, (s.sum - h2 * src[idx]) / s.diagonal, s.diagonal > 0.0);
@@ -419,8 +418,28 @@ fn smooth_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_inv
         }
         product = src[idx] * e;
     }
+    var other_product = 0.0;
+    if other != NO_CELL {
+        if from_zero() {
+            out[other] = 0.0;
+        }
+        if reduces() {
+            other_product = src[other] * out[other];
+        }
+    }
     if reduces() {
-        fold_sum(li, listed_partial(gid.x), product);
+        sums[2u * li + offset] = product;
+        sums[2u * li + (offset ^ 1u)] = other_product;
+        workgroupBarrier();
+        for (var width = 128u; width > 0u; width = width >> 1u) {
+            if li < width {
+                sums[li] = sums[li] + sums[li + width];
+            }
+            workgroupBarrier();
+        }
+        if li == 0u {
+            partials[listed_partial(pair)] = sums[0];
+        }
     }
 }
 
@@ -686,36 +705,41 @@ fn coarsen_water_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     out2[idx] = select(0.0, 1.0, touched);
 }
 
-// One thread per tile of this level: active (1) when a touched cell (`water`
+// 32 lanes per tile of this level: active (1) when a touched cell (`water`
 // binds the level's touched mask) lies in the tile's box grown by one cell,
 // into flags from list_base; every tile with `all_tiles`.
 @compute @workgroup_size(256, 1, 1)
-fn classify_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn classify_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) li: u32) {
     if slot_inactive() {
         return;
     }
     let n = lattice();
-    let t = gid.x;
-    if t >= tile_total(n) {
-        return;
-    }
-    var lit = u.all_tiles != 0u;
-    if !lit {
+    // Eight tiles per workgroup, with 32 lanes sharing each tile's 10³ halo.
+    // Invalid edge tiles contribute zero and still reach every barrier.
+    let t = gid.x >> 5u;
+    let lane = gid.x & 31u;
+    let valid = t < tile_total(n);
+    var lit = valid && u.all_tiles != 0u;
+    if valid && !lit {
         let origin = coords(t, tile_dims(n)) * TILE;
-        let first = max(origin - vec3<i32>(1), vec3<i32>(0));
-        let last = min(origin + vec3<i32>(TILE), n - vec3<i32>(1));
-        for (var z = first.z; z <= last.z && !lit; z = z + 1) {
-            for (var y = first.y; y <= last.y && !lit; y = y + 1) {
-                for (var x = first.x; x <= last.x; x = x + 1) {
-                    if is_water(cell(vec3<i32>(x, y, z), n)) {
-                        lit = true;
-                        break;
-                    }
-                }
+        for (var k = lane; k < 1000u && !lit; k = k + 32u) {
+            let p = origin - vec3<i32>(1) + coords(k, vec3<i32>(10));
+            if all(p >= vec3<i32>(0)) && all(p < n) {
+                lit = is_water(cell(p, n));
             }
         }
     }
-    flags[u.list_base + t] = u32(lit);
+    scan[li] = u32(lit);
+    workgroupBarrier();
+    for (var width = 16u; width > 0u; width = width >> 1u) {
+        if lane < width {
+            scan[li] = scan[li] | scan[li + width];
+        }
+        workgroupBarrier();
+    }
+    if lane == 0u && valid {
+        flags[u.list_base + t] = scan[li];
+    }
 }
 
 // One workgroup per level: the level's active tiles in tile order into

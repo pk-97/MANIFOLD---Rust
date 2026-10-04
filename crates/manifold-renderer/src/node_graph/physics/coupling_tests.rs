@@ -340,8 +340,11 @@ fn scene_physics_coupling_capture_publishes_accepted_span_and_paused_edit() {
         &mut capture,
     )
     .unwrap();
-    assert_eq!(capture.publications.len(), 1);
+    assert_eq!(capture.publications.len(), 2);
     assert_eq!(capture.publications[0].stamp.tick, 0);
+    assert_eq!(capture.publications[1].stamp.tick, 1);
+    assert!((capture.publications[0].body_position[0] + 1.5).abs() < 1.0e-5);
+    assert!((capture.publications[1].body_position[0] + 1.0).abs() < 1.0e-5);
     assert_eq!(simulation.pending_time, Seconds::ZERO);
     assert_eq!(simulation.physics_time, FIXED_TICK.0 * 2.0);
 
@@ -356,7 +359,7 @@ fn scene_physics_coupling_capture_publishes_accepted_span_and_paused_edit() {
         &mut capture,
     )
     .unwrap();
-    assert_eq!(capture.publications.len(), 1);
+    assert_eq!(capture.publications.len(), 2);
     assert_eq!(simulation.pending_time, Seconds::ZERO);
     assert!((simulation.poses[0].pos[0] - 5.0).abs() < 1.0e-5);
     for (pose, offset) in simulation.copy_poses.iter().zip(&copy_offsets) {
@@ -372,7 +375,7 @@ fn scene_physics_coupling_capture_publishes_accepted_span_and_paused_edit() {
         &mut capture,
     )
     .unwrap();
-    assert_eq!(capture.publications.len(), 1);
+    assert_eq!(capture.publications.len(), 2);
     assert_eq!(simulation.physics_time, FIXED_TICK.0 * 2.0);
     advance_capture(
         &mut simulation,
@@ -383,13 +386,13 @@ fn scene_physics_coupling_capture_publishes_accepted_span_and_paused_edit() {
         &mut capture,
     )
     .unwrap();
-    assert_eq!(capture.publications.len(), 2);
-    assert_eq!(capture.publications[1].stamp.tick, 1);
+    assert_eq!(capture.publications.len(), 3);
+    assert_eq!(capture.publications[2].stamp.tick, 2);
     assert_eq!(simulation.pending_time, Seconds::ZERO);
     assert_eq!(simulation.physics_time,
         FIXED_TICK.0 * 2.0 + (FIXED_TICK.0 * 4.0 - FIXED_TICK.0 * 3.0));
-    assert!((capture.publications[1].body_position[0] - 5.0).abs() < 1.0e-5);
-    for (captured, expected) in capture.publications[1]
+    assert!((capture.publications[2].body_position[0] - 5.0).abs() < 1.0e-5);
+    for (captured, expected) in capture.publications[2]
         .copy_positions
         .iter()
         .zip(&simulation.copy_poses[..simulation.active_copy_count])

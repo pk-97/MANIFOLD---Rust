@@ -1000,14 +1000,14 @@ pub trait EffectNode: Send {
     /// full restart through its existing clock owner before another tick.
     fn take_substep_restart_request(&mut self) -> bool { false }
 
-    /// The clock's accepted interval for this region iteration. The named
-    /// scalar output publishes its duration before the body executes.
-    fn substep_clock_interval(&self, _iteration: u32) -> Option<(&'static str, manifold_physics::stepping::StepInterval)> {
+    /// The accepted interval, numerical schedule and clock outputs for this
+    /// iteration. The executor refreshes the outputs before the body executes.
+    fn substep_clock_interval(&self, _iteration: u32) -> Option<crate::node_graph::substeps::SubstepClockOutput<'_>> {
         None
     }
 
     /// Let a boundary derive its numerical substeps from the clock interval.
-    fn set_substep_interval(&mut self, _interval: manifold_physics::stepping::StepInterval) {}
+    fn set_substep_interval(&mut self, _interval: crate::node_graph::substeps::SubstepInterval) {}
 
     /// Clock owner of a substep region only (the node wired into the
     /// boundary's [`SubstepBoundaryPorts::clock`](crate::node_graph::substeps::SubstepBoundaryPorts::clock)

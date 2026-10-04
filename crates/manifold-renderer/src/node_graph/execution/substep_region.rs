@@ -93,17 +93,22 @@ impl Executor {
             let mut iteration = 0u32;
             loop {
                 if let Some(clock) = region.clock
-                    && let Some((port, interval)) = graph.get_node(clock)
+                    && let Some(output) = graph.get_node(clock)
                         .and_then(|owner| owner.node.substep_clock_interval(iteration))
                 {
-                    if let Some(slot) = plan.steps().iter().find(|step| step.node == clock)
-                        .and_then(|step| step.outputs.iter().find(|(name, _)| *name == port))
-                        .and_then(|(_, resource)| self.backend.slot_for(*resource))
-                    {
-                        self.backend.set_scalar(slot, ParamValue::Float(interval.duration().0 as f32));
+                    let timing = output.timing;
+                    let clock_step = plan.steps().iter().find(|step| step.node == clock);
+                    let duration = (output.duration_port, timing.interval.duration().0 as f32);
+                    for &(port, value) in std::iter::once(&duration).chain(output.scalars) {
+                        if let Some(slot) = clock_step
+                            .and_then(|step| step.outputs.iter().find(|(name, _)| *name == port))
+                            .and_then(|(_, resource)| self.backend.slot_for(*resource))
+                        {
+                            self.backend.set_scalar(slot, ParamValue::Float(value));
+                        }
                     }
                     graph.get_node_mut(region.boundary).expect("boundary exists")
-                        .node.set_substep_interval(interval);
+                        .node.set_substep_interval(timing);
                 }
                 let more = graph
                     .get_node_mut(region.boundary)

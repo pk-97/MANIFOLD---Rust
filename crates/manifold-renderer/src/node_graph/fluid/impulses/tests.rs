@@ -65,23 +65,24 @@ fn fluid_impulse_stamp_tracks_target_time_from_exact_transport() {
     runtime
         .observe(empty_settings(), controls(), Seconds(6.0), 2.0, 0.0)
         .unwrap();
+    let first_two_steps = (5.0 + 2.0 * TICK) - 5.0;
     assert_eq!(
         runtime.impulse_stamp(Seconds(6.0), 2).unwrap().time,
-        Seconds(1.0)
+        Seconds(first_two_steps)
     );
     runtime
         .observe(empty_settings(), controls(), Seconds(6.0), 2.0, 0.0)
         .unwrap();
     assert_eq!(
         runtime.impulse_stamp(Seconds(6.0), 3).unwrap().time,
-        Seconds(1.0)
+        Seconds(first_two_steps)
     );
     runtime
         .observe(empty_settings(), controls(), Seconds(7.0), 2.0, 0.0)
         .unwrap();
     assert_eq!(
         runtime.impulse_stamp(Seconds(7.0), 4).unwrap().time,
-        Seconds(3.0)
+        Seconds(first_two_steps + ((6.0 + 2.0 * TICK) - 6.0) * 2.0)
     );
     assert!(runtime
         .impulse_stamp(Seconds(7.0 + 1e-9), 5)
@@ -192,8 +193,9 @@ fn fluid_impulses_pause_keeps_hits_until_the_first_tick() {
 }
 
 #[test]
-fn fluid_impulses_known_input_delivery_matches_24_30_60_and_stalled_frames() {
+fn fluid_impulses_offline_known_input_delivery_matches_24_30_60_and_stalled_frames() {
     fn run(frame_times: impl Iterator<Item = f64>) -> Vec<(u64, u64, Seconds)> {
+        let _export = crate::node_graph::physics::PhysicsStepScope::for_render(true);
         let mut runtime = FluidRuntime::default();
         observe(&mut runtime, 0.0, 0.0);
         for (sequence, time) in [0.0, 0.004, 0.008, TICK, 0.7].into_iter().enumerate() {
@@ -236,14 +238,17 @@ fn install_mock(runtime: &mut FluidRuntime) -> (mpsc::Receiver<Request>, mpsc::S
 
 fn completed(request: Request) -> Reply {
     let tick = request.start_tick + request.count as u64;
+    let interval = (request.count > 0).then(|| request.interval(tick - 1)).flatten();
     let mut reply = cancelled_reply(request);
     reply.tick = tick;
     reply.started_tick = tick;
+    reply.accepted_interval = interval;
     reply
 }
 
 #[test]
 fn fluid_impulses_busy_handoff_seals_ticks_and_reports_late_delivery() {
+    let _live = crate::node_graph::physics::PhysicsStepScope::for_render(false);
     let mut runtime = FluidRuntime::default();
     observe(&mut runtime, 0.0, 0.0);
     let (requests, replies) = install_mock(&mut runtime);
@@ -253,9 +258,9 @@ fn fluid_impulses_busy_handoff_seals_ticks_and_reports_late_delivery() {
     observe(&mut runtime, TICK * 4.0, 0.0);
     runtime.advance(false).unwrap();
     let busy = requests.recv().unwrap();
-    assert_eq!(busy.count, 1);
+    assert_eq!(busy.count, 2);
     let planned = enqueue(&mut runtime, 1, TICK * 0.5, 1.0);
-    assert_eq!(planned.tick, 1, "cannot rewrite the worker-owned interval");
+    assert_eq!(planned.tick, 2, "cannot rewrite either worker-owned interval");
     assert_eq!(runtime.drain_applied_impulses().count(), 0);
     replies.send(completed(busy)).unwrap();
     runtime.advance(false).unwrap();
@@ -273,7 +278,91 @@ fn fluid_impulses_busy_handoff_seals_ticks_and_reports_late_delivery() {
     runtime.advance(false).unwrap();
     let receipt = runtime.drain_applied_impulses().next().unwrap();
     assert_eq!(receipt.applied, planned);
-    assert_eq!(receipt.lateness, Seconds(0.5 * TICK));
+    assert_eq!(receipt.lateness, Seconds(1.5 * TICK));
+}
+
+#[test]
+fn fluid_impulses_advancing_busy_plateau_admits_hits_once_and_preserves_hold_guards() {
+    let _live = crate::node_graph::physics::PhysicsStepScope::for_render(false);
+    let mut runtime = FluidRuntime::default();
+    observe(&mut runtime, 0.0, 0.0);
+    let (requests, replies) = install_mock(&mut runtime);
+    runtime.advance(false).unwrap();
+    replies.send(completed(requests.recv().unwrap())).unwrap();
+    runtime.advance(false).unwrap();
+    observe(&mut runtime, 0.7, 0.0);
+    runtime.advance(false).unwrap();
+    let busy = requests.recv().unwrap();
+    assert_eq!(busy.count, 2);
+    let mut stamps = Vec::new();
+    for (sequence, transport) in [(1, 1.0), (2, 1.4)] {
+        observe(&mut runtime, transport, 0.0);
+        assert_eq!(runtime.clock.ticks_done(), 2, "busy observations accept no work");
+        let stamp = runtime.impulse_stamp(Seconds(transport), sequence).unwrap();
+        runtime.enqueue_impulse(stamp, FieldValue::uniform([1.0, 0.0, 0.0]).unwrap()).unwrap();
+        stamps.push(stamp);
+    }
+    assert_eq!(stamps[0].time, stamps[1].time, "both observations reached the capped plateau");
+    assert_eq!(runtime.impulse_outstanding, 2, "moving transport is not paused");
+    replies.send(completed(busy)).unwrap();
+    runtime.advance(false).unwrap();
+    observe(&mut runtime, 1.4, 0.0);
+    runtime.advance(false).unwrap();
+    let next = requests.recv().unwrap();
+    assert_eq!((next.start_tick, next.count), (2, 2));
+    assert!(next.impulses.is_empty(), "hits on the closing boundary await the following half-open interval");
+    replies.send(completed(next)).unwrap();
+    runtime.advance(false).unwrap();
+    assert_eq!(runtime.drain_applied_impulses().count(), 0);
+    observe(&mut runtime, 1.4 + TICK, 0.0);
+    runtime.advance(false).unwrap();
+    let next = requests.recv().unwrap();
+    assert_eq!((next.start_tick, next.count), (4, 1));
+    assert_eq!(next.impulses.iter().map(|event| (event.source.sequence, event.applied.tick)).collect::<Vec<_>>(), [(1, 4), (2, 4)]);
+    replies.send(completed(next)).unwrap();
+    runtime.advance(false).unwrap();
+    assert_eq!(runtime.drain_applied_impulses().map(|event| event.source.sequence).collect::<Vec<_>>(), [1, 2]);
+    assert_eq!(runtime.impulse_outstanding, 0);
+    observe(&mut runtime, 1.4 + TICK, 0.0);
+    let paused = runtime.impulse_stamp(Seconds(1.4 + TICK), 3).unwrap();
+    runtime.enqueue_impulse(paused, FieldValue::uniform([1.0; 3]).unwrap()).unwrap();
+    runtime.observe(empty_settings(), controls(), Seconds(2.0), 0.0, 0.0).unwrap();
+    let stopped = runtime.impulse_stamp(Seconds(2.0), 4).unwrap();
+    runtime.enqueue_impulse(stopped, FieldValue::uniform([1.0; 3]).unwrap()).unwrap();
+    assert_eq!(runtime.impulse_outstanding, 0, "pause and zero speed discard new hits");
+    assert_eq!(runtime.impulses.len(), 0);
+    assert_eq!(runtime.drain_applied_impulses().count(), 0);
+}
+
+#[test]
+fn fluid_live_drop_hud_records_each_drop_once_and_resets_its_epoch() {
+    use crate::node_graph::physics_metrics;
+    let _live = crate::node_graph::physics::PhysicsStepScope::for_render(false);
+    let mut runtime = FluidRuntime::default();
+    observe(&mut runtime, 0.0, 0.0);
+    let (requests, replies) = install_mock(&mut runtime);
+    runtime.advance(false).unwrap();
+    replies.send(completed(requests.recv().unwrap())).unwrap();
+    runtime.advance(false).unwrap();
+    physics_metrics::begin_frame();
+    observe(&mut runtime, 0.7, 0.0);
+    let metrics = physics_metrics::take_frame();
+    assert_eq!(metrics.backlog_seconds, (0.7 - 2.0 * TICK) as f32);
+    assert!(metrics.sim_step_cap_hit);
+    runtime.advance(false).unwrap();
+    replies.send(completed(requests.recv().unwrap())).unwrap();
+    runtime.advance(false).unwrap();
+    physics_metrics::begin_frame();
+    observe(&mut runtime, 0.7, 0.0);
+    let metrics = physics_metrics::take_frame();
+    assert_eq!(metrics.backlog_seconds, 0.0);
+    assert!(!metrics.sim_step_cap_hit, "a retained cumulative drop is not a fresh overload");
+    observe(&mut runtime, 0.7, 1.0);
+    physics_metrics::begin_frame();
+    observe(&mut runtime, 1.4, 1.0);
+    let metrics = physics_metrics::take_frame();
+    assert_eq!(metrics.backlog_seconds, (1.4 - (0.7 + 2.0 * TICK)) as f32);
+    assert!(metrics.sim_step_cap_hit, "reset rearms fresh-drop reporting");
 }
 
 #[test]
@@ -446,6 +535,7 @@ fn fluid_impulses_sum_uses_scene_coordinates_and_owned_fields() {
 #[test]
 fn fluid_impulses_move_native_liquid_once_across_substeps_and_batches() {
     fn run(impulse: bool, accelerated: bool, batched: bool) -> f32 {
+        let _export = crate::node_graph::physics::PhysicsStepScope::for_render(true);
         let settings = FluidSettings {
             resolution: 12,
             fill_height: 0.0,

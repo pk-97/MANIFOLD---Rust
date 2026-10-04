@@ -393,7 +393,6 @@ impl MatterScene {
 
     /// Display frames `interval` seconds apart from now on (two ticks per
     /// frame at 30 Hz).
-    #[cfg_attr(not(feature = "matter-perf-proofs"), expect(dead_code, reason = "the 30 Hz stretch of matter_solver_perf, under matter-perf-proofs, sets it"))]
     pub(crate) fn set_frame_interval(&mut self, interval: f64) {
         self.frame_interval = interval;
     }
@@ -568,6 +567,97 @@ fn matter_deterministic_under_seed() {
     assert!(a_bytes == b_bytes, "two runs of the same seed diverged");
 }
 
+/// Unequal Speed-history intervals must keep their own subdivision count and
+/// fixed-point unit when export groups both into one display frame.
+#[test]
+fn matter_variable_speed_export_grouping_matches_raw_points() {
+    use manifold_renderer::node_graph::matter::{
+        MAX_SUBSTEPS, WATER_DENSITY, free_fall_speed, momentum_unit,
+        substeps_for_interval, substeps_per_tick, water_lambda, wave_speed,
+    };
+    use manifold_renderer::node_graph::physics::PhysicsStepScope;
+
+    let _offline = PhysicsStepScope::for_render(true);
+    let settings = SceneSettings { resolution: 16, domain_size: 1.0, stiffness: 1.0, ..SceneSettings::default() };
+    let dx = settings.domain_size / settings.resolution as f32;
+    let nominal = substeps_per_tick(
+        dx,
+        wave_speed(water_lambda(f64::from(settings.domain_size), f64::from(settings.stiffness)),
+            f64::from(WATER_DENSITY)) as f32,
+        free_fall_speed(f64::from(settings.domain_size)) as f32,
+        None, None,
+    );
+    let expected = [0.25, 4.0].map(|speed| {
+        let duration = speed * TICK;
+        let subdivisions = substeps_for_interval(duration as f32, nominal).min(MAX_SUBSTEPS);
+        (subdivisions, momentum_unit(dx, duration / f64::from(subdivisions)))
+    });
+    assert_eq!(expected, [(5, 128.0), (68, 64.0)]);
+    assert_ne!(expected[0].0, expected[1].0, "fixture must vary subdivision counts");
+    assert_ne!(expected[0].1, expected[1].1, "fixture must vary momentum units");
+
+    let run = |grouped| {
+        let mut scene = MatterScene::new(&settings);
+        scene.set_domain("speed", 0.25);
+        scene.tick(); // Seed at transport 0, before either accepted interval.
+        assert_eq!(scene.state_input("ticks"), 0.0);
+        scene.set_domain("speed", 4.0);
+        let domain_step = scene.plan.steps().iter().position(|step| step.node == scene.domain).unwrap();
+        let mut mask = vec![false; scene.plan.steps().len()];
+        let mut params = vec![None; scene.plan.steps().len()];
+        mask[domain_step] = true;
+        params[domain_step] = Some(scene.graph.get_node(scene.domain).unwrap().params.clone());
+        // Observe the edit at TICK without accepting work, including in the
+        // grouped run whose next full render is at 2*TICK.
+        scene.executor.execute_physics_sample_frame(
+            &mut scene.graph, &scene.plan,
+            FrameTime { beats: Beats(0.0), seconds: Seconds(TICK), delta: Seconds(0.0), frame_count: 1 },
+            &mask, &params,
+        );
+        let interval_settings = |scene: &MatterScene, iteration| {
+            let output = scene.graph.get_node(scene.domain).unwrap().node
+                .substep_clock_interval(iteration).expect("accepted interval metadata");
+            let unit = output.scalars.iter().find(|(port, _)| *port == "momentum_unit").unwrap().1;
+            (output.timing.iterations, unit)
+        };
+        let ticks = if grouped {
+            scene.set_frame_interval(2.0 * TICK);
+            scene.tick_timed(None);
+            assert_eq!(interval_settings(&scene, 0), expected[0]);
+            assert_eq!(interval_settings(&scene, expected[0].0), expected[1]);
+            scene.state_input("ticks")
+        } else {
+            scene.tick_timed(None);
+            assert_eq!(interval_settings(&scene, 0), expected[0]);
+            let first_ticks = scene.state_input("ticks");
+            scene.tick_timed(None);
+            assert_eq!(interval_settings(&scene, 0), expected[1]);
+            first_ticks + scene.state_input("ticks")
+        };
+        assert_eq!(ticks, 2.0);
+        let points = scene.points();
+        let stats = scene.stats();
+        assert!(!points.is_empty());
+        assert!(points.iter().any(|point| point.id != 0), "fixture must contain live points");
+        assert!(points.iter().all(|point| point.position.iter().chain(&point.velocity)
+            .chain(std::iter::once(&point.volume_ratio)).chain(&point.affine_x)
+            .chain(&point.affine_y).chain(&point.affine_z).all(|value| value.is_finite())));
+        assert_eq!(stats.nonfinite, 0);
+        assert!(stats.live > 0);
+        assert_eq!(stats.tick, 1, "two completed ticks have zero-based final index 1");
+        assert_eq!(scene.simulation_time().to_bits(), (((0.25 + 4.0) * TICK) as f32).to_bits());
+        (points, stats, scene.simulation_time())
+    };
+    let (grouped, grouped_stats, grouped_time) = run(true);
+    let (separate, separate_stats, separate_time) = run(false);
+    assert_eq!(grouped.len(), separate.len());
+    assert!(bytemuck::cast_slice::<MatterPoint, u8>(&grouped)
+        == bytemuck::cast_slice::<MatterPoint, u8>(&separate),
+        "raw Matter points differ between grouped and separate export frames");
+    assert_eq!(grouped_stats, separate_stats);
+    assert_eq!(grouped_time.to_bits(), separate_time.to_bits());
+}
+
 /// D6's block path sorts once per tick and reuses that order for every
 /// substep, so points drift out of their block's tile; the integer
 /// accumulator still makes the whole run bit-identical to the per-point path.
@@ -670,8 +760,8 @@ fn matter_fixed_point_headroom() {
 }
 
 /// Live (a preview budget in scope): a non-finite gravity holds the liquid
-/// with a named error; on recovery live runs its one-tick allowance, not the
-/// held frames' debt.
+/// with a named error; recovery accepts at most two fixed intervals and
+/// discards excess elapsed time, so the next frame owes only its own tick.
 #[test]
 fn matter_domain_holds_on_nonfinite_gravity() {
     let _live = manifold_renderer::node_graph::physics::PhysicsStepScope::for_render(false);
@@ -686,6 +776,9 @@ fn matter_domain_holds_on_nonfinite_gravity() {
     scene.tick();
     assert_eq!(bytemuck::cast_slice::<MatterPoint, u8>(&held), bytemuck::cast_slice::<MatterPoint, u8>(&scene.points()));
     scene.set_domain("gravity", -9.81);
+    scene.tick();
+    assert_eq!(scene.state_input("ticks"), 2.0);
+    assert_eq!(scene.stats().nonfinite, 0);
     scene.tick();
     assert_eq!(scene.state_input("ticks"), 1.0);
     assert_eq!(scene.stats().nonfinite, 0);

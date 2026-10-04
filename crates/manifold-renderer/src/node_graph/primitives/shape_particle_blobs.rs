@@ -170,3 +170,102 @@ crate::param_tooltips!("node.shape_particle_blobs", {
     "stretch" => "Stretch nearby particles along the flow to shape sheets and splashes.",
     "smoothing" => "Move particle centres toward their neighbours for a calmer surface.",
 });
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn fluid_shape_fixed_sphere_shader_validates() {
+        let source = crate::node_graph::freeze::codegen::standalone_for_spec::<
+            super::ShapeParticleBlobs,
+        >().expect("shape codegen");
+        let module = naga::front::wgsl::parse_str(&source).expect("shape WGSL");
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all(),
+        ).validate(&module).expect("shape validation");
+    }
+}
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod gpu_tests {
+    use super::*;
+    use crate::node_graph::freeze::codegen;
+    use crate::node_graph::primitives::liquid_surface_tests::{
+        Harness, Lattice, read, sort_and_shape,
+    };
+    use bytemuck::Zeroable;
+
+    #[test]
+    fn fluid_shape_fixed_spheres_match_neighbour_gather() {
+        let mut harness = Harness::new();
+        let lattice = Lattice {
+            center: [0.0; 3],
+            size: [4.0; 3],
+            cell: 0.25,
+        };
+        let mut particles = Vec::new();
+        // A populated cloud, isolated droplets, a boundary particle and inactive
+        // capacity exercise the same sorted inputs in both shader variants.
+        for i in 0..257 {
+            let position = if i < 250 {
+                [
+                    (i % 10) as f32 * 0.013,
+                    ((i / 10) % 5) as f32 * 0.017,
+                    (i / 50) as f32 * 0.019,
+                ]
+            } else {
+                [-1.9 + (i - 250) as f32 * 0.55, -1.9, 1.9]
+            };
+            particles.push(FluidParticle {
+                position_radius: [
+                    position[0],
+                    position[1],
+                    position[2],
+                    0.017 + (i % 7) as f32 * 0.009,
+                ],
+                velocity: [0.0; 3],
+                id: i + 1,
+            });
+        }
+        particles.extend_from_slice(&[FluidParticle::zeroed(); 3]);
+        let source = codegen::standalone_for_spec::<ShapeParticleBlobs>().unwrap();
+        let condition = "if smoothing == 0.0 && stretch <= 1.0 && isolated_scale == 1.0";
+        assert_eq!(
+            source.matches(condition).count(),
+            1,
+            "reference must disable only the shortcut"
+        );
+        let reference_source = source.replacen(condition, "if false", 1);
+        let reference_pipeline = harness.device.create_compute_pipeline(
+            &reference_source,
+            codegen::ENTRY,
+            "fixed sphere neighbour reference",
+        );
+        let mut reference = ShapeParticleBlobs::new();
+        reference.pipeline = Some(reference_pipeline);
+        for scale in [0.25, 2.2, 3.0, 8.0] {
+            let shape = [
+                ("particle_scale", scale),
+                ("stretch", 1.0),
+                ("smoothing", 0.0),
+                ("isolated_scale", 1.0),
+                ("min_neighbours", 8.0),
+            ];
+            let (_, _, actual, (sorted, ranges, _)) =
+                sort_and_shape(&mut harness, &lattice, &particles, 257, &shape);
+            let (out, buffer) = harness.array::<FluidBlob>(&[], particles.len());
+            let (_, errors) = harness.run(
+                &mut reference,
+                &[("sorted", sorted), ("cell_ranges", ranges)],
+                &[("blobs", out)],
+                &lattice.params(&shape),
+            );
+            assert!(errors.is_empty(), "{errors:?}");
+            let expected = read::<FluidBlob>(&buffer, particles.len());
+            for (word, (&actual, &expected)) in bytemuck::cast_slice::<_, u32>(&actual)
+                .iter().zip(bytemuck::cast_slice::<_, u32>(&expected)).enumerate()
+            {
+                assert_eq!(actual, expected, "scale {scale}, blob word {word}");
+            }
+        }
+    }
+}

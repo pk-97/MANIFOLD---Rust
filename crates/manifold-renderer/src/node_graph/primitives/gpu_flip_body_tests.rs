@@ -9,11 +9,11 @@
 //! on their own and through a step with a Box3D body
 //! (docs/GPU_FLIP_SPARSE_BLOCKS_DESIGN.md D-9).
 
-use manifold_gpu::{GpuBuffer, GpuDevice};
+use manifold_gpu::{GpuBuffer, GpuDevice, GpuReplayCache};
 
 use super::gpu_flip_atom_tests::{FACE_FLOATS, assert_close, face_grid_len, random_values, random_water};
 use super::gpu_flip_bodies::{BodyPasses, Bodies};
-use super::gpu_flip_pressure::{PressureSolver, Water};
+use super::gpu_flip_pressure::{PROGRESS_FLOATS, PressureSolver, Solve, Stop, Water};
 use super::gpu_flip_step::{TILE, set_all_tiles, set_gate_off, set_poison, set_separate_off};
 use super::liquid_surface_tests::read;
 use crate::node_graph::liquid::bodies::LiquidBody;
@@ -402,6 +402,112 @@ fn gpu_flip_body_reaction_matches_cpu() {
         })
         .collect();
     assert_close(&got, &want, "reaction");
+}
+
+/// The coupled fine round is one replay segment, including the body product.
+/// Stopped and inactive rounds preserve the direct dispatch results exactly.
+#[test]
+fn gpu_flip_coupled_round_replay_matches_direct() {
+    const ROUNDS: u32 = 3;
+
+    struct Run {
+        scene: Scene,
+        solver: PressureSolver,
+        rhs: GpuBuffer,
+        pressure: GpuBuffer,
+        progress: GpuBuffer,
+        plan: GpuBuffer,
+        cache: Option<GpuReplayCache>,
+    }
+
+    impl Run {
+        fn new(replay: bool) -> Self {
+            let mut scene = Scene::with_water(0xc09e, random_water(N.iter().product(), 0xc09f), false);
+            let cells = N.iter().product::<usize>();
+            let rhs = shared(&scene.device, &vec![0.0_f32; cells]);
+            let pressure = shared(&scene.device, &vec![0.0_f32; cells]);
+            let progress = shared(&scene.device, &vec![0_u32; PROGRESS_FLOATS as usize]);
+            let plan = shared(&scene.device, &[0_u32; 12]);
+            scene.passes.set_clock_plan(&plan);
+            let mut solver = PressureSolver::default();
+            solver.prepare_pipelines(&scene.device);
+            solver.set_clock_plan(&plan);
+            Self { scene, solver, rhs, pressure, progress, plan, cache: replay.then(GpuReplayCache::default) }
+        }
+
+        fn solve(&mut self, rhs: &[f32], stop: Stop, active: bool) -> (Vec<u32>, Vec<u32>, Vec<u32>) {
+            let mut plan = [0_u32; 12];
+            plan[0] = if active { TICK.to_bits() } else { 0 };
+            plan[11] = 1;
+            // SAFETY: shared buffers sized for these values; the previous solve completed.
+            unsafe {
+                self.rhs.write(0, bytemuck::cast_slice(rhs));
+                self.plan.write(0, bytemuck::cast_slice(&plan));
+            }
+            let mut enc = self.scene.device.create_encoder("coupled pressure replay");
+            let replay = self.cache.take().map(|cache| enc.begin_replay(&self.scene.device, cache)).is_some();
+            let water = Water {
+                lattice: N.map(|v| v as u32), cell_size: H,
+                water: &self.scene.buffers[0], faces: &self.scene.buffers[1], phi: None,
+            };
+            self.solver.prepare(&self.scene.device, &mut enc, &water).expect("prepare coupled solve");
+            self.solver.solve(&mut enc, &water, Solve {
+                rhs: &self.rhs, pressure: &self.pressure, stop,
+                bodies: Some((&self.scene.passes, &self.scene.bodies())), level: 0, coarse_rhs: None,
+            }).expect("coupled solve");
+            if replay {
+                self.cache = Some(enc.end_replay());
+            }
+            enc.copy_buffer_to_buffer(self.solver.progress().expect("prepared"), &self.progress, self.progress.size);
+            enc.commit_and_wait_completed();
+            (
+                read(&self.pressure, N.iter().product()),
+                bits(&self.scene.sums()),
+                read(&self.progress, PROGRESS_FLOATS as usize),
+            )
+        }
+    }
+
+    let rhs = random_values(N.iter().product(), 0xc0a0);
+    let zero = vec![0.0_f32; rhs.len()];
+    let mut direct = Run::new(false);
+    let mut replay = Run::new(true);
+    let mut last = GpuReplayCache::default().stats();
+    let mut stopped = None;
+    for visit in 0..7 {
+        let (input, stop, active) = match visit {
+            4 => (&zero, Stop::Converged(ROUNDS), true),
+            5 => (&rhs, Stop::Fixed(ROUNDS), false),
+            _ => (&rhs, Stop::Fixed(ROUNDS), true),
+        };
+        let want = direct.solve(input, stop, active);
+        let got = replay.solve(input, stop, active);
+        assert_eq!(got, want, "visit {visit}: pressure, body sums and progress match direct bits");
+        assert!(got.0.iter().chain(&got.1).all(|&v| f32::from_bits(v).is_finite()), "visit {visit}: finite outputs");
+        if visit == 4 {
+            assert!(got.0.iter().all(|&v| v == 0), "zero RHS leaves zero pressure");
+            assert_eq!(got.2[0], 0);
+            assert_eq!(got.2[1], 0, "zero RHS stops before the first iteration");
+            assert_eq!(got.2[2], 1.0_f32.to_bits());
+            stopped = Some(got.clone());
+        } else if visit == 5 {
+            assert_eq!(Some(&got), stopped.as_ref(), "inactive slot preserves pressure, body sums and progress");
+        } else {
+            assert_eq!(got.2[1], (ROUNDS as f32).to_bits(), "visit {visit}: all fixed rounds ran");
+            assert_eq!(got.2[2], 0, "fixed solve has no convergence stop");
+            assert!(got.0.iter().any(|&v| f32::from_bits(v).abs() > 1e-6), "visit {visit}: nonzero pressure");
+            assert!(got.1[..3].iter().any(|&v| f32::from_bits(v).abs() > 1e-6), "visit {visit}: the dynamic body participates");
+        }
+        let stats = replay.cache.as_ref().expect("replay cache returned").stats();
+        // The first visit records its entry; the second grows the recording.
+        if visit >= 2 {
+            assert_eq!(stats.recorded, last.recorded, "visit {visit}: warm recordings unchanged");
+            assert_eq!(stats.store_allocations, last.store_allocations, "visit {visit}: warm storage unchanged");
+            assert_eq!(stats.segments_direct, last.segments_direct, "visit {visit}: no direct round dispatches");
+            assert_eq!(stats.segments_replayed - last.segments_replayed, u64::from(ROUNDS), "visit {visit}: one merged segment per round, including stopped/inactive rounds");
+        }
+        last = stats;
+    }
 }
 
 // ── Sparse against every tile ──────────────────────────────────────────────
@@ -800,6 +906,82 @@ fn gpu_flip_inactive_slots_match_the_ungated_step() {
         }
         assert!(inactive > 0, "{fixture:?} level {level}: no inactive slot in {slots}, so nothing was gated");
         println!("{fixture:?} level {level}: {TICKS} ticks bitwise; {inactive} of {slots} slots inactive; {canonical_cells} distance cells canonical where ungated kept a stale φ");
+    }
+}
+
+/// Fresh one-step recording equals the complete GPU scheduler with two-way
+/// coupling. An authored negative speed keeps the baseline on its six-slot
+/// loop without changing Steps, CFL, numerical caps or body controls.
+#[test]
+fn gpu_flip_fresh_speed_preserves_coupled_bodies() {
+    use crate::node_graph::liquid::conformance::Fixture;
+    const STEP: &str = "node.gpu_flip_step";
+    const TICKS: u32 = 8;
+    fn baseline(mut def: manifold_core::effect_graph_def::EffectGraphDef) -> manifold_core::effect_graph_def::EffectGraphDef {
+        use manifold_core::effect_graph_def::EffectGraphWire;
+        let steps: Vec<_> = def.nodes.iter().filter(|node| node.type_id == STEP).map(|node| node.id).collect();
+        let [step] = steps[..] else { panic!("coupled proof requires exactly one GPU FLIP step") };
+        let id = def.nodes.iter().map(|node| node.id).max().expect("box scene nodes")
+            .checked_add(1).expect("room for baseline scalar id");
+        def.nodes.push(serde_json::from_value(serde_json::json!({
+            "id": id,
+            "nodeId": "full_gpu_clock",
+            "typeId": "node.value",
+            "params": {"value": {"type": "Float", "value": -1.0}}
+        })).expect("baseline negative speed scalar"));
+        def.wires.retain(|wire| !(wire.to_node == step && wire.to_port == "retired_max_speed"));
+        def.wires.push(EffectGraphWire {
+            from_node: id, from_port: "out".into(),
+            to_node: step, to_port: "retired_max_speed".into(),
+        });
+        def
+    }
+    for fixture in [Fixture::SubmergedBox, Fixture::FloatingBox] {
+        let def = BoxRun::at_level(fixture, 0);
+        let mut automatic = BoxRun::of(def.clone(), false, false, false);
+        let mut full = BoxRun::of(baseline(def), false, false, false);
+        let (mut shortcuts, mut reacting_ticks) = (0u32, 0u32);
+        for tick in 1..=TICKS {
+            automatic.step();
+            full.step();
+            let at = format!("{fixture:?} level 0 tick {tick}");
+            let (mut got, mut want) = (automatic.left(), full.left());
+            let reaction = &got.iter().find(|(what, _)| *what == "reaction").expect("body reaction").1;
+            reacting_ticks += u32::from(reaction.iter().any(|&word| {
+                let value = f32::from_bits(word);
+                value.is_finite() && value != 0.0
+            }));
+            for (what, type_id, port) in [
+                ("full capped", STEP, "capped"),
+                ("faces", STEP, "faces"),
+                ("full stats", "node.liquid_stats", "stats_out"),
+            ] {
+                got.push((what, automatic.words(type_id, port)));
+                want.push((what, full.words(type_id, port)));
+            }
+            for ((what, a), (expected_what, b)) in got.iter().zip(&want) {
+                assert_eq!(what, expected_what, "{at}: matching array labels");
+                assert_eq!(a.len(), b.len(), "{at}: {what} is sized differently");
+                if let Some(i) = first_differing(a, b) {
+                    panic!("{at}: automatic {what} differs first at word {i}: {} ({}) vs full scheduler {} ({})",
+                        a[i], f32::from_bits(a[i]), b[i], f32::from_bits(b[i]));
+                }
+            }
+            let (a, b) = (automatic.words(STEP, "clock_status"), full.words(STEP, "clock_status"));
+            assert!(a.len() >= 8 && b.len() >= 8, "{at}: complete clock status");
+            assert_eq!(&a[1..8], &b[1..8], "{at}: identical completed interval and clock diagnostics");
+            for (label, status) in [("automatic", &a), ("full scheduler", &b)] {
+                assert_eq!(status[2], 0.0f32.to_bits(), "{at}: {label} completed the interval");
+                assert_eq!(status[5], 0, "{at}: {label} has no nonfinite clock input");
+            }
+            assert_eq!(b[0], 0.0f32.to_bits(), "{at}: baseline must retain its inactive tail slots");
+            if f32::from_bits(a[0]) > 0.0 && a[6] == 1 {
+                shortcuts += 1;
+            }
+        }
+        assert!(shortcuts > 0, "{fixture:?}: automatic recording never took the fresh one-step path");
+        assert!(reacting_ticks > 0, "{fixture:?}: no nonzero finite body reaction, so coupling was not exercised");
+        println!("{fixture:?} level 0: {TICKS} coupled ticks bitwise; {shortcuts} fresh one-step ticks; {reacting_ticks} ticks with body reaction");
     }
 }
 

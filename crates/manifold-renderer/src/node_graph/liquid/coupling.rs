@@ -291,6 +291,22 @@ impl LiquidRigidOwner {
         &mut self.rigid
     }
 
+    /// Reanchor authored poses across discarded transport without stepping
+    /// Box3D. Dynamic bodies keep their integrated state; animated bodies move
+    /// to the new start instead of sweeping through the discarded gap.
+    pub fn reanchor_start(&mut self, inputs: &RigidSceneInputs) -> Result<(), String> {
+        if self.pending.is_some() {
+            return Err("Liquid coupling: settle the pending reaction before reanchoring".into());
+        }
+        self.walled.clone_from(inputs);
+        self.walls.install(&mut self.walled)?;
+        self.rigid.advance_worker(&self.walled, self.completed_time, 0, &mut Uncoupled)?;
+        self.update_friction(inputs);
+        let world = self.rigid.native_world().ok_or("Liquid coupling: reanchor lost the rigid world")?;
+        self.layout.capture(world, &mut self.frame)?;
+        capture_rows(world, &self.bodies, &mut self.rows)
+    }
+
     /// Finish a required tick boundary after the caller waits for the GPU.
     /// Decode one reaction and step Box3D toward the sampled tick-end scene.
     /// Missing samples or reactions fail rather than reducing the tick rate.
@@ -524,6 +540,43 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn liquid_coupled_reanchor_moves_only_authored_poses_without_an_extra_step() {
+        let _live = crate::node_graph::physics::PhysicsStepScope::for_render(false);
+        let mut inputs = scene();
+        inputs.bodies[1] = inputs.bodies[0].clone();
+        inputs.bodies[1].as_mut().unwrap().transform.pos[0] = 10.0;
+        inputs.bodies[0].as_mut().unwrap().kind = 2;
+        let colliders = RigidImpulseTargets { bodies: 3, copies: false };
+        let mut owner = LiquidRigidOwner::new(&inputs, OPEN, colliders, 1, None).unwrap();
+        // More than one live frame's budget has already completed before
+        // an overloaded frame reanchors the authored scene.
+        for tick in 0..6 {
+            owner.set_pending(PendingTick { tick, stamp: 0,
+                interval: manifold_physics::stepping::StepInterval::new(
+                    Seconds(tick as f64 * TICK), Seconds((tick + 1) as f64 * TICK)),
+                offline: false });
+            inputs.bodies[0].as_mut().unwrap().transform.pos[0] = (tick + 1) as f32 * 0.1;
+            owner.settle_ready(Some(&inputs), |_| true, no_reaction).unwrap();
+        }
+        let before = owner.rows()[1];
+        let stamp = owner.frame().stamp;
+        inputs.bodies[0].as_mut().unwrap().transform.pos[0] = 3.0;
+        owner.reanchor_start(&inputs).unwrap();
+        assert_eq!(owner.completed(), 6);
+        assert_eq!(owner.completed_time(), Seconds(6.0 * TICK));
+        assert_eq!(owner.frame().stamp, stamp);
+        assert!((owner.rows()[0].position_inv_mass[0] - 3.0).abs() < 1e-4);
+        assert_eq!(owner.rows()[1].position_inv_mass, before.position_inv_mass);
+        assert_eq!(owner.rows()[1].linear_velocity, before.linear_velocity);
+        assert_eq!(owner.rows()[1].angular_velocity, before.angular_velocity);
+        owner.set_pending(PendingTick { tick: 6, stamp: 0,
+            interval: manifold_physics::stepping::StepInterval::new(
+                Seconds(6.0 * TICK), Seconds(7.0 * TICK)), offline: false });
+        owner.settle_ready(Some(&inputs), |_| true, no_reaction).unwrap();
+        assert_eq!(owner.completed(), 7);
+    }
+
     /// A decoded impulse of m·Δv (Δv = +1 m/s) reaches Box3D on top of the
     /// tick's gravity; the decoder sees one impulse per row, naming its body.
     #[test]
@@ -572,7 +625,8 @@ mod tests {
     }
 
     /// An animated body in a coupled world follows its authored path at the
-    /// start of each accepted live interval, at every display rate.
+    /// start of each accepted live interval, with Sim Rate set to each display
+    /// rate so this regression tests sampling without overload.
     #[test]
     fn liquid_coupled_animated_rows_match_at_every_frame_rate() {
         use crate::node_graph::liquid::clock::LiquidClock;
@@ -608,7 +662,7 @@ mod tests {
                 last = Some(transport);
                 // The previous display frame leaves its accepted interval
                 // pending; it is exchanged once its end sample is present.
-                owner.settle_ready(scenes.get(owner.completed() + 1), |_| true, no_reaction).unwrap();
+                owner.settle_ready(scenes.endpoint(owner.completed() + 1), |_| true, no_reaction).unwrap();
                 let frame = clock.advance(transport, 1.0 / fps, 1.0, 0.0, false, false);
                 assert_eq!(frame.dropped_seconds, 0.0, "{fps} fps dropped time");
                 if index > 0 {

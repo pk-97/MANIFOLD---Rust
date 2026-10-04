@@ -88,6 +88,16 @@ fn body(
     let home = clamp(vec3<i32>(floor((x - lattice_min) / cell_size)), vec3<i32>(0), bins - vec3<i32>(1));
     // The bins index the kernels; they never limit their size.
     let radius = particle_scale * physical;
+    // These authored settings make the kernel independent of every neighbour.
+    // Keep the general path for smoothing, anisotropy or droplet shrinkage.
+    if smoothing == 0.0 && stretch <= 1.0 && isolated_scale == 1.0 {
+        let inverse = 1.0 / radius;
+        return Element3(
+            vec4<f32>(x, radius),
+            vec4<f32>(inverse, inverse, inverse, 1.0 / (radius * radius * radius)),
+            vec4<f32>(0.0),
+        );
+    }
     let search = i32(ceil(max(radius, 3.0 * physical) / cell_size));
 
     var weight_sum = 0.0;

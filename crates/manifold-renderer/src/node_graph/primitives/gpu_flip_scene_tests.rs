@@ -10,7 +10,7 @@ use manifold_gpu::GpuTextureFormat;
 use super::gpu_flip_preset::{DAM_COLUMN, DAM_FILL_HEIGHT, DAM_OBSTACLE, FACE_NODES, REST_PER_CELL, STEP_NODE, WaterScene, water_def};
 use crate::node_graph::liquid::grid::face_len;
 use super::gpu_flip_volume::{VolumeDrift, volume_and_area};
-use super::liquid_stats::{LIQUID_STATS_WORDS, LiquidTickStats};
+use super::liquid_stats::{LIQUID_STATS_WORDS, SOLVER_WORDS, LiquidTickStats};
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::fluid_particles::{FaceSample, FluidParticle};
 use crate::node_graph::substeps::test_nodes::register_substep_test_nodes;
@@ -20,6 +20,42 @@ use crate::node_graph::{
 };
 
 const G: f64 = 9.81;
+
+/// Command-buffer timestamps across every ordinary chunk, without dispatch
+/// profiling or changes to replay. Reused after the preceding frame completes.
+struct FrameGpuTime {
+    span: std::sync::Arc<[std::sync::atomic::AtomicU64; 2]>,
+    tap: std::sync::Arc<dyn Fn(f64, f64) + Send + Sync>,
+}
+
+impl FrameGpuTime {
+    fn new() -> Self {
+        use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
+        let span = Arc::new([AtomicU64::new(u64::MAX), AtomicU64::new(0)]);
+        let tapped = Arc::clone(&span);
+        let tap = Arc::new(move |start: f64, end: f64| {
+            if start.is_finite() && end.is_finite() && start > 0.0 && end >= start {
+                // Positive finite f64 bit patterns have their numeric ordering.
+                tapped[0].fetch_min(start.to_bits(), Ordering::Relaxed);
+                tapped[1].fetch_max(end.to_bits(), Ordering::Relaxed);
+            }
+        });
+        Self { span, tap }
+    }
+
+    fn reset(&self) {
+        use std::sync::atomic::Ordering;
+        self.span[0].store(u64::MAX, Ordering::Relaxed);
+        self.span[1].store(0, Ordering::Relaxed);
+    }
+
+    fn millis(&self) -> f64 {
+        use std::sync::atomic::Ordering;
+        let start = f64::from_bits(self.span[0].load(Ordering::Relaxed));
+        let end = f64::from_bits(self.span[1].load(Ordering::Relaxed));
+        (end - start) * 1000.0
+    }
+}
 
 pub(super) fn node_named(graph: &Graph, name: &str) -> NodeInstanceId {
     graph.nodes().find(|n| n.node_id.as_str() == name).map(|n| n.id).unwrap_or_else(|| panic!("no node {name}"))
@@ -53,6 +89,7 @@ pub(super) struct Run {
     /// The particles the frame's tick started from: the state's, read
     /// before the frame runs.
     entering: Vec<FluidParticle>,
+    gpu_time: Option<FrameGpuTime>,
 }
 
 impl Run {
@@ -94,7 +131,7 @@ impl Run {
         let mut backend = MetalBackend::new(device.arc(), 64, 64, GpuTextureFormat::Rgba16Float);
         pre_allocate_resources(&mut graph, &plan, &device, &mut backend).expect("pre-allocate");
         let exec = Executor::new(Box::new(backend));
-        let mut run = Self { device, graph, plan, exec, state: StateStore::new(), scene, frames: 0, fps: 60.0, entering: Vec::new() };
+        let mut run = Self { device, graph, plan, exec, state: StateStore::new(), scene, frames: 0, fps: 60.0, entering: Vec::new(), gpu_time: None };
         // The domain's clock restarts on its first frame and ticks none: the
         // state takes the fill. Every later frame is one tick.
         run.frame();
@@ -164,24 +201,7 @@ impl Run {
     /// dispatch label, summed over the frame, and the frame's total.
     #[cfg(feature = "water-race-probes")]
     pub(super) fn profiled_labels(&mut self) -> (Vec<(String, f64, usize)>, f64) {
-        self.entering = self.particles();
-        let sampler = self.device.create_timestamp_sampler(8192).expect("timestamp sampling");
-        let mut enc = self.device.create_encoder("gpu-flip-scene-labels");
-        enc.enable_dispatch_profiling(sampler, &self.device);
-        self.exec.set_profiling(true);
-        {
-            let mut gpu = GpuEncoder::new(&mut enc, &self.device);
-            let time = FrameTime {
-                beats: Beats(0.0),
-                seconds: Seconds(self.frames as f64 / self.fps),
-                delta: Seconds(1.0 / self.fps),
-                frame_count: self.frames,
-            };
-            self.exec.execute_frame_with_state(&mut self.graph, &self.plan, time, &mut gpu, &mut self.state, 0);
-            self.frames += 1;
-        }
-        self.exec.set_profiling(false);
-        let profile = enc.commit_and_wait_profiled(&self.device);
+        let profile = self.sampled_frame(manifold_gpu::ProfileGranularity::Dispatch);
         let mut by_label: Vec<(String, f64, usize)> = Vec::new();
         for span in &profile.spans {
             match by_label.iter_mut().find(|(l, _, _)| *l == span.label) {
@@ -195,10 +215,46 @@ impl Run {
         (by_label, profile.total_ms)
     }
 
+    /// Preserve sampling diagnostics for probes that require complete attribution.
+    #[cfg(feature = "water-race-probes")]
+    fn sampled_frame(&mut self, granularity: manifold_gpu::ProfileGranularity) -> manifold_gpu::GpuFrameProfile {
+        self.entering = self.particles();
+        let sampler = self.device.create_timestamp_sampler(8192).expect("timestamp sampling");
+        let mut enc = self.device.create_encoder("gpu-flip-scene-labels");
+        enc.enable_profiling_at(sampler, &self.device, granularity);
+        self.exec.set_profiling(true);
+        {
+            let mut gpu = GpuEncoder::new(&mut enc, &self.device);
+            let time = FrameTime {
+                beats: Beats(0.0),
+                seconds: Seconds(self.frames as f64 / self.fps),
+                delta: Seconds(1.0 / self.fps),
+                frame_count: self.frames,
+            };
+            self.exec.execute_frame_with_state(&mut self.graph, &self.plan, time, &mut gpu, &mut self.state, 0);
+            self.frames += 1;
+        }
+        self.exec.set_profiling(false);
+        enc.commit_and_wait_profiled(&self.device)
+    }
+
     /// One frame in its own command buffer: GPU ms and CPU encode ms.
     pub(super) fn frame(&mut self) -> (f64, f64) {
+        self.frame_with_timing(false)
+    }
+
+    fn timed_frame(&mut self) -> (f64, f64) {
+        self.frame_with_timing(true)
+    }
+
+    fn frame_with_timing(&mut self, timed: bool) -> (f64, f64) {
         self.entering = self.particles();
         let mut enc = self.device.create_encoder("gpu-flip-scene");
+        if timed {
+            let timing = self.gpu_time.get_or_insert_with(FrameGpuTime::new);
+            timing.reset();
+            enc.tap_gpu_time(std::sync::Arc::clone(&timing.tap));
+        }
         let cpu_ms;
         {
             let mut gpu = GpuEncoder::new(&mut enc, &self.device);
@@ -213,9 +269,15 @@ impl Run {
             cpu_ms = start.elapsed().as_secs_f64() * 1000.0;
             self.frames += 1;
         }
+        if timed {
+            // Register the tap for the final nonempty chunk; the following
+            // blocking completion waits behind every chunk on this queue.
+            enc.commit_and_continue(&self.device);
+        }
         let profile = enc.commit_and_wait_profiled(&self.device);
         assert_eq!(profile.failed_command_buffers, 0, "frame {} failed on the GPU", self.frames - 1);
-        (profile.total_ms, cpu_ms)
+        let gpu_ms = if timed { self.gpu_time.as_ref().expect("frame timing enabled").millis() } else { profile.total_ms };
+        (gpu_ms, cpu_ms)
     }
 
     fn read<T: bytemuck::Pod>(&self, node: &str, port: &str, len: usize) -> Vec<T> {
@@ -1287,6 +1349,560 @@ fn gpu_flip_replay_changes_nothing() {
         last = stats;
     }
     assert_eq!(direct.replay_stats().replayed, 0, "the direct run replayed nothing");
+}
+
+fn run_with_retired_speed(scene: WaterScene, enabled: bool) -> Run {
+    let mut registry = PrimitiveRegistry::with_builtin();
+    register_substep_test_nodes(&mut registry);
+    let mut graph = water_def(scene).into_graph(&registry, &Default::default()).expect("slot-cost water graph");
+    let step = node_named(&graph, STEP_NODE);
+    if !enabled {
+        // An unwired custom graph retains the original adaptive loop.
+        graph.disconnect((step, "retired_max_speed")).expect("retired speed wire");
+    }
+    graph.add_external_output(step, "clock_status").expect("clock status read");
+    Run::with_graph(scene, graph)
+}
+
+/// Rank one settled 64³ step's stages; sampling changes encoder layout,
+/// so its total is attribution data rather than ordinary frame performance.
+#[cfg(feature = "water-race-probes")]
+#[test]
+fn gpu_flip_one_step_stage_cost_probe() {
+    const WARMUP: usize = 4;
+    let scene = WaterScene::still_pool(64).with_steps(1);
+    let mut profiled = run_with_retired_speed(scene, true);
+    let mut plain = run_with_retired_speed(scene, true);
+    profiled.set_encode_replay(true);
+    plain.set_encode_replay(true);
+    for _ in 0..WARMUP {
+        profiled.frame();
+        plain.frame();
+    }
+    assert_eq!(profiled.frames, plain.frames, "same time before the sampled frame");
+    let profile = objc2::rc::autoreleasepool(|_| profiled.sampled_frame(manifold_gpu::ProfileGranularity::Tag));
+    plain.frame();
+    assert_eq!(profiled.frames, plain.frames, "same time after the sampled frame");
+
+    let mut by_label: std::collections::BTreeMap<String, (f64, usize, usize)> = std::collections::BTreeMap::new();
+    for span in &profile.spans {
+        let label = if span.tag.starts_with("gpu_flip.stage.") { &span.tag } else { &span.label };
+        let row = by_label.entry(label.clone()).or_default();
+        row.0 += span.millis;
+        row.1 += usize::from(span.kind == manifold_gpu::GpuWorkKind::Compute);
+        row.2 += 1;
+    }
+    let mut rows: Vec<_> = by_label.into_iter().collect();
+    rows.sort_by(|(a_label, (a_ms, _, _)), (b_label, (b_ms, _, _))|
+        b_ms.total_cmp(a_ms).then_with(|| a_label.cmp(b_label)));
+    let attributed_ms = profile.attributed_ms();
+    let compute_encoders: usize = rows.iter().map(|(_, row)| row.1).sum();
+    println!(
+        "GPU FLIP 64³ one-step stage attribution, {WARMUP} warmup + 1 sampled frame: profiled total {:.3} ms; attributed {:.3} ms; unresolved {:.3} ms; {} spans, {compute_encoders} compute encoders; overflow {}, invalid {}, failed command buffers {}",
+        profile.total_ms, attributed_ms, profile.total_ms - attributed_ms, profile.spans.len(),
+        profile.overflow, profile.invalid, profile.failed_command_buffers,
+    );
+    for (label, (ms, count, spans)) in &rows {
+        println!("GPU FLIP 64³ one-step: {label:<48} {ms:9.3} ms; {count} compute encoders, {spans} spans");
+    }
+    assert_eq!(profile.failed_command_buffers, 0, "sampled command buffers completed");
+    assert_eq!(profile.overflow, 0, "every encoded span must fit the timestamp sampler");
+    assert_eq!(profile.invalid, 0, "every encoded span must resolve valid samples");
+    assert!(profile.total_ms.is_finite() && profile.total_ms > 0.0, "finite positive profiled total");
+    assert!(attributed_ms.is_finite() && attributed_ms > 0.0 && compute_encoders > 0, "compute work must be attributed");
+    for span in &profile.spans {
+        assert!(!span.label.is_empty(), "every span has a dispatch/pass label");
+        assert!(span.start_ms.is_finite() && span.millis.is_finite() && span.millis >= 0.0,
+            "{}: valid resolved timing", span.label);
+    }
+
+    for (label, run) in [("profiled", &profiled), ("plain", &plain)] {
+        let status: Vec<u32> = run.read(STEP_NODE, "clock_status", 8);
+        assert_eq!(status[0], (1.0f32 / 60.0).to_bits(), "{label}: final slot is the one active step");
+        assert_eq!(status[1], (1.0f32 / 60.0).to_bits(), "{label}: exact completed time");
+        assert_eq!(status[2], 0.0f32.to_bits(), "{label}: interval is complete");
+        assert_eq!(status[6], 1, "{label}: exactly one accepted step");
+        assert_eq!((status[4], status[5]), (0, 0), "{label}: no cap or nonfinite clock input");
+        let stats = particle_stats(&run.particles());
+        assert_eq!((stats.live, stats.bad), (scene.particles() as usize, 0), "{label}: all water remains live and finite");
+    }
+    let (pp, up) = (profiled.particles(), plain.particles());
+    assert!(bytemuck::cast_slice::<_, u8>(&pp) == bytemuck::cast_slice::<_, u8>(&up), "published particle bits differ");
+    let pp: Vec<FluidParticle> = profiled.read(STEP_NODE, "out", scene.particles() as usize);
+    let up: Vec<FluidParticle> = plain.read(STEP_NODE, "out", scene.particles() as usize);
+    assert!(bytemuck::cast_slice::<_, u8>(&pp) == bytemuck::cast_slice::<_, u8>(&up), "step particle bits differ");
+    let (pf, uf) = (profiled.faces(), plain.faces());
+    assert!(bytemuck::cast_slice::<_, u8>(&pf) == bytemuck::cast_slice::<_, u8>(&uf), "final face bits differ");
+    let ps: Vec<u32> = profiled.read("stats", "stats_out", LIQUID_STATS_WORDS as usize);
+    let us: Vec<u32> = plain.read("stats", "stats_out", LIQUID_STATS_WORDS as usize);
+    assert_eq!(ps, us, "full liquid stats differ");
+    let capped_words = 2 * scene.particles() as usize + SOLVER_WORDS as usize;
+    let pc: Vec<u32> = profiled.read(STEP_NODE, "capped", capped_words);
+    let uc: Vec<u32> = plain.read(STEP_NODE, "capped", capped_words);
+    assert_eq!(pc, uc, "full capped words differ");
+}
+
+/// The cost of recording inactive slots, with completed time and all final
+/// state proved identical. Readbacks happen after `frame`'s timing ends.
+#[test]
+fn gpu_flip_one_active_slot_matches_six_recorded_slots_cost_proof() {
+    const WARMUP: usize = 8;
+    const MEASURED: usize = 12;
+    fn median(values: &mut [f64]) -> f64 {
+        values.sort_by(f64::total_cmp);
+        (values[values.len() / 2 - 1] + values[values.len() / 2]) * 0.5
+    }
+    fn completed_one_step(run: &Run, n: usize, frame: usize, slots: u32) {
+        let status: Vec<u32> = run.read(STEP_NODE, "clock_status", 8);
+        let last_dt = if slots == 1 { 1.0f32 / 60.0 } else { 0.0 };
+        assert_eq!(status[0], last_dt.to_bits(),
+            "{n}³ tick {frame}, {slots} recorded slots: final slot proves the loop override took effect");
+        assert_eq!(status[1], (1.0f32 / 60.0).to_bits(),
+            "{n}³ tick {frame}, {slots} recorded slots: exact completed time");
+        assert_eq!(status[2], 0.0f32.to_bits(),
+            "{n}³ tick {frame}, {slots} recorded slots: interval is complete");
+        assert_eq!(status[6], 1,
+            "{n}³ tick {frame}, {slots} recorded slots: fixture must accept exactly one step");
+        assert_eq!((status[4], status[5]), (0, 0),
+            "{n}³ tick {frame}, {slots} recorded slots: no cap or nonfinite clock input");
+    }
+    for n in [32, 64] {
+        let scene = WaterScene::still_pool(n).with_steps(1);
+        let mut one = run_with_retired_speed(scene, true);
+        let mut six = run_with_retired_speed(scene, false);
+        one.set_encode_replay(true);
+        six.set_encode_replay(true);
+        let mut one_gpu = Vec::with_capacity(MEASURED);
+        let mut one_cpu = Vec::with_capacity(MEASURED);
+        let mut six_gpu = Vec::with_capacity(MEASURED);
+        let mut six_cpu = Vec::with_capacity(MEASURED);
+        let mut warm_replay = [manifold_gpu::GpuReplayStats::default(); 2];
+        for frame in 0..WARMUP + MEASURED {
+            // Alternate which identical run gets the first GPU submission.
+            let (one_time, six_time) = if frame % 2 == 0 {
+                (one.timed_frame(), six.timed_frame())
+            } else {
+                let six_time = six.timed_frame();
+                (one.timed_frame(), six_time)
+            };
+            for (label, gpu_ms) in [("one", one_time.0), ("six", six_time.0)] {
+                assert!(gpu_ms.is_finite() && gpu_ms > 0.0,
+                    "{n}³ tick {frame}, {label}: GPU chunk span must be positive and finite, got {gpu_ms}");
+            }
+            if frame >= WARMUP {
+                one_gpu.push(one_time.0);
+                one_cpu.push(one_time.1);
+                six_gpu.push(six_time.0);
+                six_cpu.push(six_time.1);
+            }
+            completed_one_step(&one, n, frame, if frame == 0 { 6 } else { 1 });
+            completed_one_step(&six, n, frame, 6);
+            let (op, sp) = (one.particles(), six.particles());
+            for (label, particles) in [("one", &op), ("six", &sp)] {
+                let stats = particle_stats(particles);
+                assert_eq!((stats.live, stats.bad), (scene.particles() as usize, 0),
+                    "{n}³ tick {frame}, {label}: every particle remains live and finite");
+            }
+            assert!(bytemuck::cast_slice::<_, u8>(&op) == bytemuck::cast_slice::<_, u8>(&sp),
+                "{n}³ tick {frame}: particle bits differ");
+            let (of, sf) = (one.faces(), six.faces());
+            assert!(bytemuck::cast_slice::<_, u8>(&of) == bytemuck::cast_slice::<_, u8>(&sf),
+                "{n}³ tick {frame}: final face bits differ");
+            let os: Vec<u32> = one.read("stats", "stats_out", LIQUID_STATS_WORDS as usize);
+            let ss: Vec<u32> = six.read("stats", "stats_out", LIQUID_STATS_WORDS as usize);
+            assert_eq!(os, ss, "{n}³ tick {frame}: full liquid stats differ");
+            let capped_words = 2 * scene.particles() as usize + SOLVER_WORDS as usize;
+            let oc: Vec<u32> = one.read(STEP_NODE, "capped", capped_words);
+            let sc: Vec<u32> = six.read(STEP_NODE, "capped", capped_words);
+            assert_eq!(oc, sc, "{n}³ tick {frame}: full capped words differ");
+            if frame + 1 == WARMUP {
+                warm_replay = [one.replay_stats(), six.replay_stats()];
+            }
+        }
+        println!(
+            "GPU FLIP {n}³ slot cost, {WARMUP} warmup + {MEASURED} measured ticks/run: median one GPU {:.3} ms CPU {:.3} ms; six GPU {:.3} ms CPU {:.3} ms",
+            median(&mut one_gpu), median(&mut one_cpu), median(&mut six_gpu), median(&mut six_cpu),
+        );
+        for (label, run, warm) in [("one", &one, warm_replay[0]), ("six", &six, warm_replay[1])] {
+            let replay = run.replay_stats();
+            println!("GPU FLIP {n}³ {label} slots replay: after warmup {warm:?}; final {replay:?}");
+            assert!(replay.replayed > warm.replayed && replay.segments_replayed > warm.segments_replayed,
+                "{n}³ {label}: measured ticks must exercise ordinary encode replay");
+        }
+    }
+}
+
+/// With no bodies, clearing solid velocity equals its original six passes,
+/// including inactive slots. Time ordinary replayed frames without profiling.
+#[test]
+fn gpu_flip_no_body_solid_clear_matches_six_passes() {
+    const WARMUP: usize = 4;
+    const MEASURED: usize = 8;
+    struct ForceSolidVelocity;
+    impl Drop for ForceSolidVelocity {
+        fn drop(&mut self) {
+            super::gpu_flip_step::set_force_solid_velocity(false);
+        }
+    }
+    fn original_frame(run: &mut Run) -> (f64, f64) {
+        super::gpu_flip_step::set_force_solid_velocity(true);
+        let _reset = ForceSolidVelocity;
+        run.timed_frame()
+    }
+    fn median(values: &mut [f64]) -> f64 {
+        values.sort_by(f64::total_cmp);
+        (values[values.len() / 2 - 1] + values[values.len() / 2]) * 0.5
+    }
+    super::gpu_flip_step::set_force_solid_velocity(false);
+    for (n, fresh) in [(16, true), (16, false), (64, true)] {
+        let scene = WaterScene::still_pool(n).with_steps(1);
+        let mut optimized = run_with_retired_speed(scene, fresh);
+        let mut original = run_with_retired_speed(scene, fresh);
+        optimized.set_encode_replay(true);
+        original.set_encode_replay(true);
+        let mut optimized_gpu = Vec::with_capacity(MEASURED);
+        let mut optimized_cpu = Vec::with_capacity(MEASURED);
+        let mut original_gpu = Vec::with_capacity(MEASURED);
+        let mut original_cpu = Vec::with_capacity(MEASURED);
+        let mut warm_replay = [manifold_gpu::GpuReplayStats::default(); 2];
+        for frame in 0..WARMUP + MEASURED {
+            let (optimized_time, original_time) = if frame % 2 == 0 {
+                (optimized.timed_frame(), original_frame(&mut original))
+            } else {
+                let original_time = original_frame(&mut original);
+                (optimized.timed_frame(), original_time)
+            };
+            for (label, time) in [("clear", optimized_time), ("six passes", original_time)] {
+                assert!(time.0.is_finite() && time.0 > 0.0,
+                    "{n}³ fresh {fresh} tick {frame}, {label}: positive finite GPU chunk span, got {}", time.0);
+                assert!(time.1.is_finite() && time.1 > 0.0,
+                    "{n}³ fresh {fresh} tick {frame}, {label}: positive finite CPU encode time, got {}", time.1);
+            }
+            if frame >= WARMUP {
+                optimized_gpu.push(optimized_time.0);
+                optimized_cpu.push(optimized_time.1);
+                original_gpu.push(original_time.0);
+                original_cpu.push(original_time.1);
+            }
+            let a: Vec<u32> = optimized.read(STEP_NODE, "clock_status", 8);
+            let b: Vec<u32> = original.read(STEP_NODE, "clock_status", 8);
+            assert_eq!(a, b, "{n}³ fresh {fresh} tick {frame}: complete clock status differs");
+            let final_dt = if fresh && frame > 0 { 1.0f32 / 60.0 } else { 0.0 };
+            assert_eq!(a[0], final_dt.to_bits(), "{n}³ fresh {fresh} tick {frame}: expected recording path");
+            assert_eq!(a[1], (1.0f32 / 60.0).to_bits(), "{n}³ fresh {fresh} tick {frame}: exact completed time");
+            assert_eq!(a[2], 0.0f32.to_bits(), "{n}³ fresh {fresh} tick {frame}: no unfinished interval");
+            assert_eq!(a[6], 1, "{n}³ fresh {fresh} tick {frame}: exactly one active step");
+            assert_eq!((a[4], a[5]), (0, 0), "{n}³ fresh {fresh} tick {frame}: no cap or nonfinite input");
+            let optimized_step: Vec<FluidParticle> = optimized.read(STEP_NODE, "out", scene.particles() as usize);
+            let original_step: Vec<FluidParticle> = original.read(STEP_NODE, "out", scene.particles() as usize);
+            for (what, a, b) in [
+                ("published particles", optimized.particles(), original.particles()),
+                ("step particles", optimized_step, original_step),
+            ] {
+                assert_eq!(bytemuck::cast_slice::<_, u32>(&a), bytemuck::cast_slice::<_, u32>(&b),
+                    "{n}³ fresh {fresh} tick {frame}: {what} bits differ");
+                for particles in [&a, &b] {
+                    let stats = particle_stats(particles);
+                    assert_eq!((stats.live, stats.bad), (scene.particles() as usize, 0),
+                        "{n}³ fresh {fresh} tick {frame}: every {what} record remains live and finite");
+                }
+            }
+            let (a, b) = (optimized.faces(), original.faces());
+            assert_eq!(bytemuck::cast_slice::<_, u32>(&a), bytemuck::cast_slice::<_, u32>(&b),
+                "{n}³ fresh {fresh} tick {frame}: face bits differ");
+            let a: Vec<u32> = optimized.read("stats", "stats_out", LIQUID_STATS_WORDS as usize);
+            let b: Vec<u32> = original.read("stats", "stats_out", LIQUID_STATS_WORDS as usize);
+            assert_eq!(a, b, "{n}³ fresh {fresh} tick {frame}: full liquid stats differ");
+            let capped_words = 2 * scene.particles() as usize + SOLVER_WORDS as usize;
+            let a: Vec<u32> = optimized.read(STEP_NODE, "capped", capped_words);
+            let b: Vec<u32> = original.read(STEP_NODE, "capped", capped_words);
+            assert_eq!(a, b, "{n}³ fresh {fresh} tick {frame}: full capped words differ");
+            if frame + 1 == WARMUP {
+                warm_replay = [optimized.replay_stats(), original.replay_stats()];
+            }
+        }
+        println!(
+            "GPU FLIP {n}³ no-body solid velocity, fresh {fresh}, {WARMUP} warmup + {MEASURED} measured ticks/run: median clear GPU {:.3} ms CPU {:.3} ms; six passes GPU {:.3} ms CPU {:.3} ms",
+            median(&mut optimized_gpu), median(&mut optimized_cpu), median(&mut original_gpu), median(&mut original_cpu),
+        );
+        for (label, run, warm) in [("clear", &optimized, warm_replay[0]), ("six passes", &original, warm_replay[1])] {
+            let replay = run.replay_stats();
+            println!("GPU FLIP {n}³ no-body solid velocity, fresh {fresh}, {label} replay: after warmup {warm:?}; final {replay:?}");
+            assert!(replay.replayed > warm.replayed && replay.segments_replayed > warm.segments_replayed,
+                "{n}³ fresh {fresh}, {label}: measured ticks must exercise ordinary encode replay");
+        }
+    }
+}
+
+/// The pocket sweep segment matches its original indirect dispatches across
+/// active/inactive numerical slots, warmed replay and changed clock gates.
+#[test]
+fn gpu_flip_pocket_segments_match_indirect_sweeps() {
+    struct ForceIndirectPockets;
+    impl Drop for ForceIndirectPockets {
+        fn drop(&mut self) {
+            super::gpu_flip_step::set_force_indirect_pockets(false);
+        }
+    }
+    fn original_frame(run: &mut Run) {
+        super::gpu_flip_step::set_force_indirect_pockets(true);
+        let _reset = ForceIndirectPockets;
+        run.frame();
+    }
+    fn compare(segmented: &Run, indirect: &Run, steps: u32, frame: usize) {
+        let a: Vec<u32> = segmented.read(STEP_NODE, "clock_status", 8);
+        let b: Vec<u32> = indirect.read(STEP_NODE, "clock_status", 8);
+        assert_eq!(a, b, "frame{frame}: all clock words");
+        assert_eq!(a[0], 0.0f32.to_bits(), "six-slot path ends inactive");
+        assert_eq!(a[1], (1.0f32 / 60.0).to_bits(), "full interval completed");
+        assert_eq!(a[2], 0.0f32.to_bits(), "no unfinished interval");
+        assert_eq!(a[6], steps, "active steps before inactive tail");
+        assert_eq!((a[4], a[5]), (0, 0), "no cap or nonfinite clock input");
+        let count = segmented.scene.particles() as usize;
+        let segmented_step: Vec<FluidParticle> = segmented.read(STEP_NODE, "out", count);
+        let indirect_step: Vec<FluidParticle> = indirect.read(STEP_NODE, "out", count);
+        for (label, a, b) in [
+            ("published particles", segmented.particles(), indirect.particles()),
+            ("step particles", segmented_step, indirect_step),
+        ] {
+            assert_eq!(bytemuck::cast_slice::<_, u32>(&a), bytemuck::cast_slice::<_, u32>(&b), "frame{frame}: {label}");
+            for particles in [&a, &b] {
+                let stats = particle_stats(particles);
+                assert_eq!((stats.live, stats.bad), (count, 0), "frame{frame}: {label} remain live and finite");
+            }
+        }
+        assert_eq!(bytemuck::cast_slice::<_, u32>(&segmented.faces()), bytemuck::cast_slice::<_, u32>(&indirect.faces()), "frame{frame}: faces");
+        for (node, port, words) in [
+            ("stats", "stats_out", LIQUID_STATS_WORDS as usize),
+            (STEP_NODE, "capped", 2 * count + SOLVER_WORDS as usize),
+        ] {
+            assert_eq!(segmented.read::<u32>(node, port, words), indirect.read::<u32>(node, port, words), "frame{frame}: {port}");
+        }
+    }
+    super::gpu_flip_step::set_force_indirect_pockets(false);
+    let scene = WaterScene::still_pool(16).with_steps(2);
+    // Unwired retired speed keeps all six numerical slots: each interval
+    // records active work, an inactive tail, then active work next interval.
+    let mut segmented = run_with_retired_speed(scene, false);
+    let mut indirect = run_with_retired_speed(scene, false);
+    segmented.set_encode_replay(true);
+    indirect.set_encode_replay(true);
+    let mut warm = None;
+    for frame in 0..14 {
+        let steps = if frame < 10 { 2 } else { 1 };
+        if frame == 10 {
+            for run in [&mut segmented, &mut indirect] {
+                let step = node_named(&run.graph, STEP_NODE);
+                run.graph.set_param(step, "steps", crate::node_graph::ParamValue::Float(1.0)).expect("steps");
+            }
+        }
+        if frame % 2 == 0 {
+            segmented.frame();
+            original_frame(&mut indirect);
+        } else {
+            original_frame(&mut indirect);
+            segmented.frame();
+        }
+        compare(&segmented, &indirect, steps, frame);
+        if frame == 9 { warm = Some([segmented.replay_stats(), indirect.replay_stats()]); }
+    }
+    let warm = warm.expect("ten warmup visits");
+    for (label, run, before) in [("segmented", &segmented, warm[0]), ("indirect", &indirect, warm[1])] {
+        let after = run.replay_stats();
+        assert!(after.replayed > before.replayed, "{label}: changed clock gates exercise warmed replay");
+        assert!(after.segments_replayed > before.segments_replayed, "{label}: warmed solver rounds replay");
+        assert_eq!(after.recorded, before.recorded, "{label}: changed gates do not record new commands");
+        assert_eq!(after.store_allocations, before.store_allocations, "{label}: changed gates reuse replay storage");
+    }
+    assert!(segmented.replay_stats().segments_replayed - warm[0].segments_replayed
+        > indirect.replay_stats().segments_replayed - warm[1].segments_replayed,
+        "pocket sweeps add replayed segments");
+    segmented.set_encode_replay(false);
+    indirect.set_encode_replay(false);
+    let before = [segmented.replay_stats(), indirect.replay_stats()];
+    segmented.frame();
+    original_frame(&mut indirect);
+    compare(&segmented, &indirect, 1, 14);
+    for (run, before) in [(&segmented, before[0]), (&indirect, before[1])] {
+        assert_eq!(run.replay_stats().replayed, before.replayed, "direct frame replays no command chains");
+        assert_eq!(run.replay_stats().segments_replayed, before.segments_replayed, "direct frame replays no segments");
+    }
+}
+
+/// Later inactive numerical slots can skip dense extension dispatches while
+/// retaining every active layer and the ordinary replayed frame's results.
+#[test]
+fn gpu_flip_inactive_extension_dispatch_matches_dense() {
+    const WARMUP: usize = 4;
+    const MEASURED: usize = 8;
+    struct ForceDenseExtend;
+    impl Drop for ForceDenseExtend {
+        fn drop(&mut self) {
+            super::gpu_flip_step::set_force_dense_extend(false);
+        }
+    }
+    fn original_frame(run: &mut Run) -> (f64, f64) {
+        super::gpu_flip_step::set_force_dense_extend(true);
+        let _reset = ForceDenseExtend;
+        run.timed_frame()
+    }
+    fn median(values: &mut [f64]) -> f64 {
+        values.sort_by(f64::total_cmp);
+        (values[values.len() / 2 - 1] + values[values.len() / 2]) * 0.5
+    }
+    fn compare(optimized: &Run, original: &Run, fresh: bool, frame: usize) {
+        let scene = optimized.scene;
+        let at = format!("{}³ Steps {} fresh {fresh} tick {frame}", scene.pressure.n, scene.steps);
+        let a: Vec<u32> = optimized.read(STEP_NODE, "clock_status", 8);
+        let b: Vec<u32> = original.read(STEP_NODE, "clock_status", 8);
+        assert_eq!(a, b, "{at}: complete clock status differs");
+        let final_dt = if fresh && scene.steps == 1 && frame > 0 { 1.0f32 / 60.0 } else { 0.0 };
+        assert_eq!(a[0], final_dt.to_bits(), "{at}: expected recording path");
+        assert_eq!(a[1], (1.0f32 / 60.0).to_bits(), "{at}: exact completed time");
+        assert_eq!(a[2], 0.0f32.to_bits(), "{at}: no unfinished interval");
+        assert_eq!(a[6], scene.steps as u32, "{at}: authored Steps accepted exactly");
+        assert_eq!((a[4], a[5]), (0, 0), "{at}: no cap or nonfinite input");
+        let count = scene.particles() as usize;
+        let optimized_step: Vec<FluidParticle> = optimized.read(STEP_NODE, "out", count);
+        let original_step: Vec<FluidParticle> = original.read(STEP_NODE, "out", count);
+        for (what, a, b) in [
+            ("published particles", optimized.particles(), original.particles()),
+            ("step particles", optimized_step, original_step),
+        ] {
+            assert!(bytemuck::cast_slice::<_, u32>(&a) == bytemuck::cast_slice::<_, u32>(&b), "{at}: {what} bits differ");
+            for particles in [&a, &b] {
+                let stats = particle_stats(particles);
+                assert_eq!((stats.live, stats.bad), (count, 0), "{at}: every {what} record remains live and finite");
+            }
+        }
+        let (a, b) = (optimized.faces(), original.faces());
+        assert!(bytemuck::cast_slice::<_, u32>(&a) == bytemuck::cast_slice::<_, u32>(&b), "{at}: face bits differ");
+        let a: Vec<u32> = optimized.read("stats", "stats_out", LIQUID_STATS_WORDS as usize);
+        let b: Vec<u32> = original.read("stats", "stats_out", LIQUID_STATS_WORDS as usize);
+        assert_eq!(a, b, "{at}: full liquid stats differ");
+        let capped_words = 2 * count + SOLVER_WORDS as usize;
+        let a: Vec<u32> = optimized.read(STEP_NODE, "capped", capped_words);
+        let b: Vec<u32> = original.read(STEP_NODE, "capped", capped_words);
+        assert!(a == b, "{at}: full capped words differ");
+    }
+    super::gpu_flip_step::set_force_dense_extend(false);
+    for (n, steps, fresh) in [(16, 1, true), (16, 2, false), (64, 1, false)] {
+        let scene = WaterScene::still_pool(n).with_steps(steps);
+        let mut optimized = run_with_retired_speed(scene, fresh);
+        let mut original = run_with_retired_speed(scene, fresh);
+        optimized.set_encode_replay(true);
+        original.set_encode_replay(true);
+        let mut optimized_gpu = Vec::with_capacity(MEASURED);
+        let mut optimized_cpu = Vec::with_capacity(MEASURED);
+        let mut original_gpu = Vec::with_capacity(MEASURED);
+        let mut original_cpu = Vec::with_capacity(MEASURED);
+        let mut warm_replay = [manifold_gpu::GpuReplayStats::default(); 2];
+        for frame in 0..WARMUP + MEASURED {
+            super::gpu_flip_step::set_force_dense_extend(false);
+            let (optimized_time, original_time) = if frame % 2 == 0 {
+                (optimized.timed_frame(), original_frame(&mut original))
+            } else {
+                let original_time = original_frame(&mut original);
+                (optimized.timed_frame(), original_time)
+            };
+            for (label, time) in [("indirect", optimized_time), ("dense", original_time)] {
+                assert!(time.0.is_finite() && time.0 > 0.0, "{n}³ Steps {steps}, {label}: positive finite GPU chunk span");
+                assert!(time.1.is_finite() && time.1 > 0.0, "{n}³ Steps {steps}, {label}: positive finite CPU encode time");
+            }
+            if frame >= WARMUP {
+                optimized_gpu.push(optimized_time.0);
+                optimized_cpu.push(optimized_time.1);
+                original_gpu.push(original_time.0);
+                original_cpu.push(original_time.1);
+            }
+            compare(&optimized, &original, fresh, frame);
+            if frame + 1 == WARMUP {
+                warm_replay = [optimized.replay_stats(), original.replay_stats()];
+            }
+        }
+        println!(
+            "GPU FLIP {n}³ inactive extension, Steps {steps} fresh {fresh}, {WARMUP} warmup + {MEASURED} measured ticks/run: median gated GPU {:.3} ms CPU {:.3} ms; dense GPU {:.3} ms CPU {:.3} ms",
+            median(&mut optimized_gpu), median(&mut optimized_cpu), median(&mut original_gpu), median(&mut original_cpu),
+        );
+        for (label, run, warm) in [("indirect", &optimized, warm_replay[0]), ("dense", &original, warm_replay[1])] {
+            let replay = run.replay_stats();
+            println!("GPU FLIP {n}³ inactive extension, Steps {steps}, {label} replay: after warmup {warm:?}; final {replay:?}");
+            assert!(replay.replayed > warm.replayed && replay.segments_replayed > warm.segments_replayed,
+                "{n}³ Steps {steps}, {label}: measured ticks must exercise ordinary encode replay");
+        }
+        if !fresh {
+            let gated_segments = optimized.replay_stats().segments_replayed - warm_replay[0].segments_replayed;
+            let dense_segments = original.replay_stats().segments_replayed - warm_replay[1].segments_replayed;
+            assert!(gated_segments > dense_segments, "{n}³ Steps {steps}: extension layers must use gated replay segments");
+        }
+        if n == 16 && steps == 2 {
+            optimized.set_encode_replay(false);
+            original.set_encode_replay(false);
+            let direct_before = [optimized.replay_stats(), original.replay_stats()];
+            super::gpu_flip_step::set_force_dense_extend(false);
+            optimized.timed_frame();
+            original_frame(&mut original);
+            compare(&optimized, &original, fresh, WARMUP + MEASURED);
+            for (label, run, before) in [("indirect", &optimized, direct_before[0]), ("dense", &original, direct_before[1])] {
+                let after = run.replay_stats();
+                assert_eq!(after.replayed, before.replayed, "{label}: the direct frame replayed no command chains");
+                assert_eq!(after.segments_replayed, before.segments_replayed, "{label}: the direct frame replayed no pressure rounds");
+            }
+        }
+    }
+}
+
+#[test]
+fn gpu_flip_fresh_speed_preserves_force_changes_and_multiple_intervals() {
+    let scene = WaterScene::still_pool(32).with_steps(1);
+    let mut optimized = run_with_retired_speed(scene, true);
+    let mut original = run_with_retired_speed(scene, false);
+    let mut fast_steps = 0;
+    let mut adaptive_steps = 0;
+    for frame in 0..10 {
+        for run in [&mut optimized, &mut original] {
+            if frame == 3 {
+                // Launch the free surface upward fast enough to require CFL
+                // subdivision in the following interval, after its stats retire.
+                run.set_gravity(0.0, 4000.0);
+            }
+            if frame == 5 {
+                run.set_gravity(0.0, -G);
+            }
+            if frame == 6 {
+                run.fps = 30.0;
+            }
+            if frame == 8 {
+                let step = node_named(&run.graph, STEP_NODE);
+                run.graph.set_param(step, "steps", crate::node_graph::ParamValue::Float(3.0)).unwrap();
+            }
+            run.frame();
+        }
+        let a: Vec<u32> = optimized.read(STEP_NODE, "clock_status", 8);
+        let b: Vec<u32> = original.read(STEP_NODE, "clock_status", 8);
+        assert_eq!(&a[1..], &b[1..], "frame {frame}: completed time and CFL decisions");
+        assert_eq!(a[2], 0.0f32.to_bits(), "frame {frame}: no unfinished interval");
+        assert_eq!(a[5], 0, "frame {frame}: finite clock input");
+        fast_steps += usize::from(a[0] != 0 && a[6] == 1);
+        if (3..6).contains(&frame) {
+            adaptive_steps += usize::from(a[6] > 1);
+        }
+        if frame >= 8 {
+            assert!(a[6] >= 3, "authored minimum Steps remains active");
+        }
+        let (ap, bp) = (optimized.particles(), original.particles());
+        assert!(bytemuck::cast_slice::<_, u8>(&ap) == bytemuck::cast_slice::<_, u8>(&bp),
+            "frame {frame}: particle bits differ");
+        assert_eq!(particle_stats(&ap).bad, 0, "frame {frame}: finite water");
+        let (af, bf) = (optimized.faces(), original.faces());
+        assert!(bytemuck::cast_slice::<_, u8>(&af) == bytemuck::cast_slice::<_, u8>(&bf),
+            "frame {frame}: face bits differ");
+        let a: Vec<u32> = optimized.read("stats", "stats_out", LIQUID_STATS_WORDS as usize);
+        let b: Vec<u32> = original.read("stats", "stats_out", LIQUID_STATS_WORDS as usize);
+        assert_eq!(a, b, "frame {frame}: full liquid stats differ");
+    }
+    assert!(fast_steps > 0, "fixture must use the one-step shortcut");
+    assert!(adaptive_steps > 0, "the changed force must require fresh CFL subdivision");
 }
 
 /// The speed pass's measure, Steps 1 (BUG-l2h3.24): the Dam Break and the

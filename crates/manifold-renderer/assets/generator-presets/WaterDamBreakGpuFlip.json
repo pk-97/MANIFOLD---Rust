@@ -3692,6 +3692,12 @@
     },
     {
       "fromNode": 0,
+      "fromPort": "dropped_seconds",
+      "toNode": 5,
+      "toPort": "dropped_seconds"
+    },
+    {
+      "fromNode": 0,
       "fromPort": "lattice_min_x",
       "toNode": 6,
       "toPort": "lattice_min_x"
@@ -3815,6 +3821,18 @@
       "fromPort": "tick_index",
       "toNode": 6,
       "toPort": "tick_index"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "retired_max_speed",
+      "toNode": 6,
+      "toPort": "retired_max_speed"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "initial_obstacle_speed",
+      "toNode": 6,
+      "toPort": "initial_obstacle_speed"
     },
     {
       "fromNode": 0,

@@ -136,7 +136,10 @@ Accepted numerical substeps (BUG-g75v.7): a producer may also publish
 one-shot impulse-index/valid-bit, reserved zero), `substep_u/v/w` (concatenated
 MAC arrays in the layout above), and `substep_count`. Duration zero denotes an
 inactive encoded slot. The event high bit marks a hit; remaining bits index the
-domain impulse lattices. This is a solver-neutral consumer seam; a producer
+domain impulse lattices. Face data is valid only for positive-duration rows;
+consumers must skip inactive rows before reading their grids. GPU FLIP leaves
+inactive grids untouched and dispatches their gathers with zero workgroups.
+This is a solver-neutral consumer seam; a producer
 adapts its private scheduler/velocity layout before publication. Whitewater
 never reads a GPU FLIP private face record or scheduler structure.
 

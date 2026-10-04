@@ -181,7 +181,7 @@ impl GpuFlipGeometry {
 }
 
 /// Every scalar output, in the order [`GpuFlipDomain::compute`] fills them.
-const OUTPUTS: [&str; 49] = [
+const OUTPUTS: [&str; 50] = [
     "lattice_min_x", "lattice_min_y", "lattice_min_z", "cell_size", "nodes_x", "nodes_y", "nodes_z",
     "closed_faces", "pool_sites", "box_x0", "box_x1", "box_y0", "box_y1", "box_z0", "box_z1",
     "particle_mass", "gravity_x", "gravity", "gravity_z", "ticks", "epoch", "simulation_time",
@@ -192,11 +192,14 @@ const OUTPUTS: [&str; 49] = [
     "limit_interval",
     "clock_obstacle_count",
     "clock_source_count",
-    "live_hit_count", "mesh_min_x", "mesh_min_y", "mesh_min_z", "mesh_nodes_x", "mesh_nodes_y", "mesh_nodes_z"];
+    "live_hit_count", "mesh_min_x", "mesh_min_y", "mesh_min_z", "mesh_nodes_x", "mesh_nodes_y", "mesh_nodes_z",
+    "initial_obstacle_speed"];
 const TICKS: usize = 19;
 const IMPULSE_TICK: usize = 33;
+const INITIAL_OBSTACLE_SPEED: usize = 49;
 const _: () = assert!(matches!(OUTPUTS[TICKS].as_bytes(), b"ticks"));
 const _: () = assert!(matches!(OUTPUTS[IMPULSE_TICK].as_bytes(), b"impulse_tick"));
+const _: () = assert!(matches!(OUTPUTS[INITIAL_OBSTACLE_SPEED].as_bytes(), b"initial_obstacle_speed"));
 
 /// The coupled half of the domain: the paired physics world's latest
 /// observation, and the rigid owner built from it.
@@ -354,6 +357,7 @@ crate::primitive! {
     interval_duration: ScalarF32,
     limit_interval: ScalarF32,
     clock_obstacle_count: ScalarF32, clock_source_count: ScalarF32,
+    initial_obstacle_speed: ScalarF32,
     clock_obstacles: Array(f32), clock_sources: Array(f32),
     live_hits: Array(f32), live_hit_count: ScalarF32,
         target_time: ScalarF32,
@@ -391,7 +395,7 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("particle_capacity"), label: "Particle Capacity", ty: ParamType::Int, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "The GPU FLIP group's source of truth: ticks and epoch into node.liquid_state (the tick region's clock owner), the fill sites and the padded lattice into node.liquid_fill, gravity, forces, impulses, the field scalars (field_nodes_x/y/z, field_spacing, force_lattices, first_tick, impulse_tick), bodies, regions, region_count, shapes, atlas, dynamic_bodies and the padded lattice into every node.gpu_flip_step, reaction into the first step of the tick (each later step takes the one before's reaction_out), and the padded lattice with bodies, shapes and atlas into node.liquid_solid_distance, node.liquid_frame and node.face_sample_component; simulation_time, display_time and epoch into node.liquid_frame; particle_mass into node.liquid_stats; particle_capacity into node.liquid_fill. The domain box, Resolution and fill restart the liquid; gravity and Simulation Speed are live. Live runs at most three ticks per display frame and reports dropped time; export runs every tick.",
+    composition_notes: "The GPU FLIP group's source of truth: ticks and epoch into node.liquid_state (the tick region's clock owner), the fill sites and the padded lattice into node.liquid_fill, gravity, forces, impulses, the field scalars (field_nodes_x/y/z, field_spacing, force_lattices, first_tick, impulse_tick), bodies, regions, region_count, shapes, atlas, dynamic_bodies and the padded lattice into every node.gpu_flip_step, reaction into the first step of the tick (each later step takes the one before's reaction_out), and the padded lattice with bodies, shapes and atlas into node.liquid_solid_distance, node.liquid_frame and node.face_sample_component; simulation_time, display_time and epoch into node.liquid_frame; particle_mass into node.liquid_stats; particle_capacity into node.liquid_fill. The domain box, Resolution and fill restart the liquid; gravity and Simulation Speed are live. Live runs at most two fixed Sim Rate intervals per display frame and reports dropped time; export runs every interval.",
     examples: [],
     picker: { label: "GPU FLIP Domain", category: Atom },
     summary: "Sets up a GPU FLIP liquid: its box, resolution, starting fill, gravity and speed.",
@@ -451,9 +455,11 @@ impl Primitive for GpuFlipDomain {
         self.role_pending
     }
 
-    fn substep_clock_interval(&self, iteration: u32) -> Option<(&'static str, manifold_physics::stepping::StepInterval)> {
-        self.scheduled_frame.as_ref()?.interval(u64::from(iteration))
-            .map(|interval| ("interval_duration", interval))
+    fn substep_clock_interval(&self, iteration: u32) -> Option<crate::node_graph::substeps::SubstepClockOutput<'_>> {
+        let frame = self.scheduled_frame.as_ref()?;
+        frame.interval(u64::from(iteration)).map(|interval| {
+            crate::node_graph::substeps::SubstepClockOutput::single("interval_duration", interval, iteration, frame.ticks)
+        })
     }
 
     /// Coupled frames sync before each later tick of the frame.
@@ -565,6 +571,7 @@ impl Primitive for GpuFlipDomain {
             let mut held = self.published.unwrap_or([0.0; OUTPUTS.len()]);
             held[TICKS] = 0.0;
             held[IMPULSE_TICK] = -1.0;
+            held[INITIAL_OBSTACLE_SPEED] = -1.0;
             held
         };
         self.coupled.failed = false;
@@ -711,7 +718,7 @@ impl GpuFlipDomain {
             let offset = self.coupled.offset;
             // This frame's clear is encoded after this read.
             let settled = owner.settle_ready(
-                self.coupled.scenes.get(owner.completed() + 1),
+                self.coupled.scenes.endpoint(owner.completed() + 1),
                 |stamp| clock.as_ref().is_none_or(|clock| {
                     clock.is_complete(stamp) || (clock.wait(stamp) && clock.is_complete(stamp))
                 }),
@@ -725,6 +732,9 @@ impl GpuFlipDomain {
                 // with a fresh rigid owner, the error reported.
                 self.coupled.owner = None;
                 return Err(error);
+            }
+            if let Some(start) = self.coupled.scenes.reanchored_start(owner.completed()) {
+                owner.reanchor_start(start)?;
             }
         }
         self.setup = Some(geometry.setup);
@@ -763,7 +773,7 @@ impl GpuFlipDomain {
         }
         let dynamic_bodies = coupled_rows.iter().filter(|row| takes_reaction(row)).count();
         self.bodies
-            .prepare_clock_vertices(geometry.layout.min, geometry.layout.size);
+            .prepare_clock_vertices(geometry.layout.min, geometry.layout.size, 0);
         let mut display_time = frame.display_time;
         if let Some(owner) = &mut self.coupled.owner {
             if frame.ticks > 0 {
@@ -810,7 +820,9 @@ impl GpuFlipDomain {
             // Export steps each interval, so its limit measures the step (0).
             (
                 "limit_interval",
-                if frame.offline { 0.0 } else { self.clock.interval_simulated_duration() as f32 },
+                // Compatibility output for saved graphs. Each solver call is
+                // now exactly one accepted interval, so no span override is needed.
+                0.0,
             ),
             (
                 "clock_obstacle_count",
@@ -829,6 +841,11 @@ impl GpuFlipDomain {
             ("body_rows", self.body_rows),
             ("dynamic_bodies", dynamic_bodies as f32),
             ("first_tick", first_tick as f32),
+            // Prepared first rows, before the first interval's cleared reaction
+            // changes. Later intervals require their own freshness proof.
+            ("initial_obstacle_speed", frame.interval(0).map_or(-1.0, |interval| {
+                self.bodies.initial_clock_obstacle_speed(interval.duration().0 as f32)
+            })),
         ];
         let mut values = [0.0; OUTPUTS.len()];
         let mut written = 0u64;
@@ -880,7 +897,7 @@ impl GpuFlipDomain {
         let reaction = self.reaction.as_ref().ok_or("GPU FLIP coupling: the reaction is missing")?;
         // A tick running this frame started by now, so the tick before it
         // has its end sampled.
-        let end = self.coupled.scenes.get(owner.completed() + 1);
+        let end = self.coupled.scenes.endpoint(owner.completed() + 1);
         owner.settle_ready(end, |_| true, |_, rows, impulses| {
             decode_reaction(exchange.offset, rows, reaction_floats(Some(reaction)), impulses)
         })?;
@@ -894,6 +911,23 @@ impl GpuFlipDomain {
         // completed every command that touched it, and the next reader is
         // encoded after this write.
         unsafe { bodies.write(offset, bytes) };
+        // The CFL samples must belong to the same accepted tick as its body
+        // rows. Reusing the first tick's world-space hull with the next tick's
+        // centre changes the angular point speed and leaves eligibility stale.
+        // This uses the existing coupled-tick fence; no additional wait.
+        self.bodies.prepare_clock_vertices(self.coupled.walls.min, self.coupled.walls.size, tick as usize);
+        for (port, vertices) in [
+            ("clock_obstacles", self.bodies.clock_obstacles()),
+            ("clock_sources", self.bodies.clock_sources()),
+        ] {
+            let buffer = self.body_buffers.output(port).ok_or_else(|| format!("GPU FLIP coupling: {port} is missing"))?;
+            let bytes = bytemuck::cast_slice(vertices);
+            if bytes.len() as u64 > buffer.size {
+                return Err(format!("GPU FLIP coupling: {port} outgrew its buffer"));
+            }
+            // SAFETY: the same completed fence and bounds check as body rows.
+            unsafe { buffer.write(0, bytes) };
+        }
         reaction.zero_fill();
         owner.set_pending(PendingTick { tick: exchange.pending.tick + u64::from(tick),
             interval: exchange.frame.interval(u64::from(tick)).expect("accepted exchange interval"), ..exchange.pending });

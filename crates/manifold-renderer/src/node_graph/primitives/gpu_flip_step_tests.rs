@@ -9,15 +9,16 @@
 //! fluidsimulation.cpp (solid face velocity, the constraint),
 //! pressuresolver.cpp (the pressure subtraction).
 
-use manifold_gpu::GpuBuffer;
+use manifold_gpu::{GpuBinding, GpuBuffer};
 
 use super::gpu_flip_atom_tests::{FACE_FLOATS, assert_close, face_grid_len, random_values};
-use super::gpu_flip_step::{StepParams, dispatch_pass, tile_total};
+use super::gpu_flip_step::{POCKET_GATE_WORDS, StepParams, dispatch_pass, tile_total};
 use super::liquid_fill::LiquidFill;
 use super::liquid_surface_tests::{Harness, params, read};
+use super::liquid_stats::with_stats_layout;
 use crate::node_graph::fluid_particles::{CellRange, FaceSample, FluidParticle};
-use crate::node_graph::liquid::bodies::{LiquidBody, LiquidShape, body_pose_at, pack_distance_atlas};
-use crate::node_graph::liquid::fields::FieldLattice;
+use crate::node_graph::liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape, body_pose_at, pack_distance_atlas};
+use crate::node_graph::liquid::fields::{FieldLattice, LIQUID_FIELD};
 use crate::node_graph::liquid::lattice::PADDING_NODES;
 use crate::node_graph::parameters::ParamValue;
 
@@ -813,6 +814,124 @@ fn gpu_flip_extend_faces_waits_for_fluid_beside_walls() {
     }
 }
 
+fn density_support_sources() -> [String; 2] {
+    const CULL: &str = "                    if finite(q) && any(abs(centre - q) >= vec3<f32>(1.0)) {\n                        continue;\n                    }\n";
+    let source = include_str!("shaders/gpu_flip_step.wgsl");
+    assert_eq!(source.matches(CULL).count(), 1, "density support predicate occurs once");
+    let original = source.replacen(CULL, "", 1);
+    [original.as_str(), source].map(|shader| {
+        with_stats_layout(&format!("{LIQUID_POSE}\n{LIQUID_COLLIDER}\n{LIQUID_FIELD}\n{shader}"))
+    })
+}
+
+#[test]
+fn gpu_flip_density_support_shader_validates() {
+    for source in density_support_sources() {
+        let module = naga::front::wgsl::parse_str(&source).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&source)));
+        naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
+            .validate(&module).expect("density support shader validates");
+    }
+}
+
+#[test]
+fn gpu_flip_density_support_matches_original() {
+    let mut pass = Pass::new();
+    let pipelines = density_support_sources().map(|source| {
+        pass.device.create_compute_pipeline(&source, "density_source", "density-support-proof")
+    });
+    let mut particles = Vec::new();
+    let mut rng = Stream::new(0xde8517);
+    // Near rest rather than clamp-saturated: eight slightly jittered sites
+    // per cell. Leave one corner empty to exercise the face-neighbour air rule.
+    for c in 0..cell_len() - 1 {
+        let p = cell_coords(c);
+        for site in 0..8 {
+            let q: [f32; 3] = std::array::from_fn(|a| p[a] as f32 + 0.25 + 0.5 * ((site >> a) & 1) as f32 + rng.signed(0.004));
+            let x: [f32; 3] = std::array::from_fn(|a| MIN[a] + H * q[a]);
+            particles.push(FluidParticle { position_radius: [x[0], x[1], x[2], 0.08], ..FluidParticle::default() });
+        }
+    }
+    let centre = [2.5_f32; 3];
+    let x = centre.map(|q| q * H);
+    particles.push(FluidParticle { position_radius: [MIN[0] + x[0], MIN[1] + x[1], MIN[2] + x[2], 0.08], ..FluidParticle::default() });
+    let mut support = [0; 2];
+    for a in 0..3 {
+        for side in [-1.0_f32, 1.0] {
+            let boundary = MIN[a] + H * (centre[a] + side);
+            for direction in [-1, 0, 1] {
+                let mut x: [f32; 3] = std::array::from_fn(|b| MIN[b] + H * centre[b]);
+                x[a] = boundary;
+                // Also include world-coordinate neighbours; several ULPs
+                // survive the world-to-lattice rounding at every box offset.
+                for _ in 0..4 {
+                    x[a] = match direction { -1 => x[a].next_down(), 1 => x[a].next_up(), _ => x[a] };
+                }
+                let q: [f32; 3] = std::array::from_fn(|b| (x[b] - MIN[b]) / H);
+                let outside = (0..3).any(|b| (centre[b] - q[b]).abs() >= 1.0);
+                support[usize::from(outside)] += 1;
+                particles.push(FluidParticle { position_radius: [x[0], x[1], x[2], 0.08], ..FluidParticle::default() });
+            }
+        }
+    }
+    assert!(support.iter().all(|&count| count > 0), "positive and culled zero-support probes: {support:?}");
+    let mut water = vec![1.0_f32; cell_len()];
+    water[0] = 0.0;
+    let mask: Vec<u32> = (0..cell_len()).map(|c| u32::from(c % 4 != 0)).collect();
+    for nonfinite in [false, true] {
+        let mut input = particles.clone();
+        if nonfinite {
+            for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+                let mut p = input[0];
+                p.position_radius[0] = value;
+                input.push(p);
+            }
+        }
+        let (sorted, ranges) = cpu_sort(&input);
+        for (body_count, distance) in [(0, 4.0 * H), (1, 4.0 * H), (1, -4.0 * H)] {
+            for narrow in [false, true] {
+                pass.bound.clear();
+                let threads = pass.every_tile();
+                pass.bind(1, &ranges).bind(2, &sorted).bind(6, &water)
+                    .bind(9, &vec![distance; face_len()]).bind(45, &mask)
+                    .bind(46, &[0_u32; 12]).bind(5, &vec![f32::NAN; cell_len()]);
+                let step = StepParams {
+                    capacity: sorted.len() as u32, body_count, rate: 4.0,
+                    narrow_band: if narrow { 2 } else { 0 }, ..lattice()
+                };
+                let outputs = pipelines.each_ref().map(|pipeline| {
+                    let mut bindings = vec![GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&step) }];
+                    bindings.extend(pass.bound.iter().map(|(binding, buffer)| GpuBinding::Buffer { binding: *binding, buffer, offset: 0 }));
+                    let mut enc = pass.device.create_encoder("density support parity");
+                    enc.dispatch_compute(pipeline, &bindings, [threads.div_ceil(256) as u32, 1, 1], "density-support-proof");
+                    enc.commit_and_wait_completed();
+                    pass.bound::<f32>(5, cell_len())
+                });
+                for (c, (&want, &got)) in outputs[0].iter().zip(&outputs[1]).enumerate() {
+                    let context = format!("cell{c} body{body_count} sdf{distance} narrow{narrow} nonfinite{nonfinite}");
+                    if want.is_finite() {
+                        assert_eq!(got.to_bits(), want.to_bits(), "{context}: finite output bits");
+                    } else if want.is_nan() {
+                        assert!(got.is_nan(), "{context}: NaN classification");
+                    } else {
+                        assert!(got.is_infinite() && got.is_sign_negative() == want.is_sign_negative(), "{context}: infinity classification");
+                    }
+                    if c == 0 || (narrow && mask[c] == 0) {
+                        assert_eq!(got, 0.0, "{context}: air/inactive mask");
+                    }
+                }
+                if !nonfinite {
+                    assert!(outputs[0].iter().all(|v| v.is_finite()), "finite fixture yields finite output");
+                    if body_count == 0 {
+                        let value = outputs[0][cell_index([2, 2, 2])];
+                        assert!(value < 0.0 && value.abs() < 2.0, "positive marker contribution is visible below the density clamp: {value}");
+                        assert!(outputs[0].iter().any(|v| v.abs() > 0.0 && v.abs() < 2.0), "nonzero unsaturated near-rest outputs");
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// The kernel's per-component trilinear sample over faces with weight > 0,
 /// in f64. q is in cells from the lattice minimum.
 fn cpu_sample(q: [f64; 3], field: &[FaceSample]) -> [f64; 3] {
@@ -855,6 +974,11 @@ fn gpu_flip_faces_to_particles_blends_flip_and_moves_by_rk3() {
     let got: Vec<FluidParticle> = pass
         .bind(2, &particles)
         .bind(3, &faces)
+        // Metal requires the conditional solid/region resources even with zero counts.
+        .bind(9, &vec![0.0_f32; face_len()])
+        .bind(15, &[LiquidShape::default()])
+        .bind(16, &[0_u32; 4])
+        .bind(36, &[LiquidBody::default()])
         .bind(17, &old)
         // Spread equal to the new faces: no density move.
         .bind(18, &faces)
@@ -1689,28 +1813,28 @@ fn gpu_pockets(water: &[f32], open: &[FaceSample], moving: &[FaceSample], mask: 
     pass.bind(6, water)
         .bind(10, open)
         .bind(23, &vec![0u32; cell_len()])
-        .bind(24, &[0u32; 11])
+        .bind(24, &[0u32; POCKET_GATE_WORDS as usize])
         .bind(4, moving)
         .bind(25, &vec![0u32; cell_len()])
         .bind(5, rhs)
         .bind(26, &vec![7u32; 3 * cell_len() + 2])
         .bind(22, &[9u32; 6]);
     pass.run::<u32>("pocket_seed", &params, 23, cell_len(), cell_len());
-    pass.run::<u32>("pocket_start", &params, 24, 11, 1);
+    pass.run::<u32>("pocket_start", &params, 24, POCKET_GATE_WORDS as usize, 1);
     let mut rounds = 0;
     loop {
-        pass.run::<u32>("pocket_round", &params, 24, 11, 1);
+        pass.run::<u32>("pocket_round", &params, 24, POCKET_GATE_WORDS as usize, 1);
         for sweep in ["pocket_sweep_x", "pocket_sweep_y", "pocket_sweep_z"] {
-            pass.run::<u32>(sweep, &params, 24, 11, lines);
+            pass.run::<u32>(sweep, &params, 24, POCKET_GATE_WORDS as usize, lines);
         }
-        if pass.bound::<u32>(24, 11)[9] == 0 {
+        if pass.bound::<u32>(24, POCKET_GATE_WORDS as usize)[9] == 0 {
             break;
         }
         rounds += 1;
         assert!(rounds <= cell_len(), "the spread never settled");
     }
-    pass.run::<u32>("pocket_check", &params, 24, 11, cell_len());
-    assert_eq!(pass.bound::<u32>(24, 11)[10], 0, "a settled spread leaves no sealed cell linked to air");
+    pass.run::<u32>("pocket_check", &params, 24, POCKET_GATE_WORDS as usize, cell_len());
+    assert_eq!(pass.bound::<u32>(24, POCKET_GATE_WORDS as usize)[10], 0, "a settled spread leaves no sealed cell linked to air");
     let got = pass.run::<FaceSample>("pocket_condition", &params, 4, face_len(), face_len());
     pass.run::<u32>("pocket_clear", &params, 26, 3 * cell_len() + 2, 3 * cell_len() + 2);
     pass.run::<u32>("pocket_accumulate", &params, 26, 3 * cell_len() + 2, cell_len());
@@ -1811,6 +1935,61 @@ fn gpu_flip_sealed_pockets_zero_the_solid_velocity_as_the_engine() {
     assert!(zeroed > 0, "some pocket was sealed");
 }
 
+/// Pocket sweeps' original triples and appended replay range agree through
+/// changed, quiet and inactive rounds, even with a stale active range.
+#[test]
+fn gpu_flip_pocket_round_initializes_replay_gate() {
+    fn write(pass: &Pass, binding: u32, values: &[u32]) {
+        let buffer = &pass.bound.iter().find(|(b, _)| *b == binding).expect("bound").1;
+        assert_eq!(buffer.size, (values.len() * 4) as u64);
+        // SAFETY: each Pass::run retired its command buffer before this write.
+        unsafe { buffer.write(0, bytemuck::cast_slice(values)) };
+    }
+    let params = lattice();
+    let words = POCKET_GATE_WORDS as usize;
+    assert_eq!(words, 17, "eleven original words, pad, two replay range words and setup triple");
+    let mut clock = [0u32; 12];
+    clock[0] = (1.0f32 / 60.0).to_bits();
+    clock[11] = 1;
+    let mut pass = Pass::new();
+    pass.bind(24, &vec![73u32; words]).bind(46, &clock);
+    let mut expected = vec![73u32; words];
+    expected[9] = 1;
+    expected[10] = 0;
+    expected[12..14].copy_from_slice(&[0, 0]);
+    expected[14..17].copy_from_slice(&[0, 1, 1]);
+    assert_eq!(pass.run::<u32>("pocket_start", &params, 24, words, 1), expected, "active start clears the range and preserves original triple words");
+    let lines = [N[1] * N[2], N[2] * N[0], N[0] * N[1]];
+    for (axis, count) in lines.into_iter().enumerate() {
+        expected[3 * axis..3 * axis + 3].copy_from_slice(&[count.div_ceil(256) as u32, 1, 1]);
+    }
+    expected[9] = 0;
+    expected[12..14].copy_from_slice(&[0, 4]);
+    expected[14] = 1;
+    assert_eq!(pass.run::<u32>("pocket_round", &params, 24, words, 1), expected, "changed round enables three sweeps and next setup");
+    for axis in 0..3 { expected[3 * axis] = 0; }
+    expected[12..14].copy_from_slice(&[0, 0]);
+    expected[14] = 0;
+    assert_eq!(pass.run::<u32>("pocket_round", &params, 24, words, 1), expected, "quiet round enables no sweep");
+
+    // An inactive slot always starts before its rounds. Start clears the
+    // preceding active slot's range; each inactive round keeps it cleared.
+    let mut stale = vec![73u32; words];
+    stale[9] = 1;
+    stale[12..14].copy_from_slice(&[0, 4]);
+    stale[14..17].copy_from_slice(&[1, 1, 1]);
+    write(&pass, 24, &stale);
+    clock[0] = 0;
+    write(&pass, 46, &clock);
+    for axis in 0..3 { stale[3 * axis] = 0; }
+    stale[9] = 0;
+    stale[10] = 0;
+    stale[12..14].copy_from_slice(&[0, 0]);
+    stale[14] = 0;
+    assert_eq!(pass.run::<u32>("pocket_start", &params, 24, words, 1), stale, "inactive start clears stale execution and retains original word semantics");
+    assert_eq!(pass.run::<u32>("pocket_round", &params, 24, words, 1), stale, "inactive round preserves the cleared execution range");
+}
+
 #[test]
 fn gpu_flip_pocket_spread_reports_an_unfinished_cap() {
     // Every cell water and every link open, air only past the open -X face:
@@ -1819,11 +1998,11 @@ fn gpu_flip_pocket_spread_reports_an_unfinished_cap() {
     let water = vec![1.0f32; cell_len()];
     let open = solid_faces(0x5e9, false);
     let mut pass = Pass::new();
-    pass.bind(6, &water).bind(10, &open).bind(23, &vec![0u32; cell_len()]).bind(24, &[0u32; 11]).bind(25, &vec![0u32; cell_len()]);
+    pass.bind(6, &water).bind(10, &open).bind(23, &vec![0u32; cell_len()]).bind(24, &[0u32; POCKET_GATE_WORDS as usize]).bind(25, &vec![0u32; cell_len()]);
     pass.run::<u32>("pocket_seed", &params, 23, cell_len(), cell_len());
-    pass.run::<u32>("pocket_start", &params, 24, 11, 1);
-    pass.run::<u32>("pocket_check", &params, 24, 11, cell_len());
-    assert_eq!(pass.bound::<u32>(24, 11)[10], 1, "an unfinished spread is flagged");
+    pass.run::<u32>("pocket_start", &params, 24, POCKET_GATE_WORDS as usize, 1);
+    pass.run::<u32>("pocket_check", &params, 24, POCKET_GATE_WORDS as usize, cell_len());
+    assert_eq!(pass.bound::<u32>(24, POCKET_GATE_WORDS as usize)[10], 1, "an unfinished spread is flagged");
     // The step's dry, sealed and air counts follow in words 7-9.
     let pocket = pass.bound::<u32>(23, cell_len());
     let counts: Vec<u32> = (0..3).map(|k| pocket.iter().filter(|&&s| s == k).count() as u32).collect();
@@ -2040,20 +2219,20 @@ fn fine_pockets(water: &[f32], open: &[FaceSample]) -> (Vec<u32>, Vec<u32>) {
     let params = lattice();
     let lines = (N[1] * N[2]).max(N[0] * N[2]).max(N[0] * N[1]);
     let mut pass = Pass::new();
-    pass.bind(6, water).bind(10, open).bind(23, &vec![0u32; cell_len()]).bind(24, &[0u32; 11]).bind(25, &vec![0u32; cell_len()]);
+    pass.bind(6, water).bind(10, open).bind(23, &vec![0u32; cell_len()]).bind(24, &[0u32; POCKET_GATE_WORDS as usize]).bind(25, &vec![0u32; cell_len()]);
     pass.run::<u32>("pocket_seed", &params, 23, cell_len(), cell_len());
-    pass.run::<u32>("pocket_start", &params, 24, 11, 1);
+    pass.run::<u32>("pocket_start", &params, 24, POCKET_GATE_WORDS as usize, 1);
     for _ in 0..=cell_len() {
-        pass.run::<u32>("pocket_round", &params, 24, 11, 1);
+        pass.run::<u32>("pocket_round", &params, 24, POCKET_GATE_WORDS as usize, 1);
         for sweep in ["pocket_sweep_x", "pocket_sweep_y", "pocket_sweep_z"] {
-            pass.run::<u32>(sweep, &params, 24, 11, lines);
+            pass.run::<u32>(sweep, &params, 24, POCKET_GATE_WORDS as usize, lines);
         }
-        if pass.bound::<u32>(24, 11)[9] == 0 {
+        if pass.bound::<u32>(24, POCKET_GATE_WORDS as usize)[9] == 0 {
             break;
         }
     }
-    pass.run::<u32>("pocket_check", &params, 24, 11, cell_len());
-    assert_eq!(pass.bound::<u32>(24, 11)[10], 0, "a settled spread leaves no sealed cell linked to air");
+    pass.run::<u32>("pocket_check", &params, 24, POCKET_GATE_WORDS as usize, cell_len());
+    assert_eq!(pass.bound::<u32>(24, POCKET_GATE_WORDS as usize)[10], 0, "a settled spread leaves no sealed cell linked to air");
     (pass.bound(23, cell_len()), pass.bound(25, cell_len()))
 }
 

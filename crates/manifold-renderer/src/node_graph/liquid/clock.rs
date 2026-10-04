@@ -32,7 +32,7 @@ mod tests {
     }
 
     #[test]
-    fn liquid_clock_live_covers_stalled_frame() {
+    fn liquid_clock_live_caps_stalled_frame_and_reanchors() {
         let mut clock = LiquidClock::default();
         // 60 fps: one tick per frame after the first.
         let frames: Vec<(f64, f64)> = (0..=10).map(|i| (i as f64 * TICK, TICK)).collect();
@@ -40,10 +40,16 @@ mod tests {
         assert!(out[0].restarted);
         assert!(out[1..].iter().all(|f| f.ticks == 1 && !f.restarted));
         let stalled = clock.advance(10.0 * TICK + 1.0, TICK, 1.0, 0.0, false, false);
-        assert_eq!(stalled.ticks, 1);
-        assert_eq!(stalled.dropped_seconds, 0.0);
-        assert!((stalled.plan.end.0 - stalled.plan.start.0 - 1.0).abs() < 1e-12);
+        assert_eq!(stalled.ticks, 2);
+        assert!(stalled.reanchored);
+        assert!((stalled.dropped_seconds - (1.0 - 2.0 * TICK)).abs() < 1e-12);
+        assert!((stalled.plan.end.0 - stalled.plan.start.0 - 2.0 * TICK).abs() < 1e-12);
         assert_eq!(stalled.simulation_time, stalled.target_time);
+        let next = clock.advance(11.0 * TICK + 1.0, TICK, 1.0, 0.0, false, false);
+        assert_eq!(next.ticks, 1);
+        assert!(!next.reanchored);
+        assert_eq!(next.plan.start, stalled.plan.end);
+        assert_eq!(next.dropped_seconds, stalled.dropped_seconds);
     }
 
     #[test]
@@ -69,7 +75,7 @@ mod tests {
         assert_eq!(held.simulation_time, a.simulation_time);
         // Speed 0 holds while transport runs.
         assert!(clock.advance(2.0 * TICK, TICK, 0.0, 0.0, false, false).held);
-        // Speed 0.5 runs a tick every other frame and never holds. A speed
+        // Speed 0.5 runs each fixed transport tick at half duration. A speed
         // edit applies from the interval after the frame that sees it, so the
         // first of these frames still advances at speed 0.
         let frames: Vec<_> = (3..8)
@@ -123,36 +129,40 @@ mod tests {
         }
     }
 
-    /// Live frames expose the complete observed transport span. The ordinal
-    /// identifies the one interval in each display frame; it is not a tick
-    /// duration or a nominal fixed-tick budget.
+    /// Live plans contain at most two fixed intervals with contiguous simulation
+    /// endpoints. Any excess transport is counted as discarded time.
     #[test]
-    fn liquid_clock_live_plan_covers_observed_span() {
+    fn liquid_clock_live_plan_keeps_fixed_intervals_under_overload() {
         for fps in [20, 24, 30, 60] {
             let mut clock = LiquidClock::default();
             let mut previous_end = 0.0;
+            let mut sequence = 0;
             for frame_index in 0..=fps {
                 let transport = frame_index as f64 / fps as f64;
                 let frame = clock.advance(
                     transport,
-                    1.0 / fps as f64,
+                    TICK,
                     1.0,
                     0.0,
                     false,
                     false,
                 );
                 assert_eq!(frame.plan.start.0, previous_end, "{fps} fps frame {frame_index}");
-                assert!((frame.plan.end.0 - transport).abs() < 1e-12, "{fps} fps frame {frame_index}");
-                assert_eq!(frame.dropped_seconds, 0.0);
-                if frame.ticks == 1 {
-                    assert_eq!(frame.first_sequence, frame_index as u64 - 1);
-                    let interval = frame.interval(0).expect("live frame interval");
-                    assert_eq!(interval.start.0, previous_end);
-                    assert!((interval.end.0 - transport).abs() < 1e-12);
+                assert!(frame.ticks <= 2);
+                assert_eq!(frame.first_sequence, sequence);
+                let mut endpoint = previous_end;
+                for ordinal in 0..u64::from(frame.ticks) {
+                    let interval = frame.interval(ordinal).expect("live frame interval");
+                    assert_eq!(interval.start.0, endpoint);
+                    assert!((interval.duration().0 - TICK).abs() < 1e-12);
+                    endpoint = interval.end.0;
                 }
+                assert_eq!(endpoint, frame.plan.end.0);
+                assert!((frame.target_time + frame.dropped_seconds - transport).abs() < 1e-12);
+                assert!(transport - frame.simulation_time - frame.dropped_seconds < TICK + 1e-12);
+                sequence += u64::from(frame.ticks);
                 previous_end = frame.plan.end.0;
             }
-            assert_eq!(previous_end, 1.0, "{fps} fps");
         }
     }
 
@@ -169,26 +179,30 @@ mod tests {
         }
     }
 
-    /// The same live policy serves coupled and uncoupled domains.
+    /// At 20/24 fps overload discards the excess. At 30/60 fps the two-step cap
+    /// covers the same second as export without dropping time.
     #[test]
-    fn liquid_clock_live_20_24_30_60_fps_cover_the_same_time() {
-        for fps in [20, 24, 30, 60] {
+    fn liquid_clock_live_20_24_30_60_fps_account_for_accepted_and_dropped_time() {
+        for (fps, expected_ticks) in [(20, 40), (24, 48), (30, 60), (60, 60)] {
             let mut clock = LiquidClock::default();
             let mut completed = 0.0;
+            let mut dropped = 0.0;
             for frame in 0..=fps {
-                let out = clock.advance(frame as f64 / fps as f64, 1.0 / fps as f64, 1.0, 0.0, false, false);
-                assert_eq!(out.dropped_seconds, 0.0);
-                assert!(out.ticks <= 1);
+                let out = clock.advance(frame as f64 / fps as f64, TICK, 1.0, 0.0, false, false);
+                assert!(out.ticks <= 2);
                 assert_eq!(out.plan.start.0, completed);
                 completed = out.plan.end.0;
-                assert!((completed - frame as f64 / fps as f64).abs() < 1e-12);
+                dropped = out.dropped_seconds;
+                assert!((out.target_time + dropped - frame as f64 / fps as f64).abs() < 1e-12);
             }
-            assert_eq!(completed, 1.0, "{fps} fps");
+            assert_eq!(clock.ticks_done(), expected_ticks, "{fps} fps");
+            assert!((completed - expected_ticks as f64 * TICK).abs() < 1e-12);
+            assert!((completed + dropped - 1.0).abs() < 1e-12, "{fps} fps");
         }
     }
 
-    /// Jitter never moves the sampled target backwards or leaves the accepted
-    /// live plan behind the observed transport.
+    /// Jitter preserves contiguous fixed steps and a monotone target while
+    /// discarded transport is accounted for separately from accepted time.
     #[test]
     fn liquid_clock_target_never_regresses_under_live_jitter() {
         let mut clock = LiquidClock::default();
@@ -202,12 +216,20 @@ mod tests {
             assert!(!frame.restarted, "frame {step}");
             assert!(frame.target_time >= previous.target_time - 1e-12, "frame {step}: target went back");
             assert!(frame.target_time <= transport + 1e-9, "frame {step}: target ran ahead of transport");
-            assert_eq!(frame.dropped_seconds, 0.0, "frame {step}: live time was dropped");
+            assert_eq!(frame.plan.start, previous.plan.end);
+            assert!(frame.ticks <= 2, "frame {step}: live cap");
+            assert!((frame.plan.end.0 - frame.plan.start.0 - f64::from(frame.ticks) * TICK).abs() < 1e-12);
+            assert!(frame.dropped_seconds >= previous.dropped_seconds);
+            if frame.reanchored {
+                assert_eq!(frame.ticks, 2);
+                assert!(frame.dropped_seconds > previous.dropped_seconds);
+            }
+            assert!((frame.target_time + frame.dropped_seconds - transport).abs() < 1e-9);
             assert!(frame.plan.end.0 <= transport + 1e-9, "frame {step}: plan ran ahead");
             previous = frame;
         }
-        assert_eq!(previous.dropped_seconds, 0.0);
-        assert!(transport - previous.simulation_time < TICK + 1e-9);
+        assert!(previous.dropped_seconds > 0.0);
+        assert!(transport - previous.simulation_time - previous.dropped_seconds < TICK + 1e-9);
     }
 
     /// A state reset restarts once in a new epoch while the transport runs on.

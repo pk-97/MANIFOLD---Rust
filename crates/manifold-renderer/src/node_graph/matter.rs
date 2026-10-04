@@ -357,9 +357,10 @@ mod tests {
             let mut schedule = Vec::new();
             for frame in 0..=120 / stride {
                 let accepted = clock.advance(f64::from(frame * stride) * TICK, TICK, 1.0, 0.0, false, true);
-                let substeps = substeps_for_interval(accepted.duration().0 as f32, 34);
                 for i in 0..accepted.ticks {
-                    let dt = substep_duration(accepted.interval(u64::from(i)).unwrap().duration().0 as f32, substeps);
+                    let interval = accepted.interval(u64::from(i)).unwrap().duration().0 as f32;
+                    let substeps = substeps_for_interval(interval, 34);
+                    let dt = substep_duration(interval, substeps);
                     schedule.push((substeps, dt.to_bits()));
                 }
             }

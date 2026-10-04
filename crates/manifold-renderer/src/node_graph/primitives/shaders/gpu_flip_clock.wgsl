@@ -10,7 +10,7 @@
 struct ReduceParams {
     count: u32,
     mode: u32,
-    _pad0: u32,
+    phase: u32, // 0: before scheduling; 1: post-step marker cleanup.
     _pad1: u32,
 };
 
@@ -109,6 +109,7 @@ fn reduce_group(lid: u32, count: u32, value: f32, bad: u32) -> vec4<f32> {
 @compute @workgroup_size(64)
 fn reduce_marker(@builtin(local_invocation_id) local: vec3<u32>,
                  @builtin(workgroup_id) group: vec3<u32>) {
+    if !reduction_active(marker_reduce_params.phase) { return; }
     let lid = local.x;
     let gid = group.x;
     let idx = gid * 64u + lid;
@@ -137,11 +138,7 @@ fn reduce_marker(@builtin(local_invocation_id) local: vec3<u32>,
 // Port of FluidSimulation::_getMarkerParticleSpeedLimit's histogram and
 // relative-outlier counts. Classification is a separate ordered pass because
 // the thresholds depend on the reduced maximum marker speed.
-@compute @workgroup_size(64)
-fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if marker_clock_plan[0].live_mode == 0u || marker_clock_plan[0].step_dt <= 0.0 {
-        return;
-    }
+fn classify_marker_lane(gid: vec3<u32>) {
     let idx = gid.x;
     if idx >= marker_reduce_params.count {
         return;
@@ -159,13 +156,37 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
         speed_limit_duration(marker_clock_params);
     let bin = min(u32(floor(speed / speed_limit_step)),
         max(marker_clock_params.max_frame_steps, 1u) - 1u);
-    atomicAdd(&marker_histogram_atomic[bin], 1u);
+    atomicAdd(&classifier_local[bin], 1u);
     let maximum = partial_values[0].x;
     if speed >= 0.90 * maximum && speed < 0.99999 * maximum {
-        atomicAdd(&marker_outliers_atomic[0], 1u);
+        atomicAdd(&classifier_local[64], 1u);
     }
     if speed >= 0.99999 * maximum {
-        atomicAdd(&marker_outliers_atomic[1], 1u);
+        atomicAdd(&classifier_local[65], 1u);
+    }
+}
+
+// Aggregate exact integer counts within each workgroup before touching the
+// shared histogram. All lanes, including invalid/tail records, reach barriers.
+
+var<workgroup> classifier_local: array<atomic<u32>, 66>;
+@compute @workgroup_size(64)
+fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>,
+                   @builtin(local_invocation_index) lane: u32) {
+    if marker_clock_plan[0].live_mode == 0u || marker_clock_plan[0].step_dt <= 0.0 {
+        return;
+    }
+    for (var word = lane; word < 66u; word += 64u) {
+        atomicStore(&classifier_local[word], 0u);
+    }
+    workgroupBarrier();
+    classify_marker_lane(gid);
+    workgroupBarrier();
+    let count = atomicLoad(&classifier_local[lane]);
+    if count != 0u { atomicAdd(&marker_histogram_atomic[lane], count); }
+    if lane < 2u {
+        let outliers = atomicLoad(&classifier_local[64u + lane]);
+        if outliers != 0u { atomicAdd(&marker_outliers_atomic[lane], outliers); }
     }
 }
 
@@ -289,6 +310,7 @@ fn coupled_body_speed(body: BodyVertex) -> vec2<f32> {
 @compute @workgroup_size(64)
 fn reduce_body(@builtin(local_invocation_id) local: vec3<u32>,
                @builtin(workgroup_id) group: vec3<u32>) {
+    if !reduction_active(body_reduce_params.phase) { return; }
     let lid = local.x;
     let gid = group.x;
     let idx = gid * 64u + lid;
@@ -326,9 +348,18 @@ fn reduce_body(@builtin(local_invocation_id) local: vec3<u32>,
 @group(0) @binding(26) var<uniform> event_field: EventFieldParams;
 @group(0) @binding(27) var<storage, read> event_impulses: array<f32>;
 
+// Uniform across every workgroup, so inactive slots return before any barrier.
+// The final active step has no remaining time but still needs marker cleanup.
+fn reduction_active(phase: u32) -> bool {
+    let state = marker_clock_plan[0];
+    return state.live_mode == 0u ||
+        select(state.remaining > 0.0, state.step_dt > 0.0, phase == 1u);
+}
+
 @compute @workgroup_size(64)
 fn reduce_partial(@builtin(local_invocation_id) local: vec3<u32>,
                   @builtin(workgroup_id) group: vec3<u32>) {
+    if !reduction_active(partial_params.phase) { return; }
     let lid = local.x;
     let gid = group.x;
     let idx = gid * 64u + lid;

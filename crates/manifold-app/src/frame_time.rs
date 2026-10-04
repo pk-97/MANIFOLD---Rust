@@ -1,22 +1,29 @@
-//! `manifold frame-time <project.manifold> --frames N [--resolution R]
+//! `manifold frame-time <project.manifold> --frames N [--frame-clock] [--resolution R]
 //! [--solve-level L] [--sim-rate HZ] [--stamp-every K] [--splash-frames S] [--png-frame T --png <path>]` —
 //! the whole frame of a real project the way the app runs it: the
 //! production loader, the headless content thread, the project's own frame
-//! rate and output size, from the clip's start. Every frame reports what
-//! Peter's FPS counter sees (the wall interval between ticks) and the GPU
-//! surface wait; every `K`th frame also carries per-dispatch GPU timestamps
+//! rate and output size, from the clip's start. By default it uses production
+//! pacing and reports the wall interval between ticks and the GPU surface
+//! wait. `--frame-clock` advances exactly one project frame per tick without
+//! real-time pacing and waits for GPU completion after every tick, including
+//! coupled reactions. Its wall sample is tick plus GPU fence, never window
+//! FPS. Plain GPU time is the sum of the Generators and Compositor command-
+//! buffer spans, each from its first chunk's start to its last chunk's end.
+//! Every `K`th frame also carries per-dispatch GPU timestamps
 //! split per node type, per dispatch label inside the solver and the
 //! whitewater, and per pass label inside render_scene. Timestamped frames
 //! open one encoder per dispatch with encode replay off, so their split is a
 //! ratio, never the budget. `--stamp-granularity node` keeps one sampled
-//! encoder per graph step instead, so the per-node-type table is the plain
-//! frame's breakdown (replay still off; the inner tables are then empty).
-//! A timestamped frame waits for its GPU work, a plain frame does not, and
+//! encoder per graph step instead (replay still off; inner labels are grouped).
+//! A build with `manifold-renderer/water-race-probes` uses the solver's
+//! existing stage tags to subdivide GPU FLIP preparation, solves and movement.
+//! In paced mode a timestamped frame waits for its GPU work, a plain frame
+//! does not, and
 //! a liquid coupled to a body runs no tick while the last tick's reaction
 //! is in flight: with plain and timestamped frames interleaved on such a
 //! project the timestamped frames skip the step once the plain frame's GPU
 //! work outlasts the tick interval (every one of them at 128). Measure a
-//! coupled project with `--stamp-every 1`.
+//! coupled project with `--stamp-every 1` or use `--frame-clock`.
 //! The first `S` frames are the splash, the rest
 //! the calm; both tables print. `--resolution` and `--solve-level` override
 //! the GPU FLIP generator's `resolution` and `solve_level` cards in memory,
@@ -27,7 +34,8 @@
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-use manifold_gpu::ProfileGranularity;
+use manifold_gpu::{GpuFrameProfile, GpuWorkKind, ProfileGranularity};
+use manifold_renderer::node_graph::StepProfile;
 
 use crate::content_command::ContentCommand;
 use crate::perf_soak::{prepare_project_edited, PreparedProject};
@@ -45,6 +53,7 @@ const MAX_SPANS: usize = 65536;
 struct Args {
     project: String,
     frames: usize,
+    frame_clock: bool,
     resolution: Option<f32>,
     solve_level: Option<f32>,
     sim_rate: Option<manifold_core::settings::SimRate>,
@@ -57,7 +66,7 @@ struct Args {
 fn usage_exit(msg: &str) -> ! {
     eprintln!("frame-time: {msg}");
     eprintln!(
-        "usage: manifold frame-time <project.manifold> --frames N [--resolution R] [--solve-level L] [--sim-rate 15|20|30|60] \
+        "usage: manifold frame-time <project.manifold> --frames N [--frame-clock] [--resolution R] [--solve-level L] [--sim-rate 15|20|30|60] \
          [--stamp-every K] [--stamp-granularity dispatch|node] [--splash-frames S] \
          [--png-frame T --png <path>]"
     );
@@ -89,6 +98,7 @@ fn parse(args: &[String]) -> Args {
         }
     };
     let frames = number("--frames", None);
+    let frame_clock = args.iter().any(|arg| arg == "--frame-clock");
     let stamp_every = number("--stamp-every", Some(5)).max(1);
     let granularity = granularity(value(args, "--stamp-granularity").as_deref()).unwrap_or_else(|e| usage_exit(&e));
     let splash_frames = number("--splash-frames", Some(frames / 2));
@@ -105,12 +115,20 @@ fn parse(args: &[String]) -> Args {
         (Some(_), None) | (None, Some(_)) => usage_exit("--png-frame and --png go together"),
         (Some(_), Some(path)) => Some((number("--png-frame", None), path)),
     };
-    Args { project, frames, resolution, solve_level, sim_rate, stamp_every, granularity, splash_frames, png }
+    Args { project, frames, frame_clock, resolution, solve_level, sim_rate, stamp_every, granularity, splash_frames, png }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frame_clock_flag_defaults_off_and_parses() {
+        let mut args: Vec<String> = ["frame-time", "water.manifold", "--frames", "2"].into_iter().map(str::to_owned).collect();
+        assert!(!parse(&args).frame_clock);
+        args.push("--frame-clock".into());
+        assert!(parse(&args).frame_clock);
+    }
 
     #[test]
     fn stamp_granularity_flag_parses() {
@@ -119,15 +137,80 @@ mod tests {
         assert_eq!(granularity(Some("node")), Ok(ProfileGranularity::Tag));
         assert!(granularity(Some("step")).is_err());
     }
+
+    #[test]
+    fn explicit_flip_stage_tags_keep_their_solver_attribution() {
+        let span = manifold_gpu::GpuProfiledSpan {
+            tag: "gpu_flip.stage.pressure".into(),
+            label: "first dispatch in grouped encoder".into(),
+            kind: GpuWorkKind::Compute,
+            millis: 2.5,
+            start_ms: 0.0,
+            threadgroup_bytes: 0,
+        };
+        let profiles = [("Generators", GpuFrameProfile { spans: vec![span], ..GpuFrameProfile::default() })];
+        let split = split_profiles(&[], &profiles, ProfileGranularity::Tag);
+        assert_eq!(split.per_type[STEP], 2.5);
+        assert_eq!(split.per_step_label["gpu_flip.stage.pressure"], 2.5);
+        assert!(split.compute_dispatches.is_none(), "a stage span is not one dispatch");
+    }
+
+    #[test]
+    fn duplicate_profile_tags_sum_cpu_preparation_and_only_dispatch_mode_counts_compute() {
+        use manifold_gpu::GpuProfiledSpan;
+        use manifold_renderer::node_graph::NodeInstanceId;
+
+        let steps: Vec<_> = [1_000_000, 2_000_000].into_iter().map(|cpu_nanos| StepProfile {
+            step_idx: 0,
+            node: NodeInstanceId(1),
+            type_id: STEP.into(),
+            cpu_nanos,
+            tag: "water:s0".into(),
+        }).collect();
+        let spans = [GpuWorkKind::Compute, GpuWorkKind::Compute, GpuWorkKind::Blit].into_iter().map(|kind| GpuProfiledSpan {
+            tag: "water:s0".into(),
+            label: "pass".into(),
+            kind,
+            threadgroup_bytes: 0,
+            start_ms: 0.0,
+            millis: 0.5,
+        }).collect();
+        let profiles = [("Generators", GpuFrameProfile { total_ms: 2.0, spans, invalid: 1, ..GpuFrameProfile::default() })];
+        let dispatch = split_profiles(&steps, &profiles, ProfileGranularity::Dispatch);
+        assert_eq!(dispatch.per_type_cpu_ms[STEP], 3.0);
+        assert_eq!(dispatch.per_type[STEP], 1.5);
+        assert_eq!(dispatch.compute_dispatches.as_ref().unwrap()[STEP], 2);
+        assert_eq!(dispatch.invalid, 1);
+        let mut phase = Phase::default();
+        phase.add(&Frame { interval_ms: 4.0, fence_ms: 0.0, plain_gpu_ms: None, split: Some(dispatch) });
+        assert_eq!(phase.per_type_cpu_ms[STEP], vec![3.0]);
+        assert_eq!(phase.compute_dispatches[STEP], vec![2.0]);
+        assert_eq!(phase.dispatch_frames, 1);
+        assert_eq!(phase.invalid, 1);
+        let idle = split_profiles(&steps, &[], ProfileGranularity::Dispatch);
+        phase.add(&Frame { interval_ms: 4.0, fence_ms: 0.0, plain_gpu_ms: None, split: Some(idle) });
+        assert_eq!(phase.compute_dispatches[STEP], vec![2.0, 0.0]);
+        assert_eq!(phase.dispatch_frames, 2);
+
+        let tagged = split_profiles(&steps, &profiles, ProfileGranularity::Tag);
+        assert_eq!(tagged.per_type_cpu_ms[STEP], 3.0);
+        assert_eq!(tagged.per_type[STEP], 1.5);
+        assert!(tagged.compute_dispatches.is_none());
+        let mut phase = Phase::default();
+        phase.add(&Frame { interval_ms: 4.0, fence_ms: 0.0, plain_gpu_ms: None, split: Some(tagged) });
+        assert_eq!(phase.per_type_cpu_ms[STEP], vec![3.0]);
+        assert!(phase.compute_dispatches.is_empty());
+        assert_eq!(phase.dispatch_frames, 0);
+    }
 }
 
-/// One frame's numbers. Every frame has the wall interval and the surface
-/// wait; a timestamped frame also has its split.
+/// One frame's numbers: paced tick interval/surface wait, or fixed-clock
+/// tick plus fence/completion wait. A timestamped frame also has its split.
 struct Frame {
     interval_ms: f64,
     fence_ms: f64,
-    /// Plain (unprofiled) frames only: true GPU ms of the Generators and
-    /// Compositor command buffers, from their completion handlers.
+    /// Plain frames only: Generators and Compositor command-buffer spans,
+    /// from their completion handlers, including gaps between their chunks.
     plain_gpu_ms: Option<(f64, f64)>,
     split: Option<Split>,
 }
@@ -159,7 +242,12 @@ struct Split {
     /// Whole command buffers (Generators + Compositor), GPU ms.
     total_ms: f64,
     overflow: usize,
+    invalid: usize,
     per_type: BTreeMap<String, f64>,
+    /// Profiled graph-step preparation: acquire, encode and scalar drains.
+    per_type_cpu_ms: BTreeMap<String, f64>,
+    /// Tag-granularity compute spans can contain multiple dispatches.
+    compute_dispatches: Option<BTreeMap<String, u64>>,
     per_step_label: BTreeMap<String, f64>,
     per_whitewater_label: BTreeMap<String, f64>,
     per_render_label: BTreeMap<String, f64>,
@@ -196,7 +284,11 @@ struct Phase {
     plain_total: Vec<f64>,
     stamped_total: Vec<f64>,
     overflow: usize,
+    invalid: usize,
     per_type: BTreeMap<String, Vec<f64>>,
+    per_type_cpu_ms: BTreeMap<String, Vec<f64>>,
+    compute_dispatches: BTreeMap<String, Vec<f64>>,
+    dispatch_frames: usize,
     per_step: BTreeMap<String, Vec<f64>>,
     per_whitewater: BTreeMap<String, Vec<f64>>,
     per_render: BTreeMap<String, Vec<f64>>,
@@ -214,8 +306,10 @@ impl Phase {
         let Some(split) = &frame.split else { return };
         self.stamped_total.push(split.total_ms);
         self.overflow += split.overflow;
+        self.invalid += split.invalid;
         for (into, from) in [
             (&mut self.per_type, &split.per_type),
+            (&mut self.per_type_cpu_ms, &split.per_type_cpu_ms),
             (&mut self.per_step, &split.per_step_label),
             (&mut self.per_whitewater, &split.per_whitewater_label),
             (&mut self.per_render, &split.per_render_label),
@@ -224,21 +318,37 @@ impl Phase {
                 into.entry(name.clone()).or_default().push(*ms);
             }
         }
+        if let Some(counts) = &split.compute_dispatches {
+            self.dispatch_frames += 1;
+            // A type with no compute span in this sampled frame dispatched zero.
+            for samples in self.compute_dispatches.values_mut() {
+                samples.push(0.0);
+            }
+            for (name, count) in counts {
+                let samples = self.compute_dispatches.entry(name.clone())
+                    .or_insert_with(|| vec![0.0; self.dispatch_frames]);
+                *samples.last_mut().expect("the current dispatch frame has a count slot") = *count as f64;
+            }
+        }
     }
 
-    fn report(&self, name: &str) {
+    fn report(&self, name: &str, frame_clock: bool) {
         println!("== {name} ==");
+        let (wall_label, wait_label, rate_note) = if frame_clock {
+            ("tick + GPU fence", "post-tick GPU completion wait", String::new())
+        } else {
+            ("tick interval", "GPU surface wait", format!(" (fps p50 {:.1})", 1000.0 / percentile(&self.interval, 0.5)))
+        };
         println!(
-            "  frames ({}): tick interval p50 {:.2} ms p95 {:.2} ms (fps p50 {:.1}) | GPU surface wait p50 {:.2} ms p95 {:.2} ms",
+            "  frames ({}): {wall_label} p50 {:.2} ms p95 {:.2} ms{rate_note} | {wait_label} p50 {:.2} ms p95 {:.2} ms",
             self.interval.len(),
             percentile(&self.interval, 0.5),
             percentile(&self.interval, 0.95),
-            1000.0 / percentile(&self.interval, 0.5),
             percentile(&self.fence, 0.5),
             percentile(&self.fence, 0.95),
         );
         println!(
-            "  plain frames ({}): true GPU ms  total p50 {:.2} p95 {:.2} max {:.2} | generators p50 {:.2} p95 {:.2} | compositor p50 {:.2} p95 {:.2}",
+            "  plain frames ({}): command-buffer GPU spans, ms  sum p50 {:.2} p95 {:.2} max {:.2} | generators p50 {:.2} p95 {:.2} | compositor p50 {:.2} p95 {:.2}",
             self.plain_total.len(),
             percentile(&self.plain_total, 0.5),
             percentile(&self.plain_total, 0.95),
@@ -249,22 +359,43 @@ impl Phase {
             percentile(&self.plain_compositor, 0.95),
         );
         println!(
-            "  timestamped frames ({}): whole-buffer GPU p50 {:.2} ms p95 {:.2} ms, sampler overflow {}",
+            "  timestamped frames ({}): whole-buffer GPU p50 {:.2} ms p95 {:.2} ms, sampler overflow {}, invalid spans {}",
             self.stamped_total.len(),
             percentile(&self.stamped_total, 0.5),
             percentile(&self.stamped_total, 0.95),
             self.overflow,
+            self.invalid,
         );
-        if self.overflow > 0 {
+        if self.overflow > 0 || self.invalid > 0 {
             println!(
-                "  WARNING: {} spans did not fit the sampler; every per-node and per-dispatch table below is missing the frames' last dispatches",
-                self.overflow
+                "  WARNING: {} spans did not fit the sampler and {} spans had invalid samples; GPU span timing and dispatch-count tables below are incomplete",
+                self.overflow,
+                self.invalid,
             );
         }
         print_split("per node type", &self.per_type);
-        print_split("gpu_flip_step per dispatch label", &self.per_step);
-        print_split("whitewater_step per dispatch label", &self.per_whitewater);
+        let (step_title, whitewater_title) = if self.dispatch_frames > 0 {
+            ("gpu_flip_step per dispatch label", "whitewater_step per dispatch label")
+        } else {
+            ("gpu_flip_step grouped encoder labels", "whitewater_step grouped encoder labels")
+        };
+        print_split(step_title, &self.per_step);
+        print_split(whitewater_title, &self.per_whitewater);
         print_split("render_scene per pass label", &self.per_render);
+        println!("  profiled CPU preparation per node type (acquire, encode, scalar drains; timestamped frames):");
+        let mut cpu_rows: Vec<_> = self.per_type_cpu_ms.iter().collect();
+        cpu_rows.sort_by(|a, b| percentile(b.1, 0.5).total_cmp(&percentile(a.1, 0.5)));
+        for (name, samples) in cpu_rows {
+            println!("    {name:<56} p50 {:>8.3} ms  p95 {:>8.3} ms", percentile(samples, 0.5), percentile(samples, 0.95));
+        }
+        if self.dispatch_frames > 0 {
+            println!("  sampled compute dispatch counts per node type ({} dispatch-granularity frames):", self.dispatch_frames);
+            let mut count_rows: Vec<_> = self.compute_dispatches.iter().collect();
+            count_rows.sort_by(|a, b| percentile(b.1, 0.5).total_cmp(&percentile(a.1, 0.5)));
+            for (name, samples) in count_rows {
+                println!("    {name:<56} p50 {:>8.0} dispatches  p95 {:>8.0} dispatches", percentile(samples, 0.5), percentile(samples, 0.95));
+            }
+        }
     }
 }
 
@@ -282,7 +413,7 @@ fn set_profiling(ct: &mut crate::content_thread::ContentThread, on: bool) {
 
 /// Join the frame's GPU spans back to their nodes, the way the frame probe
 /// in `gpu_flip_frame_perf.rs` does.
-fn split(ct: &mut crate::content_thread::ContentThread) -> Split {
+fn split(ct: &mut crate::content_thread::ContentThread, granularity: ProfileGranularity) -> Split {
     let gpu_profiles = ct.content_pipeline.take_gpu_profiles();
     let mut steps = ct.content_pipeline.take_step_profiles();
     for renderer in ct.engine.renderers_mut() {
@@ -293,17 +424,38 @@ fn split(ct: &mut crate::content_thread::ContentThread) -> Split {
             steps.extend(generator.take_step_profiles());
         }
     }
-    let types: BTreeMap<String, String> = steps.into_iter().map(|s| (s.tag, s.type_id)).collect();
-    let mut split = Split::default();
-    for (buffer, profile) in &gpu_profiles {
+    split_profiles(&steps, &gpu_profiles, granularity)
+}
+
+fn split_profiles(
+    steps: &[StepProfile],
+    gpu_profiles: &[(&str, GpuFrameProfile)],
+    granularity: ProfileGranularity,
+) -> Split {
+    let mut split = Split {
+        compute_dispatches: (granularity == ProfileGranularity::Dispatch).then(BTreeMap::new),
+        ..Split::default()
+    };
+    let mut types = BTreeMap::new();
+    for step in steps {
+        *split.per_type_cpu_ms.entry(step.type_id.clone()).or_insert(0.0) += step.cpu_nanos as f64 / 1e6;
+        types.insert(step.tag.as_str(), step.type_id.as_str());
+    }
+    for (buffer, profile) in gpu_profiles {
         split.total_ms += profile.total_ms;
         split.overflow += profile.overflow;
+        split.invalid += profile.invalid;
         for span in &profile.spans {
-            let Some(type_id) = types.get(&span.tag) else {
-                *split.per_type.entry(format!("(untagged, {buffer})")).or_insert(0.0) += span.millis;
-                continue;
+            // The opt-in water-race-probes build subdivides GPU FLIP's node
+            // tag into stages. Preserve those labels in real-project probes.
+            let stage = span.tag.starts_with("gpu_flip.stage.");
+            let type_id = if stage { STEP.to_owned() } else {
+                types.get(span.tag.as_str()).map_or_else(|| format!("(untagged, {buffer})"), |type_id| (*type_id).to_owned())
             };
             *split.per_type.entry(type_id.clone()).or_insert(0.0) += span.millis;
+            if span.kind == GpuWorkKind::Compute && let Some(counts) = &mut split.compute_dispatches {
+                *counts.entry(type_id.clone()).or_insert(0) += 1;
+            }
             let labelled = match type_id.as_str() {
                 STEP => Some(&mut split.per_step_label),
                 WHITEWATER => Some(&mut split.per_whitewater_label),
@@ -311,7 +463,7 @@ fn split(ct: &mut crate::content_thread::ContentThread) -> Split {
                 _ => None,
             };
             if let Some(labelled) = labelled {
-                let key = if type_id == RENDER { format!("{:?} {}", span.kind, span.label) } else { span.label.clone() };
+                let key = if stage { span.tag.clone() } else if type_id == RENDER { format!("{:?} {}", span.kind, span.label) } else { span.label.clone() };
                 *labelled.entry(key).or_insert(0.0) += span.millis;
             }
         }
@@ -346,6 +498,7 @@ pub fn run(args: &[String]) -> ! {
 }
 
 fn probe(args: &Args) -> Result<(), String> {
+    let initial_faults = manifold_gpu::gpu_fault::fault_count();
     let mut overridden = 0usize;
     let mut sim_rate = manifold_core::settings::SimRate::default();
     let PreparedProject { mut ct, cmd_tx, cmd_rx, state_tx, drain, width, height, frame_rate, .. } =
@@ -377,8 +530,13 @@ fn probe(args: &Args) -> Result<(), String> {
         + &args.solve_level.map_or(String::new(), |l| format!(", solve level {l}"))
         + &format!(", sim rate {} Hz", sim_rate.hz());
     let device_name = ct.content_pipeline.native_device().map_or("unknown".to_owned(), |d| d.device_name());
+    let mode = if args.frame_clock {
+        "frame clock, no pacing, completion wait every frame; wall = tick + GPU fence"
+    } else {
+        "real-time paced; wall = tick interval"
+    };
     println!(
-        "frame-time: {} at {width}x{height} @ {frame_rate} fps, {resolution_note}, {} frames, every {}th timestamped per {}, splash = first {} frames, on {device_name}",
+        "frame-time: {mode}; {} at {width}x{height} @ {frame_rate} project fps, {resolution_note}, {} frames, every {}th timestamped per {}, splash = first {} frames, on {device_name}",
         args.project,
         args.frames,
         args.stamp_every,
@@ -390,6 +548,7 @@ fn probe(args: &Args) -> Result<(), String> {
     );
     ct.content_pipeline.set_profiling_granularity(args.granularity);
 
+    ct.timer.set_frame_clocked(args.frame_clock);
     ct.timer.resume_after_load();
     ct.handle_command(ContentCommand::Play);
     let (gpu_time_tx, gpu_time_rx) = crossbeam_channel::unbounded::<(&'static str, f64, f64)>();
@@ -399,14 +558,32 @@ fn probe(args: &Args) -> Result<(), String> {
     for index in 0..args.frames {
         let stamped = index % args.stamp_every == args.stamp_every - 1;
         set_profiling(&mut ct, stamped);
-        if ct.run_paced_frame(&cmd_tx, &cmd_rx, &state_tx) {
-            return Err("shutdown requested mid-run".into());
+        let (interval_ms, fence_ms) = if args.frame_clock {
+            let start = Instant::now();
+            ct.timer.ensure_thread_policy();
+            objc2::rc::autoreleasepool(|_| ct.tick_frame(&state_tx));
+            let fence_start = Instant::now();
+            ct.content_pipeline.wait_for_render_complete();
+            // The live waiter may time out or wake early. Reuse the existing
+            // checked fence before accepting an equal-progress sample.
+            ct.content_pipeline.wait_for_export_complete(initial_faults)?;
+            let fence_ms = fence_start.elapsed().as_secs_f64() * 1e3;
+            (start.elapsed().as_secs_f64() * 1e3, fence_ms)
+        } else {
+            if ct.run_paced_frame(&cmd_tx, &cmd_rx, &state_tx) {
+                return Err("shutdown requested mid-run".into());
+            }
+            let now = Instant::now();
+            let interval_ms = now.duration_since(last).as_secs_f64() * 1e3;
+            last = now;
+            (interval_ms, ct.content_pipeline.last_fence_wait_ms())
+        };
+        let frame_split = stamped.then(|| split(&mut ct, args.granularity));
+        if args.frame_clock && let Some(split) = &frame_split
+            && (split.invalid != 0 || split.overflow != 0)
+        {
+            return Err(format!("frame {index}: incomplete GPU attribution ({} invalid, {} overflow)", split.invalid, split.overflow));
         }
-        let now = Instant::now();
-        let interval_ms = now.duration_since(last).as_secs_f64() * 1e3;
-        last = now;
-        let fence_ms = ct.content_pipeline.last_fence_wait_ms();
-        let frame_split = stamped.then(|| split(&mut ct));
         if let Some((at, path)) = &args.png
             && *at == index
         {
@@ -415,6 +592,7 @@ fn probe(args: &Args) -> Result<(), String> {
         frames.push(Frame { interval_ms, fence_ms, plain_gpu_ms: None, split: frame_split });
     }
     set_profiling(&mut ct, false);
+    ct.content_pipeline.wait_for_render_complete();
     ct.content_pipeline.set_gpu_time_tap(None);
     drop(state_tx);
     drain.join().map_err(|_| "drain thread panicked".to_string())?;
@@ -423,9 +601,10 @@ fn probe(args: &Args) -> Result<(), String> {
     // them in that same order. A frame is every Generators chunk, then every
     // Compositor chunk (chunking splits each encoder into several buffers);
     // a Generators chunk after a Compositor one starts the next frame. The
-    // chunks of one frame overlap on the GPU, so a frame's time is the span
-    // from its first start to its last end, not the sum of durations. Let
-    // the last buffers land before grouping.
+    // chunks of each encoder overlap on the GPU, so its time is the span
+    // from its first start to its last end, not the sum of chunk durations.
+    // The reported plain sum adds the two encoder spans. Allow completion
+    // handlers to deliver the final taps before grouping.
     std::thread::sleep(Duration::from_millis(500));
     let mut plain = frames.iter_mut().filter(|f| f.split.is_none());
     let (mut generators, mut compositor) = (Span::default(), Span::default());
@@ -447,10 +626,14 @@ fn probe(args: &Args) -> Result<(), String> {
     }
     let unpaired = frames.iter().filter(|f| f.split.is_none() && f.plain_gpu_ms.is_none()).count();
     if unpaired > 0 {
+        if args.frame_clock {
+            return Err(format!("{unpaired} fixed-clock frames got no GPU completion time"));
+        }
         println!("  WARNING: {unpaired} plain frames got no GPU completion time");
     }
 
-    println!("  per frame: wall interval ms / true GPU ms (* = timestamped: one encoder per dispatch, no plain GPU time):");
+    let wall_label = if args.frame_clock { "tick + GPU fence" } else { "wall interval" };
+    println!("  per frame: {wall_label} ms / command-buffer GPU span sum ms (* = timestamped, replay off, no plain GPU time):");
     for (row_index, row) in frames.chunks(8).enumerate() {
         let cells: Vec<String> = row
             .iter()
@@ -470,8 +653,8 @@ fn probe(args: &Args) -> Result<(), String> {
         whole.add(frame);
         if index < args.splash_frames { splash.add(frame) } else { calm.add(frame) }
     }
-    whole.report("whole run");
-    splash.report(&format!("splash (frames 0..{})", args.splash_frames));
-    calm.report(&format!("calm (frames {}..{})", args.splash_frames, args.frames));
+    whole.report("whole run", args.frame_clock);
+    splash.report(&format!("splash (frames 0..{})", args.splash_frames), args.frame_clock);
+    calm.report(&format!("calm (frames {}..{})", args.splash_frames, args.frames), args.frame_clock);
     Ok(())
 }

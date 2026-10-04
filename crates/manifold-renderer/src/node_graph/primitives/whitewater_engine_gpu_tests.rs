@@ -384,3 +384,48 @@ fn whitewater_engine_seam_publishes_accepted_substeps() {
         }
     }
 }
+
+#[test]
+fn whitewater_engine_seam_skips_inactive_grids_and_resumes_capture() {
+    use crate::node_graph::{fluid_particles::FaceSample, liquid::substep_history::SubstepHistory};
+    let mut h = Harness::new();
+    let faces = |velocity| vec![FaceSample { velocity, weight: [1.0; 4] }; 729];
+    let first = h.array(&faces([1.0, 2.0, 3.0, 0.0]), 729);
+    let poison = h.array(&faces([f32::NAN; 4]), 729);
+    let resumed = h.array(&faces([4.0, 5.0, 6.0, 0.0]), 729);
+    let active = h.array(&[0.01f32.to_bits(), 0.01f32.to_bits(), 0, 0, 0, 0, 0, 0], 8);
+    let inactive = h.array(&[0, 0.01f32.to_bits(), 0, 0, 0, 0, 0, 0x80000002], 8);
+    let mut history = SubstepHistory::default();
+    history.prepare(&h.device);
+    history.reserve(&h.device, [8; 3], 2).unwrap();
+    let held = std::array::from_fn::<_, 3, _>(|_| h.array::<f32>(&[], 1152));
+    let final_grids = std::array::from_fn::<_, 3, _>(|_| h.array::<f32>(&[], 1152));
+    let held_schedule = h.array::<u32>(&[], 8);
+    let mut enc = h.device.create_encoder("whitewater-engine-inactive-history");
+    history.capture(&mut enc, 0, &active.1, &first.1);
+    // An inactive row must neither read this poisoned grid nor overwrite a
+    // previous active capture. A never-active row starts with zero storage.
+    history.capture(&mut enc, 0, &inactive.1, &poison.1);
+    history.capture(&mut enc, 1, &inactive.1, &poison.1);
+    for (source, target) in history.faces.as_ref().unwrap().iter().zip(&held) {
+        enc.copy_buffer_to_buffer(source, &target.1, 1152 * 4);
+    }
+    enc.copy_buffer_to_buffer(history.schedule.as_ref().unwrap(), &held_schedule.1, 32);
+    history.capture(&mut enc, 0, &active.1, &resumed.1);
+    for (source, target) in history.faces.as_ref().unwrap().iter().zip(&final_grids) {
+        enc.copy_buffer_to_buffer(source, &target.1, 1152 * 4);
+    }
+    enc.commit_and_wait_completed();
+    assert_eq!(
+        read::<u32>(&held_schedule.1, 8),
+        [0, 0.01f32.to_bits(), 0x80000002, 0].repeat(2),
+    );
+    for axis in 0..3 {
+        let held_values = read::<f32>(&held[axis].1, 1152);
+        let final_values = read::<f32>(&final_grids[axis].1, 1152);
+        assert_eq!(held_values[..576], vec![axis as f32 + 1.0; 576]);
+        assert_eq!(final_values[..576], vec![axis as f32 + 4.0; 576]);
+        assert_eq!(held_values[576..], vec![0.0; 576]);
+        assert_eq!(final_values[576..], vec![0.0; 576]);
+    }
+}

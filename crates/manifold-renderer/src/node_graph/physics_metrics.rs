@@ -15,7 +15,7 @@ pub struct PhysicsMetrics {
     pub physics_cpu_ms: f32,
     /// Number of bodies evaluated across all physics worlds.
     pub body_count: u32,
-    /// Maximum unprocessed physics time across worlds, in seconds.
+    /// Maximum completion lag or freshly discarded time across worlds, in seconds.
     pub backlog_seconds: f32,
     pub sim_step_cap_hit: bool,
     pub sim_nonfinite: bool,
@@ -100,6 +100,57 @@ pub fn record_frame(physics_ms: f32, body_count: u32, pending_seconds: f32) {
 /// rigid bodies or their CPU cost. Submitted GPU endpoints are not completion.
 #[inline]
 pub fn record_simulation(target: f64, completed: f64, cap_hit: bool, nonfinite: bool) {
+    record_simulation_with_drop(target, completed, 0.0, cap_hit, nonfinite);
+}
+
+/// Converts one world's cumulative discarded time into a frame-local advisory.
+/// The owning state resets this history alongside its completion time on epoch reset.
+#[derive(Default)]
+pub struct DroppedTimeTracker {
+    previous_seconds: f64,
+}
+
+impl DroppedTimeTracker {
+    #[inline]
+    pub fn reset(&mut self) {
+        self.previous_seconds = 0.0;
+    }
+
+    #[inline]
+    pub fn record(
+        &mut self,
+        target: f64,
+        completed: f64,
+        dropped_seconds: f64,
+        cap_hit: bool,
+        nonfinite: bool,
+    ) {
+        let fresh_drop = if dropped_seconds.is_finite() {
+            let dropped_seconds = dropped_seconds.max(0.0);
+            let fresh = (dropped_seconds - self.previous_seconds).max(0.0);
+            self.previous_seconds = dropped_seconds;
+            fresh
+        } else {
+            0.0
+        };
+        record_simulation_with_drop(
+            target,
+            completed,
+            fresh_drop,
+            cap_hit || fresh_drop > 0.0,
+            nonfinite || !dropped_seconds.is_finite(),
+        );
+    }
+}
+
+#[inline]
+fn record_simulation_with_drop(
+    target: f64,
+    completed: f64,
+    fresh_drop: f64,
+    cap_hit: bool,
+    nonfinite: bool,
+) {
     if !RECORDING_ENABLED.with(Cell::get) {
         return;
     }
@@ -109,6 +160,7 @@ pub fn record_simulation(target: f64, completed: f64, cap_hit: bool, nonfinite: 
         if lag.is_finite() {
             current.backlog_seconds = current.backlog_seconds.max(lag.max(0.0) as f32);
         }
+        current.backlog_seconds = current.backlog_seconds.max(fresh_drop as f32);
         current.sim_step_cap_hit |= cap_hit;
         current.sim_nonfinite |= nonfinite || !lag.is_finite();
         metrics.set(current);
@@ -128,6 +180,95 @@ pub fn take_frame() -> PhysicsMetrics {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fresh_drop_warns_then_clears_without_hiding_completion_lag() {
+        let mut dropped = DroppedTimeTracker::default();
+        begin_frame();
+        dropped.record(2.0, 1.875, 0.5, false, false);
+        let metrics = take_frame();
+        assert_eq!(metrics.backlog_seconds, 0.5);
+        assert!(metrics.sim_step_cap_hit);
+        assert!(!metrics.sim_nonfinite);
+
+        begin_frame();
+        dropped.record(2.0, 1.875, 0.5, false, false);
+        let metrics = take_frame();
+        assert_eq!(metrics.backlog_seconds, 0.125);
+        assert!(!metrics.sim_step_cap_hit);
+        assert!(!metrics.sim_nonfinite);
+
+        begin_frame();
+        dropped.record(2.0, 2.0, 0.5, false, false);
+        assert_eq!(take_frame(), PhysicsMetrics::default());
+
+        begin_frame();
+        dropped.record(2.0, 2.0, 0.75, false, false);
+        let metrics = take_frame();
+        assert_eq!(metrics.backlog_seconds, 0.25);
+        assert!(metrics.sim_step_cap_hit);
+        assert!(!metrics.sim_nonfinite);
+    }
+
+    #[test]
+    fn world_drop_histories_are_independent_and_completion_lag_can_dominate() {
+        let mut first = DroppedTimeTracker::default();
+        let mut second = DroppedTimeTracker::default();
+        begin_frame();
+        first.record(2.0, 1.0, 0.25, false, false);
+        second.record(2.0, 2.0, 0.5, false, false);
+        let metrics = take_frame();
+        assert_eq!(metrics.backlog_seconds, 1.0);
+        assert!(metrics.sim_step_cap_hit);
+
+        begin_frame();
+        first.record(2.0, 2.0, 0.25, false, false);
+        second.record(2.0, 2.0, 0.5, false, false);
+        assert_eq!(take_frame(), PhysicsMetrics::default());
+    }
+
+    #[test]
+    fn epoch_reset_clears_dropped_counter_history() {
+        let mut dropped = DroppedTimeTracker::default();
+        begin_frame();
+        dropped.record(2.0, 2.0, 0.5, false, false);
+        take_frame();
+        dropped.reset();
+
+        begin_frame();
+        dropped.record(0.0, 0.0, 0.0, false, false);
+        assert_eq!(take_frame(), PhysicsMetrics::default());
+
+        begin_frame();
+        dropped.record(0.5, 0.5, 0.25, false, false);
+        let metrics = take_frame();
+        assert_eq!(metrics.backlog_seconds, 0.25);
+        assert!(metrics.sim_step_cap_hit);
+        assert!(!metrics.sim_nonfinite);
+    }
+
+    #[test]
+    fn cap_hit_is_advisory_and_nonfinite_diagnostics_survive() {
+        let mut dropped = DroppedTimeTracker::default();
+        begin_frame();
+        dropped.record(1.0, 1.0, 0.0, true, false);
+        let metrics = take_frame();
+        assert!(metrics.sim_step_cap_hit);
+        assert!(!metrics.sim_nonfinite);
+        assert_eq!(metrics.backlog_seconds, 0.0);
+
+        begin_frame();
+        dropped.record(f64::NAN, 1.0, 0.0, false, false);
+        assert!(take_frame().sim_nonfinite);
+
+        begin_frame();
+        dropped.record(1.0, 1.0, f64::INFINITY, false, false);
+        assert!(take_frame().sim_nonfinite);
+
+        begin_frame();
+        dropped.record(1.0, 1.0, 0.0, false, true);
+        assert!(take_frame().sim_nonfinite);
+    }
 
     #[test]
     fn live_interval_metrics_use_completed_time_and_aggregate_warnings() {

@@ -152,7 +152,10 @@ The new `blob_bounds` operation is a barriered maximum reduction (ADDING_PRIMITI
 exclusion 1). Inventory: existing `peak` reduces textures and cannot consume blob
 records; the sort supplies ranges but does not measure shaped-kernel reach.
 Both `particle_volume` and `lattice_bricks` consume the two-word reduction across
-all five presets. The field remains a codegen BufferGather atom. The bounds
+all five presets. Above 256 blobs, up to 256 workgroups reduce partial maxima,
+then one workgroup writes the same two words; a fixed 2048-byte scratch buffer
+is reused. Smaller inputs use one workgroup. Both paths overwrite the result
+when the population shrinks or becomes inactive. The field remains a codegen BufferGather atom. The bounds
 wire is required: a graph saved before it gets the shipped wiring at load
 (`graph_loader.rs` `wire_blob_bounds`), because recomputing the maximum per
 lattice node read the whole blob pool at every node (1.37 s a frame on a saved
@@ -160,6 +163,28 @@ lattice node read the whole blob pool at every node (1.37 s a frame on a saved
 displacement; its ABI size remains 48 bytes. Fill Pits retains its extra support
 and sparse smoothing/normal halo. Production borders use the solid field;
 `ParticleMesher::getPreviewMesh` alone invokes `_setScalarFieldSolidBorders`.
+
+Runtime preparation also supplies the existing brick scheduler to recognized
+legacy `WaterDamBreakGpuFlip` surface groups whose `liquid_volume` has no schedule.
+It copies the volume's exact inputs and settings and mirrors direct parameter
+bindings before modifier expansion and fusion, preserving saved Surface Detail
+offsets. It schedules only ParticleVolume; the authored smoothing and mesh paths
+are retained. Already wired graphs are unchanged. Custom group aliases targeting
+shared volume parameters, ambiguous inputs and missing required arrays retain
+their dense path. Missing bounds still use the loader's shared reduction repair.
+
+With Centre Smoothing 0, Stretch 1 and Isolated Droplet Scale 1, shaped kernels
+are fixed spheres independent of neighbours. The shape shader writes those
+spheres directly; other settings retain the neighbour gathers. A GPU proof
+compares every output word against the original gather across varied radii,
+populated and isolated particles, boundary positions and inactive capacity.
+
+ParticleVolume narrows its symmetric bin window to the world-space support
+endpoints, rounded outwards for f32 coordinate and bin arithmetic. It retains
+the native support box, centre-displacement and interpolation margins, and the
+order of contributing blobs. Exact GPU comparisons against the original search
+cover shifted kernels, bin/support boundaries, translated rectangular domains,
+three refinement scales and the expanded Fill Pits band.
 
 Derived artifacts: the source Liquid Surface group has **33 nodes**; all other
 four water surface groups copy it. The builder regenerates the rest of
@@ -421,9 +446,11 @@ brick dimensions xyz, reserved), N mask words and N compact-list slots.
 Volume, smoothing, solid clamp and triangle counting keep their dense storage
 and freeze body arithmetic. Generated index mapping dispatches active bricks;
 an exterior pass writes inactive slots every frame, which also clears retired
-bricks. Volume exterior is `cell_size / 3`; each smoothing axis applies the
+bricks. Volume exterior starts at three times the largest blob radius plus
+the expanded distance band, then applies the same interior and solid rules
+as the dense field. Each smoothing axis applies the
 original ordered binomial sum to its constant exterior input. Copying the band
-would lose f32 bits. Clamp restores the original border band, and exterior
+would lose f32 bits. Clamp applies the production solid rule, and exterior
 cells count zero triangles. Capacity padding keeps the pre-existing pass-through
 rules. The WaterDamBreakGpuFlip group wires one schedule through mesh emission and
 both relaxation passes too, and binds its refinement to Surface Detail.
