@@ -169,9 +169,7 @@ pub(crate) fn scratch_bytes(cells: [u32; 3], slots: u64, ring_max: u32) -> u64 {
 #[cfg(any(test, feature = "gpu-proofs"))]
 fn mask_saved_bytes(cells: [u32; 3], slots: u64) -> u64 {
     slots * size_of::<FluidParticle>() as u64
-        + face_bytes(cells)
         + cell_bytes(cells)
-        + ZERO_BYTES
         + (slots * 8 + u64::from(SOLVER_WORDS) * 4)
 }
 
@@ -679,9 +677,7 @@ pub(crate) struct StepState {
     faces: Option<GpuBuffer>,
     /// [`ZERO_BYTES`] zero bytes bound where an optional input is unwired.
     saved_particles: Option<GpuBuffer>,
-    saved_faces: Option<GpuBuffer>,
     saved_distance: Option<GpuBuffer>,
-    saved_reaction: Option<GpuBuffer>,
     saved_capped: Option<GpuBuffer>,
     saved_narrow_phi: Option<GpuBuffer>,
     saved_narrow_faces: Option<GpuBuffer>,
@@ -1058,14 +1054,6 @@ impl StepState {
         {
             self.saved_particles = Some(allocate(device, saved_particle_bytes)?);
         }
-        let saved_face_bytes = face_bytes(cells);
-        if self
-            .saved_faces
-            .as_ref()
-            .is_none_or(|buffer| buffer.size < saved_face_bytes)
-        {
-            self.saved_faces = Some(allocate(device, saved_face_bytes)?);
-        }
         let saved_distance_bytes = cell_bytes(cells);
         if self
             .saved_distance
@@ -1073,13 +1061,6 @@ impl StepState {
             .is_none_or(|buffer| buffer.size < saved_distance_bytes)
         {
             self.saved_distance = Some(allocate(device, saved_distance_bytes)?);
-        }
-        if self
-            .saved_reaction
-            .as_ref()
-            .is_none_or(|buffer| buffer.size < ZERO_BYTES)
-        {
-            self.saved_reaction = Some(allocate(device, ZERO_BYTES)?);
         }
         let saved_capped_bytes = slots.max(1) * 8 + u64::from(SOLVER_WORDS) * 4;
         if self
@@ -2584,13 +2565,9 @@ impl Primitive for GpuFlipStep {
                         .expect("particle mask prepared"),
                     "gpu_flip.step.mask.particles",
                 );
-                self.state.commit_mask(
-                    gpu.native_enc,
-                    &plan_buffer,
-                    self.state.faces.as_ref().expect("face mask prepared"),
-                    self.state.saved_faces.as_ref().expect("face mask prepared"),
-                    "gpu_flip.step.mask.faces",
-                );
+                // Public faces and body reactions already gate every write
+                // on the actual clock plan. Inactive slots leave them intact;
+                // they need neither an active-step backup nor a restore pass.
                 self.state.commit_mask(
                     gpu.native_enc,
                     &plan_buffer,
@@ -2600,16 +2577,6 @@ impl Primitive for GpuFlipStep {
                         .as_ref()
                         .expect("distance mask prepared"),
                     "gpu_flip.step.mask.distance",
-                );
-                self.state.commit_mask(
-                    gpu.native_enc,
-                    &plan_buffer,
-                    step.reaction,
-                    self.state
-                        .saved_reaction
-                        .as_ref()
-                        .expect("reaction mask prepared"),
-                    "gpu_flip.step.mask.reaction",
                 );
                 self.state.commit_mask(
                     gpu.native_enc,
