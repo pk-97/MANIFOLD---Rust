@@ -1381,15 +1381,17 @@ impl StepState {
             let nb_pipes = self.narrow.pipes.as_ref().ok_or("narrow-band pipelines were not prepared")?;
             let ranges = self.sorter.ranges().ok_or("the cell ranges were not reserved")?;
             if narrow_initial {
+                // Dense narrow-band indexing bypasses the tile list at runtime,
+                // but the compiled shader still requires its buffer binding.
                 enc.dispatch_compute(
                     &pipes.band_distance,
-                    &[uniform(&base), buffer(1, ranges), buffer(2, sorted), buffer(5, &l.phi), buffer(45, &nb.mask)],
+                    &[uniform(&base), buffer(1, ranges), buffer(2, sorted), buffer(5, &l.phi), buffer(29, &tiles.by_ring), buffer(45, &nb.mask), buffer(46, step.clock_plan)],
                     cells_groups,
                     "gpu_flip.step.narrow.initialize_distance",
                 );
                 enc.dispatch_compute(
                     &pipes.band_gather,
-                    &[uniform(&base), buffer(1, ranges), buffer(2, sorted), buffer(4, &l.g), buffer(45, &nb.mask)],
+                    &[uniform(&base), buffer(1, ranges), buffer(2, sorted), buffer(4, &l.g), buffer(29, &tiles.by_ring), buffer(45, &nb.mask), buffer(46, step.clock_plan)],
                     face_groups,
                     "gpu_flip.step.narrow.initialize_gather",
                 );
@@ -1550,13 +1552,11 @@ impl StepState {
             );
         }
         let over_c = |enc: &mut GpuEncoder, pipeline: &GpuComputePipeline, bindings: Vec<GpuBinding<'_>>, threads: [u32; 3], label: &str| {
+            let mut bound = vec![uniform(&base), buffer(29, &tiles.by_ring), buffer(46, step.clock_plan)];
+            bound.extend(bindings);
             if step.narrow_enabled {
-                let mut bound = vec![uniform(&base), buffer(46, step.clock_plan)];
-                bound.extend(bindings);
                 enc.dispatch_compute(pipeline, &bound, threads, label);
             } else {
-                let mut bound = vec![uniform(&base), buffer(29, &tiles.by_ring), buffer(46, step.clock_plan)];
-                bound.extend(bindings);
                 enc.dispatch_compute_indirect(pipeline, &bound, &tiles.args, 0, label);
             }
         };

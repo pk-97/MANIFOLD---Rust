@@ -855,6 +855,11 @@ fn gpu_flip_faces_to_particles_blends_flip_and_moves_by_rk3() {
     let got: Vec<FluidParticle> = pass
         .bind(2, &particles)
         .bind(3, &faces)
+        // Metal requires the conditional solid/region resources even with zero counts.
+        .bind(9, &vec![0.0_f32; face_len()])
+        .bind(15, &[LiquidShape::default()])
+        .bind(16, &[0_u32; 4])
+        .bind(36, &[LiquidBody::default()])
         .bind(17, &old)
         // Spread equal to the new faces: no density move.
         .bind(18, &faces)
