@@ -3193,24 +3193,40 @@ mod tests {
         let old = target_slots(0, FieldValue::uniform([2.0, 0.0, 0.0]).unwrap());
         let new = target_slots(0, FieldValue::uniform([-4.0, 0.0, 0.0]).unwrap());
 
+        // Compare the same accepted history without discarded wall time.
+        // The old field already advanced two live intervals before the edit;
+        // a paused edit must not replace that completed motion retroactively.
         let mut expected = RigidSimulation::default();
-        advance_targeted(&mut expected, bodies.clone(), None, 0.0, [0.0; 3], &empty);
-        advance_targeted(&mut expected, bodies.clone(), None, 0.5, [0.0; 3], &new);
-        advance_targeted(&mut expected, bodies.clone(), None, 0.75, [0.0; 3], &new);
+        {
+            let _offline = PhysicsStepScope::for_render(true);
+            advance_targeted(&mut expected, bodies.clone(), None, 0.0, [0.0; 3], &empty);
+            advance_targeted(&mut expected, bodies.clone(), None, 2.0 * FRAME, [0.0; 3], &old);
+            advance_targeted(&mut expected, bodies.clone(), None, 2.0 * FRAME, [0.0; 3], &new);
+            advance_targeted(&mut expected, bodies.clone(), None, 4.0 * FRAME, [0.0; 3], &new);
+        }
 
         let mut edited = RigidSimulation::default();
         advance_targeted(&mut edited, bodies.clone(), None, 0.0, [0.0; 3], &empty);
         advance_targeted(&mut edited, bodies.clone(), None, 0.5, [0.0; 3], &old);
         let identity = edited.handles[0];
         let time_before_edit = edited.physics_time;
+        let pose_before_edit = edited.poses;
+        let velocity = |simulation: &RigidSimulation| simulation.world.as_ref().unwrap()
+            .linear_velocity(simulation.handles[0].unwrap()).unwrap();
+        let velocity_before_edit = velocity(&edited);
         advance_targeted(&mut edited, bodies.clone(), None, 0.5, [0.0; 3], &new);
         assert_eq!(edited.pending_time, Seconds::ZERO);
         assert_eq!(edited.physics_time, time_before_edit);
+        assert!((edited.physics_time - 2.0 * FRAME).abs() < 1e-12);
+        assert_eq!(edited.poses, pose_before_edit);
+        assert_eq!(velocity(&edited), velocity_before_edit);
         assert_eq!(edited.handles[0], identity);
         advance_targeted(&mut edited, bodies, None, 0.75, [0.0; 3], &new);
 
         assert_eq!(edited.pending_time, Seconds::ZERO);
+        assert!((edited.physics_time - 4.0 * FRAME).abs() < 1e-12);
         assert_eq!(edited.poses, expected.poses, "paused edit changed the accepted endpoint");
+        assert_eq!(velocity(&edited), velocity(&expected));
     }
 
     fn varying_gravity(sample: usize) -> [f32; 3] {
