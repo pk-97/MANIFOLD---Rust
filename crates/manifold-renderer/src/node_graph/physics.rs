@@ -2926,7 +2926,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(simulation.pending_time, Seconds::ZERO);
-        assert!((simulation.physics_time - 1.0).abs() < 1e-12);
+        assert!((simulation.physics_time - 4.0 * FRAME).abs() < 1e-12);
         assert_ne!(simulation.poses[0], pose_before_edit);
     }
 
@@ -3309,7 +3309,7 @@ mod tests {
         assert_eq!(simulation.poses[0], pose_before_edit);
         simulation.advance(bodies, new_gravity, Seconds(1.0), 1.0, 0.0).unwrap();
         assert_eq!(simulation.pending_time, Seconds::ZERO);
-        assert!((simulation.physics_time - 1.0).abs() < 1e-12);
+        assert!((simulation.physics_time - 4.0 * FRAME).abs() < 1e-12);
         assert_ne!(simulation.poses[0], pose_before_edit);
     }
 
@@ -4031,7 +4031,7 @@ mod tests {
         simulation.advance(bodies, [0.0; 3], Seconds(0.5), 0.0, 0.0).unwrap();
         assert_eq!(simulation.pending_time, Seconds::ZERO);
         assert!((simulation.poses[0].pos[0] - 2.0).abs() < 1e-5);
-        assert!((simulation.physics_time - 0.5).abs() < 1e-12);
+        assert!((simulation.physics_time - 2.0 * FRAME).abs() < 1e-12);
     }
 
     #[test]
@@ -4221,7 +4221,10 @@ mod tests {
             let (position, physics_time, pending_time) = run(irregular);
             assert!(position.iter().all(|value| value.is_finite()));
             assert!(position.iter().any(|value| value.abs() > 0.01));
-            assert!((physics_time - 32.0 / 240.0).abs() < 1e-12);
+            // Authored samples retain the nonlinear path, but one late
+            // displayed frame accepts only two fixed intervals.
+            let accepted = if irregular { 2.0 * FRAME } else { 32.0 / 240.0 };
+            assert!((physics_time - accepted).abs() < 1e-12);
             assert_eq!(pending_time, Seconds::ZERO);
         }
     }
