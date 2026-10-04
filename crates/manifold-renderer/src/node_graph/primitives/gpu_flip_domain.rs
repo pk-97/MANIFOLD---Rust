@@ -395,7 +395,7 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("particle_capacity"), label: "Particle Capacity", ty: ParamType::Int, default: ParamValue::Float(0.0), range: None, enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "The GPU FLIP group's source of truth: ticks and epoch into node.liquid_state (the tick region's clock owner), the fill sites and the padded lattice into node.liquid_fill, gravity, forces, impulses, the field scalars (field_nodes_x/y/z, field_spacing, force_lattices, first_tick, impulse_tick), bodies, regions, region_count, shapes, atlas, dynamic_bodies and the padded lattice into every node.gpu_flip_step, reaction into the first step of the tick (each later step takes the one before's reaction_out), and the padded lattice with bodies, shapes and atlas into node.liquid_solid_distance, node.liquid_frame and node.face_sample_component; simulation_time, display_time and epoch into node.liquid_frame; particle_mass into node.liquid_stats; particle_capacity into node.liquid_fill. The domain box, Resolution and fill restart the liquid; gravity and Simulation Speed are live. Live runs at most three ticks per display frame and reports dropped time; export runs every tick.",
+    composition_notes: "The GPU FLIP group's source of truth: ticks and epoch into node.liquid_state (the tick region's clock owner), the fill sites and the padded lattice into node.liquid_fill, gravity, forces, impulses, the field scalars (field_nodes_x/y/z, field_spacing, force_lattices, first_tick, impulse_tick), bodies, regions, region_count, shapes, atlas, dynamic_bodies and the padded lattice into every node.gpu_flip_step, reaction into the first step of the tick (each later step takes the one before's reaction_out), and the padded lattice with bodies, shapes and atlas into node.liquid_solid_distance, node.liquid_frame and node.face_sample_component; simulation_time, display_time and epoch into node.liquid_frame; particle_mass into node.liquid_stats; particle_capacity into node.liquid_fill. The domain box, Resolution and fill restart the liquid; gravity and Simulation Speed are live. Live runs at most two fixed Sim Rate intervals per display frame and reports dropped time; export runs every interval.",
     examples: [],
     picker: { label: "GPU FLIP Domain", category: Atom },
     summary: "Sets up a GPU FLIP liquid: its box, resolution, starting fill, gravity and speed.",
@@ -773,7 +773,7 @@ impl GpuFlipDomain {
         }
         let dynamic_bodies = coupled_rows.iter().filter(|row| takes_reaction(row)).count();
         self.bodies
-            .prepare_clock_vertices(geometry.layout.min, geometry.layout.size);
+            .prepare_clock_vertices(geometry.layout.min, geometry.layout.size, 0);
         let mut display_time = frame.display_time;
         if let Some(owner) = &mut self.coupled.owner {
             if frame.ticks > 0 {
@@ -911,6 +911,23 @@ impl GpuFlipDomain {
         // completed every command that touched it, and the next reader is
         // encoded after this write.
         unsafe { bodies.write(offset, bytes) };
+        // The CFL samples must belong to the same accepted tick as its body
+        // rows. Reusing the first tick's world-space hull with the next tick's
+        // centre changes the angular point speed and leaves eligibility stale.
+        // This uses the existing coupled-tick fence; no additional wait.
+        self.bodies.prepare_clock_vertices(self.coupled.walls.min, self.coupled.walls.size, tick as usize);
+        for (port, vertices) in [
+            ("clock_obstacles", self.bodies.clock_obstacles()),
+            ("clock_sources", self.bodies.clock_sources()),
+        ] {
+            let buffer = self.body_buffers.output(port).ok_or_else(|| format!("GPU FLIP coupling: {port} is missing"))?;
+            let bytes = bytemuck::cast_slice(vertices);
+            if bytes.len() as u64 > buffer.size {
+                return Err(format!("GPU FLIP coupling: {port} outgrew its buffer"));
+            }
+            // SAFETY: the same completed fence and bounds check as body rows.
+            unsafe { buffer.write(0, bytes) };
+        }
         reaction.zero_fill();
         owner.set_pending(PendingTick { tick: exchange.pending.tick + u64::from(tick),
             interval: exchange.frame.interval(u64::from(tick)).expect("accepted exchange interval"), ..exchange.pending });

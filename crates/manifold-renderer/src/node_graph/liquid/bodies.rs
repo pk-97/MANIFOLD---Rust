@@ -275,11 +275,14 @@ impl LiquidBodies {
     /// control. So a collider that jumps between frames never splits the
     /// interval and sweeps through the water at the jump's speed. Sources
     /// always feed the first-substep prediction.
-    pub fn prepare_clock_vertices(&mut self, min: [f32; 3], size: [f32; 3]) {
+    /// `tick` selects the accepted tick's rows within this display frame.
+    pub fn prepare_clock_vertices(&mut self, min: [f32; 3], size: [f32; 3], tick: usize) {
         use crate::node_graph::primitives::gpu_flip_clock::GpuFlipBodyVertex;
         self.clock_obstacles.clear();
         self.clock_sources.clear();
         let coupling = !self.coupled.is_empty();
+        let body_offset = tick * self.count();
+        let region_offset = tick * self.region_count();
         let mut collider = 0;
         let mut region = 0;
         let mut append = |geometry: &PreparedFluidGeometry, scale: [f32; 3], row: LiquidBody, coupled: bool, source: bool, row_index: Option<usize>| {
@@ -331,15 +334,16 @@ impl LiquidBodies {
         for role in &self.roles {
             let rows = if role.kind == FluidRoleKind::Collider { &self.rows } else { &self.region_rows };
             let index = if role.kind == FluidRoleKind::Collider { let n = collider; collider += 1; n } else { let n = region; region += 1; n };
+            let offset = if role.kind == FluidRoleKind::Collider { body_offset } else { region_offset };
             let source = role.kind == FluidRoleKind::Inflow;
-            if let Some(&row) = rows.get(index)
+            if let Some(&row) = rows.get(offset + index)
                 && role.kind != FluidRoleKind::Outflow
                 && (source || coupling) {
                 append(&role.geometry, role.scale, row, false, source, None);
             }
         }
         for (index, geometry) in self.coupled.iter().enumerate() {
-            if let Some(&row) = self.rows.get(collider + index) {
+            if let Some(&row) = self.rows.get(body_offset + collider + index) {
                 append(geometry, [1.0; 3], row, true, false, Some(collider + index));
             }
         }
@@ -1065,7 +1069,7 @@ mod tests {
             let hulls = vec![LiquidBody::default(); coupled.len()];
             let rows = bodies.rows(first_tick(&frame), frame.ticks, &hulls).unwrap().to_vec();
             assert!((rows[0].linear_velocity[0] - 60.0).abs() < 1e-3, "the collider moves a metre a tick");
-            bodies.prepare_clock_vertices([-4.0; 3], [8.0; 3]);
+            bodies.prepare_clock_vertices([-4.0; 3], [8.0; 3], 0);
             assert_eq!(bodies.clock_sources().len(), 8, "the source counts with or without coupling");
             let obstacles = bodies.clock_obstacles();
             if coupled.is_empty() {
@@ -1076,6 +1080,77 @@ mod tests {
                 assert!(obstacles[8..].iter().all(|v| v.velocity[3] == 2.0), "the hull names its body row");
             }
         }
+    }
+
+    #[test]
+    fn liquid_clock_vertices_refresh_the_selected_coupled_tick() {
+        let geometry = cube();
+        let hulls = [cube(), cube()];
+        let roles_at = |time: f64| {
+            let tick = (time / TICK) as f32;
+            let source = FluidRole {
+                kind: FluidRoleKind::Inflow,
+                velocity: [1.0, -2.0, 0.5],
+                inherit_motion: 0.5,
+                ..collider(&geometry, [1.0 + tick, 0.0, 0.0], tick * 0.25).unwrap()
+            };
+            vec![
+                Some(source),
+                collider(&geometry, [0.5 * tick, 0.0, 0.0], tick * 0.5),
+                Some(FluidRole { kind: FluidRoleKind::Outflow, ..collider(&geometry, [0.0; 3], 0.0).unwrap() }),
+            ]
+        };
+        let coupled_row = |y, yaw: f32, shape| LiquidBody {
+            position_inv_mass: [0.5, y, -0.25, 1.0],
+            rotation: [0.0, (yaw * 0.5).sin(), 0.0, (yaw * 0.5).cos()],
+            linear_velocity: [1.0, -2.0, 3.0, 0.0],
+            angular_velocity: [0.0, 4.0, 0.0, 0.0],
+            accel_shape: [0.0, -9.81, 0.0, shape],
+            ..LiquidBody::default()
+        };
+        let initial = [coupled_row(-40.0, 0.0, 0.0), coupled_row(0.0, 0.0, 1.0)];
+        let moved = [coupled_row(0.0, 0.75, 0.0), coupled_row(-40.0, -0.5, 1.0)];
+        let mut grouped = LiquidBodies::with_regions();
+        let mut separate = LiquidBodies::with_regions();
+        for bodies in [&mut grouped, &mut separate] {
+            ready_coupled(bodies, &roles_at(0.0), &hulls);
+        }
+        let mut grouped_rig = Rig::default();
+        grouped_rig.frame(&mut grouped, 0.0, TICK, &roles_at);
+        let frame = grouped_rig.frame(&mut grouped, 2.0 * TICK, TICK, &roles_at);
+        assert_eq!(frame.ticks, 2);
+        grouped.rows(first_tick(&frame), frame.ticks, &initial).unwrap();
+        grouped.prepare_clock_vertices([-4.0; 3], [8.0; 3], 0);
+        let before_obstacles = grouped.clock_obstacles().to_vec();
+        let before_sources = grouped.clock_sources().to_vec();
+        assert!(before_obstacles[8..16].iter().all(|vertex| vertex.position[3] == 0.0));
+        assert!(before_obstacles[16..].iter().all(|vertex| vertex.position[3] == 1.0));
+        grouped.set_coupled_rows(1, &moved).unwrap();
+        grouped.prepare_clock_vertices([-4.0; 3], [8.0; 3], 1);
+
+        let mut separate_rig = Rig::default();
+        separate_rig.frame(&mut separate, 0.0, TICK, &roles_at);
+        let first = separate_rig.frame(&mut separate, TICK, TICK, &roles_at);
+        separate.rows(first_tick(&first), first.ticks, &initial).unwrap();
+        let second = separate_rig.frame(&mut separate, 2.0 * TICK, TICK, &roles_at);
+        assert_eq!(second.ticks, 1);
+        separate.rows(first_tick(&second), second.ticks, &moved).unwrap();
+        separate.prepare_clock_vertices([-4.0; 3], [8.0; 3], 0);
+
+        let obstacles = grouped.clock_obstacles();
+        assert_eq!(obstacles.len(), 24, "one collider and two coupled hulls");
+        assert_eq!(grouped.clock_sources().len(), 8, "the drain contributes no source vertices");
+        assert_eq!(bytemuck::cast_slice::<_, u32>(obstacles), bytemuck::cast_slice::<_, u32>(separate.clock_obstacles()));
+        assert_eq!(bytemuck::cast_slice::<_, u32>(grouped.clock_sources()), bytemuck::cast_slice::<_, u32>(separate.clock_sources()));
+        assert_ne!(bytemuck::cast_slice::<_, u32>(&before_obstacles[..8]), bytemuck::cast_slice::<_, u32>(&obstacles[..8]),
+            "the selected tick refreshes the moving collider");
+        assert_ne!(bytemuck::cast_slice::<_, u32>(&before_sources), bytemuck::cast_slice::<_, u32>(grouped.clock_sources()),
+            "the selected tick refreshes the moving source");
+        assert!(obstacles[8..16].iter().all(|vertex| vertex.position[3] == 1.0 && vertex.velocity[3] == 2.0),
+            "the entering hull is eligible and retains its relative body row");
+        assert!(obstacles[16..].iter().all(|vertex| vertex.position[3] == 0.0 && vertex.velocity[3] == 3.0),
+            "the leaving hull is ineligible and retains its relative body row");
+        assert!(grouped.clock_sources().iter().all(|vertex| vertex.velocity[3] == 0.0));
     }
 
     fn initial_obstacle(vertex: crate::node_graph::primitives::gpu_flip_clock::GpuFlipBodyVertex) -> LiquidBodies {
@@ -1206,7 +1281,7 @@ mod tests {
             ..LiquidBody::default()
         };
         bodies.rows(first_tick(&frame), frame.ticks, &[falling(0.0), falling(0.0), falling(-40.0)]).unwrap();
-        bodies.prepare_clock_vertices([-4.0; 3], [8.0; 3]);
+        bodies.prepare_clock_vertices([-4.0; 3], [8.0; 3], 0);
         let obstacles = bodies.clock_obstacles();
         assert_eq!(obstacles.len(), 24, "three cubes");
         assert!(obstacles[..8].iter().all(|v| v.position[3] == 1.0), "a hull inside the domain counts");
