@@ -451,9 +451,11 @@ impl Primitive for GpuFlipDomain {
         self.role_pending
     }
 
-    fn substep_clock_interval(&self, iteration: u32) -> Option<(&'static str, manifold_physics::stepping::StepInterval)> {
-        self.scheduled_frame.as_ref()?.interval(u64::from(iteration))
-            .map(|interval| ("interval_duration", interval))
+    fn substep_clock_interval(&self, iteration: u32) -> Option<crate::node_graph::substeps::SubstepClockOutput<'_>> {
+        let frame = self.scheduled_frame.as_ref()?;
+        frame.interval(u64::from(iteration)).map(|interval| {
+            crate::node_graph::substeps::SubstepClockOutput::single("interval_duration", interval, iteration, frame.ticks)
+        })
     }
 
     /// Coupled frames sync before each later tick of the frame.

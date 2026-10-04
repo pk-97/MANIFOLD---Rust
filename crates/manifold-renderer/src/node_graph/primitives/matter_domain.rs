@@ -38,6 +38,7 @@ use crate::node_graph::physics::{
 };
 use crate::node_graph::physics_events::ResolvedNodeImpulse;
 use crate::node_graph::primitive::Primitive;
+use crate::node_graph::substeps::{SubstepClockOutput, SubstepInterval};
 use crate::node_graph::transform::Transform;
 
 /// Everything whose change restarts the simulation.
@@ -320,7 +321,7 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("liveliness"), label: "Liveliness", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((0.0, 1.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "The Live Matter group's source of truth: wire its lattice, fill, clock and dial outputs into node.matter_fill, node.matter_state, the region body atoms and node.matter_frame. The domain box, resolution, faces, fill, Points per Cell and Seed restart the simulation; gravity, Simulation Speed, Stiffness, Cohesion and Liveliness are live. Stiffness sets how springy the water is and costs substeps (Stiffness 0.5 → 21, 1 → 34, 2 → 61 at 64³ in 4 m); a value that would need more than 128 runs at the largest that fits and reports it on limited_by_substeps. Live runs at most three ticks per display frame and reports dropped time; export runs every tick. Collider roles (node.fluid_role_source, Role Collider) move live and restart nothing; bodies, first_tick, body_count and body_rows feed node.matter_move_bodies, and shapes and atlas node.matter_grid_update and node.liquid_solid_distance. Until every collider's distance lattice is built the liquid holds. Fill, Inflow and Outflow roles are refused until sources and drains arrive. In a scene with a node.physics_world, the world's bodies selected as colliders couple both ways: wire reaction into node.matter_move_bodies and node.matter_body_reaction (whose reaction_out feeds node.grid_to_matter), and dynamic_count into all three. Live, a coupled domain runs at most one tick per display frame and holds while the GPU is still finishing the last one; export runs every tick, waiting for the GPU between ticks so Box3D and the liquid exchange once per tick at any frame rate; light bodies raise the substep count, and one too light for 128 substeps is refused by name. Scene forces arrive on acceleration_field and scene impulses through the impulse hooks; both are sampled on a coarse field lattice (a quarter of the resolution per axis): wire forces, impulses and the six field scalars into node.matter_grid_update and node.matter_body_reaction. Forces act every substep; an impulse changes the water's velocity once, on the first substep of impulse_tick, the first tick after the frame it was fired. A hit fired while paused or at Simulation Speed 0 is discarded, never replayed on resume; a restart cancels hits not yet applied. Rigid targets of an impulse reach the coupled bodies.",
+    composition_notes: "The Live Matter group's source of truth: wire its lattice, fill, clock and dial outputs into node.matter_fill, node.matter_state, the region body atoms and node.matter_frame. The domain box, resolution, faces, fill, Points per Cell and Seed restart the simulation; gravity, Simulation Speed, Stiffness, Cohesion and Liveliness are live. Stiffness sets how springy the water is and costs substeps (Stiffness 0.5 → 21, 1 → 34, 2 → 61 at 64³ in 4 m); a value that would need more than 128 runs at the largest that fits and reports it on limited_by_substeps. Live runs at most two ticks per display frame and reports dropped time; export runs every tick. Collider roles (node.fluid_role_source, Role Collider) move live and restart nothing; bodies, first_tick, body_count and body_rows feed node.matter_move_bodies, and shapes and atlas node.matter_grid_update and node.liquid_solid_distance. Until every collider's distance lattice is built the liquid holds. Fill, Inflow and Outflow roles are refused until sources and drains arrive. In a scene with a node.physics_world, the world's bodies selected as colliders couple both ways: wire reaction into node.matter_move_bodies and node.matter_body_reaction (whose reaction_out feeds node.grid_to_matter), and dynamic_count into all three. Live, a coupled domain runs at most two ticks per display frame; live and export wait for the GPU between ticks so Box3D and the liquid exchange once per tick at any frame rate; light bodies raise the substep count, and one too light for 128 substeps is refused by name. Scene forces arrive on acceleration_field and scene impulses through the impulse hooks; both are sampled on a coarse field lattice (a quarter of the resolution per axis): wire forces, impulses and the six field scalars into node.matter_grid_update and node.matter_body_reaction. Forces act every substep; an impulse changes the water's velocity once, on the first substep of impulse_tick, the first tick after the frame it was fired. A hit fired while paused or at Simulation Speed 0 is discarded, never replayed on resume; a restart cancels hits not yet applied. Rigid targets of an impulse reach the coupled bodies.",
     examples: ["WaterDamBreakMatter", "WaterStillPoolMatter", "WaterFloatingBoxMatter"],
     picker: { label: "Matter Domain", category: Atom },
     summary: "Sets up a live GPU liquid: its box, resolution, walls, starting fill, gravity and how the water behaves.",
@@ -330,8 +331,7 @@ crate::primitive! {
     boundary_reason: NonGpu,
     extra_fields: {
         clock: LiquidClock = LiquidClock::default(),
-        scheduled_frame: Option<manifold_physics::clock::ClockFrame> = None,
-        scheduled_substeps: u32 = 1,
+        schedule: Vec<MatterInterval> = Vec::new(),
         setup: Option<MatterSetup> = None,
         limited: bool = false,
         published: Option<[f32; OUTPUTS.len()]> = None,
@@ -382,14 +382,62 @@ pub struct Coupling {
 
 /// A frame of several coupled ticks: the region syncs at each later
 /// tick's first substep, and the domain settles the tick before it there.
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 struct Exchange {
-    frame: manifold_physics::clock::ClockFrame,
-    substeps: u32,
-    ticks: u32,
-    /// The frame's first tick; later ticks differ only in `tick`.
+    /// The frame's first tick; later ticks keep its fence and mode.
     pending: PendingTick,
     scale: ReactionScale,
+}
+
+/// One accepted interval's numerical work and existing clock output scalars.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MatterInterval {
+    timing: SubstepInterval,
+    scalars: [(&'static str, f32); 2],
+}
+
+impl MatterInterval {
+    fn contains(&self, iteration: u32) -> bool {
+        iteration >= self.timing.first_iteration
+            && iteration - self.timing.first_iteration < self.timing.iterations
+    }
+
+    fn reaction_scale(&self, previous: ReactionScale) -> ReactionScale {
+        ReactionScale { unit: self.scalars[1].1, ..previous }
+    }
+}
+
+/// Reuse schedule storage; interval CFL counts and quantisation scales do not
+/// depend on how export groups transport frames.
+fn schedule_intervals(
+    schedule: &mut Vec<MatterInterval>,
+    frame: &manifold_physics::clock::ClockFrame,
+    nominal: u32,
+    cell_size: f32,
+) -> bool {
+    schedule.clear();
+    let mut total = 0u32;
+    let mut capped = false;
+    for ordinal in 0..frame.ticks {
+        let interval = frame.interval(u64::from(ordinal)).expect("accepted Matter interval");
+        let requested = substeps_for_interval(interval.duration().0 as f32, nominal);
+        let iterations = requested.min(MAX_SUBSTEPS);
+        capped |= requested >= MAX_SUBSTEPS;
+        schedule.push(MatterInterval {
+            timing: SubstepInterval {
+                interval, ordinal, first_iteration: total, iterations, total_iterations: 0,
+            },
+            scalars: [
+                ("substeps_per_tick", iterations as f32),
+                ("momentum_unit", momentum_unit(cell_size, interval.duration().0 / f64::from(iterations))),
+            ],
+        });
+        total = total.saturating_add(iterations);
+    }
+    for record in schedule {
+        record.timing.total_iterations = total;
+    }
+    capped
 }
 
 /// The reaction words, once their last GPU writer has retired.
@@ -490,17 +538,18 @@ impl Primitive for MatterDomain {
         self.role_pending
     }
 
-    fn substep_clock_interval(&self, iteration: u32) -> Option<(&'static str, manifold_physics::stepping::StepInterval)> {
-        self.scheduled_frame.as_ref()?.interval(u64::from(iteration / self.scheduled_substeps))
-            .map(|interval| ("interval_duration", interval))
+    fn substep_clock_interval(&self, iteration: u32) -> Option<SubstepClockOutput<'_>> {
+        let record = self.schedule.iter().find(|record| record.contains(iteration))?;
+        Some(SubstepClockOutput {
+            duration_port: "interval_duration", timing: record.timing, scalars: &record.scalars,
+        })
     }
 
     /// Coupled frames sync at each later tick's first substep.
     fn substep_host_sync(&self, iteration: u32) -> bool {
-        self.coupled
-            .exchange
-            .as_ref()
-            .is_some_and(|x| {iteration.is_multiple_of(x.substeps) && iteration / x.substeps < x.ticks})
+        self.coupled.exchange.is_some() && self.schedule.iter().any(|record| {
+            record.timing.ordinal > 0 && record.timing.first_iteration == iteration
+        })
     }
 
     /// Section 5 between two ticks of one frame: settle the tick the
@@ -511,8 +560,10 @@ impl Primitive for MatterDomain {
         iteration: u32,
         _gpu: Option<&mut crate::gpu_encoder::GpuEncoder<'_>>,
     ) -> Result<(), String> {
-        let Some(exchange) = self.coupled.exchange.clone() else { return Ok(()) };
-        let result = self.exchange_tick(iteration / exchange.substeps, exchange);
+        let Some(exchange) = self.coupled.exchange else { return Ok(()) };
+        let record = *self.schedule.iter().find(|record| record.contains(iteration))
+            .ok_or("Matter coupling: the numerical iteration has no accepted interval")?;
+        let result = self.exchange_tick(record, exchange);
         if let Err(error) = &result {
             // The pair restarts next frame with a fresh rigid owner.
             self.coupled.exchange = None;
@@ -551,7 +602,7 @@ impl Primitive for MatterDomain {
         // zero ticks. Before the first good frame there is nothing to hold,
         // so the outputs are declared pending.
         self.coupled.exchange = None;
-        self.scheduled_frame = None;
+        self.schedule.clear();
         let computed = if self.role_pending { Ok(None) } else { self.compute(ctx, &roles) };
         let held = || {
             let mut held = self.published.unwrap_or([0.0; OUTPUTS.len()]);
@@ -572,6 +623,10 @@ impl Primitive for MatterDomain {
                 (held(), false)
             }
         };
+        if !fresh {
+            self.schedule.clear();
+            self.coupled.exchange = None;
+        }
         if fresh {
             self.published = Some(values);
         }
@@ -602,6 +657,7 @@ impl Primitive for MatterDomain {
     /// The liquid restarts in a new epoch, and a coupled pair together with
     /// a fresh rigid owner.
     fn clear_state(&mut self) {
+        self.schedule.clear();
         self.coupled.reset();
         self.clock.restart();
     }
@@ -784,7 +840,6 @@ impl MatterDomain {
             restart,
             offline,
         );
-        self.scheduled_frame = Some(frame.clone());
         if frame.numerical_error {
             crate::node_graph::physics_metrics::record_simulation(0.0, 0.0, false, true);
         }
@@ -847,8 +902,12 @@ impl MatterDomain {
         };
         let requested = substeps_for_interval(duration as f32, nominal_substeps);
         let substeps = requested.min(MAX_SUBSTEPS);
+        let schedule_capped = schedule_intervals(&mut self.schedule, &frame, nominal_substeps, lattice.cell_size());
         let lambda = water_lambda(longest, fitted);
-        let unit = momentum_unit(lattice.cell_size(), duration / f64::from(substeps));
+        let unit = self.schedule.first().map_or_else(
+            || momentum_unit(lattice.cell_size(), duration / f64::from(substeps)),
+            |record| record.scalars[1].1,
+        );
         let mut display_time = frame.display_time;
         if let Some(owner) = &mut self.coupled.owner {
             if frame.ticks > 0 {
@@ -870,7 +929,7 @@ impl MatterDomain {
                 owner.set_pending(pending);
                 self.coupled.scale = Some(scale);
                 if frame.ticks > 1 {
-                    self.coupled.exchange = Some(Exchange { frame: frame.clone(), substeps, ticks: frame.ticks, pending, scale });
+                    self.coupled.exchange = Some(Exchange { pending, scale });
                 }
             }
             // The liquid is shown at the tick Box3D has settled, with the
@@ -883,7 +942,6 @@ impl MatterDomain {
             .fields
             .prepare(FieldLattice::of(&lattice), self.acceleration.as_ref(), &self.clock, &frame, &self.impulses)?;
 
-        self.scheduled_substeps = substeps;
         let per_frame = [
             ("gravity_x", ctx.scalar_or_param("gravity_x", 0.0)),
             ("gravity", ctx.scalar_or_param("gravity", -9.81)),
@@ -896,7 +954,7 @@ impl MatterDomain {
             ("target_time", frame.target_time as f32),
             (
                 "step_cap_hit",
-                if !offline && requested >= MAX_SUBSTEPS {
+                if !offline && (schedule_capped || (frame.ticks == 0 && requested >= MAX_SUBSTEPS)) {
                     1.0
                 } else {
                     0.0
@@ -959,7 +1017,9 @@ impl MatterDomain {
     /// Exchange before tick `tick` of this frame (counted from its first):
     /// the GPU has finished tick `tick − 1`, so its reaction words are final
     /// and the body rows are free to rewrite.
-    fn exchange_tick(&mut self, tick: u32, exchange: Exchange) -> Result<(), String> {
+    fn exchange_tick(&mut self, record: MatterInterval, exchange: Exchange) -> Result<(), String> {
+        let tick = record.timing.ordinal;
+        let scale = record.reaction_scale(exchange.scale);
         let owner = self.coupled.owner.as_mut().ok_or("Matter coupling: no coupled rigid world")?;
         let reaction = self.reaction.as_ref().ok_or("Matter coupling: the reaction array is missing")?;
         // A tick running this frame started by now, so the tick before it
@@ -981,9 +1041,13 @@ impl MatterDomain {
         reaction.zero_fill();
         owner.set_pending(PendingTick {
             tick: exchange.pending.tick + u64::from(tick),
-            interval: exchange.frame.interval(u64::from(tick)).expect("accepted exchange interval"),
+            interval: record.timing.interval,
             ..exchange.pending
         });
+        self.coupled.scale = Some(scale);
+        if let Some(exchange) = &mut self.coupled.exchange {
+            exchange.scale = scale;
+        }
         Ok(())
     }
 
@@ -1000,6 +1064,119 @@ impl MatterDomain {
 
 #[cfg(test)]
 mod sim_rate_tests {
+    use super::*;
+    use manifold_core::Seconds;
+    use manifold_physics::{clock::SimulationClock, stepping::StepInterval};
+
+    #[test]
+    fn matter_interval_schedule_matches_separate_speed_history_frames() {
+        let run = |grouped| {
+            let mut clock = SimulationClock::default();
+            clock.advance(0.0, TICK, 0.25, 0.0, false, true);
+            clock.observe_speed(TICK, 4.0);
+            let mut schedule = Vec::new();
+            let mut result = Vec::new();
+            for transport in if grouped { vec![2.0 * TICK] } else { vec![TICK, 2.0 * TICK] } {
+                let frame = clock.advance(transport, TICK, 4.0, 0.0, false, true);
+                schedule_intervals(&mut schedule, &frame, 100, 0.0625);
+                for record in &schedule {
+                    result.push((record.timing.interval, record.timing.iterations,
+                        crate::node_graph::matter::substep_duration(
+                            record.timing.interval.duration().0 as f32, record.timing.iterations,
+                        ).to_bits(), record.scalars[1].1.to_bits()));
+                }
+            }
+            result
+        };
+        let separate = run(false);
+        assert_eq!(run(true), separate);
+        assert_eq!(separate.len(), 2);
+        assert_eq!(separate[0].1, 25);
+        assert_eq!(separate[1].1, MAX_SUBSTEPS);
+        assert_ne!(separate[0].3, separate[1].3);
+    }
+
+    #[test]
+    fn matter_clock_outputs_follow_interval_prefix_and_clear_on_reset() {
+        let mut clock = SimulationClock::default();
+        clock.advance(0.0, TICK, 0.25, 0.0, false, true);
+        clock.observe_speed(TICK, 4.0);
+        let frame = clock.advance(2.0 * TICK, TICK, 4.0, 0.0, false, true);
+        let mut domain = MatterDomain::new();
+        assert!(schedule_intervals(&mut domain.schedule, &frame, 100, 0.0625));
+        let first = domain.schedule[0];
+        let second = domain.schedule[1];
+        assert_eq!(second.timing.first_iteration, first.timing.iterations);
+        assert_eq!(first.timing.total_iterations, 153);
+        assert_eq!(second.timing.total_iterations, 153);
+        domain.coupled.exchange = Some(Exchange {
+            pending: PendingTick { tick: 7, interval: first.timing.interval, offline: true, stamp: 0 },
+            scale: ReactionScale { unit: first.scalars[1].1, cell_size: 0.0625, offset: 0 },
+        });
+        for iteration in 0..153 {
+            let expected = if iteration < 25 { first } else { second };
+            let output = Primitive::substep_clock_interval(&domain, iteration).unwrap();
+            assert_eq!(output.timing, expected.timing);
+            assert_eq!(output.scalars, expected.scalars.as_slice());
+            assert_eq!(Primitive::substep_host_sync(&domain, iteration), iteration == 25);
+        }
+        assert!(Primitive::substep_clock_interval(&domain, 153).is_none());
+        let held = clock.advance(2.0 * TICK, TICK, 4.0, 0.0, false, true);
+        let capacity = domain.schedule.capacity();
+        schedule_intervals(&mut domain.schedule, &held, 100, 0.0625);
+        assert!(domain.schedule.is_empty());
+        assert_eq!(domain.schedule.capacity(), capacity);
+        schedule_intervals(&mut domain.schedule, &frame, 100, 0.0625);
+        Primitive::clear_state(&mut domain);
+        assert!(Primitive::substep_clock_interval(&domain, 0).is_none());
+        assert!(domain.coupled.exchange.is_none());
+    }
+
+    #[test]
+    fn matter_interval_reaction_scale_keeps_previous_decode_and_next_unit() {
+        use crate::node_graph::physics::RigidBody;
+        let previous = ReactionScale { unit: 64.0, cell_size: 0.0625, offset: 3 };
+        let record = MatterInterval {
+            timing: SubstepInterval {
+                interval: StepInterval::new(Seconds(TICK), Seconds(2.0 * TICK)),
+                ordinal: 1, first_iteration: 25, iterations: 128, total_iterations: 153,
+            },
+            scalars: [("substeps_per_tick", 128.0), ("momentum_unit", 256.0)],
+        };
+        let exchange = Exchange {
+            pending: PendingTick { tick: 7, interval: record.timing.interval, offline: true, stamp: 0 },
+            scale: previous,
+        };
+        let next = record.reaction_scale(exchange.scale);
+        assert_eq!(exchange.scale, previous, "completed reaction uses its original unit");
+        assert_eq!(next, ReactionScale { unit: 256.0, ..previous });
+
+        let mut scene = RigidSceneInputs { gravity: [0.0; 3], ..RigidSceneInputs::default() };
+        scene.bodies[0] = Some(RigidBody {
+            transform: Transform { pos: [0.0, 1.0, 0.0], scale: [0.4; 3], ..Transform::default() },
+            density: 500.0,
+            ..RigidBody::default()
+        });
+        let mut owner = LiquidRigidOwner::new(
+            &scene, DomainWalls::default(), RigidImpulseTargets { bodies: 1, copies: false }, 3, None,
+        ).unwrap();
+        let mut words = [0i32; 4 * REACTION_WORDS as usize];
+        for (tick, scale) in [exchange.scale, next].into_iter().enumerate() {
+            // The same +1 m/s reaction is encoded with different units. Decoding
+            // either with the other interval's unit gives the wrong velocity.
+            words[previous.offset * REACTION_WORDS as usize] = (16_777_216.0 / scale.unit) as i32;
+            owner.set_pending(PendingTick {
+                tick: tick as u64,
+                interval: StepInterval::new(Seconds(tick as f64 * TICK), Seconds((tick + 1) as f64 * TICK)),
+                offline: true, stamp: 0,
+            });
+            owner.settle_ready(Some(&scene), |_| true, |_, rows, impulses| {
+                decode(scale, rows, Some(&words), impulses)
+            }).unwrap();
+            assert!((owner.rows()[0].linear_velocity[0] - (tick + 1) as f32).abs() < 1e-4);
+        }
+    }
+
     #[test]
     fn sim_rate_matter_keeps_stability_subdivisions() {
         use manifold_physics::{SimRate, clock::SimulationClock};
