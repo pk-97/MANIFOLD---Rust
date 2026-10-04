@@ -1364,6 +1364,85 @@ fn run_with_retired_speed(scene: WaterScene, enabled: bool) -> Run {
     Run::with_graph(scene, graph)
 }
 
+/// The automatic absence proof must equal the original full solid path,
+/// across replay, held/reset frames, two accepted intervals and a body that
+/// returns to the pool. The reference disconnects only the new certificate.
+#[test]
+fn gpu_flip_absent_solids_preserve_full_step_and_pose_changes() {
+    use crate::node_graph::ParamValue;
+    let _live = crate::node_graph::physics::PhysicsStepScope::for_render(false);
+    let scene = WaterScene::still_pool(16).with_obstacle().with_steps(1);
+    let make = |certified: bool| {
+        let mut registry = PrimitiveRegistry::with_builtin();
+        register_substep_test_nodes(&mut registry);
+        let mut graph = water_def(scene).into_graph(&registry, &Default::default()).expect("solid cull graph");
+        let transform = node_named(&graph, "obstacle_transform");
+        graph.set_param(transform, "pos_x", ParamValue::Float(-100.0)).unwrap();
+        let step = node_named(&graph, STEP_NODE);
+        if !certified { graph.disconnect((step, "initial_solids_absent")).unwrap(); }
+        graph.add_external_output(step, "clock_status").unwrap();
+        graph.add_external_output(node_named(&graph, "domain"), "initial_solids_absent").unwrap();
+        Run::with_graph(scene, graph)
+    };
+    let certificate = |run: &Run| {
+        let resource = output_of(&run.plan, node_named(&run.graph, "domain"), "initial_solids_absent");
+        let backend = run.exec.backend();
+        match backend.scalar(backend.slot_for(resource).expect("certificate slot")) {
+            Some(ParamValue::Float(value)) => value,
+            other => panic!("missing certificate: {other:?}"),
+        }
+    };
+    for replay in [false, true] {
+        let mut culled = make(true);
+        let mut original = make(false);
+        let mut absent_frames = 0;
+        let mut present_frames = 0;
+        for frame in 0..12 {
+            for run in [&mut culled, &mut original] {
+                run.set_encode_replay(replay);
+                let domain = node_named(&run.graph, "domain");
+                let transform = node_named(&run.graph, "obstacle_transform");
+                if frame == 3 {
+                    // Stay remote while rotating; no endpoint-only geometry shortcut.
+                    run.graph.set_param(transform, "rot_y", ParamValue::Float(0.4)).unwrap();
+                }
+                if frame == 4 { run.fps = 30.0; }
+                if frame == 5 { run.frames -= 1; } // held transport time
+                if frame == 6 {
+                    run.graph.set_param(domain, "reset", ParamValue::Float(1.0)).unwrap();
+                }
+                if frame == 8 {
+                    // A reset puts the obstacle inside the new fill without
+                    // an artificial 100 m teleport velocity.
+                    run.graph.set_param(transform, "pos_x", ParamValue::Float(DAM_OBSTACLE[0][0] as f32)).unwrap();
+                    run.graph.set_param(domain, "reset", ParamValue::Float(2.0)).unwrap();
+                }
+                if frame == 10 {
+                    run.graph.set_param(transform, "pos_x", ParamValue::Float(DAM_OBSTACLE[0][0] as f32 + 0.025)).unwrap();
+                }
+                run.frame();
+            }
+            let proof = certificate(&culled);
+            if [5, 6, 8].contains(&frame) { assert_eq!(proof, 0.0, "held/reset frame {frame}"); }
+            if frame < 8 && proof == 1.0 { absent_frames += 1; }
+            if frame > 8 && proof == 0.0 { present_frames += 1; }
+            let context = format!("replay {replay} frame {frame}");
+            assert_eq!(bytemuck::cast_slice::<_, u32>(&culled.particles()), bytemuck::cast_slice::<_, u32>(&original.particles()), "{context}: published particles");
+            assert_eq!(bytemuck::cast_slice::<_, u32>(&culled.faces()), bytemuck::cast_slice::<_, u32>(&original.faces()), "{context}: faces");
+            for (node, port, len) in [
+                ("stats", "stats_out", LIQUID_STATS_WORDS as usize),
+                (STEP_NODE, "capped", 2 * scene.particles() as usize + SOLVER_WORDS as usize),
+                (STEP_NODE, "clock_status", 8),
+            ] {
+                assert_eq!(culled.read::<u32>(node, port, len), original.read::<u32>(node, port, len), "{context}: {port}");
+            }
+        }
+        assert!(absent_frames >= 4, "the cull must actually activate");
+        assert_eq!(present_frames, 3, "the restored obstacle must keep its full solve");
+        if replay { assert!(culled.replay_stats().replayed > 0, "exercise cached command encoding"); }
+    }
+}
+
 /// Rank one settled 64³ step's stages; sampling changes encoder layout,
 /// so its total is attribution data rather than ordinary frame performance.
 #[cfg(feature = "water-race-probes")]

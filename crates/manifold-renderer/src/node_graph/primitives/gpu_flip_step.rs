@@ -296,6 +296,10 @@ fn solid_velocity_needed(body_count: i32) -> bool {
     body_count > 0
 }
 
+fn body_count_for_interval(body_count: i32, initial_solids_absent: f32, tick: i32, first_tick: i32) -> i32 {
+    if initial_solids_absent == 1.0 && tick == first_tick { 0 } else { body_count }
+}
+
 /// The lattice's cell-sized arrays (`LatticeBuffers`): water, φ, the
 /// right-hand side, the pressure, the pocket state and label, the solve
 /// mask, the contact mask and the let-go set.
@@ -2196,6 +2200,7 @@ crate::primitive! {
         clock_obstacles: Array(f32) optional,
         clock_obstacle_count: ScalarF32 optional,
         initial_obstacle_speed: ScalarF32 optional,
+        initial_solids_absent: ScalarF32 optional,
         clock_sources: Array(f32) optional,
         clock_source_count: ScalarF32 optional,
         live_hits: Array(f32) optional,
@@ -2521,8 +2526,11 @@ impl Primitive for GpuFlipStep {
             _ => (&zeros, &zeros, &zeros, 0, 0, 0),
         };
         let reaction_in = ctx.inputs.array("reaction");
-        let dynamic = body_count > 0 && ctx.scalar_or_param("dynamic_bodies", 0.0) > 0.0;
-        if dynamic && let Some(reason) = body_refusal(body_count as u32, reaction_in) {
+        // Only the first interval's prepared poses carry this certificate.
+        // Preserve the full rows/count below for the clock's reaction mapping.
+        let active_body_count = body_count_for_interval(body_count, ctx.scalar_or_param("initial_solids_absent", 0.0), tick_index, field.first_tick);
+        let dynamic = active_body_count > 0 && ctx.scalar_or_param("dynamic_bodies", 0.0) > 0.0;
+        if dynamic && let Some(reason) = body_refusal(active_body_count as u32, reaction_in) {
             ctx.error(format!("{NAME}: {reason}"));
             return;
         }
@@ -2551,7 +2559,7 @@ impl Primitive for GpuFlipStep {
                 force_lattices: field.force_lattices,
                 impulse_tick: field.impulse_tick,
                 first_tick: field.first_tick,
-                body_count,
+                body_count: active_body_count,
                 rows,
                 tick_seconds: step_dt,
                 // The share is per step, as the engine's `_ratioPICFLIP`, whatever
@@ -2777,6 +2785,18 @@ impl Primitive for GpuFlipStep {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn absent_solids_certificate_only_suppresses_the_first_interval() {
+        assert_eq!(body_count_for_interval(3, 1.0, 7, 7), 0);
+        for tick in [6, 8, 9] {
+            assert_eq!(body_count_for_interval(3, 1.0, tick, 7), 3);
+        }
+        for certificate in [0.0, -1.0, 0.5, 1.0_f32.next_down(), 1.0_f32.next_up(), f32::NAN, f32::INFINITY] {
+            assert_eq!(body_count_for_interval(3, certificate, 7, 7), 3);
+        }
+        assert_eq!(body_count_for_interval(0, 1.0, 7, 7), 0);
+    }
 
     #[test]
     fn one_step_bound_requires_a_whole_reference_interval() {

@@ -1104,6 +1104,7 @@ fn water_step(b: &mut Builder, scene: WaterScene, tick: (usize, usize)) -> usize
     b.wire((state, "tick_index"), step, "tick_index");
     b.wire((state, "retired_max_speed"), step, "retired_max_speed");
     b.wire((domain, "initial_obstacle_speed"), step, "initial_obstacle_speed");
+    b.wire((domain, "initial_solids_absent"), step, "initial_solids_absent");
     b.wires(domain, step, &["bodies", "shapes", "atlas", "body_count", "dynamic_bodies", "closed_faces", "solve_level"]);
     b.wire((domain, "body_rows"), step, "rows");
     step
@@ -1612,6 +1613,24 @@ pub(super) mod tests {
                 assert_eq!(speed[0].from_node, particles.from_node);
                 assert_eq!(speed[0].from_port, "retired_max_speed");
                 assert!(flat.nodes.iter().any(|node| node.id == speed[0].from_node && node.type_id == "node.liquid_state"));
+                checked += 1;
+            }
+            assert!(checked > 0);
+        }
+    }
+
+    #[test]
+    fn gpu_flip_presets_feed_initial_solids_certificate_from_the_domain() {
+        for def in [water_def(WaterScene::dam_break(16)), gpu_flip_liquid_body()] {
+            let flat = manifold_core::flatten::flatten_groups(&def).expect("flattens");
+            let mut checked = 0;
+            for step in flat.nodes.iter().filter(|node| node.type_id == "node.gpu_flip_step") {
+                let feeds: Vec<_> = flat.wires.iter().filter(|wire| wire.to_node == step.id && wire.to_port == "initial_solids_absent").collect();
+                assert_eq!(feeds.len(), 1);
+                let obstacle = flat.wires.iter().find(|wire| wire.to_node == step.id && wire.to_port == "initial_obstacle_speed").expect("initial obstacle bound");
+                assert_eq!(feeds[0].from_node, obstacle.from_node);
+                assert_eq!(feeds[0].from_port, "initial_solids_absent");
+                assert!(flat.nodes.iter().any(|node| node.id == feeds[0].from_node && node.type_id == "node.gpu_flip_domain"));
                 checked += 1;
             }
             assert!(checked > 0);

@@ -181,7 +181,7 @@ impl GpuFlipGeometry {
 }
 
 /// Every scalar output, in the order [`GpuFlipDomain::compute`] fills them.
-const OUTPUTS: [&str; 50] = [
+const OUTPUTS: [&str; 51] = [
     "lattice_min_x", "lattice_min_y", "lattice_min_z", "cell_size", "nodes_x", "nodes_y", "nodes_z",
     "closed_faces", "pool_sites", "box_x0", "box_x1", "box_y0", "box_y1", "box_z0", "box_z1",
     "particle_mass", "gravity_x", "gravity", "gravity_z", "ticks", "epoch", "simulation_time",
@@ -193,13 +193,15 @@ const OUTPUTS: [&str; 50] = [
     "clock_obstacle_count",
     "clock_source_count",
     "live_hit_count", "mesh_min_x", "mesh_min_y", "mesh_min_z", "mesh_nodes_x", "mesh_nodes_y", "mesh_nodes_z",
-    "initial_obstacle_speed"];
+    "initial_obstacle_speed", "initial_solids_absent"];
 const TICKS: usize = 19;
 const IMPULSE_TICK: usize = 33;
 const INITIAL_OBSTACLE_SPEED: usize = 49;
+const INITIAL_SOLIDS_ABSENT: usize = 50;
 const _: () = assert!(matches!(OUTPUTS[TICKS].as_bytes(), b"ticks"));
 const _: () = assert!(matches!(OUTPUTS[IMPULSE_TICK].as_bytes(), b"impulse_tick"));
 const _: () = assert!(matches!(OUTPUTS[INITIAL_OBSTACLE_SPEED].as_bytes(), b"initial_obstacle_speed"));
+const _: () = assert!(matches!(OUTPUTS[INITIAL_SOLIDS_ABSENT].as_bytes(), b"initial_solids_absent"));
 
 /// The coupled half of the domain: the paired physics world's latest
 /// observation, and the rigid owner built from it.
@@ -358,6 +360,7 @@ crate::primitive! {
     limit_interval: ScalarF32,
     clock_obstacle_count: ScalarF32, clock_source_count: ScalarF32,
     initial_obstacle_speed: ScalarF32,
+    initial_solids_absent: ScalarF32,
     clock_obstacles: Array(f32), clock_sources: Array(f32),
     live_hits: Array(f32), live_hit_count: ScalarF32,
         target_time: ScalarF32,
@@ -572,6 +575,7 @@ impl Primitive for GpuFlipDomain {
             held[TICKS] = 0.0;
             held[IMPULSE_TICK] = -1.0;
             held[INITIAL_OBSTACLE_SPEED] = -1.0;
+            held[INITIAL_SOLIDS_ABSENT] = 0.0;
             held
         };
         self.coupled.failed = false;
@@ -845,6 +849,11 @@ impl GpuFlipDomain {
             // changes. Later intervals require their own freshness proof.
             ("initial_obstacle_speed", frame.interval(0).map_or(-1.0, |interval| {
                 self.bodies.initial_clock_obstacle_speed(interval.duration().0 as f32)
+            })),
+            ("initial_solids_absent", frame.interval(0).map_or(0.0, |interval| {
+                let lattice = geometry.setup.lattice;
+                let size = lattice.nodes().map(|nodes| (nodes - 1) as f32 * lattice.cell_size());
+                f32::from(u8::from(self.bodies.initial_solids_absent(lattice.min(), size, interval.duration().0 as f32)))
             })),
         ];
         let mut values = [0.0; OUTPUTS.len()];

@@ -224,6 +224,31 @@ impl LiquidBodies {
     pub fn clock_obstacles(&self) -> &[crate::node_graph::primitives::gpu_flip_clock::GpuFlipBodyVertex] { &self.clock_obstacles }
     pub fn clock_sources(&self) -> &[crate::node_graph::primitives::gpu_flip_clock::GpuFlipBodyVertex] { &self.clock_sources }
 
+    /// Whether every first-interval solid's complete distance lattice stays
+    /// outside the supplied padded liquid lattice. Rows and body IDs remain
+    /// intact; this only certifies that the FLIP step needs no solid work.
+    /// Later accepted intervals can replace coupled rows and need a new proof.
+    pub fn initial_solids_absent(&self, min: [f32; 3], size: [f32; 3], interval: f32) -> bool {
+        if !interval.is_finite() || interval <= 0.0
+            || min.iter().any(|v| !v.is_finite())
+            || size.iter().any(|v| !v.is_finite() || *v <= 0.0)
+        {
+            return false;
+        }
+        let low = min.map(f64::from);
+        let high = std::array::from_fn(|a| low[a] + f64::from(size[a]));
+        let Some(rows) = self.rows.get(..self.count()) else { return false; };
+        rows.iter().all(|body| {
+            let index = body.accel_shape[3];
+            if !index.is_finite() { return false; }
+            if index < 0.0 { return true; }
+            if index.fract() != 0.0 { return false; }
+            self.shapes.get(index as usize).is_some_and(|shape| {
+                solid_sweep_misses_box(body, shape, low, high, f64::from(interval))
+            })
+        })
+    }
+
     /// Conservative initial obstacle speed for the first accepted interval.
     /// This uses its prepared body rows with zero initial reaction, and is
     /// useful only beside a fresh marker sample of the matching incoming tick.
@@ -599,6 +624,54 @@ impl LiquidBodies {
     }
 }
 
+/// A swept sphere encloses the entire padded SDF, including its positive
+/// exterior samples; mesh bounds alone would miss their influence. Translation
+/// follows the same fixed row as liquid_solid_distance throughout the interval.
+/// The radius covers every rotation, so endpoint-only pose tests are unnecessary.
+fn solid_sweep_misses_box(body: &LiquidBody, shape: &LiquidShape, low: [f64; 3], high: [f64; 3], interval: f64) -> bool {
+    if bytemuck::cast_slice::<LiquidBody, f32>(std::slice::from_ref(body)).iter().any(|v| !v.is_finite())
+        || shape.origin_spacing.iter().chain(&shape.scale_min).any(|v| !v.is_finite())
+        || shape.origin_spacing[3] <= 0.0 || shape.scale_min[..3].contains(&0.0)
+        || [shape.dims_x, shape.dims_y, shape.dims_z].iter().any(|&n| n < 2)
+    {
+        return false;
+    }
+    let norm2: f64 = body.rotation.iter().map(|&v| f64::from(v).powi(2)).sum();
+    // The shader's rotation formula requires a unit quaternion. Malformed or
+    // ill-conditioned pose math retains the full path instead of hiding it.
+    if !(0.99..=1.01).contains(&norm2) { return false; }
+    let angular2: f64 = body.angular_velocity[..3].iter().map(|&v| f64::from(v).powi(2)).sum();
+    if angular2 > 0.0 && !(f64::from(f32::MIN_POSITIVE)..=f64::from(f32::MAX) / 4.0).contains(&angular2) {
+        return false;
+    }
+    if angular2.sqrt() * interval > f64::from(f32::MAX) / 4.0 { return false; }
+    let dims = [shape.dims_x, shape.dims_y, shape.dims_z];
+    let mut radius = 0.0;
+    for (a, n) in dims.into_iter().enumerate() {
+        let first = f64::from(shape.origin_spacing[a]);
+        let last = first + f64::from(n - 1) * f64::from(shape.origin_spacing[3]);
+        radius += (first * f64::from(shape.scale_min[a])).abs().max((last * f64::from(shape.scale_min[a])).abs());
+    }
+    // Twice the L1 corner radius leaves slack for the near-unit inverse
+    // rotation and f32 pose arithmetic. This is deliberately a loose cull.
+    radius *= 2.0;
+    if !radius.is_finite() || radius > f64::from(f32::MAX) { return false; }
+    let start: [f64; 3] = std::array::from_fn(|a| f64::from(body.position_inv_mass[a]));
+    let travel: [f64; 3] = std::array::from_fn(|a| f64::from(body.linear_velocity[a]) * interval);
+    let end: [f64; 3] = std::array::from_fn(|a| start[a] + travel[a]);
+    // Reject the entire row if even one axis can overflow the shader's
+    // multiply/add; separation on another axis must not conceal bad pose math.
+    if travel.iter().chain(&end).any(|v| !v.is_finite() || v.abs() > f64::from(f32::MAX) / 4.0) {
+        return false;
+    }
+    (0..3).any(|a| {
+        let rounding = 32.0 * f64::from(f32::EPSILON)
+            * (1.0 + start[a].abs() + end[a].abs() + radius + low[a].abs() + high[a].abs());
+        start[a].max(end[a]) + radius + rounding < low[a]
+            || start[a].min(end[a]) - radius - rounding > high[a]
+    })
+}
+
 /// A coupled body's row with its shape index moved past the roles' shapes.
 fn coupled_row(row: &LiquidBody, offset: f32) -> LiquidBody {
     let shape = row.accel_shape[3];
@@ -709,6 +782,85 @@ mod tests {
     fn liquid_body_records_match_their_channel_layouts() {
         assert_eq!(std430_stride(LIQUID_BODY_SPECS), 128);
         assert_eq!(std430_stride(LIQUID_SHAPE_SPECS), 48);
+    }
+
+    fn cull_shape() -> LiquidShape {
+        LiquidShape { origin_spacing: [-0.5, -0.75, -1.0, 0.25], dims_x: 5, dims_y: 7, dims_z: 9, scale_min: [1.0; 4], ..LiquidShape::default() }
+    }
+
+    fn cull_body(x: f32) -> LiquidBody {
+        LiquidBody { position_inv_mass: [x, 0.0, 0.0, 0.0], rotation: [0.0, 0.0, 0.0, 1.0], ..LiquidBody::default() }
+    }
+
+    #[test]
+    fn liquid_solid_cull_covers_translation_and_padded_support() {
+        let shape = cull_shape();
+        let misses = |body: &LiquidBody, shape: &LiquidShape| solid_sweep_misses_box(body, shape, [-1.0; 3], [1.0; 3], 1.0);
+        assert!(misses(&cull_body(-100.0), &shape));
+        assert!(!misses(&cull_body(0.0), &shape));
+        let mut body = cull_body(-20.0);
+        body.linear_velocity[0] = 40.0;
+        assert!(!misses(&body, &shape), "both endpoint poses miss, but the body crosses the liquid");
+        body.linear_velocity[0] = -40.0;
+        assert!(misses(&body, &shape), "moving farther away remains absent");
+        let wide = LiquidShape { origin_spacing: [-10.0, -0.75, -1.0, 0.25], dims_x: 81, ..shape };
+        assert!(!misses(&cull_body(8.0), &wide), "positive SDF padding can reach the domain even when the mesh does not");
+        let reflected = LiquidShape { scale_min: [-1.0, 2.0, 0.5, 0.5], ..shape };
+        assert!(!misses(&cull_body(1.0), &reflected));
+        assert!(misses(&cull_body(100.0), &reflected));
+    }
+
+    #[test]
+    fn liquid_solid_cull_covers_rotation_and_rejects_bad_pose_math() {
+        let shape = LiquidShape { origin_spacing: [-4.0, -0.25, -0.25, 0.25], dims_x: 33, dims_y: 3, dims_z: 3, ..cull_shape() };
+        let misses = |body: &LiquidBody| solid_sweep_misses_box(body, &shape, [-1.0; 3], [1.0; 3], 1.0);
+        let mut body = cull_body(0.0);
+        body.position_inv_mass[2] = 4.0;
+        body.angular_velocity[1] = std::f32::consts::PI;
+        assert!(!misses(&body), "the long axis enters the liquid halfway through a half turn");
+        body.position_inv_mass[0] = -100.0;
+        assert!(misses(&body), "the swept support remains far away despite rotation");
+        for invalid in [f32::NAN, f32::INFINITY, f32::MAX, f32::MIN_POSITIVE] {
+            let mut bad = body;
+            bad.angular_velocity[1] = invalid;
+            assert!(!misses(&bad), "invalid or ill-conditioned angular input {invalid}");
+        }
+        let mut bad = body;
+        bad.linear_velocity[2] = f32::MAX;
+        assert!(!misses(&bad), "a separate x gap must not hide z pose overflow");
+        bad = body;
+        bad.rotation = [0.0, 0.0, 0.0, 0.5];
+        assert!(!misses(&bad), "non-unit rotation keeps the full path");
+        for invalid in [0.0, f32::NAN, f32::INFINITY] {
+            let bad_shape = LiquidShape { origin_spacing: [-0.5, -0.75, -1.0, invalid], ..shape };
+            assert!(!solid_sweep_misses_box(&body, &bad_shape, [-1.0; 3], [1.0; 3], 1.0));
+        }
+    }
+
+    #[test]
+    fn liquid_solid_cull_requires_every_first_interval_row() {
+        let mut bodies = LiquidBodies { coupled: vec![cube(), cube()], shapes: vec![cull_shape(); 2], ..LiquidBodies::default() };
+        let absent = |bodies: &LiquidBodies| bodies.initial_solids_absent([-1.0; 3], [2.0; 3], 1.0);
+        assert!(!absent(&bodies), "unprepared rows are not evidence");
+        bodies.rows = vec![cull_body(-100.0); 2];
+        bodies.rows[1].accel_shape[3] = 1.0;
+        assert!(absent(&bodies));
+        bodies.rows[1].position_inv_mass[0] = 0.0;
+        assert!(!absent(&bodies), "one present body keeps all original row identities");
+        bodies.rows[1].accel_shape[3] = -1.0;
+        assert!(absent(&bodies), "disabled bodies do not sample a shape");
+        for invalid in [2.0, 0.5, f32::NAN] {
+            bodies.rows[1].accel_shape[3] = invalid;
+            assert!(!absent(&bodies), "missing or malformed shape {invalid}");
+        }
+        bodies.rows[1] = cull_body(-100.0);
+        bodies.rows.extend([cull_body(0.0); 2]);
+        assert!(absent(&bodies), "only interval zero is certified; later rows may change after coupling");
+        for interval in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            assert!(!bodies.initial_solids_absent([-1.0; 3], [2.0; 3], interval));
+        }
+        assert!(!bodies.initial_solids_absent([f32::NAN; 3], [2.0; 3], 1.0));
+        assert!(!bodies.initial_solids_absent([-1.0; 3], [0.0; 3], 1.0));
     }
 
     /// A quarter turn about y over one tick: halfway through, the pose is the

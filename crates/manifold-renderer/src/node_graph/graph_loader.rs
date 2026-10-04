@@ -718,7 +718,7 @@ fn wire_liquid_intervals(def: &mut EffectGraphDef) -> bool {
     let mut changed = false;
     for node in &def.nodes {
         let clock_ports: &[(&str, &str)] = match node.type_id.as_str() {
-            "node.gpu_flip_step" => &[("clock_obstacles", "clock_obstacles"), ("clock_sources", "clock_sources"), ("clock_obstacle_count", "clock_obstacle_count"), ("clock_source_count", "clock_source_count"), ("initial_obstacle_speed", "initial_obstacle_speed"), ("live_hits", "live_hits"), ("live_hit_count", "live_hit_count"), ("limit_interval", "limit_interval")],
+            "node.gpu_flip_step" => &[("clock_obstacles", "clock_obstacles"), ("clock_sources", "clock_sources"), ("clock_obstacle_count", "clock_obstacle_count"), ("clock_source_count", "clock_source_count"), ("initial_obstacle_speed", "initial_obstacle_speed"), ("initial_solids_absent", "initial_solids_absent"), ("live_hits", "live_hits"), ("live_hit_count", "live_hit_count"), ("limit_interval", "limit_interval")],
             "node.liquid_state" => &[("dropped_seconds", "dropped_seconds")],
             "node.matter_state" => &[("target_time", "target_time"), ("simulation_time", "simulation_time"), ("step_cap_hit", "step_cap_hit"), ("dropped_seconds", "dropped_seconds")],
             _ => &[],
@@ -2119,6 +2119,7 @@ mod tests {
         assert!(def.wires.contains(&wire(1, "interval_duration", 3, "interval_duration")));
         assert!(def.wires.contains(&wire(1, "live_hits", 3, "live_hits")));
         assert!(def.wires.contains(&wire(1, "initial_obstacle_speed", 3, "initial_obstacle_speed")));
+        assert!(def.wires.contains(&wire(1, "initial_solids_absent", 3, "initial_solids_absent")));
         assert!(def.wires.contains(&wire(3, "clock_status", 2, "clock_status_in")));
         assert!(def.wires.contains(&wire(2, "identity", 3, "identity")));
         assert!(def.wires.contains(&wire(2, "retired_max_speed", 3, "retired_max_speed")));
@@ -2126,6 +2127,13 @@ mod tests {
         assert_eq!(def.wires.iter().filter(|w| w.to_node == 4 && w.to_port == "dt").count(), 1);
         assert!(def.wires.contains(&wire(5, "out", 4, "dt")));
         assert!(!wire_liquid_intervals(&mut def));
+        let automatic = wire(1, "initial_solids_absent", 3, "initial_solids_absent");
+        def.wires.retain(|wire| wire != &automatic);
+        let authored = wire(5, "out", 3, "initial_solids_absent");
+        def.wires.push(authored.clone());
+        assert!(!wire_liquid_intervals(&mut def));
+        assert!(def.wires.contains(&authored));
+        assert_eq!(def.wires.iter().filter(|wire| wire.to_node == 3 && wire.to_port == "initial_solids_absent").count(), 1);
     }
 
     #[test]
