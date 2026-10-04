@@ -266,12 +266,26 @@ fn assert_visible_pair(runtime: &PresetRuntime, frame: &CoupledRigidFrame) {
 #[test]
 fn coupled_graph_preview_holds_pair_then_offline_drains_without_double_advancement() {
     let mut runtime = runtime(&coupled_fixture());
-    runtime.execute_frame(time(0.0));
-    let initial = paired_frame(&runtime);
-    assert_eq!(initial.stamp.tick, 0);
-    assert_visible_pair(&runtime, &initial);
+    let initial;
     {
         let _preview = PhysicsStepScope::for_render(false);
+        // Initialize in live mode, as the content pipeline does. Observe the
+        // asynchronous initial reply without advancing transport or changing
+        // the clock mode before its first accepted interval.
+        let fluid = runtime.graph.instance_by_node_id(&NodeId::new("fluid")).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            runtime.execute_frame(time(0.0));
+            assert!(runtime.scene_viewport_errors().is_empty(), "{:?}", runtime.scene_viewport_errors());
+            if runtime.graph.get_node(fluid).unwrap().node.coupled_rigid_frame().is_some() {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "initial paired frame timed out");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        initial = paired_frame(&runtime);
+        assert_eq!(initial.stamp.tick, 0);
+        assert_visible_pair(&runtime, &initial);
         runtime.execute_frame(time(3.0 * DT));
         let held = paired_frame(&runtime);
         // Nonblocking submit cannot accept the newly submitted reply in this
@@ -282,9 +296,10 @@ fn coupled_graph_preview_holds_pair_then_offline_drains_without_double_advanceme
     }
     runtime.execute_frame(time(3.0 * DT));
     let caught_up = paired_frame(&runtime);
-    // One live interval covers the whole span; its ordinal is not elapsed time.
-    assert_eq!(caught_up.stamp.tick, 1);
-    assert_eq!(observed_fluid_time(&runtime, &NodeId::new("fluid"), 3.0 * DT), Seconds(3.0 * DT));
+    // The live frame accepted two fixed intervals and discarded the third.
+    // Offline draining completes that pair without recovering discarded time.
+    assert_eq!(caught_up.stamp.tick, 2);
+    assert_eq!(observed_fluid_time(&runtime, &NodeId::new("fluid"), 3.0 * DT), Seconds(2.0 * DT));
     assert_eq!(caught_up.stamp.epoch, initial.stamp.epoch);
     assert!(caught_up.poses[0].pos[0] > initial.poses[0].pos[0]);
     assert_visible_pair(&runtime, &caught_up);

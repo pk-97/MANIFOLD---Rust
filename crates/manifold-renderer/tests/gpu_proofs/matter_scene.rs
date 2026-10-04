@@ -760,8 +760,8 @@ fn matter_fixed_point_headroom() {
 }
 
 /// Live (a preview budget in scope): a non-finite gravity holds the liquid
-/// with a named error; on recovery live runs its one-tick allowance, not the
-/// held frames' debt.
+/// with a named error; recovery accepts at most two fixed intervals and
+/// discards excess elapsed time, so the next frame owes only its own tick.
 #[test]
 fn matter_domain_holds_on_nonfinite_gravity() {
     let _live = manifold_renderer::node_graph::physics::PhysicsStepScope::for_render(false);
@@ -776,6 +776,9 @@ fn matter_domain_holds_on_nonfinite_gravity() {
     scene.tick();
     assert_eq!(bytemuck::cast_slice::<MatterPoint, u8>(&held), bytemuck::cast_slice::<MatterPoint, u8>(&scene.points()));
     scene.set_domain("gravity", -9.81);
+    scene.tick();
+    assert_eq!(scene.state_input("ticks"), 2.0);
+    assert_eq!(scene.stats().nonfinite, 0);
     scene.tick();
     assert_eq!(scene.state_input("ticks"), 1.0);
     assert_eq!(scene.stats().nonfinite, 0);

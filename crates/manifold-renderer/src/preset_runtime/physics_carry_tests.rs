@@ -282,22 +282,20 @@ fn offline_history_drain_long_gap_matches_native_rigid_frame_sequence() {
 }
 
 #[test]
-fn offline_history_drain_consumes_preview_debt_before_long_gap() {
+fn offline_history_drain_keeps_capped_preview_prefix_before_long_gap() {
     use crate::node_graph::physics::PhysicsStepScope;
+    let accepted_prefix = 2.0 / 60.0;
     let mut expected_runtime = runtime_with_field(50.0, false, true);
-    {
-        let _preview = PhysicsStepScope::for_render(false);
-        frame(&mut expected_runtime, 0.0);
-        frame(&mut expected_runtime, 0.9);
-    }
-    let expected = frame(&mut expected_runtime, 3.0);
+    frame(&mut expected_runtime, 0.0);
+    let expected_prefix = frame(&mut expected_runtime, accepted_prefix);
+    let expected = frame(&mut expected_runtime, accepted_prefix + (3.0 - 0.9));
 
     let mut jumped = runtime_with_field(50.0, false, true);
     {
         let _preview = PhysicsStepScope::with_preview_budget(false, std::time::Duration::ZERO);
         frame(&mut jumped, 0.0);
         let behind = frame(&mut jumped, 0.9);
-        assert!(behind.pos[1] < 49.0, "live preview must consume the full interval even at zero budget");
+        assert_eq!(behind, expected_prefix, "live accepts exactly two fixed intervals even at zero budget");
     }
     let actual = frame(&mut jumped, 3.0);
     for axis in 0..3 {
