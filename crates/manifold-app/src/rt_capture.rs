@@ -23,9 +23,10 @@
 //!   --set-at N param=value: one-shot param snap at frame N (repeatable)
 //!   --width W / --height H: override render resolution (cost measurement;
 //!                  applied to the in-memory project, file untouched)
-//!   --sync-gpu: block on the GPU fence each frame + print `[GPU_FRAME_MS]`
-//!                  (per-frame GPU cost; without it the content thread pipelines
-//!                  and frame times read as CPU encode only)
+//!   --sync-gpu: wait on the GPU fence during initial play + print `[GPU_FRAME_MS]`
+//!                  (tick plus fence wall time; retains the legacy output label)
+//!   --profile-cpu: generator node preparation and tick_frame wall time,
+//!                  including existing waits; requires --sync-gpu
 //!
 //! MANIFOLD_RT_PROBE is NOT required — the subcommand arms the capture
 //! flags directly.
@@ -282,6 +283,33 @@ pub(crate) fn arm_capture() {
     arm_rt_capture(true);
 }
 
+fn tick_frame_cpu_ms(
+    ct: &mut crate::content_thread::ContentThread,
+    state_tx: &crossbeam_channel::Sender<crate::content_state::ContentState>,
+    profile_cpu: bool,
+) -> Option<f64> {
+    let start = profile_cpu.then(std::time::Instant::now);
+    ct.tick_frame(state_tx);
+    start.map(|start| start.elapsed().as_secs_f64() * 1000.0)
+}
+
+fn report_cpu_frame(ct: &mut crate::content_thread::ContentThread, frame: u32, tick_ms: Option<f64>) {
+    let Some(tick_ms) = tick_ms else { return };
+    let mut per_type = std::collections::BTreeMap::<String, f64>::new();
+    for renderer in ct.engine.renderers_mut() {
+        if let Some(generator) = renderer.as_any_mut()
+            .downcast_mut::<manifold_renderer::generator_renderer::GeneratorRenderer>() {
+            for step in generator.take_step_profiles() {
+                *per_type.entry(step.type_id).or_default() += step.cpu_nanos as f64 / 1_000_000.0;
+            }
+        }
+    }
+    eprintln!("[CPU_FRAME_MS] frame={frame} ms={tick_ms:.3} scope=tick_frame_wall");
+    for (type_id, ms) in per_type {
+        eprintln!("[CPU_NODE_MS] frame={frame} type={type_id} ms={ms:.3} scope=generator_preparation");
+    }
+}
+
 pub fn run(args: &[String]) -> ! {
     // main.rs's logger init runs after subcommand dispatch — without this the
     // harness drops every log::info from the RT path (rebuild/fallback).
@@ -290,13 +318,14 @@ pub fn run(args: &[String]) -> ! {
 
     let paused_mode = args.iter().any(|a| a == "--paused");
 
-    // `--sync-gpu` (cost measurement): block on the GPU fence after every
-    // frame and print the per-frame GPU work time as `[GPU_FRAME_MS]`. The
-    // content thread otherwise pipelines (CPU encodes frame N+1 while the GPU
-    // runs N), so `_t_frame`/`[RENDER_TRACE]` measure CPU encode only — useless
-    // for a frame-budget question. Serializing makes each measured frame's
-    // wall-clock ≈ its GPU cost (CPU encode ~0.3ms is negligible overlap).
+    // The legacy GPU_FRAME_MS label measures tick plus fence wall time,
+    // including preparation and any waits inside the content tick.
     let sync_gpu = args.iter().any(|a| a == "--sync-gpu");
+    let profile_cpu = args.iter().any(|a| a == "--profile-cpu");
+    if profile_cpu && !sync_gpu {
+        eprintln!("rt-capture: --profile-cpu requires --sync-gpu");
+        std::process::exit(2);
+    }
 
     // `--set param=value` (repeatable): one MutateProject write after load —
     // the RT-off baseline runs `--set 8_rt_enabled=0`.
@@ -467,6 +496,15 @@ pub fn run(args: &[String]) -> ! {
         load.warmup.elapsed_ms, load.warmup.completed);
     // This tool deliberately permits an FPS override after the production load.
     ct.timer.set_target_fps(fr);
+    if profile_cpu {
+        for renderer in ct.engine.renderers_mut() {
+            if let Some(generator) = renderer.as_any_mut()
+                .downcast_mut::<manifold_renderer::generator_renderer::GeneratorRenderer>() {
+                generator.set_profiling(true);
+            }
+        }
+        eprintln!("[rt-capture] CPU profiling: generator node preparation, including existing node waits; CPU_FRAME_MS is tick_frame wall time");
+    }
 
     // Phase 1: Play N frames (rotation, beat advancing).
     ct.handle_command(ContentCommand::Play);
@@ -554,19 +592,16 @@ pub fn run(args: &[String]) -> ! {
         }
         ct.timer.wait_for_deadline();
         let gpu_t0 = std::time::Instant::now();
-        ct.tick_frame(&state_tx);
+        let cpu_ms = tick_frame_cpu_ms(&mut ct, &state_tx, profile_cpu);
         if sync_gpu {
-            // Block until this frame's command buffer completes. Wall-clock
-            // from tick start to fence done is the per-frame GPU cost (CPU
-            // encode ~0.3ms is negligible overlap) — the metric a frame budget
-            // is measured against. Without this the content thread pipelines
-            // and per-frame times read as CPU encode only.
+            // Keep the compatible label for tick plus fence wall time.
             ct.content_pipeline.wait_for_render_complete();
             eprintln!(
                 "[GPU_FRAME_MS] frame={frame} ms={:.2}",
                 gpu_t0.elapsed().as_secs_f64() * 1000.0
             );
         }
+        report_cpu_frame(&mut ct, frame, cpu_ms);
         if let Some(dev) = ct.content_pipeline.native_device() { drain_captures(dev, frame, &mut last_stats); }
     }
 
@@ -601,7 +636,8 @@ pub fn run(args: &[String]) -> ! {
                 arm_capture();
             }
             ct.timer.wait_for_deadline();
-            ct.tick_frame(&state_tx);
+            let cpu_ms = tick_frame_cpu_ms(&mut ct, &state_tx, profile_cpu);
+            report_cpu_frame(&mut ct, frame, cpu_ms);
             if let Some(dev) = ct.content_pipeline.native_device() { drain_captures(dev, frame, &mut last_stats); }
         }
         stats_after_flip = Some(last_stats.clone());
@@ -622,7 +658,8 @@ pub fn run(args: &[String]) -> ! {
                 arm_capture();
             }
             ct.timer.wait_for_deadline();
-            ct.tick_frame(&state_tx);
+            let cpu_ms = tick_frame_cpu_ms(&mut ct, &state_tx, profile_cpu);
+            report_cpu_frame(&mut ct, host, cpu_ms);
             if let Some(dev) = ct.content_pipeline.native_device() { drain_captures(dev, host, &mut last_stats); }
         }
     }
