@@ -15,6 +15,8 @@
 //! open one encoder per dispatch with encode replay off, so their split is a
 //! ratio, never the budget. `--stamp-granularity node` keeps one sampled
 //! encoder per graph step instead (replay still off; inner labels are grouped).
+//! A build with `manifold-renderer/water-race-probes` uses the solver's
+//! existing stage tags to subdivide GPU FLIP preparation, solves and movement.
 //! In paced mode a timestamped frame waits for its GPU work, a plain frame
 //! does not, and
 //! a liquid coupled to a body runs no tick while the last tick's reaction
@@ -134,6 +136,23 @@ mod tests {
         assert_eq!(granularity(Some("dispatch")), Ok(ProfileGranularity::Dispatch));
         assert_eq!(granularity(Some("node")), Ok(ProfileGranularity::Tag));
         assert!(granularity(Some("step")).is_err());
+    }
+
+    #[test]
+    fn explicit_flip_stage_tags_keep_their_solver_attribution() {
+        let span = manifold_gpu::GpuProfiledSpan {
+            tag: "gpu_flip.stage.pressure".into(),
+            label: "first dispatch in grouped encoder".into(),
+            kind: GpuWorkKind::Compute,
+            millis: 2.5,
+            start_ms: 0.0,
+            threadgroup_bytes: 0,
+        };
+        let profiles = [("Generators", GpuFrameProfile { spans: vec![span], ..GpuFrameProfile::default() })];
+        let split = split_profiles(&[], &profiles, ProfileGranularity::Tag);
+        assert_eq!(split.per_type[STEP], 2.5);
+        assert_eq!(split.per_step_label["gpu_flip.stage.pressure"], 2.5);
+        assert!(split.compute_dispatches.is_none(), "a stage span is not one dispatch");
     }
 
     #[test]
@@ -427,7 +446,12 @@ fn split_profiles(
         split.overflow += profile.overflow;
         split.invalid += profile.invalid;
         for span in &profile.spans {
-            let type_id = types.get(span.tag.as_str()).map_or_else(|| format!("(untagged, {buffer})"), |type_id| (*type_id).to_owned());
+            // The opt-in water-race-probes build subdivides GPU FLIP's node
+            // tag into stages. Preserve those labels in real-project probes.
+            let stage = span.tag.starts_with("gpu_flip.stage.");
+            let type_id = if stage { STEP.to_owned() } else {
+                types.get(span.tag.as_str()).map_or_else(|| format!("(untagged, {buffer})"), |type_id| (*type_id).to_owned())
+            };
             *split.per_type.entry(type_id.clone()).or_insert(0.0) += span.millis;
             if span.kind == GpuWorkKind::Compute && let Some(counts) = &mut split.compute_dispatches {
                 *counts.entry(type_id.clone()).or_insert(0) += 1;
@@ -439,7 +463,7 @@ fn split_profiles(
                 _ => None,
             };
             if let Some(labelled) = labelled {
-                let key = if type_id == RENDER { format!("{:?} {}", span.kind, span.label) } else { span.label.clone() };
+                let key = if stage { span.tag.clone() } else if type_id == RENDER { format!("{:?} {}", span.kind, span.label) } else { span.label.clone() };
                 *labelled.entry(key).or_insert(0.0) += span.millis;
             }
         }
@@ -555,6 +579,11 @@ fn probe(args: &Args) -> Result<(), String> {
             (interval_ms, ct.content_pipeline.last_fence_wait_ms())
         };
         let frame_split = stamped.then(|| split(&mut ct, args.granularity));
+        if args.frame_clock && let Some(split) = &frame_split
+            && (split.invalid != 0 || split.overflow != 0)
+        {
+            return Err(format!("frame {index}: incomplete GPU attribution ({} invalid, {} overflow)", split.invalid, split.overflow));
+        }
         if let Some((at, path)) = &args.png
             && *at == index
         {
