@@ -2579,7 +2579,9 @@ impl Primitive for GpuFlipStep {
                             obstacle_vertices: clock_obstacles,
                             obstacle_count,
                             source_vertices: clock_sources,
-                            source_count,
+                            // Only the first numerical slot can use initial
+                            // source prediction. Later slots use markers.
+                            source_count: if k == 0 { source_count } else { 0 },
                             live_hits,
                             live_hit_count,
                             event_impulses: field.impulses.unwrap_or(&zeros),

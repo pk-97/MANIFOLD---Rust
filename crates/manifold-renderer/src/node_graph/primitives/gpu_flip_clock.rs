@@ -318,7 +318,9 @@ impl GpuFlipClock {
             );
             encoder.copy_buffer_to_buffer(obstacle, &self.obstacle_result, 16);
         }
-        if inputs.source_count > 0 {
+        // The native engine predicts source speed only before the first
+        // simulation step. Later intervals use current marker velocities.
+        if inputs.source_count > 0 && params.flags & flags::FIRST_SUBSTEP != 0 {
             let source = self.reduce_body(
                 encoder,
                 inputs.source_vertices,
@@ -965,7 +967,7 @@ mod gpu_tests {
         assert_eq!(read_plan(&plan_readback).maximum_speed, 1024.0);
         let aggregates = read_words(&aggregate_readback, 12);
         assert_eq!(f32::from_bits(aggregates[4]), 4.0);
-        assert_eq!(f32::from_bits(aggregates[8]), 4.0);
+        assert_eq!(aggregates[8], 0, "outside startup, the unused source aggregate stays cleared");
 
         let mut enc = device.create_encoder("flip-clock populations become empty");
         enc.copy_buffer_to_buffer(&poison, &clock.scratch_a, poison.size);
@@ -1331,6 +1333,65 @@ mod gpu_tests {
         assert_eq!(with_reaction.maximum_speed, 10.0);
         assert!(with_reaction.dt < without_reaction.dt);
         assert_eq!(with_reaction.dt, expected_dt(&p, 10.0, CflRestrictions::default()));
+    }
+
+    #[test]
+    fn gpu_flip_clock_later_intervals_skip_source_reductions_value_proof() {
+        let device = crate::test_device();
+        // More than one workgroup also exercises the partial reduction that
+        // must disappear with the unused source scan.
+        const SOURCES: u32 = 129;
+        let clock = GpuFlipClock::new(&device, 1, 1, SOURCES);
+        let zeros = device.create_buffer_shared(128);
+        zeros.zero_fill();
+        let sources = device.create_buffer_shared(u64::from(SOURCES) * size_of::<GpuFlipBodyVertex>() as u64);
+        let source = GpuFlipBodyVertex {
+            position: [0.0, 0.0, 0.0, 1.0],
+            velocity: [3.0, 0.0, 0.0, 0.0],
+            ..GpuFlipBodyVertex::default()
+        };
+        unsafe { sources.write(0, bytemuck::cast_slice(&[source; SOURCES as usize])) };
+        let inputs = |source_count| GpuFlipClockInputs {
+            marker_particles: &zeros, marker_count: 0,
+            obstacle_vertices: &zeros, obstacle_count: 0,
+            source_vertices: &sources, source_count,
+            live_hits: &zeros, live_hit_count: 0,
+            event_impulses: &zeros, impulse_stride: 0,
+            impulse_nodes: [2; 3], impulse_origin: [0.0; 3], impulse_spacing: 1.0,
+            body_rows: &zeros, body_rows_offset: 0, body_reaction: &zeros,
+        };
+        let readback = device.create_buffer_shared(48);
+        let initial = GpuFlipClockParams { flags: flags::FIRST_SUBSTEP, ..params() };
+        let mut enc = device.create_encoder("flip-clock initial source proof");
+        clock.begin_frame(&mut enc, &initial);
+        let plan = clock.dispatch(&mut enc, inputs(SOURCES), &initial);
+        enc.copy_buffer_to_buffer(plan.buffer(), &readback, 48);
+        enc.commit_and_wait_completed();
+        assert_eq!(read_plan(&readback).maximum_speed, 3.0);
+
+        let untouched = vec![0x12345678u32; (clock.scratch_a.size / 4) as usize];
+        let seed = device.create_buffer_shared(clock.scratch_a.size);
+        let scratch = device.create_buffer_shared(clock.scratch_a.size);
+        unsafe { seed.write(0, bytemuck::cast_slice(&untouched)) };
+        let later = params();
+        let mut enc = device.create_encoder("flip-clock later source work proof");
+        enc.copy_buffer_to_buffer(&seed, &clock.scratch_a, seed.size);
+        clock.begin_frame(&mut enc, &later);
+        let plan = clock.dispatch(&mut enc, inputs(SOURCES), &later);
+        enc.copy_buffer_to_buffer(plan.buffer(), &readback, 48);
+        enc.copy_buffer_to_buffer(&clock.scratch_a, &scratch, scratch.size);
+        enc.commit_and_wait_completed();
+        let result = read_plan(&readback);
+        assert_eq!((result.maximum_speed, result.dt, result.nonfinite), (0.0, later.frame_duration, 0));
+        let actual = unsafe { std::slice::from_raw_parts(scratch.mapped_ptr().unwrap().cast::<u32>(), untouched.len()) };
+        assert_eq!(actual, untouched, "later intervals must not scan sources or reduce their partials");
+
+        let mut enc = device.create_encoder("flip-clock absent source reference");
+        clock.begin_frame(&mut enc, &later);
+        let plan = clock.dispatch(&mut enc, inputs(0), &later);
+        enc.copy_buffer_to_buffer(plan.buffer(), &readback, 48);
+        enc.commit_and_wait_completed();
+        assert_eq!(bytemuck::bytes_of(&result), bytemuck::bytes_of(&read_plan(&readback)));
     }
 
     #[test]
