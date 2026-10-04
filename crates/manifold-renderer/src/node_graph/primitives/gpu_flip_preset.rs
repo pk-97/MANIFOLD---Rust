@@ -1102,6 +1102,7 @@ fn water_step(b: &mut Builder, scene: WaterScene, tick: (usize, usize)) -> usize
     b.wire((domain, "gravity_z"), step, "gravity_z");
     b.wires(domain, step, &FIELD_WIRES);
     b.wire((state, "tick_index"), step, "tick_index");
+    b.wire((state, "retired_max_speed"), step, "retired_max_speed");
     b.wires(domain, step, &["bodies", "shapes", "atlas", "body_count", "dynamic_bodies", "closed_faces", "solve_level"]);
     b.wire((domain, "body_rows"), step, "rows");
     step
@@ -1595,6 +1596,24 @@ pub(super) mod tests {
                 checked += 1;
             }
             assert!(checked > 0, "{name} has no liquid state");
+        }
+    }
+
+    #[test]
+    fn gpu_flip_presets_feed_retired_speed_from_the_particles_state() {
+        for def in [water_def(WaterScene::dam_break(16)), gpu_flip_liquid_body()] {
+            let flat = manifold_core::flatten::flatten_groups(&def).expect("flattens");
+            let mut checked = 0;
+            for step in flat.nodes.iter().filter(|node| node.type_id == "node.gpu_flip_step") {
+                let particles = flat.wires.iter().find(|wire| wire.to_node == step.id && wire.to_port == "particles").expect("step has particles");
+                let speed: Vec<_> = flat.wires.iter().filter(|wire| wire.to_node == step.id && wire.to_port == "retired_max_speed").collect();
+                assert_eq!(speed.len(), 1);
+                assert_eq!(speed[0].from_node, particles.from_node);
+                assert_eq!(speed[0].from_port, "retired_max_speed");
+                assert!(flat.nodes.iter().any(|node| node.id == speed[0].from_node && node.type_id == "node.liquid_state"));
+                checked += 1;
+            }
+            assert!(checked > 0);
         }
     }
 

@@ -73,6 +73,19 @@ pub(crate) const DEFAULT_TOP_SPEED: f32 = 20.0;
 /// Configured engine CFL, shared with the clock.
 pub(crate) const ENGINE_CFL: u32 = 5;
 
+/// A fenced maximum for the exact incoming marker state can prove that the
+/// GPU scheduler's first step consumes the entire interval. Keep a 1% margin
+/// from its ceil boundary for CPU/GPU length and division rounding. This only
+/// decides whether to omit unused command chains; GPU CFL and max steps stay
+/// unchanged. The caller excludes first-tick prediction, bodies and events.
+fn one_step_cfl_safe(max_speed: f32, interval: f32, cell_size: f32) -> bool {
+    max_speed.is_finite() && max_speed >= 0.0
+        && interval.is_finite() && interval > 0.0
+        && cell_size.is_finite() && cell_size > 0.0
+        && f64::from(interval) * (f64::from(max_speed) + manifold_physics::stepping::LIVE_CFL_EPSILON) * 1.01
+            < f64::from(ENGINE_CFL) * f64::from(cell_size)
+}
+
 /// The CFL guard: the farthest one RK3 stage moves a particle, in cells,
 /// `top_speed` over one step rounded up. The inputs are f32, so a ratio
 /// within 1e-4 of a whole cell is that cell, not the next.
@@ -2046,6 +2059,7 @@ crate::primitive! {
         impulse_tick: ScalarF32 optional,
         first_tick: ScalarF32 optional,
         tick_index: ScalarF32 optional,
+        retired_max_speed: ScalarF32 optional,
         interval_duration: ScalarF32 optional, limit_interval: ScalarF32 optional,
         bodies: Array(LiquidBody) optional,
         shapes: Array(LiquidShape) optional,
@@ -2473,7 +2487,19 @@ impl Primitive for GpuFlipStep {
         let body_row_offset = u64::try_from(rows.saturating_sub(body_count).max(0))
             .unwrap_or(0)
             .saturating_mul(size_of::<LiquidBody>() as u64);
-        let history_slots = manifold_physics::stepping::LIVE_DEFAULT_MAX_STEPS + live_hit_count;
+        // LiquidState supplies -1 unless its fenced stats describe these exact
+        // incoming particles. Later intervals in the same frame, skipped
+        // readbacks, reset/recovery, and an unwired custom graph take the full
+        // GPU-adaptive path. Forces applied inside this step do not change the
+        // first scheduler decision: it reads the incoming markers. Dynamic
+        // bodies/events and narrow-band restoration remain GPU-owned here.
+        let one_step = tick_index > 0 && steps == 1.0
+            && live_hit_count == 0 && obstacle_count == 0 && source_count == 0
+            && !dynamic && !narrow_enabled && !restore_narrow
+            && one_step_cfl_safe(ctx.scalar_or_param("retired_max_speed", -1.0), interval_duration as f32, h);
+        let history_slots = if one_step { 1 } else {
+            manifold_physics::stepping::LIVE_DEFAULT_MAX_STEPS + live_hit_count
+        };
         ctx.outputs.set_scalar("substep_count", ParamValue::Float(history_slots as f32));
         let gpu = ctx.gpu_encoder();
         self.state.history.prepare(gpu.device);
@@ -2504,7 +2530,7 @@ impl Primitive for GpuFlipStep {
             constant_force: [gravity[0], gravity[1], gravity[2], 0.0],
         };
         let mut last_clock_plan = zeros.clone();
-        let encoded_steps = manifold_physics::stepping::LIVE_DEFAULT_MAX_STEPS as f32 + live_hit_count as f32;
+        let encoded_steps = history_slots;
         {
             let clock = self.state.clock.as_ref().expect("live clock prepared");
             clock.begin_frame(gpu.native_enc, &clock_params);
@@ -2616,6 +2642,34 @@ impl Primitive for GpuFlipStep {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn one_step_bound_requires_a_whole_reference_interval() {
+        use manifold_physics::{Seconds, stepping::{CflPolicy, CflRestrictions}};
+        for interval in [1.0f32 / 24.0, 1.0 / 60.0, 1.0 / 120.0] {
+            for cell_size in [0.01f32, 0.1, 1.0] {
+                let edge = ENGINE_CFL as f32 * cell_size / interval;
+                for fraction in [0.0, 0.5, 0.98, 0.999, 1.0, 1.01, 2.0] {
+                    let speed = edge * fraction;
+                    let safe = one_step_cfl_safe(speed, interval, cell_size);
+                    if safe {
+                        let reference = CflPolicy { cell_size: f64::from(cell_size), ..Default::default() }
+                            .duration(Seconds(f64::from(interval)), f64::from(speed), CflRestrictions::default());
+                        assert!(reference.diagnostic.is_none());
+                        assert_eq!(reference.value.0, f64::from(interval));
+                    }
+                    assert_eq!(safe, fraction < 0.99, "speed fraction {fraction}");
+                }
+            }
+        }
+        for bad in [-1.0, f32::NAN, f32::INFINITY] {
+            assert!(!one_step_cfl_safe(bad, 1.0 / 60.0, 0.1));
+            assert!(!one_step_cfl_safe(0.0, bad, 0.1));
+            assert!(!one_step_cfl_safe(0.0, 1.0 / 60.0, bad));
+        }
+        assert!(!one_step_cfl_safe(0.0, 0.0, 0.1));
+        assert!(!one_step_cfl_safe(0.0, 1.0 / 60.0, 0.0));
+    }
 
     #[test]
     fn narrow_band_history_restores_once_and_resets_identity() {

@@ -739,6 +739,10 @@ fn wire_liquid_intervals(def: &mut EffectGraphDef) -> bool {
             let state = def.wires.iter().filter(|w| w.to_node == node.id && w.to_port == "particles")
                 .find_map(|w| def.nodes.iter().find(|n| n.id == w.from_node && n.type_id == "node.liquid_state"));
             if let Some(state) = state {
+                if node.type_id == "node.gpu_flip_step" && !def.wires.iter().any(|w| w.to_node == node.id && w.to_port == "retired_max_speed") {
+                    def.wires.push(EffectGraphWire { from_node: state.id, from_port: "retired_max_speed".into(), to_node: node.id, to_port: "retired_max_speed".into() });
+                    changed = true;
+                }
                 if !def.wires.iter().any(|w| w.to_node == node.id && w.to_port == "identity") {
                     def.wires.push(EffectGraphWire { from_node: state.id, from_port: "identity".into(), to_node: node.id, to_port: "identity".into() });
                     changed = true;
@@ -2116,6 +2120,7 @@ mod tests {
         assert!(def.wires.contains(&wire(1, "live_hits", 3, "live_hits")));
         assert!(def.wires.contains(&wire(3, "clock_status", 2, "clock_status_in")));
         assert!(def.wires.contains(&wire(2, "identity", 3, "identity")));
+        assert!(def.wires.contains(&wire(2, "retired_max_speed", 3, "retired_max_speed")));
         assert!(def.wires.contains(&wire(3, "identity_out", 2, "identity_in")));
         assert_eq!(def.wires.iter().filter(|w| w.to_node == 4 && w.to_port == "dt").count(), 1);
         assert!(def.wires.contains(&wire(5, "out", 4, "dt")));
@@ -2150,6 +2155,31 @@ mod tests {
             assert!(!wire_liquid_intervals(&mut def));
             assert_eq!(def.wires, migrated);
         }
+    }
+
+    #[test]
+    fn retired_speed_wires_preserve_authored_inputs_and_follow_each_steps_state() {
+        use manifold_core::effect_graph_def::EffectGraphWire;
+        let wire = |from, output: &str, to, input: &str| EffectGraphWire {
+            from_node: from, from_port: output.into(), to_node: to, to_port: input.into(),
+        };
+        let authored = wire(5, "out", 4, "retired_max_speed");
+        let mut def = EffectGraphDef {
+            version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
+            name: None, description: None, preset_metadata: None, scene_modifiers: Vec::new(),
+            nodes: vec![bare_node(1, "node.liquid_state"), bare_node(2, "node.gpu_flip_step"), bare_node(3, "node.liquid_state"), bare_node(4, "node.gpu_flip_step"), bare_node(5, "node.scalar"), bare_node(6, "node.gpu_flip_step")],
+            wires: vec![wire(1, "out", 2, "particles"), wire(3, "out", 4, "particles"), authored.clone()],
+        };
+        assert!(wire_liquid_intervals(&mut def));
+        assert!(def.wires.contains(&wire(1, "retired_max_speed", 2, "retired_max_speed")));
+        assert!(def.wires.contains(&authored));
+        for step in [2, 4] {
+            assert_eq!(def.wires.iter().filter(|w| w.to_node == step && w.to_port == "retired_max_speed").count(), 1);
+        }
+        assert!(!def.wires.iter().any(|w| w.to_node == 6), "no state is inferred for an unconnected step");
+        let migrated = def.wires.clone();
+        assert!(!wire_liquid_intervals(&mut def));
+        assert_eq!(def.wires, migrated);
     }
 
     /// Each liquid field consumer's bounds wiring as (consumer type, blob

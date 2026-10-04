@@ -44,13 +44,13 @@ const RESULTS: &[SubstepResultPorts] = &[
     SubstepResultPorts { capture: "identity_in", output: "identity", optional: true },
 ];
 
-/// The region's contract. The one iteration scalar is the tick's index in
-/// the epoch.
+/// The region's contract: the tick's index in the epoch and a fenced speed
+/// sample, valid only for that exact incoming tick state.
 pub const LIQUID_STATE_PORTS: SubstepBoundaryPorts = SubstepBoundaryPorts {
     seed: "seed",
     capture: "in",
     state: "out",
-    iteration_scalars: &["tick_index"],
+    iteration_scalars: &["tick_index", "retired_max_speed"],
     results: RESULTS,
     // The domain owns the clock; offline it may sync between ticks.
     clock: Some("ticks"),
@@ -72,6 +72,8 @@ pub struct ReadbackSlot {
     epoch: u32,
     pending: bool,
     endpoint: f64,
+    /// Exact incoming tick ordinal after the copied final tick completed.
+    completed_ticks: u64,
 }
 
 fn create_shared_buffer(device: &GpuDevice, bytes: u64) -> Result<GpuBuffer, String> {
@@ -125,6 +127,7 @@ crate::primitive! {
         dust_particles: Array(FluidParticle),
         interior: Array(f32),
         tick_index: ScalarF32,
+        retired_max_speed: ScalarF32,
         live_count: ScalarF32,
         fault: ScalarF32,
     },
@@ -156,6 +159,7 @@ crate::primitive! {
         cap_hit: bool = false,
         clock_nonfinite: bool = false,
         last_stats: Option<LiquidTickStats> = None,
+        retired_ticks: Option<u64> = None,
         faces: Option<GpuBuffer> = None,
         whitewater_pool: Option<GpuBuffer> = None,
         whitewater_empty: Option<GpuBuffer> = None,
@@ -225,7 +229,7 @@ impl LiquidState {
     /// Read every retired readback of the current epoch, newest last.
     fn poll_readbacks(&mut self, clock: Option<&manifold_gpu::FrameClock>, live_recovery: bool) -> bool {
         let Some(epoch) = self.epoch else { return false ;};
-        let mut newest: Option<(u64, LiquidTickStats, f64, bool, bool)> = None;
+        let mut newest: Option<(u64, LiquidTickStats, f64, u64, bool, bool)> = None;
         for slot in self.readback.iter_mut().filter(|s| s.pending) {
             if !clock.is_none_or(|c| c.is_complete(slot.stamp)) {
                 continue;
@@ -250,20 +254,62 @@ impl LiquidState {
             });
             let cap_hit = status.is_some_and(|words| words[4] != 0);
             let nonfinite = status.is_some_and(|words| words[5] != 0);
-            if newest.is_none_or(|(stamp, _, _, _, _)| slot.stamp >= stamp) {
-                newest = Some((slot.stamp, stats, slot.endpoint, cap_hit, nonfinite));
+            if newest.is_none_or(|(stamp, _, _, _, _, _)| slot.stamp >= stamp) {
+                newest = Some((slot.stamp, stats, slot.endpoint, slot.completed_ticks, cap_hit, nonfinite));
             }
         }
-        if let Some((_, stats, endpoint, cap_hit, nonfinite)) = newest {
-            self.cap_hit = cap_hit;
-            self.clock_nonfinite = nonfinite;
-            self.capacity_faulted |= stats.narrow_band_shortage > 0;
-            self.faulted = self.capacity_faulted || stats.nonfinite > 0 || (self.faulted && !live_recovery);
-            self.completed_time = endpoint;
-            self.last_stats = Some(stats);
-            return self.faulted && live_recovery && !self.capacity_faulted;
+        if let Some((_, stats, endpoint, completed_ticks, cap_hit, nonfinite)) = newest {
+            return self.accept_retired_stats(stats, endpoint, completed_ticks, cap_hit, nonfinite, live_recovery);
         }
         false
+    }
+
+    fn accept_retired_stats(
+        &mut self,
+        stats: LiquidTickStats,
+        endpoint: f64,
+        completed_ticks: u64,
+        cap_hit: bool,
+        nonfinite: bool,
+        live_recovery: bool,
+    ) -> bool {
+        self.cap_hit = cap_hit;
+        self.clock_nonfinite = nonfinite;
+        self.capacity_faulted |= stats.narrow_band_shortage > 0;
+        self.faulted = self.capacity_faulted || stats.nonfinite > 0 || (self.faulted && !live_recovery);
+        self.completed_time = endpoint;
+        self.last_stats = Some(stats);
+        self.retired_ticks = (!self.faulted && !nonfinite).then_some(completed_ticks);
+        self.faulted && live_recovery && !self.capacity_faulted
+    }
+
+    fn reset_epoch(&mut self, epoch: u32) {
+        self.completed_time = 0.0;
+        self.dropped_time.reset();
+        self.epoch = Some(epoch);
+        self.ticks_done = 0;
+        self.faulted = false;
+        self.capacity_faulted = false;
+        self.cap_hit = false;
+        self.clock_nonfinite = false;
+        self.last_stats = None;
+        self.retired_ticks = None;
+    }
+
+    /// Only a retired sample of this exact incoming tick state is fresh.
+    fn retired_speed(&self, iteration: u32) -> f32 {
+        if self.faulted || self.capacity_faulted || self.clock_nonfinite || self.identity_reset {
+            return -1.0;
+        }
+        let Some(incoming_tick) = self.ticks_done.checked_add(u64::from(iteration)) else { return -1.0 };
+        let Some(stats) = self.last_stats.filter(|stats| {
+            self.retired_ticks == Some(incoming_tick)
+                && stats.nonfinite == 0
+                && stats.narrow_band_shortage == 0
+                && stats.max_speed.is_finite()
+                && stats.max_speed >= 0.0
+        }) else { return -1.0 };
+        stats.max_speed
     }
 }
 
@@ -499,6 +545,9 @@ impl Primitive for LiquidState {
         // Recovery increments on the GPU, after all submitted births. Retired
         // CPU metadata may be older than the allocator currently on the queue.
         let seed_identity_epoch = if self.epoch != Some(epoch) { 0 } else { u32::MAX };
+        if epoch_reset {
+            self.reset_epoch(epoch);
+        }
         let identity = self.identity.get_or_insert_with(|| gpu.device.create_buffer_shared(IDENTITY_BYTES));
         if (epoch_reset || fresh_interior)
             && let Some(interior) = self.interior.as_ref()
@@ -507,15 +556,6 @@ impl Primitive for LiquidState {
             refused = Some(format!("Liquid State: {error}"));
         }
         if epoch_reset {
-            self.completed_time = 0.0;
-            self.dropped_time.reset();
-            self.epoch = Some(epoch);
-            self.ticks_done = 0;
-            self.faulted = false;
-            self.capacity_faulted = false;
-            self.cap_hit = false;
-            self.clock_nonfinite = false;
-            self.last_stats = None;
             if let (Some(seed), Some(out)) = (seed, out) {
                 let bytes = (u64::from(count) * std::mem::size_of::<FluidParticle>() as u64).min(seed.size).min(out.size);
                 if bytes > 0 {
@@ -549,6 +589,7 @@ impl Primitive for LiquidState {
             }
         }
         if recover {
+            self.retired_ticks = None;
             // Replace poisoned state in encoder order without reanchoring time.
             // A numerical fault must not latch a show stop until manual Reset.
             if let (Some(seed), Some(out)) = (seed, out) {
@@ -604,6 +645,7 @@ impl Primitive for LiquidState {
             return false;
         }
         scalars[0] = (self.ticks_done + u64::from(iteration)) as f32;
+        scalars[1] = self.retired_speed(iteration);
         true
     }
 
@@ -673,6 +715,7 @@ impl Primitive for LiquidState {
                     epoch,
                     pending: false,
                     endpoint: 0.0,
+                    completed_ticks: 0,
                 });
                 self.readback.len() - 1
             }
@@ -695,6 +738,7 @@ impl Primitive for LiquidState {
         slot.epoch = epoch;
         slot.pending = true;
         slot.endpoint = self.submitted_time;
+        slot.completed_ticks = self.ticks_done;
     }
 }
 
@@ -708,16 +752,112 @@ mod tests {
         let mut state = LiquidState::new();
         state.pending = 3;
         state.ticks_done = 10;
-        let mut scalars = [0.0f32; 1];
+        let mut scalars = [0.0f32; 2];
         let mut seen = Vec::new();
         for i in 0.. {
             if !EffectNode::substep_iteration(&mut state, i, &mut scalars) {
                 break;
             }
             seen.push(scalars[0]);
+            assert_eq!(scalars[1], -1.0);
         }
         assert_eq!(seen, [10.0, 11.0, 12.0]);
-        assert_eq!(LIQUID_STATE_PORTS.iteration_scalars.len(), 1);
+        assert_eq!(LIQUID_STATE_PORTS.iteration_scalars, ["tick_index", "retired_max_speed"]);
+    }
+
+    fn retired_state(speed: f32) -> LiquidState {
+        let mut state = LiquidState::new();
+        state.epoch = Some(1);
+        state.pending = 3;
+        state.ticks_done = 10;
+        state.accept_retired_stats(LiquidTickStats { max_speed: speed, ..LiquidTickStats::default() }, 1.0, 10, false, false, true);
+        state
+    }
+
+    #[test]
+    fn liquid_state_retired_speed_is_fresh_only_for_the_incoming_tick() {
+        let mut state = retired_state(3.5);
+        let mut scalars = [0.0; 2];
+        for (iteration, expected) in [(0, 3.5), (1, -1.0), (2, -1.0)] {
+            assert!(EffectNode::substep_iteration(&mut state, iteration, &mut scalars));
+            assert_eq!(scalars[1], expected);
+        }
+        // Skipping a full readback ring leaves the previous sample untouched,
+        // while successfully captured ticks still advance the incoming state.
+        state.ticks_done += 3;
+        assert_eq!(state.retired_speed(0), -1.0);
+        state.retired_ticks = None;
+        assert_eq!(state.retired_speed(0), -1.0);
+    }
+
+    #[test]
+    fn liquid_state_retired_speed_freshness_uses_exact_integer_ticks() {
+        let mut state = retired_state(1.0);
+        state.ticks_done = 1 << 24;
+        state.retired_ticks = Some(state.ticks_done);
+        assert_eq!(state.ticks_done as f32, (state.ticks_done + 1) as f32);
+        assert_eq!(state.retired_speed(0), 1.0);
+        assert_eq!(state.retired_speed(1), -1.0);
+        state.ticks_done = u64::MAX;
+        state.retired_ticks = Some(u64::MAX);
+        assert_eq!(state.retired_speed(1), -1.0);
+    }
+
+    #[test]
+    fn liquid_state_retired_speed_rejects_invalid_samples_and_faults() {
+        assert_eq!(retired_state(0.0).retired_speed(0), 0.0);
+        for speed in [f32::NAN, f32::INFINITY, -0.5] {
+            assert_eq!(retired_state(speed).retired_speed(0), -1.0);
+        }
+        for fault in 0..6 {
+            let mut state = retired_state(2.0);
+            match fault {
+                0 => state.faulted = true,
+                1 => state.capacity_faulted = true,
+                2 => state.clock_nonfinite = true,
+                3 => state.identity_reset = true,
+                4 => state.last_stats.as_mut().unwrap().nonfinite = 1,
+                5 => state.last_stats.as_mut().unwrap().narrow_band_shortage = 1,
+                _ => unreachable!(),
+            }
+            assert_eq!(state.retired_speed(0), -1.0, "fault {fault}");
+        }
+        let mut state = retired_state(2.0);
+        state.cap_hit = true;
+        let stats = state.last_stats.as_mut().unwrap();
+        stats.speed_capped = 1;
+        stats.unconverged = 1;
+        assert_eq!(state.retired_speed(0), 2.0, "ordinary caps do not invalidate the final speed");
+    }
+
+    #[test]
+    fn liquid_state_retired_speed_epoch_reset_invalidates_the_sample() {
+        let mut state = retired_state(2.0);
+        state.reset_epoch(2);
+        assert_eq!(state.epoch, Some(2));
+        assert_eq!(state.retired_ticks, None);
+        assert_eq!(state.last_stats, None);
+        assert_eq!(state.retired_speed(0), -1.0);
+        // An old ordinal must not become fresh when a new epoch reaches it.
+        state.ticks_done = 10;
+        assert_eq!(state.retired_speed(0), -1.0);
+    }
+
+    #[test]
+    fn liquid_state_retired_speed_recovery_invalidates_the_captured_tick() {
+        let mut state = retired_state(2.0);
+        let poisoned = LiquidTickStats { max_speed: 2.0, nonfinite: 1, ..LiquidTickStats::default() };
+        assert!(state.accept_retired_stats(poisoned, 1.0, 10, false, false, true));
+        assert_eq!(state.retired_ticks, None);
+        assert_eq!(state.retired_speed(0), -1.0);
+        // Reseeding does not make the old diagnostic describe the new state.
+        state.faulted = false;
+        state.last_stats.as_mut().unwrap().nonfinite = 0;
+        assert_eq!(state.retired_speed(0), -1.0);
+        let healthy = LiquidTickStats { max_speed: 0.0, ..LiquidTickStats::default() };
+        assert!(!state.accept_retired_stats(healthy, 2.0, 10, false, true, true));
+        assert_eq!(state.retired_ticks, None, "clock faults also invalidate the captured tick");
+        assert_eq!(state.retired_speed(0), -1.0);
     }
 
     #[test]
