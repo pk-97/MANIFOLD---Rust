@@ -254,6 +254,11 @@ impl LiquidState {
             });
             let cap_hit = status.is_some_and(|words| words[4] != 0);
             let nonfinite = status.is_some_and(|words| words[5] != 0);
+            if let Some(status) = status {
+                log::debug!(target: "gpu_flip::schedule",
+                    "retired={} steps={} remaining={} maximum={} cap={cap_hit} nonfinite={nonfinite}",
+                    slot.completed_ticks, status[6], f32::from_bits(status[2]), stats.max_speed);
+            }
             if newest.is_none_or(|(stamp, _, _, _, _, _)| slot.stamp >= stamp) {
                 newest = Some((slot.stamp, stats, slot.endpoint, slot.completed_ticks, cap_hit, nonfinite));
             }

@@ -201,10 +201,27 @@ impl Run {
     /// dispatch label, summed over the frame, and the frame's total.
     #[cfg(feature = "water-race-probes")]
     pub(super) fn profiled_labels(&mut self) -> (Vec<(String, f64, usize)>, f64) {
+        let profile = self.sampled_frame(manifold_gpu::ProfileGranularity::Dispatch);
+        let mut by_label: Vec<(String, f64, usize)> = Vec::new();
+        for span in &profile.spans {
+            match by_label.iter_mut().find(|(l, _, _)| *l == span.label) {
+                Some(row) => {
+                    row.1 += span.millis;
+                    row.2 += 1;
+                }
+                None => by_label.push((span.label.clone(), span.millis, 1)),
+            }
+        }
+        (by_label, profile.total_ms)
+    }
+
+    /// Preserve sampling diagnostics for probes that require complete attribution.
+    #[cfg(feature = "water-race-probes")]
+    fn sampled_frame(&mut self, granularity: manifold_gpu::ProfileGranularity) -> manifold_gpu::GpuFrameProfile {
         self.entering = self.particles();
         let sampler = self.device.create_timestamp_sampler(8192).expect("timestamp sampling");
         let mut enc = self.device.create_encoder("gpu-flip-scene-labels");
-        enc.enable_dispatch_profiling(sampler, &self.device);
+        enc.enable_profiling_at(sampler, &self.device, granularity);
         self.exec.set_profiling(true);
         {
             let mut gpu = GpuEncoder::new(&mut enc, &self.device);
@@ -218,18 +235,7 @@ impl Run {
             self.frames += 1;
         }
         self.exec.set_profiling(false);
-        let profile = enc.commit_and_wait_profiled(&self.device);
-        let mut by_label: Vec<(String, f64, usize)> = Vec::new();
-        for span in &profile.spans {
-            match by_label.iter_mut().find(|(l, _, _)| *l == span.label) {
-                Some(row) => {
-                    row.1 += span.millis;
-                    row.2 += 1;
-                }
-                None => by_label.push((span.label.clone(), span.millis, 1)),
-            }
-        }
-        (by_label, profile.total_ms)
+        enc.commit_and_wait_profiled(&self.device)
     }
 
     /// One frame in its own command buffer: GPU ms and CPU encode ms.
@@ -1356,6 +1362,84 @@ fn run_with_retired_speed(scene: WaterScene, enabled: bool) -> Run {
     }
     graph.add_external_output(step, "clock_status").expect("clock status read");
     Run::with_graph(scene, graph)
+}
+
+/// Rank one settled 64³ step's stages; sampling changes encoder layout,
+/// so its total is attribution data rather than ordinary frame performance.
+#[cfg(feature = "water-race-probes")]
+#[test]
+fn gpu_flip_one_step_stage_cost_probe() {
+    const WARMUP: usize = 4;
+    let scene = WaterScene::still_pool(64).with_steps(1);
+    let mut profiled = run_with_retired_speed(scene, true);
+    let mut plain = run_with_retired_speed(scene, true);
+    profiled.set_encode_replay(true);
+    plain.set_encode_replay(true);
+    for _ in 0..WARMUP {
+        profiled.frame();
+        plain.frame();
+    }
+    assert_eq!(profiled.frames, plain.frames, "same time before the sampled frame");
+    let profile = objc2::rc::autoreleasepool(|_| profiled.sampled_frame(manifold_gpu::ProfileGranularity::Tag));
+    plain.frame();
+    assert_eq!(profiled.frames, plain.frames, "same time after the sampled frame");
+
+    let mut by_label: std::collections::BTreeMap<String, (f64, usize, usize)> = std::collections::BTreeMap::new();
+    for span in &profile.spans {
+        let label = if span.tag.starts_with("gpu_flip.stage.") { &span.tag } else { &span.label };
+        let row = by_label.entry(label.clone()).or_default();
+        row.0 += span.millis;
+        row.1 += usize::from(span.kind == manifold_gpu::GpuWorkKind::Compute);
+        row.2 += 1;
+    }
+    let mut rows: Vec<_> = by_label.into_iter().collect();
+    rows.sort_by(|(a_label, (a_ms, _, _)), (b_label, (b_ms, _, _))|
+        b_ms.total_cmp(a_ms).then_with(|| a_label.cmp(b_label)));
+    let attributed_ms = profile.attributed_ms();
+    let compute_encoders: usize = rows.iter().map(|(_, row)| row.1).sum();
+    println!(
+        "GPU FLIP 64³ one-step stage attribution, {WARMUP} warmup + 1 sampled frame: profiled total {:.3} ms; attributed {:.3} ms; unresolved {:.3} ms; {} spans, {compute_encoders} compute encoders; overflow {}, invalid {}, failed command buffers {}",
+        profile.total_ms, attributed_ms, profile.total_ms - attributed_ms, profile.spans.len(),
+        profile.overflow, profile.invalid, profile.failed_command_buffers,
+    );
+    for (label, (ms, count, spans)) in &rows {
+        println!("GPU FLIP 64³ one-step: {label:<48} {ms:9.3} ms; {count} compute encoders, {spans} spans");
+    }
+    assert_eq!(profile.failed_command_buffers, 0, "sampled command buffers completed");
+    assert_eq!(profile.overflow, 0, "every encoded span must fit the timestamp sampler");
+    assert_eq!(profile.invalid, 0, "every encoded span must resolve valid samples");
+    assert!(profile.total_ms.is_finite() && profile.total_ms > 0.0, "finite positive profiled total");
+    assert!(attributed_ms.is_finite() && attributed_ms > 0.0 && compute_encoders > 0, "compute work must be attributed");
+    for span in &profile.spans {
+        assert!(!span.label.is_empty(), "every span has a dispatch/pass label");
+        assert!(span.start_ms.is_finite() && span.millis.is_finite() && span.millis >= 0.0,
+            "{}: valid resolved timing", span.label);
+    }
+
+    for (label, run) in [("profiled", &profiled), ("plain", &plain)] {
+        let status: Vec<u32> = run.read(STEP_NODE, "clock_status", 8);
+        assert_eq!(status[0], (1.0f32 / 60.0).to_bits(), "{label}: final slot is the one active step");
+        assert_eq!(status[1], (1.0f32 / 60.0).to_bits(), "{label}: exact completed time");
+        assert_eq!(status[2], 0.0f32.to_bits(), "{label}: interval is complete");
+        assert_eq!(status[6], 1, "{label}: exactly one accepted step");
+        assert_eq!((status[4], status[5]), (0, 0), "{label}: no cap or nonfinite clock input");
+        let stats = particle_stats(&run.particles());
+        assert_eq!((stats.live, stats.bad), (scene.particles() as usize, 0), "{label}: all water remains live and finite");
+    }
+    let (pp, up) = (profiled.particles(), plain.particles());
+    assert!(bytemuck::cast_slice::<_, u8>(&pp) == bytemuck::cast_slice::<_, u8>(&up), "published particle bits differ");
+    let pp: Vec<FluidParticle> = profiled.read(STEP_NODE, "out", scene.particles() as usize);
+    let up: Vec<FluidParticle> = plain.read(STEP_NODE, "out", scene.particles() as usize);
+    assert!(bytemuck::cast_slice::<_, u8>(&pp) == bytemuck::cast_slice::<_, u8>(&up), "step particle bits differ");
+    let (pf, uf) = (profiled.faces(), plain.faces());
+    assert!(bytemuck::cast_slice::<_, u8>(&pf) == bytemuck::cast_slice::<_, u8>(&uf), "final face bits differ");
+    let ps: Vec<u32> = profiled.read("stats", "stats_out", LIQUID_STATS_WORDS as usize);
+    let us: Vec<u32> = plain.read("stats", "stats_out", LIQUID_STATS_WORDS as usize);
+    assert_eq!(ps, us, "full liquid stats differ");
+    let capped_words = 2 * scene.particles() as usize + SOLVER_WORDS as usize;
+    let pc: Vec<u32> = profiled.read(STEP_NODE, "capped", capped_words);
+    let uc: Vec<u32> = plain.read(STEP_NODE, "capped", capped_words);
+    assert_eq!(pc, uc, "full capped words differ");
 }
 
 /// The cost of recording inactive slots, with completed time and all final

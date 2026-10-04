@@ -1204,6 +1204,8 @@ impl StepState {
     }
 
     fn encode(&mut self, device: &GpuDevice, enc: &mut GpuEncoder, step: &Step<'_>, clock_params: &GpuFlipClockParams) -> Result<(), String> {
+        #[cfg(all(test, feature = "water-race-probes"))]
+        enc.set_profile_tag("gpu_flip.stage.prepare");
         let pipes = self.pipelines.as_ref().expect("step pipelines built by prepare_pipelines at install");
         let (Some(l), Some(tiles), Some(sorted), Some(out_faces)) = (self.lattice.as_ref(), self.tiles.as_ref(), self.sorted.as_ref(), self.faces.as_ref()) else {
             return Err("the step's storage was not reserved".into());
@@ -1595,6 +1597,8 @@ impl StepState {
         // Which water reaches air holds every step: the density source reads
         // it too. As the engine does, the solid velocity's zeroing is skipped
         // when the bodies are in the solve: their mass resolves the pocket.
+        #[cfg(all(test, feature = "water-race-probes"))]
+        enc.set_profile_tag("gpu_flip.stage.pockets");
         encode_pockets(enc, pipes, &base, l, ranges, cells, step.capped, step.tally, gate_plan);
         enc.dispatch_compute(
             &pipes.pocket_pin,
@@ -1650,6 +1654,8 @@ impl StepState {
                 encode_pocket_mean(enc, pipes, &params, l.coarse_pockets(), rhs, solve, step.capped, step.tally, gate_plan);
             }
         };
+        #[cfg(all(test, feature = "water-race-probes"))]
+        enc.set_profile_tag("gpu_flip.stage.pressure");
         let water = Water {
             lattice: cells,
             cell_size: p.cell_size,
@@ -1715,6 +1721,8 @@ impl StepState {
         if step.dynamic {
             self.bodies.react(enc, &coupled, self.solver.tiles()?, &l.pressure, step.reaction)?;
         }
+        #[cfg(all(test, feature = "water-race-probes"))]
+        enc.set_profile_tag("gpu_flip.stage.project_extend");
         extend(enc, pipes, step.clock_plan, &base, face_groups, [&l.f, out_faces, &l.b], step.band, "gpu_flip.step.extend_new");
         enc.compute_memory_barrier_buffers();
         // The engine constrains its velocity and its saved velocity to the
@@ -1755,6 +1763,8 @@ impl StepState {
         // The density projection (module doc): its pressure's gradient is
         // taken off a copy of the new faces in `l.f`, and the move reads the
         // difference as a displacement. Air sits at zero at its centres.
+        #[cfg(all(test, feature = "water-race-probes"))]
+        enc.set_profile_tag("gpu_flip.stage.density");
         let spread = if step.density {
             if step.narrow_enabled {
                 let nb = self.narrow.buffers.as_ref().ok_or("narrow-band storage was not reserved")?;
@@ -1811,6 +1821,8 @@ impl StepState {
         } else {
             out_faces
         };
+        #[cfg(all(test, feature = "water-race-probes"))]
+        enc.set_profile_tag("gpu_flip.stage.move");
         enc.dispatch_compute(
             &pipes.advect,
             &[
@@ -2509,6 +2521,9 @@ impl Primitive for GpuFlipStep {
         let history_slots = if one_step { 1 } else {
             manifold_physics::stepping::LIVE_DEFAULT_MAX_STEPS + live_hit_count
         };
+        log::debug!(target: "gpu_flip::schedule",
+            "tick={tick_index} slots={history_slots} interval={interval_duration} h={h} marker={} obstacle={obstacle_speed} minimum={steps} hits={live_hit_count} sources={source_count} narrow={narrow_enabled} restore={restore_narrow}",
+            ctx.scalar_or_param("retired_max_speed", -1.0));
         ctx.outputs.set_scalar("substep_count", ParamValue::Float(history_slots as f32));
         let gpu = ctx.gpu_encoder();
         self.state.history.prepare(gpu.device);
@@ -2590,6 +2605,8 @@ impl Primitive for GpuFlipStep {
                 ctx.error(format!("{NAME}: {error}"));
                 return;
             }
+                #[cfg(all(test, feature = "water-race-probes"))]
+                gpu.native_enc.set_profile_tag("gpu_flip.stage.finish");
                 self.state.commit_mask(
                     gpu.native_enc,
                     &plan_buffer,
