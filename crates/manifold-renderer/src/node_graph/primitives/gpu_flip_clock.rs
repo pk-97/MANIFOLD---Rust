@@ -287,44 +287,50 @@ impl GpuFlipClock {
                 inputs.impulse_stride,
             ],
         };
-        let marker = self.reduce_marker(
-            encoder,
-            inputs.marker_particles,
-            inputs.marker_count,
-            inputs.live_hits,
-            inputs.live_hit_count,
-            inputs.event_impulses,
-            &event_params,
-            params,
-        );
-        encoder.copy_buffer_to_buffer(marker, &self.marker_result, 16);
-        // The reduction result is consumed by the classification pass to
-        // apply the native relative-outlier thresholds.  Keep this explicit
-        // because the copy and the following dispatch target different
-        // resources on Metal.
-        encoder.compute_memory_barrier_buffers();
-        let obstacle = self.reduce_body(
-            encoder,
-            inputs.obstacle_vertices,
-            inputs.obstacle_count,
-            false,
-            inputs.body_rows,
-            inputs.body_rows_offset,
-            inputs.body_reaction,
-            params,
-        );
-        encoder.copy_buffer_to_buffer(obstacle, &self.obstacle_result, 16);
-        let source = self.reduce_body(
-            encoder,
-            inputs.source_vertices,
-            inputs.source_count,
-            true,
-            inputs.body_rows,
-            inputs.body_rows_offset,
-            inputs.body_reaction,
-            params,
-        );
-        encoder.copy_buffer_to_buffer(source, &self.source_result, 16);
+        if inputs.marker_count > 0 {
+            let marker = self.reduce_marker(
+                encoder,
+                inputs.marker_particles,
+                inputs.marker_count,
+                inputs.live_hits,
+                inputs.live_hit_count,
+                inputs.event_impulses,
+                &event_params,
+                params,
+                ReductionPhase::Scheduling,
+            );
+            encoder.copy_buffer_to_buffer(marker, &self.marker_result, 16);
+            // The reduction result is consumed by the classification pass to
+            // apply the native relative-outlier thresholds. Keep this explicit
+            // because the copy and following dispatch target different resources.
+            encoder.compute_memory_barrier_buffers();
+        }
+        if inputs.obstacle_count > 0 {
+            let obstacle = self.reduce_body(
+                encoder,
+                inputs.obstacle_vertices,
+                inputs.obstacle_count,
+                false,
+                inputs.body_rows,
+                inputs.body_rows_offset,
+                inputs.body_reaction,
+                params,
+            );
+            encoder.copy_buffer_to_buffer(obstacle, &self.obstacle_result, 16);
+        }
+        if inputs.source_count > 0 {
+            let source = self.reduce_body(
+                encoder,
+                inputs.source_vertices,
+                inputs.source_count,
+                true,
+                inputs.body_rows,
+                inputs.body_rows_offset,
+                inputs.body_reaction,
+                params,
+            );
+            encoder.copy_buffer_to_buffer(source, &self.source_result, 16);
+        }
         encoder.compute_memory_barrier_buffers();
         let hit_params = [inputs.live_hit_count, 0, 0, 0];
 
@@ -389,7 +395,7 @@ impl GpuFlipClock {
         count: u32,
         params: &GpuFlipClockParams,
     ) {
-        let reduce_params = reduce_bytes(count, 0);
+        let reduce_params = reduce_bytes(count, 0, ReductionPhase::Cleanup);
         encoder.dispatch_compute(
             &self.marker_classify,
             &[
@@ -482,24 +488,29 @@ impl GpuFlipClock {
             origin_spacing: [0.0, 0.0, 0.0, 1.0],
             nodes_stride: [2, 2, 2, 0],
         };
-        let marker = self.reduce_marker(
-            encoder,
-            particles,
-            count,
-            &empty_hits,
-            0,
-            &empty_hits,
-            &empty_params,
-            params,
-        );
-        encoder.copy_buffer_to_buffer(marker, &self.marker_result, 16);
+        if count > 0 {
+            let marker = self.reduce_marker(
+                encoder,
+                particles,
+                count,
+                &empty_hits,
+                0,
+                &empty_hits,
+                &empty_params,
+                params,
+                ReductionPhase::Cleanup,
+            );
+            encoder.copy_buffer_to_buffer(marker, &self.marker_result, 16);
+        } else {
+            encoder.clear_buffer(&self.marker_result);
+        }
         encoder.compute_memory_barrier_buffers();
         encoder.clear_buffer(&self.marker_histogram);
         encoder.clear_buffer(&self.marker_outliers);
         self.classify_marker(encoder, particles, count, params);
         self.finalize_marker_limit(encoder, params);
         encoder.compute_memory_barrier_buffers();
-        let reduce_params = reduce_bytes(count, 0);
+        let reduce_params = reduce_bytes(count, 0, ReductionPhase::Cleanup);
         encoder.dispatch_compute(
             &self.marker_remove,
             &[
@@ -533,14 +544,12 @@ impl GpuFlipClock {
         event_impulses: &GpuBuffer,
         event_params: &EventFieldParams,
         clock_params: &GpuFlipClockParams,
+        phase: ReductionPhase,
     ) -> &'a GpuBuffer {
-        if count == 0 {
-            encoder.clear_buffer(&self.scratch_a);
-            return &self.scratch_a;
-        }
+        debug_assert!(count > 0, "empty marker populations retain the cleared aggregate");
         let mut n = count;
         let mut pass = 0u32;
-        let reduce_data = reduce_bytes(n, 0);
+        let reduce_data = reduce_bytes(n, 0, phase);
         let hit_params = [live_hit_count, 0, 0, 0];
         encoder.dispatch_compute(
             &self.marker_reduce,
@@ -598,7 +607,7 @@ impl GpuFlipClock {
             } else {
                 (&self.scratch_b, &self.scratch_a)
             };
-            let reduce_data = reduce_bytes(n, 0);
+            let reduce_data = reduce_bytes(n, 0, phase);
             encoder.dispatch_compute(
                 &self.partial_reduce,
                 &[
@@ -616,6 +625,7 @@ impl GpuFlipClock {
                         binding: 10,
                         data: &reduce_data,
                     },
+                    GpuBinding::Buffer { binding: 24, buffer: &self.plan, offset: 0 },
                 ],
                 [n.div_ceil(WORKGROUP), 1, 1],
                 "flip-clock-marker-partial",
@@ -642,14 +652,11 @@ impl GpuFlipClock {
         body_reaction: &GpuBuffer,
         params: &GpuFlipClockParams,
     ) -> &'a GpuBuffer {
-        if count == 0 {
-            encoder.clear_buffer(&self.scratch_a);
-            return &self.scratch_a;
-        }
+        debug_assert!(count > 0, "empty body populations retain the cleared aggregate");
         let mode = u32::from(source);
         let mut n = count;
         let mut pass = 0u32;
-        let reduce_data = reduce_bytes(n, mode);
+        let reduce_data = reduce_bytes(n, mode, ReductionPhase::Scheduling);
         encoder.dispatch_compute(
             &self.body_reduce,
             &[
@@ -671,6 +678,7 @@ impl GpuFlipClock {
                     binding: 6,
                     data: params.as_bytes(),
                 },
+                GpuBinding::Buffer { binding: 24, buffer: &self.plan, offset: 0 },
                 GpuBinding::Buffer {
                     binding: 28,
                     buffer: body_rows,
@@ -697,7 +705,7 @@ impl GpuFlipClock {
             } else {
                 (&self.scratch_b, &self.scratch_a)
             };
-            let reduce_data = reduce_bytes(n, 0);
+            let reduce_data = reduce_bytes(n, 0, ReductionPhase::Scheduling);
             encoder.dispatch_compute(
                 &self.partial_reduce,
                 &[
@@ -715,6 +723,7 @@ impl GpuFlipClock {
                         binding: 10,
                         data: &reduce_data,
                     },
+                    GpuBinding::Buffer { binding: 24, buffer: &self.plan, offset: 0 },
                 ],
                 [n.div_ceil(WORKGROUP), 1, 1],
                 "flip-clock-body-partial",
@@ -732,10 +741,19 @@ impl GpuFlipClock {
 }
 
 #[inline]
-fn reduce_bytes(count: u32, mode: u32) -> [u8; 16] {
-    let words = [count, mode, 0, 0];
+fn reduce_bytes(count: u32, mode: u32, phase: ReductionPhase) -> [u8; 16] {
+    let words = [count, mode, phase as u32, 0];
     // A stack-owned inline payload; manifold-gpu consumes it during encode.
     bytemuck::cast(words)
+}
+
+/// Scheduling precedes `schedule`; cleanup follows the accepted step, whose
+/// duration remains positive even when it consumes the interval remainder.
+#[derive(Clone, Copy)]
+#[repr(u32)]
+enum ReductionPhase {
+    Scheduling = 0,
+    Cleanup = 1,
 }
 
 #[cfg(test)]
@@ -866,6 +884,147 @@ mod gpu_tests {
             std::slice::from_raw_parts(buffer.mapped_ptr().unwrap(), count * size_of::<u32>())
         };
         bytemuck::cast_slice(bytes).to_vec()
+    }
+
+    #[test]
+    fn gpu_flip_clock_inactive_reductions_preserve_scratch_and_final_cleanup() {
+        // More than one workgroup exercises both the population and partial
+        // guards. The same allocations then become empty without stale maxima.
+        const COUNT: u32 = 512;
+        let device = crate::test_device();
+        let clock = GpuFlipClock::new(&device, COUNT, COUNT, COUNT);
+        let markers = device.create_buffer_shared(u64::from(COUNT) * 32);
+        let vertices = device.create_buffer_shared(u64::from(COUNT) * 96);
+        let plan_input = device.create_buffer_shared(48);
+        let plan_readback = device.create_buffer_shared(48);
+        let aggregate_readback = device.create_buffer_shared(48);
+        let scratch_readback = [
+            device.create_buffer_shared(clock.scratch_a.size),
+            device.create_buffer_shared(clock.scratch_b.size),
+        ];
+        let poison = device.create_buffer_shared(clock.scratch_a.size);
+        let poison_words = vec![0x7fc0_1234u32; (poison.size / 4) as usize];
+        let mut particles = [particle(1.0); COUNT as usize];
+        // A power-of-two speed keeps length's GPU square-root exact, so the
+        // reduction and removal assertions can compare literal bits.
+        particles[COUNT as usize - 1] = particle(1024.0);
+        let vertex = GpuFlipBodyVertex {
+            position: [0.0, 0.0, 0.0, 1.0],
+            velocity: [4.0, 0.0, 0.0, 0.0],
+            acceleration: [0.0; 4],
+            angular_velocity: [0.0; 4],
+            angular_acceleration: [0.0; 4],
+            centroid: [0.0; 4],
+        };
+        // SAFETY: shared storage, before any work is submitted.
+        unsafe {
+            markers.write(0, bytemuck::cast_slice(&particles));
+            vertices.write(0, bytemuck::cast_slice(&[vertex; COUNT as usize]));
+            poison.write(0, bytemuck::cast_slice(&poison_words));
+        }
+        let p = params();
+        let dispatch = |enc: &mut GpuEncoder, count| {
+            clock.dispatch(enc, GpuFlipClockInputs {
+                marker_particles: &markers,
+                marker_count: count,
+                obstacle_vertices: &vertices,
+                obstacle_count: count,
+                source_vertices: &vertices,
+                source_count: count,
+                live_hits: &markers,
+                live_hit_count: 0,
+                event_impulses: &markers,
+                impulse_stride: 0,
+                impulse_nodes: [2, 2, 2],
+                impulse_origin: [0.0; 3],
+                impulse_spacing: 1.0,
+                body_rows: &vertices,
+                body_rows_offset: 0,
+                body_reaction: &vertices,
+            }, &p);
+        };
+        let copy_scratch = |enc: &mut GpuEncoder| {
+            for (scratch, readback) in [&clock.scratch_a, &clock.scratch_b].into_iter().zip(&scratch_readback) {
+                enc.copy_buffer_to_buffer(scratch, readback, scratch.size);
+            }
+        };
+        let assert_poison = || {
+            for readback in &scratch_readback {
+                assert_eq!(read_words(readback, poison_words.len()), poison_words,
+                    "inactive/empty reductions must not write either scratch buffer");
+            }
+        };
+
+        let mut enc = device.create_encoder("flip-clock previously nonempty populations");
+        clock.begin_frame(&mut enc, &p);
+        dispatch(&mut enc, COUNT);
+        enc.copy_buffer_to_buffer(&clock.plan, &plan_readback, 48);
+        enc.copy_buffer_range(&clock.obstacle_result, 0, &aggregate_readback, 16, 16);
+        enc.copy_buffer_range(&clock.source_result, 0, &aggregate_readback, 32, 16);
+        enc.commit_and_wait_completed();
+        assert_eq!(read_plan(&plan_readback).maximum_speed, 1024.0);
+        let aggregates = read_words(&aggregate_readback, 12);
+        assert_eq!(f32::from_bits(aggregates[4]), 4.0);
+        assert_eq!(f32::from_bits(aggregates[8]), 4.0);
+
+        let mut enc = device.create_encoder("flip-clock populations become empty");
+        enc.copy_buffer_to_buffer(&poison, &clock.scratch_a, poison.size);
+        enc.copy_buffer_to_buffer(&poison, &clock.scratch_b, poison.size);
+        clock.begin_frame(&mut enc, &p);
+        dispatch(&mut enc, 0);
+        for (index, aggregate) in [&clock.marker_result, &clock.obstacle_result, &clock.source_result].into_iter().enumerate() {
+            enc.copy_buffer_range(aggregate, 0, &aggregate_readback, index as u64 * 16, 16);
+        }
+        enc.copy_buffer_to_buffer(&clock.plan, &plan_readback, 48);
+        copy_scratch(&mut enc);
+        enc.commit_and_wait_completed();
+        assert_eq!(read_words(&aggregate_readback, 12), vec![0; 12]);
+        let empty = read_plan(&plan_readback);
+        assert_eq!(empty.maximum_speed, 0.0);
+        assert_eq!(empty.dt, p.frame_duration);
+        assert_poison();
+
+        // Scheduling must stop on remaining == 0 even while the previous
+        // step's dt is positive. schedule then sets dt to zero, so subsequent
+        // cleanup must also leave both poisoned buffers untouched.
+        let final_step = PlanValue {
+            dt: 0.1, elapsed: 1.0, remaining: 0.0, live_mode: 1,
+            ..PlanValue::zeroed()
+        };
+        // SAFETY: all earlier work has completed; plan_input is shared storage.
+        unsafe { plan_input.write(0, bytemuck::bytes_of(&final_step)) };
+        let mut enc = device.create_encoder("flip-clock inactive scheduling and cleanup");
+        enc.copy_buffer_to_buffer(&plan_input, &clock.plan, 48);
+        dispatch(&mut enc, COUNT);
+        clock.remove_extreme(&mut enc, &markers, COUNT, &p);
+        copy_scratch(&mut enc);
+        enc.copy_buffer_to_buffer(&clock.plan, &plan_readback, 48);
+        enc.commit_and_wait_completed();
+        assert_poison();
+        assert_eq!(read_plan(&plan_readback).dt, 0.0);
+        let unchanged = read_words(&markers, COUNT as usize * 8);
+        assert_eq!(unchanged.as_slice(), bytemuck::cast_slice::<FluidParticle, u32>(&particles));
+
+        // The final accepted step still needs the complete reduction and
+        // removal, despite having no interval remainder left to schedule.
+        let mut enc = device.create_encoder("flip-clock final active cleanup");
+        enc.copy_buffer_to_buffer(&plan_input, &clock.plan, 48);
+        clock.remove_extreme(&mut enc, &markers, COUNT, &p);
+        enc.copy_buffer_to_buffer(&clock.marker_result, &aggregate_readback, 16);
+        enc.copy_buffer_to_buffer(&clock.plan, &plan_readback, 48);
+        enc.commit_and_wait_completed();
+        assert_eq!(f32::from_bits(read_words(&aggregate_readback, 4)[0]), 1024.0);
+        let result = read_plan(&plan_readback);
+        assert_eq!(result.remaining, 0.0);
+        assert_eq!(result.dt, final_step.dt);
+        assert_eq!(result.marker_limit, p.max_frame_steps as f32 * p.cfl * p.cell_size / p.limit_interval);
+        // SAFETY: the encoder completed and the buffer holds COUNT records.
+        let got = unsafe { std::slice::from_raw_parts(markers.mapped_ptr().unwrap().cast::<FluidParticle>(), COUNT as usize) };
+        for (index, (before, after)) in particles.iter().zip(got).enumerate() {
+            let mut want = *before;
+            if index == COUNT as usize - 1 { want.position_radius[3] = 0.0; }
+            assert_eq!(bytemuck::bytes_of(after), bytemuck::bytes_of(&want));
+        }
     }
 
     #[test]

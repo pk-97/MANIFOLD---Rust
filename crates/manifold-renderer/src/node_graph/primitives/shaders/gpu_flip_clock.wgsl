@@ -10,7 +10,7 @@
 struct ReduceParams {
     count: u32,
     mode: u32,
-    _pad0: u32,
+    phase: u32, // 0: before scheduling; 1: post-step marker cleanup.
     _pad1: u32,
 };
 
@@ -109,6 +109,7 @@ fn reduce_group(lid: u32, count: u32, value: f32, bad: u32) -> vec4<f32> {
 @compute @workgroup_size(64)
 fn reduce_marker(@builtin(local_invocation_id) local: vec3<u32>,
                  @builtin(workgroup_id) group: vec3<u32>) {
+    if !reduction_active(marker_reduce_params.phase) { return; }
     let lid = local.x;
     let gid = group.x;
     let idx = gid * 64u + lid;
@@ -289,6 +290,7 @@ fn coupled_body_speed(body: BodyVertex) -> vec2<f32> {
 @compute @workgroup_size(64)
 fn reduce_body(@builtin(local_invocation_id) local: vec3<u32>,
                @builtin(workgroup_id) group: vec3<u32>) {
+    if !reduction_active(body_reduce_params.phase) { return; }
     let lid = local.x;
     let gid = group.x;
     let idx = gid * 64u + lid;
@@ -326,9 +328,18 @@ fn reduce_body(@builtin(local_invocation_id) local: vec3<u32>,
 @group(0) @binding(26) var<uniform> event_field: EventFieldParams;
 @group(0) @binding(27) var<storage, read> event_impulses: array<f32>;
 
+// Uniform across every workgroup, so inactive slots return before any barrier.
+// The final active step has no remaining time but still needs marker cleanup.
+fn reduction_active(phase: u32) -> bool {
+    let state = marker_clock_plan[0];
+    return state.live_mode == 0u ||
+        select(state.remaining > 0.0, state.step_dt > 0.0, phase == 1u);
+}
+
 @compute @workgroup_size(64)
 fn reduce_partial(@builtin(local_invocation_id) local: vec3<u32>,
                   @builtin(workgroup_id) group: vec3<u32>) {
+    if !reduction_active(partial_params.phase) { return; }
     let lid = local.x;
     let gid = group.x;
     let idx = gid * 64u + lid;
