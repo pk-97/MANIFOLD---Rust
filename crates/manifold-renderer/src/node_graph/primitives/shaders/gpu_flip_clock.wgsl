@@ -138,11 +138,7 @@ fn reduce_marker(@builtin(local_invocation_id) local: vec3<u32>,
 // Port of FluidSimulation::_getMarkerParticleSpeedLimit's histogram and
 // relative-outlier counts. Classification is a separate ordered pass because
 // the thresholds depend on the reduced maximum marker speed.
-@compute @workgroup_size(64)
-fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if marker_clock_plan[0].live_mode == 0u || marker_clock_plan[0].step_dt <= 0.0 {
-        return;
-    }
+fn classify_marker_lane(gid: vec3<u32>) {
     let idx = gid.x;
     if idx >= marker_reduce_params.count {
         return;
@@ -160,13 +156,37 @@ fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
         speed_limit_duration(marker_clock_params);
     let bin = min(u32(floor(speed / speed_limit_step)),
         max(marker_clock_params.max_frame_steps, 1u) - 1u);
-    atomicAdd(&marker_histogram_atomic[bin], 1u);
+    atomicAdd(&classifier_local[bin], 1u);
     let maximum = partial_values[0].x;
     if speed >= 0.90 * maximum && speed < 0.99999 * maximum {
-        atomicAdd(&marker_outliers_atomic[0], 1u);
+        atomicAdd(&classifier_local[64], 1u);
     }
     if speed >= 0.99999 * maximum {
-        atomicAdd(&marker_outliers_atomic[1], 1u);
+        atomicAdd(&classifier_local[65], 1u);
+    }
+}
+
+// Aggregate exact integer counts within each workgroup before touching the
+// shared histogram. All lanes, including invalid/tail records, reach barriers.
+
+var<workgroup> classifier_local: array<atomic<u32>, 66>;
+@compute @workgroup_size(64)
+fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>,
+                   @builtin(local_invocation_index) lane: u32) {
+    if marker_clock_plan[0].live_mode == 0u || marker_clock_plan[0].step_dt <= 0.0 {
+        return;
+    }
+    for (var word = lane; word < 66u; word += 64u) {
+        atomicStore(&classifier_local[word], 0u);
+    }
+    workgroupBarrier();
+    classify_marker_lane(gid);
+    workgroupBarrier();
+    let count = atomicLoad(&classifier_local[lane]);
+    if count != 0u { atomicAdd(&marker_histogram_atomic[lane], count); }
+    if lane < 2u {
+        let outliers = atomicLoad(&classifier_local[64u + lane]);
+        if outliers != 0u { atomicAdd(&marker_outliers_atomic[lane], outliers); }
     }
 }
 

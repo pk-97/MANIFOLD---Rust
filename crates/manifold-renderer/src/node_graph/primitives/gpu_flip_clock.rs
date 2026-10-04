@@ -888,6 +888,235 @@ mod gpu_tests {
         bytemuck::cast_slice(bytes).to_vec()
     }
 
+    fn original_marker_clock(device: &GpuDevice, capacity: u32) -> GpuFlipClock {
+        // Frozen global-atomic classifier: independent of the production
+        // workgroup implementation, with identical per-particle f32 math.
+        const ORIGINAL: &str = r#"@compute @workgroup_size(64)
+fn classify_marker(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if marker_clock_plan[0].live_mode == 0u || marker_clock_plan[0].step_dt <= 0.0 {
+        return;
+    }
+    let idx = gid.x;
+    if idx >= marker_reduce_params.count {
+        return;
+    }
+    let particle = marker_values[idx];
+    let v = particle.velocity;
+    if !(particle.position_radius.w > 0.0 && finite3(v) && finite3(particle.position_radius.xyz)) {
+        return;
+    }
+    let speed = length(v);
+    if !finite1(speed) {
+        return;
+    }
+    let speed_limit_step = marker_clock_params.cfl * marker_clock_params.cell_size /
+        speed_limit_duration(marker_clock_params);
+    let bin = min(u32(floor(speed / speed_limit_step)),
+        max(marker_clock_params.max_frame_steps, 1u) - 1u);
+    atomicAdd(&marker_histogram_atomic[bin], 1u);
+    let maximum = partial_values[0].x;
+    if speed >= 0.90 * maximum && speed < 0.99999 * maximum {
+        atomicAdd(&marker_outliers_atomic[0], 1u);
+    }
+    if speed >= 0.99999 * maximum {
+        atomicAdd(&marker_outliers_atomic[1], 1u);
+    }
+}
+"#;
+        let start = SHADER.find("fn classify_marker_lane(").expect("classifier lane helper");
+        let end = SHADER[start..].find("\n// The frame the marker speed limit").expect("classifier end") + start;
+        let mut shader = SHADER.to_owned();
+        shader.replace_range(start..end, ORIGINAL);
+        let mut clock = GpuFlipClock::new(device, capacity, 1, 1);
+        clock.marker_classify = device.create_compute_pipeline(
+            &shader, "classify_marker", "marker-classify-original-proof",
+        );
+        clock
+    }
+
+    // Setup and readback use separate completed command buffers: total_ms
+    // below measures only the existing classifier dispatch and its barrier.
+    fn classify_probe(
+        device: &GpuDevice,
+        clock: &GpuFlipClock,
+        input: (&GpuBuffer, u32),
+        p: &GpuFlipClockParams,
+        plan: &PlanValue,
+        seed: Option<&[u32; 68]>,
+        buffers: &[GpuBuffer; 4],
+    ) -> (Vec<u32>, f64) {
+        let (markers, count) = input;
+        let [plan_seed, maximum_seed, histogram, outliers] = buffers;
+        unsafe {
+            plan_seed.write(0, bytemuck::bytes_of(plan));
+            maximum_seed.write(0, bytemuck::cast_slice(&[32.0f32, 0.0, 0.0, 0.0]));
+            if let Some(seed) = seed {
+                histogram.write(0, bytemuck::cast_slice(&seed[..64]));
+                outliers.write(0, bytemuck::cast_slice(&seed[64..]));
+            }
+        }
+        let mut enc = device.create_encoder("marker-classify-proof-setup");
+        enc.copy_buffer_to_buffer(plan_seed, &clock.plan, 48);
+        enc.copy_buffer_to_buffer(maximum_seed, &clock.marker_result, 16);
+        if seed.is_some() {
+            enc.copy_buffer_to_buffer(histogram, &clock.marker_histogram, 256);
+            enc.copy_buffer_to_buffer(outliers, &clock.marker_outliers, 16);
+        } else {
+            enc.clear_buffer(&clock.marker_histogram);
+            enc.clear_buffer(&clock.marker_outliers);
+        }
+        enc.commit_and_wait_completed();
+        let mut enc = device.create_encoder("marker-classify-proof-dispatch");
+        clock.classify_marker(&mut enc, markers, count, p);
+        let timing = enc.commit_and_wait_profiled(device);
+        let mut enc = device.create_encoder("marker-classify-proof-readback");
+        enc.copy_buffer_to_buffer(&clock.marker_histogram, histogram, 256);
+        enc.copy_buffer_to_buffer(&clock.marker_outliers, outliers, 16);
+        enc.commit_and_wait_completed();
+        let mut words = read_words(histogram, 64);
+        words.extend(read_words(outliers, 4));
+        (words, timing.total_ms)
+    }
+
+    fn classify_buffers(device: &GpuDevice) -> [GpuBuffer; 4] {
+        [48, 16, 256, 16].map(|bytes| device.create_buffer_shared(bytes))
+    }
+
+    #[test]
+    fn gpu_flip_clock_workgroup_marker_histogram_exact_proof() {
+        let device = crate::test_device();
+        let original = original_marker_clock(&device, 257);
+        let candidate = GpuFlipClock::new(&device, 257, 1, 1);
+        let markers = device.create_buffer_shared(257 * 32);
+        let buffers = classify_buffers(&device);
+        let active = PlanValue { dt: 0.25, live_mode: 1, ..PlanValue::zeroed() };
+        // Include adjacent f32 words at bin and both relative-outlier edges.
+        // Exact parity is against the production GPU math, including sqrt.
+        let edges = [0.0, f32::from_bits(0.5f32.to_bits() - 1), 0.5,
+            f32::from_bits(0.5f32.to_bits() + 1), 31.75, 32.0,
+            f32::from_bits((0.90f32 * 32.0).to_bits() - 1), 0.90 * 32.0,
+            f32::from_bits((0.90f32 * 32.0).to_bits() + 1),
+            f32::from_bits((0.99999f32 * 32.0).to_bits() - 1), 0.99999 * 32.0,
+            f32::from_bits((0.99999f32 * 32.0).to_bits() + 1)];
+        for count in [0, 1, 63, 64, 65, 257] {
+            for max_steps in [1, 6, 64] {
+                let p = GpuFlipClockParams { max_frame_steps: max_steps, ..params() };
+                for mixed in [false, true] {
+                    let mut particles = vec![particle(0.25); count as usize];
+                    if mixed {
+                        for (i, marker) in particles.iter_mut().enumerate() {
+                            *marker = particle(if i < edges.len() { edges[i] } else { (i % 64) as f32 * 0.5 + 0.25 });
+                            match i {
+                                12 => marker.position_radius[3] = 0.0,
+                                13 => marker.position_radius[3] = -1.0,
+                                14 => marker.velocity[0] = f32::NAN,
+                                15 => marker.velocity[0] = f32::INFINITY,
+                                16 => marker.position_radius[0] = f32::NAN,
+                                17 => marker.position_radius[1] = f32::INFINITY,
+                                18 => marker.position_radius[3] = f32::NAN,
+                                19 => marker.position_radius[3] = f32::INFINITY,
+                                20 => marker.velocity[0] = f32::MAX,
+                                _ => {}
+                            }
+                        }
+                    }
+                    if let Some(last) = particles.last_mut() { *last = particle(32.0); }
+                    unsafe { markers.write(0, bytemuck::cast_slice(&particles)); }
+                    let mut previous = None;
+                    for repeat in 0..2 {
+                        let (old, _) = classify_probe(&device, &original, (&markers, count), &p, &active, None, &buffers);
+                        let (new, _) = classify_probe(&device, &candidate, (&markers, count), &p, &active, None, &buffers);
+                        assert_eq!(old, new, "count {count}, max_steps {max_steps}, mixed {mixed}, repeat {repeat}");
+                        assert_eq!(&new[66..], &[0, 0], "unused outlier words stay clear");
+                        if let Some(previous) = &previous { assert_eq!(&new, previous, "cleared repeat"); }
+                        previous = Some(new);
+                    }
+                }
+            }
+        }
+        let seed = std::array::from_fn(|i| 0x1357_0000u32 + i as u32);
+        for inactive in [
+            PlanValue { live_mode: 0, ..active },
+            PlanValue { dt: 0.0, ..active },
+        ] {
+            for clock in [&original, &candidate] {
+                let (words, _) = classify_probe(&device, clock, (&markers, 65), &params(), &inactive, Some(&seed), &buffers);
+                assert_eq!(words, seed, "inactive classifier preserves all seeded words");
+            }
+        }
+    }
+
+    #[test]
+    fn gpu_flip_clock_workgroup_marker_cleanup_exact_proof() {
+        let device = crate::test_device();
+        let clocks = [original_marker_clock(&device, 21_000), GpuFlipClock::new(&device, 21_000, 1, 1)];
+        let markers = [device.create_buffer_shared(21_000 * 32), device.create_buffer_shared(21_000 * 32)];
+        let plan_seed = device.create_buffer_shared(48);
+        let plans = [device.create_buffer_shared(48), device.create_buffer_shared(48)];
+        let buffers = classify_buffers(&device);
+        // Same native budget/floor populations as the CPU policy oracle.
+        for (count, duration) in [(300, 0.25), (300, 1.0), (21_000, 1.0)] {
+            let mut particles = vec![particle(1.25); count as usize];
+            for (i, marker) in particles.iter_mut().enumerate() { marker.id = i as u32 + 101; }
+            for marker in particles.iter_mut().take(9) { marker.velocity[0] = 11.0; }
+            particles[9].velocity[0] = 3.25;
+            for span in [1.0, 4.0] {
+                let p = GpuFlipClockParams { frame_duration: duration * span,
+                    limit_interval: if span == 1.0 { 0.0 } else { duration }, ..params() };
+                let plan = PlanValue { dt: duration / 3.0, remaining: duration * span,
+                    live_mode: 1, ..PlanValue::zeroed() };
+                unsafe {
+                    plan_seed.write(0, bytemuck::bytes_of(&plan));
+                    for buffer in &markers { buffer.write(0, bytemuck::cast_slice(&particles)); }
+                }
+                let mut outputs = Vec::new();
+                for (i, clock) in clocks.iter().enumerate() {
+                    let mut enc = device.create_encoder("marker-workgroup-cleanup-proof");
+                    enc.copy_buffer_to_buffer(&plan_seed, &clock.plan, 48);
+                    enc.compute_memory_barrier_buffers();
+                    clock.remove_extreme(&mut enc, &markers[i], count, &p);
+                    enc.copy_buffer_to_buffer(&clock.plan, &plans[i], 48);
+                    enc.copy_buffer_to_buffer(&clock.marker_histogram, &buffers[2], 256);
+                    enc.copy_buffer_to_buffer(&clock.marker_outliers, &buffers[3], 16);
+                    enc.commit_and_wait_completed();
+                    outputs.push((read_words(&markers[i], count as usize * 8),
+                        read_words(&plans[i], 12), read_words(&buffers[2], 64), read_words(&buffers[3], 4)));
+                }
+                assert_eq!(outputs[0], outputs[1], "{count} markers, {duration}s, {span}x span: particles/plan/histogram/outliers");
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "water-race-probes")]
+    fn gpu_flip_clock_workgroup_marker_classify_bounded_timing() {
+        let device = crate::test_device();
+        let buffers = classify_buffers(&device);
+        let active = PlanValue { dt: 0.25, live_mode: 1, ..PlanValue::zeroed() };
+        let p = GpuFlipClockParams { max_frame_steps: 64, ..params() };
+        for count in [847_872u32, 6_832_128] {
+            let clocks = [original_marker_clock(&device, count), GpuFlipClock::new(&device, count, 1, 1)];
+            let markers = device.create_buffer_shared(u64::from(count) * 32);
+            let particles: Vec<_> = (0..count).map(|i| particle(if i % 16 == 0 { 31.75 } else { 0.25 })).collect();
+            unsafe { markers.write(0, bytemuck::cast_slice(&particles)); }
+            drop(particles);
+            let mut samples = [Vec::with_capacity(8), Vec::with_capacity(8)];
+            for sample in 0..12 {
+                let mut outputs = [Vec::new(), Vec::new()];
+                for i in if sample % 2 == 0 { [0, 1] } else { [1, 0] } {
+                    let (words, millis) = classify_probe(&device, &clocks[i], (&markers, count), &p, &active, None, &buffers);
+                    outputs[i] = words;
+                    if sample >= 4 { samples[i].push(millis); }
+                }
+                assert_eq!(outputs[0], outputs[1], "{count} markers, sample {sample}: exact histogram/outliers");
+            }
+            for times in &mut samples { times.sort_by(f64::total_cmp); }
+            let median = |times: &[f64]| (times[3] + times[4]) * 0.5;
+            eprintln!("MARKER_CLASSIFY count={count} warm=4 measured=8 old_median_ms={:.6} workgroup_median_ms={:.6} exact=true",
+                median(&samples[0]), median(&samples[1]));
+        }
+    }
+
     #[test]
     fn gpu_flip_clock_inactive_reductions_preserve_scratch_and_final_cleanup() {
         // More than one workgroup exercises both the population and partial
