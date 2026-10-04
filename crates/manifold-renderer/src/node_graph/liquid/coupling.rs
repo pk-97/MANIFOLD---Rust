@@ -542,13 +542,16 @@ mod tests {
 
     #[test]
     fn liquid_coupled_reanchor_moves_only_authored_poses_without_an_extra_step() {
+        let _live = crate::node_graph::physics::PhysicsStepScope::for_render(false);
         let mut inputs = scene();
         inputs.bodies[1] = inputs.bodies[0].clone();
         inputs.bodies[1].as_mut().unwrap().transform.pos[0] = 10.0;
         inputs.bodies[0].as_mut().unwrap().kind = 2;
         let colliders = RigidImpulseTargets { bodies: 3, copies: false };
         let mut owner = LiquidRigidOwner::new(&inputs, OPEN, colliders, 1, None).unwrap();
-        for tick in 0..2 {
+        // More than one live frame's budget has already completed before
+        // an overloaded frame reanchors the authored scene.
+        for tick in 0..6 {
             owner.set_pending(PendingTick { tick, stamp: 0,
                 interval: manifold_physics::stepping::StepInterval::new(
                     Seconds(tick as f64 * TICK), Seconds((tick + 1) as f64 * TICK)),
@@ -560,13 +563,18 @@ mod tests {
         let stamp = owner.frame().stamp;
         inputs.bodies[0].as_mut().unwrap().transform.pos[0] = 3.0;
         owner.reanchor_start(&inputs).unwrap();
-        assert_eq!(owner.completed(), 2);
-        assert_eq!(owner.completed_time(), Seconds(2.0 * TICK));
+        assert_eq!(owner.completed(), 6);
+        assert_eq!(owner.completed_time(), Seconds(6.0 * TICK));
         assert_eq!(owner.frame().stamp, stamp);
         assert!((owner.rows()[0].position_inv_mass[0] - 3.0).abs() < 1e-4);
         assert_eq!(owner.rows()[1].position_inv_mass, before.position_inv_mass);
         assert_eq!(owner.rows()[1].linear_velocity, before.linear_velocity);
         assert_eq!(owner.rows()[1].angular_velocity, before.angular_velocity);
+        owner.set_pending(PendingTick { tick: 6, stamp: 0,
+            interval: manifold_physics::stepping::StepInterval::new(
+                Seconds(6.0 * TICK), Seconds(7.0 * TICK)), offline: false });
+        owner.settle_ready(Some(&inputs), |_| true, no_reaction).unwrap();
+        assert_eq!(owner.completed(), 7);
     }
 
     /// A decoded impulse of m·Δv (Δv = +1 m/s) reaches Box3D on top of the

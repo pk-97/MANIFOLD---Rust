@@ -1084,14 +1084,20 @@ impl RigidSimulation {
                 self.release_fragments(index, body, body.release_count)?;
             }
         }
-        let clock_frame = if accepted_interval.is_none() {
+        // Workers receive simulation time already accepted by their owner.
+        // Applying the display-frame cap again would truncate retained input
+        // history, including a zero-step pose edit after coupled intervals.
+        let clock_frame = if !self.advancement_policy.is_worker() {
             Some(self.clock.advance(now.0, simulation_interval(), speed, reset_count, rebuild,
                 offline_simulation()))
         } else {
             None
         };
-        let authored_time = accepted_interval.map_or_else(
-            || self.clock.simulation_at(now.0), |_| now.0);
+        let authored_time = if self.advancement_policy.is_worker() {
+            now.0
+        } else {
+            self.clock.simulation_at(now.0)
+        };
         let elapsed_simulation = authored_time - self.authored_time;
         let stationary_edit = elapsed_simulation == 0.0;
         self.ensure_targeted_history(targeted_fields)?;
