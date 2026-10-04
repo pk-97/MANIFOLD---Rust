@@ -515,7 +515,7 @@ mod cpu_tests {
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
-    use super::super::liquid_surface_tests::{Harness, Lattice, read};
+    use super::super::liquid_surface_tests::{Harness, Lattice, blob_bounds, read};
     use super::*;
     use crate::node_graph::fluid_particles::{CellRange, FluidBlob, bin_counts};
 
@@ -630,6 +630,131 @@ mod gpu_tests {
                 (got - want).abs() <= 2e-5,
                 "node {idx}: got {got}, expected {want}"
             );
+        }
+    }
+
+    /// Markers determine the ranges; the shaped centre can move away from its
+    /// original marker. Both the support and bin boundaries get their nearest
+    /// representable neighbours, including markers clamped at the box edges.
+    fn search_boundary_blobs(lattice: &Lattice, solid_nodes: [u32; 3]) -> (Vec<FluidBlob>, Vec<CellRange>) {
+        let min = lattice.min();
+        let h: [f32; 3] = std::array::from_fn(|a| lattice.size[a] / (solid_nodes[a] - 1) as f32);
+        let neighbour = |v: f32, side| match side {
+            0 => v.next_down(),
+            1 => v,
+            _ => v.next_up(),
+        };
+        let mut marked = Vec::new();
+        let mut add = |marker: [f32; 3], center: [f32; 3], radius: f32| {
+            let shift = std::array::from_fn::<_, 3, _>(|a| center[a] - marker[a]);
+            let shift_length = shift.iter().map(|v| v * v).sum::<f32>().sqrt();
+            assert!(shift_length <= 1.301 * lattice.cell);
+            let inverse = if radius > 0.0 { radius.recip() } else { 1.0 };
+            marked.push((marker, FluidBlob {
+                center_radius: [center[0], center[1], center[2], radius],
+                shape_diag: [inverse, inverse, inverse, 0.0],
+                shape_off: [0.0, 0.0, 0.0, shift_length],
+            }));
+        };
+        for (axis, radius_bins) in [0.1, 0.5, 1.5].into_iter().enumerate() {
+            let radius = radius_bins * lattice.cell;
+            for side in 0..3 {
+                // Native support's upper/lower endpoint meets a lattice node.
+                // The same physical nodes occur at all refinement scales.
+                for sign in [-1.0, 1.0] {
+                    let mut center = std::array::from_fn(|a| min[a] + 3.0 * h[a]);
+                    center[axis] = neighbour(center[axis] + sign * 1.5 * radius, side);
+                    let mut marker = center;
+                    marker[axis] -= sign * 1.3 * lattice.cell;
+                    add(marker, center, radius);
+                }
+                let mut marker = std::array::from_fn(|a| min[a] + 5.0 * h[a]);
+                marker[axis] = neighbour(min[axis] + 4.0 * lattice.cell, side);
+                let mut center = marker;
+                center[axis] += 0.7 * lattice.cell;
+                add(marker, center, radius);
+            }
+        }
+        for side in 0..3 {
+            for upper in [false, true] {
+                let mut marker = lattice.center;
+                marker[0] = neighbour(min[0] + if upper { lattice.size[0] } else { 0.0 }, side);
+                let mut center = marker;
+                center[0] += if upper { -1.3 } else { 1.3 } * lattice.cell;
+                add(marker, center, 1.5 * lattice.cell);
+            }
+        }
+        add(lattice.center, lattice.center, 0.0);
+        add(min, min, -lattice.cell);
+        marked.sort_by_key(|(marker, _)| lattice.bin(*marker));
+        let bins = bin_counts(lattice.size, lattice.cell);
+        let mut ranges = vec![CellRange { start: 0, count: 0 }; bins.iter().product::<u32>() as usize];
+        for (index, (marker, _)) in marked.iter().enumerate() {
+            let range = &mut ranges[lattice.bin(*marker)];
+            if range.count == 0 { range.start = index as u32; }
+            range.count += 1;
+        }
+        (marked.into_iter().map(|(_, blob)| blob).collect(), ranges)
+    }
+
+    #[test]
+    fn gpu_flip_volume_tight_bounds_matches_original_search_exactly() {
+        use crate::node_graph::freeze::codegen::{ENTRY, standalone_for_spec};
+
+        let mut old = standalone_for_spec::<ParticleVolume>().expect("volume standalone codegen");
+        for (name, expression) in [
+            ("first_bin", "max(home - vec3<i32>(reach_bins), vec3<i32>(0))"),
+            ("last_bin", "min(home + vec3<i32>(reach_bins), bins - vec3<i32>(1))"),
+        ] {
+            let prefix = format!("let {name} = ");
+            assert_eq!(old.matches(&prefix).count(), 1, "reference replacement must be unique: {name}");
+            let assignment = old.lines().find(|line| line.trim_start().starts_with(&prefix)).unwrap().trim().to_owned();
+            assert!(assignment.ends_with(';'), "assignment must occupy one line");
+            old = old.replacen(&assignment, &format!("{prefix}{expression};"), 1);
+        }
+        let mut harness = Harness::new();
+        let mut reference = ParticleVolume::new();
+        reference.pipeline = Some(harness.device.create_compute_pipeline(&old, ENTRY, "particle_volume.original_search"));
+        let mut optimized = ParticleVolume::new();
+        for (case, lattice) in [
+            Lattice { center: [0.0, 1.0, 0.0], size: [2.0, 2.5, 3.0], cell: 0.25 },
+            Lattice { center: [13.25, -7.5, 3.75], size: [2.0, 2.5, 3.0], cell: 0.25 },
+            Lattice { center: [1000.0, -1000.0, 1000.0], size: [0.25, 0.3125, 0.375], cell: 0.03125 },
+        ].iter().enumerate() {
+            let nodes = [9, 11, 13];
+            let (blobs, ranges) = search_boundary_blobs(lattice, nodes);
+            let (blobs_slot, _) = harness.array(&blobs, blobs.len());
+            let (ranges_slot, _) = harness.array(&ranges, ranges.len());
+            let bounds_slot = blob_bounds(&mut harness, blobs_slot);
+            let bounds = read::<f32>(&harness.buffer(bounds_slot), 2);
+            assert!(bounds[0] > 0.0 && bounds[1] > 1.5 * bounds[0]);
+            let solid = vec![1.0_f32; nodes.iter().product::<u32>() as usize];
+            let (solid_slot, _) = harness.array(&solid, solid.len());
+            let inputs = [("blobs", blobs_slot), ("cell_ranges", ranges_slot), ("solid", solid_slot), ("bounds", bounds_slot)];
+            for scale in [1, 2, 3] {
+                let refined = nodes.map(|n| (n - 1) * scale + 1);
+                let total = refined.iter().product::<u32>() as usize;
+                let (actual_slot, actual_buffer) = harness.array::<f32>(&[], total);
+                let (old_slot, old_buffer) = harness.array::<f32>(&[], total);
+                for band in [0.0, 0.6 * lattice.cell] {
+                    let params = lattice.params(&[
+                        ("nodes_x", nodes[0] as f32), ("nodes_y", nodes[1] as f32), ("nodes_z", nodes[2] as f32),
+                        ("resolution_scale", scale as f32), ("band_extra", band),
+                    ]);
+                    for (node, slot) in [(&mut optimized, actual_slot), (&mut reference, old_slot)] {
+                        let (_, errors) = harness.run(node, &inputs, &[("levelset", slot)], &params);
+                        assert!(errors.is_empty(), "case {case}, scale {scale}, band {band}: {errors:?}");
+                    }
+                    let actual = read::<f32>(&actual_buffer, total);
+                    let original = read::<f32>(&old_buffer, total);
+                    assert!(actual.iter().all(|v| v.is_finite()));
+                    assert!(actual.iter().any(|&v| v < 0.0), "fixture must contain liquid");
+                    assert!(actual.iter().any(|&v| v > 0.0 && v < 3.0 * bounds[0]), "fixture must contain intermediate distances");
+                    for (index, (&got, &want)) in actual.iter().zip(&original).enumerate() {
+                        assert_eq!(got.to_bits(), want.to_bits(), "case {case}, scale {scale}, band {band}, word {index}: {got} vs {want}");
+                    }
+                }
+            }
         }
     }
 

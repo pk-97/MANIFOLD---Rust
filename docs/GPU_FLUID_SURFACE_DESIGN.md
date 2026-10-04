@@ -179,6 +179,13 @@ spheres directly; other settings retain the neighbour gathers. A GPU proof
 compares every output word against the original gather across varied radii,
 populated and isolated particles, boundary positions and inactive capacity.
 
+ParticleVolume narrows its symmetric bin window to the world-space support
+endpoints, rounded outwards for f32 coordinate and bin arithmetic. It retains
+the native support box, centre-displacement and interpolation margins, and the
+order of contributing blobs. Exact GPU comparisons against the original search
+cover shifted kernels, bin/support boundaries, translated rectangular domains,
+three refinement scales and the expanded Fill Pits band.
+
 Derived artifacts: the source Liquid Surface group has **33 nodes**; all other
 four water surface groups copy it. The builder regenerates the rest of
 `WaterDamBreakGpuFlip.json` through `UPDATE_GPU_FLIP_PRESET=1` and its equality

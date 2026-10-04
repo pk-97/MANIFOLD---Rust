@@ -94,13 +94,22 @@ fn body(
     if brick_pass != 2u {
         let home = clamp(vec3<i32>(floor((p - lattice_min) / cell_size)), vec3<i32>(0), bins - vec3<i32>(1));
         let reach_bins = i32(ceil((bound.y + extra + margin) / cell_size));
-        for (var dz = -reach_bins; dz <= reach_bins; dz = dz + 1) {
-            for (var dy = -reach_bins; dy <= reach_bins; dy = dy + 1) {
-                for (var dx = -reach_bins; dx <= reach_bins; dx = dx + 1) {
-                    let b = home + vec3<i32>(dx, dy, dz);
-                    if any(b < vec3<i32>(0)) || any(b >= bins) {
-                        continue;
-                    }
+        // The existing bound includes kernel support, centre displacement and
+        // the outer interpolation node. Locate its endpoints within the bins
+        // instead of rounding its radius up around an entire home bin. Expand
+        // outwards by more than eight f32 epsilons at the coordinate scale
+        // for coordinate and reciprocal-bin rounding, then only
+        // narrow the old search: contributor arithmetic/order stays unchanged.
+        let reach_world = bound.y + extra + margin;
+        let roundoff = 0.000001 * (abs(lattice_min) + abs(size) + vec3<f32>(reach_world + cell_size));
+        let query_lo = vec3<i32>(floor(clamp((p - lattice_min - vec3<f32>(reach_world) - roundoff) / cell_size, vec3<f32>(0.0), vec3<f32>(bins - vec3<i32>(1)))));
+        let query_hi = vec3<i32>(floor(clamp((p - lattice_min + vec3<f32>(reach_world) + roundoff) / cell_size, vec3<f32>(0.0), vec3<f32>(bins - vec3<i32>(1)))));
+        let first_bin = max(max(home - vec3<i32>(reach_bins), vec3<i32>(0)), query_lo);
+        let last_bin = min(min(home + vec3<i32>(reach_bins), bins - vec3<i32>(1)), query_hi);
+        for (var z = first_bin.z; z <= last_bin.z; z = z + 1) {
+            for (var y = first_bin.y; y <= last_bin.y; y = y + 1) {
+                for (var x = first_bin.x; x <= last_bin.x; x = x + 1) {
+                    let b = vec3<i32>(x, y, z);
                     let range = buf_cell_ranges[u32(b.x + bins.x * (b.y + bins.y * b.z))];
                     for (var k = range.start; k < range.start + range.count; k = k + 1u) {
                         let blob = buf_blobs[k];
