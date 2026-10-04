@@ -561,7 +561,7 @@ fn encode_tiles(enc: &mut GpuEncoder, pipes: &Pipelines, params: &StepParams, t:
     enc.dispatch_compute(
         &pipes.tiles_classify,
         &[uniform(params), buffer(1, ranges), buffer(27, &t.near), buffer(30, &t.counts), buffer(46, plan)],
-        tiles,
+        groups(tile_total(params.n) * 32),
         "gpu_flip.step.tiles.classify",
     );
     enc.dispatch_compute(

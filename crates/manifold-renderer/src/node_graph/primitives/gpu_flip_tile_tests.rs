@@ -172,17 +172,24 @@ impl Table {
 
     /// One step's three kernels over `counts` (the sort's per-cell counts).
     fn step(&self, device: &manifold_gpu::GpuDevice, params: &StepParams, counts: &[u32]) {
+        self.step_with_clock(device, params, counts, None);
+    }
+
+    fn step_with_clock(&self, device: &manifold_gpu::GpuDevice, params: &StepParams, counts: &[u32], clock: Option<&GpuBuffer>) {
         let ranges: Vec<CellRange> = counts.iter().map(|&count| CellRange { start: 0, count }).collect();
         let ptr = self.ranges.mapped_ptr().expect("shared");
         // SAFETY: the buffer holds two words per cell and no GPU work is in flight.
         unsafe { std::ptr::copy_nonoverlapping(ranges.as_ptr().cast::<u8>(), ptr, ranges.len() * 8) };
         let threads = self.total as u64;
-        dispatch_pass(device, "tiles_classify", params, &[(1, &self.ranges), (27, &self.near), (30, &self.counts)], threads);
-        dispatch_pass(device, "tiles_rings", params, &[(27, &self.near), (28, &self.rank), (30, &self.counts)], threads);
-        dispatch_pass(
-            device,
+        let pass = |entry: &str, buffers: &[(u32, &GpuBuffer)], threads| {
+            let mut buffers = buffers.to_vec();
+            if let Some(clock) = clock { buffers.push((46, clock)); }
+            dispatch_pass(device, entry, params, &buffers, threads);
+        };
+        pass("tiles_classify", &[(1, &self.ranges), (27, &self.near), (30, &self.counts)], threads * 32);
+        pass("tiles_rings", &[(27, &self.near), (28, &self.rank), (30, &self.counts)], threads);
+        pass(
             "tiles_lists",
-            params,
             &[
                 (27, &self.near),
                 (28, &self.rank),
@@ -194,6 +201,13 @@ impl Table {
             ],
             1,
         );
+    }
+
+    /// Every table word, including inactive list tails and the previous rank
+    /// half. The input ranges deliberately change during an inactive slot.
+    fn words(&self) -> Vec<Vec<u32>> {
+        [&self.near, &self.rank, &self.by_ring, &self.counts, &self.args, &self.retired, &self.capped]
+            .into_iter().map(|buffer| read(buffer, (buffer.size / 4) as usize)).collect()
     }
 
     fn parity(&self) -> u32 {
@@ -234,6 +248,64 @@ fn assert_model(gpu: &Model, cpu: &Model, what: &str) {
     ] {
         if let Some(i) = (0..g.len().max(c.len())).find(|&i| g.get(i) != c.get(i)) {
             panic!("{what}: {name} differs first at {i}: gpu {:?} cpu {:?} (lengths {} / {})", g.get(i), c.get(i), g.len(), c.len());
+        }
+    }
+}
+
+#[test]
+fn gpu_flip_tiles_parallel_nearness_matches_cpu_on_synthetic_masks() {
+    let device = crate::test_device();
+    let extension_layers = band_layers(ENGINE_CFL).max(FACE_VALID_LAYERS);
+    let r = ring_max(extension_layers);
+    for n in [[1, 1, 1], [7, 9, 5], [17, 10, 25], [64, 64, 64], [128, 128, 128]] {
+        let total = tile_total(n) as usize;
+        let cells = n.iter().map(|&v| v as usize).product();
+        let table = Table::new(&device, n, r);
+        let clock = device.create_buffer_shared(48);
+        let mut previous_rank = vec![0; total];
+        let mut parity = 0;
+        for (mask, all, inactive) in [
+            (0, false, false), (1, false, false), (2, false, false),
+            (3, false, false), (0, false, false), (0, true, false),
+            (0, false, true), (2, false, false),
+        ] {
+            let mut counts = vec![u32::from(mask == 1); cells];
+            let index = |p: [u32; 3]| (p[0] + n[0] * (p[1] + n[1] * p[2])) as usize;
+            if mask == 2 {
+                // One cell lies one past tile 0, inside its CELL_REACH halo.
+                counts[index([8.min(n[0] - 1), 0, 0])] = 1;
+            } else if mask == 3 {
+                for p in [[0; 3], n.map(|v| v - 1), n.map(|v| 9.min(v - 1))] {
+                    counts[index(p)] = 7;
+                }
+            }
+            let params = StepParams { n, ring_max: r, extension_layers, all_tiles: u32::from(all), ..StepParams::default() };
+            let mut plan = [0u32; 12];
+            plan[11] = 1;
+            plan[0] = if inactive { 0.0_f32 } else { 1.0_f32 / 60.0 }.to_bits();
+            // SAFETY: shared 48-byte plan; the prior table passes completed.
+            unsafe { clock.write(0, bytemuck::cast_slice(&plan)) };
+            let context = format!("{n:?}, mask {mask}, all_tiles {all}, inactive {inactive}");
+            if inactive {
+                let mut expected = table.words();
+                assert!(expected[0].iter().all(|&near| near == 0), "the preceding all_tiles table is populated");
+                assert!(counts.iter().all(|&count| count == 0), "inactive input must differ from the prior table");
+                // Only execution decisions are cleared; both rank halves,
+                // parity, lists, retired list and diagnostics remain intact.
+                for triple in 0..r as usize + 3 { expected[4][3 * triple] = 0; }
+                *expected[4].last_mut().unwrap() = 0;
+                table.step_with_clock(&device, &params, &counts, Some(&clock));
+                assert_eq!(table.words(), expected, "every inactive table word: {context}");
+            } else {
+                let expected = model(&counts, n, r, &previous_rank, all);
+                table.step_with_clock(&device, &params, &counts, Some(&clock));
+                parity = 1 - parity;
+                assert_model(&table.model(), &expected, &context);
+                assert_eq!(table.parity(), parity, "one parity toggle per active dispatch: {context}");
+                assert_eq!(table.stats_word(), expected.counts[0] as f32 / total as f32, "active fraction: {context}");
+                previous_rank = expected.rank;
+            }
+            assert_eq!(table.parity(), parity, "inactive slots must hold parity: {context}");
         }
     }
 }

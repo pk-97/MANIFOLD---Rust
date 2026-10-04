@@ -1052,6 +1052,95 @@ fn solve_bits_under(rig: &mut Rig, p: &Problem, stop: Stop, cache: &mut Option<G
     (bytemuck::cast_slice(rig.pressure()).to_vec(), all.to_vec())
 }
 
+/// Exact six-face arithmetic against the original dynamic-loop shader,
+/// with odd edges, ghost rows, coarse levels, changing masks and replay.
+#[test]
+fn pressure_module_unrolled_stencil_matches_original_loop() {
+    const ORIGINAL: &str = r#"fn row_weight(row: Row, k: u32) -> f32 {
+    if k < 4u {
+        return row.lo[k];
+    }
+    return row.hi[k - 4u];
+}
+
+// Cell idx's neighbour across face k (axis k / 2, low side for even k):
+// the weight is positive only inside the box, so this never leaves it.
+fn across(idx: u32, k: u32) -> u32 {
+    let stride = select(select(u.nx * u.ny, u.nx, k < 4u), 1u, k < 2u);
+    return select(idx + stride, idx - stride, (k & 1u) == 0u);
+}
+
+fn stencil(idx: u32, source: u32) -> Stencil {
+    let row = rows[idx];
+    var s = Stencil(select(row.hi.w, row.hi.z, u.ghost == 1u), 0.0);
+    if source == 2u {
+        return s;
+    }
+    for (var k = 0u; k < 6u; k = k + 1u) {
+        let w = row_weight(row, k);
+        if w > 0.0 {
+            let at = across(idx, k);
+            if source == 0u {
+                s.sum = s.sum + w * out[at];
+            } else {
+                s.sum = s.sum + w * aux[at];
+            }
+        }
+    }
+    return s;
+}
+
+"#;
+    let shader = include_str!("shaders/gpu_flip_pressure.wgsl");
+    let start = shader.find("fn stencil_add(").expect("unrolled stencil helper");
+    let end = shader.find("// One red-black Gauss-Seidel").expect("stencil end");
+    let mut original = shader.to_owned();
+    original.replace_range(start..end, ORIGINAL);
+    let (n, saved) = load_fixture(DAM_BREAK);
+    for (m, level, ghost) in [(16, 0, false), (25, 0, true), (32, 1, true), (64, 0, false), (64, 0, true), (128, 0, true)] {
+        let mut current = Rig::new(m).at_level(level);
+        let mut reference = Rig::new(m).at_level(level);
+        reference.solver.set_stencil_shader_for_proof(&reference.device, &original);
+        let mut current_cache = Some(GpuReplayCache::default());
+        let mut reference_cache = Some(GpuReplayCache::default());
+        for frame in 0..4 {
+            let problem = resample(&saved[if frame % 2 == 0 { 0 } else { 4 }], n, m);
+            if ghost {
+                let phi = surface_phi(&problem.water, m, current.cell_size() as f32);
+                current = current.with_phi(&phi);
+                reference = reference.with_phi(&phi);
+            }
+            let stop = if frame < 2 { Stop::Fixed(8) } else { Stop::Converged(MAX_ITERATIONS) };
+            let got = solve_bits_under(&mut current, &problem, stop, &mut current_cache, true);
+            let before = solve_bits_under(&mut reference, &problem, stop, &mut reference_cache, true);
+            assert_eq!(got.0, before.0, "{m}³ level{level} ghost{ghost} frame{frame}: pressure");
+            assert_eq!(got.1, before.1, "{m}³ level{level} ghost{ghost} frame{frame}: stop record");
+        }
+        if level == 0 && (m == 64 || m == 128) {
+            let problem = resample(&saved[4], n, m);
+            let mut current_ms = Vec::new();
+            let mut reference_ms = Vec::new();
+            for sample in 0..12 {
+                let (now, old) = if sample % 2 == 0 {
+                    (current.run(&problem, 8, false).total_ms, reference.run(&problem, 8, false).total_ms)
+                } else {
+                    let old = reference.run(&problem, 8, false).total_ms;
+                    (current.run(&problem, 8, false).total_ms, old)
+                };
+                assert_eq!(bytemuck::cast_slice::<f32, u32>(current.pressure()), bytemuck::cast_slice::<f32, u32>(reference.pressure()), "timed solve stays exact");
+                if sample >= 4 {
+                    current_ms.push(now);
+                    reference_ms.push(old);
+                }
+            }
+            current_ms.sort_by(f64::total_cmp);
+            reference_ms.sort_by(f64::total_cmp);
+            let median = |v: &[f64]| (v[3] + v[4]) / 2.0;
+            println!("pressure stencil {m}³ ghost{ghost}:8-iteration prepare+solve,4warm+8measured, unrolled {:.4} ms original {:.4} ms", median(&current_ms), median(&reference_ms));
+        }
+    }
+}
+
 /// A solve replayed from a recording (every round one gated segment the
 /// GPU switches off once the stop fires) gives the same pressure and the
 /// same stop record, bit for bit, as encoding it directly, on the engine's

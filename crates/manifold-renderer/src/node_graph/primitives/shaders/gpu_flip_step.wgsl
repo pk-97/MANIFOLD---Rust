@@ -2541,7 +2541,9 @@ fn poison_inactive(@builtin(global_invocation_id) gid: vec3<u32>) {
     tile_rhs[idx] = nan;
 }
 
-// One thread per tile, the sort's bin counts to `tile_near`: the Chebyshev
+var<workgroup> tile_near_min: array<u32, 256>;
+
+// 32 lanes per tile, the sort's bin counts to `tile_near`: the Chebyshev
 // cell distance from the tile's box to the nearest particle-holding cell,
 // scanning the box grown by CELL_REACH (12³ cells at most); CELL_REACH + 1
 // when none. Thread 0 flips the ring halves' parity for this step first: no
@@ -2549,40 +2551,46 @@ fn poison_inactive(@builtin(global_invocation_id) gid: vec3<u32>) {
 // inactive clock slot runs none of the table's passes, so the next active
 // step's retire measures against the last active step's C.
 @compute @workgroup_size(256)
-fn tiles_classify(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn tiles_classify(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) li: u32) {
     if !clock_active() { return; }
-    let t = gid.x;
-    if t >= tile_total() {
-        return;
-    }
-    if t == 0u {
+    let t = gid.x >> 5u;
+    let lane = gid.x & 31u;
+    let valid = t < tile_total();
+    if gid.x == 0u {
         tile_counts[tile_parity_word()] = 1u - tile_counts[tile_parity_word()];
     }
-    if u.all_tiles != 0u {
-        tile_near[t] = 0u;
-        return;
-    }
-    let n = lattice();
-    let reach = i32(CELL_REACH);
-    let origin = unflatten(t, vec3<i32>(tile_dims())) * i32(TILE);
-    let box_last = min(origin + vec3<i32>(i32(TILE) - 1), n - vec3<i32>(1));
-    let first = max(origin - vec3<i32>(reach), vec3<i32>(0));
-    let last = min(box_last + vec3<i32>(reach), n - vec3<i32>(1));
     var near = CELL_REACH + 1u;
-    for (var z = first.z; z <= last.z; z = z + 1) {
-        for (var y = first.y; y <= last.y; y = y + 1) {
-            for (var x = first.x; x <= last.x; x = x + 1) {
-                let c = vec3<i32>(x, y, z);
-                if ranges[flatten(c, n)].count == 0u {
-                    continue;
+    if valid && u.all_tiles != 0u {
+        near = 0u;
+    } else if valid {
+        let n = lattice();
+        let reach = i32(CELL_REACH);
+        let origin = unflatten(t, vec3<i32>(tile_dims())) * i32(TILE);
+        let box_last = min(origin + vec3<i32>(i32(TILE) - 1), n - vec3<i32>(1));
+        let side = TILE + 2u * CELL_REACH;
+        for (var k = lane; k < side * side * side && near != 0u; k = k + 32u) {
+            let c = origin - vec3<i32>(reach) + unflatten(k, vec3<i32>(i32(side)));
+            if all(c >= vec3<i32>(0)) && all(c < n) {
+                if ranges[flatten(c, n)].count != 0u {
+                    // Distance to the original clipped tile box, unchanged.
+                    let d = max(max(origin - c, c - box_last), vec3<i32>(0));
+                    near = min(near, u32(max(max(d.x, d.y), d.z)));
                 }
-                // Distance from the cell to the box: 0 inside it.
-                let d = max(max(origin - c, c - box_last), vec3<i32>(0));
-                near = min(near, u32(max(max(d.x, d.y), d.z)));
             }
         }
     }
-    tile_near[t] = near;
+    // Eight independent min trees; invalid tiles still reach every barrier.
+    tile_near_min[li] = near;
+    workgroupBarrier();
+    for (var width = 16u; width > 0u; width = width >> 1u) {
+        if lane < width {
+            tile_near_min[li] = min(tile_near_min[li], tile_near_min[li + width]);
+        }
+        workgroupBarrier();
+    }
+    if lane == 0u && valid {
+        tile_near[t] = tile_near_min[li];
+    }
 }
 
 // One thread per tile, `tile_near` to the current half of `tile_rank`: the

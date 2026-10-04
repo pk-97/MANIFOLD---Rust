@@ -999,6 +999,14 @@ impl Stop {
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 impl PressureSolver {
+    /// Compare a changed stencil against its original shader in the full
+    /// solve, retaining every other production pipeline and buffer.
+    pub(crate) fn set_stencil_shader_for_proof(&mut self, device: &GpuDevice, shader: &str) {
+        let pipes = self.pipelines.as_mut().expect("pressure pipelines prepared");
+        pipes.smooth = device.create_compute_pipeline(shader, "smooth_main", "gpu_flip.pressure.smooth.reference");
+        pipes.residual = device.create_compute_pipeline(shader, "residual_main", "gpu_flip.pressure.residual.reference");
+    }
+
     /// Copies the last solve's scalars (iteration k's r·z at 2k, p·s at
     /// 2k + 1) into `into`, a shared buffer of 2 · MAX_ITERATIONS floats.
     pub(crate) fn copy_scalars(&self, enc: &mut GpuEncoder, into: &GpuBuffer) {

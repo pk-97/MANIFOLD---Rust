@@ -127,20 +127,6 @@ struct Row {
     hi: vec4<f32>,
 };
 
-fn row_weight(row: Row, k: u32) -> f32 {
-    if k < 4u {
-        return row.lo[k];
-    }
-    return row.hi[k - 4u];
-}
-
-// Cell idx's neighbour across face k (axis k / 2, low side for even k):
-// the weight is positive only inside the box, so this never leaves it.
-fn across(idx: u32, k: u32) -> u32 {
-    let stride = select(select(u.nx * u.ny, u.nx, k < 4u), 1u, k < 2u);
-    return select(idx + stride, idx - stride, (k & 1u) == 0u);
-}
-
 const DIVISOR_FLOOR: f32 = 1e-30;
 // Rounds a solve may run: the solver's MAX_ITERATIONS.
 const ROUNDS: u32 = 64u;
@@ -369,23 +355,31 @@ struct Stencil {
     sum: f32,
 };
 
+// A zero weight must not read its neighbour (which may be outside the box).
+// Keep the six additions in the original face order without a dynamic loop
+// or dynamic vector-component indexing in each smoothing/operator pass.
+fn stencil_add(sum: f32, source: u32, weight: f32, at: u32) -> f32 {
+    if !(weight > 0.0) {
+        return sum;
+    }
+    if source == 0u {
+        return sum + weight * out[at];
+    }
+    return sum + weight * aux[at];
+}
+
 fn stencil(idx: u32, source: u32) -> Stencil {
     let row = rows[idx];
     var s = Stencil(select(row.hi.w, row.hi.z, u.ghost == 1u), 0.0);
     if source == 2u {
         return s;
     }
-    for (var k = 0u; k < 6u; k = k + 1u) {
-        let w = row_weight(row, k);
-        if w > 0.0 {
-            let at = across(idx, k);
-            if source == 0u {
-                s.sum = s.sum + w * out[at];
-            } else {
-                s.sum = s.sum + w * aux[at];
-            }
-        }
-    }
+    s.sum = stencil_add(s.sum, source, row.lo.x, idx - 1u);
+    s.sum = stencil_add(s.sum, source, row.lo.y, idx + 1u);
+    s.sum = stencil_add(s.sum, source, row.lo.z, idx - u.nx);
+    s.sum = stencil_add(s.sum, source, row.lo.w, idx + u.nx);
+    s.sum = stencil_add(s.sum, source, row.hi.x, idx - u.nx * u.ny);
+    s.sum = stencil_add(s.sum, source, row.hi.y, idx + u.nx * u.ny);
     return s;
 }
 
