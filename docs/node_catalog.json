@@ -14654,6 +14654,10 @@
           "type": "f32"
         },
         {
+          "name": "initial_obstacle_speed",
+          "type": "f32"
+        },
+        {
           "capacity": "fixed:1",
           "name": "clock_obstacles",
           "type": "Array"
@@ -15042,6 +15046,11 @@
           "type": "f32"
         },
         {
+          "name": "retired_max_speed",
+          "required": false,
+          "type": "f32"
+        },
+        {
           "name": "interval_duration",
           "required": false,
           "type": "f32"
@@ -15113,6 +15122,11 @@
         },
         {
           "name": "clock_obstacle_count",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "initial_obstacle_speed",
           "required": false,
           "type": "f32"
         },
@@ -20339,6 +20353,11 @@
           "type": "f32"
         },
         {
+          "name": "dropped_seconds",
+          "required": false,
+          "type": "f32"
+        },
+        {
           "name": "epoch",
           "required": false,
           "type": "f32"
@@ -20428,6 +20447,10 @@
         },
         {
           "name": "tick_index",
+          "type": "f32"
+        },
+        {
+          "name": "retired_max_speed",
           "type": "f32"
         },
         {
@@ -24008,6 +24031,11 @@
           "type": "f32"
         },
         {
+          "name": "dropped_seconds",
+          "required": false,
+          "type": "f32"
+        },
+        {
           "name": "step_cap_hit",
           "required": false,
           "type": "f32"
@@ -24084,7 +24112,7 @@
         }
       ],
       "params": [],
-      "purpose": "Hold a matter domain's points across frames and run its substep region: seed the points when the epoch changes, provide the grid arrays for the lattice, and repeat the region ticks × substeps-per-tick times with the substep length, indices and tick flags. A tick with non-finite values halts the solver with an error until Reset.",
+      "purpose": "Hold a matter domain's points across frames and run its substep region: seed the points when the epoch changes, provide the grid arrays for the lattice, and repeat the region over each accepted interval's subdivisions with the substep length, indices and tick flags. A tick with non-finite values halts the solver with an error until Reset.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Keeps the liquid's particles between frames and runs its simulation steps.",
