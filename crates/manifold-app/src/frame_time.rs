@@ -27,7 +27,8 @@
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-use manifold_gpu::ProfileGranularity;
+use manifold_gpu::{GpuFrameProfile, GpuWorkKind, ProfileGranularity};
+use manifold_renderer::node_graph::StepProfile;
 
 use crate::content_command::ContentCommand;
 use crate::perf_soak::{prepare_project_edited, PreparedProject};
@@ -119,6 +120,54 @@ mod tests {
         assert_eq!(granularity(Some("node")), Ok(ProfileGranularity::Tag));
         assert!(granularity(Some("step")).is_err());
     }
+
+    #[test]
+    fn duplicate_profile_tags_sum_cpu_preparation_and_only_dispatch_mode_counts_compute() {
+        use manifold_gpu::GpuProfiledSpan;
+        use manifold_renderer::node_graph::NodeInstanceId;
+
+        let steps: Vec<_> = [1_000_000, 2_000_000].into_iter().map(|cpu_nanos| StepProfile {
+            step_idx: 0,
+            node: NodeInstanceId(1),
+            type_id: STEP.into(),
+            cpu_nanos,
+            tag: "water:s0".into(),
+        }).collect();
+        let spans = [GpuWorkKind::Compute, GpuWorkKind::Compute, GpuWorkKind::Blit].into_iter().map(|kind| GpuProfiledSpan {
+            tag: "water:s0".into(),
+            label: "pass".into(),
+            kind,
+            threadgroup_bytes: 0,
+            start_ms: 0.0,
+            millis: 0.5,
+        }).collect();
+        let profiles = [("Generators", GpuFrameProfile { total_ms: 2.0, spans, invalid: 1, ..GpuFrameProfile::default() })];
+        let dispatch = split_profiles(&steps, &profiles, ProfileGranularity::Dispatch);
+        assert_eq!(dispatch.per_type_cpu_ms[STEP], 3.0);
+        assert_eq!(dispatch.per_type[STEP], 1.5);
+        assert_eq!(dispatch.compute_dispatches.as_ref().unwrap()[STEP], 2);
+        assert_eq!(dispatch.invalid, 1);
+        let mut phase = Phase::default();
+        phase.add(&Frame { interval_ms: 4.0, fence_ms: 0.0, plain_gpu_ms: None, split: Some(dispatch) });
+        assert_eq!(phase.per_type_cpu_ms[STEP], vec![3.0]);
+        assert_eq!(phase.compute_dispatches[STEP], vec![2.0]);
+        assert_eq!(phase.dispatch_frames, 1);
+        assert_eq!(phase.invalid, 1);
+        let idle = split_profiles(&steps, &[], ProfileGranularity::Dispatch);
+        phase.add(&Frame { interval_ms: 4.0, fence_ms: 0.0, plain_gpu_ms: None, split: Some(idle) });
+        assert_eq!(phase.compute_dispatches[STEP], vec![2.0, 0.0]);
+        assert_eq!(phase.dispatch_frames, 2);
+
+        let tagged = split_profiles(&steps, &profiles, ProfileGranularity::Tag);
+        assert_eq!(tagged.per_type_cpu_ms[STEP], 3.0);
+        assert_eq!(tagged.per_type[STEP], 1.5);
+        assert!(tagged.compute_dispatches.is_none());
+        let mut phase = Phase::default();
+        phase.add(&Frame { interval_ms: 4.0, fence_ms: 0.0, plain_gpu_ms: None, split: Some(tagged) });
+        assert_eq!(phase.per_type_cpu_ms[STEP], vec![3.0]);
+        assert!(phase.compute_dispatches.is_empty());
+        assert_eq!(phase.dispatch_frames, 0);
+    }
 }
 
 /// One frame's numbers. Every frame has the wall interval and the surface
@@ -159,7 +208,12 @@ struct Split {
     /// Whole command buffers (Generators + Compositor), GPU ms.
     total_ms: f64,
     overflow: usize,
+    invalid: usize,
     per_type: BTreeMap<String, f64>,
+    /// Profiled graph-step preparation: acquire, encode and scalar drains.
+    per_type_cpu_ms: BTreeMap<String, f64>,
+    /// Tag-granularity compute spans can contain multiple dispatches.
+    compute_dispatches: Option<BTreeMap<String, u64>>,
     per_step_label: BTreeMap<String, f64>,
     per_whitewater_label: BTreeMap<String, f64>,
     per_render_label: BTreeMap<String, f64>,
@@ -196,7 +250,11 @@ struct Phase {
     plain_total: Vec<f64>,
     stamped_total: Vec<f64>,
     overflow: usize,
+    invalid: usize,
     per_type: BTreeMap<String, Vec<f64>>,
+    per_type_cpu_ms: BTreeMap<String, Vec<f64>>,
+    compute_dispatches: BTreeMap<String, Vec<f64>>,
+    dispatch_frames: usize,
     per_step: BTreeMap<String, Vec<f64>>,
     per_whitewater: BTreeMap<String, Vec<f64>>,
     per_render: BTreeMap<String, Vec<f64>>,
@@ -214,14 +272,28 @@ impl Phase {
         let Some(split) = &frame.split else { return };
         self.stamped_total.push(split.total_ms);
         self.overflow += split.overflow;
+        self.invalid += split.invalid;
         for (into, from) in [
             (&mut self.per_type, &split.per_type),
+            (&mut self.per_type_cpu_ms, &split.per_type_cpu_ms),
             (&mut self.per_step, &split.per_step_label),
             (&mut self.per_whitewater, &split.per_whitewater_label),
             (&mut self.per_render, &split.per_render_label),
         ] {
             for (name, ms) in from {
                 into.entry(name.clone()).or_default().push(*ms);
+            }
+        }
+        if let Some(counts) = &split.compute_dispatches {
+            self.dispatch_frames += 1;
+            // A type with no compute span in this sampled frame dispatched zero.
+            for samples in self.compute_dispatches.values_mut() {
+                samples.push(0.0);
+            }
+            for (name, count) in counts {
+                let samples = self.compute_dispatches.entry(name.clone())
+                    .or_insert_with(|| vec![0.0; self.dispatch_frames]);
+                *samples.last_mut().expect("the current dispatch frame has a count slot") = *count as f64;
             }
         }
     }
@@ -249,22 +321,43 @@ impl Phase {
             percentile(&self.plain_compositor, 0.95),
         );
         println!(
-            "  timestamped frames ({}): whole-buffer GPU p50 {:.2} ms p95 {:.2} ms, sampler overflow {}",
+            "  timestamped frames ({}): whole-buffer GPU p50 {:.2} ms p95 {:.2} ms, sampler overflow {}, invalid spans {}",
             self.stamped_total.len(),
             percentile(&self.stamped_total, 0.5),
             percentile(&self.stamped_total, 0.95),
             self.overflow,
+            self.invalid,
         );
-        if self.overflow > 0 {
+        if self.overflow > 0 || self.invalid > 0 {
             println!(
-                "  WARNING: {} spans did not fit the sampler; every per-node and per-dispatch table below is missing the frames' last dispatches",
-                self.overflow
+                "  WARNING: {} spans did not fit the sampler and {} spans had invalid samples; GPU span timing and dispatch-count tables below are incomplete",
+                self.overflow,
+                self.invalid,
             );
         }
         print_split("per node type", &self.per_type);
-        print_split("gpu_flip_step per dispatch label", &self.per_step);
-        print_split("whitewater_step per dispatch label", &self.per_whitewater);
+        let (step_title, whitewater_title) = if self.dispatch_frames > 0 {
+            ("gpu_flip_step per dispatch label", "whitewater_step per dispatch label")
+        } else {
+            ("gpu_flip_step grouped encoder labels", "whitewater_step grouped encoder labels")
+        };
+        print_split(step_title, &self.per_step);
+        print_split(whitewater_title, &self.per_whitewater);
         print_split("render_scene per pass label", &self.per_render);
+        println!("  profiled CPU preparation per node type (acquire, encode, scalar drains; timestamped frames):");
+        let mut cpu_rows: Vec<_> = self.per_type_cpu_ms.iter().collect();
+        cpu_rows.sort_by(|a, b| percentile(b.1, 0.5).total_cmp(&percentile(a.1, 0.5)));
+        for (name, samples) in cpu_rows {
+            println!("    {name:<56} p50 {:>8.3} ms  p95 {:>8.3} ms", percentile(samples, 0.5), percentile(samples, 0.95));
+        }
+        if self.dispatch_frames > 0 {
+            println!("  sampled compute dispatch counts per node type ({} dispatch-granularity frames):", self.dispatch_frames);
+            let mut count_rows: Vec<_> = self.compute_dispatches.iter().collect();
+            count_rows.sort_by(|a, b| percentile(b.1, 0.5).total_cmp(&percentile(a.1, 0.5)));
+            for (name, samples) in count_rows {
+                println!("    {name:<56} p50 {:>8.0} dispatches  p95 {:>8.0} dispatches", percentile(samples, 0.5), percentile(samples, 0.95));
+            }
+        }
     }
 }
 
@@ -282,7 +375,7 @@ fn set_profiling(ct: &mut crate::content_thread::ContentThread, on: bool) {
 
 /// Join the frame's GPU spans back to their nodes, the way the frame probe
 /// in `gpu_flip_frame_perf.rs` does.
-fn split(ct: &mut crate::content_thread::ContentThread) -> Split {
+fn split(ct: &mut crate::content_thread::ContentThread, granularity: ProfileGranularity) -> Split {
     let gpu_profiles = ct.content_pipeline.take_gpu_profiles();
     let mut steps = ct.content_pipeline.take_step_profiles();
     for renderer in ct.engine.renderers_mut() {
@@ -293,17 +386,33 @@ fn split(ct: &mut crate::content_thread::ContentThread) -> Split {
             steps.extend(generator.take_step_profiles());
         }
     }
-    let types: BTreeMap<String, String> = steps.into_iter().map(|s| (s.tag, s.type_id)).collect();
-    let mut split = Split::default();
-    for (buffer, profile) in &gpu_profiles {
+    split_profiles(&steps, &gpu_profiles, granularity)
+}
+
+fn split_profiles(
+    steps: &[StepProfile],
+    gpu_profiles: &[(&str, GpuFrameProfile)],
+    granularity: ProfileGranularity,
+) -> Split {
+    let mut split = Split {
+        compute_dispatches: (granularity == ProfileGranularity::Dispatch).then(BTreeMap::new),
+        ..Split::default()
+    };
+    let mut types = BTreeMap::new();
+    for step in steps {
+        *split.per_type_cpu_ms.entry(step.type_id.clone()).or_insert(0.0) += step.cpu_nanos as f64 / 1e6;
+        types.insert(step.tag.as_str(), step.type_id.as_str());
+    }
+    for (buffer, profile) in gpu_profiles {
         split.total_ms += profile.total_ms;
         split.overflow += profile.overflow;
+        split.invalid += profile.invalid;
         for span in &profile.spans {
-            let Some(type_id) = types.get(&span.tag) else {
-                *split.per_type.entry(format!("(untagged, {buffer})")).or_insert(0.0) += span.millis;
-                continue;
-            };
+            let type_id = types.get(span.tag.as_str()).map_or_else(|| format!("(untagged, {buffer})"), |type_id| (*type_id).to_owned());
             *split.per_type.entry(type_id.clone()).or_insert(0.0) += span.millis;
+            if span.kind == GpuWorkKind::Compute && let Some(counts) = &mut split.compute_dispatches {
+                *counts.entry(type_id.clone()).or_insert(0) += 1;
+            }
             let labelled = match type_id.as_str() {
                 STEP => Some(&mut split.per_step_label),
                 WHITEWATER => Some(&mut split.per_whitewater_label),
@@ -406,7 +515,7 @@ fn probe(args: &Args) -> Result<(), String> {
         let interval_ms = now.duration_since(last).as_secs_f64() * 1e3;
         last = now;
         let fence_ms = ct.content_pipeline.last_fence_wait_ms();
-        let frame_split = stamped.then(|| split(&mut ct));
+        let frame_split = stamped.then(|| split(&mut ct, args.granularity));
         if let Some((at, path)) = &args.png
             && *at == index
         {
