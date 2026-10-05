@@ -28,6 +28,12 @@ use crate::node_graph::primitive::Primitive;
 pub const WHITEWATER_INPUTS: [&str; 4] = ["foam_in", "bubble_in", "spray_in", "dust_in"];
 pub const WHITEWATER_OUTPUTS: [&str; 4] = ["foam_b", "bubble_b", "spray_b", "dust_b"];
 
+#[cfg(feature = "gpu-proofs")]
+thread_local! {
+    /// Proof hook: the next publication on this thread fails to encode.
+    pub(crate) static FAIL_NEXT_PUBLICATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// Every provided array output, in [`LiquidFrame`]'s binding table order.
 const PROVIDED_PORTS: usize = 13;
 const PROVIDED: [&str; PROVIDED_PORTS] = [
@@ -119,8 +125,11 @@ impl LiquidFrame {
     /// Placeholders allocate only when a port's size changes.
     fn rebind(&mut self, device: &manifold_gpu::GpuDevice, sizes: [u64; PROVIDED_PORTS]) {
         for (i, port) in PROVIDED.iter().enumerate() {
-            let next = match self.wanted(port) {
-                Some(buffer) => buffer.clone(),
+            // Compare before cloning: an unchanged binding is left alone, so
+            // held frames neither clone nor retire a buffer.
+            let wanted = self.wanted(port).map(|b| b.identity_key());
+            let key = match wanted {
+                Some(key) => key,
                 None => {
                     let size = sizes[i].max(4);
                     if self.placeholders[i].as_ref().is_none_or(|b| b.size != size) {
@@ -128,10 +137,17 @@ impl LiquidFrame {
                         buffer.zero_fill();
                         self.placeholders[i] = Some(buffer);
                     }
-                    self.placeholders[i].clone().expect("placeholder made")
+                    self.placeholders[i].as_ref().expect("placeholder made").identity_key()
                 }
             };
-            self.bound[i] = Some(next);
+            if self.bound[i].as_ref().is_some_and(|b| b.identity_key() == key) {
+                continue;
+            }
+            let next = match wanted {
+                Some(_) => self.wanted(port).cloned(),
+                None => self.placeholders[i].clone(),
+            };
+            self.bound[i] = next;
         }
     }
 
@@ -265,8 +281,12 @@ impl Primitive for LiquidFrame {
         if !self.wired[FIELD_SOLID] && self.solid_key != Some(solid_key) {
             let distances = surface.flip_wall_distance(closed_faces);
             // A fresh buffer per setup: the previous one may still be read by
-            // an in-flight frame; its drop is fence-retired.
-            let buffer = gpu.device.create_buffer_shared((distances.len() * 4).max(4) as u64);
+            // an in-flight frame; its drop is fence-retired. Grow-only, as
+            // the solid slots: the solid mix's output never shrinks, so the
+            // walls keep the largest size and a zero tail.
+            let bytes = ((distances.len() * 4).max(4) as u64).max(self.solid.as_ref().map_or(0, |b| b.size));
+            let buffer = gpu.device.create_buffer_shared(bytes);
+            buffer.zero_fill();
             // SAFETY: new shared buffer, not yet visible to the GPU.
             unsafe { buffer.write(0, bytemuck::cast_slice(&distances)) };
             self.solid = Some(buffer);
@@ -296,39 +316,42 @@ impl Primitive for LiquidFrame {
                         metadata: target.metadata.as_ref().expect("acquired slot"),
                         count,
                     });
+                    #[cfg(feature = "gpu-proofs")]
+                    let encoded = if FAIL_NEXT_PUBLICATION.take() { Err("injected publication failure".to_string()) } else { encoded };
                     if let Err(error) = encoded {
+                        // Never selectable; the frame still publishes its
+                        // outputs below, so arrays and scalars agree.
                         self.history.core.begin(slot, simulation_time, stamp);
                         self.history.core.fail(slot, stamp);
-                        self.rebind(gpu.device, sizes);
-                        ctx.error(format!("Liquid Frame: {error}"));
-                        return;
-                    }
-                    // Every wired field is written whole by this publication;
-                    // a rejected tick's slot is never shown, so nothing is gated.
-                    let sources: [Option<&GpuBuffer>; FIELDS] = [
-                        solid_in, interior, faces_in[0], faces_in[1], faces_in[2],
-                        whitewater_in[0], whitewater_in[1], whitewater_in[2], whitewater_in[3],
-                    ];
-                    for (field, source) in sources.into_iter().enumerate() {
-                        if let (Some(source), Some(target)) = (source, target.fields[field].as_ref()) {
-                            let bytes = fields[field].min(source.size);
-                            if target.size > bytes {
-                                // Grow-only storage: past this layout's size is zero,
-                                // so a shrunk whitewater pool shows no stale tail.
-                                gpu.native_enc.clear_buffer(target);
+                        refused = Some(format!("Liquid Frame: {error}"));
+                    } else {
+                        // Every wired field is written whole by this publication;
+                        // a rejected tick's slot is never shown, so nothing is gated.
+                        let sources: [Option<&GpuBuffer>; FIELDS] = [
+                            solid_in, interior, faces_in[0], faces_in[1], faces_in[2],
+                            whitewater_in[0], whitewater_in[1], whitewater_in[2], whitewater_in[3],
+                        ];
+                        for (field, source) in sources.into_iter().enumerate() {
+                            if let (Some(source), Some(target)) = (source, target.fields[field].as_ref()) {
+                                let bytes = fields[field].min(source.size);
+                                if target.size > bytes {
+                                    // Grow-only solid storage: past this lattice's size is
+                                    // zero, so a shrunk lattice reads no stale tail.
+                                    gpu.native_enc.clear_buffer(target);
+                                }
+                                gpu.native_enc.copy_buffer_to_buffer(source, target, bytes);
                             }
-                            gpu.native_enc.copy_buffer_to_buffer(source, target, bytes);
                         }
-                    }
-                    self.history.core.begin(slot, simulation_time, stamp);
-                    if crate::node_graph::physics::offline_simulation() {
-                        // Export presents this sample, independent of output
-                        // fps: complete it now, then select again.
-                        gpu.native_enc.commit_wait_and_continue(gpu.device);
-                        self.history.core.release_writer(slot);
-                        self.history.retire(complete);
-                        self.history.core.select(display_time);
-                        self.history.core.stamp_readers(stamp);
+                        self.history.core.begin(slot, simulation_time, stamp);
+                        if crate::node_graph::physics::offline_simulation() {
+                            // Export presents this sample, independent of output
+                            // fps: complete it now, then select again.
+                            gpu.native_enc.commit_wait_and_continue(gpu.device);
+                            self.history.core.release_writer(slot);
+                            self.history.retire(complete);
+                            self.history.core.select(display_time);
+                            self.history.core.stamp_readers(stamp);
+                        }
                     }
                 }
             }

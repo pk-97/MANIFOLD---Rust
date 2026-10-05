@@ -388,6 +388,10 @@ pub(super) struct Show {
     paused: bool,
     /// The cards' values, as the clip hands them to the runtime.
     cards: ParamManifest,
+    /// A proof injects a node error this frame; its refusal is expected.
+    expect_node_error: bool,
+    /// The last frame.s status, for proofs that expect a refusal.
+    last_status: String,
 }
 
 /// One frame's clocks and, when profiled, each whitewater label's own GPU ms.
@@ -443,6 +447,8 @@ impl Show {
             trigger: 0,
             paused: false,
             cards: ParamManifest::default(),
+            expect_node_error: false,
+            last_status: String::new(),
         };
         show.hold(held);
         show
@@ -491,7 +497,8 @@ impl Show {
         assert_eq!(result.failed_command_buffers, 0, "frame {} failed on the GPU", self.frame_count);
         // A failed frame is not the one the graph describes: a refusing node
         // drew a fallback, and every probe past it reads nothing computed.
-        assert!(!matches!(status, FrameRenderStatus::Failed(_)), "frame {} failed: {status:?}", self.frame_count);
+        assert!(self.expect_node_error || !matches!(status, FrameRenderStatus::Failed(_)), "frame {} failed: {status:?}", self.frame_count);
+        self.last_status = format!("{status:?}");
         let mut whitewater_ms = vec![0.0; self.labels.len()];
         if profile {
             self.runtime.take_step_profiles();
@@ -2126,4 +2133,69 @@ fn liquid_frame_whitewater_reads_the_selected_slot() {
     }
     assert!(with_foam > 0, "the scene throws foam");
     assert!(behind > 0, "some frame shows a B older than the state");
+}
+
+/// A publication that fails to encode still ends the frame with the frame's
+/// outputs: the selection happens before publishing, so the failing frame
+/// shows exactly what the same frame shows without the failure, arrays and
+/// scalars together, and names the error.
+#[test]
+fn liquid_frame_encode_failure_publishes_the_selected_outputs() {
+    let _live = crate::node_graph::physics::PhysicsStepScope::with_preview_budget(false, std::time::Duration::from_secs(1));
+    let [mut clean, mut failing] = [(), ()].map(|()| {
+        let mut show = Show::new(history_def(), (96, 54), false, &[]);
+        show.restart();
+        show
+    });
+    for frame in 0..30 {
+        // Armed from frame 5 until a publication consumes it.
+        let armed = frame >= 5;
+        clean.frame(false);
+        super::liquid_frame::FAIL_NEXT_PUBLICATION.set(armed);
+        failing.expect_node_error = armed;
+        failing.frame(false);
+        failing.expect_node_error = false;
+        let inject = armed && !super::liquid_frame::FAIL_NEXT_PUBLICATION.get();
+        super::liquid_frame::FAIL_NEXT_PUBLICATION.set(false);
+        if inject {
+            assert!(failing.last_status.starts_with("Failed"), "frame {frame}: the failure is reported: {}", failing.last_status);
+            assert_eq!(failing.probes(HISTORY_PROBES)[PAIR], clean.probes(HISTORY_PROBES)[PAIR], "frame {frame}: scalars follow the selection");
+            for port in ["particles_a", "particles_b"] {
+                assert_eq!(failing.provided_copy("frame", port), clean.provided_copy("frame", port), "frame {frame}: {port}");
+            }
+            // The failed endpoint is never retried, so the two runs part.
+            return;
+        }
+    }
+    panic!("no publication consumed the injected failure");
+}
+
+/// A smaller lattice keeps the solid's storage, wired or as walls: the
+/// solid mix's output capacity is planned once and never shrinks.
+#[test]
+fn liquid_frame_solid_shrink_keeps_mix_capacity() {
+    for wired in [true, false] {
+        let mut g = Appender::new(render_def(WaterScene::dam_break(32).with_faces()));
+        let frame = g.id("frame");
+        if !wired {
+            g.def["wires"].as_array_mut().expect("wires").retain(|w| !(w["toNode"] == frame && w["toPort"] == "solid"));
+        }
+        let def = g.finish();
+        let spec = def.preset_metadata.as_ref()
+            .and_then(|cards| cards.params.iter().find(|card| card.id == "resolution"))
+            .expect("the Resolution card")
+            .clone();
+        let mut show = Show::new(def, (96, 54), false, &[]);
+        show.restart();
+        for n in [32u32, 16] {
+            let mut card = Param::bundled(spec.clone());
+            card.value = n as f32;
+            card.base = n as f32;
+            show.cards = ParamManifest::from_params(vec![card]);
+            for _ in 0..4 {
+                show.frame(false);
+            }
+            assert!(show.errors().is_empty(), "solid wired {wired}, Resolution {n}: {:?}", show.errors());
+        }
+    }
 }
