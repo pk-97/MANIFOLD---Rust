@@ -267,7 +267,7 @@ class LandingTests(unittest.TestCase):
 
     def test_named_red_collection_does_not_skip_remaining_checks(self):
         code, called, timings, *_ = self.exercise("docs-index", extra=["--keep-going"])
-        self.assertEqual(code, 1)
+        self.assertEqual(code, landing_gate.CHECKS_RED)
         self.assertEqual(called, self.checks)
         self.assertEqual(timings["failed"], 1)
 

@@ -4,7 +4,8 @@
 Gates only what the branch touched (GPU leg: scripts/gpu_scope.py); the workspace-wide sweep lives in
 scripts/trunk_health.py (nightly). Pass --repo <worktree path> of the branch
 being landed, after merging origin/main into it. Stop at the first failed check; preserve its
-transcript and timings. Exit 0 iff all required checks pass.
+transcript and timings. Exit 0 iff all required checks pass; exit CHECKS_RED
+when --keep-going ran every check and some were red; exit 1 otherwise.
 """
 
 import argparse
@@ -26,6 +27,11 @@ import gpu_queue
 
 MAIN_CHECKOUT = Path("/Users/peterkiemann/MANIFOLD - Rust")
 GATED_HEAD = contextvars.ContextVar('gated_head', default=None)
+# Exit code of a gate that ran every check (--keep-going) on a tree that
+# held still and found some red: the only red land_branch.py may land over
+# with an explicit named red. Refusals, crashes and early stops exit 1.
+CHECKS_RED = 4
+RAN_EVERY_CHECK = contextvars.ContextVar('ran_every_check', default=False)
 
 # GPU-proofs scope (touched paths -> focused tests + smoke, time budget, no
 # run-everything fallback) lives in scripts/gpu_scope.py; the full suite runs
@@ -362,10 +368,12 @@ def print_result(label, status, duration=None, tail=None):
 
 def main():
     token = GATED_HEAD.set(None)
+    ran = RAN_EVERY_CHECK.set(False)
     try:
         with contextlib.ExitStack() as stack:
             return _main(stack)
     finally:
+        RAN_EVERY_CHECK.reset(ran)
         GATED_HEAD.reset(token)
 
 
@@ -401,6 +409,7 @@ def _main(stack):
         print('[FAIL] landing needs a clean committed tree; standalone proof passes can precede the commit')
         return 1
     GATED_HEAD.set(head_sha)
+    RAN_EVERY_CHECK.set(args.keep_going)
 
     try:
         paths, ignored_paths = diff_scope.effective_paths(repo, base_sha)
@@ -799,7 +808,10 @@ def finish(repo, base_sha, results):
         except Exception as e:
             print(f"[WARN] self-verdict failed: {e}")
 
-    return 0 if failed == 0 else 1
+    if failed == 0:
+        return 0
+    moved = any(status == 'FAIL' and label == 'stable-tree' for status, label, _, _ in results)
+    return CHECKS_RED if RAN_EVERY_CHECK.get() and not moved else 1
 
 
 if __name__ == "__main__":
