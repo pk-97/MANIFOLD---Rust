@@ -1015,6 +1015,14 @@ impl PressureSolver {
         enc.copy_buffer_to_buffer(&b.scalars, into, b.scalars.size);
     }
 
+    /// Fills the scalars and the stop's record from `sentinel` (at least as
+    /// large as either), so storage a solve leaves unwritten holds known bits.
+    pub(crate) fn seed_records(&self, enc: &mut GpuEncoder, sentinel: &GpuBuffer) {
+        let b = self.buffers.as_ref().expect("the solver was prepared");
+        enc.copy_buffer_to_buffer(sentinel, &b.scalars, b.scalars.size);
+        enc.copy_buffer_to_buffer(sentinel, &b.progress, b.progress.size);
+    }
+
     /// Copies the fine level's rows (`ROW_BYTES` a cell, gpu_flip_pressure.wgsl
     /// Row) into `into`, a shared buffer of the lattice's cells × `ROW_BYTES`.
     pub(crate) fn copy_rows(&self, enc: &mut GpuEncoder, into: &GpuBuffer) {

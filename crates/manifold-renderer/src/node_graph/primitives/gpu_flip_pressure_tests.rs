@@ -1342,6 +1342,121 @@ fn pressure_module_replay_matches_direct() {
     }
 }
 
+// ── The main golden (docs/GPU_FLIP_PRESSURE_CAP_DESIGN.md section 9 (Phasing), C0) ──
+
+const GOLDEN: &str = "gpu_flip_pressure_golden.txt";
+/// Bits every scalar and record float holds before a solve: a quiet NaN no
+/// solve writes, so storage it leaves alone is known.
+const GOLDEN_SENTINEL: u32 = 0x7fc0_dead;
+/// The fingerprinted region: the scalars and record of a cap-64 solve. A
+/// larger cap's tail is tested on its own, never folded into these.
+const GOLDEN_SCALARS: usize = 128;
+const GOLDEN_PROGRESS: usize = 68;
+const GOLDEN_STOPS: [Stop; 8] = [
+    Stop::Fixed(1),
+    Stop::Fixed(2),
+    Stop::Fixed(16),
+    Stop::Fixed(24),
+    Stop::Fixed(25),
+    Stop::Fixed(63),
+    Stop::Fixed(64),
+    Stop::Converged(64),
+];
+
+/// One golden solve: pressure zeroed and scalars and record seeded before
+/// it, inside a replay span when `cache` holds one. Fingerprints of the
+/// pressure, the legacy-sized scalars and the legacy-sized record.
+fn golden_solve(rig: &mut Rig, p: &Problem, stop: Stop, cache: &mut Option<GpuReplayCache>) -> [u64; 3] {
+    let water: Vec<f32> = p.water.iter().map(|&w| f32::from(u8::from(w))).collect();
+    let cells = rig.n * rig.n * rig.n;
+    let scalar_bytes = u64::from(2 * MAX_ITERATIONS) * 4;
+    let record_bytes = u64::from(PROGRESS_FLOATS) * 4;
+    let sentinel = rig.device.create_buffer_shared(scalar_bytes.max(record_bytes));
+    // SAFETY: shared buffers sized for what is written; the last solve completed.
+    unsafe {
+        rig.water.write(0, bytemuck::cast_slice(&water));
+        rig.rhs.write(0, bytemuck::cast_slice(&p.f));
+        rig.pressure.write(0, bytemuck::cast_slice(&vec![0u32; cells]));
+        sentinel.write(0, bytemuck::cast_slice(&vec![GOLDEN_SENTINEL; (sentinel.size / 4) as usize]));
+    }
+    let scalars = rig.device.create_buffer_shared(scalar_bytes);
+    let record = rig.device.create_buffer_shared(record_bytes);
+    let mut enc = rig.device.create_encoder("gpu-flip-pressure-golden");
+    let n = rig.n as u32;
+    let lattice = Water { lattice: [n; 3], cell_size: rig.cell_size() as f32, water: &rig.water, faces: &rig.faces, phi: rig.phi.as_ref() };
+    rig.solver.prepare(&rig.device, &mut enc, &lattice).expect("prepares");
+    rig.solver.seed_records(&mut enc, &sentinel);
+    let spanned = cache.take().map(|cache| enc.begin_replay(&rig.device, cache)).is_some();
+    rig.solver.solve(&mut enc, &lattice, run_at!(rig, stop)).expect("solves");
+    if spanned {
+        *cache = Some(enc.end_replay());
+    }
+    rig.solver.copy_scalars(&mut enc, &scalars);
+    enc.copy_buffer_to_buffer(rig.solver.progress().expect("prepared"), &record, record_bytes);
+    enc.commit_and_wait_completed();
+    let scalar_words: Vec<u32> = read(&scalars, GOLDEN_SCALARS);
+    let record_words: Vec<u32> = read(&record, GOLDEN_PROGRESS);
+    [fingerprint(bytemuck::cast_slice(rig.pressure())), fingerprint(&scalar_words), fingerprint(&record_words)]
+}
+
+/// Every golden case, direct and replayed, as the fixture's lines.
+fn golden_lines() -> Vec<String> {
+    let (n, dam) = load_fixture(DAM_BREAK);
+    let (_, density) = load_fixture("deep_pool_density_problems");
+    let cases = [("dambreak", 0, &dam[0], 0), ("dambreak", 4, &dam[4], 0), ("density", 0, &density[0], 0), ("dambreak", 0, &dam[0], 1)];
+    let mut lines = Vec::new();
+    for (fixture, index, saved, level) in cases {
+        let p = resample(saved, n, 64);
+        let mut direct = Rig::new(64).at_level(level);
+        let mut replay = Rig::new(64).at_level(level);
+        let mut none = None;
+        let mut cache = Some(GpuReplayCache::default());
+        for stop in GOLDEN_STOPS {
+            let d = golden_solve(&mut direct, &p, stop, &mut none);
+            // Twice: the first visit records, the second replays.
+            golden_solve(&mut replay, &p, stop, &mut cache);
+            let r = golden_solve(&mut replay, &p, stop, &mut cache);
+            for (mode, [pressure, scalars, record]) in [("direct", d), ("replay", r)] {
+                lines.push(format!(
+                    "{fixture}[{index}] frame {} 64^3 level {level} {stop:?} {mode} pressure {pressure:016x} scalars {scalars:016x} record {record:016x}",
+                    saved.frame
+                ));
+            }
+        }
+    }
+    lines
+}
+
+/// The solve against the golden recorded on main before the pressure cap
+/// work (BUG-fwp2n — unused solver rounds still cost encode time): every
+/// case's pressure, scalars and record, direct and replayed, bit for bit.
+/// `MANIFOLD_RECORD_GOLDEN=1` rewrites the fixture from this build; only
+/// ever do that on main.
+#[test]
+fn pressure_module_matches_main_golden() {
+    let path = format!("{}/tests/fixtures/{GOLDEN}", env!("CARGO_MANIFEST_DIR"));
+    let lines = golden_lines();
+    if std::env::var("MANIFOLD_RECORD_GOLDEN").is_ok_and(|v| v == "1") {
+        let sha = std::process::Command::new("git")
+            .args(["-C", env!("CARGO_MANIFEST_DIR"), "rev-parse", "HEAD"])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default();
+        let header = format!(
+            "# GPU FLIP pressure golden (pressure_module_matches_main_golden)\n# sha {sha}\n# inputs: saved problems resampled to 64^3, pressure zeroed, scalars and record seeded {GOLDEN_SENTINEL:#010x}\n# fingerprints: FNV-1a over the pressure, scalars[..{GOLDEN_SCALARS}], progress[..{GOLDEN_PROGRESS}]\n"
+        );
+        std::fs::write(&path, header + &lines.join("\n") + "\n").expect("golden writes");
+        println!("recorded {} cases at {sha}", lines.len());
+        return;
+    }
+    let golden = std::fs::read_to_string(&path).expect("golden fixture reads");
+    let expected: Vec<&str> = golden.lines().filter(|l| !l.starts_with('#')).collect();
+    assert_eq!(expected.len(), lines.len(), "golden case count");
+    let moved: Vec<String> =
+        expected.iter().zip(&lines).filter(|(e, l)| **e != l.as_str()).map(|(e, l)| format!("want {e}\n got {l}")).collect();
+    assert!(moved.is_empty(), "{} of {} golden cases moved:\n{}", moved.len(), lines.len(), moved.join("\n"));
+}
+
 /// The solve over each level's active tiles equals the solve over every
 /// tile, bit for bit, in the pressure and the stop record, on the engine's
 /// stop and at a fixed count, direct and replayed, over Dam Break frames at
