@@ -1,0 +1,28 @@
+# GPU FLIP coupled-body golden (gpu_flip_body_solve_matches_main_golden)
+# solver code of main 6b4766f9f (plus the test-only seed_records of 41f2952e8)
+# inputs: body scene water 0xc09f, rhs 0xc0a0, pressure zeroed, scalars and record seeded 0x7fc0dead
+# fingerprints: FNV-1a over the pressure, the body sums, scalars[..128], progress[..68]
+gated level 0 Fixed(1) direct pressure f21f5d83ca01417a sums e92d66652ac01b08 scalars 991e0faffa95eb96 record a1093e0e83d963de
+gated level 0 Fixed(1) replay pressure f21f5d83ca01417a sums e92d66652ac01b08 scalars 991e0faffa95eb96 record a1093e0e83d963de
+gated level 0 Fixed(3) direct pressure 8b382ca6f99a2ff6 sums 32e1d7195a61d34c scalars 1d37cd2b568d8ce1 record f5997f5dba399a6c
+gated level 0 Fixed(3) replay pressure 8b382ca6f99a2ff6 sums 32e1d7195a61d34c scalars 1d37cd2b568d8ce1 record f5997f5dba399a6c
+gated level 0 Fixed(16) direct pressure 6eec6069ea1c9c3f sums 0660fdc0036e0eb3 scalars 41817a346f050870 record 1b26490cffa27209
+gated level 0 Fixed(16) replay pressure 6eec6069ea1c9c3f sums 0660fdc0036e0eb3 scalars 41817a346f050870 record 1b26490cffa27209
+gated level 0 Converged(64) direct pressure 5d548efb2b12632f sums 558179fc77560416 scalars eb54c59121c5cf99 record b1ddda852edf43b9
+gated level 0 Converged(64) replay pressure 5d548efb2b12632f sums 558179fc77560416 scalars eb54c59121c5cf99 record b1ddda852edf43b9
+plain level 0 Fixed(1) direct pressure f21f5d83ca01417a sums e92d66652ac01b08 scalars 991e0faffa95eb96 record a1093e0e83d963de
+plain level 0 Fixed(1) replay pressure f21f5d83ca01417a sums e92d66652ac01b08 scalars 991e0faffa95eb96 record a1093e0e83d963de
+plain level 0 Fixed(3) direct pressure 8b382ca6f99a2ff6 sums 32e1d7195a61d34c scalars 1d37cd2b568d8ce1 record f5997f5dba399a6c
+plain level 0 Fixed(3) replay pressure 8b382ca6f99a2ff6 sums 32e1d7195a61d34c scalars 1d37cd2b568d8ce1 record f5997f5dba399a6c
+plain level 0 Fixed(16) direct pressure 6eec6069ea1c9c3f sums 0660fdc0036e0eb3 scalars 41817a346f050870 record 1b26490cffa27209
+plain level 0 Fixed(16) replay pressure 6eec6069ea1c9c3f sums 0660fdc0036e0eb3 scalars 41817a346f050870 record 1b26490cffa27209
+plain level 0 Converged(64) direct pressure 5d548efb2b12632f sums 558179fc77560416 scalars eb54c59121c5cf99 record b1ddda852edf43b9
+plain level 0 Converged(64) replay pressure 5d548efb2b12632f sums 558179fc77560416 scalars eb54c59121c5cf99 record b1ddda852edf43b9
+level1 level 1 Fixed(1) direct pressure 3bd9ac5714d81dd9 sums 9af38e32c75207e6 scalars e265582f6cac5bc7 record e9a916f0badaeb1e
+level1 level 1 Fixed(1) replay pressure 3bd9ac5714d81dd9 sums 9af38e32c75207e6 scalars e265582f6cac5bc7 record e9a916f0badaeb1e
+level1 level 1 Fixed(3) direct pressure a74a1789753a40e6 sums dd50e50bcf242924 scalars 2c05b38e3c1b21ad record fefd05056590084b
+level1 level 1 Fixed(3) replay pressure a74a1789753a40e6 sums dd50e50bcf242924 scalars 2c05b38e3c1b21ad record fefd05056590084b
+level1 level 1 Fixed(16) direct pressure 1809431c5240da5b sums e70a46b4d81e9efe scalars 1d82edb462d4b045 record 66235119167ce402
+level1 level 1 Fixed(16) replay pressure 1809431c5240da5b sums e70a46b4d81e9efe scalars 1d82edb462d4b045 record 66235119167ce402
+level1 level 1 Converged(64) direct pressure 1809431c5240da5b sums e70a46b4d81e9efe scalars 1d82edb462d4b045 record 59197299c8fce402
+level1 level 1 Converged(64) replay pressure 1809431c5240da5b sums e70a46b4d81e9efe scalars 1d82edb462d4b045 record 59197299c8fce402

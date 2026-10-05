@@ -1336,8 +1336,228 @@ fn pressure_module_replay_matches_direct() {
                     Stop::Converged(cap) | Stop::Fixed(cap) => u64::from(cap),
                 };
                 assert_eq!(stats.segments_replayed - last.segments_replayed, rounds, "{stop:?} frame {frame}: every round is one segment execute");
+                // One walked round per solve, not one per round up to the cap.
+                assert_eq!(stats.templates_replayed - last.templates_replayed, 1, "{stop:?} frame {frame}: the rounds are one replayed template");
+                assert_eq!(stats.templates_direct, last.templates_direct, "{stop:?} frame {frame}: no template ran directly");
+                // The prepare, the arm, init and start check, and one round:
+                // `passes` of a one-round solve.
+                let (prepare, one_round) = passes([64; 3], 1);
+                assert_eq!(stats.replayed - last.replayed, (prepare + one_round) as u64, "{stop:?} frame {frame}: the warm solve validates one round");
             }
             last = stats;
+        }
+    }
+}
+
+// ── The main golden (docs/GPU_FLIP_PRESSURE_CAP_DESIGN.md section 9 (Phasing), C0) ──
+
+const GOLDEN: &str = "gpu_flip_pressure_golden.txt";
+/// Bits every scalar and record float holds before a solve: a quiet NaN no
+/// solve writes, so storage it leaves alone is known.
+const GOLDEN_SENTINEL: u32 = 0x7fc0_dead;
+/// The fingerprinted region: the scalars and record of a cap-64 solve. A
+/// larger cap's tail is tested on its own, never folded into these.
+const GOLDEN_SCALARS: usize = 128;
+const GOLDEN_PROGRESS: usize = 68;
+const GOLDEN_STOPS: [Stop; 8] = [
+    Stop::Fixed(1),
+    Stop::Fixed(2),
+    Stop::Fixed(16),
+    Stop::Fixed(24),
+    Stop::Fixed(25),
+    Stop::Fixed(63),
+    Stop::Fixed(64),
+    Stop::Converged(64),
+];
+
+/// One golden solve: pressure zeroed and scalars and record seeded before
+/// it, inside a replay span when `cache` holds one. Fingerprints of the
+/// pressure, the legacy-sized scalars and the legacy-sized record.
+fn golden_solve(rig: &mut Rig, p: &Problem, stop: Stop, cache: &mut Option<GpuReplayCache>) -> [u64; 3] {
+    let water: Vec<f32> = p.water.iter().map(|&w| f32::from(u8::from(w))).collect();
+    let cells = rig.n * rig.n * rig.n;
+    let scalar_bytes = u64::from(2 * MAX_ITERATIONS) * 4;
+    let record_bytes = u64::from(PROGRESS_FLOATS) * 4;
+    let sentinel = rig.device.create_buffer_shared(scalar_bytes.max(record_bytes));
+    // SAFETY: shared buffers sized for what is written; the last solve completed.
+    unsafe {
+        rig.water.write(0, bytemuck::cast_slice(&water));
+        rig.rhs.write(0, bytemuck::cast_slice(&p.f));
+        rig.pressure.write(0, bytemuck::cast_slice(&vec![0u32; cells]));
+        sentinel.write(0, bytemuck::cast_slice(&vec![GOLDEN_SENTINEL; (sentinel.size / 4) as usize]));
+    }
+    let scalars = rig.device.create_buffer_shared(scalar_bytes);
+    let record = rig.device.create_buffer_shared(record_bytes);
+    let mut enc = rig.device.create_encoder("gpu-flip-pressure-golden");
+    let n = rig.n as u32;
+    let lattice = Water { lattice: [n; 3], cell_size: rig.cell_size() as f32, water: &rig.water, faces: &rig.faces, phi: rig.phi.as_ref() };
+    rig.solver.prepare(&rig.device, &mut enc, &lattice).expect("prepares");
+    rig.solver.seed_records(&mut enc, &sentinel);
+    let spanned = cache.take().map(|cache| enc.begin_replay(&rig.device, cache)).is_some();
+    rig.solver.solve(&mut enc, &lattice, run_at!(rig, stop)).expect("solves");
+    if spanned {
+        *cache = Some(enc.end_replay());
+    }
+    rig.solver.copy_scalars(&mut enc, &scalars);
+    enc.copy_buffer_to_buffer(rig.solver.progress().expect("prepared"), &record, record_bytes);
+    enc.commit_and_wait_completed();
+    let scalar_words: Vec<u32> = read(&scalars, GOLDEN_SCALARS);
+    let record_words: Vec<u32> = read(&record, GOLDEN_PROGRESS);
+    [fingerprint(bytemuck::cast_slice(rig.pressure())), fingerprint(&scalar_words), fingerprint(&record_words)]
+}
+
+/// Every golden case, direct and replayed, as the fixture's lines.
+fn golden_lines() -> Vec<String> {
+    let (n, dam) = load_fixture(DAM_BREAK);
+    let (_, density) = load_fixture("deep_pool_density_problems");
+    let cases = [("dambreak", 0, &dam[0], 0), ("dambreak", 4, &dam[4], 0), ("density", 0, &density[0], 0), ("dambreak", 0, &dam[0], 1)];
+    let mut lines = Vec::new();
+    for (fixture, index, saved, level) in cases {
+        let p = resample(saved, n, 64);
+        let mut direct = Rig::new(64).at_level(level);
+        let mut replay = Rig::new(64).at_level(level);
+        let mut none = None;
+        let mut cache = Some(GpuReplayCache::default());
+        for stop in GOLDEN_STOPS {
+            let d = golden_solve(&mut direct, &p, stop, &mut none);
+            // Twice: the first visit records, the second replays.
+            golden_solve(&mut replay, &p, stop, &mut cache);
+            let r = golden_solve(&mut replay, &p, stop, &mut cache);
+            for (mode, [pressure, scalars, record]) in [("direct", d), ("replay", r)] {
+                lines.push(format!(
+                    "{fixture}[{index}] frame {} 64^3 level {level} {stop:?} {mode} pressure {pressure:016x} scalars {scalars:016x} record {record:016x}",
+                    saved.frame
+                ));
+            }
+        }
+    }
+    lines
+}
+
+/// The solve against the golden recorded on main before the pressure cap
+/// work (BUG-fwp2n — unused solver rounds still cost encode time): every
+/// case's pressure, scalars and record, direct and replayed, bit for bit.
+/// `MANIFOLD_RECORD_GOLDEN=1` rewrites the fixture from this build; only
+/// ever do that on main.
+#[test]
+fn pressure_module_matches_main_golden() {
+    let path = format!("{}/tests/fixtures/{GOLDEN}", env!("CARGO_MANIFEST_DIR"));
+    let lines = golden_lines();
+    if std::env::var("MANIFOLD_RECORD_GOLDEN").is_ok_and(|v| v == "1") {
+        let sha = std::process::Command::new("git")
+            .args(["-C", env!("CARGO_MANIFEST_DIR"), "rev-parse", "HEAD"])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default();
+        let header = format!(
+            "# GPU FLIP pressure golden (pressure_module_matches_main_golden)\n# sha {sha}\n# inputs: saved problems resampled to 64^3, pressure zeroed, scalars and record seeded {GOLDEN_SENTINEL:#010x}\n# fingerprints: FNV-1a over the pressure, scalars[..{GOLDEN_SCALARS}], progress[..{GOLDEN_PROGRESS}]\n"
+        );
+        std::fs::write(&path, header + &lines.join("\n") + "\n").expect("golden writes");
+        println!("recorded {} cases at {sha}", lines.len());
+        return;
+    }
+    let golden = std::fs::read_to_string(&path).expect("golden fixture reads");
+    let expected: Vec<&str> = golden.lines().filter(|l| !l.starts_with('#')).collect();
+    assert_eq!(expected.len(), lines.len(), "golden case count");
+    let moved: Vec<String> =
+        expected.iter().zip(&lines).filter(|(e, l)| **e != l.as_str()).map(|(e, l)| format!("want {e}\n got {l}")).collect();
+    assert!(moved.is_empty(), "{} of {} golden cases moved:\n{}", moved.len(), lines.len(), moved.join("\n"));
+}
+
+/// A frame of the step's two solves on one solver, as the density solve
+/// follows the pressure one: each solve's pressure and stop record copied
+/// out after it, so the second solve's rearm is seen on its own record.
+/// `live` per solve: false gives it a zero right-hand side, which stops it
+/// before its first round. `active` is the clock slot's plan.
+fn rearm_frame(rig: &mut Rig, bufs: &[GpuBuffer], p: &Problem, live: [bool; 2], active: bool, plan: &GpuBuffer, cache: &mut Option<GpuReplayCache>) -> Vec<(Vec<u32>, Vec<u32>)> {
+    let cells = rig.n * rig.n * rig.n;
+    let water: Vec<f32> = p.water.iter().map(|&w| f32::from(u8::from(w))).collect();
+    let density: Vec<f32> = p.f.iter().map(|f| 0.5 * f).collect();
+    let rhs: [Vec<f32>; 2] = std::array::from_fn(|s| if !live[s] { vec![0.0; cells] } else if s == 0 { p.f.clone() } else { density.clone() });
+    // The same buffers every frame, as the step keeps its own: a new
+    // buffer is a new recording.
+    let (rhs_buffers, pressures, records, sentinel) = (&bufs[0..2], &bufs[2..4], &bufs[4..6], &bufs[6]);
+    let mut words = [0u32; 12];
+    words[0] = if active { 1.0f32.to_bits() } else { 0 };
+    words[11] = 1;
+    // SAFETY: shared buffers sized for what is written; the last frame completed.
+    unsafe {
+        rig.water.write(0, bytemuck::cast_slice(&water));
+        plan.write(0, bytemuck::cast_slice(&words));
+        sentinel.write(0, bytemuck::cast_slice(&vec![GOLDEN_SENTINEL; (sentinel.size / 4) as usize]));
+        for s in 0..2 {
+            rhs_buffers[s].write(0, bytemuck::cast_slice(&rhs[s]));
+            pressures[s].write(0, bytemuck::cast_slice(&vec![0u32; cells]));
+        }
+    }
+    rig.solver.set_clock_plan(plan);
+    let mut enc = rig.device.create_encoder("gpu-flip-pressure-rearm");
+    let n = rig.n as u32;
+    let lattice = Water { lattice: [n; 3], cell_size: rig.cell_size() as f32, water: &rig.water, faces: &rig.faces, phi: None };
+    rig.solver.prepare(&rig.device, &mut enc, &lattice).expect("prepares");
+    rig.solver.seed_records(&mut enc, sentinel);
+    let spanned = cache.take().map(|cache| enc.begin_replay(&rig.device, cache)).is_some();
+    for s in 0..2 {
+        let solve = Solve { rhs: &rhs_buffers[s], pressure: &pressures[s], stop: Stop::Converged(MAX_ITERATIONS), bodies: None, level: rig.level, coarse_rhs: None };
+        rig.solver.solve(&mut enc, &lattice, solve).expect("solves");
+        enc.copy_buffer_to_buffer(rig.solver.progress().expect("prepared"), &records[s], records[s].size);
+    }
+    if spanned {
+        *cache = Some(enc.end_replay());
+    }
+    enc.commit_and_wait_completed();
+    (0..2).map(|s| (read::<u32>(&pressures[s], cells), read::<u32>(&records[s], PROGRESS_FLOATS as usize))).collect()
+}
+
+/// The density solve rearms what the pressure solve's stop switched off,
+/// and the other way round: a pressure solve stopped before its first round
+/// leaves the density solve live, a live pressure solve leaves a stopped
+/// density solve stopped, each with its own record; an inactive clock slot
+/// runs neither, and the slot turning active runs both again. Replayed
+/// equals direct on every solve, through the round template.
+#[test]
+fn pressure_module_rearms_between_solves() {
+    let (n, saved) = load_fixture(DAM_BREAK);
+    let p = resample(&saved[0], n, 64);
+    let frames: [([bool; 2], bool); 7] =
+        [([true, true], true), ([false, true], true), ([true, false], true), ([true, true], false), ([true, true], true), ([false, true], true), ([true, true], true)];
+    let mut direct = Rig::new(64);
+    let mut replay = Rig::new(64);
+    let direct_plan = direct.device.create_buffer_shared(48);
+    let replay_plan = replay.device.create_buffer_shared(48);
+    let bufs = |rig: &Rig| -> Vec<GpuBuffer> {
+        let cells = (rig.n * rig.n * rig.n * 4) as u64;
+        let record = u64::from(PROGRESS_FLOATS) * 4;
+        let sentinel = (u64::from(2 * MAX_ITERATIONS) * 4).max(record);
+        [cells, cells, cells, cells, record, record, sentinel].iter().map(|&size| rig.device.create_buffer_shared(size)).collect()
+    };
+    let (direct_bufs, replay_bufs) = (bufs(&direct), bufs(&replay));
+    let mut none = None;
+    let mut cache = Some(GpuReplayCache::default());
+    for (frame, &(live, active)) in frames.iter().enumerate() {
+        let d = rearm_frame(&mut direct, &direct_bufs, &p, live, active, &direct_plan, &mut none);
+        let before = cache.as_ref().unwrap().stats();
+        let r = rearm_frame(&mut replay, &replay_bufs, &p, live, active, &replay_plan, &mut cache);
+        let stats = cache.as_ref().unwrap().stats();
+        for s in 0..2 {
+            let solve = ["pressure", "density"][s];
+            assert!(d[s].0 == r[s].0, "frame {frame} {solve}: the replayed pressure differs from direct");
+            assert_eq!(d[s].1, r[s].1, "frame {frame} {solve}: the replayed record differs from direct");
+            let (iterations, stopped) = (f32::from_bits(r[s].1[1]), f32::from_bits(r[s].1[2]));
+            println!("frame {frame} {solve} live {} active {active}: {iterations} iterations, stopped {stopped}", live[s]);
+            if !active {
+                assert!(r[s].0.iter().all(|&w| w == 0), "frame {frame} {solve}: an inactive slot's solve writes no pressure");
+                assert!(r[s].1.iter().all(|&w| w == GOLDEN_SENTINEL), "frame {frame} {solve}: an inactive slot's solve leaves its record unwritten");
+            } else if live[s] {
+                assert!((10.0..=16.0).contains(&iterations) && stopped == 1.0, "frame {frame} {solve}: a live solve converges on its own");
+            } else {
+                assert!(iterations == 0.0 && stopped == 1.0, "frame {frame} {solve}: a zero right-hand side stops before round 0");
+                assert!(r[s].0.iter().all(|&w| w == 0), "frame {frame} {solve}: a solve stopped at the start writes no pressure");
+            }
+        }
+        if frame >= 2 {
+            assert_eq!(stats.templates_direct, before.templates_direct, "frame {frame}: no template ran directly");
+            assert_eq!(stats.templates_replayed - before.templates_replayed, 2, "frame {frame}: both solves replay their template");
         }
     }
 }
