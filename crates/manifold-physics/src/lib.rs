@@ -1608,6 +1608,36 @@ mod tests {
         assert!(stopped.abs() < 0.01, "untagging the live slab should stop the cube again: {stopped}");
     }
 
+    /// Retagging drops and rebuilds a body's contacts; a moving body keeps
+    /// its linear and angular velocity across that.
+    #[test]
+    fn retagging_keeps_a_moving_bodys_velocity() {
+        let mut world = PhysicsWorld::new([0.0; 3]).unwrap();
+        let dynamic = world.add_hull(&cube(0.5), BodyConfig::default()).unwrap();
+        world.set_velocity(dynamic, [1.0, 2.0, 3.0], [0.5, -0.25, 0.75]).unwrap();
+        let animated_config = |position, wall| BodyConfig {
+            kind: BodyKind::Animated,
+            position,
+            wall,
+            ..BodyConfig::default()
+        };
+        let animated = world.add_hull(&cube(0.5), animated_config([5.0, 0.0, 0.0], false)).unwrap();
+        world
+            .set_animated_target(animated, animated_config([6.0, 0.0, 0.0], false), Seconds(1.0))
+            .unwrap();
+        for (handle, config) in [
+            (dynamic, BodyConfig { wall: true, ..BodyConfig::default() }),
+            (animated, animated_config([5.0, 0.0, 0.0], true)),
+        ] {
+            let linear = world.linear_velocity(handle).unwrap();
+            let angular = world.angular_velocity(handle).unwrap();
+            assert!(linear.iter().any(|v| v.abs() > 0.1), "the body should be moving: {linear:?}");
+            world.update_body(handle, config, false).unwrap();
+            assert_eq!(world.linear_velocity(handle).unwrap(), linear);
+            assert_eq!(world.angular_velocity(handle).unwrap(), angular);
+        }
+    }
+
     #[test]
     fn free_fall_is_close_to_analytic_solution() {
         let mut world = PhysicsWorld::new([0.0, -9.8, 0.0]).unwrap();

@@ -546,11 +546,21 @@ int manifold_box3d_body_set_wall( uint64_t body_value, int wall )
 	/* A recycled contact never re-reads its materials (physics_world.c contact
 	 * recycling), so a live retag must drop the body's contacts. Disabling
 	 * destroys them; enabling lets the broadphase rebuild them with the new
-	 * mixed friction. */
+	 * mixed friction. Re-enabling recreates the awake state at rest, so a
+	 * moving body's velocities are carried across by hand. It also wakes the
+	 * body and whatever touched it. */
 	if ( changed && b3Body_IsEnabled( body_id ) )
 	{
+		int moving = b3Body_GetType( body_id ) != b3_staticBody;
+		b3Vec3 linear = b3Body_GetLinearVelocity( body_id );
+		b3Vec3 angular = b3Body_GetAngularVelocity( body_id );
 		b3Body_Disable( body_id );
 		b3Body_Enable( body_id );
+		if ( moving )
+		{
+			b3Body_SetLinearVelocity( body_id, linear );
+			b3Body_SetAngularVelocity( body_id, angular );
+		}
 	}
 	return BOX3D_BRIDGE_OK;
 }
