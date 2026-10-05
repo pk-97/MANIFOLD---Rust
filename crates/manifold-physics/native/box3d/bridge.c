@@ -173,10 +173,32 @@ static void box3d_set_mass( b3BodyId body_id, float mass )
 	b3Body_SetTransform( body_id, b3Body_GetPosition( body_id ), b3Body_GetRotation( body_id ) );
 }
 
+/* A shape tagged as a generated domain wall carries this user material id. */
+#define MANIFOLD_WALL_MATERIAL 1u
+
+/* A wall takes the friction of whatever touches it, so a body's own friction
+ * is its slide threshold on a domain floor. Two ordinary shapes, or two walls,
+ * keep Box3D's geometric mean. */
+static float manifold_friction( float friction_a, uint64_t material_a, float friction_b, uint64_t material_b )
+{
+	int wall_a = material_a == MANIFOLD_WALL_MATERIAL;
+	int wall_b = material_b == MANIFOLD_WALL_MATERIAL;
+	if ( wall_a && !wall_b )
+	{
+		return friction_b;
+	}
+	if ( wall_b && !wall_a )
+	{
+		return friction_a;
+	}
+	return sqrtf( friction_a * friction_b );
+}
+
 uint32_t manifold_box3d_world_create( float gx, float gy, float gz )
 {
 	b3WorldDef definition = b3DefaultWorldDef();
 	definition.gravity = (b3Vec3){ gx, gy, gz };
+	definition.frictionCallback = manifold_friction;
 	definition.workerCount = 1;
 	b3WorldId world_id = b3CreateWorld( &definition );
 	return b3StoreWorldId( world_id );
@@ -493,6 +515,53 @@ int manifold_box3d_body_set_bullet( uint64_t body_value, int enabled )
 		return BOX3D_BRIDGE_ERROR;
 	}
 	b3Body_SetBullet( body_id, enabled != 0 );
+	return BOX3D_BRIDGE_OK;
+}
+
+int manifold_box3d_body_set_wall( uint64_t body_value, int wall )
+{
+	b3BodyId body_id = b3LoadBodyId( body_value );
+	b3ShapeId shape_ids[BOX3D_MAX_BODY_SHAPES];
+	int shape_count = b3Body_GetShapes( body_id, shape_ids, BOX3D_MAX_BODY_SHAPES );
+	if ( shape_count < 1 )
+	{
+		return BOX3D_BRIDGE_NO_SHAPE;
+	}
+	uint64_t tag = wall != 0 ? MANIFOLD_WALL_MATERIAL : 0u;
+	int changed = 0;
+	for ( int i = 0; i < shape_count; ++i )
+	{
+		if ( b3Shape_GetType( shape_ids[i] ) == b3_compoundShape )
+		{
+			return BOX3D_BRIDGE_ERROR;
+		}
+		b3SurfaceMaterial material = b3Shape_GetSurfaceMaterial( shape_ids[i] );
+		if ( material.userMaterialId != tag )
+		{
+			material.userMaterialId = tag;
+			b3Shape_SetSurfaceMaterial( shape_ids[i], material );
+			changed = 1;
+		}
+	}
+	/* A recycled contact never re-reads its materials (physics_world.c contact
+	 * recycling), so a live retag must drop the body's contacts. Disabling
+	 * destroys them; enabling lets the broadphase rebuild them with the new
+	 * mixed friction. Re-enabling recreates the awake state at rest, so a
+	 * moving body's velocities are carried across by hand. It also wakes the
+	 * body and whatever touched it. */
+	if ( changed && b3Body_IsEnabled( body_id ) )
+	{
+		int moving = b3Body_GetType( body_id ) != b3_staticBody;
+		b3Vec3 linear = b3Body_GetLinearVelocity( body_id );
+		b3Vec3 angular = b3Body_GetAngularVelocity( body_id );
+		b3Body_Disable( body_id );
+		b3Body_Enable( body_id );
+		if ( moving )
+		{
+			b3Body_SetLinearVelocity( body_id, linear );
+			b3Body_SetAngularVelocity( body_id, angular );
+		}
+	}
 	return BOX3D_BRIDGE_OK;
 }
 

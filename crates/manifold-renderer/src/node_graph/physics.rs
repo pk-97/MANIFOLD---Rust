@@ -288,6 +288,11 @@ pub struct RigidBody {
     pub friction: f32,
     pub bounce: f32,
     pub collider: Option<Arc<ColliderGeometry>>,
+    /// A generated domain wall (`DomainWalls::install`, liquid and matter).
+    /// Runtime-only: never saved, so authored data and take history are
+    /// unchanged.
+    #[serde(skip)]
+    pub wall: bool,
 }
 
 /// An authored graph sample retained until all fixed ticks that can use it
@@ -328,6 +333,7 @@ impl Default for RigidBody {
             friction: 0.5,
             bounce: 0.15,
             collider: None,
+            wall: false,
         }
     }
 }
@@ -350,6 +356,7 @@ impl RigidBody {
             mass: self.density * volume,
             friction: self.friction,
             restitution: self.bounce,
+            wall: self.wall,
         }
     }
 }
@@ -387,6 +394,7 @@ fn same_body(left: &RigidBody, right: &RigidBody) -> bool {
         && left.density == right.density
         && left.friction == right.friction
         && left.bounce == right.bounce
+        && left.wall == right.wall
         && same_collider(left, right)
 }
 
