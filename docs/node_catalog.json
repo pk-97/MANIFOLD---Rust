@@ -126812,7 +126812,7 @@
           "name": "Flow Speed"
         },
         {
-          "default": "1",
+          "default": "0",
           "id": "4_surface_subdivisions",
           "max": "2",
           "min": "0",
@@ -126826,7 +126826,7 @@
           "name": "Surface Particle Scale"
         },
         {
-          "default": "0.35",
+          "default": "0.5",
           "id": "4_surface_smoothing",
           "max": "1",
           "min": "0",
