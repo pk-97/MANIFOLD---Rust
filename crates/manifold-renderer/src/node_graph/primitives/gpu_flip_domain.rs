@@ -424,8 +424,15 @@ crate::primitive! {
         fields: LiquidFields = LiquidFields::default(),
         acceleration: Option<FieldValue> = None,
         holding: bool = false,
+        // The obstacle CFL bound of a later tick of this frame, prepared by
+        // the host step before it (see `substep_clock_interval`).
+        later_obstacle: [(&'static str, f32); 1] = [(OUTPUTS[INITIAL_OBSTACLE_SPEED], -1.0)],
+        later_obstacle_tick: Option<u32> = None,
     },
 }
+
+/// A later tick whose bodies no host step prepared has no obstacle bound.
+const NO_OBSTACLE_BOUND: &[(&str, f32)] = &[(OUTPUTS[INITIAL_OBSTACLE_SPEED], -1.0)];
 
 impl Primitive for GpuFlipDomain {
     fn provides_array_output(&self, port: &str) -> bool {
@@ -460,10 +467,17 @@ impl Primitive for GpuFlipDomain {
         self.role_pending
     }
 
+    /// The frame's outputs carry the first tick's obstacle bound. A later
+    /// tick gets its own once the host step has prepared its bodies, and
+    /// none before, so a step never pairs one tick's bodies with another's.
     fn substep_clock_interval(&self, iteration: u32) -> Option<crate::node_graph::substeps::SubstepClockOutput<'_>> {
         let frame = self.scheduled_frame.as_ref()?;
         frame.interval(u64::from(iteration)).map(|interval| {
-            crate::node_graph::substeps::SubstepClockOutput::single("interval_duration", interval, iteration, frame.ticks)
+            let mut output = crate::node_graph::substeps::SubstepClockOutput::single("interval_duration", interval, iteration, frame.ticks);
+            if iteration > 0 {
+                output.scalars = if self.later_obstacle_tick == Some(iteration) { &self.later_obstacle } else { NO_OBSTACLE_BOUND };
+            }
+            output
         })
     }
 
@@ -481,7 +495,13 @@ impl Primitive for GpuFlipDomain {
         _gpu: Option<&mut crate::gpu_encoder::GpuEncoder<'_>>,
     ) -> Result<(), String> {
         let Some(exchange) = self.coupled.exchange.clone() else { return Ok(()) };
+        let duration = exchange.frame.interval(u64::from(iteration)).map(|interval| interval.duration().0 as f32);
         let result = self.exchange_tick(iteration, exchange);
+        if result.is_ok() && let Some(duration) = duration {
+            // exchange_tick prepared this tick's clock vertices.
+            self.later_obstacle[0].1 = self.bodies.initial_clock_obstacle_speed(duration);
+            self.later_obstacle_tick = Some(iteration);
+        }
         if let Err(error) = &result {
             // The pair restarts next frame with a fresh rigid owner.
             self.coupled.exchange = None;
@@ -571,6 +591,7 @@ impl Primitive for GpuFlipDomain {
         // there is nothing to hold, so the outputs are declared pending.
         self.coupled.exchange = None;
         self.scheduled_frame = None;
+        self.later_obstacle_tick = None;
         let computed = if self.role_pending { Ok(None) } else { self.compute(ctx, &roles) };
         let held = || {
             let mut held = self.published.unwrap_or([0.0; OUTPUTS.len()]);
@@ -963,6 +984,29 @@ mod tests {
             _ => default,
         };
         gpu_flip_geometry(read, None, volume)
+    }
+
+    /// A later tick of a frame reads the obstacle bound its host step
+    /// prepared, or none; it never inherits the first tick's.
+    #[test]
+    fn gpu_flip_domain_later_ticks_get_their_own_obstacle_bound() {
+        use manifold_physics::clock::SimulationClock;
+        let mut clock = SimulationClock::default();
+        clock.advance(0.0, 0.5, 1.0, 0.0, false, true);
+        let frame = clock.advance(1.0, 0.5, 1.0, 0.0, false, true);
+        assert!(frame.ticks >= 2, "the fixture needs a later tick");
+        let mut domain = GpuFlipDomain::new();
+        domain.scheduled_frame = Some(frame);
+        let scalars = |domain: &GpuFlipDomain, iteration| {
+            domain.substep_clock_interval(iteration).expect("an accepted interval").scalars.to_vec()
+        };
+        assert!(scalars(&domain, 0).is_empty(), "the first tick keeps the frame's bound");
+        assert_eq!(scalars(&domain, 1), vec![("initial_obstacle_speed", -1.0)]);
+        domain.later_obstacle[0].1 = 2.5;
+        domain.later_obstacle_tick = Some(1);
+        assert_eq!(scalars(&domain, 1), vec![("initial_obstacle_speed", 2.5)]);
+        domain.later_obstacle_tick = Some(2);
+        assert_eq!(scalars(&domain, 1), vec![("initial_obstacle_speed", -1.0)], "another tick's bound");
     }
 
     #[test]

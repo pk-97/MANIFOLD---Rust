@@ -76,6 +76,25 @@ pub struct ReadbackSlot {
     completed_ticks: u64,
 }
 
+/// The last captured tick's stats, identity and clock status, copied when
+/// another tick of the frame follows. Read only after a host sync waited for
+/// them (`substep_host_synced`).
+pub struct SyncSample {
+    stats: GpuBuffer,
+    identity: GpuBuffer,
+    clock_status: GpuBuffer,
+}
+
+/// A tick's max marker speed, unless its stats make it unusable for the
+/// next tick's CFL decision.
+fn usable_speed(stats: &LiquidTickStats) -> Option<f32> {
+    (stats.nonfinite == 0
+        && stats.narrow_band_shortage == 0
+        && stats.max_speed.is_finite()
+        && stats.max_speed >= 0.0)
+        .then_some(stats.max_speed)
+}
+
 fn create_shared_buffer(device: &GpuDevice, bytes: u64) -> Result<GpuBuffer, String> {
     crate::node_graph::scene_modifier_expand::admit_candidate_bytes(device.modifier_memory_snapshot(), bytes)
         .map_err(|error| error.to_string())
@@ -160,6 +179,9 @@ crate::primitive! {
         clock_nonfinite: bool = false,
         last_stats: Option<LiquidTickStats> = None,
         retired_ticks: Option<u64> = None,
+        sync_sample: Option<SyncSample> = None,
+        // Incoming tick ordinal the sync sample describes, set when copied.
+        sync_sample_tick: Option<u64> = None,
         faces: Option<GpuBuffer> = None,
         whitewater_pool: Option<GpuBuffer> = None,
         whitewater_empty: Option<GpuBuffer> = None,
@@ -309,14 +331,49 @@ impl LiquidState {
             return -1.0;
         }
         let Some(incoming_tick) = self.ticks_done.checked_add(u64::from(iteration)) else { return -1.0 };
-        let Some(stats) = self.last_stats.filter(|stats| {
-            self.retired_ticks == Some(incoming_tick)
-                && stats.nonfinite == 0
-                && stats.narrow_band_shortage == 0
-                && stats.max_speed.is_finite()
-                && stats.max_speed >= 0.0
-        }) else { return -1.0 };
-        stats.max_speed
+        self.last_stats
+            .filter(|_| self.retired_ticks == Some(incoming_tick))
+            .as_ref()
+            .and_then(usable_speed)
+            .unwrap_or(-1.0)
+    }
+
+    /// Copy the tick just captured for a host sync before the next tick of
+    /// this frame. Without a sync it is never read.
+    fn capture_sync_sample(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        self.sync_sample_tick = None;
+        let Some(stats) = ctx.outputs.array("stats") else { return };
+        let clock_status = ctx.inputs.array("clock_status_in");
+        let gpu = ctx.gpu_encoder();
+        let stats_bytes = u64::from(LIQUID_STATS_WORDS) * 4;
+        let sample = self.sync_sample.get_or_insert_with(|| SyncSample {
+            stats: gpu.device.create_buffer_shared(stats_bytes),
+            identity: gpu.device.create_buffer_shared(IDENTITY_BYTES),
+            clock_status: gpu.device.create_buffer_shared(32),
+        });
+        gpu.native_enc.copy_buffer_to_buffer(stats, &sample.stats, stats_bytes.min(stats.size));
+        match self.identity.as_ref() {
+            Some(identity) => gpu.native_enc.copy_buffer_to_buffer(identity, &sample.identity, IDENTITY_BYTES),
+            None => gpu.native_enc.clear_buffer(&sample.identity),
+        }
+        match clock_status {
+            Some(status) => gpu.native_enc.copy_buffer_to_buffer(status, &sample.clock_status, 32),
+            None => gpu.native_enc.clear_buffer(&sample.clock_status),
+        }
+        self.sync_sample_tick = Some(self.ticks_done + u64::from(self.captures));
+    }
+
+    /// The sync sample's speed when it describes exactly this iteration's
+    /// incoming tick and neither it nor the liquid's state rules it out
+    /// (the same rules as `retired_speed`).
+    fn synced_speed(&self, iteration: u32, sample_tick: u64, stats: &LiquidTickStats, nonfinite_clock: bool, identity_reset: bool) -> Option<f32> {
+        if self.faulted || self.capacity_faulted || self.clock_nonfinite || self.identity_reset || nonfinite_clock || identity_reset {
+            return None;
+        }
+        if self.ticks_done.checked_add(u64::from(iteration)) != Some(sample_tick) {
+            return None;
+        }
+        usable_speed(stats)
     }
 }
 
@@ -618,7 +675,8 @@ impl Primitive for LiquidState {
 
         self.pending = if refused.is_some() || self.capacity_faulted || (self.faulted && !live_recovery) { 0 } else { ticks };
         self.captures = 0;
-        let live = self.last_stats.map_or(count, |s| s.live);
+        self.sync_sample_tick = None;
+        let live =self.last_stats.map_or(count, |s| s.live);
         ctx.outputs.set_scalar("live_count", ParamValue::Float(live as f32));
         ctx.outputs.set_scalar("fault", ParamValue::Float(if self.faulted { 1.0 } else { 0.0 }));
         if self.faulted {
@@ -656,6 +714,30 @@ impl Primitive for LiquidState {
         true
     }
 
+    /// A coupled liquid's later tick: the host sync waited for the tick
+    /// before it, so that tick's copy is a fresh, fenced speed sample.
+    fn substep_host_synced(&mut self, iteration: u32, scalars: &mut [f32]) {
+        let Some(tick) = self.sync_sample_tick.take() else { return };
+        let Some(sample) = self.sync_sample.as_ref() else { return };
+        let (Some(stats), Some(identity), Some(status)) =
+            (sample.stats.mapped_ptr(), sample.identity.mapped_ptr(), sample.clock_status.mapped_ptr())
+        else {
+            return;
+        };
+        // SAFETY: shared buffers of these sizes, and the executor committed
+        // and waited for every command before calling this.
+        let (stats, identity_reset, nonfinite_clock) = unsafe {
+            (
+                LiquidTickStats::from_words(std::slice::from_raw_parts(stats.cast::<u32>().cast_const(), LIQUID_STATS_WORDS as usize)),
+                *identity.cast::<u32>().cast_const().add(3) != 0,
+                *status.cast::<u32>().cast_const().add(5) != 0,
+            )
+        };
+        if let Some(speed) = self.synced_speed(iteration, tick, &stats, nonfinite_clock, identity_reset) {
+            scalars[1] = speed;
+        }
+    }
+
     fn late_capture(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         // A body that writes fresh storage is accepted by copy.
         for (candidate, state) in [
@@ -679,6 +761,9 @@ impl Primitive for LiquidState {
             }
         }
         self.captures += 1;
+        if self.captures < self.pending {
+            self.capture_sync_sample(ctx);
+        }
         if self.captures != self.pending {
             return;
         }
@@ -795,6 +880,28 @@ mod tests {
         assert_eq!(state.retired_speed(0), -1.0);
         state.retired_ticks = None;
         assert_eq!(state.retired_speed(0), -1.0);
+    }
+
+    #[test]
+    fn liquid_state_sync_sample_is_fresh_only_for_its_exact_tick() {
+        let mut state = LiquidState::new();
+        state.ticks_done = 10;
+        let stats = LiquidTickStats { max_speed: 1.5, ..LiquidTickStats::default() };
+        assert_eq!(state.synced_speed(1, 11, &stats, false, false), Some(1.5));
+        assert_eq!(state.synced_speed(1, 10, &stats, false, false), None, "a tick behind");
+        assert_eq!(state.synced_speed(2, 11, &stats, false, false), None, "a tick ahead");
+        assert_eq!(state.synced_speed(1, 11, &stats, true, false), None, "nonfinite clock input");
+        assert_eq!(state.synced_speed(1, 11, &stats, false, true), None, "identity reset in the sample");
+        for bad in [
+            LiquidTickStats { nonfinite: 1, ..stats },
+            LiquidTickStats { narrow_band_shortage: 1, ..stats },
+            LiquidTickStats { max_speed: f32::NAN, ..stats },
+            LiquidTickStats { max_speed: -1.0, ..stats },
+        ] {
+            assert_eq!(state.synced_speed(1, 11, &bad, false, false), None, "{bad:?}");
+        }
+        state.faulted = true;
+        assert_eq!(state.synced_speed(1, 11, &stats, false, false), None, "a faulted liquid");
     }
 
     #[test]

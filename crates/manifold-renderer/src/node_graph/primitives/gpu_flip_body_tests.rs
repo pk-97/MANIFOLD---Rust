@@ -639,6 +639,9 @@ struct BoxRun {
     poison: bool,
     /// Every pass of an inactive clock slot runs (`set_gate_off`).
     ungated: bool,
+    /// Ticks each `step` frame covers; above 1 the coupled pair host-syncs
+    /// between them.
+    ticks_per_frame: u32,
     _scope: crate::node_graph::physics::PhysicsStepScope,
 }
 
@@ -699,7 +702,7 @@ impl BoxRun {
         runtime.set_dump_all(true);
         let target =
             crate::render_target::RenderTarget::new(&device, BOX_SIZE, BOX_SIZE, manifold_gpu::GpuTextureFormat::Rgba16Float, "body sparse");
-        let mut run = Self { device, runtime, target, manifest, frame: 0, all, poison, ungated, _scope: scope };
+        let mut run = Self { device, runtime, target, manifest, frame: 0, all, poison, ungated, ticks_per_frame: 1, _scope: scope };
         let started = std::time::Instant::now();
         loop {
             run.render(true);
@@ -714,11 +717,12 @@ impl BoxRun {
 
     fn render(&mut self, warming: bool) {
         use crate::node_graph::fluid::TICK;
-        let time = self.frame as f64 * TICK;
+        let frame_seconds = f64::from(self.ticks_per_frame) * TICK;
+        let time = self.frame as f64 * frame_seconds;
         let ctx = crate::preset_context::PresetContext {
             time,
             beat: time * 2.0,
-            dt: if warming { 0.0 } else { TICK as f32 },
+            dt: if warming { 0.0 } else { frame_seconds as f32 },
             width: BOX_SIZE,
             height: BOX_SIZE,
             output_width: BOX_SIZE,
@@ -751,7 +755,7 @@ impl BoxRun {
         );
     }
 
-    /// One tick on.
+    /// One frame on: `ticks_per_frame` ticks.
     fn step(&mut self) {
         self.frame += 1;
         self.render(false);
@@ -910,6 +914,18 @@ fn gpu_flip_inactive_slots_match_the_ungated_step() {
 /// loop without changing Steps, CFL, numerical caps or body controls.
 #[test]
 fn gpu_flip_fresh_speed_preserves_coupled_bodies() {
+    fresh_speed_preserves_coupled_bodies(1);
+}
+
+/// The second tick of a frame takes its speed sample and obstacle bound from
+/// the host sync before it. The clock status read after each frame is that
+/// second tick's, so a one-step shortcut there proves the sync sample was used.
+#[test]
+fn gpu_flip_fresh_speed_preserves_coupled_bodies_two_ticks_a_frame() {
+    fresh_speed_preserves_coupled_bodies(2);
+}
+
+fn fresh_speed_preserves_coupled_bodies(ticks_per_frame: u32) {
     use crate::node_graph::liquid::conformance::Fixture;
     const STEP: &str = "node.gpu_flip_step";
     const TICKS: u32 = 8;
@@ -936,11 +952,13 @@ fn gpu_flip_fresh_speed_preserves_coupled_bodies() {
         let def = BoxRun::at_level(fixture, 0);
         let mut automatic = BoxRun::of(def.clone(), false, false);
         let mut full = BoxRun::of(baseline(def), false, false);
+        automatic.ticks_per_frame = ticks_per_frame;
+        full.ticks_per_frame = ticks_per_frame;
         let (mut shortcuts, mut reacting_ticks) = (0u32, 0u32);
         for tick in 1..=TICKS {
             automatic.step();
             full.step();
-            let at = format!("{fixture:?} level 0 tick {tick}");
+            let at = format!("{fixture:?} level 0, {ticks_per_frame} ticks a frame, frame {tick}");
             let (mut got, mut want) = (automatic.left(), full.left());
             let reaction = &got.iter().find(|(what, _)| *what == "reaction").expect("body reaction").1;
             reacting_ticks += u32::from(reaction.iter().any(|&word| {
@@ -975,9 +993,9 @@ fn gpu_flip_fresh_speed_preserves_coupled_bodies() {
                 shortcuts += 1;
             }
         }
-        assert!(shortcuts > 0, "{fixture:?}: automatic recording never took the fresh one-step path");
+        assert!(shortcuts > 0, "{fixture:?}, {ticks_per_frame} ticks a frame: a frame's last tick never took the fresh one-step path");
         assert!(reacting_ticks > 0, "{fixture:?}: no nonzero finite body reaction, so coupling was not exercised");
-        println!("{fixture:?} level 0: {TICKS} coupled ticks bitwise; {shortcuts} fresh one-step ticks; {reacting_ticks} ticks with body reaction");
+        println!("{fixture:?} level 0, {ticks_per_frame} ticks a frame: {TICKS} coupled frames bitwise; {shortcuts} fresh one-step final ticks; {reacting_ticks} frames with body reaction");
     }
 }
 

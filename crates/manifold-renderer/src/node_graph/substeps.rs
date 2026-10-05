@@ -1658,6 +1658,8 @@ mod tests {
         seeded: bool,
         ports: SubstepBoundaryPorts,
         interval_duration: f32,
+        /// After a host sync, replace `step_index` with 100 + iteration.
+        refresh_after_sync: bool,
     }
 
     impl SimBoundary {
@@ -1682,11 +1684,18 @@ mod tests {
                 seeded: false,
                 ports: SIM_PORTS,
                 interval_duration: 0.5,
+                refresh_after_sync: false,
             }
         }
     }
 
     impl EffectNode for SimBoundary {
+        fn substep_host_synced(&mut self, iteration: u32, scalars: &mut [f32]) {
+            if self.refresh_after_sync {
+                self.log.lock().unwrap().push(format!("synced {iteration}"));
+                scalars[1] = 100.0 + iteration as f32;
+            }
+        }
         fn take_substep_restart_request(&mut self) -> bool {
             let mut count = self.count.lock().unwrap();
             if *count == u32::MAX { *count = 0; true } else { false }
@@ -1833,6 +1842,11 @@ mod tests {
         log: Log,
         fail_at: Option<u32>,
         intervals: Option<manifold_physics::clock::ClockFrame>,
+        /// After its host step before `iteration`, publish 1000 + iteration
+        /// on `out` for that iteration.
+        refresh_after_step: bool,
+        stepped: [(&'static str, f32); 1],
+        stepped_for: Option<u32>,
     }
 
     impl EffectNode for EagerClock {
@@ -1862,7 +1876,13 @@ mod tests {
         }
         fn substep_clock_interval(&self, iteration: u32) -> Option<SubstepClockOutput<'_>> {
             let frame = self.intervals.as_ref()?;
-            frame.interval(u64::from(iteration)).map(|interval| SubstepClockOutput::single("out", interval, iteration, frame.ticks))
+            frame.interval(u64::from(iteration)).map(|interval| {
+                let mut output = SubstepClockOutput::single("out", interval, iteration, frame.ticks);
+                if self.stepped_for == Some(iteration) {
+                    output.scalars = &self.stepped;
+                }
+                output
+            })
         }
         fn substep_host_step(
             &mut self,
@@ -1872,6 +1892,10 @@ mod tests {
             self.log.lock().unwrap().push(format!("host {iteration}"));
             if self.fail_at == Some(iteration) {
                 return Err("test reaction failed".into());
+            }
+            if self.refresh_after_step {
+                self.stepped[0].1 = 1000.0 + iteration as f32;
+                self.stepped_for = Some(iteration);
             }
             Ok(())
         }
@@ -1896,6 +1920,12 @@ mod tests {
     }
 
     fn clock_fixture_with_intervals(opted: bool, fail_at: Option<u32>, intervals: Option<manifold_physics::clock::ClockFrame>) -> SimFixture {
+        clock_fixture_refreshing(opted, fail_at, intervals, false)
+    }
+
+    /// `refresh`: the clock re-publishes after its host step and the
+    /// boundary replaces its scalars after the sync.
+    fn clock_fixture_refreshing(opted: bool, fail_at: Option<u32>, intervals: Option<manifold_physics::clock::ClockFrame>, refresh: bool) -> SimFixture {
         let sample_intervals = intervals.is_some();
         let log: Log = Arc::default();
         let count = Arc::new(Mutex::new(3));
@@ -1908,11 +1938,15 @@ mod tests {
             log: log.clone(),
             fail_at,
             intervals,
+            refresh_after_step: refresh,
+            stepped: [("out", 0.0)],
+            stepped_for: None,
         }));
         let mut sim = SimBoundary::new(log.clone(), count.clone());
         if opted {
             sim.ports = SIM_CLOCK_PORTS;
         }
+        sim.refresh_after_sync = refresh;
         let boundary = graph.add_node(Box::new(sim));
         let add_dt = graph.add_node(Box::new(Adder::new("add_dt", log.clone())));
         let add_index = graph.add_node(Box::new(Adder::new("add_index", log.clone())));
@@ -2160,6 +2194,32 @@ mod tests {
             "add_index a=1.75 b=0 c=0.75", "capture 2.5", "host 1",
             "add_index a=3.5 b=1 c=1", "capture 5.5", "host 2",
             "add_index a=6.5 b=2 c=1", "capture 9.5",
+        ]);
+    }
+
+    /// What a host sync finished feeds the next iteration: the clock owner's
+    /// outputs published after its host step and the boundary's refreshed
+    /// scalars both reach that iteration's body. Iteration 0 is untouched.
+    #[test]
+    fn substeps_host_sync_refreshes_the_next_iterations_inputs() {
+        use manifold_physics::clock::SimulationClock;
+        let _live = crate::node_graph::physics::PhysicsStepScope::for_render(false);
+        let mut clock = SimulationClock::default();
+        clock.advance(0.0, 0.5, 1.0, 0.0, false, true);
+        clock.observe_speed(0.25, 2.0);
+        let intervals = clock.advance(1.5, 0.5, 2.0, 0.0, false, true);
+        let mut fx = clock_fixture_refreshing(true, None, Some(intervals), true);
+        let mut exec = Executor::with_mock();
+        let log = run_frame(&mut fx, &mut exec, 3);
+        let events: Vec<&str> = log
+            .iter()
+            .map(String::as_str)
+            .filter(|e| e.starts_with("host") || e.starts_with("synced") || e.starts_with("add_index"))
+            .collect();
+        assert_eq!(events, vec![
+            "add_index a=1.75 b=0 c=0.75",
+            "host 1", "synced 1", "add_index a=3.5 b=101 c=1001",
+            "host 2", "synced 2", "add_index a=1106.5 b=102 c=1002",
         ]);
     }
 
