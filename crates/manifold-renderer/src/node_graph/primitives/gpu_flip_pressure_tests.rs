@@ -1335,7 +1335,11 @@ fn pressure_module_replay_matches_direct() {
                 let rounds = match stop {
                     Stop::Converged(cap) | Stop::Fixed(cap) => u64::from(cap),
                 };
-                assert_eq!(stats.segments_replayed - last.segments_replayed, rounds, "{stop:?} frame {frame}: every round is one segment execute");
+                assert_eq!(
+                    stats.segments_replayed - last.segments_replayed,
+                    manifold_gpu::template_chunks(rounds as u32, 32).count() as u64,
+                    "{stop:?} frame {frame}: one execute per chunk of rounds"
+                );
                 // One walked round per solve, not one per round up to the cap.
                 assert_eq!(stats.templates_replayed - last.templates_replayed, 1, "{stop:?} frame {frame}: the rounds are one replayed template");
                 assert_eq!(stats.templates_direct, last.templates_direct, "{stop:?} frame {frame}: no template ran directly");
@@ -2107,4 +2111,75 @@ fn pressure_module_rounds_past_the_stop_write_nothing() {
     let expected: Vec<&str> = golden.lines().filter(|l| !l.starts_with('#')).collect();
     let moved: Vec<String> = expected.iter().zip(&lines).filter(|(e, l)| **e != l.as_str()).map(|(e, l)| format!("want {e}\n got {l}")).collect();
     assert!(moved.is_empty(), "rounds past the stop wrote something:\n{}", moved.join("\n"));
+}
+
+/// Chunked executes change no bit: at one round an execute (the per-round
+/// executes main runs), at 3 and 4 (boundaries inside every Fixed count and
+/// the Converged stops) and at the default, every golden case matches main,
+/// scalars and record tails included, so no round past a stop or past a
+/// Fixed count wrote anything (docs/GPU_FLIP_PRESSURE_CAP_DESIGN.md section
+/// 3.1 (Chunks)).
+#[test]
+fn pressure_module_chunk_sizes_match_main_golden() {
+    let golden = std::fs::read_to_string(format!("{}/tests/fixtures/{GOLDEN}", env!("CARGO_MANIFEST_DIR"))).expect("golden fixture reads");
+    let expected: Vec<&str> = golden.lines().filter(|l| !l.starts_with('#')).collect();
+    for chunk in [1, 3, 4, 32] {
+        super::gpu_flip_pressure::set_round_chunk(chunk);
+        let lines = golden_lines();
+        super::gpu_flip_pressure::set_round_chunk(0);
+        let moved: Vec<String> = expected.iter().zip(&lines).filter(|(e, l)| **e != l.as_str()).map(|(e, l)| format!("want {e}\n got {l}")).collect();
+        assert!(moved.is_empty(), "chunk {chunk}: {} golden cases moved:\n{}", moved.len(), moved.join("\n"));
+    }
+}
+
+/// Reports a warm replayed Converged(64) solve on Dam Break at 64³ with one
+/// round an execute (main's per-round executes) against chunked executes:
+/// validations, executes and the GPU time of the prepare and solve.
+#[test]
+fn pressure_module_chunk_cost_probe() {
+    const REPS: usize = 30;
+    let (n, saved) = load_fixture(DAM_BREAK);
+    let p = resample(&saved[0], n, 64);
+    let mut report = Vec::new();
+    for chunk in [1, 32] {
+        super::gpu_flip_pressure::set_round_chunk(chunk);
+        let mut rig = Rig::new(64);
+        let water: Vec<f32> = p.water.iter().map(|&w| f32::from(u8::from(w))).collect();
+        // SAFETY: shared buffers sized for the lattice; nothing is queued.
+        unsafe {
+            rig.water.write(0, bytemuck::cast_slice(&water));
+            rig.rhs.write(0, bytemuck::cast_slice(&p.f));
+        }
+        let mut cache = Some(GpuReplayCache::default());
+        let mut gpu = Vec::with_capacity(REPS);
+        let mut warm = None;
+        for rep in 0..REPS + 3 {
+            let mut enc = rig.device.create_encoder("gpu-flip-pressure-chunk-probe");
+            enc.begin_replay(&rig.device, cache.take().expect("cache"));
+            let n = rig.n as u32;
+            let lattice = Water { lattice: [n; 3], cell_size: rig.cell_size() as f32, water: &rig.water, faces: &rig.faces, phi: None };
+            rig.solver.prepare(&rig.device, &mut enc, &lattice).expect("prepares");
+            rig.solver.solve(&mut enc, &lattice, run_at!(rig, Stop::Converged(MAX_ITERATIONS))).expect("solves");
+            cache = Some(enc.end_replay());
+            let ms = enc.commit_and_wait_completed_timed() * 1e3;
+            if rep == 2 {
+                warm = cache.as_ref().map(|c| c.stats());
+            }
+            if rep >= 3 {
+                gpu.push(ms);
+            }
+        }
+        super::gpu_flip_pressure::set_round_chunk(0);
+        gpu.sort_by(f64::total_cmp);
+        let (warm, end) = (warm.expect("warm stats"), cache.expect("cache").stats());
+        let reps = REPS as u64;
+        report.push(format!(
+            "chunk {chunk}: GPU p50 {:.3} ms, validations {} a solve, segment executes {} a solve, recorded {}",
+            gpu[REPS / 2],
+            (end.replayed - warm.replayed) / reps,
+            (end.segments_replayed - warm.segments_replayed) / reps,
+            end.recorded - warm.recorded
+        ));
+    }
+    println!("CHUNK PROBE warm Converged(64), Dam Break 64^3:\n{}", report.join("\n"));
 }

@@ -1087,6 +1087,14 @@ fn update_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_inv
 // The norm's partials come folded from init (the start) or update.
 const START_FLOOR: f32 = 1e-9;
 const ACCEPTABLE: f32 = 1.0;
+// The chunked rounds' range entries follow the per-round ones, one an
+// execute (gpu_flip_pressure.rs chunk entries; manifold_gpu template_chunks).
+const CHUNK_ENTRIES: u32 = 2u * ROUNDS;
+
+// Execute j's rounds before the last cut: 1, 2, 4, … doubling to `chunk`.
+fn chunk_rounds(j: u32, chunk: u32) -> u32 {
+    return min(1u << min(j, 31u), max(chunk, 1u));
+}
 const KEEP_RANGES: u32 = 8u;
 
 fn stop(first: u32) {
@@ -1102,6 +1110,15 @@ fn stop(first: u32) {
     for (var r = first; r < ROUNDS; r = r + 1u) {
         ranges[4u * r + 1u] = 0u;
         ranges[4u * r + 3u] = 0u;
+    }
+    // Every chunk that starts at or after `first`; the chunk running this
+    // stop already read its range, and its later rounds write nothing.
+    var start = 0u;
+    for (var j = 0u; j < ROUNDS; j = j + 1u) {
+        if start >= first {
+            ranges[2u * (CHUNK_ENTRIES + j) + 1u] = 0u;
+        }
+        start = start + chunk_rounds(j, u.slot);
     }
 }
 
@@ -1187,5 +1204,16 @@ fn arm_main(@builtin(local_invocation_index) lane: u32) {
         ranges[4u * r + 1u] = select(u.color, 0u, off);
         ranges[4u * r + 2u] = 0u;
         ranges[4u * r + 3u] = select(u.slot, 0u, off);
+    }
+    // The chunked executes of `mode` rounds, `live` at most an execute,
+    // `color` commands a round; the last cut to what remains.
+    if lane == 0u {
+        var start = 0u;
+        for (var j = 0u; j < ROUNDS; j = j + 1u) {
+            let rounds = select(min(chunk_rounds(j, u.live), u.mode - start), 0u, start >= u.mode);
+            ranges[2u * (CHUNK_ENTRIES + j)] = 0u;
+            ranges[2u * (CHUNK_ENTRIES + j) + 1u] = select(rounds * u.color, 0u, off);
+            start = start + rounds;
+        }
     }
 }

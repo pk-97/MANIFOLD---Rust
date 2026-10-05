@@ -872,6 +872,9 @@ const TEMPLATE_COUNTDOWN_WGSL: &str = r#"
 
 @compute @workgroup_size(1)
 fn main() {
+    if args[3] == 0u {
+        return;
+    }
     let done = state[1] + 1u;
     state[1] = done;
     if done >= state[0] {
@@ -881,12 +884,32 @@ fn main() {
 }
 "#;
 
+/// The mix, returning when the round's gate is off: a round a chunk runs
+/// after the countdown stopped the template writes nothing.
+const GUARDED_MIX_WGSL: &str = r#"
+struct Params { mul: u32, add: u32, shift: u32, pad: u32 };
+@group(0) @binding(0) var<storage, read> src: array<u32>;
+@group(0) @binding(1) var<storage, read_write> dst: array<u32>;
+@group(0) @binding(2) var<uniform> p: Params;
+@group(0) @binding(3) var<storage, read> gate: array<u32>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    if (gate[0] == 0u) { return; }
+    let n = arrayLength(&dst);
+    if (id.x >= n) { return; }
+    let other = src[(id.x + p.shift) % arrayLength(&src)];
+    dst[id.x] = dst[id.x] * p.mul + other + p.add;
+}
+"#;
+
 const TEMPLATE_ENTRIES: u32 = 32;
 
 struct TemplateRig {
     rig: Rig,
     arm: GpuComputePipeline,
     countdown: GpuComputePipeline,
+    mix: GpuComputePipeline,
     state: GpuBuffer,
     args: GpuBuffer,
     ranges: GpuBuffer,
@@ -898,6 +921,7 @@ impl TemplateRig {
             rig: Rig::new(device, replay),
             arm: device.create_compute_pipeline(TEMPLATE_ARM_WGSL, "main", "template-proof arm"),
             countdown: device.create_compute_pipeline(TEMPLATE_COUNTDOWN_WGSL, "main", "template-proof countdown"),
+            mix: device.create_compute_pipeline(GUARDED_MIX_WGSL, "main", "template-proof guarded mix"),
             state: device.create_buffer_shared(8),
             args: device.create_buffer_shared(24),
             ranges: device.create_buffer_shared(u64::from(TEMPLATE_ENTRIES) * crate::GATED_RANGE_BYTES),
@@ -928,11 +952,14 @@ struct TemplateSpec {
     err: bool,
     /// Leave the template out (the reference for a failed walk).
     skip: bool,
+    /// Most rounds an execute; past 1 the CPU writes the executes' range
+    /// entries and the arm writes none.
+    chunk: u32,
 }
 
 impl Default for TemplateSpec {
     fn default() -> Self {
-        Self { prefix: 2, mixes: 4, declared: 5, copies: 6, first: 1, stride: 1, live: 3, err: false, skip: false }
+        Self { prefix: 2, mixes: 4, declared: 5, copies: 6, first: 1, stride: 1, live: 3, err: false, skip: false, chunk: 1 }
     }
 }
 
@@ -957,7 +984,17 @@ fn encode_template_frame(enc: &mut GpuEncoder, k: &Kernels, t: &TemplateRig, fra
     for step in 0..spec.prefix {
         plain(enc, step);
     }
-    let arm: [u32; 8] = [spec.live, spec.copies, spec.first, spec.stride, spec.declared, TEMPLATE_ENTRIES, GROUPS[0], 0];
+    let arm: [u32; 8] = if spec.chunk > 1 {
+        let mut words = vec![0u32; 2 * TEMPLATE_ENTRIES as usize];
+        for (j, (start, rounds)) in crate::template_chunks(spec.copies, spec.chunk).enumerate() {
+            let entry = (spec.first + j as u32 * spec.stride) as usize;
+            words[2 * entry + 1] = if start < spec.live { rounds * spec.declared } else { 0 };
+        }
+        write_u32s(&t.ranges, &words);
+        [spec.live, 0, 0, 0, 0, 0, GROUPS[0], 0]
+    } else {
+        [spec.live, spec.copies, spec.first, spec.stride, spec.declared, TEMPLATE_ENTRIES, GROUPS[0], 0]
+    };
     enc.dispatch_compute(
         &t.arm,
         &[
@@ -971,17 +1008,18 @@ fn encode_template_frame(enc: &mut GpuEncoder, k: &Kernels, t: &TemplateRig, fra
     );
     let mut result = Ok(());
     if !spec.skip {
-        let at = TemplateRanges { ranges: &t.ranges, first: spec.first, stride: spec.stride };
+        let at = TemplateRanges { ranges: &t.ranges, first: spec.first, stride: spec.stride, chunk: spec.chunk };
         result = enc.repeat_gated_template(at, spec.declared, spec.copies, |rec| {
             for i in 0..spec.mixes as usize {
                 let step = 100 + i;
                 let params = mix_params(frame, step);
                 rec.dispatch_gated(
-                    &k.mix,
+                    &t.mix,
                     &[
                         GpuBinding::Buffer { binding: 0, buffer: &t.rig.buffers[i % 3], offset: 0 },
                         GpuBinding::Buffer { binding: 1, buffer: &t.rig.buffers[(i + 1) % 3], offset: 0 },
                         GpuBinding::Bytes { binding: 2, data: bytemuck_u32(&params) },
+                        GpuBinding::Buffer { binding: 3, buffer: &t.args, offset: 0 },
                     ],
                     GROUPS,
                     &t.args,
@@ -1307,4 +1345,35 @@ fn replay_template_body_error_is_atomic_on_direct_paths() {
     unsafe { gate.raw().setSignaledValue(1) };
     device.create_encoder("template-proof drain").commit_and_wait_completed();
     assert_eq!(reference.contents(), replay.contents(), "ring busy: nothing of the failing body ran");
+}
+
+/// Chunked executes: rounds grouped 1, 2, 4, 8, 8, … into executes of one
+/// replicated buffer, each a prefix by its GPU-written length. Stops before,
+/// at and after every chunk boundary (rounds past the stop run inside their
+/// chunk and write nothing) match direct output; executes are the chunk
+/// count, not the rounds; a changed chunk size re-records one template.
+#[test]
+fn replay_template_chunks_match_direct_at_every_boundary() {
+    let device = GpuDevice::new();
+    let k = Kernels::new(&device);
+    let base = TemplateSpec { copies: 40, chunk: 8, ..TemplateSpec::default() };
+    let mut specs: Vec<TemplateSpec> = [0, 1, 2, 3, 4, 6, 7, 8, 14, 15, 16, 22, 23, 24, 31, 39, 40]
+        .iter()
+        .map(|&live| TemplateSpec { live, ..base })
+        .collect();
+    specs.push(TemplateSpec { chunk: 4, live: 9, ..base });
+    specs.push(TemplateSpec { chunk: 4, live: 10, ..base });
+    specs.push(TemplateSpec { copies: 13, live: 13, ..base });
+    let (_, d) = template_frames(&device, &k, &specs);
+    for (i, (s, spec)) in d.iter().zip(&specs).enumerate() {
+        let executes = crate::template_chunks(spec.copies, spec.chunk).count() as u64;
+        assert_eq!(s.segments_replayed, executes, "frame {i}: one execute per chunk");
+        assert_eq!((s.templates_direct, s.segments_direct), (0, 0), "frame {i}: nothing ran directly");
+        if i > 0 && spec.chunk == specs[i - 1].chunk && spec.copies == specs[i - 1].copies {
+            assert_eq!((s.recorded, s.templates_replayed), (0, 1), "frame {i}: warm");
+        } else {
+            assert_eq!(s.templates_recorded, 1, "frame {i}: a changed chunk layout re-records one template");
+        }
+    }
+    assert_eq!(crate::template_chunks(40, 8).count(), 8);
 }

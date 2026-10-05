@@ -89,6 +89,7 @@ pub(crate) struct GateKey {
     pub slot: u32,
     pub copies: u32,
     pub stride: u32,
+    pub chunk: u32,
 }
 
 /// `MANIFOLD_ENCODE_REPLAY=0` turns replay off for the process, which brings
@@ -359,7 +360,7 @@ mod tests {
         variants.push(("binding count (more)", k));
 
         let mut k = key(&bytes);
-        k.gate = Some(GateKey { ranges: 0x5000, offset: 0, commands: 4, slot: 0, copies: 0, stride: 0 });
+        k.gate = Some(GateKey { ranges: 0x5000, offset: 0, commands: 4, slot: 0, copies: 0, stride: 0, chunk: 0 });
         variants.push(("gate (added)", k));
 
         for (field, variant) in &variants {
@@ -368,7 +369,7 @@ mod tests {
         assert!(!recording.matches(1, &key(&bytes)), "past the end must miss");
 
         // A gated command: every gate field decides the match too.
-        let gate = GateKey { ranges: 0x5000, offset: 8, commands: 4, slot: 1, copies: 0, stride: 0 };
+        let gate = GateKey { ranges: 0x5000, offset: 8, commands: 4, slot: 1, copies: 0, stride: 0, chunk: 0 };
         let mut gated = Recording::default();
         let mut k = key(&bytes);
         k.gate = Some(gate);
@@ -382,6 +383,7 @@ mod tests {
             ("slot", GateKey { slot: 0, ..gate }),
             ("copies", GateKey { copies: 3, ..gate }),
             ("stride", GateKey { stride: 2, ..gate }),
+            ("chunk", GateKey { chunk: 4, ..gate }),
         ] {
             let mut k = key(&bytes);
             k.gate = Some(changed);
@@ -426,5 +428,45 @@ mod tests {
         assert_eq!(pick_entry(2, Some(1), |i| i != 1), Some(0));
         assert_eq!(pick_entry(2, Some(1), |_| false), Some(2));
         assert_eq!(pick_entry(REPLAY_RING, Some(0), |_| false), None);
+    }
+}
+
+/// The rounds of a `copies`-round gated template, grouped into executes:
+/// 1, 2, 4, … doubling up to `chunk` rounds an execute, then `chunk` at a
+/// time, the last cut to what remains. Each item is (first round, rounds).
+/// The GPU writes execute j's range entry as {0, rounds · commands} while
+/// live, and the same layout must be computed wherever those entries are
+/// written (gpu_flip_pressure.wgsl chunk_rounds).
+pub fn template_chunks(copies: u32, chunk: u32) -> impl Iterator<Item = (u32, u32)> {
+    let chunk = chunk.max(1);
+    let mut start = 0u32;
+    let mut size = 1u32;
+    std::iter::from_fn(move || {
+        if start >= copies {
+            return None;
+        }
+        let len = size.min(chunk).min(copies - start);
+        let item = (start, len);
+        start += len;
+        size = size.saturating_mul(2);
+        Some(item)
+    })
+}
+
+#[cfg(test)]
+mod chunk_tests {
+    use super::template_chunks;
+
+    #[test]
+    fn template_chunks_double_then_hold() {
+        let rounds = |copies, chunk| template_chunks(copies, chunk).map(|(_, len)| len).collect::<Vec<_>>();
+        assert_eq!(rounds(64, 32), [1, 2, 4, 8, 16, 32, 1]);
+        assert_eq!(rounds(900, 32).len(), 33);
+        assert_eq!(rounds(900, 32).iter().sum::<u32>(), 900);
+        assert_eq!(rounds(13, 32), [1, 2, 4, 6]);
+        assert_eq!(rounds(5, 1), [1, 1, 1, 1, 1]);
+        assert_eq!(rounds(0, 32), Vec::<u32>::new());
+        let starts: Vec<u32> = template_chunks(40, 8).map(|(s, _)| s).collect();
+        assert_eq!(starts, [0, 1, 3, 7, 15, 23, 31, 39]);
     }
 }

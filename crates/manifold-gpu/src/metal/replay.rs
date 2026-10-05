@@ -110,9 +110,13 @@ struct StoredSegment {
     commands: usize,
     ranges: Retained<ProtocolObject<dyn MTLBuffer>>,
     offset: u64,
-    /// Executes per stretch: 1 for a plain segment, a template's copies.
-    copies: usize,
-    /// Bytes between consecutive copies' range entries.
+    /// Executes per stretch: 1 for a plain segment, a template's chunks
+    /// (`crate::replay::template_chunks`).
+    executes: usize,
+    /// Copies of the recorded commands the buffer holds back to back: a
+    /// chunk of n rounds executes the first n · commands.
+    replicas: usize,
+    /// Bytes between consecutive executes' range entries.
     stride_bytes: u64,
 }
 
@@ -233,7 +237,10 @@ impl ReplayStore {
             match command.place {
                 Place::Chunk(position) => chunk_cursor = chunk_cursor.min(position),
                 Place::Segment { segment, slot } => {
-                    unsafe { self.segments[segment].icb.indirectComputeCommandAtIndex(slot) }.reset();
+                    let stored = &self.segments[segment];
+                    for replica in 0..stored.replicas {
+                        unsafe { stored.icb.indirectComputeCommandAtIndex(slot + replica * stored.commands) }.reset();
+                    }
                     if slot == 0 {
                         segments = segments.min(segment);
                     }
@@ -264,8 +271,9 @@ impl ReplayStore {
         }
         if slot == 0 {
             let ranges = ranges.expect("a gated key names its range buffer");
-            let icb = new_icb(device, gate.commands as usize)?;
-            for i in 0..gate.commands as usize {
+            let replicas = gate.chunk.max(1) as usize;
+            let icb = new_icb(device, gate.commands as usize * replicas)?;
+            for i in 0..gate.commands as usize * replicas {
                 unsafe { icb.indirectComputeCommandAtIndex(i) }.reset();
             }
             stats.store_allocations += 1;
@@ -274,7 +282,8 @@ impl ReplayStore {
                 commands: gate.commands as usize,
                 ranges: ranges.clone(),
                 offset: gate.offset,
-                copies: gate.copies.max(1) as usize,
+                executes: if gate.copies == 0 { 1 } else { crate::replay::template_chunks(gate.copies, gate.chunk).count() },
+                replicas,
                 stride_bytes: u64::from(gate.stride) * crate::replay::GATED_RANGE_BYTES,
             });
         }
@@ -297,29 +306,37 @@ impl ReplayStore {
     ) {
         let retained_start = self.retained.len() as u32;
         let resources_start = self.resources.len() as u32;
-        let command = match place {
+        // A template's command is written once per replica; the replicas
+        // share its bindings, arena slots and declared resources.
+        let (icb, first, step, count) = match place {
             Place::Chunk(position) => {
                 debug_assert_eq!(position, self.chunk_cursor, "chunk commands are placed in order");
                 self.chunk_cursor = position + 1;
-                unsafe { self.chunks[position / CHUNK_COMMANDS].indirectComputeCommandAtIndex(position % CHUNK_COMMANDS) }
+                (&self.chunks[position / CHUNK_COMMANDS], position % CHUNK_COMMANDS, 0, 1)
             }
             Place::Segment { segment, slot } => {
                 let stored = &self.segments[segment];
                 if slot == 0 {
                     self.resources.push(resource(&stored.ranges));
                 }
-                unsafe { stored.icb.indirectComputeCommandAtIndex(slot) }
+                (&stored.icb, slot, stored.commands, stored.replicas)
             }
         };
-        command.reset();
-        command.setComputePipelineState(&pipeline.state);
+        let icb = icb.clone();
+        let commands: Vec<_> = (0..count).map(|r| unsafe { icb.indirectComputeCommandAtIndex(first + r * step) }).collect();
+        for command in &commands {
+            command.reset();
+            command.setComputePipelineState(&pipeline.state);
+        }
         let mut buffers = buffers.iter();
         let mut slots = slots.iter();
         for binding in key.bindings() {
             match *binding {
                 KeyBinding::Buffer { slot, offset, .. } => {
                     let buffer = buffers.next().copied().flatten().expect("one buffer per buffer binding");
-                    unsafe { command.setKernelBuffer_offset_atIndex(&buffer.raw, offset as usize, slot as usize) };
+                    for command in &commands {
+                        unsafe { command.setKernelBuffer_offset_atIndex(&buffer.raw, offset as usize, slot as usize) };
+                    }
                     self.resources.push(resource(&buffer.raw));
                     self.retained.push(buffer.raw.clone());
                 }
@@ -327,13 +344,17 @@ impl ReplayStore {
                     let store = *slots.next().expect("one arena slot per inline binding");
                     self.write_bytes(store, data);
                     let arena = &self.arenas[store.arena as usize].raw;
-                    unsafe { command.setKernelBuffer_offset_atIndex(arena, store.offset as usize, slot as usize) };
+                    for command in &commands {
+                        unsafe { command.setKernelBuffer_offset_atIndex(arena, store.offset as usize, slot as usize) };
+                    }
                     self.resources.push(resource(arena));
                 }
             }
         }
-        command.concurrentDispatchThreadgroups_threadsPerThreadgroup(mtl_size(key.groups), mtl_size(pipeline.workgroup_size));
-        command.setBarrier();
+        for command in &commands {
+            command.concurrentDispatchThreadgroups_threadsPerThreadgroup(mtl_size(key.groups), mtl_size(pipeline.workgroup_size));
+            command.setBarrier();
+        }
         self.commands.push(StoredCommand {
             _pipeline: pipeline.state.clone(),
             place,
@@ -402,7 +423,7 @@ impl ReplayStore {
                         // entry, a buffer barrier between copies as between
                         // any two executes.
                         let stored = &self.segments[segment];
-                        for copy in 0..stored.copies {
+                        for copy in 0..stored.executes {
                             if copy > 0 {
                                 enc.memoryBarrierWithScope(MTLBarrierScope::Buffers);
                                 executes += 1;
@@ -410,7 +431,7 @@ impl ReplayStore {
                             let offset = stored.offset + copy as u64 * stored.stride_bytes;
                             enc.executeCommandsInBuffer_indirectBuffer_indirectBufferOffset(&stored.icb, &stored.ranges, offset as usize);
                         }
-                        segments += stored.copies as u64;
+                        segments += stored.executes as u64;
                         start = end;
                     }
                 }
@@ -494,9 +515,11 @@ struct OpenSegment {
     /// A flush ran inside this segment: the rest of it encodes directly,
     /// since the segment's buffer already executed as a whole.
     broken: bool,
-    /// A template's copies and range stride in entries; 0 for a plain segment.
+    /// A template's rounds, range stride in entries and most rounds an
+    /// execute; 0 for a plain segment.
     copies: u32,
     stride: u32,
+    chunk: u32,
 }
 
 /// The word copy a replaying span turns buffer copies into (D9): one thread
@@ -562,6 +585,7 @@ impl GpuEncoder {
                 broken: false,
                 copies: 0,
                 stride: 0,
+                chunk: 0,
             });
         }
         self.replay = Some(span);
@@ -600,6 +624,7 @@ impl GpuEncoder {
                         slot: segment.taken,
                         copies: segment.copies,
                         stride: segment.stride,
+                        chunk: segment.chunk,
                     };
                     self.replay_dispatch_in(&mut span, pipeline, bindings, Some(groups), Some(gate), label)
                 }
@@ -895,13 +920,18 @@ impl GpuEncoder {
     }
 }
 
-/// Where a gated template's copies run: copy c executes by range entry
-/// `first + c * stride` of `ranges` (`GATED_RANGE_BYTES` per entry).
+/// Where a gated template's rounds run: grouped into executes of up to
+/// `chunk` rounds (`crate::template_chunks`), execute j by range entry
+/// `first + j * stride` of `ranges` (`GATED_RANGE_BYTES` per entry), which
+/// the GPU writes as {0, rounds · commands} while live and {0, 0} once the
+/// work is done. Rounds of an execute that run after the GPU decided to
+/// stop must write nothing: the caller's kernels guard themselves.
 #[derive(Clone, Copy)]
 pub struct TemplateRanges<'a> {
     pub ranges: &'a GpuBuffer,
     pub first: u32,
     pub stride: u32,
+    pub chunk: u32,
 }
 
 /// What a template body can do: issue gated dispatches, nothing else. A
@@ -982,12 +1012,13 @@ impl GpuEncoder {
         copies: u32,
         mut body: impl FnMut(&mut GatedRecorder<'_>) -> Result<(), String>,
     ) -> Result<(), String> {
-        let last = copies.checked_sub(1).and_then(|c| c.checked_mul(at.stride)).and_then(|c| c.checked_add(at.first));
+        let executes = crate::replay::template_chunks(copies, at.chunk).count() as u32;
+        let last = executes.checked_sub(1).and_then(|c| c.checked_mul(at.stride)).and_then(|c| c.checked_add(at.first));
         let end = last.and_then(|l| (u64::from(l) + 1).checked_mul(crate::replay::GATED_RANGE_BYTES));
-        if commands == 0 || end.is_none_or(|end| end > at.ranges.size) {
+        if commands == 0 || at.chunk == 0 || end.is_none_or(|end| end > at.ranges.size) {
             return Err(format!(
-                "gated template: {commands} commands, {copies} copies from entry {} by {} do not fit a {}-byte range buffer",
-                at.first, at.stride, at.ranges.size
+                "gated template: {commands} commands, {copies} rounds by {} in {executes} executes from entry {} by {} do not fit a {}-byte range buffer",
+                at.chunk, at.first, at.stride, at.ranges.size
             ));
         }
         let mut walked = false;
@@ -1015,6 +1046,7 @@ impl GpuEncoder {
                         broken: false,
                         copies,
                         stride: at.stride,
+                        chunk: at.chunk,
                     });
                     walked = true;
                 }
@@ -1081,6 +1113,7 @@ impl GpuEncoder {
                         slot: segment.taken,
                         copies: segment.copies,
                         stride: segment.stride,
+                        chunk: segment.chunk,
                     };
                     if self.replay_dispatch_in(&mut span, pipeline, bindings, Some(groups), Some(gate), label) {
                         span.segment.as_mut().expect("checked above").taken += 1;

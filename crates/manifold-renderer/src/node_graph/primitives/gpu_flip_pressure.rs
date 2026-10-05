@@ -426,9 +426,35 @@ pub(crate) const PROGRESS_FLOATS: u32 = 4 + MAX_ITERATIONS;
 const PROGRESS_BYTES: u64 = PROGRESS_FLOATS as u64 * 4;
 /// Bytes of one indirect dispatch's three group counts.
 const TRIPLE_BYTES: u64 = 12;
-/// Range entries a solve's rounds take: two a round, every round the cap
-/// allows (gpu_flip_pressure.wgsl ROUNDS).
-const RANGES_BYTES: u64 = 2 * MAX_ITERATIONS as u64 * GATED_RANGE_BYTES;
+/// Range entries a solve's rounds take: two a round for the round-by-round
+/// path, every round the cap allows (gpu_flip_pressure.wgsl ROUNDS), then one
+/// per chunked execute from CHUNK_ENTRIES, never more than the rounds.
+const RANGES_BYTES: u64 = 3 * MAX_ITERATIONS as u64 * GATED_RANGE_BYTES;
+/// The first chunked execute's range entry (gpu_flip_pressure.wgsl CHUNK_ENTRIES).
+const CHUNK_ENTRIES: u32 = 2 * MAX_ITERATIONS;
+/// Most rounds one execute runs: executes cover 1, 2, 4, … rounds doubling
+/// to this, so a stop leaves at most this less one guarded round running.
+const ROUND_CHUNK: u32 = 32;
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+static CHUNK_OVERRIDE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// Test-only: the most rounds an execute runs (0 restores ROUND_CHUNK).
+#[cfg(all(test, feature = "gpu-proofs"))]
+pub(crate) fn set_round_chunk(chunk: u32) {
+    CHUNK_OVERRIDE.store(chunk, std::sync::atomic::Ordering::SeqCst);
+}
+
+fn round_chunk() -> u32 {
+    #[cfg(all(test, feature = "gpu-proofs"))]
+    {
+        let chunk = CHUNK_OVERRIDE.load(std::sync::atomic::Ordering::SeqCst);
+        if chunk > 0 {
+            return chunk;
+        }
+    }
+    ROUND_CHUNK
+}
 
 /// Where each gated dispatch's groups sit in the gate, by triple: level l's
 /// lattice at l, then one group (the solve-live triple), then level l's
@@ -824,7 +850,9 @@ impl PressureSolver {
             _ => 0,
         };
         let fine = Params { cx: slots.triples(), tolerance: stop.tolerance(), ..Params::at(top.lattice, top.cell_size).over(&top) };
-        let arm = Params { color: before, slot: after, cy: slots.armed(), cz: body_count, ..fine };
+        // The arm's `mode` is the rounds and `live` the chunk, for the chunked
+        // executes' range entries.
+        let arm = Params { color: before, slot: after, cy: slots.armed(), cz: body_count, mode: iterations, live: round_chunk(), ..fine };
         enc.dispatch_compute(
             &pipes.arm,
             &[bytes(&arm), buffer(12, &b.gate), buffer(14, &b.armed), buffer(15, &b.ranges), buffer(21, plan)],
@@ -883,13 +911,14 @@ impl PressureSolver {
             }
             // Every round encodes the same bytes (the round index is the GPU's
             // progress[1]), so one walked round is the template the GPU runs
-            // once per round, round i by range entry 2i. On the gate the body
+            // once per round, in executes of 1, 2, 4, … up to ROUND_CHUNK rounds,
+            // execute j by range entry CHUNK_ENTRIES + j. On the gate the body
             // product runs in live rounds only; at a coarse level its chain
             // (the direction down to the fine lattice, the product back up)
             // rides the gate too.
             _ if iterations > 0 => {
                 debug_assert_eq!(after, 0, "a gated round is one segment");
-                let at = TemplateRanges { ranges: &b.ranges, first: 0, stride: 2 };
+                let at = TemplateRanges { ranges: &b.ranges, first: CHUNK_ENTRIES, stride: 1, chunk: round_chunk() };
                 enc.repeat_gated_template(at, before, iterations, |recorder| {
                     let mut sink = Round { recorder, refused: None };
                     r.head(&mut sink);
@@ -1445,7 +1474,7 @@ fn keep_ranges() -> u32 {
 /// The folded partials' max, |r|∞, into the stop's record and the stop
 /// test: the start with `mode` 1, else after iteration `slot`.
 fn check<S: Sink>(enc: &mut S, pipes: &Pipelines, b: &Buffers, g: Gate<'_>, step: &Params) {
-    let params = Params { color: partial_count([step.nx, step.ny, step.nz]), live: g.live, mode: step.mode | keep_ranges(), ..*step };
+    let params = Params { color: partial_count([step.nx, step.ny, step.nz]), live: g.live, mode: step.mode | keep_ranges(), slot: round_chunk(), ..*step };
     g.dispatch(
         enc,
         &pipes.check,
