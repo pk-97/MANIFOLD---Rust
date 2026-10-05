@@ -15532,7 +15532,7 @@
           "type": "int"
         },
         {
-          "default": "1",
+          "default": "0",
           "label": "Volume Projection",
           "name": "volume_projection",
           "range": [

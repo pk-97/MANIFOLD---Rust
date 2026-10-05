@@ -232,7 +232,7 @@
         },
         "volume_projection": {
           "type": "Int",
-          "value": 1
+          "value": 0
         }
       },
       "typeId": "node.gpu_flip_step"

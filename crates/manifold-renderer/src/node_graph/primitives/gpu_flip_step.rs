@@ -2249,7 +2249,7 @@ crate::primitive! {
         int_param!("iterations", "Iterations (0 = Auto)", 0.0, 0.0, MAX_ITERATIONS as f32),
         float_param!("top_speed", "Top Speed", DEFAULT_TOP_SPEED, 0.1, 1000.0),
         int_param!("ghost_fluid", "Ghost Fluid", 1.0, 0.0, 1.0),
-        int_param!("volume_projection", "Volume Projection", 1.0, 0.0, 1.0),
+        int_param!("volume_projection", "Volume Projection", 0.0, 0.0, 1.0),
         int_param!("closed_faces", "Closed Faces", 63.0, 0.0, 63.0),
         int_param!("solve_level", "Solve Level", 0.0, 0.0, 4.0),
         int_param!("narrow_band", "Narrow Band", 0.0, 0.0, 1.0),
@@ -2601,7 +2601,7 @@ impl Primitive for GpuFlipStep {
             tally,
             band,
             ghost,
-            density: ctx.scalar_or_param("volume_projection", 1.0) > 0.5,
+            density: ctx.scalar_or_param("volume_projection", 0.0) > 0.5,
             narrow_enabled,
             restore_narrow,
         };

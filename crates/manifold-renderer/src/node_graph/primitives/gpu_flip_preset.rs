@@ -96,9 +96,9 @@ pub(crate) struct WaterScene {
     /// (ghost fluid). Off wires zero distances: air at zero pressure on its
     /// cell centres, the race's comparison.
     pub ghost_fluid: bool,
-    /// The step's density projection (Volume Projection). The engine has
-    /// none, but without it the GPU Dam Break settles 21.5% too deep at 64
-    /// (interior 6.6 against 8 a cell after 1800 frames), so it stays on.
+    /// Optional non-native density projection (Volume Projection). Off by
+    /// default: matched-input motion is closer to native without its extra
+    /// solve. Explicit saved opt-ins remain supported.
     pub volume_projection: bool,
     /// The Dam Break's box as a Collider role (`obstacle_transform` into
     /// `obstacle_collider` into the domain's `role_0`).
@@ -140,7 +140,7 @@ impl WaterScene {
             surface_scale: 1,
             faces: false,
             ghost_fluid: true,
-            volume_projection: true,
+            volume_projection: false,
             obstacle: true,
             closed_faces: 63,
         }
@@ -1141,6 +1141,25 @@ pub(super) mod tests {
     use crate::node_graph::liquid::extent::{AtomExtent, ExtentError, ExtentReport, ExtentRule, LIQUID_EXTENT_RULES, Verdict, check_graph};
     use crate::node_graph::substeps::test_nodes::register_substep_test_nodes;
     use crate::node_graph::{EffectGraphDefExt, ExecutionPlan, Graph, PrimitiveRegistry, compile};
+
+    #[test]
+    fn gpu_flip_defaults_disable_optional_corrections_and_preserve_opt_ins() {
+        use super::super::gpu_flip_step::GpuFlipStep;
+        use crate::node_graph::parameters::ParamValue;
+        use crate::node_graph::primitive::PrimitiveSpec;
+
+        assert!(!WaterScene::dam_break(64).volume_projection);
+        for name in ["volume_projection", "narrow_band", "solve_level"] {
+            let param = GpuFlipStep::PARAMS.iter().find(|p| p.name == name).unwrap();
+            assert_eq!(param.default, ParamValue::Float(0.0), "{name}");
+        }
+        for enabled in [false, true] {
+            let def = water_def(WaterScene { volume_projection: enabled, ..WaterScene::dam_break(64) });
+            let step = def.nodes.iter().find(|n| n.node_id.as_str() == STEP_NODE).unwrap();
+            let params = serde_json::to_value(&step.params).unwrap();
+            assert_eq!(params["volume_projection"]["value"], i32::from(enabled));
+        }
+    }
 
     fn registry() -> PrimitiveRegistry {
         let mut registry = PrimitiveRegistry::with_builtin();

@@ -695,20 +695,17 @@ fn column_depth(run: &Run, particles: &[FluidParticle], floor: f64) -> f64 {
     top.iter().map(|&y| if y.is_finite() { y - floor + 0.25 * h } else { 0.0 }).sum::<f64>() / (n * n) as f64
 }
 
-/// The Dam Break keeps its volume: by frame 1800 (30 s) the pool's column
-/// depth is the analytic volume, the 0.16 m pool plus the column, over the
-/// 4 m × 4 m floor, within 3%, and the interior density is within 2% of its
-/// start. Over the settling, frame 400 on, KE + PE never rises frame to
-/// frame past the noise floor of `gpu_flip_dam_break_energy_never_rises`
-/// (1e-4 of the start), and ends below where it stood at frame 400. A
-/// position projection does a little work no force accounts for; this bounds
-/// it at that floor.
+/// Historical acceptance of the optional density correction: at frame 1800
+/// (30 s), estimated column depth is within 3% of the analytic average and
+/// interior density is within 2% of its start. These are not direct volume
+/// measurements or native agreement tests. From frame 400, KE + PE must not
+/// rise by more than 1e-4 of its start per frame and must finish lower.
 #[test]
-fn gpu_flip_dam_break_settles_to_its_volume() {
+fn gpu_flip_density_projection_settled_column_depth_and_density() {
     const FRAMES: usize = 1800;
     const SETTLING: usize = 400;
     for steps in [1, 2] {
-        let scene = WaterScene::dam_break(64).with_steps(steps);
+        let scene = WaterScene { volume_projection: true, ..WaterScene::dam_break(64).with_steps(steps) };
         let mut run = Run::new(scene);
         let floor = scene.min()[1];
         let start = run.particles();
@@ -997,7 +994,8 @@ fn gpu_flip_dam_break_energy_never_rises() {
         // step on the Dam Break with the obstacle box; the ceiling is about
         // twice that, so a broken preconditioner is caught while the
         // splash-dependent variation is not.
-        assert!(most.iter().all(|&m| m > 0 && m as usize <= 32 * steps), "{steps} steps: iterations a tick {most:?}");
+        assert!(most[0] > 0 && most[0] as usize <= 32 * steps, "{steps} steps: pressure iterations a tick {most:?}");
+        assert_eq!(most[1], 0, "the default must not run density iterations");
         assert!(worst <= 1e-4, "{steps} steps: energy rose {worst:.2e} of E0 above its start");
     }
 }
