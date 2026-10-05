@@ -12,8 +12,8 @@
 //! A failed prepare leaves every slot as it was.
 
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use objc2::Message;
 use objc2::rc::Retained;
@@ -249,7 +249,7 @@ struct Slot {
     /// Command buffers that ran this build, each with its encoder's template
     /// token: a buffer still unsent whose encoder is gone was abandoned and
     /// never runs.
-    users: Vec<(CommandBuffer, Weak<()>)>,
+    users: Vec<(CommandBuffer, Arc<AtomicBool>)>,
     /// Lookup clock of the last visit: the least recent idle slot is rebuilt.
     used: u64,
 }
@@ -262,9 +262,9 @@ impl Slot {
     /// Drop users that are done: completed or failed, or abandoned (never
     /// sent, and the encoder that held them dropped).
     fn prune(&mut self) {
-        self.users.retain(|(buf, token)| match unsafe { buf.status() } {
+        self.users.retain(|(buf, alive)| match unsafe { buf.status() } {
             MTLCommandBufferStatus::Completed | MTLCommandBufferStatus::Error => false,
-            MTLCommandBufferStatus::NotEnqueued => token.strong_count() > 0,
+            MTLCommandBufferStatus::NotEnqueued => alive.load(Ordering::Acquire),
             _ => true,
         });
     }
@@ -298,6 +298,9 @@ pub struct GpuTemplateStore {
     round: Round,
     clock: u64,
     stats: GpuTemplateStats,
+    /// Every encoder-liveness token made, reused once only the store holds
+    /// one, so warm frames allocate none.
+    tokens: Vec<Arc<AtomicBool>>,
     #[cfg(all(test, feature = "gpu-proofs"))]
     pub(super) fail_next_alloc: bool,
 }
@@ -315,6 +318,7 @@ impl GpuTemplateStore {
             round: Round::default(),
             clock: 0,
             stats: GpuTemplateStats::default(),
+            tokens: Vec::new(),
             #[cfg(all(test, feature = "gpu-proofs"))]
             fail_next_alloc: false,
         }
@@ -499,7 +503,23 @@ impl GpuEncoder {
         let index = store.slots.iter().position(|s| s.id == ticket.slot).ok_or("gated template: the ticket's build was rebuilt or freed")?;
         self.end_gated_segments();
         self.flush_replay();
-        let token = Arc::downgrade(self.template_token.get_or_insert_with(|| Arc::new(())));
+        let token = match &self.template_token {
+            Some(token) => token.clone(),
+            None => {
+                // A token only the store holds is free: no encoder or user
+                // names it, so its flag can be raised for this encoder.
+                let token = match store.tokens.iter().find(|t| Arc::strong_count(t) == 1) {
+                    Some(free) => free.clone(),
+                    None => {
+                        store.tokens.push(Arc::new(AtomicBool::new(true)));
+                        store.tokens.last().expect("pushed").clone()
+                    }
+                };
+                token.store(true, Ordering::Release);
+                self.template_token = Some(token.clone());
+                token
+            }
+        };
         let slot = &mut store.slots[index];
         let per_execute = self.profile.as_ref().is_some_and(|p| p.granularity == super::ProfileGranularity::Dispatch);
         let mut enc: Option<Retained<ProtocolObject<dyn MTLComputeCommandEncoder>>> = None;
@@ -629,5 +649,10 @@ impl GpuTemplateStore {
             s.prune();
             s.users.len()
         }).collect()
+    }
+
+    /// Liveness tokens the store has ever made.
+    pub(super) fn tokens(&self) -> usize {
+        self.tokens.len()
     }
 }

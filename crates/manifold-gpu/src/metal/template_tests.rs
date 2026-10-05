@@ -670,7 +670,27 @@ fn template_abandoned_encoders_release_their_slots() {
         drop(enc);
         assert!(run.store.users().iter().all(|&u| u == 0), "frame {key}: an abandoned buffer still counts as a user");
         assert_eq!(run.store.slots(), 1, "frame {key}: the abandoned slot is rebuilt in place, not stranded");
+        assert_eq!(run.store.tokens(), 1, "frame {key}: the liveness token is reused, not allocated");
     }
+    // Committed and waited frames reuse it too.
+    for key in 0..4 {
+        let mut enc = device.create_encoder("template-proof committed");
+        encode_template(&mut enc, &k, &mut run, key, Spec::default(), None).expect("encodes");
+        enc.commit_and_wait_completed();
+        assert_eq!(run.store.tokens(), 1, "committed frame {key}: no new token");
+    }
+    // A live encoder's token is never handed to another encoder, and its
+    // unsent user stays until that encoder drops.
+    let mut held = device.create_encoder("template-proof held");
+    encode_template(&mut held, &k, &mut run, 0, Spec::default(), None).expect("encodes");
+    let mut other = device.create_encoder("template-proof other");
+    encode_template(&mut other, &k, &mut run, 1, Spec::default(), None).expect("encodes");
+    assert_eq!(run.store.tokens(), 2, "two live encoders hold two tokens");
+    assert_eq!(run.store.users(), [2], "both unsent buffers are users while their encoders live");
+    drop(other);
+    assert_eq!(run.store.users(), [1], "only the dropped encoder's buffer retires");
+    drop(held);
+    assert_eq!(run.store.users(), [0]);
 }
 
 /// The store kept across a buffer replacement (a new key: a build, output

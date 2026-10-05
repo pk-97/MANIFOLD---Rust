@@ -115,10 +115,10 @@ pub struct GpuEncoder {
     /// Receives the true GPU seconds of every command buffer this encoder
     /// commits, chunk splits included ([`Self::tap_gpu_time`]).
     pub(crate) gpu_time_tap: Option<std::sync::Arc<dyn Fn(f64, f64) + Send + Sync>>,
-    /// Alive while this encoder is: a template slot's user whose buffer was
-    /// never sent and whose token is gone was abandoned (made on the first
-    /// template execute, so encoders without templates allocate nothing).
-    pub(crate) template_token: Option<std::sync::Arc<()>>,
+    /// True while this encoder lives: a template slot's user whose buffer was
+    /// never sent and whose flag is down was abandoned. Taken from the store's
+    /// pool on the first template execute, so warm frames allocate nothing.
+    pub(crate) template_token: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 unsafe impl Send for GpuEncoder {}
@@ -2955,6 +2955,9 @@ impl GpuEncoder {
 impl Drop for GpuEncoder {
     fn drop(&mut self) {
         self.end_current();
+        if let Some(token) = &self.template_token {
+            token.store(false, std::sync::atomic::Ordering::Release);
+        }
     }
 }
 

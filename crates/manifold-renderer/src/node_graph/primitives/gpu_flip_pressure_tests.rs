@@ -1486,13 +1486,21 @@ fn golden_solve(rig: &mut Rig, p: &Problem, stop: Stop, cache: &mut Option<GpuRe
 }
 
 /// Every golden case, direct and replayed, as the fixture's lines.
-fn golden_lines() -> Vec<String> {
+/// The golden's cases, each resampled to 64³: the line prefix
+/// (`fixture[index] frame f`), the problem and the solve level.
+fn golden_cases() -> Vec<(String, Problem, usize)> {
     let (n, dam) = load_fixture(DAM_BREAK);
     let (_, density) = load_fixture("deep_pool_density_problems");
     let cases = [("dambreak", 0, &dam[0], 0), ("dambreak", 4, &dam[4], 0), ("density", 0, &density[0], 0), ("dambreak", 0, &dam[0], 1)];
+    cases
+        .into_iter()
+        .map(|(fixture, index, saved, level)| (format!("{fixture}[{index}] frame {}", saved.frame), resample(saved, n, 64), level))
+        .collect()
+}
+
+fn golden_lines() -> Vec<String> {
     let mut lines = Vec::new();
-    for (fixture, index, saved, level) in cases {
-        let p = resample(saved, n, 64);
+    for (case, p, level) in golden_cases() {
         let mut direct = Rig::new(64).at_level(level);
         let mut replay = Rig::new(64).at_level(level);
         let mut none = None;
@@ -1503,10 +1511,7 @@ fn golden_lines() -> Vec<String> {
             golden_solve(&mut replay, &p, stop, &mut cache);
             let r = golden_solve(&mut replay, &p, stop, &mut cache);
             for (mode, [pressure, scalars, record]) in [("direct", d), ("replay", r)] {
-                lines.push(format!(
-                    "{fixture}[{index}] frame {} 64^3 level {level} {stop:?} {mode} pressure {pressure:016x} scalars {scalars:016x} record {record:016x}",
-                    saved.frame
-                ));
+                lines.push(format!("{case} 64^3 level {level} {stop:?} {mode} pressure {pressure:016x} scalars {scalars:016x} record {record:016x}"));
             }
         }
     }
@@ -2440,14 +2445,13 @@ fn pressure_module_chunk_cost_probe() {
 /// The golden with the frame-replay ring busy, on the real solve: every ring
 /// entry is held by an encoder that never commits, so each golden solve's
 /// span finds no entry and the rounds run as the template's executes on a
-/// direct encoder; every Dam Break case still matches main bit for bit.
+/// direct encoder; every golden case (both Dam Break frames, the density
+/// solve and level 1) still matches main bit for bit.
 #[test]
 fn pressure_module_golden_holds_with_the_ring_busy() {
     let golden = std::fs::read_to_string(format!("{}/tests/fixtures/{GOLDEN}", env!("CARGO_MANIFEST_DIR"))).expect("golden fixture reads");
-    let (n, dam) = load_fixture(DAM_BREAK);
-    let saved = &dam[0];
-    let p = resample(saved, n, 64);
-    let mut rig = Rig::new(64);
+    let cases = golden_cases();
+    let p = &cases[0].1;
     let scratch = Rig::new(64);
     let water: Vec<f32> = p.water.iter().map(|&w| f32::from(u8::from(w))).collect();
     // SAFETY: shared buffers sized for the lattice; nothing is queued.
@@ -2469,15 +2473,15 @@ fn pressure_module_golden_holds_with_the_ring_busy() {
         held.push(enc);
     }
     let busy = cache.as_ref().expect("cache").stats().ring_busy;
-    for stop in GOLDEN_STOPS {
-        let [pressure, scalars, record] = golden_solve(&mut rig, &p, stop, &mut cache);
-        let line = format!(
-            "dambreak[0] frame {} 64^3 level 0 {stop:?} replay pressure {pressure:016x} scalars {scalars:016x} record {record:016x}",
-            saved.frame
-        );
-        assert!(golden.lines().any(|l| l == line), "{stop:?}: with the ring busy the solve moved:\n got {line}");
+    for (case, p, level) in &cases {
+        let mut rig = Rig::new(64).at_level(*level);
+        for stop in GOLDEN_STOPS {
+            let [pressure, scalars, record] = golden_solve(&mut rig, p, stop, &mut cache);
+            let line = format!("{case} 64^3 level {level} {stop:?} replay pressure {pressure:016x} scalars {scalars:016x} record {record:016x}");
+            assert!(golden.lines().any(|l| l == line), "{case} level {level} {stop:?}: with the ring busy the solve moved:\n got {line}");
+        }
     }
     let stats = cache.as_ref().expect("cache").stats();
-    assert_eq!(stats.ring_busy - busy, GOLDEN_STOPS.len() as u64, "every golden solve found the ring busy");
+    assert_eq!(stats.ring_busy - busy, (cases.len() * GOLDEN_STOPS.len()) as u64, "every golden solve found the ring busy");
     drop(held);
 }
