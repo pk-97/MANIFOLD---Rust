@@ -780,6 +780,12 @@ impl GpuFlipDomain {
             self.rebuild_owner()?;
         }
         self.coupled.owner_fresh = false;
+        // After reconciliation, so a restart never reports the old owner's completion.
+        crate::node_graph::physics_metrics::record_clock(
+            &self.clock,
+            &frame,
+            self.coupled.owner.as_ref().map(LiquidRigidOwner::completed),
+        );
         if let Some(owner) = &self.coupled.owner {
             let scene = self.coupled.observation.as_ref().map(|observation| &observation.inputs);
             self.coupled.scenes.settle(&self.clock, &frame, scene);

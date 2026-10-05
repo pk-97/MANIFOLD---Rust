@@ -1283,7 +1283,6 @@ impl StepState {
     }
 
     fn encode(&mut self, device: &GpuDevice, enc: &mut GpuEncoder, step: &Step<'_>, clock_params: &GpuFlipClockParams) -> Result<(), String> {
-        #[cfg(feature = "water-race-probes")]
         enc.set_profile_tag("gpu_flip.stage.prepare");
         let pipes = self.pipelines.as_ref().expect("step pipelines built by prepare_pipelines at install");
         let (Some(l), Some(tiles), Some(sorted), Some(out_faces)) = (self.lattice.as_ref(), self.tiles.as_ref(), self.sorted.as_ref(), self.faces.as_ref()) else {
@@ -1684,7 +1683,6 @@ impl StepState {
         // Which water reaches air holds every step: the density source reads
         // it too. As the engine does, the solid velocity's zeroing is skipped
         // when the bodies are in the solve: their mass resolves the pocket.
-        #[cfg(feature = "water-race-probes")]
         enc.set_profile_tag("gpu_flip.stage.pockets");
         encode_pockets(enc, pipes, &base, l, ranges, cells, step.capped, step.tally, gate_plan);
         enc.dispatch_compute(
@@ -1726,7 +1724,6 @@ impl StepState {
                 encode_pocket_mean(enc, pipes, &params, l.coarse_pockets(), rhs, solve, step.capped, step.tally, gate_plan);
             }
         };
-        #[cfg(feature = "water-race-probes")]
         enc.set_profile_tag("gpu_flip.stage.pressure");
         let water = Water {
             lattice: cells,
@@ -1776,6 +1773,7 @@ impl StepState {
         )?;
         let tally = step.tally;
         self.solver.tally(enc, step.pressure, step.capped, tally, 0, step.params.step_in_tick == 0)?;
+        enc.set_profile_tag("gpu_flip.stage.project_extend");
         // φ binds the water array when the ghost rows are off; the pass never reads it then.
         let phi = if step.ghost { &l.phi } else { &l.water };
         let subtract = |enc: &mut GpuEncoder, params: &StepParams, phi: &GpuBuffer, faces: &GpuBuffer, label: &str| {
@@ -1793,8 +1791,6 @@ impl StepState {
         if step.dynamic {
             self.bodies.react(enc, &coupled, self.solver.tiles()?, &l.pressure, step.reaction)?;
         }
-        #[cfg(feature = "water-race-probes")]
-        enc.set_profile_tag("gpu_flip.stage.project_extend");
         extend(enc, pipes, step.clock_plan, &base, face_groups, (!step.narrow_enabled).then_some(tiles), [&l.f, out_faces, &l.b], step.band, "gpu_flip.step.extend_new");
         enc.compute_memory_barrier_buffers();
         // The engine constrains its velocity and its saved velocity to the
@@ -1806,7 +1802,6 @@ impl StepState {
         // The density projection (module doc): its pressure's gradient is
         // taken off a copy of the new faces in `l.f`, and the move reads the
         // difference as a displacement. Air sits at zero at its centres.
-        #[cfg(feature = "water-race-probes")]
         enc.set_profile_tag("gpu_flip.stage.density");
         let spread = if step.density {
             enc.copy_buffer_to_buffer(out_faces, &l.f, out_faces.size);
@@ -1866,7 +1861,6 @@ impl StepState {
         // update: births join the move, so they take this substep's velocity
         // change and advection. Off (rate 0), nothing here is encoded.
         if sheeting {
-            #[cfg(feature = "water-race-probes")]
             enc.set_profile_tag("gpu_flip.stage.sheeting");
             let ranges = self.sorter.ranges().ok_or("the cell ranges were not reserved")?;
             let order = sheet_order.ok_or("sheet seeding storage was not reserved")?;
@@ -1900,7 +1894,6 @@ impl StepState {
             enc.compute_memory_barrier_buffers();
             self.sheeting.encode_write(enc, &inputs, step.clock_plan, &births);
         }
-        #[cfg(feature = "water-race-probes")]
         enc.set_profile_tag("gpu_flip.stage.move");
         enc.dispatch_compute(
             &pipes.advect,
@@ -2659,6 +2652,9 @@ impl Primitive for GpuFlipStep {
         };
         let mut last_clock_plan = zeros.clone();
         let encoded_steps = history_slots;
+        // Stage tags only name profiled spans; an unprofiled encoder ignores
+        // them, and they touch no dispatch, binding or replay key.
+        gpu.native_enc.set_profile_tag("gpu_flip.stage.clock");
         {
             let clock = self.state.clock.as_ref().expect("live clock prepared");
             clock.begin_frame(gpu.native_enc, &clock_params);
@@ -2672,6 +2668,7 @@ impl Primitive for GpuFlipStep {
                 tick_seconds: (k + 1) as f32 * step_dt,
                 ..step.params
             };
+            gpu.native_enc.set_profile_tag("gpu_flip.stage.clock");
             {
                 let plan_buffer = {
                     let clock = self.state.clock.as_ref().expect("live clock prepared");
@@ -2711,7 +2708,6 @@ impl Primitive for GpuFlipStep {
                 ctx.error(format!("{NAME}: {error}"));
                 return;
             }
-                #[cfg(feature = "water-race-probes")]
                 gpu.native_enc.set_profile_tag("gpu_flip.stage.finish");
                 self.state.commit_mask(
                     gpu.native_enc,
