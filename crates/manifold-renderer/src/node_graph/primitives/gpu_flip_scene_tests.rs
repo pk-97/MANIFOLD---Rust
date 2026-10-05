@@ -1421,6 +1421,155 @@ mod native_reference {
             println!("gpu density={density}: gpu median {:.3}ms encode median {:.3}ms capped={capped} refused={refused} unconverged={unconverged}", median(gpu_ms), median(encode_ms));
         }
     }
+
+    /// One wall or contact case run from identical native-captured seeds.
+    #[cfg(feature = "water-race-probes")]
+    struct WallCase {
+        name: &'static str,
+        /// World-space water box and its velocity.
+        water: [[f32; 3]; 2],
+        velocity: [f32; 3],
+        /// Static box obstacle: centre, then size, world metres.
+        obstacle: Option<[[f64; 3]; 2]>,
+        /// The wall-contact region measured for run-up and contact counts.
+        near: fn([f32; 3], f32) -> bool,
+    }
+
+    /// Wall and contact parity (BUG-g75v.17 (GPU FLIP wall and collision
+    /// motion parity)): flat wall, two- and three-face corners, a body flush
+    /// with a wall, and water leaving a wall, each seeded on GPU from the
+    /// native engine's captured particles and stepped 60 frames at 16³.
+    /// Prints per-checkpoint native and GPU metrics; asserts only that both
+    /// engines stay finite and inside the tank.
+    ///
+    /// Measured 2026-10-05 at 16³, frame 60 (native vs GPU): particle counts
+    /// equal in every case and no GPU caps, refusals or unconverged solves;
+    /// both hold water 0.10h off every wall. Water stopped by a body agrees:
+    /// the tank-spanning body slab's run-up is 1.62 vs 1.47 m, mean x within
+    /// 0.02 m, rebound vx -0.58 vs -0.69 m/s; the body flush with a wall,
+    /// run-up 1.01 vs 1.19 m. The same impact on the tank wall does not:
+    /// run-up 1.24 vs 2.19 m, water within a cell of the wall 428 vs 768,
+    /// mean x 1.09 vs 1.20 m; the two-face corner's run-up 1.43 vs 3.68 m.
+    /// The three-face corner agrees (0.235 vs 0.235 m). Before any wall
+    /// contact the GPU slab keeps vx 3.00 m/s where native slows to 2.84.
+    #[cfg(feature = "water-race-probes")]
+    #[test]
+    fn gpu_flip_native_wall_contact_reference() {
+        let wall = 2.0f32;
+        let cases = [
+            WallCase { name: "flat_wall", water: [[-1.0, 0.0, -2.0], [0.0, 1.0, 2.0]], velocity: [3.0, 0.0, 0.0], obstacle: None,
+                near: |p, h| p[0] > 2.0 - h },
+            WallCase { name: "corner_two_face", water: [[0.5, 0.0, 0.5], [1.5, 1.5, 1.5]], velocity: [3.0, 0.0, 3.0], obstacle: None,
+                near: |p, h| p[0] > 2.0 - h && p[2] > 2.0 - h },
+            WallCase { name: "corner_three_face", water: [[0.5, 1.5, 0.5], [1.5, 2.5, 1.5]], velocity: [3.0, -3.0, 3.0], obstacle: None,
+                near: |p, h| p[0] > 2.0 - 2.0 * h && p[2] > 2.0 - 2.0 * h && p[1] < 2.0 * h },
+            WallCase { name: "body_flush_wall", water: [[-1.0, 0.0, -2.0], [0.0, 1.0, 2.0]], velocity: [3.0, 0.0, 0.0],
+                obstacle: Some([[1.7, 0.58, 0.0], [0.6, 1.16, 0.85]]), near: |p, h| p[0] > 1.4 - h && p[2].abs() < 0.425 + h },
+            // The flat wall's impact with a tank-spanning body as the wall,
+            // to tell a domain-wall difference from a general one.
+            WallCase { name: "body_slab_wall", water: [[-1.0, 0.0, -2.0], [0.0, 1.0, 2.0]], velocity: [3.0, 0.0, 0.0],
+                obstacle: Some([[1.875, 2.0, 0.0], [0.75, 4.2, 4.2]]), near: |p, h| p[0] > 1.5 - h },
+            WallCase { name: "separation", water: [[1.0, 0.0, -2.0], [2.0, 2.0, 2.0]], velocity: [-2.0, 0.0, 0.0], obstacle: None,
+                near: |p, h| p[0] > 2.0 - h },
+        ];
+        let scene = WaterScene::race_dam_break(16);
+        let h = scene.cell_size() as f32;
+        let layout = scene.layout();
+        let offset = layout.min.map(|v| v - 1.5 * h);
+        let local = |p: [f32; 3]| -> [f32; 3] { std::array::from_fn(|a| p[a] - offset[a]) };
+        // [n, mean x, mean y, mean z, mean vx, mean vy, mean vz, rms speed,
+        //  near count, near run-up y max, y99, deepest wall gap / h,
+        //  deepest body depth / h]
+        let measure = |case: &WallCase, particles: &[FluidParticle]| -> [f64; 13] {
+            let live: Vec<_> = particles.iter().filter(|p| p.position_radius[3] > 0.0).collect();
+            assert!(!live.is_empty());
+            assert!(live.iter().all(|p| p.position_radius.iter().chain(&p.velocity).all(|v| v.is_finite())), "{}: finite", case.name);
+            let n = live.len() as f64;
+            let mean = |f: &dyn Fn(&FluidParticle) -> f32| live.iter().map(|p| f64::from(f(p))).sum::<f64>() / n;
+            let near: Vec<_> = live.iter().filter(|p| (case.near)([p.position_radius[0], p.position_radius[1], p.position_radius[2]], h)).collect();
+            let mut ys: Vec<f64> = live.iter().map(|p| f64::from(p.position_radius[1])).collect();
+            ys.sort_by(f64::total_cmp);
+            let gap = live.iter().map(|p| {
+                let q = p.position_radius;
+                (wall - q[0].abs()).min(wall - q[2].abs()).min(q[1]).min(2.0 * wall - q[1])
+            }).fold(f32::INFINITY, f32::min);
+            let depth = case.obstacle.map_or(0.0, |[c, s]| live.iter().map(|p| {
+                let q = p.position_radius;
+                (0..3).map(|a| 0.5 * s[a] - (f64::from(q[a]) - c[a]).abs()).fold(f64::INFINITY, f64::min)
+            }).fold(f64::NEG_INFINITY, f64::max));
+            [
+                n, mean(&|p| p.position_radius[0]), mean(&|p| p.position_radius[1]), mean(&|p| p.position_radius[2]),
+                mean(&|p| p.velocity[0]), mean(&|p| p.velocity[1]), mean(&|p| p.velocity[2]),
+                mean(&|p| p.velocity.iter().map(|v| v * v).sum::<f32>()).sqrt(),
+                near.len() as f64, near.iter().map(|p| f64::from(p.position_radius[1])).fold(0.0, f64::max),
+                ys[ys.len() * 99 / 100], f64::from(gap / h), depth / f64::from(h),
+            ]
+        };
+        let started = std::time::Instant::now();
+        println!("metrics: n, mean xyz (m), mean v xyz (m/s), rms speed, near count, near run-up y max, y99, min wall gap/h, deepest body depth/h");
+        for case in &cases {
+            let mut native = FluidWorld::new_seeded(Config {
+                cells: layout.cells.map(|n| n + 3), cell_size: layout.cell_size, surface_subdivisions: 0, apic: false,
+            }, 0).expect("native world");
+            native.set_surface_reconstruction_enabled(false).expect("disable meshing");
+            native.set_gravity([0.0, -9.81, 0.0]).expect("gravity");
+            native.add_fluid_box(Bounds { min: local(case.water[0]), max: local(case.water[1]) }, case.velocity).expect("water");
+            if let Some([c, s]) = case.obstacle {
+                let bounds = Bounds {
+                    min: local(std::array::from_fn(|a| (c[a] - 0.5 * s[a]) as f32)),
+                    max: local(std::array::from_fn(|a| (c[a] + 0.5 * s[a]) as f32)),
+                };
+                native.set_obstacle(bounds, bounds, bounds).expect("obstacle");
+            }
+            native.step(Seconds(1.0 / 60.0)).expect("insert native seed");
+            let seed = capture(&mut native, offset);
+            assert!(seed.len() <= scene.particles() as usize, "{}: seed fits GPU capacity", case.name);
+            let mut reference = Vec::new();
+            for frame in 1..=60 {
+                let stats = native.step(Seconds(1.0 / 60.0)).expect("native step");
+                assert!(!stats.numerical_recovery, "{}: native recovery", case.name);
+                if frame % 10 == 0 {
+                    let m = measure(case, &capture(&mut native, offset));
+                    println!("{} native frame {frame} substeps {}: {m:.3?}", case.name, stats.substeps);
+                    reference.push(m);
+                }
+            }
+            let gpu_scene = if case.obstacle.is_some() { scene.with_obstacle() } else { scene };
+            let mut run = match case.obstacle {
+                Some([c, s]) => Run::posed(gpu_scene, &[
+                    ("obstacle_transform", "pos_x", c[0]), ("obstacle_transform", "pos_y", c[1]), ("obstacle_transform", "pos_z", c[2]),
+                    ("obstacle_transform", "scale_x", s[0]), ("obstacle_transform", "scale_y", s[1]), ("obstacle_transform", "scale_z", s[2]),
+                ]),
+                None => Run::new(gpu_scene),
+            };
+            let mut common = vec![FluidParticle { position_radius: [0.0; 4], velocity: [0.0; 3], id: 0 }; gpu_scene.particles() as usize];
+            common[..seed.len()].copy_from_slice(&seed);
+            let state = output_of(&run.plan, node_named(&run.graph, "state"), "out");
+            let buffer = run.exec.host_array_buffer(&run.graph, &run.plan, state).expect("dedicated particle state");
+            assert!(buffer.size as usize >= std::mem::size_of_val(common.as_slice()));
+            // SAFETY: the fill frame completed; no GPU command is outstanding.
+            unsafe { buffer.write(0, bytemuck::cast_slice(&common)); }
+            let (mut capped, mut refused, mut unconverged) = (0u64, 0u64, 0u64);
+            for frame in 1..=60 {
+                assert!(started.elapsed().as_secs() < 240, "bounded wall reference exceeded 240s");
+                run.frame();
+                let stats = run.liquid_stats();
+                assert_eq!(stats.nonfinite, 0);
+                capped += u64::from(stats.speed_capped);
+                refused += u64::from(stats.push_refused);
+                unconverged += u64::from(stats.unconverged);
+                if frame % 10 == 0 {
+                    let m = measure(case, &run.particles());
+                    let r = reference[frame / 10 - 1];
+                    let delta: [f64; 13] = std::array::from_fn(|a| m[a] - r[a]);
+                    println!("{} gpu    frame {frame}: {m:.3?}", case.name);
+                    println!("{} delta  frame {frame}: {delta:.3?}", case.name);
+                    assert!(m[11] > -0.01, "{}: GPU water left the tank by {:.3}h", case.name, -m[11]);
+                }
+            }
+            println!("{}: gpu capped={capped} refused={refused} unconverged={unconverged}", case.name);
+        }
+    }
 }
 
 /// The measurement must follow the rendered topology and smoothing, in both
