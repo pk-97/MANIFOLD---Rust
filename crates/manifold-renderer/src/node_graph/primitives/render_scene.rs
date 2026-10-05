@@ -1836,7 +1836,8 @@ struct ObjectDraw<'ctx> {
     indices: Option<&'ctx manifold_gpu::GpuBuffer>,
     indices_content: Option<ContentVersion>,
     /// This frame's GPU-written draw arguments (buffer, byte offset) for an
-    /// object with a live extent: raster passes draw indirectly with them.
+    /// object with a live extent or trimmed instances: raster passes draw
+    /// indirectly with them.
     live_args: Option<(manifold_gpu::GpuBuffer, u64)>,
     /// Logical content stamps remain stable when identical data moves storage.
     vertices_content: Option<ContentVersion>,
@@ -1905,8 +1906,8 @@ impl ObjectDraw<'_> {
         self.alpha_mode == AlphaMode::Blend || self.is_transmissive
     }
 
-    /// `draw`, switched to this object's GPU-written arguments when its mesh
-    /// has a live extent.
+    /// `draw`, switched to this object's GPU-written arguments when it has
+    /// them.
     fn live<'a>(&'a self, draw: manifold_gpu::DepthMsaaDraw<'a>) -> manifold_gpu::DepthMsaaDraw<'a> {
         let draw = match self.indices { Some(indices) => draw.indexed(indices), None => draw };
         match &self.live_args {
@@ -1915,8 +1916,8 @@ impl ObjectDraw<'_> {
         }
     }
 
-    /// Triangle-list draw count: GPU-written with a live extent, else the
-    /// whole buffer.
+    /// Triangle-list draw count: GPU-written when the object has arguments,
+    /// else the whole buffer.
     fn draw_count(&self) -> manifold_gpu::DrawCount<'_> {
         match (self.indices, &self.live_args) {
             (Some(indices), Some((args, offset))) => manifold_gpu::DrawCount::IndexedIndirect { indices, args, offset: *offset },
@@ -2570,18 +2571,34 @@ impl RenderScene {
             });
         }
 
-        let live = draws.iter().filter(|d| d.live_extent.is_some()).count();
+        // Points mode draws every vertex, which the triangle-count
+        // arguments do not carry, so its instances stay direct.
+        let trimmed = |d: &ObjectDraw| d.instances.is_some() && d.instance_count > 0 && !d.points;
+        let live = draws.iter().filter(|d| d.live_extent.is_some() || trimmed(d)).count();
         if live > 0 {
             let gpu = ctx.gpu_encoder();
             let args = self.live_draw_args.prepare(gpu.device, live);
-            for (slot, draw) in draws.iter_mut().filter(|d| d.live_extent.is_some()).enumerate() {
-                let extent = draw.live_extent.as_ref().expect("filtered on live_extent");
-                let capacity = draw.indices.map_or_else(
-                    || whole_triangle_vertices(draw.vertices),
-                    |indices| (indices.size / 4 / 3 * 3).min(u64::from(u32::MAX)) as u32,
-                );
-                self.live_draw_args.write(gpu.native_enc, slot, extent, capacity, draw.instance_count);
+            for (slot, draw) in draws.iter_mut().filter(|d| d.live_extent.is_some() || trimmed(d)).enumerate() {
+                let instances = if trimmed(draw) { 0 } else { draw.instance_count };
+                match &draw.live_extent {
+                    Some(extent) => {
+                        let capacity = draw.indices.map_or_else(
+                            || whole_triangle_vertices(draw.vertices),
+                            |indices| (indices.size / 4 / 3 * 3).min(u64::from(u32::MAX)) as u32,
+                        );
+                        self.live_draw_args.write(gpu.native_enc, slot, extent, capacity, instances);
+                    }
+                    None => self.live_draw_args.write_fixed(gpu.native_enc, slot, draw.vertex_count),
+                }
                 draw.live_args = Some((args.clone(), slot as u64 * live_draw_args::ARGS_BYTES));
+            }
+            if draws.iter().any(trimmed) {
+                gpu.native_enc.compute_memory_barrier_buffers();
+                for (slot, draw) in draws.iter().filter(|d| d.live_extent.is_some() || trimmed(d)).enumerate() {
+                    if let (true, Some(instances)) = (trimmed(draw), draw.instances) {
+                        self.live_draw_args.trim(gpu.native_enc, slot, instances, draw.instance_count);
+                    }
+                }
             }
         }
         Some((draws, has_transmission))

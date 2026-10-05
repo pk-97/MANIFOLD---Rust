@@ -1116,6 +1116,12 @@ phase** (below).
   load 18–32, on a landing seat; steady-state max 8 ms). At the defaults: max 6.75 ms,
   mean 1.04 ms.
 - **Deletion gate.** `rg -n 'fn mesh_vertex_count' crates/manifold-renderer/src/node_graph/primitives/render_scene.rs` and `rg -U 'pub struct DepthMsaaDraw[^}]*vertex_count' crates/manifold-gpu/src/metal/encoder.rs` both find nothing.
+- **Live instances.** An instanced raster draw (outside Points mode) also draws
+  indirectly: its instance word is one past the last instance that is not all
+  zero (`shaders/live_instances.wgsl`), so a compacted array's tail of holes is
+  never drawn. Proof `trimmed_instances_end_after_the_last_non_hole`. Dam Break
+  64 at 1080p: whitewater peaks near 7,000 of 100,000 slots; frame GPU p50
+  38.7 → 29.6 ms with the same output hash (2026-10-05).
 
 ### Indexed surface topology (BUG-llkb)
 
