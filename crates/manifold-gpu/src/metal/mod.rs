@@ -43,7 +43,7 @@ mod replay_tests;
 
 // Re-export all public types so external code paths remain identical.
 pub use device::GpuDevice;
-pub use replay::GpuReplayCache;
+pub use replay::{GatedRecorder, GpuReplayCache, TemplateRanges};
 pub use encoder::{AuxColorAttachment, DepthMsaaDraw, DepthMsaaPassDesc, DrawCount, GpuEncoder};
 pub use fft::{FftKind, GpuFft};
 pub use frame_fence::FrameFence;

@@ -110,6 +110,10 @@ struct StoredSegment {
     commands: usize,
     ranges: Retained<ProtocolObject<dyn MTLBuffer>>,
     offset: u64,
+    /// Executes per stretch: 1 for a plain segment, a template's copies.
+    copies: usize,
+    /// Bytes between consecutive copies' range entries.
+    stride_bytes: u64,
 }
 
 #[derive(Default)]
@@ -265,7 +269,14 @@ impl ReplayStore {
                 unsafe { icb.indirectComputeCommandAtIndex(i) }.reset();
             }
             stats.store_allocations += 1;
-            self.segments.push(StoredSegment { icb, commands: gate.commands as usize, ranges: ranges.clone(), offset: gate.offset });
+            self.segments.push(StoredSegment {
+                icb,
+                commands: gate.commands as usize,
+                ranges: ranges.clone(),
+                offset: gate.offset,
+                copies: gate.copies.max(1) as usize,
+                stride_bytes: u64::from(gate.stride) * crate::replay::GATED_RANGE_BYTES,
+            });
         }
         let segment = self.segments.len().checked_sub(1)?;
         (self.segments[segment].commands == gate.commands as usize).then_some(Place::Segment { segment, slot })
@@ -387,9 +398,19 @@ impl ReplayStore {
                         while end < range.end && matches!(self.commands[end].place, Place::Segment { segment: s, .. } if s == segment) {
                             end += 1;
                         }
+                        // A template runs once per copy, each by its own range
+                        // entry, a buffer barrier between copies as between
+                        // any two executes.
                         let stored = &self.segments[segment];
-                        enc.executeCommandsInBuffer_indirectBuffer_indirectBufferOffset(&stored.icb, &stored.ranges, stored.offset as usize);
-                        segments += 1;
+                        for copy in 0..stored.copies {
+                            if copy > 0 {
+                                enc.memoryBarrierWithScope(MTLBarrierScope::Buffers);
+                                executes += 1;
+                            }
+                            let offset = stored.offset + copy as u64 * stored.stride_bytes;
+                            enc.executeCommandsInBuffer_indirectBuffer_indirectBufferOffset(&stored.icb, &stored.ranges, offset as usize);
+                        }
+                        segments += stored.copies as u64;
                         start = end;
                     }
                 }
@@ -460,6 +481,8 @@ pub(crate) struct ReplaySpan {
     segment: Option<OpenSegment>,
     /// The device, for a segment buffer recorded mid-span.
     device: Retained<ProtocolObject<dyn MTLDevice>>,
+    /// The gated template being walked (`GpuEncoder::repeat_gated_template`).
+    template: Option<Template>,
 }
 
 struct OpenSegment {
@@ -471,6 +494,9 @@ struct OpenSegment {
     /// A flush ran inside this segment: the rest of it encodes directly,
     /// since the segment's buffer already executed as a whole.
     broken: bool,
+    /// A template's copies and range stride in entries; 0 for a plain segment.
+    copies: u32,
+    stride: u32,
 }
 
 /// The word copy a replaying span turns buffer copies into (D9): one thread
@@ -510,6 +536,7 @@ impl GpuEncoder {
             copy_kernel,
             segment: None,
             device: device.raw_device().retain(),
+            template: None,
         });
     }
 
@@ -533,6 +560,8 @@ impl GpuEncoder {
                 commands,
                 taken: 0,
                 broken: false,
+                copies: 0,
+                stride: 0,
             });
         }
         self.replay = Some(span);
@@ -569,6 +598,8 @@ impl GpuEncoder {
                         offset: segment.offset,
                         commands: segment.commands,
                         slot: segment.taken,
+                        copies: segment.copies,
+                        stride: segment.stride,
                     };
                     self.replay_dispatch_in(&mut span, pipeline, bindings, Some(groups), Some(gate), label)
                 }
@@ -659,7 +690,10 @@ impl GpuEncoder {
 
     /// Execute the pending stretch, if any.
     pub(super) fn flush_replay(&mut self) {
-        if self.replay.as_ref().is_none_or(|span| span.cursor == span.pending_start) {
+        // An open template holds provisional state even with nothing pending
+        // (a segment buffer made before its bytes failed): flush_span rolls
+        // it back.
+        if self.replay.as_ref().is_none_or(|span| span.cursor == span.pending_start && span.template.is_none()) {
             return;
         }
         let mut span = self.replay.take().expect("checked above");
@@ -668,6 +702,11 @@ impl GpuEncoder {
     }
 
     fn flush_span(&mut self, span: &mut ReplaySpan) {
+        // Nothing of an open template may execute: a flush reaching one
+        // (no template body can cause it) rolls the walk back first.
+        if span.template.as_ref().is_some_and(|t| t.failure.is_none()) {
+            Self::fail_template(span, TemplateFailure::Shape);
+        }
         if span.cursor == span.pending_start {
             return;
         }
@@ -804,6 +843,9 @@ impl GpuEncoder {
             if span.cursor < recording.len() {
                 if recording.matches(span.cursor, &key) {
                     recording.refresh_bytes(span.cursor, &key, |slot, data| store.write_bytes(slot, data));
+                    if let Some(template) = span.template.as_mut() {
+                        template.walk_bytes += key.arena_bytes();
+                    }
                     span.cursor += 1;
                     span.cache.stats.replayed += 1;
                     return true;
@@ -833,6 +875,9 @@ impl GpuEncoder {
             }
         });
         if fits {
+            if let Some(template) = span.template.as_mut() {
+                template.walk_bytes += key.arena_bytes();
+            }
             span.cursor += 1;
             span.cache.stats.recorded += 1;
             return true;
@@ -841,7 +886,242 @@ impl GpuEncoder {
         store.short_bytes += key.arena_bytes();
         span.mode = SpanMode::Full;
         span.cache.stats.direct += 1;
-        self.flush_span(span);
+        // Inside a template the walk is provisional: the template rolls back
+        // and runs directly, which flushes what came before it.
+        if span.template.is_none() {
+            self.flush_span(span);
+        }
         false
+    }
+}
+
+/// Where a gated template's copies run: copy c executes by range entry
+/// `first + c * stride` of `ranges` (`GATED_RANGE_BYTES` per entry).
+#[derive(Clone, Copy)]
+pub struct TemplateRanges<'a> {
+    pub ranges: &'a GpuBuffer,
+    pub first: u32,
+    pub stride: u32,
+}
+
+/// What a template body can do: issue gated dispatches, nothing else. A
+/// body that could encode a plain dispatch, a copy or a texture pass could
+/// flush the provisional walk, so none of those is expressible here.
+pub struct GatedRecorder<'e> {
+    enc: &'e mut GpuEncoder,
+    /// Walking the template once (true) or running a copy directly.
+    walk: bool,
+}
+
+impl GatedRecorder<'_> {
+    /// One gated dispatch: `gate` holds its indirect group counts at
+    /// `gate_offset` (zeros when off), `groups` the counts it has when on.
+    pub fn dispatch_gated(
+        &mut self,
+        pipeline: &GpuComputePipeline,
+        bindings: &[GpuBinding],
+        groups: [u32; 3],
+        gate: &GpuBuffer,
+        gate_offset: u64,
+        label: &str,
+    ) {
+        if self.walk {
+            self.enc.template_dispatch(pipeline, bindings, groups, label);
+        } else {
+            self.enc.dispatch_compute_gated(pipeline, bindings, groups, gate, gate_offset, label);
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum TemplateFailure {
+    /// No room in the store: the rest of the walk only measures, so the
+    /// next visit's store fits the whole template.
+    Capacity,
+    /// A count mismatch, an unrecordable dispatch or a forced flush.
+    Shape,
+}
+
+/// The checkpoint a template rolls back to: everything it walked is
+/// provisional until the walk ends whole.
+struct Template {
+    cursor: usize,
+    /// The arena position the template's first command starts at.
+    arena: (u32, u32),
+    /// `replayed`, `recorded`, `direct` before the walk.
+    stats: (u64, u64, u64),
+    /// Arena bytes the walk's taken dispatches need.
+    walk_bytes: usize,
+    failure: Option<TemplateFailure>,
+}
+
+impl GpuEncoder {
+    /// Run `body` as one gated round the GPU executes `copies` times, copy c
+    /// by range entry `at.first + c * at.stride` (written on the GPU as for
+    /// `begin_gated_segment`). Inside a replaying span the body is walked
+    /// once and validated or recorded as a template of exactly `commands`
+    /// gated dispatches, all of it provisional: if it cannot be taken whole
+    /// (a count mismatch, an unrecordable dispatch, no room) every provisional
+    /// allocation is rolled back, nothing of the walk ever executes, and
+    /// `body` runs `copies` times directly, each dispatch an indirect dispatch
+    /// on its gate. `Err` from the walk rolls back and is returned. The body
+    /// must issue the same dispatches every time it runs.
+    pub fn repeat_gated_template(
+        &mut self,
+        at: TemplateRanges<'_>,
+        commands: u32,
+        copies: u32,
+        mut body: impl FnMut(&mut GatedRecorder<'_>) -> Result<(), String>,
+    ) -> Result<(), String> {
+        let last = copies.checked_sub(1).and_then(|c| c.checked_mul(at.stride)).and_then(|c| c.checked_add(at.first));
+        let end = last.and_then(|l| (u64::from(l) + 1).checked_mul(crate::replay::GATED_RANGE_BYTES));
+        if commands == 0 || end.is_none_or(|end| end > at.ranges.size) {
+            return Err(format!(
+                "gated template: {commands} commands, {copies} copies from entry {} by {} do not fit a {}-byte range buffer",
+                at.first, at.stride, at.ranges.size
+            ));
+        }
+        let mut walked = false;
+        if let Some(mut span) = self.replay.take() {
+            debug_assert!(span.template.is_none(), "templates never nest");
+            self.close_segment(&mut span);
+            match span.entry {
+                None => span.cache.stats.templates_direct += 1,
+                Some(entry) => {
+                    let store = &span.cache.entries[entry].store;
+                    let arena = store.commands.get(span.cursor).map_or(store.arena_cursor, |c| c.arena_before);
+                    let stats = span.cache.stats;
+                    span.template = Some(Template {
+                        cursor: span.cursor,
+                        arena,
+                        stats: (stats.replayed, stats.recorded, stats.direct),
+                        walk_bytes: 0,
+                        failure: (span.mode == SpanMode::Full).then_some(TemplateFailure::Capacity),
+                    });
+                    span.segment = Some(OpenSegment {
+                        ranges: at.ranges.raw.clone(),
+                        offset: u64::from(at.first) * crate::replay::GATED_RANGE_BYTES,
+                        commands,
+                        taken: 0,
+                        broken: false,
+                        copies,
+                        stride: at.stride,
+                    });
+                    walked = true;
+                }
+            }
+            self.replay = Some(span);
+        }
+        if walked {
+            let result = body(&mut GatedRecorder { enc: self, walk: true });
+            let mut span = self.replay.take().expect("the walk keeps its span");
+            let taken = span.segment.as_ref().map_or(0, |s| s.taken);
+            if result.is_err() || taken != commands {
+                Self::fail_template(&mut span, TemplateFailure::Shape);
+            }
+            let template = span.template.take().expect("the walk keeps its template");
+            if template.failure.is_none() {
+                self.close_segment(&mut span);
+                let stats = &mut span.cache.stats;
+                if stats.recorded > template.stats.1 {
+                    stats.templates_recorded += 1;
+                } else {
+                    stats.templates_replayed += 1;
+                }
+                self.replay = Some(span);
+                return Ok(());
+            }
+            span.segment = None;
+            let stats = &mut span.cache.stats;
+            (stats.replayed, stats.recorded, stats.direct) = template.stats;
+            if result.is_ok() {
+                stats.templates_direct += 1;
+            }
+            self.replay = Some(span);
+            result?;
+        }
+        for _ in 0..copies {
+            body(&mut GatedRecorder { enc: self, walk: false })?;
+        }
+        Ok(())
+    }
+
+    /// One dispatch of a template walk: taken into the open segment, or,
+    /// once the template failed, measured (no room) or dropped.
+    fn template_dispatch(&mut self, pipeline: &GpuComputePipeline, bindings: &[GpuBinding], groups: [u32; 3], label: &str) {
+        let mut span = self.replay.take().expect("a template walks inside its span");
+        match span.template.as_ref().and_then(|t| t.failure) {
+            Some(TemplateFailure::Shape) => {}
+            // The span is full: this only adds the dispatch to the shortage.
+            Some(TemplateFailure::Capacity) => {
+                self.replay_dispatch_in(&mut span, pipeline, bindings, Some(groups), None, label);
+            }
+            None => {
+                let segment = span.segment.as_ref().expect("a template walks inside its segment");
+                if segment.taken >= segment.commands {
+                    Self::fail_template(&mut span, TemplateFailure::Shape);
+                } else {
+                    let gate = GateKey {
+                        ranges: identity(&*segment.ranges),
+                        offset: segment.offset,
+                        commands: segment.commands,
+                        slot: segment.taken,
+                        copies: segment.copies,
+                        stride: segment.stride,
+                    };
+                    if self.replay_dispatch_in(&mut span, pipeline, bindings, Some(groups), Some(gate), label) {
+                        span.segment.as_mut().expect("checked above").taken += 1;
+                    } else {
+                        let why = if span.mode == SpanMode::Full { TemplateFailure::Capacity } else { TemplateFailure::Shape };
+                        Self::fail_template(&mut span, why);
+                    }
+                }
+            }
+        }
+        self.replay = Some(span);
+    }
+
+    /// Roll the open template back to its checkpoint: the recording and the
+    /// store cut there, every segment buffer no kept command owns dropped
+    /// (one made for a slot 0 whose bytes then didn't fit included), the
+    /// arena cursor restored, and the span left recording at the checkpoint,
+    /// or full when it ran out of room. A capacity failure adds the walk so
+    /// far to the store's shortage; the rest of the walk adds the remainder.
+    fn fail_template(span: &mut ReplaySpan, why: TemplateFailure) {
+        let Some(template) = span.template.as_mut().filter(|t| t.failure.is_none()) else {
+            return;
+        };
+        template.failure = Some(why);
+        let entry = span.entry.expect("a template belongs to an entry");
+        debug_assert!(span.pending_start <= template.cursor, "nothing of a template ever executes");
+        let taken = span.segment.as_ref().map_or(0, |s| s.taken) as usize;
+        let ReplayEntry { recording, store } = &mut span.cache.entries[entry];
+        if why == TemplateFailure::Capacity {
+            store.short_commands += taken;
+            store.short_bytes += template.walk_bytes;
+        }
+        recording.truncate(template.cursor);
+        store.truncate(template.cursor);
+        let owned = store
+            .commands
+            .iter()
+            .rev()
+            .find_map(|c| match c.place {
+                Place::Segment { segment, .. } => Some(segment + 1),
+                Place::Chunk(_) => None,
+            })
+            .unwrap_or(0);
+        store.segments.truncate(owned);
+        store.arena_cursor = template.arena;
+        span.cursor = template.cursor;
+        span.mode = if why == TemplateFailure::Capacity { SpanMode::Full } else { SpanMode::Record };
+    }
+}
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+impl GpuReplayCache {
+    /// Gated segment buffers the cache's entries hold.
+    pub(super) fn segment_buffers(&self) -> usize {
+        self.entries.iter().map(|e| e.store.segments.len()).sum()
     }
 }
