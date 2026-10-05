@@ -2150,8 +2150,8 @@ fn liquid_face_grid_published() {
 /// gain ρ·h·f·A_wet/m sits far past 2, where an explicit friction reaction on
 /// the body diverged; the pressure, implicit in the solve, is its only
 /// reaction, as in the FLIP Fluids engine (`rigidfluidcoupling.cpp`). The
-/// bound is twice the step's default Top Speed (20 m/s), the fastest water it
-/// is built for: a body the water carries never outruns the water by that much.
+/// 40 m/s bound retains the fixture's existing physical runaway check;
+/// direct native RK3 does not impose an authored speed limiter.
 #[test]
 fn gpu_flip_light_body_stays_bounded_in_the_dam_break() {
     const FRAMES: u32 = 60;

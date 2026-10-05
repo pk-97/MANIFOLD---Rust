@@ -302,6 +302,11 @@ impl PresetRuntime {
             ));
         }
 
+        // Retired params leave before cards and bindings are cloned.
+        if crate::node_graph::has_retired_params(&doc) {
+            crate::node_graph::retire_params(&mut doc);
+        }
+
         // Load-time heal: a Float/IntRound-convert binding into a Bool-typed
         // target is upgraded to BoolThreshold. The v1130 cinematic-tail
         // migration stamped the motion_blur/bokeh `enabled` bindings without

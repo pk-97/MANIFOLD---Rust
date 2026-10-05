@@ -227,6 +227,25 @@ pub fn migrate_type_id(id: &str) -> &str {
         .unwrap_or(id)
 }
 
+/// `(type_id, param)` pairs a current node no longer declares. A saved
+/// document still carrying one loads with that value, its wires, exposure and
+/// cards removed; an unlisted unknown param still fails the load, so a typo
+/// never disappears silently.
+pub static RETIRED_PARAMS: &[(&str, &str)] = &[
+    // GPU FLIP matches the native engine's RK3, which never caps a stage.
+    ("node.gpu_flip_step", "top_speed"),
+];
+
+/// Whether any param of `type_id` is listed in [`RETIRED_PARAMS`].
+pub fn retires_params(type_id: &str) -> bool {
+    RETIRED_PARAMS.iter().any(|(t, _)| *t == type_id)
+}
+
+/// The retired params of `type_id`.
+pub fn retired_params(type_id: &str) -> impl Iterator<Item = &'static str> + '_ {
+    RETIRED_PARAMS.iter().filter(move |(t, _)| *t == type_id).map(|(_, p)| *p)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

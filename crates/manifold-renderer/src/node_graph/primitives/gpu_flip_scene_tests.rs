@@ -1321,11 +1321,6 @@ mod native_reference {
     #[cfg(feature = "water-race-probes")]
     #[test]
     fn gpu_flip_native_dam_break_reference() {
-        use super::super::gpu_flip_step::set_separate_off;
-        struct SeparationReset;
-        impl Drop for SeparationReset {
-            fn drop(&mut self) { set_separate_off(false); }
-        }
         fn median(mut values: Vec<f64>) -> f64 {
             values.sort_by(f64::total_cmp);
             values[values.len() / 2]
@@ -1362,8 +1357,7 @@ mod native_reference {
             }
         }
         println!("native solver wall median {:.3}ms", median(wall_ms));
-        for (density, separation) in [(false, false), (true, false), (false, true), (true, true)] {
-            // Run owns the test device lock before touching the global lever.
+        for density in [false, true] {
             let mut run = run_with_retired_speed(WaterScene { volume_projection: density, ..scene }, true);
             // The seed-only frame has zero velocity/history, no accepted
             // steps and no births. Replace its persistent particle state,
@@ -1378,8 +1372,6 @@ mod native_reference {
             assert!(buffer.size as usize >= std::mem::size_of_val(common.as_slice()));
             unsafe { buffer.write(0, bytemuck::cast_slice(&common)); }
             assert_eq!(bytemuck::cast_slice::<_, u8>(&run.particles()), bytemuck::cast_slice::<_, u8>(&common));
-            let _reset = SeparationReset;
-            set_separate_off(!separation);
             let (mut gpu_ms, mut encode_ms) = (Vec::new(), Vec::new());
             let (mut capped, mut refused, mut unconverged) = (0u64, 0u64, 0u64);
             for frame in 1..=90 {
@@ -1403,10 +1395,10 @@ mod native_reference {
                     let particles = run.particles();
                     let measure = measures(&particles);
                     let delta: [f64; 5] = std::array::from_fn(|a| measure[a] - reference[frame / 30 - 1][a]);
-                    println!("gpu density={density} separation={separation} frame {frame}: n={} metrics={measure:?} delta={delta:?}", stats.live);
+                    println!("gpu density={density} frame {frame}: n={} metrics={measure:?} delta={delta:?}", stats.live);
                 }
             }
-            println!("gpu density={density} separation={separation}: gpu median {:.3}ms encode median {:.3}ms capped={capped} refused={refused} unconverged={unconverged}", median(gpu_ms), median(encode_ms));
+            println!("gpu density={density}: gpu median {:.3}ms encode median {:.3}ms capped={capped} refused={refused} unconverged={unconverged}", median(gpu_ms), median(encode_ms));
         }
     }
 }

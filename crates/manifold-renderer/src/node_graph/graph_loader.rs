@@ -820,6 +820,124 @@ fn wire_blob_bounds(def: &mut EffectGraphDef) -> bool {
     changed
 }
 
+/// Whether any node, at any group depth or in any scene modifier, has a type
+/// listed in [`manifold_core::type_id_migration::RETIRED_PARAMS`]. Lets the
+/// common load borrow the document instead of cloning it.
+pub(crate) fn has_retired_params(def: &EffectGraphDef) -> bool {
+    fn any(nodes: &[EffectGraphNode]) -> bool {
+        nodes.iter().any(|node| manifold_core::type_id_migration::retires_params(&node.type_id)
+            || node.group.as_ref().is_some_and(|group| any(&group.nodes)))
+    }
+    any(&def.nodes) || def.scene_modifiers.iter().any(|modifier| has_retired_params(&modifier.graph))
+}
+
+/// Strip every [`manifold_core::type_id_migration::RETIRED_PARAMS`] entry
+/// from a saved graph: the value, exposure, wires into the port, group
+/// interface params and inputs that only fed it, and cards that only drove
+/// it. Runs before group flattening and before preset metadata is captured.
+pub(crate) fn retire_params(def: &mut EffectGraphDef) -> bool {
+    use manifold_core::effect_graph_def::BindingTarget;
+
+    fn declared_ids(nodes: &[EffectGraphNode], ids: &mut AHashSet<String>) {
+        for node in nodes {
+            if !node.node_id.is_empty() { ids.insert(node.node_id.to_string()); }
+            if let Some(group) = &node.group { declared_ids(&group.nodes, ids); }
+        }
+    }
+
+    // Local numeric endpoints drive wires; scoped handles drive group aliases;
+    // stable identities drive authored cards. Keep these address spaces separate.
+    fn scope(
+        nodes: &mut [EffectGraphNode], wires: &mut Vec<EffectGraphWire>,
+        prefix: &str, declared: &AHashSet<String>, identities: &mut AHashSet<(String, String)>,
+    ) -> (AHashSet<(String, String)>, AHashSet<String>, bool) {
+        let mut handles = AHashSet::new();
+        let mut endpoints = AHashSet::new();
+        let mut changed = false;
+        for node in nodes.iter_mut() {
+            let handle = node.handle.as_deref().unwrap_or_default();
+            let full_handle = format!("{prefix}{handle}");
+            let mut retired: AHashSet<String> = manifold_core::type_id_migration::retired_params(&node.type_id)
+                .map(str::to_string).collect();
+            if let Some(group) = &mut node.group {
+                let (inner, inputs, inner_changed) = scope(
+                    &mut group.nodes, &mut group.wires, &format!("{full_handle}/"), declared, identities,
+                );
+                changed |= inner_changed;
+                group.interface.params.retain(|param| {
+                    let dead = inner.contains(&(param.target_handle.clone(), param.target_param.clone()));
+                    if dead { retired.insert(param.name.clone()); changed = true; }
+                    !dead
+                });
+                group.interface.inputs.retain(|port| {
+                    if inputs.contains(&port.name) { retired.insert(port.name.clone()); changed = true; false } else { true }
+                });
+                for (inner_handle, param) in inner {
+                    handles.insert((format!("{handle}/{inner_handle}"), param));
+                }
+            }
+            for param in retired {
+                changed |= node.params.remove(&param).is_some();
+                changed |= node.exposed_params.remove(&param);
+                endpoints.insert((node.id, param.clone()));
+                if !handle.is_empty() {
+                    handles.insert((handle.to_string(), param.clone()));
+                    // A legacy handleNode has this identity, unless an explicit
+                    // stable identity belongs to another node in the same graph.
+                    if !declared.contains(&full_handle) || node.node_id.as_str() == full_handle {
+                        identities.insert((full_handle.clone(), param.clone()));
+                    }
+                }
+                if !node.node_id.as_str().is_empty() {
+                    identities.insert((node.node_id.to_string(), param));
+                }
+            }
+        }
+        let boundary_inputs: AHashSet<_> = nodes.iter().filter(|node| node.type_id == GROUP_INPUT_TYPE_ID)
+            .map(|node| node.id).collect();
+        let mut inputs = AHashSet::new();
+        wires.retain(|wire| {
+            let dead = endpoints.contains(&(wire.to_node, wire.to_port.clone()));
+            if dead && boundary_inputs.contains(&wire.from_node) { inputs.insert(wire.from_port.clone()); }
+            changed |= dead;
+            !dead
+        });
+        // An interface input can fan out to a live target as well.
+        inputs.retain(|port| !wires.iter().any(|wire|
+            boundary_inputs.contains(&wire.from_node) && &wire.from_port == port));
+        changed |= !inputs.is_empty();
+        (handles, inputs, changed)
+    }
+
+    let mut declared = AHashSet::new();
+    declared_ids(&def.nodes, &mut declared);
+    let mut identities = AHashSet::new();
+    let (_, _, mut changed) = scope(&mut def.nodes, &mut def.wires, "", &declared, &mut identities);
+    if let Some(metadata) = &mut def.preset_metadata {
+        let mut retired_cards = AHashSet::new();
+        metadata.bindings.retain(|binding| {
+            let dead = matches!(&binding.target, BindingTarget::Node { node_id, param }
+                if identities.contains(&(node_id.to_string(), param.clone())));
+            if dead { retired_cards.insert(binding.id.clone()); }
+            !dead
+        });
+        changed |= !retired_cards.is_empty();
+        // Preserve a card with other live targets, including mixed fan-out.
+        retired_cards.retain(|id| !metadata.bindings.iter().any(|binding| &binding.id == id));
+        for id in &retired_cards {
+            log::warn!("retired param: card '{id}' removed, its only target no longer exists");
+        }
+        metadata.params.retain(|param| !retired_cards.contains(&param.id));
+        metadata.param_aliases.retain(|alias| !retired_cards.contains(&alias.old)
+            && alias.new.as_ref().is_none_or(|id| !retired_cards.contains(id)));
+        metadata.value_aliases.retain(|alias| !retired_cards.contains(&alias.param_id));
+    }
+    for modifier in &mut def.scene_modifiers {
+        changed |= retire_params(&mut modifier.graph);
+    }
+    changed
+}
+
 /// Returns the [`NodeInstantiation`] on success. On any error the
 /// graph's state is the union of every successful step before the
 /// failure — both callers handle this by either propagating
@@ -851,6 +969,16 @@ pub fn instantiate_def(
         manifold_core::phong_migration::migrate_phong_to_pbr(&mut owned);
         phong_migrated = owned;
         &phong_migrated
+    } else {
+        def
+    };
+
+    let retired;
+    let def = if has_retired_params(def) {
+        let mut owned = def.clone();
+        retire_params(&mut owned);
+        retired = owned;
+        &retired
     } else {
         def
     };
@@ -3048,6 +3176,146 @@ mod tests {
             .expect("old id present, migration must produce Some");
         assert_eq!(migrated.nodes[0].type_id, "node.draw_particles_camera");
         assert!(migrated.nodes[0].params.is_empty());
+    }
+
+    #[test]
+    fn retired_params_saved_nondefault_values_load() {
+        let registry = registry();
+        for &(type_id, param) in manifold_core::type_id_migration::RETIRED_PARAMS {
+            let declared = registry.construct(type_id).expect("retired params belong to a live node type");
+            assert!(declared.parameters().iter().all(|p| p.name != param), "{type_id}.{param} is still declared");
+            let def: EffectGraphDef = serde_json::from_value(serde_json::json!({
+                "version": 1, "nodes": [{"id": 1, "nodeId": "n", "typeId": type_id, "handle": "n",
+                    "params": {param: {"type": "Float", "value": 137.0}}}], "wires": []
+            })).unwrap();
+            assert!(has_retired_params(&def));
+            let mut graph = Graph::new();
+            instantiate_def(&mut graph, &def, &registry, HandleScope::Global,
+                BoundaryHandling::Standalone, &crate::node_graph::mesh_change::PreparedMeshRules::default())
+                .unwrap_or_else(|e| panic!("{type_id}.{param}: saved retired value must load: {e:?}"));
+            let node = graph.get_node(graph.node_id_by_handle("n").unwrap()).unwrap();
+            assert!(node.params.get(param).is_none(), "{type_id}.{param}");
+        }
+    }
+
+    #[test]
+    fn retired_params_preserve_stable_identity_that_matches_another_handle() {
+        let mut def: EffectGraphDef = serde_json::from_value(serde_json::json!({
+            "version": 1, "nodes": [
+                {"id": 1, "nodeId": "solver", "typeId": "node.gpu_flip_step", "handle": "step"},
+                {"id": 2, "nodeId": "step", "typeId": "node.scalar", "handle": "unrelated",
+                 "params": {"top_speed": {"type": "Float", "value": 23.0}}}
+            ], "wires": []
+        })).unwrap();
+        let mut metadata = minimal_preset_metadata();
+        metadata.bindings = serde_json::from_value(serde_json::json!([
+            {"id": "speed", "label": "Speed", "defaultValue": 23.0,
+             "target": {"kind": "node", "nodeId": "step", "param": "top_speed"}}
+        ])).unwrap();
+        def.preset_metadata = Some(metadata);
+        let original = def.clone();
+        assert!(!retire_params(&mut def));
+        assert_eq!(def, original, "the actual stable identity takes precedence over another node's handle");
+    }
+
+    #[test]
+    fn retired_params_isolate_modifier_node_identities() {
+        let mut def: EffectGraphDef = serde_json::from_value(serde_json::json!({
+            "version": 3,
+            "nodes": [{"id": 1, "nodeId": "step", "typeId": "node.scalar", "handle": "step",
+                "params": {"top_speed": {"type": "Float", "value": 23.0}}}], "wires": [],
+            "sceneModifiers": [{"id": "modifier", "scene": {"node": "scene"}, "targets": "allObjects",
+                "graph": {"version": 3, "nodes": [
+                    {"id": 1, "nodeId": "step", "typeId": "node.gpu_flip_step", "handle": "step",
+                     "params": {"top_speed": {"type": "Float", "value": 137.0}}}], "wires": []}}]
+        })).unwrap();
+        let binding = serde_json::from_value(serde_json::json!({
+            "id": "speed", "label": "Speed", "defaultValue": 23.0,
+            "target": {"kind": "node", "nodeId": "step", "param": "top_speed"}
+        })).unwrap();
+        let mut parent_metadata = minimal_preset_metadata();
+        parent_metadata.bindings.push(binding);
+        def.preset_metadata = Some(parent_metadata.clone());
+        def.scene_modifiers[0].graph.preset_metadata = Some(parent_metadata.clone());
+        let parent_nodes = def.nodes.clone();
+        assert!(retire_params(&mut def));
+        assert_eq!(def.nodes, parent_nodes);
+        assert_eq!(def.preset_metadata, Some(parent_metadata), "modifier-local identities cannot erase parent bindings");
+        assert!(def.scene_modifiers[0].graph.nodes[0].params.is_empty());
+        assert!(def.scene_modifiers[0].graph.preset_metadata.as_ref().unwrap().bindings.is_empty());
+        let once = def.clone();
+        assert!(!retire_params(&mut def));
+        assert_eq!(def, once);
+    }
+
+    #[test]
+    fn retired_params_nested_cards_and_wires_preserve_live_fanout() {
+        use manifold_core::effect_graph_def::{BindingTarget, ParamSpecDef};
+        let mut def: EffectGraphDef = serde_json::from_value(serde_json::json!({
+            "version": 1, "nodes": [
+                {"id": 0, "typeId": "node.scalar", "handle": "source"},
+                {"id": 1, "typeId": "group", "nodeId": "group", "handle": "group",
+                 "params": {"speed": {"type": "Float", "value": 93.0}}, "exposedParams": ["speed"],
+                 "group": {
+                    "interface": {"inputs": [{"name": "dead", "portType": "Scalar(F32)"},
+                                              {"name": "shared", "portType": "Scalar(F32)"}], "outputs": [],
+                        "params": [{"name": "speed", "targetHandle": "inner/step", "targetParam": "top_speed"}]},
+                    "nodes": [
+                        {"id": 10, "typeId": "system.group_input"},
+                        {"id": 11, "typeId": "group", "handle": "inner", "group": {
+                            "interface": {"inputs": [], "outputs": []},
+                            "nodes": [{"id": 20, "typeId": "node.gpu_flip_step", "nodeId": "step", "handle": "step",
+                                "params": {"top_speed": {"type": "Float", "value": 137.0}}, "exposedParams": ["top_speed"]}],
+                            "wires": []}},
+                        {"id": 12, "typeId": "node.gpu_flip_step", "nodeId": "other_step", "handle": "other_step"},
+                        {"id": 13, "typeId": "node.scalar", "nodeId": "unrelated", "handle": "unrelated",
+                         "params": {"top_speed": {"type": "Float", "value": 23.0}}, "exposedParams": ["top_speed"]}
+                    ], "wires": [
+                        {"fromNode": 10, "fromPort": "dead", "toNode": 12, "toPort": "top_speed"},
+                        {"fromNode": 10, "fromPort": "shared", "toNode": 12, "toPort": "top_speed"},
+                        {"fromNode": 10, "fromPort": "shared", "toNode": 13, "toPort": "top_speed"}
+                    ]}}
+            ], "wires": [{"fromNode": 0, "fromPort": "value", "toNode": 1, "toPort": "speed"},
+                         {"fromNode": 0, "fromPort": "value", "toNode": 1, "toPort": "dead"},
+                         {"fromNode": 0, "fromPort": "value", "toNode": 1, "toPort": "shared"}]
+        })).unwrap();
+        let mut metadata = minimal_preset_metadata();
+        for id in ["retired", "fanout", "group_speed", "legacy"] {
+            metadata.params.push(ParamSpecDef { id: id.into(), name: id.into(), ..Default::default() });
+        }
+        metadata.bindings = serde_json::from_value(serde_json::json!([
+            {"id": "retired", "label": "Retired", "defaultValue": 137.0, "userAdded": true,
+             "target": {"kind": "node", "nodeId": "step", "param": "top_speed"}},
+            {"id": "legacy", "label": "Legacy", "defaultValue": 137.0,
+             "target": {"kind": "handleNode", "handle": "group/inner/step", "param": "top_speed"}},
+            {"id": "group_speed", "label": "Group", "defaultValue": 93.0,
+             "target": {"kind": "node", "nodeId": "group", "param": "speed"}},
+            {"id": "fanout", "label": "Mixed", "defaultValue": 23.0,
+             "target": {"kind": "node", "nodeId": "step", "param": "top_speed"}},
+            {"id": "fanout", "label": "Mixed", "defaultValue": 23.0,
+             "target": {"kind": "node", "nodeId": "unrelated", "param": "top_speed"}}
+        ])).unwrap();
+        def.preset_metadata = Some(metadata);
+        let unrelated = def.nodes[1].group.as_ref().unwrap().nodes[3].clone();
+        assert!(retire_params(&mut def));
+        let group_node = &def.nodes[1];
+        assert!(group_node.params.is_empty() && group_node.exposed_params.is_empty());
+        let group = group_node.group.as_ref().unwrap();
+        assert!(group.interface.params.is_empty());
+        assert_eq!(group.interface.inputs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["shared"]);
+        assert_eq!(group.nodes[3], unrelated, "same-named unrelated input stays byte-for-byte intact");
+        let step = &group.nodes[1].group.as_ref().unwrap().nodes[0];
+        assert!(step.params.is_empty() && step.exposed_params.is_empty());
+        assert_eq!(group.wires.len(), 1);
+        assert_eq!(def.wires.len(), 1);
+        let metadata = def.preset_metadata.as_ref().unwrap();
+        assert_eq!(metadata.params.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), ["fanout"]);
+        assert_eq!(metadata.bindings.len(), 1);
+        assert!(matches!(&metadata.bindings[0].target, BindingTarget::Node {node_id, param}
+            if node_id.as_str() == "unrelated" && param == "top_speed"));
+        let once = def.clone();
+        assert!(!retire_params(&mut def));
+        assert_eq!(def, once, "repeat migration leaves the normalized document unchanged");
     }
 
     // ── GLTF_ANIM_RUNTIME_V2_DESIGN.md P2/D5 — old-shape sampler migration ──

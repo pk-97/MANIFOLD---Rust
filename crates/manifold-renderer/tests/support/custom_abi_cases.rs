@@ -205,11 +205,7 @@ pub const CASES: &[CustomAbiCase] = &[
         rust_struct: "StepParams",
         shader: "shaders/gpu_flip_step.wgsl",
         shader_struct: "Params",
-        aliases: &[
-            ("clock_pad[0]", "clock_pad0"),
-            ("clock_pad[1]", "clock_pad1"),
-            ("clock_pad[2]", "clock_pad2"),
-        ],
+        aliases: &[],
     },
     CustomAbiCase {
         source: "whitewater_step.rs",

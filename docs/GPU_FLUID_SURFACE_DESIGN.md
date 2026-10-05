@@ -45,9 +45,16 @@ The reference is the effective instantiated `WaterDamBreak.json`, then vendored
 engine defaults for omitted values. **2026-10-05 correction:** bindings apply
 their `defaultValue` in `preset_runtime/build.rs` and `node_graph/bound_graph.rs`
 unless `defaultMirrorsNodeParam` is set. Native Dam Break therefore starts at
-particle scale **2.2**, overriding its node value 3.0; GPU Dam Break starts at
-3.0. Native Surface Detail 1 means subdivision 2, while GPU defaults to Detail
-0/subdivision 1. The earlier node-only audit missed these differences.
+particle scale **2.2**, overriding its node value 3.0. Fresh GPU FLIP Dam Break
+now uses the same effective particle scale and Surface Detail **1**, meaning
+subdivision **2**: at resolution 64 both mesh a 135³ lattice with 0.03125 m
+spacing. Existing saved surface settings remain explicit. These are the native
+scene's authored defaults; the bare engine defaults are particle scale 3.0,
+subdivision 1 and mesh smoothing 0.5. Both Dam Break scenes instead use mesh
+smoothing 0.35 for two iterations. The earlier node-only audit missed the card
+overrides. Detail 1 increases dense surface samples by about eight times over
+Detail 0; this default correction is not a measured performance or visual-parity
+claim.
 
 Native seed capture also rejects four bottom-corner sites at both 8³ and 16³
 through its interpolated solid field; GPU fill keeps them. Native interior

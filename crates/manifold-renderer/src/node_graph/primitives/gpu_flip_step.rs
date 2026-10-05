@@ -68,8 +68,6 @@ pub(crate) const FACE_VALID_LAYERS: u32 = 2;
 /// The iteration cap when `iterations` is Auto (0): Auto stops on the
 /// engine's tolerance (gpu_flip_pressure.rs Stop::Converged).
 pub(crate) const AUTO_PRESSURE_ITERATIONS: u32 = MAX_ITERATIONS;
-/// The speed the CFL guard is sized for, m/s.
-pub(crate) const DEFAULT_TOP_SPEED: f32 = 20.0;
 /// Configured engine CFL, shared with the clock.
 pub(crate) const ENGINE_CFL: u32 = 5;
 
@@ -86,13 +84,6 @@ fn one_step_cfl_safe(marker_speed: f32, obstacle_speed: f32, interval: f32, cell
         && cell_size.is_finite() && cell_size > 0.0
         && f64::from(interval) * (f64::from(marker_speed.max(obstacle_speed)) + manifold_physics::stepping::LIVE_CFL_EPSILON) * 1.01
             < f64::from(ENGINE_CFL) * f64::from(cell_size)
-}
-
-/// The CFL guard: the farthest one RK3 stage moves a particle, in cells,
-/// `top_speed` over one step rounded up. The inputs are f32, so a ratio
-/// within 1e-4 of a whole cell is that cell, not the next.
-pub(crate) fn travel_cells(top_speed: f32, step_dt: f32, cell_size: f32) -> u32 {
-    (f64::from(top_speed) * f64::from(step_dt) / f64::from(cell_size) - 1e-4).ceil().max(1.0) as u32
 }
 
 /// FLIP Fluids _extrapolateFluidVelocities: configured CFL, never travel.
@@ -231,30 +222,6 @@ pub(crate) fn set_poison(on: bool) {
     POISON.store(on, std::sync::atomic::Ordering::SeqCst);
 }
 
-/// Test-only lever, approved 2026-10-03 lead; un-suppressed when the executor
-/// exposes node access. With it set, no solid lets water go: the step skips
-/// the separate passes and the second prepare, and runs the solves as before
-/// separating solids (GPU_FLIP_PRESSURE_SOLVE.md section 8 (Separating
-/// solids)), the bitwise oracle for scenes whose let-go set stays empty.
-#[cfg(all(test, feature = "gpu-proofs"))]
-static SEPARATE_OFF: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-#[cfg(all(test, feature = "gpu-proofs"))]
-pub(crate) fn set_separate_off(on: bool) {
-    SEPARATE_OFF.store(on, std::sync::atomic::Ordering::SeqCst);
-}
-
-fn separating() -> bool {
-    #[cfg(all(test, feature = "gpu-proofs"))]
-    {
-        !SEPARATE_OFF.load(std::sync::atomic::Ordering::SeqCst)
-    }
-    #[cfg(not(all(test, feature = "gpu-proofs")))]
-    {
-        true
-    }
-}
-
 /// Test-only lever for the inactive-slot proof (BUG-e6z6s (inactive FLIP
 /// slots)): with it set, every pass of an inactive clock slot runs as it did
 /// before the slots were gated. The gate plan is zeros, so only the passes
@@ -298,9 +265,9 @@ fn solid_velocity_needed(body_count: i32) -> bool {
 
 /// The lattice's cell-sized arrays (`LatticeBuffers`): water, φ, the
 /// right-hand side, the pressure, the pocket state and label, the solve
-/// mask, the contact mask and the let-go set.
+/// mask.
 #[cfg(any(test, feature = "gpu-proofs"))]
-const LATTICE_CELL_ARRAYS: u64 = 9;
+const LATTICE_CELL_ARRAYS: u64 = 7;
 
 /// Three words a cell (a pocket's 64-bit sum and its count, indexed by its
 /// leader cell), then the removed total's two.
@@ -329,7 +296,6 @@ pub(crate) struct StepParams {
     pub(crate) rows: i32,
     pub(crate) tick_seconds: f32,
     pub(crate) flip: f32,
-    pub(crate) max_travel: f32,
     pub(crate) box_offset: f32,
     pub(crate) ghost: u32,
     pub(crate) particles: u32,
@@ -353,7 +319,6 @@ pub(crate) struct StepParams {
     /// Ferstl 2016: 0 dense, 1 full-history initialization, 2 masked band.
     pub(crate) narrow_band: u32,
     pub(crate) live_impulse_stride: u32,
-    pub(crate) clock_pad: [u32; 3],
 }
 
 /// One pass of the step's shader on its own, for the value proofs against
@@ -407,8 +372,6 @@ struct Pipelines {
     pocket_accumulate: GpuComputePipeline,
     pocket_remove: GpuComputePipeline,
     pocket_pin: GpuComputePipeline,
-    separate_pin: GpuComputePipeline,
-    separate_update: GpuComputePipeline,
     /// The removed flux into the pressure, then the density, solver word.
     pocket_flux: [GpuComputePipeline; 2],
     /// The pockets at the solve level: leaders cleared, cells coarsened,
@@ -475,8 +438,6 @@ impl Pipelines {
             pocket_accumulate: pipe("pocket_accumulate"),
             pocket_remove: pipe("pocket_remove"),
             pocket_pin: pipe("pocket_pin"),
-            separate_pin: pipe("separate_pin"),
-            separate_update: pipe("separate_update"),
             pocket_flux: [pipe("pocket_flux_pressure"), pipe("pocket_flux_density")],
             pocket_coarse: [pipe("pocket_leader_clear"), pipe("pocket_coarsen"), pipe("pocket_relabel")],
             remove_crowded: pipe("remove_crowded_markers"),
@@ -622,10 +583,6 @@ struct LatticeBuffers {
     pocket_sum: GpuBuffer,
     /// The solves' water: `water` less each sealed pocket's leader cell.
     solve_water: GpuBuffer,
-    /// The main solve's water: `solve_water` less each let-go cell.
-    contact_water: GpuBuffer,
-    /// 1 where water touching a solid is let go; carried step to step.
-    let_go: GpuBuffer,
     /// The pockets at the solve level: state and label per level cell,
     /// sized for level 1 ([`pocket_coarse_bytes`]).
     pocket_coarse: GpuBuffer,
@@ -680,8 +637,6 @@ impl LatticeBuffers {
             pocket_label: allocate(device, cell)?,
             pocket_sum: allocate(device, pocket_sum_bytes(cells))?,
             solve_water: allocate(device, cell)?,
-            contact_water: allocate(device, cell)?,
-            let_go: allocate_zeroed(device, cell)?,
             pocket_coarse: allocate(device, coarse.max(4))?,
             pocket_coarse_label: allocate(device, coarse.max(4))?,
             pocket_leader: allocate(device, cell)?,
@@ -1098,7 +1053,7 @@ struct Step<'a> {
     clock_plan: &'a GpuBuffer,
     particles: &'a GpuBuffer,
     out: &'a GpuBuffer,
-    /// Two words a slot: guarded RK3 stages and refused push-outs; then the
+    /// Two words a slot: zero stage-cap count and refused push-outs; then the
     /// tick's solver words (liquid_stats.rs SOLVER_WORDS) at byte `tally`.
     capped: &'a GpuBuffer,
     tally: u64,
@@ -1713,21 +1668,6 @@ impl StepState {
             cells_groups,
             "gpu_flip.step.pocket_pin",
         );
-        // Separating solids (GPU_FLIP_PRESSURE_SOLVE.md section 8): the
-        // let-go set from the last step's update comes out of the main
-        // solve's mask, its cells held at pressure 0.
-        let separate = separating();
-        let main_water = if separate {
-            enc.dispatch_compute(
-                &pipes.separate_pin,
-                &[uniform(&base), buffer(46, step.clock_plan), buffer(6, &l.solve_water), buffer(10, &l.s), buffer(42, &l.let_go), buffer(5, &l.contact_water)],
-                cells_groups,
-                "gpu_flip.step.separate_pin",
-            );
-            &l.contact_water
-        } else {
-            &l.solve_water
-        };
         if step.level > 0 {
             encode_pocket_coarsen(enc, pipes, &base, l, gate_plan);
         }
@@ -1766,7 +1706,7 @@ impl StepState {
         let water = Water {
             lattice: cells,
             cell_size: p.cell_size,
-            water: main_water,
+            water: &l.solve_water,
             faces: &l.s,
             phi: step.ghost.then_some(&l.phi),
         };
@@ -1782,7 +1722,7 @@ impl StepState {
             tick_seconds: p.tick_seconds,
             first: (p.rows - p.body_count).max(0) as u32,
             count: p.body_count.max(0) as u32,
-            water: main_water,
+            water: &l.solve_water,
             open: &l.s,
             solid: &l.v,
             bodies: step.bodies,
@@ -1838,41 +1778,13 @@ impl StepState {
         for (faces, label) in [(out_faces, "gpu_flip.step.constrain"), (&l.a, "gpu_flip.step.constrain_old")] {
             enc.dispatch_compute(&pipes.constrain, &[buffer(46, step.clock_plan), uniform(&base), buffer(20, faces), buffer(10, &l.s), buffer(11, &l.v)], face_groups, label);
         }
-        enc.copy_buffer_to_buffer(out_faces, &l.f, out_faces.size);
-        // One active-set update for the next step. The leftover divergence
-        // is the divergence pass itself on the projected, constrained faces,
-        // against the solid velocity after the reaction, so a body's own
-        // motion counts exactly as it does in the right-hand side. The
-        // right-hand side is free until the density source rewrites it.
-        if separate {
-            over_c(
-                enc,
-                &pipes.divergence,
-                vec![buffer(3, &l.f), buffer(5, &l.rhs), buffer(6, &l.water), buffer(10, &l.s), buffer(11, &l.v)],
-                cells_groups,
-                "gpu_flip.step.separate_divergence",
-            );
-            enc.dispatch_compute(
-                &pipes.separate_update,
-                &[
-                    uniform(&base),
-                    buffer(46, step.clock_plan),
-                    buffer(6, &l.contact_water),
-                    buffer(5, &l.rhs),
-                    buffer(8, &l.pressure),
-                    buffer(10, &l.s),
-                    buffer(42, &l.let_go),
-                ],
-                cells_groups,
-                "gpu_flip.step.separate_update",
-            );
-        }
         // The density projection (module doc): its pressure's gradient is
         // taken off a copy of the new faces in `l.f`, and the move reads the
         // difference as a displacement. Air sits at zero at its centres.
         #[cfg(feature = "water-race-probes")]
         enc.set_profile_tag("gpu_flip.stage.density");
         let spread = if step.density {
+            enc.copy_buffer_to_buffer(out_faces, &l.f, out_faces.size);
             if step.narrow_enabled {
                 let nb = self.narrow.buffers.as_ref().ok_or("narrow-band storage was not reserved")?;
                 enc.dispatch_compute(
@@ -1900,13 +1812,9 @@ impl StepState {
                 );
             }
             encode_pocket_mean(enc, pipes, &base, l.fine_pockets(), &l.rhs, 1, step.capped, step.tally, gate_plan);
-            // The density solve stays plain: every water cell in it, let go
-            // or not, so its rows are rebuilt on the pocket-only mask.
-            let plain_water = Water { water: &l.solve_water, ..water };
-            if separate {
-                self.solver.prepare(device, enc, &plain_water)?;
-            }
-            let flat = Water { phi: None, ..plain_water };
+            // The density solve uses the same pocket-only water mask as
+            // pressure, with air at the cell centres and no body coupling.
+            let flat = Water { phi: None, ..water };
             let density_mean = coarse_mean(1);
             self.solver.solve(
                 enc,
@@ -2247,7 +2155,6 @@ crate::primitive! {
         int_param!("steps", "Steps", 1.0, 1.0, 64.0),
         float_param!("flip", "Flip Share", 0.95, 0.0, 1.0),
         int_param!("iterations", "Iterations (0 = Auto)", 0.0, 0.0, MAX_ITERATIONS as f32),
-        float_param!("top_speed", "Top Speed", DEFAULT_TOP_SPEED, 0.1, 1000.0),
         int_param!("ghost_fluid", "Ghost Fluid", 1.0, 0.0, 1.0),
         int_param!("volume_projection", "Volume Projection", 0.0, 0.0, 1.0),
         int_param!("closed_faces", "Closed Faces", 63.0, 0.0, 63.0),
@@ -2386,13 +2293,7 @@ impl Primitive for GpuFlipStep {
             .filter(|limit| limit.is_finite() && *limit > 0.0)
             .unwrap_or(0.0);
         let flip = ctx.scalar_or_param("flip", 0.95).clamp(0.0, 1.0);
-        let top_speed = ctx.scalar_or_param("top_speed", DEFAULT_TOP_SPEED);
-        if !(top_speed.is_finite() && top_speed > 0.0) {
-            ctx.error(format!("{NAME}: Top Speed must be positive, not {top_speed}"));
-            return;
-        }
         let h = lattice.cell_size();
-        let travel = travel_cells(top_speed, step_dt, h);
         let gravity = [("gravity_x", 0.0), ("gravity_y", -9.81), ("gravity_z", 0.0)].map(|(name, default)| ctx.scalar_or_param(name, default));
         let tick_index = ctx.scalar_or_param("tick_index", 0.0).round().max(0.0) as i32;
         let epoch = if ctx.inputs.slot("epoch").is_some() {
@@ -2557,7 +2458,6 @@ impl Primitive for GpuFlipStep {
                 // The share is per step, as the engine's `_ratioPICFLIP`, whatever
                 // the step count.
                 flip,
-                max_travel: travel as f32,
                 box_offset: box_min.iter().fold(0.0_f32, |m, v| m.max(v.abs())),
                 ghost: u32::from(ghost),
                 particles: out_slots,
@@ -2581,7 +2481,6 @@ impl Primitive for GpuFlipStep {
                     .saturating_mul(4)
                     .min(u32::MAX as usize) as u32,
                 narrow_band: u32::from(narrow_enabled),
-                clock_pad: [0; 3],
             },
             clock_plan: &zeros,
             particles,
@@ -2932,8 +2831,6 @@ mod tests {
                 "tiles_lists",
                 "tiles_fill",
                 "tiles_retire",
-                "separate_pin",
-                "separate_update",
                 "pocket_leader_clear",
                 "pocket_coarsen",
                 "pocket_relabel",
@@ -2943,26 +2840,23 @@ mod tests {
         }
     }
 
-    /// Separating solids' extents: the lattice allocates exactly
-    /// [`LATTICE_CELL_ARRAYS`] cell-sized arrays, which the extent's hold
-    /// counts; the two new passes run one thread a cell, bounded by the cell
-    /// total, and bind the contact mask and the let-go set at their own
-    /// bindings.
+    /// The shared extent counts every cell-sized lattice array, including
+    /// the separate coarse pocket leader, against its actual allocation.
     #[test]
-    fn gpu_flip_separating_solids_buffers_and_dispatches_are_held() {
+    fn gpu_flip_lattice_buffers_are_held() {
         let source = include_str!("gpu_flip_step.rs");
         let body = source.split("fn new(device: &GpuDevice, cells: [u32; 3]) -> Result<Self, String> {\n        let cell").nth(1).expect("LatticeBuffers::new");
         let body = body.split("\n    }\n").next().unwrap_or("");
         let arrays = body.matches("(device, cell)?").count() as u64;
         // The fine-label leader is counted by pocket_coarse_bytes, separately
-        // from the nine fine solve arrays.
+        // from the seven fine solve arrays.
         assert_eq!(arrays, LATTICE_CELL_ARRAYS + 1, "cell arrays including the coarse pocket leader");
         for cells in [[64u32, 64, 64], [63, 100, 8], [128, 128, 128]] {
             let face = face_bytes(cells);
             let corners = cells.iter().map(|&n| u64::from(n) + 1).product::<u64>() * 4;
             let particles = 1000 * size_of::<FluidParticle>() as u64;
             let expected = particles
-                + 9 * cell_bytes(cells)
+                + 7 * cell_bytes(cells)
                 + corners
                 + 6 * face
                 + POCKET_GATE_WORDS * 4
@@ -2972,19 +2866,14 @@ mod tests {
                 + mask_saved_bytes(cells, 1000);
             assert_eq!(scratch_bytes(cells, 1000, 2), expected, "{cells:?}");
         }
-        let shader = step_source();
-        for entry in ["fn separate_pin(", "fn separate_update("] {
-            let body = shader.split(entry).nth(1).unwrap_or_else(|| panic!("{entry}"));
-            let head: String = body.lines().take(4).collect();
-            assert!(head.contains("if idx >= cell_total()"), "{entry} bounds its threads by the cell total");
-        }
-        assert!(shader.contains("@binding(42) var<storage, read_write> let_go: array<f32>;"));
-        assert!(source.contains("buffer(42, &l.let_go), buffer(5, &l.contact_water)"));
     }
 
     #[test]
     fn step_params_match_the_shader_uniform() {
-        assert_eq!(size_of::<StepParams>(), 176);
+        assert_eq!(size_of::<StepParams>(), 160);
+        assert_eq!(std::mem::offset_of!(StepParams, box_offset), 100);
+        assert_eq!(std::mem::offset_of!(StepParams, particles), 108);
+        assert_eq!(std::mem::offset_of!(StepParams, live_impulse_stride), 156);
     }
 
     /// The tile table's bytes, by an independent count: five words a tile
@@ -3027,7 +2916,6 @@ mod tests {
     /// face grid's guarantee.
     #[test]
     fn band_layers_match_configured_engine_cfl() {
-        assert_eq!(travel_cells(DEFAULT_TOP_SPEED, 1.0 / 120.0, 0.0625), 3);
         assert_eq!(band_layers(3), 9);
         assert_eq!(band_layers(1), 5);
         assert_eq!(band_layers(5), 12, "the engine's 12 layers at its CFL 5");

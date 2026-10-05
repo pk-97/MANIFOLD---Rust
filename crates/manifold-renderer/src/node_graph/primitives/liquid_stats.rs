@@ -27,7 +27,7 @@ pub(crate) fn partial_bytes(count: u32) -> u64 {
 
 /// Words in the stats array: 0 non-finite records, 1 live records, 2 fastest
 /// speed (m/s), 3 mass (kg), 4-6 momentum (kg·m/s), 7 kinetic energy (J),
-/// 8 move stages a speed cap shortened, 9 solid push-outs refused, 10
+/// 8 solver-reported capped stages (zero for native GPU FLIP), 9 solid push-outs refused, 10
 /// pressure solve iterations, 11 density solve iterations, 12 solves that
 /// reached their cap without converging, 13 steps whose sealed-pocket spread
 /// reached its cap unfinished, 14 and 15 the volume rate (m³/s) taken off
@@ -61,7 +61,7 @@ pub struct LiquidTickStats {
     pub mass: f32,
     pub momentum: [f32; 3],
     pub kinetic: f32,
-    /// Particle move stages the solver's speed cap shortened this tick.
+    /// Solver-reported clipped stages; native GPU FLIP reports zero (direct RK3).
     pub speed_capped: u32,
     /// Solid push-outs the solver refused as too far this tick.
     pub push_refused: u32,
