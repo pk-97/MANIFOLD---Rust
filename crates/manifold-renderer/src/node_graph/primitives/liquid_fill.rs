@@ -111,6 +111,9 @@ struct FillUniforms {
     particle_capacity: i32,
     wall_inset: f32,
     dispatch_count: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 crate::primitive! {
@@ -285,6 +288,9 @@ impl Primitive for LiquidFill {
             particle_capacity: clamp(capacity),
             wall_inset,
             dispatch_count: capacity,
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
         };
         gpu.native_enc.dispatch_compute(
             pipeline,
