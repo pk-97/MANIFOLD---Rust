@@ -302,6 +302,9 @@ impl PresetRuntime {
             ));
         }
 
+        // Normalize retired FLIP controls before cards and bindings are cloned.
+        crate::node_graph::graph_loader::retire_flip_inputs(&mut doc);
+
         // Load-time heal: a Float/IntRound-convert binding into a Bool-typed
         // target is upgraded to BoolThreshold. The v1130 cinematic-tail
         // migration stamped the motion_blur/bokeh `enabled` bindings without

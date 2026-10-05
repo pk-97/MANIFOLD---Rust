@@ -58,8 +58,6 @@ struct Params {
     tick_seconds: f32,
     // The FLIP share for this step.
     flip: f32,
-    // The farthest one RK3 stage moves, in cells.
-    max_travel: f32,
     // The largest |box_min| component, for the solid faces' tolerance.
     box_offset: f32,
     // subtract: 1 reads `phi` for the free surface, 0 keeps air at zero.
@@ -91,9 +89,6 @@ struct Params {
     ring_max: u32,
     narrow_band: u32, // Ferstl 2016: 0 dense, 1 initialization, 2 band-masked.
     live_impulse_stride: u32,
-    clock_pad0: u32,
-    clock_pad1: u32,
-    clock_pad2: u32,
 };
 
 struct CellRange {
@@ -171,9 +166,9 @@ struct ClockPlan {
 // 8 floats per body: the linear and angular impulse the water has put on it
 // so far this tick (gpu_flip_bodies.wgsl).
 @group(0) @binding(21) var<storage, read> reaction: array<f32>;
-// Two words per particle slot, summed over the tick's substeps: RK3 stages
-// the CFL guard shortened, and solid push-outs refused past SOLID_PUSH. The
-// tick's stats reduce them (liquid_stats words 8 and 9).
+// Two words per particle slot: the retired stage-cap count (always zero for
+// native RK3), and solid push-outs refused past SOLID_PUSH over the tick.
+// The tick's stats reduce them (liquid_stats words 8 and 9).
 @group(0) @binding(22) var<storage, read_write> capped: array<u32>;
 // Inflow (code 2) and outflow (code 3) rows: LiquidBody rows with the code in
 // angular_velocity.w, the emitted velocity in inv_inertia_x.xyz and the share
@@ -1253,75 +1248,6 @@ fn pocket_pin(@builtin(global_invocation_id) gid: vec3<u32>) {
     cell_out[idx] = select(water[idx], 0.0, leader);
 }
 
-// Separating solids (GPU_FLIP_PRESSURE_SOLVE.md section 8 (Separating
-// solids)): 1 where a water cell touching a solid is let go, its pressure held
-// at 0 and its leftover divergence free to be outflow. Carried step to step.
-@group(0) @binding(42) var<storage, read_write> let_go: array<f32>;
-
-// A water cell with any face less than fully open: a box wall or a body.
-fn touches_solid(p: vec3<i32>, n: vec3<i32>, m: vec3<i32>) -> bool {
-    for (var a = 0; a < 3; a = a + 1) {
-        var q = p;
-        q[a] = p[a] + 1;
-        if open_at(p, a, n, m) < 1.0 || open_at(q, a, n, m) < 1.0 {
-            return true;
-        }
-    }
-    return false;
-}
-
-// One thread per cell, `water` the solve mask to `cell_out` the contact mask:
-// the let-go set kept only on water touching a solid (and emptied on the
-// first step of the first tick), each let-go cell taken out of the mask.
-@compute @workgroup_size(256)
-fn separate_pin(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let idx = gid.x;
-    if idx >= cell_total() {
-        return;
-    }
-    // This mask is history, not scratch: inactive clock slots must not
-    // change next step's pressure constraints using stale solve data.
-    if !clock_active() { return; }
-    let n = lattice();
-    let m = n + vec3<i32>(1);
-    let first = u.tick_index == 0 && u.step_in_tick == 0;
-    let keep = !first && let_go[idx] > 0.5 && water[idx] > 0.5 && touches_solid(unflatten(idx, n), n, m);
-    let_go[idx] = select(0.0, 1.0, keep);
-    cell_out[idx] = select(water[idx], 0.0, keep);
-}
-
-// One thread per cell, after the projection and the bodies' reaction,
-// `water` the contact mask and `cell_out` (read only) the divergence of the
-// projected faces against the solids' updated face velocity: one active-set
-// update. A pressing cell whose pressure came out negative is let go; a
-// let-go cell whose leftover divergence is negative (water pushed into the
-// solid, relative to the solid's own motion) presses again.
-@compute @workgroup_size(256)
-fn separate_update(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let idx = gid.x;
-    if idx >= cell_total() {
-        return;
-    }
-    // This mask is history, not scratch: inactive clock slots must not
-    // change next step's pressure constraints using stale solve data.
-    if !clock_active() { return; }
-    let n = lattice();
-    let m = n + vec3<i32>(1);
-    let p = unflatten(idx, n);
-    if water[idx] > 0.5 {
-        if pressure[idx] < 0.0 && touches_solid(p, n, m) {
-            let_go[idx] = 1.0;
-        }
-        return;
-    }
-    if !(let_go[idx] > 0.5) {
-        return;
-    }
-    if cell_out[idx] < 0.0 {
-        let_go[idx] = 0.0;
-    }
-}
-
 // One thread per word: the pocket sums start at 0.
 @compute @workgroup_size(256)
 fn pocket_clear(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -2090,26 +2016,6 @@ fn inside_padded_grid(q: vec3<f32>, n: vec3<i32>) -> bool {
     return all(q >= low) && all(q < high);
 }
 
-// The CFL guard: one RK3 stage moves at most max_travel cells. A non-finite
-// v stays non-finite. Live stretched intervals expand the authored halo from
-// the GPU-observed speed, so Top Speed cannot truncate an arbitrary current
-// velocity at the final capped step.
-fn adaptive_max_travel() -> f32 {
-    let observed = clock_plan[0].maximum_speed * adaptive_step_dt() / u.cell_size;
-    return max(u.max_travel, observed);
-}
-
-fn guard(v: vec3<f32>, per_cell: f32) -> vec3<f32> {
-    let cells = length(v) * per_cell;
-    let max_travel = adaptive_max_travel();
-    return select(v, v * (max_travel / cells), cells > max_travel);
-}
-
-// 1 when the guard shortens v.
-fn guarded(v: vec3<f32>, per_cell: f32) -> u32 {
-    return select(0u, 1u, length(v) * per_cell > adaptive_max_travel());
-}
-
 // Exponent bits, not x != x: fast math may fold a NaN comparison away.
 fn finite(v: vec3<f32>) -> bool {
     let bits = bitcast<vec3<u32>>(v) & vec3<u32>(0x7f800000u);
@@ -2282,7 +2188,7 @@ fn open_band(q: vec3<f32>, n: vec3<i32>) -> bool {
 // One thread per particle slot, `sorted` to `particles_out`. A live particle
 // (radius > 0) at q blends FLIP and PIC, flip · (v + new(q) − old(q)) +
 // (1 − flip) · new(q), then moves by RK3 through the new faces (stages at ½
-// and ¾ of step_dt, weights 2/9, 3/9, 4/9, each guarded), plus the density
+// and ¾ of step_dt, weights 2/9, 3/9, 4/9), plus the density
 // projection's move. The native safety AABB and solid collision sequence is
 // shared by wall-only and body scenes; a particle still inside one, where a
 // moving solid swept over it, is removed: radius 0
@@ -2299,9 +2205,9 @@ fn faces_to_particles(@builtin(global_invocation_id) gid: vec3<u32>) {
     let particle = sorted[idx];
     var out = particle;
     let first = u.step_in_tick == 0 && u.narrow_band == 0u;
-    let cfl_before = select(capped[2u * idx], 0u, first);
     let push_before = select(capped[2u * idx + 1u], 0u, first);
-    capped[2u * idx] = cfl_before;
+    // Native RK3 never clips stage velocities; retain the public stats word.
+    capped[2u * idx] = 0u;
     capped[2u * idx + 1u] = push_before;
     if !(particle.position_radius.w > 0.0) {
         particles_out[idx] = out;
@@ -2312,14 +2218,9 @@ fn faces_to_particles(@builtin(global_invocation_id) gid: vec3<u32>) {
     let per_cell = adaptive_step_dt() / u.cell_size;
     let q0 = (particle.position_radius.xyz - lo) / u.cell_size;
     let after = sample(q0, n, 0u);
-    let k1 = guard(after, per_cell);
-    let s2 = sample(q0 + 0.5 * per_cell * k1, n, 0u);
-    let k2 = guard(s2, per_cell);
-    let s3 = sample(q0 + 0.75 * per_cell * k2, n, 0u);
-    let k3 = guard(s3, per_cell);
-    if u.narrow_band == 0u {
-        capped[2u * idx] = cfl_before + guarded(after, per_cell) + guarded(s2, per_cell) + guarded(s3, per_cell);
-    }
+    let k1 = after;
+    let k2 = sample(q0 + 0.5 * per_cell * k1, n, 0u);
+    let k3 = sample(q0 + 0.75 * per_cell * k2, n, 0u);
     let edge = vec3<f32>(boundary_edge());
     // The density projection's move, step_dt · (spread(q) − new(q)): position
     // only, never kept as velocity. Zero rate binds `faces_in` as `spread`.

@@ -226,10 +226,6 @@
           "type": "Int",
           "value": 1
         },
-        "top_speed": {
-          "type": "Float",
-          "value": 20.0
-        },
         "volume_projection": {
           "type": "Int",
           "value": 1

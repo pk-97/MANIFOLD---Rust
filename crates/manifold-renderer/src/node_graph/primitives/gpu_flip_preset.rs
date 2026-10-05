@@ -19,7 +19,7 @@ use manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID;
 use serde_json::{Value, json};
 
 use super::gpu_flip_domain::{GpuFlipGeometry, gpu_flip_geometry};
-use super::gpu_flip_step::{AUTO_PRESSURE_ITERATIONS, DEFAULT_TOP_SPEED, FACE_VALID_LAYERS};
+use super::gpu_flip_step::{AUTO_PRESSURE_ITERATIONS, FACE_VALID_LAYERS};
 use crate::node_graph::bundled_presets::bundled_preset_json;
 #[cfg(all(test, feature = "gpu-proofs"))]
 use crate::node_graph::fluid::{FluidDomainLayout, domain_layout};
@@ -116,11 +116,6 @@ pub(crate) const FACE_NODES: [&str; 3] = ["face_u", "face_v", "face_w"];
 
 /// The water step node in every scene.
 pub(crate) const STEP_NODE: &str = "step";
-
-/// The fastest water a step is built for (m/s): the Dam Break's splash tops
-/// out near 13 m/s at 64³ and 19–25 m/s at 128³, the FLIP Fluids engine's
-/// at 12 and 17. The step turns it into the CFL guard.
-pub(crate) const TOP_SPEED: f64 = DEFAULT_TOP_SPEED as f64;
 
 /// Particles per cell the fill seeds: one per half-cell site.
 #[cfg(all(test, feature = "gpu-proofs"))]
@@ -244,19 +239,6 @@ impl WaterScene {
     #[cfg(test)]
     pub fn step_dt(&self) -> f64 {
         1.0 / (60.0 * self.steps as f64)
-    }
-
-    /// The step's CFL guard at this scene's step and cell size.
-    #[cfg(all(test, feature = "water-race-probes"))]
-    pub fn travel_cells(&self) -> usize {
-        let travel = super::gpu_flip_step::travel_cells(DEFAULT_TOP_SPEED, self.step_dt() as f32, self.cell_size() as f32);
-        travel as usize
-    }
-
-    /// The layers the step extends its projected faces by.
-    #[cfg(all(test, feature = "water-race-probes"))]
-    pub fn band_layers(&self) -> usize {
-        super::gpu_flip_step::band_layers(super::gpu_flip_step::ENGINE_CFL) as usize
     }
 
     /// The tank: the domain's layout at this resolution, no domain box.
@@ -1089,7 +1071,6 @@ fn water_step(b: &mut Builder, scene: WaterScene, tick: (usize, usize)) -> usize
                 ("steps", int(scene.steps)),
                 ("flip", float(scene.flip)),
                 ("iterations", iterations(scene.pressure.iterations, AUTO_PRESSURE_ITERATIONS)),
-                ("top_speed", float(TOP_SPEED)),
                 ("ghost_fluid", int(usize::from(scene.ghost_fluid))),
                 ("volume_projection", int(usize::from(scene.volume_projection))),
             ],
@@ -1435,22 +1416,15 @@ pub(super) mod tests {
         }
     }
 
-    /// The step's CFL guard and band at the lattices the extent walk covers,
-    /// never under the valid layers the frame publishes, which the
-    /// conformance row's face grid scene holds.
+    /// Velocity extension follows the native configured CFL and covers the
+    /// face grid's published valid layers.
     #[test]
-    fn gpu_flip_band_uses_engine_cfl_independent_of_travel() {
-        use super::super::gpu_flip_step::{ENGINE_CFL, band_layers, travel_cells};
+    fn gpu_flip_band_uses_engine_cfl() {
+        use super::super::gpu_flip_step::{ENGINE_CFL, band_layers};
         use crate::node_graph::liquid::conformance::FACE_GRID_GPU_FLIP_LAYERS;
         assert_eq!(FACE_GRID_GPU_FLIP_LAYERS, FACE_VALID_LAYERS);
-        let at = |n: usize, steps: usize| {
-            let s = WaterScene::dam_break(n).with_steps(steps);
-            let travel = travel_cells(TOP_SPEED as f32, s.step_dt() as f32, s.cell_size() as f32);
-            (travel, band_layers(ENGINE_CFL))
-        };
-        let bands = [at(64, 2), at(64, 1), at(128, 2), at(96, 2), at(16, 2)];
-        assert_eq!(bands, [(3, 12), (6, 12), (6, 12), (4, 12), (1, 12)]);
-        assert!(bands.iter().all(|&(_, band)| band >= FACE_VALID_LAYERS));
+        assert_eq!(band_layers(ENGINE_CFL), 12);
+        assert!(band_layers(ENGINE_CFL) >= FACE_VALID_LAYERS);
     }
 
     /// The shipped JSON owns the authored surface. All solver presets copy

@@ -460,7 +460,6 @@ mod gpu_tests {
             ("tick_index", tick as f32),
             ("flip", 0.0),
             ("iterations", 1.0),
-            ("top_speed", 1.0),
             ("ghost_fluid", 1.0),
             ("volume_projection", 0.0),
             ("closed_faces", 63.0),
