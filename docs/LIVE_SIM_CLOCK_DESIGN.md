@@ -145,7 +145,7 @@ P4 resolves BUG-az3: feed metrics and explicitly tick/push the editor's own HUD 
 
 ## 7. Decided — do not reopen
 
-1. Live runs at most two fixed Sim Rate steps per frame and drops the leftover time (2026-10-04). Retired: covering owed time with longer stretched intervals.
+1. Live runs at most two fixed Sim Rate steps per frame, one after a late frame, and drops the leftover time (2026-10-04; the late-frame rule 2026-10-05). Retired: covering owed time with longer stretched intervals.
 2. Export follows D7.
 3. Hits split at their own moments, including multiple moments per frame.
 4. Port reference CFL inside each fixed step; Box3D steps the same fixed intervals.
@@ -159,6 +159,8 @@ P4 resolves BUG-az3: feed metrics and explicitly tick/push the editor's own HUD 
 
 The implementation records one numerical step only when a fresh, fenced marker-speed sample matches the incoming tick and the force/obstacle bound proves it sufficient. Otherwise it records the adaptive slots and gates inactive GPU work. Source, impulse and narrow-band transitions keep the conservative path. Remaining inactive-slot overhead is measured and still open; there is no blocking readback or reduction of the numerical step allowance.
 
+**Late frames take one interval (2026-10-05).** A live frame takes a second interval only when the previous frame finished inside the display budget: its render work plus GPU surface wait against 1 / project fps. Once one interval costs more than half a frame, a second interval made the next frame late too, and the cap of two settled at half the frame rate without keeping real time. One interval plays that overload as smooth slow motion at the full frame rate. Export and previews publish no load and keep the cap of two. Proof: `late_frame_load_takes_one_interval_and_on_time_load_two` (manifold-physics clock).
+
 The clock accepts the earliest two complete intervals. A partial remainder stays owed during ordinary pacing; when a third complete interval is owed, the whole remainder is discarded and the transport grid starts again at the current observation. The cumulative discarded duration resets with the epoch, while the HUD reports only newly discarded time and outstanding completion lag.
 
 Timestamped hits observed beyond the accepted ceiling map to its closing simulation boundary. Half-open ownership delivers them once in the next accepted interval, preserving source order and impulse strength, without creating intervals for the discarded transport. Pause and Speed 0 still discard incoming hits. An advancing busy worker is not paused merely because its capped simulation timestamp is unchanged. Closing collider samples remain attached to the accepted interval; the next authored start may jump across the discarded gap without sweeping a collider through that gap or advancing dynamic bodies.
@@ -170,7 +172,7 @@ Timestamped hits observed beyond the accepted ceiling map to its closing simulat
 
 ## 9. Implementation seam
 
-Production uses the shared physics clock with at most two fixed Sim Rate intervals per displayed live frame. Excess complete intervals cause the remaining elapsed time to be discarded and the transport anchor to advance. GPU FLIP and coupled Box3D consume the same accepted intervals; retired completion and reaction receipts keep their endpoints. Timestamped impulses preserve order across discarded transport, and body samples cover accepted motion only. Graph installation gives existing graphs their duration and status wires, including accepted-duration pose sampling for the whitewater obstacle-source grid. No project-format fields, locks or channels were added. Export retains all required fixed intervals.
+Production uses the shared physics clock with at most two fixed Sim Rate intervals per displayed live frame, one after a late frame. Excess complete intervals cause the remaining elapsed time to be discarded and the transport anchor to advance. GPU FLIP and coupled Box3D consume the same accepted intervals; retired completion and reaction receipts keep their endpoints. Timestamped impulses preserve order across discarded transport, and body samples cover accepted motion only. Graph installation gives existing graphs their duration and status wires, including accepted-duration pose sampling for the whitewater obstacle-source grid. No project-format fields, locks or channels were added. Export retains all required fixed intervals.
 
 `liquid/clock.rs` is a small compatibility adapter and `live_sim_clock_reference.rs` a test-only oracle; neither is a second runtime clock. The main and editor HUDs share `perf_metrics_from_content_state`; a CPU flow test drives both from `ContentState` through play and pause, lag, cap and nonfinite flags.
 

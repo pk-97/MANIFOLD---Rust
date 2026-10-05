@@ -1,6 +1,6 @@
 //! Transport-owned simulation intervals on the Sim Rate grid. Live and export
-//! accept fixed boundaries. Live accepts at most two intervals, then discards
-//! excess transport time and reanchors. Sequence is identity, never elapsed time. Submission and fenced
+//! accept fixed boundaries. Live accepts at most two intervals (one after a
+//! late frame), then discards excess transport time and reanchors. Sequence is identity, never elapsed time. Submission and fenced
 //! completion belong to consumers.
 
 use std::sync::Arc;
@@ -10,6 +10,38 @@ use crate::stepping::{FramePlan, StepInterval};
 
 pub const TICK: f64 = 1.0 / 60.0;
 pub const MAX_LIVE_INTERVALS: u64 = 2;
+
+/// The previous live frame's measured load (render work plus GPU surface wait)
+/// against the display frame budget. A live frame takes a second interval only
+/// after an on-time frame. After a late frame a second interval would make this
+/// one late too and the next owe two again, halving the frame rate without
+/// keeping real time; one interval plays the overload as smooth slow motion.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LiveLoad {
+    pub previous: Seconds,
+    pub budget: Seconds,
+}
+
+thread_local! {
+    static LIVE_LOAD: std::cell::Cell<Option<LiveLoad>> = const { std::cell::Cell::new(None) };
+}
+
+/// Publish this frame's live load to every clock advanced on this thread until
+/// the guard drops. None (export, tests, previews) keeps the two-interval cap.
+pub fn live_load_scope(load: Option<LiveLoad>) -> LiveLoadScope {
+    LiveLoadScope { previous: LIVE_LOAD.replace(load), _thread_bound: std::marker::PhantomData }
+}
+
+pub struct LiveLoadScope {
+    previous: Option<LiveLoad>,
+    _thread_bound: std::marker::PhantomData<*const ()>,
+}
+
+impl Drop for LiveLoadScope {
+    fn drop(&mut self) {
+        LIVE_LOAD.set(self.previous);
+    }
+}
 
 /// Accepted frame intervals and transport/display endpoints.
 #[derive(Clone, Debug, PartialEq)]
@@ -125,6 +157,15 @@ impl SimulationClock {
         observed_simulation
     }
 
+    /// Intervals this live frame may accept. The load is fixed for the whole
+    /// frame, so observers and `advance` agree on the cap.
+    fn live_cap(&self) -> u64 {
+        match LIVE_LOAD.get() {
+            Some(load) if load.previous.0 > load.budget.0 => 1,
+            _ => MAX_LIVE_INTERVALS,
+        }
+    }
+
     pub fn rate_changed(&self, interval: f64) -> bool {
         self.started && self.simulation_interval != interval
     }
@@ -139,7 +180,7 @@ impl SimulationClock {
         // accepted boundary instead of creating timestamps in discarded time.
         let transport = if self.started && !self.offline {
             transport.min(self.transport_origin
-                + (self.transport_done + MAX_LIVE_INTERVALS) as f64 * self.simulation_interval)
+                + (self.transport_done + self.live_cap()) as f64 * self.simulation_interval)
         } else { transport };
         map_transport(&self.speed_history, transport)
     }
@@ -189,7 +230,7 @@ impl SimulationClock {
             if transport > from {
                 visit(transport, tick);
             }
-            if !self.offline && tick - self.ticks_done == MAX_LIVE_INTERVALS {
+            if !self.offline && tick - self.ticks_done == self.live_cap() {
                 break;
             }
             tick += 1;
@@ -205,9 +246,10 @@ impl SimulationClock {
     }
 
     /// Accept work up to the last Sim Rate boundary transport has reached.
-    /// Export runs every owed interval; live runs at most two, then reanchors
-    /// without retaining a catch-up debt. Display and output fps never
-    /// enter. A rate edit starts one epoch; Speed is integrated exactly once.
+    /// Export runs every owed interval; live runs at most two (one after a late
+    /// frame, see `LiveLoad`), then reanchors without retaining a catch-up
+    /// debt. Interval boundaries never depend on display or output fps. A rate
+    /// edit starts one epoch; Speed is integrated exactly once.
     pub fn advance(
         &mut self,
         transport: f64,
@@ -293,7 +335,7 @@ impl SimulationClock {
             transport_first
         };
         let transport_end = if offline { transport_reached }
-            else { transport_reached.min(transport_first + MAX_LIVE_INTERVALS) };
+            else { transport_reached.min(transport_first + self.live_cap()) };
         let accepted_transport = if restarted {
             transport
         } else {
@@ -803,6 +845,40 @@ mod tests {
             assert_eq!(resumed.dropped_seconds, late.dropped_seconds);
             assert_eq!(resumed.plan.start, late.plan.end);
         }
+    }
+
+    /// A late frame takes one interval, so an overloaded show slows down
+    /// instead of halving its frame rate; an on-time frame may catch up with
+    /// two. Observers agree with `advance`, and export ignores the load.
+    #[test]
+    fn late_frame_load_takes_one_interval_and_on_time_load_two() {
+        let budget = Seconds(1.0 / 60.0);
+        let late = LiveLoad { previous: Seconds(0.025), budget };
+        let on_time = LiveLoad { previous: Seconds(0.012), budget };
+        let mut clock = SimulationClock::default();
+        clock.advance(0.0, TICK, 1.0, 0.0, false, false);
+        {
+            let _load = live_load_scope(Some(late));
+            let mut starts = Vec::new();
+            clock.tick_starts(-1.0, 2.5 * TICK, |_, tick| starts.push(tick));
+            assert_eq!(starts, [0, 1]);
+            assert_eq!(clock.simulation_at(2.5 * TICK), TICK);
+            let frame = clock.advance(2.5 * TICK, TICK, 1.0, 0.0, false, false);
+            assert_eq!(frame.ticks, 1);
+            assert!(frame.reanchored);
+        }
+        {
+            let _load = live_load_scope(Some(on_time));
+            let frame = clock.advance(5.0 * TICK, TICK, 1.0, 0.0, false, false);
+            assert_eq!(frame.ticks, 2);
+            assert!(!frame.reanchored);
+        }
+        assert_eq!(LIVE_LOAD.get(), None);
+
+        let mut export = SimulationClock::default();
+        export.advance(0.0, TICK, 1.0, 0.0, false, true);
+        let _load = live_load_scope(Some(late));
+        assert_eq!(export.advance(5.5 * TICK, TICK, 1.0, 0.0, false, true).ticks, 5);
     }
 
     /// Display frames wobble around their nominal times and Speed changes
