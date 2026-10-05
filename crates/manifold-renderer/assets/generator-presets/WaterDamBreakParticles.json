@@ -3206,6 +3206,12 @@
     {
       "fromNode": 5,
       "fromPort": "foam_particles",
+      "toNode": 10,
+      "toPort": "foam_in"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "foam_b",
       "toNode": 510,
       "toPort": "particles_b"
     },
@@ -3230,6 +3236,12 @@
     {
       "fromNode": 5,
       "fromPort": "bubble_particles",
+      "toNode": 10,
+      "toPort": "bubble_in"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "bubble_b",
       "toNode": 511,
       "toPort": "particles_b"
     },
@@ -3254,6 +3266,12 @@
     {
       "fromNode": 5,
       "fromPort": "spray_particles",
+      "toNode": 10,
+      "toPort": "spray_in"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "spray_b",
       "toNode": 512,
       "toPort": "particles_b"
     },
@@ -3278,6 +3296,12 @@
     {
       "fromNode": 5,
       "fromPort": "dust_particles",
+      "toNode": 10,
+      "toPort": "dust_in"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "dust_b",
       "toNode": 513,
       "toPort": "particles_b"
     },

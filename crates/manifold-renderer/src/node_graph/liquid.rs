@@ -16,6 +16,7 @@ pub mod coupling;
 #[doc(hidden)]
 pub mod extent;
 pub mod fields;
+pub mod frame_history;
 pub mod frame_ring;
 pub mod grid;
 pub mod lattice;

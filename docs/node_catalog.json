@@ -19828,6 +19828,26 @@
           "type": "Array"
         },
         {
+          "name": "foam_in",
+          "required": false,
+          "type": "Array"
+        },
+        {
+          "name": "bubble_in",
+          "required": false,
+          "type": "Array"
+        },
+        {
+          "name": "spray_in",
+          "required": false,
+          "type": "Array"
+        },
+        {
+          "name": "dust_in",
+          "required": false,
+          "type": "Array"
+        },
+        {
           "name": "count",
           "required": false,
           "type": "f32"
@@ -19990,6 +20010,34 @@
         {
           "name": "face_valid_layers",
           "type": "f32"
+        },
+        {
+          "capacity": "fixed:1",
+          "name": "foam_b",
+          "type": "Array"
+        },
+        {
+          "capacity": "fixed:1",
+          "name": "bubble_b",
+          "type": "Array"
+        },
+        {
+          "capacity": "fixed:1",
+          "name": "spray_b",
+          "type": "Array"
+        },
+        {
+          "capacity": "fixed:1",
+          "name": "dust_b",
+          "type": "Array"
+        },
+        {
+          "name": "presented_time",
+          "type": "f32"
+        },
+        {
+          "name": "publications_skipped",
+          "type": "f32"
         }
       ],
       "params": [
@@ -20014,7 +20062,7 @@
           "type": "int"
         }
       ],
-      "purpose": "Publish a particle liquid's state as particle frames for the liquid surface: after every simulated tick, publish a compact copy sorted by persistent nonzero birth id as frame B (the previous B becomes A), with the retired live count and a cleared tail, with the native FLIP mesh lattice (1.5-cell padding) when Native Mesh Grid is enabled, otherwise the legacy simulation lattice, the blend and span of the one-tick-behind display clock, and the solid lattice: node.liquid_solid_distance's walls and bodies when `solid` is wired, each tick's copy kept beside its frame, otherwise the walls alone. With face_u_in, face_v_in and face_w_in wired, each tick's face grid is published beside frame B as face_u, face_v and face_w over the domain's cells, with face_valid_layers from the param. An optional cell-centred `interior` distance is copied into matching A/B slots. A tick whose stats flag a non-finite record or narrow-band capacity shortage is never published.",
+      "purpose": "Publish a particle liquid's state as particle frames for the liquid surface: every frame that ends on a new simulated tick publishes a compact copy sorted by persistent nonzero birth id into a retained history slot, with the retired live count and a cleared tail; frames A and B are the retired pair bracketing the display time, with its blend and span. Publishes the native FLIP mesh lattice (1.5-cell padding) when Native Mesh Grid is enabled, otherwise the legacy simulation lattice, and the solid lattice: node.liquid_solid_distance's walls and bodies when `solid` is wired, each tick's copy kept beside its frame, otherwise the walls alone. With face_u_in, face_v_in and face_w_in wired, each tick's face grid is kept beside its frame and published for frame B as face_u, face_v and face_w over the domain's cells, with face_valid_layers from the param. An optional cell-centred `interior` distance is kept per frame as interior_a/b, and the whitewater classes foam_in, bubble_in, spray_in and dust_in per frame as frame B's foam_b, bubble_b, spray_b and dust_b. A tick whose stats flag a non-finite record or narrow-band capacity shortage is never shown.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Hands a simulated particle liquid to the liquid surface, one frame per simulation tick.",

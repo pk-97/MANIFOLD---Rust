@@ -142,46 +142,6 @@ impl InteriorOps {
         Ok(())
     }
 
-    fn copy_gated(
-        &self,
-        gpu: &mut GpuEncoder<'_>,
-        source: &GpuBuffer,
-        previous: &GpuBuffer,
-        stats: &GpuBuffer,
-        target: &GpuBuffer,
-        bytes: u64,
-        label: &str,
-    ) -> Result<(), String> {
-        if bytes == 0 || !bytes.is_multiple_of(4) {
-            return Err(format!("interior distance field has invalid extent {bytes} bytes"));
-        }
-        for (name, buffer) in [("source", source), ("previous", previous), ("target", target)] {
-            if buffer.size != bytes {
-                return Err(format!("interior {name} extent is {} bytes; expected exactly {bytes}", buffer.size));
-            }
-        }
-        let len = u32::try_from(bytes / 4)
-            .map_err(|_| format!("interior distance field has {} records, past 32-bit GPU indexing", bytes / 4))?;
-        if stats.size < 4 {
-            return Err(format!("stats buffer has {} bytes; at least 4 are required for interior publication", stats.size));
-        }
-        gpu.native_enc.copy_buffer_to_buffer(previous, target, bytes);
-        let pipeline = self.copy_pipeline.as_ref().expect("liquid interior pipeline prepared at install");
-        let has_shortage = u32::from(stats_has_shortage(stats.size));
-        let params = FaceParams { len, _pad0: 0, _pad1: 0, has_shortage };
-        gpu.native_enc.dispatch_compute(
-            pipeline,
-            &[
-                GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&params) },
-                GpuBinding::Buffer { binding: 1, buffer: source, offset: 0 },
-                GpuBinding::Buffer { binding: 2, buffer: stats, offset: 0 },
-                GpuBinding::Buffer { binding: 3, buffer: target, offset: 0 },
-            ],
-            [len.div_ceil(256), 1, 1],
-            label,
-        );
-        Ok(())
-    }
 }
 
 /// A frame node's published face grid, frame B's only: storage per wired
@@ -204,10 +164,6 @@ pub fn stats_failed(stats: &[u32]) -> bool {
 impl PublishedFaces {
     pub fn prepare(&mut self, device: &manifold_gpu::GpuDevice) {
         self.ops.prepare(device);
-    }
-
-    pub fn clear_interior(&self, gpu: &mut GpuEncoder<'_>, target: &GpuBuffer) -> Result<(), String> {
-        self.ops.clear(gpu, target)
     }
 
     /// Whether `port` is one of the grid's arrays.
@@ -295,22 +251,6 @@ impl PublishedFaces {
             );
         }
         refused
-    }
-
-    /// Copy a distance field into a ring slot while preserving the previous
-    /// slot when the tick's stats report a failed solve. The fallback copy is
-    /// encoded first; the guarded shader overwrites it only for a valid tick.
-    pub fn copy_gated(
-        &mut self,
-        gpu: &mut GpuEncoder<'_>,
-        source: &GpuBuffer,
-        previous: &GpuBuffer,
-        stats: &GpuBuffer,
-        target: &GpuBuffer,
-        bytes: u64,
-        label: &str,
-    ) -> Result<(), String> {
-        self.ops.copy_gated(gpu, source, previous, stats, target, bytes, label)
     }
 }
 

@@ -1692,3 +1692,88 @@ mod emitter_oracle {
         assert!(failures.is_empty(), "the GPU emitter strays from FLIP's: {failures:#?}");
     }
 }
+
+/// The Dam Break at 16 with the frame's presentation probed.
+fn history_def() -> EffectGraphDef {
+    let mut g = Appender::new(render_def(WaterScene::dam_break(16).with_faces()));
+    let frame = g.id("frame");
+    for port in ["blend", "span", "count_a", "count_b", "presented_time", "publications_skipped"] {
+        g.probe(port, (frame, port));
+    }
+    g.finish()
+}
+
+const HISTORY_PROBES: [&str; 6] = ["blend", "span", "count_a", "count_b", "presented_time", "publications_skipped"];
+
+impl Show {
+    /// The bytes of the storage the named node provides on `port`.
+    fn provided_copy(&self, name: &str, port: &str) -> Vec<u8> {
+        let node = self.runtime.graph.nodes().find(|n| n.node_id.as_str() == name).unwrap_or_else(|| panic!("no node {name}"));
+        let buffer = node.node.provided_array_output(port).unwrap_or_else(|| panic!("{name} provides no {port}"));
+        let ptr = buffer.mapped_ptr().expect("shared storage");
+        // SAFETY: `frame` waited for the GPU; the buffer holds `size` bytes.
+        unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), buffer.size as usize) }.to_vec()
+    }
+}
+
+/// GPU_FLIP_DISPLAY_HISTORY_DESIGN.md section 4 (Conviction tests): a live
+/// frame held until its publication retired shows what export shows at that
+/// frame: the same endpoints, blend, span and pixels. Export commit-waits
+/// each publication; live retires it on a later frame, so after each frame
+/// live holds the clock until the presentation matches, within eight frames.
+#[test]
+fn liquid_frame_live_held_frame_matches_offline() {
+    const FRAMES: usize = 40;
+    let mut offline = Show::new(history_def(), (96, 54), false, &[]);
+    offline.restart();
+    let mut expected = Vec::new();
+    for _ in 0..FRAMES {
+        offline.frame(false);
+        expected.push((offline.probes(HISTORY_PROBES), offline.provided_copy("frame", "particles_b"), offline.readback()));
+    }
+    let _live = crate::node_graph::physics::PhysicsStepScope::with_preview_budget(false, std::time::Duration::from_secs(1));
+    let mut live = Show::new(history_def(), (96, 54), false, &[]);
+    live.restart();
+    let mut compared = 0;
+    for (k, (probes, particles_b, pixels)) in expected.iter().enumerate() {
+        live.frame(false);
+        live.paused = true;
+        let mut held = 0;
+        while live.probes(HISTORY_PROBES)[..5] != probes[..5] {
+            assert!(held < 8, "frame {k}: live never presented export's pair: live {:?}, export {probes:?}", live.probes(HISTORY_PROBES));
+            live.frame(false);
+            held += 1;
+        }
+        live.paused = false;
+        assert_eq!(&live.provided_copy("frame", "particles_b"), particles_b, "frame {k}: the selected B differs");
+        assert!(live.readback() == *pixels, "frame {k}: pixels differ from export at the same presentation");
+        assert_eq!(live.probes(HISTORY_PROBES)[5], 0.0, "no publication skipped");
+        compared += 1;
+    }
+    assert_eq!(compared, FRAMES);
+}
+
+/// Each whitewater class is read from the selected slot, not the current
+/// state: a live frame whose publication is still pending shows the class
+/// copied with the shown B, which differs from the state that ticked on.
+#[test]
+fn liquid_frame_whitewater_reads_the_selected_slot() {
+    let _live = crate::node_graph::physics::PhysicsStepScope::with_preview_budget(false, std::time::Duration::from_secs(1));
+    let mut show = Show::new(history_def(), (96, 54), false, &[]);
+    show.restart();
+    let mut states: Vec<Vec<u8>> = Vec::new();
+    let mut behind = 0;
+    let mut with_foam = 0;
+    for frame in 0..180 {
+        show.frame(false);
+        let state = show.provided_copy("state", "foam_particles");
+        let shown = show.provided_copy("frame", "foam_b");
+        let live = shown.chunks_exact(32).filter(|p| f32::from_ne_bytes([p[12], p[13], p[14], p[15]]) > 0.0).count();
+        with_foam += usize::from(live > 0);
+        states.push(state.clone());
+        assert!(states.contains(&shown), "frame {frame}: foam_b is no published state");
+        behind += usize::from(shown != state);
+    }
+    assert!(with_foam > 0, "the scene throws foam");
+    assert!(behind > 0, "foam_b is the selected slot's copy, not the current state");
+}
