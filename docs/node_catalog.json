@@ -14745,6 +14745,10 @@
           "type": "f32"
         },
         {
+          "name": "max_iterations",
+          "type": "f32"
+        },
+        {
           "name": "mesh_wall_inset",
           "type": "f32"
         },
@@ -14802,6 +14806,16 @@
           "range": [
             "0",
             "4"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "900",
+          "label": "Max Iterations",
+          "name": "max_iterations",
+          "range": [
+            "1",
+            "900"
           ],
           "type": "int"
         },
@@ -15120,6 +15134,11 @@
         },
         {
           "name": "solve_level",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "max_iterations",
           "required": false,
           "type": "f32"
         },
@@ -15515,7 +15534,17 @@
           "name": "iterations",
           "range": [
             "0",
-            "64"
+            "900"
+          ],
+          "type": "int"
+        },
+        {
+          "default": "900",
+          "label": "Max Iterations",
+          "name": "max_iterations",
+          "range": [
+            "1",
+            "900"
           ],
           "type": "int"
         },
@@ -142545,6 +142574,13 @@
           "name": "Solve Level"
         },
         {
+          "default": "900",
+          "id": "max_iterations",
+          "max": "900",
+          "min": "1",
+          "name": "Max Iterations"
+        },
+        {
           "default": "1",
           "id": "speed",
           "max": "4",
@@ -168454,6 +168490,13 @@
           "max": "4",
           "min": "0",
           "name": "Solve Level"
+        },
+        {
+          "default": "900",
+          "id": "max_iterations",
+          "max": "900",
+          "min": "1",
+          "name": "Max Iterations"
         },
         {
           "default": "1",

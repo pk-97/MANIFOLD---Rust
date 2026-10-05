@@ -46,7 +46,9 @@ struct Params {
     body_count: u32,
     // impulse_finalize: 1 adds the impulses into `reaction`.
     accumulate: u32,
-    _pad0: u32,
+    // impulse_finalize inside a round: the gate's solve-live triple
+    // (`armed` is the gate there); 0 outside rounds, where it always runs.
+    live: u32,
     _pad1: u32,
     _pad2: u32,
 };
@@ -298,6 +300,10 @@ fn impulse_finalize(
     @builtin(workgroup_id) wg: vec3<u32>,
 ) {
     if !clock_active() {
+        return;
+    }
+    // A round run after the solve stopped: uniform, before any barrier.
+    if u.live != 0u && armed[3u * u.live] == 0u {
         return;
     }
     let b = wg.x;

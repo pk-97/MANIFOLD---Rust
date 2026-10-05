@@ -179,6 +179,5 @@ water-race-probes = ["gpu-proofs", "fluid-perf-proofs", "manifold-fluids/face-or
 # The whitewater fields against FLIP's own (GPU_WHITEWATER_DESIGN.md O1, O2),
 # opt-in: builds FLIP's oracle entries into manifold-fluids.
 whitewater-oracle = ["gpu-proofs", "manifold-fluids/whitewater-oracle"]
-
 [lints]
 workspace = true
