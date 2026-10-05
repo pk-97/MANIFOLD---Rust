@@ -270,6 +270,7 @@ impl Primitive for RigidBodyNode {
                 friction: ctx.scalar_or_param("friction", 0.5),
                 bounce: ctx.scalar_or_param("bounce", 0.15),
                 collider: self.collider.clone(),
+                wall: false,
             };
             let shape = body.shape;
             ctx.outputs.set_rigid_body("body", body);
@@ -488,6 +489,7 @@ impl Primitive for RigidBodyNode {
             friction: ctx.scalar_or_param("friction", 0.5),
             bounce: ctx.scalar_or_param("bounce", 0.15),
             collider: self.collider.clone(),
+            wall: false,
         };
         let shape = body.shape;
         ctx.outputs.set_rigid_body("body", body);
