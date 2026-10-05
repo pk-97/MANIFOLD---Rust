@@ -86,8 +86,8 @@ pub(crate) struct WaterScene {
     /// Mesh the liquid with the shipped GPU liquid surface.
     pub surface: bool,
     /// Surface lattice nodes per cell (`resolution_scale` of the surface's
-    /// volume and mesh): Surface Detail 1 is subdivision 2, matching the
-    /// effective native WaterDamBreak preset.
+    /// volume and mesh): Surface Detail 0 is subdivision 1, the FLIP Fluids
+    /// engine default.
     pub surface_scale: usize,
     /// Publish the face grid: three node.face_sample_component named
     /// [`FACE_NODES`] on the state's faces after the region, into the frame.
@@ -133,7 +133,7 @@ impl WaterScene {
             fill_height: DAM_FILL_HEIGHT,
             column: DAM_COLUMN,
             surface: false,
-            surface_scale: 2,
+            surface_scale: 1,
             faces: false,
             ghost_fluid: true,
             volume_projection: false,
@@ -1308,8 +1308,8 @@ pub(super) mod tests {
         let coarse = rendered_scene_bytes(WaterScene::dam_break(64).with_surface_scale(1));
         let matched = rendered_scene_bytes(WaterScene::dam_break(64).with_surface_scale(2));
         assert!(matched > coarse);
-        println!("GPU FLIP 64³ rendered arrays/held buffers: detail 0 {coarse} bytes; native-matched detail 1 {matched} bytes; increase {} bytes", matched - coarse);
-        assert_eq!(WaterScene::dam_break(64).surface_scale, 2);
+        println!("GPU FLIP 64³ rendered arrays/held buffers: detail 0 {coarse} bytes; detail 1 {matched} bytes; increase {} bytes", matched - coarse);
+        assert_eq!(WaterScene::dam_break(64).surface_scale, 1);
     }
 
     /// Resolution is a card: the graph built at 64 runs at any Resolution,
@@ -1453,8 +1453,8 @@ pub(super) mod tests {
         assert!(band_layers(ENGINE_CFL) >= FACE_VALID_LAYERS);
     }
 
-    /// Solver presets share the authored surface structure. Particle support
-    /// and surface detail remain scene-specific tuning on that same graph.
+    /// Solver presets share the authored surface structure and the FLIP Fluids
+    /// engine surface defaults: particle scale 3.0, Surface Detail 0.
     #[test]
     fn gpu_flip_surface_group_is_shared_with_all_water_presets() {
         let source = surface_group();
@@ -1480,7 +1480,7 @@ pub(super) mod tests {
             let surface = preset["nodes"].as_array().unwrap().iter()
                 .find(|n| n["handle"] == "Liquid Surface").unwrap();
             assert_eq!(structure(&surface["group"]), structure(group), "{name}: authored surface drift");
-            let particle_scale = if name == SHIPPED_PRESET { 2.2_f32 } else { 3.0 };
+            let particle_scale = 3.0_f32;
             let mut defaults = surface["params"].clone();
             assert_eq!(defaults["particle_scale"]["value"].as_f64().unwrap() as f32, particle_scale, "{name}: particle support");
             defaults["particle_scale"] = source["params"]["particle_scale"].clone();
@@ -1488,7 +1488,7 @@ pub(super) mod tests {
             let blobs = surface["group"]["nodes"].as_array().unwrap().iter()
                 .find(|n| n["nodeId"] == "liquid_blobs").unwrap();
             assert_eq!(blobs["params"]["particle_scale"]["value"].as_f64().unwrap() as f32, particle_scale);
-            let surface_detail = if name == SHIPPED_PRESET { 1.0 } else { 0.0 };
+            let surface_detail = 0.0;
             for node in surface["group"]["nodes"].as_array().unwrap().iter()
                 .filter(|n| matches!(n["nodeId"].as_str(), Some("liquid_volume" | "liquid_mesh" | "liquid_bricks"))) {
                 assert_eq!(node["params"]["resolution_scale"]["value"].as_f64().unwrap(), surface_detail + 1.0, "{name}: {}", node["nodeId"]);
@@ -1534,7 +1534,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn gpu_flip_surface_defaults_match_effective_native_dam_break_cards() {
+    fn gpu_flip_surface_defaults_match_the_engine_on_both_dam_breaks() {
         let registry = PrimitiveRegistry::with_builtin();
         let native = bundled_preset_json(&PresetTypeId::new("WaterDamBreak")).unwrap();
         let native = crate::preset_runtime::PresetRuntime::from_json_str(&native, &registry).unwrap();
@@ -1545,11 +1545,11 @@ pub(super) mod tests {
             let id = runtime.graph.instance_by_node_id(&manifold_core::NodeId::new(node)).unwrap();
             runtime.graph.get_node(id).unwrap().params.get(name).cloned().unwrap()
         };
-        assert_eq!(param(&native, "fluid_surface", "surface_particle_scale"), ParamValue::Float(2.2));
-        assert_eq!(param(&native, "fluid_surface", "surface_subdivisions"), ParamValue::Float(1.0));
+        assert_eq!(param(&native, "fluid_surface", "surface_particle_scale"), ParamValue::Float(3.0));
+        assert_eq!(param(&native, "fluid_surface", "surface_subdivisions"), ParamValue::Float(0.0));
         assert_eq!(param(&gpu, "liquid_blobs", "particle_scale"), param(&native, "fluid_surface", "surface_particle_scale"));
         for node in ["liquid_volume", "liquid_mesh", "liquid_bricks"] {
-            assert_eq!(param(&gpu, node, "resolution_scale"), ParamValue::Float(2.0), "{node}");
+            assert_eq!(param(&gpu, node, "resolution_scale"), ParamValue::Float(1.0), "{node}");
         }
         assert_eq!(param(&gpu, "liquid_mesh_relaxation", "value"), param(&native, "fluid_surface", "surface_smoothing"));
         assert_eq!(param(&gpu, "liquid_smooth_mesh", "iterations"), param(&native, "fluid_surface", "surface_smoothing_iterations"));

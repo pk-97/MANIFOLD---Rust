@@ -439,19 +439,19 @@ mod tests {
             assert_eq!(runtime.graph.get_node(id).unwrap().params.get(name), Some(&ParamValue::Float(value)), "{node}.{name}");
         };
         for node in ["liquid_volume", "liquid_mesh", "liquid_bricks"] {
-            assert_param(&runtime, node, "resolution_scale", 2.0);
+            assert_param(&runtime, node, "resolution_scale", 1.0);
         }
-        assert_param(&runtime, "liquid_blobs", "particle_scale", 2.2);
+        assert_param(&runtime, "liquid_blobs", "particle_scale", 3.0);
         assert!(runtime.shadowed_def_params().next().is_none());
-        for (name, value) in [("surface_detail", 0.0), ("surface_particle_scale", 3.0)] {
+        for (name, value) in [("surface_detail", 1.0), ("surface_particle_scale", 2.2)] {
             let param = params.get_mut(name).unwrap();
             param.value = value;
             param.base = value;
         }
         runtime.apply_param_values(&params);
         for node in ["liquid_volume", "liquid_mesh", "liquid_bricks"] {
-            assert_param(&runtime, node, "resolution_scale", 1.0);
+            assert_param(&runtime, node, "resolution_scale", 2.0);
         }
-        assert_param(&runtime, "liquid_blobs", "particle_scale", 3.0);
+        assert_param(&runtime, "liquid_blobs", "particle_scale", 2.2);
     }
 }
