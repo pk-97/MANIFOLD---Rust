@@ -1693,17 +1693,24 @@ mod emitter_oracle {
     }
 }
 
-/// The Dam Break at 16 with the frame's presentation probed.
+/// The Dam Break at 16 with the frame's presentation and the domain's
+/// simulation time probed.
 fn history_def() -> EffectGraphDef {
     let mut g = Appender::new(render_def(WaterScene::dam_break(16).with_faces()));
     let frame = g.id("frame");
-    for port in ["blend", "span", "count_a", "count_b", "presented_time", "publications_skipped"] {
+    for port in HISTORY_PROBES[..HISTORY_PROBES.len() - 1].iter() {
         g.probe(port, (frame, port));
     }
+    let domain = g.id("domain");
+    g.probe("simulation_time", (domain, "simulation_time"));
     g.finish()
 }
 
-const HISTORY_PROBES: [&str; 6] = ["blend", "span", "count_a", "count_b", "presented_time", "publications_skipped"];
+/// The frame's presentation; the last is the domain's simulation time.
+const HISTORY_PROBES: [&str; 9] =
+    ["blend", "span", "count_a", "count_b", "identity_a", "identity_b", "presented_time", "publications_skipped", "simulation_time"];
+/// The probes that describe the selected pair.
+const PAIR: std::ops::Range<usize> = 0..7;
 
 impl Show {
     /// The bytes of the storage the named node provides on `port`.
@@ -1718,9 +1725,10 @@ impl Show {
 
 /// GPU_FLIP_DISPLAY_HISTORY_DESIGN.md section 4 (Conviction tests): a live
 /// frame held until its publication retired shows what export shows at that
-/// frame: the same endpoints, blend, span and pixels. Export commit-waits
-/// each publication; live retires it on a later frame, so after each frame
-/// live holds the clock until the presentation matches, within eight frames.
+/// frame: the same endpoints and identities, A and B bytes, blend, span and
+/// pixels. Export commit-waits each publication; live retires it on a later
+/// frame, so after each frame live holds the clock until the presentation
+/// matches, within eight frames.
 #[test]
 fn liquid_frame_live_held_frame_matches_offline() {
     const FRAMES: usize = 40;
@@ -1729,51 +1737,70 @@ fn liquid_frame_live_held_frame_matches_offline() {
     let mut expected = Vec::new();
     for _ in 0..FRAMES {
         offline.frame(false);
-        expected.push((offline.probes(HISTORY_PROBES), offline.provided_copy("frame", "particles_b"), offline.readback()));
+        expected.push((
+            offline.probes(HISTORY_PROBES),
+            offline.provided_copy("frame", "particles_a"),
+            offline.provided_copy("frame", "particles_b"),
+            offline.readback(),
+        ));
     }
     let _live = crate::node_graph::physics::PhysicsStepScope::with_preview_budget(false, std::time::Duration::from_secs(1));
     let mut live = Show::new(history_def(), (96, 54), false, &[]);
     live.restart();
-    let mut compared = 0;
-    for (k, (probes, particles_b, pixels)) in expected.iter().enumerate() {
+    let mut holds = 0;
+    for (k, (probes, particles_a, particles_b, pixels)) in expected.iter().enumerate() {
         live.frame(false);
         live.paused = true;
         let mut held = 0;
-        while live.probes(HISTORY_PROBES)[..5] != probes[..5] {
+        while live.probes(HISTORY_PROBES)[PAIR] != probes[PAIR] {
             assert!(held < 8, "frame {k}: live never presented export's pair: live {:?}, export {probes:?}", live.probes(HISTORY_PROBES));
             live.frame(false);
             held += 1;
         }
+        holds += held;
         live.paused = false;
+        assert_eq!(&live.provided_copy("frame", "particles_a"), particles_a, "frame {k}: the selected A differs");
         assert_eq!(&live.provided_copy("frame", "particles_b"), particles_b, "frame {k}: the selected B differs");
         assert!(live.readback() == *pixels, "frame {k}: pixels differ from export at the same presentation");
-        assert_eq!(live.probes(HISTORY_PROBES)[5], 0.0, "no publication skipped");
-        compared += 1;
+        assert_eq!(live.probes(HISTORY_PROBES)[7], 0.0, "no publication skipped");
     }
-    assert_eq!(compared, FRAMES);
+    println!("live held {holds} frames over {FRAMES} until its publications retired");
 }
 
-/// Each whitewater class is read from the selected slot, not the current
-/// state: a live frame whose publication is still pending shows the class
-/// copied with the shown B, which differs from the state that ticked on.
+/// Each whitewater class is read from the selected slot: on every frame all
+/// four classes equal the state's classes at the frame that published B,
+/// found by B's time, and at least one frame shows a B older than the state.
 #[test]
 fn liquid_frame_whitewater_reads_the_selected_slot() {
     let _live = crate::node_graph::physics::PhysicsStepScope::with_preview_budget(false, std::time::Duration::from_secs(1));
     let mut show = Show::new(history_def(), (96, 54), false, &[]);
     show.restart();
-    let mut states: Vec<Vec<u8>> = Vec::new();
-    let mut behind = 0;
-    let mut with_foam = 0;
+    // Per frame: simulation time and the four classes the state then held.
+    let mut published: Vec<(f32, [Vec<u8>; 4])> = Vec::new();
+    let (mut behind, mut with_foam) = (0, 0);
     for frame in 0..180 {
         show.frame(false);
-        let state = show.provided_copy("state", "foam_particles");
-        let shown = show.provided_copy("frame", "foam_b");
-        let live = shown.chunks_exact(32).filter(|p| f32::from_ne_bytes([p[12], p[13], p[14], p[15]]) > 0.0).count();
-        with_foam += usize::from(live > 0);
-        states.push(state.clone());
-        assert!(states.contains(&shown), "frame {frame}: foam_b is no published state");
-        behind += usize::from(shown != state);
+        let probes = show.probes(HISTORY_PROBES);
+        let classes = WHITEWATER_KINDS.map(|kind| show.provided_copy("state", &format!("{kind}_particles")));
+        let time = probes[8];
+        if published.last().is_none_or(|(t, _)| *t != time) {
+            published.push((time, classes.clone()));
+        }
+        let (blend, span, presented) = (probes[0], probes[1], probes[6]);
+        let t_b = presented + (1.0 - blend) * span;
+        let (at, expected) = published
+            .iter()
+            .min_by(|(a, _), (b, _)| (a - t_b).abs().total_cmp(&(b - t_b).abs()))
+            .expect("a publication");
+        assert!((at - t_b).abs() < 1e-4, "frame {frame}: B at {t_b} matches no publication");
+        for (k, kind) in WHITEWATER_KINDS.iter().enumerate() {
+            let shown = show.provided_copy("frame", &format!("{kind}_b"));
+            assert!(shown == expected[k], "frame {frame}: {kind}_b is not B's publication at {at}");
+        }
+        let foam = &expected[0];
+        with_foam += usize::from(foam.chunks_exact(32).any(|p| f32::from_ne_bytes([p[12], p[13], p[14], p[15]]) > 0.0));
+        behind += usize::from(*at != time && expected != &classes);
     }
     assert!(with_foam > 0, "the scene throws foam");
-    assert!(behind > 0, "foam_b is the selected slot's copy, not the current state");
+    assert!(behind > 0, "some frame shows a B older than the state");
 }
