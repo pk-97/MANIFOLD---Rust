@@ -27,8 +27,14 @@ const N: [usize; 3] = [6, 5, 4];
 const H: f32 = 0.25;
 const MIN: [f32; 3] = [-0.5, 0.1, 0.3];
 
-/// The move's wall cap in cells: the shader's WALL_MARGIN.
+/// The native solid push target in cells.
 const WALL_MARGIN_CELLS: f64 = 0.2;
+const BOUNDARY_MARGIN_CELLS: f64 = 0.1;
+const BOUNDARY_EPS_METRES: f64 = 0.00005;
+const PADDED_GRID_MARGIN_CELLS: f64 = 1.5;
+const MOVE_EPS_METRES: f64 = 1.0e-6;
+const SOLID_STEP_CELLS: f64 = 0.1;
+const SOLID_PUSH_CELLS: f64 = 5.0;
 
 struct Stream(u64);
 
@@ -89,6 +95,141 @@ fn face_exists(p: [usize; 3], a: usize) -> bool {
 /// face closed.
 fn lattice() -> StepParams {
     StepParams { n: N.map(|n| n as u32), box_min: MIN, cell_size: H, impulse_tick: -1, closed_faces: 63, ..StepParams::default() }
+}
+
+fn wall_solid(n: [usize; 3], h: f32) -> Vec<f32> {
+    let m = n.map(|v| v + 1);
+    (0..m.iter().product())
+        .map(|i| {
+            let q = [i % m[0], (i / m[0]) % m[1], i / (m[0] * m[1])];
+            let distance = (0..3).map(|a| (q[a] as f32).min(n[a] as f32 - q[a] as f32)).fold(f32::INFINITY, f32::min);
+            distance * h
+        })
+        .collect()
+}
+
+fn wall_phi(q: [f64; 3], n: [usize; 3]) -> f64 {
+    (0..3).map(|a| q[a].min(n[a] as f64 - q[a])).fold(f64::INFINITY, f64::min)
+}
+
+fn wall_gradient(q: [f64; 3], n: [usize; 3]) -> [f64; 3] {
+    let mut axis = 0;
+    let mut value = f64::INFINITY;
+    let mut sign = 1.0;
+    for a in 0..3 {
+        let low = q[a];
+        let high = n[a] as f64 - q[a];
+        if low < value {
+            value = low;
+            axis = a;
+            sign = 1.0;
+        }
+        if high < value {
+            value = high;
+            axis = a;
+            sign = -1.0;
+        }
+    }
+    let mut out = [0.0; 3];
+    out[axis] = sign;
+    out
+}
+
+fn boundary_edge(h: f64) -> f64 {
+    BOUNDARY_MARGIN_CELLS + BOUNDARY_EPS_METRES / h
+}
+
+fn inside_boundary_cpu(q: [f64; 3], n: [usize; 3], edge: f64) -> bool {
+    (0..3).all(|a| q[a] >= edge && q[a] < n[a] as f64 - edge)
+}
+
+fn clamp_boundary_cpu(mut q: [f64; 3], n: [usize; 3], edge: f64, h: f64) -> [f64; 3] {
+    for a in 0..3 {
+        q[a] = q[a].max(edge).min(n[a] as f64 - edge - MOVE_EPS_METRES / h);
+    }
+    q
+}
+
+/// Independent f64 port of FluidSimulation::_resolveCollision for the box
+/// wall SDF. It keeps the native endpoint preclamp, march predicate, push,
+/// upper-exclusive clamp and fallback ordering visible to the proof.
+fn native_wall_move(q0: [f64; 3], q1: [f64; 3], n: [usize; 3], h: f64) -> [f64; 3] {
+    native_collision_move(q0, q1, n, h, |q| wall_phi(q, n), |q| wall_gradient(q, n).map(|v| v * h))
+}
+
+// Source sequence without the GPU's conservative distance shortcut. phi is
+// in cells; gradient holds the native unscaled lattice edge differences.
+fn native_collision_move(
+    q0: [f64; 3], mut q1: [f64; 3], n: [usize; 3], h: f64,
+    phi: impl Fn([f64; 3]) -> f64, gradient: impl Fn([f64; 3]) -> [f64; 3],
+) -> [f64; 3] {
+    let edge = boundary_edge(h);
+    if (0..3).any(|a| q1[a] < -PADDED_GRID_MARGIN_CELLS || q1[a] >= n[a] as f64 + PADDED_GRID_MARGIN_CELLS) {
+        q1 = clamp_boundary_cpu(q1, n, edge, h);
+    }
+    let travel = (0..3).map(|a| (q1[a] - q0[a]).powi(2)).sum::<f64>().sqrt();
+    if travel * h < MOVE_EPS_METRES {
+        return q1;
+    }
+    let steps = (travel / SOLID_STEP_CELLS).ceil() as usize;
+    let dir: [f64; 3] = std::array::from_fn(|a| (q1[a] - q0[a]) / travel);
+    let mut last = q0;
+    for s in 0..steps {
+        let current: [f64; 3] = if s == steps - 1 {
+            q1
+        } else {
+            std::array::from_fn(|a| q0[a] + (s + 1) as f64 * SOLID_STEP_CELLS * dir[a])
+        };
+        let d = phi(current);
+        if d < 0.0 || !inside_boundary_cpu(current, n, edge) {
+            let g = gradient(current);
+            let g_len = (0..3).map(|a| g[a] * g[a]).sum::<f64>().sqrt();
+            let mut kept = last;
+            if g_len > 1e-6 {
+                let pushed = std::array::from_fn(|a| current[a] - (d - WALL_MARGIN_CELLS) * g[a] / g_len);
+                let push_distance = (0..3).map(|a| (pushed[a] - current[a]).powi(2)).sum::<f64>().sqrt();
+                if push_distance <= SOLID_PUSH_CELLS && phi(pushed) >= 0.0 {
+                    kept = pushed;
+                }
+            }
+            if !inside_boundary_cpu(kept, n, edge) {
+                let original = kept;
+                kept = clamp_boundary_cpu(kept, n, edge, h);
+                let clamp_distance = (0..3).map(|a| (kept[a] - original[a]).powi(2)).sum::<f64>().sqrt();
+                if phi(kept) < 0.0 || clamp_distance > SOLID_PUSH_CELLS {
+                    return last;
+                }
+            }
+            return kept;
+        }
+        last = current;
+    }
+    q1
+}
+
+#[test]
+fn native_wall_oracle_covers_margin_crossing_tangent_and_padded_escape() {
+    let n = N;
+    let h = f64::from(H);
+    let e = boundary_edge(h);
+    let y = 2.5;
+    let stationary = native_wall_move([0.15, y, y], [0.15, y, y], n, h);
+    assert_eq!(stationary, [0.15, y, y], "stationary point between .1h and .2h is unchanged");
+    let approach = native_wall_move([0.15, y, y], [0.05, y, y], n, h);
+    assert!((approach[0] - 0.2).abs() < 1e-12, "wall approach pushes to .2h: {approach:?}");
+    let tangent = native_wall_move([0.15, y, y], [0.15, y + 0.4, y], n, h);
+    assert_eq!(tangent[0], 0.15, "tangent move keeps its wall distance");
+    let upper = native_wall_move([n[0] as f64 - 0.15, y, y], [n[0] as f64 - 0.05, y, y], n, h);
+    assert!((upper[0] - (n[0] as f64 - 0.2)).abs() < 1e-12, "upper wall push: {upper:?}");
+    let escaped = native_wall_move([2.0, y, y], [-2.0, y, y], n, h);
+    assert!((escaped[0] - e).abs() < 1e-12, "padded-grid escape clamps to the inclusive lower safety edge: {escaped:?}");
+    let upper_escape = native_wall_move([n[0] as f64 - 2.0, y, y], [n[0] as f64 + 2.0, y, y], n, h);
+    let upper_bound = n[0] as f64 - e - MOVE_EPS_METRES / h;
+    assert!((upper_escape[0] - upper_bound).abs() < 1e-12, "upper padded escape uses the exclusive AABB epsilon: {upper_escape:?}");
+    let tiny = native_wall_move([0.05, y, y], [0.050002, y, y], n, h);
+    assert_eq!(tiny, [0.050002, y, y], "native movement epsilon is in metres");
+    let fallback = native_collision_move([0.05, y, y], [0.05, y + 0.1, y], n, h, |_| 1.0, |_| [0.0; 3]);
+    assert_eq!(fallback, [e, y, y], "zero-gradient fallback still receives the boundary clamp");
 }
 
 /// One entry of the step's shader with its buffers bound by number.
@@ -663,22 +804,9 @@ fn snap(phi: Vec<f64>) -> Vec<f64> {
     phi.into_iter().map(|v| if v.abs() < eps { if v > 0.0 { eps } else { -eps } } else { v }).collect()
 }
 
-/// Whether a live particle sits in cell `c` or its 26 neighbours.
-fn has_near_particle(c: usize, sorted: &[FluidParticle], ranges: &[CellRange]) -> bool {
-    let p = cell_coords(c);
-    (p[2].saturating_sub(1)..=(p[2] + 1).min(N[2] - 1)).any(|z| {
-        (p[1].saturating_sub(1)..=(p[1] + 1).min(N[1] - 1)).any(|y| {
-            (p[0].saturating_sub(1)..=(p[0] + 1).min(N[0] - 1)).any(|x| {
-                let r = ranges[cell_index([x, y, z])];
-                sorted[r.start as usize..(r.start + r.count) as usize].iter().any(|q| q.position_radius[3] > 0.0)
-            })
-        })
-    })
-}
-
 /// The particle distance pass's own reading: the min over the 125 bins around
 /// each cell, from the sort's ranges, keeping a particle only when the cell
-/// is inside its box; 3h with no live particle in the 27 bins.
+/// is inside its box; 3h when no particle contributes.
 fn cpu_gather_distance(sorted: &[FluidParticle], ranges: &[CellRange]) -> Vec<f64> {
     let h = f64::from(H);
     let phi = (0..cell_len())
@@ -686,9 +814,6 @@ fn cpu_gather_distance(sorted: &[FluidParticle], ranges: &[CellRange]) -> Vec<f6
             let p = cell_coords(c);
             let centre: [f64; 3] = std::array::from_fn(|a| f64::from(MIN[a]) + (p[a] as f64 + 0.5) * h);
             let mut phi = 3.0 * h;
-            if !has_near_particle(c, sorted, ranges) {
-                return phi;
-            }
             for z in p[2].saturating_sub(2)..=(p[2] + 2).min(N[2] - 1) {
                 for y in p[1].saturating_sub(2)..=(p[1] + 2).min(N[1] - 1) {
                     for x in p[0].saturating_sub(2)..=(p[0] + 2).min(N[0] - 1) {
@@ -713,42 +838,47 @@ fn cpu_gather_distance(sorted: &[FluidParticle], ranges: &[CellRange]) -> Vec<f6
     snap(phi)
 }
 
-/// The gather is the engine's scatter, cell for cell, wherever a live
-/// particle sits within one cell; elsewhere it reads 3h. A cell holding a
-/// live particle is always inside the liquid. A particle 0.499h from its
-/// cell's centre along each axis (0.0017h inside its ball's reach) puts
-/// that cell at −0.005h and the empty cell across the corner, 0.0017h
-/// outside, at +0.005h. In "boxed", cell (3, 1, 1) has a particle in its 27
-/// bins at 1.73h, and one two cells out along x at 1.53h whose box stops at
-/// cell 2: the cell reads 1.73h, as the engine's does.
-#[test]
-fn gpu_flip_particle_distance_is_the_engines_level_set() {
-    let h = f64::from(H);
+fn distance_fixtures() -> Vec<(&'static str, Vec<FluidParticle>)> {
     let particle = |q: [f32; 3]| FluidParticle { position_radius: [q[0], q[1], q[2], 0.08], velocity: [0.0; 3], id: 1 };
     let centre = |p: [usize; 3]| -> [f32; 3] { std::array::from_fn(|a| MIN[a] + (p[a] as f32 + 0.5) * H) };
     let at = |cells: [f32; 3]| -> [f32; 3] { std::array::from_fn(|a| MIN[a] + cells[a] * H) };
     let corner = centre([2, 1, 1]).map(|v| v + 0.499 * H);
-    let sets = [
+    vec![
         ("random", random_particles(0xd157, 70)),
         ("corner", vec![particle(corner)]),
         ("boxed", vec![particle(at([2.001, 0.001, 0.001])), particle(at([1.1, 1.5, 1.5]))]),
-    ];
-    for (name, particles) in sets {
+        ("ring_two_only", vec![particle(at([2.05, 2.5, 1.5]))]),
+    ]
+}
+
+/// CPU gather must reproduce the native scatter in every cell, including
+/// air cells with only ring-two contributors beside a wet cell. Those air
+/// distances set the ghost-fluid pressure ratio.
+#[test]
+fn particle_distance_gather_matches_native_scatter() {
+    for (name, particles) in distance_fixtures() {
         let (sorted, ranges) = cpu_sort(&particles);
-        let want = cpu_gather_distance(&sorted, &ranges);
+        let gather = cpu_gather_distance(&sorted, &ranges);
         let engine = cpu_scatter_distance(&particles);
-        let mut far = 0;
-        for (c, (a, b)) in want.iter().zip(&engine).enumerate() {
-            if has_near_particle(c, &sorted, &ranges) {
-                assert!((a - b).abs() < 1e-12, "{name} cell {:?}: gather {a} vs scatter {b}", cell_coords(c));
-            } else {
-                assert_eq!(*a, 3.0 * h, "{name} cell {:?}: no particle within a cell", cell_coords(c));
-                far += usize::from(*b < 3.0 * h);
-            }
+        for (c, (a, b)) in gather.iter().zip(&engine).enumerate() {
+            assert!((a - b).abs() < 1e-12, "{name} cell {:?}: gather {a} vs scatter {b}", cell_coords(c));
         }
-        if name == "corner" {
-            assert!(far > 0, "the lone particle reaches cells two out, which read 3h here");
+        if name == "ring_two_only" {
+            let h = f64::from(H);
+            assert!((engine[cell_index([0, 2, 1])] - (1.55 * h - sdf_radius())).abs() < 1e-6);
+            assert!(engine[cell_index([1, 2, 1])] < 0.0, "adjacent cell must be wet");
         }
+    }
+}
+
+/// GPU distances match the native scatter oracle in every cell. Fixtures
+/// exercise zero snapping, exact scatter-box support, and sparse ring two.
+#[test]
+fn gpu_flip_particle_distance_is_the_engines_level_set() {
+    let h = f64::from(H);
+    for (name, particles) in distance_fixtures() {
+        let (sorted, ranges) = cpu_sort(&particles);
+        let want = cpu_scatter_distance(&particles);
         let step = StepParams { capacity: sorted.len() as u32, ..lattice() };
         let mut pass = Pass::new();
         let threads = pass.every_tile();
@@ -960,9 +1090,17 @@ fn gpu_flip_faces_to_particles_blends_flip_and_moves_by_rk3() {
     let faces = random_faces(0xf1a5, true);
     let old = random_faces(0x01d5, false);
     let mut particles = random_particles(0x2b3, 300);
-    // Two particles against the walls, so the clamp is exercised.
-    particles[0].position_radius[0] = MIN[0] + 1e-4;
-    particles[1].position_radius[1] = MIN[1] + N[1] as f32 * H - 1e-4;
+    // Keep the random draw away from wall corners so the f64 wall oracle
+    // compares the same one-axis lattice gradient as the shader.
+    for particle in &mut particles {
+        for a in 0..3 {
+            let q = ((particle.position_radius[a] - MIN[a]) / H).clamp(1.0, N[a] as f32 - 1.0);
+            particle.position_radius[a] = MIN[a] + q * H;
+        }
+    }
+    // Two particles against the walls, so the native march is exercised.
+    particles[0].position_radius[..3].copy_from_slice(&[MIN[0] + 0.15 * H, MIN[1] + 2.5 * H, MIN[2] + 2.5 * H]);
+    particles[1].position_radius[..3].copy_from_slice(&[MIN[0] + 2.5 * H, MIN[1] + (N[1] as f32 - 0.15) * H, MIN[2] + 2.5 * H]);
     // Two broken particles: the move must leave them non-finite, never clamp
     // or zero them, so the tick's stats see them.
     particles[2].position_radius[0] = f32::NAN;
@@ -970,12 +1108,13 @@ fn gpu_flip_faces_to_particles_blends_flip_and_moves_by_rk3() {
     // A guard short enough that some RK3 stages hit it and some don't.
     let (dt, flip, max_travel) = (0.07f32, 0.9f32, 0.45f32);
     let step = StepParams { step_dt: dt, flip, max_travel, particles: particles.len() as u32, ..lattice() };
+    let solid = wall_solid(N, H);
     let mut pass = Pass::new();
     let got: Vec<FluidParticle> = pass
         .bind(2, &particles)
         .bind(3, &faces)
         // Metal requires the conditional solid/region resources even with zero counts.
-        .bind(9, &vec![0.0_f32; face_len()])
+        .bind(9, &solid)
         .bind(15, &[LiquidShape::default()])
         .bind(16, &[0_u32; 4])
         .bind(36, &[LiquidBody::default()])
@@ -1017,10 +1156,10 @@ fn gpu_flip_faces_to_particles_blends_flip_and_moves_by_rk3() {
         let before = cpu_sample(q0, &old);
         assert_eq!(capped[2 * i] as usize, stages[1].get() - past_before, "particle {i}: guarded stages");
         assert_eq!(capped[2 * i + 1], 0, "particle {i}: no bodies, no refused push");
+        let reached: [f64; 3] = std::array::from_fn(|a| q0[a] + per_cell * (2.0 * k1[a] + 3.0 * k2[a] + 4.0 * k3[a]) / 9.0);
+        let q1 = native_wall_move(q0, reached, N, f64::from(H));
         for a in 0..3 {
-            let q1 = (q0[a] + per_cell * (2.0 * k1[a] + 3.0 * k2[a] + 4.0 * k3[a]) / 9.0)
-                .clamp(WALL_MARGIN_CELLS, N[a] as f64 - WALL_MARGIN_CELLS);
-            let position = f64::from(MIN[a]) + q1 * f64::from(H);
+            let position = f64::from(MIN[a]) + q1[a] * f64::from(H);
             let velocity =
                 f64::from(flip) * (f64::from(p.velocity[a]) + after[a] - before[a]) + (1.0 - f64::from(flip)) * after[a];
             assert!((f64::from(g.position_radius[a]) - position).abs() < 2e-5, "particle {i} position {a}: {} vs {position}", g.position_radius[a]);
@@ -1030,6 +1169,126 @@ fn gpu_flip_faces_to_particles_blends_flip_and_moves_by_rk3() {
     }
     let stages = stages.map(std::cell::Cell::into_inner);
     assert!(stages.iter().all(|&k| k > 30), "the draw covers stages within and past the CFL guard: {stages:?}");
+}
+
+#[test]
+fn gpu_flip_marker_motion_matches_native_wall_sequence_without_bodies() {
+    let y = 2.5_f64;
+    let cases = [
+        ("stationary", [0.15, y, y], [0.0, 0.0, 0.0], 0.01_f32, false),
+        ("approach", [0.15, y, y], [-1.0, 0.0, 0.0], 0.01, false),
+        ("crossing", [0.15, y, y], [-10.0, 0.0, 0.0], 0.04, false),
+        ("tangent", [0.15, y, y], [0.0, 1.0, 0.0], 0.10, false),
+        ("upper", [N[0] as f64 - 0.15, y, y], [1.0, 0.0, 0.0], 0.01, false),
+        ("padded escape", [2.0, y, y], [-10.0, 0.0, 0.0], 0.10, false),
+        ("upper padded escape", [N[0] as f64 - 2.0, y, y], [10.0, 0.0, 0.0], 0.10, false),
+        ("world epsilon", [0.05, y, y], [0.00005, 0.0, 0.0], 0.01, false),
+        ("fallback clamp", [0.05, y, y], [0.0, 1.0, 0.0], 0.025, true),
+        ("nonfinite", [f64::NAN, y, y], [0.0; 3], 0.01, false),
+    ];
+    for entry in ["faces_to_particles", "narrow_move"] {
+    for (name, q0, velocity, dt, flat) in cases {
+        let solid = if flat { vec![H; face_len()] } else { wall_solid(N, H) };
+        let particles = [FluidParticle {
+            position_radius: [
+                MIN[0] + q0[0] as f32 * H,
+                MIN[1] + q0[1] as f32 * H,
+                MIN[2] + q0[2] as f32 * H,
+                0.08,
+            ],
+            velocity: [0.0; 3],
+            id: 1,
+        }];
+        let faces = vec![FaceSample { velocity: [velocity[0] as f32, velocity[1] as f32, velocity[2] as f32, 0.0], weight: [1.0; 4] }; face_len()];
+        let step = StepParams { step_dt: dt, max_travel: 10.0, particles: 1, ..lattice() };
+        let got: Vec<FluidParticle> = Pass::new()
+            .bind(2, &particles)
+            .bind(3, &faces)
+            .bind(9, &solid)
+            .bind(15, &[LiquidShape::default()])
+            .bind(16, &[0_u32; 4])
+            .bind(17, &faces)
+            .bind(18, &faces)
+            .bind(22, &[0_u32; 2])
+            .bind(36, &[LiquidBody::default()])
+            .run(entry, &step, 19, 1, 1);
+        if name == "nonfinite" {
+            assert!(!got[0].position_radius[0].is_finite(), "{entry}: invalid position remains visible");
+            assert_eq!((got[0].position_radius[3], got[0].id), (particles[0].position_radius[3], particles[0].id));
+            continue;
+        }
+        let reached: [f64; 3] = std::array::from_fn(|a| q0[a] + f64::from(dt) / f64::from(H) * velocity[a]);
+        let want = if flat {
+            native_collision_move(q0, reached, N, f64::from(H), |_| 1.0, |_| [0.0; 3])
+        } else {
+            native_wall_move(q0, reached, N, f64::from(H))
+        };
+        let actual: [f64; 3] = std::array::from_fn(|a| (f64::from(got[0].position_radius[a]) - f64::from(MIN[a])) / f64::from(H));
+        for a in 0..3 {
+            assert!((actual[a] - want[a]).abs() < 2e-5, "{entry}/{name} axis {a}: {actual:?} vs {want:?}");
+        }
+        assert!(got[0].position_radius[3] > 0.0, "{name} remains live");
+    }
+    }
+}
+
+#[test]
+fn gpu_flip_collision_removes_negative_body_phi_then_open_band_particles() {
+    let mut solid = wall_solid(N, H);
+    let m = N.map(|n| n + 1);
+    for z in 2..=3 {
+        for y in 2..=3 {
+            for x in 2..=3 {
+                solid[x + m[0] * (y + m[1] * z)] = -H;
+            }
+        }
+    }
+    let particles = [
+        FluidParticle { position_radius: [MIN[0] + 2.5 * H, MIN[1] + 2.5 * H, MIN[2] + 2.5 * H, 0.08], id: 1, ..FluidParticle::default() },
+        FluidParticle { position_radius: [MIN[0] + 0.5 * H, MIN[1] + 2.5 * H, MIN[2] + 2.5 * H, 0.08], id: 2, ..FluidParticle::default() },
+    ];
+    let faces = vec![FaceSample::default(); face_len()];
+    for entry in ["faces_to_particles", "narrow_move"] {
+    for closed_faces in [62, 63] {
+    let step = StepParams { body_count: 1, rows: 1, region_count: 0, closed_faces, particles: 2, ..lattice() };
+    let got: Vec<FluidParticle> = Pass::new()
+        .bind(2, &particles)
+        .bind(3, &faces)
+        .bind(9, &solid)
+        .bind(15, &[LiquidShape::default()])
+        .bind(16, &[0_u32; 4])
+        .bind(17, &faces)
+        .bind(18, &faces)
+        .bind(22, &[0_u32; 4])
+        .bind(36, &[LiquidBody::default()])
+        .run(entry, &step, 19, particles.len(), particles.len());
+    assert_eq!(got[0].position_radius[3], 0.0, "negative body phi removes the stationary particle");
+    assert_eq!(got[1].position_radius[3], if closed_faces == 62 { 0.0 } else { 0.08 }, "only the open low-X band removes the second particle");
+    }
+    }
+}
+
+#[test]
+fn gpu_flip_collision_rejects_excessive_push_and_keeps_fallback() {
+    // A plane solid whose exit is beyond the native five-cell push limit.
+    // The last point also lies outside the safety AABB; its attempted clamp
+    // stays inside this solid, so the final native fallback is the old point.
+    let solid: Vec<f32> = (0..face_len()).map(|i| (pad_coords(i)[0] as f32 - 10.0) * H).collect();
+    let particle = FluidParticle { position_radius: [MIN[0] + 0.05 * H, MIN[1] + 2.5 * H, MIN[2] + 2.5 * H, 0.08], id: 1, ..FluidParticle::default() };
+    let faces = vec![FaceSample { velocity: [0.0, 1.0, 0.0, 0.0], weight: [1.0; 4] }; face_len()];
+    let step = StepParams { body_count: 1, rows: 1, step_dt: 0.025, max_travel: 1.0, particles: 1, ..lattice() };
+    for entry in ["faces_to_particles", "narrow_move"] {
+        let mut pass = Pass::new();
+        let got: Vec<FluidParticle> = pass
+            .bind(2, &[particle]).bind(3, &faces).bind(9, &solid)
+            .bind(15, &[LiquidShape::default()]).bind(16, &[0_u32; 4])
+            .bind(17, &faces).bind(18, &faces).bind(22, &[0_u32; 2])
+            .bind(36, &[LiquidBody::default()])
+            .run(entry, &step, 19, 1, 1);
+        assert_eq!(got[0].position_radius[..3], particle.position_radius[..3], "{entry}: last-position fallback");
+        assert_eq!(got[0].position_radius[3], 0.0, "{entry}: particle still inside solid is removed");
+        assert_eq!(pass.bound::<u32>(22, 2)[1], 1, "{entry}: refused push is counted");
+    }
 }
 
 fn cpu_fill_hash(x: u32) -> u32 {
@@ -2187,6 +2446,7 @@ fn gpu_flip_outflow_kills_the_particles_it_holds() {
     let got: Vec<FluidParticle> = Pass::new()
         .bind(2, &particles)
         .bind(3, &faces)
+        .bind(9, &wall_solid(N, H))
         .bind(17, &faces)
         .bind(18, &faces)
         .bind(22, &vec![0u32; 2 * particles.len()])

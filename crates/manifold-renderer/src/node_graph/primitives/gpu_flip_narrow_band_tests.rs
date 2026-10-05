@@ -87,21 +87,21 @@ mod cpu_tests {
     }
 
     /// Analytic particle field for `quarter_pool`, using the existing FLIP
-    /// finite gather contract, not an unbounded nearest-particle distance.
+    /// native scatter-box support, not an unbounded nearest-particle distance.
     /// See gpu_flip_step_tests::{cpu_gather_distance,
-    /// gpu_flip_particle_distance_is_the_engines_level_set}: no live particle
-    /// in the 27 adjacent cells means 3h, even if ring two contains particles.
+    /// gpu_flip_particle_distance_is_the_engines_level_set}: the last site
+    /// at y=11.75 reaches cell floor(11.75 + sqrt(3)) = 13.
     pub(super) fn stationary_pool_particle_phi() -> Vec<f32> {
         (0..cells(STEP_CELLS))
             .map(|i| {
                 let y = coords(i, STEP_CELLS)[1];
-                if y > POOL_TOP {
+                if y >= POOL_TOP + 2 {
                     return 3.0;
                 }
                 // All x/z columns are filled through y=POOL_TOP-1. The
-                // nearest quarter site is in the same or adjacent y cell,
+                // nearest quarter site is in the same cell or up to two out,
                 // inside its 2r scatter box. Neither value needs the eps snap.
-                let dy = if y < POOL_TOP { 0.25 } else { 0.75 };
+                let dy = if y < POOL_TOP { 0.25 } else if y == POOL_TOP { 0.75 } else { 1.75 };
                 (0.125_f32 + dy * dy).sqrt() - 0.8660254
             })
             .collect()
@@ -242,18 +242,19 @@ mod cpu_tests {
     fn narrow_band_stationary_pool_finite_support_pins_all_cell_values() {
         let particle = stationary_pool_particle_phi();
         let phi = stationary_pool_initial_phi();
-        // Independent f64 planar derivation: y=13 has no occupied cell in
-        // its 3x3x3 neighbourhood. The old unbounded oracle used the nearest
-        // particle in y=11 instead, shifting every reinitialized cell.
+        // Independent f64 planar derivation: y=13 is supported by ring two.
+        // Skipping it changes the zero crossing and every reinitialized cell.
         let below = (0.125_f64 + 0.75 * 0.75).sqrt() - 3.0_f64.sqrt() / 2.0;
-        let crossing = -below / (3.0 - below);
-        let unbounded_above = (0.125_f64 + 1.75 * 1.75).sqrt() - 3.0_f64.sqrt() / 2.0;
-        let unbounded_crossing = -below / (unbounded_above - below);
-        assert!((unbounded_crossing - crossing).abs() > 0.026);
+        let above = (0.125_f64 + 1.75 * 1.75).sqrt() - 3.0_f64.sqrt() / 2.0;
+        let crossing = -below / (above - below);
+        let skipped_crossing = -below / (3.0 - below);
+        assert!((crossing - skipped_crossing).abs() > 0.026);
         for (i, actual) in phi.iter().enumerate() {
             let p = coords(i, STEP_CELLS);
-            if p[1] > POOL_TOP {
+            if p[1] >= POOL_TOP + 2 {
                 assert_eq!(particle[i], 3.0, "unsupported air cell {p:?}");
+            } else if p[1] == POOL_TOP + 1 {
+                assert!((f64::from(particle[i]) - above).abs() < 1e-6, "ring-two air cell {p:?}");
             }
             let expected = p[1] as f64 - POOL_TOP as f64 - crossing;
             assert!(
@@ -262,7 +263,7 @@ mod cpu_tests {
             );
         }
         eprintln!(
-            "finite-support crossing={crossing:.10}, unbounded={unbounded_crossing:.10}; \
+            "native-support crossing={crossing:.10}, skipped-ring={skipped_crossing:.10}; \
             all {} cells checked; interior[0,0,0]={}",
             phi.len(),
             phi[0]
@@ -276,9 +277,9 @@ mod cpu_tests {
         let retained = expected_retained(&input, &phi);
         // This pool has a planar crossing between centres y=12.5 and 13.5.
         // Derive its height from the nearest supported particle distance and
-        // the unsupported air sentinel, independently of the transform.
+        // the supported ring-two air value, independently of the transform.
         let below = (0.125_f32 + 0.75 * 0.75).sqrt() - 0.8660254;
-        let above = 3.0;
+        let above = (0.125_f32 + 1.75 * 1.75).sqrt() - 0.8660254;
         let surface_y = 12.5 + (-below) / (above - below);
         let analytic: BTreeSet<_> = input
             .iter()
