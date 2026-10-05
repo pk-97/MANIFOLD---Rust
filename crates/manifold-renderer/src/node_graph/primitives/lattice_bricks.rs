@@ -44,7 +44,7 @@ struct BrickUniforms {
     bricks_z: u32,
     brick_count: u32,
     band_extra: f32,
-    _pad1: u32,
+    blob_count: u32,
 }
 
 /// Dimensions and storage size of one brick layout.
@@ -287,10 +287,12 @@ crate::primitive! {
     aliases: ["occupied bricks", "sparse liquid lattice", "surface brick list"],
     boundary_reason: BarrieredReduction,
     extra_fields: {
+        scatter: Option<GpuComputePipeline> = None,
         mark: Option<GpuComputePipeline> = None,
         compact: Option<GpuComputePipeline> = None,
         scan: BrickScan = BrickScan::default(),
         bricks: Option<GpuBuffer> = None,
+        hits: Option<GpuBuffer> = None,
     },
 }
 
@@ -315,6 +317,13 @@ impl Primitive for LatticeBricks {
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         {
             let gpu = ctx.gpu_encoder();
+            if self.scatter.is_none() {
+                self.scatter = Some(gpu.device.create_compute_pipeline(
+                    SHADER,
+                    "scatter_bricks",
+                    "node.lattice_bricks",
+                ));
+            }
             if self.mark.is_none() {
                 self.mark = Some(gpu.device.create_compute_pipeline(
                     SHADER,
@@ -399,6 +408,26 @@ impl Primitive for LatticeBricks {
         let Some(bricks) = self.bricks.as_ref().cloned() else {
             return;
         };
+        let hits_bytes = (u64::from(layout.count) * 4).max(16);
+        if self.hits.as_ref().is_none_or(|buffer| buffer.size != hits_bytes) {
+            let gpu = ctx.gpu_encoder();
+            match gpu.device.try_create_buffer_shared(hits_bytes) {
+                // The mark pass zeroes every word it reads, so only a new
+                // allocation needs clearing before the first scatter.
+                Ok(buffer) => {
+                    gpu.native_enc.clear_buffer(&buffer);
+                    self.hits = Some(buffer);
+                }
+                Err(error) => {
+                    ctx.error(format!("Lattice Bricks: hit storage allocation failed: {error}"));
+                    return;
+                }
+            }
+        }
+        let Some(hits) = self.hits.as_ref().cloned() else {
+            return;
+        };
+        let blob_count = u32::try_from(blobs.size / std::mem::size_of::<FluidBlob>() as u64).unwrap_or(u32::MAX);
         let (scan_buffer, scan_error) = {
             let gpu = ctx.gpu_encoder();
             match self.scan.buffer(gpu.device, layout.count as usize) {
@@ -433,7 +462,7 @@ impl Primitive for LatticeBricks {
             bricks_z: layout.bricks[2],
             brick_count: layout.count,
             band_extra: ctx.scalar_or_param("band_extra", 0.0),
-            _pad1: 0,
+            blob_count,
         };
         let bindings = [
             GpuBinding::Bytes {
@@ -446,11 +475,6 @@ impl Primitive for LatticeBricks {
                 offset: 0,
             },
             GpuBinding::Buffer {
-                binding: 2,
-                buffer: ranges,
-                offset: 0,
-            },
-            GpuBinding::Buffer {
                 binding: 3,
                 buffer: &scan_buffer,
                 offset: 0,
@@ -460,10 +484,19 @@ impl Primitive for LatticeBricks {
                 buffer: &bricks,
                 offset: 0,
             },
-            GpuBinding::Buffer { binding: 5, buffer: bounds, offset: 0 },
+            GpuBinding::Buffer { binding: 6, buffer: &hits, offset: 0 },
         ];
         let groups = [layout.count.div_ceil(256), 1, 1];
         let gpu = ctx.gpu_encoder();
+        if blob_count > 0 {
+            gpu.native_enc.dispatch_compute(
+                self.scatter.as_ref().expect("scatter pipeline prepared"),
+                &bindings,
+                [blob_count.div_ceil(256), 1, 1],
+                "node.lattice_bricks.scatter",
+            );
+            gpu.native_enc.compute_memory_barrier_buffers();
+        }
         gpu.native_enc.dispatch_compute(
             self.mark.as_ref().expect("mark pipeline prepared"),
             &bindings,
@@ -631,6 +664,101 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The shader's distance band: the extra band plus one lattice diagonal
+    /// when the band is on.
+    fn band(layout: BrickLayout, size: [f32; 3], band_extra: f32) -> f32 {
+        let h: [f32; 3] = std::array::from_fn(|a| size[a] / (layout.nodes[a] - 1) as f32);
+        band_extra + if band_extra > 0.0 { h.iter().map(|v| v * v).sum::<f32>().sqrt() } else { 0.0 }
+    }
+
+    /// `scatter_bricks`' candidate brick range per axis, inclusive.
+    fn scatter_candidates(blob: &FluidBlob, layout: BrickLayout, lattice_min: [f32; 3], size: [f32; 3], extra: f32) -> [(u32, u32); 3] {
+        const ROUNDING: f32 = 1.907_348_6e-6;
+        std::array::from_fn(|a| {
+            let h = size[a] / (layout.nodes[a] - 1) as f32;
+            let support = 1.5 * blob.center_radius[3] + extra + h;
+            let centre = blob.center_radius[a];
+            let magnitude = lattice_min[a].abs().max((lattice_min[a] + size[a]).abs()).max(centre.abs().max(support));
+            let slack = (magnitude * ROUNDING / h).ceil() + 2.0;
+            let from_min = centre - lattice_min[a];
+            let lo_node = ((from_min - support) / h).floor() - slack - (5 + 7) as f32;
+            let hi_node = ((from_min + support) / h).floor() + slack + 5.0;
+            let last = (layout.bricks[a] - 1) as f32;
+            ((lo_node / 8.0).floor().clamp(0.0, last) as u32, (hi_node / 8.0).floor().clamp(0.0, last) as u32)
+        })
+    }
+
+    /// Asserts every interior brick the hit test accepts for each blob lies in
+    /// the range that blob scatters to; returns how many were accepted.
+    fn assert_scatter_covers(layout: BrickLayout, center: [f32; 3], size: [f32; 3], band_extra: f32, blobs: &[FluidBlob]) -> usize {
+        let lattice_min: [f32; 3] = std::array::from_fn(|a| center[a] - size[a] * 0.5);
+        let extra = band(layout, size, band_extra);
+        let h: [f32; 3] = std::array::from_fn(|a| size[a] / (layout.nodes[a] - 1) as f32);
+        let mut accepted = 0;
+        for item in blobs {
+            let p = [item.center_radius[0], item.center_radius[1], item.center_radius[2]];
+            let reach = item.center_radius[3];
+            let range = scatter_candidates(item, layout, lattice_min, size, extra);
+            for id in 0..layout.count {
+                let brick = [id % layout.bricks[0], (id / layout.bricks[0]) % layout.bricks[1], id / (layout.bricks[0] * layout.bricks[1])];
+                if brick.iter().enumerate().any(|(axis, &v)| v == 0 || v + 1 == layout.bricks[axis]) {
+                    continue;
+                }
+                let (lo, hi) = expanded_bounds(brick, layout, lattice_min, size);
+                if intersects_support(p, h.map(|spacing| 1.5 * reach + extra + spacing), lo, hi) {
+                    accepted += 1;
+                    assert!((0..3).all(|a| range[a].0 <= brick[a] && brick[a] <= range[a].1),
+                        "lattice {center:?}+{size:?}: blob {p:?} reach {reach} reaches brick {brick:?} outside its scatter range {range:?}");
+                }
+            }
+        }
+        accepted
+    }
+
+    /// Every interior brick the gather's hit test accepts lies in the range
+    /// the blob scatters to, so the scatter's mask is the gather's. Covers
+    /// lattices far from the origin with cells near f32 resolution, where the
+    /// hit test's own rounding is many nodes wide, and huge finite blobs.
+    #[test]
+    fn scatter_candidates_cover_every_brick_the_hit_test_accepts() {
+        let mut state = 0x2545_f491_u32;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            state as f32 / u32::MAX as f32
+        };
+        let lattices = [
+            ([67, 67, 67], 1, 0.0, [0.25, -0.5, 0.125], [4.0, 2.25, 3.0]),
+            ([67, 67, 67], 1, 0.09, [0.25, -0.5, 0.125], [4.0, 2.25, 3.0]),
+            ([67, 35, 51], 2, 0.05, [0.25, -0.5, 0.125], [4.0, 2.25, 3.0]),
+            ([20, 20, 20], 3, 0.0, [0.25, -0.5, 0.125], [4.0, 2.25, 3.0]),
+            ([257, 25, 25], 1, 0.0, [1000.0, 1000.0, 1000.0], [0.001, 0.001, 0.001]),
+            ([67, 41, 33], 1, 0.0, [-3000.0, 512.0, 20000.0], [0.05, 0.02, 0.4]),
+            ([33, 33, 33], 2, 0.03, [77.0, -1e5, 3.0], [0.5, 0.25, 1.0]),
+        ];
+        for (solid_nodes, scale, band_extra, center, size) in lattices {
+            let layout = brick_layout(solid_nodes, scale).unwrap();
+            let h: [f32; 3] = std::array::from_fn(|a| size[a] / (layout.nodes[a] - 1) as f32);
+            let blobs: Vec<FluidBlob> = (0..400).map(|_| {
+                // Inside the lattice and up to a cell past it on every side;
+                // reaches from a hundredth of a node up to a few nodes.
+                let p: [f32; 3] = std::array::from_fn(|a| center[a] - 0.5 * size[a] - h[a] + next() * (size[a] + 2.0 * h[a]));
+                blob(p[0], p[1], p[2], h[0] * (0.01 + 2.5 * next()))
+            }).collect();
+            let accepted = assert_scatter_covers(layout, center, size, band_extra, &blobs);
+            assert!(accepted > 0, "lattice {center:?}+{size:?} must exercise interior bricks");
+        }
+
+        // Review counterexamples: a tiny blob on a lattice whose node spacing
+        // is below the f32 resolution of its coordinates, and a finite blob
+        // near f32 max whose support covers the whole lattice.
+        let rounding = brick_layout([257, 25, 25], 1).unwrap();
+        assert!(assert_scatter_covers(rounding, [1000.0; 3], [0.001; 3], 0.0, &[blob(1000.0, 1000.0, 1000.0, 1e-7)]) > 0);
+        let huge = brick_layout([25, 25, 25], 1).unwrap();
+        assert!(assert_scatter_covers(huge, [0.0; 3], [4.0; 3], 0.0, &[blob(3.1e38, 0.0, 0.0, 2.1e38)]) > 0);
     }
 
     #[test]
