@@ -887,3 +887,57 @@ fn math_view_instance_echoes_render_copies_and_vertices_only_path_is_unchanged()
         energy(&plain)
     );
 }
+
+/// A saved generator whose card drives a retired param loads on the
+/// scene-modifier path: the authored graph its value writes read keeps
+/// nothing the render graph dropped (a saved GPU FLIP layer's
+/// `step.top_speed` card refused the whole layer).
+#[test]
+fn retired_params_leave_before_scene_modifier_value_writes() {
+    fn find_step(nodes: &mut [manifold_core::effect_graph_def::EffectGraphNode]) -> Option<&mut manifold_core::effect_graph_def::EffectGraphNode> {
+        for node in nodes {
+            if node.type_id == "node.gpu_flip_step" {
+                return Some(node);
+            }
+            if let Some(found) = node.group.as_mut().and_then(|group| find_step(&mut group.nodes)) {
+                return Some(found);
+            }
+        }
+        None
+    }
+    let mut def: EffectGraphDef = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/assets/generator-presets/WaterDamBreakGpuFlip.json"
+    )))
+    .unwrap();
+    let step = find_step(&mut def.nodes).expect("the Dam Break has a GPU FLIP step");
+    step.params.insert("top_speed".into(), manifold_core::effect_graph_def::SerializedParamValue::Float { value: 23.0 });
+    let step_id = step.node_id.clone();
+    let metadata = def.preset_metadata.as_mut().unwrap();
+    let mut binding = metadata.bindings[0].clone();
+    let mut param = metadata.params.iter().find(|param| param.id == binding.id).unwrap().clone();
+    binding.id = "speed_cap".into();
+    binding.target = BindingTarget::Node { node_id: step_id, param: "top_speed".into() };
+    param.id = "speed_cap".into();
+    metadata.bindings.push(binding);
+    metadata.params.push(param);
+    // A Uniform Force on every object, as the saved layer carries one.
+    let recipe: EffectGraphDef = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/assets/scene-modifier-presets/UniformForce.json"
+    )))
+    .unwrap();
+    let scene = manifold_core::scene_modifier_preset::SceneNodeRef { scope: Vec::new(), node: NodeId::new("scene") };
+    let force = crate::node_graph::scene_modifier_authoring::prepare_new_scene_modifier(
+        &def,
+        &recipe,
+        NodeId::new("force"),
+        scene,
+        manifold_core::scene_modifier_preset::SceneTargetSelection::AllObjects,
+    )
+    .unwrap();
+    let def = manifold_core::scene_modifier_edit::insert_scene_modifier(&def, 0, force).unwrap().graph;
+    assert!(crate::node_graph::has_retired_params(&def));
+    PresetRuntime::from_def_for_render(def, &PrimitiveRegistry::with_builtin(), None, false)
+        .expect("the retired card leaves at load and the layer builds");
+}
