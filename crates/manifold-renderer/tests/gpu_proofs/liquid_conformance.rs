@@ -846,50 +846,80 @@ fn liquid_export_matches_live_project_schedule() {
 /// I5: a box at half the liquid's density, dropped tilted into the pool,
 /// settles with its centre at the waterline (a half-density cube's draft in
 /// any orientation), within half a cell. The waterline is the free surface
-/// the published particles show, over the columns clear of the box.
+/// the solver's pressure sees, over the columns clear of the box, averaged
+/// over the same second as the centre.
 #[test]
 fn liquid_floating_draft() {
     for row in running(Check::FloatingDraft) {
         for &fixture in Check::FloatingDraft.fixtures(row.coupled) {
             let scene = box_scene(fixture);
             let dx = cell(&scene);
-            let mut run = LiquidRun::offline(row, self::scene(row, fixture), 1);
-            run.steps(240);
-            let (mut sum, mut n) = (0.0, 0.0);
-            let (mut lo, mut hi) = (f64::MAX, f64::MIN);
-            let mut probe = run.start;
-            for _ in 0..60 {
-                probe = run.step();
-                let y = f64::from(run.body(&probe).position_inv_mass[1]);
-                sum += y;
-                n += 1.0;
-                lo = lo.min(y);
-                hi = hi.max(y);
-            }
-            let centre = sum / n;
-            let at = v3(run.body(&probe).position_inv_mass);
             let size = f64::from(scene.domain_size);
             let columns = (size / dx).round() as usize;
-            let mut tops = vec![f64::MIN; columns * columns];
-            for p in run.particles("particles_b").iter().filter(|p| p.position_radius[3] > 0.0) {
-                let [x, y, z] = [0, 1, 2].map(|i| f64::from(p.position_radius[i]));
-                if (x - at[0]).abs() < f64::from(scene.edge) || (z - at[2]).abs() < f64::from(scene.edge) {
-                    continue;
+            // GPU FLIP's liquid is the union of balls of radius √3·dx/2
+            // around its particles (the engine's liquid distance,
+            // gpu_flip_step.wgsl particle_distance): over a flat layer on the
+            // half-cell seeding lattice it stands 0.54 to 0.62 cells above
+            // the top particle. Matter's particle fills the half-cell cube
+            // around it.
+            let reach = if row.type_id == GPU_FLIP_DOMAIN_TYPE_ID { 0.75f64.sqrt() * dx } else { 0.0 };
+            let column = |c: f64| ((c + 0.5 * size) / dx).floor().clamp(0.0, (columns - 1) as f64) as usize;
+            let column_centre = |i: usize| (i as f64 + 0.5) * dx - 0.5 * size;
+            let surface = |particles: &[FluidParticle], at: [f64; 3]| {
+                let mut tops = vec![f64::MIN; columns * columns];
+                for p in particles.iter().filter(|p| p.position_radius[3] > 0.0) {
+                    let [x, y, z] = [0, 1, 2].map(|i| f64::from(p.position_radius[i]));
+                    if reach == 0.0 {
+                        let top = &mut tops[column(z) * columns + column(x)];
+                        *top = top.max(y + 0.25 * dx);
+                        continue;
+                    }
+                    for cz in column(z - reach)..=column(z + reach) {
+                        for cx in column(x - reach)..=column(x + reach) {
+                            let d2 = (column_centre(cx) - x).powi(2) + (column_centre(cz) - z).powi(2);
+                            if d2 < reach * reach {
+                                let top = &mut tops[cz * columns + cx];
+                                *top = top.max(y + (reach * reach - d2).sqrt());
+                            }
+                        }
+                    }
                 }
-                let cx = (((x + 0.5 * size) / dx) as usize).min(columns - 1);
-                let cz = (((z + 0.5 * size) / dx) as usize).min(columns - 1);
-                // A particle's column top: its centre plus half the spacing of
-                // two points per cell.
-                tops[cz * columns + cx] = tops[cz * columns + cx].max(y + 0.25 * dx);
+                let edge = f64::from(scene.edge);
+                let mut open = Vec::new();
+                for cz in 0..columns {
+                    for cx in 0..columns {
+                        let top = tops[cz * columns + cx];
+                        let clear = (column_centre(cx) - at[0]).abs() >= edge && (column_centre(cz) - at[2]).abs() >= edge;
+                        if clear && top > f64::MIN {
+                            open.push(top);
+                        }
+                    }
+                }
+                (open.iter().sum::<f64>() / open.len().max(1) as f64, open.len())
+            };
+            let mut run = LiquidRun::offline(row, self::scene(row, fixture), 1);
+            run.steps(240);
+            let (mut sum, mut waterline, mut n) = (0.0, 0.0, 0.0);
+            let (mut lo, mut hi) = (f64::MAX, f64::MIN);
+            let mut fewest = usize::MAX;
+            for _ in 0..60 {
+                let probe = run.step();
+                let at = v3(run.body(&probe).position_inv_mass);
+                let (line, open) = surface(&run.particles("particles_b"), at);
+                waterline += line;
+                fewest = fewest.min(open);
+                sum += at[1];
+                n += 1.0;
+                lo = lo.min(at[1]);
+                hi = hi.max(at[1]);
             }
-            let open: Vec<f64> = tops.into_iter().filter(|top| *top > f64::MIN).collect();
-            assert!(open.len() > columns, "{}: too few open columns ({}) to read the surface", row.type_id, open.len());
-            let waterline = open.iter().sum::<f64>() / open.len() as f64;
+            let centre = sum / n;
+            let waterline = waterline / n;
+            assert!(fewest > columns, "{}: too few open columns ({fewest}) to read the surface", row.type_id);
             eprintln!(
-                "liquid_floating_draft {}: centre {centre:.4} m, waterline {waterline:.4} m over {} open columns, \
-                 draft error {:.3}·dx, bob amplitude {:.4} m over the last second",
+                "liquid_floating_draft {}: centre {centre:.4} m, waterline {waterline:.4} m over at least {fewest} open \
+                 columns, draft error {:.3}·dx, bob amplitude {:.4} m over the last second",
                 row.type_id,
-                open.len(),
                 (centre - waterline) / dx,
                 0.5 * (hi - lo)
             );
