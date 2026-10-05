@@ -1596,6 +1596,8 @@ mod native_reference {
             run.frame();
             let clock: Vec<u32> = run.read(STEP_NODE, "clock_status", 8);
             assert_eq!((clock[6], clock[4], clock[5]), (1, 0, 0), "frame {frame}: GPU one substep, no cap or invalid input");
+            let after = particle_stats(&capture(&mut native, offset));
+            assert_eq!((after.live, after.bad), (seed.len(), 0), "frame {frame}: native count or finiteness after the step");
             let counted = run.liquid_stats();
             assert_eq!((counted.live as usize, counted.nonfinite), (seed.len(), 0), "frame {frame}: GPU count or finiteness");
             let Some(entering) = entering else { continue };
