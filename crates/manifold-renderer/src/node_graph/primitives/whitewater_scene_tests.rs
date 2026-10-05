@@ -604,12 +604,22 @@ impl Show {
 /// Resolution is a live card (BUG-9an1 (resolution change), BUG-o65k (GPU
 /// FLIP lattice wiring)): the shipped preset moves 64 → 32 → 100 under a
 /// running clip. On the first frame at each size the state already holds that
-/// lattice's face grid; within 1.5 s the fill has restarted at that size, the
-/// frame publishes all of its live water (count_b is a live count, and the
-/// fill seeds the box's sites dead), the step's faces are that lattice's and
-/// its water throws whitewater.
+/// lattice's face grid and the published population matches the new fill.
+/// During the following 1.5 s, count_b exactly describes the published live
+/// particles; after completion it matches the solver state. The initial fill
+/// is not a retention oracle: native-style marker cleanup can remove water.
+/// The step's face grid resizes and the new water throws whitewater.
 #[test]
 fn gpu_flip_resolution_card_resizes_at_runtime() {
+    use crate::node_graph::fluid_particles::FluidParticle;
+    fn particles(buffer: &manifold_gpu::GpuBuffer, bytes: u64) -> &[FluidParticle] {
+        assert!(buffer.size() >= bytes);
+        let len = bytes as usize / std::mem::size_of::<FluidParticle>();
+        let ptr = buffer.mapped_ptr().expect("shared particle storage");
+        // SAFETY: callers wait for the frame; the buffer contains len records.
+        // A resized allocation may retain storage beyond the current prefix.
+        unsafe { std::slice::from_raw_parts(ptr.cast::<FluidParticle>(), len) }
+    }
     let scene = WaterScene::dam_break(64);
     let def = whitewater_render_def(scene);
     let spec = def
@@ -618,7 +628,19 @@ fn gpu_flip_resolution_card_resizes_at_runtime() {
         .and_then(|cards| cards.params.iter().find(|card| card.id == "resolution"))
         .expect("the Resolution card")
         .clone();
-    let mut show = Show::new(def, (320, 180), true, &[]);
+    let mut show = Show::new(def, (320, 180), true, &["state".to_string()]);
+    let live_in = |buffer: &manifold_gpu::GpuBuffer, bytes: u64| {
+        particles(buffer, bytes).iter().filter(|p| p.position_radius[3] > 0.0).count() as u64
+    };
+    let state_live = |show: &Show| {
+        let arrays = show.runtime.dump_arrays_all();
+        let array = arrays.iter().find(|a| a.name == "state" && a.port == "out").expect("held state.out");
+        live_in(array.buffer, show.provided_bytes("fill", "particles"))
+    };
+    let published_live = |show: &Show| {
+        let frame = show.runtime.graph.nodes().find(|node| node.node_id.as_str() == "frame").expect("liquid frame");
+        live_in(frame.node.provided_array_output("particles_b").expect("published frame B"), show.provided_bytes("fill", "particles"))
+    };
     show.restart();
     let step = super::gpu_flip_preset::STEP_NODE;
     for n in [64u32, 32, 100] {
@@ -627,21 +649,52 @@ fn gpu_flip_resolution_card_resizes_at_runtime() {
         card.base = n as f32;
         show.cards = ParamManifest::from_params(vec![card]);
         show.frame(false);
+        let seeded = show.provided_live("fill", "particles");
+        assert_eq!(state_live(&show), seeded, "Resolution {n}: the resized state is reseeded");
+        assert_eq!(published_live(&show), seeded, "Resolution {n}: the first published frame is reseeded");
+        assert_eq!(show.probes(["count"])[0] as u64, seeded, "Resolution {n}: the first published count");
+        {
+            let bytes = show.provided_bytes("fill", "particles");
+            let fill = show.runtime.graph.nodes().find(|node| node.node_id.as_str() == "fill").unwrap();
+            let seed = particles(fill.node.provided_array_output("particles").unwrap(), bytes);
+            let arrays = show.runtime.dump_arrays_all();
+            let state = arrays.iter().find(|a| a.name == "state" && a.port == "out").unwrap();
+            let mut seen = vec![false; seed.len()];
+            for p in particles(state.buffer, bytes).iter().filter(|p| p.position_radius[3] > 0.0) {
+                let index = p.id.checked_sub(1).expect("seed identity is nonzero") as usize;
+                assert!(index < seed.len() && !seen[index], "Resolution {n}: stale or duplicate seed identity {}", p.id);
+                seen[index] = true;
+                assert_eq!(bytemuck::bytes_of(p), bytemuck::bytes_of(&seed[index]), "Resolution {n}: reseeded record {}", p.id);
+            }
+            let frame = show.runtime.graph.nodes().find(|node| node.node_id.as_str() == "frame").unwrap();
+            let published = particles(frame.node.provided_array_output("particles_b").unwrap(), bytes);
+            // Publication sorts by birth id; the fill assigns id = site + 1.
+            for (p, expected) in published.iter().filter(|p| p.position_radius[3] > 0.0).zip(seed.iter().filter(|p| p.position_radius[3] > 0.0)) {
+                assert_eq!(bytemuck::bytes_of(p), bytemuck::bytes_of(expected), "Resolution {n}: published seed record {}", expected.id);
+            }
+        }
         let faces = face_bytes([n; 3]);
         assert_eq!(show.provided_bytes("state", "faces"), faces, "Resolution {n}: the state's faces on its first frame");
         let mut last = [0.0; 6];
         let mut gpu_ms = Vec::new();
-        for _ in 0..90 {
+        for frame in 0..90 {
             gpu_ms.push(show.frame(false).gpu_ms);
             last = show.probes(STEP_REPORTS);
+            assert_eq!(show.probes(["count"])[0] as u64, published_live(&show), "Resolution {n}, frame {frame}: published live count");
         }
+        // Retire any completed publication without advancing simulation, so
+        // the source and published frame refer to the same accepted endpoint.
+        show.paused = true;
+        show.frame(false);
+        show.paused = false;
         let [count] = show.probes(["count"]);
-        let live = show.provided_live("fill", "particles");
-        println!("Resolution {n}: {count} particles of the fill's {live} live, GPU p50 {:.2} ms; foam {} bubble {} spray {}", percentile(&gpu_ms, 0.5), last[0], last[1], last[2]);
+        let live = state_live(&show);
+        println!("Resolution {n}: {count} published, {live} live in state, {seeded} initially seeded, GPU p50 {:.2} ms; foam {} bubble {} spray {}", percentile(&gpu_ms, 0.5), last[0], last[1], last[2]);
         assert_eq!(show.provided_bytes(step, "faces"), faces, "Resolution {n}: the step's faces");
         let record = std::mem::size_of::<crate::node_graph::fluid_particles::FluidParticle>() as u64;
         assert_eq!(show.provided_bytes("fill", "particles"), WaterScene::dam_break(n as usize).particles() * record, "Resolution {n}: the fill");
         assert_eq!(count as u64, live, "Resolution {n}: the frame's live water");
+        assert_eq!(count as u64, published_live(&show), "Resolution {n}: completed publication");
         assert!(last[0] + last[1] + last[2] > 0.0, "Resolution {n}: no whitewater by 1.5 s: {last:?}");
     }
     let errors = show.errors();

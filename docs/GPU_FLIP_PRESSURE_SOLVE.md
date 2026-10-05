@@ -246,6 +246,16 @@ density correction, but does not establish grid parity, 64³ cost or visual
 quality. The sampling repair itself showed no GPU speedup (2.806 ms before
 and after with both optional corrections off).
 
+The default-off runtime resize fixture retains its seeded population at 64³
+and 32³. At 100³ after 90 frames, state and publication both contain 1,300,421
+of 1,301,120 seeded particles. A temporary capture around the removal stages
+accounted for all 699 missing identities in the existing 250-particles-per-cell
+limit, with none removed by advection/collision or extreme-speed cleanup.
+The capture was removed. The resize proof now checks exact reseeding and live
+publication, rather than requiring the initial population forever. This 100³
+crowding loss is not established as native agreement; it remains part of the
+boundary/grid and motion audit (BUG-g75v.17).
+
 **The free surface** (`gpu_flip_ghost_fluid_64`, `_refined`: the meshed Dam Break, 300 frames, the same tree with the ghost rows off and on; the engine from `gpu_flip_engine_splash_64` and `gpu_flip_engine_race_refined`). Breakup is the share of particles detached from the main body, over frames 30–150; pieces counts the detached clumps.
 
 | Row | Plain 64³ | Ghost 64³ | Engine 64³ | Plain 128³ | Ghost 128³ | Engine 128³ |
