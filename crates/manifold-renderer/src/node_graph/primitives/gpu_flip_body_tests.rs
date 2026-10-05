@@ -1023,3 +1023,101 @@ fn gpu_flip_rising_box_clears_the_surface() {
     println!("rising box: box centre at {height:.3} m");
     assert!(height > f64::from(scene.fill), "the box did not clear the surface ({height} m)");
 }
+
+// ── The body golden (docs/GPU_FLIP_PRESSURE_CAP_DESIGN.md section 9 (Phasing), C0) ──
+
+const BODY_GOLDEN: &str = "gpu_flip_body_golden.txt";
+/// Bits the scalars and the stop record hold before a solve.
+const BODY_SENTINEL: u32 = 0x7fc0_dead;
+
+fn fnv(words: &[u32]) -> u64 {
+    words.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &w| (h ^ u64::from(w)).wrapping_mul(0x0000_0100_0000_01b3))
+}
+
+/// Every body golden case, direct and replayed, as the fixture's lines: the
+/// coupled solve with its rounds gated on the fine level, plain (the gate
+/// off), and at Solve Level 1, each Fixed and Converged; fingerprints of the
+/// pressure, the body sums, the scalars and the stop record.
+fn body_golden_lines() -> Vec<String> {
+    let cells = N.iter().product::<usize>();
+    let rhs_values = random_values(cells, 0xc0a0);
+    let mut lines = Vec::new();
+    for (name, level, gate_off) in [("gated", 0usize, false), ("plain", 0, true), ("level1", 1, false)] {
+        for stop in [Stop::Fixed(1), Stop::Fixed(3), Stop::Fixed(16), Stop::Converged(64)] {
+            for replay in [false, true] {
+                let mut scene = Scene::with_water(0xc09e, random_water(cells, 0xc09f), false);
+                let rhs = shared(&scene.device, &rhs_values);
+                let pressure = shared(&scene.device, &vec![0.0_f32; cells]);
+                let mut plan = [0_u32; 12];
+                plan[0] = TICK.to_bits();
+                plan[11] = 1;
+                let plan = shared(&scene.device, &plan);
+                scene.passes.set_clock_plan(&plan);
+                let mut solver = PressureSolver::default();
+                solver.prepare_pipelines(&scene.device);
+                solver.set_clock_plan(&plan);
+                let sentinel = shared(&scene.device, &vec![BODY_SENTINEL; 2 * 64 + PROGRESS_FLOATS as usize]);
+                let scalars = shared(&scene.device, &vec![0_u32; 2 * 64]);
+                let record = shared(&scene.device, &vec![0_u32; PROGRESS_FLOATS as usize]);
+                let mut cache = replay.then(GpuReplayCache::default);
+                let mut fingerprints = [0u64; 4];
+                // Twice: the replayed run records, then replays.
+                for _ in 0..2 {
+                    set_gate_off(gate_off);
+                    let mut enc = scene.device.create_encoder("body golden");
+                    let water = Water { lattice: N.map(|v| v as u32), cell_size: H, water: &scene.buffers[0], faces: &scene.buffers[1], phi: None };
+                    // SAFETY: a shared buffer sized for the lattice; the last solve completed.
+                    unsafe { pressure.write(0, bytemuck::cast_slice(&vec![0u32; cells])) };
+                    solver.prepare(&scene.device, &mut enc, &water).expect("prepares");
+                    solver.seed_records(&mut enc, &sentinel);
+                    let spanned = cache.take().map(|c| enc.begin_replay(&scene.device, c)).is_some();
+                    let solve = Solve { rhs: &rhs, pressure: &pressure, stop, bodies: Some((&scene.passes, &scene.bodies())), level, coarse_rhs: None };
+                    solver.solve(&mut enc, &water, solve).expect("coupled solve");
+                    if spanned {
+                        cache = Some(enc.end_replay());
+                    }
+                    solver.copy_scalars(&mut enc, &scalars);
+                    enc.copy_buffer_to_buffer(solver.progress().expect("prepared"), &record, record.size);
+                    enc.commit_and_wait_completed();
+                    set_gate_off(false);
+                    fingerprints = [
+                        fnv(&read::<u32>(&pressure, cells)),
+                        fnv(&bits(&scene.sums())),
+                        fnv(&read::<u32>(&scalars, 2 * 64)),
+                        fnv(&read::<u32>(&record, PROGRESS_FLOATS.min(68) as usize)),
+                    ];
+                }
+                let [p, s, c, r] = fingerprints;
+                let mode = if replay { "replay" } else { "direct" };
+                lines.push(format!("{name} level {level} {stop:?} {mode} pressure {p:016x} sums {s:016x} scalars {c:016x} record {r:016x}"));
+            }
+        }
+    }
+    lines
+}
+
+/// The coupled solve against the golden recorded from main's solver before
+/// the pressure cap work (BUG-fwp2n — unused solver rounds still cost encode
+/// time): fine-level gated bodies, plain bodies and Solve Level 1 bodies,
+/// direct and replayed, bit for bit. `MANIFOLD_RECORD_GOLDEN=1` rewrites the
+/// fixture; only ever from main's solver code.
+#[test]
+fn gpu_flip_body_solve_matches_main_golden() {
+    let path = format!("{}/tests/fixtures/{BODY_GOLDEN}", env!("CARGO_MANIFEST_DIR"));
+    let lines = body_golden_lines();
+    if std::env::var("MANIFOLD_RECORD_GOLDEN").is_ok_and(|v| v == "1") {
+        let solver = std::env::var("MANIFOLD_GOLDEN_SOLVER").expect("MANIFOLD_GOLDEN_SOLVER names the main commit the solver code is from");
+        let header = format!(
+            "# GPU FLIP coupled-body golden (gpu_flip_body_solve_matches_main_golden)\n# solver code of {solver}\n# inputs: body scene water 0xc09f, rhs 0xc0a0, pressure zeroed, scalars and record seeded {BODY_SENTINEL:#010x}\n# fingerprints: FNV-1a over the pressure, the body sums, scalars[..128], progress[..68]\n"
+        );
+        std::fs::write(&path, header + &lines.join("\n") + "\n").expect("golden writes");
+        println!("recorded {} cases from {solver}", lines.len());
+        return;
+    }
+    let golden = std::fs::read_to_string(&path).expect("golden fixture reads");
+    let expected: Vec<&str> = golden.lines().filter(|l| !l.starts_with('#')).collect();
+    assert_eq!(expected.len(), lines.len(), "golden case count");
+    let moved: Vec<String> =
+        expected.iter().zip(&lines).filter(|(e, l)| **e != l.as_str()).map(|(e, l)| format!("want {e}\n got {l}")).collect();
+    assert!(moved.is_empty(), "{} of {} golden cases moved:\n{}", moved.len(), lines.len(), moved.join("\n"));
+}

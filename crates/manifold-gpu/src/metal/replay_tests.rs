@@ -1259,5 +1259,52 @@ fn replay_template_replay_off_child() {
     let stats = replay.rig.stats();
     assert_eq!((stats.recorded, stats.replayed, stats.segments_replayed), (0, 0, 0), "replay is off");
     assert!(d.iter().all(|d| d.templates_direct == 1));
+    // A failing body encodes nothing with replay off either.
+    let mut reference = TemplateRig::new(&device, false);
+    run_template_frame(&device, &k, &mut reference, 0, TemplateSpec { skip: true, ..spec }).unwrap();
+    let mut fresh = TemplateRig::new(&device, true);
+    assert!(run_template_frame(&device, &k, &mut fresh, 0, TemplateSpec { err: true, ..spec }).is_err());
+    assert_eq!(reference.contents(), fresh.contents(), "replay off: nothing of the failing body ran");
     println!("replay-off child: templates direct {}", stats.templates_direct);
+}
+
+/// A body error encodes nothing on the paths that never walk: no replay
+/// span, and every ring entry in flight. The frame's output is the frame
+/// without the template (the mix is not idempotent, so a leaked partial
+/// copy would show). Replay off is the third such path, proven in
+/// [`replay_template_replay_off_child`].
+#[test]
+fn replay_template_body_error_is_atomic_on_direct_paths() {
+    let device = GpuDevice::new();
+    let k = Kernels::new(&device);
+    let base = TemplateSpec::default();
+    let failing = TemplateSpec { err: true, ..base };
+    let skipped = TemplateSpec { skip: true, ..base };
+
+    let mut reference = TemplateRig::new(&device, false);
+    let mut unspanned = TemplateRig::new(&device, false);
+    run_template_frame(&device, &k, &mut reference, 0, skipped).unwrap();
+    assert_eq!(run_template_frame(&device, &k, &mut unspanned, 0, failing), Err("template-proof body error".into()));
+    assert_eq!(reference.contents(), unspanned.contents(), "no span: nothing of the failing body ran");
+
+    let mut reference = TemplateRig::new(&device, false);
+    let mut replay = TemplateRig::new(&device, true);
+    for frame in 0..3 {
+        run_template_frame(&device, &k, &mut reference, frame, base).unwrap();
+    }
+    run_template_frame(&device, &k, &mut reference, 3, skipped).unwrap();
+    let gate = device.create_event();
+    for frame in 0..4 {
+        let mut enc = device.create_encoder("template-proof gated");
+        enc.wait_event(&gate, 1);
+        enc.begin_replay(&device, replay.rig.cache.take().unwrap());
+        let result = encode_template_frame(&mut enc, &k, &replay, frame, if frame == 3 { failing } else { base });
+        replay.rig.cache = Some(enc.end_replay());
+        enc.commit();
+        assert_eq!(result.is_err(), frame == 3);
+    }
+    assert_eq!(replay.rig.stats().ring_busy, 1, "the failing frame found every entry in flight");
+    unsafe { gate.raw().setSignaledValue(1) };
+    device.create_encoder("template-proof drain").commit_and_wait_completed();
+    assert_eq!(reference.contents(), replay.contents(), "ring busy: nothing of the failing body ran");
 }

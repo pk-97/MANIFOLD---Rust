@@ -1339,7 +1339,10 @@ fn pressure_module_replay_matches_direct() {
                 // One walked round per solve, not one per round up to the cap.
                 assert_eq!(stats.templates_replayed - last.templates_replayed, 1, "{stop:?} frame {frame}: the rounds are one replayed template");
                 assert_eq!(stats.templates_direct, last.templates_direct, "{stop:?} frame {frame}: no template ran directly");
-                assert!(stats.replayed - last.replayed < 150, "{stop:?} frame {frame}: {} validations, one round's worth expected", stats.replayed - last.replayed);
+                // The prepare, the arm, init and start check, and one round:
+                // `passes` of a one-round solve.
+                let (prepare, one_round) = passes([64; 3], 1);
+                assert_eq!(stats.replayed - last.replayed, (prepare + one_round) as u64, "{stop:?} frame {frame}: the warm solve validates one round");
             }
             last = stats;
         }

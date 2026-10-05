@@ -909,8 +909,17 @@ pub struct TemplateRanges<'a> {
 /// flush the provisional walk, so none of those is expressible here.
 pub struct GatedRecorder<'e> {
     enc: &'e mut GpuEncoder,
-    /// Walking the template once (true) or running a copy directly.
-    walk: bool,
+    mode: RecorderMode,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RecorderMode {
+    /// Walking the template once, provisionally.
+    Walk,
+    /// Running a copy directly.
+    Direct,
+    /// Checking the body ends Ok before a direct copy encodes anything.
+    Dry,
 }
 
 impl GatedRecorder<'_> {
@@ -925,10 +934,10 @@ impl GatedRecorder<'_> {
         gate_offset: u64,
         label: &str,
     ) {
-        if self.walk {
-            self.enc.template_dispatch(pipeline, bindings, groups, label);
-        } else {
-            self.enc.dispatch_compute_gated(pipeline, bindings, groups, gate, gate_offset, label);
+        match self.mode {
+            RecorderMode::Walk => self.enc.template_dispatch(pipeline, bindings, groups, label),
+            RecorderMode::Direct => self.enc.dispatch_compute_gated(pipeline, bindings, groups, gate, gate_offset, label),
+            RecorderMode::Dry => {}
         }
     }
 }
@@ -964,7 +973,7 @@ impl GpuEncoder {
     /// (a count mismatch, an unrecordable dispatch, no room) every provisional
     /// allocation is rolled back, nothing of the walk ever executes, and
     /// `body` runs `copies` times directly, each dispatch an indirect dispatch
-    /// on its gate. `Err` from the walk rolls back and is returned. The body
+    /// on its gate. `Err` from the body encodes nothing on any path and is returned. The body
     /// must issue the same dispatches every time it runs.
     pub fn repeat_gated_template(
         &mut self,
@@ -1013,7 +1022,7 @@ impl GpuEncoder {
             self.replay = Some(span);
         }
         if walked {
-            let result = body(&mut GatedRecorder { enc: self, walk: true });
+            let result = body(&mut GatedRecorder { enc: self, mode: RecorderMode::Walk });
             let mut span = self.replay.take().expect("the walk keeps its span");
             let taken = span.segment.as_ref().map_or(0, |s| s.taken);
             if result.is_err() || taken != commands {
@@ -1039,9 +1048,13 @@ impl GpuEncoder {
             }
             self.replay = Some(span);
             result?;
+        } else {
+            // No walk ran (no span, replay off, no idle entry): a body that
+            // fails must fail before its first copy encodes anything.
+            body(&mut GatedRecorder { enc: self, mode: RecorderMode::Dry })?;
         }
         for _ in 0..copies {
-            body(&mut GatedRecorder { enc: self, walk: false })?;
+            body(&mut GatedRecorder { enc: self, mode: RecorderMode::Direct })?;
         }
         Ok(())
     }
