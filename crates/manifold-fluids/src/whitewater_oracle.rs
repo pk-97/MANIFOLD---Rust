@@ -287,7 +287,9 @@ mod tests {
             let r = ((px - 2.0).powi(2) + (pz - 2.0).powi(2)).sqrt();
             py - (2.6 + 0.6 * (-r * r).exp())
         }).collect();
-        let solid = vec![10.0f32; (n + 1).pow(3)];
+        // A floor a cell down: solid nodes inside the influence band, which
+        // the engine variant must take without mesh objects.
+        let solid: Vec<f32> = (0..(n + 1).pow(3)).map(|i| ((i / (n + 1)) % (n + 1)) as f32 * H - H).collect();
         // A hash-noise shear so the liquid holds turbulence for bubbles.
         let noise = |i: usize, salt: usize| (((i * 2_654_435_761 + salt * 40_503) % 1000) as f32 / 500.0) - 1.0;
         let u: Vec<f32> = (0..(n + 1) * n * n).map(|i| 30.0 * noise(i, 1)).collect();

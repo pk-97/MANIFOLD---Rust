@@ -571,6 +571,24 @@ impl Show {
         unsafe { std::slice::from_raw_parts(ptr.cast::<T>().cast_const(), len) }.to_vec()
     }
 
+    /// The first `len` records of the storage the named node provides on
+    /// `port`, read after the frame completed.
+    #[cfg(feature = "whitewater-oracle")]
+    pub(super) fn provided<T: bytemuck::Pod>(&self, name: &str, port: &str, len: usize) -> Vec<T> {
+        let node = self.runtime.graph.nodes().find(|n| n.node_id.as_str() == name).unwrap_or_else(|| panic!("no node {name}"));
+        let buffer = node.node.provided_array_output(port).unwrap_or_else(|| panic!("{name} provides no {port}"));
+        assert!(buffer.size as usize >= len * std::mem::size_of::<T>(), "{name}.{port} is shorter than {len} records");
+        // The storage may be GPU-private: copy it to shared storage first.
+        let bytes = (len * std::mem::size_of::<T>()) as u64;
+        let staged = self.device.create_buffer_shared(bytes.max(4));
+        let mut encoder = self.device.create_encoder("whitewater-scene provided readback");
+        encoder.copy_buffer_to_buffer(buffer, &staged, bytes);
+        encoder.commit_and_wait_completed();
+        let ptr = staged.mapped_ptr().expect("shared readback");
+        // SAFETY: shared storage of `bytes`, the copy completed above.
+        unsafe { std::slice::from_raw_parts(ptr.cast::<T>().cast_const(), len) }.to_vec()
+    }
+
     /// Bytes of the storage the named node provides on `port`; none, 0.
     fn provided_bytes(&self, name: &str, port: &str) -> u64 {
         let node = self.runtime.graph.nodes().find(|n| n.node_id.as_str() == name).unwrap_or_else(|| panic!("no node {name}"));
@@ -1690,5 +1708,147 @@ mod emitter_oracle {
         }
         println!("O2 * marks a type outside the per-type gate: FLIP emitted fewer than {KIND_FLOOR} over the seeds");
         assert!(failures.is_empty(), "the GPU emitter strays from FLIP's: {failures:#?}");
+    }
+
+    const ENGINE_SEEDS: [u64; 3] = [1, 2, 3];
+    /// The step's default capacity and obstacle influence, which the engine
+    /// shares (`whitewater_step.rs` params, `fluidsimulation.h`).
+    const STEP_CAPACITY: u32 = 100_000;
+    const INFLUENCE_BASE: f64 = 1.0;
+    const INFLUENCE_DECAY: f64 = 2.0;
+
+    /// The solver's face-grid distance padded onto the whitewater grid, as
+    /// `encode_pad_distance_lattice` pads it for the step: outside the solver
+    /// grid, three cells of air.
+    fn pad_distance(distance: &[f32], face_cells: u32, cells: u32, h: f32) -> Vec<f32> {
+        let (f, c) = (face_cells as usize, cells as usize);
+        let pad = (c - f) / 2;
+        let mut out = vec![3.0 * h; c * c * c];
+        for z in 0..f {
+            for y in 0..f {
+                for x in 0..f {
+                    out[(x + pad) + c * ((y + pad) + c * (z + pad))] = distance[x + f * (y + f * z)];
+                }
+            }
+        }
+        out
+    }
+
+    /// L5 parity: the Dam Break at 64 for 150 frames. Every frame the step's
+    /// inputs go, read-only, to FLIP's. Tick-region nodes hold no dump, so
+    /// they are read where the tick leaves them: the particles from
+    /// `state.out` (the step's `out`, wired into the state), the faces from
+    /// the `face_*` components of `state.faces` (the step's `faces`), the
+    /// distance from the step's own `distance` storage, and `mesh_solid.solid`.
+    /// They go to FLIP's
+    /// DiffuseParticleSimulation as FluidSimulation configures it
+    /// (`whitewater_oracle::emit_engine`) at the tick dt, on three engine
+    /// seeds. Both sides see the same water by construction. Per type, the
+    /// population summed over the run must sit within three times the
+    /// engine's seed-to-seed range of the engine's mean: on identical fields
+    /// the only randomness is emitter jitter and lifetime variance, so that
+    /// range is the floor of honest disagreement.
+    ///
+    /// Known rule difference: the GPU skips emitters whose own particle
+    /// velocity is under 1e-3 m/s (`shaders/turbulence_emission_count_body.wgsl`);
+    /// FLIP samples the field velocity and has no such cut.
+    #[test]
+    fn whitewater_step_against_engine_emitters_150() {
+        let scene = WaterScene::dam_break(64);
+        let grid = GridBox::of(scene);
+        let n = cells(grid);
+        let face_cells = grid.face_cells as u32;
+        let held: Vec<String> = ["state", "mesh_solid", "face_u", "face_v", "face_w"].map(String::from).to_vec();
+        let mut show = Show::new(whitewater_render_def(scene), (320, 180), false, &held);
+        show.restart();
+        let origin = std::array::from_fn(|a| (grid.center[a] - 0.5 * grid.size[a]) as f32);
+        let whitewater_grid = WhitewaterGrid { cells: [n; 3], cell_size: grid.h as f32, origin };
+        let mut engines: Vec<NativeLifecycle> = ENGINE_SEEDS
+            .iter()
+            .map(|&seed| NativeLifecycle::new(whitewater_grid, STEP_CAPACITY, seed).expect("engine lifecycle"))
+            .collect();
+        let mut population = Vec::new();
+        let mut csv = String::from("frame,gpu_foam,gpu_bubble,gpu_spray,gpu_emitted,engine_foam,engine_bubble,engine_spray,engine_net\n");
+        let mut gpu_sum = [0.0f64; 3];
+        let mut engine_sum = vec![[0.0f64; 3]; ENGINE_SEEDS.len()];
+        let (mut previous_emitted, mut previous_engine) = (0.0f32, 0.0f64);
+        for frame in 1..=EMISSION_FRAMES {
+            show.frame(false);
+            let gpu = show.probes(STEP_REPORTS);
+            let particles: Vec<FluidParticle> = show.dumped("state", "out", scene.particles() as usize);
+            let positions: Vec<[f32; 3]> = particles
+                .iter()
+                .filter(|p| p.position_radius[3] > 0.0)
+                .map(|p| [p.position_radius[0], p.position_radius[1], p.position_radius[2]])
+                .collect();
+            let faces = [0, 1, 2].map(|axis| {
+                show.dumped::<f32>(["face_u", "face_v", "face_w"][axis], "out", face_len([face_cells; 3], axis) as usize)
+            });
+            let distance: Vec<f32> = show.provided("step", "distance", (face_cells as usize).pow(3));
+            let level = pad_distance(&distance, face_cells, n, grid.h as f32);
+            let solid: Vec<f32> = show.dumped("mesh_solid", "solid", (grid.nodes as usize).pow(3));
+            let fields = WhitewaterFields {
+                face_u: &faces[0],
+                face_v: &faces[1],
+                face_w: &faces[2],
+                face_cells: [face_cells; 3],
+                face_offset: [(n - face_cells) / 2; 3],
+                level: &level,
+                solid: &solid,
+                gravity: GRAVITY,
+            };
+            let mut engine_kinds = [0.0f64; 3];
+            for (engine, sum) in engines.iter_mut().zip(&mut engine_sum) {
+                engine.set_fields(&fields).expect("engine fields");
+                whitewater_oracle::emit_engine(engine, &positions, DT, INFLUENCE_BASE, INFLUENCE_DECAY).expect("engine emits");
+                engine.particles(&mut population).expect("engine population");
+                for p in &population {
+                    let k = match p.kind {
+                        WhitewaterKind::Foam => 0,
+                        WhitewaterKind::Bubble => 1,
+                        WhitewaterKind::Spray => 2,
+                    };
+                    sum[k] += 1.0;
+                    engine_kinds[k] += 1.0 / ENGINE_SEEDS.len() as f64;
+                }
+            }
+            for k in 0..3 {
+                gpu_sum[k] += f64::from(gpu[k]);
+            }
+            let emitted = gpu[3] - previous_emitted;
+            previous_emitted = gpu[3];
+            let engine_total: f64 = engine_kinds.iter().sum();
+            let engine_net = engine_total - previous_engine;
+            previous_engine = engine_total;
+            csv.push_str(&format!("{frame},{},{},{},{emitted},{:.1},{:.1},{:.1},{engine_net:.1}\n", gpu[0], gpu[1], gpu[2], engine_kinds[0], engine_kinds[1], engine_kinds[2]));
+            if frame % 10 == 0 {
+                println!(
+                    "L5E frame {frame}: GPU foam {} bubble {} spray {} emitted this tick {emitted}; engine mean foam {:.1} bubble {:.1} spray {:.1} net change {engine_net:+.1}",
+                    gpu[0], gpu[1], gpu[2], engine_kinds[0], engine_kinds[1], engine_kinds[2]
+                );
+            }
+        }
+        let errors = show.errors();
+        assert!(errors.is_empty(), "the chain ran with errors: {errors:#?}");
+        let path = std::env::temp_dir().join("whitewater_step_vs_engine_150.csv");
+        std::fs::write(&path, csv).expect("parity csv");
+        let mut failures = Vec::new();
+        for (k, name) in ["foam", "bubble", "spray"].into_iter().enumerate() {
+            let seeds: Vec<f64> = engine_sum.iter().map(|s| s[k]).collect();
+            let engine = mean(&seeds);
+            let range = seeds.iter().copied().fold(f64::MIN, f64::max) - seeds.iter().copied().fold(f64::MAX, f64::min);
+            let tolerance = 3.0 * range;
+            let gap = gpu_sum[k] - engine;
+            println!(
+                "L5E {name} summed over 150 frames: GPU {:.0}, engine {engine:.0} (seeds {seeds:?}), GPU/engine {:.3}, gap {gap:+.0}, tolerance ±{tolerance:.0}",
+                gpu_sum[k], gpu_sum[k] / engine.max(1.0)
+            );
+            if gap.abs() > tolerance {
+                failures.push(format!("{name}: GPU {:.0} against the engine's {engine:.0} ± {tolerance:.0}", gpu_sum[k]));
+            }
+        }
+        println!("L5E csv {}", path.display());
+        assert!(gpu_sum.iter().sum::<f64>() > 0.0, "the step made no whitewater");
+        assert!(failures.is_empty(), "the step strays from FLIP's engine on the same water: {failures:#?}");
     }
 }

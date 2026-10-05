@@ -2527,7 +2527,15 @@ extern "C" int manifold_fluids_oracle_emit_engine(void *lifecycle, const float *
         InfluenceGrid &influence = *native.engine_influence;
         influence.setBaseLevel(static_cast<float>(influence_base));
         influence.setDecayRate(static_cast<float>(influence_decay));
-        influence.update(&native.solid, dt);
+        // The bridge solid is a minimal level set: its object map is empty,
+        // so the sources pass would read past it. The same distances on a
+        // full level set with no mesh objects give every cell no object,
+        // which is what the engine sees where no obstacle raises influence.
+        MeshLevelSet sources(native.isize, native.jsize, native.ksize, native.dx);
+        const size_t solid_nodes = static_cast<size_t>(native.isize + 1) * (native.jsize + 1) * (native.ksize + 1);
+        std::memcpy(sources.getPhiArray3d()->getRawArray(), native.solid.getPhiArray3d()->getRawArray(),
+                    solid_nodes * sizeof(float));
+        influence.update(&sources, dt);
         params.influenceGrid = influence.getInfluenceGrid();
         native.markers = ParticleSystem();
         native.markers.addAttributeVector3("POSITION");
