@@ -315,3 +315,42 @@ fn gpu_flip_engine_dam_break_with_box_substeps() {
         }
     }
 }
+
+/// Probe (floor-jet junction): the engine's `_solidSDF` nodes for the Dam
+/// Break with its box after one frame, raw f32, i fastest, written to
+/// `$JUNCTION_DUMP_DIR/native_solid.f32` for comparison with GPU FLIP's
+/// (`gpu_flip_scene_tests::gpu_flip_junction_solid_dump`).
+#[test]
+fn gpu_flip_engine_junction_solid_dump() {
+    use crate::node_graph::primitives::gpu_flip_preset::DAM_OBSTACLE;
+    let settings = dam_break(64, false);
+    let domain = settings.domain_layout().expect("dam break domain");
+    let mut world = seeded_world(settings, domain, false).expect("dam break world");
+    world.set_gravity([0.0, -9.81, 0.0]).expect("gravity");
+    let [pos, scale] = DAM_OBSTACLE;
+    let bounds = domain.bounds(Transform { pos: pos.map(|v| v as f32), scale: scale.map(|v| v as f32), ..Transform::default() });
+    let offset = domain.to_scene([0.0; 3]);
+    let (mut records, mut solid) = (Vec::new(), Vec::new());
+    world.set_obstacle(bounds, bounds, bounds).expect("obstacle");
+    world.step(Seconds(1.0 / 60.0)).expect("engine step");
+    let info = loop {
+        match world.capture_particle_frame(offset, &mut records, &mut solid) {
+            Ok(info) => break info,
+            Err(CaptureError::Capacity { particles, solid: nodes }) => {
+                records.resize(particles as usize, ParticleRecord::default());
+                solid.resize(nodes, 0.0);
+            }
+            Err(CaptureError::Fluid(e)) => panic!("engine particle frame: {e}"),
+        }
+    };
+    let dir = std::env::var_os("JUNCTION_DUMP_DIR").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir);
+    let path = dir.join("native_solid.f32");
+    std::fs::write(&path, bytemuck::cast_slice::<f32, u8>(&solid)).expect("dump");
+    println!(
+        "JUNCTION native nodes {:?} origin {:?} h {} bounds {bounds:?} -> {}",
+        info.solid_nodes,
+        domain.native_origin(),
+        domain.cell_size,
+        path.display()
+    );
+}

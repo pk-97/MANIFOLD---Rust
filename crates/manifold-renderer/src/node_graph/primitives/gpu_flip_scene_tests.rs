@@ -2250,3 +2250,31 @@ fn gpu_flip_speed_measure() {
         }
     }
 }
+
+/// Probe (floor-jet junction): the Dam Break's static solid nodes after one
+/// tick, read from `mesh_solid`, which runs the step's own solid kernel on the
+/// same native lattice, inset and closed faces. Raw f32, i fastest, written
+/// to `$JUNCTION_DUMP_DIR/gpu_solid.f32` for comparison with the engine's
+/// `_solidSDF` (`race_probe::gpu_flip_engine_junction_solid_dump`).
+#[cfg(feature = "water-race-probes")]
+#[test]
+fn gpu_flip_junction_solid_dump() {
+    let scene = WaterScene::dam_break(64).with_obstacle().with_steps(1);
+    let mut registry = PrimitiveRegistry::with_builtin();
+    register_substep_test_nodes(&mut registry);
+    let mut graph = water_def(scene).into_graph(&registry, &Default::default()).expect("water def builds");
+    graph.add_external_output(node_named(&graph, "mesh_solid"), "solid").expect("mesh_solid.solid");
+    let mut run = Run::with_graph(scene, graph);
+    run.frame();
+    let nodes = run.n() + 1;
+    let solid: Vec<f32> = run.read("mesh_solid", "solid", nodes.pow(3));
+    let dir = std::env::var_os("JUNCTION_DUMP_DIR").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir);
+    let path = dir.join("gpu_solid.f32");
+    std::fs::write(&path, bytemuck::cast_slice::<f32, u8>(&solid)).expect("dump");
+    println!(
+        "JUNCTION gpu nodes {nodes} min {:?} h {} -> {}",
+        run.solver_grid().min(),
+        run.scene.cell_size(),
+        path.display()
+    );
+}
