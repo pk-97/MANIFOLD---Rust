@@ -82,6 +82,12 @@ impl PresetRuntime {
         )>,
     ) -> Result<Self, JsonGeneratorLoadError> {
         let mut doc = doc;
+        // Retired params leave before anything reads the authored graph: the
+        // scene-modifier expansion, its value writes and the render def must
+        // all see the same nodes.
+        if crate::node_graph::has_retired_params(&doc) {
+            crate::node_graph::retire_params(&mut doc);
+        }
         super::gpu_flip_surface::prepare(&mut doc);
         let (render_def, authoring) =
             if manifold_core::scene_modifier_preset::has_scene_modifier_data(&doc)
