@@ -8,6 +8,8 @@ build = "build.rs"
 [features]
 # FLIP's own whitewater fields as a test oracle (GPU_WHITEWATER_DESIGN.md O1, O2).
 whitewater-oracle = []
+# The native projected faces as a probe oracle (GPU FLIP still-pool bounds).
+face-oracle = []
 
 [dependencies]
 bytemuck = { version = "1", features = ["derive"] }

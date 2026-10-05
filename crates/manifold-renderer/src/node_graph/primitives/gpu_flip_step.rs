@@ -1521,7 +1521,7 @@ impl StepState {
             }
         };
         // The water mask is φ < 0, so φ is built every step.
-        let solids = p.body_count > 0;
+        let bodies = p.body_count > 0;
         if step.narrow_enabled {
             let nb = self.narrow.buffers.as_ref().ok_or("narrow-band storage was not reserved")?;
             let nb_pipes = self.narrow.pipes.as_ref().ok_or("narrow-band pipelines were not prepared")?;
@@ -1651,15 +1651,9 @@ impl StepState {
             enc.clear_buffer(&l.v);
             self.solid_velocity_is_zero = true;
         }
-        if solids {
-            over_c(
-                enc,
-                &pipes.phi_into_solids,
-                vec![buffer(9, &l.corners), buffer(5, &l.phi)],
-                cells_groups,
-                "gpu_flip.step.phi_into_solids",
-            );
-        }
+        // The tank walls are always in the solid, so this runs with or
+        // without bodies, as the engine's postProcessSignedDistanceField does.
+        over_c(enc, &pipes.phi_into_solids, vec![buffer(9, &l.corners), buffer(5, &l.phi)], cells_groups, "gpu_flip.step.phi_into_solids");
         over_c(enc, &pipes.water_from_phi, vec![buffer(7, &l.phi), buffer(5, &l.water)], cells_groups, "gpu_flip.step.water_from_phi");
         // Which water reaches air holds every step: the density source reads
         // it too. As the engine does, the solid velocity's zeroing is skipped
@@ -1676,7 +1670,7 @@ impl StepState {
         if step.level > 0 {
             encode_pocket_coarsen(enc, pipes, &base, l, gate_plan);
         }
-        if solids && !step.dynamic {
+        if bodies && !step.dynamic {
             enc.dispatch_compute(
                 &pipes.pocket_condition,
                 &[uniform(&base), buffer(4, &l.v), buffer(10, &l.s), buffer(23, &l.pocket), buffer(46, gate_plan)],

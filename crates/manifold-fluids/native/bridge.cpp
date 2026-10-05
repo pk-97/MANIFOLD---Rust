@@ -1715,6 +1715,38 @@ extern "C" int manifold_fluids_world_capture_particle_frame(
     });
 }
 
+#ifdef MANIFOLD_FACE_ORACLE
+// Test diagnostic: the last step's projected vertical (V) face velocities,
+// i + isize·(j + (jsize + 1)·k), domain-scaled as particle velocities are.
+// Only probe tests call this entry.
+extern "C" int manifold_fluids_world_capture_face_v(void *world, float *out, size_t capacity,
+                                                    uint32_t *dims_out) {
+    return guarded([&] {
+        if (world == nullptr || out == nullptr || dims_out == nullptr) {
+            throw std::invalid_argument("face capture pointers must be non-null");
+        }
+        auto *native = static_cast<NativeWorld *>(world);
+        require_accepted_frame(*native);
+        auto &simulation = *native->simulation;
+        const uint32_t dims[3] = {native->isize, native->jsize + 1, native->ksize};
+        std::copy(dims, dims + 3, dims_out);
+        if (static_cast<size_t>(dims[0]) * dims[1] * dims[2] > capacity) {
+            throw std::invalid_argument("face capture capacity is too small");
+        }
+        MACVelocityField *field = simulation.getVelocityField();
+        const float scale = static_cast<float>(simulation.getDomainScale());
+        for (uint32_t k = 0; k < dims[2]; ++k) {
+            for (uint32_t j = 0; j < dims[1]; ++j) {
+                for (uint32_t i = 0; i < dims[0]; ++i) {
+                    out[i + dims[0] * (j + dims[1] * k)] =
+                        field->V(static_cast<int>(i), static_cast<int>(j), static_cast<int>(k)) * scale;
+                }
+            }
+        }
+    });
+}
+#endif
+
 // Test diagnostic: the captured surface frame's prepared solid, in the
 // particle frame's lattice order. Only Rust tests call this entry.
 extern "C" int manifold_fluids_surface_frame_solid(void *frame, float *solid, size_t capacity,
