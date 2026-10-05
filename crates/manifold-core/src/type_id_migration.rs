@@ -234,6 +234,9 @@ pub fn migrate_type_id(id: &str) -> &str {
 pub static RETIRED_PARAMS: &[(&str, &str)] = &[
     // GPU FLIP matches the native engine's RK3, which never caps a stage.
     ("node.gpu_flip_step", "top_speed"),
+    // GPU FLIP always publishes the native padded grid; old graphs' solid
+    // producers are rewired at load (graph_loader `wire_gpu_flip_grid`).
+    ("node.liquid_frame", "native_mesh_grid"),
 ];
 
 /// Whether any param of `type_id` is listed in [`RETIRED_PARAMS`].

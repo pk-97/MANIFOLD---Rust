@@ -9716,7 +9716,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Copy one axis of a face grid (node.gpu_flip_step's faces, one FaceSample per cell of the authored box plus one along each axis) into the liquid seam's face array for that axis: (cells + 1) along the axis by cells on the other two, x fastest, velocity in m/s. nodes_x/y/z are the padded lattice's (node.gpu_flip_domain's), so the box has nodes − 7 cells per axis. Faces with weight 0 read 0. The storage holds one float per face grid record, a little more than the axis has faces; readers size the axis from the lattice.",
+      "purpose": "Copy one axis of a face grid (node.gpu_flip_step's faces, one FaceSample per cell of the authored box plus one along each axis) into the liquid seam's face array for that axis: (cells + 1) along the axis by cells on the other two, x fastest, velocity in m/s. nodes_x/y/z are the padded lattice's (node.gpu_flip_domain's), so GPU FLIP has nodes − 4 solver cells per axis. These wires retain the authored lattice contract; use the domain nodes, not frame grid_nodes. Faces with weight 0 read 0. The storage holds one float per face grid record, a little more than the axis has faces; readers size the axis from the lattice.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Hands one direction of the water's velocity grid to effects that follow the water.",
@@ -14741,6 +14741,10 @@
           "type": "f32"
         },
         {
+          "name": "mesh_wall_inset",
+          "type": "f32"
+        },
+        {
           "capacity": "fixed:1",
           "name": "bodies",
           "type": "Array"
@@ -15510,16 +15514,6 @@
             "64"
           ],
           "type": "int"
-        },
-        {
-          "default": "20",
-          "label": "Top Speed",
-          "name": "top_speed",
-          "range": [
-            "0.1",
-            "1000"
-          ],
-          "type": "float"
         },
         {
           "default": "1",
@@ -19984,12 +19978,6 @@
         }
       ],
       "params": [
-        {
-          "default": "false",
-          "label": "Native Mesh Grid",
-          "name": "native_mesh_grid",
-          "type": "bool"
-        },
         {
           "default": "63",
           "label": "Closed Faces (bits −X +X −Y +Y −Z +Z)",
@@ -49640,7 +49628,7 @@
             "0",
             "64"
           ],
-          "type": "int"
+          "type": "float"
         },
         {
           "default": "0",
@@ -142484,7 +142472,7 @@
           "name": "Reset"
         },
         {
-          "default": "0",
+          "default": "1",
           "id": "surface_detail",
           "max": "2",
           "min": "0",
@@ -142498,7 +142486,7 @@
           "name": "Environment"
         },
         {
-          "default": "3",
+          "default": "2.2",
           "id": "surface_particle_scale",
           "max": "4",
           "min": "1",
@@ -142512,14 +142500,14 @@
           "name": "Smoothing Value"
         },
         {
-          "default": "3",
+          "default": "0.1",
           "id": "water_attenuation",
           "max": "20",
           "min": "0.1",
           "name": "Water Absorption Distance"
         },
         {
-          "default": "0.055",
+          "default": "0.08826533",
           "id": "water_scattering",
           "max": "2",
           "min": "0",
@@ -143044,14 +143032,14 @@
           "name": "Light Size"
         },
         {
-          "default": "0.98",
+          "default": "0.37254903",
           "id": "441_color_r",
           "max": "1",
           "min": "0",
           "name": "Base Colour R"
         },
         {
-          "default": "0.99",
+          "default": "0.7294118",
           "id": "441_color_g",
           "max": "1",
           "min": "0",
@@ -143086,7 +143074,7 @@
           "name": "Metallic"
         },
         {
-          "default": "0.018",
+          "default": "0.5540391",
           "id": "441_roughness",
           "max": "1",
           "min": "0.01",
@@ -170579,14 +170567,14 @@
           "name": "Environment"
         },
         {
-          "default": "3",
+          "default": "0.1",
           "id": "water_attenuation",
           "max": "20",
           "min": "0.1",
           "name": "Water Absorption Distance"
         },
         {
-          "default": "0.055",
+          "default": "0.08826533",
           "id": "water_scattering",
           "max": "2",
           "min": "0",
@@ -171083,14 +171071,14 @@
           "name": "Light Size"
         },
         {
-          "default": "0.98",
+          "default": "0.37254903",
           "id": "441_color_r",
           "max": "1",
           "min": "0",
           "name": "Base Colour R"
         },
         {
-          "default": "0.99",
+          "default": "0.7294118",
           "id": "441_color_g",
           "max": "1",
           "min": "0",
@@ -171125,7 +171113,7 @@
           "name": "Metallic"
         },
         {
-          "default": "0.018",
+          "default": "0.5540391",
           "id": "441_roughness",
           "max": "1",
           "min": "0.01",

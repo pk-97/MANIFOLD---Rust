@@ -57,7 +57,7 @@ mod cpu_tests {
 
     use super::{NbParams, SHADER};
     use crate::node_graph::fluid_particles::FluidParticle;
-    use crate::node_graph::liquid::lattice::{FlipSolverGrid, LiquidLattice, FLIP_WALL_EPSILON};
+    use crate::node_graph::liquid::lattice::{FlipSolverGrid, LiquidLattice};
 
     pub(super) const STEP_CELLS: [usize; 3] = [16, 16, 16];
     const POOL_TOP: usize = 12;
@@ -199,15 +199,18 @@ mod cpu_tests {
         }).collect()
     }
 
+    #[cfg(feature = "gpu-proofs")]
     pub(super) fn runtime_pool_initial_phi() -> Vec<f32> {
         redistance_oracle(runtime_pool_particle_phi(), runtime_grid().cells().map(|v| v as usize))
     }
 
+    #[cfg(feature = "gpu-proofs")]
     pub(super) fn runtime_expected_retained(input: &[FluidParticle], phi: &[f32]) -> BTreeSet<u32> {
         let grid = runtime_grid();
         input.iter().filter(|p| {
             let [x, y, z, _] = p.position_radius;
-            let wall = x.min(16.0-x).min(y.min(16.0-y)).min(z.min(16.0-z)) - FLIP_WALL_EPSILON;
+            let wall = x.min(16.0-x).min(y.min(16.0-y)).min(z.min(16.0-z))
+                - crate::node_graph::liquid::lattice::FLIP_WALL_EPSILON;
             wall <= 3.0 || sample_field(phi, [x,y,z], grid.cells().map(|v| v as usize),
                 grid.min().map(|v| v + 0.5)) >= -3.0
         }).map(|p| p.id).collect()
@@ -219,7 +222,7 @@ mod cpu_tests {
         assert_eq!(grid.cells(), [19; 3]);
         assert_eq!(grid.min(), [-1.5; 3]);
         let field = runtime_pool_particle_phi();
-        let at = |x, y, z| x + 19 * (y + 19 * z);
+        let at = |x: usize, y: usize, z: usize| x + 19 * (y + 19 * z);
         assert!(field[at(9, 9, 9)] < 0.0); // world (8,8,8), inside fill
         assert!(field[at(9, 14, 9)] > 0.0); // world y=13, above fill
         assert_eq!(field[at(18, 18, 18)], 3.0); // unsupported padded air

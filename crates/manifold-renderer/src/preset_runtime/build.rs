@@ -353,10 +353,10 @@ impl PresetRuntime {
         // graph construction together, on the same prepared render document.
         let group_preview_map = manifold_core::flatten::group_output_producer_map(&doc);
         let mut flat_doc = manifold_core::flatten::flatten_groups(&doc).ok();
-        if let Some(flat) = flat_doc.as_mut() {
-            if crate::node_graph::graph_loader::wire_gpu_flip_grid(flat) {
-                doc = flat.clone();
-            }
+        if let Some(flat) = flat_doc.as_mut()
+            && crate::node_graph::wire_gpu_flip_grid(flat)
+        {
+            doc = flat.clone();
         }
 
         // Capture the binding specs + outer-card param ids before `into_graph`

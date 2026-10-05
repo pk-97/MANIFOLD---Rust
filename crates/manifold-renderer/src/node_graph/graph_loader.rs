@@ -31,6 +31,7 @@
 use std::borrow::Cow;
 
 use ahash::{AHashMap, AHashSet};
+use manifold_core::liquid_domain::{GPU_FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN_TYPE_ID};
 
 use manifold_core::effect_graph_def::{
     EFFECT_GRAPH_VERSION_WITH_SCENE_MODIFIERS, EffectGraphDef, EffectGraphNode, EffectGraphWire,
@@ -702,7 +703,7 @@ fn wire_liquid_intervals(def: &mut EffectGraphDef) -> bool {
     use manifold_core::effect_graph_def::EffectGraphWire;
     let mut domains = std::collections::BTreeMap::new();
     for node in &def.nodes {
-        if matches!(node.type_id.as_str(), "node.gpu_flip_domain" | "node.matter_domain") {
+        if matches!(node.type_id.as_str(), GPU_FLIP_DOMAIN_TYPE_ID | MATTER_DOMAIN_TYPE_ID) {
             domains.insert(node.id, node.id);
         }
     }
@@ -787,7 +788,7 @@ pub(crate) fn wire_gpu_flip_grid(def: &mut EffectGraphDef) -> bool {
     let frames: Vec<_> = def.nodes.iter().filter(|n| n.type_id == "node.liquid_frame")
         .filter_map(|frame| {
             let domain = def.wires.iter().find(|w| w.to_node == frame.id && w.to_port == "nodes_x")?.from_node;
-            (def.nodes.iter().any(|n| n.id == domain && n.type_id == "node.gpu_flip_domain")
+            (def.nodes.iter().any(|n| n.id == domain && n.type_id == GPU_FLIP_DOMAIN_TYPE_ID)
                 && geometry_matches(frame.id, domain, false)).then_some((frame.id, domain))
         }).collect();
     // Capture matches before mutating wires so the geometric authority stays
@@ -2382,7 +2383,7 @@ mod tests {
         let mut def = EffectGraphDef {
             version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
             name: None, description: None, preset_metadata: None, scene_modifiers: Vec::new(),
-            nodes: vec![bare_node(1, "node.gpu_flip_domain"), bare_node(2, "node.liquid_solid_distance"),
+            nodes: vec![bare_node(1, GPU_FLIP_DOMAIN_TYPE_ID), bare_node(2, "node.liquid_solid_distance"),
                 bare_node(3, "node.liquid_frame"), bare_node(4, "node.value_sink"), bare_node(5, "node.liquid_fill")],
             wires: vec![wire(2, "solid", 3, "solid"), wire(2, "solid", 4, "in"), wire(1, "cell_size", 3, "cell_size"), wire(1, "cell_size", 2, "cell_size")],
         };
@@ -2398,7 +2399,7 @@ mod tests {
         let nested: EffectGraphDef = serde_json::from_value(serde_json::json!({
             "version": 1,
             "nodes": [
-                { "id": 1, "typeId": "node.gpu_flip_domain" },
+                { "id": 1, "typeId": GPU_FLIP_DOMAIN_TYPE_ID },
                 { "id": 2, "typeId": "group", "handle": "outer", "group": {
                     "interface": { "inputs": [], "outputs": [] },
                     "nodes": [{ "id": 1, "typeId": "group", "handle": "inner", "group": {
@@ -2435,8 +2436,8 @@ mod tests {
         let mut def = EffectGraphDef {
             version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
             name: None, description: None, preset_metadata: None, scene_modifiers: Vec::new(),
-            nodes: vec![bare_node(1, "node.gpu_flip_domain"), bare_node(2, "node.liquid_solid_distance"),
-                bare_node(3, "node.liquid_frame"), bare_node(4, "node.gpu_flip_domain")],
+            nodes: vec![bare_node(1, GPU_FLIP_DOMAIN_TYPE_ID), bare_node(2, "node.liquid_solid_distance"),
+                bare_node(3, "node.liquid_frame"), bare_node(4, GPU_FLIP_DOMAIN_TYPE_ID)],
             wires: vec![EffectGraphWire { from_node: 2, from_port: "solid".into(), to_node: 3, to_port: "solid".into() }],
         };
         for node in [2, 3] {
@@ -2463,13 +2464,13 @@ mod tests {
         let mut def = EffectGraphDef {
             version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
             name: None, description: None, preset_metadata: None, scene_modifiers: Vec::new(),
-            nodes: vec![bare_node(1, "node.matter_domain"), bare_node(2, "node.liquid_solid_distance"), bare_node(3, "node.liquid_frame")],
+            nodes: vec![bare_node(1, MATTER_DOMAIN_TYPE_ID), bare_node(2, "node.liquid_solid_distance"), bare_node(3, "node.liquid_frame")],
             wires: vec![EffectGraphWire { from_node: 1, from_port: "nodes_x".into(), to_node: 3, to_port: "nodes_x".into() }],
         };
         let original = def.clone();
         assert!(!wire_gpu_flip_grid(&mut def));
         assert_eq!(def, original);
-        def.nodes[0].type_id = "node.gpu_flip_domain".into();
+        def.nodes[0].type_id = GPU_FLIP_DOMAIN_TYPE_ID.into();
         def.nodes[1].type_id = "node.custom_solid".into();
         let original = def.clone();
         assert!(!wire_gpu_flip_grid(&mut def));
@@ -2485,7 +2486,7 @@ mod tests {
         let mut def = EffectGraphDef {
             version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
             name: None, description: None, preset_metadata: None, scene_modifiers: Vec::new(),
-            nodes: vec![bare_node(1, "node.gpu_flip_domain"), bare_node(2, "node.liquid_state"), bare_node(3, "node.gpu_flip_step"), bare_node(4, "node.whitewater_step"), bare_node(5, "node.scalar")],
+            nodes: vec![bare_node(1, GPU_FLIP_DOMAIN_TYPE_ID), bare_node(2, "node.liquid_state"), bare_node(3, "node.gpu_flip_step"), bare_node(4, "node.whitewater_step"), bare_node(5, "node.scalar")],
             wires: vec![wire(1, "ticks", 2, "ticks"), wire(2, "out", 3, "particles"), wire(3, "out", 2, "in"), wire(3, "faces", 4, "faces"), wire(5, "out", 4, "dt")],
         };
         assert!(wire_liquid_intervals(&mut def));
@@ -2508,8 +2509,8 @@ mod tests {
             from_node: from, from_port: output.into(), to_node: to, to_port: input.into(),
         };
         for (domain, state) in [
-            ("node.gpu_flip_domain", "node.liquid_state"),
-            ("node.matter_domain", "node.matter_state"),
+            (GPU_FLIP_DOMAIN_TYPE_ID, "node.liquid_state"),
+            (MATTER_DOMAIN_TYPE_ID, "node.matter_state"),
         ] {
             let authored = wire(4, "out", 3, "dropped_seconds");
             let mut def = EffectGraphDef {
@@ -2666,7 +2667,7 @@ mod tests {
         let wire = |from, output: &str, to, input: &str| EffectGraphWire {
             from_node: from, from_port: output.into(), to_node: to, to_port: input.into(),
         };
-        for domain in ["node.gpu_flip_domain", "node.matter_domain"] {
+        for domain in [GPU_FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN_TYPE_ID] {
             let mut def = EffectGraphDef {
                 version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
                 name: None, description: None, preset_metadata: None, scene_modifiers: Vec::new(),

@@ -465,26 +465,21 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     b.wires(domain, state, &["nodes_x", "nodes_y", "nodes_z"]);
 
     // Solver faces, published surface and whitewater share the native grid.
-    let solid = b.node("mesh_solid", "node.liquid_solid_distance", json!({}));
-    b.wires(domain, solid, &["bodies", "shapes", "atlas", "closed_faces", "body_count"]);
-    b.wire((domain, "cell_size"), solid, "cell_size");
-    for (source, target) in [
+    const NATIVE_GRID: [(&str, &str); 6] = [
         ("mesh_min_x", "lattice_min_x"), ("mesh_min_y", "lattice_min_y"), ("mesh_min_z", "lattice_min_z"),
         ("mesh_nodes_x", "nodes_x"), ("mesh_nodes_y", "nodes_y"), ("mesh_nodes_z", "nodes_z"),
-    ] {
-        b.wire((domain, source), solid, target);
-    }
-    b.wire((domain, "body_rows"), solid, "rows");
-    b.wire((domain, "mesh_wall_inset"), solid, "wall_inset");
+    ];
+    let solid = b.node("mesh_solid", "node.liquid_solid_distance", json!({}));
     let source = b.node("whitewater_obstacle_source", "node.whitewater_obstacle_source", json!({}));
-    b.wires(domain, source, &["bodies", "shapes", "atlas", "closed_faces", "body_count"]);
-    b.wire((domain, "cell_size"), source, "cell_size");
-    b.wire((domain, "mesh_wall_inset"), source, "wall_inset");
-    for axis in ["x", "y", "z"] {
-        b.wire((domain, &format!("mesh_min_{axis}")), source, &format!("lattice_min_{axis}"));
-        b.wire((domain, &format!("mesh_nodes_{axis}")), source, &format!("nodes_{axis}"));
+    for node in [solid, source] {
+        b.wires(domain, node, &["bodies", "shapes", "atlas", "closed_faces", "body_count"]);
+        b.wire((domain, "cell_size"), node, "cell_size");
+        for (from, to) in NATIVE_GRID {
+            b.wire((domain, from), node, to);
+        }
+        b.wire((domain, "body_rows"), node, "rows");
+        b.wire((domain, "mesh_wall_inset"), node, "wall_inset");
     }
-    b.wire((domain, "body_rows"), source, "rows");
     let frame = b.node("frame", "node.liquid_frame", json!({"face_valid_layers": int(FACE_VALID_LAYERS as usize)}));
     b.wire((state, "out"), frame, "particles");
     b.wire((state, "stats"), frame, "stats");
