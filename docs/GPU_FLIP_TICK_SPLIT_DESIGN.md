@@ -49,7 +49,7 @@ The first measurement (`oracle_main_nodes.log`, timestamped, replay off) split f
 | 0–100 (splash) | 87 | 13 | 6 | 6 | 1 | 23 | 0.88 s |
 | 100–600 (calm) | 474 | 26 | 26 | 0 | 0 | 8 | 0.28 s |
 
-Measured GPU span sum, calm: tick frames p50 32.8 ms, no-tick p50 12.8 ms. Paced wall intervals hide the difference (no-tick 30.9 ms, tick 32.7 ms): the surface wait absorbs it. A timestamped run (replay off, every frame) agrees: 22 of 22 calm no-tick frames crossed no boundary, and the step's stage spans sum to the step span (ratio 1.000). Stage p50s: prepare 9.7, pressure 6.0, pockets 3.6, project_extend 1.0, move 0.9, finish 0.2, clock 0.1 ms.
+Measured GPU span sum, calm: tick frames p50 32.8 ms, no-tick p50 12.8 ms. Paced wall intervals hide the difference (no-tick 30.9 ms, tick 32.7 ms): the surface wait absorbs it. A timestamped run (replay off, every frame, after `project_extend` moved before projection) agrees: 25 of 25 calm no-tick frames crossed no boundary (frames 60–360), and the step's stage spans sum to the step span (ratio 1.000). Calm stage p50s, profiling-inflated, usable as relative D3 weights: prepare 9.7, pressure 5.6, pockets 3.6, project_extend 1.0, move 0.9, finish 0.2, clock 0.1 ms. No density span appears in this scene.
 
 So on the oracle, calm no-tick frames happen with no boundary crossed; none follows a reanchor. The classification is a rule over observed decisions, not proof of cause. The calm part still drops about 0.28 s of simulated time per run, through the late-frame rule of `LIVE_SIM_CLOCK_DESIGN.md` (Late frames take one interval): a frame over the 16.7 ms budget caps the next at one interval, and one that then spans two boundaries drops the remainder and reanchors. That is the clock's contract, not a defect. **Open question for Peter:** whether cap one after a late frame is the right policy when the scene sustains 30 Hz but never fits 16.7 ms.
 
@@ -120,29 +120,34 @@ Every phase is one session, ends committed with `cargo clippy -p <touched> -- -D
 
 ### P1 — Pacing experiment (D1), default Off
 
-- **Entry state:** P0 landed: `rg -n "fn record_clock" crates/manifold-renderer/src/node_graph/physics_metrics.rs`. Peter has said he wants to try it.
+- **Entry state:** P0 landed: `rg -n "fn record_clock" crates/manifold-renderer/src/node_graph/physics_metrics.rs` hits; Peter has said he wants to try it.
 - **Read-back:** D1 in full; `docs/VSYNC_AND_FRAME_PACING.md`; `crates/manifold-app/src/content_thread.rs` `run_paced_frame`; `frame_timer.rs` deadlines; `LIVE_SIM_CLOCK_DESIGN.md` (Late frames take one interval). Restate: Off by default; m = 1 only; no automatic mode; the budget change reaches every clock observer; commands still drain while the thread waits.
 - **Deliverables:** `PhysicsSettings.live_pacing` with load migration (old projects load Off); content thread paces to one sim interval when Experimental and the timer sleep drains commands; `LiveLoad.budget` is the paced interval while pacing; a `frame-time --live-pacing experimental` flag.
-- **Gate (positive):** a `frame_timer` test that the paced deadline is one sim interval; a settings round-trip test (Off default, Experimental persists, old file loads Off); oracle run reports no-tick frames, fresh dropped seconds and interval p95 − p5 for Off and Experimental side by side.
-- **Gate (negative):** `rg -n "live_pacing" crates/` shows no read outside settings, content thread and frame-time; no new `Arc<Mutex` in the diff.
-- **Acceptance artifact:** the two oracle `frame-time` reports (Off, Experimental) and the exact launch command for Peter's live trial from the branch binary. Landing on main needs Peter's verdict from that trial.
+- **Gate (positive):**
+  - `cargo nextest run -p manifold-app paced_deadline_is_one_sim_interval` (new, `frame_timer.rs`).
+  - `cargo nextest run -p manifold-core live_pacing_defaults_off_and_round_trips` (new; Off default, Experimental persists, a file without the field loads Off).
+  - `cargo nextest run -p manifold-app paced_wait_drains_commands` (new; a command sent during the paced wait is handled before the next tick).
+  - Oracle, both modes through `scripts/gpu_queue.py -- <target>/release/manifold frame-time <oracle.manifold> --frames 600 --splash-frames 100 --stamp-every 100000 [--live-pacing experimental]`: report calm no-tick frames, fresh dropped seconds and interval p95 − p5 side by side.
+- **Gate (negative):** `rg -n "live_pacing" crates/ -g '*.rs'` hits only settings, content thread, frame-time and tests; `git diff origin/main -- crates/ | rg '^\+.*Arc<(Mutex|RwLock)'` returns zero hits.
+- **Acceptance artifact:** the two oracle reports and the exact launch command for Peter's live trial from the branch binary. Landing on main needs Peter's verdict from that trial.
 
 ### P2 — Split core (D2–D10), P = 2 only, uncoupled, no narrow band — BLOCKED
 
-- **Entry state:** every item of section 3 (Open holes that block P2) has a written resolution in this doc; a P0-measured scene with `r + T/2 ≤ 16.7 < r + T`, named with its file and measured r and T.
+- **Entry state:** every item of section 3 (Open holes that block P2) has a written resolution in this doc; a P0-measured scene with `r + T/2 ≤ 16.7 < r + T`, named with its file and its measured r and T from `frame-time`.
 - **Read-back:** D2–D10, section 4, section 5; `gpu_flip_step.rs` encode; `liquid_state.rs`; `substep_region.rs`; `crates/manifold-gpu/src/replay.rs`. Restate the qualifying scene's numbers and the hole resolutions.
 - **Deliverables:** resumable `encode_units`, continuation storage, `TickInputs`, `TickPlan`, domain scheduling, boundary scalars, stats and whitewater gating, replay keys.
-- **Gate (positive):** GPU proofs through `scripts/gpu_proofs_gate.py` (dam break 64, 60 ticks): invariants 1–6; prediction 1 → 6 → 1 across ticks; another pooled array node between pieces; hits inside tick k+1 while k is in progress; whitewater counts unchanged on non-completing pieces; replay `replayed ≥ 95%` of dispatches after 10 frames of A | B; reset mid-tick leaves the next epoch's first tick equal to a fresh run.
-- **Gate (negative):** P = 1 dispatch lists byte-identical to main on the oracle; no allocation in the content frame.
-- **Acceptance artifact:** `frame-time` on the qualifying scene, interval p95 − p5 before and after, and a headless PNG pair showing no partial publication.
+- **Gate (positive):** `scripts/gpu_proofs_gate.py` with a scope mapping for the split, running these new proofs in `crates/manifold-renderer/tests/gpu_proofs/` (dam break 64, 60 ticks): `split_never_publishes_partial_state` (invariant 1), `split_tick_keeps_inputs_at_acceptance` (2), `split_cuts_are_never_empty` (3, CPU property test, nextest), `split_cursor_matches_whole_tick` (4), `split_export_equals_live_state` (6, dispatch list and completed state), `split_prediction_changes_across_ticks` (1 → 6 → 1), `split_survives_pooled_node_between_pieces`, `split_hits_during_tick_in_progress`, `split_whitewater_holds_on_partial_pieces`, `split_replay_hits_steady_pattern` (`replayed ≥ 95%` after 10 frames of A | B), `split_reset_mid_tick_matches_fresh_run`.
+- **Gate (negative):** `split_p1_dispatch_list_matches_main` shows P = 1 byte-identical to today on the oracle; `git diff origin/main -- crates/ | rg '^\+.*Arc<(Mutex|RwLock)'` returns zero hits; the hot-path allocation lint passes.
+- **Acceptance artifact:** `frame-time` on the qualifying scene before and after (interval p95 − p5), and a headless PNG pair at a `B(k), A(k+1)` frame showing no partial publication.
 
 ### P3 — History and latency
 
-- **Entry state:** P2 landed; display history P1 on main.
-- **Read-back:** section 4 latency; `GPU_FLIP_DISPLAY_HISTORY_DESIGN.md` section 3.5 (latency model).
-- **Deliverables:** P2 run under display history; transport-lag trace.
-- **Gate:** on the qualifying scene, ≤ 3 frames of added latency and frame interval p95 − p5 ≤ 3 ms at 60 fps, from the `frame-time` report.
-- **Acceptance artifact:** that report plus Peter's live look.
+- **Entry state:** P2 landed (`rg -n "fn encode_units" crates/manifold-renderer/src/node_graph/primitives/gpu_flip_step.rs` hits); display history P1 on main.
+- **Read-back:** section 4 latency; `GPU_FLIP_DISPLAY_HISTORY_DESIGN.md` section 3.5 (latency model). Restate the latency arithmetic being tested.
+- **Deliverables:** P2 under display history; a transport-lag column in the `frame-time` per-frame line.
+- **Gate (positive):** `scripts/gpu_queue.py -- <target>/release/manifold frame-time <qualifying.manifold> --frames 600 --splash-frames 100 --stamp-every 100000` reports ≤ 3 frames of added transport lag against P = 1 and frame interval p95 − p5 ≤ 3 ms at 60 fps; `cargo nextest run -p manifold-renderer split_history_publishes_completed_ticks_only` passes.
+- **Gate (negative):** the same run with splitting off reproduces today's transport lag within one frame (no regression to the unsplit path), and its report shows zero frames publishing a tick that has not completed.
+- **Acceptance artifact:** that report plus Peter's live look at the qualifying scene.
 
 ## 7. Consequences, stated honestly
 

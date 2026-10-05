@@ -27,9 +27,8 @@ pub struct PhysicsMetrics {
 /// never inferred from timing.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ClockRecord {
-    /// Identifies the clock across frames: the address of its owner's clock,
-    /// stable while the node lives.
-    pub id: usize,
+    /// The clock's process-unique instance id (`SimulationClock::instance`).
+    pub id: u64,
     /// Sim Rate intervals accepted this frame.
     pub accepted: u32,
     /// Boundaries transport crossed since the last accepted one. `due == 0`
@@ -59,6 +58,8 @@ pub const MAX_CLOCK_RECORDS: usize = 4;
 pub struct ClockMetrics {
     records: [ClockRecord; MAX_CLOCK_RECORDS],
     len: u8,
+    /// Intervals accepted by every live clock this frame, overflowed ones included.
+    pub accepted_total: u32,
     /// Clocks advanced beyond the fixed storage; their records are lost.
     pub overflow: u32,
 }
@@ -69,6 +70,7 @@ impl ClockMetrics {
     }
 
     pub fn push(&mut self, record: ClockRecord) {
+        self.accepted_total = self.accepted_total.saturating_add(record.accepted);
         match self.records.get_mut(usize::from(self.len)) {
             Some(slot) => {
                 *slot = record;
@@ -94,7 +96,7 @@ const NO_RECORD: ClockRecord = ClockRecord {
     fresh_dropped_seconds: 0.0,
 };
 
-const NO_CLOCK: ClockMetrics = ClockMetrics { records: [NO_RECORD; MAX_CLOCK_RECORDS], len: 0, overflow: 0 };
+const NO_CLOCK: ClockMetrics = ClockMetrics { records: [NO_RECORD; MAX_CLOCK_RECORDS], len: 0, accepted_total: 0, overflow: 0 };
 
 thread_local! {
     static FRAME_METRICS: Cell<PhysicsMetrics> = const { Cell::new(PhysicsMetrics {
@@ -195,7 +197,7 @@ pub fn record_clock(
     FRAME_METRICS.with(|metrics| {
         let mut current = metrics.get();
         current.clock.push(ClockRecord {
-            id: std::ptr::from_ref(clock) as usize,
+            id: clock.instance(),
             accepted: frame.ticks,
             due: frame.due,
             live_cap,

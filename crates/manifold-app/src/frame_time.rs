@@ -161,7 +161,7 @@ mod tests {
         assert!(split.compute_dispatches.is_none(), "a stage span is not one dispatch");
     }
 
-    fn record(id: usize, accepted: u32, due: u32, reanchored: bool) -> ClockRecord {
+    fn record(id: u64, accepted: u32, due: u32, reanchored: bool) -> ClockRecord {
         ClockRecord {
             id, accepted, due, live_cap: 2, reanchored,
             fresh_dropped_seconds: if reanchored { 0.05 } else { 0.0 },
@@ -252,11 +252,23 @@ mod tests {
         assert_eq!(phase.reanchors, 2);
 
         let mut full = ClockMetrics::default();
-        for id in 0..MAX_CLOCK_RECORDS + 2 {
+        for id in 0..MAX_CLOCK_RECORDS as u64 {
             full.push(record(id, 0, 0, false));
         }
+        full.push(record(98, 0, 0, false));
+        full.push(record(99, 1, 1, false));
         assert_eq!(full.records().len(), MAX_CLOCK_RECORDS);
         assert_eq!(full.overflow, 2);
+        // An overflowed clock that ticks still makes a tick frame.
+        let mut idle = ClockMetrics::default();
+        for id in 0..MAX_CLOCK_RECORDS as u64 {
+            idle.push(record(id, 0, 0, false));
+        }
+        let mut no_tick_overflow = idle;
+        no_tick_overflow.push(record(98, 0, 0, false));
+        assert_eq!(attribute(&[full, no_tick_overflow, idle]), [
+            None, Some(NoTick::Indeterminate), Some(NoTick::NoBoundary),
+        ]);
     }
 
     #[test]
@@ -353,6 +365,9 @@ enum NoTick {
     NoBoundary,
     /// No live clock advanced (a domain held, say for collider geometry).
     NoClock,
+    /// No clock ticked, but some clocks overflowed the fixed records, so
+    /// their reasons are unknown.
+    Indeterminate,
 }
 
 impl NoTick {
@@ -364,6 +379,7 @@ impl NoTick {
             NoTick::NoBoundaryAfterReanchor => "no boundary, following a reanchor",
             NoTick::NoBoundary => "no boundary crossed",
             NoTick::NoClock => "no clock advanced",
+            NoTick::Indeterminate => "indeterminate, clock records overflowed",
         }
     }
 }
@@ -372,10 +388,10 @@ impl NoTick {
 /// each clock gets a verdict and the frame takes the first in `NoTick`'s
 /// order. A clock's reanchor marks only its own next no-tick decision.
 fn attribute(frames: &[ClockMetrics]) -> Vec<Option<NoTick>> {
-    let mut after_reanchor: BTreeMap<usize, bool> = BTreeMap::new();
+    let mut after_reanchor: BTreeMap<u64, bool> = BTreeMap::new();
     frames.iter().map(|frame| {
         let records = frame.records();
-        let ticked = records.iter().any(|clock| clock.accepted > 0);
+        let ticked = frame.accepted_total > 0;
         let mut verdict: Option<NoTick> = None;
         for clock in records {
             let pending = after_reanchor.entry(clock.id).or_default();
@@ -400,6 +416,8 @@ fn attribute(frames: &[ClockMetrics]) -> Vec<Option<NoTick>> {
         }
         if ticked {
             None
+        } else if frame.overflow > 0 {
+            Some(NoTick::Indeterminate)
         } else if records.is_empty() {
             Some(NoTick::NoClock)
         } else {
@@ -925,8 +943,8 @@ fn probe(args: &Args) -> Result<(), String> {
             let flags: String = [(c.reanchored, 'R'), (c.held, 'H'), (c.restarted, 'S')]
                 .into_iter().filter_map(|(on, flag)| on.then_some(flag)).collect();
             format!(
-                "#{:x} {}/{}/{} thru {}{completed} ep {} t {:.4} {flags:<2} drop {:.1}",
-                c.id & 0xffff, c.accepted, c.due, c.live_cap, c.accepted_through, c.epoch, c.transport,
+                "#{} {}/{}/{} thru {}{completed} ep {} t {:.4} {flags:<2} drop {:.1}",
+                c.id, c.accepted, c.due, c.live_cap, c.accepted_through, c.epoch, c.transport,
                 c.fresh_dropped_seconds * 1e3,
             )
         }).collect();

@@ -92,6 +92,9 @@ pub struct ClockFrame {
 /// One transport clock shared by physics consumers.
 #[derive(Clone, Debug, Default)]
 pub struct SimulationClock {
+    /// Process-unique identity for telemetry, assigned at the first advance.
+    /// 0 until then. Never reused, unlike an address; a clone shares it.
+    instance: u64,
     /// 0 before the first start, so outputs a domain holds while it waits
     /// (for a role's geometry, say) never share an epoch with the first
     /// simulation, which then seeds.
@@ -178,6 +181,11 @@ impl SimulationClock {
 
     pub fn rate_changed(&self, interval: f64) -> bool {
         self.started && self.simulation_interval != interval
+    }
+
+    /// Process-unique identity for telemetry; 0 before the first advance.
+    pub fn instance(&self) -> u64 {
+        self.instance
     }
 
     pub fn accepted_time(&self) -> f64 {
@@ -269,6 +277,10 @@ impl SimulationClock {
         setup_changed: bool,
         offline: bool,
     ) -> ClockFrame {
+        if self.instance == 0 {
+            static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+            self.instance = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
         let mut numerical_error =
             !transport.is_finite() || !speed.is_finite() || speed < 0.0 || !reset.is_finite();
         // Invalid authored clock input has no meaningful elapsed duration. Keep
