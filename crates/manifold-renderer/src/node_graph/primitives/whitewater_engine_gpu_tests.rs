@@ -429,3 +429,222 @@ fn whitewater_engine_seam_skips_inactive_grids_and_resumes_capture() {
         assert_eq!(final_values[576..], vec![0.0; 576]);
     }
 }
+
+/// Runs the surface distance stage on `phi` and returns its output.
+fn surface_on_gpu(h: &mut Harness, stage: &super::whitewater_distance::SurfaceDistance, phi: &[f32], cell: f32, plan: Option<&manifold_gpu::GpuBuffer>) -> Vec<f32> {
+    let n = phi.len();
+    let source = h.array(phi, n);
+    let mut enc = h.device.create_encoder("whitewater-surface-distance");
+    let output = match plan {
+        Some(plan) => stage.encode_gated(&mut enc, &source.1, cell, plan),
+        None => stage.encode(&mut enc, &source.1, cell),
+    }
+    .clone();
+    let staged = h.array::<f32>(&[], n);
+    enc.copy_buffer_to_buffer(&output, &staged.1, (n * 4) as u64);
+    enc.commit_and_wait_completed();
+    read(&staged.1, n)
+}
+
+/// A clock plan (gpu_flip_step.wgsl ClockPlan): live, with `step_dt`.
+fn live_plan(h: &mut Harness, step_dt: f32) -> manifold_gpu::GpuBuffer {
+    let mut words = [0u32; 12];
+    words[0] = step_dt.to_bits();
+    words[11] = 1;
+    h.array(&words, 12).1
+}
+
+/// Every scratch buffer of the stage except its sweep grid, as words.
+fn scratch_words(h: &mut Harness, stage: &super::whitewater_distance::SurfaceDistance) -> Vec<Vec<u32>> {
+    let buffers = stage.scratch();
+    let mut enc = h.device.create_encoder("whitewater-surface-distance-scratch");
+    let staged: Vec<_> = buffers[..5]
+        .iter()
+        .map(|b| {
+            let words = (b.size() / 4) as usize;
+            let s = h.array::<u32>(&[], words);
+            enc.copy_buffer_to_buffer(b, &s.1, b.size());
+            (s.1, words)
+        })
+        .collect();
+    enc.commit_and_wait_completed();
+    staged.iter().map(|(b, w)| read(b, *w)).collect()
+}
+
+/// A sphere of radius 1.6 m centred in a 24³ grid of 0.25 m cells.
+fn sphere_phi(centre: f32) -> Vec<f32> {
+    const N: usize = 24;
+    (0..N * N * N)
+        .map(|i| {
+            let c = [i % N, i / N % N, i / (N * N)].map(|v| (v as f32 + 0.5) * 0.25 - centre);
+            (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt() - 1.6
+        })
+        .collect()
+}
+
+/// The clock gate: a live active plan (and the always-active zero plan of
+/// `encode`) give bit-identical output; an inactive slot leaves the output
+/// and every field and state word untouched, rewriting only its sweep grid
+/// to zero groups.
+#[test]
+fn whitewater_surface_distance_clock_gate() {
+    let mut h = Harness::new();
+    let mut stage = super::whitewater_distance::SurfaceDistance::default();
+    stage.prepare(&h.device);
+    stage.reserve(&h.device, [24; 3]).unwrap();
+    let a = sphere_phi(3.0);
+    let b = sphere_phi(2.5);
+    let ungated = surface_on_gpu(&mut h, &stage, &a, 0.25, None);
+    let active = live_plan(&mut h, 0.01);
+    let gated = surface_on_gpu(&mut h, &stage, &a, 0.25, Some(&active));
+    assert!(ungated.iter().zip(&gated).all(|(x, y)| x.to_bits() == y.to_bits()), "active slot differs from the zero plan");
+    let want = super::whitewater_engine_cpu::surface_distance(&a, [24; 3], 0.25);
+    for (g, c) in gated.iter().zip(&want) {
+        assert!((g - c).abs() < 2e-6, "stage {g} CPU {c}");
+    }
+    let before = scratch_words(&mut h, &stage);
+    let inactive = live_plan(&mut h, 0.0);
+    let after_output = surface_on_gpu(&mut h, &stage, &b, 0.25, Some(&inactive));
+    assert!(after_output.iter().zip(&gated).all(|(x, y)| x.to_bits() == y.to_bits()), "inactive slot changed the output");
+    assert_eq!(scratch_words(&mut h, &stage), before, "inactive slot touched the scratch");
+    let mut enc = h.device.create_encoder("whitewater-surface-distance-args");
+    let args = h.array::<u32>(&[], 3);
+    enc.copy_buffer_to_buffer(&stage.scratch()[5], &args.1, 12);
+    enc.commit_and_wait_completed();
+    assert_eq!(read::<u32>(&args.1, 3), vec![0, 1, 1], "inactive sweep grid");
+    // And the next active slot computes from the new input again.
+    let next = surface_on_gpu(&mut h, &stage, &b, 0.25, Some(&active));
+    let want = super::whitewater_engine_cpu::surface_distance(&b, [24; 3], 0.25);
+    for (g, c) in next.iter().zip(&want) {
+        assert!((g - c).abs() < 2e-6, "stage {g} CPU {c}");
+    }
+}
+
+/// Union of spheres of the engine's liquid SDF radius (0.5·√3·dx) around
+/// each marker, capped at ±3 dx: the shape of ParticleLevelSet's input, not
+/// its exact construction.
+pub(super) fn marker_phi(markers: &[[f32; 3]], cells: [u32; 3], dx: f32) -> Vec<f32> {
+    let n = cells.map(|c| c as usize);
+    let radius = 0.5 * 3f32.sqrt() * dx;
+    let mut phi = vec![3.0 * dx; n[0] * n[1] * n[2]];
+    for m in markers {
+        let lo = m.map(|c| ((c / dx).floor() as isize - 3).max(0) as usize);
+        for k in lo[2]..(lo[2] + 7).min(n[2]) {
+            for j in lo[1]..(lo[1] + 7).min(n[1]) {
+                for i in lo[0]..(lo[0] + 7).min(n[0]) {
+                    let c = [i, j, k].map(|v| (v as f32 + 0.5) * dx);
+                    let d = ((c[0] - m[0]).powi(2) + (c[1] - m[1]).powi(2) + (c[2] - m[2]).powi(2)).sqrt() - radius;
+                    let slot = &mut phi[i + n[0] * (j + n[1] * k)];
+                    *slot = slot.min(d.max(-3.0 * dx));
+                }
+            }
+        }
+    }
+    phi
+}
+
+/// SurfaceDistance against FLIP's own reinitialised surface on the same
+/// input, on the splash's analytic sheets and on a field built from its
+/// markers, then the sheeter's level-set decisions on the splash markers
+/// under each surface.
+#[cfg(feature = "whitewater-oracle")]
+#[test]
+fn whitewater_surface_distance_matches_engine_on_a_splash() {
+    use manifold_fluids::{sheet_oracle, sheeter, whitewater_oracle};
+    let mut h = Harness::new();
+    let (markers, analytic, cells, dx) = sheeter::fixtures::splash();
+    let cell = dx as f32;
+    let mut stage = super::whitewater_distance::SurfaceDistance::default();
+    stage.prepare(&h.device);
+    stage.reserve(&h.device, cells).unwrap();
+    for (name, input) in [("analytic", analytic), ("markers", marker_phi(&markers, cells, cell))] {
+        let native = whitewater_oracle::curvature(&input, cells, dx).expect("oracle").surface_phi;
+        let gpu = surface_on_gpu(&mut h, &stage, &input, cell, None);
+        let mut errors: Vec<f32> = native.iter().zip(&gpu).map(|(a, b)| (a - b).abs() / cell).collect();
+        errors.sort_by(f32::total_cmp);
+        let max = errors[errors.len() - 1];
+        let p99 = errors[errors.len() * 99 / 100];
+        let trace = |phi: &[f32]| sheeter::trace_sheet_particles(&markers, phi, cells, dx, sheet_oracle::DEFAULT_FILL_THRESHOLD).expect("sheeter");
+        let (ours, theirs) = (trace(&gpu), trace(&native));
+        let flips = |a: &[bool], b: &[bool]| a.iter().zip(b).filter(|(x, y)| x != y).count();
+        eprintln!(
+            "SURFACE {name}: max {max:e} h, p99 {p99:e} h; thin flips {}, kept flips {}, candidates {} vs {}, seeds {} vs {}, candidate lists equal {}",
+            flips(&ours.thin, &theirs.thin),
+            flips(&ours.kept, &theirs.kept),
+            ours.candidates.len(),
+            theirs.candidates.len(),
+            ours.seeds.len(),
+            theirs.seeds.len(),
+            ours.candidates == theirs.candidates,
+        );
+        // Both run the same upwind rule in f32 on fields within ±3h, where an
+        // ulp is under 4e-7 h; differences are operation order and fused
+        // multiply-adds, so ten ulps bounds them. Measured: under 1e-6 h.
+        assert!(max < 4e-6, "{name}: surfaces differ by {max} h");
+        assert_eq!(ours.thin, theirs.thin, "{name}: phase-1 sheet test flipped");
+        assert_eq!(ours.kept, theirs.kept, "{name}: phase-2 band flipped");
+        assert_eq!(ours.candidates, theirs.candidates, "{name}: candidate band flipped");
+        assert_eq!(ours.seeds.len(), theirs.seeds.len(), "{name}: seed counts differ");
+        assert!(!theirs.seeds.is_empty(), "{name}: the splash seeds");
+    }
+}
+
+/// The gated stage under encode replay: a sequence of active and inactive
+/// slots, with the plan's and the input's contents changing in the same
+/// buffers between slots, recorded once and replayed. After every slot the
+/// replayed stage's output and scratch equal a directly encoded twin's.
+#[test]
+fn whitewater_surface_distance_replay_matches_direct() {
+    use manifold_gpu::GpuReplayCache;
+    let device = crate::test_device();
+    let make = || {
+        let mut stage = super::whitewater_distance::SurfaceDistance::default();
+        stage.prepare(&device);
+        stage.reserve(&device, [24; 3]).unwrap();
+        let plan = device.create_buffer_shared(48);
+        let source = device.create_buffer_shared(24 * 24 * 24 * 4);
+        (stage, plan, source)
+    };
+    let (direct, direct_plan, direct_source) = make();
+    let (replayed, replay_plan, replay_source) = make();
+    let mut cache = Some(GpuReplayCache::default());
+    let inputs = [sphere_phi(3.0), sphere_phi(2.5), sphere_phi(2.75)];
+    let slots = [(0.01f32, 0), (0.0, 1), (0.01, 1), (0.01, 0), (0.0, 2), (0.0, 0), (0.01, 2), (0.01, 0)];
+    let words = |stage: &super::whitewater_distance::SurfaceDistance| -> Vec<Vec<u32>> {
+        let mut enc = device.create_encoder("surface replay readback");
+        let staged: Vec<_> = stage.scratch()[..6]
+            .iter()
+            .map(|b| {
+                let s = device.create_buffer_shared(b.size());
+                enc.copy_buffer_to_buffer(b, &s, b.size());
+                (s, (b.size() / 4) as usize)
+            })
+            .collect();
+        enc.commit_and_wait_completed();
+        staged.iter().map(|(s, n)| read::<u32>(s, *n)).collect()
+    };
+    for (slot, &(step_dt, input)) in slots.iter().enumerate() {
+        let mut plan = [0u32; 12];
+        plan[0] = step_dt.to_bits();
+        plan[11] = 1;
+        for (p, s) in [(&direct_plan, &direct_source), (&replay_plan, &replay_source)] {
+            // SAFETY: shared buffers sized for the writes; no GPU work in flight.
+            unsafe {
+                p.write(0, bytemuck::cast_slice(&plan));
+                s.write(0, bytemuck::cast_slice(&inputs[input]));
+            }
+        }
+        let mut enc = device.create_encoder("surface direct");
+        direct.encode_gated(&mut enc, &direct_source, 0.25, &direct_plan);
+        enc.commit_and_wait_completed();
+        let mut enc = device.create_encoder("surface replay");
+        enc.begin_replay(&device, cache.take().expect("cache"));
+        replayed.encode_gated(&mut enc, &replay_source, 0.25, &replay_plan);
+        cache = Some(enc.end_replay());
+        enc.commit_and_wait_completed();
+        assert!(words(&direct) == words(&replayed), "slot {slot} (step {step_dt}, input {input}): replay differs from direct");
+    }
+    let stats = cache.expect("cache").stats();
+    assert!(stats.replayed > 0, "nothing replayed: {stats:?}");
+    eprintln!("SURFACE replay: {stats:?}");
+}

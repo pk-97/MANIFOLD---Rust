@@ -766,6 +766,53 @@ fn wire_liquid_intervals(def: &mut EffectGraphDef) -> bool {
     changed
 }
 
+/// Move saved whitewater interpolators onto the frame's retained class copies
+/// (GPU_FLIP_DISPLAY_HISTORY_DESIGN.md section 3.6 (Whitewater)), after
+/// flattening. Matches only an interpolator whose `particles_b` is a
+/// `node.liquid_state` class output and whose `blend` and `span` both come
+/// from one `node.liquid_frame` reading that same state. The class wire goes
+/// into the frame unless the frame's class input is already wired elsewhere,
+/// which leaves the interpolator untouched; every other input is kept. A
+/// migrated graph no longer matches, so the pass is idempotent.
+pub(crate) fn wire_retained_whitewater(def: &mut EffectGraphDef) -> bool {
+    use crate::node_graph::primitives::liquid_frame::{WHITEWATER_INPUTS, WHITEWATER_OUTPUTS};
+    use manifold_core::effect_graph_def::EffectGraphWire;
+    const CLASSES: [&str; 4] = ["foam_particles", "bubble_particles", "spray_particles", "dust_particles"];
+    let type_of = |def: &EffectGraphDef, id: u32| def.nodes.iter().find(|n| n.id == id).map(|n| n.type_id.clone());
+    let feeding = |def: &EffectGraphDef, node: u32, port: &str| {
+        def.wires.iter().find(|w| w.to_node == node && w.to_port == port).map(|w| (w.from_node, w.from_port.clone()))
+    };
+    let mut changed = false;
+    let interpolators: Vec<u32> = def.nodes.iter()
+        .filter(|n| n.type_id == "node.interpolate_particle_frames")
+        .map(|n| n.id)
+        .collect();
+    for node in interpolators {
+        let Some((state, class_port)) = feeding(def, node, "particles_b") else { continue };
+        let Some(class) = CLASSES.iter().position(|c| *c == class_port) else { continue };
+        if type_of(def, state).as_deref() != Some("node.liquid_state") {
+            continue;
+        }
+        let (Some((frame, blend)), Some((span_frame, span))) = (feeding(def, node, "blend"), feeding(def, node, "span")) else { continue };
+        if blend != "blend" || span != "span" || frame != span_frame || type_of(def, frame).as_deref() != Some("node.liquid_frame") {
+            continue;
+        }
+        if feeding(def, frame, "particles").map(|(from, _)| from) != Some(state) {
+            continue;
+        }
+        let class_in = WHITEWATER_INPUTS[class];
+        match feeding(def, frame, class_in) {
+            Some((from, port)) if from == state && port == class_port => {}
+            Some(_) => continue,
+            None => def.wires.push(EffectGraphWire { from_node: state, from_port: class_port.clone(), to_node: frame, to_port: class_in.into() }),
+        }
+        def.wires.retain(|w| !(w.to_node == node && w.to_port == "particles_b"));
+        def.wires.push(EffectGraphWire { from_node: frame, from_port: WHITEWATER_OUTPUTS[class].into(), to_node: node, to_port: "particles_b".into() });
+        changed = true;
+    }
+    changed
+}
+
 /// Correct standard GPU FLIP solid producers at the flattened installation seam.
 /// Authored lattice wires retain their old meaning; only the exact native-grid
 /// consumers move to the domain's mesh descriptor. Shared producers are cloned.
@@ -1231,6 +1278,8 @@ pub fn instantiate_def(
     let def = if wire_liquid_intervals(&mut interval_wired) { &interval_wired } else { def };
     let mut grid_wired = def.clone();
     let def = if wire_gpu_flip_grid(&mut grid_wired) { &grid_wired } else { def };
+    let mut whitewater_retained = def.clone();
+    let def = if wire_retained_whitewater(&mut whitewater_retained) { &whitewater_retained } else { def };
     // Liquid fields saved before node.blob_bounds read their kernel reach
     // from it like the shipped surface group does; `bounds` is required.
     let mut bounds_wired = def.clone();
@@ -2385,6 +2434,92 @@ fn audit_array_resource_bindings(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A saved GPU FLIP whitewater wiring: state 1, frame 2, interpolators
+    /// 3 (foam) and 4 (spray) sharing the frame.
+    fn saved_whitewater() -> EffectGraphDef {
+        use manifold_core::effect_graph_def::EffectGraphWire;
+        let wire = |from, output: &str, to, input: &str| EffectGraphWire {
+            from_node: from, from_port: output.into(), to_node: to, to_port: input.into(),
+        };
+        EffectGraphDef {
+            version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
+            name: None, description: None, preset_metadata: None, scene_modifiers: Vec::new(),
+            nodes: vec![bare_node(1, "node.liquid_state"), bare_node(2, "node.liquid_frame"),
+                bare_node(3, "node.interpolate_particle_frames"), bare_node(4, "node.interpolate_particle_frames")],
+            wires: vec![
+                wire(1, "out", 2, "particles"),
+                wire(1, "foam_particles", 3, "particles_b"), wire(2, "blend", 3, "blend"), wire(2, "span", 3, "span"),
+                wire(1, "spray_particles", 4, "particles_b"), wire(2, "blend", 4, "blend"), wire(2, "span", 4, "span"),
+                wire(2, "count_b", 4, "count_b"),
+            ],
+        }
+    }
+
+    #[test]
+    fn retained_whitewater_migration_is_exact_idempotent_and_survives_reload() {
+        use manifold_core::effect_graph_def::EffectGraphWire;
+        let wire = |from, output: &str, to, input: &str| EffectGraphWire {
+            from_node: from, from_port: output.into(), to_node: to, to_port: input.into(),
+        };
+        // Shared frame: both classes move onto it, the authored count stays.
+        let mut def = saved_whitewater();
+        assert!(wire_retained_whitewater(&mut def));
+        for (class, node) in [("foam", 3), ("spray", 4)] {
+            assert!(def.wires.contains(&wire(1, &format!("{class}_particles"), 2, &format!("{class}_in"))));
+            assert!(def.wires.contains(&wire(2, &format!("{class}_b"), node, "particles_b")));
+            assert_eq!(def.wires.iter().filter(|w| w.to_node == node && w.to_port == "particles_b").count(), 1);
+        }
+        assert!(def.wires.contains(&wire(2, "count_b", 4, "count_b")));
+        // Idempotent, and a save/reload stays migrated.
+        let once = def.clone();
+        assert!(!wire_retained_whitewater(&mut def));
+        assert_eq!(def, once);
+        let mut reloaded: EffectGraphDef = serde_json::from_str(&serde_json::to_string(&def).unwrap()).unwrap();
+        assert!(!wire_retained_whitewater(&mut reloaded));
+        assert_eq!(reloaded, once);
+
+        // A conflicting explicit class input on the frame is preserved and
+        // that interpolator left alone.
+        let mut conflict = saved_whitewater();
+        conflict.nodes.push(bare_node(5, "node.liquid_state"));
+        conflict.wires.push(wire(5, "foam_particles", 2, "foam_in"));
+        assert!(wire_retained_whitewater(&mut conflict));
+        assert!(conflict.wires.contains(&wire(1, "foam_particles", 3, "particles_b")));
+        assert!(conflict.wires.contains(&wire(5, "foam_particles", 2, "foam_in")));
+        assert!(conflict.wires.contains(&wire(2, "spray_b", 4, "particles_b")));
+
+        // Blend and span from different frames, or a frame reading another
+        // state: no match.
+        for custom in [
+            { let mut d = saved_whitewater(); d.nodes.push(bare_node(6, "node.liquid_frame"));
+              d.wires.retain(|w| !(w.to_node == 3 && w.to_port == "span")); d.wires.push(wire(6, "span", 3, "span"));
+              d.wires.retain(|w| w.to_node != 4); d },
+            { let mut d = saved_whitewater(); d.nodes.push(bare_node(7, "node.liquid_state"));
+              d.wires.retain(|w| !(w.to_node == 2 && w.to_port == "particles")); d.wires.push(wire(7, "out", 2, "particles")); d },
+        ] {
+            let mut migrated = custom.clone();
+            assert!(!wire_retained_whitewater(&mut migrated));
+            assert_eq!(migrated, custom);
+        }
+
+        // Nested groups: the installation seam flattens first.
+        let inner = saved_whitewater();
+        let nested: EffectGraphDef = serde_json::from_value(serde_json::json!({
+            "version": 1,
+            "nodes": [{ "id": 1, "typeId": "group", "handle": "outer", "group": {
+                "interface": { "inputs": [], "outputs": [] },
+                "nodes": [{ "id": 1, "typeId": "group", "handle": "inner", "group": {
+                    "interface": { "inputs": [], "outputs": [] },
+                    "nodes": inner.nodes, "wires": inner.wires
+                }}], "wires": []
+            }}], "wires": []
+        })).unwrap();
+        let mut flat = manifold_core::flatten::flatten_groups(&nested).unwrap();
+        assert!(wire_retained_whitewater(&mut flat));
+        assert_eq!(flat.wires.iter().filter(|w| w.to_port == "particles_b" && (w.from_port == "foam_b" || w.from_port == "spray_b")).count(), 2);
+        assert!(!wire_retained_whitewater(&mut flat));
+    }
 
     #[test]
     fn native_flip_grid_migration_clones_shared_solids_and_preserves_authored_wires() {

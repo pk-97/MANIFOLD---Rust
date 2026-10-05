@@ -108,6 +108,7 @@ USAGE:
       field: ray_resolution             value: quarter|half|three_quarter|native
       field: spatial_denoise            value: off|low|medium|high
   project_tool settings set-sim-rate <file.manifold> <15|20|30|60>
+  project_tool settings set-frame-rate <file.manifold> <fps>
   project_tool effect add <file.manifold> --layer <index> --preset <PresetTypeId>"
     );
 }
@@ -418,12 +419,39 @@ fn run_settings(rest: &[String]) -> ExitCode {
     match sub.as_str() {
         "set-rt-quality" => settings_set_rt_quality(rest),
         "set-sim-rate" => settings_set_sim_rate(rest),
+        "set-frame-rate" => settings_set_frame_rate(rest),
         other => {
             eprintln!("error: unknown settings subcommand '{other}'\n");
             print_usage();
             ExitCode::from(2)
         }
     }
+}
+
+/// `settings set-frame-rate <file> <fps>` — `/settings/frameRate`, the
+/// project frame rate the content thread paces to. Clamped as the app's own
+/// setter clamps it.
+fn settings_set_frame_rate(rest: &[String]) -> ExitCode {
+    let [path, fps] = rest else {
+        print_usage();
+        return ExitCode::from(2);
+    };
+    let Some(fps) = fps.parse::<f32>().ok().filter(|v| v.is_finite()) else {
+        eprintln!("error: frame rate must be a number, got '{fps}'");
+        return ExitCode::from(2);
+    };
+    let mut settings = manifold_core::settings::ProjectSettings::default();
+    settings.set_frame_rate(fps);
+    let mut root = match read_raw_json(path).and_then(|j| parse_root(&j)) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    root["settings"]["frameRate"] = serde_json::json!(settings.frame_rate);
+    println!("frame_rate = {} fps", settings.frame_rate);
+    validate_and_save(&root, path)
 }
 
 /// `settings set-sim-rate <file> <hz>` — `/settings/physics/simRate`, one

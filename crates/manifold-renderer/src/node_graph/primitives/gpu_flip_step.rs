@@ -694,6 +694,11 @@ pub(crate) struct StepState {
     narrow_reset_pending: bool,
     narrow_full_count: bool,
     interior: Option<GpuBuffer>,
+    /// Sheet seeding (BUG-j9l9w): the surface distance it reads, the stage,
+    /// and each sorted slot's input index. Reserved only when the rate is on.
+    surface: super::whitewater_distance::SurfaceDistance,
+    sheeting: super::gpu_flip_sheeting::GpuSheeting,
+    sheet_order: Option<GpuBuffer>,
 }
 
 /// Zero bytes bound for an unwired input: the uniform-sized arrays, and an
@@ -1083,6 +1088,11 @@ struct Step<'a> {
     density: bool,
     narrow_enabled: bool,
     restore_narrow: bool,
+    /// The sheet fill rate. At 0 no sheeting pass is encoded and no fresh
+    /// scratch is reserved; the pipelines still prepare at install (so
+    /// switching on mid-show does not hitch) and scratch reserved while it was
+    /// on stays held.
+    sheet_rate: f32,
 }
 
 impl StepState {
@@ -1104,11 +1114,15 @@ impl StepState {
         self.solver.prepare_pipelines(device);
         self.bodies.prepare_pipelines(device);
         self.narrow.prepare(device);
+        // Sheet seeding prepares even while its rate is 0: switching it on mid-show
+        // must not compile pipelines on the content thread.
+        self.surface.prepare(device);
+        self.sheeting.prepare(device);
     }
 
     /// Size every array for `cells` and `slots` before anything is encoded;
     /// `sources` adds the emission scan; removal reuses the sorted array.
-    fn reserve(&mut self, device: &GpuDevice, cells: [u32; 3], slots: u64, ring_max: u32, sources: bool, narrow_enabled: bool, interior_wired: bool) -> Result<(), String> {
+    fn reserve(&mut self, device: &GpuDevice, cells: [u32; 3], slots: u64, ring_max: u32, sources: bool, narrow_enabled: bool, interior_wired: bool, sheeting: bool) -> Result<(), String> {
         if self.zeros.is_none() {
             let zeros = device.try_create_buffer_shared(ZERO_BYTES)?;
             zeros.zero_fill();
@@ -1179,6 +1193,14 @@ impl StepState {
                 if saved.as_ref().is_none_or(|buffer| buffer.size != bytes) {
                     *saved = Some(allocate(device, bytes)?);
                 }
+            }
+        }
+        if sheeting {
+            let slot_count = u32::try_from(slots).map_err(|_| "sheeting particle capacity exceeds u32".to_string())?;
+            self.surface.reserve(device, cells)?;
+            self.sheeting.reserve(device, cells, slot_count)?;
+            if self.sheet_order.as_ref().is_none_or(|buffer| buffer.size < 4 * slots.max(1)) {
+                self.sheet_order = Some(allocate(device, 4 * slots.max(1))?);
             }
         }
         if !interior_wired {
@@ -1258,7 +1280,6 @@ impl StepState {
     }
 
     fn encode(&mut self, device: &GpuDevice, enc: &mut GpuEncoder, step: &Step<'_>, clock_params: &GpuFlipClockParams) -> Result<(), String> {
-        #[cfg(feature = "water-race-probes")]
         enc.set_profile_tag("gpu_flip.stage.prepare");
         let pipes = self.pipelines.as_ref().expect("step pipelines built by prepare_pipelines at install");
         let (Some(l), Some(tiles), Some(sorted), Some(out_faces)) = (self.lattice.as_ref(), self.tiles.as_ref(), self.sorted.as_ref(), self.faces.as_ref()) else {
@@ -1326,7 +1347,11 @@ impl StepState {
             },
             "gpu_flip.step.solid_distance",
         );
-        self.sorter.encode(device, enc, &sort_job(step.particles, sorted), &SORT_LABELS)?;
+        // Sheet seeding (BUG-j9l9w) reads the markers in input order; off, the
+        // sort is exactly as it was.
+        let sheeting = step.sheet_rate > 0.0 && !step.narrow_enabled && !step.restore_narrow;
+        let sheet_order = if sheeting { Some(self.sheet_order.as_ref().ok_or("sheet seeding storage was not reserved")?) } else { None };
+        self.sorter.encode(device, enc, &SortJob { order: sheet_order, ..sort_job(step.particles, sorted) }, &SORT_LABELS)?;
         let cell_count: u64 = cells.iter().map(|&n| u64::from(n)).product();
         let face_count: u64 = cells.iter().map(|&n| u64::from(n) + 1).product();
         let ghost = StepParams { ghost: u32::from(step.ghost), ..base };
@@ -1655,7 +1680,6 @@ impl StepState {
         // Which water reaches air holds every step: the density source reads
         // it too. As the engine does, the solid velocity's zeroing is skipped
         // when the bodies are in the solve: their mass resolves the pocket.
-        #[cfg(feature = "water-race-probes")]
         enc.set_profile_tag("gpu_flip.stage.pockets");
         encode_pockets(enc, pipes, &base, l, ranges, cells, step.capped, step.tally, gate_plan);
         enc.dispatch_compute(
@@ -1697,7 +1721,6 @@ impl StepState {
                 encode_pocket_mean(enc, pipes, &params, l.coarse_pockets(), rhs, solve, step.capped, step.tally, gate_plan);
             }
         };
-        #[cfg(feature = "water-race-probes")]
         enc.set_profile_tag("gpu_flip.stage.pressure");
         let water = Water {
             lattice: cells,
@@ -1747,6 +1770,7 @@ impl StepState {
         )?;
         let tally = step.tally;
         self.solver.tally(enc, step.pressure, step.capped, tally, 0, step.params.step_in_tick == 0)?;
+        enc.set_profile_tag("gpu_flip.stage.project_extend");
         // φ binds the water array when the ghost rows are off; the pass never reads it then.
         let phi = if step.ghost { &l.phi } else { &l.water };
         let subtract = |enc: &mut GpuEncoder, params: &StepParams, phi: &GpuBuffer, faces: &GpuBuffer, label: &str| {
@@ -1764,8 +1788,6 @@ impl StepState {
         if step.dynamic {
             self.bodies.react(enc, &coupled, self.solver.tiles()?, &l.pressure, step.reaction)?;
         }
-        #[cfg(feature = "water-race-probes")]
-        enc.set_profile_tag("gpu_flip.stage.project_extend");
         extend(enc, pipes, step.clock_plan, &base, face_groups, (!step.narrow_enabled).then_some(tiles), [&l.f, out_faces, &l.b], step.band, "gpu_flip.step.extend_new");
         enc.compute_memory_barrier_buffers();
         // The engine constrains its velocity and its saved velocity to the
@@ -1777,7 +1799,6 @@ impl StepState {
         // The density projection (module doc): its pressure's gradient is
         // taken off a copy of the new faces in `l.f`, and the move reads the
         // difference as a displacement. Air sits at zero at its centres.
-        #[cfg(feature = "water-race-probes")]
         enc.set_profile_tag("gpu_flip.stage.density");
         let spread = if step.density {
             enc.copy_buffer_to_buffer(out_faces, &l.f, out_faces.size);
@@ -1832,7 +1853,44 @@ impl StepState {
         } else {
             out_faces
         };
-        #[cfg(feature = "water-race-probes")]
+        // Sheet seeding (fluidsimulation.cpp _updateSheetSeeding), after the
+        // engine's own marker update for this substep and before the FLIP
+        // update: births join the move, so they take this substep's velocity
+        // change and advection. Off (rate 0), nothing here is encoded.
+        if sheeting {
+            enc.set_profile_tag("gpu_flip.stage.sheeting");
+            let ranges = self.sorter.ranges().ok_or("the cell ranges were not reserved")?;
+            let order = sheet_order.ok_or("sheet seeding storage was not reserved")?;
+            // The engine's surface distance (its curvature grid's), from the
+            // liquid level set the pressure solve read.
+            let phi = self.surface.encode_gated(enc, &l.phi, p.cell_size, step.clock_plan);
+            enc.compute_memory_barrier_buffers();
+            let inputs = super::gpu_flip_sheeting::SheetInputs {
+                particles: sorted,
+                order,
+                ranges,
+                count: capacity,
+                phi,
+                origin: p.box_min,
+                h: p.cell_size,
+                threshold: super::gpu_flip_sheeting::FILL_THRESHOLD,
+            };
+            let births = super::gpu_flip_sheeting::StepBirths {
+                old: &l.a,
+                identity: step.identity,
+                slots: base.particles,
+                rate: step.sheet_rate,
+                tick: p.tick_index.max(0) as u32,
+                substep: p.step_in_tick.max(0) as u32,
+            };
+            self.sheeting.encode_draw(enc, &inputs, step.clock_plan, &births);
+            self.identity_ops.reserve(enc, super::particle_identity::BirthReservation {
+                particles: sorted, identity: step.identity, ranges, scan: self.sheeting.winners(), plan: step.clock_plan,
+                params: [base.particles, cells.iter().product(), self.sheeting.ranks(), 1],
+            });
+            enc.compute_memory_barrier_buffers();
+            self.sheeting.encode_write(enc, &inputs, step.clock_plan, &births);
+        }
         enc.set_profile_tag("gpu_flip.stage.move");
         enc.dispatch_compute(
             &pipes.advect,
@@ -2046,6 +2104,18 @@ pub(crate) fn read_closed_faces(value: f32) -> Result<u32, String> {
     }
 }
 
+/// The sheet fill rate: the share of sheet seeds kept, 0 (off) to 1. Refused
+/// with Narrow Band, whose resorts the seeding does not follow.
+pub(crate) fn read_sheet_fill_rate(value: f32, narrow_band: bool) -> Result<f32, String> {
+    if !(value.is_finite() && (0.0..=1.0).contains(&value)) {
+        return Err(format!("Sheet Fill Rate must be from 0 to 1, not {value}"));
+    }
+    if value > 0.0 && narrow_band {
+        return Err("Sheet Fill Rate needs Narrow Band off".into());
+    }
+    Ok(value)
+}
+
 /// Narrow-band is a strict binary step option.  Invalid values are refused
 /// so a malformed wire cannot silently select a different numerical method.
 pub(crate) fn read_narrow_band(value: f32) -> Result<bool, String> {
@@ -2158,6 +2228,8 @@ crate::primitive! {
         int_param!("closed_faces", "Closed Faces", 63.0, 0.0, 63.0),
         int_param!("solve_level", "Solve Level", 0.0, 0.0, 4.0),
         int_param!("narrow_band", "Narrow Band", 0.0, 0.0, 1.0),
+        // Test-only until the user controls (BUG-j9l9w step 7); no preset sets it.
+        float_param!("sheet_fill_rate", "Sheet Fill Rate", 0.0, 0.0, 1.0),
     ],
     depth_rule: Terminal,
     composition_notes: "Inside node.liquid_state's tick region, once per tick: particles from the state's out, Steps substeps of 1/(60·Steps) s run inside the node, each moving the last one's particles, and the bodies see every substep. The lattice, gravity, the field scalars, forces, impulses, bodies, shapes, atlas, body_count and body_rows (into rows) come from node.gpu_flip_domain; so do dynamic_bodies and reaction, which every substep adds to in place; tick_index from node.liquid_state; count from the fill's live count. Flip Share is the share kept per 1/60 s, so the damping does not change with the step count. The last substep's faces feed node.liquid_state's faces_in, sized exactly to the lattice; out keeps the particles slots. regions and region_count also come from node.gpu_flip_domain: each step an inflow seeds particles at its empty half-cell sites into free pool slots (a full pool emits nothing) and holds the velocity inside it, and an outflow kills the particles it holds; the live count rides the cell ranges. A lattice the device cannot hold, or a side over 1024 cells, is a named error.",
@@ -2171,6 +2243,14 @@ crate::primitive! {
     extra_fields: {
         state: StepState = StepState::default(),
     },
+}
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+impl GpuFlipStep {
+    /// The sheet seeding stage, for its proofs.
+    pub(crate) fn sheeting(&self) -> &super::gpu_flip_sheeting::GpuSheeting {
+        &self.state.sheeting
+    }
 }
 
 /// Max Iterations, the cap Auto converges within: refused unless finite and,
@@ -2282,6 +2362,13 @@ impl Primitive for GpuFlipStep {
                 return;
             }
         };
+        let sheet_rate = match read_sheet_fill_rate(ctx.scalar_or_param("sheet_fill_rate", 0.0), narrow_enabled) {
+            Ok(rate) => rate,
+            Err(error) => {
+                ctx.error(format!("{NAME}: {error}"));
+                return;
+            }
+        };
         if narrow_enabled && out_slots != capacity {
             ctx.error(format!("{NAME}: Narrow Band requires out to hold all {capacity} particle slots"));
             return;
@@ -2366,7 +2453,7 @@ impl Primitive for GpuFlipStep {
         let interior_wired = ctx.outputs.slot("interior").is_some();
         if let Err(error) = self
             .state
-            .reserve(ctx.gpu_encoder().device, cells, u64::from(capacity), ring_max(band), region_count > 0, narrow_enabled, interior_wired)
+            .reserve(ctx.gpu_encoder().device, cells, u64::from(capacity), ring_max(band), region_count > 0, narrow_enabled, interior_wired, sheet_rate > 0.0)
         {
             ctx.error(format!(
                 "{NAME}: a {}×{}×{} lattice with {capacity} particle slots needs storage the device cannot give: {error}. Lower Resolution.",
@@ -2522,6 +2609,7 @@ impl Primitive for GpuFlipStep {
             density: ctx.scalar_or_param("volume_projection", 0.0) > 0.5,
             narrow_enabled,
             restore_narrow,
+            sheet_rate,
         };
         let  clock_status = ctx.outputs.array("clock_status").cloned();
         let body_row_offset = u64::try_from(rows.saturating_sub(body_count).max(0))
@@ -2580,6 +2668,9 @@ impl Primitive for GpuFlipStep {
         };
         let mut last_clock_plan = zeros.clone();
         let encoded_steps = history_slots;
+        // Stage tags only name profiled spans; an unprofiled encoder ignores
+        // them, and they touch no dispatch, binding or replay key.
+        gpu.native_enc.set_profile_tag("gpu_flip.stage.clock");
         {
             let clock = self.state.clock.as_ref().expect("live clock prepared");
             clock.begin_frame(gpu.native_enc, &clock_params);
@@ -2593,6 +2684,7 @@ impl Primitive for GpuFlipStep {
                 tick_seconds: (k + 1) as f32 * step_dt,
                 ..step.params
             };
+            gpu.native_enc.set_profile_tag("gpu_flip.stage.clock");
             {
                 let plan_buffer = {
                     let clock = self.state.clock.as_ref().expect("live clock prepared");
@@ -2632,7 +2724,6 @@ impl Primitive for GpuFlipStep {
                 ctx.error(format!("{NAME}: {error}"));
                 return;
             }
-                #[cfg(feature = "water-race-probes")]
                 gpu.native_enc.set_profile_tag("gpu_flip.stage.finish");
                 self.state.commit_mask(
                     gpu.native_enc,
