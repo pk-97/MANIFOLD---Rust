@@ -1033,6 +1033,13 @@ pub trait EffectNode: Send {
         Ok(())
     }
 
+    /// Substep boundary only: called after the host sync before iteration
+    /// `iteration`, once the clock owner's host step succeeded. The GPU has
+    /// finished every earlier iteration, so the boundary may replace
+    /// `scalars` (as returned by [`substep_iteration`](Self::substep_iteration))
+    /// with values read from that finished work. Default: no change.
+    fn substep_host_synced(&mut self, _iteration: u32, _scalars: &mut [f32]) {}
+
     /// If `Some(port_name)`, this node is a branch-selector: only the
     /// upstream subgraph feeding the named input port needs to run
     /// this frame. The executor uses this to prune unselected branches

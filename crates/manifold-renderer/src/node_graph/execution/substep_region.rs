@@ -4,7 +4,9 @@
 //! Every step goes through the one step evaluator the frame pass uses.
 //! A boundary that names a clock owner may have the executor
 //! commit, wait for the GPU and run the owner's host step between two
-//! iterations; nothing else in a region ever commits or waits.
+//! iterations; nothing else in a region ever commits or waits. After that
+//! host step the owner's outputs are published again and the boundary may
+//! refresh its scalars, so the next iteration reads the finished one.
 
 use super::{Executor, FrameTally, StepEnv, StepFlow, StepPass, resolve_dims};
 use crate::gpu_encoder::GpuEncoder;
@@ -12,7 +14,8 @@ use crate::node_graph::execution_plan::ExecutionPlan;
 use crate::node_graph::graph::Graph;
 use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::state_store::StateStore;
-use crate::node_graph::substeps::SubstepRegion;
+use crate::node_graph::effect_node::NodeInstanceId;
+use crate::node_graph::substeps::{SubstepClockOutput, SubstepRegion};
 
 /// Iterations one region may run in one frame. The boundary owns the count
 /// (the MPM rule caps it at 128 substeps per tick); this only stops a
@@ -97,16 +100,7 @@ impl Executor {
                         .and_then(|owner| owner.node.substep_clock_interval(iteration))
                 {
                     let timing = output.timing;
-                    let clock_step = plan.steps().iter().find(|step| step.node == clock);
-                    let duration = (output.duration_port, timing.interval.duration().0 as f32);
-                    for &(port, value) in std::iter::once(&duration).chain(output.scalars) {
-                        if let Some(slot) = clock_step
-                            .and_then(|step| step.outputs.iter().find(|(name, _)| *name == port))
-                            .and_then(|(_, resource)| self.backend.slot_for(*resource))
-                        {
-                            self.backend.set_scalar(slot, ParamValue::Float(value));
-                        }
-                    }
+                    self.publish_clock_output(plan, clock, &output);
                     graph.get_node_mut(region.boundary).expect("boundary exists")
                         .node.set_substep_interval(timing);
                 }
@@ -144,6 +138,16 @@ impl Executor {
                         );
                         break 'iterations StepFlow::Abort;
                     }
+                    // The finished iteration refreshes what the next one
+                    // reads: the clock owner's outputs, then the boundary's
+                    // scalars.
+                    if let Some(output) = graph.get_node(clock)
+                        .and_then(|owner| owner.node.substep_clock_interval(iteration))
+                    {
+                        self.publish_clock_output(plan, clock, &output);
+                    }
+                    graph.get_node_mut(region.boundary).expect("boundary exists")
+                        .node.substep_host_synced(iteration, &mut self.substep_scalar_values);
                 }
                 for (slot, &value) in self.substep_scalar_slots.iter().zip(&self.substep_scalar_values) {
                     if let Some(slot) = *slot {
@@ -169,6 +173,21 @@ impl Executor {
         }
         self.release_region_held(plan, region, env);
         StepFlow::Next
+    }
+
+    /// Write a clock owner's per-iteration outputs: the interval duration,
+    /// then its extra scalars, each into the clock step's output slot.
+    fn publish_clock_output(&mut self, plan: &ExecutionPlan, clock: NodeInstanceId, output: &SubstepClockOutput<'_>) {
+        let clock_step = plan.steps().iter().find(|step| step.node == clock);
+        let duration = (output.duration_port, output.timing.interval.duration().0 as f32);
+        for &(port, value) in std::iter::once(&duration).chain(output.scalars) {
+            if let Some(slot) = clock_step
+                .and_then(|step| step.outputs.iter().find(|(name, _)| *name == port))
+                .and_then(|(_, resource)| self.backend.slot_for(*resource))
+            {
+                self.backend.set_scalar(slot, ParamValue::Float(value));
+            }
+        }
     }
 
     fn release_region_held(&mut self, plan: &ExecutionPlan, region: &SubstepRegion, env: StepEnv<'_>) {

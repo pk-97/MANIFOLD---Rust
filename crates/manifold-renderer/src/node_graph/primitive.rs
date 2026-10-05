@@ -646,6 +646,10 @@ pub trait Primitive: PrimitiveSpec {
     }
 
     /// Mirror of
+    /// [`EffectNode::substep_host_synced`](crate::node_graph::effect_node::EffectNode::substep_host_synced).
+    fn substep_host_synced(&mut self, _iteration: u32, _scalars: &mut [f32]) {}
+
+    /// Mirror of
     /// [`EffectNode::fusion_register_heavy`](crate::node_graph::effect_node::EffectNode::fusion_register_heavy).
     /// A register-heavy `wgsl_body` (big inlined noise) that pessimizes any
     /// fused region it joins overrides this to `true` and stays a fusion
@@ -1084,6 +1088,9 @@ impl<P: Primitive + 'static> EffectNode for P {
         gpu: Option<&mut crate::gpu_encoder::GpuEncoder<'_>>,
     ) -> Result<(), String> {
         Primitive::substep_host_step(self, iteration, gpu)
+    }
+    fn substep_host_synced(&mut self, iteration: u32, scalars: &mut [f32]) {
+        Primitive::substep_host_synced(self, iteration, scalars);
     }
     fn selected_input_branch(
         &self,
