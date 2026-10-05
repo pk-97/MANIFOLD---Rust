@@ -673,28 +673,46 @@ mod tests {
         band_extra + if band_extra > 0.0 { h.iter().map(|v| v * v).sum::<f32>().sqrt() } else { 0.0 }
     }
 
-    /// `scatter_bricks`' candidate brick range per axis, inclusive.
-    fn scatter_candidates(blob: &FluidBlob, layout: BrickLayout, lattice_min: [f32; 3], size: [f32; 3], extra: f32) -> [(u32, u32); 3] {
+    /// `scatter_bricks`' candidate brick range per axis, inclusive; an empty
+    /// range (first past last) for the blobs it skips.
+    fn scatter_candidates(blob: &FluidBlob, layout: BrickLayout, center: [f32; 3], size: [f32; 3], band_extra: f32) -> [(u32, u32); 3] {
         const ROUNDING: f32 = 1.907_348_6e-6;
-        const LIMIT: f32 = 1.0e30;
-        let axes: [(f32, f32, f32, f32); 3] = std::array::from_fn(|a| {
-            let h = size[a] / (layout.nodes[a] - 1) as f32;
-            let support = 1.5 * blob.center_radius[3] + extra + h;
+        const LIMIT: f32 = 1.0e18;
+        const MIN_SPACING: f32 = 1.0e-20;
+        let reach = blob.center_radius[3];
+        if reach.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater) || blob.center_radius[..3].iter().any(|v| !v.is_finite()) {
+            return [(1, 0); 3];
+        }
+        let full = std::array::from_fn(|a| (0, layout.bricks[a] - 1));
+        let lattice_min: [f32; 3] = std::array::from_fn(|a| center[a] - 0.5 * size[a]);
+        let gaps: [f32; 3] = std::array::from_fn(|a| (layout.nodes[a] - 1) as f32);
+        let bounded = reach < LIMIT && band_extra < LIMIT
+            && (0..3).all(|a| blob.center_radius[a].abs() < LIMIT && center[a].abs() < LIMIT
+                && size[a] < LIMIT && size[a] > MIN_SPACING * gaps[a]);
+        if !bounded {
+            return full;
+        }
+        let extra = band(layout, size, band_extra);
+        let axes: [Option<(f32, f32)>; 3] = std::array::from_fn(|a| {
+            let h = size[a] / gaps[a];
+            let support = 1.5 * reach + extra + h;
             let centre = blob.center_radius[a];
             let magnitude = lattice_min[a].abs().max((lattice_min[a] + size[a]).abs()).max(centre.abs().max(support));
+            if (magnitude * 1.0e-30).partial_cmp(&h) != Some(std::cmp::Ordering::Less) {
+                return None;
+            }
             let slack = (magnitude * ROUNDING / h).ceil() + 2.0;
             let from_min = centre - lattice_min[a];
             let lo_node = ((from_min - support) / h).floor() - slack - (5 + 7) as f32;
             let hi_node = ((from_min + support) / h).floor() + slack + 5.0;
-            (magnitude, size[a] * (layout.nodes[a] - 1) as f32, lo_node, hi_node)
+            Some((lo_node, hi_node))
         });
-        let bounded = axes.iter().all(|&(magnitude, span, lo, hi)| magnitude < LIMIT && span < LIMIT && lo.abs() < LIMIT && hi.abs() < LIMIT);
+        if axes.iter().any(Option::is_none) {
+            return full;
+        }
         std::array::from_fn(|a| {
             let last = (layout.bricks[a] - 1) as f32;
-            if !bounded {
-                return (0, last as u32);
-            }
-            let (_, _, lo_node, hi_node) = axes[a];
+            let (lo_node, hi_node) = axes[a].expect("checked above");
             ((lo_node / 8.0).floor().clamp(0.0, last) as u32, (hi_node / 8.0).floor().clamp(0.0, last) as u32)
         })
     }
@@ -709,7 +727,7 @@ mod tests {
         for item in blobs {
             let p = [item.center_radius[0], item.center_radius[1], item.center_radius[2]];
             let reach = item.center_radius[3];
-            let range = scatter_candidates(item, layout, lattice_min, size, extra);
+            let range = scatter_candidates(item, layout, center, size, band_extra);
             for id in 0..layout.count {
                 let brick = [id % layout.bricks[0], (id / layout.bricks[0]) % layout.bricks[1], id / (layout.bricks[0] * layout.bricks[1])];
                 if brick.iter().enumerate().any(|(axis, &v)| v == 0 || v + 1 == layout.bricks[axis]) {
@@ -772,6 +790,11 @@ mod tests {
         assert!(assert_scatter_covers(huge, [0.0; 3], [4.0; 3], 0.0, &[blob(3.1e38, 0.0, 0.0, 2.1e38)]) > 0);
         assert!(assert_scatter_covers(huge, [3e38; 3], [4.0; 3], 0.0, &[blob(-3e38, -3e38, -3e38, 3e38)]) > 0);
         assert!(assert_scatter_covers(huge, [0.0; 3], [1e38; 3], 0.0, &[blob(2e38, 2e38, 2e38, 1.0)]) > 0);
+        // Normal inputs whose node spacing divides down to a subnormal.
+        let u = f32::from_bits(1);
+        let tiny = 16_809_984.0 * u;
+        let subnormal = brick_layout([65537, 25, 25], 1).unwrap();
+        assert!(assert_scatter_covers(subnormal, [tiny / 2.0; 3], [tiny; 3], 0.0, &[blob(tiny, tiny / 2.0, tiny / 2.0, 8_388_608.0 * u)]) > 0);
     }
 
     #[test]

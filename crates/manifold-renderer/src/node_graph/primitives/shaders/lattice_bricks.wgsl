@@ -54,8 +54,11 @@ const HALO_NODES: i32 = 5;
 // Sixteen f32 ulps, relative: a generous bound on the rounding of the hit
 // test's chain of adds, multiplies and fast-math divides.
 const ROUNDING: f32 = 1.9073486e-6;
-// Below this every sum and product the hit test forms stays finite.
-const LIMIT: f32 = 1.0e30;
+// Coordinates, sizes and reaches below this keep every sum, product and the
+// squared spacing in band() finite.
+const LIMIT: f32 = 1.0e18;
+// Node spacing above this stays a normal f32, never subnormal.
+const MIN_SPACING: f32 = 1.0e-20;
 
 fn brick_coords(id: u32) -> vec3<u32> {
     return vec3<u32>(
@@ -124,30 +127,39 @@ fn scatter_bricks(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
     let extra = band();
     let nodes = node_counts();
-    let h = lattice_size() / vec3<f32>(nodes - vec3<u32>(1u));
-    let support = vec3<f32>(1.5 * reach + extra) + h;
-    // Candidate bricks in lattice nodes. The hit test builds each world
-    // coordinate in f32, so it can accept a brick a few ulps of the largest
-    // magnitude in play beyond the exact box; that error in nodes, plus two
-    // nodes for this division's own rounding, pads the range. On an ordinary
-    // lattice the error is a small fraction of a node.
-    let lo = domain_min();
-    let magnitude = max(max(abs(lo), abs(lo + lattice_size())), max(abs(centre), support));
-    let slack = ceil(magnitude * ROUNDING / h) + vec3<f32>(2.0);
-    let from_min = centre - lo;
-    let lo_node = floor((from_min - support) / h) - slack - vec3<f32>(f32(HALO_NODES + 7));
-    let hi_node = floor((from_min + support) / h) + slack + vec3<f32>(f32(HALO_NODES));
+    let size = lattice_size();
+    let gaps = vec3<f32>(nodes - vec3<u32>(1u));
     let last = vec3<f32>(f32(params.bricks_x), f32(params.bricks_y), f32(params.bricks_z)) - vec3<f32>(1.0);
-    // Near the f32 range the hit test itself overflows and no rounding bound
-    // holds, so every brick is a candidate and the hit test alone decides.
-    let span = lattice_size() * vec3<f32>(nodes - vec3<u32>(1u));
-    let bounded = all(magnitude < vec3<f32>(LIMIT)) && all(span < vec3<f32>(LIMIT))
-        && all(abs(lo_node) < vec3<f32>(LIMIT)) && all(abs(hi_node) < vec3<f32>(LIMIT));
     var first_brick = vec3<u32>(0u);
     var last_brick = vec3<u32>(last);
+    // Decided from the raw inputs, before any arithmetic that could overflow
+    // or go subnormal: fast math cannot be trusted to reject those after the
+    // fact. Inside these bounds every quantity below, and in the hit test,
+    // stays finite and normal, so the rounding pad holds. Outside them every
+    // brick is a candidate and the hit test alone decides.
+    let raw = vec3<f32>(params.center_x, params.center_y, params.center_z);
+    let bounded = reach < LIMIT && params.band_extra < LIMIT
+        && all(abs(centre) < vec3<f32>(LIMIT)) && all(abs(raw) < vec3<f32>(LIMIT))
+        && all(size < vec3<f32>(LIMIT)) && all(size > vec3<f32>(MIN_SPACING) * gaps);
     if bounded {
-        first_brick = vec3<u32>(clamp(floor(lo_node / 8.0), vec3<f32>(0.0), last));
-        last_brick = vec3<u32>(clamp(floor(hi_node / 8.0), vec3<f32>(0.0), last));
+        let h = size / gaps;
+        let support = vec3<f32>(1.5 * reach + extra) + h;
+        // Candidate bricks in lattice nodes. The hit test builds each world
+        // coordinate in f32, so it can accept a brick a few ulps of the
+        // largest magnitude in play beyond the exact box; that error in
+        // nodes, plus two nodes for this division's own rounding, pads the
+        // range. On an ordinary lattice the error is a fraction of a node.
+        let lo = domain_min();
+        let magnitude = max(max(abs(lo), abs(lo + size)), max(abs(centre), support));
+        // Keeps every node index below 1e30.
+        if all(magnitude * 1.0e-30 < h) {
+            let slack = ceil(magnitude * ROUNDING / h) + vec3<f32>(2.0);
+            let from_min = centre - lo;
+            let lo_node = floor((from_min - support) / h) - slack - vec3<f32>(f32(HALO_NODES + 7));
+            let hi_node = floor((from_min + support) / h) + slack + vec3<f32>(f32(HALO_NODES));
+            first_brick = vec3<u32>(clamp(floor(lo_node / 8.0), vec3<f32>(0.0), last));
+            last_brick = vec3<u32>(clamp(floor(hi_node / 8.0), vec3<f32>(0.0), last));
+        }
     }
     for (var z = first_brick.z; z <= last_brick.z; z = z + 1u) {
         for (var y = first_brick.y; y <= last_brick.y; y = y + 1u) {
