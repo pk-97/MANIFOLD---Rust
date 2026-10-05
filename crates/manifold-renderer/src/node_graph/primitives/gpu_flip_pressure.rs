@@ -826,12 +826,14 @@ impl PressureSolver {
         for i in 0..iterations {
             g.begin_round(enc, 2 * i, before);
             v_cycle(enc, pipes, b, water, g, &top);
-            dot_finalize(enc, pipes, b, g, &top, 2 * i);
-            let step = Params { slot: i, ..fine };
+            dot_finalize(enc, pipes, b, g, &top, 0);
+            // The round index is the GPU's completed-round count (progress[1]),
+            // so every round encodes the same bytes.
+            let step = fine;
             g.dispatch(
                 enc,
                 &pipes.direction,
-                &[bytes(&step), buffer(3, &b.z), buffer(5, &b.p), buffer(7, &b.scalars)],
+                &[bytes(&step), buffer(3, &b.z), buffer(5, &b.p), buffer(7, &b.scalars), buffer(11, &b.progress)],
                 slots.level(k),
                 "gpu_flip.pressure.direction",
             );
@@ -884,7 +886,7 @@ impl PressureSolver {
                     "gpu_flip.pressure.dot_partial",
                 );
             }
-            dot_finalize(enc, pipes, b, g, &top, 2 * i + 1);
+            dot_finalize(enc, pipes, b, g, &top, 1);
             g.dispatch(
                 enc,
                 &pipes.update,
@@ -896,6 +898,7 @@ impl PressureSolver {
                     buffer(6, &b.r),
                     buffer(7, &b.scalars),
                     buffer(16, &b.partials),
+                    buffer(11, &b.progress),
                 ],
                 slots.level(k),
                 "gpu_flip.pressure.update",
@@ -1256,14 +1259,14 @@ fn smooth(enc: &mut GpuEncoder, pipes: &Pipelines, v: &View<'_>, color: u32, swe
     );
 }
 
-/// The folded partials of a dot product over the gradient's level summed
-/// into scalars[slot], in a fixed order.
+/// The folded partials of a dot product over the gradient's level summed,
+/// in a fixed order, into this round's scalar `slot`: 0 r·z, 1 p·s.
 fn dot_finalize(enc: &mut GpuEncoder, pipes: &Pipelines, b: &Buffers, g: Gate<'_>, top: &View<'_>, slot: u32) {
     let params = Params { color: partial_count(top.lattice), slot, ..Params::at(top.lattice, 0.0).over(top) };
     g.dispatch(
         enc,
         &pipes.dot_finalize,
-        &[bytes(&params), buffer(7, &b.scalars), buffer(16, &b.partials)],
+        &[bytes(&params), buffer(7, &b.scalars), buffer(11, &b.progress), buffer(16, &b.partials)],
         g.slots.single(),
         "gpu_flip.pressure.dot_finalize",
     );
