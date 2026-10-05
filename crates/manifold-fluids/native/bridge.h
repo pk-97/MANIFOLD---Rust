@@ -126,6 +126,8 @@ int manifold_fluids_world_capture_particle_frame(void *world, const float *offse
                                                  size_t particle_capacity, float *solid,
                                                  size_t solid_capacity, size_t *count_out,
                                                  uint32_t *nodes_out, int32_t *fits_out);
+int manifold_fluids_world_capture_face_v(void *world, float *out, size_t capacity,
+                                         uint32_t *dims_out);
 int manifold_fluids_surface_frame_solid(void *frame, float *solid, size_t capacity,
                                         uint32_t *nodes_out);
 void manifold_fluids_surface_frame_destroy(void *frame);

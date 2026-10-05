@@ -550,10 +550,16 @@ const NATIVE_STILL_POOL_FASTEST: f64 = 1.889e-2;
 /// run from the native engine's captured seed (native_still_pool_reference).
 const STILL_POOL_GPU_GAP: f64 = 4.209e-4;
 
-/// The native engine's smallest fastest-vertical-particle speed at any
-/// 10-frame checkpoint from frame 29 to 299 of that pool, as a share of
-/// g·dt (native_still_pool_reference). Its own surface never rests stiller.
-const NATIVE_STILL_POOL_VERTICAL_SHARE: f64 = 0.0365;
+/// The native engine's largest inner vertical face speed in the 64³ still
+/// pool at the 30-frame checkpoints from frame 29 to 299, as a share of
+/// g·dt, measured with inner_vertical_face_speed's mask
+/// (native_hydrostatic_reference, from the native engine's seed).
+const NATIVE_HYDROSTATIC_FACE_SHARE: f64 = 0.02852;
+
+/// The largest |GPU − native| of that measure at those checkpoints, both
+/// run from the native engine's seed, as a share of g·dt: they agree to
+/// the printed 1e-5 at every checkpoint.
+const HYDROSTATIC_GPU_GAP_SHARE: f64 = 1e-5;
 
 /// I5: a pool at rest stays at rest as the engine's does. From 1 s on the
 /// particle count is the fill's and the fastest particle stays under the
@@ -627,54 +633,60 @@ fn gpu_flip_open_face_drains_the_pool() {
     assert!(last < fill / 2, "the open face drained only {} of {fill} particles", fill - last);
 }
 
+/// The largest |v| on a vertical face between two water cells at or below
+/// `deep`: `face_v(i, j, k)` is the face under cell (i, j, k), `water` the
+/// step's water mask from its entering particles.
+fn inner_vertical_face_speed(face_v: impl Fn(usize, usize, usize) -> f32, water: &[f32], n: usize, deep: usize) -> f64 {
+    let mut worst = 0.0_f64;
+    for k in 0..n {
+        for j in 1..=deep.min(n - 1) {
+            for i in 0..n {
+                if water[i + n * ((j - 1) + n * k)] > 0.5 && water[i + n * (j + n * k)] > 0.5 {
+                    worst = worst.max(f64::from(face_v(i, j, k)).abs());
+                }
+            }
+        }
+    }
+    worst
+}
+
+/// Cells wholly under the seeded top, one layer of margin below it.
+fn hydrostatic_depth(scene: WaterScene) -> usize {
+    ((scene.fill_height / scene.cell_size()).floor() as usize).saturating_sub(2)
+}
+
 /// The closed wall at rest: a 1 m pool for 300 frames. Every box wall face of
-/// the projected grid is exactly 0, and the pressure is hydrostatic: forces
-/// added g·dt to every vertical face and the projection took it back, so a
-/// face between two water cells below the surface layer keeps under
-/// NATIVE_STILL_POOL_VERTICAL_SHARE of g·dt: below the vertical speed the
-/// engine's own particles keep in that pool at its stillest checkpoint. The
-/// bridge exports no native faces, so the bound is the engine's particle
-/// motion, which its faces carry.
+/// the projected grid is exactly 0. Inner vertical faces between water
+/// cells keep within the native engine's own residual on the same faces,
+/// mask and checkpoints, plus five times the largest gap the GPU showed
+/// from the engine's seed (native_hydrostatic_reference). This is parity
+/// with the engine's hydrostatic residual, not a bound on p = ρgh: the
+/// engine itself leaves several percent of g·dt there.
 #[test]
 fn gpu_flip_hydrostatic_column_rests() {
     let scene = WaterScene::still_pool(64);
     let mut run = Run::new(scene);
-    let (n, h) = (run.n(), scene.cell_size());
+    let n = run.n();
     let m = n + 1;
     let g_dt = G * scene.step_dt();
-    // Cells wholly under the seeded top, one layer of margin below it.
-    let deep = ((scene.fill_height / h).floor() as usize).saturating_sub(2);
+    let deep = hydrostatic_depth(scene);
+    let bound = NATIVE_HYDROSTATIC_FACE_SHARE + 5.0 * HYDROSTATIC_GPU_GAP_SHARE;
     for frame in 0..300 {
         run.frame();
         if frame % 30 != 29 {
             continue;
         }
         let faces = run.faces();
-        let water = run.water();
         let mut wall = 0.0_f64;
-        let mut worst = 0.0_f64;
-        for k in 0..m {
-            for j in 0..m {
-                for i in 0..m {
-                    let p = [i, j, k];
-                    let face = &faces[i + m * (j + m * k)];
-                    for a in 0..3 {
-                        if (0..3).any(|b| b != a && p[b] >= n) {
-                            continue;
-                        }
-                        if p[a] == 0 || p[a] == n {
-                            wall = wall.max(f64::from(face.velocity[a]).abs());
-                        } else if a == 1 && j <= deep {
-                            let below = i + n * ((j - 1) + n * k);
-                            let above = i + n * (j + n * k);
-                            if water[below] > 0.5 && water[above] > 0.5 {
-                                worst = worst.max(f64::from(face.velocity[a]).abs());
-                            }
-                        }
-                    }
+        for (idx, face) in faces.iter().enumerate() {
+            let p = [idx % m, (idx / m) % m, idx / (m * m)];
+            for a in 0..3 {
+                if (0..3).all(|b| b == a || p[b] < n) && (p[a] == 0 || p[a] == n) {
+                    wall = wall.max(f64::from(face.velocity[a]).abs());
                 }
             }
         }
+        let worst = inner_vertical_face_speed(|i, j, k| faces[i + m * (j + m * k)].velocity[1], &run.water(), n, deep);
         let stats = particle_stats(&run.particles());
         println!(
             "GPU FLIP hydrostatic {n}³ frame {frame:3}: wall faces max |v| {wall:.1e}, inner vertical faces max |v| {worst:.2e} m/s = {:.3}% of g·dt, fastest particle {:.2e} m/s",
@@ -682,7 +694,7 @@ fn gpu_flip_hydrostatic_column_rests() {
             stats.fastest
         );
         assert_eq!(wall, 0.0, "frame {frame}: a wall face moves");
-        assert!(worst <= NATIVE_STILL_POOL_VERTICAL_SHARE * g_dt, "frame {frame}: inner vertical faces at {:.3}% of g·dt, past the engine's stillest {:.2}%", 100.0 * worst / g_dt, 100.0 * NATIVE_STILL_POOL_VERTICAL_SHARE);
+        assert!(worst <= bound * g_dt, "frame {frame}: inner vertical faces at {:.3}% of g·dt, past {:.3}% (native {:.3}%)", 100.0 * worst / g_dt, 100.0 * bound, 100.0 * NATIVE_HYDROSTATIC_FACE_SHARE);
         assert_eq!((stats.live, stats.bad), (run.seeded, 0), "frame {frame}: particles lost or not finite");
     }
 }
@@ -1546,6 +1558,46 @@ mod native_reference {
             }
         }
         println!("still pool 64³ frames 59-119 from one seed: native peak {native_peak:.3e} m/s, largest GPU gap {gap:.3e} m/s");
+    }
+
+    /// The 64³ still pool by the native engine and by the GPU from the
+    /// native engine's seed, 300 frames: at every 30th frame each one's
+    /// inner vertical face speed, same faces, mask (from that frame's
+    /// entering particles) and depth as gpu_flip_hydrostatic_column_rests.
+    /// The oracle for its bound.
+    #[cfg(feature = "water-race-probes")]
+    #[test]
+    fn native_hydrostatic_reference() {
+        let scene = WaterScene::still_pool(64);
+        let (mut native, offset) = world(scene);
+        let seed = capture(&mut native, offset);
+        let mut run = run_with_retired_speed(scene, true);
+        seed_run(&run, &seed);
+        let n = run.n();
+        let m = n + 1;
+        let g_dt = G * scene.step_dt();
+        let deep = hydrostatic_depth(scene);
+        let (mut native_peak, mut gap) = (0.0f64, 0.0f64);
+        let mut faces_v = Vec::new();
+        for frame in 0..300 {
+            let entering = (frame % 30 == 29).then(|| capture(&mut native, offset));
+            let stats = native.step(Seconds(1.0 / 60.0)).expect("native step");
+            assert_eq!(stats.substeps, 1, "frame {frame}: native substeps");
+            assert!(!stats.numerical_recovery && !stats.cap_hit, "frame {frame}: native recovered or capped");
+            run.frame();
+            let clock: Vec<u32> = run.read(STEP_NODE, "clock_status", 8);
+            assert_eq!((clock[6], clock[4], clock[5]), (1, 0, 0), "frame {frame}: GPU one substep, no cap or invalid input");
+            let Some(entering) = entering else { continue };
+            let dims = native.capture_face_v(&mut faces_v).expect("native faces");
+            assert_eq!(dims, [n as u32, m as u32, n as u32], "native faces on the GPU solver grid");
+            let theirs = inner_vertical_face_speed(|i, j, k| faces_v[i + n * (j + m * k)], &run.water_of(&entering), n, deep) / g_dt;
+            let faces = run.faces();
+            let ours = inner_vertical_face_speed(|i, j, k| faces[i + m * (j + m * k)].velocity[1], &run.water(), n, deep) / g_dt;
+            println!("hydrostatic 64³ frame {frame:3}: inner vertical faces native {:.3}% gpu {:.3}% of g·dt", 100.0 * theirs, 100.0 * ours);
+            native_peak = native_peak.max(theirs);
+            gap = gap.max((theirs - ours).abs());
+        }
+        println!("hydrostatic 64³ from one seed: native peak {native_peak:.5} of g·dt, largest GPU gap {gap:.5}");
     }
 
     /// One wall or contact case run from identical native-captured seeds.
