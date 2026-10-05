@@ -538,11 +538,13 @@ pub(super) fn find_entry_function(
 mod tests {
     use super::*;
 
-    // The real standalone mesher: its inlined local `array<Element, 12>` is
-    // zero-initialised by a store of a constant struct array, the shape
-    // `spirv_msl_fixup` rewrites.
-    const VOLUME_SURFACE_MESH_WGSL: &str = concat!(
-        r#"
+    // A helper's local `array<Element, 12>`, zero-initialised by naga and
+    // inlined into the entry: the constant struct array store
+    // `spirv_msl_fixup` rewrites. Self-contained on purpose — a hand copy of
+    // the generated mesher drifted from it (BUG-jro0j); the real mesher's
+    // Metal compile is proven in manifold-renderer's volume_surface_mesh
+    // gpu_tests on its generated source.
+    const STRUCT_ARRAY_LOCAL_WGSL: &str = r#"
 struct Element {
     position: vec3<f32>,
     normal: vec3<f32>,
@@ -552,72 +554,34 @@ struct Element {
     color: vec4<f32>,
 }
 
-struct Params {
-    center_x: f32,
-    center_y: f32,
-    center_z: f32,
-    size_x: f32,
-    size_y: f32,
-    size_z: f32,
-    nodes_x: f32,
-    nodes_y: f32,
-    nodes_z: f32,
-    resolution_scale: i32,
-    max_capacity: i32,
-    brick_pass: u32,
-    dispatch_count: u32,
-    _pad: vec3<u32>,
+@group(0) @binding(0) var<storage, read> buf_in: array<f32>;
+@group(0) @binding(1) var<storage, read_write> buf_out: array<Element>;
+
+const CORNERS: array<vec3<u32>, 8> = array<vec3<u32>, 8>(
+    vec3<u32>(0u, 0u, 0u), vec3<u32>(1u, 0u, 0u), vec3<u32>(1u, 0u, 1u), vec3<u32>(0u, 0u, 1u),
+    vec3<u32>(0u, 1u, 0u), vec3<u32>(1u, 1u, 0u), vec3<u32>(1u, 1u, 1u), vec3<u32>(0u, 1u, 1u),
+);
+
+fn body(idx: u32) {
+    var verts: array<Element, 12>;
+    var ready: array<bool, 12>;
+    let n = u32(buf_in[idx]) % 12u;
+    for (var i = 0u; i < n; i = i + 1u) {
+        verts[i].position = vec3<f32>(CORNERS[(idx + i) % 8u]) * buf_in[idx + i];
+        ready[i] = true;
+    }
+    for (var i = 0u; i < 3u; i = i + 1u) {
+        if ready[(n + i) % 12u] {
+            buf_out[idx * 3u + i] = verts[(n + i) % 12u];
+        }
+    }
 }
 
-@group(0) @binding(0) var<uniform> params: Params;
-@group(0) @binding(1) var<storage, read> buf_levelset: array<f32>;
-@group(0) @binding(2) var<storage, read> buf_scan: array<u32>;
-@group(0) @binding(3) var<storage, read> buf_extent: array<u32>;
-@group(0) @binding(4) var<storage, read> buf_bricks: array<u32>;
-@group(0) @binding(5) var<storage, read_write> buf_vertices: array<Element>;
-
-"#,
-        include_str!(
-            "../../../manifold-renderer/src/node_graph/primitives/shaders/marching_cubes_common.wgsl"
-        ),
-        "\n",
-        include_str!(
-            "../../../manifold-renderer/src/node_graph/primitives/shaders/liquid_bricks_common.wgsl"
-        ),
-        "\n",
-        include_str!(
-            "../../../manifold-renderer/src/node_graph/primitives/shaders/volume_surface_mesh_body.wgsl"
-        ),
-        r#"
-
-@compute @workgroup_size(256)
+@compute @workgroup_size(64)
 fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let idx = liquid_cell_brick_index(gid.x);
-    if idx == 0xffffffffu {
-        return;
-    }
-    if idx >= params.dispatch_count {
-        return;
-    }
-    body(
-        idx,
-        params.dispatch_count,
-        params.center_x,
-        params.center_y,
-        params.center_z,
-        params.size_x,
-        params.size_y,
-        params.size_z,
-        params.nodes_x,
-        params.nodes_y,
-        params.nodes_z,
-        params.resolution_scale,
-        params.max_capacity,
-        params.brick_pass,
-    );
+    body(gid.x);
 }
-"#,
-    );
+"#;
 
     // The standalone node.gradient wrapper passes the real table-valued body
     // a uniform array, which inlining turns into a constant-to-thread copy.
@@ -667,11 +631,8 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 
     #[cfg(feature = "gpu-proofs")]
     #[test]
-    fn volume_surface_mesh_local_arrays_have_valid_msl_address_spaces() {
-        assert_metal_compiles(
-            VOLUME_SURFACE_MESH_WGSL,
-            "volume-surface-mesh-array-regression",
-        );
+    fn struct_array_local_has_valid_msl_address_spaces() {
+        assert_metal_compiles(STRUCT_ARRAY_LOCAL_WGSL, "struct-array-local-regression");
     }
 
     #[test]
@@ -681,7 +642,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
         // constant-bound buffer, never a thread local.
         for (source, label, min_copies) in [
             (GRADIENT_WGSL, "gradient", 1),
-            (VOLUME_SURFACE_MESH_WGSL, "mesher", 1),
+            (STRUCT_ARRAY_LOCAL_WGSL, "struct-array-local", 1),
         ] {
             let (_, msl, _, _) = compile_wgsl_to_msl(source, "cs_main", label, false);
             let constant_globals: Vec<&str> = msl

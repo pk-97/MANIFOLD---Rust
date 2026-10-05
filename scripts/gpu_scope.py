@@ -58,8 +58,10 @@ RUNTIME_FILTERS = [
     "preset_runtime::",
 ]
 
-# manifold-gpu core, shared WGSL, proof harness: runtime set + lighting proofs.
-BROAD_FILTERS = RUNTIME_FILTERS + ["render_scene_lights"]
+# manifold-gpu core, shared WGSL, proof harness: runtime set + lighting proofs,
+# plus the generated water mesher, whose Metal compile is the shader compiler's
+# known hard case (constant struct arrays, BUG-jro0j).
+BROAD_FILTERS = RUNTIME_FILTERS + ["render_scene_lights", "volume_surface_mesh::gpu_tests::mesh_contact_"]
 
 # Tests measured slower than this are skipped by scoped runs (nightly --all runs
 # them). The measurements live in scripts/gpu_test_times.json, written by
