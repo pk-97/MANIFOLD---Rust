@@ -320,6 +320,8 @@ fn vendored_render_def(scene: WaterScene) -> EffectGraphDef {
     // populations are drawn directly; one it does not publish is not drawn.
     for kind in WHITEWATER_KINDS {
         g.remove(&[format!("{kind}_blend").as_str()]);
+        let frame_in = format!("{kind}_in");
+        g.def["wires"].as_array_mut().expect("wires").retain(|w| !(w["toNode"] == frame && w["toPort"] == frame_in.as_str()));
         let render = ["copies", "object", "mesh", "material"].map(|part| format!("{kind}_{part}"));
         let particles = format!("{kind}_particles");
         if !outputs.contains(&particles) {

@@ -113,17 +113,17 @@ impl LiquidFrame {
     }
 
     /// Rebind every provided output. An output with nothing to show gets a
-    /// zeroed node-owned placeholder at its last size, so the executor never
+    /// zeroed node-owned placeholder of the size this frame's lattice and
+    /// wiring give it (`sizes`, in [`PROVIDED`] order), so the executor never
     /// keeps a slot bound that has lost its pin and reader tracking.
-    /// Placeholders allocate only when a port first loses its storage or
-    /// outgrows them.
-    fn rebind(&mut self, device: &manifold_gpu::GpuDevice) {
+    /// Placeholders allocate only when a port's size changes.
+    fn rebind(&mut self, device: &manifold_gpu::GpuDevice, sizes: [u64; PROVIDED_PORTS]) {
         for (i, port) in PROVIDED.iter().enumerate() {
             let next = match self.wanted(port) {
                 Some(buffer) => buffer.clone(),
                 None => {
-                    let size = self.bound[i].as_ref().map_or(32, |b| b.size).max(32);
-                    if self.placeholders[i].as_ref().is_none_or(|b| b.size < size) {
+                    let size = sizes[i].max(4);
+                    if self.placeholders[i].as_ref().is_none_or(|b| b.size != size) {
                         let buffer = device.create_buffer_shared(size);
                         buffer.zero_fill();
                         self.placeholders[i] = Some(buffer);
@@ -243,6 +243,13 @@ impl Primitive for LiquidFrame {
             closed_faces,
         );
         let layout = Layout { epoch, lattice: solid_key.0, fields };
+        let particle_bytes = u64::from(count.max(1)) * std::mem::size_of::<FluidParticle>() as u64;
+        let face = |axis: usize| if fields[FIELD_FACES + axis] > 0 { face_len(cells, axis) * 4 } else { 4 };
+        let sizes = [
+            particle_bytes, particle_bytes, fields[FIELD_INTERIOR], fields[FIELD_INTERIOR], surface.solid_bytes(), surface.solid_bytes(),
+            face(0), face(1), face(2),
+            fields[FIELD_WHITEWATER], fields[FIELD_WHITEWATER + 1], fields[FIELD_WHITEWATER + 2], fields[FIELD_WHITEWATER + 3],
+        ];
         self.history.core.set_layout(layout);
 
         let gpu = ctx.gpu_encoder();
@@ -292,7 +299,7 @@ impl Primitive for LiquidFrame {
                     if let Err(error) = encoded {
                         self.history.core.begin(slot, simulation_time, stamp);
                         self.history.core.fail(slot, stamp);
-                        self.rebind(gpu.device);
+                        self.rebind(gpu.device, sizes);
                         ctx.error(format!("Liquid Frame: {error}"));
                         return;
                     }
@@ -322,7 +329,7 @@ impl Primitive for LiquidFrame {
             }
         }
 
-        self.rebind(gpu.device);
+        self.rebind(gpu.device, sizes);
         let pin = self.history.core.pinned().copied();
         let faces_published = (0..3).all(|axis| self.pinned_field(FIELD_FACES + axis, true).is_some());
         let skipped = self.history.core.publications_skipped() as f32;
