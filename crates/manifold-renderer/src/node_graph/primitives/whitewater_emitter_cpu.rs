@@ -254,7 +254,7 @@ fn whitewater_inside_emission_counts_match_vendored_engine() {
     let n = 16usize;
     let u = vec![12.0; (n + 1) * n * n];
     let v: Vec<f32> = (0..n * (n + 1) * n)
-        .map(|i| if i % n % 2 == 0 { 24.0 } else { -24.0 })
+        .map(|i| if (i % n).is_multiple_of(2) { 24.0 } else { -24.0 })
         .collect();
     let w = vec![0.0; n * n * (n + 1)];
     let phi = vec![-5.0; n * n * n];
