@@ -765,6 +765,146 @@ fn wire_liquid_intervals(def: &mut EffectGraphDef) -> bool {
     changed
 }
 
+/// Correct standard GPU FLIP solid producers at the flattened installation seam.
+/// Authored lattice wires retain their old meaning; only the exact native-grid
+/// consumers move to the domain's mesh descriptor. Shared producers are cloned.
+pub(crate) fn wire_gpu_flip_grid(def: &mut EffectGraphDef) -> bool {
+    use manifold_core::effect_graph_def::EffectGraphWire;
+    let mut changed = false;
+    // Installation calls this after flatten_groups: ids and wires are local
+    // to the same flat scope even when the saved graph contains nested groups.
+    let geometry_matches = |node, domain, native: bool| {
+        ["x", "y", "z"].into_iter().all(|axis| {
+            [(format!("lattice_min_{axis}"), format!("mesh_min_{axis}")),
+             (format!("nodes_{axis}"), format!("mesh_nodes_{axis}"))].into_iter().all(|(input, mesh)| {
+                let output = if native { mesh.as_str() } else { input.as_str() };
+                def.wires.iter().any(|w| w.to_node == node && w.to_port == input
+                    && w.from_node == domain && w.from_port == output)
+            })
+        }) && def.wires.iter().any(|w| w.to_node == node && w.to_port == "cell_size"
+            && w.from_node == domain && w.from_port == "cell_size")
+    };
+    let frames: Vec<_> = def.nodes.iter().filter(|n| n.type_id == "node.liquid_frame")
+        .filter_map(|frame| {
+            let domain = def.wires.iter().find(|w| w.to_node == frame.id && w.to_port == "nodes_x")?.from_node;
+            (def.nodes.iter().any(|n| n.id == domain && n.type_id == "node.gpu_flip_domain")
+                && geometry_matches(frame.id, domain, false)).then_some((frame.id, domain))
+        }).collect();
+    // Capture matches before mutating wires so the geometric authority stays
+    // immutable while a shared source is cloned and only FLIP uses move.
+    let producers: Vec<_> = frames.iter().map(|&(frame, domain)| {
+        let matches = def.nodes.iter().filter(|node| matches!(node.type_id.as_str(),
+            "node.liquid_solid_distance" | "node.whitewater_obstacle_source"))
+            .filter(|node| {
+                let native = geometry_matches(node.id, domain, true);
+                let authored = geometry_matches(node.id, domain, false);
+                if !native && !authored { return false; }
+                let inset_wire = def.wires.iter().find(|w| w.to_node == node.id && w.to_port == "wall_inset");
+                if let Some(wire) = inset_wire {
+                    return native && wire.from_node == domain && wire.from_port == "mesh_wall_inset";
+                }
+                // Only standard walls migrate. Authored/custom inset controls
+                // must retain their meaning rather than becoming native walls.
+                if node.exposed_params.contains("wall_inset") || def.preset_metadata.as_ref().is_some_and(|m|
+                    m.bindings.iter().any(|b| matches!(&b.target,
+                        manifold_core::effect_graph_def::BindingTarget::Node { node_id, param }
+                            if *node_id == node.node_id && param == "wall_inset"))) { return false; }
+                let inset = match node.params.get("wall_inset") {
+                    Some(manifold_core::effect_graph_def::SerializedParamValue::Float { value }) => *value,
+                    Some(manifold_core::effect_graph_def::SerializedParamValue::Int { value }) => *value as f32,
+                    None => crate::node_graph::liquid::lattice::PADDING_NODES as f32,
+                    _ => return false,
+                };
+                inset == if native { crate::node_graph::liquid::lattice::SURFACE_PADDING_CELLS }
+                    else { crate::node_graph::liquid::lattice::PADDING_NODES as f32 }
+            }).map(|n| (n.id, n.type_id.clone())).collect::<Vec<_>>();
+        (frame, domain, matches)
+    }).collect();
+    let mut next_id = def.nodes.iter().map(|n| n.id).max().unwrap_or(0) + 1;
+    for (frame, domain, matches) in producers {
+        for (source, kind) in matches {
+            let targets: Vec<_> = def.wires.iter().filter(|wire| wire.from_node == source && wire.from_port == "solid")
+                .filter(|wire| if kind == "node.liquid_solid_distance" {
+                    wire.to_node == frame && wire.to_port == "solid"
+                } else {
+                    wire.to_port == "obstacle_source" && def.nodes.iter().any(|node| node.id == wire.to_node
+                        && node.type_id == "node.whitewater_step")
+                        && def.wires.iter().any(|w| w.to_node == wire.to_node && w.to_port == "forces"
+                            && w.from_node == domain && w.from_port == "forces")
+                }).cloned().collect();
+            if targets.is_empty() { continue; }
+            let already_native = ["x", "y", "z"].into_iter().all(|axis| {
+                [(format!("lattice_min_{axis}"), format!("mesh_min_{axis}")),
+                 (format!("nodes_{axis}"), format!("mesh_nodes_{axis}"))].into_iter().all(|(input, output)|
+                    def.wires.iter().any(|w| w.to_node == source && w.to_port == input
+                        && w.from_node == domain && w.from_port == output))
+            }) && def.wires.iter().any(|w| w.to_node == source && w.to_port == "wall_inset"
+                && w.from_node == domain && w.from_port == "mesh_wall_inset");
+            if already_native { continue; }
+            let shared = def.wires.iter().any(|w| w.from_node == source && !targets.contains(w));
+            let target_source = if shared {
+                let mut copy = def.nodes.iter().find(|n| n.id == source).expect("matched source").clone();
+                copy.id = next_id;
+                let original_id = copy.node_id.clone();
+                copy.node_id = manifold_core::NodeId::new(format!("{}/native-flip-grid-{next_id}", original_id.as_str()));
+                copy.handle = copy.handle.map(|handle| format!("{handle}/native-flip-grid-{next_id}"));
+                copy.exposed_params.remove("wall_inset");
+                // Preserve card bindings as a fanout to the cloned producer.
+                if let Some(metadata) = &mut def.preset_metadata {
+                    use manifold_core::effect_graph_def::BindingTarget;
+                    let bindings: Vec<_> = metadata.bindings.iter().filter_map(|binding| {
+                        let BindingTarget::Node { node_id, param } = &binding.target else { return None };
+                        if *node_id != original_id || param == "wall_inset" { return None; }
+                        let mut binding = binding.clone();
+                        binding.target = BindingTarget::Node { node_id: copy.node_id.clone(), param: param.clone() };
+                        Some(binding)
+                    }).collect();
+                    metadata.bindings.extend(bindings);
+                }
+                def.nodes.push(copy);
+                let inputs: Vec<_> = def.wires.iter().filter(|w| w.to_node == source).cloned().collect();
+                for mut wire in inputs { wire.to_node = next_id; def.wires.push(wire); }
+                for target in &targets {
+                    let wire = def.wires.iter_mut().find(|w| *w == target).expect("target still present");
+                    wire.from_node = next_id;
+                }
+                next_id += 1;
+                next_id - 1
+            } else { source };
+            for axis in ["x", "y", "z"] {
+                for (input, output) in [(format!("lattice_min_{axis}"), format!("mesh_min_{axis}")),
+                                        (format!("nodes_{axis}"), format!("mesh_nodes_{axis}"))] {
+                    let wire = def.wires.iter_mut().find(|w| w.to_node == target_source && w.to_port == input)
+                        .expect("all descriptor wires matched");
+                    wire.from_port = output;
+                }
+            }
+            def.wires.retain(|w| !(w.to_node == target_source && w.to_port == "wall_inset"));
+            def.wires.push(EffectGraphWire { from_node: domain, from_port: "mesh_wall_inset".into(),
+                to_node: target_source, to_port: "wall_inset".into() });
+            changed = true;
+        }
+        // Face component's nodes inputs have always meant authored-grid
+        // counts. Restore that contract when an old graph used frame nodes.
+        for node in &def.nodes {
+            if node.type_id != "node.face_sample_component" { continue; }
+            let from_frame = ["x", "y", "z"].into_iter().all(|axis| def.wires.iter().any(|w|
+                w.to_node == node.id && w.to_port == format!("nodes_{axis}")
+                    && w.from_node == frame && w.from_port == format!("grid_nodes_{axis}")));
+            if !from_frame { continue; }
+            for axis in ["x", "y", "z"] {
+                if let Some(wire) = def.wires.iter_mut().find(|w| w.to_node == node.id && w.to_port == format!("nodes_{axis}")
+                    && w.from_node == frame && w.from_port == format!("grid_nodes_{axis}")) {
+                    wire.from_node = domain;
+                    wire.from_port = format!("nodes_{axis}");
+                    changed = true;
+                }
+            }
+        }
+    }
+    changed
+}
+
 /// Give every liquid field consumer saved before `node.blob_bounds` existed
 /// its bounds, the way the shipped Liquid Surface group wires them: one
 /// bounds node per blob source, feeding every consumer of that source.
@@ -948,6 +1088,8 @@ pub fn instantiate_def(
     // existing domain/state/step connections at the common loader seam.
     let mut interval_wired = def.clone();
     let def = if wire_liquid_intervals(&mut interval_wired) { &interval_wired } else { def };
+    let mut grid_wired = def.clone();
+    let def = if wire_gpu_flip_grid(&mut grid_wired) { &grid_wired } else { def };
     // Liquid fields saved before node.blob_bounds read their kernel reach
     // from it like the shipped surface group does; `bounds` is required.
     let mut bounds_wired = def.clone();
@@ -2102,6 +2244,109 @@ fn audit_array_resource_bindings(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_flip_grid_migration_clones_shared_solids_and_preserves_authored_wires() {
+        use manifold_core::effect_graph_def::EffectGraphWire;
+        let wire = |from, output: &str, to, input: &str| EffectGraphWire {
+            from_node: from, from_port: output.into(), to_node: to, to_port: input.into(),
+        };
+        let mut def = EffectGraphDef {
+            version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
+            name: None, description: None, preset_metadata: None, scene_modifiers: Vec::new(),
+            nodes: vec![bare_node(1, "node.gpu_flip_domain"), bare_node(2, "node.liquid_solid_distance"),
+                bare_node(3, "node.liquid_frame"), bare_node(4, "node.value_sink"), bare_node(5, "node.liquid_fill")],
+            wires: vec![wire(2, "solid", 3, "solid"), wire(2, "solid", 4, "in"), wire(1, "cell_size", 3, "cell_size"), wire(1, "cell_size", 2, "cell_size")],
+        };
+        for axis in ["x", "y", "z"] {
+            for port in [format!("lattice_min_{axis}"), format!("nodes_{axis}")] {
+                def.wires.push(wire(1, &port, 2, &port));
+                def.wires.push(wire(1, &port, 5, &port));
+                def.wires.push(wire(1, &port, 3, &port));
+            }
+        }
+        // Numeric ids repeat across two group scopes. Installation flattens
+        // first, so the unrelated outer domain cannot capture inner wires.
+        let nested: EffectGraphDef = serde_json::from_value(serde_json::json!({
+            "version": 1,
+            "nodes": [
+                { "id": 1, "typeId": "node.gpu_flip_domain" },
+                { "id": 2, "typeId": "group", "handle": "outer", "group": {
+                    "interface": { "inputs": [], "outputs": [] },
+                    "nodes": [{ "id": 1, "typeId": "group", "handle": "inner", "group": {
+                        "interface": { "inputs": [], "outputs": [] },
+                        "nodes": def.nodes.clone(), "wires": def.wires.clone()
+                    }}], "wires": []
+                }}
+            ], "wires": []
+        })).unwrap();
+        let mut flat = manifold_core::flatten::flatten_groups(&nested).unwrap();
+        assert!(wire_gpu_flip_grid(&mut flat));
+        assert_eq!(flat.nodes.iter().filter(|n| n.type_id == "node.liquid_solid_distance").count(), 2);
+        assert!(!wire_gpu_flip_grid(&mut flat));
+
+        let authored = def.wires.clone();
+        assert!(wire_gpu_flip_grid(&mut def));
+        let clone = def.wires.iter().find(|w| w.to_node == 3 && w.to_port == "solid").unwrap().from_node;
+        assert_ne!(clone, 2);
+        assert!(def.wires.contains(&wire(2, "solid", 4, "in")));
+        assert!(def.wires.contains(&wire(1, "mesh_wall_inset", clone, "wall_inset")));
+        for axis in ["x", "y", "z"] {
+            assert!(def.wires.contains(&wire(1, &format!("mesh_min_{axis}"), clone, &format!("lattice_min_{axis}"))));
+            assert!(def.wires.contains(&wire(1, &format!("mesh_nodes_{axis}"), clone, &format!("nodes_{axis}"))));
+        }
+        for wire in authored.into_iter().filter(|w| w.to_node == 2 || w.to_node == 5) {
+            assert!(def.wires.contains(&wire));
+        }
+        assert!(!wire_gpu_flip_grid(&mut def));
+    }
+
+    #[test]
+    fn native_flip_grid_migration_preserves_mixed_geometry_and_custom_walls() {
+        use manifold_core::effect_graph_def::{EffectGraphWire, SerializedParamValue};
+        let mut def = EffectGraphDef {
+            version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
+            name: None, description: None, preset_metadata: None, scene_modifiers: Vec::new(),
+            nodes: vec![bare_node(1, "node.gpu_flip_domain"), bare_node(2, "node.liquid_solid_distance"),
+                bare_node(3, "node.liquid_frame"), bare_node(4, "node.gpu_flip_domain")],
+            wires: vec![EffectGraphWire { from_node: 2, from_port: "solid".into(), to_node: 3, to_port: "solid".into() }],
+        };
+        for node in [2, 3] {
+            for port in ["lattice_min_x", "lattice_min_y", "lattice_min_z", "nodes_x", "nodes_y", "nodes_z", "cell_size"] {
+                def.wires.push(EffectGraphWire { from_node: 1, from_port: port.into(), to_node: node, to_port: port.into() });
+            }
+        }
+        for (node, port) in [(2, "cell_size"), (3, "cell_size"), (3, "nodes_y"), (3, "lattice_min_z")] {
+            let mut custom = def.clone();
+            custom.wires.iter_mut().find(|w| w.to_node == node && w.to_port == port).unwrap().from_node = 4;
+            let before = custom.clone();
+            assert!(!wire_gpu_flip_grid(&mut custom), "custom {node}.{port}");
+            assert_eq!(custom, before);
+        }
+        def.nodes[1].params.insert("wall_inset".into(), SerializedParamValue::Float { value: 2.0 });
+        let before = def.clone();
+        assert!(!wire_gpu_flip_grid(&mut def));
+        assert_eq!(def, before);
+    }
+
+    #[test]
+    fn native_flip_grid_migration_ignores_custom_and_matter_producers() {
+        use manifold_core::effect_graph_def::EffectGraphWire;
+        let mut def = EffectGraphDef {
+            version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
+            name: None, description: None, preset_metadata: None, scene_modifiers: Vec::new(),
+            nodes: vec![bare_node(1, "node.matter_domain"), bare_node(2, "node.liquid_solid_distance"), bare_node(3, "node.liquid_frame")],
+            wires: vec![EffectGraphWire { from_node: 1, from_port: "nodes_x".into(), to_node: 3, to_port: "nodes_x".into() }],
+        };
+        let original = def.clone();
+        assert!(!wire_gpu_flip_grid(&mut def));
+        assert_eq!(def, original);
+        def.nodes[0].type_id = "node.gpu_flip_domain".into();
+        def.nodes[1].type_id = "node.custom_solid".into();
+        let original = def.clone();
+        assert!(!wire_gpu_flip_grid(&mut def));
+        assert_eq!(def, original);
+    }
 
     #[test]
     fn live_clock_graph_wires_are_explicit_idempotent_and_preserve_authored_duration() {

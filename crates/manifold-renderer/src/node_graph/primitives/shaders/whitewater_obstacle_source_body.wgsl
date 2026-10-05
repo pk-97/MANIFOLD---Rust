@@ -17,7 +17,7 @@ fn body(
     nodes_y: f32,
     nodes_z: f32,
     closed_faces: i32,
-    wall_inset: i32,
+    wall_inset: f32,
     body_count: i32,
     rows: i32,
     tick_seconds: f32,
@@ -27,20 +27,27 @@ fn body(
     let coord = vec3<u32>(idx % n.x, (idx / n.x) % n.y, idx / (n.x * n.y));
     let lattice_min = vec3<f32>(lattice_min_x, lattice_min_y, lattice_min_z);
     let x = lattice_min + vec3<f32>(coord) * cell_size;
-    let inset = u32(max(wall_inset, 0));
-    let low = lattice_min + vec3<f32>(f32(inset) * cell_size);
-    let high = low + vec3<f32>(n - vec3<u32>(1u + 2u * inset)) * cell_size;
+    let inset = max(wall_inset, 0.0);
+    let low = lattice_min + vec3<f32>(inset * cell_size);
+    let high = lattice_min + (vec3<f32>(n) - vec3<f32>(1.0 + inset)) * cell_size;
     var distance = length(vec3<f32>(n) * cell_size);
-    var kind = 0u;
+    var outside = vec3<f32>(0.0);
     let faces = u32(closed_faces);
     for (var d = 0u; d < 3u; d = d + 1u) {
+        var axis_distance = length(vec3<f32>(n) * cell_size);
         if (faces & (1u << (2u * d))) != 0u {
-            if x[d] - low[d] < distance { distance = x[d] - low[d]; kind = 1u; }
+            axis_distance = min(axis_distance, x[d] - low[d]);
         }
         if (faces & (1u << (2u * d + 1u))) != 0u {
-            if high[d] - x[d] < distance { distance = high[d] - x[d]; kind = 1u; }
+            axis_distance = min(axis_distance, high[d] - x[d]);
         }
+        distance = min(distance, axis_distance);
+        outside[d] = min(axis_distance, 0.0);
     }
+    if any(outside < vec3<f32>(0.0)) {
+        distance = -length(outside);
+    }
+    var kind = select(0u, 1u, faces != 0u);
     let first = max(rows - body_count, 0);
     for (var b = 0; b < body_count; b = b + 1) {
         let row = first + b;

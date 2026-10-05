@@ -54,7 +54,7 @@ use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
 use crate::node_graph::liquid::{EXACT_F32_COUNT, WATER_DENSITY};
 use crate::node_graph::liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
 use crate::node_graph::liquid::fields::{FieldBinding, LIQUID_FIELD};
-use crate::node_graph::liquid::lattice::LiquidLattice;
+use crate::node_graph::liquid::lattice::{FlipSolverGrid, LiquidLattice};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
@@ -1120,6 +1120,7 @@ struct Step<'a> {
     /// The V-cycle level both solves' gradients run on; 0 is the fine
     /// lattice.
     level: usize,
+    wall_inset: f32,
     band: u32,
     ghost: bool,
     /// Run the density projection.
@@ -1357,7 +1358,7 @@ impl StepState {
                 cell_size: p.cell_size,
                 nodes: corners,
                 closed_faces: 63,
-                wall_inset: 0.0,
+                wall_inset: step.wall_inset,
                 body_count: p.body_count,
                 rows: p.rows,
                 tick_seconds: p.tick_seconds,
@@ -2327,9 +2328,10 @@ impl Primitive for GpuFlipStep {
         let Some(lattice) = LiquidLattice::from_wires(ctx, NAME) else {
             return;
         };
-        let cells = lattice.cells();
-        ctx.outputs.set_transform("grid_bounds", lattice.bounds());
-        for (port, value) in ["grid_nodes_x", "grid_nodes_y", "grid_nodes_z"].into_iter().zip(lattice.nodes())
+        let solver = FlipSolverGrid::from_lattice(lattice);
+        let cells = solver.cells();
+        ctx.outputs.set_transform("grid_bounds", solver.bounds());
+        for (port, value) in ["grid_nodes_x", "grid_nodes_y", "grid_nodes_z"].into_iter().zip(solver.nodes())
             .chain(["face_cells_x", "face_cells_y", "face_cells_z"].into_iter().zip(cells))
             .chain([("face_valid_layers", FACE_VALID_LAYERS)]) {
             ctx.outputs.set_scalar(port, ParamValue::Float(value as f32));
@@ -2430,7 +2432,7 @@ impl Primitive for GpuFlipStep {
                 return;
             }
         };
-        let box_min = lattice.box_min();
+        let box_min = solver.min();
         let regions_in = ctx.inputs.array("regions");
         let region_count = match regions_in {
             Some(_) => ctx.scalar_or_param("region_count", 0.0).round().clamp(0.0, MAX_FLUID_ROLES as f32) as i32,
@@ -2598,6 +2600,7 @@ impl Primitive for GpuFlipStep {
             dynamic,
             pressure,
             level,
+            wall_inset: solver.wall_inset(),
             tally,
             band,
             ghost,

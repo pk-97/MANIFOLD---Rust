@@ -481,13 +481,8 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     b.wire((step, "interior"), state, "interior_in");
     b.wires(domain, state, &["nodes_x", "nodes_y", "nodes_z"]);
 
-    let solid = b.node("solid", "node.liquid_solid_distance", json!({}));
-    b.wires(domain, solid, &["bodies", "shapes", "atlas", "closed_faces", "body_count"]);
-    b.wires(domain, solid, &LATTICE_WIRES);
-    b.wire((domain, "body_rows"), solid, "rows");
-    // Whitewater remains on the simulation lattice. Surface and clamp share
-    // a separately sampled solid at the native half-cell mesh coordinates.
-    let solid = b.node("mesh_solid", "node.liquid_solid_distance", json!({"wall_inset": float(f64::from(crate::node_graph::liquid::lattice::SURFACE_PADDING_CELLS))}));
+    // Solver faces, published surface and whitewater share the native grid.
+    let solid = b.node("mesh_solid", "node.liquid_solid_distance", json!({}));
     b.wires(domain, solid, &["bodies", "shapes", "atlas", "closed_faces", "body_count"]);
     b.wire((domain, "cell_size"), solid, "cell_size");
     for (source, target) in [
@@ -497,11 +492,17 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
         b.wire((domain, source), solid, target);
     }
     b.wire((domain, "body_rows"), solid, "rows");
+    b.wire((domain, "mesh_wall_inset"), solid, "wall_inset");
     let source = b.node("whitewater_obstacle_source", "node.whitewater_obstacle_source", json!({}));
     b.wires(domain, source, &["bodies", "shapes", "atlas", "closed_faces", "body_count"]);
-    b.wires(domain, source, &LATTICE_WIRES);
+    b.wire((domain, "cell_size"), source, "cell_size");
+    b.wire((domain, "mesh_wall_inset"), source, "wall_inset");
+    for axis in ["x", "y", "z"] {
+        b.wire((domain, &format!("mesh_min_{axis}")), source, &format!("lattice_min_{axis}"));
+        b.wire((domain, &format!("mesh_nodes_{axis}")), source, &format!("nodes_{axis}"));
+    }
     b.wire((domain, "body_rows"), source, "rows");
-    let frame = b.node("frame", "node.liquid_frame", json!({"face_valid_layers": int(FACE_VALID_LAYERS as usize), "native_mesh_grid": {"type": "Bool", "value": true}}));
+    let frame = b.node("frame", "node.liquid_frame", json!({"face_valid_layers": int(FACE_VALID_LAYERS as usize)}));
     b.wire((state, "out"), frame, "particles");
     b.wire((state, "stats"), frame, "stats");
     b.wire((state, "identity"), frame, "identity");
@@ -1211,8 +1212,6 @@ pub(super) mod tests {
             let domain = id("domain");
             let solid = id("mesh_solid");
             let frame = id("frame");
-            assert!(matches!(def.nodes.iter().find(|n| n.id == frame).unwrap().params.get("native_mesh_grid"),
-                Some(manifold_core::effect_graph_def::SerializedParamValue::Bool { value: true })));
             for (d, axis) in ["x", "y", "z"].into_iter().enumerate() {
                 assert_eq!(read(&format!("mesh_nodes_{axis}")), (resolution + 4) as f32);
                 assert_eq!(read(&format!("mesh_min_{axis}")), surface.min()[d]);
@@ -1283,7 +1282,7 @@ pub(super) mod tests {
         let body: Vec<String> = region.steps.iter().map(|&step| name(step)).collect();
         assert_eq!(body.iter().filter(|node| *node == STEP_NODE).count(), 1, "the tick runs one step node");
         assert!(body.iter().any(|node| node == "stats"), "the stats run every tick");
-        let outside = ["domain", "fill", "solid", "mesh_solid", "frame", "initial_column"];
+        let outside = ["domain", "fill", "mesh_solid", "frame", "initial_column"];
         assert!(!body.iter().any(|node| outside.contains(&node.as_str()) || node.starts_with("surface")), "{body:?}");
     }
 

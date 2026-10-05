@@ -19,7 +19,7 @@ use super::whitewater_step::{DEFAULT_CAPACITY as WHITEWATER_DEFAULT_CAPACITY, MA
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid_particles::{FaceSample, FluidParticle};
 use crate::node_graph::liquid::grid::{interior_bytes, InteriorOps};
-use crate::node_graph::liquid::lattice::LiquidLattice;
+use crate::node_graph::liquid::lattice::{FlipSolverGrid, LiquidLattice};
 use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::physics_metrics::DroppedTimeTracker;
 use crate::node_graph::primitive::Primitive;
@@ -454,7 +454,7 @@ impl Primitive for LiquidState {
             refused = Some("Liquid State: faces_in needs the lattice on nodes_x, nodes_y and nodes_z".to_string());
             None
         } else {
-            LiquidLattice::from_wires(ctx, "Liquid State").map(|lattice| face_bytes(lattice.cells()))
+            LiquidLattice::from_wires(ctx, "Liquid State").map(|lattice| face_bytes(FlipSolverGrid::from_lattice(lattice).cells()))
         }
         .filter(|_| ctx.outputs.array("faces").is_some());
         let whitewater_active: [bool; WHITEWATER_RESULT_COUNT] = std::array::from_fn(|i| {
@@ -468,7 +468,7 @@ impl Primitive for LiquidState {
             refused = Some("Liquid State: interior_in needs the lattice on nodes_x, nodes_y and nodes_z".to_string());
             None
         } else {
-            LiquidLattice::from_wires(ctx, "Liquid State").map(|lattice| interior_bytes(lattice.cells()))
+            LiquidLattice::from_wires(ctx, "Liquid State").map(|lattice| interior_bytes(FlipSolverGrid::from_lattice(lattice).cells()))
         };
         if interior_grid == Some(0) {
             refused = Some("Liquid State: interior distance has zero cells".to_string());

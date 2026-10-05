@@ -5,7 +5,6 @@
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid::FluidDomainLayout;
 use crate::node_graph::transform::Transform;
-use crate::node_graph::parameters::ParamValue;
 
 /// Nodes added outside the authored box on every side (taichi `padding = 3`).
 pub const PADDING_NODES: u32 = 3;
@@ -18,10 +17,11 @@ pub const SURFACE_EXTRA_NODES: u32 = 4;
 pub const MAX_LATTICE_NODES: u32 = 1024;
 
 /// The optional cell-centred interior field identifies its physical grid by
-/// exact length. Support the native mesh (1.5h padding) and existing solver
-/// lattices (3h); their products are strictly ordered, so never ambiguous.
+/// exact length. Native FLIP fills all surface cells (nodes − 1); authored
+/// fields from MPM and saved graphs retain their padded-grid counts. The
+/// products are strictly ordered, so no valid length is ambiguous.
 pub(crate) fn interior_cells(nodes: [u32; 3], values: u64) -> Option<[u32; 3]> {
-    [SURFACE_EXTRA_NODES, 1 + 2 * PADDING_NODES].into_iter().find_map(|extra| {
+    [1, SURFACE_EXTRA_NODES, 1 + 2 * PADDING_NODES].into_iter().find_map(|extra| {
         let cells = nodes.map(|n| n.saturating_sub(extra));
         (cells.iter().all(|&n| n > 0)
             && cells.into_iter().map(u64::from).product::<u64>() == values)
@@ -29,13 +29,28 @@ pub(crate) fn interior_cells(nodes: [u32; 3], values: u64) -> Option<[u32; 3]> {
     })
 }
 
-/// Old embedded graphs feed a simulation-grid solid. New builders explicitly
-/// opt into the native grid when they also wire the separately sampled solid.
-pub(crate) fn frame_lattice(lattice: LiquidLattice, params: &crate::node_graph::effect_node::ParamValues) -> LiquidLattice {
-    if matches!(params.get("native_mesh_grid"), Some(ParamValue::Bool(true))) {
-        lattice.surface()
-    } else {
-        lattice
+/// Native FLIP boundary shrinks the engine box by 3h + 1e-4 total.
+/// AABB::expand divides that by two on each side; epsilon is in metres.
+pub(crate) const FLIP_WALL_EPSILON: f32 = 5.0e-5;
+
+/// GPU FLIP's MAC grid, distinct from the authored-grid scalar wire contract.
+/// The native engine adds three cells and offsets its origin by 1.5h.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct FlipSolverGrid {
+    surface: LiquidLattice,
+}
+
+impl FlipSolverGrid {
+    pub(crate) fn from_lattice(authored: LiquidLattice) -> Self {
+        Self { surface: authored.surface() }
+    }
+
+    pub(crate) fn cells(self) -> [u32; 3] { self.surface.nodes().map(|n| n - 1) }
+    pub(crate) fn min(self) -> [f32; 3] { self.surface.min() }
+    pub(crate) fn nodes(self) -> [u32; 3] { self.surface.nodes() }
+    pub(crate) fn bounds(self) -> Transform { self.surface.bounds() }
+    pub(crate) fn wall_inset(self) -> f32 {
+        SURFACE_PADDING_CELLS + FLIP_WALL_EPSILON / self.surface.cell_size()
     }
 }
 
@@ -159,9 +174,18 @@ impl LiquidLattice {
     /// Open faces contribute nothing; with none closed, every node reads the
     /// lattice diagonal.
     pub fn wall_distance(&self, closed_faces: u32) -> Vec<f32> {
+        self.wall_distance_inset(closed_faces, 0.0)
+    }
+
+    /// Native FLIP domain object's fixed physical interior epsilon.
+    pub(crate) fn flip_wall_distance(&self, closed_faces: u32) -> Vec<f32> {
+        self.wall_distance_inset(closed_faces, FLIP_WALL_EPSILON)
+    }
+
+    fn wall_distance_inset(&self, closed_faces: u32, inset: f32) -> Vec<f32> {
         let dx = self.cell_size;
-        let low = self.box_min();
-        let high: [f32; 3] = std::array::from_fn(|d| low[d] + self.cells[d] as f32 * dx);
+        let low = self.box_min().map(|v| v + inset);
+        let high: [f32; 3] = std::array::from_fn(|d| low[d] + self.cells[d] as f32 * dx - 2.0 * inset);
         let far = self.nodes.iter().map(|&n| (n as f32 * dx).powi(2)).sum::<f32>().sqrt();
         let [nx, ny, nz] = self.nodes;
         let mut out = Vec::with_capacity(self.node_count() as usize);
@@ -170,16 +194,21 @@ impl LiquidLattice {
                 for i in 0..nx {
                     let p = [i, j, k].map(|c| c as f32 * dx);
                     let mut distance = far;
+                    let mut outside_squared = 0.0;
                     for d in 0..3 {
                         let x = self.min[d] + p[d];
                         if closed_faces & (1 << (2 * d)) != 0 {
-                            distance = distance.min(x - low[d]);
+                            let candidate = x - low[d];
+                            distance = distance.min(candidate);
+                            outside_squared += candidate.min(0.0).powi(2);
                         }
                         if closed_faces & (1 << (2 * d + 1)) != 0 {
-                            distance = distance.min(high[d] - x);
+                            let candidate = high[d] - x;
+                            distance = distance.min(candidate);
+                            outside_squared += candidate.min(0.0).powi(2);
                         }
                     }
-                    out.push(distance);
+                    out.push(if outside_squared > 0.0 { -outside_squared.sqrt() } else { distance });
                 }
             }
         }
@@ -190,6 +219,49 @@ impl LiquidLattice {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn flip_solver_grid_matches_native_counts_without_reinterpreting_authored_wires() {
+        for resolution in [8, 31, 64] {
+            let layout = crate::node_graph::fluid::domain_layout(None, 4.0, resolution).unwrap();
+            let authored = LiquidLattice::from_layout(&layout);
+            let solver = FlipSolverGrid::from_lattice(authored);
+            assert_eq!(authored.cells(), [resolution; 3]);
+            assert_eq!(authored.nodes(), [resolution + 7; 3]);
+            assert_eq!(authored.box_min(), layout.min);
+            assert_eq!(solver.cells(), [resolution + 3; 3]);
+            assert_eq!(solver.nodes(), [resolution + 4; 3]);
+            assert_eq!(solver.min(), layout.min.map(|x| x - 1.5 * layout.cell_size as f32));
+            assert_eq!(solver.bounds(), authored.surface().bounds());
+            assert_eq!(authored.surface().solid_bytes(), u64::from(resolution + 4).pow(3) * 4);
+            assert_eq!(crate::node_graph::primitives::gpu_flip_step::face_bytes(solver.cells()),
+                u64::from(resolution + 4).pow(3) * std::mem::size_of::<crate::node_graph::fluid_particles::FaceSample>() as u64);
+            assert_eq!(interior_cells(solver.nodes(), u64::from(resolution + 3).pow(3)), Some(solver.cells()));
+            assert_eq!(crate::node_graph::whitewater::face_offset(solver.nodes(), solver.cells()).unwrap(), [0; 3]);
+        }
+        assert_eq!(crate::node_graph::primitives::gpu_flip_pressure::level_lattices([67; 3]),
+            vec![[67; 3], [34; 3], [17; 3], [9; 3], [5; 3], [3; 3]]);
+    }
+
+    #[test]
+    fn flip_wall_distance_matches_native_face_edge_corner_and_absolute_epsilon() {
+        for size in [1.0, 8.0] {
+            let layout = crate::node_graph::fluid::domain_layout(None, size, 8).unwrap();
+            let surface = LiquidLattice::from_layout(&layout).surface();
+            let n = surface.nodes();
+            let distance = surface.flip_wall_distance(63);
+            let at = |i, j, k| distance[(i + n[0] * (j + n[1] * k)) as usize];
+            // Vendored _getBoundaryAABB: N+3 solver cells, shrink 3h+1e-4
+            // total. Mesh distance is Euclidean outside the inverted box.
+            let half = 0.5 * layout.cell_size + 5e-5;
+            for (coord, axes) in [([1, 5, 5], 1.0f64), ([1, 1, 5], 2.0), ([1, 1, 1], 3.0)] {
+                assert!((f64::from(at(coord[0], coord[1], coord[2])) + half * axes.sqrt()).abs() < 1e-6);
+            }
+            let one_wall = surface.flip_wall_distance(1 << 2);
+            let i = (1 + n[0] * (1 + n[1])) as usize;
+            assert!((f64::from(one_wall[i]) + half).abs() < 1e-6);
+        }
+    }
 
     #[test]
     fn surface_lattice_matches_native_engine_nodes_and_crossings() {

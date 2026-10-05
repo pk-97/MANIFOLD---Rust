@@ -296,18 +296,8 @@ fn vendored_render_def(scene: WaterScene) -> EffectGraphDef {
     g.def["wires"].as_array_mut().expect("wires")
         .retain(|wire| wire["toNode"] != id && wire["fromNode"] != id);
     g.remove(&["whitewater_face_u", "whitewater_face_v", "whitewater_face_w"]);
-    // Whitewater keeps the simulation lattice and its own solid sampled on
-    // it; the native mesh grid is the surface's (GPU_FLUID_SURFACE_DESIGN.md,
-    // the surface grid port). The group reads its lattice from the frame, so
-    // the frame publishes the simulation lattice and that solid, as embedded
-    // graphs from before the mesh grid do. On the 1.5-cell-padded mesh grid
-    // the face grid cannot sit centred by whole cells, and the group refuses.
+    // Corrected FLIP faces and obstacle lattices share native coordinates.
     let frame = g.id("frame");
-    g.def["nodes"].as_array_mut().expect("nodes").iter_mut()
-        .find(|n| n["nodeId"] == "frame").expect("the frame")["params"]["native_mesh_grid"] = json!({"type": "Bool", "value": false});
-    g.remove(&["mesh_solid"]);
-    let solid = g.id("solid");
-    g.wire((solid, "solid"), frame, "solid");
     for (source, input) in [("particles_b", "particles"), ("count_b", "count"), ("solid_b", "solid")] {
         g.wire((frame, source), id, input);
     }
@@ -1232,7 +1222,7 @@ mod emitter_oracle {
         /// grid.
         fn of(scene: WaterScene) -> Self {
             let n = scene.pressure.n;
-            let lattice = crate::node_graph::liquid::lattice::LiquidLattice::from_layout(&scene.layout());
+            let lattice = crate::node_graph::liquid::lattice::LiquidLattice::from_layout(&scene.layout()).surface();
             let bounds = lattice.bounds();
             let nodes = lattice.nodes();
             assert!(nodes.iter().all(|&v| v == nodes[0]), "a cubic lattice: {nodes:?}");
@@ -1241,7 +1231,7 @@ mod emitter_oracle {
                 size: bounds.scale.map(f64::from),
                 nodes: f64::from(nodes[0]),
                 h: f64::from(lattice.cell_size()),
-                face_cells: n as f64,
+                face_cells: (n + 3) as f64,
             }
         }
 
