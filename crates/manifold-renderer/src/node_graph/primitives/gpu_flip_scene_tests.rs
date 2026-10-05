@@ -541,10 +541,14 @@ fn gpu_flip_face_grid_is_the_last_ticks_faces() {
     }
 }
 
-/// The native engine's fastest particle in the same 64³ still pool, from
-/// frame 59 to 299 (native_still_pool_reference): it never settles below
-/// 6 mm/s, and peaks at 18.9 mm/s.
+/// The native engine's peak fastest particle in the same 64³ still pool at
+/// the 10-frame checkpoints from frame 59 to 119 (native_still_pool_reference).
+/// It never settles: 10 to 19 mm/s throughout.
 const NATIVE_STILL_POOL_FASTEST: f64 = 1.889e-2;
+
+/// The largest |GPU − native| fastest particle at those checkpoints, both
+/// run from the native engine's captured seed (native_still_pool_reference).
+const STILL_POOL_GPU_GAP: f64 = 4.209e-4;
 
 /// The native engine's smallest fastest-vertical-particle speed at any
 /// 10-frame checkpoint from frame 29 to 299 of that pool, as a share of
@@ -552,8 +556,10 @@ const NATIVE_STILL_POOL_FASTEST: f64 = 1.889e-2;
 const NATIVE_STILL_POOL_VERTICAL_SHARE: f64 = 0.0365;
 
 /// I5: a pool at rest stays at rest as the engine's does. From 1 s on the
-/// particle count is the fill's and the fastest particle stays within 1.5×
-/// the engine's own peak in the same pool.
+/// particle count is the fill's and the fastest particle stays under the
+/// engine's own peak in the same pool plus five times the largest gap the
+/// GPU showed from the engine's seed: 21.0 mm/s. The margin covers this
+/// fill's unjittered seed, which the gap run did not use.
 #[test]
 fn gpu_flip_still_pool() {
     let scene = WaterScene::still_pool(64);
@@ -582,7 +588,8 @@ fn gpu_flip_still_pool() {
         }
     }
     let peak = fastest.iter().copied().fold(0.0, f64::max);
-    assert!(peak < 1.5 * NATIVE_STILL_POOL_FASTEST, "fastest particle {peak} m/s from 1 s on, native peaks at {NATIVE_STILL_POOL_FASTEST}");
+    let bound = NATIVE_STILL_POOL_FASTEST + 5.0 * STILL_POOL_GPU_GAP;
+    assert!(peak < bound, "fastest particle {peak} m/s from 1 s on, past {bound} (native peaks at {NATIVE_STILL_POOL_FASTEST})");
 }
 
 /// An open −X face drains the pool: the engine removes every particle within
@@ -1493,27 +1500,52 @@ mod native_reference {
         }
     }
 
-    /// The native engine's still pool at `n`³ for 2 s: its fastest particle
-    /// and fastest vertical particle speed every 10 frames, the oracle for
-    /// gpu_flip_still_pool's and gpu_flip_hydrostatic_column_rests's bounds.
+    /// Replace a fresh run's particle state with `seed` (native-captured
+    /// records), zero past it. The fill frame has completed.
+    #[cfg(feature = "water-race-probes")]
+    fn seed_run(run: &Run, seed: &[FluidParticle]) {
+        let mut common = vec![FluidParticle { position_radius: [0.0; 4], velocity: [0.0; 3], id: 0 }; run.scene.particles() as usize];
+        assert!(seed.len() <= common.len(), "native seed fits GPU capacity");
+        common[..seed.len()].copy_from_slice(seed);
+        let state = output_of(&run.plan, node_named(&run.graph, "state"), "out");
+        let buffer = run.exec.host_array_buffer(&run.graph, &run.plan, state).expect("dedicated particle state");
+        assert!(buffer.size as usize >= std::mem::size_of_val(common.as_slice()));
+        // SAFETY: the fill frame completed; no GPU command is outstanding.
+        unsafe { buffer.write(0, bytemuck::cast_slice(&common)); }
+    }
+
+    /// The 64³ still pool run by the native engine and by the GPU from the
+    /// native engine's own captured seed, 120 frames: the fastest particle
+    /// of each every 10 frames, the oracle for gpu_flip_still_pool's bound.
+    /// Both keep every particle, take one substep a frame and never recover.
     #[cfg(feature = "water-race-probes")]
     #[test]
     fn native_still_pool_reference() {
-        for n in [64] {
-            let scene = WaterScene::still_pool(n);
-            let (mut native, offset) = world(scene);
-            let g_dt = G * scene.step_dt();
-            for frame in 0..300 {
-                native.step(Seconds(1.0 / 60.0)).expect("native step");
-                if frame % 10 == 9 {
-                    let particles = capture(&mut native, offset);
-                    let stats = particle_stats(&particles);
-                    let vy = particles.iter().filter(|p| p.position_radius[3] > 0.0)
-                        .map(|p| f64::from(p.velocity[1]).abs()).fold(0.0, f64::max);
-                    println!("native still pool {n}³ frame {frame:3}: live {}, fastest {:.3e} m/s, max |vy| {vy:.3e} m/s = {:.3}% of g·dt", stats.live, stats.fastest, 100.0 * vy / g_dt);
+        let scene = WaterScene::still_pool(64);
+        let (mut native, offset) = world(scene);
+        let seed = capture(&mut native, offset);
+        let mut run = run_with_retired_speed(scene, true);
+        seed_run(&run, &seed);
+        let (mut native_peak, mut gap) = (0.0f64, 0.0f64);
+        for frame in 0..120 {
+            let stats = native.step(Seconds(1.0 / 60.0)).expect("native step");
+            assert_eq!(stats.substeps, 1, "frame {frame}: native substeps");
+            assert!(!stats.numerical_recovery && !stats.cap_hit, "frame {frame}: native recovered or capped");
+            run.frame();
+            let clock: Vec<u32> = run.read(STEP_NODE, "clock_status", 8);
+            assert_eq!((clock[6], clock[4], clock[5]), (1, 0, 0), "frame {frame}: GPU one substep, no cap or invalid input");
+            assert_eq!(run.liquid_stats().nonfinite, 0);
+            if frame % 10 == 9 {
+                let (a, b) = (particle_stats(&capture(&mut native, offset)), particle_stats(&run.particles()));
+                assert_eq!((a.live, b.live, a.bad, b.bad), (seed.len(), seed.len(), 0, 0), "frame {frame}: counts");
+                println!("still pool 64³ frame {frame:3}: fastest native {:.3e} gpu {:.3e} m/s", a.fastest, b.fastest);
+                if frame >= 59 {
+                    native_peak = native_peak.max(a.fastest);
+                    gap = gap.max((a.fastest - b.fastest).abs());
                 }
             }
         }
+        println!("still pool 64³ frames 59-119 from one seed: native peak {native_peak:.3e} m/s, largest GPU gap {gap:.3e} m/s");
     }
 
     /// One wall or contact case run from identical native-captured seeds.
