@@ -1505,10 +1505,11 @@ mod native_reference {
     /// run-up 1.01 vs 1.19 m. The same impact on the tank wall does not:
     /// run-up 1.24 vs 2.19 m, the two-face corner's 1.43 vs 3.68 m, until
     /// liquid φ extended into the walls without bodies too (BUG-9p3ms (tank
-    /// walls give far more run-up than native)): now 1.24 vs 1.37 m and
-    /// 1.43 vs 2.06 m. Still open: water within a cell of the flat wall,
-    /// 428 vs 736; and before any wall contact the GPU slab keeps vx
-    /// 3.00 m/s where native slows to 2.84.
+    /// walls give far more run-up than native)), and the fluid extension
+    /// held its lattice's border rows done as the engine's does: now every
+    /// wall-only case and the flush body match native to the printed 1e-3
+    /// at frames 10 and 60. The tank-spanning body slab does not: run-up
+    /// 1.62 vs 1.43 m, near-wall water 602 vs 468.
     #[cfg(feature = "water-race-probes")]
     #[test]
     fn gpu_flip_native_wall_contact_reference() {
