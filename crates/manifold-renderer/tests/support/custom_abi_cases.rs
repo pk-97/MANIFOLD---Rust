@@ -243,6 +243,13 @@ pub const CASES: &[CustomAbiCase] = &[
         aliases: &[],
     },
     CustomAbiCase {
+        source: "live_draw_args.rs",
+        rust_struct: "TrimArgs",
+        shader: "shaders/live_instances.wgsl",
+        shader_struct: "TrimArgs",
+        aliases: &[],
+    },
+    CustomAbiCase {
         source: "blob_detect_ffi.rs",
         rust_struct: "UploadUniforms",
         shader: "shaders/blob_detect_ffi_upload.wgsl",

@@ -5,16 +5,16 @@
 // last instance that is not a hole, so the tail is never drawn and the image
 // is unchanged. Eight-word argument blocks, as live_draw_args.wgsl.
 
-struct Trim {
+struct TrimArgs {
     slot: u32,
     // Instances the draw may reach: the buffer's capacity or the wired count.
     count: u32,
     // Fixed draws: whole-triangle vertices, or indices when indexed.
     vertices: u32,
-    _pad0: u32,
+    _pad: u32,
 }
 
-@group(0) @binding(0) var<uniform> params: Trim;
+@group(0) @binding(0) var<uniform> params: TrimArgs;
 // InstanceTransform: pos_scale then rot_pad.
 @group(0) @binding(1) var<storage, read> instances: array<vec4<f32>>;
 @group(0) @binding(2) var<storage, read_write> args: array<atomic<u32>>;
