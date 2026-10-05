@@ -8,7 +8,9 @@
 //! expression: `a*b + c*d` is `fma(a, b, c*d)`, a further `+ e*f` is
 //! `fma(e, f, sum)`, `a*b - c*d` is `fma(a, b, -(c*d))`. vmath's out-of-line
 //! vector operators fuse nothing across calls. Rust never contracts, so the
-//! port writes each fused operation as `mul_add`, and matches bit for bit.
+//! port writes each fused operation as `mul_add`, and matches bit for bit on
+//! the proven fixtures under that configuration only: build.rs pins the
+//! contraction and the oracle tests refuse any compiler but clang on arm64.
 //! A GPU port cannot rely on the same contraction; its proofs say so.
 
 use crate::FluidError;
@@ -252,6 +254,9 @@ pub struct SheetTrace {
     pub projections: Vec<Option<[f32; 3]>>,
     /// Per candidate: its opposite-neighbour score, when it got that far.
     pub mindots: Vec<Option<f32>>,
+    /// Per candidate: phase-2 markers strictly inside the search radius,
+    /// when its bucket neighbourhood held three or more.
+    pub neighbours: Vec<usize>,
     pub seeds: Vec<[f32; 3]>,
     /// Per seed: the candidate it came from.
     pub seed_candidates: Vec<usize>,
@@ -423,6 +428,7 @@ pub fn trace_sheet_particles(
     let mut out = Vec::new();
     trace.projections = vec![None; candidates.len()];
     trace.mindots = vec![None; candidates.len()];
+    trace.neighbours = vec![0; candidates.len()];
     let mut neighbours = Vec::new();
     let mut nearest = Vec::new();
     let bn = candidate_buckets.cells.n;
@@ -447,6 +453,7 @@ pub fn trace_sheet_particles(
                     let p = candidate;
                     nearest.clear();
                     nearest.extend(neighbours.iter().copied().filter(|&np| length(sub(np, p)) < max_radius));
+                    trace.neighbours[identity] = nearest.len();
                     if nearest.len() < 3 {
                         continue;
                     }

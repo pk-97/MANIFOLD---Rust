@@ -215,7 +215,20 @@ mod tests {
     /// and each native seed, in order, is bit for bit the projection of
     /// exactly one port candidate, the one the port seeded at that place in
     /// the sequence. Returns the seed count.
+    /// The bitwise claim holds for the configuration the port mirrors: clang
+    /// with -ffp-contract=on (build.rs pins it) on arm64, where every
+    /// contraction is a hardware fma.
+    fn contracted_build() {
+        assert_eq!(env!("MANIFOLD_FLUIDS_ORACLE_CC"), "clang", "the sheeter port mirrors a clang build");
+        // A runtime refusal, so other targets still build the tests.
+        #[allow(clippy::assertions_on_constants, reason = "fails at test time on a non-arm64 build")]
+        {
+            assert!(cfg!(target_arch = "aarch64"), "the sheeter port mirrors an arm64 build");
+        }
+    }
+
     fn port_matches(markers: &[[f32; 3]], phi: &[f32], cells: [u32; 3], dx: f64, threshold: f32) -> usize {
+        contracted_build();
         let native = sheet_particles(markers, phi, cells, dx, threshold).expect("oracle");
         let trace = crate::sheeter::trace_sheet_particles(markers, phi, cells, dx, threshold).expect("port");
         assert_eq!(native.len(), trace.seeds.len(), "seed counts differ");
@@ -251,11 +264,19 @@ mod tests {
     /// Native and port agree by identity on the two floats either side of a
     /// decision edge and one ulp beyond each.
     fn agree_across(edge: (f32, f32), fixture: impl Fn(f32) -> (Vec<[f32; 3]>, Vec<f32>, f64, f32)) {
+        // Native exposes only its seeds: an edge none of them sees proves nothing.
+        assert!(seeds_across(edge, fixture) > 0, "no seeds either side of the edge");
+    }
+
+    /// Seeds native and port agree on across the edge, summed.
+    fn seeds_across(edge: (f32, f32), fixture: impl Fn(f32) -> (Vec<[f32; 3]>, Vec<f32>, f64, f32)) -> usize {
         assert_eq!(edge.0.next_up(), edge.1, "not adjacent");
+        let mut seeds = 0;
         for x in [ulp_step(edge.0, -1), edge.0, edge.1, ulp_step(edge.1, 1)] {
             let (markers, phi, dx, threshold) = fixture(x);
-            port_matches(&markers, &phi, CELLS, dx, threshold);
+            seeds += port_matches(&markers, &phi, CELLS, dx, threshold);
         }
+        seeds
     }
 
     fn shifted_sheet(shift: f32) -> (Vec<[f32; 3]>, Vec<f32>, f64, f32) {
@@ -277,15 +298,20 @@ mod tests {
         agree_across(knife_edge(-0.7, -0.55, observe), shifted_sheet);
     }
 
-    /// Markers need −2dx ≤ φ < 2dx: the shift where they sample −2.
+    /// Markers need −2dx ≤ φ < 2dx: the shift where they sample −2. Port-only
+    /// evidence: at that shift no candidate is shallow enough to seed, and
+    /// native exposes no per-marker trace, so native agreeing on zero seeds
+    /// is all this edge shows of it.
     #[test]
     fn port_matches_oracle_at_the_marker_band() {
         let observe = |s| crate::sheeter::trace_sheet_particles(&shifted_sheet(s).0, &shifted_sheet(s).1, CELLS, DX, DEFAULT_FILL_THRESHOLD).unwrap().thin;
-        agree_across(knife_edge(-1.8, -1.6, observe), shifted_sheet);
+        assert_eq!(seeds_across(knife_edge(-1.8, -1.6, observe), shifted_sheet), 0);
     }
 
-    /// Neighbours count within 2dx, strictly: one ring marker slid toward a
-    /// hole candidate until it enters the radius.
+    /// Neighbours count within 2dx, strictly: one ring marker slid toward the
+    /// hole until the port's radius predicate admits it for a candidate. The
+    /// bisection tracks that predicate, not the scores; the consequence is
+    /// that candidate's score changing, and native agrees on the seeds.
     #[test]
     fn port_matches_oracle_at_the_search_radius() {
         let fixture = |t: f32| {
@@ -294,11 +320,29 @@ mod tests {
             markers[m][0] -= t;
             (markers, phi, DX, DEFAULT_FILL_THRESHOLD)
         };
-        let observe = |t| {
+        let trace = |t| {
             let (m, p, ..) = fixture(t);
-            crate::sheeter::trace_sheet_particles(&m, &p, CELLS, DX, DEFAULT_FILL_THRESHOLD).unwrap().mindots
+            crate::sheeter::trace_sheet_particles(&m, &p, CELLS, DX, DEFAULT_FILL_THRESHOLD).unwrap()
         };
-        agree_across(knife_edge(0.0, 0.02, observe), fixture);
+        // Only candidates that reach the score: an unscored one's count has no
+        // consequence native could show.
+        let scored: Vec<usize> = (0..trace(0.0).mindots.len()).filter(|&c| trace(0.0).mindots[c].is_some()).collect();
+        let observe = |t| {
+            let n = trace(t).neighbours;
+            scored.iter().map(|&c| n[c]).collect::<Vec<_>>()
+        };
+        let edge = knife_edge(0.0, 0.5, observe);
+        let (outside, inside) = (trace(edge.0), trace(edge.1));
+        let entered: Vec<usize> = (0..outside.neighbours.len()).filter(|&c| outside.neighbours[c] != inside.neighbours[c]).collect();
+        assert!(!entered.is_empty());
+        for &c in &entered {
+            assert_eq!(inside.neighbours[c], outside.neighbours[c] + 1, "candidate {c}: one marker enters");
+        }
+        assert!(
+            entered.iter().any(|&c| inside.mindots[c].is_some() && outside.mindots[c] != inside.mindots[c]),
+            "the entering marker changes a scored candidate's score"
+        );
+        agree_across(edge, fixture);
     }
 
     /// Seeds need mindot < threshold, strictly: the threshold at a seed's own

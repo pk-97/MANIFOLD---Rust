@@ -12,7 +12,8 @@ struct Params {
     ox: f32, oy: f32, oz: f32, h: f32,
     inv_h: f32, inv_sub: f32, half_h: f32, sub_dx: f32,
     max_depth: f32, step_distance: f32, steps: u32, max_seed_depth: f32,
-    max_radius: f32, threshold: f32, pad0: u32, pad1: u32,
+    max_radius: f32, threshold: f32, inv_h_bits_lo: u32, inv_h_bits_hi: u32,
+    inv_sub_bits_lo: u32, inv_sub_bits_hi: u32, pad0: u32, pad1: u32,
 };
 struct FluidParticle { position_radius: vec4<f32>, velocity: vec3<f32>, id: u32 };
 struct CellRange { start: u32, count: u32 };
@@ -30,7 +31,7 @@ struct ClockPlan {
 @group(0) @binding(3) var<storage, read> order: array<u32>;
 // The surface level set at cell centres, x fastest.
 @group(0) @binding(4) var<storage, read> phi: array<f32>;
-@group(0) @binding(5) var<storage, read_write> sheet_a: array<u32>;
+@group(0) @binding(5) var<storage, read_write> sheet_a: array<atomic<u32>>;
 @group(0) @binding(6) var<storage, read_write> sheet_b: array<u32>;
 // One bit per half-cell, by ParticleMaskGrid's two floors.
 @group(0) @binding(7) var<storage, read_write> mask: array<atomic<u32>>;
@@ -41,10 +42,12 @@ struct ClockPlan {
 @group(0) @binding(10) var<storage, read_write> claims: array<atomic<u32>>;
 // Per cell: bit o marks offset o a candidate, bit 8 + o a claimant.
 @group(0) @binding(11) var<storage, read_write> flags: array<atomic<u32>>;
-// Accepted births: local position, w = the source candidate's rank.
+// Accepted births in rank order (the engine's): local position, w = rank.
 @group(0) @binding(12) var<storage, read_write> births: array<vec4<f32>>;
 @group(0) @binding(13) var<storage, read_write> birth_count: array<atomic<u32>>;
 @group(0) @binding(14) var<storage, read> clock_plan: array<ClockPlan>;
+// Per rank: 1 for a claimant holding its sub-cell, scanned in place (inclusive).
+@group(0) @binding(15) var<storage, read_write> winners: array<u32>;
 
 const NO_CLAIM: u32 = 0xffffffffu;
 const MAX_PARTICLES_PER_CELL: u32 = 6u;
@@ -58,8 +61,80 @@ fn clock_active() -> bool {
 fn dims() -> vec3<i32> { return vec3<i32>(i32(u.nx), i32(u.ny), i32(u.nz)); }
 fn in_range(c: vec3<i32>) -> bool { return all(c >= vec3<i32>(0)) && all(c < dims()); }
 fn flat(c: vec3<i32>) -> u32 { return u32(c.x) + u.nx * (u32(c.y) + u.ny * u32(c.z)); }
-fn cell_of(p: vec3<f32>) -> vec3<i32> { return vec3<i32>(floor(p * u.inv_h)); }
-fn sub_of(p: vec3<f32>) -> vec3<i32> { return vec3<i32>(floor(p * u.inv_sub)); }
+// Grid3d::positionToGridIndex floors the f64 product of the widened position
+// and the f64 reciprocal. Emulated exactly in integers: the 24-bit mantissa
+// times the 53-bit one, rounded to 53 bits nearest-even, then floored.
+fn mul32(a: u32, b: u32) -> vec2<u32> {
+    let a0 = a & 0xffffu; let a1 = a >> 16u;
+    let b0 = b & 0xffffu; let b1 = b >> 16u;
+    let p00 = a0 * b0; let p01 = a0 * b1; let p10 = a1 * b0; let p11 = a1 * b1;
+    let mid = (p00 >> 16u) + (p01 & 0xffffu) + (p10 & 0xffffu);
+    return vec2<u32>((p00 & 0xffffu) | (mid << 16u), p11 + (p01 >> 16u) + (p10 >> 16u) + (mid >> 16u));
+}
+fn limb_bit(x: vec3<u32>, i: u32) -> u32 { return (x[i / 32u] >> (i % 32u)) & 1u; }
+// x >> s for s < 96, the low two limbs.
+fn shr96(x: vec3<u32>, s: u32) -> vec2<u32> {
+    var out = vec2<u32>(0u);
+    for (var k = 0u; k < 2u; k = k + 1u) {
+        let at = 32u * k + s;
+        let w = at / 32u; let b = at % 32u;
+        var v = 0u;
+        if w < 3u { v = x[w] >> b; }
+        if b != 0u && w + 1u < 3u { v = v | (x[w + 1u] << (32u - b)); }
+        out[k] = v;
+    }
+    return out;
+}
+// Any bit of x below bit i.
+fn below(x: vec3<u32>, i: u32) -> bool {
+    for (var w = 0u; w < 3u; w = w + 1u) {
+        if 32u * w >= i { break; }
+        let n = min(32u, i - 32u * w);
+        let mask = select((1u << n) - 1u, 0xffffffffu, n == 32u);
+        if (x[w] & mask) != 0u { return true; }
+    }
+    return false;
+}
+fn exact_floor(p: f32, r: vec2<u32>) -> i32 {
+    if !(p > 0.0) {
+        // Outside the grid's low faces (or zero): the sign alone decides.
+        return select(0, -1, p < 0.0);
+    }
+    let bits = bitcast<u32>(p);
+    let e = (bits >> 23u) & 255u;
+    let m = (bits & 0x7fffffu) | select(0u, 0x800000u, e != 0u);
+    let ep = select(i32(e) - 150, -149, e == 0u);
+    let er = i32((r.y >> 20u) & 2047u) - 1075;
+    let lo = mul32(m, r.x);
+    let hi = mul32(m, (r.y & 0xfffffu) | 0x100000u);
+    let l1 = lo.y + hi.x;
+    let x = vec3<u32>(lo.x, l1, hi.y + select(0u, 1u, l1 < lo.y));
+    var length = 0u;
+    if x.z != 0u { length = 96u - countLeadingZeros(x.z); }
+    else if x.y != 0u { length = 64u - countLeadingZeros(x.y); }
+    else { length = 32u - countLeadingZeros(x.x); }
+    var q = vec2<u32>(x.x, x.y);
+    var exponent = ep + er;
+    if length > 53u {
+        let d = length - 53u;
+        q = shr96(x, d);
+        let round = limb_bit(x, d - 1u) == 1u;
+        if round && (below(x, d - 1u) || (q.x & 1u) == 1u) {
+            q.x = q.x + 1u;
+            if q.x == 0u { q.y = q.y + 1u; }
+        }
+        exponent = exponent + i32(d);
+    }
+    if exponent >= 0 { return 0x7fffffff; }
+    let s = u32(-exponent);
+    if s >= 64u { return 0; }
+    return i32(shr96(vec3<u32>(q, 0u), s).x);
+}
+fn exact_cell(p: vec3<f32>, r: vec2<u32>) -> vec3<i32> {
+    return vec3<i32>(exact_floor(p.x, r), exact_floor(p.y, r), exact_floor(p.z, r));
+}
+fn cell_of(p: vec3<f32>) -> vec3<i32> { return exact_cell(p, vec2<u32>(u.inv_h_bits_lo, u.inv_h_bits_hi)); }
+fn sub_of(p: vec3<f32>) -> vec3<i32> { return exact_cell(p, vec2<u32>(u.inv_sub_bits_lo, u.inv_sub_bits_hi)); }
 fn sub_case(s: vec3<i32>) -> u32 { return u32(s.x & 1) | (u32(s.y & 1) << 1u) | (u32(s.z & 1) << 2u); }
 fn local(p: FluidParticle) -> vec3<f32> { return p.position_radius.xyz - vec3<f32>(u.ox, u.oy, u.oz); }
 
@@ -120,9 +195,9 @@ fn in_grid(p: vec3<f32>) -> bool {
 fn clear(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
     let c = gid.x;
-    if c == 0u { atomicStore(&birth_count[0], 0u); }
+    if c == 0u { atomicStore(&birth_count[1], 0u); }
     if c >= u.nx * u.ny * u.nz { return; }
-    sheet_a[c] = 0u;
+    atomicStore(&sheet_a[c], 0u);
     sheet_b[c] = 0u;
     atomicStore(&mask[c], 0u);
     selected_count[c] = 0u;
@@ -151,7 +226,7 @@ fn detect(@builtin(global_invocation_id) gid: vec3<u32>) {
     for (var step = 0u; step < u.steps; step = step + 1u) {
         let next = sample(p + (f32(step) * u.step_distance) * dir);
         if next > current || next >= 0.0 {
-            sheet_a[flat(g)] = 1u;
+            atomicStore(&sheet_a[flat(g)], 1u);
             return;
         }
         current = next;
@@ -165,7 +240,8 @@ fn grown(source: u32, c: vec3<i32>) -> u32 {
             var q = c;
             q[a] = q[a] + d;
             if in_range(q) {
-                let v = select(sheet_b[flat(q)], sheet_a[flat(q)], source == 0u);
+                var v = sheet_b[flat(q)];
+                if source == 0u { v = atomicLoad(&sheet_a[flat(q)]); }
                 hit = max(hit, v);
             }
         }
@@ -194,7 +270,7 @@ fn feather_border(@builtin(global_invocation_id) gid: vec3<u32>) {
     if c >= u.nx * u.ny * u.nz { return; }
     let q = cell_coord(c);
     let border = any(q < vec3<i32>(3)) || any(q >= dims() - vec3<i32>(3));
-    sheet_a[c] = select(grown(1u, q), 0u, border);
+    atomicStore(&sheet_a[c], select(grown(1u, q), 0u, border));
 }
 
 // Phase 2: the first four markers of each sheet cell, in input order, with
@@ -203,7 +279,7 @@ fn feather_border(@builtin(global_invocation_id) gid: vec3<u32>) {
 fn select_markers(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
     let c = gid.x;
-    if c >= u.nx * u.ny * u.nz || sheet_a[c] == 0u { return; }
+    if c >= u.nx * u.ny * u.nz || atomicLoad(&sheet_a[c]) == 0u { return; }
     let range = ranges[c];
     var n = 0u;
     for (var s = range.start; s < range.start + range.count && n < MAX_SHEET_PARTICLES_PER_CELL; s = s + 1u) {
@@ -265,13 +341,14 @@ struct Evaluation {
 fn evaluate(site: u32) -> Evaluation {
     var e = Evaluation(0u, vec3<f32>(0.0), 0u);
     let c = site / 8u;
-    if sheet_a[c] == 0u { return e; }
+    if atomicLoad(&sheet_a[c]) == 0u { return e; }
     let o = site % 8u;
     let q = cell_coord(c);
     // Offsets in the engine's order, k fastest.
     let d = vec3<i32>(i32((o >> 2u) & 1u), i32((o >> 1u) & 1u), i32(o & 1u));
     let s = 2 * q + d;
-    let seed = vec3<f32>(s) * u.sub_dx + vec3<f32>(0.5 * u.sub_dx);
+    // (f32)s · sub_dx + sub_dx/2 in f64 is exact, so one f32 rounding matches.
+    let seed = fma(vec3<f32>(s), vec3<f32>(u.sub_dx), vec3<f32>(0.5 * u.sub_dx));
     let value = sample(seed);
     if value >= 0.0 || value < -u.max_seed_depth { return e; }
     e.state = 1u;
@@ -369,20 +446,69 @@ fn candidates(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 }
 
-// A claimant that holds its sub-cell is born, up to the list's capacity; the
-// count is the true total.
+fn rank_total() -> u32 { return 64u * u.bx * u.by * u.bz; }
+
+// The half-cell site a rank names, or NO_CLAIM where its cell is past the
+// grid (an odd side's last bucket).
+fn site_of_rank(r: u32) -> u32 {
+    let o = r % 8u;
+    let in_bucket = (r / 8u) % 8u;
+    let bucket = r / 64u;
+    let b = vec3<i32>(i32(bucket % u.bx), i32(bucket / u.bx % u.by), i32(bucket / (u.bx * u.by)));
+    let q = 2 * b + vec3<i32>(i32(in_bucket & 1u), i32((in_bucket >> 1u) & 1u), i32((in_bucket >> 2u) & 1u));
+    if !in_range(q) { return NO_CLAIM; }
+    return 8u * flat(q) + o;
+}
+
+// A claimant that holds its sub-cell, recomputed: state 2 and its claim.
+fn holds(site: u32) -> Evaluation {
+    var e = Evaluation(0u, vec3<f32>(0.0), 0u);
+    if site == NO_CLAIM { return e; }
+    if (atomicLoad(&flags[site / 8u]) & (1u << (8u + site % 8u))) == 0u { return e; }
+    e = evaluate(site);
+    if e.state != 2u { return e; }
+    let ps = sub_of(e.p);
+    if atomicLoad(&claims[8u * flat(ps / 2) + sub_case(ps)]) != e.rank { e.state = 1u; }
+    return e;
+}
+
+// One thread per rank: 1 where that candidate holds its sub-cell. The scan
+// over ranks then numbers the births in the engine's order.
 @compute @workgroup_size(256)
 fn resolve(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
-    let site = gid.x;
-    if site >= 8u * u.nx * u.ny * u.nz { return; }
-    if (atomicLoad(&flags[site / 8u]) & (1u << (8u + site % 8u))) == 0u { return; }
-    let e = evaluate(site);
-    if e.state != 2u { return; }
-    let ps = sub_of(e.p);
-    if atomicLoad(&claims[8u * flat(ps / 2) + sub_case(ps)]) != e.rank { return; }
-    let slot = atomicAdd(&birth_count[0], 1u);
-    if slot < u.capacity {
-        births[slot] = vec4<f32>(e.p, bitcast<f32>(e.rank));
+    let r = gid.x;
+    if r >= rank_total() { return; }
+    winners[r] = select(0u, 1u, holds(site_of_rank(r)).state == 2u);
+}
+
+// After the scan: each birth at its index in engine order, up to the list's
+// capacity; word 0 of the count is the true total. Word 1 counts births whose
+// recomputed evaluation no longer holds its claim (a proof that must stay 0).
+@compute @workgroup_size(256)
+fn place(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !clock_active() { return; }
+    let r = gid.x;
+    let total = rank_total();
+    if r == 0u { atomicStore(&birth_count[0], winners[total - 1u]); }
+    if r >= total { return; }
+    var before = 0u;
+    if r > 0u { before = winners[r - 1u]; }
+    if winners[r] == before { return; }
+    let e = holds(site_of_rank(r));
+    if e.state != 2u || e.rank != r { atomicAdd(&birth_count[1], 1u); }
+    if before < u.capacity {
+        births[before] = vec4<f32>(e.p, bitcast<f32>(r));
     }
+}
+
+// Proof only (GpuSheeting::encode_index_probe): each particle's cell and
+// half-cell as the stage decides them, two records a particle.
+@compute @workgroup_size(256)
+fn index_probe(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let s = gid.x;
+    if s >= u.count { return; }
+    let p = local(particles[s]);
+    births[2u * s] = bitcast<vec4<f32>>(vec4<i32>(cell_of(p), 0));
+    births[2u * s + 1u] = bitcast<vec4<f32>>(vec4<i32>(sub_of(p), 0));
 }
