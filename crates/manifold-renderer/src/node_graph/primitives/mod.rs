@@ -345,12 +345,11 @@ pub(crate) mod gpu_flip_bodies;
 pub mod gpu_flip_lentine;
 pub(crate) mod gpu_flip_pressure;
 pub(crate) mod gpu_flip_step;
-// Un-suppressed when gpu_flip_step wires the sheeting stage (BUG-j9l9w, GPU
-// FLIP sheeting, step 5).
-#[allow(dead_code)]
 pub(crate) mod gpu_flip_sheeting;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_flip_sheeting_tests;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod gpu_flip_sheeting_step_tests;
 pub(crate) mod gpu_flip_clock;
 pub(crate) mod gpu_flip_narrow_band;
 #[cfg(all(test, feature = "gpu-proofs"))]

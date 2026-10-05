@@ -13,10 +13,12 @@ struct Params {
     inv_h: f32, inv_sub: f32, half_h: f32, sub_dx: f32,
     max_depth: f32, step_distance: f32, steps: u32, max_seed_depth: f32,
     max_radius: f32, threshold: f32, inv_h_bits_lo: u32, inv_h_bits_hi: u32,
-    inv_sub_bits_lo: u32, inv_sub_bits_hi: u32, pad0: u32, pad1: u32,
+    inv_sub_bits_lo: u32, inv_sub_bits_hi: u32, rate: f32, tick: u32,
+    substep: u32, slots: u32, pad0: u32, pad1: u32,
 };
 struct FluidParticle { position_radius: vec4<f32>, velocity: vec3<f32>, id: u32 };
 struct CellRange { start: u32, count: u32 };
+struct FaceSample { face_velocity: vec4<f32>, face_weight: vec4<f32> };
 struct ClockPlan {
     step_dt: f32, elapsed: f32, remaining: f32, maximum_speed: f32,
     cap_hit: u32, nonfinite: u32, step_index: u32, event: u32,
@@ -25,7 +27,7 @@ struct ClockPlan {
 
 @group(0) @binding(0) var<uniform> u: Params;
 // Sorted by cell, stable: within a cell, in input order.
-@group(0) @binding(1) var<storage, read> particles: array<FluidParticle>;
+@group(0) @binding(1) var<storage, read_write> particles: array<FluidParticle>;
 @group(0) @binding(2) var<storage, read> ranges: array<CellRange>;
 // Per sorted slot: its input index, the engine's marker order.
 @group(0) @binding(3) var<storage, read> order: array<u32>;
@@ -48,6 +50,12 @@ struct ClockPlan {
 @group(0) @binding(14) var<storage, read> clock_plan: array<ClockPlan>;
 // Per rank: 1 for a claimant holding its sub-cell, scanned in place (inclusive).
 @group(0) @binding(15) var<storage, read_write> winners: array<u32>;
+// In the step only. The constrained saved faces (gpu_flip_step.wgsl layout).
+@group(0) @binding(16) var<storage, read> old: array<FaceSample>;
+// liquid_state's birth identity: next, epoch, reserved base, reset request.
+@group(0) @binding(17) var<storage, read> birth_identity: array<u32>;
+// The last active substep's requested and written births, then both summed.
+@group(0) @binding(18) var<storage, read_write> stats: array<u32>;
 
 const NO_CLAIM: u32 = 0xffffffffu;
 const MAX_PARTICLES_PER_CELL: u32 = 6u;
@@ -213,8 +221,11 @@ fn detect(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
     let s = gid.x;
     if s >= u.count { return; }
+    // In the step, count is every slot: the sort leaves a dead tail at radius 0.
+    if !(particles[s].position_radius.w > 0.0) { return; }
     let p = local(particles[s]);
     let g = cell_of(p);
+    if !in_range(g) { return; }
     atomicOr(&mask[flat(g)], 1u << sub_case(sub_of(p)));
     if ranges[flat(g)].count >= MAX_PARTICLES_PER_CELL { return; }
     let value = sample(p);
@@ -479,7 +490,9 @@ fn resolve(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
     let r = gid.x;
     if r >= rank_total() { return; }
-    winners[r] = select(0u, 1u, holds(site_of_rank(r)).state == 2u);
+    // The engine keeps a seed unless its draw is over the rate; standalone
+    // runs at rate 1, which keeps every one (the draw is under 1).
+    winners[r] = select(0u, 1u, holds(site_of_rank(r)).state == 2u && u.rate > 0.0 && fill_draw(r) <= u.rate);
 }
 
 // After the scan: each birth at its index in engine order, up to the list's
@@ -511,4 +524,100 @@ fn index_probe(@builtin(global_invocation_id) gid: vec3<u32>) {
     let p = local(particles[s]);
     births[2u * s] = bitcast<vec4<f32>>(vec4<i32>(cell_of(p), 0));
     births[2u * s + 1u] = bitcast<vec4<f32>>(vec4<i32>(sub_of(p), 0));
+}
+
+// ---- In the step: the fill-rate draw (in resolve), then after the rank
+// scan and the caller's identity reservation, the tail write. ----
+
+// PCG hash (Jarzynski & Olano 2020).
+fn pcg(v: u32) -> u32 {
+    let s = v * 747796405u + 2891336453u;
+    let w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u;
+    return (w >> 22u) ^ w;
+}
+
+// The fill-rate draw, uniform in [0, 1) at 24 bits. A pure function of the
+// candidate's rank, the tick and the substep: no state to seed or reset, so
+// a replayed or re-run tick draws the same births, and a reset (tick 0
+// again) repeats the first run's. A 24-bit draw can be 0, so rate 0 is
+// refused in resolve as well as never encoded.
+fn fill_draw(rank: u32) -> f32 {
+    let h = pcg(rank ^ pcg(u.tick ^ pcg(u.substep ^ 0x5eedf111u)));
+    return f32(h >> 8u) * (1.0 / 16777216.0);
+}
+
+fn finite3(v: vec3<f32>) -> bool {
+    let bits = bitcast<vec3<u32>>(v) & vec3<u32>(0x7f800000u);
+    return all(bits != vec3<u32>(0x7f800000u));
+}
+
+// gpu_flip_step.wgsl `sample` on the saved faces: q in cells from the grid's
+// minimum, missing corners contributing zero.
+fn saved_velocity(q: vec3<f32>) -> vec3<f32> {
+    let n = dims();
+    if !finite3(q) || any(q < vec3<f32>(0.0)) || any(q >= vec3<f32>(n)) {
+        return vec3<f32>(0.0);
+    }
+    let m = n + vec3<i32>(1);
+    var v = vec3<f32>(0.0);
+    for (var a = 0; a < 3; a = a + 1) {
+        var offset = vec3<f32>(0.5);
+        offset[a] = 0.0;
+        var top = n - vec3<i32>(1);
+        top[a] = n[a];
+        let s = q - offset;
+        let base = vec3<i32>(floor(s));
+        let t = s - vec3<f32>(base);
+        var sum = 0.0;
+        for (var corner = 0; corner < 8; corner = corner + 1) {
+            let bit = vec3<i32>(corner & 1, (corner >> 1u) & 1, (corner >> 2u) & 1);
+            let c = base + bit;
+            if all(c >= vec3<i32>(0)) && all(c <= top) {
+                let face = old[u32(c.x) + u32(m.x) * (u32(c.y) + u32(m.y) * u32(c.z))];
+                let w3 = select(vec3<f32>(1.0) - t, t, bit != vec3<i32>(0));
+                sum = sum + w3.x * w3.y * w3.z * face.face_velocity[a];
+            }
+        }
+        v[a] = sum;
+    }
+    return v;
+}
+
+// Each drawn birth into the slot after the live prefix its scan index gives,
+// up to the pool's slots, in the saved velocity at its seed (the engine's
+// birth velocity; the FLIP update then gives it the new field's), with the
+// identity the reservation set aside. Births past the pool are dropped and
+// counted. The birth list keeps each seed at its birth index, for the proofs.
+@compute @workgroup_size(256)
+fn write(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !clock_active() { return; }
+    if birth_identity[3] != 0u { return; }
+    let r = gid.x;
+    let total = rank_total();
+    let last = ranges[u.nx * u.ny * u.nz - 1u];
+    let live = last.start + last.count;
+    let room = select(0u, u.slots - live, live <= u.slots);
+    if r == 0u {
+        let requested = winners[total - 1u];
+        atomicStore(&birth_count[0], requested);
+        stats[0] = requested;
+        stats[1] = min(requested, room);
+        stats[2] = stats[2] + requested;
+        stats[3] = stats[3] + min(requested, room);
+    }
+    if r >= total { return; }
+    var before = 0u;
+    if r > 0u { before = winners[r - 1u]; }
+    if winners[r] == before { return; }
+    let e = holds(site_of_rank(r));
+    if e.state != 2u || e.rank != r { atomicAdd(&birth_count[1], 1u); }
+    if before < u.capacity {
+        births[before] = vec4<f32>(e.p, bitcast<f32>(r));
+    }
+    if before >= room { return; }
+    let origin = vec3<f32>(u.ox, u.oy, u.oz);
+    let world = e.p + origin;
+    // (3 / (4π · 8))^(1/3): the sphere of an eighth of a cell, as the fill's.
+    particles[live + before] = FluidParticle(vec4<f32>(world, 0.31017524 * u.h),
+        saved_velocity((world - origin) / u.h), birth_identity[2] + before);
 }

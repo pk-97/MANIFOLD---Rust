@@ -1112,7 +1112,7 @@ fn cpu_sample(q: [f64; 3], field: &[FaceSample]) -> [f64; 3] {
     cpu_sample_on(q, field, N)
 }
 
-fn cpu_sample_on(q: [f64; 3], field: &[FaceSample], n: [usize; 3]) -> [f64; 3] {
+pub(super) fn cpu_sample_on(q: [f64; 3], field: &[FaceSample], n: [usize; 3]) -> [f64; 3] {
     if q.iter().any(|value| !value.is_finite() || *value < 0.0)
         || q.iter().zip(n.iter()).any(|(value, &extent)| *value >= extent as f64)
     {

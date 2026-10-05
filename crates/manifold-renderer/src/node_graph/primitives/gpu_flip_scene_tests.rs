@@ -103,7 +103,7 @@ impl Run {
     /// `new` with each `(node, param, value)` set before the fill frame, so
     /// the fill and the first tick share that pose. A body posed after the
     /// fill crosses the whole move in its first tick, at the move's speed.
-    fn posed(scene: WaterScene, params: &[(&str, &str, f64)]) -> Self {
+    pub(super) fn posed(scene: WaterScene, params: &[(&str, &str, f64)]) -> Self {
         let mut registry = PrimitiveRegistry::with_builtin();
         register_substep_test_nodes(&mut registry);
         let mut graph = water_def(scene).into_graph(&registry, &Default::default()).expect("water def builds");
@@ -2249,4 +2249,94 @@ fn gpu_flip_speed_measure() {
             }
         }
     }
+}
+
+/// FNV-1a over the state's particles after each frame.
+fn particle_digest(run: &Run, digest: &mut u64) {
+    for byte in bytemuck::cast_slice::<FluidParticle, u8>(&run.particles()) {
+        *digest = (*digest ^ u64::from(*byte)).wrapping_mul(0x100_0000_01b3);
+    }
+}
+
+/// The Dam Break with the step's Sheet Fill Rate set, when given.
+fn dam_break_sheeting(n: usize, rate: Option<f64>) -> Run {
+    let scene = WaterScene::dam_break(n);
+    if let Some(rate) = rate {
+        Run::posed(scene, &[(STEP_NODE, "sheet_fill_rate", rate)])
+    } else {
+        Run::new(scene)
+    }
+}
+
+/// Sheet seeding off is the step it was (BUG-j9l9w): the Dam Break's
+/// particles after four frames, digested. The unwired digest printed here is
+/// the comparison against main (the same test run on main's step); Sheet
+/// Fill Rate 0 set explicitly must equal it.
+#[test]
+fn gpu_flip_sheeting_off_leaves_the_dam_break_unchanged() {
+    let digest = |rate: Option<f64>| {
+        let mut run = dam_break_sheeting(32, rate);
+        let mut digest = 0xcbf2_9ce4_8422_2325u64;
+        for _ in 0..4 {
+            run.frame();
+            particle_digest(&run, &mut digest);
+        }
+        digest
+    };
+    let unwired = digest(None);
+    eprintln!("DAM BREAK DIGEST 32 x4: {unwired:016x}");
+    assert_eq!(digest(Some(0.0)), unwired, "rate 0 changed the step");
+}
+
+/// Sheet seeding on: replayed encodes give the particles a direct encode
+/// gives, bit for bit, frame by frame, with births among them.
+#[test]
+fn gpu_flip_sheeting_replay_matches_direct() {
+    let mut direct = dam_break_sheeting(32, Some(1.0));
+    let mut replayed = dam_break_sheeting(32, Some(1.0));
+    replayed.set_encode_replay(true);
+    let seeded = direct.particles().iter().map(|p| p.id).max().unwrap_or(0);
+    let mut born = 0;
+    for frame in 0..24 {
+        direct.frame();
+        replayed.frame();
+        let a = direct.particles();
+        assert!(a == replayed.particles(), "frame {frame}: replay differs");
+        born = a.iter().filter(|p| p.position_radius[3] > 0.0 && p.id > seeded).count();
+    }
+    let stats = replayed.replay_stats();
+    eprintln!("SHEETING REPLAY: {born} live births after 24 frames, {stats:?}");
+    assert!(stats.replayed > 0, "nothing replayed");
+    assert!(born > 0, "the Dam Break seeded no sheets");
+}
+
+/// The step's GPU frame time at res 64: sheeting off, and on (the
+/// difference is the sheeting passes plus the births they add), medians
+/// over frames 40 to 63, interleaved.
+#[test]
+fn gpu_flip_sheeting_cost_at_64() {
+    let mut off = dam_break_sheeting(64, None);
+    let mut on = dam_break_sheeting(64, Some(1.0));
+    let seeded = on.particles().iter().map(|p| p.id).max().unwrap_or(0);
+    let (mut t_off, mut t_on) = (Vec::new(), Vec::new());
+    for frame in 0..64 {
+        let (a, b) = if frame % 2 == 0 {
+            (off.timed_frame().0, on.timed_frame().0)
+        } else {
+            let b = on.timed_frame().0;
+            (off.timed_frame().0, b)
+        };
+        if frame >= 40 {
+            t_off.push(a);
+            t_on.push(b);
+        }
+    }
+    t_off.sort_by(f64::total_cmp);
+    t_on.sort_by(f64::total_cmp);
+    let born = on.particles().iter().filter(|p| p.position_radius[3] > 0.0 && p.id > seeded).count();
+    eprintln!(
+        "SHEETING COST 64: off {:.3} ms, on {:.3} ms (median frame GPU time), {born} live births",
+        t_off[t_off.len() / 2],
+        t_on[t_on.len() / 2]
+    );
 }
