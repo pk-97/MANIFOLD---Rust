@@ -27,6 +27,8 @@ mod whitewater;
 pub use whitewater::{WhitewaterFields, WhitewaterGrid, WhitewaterLifecycle, WhitewaterSpawn};
 #[cfg(feature = "whitewater-oracle")]
 pub mod whitewater_oracle;
+#[cfg(feature = "whitewater-oracle")]
+pub mod sheet_oracle;
 
 pub const UPSTREAM_REVISION: &str = "70a0e954018fe39e1f9c3631264989569752bb7a";
 /// Bump when local numerical changes alter recorded-take replay semantics.
