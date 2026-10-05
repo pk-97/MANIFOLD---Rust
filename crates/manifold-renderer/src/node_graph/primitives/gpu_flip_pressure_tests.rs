@@ -131,7 +131,8 @@ struct LentineFluxParams {
     list_base: u32,
     level: u32,
     all_tiles: u32,
-    pad: u32,
+    /// The solve-live triple; 0 outside rounds, as these direct dispatches are.
+    live: u32,
 }
 
 fn lattice_index(p: [usize; 3], n: [usize; 3]) -> usize {
@@ -985,6 +986,28 @@ fn pressure_module_preconditioner_keeps_rz_negative() {
     }
     println!("preconditioner: {checked} iterations over {} solves, r·z < 0 and p·s > 0 on every one: {}", problems.len() * 2, failures.is_empty());
     assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// The full cap runs and stays sane: a small still pool solved for all 900
+/// rounds (no tolerance stop) keeps every r·z and p·s finite, its pressure
+/// finite, and its residual at or below where 16 rounds left it, which is
+/// already well below 1 rounds'. Long past convergence f32 CG only wanders at
+/// rounding level; a blow-up or NaN would fail here.
+#[test]
+fn pressure_module_runs_the_full_cap() {
+    let m = 12;
+    let problem = still_pool_problem(m);
+    let mut rig = Rig::new(m);
+    let after = |rig: &mut Rig, k: u32| rig.solve(&problem, k);
+    let (one, sixteen) = (after(&mut rig, 1), after(&mut rig, 16));
+    let full = after(&mut rig, MAX_ITERATIONS);
+    assert!(rig.pressure().iter().all(|v| v.is_finite()), "pressure finite after {MAX_ITERATIONS} rounds");
+    let values = rz(&mut rig, &problem, MAX_ITERATIONS);
+    assert_eq!(values.len(), MAX_ITERATIONS as usize);
+    assert!(values.iter().all(|(rz, ps)| rz.is_finite() && ps.is_finite()), "every round's scalars finite");
+    println!("full cap {m}³: residual after 1 {one:e}, 16 {sixteen:e}, {MAX_ITERATIONS} {full:e}");
+    assert!(sixteen < one * 1e-2, "16 rounds converge ({one:e} → {sixteen:e})");
+    assert!(full <= sixteen.max(1e-5), "{MAX_ITERATIONS} rounds stay converged ({sixteen:e} → {full:e})");
 }
 
 /// One solve of `p` on the engine's stop, at most `cap` iterations: |f|∞,
@@ -2227,8 +2250,6 @@ fn pressure_module_chunk_ranges_arm_and_stop_on_the_gpu() {
             let mut none = None;
             let mut cache = Some(GpuReplayCache::default());
             let mut per_round = 0;
-            // Counts past the build's cap are refused, so they are left out:
-            // the `pressure-cap-900` build runs them.
             let stops = fixed.iter().filter(|&&k| k <= MAX_ITERATIONS).map(|&k| Stop::Fixed(k)).chain([Stop::Converged(64), Stop::Converged(MAX_ITERATIONS)]);
             for stop in stops {
                 let cap = match stop {
@@ -2328,7 +2349,6 @@ fn chunk_solve(rig: &mut Rig, p: &Problem, stop: Stop, cache: &mut Option<GpuRep
 /// template store's walks, command writes and executes per solve, which it
 /// asserts (one walk, no write once warm, one execute per chunk). The
 /// configurations alternate order each pass so drift lands on neither side.
-/// Under `pressure-cap-900` the cap-900 rows are the T9 numbers.
 #[test]
 fn pressure_module_chunk_cost_probe() {
     const REPS: usize = 20;

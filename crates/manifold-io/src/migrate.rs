@@ -166,6 +166,12 @@ pub fn migrate_if_needed(json: &str) -> Result<String, serde_json::Error> {
         root["projectVersion"] = Value::String("1.18.0".to_string());
     }
 
+    // GPU FLIP Domain grew the Max Iterations card (the pressure cap went to 900).
+    if is_version_less_than(&version, "1.19.0") {
+        crate::migrations::pressure_cap_card_v1190::migrate(&mut root);
+        root["projectVersion"] = Value::String("1.19.0".to_string());
+    }
+
     serde_json::to_string_pretty(&root)
 }
 

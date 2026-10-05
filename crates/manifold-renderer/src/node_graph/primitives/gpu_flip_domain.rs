@@ -19,8 +19,8 @@ use std::borrow::Cow;
 use manifold_gpu::{FrameClock, GpuBuffer};
 use manifold_physics::FieldValue;
 
-use super::gpu_flip_pressure::lattice_refusal;
-use super::gpu_flip_step::read_solve_level;
+use super::gpu_flip_pressure::{MAX_ITERATIONS, lattice_refusal};
+use super::gpu_flip_step::{read_max_iterations, read_solve_level};
 use super::liquid_fill::{SITES_PER_CELL, filled_sites, site_range};
 use super::matter_domain::closed_faces;
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
@@ -63,6 +63,8 @@ pub(crate) struct GpuFlipGeometry {
     /// The V-cycle level the pressure solves run on; live, so not in the
     /// setup.
     pub(crate) solve_level: usize,
+    /// The cap Auto pressure solves converge within; live, so not in the setup.
+    pub(crate) max_iterations: u32,
 }
 
 impl GpuFlipGeometry {
@@ -154,6 +156,7 @@ pub(crate) fn gpu_flip_geometry(
         return Err(format!("GPU FLIP: {reason}. Lower Resolution."));
     }
     let solve_level = read_solve_level(read("solve_level", 0.0), solver.cells()).map_err(|reason| format!("GPU FLIP: {reason}"))?;
+    let max_iterations = read_max_iterations(read("max_iterations", MAX_ITERATIONS as f32)).map_err(|reason| format!("GPU FLIP: {reason}"))?;
     let (pool_sites, box_sites) = fill_sites(&layout, read("fill_height", 0.4), initial_volume)?;
     let capacity = read("particle_capacity", 0.0);
     if !capacity.is_finite() || capacity < 0.0 {
@@ -172,7 +175,7 @@ pub(crate) fn gpu_flip_geometry(
         box_sites,
         particle_capacity: particle_capacity as u32,
     };
-    Ok(GpuFlipGeometry { layout, setup, particles, solve_level })
+    Ok(GpuFlipGeometry { layout, setup, particles, solve_level, max_iterations })
 }
 
 impl GpuFlipGeometry {
@@ -185,7 +188,7 @@ impl GpuFlipGeometry {
 }
 
 /// Every scalar output, in the order [`GpuFlipDomain::compute`] fills them.
-const OUTPUTS: [&str; 51] = [
+const OUTPUTS: [&str; 52] = [
     "lattice_min_x", "lattice_min_y", "lattice_min_z", "cell_size", "nodes_x", "nodes_y", "nodes_z",
     "closed_faces", "pool_sites", "box_x0", "box_x1", "box_y0", "box_y1", "box_z0", "box_z1",
     "particle_mass", "gravity_x", "gravity", "gravity_z", "ticks", "epoch", "simulation_time",
@@ -197,7 +200,7 @@ const OUTPUTS: [&str; 51] = [
     "clock_obstacle_count",
     "clock_source_count",
     "live_hit_count", "mesh_min_x", "mesh_min_y", "mesh_min_z", "mesh_nodes_x", "mesh_nodes_y", "mesh_nodes_z",
-    "initial_obstacle_speed", "mesh_wall_inset"];
+    "initial_obstacle_speed", "mesh_wall_inset", "max_iterations"];
 const TICKS: usize = 19;
 const IMPULSE_TICK: usize = 33;
 const INITIAL_OBSTACLE_SPEED: usize = 49;
@@ -376,6 +379,7 @@ crate::primitive! {
         particle_capacity: ScalarF32,
         region_count: ScalarF32,
         solve_level: ScalarF32,
+        max_iterations: ScalarF32,
         mesh_wall_inset: ScalarF32,
         bodies: Array(LiquidBody), regions: Array(LiquidBody), shapes: Array(LiquidShape), atlas: Array(u32),
         reaction: Array(f32),
@@ -384,6 +388,7 @@ crate::primitive! {
     params: [
         ParamDef { name: Cow::Borrowed("resolution"), label: "Resolution", ty: ParamType::Int, default: ParamValue::Float(64.0), range: Some((8.0, 512.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("solve_level"), label: "Solve Level", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 4.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("max_iterations"), label: "Max Iterations", ty: ParamType::Int, default: ParamValue::Float(MAX_ITERATIONS as f32), range: Some((1.0, MAX_ITERATIONS as f32)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("domain_size"), label: "Domain Size", ty: ParamType::Float, default: ParamValue::Float(4.0), range: Some((0.5, 20.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("fill_height"), label: "Initial Fill Height", ty: ParamType::Float, default: ParamValue::Float(0.4), range: Some((0.0, 20.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("gravity_x"), label: "Gravity X", ty: ParamType::Float, default: ParamValue::Float(0.0), range: Some((-20.0, 20.0)), enum_values: &[] },
@@ -836,6 +841,7 @@ impl GpuFlipDomain {
         let per_frame = [
             ("closed_faces", closed_faces(ctx.params) as f32),
             ("solve_level", geometry.solve_level as f32),
+            ("max_iterations", geometry.max_iterations as f32),
             ("gravity_x", gravity[0]),
             ("gravity", gravity[1]),
             ("gravity_z", gravity[2]),
@@ -1075,6 +1081,26 @@ mod tests {
         // 256³ with a 2.5 m pool is 8 · 256² · 160 particles, past 2^24.
         let over = refused(geometry(256.0, 2.5, None));
         assert!(over.contains("Resolution") && over.contains("Initial Fill Height"), "{over}");
+    }
+
+    /// Max Iterations defaults to the engine's 900, rides the geometry to the
+    /// `max_iterations` output, and is refused outside 1..=900.
+    #[test]
+    fn gpu_flip_domain_carries_max_iterations() {
+        let at = |value: Option<f32>| {
+            let read = |name: &str, default: f32| match (name, value) {
+                ("fill_height", _) => 0.16,
+                ("max_iterations", Some(v)) => v,
+                _ => default,
+            };
+            gpu_flip_geometry(read, None, None)
+        };
+        assert_eq!(at(None).expect("default").max_iterations, 900);
+        assert_eq!(at(Some(120.0)).expect("120").max_iterations, 120);
+        let refused = at(Some(0.0)).expect_err("0");
+        assert!(refused.contains("Max Iterations must be 1 to 900"), "{refused}");
+        assert!(at(Some(f32::NAN)).is_err());
+        assert!(OUTPUTS.contains(&"max_iterations"));
     }
 
     /// Solve Level is refused past the lattice's levels, never clamped: 64

@@ -166,20 +166,19 @@ mod tests {
         super::super::take_migration_notes();
         let graph: Value = serde_json::from_str(PETER_LAYER).unwrap();
         assert!(!graph["wires"].as_array().unwrap().iter().any(|w| w["toPort"] == PARAM));
-        // From 1.17.0 so only this rung runs: the density rung drops the body's mass.
+        // From 1.17.0 so the density rung, which drops the body's mass, does not run.
         let before = json!({"projectVersion": "1.17.0", "timeline": {"layers": [{"genParams": {"params": null, "graph": graph}}]}});
         let after = migrate_project(&before);
-        assert_eq!(after["projectVersion"], "1.18.0");
+        assert_eq!(after["projectVersion"], manifold_core::project::CURRENT_PROJECT_VERSION);
         let graph = &after["timeline"]["layers"][0]["genParams"]["graph"];
         let wires = graph["wires"].as_array().unwrap();
-        assert_eq!(wires.len(), 197 + 1);
-        assert_eq!(*wires.last().unwrap(), wire(&json!(0), &json!(6)));
+        assert_eq!(wires.len(), 197 + 2, "this rung's wire and the Max Iterations rung's");
+        assert!(wires.contains(&wire(&json!(0), &json!(6))));
         assert_eq!(*find(&graph["presetMetadata"]["bindings"], PARAM), binding("domain"));
         assert_eq!(*find(&graph["presetMetadata"]["params"], PARAM), card());
         assert_eq!(graph["nodes"], before["timeline"]["layers"][0]["genParams"]["graph"]["nodes"], "no node param is written");
         let notes = super::super::take_migration_notes();
-        assert_eq!(notes.len(), 1, "{notes:?}");
-        assert!(notes[0].starts_with("1 GPU FLIP graph(s)"));
+        assert!(notes.iter().any(|n| n.starts_with("1 GPU FLIP graph(s) gained the Solve Level")), "{notes:?}");
 
         let second = migrate_project(&after);
         assert_eq!(second, after, "idempotent");
@@ -207,7 +206,6 @@ mod tests {
         let after = migrate_project(&before);
         assert_eq!(after["timeline"], before["timeline"]);
         let notes = super::super::take_migration_notes();
-        assert_eq!(notes.len(), 1);
-        assert!(notes[0].starts_with("Grouped: GPU FLIP domain or step sits inside a group"));
+        assert!(notes.iter().any(|n| n.starts_with("Grouped: GPU FLIP domain or step sits inside a group; the Solve Level")), "{notes:?}");
     }
 }

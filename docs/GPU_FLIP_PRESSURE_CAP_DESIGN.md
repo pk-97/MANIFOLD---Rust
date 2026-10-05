@@ -2,7 +2,7 @@
 
 <!-- index: BUG-fwp2n (unused solver rounds still cost encode time) and BUG-6rki6 (pressure cap 900 with tolerance stop): the round index moves to a GPU counter, one walked round becomes a transactional replay template, rounds execute in geometric chunks guarded after the stop, and Max Iterations becomes a slider with a migration. -->
 
-**Status:** APPROVED · 2026-10-06 · Claude (design) with Astra's binding review folded in · C4, C5, C5b, C6 owed (section 9 (Phasing)); tracked in BUG-fwp2n (unused solver rounds still cost encode time) and BUG-6rki6 (pressure cap 900 with tolerance stop).
+**Status:** IN PROGRESS · 2026-10-06 · Claude (design) with Astra's binding review folded in · C0 to C6 built; owed: lead review and landing (section 9 (Phasing)); tracked in BUG-fwp2n (unused solver rounds still cost encode time) and BUG-6rki6 (pressure cap 900 with tolerance stop).
 **Prerequisites:** none.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) and section 6 (Seam briefs) before starting any phase.
 
@@ -162,8 +162,6 @@ The body runs once, so `FnOnce` replaces `FnMut` and no Dry pass exists. Validat
 - **After:** export runs the same executes as live, whatever the ring does.
 
 **Bindings.** With `setInheritBuffers(false)`, a binding the entry point references but the command leaves out is undefined. `prepare_template` checks `unbound_binding` on every collected command and refuses with `Err`. BUG-cnyc8 (smooth binding 4 mismatch) is fixed in this change: smooth binds `buffer(4, v.rhs)`, which it never reads on sources 0 and 2.
-
-**Cap-900 test configuration.** The renderer feature `pressure-cap-900` sets `MAX_ITERATIONS` to 900 and substitutes the shader's `ROUNDS` at load. The source stays at 64 until C6. Proofs past 64 run under it instead of being filtered out.
 
 **Proofs (C5b gate).**
 - **T8, independent reference.** The C0 golden fixture was recorded on main by the pre-template unrolled path. Both its direct and replay lines must hold, every case, on:

@@ -33,18 +33,6 @@ use crate::node_graph::fluid_particles::FaceSample;
 const SHADER: &str = include_str!("shaders/gpu_flip_pressure.wgsl");
 const INVERSE_SHADER: &str = include_str!("shaders/coarse_inverse.wgsl");
 
-/// The solver's WGSL with `ROUNDS` at [`MAX_ITERATIONS`]: the file says 64, the
-/// `pressure-cap-900` proof build substitutes its cap.
-fn shader_source() -> std::borrow::Cow<'static, str> {
-    let written = "const ROUNDS: u32 = 64u;";
-    debug_assert!(SHADER.contains(written), "the shader declares ROUNDS as 64");
-    if MAX_ITERATIONS == 64 {
-        std::borrow::Cow::Borrowed(SHADER)
-    } else {
-        std::borrow::Cow::Owned(SHADER.replace(written, &format!("const ROUNDS: u32 = {MAX_ITERATIONS}u;")))
-    }
-}
-
 /// The coarsest level's largest side: at most 4³ = 64 cells, the one
 /// workgroup the coarse inverse runs in.
 pub(crate) const COARSEST_SIDE: u32 = 4;
@@ -53,14 +41,9 @@ pub(crate) const COARSEST_SIDE: u32 = 4;
 const MAX_COARSE_CELLS: u64 = 64;
 /// The longest lattice side the solver takes.
 pub(crate) const MAX_SIDE: u32 = 1024;
-/// Iterations one solve may run: the scalars buffer holds two per iteration.
-/// Not the engine's 900, which bounds its MIC-preconditioned solve: this
-/// multigrid one converges in 10 to 15, and every round up to the cap is
-/// encoded for each solve of each clock slot whether it runs or not.
-#[cfg(not(feature = "pressure-cap-900"))]
-pub(crate) const MAX_ITERATIONS: u32 = 64;
-/// The `pressure-cap-900` proof build: the engine's cap, before C6 makes it the default.
-#[cfg(feature = "pressure-cap-900")]
+/// Iterations one solve may run, FLIP Fluids' cap: the scalars buffer holds
+/// two per iteration. Rounds past the stop cost nothing: the template executes
+/// only the chunks the GPU-written ranges name.
 pub(crate) const MAX_ITERATIONS: u32 = 900;
 /// The stop's relative tolerance on |r|∞ / |f|∞, FLIP Fluids'
 /// `_pressureSolveTolerance` unchanged: f32 carries the recursive residual
@@ -314,8 +297,7 @@ struct Pipelines {
 
 impl Pipelines {
     fn new(device: &GpuDevice) -> Self {
-        let source = shader_source();
-        let pipeline = |entry: &str, label: &str| device.create_compute_pipeline(&source, entry, label);
+        let pipeline = |entry: &str, label: &str| device.create_compute_pipeline(SHADER, entry, label);
         Self {
             classify: pipeline("classify_main", "gpu_flip.pressure.classify"),
             lists: pipeline("lists_main", "gpu_flip.pressure.lists"),
@@ -1675,7 +1657,7 @@ mod tests {
     /// be the cap the solver sizes the entries for.
     #[test]
     fn shader_rounds_match_the_iteration_cap() {
-        assert!(super::shader_source().contains(&format!("const ROUNDS: u32 = {MAX_ITERATIONS}u;")));
+        assert!(super::SHADER.contains(&format!("const ROUNDS: u32 = {MAX_ITERATIONS}u;")));
     }
 
     #[test]

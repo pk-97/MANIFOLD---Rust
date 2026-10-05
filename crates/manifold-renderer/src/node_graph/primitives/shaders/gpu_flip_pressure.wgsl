@@ -139,7 +139,7 @@ struct Row {
 
 const DIVISOR_FLOOR: f32 = 1e-30;
 // Rounds a solve may run: the solver's MAX_ITERATIONS.
-const ROUNDS: u32 = 64u;
+const ROUNDS: u32 = 900u;
 const REDUCE: u32 = 2u;
 
 var<workgroup> sums: array<f32, 256>;

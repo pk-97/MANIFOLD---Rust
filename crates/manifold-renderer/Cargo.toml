@@ -179,9 +179,5 @@ water-race-probes = ["gpu-proofs", "fluid-perf-proofs", "manifold-fluids/face-or
 # The whitewater fields against FLIP's own (GPU_WHITEWATER_DESIGN.md O1, O2),
 # opt-in: builds FLIP's oracle entries into manifold-fluids.
 whitewater-oracle = ["gpu-proofs", "manifold-fluids/whitewater-oracle"]
-# The pressure solve at the engine's 900-round cap (GPU_FLIP_PRESSURE_CAP_DESIGN.md
-# section 3.2): proofs past 64 rounds run under it until C6 makes 900 the cap.
-pressure-cap-900 = ["gpu-proofs"]
-
 [lints]
 workspace = true
