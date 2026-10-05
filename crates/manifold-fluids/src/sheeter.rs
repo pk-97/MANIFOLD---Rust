@@ -230,6 +230,30 @@ pub fn generate_sheet_particles(
     dx: f64,
     fill_threshold: f32,
 ) -> Result<Vec<[f32; 3]>, FluidError> {
+    Ok(trace_sheet_particles(positions, phi, cells, dx, fill_threshold)?.seeds)
+}
+
+/// Each level-set decision the sheeter made, for comparing two level sets.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SheetTrace {
+    /// Per marker: passed phase 1 (sparse enough, near the surface, thin).
+    pub thin: Vec<bool>,
+    /// Per marker: kept by phase 2 (sheet cell, under the cap, in the band).
+    pub kept: Vec<bool>,
+    /// Seed candidates in visiting order, before the plane and mask tests.
+    pub candidates: Vec<[f32; 3]>,
+    pub seeds: Vec<[f32; 3]>,
+}
+
+/// [`generate_sheet_particles`] with its decisions recorded.
+pub fn trace_sheet_particles(
+    positions: &[[f32; 3]],
+    phi: &[f32],
+    cells: [u32; 3],
+    dx: f64,
+    fill_threshold: f32,
+) -> Result<SheetTrace, FluidError> {
+    let mut trace = SheetTrace { thin: vec![false; positions.len()], kept: vec![false; positions.len()], ..Default::default() };
     if cells.iter().any(|&c| c == 0 || c > (i32::MAX / 2) as u32) || !dx.is_finite() || dx <= 0.0 {
         return Err(FluidError::input("sheeter grid needs positive size and cell size"));
     }
@@ -261,7 +285,7 @@ pub fn generate_sheet_particles(
     let step_distance = (DEPTH_TEST_STEP_DISTANCE as f64 * dx) as f32;
     let steps = (test_distance / step_distance).ceil() as i32;
     let mut sheet = Grid::new(n, false);
-    for &p in positions {
+    for (index, &p) in positions.iter().enumerate() {
         let g = cell_of(p, dx).0;
         if counts.get(g) >= MAX_PARTICLES_PER_CELL {
             continue;
@@ -287,6 +311,7 @@ pub fn generate_sheet_particles(
             current = next_phi;
         }
         if thin {
+            trace.thin[index] = true;
             sheet.set(g, true);
         }
     }
@@ -325,7 +350,7 @@ pub fn generate_sheet_particles(
     // the surface.
     let mut counts = Grid::new(n, 0u8);
     let mut sheet_particles = Vec::new();
-    for &p in positions {
+    for (index, &p) in positions.iter().enumerate() {
         let g = cell_of(p, dx).0;
         if !sheet.get(g) || counts.get(g) >= MAX_SHEET_PARTICLES_PER_CELL {
             continue;
@@ -334,11 +359,12 @@ pub fn generate_sheet_particles(
         if phi >= max_depth || phi < -max_depth {
             continue;
         }
+        trace.kept[index] = true;
         sheet_particles.push(p);
         counts.set(g, counts.get(g) + 1);
     }
     if sheet_particles.is_empty() {
-        return Ok(Vec::new());
+        return Ok(trace);
     }
 
     for &p in positions {
@@ -465,5 +491,7 @@ pub fn generate_sheet_particles(
             }
         }
     }
-    Ok(out)
+    trace.candidates = candidates;
+    trace.seeds = out;
+    Ok(trace)
 }
