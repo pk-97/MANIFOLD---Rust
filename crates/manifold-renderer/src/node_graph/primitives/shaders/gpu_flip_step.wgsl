@@ -89,6 +89,12 @@ struct Params {
     ring_max: u32,
     narrow_band: u32, // Ferstl 2016: 0 dense, 1 initialization, 2 band-masked.
     live_impulse_stride: u32,
+    // Cells from the grid's minimum to each wall (FlipSolverGrid::wall_inset);
+    // 0 when the walls are the grid's edges.
+    wall_inset: f32,
+    pad0: u32,
+    pad1: u32,
+    pad2: u32,
 };
 
 struct CellRange {
@@ -734,8 +740,17 @@ fn liquid_atlas_half(index: u32) -> f32 {
     return select(pair.x, pair.y, (index & 1u) == 1u);
 }
 
+// The walls' distance at x inside the box: every wall closed, wall_inset
+// cells in, as the solid distance takes them.
+fn wall_distance(x: vec3<f32>) -> f32 {
+    let lo = u.box_min + vec3<f32>(u.wall_inset * u.cell_size);
+    let hi = u.box_min + (vec3<f32>(lattice()) - vec3<f32>(u.wall_inset)) * u.cell_size;
+    let gap = min(x - lo, hi - x);
+    return min(gap.x, min(gap.y, gap.z));
+}
+
 // The row of the body nearest x (smallest signed distance), −1 when no
-// enabled body's lattice holds x.
+// body is enabled or the walls are nearer: the solid there is the tank's.
 fn closest_body(x: vec3<f32>) -> i32 {
     var best = -1;
     var nearest = 0.0;
@@ -756,16 +771,13 @@ fn closest_body(x: vec3<f32>) -> i32 {
         let sh = shapes[u32(shape_index)];
         let dims = vec3<u32>(sh.dims_x, sh.dims_y, sh.dims_z);
         let g = liquid_lattice_coord(x, position, q, sh.origin_spacing, sh.scale_min.xyz);
-        if !liquid_lattice_holds(g, dims) {
-            continue;
-        }
-        let d = liquid_lattice_distance(sh.atlas_offset, dims, g) * sh.scale_min.w;
+        let d = liquid_shape_distance(sh.atlas_offset, dims, g, sh.origin_spacing.w) * sh.scale_min.w;
         if best < 0 || d < nearest {
             best = row;
             nearest = d;
         }
     }
-    return best;
+    return select(best, -1, best >= 0 && nearest > wall_distance(x));
 }
 
 // One thread per face record, `solid_faces` to `faces_out`. On an inner face
@@ -773,8 +785,7 @@ fn closest_body(x: vec3<f32>) -> i32 {
 // closest body's rigid velocity at the face centre, posed tick_seconds into
 // the tick as the solid distance poses it; weight is the closest body's
 // friction at the face's four corners, averaged
-// (FluidSimulation::_getFaceFrictionU/V/W), 0 at a corner no body's lattice
-// holds. Every other face is zero. A dynamic body (1/m > 0) moves at its
+// (FluidSimulation::_getFaceFrictionU/V/W). Every other face is zero. A dynamic body (1/m > 0) moves at its
 // predicted velocity, as RigidFluidCoupling::beginSubstep predicts it: its
 // external acceleration over tick_seconds plus M⁻¹ times the reaction so
 // far this tick. Velocity w is the record's owner code
@@ -2171,13 +2182,17 @@ fn resolve_solid(q0: vec3<f32>, q1: vec3<f32>, n: vec3<i32>, edge: vec3<f32>) ->
 // particle within OPEN_BOUNDARY_WIDTH cells of an open face is removed
 // (FluidSimulation::_openBoundaryWidth, _removeMarkerParticles). The emptied
 // band is air, so the pressure solve puts the water's surface there.
+// The band is measured from the wall (the engine's boundary AABB), not the
+// grid's edge. On the native grid every wall stays solid, so an open face
+// never seeds a pocket's air: only the band's emptied cells do.
 const OPEN_BOUNDARY_WIDTH: f32 = 2.0;
 
 fn open_band(q: vec3<f32>, n: vec3<i32>) -> bool {
+    let reach = u.wall_inset + OPEN_BOUNDARY_WIDTH;
     for (var a = 0; a < 3; a = a + 1) {
         let low = (u.closed_faces & (1u << u32(2 * a))) == 0u;
         let high = (u.closed_faces & (1u << u32(2 * a + 1))) == 0u;
-        if (low && q[a] < OPEN_BOUNDARY_WIDTH) || (high && q[a] > f32(n[a]) - OPEN_BOUNDARY_WIDTH) {
+        if (low && q[a] < reach) || (high && q[a] > f32(n[a]) - reach) {
             return true;
         }
     }

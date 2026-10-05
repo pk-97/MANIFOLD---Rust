@@ -41,6 +41,17 @@ fn liquid_lattice_distance(offset: u32, dims: vec3<u32>, g: vec3<f32>) -> f32 {
     return value;
 }
 
+// The shape's local distance at lattice coordinate g, inside the lattice or
+// past it: the nearest lattice point's distance plus the gap to it, exact
+// along a face's normal. Every reader of a body's distance as a size uses
+// this. The lattice pads the shape by two of its own spacings, under one
+// solver cell for a body under 16 cells across, so a node just past it must
+// keep its distance: read as far away, it leaves a half-solid cell open.
+fn liquid_shape_distance(offset: u32, dims: vec3<u32>, g: vec3<f32>, spacing: f32) -> f32 {
+    let c = clamp(g, vec3<f32>(0.0), vec3<f32>(dims - vec3<u32>(1u)));
+    return liquid_lattice_distance(offset, dims, c) + length(g - c) * spacing;
+}
+
 // The world-space gradient of the local distance at g (central differences
 // half a node either side), through the inverse scale and the rotation. Its
 // direction is the outward normal; −φ·grad/|grad|² steps a point at local

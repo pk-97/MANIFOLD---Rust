@@ -165,38 +165,71 @@ mod cpu_tests {
 
     /// The integrated host receives the authored scalar wires, then derives
     /// the native solver. Low-level shader fixtures above retain their 16³ grid.
-    pub(super) fn runtime_grid() -> FlipSolverGrid {
-        let lattice = LiquidLattice::from_scalars(|name, default| match name {
+    fn runtime_lattice() -> LiquidLattice {
+        LiquidLattice::from_scalars(|name, default| match name {
             "lattice_min_x" | "lattice_min_y" | "lattice_min_z" => -3.0,
             "nodes_x" | "nodes_y" | "nodes_z" => 23.0,
             "cell_size" => 1.0,
             _ => default,
-        }).unwrap();
-        FlipSolverGrid::from_lattice(lattice)
+        }).unwrap()
     }
 
-    /// Independent physical-site oracle: the pool fills [0,16] × [0,12] ×
-    /// [0,16], regardless of the solver's padded origin and cell phase.
+    pub(super) fn runtime_grid() -> FlipSolverGrid {
+        FlipSolverGrid::from_lattice(runtime_lattice())
+    }
+
+    /// The runtime box's wall distance at `x`, read trilinearly from the
+    /// native wall nodes, as the engine's `_solidSDF.trilinearInterpolate`.
+    fn runtime_wall_distance(x: [f32; 3]) -> f32 {
+        let grid = runtime_grid();
+        let n = grid.nodes().map(|v| v as usize);
+        let minimum = grid.min();
+        let walls = runtime_lattice().surface().flip_wall_distance(63);
+        let g: [f32; 3] = std::array::from_fn(|a| x[a] - minimum[a]);
+        let i = g.map(|v| v.floor() as usize);
+        let mut distance = 0.0;
+        for corner in 0..8 {
+            let o = [corner & 1, (corner >> 1) & 1, (corner >> 2) & 1];
+            let weight: f32 = (0..3).map(|a| if o[a] == 1 { g[a] - i[a] as f32 } else { 1.0 - (g[a] - i[a] as f32) }).product();
+            distance += weight * walls[(i[0] + o[0]) + n[0] * ((i[1] + o[1]) + n[1] * (i[2] + o[2]))];
+        }
+        distance
+    }
+
+    /// `quarter_pool` as the engine seeds it in the runtime box: a site stays
+    /// only where the solid distance is positive (`_addNewFluidCellsThread`).
+    pub(super) fn runtime_seeded_pool() -> Vec<FluidParticle> {
+        quarter_pool().into_iter().filter(|p| {
+            runtime_wall_distance([p.position_radius[0], p.position_radius[1], p.position_radius[2]]) > 0.0
+        }).collect()
+    }
+
+    /// Independent physical-site oracle over the seeded pool's live sites,
+    /// regardless of the solver's padded origin and cell phase: the nearest
+    /// site inside native particle_distance's inclusive 2r scatter box.
     fn runtime_pool_particle_phi() -> Vec<f32> {
         let grid = runtime_grid();
         let n = grid.cells().map(|v| v as usize);
         let minimum = grid.min();
-        let extent = [16.0_f32, 12.0, 16.0];
         let radius = 0.8660254_f32;
-        (0..cells(n)).map(|i| {
-            let c = coords(i, n);
-            let centre: [f32; 3] = std::array::from_fn(|a| minimum[a] + c[a] as f32 + 0.5);
-            let site: [f32; 3] = std::array::from_fn(|a|
-                (2.0 * (centre[a] - 0.25)).round().clamp(0.0, 2.0 * extent[a] - 1.0) * 0.5 + 0.25);
-            // Native particle_distance uses an inclusive 2r scatter box.
-            if !(0..3).all(|a| {
-                let low = (site[a] - 2.0 * radius - minimum[a]).floor() as i32;
-                let high = (site[a] + 2.0 * radius - minimum[a]).floor() as i32;
-                (low..=high).contains(&(c[a] as i32))
-            }) { return 3.0; }
-            let distance = (0..3).map(|a| (centre[a] - site[a]).powi(2)).sum::<f32>().sqrt() - radius;
-            if distance.abs() < 0.005 { 0.0 } else { distance.min(3.0) }
-        }).collect()
+        let mut phi = vec![3.0_f32; cells(n)];
+        for p in runtime_seeded_pool() {
+            let site = [p.position_radius[0], p.position_radius[1], p.position_radius[2]];
+            let low: [usize; 3] = std::array::from_fn(|a| (site[a] - 2.0 * radius - minimum[a]).floor().max(0.0) as usize);
+            let high: [usize; 3] = std::array::from_fn(|a| ((site[a] + 2.0 * radius - minimum[a]).floor() as usize).min(n[a] - 1));
+            for z in low[2]..=high[2] {
+                for y in low[1]..=high[1] {
+                    for x in low[0]..=high[0] {
+                        let c = [x, y, z];
+                        let centre: [f32; 3] = std::array::from_fn(|a| minimum[a] + c[a] as f32 + 0.5);
+                        let distance = (0..3).map(|a| (centre[a] - site[a]).powi(2)).sum::<f32>().sqrt() - radius;
+                        let i = x + n[0] * (y + n[1] * z);
+                        phi[i] = phi[i].min(distance);
+                    }
+                }
+            }
+        }
+        phi.into_iter().map(|d| if d.abs() < 0.005 { 0.0 } else { d.min(3.0) }).collect()
     }
 
     #[cfg(feature = "gpu-proofs")]
@@ -209,15 +242,17 @@ mod cpu_tests {
         let grid = runtime_grid();
         input.iter().filter(|p| {
             let [x, y, z, _] = p.position_radius;
-            let wall = x.min(16.0-x).min(y.min(16.0-y)).min(z.min(16.0-z))
-                - crate::node_graph::liquid::lattice::FLIP_WALL_EPSILON;
-            wall <= 3.0 || sample_field(phi, [x,y,z], grid.cells().map(|v| v as usize),
+            // The near-wall rule reads the interpolated solid, which rounds
+            // the box's corners inward.
+            runtime_wall_distance([x, y, z]) <= 3.0 || sample_field(phi, [x,y,z], grid.cells().map(|v| v as usize),
                 grid.min().map(|v| v + 0.5)) >= -3.0
         }).map(|p| p.id).collect()
     }
 
     #[test]
     fn narrow_band_runtime_pool_uses_native_centres_and_authored_fill() {
+        // The walls hold exactly the pool's four floor-corner sites.
+        assert_eq!(runtime_seeded_pool().len(), quarter_pool().len() - 4);
         let grid = runtime_grid();
         assert_eq!(grid.cells(), [19; 3]);
         assert_eq!(grid.min(), [-1.5; 3]);
@@ -483,7 +518,7 @@ mod gpu_tests {
     use super::super::prefix_scan::PrefixScan;
     use super::super::liquid_stats::{SOLVER_WORDS, NARROW_BAND_SHORTAGE_TAIL};
     use super::cpu_tests::{
-        STEP_CELLS, cells, coords, quarter_pool, runtime_grid, runtime_expected_retained, runtime_pool_initial_phi,
+        STEP_CELLS, cells, coords, quarter_pool, runtime_grid, runtime_expected_retained, runtime_pool_initial_phi, runtime_seeded_pool,
         stationary_pool_particle_phi,
     };
     use super::{NbFace, NbParams, NbParticle, NbRange, SHADER};
@@ -1452,7 +1487,7 @@ mod gpu_tests {
 
     #[test]
     fn gpu_flip_step_narrow_band_stationary_pool_matches_oracle() {
-        let input = quarter_pool();
+        let input = runtime_seeded_pool();
         let capacity = input.len() + 8 * STEP_CELLS[0] * STEP_CELLS[2];
         let mut harness = Harness::new();
         let mut step = GpuFlipStep::new();
@@ -1490,7 +1525,7 @@ mod gpu_tests {
 
     #[test]
     fn gpu_flip_step_narrow_band_enable_disable_restores_pool_and_reset_is_repeatable() {
-        let input = quarter_pool();
+        let input = runtime_seeded_pool();
         let capacity = input.len() + 8 * STEP_CELLS[0] * STEP_CELLS[2];
         let mut harness = Harness::new();
         let mut step = GpuFlipStep::new();

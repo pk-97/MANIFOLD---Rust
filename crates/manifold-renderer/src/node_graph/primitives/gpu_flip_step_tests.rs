@@ -2929,7 +2929,12 @@ fn gpu_flip_step_order_inflow_waits_until_next_step() {
     node.prepare_pipelines(&h.device);
     let particles = h.array::<FluidParticle>(&[], capacity);
     let capped = h.array::<u32>(&[], 2 * capacity + super::liquid_stats::SOLVER_WORDS as usize);
-    let faces = h.array::<FaceSample>(&[], face_len());
+    // The step solves on the native grid: three more cells, its origin 1.5
+    // cells outside the box.
+    let solver = N.map(|n| n + 3);
+    let solver_min: [f32; 3] = std::array::from_fn(|a| MIN[a] - 1.5 * H);
+    let solver_faces = solver.map(|n| n + 1).iter().product::<usize>();
+    let faces = h.array::<FaceSample>(&[], solver_faces);
     let (row, shape, atlas) = region_box(2.0, [2, 2, 1], [1, 1, 1], [0.25, 0.0, 0.0]);
     let regions = h.array(&[row], 1);
     let shapes = h.array(&[shape], 1);
@@ -2966,17 +2971,17 @@ fn gpu_flip_step_order_inflow_waits_until_next_step() {
     let (_, errors) = h.run(&mut node, &inputs, &outputs, &p);
     assert!(errors.is_empty(), "{errors:?}");
     let second: Vec<FluidParticle> = read(&particles.1, capacity);
-    let field: Vec<FaceSample> = read(&h.buffer(faces.0), face_len());
+    let field: Vec<FaceSample> = read(&h.buffer(faces.0), solver_faces);
     assert!(alive.iter().any(|before| second.iter().any(|after|
         after.id == before.id && after.position_radius[0] > before.position_radius[0] + 1e-6)),
         "the first inflow must move on the second step");
     // Native RK3 on the second step's published field, with no density move.
     for before in &alive {
         let after = second.iter().find(|p| p.id == before.id && p.position_radius[3] > 0.0).unwrap();
-        let q = std::array::from_fn(|a| f64::from((before.position_radius[a] - MIN[a]) / H));
-        let v1 = cpu_sample(q, &field);
-        let v2 = cpu_sample(std::array::from_fn(|a| q[a] + 0.5 * 0.125 / f64::from(H) * v1[a]), &field);
-        let v3 = cpu_sample(std::array::from_fn(|a| q[a] + 0.75 * 0.125 / f64::from(H) * v2[a]), &field);
+        let q = std::array::from_fn(|a| f64::from((before.position_radius[a] - solver_min[a]) / H));
+        let v1 = cpu_sample_on(q, &field, solver);
+        let v2 = cpu_sample_on(std::array::from_fn(|a| q[a] + 0.5 * 0.125 / f64::from(H) * v1[a]), &field, solver);
+        let v3 = cpu_sample_on(std::array::from_fn(|a| q[a] + 0.75 * 0.125 / f64::from(H) * v2[a]), &field, solver);
         for a in 0..3 {
             let expected = f64::from(before.position_radius[a]) + 0.125 *
                 (2.0 / 9.0 * v1[a] + 3.0 / 9.0 * v2[a] + 4.0 / 9.0 * v3[a]);

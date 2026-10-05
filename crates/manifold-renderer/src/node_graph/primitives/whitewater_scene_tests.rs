@@ -663,7 +663,8 @@ fn gpu_flip_resolution_card_resizes_at_runtime() {
                 assert_eq!(bytemuck::bytes_of(p), bytemuck::bytes_of(expected), "Resolution {n}: published seed record {}", expected.id);
             }
         }
-        let faces = face_bytes([n; 3]);
+        // The native solver grid: three cells more than the authored box.
+        let faces = face_bytes([n + 3; 3]);
         assert_eq!(show.provided_bytes("state", "faces"), faces, "Resolution {n}: the state's faces on its first frame");
         let mut last = [0.0; 6];
         let mut gpu_ms = Vec::new();

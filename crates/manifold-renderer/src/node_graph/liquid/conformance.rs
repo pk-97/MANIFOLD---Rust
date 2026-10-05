@@ -483,6 +483,13 @@ fn gpu_flip_fixture(fixture: Fixture) -> Option<EffectGraphDef> {
 /// height, on GPU FLIP. The side by side against the engine runs here
 /// because that is where the engine is proven a valid reference.
 pub fn gpu_flip_engine_tank() -> (EffectGraphDef, BoxScene) {
+    gpu_flip_engine_tank_moved(0.0)
+}
+
+/// `gpu_flip_engine_tank` with the cube moved `shift` metres along every
+/// axis. Half a cell moves its faces from mid-cell onto the grid's nodes;
+/// the engine's reaction does not depend on where they fall.
+pub fn gpu_flip_engine_tank_moved(shift: f32) -> (EffectGraphDef, BoxScene) {
     let edge = 0.4;
     let scene = BoxScene {
         domain_size: 2.4,
@@ -490,7 +497,7 @@ pub fn gpu_flip_engine_tank() -> (EffectGraphDef, BoxScene) {
         fill: 1.5,
         liquid_gravity: -G,
         open_faces: false,
-        centre: [0.0, 0.9, 0.0],
+        centre: [shift, 0.9 + shift, shift],
         rotation: [0.0; 3],
         edge,
         mass: FIXTURE_DENSITY * edge.powi(3),

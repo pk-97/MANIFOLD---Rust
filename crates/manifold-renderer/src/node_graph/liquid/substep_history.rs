@@ -122,11 +122,12 @@ impl SubstepHistory {
             .enumerate()
         {
             let count = face_len(cells, axis) as u32;
+            // The component reads nodes − 4 cells: GPU FLIP's solver grid.
             let words = [
                 axis as u32,
-                ((cells[0] + 7) as f32).to_bits(),
-                ((cells[1] + 7) as f32).to_bits(),
-                ((cells[2] + 7) as f32).to_bits(),
+                ((cells[0] + 4) as f32).to_bits(),
+                ((cells[1] + 4) as f32).to_bits(),
+                ((cells[2] + 4) as f32).to_bits(),
                 count,
                 0,
                 0,

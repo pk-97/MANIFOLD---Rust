@@ -997,15 +997,18 @@ fn engine_tank(scene: &BoxScene) -> Vec<BodySubstep> {
             [1, 6, 5],
         ],
     };
-    // The engine's domain starts at the origin; the scene's is centred in x
-    // and z with its floor at 0.
-    let shift = 0.5 * scene.domain_size;
-    let position = [scene.centre[0] + shift, scene.centre[1], scene.centre[2] + shift];
+    // The engine's domain starts at the origin, 1.5 solid cells outside each
+    // authored wall (fluid::domain's native mapping); the scene's is centred
+    // in x and z with its floor at 0.
+    let h = f64::from(scene.domain_size) / f64::from(scene.resolution);
+    let pad = (1.5 * h) as f32;
+    let shift = 0.5 * scene.domain_size + pad;
+    let position = [scene.centre[0] + shift, scene.centre[1] + pad, scene.centre[2] + shift];
     let mut rigid = PhysicsWorld::new([0.0, -G as f32, 0.0]).unwrap();
     let body = rigid.add_hull(&mesh.vertices, BodyConfig { position, mass: scene.mass, ..BodyConfig::default() }).unwrap();
     let mut fluid = FluidWorld::new(Config {
-        cells: [scene.resolution as u32; 3],
-        cell_size: f64::from(scene.domain_size) / f64::from(scene.resolution),
+        cells: [scene.resolution as u32 + 3; 3],
+        cell_size: h,
         surface_subdivisions: 0,
         apic: false,
     })
@@ -1015,7 +1018,7 @@ fn engine_tank(scene: &BoxScene) -> Vec<BodySubstep> {
     fluid.set_liquid_options(LiquidOptions { viscosity: 0.0, surface_tension: 0.0 }).unwrap();
     let collider = fluid.add_mesh(&mesh, MeshRole::Collider, rigid.pose(body).unwrap()).unwrap();
     let size = scene.domain_size;
-    fluid.add_fluid_box(Bounds { min: [0.0; 3], max: [size, scene.fill, size] }, [0.0; 3]).unwrap();
+    fluid.add_fluid_box(Bounds { min: [pad; 3], max: [size + pad, scene.fill + pad, size + pad] }, [0.0; 3]).unwrap();
     let frame_dt = Seconds(TICK);
     // Seed the particles without gravity, as the engine's own tank does.
     fluid.step(frame_dt).unwrap();
@@ -1085,42 +1088,50 @@ fn gpu_flip_body_reaction_matches_engine_substeps() {
     const IMPULSE_SHARE: f64 = 0.02;
     /// Velocity bound, as a share of g·dt per frame run.
     const VELOCITY_SHARE: f64 = 0.02;
-    let (def, scene) = manifold_renderer::node_graph::liquid::conformance::gpu_flip_engine_tank();
-    let expected = engine_tank(&scene);
-    let mass = f64::from(scene.mass);
-    let actual = gpu_flip_tank(def, mass);
-    eprintln!("frame  dt(cpu/gpu)  impulse N·s (cpu/gpu)  predicted m/s (cpu/gpu)  after m/s (cpu/gpu)");
-    for (k, (e, a)) in expected.iter().zip(&actual).enumerate() {
-        eprintln!(
-            "{k:>3}  {:.5}/{:.5}  {:>8.3}/{:>8.3}  {:>8.4}/{:>8.4}  {:>8.4}/{:>8.4}",
-            e.dt, a.dt, e.impulse, a.impulse, e.predicted, a.predicted, e.after, a.after
-        );
-    }
-    let mut divergence = None;
-    let (mut cpu_total, mut gpu_total) = (0.0, 0.0);
-    for (k, (e, a)) in expected.iter().zip(&actual).enumerate() {
-        // The impulse is bounded cumulatively: the engine's adaptive substeps
-        // bin a substep into a different frame than GPU FLIP's fixed ones, and
-        // the momentum delivered is the invariant.
-        cpu_total += e.impulse;
-        gpu_total += a.impulse;
-        let velocity_bound = VELOCITY_SHARE * G * TICK * (k + 1) as f64;
-        let columns = [
-            ("dt", e.dt, a.dt, 1e-9),
-            ("impulse through this frame", cpu_total, gpu_total, IMPULSE_SHARE * cpu_total.abs()),
-            ("predicted velocity", e.predicted, a.predicted, velocity_bound),
-            ("velocity after", e.after, a.after, velocity_bound),
-        ];
-        if let Some((name, cpu, gpu, bound)) = columns.into_iter().find(|(_, cpu, gpu, bound)| (cpu - gpu).abs() > *bound) {
-            divergence = Some(format!(
-                "frame {k}: {name} is {gpu:.4} on the GPU against the engine's {cpu:.4} (bound {bound:.4}); \
-                 this frame's impulse {:.4} against {:.4}, velocity after {:.4} against {:.4}",
-                a.impulse, e.impulse, a.after, e.after
-            ));
-            break;
+    // The cube's faces mid-cell, then moved half a cell onto the grid's nodes.
+    let mut failures = Vec::new();
+    for shift in [0.0, 0.025] {
+        eprintln!("cube moved {shift} m");
+        let (def, scene) = manifold_renderer::node_graph::liquid::conformance::gpu_flip_engine_tank_moved(shift);
+        let expected = engine_tank(&scene);
+        let mass = f64::from(scene.mass);
+        let actual = gpu_flip_tank(def, mass);
+        eprintln!("frame  dt(cpu/gpu)  impulse N·s (cpu/gpu)  predicted m/s (cpu/gpu)  after m/s (cpu/gpu)");
+        for (k, (e, a)) in expected.iter().zip(&actual).enumerate() {
+            eprintln!(
+                "{k:>3}  {:.5}/{:.5}  {:>8.3}/{:>8.3}  {:>8.4}/{:>8.4}  {:>8.4}/{:>8.4}",
+                e.dt, a.dt, e.impulse, a.impulse, e.predicted, a.predicted, e.after, a.after
+            );
+        }
+        let mut divergence = None;
+        let (mut cpu_total, mut gpu_total) = (0.0, 0.0);
+        for (k, (e, a)) in expected.iter().zip(&actual).enumerate() {
+            // The impulse is bounded cumulatively: the engine's adaptive substeps
+            // bin a substep into a different frame than GPU FLIP's fixed ones, and
+            // the momentum delivered is the invariant.
+            cpu_total += e.impulse;
+            gpu_total += a.impulse;
+            let velocity_bound = VELOCITY_SHARE * G * TICK * (k + 1) as f64;
+            let columns = [
+                ("dt", e.dt, a.dt, 1e-9),
+                ("impulse through this frame", cpu_total, gpu_total, IMPULSE_SHARE * cpu_total.abs()),
+                ("predicted velocity", e.predicted, a.predicted, velocity_bound),
+                ("velocity after", e.after, a.after, velocity_bound),
+            ];
+            if let Some((name, cpu, gpu, bound)) = columns.into_iter().find(|(_, cpu, gpu, bound)| (cpu - gpu).abs() > *bound) {
+                divergence = Some(format!(
+                    "frame {k}: {name} is {gpu:.4} on the GPU against the engine's {cpu:.4} (bound {bound:.4}); \
+                     this frame's impulse {:.4} against {:.4}, velocity after {:.4} against {:.4}",
+                    a.impulse, e.impulse, a.after, e.after
+                ));
+                break;
+            }
+        }
+        if let Some(divergence) = divergence {
+            failures.push(format!("cube moved {shift} m: {divergence}"));
         }
     }
-    assert!(divergence.is_none(), "GPU FLIP body reaction leaves the engine's: {}", divergence.unwrap_or_default());
+    assert!(failures.is_empty(), "GPU FLIP body reaction leaves the engine's: {failures:?}");
 }
 
 /// The pressure iterations the body push is measured at, and the count taken

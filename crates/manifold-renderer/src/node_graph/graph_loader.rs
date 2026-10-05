@@ -903,6 +903,18 @@ pub(crate) fn wire_gpu_flip_grid(def: &mut EffectGraphDef) -> bool {
             }
         }
     }
+    // The engine seeds no site its walls hold; an old fill learns where they are.
+    let fills: Vec<_> = def.nodes.iter().filter(|n| n.type_id == "node.liquid_fill").filter_map(|fill| {
+        let domain = def.wires.iter().find(|w| w.to_node == fill.id && w.to_port == "nodes_x")?.from_node;
+        (def.nodes.iter().any(|n| n.id == domain && n.type_id == GPU_FLIP_DOMAIN_TYPE_ID)
+            && !def.wires.iter().any(|w| w.to_node == fill.id && w.to_port == "wall_inset"))
+            .then_some((fill.id, domain))
+    }).collect();
+    for (fill, domain) in fills {
+        def.wires.push(EffectGraphWire { from_node: domain, from_port: "mesh_wall_inset".into(),
+            to_node: fill, to_port: "wall_inset".into() });
+        changed = true;
+    }
     changed
 }
 
@@ -2420,6 +2432,7 @@ mod tests {
         assert_ne!(clone, 2);
         assert!(def.wires.contains(&wire(2, "solid", 4, "in")));
         assert!(def.wires.contains(&wire(1, "mesh_wall_inset", clone, "wall_inset")));
+        assert!(def.wires.contains(&wire(1, "mesh_wall_inset", 5, "wall_inset")));
         for axis in ["x", "y", "z"] {
             assert!(def.wires.contains(&wire(1, &format!("mesh_min_{axis}"), clone, &format!("lattice_min_{axis}"))));
             assert!(def.wires.contains(&wire(1, &format!("mesh_nodes_{axis}"), clone, &format!("nodes_{axis}"))));

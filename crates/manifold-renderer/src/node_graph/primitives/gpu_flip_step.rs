@@ -319,6 +319,10 @@ pub(crate) struct StepParams {
     /// Ferstl 2016: 0 dense, 1 full-history initialization, 2 masked band.
     pub(crate) narrow_band: u32,
     pub(crate) live_impulse_stride: u32,
+    /// Cells from the grid's minimum to each wall (`FlipSolverGrid::wall_inset`);
+    /// 0 when the walls are the grid's edges.
+    pub(crate) wall_inset: f32,
+    pub(crate) _pad: [u32; 3],
 }
 
 /// One pass of the step's shader on its own, for the value proofs against
@@ -2483,6 +2487,8 @@ impl Primitive for GpuFlipStep {
                     .saturating_mul(4)
                     .min(u32::MAX as usize) as u32,
                 narrow_band: u32::from(narrow_enabled),
+                wall_inset: solver.wall_inset(),
+                _pad: [0; 3],
             },
             clock_plan: &zeros,
             particles,
@@ -2873,10 +2879,11 @@ mod tests {
 
     #[test]
     fn step_params_match_the_shader_uniform() {
-        assert_eq!(size_of::<StepParams>(), 160);
+        assert_eq!(size_of::<StepParams>(), 176);
         assert_eq!(std::mem::offset_of!(StepParams, box_offset), 100);
         assert_eq!(std::mem::offset_of!(StepParams, particles), 108);
         assert_eq!(std::mem::offset_of!(StepParams, live_impulse_stride), 156);
+        assert_eq!(std::mem::offset_of!(StepParams, wall_inset), 160);
     }
 
     /// The tile table's bytes, by an independent count: five words a tile

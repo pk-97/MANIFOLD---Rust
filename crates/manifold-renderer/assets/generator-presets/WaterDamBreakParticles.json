@@ -1898,6 +1898,12 @@
       "toPort": "particle_capacity"
     },
     {
+      "fromNode": 0,
+      "fromPort": "mesh_wall_inset",
+      "toNode": 4,
+      "toPort": "wall_inset"
+    },
+    {
       "fromNode": 4,
       "fromPort": "particles",
       "toNode": 5,

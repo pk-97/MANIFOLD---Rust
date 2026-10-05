@@ -691,7 +691,10 @@ fn gpu_flip_tiles_match_the_cpu_classification() {
     let mut run = Run::new(scene);
     let device = crate::test_device();
     let layout = scene.layout();
-    let (n, min, h) = (layout.cells, layout.min, layout.cell_size as f32);
+    // The step classifies tiles on the native solver grid.
+    let grid = crate::node_graph::liquid::lattice::FlipSolverGrid::from_lattice(
+        crate::node_graph::liquid::lattice::LiquidLattice::from_layout(&layout));
+    let (n, min, h) = (grid.cells(), grid.min(), layout.cell_size as f32);
     let r = ring_max(band_layers(ENGINE_CFL).max(FACE_VALID_LAYERS));
     let total = tile_total(n) as usize;
     let params = StepParams { n, box_min: min, cell_size: h, ring_max: r, extension_layers: band_layers(ENGINE_CFL).max(FACE_VALID_LAYERS), ..StepParams::default() };
@@ -710,8 +713,9 @@ fn gpu_flip_tiles_match_the_cpu_classification() {
         assert_eq!(table.parity(), (step as u32 + 1) % 2, "parity after step {}", step + 1);
         assert_eq!(table.stats_word().to_bits(), (cpu.counts[0] as f32 / total as f32).to_bits(), "stats word at frame {target}");
         if target == 0 {
-            // The standing column: 0.312 of the tiles (design section 6).
-            assert!((i64::from(cpu.counts[0]) - 160).abs() <= 1, "frame 0 lights {} tiles of {total}", cpu.counts[0]);
+            // The standing column on the native grid: 209 of its 729 tiles
+            // (160 of 512 on the authored grid, design section 6).
+            assert!((i64::from(cpu.counts[0]) - 209).abs() <= 1, "frame 0 lights {} tiles of {total}", cpu.counts[0]);
             // The step itself classifies the same particles on its next tick.
             run.frame();
             frame += 1;
