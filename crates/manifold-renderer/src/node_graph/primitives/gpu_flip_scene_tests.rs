@@ -541,8 +541,19 @@ fn gpu_flip_face_grid_is_the_last_ticks_faces() {
     }
 }
 
-/// I5: a pool at rest stays at rest. After 2 s the particle count is the
-/// fill's and the fastest particle moves under 1 mm/s.
+/// The native engine's fastest particle in the same 64³ still pool, from
+/// frame 59 to 299 (native_still_pool_reference): it never settles below
+/// 6 mm/s, and peaks at 18.9 mm/s.
+const NATIVE_STILL_POOL_FASTEST: f64 = 1.889e-2;
+
+/// The native engine's smallest fastest-vertical-particle speed at any
+/// 10-frame checkpoint from frame 29 to 299 of that pool, as a share of
+/// g·dt (native_still_pool_reference). Its own surface never rests stiller.
+const NATIVE_STILL_POOL_VERTICAL_SHARE: f64 = 0.0365;
+
+/// I5: a pool at rest stays at rest as the engine's does. From 1 s on the
+/// particle count is the fill's and the fastest particle stays within 1.5×
+/// the engine's own peak in the same pool.
 #[test]
 fn gpu_flip_still_pool() {
     let scene = WaterScene::still_pool(64);
@@ -565,11 +576,13 @@ fn gpu_flip_still_pool() {
                 run.water_cells()
             );
             assert_eq!((stats.live, stats.bad), (run.seeded, 0), "frame {frame}: particles lost or not finite");
-            fastest.push(stats.fastest);
+            if frame >= 59 {
+                fastest.push(stats.fastest);
+            }
         }
     }
-    let end = *fastest.last().expect("sampled");
-    assert!(end < 1e-3, "fastest particle {end} m/s after 2 s");
+    let peak = fastest.iter().copied().fold(0.0, f64::max);
+    assert!(peak < 1.5 * NATIVE_STILL_POOL_FASTEST, "fastest particle {peak} m/s from 1 s on, native peaks at {NATIVE_STILL_POOL_FASTEST}");
 }
 
 /// An open −X face drains the pool: the engine removes every particle within
@@ -610,8 +623,11 @@ fn gpu_flip_open_face_drains_the_pool() {
 /// The closed wall at rest: a 1 m pool for 300 frames. Every box wall face of
 /// the projected grid is exactly 0, and the pressure is hydrostatic: forces
 /// added g·dt to every vertical face and the projection took it back, so a
-/// face between two water cells below the surface layer keeps under 1% of
-/// g·dt, which puts the pressure gradient, and so p = ρgh, within 1%.
+/// face between two water cells below the surface layer keeps under
+/// NATIVE_STILL_POOL_VERTICAL_SHARE of g·dt: below the vertical speed the
+/// engine's own particles keep in that pool at its stillest checkpoint. The
+/// bridge exports no native faces, so the bound is the engine's particle
+/// motion, which its faces carry.
 #[test]
 fn gpu_flip_hydrostatic_column_rests() {
     let scene = WaterScene::still_pool(64);
@@ -659,7 +675,7 @@ fn gpu_flip_hydrostatic_column_rests() {
             stats.fastest
         );
         assert_eq!(wall, 0.0, "frame {frame}: a wall face moves");
-        assert!(worst <= 0.01 * g_dt, "frame {frame}: the pressure gradient is {:.3}% off ρg", 100.0 * worst / g_dt);
+        assert!(worst <= NATIVE_STILL_POOL_VERTICAL_SHARE * g_dt, "frame {frame}: inner vertical faces at {:.3}% of g·dt, past the engine's stillest {:.2}%", 100.0 * worst / g_dt, 100.0 * NATIVE_STILL_POOL_VERTICAL_SHARE);
         assert_eq!((stats.live, stats.bad), (run.seeded, 0), "frame {frame}: particles lost or not finite");
     }
 }
@@ -1477,6 +1493,29 @@ mod native_reference {
         }
     }
 
+    /// The native engine's still pool at `n`³ for 2 s: its fastest particle
+    /// and fastest vertical particle speed every 10 frames, the oracle for
+    /// gpu_flip_still_pool's and gpu_flip_hydrostatic_column_rests's bounds.
+    #[cfg(feature = "water-race-probes")]
+    #[test]
+    fn native_still_pool_reference() {
+        for n in [64] {
+            let scene = WaterScene::still_pool(n);
+            let (mut native, offset) = world(scene);
+            let g_dt = G * scene.step_dt();
+            for frame in 0..300 {
+                native.step(Seconds(1.0 / 60.0)).expect("native step");
+                if frame % 10 == 9 {
+                    let particles = capture(&mut native, offset);
+                    let stats = particle_stats(&particles);
+                    let vy = particles.iter().filter(|p| p.position_radius[3] > 0.0)
+                        .map(|p| f64::from(p.velocity[1]).abs()).fold(0.0, f64::max);
+                    println!("native still pool {n}³ frame {frame:3}: live {}, fastest {:.3e} m/s, max |vy| {vy:.3e} m/s = {:.3}% of g·dt", stats.live, stats.fastest, 100.0 * vy / g_dt);
+                }
+            }
+        }
+    }
+
     /// One wall or contact case run from identical native-captured seeds.
     #[cfg(feature = "water-race-probes")]
     struct WallCase {
@@ -1623,6 +1662,20 @@ mod native_reference {
                     println!("{} gpu    frame {frame}: {m:.3?}", case.name);
                     println!("{} delta  frame {frame}: {delta:.3?}", case.name);
                     assert!(m[11] > -0.01, "{}: GPU water left the tank by {:.3}h", case.name, -m[11]);
+                    // Measured agreement is 1e-3 in the tank-wall cases and
+                    // the flush body (2 near-wall particles); these bounds
+                    // are about ten times that. The single deepest particle
+                    // in the flush body differs by up to 0.035h. The slab is
+                    // BUG-hgcxx (GPU FLIP body slab spanning the tank runs up
+                    // less than native).
+                    if case.name != "body_slab_wall" {
+                        // Count, positions (m), velocities (m/s), near count,
+                        // run-up and y99 (m), wall gap and body depth (h).
+                        let tolerance = [0.0, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.005 * r[0], 0.01, 0.01, 0.02, 0.05];
+                        for a in 0..13 {
+                            assert!(delta[a].abs() <= tolerance[a], "{} frame {frame}: metric {a} GPU {} vs native {}", case.name, m[a], r[a]);
+                        }
+                    }
                 }
             }
             println!("{}: gpu capped={capped} refused={refused} unconverged={unconverged}", case.name);
