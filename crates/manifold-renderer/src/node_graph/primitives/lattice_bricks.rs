@@ -678,7 +678,7 @@ mod tests {
     fn scatter_candidates(blob: &FluidBlob, layout: BrickLayout, center: [f32; 3], size: [f32; 3], band_extra: f32) -> [(u32, u32); 3] {
         const ROUNDING: f32 = 1.907_348_6e-6;
         const LIMIT: f32 = 1.0e18;
-        const MIN_SPACING: f32 = 1.0e-20;
+        const MIN_SPACING: f32 = 1.0e-15;
         let reach = blob.center_radius[3];
         if reach.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater) || blob.center_radius[..3].iter().any(|v| !v.is_finite()) {
             return [(1, 0); 3];
@@ -686,7 +686,7 @@ mod tests {
         let full = std::array::from_fn(|a| (0, layout.bricks[a] - 1));
         let lattice_min: [f32; 3] = std::array::from_fn(|a| center[a] - 0.5 * size[a]);
         let gaps: [f32; 3] = std::array::from_fn(|a| (layout.nodes[a] - 1) as f32);
-        let bounded = reach < LIMIT && band_extra < LIMIT
+        let bounded = reach < LIMIT && band_extra.abs() < LIMIT
             && (0..3).all(|a| blob.center_radius[a].abs() < LIMIT && center[a].abs() < LIMIT
                 && size[a] < LIMIT && size[a] > MIN_SPACING * gaps[a]);
         if !bounded {
@@ -698,7 +698,7 @@ mod tests {
             let support = 1.5 * reach + extra + h;
             let centre = blob.center_radius[a];
             let magnitude = lattice_min[a].abs().max((lattice_min[a] + size[a]).abs()).max(centre.abs().max(support));
-            if (magnitude * 1.0e-30).partial_cmp(&h) != Some(std::cmp::Ordering::Less) {
+            if (magnitude / h).partial_cmp(&1.0e30) != Some(std::cmp::Ordering::Less) {
                 return None;
             }
             let slack = (magnitude * ROUNDING / h).ceil() + 2.0;
@@ -790,6 +790,8 @@ mod tests {
         assert!(assert_scatter_covers(huge, [0.0; 3], [4.0; 3], 0.0, &[blob(3.1e38, 0.0, 0.0, 2.1e38)]) > 0);
         assert!(assert_scatter_covers(huge, [3e38; 3], [4.0; 3], 0.0, &[blob(-3e38, -3e38, -3e38, 3e38)]) > 0);
         assert!(assert_scatter_covers(huge, [0.0; 3], [1e38; 3], 0.0, &[blob(2e38, 2e38, 2e38, 1.0)]) > 0);
+        // A huge negative band shrinks the support below zero: nothing to reach.
+        assert_eq!(assert_scatter_covers(huge, [0.0; 3], [4.0; 3], -3e38, &[blob(0.0, 0.0, 0.0, 1.0)]), 0);
         // Normal inputs whose node spacing divides down to a subnormal.
         let u = f32::from_bits(1);
         let tiny = 16_809_984.0 * u;
