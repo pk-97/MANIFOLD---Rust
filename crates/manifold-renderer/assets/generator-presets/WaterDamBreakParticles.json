@@ -512,11 +512,11 @@
         },
         "color_g": {
           "type": "Float",
-          "value": 0.9900000095367432
+          "value": 0.729411780834198
         },
         "color_r": {
           "type": "Float",
-          "value": 0.9800000190734863
+          "value": 0.37254902720451355
         },
         "ior": {
           "type": "Float",
@@ -528,7 +528,7 @@
         },
         "roughness": {
           "type": "Float",
-          "value": 0.017999999225139618
+          "value": 0.5540391206741333
         },
         "transmission": {
           "type": "Float",
@@ -548,7 +548,7 @@
         },
         "volume_attenuation_distance": {
           "type": "Float",
-          "value": 3.0
+          "value": 0.10000000149011612
         },
         "volume_geometry": {
           "type": "Float",
@@ -568,7 +568,7 @@
         },
         "volume_scattering_density": {
           "type": "Float",
-          "value": 0.054999999701976776
+          "value": 0.0882653295993805
         },
         "volume_thickness": {
           "type": "Float",
@@ -1523,7 +1523,7 @@
           "type": "Float"
         },
         "defaultMirrorsNodeParam": true,
-        "defaultValue": 2.5,
+        "defaultValue": 0.10000000149011612,
         "id": "water_attenuation",
         "label": "Water Absorption Distance",
         "target": {
@@ -1537,7 +1537,7 @@
           "type": "Float"
         },
         "defaultMirrorsNodeParam": true,
-        "defaultValue": 0.10000000149011612,
+        "defaultValue": 0.0882653295993805,
         "id": "water_scattering",
         "label": "Water Scattering",
         "target": {
@@ -1671,7 +1671,7 @@
         "wholeNumbers": true
       },
       {
-        "defaultValue": 2.5,
+        "defaultValue": 0.10000000149011612,
         "formatString": "F2",
         "id": "water_attenuation",
         "isToggle": false,
@@ -1688,7 +1688,7 @@
         "wholeNumbers": false
       },
       {
-        "defaultValue": 0.10000000149011612,
+        "defaultValue": 0.0882653295993805,
         "formatString": "F2",
         "id": "water_scattering",
         "isToggle": false,
