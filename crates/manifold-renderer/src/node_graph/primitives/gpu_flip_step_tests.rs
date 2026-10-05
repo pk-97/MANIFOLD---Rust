@@ -30,8 +30,8 @@ const MIN: [f32; 3] = [-0.5, 0.1, 0.3];
 /// The native solid push target in cells.
 const WALL_MARGIN_CELLS: f64 = 0.2;
 const BOUNDARY_MARGIN_CELLS: f64 = 0.1;
-const BOUNDARY_EPS_METRES: f64 = 0.00005;
-const PADDED_GRID_MARGIN_CELLS: f64 = 1.5;
+/// The fixtures' walls sit on the lattice edge: their step's wall_inset is 0.
+const FIXTURE_WALL_INSET: f64 = 0.0;
 const MOVE_EPS_METRES: f64 = 1.0e-6;
 const SOLID_STEP_CELLS: f64 = 0.1;
 const SOLID_PUSH_CELLS: f64 = 5.0;
@@ -135,8 +135,8 @@ fn wall_gradient(q: [f64; 3], n: [usize; 3]) -> [f64; 3] {
     out
 }
 
-fn boundary_edge(h: f64) -> f64 {
-    BOUNDARY_MARGIN_CELLS + BOUNDARY_EPS_METRES / h
+fn boundary_edge() -> f64 {
+    FIXTURE_WALL_INSET + BOUNDARY_MARGIN_CELLS
 }
 
 fn inside_boundary_cpu(q: [f64; 3], n: [usize; 3], edge: f64) -> bool {
@@ -163,8 +163,8 @@ fn native_collision_move(
     q0: [f64; 3], mut q1: [f64; 3], n: [usize; 3], h: f64,
     phi: impl Fn([f64; 3]) -> f64, gradient: impl Fn([f64; 3]) -> [f64; 3],
 ) -> [f64; 3] {
-    let edge = boundary_edge(h);
-    if (0..3).any(|a| q1[a] < -PADDED_GRID_MARGIN_CELLS || q1[a] >= n[a] as f64 + PADDED_GRID_MARGIN_CELLS) {
+    let edge = boundary_edge();
+    if (0..3).any(|a| q1[a] < 0.0 || q1[a] >= n[a] as f64) {
         q1 = clamp_boundary_cpu(q1, n, edge, h);
     }
     let travel = (0..3).map(|a| (q1[a] - q0[a]).powi(2)).sum::<f64>().sqrt();
@@ -208,10 +208,10 @@ fn native_collision_move(
 }
 
 #[test]
-fn native_wall_oracle_covers_margin_crossing_tangent_and_padded_escape() {
+fn native_wall_oracle_covers_margin_crossing_tangent_and_grid_escape() {
     let n = N;
     let h = f64::from(H);
-    let e = boundary_edge(h);
+    let e = boundary_edge();
     let y = 2.5;
     let stationary = native_wall_move([0.15, y, y], [0.15, y, y], n, h);
     assert_eq!(stationary, [0.15, y, y], "stationary point between .1h and .2h is unchanged");
@@ -222,10 +222,10 @@ fn native_wall_oracle_covers_margin_crossing_tangent_and_padded_escape() {
     let upper = native_wall_move([n[0] as f64 - 0.15, y, y], [n[0] as f64 - 0.05, y, y], n, h);
     assert!((upper[0] - (n[0] as f64 - 0.2)).abs() < 1e-12, "upper wall push: {upper:?}");
     let escaped = native_wall_move([2.0, y, y], [-2.0, y, y], n, h);
-    assert!((escaped[0] - e).abs() < 1e-12, "padded-grid escape clamps to the inclusive lower safety edge: {escaped:?}");
+    assert!((escaped[0] - e).abs() < 1e-12, "grid escape clamps to the inclusive lower safety edge: {escaped:?}");
     let upper_escape = native_wall_move([n[0] as f64 - 2.0, y, y], [n[0] as f64 + 2.0, y, y], n, h);
     let upper_bound = n[0] as f64 - e - MOVE_EPS_METRES / h;
-    assert!((upper_escape[0] - upper_bound).abs() < 1e-12, "upper padded escape uses the exclusive AABB epsilon: {upper_escape:?}");
+    assert!((upper_escape[0] - upper_bound).abs() < 1e-12, "upper grid escape uses the exclusive AABB epsilon: {upper_escape:?}");
     let tiny = native_wall_move([0.05, y, y], [0.050002, y, y], n, h);
     assert_eq!(tiny, [0.050002, y, y], "native movement epsilon is in metres");
     let fallback = native_collision_move([0.05, y, y], [0.05, y + 0.1, y], n, h, |_| 1.0, |_| [0.0; 3]);
@@ -1364,8 +1364,8 @@ fn gpu_flip_marker_motion_matches_native_wall_sequence_without_bodies() {
         ("crossing", [0.15, y, y], [-10.0, 0.0, 0.0], 0.04, false),
         ("tangent", [0.15, y, y], [0.0, 1.0, 0.0], 0.10, false),
         ("upper", [N[0] as f64 - 0.15, y, y], [1.0, 0.0, 0.0], 0.01, false),
-        ("padded escape", [2.0, y, y], [-20.0, 0.0, 0.0], 0.10, false),
-        ("upper padded escape", [N[0] as f64 - 2.0, y, y], [20.0, 0.0, 0.0], 0.10, false),
+        ("grid escape", [2.0, y, y], [-20.0, 0.0, 0.0], 0.10, false),
+        ("upper grid escape", [N[0] as f64 - 2.0, y, y], [20.0, 0.0, 0.0], 0.10, false),
         ("world epsilon", [0.05, y, y], [0.00005, 0.0, 0.0], 0.01, false),
         ("fallback clamp", [0.05, y, y], [0.0, 1.0, 0.0], 0.025, true),
         ("nonfinite", [f64::NAN, y, y], [0.0; 3], 0.01, false),
@@ -1420,9 +1420,9 @@ fn gpu_flip_marker_motion_matches_native_wall_sequence_without_bodies() {
             let k4 = at(1.0, k3);
             std::array::from_fn(|a| q0[a] + per_cell * (k1[a] + 2.0 * k2[a] + 2.0 * k3[a] + k4[a]) / 6.0)
         };
-        if name.contains("padded escape") {
-            assert!(reached[0] < -PADDED_GRID_MARGIN_CELLS || reached[0] >= N[0] as f64 + PADDED_GRID_MARGIN_CELLS,
-                "{entry}/{name}: fixture reaches outside the padded grid: {reached:?}");
+        if name.contains("grid escape") {
+            assert!(reached[0] < 0.0 || reached[0] >= N[0] as f64,
+                "{entry}/{name}: fixture reaches outside the grid: {reached:?}");
         }
         let want = if flat {
             native_collision_move(q0, reached, N, f64::from(H), |_| 1.0, |_| [0.0; 3])
@@ -1874,12 +1874,12 @@ fn rotate(q: [f64; 4], v: [f64; 3]) -> [f64; 3] {
 }
 
 /// The closest enabled body at x after `SOLID_TICK` (its row and signed
-/// distance), as liquid_collider.wgsl samples a lattice; the margin by which
-/// x clears every lattice edge and the gap to the runner-up, so the fixture
-/// can show no f32 rounding decides either.
+/// distance), as liquid_shape_distance samples a lattice and past it adds
+/// the gap; none when the walls (inset 0) are nearer. The margin is the gap
+/// to the runner-up, body or walls, so the fixture can show no f32 rounding
+/// decides either.
 fn closest(solids: &Solids, x: [f64; 3]) -> (Option<usize>, f64) {
     let mut best: Option<(usize, f64)> = None;
-    let mut margin = f64::INFINITY;
     let mut gaps = Vec::new();
     for (row, body) in solids.bodies.iter().enumerate() {
         let shape_index = body.accel_shape[3];
@@ -1894,14 +1894,10 @@ fn closest(solids: &Solids, x: [f64; 3]) -> (Option<usize>, f64) {
         let g: [f64; 3] = std::array::from_fn(|i| {
             (local[i] / f64::from(shape.scale_min[i]) - f64::from(shape.origin_spacing[i])) / f64::from(shape.origin_spacing[3])
         });
-        for i in 0..3 {
-            margin = margin.min(g[i].abs()).min((g[i] - (dims[i] - 1) as f64).abs());
-        }
-        if !(0..3).all(|i| g[i] >= 0.0 && g[i] <= (dims[i] - 1) as f64) {
-            continue;
-        }
-        let base: [usize; 3] = std::array::from_fn(|i| (g[i].floor() as usize).min(dims[i] - 2));
-        let f: [f64; 3] = std::array::from_fn(|i| g[i] - base[i] as f64);
+        let c: [f64; 3] = std::array::from_fn(|i| g[i].clamp(0.0, (dims[i] - 1) as f64));
+        let beyond = (0..3).map(|i| (g[i] - c[i]).powi(2)).sum::<f64>().sqrt() * f64::from(shape.origin_spacing[3]);
+        let base: [usize; 3] = std::array::from_fn(|i| (c[i].floor() as usize).min(dims[i] - 2));
+        let f: [f64; 3] = std::array::from_fn(|i| c[i] - base[i] as f64);
         let mut d = 0.0;
         for corner in 0..8 {
             let o = [corner & 1, (corner >> 1) & 1, corner >> 2];
@@ -1909,15 +1905,22 @@ fn closest(solids: &Solids, x: [f64; 3]) -> (Option<usize>, f64) {
             let at = shape.atlas_offset as usize + (base[0] + o[0]) + dims[0] * ((base[1] + o[1]) + dims[1] * (base[2] + o[2]));
             d += w * f64::from(solids.distances[at]);
         }
-        d *= f64::from(shape.scale_min[3]);
+        d = (d + beyond) * f64::from(shape.scale_min[3]);
         gaps.push(d);
         if best.is_none_or(|(_, nearest)| d < nearest) {
             best = Some((row, d));
         }
     }
+    let walls = (0..3)
+        .map(|i| {
+            let low = f64::from(SOLID_MIN[i]);
+            (x[i] - low).min(low + SOLID_N[i] as f64 * f64::from(SOLID_H) - x[i])
+        })
+        .fold(f64::INFINITY, f64::min);
+    gaps.push(walls);
     gaps.sort_by(f64::total_cmp);
     let gap = if gaps.len() > 1 { gaps[1] - gaps[0] } else { f64::INFINITY };
-    (best.map(|(row, _)| row), margin.min(gap))
+    (best.filter(|&(_, d)| d <= walls).map(|(row, _)| row), gap)
 }
 
 /// The velocity and spin a face sees on body `row`: as uploaded when

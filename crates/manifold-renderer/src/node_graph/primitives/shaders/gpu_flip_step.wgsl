@@ -1993,15 +1993,14 @@ fn density_source(@builtin(global_invocation_id) gid: vec3<u32>) {
     cell_out[idx] = -rate * error;
 }
 
-// Native expands the boundary by -3h-1e-4m, then by -0.2h. AABB::expand
-// moves each side by half its argument, so the authored wall is inset by
-// 0.1h + 5e-5m. The push target remains the native 0.2h solid buffer.
+// Native shrinks its grid by 3h + 1e-4m, then by 0.2h. AABB::expand moves
+// each side by half its argument, so the boundary sits 0.1h inside the
+// walls: wall_inset + 0.1 cells from the grid's minimum, the 1e-4m inside
+// wall_inset. The push target remains the native 0.2h solid buffer.
 const BOUNDARY_MARGIN: f32 = 0.1;
-const BOUNDARY_EPS_METRES: f32 = 0.00005;
-const PADDED_GRID_MARGIN: f32 = 1.5;
 
 fn boundary_edge() -> f32 {
-    return BOUNDARY_MARGIN + BOUNDARY_EPS_METRES / u.cell_size;
+    return u.wall_inset + BOUNDARY_MARGIN;
 }
 
 fn inside_boundary(q: vec3<f32>, n: vec3<i32>, edge: f32) -> bool {
@@ -2018,10 +2017,10 @@ fn clamp_boundary(q: vec3<f32>, n: vec3<i32>, edge: f32) -> vec3<f32> {
     return min(max(q, low), high - upper_epsilon);
 }
 
-fn inside_padded_grid(q: vec3<f32>, n: vec3<i32>) -> bool {
-    let low = vec3<f32>(-PADDED_GRID_MARGIN);
-    let high = vec3<f32>(n) + vec3<f32>(PADDED_GRID_MARGIN);
-    return all(q >= low) && all(q < high);
+// Native's grid index range (Grid3d::isGridIndexInRange): the cells
+// themselves, walls and padding included.
+fn inside_grid(q: vec3<f32>, n: vec3<i32>) -> bool {
+    return all(q >= vec3<f32>(0.0)) && all(q < vec3<f32>(n));
 }
 
 // Exponent bits, not x != x: fast math may fold a NaN comparison away.
@@ -2246,7 +2245,7 @@ fn faces_to_particles(@builtin(global_invocation_id) gid: vec3<u32>) {
     var q1 = reached;
     var radius = particle.position_radius.w;
     if finite(q1) {
-        if !inside_padded_grid(q1, n) {
+        if !inside_grid(q1, n) {
             q1 = clamp_boundary(q1, n, edge.x);
         }
         q1 = resolve_solid(q0, q1, n, edge);
@@ -2709,7 +2708,7 @@ fn narrow_move(@builtin(global_invocation_id) gid: vec3<u32>) {
     var reached = q + dt * (a + 2.0*b + 2.0*c + d) / 6.0;
     let edge = vec3<f32>(boundary_edge());
     if finite(reached) {
-        if !inside_padded_grid(reached, n) {
+        if !inside_grid(reached, n) {
             reached = clamp_boundary(reached, n, edge.x);
         }
         reached = resolve_solid(q, reached, n, edge);
