@@ -126,6 +126,11 @@ int manifold_fluids_world_capture_particle_frame(void *world, const float *offse
                                                  size_t particle_capacity, float *solid,
                                                  size_t solid_capacity, size_t *count_out,
                                                  uint32_t *nodes_out, int32_t *fits_out);
+#ifdef MANIFOLD_FACE_ORACLE
+// Probe oracle only (the face-oracle cargo feature).
+int manifold_fluids_world_capture_face_v(void *world, float *out, size_t capacity,
+                                         uint32_t *dims_out);
+#endif
 int manifold_fluids_surface_frame_solid(void *frame, float *solid, size_t capacity,
                                         uint32_t *nodes_out);
 void manifold_fluids_surface_frame_destroy(void *frame);
@@ -179,6 +184,17 @@ int manifold_fluids_whitewater_particles(void *lifecycle,
 int manifold_fluids_oracle_curvature(const float *phi, uint32_t isize, uint32_t jsize,
                                      uint32_t ksize, double dx, float *surface_phi_out,
                                      float *curvature_out);
+// FLIP's own sheet seeding (ParticleSheeter::generateSheetParticles), before
+// the fill-rate draw: markers at `positions` (count × 3 floats, grid-local,
+// inside the grid), `phi` the cell-centred surface level set, x fastest.
+// Writes up to `capacity` seeds and always the true count. Test oracle only.
+// The process-wide FLIP thread count. Test oracle only.
+int manifold_fluids_oracle_thread_count(int *count_out);
+int manifold_fluids_oracle_sheet_particles(const float *positions, size_t count,
+                                           const float *phi, uint32_t isize, uint32_t jsize,
+                                           uint32_t ksize, double dx, float fill_threshold,
+                                           float *seeds_out, size_t capacity,
+                                           size_t *seed_count_out);
 // FLIP's own emitter, then one update, on a lifecycle's last fields: markers
 // at `positions` (count × 3 floats, scene metres), `curvature` at the cell
 // centres, turbulence emission 0, lifetime variance 0.

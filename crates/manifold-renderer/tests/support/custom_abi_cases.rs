@@ -534,4 +534,11 @@ pub const CASES: &[CustomAbiCase] = &[
         shader_struct: "Params",
         aliases: &[],
     },
+    CustomAbiCase {
+        source: "gpu_flip_sheeting.rs",
+        rust_struct: "Params",
+        shader: "shaders/gpu_flip_sheeting.wgsl",
+        shader_struct: "Params",
+        aliases: &[],
+    },
 ];

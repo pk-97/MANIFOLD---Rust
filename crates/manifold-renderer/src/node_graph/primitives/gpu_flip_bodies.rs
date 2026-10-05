@@ -27,6 +27,7 @@
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 
+use super::gpu_flip_pressure::Sink;
 use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
 pub(crate) use crate::node_graph::liquid::coupling::REACTION_FLOATS;
 
@@ -241,9 +242,9 @@ impl BodyPasses {
 
     /// Each body's pressure impulse from `pressure` into the sums; with
     /// `reaction`, also added into it. With `gate`, on the solve's gate.
-    fn impulse(
+    fn impulse<S: Sink>(
         &self,
-        enc: &mut GpuEncoder,
+        enc: &mut S,
         bodies: &Bodies<'_>,
         tiles: Tiles<'_>,
         pressure: &GpuBuffer,
@@ -270,8 +271,8 @@ impl BodyPasses {
         ];
         let groups = [tile_groups(bodies.lattice), bodies.count.max(1), 1];
         match gate {
-            Some(gate) => enc.dispatch_compute_gated(&pipes.partial, &partial, groups, gate.buffer, gate.partial, "gpu_flip.bodies.partial"),
-            None => enc.dispatch_compute(&pipes.partial, &partial, groups, "gpu_flip.bodies.partial"),
+            Some(gate) => enc.gated(&pipes.partial, &partial, groups, gate.buffer, gate.partial, "gpu_flip.bodies.partial"),
+            None => enc.plain(&pipes.partial, &partial, groups, "gpu_flip.bodies.partial"),
         }
         // A fixed array, not a Vec: this runs every step. Without a reaction
         // binding 9 is left off.
@@ -287,8 +288,8 @@ impl BodyPasses {
         let bound = if reaction.is_some() { finalize.len() } else { finalize.len() - 1 };
         let groups = [bodies.count.max(1), 1, 1];
         match gate {
-            Some(gate) => enc.dispatch_compute_gated(&pipes.finalize, &finalize[..bound], groups, gate.buffer, gate.finalize, "gpu_flip.bodies.finalize"),
-            None => enc.dispatch_compute(&pipes.finalize, &finalize[..bound], groups, "gpu_flip.bodies.finalize"),
+            Some(gate) => enc.gated(&pipes.finalize, &finalize[..bound], groups, gate.buffer, gate.finalize, "gpu_flip.bodies.finalize"),
+            None => enc.plain(&pipes.finalize, &finalize[..bound], groups, "gpu_flip.bodies.finalize"),
         }
         Ok(())
     }
@@ -296,9 +297,9 @@ impl BodyPasses {
     /// Inside a conjugate gradient iteration: the bodies' share of the
     /// operator on the search direction `direction`, added to `s`, over the
     /// solver's fine active `tiles`.
-    pub(crate) fn apply(
+    pub(crate) fn apply<S: Sink>(
         &self,
-        enc: &mut GpuEncoder,
+        enc: &mut S,
         bodies: &Bodies<'_>,
         tiles: Tiles<'_>,
         direction: &GpuBuffer,
@@ -309,9 +310,9 @@ impl BodyPasses {
 
     /// [`Self::apply`] on the solve's gate: a round the stop switched off,
     /// or an inactive clock slot, runs none of its three passes.
-    pub(crate) fn apply_gated(
+    pub(crate) fn apply_gated<S: Sink>(
         &self,
-        enc: &mut GpuEncoder,
+        enc: &mut S,
         bodies: &Bodies<'_>,
         tiles: Tiles<'_>,
         direction: &GpuBuffer,
@@ -321,9 +322,9 @@ impl BodyPasses {
         self.apply_on(enc, bodies, tiles, direction, s, Some(gate))
     }
 
-    fn apply_on(
+    fn apply_on<S: Sink>(
         &self,
-        enc: &mut GpuEncoder,
+        enc: &mut S,
         bodies: &Bodies<'_>,
         tiles: Tiles<'_>,
         direction: &GpuBuffer,
@@ -347,8 +348,8 @@ impl BodyPasses {
         ];
         let groups = [tile_groups(bodies.lattice), 1, 1];
         match gate {
-            Some(gate) => enc.dispatch_compute_gated(&pipes.product, &product, groups, gate.buffer, gate.product, "gpu_flip.bodies.product"),
-            None => enc.dispatch_compute(&pipes.product, &product, groups, "gpu_flip.bodies.product"),
+            Some(gate) => enc.gated(&pipes.product, &product, groups, gate.buffer, gate.product, "gpu_flip.bodies.product"),
+            None => enc.plain(&pipes.product, &product, groups, "gpu_flip.bodies.product"),
         }
         Ok(())
     }

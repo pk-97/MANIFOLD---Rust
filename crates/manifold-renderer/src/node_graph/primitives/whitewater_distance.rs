@@ -7,22 +7,31 @@ use super::{
 };
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 
+/// gpu_flip_step.wgsl `ClockPlan`.
+const PLAN_BYTES: u64 = 48;
+
 pub(crate) fn scratch_bytes(cells: [u32; 3]) -> u64 {
     let n = cells.into_iter().map(u64::from).product::<u64>();
     let blocks = cells
         .into_iter()
         .map(|n| u64::from(n.div_ceil(6)))
         .product::<u64>();
-    12 * n + 4 * blocks + 16
+    // Fields, block flags, convergence state, sweep grid, zero clock plan.
+    12 * n + 4 * blocks + 16 + 16 + PLAN_BYTES
 }
 #[derive(Default)]
 pub(crate) struct SurfaceDistance {
     pipelines: Vec<GpuComputePipeline>,
     sweep: Option<GpuComputePipeline>,
-    buffers: Option<[GpuBuffer; 5]>,
+    buffers: Option<[GpuBuffer; 7]>,
     cells: [u32; 3],
 }
 impl SurfaceDistance {
+    /// current, candidate, valid, blocks, state, sweep grid, zero plan.
+    #[cfg(all(test, feature = "gpu-proofs"))]
+    pub(super) fn scratch(&self) -> &[GpuBuffer; 7] {
+        self.buffers.as_ref().expect("distance reserved")
+    }
     pub fn prepare(&mut self, device: &GpuDevice) {
         standalone_pipeline::<UpwindDistance>(&mut self.sweep, device);
         if self.pipelines.is_empty() {
@@ -34,6 +43,7 @@ impl SurfaceDistance {
                 "decide",
                 "accept",
                 "finish",
+                "gate",
             ] {
                 self.pipelines.push(device.create_compute_pipeline(
                     include_str!("shaders/whitewater_distance.wgsl"),
@@ -64,12 +74,28 @@ impl SurfaceDistance {
             device.try_create_buffer(bytes)?,
             device.try_create_buffer(blocks)?,
             device.try_create_buffer(16)?,
+            device.try_create_buffer(16)?,
+            {
+                let zeros = device.try_create_buffer_shared(PLAN_BYTES)?;
+                zeros.zero_fill();
+                zeros
+            },
         ]);
         self.cells = cells;
         Ok(())
     }
+    /// Always active: a zero clock plan.
     pub fn encode(&self, enc: &mut GpuEncoder, source: &GpuBuffer, h: f32) -> &GpuBuffer {
-        let [current, candidate, valid, blocks, state] =
+        let zeros = &self.buffers.as_ref().expect("distance reserved")[6];
+        self.encode_gated(enc, source, h, zeros)
+    }
+
+    /// Gated by the FLIP clock plan, so it can sit in a substep slot: an
+    /// inactive slot (live clock, zero step) leaves the output and every
+    /// field and state word as they were, and only rewrites the sweep grid
+    /// to zero groups.
+    pub fn encode_gated(&self, enc: &mut GpuEncoder, source: &GpuBuffer, h: f32, plan: &GpuBuffer) -> &GpuBuffer {
+        let [current, candidate, valid, blocks, state, args, _] =
             self.buffers.as_ref().expect("distance reserved");
         let [nx, ny, nz] = self.cells;
         let count = nx * ny * nz;
@@ -121,12 +147,25 @@ impl SurfaceDistance {
                         buffer: state,
                         offset: 0,
                     },
+                    GpuBinding::Buffer {
+                        binding: 7,
+                        buffer: plan,
+                        offset: 0,
+                    },
+                    GpuBinding::Buffer {
+                        binding: 8,
+                        buffer: args,
+                        offset: 0,
+                    },
                 ],
                 [work, 1, 1],
                 "whitewater.distance.control",
             );
             enc.compute_memory_barrier_buffers();
         };
+        // The generated sweep cannot read the plan, so it runs over the
+        // grid `gate` writes: count/256 groups when active, none otherwise.
+        pass(enc, 7, 0, 1);
         pass(
             enc,
             0,
@@ -137,7 +176,7 @@ impl SurfaceDistance {
         for iteration in 0..6 {
             pass(enc, 2, iteration, 1);
             let uniforms = UpwindUniforms::new([nx, ny, nz].map(|n| n as f32), h, count);
-            enc.dispatch_compute(
+            enc.dispatch_compute_indirect(
                 self.sweep.as_ref().expect("sweep prepared"),
                 &[
                     GpuBinding::Bytes {
@@ -160,7 +199,8 @@ impl SurfaceDistance {
                         offset: 0,
                     },
                 ],
-                [count.div_ceil(256), 1, 1],
+                args,
+                0,
                 "whitewater.distance.upwind",
             );
             enc.compute_memory_barrier_buffers();

@@ -170,6 +170,10 @@ NARROW_ROWS = [
        "liquid_frame_whitewater_reads_the_selected_slot",
        "liquid_frame_encode_failure_publishes_the_selected_outputs",
        "liquid_frame_solid_shrink_keeps_mix_capacity"], [])),
+    # The sheeting stage; its step wiring is proven by gpu_flip_step's own filters.
+    ((RENDERER_SRC + "node_graph/primitives/gpu_flip_sheeting",
+      RENDERER_SRC + "node_graph/primitives/shaders/gpu_flip_sheeting.wgsl"),
+     (["gpu_flip_sheeting_tests::"], [])),
     ((RENDERER_SRC + "node_graph/primitives/gpu_flip_clock.rs",
       RENDERER_SRC + "node_graph/primitives/shaders/gpu_flip_clock.wgsl"),
      (["gpu_flip_clock::gpu_tests::"], [])),

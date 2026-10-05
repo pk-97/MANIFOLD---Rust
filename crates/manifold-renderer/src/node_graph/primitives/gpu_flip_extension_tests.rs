@@ -68,51 +68,105 @@ fn coords(i: usize, n: [usize; 3]) -> [usize; 3] {
     [i % m[0], (i / m[0]) % m[1], i / (m[0] * m[1])]
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum Status {
+    Unknown,
+    Waiting,
+    Known,
+    Done,
+}
+
+/// One layer of FLIP Fluids GridUtils::extrapolateGrid on each component's
+/// own lattice (gridutils.cpp _initializeStatusGridThread and
+/// _findExtrapolationCells, gridutils.h _extrapolateCellsThread). Status
+/// starts from the weights: a border sample is DONE whatever its weight, a
+/// valid inner one KNOWN (a face a previous layer filled is valid too, and
+/// is DONE or KNOWN there: either way counted). Each KNOWN sample marks its
+/// UNKNOWN neighbours WAITING and becomes DONE; a WAITING sample takes the
+/// mean of its DONE neighbours and is valid from the next layer.
 pub(super) fn cpu_extend(faces: &[FaceSample], n: [usize; 3]) -> Vec<FaceSample> {
-    (0..faces.len())
-        .map(|i| {
-            let p = coords(i, n);
-            let mut out = FaceSample::default();
-            for a in 0..3 {
-                if (0..3).any(|b| b != a && p[b] >= n[b]) {
-                    continue;
-                }
-                out.velocity[a] = faces[i].velocity[a];
-                out.weight[a] = faces[i].weight[a];
-                if faces[i].weight[a] > 0.0 {
-                    continue;
-                }
-                let (mut sum, mut hits) = (0.0f64, 0.0f64);
-                let mut seeded = false;
-                for b in 0..3 {
-                    for d in [-1i64, 1] {
-                        let q = p[b] as i64 + d;
-                        let top = if b == a { n[b] as i64 } else { n[b] as i64 - 1 };
-                        if q < 0 || q > top {
-                            continue;
-                        }
-                        let mut r = p;
-                        r[b] = q as usize;
-                        let neighbour = faces[index(r, n)];
-                        if neighbour.weight[a] > 0.0 {
-                            sum += f64::from(neighbour.velocity[a]);
-                            hits += 1.0;
-                            seeded |= r[a] > 0 && r[a] < n[a];
-                        }
-                    }
-                }
-                if seeded {
-                    out.velocity[a] = (sum / hits) as f32;
-                    out.weight[a] = 1.0;
+    let mut out = vec![FaceSample::default(); faces.len()];
+    for a in 0..3 {
+        let dims: [usize; 3] = std::array::from_fn(|b| if b == a { n[b] + 1 } else { n[b] });
+        let at = |g: [usize; 3]| index(g, n);
+        let border = |g: [usize; 3]| (0..3).any(|b| g[b] == 0 || g[b] == dims[b] - 1);
+        let cells: Vec<[usize; 3]> = (0..dims[2])
+            .flat_map(|k| (0..dims[1]).flat_map(move |j| (0..dims[0]).map(move |i| [i, j, k])))
+            .collect();
+        let mut status = vec![Status::Unknown; faces.len()];
+        for &g in &cells {
+            status[at(g)] = if border(g) { Status::Done } else if faces[at(g)].weight[a] > 0.0 { Status::Known } else { Status::Unknown };
+        }
+        let neighbours = |g: [usize; 3]| {
+            (0..6).filter_map(move |s| {
+                let (b, d) = (s / 2, if s % 2 == 0 { 1i64 } else { -1 });
+                let q = g[b] as i64 + d;
+                (q >= 0 && q < dims[b] as i64).then(|| { let mut r = g; r[b] = q as usize; r })
+            })
+        };
+        let mut waiting = Vec::new();
+        for &g in &cells {
+            if status[at(g)] != Status::Known {
+                continue;
+            }
+            for r in neighbours(g) {
+                if status[at(r)] == Status::Unknown {
+                    status[at(r)] = Status::Waiting;
+                    waiting.push(r);
                 }
             }
-            out
-        })
-        .collect()
+            status[at(g)] = Status::Done;
+        }
+        for &g in &cells {
+            out[at(g)].velocity[a] = faces[at(g)].velocity[a];
+            out[at(g)].weight[a] = faces[at(g)].weight[a];
+        }
+        for g in waiting {
+            let done: Vec<f64> = neighbours(g).filter(|&r| status[at(r)] == Status::Done)
+                .map(|r| f64::from(faces[at(r)].velocity[a])).collect();
+            out[at(g)].velocity[a] = (done.iter().sum::<f64>() / done.len() as f64) as f32;
+            out[at(g)].weight[a] = 1.0;
+        }
+    }
+    out
+}
+
+/// Fluid valid in the inner u faces from row y = 2 up, velocity 2, a
+/// transverse wall row below: the engine averages the border row's held 0
+/// into row 1. With `corner` the fluid also starts at z = 2, so row 1's
+/// faces at z = 1 meet two border rows.
+pub(super) fn transverse_wall_fixture(n: [usize; 3], corner: bool) -> Vec<FaceSample> {
+    let mut faces = vec![FaceSample::default(); n.map(|v| v + 1).iter().product()];
+    for (i, face) in faces.iter_mut().enumerate() {
+        let p = coords(i, n);
+        let inner = p[0] > 0 && p[0] < n[0] && p[1] > 0 && p[1] < n[1] - 1 && p[2] > 0 && p[2] < n[2] - 1;
+        if inner && p[1] >= 2 && (!corner || p[2] >= 2) {
+            face.velocity[0] = 2.0;
+            face.weight[0] = 1.0;
+        }
+    }
+    faces
+}
+
+#[test]
+fn native_extension_averages_held_border_rows() {
+    let n = [8; 3];
+    let flat = cpu_extend(&transverse_wall_fixture(n, false), n);
+    // Row 1 meets fluid above and the border row's held 0 below.
+    assert_eq!(flat[index([3, 1, 3], n)].velocity[0], 1.0);
+    assert_eq!(flat[index([3, 1, 3], n)].weight[0], 1.0);
+    // The border row itself is held, never extended.
+    assert_eq!(flat[index([3, 0, 3], n)].weight[0], 0.0);
+    let corner = cpu_extend(&transverse_wall_fixture(n, true), n);
+    // Fluid on no side yet at (y 1, z 1): no seed, still unknown.
+    assert_eq!(corner[index([3, 1, 1], n)].weight[0], 0.0);
+    let corner = cpu_extend(&corner, n);
+    // Next layer: two filled neighbours at 1, two held border zeros.
+    assert_eq!(corner[index([3, 1, 1], n)].velocity[0], 0.5);
 }
 
 /// Two invalid layers between one moving fluid plane and a held-zero wall.
-/// Transverse edge rows are included: these are fluid, not engine ghost cells.
+/// Transverse edge rows are the engine's held border rows: never extended.
 pub(super) fn wall_gap(n: [usize; 3], axis: usize, high: bool) -> (Vec<FaceSample>, usize) {
     let mut faces = vec![FaceSample::default(); n.map(|v| v + 1).iter().product()];
     for (i, face) in faces.iter_mut().enumerate() {
@@ -126,7 +180,7 @@ pub(super) fn wall_gap(n: [usize; 3], axis: usize, high: bool) -> (Vec<FaceSampl
             face.velocity[axis] = if distance == 3 { 2.0 } else { 0.0 };
         }
     }
-    let mut target = [0; 3];
+    let mut target = n.map(|v| v / 2);
     target[axis] = if high { n[axis] - 1 } else { 1 };
     (faces, index(target, n))
 }
@@ -149,7 +203,8 @@ fn wall_zero_waits_for_fluid_front_on_every_axis() {
                     continue;
                 }
                 let distance = if high { n[axis] - p[axis] } else { p[axis] };
-                if distance == 1 {
+                let clear = (0..3).all(|b| b == axis || (2..n[b] - 2).contains(&p[b]));
+                if distance == 1 && clear {
                     assert_eq!(face.weight[axis], 1.0);
                     assert_eq!(
                         face.velocity[axis], 1.0,

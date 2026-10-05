@@ -1001,12 +1001,13 @@ fn dot_partial_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(loca
     fold_sum(li, listed_partial(gid.x), product);
 }
 
-// The `color` partials in order into scalars[slot].
+// The `color` partials in order into this round's scalar `slot` (0: rz,
+// 1: p·s); the round is the completed-round count in progress[1].
 @compute @workgroup_size(256, 1, 1)
 fn dot_finalize_main(@builtin(local_invocation_index) li: u32) {
     let total = total_of_partials(li, u.color);
     if li == 0u {
-        scalars[u.slot] = total;
+        scalars[2u * u32(progress[1]) + u.slot] = total;
     }
 }
 
@@ -1026,7 +1027,7 @@ fn direction_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if idx == NO_CELL {
         return;
     }
-    let k = u.slot;
+    let k = u32(progress[1]);
     if k == 0u {
         out[idx] = src[idx];
         return;
@@ -1047,7 +1048,7 @@ fn update_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_inv
     let idx = listed_cell(gid.x, lattice());
     var r = 0.0;
     if idx != NO_CELL {
-        let k = u.slot;
+        let k = u32(progress[1]);
         let alpha = ratio(scalars[2u * k], scalars[2u * k + 1u]);
         let x = select(out[idx], 0.0, k == 0u);
         out[idx] = x - alpha * src[idx];
@@ -1083,8 +1084,8 @@ fn stop(first: u32) {
     }
 }
 
-// The `color` partials' max; mode 1 is the start (|f|∞), else iteration
-// `slot`'s |r|∞ and the stop test.
+// The `color` partials' max; mode 1 is the start (|f|∞), else the round
+// progress[1] counts: its |r|∞, the count advanced, and the stop test.
 @compute @workgroup_size(256, 1, 1)
 fn check_main(@builtin(local_invocation_index) li: u32) {
     if slot_inactive() {
@@ -1103,10 +1104,11 @@ fn check_main(@builtin(local_invocation_index) li: u32) {
         }
         return;
     }
-    progress[4u + u.slot] = norm;
-    progress[1] = f32(u.slot + 1u);
+    let k = u32(progress[1]);
+    progress[4u + k] = norm;
+    progress[1] = f32(k + 1u);
     if u.tolerance >= 0.0 && norm <= min(u.tolerance * progress[0], ACCEPTABLE) {
-        stop(u.slot + 1u);
+        stop(k + 1u);
     }
 }
 
