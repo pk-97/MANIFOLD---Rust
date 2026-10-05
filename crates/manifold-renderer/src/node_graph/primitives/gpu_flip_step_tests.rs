@@ -642,7 +642,7 @@ fn random_phi(water: &[f32], seed: u64) -> Vec<f32> {
 
 /// Zero distances leave air pressure at zero, the plain Dirichlet projection;
 /// real distances give the air side the ghost pressure
-/// clamp(max(φ_air, 0) / (min(φ_water, −0.005h) + 1e-9), ±25) · p_water.
+/// clamp(max(φ_air, 0) / (min(φ_water, −0.005h) + 1e-6), ±25) · p_water.
 #[test]
 fn gpu_flip_subtract_pressure_projects_faces_touching_water() {
     let faces = random_faces(0x5b7, false);
@@ -686,15 +686,15 @@ fn gpu_flip_subtract_pressure_projects_faces_touching_water() {
                     let p_up = if wet_up { f64::from(pressure[up]) } else { ghost(up, down, &phi) };
                     let p_down = if wet_down { f64::from(pressure[down]) } else { ghost(down, up, &phi) };
                     if open[i].weight[a] <= 0.0 {
-                        // A closed face keeps its velocity for the
-                        // constraint to replace.
+                        // Pressure subtraction clears closed faces; the later
+                        // solid constraint writes their velocity independently.
                         closed += 1;
-                        (u, 1.0)
+                        (0.0, 0.0)
                     } else {
                         if wet_up != wet_down && (if wet_up { p_down } else { p_up }) != 0.0 {
                             ghosts += 1;
                         }
-                        if wet_up || wet_down { (u - (p_up - p_down) / f64::from(H), 1.0) } else { (u, 0.0) }
+                        if wet_up || wet_down { (u - (p_up - p_down) / f64::from(H), 1.0) } else { (0.0, 0.0) }
                     }
                 };
                 // Ghost pressures reach 25 × 3, a step of 300 over h.
@@ -727,7 +727,8 @@ fn gpu_flip_subtract_pressure_projects_faces_touching_water() {
                     }
                     let mut r = q;
                     r[a] = at as usize;
-                    // A closed face kept its velocity: no pressure crossed it.
+                    // A closed face contributes no pressure flux after the
+                    // producer-side validity clear.
                     let mut face = q;
                     face[a] = q[a].max(r[a]);
                     if open[pad_index(face)].weight[a] <= 0.0 {
@@ -740,13 +741,20 @@ fn gpu_flip_subtract_pressure_projects_faces_touching_water() {
                 }
             }
             let left = div(&got, q);
-            // The walls are closed: the divergence the solve saw carries no
-            // wall flux, as `divergence` writes it.
+            // Walls and inner closed faces carry no flux after subtraction;
+            // this explicitly includes the producer-side closed-face clear.
             let mut walled = faces.clone();
             for (i, face) in walled.iter_mut().enumerate() {
                 let p = pad_coords(i);
                 for a in 0..3 {
-                    if p[a] == 0 || p[a] == N[a] {
+                    let both_air = if face_exists(p, a) && p[a] > 0 && p[a] < N[a] {
+                        let mut below = p;
+                        below[a] -= 1;
+                        water[cell_index(p)] <= 0.5 && water[cell_index(below)] <= 0.5
+                    } else {
+                        false
+                    };
+                    if p[a] == 0 || p[a] == N[a] || open[i].weight[a] <= 0.0 || both_air {
                         face.velocity[a] = 0.0;
                     }
                 }
@@ -944,6 +952,41 @@ fn gpu_flip_extend_faces_waits_for_fluid_beside_walls() {
     }
 }
 
+#[test]
+fn gpu_flip_pressure_clear_precedes_face_extension() {
+    let target = [2, 2, 2];
+    let target_index = pad_index(target);
+    let mut faces = vec![FaceSample::default(); face_len()];
+    faces[target_index].velocity[0] = 9.0;
+    faces[pad_index([4, 2, 2])].velocity[0] = 13.0;
+    let open = vec![FaceSample { weight: [1.0; 4], ..FaceSample::default() }; face_len()];
+    // An inner closed high-velocity face and open faces between air cells must
+    // both be cleared by subtraction, so extension has no invalid seed.
+    let mut open = open;
+    open[target_index].weight[0] = 0.0;
+    let water = vec![0.0; cell_len()];
+    let pressure = vec![0.0; cell_len()];
+    let phi = vec![0.0; cell_len()];
+    let projected: Vec<FaceSample> = Pass::new()
+        .bind(20, &faces)
+        .bind(10, &open)
+        .bind(6, &water)
+        .bind(8, &pressure)
+        .bind(7, &phi)
+        .run("subtract_pressure", &lattice(), 20, face_len(), face_len());
+    assert_eq!(projected[target_index].velocity[0], 0.0, "closed inner velocity is cleared before extension");
+    assert_eq!(projected[target_index].weight[0], 0.0, "closed inner validity is cleared before extension");
+    assert_eq!(projected[pad_index([4, 2, 2])].velocity[0], 0.0, "open air-only velocity is cleared before extension");
+    let extended: Vec<FaceSample> = Pass::new()
+        .bind(3, &projected)
+        .run("extend_faces", &lattice(), 4, face_len(), face_len());
+    for x in [target[0] - 1, target[0], target[0] + 1] {
+        let index = pad_index([x, target[1], target[2]]);
+        assert_eq!(extended[index].velocity[0], 0.0, "closed air face cannot seed x-neighbour velocity at x={x}");
+        assert_eq!(extended[index].weight[0], 0.0, "closed air face cannot seed x-neighbour validity at x={x}");
+    }
+}
+
 fn density_support_sources() -> [String; 2] {
     const CULL: &str = "                    if finite(q) && any(abs(centre - q) >= vec3<f32>(1.0)) {\n                        continue;\n                    }\n";
     let source = include_str!("shaders/gpu_flip_step.wgsl");
@@ -1062,27 +1105,126 @@ fn gpu_flip_density_support_matches_original() {
     }
 }
 
-/// The kernel's per-component trilinear sample over faces with weight > 0,
-/// in f64. q is in cells from the lattice minimum.
+/// Native MACVelocityField's ordinary per-component trilinear sample, in f64.
+/// q is in cells from the lattice minimum. Missing corners contribute zero;
+/// face validity does not renormalise the interpolation.
 fn cpu_sample(q: [f64; 3], field: &[FaceSample]) -> [f64; 3] {
+    if q.iter().any(|value| !value.is_finite() || *value < 0.0)
+        || q.iter().zip(N.iter()).any(|(value, &extent)| *value >= extent as f64)
+    {
+        return [0.0; 3];
+    }
     std::array::from_fn(|a| {
         let top: [i64; 3] = std::array::from_fn(|b| if b == a { N[b] as i64 } else { N[b] as i64 - 1 });
         let s: [f64; 3] = std::array::from_fn(|b| q[b] - if b == a { 0.0 } else { 0.5 });
-        let base: [i64; 3] = std::array::from_fn(|b| (s[b].floor() as i64).clamp(0, (top[b] - 1).max(0)));
-        let t: [f64; 3] = std::array::from_fn(|b| (s[b] - base[b] as f64).clamp(0.0, 1.0));
-        let (mut sum, mut total) = (0.0, 0.0);
+        let base: [i64; 3] = std::array::from_fn(|b| s[b].floor() as i64);
+        let t: [f64; 3] = std::array::from_fn(|b| s[b] - base[b] as f64);
+        let mut sum = 0.0;
         for corner in 0..8 {
             let bit = [corner & 1, (corner >> 1) & 1, (corner >> 2) & 1];
-            let c: [usize; 3] = std::array::from_fn(|b| (base[b] + bit[b] as i64).min(top[b]) as usize);
-            let face = field[pad_index(c)];
-            if face.weight[a] > 0.0 {
+            let c: [i64; 3] = std::array::from_fn(|b| base[b] + bit[b] as i64);
+            if (0..3).all(|b| c[b] >= 0 && c[b] <= top[b]) {
+                let c: [usize; 3] = c.map(|value| value as usize);
+                let face = field[pad_index(c)];
                 let w: f64 = (0..3).map(|b| if bit[b] == 1 { t[b] } else { 1.0 - t[b] }).product();
                 sum += w * f64::from(face.velocity[a]);
-                total += w;
             }
         }
-        if total > 1e-6 { sum / total } else { 0.0 }
+        sum
     })
+}
+
+#[test]
+fn cpu_sample_matches_native_mac_interpolation_and_bounds() {
+    // Constant stored values include invalid faces deliberately: native
+    // interpolation reads stored values and only fades missing lattice
+    // corners, independent of the validity weights.
+    let constant = vec![FaceSample { velocity: [2.0, 3.0, 5.0, 0.0], weight: [0.0; 4] }; face_len()];
+    let check = |q: [f64; 3], want: [f64; 3], label: &str| {
+        let got = cpu_sample(q, &constant);
+        for a in 0..3 {
+            assert!((got[a] - want[a]).abs() < 1e-12, "{label} component {a}: {} vs {}", got[a], want[a]);
+        }
+    };
+    check([2.0, 2.0, 2.0], [2.0, 3.0, 5.0], "constant interior");
+    check([0.25, 0.25, 0.25], [1.125, 1.6875, 2.8125], "lower corner fade");
+    check([5.75, 4.75, 3.75], [1.125, 1.6875, 2.8125], "upper corner fade");
+    check([0.0, 0.0, 0.0], [0.5, 0.75, 1.25], "lower inclusive corner");
+    check([-f64::EPSILON, 1.0, 1.0], [0.0; 3], "below grid");
+    check([N[0] as f64, 1.0, 1.0], [0.0; 3], "exclusive high edge");
+
+    // An affine field is reproduced exactly at an interior point by each
+    // component's face lattice, including its half-cell transverse offsets.
+    let mut affine = vec![FaceSample::default(); face_len()];
+    for (i, face) in affine.iter_mut().enumerate() {
+        let c = pad_coords(i).map(|value| value as f32);
+        for a in 0..3 {
+            face.velocity[a] = 10.0 * (a as f32 + 1.0) + c[0] + 2.0 * c[1] + 3.0 * c[2];
+        }
+    }
+    let q = [2.25, 2.75, 1.5];
+    let got = cpu_sample(q, &affine);
+    for a in 0..3 {
+        let expected = 10.0 * (a as f64 + 1.0)
+            + (q[0] - f64::from((a != 0) as u8) * 0.5)
+            + 2.0 * (q[1] - f64::from((a != 1) as u8) * 0.5)
+            + 3.0 * (q[2] - f64::from((a != 2) as u8) * 0.5);
+        assert!((got[a] - expected).abs() < 1e-5, "affine component {a}: {} vs {expected}", got[a]);
+    }
+}
+
+#[test]
+fn gpu_flip_faces_to_particles_reads_native_stored_face_values() {
+    // Exact binary positions and zero origin exercise all three exclusive
+    // high edges without a world-coordinate rounding ambiguity.
+    let points = [[2.0, 2.0, 2.0], [0.25, 0.25, 0.25], [5.75, 4.75, 3.75],
+        [0.0, 0.0, 0.0], [-0.125, 1.0, 1.0], [6.0, 1.0, 1.0],
+        [1.0, 5.0, 1.0], [1.0, 1.0, 4.0], [2.25, 2.75, 1.5]];
+    let particles: Vec<_> = points.iter().enumerate().map(|(i, q)| FluidParticle {
+        position_radius: [q[0] as f32 * H, q[1] as f32 * H, q[2] as f32 * H, 0.08],
+        velocity: [0.0; 3], id: i as u32 + 1,
+    }).collect();
+    // Include nonzero data in non-existent packed component lanes. Correct
+    // component bounds must discard those lanes, regardless of their weight.
+    let stored = vec![FaceSample { velocity: [2.0, 3.0, 5.0, 0.0], weight: [0.0; 4] }; face_len()];
+    let mut affine = stored.clone();
+    for (i, face) in affine.iter_mut().enumerate() {
+        let c = pad_coords(i);
+        for a in 0..3 {
+            face.velocity[a] = (10 * (a + 1) + c[0] + 2 * c[1] + 3 * c[2]) as f32;
+        }
+    }
+    let zero = vec![FaceSample::default(); face_len()];
+    let solid = wall_solid(N, H);
+    let run = |flip: f32, faces: &[FaceSample], old: &[FaceSample]| {
+        Pass::new()
+            .bind(2, &particles)
+            .bind(3, faces)
+            .bind(9, &solid)
+            .bind(15, &[LiquidShape::default()])
+            .bind(16, &[0_u32; 4])
+            .bind(17, old)
+            .bind(18, faces)
+            .bind(22, &vec![0_u32; 2 * particles.len()])
+            .bind(36, &[LiquidBody::default()])
+            .run::<FluidParticle>("faces_to_particles", &StepParams {
+                step_dt: 0.0, flip, particles: particles.len() as u32, box_min: [0.0; 3], ..lattice()
+            }, 19, particles.len(), particles.len())
+    };
+    for field in [&stored, &affine] {
+        let fresh = run(0.0, field, &zero);
+        let old_grid = run(1.0, &zero, field);
+        for (i, q) in points.into_iter().enumerate() {
+            let want = cpu_sample(q, field);
+            for a in 0..3 {
+                close(fresh[i].velocity[a], want[a], 10.0, "new-grid stored sample");
+                close(old_grid[i].velocity[a], -want[a], 10.0, "old-grid stored sample");
+            }
+            assert_eq!(fresh[i].id, particles[i].id);
+        }
+        assert_eq!(fresh[0].position_radius, particles[0].position_radius, "dt=0 keeps the interior position");
+        assert_eq!(old_grid[0].position_radius, particles[0].position_radius, "dt=0 keeps the old-grid interior position");
+    }
 }
 
 #[test]
@@ -1180,8 +1322,8 @@ fn gpu_flip_marker_motion_matches_native_wall_sequence_without_bodies() {
         ("crossing", [0.15, y, y], [-10.0, 0.0, 0.0], 0.04, false),
         ("tangent", [0.15, y, y], [0.0, 1.0, 0.0], 0.10, false),
         ("upper", [N[0] as f64 - 0.15, y, y], [1.0, 0.0, 0.0], 0.01, false),
-        ("padded escape", [2.0, y, y], [-10.0, 0.0, 0.0], 0.10, false),
-        ("upper padded escape", [N[0] as f64 - 2.0, y, y], [10.0, 0.0, 0.0], 0.10, false),
+        ("padded escape", [2.0, y, y], [-20.0, 0.0, 0.0], 0.10, false),
+        ("upper padded escape", [N[0] as f64 - 2.0, y, y], [20.0, 0.0, 0.0], 0.10, false),
         ("world epsilon", [0.05, y, y], [0.00005, 0.0, 0.0], 0.01, false),
         ("fallback clamp", [0.05, y, y], [0.0, 1.0, 0.0], 0.025, true),
         ("nonfinite", [f64::NAN, y, y], [0.0; 3], 0.01, false),
@@ -1199,7 +1341,10 @@ fn gpu_flip_marker_motion_matches_native_wall_sequence_without_bodies() {
             velocity: [0.0; 3],
             id: 1,
         }];
-        let faces = vec![FaceSample { velocity: [velocity[0] as f32, velocity[1] as f32, velocity[2] as f32, 0.0], weight: [1.0; 4] }; face_len()];
+        // Both RK3 and the optional RK4 marker mover must read stored solid
+        // velocities even when their validity flag is zero. This does not
+        // validate the separate Narrow Band grid-backtrace sampler.
+        let faces = vec![FaceSample { velocity: [velocity[0] as f32, velocity[1] as f32, velocity[2] as f32, 0.0], weight: [0.0; 4] }; face_len()];
         let step = StepParams { step_dt: dt, max_travel: 10.0, particles: 1, ..lattice() };
         let got: Vec<FluidParticle> = Pass::new()
             .bind(2, &particles)
@@ -1217,7 +1362,26 @@ fn gpu_flip_marker_motion_matches_native_wall_sequence_without_bodies() {
             assert_eq!((got[0].position_radius[3], got[0].id), (particles[0].position_radius[3], particles[0].id));
             continue;
         }
-        let reached: [f64; 3] = std::array::from_fn(|a| q0[a] + f64::from(dt) / f64::from(H) * velocity[a]);
+        // Sampling changes near the current grid edges, so even a constant
+        // stored field is not a constant particle velocity there. Compute the
+        // actual integrator stages before applying the independent collision
+        // oracle; these fixtures keep every stage inside the travel guard.
+        let per_cell = f64::from(dt) / f64::from(H);
+        let at = |fraction: f64, v: [f64; 3]| cpu_sample(std::array::from_fn(|a| q0[a] + fraction * per_cell * v[a]), &faces);
+        let k1 = cpu_sample(q0, &faces);
+        let k2 = at(0.5, k1);
+        let reached: [f64; 3] = if entry == "faces_to_particles" {
+            let k3 = at(0.75, k2);
+            std::array::from_fn(|a| q0[a] + per_cell * (2.0 * k1[a] + 3.0 * k2[a] + 4.0 * k3[a]) / 9.0)
+        } else {
+            let k3 = at(0.5, k2);
+            let k4 = at(1.0, k3);
+            std::array::from_fn(|a| q0[a] + per_cell * (k1[a] + 2.0 * k2[a] + 2.0 * k3[a] + k4[a]) / 6.0)
+        };
+        if name.contains("padded escape") {
+            assert!(reached[0] < -PADDED_GRID_MARGIN_CELLS || reached[0] >= N[0] as f64 + PADDED_GRID_MARGIN_CELLS,
+                "{entry}/{name}: fixture reaches outside the padded grid: {reached:?}");
+        }
         let want = if flat {
             native_collision_move(q0, reached, N, f64::from(H), |_| 1.0, |_| [0.0; 3])
         } else {

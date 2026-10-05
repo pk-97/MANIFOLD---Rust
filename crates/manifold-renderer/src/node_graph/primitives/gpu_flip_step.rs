@@ -26,9 +26,9 @@
 //! J. Bender, "Implicit Density Projection for Volume Conserving Liquids",
 //! IEEE TVCG 27(4), 2019: each step solves a second Poisson equation whose
 //! source is the particles' density error against rest, and moves the
-//! particles down its gradient. The move is position only and never enters
-//! velocity, so it cannot add speed; it restores the volume the divergence
-//! solve alone lets drift. Kernel, solid-neighbour weight, surface clamp and
+//! particles down its gradient. It does not directly update velocity, but
+//! changes later transfers and potential energy. Its cost and effect on
+//! native reference agreement remain under audit. Kernel, solid-neighbour weight, surface clamp and
 //! ±½ source clamp follow the paper as built in the MIT-licensed `blub`
 //! (Copyright (c) 2020 Andreas Reich, github.com/Wumpf/blub,
 //! `density_projection_gather_error.comp`; see THIRD_PARTY_NOTICES.md).

@@ -1833,14 +1833,14 @@ fn surface_phi(cell: u32) -> f32 {
 }
 
 // One thread per face record, in place on `faces_rw`. A box wall face is 0
-// and valid. A closed inner face (open fraction 0) keeps its
-// velocity and is valid, for the constraint to give it the solid's
-// (PressureSolver::_applyPressureToVelocityField). An open inner face beside
-// water loses (p_upper − p_lower) / h, the air side's pressure the ghost
-// value clamp(φ_air / (φ_water + 1e-6), −25, 25) · p_water, φ_water taken at
-// most −0.005h and φ_air at least 0 (the matrix uses 1e-9 instead), and is
-// valid; between two air cells it keeps its velocity and is invalid (weight
-// 0) for the extension to fill.
+// and valid. An inner closed face is cleared (0 velocity, weight 0) before
+// extension; the later solid constraint writes its velocity independently of
+// this validity flag (PressureSolver::_applyPressureToVelocityField). An open
+// inner face beside water loses (p_upper − p_lower) / h, the air side's
+// pressure the ghost value clamp(φ_air / (φ_water + 1e-6), −25, 25) · p_water,
+// φ_water taken at most −0.005h and φ_air at least 0 (the matrix uses 1e-9
+// instead), and is valid. A face between two air cells is also cleared for
+// the extension to fill.
 @compute @workgroup_size(256)
 fn subtract_pressure(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
@@ -1867,12 +1867,9 @@ fn subtract_pressure(@builtin(global_invocation_id) gid: vec3<u32>) {
         below[a] = p[a] - 1;
         let upper = flatten(p, n);
         let lower = flatten(below, n);
-        out.face_velocity[a] = here.face_velocity[a];
         let wet_upper = water[upper] > 0.5;
         let wet_lower = water[lower] > 0.5;
-        if !(open.face_weight[a] > 0.0) {
-            out.face_weight[a] = 1.0;
-        } else if wet_upper || wet_lower {
+        if open.face_weight[a] > 0.0 && (wet_upper || wet_lower) {
             var p_upper = pressure[upper];
             var p_lower = pressure[lower];
             if !wet_upper {
@@ -2127,10 +2124,14 @@ fn face_record(index: u32, grid: u32) -> FaceSample {
     return spread[index];
 }
 
-// Trilinear per component over the faces with weight > 0, renormalised by
-// their weights (0 when none). Every index is clamped as an integer, so a
-// non-finite position reads in bounds.
+// Native FLIP's ordinary face interpolation (macvelocityfield.cpp
+// _interpolateLinearU/V/W): missing corners contribute zero, without a
+// validity-weight renormalisation. Grid3d::isPositionInGrid rejects samples
+// outside the exclusive high edge; retain non-finite positions as failures.
 fn sample(q: vec3<f32>, n: vec3<i32>, grid: u32) -> vec3<f32> {
+    if !finite(q) || any(q < vec3<f32>(0.0)) || any(q >= vec3<f32>(n)) {
+        return vec3<f32>(0.0);
+    }
     let m = n + vec3<i32>(1);
     var v = vec3<f32>(0.0);
     for (var a = 0; a < 3; a = a + 1) {
@@ -2139,22 +2140,20 @@ fn sample(q: vec3<f32>, n: vec3<i32>, grid: u32) -> vec3<f32> {
         var top = n - vec3<i32>(1);
         top[a] = n[a];
         let s = q - offset;
-        let base = clamp(vec3<i32>(floor(s)), vec3<i32>(0), max(top - vec3<i32>(1), vec3<i32>(0)));
-        let t = clamp(s - vec3<f32>(base), vec3<f32>(0.0), vec3<f32>(1.0));
+        let base = vec3<i32>(floor(s));
+        let t = s - vec3<f32>(base);
         var sum = 0.0;
-        var total = 0.0;
         for (var corner = 0; corner < 8; corner = corner + 1) {
             let bit = vec3<i32>(corner & 1, (corner >> 1u) & 1, (corner >> 2u) & 1);
-            let c = min(base + bit, top);
-            let face = face_record(flatten(c, m), grid);
-            if face.face_weight[a] > 0.0 {
+            let c = base + bit;
+            if all(c >= vec3<i32>(0)) && all(c <= top) {
+                let face = face_record(flatten(c, m), grid);
                 let w3 = select(vec3<f32>(1.0) - t, t, bit != vec3<i32>(0));
                 let w = w3.x * w3.y * w3.z;
                 sum = sum + w * face.face_velocity[a];
-                total = total + w;
             }
         }
-        v[a] = select(0.0, sum / max(total, 1e-30), total > 1e-6);
+        v[a] = sum;
     }
     return v;
 }
