@@ -1287,6 +1287,7 @@ fn smooth_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_inv
         let mut reference = Run::new(&water, &faces, &phi, ghost, Some(&original), false);
         let mut replay = Run::new(&water, &faces, &phi, ghost, None, true);
         let mut last = GpuReplayCache::default().stats();
+        let mut last_template = replay.solver.template_stats();
         for visit in 0..4 {
             let rhs: Vec<f32> = (0..cells).map(|i| {
                 if visit == 3 || water[i] < 0.5 { 0.0 } else { ((i * 17 + visit * 13) % 41) as f32 * 0.037 - 0.6 }
@@ -1310,13 +1311,28 @@ fn smooth_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_inv
                 assert_eq!(got.2[2], 1.0_f32.to_bits(), "converged early stop");
             }
             let stats = replay.cache.as_ref().expect("replay cache returned").stats();
+            let template = replay.solver.template_stats();
             if visit >= 2 {
                 assert_eq!(stats.recorded, last.recorded, "warm solve records nothing");
                 assert_eq!(stats.store_allocations, last.store_allocations, "warm solve allocates no replay storage");
                 assert_eq!(stats.segments_direct, last.segments_direct, "warm rounds never dispatch directly");
-                assert_eq!(stats.segments_replayed - last.segments_replayed, u64::from(ROUNDS), "every scheduled round is replayed");
+                // The rounds are the template's executes, outside the frame
+                // recording: one walk, no build, one execute per chunk.
+                assert_eq!(stats.segments_replayed, last.segments_replayed, "no round is in the frame recording");
+                assert_eq!(
+                    template.executes - last_template.executes,
+                    manifold_gpu::template_chunks(ROUNDS, 32).count() as u64,
+                    "one execute per chunk of rounds"
+                );
+                assert_eq!(template.walks - last_template.walks, 1, "one walked round per solve");
+                // Visit 2 switches Fixed to Converged: the tolerance is a round
+                // param, so that stop builds its own template once.
+                if visit == 3 {
+                    assert_eq!((template.builds, template.command_writes), (last_template.builds, last_template.command_writes), "a warm solve writes no command");
+                }
             }
             last = stats;
+            last_template = template;
         }
     }
 }
