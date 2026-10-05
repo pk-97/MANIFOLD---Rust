@@ -988,7 +988,7 @@ impl PressureSolver {
             }
             _ => {
                 if let (Some(ticket), Some(store)) = (ticket, self.templates.as_mut()) {
-                    enc.execute_template(store, ticket);
+                    enc.execute_template(store, ticket)?;
                 }
             }
         }

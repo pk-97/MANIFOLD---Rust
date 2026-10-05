@@ -12,6 +12,8 @@
 //! A failed prepare leaves every slot as it was.
 
 use std::ptr::NonNull;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Weak};
 
 use objc2::Message;
 use objc2::rc::Retained;
@@ -40,6 +42,9 @@ pub(crate) const MAX_TEMPLATE_COMMANDS: u32 = 1 << 16;
 
 /// Idle slots kept after a lookup; more are freed.
 const IDLE_SLOTS_KEPT: usize = 4;
+
+/// Store ids, so a ticket from one store is refused by another.
+static NEXT_STORE: AtomicU64 = AtomicU64::new(0);
 
 /// Where a template's rounds run: grouped into executes of up to `chunk`
 /// rounds (`crate::template_chunks`), execute j by range entry
@@ -225,6 +230,8 @@ impl Round {
     }
 }
 
+type CommandBuffer = Retained<ProtocolObject<dyn MTLCommandBuffer>>;
+
 /// One built template: the round it was built from (retaining every
 /// pipeline and buffer it names), its replicated command buffer and inline
 /// bytes, and the command buffers that ran it and may still be running.
@@ -236,7 +243,13 @@ struct Slot {
     /// Every buffer the commands name, and the arena, for `useResources`.
     resources: Vec<NonNull<ProtocolObject<dyn MTLResource>>>,
     label: Retained<NSString>,
-    users: Vec<Retained<ProtocolObject<dyn MTLCommandBuffer>>>,
+    /// Unique per build in its store: a ticket names the build it was
+    /// prepared for, so a rebuilt or trimmed slot fails its old tickets.
+    id: u64,
+    /// Command buffers that ran this build, each with its encoder's template
+    /// token: a buffer still unsent whose encoder is gone was abandoned and
+    /// never runs.
+    users: Vec<(CommandBuffer, Weak<()>)>,
     /// Lookup clock of the last visit: the least recent idle slot is rebuilt.
     used: u64,
 }
@@ -246,8 +259,14 @@ struct Slot {
 unsafe impl Send for Slot {}
 
 impl Slot {
+    /// Drop users that are done: completed or failed, or abandoned (never
+    /// sent, and the encoder that held them dropped).
     fn prune(&mut self) {
-        self.users.retain(|buf| !matches!(unsafe { buf.status() }, MTLCommandBufferStatus::Completed | MTLCommandBufferStatus::Error));
+        self.users.retain(|(buf, token)| match unsafe { buf.status() } {
+            MTLCommandBufferStatus::Completed | MTLCommandBufferStatus::Error => false,
+            MTLCommandBufferStatus::NotEnqueued => token.strong_count() > 0,
+            _ => true,
+        });
     }
 
     fn idle(&self) -> bool {
@@ -255,9 +274,12 @@ impl Slot {
     }
 }
 
-/// A prepared visit: the slot to run and its execute ranges.
+/// A prepared visit: the store and build to run, and its execute ranges.
+/// Executing it checks both, so a ticket outlived by a rebuild, a trim or
+/// handed to another store is refused, never run as another round.
 pub struct TemplateTicket {
-    slot: usize,
+    store: u64,
+    slot: u64,
     ranges: Retained<ProtocolObject<dyn MTLBuffer>>,
     first_bytes: u64,
     stride_bytes: u64,
@@ -268,6 +290,10 @@ pub struct TemplateTicket {
 /// encoder path and rebuilt only when no command buffer still runs it.
 pub struct GpuTemplateStore {
     device: Retained<ProtocolObject<dyn MTLDevice>>,
+    /// Unique per store, for ticket checks.
+    id: u64,
+    /// The next build's id.
+    next_build: u64,
     slots: Vec<Slot>,
     round: Round,
     clock: u64,
@@ -283,6 +309,8 @@ impl GpuTemplateStore {
     pub fn new(device: &GpuDevice) -> Self {
         Self {
             device: device.raw_device().retain(),
+            id: NEXT_STORE.fetch_add(1, Ordering::Relaxed),
+            next_build: 0,
             slots: Vec::new(),
             round: Round::default(),
             clock: 0,
@@ -379,7 +407,9 @@ impl GpuTemplateStore {
         let label = NSString::from_str(&format!("template: {}", self.round.label));
         let mut round = Round::default();
         std::mem::swap(&mut round, &mut self.round);
-        let slot = Slot { round, chunk, icb, arena, resources, label, users: Vec::new(), used: self.clock };
+        let id = self.next_build;
+        self.next_build += 1;
+        let slot = Slot { round, chunk, icb, arena, resources, label, id, users: Vec::new(), used: self.clock };
         Ok(match idle {
             Some(i) => {
                 // The old round's vectors come back as the next walk's scratch.
@@ -415,8 +445,10 @@ impl GpuTemplateStore {
 
 impl Drop for GpuTemplateStore {
     fn drop(&mut self) {
-        for slot in self.slots.drain(..) {
-            let pending = slot.users.iter().any(|buf| {
+        for mut slot in self.slots.drain(..) {
+            // Abandoned buffers never run: pruning drops them.
+            slot.prune();
+            let pending = slot.users.iter().any(|(buf, _)| {
                 matches!(unsafe { buf.status() }, MTLCommandBufferStatus::NotEnqueued | MTLCommandBufferStatus::Enqueued)
             });
             if pending {
@@ -426,7 +458,7 @@ impl Drop for GpuTemplateStore {
                 std::mem::forget(slot);
                 continue;
             }
-            for buf in &slot.users {
+            for (buf, _) in &slot.users {
                 buf.waitUntilCompleted();
             }
         }
@@ -458,10 +490,17 @@ impl GpuEncoder {
     /// Run a prepared template here: the pending frame-replay stretch first,
     /// then the slot's executes on a compute encoder that declares every
     /// buffer the slot names, a buffer barrier around and between executes.
-    pub fn execute_template(&mut self, store: &mut GpuTemplateStore, ticket: TemplateTicket) {
+    /// `Err`, encoding nothing, for a ticket from another store or one whose
+    /// build was since rebuilt or freed.
+    pub fn execute_template(&mut self, store: &mut GpuTemplateStore, ticket: TemplateTicket) -> Result<(), String> {
+        if ticket.store != store.id {
+            return Err("gated template: the ticket belongs to another store".into());
+        }
+        let index = store.slots.iter().position(|s| s.id == ticket.slot).ok_or("gated template: the ticket's build was rebuilt or freed")?;
         self.end_gated_segments();
         self.flush_replay();
-        let slot = &mut store.slots[ticket.slot];
+        let token = Arc::downgrade(self.template_token.get_or_insert_with(|| Arc::new(())));
+        let slot = &mut store.slots[index];
         let per_execute = self.profile.as_ref().is_some_and(|p| p.granularity == super::ProfileGranularity::Dispatch);
         let mut enc: Option<Retained<ProtocolObject<dyn MTLComputeCommandEncoder>>> = None;
         for j in 0..ticket.executes {
@@ -500,9 +539,10 @@ impl GpuEncoder {
         if self.profile.is_some() && matches!(self.state, EncoderState::Compute(_)) {
             self.end_current();
         }
-        if slot.users.last().is_none_or(|last| !std::ptr::eq(&**last, &*self.cmd_buf)) {
-            slot.users.push(self.cmd_buf.clone());
+        if slot.users.last().is_none_or(|(last, _)| !std::ptr::eq(&**last, &*self.cmd_buf)) {
+            slot.users.push((self.cmd_buf.clone(), token));
         }
+        Ok(())
     }
 }
 
@@ -555,7 +595,8 @@ fn prepare(
     store.slots[index].used = store.clock;
     let index = store.trim(index);
     Ok(TemplateTicket {
-        slot: index,
+        store: store.id,
+        slot: store.slots[index].id,
         ranges: at.ranges.raw.clone(),
         first_bytes: u64::from(at.first) * GATED_RANGE_BYTES,
         stride_bytes: u64::from(at.stride) * GATED_RANGE_BYTES,

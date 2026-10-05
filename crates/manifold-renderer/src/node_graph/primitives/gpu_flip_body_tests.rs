@@ -1038,6 +1038,11 @@ fn fnv(words: &[u32]) -> u64 {
     words.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &w| (h ^ u64::from(w)).wrapping_mul(0x0000_0100_0000_01b3))
 }
 
+thread_local! {
+    /// Body golden solves on a profiled encoder at this granularity, when set.
+    static BODY_PROFILE: std::cell::Cell<Option<manifold_gpu::ProfileGranularity>> = const { std::cell::Cell::new(None) };
+}
+
 /// Every body golden case, direct and replayed, as the fixture's lines: the
 /// coupled solve with its rounds gated on the fine level, plain (the gate
 /// off), and at Solve Level 1, each Fixed and Converged; fingerprints of the
@@ -1069,6 +1074,14 @@ fn body_golden_lines() -> Vec<String> {
                 for _ in 0..2 {
                     set_gate_off(gate_off);
                     let mut enc = scene.device.create_encoder("body golden");
+                    let profiled = BODY_PROFILE.get();
+                    if let Some(granularity) = profiled {
+                        thread_local! {
+                            static SAMPLER: std::cell::OnceCell<manifold_gpu::GpuTimestampSampler> = const { std::cell::OnceCell::new() };
+                        }
+                        let sampler = SAMPLER.with(|s| s.get_or_init(|| scene.device.create_timestamp_sampler(4096).expect("timestamp sampling")).clone());
+                        enc.enable_profiling_at(sampler, &scene.device, granularity);
+                    }
                     let water = Water { lattice: N.map(|v| v as u32), cell_size: H, water: &scene.buffers[0], faces: &scene.buffers[1], phi: None };
                     // SAFETY: a shared buffer sized for the lattice; the last solve completed.
                     unsafe { pressure.write(0, bytemuck::cast_slice(&vec![0u32; cells])) };
@@ -1082,7 +1095,12 @@ fn body_golden_lines() -> Vec<String> {
                     }
                     solver.copy_scalars(&mut enc, &scalars);
                     enc.copy_buffer_to_buffer(solver.progress().expect("prepared"), &record, record.size);
-                    enc.commit_and_wait_completed();
+                    if profiled.is_some() {
+                        let profile = enc.commit_and_wait_profiled(&scene.device);
+                        assert_eq!(profile.failed_command_buffers, 0, "{name} {stop:?}: the profiled solve ran");
+                    } else {
+                        enc.commit_and_wait_completed();
+                    }
                     set_gate_off(false);
                     fingerprints = [
                         fnv(&read::<u32>(&pressure, cells)),
@@ -1124,6 +1142,24 @@ fn gpu_flip_body_solve_matches_main_golden() {
     let moved: Vec<String> =
         expected.iter().zip(&lines).filter(|(e, l)| **e != l.as_str()).map(|(e, l)| format!("want {e}\n got {l}")).collect();
     assert!(moved.is_empty(), "{} of {} golden cases moved:\n{}", moved.len(), lines.len(), moved.join("\n"));
+}
+
+/// The coupled-body golden on a profiled encoder at both granularities:
+/// frame replay is off there, the rounds run as the template's executes,
+/// and every case matches main's unrolled solve bit for bit.
+#[test]
+fn gpu_flip_body_golden_holds_profiled() {
+    let path = format!("{}/tests/fixtures/{BODY_GOLDEN}", env!("CARGO_MANIFEST_DIR"));
+    let golden = std::fs::read_to_string(&path).expect("golden fixture reads");
+    let expected: Vec<&str> = golden.lines().filter(|l| !l.starts_with('#')).collect();
+    for granularity in [manifold_gpu::ProfileGranularity::Tag, manifold_gpu::ProfileGranularity::Dispatch] {
+        BODY_PROFILE.set(Some(granularity));
+        let lines = std::panic::catch_unwind(body_golden_lines);
+        BODY_PROFILE.set(None);
+        let lines = lines.unwrap_or_else(|e| std::panic::resume_unwind(e));
+        let moved: Vec<String> = expected.iter().zip(&lines).filter(|(e, l)| **e != l.as_str()).map(|(e, l)| format!("want {e}\n got {l}")).collect();
+        assert!(moved.is_empty(), "{granularity:?}: {} golden cases moved:\n{}", moved.len(), moved.join("\n"));
+    }
 }
 
 /// Coupled rounds past the stop write nothing, body passes included: with

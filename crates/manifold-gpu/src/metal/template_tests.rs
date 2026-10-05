@@ -86,7 +86,7 @@ fn main() {
             ranges[2u * (arm.first + j * arm.stride) + 1u] = len * arm.commands;
         }
         start = start + len;
-        size = size * 2u;
+        size = min(size * 2u, max(arm.chunk, 1u));
         j = j + 1u;
     }
 }
@@ -291,9 +291,20 @@ fn encode_reference(enc: &mut GpuEncoder, k: &Kernels, run: &Run, frame: u32, sp
 /// The frame through the template. Prepared before anything encodes: a
 /// refused prepare returns with the encoder untouched.
 fn encode_template(enc: &mut GpuEncoder, k: &Kernels, run: &mut Run, frame: u32, spec: Spec, texture: Option<&GpuTexture>) -> Result<(), String> {
+    let ticket = prepare_rounds(enc, k, run, spec, texture)?;
+    plain(enc, k, run, frame, 0);
+    plain(enc, k, run, frame, 1);
+    arm(enc, k, run, spec);
+    enc.execute_template(&mut run.store, ticket)?;
+    plain(enc, k, run, frame, 200);
+    Ok(())
+}
+
+/// The rounds' prepare alone: the walk and the slot, nothing encoded.
+fn prepare_rounds(enc: &mut GpuEncoder, k: &Kernels, run: &mut Run, spec: Spec, texture: Option<&GpuTexture>) -> Result<TemplateTicket, String> {
     let Run { buffers, state, args, ranges, store } = run;
     let at = TemplateRanges { ranges, first: spec.first, stride: spec.stride, chunk: spec.chunk };
-    let ticket = enc.prepare_template(store, at, spec.declared, spec.copies, |rec| {
+    enc.prepare_template(store, at, spec.declared, spec.copies, |rec| {
         for i in 0..spec.mixes as usize {
             let p = params(spec.param_frame, 100 + i);
             rec.dispatch_gated(
@@ -333,13 +344,7 @@ fn encode_template(enc: &mut GpuEncoder, k: &Kernels, run: &mut Run, frame: u32,
             "template-proof countdown",
         );
         Ok(())
-    })?;
-    plain(enc, k, run, frame, 0);
-    plain(enc, k, run, frame, 1);
-    arm(enc, k, run, spec);
-    enc.execute_template(&mut run.store, ticket);
-    plain(enc, k, run, frame, 200);
-    Ok(())
+    })
 }
 
 /// The encoder paths a frame can take.
@@ -428,8 +433,8 @@ fn template_matches_the_unrolled_reference_on_every_path() {
                 assert_eq!(rounds.len(), want, "{path:?} frame {frame}: the rounds' spans");
                 assert!(rounds.iter().all(|s| s.tag == "rounds-tag" && s.millis >= 0.0), "{path:?} frame {frame}: tagged, non-negative spans");
                 // Each execute depends on the one before (the gate and the
-                // countdown state), so their spans start in submission order.
-                assert!(rounds.windows(2).all(|w| w[0].start_ms <= w[1].start_ms + 1e-6), "{path:?} frame {frame}: the rounds' spans in order");
+                // countdown state): it starts after that one ends.
+                assert!(rounds.windows(2).all(|w| w[1].start_ms + 1e-3 >= w[0].start_ms + w[0].millis), "{path:?} frame {frame}: an execute started before the one it depends on ended");
                 assert_eq!((profile.overflow, profile.failed_command_buffers), (0, 0));
             }
         }
@@ -595,4 +600,129 @@ fn template_slots_in_flight_are_never_rewritten() {
     });
     drop(held.store);
     signal.join().expect("signals");
+}
+
+/// A ticket names its store and its build. A different key prepared before
+/// the ticket runs rebuilds the idle slot, and the old ticket is refused,
+/// encoding nothing; an equal key keeps both tickets good; a ticket from
+/// another store is refused; a ticket whose slot a trim freed is refused.
+#[test]
+fn template_tickets_name_their_store_and_build() {
+    let device = GpuDevice::new();
+    let k = Kernels::new(&device);
+    let spec = Spec::default();
+    let mut run = Run::new(&device);
+    let mut other = Run::new(&device);
+    let mut enc = device.create_encoder("template-proof tickets");
+    let a = prepare_rounds(&mut enc, &k, &mut run, spec, None).expect("prepares a");
+    let again = prepare_rounds(&mut enc, &k, &mut run, spec, None).expect("an equal key hits");
+    let b = prepare_rounds(&mut enc, &k, &mut run, Spec { param_frame: 9, ..spec }, None).expect("prepares b");
+    assert_eq!(run.store.slots(), 1, "b rebuilt the idle slot a named");
+    let before = run.contents();
+    let stale = enc.execute_template(&mut run.store, a).expect_err("a stale ticket");
+    assert!(stale.contains("rebuilt or freed"), "{stale}");
+    let stale = enc.execute_template(&mut run.store, again).expect_err("the equal-key ticket went with the build");
+    assert!(stale.contains("rebuilt or freed"), "{stale}");
+    let foreign = enc.execute_template(&mut other.store, b).expect_err("a ticket from another store");
+    assert!(foreign.contains("another store"), "{foreign}");
+    enc.commit_and_wait_completed();
+    assert_eq!(run.contents(), before, "the refused executes encoded nothing");
+
+    // Equal keys before a run: both tickets name the same build and run.
+    let mut enc = device.create_encoder("template-proof equal tickets");
+    let a = prepare_rounds(&mut enc, &k, &mut run, spec, None).expect("prepares");
+    let a2 = prepare_rounds(&mut enc, &k, &mut run, spec, None).expect("hits");
+    enc.execute_template(&mut run.store, a).expect("runs");
+    enc.execute_template(&mut run.store, a2).expect("runs");
+    enc.commit_and_wait_completed();
+
+    // A trim frees idle slots past four, and their tickets go with them.
+    let mut held = Vec::new();
+    let mut tickets = Vec::new();
+    for key in 0..6 {
+        let mut enc = device.create_encoder("template-proof held");
+        tickets.push(prepare_rounds(&mut enc, &k, &mut run, Spec { param_frame: 100 + key, ..spec }, None).expect("prepares"));
+        let t = prepare_rounds(&mut enc, &k, &mut run, Spec { param_frame: 100 + key, ..spec }, None).expect("hits");
+        enc.execute_template(&mut run.store, t).expect("runs");
+        held.push(enc);
+    }
+    assert!(run.store.slots() >= 6, "six keys in flight hold six slots");
+    drop(held);
+    let mut enc = device.create_encoder("template-proof trim");
+    prepare_rounds(&mut enc, &k, &mut run, Spec { param_frame: 200, ..spec }, None).expect("prepares");
+    assert!(run.store.slots() <= 1 + 4, "idle slots past four were freed: {}", run.store.slots());
+    let freed = tickets.into_iter().filter_map(|t| enc.execute_template(&mut run.store, t).err()).count();
+    assert!(freed >= 2, "tickets of freed builds are refused ({freed})");
+    drop(enc);
+}
+
+/// Encoders dropped without committing never run: their slots retire, so a
+/// stream of abandoned frames with changing keys holds a bounded number of
+/// slots, and the store drops without leaking them.
+#[test]
+fn template_abandoned_encoders_release_their_slots() {
+    let device = GpuDevice::new();
+    let k = Kernels::new(&device);
+    let mut run = Run::new(&device);
+    for key in 0..12 {
+        let mut enc = device.create_encoder("template-proof abandoned");
+        encode_template(&mut enc, &k, &mut run, key, Spec { param_frame: key, ..Spec::default() }, None).expect("encodes");
+        drop(enc);
+        assert!(run.store.users().iter().all(|&u| u == 0), "frame {key}: an abandoned buffer still counts as a user");
+        assert_eq!(run.store.slots(), 1, "frame {key}: the abandoned slot is rebuilt in place, not stranded");
+    }
+}
+
+/// The store kept across a buffer replacement (a new key: a build, output
+/// still the reference's), and a second execute of the same slot on the
+/// buffer `commit_and_continue` opened, both executes users of the slot.
+#[test]
+fn template_survives_buffer_replacement_and_split_buffers() {
+    let device = GpuDevice::new();
+    let k = Kernels::new(&device);
+    let spec = Spec::default();
+    let reference = Run::new(&device);
+    let mut first = Run::new(&device);
+    reference_frame(&device, &k, &reference, 0, spec);
+    let mut cache = None;
+    template_frame(&device, &k, &mut first, &mut cache, 0, spec, Path::NoSpan).expect("encodes");
+    assert_eq!(first.contents(), reference.contents());
+    let reference = Run::new(&device);
+    let mut second = Run::new(&device);
+    std::mem::swap(&mut first.store, &mut second.store);
+    let builds = second.store.stats().builds;
+    let mut enc = device.create_encoder("template-proof split");
+    encode_template(&mut enc, &k, &mut second, 0, spec, None).expect("encodes");
+    assert_eq!(second.store.stats().builds - builds, 1, "replaced buffers are a new key");
+    enc.commit_and_continue(&device);
+    encode_template(&mut enc, &k, &mut second, 1, spec, None).expect("encodes on the continued buffer");
+    assert_eq!(second.store.stats().builds - builds, 1, "the continued buffer runs the same build");
+    // The committed first buffer may already have completed and been pruned.
+    assert!(matches!(second.store.users()[..], [1] | [2]), "the continued buffer uses the slot: {:?}", second.store.users());
+    enc.commit_and_wait_completed();
+    reference_frame(&device, &k, &reference, 0, spec);
+    reference_frame(&device, &k, &reference, 1, spec);
+    assert_eq!(second.contents(), reference.contents(), "both executes ran in order");
+    assert_eq!(second.store.users(), [0]);
+}
+
+/// More profiled work than the sampler holds: the overflow runs unsampled
+/// and the output is still the reference's.
+#[test]
+fn template_profiled_past_the_sampler_matches_the_reference() {
+    let device = GpuDevice::new();
+    let k = Kernels::new(&device);
+    let spec = Spec { copies: 120, chunk: 1, live: 90, first: 0, ..Spec::default() };
+    let mut big = Run::new(&device);
+    big.ranges = device.create_buffer_shared(128 * crate::GATED_RANGE_BYTES);
+    let mut reference = Run::new(&device);
+    reference.ranges = device.create_buffer_shared(128 * crate::GATED_RANGE_BYTES);
+    reference_frame(&device, &k, &reference, 0, spec);
+    let mut enc = device.create_encoder("template-proof exhausted");
+    let sampler = device.create_timestamp_sampler(64).expect("timestamp sampling");
+    enc.enable_profiling_at(sampler, &device, ProfileGranularity::Dispatch);
+    encode_template(&mut enc, &k, &mut big, 0, spec, None).expect("encodes");
+    let profile = enc.commit_and_wait_profiled(&device);
+    assert!(profile.overflow > 0, "the sampler ran out");
+    assert_eq!(big.contents(), reference.contents(), "unsampled executes still ran");
 }

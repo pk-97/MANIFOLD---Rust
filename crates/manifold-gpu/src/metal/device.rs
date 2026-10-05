@@ -1432,6 +1432,7 @@ impl GpuDevice {
             scopes: Vec::new(),
             replay: None,
             gpu_time_tap: None,
+            template_token: None,
         }
     }
 

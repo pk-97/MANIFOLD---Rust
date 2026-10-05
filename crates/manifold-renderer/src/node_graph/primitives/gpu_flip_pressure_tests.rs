@@ -1452,7 +1452,7 @@ fn golden_solve(rig: &mut Rig, p: &Problem, stop: Stop, cache: &mut Option<GpuRe
             let arm = profile.spans.iter().find(|s| s.label == "gpu_flip.pressure.arm").expect("the arm's span");
             assert!(rounds[0].start_ms + 1e-6 >= arm.start_ms + arm.millis, "{stop:?}: the rounds start after the arm");
         }
-        assert!(rounds.windows(2).all(|w| w[0].start_ms <= w[1].start_ms + 1e-6), "{granularity:?} {stop:?}: the rounds' spans in order");
+        assert!(rounds.windows(2).all(|w| w[1].start_ms + 1e-3 >= w[0].start_ms + w[0].millis), "{granularity:?} {stop:?}: an execute started before the one it depends on ended");
         assert_eq!((profile.overflow, profile.failed_command_buffers), (0, 0), "{granularity:?} {stop:?}: every span sampled");
     } else {
         enc.commit_and_wait_completed();
@@ -2415,4 +2415,49 @@ fn pressure_module_chunk_cost_probe() {
         ));
     }
     println!("CHUNK PROBE warm Converged, Dam Break 64^3, {PASSES} alternating passes of {REPS}:\n{}", report.join("\n"));
+}
+
+/// The golden with the frame-replay ring busy, on the real solve: every ring
+/// entry is held by an encoder that never commits, so each golden solve's
+/// span finds no entry and the rounds run as the template's executes on a
+/// direct encoder; every Dam Break case still matches main bit for bit.
+#[test]
+fn pressure_module_golden_holds_with_the_ring_busy() {
+    let golden = std::fs::read_to_string(format!("{}/tests/fixtures/{GOLDEN}", env!("CARGO_MANIFEST_DIR"))).expect("golden fixture reads");
+    let (n, dam) = load_fixture(DAM_BREAK);
+    let saved = &dam[0];
+    let p = resample(saved, n, 64);
+    let mut rig = Rig::new(64);
+    let scratch = Rig::new(64);
+    let water: Vec<f32> = p.water.iter().map(|&w| f32::from(u8::from(w))).collect();
+    // SAFETY: shared buffers sized for the lattice; nothing is queued.
+    unsafe {
+        scratch.water.write(0, bytemuck::cast_slice(&water));
+        scratch.rhs.write(0, bytemuck::cast_slice(&p.f));
+    }
+    let mut scratch = scratch;
+    let mut cache = Some(GpuReplayCache::default());
+    let mut held = Vec::new();
+    for _ in 0..manifold_gpu::REPLAY_RING {
+        let mut enc = scratch.device.create_encoder("gpu-flip-pressure-held");
+        enc.begin_replay(&scratch.device, cache.take().expect("cache"));
+        let n = scratch.n as u32;
+        let lattice = Water { lattice: [n; 3], cell_size: scratch.cell_size() as f32, water: &scratch.water, faces: &scratch.faces, phi: None };
+        scratch.solver.prepare(&scratch.device, &mut enc, &lattice).expect("prepares");
+        scratch.solver.solve(&mut enc, &lattice, run_at!(scratch, Stop::Converged(64))).expect("solves");
+        cache = Some(enc.end_replay());
+        held.push(enc);
+    }
+    let busy = cache.as_ref().expect("cache").stats().ring_busy;
+    for stop in GOLDEN_STOPS {
+        let [pressure, scalars, record] = golden_solve(&mut rig, &p, stop, &mut cache);
+        let line = format!(
+            "dambreak[0] frame {} 64^3 level 0 {stop:?} replay pressure {pressure:016x} scalars {scalars:016x} record {record:016x}",
+            saved.frame
+        );
+        assert!(golden.lines().any(|l| l == line), "{stop:?}: with the ring busy the solve moved:\n got {line}");
+    }
+    let stats = cache.as_ref().expect("cache").stats();
+    assert_eq!(stats.ring_busy - busy, GOLDEN_STOPS.len() as u64, "every golden solve found the ring busy");
+    drop(held);
 }
