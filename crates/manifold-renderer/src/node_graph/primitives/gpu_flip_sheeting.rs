@@ -1,8 +1,9 @@
 //! Ported from FLIP Fluids particlesheeter.cpp (MIT); see THIRD_PARTY_NOTICES.md.
 //! GPU FLIP sheet detection, seed selection and births, a stage internal of
 //! `node.gpu_flip_step` (DECOMPOSING_GENERATORS.md section 1.2 (Specialised
-//! solvers are stage nodes); ADDING_PRIMITIVES.md exclusion 6). The contract is `manifold_fluids::sheeter`, the CPU port
-//! proven against the native sheeter; this stage is proven against that port.
+//! solvers are stage nodes); ADDING_PRIMITIVES.md exclusion 6). The contract is
+//! `manifold_fluids::sheeter`, the CPU port proven against the native
+//! sheeter; this stage is proven against that port.
 //!
 //! Output: the births the sheeter would seed before its fill-rate draw, in
 //! the engine's order (ascending candidate rank), each a grid-local position
@@ -15,8 +16,9 @@
 //! [`GpuSheeting::winners`], then `encode_write` puts each birth after the
 //! live prefix in the saved velocity at its seed.
 //!
-//! Parity contract. Exact: cell and half-cell indexing (the f64 floor, see
-//! the shader's `exact_floor`), candidate centres, visiting order, the claim
+//! Parity contract. Exact: cell and half-cell indexing (the f64 floor for
+//! results inside +-2^30, see the shader's `exact_floor`; beyond that and for
+//! non-finite positions it clamps outside every lattice), candidate centres, visiting order, the claim
 //! resolution. Narrowed: interpolation and vector arithmetic run in f32 under
 //! Metal fast math where the engine widens weights to f64 and contracts its
 //! own way, so a decision within rounding of its threshold (band, depth walk,
@@ -24,6 +26,16 @@
 //! cell for the density cap and first-four selection is the shared
 //! ParticleSorter's f32 assignment, which can differ from the engine's f64
 //! floor for a marker within an f32 rounding of a cell face.
+//!
+//! The fill-rate draw is not native's. Native draws a stateful MT19937
+//! stream at 32 bits (fluidsimulation.h `_randomDouble`) in seed order and,
+//! within 2h of a solid, multiplies the rate by that solid's sheeting
+//! strength (fluidsimulation.cpp 7158-7170). Here the draw is a stateless
+//! 24-bit PCG hash of (rank, tick, substep) and there is no solid multiplier
+//! (bodies carry no sheeting strength yet: BUG-g5nm1 (GPU FLIP sheeting solid
+//! strength)). So
+//! selection parity gives birth parity at rate 1 only; at a fractional rate
+//! the births are the same distribution, not the same particles.
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 
@@ -116,7 +128,7 @@ pub(crate) struct StepBirths<'a> {
     pub identity: &'a GpuBuffer,
     /// The pool's slots: births past them are dropped and counted.
     pub slots: u32,
-    /// The fill rate in (0, 1]; the caller encodes nothing at 0.
+    /// The fill rate in (0, 1]; the caller encodes no pass at 0.
     pub rate: f32,
     pub tick: u32,
     pub substep: u32,

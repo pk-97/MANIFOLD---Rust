@@ -303,7 +303,7 @@ fn gpu_flip_sheeting_inactive_slot_and_capacity() {
 fn gpu_flip_sheeting_indexing_is_the_engine_floor_at_non_binary_spacing() {
     let device = crate::test_device();
     let cells = [40u32; 3];
-    for h in [0.3f32, 0.1, 0.7] {
+    for h in [0.3f32, 0.1, 0.7, 1.0] {
         let dx = f64::from(h);
         let mut points = vec![1.5f32];
         for k in 1..80 {
@@ -322,6 +322,12 @@ fn gpu_flip_sheeting_indexing_is_the_engine_floor_at_non_binary_spacing() {
         let negative: Vec<f32> = points.iter().filter(|&&x| x < 4.0 * h).map(|&x| -x).collect();
         points.extend(negative);
         points.extend([-1.5 * h, -0.5 * h, -f32::MIN_POSITIVE, -1e-30]);
+        // Past the exact range and non-finite: clamped to +-2^30, NaN to +2^30.
+        let limit = (1u64 << 30) as f32 * h;
+        for x in [4294967296.0f32, 1073741824.0, limit, limit.next_down(), limit.next_up(), 1e30, f32::MAX, f32::INFINITY] {
+            points.extend([x, -x]);
+        }
+        points.push(f32::NAN);
         let markers: Vec<[f32; 3]> = points.iter().map(|&x| [x, x, x]).collect();
         let records: Vec<FluidParticle> = markers
             .iter()
@@ -348,7 +354,10 @@ fn gpu_flip_sheeting_indexing_is_the_engine_floor_at_non_binary_spacing() {
         let words = copy_out(&device, stage.births().0);
         let (mut naive_wrong, mut checked) = (0, 0);
         for (s, &x) in points.iter().enumerate() {
-            let engine = |inv: f64| (f64::from(x) * inv).floor() as i32;
+            let engine = |inv: f64| {
+                let f = (f64::from(x) * inv).floor();
+                if f.is_nan() { 1 << 30 } else { f.clamp(-1073741824.0, 1073741824.0) as i32 }
+            };
             let (cell, sub) = (engine(1.0 / dx), engine(1.0 / (0.5 * dx)));
             assert_eq!(words[8 * s] as i32, cell, "h {h}: cell of {x}");
             assert_eq!(words[8 * s + 4] as i32, sub, "h {h}: half-cell of {x}");

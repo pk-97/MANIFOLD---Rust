@@ -103,8 +103,17 @@ fn below(x: vec3<u32>, i: u32) -> bool {
     }
     return false;
 }
+// Exact for results in (-2^30, 2^30). Past that, and for non-finite input, it
+// clamps to +-2^30 (NaN to +2^30): every caller range-checks or clamps the
+// index, and +-2^30 is outside any lattice, so the decision is the engine's.
+const INDEX_LIMIT: i32 = 1073741824;
 fn exact_floor(p: f32, r: vec2<u32>) -> i32 {
     if p == 0.0 { return 0; }
+    // Exponent bits, not a comparison: fast math may fold a NaN test away.
+    let raw = bitcast<u32>(p);
+    if (raw & 0x7f800000u) == 0x7f800000u {
+        return select(INDEX_LIMIT, -INDEX_LIMIT, raw == 0xff800000u);
+    }
     // The product's magnitude rounds the same either sign (nearest-even), so
     // the magnitude is floored and a negative fractional result steps down.
     let negative = p < 0.0;
@@ -133,12 +142,14 @@ fn exact_floor(p: f32, r: vec2<u32>) -> i32 {
         }
         exponent = exponent + i32(d);
     }
-    if exponent >= 0 { return select(0x7fffffff, -0x7fffffff, negative); }
+    if exponent >= 0 { return select(INDEX_LIMIT, -INDEX_LIMIT, negative); }
     let s = u32(-exponent);
     var whole = 0u;
     var fraction = true;
     if s < 64u {
-        whole = shr96(vec3<u32>(q, 0u), s).x;
+        let shifted = shr96(vec3<u32>(q, 0u), s);
+        if shifted.y != 0u || shifted.x >= u32(INDEX_LIMIT) { return select(INDEX_LIMIT, -INDEX_LIMIT, negative); }
+        whole = shifted.x;
         fraction = below(vec3<u32>(q, 0u), s);
     }
     if !negative { return i32(whole); }

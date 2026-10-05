@@ -1091,7 +1091,10 @@ struct Step<'a> {
     density: bool,
     narrow_enabled: bool,
     restore_narrow: bool,
-    /// The sheet fill rate; 0 encodes no sheeting pass at all.
+    /// The sheet fill rate. At 0 no sheeting pass is encoded and no fresh
+    /// scratch is reserved; the pipelines still prepare at install (so
+    /// switching on mid-show does not hitch) and scratch reserved while it was
+    /// on stays held.
     sheet_rate: f32,
 }
 
@@ -1114,6 +1117,8 @@ impl StepState {
         self.solver.prepare_pipelines(device);
         self.bodies.prepare_pipelines(device);
         self.narrow.prepare(device);
+        // Sheet seeding prepares even while its rate is 0: switching it on mid-show
+        // must not compile pipelines on the content thread.
         self.surface.prepare(device);
         self.sheeting.prepare(device);
     }
@@ -1865,7 +1870,7 @@ impl StepState {
         // Sheet seeding (fluidsimulation.cpp _updateSheetSeeding), after the
         // engine's own marker update for this substep and before the FLIP
         // update: births join the move, so they take this substep's velocity
-        // change and advection. Off, nothing here is encoded.
+        // change and advection. Off (rate 0), nothing here is encoded.
         if sheeting {
             #[cfg(feature = "water-race-probes")]
             enc.set_profile_tag("gpu_flip.stage.sheeting");

@@ -2269,9 +2269,9 @@ fn dam_break_sheeting(n: usize, rate: Option<f64>) -> Run {
 }
 
 /// Sheet seeding off is the step it was (BUG-j9l9w): the Dam Break's
-/// particles after four frames, digested. The unwired digest printed here is
-/// the comparison against main (the same test run on main's step); Sheet
-/// Fill Rate 0 set explicitly must equal it.
+/// particles after four frames, digested, equal to main's digest before
+/// sheet seeding (a deliberate step change re-pins it). Sheet Fill Rate 0 set
+/// explicitly must equal it too.
 #[test]
 fn gpu_flip_sheeting_off_leaves_the_dam_break_unchanged() {
     let digest = |rate: Option<f64>| {
@@ -2285,6 +2285,9 @@ fn gpu_flip_sheeting_off_leaves_the_dam_break_unchanged() {
     };
     let unwired = digest(None);
     eprintln!("DAM BREAK DIGEST 32 x4: {unwired:016x}");
+    // Main's step before sheet seeding gave this digest; the step with sheeting
+    // off must keep it until the step itself is meant to change.
+    assert_eq!(unwired, 0xd747_2f0b_e4ed_be51, "sheeting off changed the Dam Break");
     assert_eq!(digest(Some(0.0)), unwired, "rate 0 changed the step");
 }
 
