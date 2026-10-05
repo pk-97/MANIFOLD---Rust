@@ -92,67 +92,6 @@ pub fn sheet_particles(
     Ok(seeds)
 }
 
-/// Test fixture: thin curved sheets with random holes on a dx 0.25 grid: a spherical
-/// shell and a rippled horizontal sheet, both 0.3 m thick, a few
-/// thousand markers, fixed seed.
-pub fn splash_fixture() -> (Vec<[f32; 3]>, Vec<f32>, [u32; 3], f64) {
-    const M: u32 = 40;
-    const H: f64 = 0.25;
-    const T: f32 = 0.15;
-    let centre = [5.0f32, 4.5, 5.0];
-    let radius = 2.2f32;
-    let ripple = |x: f32, z: f32| 8.3 + 0.4 * (1.3 * x).sin() * (0.9 * z).cos();
-    let m = M as usize;
-    let phi: Vec<f32> = (0..m * m * m)
-        .map(|index| {
-            let c = [index % m, (index / m) % m, index / (m * m)].map(|v| (v as f32 + 0.5) * H as f32);
-            let r = ((c[0] - centre[0]).powi(2) + (c[1] - centre[1]).powi(2) + (c[2] - centre[2]).powi(2)).sqrt();
-            let shell = (r - radius).abs() - T;
-            let sheet = (c[1] - ripple(c[0], c[2])).abs() - T;
-            shell.min(sheet)
-        })
-        .collect();
-    let mut state = 0x9E37_79B9_7F4A_7C15u64;
-    let mut uniform = move || {
-        state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        ((z ^ (z >> 31)) >> 40) as f32 / (1u64 << 24) as f32
-    };
-    fn direction(u: &mut dyn FnMut() -> f32) -> [f32; 3] {
-        let z = 2.0 * u() - 1.0;
-        let a = std::f32::consts::TAU * u();
-        let s = (1.0 - z * z).sqrt();
-        [s * a.cos(), z, s * a.sin()]
-    }
-    let shell_holes: Vec<[f32; 3]> = (0..6).map(|_| direction(&mut uniform)).collect();
-    // Sheet holes: centre x, radius 0.3–0.6 m, centre z.
-    let mut sheet_holes = Vec::new();
-    for _ in 0..6 {
-        let x = 1.5 + 7.0 * uniform();
-        let r = 0.3 + 0.3 * uniform();
-        sheet_holes.push([x, r, 1.5 + 7.0 * uniform()]);
-    }
-    let mut markers = Vec::new();
-    while markers.len() < 2500 {
-        let d = direction(&mut uniform);
-        let r = radius + T * 0.8 * (2.0 * uniform() - 1.0);
-        if shell_holes.iter().any(|h| d[0] * h[0] + d[1] * h[1] + d[2] * h[2] > 0.25f32.cos()) {
-            continue;
-        }
-        markers.push([centre[0] + r * d[0], centre[1] + r * d[1], centre[2] + r * d[2]]);
-    }
-    while markers.len() < 4000 {
-        let (x, z) = (1.5 + 7.0 * uniform(), 1.5 + 7.0 * uniform());
-        if sheet_holes.iter().any(|h| (x - h[0]).hypot(z - h[2]) < h[1]) {
-            continue;
-        }
-        markers.push([x, ripple(x, z) + T * 0.8 * (2.0 * uniform() - 1.0), z]);
-    }
-    (markers, phi, [M; 3], H)
-}
-
 #[cfg(test)]
 mod tests {
     use super::{DEFAULT_FILL_THRESHOLD, sheet_particles, sheet_particles_into};
@@ -301,7 +240,7 @@ mod tests {
 
     #[test]
     fn port_matches_oracle_on_a_splash() {
-        let (markers, phi, cells, dx) = super::splash_fixture();
+        let (markers, phi, cells, dx) = crate::sheeter::fixtures::splash();
         let strict = port_matches(&markers, &phi, cells, dx, DEFAULT_FILL_THRESHOLD);
         let loose = port_matches(&markers, &phi, cells, dx, -0.5);
         assert!(strict >= 20 && loose > strict, "the splash seeds {strict} at -0.95 and {loose} at -0.5");

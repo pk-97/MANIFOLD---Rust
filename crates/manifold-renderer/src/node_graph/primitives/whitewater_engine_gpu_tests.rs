@@ -523,8 +523,7 @@ fn whitewater_surface_distance_clock_gate() {
 /// Union of spheres of the engine's liquid SDF radius (0.5·√3·dx) around
 /// each marker, capped at ±3 dx: the shape of ParticleLevelSet's input, not
 /// its exact construction.
-#[cfg(feature = "whitewater-oracle")]
-fn marker_phi(markers: &[[f32; 3]], cells: [u32; 3], dx: f32) -> Vec<f32> {
+pub(super) fn marker_phi(markers: &[[f32; 3]], cells: [u32; 3], dx: f32) -> Vec<f32> {
     let n = cells.map(|c| c as usize);
     let radius = 0.5 * 3f32.sqrt() * dx;
     let mut phi = vec![3.0 * dx; n[0] * n[1] * n[2]];
@@ -553,7 +552,7 @@ fn marker_phi(markers: &[[f32; 3]], cells: [u32; 3], dx: f32) -> Vec<f32> {
 fn whitewater_surface_distance_matches_engine_on_a_splash() {
     use manifold_fluids::{sheet_oracle, sheeter, whitewater_oracle};
     let mut h = Harness::new();
-    let (markers, analytic, cells, dx) = sheet_oracle::splash_fixture();
+    let (markers, analytic, cells, dx) = sheeter::fixtures::splash();
     let cell = dx as f32;
     let mut stage = super::whitewater_distance::SurfaceDistance::default();
     stage.prepare(&h.device);
