@@ -15,8 +15,10 @@
 //! open one encoder per dispatch with encode replay off, so their split is a
 //! ratio, never the budget. `--stamp-granularity node` keeps one sampled
 //! encoder per graph step instead (replay still off; inner labels are grouped).
-//! A build with `manifold-renderer/water-race-probes` uses the solver's
-//! existing stage tags to subdivide GPU FLIP preparation, solves and movement.
+//! The solver's stage tags subdivide GPU FLIP's step span by stage. Every
+//! frame also prints the live simulation clock's decisions (accepted ticks,
+//! due boundaries, cap, reanchor, fresh dropped time), and the summary
+//! attributes each frame without a solver tick to phase creep or a reanchor.
 //! In paced mode a timestamped frame waits for its GPU work, a plain frame
 //! does not, and
 //! a liquid coupled to a body runs no tick while the last tick's reaction
@@ -36,6 +38,7 @@ use std::time::{Duration, Instant};
 
 use manifold_gpu::{GpuFrameProfile, GpuWorkKind, ProfileGranularity};
 use manifold_renderer::node_graph::StepProfile;
+use manifold_renderer::node_graph::physics_metrics::ClockMetrics;
 
 use crate::content_command::ContentCommand;
 use crate::perf_soak::{prepare_project_edited, PreparedProject};
@@ -46,6 +49,7 @@ const SOLVE_LEVEL_PARAM: &str = "solve_level";
 const STEP: &str = "node.gpu_flip_step";
 const WHITEWATER: &str = "node.whitewater_step";
 const RENDER: &str = "node.render_scene";
+const STAGE_PREFIX: &str = "gpu_flip.stage.";
 /// Spans a timestamped frame may hold: the most a process can sample (32
 /// buffers of 2,048 on M4 Max). A calm res-64 GPU FLIP frame stamps ~38,000.
 const MAX_SPANS: usize = 65536;
@@ -155,6 +159,70 @@ mod tests {
         assert!(split.compute_dispatches.is_none(), "a stage span is not one dispatch");
     }
 
+    /// Synthetic frames: a 30 Hz grid under 60 fps alternates tick and
+    /// no-tick (creep), a reanchor blames only the next no-tick frame, and
+    /// restarts, holds and absent clocks get their own verdicts.
+    #[test]
+    fn no_tick_frames_are_attributed_to_creep_or_reanchor() {
+        let clock = |accepted, due, reanchored| ClockMetrics {
+            clocks: 1, accepted, due, live_cap: 2, reanchored,
+            fresh_dropped_seconds: if reanchored { 0.05 } else { 0.0 },
+            ..ClockMetrics::default()
+        };
+        let restart = ClockMetrics { restarted: true, ..clock(0, 0, false) };
+        let held = ClockMetrics { held: true, ..clock(0, 0, false) };
+        let frames = [
+            restart,
+            clock(1, 1, false),
+            clock(0, 0, false),        // creep
+            clock(2, 4, true),         // overload: drop and reanchor
+            clock(0, 0, false),        // the reanchor's phase shift
+            clock(0, 0, false),        // still no boundary: creep again
+            clock(1, 1, false),
+            clock(1, 3, true),         // late-frame cap of one, reanchor
+            clock(1, 1, false),        // ticked: blame returns to creep
+            clock(0, 0, false),
+            held,
+            ClockMetrics::default(),
+            clock(0, 1, false),
+        ];
+        use NoTick::*;
+        assert_eq!(attribute(&frames), [
+            Some(Restart), None, Some(Creep), None, Some(Reanchor), Some(Creep), None, None, None,
+            Some(Creep), Some(Held), Some(NoClock), Some(Other),
+        ]);
+
+        let mut phase = Phase::default();
+        for (clock, no_tick) in frames.iter().zip(attribute(&frames)) {
+            let ticked = no_tick.is_none();
+            phase.add(&Frame {
+                interval_ms: if ticked { 33.0 } else { 16.0 },
+                plain_gpu_ms: Some(if ticked { (30.0, 2.0) } else { (14.0, 1.5) }),
+                clock: *clock,
+                no_tick,
+                ..Frame::default()
+            });
+        }
+        assert_eq!(phase.no_tick["Creep"], 3);
+        assert_eq!(phase.no_tick["Reanchor"], 1);
+        assert_eq!(phase.reanchors, 2);
+        assert!((phase.fresh_dropped_seconds - 0.1).abs() < 1e-12);
+        assert_eq!(phase.gpu_by_tick[0], vec![32.0; 5]);
+        assert_eq!(phase.gpu_by_tick[1], vec![15.5; 8]);
+        assert_eq!(phase.wall_by_tick[1].len(), 8);
+    }
+
+    #[test]
+    fn stage_coverage_compares_stage_spans_to_the_step_span() {
+        let mut split = Split::default();
+        split.per_type.insert(STEP.into(), 10.0);
+        split.per_step_label.insert("gpu_flip.stage.pressure".into(), 6.0);
+        split.per_step_label.insert("gpu_flip.stage.move".into(), 3.6);
+        split.per_step_label.insert("flip-clock-schedule".into(), 0.4);
+        assert!((stage_coverage(&split).unwrap() - 0.96).abs() < 1e-12);
+        assert_eq!(stage_coverage(&Split::default()), None);
+    }
+
     #[test]
     fn duplicate_profile_tags_sum_cpu_preparation_and_only_dispatch_mode_counts_compute() {
         use manifold_gpu::GpuProfiledSpan;
@@ -182,13 +250,13 @@ mod tests {
         assert_eq!(dispatch.compute_dispatches.as_ref().unwrap()[STEP], 2);
         assert_eq!(dispatch.invalid, 1);
         let mut phase = Phase::default();
-        phase.add(&Frame { interval_ms: 4.0, fence_ms: 0.0, plain_gpu_ms: None, split: Some(dispatch) });
+        phase.add(&Frame { interval_ms: 4.0, fence_ms: 0.0, plain_gpu_ms: None, split: Some(dispatch), ..Frame::default() });
         assert_eq!(phase.per_type_cpu_ms[STEP], vec![3.0]);
         assert_eq!(phase.compute_dispatches[STEP], vec![2.0]);
         assert_eq!(phase.dispatch_frames, 1);
         assert_eq!(phase.invalid, 1);
         let idle = split_profiles(&steps, &[], ProfileGranularity::Dispatch);
-        phase.add(&Frame { interval_ms: 4.0, fence_ms: 0.0, plain_gpu_ms: None, split: Some(idle) });
+        phase.add(&Frame { interval_ms: 4.0, fence_ms: 0.0, plain_gpu_ms: None, split: Some(idle), ..Frame::default() });
         assert_eq!(phase.compute_dispatches[STEP], vec![2.0, 0.0]);
         assert_eq!(phase.dispatch_frames, 2);
 
@@ -197,7 +265,7 @@ mod tests {
         assert_eq!(tagged.per_type[STEP], 1.5);
         assert!(tagged.compute_dispatches.is_none());
         let mut phase = Phase::default();
-        phase.add(&Frame { interval_ms: 4.0, fence_ms: 0.0, plain_gpu_ms: None, split: Some(tagged) });
+        phase.add(&Frame { interval_ms: 4.0, fence_ms: 0.0, plain_gpu_ms: None, split: Some(tagged), ..Frame::default() });
         assert_eq!(phase.per_type_cpu_ms[STEP], vec![3.0]);
         assert!(phase.compute_dispatches.is_empty());
         assert_eq!(phase.dispatch_frames, 0);
@@ -206,6 +274,7 @@ mod tests {
 
 /// One frame's numbers: paced tick interval/surface wait, or fixed-clock
 /// tick plus fence/completion wait. A timestamped frame also has its split.
+#[derive(Default)]
 struct Frame {
     interval_ms: f64,
     fence_ms: f64,
@@ -213,6 +282,74 @@ struct Frame {
     /// from their completion handlers, including gaps between their chunks.
     plain_gpu_ms: Option<(f64, f64)>,
     split: Option<Split>,
+    /// The live simulation clocks' decisions this frame.
+    clock: ClockMetrics,
+    /// Why this frame ran no solver tick; None when it ticked.
+    no_tick: Option<NoTick>,
+}
+
+/// Why a frame carried no solver tick, read from the clock's own decisions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NoTick {
+    /// No Sim Rate boundary arrived since the last accepted one, on a grid
+    /// no reanchor has moved since the last tick: phase creep of the frame
+    /// cadence against the simulation grid.
+    Creep,
+    /// No boundary arrived because the previous reanchor restarted the grid
+    /// at that frame's transport after discarding overload time.
+    Reanchor,
+    /// The clock restarted (first frame, reset, setup change); it seeds.
+    Restart,
+    /// Transport paused or Speed 0.
+    Held,
+    /// No live clock advanced (a domain held, say for collider geometry).
+    NoClock,
+    /// A boundary was due yet nothing was accepted. The clock never does
+    /// this today; counted so it cannot hide.
+    Other,
+}
+
+/// Attribute every no-tick frame. Only the first no-tick frame after a
+/// reanchor blames it; a tick in between returns blame to creep.
+fn attribute(clocks: &[ClockMetrics]) -> Vec<Option<NoTick>> {
+    let mut after_reanchor = false;
+    clocks.iter().map(|clock| {
+        let verdict = if clock.clocks == 0 {
+            Some(NoTick::NoClock)
+        } else if clock.restarted {
+            Some(NoTick::Restart)
+        } else if clock.accepted > 0 {
+            None
+        } else if clock.held {
+            Some(NoTick::Held)
+        } else if clock.due > 0 {
+            Some(NoTick::Other)
+        } else if after_reanchor {
+            Some(NoTick::Reanchor)
+        } else {
+            Some(NoTick::Creep)
+        };
+        if clock.clocks > 0 {
+            if clock.accepted > 0 || clock.restarted || verdict == Some(NoTick::Reanchor) {
+                after_reanchor = false;
+            }
+            if clock.reanchored {
+                after_reanchor = true;
+            }
+        }
+        verdict
+    }).collect()
+}
+
+/// The solver's stage spans as a fraction of the whole step span in one
+/// timestamped frame. None when the frame stamped no step work.
+fn stage_coverage(split: &Split) -> Option<f64> {
+    let step = split.per_type.get(STEP).copied().filter(|ms| *ms > 0.0)?;
+    let stages: f64 = split.per_step_label.iter()
+        .filter(|(label, _)| label.starts_with(STAGE_PREFIX))
+        .map(|(_, ms)| ms)
+        .sum();
+    Some(stages / step)
 }
 
 /// The GPU-clock span covered by one encoder's chunks within a frame.
@@ -292,19 +429,40 @@ struct Phase {
     per_step: BTreeMap<String, Vec<f64>>,
     per_whitewater: BTreeMap<String, Vec<f64>>,
     per_render: BTreeMap<String, Vec<f64>>,
+    /// Command-buffer GPU span sums by whether the frame ran a solver tick:
+    /// [plain tick, plain no-tick, timestamped tick, timestamped no-tick].
+    gpu_by_tick: [Vec<f64>; 4],
+    /// Wall intervals of tick and no-tick frames.
+    wall_by_tick: [Vec<f64>; 2],
+    no_tick: BTreeMap<String, usize>,
+    reanchors: usize,
+    fresh_dropped_seconds: f64,
+    stage_coverage: Vec<f64>,
 }
 
 impl Phase {
     fn add(&mut self, frame: &Frame) {
         self.interval.push(frame.interval_ms);
         self.fence.push(frame.fence_ms);
+        let quiet = usize::from(frame.no_tick.is_some());
+        self.wall_by_tick[quiet].push(frame.interval_ms);
+        if let Some(reason) = frame.no_tick {
+            *self.no_tick.entry(format!("{reason:?}")).or_default() += 1;
+        }
+        self.reanchors += usize::from(frame.clock.reanchored);
+        self.fresh_dropped_seconds += frame.clock.fresh_dropped_seconds;
         if let Some((generators, compositor)) = frame.plain_gpu_ms {
             self.plain_generators.push(generators);
             self.plain_compositor.push(compositor);
             self.plain_total.push(generators + compositor);
+            self.gpu_by_tick[quiet].push(generators + compositor);
         }
         let Some(split) = &frame.split else { return };
         self.stamped_total.push(split.total_ms);
+        self.gpu_by_tick[2 + quiet].push(split.total_ms);
+        if let Some(coverage) = stage_coverage(split) {
+            self.stage_coverage.push(coverage);
+        }
         self.overflow += split.overflow;
         self.invalid += split.invalid;
         for (into, from) in [
@@ -329,6 +487,49 @@ impl Phase {
                     .or_insert_with(|| vec![0.0; self.dispatch_frames]);
                 *samples.last_mut().expect("the current dispatch frame has a count slot") = *count as f64;
             }
+        }
+    }
+
+    /// Solver-tick attribution from the clock's decisions, GPU work split by
+    /// tick and no-tick frames, and the stage spans' share of the step span.
+    fn report_ticks(&self) {
+        let quiet: usize = self.no_tick.values().sum();
+        let reasons: Vec<String> = self.no_tick.iter().map(|(reason, n)| format!("{reason} {n}")).collect();
+        println!(
+            "  solver ticks: {} frames ticked, {quiet} did not ({}) | reanchors {} | fresh dropped {:.4} s simulated",
+            self.wall_by_tick[0].len(),
+            if reasons.is_empty() { "none".to_owned() } else { reasons.join(", ") },
+            self.reanchors,
+            self.fresh_dropped_seconds,
+        );
+        let row = |label: &str, samples: &[f64]| format!(
+            "{label} ({}) p50 {:.2} p95 {:.2}", samples.len(), percentile(samples, 0.5), percentile(samples, 0.95));
+        println!(
+            "  wall interval ms by tick: {} | {}",
+            row("tick", &self.wall_by_tick[0]),
+            row("no-tick", &self.wall_by_tick[1]),
+        );
+        println!(
+            "  measured GPU span sum ms by tick: plain {} | {}",
+            row("tick", &self.gpu_by_tick[0]),
+            row("no-tick", &self.gpu_by_tick[1]),
+        );
+        if !self.stamped_total.is_empty() {
+            println!(
+                "  timestamped GPU ms by tick (replay off, profiling inflates these): {} | {}",
+                row("tick", &self.gpu_by_tick[2]),
+                row("no-tick", &self.gpu_by_tick[3]),
+            );
+        }
+        if !self.stage_coverage.is_empty() {
+            let low = percentile(&self.stage_coverage, 0.0);
+            let high = percentile(&self.stage_coverage, 1.0);
+            println!(
+                "  gpu_flip stage spans / step span over {} frames: p50 {:.3} min {low:.3} max {high:.3} ({})",
+                self.stage_coverage.len(),
+                percentile(&self.stage_coverage, 0.5),
+                if (low - 1.0).abs() <= 0.05 && (high - 1.0).abs() <= 0.05 { "within 5%" } else { "OUTSIDE 5%" },
+            );
         }
     }
 
@@ -373,6 +574,7 @@ impl Phase {
                 self.invalid,
             );
         }
+        self.report_ticks();
         print_split("per node type", &self.per_type);
         let (step_title, whitewater_title) = if self.dispatch_frames > 0 {
             ("gpu_flip_step per dispatch label", "whitewater_step per dispatch label")
@@ -446,9 +648,8 @@ fn split_profiles(
         split.overflow += profile.overflow;
         split.invalid += profile.invalid;
         for span in &profile.spans {
-            // The opt-in water-race-probes build subdivides GPU FLIP's node
-            // tag into stages. Preserve those labels in real-project probes.
-            let stage = span.tag.starts_with("gpu_flip.stage.");
+            // GPU FLIP's step subdivides its node tag into stage tags.
+            let stage = span.tag.starts_with(STAGE_PREFIX);
             let type_id = if stage { STEP.to_owned() } else {
                 types.get(span.tag.as_str()).map_or_else(|| format!("(untagged, {buffer})"), |type_id| (*type_id).to_owned())
             };
@@ -589,7 +790,12 @@ fn probe(args: &Args) -> Result<(), String> {
         {
             write_png(&mut ct, path);
         }
-        frames.push(Frame { interval_ms, fence_ms, plain_gpu_ms: None, split: frame_split });
+        let clock = ct.physics_metrics.clock;
+        frames.push(Frame { interval_ms, fence_ms, plain_gpu_ms: None, split: frame_split, clock, no_tick: None });
+    }
+    let clocks: Vec<ClockMetrics> = frames.iter().map(|frame| frame.clock).collect();
+    for (frame, verdict) in frames.iter_mut().zip(attribute(&clocks)) {
+        frame.no_tick = verdict;
     }
     set_profiling(&mut ct, false);
     ct.content_pipeline.wait_for_render_complete();
@@ -633,20 +839,29 @@ fn probe(args: &Args) -> Result<(), String> {
     }
 
     let wall_label = if args.frame_clock { "tick + GPU fence" } else { "wall interval" };
-    println!("  per frame: {wall_label} ms / command-buffer GPU span sum ms (* = timestamped, replay off, no plain GPU time):");
-    for (row_index, row) in frames.chunks(8).enumerate() {
-        let cells: Vec<String> = row
-            .iter()
-            .enumerate()
-            .map(|(i, f)| {
-                let index = row_index * 8 + i;
-                match f.plain_gpu_ms {
-                    Some((g, c)) => format!("{index:>3}:{:>6.1}/{:<5.1}", f.interval_ms, g + c),
-                    None => format!("{index:>3}:{:>6.1}*     ", f.interval_ms),
-                }
-            })
-            .collect();
-        println!("    {}", cells.join(" "));
+    println!("  per frame: {wall_label} ms / measured command-buffer GPU span sum ms (* = timestamped, replay off, profiling changes its numbers; no plain GPU time)");
+    println!("    clock: ticks accepted/due/live cap, ticks accepted this epoch [GPU-completed where tracked], epoch, transport s, R = reanchor, H = held, S = restart, drop = fresh dropped simulated ms, no-tick verdict");
+    for (index, f) in frames.iter().enumerate() {
+        let gpu = match f.plain_gpu_ms {
+            Some((g, c)) => format!("{:>6.1} ", g + c),
+            None => "     * ".to_owned(),
+        };
+        let c = &f.clock;
+        let completed = c.completed_ticks.map_or(String::new(), |done| format!(" [{done}]"));
+        let flags: String = [(c.reanchored, 'R'), (c.held, 'H'), (c.restarted, 'S')]
+            .into_iter().filter_map(|(on, flag)| on.then_some(flag)).collect();
+        let verdict = f.no_tick.map_or(String::new(), |reason| format!(" no-tick:{reason:?}"));
+        println!(
+            "    {index:>4} {:>6.1} /{gpu}| {}/{}/{} thru {}{completed} ep {} t {:.4} {flags:<2} drop {:.1}{verdict}",
+            f.interval_ms,
+            c.accepted,
+            c.due,
+            c.live_cap,
+            c.accepted_through,
+            c.epoch,
+            c.transport,
+            c.fresh_dropped_seconds * 1e3,
+        );
     }
     let (mut whole, mut splash, mut calm) = (Phase::default(), Phase::default(), Phase::default());
     for (index, frame) in frames.iter().enumerate() {

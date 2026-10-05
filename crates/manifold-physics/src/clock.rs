@@ -77,6 +77,16 @@ pub struct ClockFrame {
     pub display_time: f64,
     /// Simulated seconds discarded under overload since this epoch began.
     pub dropped_seconds: f64,
+    /// Simulated seconds this frame's reanchor discarded; 0 without one.
+    pub fresh_dropped_seconds: f64,
+    /// Whole Sim Rate boundaries transport crossed since the last accepted
+    /// one. 0 on a frame that ticks nothing because no boundary arrived.
+    pub due: u32,
+    /// The live acceptance cap in force (1 after a late frame, else 2).
+    /// None offline, where every owed interval runs.
+    pub live_cap: Option<u32>,
+    /// The transport this frame observed.
+    pub transport: f64,
 }
 
 /// One transport clock shared by physics consumers.
@@ -310,6 +320,10 @@ impl SimulationClock {
                     target_time: self.target_time,
                     display_time: self.simulation_time,
                     dropped_seconds: self.dropped_seconds,
+                    fresh_dropped_seconds: 0.0,
+                    due: 0,
+                    live_cap: (!offline).then(|| self.live_cap() as u32),
+                    transport,
                 };
             }
         }
@@ -334,8 +348,8 @@ impl SimulationClock {
         } else {
             transport_first
         };
-        let transport_end = if offline { transport_reached }
-            else { transport_reached.min(transport_first + self.live_cap()) };
+        let live_cap = (!offline).then(|| self.live_cap());
+        let transport_end = live_cap.map_or(transport_reached, |cap| transport_reached.min(transport_first + cap));
         let accepted_transport = if restarted {
             transport
         } else {
@@ -404,8 +418,10 @@ impl SimulationClock {
         let display_time = self.simulation_at(display_from).clamp(0.0, self.simulation_time);
         let speed_history = self.snapshot_history();
         let frame_transport_origin = self.transport_origin;
+        let mut fresh_dropped_seconds = 0.0;
         if reanchored {
-            self.dropped_seconds += (map_transport(&self.speed_history, transport) - self.simulation_time).max(0.0);
+            fresh_dropped_seconds = (map_transport(&self.speed_history, transport) - self.simulation_time).max(0.0);
+            self.dropped_seconds += fresh_dropped_seconds;
             // Keep accepted history intact. The discarded transport span is a
             // plateau, followed by the current Speed at the fresh anchor.
             let retained = self.speed_history.partition_point(|anchor| anchor.transport < accepted_transport);
@@ -440,6 +456,10 @@ impl SimulationClock {
             target_time: self.target_time,
             display_time,
             dropped_seconds: self.dropped_seconds,
+            fresh_dropped_seconds,
+            due: (transport_reached - transport_first) as u32,
+            live_cap: live_cap.map(|cap| cap as u32),
+            transport,
         }
     }
 }
@@ -464,6 +484,9 @@ impl ClockFrame {
         self.transport_intervals += next.transport_intervals;
         self.plan.end = next.plan.end;
         self.plan.intervals += next.plan.intervals;
+        self.due = self.due.saturating_add(next.due);
+        self.fresh_dropped_seconds += next.fresh_dropped_seconds;
+        self.transport = next.transport;
         self.simulation_time = next.simulation_time;
         self.target_time = next.target_time;
         self.display_time = next.display_time;
@@ -879,6 +902,53 @@ mod tests {
         export.advance(0.0, TICK, 1.0, 0.0, false, true);
         let _load = live_load_scope(Some(late));
         assert_eq!(export.advance(5.5 * TICK, TICK, 1.0, 0.0, false, true).ticks, 5);
+    }
+
+    /// The frame-time counters are the clock's own decisions: accepted ticks
+    /// are the due boundaries clipped to the cap in force, a reanchor happens
+    /// exactly when due exceeds the cap, and the fresh drop is the step in the
+    /// cumulative total. A frame that crosses no boundary ticks nothing.
+    #[test]
+    fn decision_counters_match_the_clock_over_an_overload_sequence() {
+        let interval = 1.0 / 30.0;
+        let budget = Seconds(1.0 / 60.0);
+        let late = Some(LiveLoad { previous: Seconds(0.05), budget });
+        let on_time = Some(LiveLoad { previous: Seconds(0.01), budget });
+        let mut clock = SimulationClock::default();
+        let first = clock.advance(0.0, interval, 1.0, 0.0, false, false);
+        assert!(first.restarted);
+        assert_eq!((first.due, first.ticks), (0, 0));
+        // (transport offset from the last frame, load, due, cap, reanchored)
+        let sequence = [
+            (1.0 * interval + 1e-4, on_time, 1, 2, false),
+            (0.5 * interval, on_time, 0, 2, false),
+            (5.2 * interval, on_time, 5, 2, true),
+            (3.1 * interval, late, 3, 1, true),
+            (0.4 * interval, late, 0, 1, false),
+            (0.7 * interval, on_time, 1, 2, false),
+            (2.0 * interval, late, 2, 1, true),
+        ];
+        let mut transport = 0.0;
+        let mut previous_dropped = 0.0;
+        for (step, (offset, load, due, cap, reanchored)) in sequence.into_iter().enumerate() {
+            transport += offset;
+            let _load = live_load_scope(load);
+            let frame = clock.advance(transport, interval, 1.0, 0.0, false, false);
+            let at = format!("frame {step}");
+            assert_eq!(frame.due, due, "{at}");
+            assert_eq!(frame.live_cap, Some(cap), "{at}");
+            assert_eq!(frame.ticks, due.min(cap), "{at}");
+            assert_eq!(frame.reanchored, reanchored, "{at}");
+            assert_eq!(frame.reanchored, frame.due > cap, "{at}");
+            assert_eq!(frame.epoch, first.epoch, "{at}");
+            assert_eq!(frame.transport, transport, "{at}");
+            assert_eq!(frame.first_sequence + u64::from(frame.ticks), clock.ticks_done(), "{at}");
+            assert!((frame.fresh_dropped_seconds - (frame.dropped_seconds - previous_dropped)).abs() < 1e-12, "{at}");
+            assert_eq!(frame.fresh_dropped_seconds > 0.0, reanchored, "{at}");
+            previous_dropped = frame.dropped_seconds;
+        }
+        let export = SimulationClock::default().advance(0.0, interval, 1.0, 0.0, false, true);
+        assert_eq!(export.live_cap, None);
     }
 
     /// Display frames wobble around their nominal times and Speed changes

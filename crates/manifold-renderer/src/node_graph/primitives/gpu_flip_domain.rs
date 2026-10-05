@@ -773,6 +773,10 @@ impl GpuFlipDomain {
             offline,
         );
         self.scheduled_frame = Some(frame.clone());
+        crate::node_graph::physics_metrics::record_clock(
+            &frame,
+            self.coupled.owner.as_ref().map(LiquidRigidOwner::completed),
+        );
         if frame.numerical_error {
             crate::node_graph::physics_metrics::record_simulation(0.0, 0.0, false, true);
         }

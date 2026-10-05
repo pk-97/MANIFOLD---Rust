@@ -19,7 +19,52 @@ pub struct PhysicsMetrics {
     pub backlog_seconds: f32,
     pub sim_step_cap_hit: bool,
     pub sim_nonfinite: bool,
+    /// The live simulation clocks' own decisions this frame.
+    pub clock: ClockMetrics,
 }
+
+/// What the live simulation clocks decided this frame, copied from their
+/// `ClockFrame`s, never inferred from timing. With several clocks the counts
+/// add, the cap is the tightest, and epoch/transport are the last clock's.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ClockMetrics {
+    /// Live clocks advanced this frame. 0: no clock ran (the domain held).
+    pub clocks: u32,
+    /// Sim Rate intervals accepted this frame.
+    pub accepted: u32,
+    /// Boundaries transport crossed since the last accepted one. A frame
+    /// with `due == 0` ticks nothing because no boundary arrived.
+    pub due: u32,
+    /// Live acceptance cap in force (1 after a late frame, else 2).
+    pub live_cap: u32,
+    /// Ticks accepted since the epoch began, through this frame.
+    pub accepted_through: u64,
+    /// Ticks whose GPU work is fenced complete, where the domain tracks it
+    /// (a liquid coupled to bodies). None when no clock reports completion.
+    pub completed_ticks: Option<u64>,
+    pub epoch: u32,
+    pub transport: f64,
+    pub restarted: bool,
+    pub reanchored: bool,
+    pub held: bool,
+    /// Simulated seconds discarded by this frame's reanchors.
+    pub fresh_dropped_seconds: f64,
+}
+
+const NO_CLOCK: ClockMetrics = ClockMetrics {
+    clocks: 0,
+    accepted: 0,
+    due: 0,
+    live_cap: 0,
+    accepted_through: 0,
+    completed_ticks: None,
+    epoch: 0,
+    transport: 0.0,
+    restarted: false,
+    reanchored: false,
+    held: false,
+    fresh_dropped_seconds: 0.0,
+};
 
 thread_local! {
     static FRAME_METRICS: Cell<PhysicsMetrics> = const { Cell::new(PhysicsMetrics {
@@ -28,6 +73,7 @@ thread_local! {
         backlog_seconds: 0.0,
         sim_step_cap_hit: false,
         sim_nonfinite: false,
+        clock: NO_CLOCK,
     }) };
     static RECORDING_ENABLED: Cell<bool> = const { Cell::new(true) };
 }
@@ -87,6 +133,7 @@ pub fn record_frame(physics_ms: f32, body_count: u32, pending_seconds: f32) {
             body_count: current.body_count.saturating_add(body_count),
             sim_step_cap_hit: current.sim_step_cap_hit,
             sim_nonfinite: current.sim_nonfinite,
+            clock: current.clock,
             backlog_seconds: current.backlog_seconds.max(if pending_seconds.is_finite() {
                 pending_seconds.max(0.0)
             } else {
@@ -101,6 +148,33 @@ pub fn record_frame(physics_ms: f32, body_count: u32, pending_seconds: f32) {
 #[inline]
 pub fn record_simulation(target: f64, completed: f64, cap_hit: bool, nonfinite: bool) {
     record_simulation_with_drop(target, completed, 0.0, cap_hit, nonfinite);
+}
+
+/// Record one live clock's decisions for this frame. Offline clocks (export)
+/// have no live cap and are not recorded.
+#[inline]
+pub fn record_clock(frame: &manifold_physics::clock::ClockFrame, completed_ticks: Option<u64>) {
+    let Some(cap) = frame.live_cap else { return };
+    if !RECORDING_ENABLED.with(Cell::get) {
+        return;
+    }
+    FRAME_METRICS.with(|metrics| {
+        let mut current = metrics.get();
+        let clock = &mut current.clock;
+        clock.live_cap = if clock.clocks == 0 { cap } else { clock.live_cap.min(cap) };
+        clock.clocks += 1;
+        clock.accepted = clock.accepted.saturating_add(frame.ticks);
+        clock.due = clock.due.max(frame.due);
+        clock.accepted_through = frame.first_sequence + u64::from(frame.ticks);
+        clock.completed_ticks = completed_ticks.or(clock.completed_ticks);
+        clock.epoch = frame.epoch;
+        clock.transport = frame.transport;
+        clock.restarted |= frame.restarted;
+        clock.reanchored |= frame.reanchored;
+        clock.held |= frame.held;
+        clock.fresh_dropped_seconds += frame.fresh_dropped_seconds;
+        metrics.set(current);
+    });
 }
 
 /// Converts one world's cumulative discarded time into a frame-local advisory.

@@ -1101,6 +1101,7 @@ impl FluidRuntime {
         if self.cache_mode == CacheMode::Live && !super::physics::offline_simulation()
             && let Some(frame) = clock_frame.as_ref()
         {
+            super::physics_metrics::record_clock(frame, None);
             if frame.restarted {
                 self.dropped_time.reset();
             }
