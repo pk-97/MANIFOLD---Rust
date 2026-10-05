@@ -175,7 +175,7 @@ matter-perf-proofs = ["gpu-proofs"]
 # Water race probes (GPU_FLIP_PRESSURE_SOLVE.md): minutes-long Dam Break
 # runs of GPU FLIP and the FLIP Fluids engine, opt-in. The frame probe reads
 # render_scene::water_perf.
-water-race-probes = ["gpu-proofs", "fluid-perf-proofs"]
+water-race-probes = ["gpu-proofs", "fluid-perf-proofs", "manifold-fluids/face-oracle"]
 # The whitewater fields against FLIP's own (GPU_WHITEWATER_DESIGN.md O1, O2),
 # opt-in: builds FLIP's oracle entries into manifold-fluids.
 whitewater-oracle = ["gpu-proofs", "manifold-fluids/whitewater-oracle"]
