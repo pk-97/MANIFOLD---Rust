@@ -67,7 +67,8 @@ struct Params {
     level: u32,
     // classify: 1 marks every tile active (the test-only oracle).
     all_tiles: u32,
-    _pad0: u32,
+    // Inside a round: the solve-live triple (stopped); 0 outside rounds.
+    live: u32,
 };
 
 struct FaceSample {
@@ -117,6 +118,14 @@ struct FaceSample {
 
 fn slot_inactive() -> bool {
     return slot_plan[11] != 0u && !(bitcast<f32>(slot_plan[0]) > 0.0);
+}
+
+// A round running after the solve stopped (a chunk executes rounds past the
+// stop): in rounds `armed` is bound to the gate, whose solve-live triple the
+// stop zeroed. Outside rounds `live` is 0 and nothing is stopped. Listed
+// passes need no check: their live counts read the gate too.
+fn stopped() -> bool {
+    return u.live != 0u && armed[3u * u.live] == 0u;
 }
 
 // One cell's row of L: lo = w to −x, +x, −y, +y; hi = w to −z, +z, then the
@@ -597,7 +606,7 @@ fn restrict_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 // prolongation chain, so a prolonged vector is 0 off the water.
 @compute @workgroup_size(256, 1, 1)
 fn zero_main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if !slot_inactive() && gid.x < u.nx * u.ny * u.nz {
+    if !slot_inactive() && !stopped() && gid.x < u.nx * u.ny * u.nz {
         out[gid.x] = 0.0;
     }
 }
@@ -936,6 +945,9 @@ fn lentine_flux_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 // (cells² row-major, from coarse_inverse.wgsl), rhs in `aux`, e to `out`.
 @compute @workgroup_size(64, 1, 1)
 fn coarse_solve_main(@builtin(local_invocation_index) i: u32) {
+    if stopped() {
+        return;
+    }
     let cells = u.nx * u.ny * u.nz;
     if i >= cells {
         return;
@@ -1005,6 +1017,9 @@ fn dot_partial_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(loca
 // 1: p·s); the round is the completed-round count in progress[1].
 @compute @workgroup_size(256, 1, 1)
 fn dot_finalize_main(@builtin(local_invocation_index) li: u32) {
+    if stopped() {
+        return;
+    }
     let total = total_of_partials(li, u.color);
     if li == 0u {
         scalars[2u * u32(progress[1]) + u.slot] = total;
@@ -1072,11 +1087,17 @@ fn update_main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_inv
 // The norm's partials come folded from init (the start) or update.
 const START_FLOOR: f32 = 1e-9;
 const ACCEPTABLE: f32 = 1.0;
+const KEEP_RANGES: u32 = 8u;
 
 fn stop(first: u32) {
     progress[2] = 1.0;
     for (var t = 0u; t < u.cx; t = t + 1u) {
         gate[3u * t] = 0u;
+    }
+    // KEEP_RANGES (the proofs' lever) leaves later rounds executing, as a
+    // chunk does, so the guards must make them write nothing.
+    if (u.mode & KEEP_RANGES) != 0u {
+        return;
     }
     for (var r = first; r < ROUNDS; r = r + 1u) {
         ranges[4u * r + 1u] = 0u;
@@ -1091,11 +1112,14 @@ fn check_main(@builtin(local_invocation_index) li: u32) {
     if slot_inactive() {
         return;
     }
+    if stopped() {
+        return;
+    }
     let norm = max_of_partials(li, u.color);
     if li != 0u {
         return;
     }
-    if u.mode == 1u {
+    if (u.mode & 1u) == 1u {
         progress[0] = norm;
         progress[1] = 0.0;
         progress[2] = 0.0;

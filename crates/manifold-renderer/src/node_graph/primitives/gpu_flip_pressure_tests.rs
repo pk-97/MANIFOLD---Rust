@@ -2092,3 +2092,19 @@ fn pressure_module_refuses_a_level_past_the_coarsest() {
     assert_eq!(read_solve_level(1.0, [25; 3]), Ok(1));
     assert!(read_solve_level(3.0, [25; 3]).is_err(), "25³ halves to 13, 7, 4: level 3 is the coarsest");
 }
+
+/// Rounds past the stop write nothing: with the stop leaving every later
+/// round's range entry live (as a chunk of rounds executes them), the
+/// replayed solves run every round to the cap with full groups, and every
+/// case still matches the main golden bit for bit (docs/GPU_FLIP_PRESSURE_CAP_DESIGN.md
+/// section 5 (Post-stop guards)).
+#[test]
+fn pressure_module_rounds_past_the_stop_write_nothing() {
+    super::gpu_flip_pressure::set_keep_ranges(true);
+    let lines = golden_lines();
+    super::gpu_flip_pressure::set_keep_ranges(false);
+    let golden = std::fs::read_to_string(format!("{}/tests/fixtures/{GOLDEN}", env!("CARGO_MANIFEST_DIR"))).expect("golden fixture reads");
+    let expected: Vec<&str> = golden.lines().filter(|l| !l.starts_with('#')).collect();
+    let moved: Vec<String> = expected.iter().zip(&lines).filter(|(e, l)| **e != l.as_str()).map(|(e, l)| format!("want {e}\n got {l}")).collect();
+    assert!(moved.is_empty(), "rounds past the stop wrote something:\n{}", moved.join("\n"));
+}

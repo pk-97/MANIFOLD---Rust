@@ -1121,3 +1121,17 @@ fn gpu_flip_body_solve_matches_main_golden() {
         expected.iter().zip(&lines).filter(|(e, l)| **e != l.as_str()).map(|(e, l)| format!("want {e}\n got {l}")).collect();
     assert!(moved.is_empty(), "{} of {} golden cases moved:\n{}", moved.len(), lines.len(), moved.join("\n"));
 }
+
+/// Coupled rounds past the stop write nothing, body passes included: with
+/// the stop leaving later rounds executing, every body golden case still
+/// matches main bit for bit.
+#[test]
+fn gpu_flip_body_rounds_past_the_stop_write_nothing() {
+    super::gpu_flip_pressure::set_keep_ranges(true);
+    let lines = body_golden_lines();
+    super::gpu_flip_pressure::set_keep_ranges(false);
+    let golden = std::fs::read_to_string(format!("{}/tests/fixtures/{BODY_GOLDEN}", env!("CARGO_MANIFEST_DIR"))).expect("golden fixture reads");
+    let expected: Vec<&str> = golden.lines().filter(|l| !l.starts_with('#')).collect();
+    let moved: Vec<String> = expected.iter().zip(&lines).filter(|(e, l)| **e != l.as_str()).map(|(e, l)| format!("want {e}\n got {l}")).collect();
+    assert!(moved.is_empty(), "coupled rounds past the stop wrote something:\n{}", moved.join("\n"));
+}
