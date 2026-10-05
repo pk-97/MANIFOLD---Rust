@@ -1774,7 +1774,16 @@ mod emitter_oracle {
             let band = (3.0 * sd).max(3.0 * engine.sqrt());
             let label = format!("{} frames {}-{end}", s.name, start + 1);
             let verdict = if engine < ACTIVITY_FLOOR {
-                "below floor, not judged".to_owned()
+                // Too quiet to hold to the cap, but never free to over-emit:
+                // the GPU may exceed the engine by at most the band a window
+                // at the floor would allow.
+                let ceiling = engine + (3.0 * sd).max(3.0 * ACTIVITY_FLOOR.sqrt());
+                if gpu > ceiling {
+                    failures.push(format!("{label}: quiet window, GPU {gpu:.0} over the ceiling {ceiling:.0}"));
+                    "QUIET, OVER CEILING".to_owned()
+                } else {
+                    "below floor, under ceiling".to_owned()
+                }
             } else if band > TOLERANCE_CAP * engine {
                 active = true;
                 failures.push(format!("{label}: reference too noisy, band {band:.0} over {:.0}% of {engine:.0}", 100.0 * TOLERANCE_CAP));
@@ -1819,6 +1828,12 @@ mod emitter_oracle {
         // Cap: a reference whose seeds disagree by half is rejected.
         let noisy = vec![steady.clone(), steady.iter().map(|v| v * 1.5).collect(), steady.iter().map(|v| v * 0.5).collect()];
         assert!(!judge(Series { name: "noisy", gpu: steady.clone(), engine: noisy }).is_empty(), "a noisy reference must fail");
+        // Ceiling: a quiet first window (engine 1 a frame, under the floor)
+        // where the GPU emits 20 a frame fails though the rest match.
+        let quiet: Vec<f64> = (0..150).map(|f| if f < 30 { 1.0 } else { 100.0 }).collect();
+        let loud: Vec<f64> = (0..150).map(|f| if f < 30 { 20.0 } else { 100.0 }).collect();
+        assert!(judge(Series { name: "quiet", gpu: quiet.clone(), engine: seeds(quiet.clone()) }).is_empty());
+        assert!(!judge(Series { name: "quiet", gpu: loud, engine: seeds(quiet) }).is_empty(), "over-emission in a quiet window must fail");
     }
 
     /// One run's per-frame numbers: the GPU step's emitted and population by
@@ -1837,7 +1852,7 @@ mod emitter_oracle {
     /// `out`), the faces from the `face_*` components of `state.faces` (the
     /// step's `faces`), the distance from the step's own `distance` storage,
     /// and `mesh_solid.solid`.
-    fn parity_run(params: Value, engine_wavecrest: bool, csv_name: &str) -> ParityRun {
+    fn parity_run(params: Value, engine_rates: whitewater_oracle::EmissionOptions, csv_name: &str) -> ParityRun {
         let scene = WaterScene::dam_break(64);
         let grid = GridBox::of(scene);
         let n = cells(grid);
@@ -1857,10 +1872,7 @@ mod emitter_oracle {
             .iter()
             .map(|&seed| {
                 let mut engine = NativeLifecycle::new(whitewater_grid, STEP_CAPACITY, seed).expect("engine lifecycle");
-                if !engine_wavecrest {
-                    let rates = whitewater_oracle::EmissionOptions { wavecrest: 0.0, ..Default::default() };
-                    whitewater_oracle::set_emission_rates(&mut engine, rates).expect("engine rates");
-                }
+                whitewater_oracle::set_emission_rates(&mut engine, engine_rates).expect("engine rates");
                 engine
             })
             .collect();
@@ -1899,8 +1911,7 @@ mod emitter_oracle {
             };
             for (s, engine) in engines.iter_mut().enumerate() {
                 engine.set_fields(&fields).expect("engine fields");
-                let count_seed = ENGINE_SEEDS[s] * 1_000_003 + frame as u64;
-                let made = whitewater_oracle::emit_engine(engine, &positions, DT, INFLUENCE_BASE, INFLUENCE_DECAY, count_seed).expect("engine emits");
+                let made = whitewater_oracle::emit_engine(engine, &positions, DT, INFLUENCE_BASE, INFLUENCE_DECAY).expect("engine emits");
                 run.engine_emitted[s].push(f64::from(made.emitted));
                 engine.particles(&mut population).expect("engine population");
                 let mut kinds = [0.0f64; 3];
@@ -1955,49 +1966,50 @@ mod emitter_oracle {
     /// L5 emission parity: `node.whitewater_step` against FLIP Fluids'
     /// DiffuseParticleSimulation as FluidSimulation configures it
     /// (`whitewater_oracle::emit_engine`), on eight engine seeds, fed the
-    /// water the step saw each tick at the tick dt. Gated: emitted per tick
-    /// in every 30-frame window ([`gate`]; the engine's count comes from a
-    /// twin simulation), and turbulence emission alone with wavecrest off on
-    /// both sides, two-sided over the run. A step with its wavecrest emission
-    /// off must fail the window gate. There is no one-sided inside-emission
-    /// control: inside emission is about 45 of about 23,000 particles in this
-    /// scene, so removing it on one side is invisible; the turbulence-only
-    /// check covers it.
+    /// water the step saw each tick at the tick dt. The engine's emitted
+    /// count is taken inside its own emitter, before its lifecycle step.
+    /// Every gate is the windowed [`gate`] (cap, floor, quiet-window ceiling):
+    ///
+    /// - the shipped step's emitted per tick;
+    /// - turbulence emission alone: wavecrest off on both sides and the
+    ///   turbulence thresholds lowered to 20–100 on both, so the dam break's
+    ///   interior shear emits enough to judge (at the shipped 100–200 it
+    ///   makes about 45 particles a run, too few to bound);
+    /// - two controls that must fail: the GPU alone with wavecrest off, and
+    ///   the turbulence fixture with the GPU's turbulence rate at 0.7 times.
     ///
     /// Not gated: population per type, printed and in the CSV, whose
     /// lifecycle step differs in its motion inputs (the GPU advects through
     /// `substep_schedule` and `substep_u/v/w`, the engine once on the
-    /// end-of-tick faces). Known emitter difference: the GPU skips emitters
-    /// whose own particle velocity is under 1e-3 m/s
+    /// end-of-tick faces; BUG-sipwn). Known emitter difference: the GPU skips
+    /// emitters whose own particle velocity is under 1e-3 m/s
     /// (`shaders/turbulence_emission_count_body.wgsl`); FLIP samples the
     /// field velocity and has no such cut. The engine oracle covers constant
     /// default influence only (no obstacle sources).
     #[test]
     fn whitewater_step_against_engine_emitters_150() {
-        let wavecrest_off = json!({"wavecrest_emission": {"type": "Float", "value": 0.0}});
-        let base = parity_run(json!({}), true, "whitewater_step_vs_engine_150.csv");
-        let mut failures = judge_run("shipped step", &base);
-        let no_wavecrest = parity_run(wavecrest_off.clone(), true, "whitewater_step_vs_engine_150_no_wavecrest.csv");
-        let wavecrest_failures = judge_run("control: wavecrest emission off on the GPU only", &no_wavecrest);
-        println!("L5E control: wavecrest off failed {} emitted windows", wavecrest_failures.len());
+        use whitewater_oracle::EmissionOptions;
+        let shipped = EmissionOptions::default();
+        let turbulence_engine = EmissionOptions { wavecrest: 0.0, minimum: 20.0, maximum: 100.0, ..shipped };
+        let turbulence_gpu = |rate: f64| json!({
+            "wavecrest_emission": {"type": "Float", "value": 0.0},
+            "turbulence_emission": {"type": "Float", "value": rate},
+            "min_turbulence": {"type": "Float", "value": 20.0},
+            "max_turbulence": {"type": "Float", "value": 100.0},
+        });
 
-        // Turbulence emission alone: wavecrest off on both sides, so what
-        // remains is the turbulence rate at the surface and inside emitters.
-        // Its counts are small, so it is judged once over the run, on
-        // max(3 sd across seeds, 3√mean), and must be non-zero on both sides.
-        let turbulence = parity_run(wavecrest_off, false, "whitewater_step_vs_engine_150_turbulence_only.csv");
-        let gpu: f64 = turbulence.gpu_emitted.iter().sum();
-        let seeds: Vec<f64> = turbulence.engine_emitted.iter().map(|e| e.iter().sum()).collect();
-        let engine = mean(&seeds);
-        let sd = sample_sd(&seeds);
-        let band = (3.0 * sd).max(3.0 * engine.sqrt());
-        println!("L5E turbulence only, emitted over 150 frames: GPU {gpu:.0}, engine {engine:.1} (sd {sd:.1}, seeds {seeds:?}), band ±{band:.1}");
-        if !(gpu > 0.0 && engine > 0.0) {
-            failures.push(format!("turbulence only: GPU {gpu} and engine {engine} must both emit"));
-        } else if (gpu - engine).abs() > band {
-            failures.push(format!("turbulence only: GPU {gpu:.0} against the engine's {engine:.1} ± {band:.1}"));
-        }
+        let base = parity_run(json!({}), shipped, "whitewater_step_vs_engine_150.csv");
+        let mut failures = judge_run("shipped step", &base);
+        let turbulence = parity_run(turbulence_gpu(shipped.turbulence), turbulence_engine, "whitewater_step_vs_engine_150_turbulence_only.csv");
+        failures.extend(judge_run("turbulence only, both sides", &turbulence));
+
+        let no_wavecrest = parity_run(json!({"wavecrest_emission": {"type": "Float", "value": 0.0}}), shipped, "whitewater_step_vs_engine_150_no_wavecrest.csv");
+        let wavecrest_failures = judge_run("control: wavecrest off on the GPU only", &no_wavecrest);
+        let reduced = parity_run(turbulence_gpu(0.7 * shipped.turbulence), turbulence_engine, "whitewater_step_vs_engine_150_turbulence_reduced.csv");
+        let reduced_failures = judge_run("control: GPU turbulence rate x0.7", &reduced);
+        println!("L5E controls: wavecrest off failed {} windows, turbulence x0.7 failed {} windows", wavecrest_failures.len(), reduced_failures.len());
         assert!(!wavecrest_failures.is_empty(), "the gate passed a step with its wavecrest emitter off");
+        assert!(!reduced_failures.is_empty(), "the gate passed a step with its turbulence rate cut to 0.7");
         assert!(failures.is_empty(), "the step's emission strays from FLIP's engine on the same water: {failures:#?}");
     }
 }

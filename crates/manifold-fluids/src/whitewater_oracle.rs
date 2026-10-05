@@ -17,7 +17,7 @@ unsafe extern "C" {
         curvature: *const f32, positions: *const f32, count: usize, dt: f64) -> i32;
     fn manifold_fluids_oracle_emit_engine(lifecycle: *mut c_void, positions: *const f32, count: usize,
         dt: f64, influence_base: f64, influence_decay: f64, surface_out: *mut f32,
-        curvature_out: *mut f32, influence_out: *mut f32, count_seed: u64, emitted_out: *mut u32) -> i32;
+        curvature_out: *mut f32, influence_out: *mut f32, emitted_out: *mut u32) -> i32;
     fn manifold_fluids_oracle_curvature(
         phi: *const f32,
         isize: u32,
@@ -122,9 +122,8 @@ pub struct EngineEmitFields {
     pub curvature: Vec<f32>,
     /// The obstacle influence after this tick's update, nodes.
     pub influence: Vec<f32>,
-    /// Particles the emitter made this tick (counted on a twin simulation
-    /// seeded with `count_seed`, aging off), less any one advance carried
-    /// out of the domain.
+    /// Particles this tick's emission added to the pool, counted inside the
+    /// engine before its lifecycle step advanced, retyped or removed any.
     pub emitted: u32,
 }
 
@@ -139,7 +138,7 @@ pub struct EngineEmitFields {
 /// nodes to the base each step, so obstacle sources and a changed base do
 /// not reach the boundary as they do in the engine.
 pub fn emit_engine(lifecycle: &mut WhitewaterLifecycle, positions: &[[f32; 3]], dt: f64,
-    influence_base: f64, influence_decay: f64, count_seed: u64) -> Result<EngineEmitFields, FluidError> {
+    influence_base: f64, influence_decay: f64) -> Result<EngineEmitFields, FluidError> {
     let cells = lifecycle.grid().cell_count();
     let c = lifecycle.grid().cells.map(|n| n as usize + 1);
     let mut fields = EngineEmitFields {
@@ -151,7 +150,7 @@ pub fn emit_engine(lifecycle: &mut WhitewaterLifecycle, positions: &[[f32; 3]], 
     // SAFETY: live handle; outputs cover the grid's cells and nodes, positions holds `len` triples.
     let ok = unsafe { manifold_fluids_oracle_emit_engine(lifecycle.native_handle(), positions.as_ptr().cast(),
         positions.len(), dt, influence_base, influence_decay, fields.surface.as_mut_ptr(),
-        fields.curvature.as_mut_ptr(), fields.influence.as_mut_ptr(), count_seed, &mut fields.emitted) };
+        fields.curvature.as_mut_ptr(), fields.influence.as_mut_ptr(), &mut fields.emitted) };
     native_result(ok, "oracle engine emit")?;
     Ok(fields)
 }
@@ -320,7 +319,7 @@ mod tests {
             }
         }
         super::set_emission_rates(&mut lifecycle, super::EmissionOptions::default()).expect("rates");
-        let first = super::emit_engine(&mut lifecycle, &markers, DT, 1.0, 2.0, 1).expect("first tick");
+        let first = super::emit_engine(&mut lifecycle, &markers, DT, 1.0, 2.0).expect("first tick");
         let mut out = Vec::new();
         lifecycle.particles(&mut out).expect("particles");
         let kinds = [WhitewaterKind::Foam, WhitewaterKind::Bubble, WhitewaterKind::Spray]
@@ -345,7 +344,7 @@ mod tests {
         // walls to the new base, which this oracle does not model, so only
         // nodes clear of that band are held to the decay.
         assert!(first.influence.iter().all(|&x| (x - 1.0).abs() < 1e-6), "first tick influence is the base");
-        let second = super::emit_engine(&mut lifecycle, &markers, DT, 0.5, 2.0, 2).expect("second tick");
+        let second = super::emit_engine(&mut lifecycle, &markers, DT, 0.5, 2.0).expect("second tick");
         let expected = 1.0 - 2.0 * DT as f32;
         let side = n + 1;
         let clear = |i: usize| (4..side - 4).contains(&i);
@@ -356,10 +355,10 @@ mod tests {
         assert!(!interior.is_empty());
         assert!(interior.iter().all(|&x| (x - expected).abs() < 1e-5), "influence did not decay at 2/s: {:?}", &interior[..4]);
 
-        // The twin counter sees what the emitter made: on its own seed it
-        // differs from the pool only by which jittered spawns land in a
-        // solid, and by the few aged or carried out, so within 2%.
-        let (counted, live) = (f64::from(first.emitted), out.len() as f64);
-        assert!((counted - live).abs() <= 0.02 * live, "counted {counted} emitted against {live} live after one update");
+        // The count is taken before the lifecycle step: on a fresh pool it
+        // is at least what survives one update (here the floor solid and
+        // the lifecycle remove about a sixth).
+        let (counted, live) = (first.emitted as usize, out.len());
+        assert!(counted >= live && live > 0, "counted {counted} emitted against {live} live after one update");
     }
 }

@@ -2511,12 +2511,14 @@ extern "C" int manifold_fluids_oracle_emit(void *lifecycle, const float *curvatu
 // resets its influence to the base each step, so neither obstacle sources
 // nor a changed base reach the boundary nodes as they do in the engine. Each
 // out pointer may be null; non-null ones receive the fields the emitter read
-// and, in emitted_out, the particles the emitter made this call.
+// and, in emitted_out, the particles this call's emission added, counted
+// inside the engine before the lifecycle step (the oracle-only hook in
+// _emitNormalDiffuseParticles).
 extern "C" int manifold_fluids_oracle_emit_engine(void *lifecycle, const float *positions,
                                                  size_t count, double dt, double influence_base,
                                                  double influence_decay, float *surface_out,
                                                  float *curvature_out, float *influence_out,
-                                                 uint64_t count_seed, uint32_t *emitted_out) {
+                                                 uint32_t *emitted_out) {
     return guarded([&] {
         NativeWhitewater &native = whitewater_of(lifecycle);
         if (count != 0 && positions == nullptr) {
@@ -2563,38 +2565,13 @@ extern "C" int manifold_fluids_oracle_emit_engine(void *lifecycle, const float *
         const AABB generation(0.0, 0.0, 0.0, native.isize * native.dx, native.jsize * native.dx,
                               native.ksize * native.dx);
         DiffuseParticleSimulation &simulation = *native.simulation;
-        if (emitted_out != nullptr) {
-            // The engine publishes no emission count. A fresh simulation with
-            // the same settings, fields and markers, aging off, holds after
-            // its one update exactly what the emitter made, less any particle
-            // the advance carried out of the domain.
-            DiffuseParticleSimulation counter;
-            counter.setRandomSeed(count_seed);
-            counter.setDiffuseParticleWavecrestEmissionRate(simulation.getDiffuseParticleWavecrestEmissionRate());
-            counter.setDiffuseParticleTurbulenceEmissionRate(simulation.getDiffuseParticleTurbulenceEmissionRate());
-            counter.setMinTurbulence(simulation.getMinTurbulence());
-            counter.setMaxTurbulence(simulation.getMaxTurbulence());
-            counter.setMinEmitterEnergy(simulation.getMinEmitterEnergy());
-            counter.setMaxEmitterEnergy(simulation.getMaxEmitterEnergy());
-            counter.setEmitterGenerationRate(simulation.getEmitterGenerationRate());
-            counter.setSprayEmissionSpeed(simulation.getSprayEmissionSpeed());
-            counter.enableFoam();
-            counter.enableBubbles();
-            counter.enableSpray();
-            counter.disableDust();
-            counter.disableBoundaryDustEmission();
-            counter.setMaxNumDiffuseParticles(native.capacity);
-            counter.setFoamParticleLifetimeModifier(0.0);
-            counter.setBubbleParticleLifetimeModifier(0.0);
-            counter.setSprayParticleLifetimeModifier(0.0);
-            counter.setEmitterGenerationBounds(generation);
-            counter.enableDiffuseParticleEmission();
-            counter.update(params);
-            *emitted_out = static_cast<uint32_t>(counter.getNumDiffuseParticles());
-        }
         simulation.enableDiffuseParticleEmission();
         simulation.setEmitterGenerationBounds(generation);
+        simulation.oracleEmitted = 0;
         simulation.update(params);
+        if (emitted_out != nullptr) {
+            *emitted_out = static_cast<uint32_t>(simulation.oracleEmitted);
+        }
         simulation.disableDiffuseParticleEmission();
         native.markers = ParticleSystem();
         const size_t cells = static_cast<size_t>(native.isize) * native.jsize * native.ksize;
