@@ -54,6 +54,8 @@ const HALO_NODES: i32 = 5;
 // Sixteen f32 ulps, relative: a generous bound on the rounding of the hit
 // test's chain of adds, multiplies and fast-math divides.
 const ROUNDING: f32 = 1.9073486e-6;
+// Below this every sum and product the hit test forms stays finite.
+const LIMIT: f32 = 1.0e30;
 
 fn brick_coords(id: u32) -> vec3<u32> {
     return vec3<u32>(
@@ -113,8 +115,9 @@ fn scatter_bricks(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let centre = blob.center_radius.xyz;
     let reach = blob.center_radius.w;
     // The one input the scatter treats differently: a non-finite centre has
-    // no position, so it marks nothing. The per-brick search marked whatever
-    // bricks surrounded the bin the sort happened to clamp it into.
+    // no position, so it marks nothing. The per-brick search could mark the
+    // bricks around the bin the sort clamped it into (a NaN centre passes its
+    // hit test there).
     let exponent = bitcast<vec3<u32>>(centre) & vec3<u32>(0x7f800000u);
     if !(reach > 0.0) || any(exponent == vec3<u32>(0x7f800000u)) {
         return;
@@ -135,8 +138,17 @@ fn scatter_bricks(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let lo_node = floor((from_min - support) / h) - slack - vec3<f32>(f32(HALO_NODES + 7));
     let hi_node = floor((from_min + support) / h) + slack + vec3<f32>(f32(HALO_NODES));
     let last = vec3<f32>(f32(params.bricks_x), f32(params.bricks_y), f32(params.bricks_z)) - vec3<f32>(1.0);
-    let first_brick = vec3<u32>(clamp(floor(lo_node / 8.0), vec3<f32>(0.0), last));
-    let last_brick = vec3<u32>(clamp(floor(hi_node / 8.0), vec3<f32>(0.0), last));
+    // Near the f32 range the hit test itself overflows and no rounding bound
+    // holds, so every brick is a candidate and the hit test alone decides.
+    let span = lattice_size() * vec3<f32>(nodes - vec3<u32>(1u));
+    let bounded = all(magnitude < vec3<f32>(LIMIT)) && all(span < vec3<f32>(LIMIT))
+        && all(abs(lo_node) < vec3<f32>(LIMIT)) && all(abs(hi_node) < vec3<f32>(LIMIT));
+    var first_brick = vec3<u32>(0u);
+    var last_brick = vec3<u32>(last);
+    if bounded {
+        first_brick = vec3<u32>(clamp(floor(lo_node / 8.0), vec3<f32>(0.0), last));
+        last_brick = vec3<u32>(clamp(floor(hi_node / 8.0), vec3<f32>(0.0), last));
+    }
     for (var z = first_brick.z; z <= last_brick.z; z = z + 1u) {
         for (var y = first_brick.y; y <= last_brick.y; y = y + 1u) {
             for (var x = first_brick.x; x <= last_brick.x; x = x + 1u) {

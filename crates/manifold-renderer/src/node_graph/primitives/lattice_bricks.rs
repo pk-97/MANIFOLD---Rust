@@ -676,7 +676,8 @@ mod tests {
     /// `scatter_bricks`' candidate brick range per axis, inclusive.
     fn scatter_candidates(blob: &FluidBlob, layout: BrickLayout, lattice_min: [f32; 3], size: [f32; 3], extra: f32) -> [(u32, u32); 3] {
         const ROUNDING: f32 = 1.907_348_6e-6;
-        std::array::from_fn(|a| {
+        const LIMIT: f32 = 1.0e30;
+        let axes: [(f32, f32, f32, f32); 3] = std::array::from_fn(|a| {
             let h = size[a] / (layout.nodes[a] - 1) as f32;
             let support = 1.5 * blob.center_radius[3] + extra + h;
             let centre = blob.center_radius[a];
@@ -685,7 +686,15 @@ mod tests {
             let from_min = centre - lattice_min[a];
             let lo_node = ((from_min - support) / h).floor() - slack - (5 + 7) as f32;
             let hi_node = ((from_min + support) / h).floor() + slack + 5.0;
+            (magnitude, size[a] * (layout.nodes[a] - 1) as f32, lo_node, hi_node)
+        });
+        let bounded = axes.iter().all(|&(magnitude, span, lo, hi)| magnitude < LIMIT && span < LIMIT && lo.abs() < LIMIT && hi.abs() < LIMIT);
+        std::array::from_fn(|a| {
             let last = (layout.bricks[a] - 1) as f32;
+            if !bounded {
+                return (0, last as u32);
+            }
+            let (_, _, lo_node, hi_node) = axes[a];
             ((lo_node / 8.0).floor().clamp(0.0, last) as u32, (hi_node / 8.0).floor().clamp(0.0, last) as u32)
         })
     }
@@ -753,12 +762,16 @@ mod tests {
         }
 
         // Review counterexamples: a tiny blob on a lattice whose node spacing
-        // is below the f32 resolution of its coordinates, and a finite blob
-        // near f32 max whose support covers the whole lattice.
+        // is below the f32 resolution of its coordinates; a finite blob near
+        // f32 max whose support covers the whole lattice; a lattice and blob
+        // whose candidate bounds overflow to NaN; and a lattice so large the
+        // hit test's own multiply overflows to infinity.
         let rounding = brick_layout([257, 25, 25], 1).unwrap();
         assert!(assert_scatter_covers(rounding, [1000.0; 3], [0.001; 3], 0.0, &[blob(1000.0, 1000.0, 1000.0, 1e-7)]) > 0);
         let huge = brick_layout([25, 25, 25], 1).unwrap();
         assert!(assert_scatter_covers(huge, [0.0; 3], [4.0; 3], 0.0, &[blob(3.1e38, 0.0, 0.0, 2.1e38)]) > 0);
+        assert!(assert_scatter_covers(huge, [3e38; 3], [4.0; 3], 0.0, &[blob(-3e38, -3e38, -3e38, 3e38)]) > 0);
+        assert!(assert_scatter_covers(huge, [0.0; 3], [1e38; 3], 0.0, &[blob(2e38, 2e38, 2e38, 1.0)]) > 0);
     }
 
     #[test]
