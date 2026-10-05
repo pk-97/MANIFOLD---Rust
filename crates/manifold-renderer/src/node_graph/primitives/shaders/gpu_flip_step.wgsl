@@ -344,14 +344,16 @@ fn particles_to_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
     faces_out[idx] = out;
 }
 
-// One thread per face record, `faces_in` to `faces_out`. A valid face
-// (weight > 0) is copied. An invalid one takes the mean velocity of the
-// valid faces of its component among its six grid neighbours and becomes
-// valid (weight 1) only if a non-wall neighbour seeds it. FLIP Fluids
-// GridUtils::_initializeStatusGridThread holds boundary samples DONE: they
-// contribute to the mean but never start a layer. Here only the normal end
-// faces are walls; the transverse end rows are fluid cell centres, not the
-// engine's solid border cells. Keep their fluid samples eligible as seeds.
+// One thread per face record, `faces_in` to `faces_out`: one layer of the
+// fluid velocity's extrapolation (GridUtils::extrapolateGrid). A valid face
+// (weight > 0) is copied. Every face on the border of its component's
+// lattice (solid_border) is held done, as GridUtils::
+// _initializeStatusGridThread holds it: kept as it is, counted with its
+// value in a neighbour's mean whatever its weight, never a seed. An invalid
+// inner face with a valid inner neighbour takes the mean of its valid and
+// border neighbours and becomes valid (weight 1). The border rows lie in
+// the solid padding, so their zeros slow the extrapolated velocity at the
+// walls as the engine's do.
 @compute @workgroup_size(256)
 fn extend_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
@@ -373,7 +375,7 @@ fn extend_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
         out.face_velocity[a] = here.face_velocity[a];
         out.face_weight[a] = here.face_weight[a];
-        if here.face_weight[a] > 0.0 {
+        if here.face_weight[a] > 0.0 || solid_border(p, a, n) {
             continue;
         }
         var sum = 0.0;
@@ -387,10 +389,11 @@ fn extend_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
                     continue;
                 }
                 let neighbour = faces_in[flatten(q, m)];
-                if neighbour.face_weight[a] > 0.0 {
+                let border = solid_border(q, a, n);
+                if border || neighbour.face_weight[a] > 0.0 {
                     sum = sum + neighbour.face_velocity[a];
                     hits = hits + 1.0;
-                    seeded = seeded || (q[a] > 0 && q[a] < n[a]);
+                    seeded = seeded || !border;
                 }
             }
         }

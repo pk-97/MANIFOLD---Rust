@@ -952,6 +952,31 @@ fn gpu_flip_extend_faces_waits_for_fluid_beside_walls() {
     }
 }
 
+/// The engine holds every border sample of a component's lattice done: its
+/// value counts in a neighbour's mean, it is never extended or a seed. Beside
+/// a transverse wall row and in a two-row corner, two layers.
+#[test]
+fn gpu_flip_extend_faces_holds_border_rows_as_native() {
+    use super::gpu_flip_extension_tests::{cpu_extend, transverse_wall_fixture};
+    for corner in [false, true] {
+        let mut faces = transverse_wall_fixture(N, corner);
+        let mut averaged = 0;
+        for layer in 0..2 {
+            let want = cpu_extend(&faces, N);
+            let got: Vec<FaceSample> = Pass::new().bind(3, &faces).run("extend_faces", &lattice(), 4, face_len(), face_len());
+            for (i, (g, w)) in got.iter().zip(&want).enumerate() {
+                for a in 0..3 {
+                    close(g.velocity[a], f64::from(w.velocity[a]), 1.0, &format!("corner {corner} layer {layer} face {:?}/{a}", pad_coords(i)));
+                    assert_eq!(g.weight[a], w.weight[a], "corner {corner} layer {layer} weight {:?}/{a}", pad_coords(i));
+                    averaged += usize::from(w.weight[a] > 0.0 && w.velocity[a] > 0.0 && w.velocity[a] < 2.0);
+                }
+            }
+            faces = got;
+        }
+        assert!(averaged > 0, "corner {corner}: the fixture averages a held border zero");
+    }
+}
+
 #[test]
 fn gpu_flip_pressure_clear_precedes_face_extension() {
     let target = [2, 2, 2];
@@ -2879,7 +2904,9 @@ fn gpu_flip_step_order_extend_constraint_value_proof() {
         let constrained: Vec<FaceSample> = Pass::new().bind(20, &got).bind(10, &open).bind(11, &moving)
             .run("constrain_solid_faces", &lattice(), 20, face_len(), face_len());
         assert_close(bytemuck::cast_slice(&constrained), &expected, "extend then constrain moving wall");
-        assert_eq!(constrained[wall].velocity[0], 4.5);
+        // The wall face's z + 1 neighbour is this lattice's held border row:
+        // the extension averages its 0 with the seed's 2.
+        assert_eq!(constrained[wall].velocity[0], 4.0);
     }
 }
 
