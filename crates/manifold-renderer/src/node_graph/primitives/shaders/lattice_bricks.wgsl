@@ -1,12 +1,17 @@
 // Occupied-brick producer for the liquid surface lattice.
 //
-// The mark pass is deliberately conservative.  A brick owns eight lattice
+// The mark is deliberately conservative.  A brick owns eight lattice
 // nodes per axis, while the surface consumers can reach three smoothing taps,
 // one gradient tap and one cell corner: five nodes of
 // halo on every side.  A live blob marks the brick when its support plus the
 // positive exterior band intersects that expanded box.  The boundary bricks
 // are always live so the canonical exterior value and the closed surface are
 // preserved even for an empty frame.
+//
+// Each blob scatters its mark to the bricks it can reach, so the cost follows
+// the particles, not the empty space a per-brick search would scan.  The hit
+// test is the per-brick one, evaluated on a padded candidate range, so the
+// mask is the gather's word for word.
 
 struct Params {
     center_x: f32,
@@ -28,7 +33,7 @@ struct Params {
     bricks_z: u32,
     brick_count: u32,
     band_extra: f32,
-    _pad1: u32,
+    blob_count: u32,
 }
 
 struct Blob {
@@ -37,94 +42,142 @@ struct Blob {
     shape_off: vec4<f32>,
 }
 
-struct CellRange {
-    start: u32,
-    count: u32,
-}
-
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var<storage, read> blobs: array<Blob>;
-@group(0) @binding(2) var<storage, read> cell_ranges: array<CellRange>;
 @group(0) @binding(3) var<storage, read_write> prefix: array<u32>;
 @group(0) @binding(4) var<storage, read_write> bricks: array<u32>;
-
-@group(0) @binding(5) var<storage, read> bounds: array<f32>;
+// One word per brick: nonzero once a blob reaches it.  The mark pass reads
+// and zeroes it, so it is clear again for the next frame's scatter.
+@group(0) @binding(6) var<storage, read_write> hits: array<atomic<u32>>;
 
 const HALO_NODES: i32 = 5;
+// Sixteen f32 ulps, relative: a generous bound on the rounding of the hit
+// test's chain of adds, multiplies and fast-math divides.
+const ROUNDING: f32 = 1.9073486e-6;
+// Coordinates, sizes and reaches below this keep every sum, product and the
+// squared spacing in band() finite.
+const LIMIT: f32 = 1.0e18;
+// Node spacing above this keeps the spacing and its square normal f32s.
+const MIN_SPACING: f32 = 1.0e-15;
 
-fn bin_index(b: vec3<u32>) -> u32 {
-    return b.x + params.bins_x * (b.y + params.bins_y * b.z);
-}
-
-fn clamp_bin(v: i32, n: u32) -> u32 {
-    return u32(clamp(v, 0, i32(n) - 1));
-}
-
-fn mark_brick(id: u32) -> u32 {
-    let brick = vec3<u32>(
+fn brick_coords(id: u32) -> vec3<u32> {
+    return vec3<u32>(
         id % params.bricks_x,
         (id / params.bricks_x) % params.bricks_y,
         id / (params.bricks_x * params.bricks_y),
     );
-    let nodes = vec3<u32>(params.nodes_x, params.nodes_y, params.nodes_z);
+}
+
+fn is_border(brick: vec3<u32>) -> bool {
+    return any(brick == vec3<u32>(0u)) || any(brick + vec3<u32>(1u) == vec3<u32>(params.bricks_x, params.bricks_y, params.bricks_z));
+}
+
+fn domain_min() -> vec3<f32> {
+    return vec3<f32>(params.center_x, params.center_y, params.center_z)
+        - 0.5 * vec3<f32>(params.size_x, params.size_y, params.size_z);
+}
+
+fn lattice_size() -> vec3<f32> {
+    return vec3<f32>(params.size_x, params.size_y, params.size_z);
+}
+
+fn node_counts() -> vec3<u32> {
+    return vec3<u32>(params.nodes_x, params.nodes_y, params.nodes_z);
+}
+
+fn band() -> f32 {
+    let nodes = node_counts();
+    return params.band_extra + select(0.0, length(lattice_size() / vec3<f32>(nodes - vec3<u32>(1u))), params.band_extra > 0.0);
+}
+
+// The gather's hit test for one interior brick, unchanged: the brick box
+// grown by the halo, against the blob's support box.
+fn reaches(brick: vec3<u32>, centre: vec3<f32>, reach: f32, extra: f32) -> bool {
+    let nodes = node_counts();
     let at0 = brick * 8u;
     let at1 = min((brick + vec3<u32>(1u)) * 8u - vec3<u32>(1u), nodes - vec3<u32>(1u));
     let lo_node = max(vec3<i32>(at0) - vec3<i32>(HALO_NODES), vec3<i32>(0));
     let hi_node = min(vec3<i32>(at1) + vec3<i32>(HALO_NODES), vec3<i32>(nodes) - vec3<i32>(1));
-    let domain_min = vec3<f32>(params.center_x, params.center_y, params.center_z)
-        - 0.5 * vec3<f32>(params.size_x, params.size_y, params.size_z);
     // Match the volume multiply-then-divide order: monotone even in f32.
-    let size = vec3<f32>(params.size_x, params.size_y, params.size_z);
-    let lo = domain_min + vec3<f32>(lo_node) * size / vec3<f32>(nodes - vec3<u32>(1u));
-    let hi = domain_min + vec3<f32>(hi_node) * size / vec3<f32>(nodes - vec3<u32>(1u));
-    let extra = params.band_extra + select(0.0, length(size / vec3<f32>(nodes - vec3<u32>(1u))), params.band_extra > 0.0);
-    // node.blob_bounds' largest kernel support sets how many bins to search.
-    let bound = vec2<f32>(bounds[0], bounds[1]);
+    let size = lattice_size();
+    let lo = domain_min() + vec3<f32>(lo_node) * size / vec3<f32>(nodes - vec3<u32>(1u));
+    let hi = domain_min() + vec3<f32>(hi_node) * size / vec3<f32>(nodes - vec3<u32>(1u));
     let h = size / vec3<f32>(nodes - vec3<u32>(1u));
+    let d = max(max(lo - centre, centre - hi), vec3<f32>(0.0));
+    let support = vec3<f32>(1.5 * reach + extra) + h;
+    return all(d <= support);
+}
 
-    // A domain border brick is retained even when no blob is present.  This
-    // is what makes an empty frame write the same exterior field as the dense
-    // path instead of leaving retired border values in place.
-    if any(brick == vec3<u32>(0u)) || any(brick + vec3<u32>(1u) == vec3<u32>(params.bricks_x, params.bricks_y, params.bricks_z)) {
-        return 1u;
+@compute @workgroup_size(256)
+fn scatter_bricks(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let k = global_id.x;
+    if k >= params.blob_count {
+        return;
     }
-
-    let bin_lo_f = (lo - domain_min) / vec3<f32>(params.cell_size);
-    let bin_hi_f = (hi - domain_min) / vec3<f32>(params.cell_size);
-    let reach_bins = i32(ceil((bound.y + extra + length(h)) / params.cell_size));
-    let bin_lo = vec3<i32>(floor(bin_lo_f)) - vec3<i32>(reach_bins);
-    let bin_hi = vec3<i32>(floor(bin_hi_f)) + vec3<i32>(reach_bins);
-    let first = vec3<u32>(
-        clamp_bin(bin_lo.x, params.bins_x),
-        clamp_bin(bin_lo.y, params.bins_y),
-        clamp_bin(bin_lo.z, params.bins_z),
-    );
-    let last = vec3<u32>(
-        clamp_bin(bin_hi.x, params.bins_x),
-        clamp_bin(bin_hi.y, params.bins_y),
-        clamp_bin(bin_hi.z, params.bins_z),
-    );
-    for (var z = first.z; z <= last.z; z = z + 1u) {
-        for (var y = first.y; y <= last.y; y = y + 1u) {
-            for (var x = first.x; x <= last.x; x = x + 1u) {
-                let range = cell_ranges[bin_index(vec3<u32>(x, y, z))];
-                for (var k = range.start; k < range.start + range.count; k = k + 1u) {
-                    let blob = blobs[k];
-                    let centre = blob.center_radius.xyz;
-                    let reach = blob.center_radius.w;
-                    if !(reach > 0.0) {
-                        continue;
-                    }
-                    let d = max(max(lo - centre, centre - hi), vec3<f32>(0.0));
-                    let support = vec3<f32>(1.5 * reach + extra) + h;
-                    if all(d <= support) {
-                        return 1u;
-                    }
+    let blob = blobs[k];
+    let centre = blob.center_radius.xyz;
+    let reach = blob.center_radius.w;
+    // The one input the scatter treats differently: a non-finite centre has
+    // no position, so it marks nothing. The per-brick search could mark the
+    // bricks around the bin the sort clamped it into (a NaN centre passes its
+    // hit test there).
+    let exponent = bitcast<vec3<u32>>(centre) & vec3<u32>(0x7f800000u);
+    if !(reach > 0.0) || any(exponent == vec3<u32>(0x7f800000u)) {
+        return;
+    }
+    let extra = band();
+    let nodes = node_counts();
+    let size = lattice_size();
+    let gaps = vec3<f32>(nodes - vec3<u32>(1u));
+    let last = vec3<f32>(vec3<u32>(params.bricks_x, params.bricks_y, params.bricks_z) - vec3<u32>(1u));
+    var first_brick = vec3<u32>(0u);
+    var last_brick = vec3<u32>(last);
+    // Decided from the raw inputs, before any arithmetic that could overflow:
+    // fast math cannot be trusted to reject that after the fact. Inside these
+    // bounds every quantity below, and in the hit test, stays finite. The
+    // spacing h is normal, and a subnormal reach, band or coordinate only
+    // ever adds to a term at least h, far below its last bit, so the rounding
+    // pad holds. Outside them every brick is a candidate and the hit test
+    // alone decides.
+    let raw = vec3<f32>(params.center_x, params.center_y, params.center_z);
+    let bounded = reach < LIMIT && abs(params.band_extra) < LIMIT
+        && all(abs(centre) < vec3<f32>(LIMIT)) && all(abs(raw) < vec3<f32>(LIMIT))
+        && all(size < vec3<f32>(LIMIT)) && all(size > vec3<f32>(MIN_SPACING) * gaps);
+    if bounded {
+        let h = size / gaps;
+        let support = vec3<f32>(1.5 * reach + extra) + h;
+        // Candidate bricks in lattice nodes. The hit test builds each world
+        // coordinate in f32, so it can accept a brick a few ulps of the
+        // largest magnitude in play beyond the exact box; that error in
+        // nodes, plus two nodes for this division's own rounding, pads the
+        // range. On an ordinary lattice the error is a fraction of a node.
+        let lo = domain_min();
+        let magnitude = max(max(abs(lo), abs(lo + size)), max(abs(centre), support));
+        // Both normal and bounded, so the quotient is finite: it keeps every
+        // node index below 1e30.
+        if all(magnitude / h < vec3<f32>(1.0e30)) {
+            let slack = ceil(magnitude * ROUNDING / h) + vec3<f32>(2.0);
+            let from_min = centre - lo;
+            let lo_node = floor((from_min - support) / h) - slack - vec3<f32>(f32(HALO_NODES + 7));
+            let hi_node = floor((from_min + support) / h) + slack + vec3<f32>(f32(HALO_NODES));
+            first_brick = vec3<u32>(clamp(floor(lo_node / 8.0), vec3<f32>(0.0), last));
+            last_brick = vec3<u32>(clamp(floor(hi_node / 8.0), vec3<f32>(0.0), last));
+        }
+    }
+    for (var z = first_brick.z; z <= last_brick.z; z = z + 1u) {
+        for (var y = first_brick.y; y <= last_brick.y; y = y + 1u) {
+            for (var x = first_brick.x; x <= last_brick.x; x = x + 1u) {
+                let brick = vec3<u32>(x, y, z);
+                if is_border(brick) {
+                    continue;
+                }
+                let id = x + params.bricks_x * (y + params.bricks_y * z);
+                if atomicLoad(&hits[id]) == 0u && reaches(brick, centre, reach, extra) {
+                    atomicStore(&hits[id], 1u);
                 }
             }
         }
     }
-    return 0u;
 }
 
 @compute @workgroup_size(256)
@@ -133,7 +186,8 @@ fn mark_bricks(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if id >= params.brick_count {
         return;
     }
-    let marked = mark_brick(id);
+    let hit = atomicExchange(&hits[id], 0u);
+    let marked = select(min(hit, 1u), 1u, is_border(brick_coords(id)));
     prefix[id] = marked;
     bricks[8u + id] = marked;
     // Clear the old compact list.  The active count is written by compact;
