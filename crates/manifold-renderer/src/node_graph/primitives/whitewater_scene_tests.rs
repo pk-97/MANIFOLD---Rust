@@ -2036,6 +2036,18 @@ fn history_def() -> EffectGraphDef {
     g.finish()
 }
 
+/// [`history_def`] presenting exactly at the request, as export does: the
+/// frame's `display_cursor` is an authored 0, which the loader keeps.
+fn exact_history_def() -> EffectGraphDef {
+    let mut g = Appender::new(history_def());
+    let frame = g.id("frame");
+    g.def["wires"].as_array_mut().expect("wires")
+        .retain(|w| !(w["toNode"] == frame && w["toPort"] == "display_cursor"));
+    let exact = g.node("exact", "node.value", json!({"value": {"type": "Float", "value": 0.0}}));
+    g.wire((exact, "out"), frame, "display_cursor");
+    g.finish()
+}
+
 /// The frame's presentation; the last is the domain's simulation time.
 const HISTORY_PROBES: [&str; 9] =
     ["blend", "span", "count_a", "count_b", "identity_a", "identity_b", "presented_time", "publications_skipped", "simulation_time"];
@@ -2062,7 +2074,7 @@ impl Show {
 #[test]
 fn liquid_frame_live_held_frame_matches_offline() {
     const FRAMES: usize = 40;
-    let mut offline = Show::new(history_def(), (96, 54), false, &[]);
+    let mut offline = Show::new(exact_history_def(), (96, 54), false, &[]);
     offline.restart();
     let mut expected = Vec::new();
     for _ in 0..FRAMES {
@@ -2075,7 +2087,8 @@ fn liquid_frame_live_held_frame_matches_offline() {
         ));
     }
     let _live = crate::node_graph::physics::PhysicsStepScope::with_preview_budget(false, std::time::Duration::from_secs(1));
-    let mut live = Show::new(history_def(), (96, 54), false, &[]);
+    // Live runs exact: the cursor presents behind the request by design.
+    let mut live = Show::new(exact_history_def(), (96, 54), false, &[]);
     live.restart();
     let mut holds = 0;
     for (k, (probes, particles_a, particles_b, pixels)) in expected.iter().enumerate() {

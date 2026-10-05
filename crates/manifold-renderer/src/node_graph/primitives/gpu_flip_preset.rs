@@ -489,7 +489,7 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     b.wire((solid, "solid"), frame, "solid");
     b.wire(count, frame, "count");
     b.wires(domain, frame, &LATTICE_WIRES);
-    b.wires(domain, frame, &["closed_faces", "simulation_time", "display_time", "epoch"]);
+    b.wires(domain, frame, &["closed_faces", "simulation_time", "display_time", "epoch", "display_cursor", "dropped_seconds"]);
     if scene.faces {
         let nodes = scene.geometry().setup.lattice.nodes();
         for (axis, name) in FACE_NODES.into_iter().enumerate() {
@@ -1705,6 +1705,34 @@ pub(super) mod tests {
                 checked += 1;
             }
             assert!(checked > 0, "{name} has no liquid state");
+        }
+    }
+
+    /// Every GPU FLIP frame presents through the cursor: `display_cursor`
+    /// and `dropped_seconds` come from the domain that clocks it.
+    #[test]
+    fn gpu_flip_frames_take_the_cursor_from_their_clock_domain() {
+        let mut graphs = vec![
+            ("GPU FLIP builder", render_def(WaterScene::dam_break(16).with_faces())),
+            ("Add Fluid's liquid body", gpu_flip_liquid_body()),
+        ];
+        for name in [SHIPPED_PRESET, PARTICLE_VIEW_PRESET] {
+            let json = bundled_preset_json(&PresetTypeId::new(name)).unwrap_or_else(|| panic!("{name} is bundled"));
+            graphs.push((name, serde_json::from_str(&json).expect("the preset parses")));
+        }
+        for (name, def) in graphs {
+            let flat = manifold_core::flatten::flatten_groups(&def).expect("flattens");
+            let mut checked = 0;
+            for frame in flat.nodes.iter().filter(|node| node.type_id == "node.liquid_frame") {
+                let clock = flat.wires.iter().find(|w| w.to_node == frame.id && w.to_port == "epoch").expect("the frame has a clock");
+                for port in ["display_cursor", "dropped_seconds"] {
+                    let feeds: Vec<_> = flat.wires.iter().filter(|w| w.to_node == frame.id && w.to_port == port).collect();
+                    assert_eq!(feeds.len(), 1, "{name}: one {port} wire");
+                    assert_eq!((feeds[0].from_node, feeds[0].from_port.as_str()), (clock.from_node, port), "{name}: {port} from the frame's clock");
+                }
+                checked += 1;
+            }
+            assert!(checked > 0, "{name} has no liquid frame");
         }
     }
 

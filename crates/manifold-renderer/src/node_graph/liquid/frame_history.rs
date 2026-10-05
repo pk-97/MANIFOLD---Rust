@@ -90,10 +90,18 @@ pub struct Presentation {
 
 impl Presentation {
     /// The time the picture samples: t_A + blend × span, with the
-    /// published span.
+    /// published span, never past B however blend and span round.
     pub fn presented_time(&self) -> f64 {
-        self.t_a + f64::from(self.blend) * f64::from(self.span)
+        (self.t_a + f64::from(self.blend) * f64::from(self.span)).min(self.t_b)
     }
+}
+
+/// The current generation's Retired endpoint times (any run).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RetiredBounds {
+    pub earliest: f64,
+    pub second: Option<f64>,
+    pub newest: f64,
 }
 
 /// How a layout update changed the history.
@@ -138,6 +146,29 @@ impl HistoryCore {
 
     pub fn pinned(&self) -> Option<&Presentation> {
         self.pinned.as_ref()
+    }
+
+    /// The pin when it belongs to the current generation.
+    pub fn current_pin(&self) -> Option<Presentation> {
+        self.pinned.filter(|p| p.generation == self.generation)
+    }
+
+    /// Earliest, second-newest and newest Retired endpoint of the current
+    /// generation, or None when nothing is retired in it.
+    pub fn retired_bounds(&self) -> Option<RetiredBounds> {
+        let mut bounds: Option<RetiredBounds> = None;
+        for s in self.slots.iter().filter(|s| s.state == SlotState::Retired && s.generation == self.generation) {
+            bounds = Some(match bounds {
+                None => RetiredBounds { earliest: s.t, second: None, newest: s.t },
+                Some(b) if s.t > b.newest => RetiredBounds { earliest: b.earliest, second: Some(b.newest), newest: s.t },
+                Some(b) => RetiredBounds {
+                    earliest: b.earliest.min(s.t),
+                    second: Some(b.second.map_or(s.t, |second| second.max(s.t))),
+                    newest: b.newest,
+                },
+            });
+        }
+        bounds
     }
 
     /// Endpoints skipped by exhaustion or refusal, over the node's lifetime.
