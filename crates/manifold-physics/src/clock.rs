@@ -93,8 +93,8 @@ pub struct ClockFrame {
 #[derive(Clone, Debug, Default)]
 pub struct SimulationClock {
     /// Process-unique identity for telemetry, assigned at the first advance.
-    /// 0 until then. Never reused, unlike an address; a clone shares it.
-    instance: u64,
+    /// 0 until then. Never reused, unlike an address.
+    instance: ClockInstance,
     /// 0 before the first start, so outputs a domain holds while it waits
     /// (for a role's geometry, say) never share an epoch with the first
     /// simulation, which then seeds.
@@ -117,6 +117,17 @@ pub struct SimulationClock {
     /// Retain the continuity anchor and all speed edits after accepted time.
     speed_history: Vec<SpeedAnchor>,
     history_snapshots: Vec<Arc<Vec<SpeedAnchor>>>,
+}
+
+/// A clone advances on its own, so it never inherits the original's identity:
+/// it starts unassigned and takes a fresh id at its first advance.
+#[derive(Debug, Default)]
+struct ClockInstance(u64);
+
+impl Clone for ClockInstance {
+    fn clone(&self) -> Self {
+        Self(0)
+    }
 }
 
 /// Piecewise-constant speed, integrated once at each observed edit. Accepted
@@ -185,7 +196,7 @@ impl SimulationClock {
 
     /// Process-unique identity for telemetry; 0 before the first advance.
     pub fn instance(&self) -> u64 {
-        self.instance
+        self.instance.0
     }
 
     pub fn accepted_time(&self) -> f64 {
@@ -277,9 +288,9 @@ impl SimulationClock {
         setup_changed: bool,
         offline: bool,
     ) -> ClockFrame {
-        if self.instance == 0 {
+        if self.instance.0 == 0 {
             static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-            self.instance = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.instance.0 = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
         let mut numerical_error =
             !transport.is_finite() || !speed.is_finite() || speed < 0.0 || !reset.is_finite();
@@ -920,6 +931,22 @@ mod tests {
     /// are the due boundaries clipped to the cap in force, a reanchor happens
     /// exactly when due exceeds the cap, and the fresh drop is the step in the
     /// cumulative total. A frame that crosses no boundary ticks nothing.
+    #[test]
+    fn a_clone_reports_under_its_own_instance() {
+        let interval = 1.0 / 30.0;
+        let unstarted = SimulationClock::default();
+        let mut early = unstarted.clone();
+        early.advance(0.0, interval, 1.0, 0.0, false, false);
+        let mut original = SimulationClock::default();
+        original.advance(0.0, interval, 1.0, 0.0, false, false);
+        let mut late = original.clone();
+        assert_eq!(late.instance(), 0, "a clone starts unassigned");
+        late.advance(interval, interval, 1.0, 0.0, false, false);
+        let ids = [early.instance(), original.instance(), late.instance()];
+        assert!(ids.iter().all(|&id| id != 0));
+        assert!(ids[0] != ids[1] && ids[1] != ids[2] && ids[0] != ids[2]);
+    }
+
     #[test]
     fn decision_counters_match_the_clock_over_an_overload_sequence() {
         let interval = 1.0 / 30.0;
