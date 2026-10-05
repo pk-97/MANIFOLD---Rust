@@ -2642,9 +2642,10 @@ fn gpu_flip_sheeting_off_leaves_the_dam_break_unchanged() {
     };
     let unwired = digest(None);
     eprintln!("DAM BREAK DIGEST 32 x4: {unwired:016x}");
-    // Main's step before sheet seeding gave this digest; the step with sheeting
-    // off must keep it until the step itself is meant to change.
-    assert_eq!(unwired, 0xd747_2f0b_e4ed_be51, "sheeting off changed the Dam Break");
+    // The whole step's pin: only a commit that changes the step on purpose
+    // re-records it, and says why. Last re-recorded for the tank walls matching
+    // the native engine; sheeting with walls and no pressure template gives it too.
+    assert_eq!(unwired, 0xb915_115e_7604_78dd, "sheeting off changed the Dam Break");
     assert_eq!(digest(Some(0.0)), unwired, "rate 0 changed the step");
 }
 
