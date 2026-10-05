@@ -23,7 +23,7 @@
 //! coarsest level is solved by its inverse, not smoothed, so it is never a
 //! gradient level.
 
-use manifold_gpu::{GATED_RANGE_BYTES, GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
+use manifold_gpu::{GATED_RANGE_BYTES, GatedRecorder, GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder, TemplateRanges};
 
 use super::gpu_flip_bodies::{Bodies, BodyGate, BodyPasses};
 use crate::node_graph::fluid_particles::FaceSample;
@@ -823,89 +823,51 @@ impl PressureSolver {
             "gpu_flip.pressure.init",
         );
         check(enc, pipes, b, plain, &Params { mode: 1, ..fine });
-        for i in 0..iterations {
-            g.begin_round(enc, 2 * i, before);
-            v_cycle(enc, pipes, b, water, g, &top);
-            dot_finalize(enc, pipes, b, g, &top, 0);
-            // The round index is the GPU's completed-round count (progress[1]),
-            // so every round encodes the same bytes.
-            let step = fine;
-            g.dispatch(
-                enc,
-                &pipes.direction,
-                &[bytes(&step), buffer(3, &b.z), buffer(5, &b.p), buffer(7, &b.scalars), buffer(11, &b.progress)],
-                slots.level(k),
-                "gpu_flip.pressure.direction",
-            );
-            // With no bodies s is final here, so the pass folds p · s.
-            let apply = Params { mode: 1 | if bodies.is_some() { 0 } else { REDUCE }, ghost: top.ghost, ..fine };
-            g.dispatch(
-                enc,
-                &pipes.residual,
-                &[
-                    bytes(&apply),
-                    buffer(1, top.water),
-                    buffer(3, &b.p),
-                    buffer(4, &b.p),
-                    buffer(5, &b.scratch),
-                    buffer(16, &b.partials),
-                    buffer(17, top.rows),
-                ],
-                slots.level(k),
-                "gpu_flip.pressure.apply",
-            );
-            // On the gate the body product runs in live rounds only. Plain,
-            // it runs whether or not the solve stopped: it writes s and its
-            // sums, which nothing reads again this solve. On a coarse level
+        let r = RoundPasses { pipes, b, water, g, top, fine, x, k, bodies: bodies.is_some() };
+        match (round, bodies) {
+            // A plain body product splits the round around an ungated chain:
+            // two segments a round, encoded round by round. On a coarse level
             // the direction goes down to the fine lattice (the fine pressure
-            // is spare until the end) and the product comes back up.
-            if let Some((passes, bodies)) = bodies {
-                match round {
-                    BodyRound::Gated => {
-                        passes.apply_gated(enc, bodies, g.tiles, &b.p, &b.scratch, &body_gate)?;
-                    }
-                    _ if k == 0 => {
-                        enc.end_gated_segments();
+            // is spare until the end) and the product comes back up. It runs
+            // whether or not the solve stopped: it writes s and its sums,
+            // which nothing reads again this solve.
+            (BodyRound::Plain, Some((passes, bodies))) => {
+                for i in 0..iterations {
+                    g.begin_round(enc, 2 * i, before);
+                    r.head(enc);
+                    enc.end_gated_segments();
+                    if k == 0 {
                         passes.apply(enc, bodies, g.tiles, &b.p, &b.scratch)?;
-                        g.begin_round(enc, 2 * i + 1, after);
-                    }
-                    _ => {
-                        enc.end_gated_segments();
+                    } else {
                         chain.prolong_down(enc, &b.p, pressure, Spare::E);
                         zero(enc, pipes, n, &b.body, plan);
                         passes.apply(enc, bodies, g.tiles, pressure, &b.body)?;
                         chain.restrict_down(enc, &b.body, &b.scratch, 0, RESTRICT_ADD);
-                        g.begin_round(enc, 2 * i + 1, after);
                     }
+                    g.begin_round(enc, 2 * i + 1, after);
+                    r.tail(enc);
                 }
-                g.dispatch(
-                    enc,
-                    &pipes.dot_partial,
-                    &[bytes(&fine), buffer(3, &b.p), buffer(4, &b.scratch), buffer(16, &b.partials)],
-                    slots.level(k),
-                    "gpu_flip.pressure.dot_partial",
-                );
+                enc.end_gated_segments();
             }
-            dot_finalize(enc, pipes, b, g, &top, 1);
-            g.dispatch(
-                enc,
-                &pipes.update,
-                &[
-                    bytes(&Params { mode: REDUCE, ..step }),
-                    buffer(3, &b.p),
-                    buffer(4, &b.scratch),
-                    buffer(5, x),
-                    buffer(6, &b.r),
-                    buffer(7, &b.scalars),
-                    buffer(16, &b.partials),
-                    buffer(11, &b.progress),
-                ],
-                slots.level(k),
-                "gpu_flip.pressure.update",
-            );
-            check(enc, pipes, b, g, &step);
+            // Every round encodes the same bytes (the round index is the GPU's
+            // progress[1]), so one walked round is the template the GPU runs
+            // once per round, round i by range entry 2i. On the gate the body
+            // product runs in live rounds only.
+            _ if iterations > 0 => {
+                debug_assert_eq!(after, 0, "a gated round is one segment");
+                let at = TemplateRanges { ranges: &b.ranges, first: 0, stride: 2 };
+                enc.repeat_gated_template(at, before, iterations, |recorder| {
+                    let mut sink = Round { recorder, refused: None };
+                    r.head(&mut sink);
+                    if let (BodyRound::Gated, Some((passes, bodies))) = (round, bodies) {
+                        passes.apply_gated(&mut sink, bodies, g.tiles, &b.p, &b.scratch, &body_gate)?;
+                    }
+                    r.tail(&mut sink);
+                    sink.refused.map_or(Ok(()), Err)
+                })?;
+            }
+            _ => {}
         }
-        enc.end_gated_segments();
         if k > 0 {
             chain.prolong_down(enc, x, pressure, Spare::E);
         }
@@ -1074,8 +1036,43 @@ struct Gate<'a> {
 /// clock plan included.
 const MAX_BINDINGS: usize = 12;
 
+/// Where a solve's dispatches go: the encoder, or a round template's
+/// recorder, which takes gated dispatches only.
+pub(crate) trait Sink {
+    fn gated(&mut self, pipeline: &GpuComputePipeline, bindings: &[GpuBinding], groups: [u32; 3], gate: &GpuBuffer, offset: u64, label: &str);
+    fn plain(&mut self, pipeline: &GpuComputePipeline, bindings: &[GpuBinding], groups: [u32; 3], label: &str);
+}
+
+impl Sink for GpuEncoder {
+    fn gated(&mut self, pipeline: &GpuComputePipeline, bindings: &[GpuBinding], groups: [u32; 3], gate: &GpuBuffer, offset: u64, label: &str) {
+        self.dispatch_compute_gated(pipeline, bindings, groups, gate, offset, label);
+    }
+
+    fn plain(&mut self, pipeline: &GpuComputePipeline, bindings: &[GpuBinding], groups: [u32; 3], label: &str) {
+        self.dispatch_compute(pipeline, bindings, groups, label);
+    }
+}
+
+/// A round template's body. A plain dispatch has no place in a template (the
+/// GPU repeats the round, and only gated dispatches stop with the solve), so
+/// it is refused, and the refusal fails the solve.
+struct Round<'r, 'e> {
+    recorder: &'r mut GatedRecorder<'e>,
+    refused: Option<String>,
+}
+
+impl Sink for Round<'_, '_> {
+    fn gated(&mut self, pipeline: &GpuComputePipeline, bindings: &[GpuBinding], groups: [u32; 3], gate: &GpuBuffer, offset: u64, label: &str) {
+        self.recorder.dispatch_gated(pipeline, bindings, groups, gate, offset, label);
+    }
+
+    fn plain(&mut self, _: &GpuComputePipeline, _: &[GpuBinding], _: [u32; 3], label: &str) {
+        self.refused.get_or_insert_with(|| format!("the pressure round template refuses the ungated dispatch {label}"));
+    }
+}
+
 impl Gate<'_> {
-    fn dispatch(self, enc: &mut GpuEncoder, pipeline: &GpuComputePipeline, bindings: &[GpuBinding], triple: usize, label: &str) {
+    fn dispatch<S: Sink>(self, enc: &mut S, pipeline: &GpuComputePipeline, bindings: &[GpuBinding], triple: usize, label: &str) {
         let groups = self.groups[triple];
         let mut all: arrayvec::ArrayVec<GpuBinding, MAX_BINDINGS> = bindings
             .iter()
@@ -1091,9 +1088,9 @@ impl Gate<'_> {
         all.push(buffer(20, self.tiles[2]));
         all.push(buffer(21, self.plan));
         if self.gated {
-            enc.dispatch_compute_gated(pipeline, &all, groups, self.buffer, triple as u64 * TRIPLE_BYTES, label);
+            enc.gated(pipeline, &all, groups, self.buffer, triple as u64 * TRIPLE_BYTES, label);
         } else {
-            enc.dispatch_compute(pipeline, &all, groups, label);
+            enc.plain(pipeline, &all, groups, label);
         }
     }
 
@@ -1103,9 +1100,88 @@ impl Gate<'_> {
     }
 }
 
+/// One conjugate gradient round's passes around the body product: the
+/// head (V-cycle, r·z, direction, operator) and the tail (p·s with bodies,
+/// update, check).
+#[derive(Clone, Copy)]
+struct RoundPasses<'a> {
+    pipes: &'a Pipelines,
+    b: &'a Buffers,
+    water: &'a Water<'a>,
+    g: Gate<'a>,
+    top: View<'a>,
+    fine: Params,
+    x: &'a GpuBuffer,
+    k: usize,
+    bodies: bool,
+}
+
+impl RoundPasses<'_> {
+    fn head<S: Sink>(&self, enc: &mut S) {
+        let (pipes, b, g, top, fine) = (self.pipes, self.b, self.g, &self.top, self.fine);
+        v_cycle(enc, pipes, b, self.water, g, top);
+        dot_finalize(enc, pipes, b, g, top, 0);
+        g.dispatch(
+            enc,
+            &pipes.direction,
+            &[bytes(&fine), buffer(3, &b.z), buffer(5, &b.p), buffer(7, &b.scalars), buffer(11, &b.progress)],
+            g.slots.level(self.k),
+            "gpu_flip.pressure.direction",
+        );
+        // With no bodies s is final here, so the pass folds p · s.
+        let apply = Params { mode: 1 | if self.bodies { 0 } else { REDUCE }, ghost: top.ghost, ..fine };
+        g.dispatch(
+            enc,
+            &pipes.residual,
+            &[
+                bytes(&apply),
+                buffer(1, top.water),
+                buffer(3, &b.p),
+                buffer(4, &b.p),
+                buffer(5, &b.scratch),
+                buffer(16, &b.partials),
+                buffer(17, top.rows),
+            ],
+            g.slots.level(self.k),
+            "gpu_flip.pressure.apply",
+        );
+    }
+
+    fn tail<S: Sink>(&self, enc: &mut S) {
+        let (pipes, b, g, top, fine) = (self.pipes, self.b, self.g, &self.top, self.fine);
+        if self.bodies {
+            g.dispatch(
+                enc,
+                &pipes.dot_partial,
+                &[bytes(&fine), buffer(3, &b.p), buffer(4, &b.scratch), buffer(16, &b.partials)],
+                g.slots.level(self.k),
+                "gpu_flip.pressure.dot_partial",
+            );
+        }
+        dot_finalize(enc, pipes, b, g, top, 1);
+        g.dispatch(
+            enc,
+            &pipes.update,
+            &[
+                bytes(&Params { mode: REDUCE, ..fine }),
+                buffer(3, &b.p),
+                buffer(4, &b.scratch),
+                buffer(5, self.x),
+                buffer(6, &b.r),
+                buffer(7, &b.scalars),
+                buffer(16, &b.partials),
+                buffer(11, &b.progress),
+            ],
+            g.slots.level(self.k),
+            "gpu_flip.pressure.update",
+        );
+        check(enc, pipes, b, g, &fine);
+    }
+}
+
 /// z = V(r): one V-cycle for L e = r from zero, from the gradient's level
 /// `top` down. The last sweep at `top` folds r · z into the partials.
-fn v_cycle<'a>(enc: &mut GpuEncoder, pipes: &Pipelines, b: &'a Buffers, water: &Water<'a>, g: Gate<'_>, top: &View<'a>) {
+fn v_cycle<'a, S: Sink>(enc: &mut S, pipes: &Pipelines, b: &'a Buffers, water: &Water<'a>, g: Gate<'_>, top: &View<'a>) {
     let start = top.level as usize;
     let at = |level: usize| -> View<'a> { if level == start { *top } else { view(b, water, level) } };
     let last = b.coarse.len();
@@ -1161,7 +1237,7 @@ fn v_cycle<'a>(enc: &mut GpuEncoder, pipes: &Pipelines, b: &'a Buffers, water: &
 
 /// `src` on `fine` restricted into `out` on `coarse`, over the coarse
 /// level's list; `mode` is the restrict bits.
-fn restrict(enc: &mut GpuEncoder, pipes: &Pipelines, g: Gate<'_>, fine: &View<'_>, coarse: &View<'_>, src: &GpuBuffer, out: &GpuBuffer, mode: u32) {
+fn restrict<S: Sink>(enc: &mut S, pipes: &Pipelines, g: Gate<'_>, fine: &View<'_>, coarse: &View<'_>, src: &GpuBuffer, out: &GpuBuffer, mode: u32) {
     let params = Params { mode, ..Params::at(fine.lattice, fine.cell_size).coarse(coarse.lattice).over(coarse) };
     g.dispatch(
         enc,
@@ -1174,7 +1250,7 @@ fn restrict(enc: &mut GpuEncoder, pipes: &Pipelines, g: Gate<'_>, fine: &View<'_
 
 /// `src` on `coarse` prolonged and added into `out` on `fine`'s water,
 /// over the fine level's list.
-fn prolong(enc: &mut GpuEncoder, pipes: &Pipelines, g: Gate<'_>, fine: &View<'_>, coarse: &View<'_>, src: &GpuBuffer, out: &GpuBuffer) {
+fn prolong<S: Sink>(enc: &mut S, pipes: &Pipelines, g: Gate<'_>, fine: &View<'_>, coarse: &View<'_>, src: &GpuBuffer, out: &GpuBuffer) {
     let params = Params::at(fine.lattice, fine.cell_size).coarse(coarse.lattice).over(fine);
     g.dispatch(
         enc,
@@ -1243,7 +1319,7 @@ enum Sweep {
 }
 
 /// One red-black sweep of `color` at a level.
-fn smooth(enc: &mut GpuEncoder, pipes: &Pipelines, v: &View<'_>, color: u32, sweep: Sweep, g: Gate<'_>, level: usize) {
+fn smooth<S: Sink>(enc: &mut S, pipes: &Pipelines, v: &View<'_>, color: u32, sweep: Sweep, g: Gate<'_>, level: usize) {
     let mode = match sweep {
         Sweep::Plain => 0,
         Sweep::FromZero => 1,
@@ -1261,7 +1337,7 @@ fn smooth(enc: &mut GpuEncoder, pipes: &Pipelines, v: &View<'_>, color: u32, swe
 
 /// The folded partials of a dot product over the gradient's level summed,
 /// in a fixed order, into this round's scalar `slot`: 0 r·z, 1 p·s.
-fn dot_finalize(enc: &mut GpuEncoder, pipes: &Pipelines, b: &Buffers, g: Gate<'_>, top: &View<'_>, slot: u32) {
+fn dot_finalize<S: Sink>(enc: &mut S, pipes: &Pipelines, b: &Buffers, g: Gate<'_>, top: &View<'_>, slot: u32) {
     let params = Params { color: partial_count(top.lattice), slot, ..Params::at(top.lattice, 0.0).over(top) };
     g.dispatch(
         enc,
@@ -1274,7 +1350,7 @@ fn dot_finalize(enc: &mut GpuEncoder, pipes: &Pipelines, b: &Buffers, g: Gate<'_
 
 /// The folded partials' max, |r|∞, into the stop's record and the stop
 /// test: the start with `mode` 1, else after iteration `slot`.
-fn check(enc: &mut GpuEncoder, pipes: &Pipelines, b: &Buffers, g: Gate<'_>, step: &Params) {
+fn check<S: Sink>(enc: &mut S, pipes: &Pipelines, b: &Buffers, g: Gate<'_>, step: &Params) {
     let params = Params { color: partial_count([step.nx, step.ny, step.nz]), ..*step };
     g.dispatch(
         enc,

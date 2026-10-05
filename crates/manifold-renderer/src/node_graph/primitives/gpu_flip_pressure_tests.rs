@@ -1336,6 +1336,10 @@ fn pressure_module_replay_matches_direct() {
                     Stop::Converged(cap) | Stop::Fixed(cap) => u64::from(cap),
                 };
                 assert_eq!(stats.segments_replayed - last.segments_replayed, rounds, "{stop:?} frame {frame}: every round is one segment execute");
+                // One walked round per solve, not one per round up to the cap.
+                assert_eq!(stats.templates_replayed - last.templates_replayed, 1, "{stop:?} frame {frame}: the rounds are one replayed template");
+                assert_eq!(stats.templates_direct, last.templates_direct, "{stop:?} frame {frame}: no template ran directly");
+                assert!(stats.replayed - last.replayed < 150, "{stop:?} frame {frame}: {} validations, one round's worth expected", stats.replayed - last.replayed);
             }
             last = stats;
         }
