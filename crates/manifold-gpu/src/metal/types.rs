@@ -351,6 +351,15 @@ pub struct GpuComputePipeline {
     pub(crate) supports_replay: bool,
 }
 
+impl GpuComputePipeline {
+    /// The first binding the entry point references that `bindings` leaves
+    /// out. Metal binds only what a dispatch names, so a referenced binding
+    /// left out reads whatever the slot last held.
+    pub fn unbound_binding(&self, bindings: &[crate::GpuBinding]) -> Option<u32> {
+        self.slot_map.bindings().find(|&wanted| !bindings.iter().any(|b| b.binding() == wanted))
+    }
+}
+
 impl Clone for GpuComputePipeline {
     fn clone(&self) -> Self {
         Self {

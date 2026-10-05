@@ -19,7 +19,7 @@ use manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID;
 use serde_json::{Value, json};
 
 use super::gpu_flip_domain::{GpuFlipGeometry, gpu_flip_geometry};
-use super::gpu_flip_step::{AUTO_PRESSURE_ITERATIONS, FACE_VALID_LAYERS};
+use super::gpu_flip_step::FACE_VALID_LAYERS;
 use crate::node_graph::bundled_presets::bundled_preset_json;
 #[cfg(all(test, feature = "gpu-proofs"))]
 use crate::node_graph::fluid::{FluidDomainLayout, domain_layout};
@@ -37,7 +37,7 @@ const DAM_BREAK_METRES: f64 = 4.0;
 pub(crate) const STEPS_PER_TICK: usize = 1;
 
 /// The main solve's iterations: the step's Auto.
-pub(crate) const PRESSURE_ITERATIONS: usize = AUTO_PRESSURE_ITERATIONS as usize;
+pub(crate) const PRESSURE_ITERATIONS: usize = super::gpu_flip_pressure::MAX_ITERATIONS as usize;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PressureShape {
@@ -1071,7 +1071,7 @@ fn water_step(b: &mut Builder, scene: WaterScene, tick: (usize, usize)) -> usize
             &[
                 ("steps", int(scene.steps)),
                 ("flip", float(scene.flip)),
-                ("iterations", iterations(scene.pressure.iterations, AUTO_PRESSURE_ITERATIONS)),
+                ("iterations", iterations(scene.pressure.iterations, PRESSURE_ITERATIONS as u32)),
                 ("ghost_fluid", int(usize::from(scene.ghost_fluid))),
                 ("volume_projection", int(usize::from(scene.volume_projection))),
             ],
@@ -1086,7 +1086,7 @@ fn water_step(b: &mut Builder, scene: WaterScene, tick: (usize, usize)) -> usize
     b.wire((state, "tick_index"), step, "tick_index");
     b.wire((state, "retired_max_speed"), step, "retired_max_speed");
     b.wire((domain, "initial_obstacle_speed"), step, "initial_obstacle_speed");
-    b.wires(domain, step, &["bodies", "shapes", "atlas", "body_count", "dynamic_bodies", "closed_faces", "solve_level"]);
+    b.wires(domain, step, &["bodies", "shapes", "atlas", "body_count", "dynamic_bodies", "closed_faces", "solve_level", "max_iterations"]);
     b.wire((domain, "body_rows"), step, "rows");
     step
 }

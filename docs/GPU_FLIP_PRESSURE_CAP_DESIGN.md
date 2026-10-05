@@ -2,7 +2,7 @@
 
 <!-- index: BUG-fwp2n (unused solver rounds still cost encode time) and BUG-6rki6 (pressure cap 900 with tolerance stop): the round index moves to a GPU counter, one walked round becomes a transactional replay template, rounds execute in geometric chunks guarded after the stop, and Max Iterations becomes a slider with a migration. -->
 
-**Status:** APPROVED · 2026-10-06 · Claude (design) with Astra's binding review folded in · C0–C6 owed (section 9 (Phasing)); tracked in BUG-fwp2n (unused solver rounds still cost encode time) and BUG-6rki6 (pressure cap 900 with tolerance stop).
+**Status:** SHIPPED · 2026-10-06 · C0 to C6 on main; deferred items in section 11 (Deferred).
 **Prerequisites:** none.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) and section 6 (Seam briefs) before starting any phase.
 
@@ -70,7 +70,7 @@ impl GpuEncoder {
 }
 ```
 
-Contract:
+Contract (C2 to C5; C5b replaces it with section 3.2: the template leaves the frame span, and the failure path below no longer runs the body directly but returns `Err` before the solve encodes anything):
 
 - **Validation before anything is encoded.** `commands > 0`, `copies > 0`, and the last entry `first + (copies − 1)·stride` inside `ranges`, all in checked arithmetic; `stride` is in entries, the stored offset in bytes. A violation is `Err`.
 - **Transaction.** Opening a template closes any open segment and checkpoints: span cursor and mode, recording length, store command count, segment count, arena cursor, and the `replayed`/`recorded`/`direct` stats. Every walked dispatch is provisional. Commit: the walk took exactly `commands` dispatches and nothing failed; the stored segment carries `copies` and `stride`.
@@ -86,6 +86,104 @@ Contract:
 ### 3.1 Chunks (C5)
 
 The committed template is one validated round of R commands. On cold recording the store instantiates a chunk buffer of `max_chunk · R` commands: the round replicated `max_chunk` times, every replica naming the same pipelines, buffers and arena slots, each command with `setBarrier`. A chunk of c rounds executes the prefix `{0, c·R}` of that buffer by a GPU-written range entry. The final partial chunk is a shorter prefix, so one buffer serves every chunk. Warm refresh writes the shared bytes once. Barriers: every recorded command's, the stretch boundaries', and a buffer barrier between executes, all kept.
+
+### 3.2 The template on every path (C5b)
+
+**Problem.** The template lives in the frame replay ring. Whenever a frame encodes directly, the body is unrolled on the CPU to the cap. That happens with no span, dispatch profiling, `MANIFOLD_GPU_DIAGNOSTICS=1`, `MANIFOLD_ENCODE_REPLAY=0`, array dumps, or the ring busy. Measured on the Dam Break oracle at cap 900 on a profiled (direct) frame: `node.gpu_flip_step` CPU preparation p50 is about 137 ms, against 10–15 ms at cap 64 on main. A busy ring is exactly when the GPU is already behind. This is also the open half of BUG-fwp2n (unused solver rounds still cost encode time). Recording the template in the frame ring on every path can't fix it: a busy ring has no entry to record into, so the template needs storage of its own.
+
+**Rule.** Pressure rounds always run as GPU-gated chunked executes of the template. That holds on replayed, direct, cold, profiled and diagnostic frames, and in export. The CPU never unrolls rounds, and section 3's CPU fallback is gone. The only answer to a template that can't be built is the solve's named `Err`, returned before the solve encodes anything. The proofs' gate-off lever (`BodyRound::Plain`, test-only) keeps its per-round encode. It is the reference for the gated body product, not a fallback.
+
+**API (manifold-gpu, `metal/template.rs`).**
+```rust
+pub struct GpuTemplateStore { /* slots, scratch round, stats */ }
+pub struct TemplateTicket { /* slot index, execute ranges */ }
+impl GpuEncoder {
+    /// Walk `body` once into the store's provisional round, validate it whole,
+    /// find or build the slot. Encodes nothing; Err leaves every slot as it was.
+    pub fn prepare_template(&mut self, store: &mut GpuTemplateStore, at: TemplateRanges, commands: u32,
+        copies: u32, body: impl FnOnce(&mut GatedRecorder) -> Result<(), String>) -> Result<TemplateTicket, String>;
+    /// Run the prepared slot's chunked executes here.
+    pub fn execute_template(&mut self, store: &mut GpuTemplateStore, ticket: TemplateTicket);
+}
+```
+The solver calls `prepare_template` before its prelude (restriction, arm, init, check), so a failed prepare means the solve encodes nothing. It calls `execute_template` where the rounds go. `GatedRecorder` now only collects: it has no encoder.
+
+**One provisional transaction.** `prepare_template` clears the store's scratch round and runs the body once. Each `dispatch_gated` appends one command to the scratch round, with:
+- the pipeline, retained;
+- the groups;
+- the label;
+- every buffer binding, as a retained buffer, its offset and its Metal slot;
+- every inline binding's bytes, in one flat scratch byte vector;
+- the generated sizes bytes.
+
+The body runs once, so `FnOnce` replaces `FnMut` and no Dry pass exists. Validation then runs over the whole round: the body returned `Ok`, it took exactly `commands` dispatches, and every pipeline supports replay. Only after that is a slot looked up, built and published. Any failure, including an ICB or arena allocation failure, returns `Err` with every existing slot untouched. A new slot is built off to the side and pushed only once built. A rewritten idle slot is reset before it is written, and on failure left reset and keyless, so it is never executed stale.
+
+**Slots and keys.**
+- **Slot contents.** Each slot owns its replicated ICB (`commands × chunk` commands, bound by `MAX_TEMPLATE_COMMANDS`) and its arena. It also holds, retained, every pipeline and buffer its commands name, its key, and its outstanding command buffers.
+- **Key.** Every command's pipeline identity, groups, and bindings in order: buffer identity, offset and Metal slot, or inline bytes and Metal slot, the generated sizes bytes included. Plus `commands` and `chunk`. That covers what `GateKey` and the dispatch key cover today. Identities are pointers to objects the slot retains, so an address can't be recycled while a slot names it. A `prepare` that replaces solver buffers changes the key.
+- **Range identity.** The range buffer and its first offset, stride and `copies` are not in the key. They are the ticket's execute arguments, passed to `executeCommandsInBuffer` directly, so the command buffer retains them. A changed Fixed count or stop reuses the slot.
+
+**Retirement: every outstanding user is tracked.** No submission-order contract is assumed.
+- Each execute pushes the encoder's current command buffer onto the slot's user list, once per buffer, before commit. That covers `commit_and_continue` splits and profiled encoders.
+- A slot is in flight while any user's status is neither Completed nor Error. Completed users are pruned on every lookup, and the list's capacity is reused.
+- A slot with an equal key runs even in flight: executing an ICB only reads it, and nothing is written.
+- A slot in flight is never reset, written or freed.
+
+**Capacity: the ring grows on demand.**
+- **Admission.** A changed key takes the least recently used idle slot, or appends a new slot when none is idle. There is no cap and no exhaustion state.
+- **Why that is bounded.** A slot is in flight only while a command buffer that ran it is outstanding. So live slots ≤ distinct keys a command buffer runs × outstanding command buffers, and the host bounds the second factor (frames in flight).
+- **Trim.** After a lookup, idle slots beyond 4 are freed, so a burst of churn doesn't stay resident.
+- **Drop.** Dropping the store waits for its committed users. A user still uncommitted (a dropped encoder) can't be waited on: its slot is leaked with a warning, never freed under the GPU.
+
+**Execute boundary** (`execute_template`, every encoder path):
+1. Flush the frame span's pending stretch (`flush_replay`) and close its open gated segment, so earlier work keeps its order. The template is not part of the frame recording. The span validates on after it.
+2. Get the compute encoder. When profiling, open a sampled encoder labelled "pressure rounds": one per execute at Dispatch granularity, one for all executes at Tag granularity.
+3. On every newly opened encoder: a buffer barrier, then `useResources` (read and write) for every buffer the slot names, plus its arena and the range buffer.
+4. Run the executes: chunk j by range entry `first + j·stride`, with a buffer barrier between executes. Every command keeps its `setBarrier`.
+5. A trailing buffer barrier, then `compute_cache.clear()`. Executing an ICB leaves the encoder's bindings unspecified, as replay already handles at `metal/replay.rs` (`flush_span`).
+6. Push the user command buffer, and count the executes in the stats.
+
+**Cold frames.** The first visit or a changed key builds the slot: one walk, `commands` command writes for replica 0, and the same writes for the other `chunk − 1` replicas. Stats count walks, slot builds, command writes, hits and executes. T9 asserts those counts, not only timing.
+
+**Profiling.**
+- Profiled frames run the template too, so perf-soak CPU numbers measure the live path.
+- Per-pass timing inside the rounds is gone. A `Fixed(1)` solve still runs every round command in one execute, so it can't rank passes either. Ranking passes inside a round needs the gate-off proof lever, or a profiled frame-replay-off build of the pre-C5b path. That trade-off is accepted.
+- The rounds' spans carry the node's tag, so the per-tag sum is still the node's time.
+- Sample exhaustion follows today's rule: no sample reserved means an unsampled encoder.
+
+**Capture and dump.**
+- `MANIFOLD_GPU_DIAGNOSTICS=1` keeps frame replay off and the template on. Each execute is wrapped in `pushDebugGroup` with the slot's label.
+- An Xcode capture shows the ICB commands per execute.
+- Array dumps disable frame replay only. They read at node boundaries, after the solve.
+- `MANIFOLD_ENCODE_REPLAY=0` stays the frame replay kill switch and does not cover templates.
+
+**Export, today and after.**
+- **Today:** export renders through the same `ContentPipeline` and executor as live (`crates/manifold-app/src/content_export.rs`), with `encode_replay` on by default (`node_graph/execution.rs`). So export frames replay unless the ring is busy or a dump is on. How often export hits a busy ring has not been measured.
+- **After:** export runs the same executes as live, whatever the ring does.
+
+**Bindings.** With `setInheritBuffers(false)`, a binding the entry point references but the command leaves out is undefined. `prepare_template` checks `unbound_binding` on every collected command and refuses with `Err`. BUG-cnyc8 (smooth binding 4 mismatch) is fixed in this change: smooth binds `buffer(4, v.rhs)`, which it never reads on sources 0 and 2.
+
+**Proofs (C5b gate).**
+- **T8, independent reference.** The C0 golden fixture was recorded on main by the pre-template unrolled path. Both its direct and replay lines must hold, every case, on:
+  - no span; a replaying span; a busy ring (every entry held in flight by uncommitted encoders); a profiled encoder at both granularities;
+  - a cold store (first visit) and a warm one;
+  - a cap change between visits (Converged 64 → Fixed 16 → Converged 64 on one store), and density rearming (`pressure_module_rearms_between_solves`).
+  - The body golden holds as well. Diagnostics are a process-wide OnceLock and dumps are an executor flag: both only switch frame replay off, so the no-span case covers them, and the doc says so rather than claiming a separate run.
+- **T9, counts and cost.**
+  - Per warm solve: walks 1, builds 0, command writes 0, executes = chunk count, on a direct and on a replayed frame.
+  - A changed key builds exactly one slot with `commands × chunk` writes, and an idle slot is reused.
+  - CPU encode of a warm direct solve at cap 900 is within 10% of cap 64 (feature build). The changed-key visit cost is reported.
+- **T10, ranges and outputs.** The arm/stop range proof runs on a direct encoder and in a span. It checks range entries, and sentinels past the completed rounds. Pressure, `r`/`z`/`p`/scratch and the body sums must equal the replayed solve bit for bit.
+- **T11, profiling.** A profiled frame's pressure, scalars and record are bit-identical to an unprofiled frame's, at Tag and at Dispatch granularity. The rounds' spans are in submission order with start ≤ end, tagged with the solve's tag, one per execute at Dispatch.
+- **T12, lifetime.**
+  - Each solve's outputs are copied out in its own command buffer before later solves overwrite them.
+  - Covered cases: equal-key overlap (two uncommitted buffers running one slot); a key change while a slot is in flight (a new slot appended, the old untouched); `prepare` reallocation; a `commit_and_continue` split between two executes of one slot; dropping the store with committed users in flight.
+- **T13, oracle.** Frame-time on Dam Break, interleaved A/B through `gpu_queue` against the main build pinned by SHA, on the matched project and arguments. Tick interval p50 and p95 on plain frames, and `node.gpu_flip_step` CPU preparation on frames stamped every 10. Cap 900 is the feature build. Pass: tick p50 within 1 ms, stamped CPU preparation within 10% of main's at 64.
+- **Atomicity (manifold-gpu).** `prepare_template` returns `Err` and leaves an existing slot's ICB, key and users unchanged, then succeeds on the next visit, on:
+  - a body error after several dispatches;
+  - a count mismatch, over and under;
+  - an unrecordable pipeline;
+  - a forced allocation failure (test hook).
 
 ## 4. Shader: the round index from a GPU counter (C1)
 
@@ -146,6 +244,7 @@ Each phase is one commit on a lane branch; the lead reviews between. Test scope 
 - **C3 — fine and no-body rounds on the template at 64.** `BodyRound::Without` and `BodyRound::Gated` run as one template of `before` commands, `copies = iterations`, `stride = 2`. Gate: the golden; T2 counts at cap 64 (`replayed` per warm solve = prepare + arm/init/check + one round; `segments_replayed` = cap; `templates_replayed` +1 per solve; deltas only); T4 rearming (pressure-stop/density-live, pressure-live/density-stop with independent records, inactive-to-active reuse).
 - **C4 — level-k bodies and the post-stop guards at 64.** Section 5. Gate: the golden; `gpu_flip_body_step_sparse_matches_all_tiles` at level 1 on the template; guard proofs that a chunk-free forced-dead round writes nothing (sentinel seeded).
 - **C5 — chunk execution.** Section 3.1 and chunk entries in arm/stop. Gate: the golden; T3 sentinel stops (exact sentinel bits from scalar `2k` and progress `4+k`) at, before and after chunk boundaries via `Fixed(n)`; physical execute counts; guarded-tail behaviour.
+- **C5b — the template on every path.** Section 3.2, BUG-cnyc8 (smooth binding 4 mismatch) fixed inside it. Gate: T8–T12 and the atomicity proofs; T13 before C6. C6 waits for it.
 - **C6 — cap 900, controls, migration.** Section 7. Gate: migration tests; a small bounded fixture proving 900 rounds advance (finite pressure, residual falling); T6 warm CPU per solve `Converged(900)` ≤ 1.25 × `Converged(64)` and ≤ 2 ms; T7 Dam Break oracle at 900 against 64 back to back, tick-bearing frames separated from display-only frames, slot counts and completed rounds recorded: paced tick p50 within 1 ms, CPU encode p50 within 10%. A systematic GPU regression is not waived as noise.
 
 Forbidden moves, every phase: a parallel per-round path kept alive for templated rounds; an exemption list for kernels the guard audit missed; a size cap instead of chunking; a `debug_assert` standing in for a transactional rollback.

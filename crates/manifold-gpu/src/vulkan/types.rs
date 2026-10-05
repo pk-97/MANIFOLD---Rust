@@ -62,6 +62,13 @@ pub struct GpuSampler {
 
 /// Compute pipeline: compiled SPIR-V module + `VkPipeline` + layout +
 /// slot reflection.
+impl GpuComputePipeline {
+    /// The first binding the entry point references that `bindings` leaves out.
+    pub fn unbound_binding(&self, bindings: &[crate::GpuBinding]) -> Option<u32> {
+        self.slot_map.bindings().find(|&wanted| !bindings.iter().any(|b| b.binding() == wanted))
+    }
+}
+
 pub struct GpuComputePipeline {
     pub slot_map: SlotMap,
     pub label: String,

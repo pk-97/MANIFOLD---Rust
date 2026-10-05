@@ -101,4 +101,10 @@ impl SlotMap {
     pub fn get(&self, binding: u32) -> Option<&Slot> {
         self.slots.get(binding as usize).and_then(|s| s.as_ref())
     }
+
+    /// The WGSL bindings the entry point references, the sizes buffer
+    /// (bound by the encoder itself) left out.
+    pub fn bindings(&self) -> impl Iterator<Item = u32> + '_ {
+        self.slots.iter().enumerate().filter(|(_, s)| s.is_some()).map(|(b, _)| b as u32).filter(|&b| b != SIZES_BUFFER_BINDING)
+    }
 }

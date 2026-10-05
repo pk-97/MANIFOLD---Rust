@@ -6,7 +6,7 @@
 //! sides 25, 37 and 40. The residual is the true relative residual of the
 //! masked Poisson equation.
 
-use manifold_gpu::{GpuBinding, GpuBuffer, GpuReplayCache};
+use manifold_gpu::{GpuBinding, GpuBuffer, GpuEncoder, GpuReplayCache, ProfileGranularity};
 
 use super::gpu_flip_pressure::{MAX_ITERATIONS, PROGRESS_FLOATS, PressureSolver, ROW_FLOATS, Solve, Stop, Water, level_lattices, max_solve_level, passes};
 use super::liquid_surface_tests::read;
@@ -131,7 +131,8 @@ struct LentineFluxParams {
     list_base: u32,
     level: u32,
     all_tiles: u32,
-    pad: u32,
+    /// The solve-live triple; 0 outside rounds, as these direct dispatches are.
+    live: u32,
 }
 
 fn lattice_index(p: [usize; 3], n: [usize; 3]) -> usize {
@@ -899,8 +900,15 @@ fn pressure_module_passes_match_the_count() {
             println!("pressure active-pass {m}: {label} count {count} sampled_ms {ms:.5}");
         }
         let (prepare, solve) = passes([m as u32; 3], 8);
-        assert_eq!(profile.spans.len(), prepare + solve, "{m}³ ({} levels)", level_lattices([m as u32; 3]).len());
-        assert!(profile.spans.iter().all(|s| s.label.starts_with("gpu_flip.pressure.")), "{m}³: an unlabelled pass");
+        // The rounds run as the template's executes, one span each at
+        // Dispatch granularity; the prelude (arm, init, start check) is what
+        // a solve encodes besides them.
+        let round = passes([m as u32; 3], 2).1 - passes([m as u32; 3], 1).1;
+        let prelude = solve - 8 * round;
+        let executes = manifold_gpu::template_chunks(8, super::gpu_flip_pressure::ROUND_CHUNK).count();
+        assert_eq!(profile.spans.len(), prepare + prelude + executes, "{m}³ ({} levels)", level_lattices([m as u32; 3]).len());
+        assert_eq!(profile.spans.iter().filter(|s| s.label == "pressure rounds").count(), executes, "{m}³: one span per execute");
+        assert!(profile.spans.iter().all(|s| s.label.starts_with("gpu_flip.pressure.") || s.label == "pressure rounds"), "{m}³: an unlabelled pass");
         let mut times: Vec<f64> = (0..5).map(|_| rig.run(&problem, 8, false).total_ms).collect();
         times.sort_by(f64::total_cmp);
         println!("pressure module {m}³: {prepare} + {solve} passes, {:.2} ms GPU per prepare and 8-iteration solve (median of 5)", times[2]);
@@ -978,6 +986,28 @@ fn pressure_module_preconditioner_keeps_rz_negative() {
     }
     println!("preconditioner: {checked} iterations over {} solves, r·z < 0 and p·s > 0 on every one: {}", problems.len() * 2, failures.is_empty());
     assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// The full cap runs and stays sane: a small still pool solved for all 900
+/// rounds (no tolerance stop) keeps every r·z and p·s finite, its pressure
+/// finite, and its residual at or below where 16 rounds left it, which is
+/// already well below 1 rounds'. Long past convergence f32 CG only wanders at
+/// rounding level; a blow-up or NaN would fail here.
+#[test]
+fn pressure_module_runs_the_full_cap() {
+    let m = 12;
+    let problem = still_pool_problem(m);
+    let mut rig = Rig::new(m);
+    let after = |rig: &mut Rig, k: u32| rig.solve(&problem, k);
+    let (one, sixteen) = (after(&mut rig, 1), after(&mut rig, 16));
+    let full = after(&mut rig, MAX_ITERATIONS);
+    assert!(rig.pressure().iter().all(|v| v.is_finite()), "pressure finite after {MAX_ITERATIONS} rounds");
+    let values = rz(&mut rig, &problem, MAX_ITERATIONS);
+    assert_eq!(values.len(), MAX_ITERATIONS as usize);
+    assert!(values.iter().all(|(rz, ps)| rz.is_finite() && ps.is_finite()), "every round's scalars finite");
+    println!("full cap {m}³: residual after 1 {one:e}, 16 {sixteen:e}, {MAX_ITERATIONS} {full:e}");
+    assert!(sixteen < one * 1e-2, "16 rounds converge ({one:e} → {sixteen:e})");
+    assert!(full <= sixteen.max(1e-5), "{MAX_ITERATIONS} rounds stay converged ({sixteen:e} → {full:e})");
 }
 
 /// One solve of `p` on the engine's stop, at most `cap` iterations: |f|∞,
@@ -1309,6 +1339,7 @@ fn pressure_module_replay_matches_direct() {
         let mut cache = Some(GpuReplayCache::default());
         let mut none = None;
         let mut last = GpuReplayCache::default().stats();
+        let mut last_template = replay.solver.template_stats();
         for frame in 0..6 {
             let p = &problems[frame % problems.len()];
             let (dp, dr) = solve_bits(&mut direct, p, stop, &mut none);
@@ -1318,6 +1349,7 @@ fn pressure_module_replay_matches_direct() {
             assert!(dp == rp, "{stop:?} frame {frame}: the replayed pressure differs from direct");
             assert_eq!(dr, rr, "{stop:?} frame {frame}: the replayed stop record differs from direct");
             let stats = cache.as_ref().expect("the span handed its cache back").stats();
+            let template = replay.solver.template_stats();
             let iterations = f32::from_bits(rr[1]) as u64;
             println!(
                 "{stop:?} frame {frame}: {iterations} iterations, recorded {} replayed {} direct {} segments replayed {} direct {}",
@@ -1335,16 +1367,24 @@ fn pressure_module_replay_matches_direct() {
                 let rounds = match stop {
                     Stop::Converged(cap) | Stop::Fixed(cap) => u64::from(cap),
                 };
-                assert_eq!(stats.segments_replayed - last.segments_replayed, rounds, "{stop:?} frame {frame}: every round is one segment execute");
-                // One walked round per solve, not one per round up to the cap.
-                assert_eq!(stats.templates_replayed - last.templates_replayed, 1, "{stop:?} frame {frame}: the rounds are one replayed template");
-                assert_eq!(stats.templates_direct, last.templates_direct, "{stop:?} frame {frame}: no template ran directly");
-                // The prepare, the arm, init and start check, and one round:
-                // `passes` of a one-round solve.
-                let (prepare, one_round) = passes([64; 3], 1);
-                assert_eq!(stats.replayed - last.replayed, (prepare + one_round) as u64, "{stop:?} frame {frame}: the warm solve validates one round");
+                // The rounds are the template's executes, outside the frame
+                // recording: one walk, no build, one execute per chunk.
+                assert_eq!(stats.segments_replayed, last.segments_replayed, "{stop:?} frame {frame}: no round is in the frame recording");
+                assert_eq!(
+                    template.executes - last_template.executes,
+                    manifold_gpu::template_chunks(rounds as u32, 32).count() as u64,
+                    "{stop:?} frame {frame}: one execute per chunk of rounds"
+                );
+                assert_eq!(template.walks - last_template.walks, 1, "{stop:?} frame {frame}: one walked round per solve");
+                assert_eq!((template.builds, template.command_writes), (last_template.builds, last_template.command_writes), "{stop:?} frame {frame}: a warm solve writes no command");
+                // The prepare, the arm, and init and its start check: `passes`
+                // of a one-round solve, less the round.
+                let (prepare, one) = passes([64; 3], 1);
+                let round = passes([64; 3], 2).1 - one;
+                assert_eq!(stats.replayed - last.replayed, (prepare + one - round) as u64, "{stop:?} frame {frame}: the warm solve validates its prelude");
             }
             last = stats;
+            last_template = template;
         }
     }
 }
@@ -1355,6 +1395,11 @@ const GOLDEN: &str = "gpu_flip_pressure_golden.txt";
 /// Bits every scalar and record float holds before a solve: a quiet NaN no
 /// solve writes, so storage it leaves alone is known.
 const GOLDEN_SENTINEL: u32 = 0x7fc0_dead;
+
+thread_local! {
+    /// Golden solves on a profiled encoder at this granularity, when set.
+    static GOLDEN_PROFILE: std::cell::Cell<Option<ProfileGranularity>> = const { std::cell::Cell::new(None) };
+}
 /// The fingerprinted region: the scalars and record of a cap-64 solve. A
 /// larger cap's tail is tested on its own, never folded into these.
 const GOLDEN_SCALARS: usize = 128;
@@ -1389,6 +1434,16 @@ fn golden_solve(rig: &mut Rig, p: &Problem, stop: Stop, cache: &mut Option<GpuRe
     let scalars = rig.device.create_buffer_shared(scalar_bytes);
     let record = rig.device.create_buffer_shared(record_bytes);
     let mut enc = rig.device.create_encoder("gpu-flip-pressure-golden");
+    let profiled = GOLDEN_PROFILE.get();
+    if let Some(granularity) = profiled {
+        // One sampler for the thread: Metal caps live counter sample buffers.
+        thread_local! {
+            static SAMPLER: std::cell::OnceCell<manifold_gpu::GpuTimestampSampler> = const { std::cell::OnceCell::new() };
+        }
+        let sampler = SAMPLER.with(|s| s.get_or_init(|| rig.device.create_timestamp_sampler(4096).expect("timestamp sampling")).clone());
+        enc.enable_profiling_at(sampler, &rig.device, granularity);
+        enc.set_profile_tag("golden-solve");
+    }
     let n = rig.n as u32;
     let lattice = Water { lattice: [n; 3], cell_size: rig.cell_size() as f32, water: &rig.water, faces: &rig.faces, phi: rig.phi.as_ref() };
     rig.solver.prepare(&rig.device, &mut enc, &lattice).expect("prepares");
@@ -1400,20 +1455,52 @@ fn golden_solve(rig: &mut Rig, p: &Problem, stop: Stop, cache: &mut Option<GpuRe
     }
     rig.solver.copy_scalars(&mut enc, &scalars);
     enc.copy_buffer_to_buffer(rig.solver.progress().expect("prepared"), &record, record_bytes);
-    enc.commit_and_wait_completed();
+    if let Some(granularity) = profiled {
+        let profile = enc.commit_and_wait_profiled(&rig.device);
+        let rounds: Vec<_> = profile.spans.iter().filter(|s| s.label == "pressure rounds").collect();
+        let executes = manifold_gpu::template_chunks(
+            match stop {
+                Stop::Fixed(k) | Stop::Converged(k) => k,
+            },
+            super::gpu_flip_pressure::ROUND_CHUNK,
+        ).count();
+        let want = if granularity == ProfileGranularity::Dispatch { executes } else { 1 };
+        assert_eq!(rounds.len(), want, "{granularity:?} {stop:?}: the rounds' spans");
+        assert!(rounds.iter().all(|s| s.tag == "golden-solve" && s.millis >= 0.0), "{granularity:?} {stop:?}: tagged spans");
+        // The arm writes the ranges every execute reads, and each execute
+        // depends on the one before: the rounds start after the arm ends, in
+        // submission order. Unrelated encoders may overlap, so only these
+        // dependencies order the spans.
+        if granularity == ProfileGranularity::Dispatch {
+            let arm = profile.spans.iter().find(|s| s.label == "gpu_flip.pressure.arm").expect("the arm's span");
+            assert!(rounds[0].start_ms + 1e-6 >= arm.start_ms + arm.millis, "{stop:?}: the rounds start after the arm");
+        }
+        assert!(rounds.windows(2).all(|w| w[1].start_ms + 1e-3 >= w[0].start_ms + w[0].millis), "{granularity:?} {stop:?}: an execute started before the one it depends on ended");
+        assert_eq!((profile.overflow, profile.failed_command_buffers), (0, 0), "{granularity:?} {stop:?}: every span sampled");
+    } else {
+        enc.commit_and_wait_completed();
+    }
     let scalar_words: Vec<u32> = read(&scalars, GOLDEN_SCALARS);
     let record_words: Vec<u32> = read(&record, GOLDEN_PROGRESS);
     [fingerprint(bytemuck::cast_slice(rig.pressure())), fingerprint(&scalar_words), fingerprint(&record_words)]
 }
 
 /// Every golden case, direct and replayed, as the fixture's lines.
-fn golden_lines() -> Vec<String> {
+/// The golden's cases, each resampled to 64³: the line prefix
+/// (`fixture[index] frame f`), the problem and the solve level.
+fn golden_cases() -> Vec<(String, Problem, usize)> {
     let (n, dam) = load_fixture(DAM_BREAK);
     let (_, density) = load_fixture("deep_pool_density_problems");
     let cases = [("dambreak", 0, &dam[0], 0), ("dambreak", 4, &dam[4], 0), ("density", 0, &density[0], 0), ("dambreak", 0, &dam[0], 1)];
+    cases
+        .into_iter()
+        .map(|(fixture, index, saved, level)| (format!("{fixture}[{index}] frame {}", saved.frame), resample(saved, n, 64), level))
+        .collect()
+}
+
+fn golden_lines() -> Vec<String> {
     let mut lines = Vec::new();
-    for (fixture, index, saved, level) in cases {
-        let p = resample(saved, n, 64);
+    for (case, p, level) in golden_cases() {
         let mut direct = Rig::new(64).at_level(level);
         let mut replay = Rig::new(64).at_level(level);
         let mut none = None;
@@ -1424,10 +1511,7 @@ fn golden_lines() -> Vec<String> {
             golden_solve(&mut replay, &p, stop, &mut cache);
             let r = golden_solve(&mut replay, &p, stop, &mut cache);
             for (mode, [pressure, scalars, record]) in [("direct", d), ("replay", r)] {
-                lines.push(format!(
-                    "{fixture}[{index}] frame {} 64^3 level {level} {stop:?} {mode} pressure {pressure:016x} scalars {scalars:016x} record {record:016x}",
-                    saved.frame
-                ));
+                lines.push(format!("{case} 64^3 level {level} {stop:?} {mode} pressure {pressure:016x} scalars {scalars:016x} record {record:016x}"));
             }
         }
     }
@@ -1536,9 +1620,9 @@ fn pressure_module_rearms_between_solves() {
     let mut cache = Some(GpuReplayCache::default());
     for (frame, &(live, active)) in frames.iter().enumerate() {
         let d = rearm_frame(&mut direct, &direct_bufs, &p, live, active, &direct_plan, &mut none);
-        let before = cache.as_ref().unwrap().stats();
+        let before = replay.solver.template_stats();
         let r = rearm_frame(&mut replay, &replay_bufs, &p, live, active, &replay_plan, &mut cache);
-        let stats = cache.as_ref().unwrap().stats();
+        let stats = replay.solver.template_stats();
         for s in 0..2 {
             let solve = ["pressure", "density"][s];
             assert!(d[s].0 == r[s].0, "frame {frame} {solve}: the replayed pressure differs from direct");
@@ -1556,8 +1640,8 @@ fn pressure_module_rearms_between_solves() {
             }
         }
         if frame >= 2 {
-            assert_eq!(stats.templates_direct, before.templates_direct, "frame {frame}: no template ran directly");
-            assert_eq!(stats.templates_replayed - before.templates_replayed, 2, "frame {frame}: both solves replay their template");
+            assert_eq!(stats.hits - before.hits, 2, "frame {frame}: both solves run a built template");
+            assert_eq!(stats.builds, before.builds, "frame {frame}: nothing rebuilt once warm");
         }
     }
 }
@@ -2091,4 +2175,313 @@ fn pressure_module_refuses_a_level_past_the_coarsest() {
     assert_eq!(read_solve_level(3.0, [64; 3]), Ok(3));
     assert_eq!(read_solve_level(1.0, [25; 3]), Ok(1));
     assert!(read_solve_level(3.0, [25; 3]).is_err(), "25³ halves to 13, 7, 4: level 3 is the coarsest");
+}
+
+/// Rounds past the stop write nothing: with the stop leaving every later
+/// round's range entry live (as a chunk of rounds executes them), the
+/// replayed solves run every round to the cap with full groups, and every
+/// case still matches the main golden bit for bit (docs/GPU_FLIP_PRESSURE_CAP_DESIGN.md
+/// section 5 (Post-stop guards)).
+#[test]
+fn pressure_module_rounds_past_the_stop_write_nothing() {
+    super::gpu_flip_pressure::set_keep_ranges(true);
+    let lines = golden_lines();
+    super::gpu_flip_pressure::set_keep_ranges(false);
+    let golden = std::fs::read_to_string(format!("{}/tests/fixtures/{GOLDEN}", env!("CARGO_MANIFEST_DIR"))).expect("golden fixture reads");
+    let expected: Vec<&str> = golden.lines().filter(|l| !l.starts_with('#')).collect();
+    let moved: Vec<String> = expected.iter().zip(&lines).filter(|(e, l)| **e != l.as_str()).map(|(e, l)| format!("want {e}\n got {l}")).collect();
+    assert!(moved.is_empty(), "rounds past the stop wrote something:\n{}", moved.join("\n"));
+}
+
+/// The golden on a profiled encoder, at Tag and at Dispatch granularity:
+/// frame replay is off there, the rounds still run as the template's
+/// executes, and every case matches main's unrolled encode bit for bit;
+/// the rounds show as tagged spans in submission order, one per execute at
+/// Dispatch granularity (docs/GPU_FLIP_PRESSURE_CAP_DESIGN.md section 3.2
+/// (The template on every path), T8 and T11).
+#[test]
+fn pressure_module_golden_holds_profiled() {
+    let golden = std::fs::read_to_string(format!("{}/tests/fixtures/{GOLDEN}", env!("CARGO_MANIFEST_DIR"))).expect("golden fixture reads");
+    let expected: Vec<&str> = golden.lines().filter(|l| !l.starts_with('#')).collect();
+    for granularity in [ProfileGranularity::Tag, ProfileGranularity::Dispatch] {
+        GOLDEN_PROFILE.set(Some(granularity));
+        let lines = std::panic::catch_unwind(golden_lines);
+        GOLDEN_PROFILE.set(None);
+        let lines = lines.unwrap_or_else(|e| std::panic::resume_unwind(e));
+        let moved: Vec<String> = expected.iter().zip(&lines).filter(|(e, l)| **e != l.as_str()).map(|(e, l)| format!("want {e}\n got {l}")).collect();
+        assert!(moved.is_empty(), "{granularity:?}: {} golden cases moved:\n{}", moved.len(), moved.join("\n"));
+    }
+}
+
+/// Chunked executes change no bit: at one round an execute (the per-round
+/// executes main runs), at 3 and 4 (boundaries inside every Fixed count and
+/// the Converged stops) and at the default, every golden case matches main,
+/// scalars and record tails included, so no round past a stop or past a
+/// Fixed count wrote anything (docs/GPU_FLIP_PRESSURE_CAP_DESIGN.md section
+/// 3.1 (Chunks)).
+#[test]
+fn pressure_module_chunk_sizes_match_main_golden() {
+    let golden = std::fs::read_to_string(format!("{}/tests/fixtures/{GOLDEN}", env!("CARGO_MANIFEST_DIR"))).expect("golden fixture reads");
+    let expected: Vec<&str> = golden.lines().filter(|l| !l.starts_with('#')).collect();
+    for chunk in [1, 3, 4, 32] {
+        let _chunk = super::gpu_flip_pressure::set_round_chunk(chunk);
+        let lines = golden_lines();
+        let moved: Vec<String> = expected.iter().zip(&lines).filter(|(e, l)| **e != l.as_str()).map(|(e, l)| format!("want {e}\n got {l}")).collect();
+        assert!(moved.is_empty(), "chunk {chunk}: {} golden cases moved:\n{}", moved.len(), moved.join("\n"));
+    }
+}
+
+/// The GPU's own arm and stop at chunk boundaries, read back, on a direct
+/// encoder and in a replaying span: every chunked execute that starts at or
+/// past the completed rounds has length 0 (the arm's cut for Fixed, the
+/// stop's cancel for Converged), every earlier one runs its rounds of one
+/// round's commands, and the scalars and record past the completed rounds
+/// still hold the sentinel. The pressure, scalars, record, ranges and every
+/// work vector (r, z, p, scratch, body product) agree bit for bit between
+/// the two paths, so a round past the stop wrote nowhere on either.
+#[test]
+fn pressure_module_chunk_ranges_arm_and_stop_on_the_gpu() {
+    use super::gpu_flip_pressure::{CHUNK_ENTRIES, ROUND_CHUNK};
+    let (n, dam) = load_fixture(DAM_BREAK);
+    let (_, density) = load_fixture("deep_pool_density_problems");
+    let fixed = [1, 2, 3, 4, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65, 95, 96, 97, 900];
+    let mut checked = 0;
+    for chunk in [ROUND_CHUNK, 8, 3] {
+        let _chunk = super::gpu_flip_pressure::set_round_chunk(chunk);
+        for saved in [&dam[0], &dam[4], &density[0]] {
+            let p = resample(saved, n, 64);
+            let mut direct = Rig::new(64);
+            let mut spanned = Rig::new(64);
+            let mut none = None;
+            let mut cache = Some(GpuReplayCache::default());
+            let mut per_round = 0;
+            let stops = fixed.iter().filter(|&&k| k <= MAX_ITERATIONS).map(|&k| Stop::Fixed(k)).chain([Stop::Converged(64), Stop::Converged(MAX_ITERATIONS)]);
+            for stop in stops {
+                let cap = match stop {
+                    Stop::Fixed(k) | Stop::Converged(k) => k,
+                };
+                let d = chunk_solve(&mut direct, &p, stop, &mut none);
+                // The span's first visit records its prelude; the second replays.
+                chunk_solve(&mut spanned, &p, stop, &mut cache);
+                let s = chunk_solve(&mut spanned, &p, stop, &mut cache);
+                assert!(d == s, "chunk {chunk} {stop:?}: the direct and replayed solves differ");
+                let ChunkSolve { ranges, scalars, record, .. } = d;
+                let completed = f32::from_bits(record[1]) as u32;
+                assert!(completed <= cap, "chunk {chunk} {stop:?}: {completed} rounds completed");
+                if let Stop::Fixed(k) = stop {
+                    assert_eq!(completed, k, "chunk {chunk} {stop:?}: a fixed count runs every round");
+                }
+                let length = |j: u32| ranges[2 * (CHUNK_ENTRIES + j) as usize + 1];
+                if per_round == 0 {
+                    per_round = length(0);
+                    assert!(per_round > 0, "chunk {chunk} {stop:?}: the first execute runs");
+                }
+                for (j, (start, rounds)) in manifold_gpu::template_chunks(cap, chunk).enumerate() {
+                    let want = if start < completed { rounds * per_round } else { 0 };
+                    assert_eq!(length(j as u32), want, "chunk {chunk} {stop:?} completed {completed}: execute {j} from round {start}");
+                }
+                let tail = |words: &[u32], from: usize| words[from..].iter().position(|&w| w != GOLDEN_SENTINEL).map(|i| i + from);
+                assert_eq!(tail(&scalars, 2 * completed as usize), None, "chunk {chunk} {stop:?}: a scalar past round {completed} was written");
+                assert_eq!(tail(&record, 4 + completed as usize), None, "chunk {chunk} {stop:?}: a record past round {completed} was written");
+                checked += 1;
+            }
+        }
+    }
+    let per_case = fixed.iter().filter(|&&k| k <= MAX_ITERATIONS).count() + 2;
+    assert_eq!(checked, 3 * 3 * per_case);
+}
+
+/// Everything a chunked solve leaves, read back.
+#[derive(PartialEq)]
+struct ChunkSolve {
+    ranges: Vec<u32>,
+    scalars: Vec<u32>,
+    record: Vec<u32>,
+    pressure: Vec<u32>,
+    vectors: Vec<Vec<u32>>,
+}
+
+/// One solve seeded like the golden's, inside a replay span when `cache`
+/// holds one, directly otherwise.
+fn chunk_solve(rig: &mut Rig, p: &Problem, stop: Stop, cache: &mut Option<GpuReplayCache>) -> ChunkSolve {
+    let water: Vec<f32> = p.water.iter().map(|&w| f32::from(u8::from(w))).collect();
+    let cells = rig.n * rig.n * rig.n;
+    let scalar_bytes = u64::from(2 * MAX_ITERATIONS) * 4;
+    let record_bytes = u64::from(PROGRESS_FLOATS) * 4;
+    let sentinel = rig.device.create_buffer_shared(scalar_bytes.max(record_bytes));
+    // SAFETY: shared buffers sized for what is written; the last solve completed.
+    unsafe {
+        rig.water.write(0, bytemuck::cast_slice(&water));
+        rig.rhs.write(0, bytemuck::cast_slice(&p.f));
+        rig.pressure.write(0, bytemuck::cast_slice(&vec![0u32; cells]));
+        sentinel.write(0, bytemuck::cast_slice(&vec![GOLDEN_SENTINEL; (sentinel.size / 4) as usize]));
+    }
+    let scalars = rig.device.create_buffer_shared(scalar_bytes);
+    let record = rig.device.create_buffer_shared(record_bytes);
+    let mut enc = rig.device.create_encoder("gpu-flip-pressure-chunk-ranges");
+    let n = rig.n as u32;
+    let lattice = Water { lattice: [n; 3], cell_size: rig.cell_size() as f32, water: &rig.water, faces: &rig.faces, phi: rig.phi.as_ref() };
+    rig.solver.prepare(&rig.device, &mut enc, &lattice).expect("prepares");
+    rig.solver.seed_records(&mut enc, &sentinel);
+    let spanned = cache.take().map(|c| enc.begin_replay(&rig.device, c)).is_some();
+    rig.solver.solve(&mut enc, &lattice, run_at!(rig, stop)).expect("solves");
+    if spanned {
+        *cache = Some(enc.end_replay());
+    }
+    let copy = |enc: &mut GpuEncoder, src: &GpuBuffer| {
+        let dst = rig.device.create_buffer_shared(src.size);
+        enc.copy_buffer_to_buffer(src, &dst, src.size);
+        dst
+    };
+    let ranges = copy(&mut enc, rig.solver.ranges().expect("prepared"));
+    let vectors: Vec<GpuBuffer> = rig.solver.work_vectors().expect("prepared").iter().map(|v| copy(&mut enc, v)).collect();
+    rig.solver.copy_scalars(&mut enc, &scalars);
+    enc.copy_buffer_to_buffer(rig.solver.progress().expect("prepared"), &record, record_bytes);
+    enc.commit_and_wait_completed();
+    let words = |b: &GpuBuffer| read::<u32>(b, (b.size / 4) as usize);
+    ChunkSolve {
+        ranges: words(&ranges),
+        scalars: words(&scalars),
+        record: words(&record),
+        pressure: read::<u32>(&rig.pressure, cells),
+        vectors: vectors.iter().map(words).collect(),
+    }
+}
+
+/// Reports warm Converged solves on Dam Break at 64³ at cap 64 and at the
+/// build's cap, on a direct encoder and in a replaying span, by chunk:
+/// completed rounds, CPU encode of the prepare and solve, GPU time, and the
+/// template store's walks, command writes and executes per solve, which it
+/// asserts (one walk, no write once warm, one execute per chunk). The
+/// configurations alternate order each pass so drift lands on neither side.
+#[test]
+fn pressure_module_chunk_cost_probe() {
+    const REPS: usize = 20;
+    const PASSES: usize = 4;
+    let (n, saved) = load_fixture(DAM_BREAK);
+    let p = resample(&saved[0], n, 64);
+    let configs: [(u32, u32, bool); 6] =
+        [(64, 32, false), (64, 32, true), (MAX_ITERATIONS, 32, false), (MAX_ITERATIONS, 32, true), (MAX_ITERATIONS, 8, false), (64, 1, false)];
+    struct Run {
+        rig: Rig,
+        cache: Option<GpuReplayCache>,
+        gpu: Vec<f64>,
+        cpu: Vec<f64>,
+        completed: u32,
+    }
+    let mut runs: Vec<Run> = configs
+        .iter()
+        .map(|&(_, _, span)| {
+            let rig = Rig::new(64);
+            let water: Vec<f32> = p.water.iter().map(|&w| f32::from(u8::from(w))).collect();
+            // SAFETY: shared buffers sized for the lattice; nothing is queued.
+            unsafe {
+                rig.water.write(0, bytemuck::cast_slice(&water));
+                rig.rhs.write(0, bytemuck::cast_slice(&p.f));
+            }
+            Run { rig, cache: span.then(GpuReplayCache::default), gpu: Vec::new(), cpu: Vec::new(), completed: 0 }
+        })
+        .collect();
+    for pass in 0..PASSES {
+        let order: Vec<usize> = if pass % 2 == 0 { (0..configs.len()).collect() } else { (0..configs.len()).rev().collect() };
+        for i in order {
+            let (cap, chunk, span) = configs[i];
+            let _chunk = super::gpu_flip_pressure::set_round_chunk(chunk);
+            let run = &mut runs[i];
+            let rig = &mut run.rig;
+            let record = rig.device.create_buffer_shared(u64::from(PROGRESS_FLOATS) * 4);
+            let mut warm = rig.solver.template_stats();
+            for rep in 0..REPS + 3 {
+                let start = std::time::Instant::now();
+                let mut enc = rig.device.create_encoder("gpu-flip-pressure-chunk-probe");
+                if span {
+                    enc.begin_replay(&rig.device, run.cache.take().expect("cache"));
+                }
+                let n = rig.n as u32;
+                let lattice = Water { lattice: [n; 3], cell_size: rig.cell_size() as f32, water: &rig.water, faces: &rig.faces, phi: None };
+                rig.solver.prepare(&rig.device, &mut enc, &lattice).expect("prepares");
+                rig.solver.solve(&mut enc, &lattice, run_at!(rig, Stop::Converged(cap))).expect("solves");
+                if span {
+                    run.cache = Some(enc.end_replay());
+                }
+                let cpu = start.elapsed().as_secs_f64() * 1e3;
+                enc.copy_buffer_to_buffer(rig.solver.progress().expect("prepared"), &record, record.size);
+                let ms = enc.commit_and_wait_completed_timed() * 1e3;
+                if rep == 2 {
+                    warm = rig.solver.template_stats();
+                }
+                if rep >= 3 {
+                    run.gpu.push(ms);
+                    run.cpu.push(cpu);
+                    run.completed = f32::from_bits(read::<u32>(&record, 2)[1]) as u32;
+                }
+            }
+            let end = rig.solver.template_stats();
+            let reps = REPS as u64;
+            let label = format!("cap {cap} chunk {chunk} span {span}");
+            assert_eq!(end.walks - warm.walks, reps, "{label}: one walk a solve");
+            assert_eq!((end.builds, end.command_writes), (warm.builds, warm.command_writes), "{label}: warm solves write no command");
+            assert_eq!(end.executes - warm.executes, reps * manifold_gpu::template_chunks(cap, chunk).count() as u64, "{label}: one execute per chunk");
+        }
+    }
+    let p50 = |v: &mut Vec<f64>| {
+        v.sort_by(f64::total_cmp);
+        v[v.len() / 2]
+    };
+    let mut report = Vec::new();
+    for (run, (cap, chunk, span)) in runs.iter_mut().zip(configs) {
+        report.push(format!(
+            "cap {cap} chunk {chunk} {}: completed {} rounds, CPU encode p50 {:.3} ms, GPU p50 {:.3} ms, executes {} a solve",
+            if span { "span  " } else { "direct" },
+            run.completed,
+            p50(&mut run.cpu),
+            p50(&mut run.gpu),
+            manifold_gpu::template_chunks(cap, chunk).count(),
+        ));
+    }
+    println!("CHUNK PROBE warm Converged, Dam Break 64^3, {PASSES} alternating passes of {REPS}:\n{}", report.join("\n"));
+}
+
+/// The golden with the frame-replay ring busy, on the real solve: every ring
+/// entry is held by an encoder that never commits, so each golden solve's
+/// span finds no entry and the rounds run as the template's executes on a
+/// direct encoder; every golden case (both Dam Break frames, the density
+/// solve and level 1) still matches main bit for bit.
+#[test]
+fn pressure_module_golden_holds_with_the_ring_busy() {
+    let golden = std::fs::read_to_string(format!("{}/tests/fixtures/{GOLDEN}", env!("CARGO_MANIFEST_DIR"))).expect("golden fixture reads");
+    let cases = golden_cases();
+    let p = &cases[0].1;
+    let scratch = Rig::new(64);
+    let water: Vec<f32> = p.water.iter().map(|&w| f32::from(u8::from(w))).collect();
+    // SAFETY: shared buffers sized for the lattice; nothing is queued.
+    unsafe {
+        scratch.water.write(0, bytemuck::cast_slice(&water));
+        scratch.rhs.write(0, bytemuck::cast_slice(&p.f));
+    }
+    let mut scratch = scratch;
+    let mut cache = Some(GpuReplayCache::default());
+    let mut held = Vec::new();
+    for _ in 0..manifold_gpu::REPLAY_RING {
+        let mut enc = scratch.device.create_encoder("gpu-flip-pressure-held");
+        enc.begin_replay(&scratch.device, cache.take().expect("cache"));
+        let n = scratch.n as u32;
+        let lattice = Water { lattice: [n; 3], cell_size: scratch.cell_size() as f32, water: &scratch.water, faces: &scratch.faces, phi: None };
+        scratch.solver.prepare(&scratch.device, &mut enc, &lattice).expect("prepares");
+        scratch.solver.solve(&mut enc, &lattice, run_at!(scratch, Stop::Converged(64))).expect("solves");
+        cache = Some(enc.end_replay());
+        held.push(enc);
+    }
+    let busy = cache.as_ref().expect("cache").stats().ring_busy;
+    for (case, p, level) in &cases {
+        let mut rig = Rig::new(64).at_level(*level);
+        for stop in GOLDEN_STOPS {
+            let [pressure, scalars, record] = golden_solve(&mut rig, p, stop, &mut cache);
+            let line = format!("{case} 64^3 level {level} {stop:?} replay pressure {pressure:016x} scalars {scalars:016x} record {record:016x}");
+            assert!(golden.lines().any(|l| l == line), "{case} level {level} {stop:?}: with the ring busy the solve moved:\n got {line}");
+        }
+    }
+    let stats = cache.as_ref().expect("cache").stats();
+    assert_eq!(stats.ring_busy - busy, (cases.len() * GOLDEN_STOPS.len()) as u64, "every golden solve found the ring busy");
+    drop(held);
 }
