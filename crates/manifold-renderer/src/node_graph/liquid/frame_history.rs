@@ -401,17 +401,26 @@ impl<B: SlotStorage> SlotBuffers<B> {
 pub struct FrameHistory<B = GpuBuffer> {
     pub core: HistoryCore,
     buffers: Vec<SlotBuffers<B>>,
+    /// Grow-only storage size per field, applied to the solid lattice only:
+    /// its mix downstream is planned once and never follows a shrink, as
+    /// FrameRing kept it. Every other field consumer needs its exact size.
+    field_capacity: [u64; FIELDS],
 }
 
 impl<B> Default for FrameHistory<B> {
     fn default() -> Self {
-        Self { core: HistoryCore::default(), buffers: Vec::new() }
+        Self { core: HistoryCore::default(), buffers: Vec::new(), field_capacity: [0; FIELDS] }
     }
 }
 
 impl<B: SlotStorage> FrameHistory<B> {
     pub fn slot(&self, index: usize) -> &SlotBuffers<B> {
         &self.buffers[index]
+    }
+
+    /// The storage size a slot gives `field`: its largest need so far.
+    pub fn field_capacity(&self, field: usize) -> u64 {
+        self.field_capacity[field]
     }
 
     /// A Free slot for the endpoint at `time` holding `particle_bytes` of
@@ -428,6 +437,11 @@ impl<B: SlotStorage> FrameHistory<B> {
         admit: impl FnOnce(u64) -> Result<(), String>,
         mut create: impl FnMut(u64) -> Result<B, String>,
     ) -> Result<Option<usize>, String> {
+        for (capacity, &bytes) in self.field_capacity.iter_mut().zip(fields) {
+            *capacity = (*capacity).max(bytes);
+        }
+        let capacity = self.field_capacity;
+        let fields = &std::array::from_fn(|i| if i == FIELD_SOLID && fields[i] > 0 { capacity[i] } else { fields[i] });
         let found = self.core.free_slot(|i| self.buffers[i].fits(particle_bytes, fields));
         let slot = match found {
             Some(slot) => slot,

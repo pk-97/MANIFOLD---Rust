@@ -243,12 +243,14 @@ impl Primitive for LiquidFrame {
             closed_faces,
         );
         let layout = Layout { epoch, lattice: solid_key.0, fields };
-        let particle_bytes = u64::from(count.max(1)) * std::mem::size_of::<FluidParticle>() as u64;
-        let face = |axis: usize| if fields[FIELD_FACES + axis] > 0 { face_len(cells, axis) * 4 } else { 4 };
+        // Placeholders take the size a slot would give the port.
+        let particle_bytes = u64::from(self.history.core.capacity_for(count)) * std::mem::size_of::<FluidParticle>() as u64;
+        let field = |f: usize| if fields[f] > 0 { fields[f] } else { 4 };
         let sizes = [
-            particle_bytes, particle_bytes, fields[FIELD_INTERIOR], fields[FIELD_INTERIOR], surface.solid_bytes(), surface.solid_bytes(),
-            face(0), face(1), face(2),
-            fields[FIELD_WHITEWATER], fields[FIELD_WHITEWATER + 1], fields[FIELD_WHITEWATER + 2], fields[FIELD_WHITEWATER + 3],
+            particle_bytes, particle_bytes, field(FIELD_INTERIOR), field(FIELD_INTERIOR),
+            surface.solid_bytes().max(self.history.field_capacity(FIELD_SOLID)), surface.solid_bytes().max(self.history.field_capacity(FIELD_SOLID)),
+            field(FIELD_FACES), field(FIELD_FACES + 1), field(FIELD_FACES + 2),
+            field(FIELD_WHITEWATER), field(FIELD_WHITEWATER + 1), field(FIELD_WHITEWATER + 2), field(FIELD_WHITEWATER + 3),
         ];
         self.history.core.set_layout(layout);
 
@@ -278,8 +280,6 @@ impl Primitive for LiquidFrame {
         if let Some((particles, stats)) = ready
             && self.history.core.wants_publication(simulation_time)
         {
-            let capacity = self.history.core.capacity_for(count);
-            let particle_bytes = u64::from(capacity) * record;
             match self.history.acquire(gpu.device, simulation_time, particle_bytes, &fields) {
                 Ok(None) => {}
                 Err(error) => {
@@ -312,6 +312,11 @@ impl Primitive for LiquidFrame {
                     for (field, source) in sources.into_iter().enumerate() {
                         if let (Some(source), Some(target)) = (source, target.fields[field].as_ref()) {
                             let bytes = fields[field].min(source.size);
+                            if target.size > bytes {
+                                // Grow-only storage: past this layout's size is zero,
+                                // so a shrunk whitewater pool shows no stale tail.
+                                gpu.native_enc.clear_buffer(target);
+                            }
                             gpu.native_enc.copy_buffer_to_buffer(source, target, bytes);
                         }
                     }
