@@ -123,6 +123,11 @@ impl PrefixScan {
         self.storage(device, storage_words(n))
     }
 
+    /// The storage `buffer` sized, for a caller holding `&self`.
+    pub(crate) fn buffer_ref(&self) -> &GpuBuffer {
+        self.buffer.as_ref().expect("scan storage prepared")
+    }
+
     /// The storage buffer sized for the levels past level 0 of `n` values.
     /// Pairs with [`Self::encode_into`].
     pub(crate) fn parents(&mut self, device: &GpuDevice, n: usize) -> Result<&GpuBuffer, String> {

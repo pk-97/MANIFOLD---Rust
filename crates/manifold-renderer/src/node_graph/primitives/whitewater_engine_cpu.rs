@@ -183,7 +183,8 @@ fn whitewater_distance_extent_covers_small_and_shipped_lattices() {
             .product::<u64>();
         assert_eq!(
             super::whitewater_distance::scratch_bytes(cells),
-            12 * count + 4 * blocks + 16
+            // Plus the sweep grid (16) and the zero clock plan (48).
+            12 * count + 4 * blocks + 16 + 16 + 48
         );
         for i in 0..count {
             let c = [

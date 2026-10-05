@@ -143,6 +143,9 @@ fn main() {
         .std("c++17")
         .opt_level(3)
         .warnings(false)
+        // The sheeter port (src/sheeter.rs) matches this build's multiply-add
+        // contraction bit for bit; pin it rather than inherit a default.
+        .flag("-ffp-contract=on")
         .define("WITH_MIXBOX", "0")
         .include(&engine_dir)
         .include(&native_dir)
@@ -163,5 +166,10 @@ fn main() {
     for source in sources {
         build.file(engine_dir.join(source));
     }
+    // The sheet oracle's bitwise proofs hold for clang with FMA hardware;
+    // the tests read this to refuse any other configuration.
+    let compiler = build.get_compiler();
+    let kind = if compiler.is_like_clang() { "clang" } else { "other" };
+    println!("cargo:rustc-env=MANIFOLD_FLUIDS_ORACLE_CC={kind}");
     build.compile("manifold_flip_fluids");
 }
