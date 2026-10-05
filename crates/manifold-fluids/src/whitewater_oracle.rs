@@ -17,7 +17,7 @@ unsafe extern "C" {
         curvature: *const f32, positions: *const f32, count: usize, dt: f64) -> i32;
     fn manifold_fluids_oracle_emit_engine(lifecycle: *mut c_void, positions: *const f32, count: usize,
         dt: f64, influence_base: f64, influence_decay: f64, surface_out: *mut f32,
-        curvature_out: *mut f32, influence_out: *mut f32) -> i32;
+        curvature_out: *mut f32, influence_out: *mut f32, count_seed: u64, emitted_out: *mut u32) -> i32;
     fn manifold_fluids_oracle_curvature(
         phi: *const f32,
         isize: u32,
@@ -112,7 +112,8 @@ pub fn emit(lifecycle: &mut WhitewaterLifecycle, curvature: &[f32], positions: &
     native_result(ok, "oracle emit")
 }
 
-/// The fields FLIP's emitter read on one engine-as-configured tick.
+/// The fields FLIP's emitter read on one engine-as-configured tick, and
+/// what it made.
 #[derive(Clone, Debug)]
 pub struct EngineEmitFields {
     /// `calculateCurvatureGrid`'s reinitialised surface distance, cells.
@@ -121,29 +122,36 @@ pub struct EngineEmitFields {
     pub curvature: Vec<f32>,
     /// The obstacle influence after this tick's update, nodes.
     pub influence: Vec<f32>,
+    /// Particles the emitter made this tick (counted on a twin simulation
+    /// seeded with `count_seed`, aging off), less any one advance carried
+    /// out of the domain.
+    pub emitted: u32,
 }
 
 /// One tick of FLIP's emitter and lifecycle as `FluidSimulation` configures
 /// them, on the lifecycle's last fields: the engine's lifetime variance, an
-/// `InfluenceGrid` updated on the solid every tick with `influence_base` and
+/// `InfluenceGrid` decayed and spread every tick with `influence_base` and
 /// `influence_decay`, and the surface distance and curvature from
 /// `calculateCurvatureGrid` on the level set. `positions` (scene metres) are
 /// the markers. Rates come from [`set_emission_rates`] or the engine
-/// defaults. The solid carries no mesh objects, so no obstacle raises
-/// influence above its base.
+/// defaults. Covers constant influence only: the solid carries no mesh
+/// objects, where the engine installs a domain object and resets boundary
+/// nodes to the base each step, so obstacle sources and a changed base do
+/// not reach the boundary as they do in the engine.
 pub fn emit_engine(lifecycle: &mut WhitewaterLifecycle, positions: &[[f32; 3]], dt: f64,
-    influence_base: f64, influence_decay: f64) -> Result<EngineEmitFields, FluidError> {
+    influence_base: f64, influence_decay: f64, count_seed: u64) -> Result<EngineEmitFields, FluidError> {
     let cells = lifecycle.grid().cell_count();
     let c = lifecycle.grid().cells.map(|n| n as usize + 1);
     let mut fields = EngineEmitFields {
         surface: vec![0.0; cells],
         curvature: vec![0.0; cells],
         influence: vec![0.0; c[0] * c[1] * c[2]],
+        emitted: 0,
     };
     // SAFETY: live handle; outputs cover the grid's cells and nodes, positions holds `len` triples.
     let ok = unsafe { manifold_fluids_oracle_emit_engine(lifecycle.native_handle(), positions.as_ptr().cast(),
         positions.len(), dt, influence_base, influence_decay, fields.surface.as_mut_ptr(),
-        fields.curvature.as_mut_ptr(), fields.influence.as_mut_ptr()) };
+        fields.curvature.as_mut_ptr(), fields.influence.as_mut_ptr(), count_seed, &mut fields.emitted) };
     native_result(ok, "oracle engine emit")?;
     Ok(fields)
 }
@@ -312,7 +320,7 @@ mod tests {
             }
         }
         super::set_emission_rates(&mut lifecycle, super::EmissionOptions::default()).expect("rates");
-        let first = super::emit_engine(&mut lifecycle, &markers, DT, 1.0, 2.0).expect("first tick");
+        let first = super::emit_engine(&mut lifecycle, &markers, DT, 1.0, 2.0, 1).expect("first tick");
         let mut out = Vec::new();
         lifecycle.particles(&mut out).expect("particles");
         let kinds = [WhitewaterKind::Foam, WhitewaterKind::Bubble, WhitewaterKind::Spray]
@@ -332,10 +340,26 @@ mod tests {
         assert!(first.surface.iter().zip(&level).any(|(a, b)| (a - b).abs() > 1e-3), "surface is the raw level set");
 
         // (b) Influence starts at base 1; with the base lowered to 0.5 it
-        // relaxes by decay · dt a tick, where a constant fill would jump.
+        // relaxes by decay · dt a tick, where a constant fill would jump. The
+        // engine's domain object resets nodes within its 3-cell band of the
+        // walls to the new base, which this oracle does not model, so only
+        // nodes clear of that band are held to the decay.
         assert!(first.influence.iter().all(|&x| (x - 1.0).abs() < 1e-6), "first tick influence is the base");
-        let second = super::emit_engine(&mut lifecycle, &markers, DT, 0.5, 2.0).expect("second tick");
+        let second = super::emit_engine(&mut lifecycle, &markers, DT, 0.5, 2.0, 2).expect("second tick");
         let expected = 1.0 - 2.0 * DT as f32;
-        assert!(second.influence.iter().all(|&x| (x - expected).abs() < 1e-5), "influence did not decay at 2/s: {:?}", &second.influence[..4]);
+        let side = n + 1;
+        let clear = |i: usize| (4..side - 4).contains(&i);
+        let interior: Vec<f32> = (0..side.pow(3))
+            .filter(|&i| clear(i % side) && clear((i / side) % side) && clear(i / (side * side)))
+            .map(|i| second.influence[i])
+            .collect();
+        assert!(!interior.is_empty());
+        assert!(interior.iter().all(|&x| (x - expected).abs() < 1e-5), "influence did not decay at 2/s: {:?}", &interior[..4]);
+
+        // The twin counter sees what the emitter made: on its own seed it
+        // differs from the pool only by which jittered spawns land in a
+        // solid, and by the few aged or carried out, so within 2%.
+        let (counted, live) = (f64::from(first.emitted), out.len() as f64);
+        assert!((counted - live).abs() <= 0.02 * live, "counted {counted} emitted against {live} live after one update");
     }
 }

@@ -30,7 +30,9 @@
 #include "aabb.h"
 #include "forcefield.h"
 #include "grid3d.h"
+#ifdef MANIFOLD_WHITEWATER_ORACLE
 #include "influencegrid.h"
+#endif
 #include "interpolation.h"
 #include "meshfluidsource.h"
 #include "meshobject.h"
@@ -2006,9 +2008,11 @@ struct NativeWhitewater {
     // FLIP's per-particle id, 0–255, which spreads spray drag.
     unsigned char next_id = 0;
     bool fields_set = false;
+#ifdef MANIFOLD_WHITEWATER_ORACLE
     // The engine-as-configured oracle's obstacle influence, which decays and
     // spreads across ticks as FluidSimulation's does; reset with the pool.
     std::unique_ptr<InfluenceGrid> engine_influence;
+#endif
 
     NativeWhitewater(int i, int j, int k, double cell_size, vmath::vec3 min, size_t particles)
         : isize(i), jsize(j), ksize(k), dx(cell_size), origin(min), capacity(particles),
@@ -2031,7 +2035,9 @@ void configure_whitewater(NativeWhitewater &native, uint64_t seed) {
     simulation.disableBoundaryDustEmission();
     simulation.setMaxNumDiffuseParticles(native.capacity);
     native.next_id = 0;
+#ifdef MANIFOLD_WHITEWATER_ORACLE
     native.engine_influence.reset();
+#endif
 }
 
 NativeWhitewater &whitewater_of(void *lifecycle) {
@@ -2497,15 +2503,20 @@ extern "C" int manifold_fluids_oracle_emit(void *lifecycle, const float *curvatu
     return manifold_fluids_oracle_emit_configured(lifecycle, curvature, positions, count, dt);
 }
 // Test-only: FLIP's emitter and lifecycle as FluidSimulation configures them,
-// on the last fields. Unlike emit_configured, the lifetime variance stays at
-// the engine's, influence comes from an InfluenceGrid updated on the solid
-// every call, and the surface distance and curvature come from
-// calculateCurvatureGrid on the supplied level set. Each out pointer may be
-// null; non-null ones receive the fields the emitter read.
+// on the last fields: the engine's lifetime variance, the surface distance
+// and curvature from calculateCurvatureGrid on the supplied level set, and an
+// InfluenceGrid decayed and spread each call. It covers constant influence
+// only (base and every object at the same level, 1 by default): the solid
+// carries no mesh objects, where the engine installs a domain object and
+// resets its influence to the base each step, so neither obstacle sources
+// nor a changed base reach the boundary nodes as they do in the engine. Each
+// out pointer may be null; non-null ones receive the fields the emitter read
+// and, in emitted_out, the particles the emitter made this call.
 extern "C" int manifold_fluids_oracle_emit_engine(void *lifecycle, const float *positions,
                                                  size_t count, double dt, double influence_base,
                                                  double influence_decay, float *surface_out,
-                                                 float *curvature_out, float *influence_out) {
+                                                 float *curvature_out, float *influence_out,
+                                                 uint64_t count_seed, uint32_t *emitted_out) {
     return guarded([&] {
         NativeWhitewater &native = whitewater_of(lifecycle);
         if (count != 0 && positions == nullptr) {
@@ -2549,11 +2560,40 @@ extern "C" int manifold_fluids_oracle_emit_engine(void *lifecycle, const float *
             markers->push_back(vmath::vec3(p[0], p[1], p[2]) - native.origin);
         }
         native.markers.update();
+        const AABB generation(0.0, 0.0, 0.0, native.isize * native.dx, native.jsize * native.dx,
+                              native.ksize * native.dx);
         DiffuseParticleSimulation &simulation = *native.simulation;
+        if (emitted_out != nullptr) {
+            // The engine publishes no emission count. A fresh simulation with
+            // the same settings, fields and markers, aging off, holds after
+            // its one update exactly what the emitter made, less any particle
+            // the advance carried out of the domain.
+            DiffuseParticleSimulation counter;
+            counter.setRandomSeed(count_seed);
+            counter.setDiffuseParticleWavecrestEmissionRate(simulation.getDiffuseParticleWavecrestEmissionRate());
+            counter.setDiffuseParticleTurbulenceEmissionRate(simulation.getDiffuseParticleTurbulenceEmissionRate());
+            counter.setMinTurbulence(simulation.getMinTurbulence());
+            counter.setMaxTurbulence(simulation.getMaxTurbulence());
+            counter.setMinEmitterEnergy(simulation.getMinEmitterEnergy());
+            counter.setMaxEmitterEnergy(simulation.getMaxEmitterEnergy());
+            counter.setEmitterGenerationRate(simulation.getEmitterGenerationRate());
+            counter.setSprayEmissionSpeed(simulation.getSprayEmissionSpeed());
+            counter.enableFoam();
+            counter.enableBubbles();
+            counter.enableSpray();
+            counter.disableDust();
+            counter.disableBoundaryDustEmission();
+            counter.setMaxNumDiffuseParticles(native.capacity);
+            counter.setFoamParticleLifetimeModifier(0.0);
+            counter.setBubbleParticleLifetimeModifier(0.0);
+            counter.setSprayParticleLifetimeModifier(0.0);
+            counter.setEmitterGenerationBounds(generation);
+            counter.enableDiffuseParticleEmission();
+            counter.update(params);
+            *emitted_out = static_cast<uint32_t>(counter.getNumDiffuseParticles());
+        }
         simulation.enableDiffuseParticleEmission();
-        simulation.setEmitterGenerationBounds(AABB(0.0, 0.0, 0.0, native.isize * native.dx,
-                                                   native.jsize * native.dx,
-                                                   native.ksize * native.dx));
+        simulation.setEmitterGenerationBounds(generation);
         simulation.update(params);
         simulation.disableDiffuseParticleEmission();
         native.markers = ParticleSystem();

@@ -1734,32 +1734,115 @@ mod emitter_oracle {
         out
     }
 
-    /// L5 parity: the Dam Break at 64 for 150 frames. Every frame the step's
-    /// inputs go, read-only, to FLIP's. Tick-region nodes hold no dump, so
-    /// they are read where the tick leaves them: the particles from
-    /// `state.out` (the step's `out`, wired into the state), the faces from
-    /// the `face_*` components of `state.faces` (the step's `faces`), the
-    /// distance from the step's own `distance` storage, and `mesh_solid.solid`.
-    /// They go to FLIP's
-    /// DiffuseParticleSimulation as FluidSimulation configures it
-    /// (`whitewater_oracle::emit_engine`) at the tick dt, on three engine
-    /// seeds. Both sides see the same water by construction. Per type, the
-    /// population summed over the run must sit within three times the
-    /// engine's seed-to-seed range of the engine's mean: on identical fields
-    /// the only randomness is emitter jitter and lifetime variance, so that
-    /// range is the floor of honest disagreement.
-    ///
-    /// Known rule difference: the GPU skips emitters whose own particle
-    /// velocity is under 1e-3 m/s (`shaders/turbulence_emission_count_body.wgsl`);
-    /// FLIP samples the field velocity and has no such cut.
+    /// The gate's window, frames: short enough that a timing error cannot
+    /// cancel in a long sum.
+    const WINDOW: usize = 30;
+    /// The widest band a window may take, relative to the engine's mean. A
+    /// reference noisier than this fails the window instead of widening it.
+    const TOLERANCE_CAP: f64 = 0.10;
+    /// A window is judged only where the engine's mean reaches this: below
+    /// it the counting floor 3√m alone is wider than the cap ((3 / 0.10)²).
+    const ACTIVITY_FLOOR: f64 = 900.0;
+
+    /// One quantity per frame: the GPU's value and each engine seed's.
+    struct Series {
+        name: &'static str,
+        gpu: Vec<f64>,
+        engine: Vec<Vec<f64>>,
+    }
+
+    /// Each window of `s`: GPU sum, engine mean, band, and its verdict. The
+    /// band is three times the engine's seed range or the counting floor
+    /// 3√mean, whichever is wider; over the cap the reference is rejected. A
+    /// series no window of which reaches the activity floor fails as never
+    /// active.
+    fn gate(s: &Series, rows: &mut Vec<String>, failures: &mut Vec<String>) {
+        let mut active = false;
+        for (w, start) in (0..s.gpu.len()).step_by(WINDOW).enumerate() {
+            let end = (start + WINDOW).min(s.gpu.len());
+            let gpu: f64 = s.gpu[start..end].iter().sum();
+            let seeds: Vec<f64> = s.engine.iter().map(|e| e[start..end].iter().sum()).collect();
+            let engine = mean(&seeds);
+            let range = seeds.iter().copied().fold(f64::MIN, f64::max) - seeds.iter().copied().fold(f64::MAX, f64::min);
+            let band = (3.0 * range).max(3.0 * engine.sqrt());
+            let label = format!("{} frames {}-{end}", s.name, start + 1);
+            let verdict = if engine < ACTIVITY_FLOOR {
+                "below floor, not judged".to_owned()
+            } else if band > TOLERANCE_CAP * engine {
+                active = true;
+                failures.push(format!("{label}: reference too noisy, band {band:.0} over {:.0}% of {engine:.0}", 100.0 * TOLERANCE_CAP));
+                "REFERENCE TOO NOISY".to_owned()
+            } else if (gpu - engine).abs() > band {
+                active = true;
+                failures.push(format!("{label}: GPU {gpu:.0} against the engine's {engine:.0} ± {band:.0}"));
+                "FAIL".to_owned()
+            } else {
+                active = true;
+                "ok".to_owned()
+            };
+            rows.push(format!("{label:28} w{} | GPU {gpu:9.0} | engine {engine:9.0} (range {range:6.0}) | ratio {:.3} | band ±{band:6.0} | {verdict}",
+                w + 1, gpu / engine.max(1.0)));
+        }
+        if !active {
+            failures.push(format!("{}: never reached the activity floor of {ACTIVITY_FLOOR}", s.name));
+        }
+    }
+
+    /// The gate's mechanisms, each shown to bite: a timing error that
+    /// cancels over the run, a quantity that never happens, and a noisy
+    /// reference all fail, where the whole-run sum, any-activity and an
+    /// uncapped seed band would pass them.
     #[test]
-    fn whitewater_step_against_engine_emitters_150() {
+    fn engine_parity_gate_mechanisms_bite() {
+        let seeds = |v: Vec<f64>| vec![v.clone(), v.clone(), v];
+        let judge = |s: Series| {
+            let (mut rows, mut failures) = (Vec::new(), Vec::new());
+            gate(&s, &mut rows, &mut failures);
+            failures
+        };
+        let steady: Vec<f64> = vec![100.0; 150];
+        assert!(judge(Series { name: "steady", gpu: steady.clone(), engine: seeds(steady.clone()) }).is_empty());
+        // Windows: emission a window late, same total.
+        let late: Vec<f64> = (0..150).map(|f| if f < 30 { 0.0 } else if f < 60 { 200.0 } else { 100.0 }).collect();
+        assert_eq!(late.iter().sum::<f64>(), steady.iter().sum::<f64>());
+        assert!(!judge(Series { name: "late", gpu: late, engine: seeds(steady.clone()) }).is_empty(), "a timing error must fail a window");
+        // Floor: nothing on either side is not parity.
+        let none = vec![0.0; 150];
+        assert!(!judge(Series { name: "none", gpu: none.clone(), engine: seeds(none) }).is_empty(), "an inactive quantity must fail");
+        // Cap: a reference whose seeds disagree by half is rejected.
+        let noisy = vec![steady.clone(), steady.iter().map(|v| v * 1.5).collect(), steady.iter().map(|v| v * 0.5).collect()];
+        assert!(!judge(Series { name: "noisy", gpu: steady.clone(), engine: noisy }).is_empty(), "a noisy reference must fail");
+    }
+
+    /// One run's per-frame numbers: the GPU step's emitted and population by
+    /// type, and each engine seed's on the same water.
+    struct ParityRun {
+        gpu_emitted: Vec<f64>,
+        gpu_kinds: [Vec<f64>; 3],
+        engine_emitted: Vec<Vec<f64>>,
+        engine_kinds: [Vec<Vec<f64>>; 3],
+    }
+
+    /// The Dam Break at 64 for 150 frames with the step's params overridden
+    /// by `params`, and FLIP's engine on the water the step saw each tick.
+    /// Tick-region nodes hold no dump, so the step's inputs are read where
+    /// the tick leaves them: the particles from `state.out` (the step's
+    /// `out`), the faces from the `face_*` components of `state.faces` (the
+    /// step's `faces`), the distance from the step's own `distance` storage,
+    /// and `mesh_solid.solid`.
+    fn parity_run(params: Value, csv_name: &str) -> ParityRun {
         let scene = WaterScene::dam_break(64);
         let grid = GridBox::of(scene);
         let n = cells(grid);
         let face_cells = grid.face_cells as u32;
+        let mut def = serde_json::to_value(whitewater_render_def(scene)).expect("def serialises");
+        let node = def["nodes"].as_array_mut().expect("nodes").iter_mut().find(|n| n["nodeId"] == "whitewater").expect("the step");
+        for (key, value) in params.as_object().expect("params") {
+            node["params"][key] = value.clone();
+        }
+        let def: EffectGraphDef = serde_json::from_value(def).expect("def");
         let held: Vec<String> = ["state", "mesh_solid", "face_u", "face_v", "face_w"].map(String::from).to_vec();
-        let mut show = Show::new(whitewater_render_def(scene), (320, 180), false, &held);
+        let mut show = Show::new(def, (320, 180), false, &held);
         show.restart();
         let origin = std::array::from_fn(|a| (grid.center[a] - 0.5 * grid.size[a]) as f32);
         let whitewater_grid = WhitewaterGrid { cells: [n; 3], cell_size: grid.h as f32, origin };
@@ -1767,11 +1850,16 @@ mod emitter_oracle {
             .iter()
             .map(|&seed| NativeLifecycle::new(whitewater_grid, STEP_CAPACITY, seed).expect("engine lifecycle"))
             .collect();
+        let seeds = ENGINE_SEEDS.len();
+        let mut run = ParityRun {
+            gpu_emitted: Vec::new(),
+            gpu_kinds: Default::default(),
+            engine_emitted: vec![Vec::new(); seeds],
+            engine_kinds: std::array::from_fn(|_| vec![Vec::new(); seeds]),
+        };
         let mut population = Vec::new();
-        let mut csv = String::from("frame,gpu_foam,gpu_bubble,gpu_spray,gpu_emitted,engine_foam,engine_bubble,engine_spray,engine_net\n");
-        let mut gpu_sum = [0.0f64; 3];
-        let mut engine_sum = vec![[0.0f64; 3]; ENGINE_SEEDS.len()];
-        let (mut previous_emitted, mut previous_engine) = (0.0f32, 0.0f64);
+        let mut csv = String::from("frame,gpu_emitted,engine_emitted_mean,gpu_foam,gpu_bubble,gpu_spray,engine_foam,engine_bubble,engine_spray\n");
+        let mut previous_emitted = 0.0f32;
         for frame in 1..=EMISSION_FRAMES {
             show.frame(false);
             let gpu = show.probes(STEP_REPORTS);
@@ -1781,9 +1869,7 @@ mod emitter_oracle {
                 .filter(|p| p.position_radius[3] > 0.0)
                 .map(|p| [p.position_radius[0], p.position_radius[1], p.position_radius[2]])
                 .collect();
-            let faces = [0, 1, 2].map(|axis| {
-                show.dumped::<f32>(["face_u", "face_v", "face_w"][axis], "out", face_len([face_cells; 3], axis) as usize)
-            });
+            let faces = [0, 1, 2].map(|axis| show.dumped::<f32>(["face_u", "face_v", "face_w"][axis], "out", face_len([face_cells; 3], axis) as usize));
             let distance: Vec<f32> = show.provided("step", "distance", (face_cells as usize).pow(3));
             let level = pad_distance(&distance, face_cells, n, grid.h as f32);
             let solid: Vec<f32> = show.dumped("mesh_solid", "solid", (grid.nodes as usize).pow(3));
@@ -1797,58 +1883,86 @@ mod emitter_oracle {
                 solid: &solid,
                 gravity: GRAVITY,
             };
-            let mut engine_kinds = [0.0f64; 3];
-            for (engine, sum) in engines.iter_mut().zip(&mut engine_sum) {
+            for (s, engine) in engines.iter_mut().enumerate() {
                 engine.set_fields(&fields).expect("engine fields");
-                whitewater_oracle::emit_engine(engine, &positions, DT, INFLUENCE_BASE, INFLUENCE_DECAY).expect("engine emits");
+                let count_seed = ENGINE_SEEDS[s] * 1_000_003 + frame as u64;
+                let made = whitewater_oracle::emit_engine(engine, &positions, DT, INFLUENCE_BASE, INFLUENCE_DECAY, count_seed).expect("engine emits");
+                run.engine_emitted[s].push(f64::from(made.emitted));
                 engine.particles(&mut population).expect("engine population");
+                let mut kinds = [0.0f64; 3];
                 for p in &population {
-                    let k = match p.kind {
+                    kinds[match p.kind {
                         WhitewaterKind::Foam => 0,
                         WhitewaterKind::Bubble => 1,
                         WhitewaterKind::Spray => 2,
-                    };
-                    sum[k] += 1.0;
-                    engine_kinds[k] += 1.0 / ENGINE_SEEDS.len() as f64;
+                    }] += 1.0;
+                }
+                for (series, count) in run.engine_kinds.iter_mut().zip(kinds) {
+                    series[s].push(count);
                 }
             }
-            for k in 0..3 {
-                gpu_sum[k] += f64::from(gpu[k]);
-            }
-            let emitted = gpu[3] - previous_emitted;
+            run.gpu_emitted.push(f64::from(gpu[3] - previous_emitted));
             previous_emitted = gpu[3];
-            let engine_total: f64 = engine_kinds.iter().sum();
-            let engine_net = engine_total - previous_engine;
-            previous_engine = engine_total;
-            csv.push_str(&format!("{frame},{},{},{},{emitted},{:.1},{:.1},{:.1},{engine_net:.1}\n", gpu[0], gpu[1], gpu[2], engine_kinds[0], engine_kinds[1], engine_kinds[2]));
-            if frame % 10 == 0 {
-                println!(
-                    "L5E frame {frame}: GPU foam {} bubble {} spray {} emitted this tick {emitted}; engine mean foam {:.1} bubble {:.1} spray {:.1} net change {engine_net:+.1}",
-                    gpu[0], gpu[1], gpu[2], engine_kinds[0], engine_kinds[1], engine_kinds[2]
-                );
+            for (series, &count) in run.gpu_kinds.iter_mut().zip(&gpu[..3]) {
+                series.push(f64::from(count));
             }
+            let f = frame - 1;
+            let engine_mean = |series: &[Vec<f64>]| series.iter().map(|s| s[f]).sum::<f64>() / seeds as f64;
+            csv.push_str(&format!("{frame},{},{:.1},{},{},{},{:.1},{:.1},{:.1}\n", run.gpu_emitted[f], engine_mean(&run.engine_emitted),
+                gpu[0], gpu[1], gpu[2], engine_mean(&run.engine_kinds[0]), engine_mean(&run.engine_kinds[1]), engine_mean(&run.engine_kinds[2])));
         }
         let errors = show.errors();
         assert!(errors.is_empty(), "the chain ran with errors: {errors:#?}");
-        let path = std::env::temp_dir().join("whitewater_step_vs_engine_150.csv");
+        let path = std::env::temp_dir().join(csv_name);
         std::fs::write(&path, csv).expect("parity csv");
-        let mut failures = Vec::new();
-        for (k, name) in ["foam", "bubble", "spray"].into_iter().enumerate() {
-            let seeds: Vec<f64> = engine_sum.iter().map(|s| s[k]).collect();
-            let engine = mean(&seeds);
-            let range = seeds.iter().copied().fold(f64::MIN, f64::max) - seeds.iter().copied().fold(f64::MAX, f64::min);
-            let tolerance = 3.0 * range;
-            let gap = gpu_sum[k] - engine;
-            println!(
-                "L5E {name} summed over 150 frames: GPU {:.0}, engine {engine:.0} (seeds {seeds:?}), GPU/engine {:.3}, gap {gap:+.0}, tolerance ±{tolerance:.0}",
-                gpu_sum[k], gpu_sum[k] / engine.max(1.0)
-            );
-            if gap.abs() > tolerance {
-                failures.push(format!("{name}: GPU {:.0} against the engine's {engine:.0} ± {tolerance:.0}", gpu_sum[k]));
-            }
-        }
         println!("L5E csv {}", path.display());
-        assert!(gpu_sum.iter().sum::<f64>() > 0.0, "the step made no whitewater");
+        run
+    }
+
+    /// Gate one run: emitted per tick (the emitters alone, on identical
+    /// inputs), then population per type (emission plus one lifecycle step).
+    fn judge_run(label: &str, run: &ParityRun) -> Vec<String> {
+        let (mut rows, mut failures) = (Vec::new(), Vec::new());
+        gate(&Series { name: "emitted", gpu: run.gpu_emitted.clone(), engine: run.engine_emitted.clone() }, &mut rows, &mut failures);
+        for (k, name) in ["foam", "bubble", "spray"].into_iter().enumerate() {
+            gate(&Series { name, gpu: run.gpu_kinds[k].clone(), engine: run.engine_kinds[k].clone() }, &mut rows, &mut failures);
+        }
+        println!("L5E {label}:");
+        for row in rows {
+            println!("L5E   {row}");
+        }
+        failures
+    }
+
+    /// L5 parity: `node.whitewater_step` against FLIP Fluids'
+    /// DiffuseParticleSimulation as FluidSimulation configures it
+    /// (`whitewater_oracle::emit_engine`), on three engine seeds, fed the
+    /// water the step saw each tick at the tick dt. Gated per 30-frame
+    /// window ([`gate`]): emitted per tick, which isolates the emitters on
+    /// identical inputs (the engine's count comes from a twin simulation);
+    /// and population per type, which adds one lifecycle step. Two negative
+    /// controls must fail the same gate: the step with its wavecrest
+    /// emission off, and with its inside-turbulence emission off.
+    ///
+    /// Known differences the gate does not remove. The GPU skips emitters
+    /// whose own particle velocity is under 1e-3 m/s
+    /// (`shaders/turbulence_emission_count_body.wgsl`); FLIP samples the
+    /// field velocity and has no such cut. The population's lifecycle step
+    /// differs in its motion inputs: the GPU advects through the substep
+    /// history (`substep_schedule`, `substep_u/v/w`), the engine once at the
+    /// tick dt on the end-of-tick faces. The engine oracle covers constant
+    /// default influence only (no obstacle sources).
+    #[test]
+    fn whitewater_step_against_engine_emitters_150() {
+        let base = parity_run(json!({}), "whitewater_step_vs_engine_150.csv");
+        let failures = judge_run("shipped step", &base);
+        let no_wavecrest = parity_run(json!({"wavecrest_emission": {"type": "Float", "value": 0.0}}), "whitewater_step_vs_engine_150_no_wavecrest.csv");
+        let wavecrest_failures = judge_run("control: wavecrest emission off", &no_wavecrest);
+        let no_inside = parity_run(json!({"inside_emission": {"type": "Bool", "value": false}}), "whitewater_step_vs_engine_150_no_inside.csv");
+        let inside_failures = judge_run("control: inside-turbulence emission off", &no_inside);
+        println!("L5E controls: wavecrest off failed {} checks, inside off failed {} checks", wavecrest_failures.len(), inside_failures.len());
+        assert!(!wavecrest_failures.is_empty(), "the gate passed a step with its wavecrest emitter off");
+        assert!(!inside_failures.is_empty(), "the gate passed a step with its inside-turbulence emitter off");
         assert!(failures.is_empty(), "the step strays from FLIP's engine on the same water: {failures:#?}");
     }
 }
