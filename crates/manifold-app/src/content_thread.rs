@@ -797,7 +797,8 @@ impl ContentThread {
             Some(self.audio_mod_runtime.visuals()),
         );
         self.physics_metrics = manifold_renderer::node_graph::physics_metrics::take_frame();
-        let _render_work_ms = render_work_start.elapsed().as_secs_f64() * 1000.0;
+        let render_work_ms = render_work_start.elapsed().as_secs_f64() * 1000.0;
+        self.content_pipeline.set_last_render_work_ms(render_work_ms);
 
         // ── Live RT capture (env MANIFOLD_RT_CAPTURE, requires perf-soak) ──
         // Arms RT_CAPTURE_ARM flags before render, drains queue + logs stats after.

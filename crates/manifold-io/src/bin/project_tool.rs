@@ -107,6 +107,7 @@ USAGE:
       field: shadows|ao|gi|reflections  value: ultra_low|low|medium|high|extra_high|ultra
       field: ray_resolution             value: quarter|half|three_quarter|native
       field: spatial_denoise            value: off|low|medium|high
+  project_tool settings set-sim-rate <file.manifold> <15|20|30|60>
   project_tool effect add <file.manifold> --layer <index> --preset <PresetTypeId>"
     );
 }
@@ -416,12 +417,46 @@ fn run_settings(rest: &[String]) -> ExitCode {
     };
     match sub.as_str() {
         "set-rt-quality" => settings_set_rt_quality(rest),
+        "set-sim-rate" => settings_set_sim_rate(rest),
         other => {
             eprintln!("error: unknown settings subcommand '{other}'\n");
             print_usage();
             ExitCode::from(2)
         }
     }
+}
+
+/// `settings set-sim-rate <file> <hz>` — `/settings/physics/simRate`, one
+/// value for every live and export solver. Validated through the typed
+/// `SimRate`, so only 15, 20, 30 or 60 Hz is written.
+fn settings_set_sim_rate(rest: &[String]) -> ExitCode {
+    let [path, hz] = rest else {
+        print_usage();
+        return ExitCode::from(2);
+    };
+    let rate = match hz.parse::<u32>().map_err(|e| e.to_string())
+        .and_then(manifold_core::settings::SimRate::try_from)
+    {
+        Ok(rate) => rate,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let mut root = match read_raw_json(path).and_then(|j| parse_root(&j)) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let settings = &mut root["settings"];
+    if settings.get("physics").is_none() {
+        settings["physics"] = serde_json::json!({});
+    }
+    settings["physics"]["simRate"] = serde_json::json!(rate.hz());
+    println!("physics.sim_rate = {} Hz", rate.hz());
+    validate_and_save(&root, path)
 }
 
 /// `settings set-rt-quality <file> <realtime|export> <field> <value>` —
