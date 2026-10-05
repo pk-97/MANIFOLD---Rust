@@ -57,8 +57,9 @@ Synchronization rules, each written into the shader as a comment beside its barr
 
 - The `any(bins < 1)` return is uniform (bins come from uniforms) and happens before any barrier; active lanes store `band` first.
 - An all-inactive half brick (the union is still the identity after the reduction) takes an explicit uniform empty path: no widths are computed from identities; it falls through to the end with no store.
-- Scratch lifetimes: reduction scratch, then the scan buffer, then staged blobs. Each reuse is separated by a barrier. A run whose total is zero executes no chunk barrier, so a barrier sits after the lanes' prefix reads and before the next run's scan writes, unconditionally.
-- The house scan (`prefix_scan.wgsl:34`) is inclusive with sixteen barriers; the kernel converts it to exclusive explicitly and defines `prefix[256] = total`.
+- Scratch lifetimes: only the union reduction reuses the prefix allocation, and it finishes (barrier) before the first run. Within a run the prefix and the staged blobs are separate storage, both live across every chunk, because loaders search the prefix on every chunk. A run whose total is zero executes no chunk barrier, so an unconditional barrier ends every run, after the lanes' prefix reads and before the next run's scan writes.
+- The house scan (`prefix_scan.wgsl:34`) is inclusive with sixteen barriers. The exclusive prefix is built in this order: each lane writes its count and keeps it in a register → barrier → inclusive scan → the total is captured uniformly (`workgroupUniformLoad` of the last inclusive entry) before anything modifies the scan → each lane writes `prefix[t] = inclusive[t] − count_t` into a separate array (an in-place shift would need an extra read-before-write barrier) → lane 0 writes `prefix[256] = total` → barrier before any prefix consumer.
+- Indices: within a run, `t` and `i` are run-local (0..256); the global bin is `q = run·256 + i`, decoded as `(U.x0 + q % w, U.y0 + q / w, z)`, and `ranges` is read at that global bin. A lane's row endpoints subtract `run·256` before indexing the 257-entry prefix; an empty row-run intersection performs no prefix read.
 - Loader binary searches may diverge; they terminate and reconverge before the next unconditional barrier and contain no collective operation and no return.
 - All control flow around barriers derives from uniform or `workgroupUniformLoad` values. naga's uniformity analysis (`wgsl_validation.rs:167`) checks that; the scratch-lifetime rules above are argued, not machine-checked.
 
@@ -68,12 +69,14 @@ for z in U.z0..=U.z1:                         // uniform
   rect = U.x-range × U.y-range, w = width
   lane_z = first_bin.z <= z && z <= last_bin.z    // the lane consumes this slab only if its own window covers it
   for run in 0..ceil(w*h/256):                // uniform
-    run-local bin t = run*256 + t (if < w*h); count_t = ranges[bin].count else 0
-    inclusive scan → exclusive prefix[0..256], prefix[256] = total (via workgroupUniformLoad)
-    lane (if lane_z): for each of its rows y in [y0,y1] ∩ rect: flat range [a,b] = row ∩ run (may be empty) → slots [prefix[a], prefix[b+1])
+    q = run*256 + t; count_t = ranges[global bin of q].count if q < w*h else 0   // t run-local
+    exclusive prefix[0..256], prefix[256] = total, built as in the scan rule above
+    lane (if lane_z): for each of its rows y in [y0,y1] ∩ rect: run-local flat range [a,b] = (row ∩ run) − run*256;
+      if non-empty, slots [prefix[a], prefix[b+1]) (no prefix read when empty)
     for chunk_base in 0..total step CHUNK:    // uniform
-      loader t < CHUNK, g = chunk_base + t < total: bin i = upper-bound search, the i with prefix[i] <= g < prefix[i+1]
-        (skips the repeated prefixes of empty bins); k = ranges[i].start + (g − prefix[i]); stage blob and box = pv_blob_box(blob)
+      loader t < CHUNK, g = chunk_base + t < total: run-local bin i = upper-bound search, the i with prefix[i] <= g < prefix[i+1]
+        (skips the repeated prefixes of empty bins); global bin of run*256 + i; k = ranges[that bin].start + (g − prefix[i]);
+        stage blob and box = pv_blob_box(blob)
       workgroupBarrier()
       lane (if lane_z): for each row: for g in clip([lo,hi), chunk): phi = min(phi, pv_blob_term(p, ijk, slot[g − chunk_base]))
       workgroupBarrier()
@@ -93,7 +96,7 @@ At I ≈ 5, V ≈ 10⁴, f ≈ 0.1, CHUNK 128: dense ≈ 475k ops, cooperative �
 ## 4. Exact equivalence
 
 - **E1 candidate sequence.** For every lane, the `(bin, k)` sequence visited, order included, equals the dense body's. Combinatorial proof above, checked by a CPU test over random lattices, windows, run splits and chunk sizes (I1).
-- **E2 per-candidate arithmetic.** One helper pair in `particle_volume_common.wgsl`, explicit `fma()`, called by both kernels. The residual risk is compiler contraction under `MTLMathMode::Fast`, covered only by the GPU bitwise tests (I3, I4) and the D4 escalation.
+- **E2 per-candidate arithmetic.** One helper pair in `particle_volume_common.wgsl`, called by both kernels. The residual risk is everything D4 names (window arithmetic, division, `length`, interpolation, reassociation, exceptional values under `MTLMathMode::Fast`), covered only by D4's three bitwise steps and the whole-frame hashes (I3, I4, I8) on the stated device.
 - **E3 after the gather.** Interior union and solid clamp use the same helpers in the same order; the `interior_len` branch is identical and uniform.
 - **E4 every input the node accepts.** `band_extra` 0 and above 0; interior unwired, native padding and solver padding; `resolution_scale` 1–4 (8 at the clamp); a lattice origin far from zero with cells near f32 resolution; rectangular lattices whose edge bricks exceed `dims`; empty bricks (border bricks are always active, `lattice_bricks.wgsl:190`); bins holding more than CHUNK blobs; union rects wider than 256 bins (`reach_bins ≥ 5` at scale 1); blobs with `reach ≤ 0`; NaN/±inf centres; `bounds[0] = 0`; `any(bins < 1)`; `dispatch_count` below the lattice total. Each is a named fixture in section 5 (Oracle and proofs).
 
