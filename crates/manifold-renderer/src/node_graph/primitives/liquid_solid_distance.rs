@@ -41,7 +41,7 @@ struct SolidDistanceUniforms {
 crate::primitive! {
     name: LiquidSolidDistance,
     type_id: "node.liquid_solid_distance",
-    purpose: "Write a liquid domain's solid lattice: per lattice node, the smaller of the distance to the nearest closed wall (Wall Inset nodes in from the lattice edge) and every enabled body's signed distance at the end of this frame's last tick (positive in free space, negative inside a solid). Bodies are sampled from their shapes' lattices in the atlas through their pose, scaled by each shape's smallest scale.",
+    purpose: "Write a liquid domain's solid lattice: per lattice node, the smaller of the distance to the nearest closed wall (Wall Inset nodes in from the lattice edge) and every enabled body's signed distance at the end of this frame's last tick (positive in free space, negative inside a solid). Bodies are sampled from their shapes' lattices in the atlas through their pose, in metres along each shape's stretch at the surface.",
     inputs: {
         bodies: Array(LiquidBody) required,
         shapes: Array(LiquidShape) required,

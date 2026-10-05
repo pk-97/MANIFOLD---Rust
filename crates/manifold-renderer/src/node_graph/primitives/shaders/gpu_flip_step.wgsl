@@ -771,7 +771,7 @@ fn closest_body(x: vec3<f32>) -> i32 {
         let sh = shapes[u32(shape_index)];
         let dims = vec3<u32>(sh.dims_x, sh.dims_y, sh.dims_z);
         let g = liquid_lattice_coord(x, position, q, sh.origin_spacing, sh.scale_min.xyz);
-        let d = liquid_shape_distance(sh.atlas_offset, dims, g, sh.origin_spacing.w) * sh.scale_min.w;
+        let d = liquid_shape_distance(sh.atlas_offset, dims, g, sh.origin_spacing.w, sh.scale_min.xyz);
         if best < 0 || d < nearest {
             best = row;
             nearest = d;

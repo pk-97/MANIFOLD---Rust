@@ -5,7 +5,7 @@
 // from the lattice edge (native FLIP supplies 1.5 + 5e-5/h; MPM supplies 3), and every enabled body's signed distance, sampled from its
 // shape's lattice in the atlas through its pose at the end of this frame's
 // last tick (the row rows − body_count moved for tick_seconds, as
-// node.matter_move_bodies moves it) and scaled by the shape's smallest scale.
+// node.matter_move_bodies moves it), in metres by liquid_shape_distance.
 //
 // ABI: `bodies` (LiquidBody), `shapes` (LiquidShape) and `atlas` (distances
 // two halves per word) are gathered; the output is one f32 per node. Poses
@@ -95,7 +95,7 @@ fn body(
         let sh = buf_shapes[u32(shape_index)];
         let dims = vec3<u32>(sh.dims_x, sh.dims_y, sh.dims_z);
         let g = liquid_lattice_coord(x, position, q, sh.origin_spacing, sh.scale_min.xyz);
-        distance = min(distance, liquid_shape_distance(sh.atlas_offset, dims, g, sh.origin_spacing.w) * sh.scale_min.w);
+        distance = min(distance, liquid_shape_distance(sh.atlas_offset, dims, g, sh.origin_spacing.w, sh.scale_min.xyz));
     }
     return distance;
 }

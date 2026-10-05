@@ -65,7 +65,7 @@ fn body(
         let sh = buf_shapes[u32(shape_index)];
         let dims = vec3<u32>(sh.dims_x, sh.dims_y, sh.dims_z);
         let g = liquid_lattice_coord(x, position, q, sh.origin_spacing, sh.scale_min.xyz);
-        let candidate = liquid_shape_distance(sh.atlas_offset, dims, g, sh.origin_spacing.w) * sh.scale_min.w;
+        let candidate = liquid_shape_distance(sh.atlas_offset, dims, g, sh.origin_spacing.w, sh.scale_min.xyz);
         if candidate < distance { distance = candidate; kind = 2u; }
     }
     return Element3(influence, select(dust_strength, 1.0, kind == 1u), kind, 0u);

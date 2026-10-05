@@ -480,9 +480,11 @@ only the `Arc` of the prepared geometry; no channel, mutex or long-lived thread.
 
 **D26 — A role's scale applies at use.** A lattice is built once in the geometry's own
 unscaled frame. Samplers map a world point through the pose and divide by the per-axis
-scale (world → local); a local distance becomes metres by the smallest scale, which
-never overstates the gap for a non-uniform scale. `LiquidShape` is 48 bytes: origin and
-spacing, dims, atlas offset, and the scale with its minimum in w.
+scale (world → local). A reader of the distance as a size (`liquid_shape_distance`)
+turns local units into metres along the trilinear slope n, d / |n ⊘ scale|, exact on
+every face of a stretched shape, and falls back to the smallest scale on a ridge; sign
+tests need no scale. `LiquidShape` is 48 bytes: origin and spacing, dims, atlas offset,
+and the scale with its minimum in w.
 
 **D27 — One lattice per geometry: the longest extent over 32, two spacings of padding.**
 Roles sharing geometry share one atlas block. World spacing is the local spacing times

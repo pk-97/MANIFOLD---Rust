@@ -1874,8 +1874,9 @@ fn rotate(q: [f64; 4], v: [f64; 3]) -> [f64; 3] {
 }
 
 /// The closest enabled body at x after `SOLID_TICK` (its row and signed
-/// distance), as liquid_shape_distance samples a lattice and past it adds
-/// the gap; none when the walls (inset 0) are nearer. The margin is the gap
+/// distance), as liquid_shape_distance samples a lattice, past it adds the
+/// gap and scales along the trilinear slope; none when the walls (inset 0)
+/// are nearer. The margin is the gap
 /// to the runner-up, body or walls, so the fixture can show no f32 rounding
 /// decides either.
 fn closest(solids: &Solids, x: [f64; 3]) -> (Option<usize>, f64) {
@@ -1898,14 +1899,22 @@ fn closest(solids: &Solids, x: [f64; 3]) -> (Option<usize>, f64) {
         let beyond = (0..3).map(|i| (g[i] - c[i]).powi(2)).sum::<f64>().sqrt() * f64::from(shape.origin_spacing[3]);
         let base: [usize; 3] = std::array::from_fn(|i| (c[i].floor() as usize).min(dims[i] - 2));
         let f: [f64; 3] = std::array::from_fn(|i| c[i] - base[i] as f64);
-        let mut d = 0.0;
+        let (mut d, mut slope) = (0.0, [0.0f64; 3]);
         for corner in 0..8 {
             let o = [corner & 1, (corner >> 1) & 1, corner >> 2];
-            let w: f64 = (0..3).map(|i| if o[i] == 1 { f[i] } else { 1.0 - f[i] }).product();
+            let w: [f64; 3] = std::array::from_fn(|i| if o[i] == 1 { f[i] } else { 1.0 - f[i] });
             let at = shape.atlas_offset as usize + (base[0] + o[0]) + dims[0] * ((base[1] + o[1]) + dims[1] * (base[2] + o[2]));
-            d += w * f64::from(solids.distances[at]);
+            let v = f64::from(solids.distances[at]);
+            d += w[0] * w[1] * w[2] * v;
+            for i in 0..3 {
+                let sign = if o[i] == 1 { 1.0 } else { -1.0 };
+                slope[i] += sign * w[(i + 1) % 3] * w[(i + 2) % 3] * v;
+            }
         }
-        d = (d + beyond) * f64::from(shape.scale_min[3]);
+        let steep = slope.iter().map(|v| v * v).sum::<f64>().sqrt();
+        let across = (0..3).map(|i| (slope[i] / f64::from(shape.scale_min[i])).powi(2)).sum::<f64>().sqrt();
+        let stretch = if steep > 1e-3 * f64::from(shape.origin_spacing[3]) { steep / across } else { f64::from(shape.scale_min[3]) };
+        d = (d + beyond) * stretch;
         gaps.push(d);
         if best.is_none_or(|(_, nearest)| d < nearest) {
             best = Some((row, d));
