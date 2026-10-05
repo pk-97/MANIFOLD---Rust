@@ -1461,6 +1461,104 @@ fn pressure_module_matches_main_golden() {
     assert!(moved.is_empty(), "{} of {} golden cases moved:\n{}", moved.len(), lines.len(), moved.join("\n"));
 }
 
+/// A frame of the step's two solves on one solver, as the density solve
+/// follows the pressure one: each solve's pressure and stop record copied
+/// out after it, so the second solve's rearm is seen on its own record.
+/// `live` per solve: false gives it a zero right-hand side, which stops it
+/// before its first round. `active` is the clock slot's plan.
+fn rearm_frame(rig: &mut Rig, bufs: &[GpuBuffer], p: &Problem, live: [bool; 2], active: bool, plan: &GpuBuffer, cache: &mut Option<GpuReplayCache>) -> Vec<(Vec<u32>, Vec<u32>)> {
+    let cells = rig.n * rig.n * rig.n;
+    let water: Vec<f32> = p.water.iter().map(|&w| f32::from(u8::from(w))).collect();
+    let density: Vec<f32> = p.f.iter().map(|f| 0.5 * f).collect();
+    let rhs: [Vec<f32>; 2] = std::array::from_fn(|s| if !live[s] { vec![0.0; cells] } else if s == 0 { p.f.clone() } else { density.clone() });
+    // The same buffers every frame, as the step keeps its own: a new
+    // buffer is a new recording.
+    let (rhs_buffers, pressures, records, sentinel) = (&bufs[0..2], &bufs[2..4], &bufs[4..6], &bufs[6]);
+    let mut words = [0u32; 12];
+    words[0] = if active { 1.0f32.to_bits() } else { 0 };
+    words[11] = 1;
+    // SAFETY: shared buffers sized for what is written; the last frame completed.
+    unsafe {
+        rig.water.write(0, bytemuck::cast_slice(&water));
+        plan.write(0, bytemuck::cast_slice(&words));
+        sentinel.write(0, bytemuck::cast_slice(&vec![GOLDEN_SENTINEL; (sentinel.size / 4) as usize]));
+        for s in 0..2 {
+            rhs_buffers[s].write(0, bytemuck::cast_slice(&rhs[s]));
+            pressures[s].write(0, bytemuck::cast_slice(&vec![0u32; cells]));
+        }
+    }
+    rig.solver.set_clock_plan(plan);
+    let mut enc = rig.device.create_encoder("gpu-flip-pressure-rearm");
+    let n = rig.n as u32;
+    let lattice = Water { lattice: [n; 3], cell_size: rig.cell_size() as f32, water: &rig.water, faces: &rig.faces, phi: None };
+    rig.solver.prepare(&rig.device, &mut enc, &lattice).expect("prepares");
+    rig.solver.seed_records(&mut enc, sentinel);
+    let spanned = cache.take().map(|cache| enc.begin_replay(&rig.device, cache)).is_some();
+    for s in 0..2 {
+        let solve = Solve { rhs: &rhs_buffers[s], pressure: &pressures[s], stop: Stop::Converged(MAX_ITERATIONS), bodies: None, level: rig.level, coarse_rhs: None };
+        rig.solver.solve(&mut enc, &lattice, solve).expect("solves");
+        enc.copy_buffer_to_buffer(rig.solver.progress().expect("prepared"), &records[s], records[s].size);
+    }
+    if spanned {
+        *cache = Some(enc.end_replay());
+    }
+    enc.commit_and_wait_completed();
+    (0..2).map(|s| (read::<u32>(&pressures[s], cells), read::<u32>(&records[s], PROGRESS_FLOATS as usize))).collect()
+}
+
+/// The density solve rearms what the pressure solve's stop switched off,
+/// and the other way round: a pressure solve stopped before its first round
+/// leaves the density solve live, a live pressure solve leaves a stopped
+/// density solve stopped, each with its own record; an inactive clock slot
+/// runs neither, and the slot turning active runs both again. Replayed
+/// equals direct on every solve, through the round template.
+#[test]
+fn pressure_module_rearms_between_solves() {
+    let (n, saved) = load_fixture(DAM_BREAK);
+    let p = resample(&saved[0], n, 64);
+    let frames: [([bool; 2], bool); 7] =
+        [([true, true], true), ([false, true], true), ([true, false], true), ([true, true], false), ([true, true], true), ([false, true], true), ([true, true], true)];
+    let mut direct = Rig::new(64);
+    let mut replay = Rig::new(64);
+    let direct_plan = direct.device.create_buffer_shared(48);
+    let replay_plan = replay.device.create_buffer_shared(48);
+    let bufs = |rig: &Rig| -> Vec<GpuBuffer> {
+        let cells = (rig.n * rig.n * rig.n * 4) as u64;
+        let record = u64::from(PROGRESS_FLOATS) * 4;
+        let sentinel = (u64::from(2 * MAX_ITERATIONS) * 4).max(record);
+        [cells, cells, cells, cells, record, record, sentinel].iter().map(|&size| rig.device.create_buffer_shared(size)).collect()
+    };
+    let (direct_bufs, replay_bufs) = (bufs(&direct), bufs(&replay));
+    let mut none = None;
+    let mut cache = Some(GpuReplayCache::default());
+    for (frame, &(live, active)) in frames.iter().enumerate() {
+        let d = rearm_frame(&mut direct, &direct_bufs, &p, live, active, &direct_plan, &mut none);
+        let before = cache.as_ref().unwrap().stats();
+        let r = rearm_frame(&mut replay, &replay_bufs, &p, live, active, &replay_plan, &mut cache);
+        let stats = cache.as_ref().unwrap().stats();
+        for s in 0..2 {
+            let solve = ["pressure", "density"][s];
+            assert!(d[s].0 == r[s].0, "frame {frame} {solve}: the replayed pressure differs from direct");
+            assert_eq!(d[s].1, r[s].1, "frame {frame} {solve}: the replayed record differs from direct");
+            let (iterations, stopped) = (f32::from_bits(r[s].1[1]), f32::from_bits(r[s].1[2]));
+            println!("frame {frame} {solve} live {} active {active}: {iterations} iterations, stopped {stopped}", live[s]);
+            if !active {
+                assert!(r[s].0.iter().all(|&w| w == 0), "frame {frame} {solve}: an inactive slot's solve writes no pressure");
+                assert!(r[s].1.iter().all(|&w| w == GOLDEN_SENTINEL), "frame {frame} {solve}: an inactive slot's solve leaves its record unwritten");
+            } else if live[s] {
+                assert!((10.0..=16.0).contains(&iterations) && stopped == 1.0, "frame {frame} {solve}: a live solve converges on its own");
+            } else {
+                assert!(iterations == 0.0 && stopped == 1.0, "frame {frame} {solve}: a zero right-hand side stops before round 0");
+                assert!(r[s].0.iter().all(|&w| w == 0), "frame {frame} {solve}: a solve stopped at the start writes no pressure");
+            }
+        }
+        if frame >= 2 {
+            assert_eq!(stats.templates_direct, before.templates_direct, "frame {frame}: no template ran directly");
+            assert_eq!(stats.templates_replayed - before.templates_replayed, 2, "frame {frame}: both solves replay their template");
+        }
+    }
+}
+
 /// The solve over each level's active tiles equals the solve over every
 /// tile, bit for bit, in the pressure and the stop record, on the engine's
 /// stop and at a fixed count, direct and replayed, over Dam Break frames at
