@@ -1,6 +1,6 @@
 # GPU FLIP display history — retained publications and a presentation cursor
 
-**Status:** APPROVED design, P1 landed, P2 open (section 3.4 items marked open) · 2026-10-06 · Claude, reviewed by Astra. Bead: BUG-ckvpp (display shows every third tick, never interpolated, ~0.25 s late).
+**Status:** APPROVED design, P1 landed, P2 contract written (section 3.4, section 5 P2 brief), awaiting review before build · 2026-10-06 · Claude, reviewed by Astra. Bead: BUG-ckvpp (display shows every third tick, never interpolated, ~0.25 s late).
 **Prerequisites:** none.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5–section 6 before starting any phase.
 
@@ -53,16 +53,30 @@ Candidates are Retired slots of the current generation, all runs, sorted by t. B
 
 ### 3.4 Cursor
 
-**Open for P2 (not built):** cursor initialization (proposed: c starts at the epoch's first retired endpoint); GUARD when N₂ is absent (proposed 0); the epoch exception to "never below the pinned A" and "c ≤ N" when an old pin sits past the new epoch's N; the effective presented time at a run cut in exact mode; Speed 0 is not Δ = 0 in general, since the delayed requested-time history (`clock.rs:404`) can still advance; the stall recovery claim (Astra's model returns within 10% 3.15 s after the stall ends, not within 3 s). The rules below are the draft.
+**Mode.** The cursor runs when `display_cursor` is wired and ≥ 0.5 and the frame is not offline. Everything else is exact: c = r. The domain outputs 1 when not offline and no rigid owner is attached (`gpu_flip_domain.rs:823-832`), else 0; `liquid_frame` re-checks `offline_simulation()` itself (D6).
 
-Per frame: requested r, Δ = max(0, r − r_prev) in simulation seconds (0 on the epoch's first frame), newest retired N and the one before it N₂. Constants: RATE 0.05, FILL_RATE 0.25, HORIZON 0.5 s, WINDOW 2 s of transport, GUARD = (N − N₂)/4.
+**Inputs per frame.** r is the domain's `display_time`; it is non-decreasing within an epoch, because the clock restarts the epoch on any backward transport (`clock.rs:358-359`) and maps a non-decreasing transport through a non-negative Speed history. Δ = max(0, r − r_prev), with r_prev taken from the same epoch, else Δ = 0. N and N₂ are the newest and second-newest Retired endpoints of the current generation, any run, read after this frame's retirement. T is the frame's transport time (`ctx.time.seconds`). Constants: RATE 0.05, FILL_RATE 0.25, HORIZON 0.5 s, WINDOW 2 s of transport; GUARD = (N − N₂)/4, or 0 when N₂ does not exist.
 
-1. A frame with Δ > 0 records behind = max(0, r − N) under its transport time; held frames neither sample nor age the window. L = the maximum over samples within WINDOW.
+**State** lives in `liquid_frame`, never in the clock: c, r_prev, the epoch it belongs to, the transport time of its fill start, and the deficit window (a fixed ring of (T, behind) samples, allocated once).
+
+**Per frame, in order:** retire; advance the cursor; `select(c)`; apply the cut rule; stamp; reclaim.
+
+0. Epoch. When the layout's epoch differs from the cursor's, the cursor is cleared: no c, empty window. Until the epoch's first retirement nothing is selected (the old pin holds, section 3.3). On the first frame that has a Retired endpoint in the epoch, c := the earliest Retired time in the generation and the fill start := T; the remaining steps run on later frames. A generation change inside the epoch (lattice or field layout) does not clear the cursor; the cut rule moves it.
+1. A frame with Δ > 0 records behind = max(0, r − N) at T. A frame with Δ = 0 neither records nor ages the window. L = the maximum over samples with T − T_sample ≤ WINDOW, 0 when none.
 2. target = r − L − GUARD.
-3. base = c + Δ; u = clamp((target − base)/HORIZON, −k, k); k = FILL_RATE for the first second of transport after the epoch's first retirement, then RATE.
-4. c ← min(base + Δ·u, N), never below the pinned A.
+3. base = c + Δ; u = clamp((target − base)/HORIZON, −k, k); k = FILL_RATE while T − fill start < 1 s, then RATE.
+4. c ← min(base + Δ·u, N). Since u ≥ −RATE > −1, c never decreases.
+5. Cut rule, after `select(c)`: when the pin is of the current epoch and its t_A > c, c := t_A. This is the run or generation cut of section 3.3 and the only jump; in steady selection t_A ≤ c holds by construction (B is the earliest t > c, A its predecessor).
 
-For constant Δ and L the equilibrium is c = target (comparing target with the un-advanced cursor sat Δ ahead of it and hit N every other frame). Δ = 0 holds c within a run even when N advances. L is the observed deficit, not a guarantee: when a slow retirement leaves the window, latency contracts, and another slow one can hold again without a reanchor. The clamp keeps c ≤ N; non-negative advance and the run rule keep it from moving back; the correction can oscillate within ±5% of real time. Exact policy (`display_cursor` unwired or 0, offline, coupled): c = r. `liquid_frame` outputs `presented_time` and `publications_skipped`.
+**The epoch exception.** "Never below the pinned A" and "c ≤ N" are statements about one epoch. A pin left over from the previous epoch can sit past the new epoch's N (an old picture at t = 40 s while the new water is at 0.1 s); it bounds nothing, because step 0 cleared the cursor and step 5 only reads a current-epoch pin. Its `presented_time` is reported as is during the hold: the old water's time, not comparable with the new r. The invariant "presented_time ≤ N" is checked against the pin's own generation.
+
+**Exact mode at a run cut.** c = r is never moved by the cut rule (export must present the requested time, D6). When r lies before the first endpoint of the run B moved into, A = B and the picture is that endpoint whole: `presented_time` = t_B > r, ahead of the request by less than one publication gap and never past N. It holds there until r passes t_B. This is the existing exact behavior, stated, not a change.
+
+**Speed 0 and pause.** Pause stops transport, so r stops at once and Δ = 0. Speed 0 does not: r is the simulation one Sim Rate interval of transport ago (`clock.rs:440-441`), so for one interval after Speed reaches 0 it keeps rising toward the frozen simulation time while no new endpoint arrives. Those frames have Δ > 0; the cursor advances with them, still clamped at N, and records shrinking deficits that do not lower L. After that interval r is constant, Δ = 0, the window freezes, and c stays where it stopped, between two retained endpoints: a still, interpolated picture. The cursor reads Δ only, never the clock's `held` flag, which is set at Speed 0 while r still moves (`clock.rs:400`).
+
+**Equilibrium and recovery.** For constant Δ and L the cursor settles at c = target, lag r − c = L + GUARD. The clamp keeps c ≤ N; a monotone r and u > −1 keep it from moving back; the correction stays within ±5% of real time. L is the observed deficit, not a guarantee: when a slow retirement leaves the window, latency contracts, and a later slow one holds at N again without a reanchor. After a stall that raised L by E seconds ends, the old samples hold L for WINDOW, then the cursor closes the gap at RATE until the error falls under RATE·HORIZON (25 ms), then exponentially with time constant HORIZON. Recovery to within 10% of the pre-stall lag λ therefore takes WINDOW + max(0, E − RATE·HORIZON)/RATE + HORIZON·ln(min(E, RATE·HORIZON)/(0.1·λ)) seconds of transport at Speed 1: 3.10 s for the modelled stall (E = 50 ms, λ = 75 ms). The test bound is 3.5 s.
+
+`r` reaches `liquid_frame` as an f32 scalar; at one hour of simulation its step is 0.24 ms against a 16.7 ms frame Δ, which the cursor tolerates. `liquid_frame` outputs `presented_time` and `publications_skipped`.
 
 ### 3.5 Latency (model)
 
@@ -77,7 +91,7 @@ Corrected recurrence, one endpoint per frame boundary crossing, retirement R fra
 | 60 / 24 | 3 | 94 ms | 52 ms | 0 |
 | 27 / 30 (one or two ticks a frame) | 3 | 150 ms | 117 ms | 0 |
 | 60 / 30, Speed 0.5 | 3 | 75 ms (37.5 sim) | 21 ms | 0 |
-| 60 / 30, R 3→6 for 1 s | — | 75→125, back within 3 s | — | 3 hits, 2 holds |
+| 60 / 30, R 3→6 for 1 s | — | 75→125, within 10% after 3.1 s | — | 3 hits, 2 holds |
 
 At 60 fps the water trails transport by 75 ms against D10's 33 ms: 42 ms more, 2.5 frames. In the measured case (≈30 fps GPU-bound, R 3–4) 108–142 ms, interpolated every frame, against 170–270 ms stepping today: retained publications remove the throttling component; the retire delay at the GPU-bound frame time remains, and only the P2 trace and Peter's observation say what it is. Holds in the first second after an epoch starts and under a retire-delay increase are expected. These are arithmetic, not runtime numbers.
 
@@ -87,7 +101,7 @@ At 60 fps the water trails transport by 75 ms against D10's 33 ms: 42 ms more, 2
 
 ### 3.7 Scope and controls
 
-Matter: D7. Coupled: exact at the completed time (`gpu_flip_domain.rs:746`, `:823-826`); the selector changes its pair where older endpoints bracket, so compatibility checks cover coupled one- and two-tick frames, rejection and reset. Export: D6; equal pictures need the same frame grouping and no live drops (`clock.rs:337`). Pause, Speed 0: Δ = 0; a tick already on the GPU still retires into history (section 3.4 of the seam). Speed: Δ scales, GUARD scales with the retained gap, L re-measures. Reset, backward seek, setup or rate change: new epoch, new generation, pinned pair per 3.3. Lattice or field-layout change: new generation, republish at unchanged time. Growth, identity change: new run.
+Matter: D7. Coupled: exact at the completed time (`gpu_flip_domain.rs:746`, `:823-826`); the selector changes its pair where older endpoints bracket, so compatibility checks cover coupled one- and two-tick frames, rejection and reset. Export: D6; equal pictures need the same frame grouping and no live drops (`clock.rs:337`). Pause: Δ = 0. Speed 0: Δ > 0 for one Sim Rate interval, then 0 (section 3.4). Either way a tick already on the GPU still retires into history (section 3.4 of the seam). Speed: Δ scales, GUARD scales with the retained gap, L re-measures. Reset, backward seek, setup or rate change: new epoch, new generation, pinned pair per 3.3. Lattice or field-layout change: new generation, republish at unchanged time. Growth, identity change: new run.
 
 ### 3.8 Budget and failure
 
@@ -100,7 +114,7 @@ Memory per slot: 32 B × particle capacity + 4 B × (solid nodes + interior cell
 CPU, `liquid/frame_history.rs`, a model over the real `SimulationClock` with a scripted retire delay.
 
 - `frame_history_constant_cadence_no_clamp_hits_after_warm_up`: 60/30, 60/24, 27/30 and Speed 0.5 at R = 3; after 3 s blend is interior, c advances by Δ(1 ± 0.05), no clamp hits, lag within 1 ms of section 3.5. Today: blend 1, every third endpoint.
-- `frame_history_retire_stall_holds_at_newest_then_recovers`: R 3→6 for 1 s; c never decreases, every hold is at N, lag returns within 10% of its pre-stall value (recovery window open, section 3.4).
+- `frame_history_retire_stall_holds_at_newest_then_recovers`: R 3→6 for 1 s; c never decreases, every hold is at N, lag returns within 10% of its pre-stall value within 3.5 s of transport after the stall ends (section 3.4, Equilibrium and recovery).
 - `frame_history_jitter_and_reanchor_never_step_backwards`: the clock's jitter pattern, R seeded in 1..4; c monotone within a run.
 - `frame_history_selector_matches_frame_ring_within_latest_pair`: retained {0, 1, 2}: r = 1 → (1, 2, 0) and r = 2.5 → (1, 2, 1) as FrameRing; r = 0.5 → (0, 1, 0.5) by design.
 - `frame_history_two_tick_frames_publish_frame_end_only`.
@@ -112,13 +126,49 @@ CPU, `liquid/frame_history.rs`, a model over the real `SimulationClock` with a s
 - `frame_history_coupled_exact_one_two_tick_rejection_reset`.
 - `frame_history_slot_use_over_2000_frames` ≤ section 3.8 per scenario.
 
+Cursor tests (P2), same model with the cursor on unless named exact. Every one asserts, on every frame, c non-decreasing within the epoch, `presented_time` ≤ the newest Retired endpoint of the pin's generation, and no extrapolation (blend in [0, 1]).
+
+- `cursor_equilibrium_matches_the_model`: the four cadences of the first test; after 3 s, r − c within 1 ms of L + GUARD, and blend strictly inside (0, 1) on at least 90% of frames.
+- `cursor_speed_zero_advances_one_interval_then_freezes`: 60/30, Speed 1 → 0 at 4 s; c rises only during the interval after the change, then is constant for 2 s with blend unchanged frame to frame; resuming Speed 1 produces no clamp hit in the first 0.5 s (the window was frozen, not aged).
+- `cursor_speed_change_rescales`: Speed 1 → 2 → 0.5; c's advance per frame tracks Δ within ±5% after each change settles; no backward step.
+- `cursor_pause_holds_still`: transport frozen 2 s; Δ = 0 every frame, c, the pin and the window unchanged.
+- `cursor_reset_epoch_ignores_the_old_pin`: run to t = 40 s, reset; the old pin is shown until the first retirement, the cursor then starts at the new epoch's earliest Retired endpoint, never clamped by the old A; same for a backward seek.
+- `cursor_generation_change_cuts_forward`: lattice change mid-run; c jumps to the republished endpoint once, then advances normally.
+- `cursor_exact_modes_present_the_request`: offline, coupled (`display_cursor` 0) and unwired; c = r every frame, selection identical to P1's on the same script, and at a run cut `presented_time` = t_B ≥ r.
+- `cursor_held_frame_reemits_the_pin`: a frame repeated with unchanged r and transport (and a frame where a new endpoint retires with Δ = 0) re-emits the same presented time; the window does not age.
+- The stall test above, plus `frame_history_jitter_and_reanchor_never_step_backwards` with the cursor on.
+
 GPU, lead-run through `gpu_queue.py`: `liquid_frame_live_held_frame_matches_offline` (live exact; after each ticking frame, hold until that publication's writer stamp has completed and it is retired, then assert the selected endpoints, blend and span equal offline's before comparing pixels); `liquid_frame_whitewater_reads_the_selected_slot`; the publication proof without the interior fallback assertion.
 
 ## 5. Phasing
 
 **P1 — History with exact selection (landable alone).** `FrameRing` use leaves `liquid_frame` only: sites `liquid_frame.rs:18,78,105-113,164-176,272-292,331,379-395,409`; re-derive with `rg -n 'FrameRing|RingWrite|\bRING\b|copy_gated|clear_interior' crates/manifold-renderer/src/node_graph/primitives/liquid_frame.rs`, stop if the count differs (the RING sites at the interior, solid and face allocations, `liquid_frame.rs:209-246,307-361`, belong to the same move). Deliverables: `frame_history.rs` (3.1–3.3, 3.8), the liquid_frame memory-extent rule in `liquid/extent.rs` at H_MAX slots, D4, the clear removal, whitewater retention with builder, preset and loader migration, `presented_time`, `publications_skipped`, every CPU test but the cursor ones, the GPU proofs. Gate: `cargo nextest run -p manifold-renderer frame_history`, clippy `-p manifold-renderer`, scoped GPU gate, a content-thread trace run; negative: the rg above returns nothing, `git diff --stat -- matter_frame.rs frame_ring.rs` is empty. On stage: every eligible frame-end publication is attempted, selection is exact over the retained endpoints, skips are reported in `publications_skipped`; endpoints can still pass unshown when several retire between presentations, and holds at the newest retired endpoint remain under GPU-bound frames; export pictures unchanged where the requested time lies within the latest pair.
 
-**P2 — Cursor.** Domain output `display_cursor`, the wire through the builder, `graph_loader.rs:727`'s pattern and `gpu_flip_preset.rs:332`'s preset test; section 3.4; the cursor tests; a trace of r, N, c, blend, `publications_skipped` over 300 frames at 60 fps and GPU-bound, reported against section 3.5. Forbidden: touching `manifold-physics`; a fixed lag; extrapolation.
+**P2 — Cursor.** One session, one commit.
+
+*Entry state.* P1 on main: `rg -n 'fn select|fn pinned|presented_time' crates/manifold-renderer/src/node_graph/liquid/frame_history.rs` hits; `rg -n '"display_time", "epoch"' crates/manifold-renderer/src/node_graph/primitives/gpu_flip_preset.rs` finds the frame wire (`:492`); `rg -n 'node.liquid_state" => &\[\("dropped_seconds"' crates/manifold-renderer/src/node_graph/graph_loader.rs` finds the clock-port table (`:722-727`). Any anchor moved: re-derive, then proceed.
+
+*Read-back.* This doc's section 3.3, section 3.4 whole, D3, D6, section 6; `liquid_frame.rs` `run`; `frame_history.rs` `select` and the test model; `graph_loader.rs` `wire_liquid_intervals`. Restate the mode rule, the per-frame order, the cut rule and the epoch exception before code.
+
+*Deliverables.*
+- `liquid/display_cursor.rs`: `DisplayCursor` (state per section 3.4, a fixed sample ring, no per-frame allocation) with one entry, `advance(epoch, r, transport, newest_two) -> Option<f64>`, and `cut(t_a)`. CPU only, no GPU types.
+- `HistoryCore::newest_two()` (N, N₂ of the current generation, any run) and the layout's epoch. `select` is unchanged.
+- `gpu_flip_domain`: output `display_cursor` (`ScalarF32`, added to `OUTPUTS`), 1 when `!offline && self.coupled.owner.is_none()`, else 0, set beside `display_time` (`:869`).
+- `liquid_frame`: optional input `display_cursor`; `run` follows section 3.4's order on the live path; the offline branch stays exact.
+- Wire: the builder's frame wire list (`gpu_flip_preset.rs:492`) gains `display_cursor`, which covers the Dam Break builder and Add Fluid's liquid body (`gpu_flip_liquid_body`, `:707`); `WaterDamBreakGpuFlip.json` and `WaterDamBreakParticles.json` regenerate from the builder.
+- Migration: the clock-port table in `wire_liquid_intervals` gains `"node.liquid_frame" => &[("display_cursor", "display_cursor")]`, applied only when the source is a `GPU_FLIP_DOMAIN_TYPE_ID` node (a Matter domain has no such output; a dangling wire is the forbidden silent failure). An authored `display_cursor` wire, including a constant 0, is kept. Saved projects get the cursor on load; nothing is rewritten on disk. Loader tests: idempotent, Matter-sourced frame untouched, authored wire kept, nested group, the `manifold-io` fixture `water_layer_graph_v1160.json` loads wired.
+- Preset test: extend `liquid_presets_feed_state_dropped_time_from_their_clock_domain` (`gpu_flip_preset.rs:1686`) or add its sibling: every `node.liquid_frame` in the GPU FLIP graphs has exactly one `display_cursor` wire from its own clock domain.
+- Tests: section 4's cursor list in `frame_history.rs`'s model (constructor flag for cursor on/off). The GPU proof `liquid_frame_live_held_frame_matches_offline` compares live against offline, so it must run exact: check whether its graph now carries the wire and, if so, remove that wire from the proof's graph explicitly, documented in the test. A green proof reached by loosening its comparison is a failed gate.
+
+*Trace plan.* One temporary `eprintln!` in `liquid_frame::run`, after the cut rule: frame index, T, r, c, N, N₂, blend, r − c, `publications_skipped`. Build the worktree binary with its own `CARGO_TARGET_DIR` after touching every source under `crates/` (BUG-nrdhb (shared target dir links stale crates)), copy it to `$S/manifold-cursor`, and run through `scripts/gpu_queue.py`: `$S/manifold-cursor frame-time $S/preset/gpu_flip_dam_break.manifold --frames 600 --splash-frames 100 --stamp-every 100000` in paced mode (never `--frame-clock`, which waits on the GPU every frame and removes the retire delay), once at the project's resolution and once at `--resolution 128` for GPU-bound. `$S` is the session scratchpad named in the lead's brief. Report the distributions against section 3.5, then delete the probe; `rg -n 'eprintln' crates/manifold-renderer/src/node_graph/primitives/liquid_frame.rs` returns what main returns.
+
+*Acceptance.* On the oracle, after the first second: blend strictly inside (0, 1) on at least 90% of frames; c never decreases; r − c ≤ 50 ms (3 frames at 60 fps) at p95 in the 60 fps run, reported (not gated) for the GPU-bound run. Frame-time p50 within noise of main: `$S/time_set.sh main:manifold-final:gpu_flip_dam_break.manifold cursor:manifold-cursor:gpu_flip_dam_break.manifold`, interleaved three times through `gpu_queue.py`, clean builds; the cursor's per-frame work is a few float compares, so a regression means a wiring mistake. Demo: L2, Peter watches the Dam Break in P3.
+
+*Gate.* `cargo nextest run -p manifold-renderer frame_history cursor graph_loader gpu_flip_preset`; `cargo nextest run -p manifold-io` for the fixture; clippy `-p manifold-renderer -- -D warnings`; scoped `scripts/gpu_proofs_gate.py`; the content-thread `MANIFOLD_RENDER_TRACE=1` check. Negative: `git diff --stat origin/main -- crates/manifold-physics` is empty; `rg -n 'display_cursor' crates/manifold-renderer/src/node_graph/primitives/matter_frame.rs crates/manifold-renderer/src/node_graph/liquid/frame_ring.rs` returns nothing.
+
+*Forbidden.* Touching `manifold-physics`; a fixed lag; extrapolation past N; a cursor in export; reading the clock's `held` flag; adapting `select` to the cursor instead of feeding it c; loosening the held-frame proof.
+
+*On stage.* The water glides between published snapshots instead of stepping at 10 Hz, about 2.5 frames behind the beat at 60 fps; at Speed 0 it settles to a still picture one Sim Rate interval after the knob reaches 0; a reset still shows the old water until the new pour has its first snapshot.
 
 **P3 — Stage acceptance.** Lead-run Dam Break at 60 fps and GPU-bound; Peter looks.
 
