@@ -7,17 +7,19 @@
 //! stored graph the three pieces the bundled def ships: the wire
 //! `domain.max_iterations → step.max_iterations`, the binding, and the card,
 //! placed after Solve Level. The card mirrors the domain's param, default 900,
-//! the cap the step already ran Auto within. The wire overrides the step's
-//! own param, so a step with an authored `max_iterations` has it moved onto
-//! the domain, where the card shows it. When the domain already carries a
-//! different value, the graph is left alone and reported: a card bound to the
-//! domain could not drive that step.
-//! Either way a migrated project solves exactly as before.
+//! the cap the step already ran Auto within.
 //!
-//! Each piece is added only when missing: an authored wire into
-//! `step.max_iterations`, or an existing card or binding with the id, is kept,
-//! and migrating twice is a byte-identical passthrough. A domain or step
-//! inside a group is reported and left alone.
+//! The rung adds pieces only where the card then drives the step's cap and
+//! that cap is unchanged. The wire overrides the step's own param, so it joins
+//! only a domain carrying the step's effective cap (its saved value, else
+//! 900); a saved step cap over an unset domain moves onto the domain. A
+//! different saved domain cap, a cap wire from another node, or a binding
+//! aimed at the step's own param leaves the graph alone, reported. A migrated
+//! project solves exactly as before.
+//!
+//! Each piece is added only when missing: an existing domain→step wire, card
+//! or binding with the id is kept, and migrating twice is a byte-identical
+//! passthrough. A domain or step inside a group is reported and left alone.
 
 use serde_json::{json, Value};
 
@@ -25,6 +27,8 @@ const DOMAIN: &str = manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID;
 const STEP: &str = "node.gpu_flip_step";
 const PARAM: &str = "max_iterations";
 const BESIDE: &str = "solve_level";
+/// The step's and domain's `max_iterations` default (`MAX_ITERATIONS`).
+const DEFAULT_CAP: i64 = 900;
 
 pub(crate) fn migrate(root: &mut Value) {
     let mut migrated = 0usize;
@@ -133,38 +137,70 @@ fn migrate_graph_value(graph: &mut Value) -> bool {
     };
     let step_cap = authored(step);
     let domain_cap = authored(domain);
+    let step_node_id = step.get("nodeId").and_then(Value::as_str).map(str::to_owned);
     let graph_name = name();
+    let has_card = map
+        .get("presetMetadata")
+        .and_then(|m| m.get("params"))
+        .and_then(Value::as_array)
+        .is_some_and(|params| params.iter().any(|p| p["id"] == PARAM));
+    let skip = |why: String| {
+        if !has_card {
+            super::note_migration(format!(
+                "{graph_name}: {why}; the Max Iterations card was not added. Re-add the generator from the preset to get it."
+            ));
+        }
+        false
+    };
 
     let mut changed = false;
-    let wired = map
+    let cap_wire = map
         .get("wires")
         .and_then(Value::as_array)
-        .is_some_and(|wires| wires.iter().any(|w| w["toNode"] == step_id && w["toPort"] == PARAM));
-    if !wired {
-        // The wire overrides the step's own param, so an authored step cap
-        // moves onto the domain, where the card shows it. A different domain
-        // cap means a domain-bound card could not drive the step, so nothing
-        // is added.
-        let carry = match (step_cap, domain_cap) {
-            (Some(step), Some(domain)) if step != domain => {
-                super::note_migration(format!(
-                    "{graph_name}: the GPU FLIP step's Max Iterations ({step}) differs from the domain's ({domain}); the step keeps solving at {step} and the Max Iterations card was not added. Re-add the generator from the preset to get the card."
-                ));
-                return false;
+        .and_then(|wires| wires.iter().find(|w| w["toNode"] == step_id && w["toPort"] == PARAM))
+        .map(|w| (w["fromNode"].clone(), w["fromPort"].clone()));
+    match cap_wire {
+        Some((from, port)) if from == domain_id && port == PARAM => {}
+        Some(_) => return skip("the GPU FLIP step's Max Iterations is wired from another node, which a card on the domain could not drive".into()),
+        None => {
+            // The wire overrides the step's own param, so it may only join a
+            // domain that already carries the step's effective cap, and never
+            // where a card drives the step's param directly.
+            let binds_step = step_node_id.is_some_and(|id| {
+                map.get("presetMetadata")
+                    .and_then(|m| m.get("bindings"))
+                    .and_then(Value::as_array)
+                    .is_some_and(|bindings| {
+                        bindings.iter().any(|b| b["target"]["nodeId"] == id.as_str() && b["target"]["param"] == PARAM)
+                    })
+            });
+            if binds_step {
+                return skip("a card already drives the GPU FLIP step's Max Iterations, and the domain→step wire would override it".into());
             }
-            (Some(step), None) => Some(step),
-            _ => None,
-        };
-        if let Some(cap) = carry
-            && let Some(domain) = map.get_mut("nodes").and_then(Value::as_array_mut).and_then(|nodes| nodes.iter_mut().find(|n| n["id"] == domain_id))
-        {
-            let params = domain.as_object_mut().expect("a node is an object").entry("params").or_insert_with(|| json!({}));
-            params[PARAM] = json!({"type": "Int", "value": cap});
-        }
-        let wires = map.entry("wires").or_insert_with(|| json!([]));
-        if let Some(wires) = wires.as_array_mut() {
-            wires.push(wire(&domain_id, &step_id));
-            changed = true;
+            let step_effective = step_cap.unwrap_or(DEFAULT_CAP);
+            match domain_cap {
+                Some(domain) if domain != step_effective => {
+                    return skip(format!(
+                        "the GPU FLIP step's Max Iterations ({step_effective}) differs from the domain's ({domain}), so the step keeps solving at {step_effective}"
+                    ));
+                }
+                Some(_) => {}
+                None => {
+                    // An authored step cap moves onto the domain, where the
+                    // card shows it.
+                    if let Some(cap) = step_cap
+                        && let Some(domain) = map.get_mut("nodes").and_then(Value::as_array_mut).and_then(|nodes| nodes.iter_mut().find(|n| n["id"] == domain_id))
+                    {
+                        let params = domain.as_object_mut().expect("a node is an object").entry("params").or_insert_with(|| json!({}));
+                        params[PARAM] = json!({"type": "Int", "value": cap});
+                    }
+                }
+            }
+            let wires = map.entry("wires").or_insert_with(|| json!([]));
+            if let Some(wires) = wires.as_array_mut() {
+                wires.push(wire(&domain_id, &step_id));
+                changed = true;
+            }
         }
     }
     let meta = map.entry("presetMetadata").or_insert_with(|| json!({}));
@@ -378,7 +414,56 @@ mod tests {
         assert_eq!(after["timeline"], before["timeline"], "no wire, card or binding added");
         let notes = super::super::take_migration_notes();
         assert_eq!(notes.len(), 1, "{notes:?}");
-        assert!(notes[0].contains("step's Max Iterations (120) differs from the domain's (300); the step keeps solving at 120 and the Max Iterations card was not added"), "{notes:?}");
+        assert!(notes[0].contains("step's Max Iterations (120) differs from the domain's (300), so the step keeps solving at 120; the Max Iterations card was not added"), "{notes:?}");
+    }
+
+    /// A step on its default 900 runs Auto within 900; a domain saved at 300
+    /// would lower that through the wire, so the graph is left alone.
+    #[test]
+    fn a_default_step_cap_conflicts_with_a_lower_domain_cap() {
+        let mut graph = layer_at_1180();
+        for n in graph["nodes"].as_array_mut().unwrap() {
+            if n["typeId"] == DOMAIN {
+                n["params"][PARAM] = json!({"type": "Int", "value": 300});
+            }
+        }
+        let before = project(graph);
+        super::super::take_migration_notes();
+        let after = migrate_project(&before);
+        assert_eq!(after["timeline"], before["timeline"]);
+        let notes = super::super::take_migration_notes();
+        assert!(notes.iter().any(|n| n.contains("step's Max Iterations (900) differs from the domain's (300)")), "{notes:?}");
+    }
+
+    /// A cap wire from another node keeps driving the step; a card on the
+    /// domain could not, so none is added.
+    #[test]
+    fn a_cap_wire_from_another_node_gets_no_domain_card() {
+        let mut graph = layer_at_1180();
+        let step_id = node(&graph, STEP)["id"].clone();
+        graph["wires"].as_array_mut().unwrap().push(json!({"fromNode": 99, "fromPort": "value", "toNode": step_id, "toPort": PARAM}));
+        let before = project(graph);
+        super::super::take_migration_notes();
+        let after = migrate_project(&before);
+        assert_eq!(after["timeline"], before["timeline"]);
+        let notes = super::super::take_migration_notes();
+        assert!(notes.iter().any(|n| n.contains("wired from another node")), "{notes:?}");
+    }
+
+    /// A binding aimed at the step's own param would be disabled by the
+    /// domain→step wire, so the graph is left alone.
+    #[test]
+    fn a_binding_on_the_step_param_blocks_the_wire() {
+        let mut graph = layer_at_1180();
+        let step_node_id = node(&graph, STEP)["nodeId"].as_str().unwrap().to_owned();
+        graph["presetMetadata"]["bindings"].as_array_mut().unwrap().push(json!({
+            "id": "solver_cap", "label": "Solver Cap", "target": {"kind": "node", "nodeId": step_node_id, "param": PARAM}}));
+        let before = project(graph);
+        super::super::take_migration_notes();
+        let after = migrate_project(&before);
+        assert_eq!(after["timeline"], before["timeline"]);
+        let notes = super::super::take_migration_notes();
+        assert!(notes.iter().any(|n| n.contains("a card already drives the GPU FLIP step's Max Iterations")), "{notes:?}");
     }
 
     /// A step cap equal to the domain's is wired without any change to either.
