@@ -2,12 +2,10 @@
 // D11, section 3.2). One thread per lattice node, x fastest: the seam's solid
 // lattice, positive in free space and negative inside a solid. It is the
 // smaller of the distance to the nearest closed wall, wall_inset nodes in
-// from the lattice edge (1.5 on the native mesh grid; 3 on a solver lattice, as node.matter_frame's wall
-// lattice; 0 on node.gpu_flip_step's cell lattice, whose walls are its
-// edge), and every enabled body's signed distance, sampled from its
+// from the lattice edge (native FLIP supplies 1.5 + 5e-5/h; MPM supplies 3), and every enabled body's signed distance, sampled from its
 // shape's lattice in the atlas through its pose at the end of this frame's
 // last tick (the row rows − body_count moved for tick_seconds, as
-// node.matter_move_bodies moves it) and scaled by the shape's smallest scale.
+// node.matter_move_bodies moves it), in metres by liquid_shape_distance.
 //
 // ABI: `bodies` (LiquidBody), `shapes` (LiquidShape) and `atlas` (distances
 // two halves per word) are gathered; the output is one f32 per node. Poses
@@ -63,14 +61,21 @@ fn body(
     let low = lattice_min + vec3<f32>(inset * cell_size);
     let high = low + (vec3<f32>(n) - vec3<f32>(1.0 + 2.0 * inset)) * cell_size;
     var distance = length(vec3<f32>(n) * cell_size);
+    var outside = vec3<f32>(0.0);
     let faces = u32(closed_faces);
     for (var d = 0u; d < 3u; d = d + 1u) {
+        var axis_distance = length(vec3<f32>(n) * cell_size);
         if (faces & (1u << (2u * d))) != 0u {
-            distance = min(distance, x[d] - low[d]);
+            axis_distance = min(axis_distance, x[d] - low[d]);
         }
         if (faces & (1u << (2u * d + 1u))) != 0u {
-            distance = min(distance, high[d] - x[d]);
+            axis_distance = min(axis_distance, high[d] - x[d]);
         }
+        distance = min(distance, axis_distance);
+        outside[d] = min(axis_distance, 0.0);
+    }
+    if any(outside < vec3<f32>(0.0)) {
+        distance = -length(outside);
     }
     let first = max(rows - body_count, 0);
     for (var b = 0; b < body_count; b = b + 1) {
@@ -90,10 +95,7 @@ fn body(
         let sh = buf_shapes[u32(shape_index)];
         let dims = vec3<u32>(sh.dims_x, sh.dims_y, sh.dims_z);
         let g = liquid_lattice_coord(x, position, q, sh.origin_spacing, sh.scale_min.xyz);
-        if !liquid_lattice_holds(g, dims) {
-            continue;
-        }
-        distance = min(distance, liquid_lattice_distance(sh.atlas_offset, dims, g) * sh.scale_min.w);
+        distance = min(distance, liquid_shape_distance(sh.atlas_offset, dims, g, sh.origin_spacing.w, sh.scale_min.xyz));
     }
     return distance;
 }

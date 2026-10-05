@@ -90,6 +90,9 @@ pub(super) struct Run {
     /// before the frame runs.
     entering: Vec<FluidParticle>,
     gpu_time: Option<FrameGpuTime>,
+    /// Live particles the fill seeded. The engine seeds no site a solid holds,
+    /// walls included, so this can be under the fill's slot count.
+    pub(super) seeded: usize,
 }
 
 impl Run {
@@ -133,10 +136,11 @@ impl Run {
         let mut backend = MetalBackend::new(device.arc(), 64, 64, GpuTextureFormat::Rgba16Float);
         pre_allocate_resources(&mut graph, &plan, &device, &mut backend).expect("pre-allocate");
         let exec = Executor::new(Box::new(backend));
-        let mut run = Self { device, graph, plan, exec, state: StateStore::new(), scene, frames: 0, fps: 60.0, entering: Vec::new(), gpu_time: None };
+        let mut run = Self { device, graph, plan, exec, state: StateStore::new(), scene, frames: 0, fps: 60.0, entering: Vec::new(), gpu_time: None, seeded: 0 };
         // The domain's clock restarts on its first frame and ticks none: the
         // state takes the fill. Every later frame is one tick.
         run.frame();
+        run.seeded = particle_stats(&run.particles()).live;
         run
     }
 
@@ -310,7 +314,13 @@ impl Run {
     }
 
     pub(super) fn n(&self) -> usize {
-        self.scene.pressure.n
+        self.solver_grid().cells()[0] as usize
+    }
+
+    fn solver_grid(&self) -> crate::node_graph::liquid::lattice::FlipSolverGrid {
+        crate::node_graph::liquid::lattice::FlipSolverGrid::from_lattice(
+            crate::node_graph::liquid::lattice::LiquidLattice::from_layout(&self.scene.layout()),
+        )
     }
 
     /// The force hook: the domain's uniform acceleration (Gravity X and Y),
@@ -355,7 +365,7 @@ impl Run {
     /// The water cells, 1 or 0, of `particles`: φ < 0 as the step builds it.
     pub(super) fn water_of(&self, particles: &[FluidParticle]) -> Vec<f32> {
         let started = particles;
-        let (n, h, min) = (self.n(), self.scene.cell_size(), self.scene.min());
+        let (n, h, min) = (self.n(), self.scene.cell_size(), self.solver_grid().min().map(f64::from));
         let radius = 0.866_025_4 * h;
         let mut water = vec![0.0; n.pow(3)];
         for p in started.iter().filter(|p| p.position_radius[3] > 0.0) {
@@ -514,13 +524,13 @@ fn gpu_flip_face_grid_is_the_last_ticks_faces() {
         for _ in 0..12 {
             run.frame();
         }
-        let records = (n + 1).pow(3);
+        let records = (run.n() + 1).pow(3);
         let state: Vec<FaceSample> = run.read("state", "faces", records);
         let last = run.faces();
         let differ = state.iter().zip(&last).filter(|(a, b)| bytemuck::bytes_of(*a) != bytemuck::bytes_of(*b)).count();
         let moving = state.iter().filter(|s| s.velocity.iter().any(|v| *v != 0.0)).count();
         let grid = run.face_grid();
-        let expected = crate::node_graph::liquid::conformance::gpu_flip_faces(bytemuck::cast_slice(&state), [n as u32; 3]);
+        let expected = crate::node_graph::liquid::conformance::gpu_flip_faces(bytemuck::cast_slice(&state), run.solver_grid().cells());
         let gathered = (0..3)
             .map(|axis| grid[axis].iter().zip(&expected[axis]).filter(|(a, b)| a.to_bits() != b.to_bits()).count())
             .sum::<usize>();
@@ -537,6 +547,9 @@ fn gpu_flip_face_grid_is_the_last_ticks_faces() {
 fn gpu_flip_still_pool() {
     let scene = WaterScene::still_pool(64);
     let mut run = Run::new(scene);
+    // The engine seeds a site only where the solid distance, walls included,
+    // is positive: the inset walls hold the pool's four floor-corner sites.
+    assert_eq!(run.seeded, scene.particles() as usize - 4, "the walls hold exactly the four floor-corner sites");
     let mut fastest = Vec::new();
     for frame in 0..120 {
         run.frame();
@@ -551,7 +564,7 @@ fn gpu_flip_still_pool() {
                 stats.mean_height,
                 run.water_cells()
             );
-            assert_eq!((stats.live, stats.bad), (scene.particles() as usize, 0), "frame {frame}: particles lost or not finite");
+            assert_eq!((stats.live, stats.bad), (run.seeded, 0), "frame {frame}: particles lost or not finite");
             fastest.push(stats.fastest);
         }
     }
@@ -647,7 +660,7 @@ fn gpu_flip_hydrostatic_column_rests() {
         );
         assert_eq!(wall, 0.0, "frame {frame}: a wall face moves");
         assert!(worst <= 0.01 * g_dt, "frame {frame}: the pressure gradient is {:.3}% off ρg", 100.0 * worst / g_dt);
-        assert_eq!((stats.live, stats.bad), (scene.particles() as usize, 0), "frame {frame}: particles lost or not finite");
+        assert_eq!((stats.live, stats.bad), (run.seeded, 0), "frame {frame}: particles lost or not finite");
     }
 }
 
@@ -655,7 +668,7 @@ fn gpu_flip_hydrostatic_column_rests() {
 /// 26 neighbours, are φ < 0. Unlike particles per water cell, a growing
 /// surface does not move it.
 pub(super) fn interior_density(run: &Run, particles: &[FluidParticle]) -> f64 {
-    let (n, h, min) = (run.n(), run.scene.cell_size(), run.scene.min());
+    let (n, h, min) = (run.n(), run.scene.cell_size(), run.solver_grid().min().map(f64::from));
     let water = run.water_of(particles);
     let mut count = vec![0u32; n.pow(3)];
     for p in particles.iter().filter(|p| p.position_radius[3] > 0.0) {
@@ -685,7 +698,7 @@ pub(super) fn interior_density(run: &Run, particles: &[FluidParticle]) -> f64 {
 /// seeds under a surface. A slosh moves water between columns, not out of
 /// them, so this holds while the pool still moves.
 fn column_depth(run: &Run, particles: &[FluidParticle], floor: f64) -> f64 {
-    let (n, h, min) = (run.n(), run.scene.cell_size(), run.scene.min());
+    let (n, h, min) = (run.scene.layout().cells[0] as usize, run.scene.cell_size(), run.scene.min());
     let mut top = vec![f64::NEG_INFINITY; n * n];
     for p in particles.iter().filter(|p| p.position_radius[3] > 0.0) {
         let c = |a: usize| ((f64::from(p.position_radius[a]) - min[a]) / h).floor().clamp(0.0, (n - 1) as f64) as usize;
@@ -695,20 +708,17 @@ fn column_depth(run: &Run, particles: &[FluidParticle], floor: f64) -> f64 {
     top.iter().map(|&y| if y.is_finite() { y - floor + 0.25 * h } else { 0.0 }).sum::<f64>() / (n * n) as f64
 }
 
-/// The Dam Break keeps its volume: by frame 1800 (30 s) the pool's column
-/// depth is the analytic volume, the 0.16 m pool plus the column, over the
-/// 4 m × 4 m floor, within 3%, and the interior density is within 2% of its
-/// start. Over the settling, frame 400 on, KE + PE never rises frame to
-/// frame past the noise floor of `gpu_flip_dam_break_energy_never_rises`
-/// (1e-4 of the start), and ends below where it stood at frame 400. A
-/// position projection does a little work no force accounts for; this bounds
-/// it at that floor.
+/// Historical acceptance of the optional density correction: at frame 1800
+/// (30 s), estimated column depth is within 3% of the analytic average and
+/// interior density is within 2% of its start. These are not direct volume
+/// measurements or native agreement tests. From frame 400, KE + PE must not
+/// rise by more than 1e-4 of its start per frame and must finish lower.
 #[test]
-fn gpu_flip_dam_break_settles_to_its_volume() {
+fn gpu_flip_density_projection_settled_column_depth_and_density() {
     const FRAMES: usize = 1800;
     const SETTLING: usize = 400;
     for steps in [1, 2] {
-        let scene = WaterScene::dam_break(64).with_steps(steps);
+        let scene = WaterScene { volume_projection: true, ..WaterScene::dam_break(64).with_steps(steps) };
         let mut run = Run::new(scene);
         let floor = scene.min()[1];
         let start = run.particles();
@@ -789,7 +799,7 @@ pub(super) fn energy(particles: &[FluidParticle], floor: f64) -> f64 {
 /// source's air) and particles per occupied cell (rest 8).
 #[cfg(feature = "water-race-probes")]
 fn cloud_counts(run: &Run, particles: &[FluidParticle]) -> (usize, usize, usize, f64) {
-    let (n, h, min) = (run.n(), run.scene.cell_size(), run.scene.min());
+    let (n, h, min) = (run.n(), run.scene.cell_size(), run.solver_grid().min().map(f64::from));
     let mut occupied = vec![false; n.pow(3)];
     let mut live = 0;
     for p in particles.iter().filter(|p| p.position_radius[3] > 0.0) {
@@ -807,7 +817,7 @@ fn cloud_counts(run: &Run, particles: &[FluidParticle]) -> (usize, usize, usize,
 /// density, wall sites included, reads under 8 (`density_source`, no bodies).
 #[cfg(feature = "water-race-probes")]
 fn raised_share(run: &Run, particles: &[FluidParticle], water: &[f32]) -> f64 {
-    let (n, h, min) = (run.n() as i64, run.scene.cell_size(), run.scene.min());
+    let (n, h, min) = (run.n() as i64, run.scene.cell_size(), run.solver_grid().min().map(f64::from));
     let at = |c: [i64; 3]| (c[0] + n * (c[1] + n * c[2])) as usize;
     let mut bins: Vec<Vec<[f64; 3]>> = vec![Vec::new(); (n * n * n) as usize];
     for p in particles.iter().filter(|p| p.position_radius[3] > 0.0) {
@@ -997,7 +1007,8 @@ fn gpu_flip_dam_break_energy_never_rises() {
         // step on the Dam Break with the obstacle box; the ceiling is about
         // twice that, so a broken preconditioner is caught while the
         // splash-dependent variation is not.
-        assert!(most.iter().all(|&m| m > 0 && m as usize <= 32 * steps), "{steps} steps: iterations a tick {most:?}");
+        assert!(most[0] > 0 && most[0] as usize <= 32 * steps, "{steps} steps: pressure iterations a tick {most:?}");
+        assert_eq!(most[1], 0, "the default must not run density iterations");
         assert!(worst <= 1e-4, "{steps} steps: energy rose {worst:.2e} of E0 above its start");
     }
 }
@@ -1021,7 +1032,7 @@ fn gpu_flip_standing_wave_keeps_its_period() {
         if frame % 60 == 59 {
             let stats = particle_stats(&run.particles());
             println!("GPU FLIP slosh frame {frame:3}: centre x {:+.4} m, fastest {:.3} m/s", centre[frame], stats.fastest);
-            assert_eq!((stats.live, stats.bad), (scene.particles() as usize, 0), "frame {frame}: particles lost or not finite");
+            assert_eq!((stats.live, stats.bad), (run.seeded, 0), "frame {frame}: particles lost or not finite");
         }
     }
     // Crossings of the rest centre, x = 0, interpolated between frames.
@@ -1104,18 +1115,22 @@ fn gpu_flip_dam_break_flows_around_the_obstacle() {
     assert!(beside > 1000, "the wave never passed beside the box");
 }
 
-/// A pool at rest round a static box resting on the tank floor stays at
-/// rest: no particle is lost, the level holds and nothing moves faster
-/// than 1 mm/s. The density solve made a waterline creep here (0.1 m/s at
-/// its peak); without it the pool is still to rounding.
+/// A pool at rest round a static box resting on the tank floor rests as the
+/// FLIP engine's does: no particle is lost, the level holds, and the water
+/// moves no faster than the engine's. On the engine's grid the waterline
+/// falls mid-cell, where both keep a few cm/s of lapping at every solid
+/// (`gpu_flip_engine_still_pool_round_a_box`, which printed `ENGINE`).
 #[test]
 fn gpu_flip_still_pool_rests_round_a_static_obstacle() {
+    // The engine's fastest particle at frames 19, 39 … 119 (GPU FLIP within
+    // 7% of each on 2026-10-05).
+    const ENGINE: [f64; 6] = [0.0438, 0.0129, 0.0183, 0.0241, 0.0221, 0.0190];
     let scene = WaterScene::still_pool(64).with_obstacle();
     let mut run = Run::new(scene);
     let (_, live) = deepest_in_obstacle(&run.particles(), DAM_OBSTACLE[0]);
     // The level once the fill has settled.
     let mut level = None;
-    let (mut peak, mut fastest) = (0.0_f64, 0.0);
+    let mut fastest = Vec::new();
     for frame in 0..120 {
         run.frame();
         if frame % 20 == 19 {
@@ -1124,11 +1139,14 @@ fn gpu_flip_still_pool_rests_round_a_static_obstacle() {
             assert_eq!((stats.live, stats.bad), (live, 0), "frame {frame}: particles lost or not finite");
             let level = *level.get_or_insert(stats.mean_height);
             assert!((stats.mean_height - level).abs() < 1e-4, "frame {frame}: the level moved from {level} to {}", stats.mean_height);
-            fastest = stats.fastest;
-            peak = peak.max(fastest);
+            fastest.push(stats.fastest);
         }
     }
-    assert!(peak < 1e-3, "the pool round the box reached {peak} m/s, last {fastest} m/s");
+    let peak = fastest.iter().copied().fold(0.0, f64::max);
+    let engine_peak = ENGINE.iter().copied().fold(0.0, f64::max);
+    assert!(peak < 1.25 * engine_peak, "the pool round the box reached {peak} m/s, the engine's {engine_peak} m/s");
+    let last = fastest[ENGINE.len() - 1];
+    assert!(last < 1.25 * ENGINE[5], "after 2 s the pool round the box moves at {last} m/s, the engine's at {} m/s", ENGINE[5]);
 }
 
 /// A box driven through a still pool at 1 m/s pushes the water ahead of it:
@@ -1323,11 +1341,6 @@ mod native_reference {
     #[cfg(feature = "water-race-probes")]
     #[test]
     fn gpu_flip_native_dam_break_reference() {
-        use super::super::gpu_flip_step::set_separate_off;
-        struct SeparationReset;
-        impl Drop for SeparationReset {
-            fn drop(&mut self) { set_separate_off(false); }
-        }
         fn median(mut values: Vec<f64>) -> f64 {
             values.sort_by(f64::total_cmp);
             values[values.len() / 2]
@@ -1364,8 +1377,7 @@ mod native_reference {
             }
         }
         println!("native solver wall median {:.3}ms", median(wall_ms));
-        for (density, separation) in [(false, false), (true, false), (false, true), (true, true)] {
-            // Run owns the test device lock before touching the global lever.
+        for density in [false, true] {
             let mut run = run_with_retired_speed(WaterScene { volume_projection: density, ..scene }, true);
             // The seed-only frame has zero velocity/history, no accepted
             // steps and no births. Replace its persistent particle state,
@@ -1380,8 +1392,6 @@ mod native_reference {
             assert!(buffer.size as usize >= std::mem::size_of_val(common.as_slice()));
             unsafe { buffer.write(0, bytemuck::cast_slice(&common)); }
             assert_eq!(bytemuck::cast_slice::<_, u8>(&run.particles()), bytemuck::cast_slice::<_, u8>(&common));
-            let _reset = SeparationReset;
-            set_separate_off(!separation);
             let (mut gpu_ms, mut encode_ms) = (Vec::new(), Vec::new());
             let (mut capped, mut refused, mut unconverged) = (0u64, 0u64, 0u64);
             for frame in 1..=90 {
@@ -1405,10 +1415,10 @@ mod native_reference {
                     let particles = run.particles();
                     let measure = measures(&particles);
                     let delta: [f64; 5] = std::array::from_fn(|a| measure[a] - reference[frame / 30 - 1][a]);
-                    println!("gpu density={density} separation={separation} frame {frame}: n={} metrics={measure:?} delta={delta:?}", stats.live);
+                    println!("gpu density={density} frame {frame}: n={} metrics={measure:?} delta={delta:?}", stats.live);
                 }
             }
-            println!("gpu density={density} separation={separation}: gpu median {:.3}ms encode median {:.3}ms capped={capped} refused={refused} unconverged={unconverged}", median(gpu_ms), median(encode_ms));
+            println!("gpu density={density}: gpu median {:.3}ms encode median {:.3}ms capped={capped} refused={refused} unconverged={unconverged}", median(gpu_ms), median(encode_ms));
         }
     }
 }
@@ -1587,9 +1597,11 @@ fn gpu_flip_replay_changes_nothing() {
         assert_eq!(direct.solver(), replay.solver(), "tick {frame}: the solver words differ with replay on");
         let stats = replay.replay_stats();
         let delta = |take: fn(&manifold_gpu::GpuReplayStats) -> u64| take(&stats) - take(&last);
-        if frame <= WARM || frame % 100 == 0 {
+        if frame <= WARM || frame % 100 == 0 || delta(|s| s.recorded) > 0 {
+            let clock: Vec<u32> = replay.read(STEP_NODE, "clock_status", 8);
             println!(
-                "tick {frame}: solver words {:?}; recorded {} replayed {} direct {} executes {} segments replayed {} direct {} allocations {}",
+                "tick {frame}: clock {clock:?}, live {}; solver words {:?}; recorded {} replayed {} direct {} executes {} segments replayed {} direct {} allocations {}",
+                particle_stats(&rp).live,
                 replay.solver(),
                 delta(|s| s.recorded),
                 delta(|s| s.replayed),
@@ -1684,7 +1696,7 @@ fn gpu_flip_one_step_stage_cost_probe() {
         assert_eq!(status[6], 1, "{label}: exactly one accepted step");
         assert_eq!((status[4], status[5]), (0, 0), "{label}: no cap or nonfinite clock input");
         let stats = particle_stats(&run.particles());
-        assert_eq!((stats.live, stats.bad), (scene.particles() as usize, 0), "{label}: all water remains live and finite");
+        assert_eq!((stats.live, stats.bad), (run.seeded, 0), "{label}: all water remains live and finite");
     }
     let (pp, up) = (profiled.particles(), plain.particles());
     assert!(bytemuck::cast_slice::<_, u8>(&pp) == bytemuck::cast_slice::<_, u8>(&up), "published particle bits differ");
@@ -1760,7 +1772,7 @@ fn gpu_flip_one_active_slot_matches_six_recorded_slots_cost_proof() {
             let (op, sp) = (one.particles(), six.particles());
             for (label, particles) in [("one", &op), ("six", &sp)] {
                 let stats = particle_stats(particles);
-                assert_eq!((stats.live, stats.bad), (scene.particles() as usize, 0),
+                assert_eq!((stats.live, stats.bad), (one.seeded, 0),
                     "{n}³ tick {frame}, {label}: every particle remains live and finite");
             }
             assert!(bytemuck::cast_slice::<_, u8>(&op) == bytemuck::cast_slice::<_, u8>(&sp),
@@ -1863,7 +1875,7 @@ fn gpu_flip_no_body_solid_clear_matches_six_passes() {
                     "{n}³ fresh {fresh} tick {frame}: {what} bits differ");
                 for particles in [&a, &b] {
                     let stats = particle_stats(particles);
-                    assert_eq!((stats.live, stats.bad), (scene.particles() as usize, 0),
+                    assert_eq!((stats.live, stats.bad), (optimized.seeded, 0),
                         "{n}³ fresh {fresh} tick {frame}: every {what} record remains live and finite");
                 }
             }
@@ -1928,7 +1940,7 @@ fn gpu_flip_pocket_segments_match_indirect_sweeps() {
             assert_eq!(bytemuck::cast_slice::<_, u32>(&a), bytemuck::cast_slice::<_, u32>(&b), "frame{frame}: {label}");
             for particles in [&a, &b] {
                 let stats = particle_stats(particles);
-                assert_eq!((stats.live, stats.bad), (count, 0), "frame{frame}: {label} remain live and finite");
+                assert_eq!((stats.live, stats.bad), (segmented.seeded, 0), "frame{frame}: {label} remain live and finite");
             }
         }
         assert_eq!(bytemuck::cast_slice::<_, u32>(&segmented.faces()), bytemuck::cast_slice::<_, u32>(&indirect.faces()), "frame{frame}: faces");
@@ -2032,7 +2044,7 @@ fn gpu_flip_inactive_extension_dispatch_matches_dense() {
             assert!(bytemuck::cast_slice::<_, u32>(&a) == bytemuck::cast_slice::<_, u32>(&b), "{at}: {what} bits differ");
             for particles in [&a, &b] {
                 let stats = particle_stats(particles);
-                assert_eq!((stats.live, stats.bad), (count, 0), "{at}: every {what} record remains live and finite");
+                assert_eq!((stats.live, stats.bad), (optimized.seeded, 0), "{at}: every {what} record remains live and finite");
             }
         }
         let (a, b) = (optimized.faces(), original.faces());
@@ -2122,9 +2134,10 @@ fn gpu_flip_fresh_speed_preserves_force_changes_and_multiple_intervals() {
     for frame in 0..10 {
         for run in [&mut optimized, &mut original] {
             if frame == 3 {
-                // Launch the free surface upward fast enough to require CFL
-                // subdivision in the following interval, after its stats retire.
-                run.set_gravity(0.0, 4000.0);
+                // Throw the pool sideways fast enough to require CFL
+                // subdivision in the following interval, after its stats
+                // retire. Pulled upward, native water hangs from the floor.
+                run.set_gravity(4000.0, -G);
             }
             if frame == 5 {
                 run.set_gravity(0.0, -G);

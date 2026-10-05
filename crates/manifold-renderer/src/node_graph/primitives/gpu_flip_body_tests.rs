@@ -14,7 +14,7 @@ use manifold_gpu::{GpuBuffer, GpuDevice, GpuReplayCache};
 use super::gpu_flip_atom_tests::{FACE_FLOATS, assert_close, face_grid_len, random_values, random_water};
 use super::gpu_flip_bodies::{BodyPasses, Bodies};
 use super::gpu_flip_pressure::{PROGRESS_FLOATS, PressureSolver, Solve, Stop, Water};
-use super::gpu_flip_step::{TILE, set_all_tiles, set_gate_off, set_poison, set_separate_off};
+use super::gpu_flip_step::{TILE, set_all_tiles, set_gate_off, set_poison};
 use super::liquid_surface_tests::read;
 use crate::node_graph::liquid::bodies::LiquidBody;
 use super::liquid_stats::SOLVER_WORDS;
@@ -637,8 +637,6 @@ struct BoxRun {
     frame: i64,
     all: bool,
     poison: bool,
-    /// No solid lets water go (`set_separate_off`).
-    off: bool,
     /// Every pass of an inactive clock slot runs (`set_gate_off`).
     ungated: bool,
     _scope: crate::node_graph::physics::PhysicsStepScope,
@@ -657,13 +655,13 @@ fn box_def(fixture: crate::node_graph::liquid::conformance::Fixture) -> manifold
 
 impl BoxRun {
     fn new(fixture: crate::node_graph::liquid::conformance::Fixture, all: bool, poison: bool, level: i32) -> Self {
-        Self::of(Self::at_level(fixture, level), all, poison, false)
+        Self::of(Self::at_level(fixture, level), all, poison)
     }
 
     /// The scene with every pass of an inactive clock slot run, as before
     /// the slots were gated.
     fn ungated(fixture: crate::node_graph::liquid::conformance::Fixture, level: i32) -> Self {
-        Self::with_levers(Self::at_level(fixture, level), false, false, false, true)
+        Self::with_levers(Self::at_level(fixture, level), false, false, true)
     }
 
     fn at_level(fixture: crate::node_graph::liquid::conformance::Fixture, level: i32) -> manifold_core::effect_graph_def::EffectGraphDef {
@@ -673,11 +671,11 @@ impl BoxRun {
         def
     }
 
-    fn of(def: manifold_core::effect_graph_def::EffectGraphDef, all: bool, poison: bool, off: bool) -> Self {
-        Self::with_levers(def, all, poison, off, false)
+    fn of(def: manifold_core::effect_graph_def::EffectGraphDef, all: bool, poison: bool) -> Self {
+        Self::with_levers(def, all, poison, false)
     }
 
-    fn with_levers(def: manifold_core::effect_graph_def::EffectGraphDef, all: bool, poison: bool, off: bool, ungated: bool) -> Self {
+    fn with_levers(def: manifold_core::effect_graph_def::EffectGraphDef, all: bool, poison: bool, ungated: bool) -> Self {
         let fixture = "box scene";
         let device = crate::test_device();
         let registry = crate::node_graph::PrimitiveRegistry::with_builtin();
@@ -701,7 +699,7 @@ impl BoxRun {
         runtime.set_dump_all(true);
         let target =
             crate::render_target::RenderTarget::new(&device, BOX_SIZE, BOX_SIZE, manifold_gpu::GpuTextureFormat::Rgba16Float, "body sparse");
-        let mut run = Self { device, runtime, target, manifest, frame: 0, all, poison, off, ungated, _scope: scope };
+        let mut run = Self { device, runtime, target, manifest, frame: 0, all, poison, ungated, _scope: scope };
         let started = std::time::Instant::now();
         loop {
             run.render(true);
@@ -735,7 +733,6 @@ impl BoxRun {
         let mut encoder = self.device.create_encoder("body sparse frame");
         set_all_tiles(self.all);
         set_poison(self.poison);
-        set_separate_off(self.off);
         set_gate_off(self.ungated);
         let status = {
             let mut gpu = crate::gpu_encoder::GpuEncoder::new(&mut encoder, &self.device);
@@ -745,7 +742,6 @@ impl BoxRun {
         encoder.commit_and_wait_completed();
         set_all_tiles(false);
         set_poison(false);
-        set_separate_off(false);
         set_gate_off(false);
         use crate::frame_status::FrameRenderStatus;
         assert!(
@@ -938,8 +934,8 @@ fn gpu_flip_fresh_speed_preserves_coupled_bodies() {
     }
     for fixture in [Fixture::SubmergedBox, Fixture::FloatingBox] {
         let def = BoxRun::at_level(fixture, 0);
-        let mut automatic = BoxRun::of(def.clone(), false, false, false);
-        let mut full = BoxRun::of(baseline(def), false, false, false);
+        let mut automatic = BoxRun::of(def.clone(), false, false);
+        let mut full = BoxRun::of(baseline(def), false, false);
         let (mut shortcuts, mut reacting_ticks) = (0u32, 0u32);
         for tick in 1..=TICKS {
             automatic.step();
@@ -991,47 +987,21 @@ impl BoxRun {
         let row: &LiquidBody = bytemuck::from_bytes(bytemuck::cast_slice(&words[..std::mem::size_of::<LiquidBody>() / 4]));
         f64::from(row.position_inv_mass[1])
     }
-
-    /// The live particles at or above `y` inside the box's footprint `half`.
-    fn water_above(&self, y: f32, half: f32) -> usize {
-        let capped = self.words("node.gpu_flip_step", "capped");
-        let count = (capped.len() - SOLVER_WORDS as usize) / 2;
-        let words = self.words("node.gpu_flip_step", "out");
-        let particles: &[crate::node_graph::fluid_particles::FluidParticle] =
-            bytemuck::cast_slice(&words[..count * std::mem::size_of::<crate::node_graph::fluid_particles::FluidParticle>() / 4]);
-        particles
-            .iter()
-            .filter(|p| p.position_radius[3] > 0.0)
-            .filter(|p| p.position_radius[1] >= y && p.position_radius[0].abs() < half && p.position_radius[2].abs() < half)
-            .count()
-    }
 }
 
-/// A box a quarter as dense as water, released under 0.2 m of it: buoyancy
-/// lifts it out of the pool. Separating solids let the water under it go,
-/// so less water rides up above the pool surface in the box's footprint
-/// than with every solid holding water by suction; the box clears the
-/// surface either way.
+/// A box a quarter as dense as water, released under 0.2 m of it:
+/// the coupled pressure solve must lift it out of the pool.
 #[test]
-fn gpu_flip_rising_box_does_not_drag_water_up() {
+fn gpu_flip_rising_box_clears_the_surface() {
     use crate::node_graph::liquid::conformance::{BoxScene, Fixture, set_node_param};
     let scene = BoxScene::of(Fixture::SubmergedBox).expect("the submerged box");
     let mut def = box_def(Fixture::SubmergedBox);
     set_node_param(&mut def, "box_body", "density", manifold_core::effect_graph_def::SerializedParamValue::Float { value: 250.0 });
-    let cell = scene.domain_size / scene.resolution as f32;
-    let (surface, half) = (scene.fill + 2.0 * cell, 0.5 * scene.edge + cell);
-    let mut lifted = Vec::new();
-    for off in [false, true] {
-        let mut run = BoxRun::of(def.clone(), false, false, off);
-        let mut most = 0;
-        for _ in 1..=60 {
-            run.step();
-            most = most.max(run.water_above(surface, half));
-        }
-        let height = run.body_height();
-        println!("rising box, separation {}: box centre at {height:.3} m, most water above the surface in its footprint {most}", if off { "off" } else { "on" });
-        assert!(height > f64::from(scene.fill), "separation off {off}: the box did not clear the surface ({height} m)");
-        lifted.push(most);
+    let mut run = BoxRun::of(def, false, false);
+    for _ in 1..=60 {
+        run.step();
     }
-    assert!(lifted[0] < lifted[1], "separating solids lifted {} particles, holding solids {}", lifted[0], lifted[1]);
+    let height = run.body_height();
+    println!("rising box: box centre at {height:.3} m");
+    assert!(height > f64::from(scene.fill), "the box did not clear the surface ({height} m)");
 }

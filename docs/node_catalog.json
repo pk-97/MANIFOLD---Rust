@@ -9716,7 +9716,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Copy one axis of a face grid (node.gpu_flip_step's faces, one FaceSample per cell of the authored box plus one along each axis) into the liquid seam's face array for that axis: (cells + 1) along the axis by cells on the other two, x fastest, velocity in m/s. nodes_x/y/z are the padded lattice's (node.gpu_flip_domain's), so the box has nodes − 7 cells per axis. Faces with weight 0 read 0. The storage holds one float per face grid record, a little more than the axis has faces; readers size the axis from the lattice.",
+      "purpose": "Copy one axis of a face grid (node.gpu_flip_step's faces, one FaceSample per cell of the authored box plus one along each axis) into the liquid seam's face array for that axis: (cells + 1) along the axis by cells on the other two, x fastest, velocity in m/s. nodes_x/y/z are the padded lattice's (node.gpu_flip_domain's), so GPU FLIP has nodes − 4 solver cells per axis. These wires retain the authored lattice contract; use the domain nodes, not frame grid_nodes. Faces with weight 0 read 0. The storage holds one float per face grid record, a little more than the axis has faces; readers size the axis from the lattice.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Hands one direction of the water's velocity grid to effects that follow the water.",
@@ -14741,6 +14741,10 @@
           "type": "f32"
         },
         {
+          "name": "mesh_wall_inset",
+          "type": "f32"
+        },
+        {
           "capacity": "fixed:1",
           "name": "bodies",
           "type": "Array"
@@ -15512,16 +15516,6 @@
           "type": "int"
         },
         {
-          "default": "20",
-          "label": "Top Speed",
-          "name": "top_speed",
-          "range": [
-            "0.1",
-            "1000"
-          ],
-          "type": "float"
-        },
-        {
           "default": "1",
           "label": "Ghost Fluid",
           "name": "ghost_fluid",
@@ -15532,7 +15526,7 @@
           "type": "int"
         },
         {
-          "default": "1",
+          "default": "0",
           "label": "Volume Projection",
           "name": "volume_projection",
           "range": [
@@ -19553,6 +19547,11 @@
           "name": "particle_capacity",
           "required": false,
           "type": "f32"
+        },
+        {
+          "name": "wall_inset",
+          "required": false,
+          "type": "f32"
         }
       ],
       "label": "Liquid Fill",
@@ -19757,9 +19756,19 @@
             "16777216"
           ],
           "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "Wall Inset (cells)",
+          "name": "wall_inset",
+          "range": [
+            "0",
+            "8"
+          ],
+          "type": "float"
         }
       ],
-      "purpose": "Place a liquid's starting particles at rest, one per half-cell site of the authored box inside the padded lattice (node.gpu_flip_domain's lattice wires: the box starts 3 cells in and has nodes − 7 cells per axis; site j at (1/4 + j/2) cells along each axis, 2 sites per cell): every site below pool_sites, then the box of sites [box_x0, x1) × [max(box_y0, pool_sites), y1) × [box_z0, z1), in lattice order. Each particle moves up to jitter / 4 cells each way by a hash of seed; 0 keeps the exact lattice. The radius is the sphere of an eighth of a cell; ids count from 1. A site inside one of the first body_count bodies at its pose when the epoch starts (its distance lattice at or below zero) is left dead, radius 0. The storage holds the larger of the sites covered and particle_capacity (0 = the sites covered), and count is its slot count: slots past the fill start dead, for sources to emit into. A pool past the 16,777,216 particles a count carries exactly is refused.",
+      "purpose": "Place a liquid's starting particles at rest, one per half-cell site of the authored box inside the padded lattice (node.gpu_flip_domain's lattice wires: the box starts 3 cells in and has nodes − 7 cells per axis; site j at (1/4 + j/2) cells along each axis, 2 sites per cell): every site below pool_sites, then the box of sites [box_x0, x1) × [max(box_y0, pool_sites), y1) × [box_z0, z1), in lattice order. Each particle moves up to jitter / 4 cells each way by a hash of seed; 0 keeps the exact lattice. The radius is the sphere of an eighth of a cell; ids count from 1. A site inside one of the first body_count bodies at its pose when the epoch starts (its distance lattice at or below zero) is left dead, radius 0. With wall_inset above 0 (node.gpu_flip_domain's mesh_wall_inset) the test is the FLIP engine's instead: the six walls, wall_inset cells in from a grid 1.5 cells outside the box, and the bodies, read together trilinearly from that grid's nodes. The storage holds the larger of the sites covered and particle_capacity (0 = the sites covered), and count is its slot count: slots past the fill start dead, for sources to emit into. A pool past the 16,777,216 particles a count carries exactly is refused.",
       "role": "Source",
       "stratum": "atom",
       "summary": "Places the liquid's starting particles: a pool on the floor plus one block of water.",
@@ -19984,12 +19993,6 @@
         }
       ],
       "params": [
-        {
-          "default": "false",
-          "label": "Native Mesh Grid",
-          "name": "native_mesh_grid",
-          "type": "bool"
-        },
         {
           "default": "63",
           "label": "Closed Faces (bits −X +X −Y +Y −Z +Z)",
@@ -20238,7 +20241,7 @@
           "type": "float"
         }
       ],
-      "purpose": "Write a liquid domain's solid lattice: per lattice node, the smaller of the distance to the nearest closed wall (Wall Inset nodes in from the lattice edge) and every enabled body's signed distance at the end of this frame's last tick (positive in free space, negative inside a solid). Bodies are sampled from their shapes' lattices in the atlas through their pose, scaled by each shape's smallest scale.",
+      "purpose": "Write a liquid domain's solid lattice: per lattice node, the smaller of the distance to the nearest closed wall (Wall Inset nodes in from the lattice edge) and every enabled body's signed distance at the end of this frame's last tick (positive in free space, negative inside a solid). Bodies are sampled from their shapes' lattices in the atlas through their pose, in metres along each shape's stretch at the surface.",
       "role": "Filter",
       "stratum": "atom",
       "summary": "Marks where the walls and solid objects are around a liquid, so its surface stops at them.",
@@ -49640,7 +49643,7 @@
             "0",
             "64"
           ],
-          "type": "int"
+          "type": "float"
         },
         {
           "default": "0",
@@ -142484,7 +142487,7 @@
           "name": "Reset"
         },
         {
-          "default": "0",
+          "default": "1",
           "id": "surface_detail",
           "max": "2",
           "min": "0",
@@ -142498,7 +142501,7 @@
           "name": "Environment"
         },
         {
-          "default": "3",
+          "default": "2.2",
           "id": "surface_particle_scale",
           "max": "4",
           "min": "1",
@@ -142512,14 +142515,14 @@
           "name": "Smoothing Value"
         },
         {
-          "default": "3",
+          "default": "0.1",
           "id": "water_attenuation",
           "max": "20",
           "min": "0.1",
           "name": "Water Absorption Distance"
         },
         {
-          "default": "0.055",
+          "default": "0.08826533",
           "id": "water_scattering",
           "max": "2",
           "min": "0",
@@ -143044,14 +143047,14 @@
           "name": "Light Size"
         },
         {
-          "default": "0.98",
+          "default": "0.37254903",
           "id": "441_color_r",
           "max": "1",
           "min": "0",
           "name": "Base Colour R"
         },
         {
-          "default": "0.99",
+          "default": "0.7294118",
           "id": "441_color_g",
           "max": "1",
           "min": "0",
@@ -143086,7 +143089,7 @@
           "name": "Metallic"
         },
         {
-          "default": "0.018",
+          "default": "0.5540391",
           "id": "441_roughness",
           "max": "1",
           "min": "0.01",
@@ -170579,14 +170582,14 @@
           "name": "Environment"
         },
         {
-          "default": "3",
+          "default": "0.1",
           "id": "water_attenuation",
           "max": "20",
           "min": "0.1",
           "name": "Water Absorption Distance"
         },
         {
-          "default": "0.055",
+          "default": "0.08826533",
           "id": "water_scattering",
           "max": "2",
           "min": "0",
@@ -171083,14 +171086,14 @@
           "name": "Light Size"
         },
         {
-          "default": "0.98",
+          "default": "0.37254903",
           "id": "441_color_r",
           "max": "1",
           "min": "0",
           "name": "Base Colour R"
         },
         {
-          "default": "0.99",
+          "default": "0.7294118",
           "id": "441_color_g",
           "max": "1",
           "min": "0",
@@ -171125,7 +171128,7 @@
           "name": "Metallic"
         },
         {
-          "default": "0.018",
+          "default": "0.5540391",
           "id": "441_roughness",
           "max": "1",
           "min": "0.01",

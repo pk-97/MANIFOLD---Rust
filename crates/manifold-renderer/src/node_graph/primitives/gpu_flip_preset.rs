@@ -19,7 +19,7 @@ use manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID;
 use serde_json::{Value, json};
 
 use super::gpu_flip_domain::{GpuFlipGeometry, gpu_flip_geometry};
-use super::gpu_flip_step::{AUTO_PRESSURE_ITERATIONS, DEFAULT_TOP_SPEED, FACE_VALID_LAYERS};
+use super::gpu_flip_step::{AUTO_PRESSURE_ITERATIONS, FACE_VALID_LAYERS};
 use crate::node_graph::bundled_presets::bundled_preset_json;
 #[cfg(all(test, feature = "gpu-proofs"))]
 use crate::node_graph::fluid::{FluidDomainLayout, domain_layout};
@@ -86,7 +86,8 @@ pub(crate) struct WaterScene {
     /// Mesh the liquid with the shipped GPU liquid surface.
     pub surface: bool,
     /// Surface lattice nodes per cell (`resolution_scale` of the surface's
-    /// volume and mesh): Surface Detail 0 is subdivision 1, the FLIP default.
+    /// volume and mesh): Surface Detail 1 is subdivision 2, matching the
+    /// effective native WaterDamBreak preset.
     pub surface_scale: usize,
     /// Publish the face grid: three node.face_sample_component named
     /// [`FACE_NODES`] on the state's faces after the region, into the frame.
@@ -96,9 +97,9 @@ pub(crate) struct WaterScene {
     /// (ghost fluid). Off wires zero distances: air at zero pressure on its
     /// cell centres, the race's comparison.
     pub ghost_fluid: bool,
-    /// The step's density projection (Volume Projection). The engine has
-    /// none, but without it the GPU Dam Break settles 21.5% too deep at 64
-    /// (interior 6.6 against 8 a cell after 1800 frames), so it stays on.
+    /// Optional non-native density projection (Volume Projection). Off by
+    /// default: matched-input motion is closer to native without its extra
+    /// solve. Explicit saved opt-ins remain supported.
     pub volume_projection: bool,
     /// The Dam Break's box as a Collider role (`obstacle_transform` into
     /// `obstacle_collider` into the domain's `role_0`).
@@ -117,11 +118,6 @@ pub(crate) const FACE_NODES: [&str; 3] = ["face_u", "face_v", "face_w"];
 /// The water step node in every scene.
 pub(crate) const STEP_NODE: &str = "step";
 
-/// The fastest water a step is built for (m/s): the Dam Break's splash tops
-/// out near 13 m/s at 64³ and 19–25 m/s at 128³, the FLIP Fluids engine's
-/// at 12 and 17. The step turns it into the CFL guard.
-pub(crate) const TOP_SPEED: f64 = DEFAULT_TOP_SPEED as f64;
-
 /// Particles per cell the fill seeds: one per half-cell site.
 #[cfg(all(test, feature = "gpu-proofs"))]
 pub(crate) const REST_PER_CELL: f64 = 8.0;
@@ -137,10 +133,10 @@ impl WaterScene {
             fill_height: DAM_FILL_HEIGHT,
             column: DAM_COLUMN,
             surface: false,
-            surface_scale: 1,
+            surface_scale: 2,
             faces: false,
             ghost_fluid: true,
-            volume_projection: true,
+            volume_projection: false,
             obstacle: true,
             closed_faces: 63,
         }
@@ -230,7 +226,7 @@ impl WaterScene {
     }
 
     /// The cell side in metres: the tank's side over the lattice.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "gpu-proofs"))]
     pub fn cell_size(&self) -> f64 {
         self.size / self.pressure.n as f64
     }
@@ -241,22 +237,9 @@ impl WaterScene {
         Self { steps, ..self }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "gpu-proofs"))]
     pub fn step_dt(&self) -> f64 {
         1.0 / (60.0 * self.steps as f64)
-    }
-
-    /// The step's CFL guard at this scene's step and cell size.
-    #[cfg(all(test, feature = "water-race-probes"))]
-    pub fn travel_cells(&self) -> usize {
-        let travel = super::gpu_flip_step::travel_cells(DEFAULT_TOP_SPEED, self.step_dt() as f32, self.cell_size() as f32);
-        travel as usize
-    }
-
-    /// The layers the step extends its projected faces by.
-    #[cfg(all(test, feature = "water-race-probes"))]
-    pub fn band_layers(&self) -> usize {
-        super::gpu_flip_step::band_layers(super::gpu_flip_step::ENGINE_CFL) as usize
     }
 
     /// The tank: the domain's layout at this resolution, no domain box.
@@ -453,6 +436,7 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     b.wires(domain, fill, &FILL_WIRES);
     b.wires(domain, fill, &LATTICE_WIRES);
     b.wires(domain, fill, &["bodies", "shapes", "atlas", "body_count", "epoch", "particle_capacity"]);
+    b.wire((domain, "mesh_wall_inset"), fill, "wall_inset");
     let count = (fill, "count");
     let state = b.node("state", "node.liquid_state", json!({}));
     b.wire((fill, "particles"), state, "seed");
@@ -481,27 +465,23 @@ pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
     b.wire((step, "interior"), state, "interior_in");
     b.wires(domain, state, &["nodes_x", "nodes_y", "nodes_z"]);
 
-    let solid = b.node("solid", "node.liquid_solid_distance", json!({}));
-    b.wires(domain, solid, &["bodies", "shapes", "atlas", "closed_faces", "body_count"]);
-    b.wires(domain, solid, &LATTICE_WIRES);
-    b.wire((domain, "body_rows"), solid, "rows");
-    // Whitewater remains on the simulation lattice. Surface and clamp share
-    // a separately sampled solid at the native half-cell mesh coordinates.
-    let solid = b.node("mesh_solid", "node.liquid_solid_distance", json!({"wall_inset": float(f64::from(crate::node_graph::liquid::lattice::SURFACE_PADDING_CELLS))}));
-    b.wires(domain, solid, &["bodies", "shapes", "atlas", "closed_faces", "body_count"]);
-    b.wire((domain, "cell_size"), solid, "cell_size");
-    for (source, target) in [
+    // Solver faces, published surface and whitewater share the native grid.
+    const NATIVE_GRID: [(&str, &str); 6] = [
         ("mesh_min_x", "lattice_min_x"), ("mesh_min_y", "lattice_min_y"), ("mesh_min_z", "lattice_min_z"),
         ("mesh_nodes_x", "nodes_x"), ("mesh_nodes_y", "nodes_y"), ("mesh_nodes_z", "nodes_z"),
-    ] {
-        b.wire((domain, source), solid, target);
-    }
-    b.wire((domain, "body_rows"), solid, "rows");
+    ];
+    let solid = b.node("mesh_solid", "node.liquid_solid_distance", json!({}));
     let source = b.node("whitewater_obstacle_source", "node.whitewater_obstacle_source", json!({}));
-    b.wires(domain, source, &["bodies", "shapes", "atlas", "closed_faces", "body_count"]);
-    b.wires(domain, source, &LATTICE_WIRES);
-    b.wire((domain, "body_rows"), source, "rows");
-    let frame = b.node("frame", "node.liquid_frame", json!({"face_valid_layers": int(FACE_VALID_LAYERS as usize), "native_mesh_grid": {"type": "Bool", "value": true}}));
+    for node in [solid, source] {
+        b.wires(domain, node, &["bodies", "shapes", "atlas", "closed_faces", "body_count"]);
+        b.wire((domain, "cell_size"), node, "cell_size");
+        for (from, to) in NATIVE_GRID {
+            b.wire((domain, from), node, to);
+        }
+        b.wire((domain, "body_rows"), node, "rows");
+        b.wire((domain, "mesh_wall_inset"), node, "wall_inset");
+    }
+    let frame = b.node("frame", "node.liquid_frame", json!({"face_valid_layers": int(FACE_VALID_LAYERS as usize)}));
     b.wire((state, "out"), frame, "particles");
     b.wire((state, "stats"), frame, "stats");
     b.wire((state, "identity"), frame, "identity");
@@ -1089,7 +1069,6 @@ fn water_step(b: &mut Builder, scene: WaterScene, tick: (usize, usize)) -> usize
                 ("steps", int(scene.steps)),
                 ("flip", float(scene.flip)),
                 ("iterations", iterations(scene.pressure.iterations, AUTO_PRESSURE_ITERATIONS)),
-                ("top_speed", float(TOP_SPEED)),
                 ("ghost_fluid", int(usize::from(scene.ghost_fluid))),
                 ("volume_projection", int(usize::from(scene.volume_projection))),
             ],
@@ -1140,7 +1119,26 @@ pub(super) mod tests {
     use super::*;
     use crate::node_graph::liquid::extent::{AtomExtent, ExtentError, ExtentReport, ExtentRule, LIQUID_EXTENT_RULES, Verdict, check_graph};
     use crate::node_graph::substeps::test_nodes::register_substep_test_nodes;
-    use crate::node_graph::{EffectGraphDefExt, ExecutionPlan, Graph, PrimitiveRegistry, compile};
+    use crate::node_graph::{EffectGraphDefExt, ExecutionPlan, Graph, ParamValue, PrimitiveRegistry, compile};
+
+    #[test]
+    fn gpu_flip_defaults_disable_optional_corrections_and_preserve_opt_ins() {
+        use super::super::gpu_flip_step::GpuFlipStep;
+        use crate::node_graph::parameters::ParamValue;
+        use crate::node_graph::primitive::PrimitiveSpec;
+
+        assert!(!WaterScene::dam_break(64).volume_projection);
+        for name in ["volume_projection", "narrow_band", "solve_level"] {
+            let param = GpuFlipStep::PARAMS.iter().find(|p| p.name == name).unwrap();
+            assert_eq!(param.default, ParamValue::Float(0.0), "{name}");
+        }
+        for enabled in [false, true] {
+            let def = water_def(WaterScene { volume_projection: enabled, ..WaterScene::dam_break(64) });
+            let step = def.nodes.iter().find(|n| n.node_id.as_str() == STEP_NODE).unwrap();
+            let params = serde_json::to_value(&step.params).unwrap();
+            assert_eq!(params["volume_projection"]["value"], i32::from(enabled));
+        }
+    }
 
     fn registry() -> PrimitiveRegistry {
         let mut registry = PrimitiveRegistry::with_builtin();
@@ -1211,8 +1209,6 @@ pub(super) mod tests {
             let domain = id("domain");
             let solid = id("mesh_solid");
             let frame = id("frame");
-            assert!(matches!(def.nodes.iter().find(|n| n.id == frame).unwrap().params.get("native_mesh_grid"),
-                Some(manifold_core::effect_graph_def::SerializedParamValue::Bool { value: true })));
             for (d, axis) in ["x", "y", "z"].into_iter().enumerate() {
                 assert_eq!(read(&format!("mesh_nodes_{axis}")), (resolution + 4) as f32);
                 assert_eq!(read(&format!("mesh_min_{axis}")), surface.min()[d]);
@@ -1283,7 +1279,7 @@ pub(super) mod tests {
         let body: Vec<String> = region.steps.iter().map(|&step| name(step)).collect();
         assert_eq!(body.iter().filter(|node| *node == STEP_NODE).count(), 1, "the tick runs one step node");
         assert!(body.iter().any(|node| node == "stats"), "the stats run every tick");
-        let outside = ["domain", "fill", "solid", "mesh_solid", "frame", "initial_column"];
+        let outside = ["domain", "fill", "mesh_solid", "frame", "initial_column"];
         assert!(!body.iter().any(|node| outside.contains(&node.as_str()) || node.starts_with("surface")), "{body:?}");
     }
 
@@ -1303,6 +1299,17 @@ pub(super) mod tests {
                 assert!(bytes > 0);
             }
         }
+    }
+
+    /// Full array and held-buffer accounting at the shipped resolution. This
+    /// excludes textures and later mesh growth; it is not a frame-time proof.
+    #[test]
+    fn gpu_flip_native_surface_detail_memory_at_64() {
+        let coarse = rendered_scene_bytes(WaterScene::dam_break(64).with_surface_scale(1));
+        let matched = rendered_scene_bytes(WaterScene::dam_break(64).with_surface_scale(2));
+        assert!(matched > coarse);
+        println!("GPU FLIP 64³ rendered arrays/held buffers: detail 0 {coarse} bytes; native-matched detail 1 {matched} bytes; increase {} bytes", matched - coarse);
+        assert_eq!(WaterScene::dam_break(64).surface_scale, 2);
     }
 
     /// Resolution is a card: the graph built at 64 runs at any Resolution,
@@ -1435,39 +1442,68 @@ pub(super) mod tests {
         }
     }
 
-    /// The step's CFL guard and band at the lattices the extent walk covers,
-    /// never under the valid layers the frame publishes, which the
-    /// conformance row's face grid scene holds.
+    /// Velocity extension follows the native configured CFL and covers the
+    /// face grid's published valid layers.
     #[test]
-    fn gpu_flip_band_uses_engine_cfl_independent_of_travel() {
-        use super::super::gpu_flip_step::{ENGINE_CFL, band_layers, travel_cells};
+    fn gpu_flip_band_uses_engine_cfl() {
+        use super::super::gpu_flip_step::{ENGINE_CFL, band_layers};
         use crate::node_graph::liquid::conformance::FACE_GRID_GPU_FLIP_LAYERS;
         assert_eq!(FACE_GRID_GPU_FLIP_LAYERS, FACE_VALID_LAYERS);
-        let at = |n: usize, steps: usize| {
-            let s = WaterScene::dam_break(n).with_steps(steps);
-            let travel = travel_cells(TOP_SPEED as f32, s.step_dt() as f32, s.cell_size() as f32);
-            (travel, band_layers(ENGINE_CFL))
-        };
-        let bands = [at(64, 2), at(64, 1), at(128, 2), at(96, 2), at(16, 2)];
-        assert_eq!(bands, [(3, 12), (6, 12), (6, 12), (4, 12), (1, 12)]);
-        assert!(bands.iter().all(|&(_, band)| band >= FACE_VALID_LAYERS));
+        assert_eq!(band_layers(ENGINE_CFL), 12);
+        assert!(band_layers(ENGINE_CFL) >= FACE_VALID_LAYERS);
     }
 
-    /// The shipped JSON owns the authored surface. All solver presets copy
-    /// that group, including its indexed mesh and independent shaping controls.
+    /// Solver presets share the authored surface structure. Particle support
+    /// and surface detail remain scene-specific tuning on that same graph.
     #[test]
     fn gpu_flip_surface_group_is_shared_with_all_water_presets() {
         let source = surface_group();
         let group = &source["group"];
         assert_eq!(group["nodes"].as_array().unwrap().len(), 33);
+        let structure = |value: &Value| {
+            let mut value = value.clone();
+            for node in value["nodes"].as_array_mut().unwrap() {
+                match node["nodeId"].as_str() {
+                    Some("liquid_blobs") => node["params"]["particle_scale"]["value"] = json!(0.0),
+                    Some("liquid_volume" | "liquid_mesh" | "liquid_bricks") => {
+                        node["params"]["resolution_scale"]["value"] = json!(0);
+                    }
+                    _ => {}
+                }
+            }
+            value
+        };
         let registry = PrimitiveRegistry::with_builtin();
         for name in [SHIPPED_PRESET, "WaterDamBreakGpu", "WaterDamBreakMatter", "WaterStillPoolMatter", "WaterFloatingBoxMatter"] {
             let json = bundled_preset_json(&PresetTypeId::new(name)).unwrap();
             let preset: Value = serde_json::from_str(&json).unwrap();
             let surface = preset["nodes"].as_array().unwrap().iter()
                 .find(|n| n["handle"] == "Liquid Surface").unwrap();
-            assert_eq!(&surface["group"], group, "{name}: authored surface drift");
-            assert_eq!(surface["params"], source["params"], "{name}: defaults drift");
+            assert_eq!(structure(&surface["group"]), structure(group), "{name}: authored surface drift");
+            let particle_scale = if name == SHIPPED_PRESET { 2.2_f32 } else { 3.0 };
+            let mut defaults = surface["params"].clone();
+            assert_eq!(defaults["particle_scale"]["value"].as_f64().unwrap() as f32, particle_scale, "{name}: particle support");
+            defaults["particle_scale"] = source["params"]["particle_scale"].clone();
+            assert_eq!(defaults, source["params"], "{name}: other defaults drift");
+            let blobs = surface["group"]["nodes"].as_array().unwrap().iter()
+                .find(|n| n["nodeId"] == "liquid_blobs").unwrap();
+            assert_eq!(blobs["params"]["particle_scale"]["value"].as_f64().unwrap() as f32, particle_scale);
+            let surface_detail = if name == SHIPPED_PRESET { 1.0 } else { 0.0 };
+            for node in surface["group"]["nodes"].as_array().unwrap().iter()
+                .filter(|n| matches!(n["nodeId"].as_str(), Some("liquid_volume" | "liquid_mesh" | "liquid_bricks"))) {
+                assert_eq!(node["params"]["resolution_scale"]["value"].as_f64().unwrap(), surface_detail + 1.0, "{name}: {}", node["nodeId"]);
+            }
+            for list in ["params", "bindings"] {
+                let entries = preset["presetMetadata"][list].as_array().unwrap();
+                let support: Vec<_> = entries.iter().filter(|entry| entry["id"] == "surface_particle_scale").collect();
+                assert_eq!(support.len(), 1, "{name}: one particle support {list} entry");
+                assert_eq!(support[0]["defaultValue"].as_f64().unwrap() as f32, particle_scale, "{name}: {list}");
+                let detail: Vec<_> = entries.iter().filter(|entry| entry["id"] == "surface_detail").collect();
+                assert_eq!(detail.len(), if list == "params" { 1 } else { 3 }, "{name}: surface detail {list} entries");
+                for entry in detail {
+                    assert_eq!(entry["defaultValue"].as_f64().unwrap(), surface_detail, "{name}: {list}");
+                }
+            }
             for param in ["stretch", "smoothing", "fill_pits", "smoothing_iterations"] {
                 assert!(surface["params"][param]["value"].is_number(), "{name}: {param}");
             }
@@ -1494,6 +1530,75 @@ pub(super) mod tests {
                 .filter(|b| b["id"] == "surface_detail").collect::<Vec<_>>();
             assert_eq!(detail.len(), 3, "{name}: detail reaches volume, mesh and bricks");
             assert!(detail.iter().all(|b| b["offset"] == 1.0));
+        }
+    }
+
+    #[test]
+    fn gpu_flip_surface_defaults_match_effective_native_dam_break_cards() {
+        let registry = PrimitiveRegistry::with_builtin();
+        let native = bundled_preset_json(&PresetTypeId::new("WaterDamBreak")).unwrap();
+        let native = crate::preset_runtime::PresetRuntime::from_json_str(&native, &registry).unwrap();
+        let gpu = crate::preset_runtime::PresetRuntime::from_def(
+            render_def(WaterScene::dam_break(64)), &registry, None,
+        ).unwrap();
+        let param = |runtime: &crate::preset_runtime::PresetRuntime, node: &str, name: &str| {
+            let id = runtime.graph.instance_by_node_id(&manifold_core::NodeId::new(node)).unwrap();
+            runtime.graph.get_node(id).unwrap().params.get(name).cloned().unwrap()
+        };
+        assert_eq!(param(&native, "fluid_surface", "surface_particle_scale"), ParamValue::Float(2.2));
+        assert_eq!(param(&native, "fluid_surface", "surface_subdivisions"), ParamValue::Float(1.0));
+        assert_eq!(param(&gpu, "liquid_blobs", "particle_scale"), param(&native, "fluid_surface", "surface_particle_scale"));
+        for node in ["liquid_volume", "liquid_mesh", "liquid_bricks"] {
+            assert_eq!(param(&gpu, node, "resolution_scale"), ParamValue::Float(2.0), "{node}");
+        }
+        assert_eq!(param(&gpu, "liquid_mesh_relaxation", "value"), param(&native, "fluid_surface", "surface_smoothing"));
+        assert_eq!(param(&gpu, "liquid_smooth_mesh", "iterations"), param(&native, "fluid_surface", "surface_smoothing_iterations"));
+        assert_eq!(param(&gpu, "liquid_blobs", "stretch"), ParamValue::Float(1.0));
+        assert_eq!(param(&gpu, "liquid_blobs", "smoothing"), ParamValue::Float(0.0));
+        assert_eq!(param(&gpu, "liquid_smoothing_passes", "value"), ParamValue::Float(0.0));
+        assert!(gpu.shadowed_def_params().next().is_none(), "fresh defaults agree with the authored graph");
+    }
+
+    /// Native layer 0's water_material in flipEngineVSGPUFLIP.manifold:
+    /// saved RGB (.37254903, .7294118, 1), roughness .5540391, absorption
+    /// distance .1 and scattering .08826533 override its raw graph defaults.
+    /// The other authored values and all omitted PBR defaults match that save.
+    #[test]
+    fn gpu_flip_water_material_matches_saved_native_reference() {
+        let registry = PrimitiveRegistry::with_builtin();
+        for def in [render_def(WaterScene::dam_break(64)), particle_view_def()] {
+            let material = def.nodes.iter().find(|n| n.node_id.as_str() == "water_material").unwrap();
+            assert_eq!(material.params.len(), 18, "the material retains its authored parameter surface");
+            let runtime = crate::preset_runtime::PresetRuntime::from_def(def, &registry, None).unwrap();
+            let id = runtime.graph.instance_by_node_id(&manifold_core::NodeId::new("water_material")).unwrap();
+            let material = runtime.graph.get_node(id).unwrap();
+            for (name, expected) in [
+                ("ambient", 0.0), ("color_r", 0.37254903), ("color_g", 0.7294118), ("color_b", 1.0),
+                ("metallic", 0.0), ("roughness", 0.5540391), ("ior", 1.333), ("transmission", 1.0),
+                ("volume_attenuation_color_r", 0.35), ("volume_attenuation_color_g", 0.72), ("volume_attenuation_color_b", 0.8),
+                ("volume_attenuation_distance", 0.1), ("volume_geometry", 1.0), ("volume_thickness", 0.09),
+                ("volume_scattering_color_r", 0.68), ("volume_scattering_color_g", 0.86), ("volume_scattering_color_b", 0.92),
+                ("volume_scattering_density", 0.08826533),
+            ] {
+                assert_eq!(material.params.get(name), Some(&ParamValue::Float(expected)), "{name}");
+            }
+            assert!(runtime.shadowed_def_params().next().is_none(), "material defaults agree with the authored graph");
+        }
+        let preset = shipped_preset();
+        for (card, target, expected) in [
+            ("water_attenuation", "volume_attenuation_distance", 0.1_f32),
+            ("water_scattering", "volume_scattering_density", 0.08826533_f32),
+        ] {
+            for list in ["params", "bindings"] {
+                let entries: Vec<_> = preset["presetMetadata"][list].as_array().unwrap().iter()
+                    .filter(|entry| entry["id"] == card).collect();
+                assert_eq!(entries.len(), 1, "{card}: {list}");
+                assert_eq!(entries[0]["defaultValue"].as_f64().unwrap() as f32, expected);
+                if list == "bindings" {
+                    assert_eq!(entries[0]["target"]["nodeId"], "water_material");
+                    assert_eq!(entries[0]["target"]["param"], target);
+                }
+            }
         }
     }
 

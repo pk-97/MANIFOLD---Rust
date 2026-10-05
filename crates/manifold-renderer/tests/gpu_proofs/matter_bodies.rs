@@ -822,11 +822,15 @@ fn matter_solid_lattice_matches_bodies() {
     let high: [f32; 3] = std::array::from_fn(|d| low[d] + lat.cells()[d] as f32 * dx);
     let far = lat.nodes().iter().map(|&n| (n as f32 * dx).powi(2)).sum::<f32>().sqrt();
     let n = lat.nodes();
-    let (mut near, mut worst_near, mut worst_far) = (0, 0.0f32, 0.0f32);
+    let (mut near, mut worst_near, mut worst_far, mut worst_reach) = (0, 0.0f32, 0.0f32, 0.0f32);
     for (idx, &value) in solid.iter().enumerate().take(lat.node_count() as usize) {
         let coord = [idx as u32 % n[0], (idx as u32 / n[0]) % n[1], idx as u32 / (n[0] * n[1])];
         let x: [f32; 3] = std::array::from_fn(|d| lat.min()[d] + coord[d] as f32 * dx);
-        let walls = (0..3).fold(far, |m, d| m.min(x[d] - low[d]).min(high[d] - x[d]));
+        // Inside the walls the nearest one; past them the Euclidean depth
+        // into the solid, as the FLIP engine's inverted box measures it.
+        let gap: [f32; 3] = std::array::from_fn(|d| (x[d] - low[d]).min(high[d] - x[d]));
+        let depth = gap.iter().map(|g| g.min(0.0).powi(2)).sum::<f32>().sqrt();
+        let walls = if depth > 0.0 { -depth } else { gap.iter().fold(far, |m, &g| m.min(g)) };
         let body = box_distance(x, centre, yaw, size);
         // The cube's lattice reaches two spacings (1/16 of its side) past it.
         // Trilinear sampling of a box's distance is off by up to 0.21 spacings
@@ -837,14 +841,26 @@ fn matter_solid_lattice_matches_bodies() {
             near += 1;
             worst_near = worst_near.max((value - walls.min(body)).abs());
         } else if body > 0.25 {
-            worst_far = worst_far.max((value - walls).abs());
+            // Past its lattice the cube reads at least its true distance, so
+            // where the walls are nearer the lattice is exactly theirs.
+            if walls < body {
+                worst_far = worst_far.max((value - walls).abs());
+            } else {
+                worst_reach = worst_reach.max((value - body).abs());
+            }
         }
     }
-    eprintln!("matter_solid_lattice_matches_bodies: {near} nodes at the cube within {worst_near:.5} m, walls within {worst_far:e} m");
+    eprintln!("matter_solid_lattice_matches_bodies: {near} nodes at the cube within {worst_near:.5} m, walls within {worst_far:e} m, the cube past its lattice within {worst_reach:.5} m");
     assert!(near > 100, "few nodes near the cube: {near}");
     let spacing = 0.25 / 32.0;
     assert!(worst_near < 0.3 * spacing, "near the cube the lattice is off by {worst_near} m");
     assert!(worst_far < 1e-5, "away from it the walls are off by {worst_far} m");
+    // Past the lattice the edge point c's distance plus the gap: the true
+    // distance is at least the gap plus the two-spacing padding p, and d(c)
+    // is at most √3·p, so the excess is under (√3 − 1)·p, plus the sampling
+    // bound at c.
+    let padding = 2.0 * spacing;
+    assert!(worst_reach < (3f32.sqrt() - 1.0) * padding + 0.3 * spacing, "past its lattice the cube is off by {worst_reach} m");
 }
 
 /// D11 with the fill (section 3.2): a box standing in the pool from the

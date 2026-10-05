@@ -1784,7 +1784,10 @@ fn fluid_mesh_grid_native_solid_and_clamp_match_engine() {
         let settings = params(&[
             ("lattice_min_x", mesh.min()[0]), ("lattice_min_y", mesh.min()[1]), ("lattice_min_z", mesh.min()[2]),
             ("nodes_x", n[0] as f32), ("nodes_y", n[1] as f32), ("nodes_z", n[2] as f32),
-            ("cell_size", mesh.cell_size()), ("wall_inset", 1.5), ("closed_faces", 63.0),
+            ("cell_size", mesh.cell_size()),
+            ("wall_inset", crate::node_graph::liquid::lattice::FlipSolverGrid::from_lattice(
+                crate::node_graph::liquid::lattice::LiquidLattice::from_layout(&layout)).wall_inset()),
+            ("closed_faces", 63.0),
         ]);
         let (_, errors) = harness.run(&mut LiquidSolidDistance::new(),
             &[("bodies", bodies), ("shapes", shapes), ("atlas", atlas)], &[("solid", solid)], &settings);
@@ -1793,10 +1796,12 @@ fn fluid_mesh_grid_native_solid_and_clamp_match_engine() {
         // Native node p = domain_min + (i - 1.5)h; distance to all six walls.
         for (i, &value) in values.iter().enumerate() {
             let q = [i as u32 % n[0], i as u32 / n[0] % n[1], i as u32 / (n[0] * n[1])];
-            let expected = q.into_iter().map(|v| {
+            let distances = q.map(|v| {
                 let x = (f64::from(v) - 1.5) * layout.cell_size;
-                x.min(2.0 - x)
-            }).fold(f64::INFINITY, f64::min);
+                (x - 5e-5).min(2.0 - 5e-5 - x)
+            });
+            let outside = distances.map(|d| d.min(0.0).powi(2)).into_iter().sum::<f64>().sqrt();
+            let expected = if outside > 0.0 { -outside } else { distances.into_iter().fold(f64::INFINITY, f64::min) };
             assert!((f64::from(value) - expected).abs() < 1e-6);
         }
         let simulation = crate::node_graph::liquid::lattice::LiquidLattice::from_layout(&layout);
@@ -1807,12 +1812,11 @@ fn fluid_mesh_grid_native_solid_and_clamp_match_engine() {
         let (identity, _) = harness.array::<u32>(&[2, 0, 0, 0], 4);
         let (published, _) = harness.array::<f32>(&[], 1);
         let grid_nodes: [Slot; 3] = std::array::from_fn(|_| harness.scalar());
-        let mut frame_params = params(&[
+        let frame_params = params(&[
             ("lattice_min_x", simulation.min()[0]), ("lattice_min_y", simulation.min()[1]), ("lattice_min_z", simulation.min()[2]),
             ("nodes_x", simulation.nodes()[0] as f32), ("nodes_y", simulation.nodes()[1] as f32), ("nodes_z", simulation.nodes()[2] as f32),
             ("cell_size", simulation.cell_size()), ("count", 1.0), ("simulation_time", 1.0),
         ]);
-        frame_params.insert("native_mesh_grid".into(), ParamValue::Bool(true));
         let mut frame = super::liquid_frame::LiquidFrame::new();
         frame.prepare_pipelines(&harness.device);
         let (scalars, errors) = harness.run(&mut frame,

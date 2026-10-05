@@ -30,8 +30,8 @@ const MIN: [f32; 3] = [-0.5, 0.1, 0.3];
 /// The native solid push target in cells.
 const WALL_MARGIN_CELLS: f64 = 0.2;
 const BOUNDARY_MARGIN_CELLS: f64 = 0.1;
-const BOUNDARY_EPS_METRES: f64 = 0.00005;
-const PADDED_GRID_MARGIN_CELLS: f64 = 1.5;
+/// The fixtures' walls sit on the lattice edge: their step's wall_inset is 0.
+const FIXTURE_WALL_INSET: f64 = 0.0;
 const MOVE_EPS_METRES: f64 = 1.0e-6;
 const SOLID_STEP_CELLS: f64 = 0.1;
 const SOLID_PUSH_CELLS: f64 = 5.0;
@@ -135,8 +135,8 @@ fn wall_gradient(q: [f64; 3], n: [usize; 3]) -> [f64; 3] {
     out
 }
 
-fn boundary_edge(h: f64) -> f64 {
-    BOUNDARY_MARGIN_CELLS + BOUNDARY_EPS_METRES / h
+fn boundary_edge() -> f64 {
+    FIXTURE_WALL_INSET + BOUNDARY_MARGIN_CELLS
 }
 
 fn inside_boundary_cpu(q: [f64; 3], n: [usize; 3], edge: f64) -> bool {
@@ -163,8 +163,8 @@ fn native_collision_move(
     q0: [f64; 3], mut q1: [f64; 3], n: [usize; 3], h: f64,
     phi: impl Fn([f64; 3]) -> f64, gradient: impl Fn([f64; 3]) -> [f64; 3],
 ) -> [f64; 3] {
-    let edge = boundary_edge(h);
-    if (0..3).any(|a| q1[a] < -PADDED_GRID_MARGIN_CELLS || q1[a] >= n[a] as f64 + PADDED_GRID_MARGIN_CELLS) {
+    let edge = boundary_edge();
+    if (0..3).any(|a| q1[a] < 0.0 || q1[a] >= n[a] as f64) {
         q1 = clamp_boundary_cpu(q1, n, edge, h);
     }
     let travel = (0..3).map(|a| (q1[a] - q0[a]).powi(2)).sum::<f64>().sqrt();
@@ -208,10 +208,10 @@ fn native_collision_move(
 }
 
 #[test]
-fn native_wall_oracle_covers_margin_crossing_tangent_and_padded_escape() {
+fn native_wall_oracle_covers_margin_crossing_tangent_and_grid_escape() {
     let n = N;
     let h = f64::from(H);
-    let e = boundary_edge(h);
+    let e = boundary_edge();
     let y = 2.5;
     let stationary = native_wall_move([0.15, y, y], [0.15, y, y], n, h);
     assert_eq!(stationary, [0.15, y, y], "stationary point between .1h and .2h is unchanged");
@@ -222,10 +222,10 @@ fn native_wall_oracle_covers_margin_crossing_tangent_and_padded_escape() {
     let upper = native_wall_move([n[0] as f64 - 0.15, y, y], [n[0] as f64 - 0.05, y, y], n, h);
     assert!((upper[0] - (n[0] as f64 - 0.2)).abs() < 1e-12, "upper wall push: {upper:?}");
     let escaped = native_wall_move([2.0, y, y], [-2.0, y, y], n, h);
-    assert!((escaped[0] - e).abs() < 1e-12, "padded-grid escape clamps to the inclusive lower safety edge: {escaped:?}");
+    assert!((escaped[0] - e).abs() < 1e-12, "grid escape clamps to the inclusive lower safety edge: {escaped:?}");
     let upper_escape = native_wall_move([n[0] as f64 - 2.0, y, y], [n[0] as f64 + 2.0, y, y], n, h);
     let upper_bound = n[0] as f64 - e - MOVE_EPS_METRES / h;
-    assert!((upper_escape[0] - upper_bound).abs() < 1e-12, "upper padded escape uses the exclusive AABB epsilon: {upper_escape:?}");
+    assert!((upper_escape[0] - upper_bound).abs() < 1e-12, "upper grid escape uses the exclusive AABB epsilon: {upper_escape:?}");
     let tiny = native_wall_move([0.05, y, y], [0.050002, y, y], n, h);
     assert_eq!(tiny, [0.050002, y, y], "native movement epsilon is in metres");
     let fallback = native_collision_move([0.05, y, y], [0.05, y + 0.1, y], n, h, |_| 1.0, |_| [0.0; 3]);
@@ -642,7 +642,7 @@ fn random_phi(water: &[f32], seed: u64) -> Vec<f32> {
 
 /// Zero distances leave air pressure at zero, the plain Dirichlet projection;
 /// real distances give the air side the ghost pressure
-/// clamp(max(φ_air, 0) / (min(φ_water, −0.005h) + 1e-9), ±25) · p_water.
+/// clamp(max(φ_air, 0) / (min(φ_water, −0.005h) + 1e-6), ±25) · p_water.
 #[test]
 fn gpu_flip_subtract_pressure_projects_faces_touching_water() {
     let faces = random_faces(0x5b7, false);
@@ -686,15 +686,15 @@ fn gpu_flip_subtract_pressure_projects_faces_touching_water() {
                     let p_up = if wet_up { f64::from(pressure[up]) } else { ghost(up, down, &phi) };
                     let p_down = if wet_down { f64::from(pressure[down]) } else { ghost(down, up, &phi) };
                     if open[i].weight[a] <= 0.0 {
-                        // A closed face keeps its velocity for the
-                        // constraint to replace.
+                        // Pressure subtraction clears closed faces; the later
+                        // solid constraint writes their velocity independently.
                         closed += 1;
-                        (u, 1.0)
+                        (0.0, 0.0)
                     } else {
                         if wet_up != wet_down && (if wet_up { p_down } else { p_up }) != 0.0 {
                             ghosts += 1;
                         }
-                        if wet_up || wet_down { (u - (p_up - p_down) / f64::from(H), 1.0) } else { (u, 0.0) }
+                        if wet_up || wet_down { (u - (p_up - p_down) / f64::from(H), 1.0) } else { (0.0, 0.0) }
                     }
                 };
                 // Ghost pressures reach 25 × 3, a step of 300 over h.
@@ -727,7 +727,8 @@ fn gpu_flip_subtract_pressure_projects_faces_touching_water() {
                     }
                     let mut r = q;
                     r[a] = at as usize;
-                    // A closed face kept its velocity: no pressure crossed it.
+                    // A closed face contributes no pressure flux after the
+                    // producer-side validity clear.
                     let mut face = q;
                     face[a] = q[a].max(r[a]);
                     if open[pad_index(face)].weight[a] <= 0.0 {
@@ -740,13 +741,20 @@ fn gpu_flip_subtract_pressure_projects_faces_touching_water() {
                 }
             }
             let left = div(&got, q);
-            // The walls are closed: the divergence the solve saw carries no
-            // wall flux, as `divergence` writes it.
+            // Walls and inner closed faces carry no flux after subtraction;
+            // this explicitly includes the producer-side closed-face clear.
             let mut walled = faces.clone();
             for (i, face) in walled.iter_mut().enumerate() {
                 let p = pad_coords(i);
                 for a in 0..3 {
-                    if p[a] == 0 || p[a] == N[a] {
+                    let both_air = if face_exists(p, a) && p[a] > 0 && p[a] < N[a] {
+                        let mut below = p;
+                        below[a] -= 1;
+                        water[cell_index(p)] <= 0.5 && water[cell_index(below)] <= 0.5
+                    } else {
+                        false
+                    };
+                    if p[a] == 0 || p[a] == N[a] || open[i].weight[a] <= 0.0 || both_air {
                         face.velocity[a] = 0.0;
                     }
                 }
@@ -944,6 +952,41 @@ fn gpu_flip_extend_faces_waits_for_fluid_beside_walls() {
     }
 }
 
+#[test]
+fn gpu_flip_pressure_clear_precedes_face_extension() {
+    let target = [2, 2, 2];
+    let target_index = pad_index(target);
+    let mut faces = vec![FaceSample::default(); face_len()];
+    faces[target_index].velocity[0] = 9.0;
+    faces[pad_index([4, 2, 2])].velocity[0] = 13.0;
+    let open = vec![FaceSample { weight: [1.0; 4], ..FaceSample::default() }; face_len()];
+    // An inner closed high-velocity face and open faces between air cells must
+    // both be cleared by subtraction, so extension has no invalid seed.
+    let mut open = open;
+    open[target_index].weight[0] = 0.0;
+    let water = vec![0.0; cell_len()];
+    let pressure = vec![0.0; cell_len()];
+    let phi = vec![0.0; cell_len()];
+    let projected: Vec<FaceSample> = Pass::new()
+        .bind(20, &faces)
+        .bind(10, &open)
+        .bind(6, &water)
+        .bind(8, &pressure)
+        .bind(7, &phi)
+        .run("subtract_pressure", &lattice(), 20, face_len(), face_len());
+    assert_eq!(projected[target_index].velocity[0], 0.0, "closed inner velocity is cleared before extension");
+    assert_eq!(projected[target_index].weight[0], 0.0, "closed inner validity is cleared before extension");
+    assert_eq!(projected[pad_index([4, 2, 2])].velocity[0], 0.0, "open air-only velocity is cleared before extension");
+    let extended: Vec<FaceSample> = Pass::new()
+        .bind(3, &projected)
+        .run("extend_faces", &lattice(), 4, face_len(), face_len());
+    for x in [target[0] - 1, target[0], target[0] + 1] {
+        let index = pad_index([x, target[1], target[2]]);
+        assert_eq!(extended[index].velocity[0], 0.0, "closed air face cannot seed x-neighbour velocity at x={x}");
+        assert_eq!(extended[index].weight[0], 0.0, "closed air face cannot seed x-neighbour validity at x={x}");
+    }
+}
+
 fn density_support_sources() -> [String; 2] {
     const CULL: &str = "                    if finite(q) && any(abs(centre - q) >= vec3<f32>(1.0)) {\n                        continue;\n                    }\n";
     let source = include_str!("shaders/gpu_flip_step.wgsl");
@@ -1062,27 +1105,130 @@ fn gpu_flip_density_support_matches_original() {
     }
 }
 
-/// The kernel's per-component trilinear sample over faces with weight > 0,
-/// in f64. q is in cells from the lattice minimum.
+/// Native MACVelocityField's ordinary per-component trilinear sample, in f64.
+/// q is in cells from the lattice minimum. Missing corners contribute zero;
+/// face validity does not renormalise the interpolation.
 fn cpu_sample(q: [f64; 3], field: &[FaceSample]) -> [f64; 3] {
+    cpu_sample_on(q, field, N)
+}
+
+fn cpu_sample_on(q: [f64; 3], field: &[FaceSample], n: [usize; 3]) -> [f64; 3] {
+    if q.iter().any(|value| !value.is_finite() || *value < 0.0)
+        || q.iter().zip(n.iter()).any(|(value, &extent)| *value >= extent as f64)
+    {
+        return [0.0; 3];
+    }
     std::array::from_fn(|a| {
-        let top: [i64; 3] = std::array::from_fn(|b| if b == a { N[b] as i64 } else { N[b] as i64 - 1 });
+        let top: [i64; 3] = std::array::from_fn(|b| if b == a { n[b] as i64 } else { n[b] as i64 - 1 });
         let s: [f64; 3] = std::array::from_fn(|b| q[b] - if b == a { 0.0 } else { 0.5 });
-        let base: [i64; 3] = std::array::from_fn(|b| (s[b].floor() as i64).clamp(0, (top[b] - 1).max(0)));
-        let t: [f64; 3] = std::array::from_fn(|b| (s[b] - base[b] as f64).clamp(0.0, 1.0));
-        let (mut sum, mut total) = (0.0, 0.0);
+        let base: [i64; 3] = std::array::from_fn(|b| s[b].floor() as i64);
+        let t: [f64; 3] = std::array::from_fn(|b| s[b] - base[b] as f64);
+        let mut sum = 0.0;
         for corner in 0..8 {
             let bit = [corner & 1, (corner >> 1) & 1, (corner >> 2) & 1];
-            let c: [usize; 3] = std::array::from_fn(|b| (base[b] + bit[b] as i64).min(top[b]) as usize);
-            let face = field[pad_index(c)];
-            if face.weight[a] > 0.0 {
+            let c: [i64; 3] = std::array::from_fn(|b| base[b] + bit[b] as i64);
+            if (0..3).all(|b| c[b] >= 0 && c[b] <= top[b]) {
+                let c: [usize; 3] = c.map(|value| value as usize);
+                let face = field[c[0] + (n[0] + 1) * (c[1] + (n[1] + 1) * c[2])];
                 let w: f64 = (0..3).map(|b| if bit[b] == 1 { t[b] } else { 1.0 - t[b] }).product();
                 sum += w * f64::from(face.velocity[a]);
-                total += w;
             }
         }
-        if total > 1e-6 { sum / total } else { 0.0 }
+        sum
     })
+}
+
+#[test]
+fn cpu_sample_matches_native_mac_interpolation_and_bounds() {
+    // Constant stored values include invalid faces deliberately: native
+    // interpolation reads stored values and only fades missing lattice
+    // corners, independent of the validity weights.
+    let constant = vec![FaceSample { velocity: [2.0, 3.0, 5.0, 0.0], weight: [0.0; 4] }; face_len()];
+    let check = |q: [f64; 3], want: [f64; 3], label: &str| {
+        let got = cpu_sample(q, &constant);
+        for a in 0..3 {
+            assert!((got[a] - want[a]).abs() < 1e-12, "{label} component {a}: {} vs {}", got[a], want[a]);
+        }
+    };
+    check([2.0, 2.0, 2.0], [2.0, 3.0, 5.0], "constant interior");
+    check([0.25, 0.25, 0.25], [1.125, 1.6875, 2.8125], "lower corner fade");
+    check([5.75, 4.75, 3.75], [1.125, 1.6875, 2.8125], "upper corner fade");
+    check([0.0, 0.0, 0.0], [0.5, 0.75, 1.25], "lower inclusive corner");
+    check([-f64::EPSILON, 1.0, 1.0], [0.0; 3], "below grid");
+    check([N[0] as f64, 1.0, 1.0], [0.0; 3], "exclusive high edge");
+
+    // An affine field is reproduced exactly at an interior point by each
+    // component's face lattice, including its half-cell transverse offsets.
+    let mut affine = vec![FaceSample::default(); face_len()];
+    for (i, face) in affine.iter_mut().enumerate() {
+        let c = pad_coords(i).map(|value| value as f32);
+        for a in 0..3 {
+            face.velocity[a] = 10.0 * (a as f32 + 1.0) + c[0] + 2.0 * c[1] + 3.0 * c[2];
+        }
+    }
+    let q = [2.25, 2.75, 1.5];
+    let got = cpu_sample(q, &affine);
+    for (a, got) in got.into_iter().enumerate() {
+        let expected = 10.0 * (a as f64 + 1.0)
+            + (q[0] - f64::from((a != 0) as u8) * 0.5)
+            + 2.0 * (q[1] - f64::from((a != 1) as u8) * 0.5)
+            + 3.0 * (q[2] - f64::from((a != 2) as u8) * 0.5);
+        assert!((got - expected).abs() < 1e-5, "affine component {a}: {got} vs {expected}");
+    }
+}
+
+#[test]
+fn gpu_flip_faces_to_particles_reads_native_stored_face_values() {
+    // Exact binary positions and zero origin exercise all three exclusive
+    // high edges without a world-coordinate rounding ambiguity.
+    let points = [[2.0, 2.0, 2.0], [0.25, 0.25, 0.25], [5.75, 4.75, 3.75],
+        [0.0, 0.0, 0.0], [-0.125, 1.0, 1.0], [6.0, 1.0, 1.0],
+        [1.0, 5.0, 1.0], [1.0, 1.0, 4.0], [2.25, 2.75, 1.5]];
+    let particles: Vec<_> = points.iter().enumerate().map(|(i, q)| FluidParticle {
+        position_radius: [q[0] as f32 * H, q[1] as f32 * H, q[2] as f32 * H, 0.08],
+        velocity: [0.0; 3], id: i as u32 + 1,
+    }).collect();
+    // Include nonzero data in non-existent packed component lanes. Correct
+    // component bounds must discard those lanes, regardless of their weight.
+    let stored = vec![FaceSample { velocity: [2.0, 3.0, 5.0, 0.0], weight: [0.0; 4] }; face_len()];
+    let mut affine = stored.clone();
+    for (i, face) in affine.iter_mut().enumerate() {
+        let c = pad_coords(i);
+        for a in 0..3 {
+            face.velocity[a] = (10 * (a + 1) + c[0] + 2 * c[1] + 3 * c[2]) as f32;
+        }
+    }
+    let zero = vec![FaceSample::default(); face_len()];
+    let solid = wall_solid(N, H);
+    let run = |flip: f32, faces: &[FaceSample], old: &[FaceSample]| {
+        Pass::new()
+            .bind(2, &particles)
+            .bind(3, faces)
+            .bind(9, &solid)
+            .bind(15, &[LiquidShape::default()])
+            .bind(16, &[0_u32; 4])
+            .bind(17, old)
+            .bind(18, faces)
+            .bind(22, &vec![0_u32; 2 * particles.len()])
+            .bind(36, &[LiquidBody::default()])
+            .run::<FluidParticle>("faces_to_particles", &StepParams {
+                step_dt: 0.0, flip, particles: particles.len() as u32, box_min: [0.0; 3], ..lattice()
+            }, 19, particles.len(), particles.len())
+    };
+    for field in [&stored, &affine] {
+        let fresh = run(0.0, field, &zero);
+        let old_grid = run(1.0, &zero, field);
+        for (i, q) in points.into_iter().enumerate() {
+            let want = cpu_sample(q, field);
+            for (a, want) in want.into_iter().enumerate() {
+                close(fresh[i].velocity[a], want, 10.0, "new-grid stored sample");
+                close(old_grid[i].velocity[a], -want, 10.0, "old-grid stored sample");
+            }
+            assert_eq!(fresh[i].id, particles[i].id);
+        }
+        assert_eq!(fresh[0].position_radius, particles[0].position_radius, "dt=0 keeps the interior position");
+        assert_eq!(old_grid[0].position_radius, particles[0].position_radius, "dt=0 keeps the old-grid interior position");
+    }
 }
 
 #[test]
@@ -1105,9 +1251,8 @@ fn gpu_flip_faces_to_particles_blends_flip_and_moves_by_rk3() {
     // or zero them, so the tick's stats see them.
     particles[2].position_radius[0] = f32::NAN;
     particles[3].velocity[1] = f32::INFINITY;
-    // A guard short enough that some RK3 stages hit it and some don't.
-    let (dt, flip, max_travel) = (0.07f32, 0.9f32, 0.45f32);
-    let step = StepParams { step_dt: dt, flip, max_travel, particles: particles.len() as u32, ..lattice() };
+    let (dt, flip) = (0.07f32, 0.9f32);
+    let step = StepParams { step_dt: dt, flip, particles: particles.len() as u32, ..lattice() };
     let solid = wall_solid(N, H);
     let mut pass = Pass::new();
     let got: Vec<FluidParticle> = pass
@@ -1126,14 +1271,6 @@ fn gpu_flip_faces_to_particles_blends_flip_and_moves_by_rk3() {
     // Step 0 of the tick starts the counts over the stale 7s.
     let capped: Vec<u32> = pass.bound(22, 2 * particles.len());
     let per_cell = f64::from(dt) / f64::from(H);
-    // RK3 stages within the CFL guard, and shortened by it.
-    let stages = [std::cell::Cell::new(0usize), std::cell::Cell::new(0usize)];
-    let guard = |v: [f64; 3]| {
-        let cells = v.iter().map(|c| c * c).sum::<f64>().sqrt() * per_cell;
-        let past = cells > f64::from(max_travel);
-        stages[usize::from(past)].set(stages[usize::from(past)].get() + 1);
-        if past { v.map(|c| c * f64::from(max_travel) / cells) } else { v }
-    };
     for (i, (g, p)) in got.iter().zip(&particles).enumerate() {
         if p.position_radius[3] <= 0.0 {
             assert_eq!(g, p, "unused slot {i} passes through");
@@ -1148,13 +1285,12 @@ fn gpu_flip_faces_to_particles_blends_flip_and_moves_by_rk3() {
             continue;
         }
         let q0: [f64; 3] = std::array::from_fn(|a| (f64::from(p.position_radius[a]) - f64::from(MIN[a])) / f64::from(H));
-        let past_before = stages[1].get();
         let after = cpu_sample(q0, &faces);
-        let k1 = guard(after);
-        let k2 = guard(cpu_sample(std::array::from_fn(|a| q0[a] + 0.5 * per_cell * k1[a]), &faces));
-        let k3 = guard(cpu_sample(std::array::from_fn(|a| q0[a] + 0.75 * per_cell * k2[a]), &faces));
+        let k1 = after;
+        let k2 = cpu_sample(std::array::from_fn(|a| q0[a] + 0.5 * per_cell * k1[a]), &faces);
+        let k3 = cpu_sample(std::array::from_fn(|a| q0[a] + 0.75 * per_cell * k2[a]), &faces);
         let before = cpu_sample(q0, &old);
-        assert_eq!(capped[2 * i] as usize, stages[1].get() - past_before, "particle {i}: guarded stages");
+        assert_eq!(capped[2 * i], 0, "particle {i}: native RK3 does not cap stage velocities");
         assert_eq!(capped[2 * i + 1], 0, "particle {i}: no bodies, no refused push");
         let reached: [f64; 3] = std::array::from_fn(|a| q0[a] + per_cell * (2.0 * k1[a] + 3.0 * k2[a] + 4.0 * k3[a]) / 9.0);
         let q1 = native_wall_move(q0, reached, N, f64::from(H));
@@ -1167,8 +1303,56 @@ fn gpu_flip_faces_to_particles_blends_flip_and_moves_by_rk3() {
         }
         assert_eq!((g.position_radius[3], g.id), (p.position_radius[3], p.id), "particle {i} keeps radius and id");
     }
-    let stages = stages.map(std::cell::Cell::into_inner);
-    assert!(stages.iter().all(|&k| k > 30), "the draw covers stages within and past the CFL guard: {stages:?}");
+}
+
+/// A low pre-step marker speed does not bound the post-force grid. Exercise
+/// both a uniformly high field and a field whose later RK3 stages accelerate.
+#[test]
+fn gpu_flip_rk3_stage_velocity_is_not_truncated() {
+    let n = [96usize, 8, 8];
+    let m = n.map(|v| v + 1);
+    let len = m.iter().product();
+    let q0 = [32.0, 4.0, 4.0];
+    let dt = 0.01f32;
+    let per_cell = f64::from(dt) / f64::from(H);
+    // The former default Top Speed of 20 m/s rounded this dt/h to one cell.
+    let old_limit = 1.0 / per_cell;
+    for (name, initial, slope) in [("uniform", 600.0, 0.0), ("later stages", 20.0, 20.0)] {
+        let faces: Vec<_> = (0..len).map(|i| FaceSample {
+            velocity: [initial + slope * (i % m[0]) as f32 - slope * q0[0] as f32, 0.0, 0.0, 0.0],
+            weight: [1.0; 4],
+        }).collect();
+        let particle = FluidParticle {
+            position_radius: [MIN[0] + q0[0] as f32 * H, MIN[1] + q0[1] as f32 * H, MIN[2] + q0[2] as f32 * H, 0.08],
+            velocity: [0.0; 3], id: 17,
+        };
+        let k1 = cpu_sample_on(q0, &faces, n);
+        let k2 = cpu_sample_on(std::array::from_fn(|a| q0[a] + 0.5 * per_cell * k1[a]), &faces, n);
+        let k3 = cpu_sample_on(std::array::from_fn(|a| q0[a] + 0.75 * per_cell * k2[a]), &faces, n);
+        assert!(k3[0] > old_limit, "{name} exceeds the former stage limiter");
+        if slope != 0.0 { assert!(k1[0] < old_limit && k2[0] > old_limit); }
+        let want: [f64; 3] = std::array::from_fn(|a| q0[a] + per_cell * (2.0 * k1[a] + 3.0 * k2[a] + 4.0 * k3[a]) / 9.0);
+        assert!(want[0] - q0[0] > 1.0, "{name} distinguishes the former one-cell stage cap");
+        assert!(want[0] < n[0] as f64 - 2.0, "the proof remains clear of collisions");
+        for live in [false, true] {
+            let mut clock = [0u32; 12];
+            clock[0] = dt.to_bits();
+            clock[3] = 0.0f32.to_bits(); // Pre-step marker speed before the high grid field.
+            clock[11] = u32::from(live);
+            let mut pass = Pass::new();
+            let got: Vec<FluidParticle> = pass.bind(2, &[particle]).bind(3, &faces)
+                .bind(9, &wall_solid(n, H)).bind(15, &[LiquidShape::default()])
+                .bind(16, &[0_u32; 4]).bind(17, &faces).bind(18, &faces)
+                .bind(22, &[91u32; 2]).bind(36, &[LiquidBody::default()]).bind(46, &clock)
+                .run("faces_to_particles", &StepParams { n: n.map(|v| v as u32), step_dt: dt, particles: 1, ..lattice() }, 19, 1, 1);
+            for a in 0..3 {
+                let actual = (f64::from(got[0].position_radius[a]) - f64::from(MIN[a])) / f64::from(H);
+                assert!((actual - want[a]).abs() < 2e-5, "{name}, live={live}, axis {a}: {actual} != {want:?}");
+            }
+            assert_eq!(pass.bound::<u32>(22, 2), [0, 0], "{name}: no stage cap or refused push");
+            assert_eq!((got[0].id, got[0].position_radius[3]), (particle.id, particle.position_radius[3]));
+        }
+    }
 }
 
 #[test]
@@ -1180,8 +1364,8 @@ fn gpu_flip_marker_motion_matches_native_wall_sequence_without_bodies() {
         ("crossing", [0.15, y, y], [-10.0, 0.0, 0.0], 0.04, false),
         ("tangent", [0.15, y, y], [0.0, 1.0, 0.0], 0.10, false),
         ("upper", [N[0] as f64 - 0.15, y, y], [1.0, 0.0, 0.0], 0.01, false),
-        ("padded escape", [2.0, y, y], [-10.0, 0.0, 0.0], 0.10, false),
-        ("upper padded escape", [N[0] as f64 - 2.0, y, y], [10.0, 0.0, 0.0], 0.10, false),
+        ("grid escape", [2.0, y, y], [-20.0, 0.0, 0.0], 0.10, false),
+        ("upper grid escape", [N[0] as f64 - 2.0, y, y], [20.0, 0.0, 0.0], 0.10, false),
         ("world epsilon", [0.05, y, y], [0.00005, 0.0, 0.0], 0.01, false),
         ("fallback clamp", [0.05, y, y], [0.0, 1.0, 0.0], 0.025, true),
         ("nonfinite", [f64::NAN, y, y], [0.0; 3], 0.01, false),
@@ -1199,8 +1383,11 @@ fn gpu_flip_marker_motion_matches_native_wall_sequence_without_bodies() {
             velocity: [0.0; 3],
             id: 1,
         }];
-        let faces = vec![FaceSample { velocity: [velocity[0] as f32, velocity[1] as f32, velocity[2] as f32, 0.0], weight: [1.0; 4] }; face_len()];
-        let step = StepParams { step_dt: dt, max_travel: 10.0, particles: 1, ..lattice() };
+        // Both RK3 and the optional RK4 marker mover must read stored solid
+        // velocities even when their validity flag is zero. This does not
+        // validate the separate Narrow Band grid-backtrace sampler.
+        let faces = vec![FaceSample { velocity: [velocity[0] as f32, velocity[1] as f32, velocity[2] as f32, 0.0], weight: [0.0; 4] }; face_len()];
+        let step = StepParams { step_dt: dt, particles: 1, ..lattice() };
         let got: Vec<FluidParticle> = Pass::new()
             .bind(2, &particles)
             .bind(3, &faces)
@@ -1217,7 +1404,26 @@ fn gpu_flip_marker_motion_matches_native_wall_sequence_without_bodies() {
             assert_eq!((got[0].position_radius[3], got[0].id), (particles[0].position_radius[3], particles[0].id));
             continue;
         }
-        let reached: [f64; 3] = std::array::from_fn(|a| q0[a] + f64::from(dt) / f64::from(H) * velocity[a]);
+        // Sampling changes near the current grid edges, so even a constant
+        // stored field is not a constant particle velocity there. Compute the
+        // actual integrator stages before applying the independent collision
+        // oracle; these fixtures keep every stage inside the travel guard.
+        let per_cell = f64::from(dt) / f64::from(H);
+        let at = |fraction: f64, v: [f64; 3]| cpu_sample(std::array::from_fn(|a| q0[a] + fraction * per_cell * v[a]), &faces);
+        let k1 = cpu_sample(q0, &faces);
+        let k2 = at(0.5, k1);
+        let reached: [f64; 3] = if entry == "faces_to_particles" {
+            let k3 = at(0.75, k2);
+            std::array::from_fn(|a| q0[a] + per_cell * (2.0 * k1[a] + 3.0 * k2[a] + 4.0 * k3[a]) / 9.0)
+        } else {
+            let k3 = at(0.5, k2);
+            let k4 = at(1.0, k3);
+            std::array::from_fn(|a| q0[a] + per_cell * (k1[a] + 2.0 * k2[a] + 2.0 * k3[a] + k4[a]) / 6.0)
+        };
+        if name.contains("grid escape") {
+            assert!(reached[0] < 0.0 || reached[0] >= N[0] as f64,
+                "{entry}/{name}: fixture reaches outside the grid: {reached:?}");
+        }
         let want = if flat {
             native_collision_move(q0, reached, N, f64::from(H), |_| 1.0, |_| [0.0; 3])
         } else {
@@ -1276,7 +1482,7 @@ fn gpu_flip_collision_rejects_excessive_push_and_keeps_fallback() {
     let solid: Vec<f32> = (0..face_len()).map(|i| (pad_coords(i)[0] as f32 - 10.0) * H).collect();
     let particle = FluidParticle { position_radius: [MIN[0] + 0.05 * H, MIN[1] + 2.5 * H, MIN[2] + 2.5 * H, 0.08], id: 1, ..FluidParticle::default() };
     let faces = vec![FaceSample { velocity: [0.0, 1.0, 0.0, 0.0], weight: [1.0; 4] }; face_len()];
-    let step = StepParams { body_count: 1, rows: 1, step_dt: 0.025, max_travel: 1.0, particles: 1, ..lattice() };
+    let step = StepParams { body_count: 1, rows: 1, step_dt: 0.025, particles: 1, ..lattice() };
     for entry in ["faces_to_particles", "narrow_move"] {
         let mut pass = Pass::new();
         let got: Vec<FluidParticle> = pass
@@ -1668,12 +1874,13 @@ fn rotate(q: [f64; 4], v: [f64; 3]) -> [f64; 3] {
 }
 
 /// The closest enabled body at x after `SOLID_TICK` (its row and signed
-/// distance), as liquid_collider.wgsl samples a lattice; the margin by which
-/// x clears every lattice edge and the gap to the runner-up, so the fixture
-/// can show no f32 rounding decides either.
+/// distance), as liquid_shape_distance samples a lattice, past it adds the
+/// gap and scales along the trilinear slope; none when the walls (inset 0)
+/// are nearer. The margin is the gap
+/// to the runner-up, body or walls, so the fixture can show no f32 rounding
+/// decides either.
 fn closest(solids: &Solids, x: [f64; 3]) -> (Option<usize>, f64) {
     let mut best: Option<(usize, f64)> = None;
-    let mut margin = f64::INFINITY;
     let mut gaps = Vec::new();
     for (row, body) in solids.bodies.iter().enumerate() {
         let shape_index = body.accel_shape[3];
@@ -1688,30 +1895,41 @@ fn closest(solids: &Solids, x: [f64; 3]) -> (Option<usize>, f64) {
         let g: [f64; 3] = std::array::from_fn(|i| {
             (local[i] / f64::from(shape.scale_min[i]) - f64::from(shape.origin_spacing[i])) / f64::from(shape.origin_spacing[3])
         });
-        for i in 0..3 {
-            margin = margin.min(g[i].abs()).min((g[i] - (dims[i] - 1) as f64).abs());
-        }
-        if !(0..3).all(|i| g[i] >= 0.0 && g[i] <= (dims[i] - 1) as f64) {
-            continue;
-        }
-        let base: [usize; 3] = std::array::from_fn(|i| (g[i].floor() as usize).min(dims[i] - 2));
-        let f: [f64; 3] = std::array::from_fn(|i| g[i] - base[i] as f64);
-        let mut d = 0.0;
+        let c: [f64; 3] = std::array::from_fn(|i| g[i].clamp(0.0, (dims[i] - 1) as f64));
+        let beyond = (0..3).map(|i| (g[i] - c[i]).powi(2)).sum::<f64>().sqrt() * f64::from(shape.origin_spacing[3]);
+        let base: [usize; 3] = std::array::from_fn(|i| (c[i].floor() as usize).min(dims[i] - 2));
+        let f: [f64; 3] = std::array::from_fn(|i| c[i] - base[i] as f64);
+        let (mut d, mut slope) = (0.0, [0.0f64; 3]);
         for corner in 0..8 {
             let o = [corner & 1, (corner >> 1) & 1, corner >> 2];
-            let w: f64 = (0..3).map(|i| if o[i] == 1 { f[i] } else { 1.0 - f[i] }).product();
+            let w: [f64; 3] = std::array::from_fn(|i| if o[i] == 1 { f[i] } else { 1.0 - f[i] });
             let at = shape.atlas_offset as usize + (base[0] + o[0]) + dims[0] * ((base[1] + o[1]) + dims[1] * (base[2] + o[2]));
-            d += w * f64::from(solids.distances[at]);
+            let v = f64::from(solids.distances[at]);
+            d += w[0] * w[1] * w[2] * v;
+            for i in 0..3 {
+                let sign = if o[i] == 1 { 1.0 } else { -1.0 };
+                slope[i] += sign * w[(i + 1) % 3] * w[(i + 2) % 3] * v;
+            }
         }
-        d *= f64::from(shape.scale_min[3]);
+        let steep = slope.iter().map(|v| v * v).sum::<f64>().sqrt();
+        let across = (0..3).map(|i| (slope[i] / f64::from(shape.scale_min[i])).powi(2)).sum::<f64>().sqrt();
+        let stretch = if steep > 1e-3 * f64::from(shape.origin_spacing[3]) { steep / across } else { f64::from(shape.scale_min[3]) };
+        d = (d + beyond) * stretch;
         gaps.push(d);
         if best.is_none_or(|(_, nearest)| d < nearest) {
             best = Some((row, d));
         }
     }
+    let walls = (0..3)
+        .map(|i| {
+            let low = f64::from(SOLID_MIN[i]);
+            (x[i] - low).min(low + SOLID_N[i] as f64 * f64::from(SOLID_H) - x[i])
+        })
+        .fold(f64::INFINITY, f64::min);
+    gaps.push(walls);
     gaps.sort_by(f64::total_cmp);
     let gap = if gaps.len() > 1 { gaps[1] - gaps[0] } else { f64::INFINITY };
-    (best.map(|(row, _)| row), margin.min(gap))
+    (best.filter(|&(_, d)| d <= walls).map(|(row, _)| row), gap)
 }
 
 /// The velocity and spin a face sees on body `row`: as uploaded when
@@ -2442,7 +2660,7 @@ fn gpu_flip_outflow_kills_the_particles_it_holds() {
         .collect();
     // Still faces: nothing moves, so the new position is the old one.
     let faces = vec![FaceSample::default(); face_len()];
-    let step = StepParams { step_dt: 0.02, flip: 1.0, max_travel: 1.0, particles: particles.len() as u32, ..region_params() };
+    let step = StepParams { step_dt: 0.02, flip: 1.0, particles: particles.len() as u32, ..region_params() };
     let got: Vec<FluidParticle> = Pass::new()
         .bind(2, &particles)
         .bind(3, &faces)
@@ -2723,7 +2941,12 @@ fn gpu_flip_step_order_inflow_waits_until_next_step() {
     node.prepare_pipelines(&h.device);
     let particles = h.array::<FluidParticle>(&[], capacity);
     let capped = h.array::<u32>(&[], 2 * capacity + super::liquid_stats::SOLVER_WORDS as usize);
-    let faces = h.array::<FaceSample>(&[], face_len());
+    // The step solves on the native grid: three more cells, its origin 1.5
+    // cells outside the box.
+    let solver = N.map(|n| n + 3);
+    let solver_min: [f32; 3] = std::array::from_fn(|a| MIN[a] - 1.5 * H);
+    let solver_faces = solver.map(|n| n + 1).iter().product::<usize>();
+    let faces = h.array::<FaceSample>(&[], solver_faces);
     let (row, shape, atlas) = region_box(2.0, [2, 2, 1], [1, 1, 1], [0.25, 0.0, 0.0]);
     let regions = h.array(&[row], 1);
     let shapes = h.array(&[shape], 1);
@@ -2760,17 +2983,17 @@ fn gpu_flip_step_order_inflow_waits_until_next_step() {
     let (_, errors) = h.run(&mut node, &inputs, &outputs, &p);
     assert!(errors.is_empty(), "{errors:?}");
     let second: Vec<FluidParticle> = read(&particles.1, capacity);
-    let field: Vec<FaceSample> = read(&h.buffer(faces.0), face_len());
+    let field: Vec<FaceSample> = read(&h.buffer(faces.0), solver_faces);
     assert!(alive.iter().any(|before| second.iter().any(|after|
         after.id == before.id && after.position_radius[0] > before.position_radius[0] + 1e-6)),
         "the first inflow must move on the second step");
     // Native RK3 on the second step's published field, with no density move.
     for before in &alive {
         let after = second.iter().find(|p| p.id == before.id && p.position_radius[3] > 0.0).unwrap();
-        let q = std::array::from_fn(|a| f64::from((before.position_radius[a] - MIN[a]) / H));
-        let v1 = cpu_sample(q, &field);
-        let v2 = cpu_sample(std::array::from_fn(|a| q[a] + 0.5 * 0.125 / f64::from(H) * v1[a]), &field);
-        let v3 = cpu_sample(std::array::from_fn(|a| q[a] + 0.75 * 0.125 / f64::from(H) * v2[a]), &field);
+        let q = std::array::from_fn(|a| f64::from((before.position_radius[a] - solver_min[a]) / H));
+        let v1 = cpu_sample_on(q, &field, solver);
+        let v2 = cpu_sample_on(std::array::from_fn(|a| q[a] + 0.5 * 0.125 / f64::from(H) * v1[a]), &field, solver);
+        let v3 = cpu_sample_on(std::array::from_fn(|a| q[a] + 0.75 * 0.125 / f64::from(H) * v2[a]), &field, solver);
         for a in 0..3 {
             let expected = f64::from(before.position_radius[a]) + 0.125 *
                 (2.0 / 9.0 * v1[a] + 3.0 / 9.0 * v2[a] + 4.0 / 9.0 * v3[a]);

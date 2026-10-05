@@ -31,6 +31,7 @@
 use std::borrow::Cow;
 
 use ahash::{AHashMap, AHashSet};
+use manifold_core::liquid_domain::{GPU_FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN_TYPE_ID};
 
 use manifold_core::effect_graph_def::{
     EFFECT_GRAPH_VERSION_WITH_SCENE_MODIFIERS, EffectGraphDef, EffectGraphNode, EffectGraphWire,
@@ -702,7 +703,7 @@ fn wire_liquid_intervals(def: &mut EffectGraphDef) -> bool {
     use manifold_core::effect_graph_def::EffectGraphWire;
     let mut domains = std::collections::BTreeMap::new();
     for node in &def.nodes {
-        if matches!(node.type_id.as_str(), "node.gpu_flip_domain" | "node.matter_domain") {
+        if matches!(node.type_id.as_str(), GPU_FLIP_DOMAIN_TYPE_ID | MATTER_DOMAIN_TYPE_ID) {
             domains.insert(node.id, node.id);
         }
     }
@@ -765,6 +766,158 @@ fn wire_liquid_intervals(def: &mut EffectGraphDef) -> bool {
     changed
 }
 
+/// Correct standard GPU FLIP solid producers at the flattened installation seam.
+/// Authored lattice wires retain their old meaning; only the exact native-grid
+/// consumers move to the domain's mesh descriptor. Shared producers are cloned.
+pub(crate) fn wire_gpu_flip_grid(def: &mut EffectGraphDef) -> bool {
+    use manifold_core::effect_graph_def::EffectGraphWire;
+    let mut changed = false;
+    // Installation calls this after flatten_groups: ids and wires are local
+    // to the same flat scope even when the saved graph contains nested groups.
+    let geometry_matches = |node, domain, native: bool| {
+        ["x", "y", "z"].into_iter().all(|axis| {
+            [(format!("lattice_min_{axis}"), format!("mesh_min_{axis}")),
+             (format!("nodes_{axis}"), format!("mesh_nodes_{axis}"))].into_iter().all(|(input, mesh)| {
+                let output = if native { mesh.as_str() } else { input.as_str() };
+                def.wires.iter().any(|w| w.to_node == node && w.to_port == input
+                    && w.from_node == domain && w.from_port == output)
+            })
+        }) && def.wires.iter().any(|w| w.to_node == node && w.to_port == "cell_size"
+            && w.from_node == domain && w.from_port == "cell_size")
+    };
+    let frames: Vec<_> = def.nodes.iter().filter(|n| n.type_id == "node.liquid_frame")
+        .filter_map(|frame| {
+            let domain = def.wires.iter().find(|w| w.to_node == frame.id && w.to_port == "nodes_x")?.from_node;
+            (def.nodes.iter().any(|n| n.id == domain && n.type_id == GPU_FLIP_DOMAIN_TYPE_ID)
+                && geometry_matches(frame.id, domain, false)).then_some((frame.id, domain))
+        }).collect();
+    // Capture matches before mutating wires so the geometric authority stays
+    // immutable while a shared source is cloned and only FLIP uses move.
+    let producers: Vec<_> = frames.iter().map(|&(frame, domain)| {
+        let matches = def.nodes.iter().filter(|node| matches!(node.type_id.as_str(),
+            "node.liquid_solid_distance" | "node.whitewater_obstacle_source"))
+            .filter(|node| {
+                let native = geometry_matches(node.id, domain, true);
+                let authored = geometry_matches(node.id, domain, false);
+                if !native && !authored { return false; }
+                let inset_wire = def.wires.iter().find(|w| w.to_node == node.id && w.to_port == "wall_inset");
+                if let Some(wire) = inset_wire {
+                    return native && wire.from_node == domain && wire.from_port == "mesh_wall_inset";
+                }
+                // Only standard walls migrate. Authored/custom inset controls
+                // must retain their meaning rather than becoming native walls.
+                if node.exposed_params.contains("wall_inset") || def.preset_metadata.as_ref().is_some_and(|m|
+                    m.bindings.iter().any(|b| matches!(&b.target,
+                        manifold_core::effect_graph_def::BindingTarget::Node { node_id, param }
+                            if *node_id == node.node_id && param == "wall_inset"))) { return false; }
+                let inset = match node.params.get("wall_inset") {
+                    Some(manifold_core::effect_graph_def::SerializedParamValue::Float { value }) => *value,
+                    Some(manifold_core::effect_graph_def::SerializedParamValue::Int { value }) => *value as f32,
+                    None => crate::node_graph::liquid::lattice::PADDING_NODES as f32,
+                    _ => return false,
+                };
+                inset == if native { crate::node_graph::liquid::lattice::SURFACE_PADDING_CELLS }
+                    else { crate::node_graph::liquid::lattice::PADDING_NODES as f32 }
+            }).map(|n| (n.id, n.type_id.clone())).collect::<Vec<_>>();
+        (frame, domain, matches)
+    }).collect();
+    let mut next_id = def.nodes.iter().map(|n| n.id).max().unwrap_or(0) + 1;
+    for (frame, domain, matches) in producers {
+        for (source, kind) in matches {
+            let targets: Vec<_> = def.wires.iter().filter(|wire| wire.from_node == source && wire.from_port == "solid")
+                .filter(|wire| if kind == "node.liquid_solid_distance" {
+                    wire.to_node == frame && wire.to_port == "solid"
+                } else {
+                    wire.to_port == "obstacle_source" && def.nodes.iter().any(|node| node.id == wire.to_node
+                        && node.type_id == "node.whitewater_step")
+                        && def.wires.iter().any(|w| w.to_node == wire.to_node && w.to_port == "forces"
+                            && w.from_node == domain && w.from_port == "forces")
+                }).cloned().collect();
+            if targets.is_empty() { continue; }
+            let already_native = ["x", "y", "z"].into_iter().all(|axis| {
+                [(format!("lattice_min_{axis}"), format!("mesh_min_{axis}")),
+                 (format!("nodes_{axis}"), format!("mesh_nodes_{axis}"))].into_iter().all(|(input, output)|
+                    def.wires.iter().any(|w| w.to_node == source && w.to_port == input
+                        && w.from_node == domain && w.from_port == output))
+            }) && def.wires.iter().any(|w| w.to_node == source && w.to_port == "wall_inset"
+                && w.from_node == domain && w.from_port == "mesh_wall_inset");
+            if already_native { continue; }
+            let shared = def.wires.iter().any(|w| w.from_node == source && !targets.contains(w));
+            let target_source = if shared {
+                let mut copy = def.nodes.iter().find(|n| n.id == source).expect("matched source").clone();
+                copy.id = next_id;
+                let original_id = copy.node_id.clone();
+                copy.node_id = manifold_core::NodeId::new(format!("{}/native-flip-grid-{next_id}", original_id.as_str()));
+                copy.handle = copy.handle.map(|handle| format!("{handle}/native-flip-grid-{next_id}"));
+                copy.exposed_params.remove("wall_inset");
+                // Preserve card bindings as a fanout to the cloned producer.
+                if let Some(metadata) = &mut def.preset_metadata {
+                    use manifold_core::effect_graph_def::BindingTarget;
+                    let bindings: Vec<_> = metadata.bindings.iter().filter_map(|binding| {
+                        let BindingTarget::Node { node_id, param } = &binding.target else { return None };
+                        if *node_id != original_id || param == "wall_inset" { return None; }
+                        let mut binding = binding.clone();
+                        binding.target = BindingTarget::Node { node_id: copy.node_id.clone(), param: param.clone() };
+                        Some(binding)
+                    }).collect();
+                    metadata.bindings.extend(bindings);
+                }
+                def.nodes.push(copy);
+                let inputs: Vec<_> = def.wires.iter().filter(|w| w.to_node == source).cloned().collect();
+                for mut wire in inputs { wire.to_node = next_id; def.wires.push(wire); }
+                for target in &targets {
+                    let wire = def.wires.iter_mut().find(|w| *w == target).expect("target still present");
+                    wire.from_node = next_id;
+                }
+                next_id += 1;
+                next_id - 1
+            } else { source };
+            for axis in ["x", "y", "z"] {
+                for (input, output) in [(format!("lattice_min_{axis}"), format!("mesh_min_{axis}")),
+                                        (format!("nodes_{axis}"), format!("mesh_nodes_{axis}"))] {
+                    let wire = def.wires.iter_mut().find(|w| w.to_node == target_source && w.to_port == input)
+                        .expect("all descriptor wires matched");
+                    wire.from_port = output;
+                }
+            }
+            def.wires.retain(|w| !(w.to_node == target_source && w.to_port == "wall_inset"));
+            def.wires.push(EffectGraphWire { from_node: domain, from_port: "mesh_wall_inset".into(),
+                to_node: target_source, to_port: "wall_inset".into() });
+            changed = true;
+        }
+        // Face component's nodes inputs have always meant authored-grid
+        // counts. Restore that contract when an old graph used frame nodes.
+        for node in &def.nodes {
+            if node.type_id != "node.face_sample_component" { continue; }
+            let from_frame = ["x", "y", "z"].into_iter().all(|axis| def.wires.iter().any(|w|
+                w.to_node == node.id && w.to_port == format!("nodes_{axis}")
+                    && w.from_node == frame && w.from_port == format!("grid_nodes_{axis}")));
+            if !from_frame { continue; }
+            for axis in ["x", "y", "z"] {
+                if let Some(wire) = def.wires.iter_mut().find(|w| w.to_node == node.id && w.to_port == format!("nodes_{axis}")
+                    && w.from_node == frame && w.from_port == format!("grid_nodes_{axis}")) {
+                    wire.from_node = domain;
+                    wire.from_port = format!("nodes_{axis}");
+                    changed = true;
+                }
+            }
+        }
+    }
+    // The engine seeds no site its walls hold; an old fill learns where they are.
+    let fills: Vec<_> = def.nodes.iter().filter(|n| n.type_id == "node.liquid_fill").filter_map(|fill| {
+        let domain = def.wires.iter().find(|w| w.to_node == fill.id && w.to_port == "nodes_x")?.from_node;
+        (def.nodes.iter().any(|n| n.id == domain && n.type_id == GPU_FLIP_DOMAIN_TYPE_ID)
+            && !def.wires.iter().any(|w| w.to_node == fill.id && w.to_port == "wall_inset"))
+            .then_some((fill.id, domain))
+    }).collect();
+    for (fill, domain) in fills {
+        def.wires.push(EffectGraphWire { from_node: domain, from_port: "mesh_wall_inset".into(),
+            to_node: fill, to_port: "wall_inset".into() });
+        changed = true;
+    }
+    changed
+}
+
 /// Give every liquid field consumer saved before `node.blob_bounds` existed
 /// its bounds, the way the shipped Liquid Surface group wires them: one
 /// bounds node per blob source, feeding every consumer of that source.
@@ -820,6 +973,124 @@ fn wire_blob_bounds(def: &mut EffectGraphDef) -> bool {
     changed
 }
 
+/// Whether any node, at any group depth or in any scene modifier, has a type
+/// listed in [`manifold_core::type_id_migration::RETIRED_PARAMS`]. Lets the
+/// common load borrow the document instead of cloning it.
+pub(crate) fn has_retired_params(def: &EffectGraphDef) -> bool {
+    fn any(nodes: &[EffectGraphNode]) -> bool {
+        nodes.iter().any(|node| manifold_core::type_id_migration::retires_params(&node.type_id)
+            || node.group.as_ref().is_some_and(|group| any(&group.nodes)))
+    }
+    any(&def.nodes) || def.scene_modifiers.iter().any(|modifier| has_retired_params(&modifier.graph))
+}
+
+/// Strip every [`manifold_core::type_id_migration::RETIRED_PARAMS`] entry
+/// from a saved graph: the value, exposure, wires into the port, group
+/// interface params and inputs that only fed it, and cards that only drove
+/// it. Runs before group flattening and before preset metadata is captured.
+pub(crate) fn retire_params(def: &mut EffectGraphDef) -> bool {
+    use manifold_core::effect_graph_def::BindingTarget;
+
+    fn declared_ids(nodes: &[EffectGraphNode], ids: &mut AHashSet<String>) {
+        for node in nodes {
+            if !node.node_id.is_empty() { ids.insert(node.node_id.to_string()); }
+            if let Some(group) = &node.group { declared_ids(&group.nodes, ids); }
+        }
+    }
+
+    // Local numeric endpoints drive wires; scoped handles drive group aliases;
+    // stable identities drive authored cards. Keep these address spaces separate.
+    fn scope(
+        nodes: &mut [EffectGraphNode], wires: &mut Vec<EffectGraphWire>,
+        prefix: &str, declared: &AHashSet<String>, identities: &mut AHashSet<(String, String)>,
+    ) -> (AHashSet<(String, String)>, AHashSet<String>, bool) {
+        let mut handles = AHashSet::new();
+        let mut endpoints = AHashSet::new();
+        let mut changed = false;
+        for node in nodes.iter_mut() {
+            let handle = node.handle.as_deref().unwrap_or_default();
+            let full_handle = format!("{prefix}{handle}");
+            let mut retired: AHashSet<String> = manifold_core::type_id_migration::retired_params(&node.type_id)
+                .map(str::to_string).collect();
+            if let Some(group) = &mut node.group {
+                let (inner, inputs, inner_changed) = scope(
+                    &mut group.nodes, &mut group.wires, &format!("{full_handle}/"), declared, identities,
+                );
+                changed |= inner_changed;
+                group.interface.params.retain(|param| {
+                    let dead = inner.contains(&(param.target_handle.clone(), param.target_param.clone()));
+                    if dead { retired.insert(param.name.clone()); changed = true; }
+                    !dead
+                });
+                group.interface.inputs.retain(|port| {
+                    if inputs.contains(&port.name) { retired.insert(port.name.clone()); changed = true; false } else { true }
+                });
+                for (inner_handle, param) in inner {
+                    handles.insert((format!("{handle}/{inner_handle}"), param));
+                }
+            }
+            for param in retired {
+                changed |= node.params.remove(&param).is_some();
+                changed |= node.exposed_params.remove(&param);
+                endpoints.insert((node.id, param.clone()));
+                if !handle.is_empty() {
+                    handles.insert((handle.to_string(), param.clone()));
+                    // A legacy handleNode has this identity, unless an explicit
+                    // stable identity belongs to another node in the same graph.
+                    if !declared.contains(&full_handle) || node.node_id.as_str() == full_handle {
+                        identities.insert((full_handle.clone(), param.clone()));
+                    }
+                }
+                if !node.node_id.as_str().is_empty() {
+                    identities.insert((node.node_id.to_string(), param));
+                }
+            }
+        }
+        let boundary_inputs: AHashSet<_> = nodes.iter().filter(|node| node.type_id == GROUP_INPUT_TYPE_ID)
+            .map(|node| node.id).collect();
+        let mut inputs = AHashSet::new();
+        wires.retain(|wire| {
+            let dead = endpoints.contains(&(wire.to_node, wire.to_port.clone()));
+            if dead && boundary_inputs.contains(&wire.from_node) { inputs.insert(wire.from_port.clone()); }
+            changed |= dead;
+            !dead
+        });
+        // An interface input can fan out to a live target as well.
+        inputs.retain(|port| !wires.iter().any(|wire|
+            boundary_inputs.contains(&wire.from_node) && &wire.from_port == port));
+        changed |= !inputs.is_empty();
+        (handles, inputs, changed)
+    }
+
+    let mut declared = AHashSet::new();
+    declared_ids(&def.nodes, &mut declared);
+    let mut identities = AHashSet::new();
+    let (_, _, mut changed) = scope(&mut def.nodes, &mut def.wires, "", &declared, &mut identities);
+    if let Some(metadata) = &mut def.preset_metadata {
+        let mut retired_cards = AHashSet::new();
+        metadata.bindings.retain(|binding| {
+            let dead = matches!(&binding.target, BindingTarget::Node { node_id, param }
+                if identities.contains(&(node_id.to_string(), param.clone())));
+            if dead { retired_cards.insert(binding.id.clone()); }
+            !dead
+        });
+        changed |= !retired_cards.is_empty();
+        // Preserve a card with other live targets, including mixed fan-out.
+        retired_cards.retain(|id| !metadata.bindings.iter().any(|binding| &binding.id == id));
+        for id in &retired_cards {
+            log::warn!("retired param: card '{id}' removed, its only target no longer exists");
+        }
+        metadata.params.retain(|param| !retired_cards.contains(&param.id));
+        metadata.param_aliases.retain(|alias| !retired_cards.contains(&alias.old)
+            && alias.new.as_ref().is_none_or(|id| !retired_cards.contains(id)));
+        metadata.value_aliases.retain(|alias| !retired_cards.contains(&alias.param_id));
+    }
+    for modifier in &mut def.scene_modifiers {
+        changed |= retire_params(&mut modifier.graph);
+    }
+    changed
+}
+
 /// Returns the [`NodeInstantiation`] on success. On any error the
 /// graph's state is the union of every successful step before the
 /// failure — both callers handle this by either propagating
@@ -851,6 +1122,16 @@ pub fn instantiate_def(
         manifold_core::phong_migration::migrate_phong_to_pbr(&mut owned);
         phong_migrated = owned;
         &phong_migrated
+    } else {
+        def
+    };
+
+    let retired;
+    let def = if has_retired_params(def) {
+        let mut owned = def.clone();
+        retire_params(&mut owned);
+        retired = owned;
+        &retired
     } else {
         def
     };
@@ -948,6 +1229,8 @@ pub fn instantiate_def(
     // existing domain/state/step connections at the common loader seam.
     let mut interval_wired = def.clone();
     let def = if wire_liquid_intervals(&mut interval_wired) { &interval_wired } else { def };
+    let mut grid_wired = def.clone();
+    let def = if wire_gpu_flip_grid(&mut grid_wired) { &grid_wired } else { def };
     // Liquid fields saved before node.blob_bounds read their kernel reach
     // from it like the shipped surface group does; `bounds` is required.
     let mut bounds_wired = def.clone();
@@ -2104,6 +2387,110 @@ mod tests {
     use super::*;
 
     #[test]
+    fn native_flip_grid_migration_clones_shared_solids_and_preserves_authored_wires() {
+        use manifold_core::effect_graph_def::EffectGraphWire;
+        let wire = |from, output: &str, to, input: &str| EffectGraphWire {
+            from_node: from, from_port: output.into(), to_node: to, to_port: input.into(),
+        };
+        let mut def = EffectGraphDef {
+            version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
+            name: None, description: None, preset_metadata: None, scene_modifiers: Vec::new(),
+            nodes: vec![bare_node(1, GPU_FLIP_DOMAIN_TYPE_ID), bare_node(2, "node.liquid_solid_distance"),
+                bare_node(3, "node.liquid_frame"), bare_node(4, "node.value_sink"), bare_node(5, "node.liquid_fill")],
+            wires: vec![wire(2, "solid", 3, "solid"), wire(2, "solid", 4, "in"), wire(1, "cell_size", 3, "cell_size"), wire(1, "cell_size", 2, "cell_size")],
+        };
+        for axis in ["x", "y", "z"] {
+            for port in [format!("lattice_min_{axis}"), format!("nodes_{axis}")] {
+                def.wires.push(wire(1, &port, 2, &port));
+                def.wires.push(wire(1, &port, 5, &port));
+                def.wires.push(wire(1, &port, 3, &port));
+            }
+        }
+        // Numeric ids repeat across two group scopes. Installation flattens
+        // first, so the unrelated outer domain cannot capture inner wires.
+        let nested: EffectGraphDef = serde_json::from_value(serde_json::json!({
+            "version": 1,
+            "nodes": [
+                { "id": 1, "typeId": GPU_FLIP_DOMAIN_TYPE_ID },
+                { "id": 2, "typeId": "group", "handle": "outer", "group": {
+                    "interface": { "inputs": [], "outputs": [] },
+                    "nodes": [{ "id": 1, "typeId": "group", "handle": "inner", "group": {
+                        "interface": { "inputs": [], "outputs": [] },
+                        "nodes": def.nodes.clone(), "wires": def.wires.clone()
+                    }}], "wires": []
+                }}
+            ], "wires": []
+        })).unwrap();
+        let mut flat = manifold_core::flatten::flatten_groups(&nested).unwrap();
+        assert!(wire_gpu_flip_grid(&mut flat));
+        assert_eq!(flat.nodes.iter().filter(|n| n.type_id == "node.liquid_solid_distance").count(), 2);
+        assert!(!wire_gpu_flip_grid(&mut flat));
+
+        let authored = def.wires.clone();
+        assert!(wire_gpu_flip_grid(&mut def));
+        let clone = def.wires.iter().find(|w| w.to_node == 3 && w.to_port == "solid").unwrap().from_node;
+        assert_ne!(clone, 2);
+        assert!(def.wires.contains(&wire(2, "solid", 4, "in")));
+        assert!(def.wires.contains(&wire(1, "mesh_wall_inset", clone, "wall_inset")));
+        assert!(def.wires.contains(&wire(1, "mesh_wall_inset", 5, "wall_inset")));
+        for axis in ["x", "y", "z"] {
+            assert!(def.wires.contains(&wire(1, &format!("mesh_min_{axis}"), clone, &format!("lattice_min_{axis}"))));
+            assert!(def.wires.contains(&wire(1, &format!("mesh_nodes_{axis}"), clone, &format!("nodes_{axis}"))));
+        }
+        for wire in authored.into_iter().filter(|w| w.to_node == 2 || w.to_node == 5) {
+            assert!(def.wires.contains(&wire));
+        }
+        assert!(!wire_gpu_flip_grid(&mut def));
+    }
+
+    #[test]
+    fn native_flip_grid_migration_preserves_mixed_geometry_and_custom_walls() {
+        use manifold_core::effect_graph_def::{EffectGraphWire, SerializedParamValue};
+        let mut def = EffectGraphDef {
+            version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
+            name: None, description: None, preset_metadata: None, scene_modifiers: Vec::new(),
+            nodes: vec![bare_node(1, GPU_FLIP_DOMAIN_TYPE_ID), bare_node(2, "node.liquid_solid_distance"),
+                bare_node(3, "node.liquid_frame"), bare_node(4, GPU_FLIP_DOMAIN_TYPE_ID)],
+            wires: vec![EffectGraphWire { from_node: 2, from_port: "solid".into(), to_node: 3, to_port: "solid".into() }],
+        };
+        for node in [2, 3] {
+            for port in ["lattice_min_x", "lattice_min_y", "lattice_min_z", "nodes_x", "nodes_y", "nodes_z", "cell_size"] {
+                def.wires.push(EffectGraphWire { from_node: 1, from_port: port.into(), to_node: node, to_port: port.into() });
+            }
+        }
+        for (node, port) in [(2, "cell_size"), (3, "cell_size"), (3, "nodes_y"), (3, "lattice_min_z")] {
+            let mut custom = def.clone();
+            custom.wires.iter_mut().find(|w| w.to_node == node && w.to_port == port).unwrap().from_node = 4;
+            let before = custom.clone();
+            assert!(!wire_gpu_flip_grid(&mut custom), "custom {node}.{port}");
+            assert_eq!(custom, before);
+        }
+        def.nodes[1].params.insert("wall_inset".into(), SerializedParamValue::Float { value: 2.0 });
+        let before = def.clone();
+        assert!(!wire_gpu_flip_grid(&mut def));
+        assert_eq!(def, before);
+    }
+
+    #[test]
+    fn native_flip_grid_migration_ignores_custom_and_matter_producers() {
+        use manifold_core::effect_graph_def::EffectGraphWire;
+        let mut def = EffectGraphDef {
+            version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
+            name: None, description: None, preset_metadata: None, scene_modifiers: Vec::new(),
+            nodes: vec![bare_node(1, MATTER_DOMAIN_TYPE_ID), bare_node(2, "node.liquid_solid_distance"), bare_node(3, "node.liquid_frame")],
+            wires: vec![EffectGraphWire { from_node: 1, from_port: "nodes_x".into(), to_node: 3, to_port: "nodes_x".into() }],
+        };
+        let original = def.clone();
+        assert!(!wire_gpu_flip_grid(&mut def));
+        assert_eq!(def, original);
+        def.nodes[0].type_id = GPU_FLIP_DOMAIN_TYPE_ID.into();
+        def.nodes[1].type_id = "node.custom_solid".into();
+        let original = def.clone();
+        assert!(!wire_gpu_flip_grid(&mut def));
+        assert_eq!(def, original);
+    }
+
+    #[test]
     fn live_clock_graph_wires_are_explicit_idempotent_and_preserve_authored_duration() {
         use manifold_core::effect_graph_def::EffectGraphWire;
         let wire = |from, output: &str, to, input: &str| EffectGraphWire {
@@ -2112,7 +2499,7 @@ mod tests {
         let mut def = EffectGraphDef {
             version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
             name: None, description: None, preset_metadata: None, scene_modifiers: Vec::new(),
-            nodes: vec![bare_node(1, "node.gpu_flip_domain"), bare_node(2, "node.liquid_state"), bare_node(3, "node.gpu_flip_step"), bare_node(4, "node.whitewater_step"), bare_node(5, "node.scalar")],
+            nodes: vec![bare_node(1, GPU_FLIP_DOMAIN_TYPE_ID), bare_node(2, "node.liquid_state"), bare_node(3, "node.gpu_flip_step"), bare_node(4, "node.whitewater_step"), bare_node(5, "node.scalar")],
             wires: vec![wire(1, "ticks", 2, "ticks"), wire(2, "out", 3, "particles"), wire(3, "out", 2, "in"), wire(3, "faces", 4, "faces"), wire(5, "out", 4, "dt")],
         };
         assert!(wire_liquid_intervals(&mut def));
@@ -2135,8 +2522,8 @@ mod tests {
             from_node: from, from_port: output.into(), to_node: to, to_port: input.into(),
         };
         for (domain, state) in [
-            ("node.gpu_flip_domain", "node.liquid_state"),
-            ("node.matter_domain", "node.matter_state"),
+            (GPU_FLIP_DOMAIN_TYPE_ID, "node.liquid_state"),
+            (MATTER_DOMAIN_TYPE_ID, "node.matter_state"),
         ] {
             let authored = wire(4, "out", 3, "dropped_seconds");
             let mut def = EffectGraphDef {
@@ -2293,7 +2680,7 @@ mod tests {
         let wire = |from, output: &str, to, input: &str| EffectGraphWire {
             from_node: from, from_port: output.into(), to_node: to, to_port: input.into(),
         };
-        for domain in ["node.gpu_flip_domain", "node.matter_domain"] {
+        for domain in [GPU_FLIP_DOMAIN_TYPE_ID, MATTER_DOMAIN_TYPE_ID] {
             let mut def = EffectGraphDef {
                 version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
                 name: None, description: None, preset_metadata: None, scene_modifiers: Vec::new(),
@@ -3048,6 +3435,146 @@ mod tests {
             .expect("old id present, migration must produce Some");
         assert_eq!(migrated.nodes[0].type_id, "node.draw_particles_camera");
         assert!(migrated.nodes[0].params.is_empty());
+    }
+
+    #[test]
+    fn retired_params_saved_nondefault_values_load() {
+        let registry = registry();
+        for &(type_id, param) in manifold_core::type_id_migration::RETIRED_PARAMS {
+            let declared = registry.construct(type_id).expect("retired params belong to a live node type");
+            assert!(declared.parameters().iter().all(|p| p.name != param), "{type_id}.{param} is still declared");
+            let def: EffectGraphDef = serde_json::from_value(serde_json::json!({
+                "version": 1, "nodes": [{"id": 1, "nodeId": "n", "typeId": type_id, "handle": "n",
+                    "params": {param: {"type": "Float", "value": 137.0}}}], "wires": []
+            })).unwrap();
+            assert!(has_retired_params(&def));
+            let mut graph = Graph::new();
+            instantiate_def(&mut graph, &def, &registry, HandleScope::Global,
+                BoundaryHandling::Standalone, &crate::node_graph::mesh_change::PreparedMeshRules::default())
+                .unwrap_or_else(|e| panic!("{type_id}.{param}: saved retired value must load: {e:?}"));
+            let node = graph.get_node(graph.node_id_by_handle("n").unwrap()).unwrap();
+            assert!(node.params.get(param).is_none(), "{type_id}.{param}");
+        }
+    }
+
+    #[test]
+    fn retired_params_preserve_stable_identity_that_matches_another_handle() {
+        let mut def: EffectGraphDef = serde_json::from_value(serde_json::json!({
+            "version": 1, "nodes": [
+                {"id": 1, "nodeId": "solver", "typeId": "node.gpu_flip_step", "handle": "step"},
+                {"id": 2, "nodeId": "step", "typeId": "node.scalar", "handle": "unrelated",
+                 "params": {"top_speed": {"type": "Float", "value": 23.0}}}
+            ], "wires": []
+        })).unwrap();
+        let mut metadata = minimal_preset_metadata();
+        metadata.bindings = serde_json::from_value(serde_json::json!([
+            {"id": "speed", "label": "Speed", "defaultValue": 23.0,
+             "target": {"kind": "node", "nodeId": "step", "param": "top_speed"}}
+        ])).unwrap();
+        def.preset_metadata = Some(metadata);
+        let original = def.clone();
+        assert!(!retire_params(&mut def));
+        assert_eq!(def, original, "the actual stable identity takes precedence over another node's handle");
+    }
+
+    #[test]
+    fn retired_params_isolate_modifier_node_identities() {
+        let mut def: EffectGraphDef = serde_json::from_value(serde_json::json!({
+            "version": 3,
+            "nodes": [{"id": 1, "nodeId": "step", "typeId": "node.scalar", "handle": "step",
+                "params": {"top_speed": {"type": "Float", "value": 23.0}}}], "wires": [],
+            "sceneModifiers": [{"id": "modifier", "scene": {"node": "scene"}, "targets": "allObjects",
+                "graph": {"version": 3, "nodes": [
+                    {"id": 1, "nodeId": "step", "typeId": "node.gpu_flip_step", "handle": "step",
+                     "params": {"top_speed": {"type": "Float", "value": 137.0}}}], "wires": []}}]
+        })).unwrap();
+        let binding = serde_json::from_value(serde_json::json!({
+            "id": "speed", "label": "Speed", "defaultValue": 23.0,
+            "target": {"kind": "node", "nodeId": "step", "param": "top_speed"}
+        })).unwrap();
+        let mut parent_metadata = minimal_preset_metadata();
+        parent_metadata.bindings.push(binding);
+        def.preset_metadata = Some(parent_metadata.clone());
+        def.scene_modifiers[0].graph.preset_metadata = Some(parent_metadata.clone());
+        let parent_nodes = def.nodes.clone();
+        assert!(retire_params(&mut def));
+        assert_eq!(def.nodes, parent_nodes);
+        assert_eq!(def.preset_metadata, Some(parent_metadata), "modifier-local identities cannot erase parent bindings");
+        assert!(def.scene_modifiers[0].graph.nodes[0].params.is_empty());
+        assert!(def.scene_modifiers[0].graph.preset_metadata.as_ref().unwrap().bindings.is_empty());
+        let once = def.clone();
+        assert!(!retire_params(&mut def));
+        assert_eq!(def, once);
+    }
+
+    #[test]
+    fn retired_params_nested_cards_and_wires_preserve_live_fanout() {
+        use manifold_core::effect_graph_def::{BindingTarget, ParamSpecDef};
+        let mut def: EffectGraphDef = serde_json::from_value(serde_json::json!({
+            "version": 1, "nodes": [
+                {"id": 0, "typeId": "node.scalar", "handle": "source"},
+                {"id": 1, "typeId": "group", "nodeId": "group", "handle": "group",
+                 "params": {"speed": {"type": "Float", "value": 93.0}}, "exposedParams": ["speed"],
+                 "group": {
+                    "interface": {"inputs": [{"name": "dead", "portType": "Scalar(F32)"},
+                                              {"name": "shared", "portType": "Scalar(F32)"}], "outputs": [],
+                        "params": [{"name": "speed", "targetHandle": "inner/step", "targetParam": "top_speed"}]},
+                    "nodes": [
+                        {"id": 10, "typeId": "system.group_input"},
+                        {"id": 11, "typeId": "group", "handle": "inner", "group": {
+                            "interface": {"inputs": [], "outputs": []},
+                            "nodes": [{"id": 20, "typeId": "node.gpu_flip_step", "nodeId": "step", "handle": "step",
+                                "params": {"top_speed": {"type": "Float", "value": 137.0}}, "exposedParams": ["top_speed"]}],
+                            "wires": []}},
+                        {"id": 12, "typeId": "node.gpu_flip_step", "nodeId": "other_step", "handle": "other_step"},
+                        {"id": 13, "typeId": "node.scalar", "nodeId": "unrelated", "handle": "unrelated",
+                         "params": {"top_speed": {"type": "Float", "value": 23.0}}, "exposedParams": ["top_speed"]}
+                    ], "wires": [
+                        {"fromNode": 10, "fromPort": "dead", "toNode": 12, "toPort": "top_speed"},
+                        {"fromNode": 10, "fromPort": "shared", "toNode": 12, "toPort": "top_speed"},
+                        {"fromNode": 10, "fromPort": "shared", "toNode": 13, "toPort": "top_speed"}
+                    ]}}
+            ], "wires": [{"fromNode": 0, "fromPort": "value", "toNode": 1, "toPort": "speed"},
+                         {"fromNode": 0, "fromPort": "value", "toNode": 1, "toPort": "dead"},
+                         {"fromNode": 0, "fromPort": "value", "toNode": 1, "toPort": "shared"}]
+        })).unwrap();
+        let mut metadata = minimal_preset_metadata();
+        for id in ["retired", "fanout", "group_speed", "legacy"] {
+            metadata.params.push(ParamSpecDef { id: id.into(), name: id.into(), ..Default::default() });
+        }
+        metadata.bindings = serde_json::from_value(serde_json::json!([
+            {"id": "retired", "label": "Retired", "defaultValue": 137.0, "userAdded": true,
+             "target": {"kind": "node", "nodeId": "step", "param": "top_speed"}},
+            {"id": "legacy", "label": "Legacy", "defaultValue": 137.0,
+             "target": {"kind": "handleNode", "handle": "group/inner/step", "param": "top_speed"}},
+            {"id": "group_speed", "label": "Group", "defaultValue": 93.0,
+             "target": {"kind": "node", "nodeId": "group", "param": "speed"}},
+            {"id": "fanout", "label": "Mixed", "defaultValue": 23.0,
+             "target": {"kind": "node", "nodeId": "step", "param": "top_speed"}},
+            {"id": "fanout", "label": "Mixed", "defaultValue": 23.0,
+             "target": {"kind": "node", "nodeId": "unrelated", "param": "top_speed"}}
+        ])).unwrap();
+        def.preset_metadata = Some(metadata);
+        let unrelated = def.nodes[1].group.as_ref().unwrap().nodes[3].clone();
+        assert!(retire_params(&mut def));
+        let group_node = &def.nodes[1];
+        assert!(group_node.params.is_empty() && group_node.exposed_params.is_empty());
+        let group = group_node.group.as_ref().unwrap();
+        assert!(group.interface.params.is_empty());
+        assert_eq!(group.interface.inputs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["shared"]);
+        assert_eq!(group.nodes[3], unrelated, "same-named unrelated input stays byte-for-byte intact");
+        let step = &group.nodes[1].group.as_ref().unwrap().nodes[0];
+        assert!(step.params.is_empty() && step.exposed_params.is_empty());
+        assert_eq!(group.wires.len(), 1);
+        assert_eq!(def.wires.len(), 1);
+        let metadata = def.preset_metadata.as_ref().unwrap();
+        assert_eq!(metadata.params.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), ["fanout"]);
+        assert_eq!(metadata.bindings.len(), 1);
+        assert!(matches!(&metadata.bindings[0].target, BindingTarget::Node {node_id, param}
+            if node_id.as_str() == "unrelated" && param == "top_speed"));
+        let once = def.clone();
+        assert!(!retire_params(&mut def));
+        assert_eq!(def, once, "repeat migration leaves the normalized document unchanged");
     }
 
     // ── GLTF_ANIM_RUNTIME_V2_DESIGN.md P2/D5 — old-shape sampler migration ──

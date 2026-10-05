@@ -105,10 +105,16 @@ fn gpu_flip_lattice(field: &Field) -> Vec<FaceSample> {
         .collect()
 }
 
-/// The padded lattice over the box: n + 7 nodes, the first at m − 3h. Both
-/// components read their box from it.
+/// The padded lattice over the box: n + 7 nodes, the first at m − 3h. The
+/// MPM component reads its box from it.
 fn lattice_nodes() -> [u32; 3] {
     N.map(|n| n + 1 + 2 * PADDING_NODES)
+}
+
+/// The padded lattice whose native FLIP solver grid has N cells: GPU FLIP
+/// solves on nodes − 4 cells.
+fn gpu_flip_nodes() -> [u32; 3] {
+    N.map(|n| n + 4)
 }
 
 fn node_position(p: [u32; 3]) -> [f64; 3] {
@@ -140,7 +146,7 @@ fn liquid_face_grid_layout_gpu_flip() {
                 &mut FaceSampleComponent::new(),
                 ("faces", input.0),
                 face_len(N, axis) as usize,
-                &component_params(lattice_nodes(), axis as u32),
+                &component_params(gpu_flip_nodes(), axis as u32),
             );
             assert_faces(axis, &got, |f| field.at(seam_position(axis, f))[axis], &format!("GPU FLIP {name}"));
         }
@@ -192,7 +198,7 @@ fn face_sample_component_zeroes_unweighted_faces() {
             &mut FaceSampleComponent::new(),
             ("faces", input.0),
             face_len(N, axis) as usize,
-            &component_params(lattice_nodes(), axis as u32),
+            &component_params(gpu_flip_nodes(), axis as u32),
         );
         assert_faces(
             axis,

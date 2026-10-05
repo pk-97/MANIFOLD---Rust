@@ -366,6 +366,36 @@ mod tests {
     #[test]
     fn legacy_gpu_flip_surface_runtime_defaults_and_live_binding_fan_out() {
         let mut def = legacy_shipped();
+        // Preserve an explicitly saved coarse surface with its old support,
+        // independently of the bundled preset's fresh defaults.
+        let metadata = def.preset_metadata.as_mut().unwrap();
+        for param in &mut metadata.params {
+            match param.id.as_str() {
+                "surface_detail" => param.default_value = 0.0,
+                "surface_particle_scale" => param.default_value = 3.0,
+                _ => {}
+            }
+        }
+        for binding in &mut metadata.bindings {
+            match binding.id.as_str() {
+                "surface_detail" => binding.default_value = 0.0,
+                "surface_particle_scale" => binding.default_value = 3.0,
+                _ => {}
+            }
+        }
+        let surface_node = def.nodes.iter_mut().find(|n| n.node_id.as_str() == "surface").unwrap();
+        surface_node.params.insert("particle_scale".into(), SerializedParamValue::Float { value: 3.0 });
+        for node in &mut surface_node.group.as_deref_mut().unwrap().nodes {
+            match node.node_id.as_str() {
+                "liquid_volume" | "liquid_mesh" => {
+                    node.params.insert("resolution_scale".into(), SerializedParamValue::Int { value: 1 });
+                }
+                "liquid_blobs" => {
+                    node.params.insert("particle_scale".into(), SerializedParamValue::Float { value: 3.0 });
+                }
+                _ => {}
+            }
+        }
         def.preset_metadata.as_mut().unwrap().bindings.iter_mut().find(|b|
             matches!(&b.target, BindingTarget::Node { node_id, param } if node_id.as_str() == "liquid_volume" && param == "resolution_scale")
         ).unwrap().offset = 2.0;
@@ -386,6 +416,8 @@ mod tests {
             }
         };
         assert_scale(&runtime, 2.0);
+        let blobs = runtime.graph.instance_by_node_id(&NodeId::new("liquid_blobs")).unwrap();
+        assert_eq!(runtime.graph.get_node(blobs).unwrap().params.get("particle_scale"), Some(&ParamValue::Float(3.0)));
         let target_nodes: Vec<_> = targets.iter().map(|id| runtime.graph.instance_by_node_id(id).unwrap()).collect();
         let source = |id, port: &str| runtime.graph.wires_into(id).find(|w| w.to.1 == port).unwrap().from;
         assert_eq!(source(target_nodes[0], "bounds"), source(target_nodes[1], "bounds"));
@@ -395,5 +427,31 @@ mod tests {
         detail.base = 1.0;
         runtime.apply_param_values(&params);
         assert_scale(&runtime, 3.0);
+    }
+
+    #[test]
+    fn gpu_flip_surface_fresh_defaults_and_live_bindings_reach_nested_nodes() {
+        let def = shipped();
+        let mut params = ParamManifest::from_params(def.preset_metadata.as_ref().unwrap().params.iter().cloned().map(Param::bundled).collect());
+        let mut runtime = PresetRuntime::from_def(def, &PrimitiveRegistry::with_builtin(), None).unwrap();
+        let assert_param = |runtime: &PresetRuntime, node: &str, name: &str, value| {
+            let id = runtime.graph.instance_by_node_id(&NodeId::new(node)).unwrap();
+            assert_eq!(runtime.graph.get_node(id).unwrap().params.get(name), Some(&ParamValue::Float(value)), "{node}.{name}");
+        };
+        for node in ["liquid_volume", "liquid_mesh", "liquid_bricks"] {
+            assert_param(&runtime, node, "resolution_scale", 2.0);
+        }
+        assert_param(&runtime, "liquid_blobs", "particle_scale", 2.2);
+        assert!(runtime.shadowed_def_params().next().is_none());
+        for (name, value) in [("surface_detail", 0.0), ("surface_particle_scale", 3.0)] {
+            let param = params.get_mut(name).unwrap();
+            param.value = value;
+            param.base = value;
+        }
+        runtime.apply_param_values(&params);
+        for node in ["liquid_volume", "liquid_mesh", "liquid_bricks"] {
+            assert_param(&runtime, node, "resolution_scale", 1.0);
+        }
+        assert_param(&runtime, "liquid_blobs", "particle_scale", 3.0);
     }
 }

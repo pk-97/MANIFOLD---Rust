@@ -145,8 +145,10 @@ impl MatterRun {
 /// Faces carrying velocity around the liquid, as (carrying, counted), by
 /// layer: the liquid cells' own faces; one layer out across the face's axis
 /// (sharing an edge with an own face); one layer out along it. Tank-wall
-/// faces are left out, since the wall condition zeroes them.
-fn layer_shares(faces: &[Vec<f32>; 3], liquid: &[bool], cells: [u32; 3]) -> [(usize, usize); 3] {
+/// faces are left out, since the wall condition zeroes them: the grid's edge,
+/// and `padding` more layers where the walls stand inside the grid (GPU
+/// FLIP's native grid, walls 1.5 cells in).
+fn layer_shares(faces: &[Vec<f32>; 3], liquid: &[bool], cells: [u32; 3], padding: u32) -> [(usize, usize); 3] {
     let cell = |c: [u32; 3]| liquid[(c[0] + cells[0] * (c[1] + cells[1] * c[2])) as usize];
     let mut shares = [(0, 0); 3];
     for (axis, values) in faces.iter().enumerate() {
@@ -167,7 +169,12 @@ fn layer_shares(faces: &[Vec<f32>; 3], liquid: &[bool], cells: [u32; 3]) -> [(us
         };
         for (index, &value) in values.iter().enumerate() {
             let f = face_coords(cells, axis, index);
-            if f[axis] == 0 || f[axis] == cells[axis] {
+            let in_wall = (0..3).any(|b| if b == axis {
+                f[b] <= padding || f[b] >= cells[b] - padding
+            } else {
+                f[b] < padding || f[b] >= cells[b] - padding
+            });
+            if in_wall {
                 continue;
             }
             let layer = if own(f) {
@@ -273,7 +280,9 @@ fn face_grid_demo_gpu_flip_and_matter_side_by_side() {
     for _ in 0..FRAMES {
         gpu_flip.frame();
     }
-    assert_eq!(gpu_flip.n(), 64);
+    // The native solver grid: the authored 64 plus three cells of wall padding.
+    let gpu_flip_cells = [gpu_flip.n() as u32; 3];
+    assert_eq!(gpu_flip_cells, [67; 3]);
     let gpu_flip_faces = gpu_flip.face_grid();
     let gpu_flip_liquid: Vec<bool> = gpu_flip.water().iter().map(|&w| w > 0.5).collect();
     drop(gpu_flip);
@@ -284,16 +293,19 @@ fn face_grid_demo_gpu_flip_and_matter_side_by_side() {
     let matter_faces = matter.face_grid();
     let matter_liquid = matter.liquid_cells();
 
-    let slices = [speed_slice(&gpu_flip_faces, CELLS), speed_slice(&matter_faces, CELLS)];
-    let runs = [("GPU FLIP", &gpu_flip_faces, &gpu_flip_liquid, &slices[0]), ("MPM", &matter_faces, &matter_liquid, &slices[1])];
-    for (name, faces, liquid, slice) in runs {
+    let slices = [speed_slice(&gpu_flip_faces, gpu_flip_cells), speed_slice(&matter_faces, CELLS)];
+    let runs = [
+        ("GPU FLIP", &gpu_flip_faces, &gpu_flip_liquid, &slices[0], gpu_flip_cells, 1),
+        ("MPM", &matter_faces, &matter_liquid, &slices[1], CELLS, 0),
+    ];
+    for (name, faces, liquid, slice, cells, padding) in runs {
         for (axis, face) in faces.iter().enumerate() {
             assert!(face.iter().all(|v| v.is_finite()), "{name} axis {axis} holds a non-finite face");
         }
         let fastest = slice.iter().copied().fold(0.0_f32, f32::max);
         let moving: Vec<f32> = slice.iter().copied().filter(|&s| s > 0.0).collect();
         let mean = moving.iter().sum::<f32>() / moving.len().max(1) as f32;
-        let shares = layer_shares(faces, liquid, CELLS);
+        let shares = layer_shares(faces, liquid, cells, padding);
         let share = shares.map(|(carrying, counted)| format!("{carrying}/{counted} ({:.1}%)", 100.0 * carrying as f64 / counted.max(1) as f64));
         println!(
             "{name}: {} liquid cells; faces carrying velocity: own {}, one out across {}, one out along {}; slice: {} of {} cells moving, fastest {fastest:.3} m/s, mean {mean:.3} m/s",
@@ -323,14 +335,16 @@ fn face_grid_demo_gpu_flip_and_matter_side_by_side() {
         }
     }
 
-    let side = CELLS[0] as usize;
+    let sides = [gpu_flip_cells[0] as usize, CELLS[0] as usize];
+    let side = sides[0].max(sides[1]);
     let top = slices.iter().flatten().copied().fold(0.0_f32, f32::max);
     let (w, h) = (2 * side * SCALE + GAP, side * SCALE);
     let mut rgba = [48_u8, 48, 48, 255].repeat(w * h);
     for (panel, slice) in slices.iter().enumerate() {
-        for y in 0..h {
-            for x in 0..side * SCALE {
-                let [r, g, b] = heat(slice[(y / SCALE) * side + x / SCALE] / top);
+        let n = sides[panel];
+        for y in 0..n * SCALE {
+            for x in 0..n * SCALE {
+                let [r, g, b] = heat(slice[(y / SCALE) * n + x / SCALE] / top);
                 let at = (y * w + panel * (side * SCALE + GAP) + x) * 4;
                 rgba[at..at + 4].copy_from_slice(&[r, g, b, 255]);
             }

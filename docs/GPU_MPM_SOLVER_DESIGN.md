@@ -480,9 +480,11 @@ only the `Arc` of the prepared geometry; no channel, mutex or long-lived thread.
 
 **D26 — A role's scale applies at use.** A lattice is built once in the geometry's own
 unscaled frame. Samplers map a world point through the pose and divide by the per-axis
-scale (world → local); a local distance becomes metres by the smallest scale, which
-never overstates the gap for a non-uniform scale. `LiquidShape` is 48 bytes: origin and
-spacing, dims, atlas offset, and the scale with its minimum in w.
+scale (world → local). A reader of the distance as a size (`liquid_shape_distance`)
+turns local units into metres along the trilinear slope n, d / |n ⊘ scale|, exact on
+every face of a stretched shape, and falls back to the smallest scale on a ridge; sign
+tests need no scale. `LiquidShape` is 48 bytes: origin and spacing, dims, atlas offset,
+and the scale with its minimum in w.
 
 **D27 — One lattice per geometry: the longest extent over 32, two spacings of padding.**
 Roles sharing geometry share one atlas block. World spacing is the local spacing times
@@ -491,6 +493,10 @@ Break's moving box (a unit cube scaled 0.6 × 1.16 × 0.85) samples at 0.019–0
 0.3–0.58 dx; a 0.25 m prop at 0.008 m, 0.13 dx; a domain-sized 4 m collider at
 0.125 m, 2 dx. Any collider longer than 32 dx is coarser than the grid and rounds its
 corners by up to a spacing; P4 decides whether to raise the count for large colliders.
+The padding is under one grid cell for a body under 16 cells across, so every reader
+of the distance as a size (solid lattice, seeding, face owner, whitewater) reads past
+it as the nearest lattice point's distance plus the gap (`liquid_shape_distance`);
+only inside tests may treat a point off the lattice as outside.
 
 **D28 — Bodies are per-tick rows; the pose is evaluated per substep.**
 `node.matter_domain` records each collider's transform once per display frame into

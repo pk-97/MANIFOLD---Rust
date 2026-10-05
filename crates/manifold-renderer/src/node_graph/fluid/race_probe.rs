@@ -222,3 +222,96 @@ fn gpu_flip_engine_settles() {
 fn gpu_flip_engine_race_refined() {
     race(128, false, 300);
 }
+
+/// The engine's side of `gpu_flip_still_pool_rests_round_a_static_obstacle`:
+/// the pool 1 m deep round the Dam Break's box at 64³ for 120 frames, the
+/// fastest particles in the engine's own cells.
+#[test]
+fn gpu_flip_engine_still_pool_round_a_box() {
+    use crate::node_graph::primitives::gpu_flip_preset::DAM_OBSTACLE;
+    let settings = FluidSettings { initial_volume: None, fill_height: 1.0, ..dam_break(64, false) };
+    let domain = settings.domain_layout().expect("pool domain");
+    let mut world = seeded_world(settings, domain, false).expect("pool world");
+    world.set_gravity([0.0, -9.81, 0.0]).expect("gravity");
+    let [pos, scale] = DAM_OBSTACLE;
+    let bounds = domain.bounds(Transform { pos: pos.map(|v| v as f32), scale: scale.map(|v| v as f32), ..Transform::default() });
+    let (origin, _) = engine_grid(domain);
+    let h = domain.cell_size;
+    let offset = domain.to_scene([0.0; 3]);
+    let (mut records, mut solid) = (Vec::new(), Vec::new());
+    let mut peak = 0.0f64;
+    for frame in 0..120 {
+        world.set_obstacle(bounds, bounds, bounds).expect("obstacle");
+        world.step(Seconds(1.0 / 60.0)).expect("engine step");
+        let info = loop {
+            match world.capture_particle_frame(offset, &mut records, &mut solid) {
+                Ok(info) => break info,
+                Err(CaptureError::Capacity { particles, solid: nodes }) => {
+                    records.resize(particles as usize, ParticleRecord::default());
+                    solid.resize(nodes, 0.0);
+                }
+                Err(CaptureError::Fluid(e)) => panic!("engine particle frame: {e}"),
+            }
+        };
+        let mut fast: Vec<(f64, [f64; 3], [f32; 3])> = records[..info.count as usize]
+            .iter()
+            .map(|p| {
+                let speed = p.velocity.iter().map(|c| f64::from(*c).powi(2)).sum::<f64>().sqrt();
+                let at = std::array::from_fn(|a| (f64::from(p.position_radius[a]) - origin[a]) / h);
+                (speed, at, [p.velocity[0], p.velocity[1], p.velocity[2]])
+            })
+            .collect();
+        fast.sort_by(|a, b| b.0.total_cmp(&a.0));
+        peak = peak.max(fast[0].0);
+        if [0, 1, 2, 5, 19, 39, 59, 79, 99, 119].contains(&frame) {
+            println!("ENGINE pool round a box frame {frame}: {} live", info.count);
+            for (s, at, v) in fast.iter().take(5) {
+                println!("ENGINE   {s:.4} m/s at [{:.3}, {:.3}, {:.3}] v {v:?}", at[0], at[1], at[2]);
+            }
+        }
+    }
+    println!("ENGINE pool round a box: peak {peak:.4} m/s");
+}
+
+/// The engine's side of `gpu_flip_replay_changes_nothing`'s scene: the Dam
+/// Break with its box at 64³, the substeps and fastest particle per frame.
+#[test]
+fn gpu_flip_engine_dam_break_with_box_substeps() {
+    use crate::node_graph::primitives::gpu_flip_preset::DAM_OBSTACLE;
+    let settings = dam_break(64, false);
+    let domain = settings.domain_layout().expect("dam break domain");
+    let mut world = seeded_world(settings, domain, false).expect("dam break world");
+    world.set_gravity([0.0, -9.81, 0.0]).expect("gravity");
+    let [pos, scale] = DAM_OBSTACLE;
+    let bounds = domain.bounds(Transform { pos: pos.map(|v| v as f32), scale: scale.map(|v| v as f32), ..Transform::default() });
+    let offset = domain.to_scene([0.0; 3]);
+    let (mut records, mut solid) = (Vec::new(), Vec::new());
+    for frame in 0..90 {
+        world.set_obstacle(bounds, bounds, bounds).expect("obstacle");
+        let stats = world.step(Seconds(1.0 / 60.0)).expect("engine step");
+        let info = loop {
+            match world.capture_particle_frame(offset, &mut records, &mut solid) {
+                Ok(info) => break info,
+                Err(CaptureError::Capacity { particles, solid: nodes }) => {
+                    records.resize(particles as usize, ParticleRecord::default());
+                    solid.resize(nodes, 0.0);
+                }
+                Err(CaptureError::Fluid(e)) => panic!("engine particle frame: {e}"),
+            }
+        };
+        let mut fast: Vec<(f64, [f32; 3], [f32; 3])> = records[..info.count as usize]
+            .iter()
+            .map(|p| {
+                let s = p.velocity.iter().map(|c| f64::from(*c).powi(2)).sum::<f64>().sqrt();
+                (s, [p.position_radius[0], p.position_radius[1], p.position_radius[2]], [p.velocity[0], p.velocity[1], p.velocity[2]])
+            })
+            .collect();
+        fast.sort_by(|a, b| b.0.total_cmp(&a.0));
+        println!("ENGINE dam break with box frame {frame}: {} substeps, fastest {:.2} m/s", stats.substeps, fast[0].0);
+        if (27..40).contains(&frame) {
+            for (s, at, v) in fast.iter().take(3) {
+                println!("ENGINE   {s:.2} m/s at {at:?} v {v:?}");
+            }
+        }
+    }
+}

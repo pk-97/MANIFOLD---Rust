@@ -2,7 +2,7 @@
 
 <!-- index: The GPU water solver (GPU FLIP, formerly SWASH): PIC/FLIP particles on a face grid, one liquid tick of two water steps, and a multigrid-preconditioned conjugate gradient pressure solve that stops on the FLIP Fluids tolerance. The step, the equation, the solve, the Auto iteration rule, the named refusals, the measures against the FLIP Fluids engine, and what is still owed (solids). -->
 
-**Status:** BUILT · 2026-10-01 · the step is one node, `node.gpu_flip_step` (section 1.1 (stage design)) · owed: BUG-4jfv (solids gate: race rows, engine draft, L2 demo); BUG-l2h3 (SWASH to a live instrument) child .10 (occupied-block passes); BUG-h8or (lid slabs); BUG-ekb3 (separating solids, built at level 0 in section 8; landing review owed) · the retired FFT solve is `docs/archive/FFT_WATER_SOLVER_DESIGN.md`.
+**Status:** BUILT · 2026-10-01 · the step is one node, `node.gpu_flip_step` (section 1.1 (stage design)) · owed: BUG-4jfv (solids gate: race rows, engine draft, L2 demo); BUG-l2h3 (SWASH to a live instrument) child .10 (occupied-block passes); BUG-h8or (lid slabs) · the retired FFT solve is `docs/archive/FFT_WATER_SOLVER_DESIGN.md`.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) before the solids phase.
 
 GPU FLIP is the liquid water solver: particles carry the water, a face (MAC) grid carries its velocity, and each step makes that velocity divergence-free with one pressure solve. The solve is the textbook multigrid-preconditioned conjugate gradient (McAdams, Sifakis and Teran, "A parallel multigrid Poisson solver for fluids simulation on large grids", 2010). It replaced the FFT capacitance solve on 2026-10-01: the same equation, 3.0× faster at 64³ and 3.7× at 128³, to a smaller residual.
@@ -23,16 +23,16 @@ The builder is `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_pres
 4. Gravity plus the scene's forces, the wall faces held at 0 (`face_gravity`). The forces and impulses come from the domain's coarse lattices (LIQUID_SOLVER_SEAM_DESIGN.md P8 (Forces and impulses for GPU liquids)), read at each face's centre; an impulse lands once, on the first step of its tick. Solids: the open fraction of every face (`open_fractions`) and the closest body's velocity on it (`solid_face_velocity`); see "Solids in the water" below.
 5. Divergence per water cell → f (`divergence`).
 6. The pressure solve, section 3.
-7. Subtract the pressure gradient on faces touching water (`subtract_pressure`), the air side of a surface face at its ghost pressure; wall faces stay 0. Extend the projected field by `band_layers` layers, then constrain both `new` and the saved `old` field against solids and walls (`constrain_solid_faces`), matching `_pressureSolve` followed by `_constrainVelocityFields`.
-8. When enabled (on in the Dam Break: the engine has none, but without it the pool stands 13–21% high), the density projection of Kugelstadt et al. 2019, "Implicit Density Projection for Volume Conserving Liquids" (`density_source`; credit in `gpu_flip_step.rs`). Each water cell's density ρ is the tent-kernel sum of the particles within a cell of its centre, rest 8; solids are sampled with particles as the paper does, on the same rest lattice of eight sites a cell: each of the 26 neighbours outside the box adds what its eight sites would (0.5625 a face, 0.09375 an edge, 0.015625 a corner), and near a body every site inside it (`solid_at` < 0) adds its tent weight, so a cell the body only cuts weighs its solid part; a cell with any face neighbour holding no particles reads at least rest, so a part-full surface cell only spreads (the paper's particle-deficiency clamp, read on face neighbours as blub's live branch does, `density_projection_gather_error.comp`:182–184; air is an empty cell, not the level-set mask, which also covers the empty cell above the surface). A pool at rest on the seeded lattice reads exactly rest everywhere, so it is never pushed. Departure from blub: its live branch counts walls on the face neighbours only (:167); its edge and corner weights sit in a disabled branch (:130–159). We keep all 26, because face-only reads a seeded wall cell 5.5% light (7.5625 against a floor) and fails `gpu_flip_still_pool`, `gpu_flip_still_pool_rests_round_a_static_obstacle` and `gpu_flip_hydrostatic_column_rests`. The source −(1/dt)·clamp(ρ/8 − 1, ±½) (the paper's displacement limit, ρ/ρ0 in [0.5, 1.5]; blub builds both the same way) is solved like section 3 with air at zero, its gradient taken off a copy of the projected faces into `spread`. It is the whole error every step, no per-step share, and it moves particles only: it never becomes velocity, so it adds no speed. Off with Volume Projection 0.
-9. Faces to particles (`faces_to_particles`): PIC/FLIP velocity from `new` and `old`; the RK3 move through `new` plus the density move step dt · (`spread` − `new`), uncapped (the source clamp bounds it); clamped 0.2 cells off the walls.
+7. Subtract the pressure gradient on open faces touching water (`subtract_pressure`), the air side of a surface face at its ghost pressure. Inner closed faces and faces between two air cells become zero and invalid before extension, as in native `PressureSolver::applySolutionToVelocityField`; wall end faces retain the current grid boundary convention. Extend the projected field by `band_layers` layers, then constrain both `new` and the saved `old` field against solids and walls (`constrain_solid_faces`), matching `_pressureSolve` followed by `_constrainVelocityFields`.
+8. When explicitly enabled (off by default and absent from the native engine), the density projection of Kugelstadt et al. 2019, "Implicit Density Projection for Volume Conserving Liquids" (`density_source`; credit in `gpu_flip_step.rs`). Each water cell's density ρ is the tent-kernel sum of the particles within a cell of its centre, rest 8; solids are sampled with particles as the paper does, on the same rest lattice of eight sites a cell: each of the 26 neighbours outside the box adds what its eight sites would (0.5625 a face, 0.09375 an edge, 0.015625 a corner), and near a body every site inside it (`solid_at` < 0) adds its tent weight, so a cell the body only cuts weighs its solid part; a cell with any face neighbour holding no particles reads at least rest, so a part-full surface cell only spreads (the paper's particle-deficiency clamp, read on face neighbours as blub's live branch does, `density_projection_gather_error.comp`:182–184; air is an empty cell, not the level-set mask, which also covers the empty cell above the surface). A pool at rest on the seeded lattice reads exactly rest everywhere, so it is never pushed. Departure from blub: its live branch counts walls on the face neighbours only (:167); its edge and corner weights sit in a disabled branch (:130–159). We keep all 26, because face-only reads a seeded wall cell 5.5% light (7.5625 against a floor) and fails `gpu_flip_still_pool`, `gpu_flip_still_pool_rests_round_a_static_obstacle` and `gpu_flip_hydrostatic_column_rests`. The source −(1/dt)·clamp(ρ/8 − 1, ±½) (the paper's displacement limit, ρ/ρ0 in [0.5, 1.5]; blub builds both the same way) is solved like section 3 with air at zero, its gradient taken off a copy of the projected faces into `spread`. It is the whole error every step, no per-step share, and it moves particles without directly updating velocity. Moving particles changes later transfers and potential energy, so this does not imply unchanged speed or energy. Off with Volume Projection 0.
+9. Faces to particles (`faces_to_particles`): PIC/FLIP velocity from `new` and `old`; the RK3 move through `new` plus the density move step dt · (`spread` − `new`). Sampling follows native `MACVelocityField::_interpolateLinearU/V/W`: ordinary trilinear stored velocities, zero for missing component corners or positions outside the grid, with no validity-weight renormalization. Collision processing follows the native sequence described in section 8; there is no unconditional 0.2-cell preclamp. Grid origin/dimensions and per-stage travel guards still differ from native, so matching interpolation alone does not establish complete transport parity. The optional Narrow Band marker mover shares this sampler, but its separate grid-backtrace sampler still clamps and renormalizes validity; that mode remains outside the native reference baseline.
 10. Sort moved markers into cells, remove extreme velocities using the accepted frame interval, and reject cell ranks above 250. Ranges precede speed rejection, preserving the native count-before-speed rule. The speed histogram and relative-outlier counts aggregate exact integer counts within each 64-thread workgroup before merging nonzero counts into the shared histogram; thresholds and removal decisions are unchanged. The existing stable sorter compacts survivors without changing ids.
 11. Emit inflow into the compacted pool; fresh markers first enter transfer and advection on the following numerical step.
 
 The step's time rules:
 
 - **Step count.** The GPU-local clock ports the engine's CFL 5 schedule, authored minimum and six-step final-remainder rule. All integration uses its accepted durations; see LIVE_SIM_CLOCK_DESIGN.md. The 2026-10-04 ruling bounds that rule to one fixed Sim Rate step and records only the substeps that run (LIVE_SIM_CLOCK_DESIGN.md section 8 (Resolved decisions)).
-- **Extrapolation count.** Both face grids extend ceil(sqrt(3) * CFL) + 3 layers: 12 at the configured CFL 5. This follows `_extrapolateFluidVelocities` exactly and is independent of measured travel, resolution, authored Steps and a stretched final interval. The existing RK3 travel guard remains separate from this count.
+- **Extrapolation count.** Both face grids extend ceil(sqrt(3) * CFL) + 3 layers: 12 at the configured CFL 5. This follows `_extrapolateFluidVelocities` exactly and is independent of measured travel, resolution, authored Steps and a stretched final interval. RK3 samples stage velocities directly, without an additional travel guard.
 - **FLIP share per step.** `flip` is the FLIP share every step keeps, 0.95, as the engine's `_ratioPICFLIP` = 0.05 blends PIC into every substep. More Steps means more PIC damping per second, as in the engine.
 
 ## 1.1 Stage design — decided 2026-10-01
@@ -94,7 +94,7 @@ Deviations from the engine, each named:
 | φ from every particle whose box reaches the cell | Same scatter support, gathered over up to 125 bins | Repaired 2026-10-05: an empty inner ring does not permit skipping ring two. A ring-two-only air cell can neighbour water and affect the ghost-pressure ratio. CPU and GPU tests compare every cell to native scatter. |
 | ε 1e-6 in the velocity update, 1e-9 in the matrix | Same split, ported 2026-10-03 | Velocity-projection residual is not the recursive matrix residual; no tuned common epsilon |
 | ghost rows on every level | the finest level and its conjugate gradient only; coarse levels plain Dirichlet | coarse water is all-eight-children water, so a coarse surface has no φ; the V-cycle stays symmetric, only a weaker preconditioner at the surface |
-| no density solve | Enabled in current shipped Dam Break | Non-reference correction; removal requires separating its effects from remaining boundary/grid differences (BUG-irim0). |
+| no density solve | Off in fresh GPU FLIP and Dam Break defaults; explicit saved opt-ins retained | Matched-input motion supports disabling this non-reference correction; grid differences remain (BUG-irim0). |
 | surface tension, density ratio | none here | off in the scenes we race |
 | skips the last inner face of each axis in the velocity update | every inner face | the skip is an engine boundary quirk; our wall faces are their own rule |
 
@@ -202,7 +202,7 @@ Historical water race, 300 frames of the Dam Break without its obstacle (`gpu_fl
 
 These records used different solver, wall and surface revisions, so they do not isolate a cause of the motion differences. The old mesh harness and skin calibration invalidate the previous conclusion that the water kept its volume. The 64³ step-alone time is a quiet profiled frame (`gpu_flip_frame_by_node_type`); the other timing rows were contended. Use the captured-input native comparison below for the current bounded numerical evidence.
 
-**Volume, Kugelstadt projection** (`gpu_flip_dam_break_settles_to_its_volume`, the 64³ Dam Break, 1800 frames). Before it, the settled interior read 7.41 particles a cell against 8 (−7.3%) and the pool stood 13–21% high. With it:
+**Historical column depth and density, optional Kugelstadt projection** (`gpu_flip_density_projection_settled_column_depth_and_density`, explicitly enabled, 64³ Dam Break, 1800 frames). Before it, the settled interior read 7.41 particles a cell against 8 (−7.3%) and the pool stood 13–21% high. With it:
 
 | Row | 1 step | 2 steps |
 |---|---|---|
@@ -231,15 +231,30 @@ Historical result: one step and two touched the lid about equally, and the lid w
 
 With wall release off, density off/on measured GPU medians 2.795/4.261 ms and CPU encode medians 3.468/5.236 ms. At 1.5 s, native height p99 was 2.209 m, versus 2.576/2.173 m; mean energy was 6.290 J/kg, versus 6.834/6.312 J/kg. Density improved those measures but worsened the final RMS-speed difference. Wall release changed this case only modestly. These small-grid observations justify investigating the underlying differences before removing correction; they are not 64³ performance or visual evidence.
 
-After the collision-order repair, the same bounded diagnostic retained 5500
-particles at its checkpoints and reported no caps, refused pushes or
-unconverged solves in all four density/release arms. With release off,
-density off/on GPU medians were 2.806/4.291 ms and CPU encode medians
-3.480/5.266 ms. At 1.5 s, height p99 was 2.580/2.167 m, energy
-6.908/6.233 J/kg and RMS speed 0.784/0.952 m/s, against native
-2.209 m, 6.290 J/kg and 0.798 m/s. The planar wall sequence is repaired;
-the remaining motion discrepancy is not. This one run shows similar cost,
-not a measured performance improvement or visual match.
+After the collision-order, pressure-output and velocity-sampling repairs,
+the same diagnostic retained all 5500 particles at its checkpoints with no
+caps, refused pushes or unconverged solves. With wall release off, density
+off/on cost 2.806/4.297 ms GPU and 3.494/5.261 ms CPU encode. Density off
+tracked the first 0.5 s closely: height p99 differed from native by −0.004 m
+and RMS speed by +0.008 m/s. At 1.5 s, p99 was 2.365/2.050 m, energy
+6.024/5.423 J/kg and RMS speed 0.680/0.887 m/s, against native
+2.209 m, 6.290 J/kg and 0.798 m/s. Density correction worsened 14 of the
+15 absolute metric differences across the three checkpoints; only final RMS
+speed was closer with it. With release on, density off/on cost 2.866/4.600 ms
+GPU and showed the same broad result. This supports the new default without
+density correction, but does not establish grid parity, 64³ cost or visual
+quality. The sampling repair itself showed no GPU speedup (2.806 ms before
+and after with both optional corrections off).
+
+The default-off runtime resize fixture retains its seeded population at 64³
+and 32³. At 100³ after 90 frames, state and publication both contain 1,300,421
+of 1,301,120 seeded particles. A temporary capture around the removal stages
+accounted for all 699 missing identities in the existing 250-particles-per-cell
+limit, with none removed by advection/collision or extreme-speed cleanup.
+The capture was removed. The resize proof now checks exact reseeding and live
+publication, rather than requiring the initial population forever. This 100³
+crowding loss is not established as native agreement; it remains part of the
+boundary/grid and motion audit (BUG-g75v.17).
 
 **The free surface** (`gpu_flip_ghost_fluid_64`, `_refined`: the meshed Dam Break, 300 frames, the same tree with the ghost rows off and on; the engine from `gpu_flip_engine_splash_64` and `gpu_flip_engine_race_refined`). Breakup is the share of particles detached from the main body, over frames 30–150; pieces counts the detached clumps.
 
@@ -302,7 +317,7 @@ Remaining reference differences (not evidence of improved behaviour):
 | I8 | No atomic exchange or compare-exchange anywhere in the step, the solve or the body passes; integer atomicAdd/Min/Max only, each site named in the guard's allowlist, and only where the result is exact and independent of thread order (fixed-point sums with carry). Amended 2026-10-02 for the sealed-pocket sums. | `step_shader_atomics_are_allowlisted_integer_sums`, `pocket_carry_sum_is_exact_in_any_order`, `pressure_solver_uses_no_atomics`, `body_shader_uses_no_atomics` |
 | I10 | The V-cycle depth follows the lattice, halving each side rounding up until every side is 4 or less; the coarsest level is solved exactly | `levels_halve_rounding_up_to_four`, `pass_counts_follow_the_levels`, `pressure_module_passes_match_the_count` |
 | I11 | A box wall face is 0 in `old`, the forced field, the projection and the constraint | `gpu_flip_particles_to_faces_matches_the_wyvill_sum`, `gpu_flip_face_gravity_adds_gravity_and_holds_the_walls`, `gpu_flip_subtract_pressure_projects_faces_touching_water` (walls held and kept both drawn) |
-| I12 | The face band uses the configured engine CFL, independent of particle travel; RK3 guard behavior is tested separately | `gpu_flip_faces_to_particles_blends_flip_and_moves_by_rk3` (stages within and past the guard); `gpu_flip_band_uses_engine_cfl_independent_of_travel`, `gpu_flip_step_order_extend_constraint_value_proof` |
+| I12 | The face band uses the configured engine CFL, independent of particle travel; ordinary RK3 samples stage velocities directly as the native engine does | `gpu_flip_faces_to_particles_blends_flip_and_moves_by_rk3`, `gpu_flip_rk3_stage_velocity_is_not_truncated`; `gpu_flip_band_uses_engine_cfl`, `gpu_flip_step_order_extend_constraint_value_proof` |
 | I13 | Ghost formulas retain native θ clamps, zero-diagonal handling, water-side φ floor and distinct matrix/velocity epsilons; zero φ gives plain rows; particle-distance support matches native scatter at r = √3·h/2 | `pressure_module_solves_the_ghost_rows`, `gpu_flip_subtract_pressure_projects_faces_touching_water`, `gpu_flip_particle_distance_is_the_engines_level_set`; these do not establish native grid alignment |
 | I9 | The domain meets the liquid contract | the liquid conformance suite (`liquid_conformance_covers_every_domain`, `tests/gpu_proofs/liquid_conformance.rs`) |
 
@@ -323,7 +338,7 @@ Peter's scenes have boxes and obstacles in the water, and the engine's Dam Break
   - A coarse face's weight is the mean of the four fine faces it covers. The engine has no multigrid, so this is ours.
   - A water cell with every face closed drops out: the smoother and residual give 0 there, the coarse inverse pins it.
   - The box walls are closed faces of the solid like any other: open fraction 0 in the divergence and the operator, velocity 0 after the constraint.
-  - A closed face (weight 0) keeps its velocity through the projection and stays valid for extension; `constrain_solid_faces` then sets it.
+  - An inner closed face (open fraction 0) is cleared and invalidated by the projection, so its pre-projection velocity cannot seed extension; `constrain_solid_faces` sets its solid velocity after extension, independently of validity.
   - The distance lattice is sampled at the step's pose, once per step.
 - **Moving solids, as built** (the step's `solid_face_velocity` and `constrain_solid_faces` passes). Divergence adds the engine's C·v_s term, (c − w)·v_s through each inner face with c the cell's open volume (`open_fractions` writes it in weight w, as `_getCellWeight` takes it). After the projection the step constrains both the projected and the saved faces, as the engine does: a closed face takes v_s, a cut face f·v_s + (1 − f)·u. Where it departs from the engine:
   - v_s is the closest body's rigid velocity, v + ω × (x − c), at the face centre. The engine interpolates the nearest triangle's vertex velocities from its mesh level set. For rigid bodies the two agree at the surface.
@@ -351,51 +366,21 @@ Peter's scenes have boxes and obstacles in the water, and the engine's Dam Break
   - Body force against iteration count (`gpu_flip_body_push_against_iterations`): at 4, 6, 8, 12 and 16 iterations the mean force and torque on both boxes are within 0.8% of 64 iterations, so 4 is the smallest steady count; Auto takes 11–17 iterations a tick and never reaches the cap, so it stands with bodies. Shake and trajectory statistics are not bars: the floating box amplifies the solve's last bits into 0.7–1.6 cells of stray over two seconds at any count that is not bit-identical to 64.
 - **Forbidden:** whole-cell solids; a CPU wait for the reaction inside the tick; atomics in the per-body reduction; editing the engine.
 
-### Separating solids — built at Solve Level 0 (BUG-ekb3 (water cannot separate from a solid floor))
+### Solid contact follows the native pressure solve
 
-Today the solve lets a solid pull on water: a pool under +20 m/s² upward gravity stays on the floor, held by negative pressure in the floor cells. Real water lets go. The FLIP Fluids engine has the same fault (`fluidsimulation.cpp` `_constrainVelocityFieldThread`, 6860–6924, no one-sided condition), so this is a departure from the engine, on physics. On stage: water flung upward, or a box yanked out of a pool, leaves the surface it was on instead of hanging off it.
+The GPU step uses the pocket-only water mask for pressure and body coupling,
+then constrains both the projected and saved velocity fields to the solids
+before advancing markers. This follows `fluidsimulation.cpp` `_stepFluid` and
+`_pressureSolve`: negative pressure at a solid is allowed.
 
-**The condition.** Batty, Bertails and Bridson 2007 ("A fast variational framework for accurate solid-fluid coupling", section 5): at a solid the water may move away but not in, and the solid may push but never pull. Written per cell, as Chentanez and Müller 2012 ("A multigrid fluid pressure solver handling separating solid boundary conditions", TVCG 18(8)) put it on a multigrid solve: for every water cell with a face of open fraction below 1 (a box wall or a body), a separating cell,
-
-- p_i ≥ 0, the divergence left after the projection d_i ≥ 0, and p_i · d_i = 0.
-
-Either the cell presses on the solid (p > 0, the divergence-free row as today) or it is let go (p = 0, it may lose water, d > 0). A cell with no solid face keeps today's equation exactly. This is the linear complementarity problem the papers solve; our L is a symmetric M-matrix (non-positive off-diagonals, diagonally dominant), for which the active-set iteration below is finite and exact (Hintermüller, Ito and Kunisch 2002, "The primal-dual active set strategy as a semismooth Newton method").
-
-The face velocity is not touched. A wall face stays 0 and a body face stays v_s in `old`, the forced field, the divergence, the projection and the constraint, so the operator and the divergence still agree on every face. That is what killed the earlier separating wall (section 2, walls): it changed the face and not the operator. Here only the pressure unknown changes kind, and a let-go cell is a Dirichlet p = 0 cell, which the operator already handles.
-
-**The active set, as built: one round a step, carried across steps.** Same-tick rounds would need every `prepare` and solve dispatch behind an indirect gate, so the build runs one active-set round per water step instead, and the set carries to the next step. Water steps are a few milliseconds apart, so a contact change lands one step late.
-
-1. `separate_pin` (gpu_flip_step.wgsl, one thread a cell, after `pocket_pin`): the let-go set A (`let_go`, a cell array the step keeps, zeroed at allocation) is masked to solve water touching a solid (any of its six faces below open fraction 1) and emptied on the first step of tick 0. The contact mask `contact_water` is `solve_water` less A.
-2. The main `prepare`, solve and body passes run on the contact mask. A let-go cell is a Dirichlet p = 0 cell, exactly as a sealed pocket's pinned leader (section 2): its neighbours' diagonals already count every in-box neighbour, and `init_main` zeroes its pressure. The whole hierarchy is rebuilt from the contact mask, so the preconditioner matches the operator.
-3. `separate_update` (one thread a cell, after the projection and the body `react`): a pressing cell touching a solid with p < 0 joins A; a let-go cell leaves A when the divergence of its projected faces, recomputed by the `divergence` pass against the solids' updated face velocities, is below 0: water pushed into the solid, relative to the solid's motion.
-4. The density solve is re-prepared on `solve_water` and runs plain (ruling 3).
-
-Signs are exact: no threshold on p. A one-cell film on the floor whose p sits near 0 in f32 may flip into A; pinning a near-zero cell to zero moves nothing visible, and the next update returns it if the water presses back.
-
-Simplification, named: a sealed pocket with a let-go cell keeps its mean removal and its leader pin. It does not change a resting scene.
-
-**Cost per step.** Two dense one-thread-a-cell passes, and a second `prepare` (the density solve's, on the pocket-only mask) whether or not A is empty. The second prepare is the real cost; it is owed a frame-time stamp against the 9.22 ms of `gpu_flip.pressure.*` at 64 (GPU_FLIP_SPARSE_BLOCKS_DESIGN.md section 7 (the node measure)). With A empty the pressure and the particles are bitwise the step without separation (proof 1).
-
-**The density solve stays plain.** It moves particles toward rest density and never becomes velocity (section 9, item 5). A negative density pressure at the floor pulls particles down only toward rest spacing, which is not suction on the velocity. Constraining it too is open call 2.
-
-**Moving and dynamic bodies.** The divergence already carries the body's motion through the C·v_s term (moving solids, above), so the complementarity is on the relative motion with no new term: a body moving up off the water lets go of it, a body pushing in presses. With dynamic bodies the operator is A + ρh·G M⁻¹ Gᵀ; a let-go cell leaves both, so the body can never be pulled by suction, and the reaction (`react`) reads a pressure that is zero there. The floating box then feels only the push of the water under it. Sealed pockets: a pocket with any let-go cell is no longer sealed (it has a p = 0 cell), so the pocket spread counts last step's A as air before the solve, and that pocket takes no mean removal and no pin.
-
-**Solve Level.** The condition lives on the level the gradient runs on (GPU_FLIP_SPARSE_BLOCKS_DESIGN.md section 11 (Solve Level)): at level k the separating cells are level-k water cells with a coarse face below 1 or a solid child (the coarsening's solid kind, −1), A is a level-k mask, and `separating_update` reads `view(k)`. Nothing below k changes. The fine pressure is P p_k; trilinear prolongation of a field that is ≥ 0 at the let-go coarse cells can still read slightly negative in a fine floor cell beside a pressed coarse neighbour. So at level k the guarantee is p_k ≥ 0 on the coarse unknowns, and the lift is proven, not a fine p ≥ 0.
-
-**Proofs.**
-
-1. Rest stays rest. `gpu_flip_separating_solids_leave_resting_pools_bitwise` (gpu_flip_separate_tests.rs): the still pool for 300 frames (the scene of `gpu_flip_still_pool` and `gpu_flip_hydrostatic_column_rests`) and the pool round a static box for 120, the particles bitwise against the step with the test-only `set_separate_off` lever after every frame. The existing rest proofs run with separation on.
-2. Lift. `gpu_flip_pool_lifts_under_upward_gravity`: the still pool at 64 and 128 under +20 m/s² for 15 frames; free fall would raise the mean height 0.625 m, the bar is 0.2 m with nothing lost. The same scene with the lever off is printed for the record.
-3. The LCP oracle. `scripts/mgpcg_reference.py --separating n,fill,dt` runs the active set over a direct sparse solve on a pool after one step of ±20 m/s²: down, 1 round and nothing let go; up, 2 rounds, every wall-touching cell let go, p = 0 everywhere, all three conditions met exactly (16³ and 32³). `pressure_module_separating_matches_reference` runs the same rounds on the GPU solve and pins the round count, the let-go count and the minimum pressure at both sizes and both signs.
-4. A rising body. `gpu_flip_rising_box_does_not_drag_water_up` (gpu_flip_body_tests.rs): a box a quarter as dense as water rises out of the submerged-box pool; less water rides above the surface in its footprint than with the lever off.
-5. Everything that exists stays green: the `pressure_module_*` pins, the sparse-tile, body, conformance and pocket proofs.
-
-**Rulings, 2026-10-03.**
-
-1. Every solid lets go, the box walls and lid included. No Sticky toggle.
-2. The rounds ceiling is a named constant far above what scenes need, handled like the solve's iteration ceiling: reported in stats, loud when hit, never silent. As built (one round a step) the GPU has no rounds loop to cap; the oracle carries the ceiling (`SEPARATE_ROUNDS`). Same-tick rounds, with their ceiling and stats word, are owed if the one-step lag shows.
-3. The density solve stays plain.
-4. Solve Level above 0 is pending. Level 0 is built exact; the coarse-level bar above is provisional.
+The earlier separating-solid active set (BUG-ekb3) was a numerical departure
+from that reference and has been removed. Its contact mask, carried let-go
+history and extra divergence/update passes are gone; collision handling,
+solid velocity constraints and sealed-pocket compatibility remain. No runtime
+switch or serialized setting was added. The independent
+`scripts/mgpcg_reference.py --separating` mode is a historical research oracle,
+not a model of the production step. Existing resting-pool, solid-mask,
+no-through-flow and rising-body buoyancy proofs cover the retained behaviour.
 
 ### Tracked in beads
 

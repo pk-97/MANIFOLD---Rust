@@ -41,6 +41,38 @@ fn liquid_lattice_distance(offset: u32, dims: vec3<u32>, g: vec3<f32>) -> f32 {
     return value;
 }
 
+// The shape's world distance at lattice coordinate g, inside the lattice or
+// past it: past it, the nearest lattice point's distance plus the gap to
+// it, exact along a face's normal. Every reader of a body's distance as a
+// size uses this. The lattice pads the shape by two of its own spacings,
+// under one solver cell for a body under 16 cells across, so a node just
+// past it must keep its distance: read as far away, it leaves a half-solid
+// cell open. A local distance d along the local normal n is d / |n ⊘ scale|
+// in the world, exact on every face of a stretched shape; the smallest
+// scale stands in where the trilinear slope vanishes.
+fn liquid_shape_distance(offset: u32, dims: vec3<u32>, g: vec3<f32>, spacing: f32, scale: vec3<f32>) -> f32 {
+    let c = clamp(g, vec3<f32>(0.0), vec3<f32>(dims - vec3<u32>(1u)));
+    let base = min(vec3<u32>(floor(c)), dims - vec3<u32>(2u));
+    let f = c - vec3<f32>(base);
+    var value = 0.0;
+    var slope = vec3<f32>(0.0);
+    for (var corner = 0u; corner < 8u; corner = corner + 1u) {
+        let o = vec3<u32>(corner & 1u, (corner >> 1u) & 1u, (corner >> 2u) & 1u);
+        let at = base + o;
+        let v = liquid_atlas_half(offset + at.x + dims.x * (at.y + dims.y * at.z));
+        let w = select(vec3<f32>(1.0) - f, f, o == vec3<u32>(1u));
+        let s = select(vec3<f32>(-1.0), vec3<f32>(1.0), o == vec3<u32>(1u));
+        value = value + w.x * w.y * w.z * v;
+        slope = slope + vec3<f32>(s.x * w.y * w.z, w.x * s.y * w.z, w.x * w.y * s.z) * v;
+    }
+    let local = value + length(g - c) * spacing;
+    // A true distance climbs one spacing a node; a slope far under that is
+    // a ridge or a flat, with no normal to stretch along.
+    let steep = length(slope);
+    let smallest = min(scale.x, min(scale.y, scale.z));
+    return local * select(smallest, steep / length(slope / scale), steep > 1e-3 * spacing);
+}
+
 // The world-space gradient of the local distance at g (central differences
 // half a node either side), through the inverse scale and the rotation. Its
 // direction is the outward normal; −φ·grad/|grad|² steps a point at local

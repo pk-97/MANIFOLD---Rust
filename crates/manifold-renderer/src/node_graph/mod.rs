@@ -151,6 +151,7 @@ pub use graph_loader::{
     BoundaryHandling, GraphBuildError, HandleScope, NodeInstantiation, PreAllocationError,
     WireSide as BuildWireSide, instantiate_def, log_build_error, pre_allocate_resources, allocate_resources,
 };
+pub(crate) use graph_loader::{has_retired_params, retire_params, wire_gpu_flip_grid};
 pub use loaded_preset_view::{
     LoadedPresetView, collect_node_handles, loaded_preset_view_by_id, outer_routings_from_view,
     snapshot_for_view,

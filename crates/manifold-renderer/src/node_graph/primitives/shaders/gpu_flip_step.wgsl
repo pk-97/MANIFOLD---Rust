@@ -58,8 +58,6 @@ struct Params {
     tick_seconds: f32,
     // The FLIP share for this step.
     flip: f32,
-    // The farthest one RK3 stage moves, in cells.
-    max_travel: f32,
     // The largest |box_min| component, for the solid faces' tolerance.
     box_offset: f32,
     // subtract: 1 reads `phi` for the free surface, 0 keeps air at zero.
@@ -91,9 +89,12 @@ struct Params {
     ring_max: u32,
     narrow_band: u32, // Ferstl 2016: 0 dense, 1 initialization, 2 band-masked.
     live_impulse_stride: u32,
-    clock_pad0: u32,
-    clock_pad1: u32,
-    clock_pad2: u32,
+    // Cells from the grid's minimum to each wall (FlipSolverGrid::wall_inset);
+    // 0 when the walls are the grid's edges.
+    wall_inset: f32,
+    pad0: u32,
+    pad1: u32,
+    pad2: u32,
 };
 
 struct CellRange {
@@ -171,9 +172,9 @@ struct ClockPlan {
 // 8 floats per body: the linear and angular impulse the water has put on it
 // so far this tick (gpu_flip_bodies.wgsl).
 @group(0) @binding(21) var<storage, read> reaction: array<f32>;
-// Two words per particle slot, summed over the tick's substeps: RK3 stages
-// the CFL guard shortened, and solid push-outs refused past SOLID_PUSH. The
-// tick's stats reduce them (liquid_stats words 8 and 9).
+// Two words per particle slot: the retired stage-cap count (always zero for
+// native RK3), and solid push-outs refused past SOLID_PUSH over the tick.
+// The tick's stats reduce them (liquid_stats words 8 and 9).
 @group(0) @binding(22) var<storage, read_write> capped: array<u32>;
 // Inflow (code 2) and outflow (code 3) rows: LiquidBody rows with the code in
 // angular_velocity.w, the emitted velocity in inv_inertia_x.xyz and the share
@@ -739,8 +740,17 @@ fn liquid_atlas_half(index: u32) -> f32 {
     return select(pair.x, pair.y, (index & 1u) == 1u);
 }
 
+// The walls' distance at x inside the box: every wall closed, wall_inset
+// cells in, as the solid distance takes them.
+fn wall_distance(x: vec3<f32>) -> f32 {
+    let lo = u.box_min + vec3<f32>(u.wall_inset * u.cell_size);
+    let hi = u.box_min + (vec3<f32>(lattice()) - vec3<f32>(u.wall_inset)) * u.cell_size;
+    let gap = min(x - lo, hi - x);
+    return min(gap.x, min(gap.y, gap.z));
+}
+
 // The row of the body nearest x (smallest signed distance), −1 when no
-// enabled body's lattice holds x.
+// body is enabled or the walls are nearer: the solid there is the tank's.
 fn closest_body(x: vec3<f32>) -> i32 {
     var best = -1;
     var nearest = 0.0;
@@ -761,16 +771,13 @@ fn closest_body(x: vec3<f32>) -> i32 {
         let sh = shapes[u32(shape_index)];
         let dims = vec3<u32>(sh.dims_x, sh.dims_y, sh.dims_z);
         let g = liquid_lattice_coord(x, position, q, sh.origin_spacing, sh.scale_min.xyz);
-        if !liquid_lattice_holds(g, dims) {
-            continue;
-        }
-        let d = liquid_lattice_distance(sh.atlas_offset, dims, g) * sh.scale_min.w;
+        let d = liquid_shape_distance(sh.atlas_offset, dims, g, sh.origin_spacing.w, sh.scale_min.xyz);
         if best < 0 || d < nearest {
             best = row;
             nearest = d;
         }
     }
-    return best;
+    return select(best, -1, best >= 0 && nearest > wall_distance(x));
 }
 
 // One thread per face record, `solid_faces` to `faces_out`. On an inner face
@@ -778,8 +785,7 @@ fn closest_body(x: vec3<f32>) -> i32 {
 // closest body's rigid velocity at the face centre, posed tick_seconds into
 // the tick as the solid distance poses it; weight is the closest body's
 // friction at the face's four corners, averaged
-// (FluidSimulation::_getFaceFrictionU/V/W), 0 at a corner no body's lattice
-// holds. Every other face is zero. A dynamic body (1/m > 0) moves at its
+// (FluidSimulation::_getFaceFrictionU/V/W). Every other face is zero. A dynamic body (1/m > 0) moves at its
 // predicted velocity, as RigidFluidCoupling::beginSubstep predicts it: its
 // external acceleration over tick_seconds plus M⁻¹ times the reaction so
 // far this tick. Velocity w is the record's owner code
@@ -1251,75 +1257,6 @@ fn pocket_pin(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let leader = pocket[idx] == POCKET_SEALED && pocket_label[idx] == idx;
     cell_out[idx] = select(water[idx], 0.0, leader);
-}
-
-// Separating solids (GPU_FLIP_PRESSURE_SOLVE.md section 8 (Separating
-// solids)): 1 where a water cell touching a solid is let go, its pressure held
-// at 0 and its leftover divergence free to be outflow. Carried step to step.
-@group(0) @binding(42) var<storage, read_write> let_go: array<f32>;
-
-// A water cell with any face less than fully open: a box wall or a body.
-fn touches_solid(p: vec3<i32>, n: vec3<i32>, m: vec3<i32>) -> bool {
-    for (var a = 0; a < 3; a = a + 1) {
-        var q = p;
-        q[a] = p[a] + 1;
-        if open_at(p, a, n, m) < 1.0 || open_at(q, a, n, m) < 1.0 {
-            return true;
-        }
-    }
-    return false;
-}
-
-// One thread per cell, `water` the solve mask to `cell_out` the contact mask:
-// the let-go set kept only on water touching a solid (and emptied on the
-// first step of the first tick), each let-go cell taken out of the mask.
-@compute @workgroup_size(256)
-fn separate_pin(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let idx = gid.x;
-    if idx >= cell_total() {
-        return;
-    }
-    // This mask is history, not scratch: inactive clock slots must not
-    // change next step's pressure constraints using stale solve data.
-    if !clock_active() { return; }
-    let n = lattice();
-    let m = n + vec3<i32>(1);
-    let first = u.tick_index == 0 && u.step_in_tick == 0;
-    let keep = !first && let_go[idx] > 0.5 && water[idx] > 0.5 && touches_solid(unflatten(idx, n), n, m);
-    let_go[idx] = select(0.0, 1.0, keep);
-    cell_out[idx] = select(water[idx], 0.0, keep);
-}
-
-// One thread per cell, after the projection and the bodies' reaction,
-// `water` the contact mask and `cell_out` (read only) the divergence of the
-// projected faces against the solids' updated face velocity: one active-set
-// update. A pressing cell whose pressure came out negative is let go; a
-// let-go cell whose leftover divergence is negative (water pushed into the
-// solid, relative to the solid's own motion) presses again.
-@compute @workgroup_size(256)
-fn separate_update(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let idx = gid.x;
-    if idx >= cell_total() {
-        return;
-    }
-    // This mask is history, not scratch: inactive clock slots must not
-    // change next step's pressure constraints using stale solve data.
-    if !clock_active() { return; }
-    let n = lattice();
-    let m = n + vec3<i32>(1);
-    let p = unflatten(idx, n);
-    if water[idx] > 0.5 {
-        if pressure[idx] < 0.0 && touches_solid(p, n, m) {
-            let_go[idx] = 1.0;
-        }
-        return;
-    }
-    if !(let_go[idx] > 0.5) {
-        return;
-    }
-    if cell_out[idx] < 0.0 {
-        let_go[idx] = 0.0;
-    }
 }
 
 // One thread per word: the pocket sums start at 0.
@@ -1833,14 +1770,14 @@ fn surface_phi(cell: u32) -> f32 {
 }
 
 // One thread per face record, in place on `faces_rw`. A box wall face is 0
-// and valid. A closed inner face (open fraction 0) keeps its
-// velocity and is valid, for the constraint to give it the solid's
-// (PressureSolver::_applyPressureToVelocityField). An open inner face beside
-// water loses (p_upper − p_lower) / h, the air side's pressure the ghost
-// value clamp(φ_air / (φ_water + 1e-6), −25, 25) · p_water, φ_water taken at
-// most −0.005h and φ_air at least 0 (the matrix uses 1e-9 instead), and is
-// valid; between two air cells it keeps its velocity and is invalid (weight
-// 0) for the extension to fill.
+// and valid. An inner closed face is cleared (0 velocity, weight 0) before
+// extension; the later solid constraint writes its velocity independently of
+// this validity flag (PressureSolver::_applyPressureToVelocityField). An open
+// inner face beside water loses (p_upper − p_lower) / h, the air side's
+// pressure the ghost value clamp(φ_air / (φ_water + 1e-6), −25, 25) · p_water,
+// φ_water taken at most −0.005h and φ_air at least 0 (the matrix uses 1e-9
+// instead), and is valid. A face between two air cells is also cleared for
+// the extension to fill.
 @compute @workgroup_size(256)
 fn subtract_pressure(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
@@ -1867,12 +1804,9 @@ fn subtract_pressure(@builtin(global_invocation_id) gid: vec3<u32>) {
         below[a] = p[a] - 1;
         let upper = flatten(p, n);
         let lower = flatten(below, n);
-        out.face_velocity[a] = here.face_velocity[a];
         let wet_upper = water[upper] > 0.5;
         let wet_lower = water[lower] > 0.5;
-        if !(open.face_weight[a] > 0.0) {
-            out.face_weight[a] = 1.0;
-        } else if wet_upper || wet_lower {
+        if open.face_weight[a] > 0.0 && (wet_upper || wet_lower) {
             var p_upper = pressure[upper];
             var p_lower = pressure[lower];
             if !wet_upper {
@@ -2059,15 +1993,14 @@ fn density_source(@builtin(global_invocation_id) gid: vec3<u32>) {
     cell_out[idx] = -rate * error;
 }
 
-// Native expands the boundary by -3h-1e-4m, then by -0.2h. AABB::expand
-// moves each side by half its argument, so the authored wall is inset by
-// 0.1h + 5e-5m. The push target remains the native 0.2h solid buffer.
+// Native shrinks its grid by 3h + 1e-4m, then by 0.2h. AABB::expand moves
+// each side by half its argument, so the boundary sits 0.1h inside the
+// walls: wall_inset + 0.1 cells from the grid's minimum, the 1e-4m inside
+// wall_inset. The push target remains the native 0.2h solid buffer.
 const BOUNDARY_MARGIN: f32 = 0.1;
-const BOUNDARY_EPS_METRES: f32 = 0.00005;
-const PADDED_GRID_MARGIN: f32 = 1.5;
 
 fn boundary_edge() -> f32 {
-    return BOUNDARY_MARGIN + BOUNDARY_EPS_METRES / u.cell_size;
+    return u.wall_inset + BOUNDARY_MARGIN;
 }
 
 fn inside_boundary(q: vec3<f32>, n: vec3<i32>, edge: f32) -> bool {
@@ -2084,30 +2017,10 @@ fn clamp_boundary(q: vec3<f32>, n: vec3<i32>, edge: f32) -> vec3<f32> {
     return min(max(q, low), high - upper_epsilon);
 }
 
-fn inside_padded_grid(q: vec3<f32>, n: vec3<i32>) -> bool {
-    let low = vec3<f32>(-PADDED_GRID_MARGIN);
-    let high = vec3<f32>(n) + vec3<f32>(PADDED_GRID_MARGIN);
-    return all(q >= low) && all(q < high);
-}
-
-// The CFL guard: one RK3 stage moves at most max_travel cells. A non-finite
-// v stays non-finite. Live stretched intervals expand the authored halo from
-// the GPU-observed speed, so Top Speed cannot truncate an arbitrary current
-// velocity at the final capped step.
-fn adaptive_max_travel() -> f32 {
-    let observed = clock_plan[0].maximum_speed * adaptive_step_dt() / u.cell_size;
-    return max(u.max_travel, observed);
-}
-
-fn guard(v: vec3<f32>, per_cell: f32) -> vec3<f32> {
-    let cells = length(v) * per_cell;
-    let max_travel = adaptive_max_travel();
-    return select(v, v * (max_travel / cells), cells > max_travel);
-}
-
-// 1 when the guard shortens v.
-fn guarded(v: vec3<f32>, per_cell: f32) -> u32 {
-    return select(0u, 1u, length(v) * per_cell > adaptive_max_travel());
+// Native's grid index range (Grid3d::isGridIndexInRange): the cells
+// themselves, walls and padding included.
+fn inside_grid(q: vec3<f32>, n: vec3<i32>) -> bool {
+    return all(q >= vec3<f32>(0.0)) && all(q < vec3<f32>(n));
 }
 
 // Exponent bits, not x != x: fast math may fold a NaN comparison away.
@@ -2127,10 +2040,14 @@ fn face_record(index: u32, grid: u32) -> FaceSample {
     return spread[index];
 }
 
-// Trilinear per component over the faces with weight > 0, renormalised by
-// their weights (0 when none). Every index is clamped as an integer, so a
-// non-finite position reads in bounds.
+// Native FLIP's ordinary face interpolation (macvelocityfield.cpp
+// _interpolateLinearU/V/W): missing corners contribute zero, without a
+// validity-weight renormalisation. Grid3d::isPositionInGrid rejects samples
+// outside the exclusive high edge; retain non-finite positions as failures.
 fn sample(q: vec3<f32>, n: vec3<i32>, grid: u32) -> vec3<f32> {
+    if !finite(q) || any(q < vec3<f32>(0.0)) || any(q >= vec3<f32>(n)) {
+        return vec3<f32>(0.0);
+    }
     let m = n + vec3<i32>(1);
     var v = vec3<f32>(0.0);
     for (var a = 0; a < 3; a = a + 1) {
@@ -2139,22 +2056,20 @@ fn sample(q: vec3<f32>, n: vec3<i32>, grid: u32) -> vec3<f32> {
         var top = n - vec3<i32>(1);
         top[a] = n[a];
         let s = q - offset;
-        let base = clamp(vec3<i32>(floor(s)), vec3<i32>(0), max(top - vec3<i32>(1), vec3<i32>(0)));
-        let t = clamp(s - vec3<f32>(base), vec3<f32>(0.0), vec3<f32>(1.0));
+        let base = vec3<i32>(floor(s));
+        let t = s - vec3<f32>(base);
         var sum = 0.0;
-        var total = 0.0;
         for (var corner = 0; corner < 8; corner = corner + 1) {
             let bit = vec3<i32>(corner & 1, (corner >> 1u) & 1, (corner >> 2u) & 1);
-            let c = min(base + bit, top);
-            let face = face_record(flatten(c, m), grid);
-            if face.face_weight[a] > 0.0 {
+            let c = base + bit;
+            if all(c >= vec3<i32>(0)) && all(c <= top) {
+                let face = face_record(flatten(c, m), grid);
                 let w3 = select(vec3<f32>(1.0) - t, t, bit != vec3<i32>(0));
                 let w = w3.x * w3.y * w3.z;
                 sum = sum + w * face.face_velocity[a];
-                total = total + w;
             }
         }
-        v[a] = select(0.0, sum / max(total, 1e-30), total > 1e-6);
+        v[a] = sum;
     }
     return v;
 }
@@ -2266,13 +2181,17 @@ fn resolve_solid(q0: vec3<f32>, q1: vec3<f32>, n: vec3<i32>, edge: vec3<f32>) ->
 // particle within OPEN_BOUNDARY_WIDTH cells of an open face is removed
 // (FluidSimulation::_openBoundaryWidth, _removeMarkerParticles). The emptied
 // band is air, so the pressure solve puts the water's surface there.
+// The band is measured from the wall (the engine's boundary AABB), not the
+// grid's edge. On the native grid every wall stays solid, so an open face
+// never seeds a pocket's air: only the band's emptied cells do.
 const OPEN_BOUNDARY_WIDTH: f32 = 2.0;
 
 fn open_band(q: vec3<f32>, n: vec3<i32>) -> bool {
+    let reach = u.wall_inset + OPEN_BOUNDARY_WIDTH;
     for (var a = 0; a < 3; a = a + 1) {
         let low = (u.closed_faces & (1u << u32(2 * a))) == 0u;
         let high = (u.closed_faces & (1u << u32(2 * a + 1))) == 0u;
-        if (low && q[a] < OPEN_BOUNDARY_WIDTH) || (high && q[a] > f32(n[a]) - OPEN_BOUNDARY_WIDTH) {
+        if (low && q[a] < reach) || (high && q[a] > f32(n[a]) - reach) {
             return true;
         }
     }
@@ -2282,7 +2201,7 @@ fn open_band(q: vec3<f32>, n: vec3<i32>) -> bool {
 // One thread per particle slot, `sorted` to `particles_out`. A live particle
 // (radius > 0) at q blends FLIP and PIC, flip · (v + new(q) − old(q)) +
 // (1 − flip) · new(q), then moves by RK3 through the new faces (stages at ½
-// and ¾ of step_dt, weights 2/9, 3/9, 4/9, each guarded), plus the density
+// and ¾ of step_dt, weights 2/9, 3/9, 4/9), plus the density
 // projection's move. The native safety AABB and solid collision sequence is
 // shared by wall-only and body scenes; a particle still inside one, where a
 // moving solid swept over it, is removed: radius 0
@@ -2299,9 +2218,9 @@ fn faces_to_particles(@builtin(global_invocation_id) gid: vec3<u32>) {
     let particle = sorted[idx];
     var out = particle;
     let first = u.step_in_tick == 0 && u.narrow_band == 0u;
-    let cfl_before = select(capped[2u * idx], 0u, first);
     let push_before = select(capped[2u * idx + 1u], 0u, first);
-    capped[2u * idx] = cfl_before;
+    // Native RK3 never clips stage velocities; retain the public stats word.
+    capped[2u * idx] = 0u;
     capped[2u * idx + 1u] = push_before;
     if !(particle.position_radius.w > 0.0) {
         particles_out[idx] = out;
@@ -2312,14 +2231,9 @@ fn faces_to_particles(@builtin(global_invocation_id) gid: vec3<u32>) {
     let per_cell = adaptive_step_dt() / u.cell_size;
     let q0 = (particle.position_radius.xyz - lo) / u.cell_size;
     let after = sample(q0, n, 0u);
-    let k1 = guard(after, per_cell);
-    let s2 = sample(q0 + 0.5 * per_cell * k1, n, 0u);
-    let k2 = guard(s2, per_cell);
-    let s3 = sample(q0 + 0.75 * per_cell * k2, n, 0u);
-    let k3 = guard(s3, per_cell);
-    if u.narrow_band == 0u {
-        capped[2u * idx] = cfl_before + guarded(after, per_cell) + guarded(s2, per_cell) + guarded(s3, per_cell);
-    }
+    let k1 = after;
+    let k2 = sample(q0 + 0.5 * per_cell * k1, n, 0u);
+    let k3 = sample(q0 + 0.75 * per_cell * k2, n, 0u);
     let edge = vec3<f32>(boundary_edge());
     // The density projection's move, step_dt · (spread(q) − new(q)): position
     // only, never kept as velocity. Zero rate binds `faces_in` as `spread`.
@@ -2331,7 +2245,7 @@ fn faces_to_particles(@builtin(global_invocation_id) gid: vec3<u32>) {
     var q1 = reached;
     var radius = particle.position_radius.w;
     if finite(q1) {
-        if !inside_padded_grid(q1, n) {
+        if !inside_grid(q1, n) {
             q1 = clamp_boundary(q1, n, edge.x);
         }
         q1 = resolve_solid(q0, q1, n, edge);
@@ -2794,7 +2708,7 @@ fn narrow_move(@builtin(global_invocation_id) gid: vec3<u32>) {
     var reached = q + dt * (a + 2.0*b + 2.0*c + d) / 6.0;
     let edge = vec3<f32>(boundary_edge());
     if finite(reached) {
-        if !inside_padded_grid(reached, n) {
+        if !inside_grid(reached, n) {
             reached = clamp_boundary(reached, n, edge.x);
         }
         reached = resolve_solid(q, reached, n, edge);
