@@ -352,7 +352,9 @@ fn gpu_flip_sheeting_indexing_is_the_engine_floor_at_non_binary_spacing() {
         stage.encode_index_probe(&device, &mut enc, &inputs);
         enc.commit_and_wait_completed();
         let words = copy_out(&device, stage.births().0);
-        let (mut naive_wrong, mut checked) = (0, 0);
+        // In contract: finite with both floors inside +-2^30, the engine's floor.
+        // Policy: the clamp for everything else, deliberately not native's.
+        let (mut naive_wrong, mut checked, mut policy) = (0, 0, 0);
         for (s, &x) in points.iter().enumerate() {
             let engine = |inv: f64| {
                 let f = (f64::from(x) * inv).floor();
@@ -361,11 +363,18 @@ fn gpu_flip_sheeting_indexing_is_the_engine_floor_at_non_binary_spacing() {
             let (cell, sub) = (engine(1.0 / dx), engine(1.0 / (0.5 * dx)));
             assert_eq!(words[8 * s] as i32, cell, "h {h}: cell of {x}");
             assert_eq!(words[8 * s + 4] as i32, sub, "h {h}: half-cell of {x}");
-            let naive = (x * (1.0 / dx) as f32).floor() as i32;
-            naive_wrong += usize::from(naive != cell);
-            checked += 1;
+            if x.is_finite() && cell.abs() < 1 << 30 && sub.abs() < 1 << 30 {
+                let naive = (x * (1.0 / dx) as f32).floor() as i32;
+                naive_wrong += usize::from(naive != cell);
+                checked += 1;
+            } else {
+                policy += 1;
+            }
         }
-        eprintln!("SHEETING INDEX h {h}: {checked} positions agree (signed); a plain f32 product misses {naive_wrong}");
+        eprintln!(
+            "SHEETING INDEX h {h}: {checked} in-contract positions match the engine floor (a plain f32 product misses {naive_wrong}); {policy} saturation and NaN inputs match the clamp policy"
+        );
+        assert!(policy > 0, "the probe covers the clamp policy");
         if h == 0.3 {
             assert!(naive_wrong > 0, "the probe must be able to see the f32 error");
         }

@@ -33,9 +33,11 @@
 //! strength (fluidsimulation.cpp 7158-7170). Here the draw is a stateless
 //! 24-bit PCG hash of (rank, tick, substep) and there is no solid multiplier
 //! (bodies carry no sheeting strength yet: BUG-g5nm1 (GPU FLIP sheeting solid
-//! strength)). So
-//! selection parity gives birth parity at rate 1 only; at a fractional rate
-//! the births are the same distribution, not the same particles.
+//! strength)). So selection parity gives birth parity only at rate 1 and only
+//! while native's effective rate stays 1 (a solid sheeting strength under 1
+//! breaks it). At a fractional rate the acceptance is a like Bernoulli draw
+//! at the rate, not the same particles, and not the same distribution near a
+//! solid with strength other than 1 or below the 24-bit draw's resolution.
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder};
 
@@ -51,11 +53,17 @@ pub(crate) const FILL_THRESHOLD: f32 = -0.95;
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Params {
-    n: [u32; 3],
+    nx: u32,
+    ny: u32,
+    nz: u32,
     count: u32,
-    b: [u32; 3],
+    bx: u32,
+    by: u32,
+    bz: u32,
     capacity: u32,
-    origin: [f32; 3],
+    ox: f32,
+    oy: f32,
+    oz: f32,
     h: f32,
     inv_h: f32,
     inv_sub: f32,
@@ -68,13 +76,16 @@ struct Params {
     max_radius: f32,
     threshold: f32,
     /// The f64 reciprocals' bits, low word first, for the exact indexing.
-    inv_h_bits: [u32; 2],
-    inv_sub_bits: [u32; 2],
+    inv_h_bits_lo: u32,
+    inv_h_bits_hi: u32,
+    inv_sub_bits_lo: u32,
+    inv_sub_bits_hi: u32,
     rate: f32,
     tick: u32,
     substep: u32,
     slots: u32,
-    pad: [u32; 2],
+    pad0: u32,
+    pad1: u32,
 }
 
 /// Bytes per cell: two sheet flags, the mask word, the selected count, the
@@ -282,11 +293,17 @@ impl GpuSheeting {
         let test_distance = (3.0 * dx) as f32;
         let step_distance = (0.5 * dx) as f32;
         let params = Params {
-            n,
+            nx: n[0],
+            ny: n[1],
+            nz: n[2],
             count: inputs.count,
-            b: n.map(|c| c.div_ceil(2)),
+            bx: n[0].div_ceil(2),
+            by: n[1].div_ceil(2),
+            bz: n[2].div_ceil(2),
             capacity: self.capacity,
-            origin: inputs.origin,
+            ox: inputs.origin[0],
+            oy: inputs.origin[1],
+            oz: inputs.origin[2],
             h,
             inv_h: (1.0 / dx) as f32,
             inv_sub: (1.0 / (0.5 * dx)) as f32,
@@ -298,14 +315,17 @@ impl GpuSheeting {
             max_seed_depth: dx as f32,
             max_radius: (2.0 * dx) as f32,
             threshold: inputs.threshold,
-            inv_h_bits: words(1.0 / dx),
-            inv_sub_bits: words(1.0 / (0.5 * dx)),
+            inv_h_bits_lo: words(1.0 / dx)[0],
+            inv_h_bits_hi: words(1.0 / dx)[1],
+            inv_sub_bits_lo: words(1.0 / (0.5 * dx))[0],
+            inv_sub_bits_hi: words(1.0 / (0.5 * dx))[1],
             // Standalone keeps every winner: the draw is under 1.
             rate: step.map_or(1.0, |s| s.rate),
             tick: step.map_or(0, |s| s.tick),
             substep: step.map_or(0, |s| s.substep),
             slots: step.map_or(0, |s| s.slots),
-            pad: [0; 2],
+            pad0: 0,
+            pad1: 0,
         };
         fn buffer(binding: u32, buffer: &GpuBuffer) -> GpuBinding<'_> {
             GpuBinding::Buffer { binding, buffer, offset: 0 }

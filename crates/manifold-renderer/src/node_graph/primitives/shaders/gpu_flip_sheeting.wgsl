@@ -103,9 +103,12 @@ fn below(x: vec3<u32>, i: u32) -> bool {
     }
     return false;
 }
-// Exact for results in (-2^30, 2^30). Past that, and for non-finite input, it
-// clamps to +-2^30 (NaN to +2^30): every caller range-checks or clamps the
-// index, and +-2^30 is outside any lattice, so the decision is the engine's.
+// The engine's floor for results in (-2^30, 2^30). Past that, and for
+// non-finite input, a defined GPU policy, not native parity (native casts
+// the floor to int, undefined for NaN and out-of-range values): clamp to
+// +-2^30, NaN to +2^30, outside every lattice. Indices from it are range
+// checked (in_range, the zero-outside corners) or come from positions that
+// already passed the grid check (the sub-cell mask and claim accesses).
 const INDEX_LIMIT: i32 = 1073741824;
 fn exact_floor(p: f32, r: vec2<u32>) -> i32 {
     if p == 0.0 { return 0; }
