@@ -1,6 +1,6 @@
 # GPU FLIP display history — retained publications and a presentation cursor
 
-**Status:** APPROVED design, P1 built on its branch (not landed), P2 open (section 3.4 items marked open) · 2026-10-06 · Claude, reviewed by Astra. Bead: BUG-ckvpp (display shows every third tick, never interpolated, ~0.25 s late).
+**Status:** APPROVED design, P1 landed, P2 open (section 3.4 items marked open) · 2026-10-06 · Claude, reviewed by Astra. Bead: BUG-ckvpp (display shows every third tick, never interpolated, ~0.25 s late).
 **Prerequisites:** none.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5–section 6 before starting any phase.
 
