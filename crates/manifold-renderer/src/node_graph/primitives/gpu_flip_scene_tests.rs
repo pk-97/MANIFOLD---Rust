@@ -1335,6 +1335,61 @@ mod native_reference {
         }
     }
 
+    /// A pool against the tank walls with no body: the step's liquid φ obeys
+    /// the engine's ParticleLevelSet::postProcessSignedDistanceField against
+    /// the engine's own solid. A cell whose centre is in the wall and whose φ
+    /// is under h/2 is water at −h/2. Without it the wall's cut cells are a
+    /// free surface and water climbs the wall (BUG-9p3ms (tank walls give far
+    /// more run-up than native)).
+    #[test]
+    fn gpu_flip_wall_only_phi_extends_into_the_walls_as_native() {
+        let scene = WaterScene::still_pool(16);
+        let (mut native, offset) = world(scene);
+        let (_, solid, nodes) = snapshot(&mut native, offset);
+        let mut registry = PrimitiveRegistry::with_builtin();
+        register_substep_test_nodes(&mut registry);
+        let mut graph = water_def(scene).into_graph(&registry, &Default::default()).expect("water graph");
+        graph.add_external_output(node_named(&graph, STEP_NODE), "distance").expect("distance in the plan");
+        let mut run = Run::with_graph(scene, graph);
+        let step = node_named(&run.graph, STEP_NODE);
+        run.exec.set_dump_array_set(Some([step].into_iter().collect()));
+        run.frame();
+        let n = run.n();
+        assert_eq!(nodes, [n as u32 + 1; 3], "native solid on the GPU solver grid");
+        let h = scene.cell_size() as f32;
+        let res = run.exec.dump_array_resources().iter()
+            .find(|&&(node, port, _)| node == step && port == "distance").unwrap_or_else(|| panic!("step distance not dumped: {:?}",
+                run.exec.dump_array_resources().iter().filter(|r| r.0 == step).map(|r| r.1).collect::<Vec<_>>())).2;
+        let buffer = run.exec.dump_array_buffer(res).expect("distance buffer");
+        let bytes = 4 * n * n * n;
+        let staging = run.device.create_buffer_shared(bytes as u64);
+        let mut enc = run.device.create_encoder("wall phi readback");
+        enc.copy_buffer_to_buffer(buffer, &staging, bytes as u64);
+        enc.commit_and_wait_completed();
+        // SAFETY: the copy completed; staging is shared and `bytes` long.
+        let phi: Vec<f32> = unsafe {
+            std::slice::from_raw_parts(staging.mapped_ptr().expect("shared staging").cast::<f32>().cast_const(), n * n * n)
+        }.to_vec();
+        let (mut extended, mut wrong) = (0, Vec::new());
+        for k in 0..n {
+            for j in 0..n {
+                for i in 0..n {
+                    let centre = (0..8).map(|c| {
+                        let p = [i + (c & 1), j + ((c >> 1) & 1), k + ((c >> 2) & 1)];
+                        solid[p[0] + (n + 1) * (p[1] + (n + 1) * p[2])]
+                    }).sum::<f32>() / 8.0;
+                    let v = phi[i + n * (j + n * k)];
+                    if centre < 0.0 && v < 0.5 * h {
+                        if (v + 0.5 * h).abs() < 1e-5 { extended += 1 } else { wrong.push(([i, j, k], v / h)) }
+                    }
+                }
+            }
+        }
+        println!("wall cells taken as water at -h/2: {extended}, left otherwise: {}", wrong.len());
+        assert!(extended > 0, "the pool must touch the wall's cells");
+        assert!(wrong.is_empty(), "wall cells under h/2 not at -h/2 (cell, phi/h): {:?}", &wrong[..wrong.len().min(8)]);
+    }
+
     /// 1.5 simulated seconds at 16³ from captured native particle records:
     /// observe motion and cost without meshing or rendering. This isolates
     /// solver behaviour; it does not claim the production fills match.
@@ -1448,10 +1503,12 @@ mod native_reference {
     /// the tank-spanning body slab's run-up is 1.62 vs 1.47 m, mean x within
     /// 0.02 m, rebound vx -0.58 vs -0.69 m/s; the body flush with a wall,
     /// run-up 1.01 vs 1.19 m. The same impact on the tank wall does not:
-    /// run-up 1.24 vs 2.19 m, water within a cell of the wall 428 vs 768,
-    /// mean x 1.09 vs 1.20 m; the two-face corner's run-up 1.43 vs 3.68 m.
-    /// The three-face corner agrees (0.235 vs 0.235 m). Before any wall
-    /// contact the GPU slab keeps vx 3.00 m/s where native slows to 2.84.
+    /// run-up 1.24 vs 2.19 m, the two-face corner's 1.43 vs 3.68 m, until
+    /// liquid φ extended into the walls without bodies too (BUG-9p3ms (tank
+    /// walls give far more run-up than native)): now 1.24 vs 1.37 m and
+    /// 1.43 vs 2.06 m. Still open: water within a cell of the flat wall,
+    /// 428 vs 736; and before any wall contact the GPU slab keeps vx
+    /// 3.00 m/s where native slows to 2.84.
     #[cfg(feature = "water-race-probes")]
     #[test]
     fn gpu_flip_native_wall_contact_reference() {
