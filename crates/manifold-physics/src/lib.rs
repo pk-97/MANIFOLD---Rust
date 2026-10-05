@@ -253,9 +253,9 @@ pub struct BodyConfig {
     pub mass: f32,
     pub friction: f32,
     pub restitution: f32,
-    /// A generated tank wall: its contacts take the other side's friction
-    /// instead of the geometric mean, so a body's own friction is its slide
-    /// threshold against the wall.
+    /// A generated domain wall (liquid or matter): its contacts take the
+    /// other side's friction instead of the geometric mean, so a body's own
+    /// friction is its slide threshold against the wall.
     pub wall: bool,
 }
 
@@ -1457,8 +1457,8 @@ fn validate_vec3(value: [f32; 3], name: &'static str) -> Result<(), PhysicsError
     }
 }
 
-/// Tag or untag every shape of `native` as a tank wall. The caller holds the
-/// native lock. Contacts read the tag when they begin.
+/// Tag or untag every shape of `native` as a domain wall. The caller holds the
+/// native lock. A change drops the body's live contacts so they remix.
 fn native_set_wall(native: u64, wall: bool) -> Result<(), PhysicsError> {
     match unsafe { ffi::manifold_box3d_body_set_wall(native, i32::from(wall)) } {
         0 => Ok(()),
@@ -1569,6 +1569,43 @@ mod tests {
         assert!(wall_steep > 0.5, "wall at tan 0.26 should slide past μ = 0.2: {wall_steep}");
         assert!(plain_steep.abs() < 0.01, "plain pair at tan 0.26 should stick under √0.1: {plain_steep}");
         assert!(wall_shallow.abs() < 0.01, "wall at tan 0.15 should stick under μ = 0.2: {wall_shallow}");
+    }
+
+    /// Retagging a slab under a resting cube takes effect on the live
+    /// contact, both ways, not only on contacts that begin afterwards.
+    #[test]
+    fn retagging_a_live_contact_changes_its_friction() {
+        let theta = 0.26f32.atan();
+        let mut world = PhysicsWorld::new([9.81 * theta.sin(), -9.81 * theta.cos(), 0.0]).unwrap();
+        let slab: Vec<[f32; 3]> = cube(0.5).iter().map(|p| [p[0] * 40.0, p[1], p[2] * 4.0]).collect();
+        let slab_config = |wall| BodyConfig {
+            kind: BodyKind::Fixed,
+            position: [0.0, -0.5, 0.0],
+            friction: 0.5,
+            wall,
+            ..BodyConfig::default()
+        };
+        let slab_handle = world.add_hull(&slab, slab_config(false)).unwrap();
+        let cube = world
+            .add_hull(&cube(0.5), BodyConfig { position: [0.0, 0.5, 0.0], friction: 0.2, ..BodyConfig::default() })
+            .unwrap();
+        let run = |world: &mut PhysicsWorld, ticks| {
+            let start = world.pose(cube).unwrap().position[0];
+            for _ in 0..ticks {
+                world.step(Seconds(1.0 / 60.0), 4).unwrap();
+            }
+            world.pose(cube).unwrap().position[0] - start
+        };
+        run(&mut world, 30);
+        let held = run(&mut world, 60);
+        assert!(held.abs() < 0.01, "untagged pair should stick under √0.1: {held}");
+        world.update_body(slab_handle, slab_config(true), false).unwrap();
+        let slid = run(&mut world, 60);
+        assert!(slid > 0.2, "tagging the live slab should let the cube slide at μ = 0.2: {slid}");
+        world.update_body(slab_handle, slab_config(false), false).unwrap();
+        run(&mut world, 120);
+        let stopped = run(&mut world, 60);
+        assert!(stopped.abs() < 0.01, "untagging the live slab should stop the cube again: {stopped}");
     }
 
     #[test]

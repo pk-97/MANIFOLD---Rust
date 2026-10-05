@@ -288,8 +288,9 @@ pub struct RigidBody {
     pub friction: f32,
     pub bounce: f32,
     pub collider: Option<Arc<ColliderGeometry>>,
-    /// A generated tank wall (`liquid::coupling`). Runtime-only: never saved,
-    /// so authored data and fluid-take history are unchanged.
+    /// A generated domain wall (`DomainWalls::install`, liquid and matter).
+    /// Runtime-only: never saved, so authored data and take history are
+    /// unchanged.
     #[serde(skip)]
     pub wall: bool,
 }
