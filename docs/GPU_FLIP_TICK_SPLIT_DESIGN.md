@@ -1,29 +1,12 @@
-# GPU FLIP Tick Split v2 — even frames: pace the thread where the GPU is saturated, spread the tick where it fits
+# GPU FLIP Tick Split — even frames: measure first, pace as an experiment, spread only where it fits
 
-**Status:** PROPOSED. P0 instrumentation being built. P1 pacing is a default-Off experiment for Peter. P2+ blocked until a qualifying scene exists and the open holes close. See section 0 (Review amendments).
-**Prerequisites:** none for P0–P1; display history P1 (`feat/flip-display-history`, 046862959) for P3
-**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5–6 before starting any phase.
+**Status:** IN PROGRESS · 2026-10-06 · Fable 5.1, amended by the Claude lead after Astra's reviews. P0 implemented on `feat/flip-tick-instrumentation`, pending landing. P1 is a default-Off experiment for Peter. P2+ blocked (section 3, Open holes that block P2).
+**Prerequisites:** none for P0–P1; display history P1 (`feat/flip-display-history`) for P3
+**Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) and section 6 before starting any phase.
 
-## 0. Review amendments (Astra, 2026-10-06, read-only at 216071de2)
+Peter's item: "Even frames: spread each GPU FLIP solver tick across its interval so frame times are even; up to 3 frames of added display latency is allowed." At the oracle (Dam Break 64, 30 Hz sim, 60 fps project) the render alone fills 94% of a 60 fps frame, so no spreading reaches 60 fps there. The uneven frames are frames that carry no solver tick. P0 shows they happen when no Sim Rate boundary was crossed (section 2). Pacing the content thread to the sim grid (D1) might remove them, but it changes the whole instrument and has no sound load model yet, so it is an Off-by-default experiment, not a fix. Spreading (D2–D10) is designed for the regime where it pays, a scene whose render plus half a tick fits a frame, and is blocked until such a scene exists and the open holes in section 3 close.
 
-These override the text below wherever they disagree.
-
-**A1. Creep alone explains the oracle cadence.** The frame list shows 22 short frames (mean 15.6 ms) and 238 long ones (mean 32.1 ms), averaging 32.56 fps; the reciprocal median interval is not throughput. With long frames L = 31.6 ms, short r = 15.6 ms and sim interval S = 33.3 ms, the cycle N·L + r = N·S repeats about every nine tick frames plus one short one. The "about twenty short frames, so reanchors explain the rest" argument in section 2 ignores that the short frame shifts the phase. The clock does drop time under overload (startup frames of 66–76 ms), but the calm short-frame pattern does not establish reanchors. The r/T arithmetic is conditional, not a cost measurement; "root fix proved", "no drops" and the equal-cost six-stage bound do not follow. P0 measured it from the clock's own decisions: on the oracle every calm no-tick frame is creep (31 of 31 paced, 22 of 22 timestamped; frames 100–600 and 60–360).
-
-**A2. D1 is contradictory and has the wrong load model.** At the oracle `ceil((32.1+1)/33.3) = 1`, so D1 both paces to 33.3 ms and says m = 1 restores project fps. Pacing to m·S makes about m ticks due per frame, so size against r + m·T, not today's one-tick load. m > 2 always exceeds the live cap, and m = 2 loses time after a late frame drops the cap to one. The EWMA and hysteresis need entry and exit thresholds, dwell, recovery and qualifying samples. `last_render_work_ms + last_fence_wait_ms` is host load, not GPU execution time. Using the paced interval as the late-frame budget is defensible if every clock observer sees the same policy, but it does not force cap two or prevent drops; deadlines are relative to the previous actual tick, not phase-locked to sim boundaries. Pacing changes the whole instrument: non-water animation, MIDI, Link/OSC polling, outbound transport and audio-layer updates share the content tick, and the timer sleep lacks the command draining of the surface wait. P1 ships Off by default as a bounded one-interval experiment for Peter to try; it is not an automatic main landing.
-
-**A3. Open holes in the split (D3–D8) that block P2:**
-- Acceptance is not unit zero. Queued ticks may begin later, and D5 snapshots then, contradicting inputs frozen at acceptance. Whitewater's own parameters are outside `TickInputs`.
-- Cloned handles do not freeze mutable contents. Dense emission mutates aliased particle identity (`gpu_flip_step.rs`, dense emission); restarting after an earlier slot emitted does not restore that counter. "An abandoned tick leaves no residue" needs rollback or reset of every persistent side effect, coordinated with the domain.
-- Queue accounting: accepting two ticks but running only the first eligible piece can leave two unfinished ticks, while section 4 assumes unfinished is 0 or 1. Define queued versus started occupancy, parity-buffer ownership, and abandonment of accepted work.
-- Replay stays a heuristic: a first/last range plus one slot count does not describe every multi-piece sequence, and early binding changes can invalidate the prefix, not just the tail copies (`crates/manifold-gpu/src/replay.rs`). Keep validation and bound cache growth.
-- Dispatch-list equality is not numerical or export equality when initial mutable storage differs; require completed-state equality too.
-
-**A4. P0 lands on its own** with these instrumentation amendments: explicit per-clock accepted and completed counts, epoch, transport, cap, reanchor and fresh drop (the existing `physics_metrics` backlog conflates completion lag and fresh drops); render, completion and publication costs kept apart; measured GPU work kept apart from wall intervals; profiling-induced changes flagged.
-
-Peter's item: "Even frames: spread each GPU FLIP solver tick across its interval so frame times are even; up to 3 frames of added display latency is allowed." The governing insight from the measurement (section 2): at the oracle the render alone fills 94% of a 60 fps frame, so no spreading reaches 60 fps there, and the unevenness is the content thread running 31.6 ms frames against a 33.3 ms sim grid. The cheap root fix at the oracle is pacing the thread to the grid (D1). Spreading (D2–D8) is designed for the regime where it pays — a scene whose render plus half a tick fits a frame — and it is built so nothing partial ever publishes. Peter asked for spreading by name; the honest answer is that at the oracle it buys 4% more frames for the whole continuation machinery, and pacing buys even frames for a timer change.
-
-Companions: `LIVE_SIM_CLOCK_DESIGN.md` (accepted intervals, cap, drop and reanchor); `GPU_FLIP_DISPLAY_HISTORY_DESIGN.md` (publication slots, cursor; section 3.5 (latency model)); `LIQUID_SOLVER_SEAM_DESIGN.md` section 3.4 (pause and export) (pause, export); `GPU_FLIP_PRESSURE_SOLVE.md` (step passes).
+Companions: `LIVE_SIM_CLOCK_DESIGN.md` (accepted intervals, cap, drop and reanchor); `GPU_FLIP_DISPLAY_HISTORY_DESIGN.md` (publication slots, cursor; section 3.5 (latency model)); `LIQUID_SOLVER_SEAM_DESIGN.md` section 3.4 (pause and export); `GPU_FLIP_PRESSURE_SOLVE.md` (step passes).
 
 ## 1. Audit — what exists (verified 2026-10-06 against 216071de2 = origin/main a551bb175 + test fix; history branch 046862959)
 
@@ -48,24 +31,33 @@ Extend, don't redesign. `R = crates/manifold-renderer/src/node_graph/`, `G = cra
 | Publication reads `liquid_state.out` after the region; history branch publishes on `wants_publication(simulation_time)` | `gpu_flip_preset.rs:484-492`; main `R/primitives/liquid_frame.rs:272-367`; 046862959 `liquid_frame.rs:231-271`, `R/liquid/frame_history.rs:181-183` | per frame |
 | Live clock: cap 2 intervals, 1 after a late frame (`previous > budget`), drop and reanchor past the cap, display one interval behind | `crates/manifold-physics/src/clock.rs:20-44`, `:162-167`, `:331-347`, `:403-417` | budget = 1/project fps |
 | Content thread pacing: deadline at project fps; `LiveLoad.budget = 1/fps` | `A/content_thread.rs:405-446`; `A/frame_timer.rs:179-200`, `:429-441`; `A/content_pipeline.rs:2127-2136` | runs as fast as the GPU allows below 60 |
-| Measurement: per-node spans; stage tags only under `water-race-probes`; no per-frame accepted/dropped trace | `A/frame_time.rs:340-395`, `:636`; `gpu_flip_step.rs:1265` | cannot attribute no-tick frames |
+| Measurement: per-node spans; per-clock decision records; GPU FLIP stage tags; no-tick classification | `A/frame_time.rs`; `R/physics_metrics.rs`; `gpu_flip_step.rs` stage tags | P0 (pending landing) |
 
-## 2. Feasibility from the measurement (scratchpad/oracle_main_nodes.log, 2026-10-06, Dam Break 64, 30 Hz, 60 fps project, M4 Max)
 
-Calm frames 60–360: interval p50 31.87 ms (31.4 fps), whole-buffer GPU p50 27.39; `gpu_flip_step` 21.9 ms p50, `particle_volume` 8.5, `render_scene` 4.6, `whitewater_step` 1.7, mesh nodes ≈ 2.5. Frames 100–360 split by whether the clock accepted an interval: 238 tick frames mean 32.1 ms (p10 30.1, p50 31.6, p90 34.2); 22 no-tick frames mean 15.6 ms, one every 7–13 frames (179, 192, 203, …, 358).
+## 2. Feasibility from the measurement (Dam Break 64, 30 Hz, 60 fps project, M4 Max, 2026-10-06)
 
-- Per-frame render and publication `r = 15.6 ms` (a frame with no tick). Marginal tick cost `T = 32.1 − 15.6 = 16.5 ms` (the step's own span is 21.9; encoders overlap on the GPU, so the marginal figure is what a frame pays).
-- 60 fps unsplit needs `r + T ≤ 16.7` → `T ≤ 1.1 ms`. Split into P pieces needs `r + T/P ≤ 16.7` → `P ≥ 15`. Render alone is 94% of the budget: no spreading reaches 60 fps at the oracle.
-- One tick per frame sustains `1000/32.1 = 31.2 fps` (observed 31.4). Over the 30 Hz grid: `30·16.5 + fps·15.6 ≤ 1000` → `fps ≤ 32.4`.
-- Mechanism of the short frames: 31.6 ms frames gain 1.7 ms per frame on the 33.3 ms grid, so a boundary is missed about every 20 frames by creep alone. Observed is twice that, which the cap-1 rule explains: every frame exceeds the 16.7 ms budget, so `live_cap` is 1 (`clock.rs:162-167`); a frame spanning two boundaries drops one and reanchors (`:337-347`, `:407-417`), and the next boundary is a full interval away. If so, the oracle is also dropping simulated time today. P0 records both; the log cannot tell them apart.
-- (a) spreading at the oracle: the frame rate stays GPU-bound near 31 fps; the empty excursion shrinks from 16.5 to `16.5/P` ms at the same cadence. Even to ±2 ms needs `P ≥ 8`; one active slot has 6 stage units (section 3.1), so the best is 2.75 ms excursions every ~10 frames, plus every cost in section 7. It does not deliver even frames at the oracle.
-- (b) pacing the content thread to the sim grid: every frame carries exactly one tick, 32.1 of 33.3 ms busy, presents on every other vsync, no 15.6 ms frames, no late-frame cap, no drops. Residual jitter is the GPU's own (p10–p90 4 ms, overruns of ≤1 ms absorbed by the surface queue). Cost: 31.4 → 30 fps for all content. Latency: +1.7 ms per frame interval, nothing else.
+The first measurement (`oracle_main_nodes.log`, timestamped, replay off) split frames 100–360 by whether a tick ran: 238 tick frames mean 32.1 ms, 22 no-tick frames mean 15.6 ms, 260 frames averaging 32.56 fps. The reciprocal median interval is not throughput.
 
-Verdict: (b) is the root fix for GPU-bound scenes and the right answer at the oracle, not a stopgap. (a) is the right answer where `r + T/P ≤ 1/fps < r + T` with integer `P = sim_interval / frame_interval` (60 fps / 30 Hz: `T ≤ 2·(16.7 − r)`; `r = 8` admits `T ≤ 17.4`). No scene has been measured in that regime; P0 measures `r` and `T` per scene and P2 ships only against a scene that qualifies.
+- Per-frame render and publication `r ≈ 15.6 ms` (a frame with no tick). Marginal tick cost `T ≈ 32.1 − 15.6 = 16.5 ms`. Both are conditional on the frame's cadence and on publication, which is itself conditional (`liquid_frame.rs`), so they bound regimes; they are not isolated stage costs.
+- 60 fps unsplit needs `r + T ≤ 16.7`. Split into P pieces it needs `r + T/P ≤ 16.7`, so `P ≥ 15` at the oracle. Render alone is 94% of the budget: no spreading reaches 60 fps here.
+- Phase creep alone explains the cadence. With long frames L = 31.6 ms, short frames r = 15.6 ms and interval S = 33.3 ms, the cycle `N·L + r = N·S` repeats about every nine tick frames plus one short frame; the short frame shifts the phase too.
+
+**P0 result (`frame-time`, release, paced, 600 frames, no stamps).** Classified by the rule in `frame_time.rs` from each clock's own decisions:
+
+| Frames | Ticked | No tick | No boundary crossed | No boundary, following a reanchor | Restart | Reanchors | Fresh dropped |
+|---|---|---|---|---|---|---|---|
+| 0–100 (splash) | 87 | 13 | 6 | 6 | 1 | 23 | 0.88 s |
+| 100–600 (calm) | 474 | 26 | 26 | 0 | 0 | 8 | 0.28 s |
+
+Measured GPU span sum, calm: tick frames p50 32.8 ms, no-tick p50 12.8 ms. Paced wall intervals hide the difference (no-tick 30.9 ms, tick 32.7 ms): the surface wait absorbs it. A timestamped run (replay off, every frame) agrees: 22 of 22 calm no-tick frames crossed no boundary, and the step's stage spans sum to the step span (ratio 1.000). Stage p50s: prepare 9.7, pressure 6.0, pockets 3.6, project_extend 1.0, move 0.9, finish 0.2, clock 0.1 ms.
+
+So on the oracle, calm no-tick frames happen with no boundary crossed; none follows a reanchor. The classification is a rule over observed decisions, not proof of cause. The calm part still drops about 0.28 s of simulated time per run, through the late-frame rule of `LIVE_SIM_CLOCK_DESIGN.md` (Late frames take one interval): a frame over the 16.7 ms budget caps the next at one interval, and one that then spans two boundaries drops the remainder and reanchors. That is the clock's contract, not a defect. **Open question for Peter:** whether cap one after a late frame is the right policy when the scene sustains 30 Hz but never fits 16.7 ms.
+
+Verdict: spreading cannot deliver even frames at the oracle. Pacing is worth an experiment (D1). Spreading is the answer only where `r + T/P ≤ 1/fps < r + T` with integer `P = sim_interval / frame_interval` (60 fps / 30 Hz: `T ≤ 2·(16.7 − r)`); no scene has been measured there.
 
 ## 3. Decisions
 
-**D1 — Pacing to the grid is the first fix and the GPU-bound fallback.** The content thread's deadline becomes `m × sim_interval`, `m = ceil((ewma_gpu + 1 ms) / sim_interval)`, `ewma_gpu` = EWMA (τ = 1 s) of `last_render_work_ms + last_fence_wait_ms` (`content_pipeline.rs:2133`), re-evaluated at most once per second with 10% hysteresis, only while `ewma_gpu > 1/fps`; `m = 1` restores the project fps. `LiveLoad.budget` becomes the paced interval so the clock's cap stays 2 and no frame is "late" for being on the grid. Project setting `settings.physics.live_pacing: Auto | Off`, default Auto, persisted, not a performance control. Export is offline and untouched. Rejected: pacing to `1/fps × n` ignoring the sim rate, because 30 fps against 24 Hz re-creates a no-tick frame in five. Rejected: spreading at the oracle, because section 2 shows 2.75 ms excursions at best for the whole of D3–D8.
+**D1 — Pacing to the grid is an Off-by-default experiment.** Setting `settings.physics.live_pacing: Off | Experimental`, default Off, persisted with load migration. Experimental paces the content thread to one sim interval (`m = 1`, 33.3 ms at 30 Hz) only; no automatic `m` selection. Load model: pacing to `m·S` makes about m ticks due per frame, so a frame costs `r + m·T`, not today's `r + T`. m > 2 always exceeds the live cap, and m = 2 loses time once a late frame drops the cap to one, so only m = 1 is in scope. The trigger is Peter's switch, not an EWMA of `last_render_work_ms + last_fence_wait_ms`, which is host load rather than GPU execution time; an automatic mode needs entry and exit thresholds, dwell, recovery and a defined qualifying sample, and is deferred. While pacing, `LiveLoad.budget` is the paced interval, and every clock observer sees the same budget. That keeps "late" meaning late against the display budget; it does not force cap two or prevent drops, because frame deadlines are relative to the previous actual tick, not phase-locked to sim boundaries. Pacing slows the whole instrument: non-water animation cadence, MIDI consumption, Link/OSC polling, outbound transport and audio-layer updates share the content tick, and the timer sleep does not drain commands the way the surface wait does. Export is offline and untouched. Rejected: pacing to `n/fps` ignoring the sim rate, because 30 fps against 24 Hz re-creates a no-tick frame in five. Rejected: spreading at the oracle (section 2).
 
 **D2 — The split applies only where it fits, P ≥ 2 integer.** Per accepted tick `P = round(sim_interval / frame_budget)` when within 1% of an integer and ≥ 2, clamped to the predicted non-empty unit count (D3); otherwise `P = 1` (today's path, byte-identical). `P = 1` also when offline, coupled (D9), narrow band, or D1 pacing is active. Rejected: rational ratios (60/24), because pieces per frame would alternate 2 and 3 and unevenness returns; deferred.
 
@@ -85,11 +77,23 @@ Verdict: (b) is the root fix for GPU-bound scenes and the right answer at the or
 
 **D10 — Export equals live precisely.** For the same accepted intervals with the same inputs at acceptance, a live tick's dispatch list (pipelines, groups, gates, bindings by role, inline bytes) equals the export tick's; pieces move the frame at which commands are encoded, never their order, and `cont.*` substitute pooled buffers one-to-one. Live drops (`clock.rs:337`) already make unconditional equality false; the statement is per accepted interval.
 
+
+### Open holes that block P2
+
+D3–D10 close the v1 review's holes, but not these. Each needs a written resolution in this doc before P2 starts.
+
+1. **Acceptance is not unit zero.** Queued ticks may begin a frame later, and D5 snapshots at unit 0, contradicting "inputs frozen at acceptance". Whitewater's own parameters are outside `TickInputs`.
+2. **Cloned handles do not freeze mutable contents.** Dense emission mutates aliased particle identity in `gpu_flip_step.rs`; restarting a tick after an earlier slot emitted does not restore that counter. D6's "an abandoned tick leaves no residue" needs rollback or reset of every persistent side effect, coordinated with the domain.
+3. **Queue accounting.** Accepting two ticks but running only the first eligible piece can leave two unfinished ticks, while section 4 assumes unfinished is 0 or 1. Define queued versus started occupancy, parity-buffer ownership, and abandonment of accepted work.
+4. **Replay keys are a heuristic.** A first/last range plus one slot count does not describe every multi-piece sequence, and early binding changes can invalidate the prefix, not only the tail copies (`crates/manifold-gpu/src/replay.rs`). Keep validation and bound the cache's growth.
+5. **Dispatch-list equality is not state equality.** When initial mutable storage differs, equal dispatch lists do not give equal numbers or equal export; D10's proof also needs completed-state equality.
+
 ## 4. Scheduling and latency
 
 Per frame, after `clock.advance` is given `max_accept = 2 − unfinished` (unfinished ∈ {0, 1}; the clock's own cap and drop rule still apply): run the in-progress tick's next piece; if the previous frame was not late (`LiveLoad`) and the tick is behind its planned completion frame, run its next piece too; then the first piece of a newly accepted tick only while fewer than 2 pieces ran and no second completing piece would follow. Steady state at 60/30: A(k) | B(k) | A(k+1) …, completion at acceptance + P − 1 frames; after a late frame one frame earlier; never later than acceptance + P, else the clock drops as today. Pause: remaining pieces run on paused frames until the tick completes (LIQUID_SOLVER_SEAM_DESIGN.md section 3.4 (pause and export)), at most P frames. Speed: the interval is fixed at acceptance; pieces are unaffected. Reset, backward seek, rate change: new epoch, the in-progress tick is abandoned (D6). Export: P = 1.
 
 Latency, GPU_FLIP_DISPLAY_HISTORY_DESIGN.md section 3.5 (latency model) (046862959 `docs/GPU_FLIP_DISPLAY_HISTORY_DESIGN.md:69-82`): 60 fps / 30 Hz with P = 2 completes one frame later than today, R = 3 → 4: 75 → 92 ms transport lag, +1 frame of the 3 allowed; catch-up frames complete earlier and the cursor's measured deficit absorbs it. 30 fps GPU-bound (oracle) under D1: P = 1, 108 ms as today, +1.7 ms from the 33.3 ms frame. These are arithmetic; P3 measures.
+
 
 ## 5. Invariants and enforcement
 
@@ -97,33 +101,57 @@ Latency, GPU_FLIP_DISPLAY_HISTORY_DESIGN.md section 3.5 (latency model) (0468629
 2. Reading the past never changes it: a tick's bytes are a function of its `TickInputs` and particle snapshot. Test: controls changed between pieces leave the in-progress tick's bytes equal to the snapshot run; the next tick takes the new values.
 3. No empty piece: property test over `s_enc ∈ {1, 6, 7}`, `s_pred ∈ 1..6`, `P ∈ 1..8`.
 4. The cursor is exact: `encode_units(from, to)` for consecutive ranges equals `encode_units(0, 6·s_enc)` as a dispatch list; a mismatched `(epoch, tick, from)` restarts at unit 0.
-5. No per-frame allocation, no new shared state: continuation buffers at reserve only; `TickPlan` ring of 2; the hot-path allocation lint passes.
-6. Export equals live per accepted interval (D10): dispatch-list equality test, P ∈ {1, 2, 3}.
-7. Pacing never drops: 300 paced frames at 33.3 ms accept one interval each, `dropped_seconds == 0`.
+5. No per-frame allocation, no new shared state: continuation buffers at reserve only; `TickPlan` ring of 2; clock records in fixed storage; the hot-path allocation lint passes.
+6. Export equals live per accepted interval (D10): dispatch-list equality plus completed-state equality, P ∈ {1, 2, 3}.
+7. Pacing is measured, never assumed: under D1 Experimental, the frame-time report states accepted ticks, no-tick frames and fresh dropped seconds. Pacing does not guarantee zero drops; a drop under pacing is reported, not hidden.
 
 ## 6. Phasing
 
-**P0 — Instrumentation (safe, first).** Per-frame line in `frame_time.rs:636` gains accepted intervals, pieces and fresh dropped seconds (from `physics_metrics`); the summary counts no-tick frames and splits GPU spans by tick/no-tick; the step's stage tags (`:1265` etc.) become plain encoder labels so the "grouped encoder labels" table splits the 21.4 ms `flip-clock-schedule` bucket by stage, giving D3's weights. Conviction: a report unit test with synthetic frames; on the oracle the stage spans sum to the step span within 5% and the no-tick frames are attributed to creep or reanchor, not guessed.
+Every phase is one session, ends committed with `cargo clippy -p <touched> -- -D warnings` clean, and is landed by the Claude lead, never the lane.
 
-**P1 — Pacing (D1).** `content_thread.rs` computes `m`, calls `timer.set_target_fps(1/(m·sim_interval))`, publishes the paced budget in `content_pipeline.rs:2133`; the setting lands in `PhysicsSettings` with load migration. Conviction: `frame_timer` test for the `m = 2` grid; clock test for invariant 7; oracle gate: 0 no-tick frames in frames 100–360, 0 dropped seconds, interval p95 − p5 ≤ 5 ms (today 38.3 − 30.1), fps p50 30.0 ± 0.2.
+### P0 — Instrumentation (implemented, pending landing)
 
-**P2 — Split core (D2–D8), P = 2 only, uncoupled, no narrow band.** Resumable `encode_units`, continuation storage, `TickInputs`, `TickPlan`, domain scheduling, boundary scalars, stats/whitewater gating, replay keys. Gate to start: a P0-measured scene with `r + T/2 ≤ 16.7 < r + T`. Conviction (GPU proofs, dam break 64, 60 ticks): invariants 1–6; changing prediction 1 → 6 → 1 across ticks; another pooled array node between pieces; hits inside tick k+1 while k is in progress; whitewater counts unchanged on non-completing pieces; replay `replayed ≥ 95%` of dispatches after 10 frames of A | B; reset mid-tick leaves the next epoch's first tick equal to a fresh run.
+- **Entry state:** `origin/main` contains `crates/manifold-physics/src/clock.rs` with `live_cap` and the reanchor branch: `rg -n "fn live_cap|reanchored = " crates/manifold-physics/src/clock.rs`.
+- **Read-back:** this doc's section 2 and section 6; `clock.rs` `advance`; `crates/manifold-renderer/src/node_graph/physics_metrics.rs`; `crates/manifold-app/src/frame_time.rs` `probe`. Restate: counters come from the clock's decisions, never from timing; no allocation in the content frame; stage tags are profiling-only and touch no dispatch, binding or replay key.
+- **Deliverables:** `ClockFrame.{due, live_cap, fresh_dropped_seconds, transport}`; `physics_metrics::{ClockRecord, ClockMetrics, record_clock}` (four fixed records plus overflow count); records from the GPU FLIP and CPU water domains; GPU FLIP stage tags unconditional plus `gpu_flip.stage.clock`, `project_extend` starting before projection; frame-time per-frame clock line, no-tick classification, wall and GPU split by tick.
+- **Gate (positive):** `cargo nextest run -p manifold-physics decision_counters_match_the_clock_over_an_overload_sequence`; `cargo nextest run -p manifold-renderer each_live_clock_keeps_its_own_record`; `cargo nextest run -p manifold-app --features perf-soak frame_time` (includes `no_tick_frames_are_classified_from_the_clock_decisions`, `mixed_clock_frames_keep_per_clock_identity`, `stage_coverage_compares_stage_spans_to_the_step_span`).
+- **Gate (negative):** `rg -n 'cfg\(feature = "water-race-probes"\)\]\s*$' -A1 crates/manifold-renderer/src/node_graph/primitives/gpu_flip_step.rs | rg set_profile_tag` returns zero hits; `rg -n "profile_tag|label" crates/manifold-gpu/src/replay.rs` returns zero hits.
+- **Acceptance artifact:** `scripts/gpu_queue.py -- <target>/release/manifold frame-time <oracle.manifold> --frames 600 --splash-frames 100 --stamp-every 100000` prints the per-frame clock line and the "solver ticks … classified by this rule" summary; a `--stamp-every 1 --stamp-granularity node` run prints the stage spans / step span ratio within 5%. Results recorded in section 2.
 
-**P3 — History and latency.** Run P2 under display history P1; measure transport lag with the P2 trace on the qualifying scene; gate ≤ 3 frames added, frame interval p95 − p5 ≤ 3 ms at 60 fps.
+### P1 — Pacing experiment (D1), default Off
+
+- **Entry state:** P0 landed: `rg -n "fn record_clock" crates/manifold-renderer/src/node_graph/physics_metrics.rs`. Peter has said he wants to try it.
+- **Read-back:** D1 in full; `docs/VSYNC_AND_FRAME_PACING.md`; `crates/manifold-app/src/content_thread.rs` `run_paced_frame`; `frame_timer.rs` deadlines; `LIVE_SIM_CLOCK_DESIGN.md` (Late frames take one interval). Restate: Off by default; m = 1 only; no automatic mode; the budget change reaches every clock observer; commands still drain while the thread waits.
+- **Deliverables:** `PhysicsSettings.live_pacing` with load migration (old projects load Off); content thread paces to one sim interval when Experimental and the timer sleep drains commands; `LiveLoad.budget` is the paced interval while pacing; a `frame-time --live-pacing experimental` flag.
+- **Gate (positive):** a `frame_timer` test that the paced deadline is one sim interval; a settings round-trip test (Off default, Experimental persists, old file loads Off); oracle run reports no-tick frames, fresh dropped seconds and interval p95 − p5 for Off and Experimental side by side.
+- **Gate (negative):** `rg -n "live_pacing" crates/` shows no read outside settings, content thread and frame-time; no new `Arc<Mutex` in the diff.
+- **Acceptance artifact:** the two oracle `frame-time` reports (Off, Experimental) and the exact launch command for Peter's live trial from the branch binary. Landing on main needs Peter's verdict from that trial.
+
+### P2 — Split core (D2–D10), P = 2 only, uncoupled, no narrow band — BLOCKED
+
+- **Entry state:** every item of section 3 (Open holes that block P2) has a written resolution in this doc; a P0-measured scene with `r + T/2 ≤ 16.7 < r + T`, named with its file and measured r and T.
+- **Read-back:** D2–D10, section 4, section 5; `gpu_flip_step.rs` encode; `liquid_state.rs`; `substep_region.rs`; `crates/manifold-gpu/src/replay.rs`. Restate the qualifying scene's numbers and the hole resolutions.
+- **Deliverables:** resumable `encode_units`, continuation storage, `TickInputs`, `TickPlan`, domain scheduling, boundary scalars, stats and whitewater gating, replay keys.
+- **Gate (positive):** GPU proofs through `scripts/gpu_proofs_gate.py` (dam break 64, 60 ticks): invariants 1–6; prediction 1 → 6 → 1 across ticks; another pooled array node between pieces; hits inside tick k+1 while k is in progress; whitewater counts unchanged on non-completing pieces; replay `replayed ≥ 95%` of dispatches after 10 frames of A | B; reset mid-tick leaves the next epoch's first tick equal to a fresh run.
+- **Gate (negative):** P = 1 dispatch lists byte-identical to main on the oracle; no allocation in the content frame.
+- **Acceptance artifact:** `frame-time` on the qualifying scene, interval p95 − p5 before and after, and a headless PNG pair showing no partial publication.
+
+### P3 — History and latency
+
+- **Entry state:** P2 landed; display history P1 on main.
+- **Read-back:** section 4 latency; `GPU_FLIP_DISPLAY_HISTORY_DESIGN.md` section 3.5 (latency model).
+- **Deliverables:** P2 run under display history; transport-lag trace.
+- **Gate:** on the qualifying scene, ≤ 3 frames of added latency and frame interval p95 − p5 ≤ 3 ms at 60 fps, from the `frame-time` report.
+- **Acceptance artifact:** that report plus Peter's live look.
 
 ## 7. Consequences, stated honestly
 
-D1 lowers the whole content thread to 30 fps at the oracle, not only the water; that is the price of even frames there. The split does not help the oracle and adds one frame of latency where it applies. Memory at 64³: `cont.out` capacity × 32 B, `cont.capped` ≈ capacity × 8 B, `phi_done` 1 MB, history doubled (≈ 19 MB at 6 slots). Per completing tick: three copies, well under 0.2 ms. Replay cache memory doubles in steady state. Four node contracts change (step inputs, domain outputs, stats `enabled`, whitewater `ticks` precedence), all defaulted so saved graphs run whole ticks.
+D1, when on, lowers the whole content thread to the sim rate, not only the water, and coarsens MIDI, Link/OSC, transport and audio-layer update timing; that is why it is Off by default. The split does not help the oracle and adds one frame of latency where it applies. Memory at 64³: `cont.out` capacity × 32 B, `cont.capped` ≈ capacity × 8 B, `phi_done` 1 MB, history doubled (≈ 19 MB at 6 slots). Per completing tick: three copies, well under 0.2 ms. Replay cache memory doubles in steady state. Four node contracts change (step inputs, domain outputs, stats `enabled`, whitewater `ticks` precedence), all defaulted so saved graphs run whole ticks.
 
 ## 8. Decided — do not reopen
-1. D1 pacing at the GPU-bound oracle; no spreading there. 2. Unit = stage of a slot, plan frozen at acceptance. 3. Continuation separate from snapshot. 4. Coupled, narrow, offline never split in v1. 5. Export equality is per accepted interval.
+
+1. No spreading at the GPU-bound oracle. 2. Pacing is opt-in, default Off, m = 1 only, until Peter's trial. 3. Unit = stage of a slot, plan frozen at acceptance. 4. Continuation separate from snapshot. 5. Coupled, narrow, offline never split in v1. 6. Export equality is per accepted interval and needs state equality.
 
 ## 9. Deferred
-Rational P (60/24); coupled split (third pending state, exchange at the last piece); narrow band; cuts inside the pressure loop; GPU-resident piece schedule; pacing to a non-vsync-multiple grid at displays other than 60 Hz. Trigger for each: a measured scene that needs it.
 
-### Critical Files for Implementation
-- /Users/peterkiemann/MANIFOLD - Rust/.claude/worktrees/slot-5/crates/manifold-renderer/src/node_graph/primitives/gpu_flip_step.rs
-- /Users/peterkiemann/MANIFOLD - Rust/.claude/worktrees/slot-5/crates/manifold-renderer/src/node_graph/primitives/gpu_flip_domain.rs
-- /Users/peterkiemann/MANIFOLD - Rust/.claude/worktrees/slot-5/crates/manifold-renderer/src/node_graph/primitives/liquid_state.rs
-- /Users/peterkiemann/MANIFOLD - Rust/.claude/worktrees/slot-5/crates/manifold-app/src/content_thread.rs
-- /Users/peterkiemann/MANIFOLD - Rust/.claude/worktrees/slot-5/crates/manifold-renderer/src/node_graph/execution/substep_region.rs
+Automatic pacing (EWMA, m selection); rational P (60/24); coupled split (third pending state, exchange at the last piece); narrow band; cuts inside the pressure loop; GPU-resident piece schedule; pacing to a non-vsync-multiple grid at displays other than 60 Hz. Trigger for each: a measured scene that needs it.
