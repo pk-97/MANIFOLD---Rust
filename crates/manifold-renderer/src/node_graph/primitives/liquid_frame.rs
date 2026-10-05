@@ -28,6 +28,13 @@ use crate::node_graph::primitive::Primitive;
 pub const WHITEWATER_INPUTS: [&str; 4] = ["foam_in", "bubble_in", "spray_in", "dust_in"];
 pub const WHITEWATER_OUTPUTS: [&str; 4] = ["foam_b", "bubble_b", "spray_b", "dust_b"];
 
+/// Every provided array output, in [`LiquidFrame`]'s binding table order.
+const PROVIDED_PORTS: usize = 13;
+const PROVIDED: [&str; PROVIDED_PORTS] = [
+    "particles_a", "particles_b", "interior_a", "interior_b", "solid_a", "solid_b",
+    "face_u", "face_v", "face_w", "foam_b", "bubble_b", "spray_b", "dust_b",
+];
+
 crate::primitive! {
     name: LiquidFrame,
     type_id: "node.liquid_frame",
@@ -82,10 +89,52 @@ crate::primitive! {
         solid: Option<GpuBuffer> = None,
         solid_key: Option<([u32; 7], u32)> = None,
         wired: [bool; FIELDS] = [false; FIELDS],
+        bound: [Option<GpuBuffer>; PROVIDED_PORTS] = std::array::from_fn(|_| None),
+        placeholders: [Option<GpuBuffer>; PROVIDED_PORTS] = std::array::from_fn(|_| None),
     },
 }
 
 impl LiquidFrame {
+    /// What `port` shows now: the pinned slot's storage, the walls, or None.
+    fn wanted(&self, port: &str) -> Option<&GpuBuffer> {
+        let pin = self.history.core.pinned();
+        match port {
+            "particles_a" => pin.and_then(|p| self.history.slot(p.a).particles.as_ref()),
+            "particles_b" => pin.and_then(|p| self.history.slot(p.b).particles.as_ref()),
+            "interior_a" => self.pinned_field(FIELD_INTERIOR, false),
+            "interior_b" => self.pinned_field(FIELD_INTERIOR, true),
+            "solid_a" if self.wired[FIELD_SOLID] => self.pinned_field(FIELD_SOLID, false),
+            "solid_b" if self.wired[FIELD_SOLID] => self.pinned_field(FIELD_SOLID, true),
+            "solid_a" | "solid_b" => self.solid.as_ref(),
+            _ => FACE_GRID_PORTS[..3].iter().position(|&p| p == port).map(|axis| FIELD_FACES + axis)
+                .or_else(|| WHITEWATER_OUTPUTS.iter().position(|&p| p == port).map(|k| FIELD_WHITEWATER + k))
+                .and_then(|field| self.pinned_field(field, true)),
+        }
+    }
+
+    /// Rebind every provided output. An output with nothing to show gets a
+    /// zeroed node-owned placeholder at its last size, so the executor never
+    /// keeps a slot bound that has lost its pin and reader tracking.
+    /// Placeholders allocate only when a port first loses its storage or
+    /// outgrows them.
+    fn rebind(&mut self, device: &manifold_gpu::GpuDevice) {
+        for (i, port) in PROVIDED.iter().enumerate() {
+            let next = match self.wanted(port) {
+                Some(buffer) => buffer.clone(),
+                None => {
+                    let size = self.bound[i].as_ref().map_or(32, |b| b.size).max(32);
+                    if self.placeholders[i].as_ref().is_none_or(|b| b.size < size) {
+                        let buffer = device.create_buffer_shared(size);
+                        buffer.zero_fill();
+                        self.placeholders[i] = Some(buffer);
+                    }
+                    self.placeholders[i].clone().expect("placeholder made")
+                }
+            };
+            self.bound[i] = Some(next);
+        }
+    }
+
     fn pinned_field(&self, field: usize, frame_b: bool) -> Option<&GpuBuffer> {
         let pin = self.history.core.pinned()?;
         let slot = if frame_b { pin.b } else { pin.a };
@@ -105,19 +154,7 @@ impl Primitive for LiquidFrame {
     }
 
     fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
-        let pin = self.history.core.pinned();
-        match port {
-            "particles_a" => pin.and_then(|p| self.history.slot(p.a).particles.as_ref()),
-            "particles_b" => pin.and_then(|p| self.history.slot(p.b).particles.as_ref()),
-            "interior_a" => self.pinned_field(FIELD_INTERIOR, false),
-            "interior_b" => self.pinned_field(FIELD_INTERIOR, true),
-            "solid_a" if self.wired[FIELD_SOLID] => self.pinned_field(FIELD_SOLID, false),
-            "solid_b" if self.wired[FIELD_SOLID] => self.pinned_field(FIELD_SOLID, true),
-            "solid_a" | "solid_b" => self.solid.as_ref(),
-            _ => FACE_GRID_PORTS[..3].iter().position(|&p| p == port).map(|axis| FIELD_FACES + axis)
-                .or_else(|| WHITEWATER_OUTPUTS.iter().position(|&p| p == port).map(|k| FIELD_WHITEWATER + k))
-                .and_then(|field| self.pinned_field(field, true)),
-        }
+        PROVIDED.iter().position(|&p| p == port).and_then(|i| self.bound[i].as_ref())
     }
 
     fn array_output_capacity(
@@ -131,6 +168,10 @@ impl Primitive for LiquidFrame {
     }
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
+        // The bound outputs are read this frame whatever happens below, so
+        // the pin they show is stamped before any exit.
+        let stamp = ctx.gpu_encoder().device.frame_clock().map_or(0, |c| c.stamp());
+        self.history.core.stamp_readers(stamp);
         let Some(lattice) = LiquidLattice::from_wires(ctx, "Liquid Frame") else {
             return;
         };
@@ -207,7 +248,6 @@ impl Primitive for LiquidFrame {
         let gpu = ctx.gpu_encoder();
         let clock = gpu.device.frame_clock();
         let complete = |stamp: u64| clock.as_ref().is_none_or(|c| c.is_complete(stamp));
-        let stamp = clock.as_ref().map_or(0, |c| c.stamp());
         self.history.retire(complete);
         self.history.core.select(display_time);
         self.history.core.stamp_readers(stamp);
@@ -233,10 +273,9 @@ impl Primitive for LiquidFrame {
         {
             let capacity = self.history.core.capacity_for(count);
             let particle_bytes = u64::from(capacity) * record;
-            match self.history.acquire(gpu.device, particle_bytes, &fields) {
-                Ok(None) => self.history.core.skip(simulation_time),
+            match self.history.acquire(gpu.device, simulation_time, particle_bytes, &fields) {
+                Ok(None) => {}
                 Err(error) => {
-                    self.history.core.skip(simulation_time);
                     refused = Some(format!("Liquid Frame: {error}. Lower Resolution."));
                 }
                 Ok(Some(slot)) => {
@@ -253,6 +292,7 @@ impl Primitive for LiquidFrame {
                     if let Err(error) = encoded {
                         self.history.core.begin(slot, simulation_time, stamp);
                         self.history.core.fail(slot, stamp);
+                        self.rebind(gpu.device);
                         ctx.error(format!("Liquid Frame: {error}"));
                         return;
                     }
@@ -282,6 +322,7 @@ impl Primitive for LiquidFrame {
             }
         }
 
+        self.rebind(gpu.device);
         let pin = self.history.core.pinned().copied();
         let faces_published = (0..3).all(|axis| self.pinned_field(FIELD_FACES + axis, true).is_some());
         let skipped = self.history.core.publications_skipped() as f32;

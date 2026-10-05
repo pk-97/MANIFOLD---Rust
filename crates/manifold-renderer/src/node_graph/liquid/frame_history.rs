@@ -89,9 +89,10 @@ pub struct Presentation {
 }
 
 impl Presentation {
-    /// The time the picture samples: t_A + blend × (t_B − t_A).
+    /// The time the picture samples: t_A + blend × span, with the
+    /// published span.
     pub fn presented_time(&self) -> f64 {
-        self.t_a + f64::from(self.blend) * (self.t_b - self.t_a)
+        self.t_a + f64::from(self.blend) * f64::from(self.span)
     }
 }
 
@@ -287,23 +288,27 @@ impl HistoryCore {
     /// nothing retired in this generation the previous pin holds unchanged.
     pub fn select(&mut self, c: f64) -> Option<Presentation> {
         let min_run = self.pinned.filter(|p| p.generation == self.generation).map_or(0, |p| p.run);
-        let mut candidates: Vec<usize> = (0..self.slots.len())
-            .filter(|&i| {
-                let s = &self.slots[i];
-                s.state == SlotState::Retired && s.generation == self.generation && s.run >= min_run
-            })
-            .collect();
-        candidates.sort_by_key(|&i| self.slots[i].seq);
-        if candidates.is_empty() {
-            return self.pinned;
+        // Allocation-free scan: B is the earliest candidate after c, else
+        // the newest; A the latest candidate before B in B's run.
+        let candidate = |s: &SlotMeta| s.state == SlotState::Retired && s.generation == self.generation && s.run >= min_run;
+        let mut after: Option<usize> = None;
+        let mut newest: Option<usize> = None;
+        for (i, s) in self.slots.iter().enumerate().filter(|(_, s)| candidate(s)) {
+            if newest.is_none_or(|n| s.seq > self.slots[n].seq) {
+                newest = Some(i);
+            }
+            if s.t > c && after.is_none_or(|n| s.seq < self.slots[n].seq) {
+                after = Some(i);
+            }
         }
-        let position = candidates.iter().position(|&i| self.slots[i].t > c).unwrap_or(candidates.len() - 1);
-        let b = candidates[position];
-        let a = position
-            .checked_sub(1)
-            .map(|p| candidates[p])
-            .filter(|&a| self.slots[a].run == self.slots[b].run)
-            .unwrap_or(b);
+        let Some(b) = after.or(newest) else { return self.pinned };
+        let mut before: Option<usize> = None;
+        for (i, s) in self.slots.iter().enumerate().filter(|(_, s)| candidate(s)) {
+            if s.seq < self.slots[b].seq && before.is_none_or(|n| s.seq > self.slots[n].seq) {
+                before = Some(i);
+            }
+        }
+        let a = before.filter(|&a| self.slots[a].run == self.slots[b].run).unwrap_or(b);
         let (sa, sb) = (self.slots[a], self.slots[b]);
         let (blend, span) = display_blend(c, sa.t, sb.t);
         let presentation = Presentation {
@@ -355,80 +360,127 @@ impl HistoryCore {
         }
     }
 
-    /// Check the Free invariant: no Free slot is pinned or has an
-    /// incomplete stamp.
-    pub fn free_slots_are_safe(&self, complete: impl Fn(u64) -> bool) -> bool {
-        (0..self.slots.len()).all(|i| {
-            let s = &self.slots[i];
-            s.state != SlotState::Free || (!self.is_pinned(i) && complete(s.writer_stamp) && complete(s.reader_stamp))
-        })
+}
+
+/// Storage a slot holds: its byte size is all the lifecycle needs.
+pub trait SlotStorage {
+    fn bytes(&self) -> u64;
+}
+
+impl SlotStorage for GpuBuffer {
+    fn bytes(&self) -> u64 {
+        self.size
     }
 }
 
 /// One slot's storage, allocated whole before its first publication.
-#[derive(Default)]
-pub struct SlotBuffers {
-    pub particles: Option<GpuBuffer>,
-    pub metadata: Option<GpuBuffer>,
-    pub fields: [Option<GpuBuffer>; FIELDS],
+pub struct SlotBuffers<B = GpuBuffer> {
+    pub particles: Option<B>,
+    pub metadata: Option<B>,
+    pub fields: [Option<B>; FIELDS],
 }
 
-impl SlotBuffers {
+impl<B> Default for SlotBuffers<B> {
+    fn default() -> Self {
+        Self { particles: None, metadata: None, fields: std::array::from_fn(|_| None) }
+    }
+}
+
+impl<B: SlotStorage> SlotBuffers<B> {
     fn fits(&self, particle_bytes: u64, fields: &[u64; FIELDS]) -> bool {
-        self.particles.as_ref().is_some_and(|b| b.size >= particle_bytes)
+        self.particles.as_ref().is_some_and(|b| b.bytes() >= particle_bytes)
             && self.metadata.is_some()
             && self.fields.iter().zip(fields).all(|(buffer, &bytes)| match buffer {
                 None => bytes == 0,
-                Some(buffer) => buffer.size == bytes,
+                Some(buffer) => buffer.bytes() == bytes,
             })
     }
 }
 
-/// [`HistoryCore`] with each slot's GPU storage.
-#[derive(Default)]
-pub struct FrameHistory {
+/// [`HistoryCore`] with each slot's storage.
+pub struct FrameHistory<B = GpuBuffer> {
     pub core: HistoryCore,
-    buffers: Vec<SlotBuffers>,
+    buffers: Vec<SlotBuffers<B>>,
 }
 
-impl FrameHistory {
-    pub fn slot(&self, index: usize) -> &SlotBuffers {
+impl<B> Default for FrameHistory<B> {
+    fn default() -> Self {
+        Self { core: HistoryCore::default(), buffers: Vec::new() }
+    }
+}
+
+impl<B: SlotStorage> FrameHistory<B> {
+    pub fn slot(&self, index: usize) -> &SlotBuffers<B> {
         &self.buffers[index]
     }
 
-    /// A Free slot holding `particle_bytes` of particles and exactly the
-    /// layout's fields, allocated or reallocated whole under one memory
-    /// admission. `Ok(None)` when the budget is exhausted; `Err` names a
-    /// refused allocation. Either way the caller skips the endpoint.
-    pub fn acquire(&mut self, device: &GpuDevice, particle_bytes: u64, fields: &[u64; FIELDS]) -> Result<Option<usize>, String> {
-        let slot = match self.core.free_slot(|i| self.buffers[i].fits(particle_bytes, fields)) {
+    /// A Free slot for the endpoint at `time` holding `particle_bytes` of
+    /// particles and exactly the layout's fields, allocated or reallocated
+    /// whole under one `admit`. With no slot (budget exhausted) or a refused
+    /// allocation the endpoint is skipped once and `Err` names a refusal.
+    /// A failed allocation keeps the slot's previous storage and leaves it
+    /// Free; nothing partial is installed.
+    pub fn acquire_with(
+        &mut self,
+        time: f64,
+        particle_bytes: u64,
+        fields: &[u64; FIELDS],
+        admit: impl FnOnce(u64) -> Result<(), String>,
+        mut create: impl FnMut(u64) -> Result<B, String>,
+    ) -> Result<Option<usize>, String> {
+        let found = self.core.free_slot(|i| self.buffers[i].fits(particle_bytes, fields));
+        let slot = match found {
             Some(slot) => slot,
-            None if self.core.can_grow() => {
-                self.buffers.push(SlotBuffers::default());
-                self.core.push_free()
+            None if self.core.can_grow() => self.core.len(),
+            None => {
+                self.core.skip(time);
+                return Ok(None);
             }
-            None => return Ok(None),
         };
-        if self.buffers[slot].fits(particle_bytes, fields) {
+        if found.is_some() && self.buffers[slot].fits(particle_bytes, fields) {
             return Ok(Some(slot));
         }
         let total = particle_bytes + 16 + fields.iter().sum::<u64>();
-        crate::node_graph::scene_modifier_expand::admit_candidate_bytes(device.modifier_memory_snapshot(), total)
-            .map_err(|error| format!("a history slot needs {total} bytes the device cannot give: {error}"))?;
-        // The replaced storage drops fence-retired; this slot's stamps are
-        // complete, so nothing in flight still reads it.
-        let mut fresh = SlotBuffers {
-            particles: Some(device.try_create_buffer_shared(particle_bytes)?),
-            metadata: Some(device.try_create_buffer_shared(16)?),
-            fields: Default::default(),
-        };
-        for (field, &bytes) in fresh.fields.iter_mut().zip(fields) {
-            if bytes > 0 {
-                *field = Some(device.try_create_buffer_shared(bytes)?);
+        let fresh = admit(total)
+            .map_err(|error| format!("a history slot needs {total} bytes the device cannot give: {error}"))
+            .and_then(|()| {
+                let mut fresh = SlotBuffers { particles: Some(create(particle_bytes)?), metadata: Some(create(16)?), ..SlotBuffers::default() };
+                for (field, &bytes) in fresh.fields.iter_mut().zip(fields) {
+                    if bytes > 0 {
+                        *field = Some(create(bytes)?);
+                    }
+                }
+                Ok(fresh)
+            });
+        match fresh {
+            Err(error) => {
+                self.core.skip(time);
+                Err(error)
+            }
+            Ok(fresh) => {
+                if found.is_none() {
+                    self.buffers.push(SlotBuffers::default());
+                    self.core.push_free();
+                }
+                // The replaced storage drops fence-retired; this slot's
+                // stamps are complete, so nothing in flight still reads it.
+                self.buffers[slot] = fresh;
+                Ok(Some(slot))
             }
         }
-        self.buffers[slot] = fresh;
-        Ok(Some(slot))
+    }
+}
+
+impl FrameHistory<GpuBuffer> {
+    /// [`Self::acquire_with`] on the device under its memory admission.
+    pub fn acquire(&mut self, device: &GpuDevice, time: f64, particle_bytes: u64, fields: &[u64; FIELDS]) -> Result<Option<usize>, String> {
+        self.acquire_with(
+            time,
+            particle_bytes,
+            fields,
+            |total| crate::node_graph::scene_modifier_expand::admit_candidate_bytes(device.modifier_memory_snapshot(), total).map_err(|e| e.to_string()),
+            |bytes| device.try_create_buffer_shared(bytes),
+        )
     }
 
     /// The four metadata words of a completed slot.
@@ -497,7 +549,6 @@ mod tests {
             let shown = self.core.select(c);
             self.core.stamp_readers(stamp);
             self.core.reclaim(&complete);
-            assert!(self.core.free_slots_are_safe(&complete));
             if ready && self.core.wants_publication(time) {
                 match self.core.free_slot(|_| true).or_else(|| self.core.can_grow().then(|| self.core.push_free())) {
                     Some(slot) => self.core.begin(slot, time, stamp),
@@ -647,9 +698,13 @@ mod tests {
         assert_eq!((p.t_a, p.t_b), (2.0, 2.0));
     }
 
+    /// An independent ledger of what the GPU may still do to each slot:
+    /// the last frame that wrote it and the last frame that showed it. Every
+    /// reuse and every slot found Free must have both complete and be
+    /// unpinned. Sequences mix resets, field and lattice changes, encode
+    /// failures and frames that exit before selecting (only stamping).
     #[test]
     fn frame_history_every_free_transition_checks_both_stamps() {
-        // A small deterministic generator: no external crate, seeded.
         let mut state = 0x9e37_79b9_7f4a_7c15_u64;
         let mut next = move |n: u64| {
             state ^= state << 13;
@@ -659,33 +714,57 @@ mod tests {
         };
         for _ in 0..50 {
             let mut core = HistoryCore::default();
-            let mut epoch = 1;
-            let mut fields = [0; FIELDS];
+            let mut writer = [0u64; H_MAX];
+            let mut reader = [0u64; H_MAX];
+            let (mut epoch, mut lattice, mut fields) = (1, LATTICE, [0; FIELDS]);
             let mut t = 0.0;
+            let delay = 1 + next(4);
             for frame in 1..400u64 {
-                let delay = 1 + next(4);
                 let complete = move |stamp: u64| stamp == 0 || stamp + delay <= frame;
-                match next(20) {
+                let safe = |core: &HistoryCore, writer: &[u64; H_MAX], reader: &[u64; H_MAX], slot: usize| {
+                    complete(writer[slot]) && complete(reader[slot]) && core.pinned().is_none_or(|p| p.a != slot && p.b != slot)
+                };
+                match next(25) {
                     0 => epoch += 1,
                     1 => fields[FIELD_INTERIOR] = 4 * next(3),
-                    2 => fields[FIELD_FACES] = 4 * next(2),
+                    2 => fields[FIELD_WHITEWATER] = 4 * next(2),
+                    3 => lattice[4] = 8 + next(2) as u32,
                     _ => {}
                 }
-                core.set_layout(Layout { epoch, lattice: LATTICE, fields });
-                core.retire(complete, |_| Some([5, 1, u32::from(next(5) != 0), 0]));
-                core.select(t - 0.05);
+                // The frame's bound outputs are read whatever it does next.
+                if let Some(p) = core.pinned() {
+                    reader[p.a] = frame;
+                    reader[p.b] = frame;
+                }
                 core.stamp_readers(frame);
+                if next(8) == 0 {
+                    continue; // an early exit: nothing else this frame
+                }
+                core.set_layout(Layout { epoch, lattice, fields });
+                core.retire(complete, |_| Some([5, 1, u32::from(next(5) != 0), 0]));
+                if let Some(p) = core.select(t - 0.05) {
+                    reader[p.a] = frame;
+                    reader[p.b] = frame;
+                }
+                core.stamp_readers(frame);
+                let before: Vec<SlotState> = (0..core.len()).map(|i| core.state(i)).collect();
                 core.reclaim(complete);
-                assert!(core.free_slots_are_safe(complete), "no Free slot is pinned, retained or has an incomplete stamp");
+                for (i, was) in before.iter().enumerate() {
+                    if *was != SlotState::Free && core.state(i) == SlotState::Free {
+                        assert!(safe(&core, &writer, &reader, i), "slot {i} freed while the GPU may still use it");
+                    }
+                }
                 t += 1.0 / 30.0;
                 if core.wants_publication(t) {
                     match core.free_slot(|_| true).or_else(|| core.can_grow().then(|| core.push_free())) {
-                        Some(slot) if next(10) == 0 => {
-                            // Encode failure or cancel after work reached it.
+                        Some(slot) => {
+                            assert!(safe(&core, &writer, &reader, slot), "slot {slot} reused while the GPU may still use it");
                             core.begin(slot, t, frame);
-                            core.fail(slot, frame);
+                            writer[slot] = frame;
+                            if next(10) == 0 {
+                                core.fail(slot, frame);
+                            }
                         }
-                        Some(slot) => core.begin(slot, t, frame),
                         None => core.skip(t),
                     }
                 }
@@ -721,30 +800,58 @@ mod tests {
         assert_eq!(rejected, 0, "rejected slots free once their stamps complete");
     }
 
+    /// Storage that only knows its size, for allocation tests.
+    struct Bytes(u64);
+
+    impl SlotStorage for Bytes {
+        fn bytes(&self) -> u64 {
+            self.0
+        }
+    }
+
     #[test]
     fn frame_history_allocation_refusal_and_budget_exhaustion_count_skips() {
-        let mut core = HistoryCore::default();
-        core.set_layout(layout(1));
-        // Nothing ever completes: every slot stays Pending.
-        for frame in 1..=H_MAX as u64 + 3 {
+        let mut history: FrameHistory<Bytes> = FrameHistory::default();
+        history.core.set_layout(layout(1));
+        let fields = [0; FIELDS];
+        let ok = |_: u64| Ok(());
+        // Admission refused: no slot is added, the endpoint is skipped once.
+        let refused = history.acquire_with(1.0, 64, &fields, |_| Err("no memory".into()), |b| Ok(Bytes(b)));
+        assert!(refused.is_err());
+        assert_eq!((history.core.len(), history.core.publications_skipped()), (0, 1));
+        assert!(!history.core.wants_publication(1.0), "a held frame does not retry it");
+        // A partial allocation installs nothing.
+        let mut made = 0;
+        let partial = history.acquire_with(2.0, 64, &fields, ok, |b| {
+            made += 1;
+            if made == 2 { Err("device refused".into()) } else { Ok(Bytes(b)) }
+        });
+        assert!(partial.is_err());
+        assert_eq!((history.core.len(), history.core.publications_skipped()), (0, 2));
+        // A slot that exists keeps its storage when its regrowth fails.
+        let slot = history.acquire_with(3.0, 64, &fields, ok, |b| Ok(Bytes(b))).unwrap().expect("slot");
+        history.core.begin(slot, 3.0, 0);
+        history.core.fail(slot, 0);
+        history.core.reclaim(|_| true);
+        assert_eq!(history.core.state(slot), SlotState::Free);
+        let grown = history.acquire_with(4.0, 128, &fields, ok, |_| Err("device refused".into()));
+        assert!(grown.is_err());
+        assert_eq!(history.slot(slot).particles.as_ref().map(|b| b.0), Some(64));
+        assert_eq!(history.core.state(slot), SlotState::Free);
+        assert_eq!(history.core.publications_skipped(), 3);
+        // Exhaustion: nothing ever completes, so every slot stays Pending.
+        for frame in 5..5 + H_MAX as u64 + 3 {
             let t = frame as f64;
-            core.retire(|stamp| stamp == 0, |_| None);
-            assert!(core.wants_publication(t));
-            match core.free_slot(|_| true).or_else(|| core.can_grow().then(|| core.push_free())) {
-                Some(slot) => core.begin(slot, t, frame),
-                None => core.skip(t),
+            history.core.retire(|stamp| stamp == 0, |_| None);
+            if let Ok(Some(slot)) = history.acquire_with(t, 64, &fields, ok, |b| Ok(Bytes(b))) {
+                history.core.begin(slot, t, frame);
             }
-            // A held frame does not retry the skipped endpoint.
-            assert!(!core.wants_publication(t));
+            assert!(!history.core.wants_publication(t));
         }
-        assert_eq!(core.len(), H_MAX);
-        assert_eq!(core.publications_skipped(), 3, "each skipped endpoint counts once");
-        // A refused allocation is the same skip.
-        core.skip(100.0);
-        assert!(!core.wants_publication(100.0));
-        assert_eq!(core.publications_skipped(), 4);
-        core.set_layout(layout(2));
-        assert_eq!(core.publications_skipped(), 4, "the counter spans epochs");
+        assert_eq!(history.core.len(), H_MAX);
+        assert_eq!(history.core.publications_skipped(), 3 + 3, "each skipped endpoint counts once");
+        history.core.set_layout(layout(2));
+        assert_eq!(history.core.publications_skipped(), 6, "the counter spans epochs");
     }
 
     #[test]
