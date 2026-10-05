@@ -872,7 +872,7 @@ impl PressureSolver {
                         passes.apply(enc, bodies, plain.tiles, &b.p, &b.scratch)?;
                     } else {
                         chain.prolong_down(enc, &b.p, pressure, Spare::E);
-                        zero(enc, pipes, n, &b.body, plan);
+                        zero(enc, pipes, n, &b.body, &b.armed, plan);
                         passes.apply(enc, bodies, plain.tiles, pressure, &b.body)?;
                         chain.restrict_down(enc, &b.body, &b.scratch, 0, RESTRICT_ADD);
                     }
@@ -1100,6 +1100,15 @@ impl Sink for GpuEncoder {
     }
 }
 
+/// Metal binds only what a dispatch names: a binding the entry point
+/// references and the dispatch leaves out reads whatever its slot last held.
+/// Checked on the zero, whose stop check reads `armed`; not on every pass,
+/// because some reference a binding only on a path they never take (smooth
+/// and binding 4).
+fn debug_assert_bound(pipeline: &GpuComputePipeline, bindings: &[GpuBinding], label: &str) {
+    debug_assert!(pipeline.unbound_binding(bindings).is_none(), "{label} leaves binding {:?} unbound", pipeline.unbound_binding(bindings));
+}
+
 /// A round template's body. A plain dispatch has no place in a template (the
 /// GPU repeats the round, and only gated dispatches stop with the solve), so
 /// it is refused, and the refusal fails the solve.
@@ -1310,15 +1319,19 @@ fn prolong<S: Sink>(enc: &mut S, pipes: &Pipelines, g: Gate<'_>, fine: &View<'_>
 
 /// Every cell of `out` on `lattice` to 0: a dispatch, so it records and
 /// labels with the solver's passes.
-fn zero(enc: &mut GpuEncoder, pipes: &Pipelines, lattice: [u32; 3], out: &GpuBuffer, plan: &GpuBuffer) {
-    enc.dispatch_compute(&pipes.zero, &[bytes(&Params::at(lattice, 0.0)), buffer(5, out), buffer(21, plan)], groups(cells(lattice)), "gpu_flip.pressure.zero");
+fn zero<S: Sink>(enc: &mut S, pipes: &Pipelines, lattice: [u32; 3], out: &GpuBuffer, armed: &GpuBuffer, plan: &GpuBuffer) {
+    // `armed` with `live` 0: the shader's stop check reads it and never stops.
+    let params = Params::at(lattice, 0.0);
+    let bindings = [bytes(&params), buffer(5, out), buffer(14, armed), buffer(21, plan)];
+    debug_assert_bound(&pipes.zero, &bindings, "gpu_flip.pressure.zero");
+    enc.plain(&pipes.zero, &bindings, groups(cells(lattice)), "gpu_flip.pressure.zero");
 }
 
 /// [`zero`] of level `level` on `g`: inside a round, gated on the level's
 /// dense triple and skipped once the solve stopped; outside, plain.
 fn zero_in<S: Sink>(enc: &mut S, pipes: &Pipelines, g: Gate<'_>, level: usize, lattice: [u32; 3], out: &GpuBuffer, plan: &GpuBuffer) {
     if !g.gated {
-        enc.plain(&pipes.zero, &[bytes(&Params::at(lattice, 0.0)), buffer(5, out), buffer(21, plan)], groups(cells(lattice)), "gpu_flip.pressure.zero");
+        zero(enc, pipes, lattice, out, g.tiles[0], plan);
         return;
     }
     let params = Params { live: g.live, ..Params::at(lattice, 0.0) };
