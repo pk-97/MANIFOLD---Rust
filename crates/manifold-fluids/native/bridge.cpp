@@ -30,6 +30,7 @@
 #include "aabb.h"
 #include "forcefield.h"
 #include "grid3d.h"
+#include "influencegrid.h"
 #include "interpolation.h"
 #include "meshfluidsource.h"
 #include "meshobject.h"
@@ -2005,6 +2006,9 @@ struct NativeWhitewater {
     // FLIP's per-particle id, 0–255, which spreads spray drag.
     unsigned char next_id = 0;
     bool fields_set = false;
+    // The engine-as-configured oracle's obstacle influence, which decays and
+    // spreads across ticks as FluidSimulation's does; reset with the pool.
+    std::unique_ptr<InfluenceGrid> engine_influence;
 
     NativeWhitewater(int i, int j, int k, double cell_size, vmath::vec3 min, size_t particles)
         : isize(i), jsize(j), ksize(k), dx(cell_size), origin(min), capacity(particles),
@@ -2027,6 +2031,7 @@ void configure_whitewater(NativeWhitewater &native, uint64_t seed) {
     simulation.disableBoundaryDustEmission();
     simulation.setMaxNumDiffuseParticles(native.capacity);
     native.next_id = 0;
+    native.engine_influence.reset();
 }
 
 NativeWhitewater &whitewater_of(void *lifecycle) {
@@ -2490,5 +2495,73 @@ extern "C" int manifold_fluids_oracle_emit(void *lifecycle, const float *curvatu
         lifecycle, 175.0, 0.0, 100.0, 200.0, 1.0, 1.0, 1.0);
     if (!configured) { return configured; }
     return manifold_fluids_oracle_emit_configured(lifecycle, curvature, positions, count, dt);
+}
+// Test-only: FLIP's emitter and lifecycle as FluidSimulation configures them,
+// on the last fields. Unlike emit_configured, the lifetime variance stays at
+// the engine's, influence comes from an InfluenceGrid updated on the solid
+// every call, and the surface distance and curvature come from
+// calculateCurvatureGrid on the supplied level set. Each out pointer may be
+// null; non-null ones receive the fields the emitter read.
+extern "C" int manifold_fluids_oracle_emit_engine(void *lifecycle, const float *positions,
+                                                 size_t count, double dt, double influence_base,
+                                                 double influence_decay, float *surface_out,
+                                                 float *curvature_out, float *influence_out) {
+    return guarded([&] {
+        NativeWhitewater &native = whitewater_of(lifecycle);
+        if (count != 0 && positions == nullptr) {
+            throw std::invalid_argument("oracle engine emit positions must be non-null");
+        }
+        if (!std::isfinite(influence_base) || influence_base < 0.0 ||
+            !std::isfinite(influence_decay) || influence_decay < 0.0) {
+            throw std::invalid_argument("oracle engine influence must be finite and nonnegative");
+        }
+        DiffuseParticleSimulationParameters params = whitewater_update(native, dt);
+        native.surface.fill(0.0f);
+        native.curvature.fill(0.0f);
+        native.liquid.calculateCurvatureGrid(native.surface, native.curvature);
+        if (!native.engine_influence) {
+            native.engine_influence = std::make_unique<InfluenceGrid>(
+                native.isize + 1, native.jsize + 1, native.ksize + 1, native.dx,
+                static_cast<float>(influence_base));
+        }
+        InfluenceGrid &influence = *native.engine_influence;
+        influence.setBaseLevel(static_cast<float>(influence_base));
+        influence.setDecayRate(static_cast<float>(influence_decay));
+        influence.update(&native.solid, dt);
+        params.influenceGrid = influence.getInfluenceGrid();
+        native.markers = ParticleSystem();
+        native.markers.addAttributeVector3("POSITION");
+        std::vector<vmath::vec3> *markers = native.markers.getAttributeValuesVector3("POSITION");
+        markers->reserve(count);
+        for (size_t index = 0; index < count; ++index) {
+            const float *p = positions + 3 * index;
+            if (!finite3(p)) {
+                throw std::invalid_argument("oracle engine emit position is not finite");
+            }
+            markers->push_back(vmath::vec3(p[0], p[1], p[2]) - native.origin);
+        }
+        native.markers.update();
+        DiffuseParticleSimulation &simulation = *native.simulation;
+        simulation.enableDiffuseParticleEmission();
+        simulation.setEmitterGenerationBounds(AABB(0.0, 0.0, 0.0, native.isize * native.dx,
+                                                   native.jsize * native.dx,
+                                                   native.ksize * native.dx));
+        simulation.update(params);
+        simulation.disableDiffuseParticleEmission();
+        native.markers = ParticleSystem();
+        const size_t cells = static_cast<size_t>(native.isize) * native.jsize * native.ksize;
+        if (surface_out != nullptr) {
+            std::memcpy(surface_out, native.surface.getRawArray(), cells * sizeof(float));
+        }
+        if (curvature_out != nullptr) {
+            std::memcpy(curvature_out, native.curvature.getRawArray(), cells * sizeof(float));
+        }
+        if (influence_out != nullptr) {
+            const size_t nodes = static_cast<size_t>(native.isize + 1) * (native.jsize + 1) *
+                                 (native.ksize + 1);
+            std::memcpy(influence_out, influence.getInfluenceGrid()->getRawArray(),
+                        nodes * sizeof(float));
+        }
+    });
 }
 #endif
