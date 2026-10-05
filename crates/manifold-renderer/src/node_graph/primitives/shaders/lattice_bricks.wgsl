@@ -132,11 +132,13 @@ fn scatter_bricks(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let last = vec3<f32>(vec3<u32>(params.bricks_x, params.bricks_y, params.bricks_z) - vec3<u32>(1u));
     var first_brick = vec3<u32>(0u);
     var last_brick = vec3<u32>(last);
-    // Decided from the raw inputs, before any arithmetic that could overflow
-    // or go subnormal: fast math cannot be trusted to reject those after the
-    // fact. Inside these bounds every quantity below, and in the hit test,
-    // stays finite and normal, so the rounding pad holds. Outside them every
-    // brick is a candidate and the hit test alone decides.
+    // Decided from the raw inputs, before any arithmetic that could overflow:
+    // fast math cannot be trusted to reject that after the fact. Inside these
+    // bounds every quantity below, and in the hit test, stays finite. The
+    // spacing h is normal, and a subnormal reach, band or coordinate only
+    // ever adds to a term at least h, far below its last bit, so the rounding
+    // pad holds. Outside them every brick is a candidate and the hit test
+    // alone decides.
     let raw = vec3<f32>(params.center_x, params.center_y, params.center_z);
     let bounded = reach < LIMIT && abs(params.band_extra) < LIMIT
         && all(abs(centre) < vec3<f32>(LIMIT)) && all(abs(raw) < vec3<f32>(LIMIT))
