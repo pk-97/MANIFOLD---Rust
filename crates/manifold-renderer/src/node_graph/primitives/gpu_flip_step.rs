@@ -1747,6 +1747,7 @@ impl StepState {
         )?;
         let tally = step.tally;
         self.solver.tally(enc, step.pressure, step.capped, tally, 0, step.params.step_in_tick == 0)?;
+        enc.set_profile_tag("gpu_flip.stage.project_extend");
         // φ binds the water array when the ghost rows are off; the pass never reads it then.
         let phi = if step.ghost { &l.phi } else { &l.water };
         let subtract = |enc: &mut GpuEncoder, params: &StepParams, phi: &GpuBuffer, faces: &GpuBuffer, label: &str| {
@@ -1764,7 +1765,6 @@ impl StepState {
         if step.dynamic {
             self.bodies.react(enc, &coupled, self.solver.tiles()?, &l.pressure, step.reaction)?;
         }
-        enc.set_profile_tag("gpu_flip.stage.project_extend");
         extend(enc, pipes, step.clock_plan, &base, face_groups, (!step.narrow_enabled).then_some(tiles), [&l.f, out_faces, &l.b], step.band, "gpu_flip.step.extend_new");
         enc.compute_memory_barrier_buffers();
         // The engine constrains its velocity and its saved velocity to the

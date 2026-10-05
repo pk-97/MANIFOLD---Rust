@@ -23,36 +23,64 @@ pub struct PhysicsMetrics {
     pub clock: ClockMetrics,
 }
 
-/// What the live simulation clocks decided this frame, copied from their
-/// `ClockFrame`s, never inferred from timing. With several clocks the counts
-/// add, the cap is the tightest, and epoch/transport are the last clock's.
+/// One live clock's decisions this frame, copied from its `ClockFrame`,
+/// never inferred from timing.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct ClockMetrics {
-    /// Live clocks advanced this frame. 0: no clock ran (the domain held).
-    pub clocks: u32,
+pub struct ClockRecord {
+    /// Identifies the clock across frames: the address of its owner's clock,
+    /// stable while the node lives.
+    pub id: usize,
     /// Sim Rate intervals accepted this frame.
     pub accepted: u32,
-    /// Boundaries transport crossed since the last accepted one. A frame
-    /// with `due == 0` ticks nothing because no boundary arrived.
+    /// Boundaries transport crossed since the last accepted one. `due == 0`
+    /// means no boundary arrived, so nothing could be accepted.
     pub due: u32,
     /// Live acceptance cap in force (1 after a late frame, else 2).
     pub live_cap: u32,
     /// Ticks accepted since the epoch began, through this frame.
     pub accepted_through: u64,
-    /// Ticks whose GPU work is fenced complete, where the domain tracks it
-    /// (a liquid coupled to bodies). None when no clock reports completion.
+    /// Ticks whose GPU work is fenced complete in this epoch, where the
+    /// domain tracks it (a liquid coupled to bodies).
     pub completed_ticks: Option<u64>,
     pub epoch: u32,
     pub transport: f64,
     pub restarted: bool,
     pub reanchored: bool,
     pub held: bool,
-    /// Simulated seconds discarded by this frame's reanchors.
+    /// Simulated seconds this frame's reanchor discarded.
     pub fresh_dropped_seconds: f64,
 }
 
-const NO_CLOCK: ClockMetrics = ClockMetrics {
-    clocks: 0,
+/// Fixed storage for the frame's clock records; no allocation.
+pub const MAX_CLOCK_RECORDS: usize = 4;
+
+/// Every live clock advanced this frame, one record each, in advance order.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ClockMetrics {
+    records: [ClockRecord; MAX_CLOCK_RECORDS],
+    len: u8,
+    /// Clocks advanced beyond the fixed storage; their records are lost.
+    pub overflow: u32,
+}
+
+impl ClockMetrics {
+    pub fn records(&self) -> &[ClockRecord] {
+        &self.records[..usize::from(self.len)]
+    }
+
+    pub fn push(&mut self, record: ClockRecord) {
+        match self.records.get_mut(usize::from(self.len)) {
+            Some(slot) => {
+                *slot = record;
+                self.len += 1;
+            }
+            None => self.overflow = self.overflow.saturating_add(1),
+        }
+    }
+}
+
+const NO_RECORD: ClockRecord = ClockRecord {
+    id: 0,
     accepted: 0,
     due: 0,
     live_cap: 0,
@@ -65,6 +93,8 @@ const NO_CLOCK: ClockMetrics = ClockMetrics {
     held: false,
     fresh_dropped_seconds: 0.0,
 };
+
+const NO_CLOCK: ClockMetrics = ClockMetrics { records: [NO_RECORD; MAX_CLOCK_RECORDS], len: 0, overflow: 0 };
 
 thread_local! {
     static FRAME_METRICS: Cell<PhysicsMetrics> = const { Cell::new(PhysicsMetrics {
@@ -153,26 +183,31 @@ pub fn record_simulation(target: f64, completed: f64, cap_hit: bool, nonfinite: 
 /// Record one live clock's decisions for this frame. Offline clocks (export)
 /// have no live cap and are not recorded.
 #[inline]
-pub fn record_clock(frame: &manifold_physics::clock::ClockFrame, completed_ticks: Option<u64>) {
-    let Some(cap) = frame.live_cap else { return };
+pub fn record_clock(
+    clock: &manifold_physics::clock::SimulationClock,
+    frame: &manifold_physics::clock::ClockFrame,
+    completed_ticks: Option<u64>,
+) {
+    let Some(live_cap) = frame.live_cap else { return };
     if !RECORDING_ENABLED.with(Cell::get) {
         return;
     }
     FRAME_METRICS.with(|metrics| {
         let mut current = metrics.get();
-        let clock = &mut current.clock;
-        clock.live_cap = if clock.clocks == 0 { cap } else { clock.live_cap.min(cap) };
-        clock.clocks += 1;
-        clock.accepted = clock.accepted.saturating_add(frame.ticks);
-        clock.due = clock.due.max(frame.due);
-        clock.accepted_through = frame.first_sequence + u64::from(frame.ticks);
-        clock.completed_ticks = completed_ticks.or(clock.completed_ticks);
-        clock.epoch = frame.epoch;
-        clock.transport = frame.transport;
-        clock.restarted |= frame.restarted;
-        clock.reanchored |= frame.reanchored;
-        clock.held |= frame.held;
-        clock.fresh_dropped_seconds += frame.fresh_dropped_seconds;
+        current.clock.push(ClockRecord {
+            id: std::ptr::from_ref(clock) as usize,
+            accepted: frame.ticks,
+            due: frame.due,
+            live_cap,
+            accepted_through: frame.first_sequence + u64::from(frame.ticks),
+            completed_ticks,
+            epoch: frame.epoch,
+            transport: frame.transport,
+            restarted: frame.restarted,
+            reanchored: frame.reanchored,
+            held: frame.held,
+            fresh_dropped_seconds: frame.fresh_dropped_seconds,
+        });
         metrics.set(current);
     });
 }
@@ -375,6 +410,27 @@ mod tests {
             }
         );
         assert_eq!(take_frame(), PhysicsMetrics::default());
+    }
+
+    #[test]
+    fn each_live_clock_keeps_its_own_record() {
+        use manifold_physics::clock::SimulationClock;
+        let (mut a, mut b) = (SimulationClock::default(), SimulationClock::default());
+        a.advance(0.0, 1.0 / 30.0, 1.0, 0.0, false, false);
+        b.advance(0.0, 1.0 / 30.0, 1.0, 0.0, false, false);
+        begin_frame();
+        let restarted = a.advance(0.0, 1.0 / 30.0, 1.0, 1.0, false, false);
+        record_clock(&a, &restarted, Some(7));
+        let ticked = b.advance(0.05, 1.0 / 30.0, 1.0, 0.0, false, false);
+        record_clock(&b, &ticked, None);
+        let offline = b.advance(0.1, 1.0 / 30.0, 1.0, 0.0, false, true);
+        record_clock(&b, &offline, None);
+        let clocks = take_frame().clock;
+        let [first, second] = clocks.records() else { panic!("two live records") };
+        assert_ne!(first.id, second.id);
+        assert!(first.restarted && first.accepted == 0 && first.completed_ticks == Some(7));
+        assert!(!second.restarted && second.accepted == 1 && second.completed_ticks.is_none());
+        assert_ne!(first.epoch, 0);
     }
 
     #[test]
