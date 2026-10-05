@@ -30,6 +30,9 @@
 #include "aabb.h"
 #include "forcefield.h"
 #include "grid3d.h"
+#ifdef MANIFOLD_WHITEWATER_ORACLE
+#include "influencegrid.h"
+#endif
 #include "interpolation.h"
 #include "meshfluidsource.h"
 #include "meshobject.h"
@@ -1712,6 +1715,38 @@ extern "C" int manifold_fluids_world_capture_particle_frame(
     });
 }
 
+#ifdef MANIFOLD_FACE_ORACLE
+// Test diagnostic: the last step's projected vertical (V) face velocities,
+// i + isize·(j + (jsize + 1)·k), domain-scaled as particle velocities are.
+// Only probe tests call this entry.
+extern "C" int manifold_fluids_world_capture_face_v(void *world, float *out, size_t capacity,
+                                                    uint32_t *dims_out) {
+    return guarded([&] {
+        if (world == nullptr || out == nullptr || dims_out == nullptr) {
+            throw std::invalid_argument("face capture pointers must be non-null");
+        }
+        auto *native = static_cast<NativeWorld *>(world);
+        require_accepted_frame(*native);
+        auto &simulation = *native->simulation;
+        const uint32_t dims[3] = {native->isize, native->jsize + 1, native->ksize};
+        std::copy(dims, dims + 3, dims_out);
+        if (static_cast<size_t>(dims[0]) * dims[1] * dims[2] > capacity) {
+            throw std::invalid_argument("face capture capacity is too small");
+        }
+        MACVelocityField *field = simulation.getVelocityField();
+        const float scale = static_cast<float>(simulation.getDomainScale());
+        for (uint32_t k = 0; k < dims[2]; ++k) {
+            for (uint32_t j = 0; j < dims[1]; ++j) {
+                for (uint32_t i = 0; i < dims[0]; ++i) {
+                    out[i + dims[0] * (j + dims[1] * k)] =
+                        field->V(static_cast<int>(i), static_cast<int>(j), static_cast<int>(k)) * scale;
+                }
+            }
+        }
+    });
+}
+#endif
+
 // Test diagnostic: the captured surface frame's prepared solid, in the
 // particle frame's lattice order. Only Rust tests call this entry.
 extern "C" int manifold_fluids_surface_frame_solid(void *frame, float *solid, size_t capacity,
@@ -2005,6 +2040,11 @@ struct NativeWhitewater {
     // FLIP's per-particle id, 0–255, which spreads spray drag.
     unsigned char next_id = 0;
     bool fields_set = false;
+#ifdef MANIFOLD_WHITEWATER_ORACLE
+    // The engine-as-configured oracle's obstacle influence, which decays and
+    // spreads across ticks as FluidSimulation's does; reset with the pool.
+    std::unique_ptr<InfluenceGrid> engine_influence;
+#endif
 
     NativeWhitewater(int i, int j, int k, double cell_size, vmath::vec3 min, size_t particles)
         : isize(i), jsize(j), ksize(k), dx(cell_size), origin(min), capacity(particles),
@@ -2027,6 +2067,9 @@ void configure_whitewater(NativeWhitewater &native, uint64_t seed) {
     simulation.disableBoundaryDustEmission();
     simulation.setMaxNumDiffuseParticles(native.capacity);
     native.next_id = 0;
+#ifdef MANIFOLD_WHITEWATER_ORACLE
+    native.engine_influence.reset();
+#endif
 }
 
 NativeWhitewater &whitewater_of(void *lifecycle) {
@@ -2490,5 +2533,92 @@ extern "C" int manifold_fluids_oracle_emit(void *lifecycle, const float *curvatu
         lifecycle, 175.0, 0.0, 100.0, 200.0, 1.0, 1.0, 1.0);
     if (!configured) { return configured; }
     return manifold_fluids_oracle_emit_configured(lifecycle, curvature, positions, count, dt);
+}
+// Test-only: FLIP's emitter and lifecycle as FluidSimulation configures them,
+// on the last fields: the engine's lifetime variance, the surface distance
+// and curvature from calculateCurvatureGrid on the supplied level set, and an
+// InfluenceGrid decayed and spread each call. It covers constant influence
+// only (base and every object at the same level, 1 by default): the solid
+// carries no mesh objects, where the engine installs a domain object and
+// resets its influence to the base each step, so neither obstacle sources
+// nor a changed base reach the boundary nodes as they do in the engine. Each
+// out pointer may be null; non-null ones receive the fields the emitter read
+// and, in emitted_out, the particles this call's emission added, counted
+// inside the engine before the lifecycle step (the oracle-only hook in
+// _emitNormalDiffuseParticles).
+extern "C" int manifold_fluids_oracle_emit_engine(void *lifecycle, const float *positions,
+                                                 size_t count, double dt, double influence_base,
+                                                 double influence_decay, float *surface_out,
+                                                 float *curvature_out, float *influence_out,
+                                                 uint32_t *emitted_out) {
+    return guarded([&] {
+        NativeWhitewater &native = whitewater_of(lifecycle);
+        if (count != 0 && positions == nullptr) {
+            throw std::invalid_argument("oracle engine emit positions must be non-null");
+        }
+        if (!std::isfinite(influence_base) || influence_base < 0.0 ||
+            !std::isfinite(influence_decay) || influence_decay < 0.0) {
+            throw std::invalid_argument("oracle engine influence must be finite and nonnegative");
+        }
+        DiffuseParticleSimulationParameters params = whitewater_update(native, dt);
+        native.surface.fill(0.0f);
+        native.curvature.fill(0.0f);
+        native.liquid.calculateCurvatureGrid(native.surface, native.curvature);
+        if (!native.engine_influence) {
+            native.engine_influence = std::make_unique<InfluenceGrid>(
+                native.isize + 1, native.jsize + 1, native.ksize + 1, native.dx,
+                static_cast<float>(influence_base));
+        }
+        InfluenceGrid &influence = *native.engine_influence;
+        influence.setBaseLevel(static_cast<float>(influence_base));
+        influence.setDecayRate(static_cast<float>(influence_decay));
+        // The bridge solid is a minimal level set: its object map is empty,
+        // so the sources pass would read past it. The same distances on a
+        // full level set with no mesh objects give every cell no object,
+        // which is what the engine sees where no obstacle raises influence.
+        MeshLevelSet sources(native.isize, native.jsize, native.ksize, native.dx);
+        const size_t solid_nodes = static_cast<size_t>(native.isize + 1) * (native.jsize + 1) * (native.ksize + 1);
+        std::memcpy(sources.getPhiArray3d()->getRawArray(), native.solid.getPhiArray3d()->getRawArray(),
+                    solid_nodes * sizeof(float));
+        influence.update(&sources, dt);
+        params.influenceGrid = influence.getInfluenceGrid();
+        native.markers = ParticleSystem();
+        native.markers.addAttributeVector3("POSITION");
+        std::vector<vmath::vec3> *markers = native.markers.getAttributeValuesVector3("POSITION");
+        markers->reserve(count);
+        for (size_t index = 0; index < count; ++index) {
+            const float *p = positions + 3 * index;
+            if (!finite3(p)) {
+                throw std::invalid_argument("oracle engine emit position is not finite");
+            }
+            markers->push_back(vmath::vec3(p[0], p[1], p[2]) - native.origin);
+        }
+        native.markers.update();
+        const AABB generation(0.0, 0.0, 0.0, native.isize * native.dx, native.jsize * native.dx,
+                              native.ksize * native.dx);
+        DiffuseParticleSimulation &simulation = *native.simulation;
+        simulation.enableDiffuseParticleEmission();
+        simulation.setEmitterGenerationBounds(generation);
+        simulation.oracleEmitted = 0;
+        simulation.update(params);
+        if (emitted_out != nullptr) {
+            *emitted_out = static_cast<uint32_t>(simulation.oracleEmitted);
+        }
+        simulation.disableDiffuseParticleEmission();
+        native.markers = ParticleSystem();
+        const size_t cells = static_cast<size_t>(native.isize) * native.jsize * native.ksize;
+        if (surface_out != nullptr) {
+            std::memcpy(surface_out, native.surface.getRawArray(), cells * sizeof(float));
+        }
+        if (curvature_out != nullptr) {
+            std::memcpy(curvature_out, native.curvature.getRawArray(), cells * sizeof(float));
+        }
+        if (influence_out != nullptr) {
+            const size_t nodes = static_cast<size_t>(native.isize + 1) * (native.jsize + 1) *
+                                 (native.ksize + 1);
+            std::memcpy(influence_out, influence.getInfluenceGrid()->getRawArray(),
+                        nodes * sizeof(float));
+        }
+    });
 }
 #endif

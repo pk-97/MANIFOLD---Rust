@@ -121,8 +121,7 @@ mod tests {
             })
             .expect("Water object");
         for (id, name, default) in [
-            // WaterDamBreak's engine node overrides the engine's 0.5 default.
-            ("mesh_relaxation", "Smoothing Value", 0.35),
+            ("mesh_relaxation", "Smoothing Value", 0.5),
             ("surface_smoothing_iterations", "Smoothing Iterations", 2.0),
         ] {
             let p = metadata.params.iter().find(|p| p.id == id).unwrap();

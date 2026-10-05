@@ -55,6 +55,7 @@ EXEMPT = {
     ("manifold-spectral", "gpu"): "strict subset of its gpu-proofs row",
     ("manifold-renderer", "gpu-proofs"): "strict subset of its rt-perf-proofs row",
     ("manifold-fluids", "whitewater-oracle"): "strict subset of manifold-renderer's whitewater-oracle row",
+    ("manifold-fluids", "face-oracle"): "strict subset of manifold-renderer's water-race-probes row",
 }
 
 FEATURES_RE = re.compile(r"^\[features\]\s*$")

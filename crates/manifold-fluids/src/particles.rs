@@ -70,6 +70,27 @@ unsafe extern "C" {
         nodes_out: *mut u32,
         fits_out: *mut i32,
     ) -> i32;
+    #[cfg(feature = "face-oracle")]
+    fn manifold_fluids_world_capture_face_v(world: *mut c_void, out: *mut f32, capacity: usize, dims_out: *mut u32) -> i32;
+}
+
+#[cfg(feature = "face-oracle")]
+impl FluidWorld {
+    /// After a completed step: the projected vertical face velocities, x
+    /// fastest over `[isize, jsize + 1, ksize]`, returned with those dims.
+    /// A probe oracle only.
+    pub fn capture_face_v(&mut self, out: &mut Vec<f32>) -> Result<[u32; 3], FluidError> {
+        let mut dims = [0u32; 3];
+        // The entry reports its dims before it checks capacity.
+        let mut ok = unsafe { manifold_fluids_world_capture_face_v(self.native, out.as_mut_ptr(), out.len(), dims.as_mut_ptr()) };
+        let needed = dims.iter().map(|&d| d as usize).product::<usize>();
+        if out.len() < needed {
+            out.resize(needed, 0.0);
+            ok = unsafe { manifold_fluids_world_capture_face_v(self.native, out.as_mut_ptr(), out.len(), dims.as_mut_ptr()) };
+        }
+        native_result(ok, "capturing vertical faces")?;
+        Ok(dims)
+    }
 }
 
 impl FluidWorld {
