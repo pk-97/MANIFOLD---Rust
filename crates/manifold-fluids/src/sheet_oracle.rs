@@ -149,6 +149,9 @@ mod tests {
     /// lie on one side, so no neighbour opposes the centroid (mindot stays
     /// above −0.95). Only the hole, ringed by markers, can seed, and the
     /// projection moves along y alone, so a seed's xz is a removed marker's.
+    /// The four inner hole columns never seed: e.g. from (7.75, 7.75) the
+    /// three nearest markers, (7.25, 7.25), (6.75, 7.75), (7.75, 6.75), lie
+    /// on one line, so the plane guard (|cross| < eps) skips them.
     #[test]
     fn oracle_sheet_seeds_fill_a_hole_in_a_thin_sheet() {
         let (markers, phi, removed) = holed_sheet();
@@ -202,6 +205,106 @@ mod tests {
         let markers = lattice(&[6.3, 7.3]);
         let seeds = sheet_particles(&markers, &phi, CELLS, DX, DEFAULT_FILL_THRESHOLD).expect("oracle");
         assert!(seeds.is_empty(), "a still pool seeded {seeds:?}");
+    }
+
+    /// The CPU port against the native sheeter: same count, same order, and
+    /// positions within `ULPS` (the engine build fuses multiply-adds, Rust
+    /// does not). Returns the seed count.
+    fn port_matches(markers: &[[f32; 3]], phi: &[f32], cells: [u32; 3], dx: f64, threshold: f32) -> usize {
+        const ULPS: i32 = 1;
+        let native = sheet_particles(markers, phi, cells, dx, threshold).expect("oracle");
+        let port = crate::sheeter::generate_sheet_particles(markers, phi, cells, dx, threshold).expect("port");
+        let worst = native
+            .iter()
+            .zip(&port)
+            .flat_map(|(a, b)| (0..3).map(move |c| (a[c].to_bits() as i32 - b[c].to_bits() as i32).abs()))
+            .max()
+            .unwrap_or(0);
+        assert_eq!(native.len(), port.len(), "seed counts differ");
+        assert!(worst <= ULPS, "positions differ by {worst} ulp");
+        native.len()
+    }
+
+    /// Thin curved sheets with random holes on a dx 0.25 grid: a spherical
+    /// shell and a rippled horizontal sheet, both 0.3 m thick, a few
+    /// thousand markers, fixed seed.
+    fn splash() -> (Vec<[f32; 3]>, Vec<f32>, [u32; 3], f64) {
+        const M: u32 = 40;
+        const H: f64 = 0.25;
+        const T: f32 = 0.15;
+        let centre = [5.0f32, 4.5, 5.0];
+        let radius = 2.2f32;
+        let ripple = |x: f32, z: f32| 8.3 + 0.4 * (1.3 * x).sin() * (0.9 * z).cos();
+        let m = M as usize;
+        let phi: Vec<f32> = (0..m * m * m)
+            .map(|index| {
+                let c = [index % m, (index / m) % m, index / (m * m)].map(|v| (v as f32 + 0.5) * H as f32);
+                let r = ((c[0] - centre[0]).powi(2) + (c[1] - centre[1]).powi(2) + (c[2] - centre[2]).powi(2)).sqrt();
+                let shell = (r - radius).abs() - T;
+                let sheet = (c[1] - ripple(c[0], c[2])).abs() - T;
+                shell.min(sheet)
+            })
+            .collect();
+        let mut state = 0x9E37_79B9_7F4A_7C15u64;
+        let mut uniform = move || {
+            state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            ((z ^ (z >> 31)) >> 40) as f32 / (1u64 << 24) as f32
+        };
+        fn direction(u: &mut dyn FnMut() -> f32) -> [f32; 3] {
+            let z = 2.0 * u() - 1.0;
+            let a = std::f32::consts::TAU * u();
+            let s = (1.0 - z * z).sqrt();
+            [s * a.cos(), z, s * a.sin()]
+        }
+        let shell_holes: Vec<[f32; 3]> = (0..6).map(|_| direction(&mut uniform)).collect();
+        // Sheet holes: centre x, radius 0.3–0.6 m, centre z.
+        let mut sheet_holes = Vec::new();
+        for _ in 0..6 {
+            let x = 1.5 + 7.0 * uniform();
+            let r = 0.3 + 0.3 * uniform();
+            sheet_holes.push([x, r, 1.5 + 7.0 * uniform()]);
+        }
+        let mut markers = Vec::new();
+        while markers.len() < 2500 {
+            let d = direction(&mut uniform);
+            let r = radius + T * 0.8 * (2.0 * uniform() - 1.0);
+            if shell_holes.iter().any(|h| d[0] * h[0] + d[1] * h[1] + d[2] * h[2] > 0.25f32.cos()) {
+                continue;
+            }
+            markers.push([centre[0] + r * d[0], centre[1] + r * d[1], centre[2] + r * d[2]]);
+        }
+        while markers.len() < 4000 {
+            let (x, z) = (1.5 + 7.0 * uniform(), 1.5 + 7.0 * uniform());
+            if sheet_holes.iter().any(|h| (x - h[0]).hypot(z - h[2]) < h[1]) {
+                continue;
+            }
+            markers.push([x, ripple(x, z) + T * 0.8 * (2.0 * uniform() - 1.0), z]);
+        }
+        (markers, phi, [M; 3], H)
+    }
+
+    #[test]
+    fn port_matches_oracle_on_the_holed_sheet() {
+        let (markers, phi, _) = holed_sheet();
+        assert_eq!(port_matches(&markers, &phi, CELLS, DX, DEFAULT_FILL_THRESHOLD), 8);
+        assert_eq!(port_matches(&markers, &phi, CELLS, DX, 0.0), 8);
+    }
+
+    #[test]
+    fn port_matches_oracle_on_the_still_pool() {
+        let phi = field(|y| y - 8.0);
+        assert_eq!(port_matches(&lattice(&[6.3, 7.3]), &phi, CELLS, DX, DEFAULT_FILL_THRESHOLD), 0);
+    }
+
+    #[test]
+    fn port_matches_oracle_on_a_splash() {
+        let (markers, phi, cells, dx) = splash();
+        let strict = port_matches(&markers, &phi, cells, dx, DEFAULT_FILL_THRESHOLD);
+        let loose = port_matches(&markers, &phi, cells, dx, -0.5);
+        assert!(strict >= 20 && loose > strict, "the splash seeds {strict} at -0.95 and {loose} at -0.5");
     }
 
     /// A short buffer gets the first seeds and the true count, never a
