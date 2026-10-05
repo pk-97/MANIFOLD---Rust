@@ -39,15 +39,13 @@ struct ClockPlan {
 @group(0) @binding(9) var<storage, read_write> selected_count: array<u32>;
 // Per half-cell: the lowest claiming candidate rank.
 @group(0) @binding(10) var<storage, read_write> claims: array<atomic<u32>>;
-// Per candidate site: projected position, w = rank, or a no-candidate mark.
-@group(0) @binding(11) var<storage, read_write> sites: array<vec4<f32>>;
+// Per cell: bit o marks offset o a candidate, bit 8 + o a claimant.
+@group(0) @binding(11) var<storage, read_write> flags: array<atomic<u32>>;
 // Accepted births: local position, w = the source candidate's rank.
 @group(0) @binding(12) var<storage, read_write> births: array<vec4<f32>>;
 @group(0) @binding(13) var<storage, read_write> birth_count: array<atomic<u32>>;
 @group(0) @binding(14) var<storage, read> clock_plan: array<ClockPlan>;
 
-const NO_SITE: u32 = 0xffffffffu;
-const REJECTED: u32 = 0xfffffffeu;
 const NO_CLAIM: u32 = 0xffffffffu;
 const MAX_PARTICLES_PER_CELL: u32 = 6u;
 const MAX_SHEET_PARTICLES_PER_CELL: u32 = 4u;
@@ -128,9 +126,9 @@ fn clear(@builtin(global_invocation_id) gid: vec3<u32>) {
     sheet_b[c] = 0u;
     atomicStore(&mask[c], 0u);
     selected_count[c] = 0u;
+    atomicStore(&flags[c], 0u);
     for (var o = 0u; o < 8u; o = o + 1u) {
         atomicStore(&claims[8u * c + o], NO_CLAIM);
-        sites[8u * c + o] = vec4<f32>(0.0, 0.0, 0.0, bitcast<f32>(NO_SITE));
     }
 }
 
@@ -254,15 +252,20 @@ fn fill_bucket(b: vec3<i32>) -> u32 {
 
 fn bucket_dims() -> vec3<i32> { return vec3<i32>(i32(u.bx), i32(u.by), i32(u.bz)); }
 
-// One thread per half-cell site: candidate test, plane projection, mask and
-// opposite-neighbour test; a passing candidate claims its sub-cell.
-@compute @workgroup_size(256)
-fn candidates(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if !clock_active() { return; }
-    let site = gid.x;
-    if site >= 8u * u.nx * u.ny * u.nz { return; }
+struct Evaluation {
+    // 0: not a candidate, 1: a candidate that fails a test, 2: a claimant.
+    state: u32,
+    p: vec3<f32>,
+    rank: u32,
+};
+
+// One half-cell site: candidate test, plane projection, mask and
+// opposite-neighbour test. Deterministic, so resolve recomputes a claimant's
+// projection instead of storing it.
+fn evaluate(site: u32) -> Evaluation {
+    var e = Evaluation(0u, vec3<f32>(0.0), 0u);
     let c = site / 8u;
-    if sheet_a[c] == 0u { return; }
+    if sheet_a[c] == 0u { return e; }
     let o = site % 8u;
     let q = cell_coord(c);
     // Offsets in the engine's order, k fastest.
@@ -270,14 +273,14 @@ fn candidates(@builtin(global_invocation_id) gid: vec3<u32>) {
     let s = 2 * q + d;
     let seed = vec3<f32>(s) * u.sub_dx + vec3<f32>(0.5 * u.sub_dx);
     let value = sample(seed);
-    if value >= 0.0 || value < -u.max_seed_depth { return; }
+    if value >= 0.0 || value < -u.max_seed_depth { return e; }
+    e.state = 1u;
     // The engine visits candidates by bucket (k, j, i), then cell (k, j, i)
     // within it, then offset: this rank is that visiting order.
     let b = q / 2;
     let in_bucket = u32((q.z & 1) * 4 + (q.y & 1) * 2 + (q.x & 1));
     let bucket_index = u32(b.x) + u.bx * (u32(b.y) + u.by * u32(b.z));
-    let rank = (bucket_index * 8u + in_bucket) * 8u + o;
-    sites[site] = vec4<f32>(seed, bitcast<f32>(REJECTED));
+    e.rank = (bucket_index * 8u + in_bucket) * 8u + o;
 
     var centroid = vec3<f32>(0.0);
     var near = 0u;
@@ -289,8 +292,8 @@ fn candidates(@builtin(global_invocation_id) gid: vec3<u32>) {
                 let nb = vec3<i32>(i, j, k);
                 if any(nb < vec3<i32>(0)) || any(nb >= bucket_dims()) { continue; }
                 let n = fill_bucket(nb);
-                for (var e = 0u; e < n; e = e + 1u) {
-                    let np = bucket[e].xyz;
+                for (var m = 0u; m < n; m = m + 1u) {
+                    let np = bucket[m].xyz;
                     let len = length(np - seed);
                     if !(len < u.max_radius) { continue; }
                     centroid = centroid + np;
@@ -309,22 +312,20 @@ fn candidates(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
         }
     }
-    if near < 3u { return; }
+    if near < 3u { return e; }
     centroid = centroid * (1.0 / f32(near));
     let vt1 = p2 - p1;
     let vt2 = p3 - p1;
     let cr = cross(vt1, vt2);
-    if length(vt1) < EPS || length(vt2) < EPS || length(cr) < EPS { return; }
+    if length(vt1) < EPS || length(vt2) < EPS || length(cr) < EPS { return e; }
     let normal = unit(cr);
     let distance = -dot(normal, seed - p1);
     let p = seed + (0.75 * distance) * normal;
-    if !in_grid(p) { return; }
+    if !in_grid(p) { return e; }
     let ps = sub_of(p);
-    let pc = flat(ps / 2);
-    let bit = sub_case(ps);
-    if (atomicLoad(&mask[pc]) & (1u << bit)) != 0u { return; }
+    if (atomicLoad(&mask[flat(ps / 2)]) & (1u << sub_case(ps))) != 0u { return e; }
     var cdir = centroid - p;
-    if length(cdir) < EPS { return; }
+    if length(cdir) < EPS { return e; }
     cdir = unit(cdir);
     var mindot = 1.01;
     for (var k = b.z - 1; k <= b.z + 1; k = k + 1) {
@@ -333,8 +334,8 @@ fn candidates(@builtin(global_invocation_id) gid: vec3<u32>) {
                 let nb = vec3<i32>(i, j, k);
                 if any(nb < vec3<i32>(0)) || any(nb >= bucket_dims()) { continue; }
                 let n = fill_bucket(nb);
-                for (var e = 0u; e < n; e = e + 1u) {
-                    let np = bucket[e].xyz;
+                for (var m = 0u; m < n; m = m + 1u) {
+                    let np = bucket[m].xyz;
                     if !(length(np - seed) < u.max_radius) { continue; }
                     let ndir = np - p;
                     if length(ndir) < EPS { continue; }
@@ -343,9 +344,29 @@ fn candidates(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
         }
     }
-    if !(mindot < u.threshold) { return; }
-    sites[site] = vec4<f32>(p, bitcast<f32>(rank));
-    atomicMin(&claims[8u * pc + bit], rank);
+    if !(mindot < u.threshold) { return e; }
+    e.state = 2u;
+    e.p = p;
+    return e;
+}
+
+// One thread per half-cell site: flag candidates and claimants; a claimant
+// claims its sub-cell for its rank.
+@compute @workgroup_size(256)
+fn candidates(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !clock_active() { return; }
+    let site = gid.x;
+    if site >= 8u * u.nx * u.ny * u.nz { return; }
+    let e = evaluate(site);
+    if e.state == 0u { return; }
+    let c = site / 8u;
+    let o = site % 8u;
+    atomicOr(&flags[c], 1u << o);
+    if e.state == 2u {
+        atomicOr(&flags[c], 1u << (8u + o));
+        let ps = sub_of(e.p);
+        atomicMin(&claims[8u * flat(ps / 2) + sub_case(ps)], e.rank);
+    }
 }
 
 // A claimant that holds its sub-cell is born, up to the list's capacity; the
@@ -355,13 +376,13 @@ fn resolve(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
     let site = gid.x;
     if site >= 8u * u.nx * u.ny * u.nz { return; }
-    let v = sites[site];
-    let rank = bitcast<u32>(v.w);
-    if rank >= REJECTED { return; }
-    let ps = sub_of(v.xyz);
-    if atomicLoad(&claims[8u * flat(ps / 2) + sub_case(ps)]) != rank { return; }
+    if (atomicLoad(&flags[site / 8u]) & (1u << (8u + site % 8u))) == 0u { return; }
+    let e = evaluate(site);
+    if e.state != 2u { return; }
+    let ps = sub_of(e.p);
+    if atomicLoad(&claims[8u * flat(ps / 2) + sub_case(ps)]) != e.rank { return; }
     let slot = atomicAdd(&birth_count[0], 1u);
     if slot < u.capacity {
-        births[slot] = vec4<f32>(v.xyz, v.w);
+        births[slot] = vec4<f32>(e.p, bitcast<f32>(e.rank));
     }
 }

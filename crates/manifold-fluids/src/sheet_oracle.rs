@@ -3,8 +3,6 @@
 //! Built only with the `whitewater-oracle` feature; nothing in the product
 //! calls it. The output is the sheeter's, before the engine's fill-rate draw.
 
-use std::sync::Mutex;
-
 use crate::{FluidError, native_result};
 
 unsafe extern "C" {
@@ -21,11 +19,8 @@ unsafe extern "C" {
         capacity: usize,
         seed_count_out: *mut usize,
     ) -> i32;
+    fn manifold_fluids_oracle_thread_count(count_out: *mut i32) -> i32;
 }
-
-/// The native call pins the process-global FLIP thread count to 1 and
-/// restores it; two overlapping calls would restore each other's value.
-static SHEET_ORACLE: Mutex<()> = Mutex::new(());
 
 /// The engine's default `sheetFillThreshold`.
 pub const DEFAULT_FILL_THRESHOLD: f32 = -0.95;
@@ -52,7 +47,6 @@ pub fn sheet_particles_into(
             phi.len()
         )));
     }
-    let _serial = SHEET_ORACLE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut seeds = 0usize;
     // SAFETY: `phi` covers the grid (checked above); positions and out are
     // slices of float triples whose lengths are passed alongside.
@@ -73,6 +67,16 @@ pub fn sheet_particles_into(
     };
     native_result(ok, "oracle sheet particles")?;
     Ok(seeds)
+}
+
+/// The process-wide FLIP thread count. The sheet oracle pins it to 1 for its
+/// call and restores it, under the bridge lock every native entry holds.
+pub fn thread_count() -> Result<i32, FluidError> {
+    let mut count = 0;
+    // SAFETY: a valid out pointer for one int.
+    let ok = unsafe { manifold_fluids_oracle_thread_count(&mut count) };
+    native_result(ok, "oracle thread count")?;
+    Ok(count)
 }
 
 /// Every seed of [`sheet_particles_into`], in the sheeter's order.
@@ -207,22 +211,169 @@ mod tests {
         assert!(seeds.is_empty(), "a still pool seeded {seeds:?}");
     }
 
-    /// The CPU port against the native sheeter: same count, same order, and
-    /// positions within `ULPS` (the engine build fuses multiply-adds, Rust
-    /// does not). Returns the seed count.
+    /// The CPU port against the native sheeter, by identity: equal counts,
+    /// and each native seed, in order, is bit for bit the projection of
+    /// exactly one port candidate, the one the port seeded at that place in
+    /// the sequence. Returns the seed count.
     fn port_matches(markers: &[[f32; 3]], phi: &[f32], cells: [u32; 3], dx: f64, threshold: f32) -> usize {
-        const ULPS: i32 = 1;
         let native = sheet_particles(markers, phi, cells, dx, threshold).expect("oracle");
-        let port = crate::sheeter::generate_sheet_particles(markers, phi, cells, dx, threshold).expect("port");
-        let worst = native
-            .iter()
-            .zip(&port)
-            .flat_map(|(a, b)| (0..3).map(move |c| (a[c].to_bits() as i32 - b[c].to_bits() as i32).abs()))
-            .max()
-            .unwrap_or(0);
-        assert_eq!(native.len(), port.len(), "seed counts differ");
-        assert!(worst <= ULPS, "positions differ by {worst} ulp");
+        let trace = crate::sheeter::trace_sheet_particles(markers, phi, cells, dx, threshold).expect("port");
+        assert_eq!(native.len(), trace.seeds.len(), "seed counts differ");
+        let near = |a: &[f32; 3], b: &[f32; 3]| (0..3).all(|c| a[c].to_bits() == b[c].to_bits());
+        for (i, seed) in native.iter().enumerate() {
+            let sources: Vec<usize> = (0..trace.candidates.len())
+                .filter(|&j| trace.projections[j].is_some_and(|p| near(&p, seed)))
+                .collect();
+            assert_eq!(sources, vec![trace.seed_candidates[i]], "native seed {i} {seed:?} is not the port's seed {i}");
+        }
         native.len()
+    }
+
+    /// One ulp along `x`, signed.
+    fn ulp_step(x: f32, k: i32) -> f32 {
+        (0..k.unsigned_abs()).fold(x, |v, _| if k > 0 { v.next_up() } else { v.next_down() })
+    }
+
+    /// The two adjacent floats in [lo, hi] where `observe` (the port's
+    /// decisions) changes, by bisection; the observable differs at the ends.
+    fn knife_edge<T: PartialEq>(mut lo: f32, mut hi: f32, observe: impl Fn(f32) -> T) -> (f32, f32) {
+        let low = observe(lo);
+        assert!(observe(hi) != low, "the decision does not change over [{lo}, {hi}]");
+        loop {
+            let mid = 0.5 * (lo + hi);
+            if mid == lo || mid == hi {
+                return (lo, hi);
+            }
+            if observe(mid) == low { lo = mid } else { hi = mid }
+        }
+    }
+
+    /// Native and port agree by identity on the two floats either side of a
+    /// decision edge and one ulp beyond each.
+    fn agree_across(edge: (f32, f32), fixture: impl Fn(f32) -> (Vec<[f32; 3]>, Vec<f32>, f64, f32)) {
+        assert_eq!(edge.0.next_up(), edge.1, "not adjacent");
+        for x in [ulp_step(edge.0, -1), edge.0, edge.1, ulp_step(edge.1, 1)] {
+            let (markers, phi, dx, threshold) = fixture(x);
+            port_matches(&markers, &phi, CELLS, dx, threshold);
+        }
+    }
+
+    fn shifted_sheet(shift: f32) -> (Vec<[f32; 3]>, Vec<f32>, f64, f32) {
+        let (markers, phi, _) = holed_sheet();
+        (markers, phi.iter().map(|v| v + shift).collect(), DX, DEFAULT_FILL_THRESHOLD)
+    }
+
+    /// Candidates need φ < 0: the shift where the y 7.75 candidates sample 0.
+    #[test]
+    fn port_matches_oracle_where_candidates_reach_the_surface() {
+        let observe = |s| crate::sheeter::trace_sheet_particles(&shifted_sheet(s).0, &shifted_sheet(s).1, CELLS, DX, DEFAULT_FILL_THRESHOLD).unwrap().candidates.len();
+        agree_across(knife_edge(0.1, 0.15, observe), shifted_sheet);
+    }
+
+    /// Candidates need φ ≥ −dx: the shift where the y 8.25 candidates sample −1.
+    #[test]
+    fn port_matches_oracle_at_the_candidate_depth() {
+        let observe = |s| crate::sheeter::trace_sheet_particles(&shifted_sheet(s).0, &shifted_sheet(s).1, CELLS, DX, DEFAULT_FILL_THRESHOLD).unwrap().candidates.len();
+        agree_across(knife_edge(-0.7, -0.55, observe), shifted_sheet);
+    }
+
+    /// Markers need −2dx ≤ φ < 2dx: the shift where they sample −2.
+    #[test]
+    fn port_matches_oracle_at_the_marker_band() {
+        let observe = |s| crate::sheeter::trace_sheet_particles(&shifted_sheet(s).0, &shifted_sheet(s).1, CELLS, DX, DEFAULT_FILL_THRESHOLD).unwrap().thin;
+        agree_across(knife_edge(-1.8, -1.6, observe), shifted_sheet);
+    }
+
+    /// Neighbours count within 2dx, strictly: one ring marker slid toward a
+    /// hole candidate until it enters the radius.
+    #[test]
+    fn port_matches_oracle_at_the_search_radius() {
+        let fixture = |t: f32| {
+            let (mut markers, phi, _) = holed_sheet();
+            let m = markers.iter().position(|p| *p == [9.75, SHEET_Y, 8.25]).expect("ring marker");
+            markers[m][0] -= t;
+            (markers, phi, DX, DEFAULT_FILL_THRESHOLD)
+        };
+        let observe = |t| {
+            let (m, p, ..) = fixture(t);
+            crate::sheeter::trace_sheet_particles(&m, &p, CELLS, DX, DEFAULT_FILL_THRESHOLD).unwrap().mindots
+        };
+        agree_across(knife_edge(0.0, 0.02, observe), fixture);
+    }
+
+    /// Seeds need mindot < threshold, strictly: the threshold at a seed's own
+    /// score and one ulp either side.
+    #[test]
+    fn port_matches_oracle_at_the_fill_threshold() {
+        let (markers, phi, _) = holed_sheet();
+        let trace = crate::sheeter::trace_sheet_particles(&markers, &phi, CELLS, DX, DEFAULT_FILL_THRESHOLD).unwrap();
+        let score = trace.mindots[trace.seed_candidates[0]].expect("a seed has a score");
+        let fixture = |t: f32| (markers.clone(), phi.clone(), DX, t);
+        agree_across((score.next_down(), score), fixture);
+        let at = port_matches(&markers, &phi, CELLS, DX, score);
+        let above = port_matches(&markers, &phi, CELLS, DX, score.next_up());
+        assert!(at < above, "the seed's own score must reject it ({at} vs {above})");
+    }
+
+    /// A projection lands on a half-cell boundary: the marker layer height
+    /// where the y 7.75 candidates project to y 8.0.
+    #[test]
+    fn port_matches_oracle_at_a_half_cell_boundary() {
+        let fixture = |y: f32| {
+            let (markers, phi, _) = holed_sheet();
+            (markers.into_iter().map(|p| [p[0], y, p[2]]).collect::<Vec<_>>(), phi, DX, 0.0f32)
+        };
+        let observe = |y| {
+            let (m, p, ..) = fixture(y);
+            crate::sheeter::trace_sheet_particles(&m, &p, CELLS, DX, 0.0)
+                .unwrap()
+                .seeds
+                .iter()
+                .map(|s| (s[1] / 0.5).floor() as i32)
+                .collect::<Vec<_>>()
+        };
+        agree_across(knife_edge(8.07, 8.1, observe), fixture);
+    }
+
+    /// The holed sheet at non-binary cell sizes: every position and distance
+    /// scaled, the lattice's equal-distance ties kept.
+    #[test]
+    fn port_matches_oracle_at_non_binary_cell_sizes() {
+        let (markers, phi, _) = holed_sheet();
+        for dx in [0.3f32, 0.1, 0.7] {
+            let m: Vec<[f32; 3]> = markers.iter().map(|p| p.map(|c| c * dx)).collect();
+            let f: Vec<f32> = phi.iter().map(|v| v * dx).collect();
+            let seeds = port_matches(&m, &f, CELLS, f64::from(dx), DEFAULT_FILL_THRESHOLD);
+            assert!(seeds > 0, "dx {dx}: the scaled hole seeds");
+        }
+    }
+
+    /// Oracle calls racing native world construction (which sets the
+    /// process-wide thread count to 4) from other threads: each call is
+    /// serialised by the bridge lock, gives the same seeds, and leaves the
+    /// count as the worlds set it.
+    #[test]
+    fn oracle_sheet_is_isolated_from_concurrent_native_work() {
+        let (markers, phi, _) = holed_sheet();
+        let want = sheet_particles(&markers, &phi, CELLS, DX, DEFAULT_FILL_THRESHOLD).expect("oracle");
+        std::thread::scope(|scope| {
+            for _ in 0..4 {
+                scope.spawn(|| {
+                    for _ in 0..25 {
+                        assert_eq!(sheet_particles(&markers, &phi, CELLS, DX, DEFAULT_FILL_THRESHOLD).expect("oracle"), want);
+                    }
+                });
+            }
+            for _ in 0..2 {
+                scope.spawn(|| {
+                    for _ in 0..10 {
+                        let world = crate::FluidWorld::new(crate::Config { cells: [8; 3], cell_size: 0.5, surface_subdivisions: 0, apic: false });
+                        drop(world.expect("world"));
+                    }
+                });
+            }
+        });
+        assert_eq!(super::thread_count().expect("count"), 4, "the oracle restored a stale thread count");
     }
 
     #[test]

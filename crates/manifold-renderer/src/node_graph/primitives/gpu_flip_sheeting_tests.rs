@@ -18,7 +18,6 @@ const LABELS: SortLabels = SortLabels {
     scatter: "sheeting proof sort scatter",
     stabilise: "sheeting proof sort stabilise",
 };
-const NO_SITE: u32 = u32::MAX;
 
 fn shared(device: &GpuDevice, bytes: &[u8]) -> GpuBuffer {
     let buffer = device.create_buffer_shared(bytes.len().max(16) as u64);
@@ -92,8 +91,8 @@ struct Run {
     /// Births: x, y, z, rank bits.
     births: Vec<[u32; 4]>,
     count: u32,
-    /// Per half-cell site: x, y, z, rank or a no-candidate mark.
-    sites: Vec<[u32; 4]>,
+    /// Per cell: bit o marks offset o a candidate, bit 8 + o a claimant.
+    flags: Vec<u32>,
 }
 
 fn run(device: &GpuDevice, stage: &GpuSheeting, sorted: &Sorted, phi: &GpuBuffer, h: f32, plan: Option<&GpuBuffer>) -> Run {
@@ -116,11 +115,11 @@ fn run(device: &GpuDevice, stage: &GpuSheeting, sorted: &Sorted, phi: &GpuBuffer
     let (births, count) = stage.births();
     let count = copy_out(device, count)[0];
     let births: Vec<u32> = copy_out(device, births);
-    let sites: Vec<u32> = copy_out(device, &stage.scratch()[6]);
+    let flags: Vec<u32> = copy_out(device, &stage.scratch()[6]);
     Run {
         births: births.chunks_exact(4).map(|c| [c[0], c[1], c[2], c[3]]).collect(),
         count,
-        sites: sites.chunks_exact(4).map(|c| [c[0], c[1], c[2], c[3]]).collect(),
+        flags,
     }
 }
 
@@ -163,7 +162,7 @@ fn matches_port(device: &GpuDevice, name: &str, markers: &[[f32; 3]], phi: &[f32
         let previous = last.insert(rank / 64, rank);
         assert!(previous.is_none_or(|p| p < rank), "{name}: rank {rank} out of the engine's order in its bucket");
     }
-    let mut got_sites: Vec<usize> = (0..gpu.sites.len()).filter(|&s| gpu.sites[s][3] != NO_SITE).collect();
+    let mut got_sites: Vec<usize> = (0..8 * gpu.flags.len()).filter(|&s| gpu.flags[s / 8] & (1 << (s % 8)) != 0).collect();
     let mut sorted_want = want_sites.clone();
     sorted_want.sort_unstable();
     got_sites.sort_unstable();
@@ -171,7 +170,7 @@ fn matches_port(device: &GpuDevice, name: &str, markers: &[[f32; 3]], phi: &[f32
 
     // The accepted set by source candidate, and the births' positions.
     let mut want: Vec<(u32, [f32; 3])> =
-        trace.seed_sources.iter().zip(&trace.seeds).map(|(&c, &p)| (rank_of(site_of(c, cells, h), cells), p)).collect();
+        trace.seed_candidates.iter().zip(&trace.seeds).map(|(&c, &p)| (rank_of(site_of(trace.candidates[c], cells, h), cells), p)).collect();
     want.sort_by_key(|w| w.0);
     assert_eq!(gpu.count as usize, want.len(), "{name}: birth counts differ");
     let mut got: Vec<(u32, [f32; 3])> = gpu.births[..gpu.count as usize]
@@ -181,7 +180,7 @@ fn matches_port(device: &GpuDevice, name: &str, markers: &[[f32; 3]], phi: &[f32
     got.sort_by_key(|g| g.0);
     assert_eq!(got.iter().map(|g| g.0).collect::<Vec<_>>(), want.iter().map(|w| w.0).collect::<Vec<_>>(), "{name}: accepted sets differ");
     let worst = got.iter().zip(&want).flat_map(|(g, w)| (0..3).map(move |a| (g.1[a] - w.1[a]).abs())).fold(0.0f32, f32::max);
-    // Same f32 projection; the GPU fuses multiply-adds the port does not.
+    // The port fuses multiply-adds as the engine build does; Metal fuses its own way.
     assert!(worst < 1e-5 * h, "{name}: birth positions differ by {worst}");
     assert!(gpu.count > 0, "{name}: no births");
     eprintln!(

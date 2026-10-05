@@ -40,9 +40,9 @@ struct Params {
     pad: [u32; 2],
 }
 
-/// Bytes per cell: two sheet flags, the mask word, the selected count, four
-/// selected markers, and eight half-cell claims and candidate sites.
-const BYTES_PER_CELL: u64 = 4 * 4 + 4 * 16 + 8 * 4 + 8 * 16;
+/// Bytes per cell: two sheet flags, the mask word, the selected count, the
+/// candidate flags, four selected markers, and eight half-cell claims.
+const BYTES_PER_CELL: u64 = 5 * 4 + 4 * 16 + 8 * 4;
 
 /// Everything the stage holds for `cells` and a birth list of `capacity`.
 pub(crate) fn scratch_bytes(cells: [u32; 3], capacity: u32) -> u64 {
@@ -70,8 +70,8 @@ pub(crate) struct SheetInputs<'a> {
 #[derive(Default)]
 pub(crate) struct GpuSheeting {
     pipelines: Vec<GpuComputePipeline>,
-    /// sheet a, sheet b, mask, selected count, selected, claims, sites,
-    /// births, birth count, zero plan.
+    /// sheet a, sheet b, mask, selected count, selected, claims, candidate
+    /// flags, births, birth count, zero plan.
     buffers: Option<[GpuBuffer; 10]>,
     cells: [u32; 3],
     capacity: u32,
@@ -105,7 +105,7 @@ impl GpuSheeting {
             device.try_create_buffer(4 * n)?,
             device.try_create_buffer(4 * 16 * n)?,
             device.try_create_buffer(8 * 4 * n)?,
-            device.try_create_buffer(8 * 16 * n)?,
+            device.try_create_buffer(4 * n)?,
             device.try_create_buffer(16 * u64::from(capacity.max(1)))?,
             device.try_create_buffer(16)?,
             plan,
@@ -136,7 +136,7 @@ impl GpuSheeting {
     /// Gated by the FLIP clock plan: in an inactive slot every pass returns
     /// before writing.
     pub(crate) fn encode_gated(&self, enc: &mut GpuEncoder, inputs: &SheetInputs<'_>, plan: &GpuBuffer) {
-        let [sheet_a, sheet_b, mask, selected_count, selected, claims, sites, births, birth_count, _] =
+        let [sheet_a, sheet_b, mask, selected_count, selected, claims, flags, births, birth_count, _] =
             self.buffers.as_ref().expect("sheeting reserved");
         let n = self.cells;
         let h = inputs.h;
@@ -178,7 +178,7 @@ impl GpuSheeting {
             buffer(8, selected),
             buffer(9, selected_count),
             buffer(10, claims),
-            buffer(11, sites),
+            buffer(11, flags),
             buffer(12, births),
             buffer(13, birth_count),
             buffer(14, plan),

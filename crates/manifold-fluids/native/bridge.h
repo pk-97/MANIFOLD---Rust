@@ -183,6 +183,8 @@ int manifold_fluids_oracle_curvature(const float *phi, uint32_t isize, uint32_t 
 // the fill-rate draw: markers at `positions` (count × 3 floats, grid-local,
 // inside the grid), `phi` the cell-centred surface level set, x fastest.
 // Writes up to `capacity` seeds and always the true count. Test oracle only.
+// The process-wide FLIP thread count. Test oracle only.
+int manifold_fluids_oracle_thread_count(int *count_out);
 int manifold_fluids_oracle_sheet_particles(const float *positions, size_t count,
                                            const float *phi, uint32_t isize, uint32_t jsize,
                                            uint32_t ksize, double dx, float fill_threshold,

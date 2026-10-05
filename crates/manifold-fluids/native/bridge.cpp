@@ -2402,11 +2402,13 @@ extern "C" int manifold_fluids_oracle_curvature(const float *phi, uint32_t isize
     });
 }
 
-// The thread count is process-global (threadutils.cpp), so this call pins it
-// to 1 for a deterministic, input-ordered result and restores it afterwards.
-// A native simulation stepping concurrently in this process would run its
-// threaded passes single-threaded meanwhile; the Rust wrapper serialises
-// oracle calls but cannot see live simulations.
+// The thread count is process-global and unsynchronised (threadutils.cpp),
+// and the threaded sheeter is not input-ordered (its phase-2 count and seed
+// mask race), so this call pins it to 1 and restores it. That is safe only
+// because every bridge entry, this one included, holds NATIVE_MUTEX for its
+// whole call (`guarded`, or a direct lock), and the engine joins every thread
+// it starts before the call returns (asynchronous meshing is off): no native
+// code reads or writes the count while the oracle holds it.
 extern "C" int manifold_fluids_oracle_sheet_particles(const float *positions, size_t count,
                                                      const float *phi, uint32_t isize,
                                                      uint32_t jsize, uint32_t ksize, double dx,
@@ -2487,6 +2489,16 @@ extern "C" int manifold_fluids_oracle_sheet_particles(const float *positions, si
             seeds_out[3 * index + 2] = seeds[index].z;
         }
         *seed_count_out = seeds.size();
+    });
+}
+
+// The process-wide FLIP thread count, read under the bridge lock.
+extern "C" int manifold_fluids_oracle_thread_count(int *count_out) {
+    return guarded([&] {
+        if (count_out == nullptr) {
+            throw std::invalid_argument("oracle thread count pointer must be non-null");
+        }
+        *count_out = ThreadUtils::getMaxThreadCount();
     });
 }
 

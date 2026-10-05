@@ -3,9 +3,13 @@
 //! A CPU reference of `ParticleSheeter::generateSheetParticles`, the spec the
 //! GPU sheeting kernels are proven against. It runs the engine's single-thread
 //! order and its precision: f32 vectors (vmath), f64 where the engine widens
-//! (cell indexing, interpolation weights, `dx` products). Rust never fuses a
-//! multiply-add; the engine build does, so results can differ from the native
-//! sheeter by a few ulps (`sheet_oracle` tests name the bound).
+//! (cell indexing, interpolation weights, `dx` products). The engine build
+//! (clang -O3, arm64, -ffp-contract=on) fuses a multiply-add inside each
+//! expression: `a*b + c*d` is `fma(a, b, c*d)`, a further `+ e*f` is
+//! `fma(e, f, sum)`, `a*b - c*d` is `fma(a, b, -(c*d))`. vmath's out-of-line
+//! vector operators fuse nothing across calls. Rust never contracts, so the
+//! port writes each fused operation as `mul_add`, and matches bit for bit.
+//! A GPU port cannot rely on the same contraction; its proofs say so.
 
 use crate::FluidError;
 
@@ -31,10 +35,10 @@ fn scale(s: f32, v: V) -> V {
     [v[0] * s, v[1] * s, v[2] * s]
 }
 fn dot(a: V, b: V) -> f32 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+    a[2].mul_add(b[2], a[0].mul_add(b[0], a[1] * b[1]))
 }
 fn cross(a: V, b: V) -> V {
-    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+    [a[1].mul_add(b[2], -(a[2] * b[1])), a[2].mul_add(b[0], -(a[0] * b[2])), a[0].mul_add(b[1], -(a[1] * b[0]))]
 }
 fn length(v: V) -> f32 {
     dot(v, v).sqrt()
@@ -108,20 +112,20 @@ fn trilinear(p: V, dx: f64, grid: &Grid<f32>) -> f64 {
     let p5 = v([i, j + 1, k + 1]);
     let p6 = v([i + 1, j + 1, k]);
     let p7 = v([i + 1, j + 1, k + 1]);
-    p0 * (1.0 - x) * (1.0 - y) * (1.0 - z)
-        + p1 * x * (1.0 - y) * (1.0 - z)
-        + p2 * (1.0 - x) * y * (1.0 - z)
-        + p3 * (1.0 - x) * (1.0 - y) * z
-        + p4 * x * (1.0 - y) * z
-        + p5 * (1.0 - x) * y * z
-        + p6 * x * y * (1.0 - z)
-        + p7 * x * y * z
+    // The engine's left-to-right sum of eight products, contracted.
+    let mut s = (p0 * (1.0 - x) * (1.0 - y)).mul_add(1.0 - z, p1 * x * (1.0 - y) * (1.0 - z));
+    s = (p2 * (1.0 - x) * y).mul_add(1.0 - z, s);
+    s = (p3 * (1.0 - x) * (1.0 - y)).mul_add(z, s);
+    s = (p4 * x * (1.0 - y)).mul_add(z, s);
+    s = (p5 * (1.0 - x) * y).mul_add(z, s);
+    s = (p6 * x * y).mul_add(1.0 - z, s);
+    (p7 * x * y).mul_add(z, s)
 }
 
 fn bilinear(v00: f32, v10: f32, v01: f32, v11: f32, ix: f64, iy: f64) -> f32 {
-    let lerp1 = (1.0 - ix) * v00 as f64 + ix * v10 as f64;
-    let lerp2 = (1.0 - ix) * v01 as f64 + ix * v11 as f64;
-    ((1.0 - iy) * lerp1 + iy * lerp2) as f32
+    let lerp1 = (1.0 - ix).mul_add(v00 as f64, ix * v10 as f64);
+    let lerp2 = (1.0 - ix).mul_add(v01 as f64, ix * v11 as f64);
+    (1.0 - iy).mul_add(lerp1, iy * lerp2) as f32
 }
 
 /// Interpolation::trilinearInterpolateGradient: the interpolant's derivative
@@ -177,7 +181,8 @@ impl Mask {
 /// insertion order; buckets with particles are visited k, j, i.
 struct Buckets {
     cells: Grid<u32>,
-    lists: Vec<Vec<V>>,
+    /// Each point with its index in the list the buckets were built from.
+    lists: Vec<Vec<(V, usize)>>,
 }
 
 impl Buckets {
@@ -186,7 +191,7 @@ impl Buckets {
         let bn = n.map(|c| (c as f32 / reduction as f32).ceil() as i32);
         let bdx = reduction as f64 * dx;
         let mut cells = Grid::new(bn, u32::MAX);
-        let mut lists: Vec<Vec<V>> = Vec::new();
+        let mut lists: Vec<Vec<(V, usize)>> = Vec::new();
         let mut valid = Grid::new(bn, false);
         for &p in points {
             valid.set(cell_of(p, bdx).0, true);
@@ -201,15 +206,15 @@ impl Buckets {
                 }
             }
         }
-        for &p in points {
+        for (index, &p) in points.iter().enumerate() {
             let list = &mut lists[cells.get(cell_of(p, bdx).0) as usize];
             // The engine's flat buffer gives each bucket exactly `cap` slots.
             debug_assert!(list.len() < cap, "bucket overflow the engine would corrupt");
-            list.push(p);
+            list.push((p, index));
         }
         Self { cells, lists }
     }
-    fn at(&self, c: [i32; 3]) -> Option<&[V]> {
+    fn at(&self, c: [i32; 3]) -> Option<&[(V, usize)]> {
         if !self.cells.in_range(c) {
             return None;
         }
@@ -240,11 +245,16 @@ pub struct SheetTrace {
     pub thin: Vec<bool>,
     /// Per marker: kept by phase 2 (sheet cell, under the cap, in the band).
     pub kept: Vec<bool>,
-    /// Seed candidates in visiting order, before the plane and mask tests.
+    /// Seed candidates as generated (sheet cells k, j, i; offsets k fastest),
+    /// before the plane and mask tests. An index here is a candidate's identity.
     pub candidates: Vec<[f32; 3]>,
+    /// Per candidate: where the plane projection put it, when it got that far.
+    pub projections: Vec<Option<[f32; 3]>>,
+    /// Per candidate: its opposite-neighbour score, when it got that far.
+    pub mindots: Vec<Option<f32>>,
     pub seeds: Vec<[f32; 3]>,
-    /// Per seed: the candidate it was projected from.
-    pub seed_sources: Vec<[f32; 3]>,
+    /// Per seed: the candidate it came from.
+    pub seed_candidates: Vec<usize>,
 }
 
 /// [`generate_sheet_particles`] with its decisions recorded.
@@ -263,6 +273,13 @@ pub fn trace_sheet_particles(
     let count = cells.iter().try_fold(1usize, |a, &c| a.checked_mul(c as usize));
     if count != Some(phi.len()) {
         return Err(FluidError::input("sheeter level set length differs from the grid"));
+    }
+    // The oracle's checks (bridge.cpp manifold_fluids_oracle_sheet_particles).
+    if phi.iter().any(|v| !v.is_finite()) {
+        return Err(FluidError::input("sheeter level set is not finite"));
+    }
+    if !fill_threshold.is_finite() || !(-1.0..=0.0).contains(&fill_threshold) {
+        return Err(FluidError::input("sheeter fill threshold must be in [-1, 0]"));
     }
     let level = Grid { n, data: phi.to_vec() };
     let mut mask = Mask { dx, sub_dx: 0.5 * dx, n, bits: Grid::new(n, 0) };
@@ -387,7 +404,7 @@ pub fn trace_sheet_particles(
                 }
                 for o in 0..8 {
                     let s = [2 * i + (o >> 2 & 1), 2 * j + (o >> 1 & 1), 2 * k + (o & 1)];
-                    let seed = s.map(|c| ((c as f32) as f64 * sub_dx + hw) as f32);
+                    let seed = s.map(|c| ((c as f32) as f64).mul_add(sub_dx, hw) as f32);
                     let phi = trilinear(sub(seed, hdx), dx, &level) as f32;
                     if phi >= 0.0 || phi < -max_seed_depth {
                         continue;
@@ -404,6 +421,8 @@ pub fn trace_sheet_particles(
     let max_radius = (SHEET_SEARCH_RADIUS as f64 * dx) as f32;
 
     let mut out = Vec::new();
+    trace.projections = vec![None; candidates.len()];
+    trace.mindots = vec![None; candidates.len()];
     let mut neighbours = Vec::new();
     let mut nearest = Vec::new();
     let bn = candidate_buckets.cells.n;
@@ -416,7 +435,7 @@ pub fn trace_sheet_particles(
                     for j in bj - 1..=bj + 1 {
                         for i in bi - 1..=bi + 1 {
                             if let Some(list) = sheet_buckets.at([i, j, k]) {
-                                neighbours.extend_from_slice(list);
+                                neighbours.extend(list.iter().map(|&(p, _)| p));
                             }
                         }
                     }
@@ -424,7 +443,7 @@ pub fn trace_sheet_particles(
                 if neighbours.len() < 3 {
                     continue;
                 }
-                for &candidate in bucket {
+                for &(candidate, identity) in bucket {
                     let p = candidate;
                     nearest.clear();
                     nearest.extend(neighbours.iter().copied().filter(|&np| length(sub(np, p)) < max_radius));
@@ -466,6 +485,7 @@ pub fn trace_sheet_particles(
                     let normal = normalize(c);
                     let distance = -dot(normal, sub(p, p1));
                     let p = add(p, scale(PROJECTION_FACTOR * distance, normal));
+                    trace.projections[identity] = Some(p);
                     if !mask.in_grid(p) || mask.is_set(p) {
                         continue;
                     }
@@ -485,9 +505,10 @@ pub fn trace_sheet_particles(
                             mindot = d;
                         }
                     }
+                    trace.mindots[identity] = Some(mindot);
                     if mindot < fill_threshold {
                         out.push(p);
-                        trace.seed_sources.push(candidate);
+                        trace.seed_candidates.push(identity);
                         mask.add(p);
                     }
                 }

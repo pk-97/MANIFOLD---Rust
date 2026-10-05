@@ -588,3 +588,63 @@ fn whitewater_surface_distance_matches_engine_on_a_splash() {
         assert!(!theirs.seeds.is_empty(), "{name}: the splash seeds");
     }
 }
+
+/// The gated stage under encode replay: a sequence of active and inactive
+/// slots, with the plan's and the input's contents changing in the same
+/// buffers between slots, recorded once and replayed. After every slot the
+/// replayed stage's output and scratch equal a directly encoded twin's.
+#[test]
+fn whitewater_surface_distance_replay_matches_direct() {
+    use manifold_gpu::GpuReplayCache;
+    let device = crate::test_device();
+    let make = || {
+        let mut stage = super::whitewater_distance::SurfaceDistance::default();
+        stage.prepare(&device);
+        stage.reserve(&device, [24; 3]).unwrap();
+        let plan = device.create_buffer_shared(48);
+        let source = device.create_buffer_shared(24 * 24 * 24 * 4);
+        (stage, plan, source)
+    };
+    let (direct, direct_plan, direct_source) = make();
+    let (replayed, replay_plan, replay_source) = make();
+    let mut cache = Some(GpuReplayCache::default());
+    let inputs = [sphere_phi(3.0), sphere_phi(2.5), sphere_phi(2.75)];
+    let slots = [(0.01f32, 0), (0.0, 1), (0.01, 1), (0.01, 0), (0.0, 2), (0.0, 0), (0.01, 2), (0.01, 0)];
+    let words = |stage: &super::whitewater_distance::SurfaceDistance| -> Vec<Vec<u32>> {
+        let mut enc = device.create_encoder("surface replay readback");
+        let staged: Vec<_> = stage.scratch()[..6]
+            .iter()
+            .map(|b| {
+                let s = device.create_buffer_shared(b.size());
+                enc.copy_buffer_to_buffer(b, &s, b.size());
+                (s, (b.size() / 4) as usize)
+            })
+            .collect();
+        enc.commit_and_wait_completed();
+        staged.iter().map(|(s, n)| read::<u32>(s, *n)).collect()
+    };
+    for (slot, &(step_dt, input)) in slots.iter().enumerate() {
+        let mut plan = [0u32; 12];
+        plan[0] = step_dt.to_bits();
+        plan[11] = 1;
+        for (p, s) in [(&direct_plan, &direct_source), (&replay_plan, &replay_source)] {
+            // SAFETY: shared buffers sized for the writes; no GPU work in flight.
+            unsafe {
+                p.write(0, bytemuck::cast_slice(&plan));
+                s.write(0, bytemuck::cast_slice(&inputs[input]));
+            }
+        }
+        let mut enc = device.create_encoder("surface direct");
+        direct.encode_gated(&mut enc, &direct_source, 0.25, &direct_plan);
+        enc.commit_and_wait_completed();
+        let mut enc = device.create_encoder("surface replay");
+        enc.begin_replay(&device, cache.take().expect("cache"));
+        replayed.encode_gated(&mut enc, &replay_source, 0.25, &replay_plan);
+        cache = Some(enc.end_replay());
+        enc.commit_and_wait_completed();
+        assert!(words(&direct) == words(&replayed), "slot {slot} (step {step_dt}, input {input}): replay differs from direct");
+    }
+    let stats = cache.expect("cache").stats();
+    assert!(stats.replayed > 0, "nothing replayed: {stats:?}");
+    eprintln!("SURFACE replay: {stats:?}");
+}
