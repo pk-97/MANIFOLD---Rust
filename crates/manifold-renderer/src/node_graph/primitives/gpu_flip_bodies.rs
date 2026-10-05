@@ -55,6 +55,9 @@ pub(crate) struct BodyGate<'a> {
     pub partial: u64,
     pub finalize: u64,
     pub product: u64,
+    /// The solve-live triple the finalize checks (gpu_flip_bodies.wgsl
+    /// impulse_finalize), so a round run after the stop writes no sums.
+    pub live: u32,
 }
 
 /// The bodies a step couples into its solve, and what their passes read.
@@ -87,7 +90,8 @@ struct Params {
     first: u32,
     body_count: u32,
     accumulate: u32,
-    _pad0: u32,
+    /// impulse_finalize inside a round: the gate's solve-live triple; 0 runs always.
+    live: u32,
     _pad1: u32,
     _pad2: u32,
 }
@@ -255,7 +259,7 @@ impl BodyPasses {
         if partials.size < partial_bytes(bodies.lattice, bodies.count) {
             return Err(format!("the body partials were prepared for fewer than {} bodies on {:?}", bodies.count, bodies.lattice));
         }
-        let params = Self::params(bodies, reaction.is_some());
+        let params = Params { live: gate.map_or(0, |g| g.live), ..Self::params(bodies, reaction.is_some()) };
         let data = bytemuck::bytes_of(&params);
         let partial = [
             GpuBinding::Bytes { binding: 0, data },
@@ -275,21 +279,23 @@ impl BodyPasses {
             None => enc.plain(&pipes.partial, &partial, groups, "gpu_flip.bodies.partial"),
         }
         // A fixed array, not a Vec: this runs every step. Without a reaction
-        // binding 9 is left off.
+        // binding 9 holds the sums, which mode 0 never writes through it: a
+        // template command inherits no binding, so every one the entry point
+        // references is bound.
         let finalize = [
             GpuBinding::Bytes { binding: 0, data },
             buffer(4, bodies.bodies),
             buffer(7, partials),
             buffer(8, sums),
             buffer(13, tiles[1]),
+            buffer(12, tiles[0]),
             self.clock_binding(),
             buffer(9, reaction.unwrap_or(sums)),
         ];
-        let bound = if reaction.is_some() { finalize.len() } else { finalize.len() - 1 };
         let groups = [bodies.count.max(1), 1, 1];
         match gate {
-            Some(gate) => enc.gated(&pipes.finalize, &finalize[..bound], groups, gate.buffer, gate.finalize, "gpu_flip.bodies.finalize"),
-            None => enc.plain(&pipes.finalize, &finalize[..bound], groups, "gpu_flip.bodies.finalize"),
+            Some(gate) => enc.gated(&pipes.finalize, &finalize, groups, gate.buffer, gate.finalize, "gpu_flip.bodies.finalize"),
+            None => enc.plain(&pipes.finalize, &finalize, groups, "gpu_flip.bodies.finalize"),
         }
         Ok(())
     }

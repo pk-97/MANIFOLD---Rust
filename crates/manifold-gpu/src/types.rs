@@ -320,3 +320,12 @@ pub enum GpuBinding<'a> {
     /// Inline bytes at WGSL @binding(N). Uses set_bytes on Metal (no buffer allocation).
     Bytes { binding: u32, data: &'a [u8] },
 }
+
+impl GpuBinding<'_> {
+    /// The WGSL @binding(N) this binds.
+    pub fn binding(&self) -> u32 {
+        match *self {
+            Self::Buffer { binding, .. } | Self::Texture { binding, .. } | Self::Sampler { binding, .. } | Self::Bytes { binding, .. } => binding,
+        }
+    }
+}

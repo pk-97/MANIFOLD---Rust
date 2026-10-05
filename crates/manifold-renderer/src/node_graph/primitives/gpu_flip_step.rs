@@ -65,9 +65,6 @@ const NAME: &str = "GPU FLIP Step";
 /// Layers of valid faces the step's face grid holds around the water at
 /// least: both extensions run `band_layers` ≥ 5.
 pub(crate) const FACE_VALID_LAYERS: u32 = 2;
-/// The iteration cap when `iterations` is Auto (0): Auto stops on the
-/// engine's tolerance (gpu_flip_pressure.rs Stop::Converged).
-pub(crate) const AUTO_PRESSURE_ITERATIONS: u32 = MAX_ITERATIONS;
 /// Configured engine CFL, shared with the clock.
 pub(crate) const ENGINE_CFL: u32 = 5;
 
@@ -2170,6 +2167,7 @@ crate::primitive! {
         dynamic_bodies: ScalarF32 optional,
         closed_faces: ScalarF32 optional,
         solve_level: ScalarF32 optional,
+        max_iterations: ScalarF32 optional,
         clock_obstacles: Array(f32) optional,
         clock_obstacle_count: ScalarF32 optional,
         initial_obstacle_speed: ScalarF32 optional,
@@ -2224,6 +2222,7 @@ crate::primitive! {
         int_param!("steps", "Steps", 1.0, 1.0, 64.0),
         float_param!("flip", "Flip Share", 0.95, 0.0, 1.0),
         int_param!("iterations", "Iterations (0 = Auto)", 0.0, 0.0, MAX_ITERATIONS as f32),
+        int_param!("max_iterations", "Max Iterations", MAX_ITERATIONS as f32, 1.0, MAX_ITERATIONS as f32),
         int_param!("ghost_fluid", "Ghost Fluid", 1.0, 0.0, 1.0),
         int_param!("volume_projection", "Volume Projection", 0.0, 0.0, 1.0),
         int_param!("closed_faces", "Closed Faces", 63.0, 0.0, 63.0),
@@ -2254,11 +2253,26 @@ impl GpuFlipStep {
     }
 }
 
-/// When the solves stop: Auto at 0 or below converges within the cap, a
-/// value runs exactly that many iterations, refused past MAX_ITERATIONS.
-fn read_iterations(value: f32) -> Result<Stop, String> {
+/// Max Iterations, the cap Auto converges within: refused unless finite and,
+/// rounded, 1 to MAX_ITERATIONS.
+pub(crate) fn read_max_iterations(value: f32) -> Result<u32, String> {
+    let v = value.round();
+    if value.is_finite() && (1.0..=MAX_ITERATIONS as f32).contains(&v) {
+        Ok(v as u32)
+    } else {
+        Err(format!("Max Iterations must be 1 to {MAX_ITERATIONS}, not {value}"))
+    }
+}
+
+/// When the solves stop: Auto at 0 or below converges within Max Iterations;
+/// a positive value runs exactly that many, whatever Max Iterations says,
+/// refused past MAX_ITERATIONS.
+fn read_iterations(value: f32, max_iterations: u32) -> Result<Stop, String> {
+    if !value.is_finite() {
+        return Err(format!("Iterations must be a number, not {value}"));
+    }
     match value.round() {
-        v if v <= 0.0 => Ok(Stop::Converged(AUTO_PRESSURE_ITERATIONS)),
+        v if v <= 0.0 => Ok(Stop::Converged(max_iterations)),
         v if v > MAX_ITERATIONS as f32 => Err(format!("Iterations {v} is past the solver's {MAX_ITERATIONS}")),
         v => Ok(Stop::Fixed(v as u32)),
     }
@@ -2396,7 +2410,9 @@ impl Primitive for GpuFlipStep {
         };
         let body_count = ctx.scalar_or_param("body_count", 0.0).round().clamp(0.0, MAX_FLUID_ROLES as f32) as i32;
         let rows = ctx.scalar_or_param("rows", 0.0).round().max(0.0) as i32;
-        let pressure = match read_iterations(ctx.scalar_or_param("iterations", 0.0)) {
+        let pressure = match read_max_iterations(ctx.scalar_or_param("max_iterations", MAX_ITERATIONS as f32))
+            .and_then(|max| read_iterations(ctx.scalar_or_param("iterations", 0.0), max))
+        {
             Ok(iterations) => iterations,
             Err(error) => {
                 ctx.error(format!("{NAME}: {error}"));
@@ -2770,6 +2786,28 @@ impl Primitive for GpuFlipStep {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Max Iterations rounds and is refused outside 1..=MAX_ITERATIONS or
+    /// non-finite; Auto converges within it; a fixed count runs as saved even
+    /// past it.
+    #[test]
+    fn max_iterations_bounds_auto_only() {
+        assert_eq!(MAX_ITERATIONS, 900);
+        assert_eq!(read_max_iterations(900.0), Ok(900));
+        assert_eq!(read_max_iterations(1.0), Ok(1));
+        assert_eq!(read_max_iterations(37.4), Ok(37));
+        assert_eq!(read_max_iterations(0.6), Ok(1));
+        for bad in [0.0, 0.4, -3.0, 900.6, 1000.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let refused = read_max_iterations(bad).expect_err("refused");
+            assert!(refused.starts_with("Max Iterations must be 1 to 900"), "{refused}");
+        }
+        assert_eq!(read_iterations(0.0, 300), Ok(Stop::Converged(300)));
+        assert_eq!(read_iterations(-2.0, 900), Ok(Stop::Converged(900)));
+        assert_eq!(read_iterations(24.0, 10), Ok(Stop::Fixed(24)), "a fixed count ignores Max Iterations");
+        assert_eq!(read_iterations(900.0, 1), Ok(Stop::Fixed(900)));
+        assert!(read_iterations(901.0, 900).is_err());
+        assert!(read_iterations(f32::NAN, 900).is_err());
+    }
 
     #[test]
     fn one_step_bound_requires_a_whole_reference_interval() {
