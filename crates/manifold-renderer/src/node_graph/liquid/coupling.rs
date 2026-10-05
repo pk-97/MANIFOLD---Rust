@@ -122,6 +122,7 @@ impl DomainWalls {
                 shape: 1,
                 kind: 0,
                 bounce: 0.0,
+                wall: true,
                 ..RigidBody::default()
             });
         }
@@ -522,6 +523,83 @@ mod tests {
         let half_edge = 0.4 / 3f32.sqrt();
         assert!((row.position_inv_mass[1] - half_edge).abs() < 0.02, "rest height {}", row.position_inv_mass[1]);
         assert!(row.linear_velocity[1].abs() < 0.05, "still falling: {}", row.linear_velocity[1]);
+    }
+
+    /// How far body 0 of `scene` moves along x in 2 s under gravity tilted by
+    /// a sideways part s·g, with the downward part scaled by `1 + load` to
+    /// press it harder. Tilted gravity pushes every substep; a per-tick
+    /// impulse would creep the body a little each tick below the Coulomb
+    /// limit and hide it.
+    fn slide_distance(scene: &RigidSceneInputs, s: f32, load: f32) -> f32 {
+        let mut scene = scene.clone();
+        scene.gravity = [s * 9.81, -(1.0 + load) * 9.81, 0.0];
+        let walls = DomainWalls { min: [-1.2, 0.0, -1.2], size: [2.4; 3], closed: 0b11_1111 };
+        let colliders = RigidImpulseTargets { bodies: 1, copies: false };
+        let mut owner = LiquidRigidOwner::new(&scene, walls, colliders, 1, None).expect("owner");
+        let mut start = 0.0;
+        for tick in 0..(2.5 / TICK) as u64 {
+            if tick == (0.5 / TICK) as u64 {
+                start = owner.rows()[0].position_inv_mass[0];
+            }
+            owner.set_pending(PendingTick { tick, stamp: 0, interval: manifold_physics::stepping::StepInterval::new(Seconds(tick as f64 * TICK), Seconds((tick + 1) as f64 * TICK)), offline: true });
+            owner.settle_ready(Some(&scene), |_| true, no_reaction).unwrap();
+        }
+        owner.rows()[0].position_inv_mass[0] - start
+    }
+
+    /// The smallest sideways push s, swept from 0 past every expected
+    /// threshold in steps of 0.01, at which body 0 slides more than 5 cm.
+    fn slide_threshold(scene: &RigidSceneInputs, load: f32) -> Option<f32> {
+        (0..=150).map(|step| step as f32 * 0.01).find(|&s| slide_distance(scene, s, load) > 0.05)
+    }
+
+    /// The tank floor takes the body's own friction: a 32 kg cube of μ =
+    /// 0.25 starts sliding at a push of μ·m·g, not √(0.5·μ)·m·g ≈ 0.35 (the
+    /// geometric mean with the slab's default 0.5). Pressing it down with an
+    /// extra g of weight doubles the limit: the normal load sets the cone.
+    #[test]
+    fn domain_floor_slide_threshold_is_the_body_friction() {
+        let mut scene = scene();
+        let body = scene.bodies[0].as_mut().unwrap();
+        body.transform.pos[1] = 0.25;
+        body.friction = 0.25;
+        let free = slide_threshold(&scene, 0.0).expect("never slid");
+        assert!((free - 0.25).abs() < 0.05, "slide threshold {free}, expected μ = 0.25");
+        let loaded = slide_threshold(&scene, 1.0).expect("never slid under load");
+        assert!((loaded - 0.5).abs() < 0.1, "loaded slide threshold {loaded}, expected 2μ = 0.5");
+    }
+
+    /// Two authored bodies keep Box3D's geometric mean: a μ = 0.1 cube on a
+    /// fixed authored platform of μ = 0.9 slides at √0.09 = 0.3, not 0.1.
+    #[test]
+    fn authored_pair_keeps_the_geometric_mean() {
+        let mut scene = scene();
+        let body = scene.bodies[0].as_mut().unwrap();
+        body.friction = 0.1;
+        body.transform.pos[1] = 0.6;
+        scene.bodies[1] = Some(RigidBody {
+            transform: Transform { pos: [0.0, 0.2, 0.0], scale: [1.0, 0.1, 1.0], ..Transform::default() },
+            kind: 0,
+            friction: 0.9,
+            bounce: 0.0,
+            ..RigidBody::default()
+        });
+        let first = slide_threshold(&scene, 0.0).expect("never slid");
+        assert!((first - 0.3).abs() < 0.05, "authored-pair slide threshold {first}, expected √(0.1·0.9) = 0.3");
+    }
+
+    /// The wall tag is runtime-only: a saved body carries no field for it,
+    /// old data loads untagged, and a round trip is unchanged.
+    #[test]
+    fn wall_tag_is_never_serialized() {
+        let body = RigidBody { wall: true, ..RigidBody::default() };
+        let json = serde_json::to_value(&body).unwrap();
+        assert!(json.get("wall").is_none(), "wall leaked into saved data: {json}");
+        let plain = RigidBody::default();
+        let saved = serde_json::to_string(&plain).unwrap();
+        let loaded: RigidBody = serde_json::from_str(&saved).unwrap();
+        assert_eq!(loaded, plain);
+        assert!(!loaded.wall);
     }
 
     fn scene() -> RigidSceneInputs {
