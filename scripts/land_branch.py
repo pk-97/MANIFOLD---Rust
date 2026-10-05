@@ -10,7 +10,7 @@ The JUDGMENT stays with the lead: the review, the named-red call (pass
 --named-red BUG-id --reason "..."), the design-doc status edits. This
 script is the fixed git+gate sequence only — every step exits on failure
 with the step named, and push happens only after a green gate (or an
-explicit named red).
+explicit named red over a gate that ran every check).
 
 Usage:
   scripts/land_branch.py <branch> --worktree <path> --message '<merge msg>' \
@@ -27,6 +27,8 @@ import sys
 from datetime import datetime, timezone
 import time
 from pathlib import Path
+
+from landing_gate import CHECKS_RED
 
 MAIN = Path("/Users/peterkiemann/MANIFOLD - Rust")
 
@@ -125,6 +127,11 @@ def main():
         if a.skip_gpu or not (a.named_red and a.reason):
             print("[land] gate red and no --named-red/--reason given — stopping. "
                   "Review the failure; land over it only with an explicit named red.", file=sys.stderr)
+            sys.exit(1)
+        if gate_returncode != CHECKS_RED:
+            print(f"[land] the gate exited {gate_returncode} without running every check (a refusal, "
+                  "a crash or a moved tree); a named red covers only checks that ran red — stopping.",
+                  file=sys.stderr)
             sys.exit(1)
         step("no-gate verdict", ["scripts/gate_runner.py", "no-gate", "--task", a.named_red,
                                  "--reason", f"{a.reason} {a.lead}"], MAIN)

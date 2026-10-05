@@ -279,9 +279,10 @@ class CacheTests(unittest.TestCase):
             self.assertEqual(build.call_count, 1)
             self.assertEqual(run.call_count, 1)
 
-    def run_landing(self, failed=None):
+    def run_landing(self, failed=None, keep_going=False):
         calls = []
         real_run = landing.run_cmd
+        argv = ['landing_gate.py', '--repo', str(self.repo)] + (['--keep-going'] if keep_going else [])
 
         def run(command, cwd, timeout, live_log=None):
             if command[0] == 'git':
@@ -293,7 +294,7 @@ class CacheTests(unittest.TestCase):
             return (1 if failed and command[:2] == ['cargo', failed] else 0), '', '', 0.01
 
         with contextlib.ExitStack() as stack:
-            stack.enter_context(patch.object(sys, 'argv', ['landing_gate.py', '--repo', str(self.repo)]))
+            stack.enter_context(patch.object(sys, 'argv', argv))
             stack.enter_context(patch.object(landing, 'MAIN_CHECKOUT', self.repo))
             stack.enter_context(patch.object(landing, 'run_cmd', side_effect=run))
             stack.enter_context(patch.object(landing, 'reverse_deps', return_value=[]))
@@ -324,6 +325,30 @@ class CacheTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual(calls, [['cargo', 'deny', 'check', 'bans']])
         self.assertIn('[REUSED] design-status', self.output.getvalue())
+
+    def test_only_a_gate_that_ran_every_check_exits_checks_red(self):
+        self.assertEqual(self.run_landing(failed='deny', keep_going=True)[0], landing.CHECKS_RED)
+        self.assertEqual(self.run_landing(failed='deny')[0], 1, 'an early stop skipped later checks')
+        self.write('scratch/untracked.txt', 'build output\n')
+        code, calls, _, _ = self.run_landing(keep_going=True)
+        self.assertEqual((code, calls), (1, []), 'a refused gate ran nothing')
+
+    def test_named_red_lands_only_over_a_gate_that_ran_every_check(self):
+        argv = ['land_branch.py', 'work', '--worktree', str(self.repo), '--message', 'landing',
+                '--named-red', 'BUG-cache', '--reason', 'reviewed red']
+        for gate_code, lands in [(1, False), (2, False), (landing.CHECKS_RED, True)]:
+            with patch.object(sys, 'argv', argv), \
+                    patch.object(land_branch, 'MAIN', self.repo), \
+                    patch.object(land_branch, 'step', return_value=MagicMock(stdout='tip\n', returncode=0)), \
+                    patch.object(land_branch, 'run_landing_gate', return_value=gate_code), \
+                    patch.object(land_branch, 'merge_gated_tree') as merge, \
+                    contextlib.redirect_stderr(io.StringIO()):
+                if lands:
+                    land_branch.main()
+                else:
+                    with self.assertRaises(SystemExit):
+                        land_branch.main()
+            self.assertEqual(merge.called, lands, f'gate exit {gate_code}')
 
     def test_gate_crate_edit_keeps_other_crate_and_gpu_passes(self):
         self.assertEqual(self.run_landing()[0], 0)
