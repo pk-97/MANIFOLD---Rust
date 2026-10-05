@@ -1531,24 +1531,16 @@ mod native_reference {
 
     /// Wall and contact parity (BUG-g75v.17 (GPU FLIP wall and collision
     /// motion parity)): flat wall, two- and three-face corners, a body flush
-    /// with a wall, and water leaving a wall, each seeded on GPU from the
-    /// native engine's captured particles and stepped 60 frames at 16³.
-    /// Prints per-checkpoint native and GPU metrics; asserts only that both
-    /// engines stay finite and inside the tank.
-    ///
-    /// Measured 2026-10-05 at 16³, frame 60 (native vs GPU): particle counts
-    /// equal in every case and no GPU caps, refusals or unconverged solves;
-    /// both hold water 0.10h off every wall. Water stopped by a body agrees:
-    /// the tank-spanning body slab's run-up is 1.62 vs 1.47 m, mean x within
-    /// 0.02 m, rebound vx -0.58 vs -0.69 m/s; the body flush with a wall,
-    /// run-up 1.01 vs 1.19 m. The same impact on the tank wall does not:
-    /// run-up 1.24 vs 2.19 m, the two-face corner's 1.43 vs 3.68 m, until
-    /// liquid φ extended into the walls without bodies too (BUG-9p3ms (tank
-    /// walls give far more run-up than native)), and the fluid extension
-    /// held its lattice's border rows done as the engine's does: now every
-    /// wall-only case and the flush body match native to the printed 1e-3
-    /// at frames 10 and 60. The tank-spanning body slab does not: run-up
-    /// 1.62 vs 1.43 m, near-wall water 602 vs 468.
+    /// with a wall, water leaving a wall, and a tank-spanning body slab, each
+    /// seeded on GPU from the native engine's captured particles and stepped
+    /// 60 frames at 16³. Every 10 frames it compares aggregate guards, not
+    /// particle-by-particle parity: count, mean position and velocity, RMS
+    /// speed, the contact region's count and highest particle, the 99th
+    /// height percentile, the smallest wall gap and the deepest body
+    /// penetration. Means can hide opposite local errors; the contact
+    /// region's count and run-up are the local checks. The slab only prints
+    /// (BUG-hgcxx (GPU FLIP body slab spanning the tank runs up less than
+    /// native)).
     #[cfg(feature = "water-race-probes")]
     #[test]
     fn gpu_flip_native_wall_contact_reference() {
@@ -1662,16 +1654,18 @@ mod native_reference {
                     println!("{} gpu    frame {frame}: {m:.3?}", case.name);
                     println!("{} delta  frame {frame}: {delta:.3?}", case.name);
                     assert!(m[11] > -0.01, "{}: GPU water left the tank by {:.3}h", case.name, -m[11]);
-                    // Measured agreement is 1e-3 in the tank-wall cases and
-                    // the flush body (2 near-wall particles); these bounds
-                    // are about ten times that. The single deepest particle
-                    // in the flush body differs by up to 0.035h. The slab is
-                    // BUG-hgcxx (GPU FLIP body slab spanning the tank runs up
-                    // less than native).
+                    // The GPU run is bit-reproducible (three runs in one
+                    // job, 2026-10-06), so these bounds sit over measured
+                    // differences, not noise. Means, RMS speed, run-up and
+                    // y99 differ by at most 3e-3: bound 0.01. The contact
+                    // count differs by 2 of 212 in the flush body: bound
+                    // 2% of the native contact count plus 2. The deepest
+                    // particle in the flush body differs by 0.035h at
+                    // frame 40 (0.053 vs 0.088h): bound 0.05h.
                     if case.name != "body_slab_wall" {
-                        // Count, positions (m), velocities (m/s), near count,
-                        // run-up and y99 (m), wall gap and body depth (h).
-                        let tolerance = [0.0, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.005 * r[0], 0.01, 0.01, 0.02, 0.05];
+                        // Count, positions (m), velocities (m/s), contact
+                        // count, run-up and y99 (m), wall gap and depth (h).
+                        let tolerance = [0.0, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.02 * r[8] + 2.0, 0.01, 0.01, 0.02, 0.05];
                         for a in 0..13 {
                             assert!(delta[a].abs() <= tolerance[a], "{} frame {frame}: metric {a} GPU {} vs native {}", case.name, m[a], r[a]);
                         }
