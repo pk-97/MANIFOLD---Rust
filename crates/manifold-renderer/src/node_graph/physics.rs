@@ -150,11 +150,14 @@ impl Drop for PhysicsHistoryDrainScope {
     }
 }
 
+pub use manifold_physics::clock::LiveLoad;
+
 /// Select live or deterministic export execution and retain the project cadence.
 #[must_use]
 pub struct PhysicsStepScope {
     previous_interval: f64,
     previous: Option<std::time::Duration>,
+    _live_load: manifold_physics::clock::LiveLoadScope,
     _thread_bound: std::marker::PhantomData<std::rc::Rc<()>>,
 }
 
@@ -165,20 +168,31 @@ impl PhysicsStepScope {
 
     /// Pass the shared project physics settings to every consumer.
     pub fn for_settings(export_mode: bool, settings: manifold_physics::PhysicsSettings) -> Self {
+        Self::for_frame(export_mode, settings, None)
+    }
+
+    /// [`Self::for_settings`] plus the previous live frame's load for every
+    /// live clock; export ignores it.
+    pub fn for_frame(export_mode: bool, settings: manifold_physics::PhysicsSettings, load: Option<LiveLoad>) -> Self {
         let interval = settings.sim_rate.interval();
-        let scope = Self::with_preview_budget(export_mode, std::time::Duration::from_secs_f64(interval));
+        let scope = Self::scoped(export_mode, std::time::Duration::from_secs_f64(interval), load);
         SIMULATION_INTERVAL.set(interval);
         scope
     }
 
     /// Retain the preview-scope API; live intervals always consume their full span.
     pub fn with_preview_budget(export_mode: bool, budget: std::time::Duration) -> Self {
+        Self::scoped(export_mode, budget, None)
+    }
+
+    fn scoped(export_mode: bool, budget: std::time::Duration, load: Option<LiveLoad>) -> Self {
         let previous_interval = SIMULATION_INTERVAL.get();
         let previous =
             PREVIEW_STEP_BUDGET.with(|current| current.replace((!export_mode).then_some(budget)));
         Self {
             previous,
             previous_interval,
+            _live_load: manifold_physics::clock::live_load_scope(load.filter(|_| !export_mode)),
             _thread_bound: std::marker::PhantomData,
         }
     }

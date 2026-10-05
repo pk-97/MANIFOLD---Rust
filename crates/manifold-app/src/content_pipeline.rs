@@ -900,6 +900,9 @@ pub struct ContentPipeline {
     /// Non-zero means the GPU was still working when the content thread woke up.
     /// Exposed unconditionally for the performance overlay.
     last_fence_wait_ms: f64,
+    /// The last live `render_content` call's wall time in milliseconds; with
+    /// the fence wait, the load that caps live physics intervals.
+    last_render_work_ms: f64,
     /// SCENE_MODIFIER_RT_DESIGN.md section 5.4 (P5): the merged validity of
     /// the last rendered frame — reset at the top of `render_content`, then
     /// merged from the generator wrapper before it drops and the compositor
@@ -1191,6 +1194,7 @@ impl ContentPipeline {
             #[cfg(target_os = "macos")]
             surface_signal_values: [0; crate::shared_texture::SURFACE_COUNT],
             last_fence_wait_ms: 0.0,
+            last_render_work_ms: 0.0,
             last_frame_status: manifold_renderer::frame_status::FrameRenderStatus::Complete,
             last_rt_updates: Default::default(),
             last_rt_dispatches: 0,
@@ -1834,6 +1838,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         self.last_fence_wait_ms = ms;
     }
 
+    /// Set the last live render's wall time (called from content thread).
+    pub fn set_last_render_work_ms(&mut self, ms: f64) {
+        self.last_render_work_ms = ms;
+    }
+
     /// Current output resolution (post-upscale).
     pub fn output_dimensions(&self) -> (u32, u32) {
         (self.output_w, self.output_h)
@@ -2115,12 +2124,18 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
         audio_visuals: Option<&manifold_core::audio_visual::AudioVisualRegistry>,
     ) {
         // Prioritize accurate physics work before drawing, retaining any debt.
-        let physics = engine.project().map_or_else(
-            manifold_core::settings::PhysicsSettings::default,
-            |project| project.settings.physics,
+        let (physics, fps) = engine.project().map_or_else(
+            || (manifold_core::settings::PhysicsSettings::default(), 60.0),
+            |project| (project.settings.physics, project.settings.frame_rate),
         );
-        let _physics_scope = manifold_renderer::node_graph::physics::PhysicsStepScope::for_settings(
-            export_mode, physics,
+        // Whether the previous frame was late decides if live physics may run
+        // a second interval this frame.
+        let load = manifold_renderer::node_graph::physics::LiveLoad {
+            previous: manifold_core::Seconds((self.last_render_work_ms + self.last_fence_wait_ms) / 1000.0),
+            budget: manifold_core::Seconds(1.0 / f64::from(fps.max(1.0))),
+        };
+        let _physics_scope = manifold_renderer::node_graph::physics::PhysicsStepScope::for_frame(
+            export_mode, physics, Some(load),
         );
         let _t_frame = std::time::Instant::now();
 
