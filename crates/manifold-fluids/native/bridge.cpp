@@ -2412,6 +2412,7 @@ extern "C" const char *manifold_fluids_last_error(void) {
 
 #ifdef MANIFOLD_WHITEWATER_ORACLE
 #include "particlelevelset.h"
+#include "particlesheeter.h"
 
 extern "C" int manifold_fluids_oracle_curvature(const float *phi, uint32_t isize, uint32_t jsize,
                                                 uint32_t ksize, double dx,
@@ -2441,6 +2442,106 @@ extern "C" int manifold_fluids_oracle_curvature(const float *phi, uint32_t isize
         levelset.calculateCurvatureGrid(surface_phi, curvature);
         std::memcpy(surface_phi_out, surface_phi.getRawArray(), count * sizeof(float));
         std::memcpy(curvature_out, curvature.getRawArray(), count * sizeof(float));
+    });
+}
+
+// The thread count is process-global and unsynchronised (threadutils.cpp),
+// and the threaded sheeter is not input-ordered (its phase-2 count and seed
+// mask race), so this call pins it to 1 and restores it. That is safe only
+// because every bridge entry, this one included, holds NATIVE_MUTEX for its
+// whole call (`guarded`, or a direct lock), and the engine joins every thread
+// it starts before the call returns (asynchronous meshing is off): no native
+// code reads or writes the count while the oracle holds it.
+extern "C" int manifold_fluids_oracle_sheet_particles(const float *positions, size_t count,
+                                                     const float *phi, uint32_t isize,
+                                                     uint32_t jsize, uint32_t ksize, double dx,
+                                                     float fill_threshold, float *seeds_out,
+                                                     size_t capacity, size_t *seed_count_out) {
+    return guarded([&] {
+        if (seed_count_out == nullptr || phi == nullptr || (count != 0 && positions == nullptr) ||
+            (capacity != 0 && seeds_out == nullptr)) {
+            throw std::invalid_argument("oracle sheet pointers must be non-null");
+        }
+        *seed_count_out = 0;
+        const uint32_t largest = static_cast<uint32_t>(std::numeric_limits<int>::max() / 2);
+        if (isize < 1 || jsize < 1 || ksize < 1 || isize > largest || jsize > largest ||
+            ksize > largest) {
+            throw std::invalid_argument("oracle sheet grid needs 1 or more cells a side");
+        }
+        if (!std::isfinite(dx) || !(dx > 0.0)) {
+            throw std::invalid_argument("oracle sheet cell size must be finite and positive");
+        }
+        if (!std::isfinite(fill_threshold) || fill_threshold < -1.0f || fill_threshold > 0.0f) {
+            throw std::invalid_argument("oracle sheet fill threshold must be in [-1, 0]");
+        }
+        if (count > static_cast<size_t>(std::numeric_limits<int>::max())) {
+            throw std::invalid_argument("oracle sheet particle count is too large");
+        }
+        const size_t cells = checked_product(
+            checked_product(isize, jsize, "oracle sheet grid is too large"), ksize,
+            "oracle sheet grid is too large");
+        for (size_t index = 0; index < cells; ++index) {
+            if (!std::isfinite(phi[index])) {
+                throw std::invalid_argument("oracle sheet level set is not finite");
+            }
+        }
+        const int i = static_cast<int>(isize);
+        const int j = static_cast<int>(jsize);
+        const int k = static_cast<int>(ksize);
+        ParticleSystem markers;
+        markers.addAttributeVector3("POSITION");
+        std::vector<vmath::vec3> *marker_positions = markers.getAttributeValuesVector3("POSITION");
+        marker_positions->reserve(count);
+        for (size_t index = 0; index < count; ++index) {
+            const float *p = positions + 3 * index;
+            const vmath::vec3 position(p[0], p[1], p[2]);
+            // The sheeter indexes its grids by position unchecked.
+            if (!finite3(p) || !Grid3d::isPositionInGrid(position, dx, i, j, k)) {
+                throw std::invalid_argument("oracle sheet position is not inside the grid");
+            }
+            marker_positions->push_back(position);
+        }
+        markers.update();
+        if (count == 0) {
+            return;
+        }
+        Array3d<float> level(i, j, k, 0.0f);
+        std::memcpy(level.getRawArray(), phi, cells * sizeof(float));
+
+        struct ThreadCountGuard {
+            int previous = ThreadUtils::getMaxThreadCount();
+            ThreadCountGuard() { ThreadUtils::setMaxThreadCount(1); }
+            ~ThreadCountGuard() { ThreadUtils::setMaxThreadCount(previous); }
+        } thread_count;
+
+        ParticleSheeterParameters params;
+        params.particles = &markers;
+        params.fluidSurfaceLevelSet = &level;
+        params.isize = i;
+        params.jsize = j;
+        params.ksize = k;
+        params.dx = dx;
+        params.sheetFillThreshold = fill_threshold;
+        std::vector<vmath::vec3> seeds;
+        ParticleSheeter sheeter;
+        sheeter.generateSheetParticles(params, seeds);
+        const size_t written = std::min(capacity, seeds.size());
+        for (size_t index = 0; index < written; ++index) {
+            seeds_out[3 * index] = seeds[index].x;
+            seeds_out[3 * index + 1] = seeds[index].y;
+            seeds_out[3 * index + 2] = seeds[index].z;
+        }
+        *seed_count_out = seeds.size();
+    });
+}
+
+// The process-wide FLIP thread count, read under the bridge lock.
+extern "C" int manifold_fluids_oracle_thread_count(int *count_out) {
+    return guarded([&] {
+        if (count_out == nullptr) {
+            throw std::invalid_argument("oracle thread count pointer must be non-null");
+        }
+        *count_out = ThreadUtils::getMaxThreadCount();
     });
 }
 

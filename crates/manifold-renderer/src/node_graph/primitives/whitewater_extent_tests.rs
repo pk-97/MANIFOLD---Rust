@@ -557,8 +557,9 @@ fn whitewater_step_extents_at_64() {
     // fourth population. The former 256 MiB assertion was a budget for the
     // incomplete three-emitter port, not a limit on FLIP's emitter features.
     // Added storage, derived independently: padded surface phi, three
-    // 64³ reinitialisation arrays, ceil(64/6)³ block flags and four state words.
-    let engine_distance = 4 * 70u64.pow(3) + 12 * 64u64.pow(3) + 4 * 11u64.pow(3) + 16;
+    // 64³ reinitialisation arrays, ceil(64/6)³ block flags, four state words, the sweep's indirect grid
+    // (16 bytes) and a zero clock plan (48 bytes).
+    let engine_distance = 4 * 70u64.pow(3) + 12 * 64u64.pow(3) + 4 * 11u64.pow(3) + 16 + 16 + 48;
     assert_eq!(held, 282_078_580 + engine_distance, "all emitter and engine-distance storage is accounted for");
 
     let refusals = [

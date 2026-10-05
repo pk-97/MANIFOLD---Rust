@@ -165,6 +165,10 @@ NARROW_ROWS = [
        "interpolate_particle_frames::gpu_tests::", "push_out_of_solid::gpu_tests::",
        "mix_arrays::gpu_tests::", "gpu_flip_inflow_emits_at_empty_sites_into_free_slots",
        "gpu_flip_narrow_band_publication_repeats_failed_ticks"], [])),
+    # Standalone sheeting stage, not yet wired into the step.
+    ((RENDERER_SRC + "node_graph/primitives/gpu_flip_sheeting",
+      RENDERER_SRC + "node_graph/primitives/shaders/gpu_flip_sheeting.wgsl"),
+     (["gpu_flip_sheeting_tests::"], [])),
     ((RENDERER_SRC + "node_graph/primitives/gpu_flip_clock.rs",
       RENDERER_SRC + "node_graph/primitives/shaders/gpu_flip_clock.wgsl"),
      (["gpu_flip_clock::gpu_tests::"], [])),
