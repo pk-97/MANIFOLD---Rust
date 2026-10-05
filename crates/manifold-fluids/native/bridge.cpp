@@ -1715,6 +1715,7 @@ extern "C" int manifold_fluids_world_capture_particle_frame(
     });
 }
 
+#ifdef MANIFOLD_FACE_ORACLE
 // Test diagnostic: the last step's projected vertical (V) face velocities,
 // i + isize·(j + (jsize + 1)·k), domain-scaled as particle velocities are.
 // Only probe tests call this entry.
@@ -1744,6 +1745,7 @@ extern "C" int manifold_fluids_world_capture_face_v(void *world, float *out, siz
         }
     });
 }
+#endif
 
 // Test diagnostic: the captured surface frame's prepared solid, in the
 // particle frame's lattice order. Only Rust tests call this entry.

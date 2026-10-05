@@ -634,20 +634,26 @@ fn gpu_flip_open_face_drains_the_pool() {
 }
 
 /// The largest |v| on a vertical face between two water cells at or below
-/// `deep`: `face_v(i, j, k)` is the face under cell (i, j, k), `water` the
-/// step's water mask from its entering particles.
-fn inner_vertical_face_speed(face_v: impl Fn(usize, usize, usize) -> f32, water: &[f32], n: usize, deep: usize) -> f64 {
+/// `deep`, and how many faces it read: `face_v(i, j, k)` is the face under
+/// cell (i, j, k), `water` the step's water mask from its entering
+/// particles. Panics on a non-finite face, which a max would skip.
+fn inner_vertical_face_speed(face_v: impl Fn(usize, usize, usize) -> f32, water: &[f32], n: usize, deep: usize) -> (f64, Vec<u32>) {
     let mut worst = 0.0_f64;
+    let mut selected = Vec::new();
     for k in 0..n {
         for j in 1..=deep.min(n - 1) {
             for i in 0..n {
                 if water[i + n * ((j - 1) + n * k)] > 0.5 && water[i + n * (j + n * k)] > 0.5 {
-                    worst = worst.max(f64::from(face_v(i, j, k)).abs());
+                    let v = face_v(i, j, k);
+                    assert!(v.is_finite(), "inner vertical face ({i}, {j}, {k}) is {v}");
+                    worst = worst.max(f64::from(v).abs());
+                    selected.push((i + n * (j + n * k)) as u32);
                 }
             }
         }
     }
-    worst
+    assert!(!selected.is_empty(), "no inner vertical face under the water");
+    (worst, selected)
 }
 
 /// Cells wholly under the seeded top, one layer of margin below it.
@@ -682,11 +688,12 @@ fn gpu_flip_hydrostatic_column_rests() {
             let p = [idx % m, (idx / m) % m, idx / (m * m)];
             for a in 0..3 {
                 if (0..3).all(|b| b == a || p[b] < n) && (p[a] == 0 || p[a] == n) {
+                    assert!(face.velocity[a].is_finite(), "frame {frame}: wall face {p:?}/{a} is not finite");
                     wall = wall.max(f64::from(face.velocity[a]).abs());
                 }
             }
         }
-        let worst = inner_vertical_face_speed(|i, j, k| faces[i + m * (j + m * k)].velocity[1], &run.water(), n, deep);
+        let (worst, _) = inner_vertical_face_speed(|i, j, k| faces[i + m * (j + m * k)].velocity[1], &run.water(), n, deep);
         let stats = particle_stats(&run.particles());
         println!(
             "GPU FLIP hydrostatic {n}³ frame {frame:3}: wall faces max |v| {wall:.1e}, inner vertical faces max |v| {worst:.2e} m/s = {:.3}% of g·dt, fastest particle {:.2e} m/s",
@@ -1524,6 +1531,8 @@ mod native_reference {
         assert!(buffer.size as usize >= std::mem::size_of_val(common.as_slice()));
         // SAFETY: the fill frame completed; no GPU command is outstanding.
         unsafe { buffer.write(0, bytemuck::cast_slice(&common)); }
+        let stats = particle_stats(&run.particles());
+        assert_eq!((stats.live, stats.bad), (seed.len(), 0), "frame 0: the GPU holds the whole finite native seed");
     }
 
     /// The 64³ still pool run by the native engine and by the GPU from the
@@ -1547,9 +1556,9 @@ mod native_reference {
             let clock: Vec<u32> = run.read(STEP_NODE, "clock_status", 8);
             assert_eq!((clock[6], clock[4], clock[5]), (1, 0, 0), "frame {frame}: GPU one substep, no cap or invalid input");
             assert_eq!(run.liquid_stats().nonfinite, 0);
+            let (a, b) = (particle_stats(&capture(&mut native, offset)), particle_stats(&run.particles()));
+            assert_eq!((a.live, b.live, a.bad, b.bad), (seed.len(), seed.len(), 0, 0), "frame {frame}: counts");
             if frame % 10 == 9 {
-                let (a, b) = (particle_stats(&capture(&mut native, offset)), particle_stats(&run.particles()));
-                assert_eq!((a.live, b.live, a.bad, b.bad), (seed.len(), seed.len(), 0, 0), "frame {frame}: counts");
                 println!("still pool 64³ frame {frame:3}: fastest native {:.3e} gpu {:.3e} m/s", a.fastest, b.fastest);
                 if frame >= 59 {
                     native_peak = native_peak.max(a.fastest);
@@ -1587,12 +1596,20 @@ mod native_reference {
             run.frame();
             let clock: Vec<u32> = run.read(STEP_NODE, "clock_status", 8);
             assert_eq!((clock[6], clock[4], clock[5]), (1, 0, 0), "frame {frame}: GPU one substep, no cap or invalid input");
+            let counted = run.liquid_stats();
+            assert_eq!((counted.live as usize, counted.nonfinite), (seed.len(), 0), "frame {frame}: GPU count or finiteness");
             let Some(entering) = entering else { continue };
+            let (a, b) = (particle_stats(&entering), particle_stats(&run.entering));
+            assert_eq!((a.live, b.live, a.bad, b.bad), (seed.len(), seed.len(), 0, 0), "frame {frame}: entering counts");
             let dims = native.capture_face_v(&mut faces_v).expect("native faces");
             assert_eq!(dims, [n as u32, m as u32, n as u32], "native faces on the GPU solver grid");
-            let theirs = inner_vertical_face_speed(|i, j, k| faces_v[i + n * (j + m * k)], &run.water_of(&entering), n, deep) / g_dt;
+            assert!(faces_v.iter().all(|v| v.is_finite()), "frame {frame}: a native face is not finite");
             let faces = run.faces();
-            let ours = inner_vertical_face_speed(|i, j, k| faces[i + m * (j + m * k)].velocity[1], &run.water(), n, deep) / g_dt;
+            assert!(faces.iter().all(|f| f.velocity.iter().all(|v| v.is_finite())), "frame {frame}: a GPU face is not finite");
+            let (theirs, native_faces) = inner_vertical_face_speed(|i, j, k| faces_v[i + n * (j + m * k)], &run.water_of(&entering), n, deep);
+            let (ours, gpu_faces) = inner_vertical_face_speed(|i, j, k| faces[i + m * (j + m * k)].velocity[1], &run.water(), n, deep);
+            assert_eq!(native_faces, gpu_faces, "frame {frame}: the engines' masks select different faces");
+            let (theirs, ours) = (theirs / g_dt, ours / g_dt);
             println!("hydrostatic 64³ frame {frame:3}: inner vertical faces native {:.3}% gpu {:.3}% of g·dt", 100.0 * theirs, 100.0 * ours);
             native_peak = native_peak.max(theirs);
             gap = gap.max((theirs - ours).abs());
