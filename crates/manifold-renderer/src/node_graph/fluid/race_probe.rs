@@ -35,8 +35,8 @@ fn dam_break(resolution: u32, whitewater: bool) -> FluidSettings {
             scale: [1.18, 1.92, 3.5],
             ..Transform::default()
         }),
-        surface_subdivisions: 1,
-        surface: SurfaceOptions { particle_scale: 2.2, smoothing: 0.35, smoothing_iterations: 2 },
+        surface_subdivisions: 0,
+        surface: SurfaceOptions { particle_scale: 3.0, smoothing: 0.5, smoothing_iterations: 2 },
         whitewater: WhitewaterOptions {
             enabled: whitewater,
             max_particles: 100_000,
@@ -177,7 +177,7 @@ fn race(resolution: u32, whitewater: bool, frames: u32) {
     report_breakup(&format!("ENGINE {resolution}³"), &breaks);
     report_motion(&format!("ENGINE {resolution}³"), &motions);
     // Short lines: the tool output around these probes cuts long ones.
-    println!("ENGINE {resolution}³ settings: Detail 1, particle scale 2.2, smoothing 0.35 × 2, substeps 1–6 at CFL 5, whitewater {whitewater}");
+    println!("ENGINE {resolution}³ settings: Detail 0, particle scale 3.0, smoothing 0.5 × 2, substeps 1–6 at CFL 5, whitewater {whitewater}");
     println!(
         "ENGINE {resolution}³ over {frames} frames: {:.1} ms wall median, {:.1} ms reported median, {:.2} substeps mean, {particles} particles",
         median(&wall),

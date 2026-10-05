@@ -54,7 +54,7 @@
         "name": "Surface Detail",
         "min": 0.0,
         "max": 2.0,
-        "defaultValue": 1.0,
+        "defaultValue": 0.0,
         "wholeNumbers": true,
         "isToggle": false,
         "isTrigger": false,
@@ -97,7 +97,7 @@
         "name": "Surface Particle Scale",
         "min": 1.0,
         "max": 4.0,
-        "defaultValue": 2.2,
+        "defaultValue": 3.0,
         "wholeNumbers": false,
         "isToggle": false,
         "isTrigger": false,
@@ -253,7 +253,7 @@
       {
         "id": "surface_detail",
         "label": "Surface Detail",
-        "defaultValue": 1.0,
+        "defaultValue": 0.0,
         "target": {
           "kind": "node",
           "nodeId": "fluid_surface",
@@ -292,7 +292,7 @@
       {
         "id": "surface_particle_scale",
         "label": "Surface Particle Scale",
-        "defaultValue": 2.2,
+        "defaultValue": 3.0,
         "target": {
           "kind": "node",
           "nodeId": "fluid_surface",
@@ -635,7 +635,7 @@
         },
         "surface_subdivisions": {
           "type": "Int",
-          "value": 1
+          "value": 0
         },
         "max_capacity": {
           "type": "Int",
@@ -651,7 +651,7 @@
         },
         "surface_smoothing": {
           "type": "Float",
-          "value": 0.35
+          "value": 0.5
         },
         "surface_smoothing_iterations": {
           "type": "Int",

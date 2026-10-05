@@ -514,7 +514,7 @@
               },
               "particle_scale": {
                 "type": "Float",
-                "value": 2.200000047683716
+                "value": 3.0
               },
               "smoothing": {
                 "type": "Float",
@@ -534,7 +534,7 @@
             "params": {
               "resolution_scale": {
                 "type": "Int",
-                "value": 2
+                "value": 1
               }
             },
             "typeId": "node.particle_volume"
@@ -568,7 +568,7 @@
               },
               "resolution_scale": {
                 "type": "Int",
-                "value": 2
+                "value": 1
               }
             },
             "typeId": "node.volume_surface_mesh"
@@ -638,7 +638,7 @@
             "params": {
               "value": {
                 "type": "Float",
-                "value": 0.3499999940395355
+                "value": 0.5
               }
             },
             "typeId": "node.value"
@@ -668,7 +668,7 @@
             "params": {
               "resolution_scale": {
                 "type": "Int",
-                "value": 2
+                "value": 1
               }
             },
             "typeId": "node.lattice_bricks"
@@ -1854,11 +1854,11 @@
         },
         "mesh_relaxation": {
           "type": "Float",
-          "value": 0.3499999940395355
+          "value": 0.5
         },
         "particle_scale": {
           "type": "Float",
-          "value": 2.200000047683716
+          "value": 3.0
         },
         "smoothing": {
           "type": "Float",
@@ -2688,74 +2688,6 @@
       "typeId": "node.particles_to_copies"
     },
     {
-      "handle": "Studio Floor Mesh",
-      "id": 488,
-      "nodeId": "studio_floor_mesh",
-      "typeId": "node.cube_mesh"
-    },
-    {
-      "handle": "Studio Floor Material",
-      "id": 489,
-      "nodeId": "studio_floor_material",
-      "params": {
-        "ambient": {
-          "type": "Float",
-          "value": 0.0
-        },
-        "color_b": {
-          "type": "Float",
-          "value": 0.006000000052154064
-        },
-        "color_g": {
-          "type": "Float",
-          "value": 0.004000000189989805
-        },
-        "color_r": {
-          "type": "Float",
-          "value": 0.003000000026077032
-        },
-        "metallic": {
-          "type": "Float",
-          "value": 0.0
-        },
-        "roughness": {
-          "type": "Float",
-          "value": 0.6499999761581421
-        }
-      },
-      "typeId": "node.pbr_material"
-    },
-    {
-      "handle": "Studio Floor Transform",
-      "id": 490,
-      "nodeId": "studio_floor_transform",
-      "params": {
-        "pos_y": {
-          "type": "Float",
-          "value": -0.2800000011920929
-        },
-        "scale_x": {
-          "type": "Float",
-          "value": 2000.0
-        },
-        "scale_y": {
-          "type": "Float",
-          "value": 0.20000000298023224
-        },
-        "scale_z": {
-          "type": "Float",
-          "value": 2000.0
-        }
-      },
-      "typeId": "node.transform_3d"
-    },
-    {
-      "handle": "Studio Floor",
-      "id": 491,
-      "nodeId": "studio_floor",
-      "typeId": "node.scene_object"
-    },
-    {
       "id": 495,
       "nodeId": "whitewater_budget",
       "params": {
@@ -3062,7 +2994,7 @@
         "convert": {
           "type": "IntRound"
         },
-        "defaultValue": 1.0,
+        "defaultValue": 0.0,
         "id": "surface_detail",
         "label": "Surface Detail",
         "offset": 1.0,
@@ -3076,7 +3008,7 @@
         "convert": {
           "type": "IntRound"
         },
-        "defaultValue": 1.0,
+        "defaultValue": 0.0,
         "id": "surface_detail",
         "label": "Surface Detail",
         "offset": 1.0,
@@ -3090,7 +3022,7 @@
         "convert": {
           "type": "Float"
         },
-        "defaultValue": 2.200000047683716,
+        "defaultValue": 3.0,
         "id": "surface_particle_scale",
         "label": "Surface Particle Scale",
         "target": {
@@ -3103,7 +3035,7 @@
         "convert": {
           "type": "Float"
         },
-        "defaultValue": 0.3499999940395355,
+        "defaultValue": 0.5,
         "id": "mesh_relaxation",
         "label": "Smoothing Value",
         "target": {
@@ -3169,7 +3101,7 @@
         "convert": {
           "type": "IntRound"
         },
-        "defaultValue": 1.0,
+        "defaultValue": 0.0,
         "id": "surface_detail",
         "label": "Surface Detail",
         "offset": 1.0,
@@ -3287,7 +3219,7 @@
         "wholeNumbers": true
       },
       {
-        "defaultValue": 1.0,
+        "defaultValue": 0.0,
         "formatString": "F0",
         "id": "surface_detail",
         "isToggle": false,
@@ -3315,7 +3247,7 @@
         "wholeNumbers": true
       },
       {
-        "defaultValue": 2.200000047683716,
+        "defaultValue": 3.0,
         "formatString": "F3",
         "id": "surface_particle_scale",
         "isToggle": false,
@@ -3327,7 +3259,7 @@
         "wholeNumbers": false
       },
       {
-        "defaultValue": 0.3499999940395355,
+        "defaultValue": 0.5,
         "formatString": "F2",
         "id": "mesh_relaxation",
         "isToggle": false,
@@ -4636,30 +4568,6 @@
       "fromPort": "copies",
       "toNode": 484,
       "toPort": "instances"
-    },
-    {
-      "fromNode": 488,
-      "fromPort": "vertices",
-      "toNode": 491,
-      "toPort": "vertices"
-    },
-    {
-      "fromNode": 489,
-      "fromPort": "out",
-      "toNode": 491,
-      "toPort": "material"
-    },
-    {
-      "fromNode": 490,
-      "fromPort": "transform",
-      "toNode": 491,
-      "toPort": "transform"
-    },
-    {
-      "fromNode": 491,
-      "fromPort": "object",
-      "toNode": 463,
-      "toPort": "object_6"
     },
     {
       "fromNode": 495,
