@@ -760,3 +760,170 @@ fn fluid_smooth_clamp_dense_fusion_matches_unfused() {
         }
     }
 }
+
+/// Particles for the scatter proofs in a lattice of any size: eight per cell
+/// in a column filling the lower corner, a thin sheet thrown off it, and
+/// loose drops. Without spray the frame is just the column.
+fn scatter_fixture(
+    lattice: &crate::node_graph::primitives::liquid_surface_tests::Lattice,
+    resolution: u32,
+    spray: bool,
+    seed: u64,
+) -> Vec<crate::node_graph::fluid_particles::FluidParticle> {
+    use crate::node_graph::fluid_particles::FluidParticle;
+    let min = lattice.min();
+    let unit = lattice.size[0] / 4.0;
+    let marker = 0.310_175_25 * lattice.cell;
+    let mut state = seed;
+    let mut next = move || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        (state >> 40) as f32 / (1u64 << 24) as f32
+    };
+    let mut particles = Vec::new();
+    let mut push = |p: [f32; 3]| {
+        let id = particles.len() as u32 + 1;
+        particles.push(FluidParticle { position_radius: [p[0], p[1], p[2], marker], velocity: [0.0; 3], id });
+    };
+    for z in 0..(resolution * 2 / 5) * 2 {
+        for y in 0..(resolution * 2 / 5) * 2 {
+            for x in 0..(resolution / 4) * 2 {
+                let at = [x, y, z].map(|i| (i as f32 + 0.5) * 0.5 * lattice.cell);
+                push(std::array::from_fn(|a| min[a] + at[a] + (next() - 0.5) * 0.2 * lattice.cell));
+            }
+        }
+    }
+    if !spray {
+        return particles;
+    }
+    for i in 0..6000 {
+        let t = i as f32 / 6000.0;
+        push([
+            min[0] + unit * (1.2 + 1.5 * t),
+            min[1] + unit * (1.0 + 0.6 * (t * 9.0).sin().abs()),
+            min[2] + unit * (3.6 * next() + 0.2),
+        ]);
+    }
+    // Few enough that empty bricks remain between them at Surface Detail 0.
+    for _ in 0..60 {
+        push(std::array::from_fn(|a| min[a] + unit * 0.05 + next() * (lattice.size[a] - unit * 0.1)));
+    }
+    particles
+}
+
+/// The per-blob scatter marks exactly the bricks the per-brick gather it
+/// replaced marked: a settled block, a sheet thrown off it and stray drops,
+/// sorted and shaped by the shipped nodes, with and without the distance
+/// band, at Surface Detail 0 and 1. Each node instance runs a second frame
+/// with only the block, so a hit word left from the first frame shows up as a
+/// stale brick. The second lattice sits far from the origin, where world
+/// coordinates round coarsely against the node spacing.
+#[test]
+fn fluid_bricks_scatter_mask_is_the_gather_mask() {
+    use crate::node_graph::primitives::liquid_surface_tests::{Lattice, blob_bounds, sort_and_shape};
+
+    let mut h = Harness::new();
+    let resolution = 64u32;
+    let gather = h.device.create_compute_pipeline(
+        include_str!("shaders/lattice_bricks_gather_reference.wgsl"),
+        "mark_bricks",
+        "liquid.bricks.gather_reference",
+    );
+    let lattices = [
+        Lattice { center: [0.0, 0.5, 0.0], size: [4.0, 4.0, 4.0], cell: 4.0 / resolution as f32 },
+        Lattice { center: [1000.0, -1000.0, 1000.0], size: [0.25, 0.25, 0.25], cell: 0.25 / resolution as f32 },
+    ];
+    for lattice in &lattices {
+        let marker = 0.310_175_25 * lattice.cell;
+        let frames: Vec<_> = [true, false].iter().map(|&spray| {
+            let particles = scatter_fixture(lattice, resolution, spray, 0x9e37_79b9_7f4a_7c15);
+            let count = particles.len();
+            let (_, _, _, (_, ranges_slot, blobs_slot)) = sort_and_shape(&mut h, lattice, &particles, count, &[("particle_scale", 3.0)]);
+            (ranges_slot, blobs_slot, blob_bounds(&mut h, blobs_slot))
+        }).collect();
+        let solid_nodes = [resolution + 4; 3];
+        let (solid_slot, _) = h.array::<f32>(&[], solid_nodes.iter().product::<u32>() as usize);
+        let bins = bin_counts(lattice.size, lattice.cell);
+        for scale in [1u32, 2] {
+            for band in [0.0, 3.0 * marker] {
+                let layout = brick_layout(solid_nodes, scale).unwrap();
+                let label = format!("lattice {:?} scale {scale} band {band}", lattice.center);
+                let mut builder = LatticeBricks::new();
+                let mut previous: Option<Vec<u32>> = None;
+                for (frame, &(ranges_slot, blobs_slot, bounds_slot)) in frames.iter().enumerate() {
+                    let (brick_slot, _) = h.array::<u32>(&[], 1);
+                    let (_, errors) = h.run(
+                        &mut builder,
+                        &[("blobs", blobs_slot), ("bounds", bounds_slot), ("cell_ranges", ranges_slot), ("solid", solid_slot)],
+                        &[("bricks", brick_slot)],
+                        &lattice.params(&[
+                            ("nodes_x", solid_nodes[0] as f32),
+                            ("nodes_y", solid_nodes[1] as f32),
+                            ("nodes_z", solid_nodes[2] as f32),
+                            ("resolution_scale", scale as f32),
+                            ("band_extra", band),
+                        ]),
+                    );
+                    assert!(errors.is_empty(), "{label} frame {frame}: {errors:?}");
+                    let scattered = read::<u32>(&h.buffer(brick_slot), layout.words as usize);
+
+                    // The gather reads the same uniform layout; its last word was padding.
+                    let f = f32::to_bits;
+                    let uniforms: Vec<u32> = vec![
+                        f(lattice.center[0]), f(lattice.center[1]), f(lattice.center[2]),
+                        f(lattice.size[0]), f(lattice.size[1]), f(lattice.size[2]), f(lattice.cell),
+                        layout.nodes[0], layout.nodes[1], layout.nodes[2], scale,
+                        bins[0], bins[1], bins[2],
+                        layout.bricks[0], layout.bricks[1], layout.bricks[2], layout.count,
+                        f(band), 0,
+                    ];
+                    let prefix = h.device.create_buffer_shared(u64::from(layout.count.max(4)) * 4);
+                    let gathered = h.device.create_buffer_shared(u64::from(layout.words) * 4);
+                    let blobs = h.buffer(blobs_slot);
+                    let ranges = h.buffer(ranges_slot);
+                    let bounds = h.buffer(bounds_slot);
+                    let mut encoder = h.device.create_encoder("liquid bricks gather oracle");
+                    encoder.dispatch_compute(
+                        &gather,
+                        &[
+                            GpuBinding::Bytes { binding: 0, data: bytemuck::cast_slice(&uniforms) },
+                            GpuBinding::Buffer { binding: 1, buffer: &blobs, offset: 0 },
+                            GpuBinding::Buffer { binding: 2, buffer: &ranges, offset: 0 },
+                            GpuBinding::Buffer { binding: 3, buffer: &prefix, offset: 0 },
+                            GpuBinding::Buffer { binding: 4, buffer: &gathered, offset: 0 },
+                            GpuBinding::Buffer { binding: 5, buffer: &bounds, offset: 0 },
+                        ],
+                        [layout.count.div_ceil(256), 1, 1],
+                        "gather oracle mark",
+                    );
+                    encoder.commit_and_wait_completed();
+                    let gathered = read::<u32>(&gathered, layout.words as usize);
+                    let mask = 8..8 + layout.count as usize;
+                    let interior = |id: u32| {
+                        let b = [id % layout.bricks[0], (id / layout.bricks[0]) % layout.bricks[1], id / (layout.bricks[0] * layout.bricks[1])];
+                        (0..3).all(|a| b[a] > 0 && b[a] + 1 < layout.bricks[a])
+                    };
+                    let active = |words: &[u32]| (0..layout.count).filter(|&id| words[8 + id as usize] == 1).count();
+                    assert_eq!(
+                        scattered[mask.clone()].iter().zip(&gathered[mask.clone()]).position(|(a, b)| a != b),
+                        None,
+                        "{label} frame {frame}: first brick where the scatter ({} active) and the gather ({} active) disagree, of {}",
+                        active(&scattered), active(&gathered), layout.count
+                    );
+                    let interior_active = (0..layout.count).filter(|&id| interior(id) && scattered[8 + id as usize] == 1).count();
+                    assert!(interior_active > 0, "{label} frame {frame}: the fixture must activate interior bricks");
+                    assert!(scattered[mask.clone()].contains(&0), "{label} frame {frame}: the fixture must leave bricks inactive");
+                    if let Some(previous) = &previous {
+                        assert!(
+                            (0..layout.count).any(|id| interior(id) && previous[8 + id as usize] == 1 && scattered[8 + id as usize] == 0),
+                            "{label}: the second frame must retire bricks the first one marked"
+                        );
+                    }
+                    assert_eq!(scattered, compact_brick_words(&scattered[mask], layout.bricks), "{label} frame {frame}: header and compact list");
+                    previous = Some(scattered);
+                }
+            }
+        }
+    }
+}

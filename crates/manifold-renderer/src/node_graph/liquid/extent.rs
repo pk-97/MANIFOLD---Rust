@@ -1090,7 +1090,9 @@ fn lattice_bricks(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.covers("solid", nodes_total(nodes) * 4)?;
     let bytes = u64::from(layout.words) * 4;
     x.provide("bricks", bytes);
-    x.hold(bytes + storage_words(layout.count as usize) as u64 * 4);
+    // Bricks, the scan, and one scatter hit word per brick.
+    let hits = (u64::from(layout.count) * 4).max(16);
+    x.hold(bytes + storage_words(layout.count as usize) as u64 * 4 + hits);
     required_blob_bounds(x)
 }
 
