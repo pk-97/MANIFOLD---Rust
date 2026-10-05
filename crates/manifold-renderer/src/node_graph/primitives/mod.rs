@@ -357,7 +357,7 @@ mod gpu_flip_pressure_tests;
 pub(crate) mod liquid_fill;
 pub(crate) mod liquid_state;
 pub(crate) mod liquid_stats;
-mod liquid_frame;
+pub(crate) mod liquid_frame;
 pub(crate) mod particle_identity;
 pub(crate) mod particle_publication;
 #[cfg(all(test, feature = "gpu-proofs"))]

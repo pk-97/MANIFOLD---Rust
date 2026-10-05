@@ -635,7 +635,10 @@ fn add_display_presentation(def: &mut Value) {
     }
     for kind in WHITEWATER_KINDS {
         let [blend, copies] = [format!("{kind}_blend"), format!("{kind}_copies")].map(|name| id_named(def, &name));
-        feed(state, &format!("{kind}_particles"), blend, "particles_b");
+        // Each class is kept beside its frame, so it rewinds from the same
+        // B time as the water.
+        feed(state, &format!("{kind}_particles"), frame, &format!("{kind}_in"));
+        feed(frame, &format!("{kind}_b"), blend, "particles_b");
         feed(frame, "blend", blend, "blend");
         feed(frame, "span", blend, "span");
         feed(blend, "out", copies, "particles");

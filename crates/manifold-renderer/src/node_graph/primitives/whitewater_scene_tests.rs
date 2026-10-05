@@ -320,6 +320,8 @@ fn vendored_render_def(scene: WaterScene) -> EffectGraphDef {
     // populations are drawn directly; one it does not publish is not drawn.
     for kind in WHITEWATER_KINDS {
         g.remove(&[format!("{kind}_blend").as_str()]);
+        let frame_in = format!("{kind}_in");
+        g.def["wires"].as_array_mut().expect("wires").retain(|w| !(w["toNode"] == frame && w["toPort"] == frame_in.as_str()));
         let render = ["copies", "object", "mesh", "material"].map(|part| format!("{kind}_{part}"));
         let particles = format!("{kind}_particles");
         if !outputs.contains(&particles) {
@@ -386,6 +388,10 @@ pub(super) struct Show {
     paused: bool,
     /// The cards' values, as the clip hands them to the runtime.
     cards: ParamManifest,
+    /// A proof injects a node error this frame; its refusal is expected.
+    expect_node_error: bool,
+    /// The last frame.s status, for proofs that expect a refusal.
+    last_status: String,
 }
 
 /// One frame's clocks and, when profiled, each whitewater label's own GPU ms.
@@ -441,6 +447,8 @@ impl Show {
             trigger: 0,
             paused: false,
             cards: ParamManifest::default(),
+            expect_node_error: false,
+            last_status: String::new(),
         };
         show.hold(held);
         show
@@ -489,7 +497,8 @@ impl Show {
         assert_eq!(result.failed_command_buffers, 0, "frame {} failed on the GPU", self.frame_count);
         // A failed frame is not the one the graph describes: a refusing node
         // drew a fallback, and every probe past it reads nothing computed.
-        assert!(!matches!(status, FrameRenderStatus::Failed(_)), "frame {} failed: {status:?}", self.frame_count);
+        assert!(self.expect_node_error || !matches!(status, FrameRenderStatus::Failed(_)), "frame {} failed: {status:?}", self.frame_count);
+        self.last_status = format!("{status:?}");
         let mut whitewater_ms = vec![0.0; self.labels.len()];
         if profile {
             self.runtime.take_step_profiles();
@@ -2011,5 +2020,182 @@ mod emitter_oracle {
         assert!(!wavecrest_failures.is_empty(), "the gate passed a step with its wavecrest emitter off");
         assert!(!reduced_failures.is_empty(), "the gate passed a step with its turbulence rate cut to 0.7");
         assert!(failures.is_empty(), "the step's emission strays from FLIP's engine on the same water: {failures:#?}");
+    }
+}
+
+/// The Dam Break at 16 with the frame's presentation and the domain's
+/// simulation time probed.
+fn history_def() -> EffectGraphDef {
+    let mut g = Appender::new(render_def(WaterScene::dam_break(16).with_faces()));
+    let frame = g.id("frame");
+    for port in HISTORY_PROBES[..HISTORY_PROBES.len() - 1].iter() {
+        g.probe(port, (frame, port));
+    }
+    let domain = g.id("domain");
+    g.probe("simulation_time", (domain, "simulation_time"));
+    g.finish()
+}
+
+/// The frame's presentation; the last is the domain's simulation time.
+const HISTORY_PROBES: [&str; 9] =
+    ["blend", "span", "count_a", "count_b", "identity_a", "identity_b", "presented_time", "publications_skipped", "simulation_time"];
+/// The probes that describe the selected pair.
+const PAIR: std::ops::Range<usize> = 0..7;
+
+impl Show {
+    /// The bytes of the storage the named node provides on `port`.
+    fn provided_copy(&self, name: &str, port: &str) -> Vec<u8> {
+        let node = self.runtime.graph.nodes().find(|n| n.node_id.as_str() == name).unwrap_or_else(|| panic!("no node {name}"));
+        let buffer = node.node.provided_array_output(port).unwrap_or_else(|| panic!("{name} provides no {port}"));
+        let ptr = buffer.mapped_ptr().expect("shared storage");
+        // SAFETY: `frame` waited for the GPU; the buffer holds `size` bytes.
+        unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), buffer.size as usize) }.to_vec()
+    }
+}
+
+/// GPU_FLIP_DISPLAY_HISTORY_DESIGN.md section 4 (Conviction tests): a live
+/// frame held until its publication retired shows what export shows at that
+/// frame: the same endpoints and identities, A and B bytes, blend, span and
+/// pixels. Export commit-waits each publication; live retires it on a later
+/// frame, so after each frame live holds the clock until the presentation
+/// matches, within eight frames.
+#[test]
+fn liquid_frame_live_held_frame_matches_offline() {
+    const FRAMES: usize = 40;
+    let mut offline = Show::new(history_def(), (96, 54), false, &[]);
+    offline.restart();
+    let mut expected = Vec::new();
+    for _ in 0..FRAMES {
+        offline.frame(false);
+        expected.push((
+            offline.probes(HISTORY_PROBES),
+            offline.provided_copy("frame", "particles_a"),
+            offline.provided_copy("frame", "particles_b"),
+            offline.readback(),
+        ));
+    }
+    let _live = crate::node_graph::physics::PhysicsStepScope::with_preview_budget(false, std::time::Duration::from_secs(1));
+    let mut live = Show::new(history_def(), (96, 54), false, &[]);
+    live.restart();
+    let mut holds = 0;
+    for (k, (probes, particles_a, particles_b, pixels)) in expected.iter().enumerate() {
+        live.frame(false);
+        live.paused = true;
+        let mut held = 0;
+        while live.probes(HISTORY_PROBES)[PAIR] != probes[PAIR] {
+            assert!(held < 8, "frame {k}: live never presented export's pair: live {:?}, export {probes:?}", live.probes(HISTORY_PROBES));
+            live.frame(false);
+            held += 1;
+        }
+        holds += held;
+        live.paused = false;
+        assert_eq!(&live.provided_copy("frame", "particles_a"), particles_a, "frame {k}: the selected A differs");
+        assert_eq!(&live.provided_copy("frame", "particles_b"), particles_b, "frame {k}: the selected B differs");
+        assert!(live.readback() == *pixels, "frame {k}: pixels differ from export at the same presentation");
+        assert_eq!(live.probes(HISTORY_PROBES)[7], 0.0, "no publication skipped");
+    }
+    println!("live held {holds} frames over {FRAMES} until its publications retired");
+}
+
+/// Each whitewater class is read from the selected slot: on every frame all
+/// four classes equal the state's classes at the frame that published B,
+/// found by B's time, and at least one frame shows a B older than the state.
+#[test]
+fn liquid_frame_whitewater_reads_the_selected_slot() {
+    let _live = crate::node_graph::physics::PhysicsStepScope::with_preview_budget(false, std::time::Duration::from_secs(1));
+    let mut show = Show::new(history_def(), (96, 54), false, &[]);
+    show.restart();
+    // Per frame: simulation time and the four classes the state then held.
+    let mut published: Vec<(f32, [Vec<u8>; 4])> = Vec::new();
+    let (mut behind, mut with_foam) = (0, 0);
+    for frame in 0..180 {
+        show.frame(false);
+        let probes = show.probes(HISTORY_PROBES);
+        let classes = WHITEWATER_KINDS.map(|kind| show.provided_copy("state", &format!("{kind}_particles")));
+        let time = probes[8];
+        if published.last().is_none_or(|(t, _)| *t != time) {
+            published.push((time, classes.clone()));
+        }
+        let (blend, span, presented) = (probes[0], probes[1], probes[6]);
+        let t_b = presented + (1.0 - blend) * span;
+        let (at, expected) = published
+            .iter()
+            .min_by(|(a, _), (b, _)| (a - t_b).abs().total_cmp(&(b - t_b).abs()))
+            .expect("a publication");
+        assert!((at - t_b).abs() < 1e-4, "frame {frame}: B at {t_b} matches no publication");
+        for (k, kind) in WHITEWATER_KINDS.iter().enumerate() {
+            let shown = show.provided_copy("frame", &format!("{kind}_b"));
+            assert!(shown == expected[k], "frame {frame}: {kind}_b is not B's publication at {at}");
+        }
+        let foam = &expected[0];
+        with_foam += usize::from(foam.chunks_exact(32).any(|p| f32::from_ne_bytes([p[12], p[13], p[14], p[15]]) > 0.0));
+        behind += usize::from(*at != time && expected != &classes);
+    }
+    assert!(with_foam > 0, "the scene throws foam");
+    assert!(behind > 0, "some frame shows a B older than the state");
+}
+
+/// A publication that fails to encode still ends the frame with the frame's
+/// outputs: the selection happens before publishing, so the failing frame
+/// shows exactly what the same frame shows without the failure, arrays and
+/// scalars together, and names the error.
+#[test]
+fn liquid_frame_encode_failure_publishes_the_selected_outputs() {
+    let _live = crate::node_graph::physics::PhysicsStepScope::with_preview_budget(false, std::time::Duration::from_secs(1));
+    let [mut clean, mut failing] = [(), ()].map(|()| {
+        let mut show = Show::new(history_def(), (96, 54), false, &[]);
+        show.restart();
+        show
+    });
+    for frame in 0..30 {
+        // Armed from frame 5 until a publication consumes it.
+        let armed = frame >= 5;
+        clean.frame(false);
+        super::liquid_frame::FAIL_NEXT_PUBLICATION.set(armed);
+        failing.expect_node_error = armed;
+        failing.frame(false);
+        failing.expect_node_error = false;
+        let inject = armed && !super::liquid_frame::FAIL_NEXT_PUBLICATION.get();
+        super::liquid_frame::FAIL_NEXT_PUBLICATION.set(false);
+        if inject {
+            assert!(failing.last_status.starts_with("Failed"), "frame {frame}: the failure is reported: {}", failing.last_status);
+            assert_eq!(failing.probes(HISTORY_PROBES)[PAIR], clean.probes(HISTORY_PROBES)[PAIR], "frame {frame}: scalars follow the selection");
+            for port in ["particles_a", "particles_b"] {
+                assert_eq!(failing.provided_copy("frame", port), clean.provided_copy("frame", port), "frame {frame}: {port}");
+            }
+            // The failed endpoint is never retried, so the two runs part.
+            return;
+        }
+    }
+    panic!("no publication consumed the injected failure");
+}
+
+/// A smaller lattice keeps the solid's storage, wired or as walls: the
+/// solid mix's output capacity is planned once and never shrinks.
+#[test]
+fn liquid_frame_solid_shrink_keeps_mix_capacity() {
+    for wired in [true, false] {
+        let mut g = Appender::new(render_def(WaterScene::dam_break(32).with_faces()));
+        let frame = g.id("frame");
+        if !wired {
+            g.def["wires"].as_array_mut().expect("wires").retain(|w| !(w["toNode"] == frame && w["toPort"] == "solid"));
+        }
+        let def = g.finish();
+        let spec = def.preset_metadata.as_ref()
+            .and_then(|cards| cards.params.iter().find(|card| card.id == "resolution"))
+            .expect("the Resolution card")
+            .clone();
+        let mut show = Show::new(def, (96, 54), false, &[]);
+        show.restart();
+        for n in [32u32, 16] {
+            let mut card = Param::bundled(spec.clone());
+            card.value = n as f32;
+            card.base = n as f32;
+            show.cards = ParamManifest::from_params(vec![card]);
+            for _ in 0..4 {
+                show.frame(false);
+            }
+            assert!(show.errors().is_empty(), "solid wired {wired}, Resolution {n}: {:?}", show.errors());
+        }
     }
 }

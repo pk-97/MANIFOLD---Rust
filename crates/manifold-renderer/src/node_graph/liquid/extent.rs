@@ -34,7 +34,9 @@ use crate::node_graph::liquid::EXACT_F32_COUNT;
 use crate::node_graph::liquid::bodies::{LiquidBody, LiquidShape};
 use crate::node_graph::liquid::clock::FIELD_RESERVE_INTERVALS;
 use crate::node_graph::liquid::fields::{FieldFrame, FieldLattice, STAGING_SLOTS as FIELD_STAGING_SLOTS};
+use crate::node_graph::liquid::frame_history::H_MAX;
 use crate::node_graph::liquid::frame_ring::RING;
+use crate::node_graph::primitives::liquid_frame::{WHITEWATER_INPUTS, WHITEWATER_OUTPUTS};
 use crate::node_graph::liquid::grid::{FACE_GRID_PORTS, FACE_INPUT_PORTS, face_len};
 use crate::node_graph::liquid::lattice::{FlipSolverGrid, LiquidLattice};
 use crate::node_graph::matter::{
@@ -1384,12 +1386,14 @@ fn liquid_stats(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 }
 
 fn liquid_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    // The retained history at its budget: every slot admitted whole.
+    const SLOTS: u64 = H_MAX as u64;
     x.covers("identity", 16)?;
     let lattice = x.lattice()?;
     let surface = lattice.surface();
     let solver = FlipSolverGrid::from_lattice(lattice);
     for (axis, input) in FACE_INPUT_PORTS.into_iter().enumerate() {
-        if x.wired(input) { x.hold((RING - 1) as u64 * face_len(solver.cells(), axis) * 4); }
+        if x.wired(input) { x.hold((SLOTS - 1) * face_len(solver.cells(), axis) * 4); }
     }
     let mut interior_check = Ok(());
     if x.wired("interior") {
@@ -1399,7 +1403,7 @@ fn liquid_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
         }
         x.provide("interior_a", bytes);
         x.provide("interior_b", bytes);
-        x.hold(RING as u64 * bytes);
+        x.hold(SLOTS * bytes);
     } else {
         x.provide("interior_a", 0);
         x.provide("interior_b", 0);
@@ -1409,14 +1413,24 @@ fn liquid_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let count = x.count("count", 0.0)?;
     let particles = u64::from(count.max(1)) * PARTICLE;
     let solid = surface.solid_bytes();
-    x.hold(crate::node_graph::primitives::particle_publication::scratch_bytes(count) + RING as u64 * 16);
+    x.hold(crate::node_graph::primitives::particle_publication::scratch_bytes(count) + SLOTS * 16);
     let wired = x.wired("solid");
-    x.hold(if wired { RING as u64 * solid } else { solid });
+    x.hold(if wired { SLOTS * solid } else { solid });
     x.provide("particles_a", particles);
     x.provide("particles_b", particles);
     x.provide("solid_a", solid);
     x.provide("solid_b", solid);
-    x.hold(RING as u64 * particles);
+    x.hold(SLOTS * particles);
+    // Each wired whitewater class is kept per slot, frame B's copy provided.
+    for (input, output) in WHITEWATER_INPUTS.into_iter().zip(WHITEWATER_OUTPUTS) {
+        let bytes = if x.wired(input) { x.bytes(input).unwrap_or(4).max(4) } else { 4 };
+        x.provide(output, bytes);
+        if x.wired(input) {
+            x.hold(SLOTS * bytes);
+        }
+    }
+    x.publish("presented_time", 0.0);
+    x.publish("publications_skipped", 0.0);
     x.publish("count_a", count as f32);
     x.publish("count_b", count as f32);
     x.publish_transform("grid_bounds", surface.bounds());
