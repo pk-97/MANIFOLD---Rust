@@ -290,7 +290,8 @@ fn gpu_flip_sheeting_inactive_slot_and_capacity() {
 }
 
 /// Cell and half-cell indices are the engine's f64 floor at non-binary
-/// spacing, on the floats either side of every cell and half-cell face. A
+/// spacing, on the floats either side of every cell and half-cell face, and
+/// of their mirrors below zero, where interpolation and the walk sample. A
 /// plain f32 product gets some of them wrong (f32 0.3 at 1.5 m: cell 5, where
 /// the engine's is 4), so the probe can tell.
 #[test]
@@ -311,6 +312,11 @@ fn gpu_flip_sheeting_indexing_is_the_engine_floor_at_non_binary_spacing() {
                 x = x.next_up();
             }
         }
+        // Interpolation and the depth walk index points below the grid's low
+        // faces: the same faces mirrored, down to a few cells under zero.
+        let negative: Vec<f32> = points.iter().filter(|&&x| x < 4.0 * h).map(|&x| -x).collect();
+        points.extend(negative);
+        points.extend([-1.5 * h, -0.5 * h, -f32::MIN_POSITIVE, -1e-30]);
         let markers: Vec<[f32; 3]> = points.iter().map(|&x| [x, x, x]).collect();
         let records: Vec<FluidParticle> = markers
             .iter()
@@ -345,7 +351,7 @@ fn gpu_flip_sheeting_indexing_is_the_engine_floor_at_non_binary_spacing() {
             naive_wrong += usize::from(naive != cell);
             checked += 1;
         }
-        eprintln!("SHEETING INDEX h {h}: {checked} positions agree; a plain f32 product misses {naive_wrong}");
+        eprintln!("SHEETING INDEX h {h}: {checked} positions agree (signed); a plain f32 product misses {naive_wrong}");
         if h == 0.3 {
             assert!(naive_wrong > 0, "the probe must be able to see the f32 error");
         }
@@ -382,5 +388,56 @@ fn gpu_flip_sheeting_matches_the_port_at_non_binary_spacing() {
             }
         }
         matches_port(&device, &format!("lattice h {h}"), &sheet, &lattice_phi, [n as u32; 3], h);
+    }
+}
+
+/// The depth walk below the grid's low x face: a level set rising along x,
+/// so each marker walks toward −x, past zero, where native reads only
+/// out-of-range corners (zero) and the walk ends. Markers swept across the
+/// first three and a half cells, one to a cell: the near ones feel the zero
+/// corners and turn thin, the far ones walk inside the grid and do not. The GPU's thin cells after detect
+/// equal the port's thin markers' cells; the port is the native sheeter's
+/// decisions bit for bit (sheet_oracle.rs), which exposes only seeds, and
+/// nothing seeds this close to the border.
+#[test]
+fn gpu_flip_sheeting_depth_walk_below_zero_matches_the_port() {
+    let device = crate::test_device();
+    let cells = [16u32; 3];
+    for h in [1.0f32, 0.3] {
+        let n = 16usize;
+        let phi: Vec<f32> = (0..n * n * n).map(|i| 0.3 * ((i % n) as f32 + 0.5 - 5.0) * h).collect();
+        let markers: Vec<[f32; 3]> = (0..48)
+            .map(|k| [(0.02 + 0.072 * k as f32) * h, (2 + k % 12) as f32 * h + 0.5 * h, (2 + k / 12) as f32 * h + 0.5 * h])
+            .collect();
+        let trace = sheeter::trace_sheet_particles(&markers, &phi, cells, f64::from(h), FILL_THRESHOLD).expect("port");
+        let cell = |p: &[f32; 3]| {
+            let c = p.map(|v| (f64::from(v) * (1.0 / f64::from(h))).floor() as usize);
+            c[0] + n * (c[1] + n * c[2])
+        };
+        let mut want: Vec<usize> = markers.iter().zip(&trace.thin).filter(|(_, t)| **t).map(|(p, _)| cell(p)).collect();
+        want.sort_unstable();
+        let thin = want.len();
+        assert!(thin > 0 && thin < markers.len(), "h {h}: the sweep crosses the walk's decision ({thin} thin)");
+        let sorted = sort(&device, &markers, cells, h);
+        let phi_buffer = shared(&device, bytemuck::cast_slice(&phi));
+        let mut stage = GpuSheeting::default();
+        stage.prepare(&device);
+        stage.reserve(&device, cells, 16).unwrap();
+        let mut enc = device.create_encoder("sheeting detect");
+        stage.encode_detect(&mut enc, &SheetInputs {
+            particles: &sorted.particles,
+            order: &sorted.order,
+            ranges: sorted.sorter.ranges().unwrap(),
+            count: sorted.count,
+            phi: &phi_buffer,
+            origin: [0.0; 3],
+            h,
+            threshold: FILL_THRESHOLD,
+        });
+        enc.commit_and_wait_completed();
+        let flags = copy_out(&device, &stage.scratch()[0]);
+        let got: Vec<usize> = (0..flags.len()).filter(|&c| flags[c] != 0).collect();
+        assert_eq!(got, want, "h {h}: thin cells differ");
+        eprintln!("SHEETING WALK h {h}: {thin} of {} markers thin, cells agree", markers.len());
     }
 }

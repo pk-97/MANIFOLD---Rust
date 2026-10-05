@@ -104,11 +104,11 @@ fn below(x: vec3<u32>, i: u32) -> bool {
     return false;
 }
 fn exact_floor(p: f32, r: vec2<u32>) -> i32 {
-    if !(p > 0.0) {
-        // Outside the grid's low faces (or zero): the sign alone decides.
-        return select(0, -1, p < 0.0);
-    }
-    let bits = bitcast<u32>(p);
+    if p == 0.0 { return 0; }
+    // The product's magnitude rounds the same either sign (nearest-even), so
+    // the magnitude is floored and a negative fractional result steps down.
+    let negative = p < 0.0;
+    let bits = bitcast<u32>(abs(p));
     let e = (bits >> 23u) & 255u;
     let m = (bits & 0x7fffffu) | select(0u, 0x800000u, e != 0u);
     let ep = select(i32(e) - 150, -149, e == 0u);
@@ -133,10 +133,16 @@ fn exact_floor(p: f32, r: vec2<u32>) -> i32 {
         }
         exponent = exponent + i32(d);
     }
-    if exponent >= 0 { return 0x7fffffff; }
+    if exponent >= 0 { return select(0x7fffffff, -0x7fffffff, negative); }
     let s = u32(-exponent);
-    if s >= 64u { return 0; }
-    return i32(shr96(vec3<u32>(q, 0u), s).x);
+    var whole = 0u;
+    var fraction = true;
+    if s < 64u {
+        whole = shr96(vec3<u32>(q, 0u), s).x;
+        fraction = below(vec3<u32>(q, 0u), s);
+    }
+    if !negative { return i32(whole); }
+    return -i32(whole) - select(0, 1, fraction);
 }
 fn exact_cell(p: vec3<f32>, r: vec2<u32>) -> vec3<i32> {
     return vec3<i32>(exact_floor(p.x, r), exact_floor(p.y, r), exact_floor(p.z, r));

@@ -227,6 +227,12 @@ impl GpuSheeting {
         self.dispatch_with(enc, inputs, &self.buffers.as_ref().expect("sheeting reserved")[9], None, Some((&probe, inputs.count)), 0..0);
     }
 
+    /// Proof only: clear and detect, the sheet flags before feathering.
+    #[cfg(all(test, feature = "gpu-proofs"))]
+    pub(crate) fn encode_detect(&self, enc: &mut GpuEncoder, inputs: &SheetInputs<'_>) {
+        self.dispatch_with(enc, inputs, &self.buffers.as_ref().expect("sheeting reserved")[9], None, None, 0..2);
+    }
+
     /// Gated by the FLIP clock plan: in an inactive slot every pass returns
     /// before writing.
     #[cfg(all(test, feature = "gpu-proofs"))]
