@@ -17,7 +17,7 @@ use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid_particles::FluidParticle;
 use crate::node_graph::liquid::frame_ring::{FrameRing, RingWrite, RING};
 use crate::node_graph::liquid::grid::{interior_bytes, face_len, FACE_GRID_PORTS, FACE_INPUT_PORTS, PublishedFaces};
-use crate::node_graph::liquid::lattice::{LiquidLattice, frame_lattice};
+use crate::node_graph::liquid::lattice::{FlipSolverGrid, LiquidLattice};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
@@ -59,12 +59,11 @@ crate::primitive! {
         face_cells_x: ScalarF32, face_cells_y: ScalarF32, face_cells_z: ScalarF32, face_valid_layers: ScalarF32,
     },
     params: [
-        ParamDef { name: std::borrow::Cow::Borrowed("native_mesh_grid"), label: "Native Mesh Grid", ty: ParamType::Bool, default: ParamValue::Bool(false), range: None, enum_values: &[] },
         ParamDef { name: std::borrow::Cow::Borrowed("closed_faces"), label: "Closed Faces (bits −X +X −Y +Y −Z +Z)", ty: ParamType::Int, default: ParamValue::Float(63.0), range: Some((0.0, 63.0)), enum_values: &[] },
         ParamDef { name: std::borrow::Cow::Borrowed("face_valid_layers"), label: "Face Valid Layers", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 8.0)), enum_values: &[] },
     ],
     depth_rule: Terminal,
-    composition_notes: "Reads node.liquid_state's out and stats after the region; count comes from the fill, and the lattice, closed faces, simulation_time, display_time and epoch from the liquid's domain; New GPU FLIP graphs enable Native Mesh Grid and take solid from node.liquid_solid_distance sampled on the domain mesh_min/mesh_nodes outputs with Wall Inset 1.5; the lattice inputs remain the simulation grid; the face inputs from three node.face_sample_component on liquid_state's faces. Its outputs are the particle-frame seam node.fluid_surface and node.matter_frame also publish, so the Liquid Surface atoms and whitewater read any solver unchanged. face_valid_layers is how many face layers past the liquid the solver extended its velocity into; it reads 0 unless all three axes are wired. identity_a/b carry each accepted frame identity epoch. Domain reset, identity renumbering and growth collapse the pair; publication preserves solver storage order.",
+    composition_notes: "Reads node.liquid_state's out and stats after the region; count comes from the fill, and the lattice, closed faces, simulation_time, display_time and epoch from the liquid's domain; GPU FLIP always publishes the native padded grid and takes solid from node.liquid_solid_distance sampled on the domain mesh_min/mesh_nodes outputs with mesh_wall_inset; the lattice inputs retain the authored scalar contract; the face inputs from three node.face_sample_component on liquid_state's faces. Its outputs are the particle-frame seam node.fluid_surface and node.matter_frame also publish, so the Liquid Surface atoms and whitewater read any solver unchanged. face_valid_layers is how many face layers past the liquid the solver extended its velocity into; it reads 0 unless all three axes are wired. identity_a/b carry each accepted frame identity epoch. Domain reset, identity renumbering and growth collapse the pair; publication preserves solver storage order.",
     examples: [],
     picker: { label: "Liquid Frame", category: Atom },
     summary: "Hands a simulated particle liquid to the liquid surface, one frame per simulation tick.",
@@ -129,7 +128,8 @@ impl Primitive for LiquidFrame {
         let Some(lattice) = LiquidLattice::from_wires(ctx, "Liquid Frame") else {
             return;
         };
-        let surface = frame_lattice(lattice, ctx.params);
+        let surface = lattice.surface();
+        let cells = FlipSolverGrid::from_lattice(lattice).cells();
         let count = ctx.scalar_or_param("count", 0.0).round().max(0.0) as u32;
         let closed_faces = ctx.scalar_or_param("closed_faces", 63.0).round().clamp(0.0, 63.0) as u32;
         let simulation_time = f64::from(ctx.scalar_or_param("simulation_time", 0.0));
@@ -140,6 +140,10 @@ impl Primitive for LiquidFrame {
         let identity = ctx.inputs.array("identity");
         let interior = ctx.inputs.array("interior");
         let solid_in = ctx.inputs.array("solid");
+        if let Some(solid) = solid_in && solid.size != surface.solid_bytes() {
+            ctx.error(format!("Liquid Frame: solid holds {} bytes; native FLIP grid {:?} requires exactly {}. Sample the solid at gpu_flip_domain.mesh_min/mesh_nodes with mesh_wall_inset", solid.size, surface.nodes(), surface.solid_bytes()));
+            return;
+        }
         self.solid_wired = solid_in.is_some();
         let faces_in = FACE_INPUT_PORTS.map(|port| ctx.inputs.array(port));
         let face_valid_layers = ctx.scalar_or_param("face_valid_layers", 0.0).round().clamp(0.0, 8.0);
@@ -173,8 +177,8 @@ impl Primitive for LiquidFrame {
                 }
             }
         }
-        let interior_size = interior_bytes(lattice.cells());
-        let interior_key = (lattice.cells(), lattice.cell_size().to_bits());
+        let interior_size = interior_bytes(cells);
+        let interior_key = (cells, lattice.cell_size().to_bits());
         let interior_valid = if interior_size == 0 {
             if interior.is_some() {
                 refused = Some("Liquid Frame: interior distance has zero cells".to_string());
@@ -188,7 +192,7 @@ impl Primitive for LiquidFrame {
                     refused = Some(format!(
                         "Liquid Frame: interior distance holds {} bytes; the lattice needs exactly {interior_size} bytes ({})",
                         field.size,
-                        lattice.cells().iter().product::<u32>()
+                        cells.iter().product::<u32>()
                     ));
                     false
                 }
@@ -250,7 +254,7 @@ impl Primitive for LiquidFrame {
             self.interior_epoch = None;
         }
         if !self.solid_wired && self.solid_key != Some(solid_key) {
-            let distances = surface.wall_distance(closed_faces);
+            let distances = surface.flip_wall_distance(closed_faces);
             // A fresh buffer per setup: the previous one may still be read by
             // an in-flight frame; its drop is fence-retired.
             let buffer = gpu.device.create_buffer_shared((distances.len() * 4).max(4) as u64);
@@ -318,7 +322,7 @@ impl Primitive for LiquidFrame {
                         Vec::new()
                     });
                 }
-                let bytes = bytes.min(solid_in.size);
+                // The exact native extent was checked before publishing.
                 let targets = if fresh { 0..self.solid_slots.len() } else { write..write + 1 };
                 for slot in targets {
                     gpu.native_enc.copy_buffer_to_buffer(solid_in, &self.solid_slots[slot], bytes);
@@ -339,7 +343,7 @@ impl Primitive for LiquidFrame {
             }
             for (axis, input) in faces_in.into_iter().enumerate() {
                 let Some(input) = input else { self.face_slots[axis].clear(); continue; };
-                let bytes = face_len(lattice.cells(), axis) * 4;
+                let bytes = face_len(cells, axis) * 4;
                 if input.size < bytes {
                     refused = Some(format!("Liquid Frame: face axis {axis} needs {bytes} bytes"));
                     continue;
@@ -390,9 +394,9 @@ impl Primitive for LiquidFrame {
             ("grid_nodes_z", surface.nodes()[2] as f32),
             ("blend", blend),
             ("span", span),
-            ("face_cells_x", lattice.cells()[0] as f32),
-            ("face_cells_y", lattice.cells()[1] as f32),
-            ("face_cells_z", lattice.cells()[2] as f32),
+            ("face_cells_x", cells[0] as f32),
+            ("face_cells_y", cells[1] as f32),
+            ("face_cells_z", cells[2] as f32),
             ("face_valid_layers", if faces_published { face_valid_layers } else { 0.0 }),
         ] {
             ctx.outputs.set_scalar(name, ParamValue::Float(value));
@@ -412,17 +416,6 @@ impl Primitive for LiquidFrame {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn liquid_frame_mesh_grid_preserves_embedded_graph_contract() {
-        let layout = crate::node_graph::fluid::domain_layout(None, 4.0, 64).unwrap();
-        let simulation = LiquidLattice::from_layout(&layout);
-        let mut params = crate::node_graph::effect_node::ParamValues::default();
-        assert_eq!(frame_lattice(simulation, &params), simulation);
-        params.insert("native_mesh_grid".into(), ParamValue::Bool(true));
-        assert_eq!(frame_lattice(simulation, &params), simulation.surface());
-        assert_eq!(frame_lattice(simulation, &params).nodes(), [68; 3]);
-    }
 
     #[test]
     fn liquid_frame_params_match_the_shader() {

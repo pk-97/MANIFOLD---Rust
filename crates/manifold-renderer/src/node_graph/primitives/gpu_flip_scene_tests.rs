@@ -310,7 +310,13 @@ impl Run {
     }
 
     pub(super) fn n(&self) -> usize {
-        self.scene.pressure.n
+        self.solver_grid().cells()[0] as usize
+    }
+
+    fn solver_grid(&self) -> crate::node_graph::liquid::lattice::FlipSolverGrid {
+        crate::node_graph::liquid::lattice::FlipSolverGrid::from_lattice(
+            crate::node_graph::liquid::lattice::LiquidLattice::from_layout(&self.scene.layout()),
+        )
     }
 
     /// The force hook: the domain's uniform acceleration (Gravity X and Y),
@@ -355,7 +361,7 @@ impl Run {
     /// The water cells, 1 or 0, of `particles`: φ < 0 as the step builds it.
     pub(super) fn water_of(&self, particles: &[FluidParticle]) -> Vec<f32> {
         let started = particles;
-        let (n, h, min) = (self.n(), self.scene.cell_size(), self.scene.min());
+        let (n, h, min) = (self.n(), self.scene.cell_size(), self.solver_grid().min().map(f64::from));
         let radius = 0.866_025_4 * h;
         let mut water = vec![0.0; n.pow(3)];
         for p in started.iter().filter(|p| p.position_radius[3] > 0.0) {
@@ -514,13 +520,13 @@ fn gpu_flip_face_grid_is_the_last_ticks_faces() {
         for _ in 0..12 {
             run.frame();
         }
-        let records = (n + 1).pow(3);
+        let records = (run.n() + 1).pow(3);
         let state: Vec<FaceSample> = run.read("state", "faces", records);
         let last = run.faces();
         let differ = state.iter().zip(&last).filter(|(a, b)| bytemuck::bytes_of(*a) != bytemuck::bytes_of(*b)).count();
         let moving = state.iter().filter(|s| s.velocity.iter().any(|v| *v != 0.0)).count();
         let grid = run.face_grid();
-        let expected = crate::node_graph::liquid::conformance::gpu_flip_faces(bytemuck::cast_slice(&state), [n as u32; 3]);
+        let expected = crate::node_graph::liquid::conformance::gpu_flip_faces(bytemuck::cast_slice(&state), run.solver_grid().cells());
         let gathered = (0..3)
             .map(|axis| grid[axis].iter().zip(&expected[axis]).filter(|(a, b)| a.to_bits() != b.to_bits()).count())
             .sum::<usize>();
@@ -655,7 +661,7 @@ fn gpu_flip_hydrostatic_column_rests() {
 /// 26 neighbours, are φ < 0. Unlike particles per water cell, a growing
 /// surface does not move it.
 pub(super) fn interior_density(run: &Run, particles: &[FluidParticle]) -> f64 {
-    let (n, h, min) = (run.n(), run.scene.cell_size(), run.scene.min());
+    let (n, h, min) = (run.n(), run.scene.cell_size(), run.solver_grid().min().map(f64::from));
     let water = run.water_of(particles);
     let mut count = vec![0u32; n.pow(3)];
     for p in particles.iter().filter(|p| p.position_radius[3] > 0.0) {
@@ -685,7 +691,7 @@ pub(super) fn interior_density(run: &Run, particles: &[FluidParticle]) -> f64 {
 /// seeds under a surface. A slosh moves water between columns, not out of
 /// them, so this holds while the pool still moves.
 fn column_depth(run: &Run, particles: &[FluidParticle], floor: f64) -> f64 {
-    let (n, h, min) = (run.n(), run.scene.cell_size(), run.scene.min());
+    let (n, h, min) = (run.scene.layout().cells[0] as usize, run.scene.cell_size(), run.scene.min());
     let mut top = vec![f64::NEG_INFINITY; n * n];
     for p in particles.iter().filter(|p| p.position_radius[3] > 0.0) {
         let c = |a: usize| ((f64::from(p.position_radius[a]) - min[a]) / h).floor().clamp(0.0, (n - 1) as f64) as usize;
@@ -786,7 +792,7 @@ pub(super) fn energy(particles: &[FluidParticle], floor: f64) -> f64 {
 /// source's air) and particles per occupied cell (rest 8).
 #[cfg(feature = "water-race-probes")]
 fn cloud_counts(run: &Run, particles: &[FluidParticle]) -> (usize, usize, usize, f64) {
-    let (n, h, min) = (run.n(), run.scene.cell_size(), run.scene.min());
+    let (n, h, min) = (run.n(), run.scene.cell_size(), run.solver_grid().min().map(f64::from));
     let mut occupied = vec![false; n.pow(3)];
     let mut live = 0;
     for p in particles.iter().filter(|p| p.position_radius[3] > 0.0) {
@@ -804,7 +810,7 @@ fn cloud_counts(run: &Run, particles: &[FluidParticle]) -> (usize, usize, usize,
 /// density, wall sites included, reads under 8 (`density_source`, no bodies).
 #[cfg(feature = "water-race-probes")]
 fn raised_share(run: &Run, particles: &[FluidParticle], water: &[f32]) -> f64 {
-    let (n, h, min) = (run.n() as i64, run.scene.cell_size(), run.scene.min());
+    let (n, h, min) = (run.n() as i64, run.scene.cell_size(), run.solver_grid().min().map(f64::from));
     let at = |c: [i64; 3]| (c[0] + n * (c[1] + n * c[2])) as usize;
     let mut bins: Vec<Vec<[f64; 3]>> = vec![Vec::new(); (n * n * n) as usize];
     for p in particles.iter().filter(|p| p.position_radius[3] > 0.0) {

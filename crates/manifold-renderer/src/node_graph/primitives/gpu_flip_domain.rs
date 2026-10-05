@@ -3,8 +3,8 @@
 //! it speaks `node.fluid_surface`'s scene contract (names, types, meanings)
 //! and turns it into the fixed-tick clock, the fill's sites, gravity, the
 //! Collider roles as body rows, shapes and a distance atlas, and the padded
-//! simulation lattice. Separate mesh_min/mesh_nodes outputs carry the native
-//! surface grid for solid sampling; the particle frame derives the same grid. Scene
+//! authored lattice descriptor. Separate mesh_min/mesh_nodes outputs carry the native
+//! solver and surface grid for solid sampling; the particle frame derives the same grid. Scene
 //! forces and impulses reach the water through the shared field lattices of
 //! `liquid::fields` (seam P8), sampled over the face grid's box. Paired with
 //! a physics world, the scene's Box3D bodies join the water two ways
@@ -33,7 +33,7 @@ use crate::node_graph::liquid::coupling::{
     DomainWalls, LiquidRigidOwner, PendingTick, REACTION_FLOATS, decode_reaction, takes_reaction,
 };
 use crate::node_graph::liquid::fields::{self, FieldLattice, LiquidFields, LiquidImpulses};
-use crate::node_graph::liquid::lattice::LiquidLattice;
+use crate::node_graph::liquid::lattice::{FlipSolverGrid, LiquidLattice};
 use crate::node_graph::liquid::tick_samples::TickSamples;
 use crate::node_graph::liquid::{EXACT_F32_COUNT, ROLE_PORTS, WATER_DENSITY};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
@@ -67,10 +67,11 @@ pub(crate) struct GpuFlipGeometry {
 
 impl GpuFlipGeometry {
     /// The scalar outputs fixed by the setup, by name.
-    pub(crate) fn outputs(&self) -> [(&'static str, f32); 22] {
+    pub(crate) fn outputs(&self) -> [(&'static str, f32); 23] {
         let GpuFlipSetup { lattice, pool_sites, box_sites, particle_capacity } = self.setup;
         let h = self.layout.cell_size;
         let surface = lattice.surface();
+        let solver = FlipSolverGrid::from_lattice(lattice);
         [
             ("lattice_min_x", lattice.min()[0]),
             ("lattice_min_y", lattice.min()[1]),
@@ -94,6 +95,7 @@ impl GpuFlipGeometry {
             ("mesh_nodes_x", surface.nodes()[0] as f32),
             ("mesh_nodes_y", surface.nodes()[1] as f32),
             ("mesh_nodes_z", surface.nodes()[2] as f32),
+            ("mesh_wall_inset", solver.wall_inset()),
         ]
     }
 }
@@ -147,10 +149,11 @@ pub(crate) fn gpu_flip_geometry(
 ) -> Result<GpuFlipGeometry, String> {
     let resolution = read("resolution", 64.0).round().max(0.0) as u32;
     let layout = domain_layout(domain, read("domain_size", 4.0), resolution)?;
-    if let Some(reason) = lattice_refusal(layout.cells) {
+    let solver = FlipSolverGrid::from_lattice(LiquidLattice::from_layout(&layout));
+    if let Some(reason) = lattice_refusal(solver.cells()) {
         return Err(format!("GPU FLIP: {reason}. Lower Resolution."));
     }
-    let solve_level = read_solve_level(read("solve_level", 0.0), layout.cells).map_err(|reason| format!("GPU FLIP: {reason}"))?;
+    let solve_level = read_solve_level(read("solve_level", 0.0), solver.cells()).map_err(|reason| format!("GPU FLIP: {reason}"))?;
     let (pool_sites, box_sites) = fill_sites(&layout, read("fill_height", 0.4), initial_volume)?;
     let capacity = read("particle_capacity", 0.0);
     if !capacity.is_finite() || capacity < 0.0 {
@@ -176,12 +179,13 @@ impl GpuFlipGeometry {
     /// The field lattice over the face grid's box: from its minimum corner
     /// to its far wall faces.
     pub(crate) fn field_lattice(&self) -> FieldLattice {
-        FieldLattice::covering(self.layout.min, self.layout.cell_size as f32, self.layout.cells.map(|n| n + 1))
+        let solver = FlipSolverGrid::from_lattice(self.setup.lattice);
+        FieldLattice::covering(solver.min(), self.layout.cell_size as f32, solver.nodes())
     }
 }
 
 /// Every scalar output, in the order [`GpuFlipDomain::compute`] fills them.
-const OUTPUTS: [&str; 50] = [
+const OUTPUTS: [&str; 51] = [
     "lattice_min_x", "lattice_min_y", "lattice_min_z", "cell_size", "nodes_x", "nodes_y", "nodes_z",
     "closed_faces", "pool_sites", "box_x0", "box_x1", "box_y0", "box_y1", "box_z0", "box_z1",
     "particle_mass", "gravity_x", "gravity", "gravity_z", "ticks", "epoch", "simulation_time",
@@ -193,7 +197,7 @@ const OUTPUTS: [&str; 50] = [
     "clock_obstacle_count",
     "clock_source_count",
     "live_hit_count", "mesh_min_x", "mesh_min_y", "mesh_min_z", "mesh_nodes_x", "mesh_nodes_y", "mesh_nodes_z",
-    "initial_obstacle_speed"];
+    "initial_obstacle_speed", "mesh_wall_inset"];
 const TICKS: usize = 19;
 const IMPULSE_TICK: usize = 33;
 const INITIAL_OBSTACLE_SPEED: usize = 49;
@@ -372,6 +376,7 @@ crate::primitive! {
         particle_capacity: ScalarF32,
         region_count: ScalarF32,
         solve_level: ScalarF32,
+        mesh_wall_inset: ScalarF32,
         bodies: Array(LiquidBody), regions: Array(LiquidBody), shapes: Array(LiquidShape), atlas: Array(u32),
         reaction: Array(f32),
         forces: Array(f32), impulses: Array(f32),
@@ -960,6 +965,16 @@ mod tests {
         gpu_flip_geometry(read, None, volume)
     }
 
+    #[test]
+    fn gpu_flip_domain_fields_cover_the_native_solver_faces() {
+        let geometry = geometry(64.0, 0.16, None).unwrap();
+        let grid = FlipSolverGrid::from_lattice(geometry.setup.lattice);
+        let field = geometry.field_lattice();
+        let expected = FieldLattice::covering(grid.min(), geometry.setup.lattice.cell_size(), grid.nodes());
+        assert_eq!(field, expected);
+        assert!(geometry.outputs().iter().any(|(name, value)| *name == "mesh_wall_inset" && *value == grid.wall_inset()));
+    }
+
     /// The frame publisher reads these CPU outputs before any solver publish.
     /// This guards the GPU FLIP side of BUG-a1xh independently of the CPU
     /// FLIP particle ring: neither surface nodes nor bin size need GPU data.
@@ -1019,7 +1034,7 @@ mod tests {
     }
 
     /// Solve Level is refused past the lattice's levels, never clamped: 64
-    /// has levels 64, 32, 16, 8, 4, so 3 is the deepest gradient level.
+    /// has native levels 67, 34, 17, 9, 5, 3, so 4 is the deepest gradient level.
     #[test]
     fn gpu_flip_domain_refuses_a_solve_level_the_lattice_lacks() {
         let at = |resolution: f32, level: f32| {
@@ -1033,8 +1048,9 @@ mod tests {
         };
         assert_eq!(at(64.0, 3.0).expect("level 3 at 64").solve_level, 3);
         assert_eq!(at(64.0, 0.0).expect("level 0").solve_level, 0);
-        let refused = at(64.0, 4.0).expect_err("level 4 at 64");
-        assert!(refused.contains("Solve Level must be 0 to 3"), "{refused}");
+        assert_eq!(at(64.0, 4.0).expect("native level 4").solve_level, 4);
+        let refused = at(64.0, 5.0).expect_err("level 5 at 64");
+        assert!(refused.contains("Solve Level must be 0 to 4"), "{refused}");
         let fraction = at(64.0, 1.5).expect_err("a fraction");
         assert!(fraction.contains("Solve Level must be a whole number"), "{fraction}");
     }

@@ -348,6 +348,17 @@ impl PresetRuntime {
             return Err(JsonGeneratorLoadError::MissingFinalOutput);
         }
 
+        // Preserve group preview routes, then prepare the shared flat view.
+        // A cloned FLIP solid's control fanout must enter binding capture and
+        // graph construction together, on the same prepared render document.
+        let group_preview_map = manifold_core::flatten::group_output_producer_map(&doc);
+        let mut flat_doc = manifold_core::flatten::flatten_groups(&doc).ok();
+        if let Some(flat) = flat_doc.as_mut() {
+            if crate::node_graph::graph_loader::wire_gpu_flip_grid(flat) {
+                doc = flat.clone();
+            }
+        }
+
         // Capture the binding specs + outer-card param ids before `into_graph`
         // consumes `doc`. The id list resolves each binding's `source_index`
         // (which outer slider it draws from) — keyed by id rather than position
@@ -399,13 +410,6 @@ impl PresetRuntime {
             .map(|m| m.string_bindings.clone())
             .unwrap_or_default();
 
-        // Group → producer map for the node-output preview, captured before
-        // `into_graph` flattens the groups away.
-        let group_preview_map = manifold_core::flatten::group_output_producer_map(&doc);
-        // Flattened once, shared by the node-output preview kind propagation
-        // AND the BUG-104 trigger-shadow class check below — both need the
-        // group-boundary-free view of the graph.
-        let flat_doc = manifold_core::flatten::flatten_groups(&doc).ok();
         let preview_kinds = flat_doc
             .as_ref()
             .map(crate::node_graph::PreviewEncoding::propagate)

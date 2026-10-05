@@ -54,7 +54,7 @@ struct ObstacleSourceUniforms {
     nodes_y: f32,
     nodes_z: f32,
     closed_faces: i32,
-    wall_inset: i32,
+    wall_inset: f32,
     body_count: i32,
     rows: i32,
     tick_seconds: f32,
@@ -94,7 +94,7 @@ crate::primitive! {
         ParamDef { name: Cow::Borrowed("nodes_y"), label: "Nodes Y", ty: ParamType::Float, default: ParamValue::Float(71.0), range: Some((1.0, 4096.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("nodes_z"), label: "Nodes Z", ty: ParamType::Float, default: ParamValue::Float(71.0), range: Some((1.0, 4096.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("closed_faces"), label: "Closed Faces (bits −X +X −Y +Y −Z +Z)", ty: ParamType::Int, default: ParamValue::Float(63.0), range: Some((0.0, 63.0)), enum_values: &[] },
-        ParamDef { name: Cow::Borrowed("wall_inset"), label: "Wall Inset (nodes)", ty: ParamType::Int, default: ParamValue::Float(PADDING_NODES as f32), range: Some((0.0, 64.0)), enum_values: &[] },
+        ParamDef { name: Cow::Borrowed("wall_inset"), label: "Wall Inset (nodes)", ty: ParamType::Float, default: ParamValue::Float(PADDING_NODES as f32), range: Some((0.0, 64.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("body_count"), label: "Bodies", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, MAX_FLUID_ROLES as f32)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("rows"), label: "Rows", ty: ParamType::Int, default: ParamValue::Float(0.0), range: Some((0.0, 16_777_216.0)), enum_values: &[] },
         ParamDef { name: Cow::Borrowed("tick_seconds"), label: "Tick (s)", ty: ParamType::Float, default: ParamValue::Float(TICK as f32), range: Some((0.0, 1.0)), enum_values: &[] },
@@ -159,8 +159,7 @@ impl Primitive for WhitewaterObstacleSource {
             .clamp(0.0, 63.0) as i32;
         let wall_inset = ctx
             .scalar_or_param("wall_inset", PADDING_NODES as f32)
-            .round()
-            .clamp(0.0, 64.0) as i32;
+            .clamp(0.0, 64.0);
         let body_count = ctx
             .scalar_or_param("body_count", 0.0)
             .round()
@@ -176,7 +175,7 @@ impl Primitive for WhitewaterObstacleSource {
         // The storage follows the node count the dispatch covers, before it
         // is encoded.
         let bytes = lattice.solid_bytes() * 4;
-        if self.solid.as_ref().is_none_or(|solid| solid.size < bytes) {
+        if self.solid.as_ref().is_none_or(|solid| solid.size != bytes) {
             let device = ctx.gpu_encoder().device;
             let created = crate::node_graph::scene_modifier_expand::admit_candidate_bytes(
                 device.modifier_memory_snapshot(),
@@ -240,7 +239,7 @@ pub(crate) struct ObstacleSourceJob<'a> {
     pub nodes: [u32; 3],
     /// Box walls that count as solid (bits −X +X −Y +Y −Z +Z), `wall_inset` nodes in from the lattice edge.
     pub closed_faces: i32,
-    pub wall_inset: i32,
+    pub wall_inset: f32,
     pub body_count: i32,
     pub rows: i32,
     pub tick_seconds: f32,

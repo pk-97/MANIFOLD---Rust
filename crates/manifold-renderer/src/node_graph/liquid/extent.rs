@@ -36,7 +36,7 @@ use crate::node_graph::liquid::clock::FIELD_RESERVE_INTERVALS;
 use crate::node_graph::liquid::fields::{FieldFrame, FieldLattice, STAGING_SLOTS as FIELD_STAGING_SLOTS};
 use crate::node_graph::liquid::frame_ring::RING;
 use crate::node_graph::liquid::grid::{FACE_GRID_PORTS, FACE_INPUT_PORTS, face_len};
-use crate::node_graph::liquid::lattice::LiquidLattice;
+use crate::node_graph::liquid::lattice::{FlipSolverGrid, LiquidLattice};
 use crate::node_graph::matter::{
     ACCUM_WORDS_PER_NODE, MatterGridNode, MatterPoint, REACTION_WORDS, STATS_WORDS, grid_accum_bytes, grid_bytes,
     lattice_blocks, lattice_nodes,
@@ -904,11 +904,11 @@ fn liquid_solid_distance(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 /// A frame's face grid storage: one array per wired axis over the domain's
 /// cells, the one-record hint otherwise. Provided before any check can stop
 /// the rule, since consumers size from it.
-fn provide_frame_faces(x: &mut AtomExtent<'_>, lattice: &LiquidLattice, valid_layers: f32) {
+fn provide_frame_faces(x: &mut AtomExtent<'_>, cells: [u32; 3], valid_layers: f32) {
     let published = FACE_INPUT_PORTS.iter().all(|port| x.wired(port));
     x.publish(FACE_GRID_PORTS[6], if published { valid_layers } else { 0.0 });
     for axis in 0..3 {
-        let bytes = face_len(lattice.cells(), axis) * 4;
+        let bytes = face_len(cells, axis) * 4;
         if x.wired(FACE_INPUT_PORTS[axis]) {
             x.provide(FACE_GRID_PORTS[axis], bytes);
             x.hold(bytes);
@@ -916,17 +916,17 @@ fn provide_frame_faces(x: &mut AtomExtent<'_>, lattice: &LiquidLattice, valid_la
             x.provide(FACE_GRID_PORTS[axis], 4);
         }
     }
-    for (&port, n) in FACE_GRID_PORTS[3..6].iter().zip(lattice.cells()) {
+    for (&port, n) in FACE_GRID_PORTS[3..6].iter().zip(cells) {
         x.publish(port, n as f32);
     }
 }
 
 /// Each wired face input holds its whole axis: the copy never publishes a
 /// partial grid.
-fn cover_frame_faces(x: &AtomExtent<'_>, lattice: &LiquidLattice) -> Result<(), Verdict> {
+fn cover_frame_faces(x: &AtomExtent<'_>, cells: [u32; 3]) -> Result<(), Verdict> {
     for (axis, port) in FACE_INPUT_PORTS.into_iter().enumerate() {
         if x.wired(port) {
-            x.covers(port, face_len(lattice.cells(), axis) * 4)?;
+            x.covers(port, face_len(cells, axis) * 4)?;
         }
     }
     Ok(())
@@ -942,7 +942,7 @@ fn matter_face_component(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 }
 
 fn face_sample_component(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
-    let cells = x.lattice()?.cells();
+    let cells = FlipSolverGrid::from_lattice(x.lattice()?).cells();
     let Some(axis) = axis_param(x.params()) else {
         return Err(Verdict::Refused("the axis is not X, Y or Z".into()));
     };
@@ -952,7 +952,7 @@ fn face_sample_component(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 
 fn matter_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let lattice = x.lattice()?;
-    provide_frame_faces(x, &lattice, MATTER_FACE_VALID_LAYERS as f32);
+    provide_frame_faces(x, lattice.cells(), MATTER_FACE_VALID_LAYERS as f32);
     let count = x.count("count", 0.0)?;
     x.covers("points", u64::from(count) * size_of::<MatterPoint>() as u64)?;
     x.covers("stats", u64::from(STATS_WORDS) * 4)?;
@@ -975,7 +975,7 @@ fn matter_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     for (port, n) in ["grid_nodes_x", "grid_nodes_y", "grid_nodes_z"].into_iter().zip(lattice.nodes()) {
         x.publish(port, n as f32);
     }
-    cover_frame_faces(x, &lattice)
+    cover_frame_faces(x, lattice.cells())
 }
 
 /// The sort's bin grid is searched with exactly the ranges it allocates, and
@@ -1324,7 +1324,7 @@ fn liquid_state(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 
     let mut interior_check = Ok(());
     if x.wired("interior_in") {
-        let bytes = crate::node_graph::liquid::grid::interior_bytes(x.lattice()?.cells());
+        let bytes = crate::node_graph::liquid::grid::interior_bytes(FlipSolverGrid::from_lattice(x.lattice()?).cells());
         x.provide("interior", bytes);
         x.hold(bytes);
         if x.bytes("interior_in") != Some(bytes) {
@@ -1341,7 +1341,7 @@ fn liquid_state(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
         if ["nodes_x", "nodes_y", "nodes_z"].iter().any(|port| x.input(port).is_none()) {
             return Err(Verdict::Refused("Liquid State: faces_in needs the lattice on nodes_x, nodes_y and nodes_z".into()));
         }
-        let faces = face_bytes(x.lattice()?.cells());
+        let faces = face_bytes(FlipSolverGrid::from_lattice(x.lattice()?).cells());
         let fed = x.feeds("faces");
         x.provide("faces", if fed { faces } else { 0 });
         if fed {
@@ -1384,13 +1384,14 @@ fn liquid_stats(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 fn liquid_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.covers("identity", 16)?;
     let lattice = x.lattice()?;
-    let surface = super::lattice::frame_lattice(lattice, x.params());
+    let surface = lattice.surface();
+    let solver = FlipSolverGrid::from_lattice(lattice);
     for (axis, input) in FACE_INPUT_PORTS.into_iter().enumerate() {
-        if x.wired(input) { x.hold((RING - 1) as u64 * face_len(lattice.cells(), axis) * 4); }
+        if x.wired(input) { x.hold((RING - 1) as u64 * face_len(solver.cells(), axis) * 4); }
     }
     let mut interior_check = Ok(());
     if x.wired("interior") {
-        let bytes = crate::node_graph::liquid::grid::interior_bytes(lattice.cells());
+        let bytes = crate::node_graph::liquid::grid::interior_bytes(solver.cells());
         if x.bytes("interior") != Some(bytes) {
             interior_check = Err(x.uncovered(format!("interior must hold exactly {bytes} bytes for the cell-centred lattice")));
         }
@@ -1402,7 +1403,7 @@ fn liquid_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
         x.provide("interior_b", 0);
     }
     let valid_layers = x.param("face_valid_layers", 0.0).round().clamp(0.0, 8.0);
-    provide_frame_faces(x, &lattice, valid_layers);
+    provide_frame_faces(x, solver.cells(), valid_layers);
     let count = x.count("count", 0.0)?;
     let particles = u64::from(count.max(1)) * PARTICLE;
     let solid = surface.solid_bytes();
@@ -1423,9 +1424,12 @@ fn liquid_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.covers("particles", u64::from(count) * PARTICLE)?;
     x.covers("stats", u64::from(LIQUID_STATS_WORDS) * 4)?;
     if wired {
+        if x.bytes("solid") != Some(solid) {
+            return Err(x.uncovered(format!("solid must hold exactly {solid} bytes on the native FLIP mesh grid; sample at gpu_flip_domain.mesh_min/mesh_nodes with mesh_wall_inset")));
+        }
         x.covers("solid", solid)?;
     }
-    cover_frame_faces(x, &lattice).and(interior_check)
+    cover_frame_faces(x, solver.cells()).and(interior_check)
 }
 
 /// One GPU FLIP step: the face grid it provides, the sort, the solver and its
@@ -1434,7 +1438,7 @@ fn liquid_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.covers("identity", 16)?;
     x.covers_if_bound("identity_out", 16)?;
-    let cells = x.lattice()?.cells();
+    let cells = FlipSolverGrid::from_lattice(x.lattice()?).cells();
     if let Some(reason) = lattice_refusal(cells) {
         return Err(Verdict::Refused(format!("GPU FLIP Step: {reason}. Lower Resolution.")));
     }
@@ -1448,7 +1452,7 @@ fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     }
     x.publish("substep_count",history_slots as f32);
     x.hold(super::substep_history::history_bytes(cells,history_slots));
-    let lattice = x.lattice()?;
+    let lattice = FlipSolverGrid::from_lattice(x.lattice()?);
     x.publish_transform("grid_bounds", lattice.bounds());
     for (port, value) in ["grid_nodes_x", "grid_nodes_y", "grid_nodes_z"].into_iter().zip(lattice.nodes())
         .chain(["face_cells_x", "face_cells_y", "face_cells_z"].into_iter().zip(cells))

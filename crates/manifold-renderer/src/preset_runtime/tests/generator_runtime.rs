@@ -48,6 +48,50 @@
         ParamManifest::from_params(pairs.iter().map(|(id, v)| slot(id, *v)).collect())
     }
 
+    #[test]
+    fn native_flip_grid_shared_solid_keeps_live_card_binding_fanout() {
+        use crate::node_graph::primitives::gpu_flip_preset::{render_def, WaterScene};
+        use manifold_core::effect_graph_def::{BindingTarget, EffectGraphWire, SerializedParamValue};
+        let mut def = render_def(WaterScene::still_pool(16));
+        let source = def.nodes.iter().find(|n| n.node_id.as_str() == "mesh_solid").unwrap().id;
+        // Reconstruct the saved authored-grid solid producer. The authored
+        // consumer keeps that grid while the FLIP frame receives a clone.
+        for wire in def.wires.iter_mut().filter(|w| w.to_node == source) {
+            if wire.from_port.starts_with("mesh_min_") || wire.from_port.starts_with("mesh_nodes_") {
+                wire.from_port = wire.to_port.clone();
+            }
+        }
+        def.wires.retain(|w| !(w.to_node == source && w.to_port == "wall_inset"));
+        def.nodes.iter_mut().find(|n| n.id == source).unwrap().params
+            .insert("wall_inset".into(), SerializedParamValue::Float { value: 3.0 });
+        let next = def.nodes.iter().map(|n| n.id).max().unwrap() + 1;
+        let sink: manifold_core::effect_graph_def::EffectGraphNode = serde_json::from_value(serde_json::json!({
+            "id": next, "nodeId": "authored_solid_sink", "typeId": "node.array_math"
+        })).unwrap();
+        def.nodes.push(sink);
+        def.wires.push(EffectGraphWire { from_node: source, from_port: "solid".into(),
+            to_node: next, to_port: "a".into() });
+        let metadata = def.preset_metadata.as_mut().unwrap();
+        metadata.params = vec![slot("solid_tick", 0.5).spec];
+        metadata.bindings = vec![serde_json::from_value(serde_json::json!({
+            "id": "solid_tick", "label": "Solid Tick", "defaultValue": 0.5,
+            "target": { "kind": "node", "nodeId": "mesh_solid", "param": "tick_seconds" },
+            "convert": { "type": "Float" }
+        })).unwrap()];
+        assert!(matches!(metadata.bindings[0].target, BindingTarget::Node { .. }));
+        let mut runtime = PresetRuntime::from_def(def, &PrimitiveRegistry::with_builtin(), None)
+            .expect("saved FLIP graph with shared authored solid loads");
+        let solids: Vec<_> = runtime.graph.nodes().filter(|n| n.node.type_id().as_str() == "node.liquid_solid_distance")
+            .map(|n| n.id).collect();
+        assert_eq!(solids.len(), 2, "shared source receives one native clone");
+        runtime.apply_param_values(&manifest(&[("solid_tick", 0.75)]));
+        for id in solids {
+            assert!(matches!(runtime.graph.get_node(id).unwrap().params.get("tick_seconds"),
+                Some(ParamValue::Float(value)) if *value == 0.75),
+                "live binding must reach both original and native clone");
+        }
+    }
+
     /// Regression for the "Lissajous repeats back-to-back in clip-trigger mode"
     /// bug: two bindings keyed by the same outer-card id (`clip_trigger`) must
     /// both pick up that slider's value (fan-out by source id, not position).

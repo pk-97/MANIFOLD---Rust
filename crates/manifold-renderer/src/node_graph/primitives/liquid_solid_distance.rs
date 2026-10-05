@@ -123,7 +123,7 @@ impl Primitive for LiquidSolidDistance {
         // The storage follows the node count the dispatch covers, before it
         // is encoded.
         let bytes = lattice.solid_bytes();
-        if self.solid.as_ref().is_none_or(|solid| solid.size < bytes) {
+        if self.solid.as_ref().is_none_or(|solid| solid.size != bytes) {
             let device = ctx.gpu_encoder().device;
             let created = crate::node_graph::scene_modifier_expand::admit_candidate_bytes(
                 device.modifier_memory_snapshot(),

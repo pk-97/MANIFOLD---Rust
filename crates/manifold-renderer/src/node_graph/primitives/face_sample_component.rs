@@ -13,7 +13,7 @@ use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::freeze::classify::FusedOutputCapacity;
 use crate::node_graph::fluid_particles::FaceSample;
 use crate::node_graph::liquid::grid::face_len;
-use crate::node_graph::liquid::lattice::LiquidLattice;
+use crate::node_graph::liquid::lattice::{FlipSolverGrid, LiquidLattice};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
 
@@ -46,7 +46,7 @@ struct ComponentUniforms {
 crate::primitive! {
     name: FaceSampleComponent,
     type_id: "node.face_sample_component",
-    purpose: "Copy one axis of a face grid (node.gpu_flip_step's faces, one FaceSample per cell of the authored box plus one along each axis) into the liquid seam's face array for that axis: (cells + 1) along the axis by cells on the other two, x fastest, velocity in m/s. nodes_x/y/z are the padded lattice's (node.gpu_flip_domain's), so the box has nodes − 7 cells per axis. Faces with weight 0 read 0. The storage holds one float per face grid record, a little more than the axis has faces; readers size the axis from the lattice.",
+    purpose: "Copy one axis of a face grid (node.gpu_flip_step's faces, one FaceSample per cell of the authored box plus one along each axis) into the liquid seam's face array for that axis: (cells + 1) along the axis by cells on the other two, x fastest, velocity in m/s. nodes_x/y/z are the padded lattice's (node.gpu_flip_domain's), so GPU FLIP has nodes − 4 solver cells per axis. These wires retain the authored lattice contract; use the domain nodes, not frame grid_nodes. Faces with weight 0 read 0. The storage holds one float per face grid record, a little more than the axis has faces; readers size the axis from the lattice.",
     inputs: {
         faces: Array(FaceSample) required,
         nodes_x: ScalarF32 optional, nodes_y: ScalarF32 optional, nodes_z: ScalarF32 optional,
@@ -90,7 +90,7 @@ impl Primitive for FaceSampleComponent {
         let Some(lattice) = LiquidLattice::from_wires(ctx, "Face Grid Component") else {
             return;
         };
-        let cells = lattice.cells();
+        let cells = FlipSolverGrid::from_lattice(lattice).cells();
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
         let (Some(faces), Some(out)) = (ctx.inputs.array("faces"), ctx.outputs.array("out")) else {
