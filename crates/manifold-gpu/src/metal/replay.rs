@@ -920,6 +920,9 @@ impl GpuEncoder {
     }
 }
 
+/// The most commands one replicated template ICB may hold.
+pub(crate) const MAX_TEMPLATE_COMMANDS: u32 = 1 << 16;
+
 /// Where a gated template's rounds run: grouped into executes of up to
 /// `chunk` rounds (`crate::template_chunks`), execute j by range entry
 /// `first + j * stride` of `ranges` (`GATED_RANGE_BYTES` per entry), which
@@ -1015,7 +1018,10 @@ impl GpuEncoder {
         let executes = crate::replay::template_chunks(copies, at.chunk).count() as u32;
         let last = executes.checked_sub(1).and_then(|c| c.checked_mul(at.stride)).and_then(|c| c.checked_add(at.first));
         let end = last.and_then(|l| (u64::from(l) + 1).checked_mul(crate::replay::GATED_RANGE_BYTES));
-        if commands == 0 || at.chunk == 0 || end.is_none_or(|end| end > at.ranges.size) {
+        // One ICB holds `commands` × `chunk` commands and each execute length is
+        // written into a u32 range entry, so the product must fit both.
+        let replicated = commands.checked_mul(at.chunk).filter(|&n| n <= MAX_TEMPLATE_COMMANDS);
+        if commands == 0 || at.chunk == 0 || replicated.is_none() || end.is_none_or(|end| end > at.ranges.size) {
             return Err(format!(
                 "gated template: {commands} commands, {copies} rounds by {} in {executes} executes from entry {} by {} do not fit a {}-byte range buffer",
                 at.chunk, at.first, at.stride, at.ranges.size

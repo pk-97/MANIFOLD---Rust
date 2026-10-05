@@ -1357,13 +1357,15 @@ fn replay_template_chunks_match_direct_at_every_boundary() {
     let device = GpuDevice::new();
     let k = Kernels::new(&device);
     let base = TemplateSpec { copies: 40, chunk: 8, ..TemplateSpec::default() };
-    let mut specs: Vec<TemplateSpec> = [0, 1, 2, 3, 4, 6, 7, 8, 14, 15, 16, 22, 23, 24, 31, 39, 40]
+    let mut specs: Vec<TemplateSpec> = [0, 1, 2, 3, 4, 6, 7, 8, 14, 15, 16, 22, 23, 24, 30, 31, 32, 38, 39, 40]
         .iter()
         .map(|&live| TemplateSpec { live, ..base })
         .collect();
     specs.push(TemplateSpec { chunk: 4, live: 9, ..base });
     specs.push(TemplateSpec { chunk: 4, live: 10, ..base });
     specs.push(TemplateSpec { copies: 13, live: 13, ..base });
+    specs.push(TemplateSpec { copies: 13, chunk: 4, live: 13, ..base });
+    specs.push(TemplateSpec { copies: 13, chunk: 4, live: 7, ..base });
     let (_, d) = template_frames(&device, &k, &specs);
     for (i, (s, spec)) in d.iter().zip(&specs).enumerate() {
         let executes = crate::template_chunks(spec.copies, spec.chunk).count() as u64;
@@ -1376,4 +1378,25 @@ fn replay_template_chunks_match_direct_at_every_boundary() {
         }
     }
     assert_eq!(crate::template_chunks(40, 8).count(), 8);
+}
+
+/// A chunk whose replicated buffer would pass the template command bound
+/// (or wrap the u32 execute length) is refused before anything is
+/// allocated, on the replayed and the direct path.
+#[test]
+fn replay_template_chunk_past_the_command_bound_is_refused() {
+    let device = GpuDevice::new();
+    let k = Kernels::new(&device);
+    for replay in [true, false] {
+        let mut t = TemplateRig::new(&device, replay);
+        for chunk in [super::replay::MAX_TEMPLATE_COMMANDS, u32::MAX] {
+            let spec = TemplateSpec { chunk, ..TemplateSpec::default() };
+            let err = run_template_frame(&device, &k, &mut t, 0, spec).expect_err("refused");
+            assert!(err.contains("do not fit"), "replay {replay} chunk {chunk}: {err}");
+        }
+        if let Some(cache) = t.rig.cache.as_ref() {
+            assert_eq!(cache.segment_buffers(), 0, "no template buffer allocated");
+            assert_eq!(cache.stats().templates_recorded, 0, "nothing recorded");
+        }
+    }
 }

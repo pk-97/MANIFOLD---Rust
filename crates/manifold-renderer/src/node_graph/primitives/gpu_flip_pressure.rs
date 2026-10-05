@@ -431,10 +431,10 @@ const TRIPLE_BYTES: u64 = 12;
 /// per chunked execute from CHUNK_ENTRIES, never more than the rounds.
 const RANGES_BYTES: u64 = 3 * MAX_ITERATIONS as u64 * GATED_RANGE_BYTES;
 /// The first chunked execute's range entry (gpu_flip_pressure.wgsl CHUNK_ENTRIES).
-const CHUNK_ENTRIES: u32 = 2 * MAX_ITERATIONS;
+pub(crate) const CHUNK_ENTRIES: u32 = 2 * MAX_ITERATIONS;
 /// Most rounds one execute runs: executes cover 1, 2, 4, … rounds doubling
 /// to this, so a stop leaves at most this less one guarded round running.
-const ROUND_CHUNK: u32 = 32;
+pub(crate) const ROUND_CHUNK: u32 = 32;
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 static CHUNK_OVERRIDE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
@@ -958,6 +958,13 @@ impl PressureSolver {
 
     /// The last solve's record: |f|∞, iterations run, 1.0 when it stopped by
     /// the tolerance, then |r|∞ per iteration; [`PROGRESS_FLOATS`] floats.
+    /// The gated range entries: per-round from 0, chunked executes from
+    /// [`CHUNK_ENTRIES`], `{location, length}` u32 pairs.
+    #[cfg(all(test, feature = "gpu-proofs"))]
+    pub(crate) fn ranges(&self) -> Option<&GpuBuffer> {
+        self.buffers.as_ref().map(|b| &b.ranges)
+    }
+
     #[cfg(all(test, feature = "gpu-proofs"))]
     pub(crate) fn progress(&self) -> Option<&GpuBuffer> {
         self.buffers.as_ref().map(|b| &b.progress)
@@ -1131,9 +1138,9 @@ impl Sink for GpuEncoder {
 
 /// Metal binds only what a dispatch names: a binding the entry point
 /// references and the dispatch leaves out reads whatever its slot last held.
-/// Checked on the zero, whose stop check reads `armed`; not on every pass,
-/// because some reference a binding only on a path they never take (smooth
-/// and binding 4).
+/// Checked on the zero, whose stop check reads `armed`; not on every pass
+/// yet: smooth references binding 4 on sources it never runs with, a latent
+/// binding-contract mismatch (BUG-cnyc8, smooth binding 4 mismatch).
 fn debug_assert_bound(pipeline: &GpuComputePipeline, bindings: &[GpuBinding], label: &str) {
     debug_assert!(pipeline.unbound_binding(bindings).is_none(), "{label} leaves binding {:?} unbound", pipeline.unbound_binding(bindings));
 }

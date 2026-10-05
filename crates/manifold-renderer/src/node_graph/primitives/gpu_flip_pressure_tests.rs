@@ -2132,54 +2132,184 @@ fn pressure_module_chunk_sizes_match_main_golden() {
     }
 }
 
-/// Reports a warm replayed Converged(64) solve on Dam Break at 64³ with one
-/// round an execute (main's per-round executes) against chunked executes:
-/// validations, executes and the GPU time of the prepare and solve.
+/// The GPU's own arm and stop at chunk boundaries, read back: after a warm
+/// replayed solve every chunked execute that starts at or past the completed
+/// rounds has length 0 (the arm's cut for Fixed, the stop's cancel for
+/// Converged), every earlier one runs its rounds of one
+/// round's commands, and the scalars and record past the
+/// completed rounds still hold the sentinel.
+#[test]
+fn pressure_module_chunk_ranges_arm_and_stop_on_the_gpu() {
+    use super::gpu_flip_pressure::{CHUNK_ENTRIES, ROUND_CHUNK};
+    let (n, dam) = load_fixture(DAM_BREAK);
+    let (_, density) = load_fixture("deep_pool_density_problems");
+    let fixed = [1, 2, 3, 4, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65, 95, 96, 97, 900];
+    let mut checked = 0;
+    for chunk in [ROUND_CHUNK, 8, 3] {
+        super::gpu_flip_pressure::set_round_chunk(chunk);
+        for saved in [&dam[0], &dam[4], &density[0]] {
+            let p = resample(saved, n, 64);
+            let mut rig = Rig::new(64);
+            let mut per_round = 0;
+            let mut cache = Some(GpuReplayCache::default());
+            let stops = fixed.iter().map(|&k| Stop::Fixed(k)).chain([Stop::Converged(64), Stop::Converged(MAX_ITERATIONS)]);
+            for stop in stops {
+                let cap = match stop {
+                    Stop::Fixed(k) | Stop::Converged(k) => k,
+                };
+                // The first visit records; the second replays and is read.
+                chunk_solve(&mut rig, &p, stop, &mut cache);
+                let (ranges, scalars, record) = chunk_solve(&mut rig, &p, stop, &mut cache);
+                let completed = f32::from_bits(record[1]) as u32;
+                assert!(completed <= cap, "chunk {chunk} {stop:?}: {completed} rounds completed");
+                if let Stop::Fixed(k) = stop {
+                    assert_eq!(completed, k, "chunk {chunk} {stop:?}: a fixed count runs every round");
+                }
+                let length = |j: u32| ranges[2 * (CHUNK_ENTRIES + j) as usize + 1];
+                if per_round == 0 {
+                    per_round = length(0);
+                    assert!(per_round > 0, "chunk {chunk} {stop:?}: the first execute runs");
+                }
+                for (j, (start, rounds)) in manifold_gpu::template_chunks(cap, chunk).enumerate() {
+                    let want = if start < completed { rounds * per_round } else { 0 };
+                    assert_eq!(length(j as u32), want, "chunk {chunk} {stop:?} completed {completed}: execute {j} from round {start}");
+                }
+                let tail = |words: &[u32], from: usize| words[from..].iter().position(|&w| w != GOLDEN_SENTINEL).map(|i| i + from);
+                assert_eq!(tail(&scalars, 2 * completed as usize), None, "chunk {chunk} {stop:?}: a scalar past round {completed} was written");
+                assert_eq!(tail(&record, 4 + completed as usize), None, "chunk {chunk} {stop:?}: a record past round {completed} was written");
+                checked += 1;
+            }
+        }
+    }
+    super::gpu_flip_pressure::set_round_chunk(0);
+    assert_eq!(checked, 3 * 3 * 22);
+}
+
+/// One solve seeded like the golden's, inside the replay span; the range
+/// entries, scalars and record read back.
+fn chunk_solve(rig: &mut Rig, p: &Problem, stop: Stop, cache: &mut Option<GpuReplayCache>) -> (Vec<u32>, Vec<u32>, Vec<u32>) {
+    let water: Vec<f32> = p.water.iter().map(|&w| f32::from(u8::from(w))).collect();
+    let cells = rig.n * rig.n * rig.n;
+    let scalar_bytes = u64::from(2 * MAX_ITERATIONS) * 4;
+    let record_bytes = u64::from(PROGRESS_FLOATS) * 4;
+    let sentinel = rig.device.create_buffer_shared(scalar_bytes.max(record_bytes));
+    // SAFETY: shared buffers sized for what is written; the last solve completed.
+    unsafe {
+        rig.water.write(0, bytemuck::cast_slice(&water));
+        rig.rhs.write(0, bytemuck::cast_slice(&p.f));
+        rig.pressure.write(0, bytemuck::cast_slice(&vec![0u32; cells]));
+        sentinel.write(0, bytemuck::cast_slice(&vec![GOLDEN_SENTINEL; (sentinel.size / 4) as usize]));
+    }
+    let scalars = rig.device.create_buffer_shared(scalar_bytes);
+    let record = rig.device.create_buffer_shared(record_bytes);
+    let mut enc = rig.device.create_encoder("gpu-flip-pressure-chunk-ranges");
+    let n = rig.n as u32;
+    let lattice = Water { lattice: [n; 3], cell_size: rig.cell_size() as f32, water: &rig.water, faces: &rig.faces, phi: rig.phi.as_ref() };
+    rig.solver.prepare(&rig.device, &mut enc, &lattice).expect("prepares");
+    rig.solver.seed_records(&mut enc, &sentinel);
+    enc.begin_replay(&rig.device, cache.take().expect("cache"));
+    rig.solver.solve(&mut enc, &lattice, run_at!(rig, stop)).expect("solves");
+    *cache = Some(enc.end_replay());
+    let range_src = rig.solver.ranges().expect("prepared");
+    let ranges = rig.device.create_buffer_shared(range_src.size);
+    enc.copy_buffer_to_buffer(range_src, &ranges, range_src.size);
+    rig.solver.copy_scalars(&mut enc, &scalars);
+    enc.copy_buffer_to_buffer(rig.solver.progress().expect("prepared"), &record, record_bytes);
+    enc.commit_and_wait_completed();
+    let words = |b: &GpuBuffer| read::<u32>(b, (b.size / 4) as usize);
+    (words(&ranges), words(&scalars), words(&record))
+}
+
+/// Reports warm replayed Converged solves on Dam Break at 64³ at cap 64 and
+/// 900, one round an execute (main's per-round executes) against chunked
+/// executes: completed rounds, CPU encode time of the prepare and solve,
+/// validations, executes and GPU time. Configurations alternate order each
+/// pass so drift does not land on one side.
 #[test]
 fn pressure_module_chunk_cost_probe() {
-    const REPS: usize = 30;
+    const REPS: usize = 20;
+    const PASSES: usize = 4;
     let (n, saved) = load_fixture(DAM_BREAK);
     let p = resample(&saved[0], n, 64);
+    let configs: [(u32, u32); 4] = [(64, 1), (64, 32), (MAX_ITERATIONS, 32), (MAX_ITERATIONS, 8)];
+    struct Run {
+        rig: Rig,
+        cache: Option<GpuReplayCache>,
+        gpu: Vec<f64>,
+        cpu: Vec<f64>,
+        completed: u32,
+        validations: u64,
+        executes: u64,
+        recorded: u64,
+    }
+    let mut runs: Vec<Run> = configs
+        .iter()
+        .map(|_| {
+            let rig = Rig::new(64);
+            let water: Vec<f32> = p.water.iter().map(|&w| f32::from(u8::from(w))).collect();
+            // SAFETY: shared buffers sized for the lattice; nothing is queued.
+            unsafe {
+                rig.water.write(0, bytemuck::cast_slice(&water));
+                rig.rhs.write(0, bytemuck::cast_slice(&p.f));
+            }
+            Run { rig, cache: Some(GpuReplayCache::default()), gpu: Vec::new(), cpu: Vec::new(), completed: 0, validations: 0, executes: 0, recorded: 0 }
+        })
+        .collect();
+    for pass in 0..PASSES {
+        let order: Vec<usize> = if pass % 2 == 0 { (0..configs.len()).collect() } else { (0..configs.len()).rev().collect() };
+        for i in order {
+            let (cap, chunk) = configs[i];
+            super::gpu_flip_pressure::set_round_chunk(chunk);
+            let run = &mut runs[i];
+            let rig = &mut run.rig;
+            let record = rig.device.create_buffer_shared(u64::from(PROGRESS_FLOATS) * 4);
+            for rep in 0..REPS + 3 {
+                let start = std::time::Instant::now();
+                let mut enc = rig.device.create_encoder("gpu-flip-pressure-chunk-probe");
+                enc.begin_replay(&rig.device, run.cache.take().expect("cache"));
+                let n = rig.n as u32;
+                let lattice = Water { lattice: [n; 3], cell_size: rig.cell_size() as f32, water: &rig.water, faces: &rig.faces, phi: None };
+                rig.solver.prepare(&rig.device, &mut enc, &lattice).expect("prepares");
+                rig.solver.solve(&mut enc, &lattice, run_at!(rig, Stop::Converged(cap))).expect("solves");
+                run.cache = Some(enc.end_replay());
+                let cpu = start.elapsed().as_secs_f64() * 1e3;
+                enc.copy_buffer_to_buffer(rig.solver.progress().expect("prepared"), &record, record.size);
+                let before = run.cache.as_ref().map(|c| c.stats()).expect("cache");
+                let ms = enc.commit_and_wait_completed_timed() * 1e3;
+                if rep >= 3 {
+                    run.gpu.push(ms);
+                    run.cpu.push(cpu);
+                    run.completed = f32::from_bits(read::<u32>(&record, 2)[1]) as u32;
+                }
+                if rep == 2 {
+                    run.validations = before.replayed;
+                    run.executes = before.segments_replayed;
+                    run.recorded = before.recorded;
+                }
+            }
+            let end = run.cache.as_ref().map(|c| c.stats()).expect("cache");
+            let reps = REPS as u64;
+            run.validations = (end.replayed - run.validations) / reps;
+            run.executes = (end.segments_replayed - run.executes) / reps;
+            run.recorded = end.recorded - run.recorded;
+        }
+    }
+    super::gpu_flip_pressure::set_round_chunk(0);
+    let p50 = |v: &mut Vec<f64>| {
+        v.sort_by(f64::total_cmp);
+        v[v.len() / 2]
+    };
     let mut report = Vec::new();
-    for chunk in [1, 32] {
-        super::gpu_flip_pressure::set_round_chunk(chunk);
-        let mut rig = Rig::new(64);
-        let water: Vec<f32> = p.water.iter().map(|&w| f32::from(u8::from(w))).collect();
-        // SAFETY: shared buffers sized for the lattice; nothing is queued.
-        unsafe {
-            rig.water.write(0, bytemuck::cast_slice(&water));
-            rig.rhs.write(0, bytemuck::cast_slice(&p.f));
-        }
-        let mut cache = Some(GpuReplayCache::default());
-        let mut gpu = Vec::with_capacity(REPS);
-        let mut warm = None;
-        for rep in 0..REPS + 3 {
-            let mut enc = rig.device.create_encoder("gpu-flip-pressure-chunk-probe");
-            enc.begin_replay(&rig.device, cache.take().expect("cache"));
-            let n = rig.n as u32;
-            let lattice = Water { lattice: [n; 3], cell_size: rig.cell_size() as f32, water: &rig.water, faces: &rig.faces, phi: None };
-            rig.solver.prepare(&rig.device, &mut enc, &lattice).expect("prepares");
-            rig.solver.solve(&mut enc, &lattice, run_at!(rig, Stop::Converged(MAX_ITERATIONS))).expect("solves");
-            cache = Some(enc.end_replay());
-            let ms = enc.commit_and_wait_completed_timed() * 1e3;
-            if rep == 2 {
-                warm = cache.as_ref().map(|c| c.stats());
-            }
-            if rep >= 3 {
-                gpu.push(ms);
-            }
-        }
-        super::gpu_flip_pressure::set_round_chunk(0);
-        gpu.sort_by(f64::total_cmp);
-        let (warm, end) = (warm.expect("warm stats"), cache.expect("cache").stats());
-        let reps = REPS as u64;
+    for (run, (cap, chunk)) in runs.iter_mut().zip(configs) {
         report.push(format!(
-            "chunk {chunk}: GPU p50 {:.3} ms, validations {} a solve, segment executes {} a solve, recorded {}",
-            gpu[REPS / 2],
-            (end.replayed - warm.replayed) / reps,
-            (end.segments_replayed - warm.segments_replayed) / reps,
-            end.recorded - warm.recorded
+            "cap {cap} chunk {chunk}: completed {} rounds, CPU encode p50 {:.3} ms, GPU p50 {:.3} ms, validations {} a solve, segment executes {} a solve, recorded warm {}",
+            run.completed,
+            p50(&mut run.cpu),
+            p50(&mut run.gpu),
+            run.validations,
+            run.executes,
+            run.recorded
         ));
     }
-    println!("CHUNK PROBE warm Converged(64), Dam Break 64^3:\n{}", report.join("\n"));
+    println!("CHUNK PROBE warm Converged, Dam Break 64^3, {PASSES} alternating passes of {REPS}:\n{}", report.join("\n"));
 }
