@@ -13,7 +13,7 @@ use manifold_gpu::{GpuBuffer, GpuDevice, GpuReplayCache};
 
 use super::gpu_flip_atom_tests::{FACE_FLOATS, assert_close, face_grid_len, random_values, random_water};
 use super::gpu_flip_bodies::{BodyPasses, Bodies};
-use super::gpu_flip_pressure::{PROGRESS_FLOATS, PressureSolver, Solve, Stop, Water};
+use super::gpu_flip_pressure::{MAX_ITERATIONS, PROGRESS_FLOATS, PressureSolver, Solve, Stop, Water};
 use super::gpu_flip_step::{TILE, set_all_tiles, set_gate_off, set_poison};
 use super::liquid_surface_tests::read;
 use crate::node_graph::liquid::bodies::LiquidBody;
@@ -1056,8 +1056,8 @@ fn body_golden_lines() -> Vec<String> {
                 let mut solver = PressureSolver::default();
                 solver.prepare_pipelines(&scene.device);
                 solver.set_clock_plan(&plan);
-                let sentinel = shared(&scene.device, &vec![BODY_SENTINEL; 2 * 64 + PROGRESS_FLOATS as usize]);
-                let scalars = shared(&scene.device, &vec![0_u32; 2 * 64]);
+                let sentinel = shared(&scene.device, &vec![BODY_SENTINEL; 2 * MAX_ITERATIONS as usize + PROGRESS_FLOATS as usize]);
+                let scalars = shared(&scene.device, &vec![0_u32; 2 * MAX_ITERATIONS as usize]);
                 let record = shared(&scene.device, &vec![0_u32; PROGRESS_FLOATS as usize]);
                 let mut cache = replay.then(GpuReplayCache::default);
                 let mut fingerprints = [0u64; 4];
