@@ -1,6 +1,6 @@
 # GPU FLIP display history — retained publications and a presentation cursor
 
-**Status:** APPROVED design, P1 landed, P2 contract amended after Astra and Fable review (section 3.4, section 5 P2 brief), build in progress · 2026-10-06 · Claude, reviewed by Astra. Bead: BUG-ckvpp (display shows every third tick, never interpolated, ~0.25 s late).
+**Status:** IN PROGRESS · 2026-10-06 · P1 and P2 landed; owed: P3, Peter's stage look (section 5). Bead: BUG-ckvpp (display shows every third tick, never interpolated).
 **Prerequisites:** none.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5–section 6 before starting any phase.
 
