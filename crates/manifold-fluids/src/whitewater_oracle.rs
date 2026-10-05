@@ -15,6 +15,9 @@ unsafe extern "C" {
         generation: f64, speed: f64, influence: f64) -> i32;
     fn manifold_fluids_oracle_emit_configured(lifecycle: *mut c_void,
         curvature: *const f32, positions: *const f32, count: usize, dt: f64) -> i32;
+    fn manifold_fluids_oracle_emit_engine(lifecycle: *mut c_void, positions: *const f32, count: usize,
+        dt: f64, influence_base: f64, influence_decay: f64, surface_out: *mut f32,
+        curvature_out: *mut f32, influence_out: *mut f32, emitted_out: *mut u32) -> i32;
     fn manifold_fluids_oracle_curvature(
         phi: *const f32,
         isize: u32,
@@ -107,6 +110,58 @@ pub fn emit(lifecycle: &mut WhitewaterLifecycle, curvature: &[f32], positions: &
         )
     };
     native_result(ok, "oracle emit")
+}
+
+/// The fields FLIP's emitter read on one engine-as-configured tick, and
+/// what it made.
+#[derive(Clone, Debug)]
+pub struct EngineEmitFields {
+    /// `calculateCurvatureGrid`'s reinitialised surface distance, cells.
+    pub surface: Vec<f32>,
+    /// Its curvature, cells.
+    pub curvature: Vec<f32>,
+    /// The obstacle influence after this tick's update, nodes.
+    pub influence: Vec<f32>,
+    /// Particles this tick's emission added to the pool, counted inside the
+    /// engine before its lifecycle step advanced, retyped or removed any.
+    pub emitted: u32,
+}
+
+/// One tick of FLIP's emitter and lifecycle as `FluidSimulation` configures
+/// them, on the lifecycle's last fields: the engine's lifetime variance, an
+/// `InfluenceGrid` decayed and spread every tick with `influence_base` and
+/// `influence_decay`, and the surface distance and curvature from
+/// `calculateCurvatureGrid` on the level set. `positions` (scene metres) are
+/// the markers. Rates come from [`set_emission_rates`] or the engine
+/// defaults. Covers constant influence only: the solid carries no mesh
+/// objects, where the engine installs a domain object and resets boundary
+/// nodes to the base each step, so obstacle sources and a changed base do
+/// not reach the boundary as they do in the engine.
+pub fn emit_engine(lifecycle: &mut WhitewaterLifecycle, positions: &[[f32; 3]], dt: f64,
+    influence_base: f64, influence_decay: f64) -> Result<EngineEmitFields, FluidError> {
+    let cells = lifecycle.grid().cell_count();
+    let c = lifecycle.grid().cells.map(|n| n as usize + 1);
+    let mut fields = EngineEmitFields {
+        surface: vec![0.0; cells],
+        curvature: vec![0.0; cells],
+        influence: vec![0.0; c[0] * c[1] * c[2]],
+        emitted: 0,
+    };
+    // SAFETY: live handle; outputs cover the grid's cells and nodes, positions holds `len` triples.
+    let ok = unsafe { manifold_fluids_oracle_emit_engine(lifecycle.native_handle(), positions.as_ptr().cast(),
+        positions.len(), dt, influence_base, influence_decay, fields.surface.as_mut_ptr(),
+        fields.curvature.as_mut_ptr(), fields.influence.as_mut_ptr(), &mut fields.emitted) };
+    native_result(ok, "oracle engine emit")?;
+    Ok(fields)
+}
+
+/// The emitter's rates for [`emit_engine`]; `options.influence` is unused there.
+pub fn set_emission_rates(lifecycle: &mut WhitewaterLifecycle, options: EmissionOptions) -> Result<(), FluidError> {
+    // SAFETY: live handle; scalar options are consumed synchronously.
+    let ok = unsafe { manifold_fluids_oracle_emission_options(lifecycle.native_handle(),
+        options.wavecrest, options.turbulence, options.minimum, options.maximum,
+        options.generation, options.speed, options.influence) };
+    native_result(ok, "oracle emission options")
 }
 
 /// FLIP's curvature of a cell-centred level set, x fastest.
@@ -219,5 +274,91 @@ mod tests {
             assert!((oracle.surface_phi[i] - phi[i]).abs() < 1e-4, "node {i}: {} against {}", oracle.surface_phi[i], phi[i]);
         }
         assert!(super::curvature(&phi[1..], cells, dx).is_err(), "a short field is refused");
+    }
+
+    /// The engine-as-configured variant on a sheared, rising slab: it emits
+    /// all three types, its lifetimes carry the engine's variance, its
+    /// influence relaxes at the decay rate rather than jumping to the base,
+    /// and its surface is calculateCurvatureGrid's, not the raw level set.
+    #[test]
+    fn oracle_engine_emit_runs_as_the_engine_configures_it() {
+        const N: u32 = 16;
+        const H: f32 = 0.25;
+        const DT: f64 = 1.0 / 60.0;
+        let n = N as usize;
+        let grid = WhitewaterGrid { cells: [N; 3], cell_size: H, origin: [0.0; 3] };
+        // Liquid below y = 2.6, a dome on top so the crest curves.
+        let level: Vec<f32> = (0..n * n * n).map(|i| {
+            let (x, y, z) = (i % n, (i / n) % n, i / (n * n));
+            let (px, py, pz) = ((x as f32 + 0.5) * H, (y as f32 + 0.5) * H, (z as f32 + 0.5) * H);
+            let r = ((px - 2.0).powi(2) + (pz - 2.0).powi(2)).sqrt();
+            py - (2.6 + 0.6 * (-r * r).exp())
+        }).collect();
+        // A floor a cell down: solid nodes inside the influence band, which
+        // the engine variant must take without mesh objects.
+        let solid: Vec<f32> = (0..(n + 1).pow(3)).map(|i| ((i / (n + 1)) % (n + 1)) as f32 * H - H).collect();
+        // A hash-noise shear so the liquid holds turbulence for bubbles.
+        let noise = |i: usize, salt: usize| (((i * 2_654_435_761 + salt * 40_503) % 1000) as f32 / 500.0) - 1.0;
+        let u: Vec<f32> = (0..(n + 1) * n * n).map(|i| 30.0 * noise(i, 1)).collect();
+        let v: Vec<f32> = (0..n * (n + 1) * n).map(|i| 6.0 + 30.0 * noise(i, 2)).collect();
+        let w: Vec<f32> = (0..n * n * (n + 1)).map(|i| 30.0 * noise(i, 3)).collect();
+        let fields = WhitewaterFields {
+            face_u: &u, face_v: &v, face_w: &w, face_cells: [N; 3], face_offset: [0; 3],
+            level: &level, solid: &solid, gravity: [0.0, -9.81, 0.0],
+        };
+        let mut lifecycle = WhitewaterLifecycle::new(grid, 200_000, 11).expect("lifecycle");
+        lifecycle.set_fields(&fields).expect("fields");
+        // Eight markers a cell in the liquid, as FLIP seeds them.
+        let mut markers = Vec::new();
+        for (i, &phi) in level.iter().enumerate() {
+            if phi >= 0.0 { continue; }
+            let (x, y, z) = (i % n, (i / n) % n, i / (n * n));
+            for s in 0..8 {
+                let o = [(s & 1) as f32, ((s >> 1) & 1) as f32, ((s >> 2) & 1) as f32].map(|b| (0.25 + 0.5 * b) * H);
+                markers.push([x as f32 * H + o[0], y as f32 * H + o[1], z as f32 * H + o[2]]);
+            }
+        }
+        super::set_emission_rates(&mut lifecycle, super::EmissionOptions::default()).expect("rates");
+        let first = super::emit_engine(&mut lifecycle, &markers, DT, 1.0, 2.0).expect("first tick");
+        let mut out = Vec::new();
+        lifecycle.particles(&mut out).expect("particles");
+        let kinds = [WhitewaterKind::Foam, WhitewaterKind::Bubble, WhitewaterKind::Spray]
+            .map(|k| out.iter().filter(|p| p.kind == k).count());
+        println!("engine oracle tick 1: foam/bubble/spray {kinds:?} of {} markers", markers.len());
+        assert!(kinds.iter().all(|&c| c > 0), "every type must emit: {kinds:?}");
+
+        // (a) Without variance a lifetime is 7 times an energy of at most 1,
+        // so only the engine's variance of 3 lifts one past 7.
+        let hi = out.iter().map(|p| p.lifetime).fold(f32::MIN, f32::max);
+        assert!(hi > 7.0, "longest lifetime {hi}: no variance");
+
+        // (c) The surface is calculateCurvatureGrid's on the level set.
+        let reference = super::curvature(&level, [N; 3], f64::from(H)).expect("reference curvature");
+        assert_eq!(first.surface, reference.surface_phi, "surface is not calculateCurvatureGrid's");
+        assert_eq!(first.curvature, reference.curvature, "curvature is not calculateCurvatureGrid's");
+        assert!(first.surface.iter().zip(&level).any(|(a, b)| (a - b).abs() > 1e-3), "surface is the raw level set");
+
+        // (b) Influence starts at base 1; with the base lowered to 0.5 it
+        // relaxes by decay · dt a tick, where a constant fill would jump. The
+        // engine's domain object resets nodes within its 3-cell band of the
+        // walls to the new base, which this oracle does not model, so only
+        // nodes clear of that band are held to the decay.
+        assert!(first.influence.iter().all(|&x| (x - 1.0).abs() < 1e-6), "first tick influence is the base");
+        let second = super::emit_engine(&mut lifecycle, &markers, DT, 0.5, 2.0).expect("second tick");
+        let expected = 1.0 - 2.0 * DT as f32;
+        let side = n + 1;
+        let clear = |i: usize| (4..side - 4).contains(&i);
+        let interior: Vec<f32> = (0..side.pow(3))
+            .filter(|&i| clear(i % side) && clear((i / side) % side) && clear(i / (side * side)))
+            .map(|i| second.influence[i])
+            .collect();
+        assert!(!interior.is_empty());
+        assert!(interior.iter().all(|&x| (x - expected).abs() < 1e-5), "influence did not decay at 2/s: {:?}", &interior[..4]);
+
+        // The count is taken before the lifecycle step: on a fresh pool it
+        // is at least what survives one update (here the floor solid and
+        // the lifecycle remove about a sixth).
+        let (counted, live) = (first.emitted as usize, out.len());
+        assert!(counted >= live && live > 0, "counted {counted} emitted against {live} live after one update");
     }
 }
