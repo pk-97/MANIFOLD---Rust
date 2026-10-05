@@ -2,7 +2,7 @@
 
 <!-- index: BUG-fwp2n (unused solver rounds still cost encode time) and BUG-6rki6 (pressure cap 900 with tolerance stop): the round index moves to a GPU counter, one walked round becomes a transactional replay template, rounds execute in geometric chunks guarded after the stop, and Max Iterations becomes a slider with a migration. -->
 
-**Status:** IN PROGRESS · 2026-10-06 · Claude (design) with Astra's binding review folded in · C0 to C6 built; owed: lead review and landing (section 9 (Phasing)); tracked in BUG-fwp2n (unused solver rounds still cost encode time) and BUG-6rki6 (pressure cap 900 with tolerance stop).
+**Status:** SHIPPED · 2026-10-06 · C0 to C6 on main; deferred items in section 11 (Deferred).
 **Prerequisites:** none.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) and section 6 (Seam briefs) before starting any phase.
 
