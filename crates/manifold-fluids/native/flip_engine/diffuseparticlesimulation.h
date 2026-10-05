@@ -126,6 +126,11 @@ public:
 
     ParticleSystem* getDiffuseParticles();
     size_t getNumDiffuseParticles();
+#ifdef MANIFOLD_WHITEWATER_ORACLE
+    // MANIFOLD test oracle only: normal (non-dust) particles added by
+    // emission since the oracle last zeroed it, before any lifecycle step.
+    size_t oracleEmitted = 0;
+#endif
 
     double getForceFieldWeightWhitewaterFoam();
     void setForceFieldWeightWhitewaterFoam(double v);

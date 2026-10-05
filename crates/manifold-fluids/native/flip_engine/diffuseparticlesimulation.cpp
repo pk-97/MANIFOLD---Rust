@@ -1888,6 +1888,9 @@ void DiffuseParticleSimulation::_emitNormalDiffuseParticles(std::vector<DiffuseP
     }
 
     _computeNewDiffuseParticleVelocities(newdps);
+#ifdef MANIFOLD_WHITEWATER_ORACLE
+    oracleEmitted += newdps.size();
+#endif
     _addNewDiffuseParticles(newdps);
 }
 
