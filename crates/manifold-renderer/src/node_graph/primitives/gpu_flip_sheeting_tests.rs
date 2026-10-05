@@ -197,6 +197,11 @@ fn matches_port(device: &GpuDevice, name: &str, markers: &[[f32; 3]], phi: &[f32
         assert_eq!(gpu.claims[index], *rank, "{name}: birth {rank} does not hold its sub-cell");
         assert!(held.insert(index), "{name}: two births in one sub-cell");
     }
+    // And the other way: every sub-cell a claim won holds a birth of that
+    // rank, so no winner is lost between the claim and the births.
+    let claimed: std::collections::HashSet<usize> = (0..gpu.claims.len()).filter(|&i| gpu.claims[i] != u32::MAX).collect();
+    assert_eq!(claimed.len(), got.len(), "{name}: claims won and births differ in number");
+    assert!(claimed == held, "{name}: a won claim has no birth");
     let claimants: u32 = gpu.flags.iter().map(|f| (f >> 8).count_ones()).sum();
     // Several markers of one cell passing the depth walk: detect's shared flag.
     let mut thin_per_cell = std::collections::HashMap::new();

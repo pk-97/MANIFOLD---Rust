@@ -178,7 +178,7 @@ impl GpuSheeting {
     }
 
     /// The birth list in the engine's order and its count buffer: word 0 the
-    /// true count, word 1 births whose recomputed claim failed (always 0).
+    /// true count, word 1 claimants whose recomputed evaluation disagreed (always 0).
     #[cfg(all(test, feature = "gpu-proofs"))]
     pub(crate) fn births(&self) -> (&GpuBuffer, &GpuBuffer) {
         let b = self.buffers.as_ref().expect("sheeting reserved");

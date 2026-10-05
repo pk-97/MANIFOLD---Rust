@@ -477,7 +477,8 @@ fn site_of_rank(r: u32) -> u32 {
     return 8u * flat(q) + o;
 }
 
-// A claimant that holds its sub-cell, recomputed: state 2 and its claim.
+// A claimant that holds its sub-cell, recomputed: state 2 and its claim;
+// state 3 a claimant that passes but lost its sub-cell to a lower rank.
 fn holds(site: u32) -> Evaluation {
     var e = Evaluation(0u, vec3<f32>(0.0), 0u);
     if site == NO_CLAIM { return e; }
@@ -485,7 +486,7 @@ fn holds(site: u32) -> Evaluation {
     e = evaluate(site);
     if e.state != 2u { return e; }
     let ps = sub_of(e.p);
-    if atomicLoad(&claims[8u * flat(ps / 2) + sub_case(ps)]) != e.rank { e.state = 1u; }
+    if atomicLoad(&claims[8u * flat(ps / 2) + sub_case(ps)]) != e.rank { e.state = 3u; }
     return e;
 }
 
@@ -498,12 +499,20 @@ fn resolve(@builtin(global_invocation_id) gid: vec3<u32>) {
     if r >= rank_total() { return; }
     // The engine keeps a seed unless its draw is over the rate; standalone
     // runs at rate 1, which keeps every one (the draw is under 1).
-    winners[r] = select(0u, 1u, holds(site_of_rank(r)).state == 2u && u.rate > 0.0 && fill_draw(r) <= u.rate);
+    let site = site_of_rank(r);
+    let e = holds(site);
+    // A flagged claimant that no longer passes on recomputation would lose
+    // its claim silently: count it with the failures (always 0).
+    if site != NO_CLAIM && (atomicLoad(&flags[site / 8u]) & (1u << (8u + site % 8u))) != 0u && e.state < 2u {
+        atomicAdd(&birth_count[1], 1u);
+    }
+    winners[r] = select(0u, 1u, e.state == 2u && u.rate > 0.0 && fill_draw(r) <= u.rate);
 }
 
 // After the scan: each birth at its index in engine order, up to the list's
-// capacity; word 0 of the count is the true total. Word 1 counts births whose
-// recomputed evaluation no longer holds its claim (a proof that must stay 0).
+// capacity; word 0 of the count is the true total. Word 1 counts claimants
+// whose recomputed evaluation disagrees with the claim pass, here or in
+// resolve (a proof that must stay 0).
 @compute @workgroup_size(256)
 fn place(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
