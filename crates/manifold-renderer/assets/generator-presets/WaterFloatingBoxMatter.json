@@ -195,7 +195,7 @@
         "wholeNumbers": false
       },
       {
-        "defaultValue": 0.35,
+        "defaultValue": 0.5,
         "formatString": "F2",
         "id": "mesh_relaxation",
         "isToggle": false,
@@ -434,7 +434,7 @@
         "convert": {
           "type": "Float"
         },
-        "defaultValue": 0.35,
+        "defaultValue": 0.5,
         "id": "mesh_relaxation",
         "label": "Smoothing Value",
         "target": {
@@ -2833,7 +2833,7 @@
             "params": {
               "value": {
                 "type": "Float",
-                "value": 0.3499999940395355
+                "value": 0.5
               }
             },
             "typeId": "node.value"
@@ -4046,7 +4046,7 @@
         },
         "mesh_relaxation": {
           "type": "Float",
-          "value": 0.3499999940395355
+          "value": 0.5
         },
         "particle_scale": {
           "type": "Float",

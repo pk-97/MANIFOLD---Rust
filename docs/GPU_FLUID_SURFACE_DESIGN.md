@@ -41,20 +41,13 @@ is the slot-9 work this design builds on.
 
 Peter selected FLIP Fluids as the reference. This supersedes the pending look
 decision in the earlier audit and any historical tuning recommendations below.
-The reference is the effective instantiated `WaterDamBreak.json`, then vendored
-engine defaults for omitted values. **2026-10-05 correction:** bindings apply
+Every water preset, and both Dam Break twins, start at the bare FLIP Fluids engine
+surface defaults (Peter, 2026-10-05): particle scale **3.0**, subdivision **1**
+(Surface Detail 0) and mesh smoothing **0.5** for two iterations. Bindings apply
 their `defaultValue` in `preset_runtime/build.rs` and `node_graph/bound_graph.rs`
-unless `defaultMirrorsNodeParam` is set. Native Dam Break therefore starts at
-particle scale **2.2**, overriding its node value 3.0. Fresh GPU FLIP Dam Break
-now uses the same effective particle scale and Surface Detail **1**, meaning
-subdivision **2**: at resolution 64 both mesh a 135³ lattice with 0.03125 m
-spacing. Existing saved surface settings remain explicit. These are the native
-scene's authored defaults; the bare engine defaults are particle scale 3.0,
-subdivision 1 and mesh smoothing 0.5. Both Dam Break scenes instead use mesh
-smoothing 0.35 for two iterations. The earlier node-only audit missed the card
-overrides. Detail 1 increases dense surface samples by about eight times over
-Detail 0; this default correction is not a measured performance or visual-parity
-claim.
+unless `defaultMirrorsNodeParam` is set, so the card defaults carry these values,
+not only the node params. Existing saved surface settings remain explicit.
+Detail 1 costs about eight times the dense surface samples of Detail 0.
 
 Native seed capture also rejects four bottom-corner sites at both 8³ and 16³
 through its interpolated solid field; GPU fill keeps them. Native interior
@@ -118,7 +111,7 @@ The GPU stores the nearest f32 marker coefficient, `0.31017524`.
 | Mesh vertex solid clamp | constrain mu to solid root on open side; sequential epsilon bounds 1e-10 | present at b75c12b29; missing contact coverage and credit | retained exact rule; oblique-wall and thin-plate proofs | ported | `crates/manifold-fluids/native/flip_engine/polygonizer3d.cpp:467`; `crates/manifold-renderer/src/node_graph/primitives/shaders/volume_surface_mesh_body.wgsl:54` |
 | Anisotropy / centre smoothing / detached shrink | sphere / 0 / 1 | sphere / 0 / 1 | sphere / 0 / 1 | matched | `crates/manifold-fluids/native/flip_engine/particlemesher.cpp:418`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_preset.rs:519` |
 | Field smoothing / Fill Pits | 0 / 0 (engine has neither) | 0 / 0 (engine has neither) | 0 / 0 (engine has neither) | matched | `crates/manifold-fluids/native/flip_engine/particlemesher.cpp:305`; `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_preset.rs:519` |
-| Mesh smoothing value | 0.35 preset override (header default 0.5) | 0.5 | 0.35 | ported | `crates/manifold-renderer/assets/generator-presets/WaterDamBreak.json:652`; `crates/manifold-renderer/src/node_graph/primitives/surface_mesh_normals.rs:125` |
+| Mesh smoothing value | 0.5 (engine default) | 0.5 | 0.5 | matched | `crates/manifold-renderer/assets/generator-presets/WaterDamBreak.json:652`; `crates/manifold-renderer/src/node_graph/primitives/surface_mesh_normals.rs:125` |
 | Mesh smoothing iterations | 2 | 2 | 2 | matched | `crates/manifold-renderer/assets/generator-presets/WaterDamBreak.json:656`; `crates/manifold-renderer/src/node_graph/primitives/smooth_surface_mesh.rs:33` |
 | Whitewater enabled / types | on; foam, bubbles, spray; dust off | on; foam, bubbles, spray; dust off | on; foam, bubbles, spray; dust off | matched | `crates/manifold-fluids/native/flip_engine/diffuseparticlesimulation.h:461`; `crates/manifold-renderer/src/node_graph/primitives/whitewater_step.rs:142` |
 | Whitewater capacity | 100000 preset override | 100000 preset override | 100000 preset override | matched | `crates/manifold-renderer/assets/generator-presets/WaterDamBreak.json:664`; `crates/manifold-renderer/src/node_graph/primitives/whitewater_step.rs:52` |
