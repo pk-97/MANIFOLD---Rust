@@ -476,6 +476,16 @@ impl GpuEncoder {
         label: &str,
         pipeline: &GpuComputePipeline,
     ) -> Retained<ProtocolObject<dyn MTLComputeCommandEncoder>> {
+        self.begin_profiled_compute_named(label, pipeline.state.staticThreadgroupMemoryLength() as u32)
+    }
+
+    /// [`Self::begin_profiled_compute`] by label and threadgroup memory: a
+    /// template's executes open their sampled encoder through here.
+    pub(super) fn begin_profiled_compute_named(
+        &mut self,
+        label: &str,
+        threadgroup_bytes: u32,
+    ) -> Retained<ProtocolObject<dyn MTLComputeCommandEncoder>> {
         self.flush_replay();
         if let (EncoderState::Compute(enc), Some(p)) = (&self.state, &self.profile)
             && p.granularity.reuses_open_encoder(p.open_tag.as_deref(), &p.tag)
@@ -483,7 +493,6 @@ impl GpuEncoder {
             return enc.clone();
         }
         self.end_current();
-        let threadgroup_bytes = pipeline.state.staticThreadgroupMemoryLength() as u32;
         let Some((sample_buffer, start, end)) = self
             .profile
             .as_mut()

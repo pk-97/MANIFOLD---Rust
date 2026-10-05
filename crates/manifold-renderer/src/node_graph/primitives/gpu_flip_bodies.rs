@@ -279,7 +279,9 @@ impl BodyPasses {
             None => enc.plain(&pipes.partial, &partial, groups, "gpu_flip.bodies.partial"),
         }
         // A fixed array, not a Vec: this runs every step. Without a reaction
-        // binding 9 is left off.
+        // binding 9 holds the sums, which mode 0 never writes through it: a
+        // template command inherits no binding, so every one the entry point
+        // references is bound.
         let finalize = [
             GpuBinding::Bytes { binding: 0, data },
             buffer(4, bodies.bodies),
@@ -290,11 +292,10 @@ impl BodyPasses {
             self.clock_binding(),
             buffer(9, reaction.unwrap_or(sums)),
         ];
-        let bound = if reaction.is_some() { finalize.len() } else { finalize.len() - 1 };
         let groups = [bodies.count.max(1), 1, 1];
         match gate {
-            Some(gate) => enc.gated(&pipes.finalize, &finalize[..bound], groups, gate.buffer, gate.finalize, "gpu_flip.bodies.finalize"),
-            None => enc.plain(&pipes.finalize, &finalize[..bound], groups, "gpu_flip.bodies.finalize"),
+            Some(gate) => enc.gated(&pipes.finalize, &finalize, groups, gate.buffer, gate.finalize, "gpu_flip.bodies.finalize"),
+            None => enc.plain(&pipes.finalize, &finalize, groups, "gpu_flip.bodies.finalize"),
         }
         Ok(())
     }

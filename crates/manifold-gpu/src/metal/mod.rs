@@ -26,6 +26,7 @@ mod profiling;
 mod residency;
 pub mod raytrace;
 mod replay;
+mod template;
 mod retire;
 mod shader_compiler;
 mod spirv_msl_fixup;
@@ -40,10 +41,13 @@ mod pipeline_cache_tests;
 mod workgroup_zeroing_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod replay_tests;
+#[cfg(all(test, feature = "gpu-proofs"))]
+mod template_tests;
 
 // Re-export all public types so external code paths remain identical.
 pub use device::GpuDevice;
-pub use replay::{GatedRecorder, GpuReplayCache, TemplateRanges};
+pub use replay::GpuReplayCache;
+pub use template::{GatedRecorder, GpuTemplateStats, GpuTemplateStore, TemplateRanges, TemplateTicket};
 pub use encoder::{AuxColorAttachment, DepthMsaaDraw, DepthMsaaPassDesc, DrawCount, GpuEncoder};
 pub use fft::{FftKind, GpuFft};
 pub use frame_fence::FrameFence;

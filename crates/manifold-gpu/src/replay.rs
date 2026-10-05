@@ -49,14 +49,6 @@ pub struct GpuReplayStats {
     pub segments_replayed: u64,
     /// Gated dispatches that ran directly, as an indirect dispatch.
     pub segments_direct: u64,
-    /// Gated templates (`GpuEncoder::repeat_gated_template`) committed by a
-    /// walk that recorded at least one command.
-    pub templates_recorded: u64,
-    /// Gated templates committed by a walk that only validated.
-    pub templates_replayed: u64,
-    /// Gated templates that ran whole as direct dispatches: no entry, a
-    /// full span, a count mismatch, an unrecordable dispatch or no room.
-    pub templates_direct: u64,
 }
 
 impl std::ops::AddAssign for GpuReplayStats {
@@ -69,27 +61,19 @@ impl std::ops::AddAssign for GpuReplayStats {
         self.store_allocations += other.store_allocations;
         self.segments_replayed += other.segments_replayed;
         self.segments_direct += other.segments_direct;
-        self.templates_recorded += other.templates_recorded;
-        self.templates_replayed += other.templates_replayed;
-        self.templates_direct += other.templates_direct;
     }
 }
 
 /// A dispatch's place in a gated segment: the range buffer the GPU writes
 /// the segment's length into (by identity and byte offset), the length the
 /// segment declared, and this dispatch's slot inside it. Slot 0 opens the
-/// segment, so a recording's segment structure is part of every key. A
-/// template's segment also carries how many copies execute it and the
-/// range entries between them; a plain segment has both 0.
+/// segment, so a recording's segment structure is part of every key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct GateKey {
     pub ranges: usize,
     pub offset: u64,
     pub commands: u32,
     pub slot: u32,
-    pub copies: u32,
-    pub stride: u32,
-    pub chunk: u32,
 }
 
 /// `MANIFOLD_ENCODE_REPLAY=0` turns replay off for the process, which brings
@@ -360,7 +344,7 @@ mod tests {
         variants.push(("binding count (more)", k));
 
         let mut k = key(&bytes);
-        k.gate = Some(GateKey { ranges: 0x5000, offset: 0, commands: 4, slot: 0, copies: 0, stride: 0, chunk: 0 });
+        k.gate = Some(GateKey { ranges: 0x5000, offset: 0, commands: 4, slot: 0 });
         variants.push(("gate (added)", k));
 
         for (field, variant) in &variants {
@@ -369,7 +353,7 @@ mod tests {
         assert!(!recording.matches(1, &key(&bytes)), "past the end must miss");
 
         // A gated command: every gate field decides the match too.
-        let gate = GateKey { ranges: 0x5000, offset: 8, commands: 4, slot: 1, copies: 0, stride: 0, chunk: 0 };
+        let gate = GateKey { ranges: 0x5000, offset: 8, commands: 4, slot: 1 };
         let mut gated = Recording::default();
         let mut k = key(&bytes);
         k.gate = Some(gate);
@@ -381,9 +365,6 @@ mod tests {
             ("offset", GateKey { offset: 16, ..gate }),
             ("commands", GateKey { commands: 5, ..gate }),
             ("slot", GateKey { slot: 0, ..gate }),
-            ("copies", GateKey { copies: 3, ..gate }),
-            ("stride", GateKey { stride: 2, ..gate }),
-            ("chunk", GateKey { chunk: 4, ..gate }),
         ] {
             let mut k = key(&bytes);
             k.gate = Some(changed);

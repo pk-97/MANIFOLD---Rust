@@ -23,13 +23,27 @@
 //! coarsest level is solved by its inverse, not smoothed, so it is never a
 //! gradient level.
 
-use manifold_gpu::{GATED_RANGE_BYTES, GatedRecorder, GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder, TemplateRanges};
+use manifold_gpu::{
+    GATED_RANGE_BYTES, GatedRecorder, GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice, GpuEncoder, GpuTemplateStore, TemplateRanges,
+};
 
 use super::gpu_flip_bodies::{Bodies, BodyGate, BodyPasses};
 use crate::node_graph::fluid_particles::FaceSample;
 
 const SHADER: &str = include_str!("shaders/gpu_flip_pressure.wgsl");
 const INVERSE_SHADER: &str = include_str!("shaders/coarse_inverse.wgsl");
+
+/// The solver's WGSL with `ROUNDS` at [`MAX_ITERATIONS`]: the file says 64, the
+/// `pressure-cap-900` proof build substitutes its cap.
+fn shader_source() -> std::borrow::Cow<'static, str> {
+    let written = "const ROUNDS: u32 = 64u;";
+    debug_assert!(SHADER.contains(written), "the shader declares ROUNDS as 64");
+    if MAX_ITERATIONS == 64 {
+        std::borrow::Cow::Borrowed(SHADER)
+    } else {
+        std::borrow::Cow::Owned(SHADER.replace(written, &format!("const ROUNDS: u32 = {MAX_ITERATIONS}u;")))
+    }
+}
 
 /// The coarsest level's largest side: at most 4³ = 64 cells, the one
 /// workgroup the coarse inverse runs in.
@@ -43,7 +57,11 @@ pub(crate) const MAX_SIDE: u32 = 1024;
 /// Not the engine's 900, which bounds its MIC-preconditioned solve: this
 /// multigrid one converges in 10 to 15, and every round up to the cap is
 /// encoded for each solve of each clock slot whether it runs or not.
+#[cfg(not(feature = "pressure-cap-900"))]
 pub(crate) const MAX_ITERATIONS: u32 = 64;
+/// The `pressure-cap-900` proof build: the engine's cap, before C6 makes it the default.
+#[cfg(feature = "pressure-cap-900")]
+pub(crate) const MAX_ITERATIONS: u32 = 900;
 /// The stop's relative tolerance on |r|∞ / |f|∞, FLIP Fluids'
 /// `_pressureSolveTolerance` unchanged: f32 carries the recursive residual
 /// below it in 11 to 14 iterations on every saved problem
@@ -296,7 +314,8 @@ struct Pipelines {
 
 impl Pipelines {
     fn new(device: &GpuDevice) -> Self {
-        let pipeline = |entry: &str, label: &str| device.create_compute_pipeline(SHADER, entry, label);
+        let source = shader_source();
+        let pipeline = |entry: &str, label: &str| device.create_compute_pipeline(&source, entry, label);
         Self {
             classify: pipeline("classify_main", "gpu_flip.pressure.classify"),
             lists: pipeline("lists_main", "gpu_flip.pressure.lists"),
@@ -649,6 +668,9 @@ pub(crate) type CoarseRhs<'a> = &'a dyn Fn(&mut GpuEncoder, &GpuBuffer, [u32; 3]
 pub(crate) struct PressureSolver {
     pipelines: Option<Pipelines>,
     buffers: Option<Buffers>,
+    /// The round template every solve runs (GPU_FLIP_PRESSURE_CAP_DESIGN.md
+    /// section 3.2): the same chunked executes on every encoder path.
+    templates: Option<GpuTemplateStore>,
     /// The GPU FLIP clock plan every pass reads (gpu_flip_pressure.wgsl
     /// slot_plan): zeros, always active, until the step sets its slot's.
     plan: Option<GpuBuffer>,
@@ -662,6 +684,9 @@ impl PressureSolver {
     pub(crate) fn prepare_pipelines(&mut self, device: &GpuDevice) {
         if self.pipelines.is_none() {
             self.pipelines = Some(Pipelines::new(device));
+        }
+        if self.templates.is_none() {
+            self.templates = Some(GpuTemplateStore::new(device));
         }
         if self.plan.is_none() {
             let plan = device.create_buffer_shared(48);
@@ -842,12 +867,6 @@ impl PressureSolver {
         let top = View { rhs: &b.r, e: &b.z, ..view(b, water, k) };
         let (rhs_k, x): (&GpuBuffer, &GpuBuffer) = if k == 0 { (rhs, pressure) } else { (spare(b, k, Spare::Rhs), spare(b, k, Spare::E)) };
         let chain = Chain { pipes, b, water, g: plain, k, plan };
-        if k > 0 {
-            chain.restrict_down(enc, rhs, rhs_k, RESTRICT_MASK, 0);
-            if let Some(hook) = coarse_rhs {
-                hook(enc, rhs_k, top.lattice, top.cell_size);
-            }
-        }
         // Each round is one replayed segment, or two for a plain body product: the arm
         // writes every round's range entries as live and the stop zeroes the
         // rounds after it, with the gate. On the fine level the body passes
@@ -867,12 +886,6 @@ impl PressureSolver {
         // The arm's `mode` is the rounds and `live` the chunk, for the chunked
         // executes' range entries.
         let arm = Params { color: before, slot: after, cy: slots.armed(), cz: body_count, mode: iterations, live: round_chunk(), ..fine };
-        enc.dispatch_compute(
-            &pipes.arm,
-            &[bytes(&arm), buffer(12, &b.gate), buffer(14, &b.armed), buffer(15, &b.ranges), buffer(21, plan)],
-            [1, 1, 1],
-            "gpu_flip.pressure.arm",
-        );
         let body_gate = BodyGate {
             buffer: &b.gate,
             partial: slots.body_partial() as u64 * TRIPLE_BYTES,
@@ -880,6 +893,57 @@ impl PressureSolver {
             product: slots.level(0) as u64 * TRIPLE_BYTES,
             live: g.live,
         };
+        let r = RoundPasses { pipes, b, water, g, top, fine, x, k, bodies: bodies.is_some() };
+        // Every round encodes the same bytes (the round index is the GPU's
+        // progress[1]), so one walked round is the template the GPU runs once
+        // per round, in executes of 1, 2, 4, … up to ROUND_CHUNK rounds,
+        // execute j by range entry CHUNK_ENTRIES + j, on every encoder path.
+        // It is prepared before anything of the solve encodes, so a refused
+        // template leaves the command buffer untouched. On the gate the body
+        // product runs in live rounds only; at a coarse level its chain (the
+        // direction down to the fine lattice, the product back up) rides the
+        // gate too. The proofs' gate-off lever (a plain body product) has no
+        // template and encodes round by round below.
+        let ticket = match round {
+            BodyRound::Plain => None,
+            _ => {
+                debug_assert_eq!(after, 0, "a gated round is one segment");
+                let store = self.templates.as_mut().ok_or("the solver was not prepared")?;
+                let at = TemplateRanges { ranges: &b.ranges, first: CHUNK_ENTRIES, stride: 1, chunk: round_chunk() };
+                let ticket = enc.prepare_template(store, at, before, iterations, |recorder| {
+                    let mut sink = Round { recorder, refused: None };
+                    r.head(&mut sink);
+                    match (round, bodies) {
+                        (BodyRound::Gated, Some((passes, bodies))) => {
+                            passes.apply_gated(&mut sink, bodies, g.tiles, &b.p, &b.scratch, &body_gate)?;
+                        }
+                        (BodyRound::GatedCoarse(_), Some((passes, bodies))) => {
+                            let inside = Chain { g, ..chain };
+                            inside.prolong_down(&mut sink, &b.p, pressure, Spare::E);
+                            zero_in(&mut sink, pipes, g, 0, n, &b.body, plan);
+                            passes.apply_gated(&mut sink, bodies, g.tiles, pressure, &b.body, &body_gate)?;
+                            inside.restrict_down(&mut sink, &b.body, &b.scratch, 0, RESTRICT_ADD);
+                        }
+                        _ => {}
+                    }
+                    r.tail(&mut sink);
+                    sink.refused.map_or(Ok(()), Err)
+                })?;
+                Some(ticket)
+            }
+        };
+        if k > 0 {
+            chain.restrict_down(enc, rhs, rhs_k, RESTRICT_MASK, 0);
+            if let Some(hook) = coarse_rhs {
+                hook(enc, rhs_k, top.lattice, top.cell_size);
+            }
+        }
+        enc.dispatch_compute(
+            &pipes.arm,
+            &[bytes(&arm), buffer(12, &b.gate), buffer(14, &b.armed), buffer(15, &b.ranges), buffer(21, plan)],
+            [1, 1, 1],
+            "gpu_flip.pressure.arm",
+        );
         plain.dispatch(
             enc,
             &pipes.init,
@@ -896,7 +960,6 @@ impl PressureSolver {
             "gpu_flip.pressure.init",
         );
         check(enc, pipes, b, plain, &Params { mode: 1, ..fine });
-        let r = RoundPasses { pipes, b, water, g, top, fine, x, k, bodies: bodies.is_some() };
         match (round, bodies) {
             // The proofs' lever (gate off): a plain body product splits the
             // round around an ungated chain, two segments a round, encoded
@@ -923,37 +986,11 @@ impl PressureSolver {
                 }
                 enc.end_gated_segments();
             }
-            // Every round encodes the same bytes (the round index is the GPU's
-            // progress[1]), so one walked round is the template the GPU runs
-            // once per round, in executes of 1, 2, 4, … up to ROUND_CHUNK rounds,
-            // execute j by range entry CHUNK_ENTRIES + j. On the gate the body
-            // product runs in live rounds only; at a coarse level its chain
-            // (the direction down to the fine lattice, the product back up)
-            // rides the gate too.
-            _ if iterations > 0 => {
-                debug_assert_eq!(after, 0, "a gated round is one segment");
-                let at = TemplateRanges { ranges: &b.ranges, first: CHUNK_ENTRIES, stride: 1, chunk: round_chunk() };
-                enc.repeat_gated_template(at, before, iterations, |recorder| {
-                    let mut sink = Round { recorder, refused: None };
-                    r.head(&mut sink);
-                    match (round, bodies) {
-                        (BodyRound::Gated, Some((passes, bodies))) => {
-                            passes.apply_gated(&mut sink, bodies, g.tiles, &b.p, &b.scratch, &body_gate)?;
-                        }
-                        (BodyRound::GatedCoarse(_), Some((passes, bodies))) => {
-                            let inside = Chain { g, ..chain };
-                            inside.prolong_down(&mut sink, &b.p, pressure, Spare::E);
-                            zero_in(&mut sink, pipes, g, 0, n, &b.body, plan);
-                            passes.apply_gated(&mut sink, bodies, g.tiles, pressure, &b.body, &body_gate)?;
-                            inside.restrict_down(&mut sink, &b.body, &b.scratch, 0, RESTRICT_ADD);
-                        }
-                        _ => {}
-                    }
-                    r.tail(&mut sink);
-                    sink.refused.map_or(Ok(()), Err)
-                })?;
+            _ => {
+                if let (Some(ticket), Some(store)) = (ticket, self.templates.as_mut()) {
+                    enc.execute_template(store, ticket);
+                }
             }
-            _ => {}
         }
         if k > 0 {
             chain.prolong_down(enc, x, pressure, Spare::E);
@@ -972,6 +1009,19 @@ impl PressureSolver {
 
     /// The last solve's record: |f|∞, iterations run, 1.0 when it stopped by
     /// the tolerance, then |r|∞ per iteration; [`PROGRESS_FLOATS`] floats.
+    /// What the round template store did over the solver's life.
+    #[cfg(all(test, feature = "gpu-proofs"))]
+    pub(crate) fn template_stats(&self) -> manifold_gpu::GpuTemplateStats {
+        self.templates.as_ref().map(|t| t.stats()).unwrap_or_default()
+    }
+
+    /// The work vectors a round writes: r, z, p, the scratch and the body
+    /// product, for proofs that compare every output of a solve.
+    #[cfg(all(test, feature = "gpu-proofs"))]
+    pub(crate) fn work_vectors(&self) -> Option<[&GpuBuffer; 5]> {
+        self.buffers.as_ref().map(|b| [&b.r, &b.z, &b.p, &b.scratch, &b.body])
+    }
+
     /// The gated range entries: per-round from 0, chunked executes from
     /// [`CHUNK_ENTRIES`], `{location, length}` u32 pairs.
     #[cfg(all(test, feature = "gpu-proofs"))]
@@ -1450,7 +1500,7 @@ fn smooth<S: Sink>(enc: &mut S, pipes: &Pipelines, v: &View<'_>, color: u32, swe
     g.dispatch(
         enc,
         &pipes.smooth,
-        &[bytes(&params), buffer(1, v.water), buffer(3, v.rhs), buffer(5, v.e), buffer(16, v.partials), buffer(17, v.rows)],
+        &[bytes(&params), buffer(1, v.water), buffer(3, v.rhs), buffer(4, v.rhs), buffer(5, v.e), buffer(16, v.partials), buffer(17, v.rows)],
         g.slots.level(level),
         "gpu_flip.pressure.smooth",
     );
@@ -1625,7 +1675,7 @@ mod tests {
     /// be the cap the solver sizes the entries for.
     #[test]
     fn shader_rounds_match_the_iteration_cap() {
-        assert!(SHADER.contains(&format!("const ROUNDS: u32 = {MAX_ITERATIONS}u;")));
+        assert!(super::shader_source().contains(&format!("const ROUNDS: u32 = {MAX_ITERATIONS}u;")));
     }
 
     #[test]

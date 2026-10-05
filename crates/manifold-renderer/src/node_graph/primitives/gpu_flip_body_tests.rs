@@ -474,6 +474,7 @@ fn gpu_flip_coupled_round_replay_matches_direct() {
     let mut replay = Run::new(true);
     let mut last = GpuReplayCache::default().stats();
     let mut stopped = None;
+    let mut last_template = replay.solver.template_stats();
     for visit in 0..7 {
         let (input, stop, active) = match visit {
             4 => (&zero, Stop::Converged(ROUNDS), true),
@@ -499,14 +500,17 @@ fn gpu_flip_coupled_round_replay_matches_direct() {
             assert!(got.1[..3].iter().any(|&v| f32::from_bits(v).abs() > 1e-6), "visit {visit}: the dynamic body participates");
         }
         let stats = replay.cache.as_ref().expect("replay cache returned").stats();
+        let template = replay.solver.template_stats();
         // The first visit records its entry; the second grows the recording.
         if visit >= 2 {
             assert_eq!(stats.recorded, last.recorded, "visit {visit}: warm recordings unchanged");
             assert_eq!(stats.store_allocations, last.store_allocations, "visit {visit}: warm storage unchanged");
             assert_eq!(stats.segments_direct, last.segments_direct, "visit {visit}: no direct round dispatches");
-            assert_eq!(stats.segments_replayed - last.segments_replayed, manifold_gpu::template_chunks(ROUNDS, 32).count() as u64, "visit {visit}: one execute per chunk of rounds, including stopped/inactive rounds");
+            assert_eq!(template.executes - last_template.executes, manifold_gpu::template_chunks(ROUNDS, 32).count() as u64, "visit {visit}: one execute per chunk of rounds, including stopped/inactive rounds");
+            assert_eq!(template.walks - last_template.walks, 1, "visit {visit}: one walked round");
         }
         last = stats;
+        last_template = template;
     }
 }
 
