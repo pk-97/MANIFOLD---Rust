@@ -439,10 +439,24 @@ pub(crate) const ROUND_CHUNK: u32 = 32;
 #[cfg(all(test, feature = "gpu-proofs"))]
 static CHUNK_OVERRIDE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
-/// Test-only: the most rounds an execute runs (0 restores ROUND_CHUNK).
+/// Test-only: the most rounds an execute runs while the guard lives; its
+/// drop restores ROUND_CHUNK, so a panicking proof cannot leak the override
+/// into the next test.
 #[cfg(all(test, feature = "gpu-proofs"))]
-pub(crate) fn set_round_chunk(chunk: u32) {
+pub(crate) fn set_round_chunk(chunk: u32) -> RoundChunkOverride {
     CHUNK_OVERRIDE.store(chunk, std::sync::atomic::Ordering::SeqCst);
+    RoundChunkOverride
+}
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+#[must_use = "the override ends when the guard drops"]
+pub(crate) struct RoundChunkOverride;
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+impl Drop for RoundChunkOverride {
+    fn drop(&mut self) {
+        CHUNK_OVERRIDE.store(0, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 fn round_chunk() -> u32 {

@@ -2124,9 +2124,8 @@ fn pressure_module_chunk_sizes_match_main_golden() {
     let golden = std::fs::read_to_string(format!("{}/tests/fixtures/{GOLDEN}", env!("CARGO_MANIFEST_DIR"))).expect("golden fixture reads");
     let expected: Vec<&str> = golden.lines().filter(|l| !l.starts_with('#')).collect();
     for chunk in [1, 3, 4, 32] {
-        super::gpu_flip_pressure::set_round_chunk(chunk);
+        let _chunk = super::gpu_flip_pressure::set_round_chunk(chunk);
         let lines = golden_lines();
-        super::gpu_flip_pressure::set_round_chunk(0);
         let moved: Vec<String> = expected.iter().zip(&lines).filter(|(e, l)| **e != l.as_str()).map(|(e, l)| format!("want {e}\n got {l}")).collect();
         assert!(moved.is_empty(), "chunk {chunk}: {} golden cases moved:\n{}", moved.len(), moved.join("\n"));
     }
@@ -2146,13 +2145,14 @@ fn pressure_module_chunk_ranges_arm_and_stop_on_the_gpu() {
     let fixed = [1, 2, 3, 4, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65, 95, 96, 97, 900];
     let mut checked = 0;
     for chunk in [ROUND_CHUNK, 8, 3] {
-        super::gpu_flip_pressure::set_round_chunk(chunk);
+        let _chunk = super::gpu_flip_pressure::set_round_chunk(chunk);
         for saved in [&dam[0], &dam[4], &density[0]] {
             let p = resample(saved, n, 64);
             let mut rig = Rig::new(64);
             let mut per_round = 0;
             let mut cache = Some(GpuReplayCache::default());
-            let stops = fixed.iter().map(|&k| Stop::Fixed(k)).chain([Stop::Converged(64), Stop::Converged(MAX_ITERATIONS)]);
+            // Counts past the build's cap are refused, so they are left out.
+            let stops = fixed.iter().filter(|&&k| k <= MAX_ITERATIONS).map(|&k| Stop::Fixed(k)).chain([Stop::Converged(64), Stop::Converged(MAX_ITERATIONS)]);
             for stop in stops {
                 let cap = match stop {
                     Stop::Fixed(k) | Stop::Converged(k) => k,
@@ -2181,8 +2181,8 @@ fn pressure_module_chunk_ranges_arm_and_stop_on_the_gpu() {
             }
         }
     }
-    super::gpu_flip_pressure::set_round_chunk(0);
-    assert_eq!(checked, 3 * 3 * 22);
+    let per_case = fixed.iter().filter(|&&k| k <= MAX_ITERATIONS).count() + 2;
+    assert_eq!(checked, 3 * 3 * per_case);
 }
 
 /// One solve seeded like the golden's, inside the replay span; the range
@@ -2259,7 +2259,7 @@ fn pressure_module_chunk_cost_probe() {
         let order: Vec<usize> = if pass % 2 == 0 { (0..configs.len()).collect() } else { (0..configs.len()).rev().collect() };
         for i in order {
             let (cap, chunk) = configs[i];
-            super::gpu_flip_pressure::set_round_chunk(chunk);
+            let _chunk = super::gpu_flip_pressure::set_round_chunk(chunk);
             let run = &mut runs[i];
             let rig = &mut run.rig;
             let record = rig.device.create_buffer_shared(u64::from(PROGRESS_FLOATS) * 4);
@@ -2294,7 +2294,6 @@ fn pressure_module_chunk_cost_probe() {
             run.recorded = end.recorded - run.recorded;
         }
     }
-    super::gpu_flip_pressure::set_round_chunk(0);
     let p50 = |v: &mut Vec<f64>| {
         v.sort_by(f64::total_cmp);
         v[v.len() / 2]

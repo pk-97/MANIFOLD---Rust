@@ -1143,9 +1143,8 @@ fn gpu_flip_body_chunk_sizes_match_main_golden() {
     let golden = std::fs::read_to_string(format!("{}/tests/fixtures/{BODY_GOLDEN}", env!("CARGO_MANIFEST_DIR"))).expect("golden fixture reads");
     let expected: Vec<&str> = golden.lines().filter(|l| !l.starts_with('#')).collect();
     for chunk in [1, 3, 32] {
-        super::gpu_flip_pressure::set_round_chunk(chunk);
+        let _chunk = super::gpu_flip_pressure::set_round_chunk(chunk);
         let lines = body_golden_lines();
-        super::gpu_flip_pressure::set_round_chunk(0);
         let moved: Vec<String> = expected.iter().zip(&lines).filter(|(e, l)| **e != l.as_str()).map(|(e, l)| format!("want {e}\n got {l}")).collect();
         assert!(moved.is_empty(), "chunk {chunk}: {} body golden cases moved:\n{}", moved.len(), moved.join("\n"));
     }
