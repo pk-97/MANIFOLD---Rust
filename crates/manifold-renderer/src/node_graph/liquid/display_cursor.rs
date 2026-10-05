@@ -215,6 +215,8 @@ mod tests {
         reset: f32,
         hz: f64,
         transport: f64,
+        /// The previous cursor frame's epoch and c, for the step invariants.
+        last: Option<(u32, f64)>,
     }
 
     impl Rig {
@@ -237,6 +239,7 @@ mod tests {
                 reset: 0.0,
                 hz: 30.0,
                 transport: 0.0,
+                last: None,
             }
         }
 
@@ -288,6 +291,26 @@ mod tests {
             } else {
                 pin
             };
+            // Every cursor step: c ≤ N, and c never decreases within an
+            // epoch. The exceptions are explicit: a new epoch, and leaving
+            // cursor mode (which clears `last`).
+            let cursor_mode = self.cursor_on && !self.offline;
+            match (cursor_mode, self.cursor.cursor()) {
+                (true, Some(c)) => {
+                    // With nothing retired in the generation (step 4) c waits.
+                    if let Some(b) = self.core.retired_bounds() {
+                        assert!(c <= b.newest, "c {c} passed N {}", b.newest);
+                    }
+                    if let Some((epoch, previous)) = self.last
+                        && epoch == frame.epoch
+                    {
+                        assert!(c >= previous, "c stepped back {previous} -> {c}");
+                    }
+                    self.last = Some((frame.epoch, c));
+                }
+                (true, None) => {}
+                (false, _) => self.last = None,
+            }
             if let (Some(p), Some(b)) = (pin, self.core.retired_bounds()) {
                 assert!(p.presented_time() <= p.t_b);
                 assert!((0.0..=1.0).contains(&p.blend));
@@ -531,7 +554,17 @@ mod tests {
         assert_monotone(&flipped);
         rig.cursor_on = false;
         let back = rig.at(rig.transport + 1.0 / 60.0);
-        assert_eq!(back.c, Some(f64::from(back.frame.display_time as f32)), "cursor → exact presents r");
+        // Cursor → exact presents r at once: the pin brackets r, or holds
+        // the newest endpoint whole when r is past it.
+        let r = f64::from(back.frame.display_time as f32);
+        let pin = back.pin.expect("shown");
+        let newest = back.newest.expect("retired");
+        if r >= newest {
+            assert_eq!((pin.t_b, pin.blend), (newest, 1.0), "past N the exact pin is N whole");
+        } else {
+            assert!(pin.t_a <= r && r < pin.t_b, "the exact pin brackets r: {} {r} {}", pin.t_a, pin.t_b);
+            assert!((pin.presented_time() - r).abs() < 1e-6, "the exact pin presents r");
+        }
     }
 
     #[test]
@@ -543,6 +576,12 @@ mod tests {
             let frames = rig.run(60.0, 360);
             assert_monotone(&frames);
             let settled = &frames[240..];
+            // Per frame, after settling: the advance stays within ±RATE of Δ.
+            for pair in settled.windows(2) {
+                let delta = f64::from(pair[1].frame.display_time as f32) - f64::from(pair[0].frame.display_time as f32);
+                let step = pair[1].c.expect("c") - pair[0].c.expect("c");
+                assert!((step - delta).abs() <= RATE * delta + 1e-6, "speed {speed}: step {step} for Δ {delta}");
+            }
             let advanced = settled.last().and_then(|s| s.c).expect("c") - settled[0].c.expect("c");
             let requested = f64::from(settled.last().expect("frame").frame.display_time as f32) - f64::from(settled[0].frame.display_time as f32);
             assert!((advanced / requested - 1.0).abs() <= 0.05, "speed {speed}: {advanced} vs {requested}");
