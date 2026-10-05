@@ -57,6 +57,12 @@ Boundary/grid matching remains open in BUG-g75v.17. The table below is the
 historical `4208155f5` audit, not a current claim of complete default or
 behavioural parity.
 
+The nominal two-cell open-boundary width also does not prove identical
+removal thresholds. Native removal measures from `_getBoundaryAABB`, inset
+5e-5 metres from the authored wall; GPU `open_band` still measures from the
+authored wall. This differs from the additional 0.1h collision safety inset.
+The default all-closed Dam Break does not exercise that open-face difference.
+
 This is a source audit, not a GPU or visual parity claim. Counts are table rows
 (related values are grouped): **43 matched, 19 ported, 2 partly ported, 2 deviations, 3 unported**. The unported rows mean full engine
 parity is not achieved.

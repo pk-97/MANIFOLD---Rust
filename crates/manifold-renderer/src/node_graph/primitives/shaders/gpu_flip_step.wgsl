@@ -1837,8 +1837,8 @@ fn surface_phi(cell: u32) -> f32 {
 // velocity and is valid, for the constraint to give it the solid's
 // (PressureSolver::_applyPressureToVelocityField). An open inner face beside
 // water loses (p_upper − p_lower) / h, the air side's pressure the ghost
-// value clamp(φ_air / (φ_water + 1e-9), −25, 25) · p_water, φ_water taken at
-// most −0.005h and φ_air at least 0, exactly the rows the solve read, and is
+// value clamp(φ_air / (φ_water + 1e-6), −25, 25) · p_water, φ_water taken at
+// most −0.005h and φ_air at least 0 (the matrix uses 1e-9 instead), and is
 // valid; between two air cells it keeps its velocity and is invalid (weight
 // 0) for the extension to fill.
 @compute @workgroup_size(256)
@@ -2059,9 +2059,36 @@ fn density_source(@builtin(global_invocation_id) gid: vec3<u32>) {
     cell_out[idx] = -rate * error;
 }
 
-// A moved particle stays 0.2 cells inside each box wall, as the engine keeps
-// its particles off its solids (`_solidBufferWidth`).
-const WALL_MARGIN: f32 = 0.2;
+// Native expands the boundary by -3h-1e-4m, then by -0.2h. AABB::expand
+// moves each side by half its argument, so the authored wall is inset by
+// 0.1h + 5e-5m. The push target remains the native 0.2h solid buffer.
+const BOUNDARY_MARGIN: f32 = 0.1;
+const BOUNDARY_EPS_METRES: f32 = 0.00005;
+const PADDED_GRID_MARGIN: f32 = 1.5;
+
+fn boundary_edge() -> f32 {
+    return BOUNDARY_MARGIN + BOUNDARY_EPS_METRES / u.cell_size;
+}
+
+fn inside_boundary(q: vec3<f32>, n: vec3<i32>, edge: f32) -> bool {
+    return all(q >= vec3<f32>(edge)) && all(q < vec3<f32>(n) - vec3<f32>(edge));
+}
+
+// Native's getNearestPointInsideAABB is called only for an outside point.
+// The lower side is inclusive; the upper side is exclusive and gets the
+// extra 1e-6m subtraction. Keep that epsilon out of ordinary moves.
+fn clamp_boundary(q: vec3<f32>, n: vec3<i32>, edge: f32) -> vec3<f32> {
+    let low = vec3<f32>(edge);
+    let high = vec3<f32>(n) - vec3<f32>(edge);
+    let upper_epsilon = vec3<f32>(1e-6 / u.cell_size);
+    return min(max(q, low), high - upper_epsilon);
+}
+
+fn inside_padded_grid(q: vec3<f32>, n: vec3<i32>) -> bool {
+    let low = vec3<f32>(-PADDED_GRID_MARGIN);
+    let high = vec3<f32>(n) + vec3<f32>(PADDED_GRID_MARGIN);
+    return all(q >= low) && all(q < high);
+}
 
 // The CFL guard: one RK3 stage moves at most max_travel cells. A non-finite
 // v stays non-finite. Live stretched intervals expand the authored halo from
@@ -2185,17 +2212,20 @@ fn solid_gradient(q: vec3<f32>, n: vec3<i32>) -> vec3<f32> {
     return g;
 }
 
-// A move from q0 to q1 (cells, both inside [edge, n − edge]) kept out of the
-// solids (FluidSimulation::_resolveCollision): march in SOLID_STEP cells; at
-// the first sample inside a solid, push it out along the distance's gradient
-// to SOLID_BUFFER cells outside, kept inside the walls' margin, or back to
-// the last sample outside when the push lands inside, moves farther than
-// SOLID_PUSH or has no direction. A move that cannot reach a solid (both
-// ends farther than the move's length times the distance's steepest slope)
-// is kept as it is.
+// A move from q0 to q1 (cells) kept out of the solids and native safety AABB
+// (FluidSimulation::_resolveCollision): march in SOLID_STEP cells; at the
+// first sample inside a solid or outside the boundary, push it out along the
+// distance's gradient to SOLID_BUFFER cells outside, then apply the boundary
+// clamp and fallback in native order. The conservative SDF skip is used only
+// when both endpoints are inside the safety AABB.
 fn resolve_solid(q0: vec3<f32>, q1: vec3<f32>, n: vec3<i32>, edge: vec3<f32>) -> vec3<f32> {
     let travel = length(q1 - q0);
-    if travel < 1e-6 || min(solid_at(q0, n), solid_at(q1, n)) > SOLID_SLOPE * travel + SOLID_STEP {
+    let inside0 = inside_boundary(q0, n, edge.x);
+    let inside1 = inside_boundary(q1, n, edge.x);
+    if inside0 && inside1 && min(solid_at(q0, n), solid_at(q1, n)) > SOLID_SLOPE * travel + SOLID_STEP {
+        return q1;
+    }
+    if travel * u.cell_size < 1e-6 {
         return q1;
     }
     let steps = i32(ceil(travel / SOLID_STEP));
@@ -2204,26 +2234,26 @@ fn resolve_solid(q0: vec3<f32>, q1: vec3<f32>, n: vec3<i32>, edge: vec3<f32>) ->
     for (var s = 0; s < steps; s = s + 1) {
         let current = select(q0 + f32(s + 1) * SOLID_STEP * dir, q1, s == steps - 1);
         let d = solid_at(current, n);
-        if d < 0.0 {
+        if d < 0.0 || !inside_boundary(current, n, edge.x) {
             let g = solid_gradient(current, n);
-            if length(g) <= 1e-6 {
-                return last;
+            var kept = last;
+            if length(g) > 1e-6 {
+                let pushed = current - (d - SOLID_BUFFER) * normalize(g);
+                if length(pushed - current) > SOLID_PUSH {
+                    push_refused = 1u;
+                } else if solid_at(pushed, n) >= 0.0 {
+                    kept = pushed;
+                }
             }
-            let pushed = current - (d - SOLID_BUFFER) * normalize(g);
-            if length(pushed - current) > SOLID_PUSH {
-                push_refused = 1u;
-                return last;
-            }
-            if solid_at(pushed, n) < 0.0 {
-                return last;
-            }
-            let kept = clamp(pushed, edge, vec3<f32>(n) - edge);
-            if any(kept != pushed) && length(kept - pushed) > SOLID_PUSH {
-                push_refused = 1u;
-                return last;
-            }
-            if any(kept != pushed) && solid_at(kept, n) < 0.0 {
-                return last;
+            if !inside_boundary(kept, n, edge.x) {
+                let original = kept;
+                kept = clamp_boundary(kept, n, edge.x);
+                if solid_at(kept, n) < 0.0 || length(kept - original) > SOLID_PUSH {
+                    if length(kept - original) > SOLID_PUSH {
+                        push_refused = 1u;
+                    }
+                    return last;
+                }
             }
             return kept;
         }
@@ -2253,9 +2283,8 @@ fn open_band(q: vec3<f32>, n: vec3<i32>) -> bool {
 // (radius > 0) at q blends FLIP and PIC, flip · (v + new(q) − old(q)) +
 // (1 − flip) · new(q), then moves by RK3 through the new faces (stages at ½
 // and ¾ of step_dt, weights 2/9, 3/9, 4/9, each guarded), plus the density
-// projection's move, kept
-// WALL_MARGIN cells inside each wall. With bodies, the move is kept out of
-// the solids (resolve_solid), and a particle still inside one, where a
+// projection's move. The native safety AABB and solid collision sequence is
+// shared by wall-only and body scenes; a particle still inside one, where a
 // moving solid swept over it, is removed: radius 0
 // (FluidSimulation::_removeMarkerParticles). A non-finite move or velocity
 // is written as it is: the tick's stats must see it to halt the liquid.
@@ -2291,7 +2320,7 @@ fn faces_to_particles(@builtin(global_invocation_id) gid: vec3<u32>) {
     if u.narrow_band == 0u {
         capped[2u * idx] = cfl_before + guarded(after, per_cell) + guarded(s2, per_cell) + guarded(s3, per_cell);
     }
-    let edge = vec3<f32>(WALL_MARGIN);
+    let edge = vec3<f32>(boundary_edge());
     // The density projection's move, step_dt · (spread(q) − new(q)): position
     // only, never kept as velocity. Zero rate binds `faces_in` as `spread`.
     let moved = per_cell * (sample(q0, n, 2u) - after);
@@ -2299,9 +2328,12 @@ fn faces_to_particles(@builtin(global_invocation_id) gid: vec3<u32>) {
     if u.narrow_band == 0u {
         reached = q0 + per_cell * (2.0 * k1 + 3.0 * k2 + 4.0 * k3) / 9.0 + moved;
     }
-    var q1 = select(reached, clamp(reached, edge, vec3<f32>(n) - edge), finite(reached));
+    var q1 = reached;
     var radius = particle.position_radius.w;
-    if u.body_count > 0 && finite(q1) {
+    if finite(q1) {
+        if !inside_padded_grid(q1, n) {
+            q1 = clamp_boundary(q1, n, edge.x);
+        }
         q1 = resolve_solid(q0, q1, n, edge);
         radius = select(radius, 0.0, solid_at(q1, n) < 0.0);
         capped[2u * idx + 1u] = push_before + push_refused;
@@ -2760,14 +2792,14 @@ fn narrow_move(@builtin(global_invocation_id) gid: vec3<u32>) {
     let c = sample(q + 0.5 * dt * b, n, 0u);
     let d = sample(q + dt * c, n, 0u);
     var reached = q + dt * (a + 2.0*b + 2.0*c + d) / 6.0;
-    let edge = vec3<f32>(WALL_MARGIN);
+    let edge = vec3<f32>(boundary_edge());
     if finite(reached) {
-        reached = clamp(reached, edge, vec3<f32>(n) - edge);
-        if u.body_count > 0 {
-            reached = resolve_solid(q, reached, n, edge);
-            if solid_at(reached, n) < 0.0 { out.position_radius.w = 0.0; }
-            capped[2u*i+1u] += push_refused;
+        if !inside_padded_grid(reached, n) {
+            reached = clamp_boundary(reached, n, edge.x);
         }
+        reached = resolve_solid(q, reached, n, edge);
+        if solid_at(reached, n) < 0.0 { out.position_radius.w = 0.0; }
+        capped[2u*i+1u] += push_refused;
     }
     if open_band(reached, n) { out.position_radius.w = 0.0; }
     out.position_radius = vec4<f32>(u.box_min + reached*u.cell_size, out.position_radius.w);
