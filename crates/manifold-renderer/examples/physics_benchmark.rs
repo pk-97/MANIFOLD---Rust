@@ -50,6 +50,7 @@ fn scene_inputs() -> (
         collider: None,
         fragment_parent: None,
         release_count: 0.0,
+        wall: false,
     };
     let mut bodies = std::array::from_fn(|_| None);
     for (slot, id) in [101, 141, 161].into_iter().enumerate() {
