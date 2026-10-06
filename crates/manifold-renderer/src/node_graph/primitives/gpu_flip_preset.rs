@@ -981,6 +981,21 @@ fn add_dust_render(def: &mut Value) {
 #[cfg(any(test, feature = "gpu-proofs"))]
 fn scene_cards(metadata: &Value, scene: WaterScene) -> Value {
     let mut metadata = metadata.clone();
+    // Author the card here so both snapshots regenerate from older seeds.
+    for (list, entry) in [
+        ("params", json!({"id":"sheet_fill_rate", "name":"Sheet Fill Rate",
+            "defaultValue":0.0, "min":0.0, "max":1.0, "formatString":"F2",
+            "wholeNumbers":false, "isToggle":false, "isTrigger":false, "section":"Fluid"})),
+        ("bindings", json!({"id":"sheet_fill_rate", "label":"Sheet Fill Rate",
+            "defaultValue":0.0, "defaultMirrorsNodeParam":true, "convert":{"type":"Float"},
+            "target":{"kind":"node", "nodeId":"domain", "param":"sheet_fill_rate"}})),
+    ] {
+        let entries = metadata[list].as_array_mut().expect("card lists");
+        entries.retain(|entry| entry["id"] != "sheet_fill_rate");
+        let after_cap = entries.iter().position(|entry| entry["id"] == "max_iterations")
+            .map_or(entries.len(), |i| i + 1);
+        entries.insert(after_cap, entry);
+    }
     let detail = scene.surface_scale.checked_sub(SURFACE_DETAIL_OFFSET).filter(|detail| *detail <= 2);
     for list in ["params", "bindings"] {
         let entries = metadata[list].as_array_mut().expect("card lists");
@@ -1086,7 +1101,7 @@ fn water_step(b: &mut Builder, scene: WaterScene, tick: (usize, usize)) -> usize
     b.wire((state, "tick_index"), step, "tick_index");
     b.wire((state, "retired_max_speed"), step, "retired_max_speed");
     b.wire((domain, "initial_obstacle_speed"), step, "initial_obstacle_speed");
-    b.wires(domain, step, &["bodies", "shapes", "atlas", "body_count", "dynamic_bodies", "closed_faces", "solve_level", "max_iterations"]);
+    b.wires(domain, step, &["bodies", "shapes", "atlas", "body_count", "dynamic_bodies", "closed_faces", "solve_level", "max_iterations", "sheet_fill_rate"]);
     b.wire((domain, "body_rows"), step, "rows");
     step
 }
@@ -1601,6 +1616,52 @@ pub(super) mod tests {
                     assert_eq!(entries[0]["target"]["nodeId"], "water_material");
                     assert_eq!(entries[0]["target"]["param"], target);
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn gpu_flip_sheet_fill_rate_card_binding_and_wire_round_trip() {
+        use manifold_core::NodeId;
+        use manifold_core::params::{Param, ParamManifest};
+        use crate::preset_runtime::PresetRuntime;
+
+        for name in [SHIPPED_PRESET, PARTICLE_VIEW_PRESET] {
+            let json = bundled_preset_json(&PresetTypeId::new(name)).unwrap();
+            let def: EffectGraphDef = serde_json::from_str(&json).unwrap();
+            let saved = serde_json::to_string(&def).unwrap();
+            let def: EffectGraphDef = serde_json::from_str(&saved).unwrap();
+            let value = serde_json::to_value(&def).unwrap();
+            let card = value["presetMetadata"]["params"].as_array().unwrap().iter()
+                .find(|p| p["id"] == "sheet_fill_rate").expect("sheet card");
+            assert_eq!(card["name"], "Sheet Fill Rate");
+            assert_eq!(card["min"], 0.0);
+            assert_eq!(card["max"], 1.0);
+            assert_eq!(card["defaultValue"], 0.0);
+            assert_eq!(card["wholeNumbers"], false);
+            let bindings: Vec<_> = value["presetMetadata"]["bindings"].as_array().unwrap().iter()
+                .filter(|p| p["id"] == "sheet_fill_rate").collect();
+            assert_eq!(bindings.len(), 1);
+            assert_eq!(bindings[0]["target"], json!({"kind":"node", "nodeId":"domain", "param":"sheet_fill_rate"}));
+            assert_eq!(bindings[0]["defaultValue"], 0.0);
+            let domain = id_named(&value, "domain");
+            let step = id_named(&value, STEP_NODE);
+            assert!(def.wires.iter().any(|w| u64::from(w.from_node) == domain && w.from_port == "sheet_fill_rate"
+                && u64::from(w.to_node) == step && w.to_port == "sheet_fill_rate"));
+            let mut params = ParamManifest::from_params(def.preset_metadata.as_ref().unwrap().params.iter().cloned().map(Param::bundled).collect());
+            let mut runtime = PresetRuntime::from_def(def, &PrimitiveRegistry::with_builtin(), None).unwrap();
+            for rate in [0.0, 0.375, 1.0, 0.0] {
+                let param = params.get_mut("sheet_fill_rate").unwrap();
+                param.value = rate;
+                param.base = rate;
+                runtime.apply_param_values(&params);
+                let id = runtime.graph.instance_by_node_id(&NodeId::new("domain")).unwrap();
+                let node = runtime.graph.get_node(id).unwrap();
+                assert_eq!(node.params.get("sheet_fill_rate"), Some(&ParamValue::Float(rate)));
+                let geometry = gpu_flip_geometry(|key, default| node.params.get(key)
+                    .map(crate::node_graph::param_default_to_f32).unwrap_or(default), None, None).unwrap();
+                assert_eq!(geometry.sheet_fill_rate, rate);
+                assert_eq!(super::super::gpu_flip_step::read_sheet_fill_rate(geometry.sheet_fill_rate, false), Ok(rate));
             }
         }
     }

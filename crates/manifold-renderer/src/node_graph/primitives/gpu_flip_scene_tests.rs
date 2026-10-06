@@ -2624,7 +2624,7 @@ fn particle_digest(run: &Run, digest: &mut u64) {
 fn dam_break_sheeting(n: usize, rate: Option<f64>) -> Run {
     let scene = WaterScene::dam_break(n);
     if let Some(rate) = rate {
-        Run::posed(scene, &[(STEP_NODE, "sheet_fill_rate", rate)])
+        Run::posed(scene, &[("domain", "sheet_fill_rate", rate)])
     } else {
         Run::new(scene)
     }
@@ -2645,13 +2645,13 @@ fn gpu_flip_sheeting_off_leaves_the_dam_break_unchanged() {
         }
         digest
     };
-    let unwired = digest(None);
-    eprintln!("DAM BREAK DIGEST 32 x4: {unwired:016x}");
+    let default_off = digest(None);
+    eprintln!("DAM BREAK DIGEST 32 x4: {default_off:016x}");
     // The whole step's pin: only a commit that changes the step on purpose
     // re-records it, and says why. Last re-recorded for the tank walls matching
     // the native engine; sheeting with walls and no pressure template gives it too.
-    assert_eq!(unwired, 0xb915_115e_7604_78dd, "sheeting off changed the Dam Break");
-    assert_eq!(digest(Some(0.0)), unwired, "rate 0 changed the step");
+    assert_eq!(default_off, 0xb915_115e_7604_78dd, "sheeting off changed the Dam Break");
+    assert_eq!(digest(Some(0.0)), default_off, "rate 0 changed the step");
 }
 
 /// Sheet seeding on: replayed encodes give the particles a direct encode

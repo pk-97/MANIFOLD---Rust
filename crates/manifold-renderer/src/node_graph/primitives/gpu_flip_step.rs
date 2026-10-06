@@ -2168,6 +2168,7 @@ crate::primitive! {
         closed_faces: ScalarF32 optional,
         solve_level: ScalarF32 optional,
         max_iterations: ScalarF32 optional,
+        sheet_fill_rate: ScalarF32 optional,
         clock_obstacles: Array(f32) optional,
         clock_obstacle_count: ScalarF32 optional,
         initial_obstacle_speed: ScalarF32 optional,
