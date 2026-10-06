@@ -519,7 +519,7 @@ _Generated from the node registry. Do not hand-edit. 389 nodes registered, group
 | — | `system.mesh_input` | — | — |
 | — | `system.mesh_output` | — | — |
 
-### Effect & generator presets (97)
+### Effect & generator presets (99)
 
 | id | name | kind | category | params |
 |---|---|---|---|---|
@@ -591,6 +591,7 @@ _Generated from the node registry. Do not hand-edit. 389 nodes registered, group
 | `MriVolume` | MRI Volume | generator | Text & Media | 8 |
 | `NestedCubes` | Nested Cubes | generator | Geometry | 6 |
 | `Ocean` | Ocean | generator | Sim | 361 |
+| `OceanCliff` | Ocean Cliff | generator | Sim | 2350 |
 | `OilyFluid` | Oily Fluid | generator | Sim | 14 |
 | `Oscilloscope` | Oscilloscope | generator | Audio | 11 |
 | `ParticleText` | Particle Text | generator | Text & Media | 15 |
@@ -616,6 +617,7 @@ _Generated from the node registry. Do not hand-edit. 389 nodes registered, group
 | `WaterDamBreakMatter` | Water — Dam Break (Live GPU) | generator | Sim | 1397 |
 | `WaterDamBreakParticles` | Water — Dam Break (Particle View) | generator | Sim | 1996 |
 | `WaterFloatingBoxMatter` | Water — Floating Box (Live GPU) | generator | Sim | 1390 |
+| `WaterSeaWallGpuFlip` | Water — Sea Wall (GPU FLIP) | generator | Sim | 2333 |
 | `WaterStillPoolMatter` | Water — Still Pool (Live GPU) | generator | Sim | 1065 |
 | `Watercolor` | Watercolor | effect | Stylize | 4 |
 | `Wireframe` | Wireframe | generator | Geometry | 9 |
