@@ -732,6 +732,14 @@ class Brokers:
         self.set_jobs(wt, jobs)
         return proc, state, session
 
+    def companion(self):
+        """A live process under the plugin worker's script name."""
+        script = self.script.with_name(cb.COMPANION_SCRIPT)
+        script.write_text("import time\ntime.sleep(60)\n")
+        proc = subprocess.Popen([sys.executable, str(script)])
+        self.procs.append(proc)
+        return proc
+
     def write_broker(self, wt, record):
         state = self.root / cb.state_dir_name(wt)
         state.mkdir(parents=True, exist_ok=True)
@@ -820,24 +828,47 @@ def test_busy_codex_broker_is_left_alone(repo):
     wt = add_slot(repo, "slot-0", "lane/busy")
     brokers = Brokers(repo)
     try:
-        running = dict(completed_job(), status="running", pid=os.getpid())
+        worker = brokers.companion()
+        # The plugin stamps updatedAt on phase changes only, so a long turn
+        # carries its start time: a day-old stamp with a live worker is busy.
+        day_old = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(time.time() - 86400))
+        running = dict(completed_job(), status="running", pid=worker.pid, updatedAt=day_old)
         proc, _, _ = brokers.start(wt, jobs=[running])
         roots, sessions = brokers.patches()
         with roots, sessions:
             lines = cb.stop_idle(wt)
-            check("running job keeps its broker", proc.poll() is None and "is running" in lines[0], lines)
+            check("running job keeps its broker at any age",
+                  proc.poll() is None and "is running" in lines[0], lines)
 
-            brokers.set_jobs(wt, [dict(running, status="queued", pid=None)])
+            brokers.set_jobs(wt, [dict(running, pid=os.getpid())])
+            lines = cb.stop_idle(wt)
+            check("a stale running job whose pid now belongs to something else does not",
+                  "is running" not in lines[0], lines)
+            proc, _, _ = brokers.start(wt)
+
+            brokers.set_jobs(wt, [dict(completed_job(), status="queued")])
             lines = cb.stop_idle(wt)
             check("queued job keeps its broker", proc.poll() is None and "is queued" in lines[0], lines)
 
             # The plugin marks a job completed on a mid-turn message; Codex can
             # then go quiet for minutes inside a build. Only the markers tell.
             brokers.set_jobs(wt, [completed_job()])
-            brokers.rollout("0a1b-c2", ["task_started", "task_complete", "task_started"], age_s=3600)
+            brokers.rollout("0a1b-c2", ["task_started", "task_complete", "task_started"], age_s=1800)
             lines = cb.stop_idle(wt)
-            check("open turn keeps its broker however quiet the rollout",
+            check("open turn keeps its broker through a long quiet build",
                   proc.poll() is None and "turn still open" in lines[0], lines)
+
+            brokers.set_jobs(wt, [dict(completed_job(), status="cancelled")])
+            brokers.rollout("0a1b-c2", ["task_started"], age_s=7200)
+            lines = cb.stop_idle(wt)
+            check("a killed turn, open but silent for hours, does not",
+                  lines == [f"STOPPED broker pid {proc.pid}"] and wait_gone(proc), lines)
+            proc, _, _ = brokers.start(wt, jobs=[completed_job()])
+
+            brokers.rollout("0a1b-c2", [], age_s=3600)
+            lines = cb.stop_idle(wt)
+            check("a rollout with no turn markers keeps its broker, loudly",
+                  proc.poll() is None and "no turn markers" in lines[0], lines)
 
             brokers.rollout("0a1b-c2", ["task_started", "turn_aborted"], age_s=5)
             lines = cb.stop_idle(wt)
@@ -931,7 +962,28 @@ def test_malformed_plugin_state_never_breaks_the_ring(repo):
     check("a helper crash is reported, not raised", "helper failed" in out.getvalue(), out.getvalue())
 
 
+def test_turn_markers_are_found_across_chunk_boundaries(repo):
+    """The rollout is read backwards in chunks; a marker split by a chunk edge
+    must still count, and an earlier marker must never shadow a later one."""
+    path = repo.parent / "rollout.jsonl"
+    opened, closed = cb.TURN_MARKERS[0], cb.TURN_MARKERS[1]
+    bad = []
+    with patch.object(cb, "TAIL_CHUNK", 64):
+        for shift in range(0, 200, 7):
+            path.write_bytes(closed + b"x" * 300 + opened + b"y" * shift)
+            if cb.last_turn_marker(path) != "open":
+                bad.append(("open", shift))
+            path.write_bytes(opened + b"x" * 300 + closed + b"y" * shift)
+            if cb.last_turn_marker(path) != "closed":
+                bad.append(("closed", shift))
+        path.write_bytes(b"z" * 500)
+        none = cb.last_turn_marker(path)
+    check("markers found at every chunk offset", not bad, bad)
+    check("no marker reads as none", none is None, none)
+
+
 TESTS += [test_state_dir_matches_the_plugin_layout,
+          test_turn_markers_are_found_across_chunk_boundaries,
           test_idle_codex_broker_no_longer_pins_a_slot,
           test_busy_codex_broker_is_left_alone,
           test_leased_slot_keeps_its_broker_until_release,

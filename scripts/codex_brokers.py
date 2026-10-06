@@ -43,7 +43,9 @@ from pathlib import Path
 PLUGIN_DATA_DEFAULT = Path.home() / ".claude" / "plugins" / "data" / "codex-openai-codex"
 CODEX_SESSIONS = Path.home() / ".codex" / "sessions"
 BROKER_SCRIPT = "app-server-broker.mjs"
+COMPANION_SCRIPT = "codex-companion.mjs"
 ROLLOUT_FRESH_S = 120     # backstop for a rollout with no turn markers yet
+OPEN_TURN_SILENT_S = 3600 # an open turn this quiet was killed before it could close
 RECENT_JOB_S = 6 * 3600   # older jobs cannot still be mid-turn
 ACK_GRACE_S = 600         # a broker that acknowledged and is still exiting is not asked again
 SHUTDOWN_TIMEOUT_S = 3.0
@@ -92,9 +94,10 @@ def pid_alive(pid):
         return False
 
 
-def broker_pid_alive(pid):
-    """A recorded pid is the broker only while it runs the broker script:
-    broker.json survives a reboot that hands the pid to something else."""
+def pid_runs(pid, script):
+    """A recorded pid counts only while it still runs the plugin script it was
+    recorded for: plugin state survives a reboot that hands the pid to
+    something else. A failed ps fails closed."""
     if not pid_alive(pid):
         return False
     try:
@@ -102,7 +105,11 @@ def broker_pid_alive(pid):
                              capture_output=True, text=True, timeout=5)
     except (OSError, subprocess.SubprocessError):
         return True
-    return BROKER_SCRIPT in out.stdout
+    return script in out.stdout
+
+
+def broker_pid_alive(pid):
+    return pid_runs(pid, BROKER_SCRIPT)
 
 
 def _parse_iso(stamp):
@@ -112,20 +119,23 @@ def _parse_iso(stamp):
         return None
 
 
-def turn_open(path):
-    """Is the last turn marker in this rollout a start? Read from the end."""
+def last_turn_marker(path):
+    """'open', 'closed', or None when the rollout has no turn marker at all.
+    Reads backwards in chunks, carrying only a marker-length overlap."""
+    overlap = max(len(marker) for marker in TURN_MARKERS) - 1
     with path.open("rb") as stream:
         end = stream.seek(0, os.SEEK_END)
-        tail = b""
+        carry = b""
         while end > 0:
             start = max(0, end - TAIL_CHUNK)
             stream.seek(start)
-            tail = stream.read(end - start) + tail
-            end = start
-            pos, kind = max((tail.rfind(marker), i) for i, marker in enumerate(TURN_MARKERS))
+            window = stream.read(end - start) + carry
+            pos, kind = max((window.rfind(marker), i) for i, marker in enumerate(TURN_MARKERS))
             if pos >= 0:
-                return kind == 0
-    return False
+                return "open" if kind == 0 else "closed"
+            carry = window[:overlap]
+            end = start
+    return None
 
 
 def rollout_busy(thread_id, now):
@@ -133,12 +143,18 @@ def rollout_busy(thread_id, now):
         return None
     for path in CODEX_SESSIONS.glob(f"*/*/*/rollout-*-{thread_id}.jsonl"):
         try:
-            if turn_open(path):
-                return "turn still open in its Codex rollout"
-            if now - path.stat().st_mtime < ROLLOUT_FRESH_S:
-                return f"rollout written in the last {ROLLOUT_FRESH_S}s"
+            marker = last_turn_marker(path)
+            silent = now - path.stat().st_mtime
         except OSError:
             return "rollout unreadable"
+        # A killed turn never writes its close, so an open turn silent this
+        # long is dead; a build inside a live turn is never this quiet.
+        if marker == "open" and silent < OPEN_TURN_SILENT_S:
+            return "turn still open in its Codex rollout"
+        if marker is None:
+            return "rollout has no turn markers (Codex format changed?); kept to be safe"
+        if silent < ROLLOUT_FRESH_S:
+            return f"rollout written in the last {ROLLOUT_FRESH_S}s"
     return None
 
 
@@ -158,9 +174,11 @@ def busy_reason(state_dir, now=None):
     for job in jobs:
         updated = _parse_iso(job.get("updatedAt") or job.get("completedAt"))
         recent = updated is None or now - updated < RECENT_JOB_S
+        # The plugin stamps updatedAt on phase changes only, so a long turn's
+        # stamp is its start: a live worker pid is busy at any age.
         if job.get("status") in ("queued", "running"):
             pid = job.get("pid")
-            if recent and (pid is None or pid_alive(pid)):
+            if pid_runs(pid, COMPANION_SCRIPT) or (pid is None and recent):
                 return f"job {job.get('id')} is {job.get('status')}"
         if recent:
             why = rollout_busy(job.get("threadId"), now)
@@ -239,7 +257,8 @@ def _stop_one(state_dir, dry_run, now):
         return f"KEEP broker pid {pid}: did not answer broker/shutdown at {endpoint}"
     if result == "gone":
         if broker_pid_alive(pid):
-            return f"KEEP broker pid {pid}: socket gone but the broker runs; it cannot be asked to stop"
+            return (f"KEEP broker pid {pid}: socket gone (macOS purges old temp files) but the "
+                    f"broker runs; its SIGTERM handler shuts it down cleanly: kill -TERM {pid}")
         _clear_files(state_dir, broker, sock_path)
         return f"CLEARED stale broker record (pid {pid} not a running broker)"
     if not _wait_exit(pid):
