@@ -587,13 +587,36 @@ fn gpu_flip_sheeting_bucket_rows_match_cpu_merge() {
 /// rates/tick/substep change while bindings stay stable.
 #[test]
 fn gpu_flip_sheeting_rows_match_old_gpu_under_replay_and_fractional_rates() {
+    rows_match_old_gpu_under_replay_and_fractional_rates(false);
+}
+
+#[test]
+fn gpu_flip_sheeting_odd_grid_rows_match_old_gpu_under_replay_and_fractional_rates() {
+    rows_match_old_gpu_under_replay_and_fractional_rates(true);
+}
+
+fn rows_match_old_gpu_under_replay_and_fractional_rates(odd_grid: bool) {
     use super::gpu_flip_sheeting::StepBirths;
     use super::particle_identity::{BirthReservation, ParticleIdentity};
     use crate::node_graph::fluid_particles::FaceSample;
     use manifold_gpu::GpuReplayCache;
 
     let device = crate::test_device();
-    let (mut markers, analytic, cells, dx) = sheeter::fixtures::splash();
+    let (mut markers, mut analytic, mut cells, dx) = sheeter::fixtures::splash();
+    if odd_grid {
+        // Crop x/z and extend y with exterior samples. Real marker selection
+        // and segment bases now traverse partial 2-cell buckets.
+        let old_cells = cells;
+        cells = [39, 41, 37];
+        markers.retain(|p| (0..3).all(|axis| p[axis] < cells[axis] as f32 * dx as f32));
+        analytic = (0..cells.iter().product()).map(|i| {
+            let x = i % cells[0];
+            let y = (i / cells[0]) % cells[1];
+            let z = i / (cells[0] * cells[1]);
+            if y >= old_cells[1] { return 1.0; }
+            analytic[(x + old_cells[0] * (y + old_cells[1] * z)) as usize]
+        }).collect();
+    }
     // Break spatial input order without changing the geometry.
     let mut rng = 0x0005_1eed_u32;
     for i in (1..markers.len()).rev() {
@@ -665,6 +688,7 @@ fn gpu_flip_sheeting_rows_match_old_gpu_under_replay_and_fractional_rates() {
             let births = copy_out(&device, stage.births().0);
             outputs.push(vec![copy_out(&device, particles), copy_out(&device, identity),
                 copy_out(&device, stage.stats()), copy_out(&device, stage.winners()),
+                copy_out(&device, &stage.scratch()[3]),
                 copy_out(&device, &stage.scratch()[5]), copy_out(&device, &stage.scratch()[6]),
                 births[..4 * count[0].min(capacity) as usize].to_vec(), count]);
         }
