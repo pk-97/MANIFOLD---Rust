@@ -300,6 +300,7 @@ fn fixture(resolution: u32, cooperative: bool) {
                 &read::<u32>(&sparse_buffer, total),
                 &read::<u32>(&dense_buffer, total),
                 None,
+                crate::node_graph::primitives::particle_volume::brick_tests::position_tolerance(center, size),
                 &format!("dam break fixture {resolution}, frame {frame}"),
             );
             continue;
@@ -529,6 +530,7 @@ fn fluid_bricks_lattice_and_mesh_bit_identical_dense_64() {
 fn particle_volume_brick_gather_dam_break_frames_bitwise() {
     fixture(64, true);
     fixture(128, true);
+    crate::node_graph::primitives::particle_volume::brick_tests::finish_bound_checks();
 }
 
 #[test]

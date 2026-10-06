@@ -1,13 +1,10 @@
 //! Proofs for `node.particle_volume`'s cooperative pass-1 kernel
 //! (PARTICLE_VOLUME_BRICK_GATHER_DESIGN.md section 5 (Oracle and proofs)).
 //! The oracle is the generated kernel on the same inputs. Pass-1 words are
-//! held to Peter's bound (D4 ruling): same class, same sign, at most
-//! `MAX_ULP` apart. Storage pass 1 does not write stays bitwise.
+//! held to Peter's bound (D4 ruling): same class, same sign, within 8 ULP
+//! of the largest lattice coordinate. Storage pass 1 does not write stays bitwise.
 
 use super::*;
-
-/// D4 ruling: the most two lattice words may differ, in ordered-integer ULP.
-pub(crate) const MAX_ULP: u32 = 4;
 
 /// ULP distance between two f32 bit patterns, or `None` when they differ in
 /// class (finite / +inf / -inf / NaN) or sign. ±0 are equal.
@@ -33,35 +30,84 @@ pub(crate) fn ordered_ulp(a: u32, b: u32) -> Option<u32> {
     Some((key(a) - key(b)).unsigned_abs().min(u64::from(u32::MAX)) as u32)
 }
 
-/// Per-buffer verdict of the bound: words pass 1 wrote, the largest ULP
-/// distance, and the first word more than 1 ULP apart.
+/// Per-buffer verdict of the bound: words pass 1 wrote, the largest
+/// absolute difference and output ULP distance, the first word more than
+/// 1 ULP apart, and how many words broke the bound.
 pub(crate) struct Bound {
     pub written: usize,
+    pub max_abs: f32,
     pub max_ulp: u32,
     pub first_over_one: Option<usize>,
+    pub violations: usize,
 }
 
-/// `actual` against `oracle` word by word. Words equal to `untouched` in
-/// the oracle must be bitwise equal; every other word must meet the bound.
-pub(crate) fn assert_within_bound(actual: &[u32], oracle: &[u32], untouched: Option<u32>, what: &str) -> Bound {
+/// D4 ruling: the absolute tolerance, 8 ULP of the largest lattice
+/// coordinate magnitude over `min` and `min + size` on all three axes.
+pub(crate) fn position_tolerance(center: [f32; 3], size: [f32; 3]) -> f32 {
+    let largest = (0..3)
+        .flat_map(|a| {
+            let min = center[a] - 0.5 * size[a];
+            [min.abs(), (min + size[a]).abs()]
+        })
+        .fold(0.0f32, f32::max);
+    8.0 * (largest.next_up() - largest)
+}
+
+thread_local! {
+    static VIOLATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Fails the test if any `assert_within_bound` on this thread found a
+/// violation. Called once at the end so every case reports first.
+pub(crate) fn finish_bound_checks() {
+    let n = VIOLATIONS.with(|v| v.replace(0));
+    assert_eq!(n, 0, "{n} case(s) broke the D4 bound; see the BOUND lines");
+}
+
+/// `actual` against `oracle` word by word. Words equal to `untouched` must
+/// be bitwise equal; every other word must be the same class and sign and
+/// within `tolerance`. Violations are reported and counted, not panicked
+/// on, so a run reports every case; `finish_bound_checks` fails the test.
+pub(crate) fn assert_within_bound(actual: &[u32], oracle: &[u32], untouched: Option<u32>, tolerance: f32, what: &str) -> Bound {
     assert_eq!(actual.len(), oracle.len());
-    let mut bound = Bound { written: 0, max_ulp: 0, first_over_one: None };
+    let mut bound = Bound { written: 0, max_abs: 0.0, max_ulp: 0, first_over_one: None, violations: 0 };
+    let mut first_violation = None;
     for (i, (&a, &b)) in actual.iter().zip(oracle).enumerate() {
+        let (x, y) = (f32::from_bits(a), f32::from_bits(b));
+        let detail = || format!("word {i}: cooperative {x} ({a:#010x}) vs generated {y} ({b:#010x})");
         if Some(b) == untouched || Some(a) == untouched {
-            assert_eq!(a, b, "{what}: word {i} is storage pass 1 does not write and must stay untouched");
+            if a != b {
+                bound.violations += 1;
+                first_violation.get_or_insert_with(|| format!("untouched storage written, {}", detail()));
+            }
             continue;
         }
         bound.written += 1;
-        let ulp = ordered_ulp(a, b).unwrap_or_else(|| {
-            panic!("{what}: word {i}: class or sign differs: cooperative {} ({a:#010x}) vs generated {} ({b:#010x})", f32::from_bits(a), f32::from_bits(b))
-        });
-        assert!(ulp <= MAX_ULP, "{what}: word {i}: {ulp} ULP: cooperative {} ({a:#010x}) vs generated {} ({b:#010x})", f32::from_bits(a), f32::from_bits(b));
+        let Some(ulp) = ordered_ulp(a, b) else {
+            bound.violations += 1;
+            first_violation.get_or_insert_with(|| format!("class or sign differs, {}", detail()));
+            continue;
+        };
+        let abs = if x.is_finite() { (x - y).abs() } else { 0.0 };
+        if abs > tolerance {
+            bound.violations += 1;
+            first_violation.get_or_insert_with(|| format!("{abs:e} over {tolerance:e}, {}", detail()));
+        }
         if ulp > 1 && bound.first_over_one.is_none() {
             bound.first_over_one = Some(i);
         }
         bound.max_ulp = bound.max_ulp.max(ulp);
+        bound.max_abs = bound.max_abs.max(abs);
     }
-    eprintln!("BOUND {what}: max {} ULP over {} words, first word over 1 ULP {:?}", bound.max_ulp, bound.written, bound.first_over_one);
+    eprintln!(
+        "BOUND {what}: max abs {:e} (tolerance {tolerance:e}), max {} ULP over {} words, first word over 1 ULP {:?}",
+        bound.max_abs, bound.max_ulp, bound.written, bound.first_over_one,
+    );
+    if let Some(v) = first_violation {
+        eprintln!("VIOLATION x{} {what}:", bound.violations);
+        eprintln!("  {v}");
+    }
+    VIOLATIONS.with(|v| v.set(v.get() + bound.violations));
     bound
 }
 
@@ -362,7 +408,8 @@ mod gpu {
         pass1(h, brick, uniforms, i, &a);
         pass1(h, oracle, uniforms, i, &b);
         let words = a.size as usize / 4;
-        assert_within_bound(&read::<u32>(&a, words), &read::<u32>(&b, words), Some(CANARY), what).written
+        let tolerance = position_tolerance([uniforms.center_x, uniforms.center_y, uniforms.center_z], [uniforms.size_x, uniforms.size_y, uniforms.size_z]);
+        assert_within_bound(&read::<u32>(&a, words), &read::<u32>(&b, words), Some(CANARY), tolerance, what).written
     }
 
     fn shared<T: bytemuck::Pod>(h: &Harness, values: &[T]) -> GpuBuffer {
@@ -490,6 +537,7 @@ mod gpu {
             }
         }
         assert!(written > 0);
+        finish_bound_checks();
     }
 
     struct Tails {
@@ -593,6 +641,7 @@ mod gpu {
             let zero = base_inputs([0.0, 0.0], &words);
             compare_pass1(&h, &oracle, &brick, base, &zero, slack, &format!("bounds [0, 0], scale {scale}"));
         }
+        finish_bound_checks();
     }
 
     /// The narrow-band value cases, through a brick schedule (every brick
