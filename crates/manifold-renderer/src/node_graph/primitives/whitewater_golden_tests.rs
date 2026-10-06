@@ -106,8 +106,10 @@ fn run(label: &str, def: EffectGraphDef, lines: &mut Vec<String>) -> [Option<u32
         let [epoch, time] = show.probes(["epoch", "simulation_time"]);
         (epoch, (f64::from(time) / TICK).round() as i64)
     };
-    // The baseline is the restart's own frame, so the first sampled frame's
-    // epoch and advance are checked too.
+    // The baseline is the restart's own frame, so frame 1 is checked too.
+    // `restart` rewinds the harness clock to zero after its trigger frame,
+    // and a backwards seek restarts the liquid clock: frame 1 is that
+    // restart, exactly one epoch on with no tick.
     let (mut was_epoch, mut was_step) = accepted(&show);
     let mut tick = 0;
     let mut frames = 0;
@@ -125,8 +127,13 @@ fn run(label: &str, def: EffectGraphDef, lines: &mut Vec<String>) -> [Option<u32
         assert_eq!(dropped, 0.0, "{label}: frame {frames} dropped simulation time");
         // The clock accepted exactly the ticks it scheduled, in one epoch.
         let (epoch, step) = accepted(&show);
-        assert_eq!(epoch, was_epoch, "{label}: frame {frames} changed epoch");
-        assert_eq!(step, was_step + due as i64, "{label}: frame {frames} clock at tick {step}, was {was_step}, due {due}");
+        if frames == 1 {
+            assert_eq!(epoch, was_epoch + 1.0, "{label}: frame 1 is not the rewind's restart");
+            assert_eq!(due, 0.0, "{label}: the rewind's restart ran a tick");
+        } else {
+            assert_eq!(epoch, was_epoch, "{label}: frame {frames} changed epoch");
+            assert_eq!(step, was_step + due as i64, "{label}: frame {frames} clock at tick {step}, was {was_step}, due {due}");
+        }
         (was_epoch, was_step) = (epoch, step);
         if due == 0.0 {
             continue;
