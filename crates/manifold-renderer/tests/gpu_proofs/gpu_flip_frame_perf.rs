@@ -10,9 +10,11 @@
 //! open one encoder per dispatch and turn encode replay off
 //! (ENCODE_REPLAY_DESIGN.md D7), so their split is a ratio, never the budget.
 //! `node.render_scene` is split per pass label and encoder kind the same way.
-//! The whitewater's published counts (foam, bubble, spray, pool full) are
-//! read back every frame through the node preview so a speed change that
-//! moved the particle population shows up beside the time it saved.
+//! The whitewater counts (foam, bubble, spray, pool full) are read on every
+//! timestamped frame from the whitewater stage's shared report buffer, so a
+//! speed change that moved the particle population shows up beside the time
+//! it saved. Holding the stage's arrays costs CPU work, so plain frames never
+//! hold them.
 //! Every split is reported twice, for the splash (ticks before
 //! `SPLASH_END_TICK`, the column falling and hitting the far wall) and for
 //! the calm after it, because the two phases have different costs and Peter
@@ -53,7 +55,7 @@ const WIDTH: u32 = 1920;
 const HEIGHT: u32 = 1080;
 const STEP: &str = "node.gpu_flip_step";
 const WHITEWATER: &str = "node.whitewater_step";
-/// The preset's whitewater node, whose scalar outputs carry the counts.
+/// The preset's whitewater stage; its `counts_out` holds the report words.
 const WHITEWATER_NODE: &str = "whitewater";
 /// Node types split per dispatch label.
 const LABELLED: [&str; 2] = [STEP, WHITEWATER];
@@ -110,8 +112,7 @@ struct Frame {
     split: Option<Split>,
 }
 
-/// The whitewater node's published counts after a frame (they lag the
-/// frame that wrote them by the readback).
+/// The whitewater counts the frame just rendered.
 #[derive(Clone, Copy, Default)]
 struct Counts {
     foam: f64,
@@ -121,10 +122,17 @@ struct Counts {
 }
 
 impl Counts {
+    /// Report words: foam, bubble, spray, emitted, thinned, pool full.
     fn read(runtime: &PresetRuntime) -> Self {
-        let (_, outputs) = runtime.preview_scalar_io();
-        let port = |name: &str| outputs.iter().find_map(|(port, value)| (port == name).then_some(f64::from(*value))).unwrap_or(0.0);
-        Self { foam: port("foam_count"), bubble: port("bubble_count"), spray: port("spray_count"), pool_full: port("pool_full") }
+        let dumps = runtime.dump_arrays_all();
+        // The frame's last tick wrote the counts the boundary now holds.
+        let counts = dumps.iter().rfind(|dump| dump.port == "counts_out").expect("the frame's whitewater counts");
+        assert!(counts.buffer.size >= 6 * 4, "six report words");
+        let ptr = counts.buffer.mapped_ptr().expect("shared whitewater counts");
+        // SAFETY: a shared buffer of at least six u32 words, checked above;
+        // `render` waited for the frame that wrote it.
+        let words: [u32; 6] = unsafe { std::ptr::read_unaligned(ptr.cast()) };
+        Self { foam: words[0].into(), bubble: words[1].into(), spray: words[2].into(), pool_full: words[5].into() }
     }
 
     fn live(self) -> f64 {
@@ -273,8 +281,8 @@ struct Phase {
 }
 
 impl Phase {
-    fn add(&mut self, result: Frame, counts: Counts) {
-        self.counts.push(counts);
+    fn add(&mut self, result: Frame, counts: Option<Counts>) {
+        self.counts.extend(counts);
         match result.split {
             None => {
                 self.plain_gpu.push(result.gpu_ms);
@@ -352,9 +360,6 @@ enum Variant {
     WaterUnwired,
 }
 
-/// Node ids in the shipped preset (`WaterDamBreakGpuFlip.json`).
-const WATER_OBJECT_NODE: u64 = 442;
-const RENDER_SCENE_NODE: u64 = 463;
 const WHITEWATER_BUDGET_PARAM: &str = "whitewater_capacity";
 
 #[test]
@@ -379,23 +384,32 @@ fn gpu_flip_frame_perf_indexed_parity() {
     assert_eq!(indexed, unindexed, "indexing must preserve every sampled frame hash");
 }
 
+/// A node's numeric id, found by its stable nodeId: regenerating the preset
+/// renumbers nodes.
+fn id_of(nodes: &Value, node_id: &str) -> Value {
+    nodes.as_array().expect("nodes").iter().find(|node| node["nodeId"] == node_id)
+        .unwrap_or_else(|| panic!("no node {node_id}"))["id"].clone()
+}
+
 fn use_triangle_list(json: &mut Value) {
+    let surface_id = id_of(&json["nodes"], "surface");
     let surface = json["nodes"].as_array_mut().expect("nodes").iter_mut()
-        .find(|node| node["id"] == 14).expect("liquid surface group");
+        .find(|node| node["id"] == surface_id).expect("liquid surface group");
     let group = &mut surface["group"];
+    let removed = ["liquid_edge_count", "liquid_edge_offsets"].map(|name| id_of(&group["nodes"], name));
     let nodes = group["nodes"].as_array_mut().expect("surface nodes");
     let before = nodes.len();
-    nodes.retain(|node| node["id"] != 21 && node["id"] != 22);
+    nodes.retain(|node| !removed.contains(&node["id"]));
     assert_eq!(before - nodes.len(), 2, "remove edge count and scan only");
     group["wires"].as_array_mut().expect("surface wires").retain(|wire| {
-        ![21, 22].iter().any(|id| wire["fromNode"] == *id || wire["toNode"] == *id)
+        !removed.iter().any(|id| wire["fromNode"] == *id || wire["toNode"] == *id)
             && wire["fromPort"] != "indices"
     });
     group["interface"]["outputs"].as_array_mut().expect("surface outputs")
         .retain(|port| port["name"] != "indices");
     let wires = json["wires"].as_array_mut().expect("preset wires");
     let before = wires.len();
-    wires.retain(|wire| !(wire["fromNode"] == 14 && wire["fromPort"] == "indices"));
+    wires.retain(|wire| !(wire["fromNode"] == surface_id && wire["fromPort"] == "indices"));
     assert_eq!(before - wires.len(), 1, "remove the water index wire only");
 }
 
@@ -419,11 +433,10 @@ fn probe(variant: Variant) -> Vec<(usize, u64)> {
         use_triangle_list(&mut json);
     }
     if variant == Variant::WaterUnwired {
+        let (water, scene) = (id_of(&json["nodes"], "water_object"), id_of(&json["nodes"], "scene"));
         let wires = json["wires"].as_array_mut().expect("preset wires");
         let before = wires.len();
-        wires.retain(|wire| {
-            !(wire["fromNode"] == WATER_OBJECT_NODE && wire["toNode"] == RENDER_SCENE_NODE)
-        });
+        wires.retain(|wire| !(wire["fromNode"] == water && wire["toNode"] == scene));
         assert_eq!(before - wires.len(), 1, "exactly one wire carries the water into render_scene");
     }
     let mut params = manifest(&json);
@@ -457,8 +470,7 @@ fn probe(variant: Variant) -> Vec<(usize, u64)> {
         assert!(warmup_started.elapsed().as_secs() < 30, "asset warmup did not settle");
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
-    // The preview copies the node's CPU-side scalars; it adds no GPU work.
-    runtime.set_preview_node(Some(&manifold_core::NodeId::from(WHITEWATER_NODE)));
+    let whitewater = [manifold_core::NodeId::from(WHITEWATER_NODE)];
     let mut whole = Phase::default();
     let mut splash = Phase::default();
     let mut calm = Phase::default();
@@ -468,6 +480,9 @@ fn probe(variant: Variant) -> Vec<(usize, u64)> {
     for tick in 0..MEASURED_FRAMES {
         frame += 1;
         let stamped = tick % TIMESTAMP_EVERY == TIMESTAMP_EVERY - 1;
+        if stamped {
+            runtime.set_dump_arrays(None, &whitewater);
+        }
         let result = render(
             &mut runtime,
             device,
@@ -476,7 +491,10 @@ fn probe(variant: Variant) -> Vec<(usize, u64)> {
             &params,
             stamped.then_some(&sampler),
         );
-        let counts = Counts::read(&runtime);
+        let counts = stamped.then(|| Counts::read(&runtime));
+        if stamped {
+            runtime.set_dump_arrays(None, &[]);
+        }
         if let Some(split) = &result.split {
             if split.shadow_rendered {
                 shadow_frames.push(tick);
