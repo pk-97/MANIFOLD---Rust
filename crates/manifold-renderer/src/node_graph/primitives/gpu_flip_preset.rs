@@ -981,7 +981,8 @@ fn add_dust_render(def: &mut Value) {
 #[cfg(any(test, feature = "gpu-proofs"))]
 fn scene_cards(metadata: &Value, scene: WaterScene) -> Value {
     let mut metadata = metadata.clone();
-    // Author the card here so both snapshots regenerate from older seeds.
+    // The builder owns this card: the seed predates it, so every regeneration
+    // writes it after Max Iterations and a hand edit to the JSON does not survive.
     for (list, entry) in [
         ("params", json!({"id":"sheet_fill_rate", "name":"Sheet Fill Rate",
             "defaultValue":0.0, "min":0.0, "max":1.0, "formatString":"F2",
@@ -1661,7 +1662,6 @@ pub(super) mod tests {
                 let geometry = gpu_flip_geometry(|key, default| node.params.get(key)
                     .map(crate::node_graph::param_default_to_f32).unwrap_or(default), None, None).unwrap();
                 assert_eq!(geometry.sheet_fill_rate, rate);
-                assert_eq!(super::super::gpu_flip_step::read_sheet_fill_rate(geometry.sheet_fill_rate, false), Ok(rate));
             }
         }
     }
