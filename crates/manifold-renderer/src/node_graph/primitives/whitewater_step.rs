@@ -15,16 +15,11 @@ use super::age_whitewater::AgeWhitewater;
 use super::advect_whitewater::AdvectWhitewater;
 use super::crossing_distance::CrossingDistance;
 use super::emission_count::WAVECREST_RATE;
-use super::turbulence_emission_count::TurbulenceEmissionCount;
 use super::turbulence_field::TurbulenceField;
 use super::whitewater_influence::WhitewaterInfluence;
 use super::whitewater_obstacle_source::WhitewaterSource;
-use super::dust_potential::DustPotential;
-use super::whitewater_emitter_velocity::WhitewaterEmitterVelocity;
-use super::inside_turbulence_potential::InsideTurbulencePotential;
-use super::energy_potential::{EnergyPotential, MAX_ENERGY, MIN_ENERGY};
+use super::energy_potential::{MAX_ENERGY, MIN_ENERGY};
 use super::extend_lattice::ExtendLattice;
-use super::jitter_particles::JitterParticles;
 use super::keep_whitewater::KeepWhitewater;
 use super::lattice_curvature::LatticeCurvature;
 use super::liquid_cells::LiquidCells;
@@ -33,12 +28,10 @@ use super::pad_distance_lattice::{encode_pad_distance_lattice, prepare_pad_dista
 use super::prefix_scan::{PrefixScan, ScanLabels, storage_words};
 use super::preserve_foam::PreserveFoam;
 use super::retype_whitewater::RetypeWhitewater;
-use super::sample_faces_at_particles::SampleFacesAtParticles;
 use super::sort_particles_into_cells::{ParticleSorter, SortJob, SortLabels, range_storage_bytes, whitewater_record_read};
 use super::spawn_whitewater::SpawnWhitewater;
 use super::standalone_pipeline::standalone_pipeline;
 use super::surface_crossings::SurfaceCrossings;
-use super::wavecrest_potential::WavecrestPotential;
 use super::whitewater_type::WhitewaterType;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
@@ -60,6 +53,121 @@ use crate::node_graph::whitewater_handoff::{Fence, Retired};
 /// FLIP's own default whitewater budget.
 pub const DEFAULT_CAPACITY: u32 = 100_000;
 pub const MAX_CAPACITY: u32 = 250_000;
+
+
+const WHITEWATER_FUSED_SHADER: &str = include_str!("shaders/whitewater_fused.wgsl");
+const FUSED_ENTRIES: [(&str, &str); 2] = [
+    ("ww_emit", "node.whitewater_step.emit"),
+    ("ww_dust", "node.whitewater_step.dust"),
+];
+
+fn fused_source(packed: bool) -> String {
+    use crate::node_graph::whitewater::WHITEWATER_COMMON;
+    use crate::node_graph::liquid::{grid::LIQUID_FACES, fields::LIQUID_FIELD};
+    format!("const LF_PACKED: bool = {packed};\n{WHITEWATER_COMMON}\n{LIQUID_FACES}\n{LIQUID_FIELD}\n{WHITEWATER_FUSED_SHADER}")
+}
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+#[path = "whitewater_reference.rs"]
+mod reference;
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+pub(super) fn reference_proof_node() -> Box<dyn crate::node_graph::effect_node::EffectNode> {
+    let mut node = WhitewaterStep::new();
+    node.step.reference.enabled = true;
+    node.step.reference.capture = true;
+    Box::new(node)
+}
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+pub(super) fn fused_proof_node() -> Box<dyn crate::node_graph::effect_node::EffectNode> {
+    let mut node = WhitewaterStep::new();
+    node.step.reference.capture = true;
+    Box::new(node)
+}
+
+#[cfg(test)]
+#[path = "whitewater_fused_tests.rs"]
+mod fused_tests;
+
+// The production expansion contains only the fused block: no selector field,
+// runtime flag, or reference branch is compiled into a shipping build.
+macro_rules! emitter_path {
+    ($reference:expr, $oracle:block, $fused:block) => {{
+        #[cfg(all(test, feature = "gpu-proofs"))]
+        { if $reference $oracle else $fused }
+        #[cfg(not(all(test, feature = "gpu-proofs")))]
+        $fused
+    }};
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct EmitParams {
+    center_x: f32,
+    center_y: f32,
+    center_z: f32,
+    size_x: f32,
+    size_y: f32,
+    size_z: f32,
+    nodes_x: f32,
+    nodes_y: f32,
+    nodes_z: f32,
+    face_cells_x: f32,
+    face_cells_y: f32,
+    face_cells_z: f32,
+    cell_size: f32,
+    seed: f32,
+    epoch: f32,
+    spray_speed: f32,
+    min_energy: f32,
+    max_energy: f32,
+    min_curvature: f32,
+    max_curvature: f32,
+    sharpness: f32,
+    min_turbulence: f32,
+    max_turbulence: f32,
+    inside_enabled: f32,
+    rate: f32,
+    turbulence_rate: f32,
+    generation_rate: f32,
+    points_per_cell: f32,
+    ticks: f32,
+    live_count: f32,
+    dt: f32,
+    dust_enabled: f32,
+    boundary_dust: f32,
+    count: u32,
+    _pad: [u32; 2],
+}
+
+impl EmitParams {
+    fn new(frame: &StepFrame, count: u32, dust: bool) -> Self {
+        let s = &frame.shape;
+        let [center_x, center_y, center_z] = s.center;
+        let [size_x, size_y, size_z] = s.size;
+        let [nodes_x, nodes_y, nodes_z] = s.nodes.map(|n| n as f32);
+        let [face_cells_x, face_cells_y, face_cells_z] = s.face_cells.map(|n| n as f32);
+        Self {
+            center_x, center_y, center_z, size_x, size_y, size_z,
+            nodes_x, nodes_y, nodes_z, face_cells_x, face_cells_y, face_cells_z,
+            cell_size: s.cell_size, seed: if dust { frame.seed + 104729.0 } else { frame.seed },
+            epoch: frame.epoch as f32, spray_speed: frame.spray_speed,
+            min_energy: frame.min_energy, max_energy: frame.max_energy,
+            min_curvature: super::wavecrest_potential::MIN_CURVATURE,
+            max_curvature: super::wavecrest_potential::MAX_CURVATURE,
+            sharpness: super::wavecrest_potential::SHARPNESS,
+            min_turbulence: frame.min_turbulence, max_turbulence: frame.max_turbulence,
+            inside_enabled: f32::from(u8::from(frame.inside_emission)),
+            rate: if dust { 0.0 } else { frame.wavecrest_emission },
+            turbulence_rate: if dust { frame.dust_rate } else { frame.turbulence_emission },
+            generation_rate: frame.generation_rate, points_per_cell: 8.0,
+            ticks: frame.ticks as f32, live_count: count as f32, dt: frame.dt,
+            dust_enabled: f32::from(u8::from(frame.dust_emission)),
+            boundary_dust: f32::from(u8::from(frame.boundary_dust)), count, _pad: [0; 2],
+        }
+    }
+}
 
 pub(crate) const WHITEWATER_STEP_SHADER: &str = include_str!("shaders/whitewater_step.wgsl");
 
@@ -547,16 +655,8 @@ struct Pipelines {
     liquid: Option<GpuComputePipeline>,
     curvature: Option<GpuComputePipeline>,
     turbulence: Option<GpuComputePipeline>,
-    inside: Option<GpuComputePipeline>,
-    emitter_velocity: Option<GpuComputePipeline>,
     influence: Option<GpuComputePipeline>,
-    dust: Option<GpuComputePipeline>,
     extend: Option<GpuComputePipeline>,
-    jitter: Option<GpuComputePipeline>,
-    sample: Option<GpuComputePipeline>,
-    energy: Option<GpuComputePipeline>,
-    wavecrest: Option<GpuComputePipeline>,
-    emission: Option<GpuComputePipeline>,
     spawn: Option<GpuComputePipeline>,
     kind: Option<GpuComputePipeline>,
     advect: Option<GpuComputePipeline>,
@@ -566,6 +666,7 @@ struct Pipelines {
     keep: Option<GpuComputePipeline>,
     /// `whitewater_step.wgsl`, in [`Hand`] order.
     hand: Vec<GpuComputePipeline>,
+    fused: Vec<GpuComputePipeline>,
 }
 
 #[derive(Clone, Copy)]
@@ -622,17 +723,9 @@ impl Pipelines {
         standalone_pipeline::<CrossingDistance>(&mut self.distance, device);
         standalone_pipeline::<LiquidCells>(&mut self.liquid, device);
         standalone_pipeline::<WhitewaterInfluence>(&mut self.influence, device);
-        standalone_pipeline::<DustPotential>(&mut self.dust, device);
-        standalone_pipeline::<WhitewaterEmitterVelocity>(&mut self.emitter_velocity, device);
         standalone_pipeline::<TurbulenceField>(&mut self.turbulence, device);
-        standalone_pipeline::<InsideTurbulencePotential>(&mut self.inside, device);
         standalone_pipeline::<LatticeCurvature>(&mut self.curvature, device);
         standalone_pipeline::<ExtendLattice>(&mut self.extend, device);
-        standalone_pipeline::<JitterParticles>(&mut self.jitter, device);
-        standalone_pipeline::<SampleFacesAtParticles>(&mut self.sample, device);
-        standalone_pipeline::<EnergyPotential>(&mut self.energy, device);
-        standalone_pipeline::<WavecrestPotential>(&mut self.wavecrest, device);
-        standalone_pipeline::<TurbulenceEmissionCount>(&mut self.emission, device);
         standalone_pipeline::<SpawnWhitewater>(&mut self.spawn, device);
         standalone_pipeline::<WhitewaterType>(&mut self.kind, device);
         standalone_pipeline::<AdvectWhitewater>(&mut self.advect, device);
@@ -640,6 +733,12 @@ impl Pipelines {
         standalone_pipeline::<AgeWhitewater>(&mut self.age, device);
         standalone_pipeline::<PreserveFoam>(&mut self.preserve, device);
         standalone_pipeline::<KeepWhitewater>(&mut self.keep, device);
+        if self.fused.is_empty() {
+            let source = fused_source(false);
+            for (entry, label) in FUSED_ENTRIES {
+                self.fused.push(device.create_compute_pipeline(&source, entry, label));
+            }
+        }
         if self.hand.is_empty() {
             for (entry, label) in HAND_ENTRIES {
                 self.hand.push(device.create_compute_pipeline(WHITEWATER_STEP_SHADER, entry, label));
@@ -718,6 +817,7 @@ impl Fields {
 #[derive(Default)]
 struct ParticleScratch {
     slots: u32,
+    /// sampled, energy, unscaled, dust_energy, dust_counts (76 bytes per slot).
     buffers: Option<[GpuBuffer; 5]>,
 }
 
@@ -726,7 +826,7 @@ impl ParticleScratch {
         if self.buffers.is_none() || self.slots < slots {
             let n = u64::from(slots);
             let alloc = |bytes| allocate(device, bytes, false);
-            self.buffers = Some([alloc(n * PARTICLE)?, alloc(n * PARTICLE)?, alloc(n * 4)?, alloc(n * 4)?, alloc(n * 4)?]);
+            self.buffers = Some([alloc(n * PARTICLE)?, alloc(n * 4)?, alloc(n * PARTICLE)?, alloc(n * 4)?, alloc(n * 4)?]);
             self.slots = slots;
         }
         Ok(self.buffers.as_ref().expect("particle scratch allocated"))
@@ -832,6 +932,8 @@ impl Outputs {
 /// The node's GPU side: pipelines, the pool and its fields, the outputs.
 #[derive(Default)]
 pub(crate) struct Step {
+    #[cfg(all(test, feature = "gpu-proofs"))]
+    reference: reference::Reference,
     pipelines: Pipelines,
     surface_distance: super::whitewater_distance::SurfaceDistance,
     shape: Option<StepShape>,
@@ -914,6 +1016,8 @@ impl Step {
     }
 
     fn reserve(&mut self, device: &GpuDevice, shape: StepShape, particles: u64, tick_mode: bool) -> Result<(), String> {
+        #[cfg(all(test, feature = "gpu-proofs"))]
+        self.reference.reserve(device, particles as u32)?;
         self.surface_distance.reserve(device, shape.face_cells)?;
         if self.shape != Some(shape) || self.tick_mode != tick_mode {
             self.shape = None;
@@ -1139,7 +1243,7 @@ impl Step {
             atom::<ExtendLattice>(enc, get(&p.extend), &nodes, &[&f.curvature[curvature], &f.curvature[1 - curvature]], cells, label("extend"));
             curvature = 1 - curvature;
         }
-        let [jittered, sampled, energy, wavecrest, inside] = scratch;
+        let [sampled, energy, unscaled, dust_energy, dust_counts] = scratch;
         let box3 = [("center_x", cx), ("center_y", cy), ("center_z", cz), ("size_x", sx), ("size_y", sy), ("size_z", sz)];
         let faces = [("face_cells_x", fx), ("face_cells_y", fy), ("face_cells_z", fz)];
         atom::<TurbulenceField>(
@@ -1147,31 +1251,11 @@ impl Step {
             &[faces[0], faces[1], faces[2], nodes[0], nodes[1], nodes[2], ("cell_size", s.cell_size)],
             &[distance, inputs.faces[0], inputs.faces[1], inputs.faces[2], &f.turbulence],
             cells, "node.whitewater_step.turbulence");
+        if emitters == 0 {
+            enc.clear_buffer(offsets);
+            enc.clear_buffer(dust_counts);
+        }
         let epoch = frame.epoch as f32;
-        // The per-particle passes run over the emitters, not every slot of
-        // the particle array: the emission count masks everything from the
-        // live count up, and the spawn reads the scratch only below the
-        // emission scan's length.
-        atom::<JitterParticles>(
-            enc,
-            get(&p.jitter),
-            &[("cell_size", s.cell_size), ("seed", frame.seed), ("epoch", epoch)],
-            &[inputs.particles, jittered],
-            emitters,
-            "node.whitewater_step.jitter",
-        );
-        let mut sample = [("", 0.0); 12];
-        sample[..3].copy_from_slice(&faces);
-        sample[3..9].copy_from_slice(&box3);
-        sample[9..].copy_from_slice(&nodes);
-        atom::<SampleFacesAtParticles>(
-            enc,
-            get(&p.sample),
-            &sample,
-            &[jittered, inputs.faces[0], inputs.faces[1], inputs.faces[2], sampled],
-            emitters,
-            "node.whitewater_step.sample_velocity",
-        );
         let mut grid = [("", 0.0); 9];
         grid[..6].copy_from_slice(&box3);
         grid[6..].copy_from_slice(&nodes);
@@ -1180,41 +1264,25 @@ impl Step {
         velocity_params[9] = ("spray_speed", frame.spray_speed);
         velocity_params[10] = ("seed", frame.seed);
         velocity_params[11] = ("epoch", epoch);
-        atom::<WhitewaterEmitterVelocity>(enc, get(&p.emitter_velocity), &velocity_params,
-            &[sampled, surface, &f.cells, jittered], emitters, "node.whitewater_step.emitter_velocity");
-        let unscaled = sampled;
-        let sampled = jittered;
-        atom_then::<EnergyPotential>(
-            enc, get(&p.energy),
-            &[("min_energy", frame.min_energy), ("max_energy", frame.max_energy)],
-            &[sampled, energy], emitters, "node.whitewater_step.energy", Barrier::None);
-        atom::<WavecrestPotential>(
-            enc,
-            get(&p.wavecrest),
-            &grid,
-            &[sampled, surface, &f.curvature[curvature], &f.cells, wavecrest],
-            emitters,
-            "node.whitewater_step.wavecrest",
-        );
-        let mut turbulence_params = [("", 0.0); 12];
-        turbulence_params[..9].copy_from_slice(&grid);
-        turbulence_params[9] = ("min_turbulence", frame.min_turbulence);
-        turbulence_params[10] = ("max_turbulence", frame.max_turbulence);
-        turbulence_params[11] = ("inside_enabled", f32::from(u8::from(frame.inside_emission)));
-        atom::<InsideTurbulencePotential>(enc, get(&p.inside), &turbulence_params,
-            &[sampled, surface, &f.turbulence, &f.cells, inside], emitters, "node.whitewater_step.inside");
-        let mut count_params = [("", 0.0); 18];
-        count_params[..8].copy_from_slice(&[("rate", frame.wavecrest_emission), ("turbulence_rate", frame.turbulence_emission), ("generation_rate", frame.generation_rate), ("seed", frame.seed), ("epoch", epoch), ("points_per_cell", 8.0), ("ticks", frame.ticks as f32), ("live_count", emitters as f32)]);
-        count_params[8..17].copy_from_slice(&grid);
-        count_params[17] = ("dt", frame.dt);
-        atom::<TurbulenceEmissionCount>(
-            enc,
-            get(&p.emission),
-            &count_params,
-            &[sampled, energy, wavecrest, inside, &f.influence[influence_next], offsets],
-            emitters,
-            "node.whitewater_step.emission",
-        );
+        #[cfg(all(test, feature = "gpu-proofs"))]
+        let reference = self.reference.enabled;
+        emitter_path!(reference, {
+            self.reference.emit_reference(enc, frame, inputs, f, surface, curvature, influence_next, offsets, emitters);
+        }, {
+            dispatch(enc, &p.fused[0], bytemuck::bytes_of(&EmitParams::new(frame, emitters, false)),
+                &[inputs.particles, inputs.faces[0], inputs.faces[1], inputs.faces[2], &f.state,
+                  surface, &f.cells, &f.curvature[curvature], &f.turbulence, &f.influence[influence_next],
+                  sampled, energy, offsets, unscaled, dust_counts], emitters, FUSED_ENTRIES[0].1, Barrier::After);
+            #[cfg(all(test, feature = "gpu-proofs"))]
+            self.reference.record_dispatch(FUSED_ENTRIES[0].1, emitters);
+        });
+        #[cfg(all(test, feature = "gpu-proofs"))]
+        let (sampled, energy, unscaled) = if reference {
+            let [jittered, sampled, energy, _, _] = self.reference.scratch();
+            (jittered, energy, sampled)
+        } else { (sampled, energy, unscaled) };
+        #[cfg(all(test, feature = "gpu-proofs"))]
+        self.reference.capture_emit(enc, sampled, unscaled, energy, offsets, emitters, frame.dust_emission);
         self.emission_scan.encode_labelled(enc, emitters.max(1) as usize, EMISSION_SCAN);
         let mut spawn = [("", 0.0); 19];
         spawn[0] = ("capacity", s.capacity as f32);
@@ -1242,25 +1310,31 @@ impl Step {
         let state = HandParams { count: 1, ..params };
         self.hand(enc, Hand::AppendState, state, self.bound(pool, pool, HandBuffers { offsets: Some(offsets), ..HandBuffers::default() }));
         if frame.dust_emission {
-            let mut dust_params = [("", 0.0); 13];
-            dust_params[..9].copy_from_slice(&grid);
-            dust_params[9..].copy_from_slice(&[("min_turbulence", frame.min_turbulence), ("max_turbulence", frame.max_turbulence),
-                ("dust_enabled", 1.0), ("boundary_dust", f32::from(u8::from(frame.boundary_dust)))]);
-            atom::<DustPotential>(enc, get(&p.dust), &dust_params,
-                &[unscaled, inputs.solid, &f.turbulence, inputs.obstacle_source.expect("validated dust source"), inside],
-                emitters, "node.whitewater_step.dust_potential");
-            atom::<EnergyPotential>(enc, get(&p.energy),
-                &[("min_energy", frame.min_energy), ("max_energy", frame.max_energy)],
-                &[unscaled, energy], emitters, "node.whitewater_step.dust_energy");
-            count_params[0] = ("rate", 0.0);
-            count_params[1] = ("turbulence_rate", frame.dust_rate);
-            count_params[3] = ("seed", frame.seed + 104729.0);
-            atom::<TurbulenceEmissionCount>(enc, get(&p.emission), &count_params,
-                &[unscaled, energy, wavecrest, inside, &f.influence[influence_next], offsets], emitters, "node.whitewater_step.dust_count");
-            self.emission_scan.encode_labelled(enc, emitters.max(1) as usize, EMISSION_SCAN);
+            emitter_path!(reference, {
+                self.reference.dust_reference(enc, frame, inputs, f, influence_next, offsets, emitters);
+            }, {
+                dispatch(enc, &p.fused[1], bytemuck::bytes_of(&EmitParams::new(frame, emitters, true)),
+                    &[unscaled, inputs.solid, inputs.obstacle_source.expect("validated dust source"),
+                      &f.state, &f.state, &f.state, &f.state, &f.state, &f.turbulence,
+                      &f.influence[influence_next], &f.state, dust_energy, dust_counts],
+                    emitters, FUSED_ENTRIES[1].1, Barrier::After);
+                #[cfg(all(test, feature = "gpu-proofs"))]
+                self.reference.record_dispatch(FUSED_ENTRIES[1].1, emitters);
+            });
+            #[cfg(all(test, feature = "gpu-proofs"))]
+            let (dust_energy, dust_counts) = if reference {
+                (self.reference.dust_energy(), offsets)
+            } else { (dust_energy, dust_counts) };
+            #[cfg(all(test, feature = "gpu-proofs"))]
+            self.reference.capture_dust(enc, dust_energy, dust_counts, emitters);
+            emitter_path!(reference, {
+                self.emission_scan.encode_labelled(enc, emitters.max(1) as usize, EMISSION_SCAN);
+            }, {
+                self.emission_scan.encode_into(enc, emitters.max(1) as usize, dust_counts, offsets);
+            });
             spawn[14] = ("seed", frame.seed + 104729.0);
             atom::<SpawnWhitewater>(enc, get(&p.spawn), &spawn[..17],
-                &[offsets, unscaled, energy, inputs.faces[0], inputs.faces[1], inputs.faces[2], inputs.solid, &f.spawns],
+                &[offsets, unscaled, dust_energy, inputs.faces[0], inputs.faces[1], inputs.faces[2], inputs.solid, &f.spawns],
                 s.capacity, "node.whitewater_step.dust_spawn");
             let mut dust_type = [("", 0.0); 10];
             dust_type[..9].copy_from_slice(&grid);
@@ -1504,6 +1578,8 @@ impl Primitive for WhitewaterStep {
     }
 
     fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
+        #[cfg(all(test, feature = "gpu-proofs"))]
+        if let Some(buffer) = self.step.reference.output(port) { return Some(buffer); }
         if self.tick_mode {
             return self.step.tick_output(port);
         }

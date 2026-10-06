@@ -352,6 +352,11 @@ pub struct GpuComputePipeline {
 }
 
 impl GpuComputePipeline {
+    /// Legal threadgroup maximum reported by the backend, not an occupancy metric.
+    pub fn max_threads_per_threadgroup(&self) -> Option<u32> {
+        Some(self.state.maxTotalThreadsPerThreadgroup() as u32)
+    }
+
     /// The first binding the entry point references that `bindings` leaves
     /// out. Metal binds only what a dispatch names, so a referenced binding
     /// left out reads whatever the slot last held.
