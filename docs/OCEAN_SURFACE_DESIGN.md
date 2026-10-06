@@ -104,6 +104,16 @@ cascade and alias wherever waves are finer than the grid. Consequence, stated ho
 no ripples finer than the grid, and the far field is smoother than the real sea, because
 unresolved slope variance doesn't reach roughness. P6's trigger revives a detail normal
 map and variance roughness.
+**Amended (2026-10-07, look gate): heights and sideways shifts are sampled Catmull-Rom.**
+Bilinear sampling made the surface flat within each cascade sample, so wherever a grid
+cell is smaller than a sample (a low camera, the ripple cascade's 10.5 cm samples within a
+few metres) the finite-difference normals showed square facets. Catmull-Rom passes
+through every sample and keeps the slope continuous, so the facets go and the far field
+keeps the finite difference's averaging. The three fold fields only drive foam and stay
+bilinear. Slope-field normals were tried again in a side-by-side and rejected for the
+reason above: smooth near the camera, but they sparkle at the horizon without footprint
+filtering, which is the variance-roughness work this decision already defers
+(BUG-fgx4g (exact slope normals with footprint filtering)).
 
 **D6 — Foam is the summed surface's fold, painted into vertex colour.**
 `node.projected_grid` writes its Colour param, the water's own albedo, into vertex
@@ -143,8 +153,8 @@ Rejected: our own compute FFT (`feat/own-fft` prototype), because MPSGraph is pr
 and reuse comes first.
 
 **D9 — One displace atom samples every cascade.** `node.ocean_displace` reads the mesh
-coincidently and gathers the three cascades' fields bilinearly, with wrap, at
-rest_xz / L_c. It writes position = in.position + Σ_c fade_c · (λ·Dx_c, Dy_c, λ·Dz_c),
+coincidently and gathers the three cascades' fields, with wrap, at rest_xz / L_c:
+Catmull-Rom for Dy, Dx, Dz and bilinear for the fold fields (D5 amendment). It writes position = in.position + Σ_c fade_c · (λ·Dx_c, Dy_c, λ·Dz_c),
 and the foam of D6. fade_c = 1 − smoothstep(Fade Start_c, Fade End_c, |rest_xz − camera_xz|),
 so short waves vanish before the grid stops resolving them.
 Rejected: one displace node per cascade. The fold test needs the summed deformation, so

@@ -97,7 +97,7 @@ impl DisplaceUniforms {
 crate::primitive! {
     name: OceanDisplace,
     type_id: "node.ocean_displace",
-    purpose: "Move each vertex of a water mesh by three ocean cascades and paint foam where the waves fold. Each cascade's fields (from node.inverse_fft_2d: height, sideways x/z, and their slopes) are sampled bilinearly, wrapping, at the vertex's rest position held in its uv (metres) over that cascade's tile, faded out with distance from the camera. Position += Σ fade·(Choppiness·Dx, Dy, Choppiness·Dz). Foam mixes vertex colour toward white as the Jacobian of the summed sideways displacement drops below Foam Threshold.",
+    purpose: "Move each vertex of a water mesh by three ocean cascades and paint foam where the waves fold. Each cascade's fields (from node.inverse_fft_2d: height, sideways x/z, and their slopes) are sampled, wrapping, at the vertex's rest position held in its uv (metres) over that cascade's tile, faded out with distance from the camera: Catmull-Rom for height and sideways shift, so the surface stays smooth between samples however close the camera gets, and bilinear for the slopes that drive foam. Position += Σ fade·(Choppiness·Dx, Dy, Choppiness·Dz). Foam mixes vertex colour toward white as the Jacobian of the summed sideways displacement drops below Foam Threshold.",
     inputs: {
         mesh: Array(MeshVertex) required,
         field_0: Array(f32) required,
@@ -232,6 +232,120 @@ impl Primitive for OceanDisplace {
     }
 }
 
+/// CPU twins of the body's field sampling.
+#[cfg(test)]
+pub(crate) mod sampling {
+    /// Catmull-Rom weights for the taps at base-1 .. base+2 and fraction t.
+    pub fn catmull_rom(t: f32) -> [f32; 4] {
+        let (t2, t3) = (t * t, t * t * t);
+        [
+            0.5 * (-t3 + 2.0 * t2 - t),
+            0.5 * (3.0 * t3 - 5.0 * t2 + 2.0),
+            0.5 * (-3.0 * t3 + 4.0 * t2 + t),
+            0.5 * (t3 - t2),
+        ]
+    }
+
+    fn wrap(i: i32, n: i32) -> usize {
+        (((i % n) + n) % n) as usize
+    }
+
+    /// One N×N field at lattice coordinate t (cells), wrapping.
+    pub fn cubic(field: &[f32], n: i32, t: [f32; 2]) -> f32 {
+        let (bx, bz) = (t[0].floor() as i32, t[1].floor() as i32);
+        let (wx, wz) = (catmull_rom(t[0] - t[0].floor()), catmull_rom(t[1] - t[1].floor()));
+        let mut acc = 0.0;
+        for (r, wr) in wz.iter().enumerate() {
+            let row = wrap(bz + r as i32 - 1, n) * n as usize;
+            let line: f32 = wx.iter().enumerate().map(|(c, wc)| wc * field[row + wrap(bx + c as i32 - 1, n)]).sum();
+            acc += wr * line;
+        }
+        acc
+    }
+
+    pub fn bilinear(field: &[f32], n: i32, t: [f32; 2]) -> f32 {
+        let (bx, bz) = (t[0].floor() as i32, t[1].floor() as i32);
+        let w = [t[0] - t[0].floor(), t[1] - t[1].floor()];
+        let at = |z: i32, x: i32| field[wrap(z, n) * n as usize + wrap(x, n)];
+        let a = at(bz, bx) + (at(bz, bx + 1) - at(bz, bx)) * w[0];
+        let b = at(bz + 1, bx) + (at(bz + 1, bx + 1) - at(bz + 1, bx)) * w[0];
+        a + (b - a) * w[1]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sampling::{bilinear, cubic};
+
+    const N: i32 = 16;
+
+    /// A periodic field holding a few waves well inside the lattice's Nyquist.
+    fn waves() -> Vec<f32> {
+        let tau = std::f32::consts::TAU / N as f32;
+        (0..N * N)
+            .map(|i| {
+                let (x, z) = ((i % N) as f32, (i / N) as f32);
+                (2.0 * tau * x + tau * z).sin() + 0.5 * (3.0 * tau * z - tau * x).cos()
+            })
+            .collect()
+    }
+
+    /// Catmull-Rom passes through every sample, so the waves' heights at the
+    /// FFT's own points are exact.
+    #[test]
+    fn cubic_passes_through_samples() {
+        let f = waves();
+        for z in 0..N {
+            for x in 0..N {
+                let got = cubic(&f, N, [x as f32, z as f32]);
+                assert!((got - f[(z * N + x) as usize]).abs() < 1e-5, "({x}, {z}): {got}");
+            }
+        }
+    }
+
+    /// The faceting cure: across a sample line the cubic surface's slope is
+    /// continuous, where bilinear's jumps. Both sides are measured just off
+    /// the line, so a kink shows as a slope difference.
+    #[test]
+    fn cubic_slope_is_continuous_across_samples() {
+        let f = waves();
+        let (h, e) = (1e-3f32, 1e-2f32);
+        let slope = |s: &dyn Fn([f32; 2]) -> f32, x: f32, z: f32| (s([x + h, z]) - s([x - h, z])) / (2.0 * h);
+        let mut cubic_jump = 0.0f32;
+        let mut bilinear_jump = 0.0f32;
+        for k in 0..N {
+            let (x, z) = (k as f32, 0.37 + k as f32 * 0.61);
+            let c = |p: [f32; 2]| cubic(&f, N, p);
+            let b = |p: [f32; 2]| bilinear(&f, N, p);
+            cubic_jump = cubic_jump.max((slope(&c, x + e, z) - slope(&c, x - e, z)).abs());
+            bilinear_jump = bilinear_jump.max((slope(&b, x + e, z) - slope(&b, x - e, z)).abs());
+        }
+        assert!(cubic_jump < 0.05, "cubic slope jumps {cubic_jump} across a sample line");
+        assert!(bilinear_jump > 10.0 * cubic_jump, "bilinear should kink ({bilinear_jump} vs {cubic_jump})");
+    }
+
+    /// Between samples the cubic surface follows the waves: height and slope
+    /// close to the exact field, which a wrong weight would miss by far.
+    #[test]
+    fn cubic_follows_the_waves_between_samples() {
+        let f = waves();
+        let tau = std::f32::consts::TAU / N as f32;
+        let exact = |x: f32, z: f32| (2.0 * tau * x + tau * z).sin() + 0.5 * (3.0 * tau * z - tau * x).cos();
+        let h = 1e-3f32;
+        let (mut worst_h, mut worst_s) = (0.0f32, 0.0f32);
+        for k in 0..64 {
+            let (x, z) = (k as f32 * 0.237 % N as f32, k as f32 * 0.419 % N as f32);
+            worst_h = worst_h.max((cubic(&f, N, [x, z]) - exact(x, z)).abs());
+            let got = (cubic(&f, N, [x + h, z]) - cubic(&f, N, [x - h, z])) / (2.0 * h);
+            let want = (exact(x + h, z) - exact(x - h, z)) / (2.0 * h);
+            worst_s = worst_s.max((got - want).abs());
+        }
+        // Measured 0.025 and 0.078 against a peak slope near 1.
+        assert!(worst_h < 0.04, "height error {worst_h}");
+        assert!(worst_s < 0.12, "slope error {worst_s}");
+    }
+}
+
 /// CPU reference of the WGSL body, for the proofs.
 #[cfg(all(test, feature = "gpu-proofs"))]
 pub(crate) fn reference(v: &MeshVertex, u: &DisplaceUniforms, fields: [&[f32]; CASCADES]) -> MeshVertex {
@@ -250,17 +364,10 @@ pub(crate) fn reference(v: &MeshVertex, u: &DisplaceUniforms, fields: [&[f32]; C
         }
         let n = cs.size;
         let t = [rest[0] / cs.tile_size.max(1e-3) * n as f32, rest[1] / cs.tile_size.max(1e-3) * n as f32];
-        let base = [t[0].floor(), t[1].floor()];
-        let w = [t[0] - base[0], t[1] - base[1]];
-        let wrap = |i: i32| ((i % n) + n) % n;
-        let (x0, z0) = (wrap(base[0] as i32), wrap(base[1] as i32));
-        let (x1, z1) = ((x0 + 1) % n, (z0 + 1) % n);
+        let plane = (n * n) as usize;
         let s: [f32; 6] = std::array::from_fn(|f| {
-            let o = (f as i32 * n * n) as usize;
-            let at = |z: i32, x: i32| field[o + (z * n + x) as usize];
-            let a = at(z0, x0) + (at(z0, x1) - at(z0, x0)) * w[0];
-            let b = at(z1, x0) + (at(z1, x1) - at(z1, x0)) * w[0];
-            a + (b - a) * w[1]
+            let one = &field[f * plane..(f + 1) * plane];
+            if f < 3 { sampling::cubic(one, n, t) } else { sampling::bilinear(one, n, t) }
         });
         disp[0] += fade * u.choppiness * s[1];
         disp[1] += fade * s[0];

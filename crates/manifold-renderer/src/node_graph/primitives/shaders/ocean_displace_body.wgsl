@@ -1,36 +1,45 @@
 // node.ocean_displace — fusable BUFFER body. Moves each vertex by three ocean
 // cascades sampled at its rest position (uv, metres) and paints foam where
-// the summed surface folds (docs/OCEAN_SURFACE_DESIGN.md D6, D9).
+// the summed surface folds (docs/OCEAN_SURFACE_DESIGN.md D5, D6, D9).
 //
 // ABI (buffer standalone codegen): `mesh` is coincident (e_mesh); field_0..2
 // are BUFFER GATHER inputs bound as globals buf_field_0..2: array<f32>, each
 // six N×N real fields, field-major then row (z) then column (x). Params in
 // PARAMS order, then the derived camera x/z. Int params arrive as i32.
+//
+// Height and sideways shift (fields 0..2) are sampled Catmull-Rom: the surface
+// is C1 between samples, so make_triangles' finite-difference normals stay
+// smooth where a grid cell is smaller than a cascade sample. Bilinear made
+// every sample cell a flat facet. The fold terms (3..5) only feed foam and
+// stay bilinear.
 
 struct OdpTaps {
-    i00: u32,
-    i10: u32,
-    i01: u32,
-    i11: u32,
+    // Wrapped columns and rows base-1 .. base+2; taps 1 and 2 are the bilinear pair.
+    x: vec4<u32>,
+    z: vec4<u32>,
+    wx: vec4<f32>,
+    wz: vec4<f32>,
     w: vec2<f32>,
 }
 
-// Bilinear taps with wrap for world point p on an N×N tile of size l.
+// Catmull-Rom weights for the taps at base-1 .. base+2 and fraction t.
+fn odp_catmull_rom(t: f32) -> vec4<f32> {
+    let t2 = t * t;
+    let t3 = t2 * t;
+    return 0.5 * vec4<f32>(-t3 + 2.0 * t2 - t, 3.0 * t3 - 5.0 * t2 + 2.0, -3.0 * t3 + 4.0 * t2 + t, t3 - t2);
+}
+
+// Taps with wrap for world point p on an N×N tile of size l.
 fn odp_taps(n: u32, l: f32, p: vec2<f32>) -> OdpTaps {
     let t = p / max(l, 1e-3) * f32(n);
     let base = floor(t);
     let ni = i32(n);
-    let x0 = ((i32(base.x) % ni) + ni) % ni;
-    let z0 = ((i32(base.y) % ni) + ni) % ni;
-    let x1 = (x0 + 1) % ni;
-    let z1 = (z0 + 1) % ni;
-    return OdpTaps(
-        u32(z0 * ni + x0),
-        u32(z0 * ni + x1),
-        u32(z1 * ni + x0),
-        u32(z1 * ni + x1),
-        t - base,
-    );
+    let bx = ((i32(base.x) % ni) + ni) % ni;
+    let bz = ((i32(base.y) % ni) + ni) % ni;
+    let x = vec4<u32>(u32((bx + ni - 1) % ni), u32(bx), u32((bx + 1) % ni), u32((bx + 2) % ni));
+    let z = vec4<u32>(u32((bz + ni - 1) % ni), u32(bz), u32((bz + 1) % ni), u32((bz + 2) % ni));
+    let w = t - base;
+    return OdpTaps(x, z, odp_catmull_rom(w.x), odp_catmull_rom(w.y), w);
 }
 
 fn odp_fade(start: f32, end: f32, d: f32) -> f32 {
@@ -71,10 +80,19 @@ fn body(
         let n = u32(size_0);
         let t = odp_taps(n, tile_size_0, rest);
         var s: array<f32, 6>;
-        for (var f = 0u; f < 6u; f = f + 1u) {
+        for (var f = 0u; f < 3u; f = f + 1u) {
             let o = f * n * n;
-            let a = mix(buf_field_0[o + t.i00], buf_field_0[o + t.i10], t.w.x);
-            let b = mix(buf_field_0[o + t.i01], buf_field_0[o + t.i11], t.w.x);
+            var acc = 0.0;
+            for (var r = 0u; r < 4u; r = r + 1u) {
+                let row = o + t.z[r] * n;
+                acc += t.wz[r] * dot(t.wx, vec4<f32>(buf_field_0[row + t.x[0]], buf_field_0[row + t.x[1]], buf_field_0[row + t.x[2]], buf_field_0[row + t.x[3]]));
+            }
+            s[f] = acc;
+        }
+        for (var f = 3u; f < 6u; f = f + 1u) {
+            let o = f * n * n;
+            let a = mix(buf_field_0[o + t.z[1] * n + t.x[1]], buf_field_0[o + t.z[1] * n + t.x[2]], t.w.x);
+            let b = mix(buf_field_0[o + t.z[2] * n + t.x[1]], buf_field_0[o + t.z[2] * n + t.x[2]], t.w.x);
             s[f] = mix(a, b, t.w.y);
         }
         disp += f0 * vec3<f32>(choppiness * s[1], s[0], choppiness * s[2]);
@@ -86,10 +104,19 @@ fn body(
         let n = u32(size_1);
         let t = odp_taps(n, tile_size_1, rest);
         var s: array<f32, 6>;
-        for (var f = 0u; f < 6u; f = f + 1u) {
+        for (var f = 0u; f < 3u; f = f + 1u) {
             let o = f * n * n;
-            let a = mix(buf_field_1[o + t.i00], buf_field_1[o + t.i10], t.w.x);
-            let b = mix(buf_field_1[o + t.i01], buf_field_1[o + t.i11], t.w.x);
+            var acc = 0.0;
+            for (var r = 0u; r < 4u; r = r + 1u) {
+                let row = o + t.z[r] * n;
+                acc += t.wz[r] * dot(t.wx, vec4<f32>(buf_field_1[row + t.x[0]], buf_field_1[row + t.x[1]], buf_field_1[row + t.x[2]], buf_field_1[row + t.x[3]]));
+            }
+            s[f] = acc;
+        }
+        for (var f = 3u; f < 6u; f = f + 1u) {
+            let o = f * n * n;
+            let a = mix(buf_field_1[o + t.z[1] * n + t.x[1]], buf_field_1[o + t.z[1] * n + t.x[2]], t.w.x);
+            let b = mix(buf_field_1[o + t.z[2] * n + t.x[1]], buf_field_1[o + t.z[2] * n + t.x[2]], t.w.x);
             s[f] = mix(a, b, t.w.y);
         }
         disp += f1 * vec3<f32>(choppiness * s[1], s[0], choppiness * s[2]);
@@ -101,10 +128,19 @@ fn body(
         let n = u32(size_2);
         let t = odp_taps(n, tile_size_2, rest);
         var s: array<f32, 6>;
-        for (var f = 0u; f < 6u; f = f + 1u) {
+        for (var f = 0u; f < 3u; f = f + 1u) {
             let o = f * n * n;
-            let a = mix(buf_field_2[o + t.i00], buf_field_2[o + t.i10], t.w.x);
-            let b = mix(buf_field_2[o + t.i01], buf_field_2[o + t.i11], t.w.x);
+            var acc = 0.0;
+            for (var r = 0u; r < 4u; r = r + 1u) {
+                let row = o + t.z[r] * n;
+                acc += t.wz[r] * dot(t.wx, vec4<f32>(buf_field_2[row + t.x[0]], buf_field_2[row + t.x[1]], buf_field_2[row + t.x[2]], buf_field_2[row + t.x[3]]));
+            }
+            s[f] = acc;
+        }
+        for (var f = 3u; f < 6u; f = f + 1u) {
+            let o = f * n * n;
+            let a = mix(buf_field_2[o + t.z[1] * n + t.x[1]], buf_field_2[o + t.z[1] * n + t.x[2]], t.w.x);
+            let b = mix(buf_field_2[o + t.z[2] * n + t.x[1]], buf_field_2[o + t.z[2] * n + t.x[2]], t.w.x);
             s[f] = mix(a, b, t.w.y);
         }
         disp += f2 * vec3<f32>(choppiness * s[1], s[0], choppiness * s[2]);
