@@ -26,7 +26,7 @@ pub(crate) struct CutUniforms {
     pub dispatch_count: u32,
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 impl CutUniforms {
     fn center(&self) -> [f32; 3] {
         [self.center_x, self.center_y, self.center_z]
@@ -120,7 +120,7 @@ impl Primitive for CutOutBox {
 }
 
 /// CPU reference of the WGSL body, for the proofs.
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 pub(crate) fn reference(v: &MeshVertex, u: &CutUniforms) -> MeshVertex {
     let d = (0..3)
         .map(|a| (v.position[a] - u.center()[a]).abs() - 0.5 * u.size()[a])

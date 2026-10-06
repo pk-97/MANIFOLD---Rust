@@ -76,7 +76,7 @@ impl DisplaceUniforms {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "gpu-proofs"))]
     pub fn cascade(&self, c: usize) -> Cascade {
         match c {
             0 => Cascade { size: self.size_0, tile_size: self.tile_size_0, fade_start: self.fade_start_0, fade_end: self.fade_end_0 },
@@ -224,7 +224,7 @@ impl Primitive for OceanDisplace {
 }
 
 /// CPU reference of the WGSL body, for the proofs.
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 pub(crate) fn reference(v: &MeshVertex, u: &DisplaceUniforms, fields: [&[f32]; CASCADES]) -> MeshVertex {
     let smooth = |e0: f32, e1: f32, x: f32| {
         let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);

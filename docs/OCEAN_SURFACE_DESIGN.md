@@ -1,6 +1,6 @@
 # Ocean Surface — a spectral open ocean out to the horizon, and a cliff cove that splashes
 
-**Status:** APPROVED design, not built · 2026-10-06 · Claude Opus 5.5 (lead), adversarial review Astra (medium)
+**Status:** BUILT on `feat/ocean-cliff`, landing owed (Astra review, `landing_gate.py`) · 2026-10-07 · D7 and D12 superseded by the look gate, see each · Claude Opus 5.5 (lead)
 **Prerequisites:** none
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) and section 6 (Seam briefs) before starting any phase.
 
@@ -20,7 +20,7 @@ Peter's directives, load-bearing:
 
 Companion docs: `DECOMPOSING_GENERATORS.md` section 2.5 (primitive audit) and its atom
 rules; `ADDING_PRIMITIVES.md` (codegen path, proofs); `MANIFOLD_GPU_ARCHITECTURE.md`
-(backend boundary); `LIQUID_SOLVER_SEAM_DESIGN.md` (the roles the cove's inflow uses).
+(backend boundary); `LIQUID_SOLVER_SEAM_DESIGN.md` (the fluid roles the cove uses).
 
 ## 1. Audit — what exists (verified 2026-10-06)
 
@@ -125,6 +125,12 @@ tonight: a per-fragment world-space clip in the renderer. That is renderer work,
 vertex mask's error is bounded. Consequence, stated honestly: the cut edge is accurate to
 one grid cell, about 3 px, and that edge moves with the camera. The trigger for the
 fragment clip is the seam visibly crawling in a still pair.
+**Superseded for Ocean Cliff (2026-10-07, look gate).** With the cut, any height
+difference between the tank and the ocean shows along the cut's straight edges: the
+stills read as a raised slab of water with rectangular sides. Ocean Cliff instead rests
+the cove 0.35 m under the ocean's mean surface and cuts nothing. The ocean covers the
+tank; FLIP water shows only where a surge rises out of the sea, and the edge is where the
+two surfaces cross. `node.cut_out_box` stays as a generic atom with no preset using it.
 
 **D8 — The inverse FFT is one library-call node.** `node.inverse_fft_2d` takes
 `Array([f32; 2])` half spectra of shape [B, N, N/2+1] and returns `Array(f32)` real fields
@@ -161,6 +167,17 @@ Peter (a bundled asset library), not a blocker tonight.
 LFO. History replay samples it at every tick's start, so the push is the same at any
 frame rate and never resets the liquid. Rejected: Reset re-triggers or keyframed restarts
 (Peter: "no hacks").
+**Superseded (2026-10-07, look gate): surges are an LFO on a wave-maker paddle.** An
+inflow is a source only (FLIP Fluids semantics): it emits to stay full and sets the
+velocity of the water it holds, so it pushes water in but never draws any back. Every
+variant tried (whole face, surface band with undertow, spillway outflows) gained water
+each cycle and mounded the cove; the open sides then needed level-holding bands that
+showed as steep walls. Ocean Cliff now uses the standard wave-flume generator: a collider
+wall across the sea end, its transform's `pos_z` driven by an LFO (stroke ±0.7 m, 2.8 s,
+between the cove's first two slosh periods of about 3.8 and 1.9 s). It moves water
+without adding any, the domain replays its pose at each tick's start, and the tank is
+closed on every face but the top. The side walls sit inside rock: the scan's
+neighbouring pieces, turned to face into the cove, make it a gully, render, and collide.
 
 ## 3. Design body
 
@@ -281,11 +298,12 @@ coc/bokeh → motion_blur → filmic, as on the Sea Wall cinematic pass.
    grid collapses, as section 3.3 says.
 7. **The FFT stays behind manifold-gpu.** Enforcement: `rg 'MPSGraph|objc2_metal_performance'
    crates/manifold-renderer` returns zero hits.
-8. **The inflow push is replayed per tick from its wire, never by Reset.** Enforcement:
-   a `preset_runtime` graph test, `inflow_lfo_velocity_is_replayed_per_tick`. An LFO wired
-   into a GPU FLIP inflow's `velocity_x` is run at 30 and 60 display fps. Each tick's
-   emitted region velocity must equal the LFO at that tick's start, and the liquid
-   bodies' version must not change after the first frame.
+8. **The paddle is replayed per tick from its wire, never by Reset.** Enforcement:
+   `preset_runtime::physics_sampling::tests::ocean_cliff_paddle_is_replayed_per_tick`
+   loads OceanCliff.json and checks that the paddle's LFO, transform and collider role and
+   the domain are in the per-tick passes, and the renderer, rock and sea are not. That a
+   collider's row is its authored pose at each tick's start at 20, 24, 30 and 60 fps is
+   `liquid::bodies::tests::liquid_body_rows_match_at_every_frame_rate`.
 9. **Live at 60 fps at 1080p.** Enforcement: a measured number in the landing commit,
    from the release-build capture's GPU frame time (P4). It is a gate at landing, not a
    standing test.
@@ -314,10 +332,11 @@ three angles and at maximum Choppiness, plus a pan with frozen ocean time to che
 sliding, all looked at.
 
 **P5 — Assets + Ocean Cliff preset.** Deliverables: downloads logged in section 8;
-`OceanCliff.json`: ocean, cliff scan, HDRI sky, and GPU FLIP tank in the cove. The tank's
-seabed (−Y) and cliff side are closed; the two side faces, the top and the sea face are
-open. The inflow surges per D12. Invariant 8's test. Gate: the test, check-presets,
-validate. Acceptance demo (L2): a 15 s 1080p30 MP4 at true Speed, plus stills.
+`OceanCliff.json`: ocean, cliff scan, HDRI sky, and GPU FLIP tank in the cove. As built
+(D7, D12 superseded): the tank is closed but for its top, its side walls sit inside the
+turned rock of the gully, and a paddle at the sea end makes the surges. Invariant 8's
+test. Gate: the test, check-presets, validate. Acceptance demo (L2): a 15 s 1080p30 MP4
+at true Speed, plus stills.
 
 **P6 — Look pass.** Fix at the root whatever stands between the stills and a cinematic
 shot. Known going in:
@@ -342,9 +361,9 @@ the final diff, then `landing_gate.py`, then merge.
 5. Normals from make_triangles; six fields per cascade.
 6. Foam from the summed Jacobian, painted into vertex colour; the grid owns the water colour.
 7. One displace atom for exactly three cascades, all three inputs required.
-8. Tank cut out with `node.cut_out_box`, alpha Mask, one-cell edge accuracy.
+8. ~~Tank cut out with `node.cut_out_box`~~ — reopened by the look gate: the cove rests under the ocean (D7).
 9. MPSGraph inverse through restored `GpuFft::new_nd`, IoBridge; no MPS outside manifold-gpu.
-10. Inflow surges are an LFO on velocity, replayed per tick.
+10. ~~Inflow surges are an LFO on velocity~~ — reopened by the look gate: an LFO on a paddle's pose, replayed per tick (D12).
 
 ## 7. Deferred
 
