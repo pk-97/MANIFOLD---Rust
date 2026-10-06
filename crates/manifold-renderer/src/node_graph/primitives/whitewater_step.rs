@@ -74,10 +74,6 @@ pub(crate) const OUTPUT_SLOTS: usize = 4;
 /// Words the GPU writes per output slot: foam, bubble and spray counts,
 /// emitted, thinned, pool full, live, next id, dust count (first eight preserved).
 const COUNT_WORDS: usize = 9;
-
-#[cfg(all(test, feature = "gpu-proofs"))]
-#[path = "whitewater_copy_tests.rs"]
-mod copy_tests;
 const STATE_WORDS: u64 = 8;
 
 const PARTICLE: u64 = std::mem::size_of::<FluidParticle>() as u64;
@@ -1598,3 +1594,7 @@ impl Primitive for WhitewaterStep {
         ctx.outputs.set_scalar("pool_full", ParamValue::Float(report.pool_full as f32));
     }
 }
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+#[path = "whitewater_copy_tests.rs"]
+mod copy_tests;
