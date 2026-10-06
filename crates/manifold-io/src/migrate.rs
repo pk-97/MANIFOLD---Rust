@@ -172,6 +172,12 @@ pub fn migrate_if_needed(json: &str) -> Result<String, serde_json::Error> {
         root["projectVersion"] = Value::String("1.19.0".to_string());
     }
 
+    // GPU FLIP Step reads the bodies' touching contacts; stored graphs get the wire.
+    if is_version_less_than(&version, "1.20.0") {
+        crate::migrations::contacts_wire_v1200::migrate(&mut root);
+        root["projectVersion"] = Value::String("1.20.0".to_string());
+    }
+
     serde_json::to_string_pretty(&root)
 }
 

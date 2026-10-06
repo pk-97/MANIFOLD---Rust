@@ -172,7 +172,7 @@ mod tests {
         assert_eq!(after["projectVersion"], manifold_core::project::CURRENT_PROJECT_VERSION);
         let graph = &after["timeline"]["layers"][0]["genParams"]["graph"];
         let wires = graph["wires"].as_array().unwrap();
-        assert_eq!(wires.len(), 197 + 2, "this rung's wire and the Max Iterations rung's");
+        assert_eq!(wires.len(), 197 + 3, "this rung's wire, the Max Iterations rung's and the contacts rung's");
         assert!(wires.contains(&wire(&json!(0), &json!(6))));
         assert_eq!(*find(&graph["presetMetadata"]["bindings"], PARAM), binding("domain"));
         assert_eq!(*find(&graph["presetMetadata"]["params"], PARAM), card());
