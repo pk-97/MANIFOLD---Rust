@@ -15461,7 +15461,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     dst[idx] = r1;
 }
 
-=== generator:WaterDamBreakGpuFlip node:97 ===
+=== generator:WaterDamBreakGpuFlip node:92 ===
 struct Params {
     n0_nodes_x: f32,
     n0_nodes_y: f32,
@@ -15631,7 +15631,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     dst[idx] = r1;
 }
 
-=== generator:WaterDamBreakGpuFlip node:98 ===
+=== generator:WaterDamBreakGpuFlip node:93 ===
 struct Params {
     n0_nodes_x: f32,
     n0_nodes_y: f32,
@@ -16036,7 +16036,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     dst[idx] = r1;
 }
 
-=== generator:WaterDamBreakGpuFlip node:99 ===
+=== generator:WaterDamBreakGpuFlip node:94 ===
 struct Element {
     position_radius: vec4<f32>,
     velocity: vec3<f32>,
@@ -16905,7 +16905,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     dst[idx] = r1;
 }
 
-=== generator:WaterDamBreakParticles node:519 ===
+=== generator:WaterDamBreakParticles node:63 ===
 struct Element {
     position_radius: vec4<f32>,
     velocity: vec3<f32>,

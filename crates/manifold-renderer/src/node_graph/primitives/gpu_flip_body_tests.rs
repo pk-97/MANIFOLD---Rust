@@ -751,8 +751,12 @@ impl BoxRun {
 
     fn at_level(fixture: crate::node_graph::liquid::conformance::Fixture, level: i32) -> manifold_core::effect_graph_def::EffectGraphDef {
         let mut def = box_def(fixture);
-        let domain = def.nodes.iter_mut().find(|node| node.node_id.as_str() == "domain").expect("domain");
-        domain.params.insert("solve_level".into(), manifold_core::effect_graph_def::SerializedParamValue::Int { value: level });
+        crate::node_graph::liquid::conformance::set_node_param(
+            &mut def,
+            "domain",
+            "solve_level",
+            manifold_core::effect_graph_def::SerializedParamValue::Int { value: level },
+        );
         def
     }
 
@@ -1011,8 +1015,11 @@ fn fresh_speed_preserves_coupled_bodies(ticks_per_frame: u32) {
     use crate::node_graph::liquid::conformance::Fixture;
     const STEP: &str = "node.gpu_flip_step";
     const TICKS: u32 = 8;
-    fn baseline(mut def: manifold_core::effect_graph_def::EffectGraphDef) -> manifold_core::effect_graph_def::EffectGraphDef {
+    fn baseline(def: manifold_core::effect_graph_def::EffectGraphDef) -> manifold_core::effect_graph_def::EffectGraphDef {
         use manifold_core::effect_graph_def::EffectGraphWire;
+        // The runtime builds this same flattened graph, so the edit lands on
+        // the step it runs, wherever the scene groups it.
+        let mut def = manifold_core::flatten::flatten_groups(&def).expect("box scene flattens");
         let steps: Vec<_> = def.nodes.iter().filter(|node| node.type_id == STEP).map(|node| node.id).collect();
         let [step] = steps[..] else { panic!("coupled proof requires exactly one GPU FLIP step") };
         let id = def.nodes.iter().map(|node| node.id).max().expect("box scene nodes")

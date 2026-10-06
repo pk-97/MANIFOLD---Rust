@@ -393,6 +393,9 @@ fn id_of(nodes: &Value, node_id: &str) -> Value {
 }
 
 fn use_triangle_list(json: &mut Value) {
+    let family = json["nodes"].as_array_mut().expect("nodes").iter_mut()
+        .find(|node| node["nodeId"] == "water_family").expect("Water family");
+    let json = &mut family["group"];
     let surface_id = id_of(&json["nodes"], "surface");
     let surface = json["nodes"].as_array_mut().expect("nodes").iter_mut()
         .find(|node| node["id"] == surface_id).expect("liquid surface group");
@@ -434,10 +437,10 @@ fn probe(variant: Variant) -> Vec<(usize, u64)> {
         use_triangle_list(&mut json);
     }
     if variant == Variant::WaterUnwired {
-        let (water, scene) = (id_of(&json["nodes"], "water_object"), id_of(&json["nodes"], "scene"));
+        let (water, scene) = (id_of(&json["nodes"], "water_family"), id_of(&json["nodes"], "scene"));
         let wires = json["wires"].as_array_mut().expect("preset wires");
         let before = wires.len();
-        wires.retain(|wire| !(wire["fromNode"] == water && wire["toNode"] == scene));
+        wires.retain(|wire| !(wire["fromNode"] == water && wire["fromPort"] == "object" && wire["toNode"] == scene));
         assert_eq!(before - wires.len(), 1, "exactly one wire carries the water into render_scene");
     }
     let mut params = manifest(&json);

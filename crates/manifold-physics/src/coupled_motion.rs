@@ -716,6 +716,39 @@ mod tests {
         }
     }
 
+    /// A box resting on another dynamic box reads it as a support, normals
+    /// up, and the box below never reads the one above (shock propagation):
+    /// the law holds the stack still as Box3D does, the upper box held fast
+    /// in the solve as on a floor.
+    #[test]
+    fn a_box_resting_on_a_box_stands_on_it() {
+        let mut world = PhysicsWorld::new(G).unwrap();
+        world
+            .add_hull(&cuboid([2.0, 0.5, 2.0]), BodyConfig { kind: BodyKind::Fixed, position: [0.0, -0.5, 0.0], ..BodyConfig::default() })
+            .unwrap();
+        let lower = world.add_hull(&cuboid([0.2; 3]), BodyConfig { position: [0.0, 0.2, 0.0], mass: 8.0, ..BodyConfig::default() }).unwrap();
+        let upper = world.add_hull(&cuboid([0.2; 3]), BodyConfig { position: [0.0, 0.6, 0.0], mass: 8.0, ..BodyConfig::default() }).unwrap();
+        let dt = Seconds(1.0 / 30.0);
+        settle(&mut world, dt, 60);
+        let on_lower = supports_of(&world, lower);
+        assert!(!on_lower.is_empty() && on_lower.iter().all(|p| p.normal[1] > 0.99), "the lower box stands on the floor only: {on_lower:?}");
+        assert!(on_lower.iter().all(|p| p.lever[1] < 0.0), "nothing from the box above: {on_lower:?}");
+        let on_upper = supports_of(&world, upper);
+        assert!(!on_upper.is_empty() && on_upper.iter().all(|p| p.normal[1] > 0.99 && p.lever[1] < 0.0), "the upper box stands on the lower: {on_upper:?}");
+        for (body, supports) in [(lower, &on_lower), (upper, &on_upper)] {
+            let start = start_of(&world, body);
+            let (t, h) = (dt.0 as f32, coupled_substep(dt));
+            let held = coupled_state_at(&start, supports, [0.0; 3], [0.0; 3], t, h);
+            assert!(length(held.linear_velocity) < 1e-3, "the law holds it on its support: {held:?}");
+            let fast = unpack(&constrained_mobility(&start, supports, held.held));
+            assert!(largest(&fast) < 1e-4 * largest(&free_of(&start)), "the solve holds it fast: {fast:?}");
+        }
+        let before = world.dynamics(upper).unwrap().center_of_mass;
+        world.step(dt, box3d_substep_count(dt).value).unwrap();
+        let after = world.dynamics(upper).unwrap().center_of_mass;
+        assert!(gap(before, after) < 5e-4, "Box3D holds it too: moved {} m", gap(before, after));
+    }
+
     /// A box touching the floor while moving down at 1 m/s is stopped at the
     /// tick's start, as Box3D's first substep stops it, and is placed no
     /// deeper.

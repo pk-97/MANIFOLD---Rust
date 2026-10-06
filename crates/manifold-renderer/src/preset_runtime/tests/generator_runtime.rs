@@ -52,7 +52,8 @@
     fn native_flip_grid_shared_solid_keeps_live_card_binding_fanout() {
         use crate::node_graph::primitives::gpu_flip_preset::{render_def, WaterScene};
         use manifold_core::effect_graph_def::{BindingTarget, EffectGraphWire, SerializedParamValue};
-        let mut def = render_def(WaterScene::still_pool(16));
+        // This migration fixture reconstructs the old flat authored solid.
+        let mut def = manifold_core::flatten::flatten_groups(&render_def(WaterScene::still_pool(16))).unwrap();
         let source = def.nodes.iter().find(|n| n.node_id.as_str() == "mesh_solid").unwrap().id;
         // Reconstruct the saved authored-grid solid producer. The authored
         // consumer keeps that grid while the FLIP frame receives a clone.

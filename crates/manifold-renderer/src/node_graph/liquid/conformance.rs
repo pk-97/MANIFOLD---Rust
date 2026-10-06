@@ -345,8 +345,8 @@ const GPU_FLIP_CORNER_LIFT: &str = "BUG-o3kj8 (GPU FLIP pushes a light box tilte
 const GPU_FLIP_FLOATS_HIGH: &str = "BUG-u8nqr (GPU FLIP floating boxes keep bobbing at rest and float about a cell \
      high): the bob and the height are the liquid's, and a box dropped 5 cm above where it should float lands near \
      its own high rest, short of the centimetre of travel the handover check needs; the handover on these boxes is exact";
-const GPU_FLIP_BOX_ON_BOX: &str = "BUG-gbx3u (Body handoff: supports between two coupled bodies): an upper box is \
-     free in the pressure solve and sinks into the box below";
+const GPU_FLIP_STACK_WOBBLE: &str = "BUG-tsdw3 (GPU FLIP stack: the top box wobbles just over the rest bound): \
+     each box stands on the one below and no water is lost, but the top box rests at about 1.07 cm/s RMS";
 const MPM_FLOATS_LOW: &str = "BUG-28j99 (MPM floats boxes about 3.5 cm low and drifts at rest): hidden on main by \
      the old impulse handoff, which pushed floating bodies up";
 
@@ -567,8 +567,7 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
             known(Check::LiftOff, "surface", GPU_FLIP_CORNER_LIFT),
             known(Check::LiftOff, "lost", GPU_FLIP_CORNER_LIFT),
             known(Check::LiftOff, "refused", GPU_FLIP_CORNER_LIFT),
-            known(Check::SubmergedStack, "lost", GPU_FLIP_BOX_ON_BOX),
-            known(Check::SubmergedStack, "rms", GPU_FLIP_BOX_ON_BOX),
+            known(Check::SubmergedStack, "rms", GPU_FLIP_STACK_WOBBLE),
             known(Check::HandoverAgreement, "travel", GPU_FLIP_FLOATS_HIGH),
             known(Check::HandoverAgreement, "bound", GPU_FLIP_CORNER_LIFT),
         ],

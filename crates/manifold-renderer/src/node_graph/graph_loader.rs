@@ -2841,18 +2841,14 @@ mod tests {
         assert_eq!(expected.1, 1, "one reduction serves both");
         assert!(!wire_blob_bounds(&mut shipped), "a wired graph is untouched");
 
-        // The same surface group as saved before node.blob_bounds existed.
-        let mut old_doc = shipped_doc;
-        for node in old_doc["nodes"].as_array_mut().expect("nodes") {
-            let Some(group) = node.get_mut("group").filter(|g| !g.is_null()) else { continue };
-            let removed: Vec<serde_json::Value> = group["nodes"].as_array().expect("group nodes").iter()
-                .filter(|n| n["typeId"] == "node.blob_bounds").map(|n| n["id"].clone()).collect();
-            group["nodes"].as_array_mut().expect("group nodes").retain(|n| n["typeId"] != "node.blob_bounds");
-            group["wires"].as_array_mut().expect("group wires")
-                .retain(|w| !removed.iter().any(|id| w["fromNode"] == *id || w["toNode"] == *id));
-        }
-        let old_def: EffectGraphDef = serde_json::from_value(old_doc.clone()).expect("parse");
-        let mut old = flat(old_doc);
+        // Reconstruct the old compiled topology at any authored group depth.
+        let mut old_def = flat(shipped_doc);
+        let removed: Vec<_> = old_def.nodes.iter().filter(|node| node.type_id == "node.blob_bounds")
+            .map(|node| node.id).collect();
+        assert_eq!(removed.len(), 1, "the fixture removes the shared bounds reduction");
+        old_def.nodes.retain(|node| !removed.contains(&node.id));
+        old_def.wires.retain(|wire| !removed.contains(&wire.from_node) && !removed.contains(&wire.to_node));
+        let mut old = old_def.clone();
         assert!(old.wires.iter().all(|w| w.to_port != "bounds"), "the fixture is the old shape");
         assert!(wire_blob_bounds(&mut old));
         assert_eq!(blob_bounds_wiring(&old), expected);

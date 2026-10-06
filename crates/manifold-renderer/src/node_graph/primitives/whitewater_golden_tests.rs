@@ -59,22 +59,33 @@ fn words(bytes: &[u8]) -> Vec<u32> {
     bytes.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
 }
 
+fn find_node_mut<'a>(value: &'a mut Value, node_id: &str) -> Option<&'a mut Value> {
+    let nodes = value["nodes"].as_array_mut()?;
+    for node in nodes {
+        if node["nodeId"] == node_id {
+            return Some(node);
+        }
+        if node["group"].is_object()
+            && let Some(found) = find_node_mut(&mut node["group"], node_id)
+        {
+            return Some(found);
+        }
+    }
+    None
+}
+
 /// The shipped def with these whitewater params and, when given, this
 /// whitewater budget (the card's node, which sizes stage and boundary alike).
 fn variant(params: &[(&str, Value)], budget: Option<f64>) -> EffectGraphDef {
     let mut def = serde_json::to_value(whitewater_render_def(WaterScene::dam_break(64))).expect("def serialises");
-    for node in def["nodes"].as_array_mut().expect("nodes") {
-        if node["nodeId"] == WHITEWATER {
-            assert_eq!(node["typeId"], "node.whitewater_step");
-            for (name, value) in params {
-                node["params"][*name] = value.clone();
-            }
-        }
-        if let Some(budget) = budget
-            && node["nodeId"] == "whitewater_budget"
-        {
-            node["params"]["value"] = json!({"type": "Float", "value": budget});
-        }
+    let node = find_node_mut(&mut def, WHITEWATER).expect("whitewater node in Water group");
+    assert_eq!(node["typeId"], "node.whitewater_step");
+    for (name, value) in params {
+        node["params"][*name] = value.clone();
+    }
+    if let Some(budget) = budget {
+        let budget_node = find_node_mut(&mut def, "whitewater_budget").expect("whitewater budget in Water group");
+        budget_node["params"]["value"] = json!({"type": "Float", "value": budget});
     }
     with_tick_probe(serde_json::from_value(def).expect("variant def"))
 }

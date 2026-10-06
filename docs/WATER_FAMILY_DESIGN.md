@@ -99,8 +99,14 @@ a physical render slot. Preserve P4 packed faces, substep history and tick
 captures; display consumes captured populations, never live outputs outside
 the tick region. Preserve P1's alias and influence-swap behaviour.
 
-The group gains an `obstacle_source` interface input. It is optional on the
-step (`whitewater_step.rs:93`), fed in the preset and unfed by Add Water.
+The obstacle source producer (`node.whitewater_obstacle_source`) lives inside
+the group. It reads only domain outputs (bodies, shapes, atlas, closed faces,
+body count and rows, cell size, lattice origin and nodes, wall inset, tick
+seconds; `gpu_flip_preset.rs:474–485`), so it needs no interface port, and
+every water, preset or Add Water, carries it. Dust stays off by default; the
+producer costs about 0.05 ms a frame. Amended at F1a (2026-10-06): an
+`obstacle_source` interface input would have forced fifteen domain outputs
+onto the group only to feed them back in.
 `gpu_flip_liquid_body() -> EffectGraphDef` keeps its signature and uses the
 shared recipe. Rewrite `render_def`, `particle_view_def`, `add_obstacle_render`
 and `feed_intervals` for the group boundary; remove the shipped `add_dust_render`

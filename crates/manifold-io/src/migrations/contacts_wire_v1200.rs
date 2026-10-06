@@ -96,11 +96,21 @@ mod tests {
         graph["wires"].as_array().unwrap().iter().filter(|w| w["toPort"] == PORT).collect()
     }
 
+    /// A bundled def in the shape this rung upgrades: ungrouped, read back
+    /// like a saved graph.
+    fn flat_bundled(def: &str) -> Value {
+        let flat = manifold_core::flatten::flatten_groups(&serde_json::from_str(def).unwrap()).unwrap();
+        serde_json::from_str(&serde_json::to_string(&flat).unwrap()).unwrap()
+    }
+
     #[test]
     fn the_wire_is_the_bundled_defs_verbatim() {
         for def in [BUNDLED, PARTICLES] {
-            let bundled: Value = serde_json::from_str(def).unwrap();
-            assert_eq!(contacts_wires(&bundled), [&wire(&json!(0), &json!(6))]);
+            let bundled = flat_bundled(def);
+            let nodes = bundled["nodes"].as_array().unwrap();
+            let domain = first_of_type(nodes, DOMAIN).expect("bundled domain");
+            let step = first_of_type(nodes, STEP).expect("bundled step");
+            assert_eq!(contacts_wires(&bundled), [&wire(&domain["id"], &step["id"])]);
         }
     }
 
@@ -127,8 +137,8 @@ mod tests {
     #[test]
     fn the_bundled_def_and_graphs_without_flip_are_passthrough() {
         super::super::take_migration_notes();
-        let bundled: Value = serde_json::from_str(BUNDLED).unwrap();
-        let before = json!({"projectVersion": "1.19.0", "embeddedPresets": [{"def": bundled}],
+        let before = json!({"projectVersion": "1.19.0",
+            "embeddedPresets": [{"def": flat_bundled(BUNDLED)}, {"def": flat_bundled(PARTICLES)}],
             "timeline": {"layers": [{"genParams": {"graph": {"version": 3, "nodes": [{"id": 1, "typeId": "node.value"}], "wires": []}}}]}});
         let after = migrate_project(&before);
         assert_eq!(after["embeddedPresets"], before["embeddedPresets"]);
