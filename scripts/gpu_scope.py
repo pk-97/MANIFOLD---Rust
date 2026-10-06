@@ -11,8 +11,8 @@ scripts/landing_gate.py and scripts/codex_checks.py. Rules:
 - A GPU path with no mapping is a hard failure naming the path; the author adds
   a rule here. There is no run-everything fallback. Everything runs only with
   `gpu_proofs_gate.py --all` (nightly trunk_health.py).
-- Scoped runs skip every test whose measured time (scripts/gpu_test_times.json)
-  is over SLOW_THRESHOLD_S; there is no hand-kept list.
+- Scoped runs defer tests measured over SLOW_THRESHOLD_S, except exact-name
+  selections (including changed test bodies); there is no hand-kept list.
 - glb_conformance (the ~16-minute glTF sample sweep) runs only when glTF import
   paths are touched, and is exempt from the time budget.
 - manifold-gpu core, shared WGSL and the proof harness map to BROAD, a bounded
@@ -25,15 +25,17 @@ Obsolete when: the GPU test suite is fast enough to run whole at every landing.
 """
 
 import json
+import math
 import re
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
 RENDERER_SRC = "crates/manifold-renderer/src/"
 PROOFS_DIR = "crates/manifold-renderer/tests/gpu_proofs/"
 
-# Landing ceiling for the scoped (non-glb) GPU step, seconds of test run time.
+# Landing warning budget for the scoped (non-glb) GPU step, seconds of test time.
 LANDING_BUDGET_S = 360
 
 # Fixed end-to-end smoke: always runs when any GPU path is touched. Four proofs
@@ -66,7 +68,8 @@ BROAD_FILTERS = RUNTIME_FILTERS + ["render_scene_lights", "volume_surface_mesh::
 # Tests measured slower than this are skipped by scoped runs (nightly --all runs
 # them). The measurements live in scripts/gpu_test_times.json, written by
 # `gpu_proofs_gate.py --all --record-times PATH` (nightly trunk_health does this
-# into /tmp; a human commits the refresh). A test missing from the file runs.
+# into /tmp). Successful gate-driven runs retain measurements in the Git common
+# directory, shared by slots. Missing tests run once to establish their cost.
 SLOW_THRESHOLD_S = 60
 TIMES_PATH = Path(__file__).resolve().parent / "gpu_test_times.json"
 # The glTF sweep has its own unbudgeted run (glb_conformance). Its measured time
@@ -74,12 +77,55 @@ TIMES_PATH = Path(__file__).resolve().parent / "gpu_test_times.json"
 GLB_TESTS = frozenset({"glb_conformance_sweep"})
 
 
-def load_times(path=None):
+def learned_times_path():
+    repo = TIMES_PATH.parent.parent
+    try:
+        result = subprocess.run(["git", "-C", str(repo), "rev-parse", "--git-common-dir"],
+                                capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError) as error:
+        print(f"[WARN] cannot locate shared GPU timings: {error}", file=sys.stderr)
+        return None
+    if result.returncode:
+        return None
+    return (repo / result.stdout.strip()).resolve() / "gpu-test-times.json"
+
+
+def read_times(path):
     """{test name: seconds} from the measured-times file; {} if absent."""
-    path = Path(path or TIMES_PATH)
+    path = Path(path)
     if not path.exists():
         return {}
-    return json.loads(path.read_text()).get("tests", {})
+    times = json.loads(path.read_text())["tests"]
+    if not isinstance(times, dict):
+        raise ValueError(f"invalid GPU measurements in {path}")
+    times = {n: v["s"] if isinstance(v, dict) else v for n, v in times.items()}
+    if not isinstance(times, dict) or any(
+            not isinstance(n, str) or not isinstance(s, (int, float))
+            or isinstance(s, bool) or not math.isfinite(s) or s < 0
+            for n, s in times.items()):
+        raise ValueError(f"invalid GPU measurements in {path}")
+    return times
+
+
+def merge_times(*tables):
+    merged = {}
+    for times in tables:
+        merged.update(times)
+    return merged
+
+
+def load_times(path=None):
+    if path is not None:
+        return read_times(path)
+    times = read_times(TIMES_PATH)
+    learned = learned_times_path()
+    if learned is not None:
+        try:
+            times = merge_times(times, read_times(learned))
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            print(f"[WARN] GPU timing cache unreadable; using committed timings: {error}",
+                  file=sys.stderr)
+    return times
 
 
 def slow_tests(times=None):
@@ -398,9 +444,14 @@ class Plan:
         return sorted(set(SMOKE_FILTERS) | self.filters)
 
     def final_skips(self):
-        # A skip that would hide a filter we deliberately selected is dropped.
-        skips = set(self.skips) | {n for n, _ in slow_tests()}
-        return sorted(s for s in skips if not any(s in f for f in self.filters))
+        # Exact test selections beat reporter and measured-time skips.
+        skips = {s for s in self.skips if not any(s in f for f in self.filters)}
+        return sorted(skips | {n for n, _ in slow_tests() if n not in self.final_filters()})
+
+    def deferred(self):
+        filters = self.final_filters()
+        return [(n, s) for n, s in slow_tests()
+                if n not in filters and any(f in n for f in filters)]
 
     def runs(self):
         """[{targets, lib, filters, skips, budgeted}] cargo invocations to make."""
@@ -416,10 +467,13 @@ class Plan:
     def describe(self):
         lines = [f"{len(self.paths)} GPU path(s) touched; smoke + mapped filters"]
         lines.append(f"  filters: {', '.join(self.final_filters())}")
-        if self.final_skips():
-            lines.append(f"  skips: {', '.join(self.final_skips())}")
-        for name, secs in slow_tests():
-            lines.append(f"  {name}: skipped, run nightly only (measured {secs:.0f}s)")
+        skips = [s for s in self.final_skips()
+                 if any(f in s or s in f for f in self.final_filters())]
+        if skips:
+            lines.append(f"  skips: {', '.join(skips)}")
+        if self.deferred():
+            lines.append("GPU-PROOFS DEFERRED: " + ", ".join(
+                f"{name} ({secs:.0f}s)" for name, secs in self.deferred()))
         if self.broad:
             lines.append("  broad set (runtime + lighting) because: " +
                          "; ".join(f"{p} ({why})" for p, why in self.broad))
@@ -490,7 +544,50 @@ def default_shader_users(repo, wgsl_path, depth=3):
     return sorted(found)
 
 
-def plan_for_paths(paths, repo, shader_users=None):
+def changed_test_filters(path, repo, base):
+    """Promote changed test bodies; shared-helper edits retain module scope."""
+    # Only renderer lib and proof paths have a derivable test-name prefix.
+    if not path.startswith((RENDERER_SRC, PROOFS_DIR)):
+        return set()
+    source = Path(repo) / path
+    if source.suffix != ".rs" or not source.exists():
+        return set()
+    text = source.read_text()
+    if "#[test]" not in text:
+        return set()
+    diff = subprocess.run(["git", "-C", str(repo), "diff", "--no-ext-diff",
+                           "--no-textconv", "-U0", "--merge-base", base, "--", path],
+                          capture_output=True, text=True)
+    if diff.returncode:
+        raise RuntimeError(f"cannot scope changed test bodies: {diff.stderr.strip()}")
+    hunks = [(int(m[1]), max(1, int(m[2] or 1))) for m in re.finditer(
+        r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", diff.stdout, re.M)]
+    if path.startswith(PROOFS_DIR):
+        parts = list(Path(path[len(PROOFS_DIR):]).with_suffix("").parts)
+        prefix = "::".join(parts[:-1] if parts[-1] == "mod" else parts) + "::"
+    else:
+        prefix = (path_attr_filters(path, repo) or module_filters(path))[0]
+    selected = set()
+    for match in re.finditer(r"#\[test\]\s*(?:#\[[^\n]+\]\s*)*"
+                             r"fn (?P<name>\w+)\([^)]*\)[^{;]*\{", text):
+        start = text.count("\n", 0, match.end()) + 1
+        # Rustfmt puts a function's closing brace at the fn's indentation.
+        fn_line = text.rfind("\n", 0, text.index("fn ", match.start())) + 1
+        indent = re.match(r"[ \t]*", text[fn_line:])[0]
+        end = re.search(r"^" + indent + r"\}", text[match.end():], re.M)
+        stop = start + text[match.end():match.end() + end.end()].count("\n") if end else start
+        if not any(row <= stop and row + count - 1 >= start for row, count in hunks):
+            continue
+        modules = []
+        for mod in re.finditer(r"^([ \t]*)mod (\w+) \{", text[:match.start()], re.M):
+            close = re.search(r"^" + mod[1] + r"\}", text[mod.end():], re.M)
+            if close is None or mod.end() + close.start() > match.start():
+                modules.append(mod[2])
+        selected.add(prefix + "::".join(modules + [match["name"]]))
+    return selected
+
+
+def plan_for_paths(paths, repo, shader_users=None, base="origin/main"):
     """Map touched `paths` to a Plan. Never returns an implicit 'everything'."""
     shader_users = shader_users or (lambda p: default_shader_users(repo, p))
     plan = Plan()
@@ -498,6 +595,7 @@ def plan_for_paths(paths, repo, shader_users=None):
         if not is_gpu_path(path):
             continue
         plan.paths.append(path)
+        plan.filters.update(changed_test_filters(path, repo, base))
         if is_gltf_path(path):
             plan.glb = True
         # A path that several features own maps to every one of their rows.

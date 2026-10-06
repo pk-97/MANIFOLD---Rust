@@ -766,6 +766,33 @@ fn wire_liquid_intervals(def: &mut EffectGraphDef) -> bool {
     changed
 }
 
+/// Give saved GPU FLIP frames the presentation cursor
+/// (GPU_FLIP_DISPLAY_HISTORY_DESIGN.md section 3.4 (Cursor)), after
+/// flattening. The frame's clock is the node feeding its `epoch`, never the
+/// first incoming wire; only a GPU FLIP domain there gets `display_cursor`
+/// and `dropped_seconds` wired into the frame's unwired inputs. Authored
+/// wires are kept, so the pass is idempotent.
+pub(crate) fn wire_liquid_frame_cursor(def: &mut EffectGraphDef) -> bool {
+    use manifold_core::effect_graph_def::EffectGraphWire;
+    let mut added = Vec::new();
+    for frame in def.nodes.iter().filter(|n| n.type_id == "node.liquid_frame") {
+        let Some(clock) = def.wires.iter().find(|w| w.to_node == frame.id && w.to_port == "epoch").map(|w| w.from_node) else {
+            continue;
+        };
+        if !def.nodes.iter().any(|n| n.id == clock && n.type_id == GPU_FLIP_DOMAIN_TYPE_ID) {
+            continue;
+        }
+        for port in ["display_cursor", "dropped_seconds"] {
+            if !def.wires.iter().any(|w| w.to_node == frame.id && w.to_port == port) {
+                added.push(EffectGraphWire { from_node: clock, from_port: port.into(), to_node: frame.id, to_port: port.into() });
+            }
+        }
+    }
+    let changed = !added.is_empty();
+    def.wires.extend(added);
+    changed
+}
+
 /// Move saved whitewater interpolators onto the frame's retained class copies
 /// (GPU_FLIP_DISPLAY_HISTORY_DESIGN.md section 3.6 (Whitewater)), after
 /// flattening. Matches only an interpolator whose `particles_b` is a
@@ -1278,6 +1305,8 @@ pub fn instantiate_def(
     let def = if wire_liquid_intervals(&mut interval_wired) { &interval_wired } else { def };
     let mut grid_wired = def.clone();
     let def = if wire_gpu_flip_grid(&mut grid_wired) { &grid_wired } else { def };
+    let mut cursor_wired = def.clone();
+    let def = if wire_liquid_frame_cursor(&mut cursor_wired) { &cursor_wired } else { def };
     let mut whitewater_retained = def.clone();
     let def = if wire_retained_whitewater(&mut whitewater_retained) { &whitewater_retained } else { def };
     // Liquid fields saved before node.blob_bounds read their kernel reach
@@ -2519,6 +2548,75 @@ mod tests {
         assert!(wire_retained_whitewater(&mut flat));
         assert_eq!(flat.wires.iter().filter(|w| w.to_port == "particles_b" && (w.from_port == "foam_b" || w.from_port == "spray_b")).count(), 2);
         assert!(!wire_retained_whitewater(&mut flat));
+    }
+
+    #[test]
+    fn liquid_frame_cursor_migration_binds_the_frame_clock() {
+        use manifold_core::effect_graph_def::EffectGraphWire;
+        let wire = |from, output: &str, to, input: &str| EffectGraphWire {
+            from_node: from, from_port: output.into(), to_node: to, to_port: input.into(),
+        };
+        // 1 GPU FLIP domain, 2 Matter domain, 3 frame. The Matter domain feeds
+        // another input; the clock is the epoch's source.
+        let base = EffectGraphDef {
+            version: manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
+            name: None, description: None, preset_metadata: None, scene_modifiers: Vec::new(),
+            nodes: vec![bare_node(1, GPU_FLIP_DOMAIN_TYPE_ID), bare_node(2, MATTER_DOMAIN_TYPE_ID), bare_node(3, "node.liquid_frame")],
+            wires: vec![wire(2, "closed_faces", 3, "closed_faces"), wire(1, "display_time", 3, "display_time"), wire(1, "epoch", 3, "epoch")],
+        };
+        let expected = [wire(1, "display_cursor", 3, "display_cursor"), wire(1, "dropped_seconds", 3, "dropped_seconds")];
+        // Every order of the authored wires gives the same result.
+        let orders = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]];
+        for order in orders {
+            let mut def = base.clone();
+            def.wires = order.iter().map(|&i| base.wires[i].clone()).collect();
+            assert!(wire_liquid_frame_cursor(&mut def));
+            for w in &expected {
+                assert_eq!(def.wires.iter().filter(|x| *x == w).count(), 1, "{order:?}");
+            }
+            assert!(!def.wires.iter().any(|w| w.from_node == 2 && w.to_port == "display_cursor"));
+            // Idempotent, and a save/reload stays migrated.
+            let once = def.clone();
+            assert!(!wire_liquid_frame_cursor(&mut def));
+            let mut reloaded: EffectGraphDef = serde_json::from_str(&serde_json::to_string(&def).unwrap()).unwrap();
+            assert!(!wire_liquid_frame_cursor(&mut reloaded));
+            assert_eq!(reloaded, once);
+        }
+        // A frame clocked by a Matter domain is untouched.
+        let mut matter = base.clone();
+        matter.wires[2] = wire(2, "epoch", 3, "epoch");
+        let before = matter.clone();
+        assert!(!wire_liquid_frame_cursor(&mut matter));
+        assert_eq!(matter, before);
+        // An authored constant 0 stays.
+        let mut authored = base.clone();
+        authored.nodes.push(bare_node(4, "node.constant"));
+        authored.wires.push(wire(4, "value", 3, "display_cursor"));
+        assert!(wire_liquid_frame_cursor(&mut authored));
+        assert_eq!(authored.wires.iter().filter(|w| w.to_port == "display_cursor").count(), 1);
+        assert!(authored.wires.contains(&wire(4, "value", 3, "display_cursor")));
+        // Nested groups: the installation seam flattens first.
+        let nested: EffectGraphDef = serde_json::from_value(serde_json::json!({
+            "version": 1,
+            "nodes": [{ "id": 1, "typeId": "group", "handle": "outer", "group": {
+                "interface": { "inputs": [], "outputs": [] },
+                "nodes": base.nodes, "wires": base.wires
+            }}], "wires": []
+        })).unwrap();
+        let mut flat = manifold_core::flatten::flatten_groups(&nested).unwrap();
+        assert!(wire_liquid_frame_cursor(&mut flat));
+        assert_eq!(flat.wires.iter().filter(|w| w.to_port == "display_cursor").count(), 1);
+        // A saved project layer from before the cursor gets it from its domain.
+        let mut saved: EffectGraphDef = serde_json::from_str(include_str!(
+            "../../../manifold-io/tests/fixtures/water_layer_graph_v1160.json"
+        ))
+        .expect("saved layer");
+        saved.scene_modifiers.clear();
+        let mut saved = manifold_core::flatten::flatten_groups(&saved).expect("flattens");
+        assert!(wire_liquid_frame_cursor(&mut saved));
+        let frame = saved.nodes.iter().find(|n| n.type_id == "node.liquid_frame").expect("a frame").id;
+        let feed = saved.wires.iter().find(|w| w.to_node == frame && w.to_port == "display_cursor").expect("wired");
+        assert!(saved.nodes.iter().any(|n| n.id == feed.from_node && n.type_id == GPU_FLIP_DOMAIN_TYPE_ID));
     }
 
     #[test]

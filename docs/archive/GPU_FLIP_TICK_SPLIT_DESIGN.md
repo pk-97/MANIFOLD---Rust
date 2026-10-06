@@ -1,6 +1,6 @@
 # GPU FLIP Tick Split — even frames: measure first, pace as an experiment, spread only where it fits
 
-**Status:** IN PROGRESS · 2026-10-06 · Fable 5.1, amended by the Claude lead after Astra's reviews. P0 landed. P1 is a default-Off experiment awaiting BUG-q2s2i (even frames: pacing vs drop rule). P2+ blocked (section 3, Open holes that block P2).
+**Status:** PARTIAL · 2026-10-06 · P0 landed; P1 onward parked by Peter in BUG-q2s2i (even frames decision): heavy water runs a 30 fps project and the drop-after-late-frame rule stays.
 **Prerequisites:** none for P0–P1; display history P1 (`feat/flip-display-history`) for P3
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) and section 6 before starting any phase.
 
