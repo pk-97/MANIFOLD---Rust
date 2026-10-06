@@ -14685,6 +14685,10 @@
           "type": "f32"
         },
         {
+          "name": "display_cursor",
+          "type": "f32"
+        },
+        {
           "name": "dropped_seconds",
           "type": "f32"
         },
@@ -19943,6 +19947,16 @@
         },
         {
           "name": "epoch",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "display_cursor",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "dropped_seconds",
           "required": false,
           "type": "f32"
         }
