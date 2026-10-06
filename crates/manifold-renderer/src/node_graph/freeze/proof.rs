@@ -1078,6 +1078,93 @@ fn coc_from_depth_fuses_with_pointwise_neighbor_and_matches_unfused() {
     );
 }
 
+/// The Ocean backdrop region (docs/OCEAN_SURFACE_DESIGN.md): `node.camera_sky`
+/// (camera-derived, Gather on the sky) feeding `node.over`'s bottom, with a
+/// varying-alpha top, fuses into one kernel and matches the unfused pair.
+#[test]
+fn camera_sky_over_fuses_and_matches_unfused() {
+    use super::install::{FusedDef, fuse_canonical_def};
+
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let (w, h) = (64u32, 64u32);
+    let input = gradient_input_varying_alpha(&device, w, h);
+
+    let json = r#"{
+        "version": 1, "name": "CameraSkyOverFusion", "nodes": [
+            { "id": 0, "typeId": "system.source", "nodeId": "source" },
+            { "id": 1, "typeId": "node.free_camera", "nodeId": "cam" },
+            { "id": 2, "typeId": "node.camera_sky", "nodeId": "sky" },
+            { "id": 3, "typeId": "node.over", "nodeId": "over" },
+            { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }
+        ], "wires": [
+            { "fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "sky" },
+            { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "camera" },
+            { "fromNode": 0, "fromPort": "out", "toNode": 3, "toPort": "top" },
+            { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "bottom" },
+            { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
+        ]
+    }"#;
+    let def: EffectGraphDef = serde_json::from_str(json).expect("parse fixture graph");
+    let set_by_node_id = |g: &mut Graph, node_id: &str, param: &str, v: f32| {
+        let id = g
+            .node_id_by_handle(node_id)
+            .or_else(|| g.instance_by_node_id(&manifold_core::NodeId::new(node_id)))
+            .unwrap_or_else(|| panic!("graph missing node `{node_id}`"));
+        g.set_param(id, param, ParamValue::Float(v))
+            .unwrap_or_else(|e| panic!("set {node_id}.{param}: {e:?}"));
+    };
+    let aim = |g: &mut Graph| {
+        set_by_node_id(g, "cam", "yaw", 0.7);
+        set_by_node_id(g, "cam", "pitch", 0.3);
+    };
+
+    let mut unfused_graph = def.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
+    aim(&mut unfused_graph);
+    let unfused_plan = compile(&unfused_graph).expect("compile unfused");
+    let u_src = resource_for_output(&unfused_plan, find_node(&unfused_graph, "system.source"), "out");
+    let u_out = resource_for_output(&unfused_plan, find_node(&unfused_graph, "node.over"), "out");
+    let unfused = render_graph(&device.arc(), &mut unfused_graph, &unfused_plan, u_src, &input, u_out);
+
+    let FusedDef { def: fused_def, .. } =
+        fuse_canonical_def(&def, &registry).expect("camera_sky + over is one fusable region");
+    assert_eq!(
+        fused_def.nodes.iter().filter(|n| n.type_id == "node.wgsl_compute").count(),
+        1,
+        "camera_sky and over must collapse to exactly one fused node"
+    );
+    assert!(
+        fused_def
+            .nodes
+            .iter()
+            .find(|n| n.type_id == "node.wgsl_compute")
+            .and_then(|n| n.wgsl_source.as_deref())
+            .is_some_and(|s| s.contains("@camera_external: camera_ext_0")
+                && s.contains("@derived_uniform_member:")),
+        "the fused kernel must read the camera through the derived-uniform recompute"
+    );
+    let mut fused_graph = fused_def.into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
+    aim(&mut fused_graph);
+    let fused_node = find_node(&fused_graph, "node.wgsl_compute");
+    let fused_plan = compile(&fused_graph).expect("compile fused");
+    let f_src = resource_for_output(&fused_plan, find_node(&fused_graph, "system.source"), "out");
+    let f_out = resource_for_output(&fused_plan, fused_node, "dst");
+    let fused = render_graph(&device.arc(), &mut fused_graph, &fused_plan, f_src, &input, f_out);
+
+    let differ = TextureDiff::new(&device);
+    let r = differ.compare(&device, &unfused.texture, &fused.texture, OUT_OF_LOOP_ULP_ABS_TOL, OUT_OF_LOOP_ULP_REL_TOL);
+    assert!(
+        r.passes(0.005) && r.over_count < 64,
+        "camera_sky + over fusion must match unfused within the out-of-loop \
+         tolerance: max_abs={}, max_rel={}, over={}/{} ({:.4})",
+        r.max_abs,
+        r.max_rel,
+        r.over_count,
+        r.total,
+        r.over_fraction()
+    );
+}
+
 /// Broad safety net for activating partial-region fusion library-wide: every
 /// bundled preset the finder fuses must render one frame through its fused view
 /// without panicking — the structural-breakage class (invalid generated WGSL, a
