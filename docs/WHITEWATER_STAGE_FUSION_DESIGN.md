@@ -1,6 +1,6 @@
 # Whitewater Stage Fusion — fuse the stage's internal atom chains, drop its grid copies, retire the face adapters
 
-**Status:** IN PROGRESS · 2026-10-06 · P0 (golden fingerprints), P1 (copies) and P2 (emitter fusion) on main · owed: P3–P5.
+**Status:** IN PROGRESS · 2026-10-06 · P0–P3 on main; P3b deferred (section 8) · owed: P4–P5.
 **Prerequisites:** none. The display-history landing (`85226c917`) is on main; this design touches nothing it owns.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) and section 6 (Seam briefs) before starting any phase.
 
@@ -399,6 +399,7 @@ Phasing-completeness check: D5/D6 → P1; D1–D4 → P2/P3 (hoists → P3b); D7
 | Legacy level-set path's distance→surface copy (:1093) and its axis-array-only faces | a saved graph on that path is measured on stage |
 | Surface-distance reinit: 6 fixed iterations × 5 dispatches (34 per tick) gated only through indirect args | `whitewater.distance.*` labels exceed 10% of the stamped tick; the engine's convergence test would have to become an early exit of encoded work, a replay-layer question |
 | `substep_u/v/w` axis histories inside the step | the lifecycle's motion path is measured against a packed per-substep snapshot |
+| P3b hoists in `ww_emit` (measured at P3: emit 0.42 ms of a 2.2 ms stamped stage, under 2% of the stamped GPU frame; the best-case saving is below the ~3% run-to-run tick noise) | the emit label exceeds 25% of the whitewater stamps, or the stage becomes the tick's bottleneck |
 | Fusing `face_sample_component` into the seam for other consumers | a preset other than these two wires the frame's face arrays |
 
 ---
