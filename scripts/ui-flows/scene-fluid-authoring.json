@@ -31,6 +31,7 @@
   {"Key":{"key":"Z","modifiers":{"command":true}}},
   {"Assert":{"selector":{"Query":{"name":"scene_setup.properties.name_value","text":"Water 1"}},"check":{"Count":0}}},
   {"Key":{"key":"Z","modifiers":{"command":true,"shift":true}}},
+  {"ScrollTo":{"target":{"Query":{"text":"■ Water 1"}}}},
   {"Pointer":{"target":{"Query":{"text":"■ Water 1"}},"gesture":{"Click":{"modifiers":{}}}}},
   {"Assert":{"selector":{"Query":{"name":"scene_setup.properties.name_value","text":"Water 1"}},"check":"Exists"}},
   "Snapshot"

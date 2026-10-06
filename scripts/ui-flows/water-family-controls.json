@@ -1,5 +1,4 @@
 [
-  {"ScrollTo":{"target":{"Query":{"text":"Scene","type":"Button"}}}},
   {"Pointer":{"target":{"Query":{"text":"Scene","type":"Button"}},"gesture":{"Click":{"modifiers":{}}}}},
   {"ScrollTo":{"target":{"Query":{"name":"scene_setup.objects.group_toggle","nth":0}}}},
   {"Pointer":{"target":{"Query":{"name":"scene_setup.objects.group_toggle","nth":0}},"gesture":{"Click":{"modifiers":{}}}}},
