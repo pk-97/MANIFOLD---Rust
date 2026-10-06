@@ -128,8 +128,10 @@ fn run(label: &str, def: EffectGraphDef, lines: &mut Vec<String>) -> [Option<u32
         // The clock accepted exactly the ticks it scheduled, in one epoch.
         let (epoch, step) = accepted(&show);
         if frames == 1 {
+            let [time] = show.probes(["simulation_time"]);
             assert_eq!(epoch, was_epoch + 1.0, "{label}: frame 1 is not the rewind's restart");
             assert_eq!(due, 0.0, "{label}: the rewind's restart ran a tick");
+            assert_eq!(time, 0.0, "{label}: the rewind's restart accepted time");
         } else {
             assert_eq!(epoch, was_epoch, "{label}: frame {frames} changed epoch");
             assert_eq!(step, was_step + due as i64, "{label}: frame {frames} clock at tick {step}, was {was_step}, due {due}");
@@ -284,17 +286,21 @@ fn record_candidate(lines: &[String]) {
     const MODULES: &str = "src/node_graph/primitives/mod.rs";
     let changed = git(&["diff", "--quiet", BASE, "HEAD", "--", "src", ":(exclude)*_tests.rs", ":(exclude)**/tests/**", &format!(":(exclude){MODULES}")]);
     assert!(changed.status.success(), "renderer sources differ from the pinned base {BASE}; refusing to record");
-    // The module list may differ only by this test's own registration.
-    let modules = git(&["diff", "-U0", BASE, "HEAD", "--", MODULES]);
-    assert!(modules.status.success(), "git diff of {MODULES} failed; refusing to record");
-    let mut delta: Vec<String> = String::from_utf8_lossy(&modules.stdout)
-        .lines()
-        .filter(|l| (l.starts_with('+') || l.starts_with('-')) && !l.starts_with("+++") && !l.starts_with("---"))
-        .map(str::to_string)
-        .collect();
-    delta.sort();
-    let registration = ["+#[cfg(all(test, feature = \"gpu-proofs\"))]", "+mod whitewater_golden_tests;"];
-    assert!(delta.is_empty() || delta == registration, "{MODULES} differs from {BASE} beyond this test's registration; refusing to record:\n{}", delta.join("\n"));
+    // The module list may differ only by this test's own registration: HEAD
+    // minus that consecutive cfg-then-mod pair must be the base, so the
+    // allowed cfg cannot land on some other module. Compared as files, since
+    // a diff may slide an insertion between identical lines.
+    let file_at = |rev: &str| {
+        let shown = git(&["show", &format!("{rev}:crates/manifold-renderer/{MODULES}")]);
+        assert!(shown.status.success(), "git show {rev}:{MODULES} failed; refusing to record");
+        String::from_utf8_lossy(&shown.stdout).lines().map(str::to_string).collect::<Vec<_>>()
+    };
+    let (base_modules, mut head_modules) = (file_at(BASE), file_at("HEAD"));
+    let registration = ["#[cfg(all(test, feature = \"gpu-proofs\"))]", "mod whitewater_golden_tests;"];
+    if let Some(at) = head_modules.windows(2).position(|pair| pair == registration) {
+        head_modules.drain(at..at + 2);
+    }
+    assert!(head_modules == base_modules, "{MODULES} differs from {BASE} beyond this test's registration; refusing to record");
     let header = format!(
         "# Whitewater per-tick golden (whitewater_tick_state_matches_golden)\n# base {BASE}\n# sha {sha}\n# fixtures: shipped GPU FLIP Dam Break 64; all emitters; all emitters at budget 1000; {TICKS} ticks each after restart\n# line: fixture tick N port bytes FNV-1a-64 over the whole buffer\n"
     );
