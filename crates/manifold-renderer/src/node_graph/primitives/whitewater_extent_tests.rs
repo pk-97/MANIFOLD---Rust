@@ -99,6 +99,22 @@ fn whitewater_extents_at_64() {
     assert_eq!(total * std::mem::size_of::<KnownValue>() as u64, 2_744_000);
     assert_eq!(total * 4, 1_372_000);
     assert_eq!(total.div_ceil(256), 1340, "workgroups per grid dispatch");
+
+    // The tick solver at res 64 uses 67 cells / 68 nodes (the legacy
+    // matter lattice above has 70 / 71). Only its pad-zero mode aliases.
+    use super::whitewater_step::{DEFAULT_CAPACITY, StepShape};
+    let tick = StepShape::new([68; 3], [68; 3], [67; 3], 1.0,
+        Some(crate::node_graph::transform::Transform { scale: [4.1875; 3], ..Default::default() }),
+        DEFAULT_CAPACITY).expect("tick grid");
+    let particles = u64::from(PARTICLE_SLOTS);
+    assert_eq!(tick.held_bytes(particles, true), 279_054_872,
+        "67-cubed grid, particle/pool/scan/output storage and reinitialisation scratch");
+    assert_eq!(tick.held_bytes(particles, false) - tick.held_bytes(particles, true), 2_406_104);
+    assert_eq!(2 * 67u64.pow(3) * 4, 2_406_104);
+    let padded = StepShape::new([68; 3], [68; 3], [63; 3], 1.0,
+        Some(crate::node_graph::transform::Transform { scale: [4.1875; 3], ..Default::default() }),
+        DEFAULT_CAPACITY).expect("padded tick grid");
+    assert_eq!(padded.held_bytes(particles, false), padded.held_bytes(particles, true));
 }
 
 /// A level set that doesn't refine the grid by one whole number, the same on
@@ -551,7 +567,7 @@ fn whitewater_step_extents_at_64() {
     assert_eq!([0, 1, 2].map(|a| step.face_bytes(a)), [266_240 * 4; 3]);
     assert_eq!(step.level_bytes(), cell_total(level) * 4);
     assert_eq!(step.solid_bytes(), 357_911 * 4);
-    let held = step.held_bytes(u64::from(PARTICLE_SLOTS));
+    let held = step.held_bytes(u64::from(PARTICLE_SLOTS), false);
     println!("whitewater_step holds {held} bytes at 64 over {PARTICLE_SLOTS} particle slots");
     // Account for the turbulence/influence fields, inside potential and
     // fourth population. The former 256 MiB assertion was a budget for the

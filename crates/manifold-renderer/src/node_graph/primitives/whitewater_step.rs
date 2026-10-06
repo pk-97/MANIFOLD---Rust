@@ -306,10 +306,12 @@ impl StepShape {
     }
 
     /// Bytes the node holds for this shape and `particles` liquid particle
-    /// slots, every scratch, scan, sort and output slot.
-    pub fn held_bytes(&self, particles: u64) -> u64 {
+    /// slots, every scratch, scan, sort and output slot. Tick mode at pad
+    /// zero borrows distance fields instead of allocating them.
+    pub fn held_bytes(&self, particles: u64, tick_mode: bool) -> u64 {
         let cells = self.cell_count();
-        let grid = cells * (2 * SURFACE_CROSSING_BYTES + 4 + 4 + 4 + 2 * KNOWN_VALUE + 4);
+        let distance_fields = if self.owns_distance_fields(tick_mode) { 8 } else { 0 };
+        let grid = cells * (2 * SURFACE_CROSSING_BYTES + distance_fields + 4 + 2 * KNOWN_VALUE + 4);
         let per_particle = particles * (2 * PARTICLE + 4 + 4 + 4) + storage_words(particles as usize) as u64 * 4;
         let capacity = u64::from(self.capacity);
         let pool = 2 * self.spawn_bytes() + 2 * self.pool_bytes() + capacity * 4;
@@ -318,6 +320,10 @@ impl StepShape {
         let outputs = OUTPUT_SLOTS as u64 * (4 * self.population_bytes() + COUNT_WORDS as u64 * 4);
         grid + per_particle + pool + sort + scan + outputs + 6 * self.solid_bytes()
             + super::whitewater_distance::scratch_bytes(self.face_cells)
+    }
+
+    fn owns_distance_fields(&self, tick_mode: bool) -> bool {
+        !tick_mode || face_offset(self.nodes, self.face_cells).expect("validated face placement")[0] > 0
     }
 }
 
@@ -669,8 +675,8 @@ fn allocate(device: &GpuDevice, bytes: u64, shared: bool) -> Result<GpuBuffer, S
 /// The grid fields and the pool, sized from one [`StepShape`].
 struct Fields {
     crossings: [GpuBuffer; 2],
-    distance: GpuBuffer,
-    surface: GpuBuffer,
+    distance: Option<GpuBuffer>,
+    surface: Option<GpuBuffer>,
     cells: GpuBuffer,
     curvature: [GpuBuffer; 2],
     turbulence: GpuBuffer,
@@ -686,13 +692,13 @@ struct Fields {
 }
 
 impl Fields {
-    fn new(device: &GpuDevice, shape: &StepShape, scan: GpuBuffer) -> Result<Self, String> {
+    fn new(device: &GpuDevice, shape: &StepShape, tick_mode: bool, scan: GpuBuffer) -> Result<Self, String> {
         let cells = shape.cell_count();
         let alloc = |bytes| allocate(device, bytes, false);
         Ok(Self {
             crossings: [alloc(cells * SURFACE_CROSSING_BYTES)?, alloc(cells * SURFACE_CROSSING_BYTES)?],
-            distance: alloc(cells * 4)?,
-            surface: alloc(cells * 4)?,
+            distance: shape.owns_distance_fields(tick_mode).then(|| alloc(cells * 4)).transpose()?,
+            surface: shape.owns_distance_fields(tick_mode).then(|| alloc(cells * 4)).transpose()?,
             cells: alloc(cells * 4)?,
             curvature: [alloc(cells * KNOWN_VALUE)?, alloc(cells * KNOWN_VALUE)?],
             turbulence: alloc(cells * 4)?,
@@ -829,6 +835,7 @@ pub(crate) struct Step {
     pipelines: Pipelines,
     surface_distance: super::whitewater_distance::SurfaceDistance,
     shape: Option<StepShape>,
+    tick_mode: bool,
     epoch: Option<u32>,
     fields: Option<Fields>,
     particles: ParticleScratch,
@@ -838,6 +845,7 @@ pub(crate) struct Step {
     /// Which of the two pool buffers holds the pool.
     current: usize,
     influence_epoch: Option<u32>,
+    influence_current: usize,
     /// The pool stepped since an output last took it.
     owed: bool,
     pub(super) outputs: Outputs,
@@ -864,8 +872,8 @@ impl Step {
         let shape = frame.shape;
         require_inputs(&shape, inputs)?;
         if frame.dust_emission && inputs.obstacle_source.is_none() { return Err("dust emission requires nearest-object obstacle_source".to_owned()); }
-        let reseed = self.shape != Some(shape) || self.epoch != Some(frame.epoch);
-        self.reserve(device, shape, inputs.particles.size / PARTICLE)?;
+        let reseed = self.shape != Some(shape) || self.tick_mode != inputs.distance.is_some() || self.epoch != Some(frame.epoch);
+        self.reserve(device, shape, inputs.particles.size / PARTICLE, inputs.distance.is_some())?;
         if reseed {
             self.epoch = Some(frame.epoch);
             self.outputs.clear();
@@ -889,9 +897,9 @@ impl Step {
             let emitters = frame.count.map_or(slots, |count| count.min(slots));
             let scratch = self.particles.reserve(device, slots)?.clone();
             let offsets = self.emission_scan.buffer(device, emitters.max(1) as usize)?.clone();
-            self.emit(enc, frame, inputs, &scratch, &offsets, emitters);
+            let surface = self.emit(enc, frame, inputs, &scratch, &offsets, emitters);
             for _ in 0..frame.ticks {
-                self.tick(enc, device, frame, inputs)?;
+                self.tick(enc, device, frame, inputs, &surface)?;
             }
             self.owed = true;
         }
@@ -905,20 +913,21 @@ impl Step {
         Ok(self.outputs.report)
     }
 
-    fn reserve(&mut self, device: &GpuDevice, shape: StepShape, particles: u64) -> Result<(), String> {
+    fn reserve(&mut self, device: &GpuDevice, shape: StepShape, particles: u64, tick_mode: bool) -> Result<(), String> {
         self.surface_distance.reserve(device, shape.face_cells)?;
-        if self.shape != Some(shape) {
+        if self.shape != Some(shape) || self.tick_mode != tick_mode {
             self.shape = None;
             self.fields = None;
             self.influence_epoch = None;
             self.outputs = Outputs::default();
-            let held = shape.held_bytes(particles);
+            let held = shape.held_bytes(particles, tick_mode);
             crate::node_graph::scene_modifier_expand::admit_candidate_bytes(device.modifier_memory_snapshot(), held)
                 .map_err(|error| format!("the pool and its scratch need {held} bytes: {error}"))?;
             let scan = self.slot_scan.buffer(device, shape.slot_scan_values())?.clone();
-            self.fields = Some(Fields::new(device, &shape, scan)?);
+            self.fields = Some(Fields::new(device, &shape, tick_mode, scan)?);
             self.sort.reserve_ranges(device, shape.bins)?;
             self.shape = Some(shape);
+            self.tick_mode = tick_mode;
         }
         Ok(())
     }
@@ -945,7 +954,7 @@ impl Step {
         self.emission_scan.prepare(gpu.device);
         self.slot_scan.prepare(gpu.device);
         self.sort.prepare(gpu.device);
-        self.reserve(gpu.device, shape, inputs.particles.size / PARTICLE)?;
+        self.reserve(gpu.device, shape, inputs.particles.size / PARTICLE, inputs.distance.is_some())?;
         if self.outputs.slots.is_empty() {
             self.outputs.free(gpu.device, &Retired, &shape)?;
         }
@@ -959,8 +968,8 @@ impl Step {
             let emitters = frame.count.map_or(slots, |count| count.min(slots));
             let scratch = self.particles.reserve(gpu.device, slots)?.clone();
             let offsets = self.emission_scan.buffer(gpu.device, emitters.max(1) as usize)?.clone();
-            self.emit(enc, frame, inputs, &scratch, &offsets, emitters);
-            self.tick(enc, gpu.device, frame, inputs)?;
+            let surface = self.emit(enc, frame, inputs, &scratch, &offsets, emitters);
+            self.tick(enc, gpu.device, frame, inputs, &surface)?;
         } else {
             self.influence_epoch = None;
             self.seed(enc, &shape);
@@ -1030,10 +1039,12 @@ impl Step {
         scratch: &[GpuBuffer; 5],
         offsets: &GpuBuffer,
         emitters: u32,
-    ) {
+    ) -> GpuBuffer {
         let s = &frame.shape;
         let reset_influence = self.influence_epoch != Some(frame.epoch);
         self.influence_epoch = Some(frame.epoch);
+        let influence_previous = self.influence_current;
+        let influence_next = 1 - influence_previous;
         let f = self.fields();
         let p = &self.pipelines;
         let cells = s.cell_count() as u32;
@@ -1053,15 +1064,28 @@ impl Step {
                 _ => "node.whitewater_step.extend_curvature",
             }
         };
-        if let Some(distance) = inputs.distance {
+        // Resolve once for emit and lifecycle; the next encode overwrites
+        // SurfaceDistance's current storage, so this view is never history.
+        let (distance, surface) = if let Some(distance) = inputs.distance {
             let padding = face_offset(s.nodes, s.face_cells).expect("validated face placement")[0];
-            encode_pad_distance_lattice(enc, get(&p.pad_distance), distance, &f.distance,
-                s.face_cells, padding, 3.0 * s.cell_size);
-            let surface = self.surface_distance.encode(enc, distance, s.cell_size);
-            encode_pad_distance_lattice(enc, get(&p.pad_distance), surface, &f.surface,
-                s.face_cells, padding, 5.0 * s.cell_size);
-            enc.compute_memory_barrier_buffers();
+            if padding == 0 {
+                let surface = self.surface_distance.encode(enc, distance, s.cell_size);
+                enc.compute_memory_barrier_buffers();
+                (distance, surface)
+            } else {
+                let padded_distance = f.distance.as_ref().expect("padded distance allocated");
+                let padded_surface = f.surface.as_ref().expect("padded surface allocated");
+                encode_pad_distance_lattice(enc, get(&p.pad_distance), distance, padded_distance,
+                    s.face_cells, padding, 3.0 * s.cell_size);
+                let surface = self.surface_distance.encode(enc, distance, s.cell_size);
+                encode_pad_distance_lattice(enc, get(&p.pad_distance), surface, padded_surface,
+                    s.face_cells, padding, 5.0 * s.cell_size);
+                enc.compute_memory_barrier_buffers();
+                (padded_distance, padded_surface)
+            }
         } else {
+            let distance = f.distance.as_ref().expect("legacy distance allocated");
+            let surface = f.surface.as_ref().expect("legacy surface allocated");
             atom::<SurfaceCrossings>(
                 enc,
                 get(&p.crossings),
@@ -1086,27 +1110,27 @@ impl Step {
                 enc,
                 get(&p.distance),
                 &[nodes[0], nodes[1], nodes[2], ("cell_size", s.cell_size)],
-                &[&f.crossings[crossing], inputs.solid, &f.distance],
+                &[&f.crossings[crossing], inputs.solid, distance],
                 cells,
                 label("distance"),
             );
-            enc.copy_buffer_to_buffer(&f.distance, &f.surface, u64::from(cells) * 4);
-        }
+            enc.copy_buffer_to_buffer(distance, surface, u64::from(cells) * 4);
+            (distance, surface)
+        };
         atom::<WhitewaterInfluence>(enc, get(&p.influence),
             &[("base_level", frame.influence_base), ("decay_rate", frame.influence_decay), ("dt", frame.dt),
               ("cell_size", s.cell_size), ("reset", f32::from(u8::from(reset_influence))),
               ("source_present", f32::from(u8::from(inputs.obstacle_source.is_some())))],
-            &[&f.influence[0], inputs.solid, inputs.obstacle_source.unwrap_or(&f.empty_source), &f.influence[1]],
+            &[&f.influence[influence_previous], inputs.solid, inputs.obstacle_source.unwrap_or(&f.empty_source), &f.influence[influence_next]],
             cell_total(s.nodes) as u32, "node.whitewater_step.influence");
-        enc.copy_buffer_to_buffer(&f.influence[1], &f.influence[0], s.solid_bytes());
         // Liquid cells and curvature both read the distance; neither reads
         // the other, so one barrier after the pair.
-        atom_then::<LiquidCells>(enc, get(&p.liquid), &nodes, &[&f.distance, inputs.solid, &f.cells], cells, label("liquid"), Barrier::None);
+        atom_then::<LiquidCells>(enc, get(&p.liquid), &nodes, &[distance, inputs.solid, &f.cells], cells, label("liquid"), Barrier::None);
         atom::<LatticeCurvature>(
             enc,
             get(&p.curvature),
             &[nodes[0], nodes[1], nodes[2], ("cell_size", s.cell_size)],
-            &[&f.surface, &f.curvature[0]],
+            &[surface, &f.curvature[0]],
             cells,
             label("curvature"),
         );
@@ -1121,7 +1145,7 @@ impl Step {
         atom::<TurbulenceField>(
             enc, get(&p.turbulence),
             &[faces[0], faces[1], faces[2], nodes[0], nodes[1], nodes[2], ("cell_size", s.cell_size)],
-            &[&f.distance, inputs.faces[0], inputs.faces[1], inputs.faces[2], &f.turbulence],
+            &[distance, inputs.faces[0], inputs.faces[1], inputs.faces[2], &f.turbulence],
             cells, "node.whitewater_step.turbulence");
         let epoch = frame.epoch as f32;
         // The per-particle passes run over the emitters, not every slot of
@@ -1157,7 +1181,7 @@ impl Step {
         velocity_params[10] = ("seed", frame.seed);
         velocity_params[11] = ("epoch", epoch);
         atom::<WhitewaterEmitterVelocity>(enc, get(&p.emitter_velocity), &velocity_params,
-            &[sampled, &f.surface, &f.cells, jittered], emitters, "node.whitewater_step.emitter_velocity");
+            &[sampled, surface, &f.cells, jittered], emitters, "node.whitewater_step.emitter_velocity");
         let unscaled = sampled;
         let sampled = jittered;
         atom_then::<EnergyPotential>(
@@ -1168,7 +1192,7 @@ impl Step {
             enc,
             get(&p.wavecrest),
             &grid,
-            &[sampled, &f.surface, &f.curvature[curvature], &f.cells, wavecrest],
+            &[sampled, surface, &f.curvature[curvature], &f.cells, wavecrest],
             emitters,
             "node.whitewater_step.wavecrest",
         );
@@ -1178,7 +1202,7 @@ impl Step {
         turbulence_params[10] = ("max_turbulence", frame.max_turbulence);
         turbulence_params[11] = ("inside_enabled", f32::from(u8::from(frame.inside_emission)));
         atom::<InsideTurbulencePotential>(enc, get(&p.inside), &turbulence_params,
-            &[sampled, &f.surface, &f.turbulence, &f.cells, inside], emitters, "node.whitewater_step.inside");
+            &[sampled, surface, &f.turbulence, &f.cells, inside], emitters, "node.whitewater_step.inside");
         let mut count_params = [("", 0.0); 18];
         count_params[..8].copy_from_slice(&[("rate", frame.wavecrest_emission), ("turbulence_rate", frame.turbulence_emission), ("generation_rate", frame.generation_rate), ("seed", frame.seed), ("epoch", epoch), ("points_per_cell", 8.0), ("ticks", frame.ticks as f32), ("live_count", emitters as f32)]);
         count_params[8..17].copy_from_slice(&grid);
@@ -1187,7 +1211,7 @@ impl Step {
             enc,
             get(&p.emission),
             &count_params,
-            &[sampled, energy, wavecrest, inside, &f.influence[1], offsets],
+            &[sampled, energy, wavecrest, inside, &f.influence[influence_next], offsets],
             emitters,
             "node.whitewater_step.emission",
         );
@@ -1209,7 +1233,7 @@ impl Step {
             s.capacity,
             "node.whitewater_step.spawn",
         );
-        atom::<WhitewaterType>(enc, get(&p.kind), &velocity_params, &[&f.spawns, &f.surface, &f.cells, &f.typed], s.capacity, "node.whitewater_step.kind");
+        atom::<WhitewaterType>(enc, get(&p.kind), &velocity_params, &[&f.spawns, surface, &f.cells, &f.typed], s.capacity, "node.whitewater_step.kind");
         let params = HandParams { capacity: s.capacity, spawn_slots: s.capacity, emitters, count: s.capacity };
         let pool = &f.pools[self.current];
         self.hand(enc, Hand::LiveFlags, params, self.bound(pool, pool, HandBuffers::default()));
@@ -1232,7 +1256,7 @@ impl Step {
             count_params[1] = ("turbulence_rate", frame.dust_rate);
             count_params[3] = ("seed", frame.seed + 104729.0);
             atom::<TurbulenceEmissionCount>(enc, get(&p.emission), &count_params,
-                &[unscaled, energy, wavecrest, inside, &f.influence[1], offsets], emitters, "node.whitewater_step.dust_count");
+                &[unscaled, energy, wavecrest, inside, &f.influence[influence_next], offsets], emitters, "node.whitewater_step.dust_count");
             self.emission_scan.encode_labelled(enc, emitters.max(1) as usize, EMISSION_SCAN);
             spawn[14] = ("seed", frame.seed + 104729.0);
             atom::<SpawnWhitewater>(enc, get(&p.spawn), &spawn[..17],
@@ -1242,13 +1266,15 @@ impl Step {
             dust_type[..9].copy_from_slice(&grid);
             dust_type[9] = ("dust", 1.0);
             atom::<WhitewaterType>(enc, get(&p.kind), &dust_type,
-                &[&f.spawns, &f.surface, &f.cells, &f.typed], s.capacity, "node.whitewater_step.dust_type");
+                &[&f.spawns, surface, &f.cells, &f.typed], s.capacity, "node.whitewater_step.dust_type");
             self.hand(enc, Hand::LiveFlags, params, self.bound(pool, pool, HandBuffers::default()));
             self.slot_scan.encode_labelled(enc, s.capacity as usize, APPEND_SCAN);
             self.hand(enc, Hand::Append, params, self.bound(pool, pool, HandBuffers::default()));
             self.hand(enc, Hand::AppendState, state, self.bound(pool, pool, HandBuffers { offsets: Some(offsets), ..HandBuffers::default() }));
         }
-
+        let surface = surface.clone();
+        self.influence_current = influence_next;
+        surface
     }
 
     /// One tick of FLIP's whitewater: advect, retype, age, sort, preserve
@@ -1259,6 +1285,7 @@ impl Step {
         device: &GpuDevice,
         frame: &StepFrame,
         inputs: &StepInputs<'_>,
+        surface: &GpuBuffer,
     ) -> Result<(), String> {
         let s = &frame.shape;
         let f = self.fields.as_ref().expect("the step's fields are allocated");
@@ -1309,7 +1336,7 @@ impl Step {
             enc,
             get(&p.retype),
             &place,
-            &[b, &f.surface, &f.cells, faces[0], faces[1], faces[2], a],
+            &[b, surface, &f.cells, faces[0], faces[1], faces[2], a],
             cap,
             "node.whitewater_step.retype",
         );
@@ -1567,3 +1594,7 @@ impl Primitive for WhitewaterStep {
         ctx.outputs.set_scalar("pool_full", ParamValue::Float(report.pool_full as f32));
     }
 }
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+#[path = "whitewater_copy_tests.rs"]
+mod copy_tests;
