@@ -1,6 +1,6 @@
 # Whitewater Stage Fusion — fuse the stage's internal atom chains, drop its grid copies, retire the face adapters
 
-**Status:** PROPOSED · 2026-10-06 · Fable (design, audited at 5a1218c89), Claude lead · Astra review folded in (verdict Change, all changes applied) · owed: P0 lane brief.
+**Status:** IN PROGRESS · 2026-10-06 · P0 (golden fingerprints) on main · owed: P1–P5.
 **Prerequisites:** none. The display-history landing (`85226c917`) is on main; this design touches nothing it owns.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) and section 6 (Seam briefs) before starting any phase.
 
