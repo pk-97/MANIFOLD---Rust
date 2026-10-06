@@ -287,14 +287,15 @@ pub struct GroupDef {
     pub tint: Option<[f32; 4]>,
 }
 
-/// Find a stable node id anywhere in a graph node tree.
+/// Find a stable node id anywhere in a graph node tree. Groups without a
+/// node id are not searched: a scope path cannot address them.
 pub fn find_node<'a>(nodes: &'a [EffectGraphNode], node_id: &str) -> Option<&'a EffectGraphNode> {
     let wanted = NodeId::new(node_id);
     let reference = SceneNodeRef::locate_nodes(nodes, &wanted)?;
     reference.resolve_nodes(nodes)
 }
 
-/// Find a stable node id mutably anywhere in a graph node tree.
+/// Mutable [`find_node`].
 pub fn find_node_mut<'a>(nodes: &'a mut [EffectGraphNode], node_id: &str) -> Option<&'a mut EffectGraphNode> {
     let wanted = NodeId::new(node_id);
     let reference = SceneNodeRef::locate_nodes(nodes, &wanted)?;

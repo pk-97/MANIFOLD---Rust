@@ -139,8 +139,10 @@ def last_turn_marker(path):
 
 
 def rollout_busy(thread_id, now):
+    if thread_id is None:
+        return None  # the job never reached Codex, so no turn can be open
     if not isinstance(thread_id, str) or not re.fullmatch(r"[0-9A-Za-z-]+", thread_id):
-        return "no rollout found for a recent job; kept to be safe"
+        return "unreadable thread id for a recent job; kept to be safe"
     found = False
     for path in CODEX_SESSIONS.glob(f"*/*/*/rollout-*-{thread_id}.jsonl"):
         found = True

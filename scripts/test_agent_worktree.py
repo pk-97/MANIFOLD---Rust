@@ -891,6 +891,11 @@ def test_busy_codex_broker_is_left_alone(repo):
             lines = cb.stop_idle(wt)
             check("a recent completed job without a rollout keeps its broker",
                   proc.poll() is None and "no rollout found" in lines[0], lines)
+
+            brokers.set_jobs(wt, [completed_job(None)])
+            lines = cb.stop_idle(wt)
+            check("a job that never reached Codex does not pin its broker",
+                  lines == [f"STOPPED broker pid {proc.pid}"] and wait_gone(proc), lines)
     finally:
         brokers.stop_all()
 

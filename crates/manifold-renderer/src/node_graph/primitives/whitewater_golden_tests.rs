@@ -193,11 +193,11 @@ fn whitewater_packed_preset_save_load_matches_fingerprints() {
     use super::whitewater_scene_tests::with_whitewater_reports;
     let def = super::gpu_flip_preset::render_def(WaterScene::dam_break(64));
     let mut project = Project::default();
-    let index = project.timeline.add_layer("P4 Dam Break", LayerType::Generator, PresetTypeId::new("WaterDamBreakGpuFlip"));
+    let index = project.timeline.add_layer("Dam Break", LayerType::Generator, PresetTypeId::new("WaterDamBreakGpuFlip"));
     project.timeline.layers[index].gen_params_or_init().graph = Some(def.clone());
-    let path = std::env::temp_dir().join(format!("whitewater_p4_{}_{}.manifold", std::process::id(),
+    let path = std::env::temp_dir().join(format!("whitewater_round_trip_{}_{}.manifold", std::process::id(),
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
-    manifold_io::saver::save_project(&mut project, &path, Some("P4 round trip"), false).expect("save actual project archive");
+    manifold_io::saver::save_project(&mut project, &path, Some("Whitewater round trip"), false).expect("save actual project archive");
     let reloaded = manifold_io::loader::load_project(&path).expect("load actual project archive");
     let loaded = reloaded.timeline.layers[index].generator_graph().expect("saved generator graph").clone();
     std::fs::remove_file(&path).expect("remove round-trip archive");
