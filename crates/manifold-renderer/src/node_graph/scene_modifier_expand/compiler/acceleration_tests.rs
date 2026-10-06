@@ -44,6 +44,8 @@ fn scene_modifier_grouped_water_add_and_retarget_expand() {
     let owner = attach(&owner, "force", SceneTargetSelection::AllObjects);
     prepare_scene_modifiers(&owner, &PrimitiveRegistry::with_builtin())
         .expect("performer Add Uniform Force expands");
+    crate::preset_runtime::PresetRuntime::from_def(owner.clone(), &PrimitiveRegistry::with_builtin(), None)
+        .expect("performer Add Uniform Force builds a runtime");
     let mut instance = owner.scene_modifiers[0].clone();
     instance.targets = SceneTargetSelection::Explicit { objects: vec![water.clone()] };
     let frames = resolve_modifier_mesh_frames(&owner, &instance).unwrap();
@@ -51,6 +53,8 @@ fn scene_modifier_grouped_water_add_and_retarget_expand() {
     assert!(FlatSceneIndex::build(&owner).unwrap().scene_objects(&scene).unwrap().contains(&water));
     prepare_scene_modifiers(&owner, &PrimitiveRegistry::with_builtin())
         .expect("performer retarget to grouped Water expands");
+    crate::preset_runtime::PresetRuntime::from_def(owner, &PrimitiveRegistry::with_builtin(), None)
+        .expect("performer retarget to grouped Water builds a runtime");
 }
 fn reference(def: &EffectGraphDef, ty: &str, id: &str) -> SceneNodeRef {
     let node = def
