@@ -79,7 +79,7 @@ fn variant(params: &[(&str, Value)], budget: Option<f64>) -> EffectGraphDef {
     with_tick_probe(serde_json::from_value(def).expect("variant def"))
 }
 
-fn all_emitters(budget: Option<f64>) -> EffectGraphDef {
+pub(super) fn all_emitters(budget: Option<f64>) -> EffectGraphDef {
     let on = json!({"type": "Bool", "value": true});
     let float = |v: f64| json!({"type": "Float", "value": v});
     variant(

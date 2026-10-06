@@ -164,7 +164,8 @@ impl PrefixScan {
     }
 
     /// Scan `src[0, n)` into `dst[0, n)`, the later levels in the storage.
-    /// `prepare` and `parents` first. `src` and `dst` are distinct buffers.
+    /// `prepare` and `parents` first. `src`, `dst`, and this scan's storage
+    /// must all be distinct buffers: parent totals start at storage word 0.
     pub(crate) fn encode_into(
         &self,
         encoder: &mut manifold_gpu::GpuEncoder,

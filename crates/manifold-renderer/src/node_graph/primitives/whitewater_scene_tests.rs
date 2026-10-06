@@ -417,7 +417,18 @@ pub(super) struct Frame {
 
 impl Show {
     pub(super) fn new(def: EffectGraphDef, size: (u32, u32), frozen: bool, held: &[String]) -> Self {
+        Self::new_with_emitter_oracle(def, size, frozen, held, None)
+    }
+
+    pub(super) fn new_with_emitter_oracle(def: EffectGraphDef, size: (u32, u32), frozen: bool, held: &[String], reference: Option<bool>) -> Self {
         let mut registry = PrimitiveRegistry::with_builtin();
+        if let Some(reference) = reference {
+            registry.register("node.whitewater_step", if reference {
+                super::whitewater_step::reference_proof_node
+            } else {
+                super::whitewater_step::fused_proof_node
+            });
+        }
         register_substep_test_nodes(&mut registry);
         registry.register(PROBE, || Box::new(Probe::new()));
         registry.register(COUNTS_PROBE, || Box::new(Probe::whitewater_counts()));

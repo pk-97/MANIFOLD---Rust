@@ -1,6 +1,6 @@
 # Whitewater Stage Fusion — fuse the stage's internal atom chains, drop its grid copies, retire the face adapters
 
-**Status:** IN PROGRESS · 2026-10-06 · P0 (golden fingerprints) and P1 (copies) on main · owed: P2–P5.
+**Status:** IN PROGRESS · 2026-10-06 · P0 (golden fingerprints), P1 (copies) and P2 (emitter fusion) on main · owed: P3–P5.
 **Prerequisites:** none. The display-history landing (`85226c917`) is on main; this design touches nothing it owns.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) and section 6 (Seam briefs) before starting any phase.
 
@@ -158,7 +158,7 @@ Mechanics: `picker:` is optional in `primitive!` (`primitive.rs:1300`); omitted 
 
 **D1 — Fusion is stage-internal hand kernels, never the region compiler.** The stage already satisfies section 1.2's three conditions (seam ports; one method, proven against the vendored engine; the only passes it calls that exist outside it are the scan and the sort, called as code). Its internal per-particle passes become four hand kernels plus the turbulence grid variant in a new `shaders/whitewater_fused.wgsl`, composed with the shared WGSL exactly as `gpu_flip_step.rs:398-403` composes its shader, built at install in `Pipelines::prepare`. Rejected: fusing through freeze regions, because the stage's dispatches never enter a region and the partitioner refuses a buffer region with more than one escaping output (GPU_WHITEWATER_DESIGN.md section 3.3, BUG-imy3.5) — spawn needs both `sampled` and `energy`. Rejected: new catalog atoms for the fused passes, because section 1.2 forbids it and Peter: "Users won't touch these GPU FLIP nodes."
 
-**D2 — Exactly four fused kernels; everything else stays.** (a) `ww_emit` over `emitters`: jitter, sample, emitter speed, energy, wavecrest, inside, count → writes `sampled` (32 B), `energy`, `counts`, and `unscaled` (the pre-speed-scale record; written for every slot, dead slots passed whole, exactly as `SampleFacesAtParticles` writes it today) when `dust_enabled`. (b) `ww_dust` over `emitters`, dust on only: dust potential, energy over `unscaled`, dust count → writes `dust_energy`, `dust_counts`. (c) `ww_spawn` over `capacity`: spawn + type → writes `typed` directly; `Fields.spawns` is deleted. (d) `ww_lifecycle` over `capacity`: advect + retype + age, `a → b` in one pass. Scans, sort, keep, preserve_foam, compaction, split and the nine hand passes are untouched. Rejected: folding dust into (a), because with axis-array faces the binding count reaches 17 against the 16-slot `dispatch` cap (whitewater_step.rs:500) and dust is a separate emitter type with its own scan/spawn/append sequence anyway. Rejected: fusing `turbulence_field`/`liquid_cells`/`curvature` into the emitter kernel, because they are grid passes the particle gathers read after a barrier.
+**D2 — Exactly four fused kernels; everything else stays.** (a) `ww_emit` over `emitters`: jitter, sample, emitter speed, energy, wavecrest, inside, count → writes `sampled` (32 B), `energy`, `counts`, and, when `dust_enabled`, `unscaled` (the pre-speed-scale record; written for every slot, dead slots passed whole, exactly as `SampleFacesAtParticles` writes it today) and `wavecrest_bits` (the wavecrest operand dust reads once). (b) `ww_dust` over `emitters`, dust on only: dust potential, energy over `unscaled`, dust count → writes `dust_energy` and its counts straight into `offsets`, which the shared emission scan then scans in place. (c) `ww_spawn` over `capacity`: spawn + type → writes `typed` directly; `Fields.spawns` is deleted. (d) `ww_lifecycle` over `capacity`: advect + retype + age, `a → b` in one pass. Scans, sort, keep, preserve_foam, compaction, split and the nine hand passes are untouched. Rejected: folding dust into (a), because with axis-array faces the binding count reaches 17 against the 16-slot `dispatch` cap (whitewater_step.rs:500) and dust is a separate emitter type with its own scan/spawn/append sequence anyway. Rejected: fusing `turbulence_field`/`liquid_cells`/`curvature` into the emitter kernel, because they are grid passes the particle gathers read after a barrier.
 
 None of the four cuts needs another invocation's newly computed particle output: spawn gathers immutable emitter records and completed offsets, classification consumes its own spawn, lifecycle gathers immutable grids and history and transforms its own pool record (Astra, 2026-10-06). The preservation contract each fused kernel copies, as complete functions including wrapper logic:
 - emitter **slot** indices for RNG streams 0–2, 9 and 10; spawn **slot** indices for streams 4–7 and 11, including capacity thinning — never particle id, never emitter index where the atom used a spawn index;
@@ -244,13 +244,15 @@ The unused set is bound to `f.state` (the existing stand-in for absent optionals
 
 | Buffer | Today | After |
 |---|---|---|
-| `ParticleScratch` | jittered, sampled, energy, wavecrest, inside | `sampled`, `energy`, `unscaled`, `dust_energy`, `dust_counts` (same byte total: 2×32 + 3×4 per slot) |
+| `ParticleScratch` | jittered, sampled, energy, wavecrest, inside | `sampled`, `energy`, `unscaled`, `dust_energy`, `wavecrest_bits` (same byte total: 2×32 + 3×4 per slot) |
 | `Fields.spawns` | spawn → type intermediate | deleted; `ww_spawn` writes `typed` |
 | `Fields.distance`, `Fields.surface` | always | `Option`, allocated only when pad > 0 |
 | `Fields.influence[2]` + copy | copy-back each tick | index swap, no copy |
 | `held_bytes` | whitewater_step.rs:310-321 | updated to match; `whitewater_extents_at_64` (I9 of the whitewater design) re-derived |
 
-Dust sequencing with one emission-scan storage: `ww_emit` writes normal counts into `offsets` (the scan's level-0 storage, as today); the normal scan/spawn/append run; then `emission_scan.encode_into(emitters, dust_counts, offsets)` (prefix_scan.rs:169-178) scans the dust counts into the same storage and the dust spawn/append run exactly as :1236-1249 do today. Order of every state-word update is unchanged.
+Dust sequencing with one emission-scan storage: `ww_emit` writes normal counts into `offsets` (the scan's level-0 storage, as today); the normal scan/spawn/append run; then `ww_dust` writes dust counts directly into `offsets`, which are scanned in place with `emission_scan.encode_labelled` under `EMISSION_SCAN` before dust spawn/append. Never use `encode_into` with the scan's own storage as its destination: its parent totals would overlap level 0. Order of every state-word update is unchanged.
+
+`wavecrest_bits` is a pure side channel: `ww_emit` writes it only when dust is enabled; `ww_dust` reads it once for the same `idx` in that emission, and it is dead afterwards. It is never read across ticks, and nothing between the two dispatches binds it. Dust counts never occupy this buffer.
 
 ### 3.3 Port changes on `node.whitewater_step` (seam brief)
 
