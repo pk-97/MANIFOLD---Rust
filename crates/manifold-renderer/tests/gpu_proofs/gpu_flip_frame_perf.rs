@@ -1,7 +1,7 @@
 //! BUG-l2h3.24 (GPU FLIP speed after the physics ports) — the whole frame
 //! Peter sees on "Water — Dam Break (GPU FLIP)" at 1920×1080, as the preset
 //! ships (resolution 64, Steps 1, Auto iterations), one deterministic tick a
-//! frame from tick 0. 300 measured frames after asset warm-up: every tenth
+//! frame from tick 0. 300 measured frames after asset warm-up: every fifth
 //! frame carries per-dispatch GPU timestamps (split per node type, plus per
 //! dispatch label inside `node.gpu_flip_step` and `node.whitewater_step`,
 //! keyed on the node's tag and the label, so the solvers stay readable);
@@ -13,8 +13,8 @@
 //! The whitewater counts (foam, bubble, spray, pool full) are read on every
 //! timestamped frame from the whitewater stage's shared report buffer, so a
 //! speed change that moved the particle population shows up beside the time
-//! it saved. Holding the stage's arrays costs CPU work, so plain frames never
-//! hold them.
+//! it saved. Plain frames never hold the stage's arrays: a held array turns
+//! the tick region's encode replay off, which would inflate their CPU encode.
 //! Every split is reported twice, for the splash (ticks before
 //! `SPLASH_END_TICK`, the column falling and hitting the far wall) and for
 //! the calm after it, because the two phases have different costs and Peter
@@ -322,7 +322,7 @@ impl Phase {
         let live: Vec<f64> = self.counts.iter().map(|c| c.live()).collect();
         let last = self.counts.last().copied().unwrap_or_default();
         println!(
-            "  whitewater live particles: p50 {:.0} p95 {:.0} max {:.0} | last frame foam {:.0} bubble {:.0} spray {:.0} | pool full on {} frames",
+            "  whitewater live particles: p50 {:.0} p95 {:.0} max {:.0} | last frame foam {:.0} bubble {:.0} spray {:.0} | pool full on {} of {} sampled",
             percentile(&live, 0.5),
             percentile(&live, 0.95),
             live.iter().copied().fold(0.0, f64::max),
@@ -330,6 +330,7 @@ impl Phase {
             last.bubble,
             last.spray,
             self.counts.iter().filter(|c| c.pool_full > 0.0).count(),
+            self.counts.len(),
         );
         print_split("per node type", &self.per_type);
         for type_id in LABELLED {
