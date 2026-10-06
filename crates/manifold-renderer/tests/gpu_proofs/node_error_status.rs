@@ -1,10 +1,10 @@
-//! A node that reports `ctx.error` fails the frame (BUG-hc5h, node ctx.error
-//! does not fail the frame). The GPU FLIP Dam Break at a Resolution other than
-//! the one its solver is built for errors from its domain and draws a
-//! fallback; before the fix that frame still said Complete.
+//! A node that reports `ctx.error` fails the frame (BUG-hc5h).
+//! Invalid Simulation Speed reaches the domain's runtime validation; unlike
+//! Resolution, it cannot describe a valid dynamically sized solver lattice.
 
 use std::sync::Arc;
 
+use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::params::ParamManifest;
 use manifold_gpu::GpuTextureFormat;
 use manifold_renderer::frame_status::{FrameRenderFailure, FrameRenderStatus};
@@ -24,14 +24,20 @@ const HEIGHT: u32 = 90;
 #[test]
 fn node_error_fails_the_frame() {
     let harness = harness::shared();
-    let mut def: serde_json::Value = serde_json::from_str(DAM_BREAK_JSON).unwrap();
+    let grouped: EffectGraphDef = serde_json::from_str(DAM_BREAK_JSON).unwrap();
+    let mut def: serde_json::Value = serde_json::to_value(
+        manifold_core::flatten::flatten_groups(&grouped).unwrap(),
+    )
+    .unwrap();
     let domain = def["nodes"]
         .as_array_mut()
         .unwrap()
         .iter_mut()
         .find(|node| node["nodeId"] == "domain")
         .unwrap();
-    domain["params"]["resolution"]["value"] = serde_json::json!(32);
+    // Geometry remains valid, so loading succeeds. The domain's compute path
+    // rejects speed outside 0..=4 and reports ctx.error during the frame.
+    domain["params"]["speed"] = serde_json::json!({"type": "Float", "value": 5.0});
     let mut runtime = PresetRuntime::from_json_str_with_device(
         &def.to_string(),
         &PrimitiveRegistry::with_builtin(),

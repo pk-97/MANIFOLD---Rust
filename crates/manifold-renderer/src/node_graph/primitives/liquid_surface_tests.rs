@@ -2790,7 +2790,16 @@ fn fluid_relax_surface_mesh_stays_standalone_in_the_fused_view() {
     .expect("Dam Break bundled");
     let mut preset: Value = serde_json::from_str(&json).expect("Dam Break parses");
     let nodes = preset["nodes"].as_array_mut().expect("nodes");
-    let group = &mut nodes.iter_mut().find(|n| n["nodeId"] == "surface").expect("the Liquid Surface group")["group"];
+    let family = nodes
+        .iter_mut()
+        .find(|n| n["nodeId"] == "water_family")
+        .expect("the Water family group");
+    let group = &mut family["group"]["nodes"]
+        .as_array_mut()
+        .expect("Water family nodes")
+        .iter_mut()
+        .find(|n| n["nodeId"] == "surface")
+        .expect("the Liquid Surface group")["group"];
     let id = |group: &Value, key: &str, name: &str| {
         let nodes = group["nodes"].as_array().expect("group nodes");
         nodes.iter().find(|n| n[key] == name).unwrap_or_else(|| panic!("no {name}"))["id"].clone()

@@ -13,7 +13,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use manifold_core::effect_graph_def::EffectGraphDef;
+use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode};
 use manifold_core::params::{Param, ParamManifest};
 use manifold_gpu::GpuTextureFormat;
 use serde_json::{Value, json};
@@ -51,6 +51,75 @@ fn float(v: f64) -> Value {
 }
 
 type Port<'a> = (u64, &'a str);
+
+fn renumber_scope_ids(value: &mut Value, next: &mut u64) {
+    let mut remap = std::collections::BTreeMap::new();
+    {
+        let Some(nodes) = value["nodes"].as_array_mut() else { return };
+        for node in nodes.iter_mut() {
+            let old = node["id"].as_u64().expect("numeric id");
+            let fresh = *next;
+            *next += 1;
+            remap.insert(old, fresh);
+            node["id"] = json!(fresh);
+        }
+        for node in nodes.iter_mut() {
+            if node["group"].is_object() {
+                renumber_scope_ids(&mut node["group"], next);
+            }
+        }
+    }
+    if let Some(wires) = value["wires"].as_array_mut() {
+        for wire in wires {
+            let from = wire["fromNode"].as_u64().expect("numeric from id");
+            let to = wire["toNode"].as_u64().expect("numeric to id");
+            wire["fromNode"] = json!(remap[&from]);
+            wire["toNode"] = json!(remap[&to]);
+        }
+    }
+}
+
+#[cfg(feature = "whitewater-oracle")]
+fn find_node_mut<'a>(value: &'a mut Value, node_id: &str) -> Option<&'a mut Value> {
+    let nodes = value["nodes"].as_array_mut()?;
+    for node in nodes {
+        if node["nodeId"] == node_id {
+            return Some(node);
+        }
+        if node["group"].is_object()
+            && let Some(found) = find_node_mut(&mut node["group"], node_id)
+        {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn find_node<'a>(nodes: &'a [EffectGraphNode], node_id: &str) -> Option<&'a EffectGraphNode> {
+    nodes.iter().find_map(|node| {
+        (node.node_id.as_str() == node_id).then_some(node).or_else(|| {
+            node.group.as_deref().and_then(|group| find_node(&group.nodes, node_id))
+        })
+    })
+}
+
+fn node_scope_wires<'a>(
+    nodes: &'a [EffectGraphNode],
+    wires: &'a [manifold_core::effect_graph_def::EffectGraphWire],
+    node_id: &str,
+) -> Option<&'a [manifold_core::effect_graph_def::EffectGraphWire]> {
+    for node in nodes {
+        if node.node_id.as_str() == node_id {
+            return Some(wires);
+        }
+        if let Some(group) = node.group.as_deref()
+            && let Some(found) = node_scope_wires(&group.nodes, &group.wires, node_id)
+        {
+            return Some(found);
+        }
+    }
+    None
+}
 
 const PROBE: &str = "test.scalar_probe";
 const COUNTS_PROBE: &str = "test.whitewater_counts_probe";
@@ -127,54 +196,148 @@ impl Appender {
     }
 
     fn from_value(def: Value) -> Self {
-        let next = def["nodes"].as_array().expect("nodes").iter().filter_map(|n| n["id"].as_u64()).max().map_or(0, |m| m + 1);
-        Self { def, next }
+        let mut first = 0;
+        let mut def = def;
+        renumber_scope_ids(&mut def, &mut first);
+        Self { def, next: first }
     }
 
     fn named(&self, name: &str) -> &Value {
-        let nodes = self.def["nodes"].as_array().expect("nodes");
-        nodes.iter().find(|n| n["nodeId"] == name).unwrap_or_else(|| panic!("no node {name}"))
+        fn find<'a>(value: &'a Value, name: &str) -> Option<&'a Value> {
+            for node in value["nodes"].as_array()? {
+                if node["nodeId"] == name {
+                    return Some(node);
+                }
+                if node["group"].is_object()
+                    && let Some(found) = find(&node["group"], name)
+                {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        find(&self.def, name).unwrap_or_else(|| panic!("no node {name}"))
     }
 
     fn id(&self, name: &str) -> u64 {
         self.named(name)["id"].as_u64().expect("numeric id")
     }
 
-    fn add(&mut self, mut node: Value) -> u64 {
+    fn scope_path(&self, id: u64) -> Option<Vec<usize>> {
+        fn find(value: &Value, id: u64, path: &mut Vec<usize>) -> bool {
+            let Some(nodes) = value["nodes"].as_array() else { return false };
+            for (index, node) in nodes.iter().enumerate() {
+                if node["id"].as_u64() == Some(id) {
+                    return true;
+                }
+                if node["group"].is_object() {
+                    path.push(index);
+                    if find(&node["group"], id, path) {
+                        return true;
+                    }
+                    path.pop();
+                }
+            }
+            false
+        }
+        let mut path = Vec::new();
+        find(&self.def, id, &mut path).then_some(path)
+    }
+
+    fn scope_mut(&mut self, path: &[usize]) -> &mut Value {
+        let mut scope = &mut self.def;
+        for &index in path {
+            scope = &mut scope["nodes"][index]["group"];
+        }
+        scope
+    }
+
+    fn scope_for_pair(&self, from: u64, to: u64) -> Vec<usize> {
+        let from = self.scope_path(from).unwrap_or_else(|| panic!("no node id {from}"));
+        let to = self.scope_path(to).unwrap_or_else(|| panic!("no node id {to}"));
+        assert_eq!(from, to, "fixture wire crosses a group boundary without an interface pin");
+        from
+    }
+
+    fn node_in_scope(&mut self, name: &str, type_id: &str, params: Value, scope_node: u64) -> u64 {
         let id = self.next;
         self.next += 1;
-        node["id"] = json!(id);
-        self.def["nodes"].as_array_mut().expect("nodes").push(node);
+        let path = self.scope_path(scope_node).unwrap_or_else(|| panic!("no node id {scope_node}"));
+        self.scope_mut(&path)["nodes"].as_array_mut().expect("nodes").push(json!({
+            "id": id,
+            "nodeId": name,
+            "typeId": type_id,
+            "params": params
+        }));
         id
     }
 
-    fn node(&mut self, name: &str, type_id: &str, params: Value) -> u64 {
-        self.add(json!({"nodeId": name, "typeId": type_id, "params": params}))
+    fn replace(&mut self, name: &str, mut replacement: Value) -> u64 {
+        fn replace_in(value: &mut Value, name: &str, replacement: &mut Value) -> Option<u64> {
+            let nodes = value["nodes"].as_array_mut()?;
+            for node in nodes.iter_mut() {
+                if node["nodeId"] == name {
+                    let id = node["id"].as_u64().expect("numeric id");
+                    replacement["id"] = json!(id);
+                    *node = replacement.take();
+                    return Some(id);
+                }
+                if node["group"].is_object()
+                    && let Some(id) = replace_in(&mut node["group"], name, replacement)
+                {
+                    return Some(id);
+                }
+            }
+            None
+        }
+        renumber_scope_ids(&mut replacement["group"], &mut self.next);
+        replace_in(&mut self.def, name, &mut replacement).unwrap_or_else(|| panic!("no node {name}"))
     }
 
     fn wire(&mut self, from: Port<'_>, to: u64, port: &str) {
         let wire = json!({"fromNode": from.0, "fromPort": from.1, "toNode": to, "toPort": port});
-        self.def["wires"].as_array_mut().expect("wires").push(wire);
+        let path = self.scope_for_pair(from.0, to);
+        self.scope_mut(&path)["wires"].as_array_mut().expect("wires").push(wire);
+    }
+
+    fn retain_wires<F>(&mut self, node: u64, mut keep: F)
+    where
+        F: FnMut(&Value) -> bool,
+    {
+        let path = self.scope_path(node).unwrap_or_else(|| panic!("no node id {node}"));
+        self.scope_mut(&path)["wires"].as_array_mut().expect("wires").retain(|wire| keep(wire));
     }
 
     /// A scalar read after the frame as `probe.<label>`.
     fn probe(&mut self, label: &str, from: Port<'_>) {
-        let id = self.node(&format!("probe.{label}"), PROBE, json!({}));
+        let id = self.next;
+        self.next += 1;
+        let path = self.scope_path(from.0).unwrap_or_else(|| panic!("no node id {}", from.0));
+        self.scope_mut(&path)["nodes"].as_array_mut().expect("nodes").push(json!({
+            "id": id,
+            "nodeId": format!("probe.{label}"),
+            "typeId": PROBE,
+            "params": {}
+        }));
         self.wire(from, id, "value");
     }
 
     /// Drops the named nodes and every wire touching them.
     fn remove(&mut self, names: &[&str]) {
-        let ids: Vec<u64> = self.def["nodes"]
-            .as_array()
-            .expect("nodes")
-            .iter()
-            .filter(|n| names.iter().any(|name| n["nodeId"] == *name))
-            .filter_map(|n| n["id"].as_u64())
-            .collect();
-        let gone = |id: &Value| id.as_u64().is_some_and(|id| ids.contains(&id));
-        self.def["nodes"].as_array_mut().expect("nodes").retain(|n| !gone(&n["id"]));
-        self.def["wires"].as_array_mut().expect("wires").retain(|w| !gone(&w["fromNode"]) && !gone(&w["toNode"]));
+        fn remove_in(value: &mut Value, names: &[&str]) {
+            let Some(nodes) = value["nodes"].as_array() else { return };
+            let ids: Vec<u64> = nodes.iter().filter(|node| names.iter().any(|name| node["nodeId"] == *name))
+                .filter_map(|node| node["id"].as_u64()).collect();
+            let gone = |id: &Value| id.as_u64().is_some_and(|id| ids.contains(&id));
+            value["nodes"].as_array_mut().expect("nodes").retain(|node| !gone(&node["id"]));
+            value["wires"].as_array_mut().expect("wires").retain(|wire| !gone(&wire["fromNode"]) && !gone(&wire["toNode"]));
+            for node in value["nodes"].as_array_mut().expect("nodes") {
+                if node["group"].is_object() {
+                    remove_in(&mut node["group"], names);
+                }
+            }
+        }
+        remove_in(&mut self.def, names);
     }
 
     fn finish(self) -> EffectGraphDef {
@@ -193,7 +356,7 @@ pub(super) fn whitewater_render_def(scene: WaterScene) -> EffectGraphDef {
 pub(super) fn with_whitewater_reports(def: EffectGraphDef) -> EffectGraphDef {
     let mut g = Appender::new(def);
     let state = g.id("state");
-    let counts = g.node("whitewater_reports", COUNTS_PROBE, json!({}));
+    let counts = g.node_in_scope("whitewater_reports", COUNTS_PROBE, json!({}), state);
     g.wire((state, "whitewater_counts"), counts, "counts");
     let frame = g.id("frame");
     g.probe("count", (frame, "count_b"));
@@ -254,11 +417,12 @@ fn vendored_whitewater_scene_loads_and_compiles_without_gpu() {
     use crate::node_graph::freeze::install::fuse_generator_view;
 
     let def = vendored_render_def(WaterScene::dam_break(16));
-    let group = def.nodes.iter().find(|node| node.node_id.as_str() == "whitewater").expect("the vendored whitewater group");
+    let group = find_node(&def.nodes, "whitewater").expect("the vendored whitewater group");
     let body = group.group.as_ref().expect("whitewater is a group");
     assert!(!body.interface.inputs.iter().any(|input| input.name == "capacity"),
         "the lifecycle uses a param, not a silently unused capacity input");
-    assert!(!def.wires.iter().any(|wire| wire.to_node == group.id && wire.to_port == "capacity"),
+    let scope_wires = node_scope_wires(&def.nodes, &def.wires, "whitewater").expect("vendored group scope");
+    assert!(!scope_wires.iter().any(|wire| wire.to_node == group.id && wire.to_port == "capacity"),
         "the step-only capacity wire must be removed by the fixture splice");
     let budget = def.preset_metadata.as_ref().unwrap().bindings.iter()
         .find(|binding| binding.id == "whitewater_capacity").expect("budget binding");
@@ -305,14 +469,12 @@ fn vendored_render_def(scene: WaterScene) -> EffectGraphDef {
         .iter()
         .map(|output| output["name"].as_str().expect("output name").to_owned())
         .collect();
-    let nodes = g.def["nodes"].as_array_mut().expect("nodes");
-    *nodes.iter_mut().find(|n| n["nodeId"] == "whitewater").expect("the whitewater node") = group;
+    g.replace("whitewater", group);
     // The step runs inside the tick region on pool state and a distance
     // lattice; the vendored lifecycle is a post-frame observer. It takes its
     // original frame and surface inputs and drives the render directly,
     // never the step's tick interface.
-    g.def["wires"].as_array_mut().expect("wires")
-        .retain(|wire| wire["toNode"] != id && wire["fromNode"] != id);
+    g.retain_wires(id, |wire| wire["toNode"] != id && wire["fromNode"] != id);
     g.remove(&["whitewater_face_u", "whitewater_face_v", "whitewater_face_w"]);
     // Corrected FLIP faces and obstacle lattices share native coordinates.
     let frame = g.id("frame");
@@ -337,9 +499,11 @@ fn vendored_render_def(scene: WaterScene) -> EffectGraphDef {
     // blend, the state result's only reader, goes too. The group's
     // populations are drawn directly; one it does not publish is not drawn.
     for kind in WHITEWATER_KINDS {
-        g.remove(&[format!("{kind}_blend").as_str()]);
         let frame_in = format!("{kind}_in");
-        g.def["wires"].as_array_mut().expect("wires").retain(|w| !(w["toNode"] == frame && w["toPort"] == frame_in.as_str()));
+        g.retain_wires(frame, |w| !(w["toNode"] == frame && w["toPort"] == frame_in.as_str()));
+    }
+    for kind in ["foam", "spray", "bubble"] {
+        g.remove(&[format!("{kind}_blend").as_str()]);
         let render = ["copies", "object", "mesh", "material"].map(|part| format!("{kind}_{part}"));
         let particles = format!("{kind}_particles");
         if !outputs.contains(&particles) {
@@ -1920,7 +2084,7 @@ mod emitter_oracle {
         let n = cells(grid);
         let face_cells = grid.face_cells as u32;
         let mut def = serde_json::to_value(whitewater_render_def(scene.with_faces())).expect("def serialises");
-        let node = def["nodes"].as_array_mut().expect("nodes").iter_mut().find(|n| n["nodeId"] == "whitewater").expect("the step");
+        let node = find_node_mut(&mut def, "whitewater").expect("the step in the Water group");
         for (key, value) in params.as_object().expect("params") {
             node["params"][key] = value.clone();
         }
@@ -2094,9 +2258,8 @@ fn history_def() -> EffectGraphDef {
 fn authored_cursor_history_def(cursor: f32) -> EffectGraphDef {
     let mut g = Appender::new(history_def());
     let frame = g.id("frame");
-    g.def["wires"].as_array_mut().expect("wires")
-        .retain(|w| !(w["toNode"] == frame && w["toPort"] == "display_cursor"));
-    let exact = g.node("exact", "node.value", json!({"value": {"type": "Float", "value": cursor}}));
+    g.retain_wires(frame, |w| !(w["toNode"] == frame && w["toPort"] == "display_cursor"));
+    let exact = g.node_in_scope("exact", "node.value", json!({"value": {"type": "Float", "value": cursor}}), frame);
     g.wire((exact, "out"), frame, "display_cursor");
     g.finish()
 }
@@ -2246,7 +2409,7 @@ fn liquid_frame_solid_shrink_keeps_mix_capacity() {
         let mut g = Appender::new(render_def(WaterScene::dam_break(32).with_faces()));
         let frame = g.id("frame");
         if !wired {
-            g.def["wires"].as_array_mut().expect("wires").retain(|w| !(w["toNode"] == frame && w["toPort"] == "solid"));
+            g.retain_wires(frame, |w| !(w["toNode"] == frame && w["toPort"] == "solid"));
         }
         let def = g.finish();
         let spec = def.preset_metadata.as_ref()

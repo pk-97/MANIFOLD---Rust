@@ -141,32 +141,23 @@ mod tests {
                 "Water must own {id}"
             );
         }
-        let surface = def
-            .nodes
-            .iter()
-            .find(|n| n.node_id.as_str() == "surface")
-            .unwrap()
-            .group
-            .as_ref()
-            .unwrap();
+        let flat = manifold_core::flatten::flatten_groups(&def).unwrap();
         assert_eq!(
-            surface
-                .nodes
+            flat.nodes
                 .iter()
                 .filter(|n| n.type_id == "node.smooth_surface_mesh")
                 .count(),
             1
         );
         assert_eq!(
-            surface
-                .nodes
+            flat.nodes
                 .iter()
                 .filter(|n| n.type_id == "node.surface_mesh_normals")
                 .count(),
             1
         );
         assert!(
-            !surface
+            !flat
                 .nodes
                 .iter()
                 .any(|n| n.type_id == "node.relax_surface_mesh")

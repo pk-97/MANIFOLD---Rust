@@ -216,7 +216,42 @@ fn fluid_particle_blend_presets_share_display_clock_and_fuse() {
                     && n.region_index == push.region_index),
             "{report:?}"
         );
-        let json: serde_json::Value = serde_json::from_str(text).unwrap();
+        let grouped: EffectGraphDef = serde_json::from_str(text).unwrap();
+        if grouped
+            .preset_metadata
+            .as_ref()
+            .is_some_and(|metadata| metadata.id.as_str() == "WaterDamBreakGpuFlip")
+        {
+            let family = grouped
+                .nodes
+                .iter()
+                .find(|node| node.node_id.as_str() == "water_family")
+                .expect("Water family group");
+            let group = family.group.as_ref().expect("Water family body");
+            let id = |name: &str| {
+                group
+                    .nodes
+                    .iter()
+                    .find(|node| node.node_id.as_str() == name)
+                    .unwrap_or_else(|| panic!("missing Water family node {name}"))
+                    .id
+            };
+            let surface = id("surface");
+            assert!(group.wires.iter().any(|wire| {
+                wire.from_node == id("particle_push_out")
+                    && wire.from_port == "out"
+                    && wire.to_node == surface
+                    && wire.to_port == "particles"
+            }));
+            assert!(group.wires.iter().any(|wire| {
+                wire.from_node == id("solid_blend")
+                    && wire.from_port == "out"
+                    && wire.to_node == surface
+                    && wire.to_port == "solid"
+            }));
+        }
+        let flat = manifold_core::flatten::flatten_groups(&grouped).unwrap();
+        let json = serde_json::to_value(flat).unwrap();
         let wires = json["wires"].as_array().unwrap();
         let has = |from: u32, port: &str, to: u32, input: &str| {
             wires.iter().any(|w| {
@@ -241,11 +276,6 @@ fn fluid_particle_blend_presets_share_display_clock_and_fuse() {
             assert!(has(id(display), "out", id(copies), "particles"));
         }
         if json["presetMetadata"]["id"] == "WaterDamBreakGpuFlip" {
-            assert!(has(frame, "blend", id("dust_blend"), "blend"));
-            assert!(has(frame, "span", id("dust_blend"), "span"));
-            assert!(has(id("dust_blend"), "out", id("dust_copies"), "particles"));
-            assert!(has(id("particle_push_out"), "out", id("surface"), "particles"));
-            assert!(has(id("solid_blend"), "out", id("surface"), "solid"));
             assert!(has(id("state"), "identity", frame, "identity"));
         } else {
             assert!(has(id("particle_push_out"), "out", id("liquid_particle_copies"), "particles"));

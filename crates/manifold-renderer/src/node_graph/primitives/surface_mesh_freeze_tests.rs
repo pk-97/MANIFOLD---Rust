@@ -12,9 +12,15 @@ fn smoothed_surface_with_pointwise_tail() -> manifold_core::effect_graph_def::Ef
     )
     .expect("WaterDamBreakGpuFlip bundled");
     let mut preset: Value = serde_json::from_str(&source).expect("WaterDamBreakGpuFlip parses");
-    let surface = preset["nodes"]
+    let family = preset["nodes"]
         .as_array_mut()
         .expect("top-level nodes")
+        .iter_mut()
+        .find(|node| node["nodeId"] == "water_family")
+        .expect("Water family group");
+    let surface = family["group"]["nodes"]
+        .as_array_mut()
+        .expect("Water family nodes")
         .iter_mut()
         .find(|node| node["nodeId"] == "surface")
         .expect("Liquid Surface group");
