@@ -1,6 +1,6 @@
 # Water Family — one water, separate looks
 
-**Status:** PROPOSED · 2026-10-06 · Codex · not built; Peter's answers incorporated.
+**Status:** APPROVED · 2026-10-06 · Astra (draft), Fable review folded in · not built; builds after whitewater fusion P4.
 **Prerequisites:** whitewater fusion P4's builder end state landed.
 **Execution contract:** read [DESIGN_DOC_STANDARD.md](DESIGN_DOC_STANDARD.md) sections 5, 6 and 8; re-derive P4-dependent seams before implementation.
 
@@ -35,10 +35,10 @@ The committed `docs/WHITEWATER_STAGE_FUSION_DESIGN.md:3` records P0 and P1
 landed, including the copies change. Its P4 contract (`:344–350`) supplies packed
 `faces`, matching extent validation, removal of forced `with_faces()` in both
 render builders, removal of whitewater face adapters, `step.faces → whitewater.faces`,
-and regenerated presets. Explicit axis-face fixtures remain. Peter's answer
-below also drops P4's own migration rung: regenerate presets instead. This
-design depends on P4's **builder end state**, not any P4 migration. The cited
-fusion document still contains that superseded rung at this snapshot.
+and regenerated presets. Explicit axis-face fixtures remain. This design
+depends on P4's **builder end state** only. P4's own migration rung is dropped
+in the fusion design under the same answer from Peter (presets are regenerated,
+old projects are not upgraded).
 
 ## 2. Decisions
 
@@ -55,7 +55,15 @@ go.” Add Water and both shipped presets use one recipe. Particle View substitu
 only the water display. Insertion is one undo; redo restores identities.
 
 **D4 — Peter:** “Let's not do dust yet”. No Dust child; remove the dust render
-chain from regenerated presets. Preserve the simulation oracle's dust coverage.
+chain from regenerated presets. Preserve the simulation oracle's dust coverage:
+the step still emits dust and the state still captures it, so the stage and
+capture kinds stay four (`WHITEWATER_KINDS`, `gpu_flip_preset.rs:579`; the
+golden's `PORTS`, `whitewater_golden_tests.rs:35–43`; the scene captures,
+`whitewater_scene_tests.rs:2129`, `:2141`). Only the rendered kinds become three,
+as a separately named list (`RENDERED_KINDS`) driving the display wiring at
+`gpu_flip_preset.rs:636`, whose `id_named` would panic on a missing
+`dust_blend`/`dust_copies`. The golden reads stage outputs and state captures,
+never `dust_copies`.
 
 **D5 — Technical:** the recipe lives in `gpu_flip_preset.rs` beside
 `water_def`/`gpu_flip_liquid_body` (`:707`), shaped as BUG-ju9j's proposed
@@ -157,9 +165,10 @@ its role. No family Duplicate control or keyboard/context bypass.
 
 F1a owns renderer builders, golden fixtures and both
 `assets/generator-presets/WaterDamBreak{GpuFlip,Particles}.json`.
-F1b/F3 own `scene_vm.rs`, `scene_exposure.rs`, editing `scene/fluid.rs` and
+F1b/F2 own `scene_vm.rs`, `scene_exposure.rs`, editing `scene/fluid.rs` and
 `fluid/template.rs`, scene lifecycle tests, app `ui_bridge/project.rs`,
-`projection/scene.rs`, `projection/inspector.rs`, `edit_selection.rs`, UI
+`projection/scene.rs`, `projection/inspector.rs`,
+`crates/manifold-app/src/edit_selection.rs`, UI
 `scene_setup_actions.rs`, `scene_setup_panel.rs`, and mapped flows. Reuse
 content routing and the parameter host. No shader, solver or backend rewrite.
 
@@ -180,7 +189,7 @@ These are required implementation checks, not claims of passes here.
 | Real Water parent; children own material, Size and visibility, no fluid controls | `water_family_row_ownership`, `water-family-preset.json`, `no_bespoke_row_infra` / F1b |
 | Atomic insertion, physical slots and stable undo/redo IDs | `water_family_add_undo_redo`, two families after an imported compound / F1b |
 | Shared parent gate preserves child choices | `water_family_visibility_round_trip` / F1b |
-| Hide never removes a child; parent deletion is one undo; no Duplicate; rename keeps roles | `water_family_delete_undo`, `water_family_visibility_rename_round_trip`, `water-family-controls.json` / F3 |
+| Hide never removes a child; parent deletion is one undo; no Duplicate; rename keeps roles | `water_family_delete_undo`, `water_family_visibility_rename_round_trip`, `water-family-controls.json` / F2 |
 | No new locks or bespoke sliders | Added production lines scanned for `Arc<(Mutex|RwLock)|BitmapSlider::new` yield zero / all phases |
 
 ## 5. Phasing
@@ -202,13 +211,14 @@ whole-crate sweep. Every persistent phase verifies save/reload and bindings.
 - **Gate:** focused renderer check/clippy, `water_family_builder_parity`;
   regenerate Dam Break then
   Particle View with `UPDATE_GPU_FLIP_PRESET=1` snapshot tests, then both without
-  it. Run `scripts/gpu_proofs_gate.py --filter whitewater_tick_state_matches_golden`
-  and `--filter whitewater_per_tick_preset_closes_the_liquid_region`, each with
-  nonzero count. Identical fingerprints prove regrouping changed no simulation
-  values; do not refresh the golden to accept a mismatch.
-- **VERIFY-AT-IMPL:** read `whitewater_golden_tests.rs:144–152` and its probe
-  helpers: `all_emitters()` must fingerprint the step, not `dust_copies`.
-  Removing dust rendering must retain all-emitter simulation coverage.
+  it. Both tests live in the lib, so `gpu_proofs_gate.py --filter` (which runs
+  only the integration binary) would run none. Run
+  `scripts/gpu_queue.py --label water-family-f1a -- cargo test -p manifold-renderer --features gpu-proofs --lib whitewater_tick_state_matches_golden`
+  and `cargo test -p manifold-renderer --lib whitewater_per_tick_preset_closes_the_liquid_region`,
+  each with nonzero count. Identical fingerprints prove regrouping changed no
+  simulation values; do not refresh the golden to accept a mismatch.
+- **Dust split:** keep the four stage and capture kinds; drop only the
+  rendered dust chain via `RENDERED_KINDS` (D4).
 - **Demo/scope:** focused renderer snapshots and GPU proofs; L1 numeric parity.
   UI acceptance follows in F1b. Forbidden: restored adapters, copied seed recipe,
   hand-edited preset JSON, shader/solver changes.
@@ -234,7 +244,7 @@ whole-crate sweep. Every persistent phase verifies save/reload and bindings.
   No clone-and-clear Water parent, logical row count for slot reservation,
   bespoke controls or UI model writes.
 
-### F3 — Family lifecycle
+### F2 — Family lifecycle
 
 - **Entry/read-back:** F1b landed; recheck deletion, duplicate and rename paths;
   read D8/D10 and the visibility path.
