@@ -2656,7 +2656,7 @@ mod automation_clipboard_host_tests {
     }
 
     #[test]
-    fn water_family_keyboard_edit_paths_withhold_children_and_parent_duplicate() {
+    fn water_family_keyboard_edit_paths_hide_children_and_withhold_duplicate() {
         let mut h = Harness::new();
         let (layer_id, parent, child) = prepare_water_family(&mut h);
         h.ui_root.scene_setup_panel.set_selection(
@@ -2666,12 +2666,21 @@ mod automation_clipboard_host_tests {
         h.ui_root.object_cards_have_focus = true;
         for action in [
             manifold_ui::panels::actions::CardEditAction::Copy,
-            manifold_ui::panels::actions::CardEditAction::Delete,
             manifold_ui::panels::actions::CardEditAction::Cut,
             manifold_ui::panels::actions::CardEditAction::Duplicate,
         ] {
             assert!(h.host().edit_scene_items(action));
             assert!(h.rx.is_empty(), "withheld child action queued {action:?}");
+            assert!(h.ui_root.pending_keyboard_actions.is_empty());
+        }
+
+        for _ in 0..2 {
+            assert!(h.host().edit_scene_items(manifold_ui::panels::actions::CardEditAction::Delete));
+            assert!(h.rx.is_empty());
+            assert!(matches!(h.ui_root.pending_keyboard_actions.pop(),
+                Some(manifold_ui::PanelAction::Project(manifold_ui::ProjectAction::SceneSetupParamChanged(
+                    ref layer, _, node, ref param, 0.0)))
+                if *layer == layer_id && node == child && param == "visible"));
             assert!(h.ui_root.pending_keyboard_actions.is_empty());
         }
 

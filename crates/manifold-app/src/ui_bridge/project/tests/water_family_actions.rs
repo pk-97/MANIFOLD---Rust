@@ -62,23 +62,45 @@ fn rows(project: &Project, layer: &LayerId) -> Vec<manifold_renderer::node_graph
 }
 
 fn rename_scene_object(project: &mut Project, layer: &LayerId, object_node_id: u32, name: &str) {
-    let default = effective_def(project, layer);
+    let command = panel_rename_command(project, layer, object_node_id, name);
     let mut editing = EditingService::new();
-    editing.execute(
-        Box::new(manifold_editing::commands::graph::RenameSceneObjectCommand::new(
-            manifold_core::GraphTarget::Generator(layer.clone()),
-            Vec::new(),
-            object_node_id,
-            name.to_string(),
-            default,
-        )),
-        project,
-    );
+    editing.execute(command, project);
     assert_eq!(editing.take_rejection(), None);
 }
 
+/// Exercise the panel's header and keyboard/context rename action addresses.
+/// Text entry/commit gesture coverage is deferred to BUG-ajyri.
+pub(super) fn panel_rename_command(project: &Project, layer: &LayerId, object_node_id: u32, name: &str)
+    -> Box<dyn manifold_editing::command::Command + Send>
+{
+    let mut ui = sync_water_ui(project, layer);
+    ui.scene_setup_panel.set_selection(layer.clone(),
+        manifold_ui::panels::scene_setup_panel::SceneSelection::Object(object_node_id));
+    build_scene_tree(&mut ui);
+    let header = ui.tree.nodes().iter().find(|node|
+        ui.tree.name_of(node.id) == Some("scene_setup.properties.name_value")).unwrap().id;
+    let (_, actions) = ui.scene_setup_panel.handle_event(&manifold_ui::UIEvent::Click {
+        node_id: header, pos: manifold_ui::Vec2::ZERO, modifiers: manifold_ui::Modifiers::default(),
+    }, &mut ui.tree);
+    let [manifold_ui::PanelAction::Root(manifold_ui::RootAction::SceneSetupRenameObjectClicked(
+        action_layer, action_object, current_name))] = actions.as_slice() else { panic!("panel rename action"); };
+    assert_eq!(action_layer, layer);
+    assert_eq!(*action_object, object_node_id);
+    assert!(matches!(ui.scene_setup_panel.rename_selection_action(),
+        Some(manifold_ui::PanelAction::Root(manifold_ui::RootAction::SceneSetupRenameObjectClicked(l, id, n)))
+        if l == *action_layer && id == *action_object && n == *current_name));
+    let default = effective_def(project, layer);
+    Box::new(manifold_editing::commands::graph::RenameSceneObjectCommand::new(
+            manifold_core::GraphTarget::Generator(action_layer.clone()),
+            Vec::new(),
+            *action_object,
+            name.to_string(),
+            default,
+        ))
+}
+
 #[test]
-fn real_water_withholds_child_actions_and_parent_duplicate() {
+fn real_water_hides_child_without_removing_and_withholds_parent_duplicate() {
     let (mut project, layer, render) = super::water_family::water_project();
     add_water(&mut project, &layer, render);
     let family = rows(&project, &layer);
@@ -142,9 +164,34 @@ fn real_water_withholds_child_actions_and_parent_duplicate() {
     let selected = ui.scene_setup_panel.selected_scene_item().unwrap();
     assert!(selected.is_family_child);
     assert!(!selected.is_family_parent);
+    let hide_button = ui.tree
+        .nodes()
+        .iter()
+        .find_map(|node| {
+            (ui.tree.name_of(node.id) == Some("scene_setup.properties.hide"))
+                .then_some(node.id)
+        })
+        .expect("Water child Hide button");
+    let (_, hide_actions) = ui.scene_setup_panel.handle_event(
+        &manifold_ui::UIEvent::Click {
+            node_id: hide_button,
+            pos: manifold_ui::Vec2::ZERO,
+            modifiers: manifold_ui::Modifiers::default(),
+        },
+        &mut ui.tree,
+    );
+    assert!(matches!(
+        hide_actions.as_slice(),
+        [manifold_ui::PanelAction::Project(
+            manifold_ui::ProjectAction::SceneSetupParamChanged(_, scope, node, param, value)
+        )] if *scope == foam.visible_addr.scope_path
+            && *node == foam.visible_addr.node_doc_id
+            && param == &foam.visible_addr.param_id
+            && *value == 0.0
+    ));
     assert!(!tree_has_name(&ui.tree, "scene_setup.properties.duplicate"));
     assert!(!tree_has_name(&ui.tree, "scene_setup.properties.remove"));
-    assert!(!ui.scene_setup_panel.scene_item_edit_allowed(
+    assert!(ui.scene_setup_panel.scene_item_edit_allowed(
         manifold_ui::panels::actions::CardEditAction::Delete,
     ));
     assert!(!ui.scene_setup_panel.scene_item_edit_allowed(
@@ -158,7 +205,58 @@ fn real_water_withholds_child_actions_and_parent_duplicate() {
         assert!(!ui.tree.nodes().iter().any(|node| node.text.as_deref() == Some(label)),
             "child context menu must omit {label}");
     }
-    assert!(ui.scene_setup_panel.remove_selection_action().is_none());
+    assert!(ui.tree.nodes().iter().any(|node| node.text.as_deref() == Some("Hide")));
+    let hide_menu_id = ui.tree
+        .nodes()
+        .iter()
+        .rev()
+        .find_map(|node| (node.text.as_deref() == Some("Hide")).then_some(node.id))
+        .expect("Water child Hide context item");
+    let menu_action = ui.dropdown.handle_event(
+        &manifold_ui::UIEvent::Click {
+            node_id: hide_menu_id,
+            pos: manifold_ui::Vec2::ZERO,
+            modifiers: manifold_ui::Modifiers::default(),
+        },
+        &mut ui.tree,
+    );
+    assert!(matches!(
+        menu_action,
+        Some(manifold_ui::panels::dropdown::DropdownAction::SelectedAction(
+            manifold_ui::PanelAction::Project(
+                manifold_ui::ProjectAction::SceneSetupParamChanged(_, scope, node, param, value)
+            )
+        )) if scope == foam.visible_addr.scope_path
+            && node == foam.visible_addr.node_doc_id
+            && param == foam.visible_addr.param_id
+            && value == 0.0
+    ));
+    assert!(matches!(
+        ui.scene_setup_panel.hide_selection_action(),
+        Some(manifold_ui::PanelAction::Project(
+            manifold_ui::ProjectAction::SceneSetupParamChanged(_, scope, node, param, value)
+        )) if scope == foam.visible_addr.scope_path
+            && node == foam.visible_addr.node_doc_id
+            && param == foam.visible_addr.param_id
+            && value == 0.0
+    ));
+    assert!(matches!(
+        ui.scene_setup_panel.remove_selection_action(),
+        Some(manifold_ui::PanelAction::Project(
+            manifold_ui::ProjectAction::SceneSetupParamChanged(_, _, _, param, value)
+        )) if param == "visible" && value == 0.0
+    ));
+    let command = apply_scene_param_write(&project, &layer, foam.visible_addr.scope_path.clone(),
+        foam.visible_addr.node_doc_id, "visible", 0.0).unwrap();
+    EditingService::new().execute(command, &mut project);
+    let mut hidden_ui = sync_water_ui(&project, &layer);
+    hidden_ui.scene_setup_panel.set_selection(layer.clone(),
+        manifold_ui::panels::scene_setup_panel::SceneSelection::Object(foam.object_node_id));
+    build_scene_tree(&mut hidden_ui);
+    assert!(tree_has_name(&hidden_ui.tree, "scene_setup.properties.hide"), "Hide remains present when hidden");
+    assert!(matches!(hidden_ui.scene_setup_panel.remove_selection_action(),
+        Some(manifold_ui::PanelAction::Project(manifold_ui::ProjectAction::SceneSetupParamChanged(
+            _, _, _, ref param, 0.0))) if param == "visible"));
 }
 
 #[test]

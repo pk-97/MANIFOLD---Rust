@@ -289,6 +289,26 @@ fn scene_physics_two_fluids_get_independent_ids_and_sections() {
 }
 
 #[test]
+fn scene_physics_template_name_prefix_preserves_collision_numbering() {
+    let mut def = render_scene_graph(0, false);
+    let mut occupied = node(500, "occupied_water", GROUP_TYPE_ID);
+    occupied.handle = Some("Water 1".into());
+    def.nodes.push(occupied);
+
+    let (mut project, target) = project_with_graph(def.clone());
+    let mut command = command(target.clone(), def);
+    command.template.name_prefix = "Water";
+    command.execute(&mut project);
+
+    let result = graph(&project, &target);
+    assert!(command.was_applied());
+    assert!(result.nodes.iter().any(|node| node.handle.as_deref() == Some("Water 2 Graph")));
+    assert!(result.preset_metadata.as_ref().unwrap().params.iter().any(|param| {
+        param.section.as_deref() == Some("Water 2 - Simulation")
+    }));
+}
+
+#[test]
 fn scene_physics_duplicate_fluid_keeps_shared_world_controls() {
     use crate::commands::graph::DuplicateSceneObjectCommand;
 
@@ -537,6 +557,7 @@ fn gpu_template() -> LiquidTemplate {
     let mut output = node(4, "fluid_output", GROUP_OUTPUT_TYPE_ID);
     output.handle = None;
     LiquidTemplate {
+        name_prefix: "Fluid",
         object_outputs: vec!["object".into()],
         nodes: vec![live, surface, object, output],
         wires: vec![wire(1, "frame", 2, "frame"), wire(2, "vertices", 3, "vertices"), wire(3, "object", 4, "object")],

@@ -1,7 +1,11 @@
 {
-  "_comment": "Flow -> headless scene map for the UI-flow gate (UI_FUNNEL_DECOMPOSITION S8). Each flow runs as `cargo xtask ui-snap <scene> --script scripts/ui-flows/<flow>.json`; the scene builds a fixture (crates/manifold-app/src/ui_snapshot/fixtures.rs) whose tree carries the flow's selectors. Scenes derived from selectors vs fixtures.rs + the fixed rules (select-and-inspect=inspector; scene-setup-*=gltfscene except empty-states=timeline; drag-clip=timeline) and VERIFIED by scripts/run_ui_flows.py: every 'flows' entry PASSes; every 'expected_fail' entry is a known-red flow (mapped to its correct authoring scene, red for a tracked/pending reason, NOT a mapping error \u2014 the whole-scene sweep confirmed none pass under any built-in fixture). Validate/regenerate: scripts/run_ui_flows.py.",
+  "_comment": "Flow -> headless scene map for the UI-flow gate (UI_FUNNEL_DECOMPOSITION S8). Each flow runs as `cargo xtask ui-snap <scene> --script scripts/ui-flows/<flow>.json`; the scene builds a fixture (crates/manifold-app/src/ui_snapshot/fixtures.rs) whose tree carries the flow's selectors. Scenes derived from selectors vs fixtures.rs + the fixed rules (select-and-inspect=inspector; scene-setup-*=gltfscene except empty-states=timeline; drag-clip=timeline) and VERIFIED by scripts/run_ui_flows.py: every 'flows' entry PASSes; every 'expected_fail' entry is a known-red flow (mapped to its correct authoring scene, red for a tracked/pending reason, NOT a mapping error \u2014 the whole-scene sweep confirmed none pass under any built-in fixture). Validate/regenerate: scripts/run_ui_flows.py. water-family-controls: rename gesture coverage is deferred to BUG-ajyri (share performer text input with ui-snap); CPU water_family_visibility_rename_round_trip covers parent/child rename and save/reload.",
   "_path_triggers_comment": "Landing flow gate (BUG-313 postmortem): `scripts/run_ui_flows.py --touched <git-range>` diffs the range, matches each touched path against these prefixes, and runs the union of the mapped flow-name filters (same substring semantics as positional filters). A touched scripts/ui-flows/<flow>.json always runs that flow. No prefix match = exit 0, nothing run. Keep prefixes on the UI value-path surfaces flows actually exercise; a new panel/projection file with flow coverage gets a row here in the same commit.",
   "path_triggers": {
+    "crates/manifold-app/src/ui_bridge/project/tests/water_family": ["water-family-controls"],
+    "crates/manifold-app/src/input_host": ["water-family-controls"],
+    "crates/manifold-app/src/ui_root/dropdowns.rs": ["water-family-controls"],
+    "crates/manifold-editing/src/commands/graph/scene.rs": ["water-family-controls"],
     "crates/manifold-ui/src/interaction_overlay.rs": [
       "automation",
       "toggle-lanes"
@@ -27,7 +31,8 @@
       "scene-fluid-role-lifecycle",
       "scene-fluid-object-lifecycle",
       "scene-forces-controls",
-      "water-family-preset"
+      "water-family-preset",
+      "water-family-controls"
     ],
     "crates/manifold-ui/src/panels/scene_setup_panel.rs": [
       "scene-setup",
@@ -39,7 +44,8 @@
       "scene-fluid-role-lifecycle",
       "scene-fluid-object-lifecycle",
       "scene-forces-controls",
-      "water-family-preset"
+      "water-family-preset",
+      "water-family-controls"
     ],
     "crates/manifold-editing/src/commands/graph/scene/fluid": ["scene-fluid-authoring", "scene-fluid-template", "water-family-preset"],
     "crates/manifold-core/src/scene_exposure.rs": ["scene-fluid-dam-break-controls", "water-family-preset"],
@@ -162,6 +168,7 @@
     ]
   },
   "flows": {
+    "water-family-controls": "scene-setup",
     "scene-fluid-authoring": "fluidauthoring",
     "scene-fluid-template": "fluidauthoring",
     "scene-fluid-dam-break-controls": "waterdambreak",

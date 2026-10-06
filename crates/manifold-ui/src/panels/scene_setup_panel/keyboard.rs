@@ -33,7 +33,10 @@ impl ScenePanel {
             | crate::panels::actions::CardEditAction::Duplicate => {
                 !item.is_family_child && !item.is_family_parent
             }
-            crate::panels::actions::CardEditAction::Delete => !item.is_family_child,
+            // Delete on a family child is the keyboard alias for Hide. It
+            // never removes the child graph output; parents retain the group
+            // removal path below.
+            crate::panels::actions::CardEditAction::Delete => true,
             _ => true,
         }
     }
@@ -142,6 +145,9 @@ impl ScenePanel {
 
     pub fn remove_selection_action(&self) -> Option<PanelAction> {
         let item = self.selected_scene_item()?;
+        if item.is_family_child {
+            return self.hide_selection_action();
+        }
         if !self.scene_item_edit_allowed(crate::panels::actions::CardEditAction::Delete) {
             return None;
         }
@@ -150,6 +156,33 @@ impl ScenePanel {
         } else {
             ProjectAction::SceneSetupRemoveObject(item.layer_id, item.scene, item.index)
         }))
+    }
+
+    /// Build the permanent Water-family child Hide action. This shares the
+    /// exact visible-row address used by the outliner eye, but always writes
+    /// zero so repeated Hide invocations remain valid and idempotent.
+    pub fn hide_selection_action(&self) -> Option<PanelAction> {
+        let vm = self.state.as_live()?;
+        let item = self.selected_scene_item()?;
+        if !item.is_family_child {
+            return None;
+        }
+        let object_node_id = match self.selection.get(&vm.layer_id)? {
+            SceneSelection::Object(id) => *id,
+            _ => return None,
+        };
+        let row = vm.objects.iter().find_map(|object| match object {
+            ObjectRowVm::Known(row)
+                if row.object_node_id == object_node_id && row.look_mesh.is_some() => Some(row),
+            _ => None,
+        })?;
+        Some(PanelAction::Project(ProjectAction::SceneSetupParamChanged(
+            vm.layer_id.clone(),
+            row.visible.addr.scope_path.clone(),
+            row.visible.addr.node_doc_id,
+            row.visible.addr.param_id.clone(),
+            0.0,
+        )))
     }
 
     pub fn frame_selection_action(&self) -> Option<PanelAction> {

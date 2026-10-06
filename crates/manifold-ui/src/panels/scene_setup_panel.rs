@@ -90,6 +90,9 @@ const OBJ_OFF_PHYSICS: u64 = 36;
 const OBJ_OFF_FLUID_ROLE: u64 = 37;
 const OBJ_OFF_FLUID_ROLE_TARGET: u64 = 38;
 const OBJ_OFF_FLUID_ROLE_REMOVE: u64 = 39;
+/// Water-family child Hide button; unlike the outliner eye this is a
+/// one-way local write and is always present, including for hidden rows.
+const OBJ_OFF_HIDE: u64 = 40;
 const MATERIAL_SWATCH_KEY_BASE: u64 = 1;
 const MATERIAL_LOOK_KEY_BASE: u64 = 97_000;
 
@@ -1051,6 +1054,10 @@ pub struct ScenePanel {
     /// `!(value > 0.5)` as 0.0/1.0) through the same
     /// `SceneSetupParamChanged` fourth-surface path every other row uses.
     outliner_eye_ids: Vec<(NodeId, RowValue)>,
+    /// Every selected Water-family child properties header Hide button this
+    /// frame — `(node_id, the child's visible write row)`. The action always
+    /// writes zero; it never removes the child graph output.
+    object_hide_ids: Vec<(NodeId, RowValue)>,
     /// `(identity_node_id, name_label_node_id, current_name)` for the
     /// properties header's editable name row, when a Known object is
     /// selected this frame (`object_node_id`, the exact address
@@ -1180,6 +1187,7 @@ impl Default for ScenePanel {
             selection: std::collections::HashMap::new(),
             outliner_row_ids: Vec::new(),
             outliner_eye_ids: Vec::new(),
+            object_hide_ids: Vec::new(),
             object_name_ids: Vec::new(),
             object_remove_ids: Vec::new(),
             object_duplicate_ids: Vec::new(),
@@ -1487,6 +1495,7 @@ impl ScenePanel {
         self.outliner_row_ids.clear();
         self.group_toggle_ids.clear();
         self.outliner_eye_ids.clear();
+        self.object_hide_ids.clear();
         self.object_name_ids.clear();
         self.object_remove_ids.clear();
         self.object_duplicate_ids.clear();
@@ -2793,6 +2802,19 @@ impl ScenePanel {
                             row_value.addr.node_doc_id,
                             row_value.addr.param_id.clone(),
                             new_value,
+                        )));
+                    } else if let Some((_, row_value)) =
+                        self.object_hide_ids.iter().find(|(id, _)| *id == *node_id)
+                    {
+                        // Water-family child Hide is intentionally one-way:
+                        // it writes the local visible parameter to zero even
+                        // when the row is already hidden.
+                        actions.push(PanelAction::Project(ProjectAction::SceneSetupParamChanged(
+                            vm.layer_id.clone(),
+                            row_value.addr.scope_path.clone(),
+                            row_value.addr.node_doc_id,
+                            row_value.addr.param_id.clone(),
+                            0.0,
                         )));
                     } else if let Some((_, index)) =
                         self.object_frame_ids.iter().find(|(id, _)| *id == *node_id)

@@ -24,8 +24,8 @@ pub enum ExposureSet {
     Look,
 }
 
-/// One node's card rows. `section` is the suffix after `"<Fluid N> - "`;
-/// `None` uses the bare fluid handle.
+/// One node's card rows. `section` is the suffix after `"<family N> - "`;
+/// `None` uses the bare family handle.
 #[derive(Clone, Debug)]
 pub enum TemplateExposure {
     Node { node: u32, set: ExposureSet, section: Option<&'static str> },
@@ -39,7 +39,7 @@ pub enum TemplateExposure {
 /// gives every node, nested ones included, a fresh document id on insert.
 ///
 /// A node's `handle` is a suffix: `Some("Simulation")` becomes
-/// `"<Fluid N> Simulation"`, `Some("")` is the bare fluid handle, `None`
+/// `"<family N> Simulation"`, `Some("")` is the bare family handle, `None`
 /// carries no handle. A node's `node_id` is the stable-id prefix.
 ///
 /// The body holds exactly one liquid domain, at any group depth. The command
@@ -47,6 +47,9 @@ pub enum TemplateExposure {
 /// (gravity, speed, reset) to it through every group boundary on the way.
 #[derive(Clone, Debug)]
 pub struct LiquidTemplate {
+    /// Prefix used for the inserted family's first-unused numbered handle.
+    /// This is runtime recipe metadata and is intentionally not serialized.
+    pub name_prefix: &'static str,
     pub nodes: Vec<EffectGraphNode>,
     pub wires: Vec<EffectGraphWire>,
     pub output_node: u32,
@@ -189,6 +192,7 @@ pub fn flip_scene_fluid_template() -> LiquidTemplate {
     let output = template_node(OUTPUT, "fluid_output", GROUP_OUTPUT_TYPE_ID, None, BTreeMap::new());
 
     LiquidTemplate {
+        name_prefix: "Fluid",
         nodes: vec![fluid, source, material, object, output, role, domain],
         group_id_slot: 5,
         wires: vec![

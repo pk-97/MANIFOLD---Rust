@@ -50,6 +50,7 @@ pub(crate) fn gpu_flip_liquid_template() -> manifold_editing::commands::graph::L
     }
     let output_node = id(manifold_renderer::node_graph::LIQUID_BODY_OUTPUT);
     LiquidTemplate {
+        name_prefix: "Water",
         group_id_slot: body.nodes.len(),
         nodes: body.nodes,
         wires: body.wires,

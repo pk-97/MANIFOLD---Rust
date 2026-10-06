@@ -2847,6 +2847,26 @@ fn find_scene_object_scope(
     None
 }
 
+/// Recognise the primary Water output, including Particle View's copies path.
+fn is_water_family_parent(group: &GroupDef, object: u32) -> bool {
+    let mut domains = group.nodes.iter().filter(|node|
+        manifold_core::liquid_domain::is_liquid_domain(&node.type_id));
+    let Some(domain) = domains.next() else { return false; };
+    if domains.next().is_some() || !upstream_ids_for_child(group, object).contains(&domain.id) {
+        return false;
+    }
+    let mut members = std::collections::HashSet::new();
+    ["object", "object_1", "object_2", "object_3"].iter().all(|port| {
+        let Some(wire) = group.wires.iter().find(|wire| wire.to_port == *port
+            && group.nodes.iter().any(|node| node.id == wire.to_node
+                && node.type_id == GROUP_OUTPUT_TYPE_ID)) else { return false; };
+        (*port != "object" || wire.from_node == object)
+            && group.nodes.iter().any(|node| node.id == wire.from_node
+                && node.type_id == "node.scene_object")
+            && members.insert(wire.from_node)
+    })
+}
+
 #[derive(Debug)]
 pub struct RenameSceneObjectCommand {
     target: GraphTarget,
@@ -2864,14 +2884,14 @@ pub struct RenameSceneObjectCommand {
     catalog_default: EffectGraphDef,
     /// Captured on first successful execute.
     prev: Option<RenameSceneObjectPrev>,
-    /// The containing group path when the panel addressed a child directly by
-    /// its scene_object id.  In that mode the enclosing group keeps its own
-    /// handle; only the child handle and its section metadata change.
+    /// Undo scope for a row addressed by its nested scene_object id: the
+    /// containing body for a look child, or the group owner for Water.
     nested_scope: Option<Vec<u32>>,
     /// D5 rename-sweep undo state — same shape as `RenameGroupCommand::swept`.
     /// Only ever populated when the object is grouped (an ungrouped bare
     /// scene_object has no group name for a card section to have followed).
     swept: Vec<(String, Option<String>)>,
+    swept_metadata: Vec<(String, Option<String>)>,
 }
 
 impl RenameSceneObjectCommand {
@@ -2891,6 +2911,7 @@ impl RenameSceneObjectCommand {
             prev: None,
             nested_scope: None,
             swept: Vec::new(),
+            swept_metadata: Vec::new(),
         }
     }
 }
@@ -2901,6 +2922,7 @@ impl Command for RenameSceneObjectCommand {
         let producer_id = self.object_node_id;
         let new_handle = self.new_handle.clone();
         let first_time = self.prev.is_none();
+        let mut family_section_name = None;
 
         let captured =
             with_target_graph_mut(project, &self.target, &self.catalog_default, true, |def| {
@@ -2923,6 +2945,31 @@ impl Command for RenameSceneObjectCommand {
                     let nested_scope = find_scene_object_scope(&def.nodes, producer_id, &mut nested)?;
                     if nested_scope.is_empty() {
                         return None;
+                    }
+                    let group_scope = &nested_scope[..nested_scope.len() - 1];
+                    let group_id = *nested_scope.last()?;
+                    let (owners, _) = descend_level(&mut def.nodes, &mut def.wires, group_scope)?;
+                    let owner = owners.iter().find(|node| node.id == group_id)?;
+                    if owner.group.as_deref().is_some_and(|body| is_water_family_parent(body, producer_id)) {
+                        if owners.iter().any(|node| node.id != group_id
+                            && node.handle.as_deref() == Some(new_handle.as_str())) {
+                            return None;
+                        }
+                        let owner = owners.iter_mut().find(|node| node.id == group_id)?;
+                        let body = owner.group.as_deref_mut()?;
+                        if body.nodes.iter().any(|node| node.id != producer_id
+                            && node.handle.as_deref() == Some(new_handle.as_str())) {
+                            return None;
+                        }
+                        let child = body.nodes.iter_mut().find(|node| node.id == producer_id)?;
+                        let previous = child.handle.clone();
+                        family_section_name = previous.clone();
+                        child.handle = Some(new_handle.clone());
+                        let previous_group = owner.handle.replace(new_handle.clone());
+                        let mut inside = Vec::new();
+                        collect_node_ids(&body.nodes, &mut inside);
+                        return Some(((Some(producer_id), previous,
+                            Some((group_id, previous_group)), inside), Some(group_scope.to_vec())));
                     }
                     let (parent_nodes, _parent_wires) = descend_level(&mut def.nodes, &mut def.wires, &nested_scope)?;
                     if parent_nodes.iter().any(|node| {
@@ -2992,14 +3039,11 @@ impl Command for RenameSceneObjectCommand {
             self.prev = Some((scene_object_id, prev_object_handle, prev_group.clone()));
             self.nested_scope = nested_scope;
         }
-        if !first_time {
-            return;
-        }
-
         // D5 sweep — only runs when the object is grouped (`prev_group` is
         // `Some`) and had a prior name (nothing could be sectioned under an
         // unnamed group).
-        let Some(old_name) = prev_group.and_then(|(_, prev_handle)| prev_handle) else {
+        let family = family_section_name.is_some();
+        let Some(old_name) = family_section_name.or_else(|| prev_group.and_then(|(_, name)| name)) else {
             return;
         };
         let Some(inst) = resolve_target_instance(&self.target, project) else {
@@ -3034,18 +3078,46 @@ impl Command for RenameSceneObjectCommand {
                     .collect()
             })
             .unwrap_or_default();
+        let renamed_section = |section: &Option<String>| -> Option<String> {
+            let section = section.as_deref()?;
+            if section == old_name { return Some(self.new_handle.clone()); }
+            family.then(|| section.strip_prefix(&format!("{old_name} - ")))
+                .flatten().map(|suffix| format!("{} - {suffix}", self.new_handle))
+        };
         self.swept.clear();
-        for param_id in target_ids {
-            if let Some(p) = inst.params.get_mut(&param_id)
-                && p.spec.section.as_deref() == Some(old_name.as_str())
+        self.swept_metadata.clear();
+        // Shared bindings repeat ids. Preserve both live and authored sections.
+        let target_ids: std::collections::HashSet<_> = target_ids.into_iter().collect();
+        for param_id in &target_ids {
+            if let Some(p) = inst.params.get_mut(param_id)
+                && let Some(section) = renamed_section(&p.spec.section)
             {
-                self.swept.push((param_id, p.spec.section.clone()));
-                p.spec.section = Some(self.new_handle.clone());
+                self.swept.push((param_id.clone(), p.spec.section.clone()));
+                p.spec.section = Some(section);
+            }
+        }
+        if let Some(meta) = inst.graph.as_mut().and_then(|graph| graph.preset_metadata.as_mut()) {
+            for spec in &mut meta.params {
+                if target_ids.contains(&spec.id)
+                    && let Some(section) = renamed_section(&spec.section)
+                {
+                    self.swept_metadata.push((spec.id.clone(), spec.section.clone()));
+                    spec.section = Some(section);
+                }
             }
         }
     }
 
     fn undo(&mut self, project: &mut Project) {
+        if let Some(inst) = resolve_target_instance(&self.target, project)
+            && let Some(meta) = inst.graph.as_mut().and_then(|graph| graph.preset_metadata.as_mut())
+        {
+            for (id, section) in self.swept_metadata.drain(..) {
+                if let Some(spec) = meta.params.iter_mut().find(|spec| spec.id == id) {
+                    spec.section = section;
+                }
+            }
+        }
         if !self.swept.is_empty()
             && let Some(inst) = resolve_target_instance(&self.target, project)
         {

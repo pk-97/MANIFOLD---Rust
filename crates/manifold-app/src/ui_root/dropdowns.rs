@@ -1598,10 +1598,19 @@ impl UIRoot {
                     items.retain(|item| match item.label.as_str() {
                         "Copy" => can_copy,
                         "Cut" => can_cut,
-                        "Delete" => can_remove,
+                        // A Water-family child has no graph-removal menu
+                        // item; its permanent Hide action writes visible=0.
+                        "Delete" => can_remove && !selected.is_family_child,
                         "Duplicate" => can_duplicate,
                         _ => true,
                     });
+                    if selected.is_family_child
+                        && let Some(action) = self.scene_setup_panel.hide_selection_action()
+                    {
+                        items.push(DropdownItem::new("Hide")
+                            .with_separator()
+                            .with_action(action));
+                    }
                     items.push(DropdownItem::new("Rename").with_action(PanelAction::Root(RootAction::SceneItemRename)));
                     items.push(DropdownItem::new("Move Up").with_action(PanelAction::Root(RootAction::SceneItemMove(-1))));
                     items.push(DropdownItem::new("Move Down").with_action(PanelAction::Root(RootAction::SceneItemMove(1))));

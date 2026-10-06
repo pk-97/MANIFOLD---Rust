@@ -963,7 +963,8 @@ impl ScenePanel {
 
     /// Object properties header: editable name (click to rename — same
     /// single-click-opens-text-input UX the outliner/graph rename affordance
-    /// already uses) + Duplicate + Remove (D11).
+    /// already uses) + Frame, with a permanent child Hide action or the
+    /// regular object's Duplicate + Remove actions (D11).
     fn build_object_properties_header(
         &mut self,
         tree: &mut UITree,
@@ -973,13 +974,15 @@ impl ScenePanel {
         row: &ObjectKnownRow,
     ) -> f32 {
         // Frame needs two icon-cell widths for its five-letter label. Keep the
-        // existing total header budget so the name, duplicate, and remove
-        // cells retain their established positions and remain reachable.
+        // existing total header budget so the name and action cells retain
+        // their established positions and remain reachable.
         let frame_w = STEP_W * 2.0;
         let family_parent = self.is_family_parent(row);
+        let show_hide = row.look_mesh.is_some();
         let show_duplicate = row.look_mesh.is_none() && !family_parent;
         let show_remove = row.look_mesh.is_none();
         let btn_w = frame_w
+            + frame_w * (show_hide as u8) as f32
             + STEP_W * (show_duplicate as u8 + show_remove as u8) as f32;
         let name_w = inner_w - btn_w - 8.0;
         let name_id = tree.add_button_keyed(
@@ -1015,6 +1018,21 @@ impl ScenePanel {
         tree.set_name(frame_id, "scene_setup.properties.frame");
 
         let mut action_x = inner_x + name_w + 4.0 + frame_w;
+        if show_hide {
+            let hide_id = tree.add_button_keyed(
+                Some(self.content_parent),
+                action_x,
+                cy,
+                frame_w,
+                ROW_H,
+                btn_style(),
+                "Hide",
+                obj_key(row.object_node_id as usize, OBJ_OFF_HIDE),
+            );
+            tree.set_name(hide_id, "scene_setup.properties.hide");
+            self.object_hide_ids.push((hide_id, row.visible.clone()));
+            action_x += frame_w;
+        }
         if show_duplicate {
             let dup_id = tree.add_button_keyed(
                 Some(self.content_parent),

@@ -370,7 +370,7 @@ impl Command for AddSceneFluidCommand {
 
             let mut handles = HashSet::new();
             collect_all_handles(&def.nodes, &mut handles);
-            let fluid_handle = next_fluid_handle(&mut handles);
+            let fluid_handle = next_fluid_handle(template.name_prefix, &mut handles);
             let group_handle = dedup_handle(&format!("{fluid_handle} Graph"), &mut handles);
             for node in &mut body_nodes {
                 node.handle = match node.handle.take() {
@@ -552,10 +552,10 @@ fn int(value: i32) -> SerializedParamValue {
     SerializedParamValue::Int { value }
 }
 
-fn next_fluid_handle(handles: &mut HashSet<String>) -> String {
+fn next_fluid_handle(prefix: &str, handles: &mut HashSet<String>) -> String {
     let mut index = 1u32;
     loop {
-        let candidate = format!("Fluid {index}");
+        let candidate = format!("{prefix} {index}");
         if !handles.contains(&candidate) {
             handles.insert(candidate.clone());
             return candidate;
