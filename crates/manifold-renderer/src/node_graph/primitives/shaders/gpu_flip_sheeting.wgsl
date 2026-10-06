@@ -37,9 +37,11 @@ struct ClockPlan {
 @group(0) @binding(6) var<storage, read_write> sheet_b: array<u32>;
 // One bit per half-cell, by ParticleMaskGrid's two floors.
 @group(0) @binding(7) var<storage, read_write> mask: array<atomic<u32>>;
-// Four phase-2 markers per cell: local position, w = input index bits.
+// Fixed 32-slot bucket rows. Selection writes eight four-marker segments;
+// build_buckets merges each row before evaluation. w stays input index bits.
 @group(0) @binding(8) var<storage, read_write> selected: array<vec4<f32>>;
-@group(0) @binding(9) var<storage, read_write> selected_count: array<u32>;
+// Hard cap: at most four selected markers per cell.
+@group(0) @binding(9) var<storage, read_write> cell_counts: array<u32>;
 // Per half-cell: the lowest claiming candidate rank.
 @group(0) @binding(10) var<storage, read_write> claims: array<atomic<u32>>;
 // Per cell: bit o marks offset o a candidate, bit 8 + o a claimant.
@@ -228,7 +230,7 @@ fn clear(@builtin(global_invocation_id) gid: vec3<u32>) {
     atomicStore(&sheet_a[c], 0u);
     sheet_b[c] = 0u;
     atomicStore(&mask[c], 0u);
-    selected_count[c] = 0u;
+    cell_counts[c] = 0u;
     atomicStore(&flags[c], 0u);
     for (var o = 0u; o < 8u; o = o + 1u) {
         atomicStore(&claims[8u * c + o], NO_CLAIM);
@@ -317,10 +319,19 @@ fn select_markers(@builtin(global_invocation_id) gid: vec3<u32>) {
         let p = local(particles[s]);
         let value = sample(p);
         if value >= u.max_depth || value < -u.max_depth { continue; }
-        selected[4u * c + n] = vec4<f32>(p, bitcast<f32>(order[s]));
+        selected[segment_base(cell_coord(c)) + n] = vec4<f32>(p, bitcast<f32>(order[s]));
         n = n + 1u;
     }
-    selected_count[c] = n;
+    cell_counts[c] = n;
+}
+
+fn bucket_flat(b: vec3<i32>) -> u32 {
+    return u32(b.x) + u.bx * (u32(b.y) + u.by * u32(b.z));
+}
+
+fn segment_base(c: vec3<i32>) -> u32 {
+    let lane = u32(c.x & 1) + 2u * u32(c.y & 1) + 4u * u32(c.z & 1);
+    return 32u * bucket_flat(c / 2) + 4u * lane;
 }
 
 // One coarse 2-cell bucket's phase-2 markers in input order: the eight
@@ -336,7 +347,7 @@ fn fill_bucket(b: vec3<i32>) -> u32 {
         counts[l] = 0u;
         if in_range(c) {
             cells[l] = flat(c);
-            counts[l] = selected_count[cells[l]];
+            counts[l] = cell_counts[cells[l]];
         }
     }
     var n = 0u;
@@ -345,16 +356,32 @@ fn fill_bucket(b: vec3<i32>) -> u32 {
         var best_index = 0xffffffffu;
         for (var l = 0; l < 8; l = l + 1) {
             if heads[l] < counts[l] {
-                let index = bitcast<u32>(selected[4u * cells[l] + heads[l]].w);
+                let index = bitcast<u32>(selected[32u * bucket_flat(b) + 4u * u32(l) + heads[l]].w);
                 if index < best_index { best_index = index; best = l; }
             }
         }
         if best < 0 { break; }
-        bucket[n] = selected[4u * cells[best] + heads[best]];
+        bucket[n] = selected[32u * bucket_flat(b) + 4u * u32(best) + heads[best]];
         heads[best] = heads[best] + 1u;
         n = n + 1u;
     }
     return n;
+}
+
+// One invocation owns a whole row. Complete the merge in private memory
+// before overwriting any source segment (including unread heads).
+@compute @workgroup_size(256)
+fn build_buckets(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if !clock_active() { return; }
+    let row = gid.x;
+    if row >= u.bx * u.by * u.bz { return; }
+    let b = vec3<i32>(i32(row % u.bx), i32(row / u.bx % u.by), i32(row / (u.bx * u.by)));
+    let n = fill_bucket(b);
+    for (var m = 0u; m < n; m = m + 1u) {
+        selected[32u * row + m] = bucket[m];
+    }
+    // Feathering is finished: sheet_b is now the bucket row lengths.
+    sheet_b[row] = n;
 }
 
 fn bucket_dims() -> vec3<i32> { return vec3<i32>(i32(u.bx), i32(u.by), i32(u.bz)); }
@@ -399,9 +426,10 @@ fn evaluate(site: u32) -> Evaluation {
             for (var i = b.x - 1; i <= b.x + 1; i = i + 1) {
                 let nb = vec3<i32>(i, j, k);
                 if any(nb < vec3<i32>(0)) || any(nb >= bucket_dims()) { continue; }
-                let n = fill_bucket(nb);
+                let row = bucket_flat(nb);
+                let n = sheet_b[row];
                 for (var m = 0u; m < n; m = m + 1u) {
-                    let np = bucket[m].xyz;
+                    let np = selected[32u * row + m].xyz;
                     let len = length(np - seed);
                     if !(len < u.max_radius) { continue; }
                     centroid = centroid + np;
@@ -441,9 +469,10 @@ fn evaluate(site: u32) -> Evaluation {
             for (var i = b.x - 1; i <= b.x + 1; i = i + 1) {
                 let nb = vec3<i32>(i, j, k);
                 if any(nb < vec3<i32>(0)) || any(nb >= bucket_dims()) { continue; }
-                let n = fill_bucket(nb);
+                let row = bucket_flat(nb);
+                let n = sheet_b[row];
                 for (var m = 0u; m < n; m = m + 1u) {
-                    let np = bucket[m].xyz;
+                    let np = selected[32u * row + m].xyz;
                     if !(length(np - seed) < u.max_radius) { continue; }
                     let ndir = np - p;
                     if length(ndir) < EPS { continue; }
