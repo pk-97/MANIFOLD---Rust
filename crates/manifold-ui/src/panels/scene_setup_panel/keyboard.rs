@@ -27,11 +27,12 @@ impl ScenePanel {
             return true;
         };
         match action {
-            crate::panels::actions::CardEditAction::Cut
-            | crate::panels::actions::CardEditAction::Delete => !item.is_family_child,
-            crate::panels::actions::CardEditAction::Duplicate => {
+            crate::panels::actions::CardEditAction::Copy
+            | crate::panels::actions::CardEditAction::Duplicate => {
                 !item.is_family_child && !item.is_family_parent
             }
+            crate::panels::actions::CardEditAction::Cut
+            | crate::panels::actions::CardEditAction::Delete => !item.is_family_child,
             _ => true,
         }
     }

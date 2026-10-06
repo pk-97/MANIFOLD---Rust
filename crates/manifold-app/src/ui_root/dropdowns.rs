@@ -1586,10 +1586,14 @@ impl UIRoot {
                     let can_remove = self.scene_setup_panel.scene_item_edit_allowed(
                         manifold_ui::panels::actions::CardEditAction::Delete,
                     );
+                    let can_copy = self.scene_setup_panel.scene_item_edit_allowed(
+                        manifold_ui::panels::actions::CardEditAction::Copy,
+                    );
                     let can_duplicate = self.scene_setup_panel.scene_item_edit_allowed(
                         manifold_ui::panels::actions::CardEditAction::Duplicate,
                     );
                     items.retain(|item| match item.label.as_str() {
+                        "Copy" => can_copy,
                         "Cut" | "Delete" => can_remove,
                         "Duplicate" => can_duplicate,
                         _ => true,

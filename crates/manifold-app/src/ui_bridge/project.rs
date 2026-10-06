@@ -1727,6 +1727,7 @@ mod tests {
             .unwrap();
         match scene.params.get("lights") {
             Some(SerializedParamValue::Float { value }) => *value,
+            Some(SerializedParamValue::Int { value }) => *value as f32,
             _ => 0.0,
         }
     }

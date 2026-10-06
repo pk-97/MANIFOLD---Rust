@@ -109,6 +109,7 @@ fn real_water_withholds_child_actions_and_parent_duplicate() {
         &manifold_ui::PanelAction::Root(manifold_ui::RootAction::SceneItemRightClicked),
         None,
     );
+    assert!(!ui.tree.nodes().iter().any(|node| node.text.as_deref() == Some("Copy")));
     assert!(ui.tree.nodes().iter().any(|node| node.text.as_deref() == Some("Cut")));
     assert!(ui.tree.nodes().iter().any(|node| node.text.as_deref() == Some("Delete")));
     assert!(!ui.tree.nodes().iter().any(|node| node.text.as_deref() == Some("Duplicate")));
@@ -153,11 +154,32 @@ fn real_water_withholds_child_actions_and_parent_duplicate() {
         &manifold_ui::PanelAction::Root(manifold_ui::RootAction::SceneItemRightClicked),
         None,
     );
-    for label in ["Cut", "Delete", "Duplicate"] {
+    for label in ["Copy", "Cut", "Delete", "Duplicate"] {
         assert!(!ui.tree.nodes().iter().any(|node| node.text.as_deref() == Some(label)),
             "child context menu must omit {label}");
     }
     assert!(ui.scene_setup_panel.remove_selection_action().is_none());
+}
+
+#[test]
+fn water_family_clipboard_rejects_every_group_output() {
+    let (mut project, layer, render) = super::water_family::water_project();
+    add_water(&mut project, &layer, render);
+    let family = rows(&project, &layer);
+    let family_rows: Vec<_> = family.iter().filter(|row| row.look_mesh.is_some()
+        || (row.is_group && row.liquid_domain.is_some())).collect();
+    assert_eq!(family_rows.len(), 8, "both complete families");
+    for row in family_rows {
+        let error = crate::scene_item_transfer::SceneItemClipboard::capture(
+            &project,
+            &layer,
+            render,
+            crate::scene_item_transfer::SceneItemKind::Object,
+            row.index as u32,
+        )
+        .expect_err("Water-family group output must not enter the clipboard");
+        assert!(error.contains("Multi-output scene groups"), "unexpected rejection: {error}");
+    }
 }
 
 fn tree_has_name(tree: &manifold_ui::UITree, name: &str) -> bool {

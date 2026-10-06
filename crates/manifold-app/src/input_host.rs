@@ -2665,6 +2665,7 @@ mod automation_clipboard_host_tests {
         );
         h.ui_root.object_cards_have_focus = true;
         for action in [
+            manifold_ui::panels::actions::CardEditAction::Copy,
             manifold_ui::panels::actions::CardEditAction::Delete,
             manifold_ui::panels::actions::CardEditAction::Cut,
             manifold_ui::panels::actions::CardEditAction::Duplicate,
@@ -2683,6 +2684,11 @@ mod automation_clipboard_host_tests {
         ));
         assert!(h.rx.is_empty(), "family-parent duplicate must be withheld");
         assert!(h.ui_root.pending_keyboard_actions.is_empty());
+        assert!(h.host().edit_scene_items(
+            manifold_ui::panels::actions::CardEditAction::Copy,
+        ));
+        assert!(h.ui_root.scene_item_clipboard.is_none(), "family copy must not populate the clipboard");
+        assert!(h.rx.is_empty());
         assert!(h.host().edit_scene_items(
             manifold_ui::panels::actions::CardEditAction::Delete,
         ));

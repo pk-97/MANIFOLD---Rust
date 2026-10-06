@@ -26,7 +26,14 @@ fn tree_texts(tree: &manifold_ui::UITree) -> Vec<String> {
 
 #[test]
 fn water_family_group_toggle_expands_children_and_preserves_parent_controls() {
-    let (project, layer_id, _) = super::water_family::water_project();
+    let (mut project, layer_id, _) = super::water_family::water_project();
+    let old_size = project.timeline.layers[0].gen_params().unwrap().get_base_param("foam_size");
+    let mut editing = manifold_editing::service::EditingService::new();
+    editing.execute(Box::new(manifold_editing::commands::effects::ChangeGraphParamCommand::new(
+        manifold_core::GraphTarget::Generator(layer_id.clone()),
+        "foam_size", old_size, 0.01,
+    )), &mut project);
+    assert_eq!(editing.take_rejection(), None);
     let (_, _state, mut ui, mut selection, _active_layer, _prefs) = dispatch_harness();
 
     ui.scene_setup_panel.open();
@@ -107,5 +114,38 @@ fn water_family_group_toggle_expands_children_and_preserves_parent_controls() {
             expanded_texts.iter().any(|text| text == label),
             "expanded parent control missing: {label}"
         );
+    }
+
+    // The failed flow clicked Foam after scrolling down to Whitewater Amount.
+    // Selector lookup can find an offscreen node; pointer hit-testing cannot.
+    assert!(ui.scene_setup_panel.handle_scroll(-10_000.0));
+    let scrolled_tree = build_scene_tree(&mut ui);
+    let foam = scrolled_tree.nodes().iter().find(|node| node.text.as_deref() == Some("■ Foam")).unwrap();
+    let rect = scrolled_tree.get_bounds(foam.id);
+    let center = manifold_ui::Vec2::new(rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
+    assert_ne!(scrolled_tree.hit_test(center), Some(foam.id), "clipped Foam cannot receive the click");
+
+    for (name, size_id) in [("Foam", "foam_size"), ("Spray", "spray_size"), ("Bubbles", "bubble_size")] {
+        // ScrollTo in the repaired flow brings the outliner target back into view.
+        ui.scene_setup_panel.handle_scroll(10_000.0);
+        let mut tree = build_scene_tree(&mut ui);
+        let label = format!("■ {name}");
+        let row = tree.nodes().iter().find(|node| node.text.as_deref() == Some(&label)).unwrap().id;
+        let rect = tree.get_bounds(row);
+        let center = manifold_ui::Vec2::new(rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
+        assert_eq!(tree.hit_test(center), Some(row), "{name} is reachable after scrolling");
+        let (consumed, _) = ui.scene_setup_panel.handle_event(&manifold_ui::UIEvent::Click {
+            node_id: row, pos: center, modifiers: manifold_ui::Modifiers::default(),
+        }, &mut tree);
+        assert!(consumed);
+        let tree = build_scene_tree(&mut ui);
+        let header = tree.nodes().iter().find(|node| tree.name_of(node.id) == Some("scene_setup.properties.name_value")).unwrap();
+        assert_eq!(header.text.as_deref(), Some(name));
+        let suffix = format!("{size_id}.value");
+        let value = tree.nodes().iter().find(|node| tree.name_of(node.id).is_some_and(|id| id.ends_with(&suffix)))
+            .expect("selected look renders its manifest-backed Size in Properties");
+        if name == "Foam" { assert_eq!(value.text.as_deref(), Some("0.01")); }
+        assert!(tree.nodes().iter().any(|node| node.text.as_deref() == Some("Size")));
+        assert!(!tree.nodes().iter().any(|node| node.text.as_deref() == Some("Whitewater Amount")));
     }
 }
