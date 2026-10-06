@@ -403,8 +403,8 @@ pub struct ObjectKnownRow {
     pub look_mesh: Option<manifold_foundation::NodeId>,
     pub index: usize,
     /// The `node.scene_object`'s own doc id — the address the eye toggle
-    /// writes `visible` at, and (with `group_node_id`) the selection key
-    /// (D12).
+    /// writes `visible` at and the selection/rename address used by the
+    /// scene-object command (D12).
     pub object_node_id: u32,
     /// `Some` when wrapped in a group (the importer/`AddSceneObjectCommand`
     /// shape) — the rename sweep's group target. `None` for a bare
@@ -1053,9 +1053,9 @@ pub struct ScenePanel {
     outliner_eye_ids: Vec<(NodeId, RowValue)>,
     /// `(identity_node_id, name_label_node_id, current_name)` for the
     /// properties header's editable name row, when a Known object is
-    /// selected this frame (`identity_node_id` = `group_node_id.unwrap_or(
-    /// object_node_id)`, the exact address `RenameSceneObjectCommand`
-    /// takes) — resolves a name-label click to its rename action, and backs
+    /// selected this frame (`object_node_id`, the exact address
+    /// `RenameSceneObjectCommand` takes) — resolves a name-label click to its
+    /// rename action, and backs
     /// `object_name_rect` (the app's text-input anchor lookup). At most one
     /// entry per frame (P5: one selection, one properties header).
     object_name_ids: Vec<(u32, NodeId, String)>,
@@ -1706,6 +1706,22 @@ impl ScenePanel {
             }
             SceneSelection::Force(id) => vm.forces.iter().any(|row| row.instance_id == id),
         }
+    }
+
+    /// Water-family parents are water object rows whose children own the
+    /// platonic look meshes. Imported compounds also have group rows, so the
+    /// presence of a look-mesh child is the discriminator rather than
+    /// `is_group` alone.
+    pub(super) fn is_family_parent(&self, row: &ObjectKnownRow) -> bool {
+        row.is_group
+            && self.state.as_live().is_some_and(|vm| {
+                vm.objects.iter().any(|object| {
+                    matches!(object,
+                        ObjectRowVm::Known(child)
+                            if child.parent_group_id == Some(row.object_node_id)
+                                && child.look_mesh.is_some())
+                })
+            })
     }
 
     /// D7's default: the first Known object, else World. A `Custom` row

@@ -1239,7 +1239,7 @@ impl Application {
                     self.pending_open_graph_editor = true;
                     continue;
                 }
-                PanelAction::Root(RootAction::SceneSetupRenameObjectClicked(layer_id, group_node_id, name)) => {
+                PanelAction::Root(RootAction::SceneSetupRenameObjectClicked(layer_id, object_node_id, name)) => {
                     // P2 object-name click — same shape as
                     // `AudioSendLabelClicked` below: begin the shared inline
                     // text-input session anchored over the row's own name
@@ -1250,11 +1250,11 @@ impl Application {
                         .ws
                         .ui_root
                         .scene_setup_panel
-                        .object_name_rect(&self.ws.ui_root.tree, *group_node_id)
+                        .object_name_rect(&self.ws.ui_root.tree, *object_node_id)
                     {
                         self.text_input.scene_object_layer_id = Some(layer_id.clone());
                         self.text_input.begin(
-                            crate::text_input::TextInputField::SceneObjectRename(*group_node_id),
+                            crate::text_input::TextInputField::SceneObjectRename(*object_node_id),
                             name,
                             crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
                             11.0,

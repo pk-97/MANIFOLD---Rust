@@ -59,10 +59,6 @@ const SCENE_VOCABULARY_TYPE_IDS: &[&str] = &[
     "node.push_mesh",
     "node.morph_mesh",
     "node.rotate_3d",
-    // Water family looks own their particle mesh radius as the shared Size
-    // control. Shape remains graph-side; the generic scene stamping path
-    // supplies the binding and automation metadata for radius.
-    "node.platonic_solid_mesh",
     // RAYTRACING_DESIGN.md D14/section 5.2: the scene-level RT toggles live on the
     // `node.render_scene` root. Curated to the RT subset in
     // `metadata_for_node_type` — the root node's other params (sun, env,
@@ -107,7 +103,6 @@ pub fn metadata_for_node_type(type_id: &str) -> Vec<SceneParamMetadata> {
         })
         .filter(|pd| type_id != "node.rigid_body" || matches!(pd.name.as_ref(), "shape" | "motion" | "density" | "friction" | "bounce" | "collider_parts"))
         .filter(|pd| type_id != "node.scene_object" || pd.name.as_ref() != "parent_visible")
-        .filter(|pd| type_id != "node.platonic_solid_mesh" || pd.name.as_ref() == "radius")
         .filter(|pd| liquid_dial_params(type_id).is_none_or(|dials| dials.contains(&pd.name.as_ref())))
         .filter(|pd| type_id != "node.whitewater_step" || matches!(pd.name.as_ref(), "enabled" | "amount" | "wavecrest_emission" | "turbulence_emission" | "min_turbulence" | "max_turbulence" | "inside_emission" | "dust_emission" | "boundary_dust" | "dust_rate" | "spray_speed" | "generation_rate" | "influence_base" | "influence_decay"))
         .filter(|pd| type_id != "node.fluid_role_source" || matches!(pd.name.as_ref(),
@@ -146,11 +141,7 @@ pub fn metadata_for_node_type(type_id: &str) -> Vec<SceneParamMetadata> {
             };
             SceneParamMetadata {
                 name: pd.name.to_string(),
-                label: if type_id == "node.platonic_solid_mesh" && pd.name.as_ref() == "radius" {
-                    "Size".to_string()
-                } else {
-                    pd.label.to_string()
-                },
+                label: pd.label.to_string(),
                 min,
                 max,
                 default_value,
@@ -166,6 +157,14 @@ pub fn metadata_for_node_type(type_id: &str) -> Vec<SceneParamMetadata> {
                 material_role: material_param_role(type_id, pd.name.as_ref()),
             }
         })
+        .collect()
+}
+
+/// Explicit Water-look exposure metadata, never part of load-time vocabulary.
+pub fn look_metadata() -> Vec<SceneParamMetadata> {
+    metadata_for_node_type("node.platonic_solid_mesh").into_iter()
+        .filter(|metadata| metadata.name == "radius")
+        .map(|mut metadata| { metadata.label = "Size".into(); metadata })
         .collect()
 }
 
@@ -705,10 +704,17 @@ mod tests {
 
     #[test]
     fn water_look_metadata_exposes_only_size() {
-        let metadata = metadata_for_node_type("node.platonic_solid_mesh");
+        let metadata = look_metadata();
         assert_eq!(metadata.len(), 1);
         assert_eq!(metadata[0].name, "radius");
         assert_eq!(metadata[0].label, "Size");
+        assert!(!SCENE_VOCABULARY_TYPE_IDS.contains(&"node.platonic_solid_mesh"));
+        for preset in ["PhysicsSolids", "PhysicsBoxes", "HoneyDamBreak", "WaterFloatingBoxMatter"] {
+            let def = crate::node_graph::bundled_preset_def(&manifold_core::PresetTypeId::new(preset))
+                .expect("shipped preset");
+            assert!(def.preset_metadata.as_ref().unwrap().params.iter().all(|spec| spec.name != "Size"),
+                "{preset} must not acquire Water look controls on load");
+        }
     }
 
     #[test]

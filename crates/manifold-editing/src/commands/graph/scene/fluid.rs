@@ -391,7 +391,10 @@ impl Command for AddSceneFluidCommand {
                     if targets.is_empty() { return Err("Add Fluid shared exposure has no targets"); }
                     let mut spec = spec.as_ref().clone();
                     spec.id = format!("{group_id}_{}", spec.id);
-                    spec.section = Some(fluid_handle.clone());
+                    spec.section = Some(match spec.section.as_deref() {
+                        None | Some("Water") => fluid_handle.clone(),
+                        Some(section) => format!("{fluid_handle} - {section}"),
+                    });
                     let mut bindings = Vec::with_capacity(targets.len());
                     for (local, authored) in targets {
                         let fresh = lookup(*local)?;

@@ -976,7 +976,11 @@ impl ScenePanel {
         // existing total header budget so the name, duplicate, and remove
         // cells retain their established positions and remain reachable.
         let frame_w = STEP_W * 2.0;
-        let btn_w = frame_w + STEP_W * 2.0;
+        let family_parent = self.is_family_parent(row);
+        let show_duplicate = row.look_mesh.is_none() && !family_parent;
+        let show_remove = row.look_mesh.is_none();
+        let btn_w = frame_w
+            + STEP_W * (show_duplicate as u8 + show_remove as u8) as f32;
         let name_w = inner_w - btn_w - 8.0;
         let name_id = tree.add_button_keyed(
             Some(self.content_parent),
@@ -993,13 +997,8 @@ impl ScenePanel {
         // assert "the header text changed" without hard-coding which object
         // it changed to.
         tree.set_name(name_id, "scene_setup.properties.name_value");
-        let identity_node_id = if row.is_group {
-            row.group_node_id.unwrap_or(row.object_node_id)
-        } else {
-            row.object_node_id
-        };
         self.object_name_ids
-            .push((identity_node_id, name_id, row.name.clone()));
+            .push((row.object_node_id, name_id, row.name.clone()));
 
         // Frame button (scene-panel-ux lane)
         let frame_id = tree.add_button_keyed(
@@ -1015,38 +1014,43 @@ impl ScenePanel {
         self.object_frame_ids.push((frame_id, row.object_node_id));
         tree.set_name(frame_id, "scene_setup.properties.frame");
 
-        let dup_id = tree.add_button_keyed(
-            Some(self.content_parent),
-            inner_x + name_w + 4.0 + frame_w,
-            cy,
-            STEP_W,
-            ROW_H,
-            btn_style(),
-            "\u{29C9}",
-            obj_key(row.object_node_id as usize, OBJ_OFF_REMOVE) + 1,
-        );
-        tree.set_name(dup_id, "scene_setup.properties.duplicate");
-        if row.parent_group_id.is_some() && !row.is_group {
-            self.submesh_duplicate_ids.push((dup_id, row.index));
-        } else {
-            self.object_duplicate_ids.push((dup_id, row.index));
+        let mut action_x = inner_x + name_w + 4.0 + frame_w;
+        if show_duplicate {
+            let dup_id = tree.add_button_keyed(
+                Some(self.content_parent),
+                action_x,
+                cy,
+                STEP_W,
+                ROW_H,
+                btn_style(),
+                "\u{29C9}",
+                obj_key(row.object_node_id as usize, OBJ_OFF_REMOVE) + 1,
+            );
+            tree.set_name(dup_id, "scene_setup.properties.duplicate");
+            if row.parent_group_id.is_some() && !row.is_group {
+                self.submesh_duplicate_ids.push((dup_id, row.index));
+            } else {
+                self.object_duplicate_ids.push((dup_id, row.index));
+            }
+            action_x += STEP_W;
         }
-        let remove_id = tree.add_button_keyed(
-            Some(self.content_parent),
-            inner_x + name_w + 4.0 + frame_w + STEP_W,
-            cy,
-            STEP_W,
-            ROW_H,
-            btn_style(),
-            "\u{2715}",
-            obj_key(row.object_node_id as usize, OBJ_OFF_REMOVE),
-        );
-        if row.parent_group_id.is_some() && !row.is_group {
+        if show_remove {
+            let remove_id = tree.add_button_keyed(
+                Some(self.content_parent),
+                action_x,
+                cy,
+                STEP_W,
+                ROW_H,
+                btn_style(),
+                "\u{2715}",
+                obj_key(row.object_node_id as usize, OBJ_OFF_REMOVE),
+            );
             tree.set_name(remove_id, "scene_setup.properties.remove");
-            self.submesh_remove_ids.push((remove_id, row.index));
-        } else {
-            tree.set_name(remove_id, "scene_setup.properties.remove");
-            self.object_remove_ids.push((remove_id, row.index));
+            if row.parent_group_id.is_some() && !row.is_group {
+                self.submesh_remove_ids.push((remove_id, row.index));
+            } else {
+                self.object_remove_ids.push((remove_id, row.index));
+            }
         }
         let mut next_cy = cy + ROW_H + ROW_GAP;
         if (row.physics_available || row.physics_unavailable_reason.is_some())

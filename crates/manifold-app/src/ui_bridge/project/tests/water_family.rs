@@ -91,6 +91,18 @@ fn water_family_add_undo_redo() {
         }
         let gate = binding(&added, &family[0].object, "parent_visible");
         assert_eq!(added.preset_metadata.as_ref().unwrap().bindings.iter().filter(|binding| binding.id == gate).count(), 4);
+        let metadata = added.preset_metadata.as_ref().unwrap();
+        for child in &family[1..] {
+            let mesh = child.look_mesh.as_ref().expect("look mesh");
+            let size = binding(&added, mesh, "radius");
+            assert!(size.ends_with("_size"), "recipe-authored Size survives fresh IDs");
+            assert_eq!(metadata.params.iter().find(|spec| spec.id == size).unwrap().name, "Size");
+            assert!(!metadata.bindings.iter().any(|binding| matches!(&binding.target,
+                BindingTarget::Node { node_id, param } if node_id == &child.object && param == "cast_shadows")));
+        }
+        let budget = metadata.params.iter().find(|spec| spec.id == format!("{group_id}_whitewater_capacity"))
+            .expect("shared whitewater budget");
+        assert_eq!(budget.section.as_deref(), Some(format!("{} - Water Detail", family[0].name).as_str()));
         assert!(editing.undo(&mut project));
         assert_eq!(effective_def(&project, &layer), previous);
         assert!(editing.redo(&mut project));
@@ -101,6 +113,32 @@ fn water_family_add_undo_redo() {
     let gates: std::collections::BTreeSet<_> = metadata.bindings.iter().filter_map(|binding| matches!(&binding.target,
         BindingTarget::Node { param, .. } if param == "parent_visible").then_some(&binding.id)).collect();
     assert!(gates.len() >= 3, "families have independent parent gates");
+}
+
+#[test]
+fn water_family_add_through_content_admission_discovers_children() {
+    let (mut project, layer, render) = water_project();
+    let initial_objects = objects_param(&project, &layer, render) as usize;
+    assert_eq!(initial_objects, 10, "shipped physical slot count includes integer literals");
+    project.on_after_deserialize();
+    let (_, state, mut ui, mut selection, mut active, mut prefs) = dispatch_harness();
+    let (tx, rx) = crossbeam_channel::unbounded();
+    dispatch_project(&ProjectAction::SceneSetupAddFluid(layer.clone(), render),
+        &mut project, &tx, &state, &mut ui, &mut selection, &mut active, &mut prefs);
+    let ContentCommand::ExecuteSelecting(command, _) = rx.try_recv().unwrap() else {
+        panic!("Add Water must execute on content");
+    };
+    let mut editing = EditingService::new();
+    editing.execute(crate::scene_modifier_edit::with_admission(command), &mut project);
+    assert_eq!(editing.take_rejection(), None);
+    project.on_after_deserialize();
+    let family = rows(&effective_def(&project, &layer));
+    let water = family.iter().find(|row| row.is_group && row.liquid_domain.is_some()
+        && row.index >= initial_objects).expect("new Water parent");
+    let children: Vec<_> = family.iter().filter(|row| row.parent_group_id == Some(water.object_node_id)
+        && (initial_objects..initial_objects + 4).contains(&row.index)).collect();
+    assert_eq!(children.len(), 3);
+    assert!(children.iter().all(|row| row.look_mesh.is_some()));
 }
 
 #[test]

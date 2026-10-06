@@ -10,6 +10,8 @@
 //! NodeId>>` row-id hoard. Both are legitimate ONLY in the files that already
 //! own that infra; the allowlist below is that exact, current set — new
 //! files matching either pattern are the violation this test exists to catch.
+//! Scene-panel controls also reject direct row/slider tree construction, so
+//! manifest-backed parameters cannot bypass the parameter surface.
 //!
 //! This pins "no NEW bespoke row infra" — it does not (and cannot) prove the
 //! EXISTING allowlisted infra is itself minimal; that is `docs/
@@ -78,6 +80,14 @@ const NODE_ID_HOARD_ALLOWLIST: &[&str] = &[
 
 fn panels_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("src/panels")
+}
+
+fn scene_panel_file(path: &Path) -> bool {
+    let Ok(relative) = path.strip_prefix(panels_dir()) else {
+        return false;
+    };
+    let relative = relative.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/");
+    relative.starts_with("scene_setup_") || relative.starts_with("scene_setup_panel/")
 }
 
 /// True if `path` (somewhere under `panels_dir()`) matches an allowlist
@@ -163,6 +173,48 @@ fn no_bespoke_node_id_row_hoard_outside_the_allowlist() {
          id-hoard-as-routing shape the widget-tree layer exists to kill; \
          route through `RowIndex` + `row_action` instead. Violating files: \
          {violations:?}"
+    );
+}
+
+#[test]
+fn no_scene_panel_bespoke_manifest_row_infra() {
+    let mut files = Vec::new();
+    rs_files(&panels_dir(), &mut files);
+
+    // Keep these as source fragments so this test cannot match its own needles.
+    // These are the concrete row/slider construction seams that scene-panel
+    // code must route through the manifest-backed parameter surface.
+    let needles = [
+        ([".", "slider_row("].concat(), "View::slider_row"),
+        (["::", "slider_row("].concat(), "View::slider_row"),
+        (["SliderSpec", " {"].concat(), "SliderSpec"),
+        (["SliderNodeIds", " {"].concat(), "SliderNodeIds"),
+        (["add", "_slider("].concat(), "UITree::add_slider"),
+        (["UINodeType", "::Slider"].concat(), "UINodeType::Slider"),
+    ];
+    let mut violations = Vec::new();
+    for path in files {
+        if !scene_panel_file(&path) {
+            continue;
+        }
+        let source = fs::read_to_string(&path).expect("read scene panel source");
+        for (needle, description) in &needles {
+            for (line, text) in source.lines().enumerate().filter(|(_, text)| text.contains(needle)) {
+                violations.push(format!(
+                    "{}:{}: scene-panel {} (`{}`); manifest-backed rows must use ParamSurface/RowHost",
+                    path.display(),
+                    line + 1,
+                    description,
+                    text.trim(),
+                ));
+            }
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "INV-8 scene-panel manifest rows have one sanctioned parameter-surface host:\n{}",
+        violations.join("\n")
     );
 }
 

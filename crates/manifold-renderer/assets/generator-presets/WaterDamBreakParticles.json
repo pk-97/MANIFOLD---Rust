@@ -2889,6 +2889,90 @@
           "nodeId": "bubble_object",
           "param": "parent_visible"
         }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true,
+        "defaultValue": 0.004999999888241291,
+        "id": "foam_size",
+        "label": "Size",
+        "target": {
+          "kind": "node",
+          "nodeId": "foam_mesh",
+          "param": "radius"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true,
+        "defaultValue": 1.0,
+        "id": "foam_visible",
+        "label": "Visible",
+        "target": {
+          "kind": "node",
+          "nodeId": "foam_object",
+          "param": "visible"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true,
+        "defaultValue": 0.003000000026077032,
+        "id": "spray_size",
+        "label": "Size",
+        "target": {
+          "kind": "node",
+          "nodeId": "spray_mesh",
+          "param": "radius"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true,
+        "defaultValue": 1.0,
+        "id": "spray_visible",
+        "label": "Visible",
+        "target": {
+          "kind": "node",
+          "nodeId": "spray_object",
+          "param": "visible"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true,
+        "defaultValue": 0.0035000001080334187,
+        "id": "bubble_size",
+        "label": "Size",
+        "target": {
+          "kind": "node",
+          "nodeId": "bubble_mesh",
+          "param": "radius"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true,
+        "defaultValue": 1.0,
+        "id": "bubble_visible",
+        "label": "Visible",
+        "target": {
+          "kind": "node",
+          "nodeId": "bubble_object",
+          "param": "visible"
+        }
       }
     ],
     "category": "Sim",
@@ -3053,6 +3137,78 @@
         "min": 0.0,
         "name": "Visible",
         "section": "Water",
+        "wholeNumbers": false
+      },
+      {
+        "cardVisible": false,
+        "defaultValue": 0.004999999888241291,
+        "id": "foam_size",
+        "isToggle": false,
+        "isTrigger": false,
+        "max": 100.0,
+        "min": 0.0,
+        "name": "Size",
+        "section": "Foam",
+        "wholeNumbers": false
+      },
+      {
+        "cardVisible": false,
+        "defaultValue": 1.0,
+        "id": "foam_visible",
+        "isToggle": false,
+        "isTrigger": false,
+        "max": 1.0,
+        "min": 0.0,
+        "name": "Visible",
+        "section": "Foam",
+        "wholeNumbers": false
+      },
+      {
+        "cardVisible": false,
+        "defaultValue": 0.003000000026077032,
+        "id": "spray_size",
+        "isToggle": false,
+        "isTrigger": false,
+        "max": 100.0,
+        "min": 0.0,
+        "name": "Size",
+        "section": "Spray",
+        "wholeNumbers": false
+      },
+      {
+        "cardVisible": false,
+        "defaultValue": 1.0,
+        "id": "spray_visible",
+        "isToggle": false,
+        "isTrigger": false,
+        "max": 1.0,
+        "min": 0.0,
+        "name": "Visible",
+        "section": "Spray",
+        "wholeNumbers": false
+      },
+      {
+        "cardVisible": false,
+        "defaultValue": 0.0035000001080334187,
+        "id": "bubble_size",
+        "isToggle": false,
+        "isTrigger": false,
+        "max": 100.0,
+        "min": 0.0,
+        "name": "Size",
+        "section": "Bubbles",
+        "wholeNumbers": false
+      },
+      {
+        "cardVisible": false,
+        "defaultValue": 1.0,
+        "id": "bubble_visible",
+        "isToggle": false,
+        "isTrigger": false,
+        "max": 1.0,
+        "min": 0.0,
+        "name": "Visible",
+        "section": "Bubbles",
         "wholeNumbers": false
       }
     ],

@@ -544,7 +544,7 @@ _Generated from the node registry. Do not hand-edit. 381 nodes registered, group
 | `FluidSim3D` | Fluid Sim 3D | generator | Sim | 26 |
 | `Glitch` | Glitch | effect | Stylize | 5 |
 | `HighlightBoost` | Highlight Boost | effect | Filmic | 4 |
-| `HoneyDamBreak` | Honey — Dam Break | generator | Sim | 2309 |
+| `HoneyDamBreak` | Honey — Dam Break | generator | Sim | 2306 |
 | `Infrared` | Infrared | effect | Filmic | 3 |
 | `Invert` | Invert | effect | Color | 1 |
 | `Kaleidoscope` | Kaleidoscope | effect | Spatial | 2 |
@@ -585,8 +585,8 @@ _Generated from the node registry. Do not hand-edit. 381 nodes registered, group
 | `OilyFluid` | Oily Fluid | generator | Sim | 14 |
 | `Oscilloscope` | Oscilloscope | generator | Audio | 11 |
 | `ParticleText` | Particle Text | generator | Text & Media | 15 |
-| `PhysicsBoxes` | Physics Boxes | generator | Geometry | 1333 |
-| `PhysicsSolids` | Physics Solids | generator | Geometry | 2000 |
+| `PhysicsBoxes` | Physics Boxes | generator | Geometry | 1329 |
+| `PhysicsSolids` | Physics Solids | generator | Geometry | 1994 |
 | `Plasma` | Plasma | generator | Pattern | 6 |
 | `QuadMirror` | Quad Mirror | effect | Spatial | 1 |
 | `Scene` | Scene | generator | Geometry | 363 |
@@ -601,12 +601,12 @@ _Generated from the node registry. Do not hand-edit. 381 nodes registered, group
 | `Transform` | Transform | effect | Spatial | 4 |
 | `VoronoiPrism` | Voronoi Prism | effect | Spatial | 3 |
 | `WaterBasin` | Water Basin (CPU) | generator | Sim | 1069 |
-| `WaterDamBreak` | Water — Dam Break | generator | Sim | 2309 |
-| `WaterDamBreakGpu` | Water — Dam Break (GPU Surface) | generator | Sim | 2315 |
+| `WaterDamBreak` | Water — Dam Break | generator | Sim | 2308 |
+| `WaterDamBreakGpu` | Water — Dam Break (GPU Surface) | generator | Sim | 2314 |
 | `WaterDamBreakGpuFlip` | Water — Dam Break (GPU FLIP) | generator | Sim | 2005 |
 | `WaterDamBreakMatter` | Water — Dam Break (Live GPU) | generator | Sim | 1397 |
-| `WaterDamBreakParticles` | Water — Dam Break (Particle View) | generator | Sim | 1999 |
-| `WaterFloatingBoxMatter` | Water — Floating Box (Live GPU) | generator | Sim | 1391 |
+| `WaterDamBreakParticles` | Water — Dam Break (Particle View) | generator | Sim | 1998 |
+| `WaterFloatingBoxMatter` | Water — Floating Box (Live GPU) | generator | Sim | 1390 |
 | `WaterStillPoolMatter` | Water — Still Pool (Live GPU) | generator | Sim | 1065 |
 | `Watercolor` | Watercolor | effect | Stylize | 4 |
 | `Wireframe` | Wireframe | generator | Geometry | 9 |

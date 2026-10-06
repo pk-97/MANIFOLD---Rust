@@ -1,9 +1,6 @@
     use super::*;
     use crate::input::Modifiers;
 
-    #[path = "no_bespoke_row_infra.rs"]
-    mod no_bespoke_row_infra;
-
     /// C-P1a: wrap a plain `RowValue` in an idle (no active modulation)
     /// `ModulatedRow` — the shape `EnvironmentRowVm`/`AtmosphereRowVm` now
     /// carry for every converted row.
@@ -755,7 +752,7 @@
         let object = panel.selected_scene_item().unwrap();
         assert!(!object.is_light);
         assert!(matches!(panel.frame_selection_action(), Some(PanelAction::Project(ProjectAction::SceneSetupFrameSelected(_, 99, 40)))));
-        assert!(matches!(panel.rename_selection_action(), Some(PanelAction::Root(RootAction::SceneSetupRenameObjectClicked(_, 42, _)))));
+        assert!(matches!(panel.rename_selection_action(), Some(PanelAction::Root(RootAction::SceneSetupRenameObjectClicked(_, 40, _)))));
         let light_node = panel.outliner_row_ids.iter().find(|(_, selection)| *selection == SceneSelection::Light(60)).unwrap().0;
         let (consumed, actions) = panel.handle_event(&UIEvent::RightClick {
             node_id: Some(light_node), pos: Vec2::new(0.0, 0.0), modifiers: Modifiers::NONE,

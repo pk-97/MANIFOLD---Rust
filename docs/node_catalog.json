@@ -60628,13 +60628,6 @@
           "name": "Appearance Gain"
         },
         {
-          "default": "0.005",
-          "id": "42_radius",
-          "max": "100",
-          "min": "0",
-          "name": "Size"
-        },
-        {
           "default": "0.95",
           "id": "43_color_r",
           "max": "1",
@@ -62742,13 +62735,6 @@
           "name": "Appearance Gain"
         },
         {
-          "default": "0.0035",
-          "id": "45_radius",
-          "max": "100",
-          "min": "0",
-          "name": "Size"
-        },
-        {
           "default": "0.95",
           "id": "46_color_r",
           "max": "1",
@@ -64854,13 +64840,6 @@
           "max": "4",
           "min": "0",
           "name": "Appearance Gain"
-        },
-        {
-          "default": "0.003",
-          "id": "48_radius",
-          "max": "100",
-          "min": "0",
-          "name": "Size"
         },
         {
           "default": "0.95",
@@ -76872,13 +76851,6 @@
           "name": "Billboard"
         },
         {
-          "default": "1",
-          "id": "102_radius",
-          "max": "100",
-          "min": "0",
-          "name": "Size"
-        },
-        {
           "default": "0.15",
           "id": "103_color_r",
           "max": "1",
@@ -79096,13 +79068,6 @@
           "max": "1",
           "min": "0",
           "name": "Billboard"
-        },
-        {
-          "default": "1",
-          "id": "122_radius",
-          "max": "100",
-          "min": "0",
-          "name": "Size"
         },
         {
           "default": "0.15",
@@ -81324,13 +81289,6 @@
           "name": "Collider Detail"
         },
         {
-          "default": "1",
-          "id": "142_radius",
-          "max": "100",
-          "min": "0",
-          "name": "Size"
-        },
-        {
           "default": "0.9",
           "id": "143_color_r",
           "max": "1",
@@ -83548,13 +83506,6 @@
           "max": "64",
           "min": "1",
           "name": "Collider Detail"
-        },
-        {
-          "default": "1",
-          "id": "162_radius",
-          "max": "100",
-          "min": "0",
-          "name": "Size"
         },
         {
           "default": "0.9",
@@ -86429,13 +86380,6 @@
           "name": "Billboard"
         },
         {
-          "default": "1",
-          "id": "102_radius",
-          "max": "100",
-          "min": "0",
-          "name": "Size"
-        },
-        {
           "default": "0.15",
           "id": "103_color_r",
           "max": "1",
@@ -88653,13 +88597,6 @@
           "max": "1",
           "min": "0",
           "name": "Billboard"
-        },
-        {
-          "default": "1",
-          "id": "112_radius",
-          "max": "100",
-          "min": "0",
-          "name": "Size"
         },
         {
           "default": "0.95",
@@ -90881,13 +90818,6 @@
           "name": "Billboard"
         },
         {
-          "default": "1",
-          "id": "122_radius",
-          "max": "100",
-          "min": "0",
-          "name": "Size"
-        },
-        {
           "default": "0.13",
           "id": "123_color_r",
           "max": "1",
@@ -93105,13 +93035,6 @@
           "max": "1",
           "min": "0",
           "name": "Billboard"
-        },
-        {
-          "default": "1",
-          "id": "132_radius",
-          "max": "100",
-          "min": "0",
-          "name": "Size"
         },
         {
           "default": "0.98",
@@ -95333,13 +95256,6 @@
           "name": "Billboard"
         },
         {
-          "default": "1",
-          "id": "142_radius",
-          "max": "100",
-          "min": "0",
-          "name": "Size"
-        },
-        {
           "default": "0.55",
           "id": "143_color_r",
           "max": "1",
@@ -97557,13 +97473,6 @@
           "max": "1",
           "min": "0",
           "name": "Billboard"
-        },
-        {
-          "default": "1",
-          "id": "152_radius",
-          "max": "100",
-          "min": "0",
-          "name": "Size"
         },
         {
           "default": "0.1",
@@ -120017,13 +119926,6 @@
           "name": "Appearance Gain"
         },
         {
-          "default": "0.0035",
-          "id": "45_radius",
-          "max": "100",
-          "min": "0",
-          "name": "Size"
-        },
-        {
           "default": "0.95",
           "id": "46_color_r",
           "max": "1",
@@ -136231,13 +136133,6 @@
           "name": "Appearance Gain"
         },
         {
-          "default": "0.0035",
-          "id": "45_radius",
-          "max": "100",
-          "min": "0",
-          "name": "Size"
-        },
-        {
           "default": "0.95",
           "id": "46_color_r",
           "max": "1",
@@ -142841,6 +142736,48 @@
           "name": "Visible"
         },
         {
+          "default": "0.005",
+          "id": "foam_size",
+          "max": "100",
+          "min": "0",
+          "name": "Size"
+        },
+        {
+          "default": "1",
+          "id": "foam_visible",
+          "max": "1",
+          "min": "0",
+          "name": "Visible"
+        },
+        {
+          "default": "0.003",
+          "id": "spray_size",
+          "max": "100",
+          "min": "0",
+          "name": "Size"
+        },
+        {
+          "default": "1",
+          "id": "spray_visible",
+          "max": "1",
+          "min": "0",
+          "name": "Visible"
+        },
+        {
+          "default": "0.0035",
+          "id": "bubble_size",
+          "max": "100",
+          "min": "0",
+          "name": "Size"
+        },
+        {
+          "default": "1",
+          "id": "bubble_visible",
+          "max": "1",
+          "min": "0",
+          "name": "Visible"
+        },
+        {
           "default": "1",
           "id": "434_orbit",
           "max": "6.2831855",
@@ -148154,13 +148091,6 @@
           "name": "Appearance Gain"
         },
         {
-          "default": "0.005",
-          "id": "21_radius",
-          "max": "100",
-          "min": "0",
-          "name": "Size"
-        },
-        {
           "default": "0.95",
           "id": "22_color_r",
           "max": "1",
@@ -150240,13 +150170,6 @@
           "name": "Subsurface Feature"
         },
         {
-          "default": "1",
-          "id": "23_visible",
-          "max": "1",
-          "min": "0",
-          "name": "Visible"
-        },
-        {
           "default": "0",
           "id": "23_cast_shadows",
           "max": "1",
@@ -150266,13 +150189,6 @@
           "max": "4",
           "min": "0",
           "name": "Appearance Gain"
-        },
-        {
-          "default": "0.003",
-          "id": "26_radius",
-          "max": "100",
-          "min": "0",
-          "name": "Size"
         },
         {
           "default": "0.95",
@@ -152354,13 +152270,6 @@
           "name": "Subsurface Feature"
         },
         {
-          "default": "1",
-          "id": "28_visible",
-          "max": "1",
-          "min": "0",
-          "name": "Visible"
-        },
-        {
           "default": "0",
           "id": "28_cast_shadows",
           "max": "1",
@@ -152380,13 +152289,6 @@
           "max": "4",
           "min": "0",
           "name": "Appearance Gain"
-        },
-        {
-          "default": "0.0035",
-          "id": "31_radius",
-          "max": "100",
-          "min": "0",
-          "name": "Size"
         },
         {
           "default": "0.95",
@@ -154459,13 +154361,6 @@
           "max": "3",
           "min": "0",
           "name": "Subsurface Feature"
-        },
-        {
-          "default": "1",
-          "id": "33_visible",
-          "max": "1",
-          "min": "0",
-          "name": "Visible"
         },
         {
           "default": "0",
@@ -166624,6 +166519,48 @@
           "name": "Visible"
         },
         {
+          "default": "0.005",
+          "id": "foam_size",
+          "max": "100",
+          "min": "0",
+          "name": "Size"
+        },
+        {
+          "default": "1",
+          "id": "foam_visible",
+          "max": "1",
+          "min": "0",
+          "name": "Visible"
+        },
+        {
+          "default": "0.003",
+          "id": "spray_size",
+          "max": "100",
+          "min": "0",
+          "name": "Size"
+        },
+        {
+          "default": "1",
+          "id": "spray_visible",
+          "max": "1",
+          "min": "0",
+          "name": "Visible"
+        },
+        {
+          "default": "0.0035",
+          "id": "bubble_size",
+          "max": "100",
+          "min": "0",
+          "name": "Size"
+        },
+        {
+          "default": "1",
+          "id": "bubble_visible",
+          "max": "1",
+          "min": "0",
+          "name": "Visible"
+        },
+        {
           "default": "1",
           "id": "434_orbit",
           "max": "6.2831855",
@@ -171937,13 +171874,6 @@
           "name": "Appearance Gain"
         },
         {
-          "default": "0.005",
-          "id": "21_radius",
-          "max": "100",
-          "min": "0",
-          "name": "Size"
-        },
-        {
           "default": "0.95",
           "id": "22_color_r",
           "max": "1",
@@ -174023,13 +173953,6 @@
           "name": "Subsurface Feature"
         },
         {
-          "default": "1",
-          "id": "23_visible",
-          "max": "1",
-          "min": "0",
-          "name": "Visible"
-        },
-        {
           "default": "0",
           "id": "23_cast_shadows",
           "max": "1",
@@ -174049,13 +173972,6 @@
           "max": "4",
           "min": "0",
           "name": "Appearance Gain"
-        },
-        {
-          "default": "0.003",
-          "id": "26_radius",
-          "max": "100",
-          "min": "0",
-          "name": "Size"
         },
         {
           "default": "0.95",
@@ -176137,13 +176053,6 @@
           "name": "Subsurface Feature"
         },
         {
-          "default": "1",
-          "id": "28_visible",
-          "max": "1",
-          "min": "0",
-          "name": "Visible"
-        },
-        {
           "default": "0",
           "id": "28_cast_shadows",
           "max": "1",
@@ -176163,13 +176072,6 @@
           "max": "4",
           "min": "0",
           "name": "Appearance Gain"
-        },
-        {
-          "default": "0.0035",
-          "id": "31_radius",
-          "max": "100",
-          "min": "0",
-          "name": "Size"
         },
         {
           "default": "0.95",
@@ -178244,13 +178146,6 @@
           "name": "Subsurface Feature"
         },
         {
-          "default": "1",
-          "id": "33_visible",
-          "max": "1",
-          "min": "0",
-          "name": "Visible"
-        },
-        {
           "default": "0",
           "id": "33_cast_shadows",
           "max": "1",
@@ -178270,13 +178165,6 @@
           "max": "4",
           "min": "0",
           "name": "Appearance Gain"
-        },
-        {
-          "default": "1",
-          "id": "37_radius",
-          "max": "100",
-          "min": "0",
-          "name": "Size"
         },
         {
           "default": "0.35",
@@ -188163,13 +188051,6 @@
           "max": "64",
           "min": "1",
           "name": "Collider Detail"
-        },
-        {
-          "default": "1",
-          "id": "73_radius",
-          "max": "100",
-          "min": "0",
-          "name": "Size"
         },
         {
           "default": "0.42",

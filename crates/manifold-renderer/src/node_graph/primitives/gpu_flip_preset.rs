@@ -735,6 +735,30 @@ impl WaterScene {
                 "min":1000.0, "max":250000.0, "wholeNumbers":true, "formatString":"F0", "section":"Water Detail"}],
             "bindings":bindings
         })).expect("family visibility metadata"));
+        let metadata = def.preset_metadata.as_mut().expect("family metadata");
+        let look_metadata = crate::node_graph::scene_exposure::look_metadata();
+        let visible_metadata: Vec<_> = crate::node_graph::scene_exposure::metadata_for_node_type("node.scene_object")
+            .into_iter().filter(|param| param.name == "visible").collect();
+        for (kind, section) in [("foam", "Foam"), ("spray", "Spray"), ("bubble", "Bubbles")] {
+            for (suffix, param_id, descriptors) in [
+                ("mesh", format!("{kind}_size"), &look_metadata),
+                ("object", format!("{kind}_visible"), &visible_metadata),
+            ] {
+                let node = def.nodes.iter().find(|node| node.node_id.as_str() == format!("{kind}_{suffix}"))
+                    .expect("family look node");
+                let mut params = Vec::new();
+                let mut bindings = Vec::new();
+                manifold_core::scene_exposure::stamp_scene_node_exposures_into(
+                    &mut params, &mut bindings, node.id, &node.node_id, &node.type_id,
+                    section, descriptors, &node.params,
+                );
+                assert_eq!(params.len(), 1, "one authored look control");
+                for param in &mut params { param.id = param_id.clone(); }
+                for binding in &mut bindings { binding.id = param_id.clone(); }
+                metadata.params.extend(params);
+                metadata.bindings.extend(bindings);
+            }
+        }
         def
     }
 }
@@ -927,11 +951,6 @@ fn particle_view_cards(def: &Value) -> Value {
 #[cfg(any(test, feature = "gpu-proofs"))]
 fn scene_cards(metadata: &Value, scene: WaterScene) -> Value {
     let mut metadata = metadata.clone();
-    // Size belongs to the child mesh through ordinary manifest exposures.
-    for list in ["params", "bindings"] {
-        metadata[list].as_array_mut().expect("card lists")
-            .retain(|entry| entry["id"] != "foam_radius" && entry["id"] != "spray_radius");
-    }
     // The builder owns this card: the seed predates it, so every regeneration
     // writes it after Max Iterations and a hand edit to the JSON does not survive.
     for (list, entry) in [

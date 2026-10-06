@@ -7,9 +7,35 @@ pub struct SceneItemAddress {
     pub scene: u32,
     pub index: u32,
     pub is_light: bool,
+    /// Water-family children own only a look mesh and must not be removed or
+    /// duplicated independently of their simulation parent.
+    pub is_family_child: bool,
+    /// A Water-family parent owns the simulation; duplicating it would clone
+    /// the complete simulation. Removing it remains supported.
+    pub is_family_parent: bool,
 }
 
 impl ScenePanel {
+    /// Shared guard for scene-item keyboard and context-menu editing. Water
+    /// children are material/look rows, while their parent owns the complete
+    /// simulation and may still be removed as one group.
+    pub fn scene_item_edit_allowed(
+        &self,
+        action: crate::panels::actions::CardEditAction,
+    ) -> bool {
+        let Some(item) = self.selected_scene_item() else {
+            return true;
+        };
+        match action {
+            crate::panels::actions::CardEditAction::Cut
+            | crate::panels::actions::CardEditAction::Delete => !item.is_family_child,
+            crate::panels::actions::CardEditAction::Duplicate => {
+                !item.is_family_child && !item.is_family_parent
+            }
+            _ => true,
+        }
+    }
+
     pub fn scene_destination(&self) -> Option<(LayerId, u32)> {
         let vm = self.state.as_live()?;
         Some((vm.layer_id.clone(), vm.scene_root_node_id))
@@ -22,20 +48,27 @@ impl ScenePanel {
             .get(&vm.layer_id)
             .cloned()
             .unwrap_or_else(|| Self::default_selection(vm));
-        let (index, is_light) = match selection {
-            SceneSelection::Object(id) => (
-                vm.objects.iter().find_map(|o| match o {
-                    ObjectRowVm::Known(row) if row.object_node_id == id => Some(row.index),
+        let (index, is_light, is_family_child, is_family_parent) = match selection {
+            SceneSelection::Object(id) => {
+                let row = vm.objects.iter().find_map(|o| match o {
+                    ObjectRowVm::Known(row) if row.object_node_id == id => Some(row),
                     _ => None,
-                })?,
-                false,
-            ),
+                })?;
+                (
+                    row.index,
+                    false,
+                    row.look_mesh.is_some(),
+                    self.is_family_parent(row),
+                )
+            }
             SceneSelection::Light(id) => (
                 vm.lights.iter().find_map(|l| match l {
                     LightRowVm::Known(row) if row.node_doc_id == id => Some(row.index),
                     _ => None,
                 })?,
                 true,
+                false,
+                false,
             ),
             _ => return None,
         };
@@ -44,6 +77,8 @@ impl ScenePanel {
             scene: vm.scene_root_node_id,
             index: index as u32,
             is_light,
+            is_family_child,
+            is_family_parent,
         })
     }
 
@@ -96,7 +131,7 @@ impl ScenePanel {
             Some(PanelAction::Root(
                 RootAction::SceneSetupRenameObjectClicked(
                     item.layer_id,
-                    row.group_node_id.unwrap_or(row.object_node_id),
+                    row.object_node_id,
                     row.name.clone(),
                 ),
             ))
@@ -105,6 +140,9 @@ impl ScenePanel {
 
     pub fn remove_selection_action(&self) -> Option<PanelAction> {
         let item = self.selected_scene_item()?;
+        if !self.scene_item_edit_allowed(crate::panels::actions::CardEditAction::Delete) {
+            return None;
+        }
         Some(PanelAction::Project(if item.is_light {
             ProjectAction::SceneSetupRemoveLight(item.layer_id, item.scene, item.index)
         } else {

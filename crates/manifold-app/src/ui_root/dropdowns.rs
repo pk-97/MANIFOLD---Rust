@@ -1583,6 +1583,17 @@ impl UIRoot {
                 let mut items = card_edit_menu_items(self.scene_item_clipboard.is_some(), false, false);
                 let selected = self.scene_setup_panel.selected_scene_item();
                 if let Some(selected) = selected {
+                    let can_remove = self.scene_setup_panel.scene_item_edit_allowed(
+                        manifold_ui::panels::actions::CardEditAction::Delete,
+                    );
+                    let can_duplicate = self.scene_setup_panel.scene_item_edit_allowed(
+                        manifold_ui::panels::actions::CardEditAction::Duplicate,
+                    );
+                    items.retain(|item| match item.label.as_str() {
+                        "Cut" | "Delete" => can_remove,
+                        "Duplicate" => can_duplicate,
+                        _ => true,
+                    });
                     items.push(DropdownItem::new("Rename").with_action(PanelAction::Root(RootAction::SceneItemRename)));
                     items.push(DropdownItem::new("Move Up").with_action(PanelAction::Root(RootAction::SceneItemMove(-1))));
                     items.push(DropdownItem::new("Move Down").with_action(PanelAction::Root(RootAction::SceneItemMove(1))));
