@@ -144,6 +144,9 @@ struct PresetSettings {
     viscosity: f64,
     surface_tension: f64,
     points_per_cell: u32,
+    /// The domain's Simulation Speed: each fixed transport tick advances the
+    /// liquid by speed × 1/60 s, so offline water time is speed × tick time.
+    speed: f64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -333,6 +336,11 @@ fn preset_settings(json: &str) -> CaptureResult<PresetSettings> {
     let [domain] = domains[..] else {
         return Err(io::Error::other(format!("preset needs one liquid domain, found {}", domains.len())).into());
     };
+    let domain_type = built(domain).ok_or_else(|| io::Error::other(format!("{} is not a registered type", domain["typeId"])))?;
+    let speed = param_or_default(domain, domain_type.as_ref(), "speed")?;
+    if !speed.is_finite() || speed <= 0.0 {
+        return Err(io::Error::other("preset liquid Simulation Speed must be above 0 to capture").into());
+    }
     let mut frames = Vec::new();
     find_preset_nodes(
         &document["nodes"],
@@ -352,7 +360,6 @@ fn preset_settings(json: &str) -> CaptureResult<PresetSettings> {
         .ok_or_else(|| io::Error::other("the particle-frame publisher has no nodeId"))?
         .to_string();
     if frame["id"] != domain["id"] || frame["nodeId"] != domain["nodeId"] {
-        let domain_type = built(domain).ok_or_else(|| io::Error::other(format!("{} is not a registered type", domain["typeId"])))?;
         // Shared names across domains (GPU_MPM_SOLVER_DESIGN.md D17).
         let resolution = param_or_default(domain, domain_type.as_ref(), "resolution")?;
         let domain_size = param_or_default(domain, domain_type.as_ref(), "domain_size")?;
@@ -374,6 +381,7 @@ fn preset_settings(json: &str) -> CaptureResult<PresetSettings> {
             viscosity: 0.0,
             surface_tension: 0.0,
             points_per_cell,
+            speed,
         });
     }
     let fluid = domain;
@@ -408,6 +416,7 @@ fn preset_settings(json: &str) -> CaptureResult<PresetSettings> {
         viscosity: optional_coefficient("viscosity")?,
         surface_tension: optional_coefficient("surface_tension")?,
         points_per_cell: 8,
+        speed,
     })
 }
 
@@ -1330,7 +1339,7 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
             let particles = published_particles(&offline_runtime, &device, &options.frame_node, fluid.particle_count)?;
             look.observe(authored_time as f32, &particles);
         }
-        let expected_time = (authored_time * FIXED_HZ + 1e-8).floor() / FIXED_HZ;
+        let expected_time = preset.speed * (authored_time * FIXED_HZ + 1e-8).floor() / FIXED_HZ;
         if (fluid.simulation_time - expected_time).abs() > 1e-4 {
             return Err(io::Error::other(format!(
                 "offline frame {frame} simulation time {:.9} does not reach fixed-tick time {:.9}",
@@ -1662,7 +1671,12 @@ mod tests {
         ))
         .unwrap();
         assert_eq!((gpu_flip.solver, gpu_flip.frame_node.as_str()), (Solver::Gpu, "frame"));
-        assert_eq!((gpu_flip.resolution, gpu_flip.domain_size), (64, 4.0));
+        assert_eq!((gpu_flip.resolution, gpu_flip.domain_size, gpu_flip.speed), (64, 4.0, 1.0));
+        let sea_wall = preset_settings(include_str!(
+            "../assets/generator-presets/WaterSeaWallGpuFlip.json"
+        ))
+        .unwrap();
+        assert_eq!(sea_wall.speed, 0.5);
         let flip = preset_settings(include_str!("../assets/generator-presets/WaterDamBreak.json")).unwrap();
         assert_eq!((flip.solver, flip.frame_node.as_str()), (Solver::Flip, "fluid_surface"));
     }

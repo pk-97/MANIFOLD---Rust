@@ -17,6 +17,14 @@
         "resolution": {
           "type": "Int",
           "value": 112
+        },
+        "sheet_fill_rate": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "speed": {
+          "type": "Float",
+          "value": 0.5
         }
       },
       "typeId": "node.gpu_flip_domain"
@@ -445,15 +453,15 @@
               },
               "particle_scale": {
                 "type": "Float",
-                "value": 3.0
+                "value": 1.0
               },
               "smoothing": {
                 "type": "Float",
-                "value": 0.0
+                "value": 0.62
               },
               "stretch": {
                 "type": "Float",
-                "value": 1.0
+                "value": 6.0
               }
             },
             "typeId": "node.shape_particle_blobs"
@@ -623,7 +631,7 @@
             "params": {
               "value": {
                 "type": "Float",
-                "value": 0.0
+                "value": 0.62
               }
             },
             "typeId": "node.value"
@@ -1781,7 +1789,7 @@
         },
         "fill_pits": {
           "type": "Float",
-          "value": 0.0
+          "value": 0.62
         },
         "mesh_relaxation": {
           "type": "Float",
@@ -1789,11 +1797,11 @@
         },
         "particle_scale": {
           "type": "Float",
-          "value": 3.0
+          "value": 1.0
         },
         "smoothing": {
           "type": "Float",
-          "value": 0.0
+          "value": 0.62
         },
         "smoothing_iterations": {
           "type": "Int",
@@ -1805,7 +1813,7 @@
         },
         "stretch": {
           "type": "Float",
-          "value": 1.0
+          "value": 6.0
         }
       },
       "typeId": "group"
@@ -1815,38 +1823,6 @@
       "id": 433,
       "nodeId": "input",
       "typeId": "system.generator_input"
-    },
-    {
-      "handle": "camera",
-      "id": 434,
-      "nodeId": "camera",
-      "params": {
-        "distance": {
-          "type": "Float",
-          "value": 12.5
-        },
-        "far": {
-          "type": "Float",
-          "value": 2000.0
-        },
-        "fov_y": {
-          "type": "Float",
-          "value": 0.6399999856948853
-        },
-        "look_y": {
-          "type": "Float",
-          "value": 1.0
-        },
-        "orbit": {
-          "type": "Float",
-          "value": 1.0
-        },
-        "tilt": {
-          "type": "Float",
-          "value": 0.3499999940395355
-        }
-      },
-      "typeId": "node.orbit_camera"
     },
     {
       "handle": "environment",
@@ -2263,7 +2239,7 @@
       "params": {
         "aim_y": {
           "type": "Float",
-          "value": 0.4000000059604645
+          "value": 1.0
         },
         "cast_shadows": {
           "type": "Float",
@@ -2271,19 +2247,19 @@
         },
         "color_b": {
           "type": "Float",
-          "value": 1.0
+          "value": 0.62
         },
         "color_g": {
           "type": "Float",
-          "value": 0.7799999713897705
+          "value": 0.82
         },
         "color_r": {
           "type": "Float",
-          "value": 0.5699999928474426
+          "value": 1.0
         },
         "intensity": {
           "type": "Float",
-          "value": 0.6499999761581421
+          "value": 2.2
         },
         "mode": {
           "type": "Enum",
@@ -2291,15 +2267,23 @@
         },
         "pos_x": {
           "type": "Float",
-          "value": 4.0
+          "value": 6.0
         },
         "pos_y": {
           "type": "Float",
-          "value": 3.0
+          "value": 2.4
         },
         "pos_z": {
           "type": "Float",
-          "value": 2.5
+          "value": -3
+        },
+        "aim_x": {
+          "type": "Float",
+          "value": 3.2
+        },
+        "aim_z": {
+          "type": "Float",
+          "value": 0.0
         }
       },
       "typeId": "node.light"
@@ -2375,7 +2359,7 @@
       "params": {
         "capacity": {
           "type": "Int",
-          "value": 100000
+          "value": 250000
         },
         "max_energy": {
           "type": "Float",
@@ -2387,7 +2371,11 @@
         },
         "wavecrest_emission": {
           "type": "Float",
-          "value": 175.0
+          "value": 800.0
+        },
+        "turbulence_emission": {
+          "type": "Float",
+          "value": 400.0
         }
       },
       "typeId": "node.whitewater_step"
@@ -2624,7 +2612,7 @@
       "params": {
         "value": {
           "type": "Float",
-          "value": 100000.0
+          "value": 250000.0
         }
       },
       "typeId": "node.value"
@@ -2817,6 +2805,101 @@
         }
       },
       "typeId": "node.transform_3d"
+    },
+    {
+      "id": 518,
+      "nodeId": "camera",
+      "typeId": "node.free_camera",
+      "params": {
+        "pos_x": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "pos_y": {
+          "type": "Float",
+          "value": 0.6
+        },
+        "pos_z": {
+          "type": "Float",
+          "value": 3.6
+        },
+        "yaw": {
+          "type": "Float",
+          "value": -0.711
+        },
+        "pitch": {
+          "type": "Float",
+          "value": 0.084
+        },
+        "fov_y": {
+          "type": "Float",
+          "value": 0.55
+        },
+        "far": {
+          "type": "Float",
+          "value": 2000.0
+        }
+      }
+    },
+    {
+      "id": 519,
+      "nodeId": "lens",
+      "typeId": "node.camera_lens",
+      "params": {
+        "focus_distance": {
+          "type": "Float",
+          "value": 4.77
+        },
+        "f_stop": {
+          "type": "Float",
+          "value": 8.0
+        },
+        "shutter_angle": {
+          "type": "Float",
+          "value": 180.0
+        }
+      }
+    },
+    {
+      "id": 520,
+      "nodeId": "haze",
+      "typeId": "node.atmosphere",
+      "params": {
+        "fog_density": {
+          "type": "Float",
+          "value": 0.035
+        },
+        "fog_color_r": {
+          "type": "Float",
+          "value": 0.42
+        },
+        "fog_color_g": {
+          "type": "Float",
+          "value": 0.47
+        },
+        "fog_color_b": {
+          "type": "Float",
+          "value": 0.55
+        }
+      }
+    },
+    {
+      "id": 521,
+      "nodeId": "coc",
+      "typeId": "node.coc_from_depth",
+      "params": {}
+    },
+    {
+      "id": 522,
+      "nodeId": "bokeh",
+      "typeId": "node.bokeh_gather",
+      "params": {}
+    },
+    {
+      "id": 523,
+      "nodeId": "motion_blur",
+      "typeId": "node.motion_blur",
+      "params": {}
     }
   ],
   "presetMetadata": {
@@ -2869,7 +2952,7 @@
           "type": "Float"
         },
         "defaultMirrorsNodeParam": true,
-        "defaultValue": 0.0,
+        "defaultValue": 1.0,
         "id": "sheet_fill_rate",
         "label": "Sheet Fill Rate",
         "target": {
@@ -2883,7 +2966,7 @@
           "type": "Float"
         },
         "defaultMirrorsNodeParam": true,
-        "defaultValue": 1.0,
+        "defaultValue": 0.5,
         "id": "speed",
         "label": "Speed",
         "target": {
@@ -2979,7 +3062,7 @@
         "convert": {
           "type": "Float"
         },
-        "defaultValue": 3.0,
+        "defaultValue": 1.0,
         "id": "surface_particle_scale",
         "label": "Surface Particle Scale",
         "target": {
@@ -3045,7 +3128,7 @@
           "type": "IntRound"
         },
         "defaultMirrorsNodeParam": true,
-        "defaultValue": 100000.0,
+        "defaultValue": 250000.0,
         "id": "whitewater_capacity",
         "label": "Whitewater Budget",
         "target": {
@@ -3085,7 +3168,7 @@
         "convert": {
           "type": "Float"
         },
-        "defaultValue": 1.0,
+        "defaultValue": 6.0,
         "id": "surface_stretch",
         "label": "Stretch",
         "target": {
@@ -3098,7 +3181,7 @@
         "convert": {
           "type": "Float"
         },
-        "defaultValue": 0.0,
+        "defaultValue": 0.62,
         "id": "surface_centre_smoothing",
         "label": "Centre Smoothing",
         "target": {
@@ -3111,7 +3194,7 @@
         "convert": {
           "type": "Float"
         },
-        "defaultValue": 0.0,
+        "defaultValue": 0.62,
         "id": "surface_fill_pits",
         "label": "Fill Pits",
         "target": {
@@ -3164,7 +3247,7 @@
         "wholeNumbers": true
       },
       {
-        "defaultValue": 0.0,
+        "defaultValue": 1.0,
         "formatString": "F2",
         "id": "sheet_fill_rate",
         "isToggle": false,
@@ -3176,7 +3259,7 @@
         "wholeNumbers": false
       },
       {
-        "defaultValue": 1.0,
+        "defaultValue": 0.5,
         "formatString": "F1",
         "id": "speed",
         "isToggle": false,
@@ -3228,7 +3311,7 @@
         "wholeNumbers": true
       },
       {
-        "defaultValue": 3.0,
+        "defaultValue": 1.0,
         "formatString": "F3",
         "id": "surface_particle_scale",
         "isToggle": false,
@@ -3322,7 +3405,7 @@
         "wholeNumbers": false
       },
       {
-        "defaultValue": 100000.0,
+        "defaultValue": 250000.0,
         "formatString": "F0",
         "id": "whitewater_capacity",
         "isToggle": false,
@@ -3346,7 +3429,7 @@
         "wholeNumbers": true
       },
       {
-        "defaultValue": 1.0,
+        "defaultValue": 6.0,
         "formatString": "F2",
         "id": "surface_stretch",
         "isToggle": false,
@@ -3359,7 +3442,7 @@
         "wholeNumbers": false
       },
       {
-        "defaultValue": 0.0,
+        "defaultValue": 0.62,
         "formatString": "F2",
         "id": "surface_centre_smoothing",
         "isToggle": false,
@@ -3372,7 +3455,7 @@
         "wholeNumbers": false
       },
       {
-        "defaultValue": 0.0,
+        "defaultValue": 0.62,
         "formatString": "F2",
         "id": "surface_fill_pits",
         "isToggle": false,
@@ -4245,12 +4328,6 @@
       "toPort": "nodes_z"
     },
     {
-      "fromNode": 434,
-      "fromPort": "out",
-      "toNode": 463,
-      "toPort": "camera"
-    },
-    {
       "fromNode": 436,
       "fromPort": "out",
       "toNode": 463,
@@ -4369,12 +4446,6 @@
       "fromPort": "out",
       "toNode": 463,
       "toPort": "light_1"
-    },
-    {
-      "fromNode": 463,
-      "fromPort": "color",
-      "toNode": 471,
-      "toPort": "in"
     },
     {
       "fromNode": 471,
@@ -5119,6 +5190,72 @@
       "fromPort": "transform",
       "toNode": 0,
       "toPort": "domain"
+    },
+    {
+      "fromNode": 518,
+      "fromPort": "out",
+      "toNode": 519,
+      "toPort": "camera"
+    },
+    {
+      "fromNode": 519,
+      "fromPort": "out",
+      "toNode": 463,
+      "toPort": "camera"
+    },
+    {
+      "fromNode": 520,
+      "fromPort": "atmosphere",
+      "toNode": 463,
+      "toPort": "atmosphere"
+    },
+    {
+      "fromNode": 463,
+      "fromPort": "depth",
+      "toNode": 521,
+      "toPort": "depth"
+    },
+    {
+      "fromNode": 519,
+      "fromPort": "out",
+      "toNode": 521,
+      "toPort": "camera"
+    },
+    {
+      "fromNode": 463,
+      "fromPort": "color",
+      "toNode": 522,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 521,
+      "fromPort": "out",
+      "toNode": 522,
+      "toPort": "width"
+    },
+    {
+      "fromNode": 522,
+      "fromPort": "out",
+      "toNode": 523,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 463,
+      "fromPort": "velocity",
+      "toNode": 523,
+      "toPort": "velocity"
+    },
+    {
+      "fromNode": 519,
+      "fromPort": "out",
+      "toNode": 523,
+      "toPort": "camera"
+    },
+    {
+      "fromNode": 523,
+      "fromPort": "out",
+      "toNode": 471,
+      "toPort": "in"
     }
   ]
 }
