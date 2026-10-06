@@ -1,8 +1,9 @@
 //! Checked against FLIP Fluids the engine's coupled tank (gravity tests) (MIT); see THIRD_PARTY_NOTICES.md.
 //! The liquid conformance table (`docs/LIQUID_SOLVER_SEAM_DESIGN.md`
 //! section 3.8 (Committed signatures), I2 and I10): one row per liquid domain
-//! type with its scenes, the setup changes it refuses by name, and the checks
-//! it is exempt from, each with its reason. The GPU checks read this table
+//! type with its scenes, the setup changes it refuses by name, the checks it
+//! is exempt from, each with its reason, and the named misses a logged bug
+//! keeps red in checks it still runs. The GPU checks read this table
 //! in `tests/gpu_proofs/liquid_conformance.rs`; the CPU checks live here.
 
 use manifold_core::PresetTypeId;
@@ -302,11 +303,26 @@ pub struct LiquidSolverRow {
     pub faces: Option<FaceSource>,
     /// A closed list, each with its reason.
     pub exempt: &'static [(Check, &'static str)],
+    /// Named misses a logged bug keeps failing in checks the row still runs.
+    pub known_red: &'static [KnownRed],
+}
+
+/// One of a check's named misses that a logged bug keeps red on a row. The
+/// check runs whole and prints it; the rest of its misses still fail it, and
+/// a run where this one never fails fails too, so it comes off with the fix.
+pub struct KnownRed {
+    pub check: Check,
+    pub miss: &'static str,
+    pub reason: &'static str,
 }
 
 impl LiquidSolverRow {
     pub fn exemption(&self, check: Check) -> Option<&'static str> {
         self.exempt.iter().find(|(exempt, _)| *exempt == check).map(|(_, reason)| *reason)
+    }
+
+    pub fn known_red(&self, check: Check, miss: &str) -> Option<&'static str> {
+        self.known_red.iter().find(|known| known.check == check && known.miss == miss).map(|known| known.reason)
     }
 }
 
@@ -323,19 +339,20 @@ const GPU_FLIP_WALLS_IN_SOLVE: &str = "GPU FLIP's tank walls are in its pressure
      floor's push back on a box pressing the pool is real ground reaction, so the walls absorb momentum and \
      body plus liquid momentum cannot balance; the check is valid only for a solver with no walls in the solve";
 
-// Known bugs, each logged with its numbers; an exemption comes off with its fix.
+// Known bugs, each logged with its numbers; a known red comes off with its fix.
 const GPU_FLIP_CORNER_LIFT: &str = "BUG-o3kj8 (GPU FLIP pushes a light box tilted into a corner down instead of \
      up): the liquid pins the box flat in the corner, so it never lifts, and Box3D and the law part on its tilted ticks";
 const GPU_FLIP_FLOATS_HIGH: &str = "BUG-u8nqr (GPU FLIP floating boxes keep bobbing at rest and float about a cell \
-     high): the bob and the height are the liquid's; the handover on these boxes is exact";
+     high): the bob and the height are the liquid's, and a box dropped 5 cm above where it should float lands near \
+     its own high rest, short of the centimetre of travel the handover check needs; the handover on these boxes is exact";
 const GPU_FLIP_BOX_ON_BOX: &str = "BUG-gbx3u (Body handoff: supports between two coupled bodies): an upper box is \
      free in the pressure solve and sinks into the box below";
-const GPU_FLIP_HANDOVER: &str = "BUG-o3kj8 (GPU FLIP pushes a light box tilted into a corner down instead of \
-     up) drives the tilted fixture apart, and BUG-u8nqr (GPU FLIP floating boxes float about a cell high) starts the \
-     floating fixtures at the liquid's own rest, short of the centimetre of travel the check needs. The law against \
-     Box3D stays proven on the CPU (coupled_motion tests)";
 const MPM_FLOATS_LOW: &str = "BUG-28j99 (MPM floats boxes about 3.5 cm low and drifts at rest): hidden on main by \
      the old impulse handoff, which pushed floating bodies up";
+
+const fn known(check: Check, miss: &'static str, reason: &'static str) -> KnownRed {
+    KnownRed { check, miss, reason }
+}
 
 pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
     LiquidSolverRow {
@@ -408,10 +425,11 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
                  sum or the division differently from the CPU; a few faces land one unit off",
             ),
         }),
-        exempt: &[
-            (Check::HandoverAgreement, MPM_MOVES_ITS_OWN_BODIES),
-            (Check::FloatingRest, MPM_FLOATS_LOW),
-            (Check::FloatingDraft, MPM_FLOATS_LOW),
+        exempt: &[(Check::HandoverAgreement, MPM_MOVES_ITS_OWN_BODIES)],
+        known_red: &[
+            known(Check::FloatingRest, "rms", MPM_FLOATS_LOW),
+            known(Check::FloatingRest, "drift", MPM_FLOATS_LOW),
+            known(Check::FloatingDraft, "draft", MPM_FLOATS_LOW),
         ],
     },
     LiquidSolverRow {
@@ -480,6 +498,7 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
             ),
             (Check::FaceGridPublished, "FLIP conforms as built and publishes no grid (D3)"),
         ],
+        known_red: &[],
     },
     LiquidSolverRow {
         type_id: GPU_FLIP_DOMAIN_TYPE_ID,
@@ -539,12 +558,19 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
             // A gather: the published faces are the solver's projected faces.
             ulps: (0, ""),
         }),
-        exempt: &[
-            (Check::CollisionMomentum, GPU_FLIP_WALLS_IN_SOLVE),
-            (Check::LiftOff, GPU_FLIP_CORNER_LIFT),
-            (Check::HandoverAgreement, GPU_FLIP_HANDOVER),
-            (Check::FloatingRest, GPU_FLIP_FLOATS_HIGH),
-            (Check::SubmergedStack, GPU_FLIP_BOX_ON_BOX),
+        exempt: &[(Check::CollisionMomentum, GPU_FLIP_WALLS_IN_SOLVE)],
+        known_red: &[
+            known(Check::FloatingRest, "centre", GPU_FLIP_FLOATS_HIGH),
+            known(Check::FloatingRest, "rms", GPU_FLIP_FLOATS_HIGH),
+            known(Check::FloatingRest, "drift", GPU_FLIP_FLOATS_HIGH),
+            known(Check::LiftOff, "left", GPU_FLIP_CORNER_LIFT),
+            known(Check::LiftOff, "surface", GPU_FLIP_CORNER_LIFT),
+            known(Check::LiftOff, "lost", GPU_FLIP_CORNER_LIFT),
+            known(Check::LiftOff, "refused", GPU_FLIP_CORNER_LIFT),
+            known(Check::SubmergedStack, "lost", GPU_FLIP_BOX_ON_BOX),
+            known(Check::SubmergedStack, "rms", GPU_FLIP_BOX_ON_BOX),
+            known(Check::HandoverAgreement, "travel", GPU_FLIP_FLOATS_HIGH),
+            known(Check::HandoverAgreement, "bound", GPU_FLIP_CORNER_LIFT),
         ],
     },
 ];
@@ -1094,6 +1120,16 @@ mod tests {
             for (i, (check, reason)) in row.exempt.iter().enumerate() {
                 assert!(!reason.trim().is_empty(), "{}: {check:?} is exempt without a reason", row.type_id);
                 assert!(!row.exempt[..i].iter().any(|(c, _)| c == check), "{}: {check:?} is exempt twice", row.type_id);
+            }
+            for (i, known) in row.known_red.iter().enumerate() {
+                let (check, miss) = (known.check, known.miss);
+                assert!(!known.reason.trim().is_empty(), "{}: {check:?} {miss} is known red without a reason", row.type_id);
+                assert!(row.exemption(check).is_none(), "{}: {check:?} is both exempt and known red", row.type_id);
+                assert!(
+                    !row.known_red[..i].iter().any(|k| k.check == check && k.miss == miss),
+                    "{}: {check:?} {miss} is known red twice",
+                    row.type_id
+                );
             }
             for atom in row.atomic_free {
                 let node = registry.construct(atom).unwrap_or_else(|| panic!("{}: atomic-free atom {atom} is not registered", row.type_id));

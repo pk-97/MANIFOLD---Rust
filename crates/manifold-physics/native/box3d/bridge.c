@@ -954,16 +954,19 @@ int manifold_box3d_body_apply_impulse(
 // The liquid's reaction spread over the step as a steady force and torque
 // (LIQUID_SOLVER_SEAM_DESIGN.md D17). Box3D clears both after each step. A
 // body handed one cannot sleep through the step: sleep zeroes the velocity
-// the liquid's law predicted; manifold_box3d_body_allow_sleep restores it.
+// the liquid's law predicted. `paused_out` is 1 when this call turned the
+// body's sleep off; manifold_box3d_body_allow_sleep turns it back on.
 int manifold_box3d_body_apply_wrench(
 	uint64_t body_value,
 	const float* force,
-	const float* torque )
+	const float* torque,
+	int* paused_out )
 {
-	if ( force == NULL || torque == NULL )
+	if ( force == NULL || torque == NULL || paused_out == NULL )
 	{
 		return BOX3D_BRIDGE_ERROR;
 	}
+	*paused_out = 0;
 	for ( int i = 0; i < 3; ++i )
 	{
 		if ( !isfinite( force[i] ) || !isfinite( torque[i] ) )
@@ -987,13 +990,15 @@ int manifold_box3d_body_apply_wrench(
 	{
 		b3Body_ApplyTorque( body_id, (b3Vec3){ torque[0], torque[1], torque[2] }, true );
 	}
-	if ( pushed || turned )
+	if ( ( pushed || turned ) && b3Body_IsSleepEnabled( body_id ) )
 	{
 		b3Body_EnableSleep( body_id, false );
+		*paused_out = 1;
 	}
 	return BOX3D_BRIDGE_OK;
 }
 
+// Undoes a sleep pause manifold_box3d_body_apply_wrench reported.
 void manifold_box3d_body_allow_sleep( uint64_t body_value )
 {
 	b3BodyId body_id = b3LoadBodyId( body_value );
@@ -1018,21 +1023,25 @@ void manifold_box3d_body_allow_sleep( uint64_t body_value )
 // in reading order; the patch centre is the mean of all the manifold's
 // anchors, touching or not, where Box3D applies central and twist friction.
 // Points are taken a round at a time over the manifolds (every manifold's
-// first point, then every second), so a full `points` still holds every
-// support. `found_out` counts every touching point, kept or not.
+// first touching point, then every second), so a full `points` still holds
+// every support. `found_out` counts every touching point read, kept or not;
+// `unread_out` counts the body's contacts past BOX3D_CONTACT_READ, which the
+// read never looked at (Box3D's contact count, touching or not).
 int manifold_box3d_body_support_points(
 	uint64_t body_value,
 	float* points,
 	int capacity,
 	int* count_out,
-	int* found_out )
+	int* found_out,
+	int* unread_out )
 {
-	if ( points == NULL || count_out == NULL || found_out == NULL || capacity < 0 )
+	if ( points == NULL || count_out == NULL || found_out == NULL || unread_out == NULL || capacity < 0 )
 	{
 		return BOX3D_BRIDGE_ERROR;
 	}
 	*count_out = 0;
 	*found_out = 0;
+	*unread_out = 0;
 	b3BodyId body_id = b3LoadBodyId( body_value );
 	if ( !b3Body_IsValid( body_id ) )
 	{
@@ -1040,6 +1049,11 @@ int manifold_box3d_body_support_points(
 	}
 	b3ContactData contacts[BOX3D_CONTACT_READ];
 	int total = b3Body_GetContactData( body_id, contacts, BOX3D_CONTACT_READ );
+	int listed = b3Body_GetContactCapacity( body_id );
+	if ( total == BOX3D_CONTACT_READ && listed > BOX3D_CONTACT_READ )
+	{
+		*unread_out = listed - BOX3D_CONTACT_READ;
+	}
 	b3Pos centre = b3Body_GetWorldCenterOfMass( body_id );
 	int count = 0;
 	int found = 0;
@@ -1064,15 +1078,26 @@ int manifold_box3d_body_support_points(
 			{
 				const b3Manifold* manifold = contacts[c].manifolds + m;
 				patch += 1;
-				if ( round >= manifold->pointCount )
+				// The manifold normal points from shape A to shape B.
+				b3Vec3 n = ours_a ? b3Neg( manifold->normal ) : manifold->normal;
+				if ( !box3d_vec3_finite( n ) )
 				{
 					continue;
 				}
-				const b3ManifoldPoint* point = manifold->points + round;
-				// The manifold normal points from shape A to shape B.
-				b3Vec3 n = ours_a ? b3Neg( manifold->normal ) : manifold->normal;
-				b3Vec3 lever = ours_a ? point->anchorA : point->anchorB;
-				if ( point->separation > B3_LINEAR_SLOP || !box3d_vec3_finite( n ) || !box3d_vec3_finite( lever ) )
+				// This round's touching point: the manifold's round-th one.
+				b3Vec3 lever = b3Vec3_zero;
+				int rank = -1;
+				for ( int k = 0; k < manifold->pointCount && rank < round; ++k )
+				{
+					const b3ManifoldPoint* point = manifold->points + k;
+					b3Vec3 anchor = ours_a ? point->anchorA : point->anchorB;
+					if ( point->separation <= B3_LINEAR_SLOP && box3d_vec3_finite( anchor ) )
+					{
+						rank += 1;
+						lever = anchor;
+					}
+				}
+				if ( rank < round )
 				{
 					continue;
 				}

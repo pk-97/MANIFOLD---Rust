@@ -190,6 +190,7 @@ mod ffi {
             body: u64,
             force: *const f32,
             torque: *const f32,
+            paused_out: *mut i32,
         ) -> i32;
         pub fn manifold_box3d_body_allow_sleep(body: u64);
         pub fn manifold_box3d_body_support_points(
@@ -198,6 +199,7 @@ mod ffi {
             capacity: i32,
             count_out: *mut i32,
             found_out: *mut i32,
+            unread_out: *mut i32,
         ) -> i32;
         pub fn manifold_box3d_body_apply_field(
             body: u64,
@@ -1111,20 +1113,27 @@ impl PhysicsWorld {
     /// `body`'s touching contact points with static and kinematic bodies
     /// (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` D16), up to `out`'s length and
     /// [`MAX_SUPPORT_POINTS`]. A full `out` still holds a point of every
-    /// support: the bridge takes every contact's first point before any
-    /// second.
+    /// support: the bridge takes every contact's first touching point before
+    /// any second.
     pub fn support_points(&self, body: BodyHandle, out: &mut [SupportPoint]) -> Result<SupportCount, PhysicsError> {
         let native = self.native_body(body)?;
         let capacity = out.len().min(MAX_SUPPORT_POINTS);
         let mut raw = [[0.0f32; 20]; MAX_SUPPORT_POINTS];
-        let (mut kept, mut found) = (0, 0);
+        let (mut kept, mut found, mut unread) = (0, 0, 0);
         let result = {
             let _lock = native_lock();
             unsafe {
-                ffi::manifold_box3d_body_support_points(native, raw.as_mut_ptr().cast(), capacity as i32, &mut kept, &mut found)
+                ffi::manifold_box3d_body_support_points(
+                    native,
+                    raw.as_mut_ptr().cast(),
+                    capacity as i32,
+                    &mut kept,
+                    &mut found,
+                    &mut unread,
+                )
             }
         };
-        if result != 0 || !(0..=capacity as i32).contains(&kept) || found < kept {
+        if result != 0 || !(0..=capacity as i32).contains(&kept) || found < kept || unread < 0 {
             return Err(PhysicsError::NativeFailure);
         }
         for (point, raw) in out.iter_mut().zip(&raw[..kept as usize]) {
@@ -1139,7 +1148,7 @@ impl PhysicsWorld {
                 patch_velocity: [raw[16], raw[17], raw[18]],
             };
         }
-        Ok(SupportCount { kept: kept as usize, found: found as usize })
+        Ok(SupportCount { kept: kept as usize, found: found as usize, unread: unread as usize })
     }
 
     /// Impulses applied at once, or spread as force over a step of `over`
@@ -1210,11 +1219,15 @@ impl PhysicsWorld {
                 if preflight_result != 0 {
                     return Err(PhysicsError::InvalidInput("impulse result is invalid"));
                 }
-                self.impulse_scratch.push(ImpulseApplication {
-                    native,
-                    linear: impulse.linear,
-                    angular: impulse.angular,
-                });
+                // Spread over a step, it is applied as force J/dt and torque
+                // L/dt, checked here so no body is touched when one overflows.
+                let (linear, angular) = match over {
+                    None => (impulse.linear, impulse.angular),
+                    Some(dt) => (impulse.linear.map(|j| j / dt), impulse.angular.map(|l| l / dt)),
+                };
+                validate_vec3(linear, "reaction force")?;
+                validate_vec3(angular, "reaction torque")?;
+                self.impulse_scratch.push(ImpulseApplication { native, linear, angular });
             }
 
             for application in &self.impulse_scratch {
@@ -1226,10 +1239,20 @@ impl PhysicsWorld {
                             application.angular.as_ptr(),
                         )
                     },
-                    Some(dt) => {
-                        let (force, torque) = (application.linear.map(|j| j / dt), application.angular.map(|l| l / dt));
-                        self.reaction_awake.push(application.native);
-                        unsafe { ffi::manifold_box3d_body_apply_wrench(application.native, force.as_ptr(), torque.as_ptr()) }
+                    Some(_) => {
+                        let mut paused = 0;
+                        let result = unsafe {
+                            ffi::manifold_box3d_body_apply_wrench(
+                                application.native,
+                                application.linear.as_ptr(),
+                                application.angular.as_ptr(),
+                                &mut paused,
+                            )
+                        };
+                        if paused != 0 {
+                            self.reaction_awake.push(application.native);
+                        }
+                        result
                     }
                 };
                 if apply_result != 0 {

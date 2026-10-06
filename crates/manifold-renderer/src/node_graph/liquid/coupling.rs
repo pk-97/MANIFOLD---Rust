@@ -454,8 +454,13 @@ fn capture_rows(
     for (index, body) in bodies.iter().enumerate() {
         let mut points = [SupportPoint::default(); MAX_SUPPORT_POINTS];
         let count = world.support_points(body.handle, &mut points).map_err(|error| error.to_string())?;
-        if count.found > count.kept {
-            log::warn!("Liquid coupling: body {index} touches {} support points; the liquid sees {}", count.found, count.kept);
+        if !count.complete() {
+            log::warn!(
+                "Liquid coupling: body {index} touches {} support points ({} contacts unread); the liquid sees {}",
+                count.found,
+                count.unread,
+                count.kept
+            );
         }
         contacts.push(pack_supports(&points[..count.kept]));
         let d = world.dynamics(body.handle).map_err(|error| error.to_string())?;

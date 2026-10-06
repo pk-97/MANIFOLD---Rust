@@ -57,6 +57,15 @@ pub struct SupportPoint {
 pub struct SupportCount {
     pub kept: usize,
     pub found: usize,
+    /// Contacts past the bridge's read, touching or not, never looked at.
+    pub unread: usize,
+}
+
+impl SupportCount {
+    /// Every touching point the body has was kept.
+    pub fn complete(&self) -> bool {
+        self.kept == self.found && self.unread == 0
+    }
 }
 
 /// The support points a body stays on, held through a pressure solve.
@@ -452,7 +461,7 @@ mod tests {
     fn supports_of(world: &PhysicsWorld, body: BodyHandle) -> Vec<SupportPoint> {
         let mut out = [SupportPoint::default(); MAX_SUPPORT_POINTS];
         let count = world.support_points(body, &mut out).unwrap();
-        assert_eq!(count.kept, count.found, "every touching point fits");
+        assert!(count.complete(), "every touching point fits: {count:?}");
         out[..count.kept].to_vec()
     }
 
@@ -555,6 +564,24 @@ mod tests {
         drifting.queue_reaction_over_step(&[BodyImpulse { body, linear: [0.08, 0.0, 0.0], angular: [0.0; 3] }], dt).unwrap();
         settle(&mut drifting, dt, 30);
         assert!(!drifting.dynamics(body).unwrap().awake, "a body no longer handed a reaction falls asleep");
+    }
+
+    /// A reaction whose J/dt overflows is refused before any body is
+    /// touched: the valid one beside it is not applied either.
+    #[test]
+    fn an_overflowing_reaction_touches_no_body() {
+        let dt = Seconds(1e-3);
+        let mut world = PhysicsWorld::new([0.0; 3]).unwrap();
+        let first = world.add_hull(&cuboid([0.2; 3]), BodyConfig { mass: 8.0, ..BodyConfig::default() }).unwrap();
+        let second =
+            world.add_hull(&cuboid([0.2; 3]), BodyConfig { position: [2.0, 0.0, 0.0], mass: 8.0, ..BodyConfig::default() }).unwrap();
+        let reactions = [
+            BodyImpulse { body: first, linear: [1.0, 0.0, 0.0], angular: [0.0; 3] },
+            BodyImpulse { body: second, linear: [3e37, 0.0, 0.0], angular: [0.0; 3] },
+        ];
+        assert!(world.queue_reaction_over_step(&reactions, dt).is_err());
+        world.step(dt, box3d_substep_count(dt).value).unwrap();
+        assert_eq!(world.dynamics(first).unwrap().linear_velocity, [0.0; 3]);
     }
 
     /// D16: a box resting flat on a fixed floor reads its bottom face's four
@@ -667,6 +694,11 @@ mod tests {
         let supports = supports_of(&world, plank);
         let on = |n: [f32; 3]| supports.iter().filter(|p| gap(p.normal, n) < 1e-3).count();
         assert!(on([0.0, 1.0, 0.0]) > 0 && on([1.0, 0.0, 0.0]) > 0, "the plank stands on the floor and the wall: {supports:?}");
+        // Two slots still hold both supports, whichever manifold points touch.
+        let mut two = [SupportPoint::default(); 2];
+        let count = world.support_points(plank, &mut two).unwrap();
+        assert_eq!((count.kept, count.found, count.unread), (2, supports.len(), 0));
+        assert_ne!(two[0].patch, two[1].patch, "one point of each support: {two:?}");
         let start = start_of(&world, plank);
         let (t, h) = (dt.0 as f32, coupled_substep(dt));
         let held = coupled_state_at(&start, &supports, [0.0; 3], [0.0; 3], t, h);
