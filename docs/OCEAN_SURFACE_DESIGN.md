@@ -1,6 +1,6 @@
 # Ocean Surface — a spectral open ocean out to the horizon, and a cliff cove that splashes
 
-**Status:** BUILT on `feat/ocean-cliff`, landing owed (Astra review, `landing_gate.py`) · 2026-10-07 · D7 and D12 superseded by the look gate, see each · Claude Opus 5.5 (lead)
+**Status:** SHIPPED · 2026-10-07 · D5 amended, D7 and D12 superseded by the look gate, see each · owed: BUG-2jka4 (Camera Sky seam at the HDRI wrap), BUG-3gwe9 (ripple detail normals and variance roughness), BUG-ra759 (Box3D hull assert on a cliff fragment) · Claude Opus 5.5 (lead)
 **Prerequisites:** none
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) and section 6 (Seam briefs) before starting any phase.
 
@@ -113,7 +113,7 @@ keeps the finite difference's averaging. The three fold fields only drive foam a
 bilinear. Slope-field normals were tried again in a side-by-side and rejected for the
 reason above: smooth near the camera, but they sparkle at the horizon without footprint
 filtering, which is the variance-roughness work this decision already defers
-(BUG-fgx4g (exact slope normals with footprint filtering)).
+(BUG-3gwe9 (ripple detail normals and variance roughness)).
 
 **D6 — Foam is the summed surface's fold, painted into vertex colour.**
 `node.projected_grid` writes its Colour param, the water's own albedo, into vertex
