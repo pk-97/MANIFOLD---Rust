@@ -1017,10 +1017,16 @@ fn rest_run(row: &'static LiquidSolverRow, fixture: Fixture, hz: u32) -> LiquidR
     LiquidRun::on_project_rate(row, scene(row, fixture), f64::from(60 / hz), false, false, None, f64::from(hz))
 }
 
-/// One tick of a rest proof: every body row and the liquid's totals.
+/// GPU FLIP's stats word counting particles a solid would not release this
+/// tick (`liquid_stats.rs`'s layout; word 9).
+const PUSH_REFUSED_WORD: usize = 9;
+
+/// One tick of a rest proof: every body row, the liquid's totals, and the
+/// particles left inside a solid (GPU FLIP; 0 for a liquid without the count).
 struct RestTick {
     bodies: Vec<LiquidBody>,
     liquid: LiquidTotals,
+    refused: u32,
 }
 
 fn rest_tick(run: &mut LiquidRun, row: &LiquidSolverRow, bodies: usize) -> RestTick {
@@ -1031,7 +1037,12 @@ fn rest_tick(run: &mut LiquidRun, row: &LiquidSolverRow, bodies: usize) -> RestT
     assert_eq!(liquid.nonfinite, 0, "{}: a non-finite tick", row.type_id);
     let mut rows: Vec<LiquidBody> = run.read(run.domain_type, "bodies");
     rows.truncate(bodies);
-    RestTick { bodies: rows, liquid }
+    let refused = if row.type_id == GPU_FLIP_DOMAIN_TYPE_ID { run.totals_words(row)[PUSH_REFUSED_WORD] } else { 0 };
+    RestTick { bodies: rows, liquid, refused }
+}
+
+fn refused(ticks: &[RestTick]) -> u32 {
+    ticks.iter().map(|t| t.refused).sum()
 }
 
 fn rest_ticks(run: &mut LiquidRun, row: &LiquidSolverRow, bodies: usize, n: u32) -> Vec<RestTick> {
@@ -1129,8 +1140,9 @@ fn liquid_floating_rest() {
                 let what = format!("{} ratio {density_ratio} at {hz} Hz", row.type_id);
                 eprintln!(
                     "liquid_floating_rest {what}: RMS motion {:.4} m/s, peak {:.4} m/s, drift {:.4} m, centre {:.4} m \
-                     against {floats_at:.4} m, liquid lift {lift:.2} g, water stirred to {stirred:.3e} J, water lost {:.4}%",
-                    rest.rms, rest.peak, rest.drift, rest.mean_y, 100.0 * lost
+                     against {floats_at:.4} m, liquid lift {lift:.2} g, water stirred to {stirred:.3e} J, water lost {:.4}%, \
+                     left inside a solid {}",
+                    rest.rms, rest.peak, rest.drift, rest.mean_y, 100.0 * lost, refused(&ticks)
                 );
                 misses.check(stirred > 1e-4, || format!("{what}: the drop never set the water moving"));
                 misses.check((lift - 1.0).abs() <= 0.3, || format!("{what}: the water holds up {lift:.2} of the box's weight"));
@@ -1168,8 +1180,9 @@ fn liquid_resting_contact() {
                 let lost = water_lost(&ticks);
                 let what = format!("{} at {hz} Hz", row.type_id);
                 eprintln!(
-                    "liquid_resting_contact {what}: RMS motion {:.5} m/s, peak {:.5} m/s, drift {:.5} m, water lost {:.4}%",
-                    rest.rms, rest.peak, rest.drift, 100.0 * lost
+                    "liquid_resting_contact {what}: RMS motion {:.5} m/s, peak {:.5} m/s, drift {:.5} m, water lost {:.4}%, \
+                     left inside a solid {}",
+                    rest.rms, rest.peak, rest.drift, 100.0 * lost, refused(&ticks)
                 );
                 misses.check(lost == 0.0, || format!("{what}: {:.4}% of the water removed", 100.0 * lost));
                 misses.check(rest.rms <= 1e-3, || format!("{what}: the resting box moves at {:.5} m/s RMS", rest.rms));
@@ -1201,8 +1214,9 @@ fn liquid_lift_off() {
             let what = row.type_id.to_string();
             eprintln!(
                 "liquid_lift_off {what}: left the floor at tick {left:?} of {hz} a second, centre {start:.4} m to {end:.4} m \
-                 at 4 s, water lost {:.4}%",
-                100.0 * lost
+                 at 4 s, water lost {:.4}%, left inside a solid {}",
+                100.0 * lost,
+                refused(&ticks)
             );
             misses.check(left.is_some_and(|tick| tick < hz as usize), || format!("{what}: the light box did not leave the floor within a second"));
             misses.check(end > f64::from(scene.fill) - f64::from(scene.edge), || format!("{what}: the light box sits at {end:.4} m, not at the surface"));
@@ -1239,10 +1253,11 @@ fn liquid_submerged_stack() {
             let what = row.type_id.to_string();
             eprintln!(
                 "liquid_submerged_stack {what}: peak speed {peak:.4} m/s, RMS motion over the last 2 s {:.4?} m/s, \
-                 heights {:.4?} m, water lost {:.4}%",
+                 heights {:.4?} m, water lost {:.4}%, left inside a solid {}",
                 rests.iter().map(|r| r.rms).collect::<Vec<_>>(),
                 rests.iter().map(|r| r.mean_y).collect::<Vec<_>>(),
-                100.0 * lost
+                100.0 * lost,
+                refused(&ticks)
             );
             misses.check(lost == 0.0, || format!("{what}: {:.4}% of the water removed under the stack", 100.0 * lost));
             misses.check(peak <= 2.0, || format!("{what}: a stacked box reached {peak:.3} m/s"));

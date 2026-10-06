@@ -2180,6 +2180,39 @@ fn resolve_solid(q0: vec3<f32>, q1: vec3<f32>, n: vec3<i32>, edge: vec3<f32>) ->
     return q1;
 }
 
+// Water is never deleted at a solid (LIQUID_SOLVER_SEAM_DESIGN.md D19). A
+// particle a move leaves inside one (a body swept over it, or it sat still
+// under a body) climbs the distance's gradient to SOLID_BUFFER cells
+// outside, the engine's own push-out (FluidSimulation::
+// _resolveSolidLevelSetUpdateCollisionsThread, written and then disabled
+// upstream): at most PUSH_OUT_ROUNDS steps, each brought back inside the
+// walls, no further than SOLID_PUSH cells in all. A particle with no way
+// out stays where it is and counts as a refused push-out.
+const PUSH_OUT_ROUNDS: i32 = 3;
+
+fn push_out(q: vec3<f32>, n: vec3<i32>, edge: vec3<f32>) -> vec3<f32> {
+    var p = q;
+    for (var round = 0; round < PUSH_OUT_ROUNDS; round = round + 1) {
+        let d = solid_at(p, n);
+        if d >= 0.0 {
+            break;
+        }
+        let g = solid_gradient(p, n);
+        if !(length(g) > 1e-6) {
+            break;
+        }
+        p = p - (d - SOLID_BUFFER) * normalize(g);
+        if !inside_boundary(p, n, edge.x) {
+            p = clamp_boundary(p, n, edge.x);
+        }
+    }
+    if solid_at(p, n) >= 0.0 && length(p - q) <= SOLID_PUSH {
+        return p;
+    }
+    push_refused = 1u;
+    return q;
+}
+
 // An open face is a sink, as the engine's is: every wall stays solid, and a
 // particle within OPEN_BOUNDARY_WIDTH cells of an open face is removed
 // (FluidSimulation::_openBoundaryWidth, _removeMarkerParticles). The emptied
@@ -2207,8 +2240,8 @@ fn open_band(q: vec3<f32>, n: vec3<i32>) -> bool {
 // and ¾ of step_dt, weights 2/9, 3/9, 4/9), plus the density
 // projection's move. The native safety AABB and solid collision sequence is
 // shared by wall-only and body scenes; a particle still inside one, where a
-// moving solid swept over it, is removed: radius 0
-// (FluidSimulation::_removeMarkerParticles). A non-finite move or velocity
+// moving solid swept over it, is pushed out (push_out), never removed. A
+// non-finite move or velocity
 // is written as it is: the tick's stats must see it to halt the liquid.
 // Radius and id are kept otherwise; unused slots pass through.
 @compute @workgroup_size(256)
@@ -2252,7 +2285,9 @@ fn faces_to_particles(@builtin(global_invocation_id) gid: vec3<u32>) {
             q1 = clamp_boundary(q1, n, edge.x);
         }
         q1 = resolve_solid(q0, q1, n, edge);
-        radius = select(radius, 0.0, solid_at(q1, n) < 0.0);
+        if solid_at(q1, n) < 0.0 {
+            q1 = push_out(q1, n, edge);
+        }
         capped[2u * idx + 1u] = push_before + push_refused;
     }
     if open_band(q1, n) {
@@ -2715,7 +2750,7 @@ fn narrow_move(@builtin(global_invocation_id) gid: vec3<u32>) {
             reached = clamp_boundary(reached, n, edge.x);
         }
         reached = resolve_solid(q, reached, n, edge);
-        if solid_at(reached, n) < 0.0 { out.position_radius.w = 0.0; }
+        if solid_at(reached, n) < 0.0 { reached = push_out(reached, n, edge); }
         capped[2u*i+1u] += push_refused;
     }
     if open_band(reached, n) { out.position_radius.w = 0.0; }
