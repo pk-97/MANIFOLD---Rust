@@ -107,7 +107,7 @@ fn whitewater_extents_at_64() {
         Some(crate::node_graph::transform::Transform { scale: [4.1875; 3], ..Default::default() }),
         DEFAULT_CAPACITY).expect("tick grid");
     let particles = u64::from(PARTICLE_SLOTS);
-    assert_eq!(tick.held_bytes(particles, true), 279_054_872,
+    assert_eq!(tick.held_bytes(particles, true), 275_854_872,
         "67-cubed grid, particle/pool/scan/output storage and reinitialisation scratch");
     assert_eq!(tick.held_bytes(particles, false) - tick.held_bytes(particles, true), 2_406_104);
     assert_eq!(2 * 67u64.pow(3) * 4, 2_406_104);
@@ -576,7 +576,7 @@ fn whitewater_step_extents_at_64() {
     // 64³ reinitialisation arrays, ceil(64/6)³ block flags, four state words, the sweep's indirect grid
     // (16 bytes) and a zero clock plan (48 bytes).
     let engine_distance = 4 * 70u64.pow(3) + 12 * 64u64.pow(3) + 4 * 11u64.pow(3) + 16 + 16 + 48;
-    assert_eq!(held, 282_078_580 + engine_distance, "all emitter and engine-distance storage is accounted for");
+    assert_eq!(held, 278_878_580 + engine_distance, "all emitter and engine-distance storage is accounted for");
 
     let refusals = [
         (StepShape::new([0; 3], level, [64; 3], 1.0, bounds, DEFAULT_CAPACITY), "solid lattice is missing"),

@@ -11,8 +11,6 @@ use std::borrow::Cow;
 use manifold_fluids::WhitewaterSpawn;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice};
 
-use super::age_whitewater::AgeWhitewater;
-use super::advect_whitewater::AdvectWhitewater;
 use super::crossing_distance::CrossingDistance;
 use super::emission_count::WAVECREST_RATE;
 use super::turbulence_field::TurbulenceField;
@@ -27,12 +25,9 @@ use super::nearest_crossing::NearestCrossing;
 use super::pad_distance_lattice::{encode_pad_distance_lattice, prepare_pad_distance_lattice};
 use super::prefix_scan::{PrefixScan, ScanLabels, storage_words};
 use super::preserve_foam::PreserveFoam;
-use super::retype_whitewater::RetypeWhitewater;
 use super::sort_particles_into_cells::{ParticleSorter, SortJob, SortLabels, range_storage_bytes, whitewater_record_read};
-use super::spawn_whitewater::SpawnWhitewater;
 use super::standalone_pipeline::standalone_pipeline;
 use super::surface_crossings::SurfaceCrossings;
-use super::whitewater_type::WhitewaterType;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::fluid::TICK;
@@ -56,9 +51,11 @@ pub const MAX_CAPACITY: u32 = 250_000;
 
 
 const WHITEWATER_FUSED_SHADER: &str = include_str!("shaders/whitewater_fused.wgsl");
-const FUSED_ENTRIES: [(&str, &str); 2] = [
+const FUSED_ENTRIES: [(&str, &str); 4] = [
     ("ww_emit", "node.whitewater_step.emit"),
     ("ww_dust", "node.whitewater_step.dust"),
+    ("ww_spawn", "node.whitewater_step.spawn"),
+    ("ww_lifecycle", "node.whitewater_step.lifecycle"),
 ];
 
 fn fused_source(packed: bool) -> String {
@@ -165,6 +162,132 @@ impl EmitParams {
             ticks: frame.ticks as f32, live_count: count as f32, dt: frame.dt,
             dust_enabled: f32::from(u8::from(frame.dust_emission)),
             boundary_dust: f32::from(u8::from(frame.boundary_dust)), count, _pad: [0; 2],
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct SpawnParams {
+    capacity: f32,
+    emitters: f32,
+    face_cells_x: f32,
+    face_cells_y: f32,
+    face_cells_z: f32,
+    center_x: f32,
+    center_y: f32,
+    center_z: f32,
+    size_x: f32,
+    size_y: f32,
+    size_z: f32,
+    nodes_x: f32,
+    nodes_y: f32,
+    nodes_z: f32,
+    seed: f32,
+    epoch: f32,
+    min_lifetime: f32,
+    max_lifetime: f32,
+    lifetime_variance: f32,
+    dt: f32,
+    spray_speed: f32,
+    type_seed: f32,
+    type_epoch: f32,
+    dust: f32,
+    count: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct LifecycleParams {
+    center_x: f32,
+    center_y: f32,
+    center_z: f32,
+    size_x: f32,
+    size_y: f32,
+    size_z: f32,
+    nodes_x: f32,
+    nodes_y: f32,
+    nodes_z: f32,
+    face_cells_x: f32,
+    face_cells_y: f32,
+    face_cells_z: f32,
+    gravity_x: f32,
+    gravity_y: f32,
+    gravity_z: f32,
+    dt: f32,
+    foam_advection: f32,
+    bubble_buoyancy: f32,
+    bubble_drag: f32,
+    spray_drag: f32,
+    spray_drag_variance: f32,
+    spray_restitution: f32,
+    spray_friction: f32,
+    substep_count: f32,
+    field_nodes_x: f32,
+    field_nodes_y: f32,
+    field_nodes_z: f32,
+    field_spacing: f32,
+    force_lattices: f32,
+    tick_index: f32,
+    first_tick: f32,
+    bubble_lifetime_modifier: f32,
+    foam_lifetime_modifier: f32,
+    spray_lifetime_modifier: f32,
+    count: u32,
+    _pad0: u32,
+}
+
+impl SpawnParams {
+    fn new(frame: &StepFrame, emitters: u32, dust: bool) -> Self {
+        let s = &frame.shape;
+        let [center_x, center_y, center_z] = s.center;
+        let [size_x, size_y, size_z] = s.size;
+        let [nodes_x, nodes_y, nodes_z] = s.nodes.map(|n| n as f32);
+        let [face_cells_x, face_cells_y, face_cells_z] = s.face_cells.map(|n| n as f32);
+        Self {
+            capacity: s.capacity as f32, emitters: emitters as f32,
+            center_x, center_y, center_z, size_x, size_y, size_z,
+            nodes_x, nodes_y, nodes_z, face_cells_x, face_cells_y, face_cells_z,
+            seed: if dust { frame.seed + 104729.0 } else { frame.seed }, epoch: frame.epoch as f32,
+            min_lifetime: super::spawn_whitewater::MIN_LIFETIME,
+            max_lifetime: super::spawn_whitewater::MAX_LIFETIME,
+            lifetime_variance: super::spawn_whitewater::LIFETIME_VARIANCE,
+            dt: frame.dt, spray_speed: if dust { 1.0 } else { frame.spray_speed },
+            type_seed: if dust { 0.0 } else { frame.seed }, type_epoch: if dust { 0.0 } else { frame.epoch as f32 },
+            dust: f32::from(u8::from(dust)), count: s.capacity, _pad0: 0, _pad1: 0, _pad2: 0,
+        }
+    }
+}
+
+impl LifecycleParams {
+    fn new(frame: &StepFrame, inputs: &StepInputs<'_>) -> Self {
+        use super::{advect_whitewater as advect, age_whitewater as age};
+        let s = &frame.shape;
+        let [center_x, center_y, center_z] = s.center;
+        let [size_x, size_y, size_z] = s.size;
+        let [nodes_x, nodes_y, nodes_z] = s.nodes.map(|n| n as f32);
+        let [face_cells_x, face_cells_y, face_cells_z] = s.face_cells.map(|n| n as f32);
+        let [gravity_x, gravity_y, gravity_z] = frame.gravity;
+        let motion = inputs.motion.as_ref();
+        let [field_nodes_x, field_nodes_y, field_nodes_z] = motion.map_or([2; 3], |m| m.fields.nodes).map(|n| n as f32);
+        Self {
+            center_x, center_y, center_z, size_x, size_y, size_z,
+            nodes_x, nodes_y, nodes_z, face_cells_x, face_cells_y, face_cells_z,
+            gravity_x, gravity_y, gravity_z, dt: frame.dt,
+            foam_advection: advect::FOAM_ADVECTION, bubble_buoyancy: advect::BUBBLE_BUOYANCY, bubble_drag: advect::BUBBLE_DRAG,
+            spray_drag: advect::SPRAY_DRAG, spray_drag_variance: advect::SPRAY_DRAG_VARIANCE,
+            spray_restitution: advect::SPRAY_RESTITUTION, spray_friction: advect::SPRAY_FRICTION,
+            substep_count: motion.map_or(0.0, |m| m.count as f32),
+            field_nodes_x, field_nodes_y, field_nodes_z,
+            field_spacing: motion.map_or(0.25, |m| m.fields.spacing),
+            force_lattices: motion.map_or(0.0, |m| m.fields.force_lattices as f32),
+            tick_index: motion.map_or(0.0, |m| m.tick_index), first_tick: motion.map_or(0.0, |m| m.fields.first_tick as f32),
+            bubble_lifetime_modifier: age::BUBBLE_LIFETIME_MODIFIER, foam_lifetime_modifier: age::FOAM_LIFETIME_MODIFIER,
+            spray_lifetime_modifier: age::SPRAY_LIFETIME_MODIFIER,
+            count: s.capacity, _pad0: 0,
         }
     }
 }
@@ -422,7 +545,7 @@ impl StepShape {
         let grid = cells * (2 * SURFACE_CROSSING_BYTES + distance_fields + 4 + 2 * KNOWN_VALUE + 4);
         let per_particle = particles * (2 * PARTICLE + 4 + 4 + 4) + storage_words(particles as usize) as u64 * 4;
         let capacity = u64::from(self.capacity);
-        let pool = 2 * self.spawn_bytes() + 2 * self.pool_bytes() + capacity * 4;
+        let pool = self.spawn_bytes() + 2 * self.pool_bytes() + capacity * 4;
         let sort = 2 * capacity * 4 + storage_words(bin_total(self.bins) as usize) as u64 * 4 + self.range_bytes();
         let scan = storage_words(self.slot_scan_values()) as u64 * 4 + STATE_WORDS * 4;
         let outputs = OUTPUT_SLOTS as u64 * (4 * self.population_bytes() + COUNT_WORDS as u64 * 4);
@@ -657,11 +780,6 @@ struct Pipelines {
     turbulence: Option<GpuComputePipeline>,
     influence: Option<GpuComputePipeline>,
     extend: Option<GpuComputePipeline>,
-    spawn: Option<GpuComputePipeline>,
-    kind: Option<GpuComputePipeline>,
-    advect: Option<GpuComputePipeline>,
-    retype: Option<GpuComputePipeline>,
-    age: Option<GpuComputePipeline>,
     preserve: Option<GpuComputePipeline>,
     keep: Option<GpuComputePipeline>,
     /// `whitewater_step.wgsl`, in [`Hand`] order.
@@ -726,11 +844,6 @@ impl Pipelines {
         standalone_pipeline::<TurbulenceField>(&mut self.turbulence, device);
         standalone_pipeline::<LatticeCurvature>(&mut self.curvature, device);
         standalone_pipeline::<ExtendLattice>(&mut self.extend, device);
-        standalone_pipeline::<SpawnWhitewater>(&mut self.spawn, device);
-        standalone_pipeline::<WhitewaterType>(&mut self.kind, device);
-        standalone_pipeline::<AdvectWhitewater>(&mut self.advect, device);
-        standalone_pipeline::<RetypeWhitewater>(&mut self.retype, device);
-        standalone_pipeline::<AgeWhitewater>(&mut self.age, device);
         standalone_pipeline::<PreserveFoam>(&mut self.preserve, device);
         standalone_pipeline::<KeepWhitewater>(&mut self.keep, device);
         if self.fused.is_empty() {
@@ -781,7 +894,6 @@ struct Fields {
     turbulence: GpuBuffer,
     influence: [GpuBuffer; 2],
     empty_source: GpuBuffer,
-    spawns: GpuBuffer,
     typed: GpuBuffer,
     pools: [GpuBuffer; 2],
     order: GpuBuffer,
@@ -803,7 +915,6 @@ impl Fields {
             turbulence: alloc(cells * 4)?,
             influence: [alloc(shape.solid_bytes())?, alloc(shape.solid_bytes())?],
             empty_source: alloc(shape.solid_bytes() * 4)?,
-            spawns: alloc(shape.spawn_bytes())?,
             typed: alloc(shape.spawn_bytes())?,
             pools: [alloc(shape.pool_bytes())?, alloc(shape.pool_bytes())?],
             order: alloc(u64::from(shape.capacity) * 4)?,
@@ -1017,7 +1128,7 @@ impl Step {
 
     fn reserve(&mut self, device: &GpuDevice, shape: StepShape, particles: u64, tick_mode: bool) -> Result<(), String> {
         #[cfg(all(test, feature = "gpu-proofs"))]
-        self.reference.reserve(device, particles as u32)?;
+        self.reference.reserve(device, particles as u32, shape.capacity)?;
         self.surface_distance.reserve(device, shape.face_cells)?;
         if self.shape != Some(shape) || self.tick_mode != tick_mode {
             self.shape = None;
@@ -1154,8 +1265,6 @@ impl Step {
         let cells = s.cell_count() as u32;
         let [nx, ny, nz] = s.nodes.map(|n| n as f32);
         let [lx, ly, lz] = s.level_nodes.map(|n| n as f32);
-        let [cx, cy, cz] = s.center;
-        let [sx, sy, sz] = s.size;
         let [fx, fy, fz] = s.face_cells.map(|n| n as f32);
         let nodes = [("nodes_x", nx), ("nodes_y", ny), ("nodes_z", nz)];
         let label = |pass: &str| -> &'static str {
@@ -1244,22 +1353,12 @@ impl Step {
             curvature = 1 - curvature;
         }
         let [sampled, energy, unscaled, dust_energy, wavecrest_bits] = scratch;
-        let box3 = [("center_x", cx), ("center_y", cy), ("center_z", cz), ("size_x", sx), ("size_y", sy), ("size_z", sz)];
         let faces = [("face_cells_x", fx), ("face_cells_y", fy), ("face_cells_z", fz)];
         atom::<TurbulenceField>(
             enc, get(&p.turbulence),
             &[faces[0], faces[1], faces[2], nodes[0], nodes[1], nodes[2], ("cell_size", s.cell_size)],
             &[distance, inputs.faces[0], inputs.faces[1], inputs.faces[2], &f.turbulence],
             cells, "node.whitewater_step.turbulence");
-        let epoch = frame.epoch as f32;
-        let mut grid = [("", 0.0); 9];
-        grid[..6].copy_from_slice(&box3);
-        grid[6..].copy_from_slice(&nodes);
-        let mut velocity_params = [("", 0.0); 12];
-        velocity_params[..9].copy_from_slice(&grid);
-        velocity_params[9] = ("spray_speed", frame.spray_speed);
-        velocity_params[10] = ("seed", frame.seed);
-        velocity_params[11] = ("epoch", epoch);
         #[cfg(all(test, feature = "gpu-proofs"))]
         let reference = self.reference.enabled;
         emitter_path!(reference, {
@@ -1280,24 +1379,7 @@ impl Step {
         #[cfg(all(test, feature = "gpu-proofs"))]
         self.reference.capture_emit(enc, sampled, unscaled, energy, offsets, emitters, frame.dust_emission);
         self.emission_scan.encode_labelled(enc, emitters.max(1) as usize, EMISSION_SCAN);
-        let mut spawn = [("", 0.0); 19];
-        spawn[0] = ("capacity", s.capacity as f32);
-        spawn[1] = ("emitters", emitters as f32);
-        spawn[2..5].copy_from_slice(&faces);
-        spawn[5..11].copy_from_slice(&box3);
-        spawn[11..14].copy_from_slice(&nodes);
-        spawn[14] = ("seed", frame.seed);
-        spawn[15] = ("epoch", epoch);
-        spawn[16] = ("dt", frame.dt);
-        atom::<SpawnWhitewater>(
-            enc,
-            get(&p.spawn),
-            &spawn[..17],
-            &[offsets, sampled, energy, inputs.faces[0], inputs.faces[1], inputs.faces[2], inputs.solid, &f.spawns],
-            s.capacity,
-            "node.whitewater_step.spawn",
-        );
-        atom::<WhitewaterType>(enc, get(&p.kind), &velocity_params, &[&f.spawns, surface, &f.cells, &f.typed], s.capacity, "node.whitewater_step.kind");
+        self.spawn(enc, frame, inputs, surface, offsets, sampled, energy, emitters, false);
         let params = HandParams { capacity: s.capacity, spawn_slots: s.capacity, emitters, count: s.capacity };
         let pool = &f.pools[self.current];
         self.hand(enc, Hand::LiveFlags, params, self.bound(pool, pool, HandBuffers::default()));
@@ -1322,15 +1404,7 @@ impl Step {
             #[cfg(all(test, feature = "gpu-proofs"))]
             self.reference.capture_dust(enc, dust_energy, offsets, emitters);
             self.emission_scan.encode_labelled(enc, emitters.max(1) as usize, EMISSION_SCAN);
-            spawn[14] = ("seed", frame.seed + 104729.0);
-            atom::<SpawnWhitewater>(enc, get(&p.spawn), &spawn[..17],
-                &[offsets, unscaled, dust_energy, inputs.faces[0], inputs.faces[1], inputs.faces[2], inputs.solid, &f.spawns],
-                s.capacity, "node.whitewater_step.dust_spawn");
-            let mut dust_type = [("", 0.0); 10];
-            dust_type[..9].copy_from_slice(&grid);
-            dust_type[9] = ("dust", 1.0);
-            atom::<WhitewaterType>(enc, get(&p.kind), &dust_type,
-                &[&f.spawns, surface, &f.cells, &f.typed], s.capacity, "node.whitewater_step.dust_type");
+            self.spawn(enc, frame, inputs, surface, offsets, unscaled, dust_energy, emitters, true);
             self.hand(enc, Hand::LiveFlags, params, self.bound(pool, pool, HandBuffers::default()));
             self.slot_scan.encode_labelled(enc, s.capacity as usize, APPEND_SCAN);
             self.hand(enc, Hand::Append, params, self.bound(pool, pool, HandBuffers::default()));
@@ -1339,6 +1413,47 @@ impl Step {
         let surface = surface.clone();
         self.influence_current = influence_next;
         surface
+    }
+
+    /// Spawn and classify before append, preserving the atom defaults for dust typing.
+    fn spawn(&self, enc: &mut manifold_gpu::GpuEncoder, frame: &StepFrame, inputs: &StepInputs<'_>,
+        surface: &GpuBuffer, offsets: &GpuBuffer, sampled: &GpuBuffer, energy: &GpuBuffer, emitters: u32, dust: bool) {
+        let f = self.fields();
+        emitter_path!(self.reference.enabled, {
+            self.reference.spawn_reference(enc, frame, inputs, f, surface, offsets, sampled, energy, emitters, dust);
+        }, {
+            let label = if dust { "node.whitewater_step.dust_spawn" } else { FUSED_ENTRIES[2].1 };
+            dispatch(enc, &self.pipelines.fused[2], bytemuck::bytes_of(&SpawnParams::new(frame, emitters, dust)),
+                &[sampled, inputs.faces[0], inputs.faces[1], inputs.faces[2], &f.state,
+                  surface, &f.cells, offsets, energy, inputs.solid, &f.typed], frame.shape.capacity, label, Barrier::After);
+            #[cfg(all(test, feature = "gpu-proofs"))]
+            self.reference.record_dispatch(label, frame.shape.capacity);
+        });
+        #[cfg(all(test, feature = "gpu-proofs"))]
+        self.reference.capture_particle(enc, &f.typed, usize::from(dust));
+    }
+
+    /// The old a → b → a → b chain ends in b in both paths. Sort and all
+    /// current/preserve/compaction bookkeeping stay in tick.
+    fn lifecycle(&self, enc: &mut manifold_gpu::GpuEncoder, frame: &StepFrame, inputs: &StepInputs<'_>,
+        surface: &GpuBuffer, a: &GpuBuffer, b: &GpuBuffer) {
+        let f = self.fields();
+        emitter_path!(self.reference.enabled, {
+            self.reference.lifecycle_reference(enc, frame, inputs, f, surface, a, b);
+        }, {
+            let motion = inputs.motion.as_ref();
+            let empty = &f.state;
+            let history = motion.map_or([empty; 3], |m| m.faces);
+            dispatch(enc, &self.pipelines.fused[3], bytemuck::bytes_of(&LifecycleParams::new(frame, inputs)),
+                &[a, inputs.faces[0], inputs.faces[1], inputs.faces[2], empty, surface, &f.cells, inputs.solid,
+                  motion.map_or(empty, |m| m.schedule), history[0], history[1], history[2],
+                  motion.and_then(|m| m.fields.forces).unwrap_or(empty), motion.and_then(|m| m.fields.impulses).unwrap_or(empty), b],
+                frame.shape.capacity, FUSED_ENTRIES[3].1, Barrier::After);
+            #[cfg(all(test, feature = "gpu-proofs"))]
+            self.reference.record_dispatch(FUSED_ENTRIES[3].1, frame.shape.capacity);
+        });
+        #[cfg(all(test, feature = "gpu-proofs"))]
+        self.reference.capture_particle(enc, b, 2);
     }
 
     /// One tick of FLIP's whitewater: advect, retype, age, sort, preserve
@@ -1376,35 +1491,9 @@ impl Step {
             ("face_cells_y", fy),
             ("face_cells_z", fz),
         ];
-        let [gx, gy, gz] = frame.gravity;
-        let mut advect = [("", 0.0); 24];
-        advect[..12].copy_from_slice(&place);
-        advect[12..16].copy_from_slice(&[("gravity_x", gx), ("gravity_y", gy), ("gravity_z", gz), ("dt", dt)]);
-        let faces = inputs.faces;
+        self.lifecycle(enc, frame, inputs, surface, a, b);
         let motion = inputs.motion.as_ref();
         let empty = &f.state;
-        let history = motion.map_or([empty;3], |m| m.faces);
-        let field_nodes = motion.map_or([2;3], |m| m.fields.nodes);
-        advect[16..].copy_from_slice(&[
-            ("substep_count", motion.map_or(0.0, |m| m.count as f32)),
-            ("field_nodes_x", field_nodes[0] as f32), ("field_nodes_y", field_nodes[1] as f32), ("field_nodes_z", field_nodes[2] as f32),
-            ("field_spacing", motion.map_or(0.25, |m| m.fields.spacing)),
-            ("force_lattices", motion.map_or(0.0, |m| m.fields.force_lattices as f32)),
-            ("tick_index", motion.map_or(0.0, |m| m.tick_index)),
-            ("first_tick", motion.map_or(0.0, |m| m.fields.first_tick as f32)),
-        ]);
-        atom::<AdvectWhitewater>(enc, get(&p.advect), &advect, &[a, faces[0], faces[1], faces[2], inputs.solid,
-            motion.map_or(empty, |m| m.schedule), history[0], history[1], history[2],
-            motion.and_then(|m| m.fields.forces).unwrap_or(empty), motion.and_then(|m| m.fields.impulses).unwrap_or(empty), b], cap, "node.whitewater_step.advect");
-        atom::<RetypeWhitewater>(
-            enc,
-            get(&p.retype),
-            &place,
-            &[b, surface, &f.cells, faces[0], faces[1], faces[2], a],
-            cap,
-            "node.whitewater_step.retype",
-        );
-        atom::<AgeWhitewater>(enc, get(&p.age), &[("dt", dt)], &[a, b], cap, "node.whitewater_step.age");
         let bin_min: [f32; 3] = std::array::from_fn(|i| s.center[i] - 0.5 * s.size[i]);
         let job = SortJob {
             particles: b,
