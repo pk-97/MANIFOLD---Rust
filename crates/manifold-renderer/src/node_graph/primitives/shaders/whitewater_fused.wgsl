@@ -1,4 +1,4 @@
-// Whitewater stage fusion P2/P3. Phase functions are copies of the named atom bodies.
+// The whitewater stage's fused kernels. Phase functions are copies of the named atom bodies.
 // No hoisting: the atom pipelines remain the bitwise oracle under Fast math.
 // Ported from FLIP Fluids (MIT); see THIRD_PARTY_NOTICES.md.
 struct Element { position_radius: vec4<f32>, velocity: vec3<f32>, id: u32, }
@@ -79,14 +79,7 @@ fn sf_face_len(axis: u32) -> u32 {
 fn sf_face(axis: u32, i: u32) -> f32 {
     if LF_PACKED {
         let face_cells = vec3<u32>(max(round(vec3<f32>(p.face_cells_x, p.face_cells_y, p.face_cells_z)), vec3<f32>(0.0)));
-        var dims = face_cells;
-        dims[axis] += 1u;
-        let g = vec3<u32>(i % dims.x, (i / dims.x) % dims.y, i / (dims.x * dims.y));
-        let m = face_cells + vec3<u32>(1u);
-        let packed_index = g.x + m.x * (g.y + m.y * g.z);
-        if packed_index >= arrayLength(&buf_faces) { return 0.0; }
-        let s = buf_faces[packed_index];
-        return select(0.0, s.face_velocity[axis], s.face_weight[axis] > 0.0);
+        return ww_packed_face(axis, i, face_cells);
     }
     if axis == 0u {
         return buf_face_u[i];

@@ -1,6 +1,6 @@
 # Whitewater Stage Fusion — fuse the stage's internal atom chains, drop its grid copies, retire the face adapters
 
-**Status:** IN PROGRESS · 2026-10-06 · P0–P3 on main; P3b deferred (section 8) · owed: P4–P5.
+**Status:** IN PROGRESS · 2026-10-06 · P0–P4 on main; P3b deferred (section 8) · owed: P5.
 **Prerequisites:** none. The display-history landing (`85226c917`) is on main; this design touches nothing it owns.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) and section 6 (Seam briefs) before starting any phase.
 

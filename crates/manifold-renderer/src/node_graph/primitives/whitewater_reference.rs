@@ -1,4 +1,4 @@
-//! P2/P3 test-only atom oracle. No fused uniform or phase code is used here.
+//! Test-only atom oracle for the fused whitewater kernels. No fused uniform or phase code is used here.
 use super::*;
 use super::super::turbulence_field::TurbulenceField;
 use super::super::age_whitewater::AgeWhitewater;

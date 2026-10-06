@@ -763,15 +763,7 @@ const SURFACE_DETAIL_OFFSET: usize = 1;
 #[cfg(any(test, feature = "gpu-proofs"))]
 pub(crate) fn render_def(scene: WaterScene) -> EffectGraphDef {
     let mut def = serde_json::to_value(water_def(scene.with_surface())).expect("water def serialises");
-    let mut preset = shipped_preset();
-    // Seeds from either side of P4 regenerate identically. Remove the tick
-    // adapters here; publication adapters remain controlled by scene.faces.
-    let adapters: Vec<u64> = preset["nodes"].as_array().expect("nodes").iter()
-        .filter(|n| ["whitewater_face_u", "whitewater_face_v", "whitewater_face_w"].iter().any(|name| n["nodeId"] == *name))
-        .map(|n| n["id"].as_u64().expect("adapter id")).collect();
-    preset["nodes"].as_array_mut().expect("nodes").retain(|n| !adapters.contains(&n["id"].as_u64().expect("id")));
-    preset["wires"].as_array_mut().expect("wires").retain(|w|
-        !adapters.contains(&w["fromNode"].as_u64().expect("from")) && !adapters.contains(&w["toNode"].as_u64().expect("to")));
+    let preset = shipped_preset();
 
     let harness = [id_named(&def, "mesh_sink"), id_named(&def, "output")];
     let ends = |wire: &Value| [wire["fromNode"].as_u64().expect("from"), wire["toNode"].as_u64().expect("to")];

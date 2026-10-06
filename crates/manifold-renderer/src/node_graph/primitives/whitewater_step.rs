@@ -851,6 +851,7 @@ struct Pipelines {
     keep: Option<GpuComputePipeline>,
     /// `whitewater_step.wgsl`, in [`Hand`] order.
     hand: Vec<GpuComputePipeline>,
+    /// `whitewater_fused.wgsl` in [`FUSED_ENTRIES`] order, indexed by [`FaceSource::packed`].
     fused: [Vec<GpuComputePipeline>; 2],
 }
 
