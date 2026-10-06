@@ -125,6 +125,9 @@ enum Solver {
     /// A GPU solver (GPU FLIP, MLS-MPM, any later one): the domain publishes
     /// through a frame node, and its time is in the frame's `gpu_ms`.
     Gpu,
+    /// No liquid (an ocean, a scene): frames are rendered and timed, and the
+    /// liquid columns stay 0.
+    None,
 }
 
 /// The particle-frame contract every liquid publishes
@@ -330,6 +333,18 @@ fn preset_settings(json: &str) -> CaptureResult<PresetSettings> {
     let built = |node: &serde_json::Value| node["typeId"].as_str().and_then(|type_id| registry.construct(type_id));
     let mut domains = Vec::new();
     find_preset_nodes(&document["nodes"], &|node| node["typeId"].as_str().is_some_and(is_liquid_domain), &mut domains);
+    if domains.is_empty() {
+        return Ok(PresetSettings {
+            solver: Solver::None,
+            frame_node: String::new(),
+            resolution: 0,
+            domain_size: 0.0,
+            surface_detail: 0,
+            viscosity: 0.0,
+            surface_tension: 0.0,
+            points_per_cell: 0,
+        });
+    }
     let [domain] = domains[..] else {
         return Err(io::Error::other(format!("preset needs one liquid domain, found {}", domains.len())).into());
     };
@@ -543,7 +558,9 @@ fn build_runtime(
         None,
     )
     .map_err(|error| io::Error::other(format!("build preset runtime: {error}")))?;
-    runtime.set_preview_node(Some(&NodeId::from(frame_node)));
+    if !frame_node.is_empty() {
+        runtime.set_preview_node(Some(&NodeId::from(frame_node)));
+    }
     Ok(runtime)
 }
 
@@ -613,6 +630,20 @@ fn context(frame: u32, authored_time: f64, dt: f64, options: &CaptureOptions) ->
 }
 
 fn read_fluid_metrics(runtime: &PresetRuntime, solver: Solver) -> CaptureResult<FluidMetrics> {
+    if solver == Solver::None {
+        return Ok(FluidMetrics {
+            simulation_time: 0.0,
+            lag_seconds: 0.0,
+            simulation_ms: 0.0,
+            meshing_ms: 0.0,
+            particle_count: 0.0,
+            vertex_count: 0.0,
+            foam_count: 0.0,
+            bubble_count: 0.0,
+            spray_count: 0.0,
+            upload_ms: 0.0,
+        });
+    }
     let (inputs, outputs) = runtime.preview_scalar_io();
     if solver == Solver::Gpu {
         // The GPU solver's time is in the frame's gpu_ms; the engine's
@@ -1204,6 +1235,9 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
         linear: options.linear || tone_mapped,
         ..options.clone()
     };
+    if options.solver == Solver::None && (options.gpu_surface || options.look_metrics || options.dump_mesh) {
+        return Err(io::Error::other("--gpu-surface, --look-metrics and --dump-mesh need a liquid in the preset").into());
+    }
     let instrumented_json =
         instrument_preset(&json, options.cinematic, options.supersample, options.solver, &options.frame_node)?;
     if options.cinematic {
@@ -1320,7 +1354,7 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
                 ))
                 .into());
             }
-        } else if fluid.vertex_count < 3.0 {
+        } else if options.solver == Solver::Flip && fluid.vertex_count < 3.0 {
             return Err(io::Error::other(format!(
                 "offline frame {frame} produced an empty fluid mesh"
             ))
@@ -1331,7 +1365,7 @@ fn run(options: &CaptureOptions) -> CaptureResult<()> {
             look.observe(authored_time as f32, &particles);
         }
         let expected_time = (authored_time * FIXED_HZ + 1e-8).floor() / FIXED_HZ;
-        if (fluid.simulation_time - expected_time).abs() > 1e-4 {
+        if options.solver != Solver::None && (fluid.simulation_time - expected_time).abs() > 1e-4 {
             return Err(io::Error::other(format!(
                 "offline frame {frame} simulation time {:.9} does not reach fixed-tick time {:.9}",
                 fluid.simulation_time, expected_time
@@ -1665,6 +1699,8 @@ mod tests {
         assert_eq!((gpu_flip.resolution, gpu_flip.domain_size), (64, 4.0));
         let flip = preset_settings(include_str!("../assets/generator-presets/WaterDamBreak.json")).unwrap();
         assert_eq!((flip.solver, flip.frame_node.as_str()), (Solver::Flip, "fluid_surface"));
+        let ocean = preset_settings(include_str!("../assets/generator-presets/Ocean.json")).unwrap();
+        assert_eq!((ocean.solver, ocean.frame_node.as_str()), (Solver::None, ""));
     }
 
     #[test]

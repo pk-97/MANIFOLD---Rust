@@ -1165,6 +1165,63 @@ fn camera_sky_over_fuses_and_matches_unfused() {
     );
 }
 
+/// `node.sea_horizon_env` (Gather on the sky) fused with a Pointwise
+/// neighbour matches the unfused pair.
+#[test]
+fn sea_horizon_env_fuses_and_matches_unfused() {
+    use super::install::{FusedDef, fuse_canonical_def};
+
+    let device = crate::test_device();
+    let registry = PrimitiveRegistry::with_builtin();
+    let (w, h) = (64u32, 64u32);
+    let input = gradient_input(&device, w, h);
+    let json = r#"{
+        "version": 1, "name": "SeaHorizonFusion", "nodes": [
+            { "id": 0, "typeId": "system.source", "nodeId": "source" },
+            { "id": 1, "typeId": "node.sea_horizon_env", "nodeId": "sea" },
+            { "id": 2, "typeId": "node.invert", "nodeId": "invert" },
+            { "id": 3, "typeId": "system.final_output", "nodeId": "final_output" }
+        ], "wires": [
+            { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "sky" },
+            { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
+            { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" }
+        ]
+    }"#;
+    let def: EffectGraphDef = serde_json::from_str(json).expect("parse fixture graph");
+
+    let mut unfused_graph = def.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
+    let unfused_plan = compile(&unfused_graph).expect("compile unfused");
+    let u_src = resource_for_output(&unfused_plan, find_node(&unfused_graph, "system.source"), "out");
+    let u_out = resource_for_output(&unfused_plan, find_node(&unfused_graph, "node.invert"), "out");
+    let unfused = render_graph(&device.arc(), &mut unfused_graph, &unfused_plan, u_src, &input, u_out);
+
+    let FusedDef { def: fused_def, .. } =
+        fuse_canonical_def(&def, &registry).expect("sea_horizon_env + invert is one fusable region");
+    assert_eq!(
+        fused_def.nodes.iter().filter(|n| n.type_id == "node.wgsl_compute").count(),
+        1,
+        "sea_horizon_env and invert must collapse to exactly one fused node"
+    );
+    let mut fused_graph = fused_def.into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
+    let fused_node = find_node(&fused_graph, "node.wgsl_compute");
+    let fused_plan = compile(&fused_graph).expect("compile fused");
+    let f_src = resource_for_output(&fused_plan, find_node(&fused_graph, "system.source"), "out");
+    let f_out = resource_for_output(&fused_plan, fused_node, "dst");
+    let fused = render_graph(&device.arc(), &mut fused_graph, &fused_plan, f_src, &input, f_out);
+
+    let differ = TextureDiff::new(&device);
+    let r = differ.compare(&device, &unfused.texture, &fused.texture, OUT_OF_LOOP_ULP_ABS_TOL, OUT_OF_LOOP_ULP_REL_TOL);
+    assert!(
+        r.passes(0.005) && r.over_count < 64,
+        "sea_horizon_env + invert fusion must match unfused: max_abs={}, max_rel={}, over={}/{} ({:.4})",
+        r.max_abs,
+        r.max_rel,
+        r.over_count,
+        r.total,
+        r.over_fraction()
+    );
+}
+
 /// Broad safety net for activating partial-region fusion library-wide: every
 /// bundled preset the finder fuses must render one frame through its fused view
 /// without panicking — the structural-breakage class (invalid generated WGSL, a

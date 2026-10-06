@@ -38,9 +38,9 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 388 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 389 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
-### Color & Tone (16)
+### Color & Tone (17)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -59,6 +59,7 @@ _Generated from the node registry. Do not hand-edit. 388 nodes registered, group
 | Posterize | `node.posterize` | Filter | Crushes each colour into a small number of steps for a banded, blocky look. Fewer levels give a chunkier result. |
 | Reinhard Tone Map | `node.reinhard_tone_map` | Filter | A simpler HDR-to-display tone map using the Reinhard curve. Lighter weight than the full Tone Map node. |
 | Saturation | `node.saturation` | Filter | Pulls colours toward grey or pushes them more vivid. |
+| Sea Horizon Environment | `node.sea_horizon_env` | Filter | Turns the ground half of an HDRI into open sea, so water reflects sky and sea instead of the beach the photo was taken from. |
 | Tone Map | `node.tone_map` | Filter | Fits HDR content, where colours can run far brighter than pure white, onto whatever display you are sending to. On a normal SDR screen or export it rolls the b… |
 
 ### Blur & Sharpen (9)
@@ -518,7 +519,7 @@ _Generated from the node registry. Do not hand-edit. 388 nodes registered, group
 | — | `system.mesh_input` | — | — |
 | — | `system.mesh_output` | — | — |
 
-### Effect & generator presets (96)
+### Effect & generator presets (97)
 
 | id | name | kind | category | params |
 |---|---|---|---|---|
@@ -589,6 +590,7 @@ _Generated from the node registry. Do not hand-edit. 388 nodes registered, group
 | `MotionMosh` | Motion Mosh | effect | Stylize | 7 |
 | `MriVolume` | MRI Volume | generator | Text & Media | 8 |
 | `NestedCubes` | Nested Cubes | generator | Geometry | 6 |
+| `Ocean` | Ocean | generator | Sim | 361 |
 | `OilyFluid` | Oily Fluid | generator | Sim | 14 |
 | `Oscilloscope` | Oscilloscope | generator | Audio | 11 |
 | `ParticleText` | Particle Text | generator | Text & Media | 15 |

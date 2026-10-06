@@ -1,0 +1,1016 @@
+{
+  "version": 3,
+  "name": "Ocean",
+  "description": "An open ocean out to the horizon: three FFT wave cascades (JONSWAP spectrum, Tessendorf choppy waves) on a camera-projected grid, foam where the surface folds, lit and backed by an HDRI sky.",
+  "nodes": [
+    {
+      "id": 0,
+      "nodeId": "input",
+      "typeId": "system.generator_input"
+    },
+    {
+      "id": 1,
+      "nodeId": "camera",
+      "typeId": "node.free_camera",
+      "params": {
+        "pos_x": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "pos_y": {
+          "type": "Float",
+          "value": 4.0
+        },
+        "pos_z": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "yaw": {
+          "type": "Float",
+          "value": -2.05
+        },
+        "pitch": {
+          "type": "Float",
+          "value": -0.04
+        },
+        "fov_y": {
+          "type": "Float",
+          "value": 0.6
+        },
+        "near": {
+          "type": "Float",
+          "value": 0.3
+        },
+        "far": {
+          "type": "Float",
+          "value": 30000.0
+        }
+      }
+    },
+    {
+      "id": 2,
+      "nodeId": "lens",
+      "typeId": "node.camera_lens",
+      "params": {
+        "focus_distance": {
+          "type": "Float",
+          "value": 300.0
+        },
+        "f_stop": {
+          "type": "Float",
+          "value": 16.0
+        },
+        "shutter_angle": {
+          "type": "Float",
+          "value": 180.0
+        }
+      }
+    },
+    {
+      "id": 3,
+      "nodeId": "swell_spectrum",
+      "typeId": "node.ocean_spectrum",
+      "params": {
+        "size": {
+          "type": "Int",
+          "value": 256
+        },
+        "tile_size": {
+          "type": "Float",
+          "value": 1000.0
+        },
+        "band_low": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "band_high": {
+          "type": "Float",
+          "value": 0.22574334
+        },
+        "wind_speed": {
+          "type": "Float",
+          "value": 10.0
+        },
+        "wind_direction": {
+          "type": "Float",
+          "value": 205.0
+        },
+        "seed": {
+          "type": "Int",
+          "value": 1
+        },
+        "fetch_km": {
+          "type": "Float",
+          "value": 60.0
+        }
+      }
+    },
+    {
+      "id": 4,
+      "nodeId": "chop_spectrum",
+      "typeId": "node.ocean_spectrum",
+      "params": {
+        "size": {
+          "type": "Int",
+          "value": 256
+        },
+        "tile_size": {
+          "type": "Float",
+          "value": 167.0
+        },
+        "band_low": {
+          "type": "Float",
+          "value": 0.22574334
+        },
+        "band_high": {
+          "type": "Float",
+          "value": 1.3962634
+        },
+        "wind_speed": {
+          "type": "Float",
+          "value": 10.0
+        },
+        "wind_direction": {
+          "type": "Float",
+          "value": 205.0
+        },
+        "seed": {
+          "type": "Int",
+          "value": 2
+        },
+        "fetch_km": {
+          "type": "Float",
+          "value": 60.0
+        }
+      }
+    },
+    {
+      "id": 5,
+      "nodeId": "ripple_spectrum",
+      "typeId": "node.ocean_spectrum",
+      "params": {
+        "size": {
+          "type": "Int",
+          "value": 256
+        },
+        "tile_size": {
+          "type": "Float",
+          "value": 27.0
+        },
+        "band_low": {
+          "type": "Float",
+          "value": 1.3962634
+        },
+        "band_high": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "wind_speed": {
+          "type": "Float",
+          "value": 10.0
+        },
+        "wind_direction": {
+          "type": "Float",
+          "value": 205.0
+        },
+        "seed": {
+          "type": "Int",
+          "value": 3
+        },
+        "fetch_km": {
+          "type": "Float",
+          "value": 60.0
+        }
+      }
+    },
+    {
+      "id": 6,
+      "nodeId": "swell_field",
+      "typeId": "node.inverse_fft_2d",
+      "params": {
+        "size": {
+          "type": "Int",
+          "value": 256
+        },
+        "batch": {
+          "type": "Int",
+          "value": 6
+        }
+      }
+    },
+    {
+      "id": 7,
+      "nodeId": "chop_field",
+      "typeId": "node.inverse_fft_2d",
+      "params": {
+        "size": {
+          "type": "Int",
+          "value": 256
+        },
+        "batch": {
+          "type": "Int",
+          "value": 6
+        }
+      }
+    },
+    {
+      "id": 8,
+      "nodeId": "ripple_field",
+      "typeId": "node.inverse_fft_2d",
+      "params": {
+        "size": {
+          "type": "Int",
+          "value": 256
+        },
+        "batch": {
+          "type": "Int",
+          "value": 6
+        }
+      }
+    },
+    {
+      "id": 9,
+      "nodeId": "grid",
+      "typeId": "node.projected_grid",
+      "params": {
+        "columns": {
+          "type": "Int",
+          "value": 640
+        },
+        "rows": {
+          "type": "Int",
+          "value": 360
+        },
+        "max_distance": {
+          "type": "Float",
+          "value": 20000.0
+        },
+        "margin": {
+          "type": "Float",
+          "value": 0.25
+        },
+        "color_r": {
+          "type": "Float",
+          "value": 0.012
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 0.034
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 0.045
+        }
+      }
+    },
+    {
+      "id": 10,
+      "nodeId": "displace",
+      "typeId": "node.ocean_displace",
+      "params": {
+        "choppiness": {
+          "type": "Float",
+          "value": 1.8
+        },
+        "foam_threshold": {
+          "type": "Float",
+          "value": 0.45
+        },
+        "foam_width": {
+          "type": "Float",
+          "value": 0.3
+        }
+      }
+    },
+    {
+      "id": 11,
+      "nodeId": "triangles",
+      "typeId": "node.make_triangles",
+      "params": {
+        "src_cols": {
+          "type": "Int",
+          "value": 640
+        },
+        "src_rows": {
+          "type": "Int",
+          "value": 360
+        }
+      }
+    },
+    {
+      "id": 12,
+      "nodeId": "water_material",
+      "typeId": "node.pbr_material",
+      "params": {
+        "color_r": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "ambient": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "metallic": {
+          "type": "Float",
+          "value": 0.0
+        },
+        "roughness": {
+          "type": "Float",
+          "value": 0.22
+        },
+        "ior": {
+          "type": "Float",
+          "value": 1.333
+        }
+      }
+    },
+    {
+      "id": 13,
+      "nodeId": "water_object",
+      "typeId": "node.scene_object",
+      "params": {
+        "cast_shadows": {
+          "type": "Float",
+          "value": 0.0
+        }
+      }
+    },
+    {
+      "id": 14,
+      "nodeId": "sun",
+      "typeId": "node.light",
+      "params": {
+        "mode": {
+          "type": "Enum",
+          "value": 0
+        },
+        "pos_x": {
+          "type": "Float",
+          "value": 80.86
+        },
+        "pos_y": {
+          "type": "Float",
+          "value": 3.6
+        },
+        "pos_z": {
+          "type": "Float",
+          "value": 58.73
+        },
+        "color_r": {
+          "type": "Float",
+          "value": 1.0
+        },
+        "color_g": {
+          "type": "Float",
+          "value": 0.55
+        },
+        "color_b": {
+          "type": "Float",
+          "value": 0.25
+        },
+        "intensity": {
+          "type": "Float",
+          "value": 2.0
+        },
+        "cast_shadows": {
+          "type": "Float",
+          "value": 0.0
+        }
+      }
+    },
+    {
+      "id": 15,
+      "nodeId": "sky_environment",
+      "typeId": "node.hdri_source",
+      "params": {
+        "width": {
+          "type": "Int",
+          "value": 4096
+        },
+        "height": {
+          "type": "Int",
+          "value": 2048
+        }
+      }
+    },
+    {
+      "id": 16,
+      "nodeId": "sky_exposure",
+      "typeId": "node.exposure",
+      "params": {
+        "gain": {
+          "type": "Float",
+          "value": 1.0
+        }
+      }
+    },
+    {
+      "id": 17,
+      "nodeId": "sky",
+      "typeId": "node.camera_sky"
+    },
+    {
+      "id": 18,
+      "nodeId": "scene_over_sky",
+      "typeId": "node.over"
+    },
+    {
+      "id": 19,
+      "nodeId": "scene",
+      "typeId": "node.render_scene",
+      "params": {
+        "lights": {
+          "type": "Int",
+          "value": 1
+        },
+        "objects": {
+          "type": "Int",
+          "value": 1
+        }
+      }
+    },
+    {
+      "id": 20,
+      "nodeId": "haze",
+      "typeId": "node.atmosphere",
+      "params": {
+        "fog_density": {
+          "type": "Float",
+          "value": 0.00008
+        },
+        "fog_color_r": {
+          "type": "Float",
+          "value": 0.62
+        },
+        "fog_color_g": {
+          "type": "Float",
+          "value": 0.66
+        },
+        "fog_color_b": {
+          "type": "Float",
+          "value": 0.74
+        }
+      }
+    },
+    {
+      "id": 21,
+      "nodeId": "coc",
+      "typeId": "node.coc_from_depth"
+    },
+    {
+      "id": 22,
+      "nodeId": "bokeh",
+      "typeId": "node.bokeh_gather"
+    },
+    {
+      "id": 23,
+      "nodeId": "motion_blur",
+      "typeId": "node.motion_blur"
+    },
+    {
+      "id": 24,
+      "nodeId": "filmic_display",
+      "typeId": "node.tone_map",
+      "params": {
+        "curve": {
+          "type": "Enum",
+          "value": 2
+        },
+        "exposure": {
+          "type": "Float",
+          "value": 0.8
+        },
+        "mode": {
+          "type": "Enum",
+          "value": 0
+        }
+      }
+    },
+    {
+      "id": 25,
+      "nodeId": "final_output",
+      "typeId": "system.final_output"
+    },
+    {
+      "id": 26,
+      "nodeId": "sea_below_horizon",
+      "typeId": "node.sea_horizon_env"
+    }
+  ],
+  "wires": [
+    {
+      "fromNode": 1,
+      "fromPort": "out",
+      "toNode": 2,
+      "toPort": "camera"
+    },
+    {
+      "fromNode": 3,
+      "fromPort": "spectrum",
+      "toNode": 6,
+      "toPort": "spectrum"
+    },
+    {
+      "fromNode": 4,
+      "fromPort": "spectrum",
+      "toNode": 7,
+      "toPort": "spectrum"
+    },
+    {
+      "fromNode": 5,
+      "fromPort": "spectrum",
+      "toNode": 8,
+      "toPort": "spectrum"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 9,
+      "toPort": "camera"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "output_width",
+      "toNode": 9,
+      "toPort": "width"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "output_height",
+      "toNode": 9,
+      "toPort": "height"
+    },
+    {
+      "fromNode": 9,
+      "fromPort": "vertices",
+      "toNode": 10,
+      "toPort": "mesh"
+    },
+    {
+      "fromNode": 6,
+      "fromPort": "field",
+      "toNode": 10,
+      "toPort": "field_0"
+    },
+    {
+      "fromNode": 7,
+      "fromPort": "field",
+      "toNode": 10,
+      "toPort": "field_1"
+    },
+    {
+      "fromNode": 8,
+      "fromPort": "field",
+      "toNode": 10,
+      "toPort": "field_2"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 10,
+      "toPort": "camera"
+    },
+    {
+      "fromNode": 10,
+      "fromPort": "out",
+      "toNode": 11,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 11,
+      "fromPort": "out",
+      "toNode": 13,
+      "toPort": "vertices"
+    },
+    {
+      "fromNode": 12,
+      "fromPort": "out",
+      "toNode": 13,
+      "toPort": "material"
+    },
+    {
+      "fromNode": 15,
+      "fromPort": "out",
+      "toNode": 16,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 26,
+      "fromPort": "out",
+      "toNode": 19,
+      "toPort": "envmap"
+    },
+    {
+      "fromNode": 26,
+      "fromPort": "out",
+      "toNode": 17,
+      "toPort": "sky"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 17,
+      "toPort": "camera"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 19,
+      "toPort": "camera"
+    },
+    {
+      "fromNode": 14,
+      "fromPort": "out",
+      "toNode": 19,
+      "toPort": "light_0"
+    },
+    {
+      "fromNode": 13,
+      "fromPort": "object",
+      "toNode": 19,
+      "toPort": "object_0"
+    },
+    {
+      "fromNode": 20,
+      "fromPort": "atmosphere",
+      "toNode": 19,
+      "toPort": "atmosphere"
+    },
+    {
+      "fromNode": 19,
+      "fromPort": "color",
+      "toNode": 18,
+      "toPort": "top"
+    },
+    {
+      "fromNode": 17,
+      "fromPort": "out",
+      "toNode": 18,
+      "toPort": "bottom"
+    },
+    {
+      "fromNode": 19,
+      "fromPort": "depth",
+      "toNode": 21,
+      "toPort": "depth"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 21,
+      "toPort": "camera"
+    },
+    {
+      "fromNode": 18,
+      "fromPort": "out",
+      "toNode": 22,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 21,
+      "fromPort": "out",
+      "toNode": 22,
+      "toPort": "width"
+    },
+    {
+      "fromNode": 22,
+      "fromPort": "out",
+      "toNode": 23,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 19,
+      "fromPort": "velocity",
+      "toNode": 23,
+      "toPort": "velocity"
+    },
+    {
+      "fromNode": 2,
+      "fromPort": "out",
+      "toNode": 23,
+      "toPort": "camera"
+    },
+    {
+      "fromNode": 23,
+      "fromPort": "out",
+      "toNode": 24,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 24,
+      "fromPort": "out",
+      "toNode": 25,
+      "toPort": "in"
+    },
+    {
+      "fromNode": 16,
+      "fromPort": "out",
+      "toNode": 26,
+      "toPort": "sky"
+    }
+  ],
+  "presetMetadata": {
+    "available": true,
+    "category": "Sim",
+    "displayName": "Ocean",
+    "id": "Ocean",
+    "isLineBased": false,
+    "oscPrefix": "ocean",
+    "params": [
+      {
+        "defaultValue": 10.0,
+        "formatString": "F1",
+        "id": "wind_speed",
+        "isToggle": false,
+        "isTrigger": false,
+        "max": 30.0,
+        "min": 1.0,
+        "name": "Wind Speed",
+        "section": "Sea",
+        "wholeNumbers": false
+      },
+      {
+        "defaultValue": 205.0,
+        "formatString": "F0",
+        "id": "wind_direction",
+        "isToggle": false,
+        "isTrigger": false,
+        "max": 360.0,
+        "min": 0.0,
+        "name": "Wind Direction",
+        "section": "Sea",
+        "wholeNumbers": false
+      },
+      {
+        "defaultValue": 1.8,
+        "formatString": "F2",
+        "id": "choppiness",
+        "isToggle": false,
+        "isTrigger": false,
+        "max": 2.5,
+        "min": 0.0,
+        "name": "Choppiness",
+        "section": "Sea",
+        "wholeNumbers": false
+      },
+      {
+        "defaultValue": 1.0,
+        "formatString": "F2",
+        "id": "wave_size",
+        "isToggle": false,
+        "isTrigger": false,
+        "max": 3.0,
+        "min": 0.0,
+        "name": "Wave Size",
+        "section": "Sea",
+        "wholeNumbers": false
+      },
+      {
+        "defaultValue": 1.0,
+        "formatString": "F2",
+        "id": "swell_speed",
+        "isToggle": false,
+        "isTrigger": false,
+        "max": 4.0,
+        "min": 0.0,
+        "name": "Swell Speed",
+        "section": "Sea",
+        "wholeNumbers": false
+      },
+      {
+        "defaultValue": 0.45,
+        "formatString": "F2",
+        "id": "foam",
+        "isToggle": false,
+        "isTrigger": false,
+        "max": 1.0,
+        "min": -0.5,
+        "name": "Foam",
+        "section": "Sea",
+        "wholeNumbers": false
+      }
+    ],
+    "bindings": [
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true,
+        "defaultValue": 10.0,
+        "id": "wind_speed",
+        "label": "Wind Speed",
+        "target": {
+          "kind": "node",
+          "nodeId": "swell_spectrum",
+          "param": "wind_speed"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true,
+        "defaultValue": 10.0,
+        "id": "wind_speed",
+        "label": "Wind Speed",
+        "target": {
+          "kind": "node",
+          "nodeId": "chop_spectrum",
+          "param": "wind_speed"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true,
+        "defaultValue": 10.0,
+        "id": "wind_speed",
+        "label": "Wind Speed",
+        "target": {
+          "kind": "node",
+          "nodeId": "ripple_spectrum",
+          "param": "wind_speed"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true,
+        "defaultValue": 205.0,
+        "id": "wind_direction",
+        "label": "Wind Direction",
+        "target": {
+          "kind": "node",
+          "nodeId": "swell_spectrum",
+          "param": "wind_direction"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true,
+        "defaultValue": 205.0,
+        "id": "wind_direction",
+        "label": "Wind Direction",
+        "target": {
+          "kind": "node",
+          "nodeId": "chop_spectrum",
+          "param": "wind_direction"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true,
+        "defaultValue": 205.0,
+        "id": "wind_direction",
+        "label": "Wind Direction",
+        "target": {
+          "kind": "node",
+          "nodeId": "ripple_spectrum",
+          "param": "wind_direction"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true,
+        "defaultValue": 1.8,
+        "id": "choppiness",
+        "label": "Choppiness",
+        "target": {
+          "kind": "node",
+          "nodeId": "displace",
+          "param": "choppiness"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultValue": 1.0,
+        "id": "wave_size",
+        "label": "Wave Size",
+        "target": {
+          "kind": "node",
+          "nodeId": "swell_spectrum",
+          "param": "wave_size"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultValue": 1.0,
+        "id": "wave_size",
+        "label": "Wave Size",
+        "target": {
+          "kind": "node",
+          "nodeId": "chop_spectrum",
+          "param": "wave_size"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultValue": 1.0,
+        "id": "wave_size",
+        "label": "Wave Size",
+        "target": {
+          "kind": "node",
+          "nodeId": "ripple_spectrum",
+          "param": "wave_size"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultValue": 1.0,
+        "id": "swell_speed",
+        "label": "Swell Speed",
+        "target": {
+          "kind": "node",
+          "nodeId": "swell_spectrum",
+          "param": "swell_speed"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultValue": 1.0,
+        "id": "swell_speed",
+        "label": "Swell Speed",
+        "target": {
+          "kind": "node",
+          "nodeId": "chop_spectrum",
+          "param": "swell_speed"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultValue": 1.0,
+        "id": "swell_speed",
+        "label": "Swell Speed",
+        "target": {
+          "kind": "node",
+          "nodeId": "ripple_spectrum",
+          "param": "swell_speed"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true,
+        "defaultValue": 0.45,
+        "id": "foam",
+        "label": "Foam",
+        "target": {
+          "kind": "node",
+          "nodeId": "displace",
+          "param": "foam_threshold"
+        }
+      }
+    ],
+    "stringBindings": [
+      {
+        "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/hdri/umhlanga_sunrise_4k.exr",
+        "id": "hdri_file",
+        "label": "HDRI File",
+        "target": {
+          "kind": "node",
+          "nodeId": "sky_environment",
+          "param": "path"
+        }
+      }
+    ],
+    "stringParams": [
+      {
+        "defaultValue": "/Users/peterkiemann/MANIFOLD - Rust/tests/fixtures/hdri/umhlanga_sunrise_4k.exr",
+        "file_path": true,
+        "id": "hdri_file",
+        "isFilePicker": true,
+        "name": "HDRI File",
+        "useDropdown": false
+      }
+    ]
+  }
+}
