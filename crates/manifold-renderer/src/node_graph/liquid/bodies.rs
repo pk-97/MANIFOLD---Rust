@@ -69,40 +69,58 @@ impl KnownItem for LiquidBody {
     const SPECS: &'static [ChannelSpec] = LIQUID_BODY_SPECS;
 }
 
-/// Vec4s a body's support points take beside its row, three a point.
-pub const SUPPORT_VEC4S: usize = 3 * MAX_SUPPORT_POINTS;
+/// Vec4s a support point takes.
+pub const SUPPORT_POINT_VEC4S: usize = 5;
+
+/// Vec4s a body's support points take beside its row.
+pub const SUPPORT_VEC4S: usize = SUPPORT_POINT_VEC4S * MAX_SUPPORT_POINTS;
 
 /// Bytes a body's packed 6 × 6 mobility takes on the GPU (`pose_bodies`):
 /// six vec4, 21 floats used.
 pub const MOBILITY_BYTES: u64 = 96;
 
 /// A coupled body's touching support points at a tick's start
-/// (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` D16), three vec4 a point: the lever
-/// arm xyz and friction, the normal xyz out of the support, the support's
-/// velocity xyz. The points run from the first; a zero normal ends them.
-/// 768 bytes, beside the body's row.
+/// (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` D16), five vec4 a point: the lever
+/// arm xyz and friction; the normal xyz out of the support and the patch;
+/// the support's velocity xyz and its spin about the normal; the patch
+/// centre's lever xyz; the support's velocity xyz there. The points run from
+/// the first; a zero normal ends them. 1280 bytes, beside the body's row.
 pub type BodySupports = [[f32; 4]; SUPPORT_VEC4S];
 
 /// `points` as [`BodySupports`], up to [`MAX_SUPPORT_POINTS`].
 pub fn pack_supports(points: &[SupportPoint]) -> BodySupports {
     let mut out = [[0.0; 4]; SUPPORT_VEC4S];
-    for (k, point) in points.iter().take(MAX_SUPPORT_POINTS).enumerate() {
-        let (l, n, v) = (point.lever, point.normal, point.support_velocity);
-        out[3 * k] = [l[0], l[1], l[2], point.friction];
-        out[3 * k + 1] = [n[0], n[1], n[2], 0.0];
-        out[3 * k + 2] = [v[0], v[1], v[2], 0.0];
+    for (point, slot) in points.iter().take(MAX_SUPPORT_POINTS).zip(out.chunks_exact_mut(SUPPORT_POINT_VEC4S)) {
+        let (l, n, v, c, u) = (point.lever, point.normal, point.support_velocity, point.patch_lever, point.patch_velocity);
+        slot.copy_from_slice(&[
+            [l[0], l[1], l[2], point.friction],
+            [n[0], n[1], n[2], point.patch as f32],
+            [v[0], v[1], v[2], point.support_spin],
+            [c[0], c[1], c[2], 0.0],
+            [u[0], u[1], u[2], 0.0],
+        ]);
     }
     out
 }
 
 /// The points of `supports` into `out`; returns how many.
 pub fn unpack_supports(supports: &BodySupports, out: &mut [SupportPoint; MAX_SUPPORT_POINTS]) -> usize {
-    for (k, slot) in out.iter_mut().enumerate() {
-        let [l, n, v] = [supports[3 * k], supports[3 * k + 1], supports[3 * k + 2]];
+    let xyz = |v: [f32; 4]| [v[0], v[1], v[2]];
+    for (k, (slot, packed)) in out.iter_mut().zip(supports.chunks_exact(SUPPORT_POINT_VEC4S)).enumerate() {
+        let [l, n, v, c, u] = [packed[0], packed[1], packed[2], packed[3], packed[4]];
         if n[0] == 0.0 && n[1] == 0.0 && n[2] == 0.0 {
             return k;
         }
-        *slot = SupportPoint { lever: [l[0], l[1], l[2]], friction: l[3], normal: [n[0], n[1], n[2]], support_velocity: [v[0], v[1], v[2]] };
+        *slot = SupportPoint {
+            lever: xyz(l),
+            friction: l[3],
+            normal: xyz(n),
+            patch: n[3] as u32,
+            support_velocity: xyz(v),
+            support_spin: v[3],
+            patch_lever: xyz(c),
+            patch_velocity: xyz(u),
+        };
     }
     MAX_SUPPORT_POINTS
 }

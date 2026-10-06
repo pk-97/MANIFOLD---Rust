@@ -190,7 +190,7 @@ struct ClockPlan {
 // This tick's bodies posed at this step's end by pose_bodies, one per body of
 // the tick in row order: what every solid pass of the step reads.
 @group(0) @binding(48) var<storage, read_write> posed: array<LiquidBody>;
-// 48 per row of `bodies`, tick major like it: the body's support points at
+// 80 per row of `bodies`, tick major like it: the body's support points at
 // the tick's start (liquid::bodies::BodySupports).
 @group(0) @binding(49) var<storage, read> contacts: array<vec4<f32>>;
 // Six per posed body: its packed response to the pressure while it stays on
@@ -781,13 +781,14 @@ fn pose_bodies(@builtin(global_invocation_id) gid: vec3<u32>) {
     let bd = bodies[u32(row)];
     var out = bd;
     let t = adaptive_tick_seconds();
-    var supports: array<vec4<f32>, 48>;
-    for (var k = 0u; k < 48u; k = k + 1u) {
-        supports[k] = support_vec4(48u * u32(row) + k);
+    var supports: array<vec4<f32>, 80>;
+    for (var k = 0u; k < 80u; k = k + 1u) {
+        supports[k] = support_vec4(80u * u32(row) + k);
     }
     let m = LiquidMobility(bd.position_inv_mass.w, bd.inv_inertia_x.xyz, bd.inv_inertia_y.xyz, bd.inv_inertia_z.xyz);
     var closed = 0u;
     var stuck = 0u;
+    var unturned = 0u;
     if bd.position_inv_mass.w > 0.0 {
         let r = 8u * u32(b);
         let s = liquid_body_state(
@@ -804,12 +805,13 @@ fn pose_bodies(@builtin(global_invocation_id) gid: vec3<u32>) {
         out.angular_velocity = vec4<f32>(s.angular, bd.angular_velocity.w);
         closed = s.closed;
         stuck = s.stuck;
+        unturned = s.unturned;
     } else {
         out.position_inv_mass = vec4<f32>(fma(bd.linear_velocity.xyz, vec3<f32>(t), bd.position_inv_mass.xyz), bd.position_inv_mass.w);
         out.rotation = liquid_turn(bd.rotation, bd.angular_velocity.xyz, t);
     }
     posed[u32(b)] = out;
-    let packed = liquid_constrained_mobility(&supports, liquid_support_count(&supports), closed, stuck, m);
+    let packed = liquid_constrained_mobility(&supports, liquid_support_count(&supports), closed, stuck, unturned, m);
     let at = 6u * u32(b);
     mobility[at] = packed.m0;
     mobility[at + 1u] = packed.m1;

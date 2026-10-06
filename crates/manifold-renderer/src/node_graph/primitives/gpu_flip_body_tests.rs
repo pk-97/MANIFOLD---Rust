@@ -334,15 +334,15 @@ impl Scene {
         Self { device, open, solid, water, rows, mobility, buffers, passes, solver }
     }
 
-    /// The dynamic body held on a floor under it: its bottom corners closed,
-    /// one of them stuck: it can only turn about that corner.
+    /// The dynamic body held on a floor under it: its bottom corners closed
+    /// and their patch unturned: it can only slide along the floor.
     fn hold(&mut self) {
         let corners = [[0.2, -0.2, 0.2], [-0.2, -0.2, 0.2], [-0.2, -0.2, -0.2], [0.2, -0.2, -0.2]];
         let supports: Vec<SupportPoint> = corners
             .iter()
-            .map(|&lever| SupportPoint { lever, normal: [0.0, 1.0, 0.0], friction: 0.5, ..SupportPoint::default() })
+            .map(|&lever| SupportPoint { lever, normal: [0.0, 1.0, 0.0], friction: 0.5, patch_lever: [0.0, -0.2, 0.0], ..SupportPoint::default() })
             .collect();
-        let held = Held { closed: 0b1111, stuck: 0b0001 };
+        let held = Held { closed: 0b1111, stuck: 0, unturned: 0b1111 };
         self.mobility[FIRST] = constrained_mobility(&coupled_start(&self.rows[FIRST]), &supports, held);
         self.buffers[4] = shared(&self.device, &gpu_mobility(&self.mobility));
     }

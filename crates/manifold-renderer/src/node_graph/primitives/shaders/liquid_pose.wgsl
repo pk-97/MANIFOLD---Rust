@@ -41,10 +41,12 @@ fn liquid_body_velocity(linear: vec3<f32>, angular: vec3<f32>, centre: vec3<f32>
     return linear + liquid_cross_fma(angular, x - centre);
 }
 
-// A coupled body's support points (LIQUID_SOLVER_SEAM_DESIGN.md D16), three
+// A coupled body's support points (LIQUID_SOLVER_SEAM_DESIGN.md D16), five
 // vec4 a point as liquid::bodies::BodySupports lays them: the lever arm and
-// friction, the normal out of the support (zero ends the points), the
-// support's velocity. The constants match manifold_physics::coupled_motion.
+// friction; the normal out of the support (zero ends the points) and the
+// patch; the support's velocity and its spin about the normal; the patch
+// centre's lever; the support's velocity there. The points of one Box3D
+// manifold make a patch. The constants match manifold_physics::coupled_motion.
 const LIQUID_SUPPORT_POINTS: u32 = 16u;
 const LIQUID_SUPPORT_SWEEPS: u32 = 16u;
 const LIQUID_HELD_SPEED: f32 = 1e-3;
@@ -52,8 +54,9 @@ const LIQUID_RANK_TOLERANCE: f32 = 1e-3;
 const LIQUID_STICK_MARGIN: f32 = 0.999;
 
 // A coupled body's pose and velocity inside its tick, and the support points
-// it stays on: bit i of `closed` keeps point i closed, of `stuck` also keeps
-// it from sliding.
+// it stays on: bit i of `closed` keeps point i closed; of `stuck`, point i's
+// patch keeps its centre from sliding; of `unturned`, from turning about its
+// normal.
 struct LiquidBodyState {
     position: vec3<f32>,
     rotation: vec4<f32>,
@@ -61,6 +64,7 @@ struct LiquidBodyState {
     angular: vec3<f32>,
     closed: u32,
     stuck: u32,
+    unturned: u32,
 };
 
 // A body's inverse mass and world inverse inertia rows.
@@ -77,16 +81,28 @@ struct LiquidProjected {
     angular: vec3<f32>,
     closed: u32,
     stuck: u32,
+    unturned: u32,
 };
 
 // Points in `supports`: up to the first zero normal.
-fn liquid_support_count(supports: ptr<function, array<vec4<f32>, 48>>) -> u32 {
+fn liquid_support_count(supports: ptr<function, array<vec4<f32>, 80>>) -> u32 {
     for (var p = 0u; p < LIQUID_SUPPORT_POINTS; p = p + 1u) {
-        if all((*supports)[3u * p + 1u].xyz == vec3<f32>(0.0)) {
+        if all((*supports)[5u * p + 1u].xyz == vec3<f32>(0.0)) {
             return p;
         }
     }
     return LIQUID_SUPPORT_POINTS;
+}
+
+// The first point of point p's patch.
+fn liquid_patch_lead(supports: ptr<function, array<vec4<f32>, 80>>, p: u32) -> u32 {
+    let key = (*supports)[5u * p + 1u].w;
+    for (var q = 0u; q < p; q = q + 1u) {
+        if (*supports)[5u * q + 1u].w == key {
+            return q;
+        }
+    }
+    return p;
 }
 
 // n and two unit tangents completing it (Duff et al. 2017).
@@ -107,11 +123,12 @@ fn liquid_inverse_inertia(m: LiquidMobility, v: vec3<f32>) -> vec3<f32> {
 
 // The known increment (dv, dw) for a body moving at (v0, w0) with no motion
 // into any support: Box3D's contact rule (Catto, sequential impulses)
-// without restitution, softness or position correction, one-sided normals
-// and friction bounded by μ·λn over two tangents. Twin of
-// manifold_physics::coupled_motion's projection.
+// without restitution, softness or position correction. Patch by patch:
+// each point's one-sided normal; twist friction about the normal inside
+// μ·Σ(arm·λn); sliding friction at the patch centre inside the circle
+// μ·Σλn. Twin of manifold_physics::coupled_motion's projection.
 fn liquid_project_off(
-    supports: ptr<function, array<vec4<f32>, 48>>,
+    supports: ptr<function, array<vec4<f32>, 80>>,
     count: u32,
     m: LiquidMobility,
     v0: vec3<f32>,
@@ -121,32 +138,74 @@ fn liquid_project_off(
 ) -> LiquidProjected {
     var dv = dv_in;
     var dw = dw_in;
-    var lambda: array<vec3<f32>, 16>;
+    var normal: array<f32, 16>;
+    var slide: array<vec2<f32>, 16>;
+    var twist: array<f32, 16>;
+    var limits: array<vec2<f32>, 16>;
     for (var sweep = 0u; sweep < LIQUID_SUPPORT_SWEEPS; sweep = sweep + 1u) {
         for (var p = 0u; p < count; p = p + 1u) {
-            let lever = (*supports)[3u * p].xyz;
-            let friction = (*supports)[3u * p].w;
-            let support = (*supports)[3u * p + 2u].xyz;
-            var directions = liquid_directions((*supports)[3u * p + 1u].xyz);
-            for (var k = 0u; k < 3u; k = k + 1u) {
-                let d = directions[k];
-                let arm = cross(lever, d);
-                let turn = liquid_inverse_inertia(m, arm);
-                let mass = m.inv_mass + dot(arm, turn);
-                if mass <= 0.0 {
+            if liquid_patch_lead(supports, p) != p {
+                continue;
+            }
+            let friction = (*supports)[5u * p].w;
+            let n = (*supports)[5u * p + 1u].xyz;
+            let key = (*supports)[5u * p + 1u].w;
+            let centre = (*supports)[5u * p + 3u].xyz;
+            var total = 0.0;
+            var twist_limit = 0.0;
+            for (var q = p; q < count; q = q + 1u) {
+                if (*supports)[5u * q + 1u].w != key {
                     continue;
                 }
-                let speed = dot(d, v0 + dv) + dot(arm, w0 + dw) - dot(d, support);
-                let trial = lambda[p][k] - speed / mass;
-                let bound = max(friction * lambda[p].x, 0.0);
-                var next = max(trial, 0.0);
-                if k > 0u {
-                    next = clamp(trial, -bound, bound);
+                let lever = (*supports)[5u * q].xyz;
+                let arm = cross(lever, n);
+                let turn = liquid_inverse_inertia(m, arm);
+                let mass = m.inv_mass + dot(arm, turn);
+                if mass > 0.0 {
+                    let speed = dot(n, v0 + dv + cross(w0 + dw, lever) - (*supports)[5u * q + 2u].xyz);
+                    let next = max(normal[q] - speed / mass, 0.0);
+                    let change = next - normal[q];
+                    normal[q] = next;
+                    dv = dv + change * m.inv_mass * n;
+                    dw = dw + change * turn;
                 }
-                let change = next - lambda[p][k];
-                lambda[p][k] = next;
-                dv = dv + change * m.inv_mass * d;
-                dw = dw + change * turn;
+                total = total + normal[q];
+                twist_limit = twist_limit + distance(lever, centre) * normal[q];
+            }
+            limits[p] = vec2<f32>(friction * total, friction * twist_limit);
+            let spin = liquid_inverse_inertia(m, n);
+            let spin_mass = dot(n, spin);
+            if spin_mass > 0.0 {
+                let speed = dot(n, w0 + dw) - (*supports)[5u * p + 2u].w;
+                let next = clamp(twist[p] - speed / spin_mass, -limits[p].y, limits[p].y);
+                let change = next - twist[p];
+                twist[p] = next;
+                dw = dw + change * spin;
+            }
+            var directions = liquid_directions(n);
+            let t1 = directions[1];
+            let t2 = directions[2];
+            let a1 = cross(centre, t1);
+            let a2 = cross(centre, t2);
+            let r1 = liquid_inverse_inertia(m, a1);
+            let r2 = liquid_inverse_inertia(m, a2);
+            let k11 = m.inv_mass + dot(a1, r1);
+            let k22 = m.inv_mass + dot(a2, r2);
+            let k12 = dot(a1, r2);
+            let det = k11 * k22 - k12 * k12;
+            if det > 0.0 {
+                let v = v0 + dv + cross(w0 + dw, centre) - (*supports)[5u * p + 4u].xyz;
+                let s1 = dot(t1, v);
+                let s2 = dot(t2, v);
+                var next = slide[p] - vec2<f32>(k22 * s1 - k12 * s2, k11 * s2 - k12 * s1) / det;
+                let size = length(next);
+                if size > limits[p].x {
+                    next = next * select(0.0, limits[p].x / size, size > 0.0);
+                }
+                let change = next - slide[p];
+                slide[p] = next;
+                dv = dv + m.inv_mass * (change.x * t1 + change.y * t2);
+                dw = dw + change.x * r1 + change.y * r2;
             }
         }
     }
@@ -155,19 +214,24 @@ fn liquid_project_off(
     out.angular = dw;
     out.closed = 0u;
     out.stuck = 0u;
+    out.unturned = 0u;
     for (var p = 0u; p < count; p = p + 1u) {
-        let lever = (*supports)[3u * p].xyz;
-        let n = (*supports)[3u * p + 1u].xyz;
+        let lever = (*supports)[5u * p].xyz;
+        let n = (*supports)[5u * p + 1u].xyz;
         let arm = cross(lever, n);
         let mass = m.inv_mass + dot(arm, liquid_inverse_inertia(m, arm));
-        let speed = dot(n, v0 + dv) + dot(arm, w0 + dw) - dot(n, (*supports)[3u * p + 2u].xyz);
-        if mass <= 0.0 || speed > LIQUID_HELD_SPEED {
-            continue;
+        let speed = dot(n, v0 + dv + cross(w0 + dw, lever) - (*supports)[5u * p + 2u].xyz);
+        if mass > 0.0 && speed <= LIQUID_HELD_SPEED {
+            out.closed = out.closed | (1u << p);
         }
-        out.closed = out.closed | (1u << p);
-        let cone = LIQUID_STICK_MARGIN * (*supports)[3u * p].w * lambda[p].x;
-        if cone > 0.0 && abs(lambda[p].y) < cone && abs(lambda[p].z) < cone {
+        let lead = liquid_patch_lead(supports, p);
+        let slide_limit = LIQUID_STICK_MARGIN * limits[lead].x;
+        let twist_limit = LIQUID_STICK_MARGIN * limits[lead].y;
+        if slide_limit > 0.0 && length(slide[lead]) < slide_limit {
             out.stuck = out.stuck | (1u << p);
+        }
+        if twist_limit > 0.0 && abs(twist[lead]) < twist_limit {
+            out.unturned = out.unturned | (1u << p);
         }
     }
     return out;
@@ -189,7 +253,7 @@ fn liquid_body_state(
     m: LiquidMobility,
     acceleration: vec3<f32>,
     angular_acceleration: vec3<f32>,
-    supports: ptr<function, array<vec4<f32>, 48>>,
+    supports: ptr<function, array<vec4<f32>, 80>>,
     push: vec3<f32>,
     turn: vec3<f32>,
     t: f32,
@@ -212,6 +276,7 @@ fn liquid_body_state(
     state.angular = w0 + known.angular;
     state.closed = known.closed;
     state.stuck = known.stuck;
+    state.unturned = known.unturned;
     return state;
 }
 
@@ -241,10 +306,11 @@ struct LiquidPackedMobility {
 // Gram–Schmidt, twice), it is (L·P)·(L·P)ᵀ: symmetric and positive
 // semidefinite however it rounds. Nothing held gives M⁻¹.
 fn liquid_constrained_mobility(
-    supports: ptr<function, array<vec4<f32>, 48>>,
+    supports: ptr<function, array<vec4<f32>, 80>>,
     count: u32,
     closed: u32,
     stuck: u32,
+    unturned: u32,
     m: LiquidMobility,
 ) -> LiquidPackedMobility {
     var free: array<array<f32, 6>, 6>;
@@ -281,15 +347,35 @@ fn liquid_constrained_mobility(
     var basis: array<array<f32, 6>, 6>;
     var rank = 0u;
     for (var p = 0u; p < count; p = p + 1u) {
-        let lever = (*supports)[3u * p].xyz;
-        var directions = liquid_directions((*supports)[3u * p + 1u].xyz);
-        for (var k = 0u; k < 3u; k = k + 1u) {
-            let bits = select(stuck, closed, k == 0u);
-            if (bits & (1u << p)) == 0u {
-                continue;
+        let lever = (*supports)[5u * p].xyz;
+        let n = (*supports)[5u * p + 1u].xyz;
+        let centre = (*supports)[5u * p + 3u].xyz;
+        let lead = liquid_patch_lead(supports, p) == p;
+        let bit = 1u << p;
+        var directions = liquid_directions(n);
+        // The point's normal; then, once a patch, its two sliding rows at the
+        // centre and its turn about the normal.
+        for (var k = 0u; k < 4u; k = k + 1u) {
+            var d = vec3<f32>(0.0);
+            var arm = vec3<f32>(0.0);
+            if k == 0u {
+                if (closed & bit) == 0u {
+                    continue;
+                }
+                d = n;
+                arm = cross(lever, n);
+            } else if k == 3u {
+                if !lead || (unturned & bit) == 0u {
+                    continue;
+                }
+                arm = n;
+            } else {
+                if !lead || (stuck & bit) == 0u {
+                    continue;
+                }
+                d = directions[k];
+                arm = cross(centre, d);
             }
-            let d = directions[k];
-            let arm = cross(lever, d);
             var row = array<f32, 6>(d.x, d.y, d.z, arm.x, arm.y, arm.z);
             var c: array<f32, 6>;
             var size = 0.0;

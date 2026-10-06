@@ -24,20 +24,32 @@ pub const HELD_SPEED: f32 = 1e-3;
 /// three.
 pub const RANK_TOLERANCE: f32 = 1e-3;
 
-/// A point sticks while its friction stays this far inside the cone.
+/// A patch sticks while its friction stays this far inside its limit.
 pub const STICK_MARGIN: f32 = 0.999;
 
-/// A touching contact of a body with a static or kinematic support.
+/// A touching contact of a body with a static or kinematic support. The
+/// points of one Box3D contact manifold make a patch: Box3D holds each point
+/// out of the support, and resists sliding and turning once per patch, at its
+/// centre (central friction and twist friction, `contact_solver.c`).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct SupportPoint {
     /// From the body's centre of mass to the contact, world frame.
     pub lever: [f32; 3],
-    /// Unit, out of the support into the body.
+    /// Unit, out of the support into the body; one per patch.
     pub normal: [f32; 3],
     /// Coulomb friction, mixed as the world mixes it.
     pub friction: f32,
     /// The support's velocity at the contact.
     pub support_velocity: [f32; 3],
+    /// The support's spin about the normal, rad/s.
+    pub support_spin: f32,
+    /// The patch this point belongs to; points of one patch share it.
+    pub patch: u32,
+    /// From the body's centre of mass to the patch's centre: the mean of all
+    /// the manifold's points, touching or not, as Box3D takes it.
+    pub patch_lever: [f32; 3],
+    /// The support's velocity at the patch's centre.
+    pub patch_velocity: [f32; 3],
 }
 
 /// A body's touching support points, and how many a read kept.
@@ -52,9 +64,12 @@ pub struct SupportCount {
 pub struct Held {
     /// Bit i: point i stays closed.
     pub closed: u32,
-    /// Bit i: point i also stays put along its surface, its friction inside
-    /// the cone.
+    /// Bit i: point i's patch keeps its centre still along the surface, its
+    /// friction inside μ·Σλn.
     pub stuck: u32,
+    /// Bit i: point i's patch keeps the body from turning about its normal,
+    /// its twist friction inside μ·Σ(arm·λn).
+    pub unturned: u32,
 }
 
 /// A coupled body at the start of a tick, as Box3D holds it.
@@ -168,17 +183,27 @@ pub fn constrained_mobility(start: &CoupledStart, supports: &[SupportPoint], hel
             free[3 + r][3 + c] = start.inverse_inertia[r][c];
         }
     }
-    let mut rows = [[0.0f32; 6]; 3 * MAX_SUPPORT_POINTS];
+    let points = &supports[..supports.len().min(MAX_SUPPORT_POINTS)];
+    let mut rows = [[0.0f32; 6]; 4 * MAX_SUPPORT_POINTS];
     let mut count = 0;
-    for (p, point) in supports.iter().take(MAX_SUPPORT_POINTS).enumerate() {
-        let directions = directions(point.normal);
-        let kept = [held.closed >> p & 1 == 1, held.stuck >> p & 1 == 1, held.stuck >> p & 1 == 1];
-        for (d, keep) in directions.iter().zip(kept) {
-            if keep {
-                let arm = cross(point.lever, *d);
-                rows[count] = [d[0], d[1], d[2], arm[0], arm[1], arm[2]];
-                count += 1;
-            }
+    let mut push = |d: [f32; 3], arm: [f32; 3]| {
+        rows[count] = [d[0], d[1], d[2], arm[0], arm[1], arm[2]];
+        count += 1;
+    };
+    for (p, point) in points.iter().enumerate() {
+        let [n, t1, t2] = directions(point.normal);
+        if held.closed >> p & 1 == 1 {
+            push(n, cross(point.lever, n));
+        }
+        if !leads(points, p) {
+            continue;
+        }
+        if held.stuck >> p & 1 == 1 {
+            push(t1, cross(point.patch_lever, t1));
+            push(t2, cross(point.patch_lever, t2));
+        }
+        if held.unturned >> p & 1 == 1 {
+            push([0.0; 3], n);
         }
     }
     if count == 0 {
@@ -221,11 +246,18 @@ pub fn constrained_mobility(start: &CoupledStart, supports: &[SupportPoint], hel
     out
 }
 
+/// Whether point `p` is the first of its patch.
+fn leads(points: &[SupportPoint], p: usize) -> bool {
+    points[..p].iter().all(|q| q.patch != points[p].patch)
+}
+
 /// The known increment (dv, dw) for a body moving at (v0, w0) with no motion
-/// into any support: Box3D's contact rule (Catto, sequential impulses)
-/// without restitution, softness or position correction. A normal multiplier
-/// is one-sided; friction is bounded by μ·λn, a pyramid over two tangents.
-/// Returns the supports the body stays on.
+/// into any support: Box3D's contact rule (Catto, sequential impulses;
+/// `b3SolveContacts_Mesh`) without restitution, softness or position
+/// correction. Patch by patch: each point's one-sided normal; then twist
+/// friction about the normal, inside μ·Σ(arm·λn) with arm the point's
+/// distance from the patch centre; then sliding friction at the centre, a 2D
+/// impulse inside the circle μ·Σλn. Returns the supports the body stays on.
 fn project_off(
     start: &CoupledStart,
     supports: &[SupportPoint],
@@ -236,29 +268,73 @@ fn project_off(
 ) -> Held {
     let points = &supports[..supports.len().min(MAX_SUPPORT_POINTS)];
     let (m, i) = (start.inverse_mass, &start.inverse_inertia);
-    let mut lambda = [[0.0f32; 3]; MAX_SUPPORT_POINTS];
-    let speed = |point: &SupportPoint, d: [f32; 3], arm: [f32; 3], dv: &[f32; 3], dw: &[f32; 3]| {
-        let v: [f32; 3] = std::array::from_fn(|r| v0[r] + dv[r]);
+    let mut normal = [0.0f32; MAX_SUPPORT_POINTS];
+    let mut slide = [[0.0f32; 2]; MAX_SUPPORT_POINTS];
+    let mut twist = [0.0f32; MAX_SUPPORT_POINTS];
+    let mut limits = [[0.0f32; 2]; MAX_SUPPORT_POINTS];
+    // The body's velocity at `at` against the support's there.
+    let relative = |at: [f32; 3], support: [f32; 3], dv: &[f32; 3], dw: &[f32; 3]| -> [f32; 3] {
         let w: [f32; 3] = std::array::from_fn(|r| w0[r] + dw[r]);
-        dot(d, v) + dot(arm, w) - dot(d, point.support_velocity)
+        let spin = cross(w, at);
+        std::array::from_fn(|r| v0[r] + dv[r] + spin[r] - support[r])
     };
+    let response = |arm: [f32; 3]| -> [f32; 3] { std::array::from_fn(|r| dot(i[r], arm)) };
     for _ in 0..PROJECTION_SWEEPS {
-        for (p, point) in points.iter().enumerate() {
-            for (k, d) in directions(point.normal).into_iter().enumerate() {
-                let arm = cross(point.lever, d);
-                let turn: [f32; 3] = std::array::from_fn(|r| dot(i[r], arm));
+        for (p, lead) in points.iter().enumerate() {
+            if !leads(points, p) {
+                continue;
+            }
+            let n = lead.normal;
+            let (mut total, mut twist_limit) = (0.0, 0.0);
+            for (q, point) in points.iter().enumerate().skip(p).filter(|(_, point)| point.patch == lead.patch) {
+                let arm = cross(point.lever, n);
+                let turn = response(arm);
                 let mass = m + dot(arm, turn);
-                if mass <= 0.0 {
-                    continue;
+                if mass > 0.0 {
+                    let speed = dot(n, relative(point.lever, point.support_velocity, dv, dw));
+                    let next = (normal[q] - speed / mass).max(0.0);
+                    let change = next - normal[q];
+                    normal[q] = next;
+                    for r in 0..3 {
+                        dv[r] += change * m * n[r];
+                        dw[r] += change * turn[r];
+                    }
                 }
-                let trial = lambda[p][k] - speed(point, d, arm, dv, dw) / mass;
-                let bound = (point.friction * lambda[p][0]).max(0.0);
-                let next = if k == 0 { trial.max(0.0) } else { trial.clamp(-bound, bound) };
-                let change = next - lambda[p][k];
-                lambda[p][k] = next;
+                total += normal[q];
+                twist_limit += distance(point.lever, lead.patch_lever) * normal[q];
+            }
+            limits[p] = [lead.friction * total, lead.friction * twist_limit];
+            let spin = response(n);
+            let mass = dot(n, spin);
+            if mass > 0.0 {
+                let speed = dot(n, std::array::from_fn(|r| w0[r] + dw[r])) - lead.support_spin;
+                let next = (twist[p] - speed / mass).clamp(-limits[p][1], limits[p][1]);
+                let change = next - twist[p];
+                twist[p] = next;
                 for r in 0..3 {
-                    dv[r] += change * m * d[r];
-                    dw[r] += change * turn[r];
+                    dw[r] += change * spin[r];
+                }
+            }
+            let [_, t1, t2] = directions(n);
+            let c = lead.patch_lever;
+            let (a1, a2) = (cross(c, t1), cross(c, t2));
+            let (r1, r2) = (response(a1), response(a2));
+            let (k11, k22, k12) = (m + dot(a1, r1), m + dot(a2, r2), dot(a1, r2));
+            let det = k11 * k22 - k12 * k12;
+            if det > 0.0 {
+                let v = relative(c, lead.patch_velocity, dv, dw);
+                let (s1, s2) = (dot(t1, v), dot(t2, v));
+                let mut next = [slide[p][0] - (k22 * s1 - k12 * s2) / det, slide[p][1] - (k11 * s2 - k12 * s1) / det];
+                let size = (next[0] * next[0] + next[1] * next[1]).sqrt();
+                if size > limits[p][0] {
+                    let scale = if size > 0.0 { limits[p][0] / size } else { 0.0 };
+                    next = [next[0] * scale, next[1] * scale];
+                }
+                let change = [next[0] - slide[p][0], next[1] - slide[p][1]];
+                slide[p] = next;
+                for r in 0..3 {
+                    dv[r] += m * (change[0] * t1[r] + change[1] * t2[r]);
+                    dw[r] += change[0] * r1[r] + change[1] * r2[r];
                 }
             }
         }
@@ -267,14 +343,17 @@ fn project_off(
     for (p, point) in points.iter().enumerate() {
         let n = point.normal;
         let arm = cross(point.lever, n);
-        let mass = m + (0..3).map(|r| arm[r] * dot(i[r], arm)).sum::<f32>();
-        if mass <= 0.0 || speed(point, n, arm, dv, dw) > HELD_SPEED {
-            continue;
+        let mass = m + dot(arm, response(arm));
+        if mass > 0.0 && dot(n, relative(point.lever, point.support_velocity, dv, dw)) <= HELD_SPEED {
+            held.closed |= 1 << p;
         }
-        held.closed |= 1 << p;
-        let cone = STICK_MARGIN * point.friction * lambda[p][0];
-        if cone > 0.0 && lambda[p][1].abs() < cone && lambda[p][2].abs() < cone {
+        let lead = (0..=p).find(|&q| points[q].patch == point.patch).unwrap_or(p);
+        let [slide_limit, twist_limit] = limits[lead].map(|limit| STICK_MARGIN * limit);
+        if slide_limit > 0.0 && (slide[lead][0] * slide[lead][0] + slide[lead][1] * slide[lead][1]).sqrt() < slide_limit {
             held.stuck |= 1 << p;
+        }
+        if twist_limit > 0.0 && twist[lead].abs() < twist_limit {
+            held.unturned |= 1 << p;
         }
     }
     held
@@ -329,6 +408,10 @@ fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
 
 fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+}
+
+fn distance(a: [f32; 3], b: [f32; 3]) -> f32 {
+    (0..3).map(|r| (a[r] - b[r]).powi(2)).sum::<f32>().sqrt()
 }
 
 fn norm(v: &[f32; 6]) -> f32 {
@@ -507,6 +590,60 @@ mod tests {
         assert_eq!(lifted.held.closed, 0, "rising, it leaves the floor: {lifted:?}");
     }
 
+    /// A box resting on a fixed floor, pushed hard enough to slide on a
+    /// diagonal, turned hard enough to spin, both, and pushed too gently to
+    /// move, for three ticks at 60, 30 and 15 Hz: Box3D ends each tick where
+    /// the law puts it, inside the handover bound (D18). The one exception is
+    /// the first tick of a slide from rest: Box3D's contacts are springs
+    /// (contact hertz), so as the load shifts onto the leading edge the box
+    /// slips about 1.3 cm/s further in the first sixtieth of a second, at any
+    /// rate. The law's contacts are rigid; that tick gets 2 cm/s and 1 mm.
+    #[test]
+    fn coupled_motion_matches_box3d_on_a_floor() {
+        let cases = [
+            ("slides", [30.0, 0.0, 30.0], [0.0; 3]),
+            ("spins", [0.0; 3], [0.0, 15.0, 0.0]),
+            ("slides and spins", [30.0, 0.0, -20.0], [0.0, 8.0, 0.0]),
+            ("held", [5.0, 0.0, 5.0], [0.0, 0.5, 0.0]),
+        ];
+        let mut misses = Vec::new();
+        for hz in [60.0, 30.0, 15.0] {
+            for (what, force, torque) in cases {
+                let dt = Seconds(1.0 / hz);
+                let t = dt.0 as f32;
+                let mut world = PhysicsWorld::new(G).unwrap();
+                world
+                    .add_hull(&cuboid([2.0, 0.5, 2.0]), BodyConfig { kind: BodyKind::Fixed, position: [0.0, -0.5, 0.0], ..BodyConfig::default() })
+                    .unwrap();
+                let body =
+                    world.add_hull(&cuboid([0.2; 3]), BodyConfig { position: [0.0, 0.2, 0.0], mass: 8.0, ..BodyConfig::default() }).unwrap();
+                settle(&mut world, dt, 30);
+                for tick in 0..3 {
+                    let supports = supports_of(&world, body);
+                    let start = start_of(&world, body);
+                    let (push, turn) = (force.map(|f| f * t), torque.map(|f| f * t));
+                    world.queue_reaction_over_step(&[BodyImpulse { body, linear: push, angular: turn }], dt).unwrap();
+                    world.step(dt, box3d_substep_count(dt).value).unwrap();
+                    let law = coupled_state_at(&start, &supports, push, turn, t, coupled_substep(dt));
+                    let end = world.dynamics(body).unwrap();
+                    let position = gap(law.position, end.center_of_mass);
+                    let velocity = gap(law.linear_velocity, end.linear_velocity);
+                    let turned = between(law.rotation, world.pose(body).unwrap().rotation);
+                    eprintln!(
+                        "{hz} Hz {what} tick {tick}: position {position:.2e} m, velocity {velocity:.2e} m/s, rotation {turned:.2e} rad; \
+                         Box3D v {:.4?} w {:.4?}",
+                        end.linear_velocity, end.angular_velocity
+                    );
+                    let (near, slow) = if tick == 0 { (1e-3, 2e-2) } else { (5e-4, 5e-3) };
+                    if position >= near || velocity >= slow || turned >= 0.1f32.to_radians() {
+                        misses.push(format!("{hz} Hz {what} tick {tick}"));
+                    }
+                }
+            }
+        }
+        assert!(misses.is_empty(), "outside the handover bound: {misses:?}");
+    }
+
     /// A plank leaning on a wall from the floor stands because friction holds
     /// its foot: the law predicts it still with every support closed and
     /// stuck. With the friction taken away it slides down the wall, as a
@@ -605,8 +742,8 @@ mod tests {
     #[test]
     fn coupled_motion_projects_off_a_corner() {
         let start = CoupledStart { inverse_inertia: [[0.0; 3]; 3], ..floor_box().0 };
-        let point = |lever, normal| SupportPoint { lever, normal, ..SupportPoint::default() };
-        let corner = [point([0.0, -0.2, 0.0], [0.0, 1.0, 0.0]), point([-0.2, 0.0, 0.0], [1.0, 0.0, 0.0])];
+        let point = |lever, normal, patch| SupportPoint { lever, normal, patch, patch_lever: lever, ..SupportPoint::default() };
+        let corner = [point([0.0, -0.2, 0.0], [0.0, 1.0, 0.0], 0), point([-0.2, 0.0, 0.0], [1.0, 0.0, 0.0], 1)];
         let state = coupled_state_at(&start, &corner, [-16.0, -24.0, 12.0], [0.0; 3], 0.1, 0.025);
         assert!(gap(state.linear_velocity, [0.0, 0.0, 1.5]) < 1e-5, "{state:?}");
     }
@@ -626,7 +763,7 @@ mod tests {
         };
         let corners = [[0.2, -0.2, 0.2], [-0.2, -0.2, 0.2], [-0.2, -0.2, -0.2], [0.2, -0.2, -0.2]];
         let supports =
-            corners.iter().map(|&lever| SupportPoint { lever, normal: [0.0, 1.0, 0.0], friction: 0.5, ..SupportPoint::default() }).collect();
+            corners.iter().map(|&lever| SupportPoint { lever, normal: [0.0, 1.0, 0.0], friction: 0.5, patch_lever: [0.0, -0.2, 0.0], ..SupportPoint::default() }).collect();
         (start, supports)
     }
 
@@ -651,14 +788,17 @@ mod tests {
     /// Every row `held` keeps, as the solve holds it.
     fn held_rows(supports: &[SupportPoint], held: Held) -> Vec<[f32; 6]> {
         let mut rows = Vec::new();
+        let row = |d: [f32; 3], arm: [f32; 3]| [d[0], d[1], d[2], arm[0], arm[1], arm[2]];
         for (p, point) in supports.iter().enumerate() {
             let [n, t1, t2] = directions(point.normal);
-            let kept = [(n, held.closed), (t1, held.stuck), (t2, held.stuck)];
-            for (d, bits) in kept {
-                if bits >> p & 1 == 1 {
-                    let arm = cross(point.lever, d);
-                    rows.push([d[0], d[1], d[2], arm[0], arm[1], arm[2]]);
-                }
+            if held.closed >> p & 1 == 1 {
+                rows.push(row(n, cross(point.lever, n)));
+            }
+            if held.stuck >> p & 1 == 1 {
+                rows.extend([t1, t2].map(|t| row(t, cross(point.patch_lever, t))));
+            }
+            if held.unturned >> p & 1 == 1 {
+                rows.push(row([0.0; 3], n));
             }
         }
         rows
@@ -696,20 +836,23 @@ mod tests {
     }
 
     /// A box closed on a floor still slides and spins freely about the
-    /// vertical but neither sinks nor tips; stuck too, it is held fast.
+    /// vertical but neither sinks nor tips; stuck, it still spins; stuck and
+    /// unturned, it is held fast.
     #[test]
     fn constrained_mobility_holds_a_box_on_its_floor() {
         let (start, supports) = floor_box();
         let free = free_of(&start);
-        let closed = assert_sound(&start, &supports, Held { closed: 0b1111, stuck: 0 });
+        let closed = assert_sound(&start, &supports, Held { closed: 0b1111, ..Held::default() });
         for (r, c) in [(0, 0), (2, 2), (4, 4)] {
             assert!((closed[r][c] - free[r][c]).abs() < 1e-5 * free[r][c], "({r}, {c}) stays free: {closed:?}");
         }
         for k in [1, 3, 5] {
             assert!(closed[k][k].abs() < 1e-5 * largest(&free), "{k} is held: {closed:?}");
         }
-        let stuck = assert_sound(&start, &supports, Held { closed: 0b1111, stuck: 0b1111 });
-        assert!(largest(&stuck) < 1e-5 * largest(&free), "held fast: {stuck:?}");
+        let stuck = assert_sound(&start, &supports, Held { closed: 0b1111, stuck: 0b1111, unturned: 0 });
+        assert!((stuck[4][4] - free[4][4]).abs() < 1e-5 * free[4][4], "it still spins: {stuck:?}");
+        let fast = assert_sound(&start, &supports, Held { closed: 0b1111, stuck: 0b1111, unturned: 0b1111 });
+        assert!(largest(&fast) < 1e-5 * largest(&free), "held fast: {fast:?}");
     }
 
     /// The order the points come in and a nearly repeated point change the
@@ -717,14 +860,14 @@ mod tests {
     #[test]
     fn constrained_mobility_ignores_order_and_near_repeats() {
         let (start, supports) = floor_box();
-        let held = Held { closed: 0b1111, stuck: 0 };
+        let held = Held { closed: 0b1111, stuck: 0b1111, unturned: 0 };
         let base = assert_sound(&start, &supports, held);
         let reversed: Vec<SupportPoint> = supports.iter().rev().copied().collect();
         let mut nudged = supports.clone();
         nudged[3].lever[0] += 1e-5;
         nudged.push(SupportPoint { lever: [0.2, -0.2, -0.19999], ..supports[3] });
         let scale = largest(&free_of(&start));
-        for (what, other, bits) in [("reversed", &reversed, held), ("nudged", &nudged, Held { closed: 0b11111, stuck: 0 })] {
+        for (what, other, bits) in [("reversed", &reversed, held), ("nudged", &nudged, Held { closed: 0b11111, stuck: 0b11111, unturned: 0 })] {
             let m = assert_sound(&start, other, bits);
             let worst = (0..6).flat_map(|r| (0..6).map(move |c| (r, c))).map(|(r, c)| (m[r][c] - base[r][c]).abs()).fold(0.0, f32::max);
             assert!(worst < 1e-4 * scale, "{what}: off by {worst}");
@@ -736,7 +879,7 @@ mod tests {
     #[test]
     fn constrained_mobility_survives_scale_and_locked_axes() {
         let (start, supports) = floor_box();
-        let held = Held { closed: 0b1111, stuck: 0b0101 };
+        let held = Held { closed: 0b1111, stuck: 0b1111, unturned: 0b1111 };
         for (inverse_mass, turn) in [(1e-4, 1e3), (1e3, 1e-4), (1.0 / 8.0, 0.0)] {
             let mut inverse_inertia = start.inverse_inertia;
             if turn > 0.0 {

@@ -1005,15 +1005,18 @@ void manifold_box3d_body_allow_sleep( uint64_t body_value )
 
 // Contacts read per body; a body touching more drops the rest.
 #define BOX3D_CONTACT_READ 64
-// Floats a support point takes: lever arm xyz, friction, normal xyz, unused,
-// support velocity xyz, unused.
-#define BOX3D_SUPPORT_FLOATS 12
+// Floats a support point takes: lever arm xyz, friction; normal xyz, patch;
+// support velocity xyz, support spin about the normal; patch centre lever
+// xyz, unused; support velocity at the patch centre xyz, unused.
+#define BOX3D_SUPPORT_FLOATS 20
 
 // The body's touching contact points with static and kinematic bodies (a
 // point within the linear slop), LIQUID_SOLVER_SEAM_DESIGN.md D16: the lever
 // arm from the body's centre of mass (world), the contact's friction as the
 // world mixes it, the unit normal out of the support into the body, and the
-// support's velocity at the point.
+// support's velocity at the point. A point's patch is its manifold, numbered
+// in reading order; the patch centre is the mean of all the manifold's
+// anchors, touching or not, where Box3D applies central and twist friction.
 // Points are taken a round at a time over the manifolds (every manifold's
 // first point, then every second), so a full `points` still holds every
 // support. `found_out` counts every touching point, kept or not.
@@ -1042,6 +1045,7 @@ int manifold_box3d_body_support_points(
 	int found = 0;
 	for ( int round = 0; round < B3_MAX_MANIFOLD_POINTS; ++round )
 	{
+		int patch = -1;
 		for ( int c = 0; c < total; ++c )
 		{
 			b3BodyId body_a = b3Shape_GetBody( contacts[c].shapeIdA );
@@ -1059,6 +1063,7 @@ int manifold_box3d_body_support_points(
 			for ( int m = 0; m < contacts[c].manifoldCount; ++m )
 			{
 				const b3Manifold* manifold = contacts[c].manifolds + m;
+				patch += 1;
 				if ( round >= manifold->pointCount )
 				{
 					continue;
@@ -1081,6 +1086,18 @@ int manifold_box3d_body_support_points(
 				at.y += lever.y;
 				at.z += lever.z;
 				b3Vec3 v = b3Body_GetWorldPointVelocity( support, at );
+				b3Vec3 middle = b3Vec3_zero;
+				for ( int k = 0; k < manifold->pointCount; ++k )
+				{
+					middle = b3Add( middle, ours_a ? manifold->points[k].anchorA : manifold->points[k].anchorB );
+				}
+				middle = b3MulSV( 1.0f / (float)manifold->pointCount, middle );
+				b3Pos centre_at = centre;
+				centre_at.x += middle.x;
+				centre_at.y += middle.y;
+				centre_at.z += middle.z;
+				b3Vec3 centre_velocity = b3Body_GetWorldPointVelocity( support, centre_at );
+				float spin = b3Dot( n, b3Body_GetAngularVelocity( support ) );
 				float* out = points + BOX3D_SUPPORT_FLOATS * count;
 				out[0] = lever.x;
 				out[1] = lever.y;
@@ -1089,11 +1106,19 @@ int manifold_box3d_body_support_points(
 				out[4] = n.x;
 				out[5] = n.y;
 				out[6] = n.z;
-				out[7] = 0.0f;
+				out[7] = (float)patch;
 				out[8] = v.x;
 				out[9] = v.y;
 				out[10] = v.z;
-				out[11] = 0.0f;
+				out[11] = spin;
+				out[12] = middle.x;
+				out[13] = middle.y;
+				out[14] = middle.z;
+				out[15] = 0.0f;
+				out[16] = centre_velocity.x;
+				out[17] = centre_velocity.y;
+				out[18] = centre_velocity.z;
+				out[19] = 0.0f;
 				count += 1;
 			}
 		}

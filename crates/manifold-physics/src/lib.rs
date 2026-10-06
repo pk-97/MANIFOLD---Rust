@@ -1116,7 +1116,7 @@ impl PhysicsWorld {
     pub fn support_points(&self, body: BodyHandle, out: &mut [SupportPoint]) -> Result<SupportCount, PhysicsError> {
         let native = self.native_body(body)?;
         let capacity = out.len().min(MAX_SUPPORT_POINTS);
-        let mut raw = [[0.0f32; 12]; MAX_SUPPORT_POINTS];
+        let mut raw = [[0.0f32; 20]; MAX_SUPPORT_POINTS];
         let (mut kept, mut found) = (0, 0);
         let result = {
             let _lock = native_lock();
@@ -1133,6 +1133,10 @@ impl PhysicsWorld {
                 friction: raw[3],
                 normal: [raw[4], raw[5], raw[6]],
                 support_velocity: [raw[8], raw[9], raw[10]],
+                support_spin: raw[11],
+                patch: raw[7] as u32,
+                patch_lever: [raw[12], raw[13], raw[14]],
+                patch_velocity: [raw[16], raw[17], raw[18]],
             };
         }
         Ok(SupportCount { kept: kept as usize, found: found as usize })

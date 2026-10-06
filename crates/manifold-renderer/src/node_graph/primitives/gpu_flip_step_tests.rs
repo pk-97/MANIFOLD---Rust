@@ -2087,12 +2087,14 @@ fn two_tick_bodies(solids: &Solids) -> (Vec<LiquidBody>, Vec<f32>, Vec<BodySuppo
         body.position_inv_mass[1] -= 0.2;
     }
     rows.extend(solids.bodies.iter().copied());
-    let point = |lever, normal| SupportPoint { lever, normal, friction: 0.6, ..SupportPoint::default() };
+    let point = |lever, normal, patch, patch_lever| SupportPoint { lever, normal, friction: 0.6, patch, patch_lever, ..SupportPoint::default() };
     let mut contacts = vec![[[0.0f32; 4]; SUPPORT_VEC4S]; rows.len()];
-    contacts[1] = pack_supports(&[point([0.0, 0.15, 0.0], [0.0, -1.0, 0.0])]);
+    let ceiling = [0.0, 0.15, 0.0];
+    contacts[1] = pack_supports(&[point(ceiling, [0.0, -1.0, 0.0], 0, ceiling)]);
     let floor = [[0.1, -0.15, 0.1], [-0.1, -0.15, 0.1], [-0.1, -0.15, -0.1], [0.1, -0.15, -0.1]];
-    let mut held: Vec<SupportPoint> = floor.iter().map(|&lever| point(lever, [0.0, 1.0, 0.0])).collect();
-    held.push(point([0.09, 0.0, -0.12], [-0.6, 0.0, 0.8]));
+    let mut held: Vec<SupportPoint> = floor.iter().map(|&lever| point(lever, [0.0, 1.0, 0.0], 0, [0.0, -0.15, 0.0])).collect();
+    let wall = [0.09, 0.0, -0.12];
+    held.push(point(wall, [-0.6, 0.0, 0.8], 1, wall));
     contacts[count + 1] = pack_supports(&held);
     let step = StepParams {
         body_count: count as i32,
