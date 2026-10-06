@@ -16,6 +16,7 @@ use super::liquid_stats::LIQUID_STATS_WORDS;
 use super::particle_publication::{ParticlePublication, Publication};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid_particles::FluidParticle;
+use crate::node_graph::liquid::display_cursor::{CursorFrame, DisplayCursor};
 use crate::node_graph::liquid::frame_history::{
     FIELD_FACES, FIELD_INTERIOR, FIELD_SOLID, FIELD_WHITEWATER, FIELDS, FrameHistory, Layout,
 };
@@ -62,6 +63,8 @@ crate::primitive! {
         simulation_time: ScalarF32 optional,
         display_time: ScalarF32 optional,
         epoch: ScalarF32 optional,
+        display_cursor: ScalarF32 optional,
+        dropped_seconds: ScalarF32 optional,
     },
     outputs: {
         particles_a: Array(FluidParticle), particles_b: Array(FluidParticle),
@@ -92,6 +95,7 @@ crate::primitive! {
     extra_fields: {
         publication: ParticlePublication = ParticlePublication::default(),
         history: FrameHistory = FrameHistory::default(),
+        cursor: DisplayCursor = DisplayCursor::default(),
         solid: Option<GpuBuffer> = None,
         solid_key: Option<([u32; 7], u32)> = None,
         wired: [bool; FIELDS] = [false; FIELDS],
@@ -198,6 +202,15 @@ impl Primitive for LiquidFrame {
         let simulation_time = f64::from(ctx.scalar_or_param("simulation_time", 0.0));
         let display_time = f64::from(ctx.scalar_or_param("display_time", 0.0));
         let epoch = ctx.scalar_or_param("epoch", 0.0).round().max(0.0) as u32;
+        // Live uncoupled water presents at the cursor (section 3.4); export
+        // presents exactly at the request whatever the wire says (D6).
+        let offline = crate::node_graph::physics::offline_simulation();
+        let cursor_frame = (!offline && ctx.scalar_or_param("display_cursor", 0.0) >= 0.5).then(|| CursorFrame {
+            epoch,
+            requested: display_time,
+            transport: ctx.time.seconds.0,
+            dropped: f64::from(ctx.scalar_or_param("dropped_seconds", 0.0)),
+        });
         let particles = ctx.inputs.array("particles");
         let stats = ctx.inputs.array("stats");
         let identity = ctx.inputs.array("identity");
@@ -274,7 +287,15 @@ impl Primitive for LiquidFrame {
         let clock = gpu.device.frame_clock();
         let complete = |stamp: u64| clock.as_ref().is_none_or(|c| c.is_complete(stamp));
         self.history.retire(complete);
-        self.history.core.select(display_time);
+        match cursor_frame {
+            Some(frame) => {
+                self.cursor.present(&mut self.history.core, frame);
+            }
+            None => {
+                self.cursor.clear();
+                self.history.core.select(display_time);
+            }
+        }
         self.history.core.stamp_readers(stamp);
         self.history.core.reclaim(complete);
 
@@ -343,7 +364,7 @@ impl Primitive for LiquidFrame {
                             }
                         }
                         self.history.core.begin(slot, simulation_time, stamp);
-                        if crate::node_graph::physics::offline_simulation() {
+                        if offline {
                             // Export presents this sample, independent of output
                             // fps: complete it now, then select again.
                             gpu.native_enc.commit_wait_and_continue(gpu.device);

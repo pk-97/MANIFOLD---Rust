@@ -579,6 +579,23 @@ fn scene(row: &LiquidSolverRow, fixture: Fixture) -> EffectGraphDef {
     (row.fixture)(fixture).unwrap_or_else(|| panic!("{}: no {fixture:?} scene", row.type_id))
 }
 
+/// Shows exactly the latest retired publication live. Schedule proofs compare
+/// what the solver published; the display delay has its own proofs
+/// (`display_cursor` tests and `liquid_frame_live_held_frame_matches_offline`).
+/// An authored 0 is wired in because the loader re-wires an unwired frame to
+/// its domain's cursor.
+fn without_display_delay(def: &mut EffectGraphDef) {
+    *def = manifold_core::flatten::flatten_groups(def).expect("a liquid preset flattens");
+    let frames: Vec<u32> = def.nodes.iter().filter(|node| node.type_id == "node.liquid_frame").map(|node| node.id).collect();
+    def.wires.retain(|wire| !(frames.contains(&wire.to_node) && wire.to_port == "display_cursor"));
+    let exact = def.nodes.iter().map(|node| node.id).max().unwrap_or(0) + 1;
+    def.nodes.push(serde_json::from_value(json!({"id": exact, "typeId": "node.value", "nodeId": "exact_display",
+        "params": {"value": {"type": "Float", "value": 0.0}}})).expect("value node"));
+    for frame in frames {
+        def.wires.push(EffectGraphWire { from_node: exact, from_port: "out".into(), to_node: frame, to_port: "display_cursor".into() });
+    }
+}
+
 fn box_scene(fixture: Fixture) -> BoxScene {
     BoxScene::of(fixture).unwrap_or_else(|| panic!("{fixture:?} is not a box scene"))
 }
@@ -820,6 +837,9 @@ fn liquid_export_matches_live_project_schedule() {
                 let mut def = scene(row, Fixture::FaceGrid);
                 set_type_param(&mut def, GPU_FLIP_DOMAIN_TYPE_ID, "resolution", SerializedParamValue::Int { value: 8 });
                 set_type_param(&mut def, "node.gpu_flip_step", "narrow_band", SerializedParamValue::Float { value: if narrow { 1.0 } else { 0.0 } });
+                if live {
+                    without_display_delay(&mut def);
+                }
                 LiquidRun::on_project_rate(row, def, 60.0 / fps, live, false, None, project_fps)
             };
             let mut live = make(60.0, true);
