@@ -1015,8 +1015,12 @@ void manifold_box3d_body_allow_sleep( uint64_t body_value )
 // xyz, unused; support velocity at the patch centre xyz, unused.
 #define BOX3D_SUPPORT_FLOATS 20
 
-// The body's touching contact points with static and kinematic bodies (a
-// point within the linear slop), LIQUID_SOLVER_SEAM_DESIGN.md D16: the lever
+// The body's touching contact points with static and kinematic bodies, and
+// with a dynamic body it rests on (a point within the linear slop),
+// LIQUID_SOLVER_SEAM_DESIGN.md D16. A dynamic body counts only where the
+// normal into this body points against gravity: the body below is a moving
+// support at its current velocity, never the body above, as shock propagation
+// orders a stack (Guendelman, Bridson and Fedkiw 2003). The lever
 // arm from the body's centre of mass (world), the contact's friction as the
 // world mixes it, the unit normal out of the support into the body, and the
 // support's velocity at the point. A point's patch is its manifold, numbered
@@ -1055,6 +1059,7 @@ int manifold_box3d_body_support_points(
 		*unread_out = listed - BOX3D_CONTACT_READ;
 	}
 	b3Pos centre = b3Body_GetWorldCenterOfMass( body_id );
+	b3Vec3 gravity = b3World_GetGravity( b3Body_GetWorld( body_id ) );
 	int count = 0;
 	int found = 0;
 	for ( int round = 0; round < B3_MAX_MANIFOLD_POINTS; ++round )
@@ -1066,10 +1071,7 @@ int manifold_box3d_body_support_points(
 			b3BodyId body_b = b3Shape_GetBody( contacts[c].shapeIdB );
 			int ours_a = B3_ID_EQUALS( body_a, body_id );
 			b3BodyId support = ours_a ? body_b : body_a;
-			if ( b3Body_GetType( support ) == b3_dynamicBody )
-			{
-				continue;
-			}
+			int below_only = b3Body_GetType( support ) == b3_dynamicBody;
 			b3SurfaceMaterial material_a = b3Shape_GetSurfaceMaterial( contacts[c].shapeIdA );
 			b3SurfaceMaterial material_b = b3Shape_GetSurfaceMaterial( contacts[c].shapeIdB );
 			float friction =
@@ -1080,7 +1082,7 @@ int manifold_box3d_body_support_points(
 				patch += 1;
 				// The manifold normal points from shape A to shape B.
 				b3Vec3 n = ours_a ? b3Neg( manifold->normal ) : manifold->normal;
-				if ( !box3d_vec3_finite( n ) )
+				if ( !box3d_vec3_finite( n ) || ( below_only && !( b3Dot( n, gravity ) < 0.0f ) ) )
 				{
 					continue;
 				}
