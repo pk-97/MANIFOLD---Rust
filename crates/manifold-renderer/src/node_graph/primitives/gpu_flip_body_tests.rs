@@ -751,8 +751,12 @@ impl BoxRun {
 
     fn at_level(fixture: crate::node_graph::liquid::conformance::Fixture, level: i32) -> manifold_core::effect_graph_def::EffectGraphDef {
         let mut def = box_def(fixture);
-        let domain = def.nodes.iter_mut().find(|node| node.node_id.as_str() == "domain").expect("domain");
-        domain.params.insert("solve_level".into(), manifold_core::effect_graph_def::SerializedParamValue::Int { value: level });
+        crate::node_graph::liquid::conformance::set_node_param(
+            &mut def,
+            "domain",
+            "solve_level",
+            manifold_core::effect_graph_def::SerializedParamValue::Int { value: level },
+        );
         def
     }
 
