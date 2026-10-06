@@ -1,35 +1,22 @@
 //! GPU FFT primitive backed by MPSGraph's Fourier-transform ops.
 //!
-//! Apple's MetalPerformanceShadersGraph ships a compiled-graph FFT. We build
-//! the graph once per (N, direction) plan, compile it to an
-//! `MPSGraphExecutable`, and encode it into an existing `GpuEncoder`'s command
-//! buffer each dispatch. No per-frame allocation, no graph rebuild.
+//! One compiled `MPSGraphExecutable` per plan (kind, shape, axes), encoded
+//! into an existing `GpuEncoder`'s command buffer each dispatch. No graph
+//! rebuild per frame.
 //!
-//! Two plan kinds today:
+//! Plans are described by the logical REAL shape, row-major (last dimension
+//! fastest). Complex data is interleaved float32 pairs `[re, im, ...]`. A
+//! half spectrum keeps `n/2 + 1` entries along the LAST transformed axis:
 //!
-//!   * `GpuFft::new_r2c(device, n)` — real-input forward FFT (length N) →
-//!     Hermitean-packed complex output. Output layout = an `(N/2 + 1) × 2`
-//!     float32 tensor (interleaved `[re0, im0, re1, im1, ...]`), which is
-//!     how MPSGraph materialises complex tensors as float32 pairs. First
-//!     and last bins have zero imaginary part by construction.
+//!   * `RealToHermitean` — real `shape` → half spectrum, unscaled.
+//!   * `HermiteanToReal` — half spectrum → real `shape`, inverse sign, scaled
+//!     by 1 / (product of the transformed lengths), so it undoes
+//!     `RealToHermitean` exactly.
+//!   * `ComplexToComplex { inverse }` — full complex `shape`, unscaled.
 //!
-//!   * `GpuFft::new_c2c(device, n, inverse)` — complex-to-complex, interleaved
-//!     `[re, im, re, im, ...]` layout for both input and output.
-//!
-//! Typical analyzer use:
-//!
-//! ```ignore
-//! let fft = GpuFft::new_r2c(&device, 65536);
-//! // per hop:
-//! let mut enc = device.create_encoder("cqt fft");
-//! fft.encode(&mut enc, &audio_buffer, &spectrum_buffer);
-//! enc.commit_and_wait_completed();
-//! ```
-//!
-//! Thread safety: `GpuFft` is `Send + Sync` — the underlying
-//! `MPSGraphExecutable` is thread-safe for encoding per Apple's docs. Safe to
-//! stash on a worker thread and share across plugin instances (though we
-//! create one per instance today).
+//! MPSGraph transforms only within the last four dimensions of a tensor.
+//! `GpuFft` is `Send + Sync`: `MPSGraphExecutable` is thread-safe for encoding
+//! per Apple's docs.
 
 use objc2::AnyThread;
 use objc2::rc::Retained;
@@ -39,233 +26,230 @@ use objc2_metal::{MTLBuffer, MTLDevice};
 use objc2_metal_performance_shaders::{MPSCommandBuffer, MPSDataType};
 use objc2_metal_performance_shaders_graph::{
     MPSGraph, MPSGraphCompilationDescriptor, MPSGraphDevice, MPSGraphExecutable,
-    MPSGraphExecutableExecutionDescriptor, MPSGraphFFTDescriptor, MPSGraphShapedType,
-    MPSGraphTensor, MPSGraphTensorData,
+    MPSGraphExecutableExecutionDescriptor, MPSGraphFFTDescriptor, MPSGraphFFTScalingMode,
+    MPSGraphShapedType, MPSGraphTensor, MPSGraphTensorData,
 };
+
+use std::sync::Mutex;
 
 use super::GpuBuffer;
 use super::encoder::GpuEncoder;
 
-/// What kind of transform this plan implements. Only the sizes + memory
-/// layouts the analyzer needs today; c2c inverse is included because
-/// spectral effects down the road will want it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FftKind {
-    /// Real input (length `n` float32) → Hermitean-packed complex output
-    /// (length `n/2 + 1`, interleaved float32 pairs).
+    /// Real input → half spectrum (interleaved complex), unscaled.
     RealToHermitean,
-    /// Interleaved complex input/output, forward (`inverse = false`) or
-    /// inverse (`inverse = true`).
+    /// Half spectrum → real output, inverse sign, scaled by 1 / volume.
+    HermiteanToReal,
+    /// Interleaved complex input and output, unscaled.
     ComplexToComplex { inverse: bool },
 }
 
-/// Compiled FFT plan. Reusable across dispatches — build once per plugin
-/// instance (or worker thread), encode many times.
+/// Compiled FFT plan. Build once, encode many times.
 pub struct GpuFft {
     kind: FftKind,
-    n: usize,
+    input_shape: Vec<usize>,
+    output_shape: Vec<usize>,
     executable: Retained<MPSGraphExecutable>,
-    // Keep the graph + its tensors alive for the executable's lifetime.
-    // MPSGraph's ownership model doesn't strictly require this once the
-    // executable is compiled, but retaining them is cheap insurance.
     #[expect(dead_code, reason = "ownership-only: keeps the MPSGraph alive for the executable's lifetime; un-suppress: never")]
     graph: Retained<MPSGraph>,
+    /// Never changes after the build.
+    execution: Retained<MPSGraphExecutableExecutionDescriptor>,
+    /// Tensor data for the buffer pairs encoded last, newest first. Making
+    /// it cost about 4 µs a call (docs/ENCODE_REPLAY_DESIGN.md section 8
+    /// (Deferred), path (a)). The command-buffer wrapper is still made on
+    /// every call: one kept between calls outlives its command buffer, and
+    /// MPS then encodes into the committed one.
+    bound: Mutex<Vec<BoundPair>>,
+}
+
+/// How many input/output buffer pairs a plan keeps tensor data for. A plan
+/// sees one pair at a time; another only after its storage moves.
+const BOUND_PAIRS: usize = 4;
+
+/// Tensor data for one input/output buffer pair. It retains both buffers, so
+/// neither address can name another buffer while the pair is kept.
+struct BoundPair {
+    input: *const ProtocolObject<dyn MTLBuffer>,
+    output: *const ProtocolObject<dyn MTLBuffer>,
+    inputs: Retained<NSArray<MPSGraphTensorData>>,
+    outputs: Retained<NSArray<MPSGraphTensorData>>,
 }
 
 // Safety: `MPSGraphExecutable` is thread-safe for encoding (Apple docs:
-// "Using Callables"). `GpuFft` exposes only `&self` encode; no interior
-// mutability.
+// "Using Callables"). `GpuFft` exposes only `&self` encode, and the tensor
+// data it keeps is only touched under `bound`'s lock.
 unsafe impl Send for GpuFft {}
 unsafe impl Sync for GpuFft {}
 
 impl GpuFft {
-    /// Real-to-Hermitean forward FFT. `n` must be a power of two and ≥ 2.
-    /// Output layout: `(n/2 + 1) × 2` float32s interleaved
-    /// `[re_0, im_0, re_1, im_1, ...]`. The conjugate-symmetric negative
-    /// half is implied.
+    /// 1D real-to-half-spectrum FFT of length `n` (a power of two ≥ 2).
     pub fn new_r2c(device: &ProtocolObject<dyn MTLDevice>, n: usize) -> Self {
-        assert!(
-            n.is_power_of_two() && n >= 2,
-            "GpuFft::new_r2c: n must be a power of two ≥ 2 (got {n})"
-        );
-        build_plan(device, FftKind::RealToHermitean, n)
+        assert!(n.is_power_of_two() && n >= 2, "GpuFft::new_r2c: n must be a power of two ≥ 2 (got {n})");
+        build_plan(device, FftKind::RealToHermitean, &[n], &[0])
     }
 
-    /// Complex-to-complex FFT (forward or inverse). Input/output are
-    /// interleaved `[re, im, re, im, ...]` float32 pairs of length `n`.
+    /// 1D complex-to-complex FFT of length `n` (a power of two ≥ 2).
     pub fn new_c2c(device: &ProtocolObject<dyn MTLDevice>, n: usize, inverse: bool) -> Self {
-        assert!(
-            n.is_power_of_two() && n >= 2,
-            "GpuFft::new_c2c: n must be a power of two ≥ 2 (got {n})"
-        );
-        build_plan(device, FftKind::ComplexToComplex { inverse }, n)
+        assert!(n.is_power_of_two() && n >= 2, "GpuFft::new_c2c: n must be a power of two ≥ 2 (got {n})");
+        build_plan(device, FftKind::ComplexToComplex { inverse }, &[n], &[0])
     }
 
-    pub fn n(&self) -> usize {
-        self.n
+    /// Multi-dimensional plan over `axes` of the real `shape` (row-major, at
+    /// most four dimensions). Every transformed length is at least 2, any
+    /// factors; the last transformed one is even, because the half-spectrum
+    /// inverse is built for an even length (`setRoundToOddHermitean(false)`).
+    pub fn new_nd(device: &super::GpuDevice, kind: FftKind, shape: &[usize], axes: &[usize]) -> Self {
+        assert!(!shape.is_empty() && shape.len() <= 4, "GpuFft::new_nd: 1 to 4 dimensions (got {shape:?})");
+        assert!(!axes.is_empty(), "GpuFft::new_nd: no axes");
+        let mut seen = [false; 4];
+        for &a in axes {
+            assert!(a < shape.len() && !seen[a], "GpuFft::new_nd: bad axes {axes:?} for shape {shape:?}");
+            seen[a] = true;
+            assert!(shape[a] >= 2, "GpuFft::new_nd: transformed length must be at least 2 (got {shape:?})");
+        }
+        let last = *axes.iter().max().expect("at least one axis");
+        assert!(shape[last].is_multiple_of(2), "GpuFft::new_nd: the last transformed length must be even (got {shape:?})");
+        build_plan(device.raw_device(), kind, shape, axes)
     }
 
     pub fn kind(&self) -> FftKind {
         self.kind
     }
 
-    /// Output buffer size in bytes (float32 elements × 4). For r2c this is
-    /// `(n/2 + 1) * 2 * 4`; for c2c it's `n * 2 * 4`.
+    /// Input buffer size in bytes.
+    pub fn input_len_bytes(&self) -> u64 {
+        (element_count(&self.input_shape) * dtype_bytes(input_dtype(self.kind))) as u64
+    }
+
+    /// Output buffer size in bytes.
     pub fn output_len_bytes(&self) -> u64 {
         (self.output_element_count() * 4) as u64
     }
 
-    /// Output element count in float32s (complex pairs = 2 floats each).
+    /// Output size in float32s (a complex value counts as two).
     pub fn output_element_count(&self) -> usize {
-        match self.kind {
-            FftKind::RealToHermitean => (self.n / 2 + 1) * 2,
-            FftKind::ComplexToComplex { .. } => self.n * 2,
-        }
+        element_count(&self.output_shape) * dtype_bytes(output_dtype(self.kind)) / 4
     }
 
-    /// Encode one FFT dispatch into the given encoder's command buffer.
-    /// Takes `&mut enc` because it must end any in-flight compute/render
-    /// pass first — MPSGraph installs its own encoders.
+    /// Encode one transform into the encoder's command buffer. Takes `&mut`
+    /// because MPSGraph installs its own encoders, so any open pass ends.
     pub fn encode(&self, enc: &mut GpuEncoder, input: &GpuBuffer, output: &GpuBuffer) {
         let cmd_buf = enc.raw_cmd_buf();
-
+        let mut pairs = self.bound.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let key = (Retained::as_ptr(&input.raw), Retained::as_ptr(&output.raw));
+        match pairs.iter().position(|pair| (pair.input, pair.output) == key) {
+            Some(index) => pairs[..=index].rotate_right(1),
+            None => {
+                // SAFETY: both buffers are live Metal buffers; the tensor data retains them.
+                let (input_data, output_data) = unsafe {
+                    (
+                        tensor_data_for_buffer(&input.raw, &self.input_shape, input_dtype(self.kind)),
+                        tensor_data_for_buffer(&output.raw, &self.output_shape, output_dtype(self.kind)),
+                    )
+                };
+                pairs.truncate(BOUND_PAIRS - 1);
+                pairs.insert(0, BoundPair {
+                    input: key.0,
+                    output: key.1,
+                    inputs: NSArray::from_retained_slice(&[input_data]),
+                    outputs: NSArray::from_retained_slice(&[output_data]),
+                });
+            }
+        }
+        let pair = &pairs[0];
         unsafe {
-            let input_data =
-                tensor_data_for_buffer(&input.raw, &self.input_shape(), self.input_dtype());
-            let output_data =
-                tensor_data_for_buffer(&output.raw, &self.output_shape(), self.output_dtype());
-
-            let inputs = NSArray::from_retained_slice(&[input_data]);
-            let outputs = NSArray::from_retained_slice(&[output_data]);
-
-            // MPSGraphExecutable.encode wants an MPSCommandBuffer. Wrap
-            // our raw MTLCommandBuffer in one; MPSCommandBuffer is a
-            // thin shim that MPS uses to support commitAndContinue.
             let mps_cmd_buf = MPSCommandBuffer::commandBufferWithCommandBuffer(cmd_buf);
-
-            let exec_desc = MPSGraphExecutableExecutionDescriptor::new();
-            exec_desc.setWaitUntilCompleted(false);
-
-            self.executable
-                .encodeToCommandBuffer_inputsArray_resultsArray_executionDescriptor(
-                    &mps_cmd_buf,
-                    &inputs,
-                    Some(&outputs),
-                    Some(&exec_desc),
-                );
+            self.executable.encodeToCommandBuffer_inputsArray_resultsArray_executionDescriptor(
+                &mps_cmd_buf,
+                &pair.inputs,
+                Some(&pair.outputs),
+                Some(&self.execution),
+            );
         }
-    }
-
-    fn input_shape(&self) -> Vec<usize> {
-        // Real input: 1D real tensor of length N.
-        // Complex input: 1D complex tensor of length N (each element is
-        // 8 bytes when bound as ComplexFloat32).
-        vec![self.n]
-    }
-
-    fn output_shape(&self) -> Vec<usize> {
-        match self.kind {
-            FftKind::RealToHermitean => vec![self.n / 2 + 1],
-            FftKind::ComplexToComplex { .. } => vec![self.n],
-        }
-    }
-
-    fn input_dtype(&self) -> MPSDataType {
-        match self.kind {
-            FftKind::RealToHermitean => MPSDataType::Float32,
-            FftKind::ComplexToComplex { .. } => MPSDataType::ComplexFloat32,
-        }
-    }
-
-    fn output_dtype(&self) -> MPSDataType {
-        // Both R2C and C2C produce complex output; bind as
-        // ComplexFloat32 so MPSGraph lays re/im out as interleaved
-        // float32 pairs (which is what the buffer actually holds).
-        MPSDataType::ComplexFloat32
     }
 }
 
-// ─── Graph construction ────────────────────────────────────────────────
+fn input_dtype(kind: FftKind) -> MPSDataType {
+    match kind {
+        FftKind::RealToHermitean => MPSDataType::Float32,
+        FftKind::HermiteanToReal | FftKind::ComplexToComplex { .. } => MPSDataType::ComplexFloat32,
+    }
+}
 
-fn build_plan(device: &ProtocolObject<dyn MTLDevice>, kind: FftKind, n: usize) -> GpuFft {
+fn output_dtype(kind: FftKind) -> MPSDataType {
+    match kind {
+        FftKind::HermiteanToReal => MPSDataType::Float32,
+        FftKind::RealToHermitean | FftKind::ComplexToComplex { .. } => MPSDataType::ComplexFloat32,
+    }
+}
+
+fn dtype_bytes(dtype: MPSDataType) -> usize {
+    if dtype == MPSDataType::ComplexFloat32 { 8 } else { 4 }
+}
+
+fn element_count(shape: &[usize]) -> usize {
+    shape.iter().product()
+}
+
+fn build_plan(device: &ProtocolObject<dyn MTLDevice>, kind: FftKind, shape: &[usize], axes: &[usize]) -> GpuFft {
+    let last_axis = *axes.iter().max().expect("at least one axis");
+    let mut half = shape.to_vec();
+    half[last_axis] = shape[last_axis] / 2 + 1;
+    let (input_shape, output_shape) = match kind {
+        FftKind::RealToHermitean => (shape.to_vec(), half),
+        FftKind::HermiteanToReal => (half, shape.to_vec()),
+        FftKind::ComplexToComplex { .. } => (shape.to_vec(), shape.to_vec()),
+    };
     unsafe {
         let graph = MPSGraph::new();
-
-        // 1D tensors. The real placeholder has dtype Float32; complex input
-        // would use ComplexFloat32. MPSGraph packs complex values as
-        // interleaved re/im float32 pairs in the underlying MTLBuffer.
-        let input_shape = nsnumber_array(&[n]);
-        let input_dtype = match kind {
-            FftKind::RealToHermitean => MPSDataType::Float32,
-            FftKind::ComplexToComplex { .. } => MPSDataType::ComplexFloat32,
-        };
-
+        let input_ns_shape = nsnumber_array(&input_shape);
         let input_tensor =
-            graph.placeholderWithShape_dataType_name(Some(&input_shape), input_dtype, None);
+            graph.placeholderWithShape_dataType_name(Some(&input_ns_shape), input_dtype(kind), None);
 
-        // FFT descriptor. No scaling — the analyzer applies its own
-        // `2/Σw` kernel normalisation so a raw unscaled transform keeps
-        // us equivalent to rustfft's default output.
-        let fft_desc = MPSGraphFFTDescriptor::descriptor()
-            .expect("MPSGraphFFTDescriptor::descriptor returned nil");
+        let fft_desc = MPSGraphFFTDescriptor::descriptor().expect("MPSGraphFFTDescriptor::descriptor returned nil");
         match kind {
             FftKind::RealToHermitean => fft_desc.setInverse(false),
+            FftKind::HermiteanToReal => {
+                fft_desc.setInverse(true);
+                fft_desc.setScalingMode(MPSGraphFFTScalingMode::Size);
+                fft_desc.setRoundToOddHermitean(false);
+            }
             FftKind::ComplexToComplex { inverse } => fft_desc.setInverse(inverse),
         }
-
-        // Axis-0 transform (the N-length dimension).
-        let axes = nsnumber_array(&[0usize]);
-
+        let ns_axes = nsnumber_array(axes);
         let output_tensor: Retained<MPSGraphTensor> = match kind {
-            FftKind::RealToHermitean => graph.realToHermiteanFFTWithTensor_axes_descriptor_name(
-                &input_tensor,
-                &axes,
-                &fft_desc,
-                None,
-            ),
-            FftKind::ComplexToComplex { .. } => graph
-                .fastFourierTransformWithTensor_axes_descriptor_name(
-                    &input_tensor,
-                    &axes,
-                    &fft_desc,
-                    None,
-                ),
+            FftKind::RealToHermitean => {
+                graph.realToHermiteanFFTWithTensor_axes_descriptor_name(&input_tensor, &ns_axes, &fft_desc, None)
+            }
+            FftKind::HermiteanToReal => {
+                graph.HermiteanToRealFFTWithTensor_axes_descriptor_name(&input_tensor, &ns_axes, &fft_desc, None)
+            }
+            FftKind::ComplexToComplex { .. } => {
+                graph.fastFourierTransformWithTensor_axes_descriptor_name(&input_tensor, &ns_axes, &fft_desc, None)
+            }
         };
 
-        // Compile. `feeds` is NSDictionary<MPSGraphTensor*, MPSGraphShapedType*>
-        // that nails the input shape so the graph can specialise.
         let mps_device = MPSGraphDevice::deviceWithMTLDevice(device);
-        let shaped = MPSGraphShapedType::initWithShape_dataType(
-            MPSGraphShapedType::alloc(),
-            Some(&input_shape),
-            input_dtype,
-        );
+        let shaped =
+            MPSGraphShapedType::initWithShape_dataType(MPSGraphShapedType::alloc(), Some(&input_ns_shape), input_dtype(kind));
         let feeds: Retained<NSDictionary<MPSGraphTensor, MPSGraphShapedType>> =
             NSDictionary::from_slices(&[&*input_tensor], &[&*shaped]);
-
         let targets = NSArray::from_retained_slice(&[output_tensor]);
         let compile_desc = MPSGraphCompilationDescriptor::new();
         compile_desc.setWaitForCompilationCompletion(true);
-
-        let executable = graph
-            .compileWithDevice_feeds_targetTensors_targetOperations_compilationDescriptor(
-                Some(&mps_device),
-                &feeds,
-                &targets,
-                None,
-                Some(&compile_desc),
-            );
-
-        GpuFft {
-            kind,
-            n,
-            executable,
-            graph,
-        }
+        let executable = graph.compileWithDevice_feeds_targetTensors_targetOperations_compilationDescriptor(
+            Some(&mps_device),
+            &feeds,
+            &targets,
+            None,
+            Some(&compile_desc),
+        );
+        let execution = MPSGraphExecutableExecutionDescriptor::new();
+        execution.setWaitUntilCompleted(false);
+        GpuFft { kind, input_shape, output_shape, executable, graph, execution, bound: Mutex::default() }
     }
 }
-
-// ─── Helpers ───────────────────────────────────────────────────────────
 
 fn nsnumber_array(dims: &[usize]) -> Retained<NSArray<NSNumber>> {
     let numbers: Vec<Retained<NSNumber>> = dims.iter().map(|&d| NSNumber::new_usize(d)).collect();
@@ -278,14 +262,7 @@ unsafe fn tensor_data_for_buffer(
     dtype: MPSDataType,
 ) -> Retained<MPSGraphTensorData> {
     let shape_array = nsnumber_array(shape);
-    unsafe {
-        MPSGraphTensorData::initWithMTLBuffer_shape_dataType(
-            MPSGraphTensorData::alloc(),
-            buf,
-            &shape_array,
-            dtype,
-        )
-    }
+    unsafe { MPSGraphTensorData::initWithMTLBuffer_shape_dataType(MPSGraphTensorData::alloc(), buf, &shape_array, dtype) }
 }
 
 #[cfg(test)]
@@ -293,62 +270,273 @@ mod tests {
     use super::*;
     use crate::metal::GpuDevice;
 
-    /// Write a 1 kHz unit-amplitude sine into a real-input buffer, run the
-    /// GPU R2C FFT, and assert the peak magnitude lands in the expected
-    /// bin. Mirrors the CPU FFT test in `plugins/manifold-analyzer-dsp`.
+    fn upload(device: &GpuDevice, values: &[f32]) -> GpuBuffer {
+        let buf = device.create_buffer_shared((values.len() * 4) as u64);
+        let ptr = buf.mapped_ptr().expect("shared buffer has mapped_ptr");
+        // SAFETY: shared buffer sized for `values`; no GPU work in flight.
+        unsafe { std::slice::from_raw_parts_mut(ptr as *mut f32, values.len()).copy_from_slice(values) };
+        buf
+    }
+
+    fn download(buf: &GpuBuffer, count: usize) -> Vec<f32> {
+        let ptr = buf.mapped_ptr().expect("shared buffer has mapped_ptr");
+        // SAFETY: shared buffer holding `count` floats; GPU work done.
+        unsafe { std::slice::from_raw_parts(ptr as *const f32, count) }.to_vec()
+    }
+
+    /// A 1 kHz sine peaks at the expected bin with magnitude N/2.
     #[test]
     #[cfg(target_os = "macos")]
     fn r2c_unit_sine_peaks_at_expected_bin() {
         let device = GpuDevice::new();
         let n: usize = 4096;
-        let sr: f32 = 48_000.0;
-        let target_freq: f32 = 1_000.0;
-        let expected_bin = (target_freq * n as f32 / sr).round() as usize;
-
-        let in_buf = device.create_buffer_shared((n * 4) as u64);
-        let ptr = in_buf.mapped_ptr().expect("shared buffer has mapped_ptr");
-        unsafe {
-            let slice = std::slice::from_raw_parts_mut(ptr as *mut f32, n);
-            for (i, s) in slice.iter_mut().enumerate() {
-                *s = (2.0 * std::f32::consts::PI * target_freq * i as f32 / sr).sin();
-            }
-        }
-
+        let (sr, freq) = (48_000.0_f32, 1_000.0_f32);
+        let expected_bin = (freq * n as f32 / sr).round() as usize;
+        let samples: Vec<f32> =
+            (0..n).map(|i| (2.0 * std::f32::consts::PI * freq * i as f32 / sr).sin()).collect();
+        let in_buf = upload(&device, &samples);
         let fft = GpuFft::new_r2c(device.raw_device(), n);
         let out_buf = device.create_buffer_shared(fft.output_len_bytes());
-
         let mut enc = device.create_encoder("gpu-fft-test");
         fft.encode(&mut enc, &in_buf, &out_buf);
         enc.commit_and_wait_completed();
+        let out = download(&out_buf, fft.output_element_count());
+        let (peak_bin, peak_mag2) = (0..n / 2 + 1)
+            .map(|b| (b, out[2 * b] * out[2 * b] + out[2 * b + 1] * out[2 * b + 1]))
+            .fold((0, 0.0_f32), |best, cur| if cur.1 > best.1 { cur } else { best });
+        assert!(peak_bin.abs_diff(expected_bin) <= 1, "GPU FFT peak bin {peak_bin}, expected {expected_bin}");
+        let ratio = peak_mag2.sqrt() / (n as f32 / 2.0);
+        assert!(ratio > 0.8 && ratio < 1.2, "peak magnitude ratio {ratio}");
+    }
 
-        let out_ptr = out_buf.mapped_ptr().expect("output buffer has mapped_ptr");
-        let out = unsafe {
-            std::slice::from_raw_parts(out_ptr as *const f32, fft.output_element_count())
-        };
+    /// One plan encodes more buffer pairs than it keeps tensor data for, out
+    /// of order and across command buffers, and every output matches a fresh
+    /// plan's bit for bit.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn one_plan_encodes_many_buffer_pairs() {
+        let device = GpuDevice::new();
+        let n: usize = 64;
+        let fft = GpuFft::new_r2c(device.raw_device(), n);
+        let inputs: Vec<GpuBuffer> = (0..2 * BOUND_PAIRS)
+            .map(|m| upload(&device, &(0..n).map(|i| ((i * (m + 3)) % 7) as f32 - 3.0).collect::<Vec<_>>()))
+            .collect();
+        let outputs: Vec<GpuBuffer> =
+            inputs.iter().map(|_| device.create_buffer_shared(fft.output_len_bytes())).collect();
+        let target = |m: usize| (m + 1) % outputs.len();
+        let order: Vec<usize> = (0..inputs.len()).chain((0..inputs.len()).rev()).collect();
+        for _ in 0..2 {
+            let mut enc = device.create_encoder("gpu-fft-pairs");
+            for &m in &order {
+                fft.encode(&mut enc, &inputs[m], &outputs[target(m)]);
+            }
+            enc.commit_and_wait_completed();
+        }
+        let bits = |buf: &GpuBuffer| download(buf, fft.output_element_count()).iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+        for (m, input) in inputs.iter().enumerate() {
+            let fresh = GpuFft::new_r2c(device.raw_device(), n);
+            let out = device.create_buffer_shared(fft.output_len_bytes());
+            let mut enc = device.create_encoder("gpu-fft-fresh");
+            fresh.encode(&mut enc, input, &out);
+            enc.commit_and_wait_completed();
+            assert_eq!(bits(&outputs[target(m)]), bits(&out), "pair {m} differs from a fresh plan");
+        }
+    }
 
-        let mut peak_bin = 0usize;
-        let mut peak_mag2 = 0.0_f32;
-        for bin in 0..n / 2 + 1 {
-            let re = out[2 * bin];
-            let im = out[2 * bin + 1];
-            let mag2 = re * re + im * im;
-            if mag2 > peak_mag2 {
-                peak_mag2 = mag2;
-                peak_bin = bin;
+    /// 3D real → half spectrum matches a direct f64 DFT, and the inverse
+    /// plan returns the input.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn nd_real_transform_matches_direct_dft_and_round_trips() {
+        let device = GpuDevice::new();
+        let shape = [4usize, 8, 16];
+        let total: usize = shape.iter().product();
+        let mut state = 0x2545_f491_4f6c_dd1d_u64;
+        let values: Vec<f32> = (0..total)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                (state >> 40) as f32 / (1u64 << 24) as f32 - 0.5
+            })
+            .collect();
+        let forward = GpuFft::new_nd(&device, FftKind::RealToHermitean, &shape, &[0, 1, 2]);
+        let inverse = GpuFft::new_nd(&device, FftKind::HermiteanToReal, &shape, &[0, 1, 2]);
+        let half_x = shape[2] / 2 + 1;
+        assert_eq!(forward.output_element_count(), shape[0] * shape[1] * half_x * 2);
+        assert_eq!(inverse.input_len_bytes(), forward.output_len_bytes());
+
+        let in_buf = upload(&device, &values);
+        let spectrum = device.create_buffer_shared(forward.output_len_bytes());
+        let back = device.create_buffer_shared(inverse.output_len_bytes());
+        let mut enc = device.create_encoder("gpu-fft-nd-test");
+        forward.encode(&mut enc, &in_buf, &spectrum);
+        inverse.encode(&mut enc, &spectrum, &back);
+        enc.commit_and_wait_completed();
+
+        let spec = download(&spectrum, forward.output_element_count());
+        let tau = std::f64::consts::TAU;
+        let mut worst = 0.0_f64;
+        for kz in 0..shape[0] {
+            for ky in 0..shape[1] {
+                for kx in 0..half_x {
+                    let (mut re, mut im) = (0.0_f64, 0.0_f64);
+                    for z in 0..shape[0] {
+                        for y in 0..shape[1] {
+                            for x in 0..shape[2] {
+                                let phase = -tau
+                                    * ((kz * z) as f64 / shape[0] as f64
+                                        + (ky * y) as f64 / shape[1] as f64
+                                        + (kx * x) as f64 / shape[2] as f64);
+                                let v = f64::from(values[x + shape[2] * (y + shape[1] * z)]);
+                                re += v * phase.cos();
+                                im += v * phase.sin();
+                            }
+                        }
+                    }
+                    let i = 2 * (kx + half_x * (ky + shape[1] * kz));
+                    worst = worst.max((f64::from(spec[i]) - re).abs()).max((f64::from(spec[i + 1]) - im).abs());
+                }
             }
         }
+        assert!(worst < 1e-4, "half spectrum differs from the direct DFT by {worst}");
+        let round_trip = download(&back, total);
+        let err = values.iter().zip(&round_trip).map(|(a, b)| (a - b).abs()).fold(0.0_f32, f32::max);
+        assert!(err < 1e-5, "inverse plan does not return the input: {err}");
+    }
 
-        assert!(
-            peak_bin.abs_diff(expected_bin) <= 1,
-            "GPU FFT peak bin {peak_bin}, expected {expected_bin}"
-        );
-        // |X[k]| for a unit cosine at bin k is N/2. Sine has the same
-        // magnitude, just a π/2 phase offset.
-        let expected_mag = n as f32 / 2.0;
-        let peak_mag = peak_mag2.sqrt();
-        assert!(
-            peak_mag / expected_mag > 0.8 && peak_mag / expected_mag < 1.2,
-            "peak mag {peak_mag}, expected ≈ {expected_mag}"
-        );
+    /// Mixed-radix plans, with every buffer checked on the CPU against the
+    /// plan's byte lengths before anything runs.
+    fn mixed_plans(device: &GpuDevice, shape: &[usize], values: &[f32]) -> (GpuFft, GpuFft, GpuBuffer, GpuBuffer, GpuBuffer) {
+        let axes: Vec<usize> = (0..shape.len()).collect();
+        let forward = GpuFft::new_nd(device, FftKind::RealToHermitean, shape, &axes);
+        let inverse = GpuFft::new_nd(device, FftKind::HermiteanToReal, shape, &axes);
+        let total: usize = shape.iter().product();
+        let last = shape.len() - 1;
+        let half: usize = shape[..last].iter().product::<usize>() * (shape[last] / 2 + 1);
+        assert_eq!(values.len(), total);
+        assert_eq!(forward.input_len_bytes(), (total * 4) as u64);
+        assert_eq!(forward.output_len_bytes(), (half * 8) as u64);
+        assert_eq!(inverse.input_len_bytes(), forward.output_len_bytes());
+        assert_eq!(inverse.output_len_bytes(), (total * 4) as u64);
+        let input = upload(device, values);
+        let spectrum = device.create_buffer_shared(forward.output_len_bytes());
+        let back = device.create_buffer_shared(inverse.output_len_bytes());
+        assert!(input.size >= forward.input_len_bytes() && spectrum.size >= forward.output_len_bytes());
+        assert!(back.size >= inverse.output_len_bytes());
+        (forward, inverse, input, spectrum, back)
+    }
+
+    /// MPSGraph transforms lengths with factors 3, 5 and 7, and a prime on a
+    /// leading axis, matching a direct DFT and round-tripping.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn nd_real_transform_at_mixed_radix_lengths() {
+        let device = GpuDevice::new();
+        for shape in [[7usize, 6, 10], [12, 10, 6], [5, 3, 96]] {
+            let total: usize = shape.iter().product();
+            let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+            let values: Vec<f32> = (0..total)
+                .map(|_| {
+                    state ^= state << 13;
+                    state ^= state >> 7;
+                    state ^= state << 17;
+                    (state >> 40) as f32 / (1u64 << 24) as f32 - 0.5
+                })
+                .collect();
+            let (forward, inverse, input, spectrum, back) = mixed_plans(&device, &shape, &values);
+            let mut enc = device.create_encoder("gpu-fft-mixed-test");
+            forward.encode(&mut enc, &input, &spectrum);
+            inverse.encode(&mut enc, &spectrum, &back);
+            enc.commit_and_wait_completed();
+            let spec = download(&spectrum, forward.output_element_count());
+            let half_x = shape[2] / 2 + 1;
+            let tau = std::f64::consts::TAU;
+            let mut worst = 0.0_f64;
+            for kz in 0..shape[0] {
+                for ky in 0..shape[1] {
+                    for kx in 0..half_x {
+                        let (mut re, mut im) = (0.0_f64, 0.0_f64);
+                        for z in 0..shape[0] {
+                            for y in 0..shape[1] {
+                                for x in 0..shape[2] {
+                                    let phase = -tau
+                                        * ((kz * z) as f64 / shape[0] as f64
+                                            + (ky * y) as f64 / shape[1] as f64
+                                            + (kx * x) as f64 / shape[2] as f64);
+                                    let v = f64::from(values[x + shape[2] * (y + shape[1] * z)]);
+                                    re += v * phase.cos();
+                                    im += v * phase.sin();
+                                }
+                            }
+                        }
+                        let i = 2 * (kx + half_x * (ky + shape[1] * kz));
+                        worst = worst.max((f64::from(spec[i]) - re).abs()).max((f64::from(spec[i + 1]) - im).abs());
+                    }
+                }
+            }
+            let round_trip = download(&back, total);
+            let err = values.iter().zip(&round_trip).map(|(a, b)| (a - b).abs()).fold(0.0_f32, f32::max);
+            eprintln!("FFT {shape:?}: direct DFT error {worst:.2e}, round trip {err:.2e}");
+            assert!(worst < 1e-4, "{shape:?}: half spectrum differs from the direct DFT by {worst}");
+            assert!(err < 1e-5, "{shape:?}: inverse plan does not return the input: {err}");
+        }
+    }
+
+    /// A plane wave at 96³ and 80×112×96 lands on its one bin; the round trip
+    /// returns it. Prints forward-plus-inverse GPU time beside 64³ and 128³.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn nd_real_transform_plane_wave_and_cost_at_lattice_sizes() {
+        let device = GpuDevice::new();
+        for shape in [[64usize, 64, 64], [80, 112, 96], [96, 96, 96], [128, 128, 128]] {
+            let k = [3usize, 5, 7];
+            let total: usize = shape.iter().product();
+            let tau = std::f64::consts::TAU;
+            let mut values = vec![0.0f32; total];
+            for z in 0..shape[0] {
+                for y in 0..shape[1] {
+                    for x in 0..shape[2] {
+                        let phase = tau
+                            * ((k[0] * z) as f64 / shape[0] as f64
+                                + (k[1] * y) as f64 / shape[1] as f64
+                                + (k[2] * x) as f64 / shape[2] as f64);
+                        values[x + shape[2] * (y + shape[1] * z)] = phase.cos() as f32;
+                    }
+                }
+            }
+            let (forward, inverse, input, spectrum, back) = mixed_plans(&device, &shape, &values);
+            let mut enc = device.create_encoder("gpu-fft-plane-wave");
+            forward.encode(&mut enc, &input, &spectrum);
+            inverse.encode(&mut enc, &spectrum, &back);
+            enc.commit_and_wait_completed();
+            let spec = download(&spectrum, forward.output_element_count());
+            let half_x = shape[2] / 2 + 1;
+            let peak = 2 * (k[2] + half_x * (k[1] + shape[1] * k[0]));
+            let expected = total as f32 / 2.0;
+            let mut stray = 0.0f32;
+            for (i, pair) in spec.chunks_exact(2).enumerate() {
+                if 2 * i != peak {
+                    stray = stray.max(pair[0].abs()).max(pair[1].abs());
+                }
+            }
+            let round_trip = download(&back, total);
+            let err = values.iter().zip(&round_trip).map(|(a, b)| (a - b).abs()).fold(0.0_f32, f32::max);
+            let mut ms = Vec::new();
+            for _ in 0..12 {
+                let mut enc = device.create_encoder("gpu-fft-cost");
+                forward.encode(&mut enc, &input, &spectrum);
+                inverse.encode(&mut enc, &spectrum, &back);
+                ms.push(enc.commit_and_wait_completed_timed() * 1000.0);
+            }
+            ms.sort_by(f64::total_cmp);
+            eprintln!(
+                "FFT {shape:?}: peak {:.1} of {expected:.1}, stray {stray:.2e}, round trip {err:.2e}, forward+inverse {:.3} ms median",
+                spec[peak], ms[ms.len() / 2]
+            );
+            assert!((spec[peak] - expected).abs() < expected * 1e-4 && spec[peak + 1].abs() < expected * 1e-4);
+            assert!(stray < expected * 1e-4, "{shape:?}: energy outside the plane wave's bin: {stray}");
+            assert!(err < 1e-4, "{shape:?}: round trip error {err}");
+        }
     }
 }

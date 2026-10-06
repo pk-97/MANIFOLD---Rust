@@ -38,7 +38,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 <!-- BEGIN GENERATED: registered-node-index — do not edit; run `cargo run -p manifold-renderer --bin gen_node_catalog` -->
 
-_Generated from the node registry. Do not hand-edit. 381 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
+_Generated from the node registry. Do not hand-edit. 389 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
 ### Color & Tone (16)
 
@@ -100,13 +100,14 @@ _Generated from the node registry. Do not hand-edit. 381 nodes registered, group
 | Vignette | `node.vignette` | Filter | Darkens the edges of the frame to pull the eye inward, with a circle, oval, or rectangular falloff. The cinematic edge fade. |
 | — | `node.watercolor` | Filter | A watercolor look built from a seven-pass feedback simulation, with grain, flow, diffusion, and soft bleeding edges. A legacy bundle still waiting to be decomp… |
 
-### Generate (18)
+### Generate (19)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
 | Audio Spectrum | `node.audio_spectrum` | Source | Provides a live scrolling spectrum texture for spectrogram graphs. |
 | Audio Waveform | `node.audio_waveform` | Source | Provides a live audio waveform as 512 curve samples for oscilloscope and line-based graphs. |
 | Basic Shape | `node.basic_shape` | Source | Draws one of three simple shapes, a square, diamond, or octagon, as a clean anti-aliased fill. Pick the shape, then size and rotate it. |
+| Camera Sky | `node.camera_sky` | Source | Shows the HDRI sky behind a 3D scene, seen through the scene's camera so it moves and lines up with the reflections. |
 | Checkerboard | `node.checkerboard` | Source | Lays down an alternating black and white checker grid at any scale. Handy as a test pattern, a mask, or a base for tiled looks. |
 | Draw Lines | `node.draw_lines` | Filter | Draws a set of smooth anti-aliased lines onto the image from a list of points. Used for wireframes, paths, and curve overlays. |
 | Draw Rectangles | `node.draw_rectangles` | Filter | Draws a batch of filled rectangles onto the image from a list of positions and sizes. Good for bars, blocks, and data overlays. |
@@ -152,7 +153,7 @@ _Generated from the node registry. Do not hand-edit. 381 nodes registered, group
 | SSAO (GTAO) | `node.ssao_gtao` | Map | Computes contact shadows from scene depth and a physical camera lens using a horizon-angle integral (GTAO) — darkens crevices and touching surfaces the way amb… |
 | Threshold | `node.threshold` | Filter | Keeps only the bright parts of the image and drops the rest, with a soft edge you can widen. The way to pull out highlights for a bloom or a mask. |
 
-### Composite (8)
+### Composite (9)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -161,11 +162,12 @@ _Generated from the node registry. Do not hand-edit. 381 nodes registered, group
 | Masked Mix | `node.masked_mix` | Filter | Blends two images using a third as a mask, applying one only where the mask is bright. The apply-only-where node. |
 | Mix | `node.mix` | Filter | Blends two images together with a choice of modes like Add, Screen, Multiply, and Overlay, plus a crossfade amount. The core layer-blend node. |
 | Multi Blend | `node.multi_blend` | Filter | Adds together any number of images and divides by a shared amount, collapsing a long chain of Mix(Add) nodes into one. Divisor 1 sums, divisor N averages. |
+| Over | `node.over` | Filter | Places one image in front of another using the front image's transparency, like stacking a cut-out on a background. |
 | Set Alpha | `node.set_alpha` | Filter | Forces the image's alpha to a fixed opacity while leaving the colours untouched. Ends a generator chain whose blends have eaten the alpha channel. |
 | — | `node.texture_sum_5` | Filter | Legacy fixed five-input sum, superseded by node.multi_blend (dynamic N inputs). Hidden from the palette but still loads in saved graphs. |
 | Wet/Dry | `node.wet_dry` | Filter | Crossfades a processed image back over the original, so you can dial how much of an effect shows. At 0 you get the original, at 1 the full effect. |
 
-### 3D Geometry (91)
+### 3D Geometry (95)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -182,6 +184,7 @@ _Generated from the node registry. Do not hand-edit. 381 nodes registered, group
 | Cube Mesh | `node.cube_mesh` | Source | Builds a unit cube as a 3D mesh ready to rotate, light, and render. The starting block for box-based geometry. |
 | Cut Mesh Bands | `node.cut_mesh_bands` | Source | Cuts mesh triangles into directional bands while retaining source-triangle provenance. |
 | Cut Mesh Cells | `node.cut_mesh_cells` | Source | Cuts mesh triangles into grid cells while retaining source-triangle provenance. |
+| Cut Out Box | `node.cut_out_box` | Filter | Hides the part of a mesh inside a box, for example to cut a hole in an ocean where a splash tank sits. |
 | Cylinder Wrap Field | `node.cylinder_wrap_field` | Map | Wraps a flat grid of points around a cylinder, placing copies on a curved surface. Part of the digital-plants geometry. |
 | Digital Plants Render | `node.digital_plants_render` | Filter | Renders a field of cubes lit with shadows, the core of the Digital Plants look. A fused renderer still to be decomposed. |
 | Displace Copies | `node.displace_copies` | Filter | Moves copies along a chosen direction according to a scalar field while preserving their transform metadata. |
@@ -216,6 +219,8 @@ _Generated from the node registry. Do not hand-edit. 381 nodes registered, group
 | Nested Cubes Geometry | `node.nested_cubes_geometry` | Source | Renders a field of nested, rotating cubes with per-face scatter and a beat-driven kick. A self-contained generator, still to be broken into atoms. |
 | Boil | `node.noise_displace` | Filter | Pushes every vertex along its normal by animated simplex noise, so a mesh appears to simmer and bubble. |
 | Normal Wave Mesh | `node.normal_wave_mesh` | Filter | Travels a smooth directional wave across the current textured mesh while carrying its lighting frame. |
+| Ocean Displace | `node.ocean_displace` | Filter | Shapes a flat water grid into ocean waves from three wave fields and whitens the crests where the waves break. |
+| Ocean Spectrum | `node.ocean_spectrum` | Source | Makes the wave spectrum of a wind-driven sea for one band of wave sizes, the starting point of a spectral ocean. |
 | Orbit Camera | `node.orbit_camera` | Source | A camera that orbits around a target point, with controls for distance, height, and angle. The viewpoint for 3D mesh rendering. |
 | Ordered Recon | `node.ordered_recon_mesh` | Filter | Reassembles an incoming mesh in directional bands, with each band settling from a periodic pose blend. |
 | Physics World | `node.physics_world` | Filter | Simulate colliding objects together under gravity, global and per-body acceleration fields, with speed and reset controls. |
@@ -223,6 +228,7 @@ _Generated from the node registry. Do not hand-edit. 381 nodes registered, group
 | Platonic Solid Edges | `node.platonic_solid_edges` | Source | Builds the wireframe edges of one of the five Platonic solids, pairing up which corners connect. Feed it with the matching points to draw the wireframe. |
 | Platonic Solid Mesh | `node.platonic_solid_mesh` | Source | Builds a reusable closed triangle mesh for any of the five Platonic solids. |
 | Platonic Solid Points | `node.platonic_solid_points` | Source | Builds the corner points of one of the five Platonic solids, from a tetrahedron to a dodecahedron. The vertex set for wireframe geometry. |
+| Projected Grid | `node.projected_grid` | Source | Lays a grid on a water level that fills the camera's view out to the horizon, dense near the camera and thin far away, the base surface for an ocean. |
 | Push Along Normals | `node.push_along_normals` | Filter | Pushes every point of a mesh outward or inward along its own surface direction — the 3D version of a bulge or breathe effect, optionally masked and driven by a… |
 | Push Mesh | `node.push_mesh` | Filter | Pushes a mesh's points up and down by reading a height image, turning a flat grid into bumpy terrain. The 3D version of a displacement. |
 | Reflect Array | `node.reflect_array` | Filter | Makes a mirrored copy of every instance across a plane — drop a reflected scene under the floor and ride the offset. |
@@ -261,7 +267,7 @@ _Generated from the node registry. Do not hand-edit. 381 nodes registered, group
 | Voxelize | `node.voxelize_mesh` | Filter | Snaps every vertex to a regular voxel grid, pixel-crushing a smooth mesh into chunky blocks. |
 | Wave Shear Mesh | `node.wave_shear_mesh` | Filter | Shears a textured mesh with a travelling wave while transporting normals and tangents analytically. |
 
-### Materials & Lighting (10)
+### Materials & Lighting (11)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -272,6 +278,7 @@ _Generated from the node registry. Do not hand-edit. 381 nodes registered, group
 | Matcap Two-Tone | `node.matcap_two_tone` | Filter | Shades a surface by mapping its normals into a two-tone sphere lookup, a fast stylised material that needs no real lights. |
 | PBR Material | `node.pbr_material` | Source | A physically based material with roughness, metalness, and environment reflections. The realistic workhorse for 3D surfaces. |
 | Rim Light (Fresnel) | `node.rim_light` | Filter | Lights up the edges of a surface where it turns away from the camera, the glowing rim you see on backlit objects. |
+| Sea Horizon Environment | `node.sea_horizon_env` | Filter | Turns the ground half of an HDRI into open sea, so water reflects sky and sea instead of the beach the photo was taken from. |
 | Shininess (Blinn) | `node.shininess` | Filter | Adds a tight highlight where the surface catches the light, set by a shininess amount. The glossy hotspot on top of basic lighting. |
 | Surface Bumps | `node.surface_bumps` | Filter | Turns a grayscale height image into a normal map, so light and dark become bumps and dents the lighting can catch. The way to add surface detail from a texture. |
 | Unlit Material | `node.unlit_material` | Source | A flat-colour material with no lighting, so the surface shows its base colour straight. The simplest material, good for solid or glowing looks. |
@@ -426,7 +433,7 @@ _Generated from the node registry. Do not hand-edit. 381 nodes registered, group
 | Track Persist | `node.track_persist` | Filter | Keeps a stable identity on each tracked blob from frame to frame, holding onto one briefly even if it flickers out. Stops IDs from jumping around. |
 | Track Regions | `node.track_regions` | Filter | Assigns stable IDs and motion to detected regions while preserving the legacy box stream for existing HUD nodes. |
 
-### Math & Convert (26)
+### Math & Convert (27)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -437,6 +444,7 @@ _Generated from the node registry. Do not hand-edit. 381 nodes registered, group
 | Connect Nearest | `node.connect_nearest` | Control | For each item in a list, finds its nearest neighbour and emits a connecting line. Used to draw constellations between tracked blobs. |
 | Divide By Value | `node.divide_by_value` | Map | Divides a list of numbers by one number the GPU just worked out. |
 | Dot Products | `node.dot_products` | Map | Measures how much a list of numbers lines up with each row of a table, all on the GPU. |
+| Inverse FFT 2D | `node.inverse_fft_2d` | Filter | Turns a batch of wave spectra back into height and displacement fields, the step that makes a spectral ocean. |
 | Magnitude → dB | `node.magnitude_db` | Filter | Converts a brightness or spectrum magnitude image into a bounded decibel field for meters and palettes. |
 | Mix Arrays | `node.mix_arrays` | Filter | Blends two GPU lists of numbers element by element for display-time interpolation. |
 | Normalize | `node.normalize` | Filter | Scales the red and green channels read as a 2D vector down to length 1, keeping the direction and dropping the magnitude. |
@@ -511,7 +519,7 @@ _Generated from the node registry. Do not hand-edit. 381 nodes registered, group
 | — | `system.mesh_input` | — | — |
 | — | `system.mesh_output` | — | — |
 
-### Effect & generator presets (96)
+### Effect & generator presets (99)
 
 | id | name | kind | category | params |
 |---|---|---|---|---|
@@ -582,6 +590,8 @@ _Generated from the node registry. Do not hand-edit. 381 nodes registered, group
 | `MotionMosh` | Motion Mosh | effect | Stylize | 7 |
 | `MriVolume` | MRI Volume | generator | Text & Media | 8 |
 | `NestedCubes` | Nested Cubes | generator | Geometry | 6 |
+| `Ocean` | Ocean | generator | Sim | 361 |
+| `OceanCliff` | Ocean Cliff | generator | Sim | 2350 |
 | `OilyFluid` | Oily Fluid | generator | Sim | 14 |
 | `Oscilloscope` | Oscilloscope | generator | Audio | 11 |
 | `ParticleText` | Particle Text | generator | Text & Media | 15 |
@@ -607,6 +617,7 @@ _Generated from the node registry. Do not hand-edit. 381 nodes registered, group
 | `WaterDamBreakMatter` | Water — Dam Break (Live GPU) | generator | Sim | 1397 |
 | `WaterDamBreakParticles` | Water — Dam Break (Particle View) | generator | Sim | 1996 |
 | `WaterFloatingBoxMatter` | Water — Floating Box (Live GPU) | generator | Sim | 1390 |
+| `WaterSeaWallGpuFlip` | Water — Sea Wall (GPU FLIP) | generator | Sim | 2333 |
 | `WaterStillPoolMatter` | Water — Still Pool (Live GPU) | generator | Sim | 1065 |
 | `Watercolor` | Watercolor | effect | Stylize | 4 |
 | `Wireframe` | Wireframe | generator | Geometry | 9 |

@@ -153,27 +153,22 @@ impl Primitive for TriangulateGrid {
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
-    //! Buffer-domain GATHER parity oracle (freeze section 12) — triangulate_grid had no
-    //! GPU test. The generated kernel (the body indexes the input grid global
-    //! buf_in to read each output vertex's quad corner + the finite-difference
-    //! normal neighbours) must reproduce the hand kernel vertex-for-vertex,
-    //! including the padding past the triangle count. Same math → bit-exact.
+    //! Value-level proofs of the generated kernel (the body indexes the input
+    //! grid global buf_in for each output vertex's quad corner and its
+    //! finite-difference neighbours).
     use super::*;
 
     fn grid_vertex(pos: [f32; 3], uv: [f32; 2]) -> MeshVertex {
         MeshVertex { position: pos, _pad0: 0.0, normal: [0.0; 3], _pad1: 0.0, uv, _pad2: [0.0; 2], tangent: [0.0; 4], color: [1.0; 4] }
-}
+    }
 
-    fn dispatch_tri(
-        wgsl: &str,
-        grid: &[MeshVertex],
-        dst_cap: u32,
-        uniform: &[u8],
-    ) -> Vec<MeshVertex> {
+    fn dispatch_tri(grid: &[MeshVertex], dst_cap: u32, uniform: &TriangulateUniforms) -> Vec<MeshVertex> {
+        let wgsl = crate::node_graph::freeze::codegen::standalone_for_spec::<TriangulateGrid>().expect("make_triangles codegen");
+        let uniform = bytemuck::bytes_of(uniform);
         let device = crate::test_device();
-        let pipeline = device.create_compute_pipeline(wgsl, "cs_main", "tri-oracle");
+        let pipeline = device.create_compute_pipeline(&wgsl, crate::node_graph::freeze::codegen::ENTRY, "tri-oracle");
         let src_buf = device.create_buffer_shared(std::mem::size_of_val(grid) as u64);
-        let dst_buf = device.create_buffer_shared(dst_cap as u64 * 48);
+        let dst_buf = device.create_buffer_shared(u64::from(dst_cap) * std::mem::size_of::<MeshVertex>() as u64);
         unsafe {
             src_buf.write(0, bytemuck::cast_slice(grid));
         }
@@ -185,7 +180,7 @@ mod gpu_tests {
                 GpuBinding::Buffer { binding: 1, buffer: &src_buf, offset: 0 },
                 GpuBinding::Buffer { binding: 2, buffer: &dst_buf, offset: 0 },
             ],
-            [dst_cap.div_ceil(64), 1, 1],
+            [dst_cap.div_ceil(256), 1, 1],
             "tri-oracle",
         );
         enc.commit_and_wait_completed();
@@ -199,9 +194,7 @@ mod gpu_tests {
     /// declared +Y up-vector (`tg_compute_normal`'s finite difference has no
     /// height variation to react to) — the emitted triangle WINDING must
     /// agree with that, i.e. `cross(v1-v0, v2-v0)` for every emitted
-    /// triangle must also point +Y, not -Y. Checked on
-    /// the hand kernel; the parity test above already proves the generated
-    /// kernel matches it vertex-for-vertex.
+    /// triangle must also point +Y, not -Y.
     #[test]
     fn flat_grid_triangle_winding_agrees_with_vertex_normal() {
         const COLS: u32 = 3;
@@ -216,14 +209,8 @@ mod gpu_tests {
         }
         const DST_CAP: u32 = 24; // (3-1)*(3-1)*6, no padding needed.
 
-        let mut hand = Vec::new();
-        hand.extend_from_slice(&COLS.to_le_bytes());
-        hand.extend_from_slice(&ROWS.to_le_bytes());
-        hand.extend_from_slice(&DST_CAP.to_le_bytes());
-        hand.extend_from_slice(&0u32.to_le_bytes());
-
-        let hand_wgsl = include_str!("shaders/triangulate_grid.wgsl");
-        let verts = dispatch_tri(hand_wgsl, &grid, DST_CAP, &hand);
+        let uniforms = TriangulateUniforms { src_cols: COLS as i32, src_rows: ROWS as i32, dispatch_count: DST_CAP, _pad0: 0 };
+        let verts = dispatch_tri(&grid, DST_CAP, &uniforms);
 
         fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
             [a[0] - b[0], a[1] - b[1], a[2] - b[2]]

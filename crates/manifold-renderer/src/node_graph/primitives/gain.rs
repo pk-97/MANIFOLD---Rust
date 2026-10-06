@@ -59,6 +59,10 @@ crate::primitive! {
     category: ColorAndTone,
     role: Filter,
     aliases: ["gain", "brightness", "exposure", "Level TOP"],
+    // Output is input × gain only. An HDRI → exposure → envmap chain then
+    // keeps one content version while nothing changes, so render_scene's
+    // environment prefilter (about 15 ms at 4K) runs once, not every frame.
+    pure: true,
     fusion_kind: Pointwise,
     wgsl_body: include_str!("shaders/gain_body.wgsl"),
 }
@@ -103,6 +107,18 @@ impl Primitive for Gain {
             out_tex,
             "node.exposure",
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::node_graph::effect_node::EffectNode;
+
+    /// HDRI scenes route the sky through Exposure; if it ran every frame,
+    /// render_scene would re-blur the environment every frame.
+    #[test]
+    fn exposure_is_pure_so_a_still_environment_stays_cached() {
+        assert!(super::Gain::new().is_pure());
     }
 }
 
