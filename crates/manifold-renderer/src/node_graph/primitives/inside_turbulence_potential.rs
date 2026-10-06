@@ -77,7 +77,6 @@ crate::primitive! {
     depth_rule: Terminal,
     composition_notes: "Sample turbulence_field with the same distance and shrunken material cells as wavecrest_potential; feed turbulence_emission_count alongside the mutually exclusive wavecrest potential.",
     examples: [],
-    picker: { label: "Inside Turbulence Potential", category: Atom },
     summary: "Finds submerged turbulent emitters, including near-surface particles classified inside by FLIP.",
     category: Particles3D,
     role: Filter,

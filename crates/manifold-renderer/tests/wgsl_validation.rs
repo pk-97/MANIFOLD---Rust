@@ -100,7 +100,6 @@ const COMPOSED_SHADERS: &[(&str, &str)] = &[
     ("ibl_brdf_lut.wgsl", PBR_BRDF),
     ("gpu_flip_step.wgsl", GPU_FLIP_STEP_PRELUDE),
     ("whitewater_fused.wgsl", concat!(
-        "const LF_PACKED: bool = false;\n",
         include_str!("../src/node_graph/primitives/shaders/whitewater_common.wgsl"), "\n",
         include_str!("../src/node_graph/primitives/shaders/liquid_faces.wgsl"), "\n",
         include_str!("../src/node_graph/primitives/shaders/liquid_field.wgsl"),

@@ -79,7 +79,6 @@ crate::primitive! {
     depth_rule: Terminal,
     composition_notes: "Use unscaled sampled marker velocities and energy, then turbulence_emission_count with wavecrest rate zero and turbulence rate equal to dust rate. Type these spawns as dust after normal emission. Source uses nearest-object properties at the marker cell index.",
     examples: [],
-    picker: { label: "Dust Potential", category: Atom },
     summary: "Finds turbulent dust emitters near solid objects.",
     category: Particles3D,
     role: Filter,

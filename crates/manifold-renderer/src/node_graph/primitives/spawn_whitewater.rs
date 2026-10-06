@@ -114,7 +114,6 @@ crate::primitive! {
     depth_rule: Terminal,
     composition_notes: "offsets from node.running_total over node.emission_count's counts, emitters the same count the running total ran over (the particle frame's count). particles from node.sample_faces_at_particles and energy from node.energy_potential, so each emitter is read as it was scored. face_u/v/w, face_cells_x/y/z, solid and the grid (center/size from node.transform_components on grid_bounds, nodes_x/y/z from grid_nodes_x/y/z) as the rest of the whitewater chain reads them; seed and epoch as node.jitter_particles takes them. Capacity is the lifecycle's. Feed node.whitewater_type, then node.whitewater_lifecycle's spawns.",
     examples: [],
-    picker: { label: "Spawn Whitewater", category: Atom },
     summary: "Places the new foam, spray and bubble particles around the breaking water that throws them off.",
     category: Particles3D,
     role: Filter,

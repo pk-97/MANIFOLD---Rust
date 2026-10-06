@@ -59,7 +59,6 @@ crate::primitive! {
     depth_rule: Terminal,
     composition_notes: "Wire level_set and level_nodes_x/y/z from the Liquid Surface group's level_set outputs, solid and nodes_x/y/z from the particle frame's solid_b and grid_nodes_x/y/z. The level set must refine the grid by the same whole number (1 to 4) on every axis, or nothing runs, a named error. Then node.nearest_crossing three times and node.crossing_distance.",
     examples: [],
-    picker: { label: "Surface Crossings", category: Atom },
     summary: "Finds where the liquid's surface passes through each grid cell, the first step to measuring distance to the surface.",
     category: Particles3D,
     role: Filter,

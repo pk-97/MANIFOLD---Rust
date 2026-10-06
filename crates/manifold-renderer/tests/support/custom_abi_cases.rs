@@ -209,6 +209,13 @@ pub const CASES: &[CustomAbiCase] = &[
     },
     CustomAbiCase {
         source: "whitewater_step.rs",
+        rust_struct: "UnpackParams",
+        shader: "shaders/whitewater_fused.wgsl",
+        shader_struct: "UnpackParams",
+        aliases: &[],
+    },
+    CustomAbiCase {
+        source: "whitewater_step.rs",
         rust_struct: "HandParams",
         shader: "shaders/whitewater_step.wgsl",
         shader_struct: "StepParams",
@@ -216,9 +223,30 @@ pub const CASES: &[CustomAbiCase] = &[
     },
     CustomAbiCase {
         source: "whitewater_step.rs",
+        rust_struct: "TurbulenceParams",
+        shader: "shaders/whitewater_fused.wgsl",
+        shader_struct: "TurbulenceParams",
+        aliases: &[],
+    },
+    CustomAbiCase {
+        source: "whitewater_step.rs",
         rust_struct: "EmitParams",
         shader: "shaders/whitewater_fused.wgsl",
         shader_struct: "EmitParams",
+        aliases: &[],
+    },
+    CustomAbiCase {
+        source: "whitewater_step.rs",
+        rust_struct: "SpawnParams",
+        shader: "shaders/whitewater_fused.wgsl",
+        shader_struct: "SpawnParams",
+        aliases: &[],
+    },
+    CustomAbiCase {
+        source: "whitewater_step.rs",
+        rust_struct: "LifecycleParams",
+        shader: "shaders/whitewater_fused.wgsl",
+        shader_struct: "LifecycleParams",
         aliases: &[],
     },
     CustomAbiCase {

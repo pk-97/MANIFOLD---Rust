@@ -44,7 +44,6 @@ crate::primitive! {
     depth_rule: Terminal,
     composition_notes: "Chain one per layer, each reading the one before: three after node.lattice_curvature, as FLIP extends its curvature grid. nodes_x/y/z are the particle frame's grid_nodes_x/y/z.",
     examples: [],
-    picker: { label: "Extend Lattice", category: Atom },
     summary: "Fills the empty cells next to known ones with their neighbours' average, one cell further each time.",
     category: Particles3D,
     role: Filter,

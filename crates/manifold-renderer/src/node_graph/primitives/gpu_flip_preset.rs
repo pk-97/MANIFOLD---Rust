@@ -762,9 +762,9 @@ const SURFACE_DETAIL_OFFSET: usize = 1;
 /// two, matched by node name.
 #[cfg(any(test, feature = "gpu-proofs"))]
 pub(crate) fn render_def(scene: WaterScene) -> EffectGraphDef {
-    // The render's Whitewater group reads the face grid.
-    let mut def = serde_json::to_value(water_def(scene.with_surface().with_faces())).expect("water def serialises");
+    let mut def = serde_json::to_value(water_def(scene.with_surface())).expect("water def serialises");
     let preset = shipped_preset();
+
     let harness = [id_named(&def, "mesh_sink"), id_named(&def, "output")];
     let ends = |wire: &Value| [wire["fromNode"].as_u64().expect("from"), wire["toNode"].as_u64().expect("to")];
     def["nodes"].as_array_mut().expect("nodes").retain(|n| !harness.contains(&n["id"].as_u64().expect("id")));
@@ -839,6 +839,8 @@ pub(crate) fn render_def(scene: WaterScene) -> EffectGraphDef {
     // Regeneration is idempotent: the source and new capture may already be in the seed preset.
     wires.retain(|w| !(w["toNode"] == whitewater && w["toPort"] == "obstacle_source"
         || w["toNode"] == state && w["toPort"] == "dust_particles_in"));
+    wires.retain(|w| !(w["toNode"] == whitewater && ["faces", "face_u", "face_v", "face_w"].iter().any(|port| w["toPort"] == *port)));
+    wires.push(json!({"fromNode":step, "fromPort":"faces", "toNode":whitewater, "toPort":"faces"}));
     wires.push(json!({"fromNode":source, "fromPort":"solid", "toNode":whitewater, "toPort":"obstacle_source"}));
     wires.push(json!({"fromNode":whitewater, "fromPort":"dust_particles", "toNode":state, "toPort":"dust_particles_in"}));
     for (from, ports) in [
@@ -877,7 +879,7 @@ const ICOSAHEDRON: usize = 3;
 /// surface.
 #[cfg(test)]
 pub(crate) fn particle_view_def() -> EffectGraphDef {
-    let mut def = serde_json::to_value(render_def(WaterScene::dam_break(64).with_faces())).expect("render def serialises");
+    let mut def = serde_json::to_value(render_def(WaterScene::dam_break(64))).expect("render def serialises");
     let surface = id_named(&def, "surface");
     def["nodes"].as_array_mut().expect("nodes").retain(|n| n["id"] != surface);
     def["wires"].as_array_mut().expect("wires").retain(|w| w["fromNode"] != surface && w["toNode"] != surface);
@@ -1128,6 +1130,32 @@ pub(super) fn fused_as_rendered(
         assert!(regions.is_empty(), "the def has {} fusable regions but does not fuse", regions.len());
     }
     view
+}
+
+/// Independent axis oracle over the same solver output and tick region.
+#[cfg(test)]
+pub(super) fn with_whitewater_axes(def: EffectGraphDef) -> EffectGraphDef {
+    let mut def = serde_json::to_value(def).expect("def serialises");
+    let nodes = def["nodes"].as_array().expect("nodes");
+    let id = |name: &str| nodes.iter().find(|n| n["nodeId"] == name).expect("node")["id"].as_u64().expect("id");
+    let (step, domain, whitewater) = (id("step"), id("domain"), id("whitewater"));
+    let mut next = nodes.iter().filter_map(|n| n["id"].as_u64()).max().unwrap() + 1;
+    let gone: Vec<_> = nodes.iter().filter(|n| ["whitewater_face_u", "whitewater_face_v", "whitewater_face_w"].iter().any(|name| n["nodeId"] == *name)).map(|n| n["id"].clone()).collect();
+    def["nodes"].as_array_mut().unwrap().retain(|n| !gone.contains(&n["id"]));
+    def["wires"].as_array_mut().unwrap().retain(|w| !(gone.contains(&w["fromNode"]) || gone.contains(&w["toNode"])
+        || w["toNode"] == whitewater && ["faces", "face_u", "face_v", "face_w"].iter().any(|port| w["toPort"] == *port)));
+    for (axis, port) in ["face_u", "face_v", "face_w"].into_iter().enumerate() {
+        let adapter = next;
+        next += 1;
+        def["nodes"].as_array_mut().unwrap().push(serde_json::json!({"id": adapter, "nodeId": format!("whitewater_{port}"), "typeId": "node.face_sample_component", "params": {"axis": {"type": "Enum", "value": axis}}}));
+        let wires = def["wires"].as_array_mut().unwrap();
+        wires.push(serde_json::json!({"fromNode": step, "fromPort": "faces", "toNode": adapter, "toPort": "faces"}));
+        for dim in ["x", "y", "z"] {
+            wires.push(serde_json::json!({"fromNode": domain, "fromPort": format!("nodes_{dim}"), "toNode": adapter, "toPort": format!("nodes_{dim}")}));
+        }
+        wires.push(serde_json::json!({"fromNode": adapter, "fromPort": "out", "toNode": whitewater, "toPort": port}));
+    }
+    serde_json::from_value(def).expect("def with axis adapters")
 }
 
 /// CPU size proofs for every GPU FLIP graph, run before any GPU run of it: the
@@ -1672,7 +1700,7 @@ pub(super) mod tests {
     #[test]
     fn gpu_flip_shipped_preset_is_the_builders_dam_break() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("assets/generator-presets/{SHIPPED_PRESET}.json"));
-        let built = serde_json::to_value(render_def(WaterScene::dam_break(64).with_faces())).expect("serialise");
+        let built = serde_json::to_value(render_def(WaterScene::dam_break(64))).expect("serialise");
         if std::env::var("UPDATE_GPU_FLIP_PRESET").is_ok() {
             let mut json = serde_json::to_string_pretty(&built).expect("serialise");
             json.push('\n');

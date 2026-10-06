@@ -74,7 +74,6 @@ crate::primitive! {
     depth_rule: Terminal,
     composition_notes: "After node.spawn_whitewater, before node.whitewater_lifecycle's spawns. distance from node.crossing_distance and cells from node.liquid_cells, the grid as node.spawn_whitewater reads it. The lifecycle retypes every particle by the same rule each tick, so FLIP's foam depth and boundary box are fixed here, not params.",
     examples: [],
-    picker: { label: "Whitewater Type", category: Atom },
     summary: "Decides whether each new whitewater particle is spray, foam or a bubble, from where it sits against the water surface.",
     category: Particles3D,
     role: Filter,

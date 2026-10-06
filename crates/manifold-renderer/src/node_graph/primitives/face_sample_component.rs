@@ -61,7 +61,7 @@ crate::primitive! {
         float_param!("nodes_z", "Nodes Z", 71.0, 8.0, 1024.0),
     ],
     depth_rule: Terminal,
-    composition_notes: "Three of them, one per axis, on node.liquid_state's faces (the tick's last node.gpu_flip_step faces) publish GPU FLIP's face grid (face_u, face_v, face_w) for whitewater and any other consumer of the liquid seam. Wire nodes_x/y/z from the domain, so the arrays follow Resolution: their storage follows the faces input.",
+    composition_notes: "Three of them, one per axis, on node.liquid_state's faces (the tick's last node.gpu_flip_step faces) publish GPU FLIP's face grid as three axis arrays (face_u, face_v, face_w) for consumers of the liquid seam that read axes; whitewater reads the packed faces directly. Wire nodes_x/y/z from the domain, so the arrays follow Resolution: their storage follows the faces input.",
     examples: [],
     picker: { label: "Face Grid Component", category: Atom },
     summary: "Hands one direction of the water's velocity grid to effects that follow the water.",

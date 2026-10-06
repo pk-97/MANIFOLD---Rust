@@ -62,6 +62,15 @@ const _: () = assert!(std::mem::size_of::<AdvectUniforms>() == 128);
 
 const FACE_PORTS: [&str; 3] = ["face_u", "face_v", "face_w"];
 
+/// Motion defaults; the fused lifecycle kernel reads the same values.
+pub(crate) const FOAM_ADVECTION: f32 = 1.0;
+pub(crate) const BUBBLE_BUOYANCY: f32 = 4.0;
+pub(crate) const BUBBLE_DRAG: f32 = 1.0;
+pub(crate) const SPRAY_DRAG: f32 = 0.0;
+pub(crate) const SPRAY_DRAG_VARIANCE: f32 = 0.25;
+pub(crate) const SPRAY_RESTITUTION: f32 = 0.2;
+pub(crate) const SPRAY_FRICTION: f32 = 0.0;
+
 crate::primitive! {
     name: AdvectWhitewater,
     type_id: "node.advect_whitewater",
@@ -111,13 +120,13 @@ crate::primitive! {
         float_param!("gravity_y", "Gravity Y", -9.81, -1000.0, 1000.0),
         float_param!("gravity_z", "Gravity Z", 0.0, -1000.0, 1000.0),
         float_param!("dt", "Tick", 1.0 / 60.0, 0.0001, 1.0),
-        float_param!("foam_advection", "Foam Advection", 1.0, 0.0, 1.0),
-        float_param!("bubble_buoyancy", "Bubble Buoyancy", 4.0, 0.0, 100.0),
-        float_param!("bubble_drag", "Bubble Drag", 1.0, 0.0, 1.0),
-        float_param!("spray_drag", "Spray Drag", 0.0, 0.0, 100.0),
-        float_param!("spray_drag_variance", "Spray Drag Variance", 0.25, 0.0, 1.0),
-        float_param!("spray_restitution", "Spray Restitution", 0.2, 0.0, 1.0),
-        float_param!("spray_friction", "Spray Friction", 0.0, 0.0, 1.0),
+        float_param!("foam_advection", "Foam Advection", FOAM_ADVECTION, 0.0, 1.0),
+        float_param!("bubble_buoyancy", "Bubble Buoyancy", BUBBLE_BUOYANCY, 0.0, 100.0),
+        float_param!("bubble_drag", "Bubble Drag", BUBBLE_DRAG, 0.0, 1.0),
+        float_param!("spray_drag", "Spray Drag", SPRAY_DRAG, 0.0, 100.0),
+        float_param!("spray_drag_variance", "Spray Drag Variance", SPRAY_DRAG_VARIANCE, 0.0, 1.0),
+        float_param!("spray_restitution", "Spray Restitution", SPRAY_RESTITUTION, 0.0, 1.0),
+        float_param!("spray_friction", "Spray Friction", SPRAY_FRICTION, 0.0, 1.0),
         float_param!("substep_count", "substep_count", 0.0, 0.0, 16_777_216.0),
         float_param!("field_nodes_x", "field_nodes_x", 2.0, 0.0, 16_777_216.0),
         float_param!("field_nodes_y", "field_nodes_y", 2.0, 0.0, 16_777_216.0),
@@ -130,7 +139,6 @@ crate::primitive! {
     depth_rule: Terminal,
     composition_notes: "The first step of the GPU whitewater tick, on the pool node.array_feedback carries; retyping, lifetimes and removal follow. face_u/v/w and face_cells_x/y/z from the liquid frame's face grid, solid its solid lattice, center/size from node.transform_components on its grid_bounds, nodes_x/y/z its grid_nodes_x/y/z. FLIP's ballistic and kill limit behaviours are not ported: every side collides.",
     examples: [],
-    picker: { label: "Advect Whitewater", category: Atom },
     summary: "Moves foam, spray and bubbles one step: spray flies and bounces, bubbles rise, foam rides the water.",
     category: Particles3D,
     role: Filter,

@@ -47,7 +47,6 @@ crate::primitive! {
     depth_rule: Terminal,
     composition_notes: "Chain three after node.surface_crossings, each reading the one before, at Step 2, 1, 1, then node.crossing_distance. nodes_x/y/z are the solid lattice's, as node.surface_crossings takes them.",
     examples: [],
-    picker: { label: "Nearest Crossing", category: Atom },
     summary: "Passes each grid cell the closest known point on the liquid's surface from its neighbours.",
     category: Particles3D,
     role: Filter,

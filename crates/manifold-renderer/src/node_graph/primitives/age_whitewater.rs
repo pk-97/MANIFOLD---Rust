@@ -31,6 +31,11 @@ struct AgeUniforms {
     _pad2: u32,
 }
 
+/// Lifetime scales per kind; the fused lifecycle kernel reads the same values.
+pub(crate) const BUBBLE_LIFETIME_MODIFIER: f32 = 0.333;
+pub(crate) const FOAM_LIFETIME_MODIFIER: f32 = 1.0;
+pub(crate) const SPRAY_LIFETIME_MODIFIER: f32 = 2.0;
+
 crate::primitive! {
     name: AgeWhitewater,
     type_id: "node.age_whitewater",
@@ -44,14 +49,13 @@ crate::primitive! {
     },
     params: [
         float_param!("dt", "Tick", 1.0 / 60.0, 0.0001, 1.0),
-        float_param!("bubble_lifetime_modifier", "Bubble Lifetime Modifier", 0.333, 0.0, 100.0),
-        float_param!("foam_lifetime_modifier", "Foam Lifetime Modifier", 1.0, 0.0, 100.0),
-        float_param!("spray_lifetime_modifier", "Spray Lifetime Modifier", 2.0, 0.0, 100.0),
+        float_param!("bubble_lifetime_modifier", "Bubble Lifetime Modifier", BUBBLE_LIFETIME_MODIFIER, 0.0, 100.0),
+        float_param!("foam_lifetime_modifier", "Foam Lifetime Modifier", FOAM_LIFETIME_MODIFIER, 0.0, 100.0),
+        float_param!("spray_lifetime_modifier", "Spray Lifetime Modifier", SPRAY_LIFETIME_MODIFIER, 0.0, 100.0),
     ],
     depth_rule: Terminal,
     composition_notes: "After node.retype_whitewater in the GPU whitewater tick, so a particle ages at its new type's rate; removal follows.",
     examples: [],
-    picker: { label: "Age Whitewater", category: Atom },
     summary: "Counts down each whitewater particle's life, spray fastest and bubbles slowest.",
     category: Particles3D,
     role: Filter,

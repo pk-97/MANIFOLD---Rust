@@ -78,7 +78,6 @@ crate::primitive! {
     depth_rule: Terminal,
     composition_notes: "After node.advect_whitewater in the GPU whitewater tick, before node.age_whitewater. distance from node.crossing_distance and cells from node.liquid_cells, the grid and face grid as node.advect_whitewater reads them. Uses the same rule as node.whitewater_type, plus FLIP's foam buffer, so new and old particles agree.",
     examples: [],
-    picker: { label: "Retype Whitewater", category: Atom },
     summary: "Re-decides whether each whitewater particle is now spray, foam or a bubble after it has moved.",
     category: Particles3D,
     role: Filter,

@@ -82,7 +82,6 @@ crate::primitive! {
     depth_rule: Terminal,
     composition_notes: "After node.sample_faces_at_particles in the whitewater emitter chain. distance from node.crossing_distance, curvature from the last node.extend_lattice, cells from node.liquid_cells; center/size from node.transform_components on the frame's grid_bounds, nodes_x/y/z its grid_nodes_x/y/z. Feeds node.emission_count.",
     examples: [],
-    picker: { label: "Wavecrest Potential", category: Atom },
     summary: "Scores how sharply each bit of water is breaking over a wave crest, which is where foam and spray come from.",
     category: Particles3D,
     role: Filter,
