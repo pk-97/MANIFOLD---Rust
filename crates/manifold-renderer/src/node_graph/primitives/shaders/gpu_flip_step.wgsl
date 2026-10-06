@@ -92,7 +92,9 @@ struct Params {
     // Cells from the grid's minimum to each wall (FlipSolverGrid::wall_inset);
     // 0 when the walls are the grid's edges.
     wall_inset: f32,
-    pad0: u32,
+    // Box3D's substep over this tick, dt / box3d_substep_count(dt): the h in
+    // the coupled motion law (liquid_body_state).
+    coupled_h: f32,
     pad1: u32,
     pad2: u32,
 };
@@ -185,6 +187,15 @@ struct ClockPlan {
 // The sorted particles, written past the live ones by emit_write.
 @group(0) @binding(38) var<storage, read_write> emitted: array<FluidParticle>;
 @group(0) @binding(46) var<storage, read> clock_plan: array<ClockPlan>;
+// This tick's bodies posed at this step's end by pose_bodies, one per body of
+// the tick in row order: what every solid pass of the step reads.
+@group(0) @binding(48) var<storage, read_write> posed: array<LiquidBody>;
+// 48 per row of `bodies`, tick major like it: the body's support points at
+// the tick's start (liquid::bodies::BodySupports).
+@group(0) @binding(49) var<storage, read> contacts: array<vec4<f32>>;
+// Six per posed body: its packed response to the pressure while it stays on
+// its supports (liquid_constrained_mobility), which the body passes read.
+@group(0) @binding(50) var<storage, read_write> mobility: array<vec4<f32>>;
 
 // Set by resolve_solid when it refuses a push-out past SOLID_PUSH.
 var<private> push_refused: u32 = 0u;
@@ -752,31 +763,89 @@ fn wall_distance(x: vec3<f32>) -> f32 {
     return min(gap.x, min(gap.y, gap.z));
 }
 
-// The row of the body nearest x (smallest signed distance), −1 when no
-// body is enabled or the walls are nearer: the solid there is the tank's.
+// A body of this tick, `b` counted from its first row, posed at this step's
+// end (LIQUID_SOLVER_SEAM_DESIGN.md D15): a dynamic body by the coupled motion
+// law from its tick-start row, the reaction the water put on it before this
+// step and its support points; any other at its own velocity. With the pose,
+// the body's response to this step's pressure while it stays on the supports
+// the law leaves it on (D16), frozen for the whole solve. One thread per
+// body; every solid pass of the step reads `posed` and `mobility`. Ungated: a
+// zeroed row would read as shape 0 at the origin.
+@compute @workgroup_size(64)
+fn pose_bodies(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let b = i32(gid.x);
+    let row = max(u.rows - u.body_count, 0) + b;
+    if b >= u.body_count || row >= u.rows {
+        return;
+    }
+    let bd = bodies[u32(row)];
+    var out = bd;
+    let t = adaptive_tick_seconds();
+    var supports: array<vec4<f32>, 48>;
+    for (var k = 0u; k < 48u; k = k + 1u) {
+        supports[k] = support_vec4(48u * u32(row) + k);
+    }
+    let m = LiquidMobility(bd.position_inv_mass.w, bd.inv_inertia_x.xyz, bd.inv_inertia_y.xyz, bd.inv_inertia_z.xyz);
+    var closed = 0u;
+    var stuck = 0u;
+    if bd.position_inv_mass.w > 0.0 {
+        let r = 8u * u32(b);
+        let s = liquid_body_state(
+            bd.position_inv_mass.xyz, bd.rotation, bd.linear_velocity.xyz, bd.angular_velocity.xyz, m,
+            bd.accel_shape.xyz, vec3<f32>(bd.inv_inertia_x.w, bd.inv_inertia_y.w, bd.inv_inertia_z.w),
+            &supports,
+            vec3<f32>(reaction[r], reaction[r + 1u], reaction[r + 2u]),
+            vec3<f32>(reaction[r + 4u], reaction[r + 5u], reaction[r + 6u]),
+            t, u.coupled_h,
+        );
+        out.position_inv_mass = vec4<f32>(s.position, bd.position_inv_mass.w);
+        out.rotation = s.rotation;
+        out.linear_velocity = vec4<f32>(s.linear, bd.linear_velocity.w);
+        out.angular_velocity = vec4<f32>(s.angular, bd.angular_velocity.w);
+        closed = s.closed;
+        stuck = s.stuck;
+    } else {
+        out.position_inv_mass = vec4<f32>(fma(bd.linear_velocity.xyz, vec3<f32>(t), bd.position_inv_mass.xyz), bd.position_inv_mass.w);
+        out.rotation = liquid_turn(bd.rotation, bd.angular_velocity.xyz, t);
+    }
+    posed[u32(b)] = out;
+    let packed = liquid_constrained_mobility(&supports, liquid_support_count(&supports), closed, stuck, m);
+    let at = 6u * u32(b);
+    mobility[at] = packed.m0;
+    mobility[at + 1u] = packed.m1;
+    mobility[at + 2u] = packed.m2;
+    mobility[at + 3u] = packed.m3;
+    mobility[at + 4u] = packed.m4;
+    mobility[at + 5u] = packed.m5;
+}
+
+// Vec4 i of `contacts`; zero past its end (no coupled world).
+fn support_vec4(i: u32) -> vec4<f32> {
+    if i >= arrayLength(&contacts) {
+        return vec4<f32>(0.0);
+    }
+    return contacts[i];
+}
+
+// The body nearest x (smallest signed distance), counted from this tick's
+// first row, −1 when no body is enabled or the walls are nearer: the solid
+// there is the tank's.
 fn closest_body(x: vec3<f32>) -> i32 {
     var best = -1;
     var nearest = 0.0;
-    let first = max(u.rows - u.body_count, 0);
-    for (var b = 0; b < u.body_count; b = b + 1) {
-        let row = first + b;
-        if row >= u.rows {
-            break;
-        }
-        let bd = bodies[u32(row)];
+    let held = min(u.body_count, u.rows);
+    for (var b = 0; b < held; b = b + 1) {
+        let bd = posed[u32(b)];
         let shape_index = i32(bd.accel_shape.w);
         if shape_index < 0 || u32(shape_index) >= u.shapes_len {
             continue;
         }
-        let pose_time = adaptive_tick_seconds();
-        let position = fma(bd.linear_velocity.xyz, vec3<f32>(pose_time), bd.position_inv_mass.xyz);
-        let q = liquid_turn(bd.rotation, bd.angular_velocity.xyz, pose_time);
         let sh = shapes[u32(shape_index)];
         let dims = vec3<u32>(sh.dims_x, sh.dims_y, sh.dims_z);
-        let g = liquid_lattice_coord(x, position, q, sh.origin_spacing, sh.scale_min.xyz);
+        let g = liquid_lattice_coord(x, bd.position_inv_mass.xyz, bd.rotation, sh.origin_spacing, sh.scale_min.xyz);
         let d = liquid_shape_distance(sh.atlas_offset, dims, g, sh.origin_spacing.w, sh.scale_min.xyz);
         if best < 0 || d < nearest {
-            best = row;
+            best = b;
             nearest = d;
         }
     }
@@ -785,15 +854,13 @@ fn closest_body(x: vec3<f32>) -> i32 {
 
 // One thread per face record, `solid_faces` to `faces_out`. On an inner face
 // a solid cuts (open fraction under 1): velocity is the normal part of the
-// closest body's rigid velocity at the face centre, posed tick_seconds into
-// the tick as the solid distance poses it; weight is the closest body's
-// friction at the face's four corners, averaged
-// (FluidSimulation::_getFaceFrictionU/V/W). Every other face is zero. A dynamic body (1/m > 0) moves at its
-// predicted velocity, as RigidFluidCoupling::beginSubstep predicts it: its
-// external acceleration over tick_seconds plus M⁻¹ times the reaction so
-// far this tick. Velocity w is the record's owner code
-// (gpu_flip_bodies.wgsl): each face's body, counted from this tick's first
-// row. Weight w is the known mask: bit a set where axis a was sampled.
+// closest body's rigid velocity at the face centre, as `posed` holds it (a
+// dynamic body by the coupled motion law, the same pose the solid distance
+// takes); weight is the closest body's friction at the face's four corners,
+// averaged (FluidSimulation::_getFaceFrictionU/V/W). Every other face is
+// zero. Velocity w is the record's owner code (gpu_flip_bodies.wgsl): each
+// face's body, counted from this tick's first row. Weight w is the known
+// mask: bit a set where axis a was sampled.
 @compute @workgroup_size(256)
 fn solid_face_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
     if !clock_active() { return; }
@@ -808,7 +875,6 @@ fn solid_face_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
     var out = FaceSample(vec4<f32>(0.0), vec4<f32>(0.0));
     let lattice_min = u.box_min;
     let h = u.cell_size;
-    let first = max(u.rows - u.body_count, 0);
     var code = 0.0;
     var known = 0.0;
     for (var a = 0; a < 3; a = a + 1) {
@@ -824,23 +890,10 @@ fn solid_face_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
         known = known + f32(1u << u32(a));
         var centre = fma(vec3<f32>(p) + vec3<f32>(0.5), vec3<f32>(h), lattice_min);
         centre[a] = fma(f32(p[a]), h, lattice_min[a]);
-        let row = closest_body(centre);
-        if row >= 0 {
-            let bd = bodies[u32(row)];
-            let body = row - first;
-            let pose_time = adaptive_tick_seconds();
-            let position = fma(bd.linear_velocity.xyz, vec3<f32>(pose_time), bd.position_inv_mass.xyz);
-            var linear = bd.linear_velocity.xyz;
-            var angular = bd.angular_velocity.xyz;
-            if bd.position_inv_mass.w > 0.0 {
-                let r = 8u * u32(body);
-                let push = vec3<f32>(reaction[r], reaction[r + 1u], reaction[r + 2u]);
-                let turn = vec3<f32>(reaction[r + 4u], reaction[r + 5u], reaction[r + 6u]);
-                linear = fma(bd.accel_shape.xyz, vec3<f32>(pose_time), linear) + bd.position_inv_mass.w * push;
-                angular = fma(vec3<f32>(bd.inv_inertia_x.w, bd.inv_inertia_y.w, bd.inv_inertia_z.w), vec3<f32>(pose_time), angular)
-                    + vec3<f32>(dot(bd.inv_inertia_x.xyz, turn), dot(bd.inv_inertia_y.xyz, turn), dot(bd.inv_inertia_z.xyz, turn));
-            }
-            out.face_velocity[a] = liquid_body_velocity(linear, angular, position, centre)[a];
+        let body = closest_body(centre);
+        if body >= 0 {
+            let bd = posed[u32(body)];
+            out.face_velocity[a] = liquid_body_velocity(bd.linear_velocity.xyz, bd.angular_velocity.xyz, bd.position_inv_mass.xyz, centre)[a];
             code = code + f32(body + 1) * f32(1u << (8u * u32(a)));
         }
         let axes = cross_axes(a);
@@ -851,7 +904,7 @@ fn solid_face_velocity(@builtin(global_invocation_id) gid: vec3<u32>) {
             q[axes.y] = q[axes.y] + ((k >> 1u) & 1);
             let at = closest_body(lattice_min + vec3<f32>(q) * h);
             if at >= 0 {
-                friction = friction + bodies[u32(at)].linear_velocity.w;
+                friction = friction + posed[u32(at)].linear_velocity.w;
             }
         }
         out.face_weight[a] = 0.25 * friction;

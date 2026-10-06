@@ -101,6 +101,18 @@ struct ClockPlan {
 @group(0) @binding(13) var<storage, read> flags: array<u32>;
 @group(0) @binding(14) var<storage, read> lists: array<u32>;
 @group(0) @binding(15) var<storage, read> clock_plan: array<ClockPlan>;
+// Six vec4 per row of `bodies`: the body's packed 6 × 6 response to an
+// impulse while it stays on its supports (liquid_pose.wgsl
+// liquid_constrained_mobility; LIQUID_SOLVER_SEAM_DESIGN.md D16).
+@group(0) @binding(16) var<storage, read> mobility: array<vec4<f32>>;
+
+// Entry (i, j) of body b's packed mobility.
+fn mobility_at(b: u32, i: u32, j: u32) -> f32 {
+    let lo = min(i, j);
+    let hi = max(i, j);
+    let k = lo * (13u - lo) / 2u + hi - lo;
+    return mobility[6u * (u.first + b) + k / 4u][k % 4u];
+}
 
 const THREADS: u32 = 256u;
 const TILE: i32 = 8;
@@ -145,9 +157,6 @@ fn clock_active() -> bool {
     return clock_plan[0].live_mode == 0u || clock_plan[0].step_dt > 0.0;
 }
 
-fn adaptive_tick_seconds() -> f32 {
-    return select(u.tick_seconds, clock_plan[0].elapsed, clock_plan[0].live_mode != 0u);
-}
 
 fn unflatten(idx: u32, m: vec3<i32>) -> vec3<i32> {
     return vec3<i32>(
@@ -174,11 +183,10 @@ fn face_centre(p: vec3<i32>, a: i32) -> vec3<f32> {
     return c;
 }
 
-// Body b's centre of mass posed tick_seconds into the tick, as the solid
-// distance poses it.
+// Body b's centre of mass at this step's end. The step binds its posed rows
+// (gpu_flip_step.wgsl pose_bodies), the pose the solid distance takes.
 fn body_centre(b: u32) -> vec3<f32> {
-    let bd = bodies[u.first + b];
-    return bd.position_inv_mass.xyz + bd.linear_velocity.xyz * adaptive_tick_seconds();
+    return bodies[u.first + b].position_inv_mass.xyz;
 }
 
 // A body that takes a reaction: finite mass and a shape
@@ -291,8 +299,10 @@ fn impulse_partial(
 
 // One workgroup per body slot b: every partial of the fine level, in slot
 // order, an inactive tile's read as 0, tree-reduced into the sums record;
-// the velocity change M⁻¹·impulse for a body that takes a reaction
-// (rigidpressurecoupling.h Body::response), 0 otherwise; with `accumulate`,
+// the velocity change M_c·impulse for a body that takes a reaction
+// (rigidpressurecoupling.h Body::response, M_c the mobility held on the
+// body's supports, which is symmetric, so the operator stays so), 0
+// otherwise; with `accumulate`,
 // the impulses added into the reaction. A slot past body_count is zero.
 @compute @workgroup_size(256, 1, 1)
 fn impulse_finalize(
@@ -339,14 +349,14 @@ fn impulse_finalize(
             total[k + k / 3u] = scratch[k][0];
         }
         if dynamic_body(b) {
-            let bd = bodies[u.first + b];
-            let l = vec3<f32>(total[4], total[5], total[6]);
-            total[8] = bd.position_inv_mass.w * total[0];
-            total[9] = bd.position_inv_mass.w * total[1];
-            total[10] = bd.position_inv_mass.w * total[2];
-            total[12] = dot(bd.inv_inertia_x.xyz, l);
-            total[13] = dot(bd.inv_inertia_y.xyz, l);
-            total[14] = dot(bd.inv_inertia_z.xyz, l);
+            var impulse = array<f32, 6>(total[0], total[1], total[2], total[4], total[5], total[6]);
+            for (var i = 0u; i < 6u; i = i + 1u) {
+                var change = 0.0;
+                for (var j = 0u; j < 6u; j = j + 1u) {
+                    change = change + mobility_at(b, i, j) * impulse[j];
+                }
+                total[8u + i + i / 3u] = change;
+            }
         }
         if u.accumulate != 0u {
             for (var k = 0u; k < 8u; k = k + 1u) {

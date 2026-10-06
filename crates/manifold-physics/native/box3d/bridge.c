@@ -952,7 +952,9 @@ int manifold_box3d_body_apply_impulse(
 }
 
 // The liquid's reaction spread over the step as a steady force and torque
-// (LIQUID_SOLVER_SEAM_DESIGN.md D17). Box3D clears both after each step.
+// (LIQUID_SOLVER_SEAM_DESIGN.md D17). Box3D clears both after each step. A
+// body handed one cannot sleep through the step: sleep zeroes the velocity
+// the liquid's law predicted; manifold_box3d_body_allow_sleep restores it.
 int manifold_box3d_body_apply_wrench(
 	uint64_t body_value,
 	const float* force,
@@ -975,35 +977,59 @@ int manifold_box3d_body_apply_wrench(
 	{
 		return BOX3D_BRIDGE_ERROR;
 	}
-	if ( force[0] != 0.0f || force[1] != 0.0f || force[2] != 0.0f )
+	int pushed = force[0] != 0.0f || force[1] != 0.0f || force[2] != 0.0f;
+	int turned = torque[0] != 0.0f || torque[1] != 0.0f || torque[2] != 0.0f;
+	if ( pushed )
 	{
 		b3Body_ApplyForceToCenter( body_id, (b3Vec3){ force[0], force[1], force[2] }, true );
 	}
-	if ( torque[0] != 0.0f || torque[1] != 0.0f || torque[2] != 0.0f )
+	if ( turned )
 	{
 		b3Body_ApplyTorque( body_id, (b3Vec3){ torque[0], torque[1], torque[2] }, true );
+	}
+	if ( pushed || turned )
+	{
+		b3Body_EnableSleep( body_id, false );
 	}
 	return BOX3D_BRIDGE_OK;
 }
 
+void manifold_box3d_body_allow_sleep( uint64_t body_value )
+{
+	b3BodyId body_id = b3LoadBodyId( body_value );
+	if ( b3Body_IsValid( body_id ) )
+	{
+		b3Body_EnableSleep( body_id, true );
+	}
+}
+
 // Contacts read per body; a body touching more drops the rest.
 #define BOX3D_CONTACT_READ 64
+// Floats a support point takes: lever arm xyz, friction, normal xyz, unused,
+// support velocity xyz, unused.
+#define BOX3D_SUPPORT_FLOATS 12
 
-// Up to `capacity` unit normals of the body's contacts with static and
-// kinematic bodies that touch (a point within the linear slop), pointing out
-// of the support into the body (LIQUID_SOLVER_SEAM_DESIGN.md D16). A normal
-// within about 8 degrees of one already kept adds nothing and is skipped.
-int manifold_box3d_body_static_contact_normals(
+// The body's touching contact points with static and kinematic bodies (a
+// point within the linear slop), LIQUID_SOLVER_SEAM_DESIGN.md D16: the lever
+// arm from the body's centre of mass (world), the contact's friction as the
+// world mixes it, the unit normal out of the support into the body, and the
+// support's velocity at the point.
+// Points are taken a round at a time over the manifolds (every manifold's
+// first point, then every second), so a full `points` still holds every
+// support. `found_out` counts every touching point, kept or not.
+int manifold_box3d_body_support_points(
 	uint64_t body_value,
-	float* normals,
+	float* points,
 	int capacity,
-	int* count_out )
+	int* count_out,
+	int* found_out )
 {
-	if ( normals == NULL || count_out == NULL || capacity < 0 )
+	if ( points == NULL || count_out == NULL || found_out == NULL || capacity < 0 )
 	{
 		return BOX3D_BRIDGE_ERROR;
 	}
 	*count_out = 0;
+	*found_out = 0;
 	b3BodyId body_id = b3LoadBodyId( body_value );
 	if ( !b3Body_IsValid( body_id ) )
 	{
@@ -1011,42 +1037,69 @@ int manifold_box3d_body_static_contact_normals(
 	}
 	b3ContactData contacts[BOX3D_CONTACT_READ];
 	int total = b3Body_GetContactData( body_id, contacts, BOX3D_CONTACT_READ );
+	b3Pos centre = b3Body_GetWorldCenterOfMass( body_id );
 	int count = 0;
-	for ( int c = 0; c < total && count < capacity; ++c )
+	int found = 0;
+	for ( int round = 0; round < B3_MAX_MANIFOLD_POINTS; ++round )
 	{
-		b3BodyId body_a = b3Shape_GetBody( contacts[c].shapeIdA );
-		b3BodyId body_b = b3Shape_GetBody( contacts[c].shapeIdB );
-		int ours_a = B3_ID_EQUALS( body_a, body_id );
-		if ( b3Body_GetType( ours_a ? body_b : body_a ) == b3_dynamicBody )
+		for ( int c = 0; c < total; ++c )
 		{
-			continue;
-		}
-		for ( int m = 0; m < contacts[c].manifoldCount && count < capacity; ++m )
-		{
-			const b3Manifold* manifold = contacts[c].manifolds + m;
-			int touching = 0;
-			for ( int k = 0; k < manifold->pointCount; ++k )
-			{
-				touching |= manifold->points[k].separation <= B3_LINEAR_SLOP;
-			}
-			// The manifold normal points from shape A to shape B.
-			b3Vec3 n = ours_a ? b3Neg( manifold->normal ) : manifold->normal;
-			int repeated = 0;
-			for ( int k = 0; k < count; ++k )
-			{
-				repeated |= n.x * normals[3 * k] + n.y * normals[3 * k + 1] + n.z * normals[3 * k + 2] > 0.99f;
-			}
-			if ( !touching || repeated || !box3d_vec3_finite( n ) )
+			b3BodyId body_a = b3Shape_GetBody( contacts[c].shapeIdA );
+			b3BodyId body_b = b3Shape_GetBody( contacts[c].shapeIdB );
+			int ours_a = B3_ID_EQUALS( body_a, body_id );
+			b3BodyId support = ours_a ? body_b : body_a;
+			if ( b3Body_GetType( support ) == b3_dynamicBody )
 			{
 				continue;
 			}
-			normals[3 * count] = n.x;
-			normals[3 * count + 1] = n.y;
-			normals[3 * count + 2] = n.z;
-			count += 1;
+			b3SurfaceMaterial material_a = b3Shape_GetSurfaceMaterial( contacts[c].shapeIdA );
+			b3SurfaceMaterial material_b = b3Shape_GetSurfaceMaterial( contacts[c].shapeIdB );
+			float friction =
+				manifold_friction( material_a.friction, material_a.userMaterialId, material_b.friction, material_b.userMaterialId );
+			for ( int m = 0; m < contacts[c].manifoldCount; ++m )
+			{
+				const b3Manifold* manifold = contacts[c].manifolds + m;
+				if ( round >= manifold->pointCount )
+				{
+					continue;
+				}
+				const b3ManifoldPoint* point = manifold->points + round;
+				// The manifold normal points from shape A to shape B.
+				b3Vec3 n = ours_a ? b3Neg( manifold->normal ) : manifold->normal;
+				b3Vec3 lever = ours_a ? point->anchorA : point->anchorB;
+				if ( point->separation > B3_LINEAR_SLOP || !box3d_vec3_finite( n ) || !box3d_vec3_finite( lever ) )
+				{
+					continue;
+				}
+				found += 1;
+				if ( count == capacity )
+				{
+					continue;
+				}
+				b3Pos at = centre;
+				at.x += lever.x;
+				at.y += lever.y;
+				at.z += lever.z;
+				b3Vec3 v = b3Body_GetWorldPointVelocity( support, at );
+				float* out = points + BOX3D_SUPPORT_FLOATS * count;
+				out[0] = lever.x;
+				out[1] = lever.y;
+				out[2] = lever.z;
+				out[3] = friction;
+				out[4] = n.x;
+				out[5] = n.y;
+				out[6] = n.z;
+				out[7] = 0.0f;
+				out[8] = v.x;
+				out[9] = v.y;
+				out[10] = v.z;
+				out[11] = 0.0f;
+				count += 1;
+			}
 		}
 	}
 	*count_out = count;
+	*found_out = found;
 	return BOX3D_BRIDGE_OK;
 }
 

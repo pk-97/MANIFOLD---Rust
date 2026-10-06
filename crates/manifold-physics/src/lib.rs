@@ -17,6 +17,7 @@ pub mod clock;
 pub mod particle_duration;
 pub mod coupled_motion;
 mod field_value;
+use coupled_motion::{SupportCount, SupportPoint, MAX_SUPPORT_POINTS};
 pub use field_value::FieldValue;
 pub use interaction::{
     FieldInput, RadialField, SampledField, ScaledField, SumField, TickStamp, UniformField,
@@ -190,11 +191,13 @@ mod ffi {
             force: *const f32,
             torque: *const f32,
         ) -> i32;
-        pub fn manifold_box3d_body_static_contact_normals(
+        pub fn manifold_box3d_body_allow_sleep(body: u64);
+        pub fn manifold_box3d_body_support_points(
             body: u64,
-            normals: *mut f32,
+            points: *mut f32,
             capacity: i32,
             count_out: *mut i32,
+            found_out: *mut i32,
         ) -> i32;
         pub fn manifold_box3d_body_apply_field(
             body: u64,
@@ -365,6 +368,8 @@ pub struct PhysicsWorld {
     bodies: Vec<BodyRecord>,
     field_scratch: Vec<FieldApplication>,
     impulse_scratch: Vec<ImpulseApplication>,
+    /// Bodies handed a reaction for the next step, kept awake through it.
+    reaction_awake: Vec<u64>,
     field_seen: Vec<bool>,
     // Cell is Send but not Sync, matching exclusive world ownership.
     _not_sync: PhantomData<Cell<()>>,
@@ -431,6 +436,7 @@ impl PhysicsWorld {
             bodies: Vec::new(),
             field_scratch: Vec::new(),
             impulse_scratch: Vec::new(),
+            reaction_awake: Vec::new(),
             field_seen: Vec::new(),
             _not_sync: PhantomData,
         })
@@ -558,6 +564,7 @@ impl PhysicsWorld {
             .reserve(self.bodies.len().saturating_sub(self.field_scratch.len()));
         self.impulse_scratch
             .reserve(self.bodies.len().saturating_sub(self.impulse_scratch.len()));
+        self.reaction_awake.reserve(self.bodies.len().saturating_sub(self.reaction_awake.len()));
         Ok(BodyHandle {
             provenance: self.provenance,
             index: index as u32,
@@ -648,6 +655,7 @@ impl PhysicsWorld {
             .reserve(self.bodies.len().saturating_sub(self.field_scratch.len()));
         self.impulse_scratch
             .reserve(self.bodies.len().saturating_sub(self.impulse_scratch.len()));
+        self.reaction_awake.reserve(self.bodies.len().saturating_sub(self.reaction_awake.len()));
         Ok(BodyHandle {
             provenance: self.provenance,
             index: index as u32,
@@ -709,6 +717,10 @@ impl PhysicsWorld {
         }
         let _lock = native_lock();
         unsafe { ffi::manifold_box3d_world_step(self.native, dt_f32, substeps) };
+        for &native in &self.reaction_awake {
+            unsafe { ffi::manifold_box3d_body_allow_sleep(native) };
+        }
+        self.reaction_awake.clear();
         Ok(())
     }
 
@@ -1083,7 +1095,8 @@ impl PhysicsWorld {
     }
 
     /// Queue a liquid's reaction for the next step as a steady force J/dt and
-    /// torque L/dt at each centre of mass, waking the body
+    /// torque L/dt at each centre of mass, keeping the body awake through
+    /// that step: sleep would zero the velocity the liquid's law predicted
     /// (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` D17). Box3D clears forces after
     /// every step, so a tick split into several steps queues before each and
     /// still delivers J and L in all. Validated as [`Self::apply_impulses`].
@@ -1095,21 +1108,34 @@ impl PhysicsWorld {
         self.deliver_impulses(reactions, Some(dt_f32))
     }
 
-    /// Up to three unit normals of `body`'s touching contacts with static and
-    /// kinematic bodies, pointing out of the support into the body
-    /// (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` D16). Returns how many of `out`
-    /// it wrote.
-    pub fn static_contact_normals(&self, body: BodyHandle, out: &mut [[f32; 3]; 3]) -> Result<usize, PhysicsError> {
+    /// `body`'s touching contact points with static and kinematic bodies
+    /// (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` D16), up to `out`'s length and
+    /// [`MAX_SUPPORT_POINTS`]. A full `out` still holds a point of every
+    /// support: the bridge takes every contact's first point before any
+    /// second.
+    pub fn support_points(&self, body: BodyHandle, out: &mut [SupportPoint]) -> Result<SupportCount, PhysicsError> {
         let native = self.native_body(body)?;
-        let mut count = 0;
-        let _lock = native_lock();
-        let result = unsafe {
-            ffi::manifold_box3d_body_static_contact_normals(native, out.as_mut_ptr().cast(), out.len() as i32, &mut count)
+        let capacity = out.len().min(MAX_SUPPORT_POINTS);
+        let mut raw = [[0.0f32; 12]; MAX_SUPPORT_POINTS];
+        let (mut kept, mut found) = (0, 0);
+        let result = {
+            let _lock = native_lock();
+            unsafe {
+                ffi::manifold_box3d_body_support_points(native, raw.as_mut_ptr().cast(), capacity as i32, &mut kept, &mut found)
+            }
         };
-        if result != 0 || !(0..=out.len() as i32).contains(&count) {
+        if result != 0 || !(0..=capacity as i32).contains(&kept) || found < kept {
             return Err(PhysicsError::NativeFailure);
         }
-        Ok(count as usize)
+        for (point, raw) in out.iter_mut().zip(&raw[..kept as usize]) {
+            *point = SupportPoint {
+                lever: [raw[0], raw[1], raw[2]],
+                friction: raw[3],
+                normal: [raw[4], raw[5], raw[6]],
+                support_velocity: [raw[8], raw[9], raw[10]],
+            };
+        }
+        Ok(SupportCount { kept: kept as usize, found: found as usize })
     }
 
     /// Impulses applied at once, or spread as force over a step of `over`
@@ -1198,6 +1224,7 @@ impl PhysicsWorld {
                     },
                     Some(dt) => {
                         let (force, torque) = (application.linear.map(|j| j / dt), application.angular.map(|l| l / dt));
+                        self.reaction_awake.push(application.native);
                         unsafe { ffi::manifold_box3d_body_apply_wrench(application.native, force.as_ptr(), torque.as_ptr()) }
                     }
                 };

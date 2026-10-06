@@ -1261,6 +1261,7 @@ fn gpu_flip_domain(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     }
     for (port, bytes) in [
         ("bodies", size_of::<LiquidBody>() as u64),
+        ("contacts", size_of::<crate::node_graph::liquid::bodies::BodySupports>() as u64),
         ("regions", size_of::<LiquidBody>() as u64),
         ("shapes", size_of::<LiquidShape>() as u64),
         ("atlas", 4),
@@ -1507,6 +1508,10 @@ fn gpu_flip_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.covers_if_bound("live_hits", u64::from(whole(x, "live_hit_count", 0.0)) * 16)?;
     let rows = body_rows(x)?;
     x.covers_if_bound("bodies", rows * size_of::<LiquidBody>() as u64)?;
+    // The posed rows and their mobilities, one per body of the tick.
+    // `contacts` is read only within its length, so any size covers it.
+    let posed = u64::from(whole(x, "body_count", 0.0)).max(1);
+    x.hold(posed * (size_of::<LiquidBody>() as u64 + crate::node_graph::liquid::bodies::MOBILITY_BYTES));
     // A wired reaction holds every body of one tick, as the step clamps
     // body_count; the body passes' sums come with it.
     if x.bytes("reaction").is_some() {

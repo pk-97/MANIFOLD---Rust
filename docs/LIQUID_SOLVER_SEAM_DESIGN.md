@@ -103,11 +103,11 @@ Scope: GPU FLIP and MPM, the live liquids. Measured 2026-10-06 at `f7e7888b6` (h
 
 **D15 — One body motion law inside a tick, owned by `manifold-physics`.** GPU FLIP and the owner place and move a coupled dynamic body by `coupled_state_at` (section 3.8) and its WGSL twin in `liquid_pose.wgsl`. With h = dt/N, a the body's external acceleration, P(t) the reaction impulse the liquid has accumulated by time t, and Δv(t) = a·t + P(t)/m after D16: v(t) = v0 + Δv(t), x(t) = x0 + v0·t + ½·Δv(t)·(t + h). Angular: ω(t) = ω0 + α·t + I⁻¹·L(t), and the rotation vector ω0·t + ½·(ω(t) − ω0)·(t + h) turns q0 in the world frame. Under D17, with no contact, damping, motion lock or speed cap acting, x(dt) and v(dt) equal Box3D's end state exactly (symplectic Euler over N substeps of constant total acceleration gives x0 + v0·dt + ½·ā·dt·(dt + h)), however P grew; fields enter both through the same start state. Inside the tick it is a prediction, and angular is approximate (Box3D's gyroscopic step); D18 measures both. A tick Box3D splits into several steps (fast-body microsteps, impulse-event segments) ends at h_eff = Σh_k²/dt rather than h; the law keeps h = dt/N(dt) and D18 reports the gap. Prescribed bodies (a = 0, P = 0) reduce to p + v·t. MPM keeps its per-substep body move (D7), which already tracks when its reaction lands; it shares the handoff (D17) and the check (D18), and moving it onto this law waits on proofs (section 7). Rejected: p + v·t (today); a predictor per incompressible solver (how this bug class was born); timing moments in the handoff (Box3D would replay each liquid's own schedule).
 
-**D16 — Static contacts shape the prediction, not the solve.** At tick start the owner reads each coupled body's touching contacts with static and kinematic shapes from Box3D (`b3Body_GetContactData`, `box3d.h:753`): up to three normals, pointing out of the support. The known increment Δv(t) = a·t + P(t)/m loses every component pushing into a normal, one-sided, all normals together. It is frozen during each pressure solve, the solve's own trial response is never projected (so the pressure operator keeps its symmetry), and Box3D still gets the full reaction. A box resting on the floor is predicted still; water pressing a box into a wall no longer moves it into the wall; a box the water lifts leaves the floor. MPM's body move applies the same projection to its increment. Rejected: projecting gravity alone (predicts a floor-held box rising whenever buoyancy is under its weight); projecting the body's mobility inside the pressure solve (breaks symmetry); contacts solved inside the liquid, as Monolith does (Takahashi and Batty 2020: sound, but a second coupling style, real-time unproven); last tick's measured acceleration (impacts become phantom bounces). A small step past proven practice; the contact proofs and D18 measure it.
+**D16 — Supports shape the prediction and hold the body in the solve (Peter, 2026-10-06).** At tick start the owner reads each coupled body's touching contact points with static and kinematic shapes from Box3D (`b3Body_GetContactData`, `PhysicsWorld::support_points`): lever arm, normal out of the support, friction as the world mixes it, the support's velocity there. Up to 16 a body; every support's first point comes before any second, and overflow is logged. The law applies Box3D's own contact rule to the body's motion (Catto's sequential impulses: one-sided normals, friction inside μ·λn over two tangents, no restitution, softness or position correction), first to the tick-start velocity, so a closing body stops at once as in Box3D's first substep, then to the known increment. The supports the result stays on (closing slower than 1 mm/s; stuck when the friction is inside its cone) are held through each pressure solve: the body's response there is M_c = (L·P)(L·P)ᵀ, with M⁻¹ = L·Lᵀ and P the projector off the held rows in the mass metric. M_c is fixed for the whole solve, so the operator stays symmetric and positive semidefinite. Box3D still gets the full reaction and owns every real contact. Measured 2026-10-06: the solve's free mobility pushed a resting box into its floor and drained 38% / 22% of the water at 15 / 30 Hz; holding the body there drained none. Rejected: the first cut's normals-only linear projection with a free solve (that drain); a mobility clipped per product (not symmetric); contact forces solved inside the liquid, as Monolith does (Takahashi and Batty 2020: a second coupling style); last tick's measured acceleration (impacts become phantom bounces). Not yet: contacts between two coupled bodies (the stack proof decides); MPM's own move, which rebuilds displacement from reaction-history moments, so an endpoint projection alone would be wrong there.
 
 **D17 — One handoff: the reaction is a steady force over the tick.** The owner queues J/dt and L/dt on each body before the tick's one Box3D step; Box3D clears forces after each step. Still one reaction per tick, applied once (D6). A new liquid only has to accumulate its reaction. Buoyancy equal to weight now nets zero on every substep. Rejected: the impulse before the step (today's drift).
 
-**D18 — Handover agreement is checked every tick.** After Box3D settles, the owner compares its end pose and velocity with the law at dt under the retired reaction. Live: counted in the liquid stats and logged over bound, never clamped. Conformance asserts the bound.
+**D18 — Handover agreement is checked every tick.** After Box3D settles, the owner compares its end pose and velocity with the law at dt under the retired reaction. Live: the domain publishes the worst body as its `handover_position`, `handover_velocity` and `handover_rotation` outputs and logs over bound, never clamped. Conformance asserts the bound.
 
 **D19 — Water is never deleted at a solid (Peter, 2026-10-06).** A particle inside a solid moves out along the distance gradient to free space, the standard push-out (Bridson, *Fluid Simulation for Computer Graphics*). The check runs whatever the particle's travel, and the end point is checked against every body and the walls. If no free point is found, the particle stays where it is and the existing refused push-out count (`push_refused`) records it. Rejected: deleting overlapped water (today); a tolerance band that hides overlap.
 
@@ -318,21 +318,25 @@ pub struct CoupledStart {
     pub linear_acceleration: [f32; 3],      // Box3D's external acceleration
     pub angular_acceleration: [f32; 3],
 }
-pub struct CoupledState { pub position: [f32; 3], pub rotation: [f32; 4], pub linear_velocity: [f32; 3], pub angular_velocity: [f32; 3] }
+pub struct SupportPoint { pub lever: [f32; 3], pub normal: [f32; 3], pub friction: f32, pub support_velocity: [f32; 3] }
+pub struct Held { pub closed: u32, pub stuck: u32 }  // bit i: support point i
+pub struct CoupledState { pub position: [f32; 3], pub rotation: [f32; 4], pub linear_velocity: [f32; 3], pub angular_velocity: [f32; 3], pub held: Held }
+pub type Mobility = [f32; 21];  // 6 × 6 symmetric, upper triangle by rows (mobility_index)
 pub fn coupled_substep(dt: Seconds) -> f32;  // h = dt / box3d_substep_count(dt)
-pub fn coupled_state_at(start: &CoupledStart, normals: &[[f32; 3]], linear_push: [f32; 3], angular_push: [f32; 3], t: f32, h: f32) -> CoupledState;
+pub fn coupled_state_at(start: &CoupledStart, supports: &[SupportPoint], linear_push: [f32; 3], angular_push: [f32; 3], t: f32, h: f32) -> CoupledState;
+pub fn constrained_mobility(start: &CoupledStart, supports: &[SupportPoint], held: Held) -> Mobility; // D16
 
 // manifold-physics/src/lib.rs
 impl PhysicsWorld {
-    pub fn static_contact_normals(&self, body: BodyHandle, out: &mut [[f32; 3]; 3]) -> Result<usize, PhysicsError>; // D16: touching static or kinematic contacts, out of the support
+    pub fn support_points(&self, body: BodyHandle, out: &mut [SupportPoint]) -> Result<SupportCount, PhysicsError>; // D16: touching static or kinematic contact points
     pub fn queue_reaction_over_step(&mut self, reactions: &[BodyImpulse], dt: Seconds) -> Result<(), PhysicsError>; // D17
 }
 
-// R/liquid/coupling.rs (D18): worst body this tick, published in the liquid stats
+// R/liquid/coupling.rs (D18): worst body this tick, published as the domain's handover_* outputs
 pub struct HandoverError { pub position: f32, pub velocity: f32, pub rotation: f32 }
 ```
 
-WGSL twin (D15): `liquid_pose.wgsl` gains `liquid_body_state(body, normals, linear_push, angular_push, t, h)`, and every GPU FLIP pose site in section 2.1 calls it. h rides each domain's tick scalars and the normals ride a per-body side buffer; the 128-byte `LiquidBody` row keeps its layout.
+WGSL twin (D15): `liquid_pose.wgsl` gains `liquid_body_state(...) -> LiquidBodyState`, taking the row's fields one by one (the row struct is declared per shader). GPU FLIP evaluates it once per step: `pose_bodies` (`gpu_flip_step.wgsl`) poses every body of the tick at the step's end into a `posed` row array, and the solid distance, `closest_body`, `solid_face_velocity` and the body passes' lever arms (`gpu_flip_bodies.wgsl`) read those rows with no time added. The reaction it reads is what the water had put on the body when the step began, so the pose lags this step's own pressure by one step. h rides `Params.coupled_h`. The support points ride a `contacts` array of 48 vec4 per body row (`BodySupports`), tick major beside the rows (`LiquidBodies::set_contacts`, the domain's `contacts` output); the 128-byte `LiquidBody` row keeps its layout. `pose_bodies` also writes each body's packed `liquid_constrained_mobility` (six vec4 a body), which `impulse_finalize` uses in place of M⁻¹. The CFL clock keeps its own speed bound (v0 + a·t + P/m before projection, an upper bound). The published surface's solid and the whitewater obstacle source still pose raw rows at p + v·t.
 
 `AtomExtent` carries an atom's resolved params, its input and output array lengths, and its dispatch grid. P3 derives it the way `matter_extent_tests.rs` does today.
 
@@ -587,7 +591,8 @@ Measured as a bit-exact in-step block skip and dropped; see section 3.10 (block 
 
 - **Entry state:** P13's red run recorded on the branch.
 - **Read-back:** D19; `gpu_flip_step.wgsl` `resolve_solid` and its two deletion sites (`:2255`, `:2718`).
-- **Deliverables:** D19 at both sites; an audit of whether MPM removes particles at solids, and the same change there if it does.
+- **Deliverables:** D19 at both sites; an audit of whether MPM removes particles at solids, and the same change there if it does. Audit result: MPM removes a point only when its stencil leaves the lattice (`grid_to_matter_body.wgsl`); at a body it projects the point onto the surface (D29), so MPM needs no change.
+- **Recorded:** push-out stopped the collision proof losing water, but a still box on the floor kept losing 52%/31% at 15/30 Hz with nothing left inside a solid. The drain was the boundary velocity (v0 + a·t + P/m) of a body posed still (p + v0·t); P15/P16 remove it.
 - **Gate:** resting contact and the stack remove no water; the refused count stays low on floating rest, so push-out is not what makes it pass.
 - **Test scope:** focused renderer; GPU proofs.
 
@@ -601,10 +606,10 @@ Measured as a bit-exact in-step block skip and dropped; see section 3.10 (block 
 - **Forbidden:** section 3.9's body handoff entries.
 - **Test scope:** manifold-physics; focused renderer; GPU proofs.
 
-### P16 — Static contacts in the prediction
+### P16 — Supports in the prediction and the solve
 
 - **Entry state:** P15 on the branch.
-- **Deliverables:** `static_contact_normals` over Box3D's touching contacts; the per-body normals buffer; D16's projection in the law, in the boundary velocity's known term, and in MPM's body move.
+- **Deliverables:** `support_points` over Box3D's touching contact points; the per-body support buffer; D16's projection in the law and its held mobility in GPU FLIP's pressure solve, with a proof that the solve's body operator stays symmetric.
 - **Gate:** resting contact and lift-off green on both rows; the stack's result reported to Peter, which decides section 7's repeated swaps.
 - **Test scope:** manifold-physics; focused renderer; GPU proofs.
 
@@ -625,7 +630,7 @@ Measured as a bit-exact in-step block skip and dropped; see section 3.10 (block 
 13. Add Fluid authors GPU FLIP, with no solver picker and no fallback to CPU FLIP or Matter (Peter, 2026-10-02).
 14. One handoff for every liquid, a steady force over the tick (D17); one in-tick motion law for GPU FLIP and the owner (D15).
 15. Water is never deleted at a solid (D19; Peter, 2026-10-06).
-16. One coupling style: liquids take turns with Box3D, which owns every contact; no contacts inside a liquid's solve (Peter, 2026-10-06).
+16. One coupling style: liquids take turns with Box3D, which owns every contact. A liquid never solves contact forces; it only keeps a body on the supports Box3D reports (D16; Peter, 2026-10-06).
 
 ## 7. Deferred
 

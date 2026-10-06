@@ -10,6 +10,7 @@
 //! (docs/GPU_FLIP_SPARSE_BLOCKS_DESIGN.md D-9).
 
 use manifold_gpu::{GpuBuffer, GpuDevice, GpuReplayCache};
+use manifold_physics::coupled_motion::{Held, Mobility, SupportPoint, constrained_mobility, mobility_index};
 
 use super::gpu_flip_atom_tests::{FACE_FLOATS, assert_close, face_grid_len, random_values, random_water};
 use super::gpu_flip_bodies::{BodyPasses, Bodies};
@@ -17,6 +18,7 @@ use super::gpu_flip_pressure::{MAX_ITERATIONS, PROGRESS_FLOATS, PressureSolver, 
 use super::gpu_flip_step::{TILE, set_all_tiles, set_gate_off, set_poison};
 use super::liquid_surface_tests::read;
 use crate::node_graph::liquid::bodies::LiquidBody;
+use crate::node_graph::liquid::coupling::coupled_start;
 use super::liquid_stats::SOLVER_WORDS;
 
 /// Tail index of stats word 16 (active-tile share): the tail starts at stats word 10 (liquid_stats.rs `SOLVER_WORDS`).
@@ -116,8 +118,10 @@ fn face_centre(p: [usize; 3], a: usize) -> [f64; 3] {
     std::array::from_fn(|b| f64::from(MIN[b]) + (p[b] as f64 + if b == a { 0.0 } else { 0.5 }) * f64::from(H))
 }
 
+/// A row's centre of mass: the passes read rows the step has already posed
+/// (gpu_flip_step.wgsl pose_bodies).
 fn posed(row: &LiquidBody) -> [f64; 3] {
-    std::array::from_fn(|b| f64::from(row.position_inv_mass[b]) + f64::from(row.linear_velocity[b]) * f64::from(TICK))
+    std::array::from_fn(|b| f64::from(row.position_inv_mass[b]))
 }
 
 fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
@@ -153,9 +157,10 @@ fn cpu_pressure_impulse(x: &[f32], water: &[f32], open: &[f32], solid: &[f32]) -
 }
 
 /// Each body's sums record from per-face impulses: linear and angular
-/// impulse, and M⁻¹ times them for a dynamic body; 0 for any other. Also the
-/// sum of |term| per float, the scale an f32 reduction's rounding grows with.
-fn cpu_body_sums(impulses: &[f64], solid: &[f32], rows: &[LiquidBody]) -> (Vec<f64>, Vec<f64>) {
+/// impulse, and its mobility times them for a dynamic body; 0 for any other.
+/// Also the sum of |term| per float, the scale an f32 reduction's rounding
+/// grows with.
+fn cpu_body_sums(impulses: &[f64], solid: &[f32], rows: &[LiquidBody], mobility: &[Mobility]) -> (Vec<f64>, Vec<f64>) {
     let mut out = vec![0.0; BODIES * SUM_FLOATS];
     let mut scale = vec![0.0; BODIES * SUM_FLOATS];
     for b in 0..BODIES {
@@ -188,12 +193,13 @@ fn cpu_body_sums(impulses: &[f64], solid: &[f32], rows: &[LiquidBody]) -> (Vec<f
         let record = &mut out[SUM_FLOATS * b..SUM_FLOATS * (b + 1)];
         record[..3].copy_from_slice(&linear);
         record[4..7].copy_from_slice(&angular);
-        let inertia = [row.inv_inertia_x, row.inv_inertia_y, row.inv_inertia_z];
-        for k in 0..3 {
-            record[8 + k] = f64::from(row.position_inv_mass[3]) * linear[k];
-            record[12 + k] = (0..3).map(|j| f64::from(inertia[k][j]) * angular[j]).sum();
-            s[8 + k] = f64::from(row.position_inv_mass[3]) * s[k];
-            s[12 + k] = (0..3).map(|j| f64::from(inertia[k][j]).abs() * s[4 + j]).sum();
+        let m = &mobility[FIRST + b];
+        let pushed = [linear[0], linear[1], linear[2], angular[0], angular[1], angular[2]];
+        let size = [s[0], s[1], s[2], s[4], s[5], s[6]];
+        for i in 0..6 {
+            let at = 8 + i + i / 3;
+            record[at] = (0..6).map(|j| f64::from(m[mobility_index(i, j)]) * pushed[j]).sum();
+            s[at] = (0..6).map(|j| f64::from(m[mobility_index(i, j)]).abs() * size[j]).sum();
         }
     }
     (out, scale)
@@ -257,6 +263,14 @@ fn cpu_velocity_change(solid: &[f32], sums: &[f32], rows: &[LiquidBody]) -> Vec<
 
 // ── Value proofs ───────────────────────────────────────────────────────────
 
+/// Packed mobilities as the GPU holds them, six vec4 each.
+fn gpu_mobility(mobility: &[Mobility]) -> Vec<[f32; 24]> {
+    mobility
+        .iter()
+        .map(|m| std::array::from_fn(|k| m.get(k).copied().unwrap_or(0.0)))
+        .collect()
+}
+
 fn shared<T: bytemuck::Pod>(device: &GpuDevice, values: &[T]) -> GpuBuffer {
     let buffer = device.create_buffer_shared((size_of_val(values) as u64).max(16));
     buffer.zero_fill();
@@ -277,7 +291,10 @@ struct Scene {
     solid: Vec<f32>,
     water: Vec<f32>,
     rows: Vec<LiquidBody>,
-    buffers: [GpuBuffer; 4],
+    /// Each row's packed mobility, as pose_bodies writes it: free unless
+    /// [`Self::hold`] held the dynamic body.
+    mobility: Vec<Mobility>,
+    buffers: [GpuBuffer; 5],
     passes: BodyPasses,
     /// Prepared on the scene's water for its fine tile set; `all` means
     /// every tile was classified active.
@@ -295,7 +312,14 @@ impl Scene {
         let device = crate::test_device();
         let (open, solid) = fixture(seed);
         let rows = bodies();
-        let buffers = [shared(&device, &water), shared(&device, &open), shared(&device, &solid), shared(&device, &rows)];
+        let mobility: Vec<Mobility> = rows.iter().map(|row| constrained_mobility(&coupled_start(row), &[], Held::default())).collect();
+        let buffers = [
+            shared(&device, &water),
+            shared(&device, &open),
+            shared(&device, &solid),
+            shared(&device, &rows),
+            shared(&device, &gpu_mobility(&mobility)),
+        ];
         let mut passes = BodyPasses::default();
         passes.prepare_pipelines(&device);
         passes.prepare(&device, N.map(|v| v as u32), BODIES as u32).expect("body passes");
@@ -307,7 +331,20 @@ impl Scene {
         solver.prepare(&device, &mut enc, &lattice).expect("the solver prepares its tile lists");
         set_all_tiles(false);
         enc.commit_and_wait_completed();
-        Self { device, open, solid, water, rows, buffers, passes, solver }
+        Self { device, open, solid, water, rows, mobility, buffers, passes, solver }
+    }
+
+    /// The dynamic body held on a floor under it: its bottom corners closed,
+    /// one of them stuck: it can only turn about that corner.
+    fn hold(&mut self) {
+        let corners = [[0.2, -0.2, 0.2], [-0.2, -0.2, 0.2], [-0.2, -0.2, -0.2], [0.2, -0.2, -0.2]];
+        let supports: Vec<SupportPoint> = corners
+            .iter()
+            .map(|&lever| SupportPoint { lever, normal: [0.0, 1.0, 0.0], friction: 0.5, ..SupportPoint::default() })
+            .collect();
+        let held = Held { closed: 0b1111, stuck: 0b0001 };
+        self.mobility[FIRST] = constrained_mobility(&coupled_start(&self.rows[FIRST]), &supports, held);
+        self.buffers[4] = shared(&self.device, &gpu_mobility(&self.mobility));
     }
 
     fn tiles(&self) -> [&GpuBuffer; 3] {
@@ -327,6 +364,7 @@ impl Scene {
             open: &self.buffers[1],
             solid: &self.buffers[2],
             bodies: &self.buffers[3],
+            mobility: &self.buffers[4],
         }
     }
 
@@ -349,7 +387,7 @@ fn gpu_flip_body_operator_matches_cpu() {
     enc.commit_and_wait_completed();
 
     let impulses = cpu_pressure_impulse(&direction, &scene.water, &scene.open, &scene.solid);
-    let (want, scale) = cpu_body_sums(&impulses, &scene.solid, &scene.rows);
+    let (want, scale) = cpu_body_sums(&impulses, &scene.solid, &scene.rows, &scene.mobility);
     assert!(want[..3].iter().any(|&v| v.abs() > 1.0), "the dynamic body owns pushed faces");
     assert!(want[SUM_FLOATS..].iter().all(|&v| v == 0.0), "the prescribed body takes no impulse");
     let sums = scene.sums();
@@ -379,7 +417,7 @@ fn gpu_flip_body_reaction_matches_cpu() {
     enc.commit_and_wait_completed();
     let pushed = scene.sums();
     let (want, scale) =
-        cpu_body_sums(&cpu_pressure_impulse(&pressure, &scene.water, &scene.open, &scene.solid), &scene.solid, &scene.rows);
+        cpu_body_sums(&cpu_pressure_impulse(&pressure, &scene.water, &scene.open, &scene.solid), &scene.solid, &scene.rows, &scene.mobility);
     assert_sums(&pushed, &want, &scale, "pressure sums");
 
     let mut enc = scene.device.create_encoder("react");
@@ -402,6 +440,46 @@ fn gpu_flip_body_reaction_matches_cpu() {
         })
         .collect();
     assert_close(&got, &want, "reaction");
+}
+
+/// D16: a body held on its supports answers the pressure through its held
+/// mobility: it neither sinks nor tips. The bodies' share of the operator, B,
+/// stays symmetric and never negative over the water cells:
+/// yᵀ·B·x = xᵀ·B·y and xᵀ·B·x ≥ 0, so the conjugate gradient solve keeps
+/// its footing.
+#[test]
+fn gpu_flip_body_operator_holds_a_supported_body_symmetric() {
+    let mut scene = Scene::new(0x5e1d);
+    scene.hold();
+    let cells: usize = N.iter().product();
+    let zeros = vec![0.0_f32; cells];
+    let product = |x: &[f32]| -> Vec<f32> {
+        let (x_gpu, s) = (shared(&scene.device, x), shared(&scene.device, &zeros));
+        let mut enc = scene.device.create_encoder("held body operator");
+        scene.passes.apply(&mut enc, &scene.bodies(), scene.tiles(), &x_gpu, &s).expect("apply");
+        enc.commit_and_wait_completed();
+        read(&s, cells)
+    };
+    let (x, y) = (random_values(cells, 0x5e1e), random_values(cells, 0x5e1f));
+    let bx = product(&x);
+    let sums = scene.sums();
+    let (want, scale) =
+        cpu_body_sums(&cpu_pressure_impulse(&x, &scene.water, &scene.open, &scene.solid), &scene.solid, &scene.rows, &scene.mobility);
+    assert_sums(&sums, &want, &scale, "held sums");
+    assert!(want[..3].iter().any(|&v| v.abs() > 1.0), "the held body owns pushed faces");
+    for (k, what) in [(9, "sinks"), (12, "tips about x"), (14, "tips about z")] {
+        assert!(want[k].abs() <= 1e-5 * (scale[k] + 1.0), "the held body {what}: {}", want[k]);
+    }
+    assert_close(&bx, &cpu_body_product(&zeros, &scene.water, &scene.open, &scene.solid, &sums, &scene.rows), "held body operator");
+
+    let by = product(&y);
+    let in_water: Vec<usize> = (0..cells).filter(|&k| scene.water[k] > 0.5).collect();
+    let dot = |a: &[f32], b: &[f32]| in_water.iter().map(|&k| f64::from(a[k]) * f64::from(b[k])).sum::<f64>();
+    let size = in_water.iter().map(|&k| (f64::from(y[k]) * f64::from(bx[k])).abs()).sum::<f64>();
+    let (ybx, xby, xbx) = (dot(&y, &bx), dot(&x, &by), dot(&x, &bx));
+    assert!(size > 1.0, "the operator acts: {size}");
+    assert!((ybx - xby).abs() <= 1e-4 * size, "yᵀBx {ybx} against xᵀBy {xby} (scale {size})");
+    assert!(xbx >= -1e-4 * size, "xᵀBx {xbx} is negative (scale {size})");
 }
 
 /// The coupled fine round is one replay segment, including the body product.

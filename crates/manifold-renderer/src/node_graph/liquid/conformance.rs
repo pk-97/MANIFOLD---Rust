@@ -112,6 +112,9 @@ pub enum Check {
     /// I20: boxes stacked under water settle without blowing up, and no
     /// water is removed.
     SubmergedStack,
+    /// I19: Box3D ends each tick where the coupled motion law put the body
+    /// (D18).
+    HandoverAgreement,
 }
 
 /// The floating rest boxes: foam-light, and half the liquid's density.
@@ -124,7 +127,7 @@ const BOX_FALLS: &[Fixture] = &[
 ];
 
 impl Check {
-    pub const ALL: [Check; 20] = [
+    pub const ALL: [Check; 21] = [
         Check::CoupledWorldStepsOnce,
         Check::CollisionMomentum,
         Check::CollisionEnergy,
@@ -145,6 +148,7 @@ impl Check {
         Check::RestingContact,
         Check::LiftOff,
         Check::SubmergedStack,
+        Check::HandoverAgreement,
     ];
 
     /// Whether the check needs a Box3D body in the liquid.
@@ -162,6 +166,7 @@ impl Check {
                 | Check::RestingContact
                 | Check::LiftOff
                 | Check::SubmergedStack
+                | Check::HandoverAgreement
         )
     }
 
@@ -178,6 +183,11 @@ impl Check {
             // floor has no water cell beneath it and feels no lift.
             Check::LiftOff => &[Fixture::Resting { density_ratio: 0.3, tilt: 0.3 }],
             Check::SubmergedStack => &[Fixture::Stack],
+            Check::HandoverAgreement => &[
+                Fixture::FloatingAt { density_ratio: 0.05 },
+                Fixture::FloatingAt { density_ratio: 0.5 },
+                Fixture::Resting { density_ratio: 0.3, tilt: 0.3 },
+            ],
             Check::HydrostaticLift => &[Fixture::SubmergedBox],
             Check::FreeFlight => &[Fixture::Collision { density_ratio: 1.0 }],
             Check::PauseDiscardsImpulses => &[Fixture::StillPool],
@@ -304,6 +314,10 @@ const FLIP_COUPLES_NATIVELY: &str = "synchronous coupling (D3): FLIP steps its b
      takes them from the scene layer's roles, so it has no rigid owner to count, no host sync between coupled \
      ticks, and no box scene a preset can carry";
 
+const MPM_MOVES_ITS_OWN_BODIES: &str = "MPM moves its bodies by its own per-substep law (D7), which tracks when \
+     its reaction lands; it shares the force handoff (D17) but the coupled motion law is not its prediction, so \
+     there is no law to agree with until section 7 (Deferred) moves MPM onto it";
+
 const GPU_FLIP_WALLS_IN_SOLVE: &str = "GPU FLIP's tank walls are in its pressure solve on every face by \
      design, as in the engine: an open face is a sink that removes particles, not a hole in the wall. The \
      floor's push back on a box pressing the pool is real ground reaction, so the walls absorb momentum and \
@@ -380,7 +394,7 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
                  sum or the division differently from the CPU; a few faces land one unit off",
             ),
         }),
-        exempt: &[],
+        exempt: &[(Check::HandoverAgreement, MPM_MOVES_ITS_OWN_BODIES)],
     },
     LiquidSolverRow {
         type_id: FLIP_DOMAIN_TYPE_ID,
@@ -421,6 +435,7 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
             (Check::RestingContact, FLIP_COUPLES_NATIVELY),
             (Check::LiftOff, FLIP_COUPLES_NATIVELY),
             (Check::SubmergedStack, FLIP_COUPLES_NATIVELY),
+            (Check::HandoverAgreement, FLIP_COUPLES_NATIVELY),
             (Check::FloatingDraft, FLIP_COUPLES_NATIVELY),
             (Check::HydrostaticLift, FLIP_COUPLES_NATIVELY),
             (Check::FreeFlight, FLIP_COUPLES_NATIVELY),

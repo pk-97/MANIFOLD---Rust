@@ -191,7 +191,7 @@ impl GpuFlipGeometry {
 }
 
 /// Every scalar output, in the order [`GpuFlipDomain::compute`] fills them.
-const OUTPUTS: [&str; 54] = [
+const OUTPUTS: [&str; 57] = [
     "lattice_min_x", "lattice_min_y", "lattice_min_z", "cell_size", "nodes_x", "nodes_y", "nodes_z",
     "closed_faces", "pool_sites", "box_x0", "box_x1", "box_y0", "box_y1", "box_z0", "box_z1",
     "particle_mass", "gravity_x", "gravity", "gravity_z", "ticks", "epoch", "simulation_time",
@@ -203,7 +203,8 @@ const OUTPUTS: [&str; 54] = [
     "clock_obstacle_count",
     "clock_source_count",
     "live_hit_count", "mesh_min_x", "mesh_min_y", "mesh_min_z", "mesh_nodes_x", "mesh_nodes_y", "mesh_nodes_z",
-    "initial_obstacle_speed", "mesh_wall_inset", "max_iterations", "display_cursor", "sheet_fill_rate"];
+    "initial_obstacle_speed", "mesh_wall_inset", "max_iterations", "display_cursor", "sheet_fill_rate",
+    "handover_position", "handover_velocity", "handover_rotation"];
 const TICKS: usize = 19;
 const IMPULSE_TICK: usize = 33;
 const INITIAL_OBSTACLE_SPEED: usize = 49;
@@ -375,6 +376,7 @@ crate::primitive! {
         display_cursor: ScalarF32,
         dropped_seconds: ScalarF32,
         body_count: ScalarF32, body_rows: ScalarF32, dynamic_bodies: ScalarF32,
+        handover_position: ScalarF32, handover_velocity: ScalarF32, handover_rotation: ScalarF32,
         first_tick: ScalarF32,
         field_nodes_x: ScalarF32, field_nodes_y: ScalarF32, field_nodes_z: ScalarF32,
         field_spacing: ScalarF32,
@@ -388,6 +390,7 @@ crate::primitive! {
         mesh_wall_inset: ScalarF32,
         bodies: Array(LiquidBody), regions: Array(LiquidBody), shapes: Array(LiquidShape), atlas: Array(u32),
         reaction: Array(f32),
+        contacts: Array(f32),
         forces: Array(f32), impulses: Array(f32),
     },
     params: [
@@ -447,7 +450,7 @@ const NO_OBSTACLE_BOUND: &[(&str, f32)] = &[(OUTPUTS[INITIAL_OBSTACLE_SPEED], -1
 
 impl Primitive for GpuFlipDomain {
     fn provides_array_output(&self, port: &str) -> bool {
-        matches!(port, "bodies" | "regions" | "shapes" | "atlas" | "reaction" | "forces" | "impulses"| "clock_obstacles"
+        matches!(port, "bodies" | "contacts" | "regions" | "shapes" | "atlas" | "reaction" | "forces" | "impulses"| "clock_obstacles"
                 | "clock_sources"
                 | "live_hits")
     }
@@ -469,7 +472,7 @@ impl Primitive for GpuFlipDomain {
         _params: &ParamValues,
         _input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
-        matches!(port_name, "bodies" | "regions" | "shapes" | "atlas" | "reaction" | "forces" | "impulses"| "clock_obstacles"
+        matches!(port_name, "bodies" | "contacts" | "regions" | "shapes" | "atlas" | "reaction" | "forces" | "impulses"| "clock_obstacles"
                 | "clock_sources"
                 | "live_hits").then_some(1)
     }
@@ -813,6 +816,7 @@ impl GpuFlipDomain {
         let coupled_rows = self.coupled.owner.as_ref().map_or(&[][..], LiquidRigidOwner::rows);
         if row_ticks > 0 {
             self.body_rows = self.bodies.rows(first_tick, frame.ticks, coupled_rows)?.len() as f32;
+            self.bodies.set_contacts(self.coupled.owner.as_ref().map_or(&[][..], LiquidRigidOwner::contacts))?;
         }
         let dynamic_bodies = coupled_rows.iter().filter(|row| takes_reaction(row)).count();
         self.bodies
@@ -850,6 +854,7 @@ impl GpuFlipDomain {
             &frame,
             &self.impulses,
         )?;
+        let handover = self.coupled.owner.as_ref().map_or_else(Default::default, LiquidRigidOwner::handover);
         let per_frame = [
             ("closed_faces", closed_faces(ctx.params) as f32),
             ("solve_level", geometry.solve_level as f32),
@@ -888,6 +893,11 @@ impl GpuFlipDomain {
             ("region_count", self.bodies.region_count() as f32),
             ("body_rows", self.body_rows),
             ("dynamic_bodies", dynamic_bodies as f32),
+            // How far Box3D ended the last settled tick from the coupled motion
+            // law, worst body (m, m/s, rad; D18).
+            ("handover_position", handover.position),
+            ("handover_velocity", handover.velocity),
+            ("handover_rotation", handover.rotation),
             ("first_tick", first_tick as f32),
             // Prepared first rows, before the first interval's cleared reaction
             // changes. Later intervals require their own freshness proof.
@@ -959,6 +969,14 @@ impl GpuFlipDomain {
         // completed every command that touched it, and the next reader is
         // encoded after this write.
         unsafe { bodies.write(offset, bytes) };
+        let (offset, contacts) = self.bodies.set_coupled_contacts(tick as usize, owner.contacts())?;
+        let buffer = self.body_buffers.contacts().ok_or("GPU FLIP coupling: the contact normals are missing")?;
+        let bytes: &[u8] = bytemuck::cast_slice(contacts);
+        if offset + bytes.len() as u64 > buffer.size {
+            return Err("GPU FLIP coupling: the contact normals outgrew their buffer".into());
+        }
+        // SAFETY: as the rows above.
+        unsafe { buffer.write(offset, bytes) };
         // The CFL samples must belong to the same accepted tick as its body
         // rows. Reusing the first tick's world-space hull with the next tick's
         // centre changes the angular point speed and leaves eligibility stale.

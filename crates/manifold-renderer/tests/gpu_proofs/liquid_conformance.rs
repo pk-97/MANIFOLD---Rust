@@ -23,6 +23,7 @@ use manifold_renderer::gpu_encoder::GpuEncoder;
 use manifold_renderer::node_graph::fluid::TICK;
 use manifold_renderer::node_graph::fluid_particles::FluidParticle;
 use manifold_renderer::node_graph::liquid::bodies::LiquidBody;
+use manifold_renderer::node_graph::liquid::coupling::HANDOVER_BOUND;
 use manifold_renderer::node_graph::liquid::grid::{FACE_GRID_PORTS, face_len};
 use manifold_renderer::node_graph::liquid::conformance::{
     BoxScene, Check, FIXTURE_DENSITY, Fixture, LIQUID_SOLVERS, LiquidSolverRow, LiquidTotals, STACK_HEIGHT, set_type_param,
@@ -47,7 +48,8 @@ const SIZE: u32 = 64;
 const G: f64 = 9.81;
 
 /// Domain scalars the probe records, where the domain publishes them.
-const DOMAIN_SCALARS: [&str; 5] = ["simulation_time", "display_time", "ticks", "epoch", "body_count"];
+const DOMAIN_SCALARS: [&str; 8] =
+    ["simulation_time", "display_time", "ticks", "epoch", "body_count", "handover_position", "handover_velocity", "handover_rotation"];
 /// The particle frame's scalars (GPU_FLUID_SURFACE_DESIGN.md section 3 (The
 /// particle-frame contract)).
 const FRAME_SCALARS: [&str; 6] = ["count_a", "count_b", "identity_a", "identity_b", "blend", "span"];
@@ -1021,12 +1023,15 @@ fn rest_run(row: &'static LiquidSolverRow, fixture: Fixture, hz: u32) -> LiquidR
 /// tick (`liquid_stats.rs`'s layout; word 9).
 const PUSH_REFUSED_WORD: usize = 9;
 
-/// One tick of a rest proof: every body row, the liquid's totals, and the
-/// particles left inside a solid (GPU FLIP; 0 for a liquid without the count).
+/// One tick of a rest proof: every body row, the liquid's totals, the
+/// particles left inside a solid (GPU FLIP; 0 for a liquid without the count),
+/// and the handover error of the tick it settled (m, m/s, rad; NaN where the
+/// domain does not publish it).
 struct RestTick {
     bodies: Vec<LiquidBody>,
     liquid: LiquidTotals,
     refused: u32,
+    handover: [f32; 3],
 }
 
 fn rest_tick(run: &mut LiquidRun, row: &LiquidSolverRow, bodies: usize) -> RestTick {
@@ -1038,7 +1043,8 @@ fn rest_tick(run: &mut LiquidRun, row: &LiquidSolverRow, bodies: usize) -> RestT
     let mut rows: Vec<LiquidBody> = run.read(run.domain_type, "bodies");
     rows.truncate(bodies);
     let refused = if row.type_id == GPU_FLIP_DOMAIN_TYPE_ID { run.totals_words(row)[PUSH_REFUSED_WORD] } else { 0 };
-    RestTick { bodies: rows, liquid, refused }
+    let handover = ["handover_position", "handover_velocity", "handover_rotation"].map(|name| probe.get(name));
+    RestTick { bodies: rows, liquid, refused, handover }
 }
 
 fn refused(ticks: &[RestTick]) -> u32 {
@@ -1267,6 +1273,49 @@ fn liquid_submerged_stack() {
         }
     }
     misses.assert_none("liquid_submerged_stack");
+}
+
+/// I19 (D18): the floating rest boxes and the light box lifting off, at 15,
+/// 30 and 60 Hz over 3 s: Box3D ends every tick within 0.5 mm, 5 mm/s and
+/// 0.1° of where the coupled motion law put the body. Guards: the box moves
+/// more than a centimetre, so the law and the handoff are exercised, and the
+/// check measures a nonzero error on some tick (one that never ran reads 0).
+#[test]
+fn liquid_handover_agreement() {
+    let mut misses = Misses::default();
+    let bound = [HANDOVER_BOUND.position, HANDOVER_BOUND.velocity, HANDOVER_BOUND.rotation];
+    for row in running(Check::HandoverAgreement) {
+        for &fixture in Check::HandoverAgreement.fixtures(row.coupled) {
+            for hz in FLOATING_REST_RATES {
+                let mut run = rest_run(row, fixture, hz);
+                let ticks = rest_ticks(&mut run, row, 1, 3 * hz);
+                // The first frame's figures belong to no settled tick.
+                let worst = ticks[1..].iter().fold([0.0f32; 3], |w, t| std::array::from_fn(|k| w[k].max(t.handover[k])));
+                let start = v3(ticks[0].bodies[0].position_inv_mass);
+                let travel = ticks
+                    .iter()
+                    .map(|t| {
+                        let at = v3(t.bodies[0].position_inv_mass);
+                        (0..3).map(|k| (at[k] - start[k]).powi(2)).sum::<f64>().sqrt()
+                    })
+                    .fold(0.0, f64::max);
+                let what = format!("{} {fixture:?} at {hz} Hz", row.type_id);
+                eprintln!(
+                    "liquid_handover_agreement {what}: worst {:.2e} m, {:.2e} m/s, {:.3}°; travelled {travel:.3} m",
+                    worst[0],
+                    worst[1],
+                    worst[2].to_degrees()
+                );
+                misses.check(ticks.iter().all(|t| t.handover.iter().all(|v| v.is_finite())), || format!("{what}: no handover error published"));
+                misses.check(travel > 0.01, || format!("{what}: the box never moved ({travel:.4} m)"));
+                misses.check(worst[0] > 0.0 || worst[1] > 0.0, || format!("{what}: the check never measured"));
+                for (k, unit) in ["m", "m/s", "rad"].into_iter().enumerate() {
+                    misses.check(worst[k] <= bound[k], || format!("{what}: handover error {:.3e} {unit} over {:.1e}", worst[k], bound[k]));
+                }
+            }
+        }
+    }
+    misses.assert_none("liquid_handover_agreement");
 }
 
 /// One coupled substep of a neutral box, as either solver saw it: vertical

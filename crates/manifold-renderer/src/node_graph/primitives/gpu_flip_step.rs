@@ -52,7 +52,7 @@ use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::fluid_particles::{FaceSample, FluidParticle};
 use crate::node_graph::fluid_role::MAX_FLUID_ROLES;
 use crate::node_graph::liquid::{EXACT_F32_COUNT, WATER_DENSITY};
-use crate::node_graph::liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
+use crate::node_graph::liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape, MOBILITY_BYTES};
 use crate::node_graph::liquid::fields::{FieldBinding, LIQUID_FIELD};
 use crate::node_graph::liquid::lattice::{FlipSolverGrid, LiquidLattice};
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
@@ -319,7 +319,10 @@ pub(crate) struct StepParams {
     /// Cells from the grid's minimum to each wall (`FlipSolverGrid::wall_inset`);
     /// 0 when the walls are the grid's edges.
     pub(crate) wall_inset: f32,
-    pub(crate) _pad: [u32; 3],
+    /// Box3D's substep over this tick: the coupled motion law's h
+    /// (`manifold_physics::coupled_motion::coupled_substep`).
+    pub(crate) coupled_h: f32,
+    pub(crate) _pad: [u32; 2],
 }
 
 /// One pass of the step's shader on its own, for the value proofs against
@@ -379,6 +382,7 @@ struct Pipelines {
     /// labels moved to the level.
     pocket_coarse: [GpuComputePipeline; 3],
     remove_crowded: GpuComputePipeline,
+    pose_bodies: GpuComputePipeline,
     emit_flags: GpuComputePipeline,
     emit_write: GpuComputePipeline,
     tiles_classify: GpuComputePipeline,
@@ -412,6 +416,7 @@ impl Pipelines {
             gravity: pipe("face_gravity"),
             open: pipe("open_fractions"),
             solid_velocity: pipe("solid_face_velocity"),
+            pose_bodies: pipe("pose_bodies"),
             solid_extrapolate: pipe("solid_extrapolate"),
             phi_into_solids: pipe("phi_into_solids"),
             water_from_phi: pipe("water_from_phi"),
@@ -685,6 +690,12 @@ pub(crate) struct StepState {
     saved_narrow_faces: Option<GpuBuffer>,
     saved_narrow_failure: Option<GpuBuffer>,
     zeros: Option<GpuBuffer>,
+    /// This tick's bodies posed at the step's end (`pose_bodies`), one row a
+    /// body of the tick.
+    posed: Option<GpuBuffer>,
+    /// Each posed body's packed response to an impulse while it stays on
+    /// its supports (`pose_bodies`), six vec4 a body.
+    mobility: Option<GpuBuffer>,
     bodies: BodyPasses,
     clock: Option<GpuFlipClock>,
     clock_capacities: [u32; 3],
@@ -1072,8 +1083,11 @@ struct Step<'a> {
     /// Inflow and outflow rows; read when `params.region_count` > 0.
     regions: &'a GpuBuffer,
     /// What the water has pushed on each body so far this tick, read by the
-    /// solid velocity; added to when `dynamic`.
+    /// bodies' pose; added to when `dynamic`.
     reaction: &'a GpuBuffer,
+    /// Each body row's support points at its tick's start
+    /// (`liquid::bodies::BodySupports`); zeros unwired.
+    contacts: &'a GpuBuffer,
     /// The bodies take part in the pressure solve and gather its reaction.
     dynamic: bool,
     /// When the pressure and density solves stop.
@@ -1280,6 +1294,14 @@ impl StepState {
     }
 
     fn encode(&mut self, device: &GpuDevice, enc: &mut GpuEncoder, step: &Step<'_>, clock_params: &GpuFlipClockParams) -> Result<(), String> {
+        let posed_bytes = step.params.body_count.max(1) as u64 * size_of::<LiquidBody>() as u64;
+        if self.posed.as_ref().is_none_or(|posed| posed.size < posed_bytes) {
+            self.posed = Some(allocate(device, posed_bytes)?);
+        }
+        let mobility_bytes = step.params.body_count.max(1) as u64 * MOBILITY_BYTES;
+        if self.mobility.as_ref().is_none_or(|mobility| mobility.size < mobility_bytes) {
+            self.mobility = Some(allocate(device, mobility_bytes)?);
+        }
         enc.set_profile_tag("gpu_flip.stage.prepare");
         let pipes = self.pipelines.as_ref().expect("step pipelines built by prepare_pipelines at install");
         let (Some(l), Some(tiles), Some(sorted), Some(out_faces)) = (self.lattice.as_ref(), self.tiles.as_ref(), self.sorted.as_ref(), self.faces.as_ref()) else {
@@ -1325,7 +1347,20 @@ impl StepState {
         // against it, where the body's own lattice distance alone would leave
         // a sub-cell open channel between them. The engine's domain object
         // covers all six faces whichever are open, so this mask stays 63.
-        // First, since emission seeds only outside the solid.
+        // First, since emission seeds only outside the solid. The bodies are
+        // posed once at the step's end and every solid pass reads that pose.
+        let posed = self.posed.as_ref().expect("posed rows reserved above");
+        let mobility = self.mobility.as_ref().expect("mobility reserved above");
+        let zeros = self.zeros.as_ref().expect("zero storage prepared");
+        if p.body_count > 0 {
+            enc.dispatch_compute(
+                &pipes.pose_bodies,
+                &[uniform(&base), buffer(14, step.bodies), buffer(21, step.reaction), buffer(46, step.clock_plan), buffer(48, posed), buffer(49, step.contacts), buffer(50, mobility)],
+                [(p.body_count as u32).div_ceil(64), 1, 1],
+                "gpu_flip.step.pose_bodies",
+            );
+            enc.compute_memory_barrier_buffers();
+        }
         encode_solid_distance(
             &mut self.solid,
             device,
@@ -1337,13 +1372,14 @@ impl StepState {
                 closed_faces: 63,
                 wall_inset: step.wall_inset,
                 body_count: p.body_count,
-                rows: p.rows,
-                tick_seconds: p.tick_seconds,
-                bodies: step.bodies,
+                rows: p.body_count.min(p.rows),
+                // Posed already: no time on, and a zero plan keeps it off.
+                tick_seconds: 0.0,
+                bodies: posed,
                 shapes: step.shapes,
                 atlas: step.atlas,
                 out: &l.corners,
-                clock_plan: step.clock_plan,
+                clock_plan: zeros,
             },
             "gpu_flip.step.solid_distance",
         );
@@ -1643,11 +1679,10 @@ impl StepState {
                     uniform(&base),
                     buffer(10, &l.s),
                     buffer(4, &l.b),
-                    buffer(14, step.bodies),
                     buffer(15, step.shapes),
                     buffer(16, step.atlas),
-                    buffer(21, step.reaction),
                     buffer(46, step.clock_plan),
+                    buffer(48, posed),
                 ],
                 face_groups,
                 "gpu_flip.step.solid_velocity",
@@ -1732,19 +1767,20 @@ impl StepState {
         self.solver.set_clock_plan(gate_plan);
         self.solver.prepare(device, enc, &water)?;
         // Dynamic bodies join the solve as the engine's mass-aware PCG
-        // (RigidFluidCoupling) has them; their tick rows start at `first`.
+        // (RigidFluidCoupling) has them, at the pose the solid takes.
         let coupled = Bodies {
             lattice: cells,
             lattice_min: p.box_min,
             cell_size: p.cell_size,
             density: WATER_DENSITY,
             tick_seconds: p.tick_seconds,
-            first: (p.rows - p.body_count).max(0) as u32,
+            first: 0,
             count: p.body_count.max(0) as u32,
             water: &l.solve_water,
             open: &l.s,
             solid: &l.v,
-            bodies: step.bodies,
+            bodies: posed,
+            mobility,
         };
         self.bodies.set_clock_plan(step.clock_plan);
         if step.dynamic {
@@ -2164,6 +2200,7 @@ crate::primitive! {
         region_count: ScalarF32 optional,
         rows: ScalarF32 optional,
         reaction: Array(f32) optional,
+        contacts: Array(f32) optional,
         dynamic_bodies: ScalarF32 optional,
         closed_faces: ScalarF32 optional,
         solve_level: ScalarF32 optional,
@@ -2587,7 +2624,8 @@ impl Primitive for GpuFlipStep {
                     .min(u32::MAX as usize) as u32,
                 narrow_band: u32::from(narrow_enabled),
                 wall_inset: solver.wall_inset(),
-                _pad: [0; 3],
+                coupled_h: manifold_physics::coupled_motion::coupled_substep(manifold_physics::Seconds(interval_duration)),
+                _pad: [0; 2],
             },
             clock_plan: &zeros,
             particles,
@@ -2601,6 +2639,7 @@ impl Primitive for GpuFlipStep {
             shapes,
             atlas,
             reaction,
+            contacts: ctx.inputs.array("contacts").unwrap_or(&zeros),
             dynamic,
             pressure,
             level,
