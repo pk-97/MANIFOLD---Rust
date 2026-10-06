@@ -2,7 +2,7 @@
 
 <!-- index: GPU MLS-MPM materials solver (goo, snow, sand, lava) from graph atoms in a repeated substep region, standalone first and coupled to Box3D; material maths kept as a grid-independent per-point stage so it moves onto GPU FLIP's grid in the later unified solver; water is GPU FLIP. -->
 
-**Status:** IN PROGRESS · P0a–P2b on main · direction amended 2026-10-06: standalone materials first, built for the unified solver (D31–D37) · owed: P5-0, P5a–P5d, P3b, P3d, P7, P8 · water presets are test scenes · phase notes in section 13 (Phasing).
+**Status:** IN PROGRESS · P0a–P2b on main · direction amended 2026-10-06: standalone materials first, built for the unified solver (D31–D38) · owed: P5-0, P5a–P5e, P3b, P3d, P7, P8 · water presets are test scenes · phase notes in section 13 (Phasing).
 **Prerequisites:** GPU_FLUID_SURFACE_DESIGN.md P1–P3 before P1 (met); none for P5-0.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -13,8 +13,12 @@ architected for our full open physics coupling and unified solver and grids. I w
 to see sand, snow, and other flagship MPM materials." Liquid water is GPU FLIP
 ([GPU_FLIP_PRESSURE_SOLVE.md](GPU_FLIP_PRESSURE_SOLVE.md)); this solver's product is the
 material zoo (D31). The unified solver is a later design on FLIP's grid (D32); D33–D36
-are the seams this solver keeps so its material maths moves there unchanged. The intro
-below is the 2026-09-29 framing; D1–D30 still govern the solver's mechanics.
+are the seams this solver keeps so its material maths moves there unchanged. Materials
+are always live and morph, never switch (D38): "I'd prefer if there isn't a strict
+"switch" and materials are always live for the performer unless that introduces huge
+overheads and performance and compute problems. So we could go from realistic GPU FLIP
+water to it gradually turning into snow to a MPM material" (Peter, 2026-10-06). The
+intro below is the 2026-09-29 framing; D1–D30 still govern the solver's mechanics.
 
 Peter's decision of 2026-09-29, superseded for water by D31:
 the live liquid solver becomes a GPU MLS-MPM (Hu et al. 2018, "A Moving Least Squares
@@ -334,11 +338,11 @@ FLIP Fluids upstream density) or 27 (3³, finer sheets and splashes at 3.4× the
 Changing it restarts the simulation.
 
 **D10 — One material per domain in v1; constitutive branches; Melt is the phase-change
-control.** `node.matter_domain` carries a setup **Material** Enum (Water, Goo, Snow, Sand,
+control.** `node.matter_domain` carries a live **Material** Enum (D38) (Water, Goo, Snow, Sand,
 Lava) and publishes one `MatterMaterial` entry. `node.matter_to_grid` switches on the
 model: water (D3), fixed-corotated goo, Stomakhin snow, Drucker–Prager sand, Bingham lava.
 Models with shape memory keep an `Array(MatterDeformation)` (F rows) updated in G2P
-(D33); water graphs leave it unwired. **Melt** m ∈ [0, 1] is a
+(D33), bound in every graph (D38). **Melt** m ∈ [0, 1] is a
 live, beat-able param for Goo, Snow and Lava: each substep the elastic part of F relaxes
 toward its rotation, `F ← R + e^{−k(m)·dt}·(F − R)` with `k(m) = m / ((1 − m + 0.01) · 0.1 s)`
 — a Maxwell relaxation. At m = 0 the material holds its shape; at m = 1 it has no shape
@@ -669,6 +673,34 @@ proven subcycling scheme is that design's decision (Astra review), not this one'
 `dt_v = ρ0·dx²/(6·μ_v)` allows μ_v up to 5,000 Pa·s, not the 5 D4 stated. Amended in
 place.
 
+**D38 — Materials are always live: they morph, they never switch (Peter, 2026-10-06,
+quoted in the header).** Amends D10's setup Material Enum. Fixed now:
+- **No restart, ever, on a material change.** Positions, velocities, ids, J, Jp and F
+  carry through. A point entering a model with shape memory takes its current shape
+  as its rest shape (F's stretch part reset to identity, rotation kept), so nothing
+  springs.
+- **Every point can hold material state.** The deformation array is bound in every
+  matter graph from P5a, water included; its spare `w` words are reserved for the morph
+  (section 3.1). Cost, stated honestly: 48 bytes more per point for water-only domains,
+  which are test scenes (D31).
+- **Mass is fixed per point through a morph.** Rest volume follows the new density
+  (`V0 = m / ρ`), so a morph from water (1000 kg/m³) to snow (400) expands the material
+  instead of changing its weight.
+- **Cost follows the live dial, not the worst case.** D4 already prices the step count
+  from live parameters each tick. While a morph is in progress, c is the larger of the
+  two materials'; at rest on one material, that material's alone. Frame time rises as
+  the performer pushes toward the stiffest material, so the stiffest point a show
+  reaches must fit the budget; P5e reports it.
+- **The gradual blend between two models is designed at P5e entry (blocking: the lead
+  with a consult; Peter approves).** Blending stress between models with different
+  plasticity has no settled answer here; P5e must not start until its blend rule is
+  written into this section.
+- **For D32's design, a requirement, not a stretch goal:** GPU FLIP water morphs live
+  and gradually into an MPM material and back. That makes D36's stiffness question
+  mandatory for that design.
+Rejected: a setup Material that restarts the simulation (D10's original form). Rejected:
+two domains cross-faded on screen — it fakes the morph and pays for two solvers.
+
 ## 3. Data model and atoms
 
 ### 3.1 Records
@@ -700,7 +732,7 @@ pub struct MatterGridNode {
 
 /// Deformation gradient for Goo, Snow and Lava (P5). 48 bytes.
 pub struct MatterDeformation {
-    pub f_x: [f32; 4], pub f_y: [f32; 4], pub f_z: [f32; 4], // F rows; w = 0
+    pub f_x: [f32; 4], pub f_y: [f32; 4], pub f_z: [f32; 4], // F rows; w reserved for the morph (D38, P5e)
 }
 
 /// The domain's material. 48 bytes, capacity 1 in v1.
@@ -1757,7 +1789,9 @@ Peter's look call recorded in a `decision` bead. Shared forbidden: a second solv
 damping to hide instability, new record types beyond `MatterDeformation`, constitutive
 maths outside the include, any pass that removes material points (D35).
 P5a also delivers `deformation_in`/`deformation` on `node.matter_state` (captured, seeded
-to identity by `matter_fill` for models with F, unwired for water). P5b reports frame time
+to identity by `matter_fill`, bound for every model including water, D38) and test
+`matter_material_change_without_restart` (Goo → Water → Goo on a live dial mid-run: ids,
+live count and positions continuous, no epoch change, no point springs on re-entry). P5b reports frame time
 at the hardening bound (D36).
 **Blocking for P5b and P5c, decided by Peter:** how Snow and Sand are drawn. They read as
 clumps and grains, and the Liquid Surface mesh smooths both away; the alternative is
@@ -1770,6 +1804,7 @@ Peter picks. Goo (P5a) and Lava (P5d) use the Liquid Surface mesh.
 | P5b Snow | hardening and plasticity branch | `matter_snow_ball_fractures` (clump count > 1 after impact); Jp stays in [0.6, 20] | throw a snowball at the floor on the snare |
 | P5c Sand | Drucker–Prager branch | `matter_sand_pile_angle` (settled slope within 5° of the expected angle) | flip gravity on a fader and watch a pile avalanche |
 | P5d Lava | Bingham branch with Melt scaling the yield stress | `matter_bingham_flow_stops_below_yield` | lava flows down a slope, crusts when Melt drops, flows again on the beat |
+| P5e Material morph | not briefed: the blend rule is written into D38 first (blocking, the lead with a consult, Peter approves). Then a Morph dial and target Material on the domain; per-point morph weight in the deformation array's spare words | `matter_morph_conserves_mass`; `matter_morph_round_trip` (Goo → Snow → Goo leaves no stored stress); frame time reported at the stiffest reachable point (D38) | ride a fader from goo to snow through the build and back on the drop |
 
 ### P6 — Whitewater
 
@@ -1847,7 +1882,7 @@ or in section 15.
 7. Executor repeat region re-implemented from the historical seam.
 8. Fixed 60 Hz ticks owned by the domain node; live caps ticks per frame and reports dropped time; export runs every tick; display one tick behind.
 9. Append-only births, order-preserving compaction, id-sorted frames; Points per Cell 8 by default, 27 optional.
-10. One material per domain in v1; constitutive branches; Melt is the beat-able phase change.
+10. One material per domain in v1; constitutive branches; Melt is the beat-able phase change. Material is live, never a restart (D38).
 11. Distance lattices built in `manifold-physics`, derived on the existing prepared geometry.
 12. Coupling: GPU body integration per substep, Box3D lockstep per tick, fenced readback, hold on miss.
 13. Forces and impulses through the existing routes; only non-finite state faults.
@@ -1861,6 +1896,7 @@ or in section 15.
 21. Material state never enters the published record; the material index lives in `affine_z.w`; deformation moves with its point (D34).
 22. Material points are permanent; only drains and faults remove them (D35).
 23. Live is 64³; c is the P-wave speed at the hardening bound; stiffness levers are Peter's (D36).
+24. Materials are always live and morph gradually; a change never restarts the sim; mass is fixed per point; cost follows the live dial; FLIP water morphing into an MPM material is a requirement of the unified design (D38, Peter).
 
 ## 15. Deferred, with triggers
 
@@ -1872,6 +1908,7 @@ or in section 15.
 | CPIC colored-distance-field compatibility (thin shells, cutting) | A collider thinner than 2 cells leaks in a show scene, or Peter wants cutting |
 | Real surface tension | Peter judges Cohesion wrong for a named look |
 | Mixed materials in one domain | The unified solver design (D32) is written, or a scene needs two materials that touch in one domain |
+| A spatial morph front (a freeze sweeping through the material) | P5e lands and Peter asks for a front instead of a whole-domain dial |
 | The unified solver on GPU FLIP's grid (D32) | P5a–P5d have shipped and GPU FLIP's water campaign has its acceptance; a named scene needs a material to meet water (dissolve, mix, honey into water) |
 | Implicit stress integration | D36's hardened Snow or a stiffer Goo misses the live budget and Peter rejects the ξ and Jp levers, or the unified design needs it |
 | More than one coupled tick per live frame (30 fps projects; export already runs every tick) | A coupled scene must play live at a project rate below 60 fps |
@@ -1902,3 +1939,4 @@ or in section 15.
 | R14 | Unverified constants and papers (Liveliness blend, snow, sand, lava, Martin & Moyce) | VERIFY-AT-IMPL markers | Transcribe at phase entry; a mismatch is an escalation |
 | R15 | Every Snow scene runs about 124 substeps at 64³, 3.6× water, because D4 prices the Jp bound without readback (D36) | P5b frame-time report | ξ and Jp floor are Peter's levers; implicit stress is deferred |
 | R16 | The split corotated Goo looks different from taichi_elements' Goo (D33) | P5a L2 capture | Peter's look call; never revert to the unsplit form |
+| R17 | Blending two models with different plasticity has no settled rule; a bad blend stores stress that snaps back (D38) | P5e's round-trip test | Designed with a consult before P5e; never shipped on a guessed rule |
