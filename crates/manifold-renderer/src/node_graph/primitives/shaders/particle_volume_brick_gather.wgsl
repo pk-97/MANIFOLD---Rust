@@ -61,9 +61,9 @@ var<workgroup> wg_scan: array<u32, 256>;
 // Exclusive prefix of the run, prefix[256] = run total. Before the first run
 // it is the union reduction's scratch.
 var<workgroup> wg_prefix: array<u32, 257>;
-var<workgroup> wg_center: array<vec4<f32>, CHUNK>;
-// diag xyz then off xyz per staged blob.
-var<workgroup> wg_shape: array<f32, CHUNK * 6u>;
+// Staged in the blob's own record shape so the term sees the generated
+// kernel's operands in the generated kernel's form.
+var<workgroup> wg_blob: array<Element, CHUNK>;
 // first xyz then last xyz per staged blob; unpacked so NaN/inf take the
 // generated kernel's float-to-int conversion.
 var<workgroup> wg_box: array<i32, CHUNK * 6u>;
@@ -130,14 +130,12 @@ fn cs_main(
     }
 
     var ijk = vec3<u32>(0u);
-    var p = vec3<f32>(0.0);
     // Inactive lanes: an empty window and identities for the union.
     var first_bin = vec3<i32>(2147483647);
     var last_bin = vec3<i32>(-2147483647 - 1);
     if inside {
         ijk = pv_ijk(idx, f.nodes);
-        p = pv_position(ijk, f);
-        let w = pv_window(p, f, params.cell_size, bins);
+        let w = pv_window(pv_position(ijk, f), f, params.cell_size, bins);
         first_bin = w.first_bin;
         last_bin = w.last_bin;
     }
@@ -207,13 +205,7 @@ fn cs_main(
                         let range = buf_cell_ranges[union_bin(run, lo, u0, w, z, bins)];
                         let blob = buf_blobs[range.start + (g - wg_prefix[lo])];
                         let b = pv_blob_box(blob.center_radius, f);
-                        wg_center[t] = blob.center_radius;
-                        wg_shape[t * 6u] = blob.shape_diag.x;
-                        wg_shape[t * 6u + 1u] = blob.shape_diag.y;
-                        wg_shape[t * 6u + 2u] = blob.shape_diag.z;
-                        wg_shape[t * 6u + 3u] = blob.shape_off.x;
-                        wg_shape[t * 6u + 4u] = blob.shape_off.y;
-                        wg_shape[t * 6u + 5u] = blob.shape_off.z;
+                        wg_blob[t] = blob;
                         wg_box[t * 6u] = b.first.x;
                         wg_box[t * 6u + 1u] = b.first.y;
                         wg_box[t * 6u + 2u] = b.first.z;
@@ -224,6 +216,9 @@ fn cs_main(
                     // Staged chunk complete before any lane reads it.
                     workgroupBarrier();
                     if lane_z {
+                        // The generated kernel's position expression, evaluated
+                        // where it is consumed.
+                        let p = pv_position(ijk, f);
                         let chunk_end = min(chunk + CHUNK, total);
                         for (var y = row_lo; y <= row_hi; y = y + 1) {
                             // The lane's row as union-rect flat bins, then
@@ -243,13 +238,11 @@ fn cs_main(
                                 var box: PvBox;
                                 box.first = vec3<i32>(wg_box[i * 6u], wg_box[i * 6u + 1u], wg_box[i * 6u + 2u]);
                                 box.last = vec3<i32>(wg_box[i * 6u + 3u], wg_box[i * 6u + 4u], wg_box[i * 6u + 5u]);
-                                let c = wg_center[i];
-                                if pv_box_rejects(c.w, ijk, box) {
+                                let blob = wg_blob[i];
+                                if pv_box_rejects(blob.center_radius.w, ijk, box) {
                                     continue;
                                 }
-                                let diag = vec3<f32>(wg_shape[i * 6u], wg_shape[i * 6u + 1u], wg_shape[i * 6u + 2u]);
-                                let off = vec3<f32>(wg_shape[i * 6u + 3u], wg_shape[i * 6u + 4u], wg_shape[i * 6u + 5u]);
-                                phi = min(phi, pv_blob_term(p, c, diag, off));
+                                phi = min(phi, pv_blob_term(p, blob.center_radius, blob.shape_diag.xyz, blob.shape_off.xyz));
                             }
                         }
                     }
@@ -264,7 +257,7 @@ fn cs_main(
     }
 
     if inside {
-        buf_levelset[idx] = pv_finish(phi, p, f, params.interior_len);
+        buf_levelset[idx] = pv_finish(phi, pv_position(ijk, f), f, params.interior_len);
     } else if stores {
         buf_levelset[idx] = f.band;
     }
