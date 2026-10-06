@@ -119,6 +119,8 @@ struct Appender {
     next: u64,
 }
 
+pub(super) use super::gpu_flip_preset::with_whitewater_axes;
+
 impl Appender {
     fn new(def: EffectGraphDef) -> Self {
         Self::from_value(serde_json::to_value(def).expect("def serialises"))
@@ -180,12 +182,16 @@ impl Appender {
     }
 }
 
-/// `render_def` of `scene` with its faces published, which for the Dam Break
+/// `render_def` of `scene`, which for the Dam Break
 /// at 64 is the shipped preset with its `node.whitewater_step`. The node's
 /// reports are read from the boundary's captured counts after the frame;
 /// the frame's particle count is probed as `count`.
 pub(super) fn whitewater_render_def(scene: WaterScene) -> EffectGraphDef {
-    let mut g = Appender::new(render_def(scene.with_faces()));
+    with_whitewater_reports(render_def(scene))
+}
+
+pub(super) fn with_whitewater_reports(def: EffectGraphDef) -> EffectGraphDef {
+    let mut g = Appender::new(def);
     let state = g.id("state");
     let counts = g.node("whitewater_reports", COUNTS_PROBE, json!({}));
     g.wire((state, "whitewater_counts"), counts, "counts");
@@ -646,7 +652,7 @@ impl Show {
     }
 
     /// Bytes of the storage the named node provides on `port`; none, 0.
-    fn provided_bytes(&self, name: &str, port: &str) -> u64 {
+    pub(super) fn provided_bytes(&self, name: &str, port: &str) -> u64 {
         let node = self.runtime.graph.nodes().find(|n| n.node_id.as_str() == name).unwrap_or_else(|| panic!("no node {name}"));
         node.node.provided_array_output(port).map_or(0, |buffer| buffer.size)
     }
@@ -685,7 +691,7 @@ fn gpu_flip_resolution_card_resizes_at_runtime() {
         unsafe { std::slice::from_raw_parts(ptr.cast::<FluidParticle>(), len) }
     }
     let scene = WaterScene::dam_break(64);
-    let def = whitewater_render_def(scene);
+    let def = whitewater_render_def(scene.with_faces());
     let spec = def
         .preset_metadata
         .as_ref()
@@ -1913,7 +1919,7 @@ mod emitter_oracle {
         let grid = GridBox::of(scene);
         let n = cells(grid);
         let face_cells = grid.face_cells as u32;
-        let mut def = serde_json::to_value(whitewater_render_def(scene)).expect("def serialises");
+        let mut def = serde_json::to_value(whitewater_render_def(scene.with_faces())).expect("def serialises");
         let node = def["nodes"].as_array_mut().expect("nodes").iter_mut().find(|n| n["nodeId"] == "whitewater").expect("the step");
         for (key, value) in params.as_object().expect("params") {
             node["params"][key] = value.clone();

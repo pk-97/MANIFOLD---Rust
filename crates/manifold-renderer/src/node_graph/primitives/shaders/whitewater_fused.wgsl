@@ -680,6 +680,11 @@ fn sw_emitter(m: u32, emitters: u32) -> u32 {
 }
 
 fn sw_face_len(axis: u32) -> u32 {
+    if LF_PACKED {
+        var dims = vec3<u32>(max(round(vec3<f32>(sp.face_cells_x, sp.face_cells_y, sp.face_cells_z)), vec3<f32>(0.0)));
+        dims[axis] += 1u;
+        return dims.x * dims.y * dims.z;
+    }
     if axis == 0u {
         return arrayLength(&buf_face_u);
     }
@@ -690,6 +695,10 @@ fn sw_face_len(axis: u32) -> u32 {
 }
 
 fn sw_face(axis: u32, i: u32) -> f32 {
+    if LF_PACKED {
+        let face_cells = vec3<u32>(max(round(vec3<f32>(sp.face_cells_x, sp.face_cells_y, sp.face_cells_z)), vec3<f32>(0.0)));
+        return ww_packed_face(axis, i, face_cells);
+    }
     if axis == 0u {
         return buf_face_u[i];
     }
@@ -982,6 +991,11 @@ const AW_DEAD: f32 = -1e6;
 const AW_ID_TOP: f32 = 255.0;
 
 fn aw_face_len(axis: u32) -> u32 {
+    if LF_PACKED {
+        var dims = vec3<u32>(max(round(vec3<f32>(lc.face_cells_x, lc.face_cells_y, lc.face_cells_z)), vec3<f32>(0.0)));
+        dims[axis] += 1u;
+        return dims.x * dims.y * dims.z;
+    }
     if axis == 0u {
         return arrayLength(&buf_face_u);
     }
@@ -998,6 +1012,10 @@ fn aw_face(axis: u32, i: u32, step: u32, cells: vec3<u32>) -> f32 {
         if axis == 0u { return buf_substep_u[at]; }
         if axis == 1u { return buf_substep_v[at]; }
         return buf_substep_w[at];
+    }
+    if LF_PACKED {
+        let face_cells = vec3<u32>(max(round(vec3<f32>(lc.face_cells_x, lc.face_cells_y, lc.face_cells_z)), vec3<f32>(0.0)));
+        return ww_packed_face(axis, i, face_cells);
     }
     if axis == 0u {
         return buf_face_u[i];
@@ -1343,6 +1361,11 @@ fn rt_borders_air(c: vec3<i32>, cells: vec3<u32>) -> bool {
 }
 
 fn rt_face_len(axis: u32) -> u32 {
+    if LF_PACKED {
+        var dims = vec3<u32>(max(round(vec3<f32>(lc.face_cells_x, lc.face_cells_y, lc.face_cells_z)), vec3<f32>(0.0)));
+        dims[axis] += 1u;
+        return dims.x * dims.y * dims.z;
+    }
     if axis == 0u {
         return arrayLength(&buf_face_u);
     }
@@ -1353,6 +1376,10 @@ fn rt_face_len(axis: u32) -> u32 {
 }
 
 fn rt_face(axis: u32, i: u32) -> f32 {
+    if LF_PACKED {
+        let face_cells = vec3<u32>(max(round(vec3<f32>(lc.face_cells_x, lc.face_cells_y, lc.face_cells_z)), vec3<f32>(0.0)));
+        return ww_packed_face(axis, i, face_cells);
+    }
     if axis == 0u {
         return buf_face_u[i];
     }
@@ -1503,4 +1530,85 @@ fn ww_lifecycle(@builtin(global_invocation_id) gid: vec3<u32>) {
     let retyped = ww_phase_retype(idx, lc.count, advected, lc.center_x, lc.center_y, lc.center_z, lc.size_x, lc.size_y, lc.size_z, lc.nodes_x, lc.nodes_y, lc.nodes_z, lc.face_cells_x, lc.face_cells_y, lc.face_cells_z);
     let aged = ww_phase_age(idx, lc.count, retyped, lc.dt, lc.bubble_lifetime_modifier, lc.foam_lifetime_modifier, lc.spray_lifetime_modifier);
     out_pool[idx] = aged;
+}
+
+// Logical axis index from lf_face_index, after its range check. Integer
+// reindexing only; the value rule is the adapter's own select.
+fn ww_packed_face(axis: u32, i: u32, face_cells: vec3<u32>) -> f32 {
+    var dims = face_cells;
+    dims[axis] += 1u;
+    let g = vec3<u32>(i % dims.x, (i / dims.x) % dims.y, i / (dims.x * dims.y));
+    let m = face_cells + vec3<u32>(1u);
+    let packed_index = g.x + m.x * (g.y + m.y * g.z);
+    if packed_index >= arrayLength(&buf_faces) { return 0.0; }
+    let s = buf_faces[packed_index];
+    return select(0.0, s.face_velocity[axis], s.face_weight[axis] > 0.0);
+}
+
+struct TurbulenceParams {
+    face_cells_x: f32,
+    face_cells_y: f32,
+    face_cells_z: f32,
+    nodes_x: f32,
+    nodes_y: f32,
+    nodes_z: f32,
+    cell_size: f32,
+    count: u32,
+}
+@group(0) @binding(0) var<uniform> tf: TurbulenceParams;
+@group(0) @binding(7) var<storage, read_write> out_turbulence: array<f32>;
+// FLIP Fluids turbulencefield.cpp:100-171 (MIT); THIRD_PARTY_NOTICES.md.
+// The asymmetric loop and excluded final boundary index are intentional.
+fn tf_face(c: vec3<i32>, axis: u32, pad: vec3<i32>, dims: vec3<u32>) -> f32 {
+    let i = lf_face_index(c, axis, pad, dims);
+    if i == LF_NONE { return 0.0; }
+    if LF_PACKED { return ww_packed_face(axis, i, dims); }
+    if axis == 0u { return buf_face_u[i]; }
+    if axis == 1u { return buf_face_v[i]; }
+    return buf_face_w[i];
+}
+
+fn tf_velocity(c: vec3<i32>, pad: vec3<i32>, dims: vec3<u32>) -> vec3<f32> {
+    var v = vec3<f32>(0.0);
+    for (var a = 0u; a < 3u; a++) {
+        var next = c; next[a]++;
+        v[a] = 0.5 * (tf_face(c, a, pad, dims) + tf_face(next, a, pad, dims));
+    }
+    return v;
+}
+
+fn ww_phase_turbulence(idx: u32, count: u32,
+    face_cells_x: f32, face_cells_y: f32, face_cells_z: f32,
+    nodes_x: f32, nodes_y: f32, nodes_z: f32, cell_size: f32,
+) -> f32 {
+    let cells = vec3<u32>(vec3<f32>(nodes_x, nodes_y, nodes_z)) - vec3<u32>(1u);
+    if idx >= cells.x * cells.y * cells.z || buf_distance[idx] >= 0.0 { return 0.0; }
+    let c = vec3<i32>(i32(idx % cells.x), i32((idx / cells.x) % cells.y), i32(idx / (cells.x * cells.y)));
+    let dims = vec3<u32>(vec3<f32>(face_cells_x, face_cells_y, face_cells_z));
+    let pad = lf_pad(cells, dims);
+    let vi = tf_velocity(c, pad, dims);
+    let lo = max(c - vec3<i32>(2), vec3<i32>(0));
+    let hi = min(c + vec3<i32>(2), vec3<i32>(cells) - vec3<i32>(1));
+    var t = 0.0;
+    for (var z = lo.z; z < hi.z; z++) {
+        for (var y = lo.y; y < hi.y; y++) {
+            for (var x = lo.x; x < hi.x; x++) {
+                let n = vec3<i32>(x, y, z);
+                let dv = vi - tf_velocity(n, pad, dims);
+                let speed = length(dv);
+                if speed < 1e-5 { continue; }
+                let delta = vec3<f32>(c - n) * cell_size;
+                let r = length(delta);
+                t += speed * (1.0 - dot(dv / speed, delta / r)) * (1.0 - r / (sqrt(12.0) * cell_size));
+            }
+        }
+    }
+    return t;
+}
+
+@compute @workgroup_size(256)
+fn ww_turbulence(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    if idx >= tf.count { return; }
+    out_turbulence[idx] = ww_phase_turbulence(idx, tf.count, tf.face_cells_x, tf.face_cells_y, tf.face_cells_z, tf.nodes_x, tf.nodes_y, tf.nodes_z, tf.cell_size);
 }

@@ -1,7 +1,7 @@
-//! P2/P3: copied text checks on the CPU, bitwise stage oracles on the GPU.
+//! P2–P4: copied text checks on the CPU, bitwise stage oracles on the GPU.
 use super::*;
 
-const ATOMS: [(&str, &str); 13] = [
+const ATOMS: [(&str, &str); 14] = [
     ("jitter", include_str!("shaders/jitter_particles_body.wgsl")),
     ("sample", include_str!("shaders/sample_faces_at_particles_body.wgsl")),
     ("velocity", include_str!("shaders/whitewater_emitter_velocity_body.wgsl")),
@@ -15,6 +15,7 @@ const ATOMS: [(&str, &str); 13] = [
     ("advect", include_str!("shaders/advect_whitewater_body.wgsl")),
     ("retype", include_str!("shaders/retype_whitewater_body.wgsl")),
     ("age", include_str!("shaders/age_whitewater_body.wgsl")),
+    ("turbulence", include_str!("shaders/turbulence_field_body.wgsl")),
 ];
 
 fn function<'a>(source: &'a str, name: &str) -> &'a str {
@@ -40,6 +41,25 @@ fn random_calls(source: &str) -> Vec<&str> {
     }).collect()
 }
 
+// Only the compile-time packed branches differ in the copied face helpers.
+// Strip those branches for the axis-oracle text check, keeping every other
+// helper, bounds branch and arithmetic expression under the existing check.
+fn axis_text(source: &str) -> String {
+    let mut text = source.to_owned();
+    while let Some(start) = text.find("    if LF_PACKED {") {
+        let body = start + text[start..].find('{').unwrap();
+        let mut depth = 0;
+        let mut end = body;
+        for (i, c) in text[body..].char_indices() {
+            match c { '{' => depth += 1, '}' => depth -= 1, _ => {} }
+            if depth == 0 { end = body + i + 1; break; }
+        }
+        if text.as_bytes().get(end) == Some(&b'\n') { end += 1; }
+        text.replace_range(start..end, "");
+    }
+    text
+}
+
 #[test]
 fn whitewater_rng_calls_are_the_atoms() {
     for (phase, atom) in ATOMS {
@@ -55,14 +75,14 @@ fn whitewater_rng_calls_are_the_atoms() {
             _ => original.to_owned(),
         };
         assert_eq!(fused, mapped.replacen("fn body(", &format!("fn {name}("), 1), "{phase}: body text changed");
-        if matches!(phase, "spawn" | "type" | "advect" | "retype" | "age") {
+        if matches!(phase, "spawn" | "type" | "advect" | "retype" | "age" | "turbulence") {
             let mapped = match phase {
                 "spawn" => atom.replace("Element2", "Spawn").replace("buf_solid", "buf_spawn_solid"),
                 "type" => atom.replace("Element", "Spawn"),
                 "advect" => atom.replace("Element", "Pool").replace("buf_solid", "buf_lifecycle_solid"),
                 _ => atom.replace("Element", "Pool"),
             }.replacen("fn body(", &format!("fn {name}("), 1);
-            assert!(WHITEWATER_FUSED_SHADER.contains(&mapped), "{phase}: copied helpers/constants changed");
+            assert!(axis_text(WHITEWATER_FUSED_SHADER).contains(&mapped), "{phase}: copied helpers/constants changed");
         }
     }
     assert_eq!(random_calls(WHITEWATER_FUSED_SHADER).len(), 10, "extra random draw outside the copied phases");
@@ -71,6 +91,7 @@ fn whitewater_rng_calls_are_the_atoms() {
         ("ww_dust", &["dust", "energy", "count"][..]),
         ("ww_spawn", &["spawn", "type"][..]),
         ("ww_lifecycle", &["advect", "retype", "age"][..]),
+        ("ww_turbulence", &["turbulence"][..]),
     ] {
         let calls: Vec<_> = function(WHITEWATER_FUSED_SHADER, entry).split("ww_phase_").skip(1)
             .map(|tail| tail.split('(').next().unwrap()).collect();
@@ -88,13 +109,100 @@ fn whitewater_fused_variants_validate_on_cpu() {
         assert_eq!(std::mem::size_of::<EmitParams>(), 144);
         assert_eq!(std::mem::size_of::<SpawnParams>(), 112);
         assert_eq!(std::mem::size_of::<LifecycleParams>(), 144);
-        assert_eq!(module.entry_points.len(), 4);
+        assert_eq!(std::mem::size_of::<TurbulenceParams>(), 32);
+        assert_eq!(module.entry_points.len(), 5);
         for entry in &module.entry_points { assert_eq!(entry.workgroup_size, [256, 1, 1]); }
     }
 }
 
 fn synthetic_faces() -> [Vec<f32>; 3] {
     std::array::from_fn(|a| vec![[2.0, 1.0, -0.5][a]; face_len([8; 3], a) as usize])
+}
+
+fn face_refusal(packed: bool, axes: [bool; 3], tick: bool, phrase: &str) {
+    use crate::node_graph::{FrameTime, MockBackend, NodeInputs, NodeOutputs, Slot};
+    use super::super::gpu_flip_preset::{render_def, WaterScene};
+    use super::super::gpu_flip_preset::with_whitewater_axes;
+    use crate::node_graph::liquid::extent::{check_preset_extents, ExtentError};
+    let backend = MockBackend::new();
+    let mut inputs = Vec::new();
+    if tick { inputs.push(("distance", Slot(0))); }
+    if packed { inputs.push(("faces", Slot(1))); }
+    for (axis, port) in ["face_u", "face_v", "face_w"].into_iter().enumerate() {
+        if axes[axis] { inputs.push((port, Slot(axis as u32 + 2))); }
+    }
+    let (mut scalars, mut cameras, mut lights, mut materials, mut transforms, mut atmospheres, mut modes, mut objects) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let outputs = NodeOutputs::new(&[], &backend, &mut scalars, &mut cameras, &mut lights,
+        &mut materials, &mut transforms, &mut atmospheres, &mut modes, &mut objects);
+    let params = ParamValues::default();
+    let mut errors = Vec::new();
+    let time = FrameTime { beats: manifold_core::Beats(0.0), seconds: manifold_core::Seconds(0.0), delta: manifold_core::Seconds(0.0), frame_count: 0 };
+    let mut ctx = EffectNodeContext::new(time, &params, NodeInputs::new(&inputs, &backend, &[]), outputs, None)
+        .with_errors(&mut errors);
+    WhitewaterStep::new().run(&mut ctx);
+    assert!(!ctx.gpu_accessed, "refusal must precede any GPU access");
+    assert_eq!(errors.len(), 1);
+    assert!(errors[0].contains(phrase), "{:?}", errors);
+
+    let mut def = with_whitewater_axes(render_def(WaterScene::dam_break(16)));
+    let whitewater = def.nodes.iter().find(|n| n.node_id.as_str() == "whitewater").unwrap().id;
+    let step = def.nodes.iter().find(|n| n.node_id.as_str() == "step").unwrap().id;
+    def.wires.retain(|w| {
+        if w.to_node != whitewater { return true; }
+        if !tick && w.to_port == "distance" { return false; }
+        ["face_u", "face_v", "face_w"].iter().position(|p| *p == w.to_port).is_none_or(|axis| axes[axis])
+    });
+    // An unused adapter would itself be an illegal reader outside the
+    // liquid region, masking the whitewater refusal under test.
+    let unused: Vec<_> = def.nodes.iter().filter(|n| ["whitewater_face_u", "whitewater_face_v", "whitewater_face_w"].iter()
+        .position(|name| *name == n.node_id.as_str()).is_some_and(|axis| !axes[axis])).map(|n| n.id).collect();
+    def.nodes.retain(|n| !unused.contains(&n.id));
+    def.wires.retain(|w| !unused.contains(&w.from_node) && !unused.contains(&w.to_node));
+    if packed {
+        def.wires.push(serde_json::from_value(serde_json::json!({"fromNode": step, "fromPort": "faces", "toNode": whitewater, "toPort": "faces"})).unwrap());
+    }
+    match check_preset_extents(&def, 16) {
+        Err(ExtentError::Refused { node, reason }) => {
+            assert!(node.contains("whitewater_step"), "{node}");
+            assert_eq!(reason, errors[0]);
+        }
+        other => panic!("expected {phrase} through extent rule, got {other:?}"),
+    }
+}
+
+#[test]
+fn whitewater_refuses_two_face_sources() {
+    for mask in 1..8 { face_refusal(true, std::array::from_fn(|a| mask & (1 << a) != 0), true, "not both"); }
+}
+
+#[test]
+fn whitewater_refuses_no_face_source() {
+    for tick in [false, true] { face_refusal(false, [false; 3], tick, "neither"); }
+}
+
+#[test]
+fn whitewater_refuses_partial_axes() {
+    for mask in 1..7 {
+        let axes = std::array::from_fn(|a| mask & (1 << a) != 0);
+        for tick in [false, true] { face_refusal(false, axes, tick, "partial axes"); }
+        face_refusal(true, axes, true, "not both");
+    }
+}
+
+#[test]
+fn whitewater_legacy_refuses_packed_faces() {
+    face_refusal(true, [false; 3], false, "legacy level-set interface");
+}
+
+#[test]
+fn whitewater_p4_production_does_not_dispatch_replaced_atoms() {
+    let source = include_str!("whitewater_step.rs");
+    for atom in ["JitterParticles", "SampleFacesAtParticles", "WhitewaterEmitterVelocity", "EnergyPotential",
+        "WavecrestPotential", "InsideTurbulencePotential", "TurbulenceEmissionCount", "DustPotential",
+        "SpawnWhitewater", "WhitewaterType", "AdvectWhitewater", "RetypeWhitewater", "AgeWhitewater", "TurbulenceField"] {
+        assert!(!source.contains(&format!("atom::<{atom}>")), "production dispatches {atom}");
+    }
 }
 
 fn synthetic_shape() -> StepShape {
@@ -130,7 +238,7 @@ mod gpu {
     use super::*;
     use super::super::super::liquid_surface_tests::read;
     use super::super::super::whitewater_pool_cpu::empty_slot;
-    use super::super::super::whitewater_scene_tests::{Show, whitewater_render_def, with_tick_probe};
+    use super::super::super::whitewater_scene_tests::{Show, whitewater_render_def, with_tick_probe, with_whitewater_axes};
     use super::super::super::gpu_flip_preset::WaterScene;
 
     const PORTS: [&str; 6] = ["proof_sampled", "proof_unscaled", "proof_energy", "proof_counts", "proof_dust_energy", "proof_dust_counts"];
@@ -144,10 +252,17 @@ mod gpu {
     }
 
     fn scene(dust: bool, particle_ports: &[&str]) {
+        for packed in [false, true] {
+            scene_variant(dust, particle_ports, packed);
+        }
+    }
+
+    fn scene_variant(dust: bool, particle_ports: &[&str], packed: bool) {
         let def = if dust { super::super::super::whitewater_golden_tests::all_emitters(None) }
             else { with_tick_probe(whitewater_render_def(WaterScene::dam_break(64))) };
-        let mut fused = Show::new_with_emitter_oracle(def.clone(), (96, 54), false, &[], Some(false));
-        let mut reference = Show::new_with_emitter_oracle(def, (96, 54), false, &[], Some(true));
+        let axes = with_whitewater_axes(def.clone());
+        let mut fused = Show::new_with_emitter_oracle(if packed { def } else { axes.clone() }, (96, 54), false, &[], Some(false));
+        let mut reference = Show::new_with_emitter_oracle(axes, (96, 54), false, &[], Some(true));
         fused.restart();
         reference.restart();
         const TICKS: usize = 120;
@@ -164,7 +279,10 @@ mod gpu {
             assert!(due == 0.0 || due == 1.0);
             if due == 0.0 { continue; }
             ticks += 1;
-            for port in &PORTS[..if dust { 6 } else { 4 }] {
+            let held_face_bytes = fused.provided_bytes("state", "faces");
+            if ticks == 1 { println!("P4 packed={packed} dust={dust}: liquid_state held faces = {held_face_bytes} bytes"); }
+            assert_eq!(held_face_bytes, 0, "held face grid must be unallocated");
+            for port in PORTS[..if dust { 6 } else { 4 }].iter().chain([&"proof_turbulence"]) {
                 if !dust && *port == "proof_unscaled" { continue; }
                 let a = fused.provided_all_bytes("whitewater", port);
                 let b = reference.provided_all_bytes("whitewater", port);
@@ -232,7 +350,7 @@ mod gpu {
         }
         fn inputs(&self) -> StepInputs<'_> {
             StepInputs { motion: None, particles: &self.particles, solid: &self.solid,
-                obstacle_source: Some(&self.source), faces: self.faces.each_ref(),
+                obstacle_source: Some(&self.source), faces: FaceSource::Axes(self.faces.each_ref()),
                 level_set: &self.distance, distance: Some(&self.distance) }
         }
     }
@@ -291,6 +409,11 @@ mod gpu {
     }
 
     #[test]
+    fn whitewater_fused_turbulence_matches_reference() {
+        scene(false, &["proof_turbulence"]);
+    }
+
+    #[test]
     fn whitewater_fused_emit_matches_reference() {
         scene(false, &[]);
         synthetic(false);
@@ -325,6 +448,82 @@ mod gpu {
 
     fn compare_buffers(a: &GpuBuffer, b: &GpuBuffer, tick: usize, name: &str) {
         equal_words(&read::<u32>(a, a.size as usize / 4), &read::<u32>(b, b.size as usize / 4), tick, name);
+    }
+
+    #[test]
+    fn whitewater_packed_faces_match_axis_arrays() {
+        super::super::super::whitewater_golden_tests::packed_scene_fingerprints();
+        let device = crate::test_device();
+        let fixture = Fixture::new(&device);
+        let shape = fixture.shape;
+        assert_eq!(face_offset(shape.nodes, shape.face_cells).unwrap(), [2; 3]);
+        // Nonzero values behind invalid weights must be masked, including
+        // negative weights. The fourth lanes and unused axis tails are poison.
+        let samples: Vec<FaceSample> = (0..9 * 9 * 9).map(|i| FaceSample {
+            velocity: [0.125 * (i % 7) as f32, -0.0625 * (i % 11) as f32, 0.03125 * (i % 13) as f32, 12345.0],
+            weight: std::array::from_fn(|a| [-1.0, 0.0, 0.25, 1.0][(i + a) % 4]),
+        }).collect();
+        let packed = shared(&device, &samples);
+        let axes: [GpuBuffer; 3] = std::array::from_fn(|axis| {
+            let mut dims = [8usize; 3]; dims[axis] += 1;
+            let values: Vec<f32> = (0..dims.iter().product()).map(|i| {
+                let g = [i % dims[0], (i / dims[0]) % dims[1], i / (dims[0] * dims[1])];
+                let sample = samples[g[0] + 9 * (g[1] + 9 * g[2])];
+                if sample.weight[axis] > 0.0 { sample.velocity[axis] } else { 0.0 }
+            }).collect();
+            shared(&device, &values)
+        });
+        let schedule = shared(&device, &[1.0f32 / 128.0, 0.0, 0.0, 0.0, 1.0 / 128.0, 0.0, 0.0, 0.0]);
+        let history: [GpuBuffer; 3] = std::array::from_fn(|axis| {
+            let values: Vec<f32> = (0..2).flat_map(|step| std::iter::repeat_n(
+                (step + 1) as f32 * [0.125, 0.0625, 0.03125][axis], face_len(shape.face_cells, axis) as usize)).collect();
+            shared(&device, &values)
+        });
+        let mut pool = vec![empty_slot(); 256];
+        for (i, p) in pool[..12].iter_mut().enumerate() {
+            *p = WhitewaterParticle { position_lifetime: [0.5, 0.5, 0.5, 7.0], kind: (i % 5) as u32,
+                id: i as u32, ..Default::default() };
+        }
+        let pool = shared(&device, &pool);
+        let state = shared(&device, &[12u32, 12, 0, 0, 0, 0, 0, 0]);
+        let mut stages = [Step::default(), Step::default(), Step::default()];
+        for stage in &mut stages { stage.reference.capture = true; }
+        stages[2].reference.enabled = true;
+        for tick in 0..3 {
+            let mut enc = device.create_encoder("P4 packed faces, padded mixed weights and substep history");
+            let mut captures = Vec::new();
+            for (variant, stage) in stages.iter_mut().enumerate() {
+                let mut inputs = fixture.inputs();
+                inputs.faces = if variant == 1 { FaceSource::Packed(&packed) } else { FaceSource::Axes(axes.each_ref()) };
+                inputs.motion = Some(MotionInputs { schedule: &schedule, faces: history.each_ref(), count: 2,
+                    fields: FieldBinding { nodes: [2; 3], spacing: 0.5, force_lattices: 0, impulse_tick: 0,
+                        first_tick: 0, forces: None, impulses: None }, tick_index: tick as f32,
+                    regions: None, shapes: None, atlas: None, region_count: 0 });
+                let mut frame = fixture.frame(true);
+                frame.ticks = 1;
+                frame.epoch += tick;
+                frame.preserve_foam = tick % 2 == 0;
+                stage.advance_tick(&mut GpuEncoder::new(&mut enc, &device), &frame, &inputs, &pool, &state, true).unwrap();
+                let mut row = snapshots(&device, &mut enc, stage);
+                row.push(copy_shared(&device, &mut enc, &stage.fields().turbulence));
+                for src in stage.reference.particle_snapshots.as_ref().unwrap() { row.push(copy_shared(&device, &mut enc, src)); }
+                for port in ["pool_out", "state_out", "counts_out", "foam_particles", "bubble_particles", "spray_particles", "dust_particles"] {
+                    row.push(copy_shared(&device, &mut enc, stage.tick_output(port).unwrap()));
+                }
+                captures.push(row);
+            }
+            enc.commit_and_wait_completed();
+            let names = ["proof_sampled", "proof_unscaled", "proof_energy", "proof_counts", "proof_dust_energy", "proof_dust_counts",
+                "proof_turbulence", "proof_typed", "proof_dust_typed", "proof_lifecycle", "pool_out", "state_out", "counts_out",
+                "foam_particles", "bubble_particles", "spray_particles", "dust_particles"];
+            for variant in [1, 2] {
+                for (i, name) in names.into_iter().enumerate() { compare_buffers(&captures[variant][i], &captures[0][i], tick as usize, name); }
+            }
+            assert!(read::<f32>(&captures[1][6], shape.cell_count() as usize).iter().any(|&v| v > 0.0), "mixed weights must exercise turbulence");
+            let lifecycle = read::<WhitewaterParticle>(&captures[1][9], 256);
+            assert!(lifecycle[1].velocity[0] > 0.0, "foam must read substep history beyond the stand-in length; bitwise values are checked against the axis oracle above");
+        }
+        for stage in &stages { assert_eq!(stage.reference.turbulence_dispatches.get(), 3); }
     }
 
     fn spawn_boundaries() {
@@ -363,7 +562,7 @@ mod gpu {
                         enc.copy_buffer_to_buffer(&air, &stage.fields().cells, air.size);
                         let mut inputs = fixture.inputs();
                         inputs.solid = &solid;
-                        inputs.faces = faces.each_ref();
+                        inputs.faces = FaceSource::Axes(faces.each_ref());
                         stage.spawn(&mut enc, &frame, &inputs, &surface, &offsets, &sampled, &energy, 3, dust);
                         captures.push(copy_shared(&device, &mut enc, &stage.reference.particle_snapshots.as_ref().unwrap()[usize::from(dust)]));
                     }
@@ -521,7 +720,7 @@ mod gpu {
         stage.pipelines.prepare(&device);
         stage.reference.enabled = true;
         stage.reference.reserve(&device, 1, 1).unwrap();
-        for pipeline in &stage.pipelines.fused {
+        for pipeline in stage.pipelines.fused.iter().flatten() {
             let max = pipeline.max_threads_per_threadgroup();
             println!("fused {}: max_threads={max:?}, dispatched=256", pipeline.label);
             // GPU proofs are Metal-only for now; Vulkan reports None here.

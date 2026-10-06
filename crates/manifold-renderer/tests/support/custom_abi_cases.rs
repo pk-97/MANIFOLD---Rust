@@ -216,6 +216,13 @@ pub const CASES: &[CustomAbiCase] = &[
     },
     CustomAbiCase {
         source: "whitewater_step.rs",
+        rust_struct: "TurbulenceParams",
+        shader: "shaders/whitewater_fused.wgsl",
+        shader_struct: "TurbulenceParams",
+        aliases: &[],
+    },
+    CustomAbiCase {
+        source: "whitewater_step.rs",
         rust_struct: "EmitParams",
         shader: "shaders/whitewater_fused.wgsl",
         shader_struct: "EmitParams",
