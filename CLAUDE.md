@@ -96,7 +96,7 @@ Pick the cheapest oracle that is reliable for the question's class; familiar is 
 - Text question → `rg`. Shape question (callers, impls, trait dispatch) → `ast-grep`, or `cargo check` after a deliberate rename. If renaming the symbol would break your search, you picked the wrong oracle.
 - Behavior question → run it with printlns and read the logs. Observe instead of deduce.
 - History question → `git log -S`, blame, the introducing diff.
-- Visual question → headless render to PNG and look. A green test is not a look.
+- Visual question → headless render to PNG and look. A green test is not a look. For any preset, the renderer exists: `target/debug/examples/fluid_capture OUT_DIR --preset <json>` via `scripts/gpu_queue.py`, prebuilt in main's target. Use it before building anything.
 - Computable question → write the three-line script; never eyeball arithmetic.
 - Mechanism question (hook, registry, config, codegen) → read the mechanism, never infer from its output.
 - Negative claim ("there is no X") → run the search that would find X first.

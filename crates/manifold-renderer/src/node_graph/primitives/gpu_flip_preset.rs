@@ -1009,7 +1009,7 @@ fn water_step(b: &mut Builder, scene: WaterScene, tick: (usize, usize)) -> usize
     b.wire((state, "tick_index"), step, "tick_index");
     b.wire((state, "retired_max_speed"), step, "retired_max_speed");
     b.wire((domain, "initial_obstacle_speed"), step, "initial_obstacle_speed");
-    b.wires(domain, step, &["bodies", "shapes", "atlas", "body_count", "dynamic_bodies", "closed_faces", "solve_level", "max_iterations", "sheet_fill_rate"]);
+    b.wires(domain, step, &["bodies", "contacts", "shapes", "atlas", "body_count", "dynamic_bodies", "closed_faces", "solve_level", "max_iterations", "sheet_fill_rate"]);
     b.wire((domain, "body_rows"), step, "rows");
     step
 }

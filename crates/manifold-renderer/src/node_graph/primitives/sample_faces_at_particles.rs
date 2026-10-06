@@ -78,7 +78,6 @@ crate::primitive! {
     depth_rule: Terminal,
     composition_notes: "After node.jitter_particles in the whitewater emitter chain. face_u/v/w and face_cells_x/y/z from a liquid frame's face grid; center/size from node.transform_components on the frame's grid_bounds (position and scale), nodes_x/y/z its grid_nodes_x/y/z. Feeds node.energy_potential, node.wavecrest_potential and node.emission_count.",
     examples: [],
-    picker: { label: "Sample Faces at Particles", category: Atom },
     summary: "Reads the liquid's flow at each particle, so whitewater knows how fast and which way the water there is moving.",
     category: Particles3D,
     role: Filter,

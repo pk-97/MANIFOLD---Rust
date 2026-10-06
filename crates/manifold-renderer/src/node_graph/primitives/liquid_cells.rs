@@ -46,7 +46,6 @@ crate::primitive! {
     depth_rule: Terminal,
     composition_notes: "distance from node.crossing_distance; solid and nodes_x/y/z from the particle frame's solid_b and grid_nodes_x/y/z. The whitewater's wavecrest and type rules read it.",
     examples: [],
-    picker: { label: "Liquid Cells", category: Atom },
     summary: "Sorts every grid cell into air, liquid or wall, the map whitewater uses to decide where spray and foam can form.",
     category: Particles3D,
     role: Filter,

@@ -3,8 +3,10 @@
 //! (docs/GPU_FLIP_PRESSURE_SOLVE.md section 8 (solids in the water),
 //! LIQUID_SOLVER_SEAM_DESIGN.md D7 (bodies inside the pressure solve)): each
 //! body that takes a reaction adds its six velocity unknowns to the solve as
-//! the engine's mass-aware PCG does, so the operator is L + ρh·G M⁻¹ Gᵀ
-//! (`scripts/mgpcg_reference.py --body`, `body_solve`). The passes, in
+//! the engine's mass-aware PCG does, so the operator is L + ρh·G M_c Gᵀ
+//! (`scripts/mgpcg_reference.py --body`, `body_solve`), M_c the body's
+//! mobility held on its supports (LIQUID_SOLVER_SEAM_DESIGN.md D16 (static
+//! contacts shape the prediction)): M⁻¹ for a free body. The passes, in
 //! `shaders/gpu_flip_bodies.wgsl`:
 //!
 //! - inside every conjugate gradient iteration, the bodies' share of the
@@ -76,6 +78,10 @@ pub(crate) struct Bodies<'a> {
     /// The solid face velocity, friction and owner codes (the step's `v`).
     pub solid: &'a GpuBuffer,
     pub bodies: &'a GpuBuffer,
+    /// Six vec4 per row of `bodies`: each body's packed response to an
+    /// impulse while it stays on its supports (D16), as `pose_bodies` writes
+    /// it.
+    pub mobility: &'a GpuBuffer,
 }
 
 #[repr(C)]
@@ -291,6 +297,7 @@ impl BodyPasses {
             buffer(12, tiles[0]),
             self.clock_binding(),
             buffer(9, reaction.unwrap_or(sums)),
+            buffer(16, bodies.mobility),
         ];
         let groups = [bodies.count.max(1), 1, 1];
         match gate {

@@ -180,7 +180,7 @@ mod tests {
         assert_eq!(after["projectVersion"], manifold_core::project::CURRENT_PROJECT_VERSION);
         let graph = &after["timeline"]["layers"][0]["genParams"]["graph"];
         let wires = graph["wires"].as_array().unwrap();
-        assert_eq!(wires.len(), 197 + 2, "this rung's wire and the Max Iterations rung's");
+        assert_eq!(wires.len(), 197 + 3, "this rung's wire, the Max Iterations rung's and the contacts rung's");
         assert!(wires.contains(&wire(&json!(0), &json!(6))));
         assert_eq!(*find(&graph["presetMetadata"]["bindings"], PARAM), binding("domain"));
         assert_eq!(*find(&graph["presetMetadata"]["params"], PARAM), card());
@@ -196,7 +196,12 @@ mod tests {
     #[test]
     fn the_bundled_def_and_graphs_without_flip_are_passthrough() {
         super::super::take_migration_notes();
-        let bundled: Value = serde_json::from_str(BUNDLED).unwrap();
+        // This rung upgrades ungrouped pre-F1a saves; keep the bundled
+        // contents in that shape while asserting a complete graph is untouched.
+        let authored = serde_json::from_str(BUNDLED).unwrap();
+        let flat = manifold_core::flatten::flatten_groups(&authored).unwrap();
+        // Read the serialized fixture like a saved graph, including float parsing.
+        let bundled: Value = serde_json::from_str(&serde_json::to_string(&flat).unwrap()).unwrap();
         let before = json!({"projectVersion": "1.16.0", "embeddedPresets": [{"def": bundled}],
             "timeline": {"layers": [{"genParams": {"graph": {"version": 3, "nodes": [{"id": 1, "typeId": "node.value"}], "wires": []}}}]}});
         let after = migrate_project(&before);

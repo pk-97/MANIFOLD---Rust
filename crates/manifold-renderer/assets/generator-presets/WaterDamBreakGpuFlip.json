@@ -2980,6 +2980,12 @@
           },
           {
             "fromNode": 0,
+            "fromPort": "contacts",
+            "toNode": 4,
+            "toPort": "contacts"
+          },
+          {
+            "fromNode": 0,
             "fromPort": "shapes",
             "toNode": 4,
             "toPort": "shapes"

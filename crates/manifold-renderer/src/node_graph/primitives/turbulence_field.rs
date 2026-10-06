@@ -53,7 +53,6 @@ crate::primitive! {
     depth_rule: Terminal,
     composition_notes: "Feed cell-centred liquid distance and seam MAC faces; inside_turbulence_potential samples this field for bubble emission. The field materializes before particle sampling.",
     examples: [],
-    picker: { label: "Turbulence Field", category: Atom },
     summary: "Measures local liquid agitation for whitewater emission.",
     category: Particles3D,
     role: Filter,

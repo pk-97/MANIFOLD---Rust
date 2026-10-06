@@ -238,7 +238,10 @@ mod tests {
         let graph: Value = serde_json::from_str(PETER_LAYER).unwrap();
         let mut root = json!({"timeline": {"layers": [{"genParams": {"params": null, "graph": graph}}]}});
         super::super::solve_level_card_v1180::migrate(&mut root);
-        root["timeline"]["layers"][0]["genParams"]["graph"].take()
+        let mut graph = root["timeline"]["layers"][0]["genParams"]["graph"].take();
+        // The later contacts rung's wire, so these tests see only this rung's edits.
+        graph["wires"].as_array_mut().unwrap().push(super::super::contacts_wire_v1200::wire(&json!(0), &json!(6)));
+        graph
     }
 
     fn project(graph: Value) -> Value {
@@ -273,7 +276,7 @@ mod tests {
         let before = project(graph);
         super::super::take_migration_notes();
         let after = migrate_project(&before);
-        assert_eq!(after["projectVersion"], "1.19.0");
+        assert_eq!(after["projectVersion"], manifold_core::project::CURRENT_PROJECT_VERSION);
         let graph = &after["timeline"]["layers"][0]["genParams"]["graph"];
         let wires = graph["wires"].as_array().unwrap();
         assert_eq!(wires.len(), wires_before + 1);
@@ -295,7 +298,12 @@ mod tests {
     #[test]
     fn the_bundled_def_and_graphs_without_flip_are_passthrough() {
         super::super::take_migration_notes();
-        let bundled: Value = serde_json::from_str(BUNDLED).unwrap();
+        // This rung upgrades ungrouped pre-F1a saves; keep the bundled
+        // contents in that shape while asserting a complete graph is untouched.
+        let authored = serde_json::from_str(BUNDLED).unwrap();
+        let flat = manifold_core::flatten::flatten_groups(&authored).unwrap();
+        // Read the serialized fixture like a saved graph, including float parsing.
+        let bundled: Value = serde_json::from_str(&serde_json::to_string(&flat).unwrap()).unwrap();
         let before = json!({"projectVersion": "1.18.0", "embeddedPresets": [{"def": bundled}],
             "timeline": {"layers": [{"genParams": {"graph": {"version": 3, "nodes": [{"id": 1, "typeId": "node.value"}], "wires": []}}}]}});
         let after = migrate_project(&before);
@@ -313,8 +321,7 @@ mod tests {
         let after = migrate_project(&before);
         assert_eq!(after["timeline"], before["timeline"]);
         let notes = super::super::take_migration_notes();
-        assert_eq!(notes.len(), 1);
-        assert!(notes[0].starts_with("Grouped: GPU FLIP domain or step sits inside a group; the Max Iterations"));
+        assert!(notes.iter().any(|n| n.starts_with("Grouped: GPU FLIP domain or step sits inside a group; the Max Iterations")), "{notes:?}");
     }
 
     /// An authored wire into the step's input and an existing card and

@@ -63,7 +63,6 @@ crate::primitive! {
     depth_rule: Terminal,
     composition_notes: "Combine wavecrest_potential and inside_turbulence_potential, then running_total and spawn_whitewater. FLIP classifies markers into mutually exclusive surface and inside sources before counting.",
     examples: [],
-    picker: { label: "Emission Count", category: Atom },
     summary: "Works out how many foam, spray and bubble particles each bit of breaking water throws off this frame.",
     category: Particles3D,
     role: Filter,

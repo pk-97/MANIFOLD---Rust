@@ -8,6 +8,8 @@
 
 use std::sync::Arc;
 
+use manifold_physics::coupled_motion::{SupportPoint, MAX_SUPPORT_POINTS};
+
 use crate::node_graph::channel_names::well_known;
 use crate::node_graph::fluid::TICK;
 use crate::node_graph::liquid::clock::{ClockFrame, LiquidClock};
@@ -65,6 +67,62 @@ pub const LIQUID_BODY_SPECS: &[ChannelSpec] = &[
 
 impl KnownItem for LiquidBody {
     const SPECS: &'static [ChannelSpec] = LIQUID_BODY_SPECS;
+}
+
+/// Vec4s a support point takes.
+pub const SUPPORT_POINT_VEC4S: usize = 5;
+
+/// Vec4s a body's support points take beside its row.
+pub const SUPPORT_VEC4S: usize = SUPPORT_POINT_VEC4S * MAX_SUPPORT_POINTS;
+
+/// Bytes a body's packed 6 × 6 mobility takes on the GPU (`pose_bodies`):
+/// six vec4, 21 floats used.
+pub const MOBILITY_BYTES: u64 = 96;
+
+/// A coupled body's touching support points at a tick's start
+/// (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` D16), five vec4 a point: the lever
+/// arm xyz and friction; the normal xyz out of the support and the patch;
+/// the support's velocity xyz and its spin about the normal; the patch
+/// centre's lever xyz; the support's velocity xyz there. The points run from
+/// the first; a zero normal ends them. 1280 bytes, beside the body's row.
+pub type BodySupports = [[f32; 4]; SUPPORT_VEC4S];
+
+/// `points` as [`BodySupports`], up to [`MAX_SUPPORT_POINTS`].
+pub fn pack_supports(points: &[SupportPoint]) -> BodySupports {
+    let mut out = [[0.0; 4]; SUPPORT_VEC4S];
+    for (point, slot) in points.iter().take(MAX_SUPPORT_POINTS).zip(out.chunks_exact_mut(SUPPORT_POINT_VEC4S)) {
+        let (l, n, v, c, u) = (point.lever, point.normal, point.support_velocity, point.patch_lever, point.patch_velocity);
+        slot.copy_from_slice(&[
+            [l[0], l[1], l[2], point.friction],
+            [n[0], n[1], n[2], point.patch as f32],
+            [v[0], v[1], v[2], point.support_spin],
+            [c[0], c[1], c[2], 0.0],
+            [u[0], u[1], u[2], 0.0],
+        ]);
+    }
+    out
+}
+
+/// The points of `supports` into `out`; returns how many.
+pub fn unpack_supports(supports: &BodySupports, out: &mut [SupportPoint; MAX_SUPPORT_POINTS]) -> usize {
+    let xyz = |v: [f32; 4]| [v[0], v[1], v[2]];
+    for (k, (slot, packed)) in out.iter_mut().zip(supports.chunks_exact(SUPPORT_POINT_VEC4S)).enumerate() {
+        let [l, n, v, c, u] = [packed[0], packed[1], packed[2], packed[3], packed[4]];
+        if n[0] == 0.0 && n[1] == 0.0 && n[2] == 0.0 {
+            return k;
+        }
+        *slot = SupportPoint {
+            lever: xyz(l),
+            friction: l[3],
+            normal: xyz(n),
+            patch: n[3] as u32,
+            support_velocity: xyz(v),
+            support_spin: v[3],
+            patch_lever: xyz(c),
+            patch_velocity: xyz(u),
+        };
+    }
+    MAX_SUPPORT_POINTS
 }
 
 /// A body-local signed-distance lattice in the domain's atlas. 48 bytes.
@@ -212,6 +270,9 @@ pub struct LiquidBodies {
     /// Bumped whenever `shapes` or `atlas` is rebuilt.
     pub version: u64,
     rows: Vec<LiquidBody>,
+    /// One per row of `rows` once [`Self::set_contacts`] ran; zero for a
+    /// collider.
+    contacts: Vec<BodySupports>,
     /// Inflow and Outflow rows, tick major, built beside `rows`.
     region_rows: Vec<LiquidBody>,
     warned_thin: bool,
@@ -536,6 +597,7 @@ impl LiquidBodies {
     /// first coupled body, or is −1. Run ticks' samples are pruned afterwards.
     pub fn rows(&mut self, first_tick: u64, ticks: u32, coupled: &[LiquidBody]) -> Result<&[LiquidBody], String> {
         self.rows.clear();
+        self.contacts.clear();
         self.region_rows.clear();
         debug_assert_eq!(coupled.len(), self.coupled.len(), "one row per prepared coupled body");
         let offset = self.roles.len() as f32;
@@ -579,6 +641,39 @@ impl LiquidBodies {
         }
         self.samples.prune_before(first_tick + u64::from(ticks));
         Ok(&self.rows)
+    }
+
+    /// Support points beside the last [`Self::rows`]: zero for each collider,
+    /// `coupled` for the coupled bodies of every tick.
+    pub fn set_contacts(&mut self, coupled: &[BodySupports]) -> Result<(), String> {
+        if coupled.len() != self.coupled.len() {
+            return Err("Liquid bodies: one contact set per coupled body".into());
+        }
+        let (count, colliders) = (self.count(), self.colliders());
+        self.contacts.clear();
+        for _ in 0..self.rows.len() / count.max(1) {
+            self.contacts.extend(std::iter::repeat_n([[0.0; 4]; SUPPORT_VEC4S], colliders));
+            self.contacts.extend_from_slice(coupled);
+        }
+        Ok(())
+    }
+
+    /// The support points the last [`Self::set_contacts`] produced.
+    pub fn last_contacts(&self) -> &[BodySupports] {
+        &self.contacts
+    }
+
+    /// Replace tick `tick`'s coupled support points with `coupled`, as
+    /// [`Self::set_coupled_rows`] does the rows; returns them and their byte
+    /// offset in [`Self::last_contacts`].
+    pub fn set_coupled_contacts(&mut self, tick: usize, coupled: &[BodySupports]) -> Result<(u64, &[BodySupports]), String> {
+        let start = tick * self.count() + self.colliders();
+        if coupled.len() != self.coupled.len() || start + coupled.len() > self.contacts.len() {
+            return Err(format!("Liquid coupling: tick {tick} has no coupled contacts this frame"));
+        }
+        let contacts = &mut self.contacts[start..start + coupled.len()];
+        contacts.copy_from_slice(coupled);
+        Ok(((start * std::mem::size_of::<BodySupports>()) as u64, contacts))
     }
 
     /// Replace tick `tick`'s coupled rows (counted from this frame's first

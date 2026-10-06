@@ -17,7 +17,12 @@ use super::liquid_fill::LiquidFill;
 use super::liquid_surface_tests::{Harness, params, read};
 use super::liquid_stats::with_stats_layout;
 use crate::node_graph::fluid_particles::{CellRange, FaceSample, FluidParticle};
-use crate::node_graph::liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape, body_pose_at, pack_distance_atlas};
+use crate::node_graph::liquid::bodies::{
+    BodySupports, LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape, SUPPORT_VEC4S, body_pose_at, pack_distance_atlas, pack_supports,
+    unpack_supports,
+};
+use crate::node_graph::liquid::coupling::coupled_start;
+use manifold_physics::coupled_motion::{Held, MAX_SUPPORT_POINTS, Mobility, SupportPoint, constrained_mobility, coupled_state_at};
 use crate::node_graph::liquid::fields::{FieldLattice, LIQUID_FIELD};
 use crate::node_graph::liquid::lattice::PADDING_NODES;
 use crate::node_graph::parameters::ParamValue;
@@ -1463,8 +1468,11 @@ fn gpu_flip_marker_motion_matches_native_wall_sequence_without_bodies() {
     }
 }
 
+/// D19: a particle under a body is never removed; only an open face's band
+/// removes water. The first sits at the centre of a solid block, where the
+/// distance has no gradient to climb, so it stays and counts as refused.
 #[test]
-fn gpu_flip_collision_removes_negative_body_phi_then_open_band_particles() {
+fn gpu_flip_collision_keeps_negative_body_phi_and_removes_open_band_particles() {
     let mut solid = wall_solid(N, H);
     let m = N.map(|n| n + 1);
     for z in 2..=3 {
@@ -1482,7 +1490,8 @@ fn gpu_flip_collision_removes_negative_body_phi_then_open_band_particles() {
     for entry in ["faces_to_particles", "narrow_move"] {
     for closed_faces in [62, 63] {
     let step = StepParams { body_count: 1, rows: 1, region_count: 0, closed_faces, particles: 2, ..lattice() };
-    let got: Vec<FluidParticle> = Pass::new()
+    let mut pass = Pass::new();
+    let got: Vec<FluidParticle> = pass
         .bind(2, &particles)
         .bind(3, &faces)
         .bind(9, &solid)
@@ -1493,17 +1502,19 @@ fn gpu_flip_collision_removes_negative_body_phi_then_open_band_particles() {
         .bind(22, &[0_u32; 4])
         .bind(36, &[LiquidBody::default()])
         .run(entry, &step, 19, particles.len(), particles.len());
-    assert_eq!(got[0].position_radius[3], 0.0, "negative body phi removes the stationary particle");
+    assert_eq!(got[0].position_radius, particles[0].position_radius, "{entry}: the particle under the body stays, live");
+    assert_eq!(pass.bound::<u32>(22, 2)[1], 1, "{entry}: its push-out is counted as refused");
     assert_eq!(got[1].position_radius[3], if closed_faces == 62 { 0.0 } else { 0.08 }, "only the open low-X band removes the second particle");
     }
     }
 }
 
 #[test]
-fn gpu_flip_collision_rejects_excessive_push_and_keeps_fallback() {
+fn gpu_flip_collision_refuses_excessive_push_and_keeps_the_particle() {
     // A plane solid whose exit is beyond the native five-cell push limit.
     // The last point also lies outside the safety AABB; its attempted clamp
     // stays inside this solid, so the final native fallback is the old point.
+    // D19: the particle is kept there, live, and counted as refused.
     let solid: Vec<f32> = (0..face_len()).map(|i| (pad_coords(i)[0] as f32 - 10.0) * H).collect();
     let particle = FluidParticle { position_radius: [MIN[0] + 0.05 * H, MIN[1] + 2.5 * H, MIN[2] + 2.5 * H, 0.08], id: 1, ..FluidParticle::default() };
     let faces = vec![FaceSample { velocity: [0.0, 1.0, 0.0, 0.0], weight: [1.0; 4] }; face_len()];
@@ -1517,7 +1528,7 @@ fn gpu_flip_collision_rejects_excessive_push_and_keeps_fallback() {
             .bind(36, &[LiquidBody::default()])
             .run(entry, &step, 19, 1, 1);
         assert_eq!(got[0].position_radius[..3], particle.position_radius[..3], "{entry}: last-position fallback");
-        assert_eq!(got[0].position_radius[3], 0.0, "{entry}: particle still inside solid is removed");
+        assert_eq!(got[0].position_radius[3], particle.position_radius[3], "{entry}: water is never deleted at a solid");
         assert_eq!(pass.bound::<u32>(22, 2)[1], 1, "{entry}: refused push is counted");
     }
 }
@@ -1898,13 +1909,65 @@ fn rotate(q: [f64; 4], v: [f64; 3]) -> [f64; 3] {
     std::array::from_fn(|i| v[i] + q[3] * t[i] + c[i])
 }
 
-/// The closest enabled body at x after `SOLID_TICK` (its row and signed
-/// distance), as liquid_shape_distance samples a lattice, past it adds the
-/// gap and scales along the trilinear slope; none when the walls (inset 0)
-/// are nearer. The margin is the gap
+/// A body at `SOLID_TICK` as pose_bodies poses it: position, rotation,
+/// linear and angular velocity, and its packed mobility on the supports it
+/// stays on.
+struct Posed {
+    position: [f32; 3],
+    rotation: [f32; 4],
+    linear: [f32; 3],
+    angular: [f32; 3],
+    mobility: Mobility,
+}
+
+/// Box3D's substep over a `SOLID_TICK` tick: the law's h.
+fn solid_h() -> f32 {
+    manifold_physics::coupled_motion::coupled_substep(manifold_physics::Seconds(f64::from(SOLID_TICK)))
+}
+
+/// Each body of `solids` at `SOLID_TICK`: a dynamic one by the coupled motion
+/// law (`manifold_physics::coupled_motion`, the CPU twin) under its reaction
+/// so far (8 floats a body) and its support points (one set a body); any
+/// other at its own velocity (`body_pose_at`).
+fn posed(solids: &Solids, reaction: &[f32], contacts: &[BodySupports]) -> Vec<Posed> {
+    let xyz = |v: [f32; 4]| [v[0], v[1], v[2]];
+    solids
+        .bodies
+        .iter()
+        .enumerate()
+        .map(|(row, body)| {
+            let start = coupled_start(body);
+            let mut points = [SupportPoint::default(); MAX_SUPPORT_POINTS];
+            let kept = unpack_supports(&contacts[row], &mut points);
+            let points = &points[..kept];
+            if body.position_inv_mass[3] > 0.0 {
+                let push = &reaction[8 * row..8 * row + 8];
+                let s = coupled_state_at(
+                    &start,
+                    points,
+                    [push[0], push[1], push[2]],
+                    [push[4], push[5], push[6]],
+                    SOLID_TICK,
+                    solid_h(),
+                );
+                let mobility = constrained_mobility(&start, points, s.held);
+                Posed { position: s.position, rotation: s.rotation, linear: s.linear_velocity, angular: s.angular_velocity, mobility }
+            } else {
+                let (position, rotation) = body_pose_at(body, SOLID_TICK);
+                let mobility = constrained_mobility(&start, points, Held::default());
+                Posed { position, rotation, linear: xyz(body.linear_velocity), angular: xyz(body.angular_velocity), mobility }
+            }
+        })
+        .collect()
+}
+
+/// The closest enabled body at x posed as `poses` holds them (its row and
+/// signed distance), as liquid_shape_distance samples a lattice, past it adds
+/// the gap and scales along the trilinear slope; none when the walls (inset
+/// 0) are nearer. The margin is the gap
 /// to the runner-up, body or walls, so the fixture can show no f32 rounding
 /// decides either.
-fn closest(solids: &Solids, x: [f64; 3]) -> (Option<usize>, f64) {
+fn closest(solids: &Solids, poses: &[Posed], x: [f64; 3]) -> (Option<usize>, f64) {
     let mut best: Option<(usize, f64)> = None;
     let mut gaps = Vec::new();
     for (row, body) in solids.bodies.iter().enumerate() {
@@ -1913,7 +1976,7 @@ fn closest(solids: &Solids, x: [f64; 3]) -> (Option<usize>, f64) {
             continue;
         }
         let shape = solids.shapes[shape_index as usize];
-        let (position, q) = body_pose_at(body, SOLID_TICK);
+        let (position, q) = (poses[row].position, poses[row].rotation);
         let inverse = [-f64::from(q[0]), -f64::from(q[1]), -f64::from(q[2]), f64::from(q[3])];
         let local = rotate(inverse, std::array::from_fn(|i| x[i] - f64::from(position[i])));
         let dims = [shape.dims_x, shape.dims_y, shape.dims_z].map(|d| d as usize);
@@ -1957,32 +2020,11 @@ fn closest(solids: &Solids, x: [f64; 3]) -> (Option<usize>, f64) {
     (best.filter(|&(_, d)| d <= walls).map(|(row, _)| row), gap)
 }
 
-/// The velocity and spin a face sees on body `row`: as uploaded when
-/// prescribed; when dynamic, predicted over `SOLID_TICK` plus M⁻¹ times the
-/// reaction so far (8 floats per body: linear, 0, angular, 0).
-fn moving_velocity(solids: &Solids, row: usize, reaction: &[f32]) -> ([f64; 3], [f64; 3]) {
-    let body = &solids.bodies[row];
-    let mut v: [f64; 3] = std::array::from_fn(|a| f64::from(body.linear_velocity[a]));
-    let mut w: [f64; 3] = std::array::from_fn(|a| f64::from(body.angular_velocity[a]));
-    if body.position_inv_mass[3] > 0.0 {
-        let t = f64::from(SOLID_TICK);
-        let spin = [body.inv_inertia_x[3], body.inv_inertia_y[3], body.inv_inertia_z[3]];
-        let inertia = [body.inv_inertia_x, body.inv_inertia_y, body.inv_inertia_z];
-        let push = &reaction[8 * row..8 * row + 8];
-        for a in 0..3 {
-            v[a] += f64::from(body.accel_shape[a]) * t + f64::from(body.position_inv_mass[3]) * f64::from(push[a]);
-            let turn: f64 = (0..3).map(|c| f64::from(inertia[a][c]) * f64::from(push[4 + c])).sum();
-            w[a] += f64::from(spin[a]) * t + turn;
-        }
-    }
-    (v, w)
-}
-
 /// The step's solid face velocity in f64: the closest body's rigid velocity
 /// at each cut inner face's centre, the mean friction at its four corners,
 /// and the owner code Σ (body + 1)·256^axis in velocity w. Also the smallest
 /// margin any query had (see `closest`) and how many faces a body moved.
-fn cpu_solid_face_velocity(open: &[f64], solids: &Solids, reaction: &[f32]) -> (Vec<f64>, f64, usize) {
+fn cpu_solid_face_velocity(open: &[f64], solids: &Solids, poses: &[Posed]) -> (Vec<f64>, f64, usize) {
     let n = SOLID_N;
     let m = n.map(|v| v + 1);
     let h = f64::from(SOLID_H);
@@ -2004,12 +2046,12 @@ fn cpu_solid_face_velocity(open: &[f64], solids: &Solids, reaction: &[f32]) -> (
             out[i * FACE_FLOATS + 7] += f64::from(1u32 << a);
             let mut centre: [f64; 3] = std::array::from_fn(|b| min[b] + (p[b] as f64 + 0.5) * h);
             centre[a] = min[a] + p[a] as f64 * h;
-            let (row, clear) = closest(solids, centre);
+            let (row, clear) = closest(solids, poses, centre);
             margin = margin.min(clear);
             if let Some(row) = row {
-                let (position, _) = body_pose_at(&solids.bodies[row], SOLID_TICK);
-                let r: [f64; 3] = std::array::from_fn(|b| centre[b] - f64::from(position[b]));
-                let (v, w) = moving_velocity(solids, row, reaction);
+                let pose = &poses[row];
+                let r: [f64; 3] = std::array::from_fn(|b| centre[b] - f64::from(pose.position[b]));
+                let (v, w) = (pose.linear.map(f64::from), pose.angular.map(f64::from));
                 let spin = [w[1] * r[2] - w[2] * r[1], w[2] * r[0] - w[0] * r[2], w[0] * r[1] - w[1] * r[0]];
                 out[i * FACE_FLOATS + a] = v[a] + spin[a];
                 out[i * FACE_FLOATS + 3] += (row + 1) as f64 * 256_f64.powi(a as i32);
@@ -2025,7 +2067,7 @@ fn cpu_solid_face_velocity(open: &[f64], solids: &Solids, reaction: &[f32]) -> (
                 let mut q = p;
                 q[b] += k & 1;
                 q[c] += (k >> 1) & 1;
-                let (row, clear) = closest(solids, std::array::from_fn(|d| min[d] + q[d] as f64 * h));
+                let (row, clear) = closest(solids, poses, std::array::from_fn(|d| min[d] + q[d] as f64 * h));
                 margin = margin.min(clear);
                 if let Some(row) = row {
                     friction += f64::from(solids.bodies[row].linear_velocity[3]);
@@ -2037,15 +2079,12 @@ fn cpu_solid_face_velocity(open: &[f64], solids: &Solids, reaction: &[f32]) -> (
     (out, margin, moved)
 }
 
-/// The step's solid face velocity against the rigid velocity, corner
-/// friction and owner codes computed here, on random cut faces under two
-/// overlapping turning bodies, one dynamic with a reaction so far. The
-/// bodies are a second tick's rows, behind a first tick's that would move
-/// every face differently.
-#[test]
-fn gpu_flip_solid_face_velocity_matches_cpu() {
-    let solids = solids();
-    let open = random_open_faces(SOLID_N, 0x5fa, 0);
+/// The bodies of `solids` as a second tick's rows behind a first tick's that
+/// would pose every body differently, a reaction so far, and support points
+/// for both ticks' rows (the second tick's dynamic body on a floor's four
+/// corners and against a slanted wall; the first tick's under a ceiling):
+/// rows, reaction, supports, and the step's params.
+fn two_tick_bodies(solids: &Solids) -> (Vec<LiquidBody>, Vec<f32>, Vec<BodySupports>, StepParams) {
     let count = solids.bodies.len();
     let reaction: Vec<f32> = random_values(8 * count, 0x5fb).iter().map(|v| v * 0.4).collect();
     let mut rows = solids.bodies.clone();
@@ -2054,22 +2093,91 @@ fn gpu_flip_solid_face_velocity_matches_cpu() {
         body.position_inv_mass[1] -= 0.2;
     }
     rows.extend(solids.bodies.iter().copied());
+    let point = |lever, normal, patch, patch_lever| SupportPoint { lever, normal, friction: 0.6, patch, patch_lever, ..SupportPoint::default() };
+    let mut contacts = vec![[[0.0f32; 4]; SUPPORT_VEC4S]; rows.len()];
+    let ceiling = [0.0, 0.15, 0.0];
+    contacts[1] = pack_supports(&[point(ceiling, [0.0, -1.0, 0.0], 0, ceiling)]);
+    let floor = [[0.1, -0.15, 0.1], [-0.1, -0.15, 0.1], [-0.1, -0.15, -0.1], [0.1, -0.15, -0.1]];
+    let mut held: Vec<SupportPoint> = floor.iter().map(|&lever| point(lever, [0.0, 1.0, 0.0], 0, [0.0, -0.15, 0.0])).collect();
+    let wall = [0.09, 0.0, -0.12];
+    held.push(point(wall, [-0.6, 0.0, 0.8], 1, wall));
+    contacts[count + 1] = pack_supports(&held);
     let step = StepParams {
         body_count: count as i32,
         rows: rows.len() as i32,
         tick_seconds: SOLID_TICK,
         shapes_len: solids.shapes.len() as u32,
+        coupled_h: solid_h(),
         ..solid_lattice()
     };
-    let got: Vec<f32> = Pass::new()
-        .bind(10, &open)
-        .bind(14, &rows)
-        .bind(15, &solids.shapes)
-        .bind(16, &solids.atlas)
-        .bind(21, &reaction)
-        .run("solid_face_velocity", &step, 4, face_grid_len(SOLID_N), solid_records());
+    (rows, reaction, contacts, step)
+}
+
+/// I18 (LIQUID_SOLVER_SEAM_DESIGN.md D15): pose_bodies poses each body of the
+/// tick as the CPU law does: the dynamic body by `coupled_state_at` with a
+/// floor and a slanted wall cutting its predicted fall, the prescribed ones
+/// at their own velocity, every other field kept; and each body's mobility
+/// as `constrained_mobility` gives it on the supports the law leaves it on.
+#[test]
+fn gpu_flip_pose_bodies_matches_coupled_motion() {
+    let solids = solids();
+    let (rows, reaction, contacts, step) = two_tick_bodies(&solids);
+    let count = solids.bodies.len();
+    let mut pass = Pass::new();
+    pass.bind(14, &rows).bind(21, &reaction).bind(49, &contacts).bind(50, &vec![[0.0f32; 4]; 6 * count]);
+    let got: Vec<LiquidBody> = pass.run("pose_bodies", &step, 48, count, count);
+    let mobility: Vec<[f32; 4]> = pass.bound(50, 6 * count);
+    let want = posed(&solids, &reaction, &contacts[count..]);
+    let unprojected = posed(&solids, &reaction, &vec![[[0.0; 4]; SUPPORT_VEC4S]; count]);
+    assert!(
+        (want[1].linear[1] - unprojected[1].linear[1]).abs() > 0.1,
+        "the floor cuts the dynamic body's predicted fall: {} against {}",
+        want[1].linear[1],
+        unprojected[1].linear[1]
+    );
+    for (b, (g, w)) in got.iter().zip(&want).enumerate() {
+        let near = |a: &[f32], e: &[f32], what: &str| {
+            for (x, y) in a.iter().zip(e) {
+                assert!((x - y).abs() <= 2e-6 * (1.0 + y.abs()), "body {b} {what}: {a:?} against {e:?}");
+            }
+        };
+        near(&g.position_inv_mass[..3], &w.position, "position");
+        near(&g.rotation, &w.rotation, "rotation");
+        near(&g.linear_velocity[..3], &w.linear, "linear velocity");
+        near(&g.angular_velocity[..3], &w.angular, "angular velocity");
+        let scale = w.mobility.iter().fold(1.0f32, |a, b| a.max(b.abs()));
+        let packed: Vec<f32> = mobility[6 * b..6 * b + 6].iter().flatten().copied().collect();
+        for (k, (x, y)) in packed.iter().zip(&w.mobility).enumerate() {
+            assert!((x - y).abs() <= 1e-5 * scale, "body {b} mobility {k}: {x} against {y}");
+        }
+        let body = &solids.bodies[b];
+        assert_eq!(
+            (g.position_inv_mass[3], g.linear_velocity[3], g.angular_velocity[3], g.inv_inertia_x, g.inv_inertia_y, g.inv_inertia_z, g.accel_shape),
+            (body.position_inv_mass[3], body.linear_velocity[3], body.angular_velocity[3], body.inv_inertia_x, body.inv_inertia_y, body.inv_inertia_z, body.accel_shape),
+            "body {b} keeps its other fields"
+        );
+    }
+}
+
+/// The step's solid face velocity against the rigid velocity, corner
+/// friction and owner codes computed here, on random cut faces under two
+/// overlapping turning bodies, one dynamic with a reaction so far and two
+/// contact normals, posed by pose_bodies. The bodies are a second tick's
+/// rows, behind a first tick's that would move every face differently.
+#[test]
+fn gpu_flip_solid_face_velocity_matches_cpu() {
+    let solids = solids();
+    let open = random_open_faces(SOLID_N, 0x5fa, 0);
+    let count = solids.bodies.len();
+    let (rows, reaction, contacts, step) = two_tick_bodies(&solids);
+    let mut pass = Pass::new();
+    pass.bind(10, &open).bind(14, &rows).bind(15, &solids.shapes).bind(16, &solids.atlas).bind(21, &reaction).bind(49, &contacts);
+    pass.bind(50, &vec![[0.0f32; 4]; 6 * count]);
+    let _: Vec<LiquidBody> = pass.run("pose_bodies", &step, 48, count, count);
+    let got: Vec<f32> = pass.run("solid_face_velocity", &step, 4, face_grid_len(SOLID_N), solid_records());
     let open64: Vec<f64> = open.iter().map(|&v| f64::from(v)).collect();
-    let (want, margin, moved) = cpu_solid_face_velocity(&open64, &solids, &reaction);
+    let poses = posed(&solids, &reaction, &contacts[count..]);
+    let (want, margin, moved) = cpu_solid_face_velocity(&open64, &solids, &poses);
     assert!(margin > 1.0e-4, "no query sits on a lattice edge or a tie between bodies: {margin}");
     assert!(moved > 10, "the bodies reach cut faces: {moved}");
     let frictions: Vec<f64> = want.chunks(FACE_FLOATS).flat_map(|r| r[4..7].to_vec()).collect();

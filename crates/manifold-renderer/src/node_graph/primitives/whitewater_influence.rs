@@ -29,7 +29,7 @@ crate::primitive! {
     ],
     depth_rule: Terminal,
     composition_notes: "Carry out into values on the next liquid tick. Source is whitewater_obstacle_source or equivalent nearest-object metadata. Sample by emitter cell index, without interpolation, when counting emissions.",
-    examples: [], picker: { label: "Whitewater Influence", category: Atom },
+    examples: [],
     summary: "Decays obstacle influence and reapplies solid sources.", category: Particles3D, role: Filter,
     aliases: ["obstacle influence", "whitewater influence"],
     fusion_kind: Pointwise,
