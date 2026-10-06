@@ -90,6 +90,18 @@ fn uniforms(cam: &Camera) -> CameraSkyUniforms {
 }
 
 impl Primitive for CameraSky {
+    /// A view through the camera, so always canvas-sized. The sky input is a
+    /// scene resource: without this the plan's max-of-input-dims default sizes
+    /// the output to the HDRI (2:1), and the body's aspect from its own dims
+    /// no longer matches the frame's (BUG-140 class).
+    fn output_canvas_scale(
+        &self,
+        _port: &str,
+        _params: &crate::node_graph::effect_node::ParamValues,
+    ) -> Option<(u32, u32)> {
+        Some((1, 1))
+    }
+
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         let cam = ctx.inputs.camera("camera").unwrap_or_else(Camera::default_perspective);
         let Some(sky) = ctx.inputs.texture_2d("sky") else {
@@ -116,6 +128,37 @@ impl Primitive for CameraSky {
             out,
             "node.camera_sky",
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CameraSky;
+    use crate::node_graph::execution_plan::compile;
+    use crate::node_graph::graph::Graph;
+    use crate::node_graph::parameters::ParamValue;
+    use crate::node_graph::primitives::{FreeCamera, HdriSource};
+    use crate::node_graph::FinalOutput;
+
+    /// A 2:1 HDRI feeding the sky must not size it: the output is the frame.
+    #[test]
+    fn camera_sky_is_canvas_sized_whatever_the_hdri() {
+        let mut g = Graph::new();
+        let hdri = g.add_node(Box::new(HdriSource::new()));
+        let camera = g.add_node(Box::new(FreeCamera::new()));
+        let sky = g.add_node(Box::new(CameraSky::new()));
+        let out = g.add_node(Box::new(FinalOutput::new()));
+        g.set_param(hdri, "width", ParamValue::Float(4096.0)).unwrap();
+        g.set_param(hdri, "height", ParamValue::Float(2048.0)).unwrap();
+        g.connect((hdri, "out"), (sky, "sky")).unwrap();
+        g.connect((camera, "out"), (sky, "camera")).unwrap();
+        g.connect((sky, "out"), (out, "in")).unwrap();
+        let plan = compile(&g).unwrap();
+        let hdri_out = plan.steps().iter().find(|s| s.node == hdri).unwrap().outputs[0].1;
+        assert_eq!(plan.resource_dims(hdri_out), Some((4096, 2048)), "the HDRI is concrete");
+        let sky_out = plan.steps().iter().find(|s| s.node == sky).unwrap().outputs[0].1;
+        assert_eq!(plan.resource_dims(sky_out), None);
+        assert_eq!(plan.resource_canvas_scale(sky_out), Some((1, 1)));
     }
 }
 

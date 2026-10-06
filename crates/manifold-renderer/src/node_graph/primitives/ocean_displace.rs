@@ -15,6 +15,14 @@ use super::standalone_pipeline::{active_elements, standalone_pipeline};
 
 pub(crate) const CASCADES: usize = 3;
 
+/// Each cascade's Size, Tile Size, Fade Start and Fade End param names, so
+/// the per-frame read builds no strings.
+const CASCADE_PARAMS: [[&str; 4]; CASCADES] = [
+    ["size_0", "tile_size_0", "fade_start_0", "fade_end_0"],
+    ["size_1", "tile_size_1", "fade_start_1", "fade_end_1"],
+    ["size_2", "tile_size_2", "fade_start_2", "fade_end_2"],
+];
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct Cascade {
     pub size: i32,
@@ -165,16 +173,17 @@ impl Primitive for OceanDisplace {
         let defaults = [(1000.0, 5000.0, 15000.0), (167.0, 1000.0, 3000.0), (27.0, 150.0, 400.0)];
         let mut cascades = [Cascade::default(); CASCADES];
         for (c, (tile, start, end)) in defaults.into_iter().enumerate() {
-            let size = param(ctx, &format!("size_{c}"), 256.0).round();
+            let [size_name, tile_name, start_name, end_name] = CASCADE_PARAMS[c];
+            let size = param(ctx, size_name, 256.0).round();
             if !(16.0..=1024.0).contains(&size) || !(size as u32).is_power_of_two() {
                 ctx.error(format!("Ocean Displace: cascade {c} Size must be a power of two in 16..1024 (got {size})"));
                 return;
             }
             cascades[c] = Cascade {
                 size: size as i32,
-                tile_size: param(ctx, &format!("tile_size_{c}"), tile),
-                fade_start: param(ctx, &format!("fade_start_{c}"), start),
-                fade_end: param(ctx, &format!("fade_end_{c}"), end),
+                tile_size: param(ctx, tile_name, tile),
+                fade_start: param(ctx, start_name, start),
+                fade_end: param(ctx, end_name, end),
             };
         }
         let (Some(mesh), Some(f0), Some(f1), Some(f2), Some(out)) = (
