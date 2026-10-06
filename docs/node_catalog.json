@@ -14702,6 +14702,18 @@
           "type": "f32"
         },
         {
+          "name": "handover_position",
+          "type": "f32"
+        },
+        {
+          "name": "handover_velocity",
+          "type": "f32"
+        },
+        {
+          "name": "handover_rotation",
+          "type": "f32"
+        },
+        {
           "name": "first_tick",
           "type": "f32"
         },
@@ -14776,6 +14788,11 @@
         {
           "capacity": "fixed:1",
           "name": "reaction",
+          "type": "Array"
+        },
+        {
+          "capacity": "fixed:1",
+          "name": "contacts",
           "type": "Array"
         },
         {
@@ -15130,6 +15147,11 @@
         },
         {
           "name": "reaction",
+          "required": false,
+          "type": "Array"
+        },
+        {
+          "name": "contacts",
           "required": false,
           "type": "Array"
         },
