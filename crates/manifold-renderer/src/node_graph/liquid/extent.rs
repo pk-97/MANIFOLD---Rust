@@ -1827,7 +1827,7 @@ fn whitewater_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     for port in ["foam_particles", "bubble_particles", "spray_particles", "dust_particles"] {
         x.provide(port, shape.population_bytes());
     }
-    x.hold(shape.held_bytes(x.items("particles").unwrap_or(0)));
+    x.hold(shape.held_bytes(x.items("particles").unwrap_or(0), x.input("distance").is_some()));
     for (axis, port) in ["face_u", "face_v", "face_w"].into_iter().enumerate() {
         x.covers(port, shape.face_bytes(axis))?;
     }

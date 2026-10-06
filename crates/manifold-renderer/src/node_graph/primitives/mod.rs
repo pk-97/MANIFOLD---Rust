@@ -446,6 +446,8 @@ mod gpu_flip_tile_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod whitewater_scene_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
+mod whitewater_golden_tests;
+#[cfg(all(test, feature = "gpu-proofs"))]
 mod liquid_prepare_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 pub(crate) mod gpu_flip_volume;
