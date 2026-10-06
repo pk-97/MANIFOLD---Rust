@@ -1,12 +1,22 @@
-# GPU MLS-MPM Solver — live liquid (then goo, snow, sand, lava) as GPU atoms writing particle frames
+# GPU MLS-MPM Solver — goo, snow, sand and lava as GPU atoms, built for the unified solver
 
-<!-- index: Replaces CPU FLIP as the live liquid solver with a GPU MLS-MPM built from graph atoms in a repeated substep region; writes the GPU surface design's particle-frame seam; rides the existing scene, role, force and Box3D coupling systems; look and speed are gated; materials, whitewater, bake and demo scenes as later phases. -->
+<!-- index: GPU MLS-MPM materials solver (goo, snow, sand, lava) from graph atoms in a repeated substep region, standalone first and coupled to Box3D; material maths kept as a grid-independent per-point stage so it moves onto GPU FLIP's grid in the later unified solver; water is GPU FLIP. -->
 
-**Status:** IN PROGRESS · P0a–P0b on main · P1–P2b built on `feat/gpu-mpm-build-b` · MPM water look and speed are out of scope (Peter, 2026-09-30): liquid water moves to GPU_FLIP_PRESSURE_SOLVE.md, MPM water presets are test scenes, P4's water targets are withdrawn · BUG-osqh (coupled MPM export below 60 fps drops ticks) fixed on the branch, bead open until it lands · P5 materials paused until the water solver settles · P3–P8 not built · phase notes in section 13 (Phasing).
-**Prerequisites:** GPU_FLUID_SURFACE_DESIGN.md P1–P3 before P1; its P5–P6 before P4.
+**Status:** IN PROGRESS · P0a–P2b on main · direction amended 2026-10-06: standalone materials first, built for the unified solver (D31–D37) · owed: P5-0, P5a–P5d, P3b, P3d, P7, P8 · water presets are test scenes · phase notes in section 13 (Phasing).
+**Prerequisites:** GPU_FLUID_SURFACE_DESIGN.md P1–P3 before P1 (met); none for P5-0.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
-Peter's decision, relayed by the lead on 2026-09-29 and restated here, not reopened:
+**Current direction (Peter, 2026-10-06), binding over everything below that conflicts:**
+"the first goal for MPM will be to get it working standalone and looking and working well
+without the FLIP GPU coupling, however it must be built and prepare and designed and
+architected for our full open physics coupling and unified solver and grids. I would like
+to see sand, snow, and other flagship MPM materials." Liquid water is GPU FLIP
+([GPU_FLIP_PRESSURE_SOLVE.md](GPU_FLIP_PRESSURE_SOLVE.md)); this solver's product is the
+material zoo (D31). The unified solver is a later design on FLIP's grid (D32); D33–D36
+are the seams this solver keeps so its material maths moves there unchanged. The intro
+below is the 2026-09-29 framing; D1–D30 still govern the solver's mechanics.
+
+Peter's decision of 2026-09-29, superseded for water by D31:
 the live liquid solver becomes a GPU MLS-MPM (Hu et al. 2018, "A Moving Least Squares
 Material Point Method with Displacement Discontinuity and Two-Way Rigid Body Coupling")
 writing into the particle-frame seam of
@@ -140,6 +150,7 @@ cherry-picks. Read it for reference only.
 ## 2. Decisions
 
 **D1 — Live liquid is GPU MLS-MPM writing the particle-frame seam (Peter, restated).**
+Superseded for water by D31: liquid water is GPU FLIP; the particle-frame seam stands.
 FLIP stays for bake and reference; its look is the target. The surface design's seam,
 atoms and D10 display clock are reused unchanged.
 
@@ -211,7 +222,8 @@ to 2, n = 61. Live gravity above 9.81 m/s² only eats acoustic headroom (0.33 �
 20 m/s², below mpm88's 0.51). n is capped at 128. When a live Stiffness or Viscosity
 value would need more, the solver uses the largest value that fits, publishes it on the
 domain's `limited_by_substeps` output and raises a node warning — limited, never
-silently. (At dx = 0.0625 m the cap allows Viscosity up to about 5 Pa·s.) A coupled body
+silently. (At dx = 0.0625 m the cap allows Viscosity up to about 5,000 Pa·s; corrected
+2026-10-06 from 5, D37.) D36 sets c for materials with shear stiffness. A coupled body
 too light to fit is a named error when the coupled scene is prepared. Rejected: adapting
 n from a read-back velocity maximum — readback arrival timing varies, so live
 trajectories would stop being deterministic. Rejected: the prototype's fixed 960 Hz.
@@ -325,14 +337,14 @@ Changing it restarts the simulation.
 control.** `node.matter_domain` carries a setup **Material** Enum (Water, Goo, Snow, Sand,
 Lava) and publishes one `MatterMaterial` entry. `node.matter_to_grid` switches on the
 model: water (D3), fixed-corotated goo, Stomakhin snow, Drucker–Prager sand, Bingham lava.
-Models with shape memory keep an `Array(MatterDeformation)` (F rows) updated by
-`node.matter_update_deformation`; water graphs leave it unwired. **Melt** m ∈ [0, 1] is a
+Models with shape memory keep an `Array(MatterDeformation)` (F rows) updated in G2P
+(D33); water graphs leave it unwired. **Melt** m ∈ [0, 1] is a
 live, beat-able param for Goo, Snow and Lava: each substep the elastic part of F relaxes
 toward its rotation, `F ← R + e^{−k(m)·dt}·(F − R)` with `k(m) = m / ((1 − m + 0.01) · 0.1 s)`
 — a Maxwell relaxation. At m = 0 the material holds its shape; at m = 1 it has no shape
 memory and flows like its liquid pressure; lowering m freezes the current shape as the new
 rest shape. Pressure keeps using J, so volume is never lost to melting. Mixed materials in
-one domain are deferred.
+one domain are deferred; the per-point material index is reserved now (D34).
 
 **D11 — Boundaries are domain walls plus distance lattices derived from the existing role
 geometry.** Walls: nodes within 3 of a closed face lose velocity into the face, with
@@ -540,6 +552,123 @@ side output makes G2P a fusion boundary per
 FREEZE_COMPILER_MAP.md section 4 (The cut rules — when fusion says no);
 it fused with nothing in any matter preset.
 
+**D31 — This solver is the materials solver: standalone first, built for the unified
+solver (Peter, 2026-10-06, quoted in the header).** Its product is Goo, Snow, Sand and
+Lava, each looking and running well in a matter domain of its own, coupled to Box3D (D12)
+and to no other solver. Water stays as the test material and as the liquid phase Melt
+reaches; it is not a show water. D32–D36 are the compatibility contract that keeps the
+unified path open: a phase that would break one stops and escalates. P5-0 replaces P4's
+go as the entry to the materials. Rejected: waiting for the unified solver before
+building materials — the material maths is the same either way (D33), and the standalone
+solver gets flagship materials on stage first.
+
+**D32 — The unified solver is a later design; this document only keeps its seams.**
+Direction (Peter and the lead, 2026-10-06; Astra review the same day): one particle and
+grid space on GPU FLIP's face-centred grid, after Stomakhin et al. 2014, "Augmented MPM
+for phase-change and varied materials". Nearly incompressible materials (water, goo,
+honey, molten lava) share FLIP's pressure projection; their shape stress is added on the
+grid after FLIP saves its pre-force grid and before the projection; snow and sand keep a
+compressible volume treatment that design decides. Box3D stays the owner of rigid
+bodies; XPBD bodies couple at their surfaces; one body, one owner
+(PHYSICS_DIRECTION.md). Nothing here builds it. **What ports and what does not:** the
+material maths (D33) moves unchanged; the transfer does not. This solver folds stress
+into the affine term with `4/dx²` (section 4.1 step 3), which holds only for quadratic
+B-splines on corner nodes. FLIP's face grid needs the classical per-face force transfer
+from weight gradients, so that design budgets a new P2G, not a re-wire. Rejected: coupling this solver to GPU
+FLIP as two solvers trading forces at an interface — a moving interface between an
+explicit and a projected solver is research-grade, and it cannot dissolve one material
+into the other. Rejected: a pressure projection on this solver's corner-node grid — a
+second pressure discretisation beside FLIP's.
+
+**D33 — Material maths is a per-point stage that never reads the grid.** Every model
+lives in one binding-free WGSL include, `shaders/matter_material.wgsl`:
+
+```wgsl
+// The material's constants. WGSL-only in P5-0 (the atoms assemble it from their
+// scalar params); P5a adds the Rust record and one `material` port (section 3.1).
+struct MatterMaterial { model: u32, density: f32, mu: f32, lambda: f32,
+                        cohesion: f32, viscosity: f32, melt: f32, p0: f32,
+                        p1: f32, p2: f32, p3: f32 }
+// f is the elastic deformation (identity for water); j is the volume ratio the
+// volumetric term reads (per-model rule below); jp the plastic volume ratio.
+struct MatterMaterialState { f: mat3x3<f32>, j: f32, jp: f32 }
+// Kirchhoff stress τ = volumetric·I + deviatoric. `deviatoric` is traceless.
+struct MatterStress { volumetric: f32, deviatoric: mat3x3<f32> }
+// grad_v is the point's velocity gradient (1/s). In this solver it is C_p;
+// on FLIP's grid it will be the gradient of the face interpolation.
+fn material_update(s: MatterMaterialState, grad_v: mat3x3<f32>, dt: f32,
+                   m: MatterMaterial) -> MatterMaterialState
+fn material_stress(s: MatterMaterialState, grad_v: mat3x3<f32>,
+                   m: MatterMaterial) -> MatterStress
+fn material_energy(s: MatterMaterialState, m: MatterMaterial) -> f32  // J/m³, stats
+```
+
+The atoms load and store these from `MatterPoint` and the deformation array; the
+include never sees a record, a binding or the grid. `grad_v` reaches the stress because
+water viscosity (P3d) and Lava's Bingham term are strain-rate stresses: their
+`deviatoric` is a function of `grad_v`, not F. `deviatoric` otherwise comes from the
+volume-preserving part F̂ = det(F)^(−1/3)·F alone — normalised by det(F), never by the
+tracked ratio, or F̂ is not volume-preserving. This is the energy split Augmented MPM
+uses (⚠ VERIFY-AT-IMPL the split energies against Stomakhin et al. 2014's constitutive
+section before P5a — read the paper, not a summary).
+
+**Which J, per model.** Water and Goo: `s.j` is the tracked `volume_ratio`
+(`J ← J·(1 + dt·tr C)`), so Melt loses no volume (D10). Snow and Sand: `material_update`
+sets `s.j = det(F_E)` after the clamp or return map, `jp` takes the removed
+determinant, and the atom writes `volume_ratio` from `s.j` — otherwise compacted snow
+springs back and sand never packs. Lava: as water, plus F only for Melt. For Snow and
+Sand, `matter_look_volume_drift` therefore reads elastic J.
+
+This solver sums the two terms in `matter_to_grid`; the unified solver hands
+`volumetric` to the projection for nearly incompressible models. Water keeps its D3
+stress as `volumetric`; its viscous term goes in `deviatoric` with its trace removed.
+Sand's Hencky stress splits into trace and traceless log strain. Rejected:
+taichi_elements' fixed-corotated Goo with its λ term dropped later — `2μ(F−R)Fᵀ` carries
+volumetric stress too, so the remainder is not shape only (Astra review).
+**Consequence:** Goo and Snow are the split corotated forms of section 4.4, not
+taichi_elements' exact ones; their look is judged at P5a and P5b, not inherited.
+
+**F updates in G2P.** `node.grid_to_matter` runs `material_update` right after it forms
+C_p (Taichi's order: C and F updated together), with the deformation array bound as an
+aliased input and output from P5a. Rejected: a separate `node.matter_update_deformation`
+atom — one more full pass over every point per substep, for no reuse.
+
+**D34 — Material state stays in solver-owned records; the published frame never carries
+it.** `FluidParticle` stays 32 bytes (`R/fluid_particles.rs:12`, asserted equal to the
+native record). `MatterPoint.affine_z.w` becomes the material index (u32 bits, always 0
+under D10; `matter_fill` writes it, G2P keeps it) so a later mixed domain needs no record
+change. `MatterDeformation` is indexed
+by point slot; every pass that moves, compacts or renumbers points moves the deformation
+row with the same permutation (`matter_compact` in P3b; any later pass that reorders
+storage). Surfaces, display history and whitewater read only the published frame.
+
+**D35 — Material points are permanent.** Only a drain role (an authored removal) and
+D14's fault remove a point that carries shape memory or plastic history (D34 also makes
+G2P keep `affine_z.w`). No deep-interior
+deletion, per-cell cap, speed removal, merge or reseed. Named temptation: GPU FLIP's water
+does all of these (`gpu_flip_narrow_band.wgsl:192` `nb_delete` with reseeding,
+`gpu_flip_step.wgsl:2747` `remove_crowded_markers`, `gpu_flip_clock.wgsl:237`
+`remove_marker_particles`); ported here they would erase F and Jp. For D32's design:
+those FLIP passes must key on a disposable-water property, never on every particle.
+Recorded, not changed here (D22).
+
+**D36 — Live is 64³, and stiffness is priced by D4, never hidden.** D4's c becomes the
+material's P-wave speed √((λ + 2μ)/ρ) at its hardening bound; Stiffness scales E, so μ
+and λ move together. At the Dam Break setup (4 m; the same arithmetic gives D4's n = 34
+for water): Goo (ρ = 1000) 36.5 m/s, n = 37 at 64³ and 73 at 128³; Snow unhardened
+19.7 m/s would be n = 23. **D4 prices n from parameters with no readback, so Snow cannot
+know its live Jp and always pays the Jp = 0.6 bound (hardening e⁴): 146 m/s, n = 124 at
+64³ in every Snow scene, about 3.6× water, and over the cap at 128³.** Sand and Lava are
+computed at P5c and P5d from their transcribed constants. Live is 64³; 128³ is export
+and bake. P5b reports Snow's frame time; the levers (a smaller ξ or a higher Jp floor)
+are Peter's. **For D32's design:** FLIP takes one or two steps per frame,
+so a stress stage needing 37 would multiply its pressure solves; implicit stress or a
+proven subcycling scheme is that design's decision (Astra review), not this one's.
+
+**D37 — D4's viscosity limit, corrected.** At dx = 0.0625 m and n = 128,
+`dt_v = ρ0·dx²/(6·μ_v)` allows μ_v up to 5,000 Pa·s, not the 5 D4 stated. Amended in
+place.
+
 ## 3. Data model and atoms
 
 ### 3.1 Records
@@ -558,7 +687,7 @@ pub struct MatterPoint {
     pub volume_ratio: f32,    // J = current / rest volume
     pub affine_x: [f32; 4],   // C row 0 (1/s); w = plastic volume ratio Jp (1 when unused)
     pub affine_y: [f32; 4],   // C row 1; w = rest volume V0 (m³)
-    pub affine_z: [f32; 4],   // C row 2; w = 0
+    pub affine_z: [f32; 4],   // C row 2; w = material index as u32 bits (0 under D10; D34)
 }
 // Specs: position Vec3F, id U32, velocity Vec3F, volume_ratio F32, affine_x/y/z Vec4F.
 // Mass = V0 · material density.
@@ -638,7 +767,6 @@ Scalars are `ScalarF32`; every numeric param is port-shadowed (DECOMPOSING_GENER
 | `node.matter_emit` | `points`, `bodies`, `shapes`, `atlas`, lattice wires, `tick_start`, `material`, `points_per_cell` → `points_out` | P3b |
 | `node.matter_drain` | `points`, `bodies`, `shapes`, `atlas`, lattice wires → `points_out` | P3b |
 | `node.matter_compact` | `points`, `tick_end` → `points_out` | P3b |
-| `node.matter_update_deformation` | `points`, `deformation`, `material`, `step_dt` → `deformation_out` | P5a |
 | whitewater atoms, frame cache | section 13, P6 and P7 | P6, P7 |
 
 The graph ships as one node group, **"Live Matter"**, per GROUPING_GRAPHS.md: the domain
@@ -696,8 +824,9 @@ over the 27 nodes `i = base + {0,1,2}³`, `d_i = (i·dx + lattice_min) − x_p`.
    a point inside a collider steps out onto its surface and loses the inward normal
    part of its velocity relative to the body (D29); a dynamic body gains `m_p·v_n·n`
    and its moment in the same reaction words as step 5 (D30).
-7. **Deformation** (P5 models): `F ← (I + dt·C_p)·F`, then Melt relaxation (D10), then the
-   model's return mapping.
+   For P5 models, G2P then runs `material_update` with `grad_v = C_p` (D33):
+   `F ← (I + dt·C_p)·F`, then Melt relaxation (D10), then the model's return mapping,
+   then the model's J rule.
 
 Once per tick, gated by `tick_start` or `tick_end` (skipped aliased dispatches call `mark_gpu_accessed`, per FREEZE_COMPILER_MAP.md section 9 (Executor contracts fusion leans on)): drain (P3b), emit (P3b), compaction (P3b), stats.
 
@@ -721,11 +850,14 @@ requires it below 2^30 on the Dam Break.
 
 ### 4.4 Constitutive branches
 
+Every branch is written in D33's split form inside `matter_material.wgsl`; the stress
+column names the model, and Goo and Snow use its split corotated version.
+
 | Model | Stress | Parameters (defaults) |
 |---|---|---|
 | 0 Water | `τ = λJ(J−1)I` for J < 1, `κ·λJ(J−1)I` for J ≥ 1, plus `μ_v·(C + Cᵀ)` | λ = 2.78e5·L·s² Pa; ρ0 = 1000; κ = 0; μ_v = 0; β = 0 |
-| 1 Goo (P5a) | fixed corotated `τ = 2μ(F−R)Fᵀ + λJ(J−1)I`, Melt relaxation | E = 1e6·L, ν = 0.2, μ and λ scaled by 0.3; m = 0 |
-| 2 Snow (P5b) | fixed corotated with hardening `e^{ξ(1−Jp)}`, singular values clamped to [1−θc, 1+θs], Jp in [0.6, 20], Melt relaxation | θc = 2.5e-2, θs = 7.5e-3, ξ = 10, E0 = 1.4e5 Pa, ν = 0.2, ρ = 400 |
+| 1 Goo (P5a) | split corotated: `τ_dev = 2μ(F̂−R̂)F̂ᵀ − (2μ/3)·tr((F̂−R̂)F̂ᵀ)·I` with F̂ = det(F)^(−1/3)·F and R̂ its rotation; `τ_vol = λJ(J−1)` on the tracked J; Melt relaxation | E = 1e6·L, ν = 0.2, μ and λ scaled by 0.3; ρ = 1000; m = 0 |
+| 2 Snow (P5b) | the Goo split with both terms scaled by hardening `e^{ξ(1−Jp)}`, J = det(F_E); singular values clamped to [1−θc, 1+θs], Jp in [0.6, 20], Melt relaxation | θc = 2.5e-2, θs = 7.5e-3, ξ = 10, E0 = 1.4e5 Pa, ν = 0.2, ρ = 400 |
 | 3 Sand (P5c) | Drucker–Prager return mapping on Hencky strain, α = √(2/3)·2 sin φ / (3 − sin φ) | φ = 45°; E, ν, ρ per Klár 2016 |
 | 4 Lava (P5d) | water pressure plus Bingham deviatoric stress (yield τ_y, plastic viscosity), Melt scales τ_y and viscosity toward zero | τ_y, viscosity, density per Yue et al. 2015 |
 
@@ -968,7 +1100,7 @@ module; the honest count.
 
 | Atom | Class | Proof |
 |---|---|---|
-| `zero_array`, `matter_grid_update`, `matter_move_bodies`, `liquid_solid_distance`, `matter_drain`, `matter_update_deformation` | Barrier-free per element: `wgsl_body` + `fusion_kind` + `input_access` (`BufferGather` for lattice, atlas and body reads), pipeline from `standalone_for_spec::<Self>()` | Value `gpu_tests` against CPU-computed expected output; fused-vs-unfused proof for every pair `graph-tool fusion` places in one region. |
+| `zero_array`, `matter_grid_update`, `matter_move_bodies`, `liquid_solid_distance`, `matter_drain` | Barrier-free per element: `wgsl_body` + `fusion_kind` + `input_access` (`BufferGather` for lattice, atlas and body reads), pipeline from `standalone_for_spec::<Self>()` | Value `gpu_tests` against CPU-computed expected output; fused-vs-unfused proof for every pair `graph-tool fusion` places in one region. |
 | `matter_to_grid`, `matter_body_reaction`, `grid_to_matter` | Atomic scatter, one atomic output each, declared exactly as `scatter_particles_3d.rs:95-98` (Boundary, `atomic_outputs`, standalone codegen); `grid_to_matter`'s is a side output next to its aliased points (D30); after L1, `matter_to_grid` uses workgroup memory and barriers (exclusion 1). ⚠ VERIFY-AT-IMPL the `boundary_reason` the precedent carries | Values against the f64 reference with the fixed-point tolerance; bit-identity between baseline and L1. |
 | `matter_emit`, `matter_compact`, `matter_stats` | Exempt, exclusion 1 of the ADDING_PRIMITIVES.md "The codegen path is mandatory" scope test (multi-pass scan, barriered reduction), `standalone_for_boundary_spec` | Values against CPU scans and sums, including sizes 1, 255, 256, 257 and 2²⁰+3. |
 | `matter_state`, `matter_frame` | Exempt, exclusion 2 (cross-frame state) | Clock and ring unit tests; frame value tests. |
@@ -1073,6 +1205,11 @@ FLIP-only.
 | Every barrier-free atom on codegen | the existing classify source scans plus each atom's value test; `graph-tool fusion` output recorded per phase |
 | No new shared locks | negative gate: `git diff origin/main -- crates \| rg '^\+.*Arc<(Mutex\|RwLock)'` returns nothing |
 | Solver budget | `matter_solver_perf` (P1b, P4), p95 against 6 ms |
+| Material maths never reads the grid (D33) | negative gate: `rg -n '@group\|@binding\|var<storage\|var<workgroup' crates/manifold-renderer/src/node_graph/primitives/shaders/matter_material.wgsl` returns nothing; negative gate: constitutive maths outside the include, `rg -n 'j \* \(j - 1\.0\)\|\(j - 1\.0\) \* \(j - 1\.0\)' crates/manifold-renderer/src/node_graph/primitives/shaders -g 'matter_*.wgsl' -g 'grid_to_matter*.wgsl'` returns hits only in `matter_material.wgsl` |
+| Stress splits cleanly (D33) | `matter_material_stress_splits` (every model, seeded random F and J: `deviatoric` trace below 1e-5 of its norm; `volumetric` unchanged when F̂ changes at fixed J; sum equals the f64 reference) ; `matter_material_rotation_is_stress_free` (every model with F, `s.j = 1`, zero `grad_v`: a pure rotation gives zero stress) |
+| Deformation follows its point (D34) | `matter_compaction_carries_deformation` (P3b: drain half a Goo blob; every surviving point keeps its F row bit for bit) |
+| Published record unchanged (D34) | the compile-time size assert on `FluidParticle` (`R/fluid_particles.rs`) |
+| Material points are permanent (D35) | `matter_material_points_permanent` (the real check: Goo in a closed box with no drain role, since `matter_drain` legitimately removes points; 600 ticks; live count constant); copy-paste guard only: `rg -n 'nb_delete\|remove_crowded\|remove_marker\|reseed' crates/manifold-renderer/src/node_graph/primitives/shaders/matter_*.wgsl` returns nothing |
 
 ## 13. Phasing
 
@@ -1560,18 +1697,76 @@ Superseded by LIQUID_SOLVER_SEAM_DESIGN.md P9 (Add Fluid authors the default liq
 - **Gesture:** Add Fluid into an existing scene and drag the source while it pours.
 - **Forbidden:** migrating FLIP scenes; a solver dropdown; a second Add command.
 
+### P5-0 — The material stage (seam brief)
+
+- **Entry state:** P2b on main: `git merge-base --is-ancestor 6e39fd71b origin/main`.
+  Anchors: `rg -n 'pub struct MatterPoint' crates/manifold-renderer/src/node_graph/matter.rs`
+  (`:23`). Re-derive both inventories and list any new site before touching anything:
+  the inline water maths, `rg -n 'j \* \(j - 1\.0\)|\(j - 1\.0\) \* \(j - 1\.0\)|volume_ratio \*' crates/manifold-renderer/src/node_graph/primitives/shaders`
+  (at `a28bc0dbb`: stress `matter_to_grid.wgsl:134` and `matter_stats.wgsl:134`, elastic
+  energy `matter_stats.wgsl:149`, J update `grid_to_matter_body.wgsl:192`); and
+  `rg -n 'affine_z' crates/manifold-renderer/src -g '*.rs' -g '*.wgsl'` (11 hits in 8
+  files; the writers are `grid_to_matter_body.wgsl:195` and `matter_fill_body.wgsl:104`,
+  the rest declare or read). Record the pre-change point hash of the `MatterScene` run
+  that `matter_deterministic_under_seed` uses (`tests/gpu_proofs/matter_scene.rs:555`,
+  seed 7, 120 ticks) in the phase notes.
+- **Read-back:** D3, D10, D31–D37; section 4.4; DECOMPOSING_GENERATORS.md section 1.2
+  (Specialised solvers are stage nodes); ADDING_PRIMITIVES.md; how includes reach a
+  pipeline (`wgsl_includes`, `grid_to_matter.rs:112`). Restate: the include is
+  binding-free; water's numbers do not change; the published record does not change;
+  the Rust material record is P5a's.
+- **Old → new:**
+  - `matter_to_grid.wgsl:134` inline `tau` and its cohesion branch →
+    `material_stress(s, C_p, m)`, water as model 0, summed `volumetric·I + deviatoric`.
+  - `matter_stats.wgsl:134` (the same stress) → `material_stress`; `:149` elastic energy
+    → `material_energy`.
+  - `grid_to_matter_body.wgsl:192` J update → `material_update(s, C_p, dt, m)`;
+    `:195` `p.affine_z = vec4(c2, 0.0)` → keeps `p.affine_z.w`.
+  - `matter_fill_body.wgsl:104` writes material index 0 into `affine_z.w`.
+  - Each atom builds the WGSL `MatterMaterial` from its existing scalar params
+    (`lambda`, `cohesion`, `density`; `matter_to_grid.rs:60`, `:81`, `:134`). No port
+    changes in this phase.
+- **Deliverables:** `shaders/matter_material.wgsl` with D33's three structs and three
+  functions, water implemented; the f64 mirror `material_stress_reference` in
+  `matter/reference.rs`; the call sites above rewritten; tests
+  `matter_material_seam_preserves_water` (GPU proof beside
+  `matter_deterministic_under_seed`: the same `MatterScene` run, in process, hash equal
+  to the recorded one) and `matter_material_stress_splits` (water row, CPU).
+- **Gate:** the tests; `cargo nextest run -p manifold-renderer matter_`;
+  `scripts/gpu_proofs_gate.py` (it maps the touched shaders);
+  `matter_dam_break_energy_bounded`; both D33 negative gates of section 12; clippy on
+  manifold-renderer. If the hash differs only because the compiler fused a multiply-add
+  differently, `matter_transfer_matches_reference` at its section 12 bounds is the oracle
+  and the delta goes in the phase notes; any other difference stops the phase.
+- **Demo:** none — L1.
+- **Forbidden:** changing any water number; a binding, record or grid read in the
+  include; a field added to `FluidParticle`; a stress or energy copy left outside the
+  include; a new port; starting Goo here.
+
 ### P5a–P5d — Materials, one phase each, goo first
 
-Paused until the water solver settles (GPU_FLIP_PRESSURE_SOLVE.md). Shared entry: P4 go recorded. Shared read-back: D10, section 4.4, the cited paper.
-Shared deliverables: the Material Enum value, its branch, its params on the domain's
-param surface, a preset, and the D4 hardening bound on c. Shared gate: the phase tests,
-the GPU filter, check-presets and graph-tool, P1's A1–A3 on the new material, an L2
-capture for Peter. Shared forbidden: a second solver, damping to hide instability, new
-record types beyond `MatterDeformation`.
+Goo goes first because it builds the deformation array and the 3×3 SVD that Snow, Sand
+and Lava reuse. Shared entry: P5-0 merged. Shared read-back: D10, D31–D37, section 4.4,
+the cited paper. Shared deliverables: the Material Enum value, its branch in
+`matter_material.wgsl` in D33's split form, its row in `matter_material_stress_splits`
+and `matter_material_rotation_is_stress_free`, its params on the domain's param surface,
+a preset, and the D36 P-wave bound on c with the phase's worked substep count. Shared
+gate: the phase tests, the GPU filter, check-presets and graph-tool, P1's A1–A3 on the
+new material, `matter_material_points_permanent` on the new material, an L2 capture, and
+Peter's look call recorded in a `decision` bead. Shared forbidden: a second solver,
+damping to hide instability, new record types beyond `MatterDeformation`, constitutive
+maths outside the include, any pass that removes material points (D35).
+P5a also delivers `deformation_in`/`deformation` on `node.matter_state` (captured, seeded
+to identity by `matter_fill` for models with F, unwired for water). P5b reports frame time
+at the hardening bound (D36).
+**Blocking for P5b and P5c, decided by Peter:** how Snow and Sand are drawn. They read as
+clumps and grains, and the Liquid Surface mesh smooths both away; the alternative is
+drawing the particles themselves as grains. P5b and P5c are not briefed further until
+Peter picks. Goo (P5a) and Lava (P5d) use the Liquid Surface mesh.
 
 | Phase | Deliverables | Test | Gesture |
 |---|---|---|---|
-| P5a Goo and Melt | `matter_update_deformation`; 3×3 SVD in WGSL (McAdams et al. 2011 form, as Taichi `ti.svd`) with value tests; fixed-corotated branch; Melt (D10) for every model with F; `GooDropMatter.json` | `matter_goo_cube_rebounds` (rest shape within 2% after 3 s at Melt 0); `matter_melt_freezes_current_shape` (Melt 1 → 0: the new rest shape is the melted shape within 2%) | ride Melt from solid to goo on the build and freeze it on the drop |
+| P5a Goo and Melt | the Rust `MatterMaterial` record and one `material` port replacing the scalar material params; the deformation array through `matter_state` and `grid_to_matter` (D33); 3×3 SVD in WGSL (McAdams et al. 2011 form, as Taichi `ti.svd`) with value tests; split corotated branch; Melt (D10) for every model with F; `GooDropMatter.json` | `matter_goo_cube_rebounds` (rest shape within 2% after 3 s at Melt 0); `matter_melt_freezes_current_shape` (Melt 1 → 0: the new rest shape is the melted shape within 2%) | ride Melt from solid to goo on the build and freeze it on the drop |
 | P5b Snow | hardening and plasticity branch | `matter_snow_ball_fractures` (clump count > 1 after impact); Jp stays in [0.6, 20] | throw a snowball at the floor on the snare |
 | P5c Sand | Drucker–Prager branch | `matter_sand_pile_angle` (settled slope within 5° of the expected angle) | flip gravity on a fader and watch a pile avalanche |
 | P5d Lava | Bingham branch with Melt scaling the yield stress | `matter_bingham_flow_stops_below_yield` | lava flows down a slope, crusts when Melt drops, flows again on the beat |
@@ -1597,7 +1792,7 @@ Superseded by BUG-imy3 (GPU whitewater, solver-agnostic), designed in [GPU_WHITE
 
 Keys on `is_liquid_domain` (LIQUID_SOLVER_SEAM_DESIGN.md section 3.5 (Scene recognition)), never on `MATTER_DOMAIN_TYPE_ID`.
 
-- **Entry state:** P4 go. ⚠ VERIFY-AT-IMPL the `fluid_cache.rs` writer and the take journal (`R/fluid/take.rs`) before pinning the payload.
+- **Entry state:** P5a merged. ⚠ VERIFY-AT-IMPL the `fluid_cache.rs` writer and the take journal (`R/fluid/take.rs`) before pinning the payload.
 - **Read-back:** D24; the surface design's D12.
 - **Deliverables:** Record and Playback for matter graphs: per-tick `FluidParticle` frames
   (and whitewater frames) through the existing atomic per-tick file writer as a new
@@ -1614,9 +1809,9 @@ Keys on `is_liquid_domain` (LIQUID_SOLVER_SEAM_DESIGN.md section 3.5 (Scene reco
 
 ### P8 — Demo scenes, one per capability
 
-- **Entry state:** P5d, P6 and P7 merged.
+- **Entry state:** P5d and P7 merged. P6 is superseded: the demos carry whitewater only if GPU_WHITEWATER_DESIGN.md has shipped by entry; by default they run without it.
 - **Read-back:** sections 6 and 7; every phase's gesture line.
-- **Deliverables:** five bundled generator presets, each with its exposed card built
+- **Deliverables:** four bundled generator presets (water is GPU FLIP, D31), each with its exposed card built
   through the scene exposure tables and its gesture bound to named params, and one project
   `Matter Demos.manifold` (built with `project_tool`, one layer per preset, 120 BPM,
   clips placed on bars; ⚠ VERIFY-AT-IMPL that `project_tool` can author layers and clips —
@@ -1624,13 +1819,12 @@ Keys on `is_liquid_domain` (LIQUID_SOLVER_SEAM_DESIGN.md section 3.5 (Scene reco
 
 | Preset | Scene | Gesture Peter performs |
 |---|---|---|
-| "Matter — Water and Boxes on Beats" | a pool with three coupled Box3D boxes; a radial impulse on the kick, a lift field on the snare | play a drum pattern; boxes jump and splash on every kick; gravity on a fader for the breakdown |
 | "Matter — Goo and Blocks" | a Goo blob in a basin, Box3D blocks dropping in | ride Melt from solid to goo on the build; freeze on the drop with the blocks stuck in it |
 | "Matter — Sand Pour" | a sand source pouring onto Box3D ramps | move the source; flip gravity on a fader to avalanche the pile |
 | "Matter — Snow" | snowballs launched by impulses at a wall and floor | fire a snowball on each snare; they burst into clumps |
 | "Matter — Lava and Melt" | a Lava block on a slope | Melt follows a beat ramp: it crusts between bars and flows on the downbeat |
 
-  Tests: check-presets, graph-tool validate and fusion for all five; `matter_demo_presets_run_ten_seconds` (no fault, no non-finite frame, live count within 5% of expected); the project loads through the project loader.
+  Tests: check-presets, graph-tool validate and fusion for all four; `matter_demo_presets_run_ten_seconds` (no fault, no non-finite frame, live count within 5% of expected); the project loads through the project loader.
 - **Gate:** the tests; each preset's 600-frame capture passes A1–A3 for its material; the
   orchestrating session runs each demo in the app with `MANIFOLD_RENDER_TRACE=1` for 60 s,
   no frame over 20 ms.
@@ -1661,6 +1855,12 @@ or in section 15.
 15. Look and speed are gates with named metrics; no executor tunes a dial or threshold.
 16. Half precision only for read-only lattices, plus the gated C-storage experiment.
 17. Add Fluid switches only after Peter's P4 go.
+18. Items 1, 2, 3 and 17 are superseded for water, and item 2 for materials too once D32 lands: liquid water is GPU FLIP; this solver is the materials solver, standalone first (D31, Peter).
+19. The unified solver is a later design on GPU FLIP's grid after Augmented MPM; this document keeps its seams and builds none of it (D32).
+20. Material maths is one binding-free include in split volumetric/deviatoric form, fed a velocity gradient (D33).
+21. Material state never enters the published record; the material index lives in `affine_z.w`; deformation moves with its point (D34).
+22. Material points are permanent; only drains and faults remove them (D35).
+23. Live is 64³; c is the P-wave speed at the hardening bound; stiffness levers are Peter's (D36).
 
 ## 15. Deferred, with triggers
 
@@ -1671,7 +1871,9 @@ or in section 15.
 | Velocity-aware substeps | Peter accepts non-deterministic live runs for the win (section 8) |
 | CPIC colored-distance-field compatibility (thin shells, cutting) | A collider thinner than 2 cells leaks in a show scene, or Peter wants cutting |
 | Real surface tension | Peter judges Cohesion wrong for a named look |
-| Mixed materials in one domain | A scene needs two materials that touch in one domain |
+| Mixed materials in one domain | The unified solver design (D32) is written, or a scene needs two materials that touch in one domain |
+| The unified solver on GPU FLIP's grid (D32) | P5a–P5d have shipped and GPU FLIP's water campaign has its acceptance; a named scene needs a material to meet water (dissolve, mix, honey into water) |
+| Implicit stress integration | D36's hardened Snow or a stiffer Goo misses the live budget and Peter rejects the ξ and Jp levers, or the unified design needs it |
 | More than one coupled tick per live frame (30 fps projects; export already runs every tick) | A coupled scene must play live at a project rate below 60 fps |
 | Sparse or adaptive grids, 128³ live | P4's stretch report and a named scene need it |
 | Sparse volume tiles (Wu et al. 2018; NVIDIA GVDB) | Domains beyond 128³ are wanted |
@@ -1698,3 +1900,5 @@ or in section 15.
 | R12 | The P3a rewrite changes a FLIP behaviour | every FLIP test and flow in P3a's gate | Fix before landing |
 | R13 | CPU distance-lattice build too slow for photoscan roles | P2a timing on a held-out 100k-triangle mesh | Proxy hulls, or the GPU SDF trigger |
 | R14 | Unverified constants and papers (Liveliness blend, snow, sand, lava, Martin & Moyce) | VERIFY-AT-IMPL markers | Transcribe at phase entry; a mismatch is an escalation |
+| R15 | Every Snow scene runs about 124 substeps at 64³, 3.6× water, because D4 prices the Jp bound without readback (D36) | P5b frame-time report | ξ and Jp floor are Peter's levers; implicit stress is deferred |
+| R16 | The split corotated Goo looks different from taichi_elements' Goo (D33) | P5a L2 capture | Peter's look call; never revert to the unsplit form |
