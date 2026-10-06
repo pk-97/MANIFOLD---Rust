@@ -36,11 +36,14 @@ def process_alive(pid):
 
 
 class LandingTests(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(patch.object(landing_gate.gpu_scope, "learned_times_path", return_value=None))
+
     checks = ["tooling", "design-status", "docs-index", "deny", "ignored-tests",
               "clippy", "flow-gate", "tests-build", "gpu-proofs-build", "tests", "gpu-proofs"]
 
     def exercise(self, failed=None, extra=(), stale_docs=False, packages=True, head="head", paths=None,
-                 comment=False):
+                 comment=False, gpu_output=None, proof_cached=False):
         called, commands = [], []
         self.events = events = []
         paths = paths or ["crates/manifold-gpu/src/metal/device.rs"]
@@ -85,6 +88,8 @@ class LandingTests(unittest.TestCase):
                 label += "-build"
             called.append(label)
             events.append(label)
+            if label == "gpu-proofs" and gpu_output is not None:
+                return (1 if label == failed else 0), gpu_output, "", 0.01
             return (1 if label == failed else 0), f"output for {label}\n", "", 0.01
 
         with tempfile.TemporaryDirectory() as d, contextlib.ExitStack() as stack:
@@ -99,6 +104,10 @@ class LandingTests(unittest.TestCase):
             stack.enter_context(patch.object(sys, "argv", ["landing_gate.py", "--repo", d, *extra]))
             stack.enter_context(patch.object(landing_gate, "MAIN_CHECKOUT", root))
             stack.enter_context(patch.object(landing_gate, "run_cmd", side_effect=run))
+            if proof_cached:
+                from unittest.mock import Mock
+                stack.enter_context(patch.object(landing_gate.gate_passes, "proof_pass",
+                    return_value=Mock(record={"seconds": 400})))
             # A tooling self-test must never wait on the machine-wide GPU lock.
             stack.enter_context(patch.object(landing_gate.gpu_queue, "hold",
                                              side_effect=recording_hold))
@@ -134,13 +143,42 @@ class LandingTests(unittest.TestCase):
         self.assertEqual(called, self.checks[:3])
         self.assertEqual(timings["checks"][-1]["label"], "docs-index")
 
+    def test_real_gpu_failure_over_budget_names_failure_and_deferred_in_finish(self):
+        import gpu_proofs_gate
+        summary = io.StringIO()
+        with contextlib.redirect_stdout(summary):
+            verdict = gpu_proofs_gate.print_summary(
+                "failures:\n    liquid_conformance::broken\n\ntest result: FAILED. 0 passed; 1 failed;\n",
+                101, [("liquid_conformance::broken", 401, "b", True)], 360)
+        self.assertEqual(verdict, 101)
+        deferred = "GPU-PROOFS DEFERRED: liquid_conformance::other (100s)"
+        code, _, _, _, _, output, _ = self.exercise(
+            failed="gpu-proofs", gpu_output=deferred + "\n" + summary.getvalue())
+        self.assertEqual(code, 1)
+        self.assertIn("GPU-PROOFS BUDGET: OVER", output)
+        self.assertIn("liquid_conformance::broken", output)
+        self.assertIn("GPU-PROOFS GATE: FAIL", output)
+        self.assertGreaterEqual(output.count(deferred), 2)
+
+    def test_reused_proofs_keep_deferred_line_in_finish(self):
+        path = landing_gate.gpu_scope.PROOFS_DIR + "liquid_conformance.rs"
+        with patch.object(landing_gate.gpu_scope, "load_times", return_value={
+                "liquid_conformance::slow": 100, "unrelated::slow": 200}):
+            code, called, _, _, _, output, _ = self.exercise(paths=[path], proof_cached=True)
+        self.assertEqual(code, 0)
+        self.assertNotIn("gpu-proofs", called)
+        self.assertIn("REUSED gpu-proofs", output)
+        self.assertNotIn("unrelated::slow", output)
+        summary = output[output.index("REUSED gpu-proofs"):]
+        self.assertIn("GPU-PROOFS DEFERRED: liquid_conformance::slow (100s)", summary)
+
     def test_success_runs_all_required_checks_with_explicit_gpu_binary(self):
         code, called, timings, commands, _, output, _ = self.exercise()
         self.assertEqual(code, 0)
         self.assertEqual(called, self.checks)
         self.assertEqual(timings["failed"], 0)
         self.assertIn(["python3", "scripts/gpu_proofs_gate.py", "--path", "crates/manifold-gpu/src/metal/device.rs",
-                       "--budget", "360"], commands)
+                       "--budget", "360", "--learn-times"], commands)
         self.assertTrue(all("--all" not in c and "--full-suite" not in c for c in commands))
         self.assertIn("[gpu-proofs] mode: scoped", output)
         self.assertIn("manifold-gpu core", output)
@@ -170,7 +208,7 @@ class LandingTests(unittest.TestCase):
         proofs = [c for c in commands if c[1:2] == ["scripts/gpu_proofs_gate.py"]]
         self.assertEqual(proofs, [
             ["python3", "scripts/gpu_proofs_gate.py", "--path", "crates/manifold-gpu/src/metal/device.rs", "--build-only"],
-            ["python3", "scripts/gpu_proofs_gate.py", "--path", "crates/manifold-gpu/src/metal/device.rs", "--budget", "360"]])
+            ["python3", "scripts/gpu_proofs_gate.py", "--path", "crates/manifold-gpu/src/metal/device.rs", "--budget", "360", "--learn-times"]])
 
     def test_catalog_check_skipped_when_renderer_untouched(self):
         _, _, _, commands, *_ = self.exercise()
@@ -204,7 +242,7 @@ class LandingTests(unittest.TestCase):
                     self.assertNotIn("--all-features", cmd)
                 self.assertIn(
                     ["python3", "scripts/gpu_proofs_gate.py", "--path", path,
-                     "--budget", "360"], enabled)
+                     "--budget", "360", "--learn-times"], enabled)
 
     def test_skipped_proofs_do_not_enable_proof_features(self):
         code, _, _, commands, *_ = self.exercise(extra=["--skip-gpu", "deferred"])
