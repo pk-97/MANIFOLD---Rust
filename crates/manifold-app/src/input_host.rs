@@ -1973,6 +1973,57 @@ mod automation_clipboard_host_tests {
         }
     }
 
+    fn prepare_water_family(h: &mut Harness) -> (LayerId, u32, u32) {
+        use manifold_renderer::node_graph::scene_vm::{SceneObjectVm, SceneVm};
+
+        let index = h.project.timeline.add_layer(
+            "Water",
+            manifold_core::types::LayerType::Generator,
+            PresetTypeId::new("WaterDamBreakGpuFlip"),
+        );
+        let layer_id = h.project.timeline.layers[index].layer_id.clone();
+        h.project.timeline.layers[index].gen_params_or_init();
+        let default = manifold_renderer::node_graph::bundled_preset_def(
+            &PresetTypeId::new("WaterDamBreakGpuFlip"),
+        )
+        .expect("Water preset")
+        .clone();
+        h.selection.select_layer(layer_id.clone());
+        h.ui_root.scene_setup_panel.open();
+        crate::ui_bridge::sync_inspector_data(
+            &mut h.ui_root,
+            &h.project,
+            Some(index),
+            &h.selection,
+            &[],
+            None,
+        );
+        let scene = SceneVm::from_def(&default).expect("Water scene VM");
+        let parent = scene
+            .objects
+            .iter()
+            .find_map(|object| match object {
+                SceneObjectVm::Known(row) if row.is_group && row.liquid_domain.is_some() => {
+                    Some(row.object_node_id)
+                }
+                _ => None,
+            })
+            .expect("Water parent");
+        let child = scene
+            .objects
+            .iter()
+            .find_map(|object| match object {
+                SceneObjectVm::Known(row)
+                    if row.parent_group_id == Some(parent) && row.look_mesh.is_some() =>
+                {
+                    Some(row.object_node_id)
+                }
+                _ => None,
+            })
+            .expect("Foam child");
+        (layer_id, parent, child)
+    }
+
     fn drain_batch(h: &Harness, authoritative: &mut manifold_core::project::Project, service: &mut EditingService) {
         match h.rx.try_recv().expect("host must emit one command") {
             ContentCommand::ExecuteBatch(commands, description) => service.execute_batch(commands, description, authoritative),
@@ -2602,6 +2653,66 @@ mod automation_clipboard_host_tests {
         assert!(h.host().handle_effect_cut());
         assert!(h.ui_root.scene_item_clipboard.is_some());
         assert!(matches!(h.ui_root.pending_keyboard_actions.last(), Some(manifold_ui::PanelAction::Project(manifold_ui::ProjectAction::SceneSetupRemoveObject(..)))));
+    }
+
+    #[test]
+    fn water_family_keyboard_edit_paths_hide_children_and_withhold_duplicate() {
+        let mut h = Harness::new();
+        let (layer_id, parent, child) = prepare_water_family(&mut h);
+        h.ui_root.scene_setup_panel.set_selection(
+            layer_id.clone(),
+            manifold_ui::panels::scene_setup_panel::SceneSelection::Object(child),
+        );
+        h.ui_root.object_cards_have_focus = true;
+        for action in [
+            manifold_ui::panels::actions::CardEditAction::Copy,
+            manifold_ui::panels::actions::CardEditAction::Cut,
+            manifold_ui::panels::actions::CardEditAction::Duplicate,
+        ] {
+            assert!(h.host().edit_scene_items(action));
+            assert!(h.rx.is_empty(), "withheld child action queued {action:?}");
+            assert!(h.ui_root.pending_keyboard_actions.is_empty());
+        }
+
+        for _ in 0..2 {
+            assert!(h.host().edit_scene_items(manifold_ui::panels::actions::CardEditAction::Delete));
+            assert!(h.rx.is_empty());
+            assert!(matches!(h.ui_root.pending_keyboard_actions.pop(),
+                Some(manifold_ui::PanelAction::Project(manifold_ui::ProjectAction::SceneSetupParamChanged(
+                    ref layer, _, node, ref param, 0.0)))
+                if *layer == layer_id && node == child && param == "visible"));
+            assert!(h.ui_root.pending_keyboard_actions.is_empty());
+        }
+
+        h.ui_root.scene_setup_panel.set_selection(
+            layer_id,
+            manifold_ui::panels::scene_setup_panel::SceneSelection::Object(parent),
+        );
+        assert!(h.host().edit_scene_items(
+            manifold_ui::panels::actions::CardEditAction::Duplicate,
+        ));
+        assert!(h.rx.is_empty(), "family-parent duplicate must be withheld");
+        assert!(h.ui_root.pending_keyboard_actions.is_empty());
+        assert!(h.host().edit_scene_items(
+            manifold_ui::panels::actions::CardEditAction::Copy,
+        ));
+        assert!(h.ui_root.scene_item_clipboard.is_none(), "family copy must not populate the clipboard");
+        assert!(h.rx.is_empty());
+        assert!(h.host().edit_scene_items(
+            manifold_ui::panels::actions::CardEditAction::Cut,
+        ));
+        assert!(h.ui_root.scene_item_clipboard.is_none(), "family cut must not populate the clipboard");
+        assert!(h.rx.is_empty(), "family cut must not delete");
+        assert!(h.ui_root.pending_keyboard_actions.is_empty());
+        assert!(h.host().edit_scene_items(
+            manifold_ui::panels::actions::CardEditAction::Delete,
+        ));
+        assert!(matches!(
+            h.ui_root.pending_keyboard_actions.last(),
+            Some(manifold_ui::PanelAction::Project(
+                manifold_ui::ProjectAction::SceneSetupRemoveObject(..)
+            ))
+        ), "family-parent delete remains the group removal path");
     }
 
 }

@@ -78,6 +78,20 @@ impl SceneItemClipboard {
             .iter()
             .find(|node| node.id == output.from_node && node.type_id == GROUP_TYPE_ID)
             .map(|node| node.id);
+        if let Some(group_id) = fluid_role_group
+            && let Some(group) = source.nodes.iter().find(|node| node.id == group_id)
+            && let Some(group) = &group.group
+        {
+            let object_outputs = group
+                .interface
+                .outputs
+                .iter()
+                .filter(|port| port.name.starts_with("object"))
+                .count();
+            if object_outputs > 1 {
+                return Err("Groups with several objects cannot be copied yet; duplicate an imported model with its ⧉ button".into());
+            }
+        }
         let fluid_role_assignments = fluid_role_group
             .map(|group| {
                 manifold_editing::commands::graph::scene_fluid_role_assignments(source, group)

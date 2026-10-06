@@ -160,6 +160,14 @@ pub fn metadata_for_node_type(type_id: &str) -> Vec<SceneParamMetadata> {
         .collect()
 }
 
+/// Explicit Water-look exposure metadata, never part of load-time vocabulary.
+pub fn look_metadata() -> Vec<SceneParamMetadata> {
+    metadata_for_node_type("node.platonic_solid_mesh").into_iter()
+        .filter(|metadata| metadata.name == "radius")
+        .map(|mut metadata| { metadata.label = "Size".into(); metadata })
+        .collect()
+}
+
 /// Idempotent load-time migration: stamp exposures for every scene-vocabulary
 /// node in `def`. Returns `true` iff anything changed. Safe to run on any graph
 /// (non-scene defs are untouched).
@@ -692,6 +700,21 @@ mod tests {
     #[test]
     fn metadata_for_unknown_type_is_empty() {
         assert!(metadata_for_node_type("node.definitely_not_real").is_empty());
+    }
+
+    #[test]
+    fn water_look_metadata_exposes_only_size() {
+        let metadata = look_metadata();
+        assert_eq!(metadata.len(), 1);
+        assert_eq!(metadata[0].name, "radius");
+        assert_eq!(metadata[0].label, "Size");
+        assert!(!SCENE_VOCABULARY_TYPE_IDS.contains(&"node.platonic_solid_mesh"));
+        for preset in ["PhysicsSolids", "PhysicsBoxes", "HoneyDamBreak", "WaterFloatingBoxMatter"] {
+            let def = crate::node_graph::bundled_preset_def(&manifold_core::PresetTypeId::new(preset))
+                .expect("shipped preset");
+            assert!(def.preset_metadata.as_ref().unwrap().params.iter().all(|spec| spec.name != "Size"),
+                "{preset} must not acquire Water look controls on load");
+        }
     }
 
     #[test]

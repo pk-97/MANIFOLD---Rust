@@ -176,7 +176,7 @@ impl GpuSheeting {
     #[cfg(all(test, feature = "gpu-proofs"))]
     pub(crate) fn prepare_reference(&mut self, device: &GpuDevice) {
         assert!(self.pipelines.is_empty());
-        let shader = super::gpu_flip_sheeting_tests::reference_shader();
+        let shader = super::gpu_flip_sheeting_cpu_tests::reference_shader();
         for entry in ENTRIES {
             self.pipelines.push(device.create_compute_pipeline(&shader, entry, "gpu_flip.sheeting.reference"));
         }

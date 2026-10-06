@@ -613,9 +613,9 @@ _Generated from the node registry. Do not hand-edit. 389 nodes registered, group
 | `WaterBasin` | Water Basin (CPU) | generator | Sim | 1069 |
 | `WaterDamBreak` | Water — Dam Break | generator | Sim | 2308 |
 | `WaterDamBreakGpu` | Water — Dam Break (GPU Surface) | generator | Sim | 2314 |
-| `WaterDamBreakGpuFlip` | Water — Dam Break (GPU FLIP) | generator | Sim | 2003 |
+| `WaterDamBreakGpuFlip` | Water — Dam Break (GPU FLIP) | generator | Sim | 2005 |
 | `WaterDamBreakMatter` | Water — Dam Break (Live GPU) | generator | Sim | 1397 |
-| `WaterDamBreakParticles` | Water — Dam Break (Particle View) | generator | Sim | 1996 |
+| `WaterDamBreakParticles` | Water — Dam Break (Particle View) | generator | Sim | 1998 |
 | `WaterFloatingBoxMatter` | Water — Floating Box (Live GPU) | generator | Sim | 1390 |
 | `WaterSeaWallGpuFlip` | Water — Sea Wall (GPU FLIP) | generator | Sim | 2333 |
 | `WaterStillPoolMatter` | Water — Still Pool (Live GPU) | generator | Sim | 1065 |

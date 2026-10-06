@@ -147,7 +147,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Object 3_3",
+          "text": "Object 6_3",
           "name": "scene_setup.properties.name_value"
         }
       },
@@ -158,7 +158,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Target: Fluid 1"
+          "text": "Target: Water 1"
         }
       },
       "check": "Exists"
@@ -181,7 +181,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "text": "\u25a0 Object 3"
+          "text": "\u25a0 Object 6"
         }
       }
     }
@@ -190,7 +190,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "\u25a0 Object 3"
+          "text": "\u25a0 Object 6"
         }
       },
       "gesture": {
@@ -227,7 +227,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "\u25a0 Object 3"
+          "text": "\u25a0 Object 6"
         }
       },
       "check": {
@@ -239,7 +239,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "\u25a0 Object 3_3"
+          "text": "\u25a0 Object 6_3"
         }
       },
       "check": "Exists"
@@ -249,7 +249,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "text": "\u25a0 Object 3_3"
+          "text": "\u25a0 Object 6_3"
         }
       }
     }
@@ -258,7 +258,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "\u25a0 Object 3_3"
+          "text": "\u25a0 Object 6_3"
         }
       },
       "gesture": {
@@ -272,7 +272,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Target: Fluid 1"
+          "text": "Target: Water 1"
         }
       },
       "check": "Exists"
@@ -290,7 +290,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "\u25a0 Object 3"
+          "text": "\u25a0 Object 6"
         }
       },
       "check": "Exists"
@@ -308,7 +308,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "\u25a0 Object 3_3"
+          "text": "\u25a0 Object 6_3"
         }
       },
       "check": {
@@ -329,7 +329,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "text": "\u25a0 Object 3_3"
+          "text": "\u25a0 Object 6_3"
         }
       }
     }
@@ -338,7 +338,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "\u25a0 Object 3_3"
+          "text": "\u25a0 Object 6_3"
         }
       },
       "gesture": {
@@ -352,7 +352,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Target: Fluid 1"
+          "text": "Target: Water 1"
         }
       },
       "check": "Exists"

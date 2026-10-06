@@ -101,6 +101,14 @@ class ScopeTests(unittest.TestCase):
                 self.assertFalse(result.unmapped)
                 self.assertFalse(result.broad)
 
+    def test_whitewater_step_and_its_fused_shader_run_the_golden_fingerprints(self):
+        step = P + "whitewater_step.rs"
+        shader = P + "shaders/whitewater_fused.wgsl"
+        for path in (step, shader):
+            result = plan([path], users=lambda _: [step], repo=self._repo_with(path))
+            self.assertIn("node_graph::primitives::whitewater_golden_tests::", result.filters)
+            self.assertFalse(result.unmapped)
+
     def test_non_gpu_paths_run_nothing(self):
         p = plan(["docs/X.md", "scripts/a.py", "crates/manifold-ui/src/lib.rs"])
         self.assertFalse(p.active)

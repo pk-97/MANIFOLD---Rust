@@ -289,6 +289,26 @@ fn scene_physics_two_fluids_get_independent_ids_and_sections() {
 }
 
 #[test]
+fn scene_physics_template_name_prefix_preserves_collision_numbering() {
+    let mut def = render_scene_graph(0, false);
+    let mut occupied = node(500, "occupied_water", GROUP_TYPE_ID);
+    occupied.handle = Some("Water 1".into());
+    def.nodes.push(occupied);
+
+    let (mut project, target) = project_with_graph(def.clone());
+    let mut command = command(target.clone(), def);
+    command.template.name_prefix = "Water";
+    command.execute(&mut project);
+
+    let result = graph(&project, &target);
+    assert!(command.was_applied());
+    assert!(result.nodes.iter().any(|node| node.handle.as_deref() == Some("Water 2 Graph")));
+    assert!(result.preset_metadata.as_ref().unwrap().params.iter().any(|param| {
+        param.section.as_deref() == Some("Water 2 - Simulation")
+    }));
+}
+
+#[test]
 fn scene_physics_duplicate_fluid_keeps_shared_world_controls() {
     use crate::commands::graph::DuplicateSceneObjectCommand;
 
@@ -537,11 +557,13 @@ fn gpu_template() -> LiquidTemplate {
     let mut output = node(4, "fluid_output", GROUP_OUTPUT_TYPE_ID);
     output.handle = None;
     LiquidTemplate {
+        name_prefix: "Fluid",
+        object_outputs: vec!["object".into()],
         nodes: vec![live, surface, object, output],
         wires: vec![wire(1, "frame", 2, "frame"), wire(2, "vertices", 3, "vertices"), wire(3, "object", 4, "object")],
         output_node: 4,
         group_id_slot: 0,
-        exposures: vec![TemplateExposure { node: 3, set: ExposureSet::Object, section: None }],
+        exposures: vec![TemplateExposure::Node { node: 3, set: ExposureSet::Object, section: None }],
     }
 }
 
@@ -653,4 +675,21 @@ fn add_undo_redo_reload(template: LiquidTemplate, domain_type: &str) {
 fn scene_physics_add_fluid_template_undo_reload() {
     add_undo_redo_reload(flip_scene_fluid_template(), FLIP_DOMAIN_TYPE_ID);
     add_undo_redo_reload(gpu_template(), manifold_core::liquid_domain::MATTER_DOMAIN_TYPE_ID);
+}
+
+#[test]
+fn multi_output_reservation_rejects_later_occupied_slot_atomically() {
+    let mut def = render_scene_graph(2, false);
+    def.wires.push(wire(100, "object", 10, "object_3"));
+    let (mut project, target) = project_with_graph(def.clone());
+    let before = serde_json::to_value(&project).unwrap();
+    let mut command = command(target, def);
+    let output = command.template.output_node;
+    let object = command.template.wires.iter().find(|wire| wire.to_node == output && wire.to_port == "object").unwrap().from_node;
+    command.template.object_outputs.push("object_1".into());
+    command.template.wires.push(wire(object, "object", output, "object_1"));
+    command.execute(&mut project);
+    assert!(!command.was_applied());
+    assert_eq!(command.rejection_reason(), Some("Add Fluid destination object slot is occupied"));
+    assert_eq!(serde_json::to_value(&project).unwrap(), before);
 }

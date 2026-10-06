@@ -90,6 +90,9 @@ const OBJ_OFF_PHYSICS: u64 = 36;
 const OBJ_OFF_FLUID_ROLE: u64 = 37;
 const OBJ_OFF_FLUID_ROLE_TARGET: u64 = 38;
 const OBJ_OFF_FLUID_ROLE_REMOVE: u64 = 39;
+/// Water-family child Hide button; unlike the outliner eye this is a
+/// one-way local write and is always present, including for hidden rows.
+const OBJ_OFF_HIDE: u64 = 40;
 const MATERIAL_SWATCH_KEY_BASE: u64 = 1;
 const MATERIAL_LOOK_KEY_BASE: u64 = 97_000;
 
@@ -399,10 +402,12 @@ pub use super::scene_setup_skin::{SkinRowVm, SkinTargetMap};
 /// `scene_vm.rs`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ObjectKnownRow {
+    /// A family child owns only its look; this is the mesh Size targets.
+    pub look_mesh: Option<manifold_foundation::NodeId>,
     pub index: usize,
     /// The `node.scene_object`'s own doc id — the address the eye toggle
-    /// writes `visible` at, and (with `group_node_id`) the selection key
-    /// (D12).
+    /// writes `visible` at and the selection/rename address used by the
+    /// scene-object command (D12).
     pub object_node_id: u32,
     /// `Some` when wrapped in a group (the importer/`AddSceneObjectCommand`
     /// shape) — the rename sweep's group target. `None` for a bare
@@ -1049,11 +1054,15 @@ pub struct ScenePanel {
     /// `!(value > 0.5)` as 0.0/1.0) through the same
     /// `SceneSetupParamChanged` fourth-surface path every other row uses.
     outliner_eye_ids: Vec<(NodeId, RowValue)>,
+    /// Every selected Water-family child properties header Hide button this
+    /// frame — `(node_id, the child's visible write row)`. The action always
+    /// writes zero; it never removes the child graph output.
+    object_hide_ids: Vec<(NodeId, RowValue)>,
     /// `(identity_node_id, name_label_node_id, current_name)` for the
     /// properties header's editable name row, when a Known object is
-    /// selected this frame (`identity_node_id` = `group_node_id.unwrap_or(
-    /// object_node_id)`, the exact address `RenameSceneObjectCommand`
-    /// takes) — resolves a name-label click to its rename action, and backs
+    /// selected this frame (`object_node_id`, the exact address
+    /// `RenameSceneObjectCommand` takes) — resolves a name-label click to its
+    /// rename action, and backs
     /// `object_name_rect` (the app's text-input anchor lookup). At most one
     /// entry per frame (P5: one selection, one properties header).
     object_name_ids: Vec<(u32, NodeId, String)>,
@@ -1178,6 +1187,7 @@ impl Default for ScenePanel {
             selection: std::collections::HashMap::new(),
             outliner_row_ids: Vec::new(),
             outliner_eye_ids: Vec::new(),
+            object_hide_ids: Vec::new(),
             object_name_ids: Vec::new(),
             object_remove_ids: Vec::new(),
             object_duplicate_ids: Vec::new(),
@@ -1485,6 +1495,7 @@ impl ScenePanel {
         self.outliner_row_ids.clear();
         self.group_toggle_ids.clear();
         self.outliner_eye_ids.clear();
+        self.object_hide_ids.clear();
         self.object_name_ids.clear();
         self.object_remove_ids.clear();
         self.object_duplicate_ids.clear();
@@ -1704,6 +1715,22 @@ impl ScenePanel {
             }
             SceneSelection::Force(id) => vm.forces.iter().any(|row| row.instance_id == id),
         }
+    }
+
+    /// Water-family parents are water object rows whose children own the
+    /// platonic look meshes. Imported compounds also have group rows, so the
+    /// presence of a look-mesh child is the discriminator rather than
+    /// `is_group` alone.
+    pub(super) fn is_family_parent(&self, row: &ObjectKnownRow) -> bool {
+        row.is_group
+            && self.state.as_live().is_some_and(|vm| {
+                vm.objects.iter().any(|object| {
+                    matches!(object,
+                        ObjectRowVm::Known(child)
+                            if child.parent_group_id == Some(row.object_node_id)
+                                && child.look_mesh.is_some())
+                })
+            })
     }
 
     /// D7's default: the first Known object, else World. A `Custom` row
@@ -2017,6 +2044,7 @@ impl ScenePanel {
                 if row.value > 0.5 { "\u{1F441}" } else { "\u{2013}" },
                 outliner_eye_key(group_id),
             );
+            tree.set_name(eye_id, format!("scene_setup.object_eye.{}", row.addr.node_doc_id));
             if !row.driven {
                 self.outliner_eye_ids.push((eye_id, row));
             }
@@ -2064,6 +2092,7 @@ impl ScenePanel {
                 if row.value > 0.5 { "\u{1F441}" } else { "\u{2013}" },
                 outliner_eye_key(object_node_id),
             );
+            tree.set_name(eye_id, format!("scene_setup.object_eye.{}", row.addr.node_doc_id));
             if !row.driven {
                 self.outliner_eye_ids.push((eye_id, row));
             }
@@ -2773,6 +2802,19 @@ impl ScenePanel {
                             row_value.addr.node_doc_id,
                             row_value.addr.param_id.clone(),
                             new_value,
+                        )));
+                    } else if let Some((_, row_value)) =
+                        self.object_hide_ids.iter().find(|(id, _)| *id == *node_id)
+                    {
+                        // Water-family child Hide is intentionally one-way:
+                        // it writes the local visible parameter to zero even
+                        // when the row is already hidden.
+                        actions.push(PanelAction::Project(ProjectAction::SceneSetupParamChanged(
+                            vm.layer_id.clone(),
+                            row_value.addr.scope_path.clone(),
+                            row_value.addr.node_doc_id,
+                            row_value.addr.param_id.clone(),
+                            0.0,
                         )));
                     } else if let Some((_, index)) =
                         self.object_frame_ids.iter().find(|(id, _)| *id == *node_id)

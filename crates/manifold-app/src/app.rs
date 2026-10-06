@@ -1578,17 +1578,16 @@ impl Application {
             // to be open — it's a fourth surface, not a canvas view), so this
             // resolves its own catalog default via `generator_catalog_default`
             // instead of `watched_graph_target`/`watched_catalog_default`.
-            TextInputField::SceneObjectRename(group_node_id) => {
+            TextInputField::SceneObjectRename(object_node_id) => {
                 // SCENE_OBJECT_AND_PANEL_V2_DESIGN.md D6/P3: dispatches
                 // RenameSceneObjectCommand now, not RenameGroupCommand — it
                 // extends the same walk (group handle + card-section sweep)
                 // but ALSO keeps the object's own `node.scene_object` handle
                 // in sync (D6's single-writer-of-both posture) and degrades
-                // cleanly for an ungrouped hand-built object. `group_node_id`
-                // is unchanged from before: `SceneVm`'s
-                // `SceneObjectVm::Known::group_node_id` already resolves to
-                // the object_k wire's producer post-P1/P2 (D12), so this is
-                // exactly the id `RenameSceneObjectCommand` addresses by.
+                // cleanly for an ungrouped hand-built object. The panel
+                // supplies `object_node_id` unconditionally: imported
+                // compounds already use their group id, while Water and
+                // other family rows use the scene object's own id.
                 let new_handle = text.trim().to_string();
                 if !new_handle.is_empty()
                     && let Some(layer_id) = self.text_input.scene_object_layer_id.take()
@@ -1600,7 +1599,7 @@ impl Application {
                         let cmd = manifold_editing::commands::graph::RenameSceneObjectCommand::new(
                             target,
                             Vec::new(),
-                            group_node_id,
+                            object_node_id,
                             new_handle,
                             default,
                         );

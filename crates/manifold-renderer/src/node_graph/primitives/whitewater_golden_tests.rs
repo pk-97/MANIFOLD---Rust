@@ -59,32 +59,19 @@ fn words(bytes: &[u8]) -> Vec<u32> {
     bytes.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
 }
 
-fn find_node_mut<'a>(value: &'a mut Value, node_id: &str) -> Option<&'a mut Value> {
-    let nodes = value["nodes"].as_array_mut()?;
-    for node in nodes {
-        if node["nodeId"] == node_id {
-            return Some(node);
-        }
-        if node["group"].is_object()
-            && let Some(found) = find_node_mut(&mut node["group"], node_id)
-        {
-            return Some(found);
-        }
-    }
-    None
-}
+use crate::node_graph::liquid::conformance::json_node_mut;
 
 /// The shipped def with these whitewater params and, when given, this
 /// whitewater budget (the card's node, which sizes stage and boundary alike).
 fn variant(params: &[(&str, Value)], budget: Option<f64>) -> EffectGraphDef {
     let mut def = serde_json::to_value(whitewater_render_def(WaterScene::dam_break(64))).expect("def serialises");
-    let node = find_node_mut(&mut def, WHITEWATER).expect("whitewater node in Water group");
+    let node = json_node_mut(&mut def, WHITEWATER).expect("whitewater node in Water group");
     assert_eq!(node["typeId"], "node.whitewater_step");
     for (name, value) in params {
         node["params"][*name] = value.clone();
     }
     if let Some(budget) = budget {
-        let budget_node = find_node_mut(&mut def, "whitewater_budget").expect("whitewater budget in Water group");
+        let budget_node = json_node_mut(&mut def, "whitewater_budget").expect("whitewater budget in Water group");
         budget_node["params"]["value"] = json!({"type": "Float", "value": budget});
     }
     with_tick_probe(serde_json::from_value(def).expect("variant def"))
@@ -206,11 +193,11 @@ fn whitewater_packed_preset_save_load_matches_fingerprints() {
     use super::whitewater_scene_tests::with_whitewater_reports;
     let def = super::gpu_flip_preset::render_def(WaterScene::dam_break(64));
     let mut project = Project::default();
-    let index = project.timeline.add_layer("P4 Dam Break", LayerType::Generator, PresetTypeId::new("WaterDamBreakGpuFlip"));
+    let index = project.timeline.add_layer("Dam Break", LayerType::Generator, PresetTypeId::new("WaterDamBreakGpuFlip"));
     project.timeline.layers[index].gen_params_or_init().graph = Some(def.clone());
-    let path = std::env::temp_dir().join(format!("whitewater_p4_{}_{}.manifold", std::process::id(),
+    let path = std::env::temp_dir().join(format!("whitewater_round_trip_{}_{}.manifold", std::process::id(),
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
-    manifold_io::saver::save_project(&mut project, &path, Some("P4 round trip"), false).expect("save actual project archive");
+    manifold_io::saver::save_project(&mut project, &path, Some("Whitewater round trip"), false).expect("save actual project archive");
     let reloaded = manifold_io::loader::load_project(&path).expect("load actual project archive");
     let loaded = reloaded.timeline.layers[index].generator_graph().expect("saved generator graph").clone();
     std::fs::remove_file(&path).expect("remove round-trip archive");

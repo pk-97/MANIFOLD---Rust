@@ -7,6 +7,8 @@
 //! in `tests/gpu_proofs/liquid_conformance.rs`; the CPU checks live here.
 
 use manifold_core::PresetTypeId;
+#[cfg(test)]
+use serde_json::Value;
 use manifold_core::effect_graph_def::{
     BindingDef, BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire, SerializedParamValue,
 };
@@ -1031,6 +1033,23 @@ fn for_each_node<F: FnMut(&mut EffectGraphNode)>(nodes: &mut [EffectGraphNode], 
     }
 }
 
+/// Find a JSON graph node by stable `nodeId`, walking nested group bodies.
+#[cfg(test)]
+pub(crate) fn json_node_mut<'a>(value: &'a mut Value, node_id: &str) -> Option<&'a mut Value> {
+    let nodes = value["nodes"].as_array_mut()?;
+    for node in nodes {
+        if node["nodeId"] == node_id {
+            return Some(node);
+        }
+        if node["group"].is_object()
+            && let Some(found) = json_node_mut(&mut node["group"], node_id)
+        {
+            return Some(found);
+        }
+    }
+    None
+}
+
 /// Set `param` on the node whose stable id is `node_id`, and on any card
 /// bound to it, so the card does not put the old value back at build.
 pub fn set_node_param(def: &mut EffectGraphDef, node_id: &str, param: &str, value: SerializedParamValue) {
@@ -1099,6 +1118,20 @@ mod tests {
     /// The GPU runs no matter scene above resolution 64 until BUG-gwe4
     /// (staged GPU check above res 64) closes.
     const GPU_FIXTURE_RESOLUTION: u32 = 64;
+
+    #[test]
+    fn json_node_mut_walks_nested_groups_and_handles_misses() {
+        let mut graph = serde_json::json!({
+            "nodes": [{
+                "nodeId": "outer",
+                "group": {"nodes": [{"nodeId": "inner"}]}
+            }]
+        });
+        assert_eq!(json_node_mut(&mut graph, "inner").expect("nested node")["nodeId"], "inner");
+        json_node_mut(&mut graph, "inner").expect("nested node")["nodeId"] = serde_json::json!("changed");
+        assert_eq!(json_node_mut(&mut graph, "changed").expect("renamed node")["nodeId"], "changed");
+        assert!(json_node_mut(&mut graph, "missing").is_none());
+    }
 
     fn build(row: &LiquidSolverRow, fixture: Fixture, def: &EffectGraphDef) -> LiquidPreset {
         LiquidPreset::build(def).unwrap_or_else(|error| panic!("{} {fixture:?}: {error}", row.type_id))

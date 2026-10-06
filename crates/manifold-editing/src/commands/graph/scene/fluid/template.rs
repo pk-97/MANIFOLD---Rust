@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use manifold_core::effect_graph_def::{
-    EffectGraphNode, EffectGraphWire, GROUP_OUTPUT_TYPE_ID, SerializedParamValue,
+    BindingDef, EffectGraphNode, EffectGraphWire, GROUP_OUTPUT_TYPE_ID, ParamSpecDef, SerializedParamValue,
 };
 
 use super::{
@@ -20,15 +20,17 @@ pub enum ExposureSet {
     Role,
     Material,
     Object,
+    Whitewater,
 }
 
-/// One node's card rows. `section` is the suffix after `"<Fluid N> - "`;
-/// `None` uses the bare fluid handle.
+/// One node's card rows. `section` is the suffix after `"<family N> - "`;
+/// `None` uses the bare family handle.
 #[derive(Clone, Debug)]
-pub struct TemplateExposure {
-    pub node: u32,
-    pub set: ExposureSet,
-    pub section: Option<&'static str>,
+pub enum TemplateExposure {
+    Node { node: u32, set: ExposureSet, section: Option<&'static str> },
+    /// Recipe-authored fan-out. Each binding carries its template-local document
+    /// target alongside its authored parameter and conversion metadata.
+    Shared { spec: Box<ParamSpecDef>, targets: Vec<(u32, BindingDef)> },
 }
 
 /// A self-contained group body that ends in a `system.group_output` node
@@ -36,7 +38,7 @@ pub struct TemplateExposure {
 /// gives every node, nested ones included, a fresh document id on insert.
 ///
 /// A node's `handle` is a suffix: `Some("Simulation")` becomes
-/// `"<Fluid N> Simulation"`, `Some("")` is the bare fluid handle, `None`
+/// `"<family N> Simulation"`, `Some("")` is the bare family handle, `None`
 /// carries no handle. A node's `node_id` is the stable-id prefix.
 ///
 /// The body holds exactly one liquid domain, at any group depth. The command
@@ -44,9 +46,13 @@ pub struct TemplateExposure {
 /// (gravity, speed, reset) to it through every group boundary on the way.
 #[derive(Clone, Debug)]
 pub struct LiquidTemplate {
+    /// Prefix used for the inserted family's first-unused numbered handle.
+    /// This is runtime recipe metadata and is intentionally not serialized.
+    pub name_prefix: &'static str,
     pub nodes: Vec<EffectGraphNode>,
     pub wires: Vec<EffectGraphWire>,
     pub output_node: u32,
+    pub object_outputs: Vec<String>,
     /// How many body nodes get document ids before the group node does. Flows
     /// address card params by document id, so FLIP keeps its original order.
     pub group_id_slot: usize,
@@ -57,8 +63,11 @@ impl LiquidTemplate {
     /// Node type of the node whose card rows `set` stamps, so the caller can
     /// look up that type's metadata.
     pub fn exposed_type_id(&self, set: ExposureSet) -> Option<&str> {
-        let exposure = self.exposures.iter().find(|exposure| exposure.set == set)?;
-        let node = self.nodes.iter().find(|node| node.id == exposure.node)?;
+        let id = self.exposures.iter().find_map(|exposure| match exposure {
+            TemplateExposure::Node { node, set: candidate, .. } if *candidate == set => Some(*node),
+            _ => None,
+        })?;
+        let node = self.nodes.iter().find(|node| node.id == id)?;
         Some(node.type_id.as_str())
     }
 }
@@ -182,6 +191,7 @@ pub fn flip_scene_fluid_template() -> LiquidTemplate {
     let output = template_node(OUTPUT, "fluid_output", GROUP_OUTPUT_TYPE_ID, None, BTreeMap::new());
 
     LiquidTemplate {
+        name_prefix: "Fluid",
         nodes: vec![fluid, source, material, object, output, role, domain],
         group_id_slot: 5,
         wires: vec![
@@ -193,13 +203,14 @@ pub fn flip_scene_fluid_template() -> LiquidTemplate {
             scene_build_wire(OBJECT, "object", OUTPUT, "object"),
         ],
         output_node: OUTPUT,
+        object_outputs: vec!["object".into()],
         exposures: vec![
-            TemplateExposure { node: FLUID, set: ExposureSet::Fluid, section: Some("Simulation") },
-            TemplateExposure { node: DOMAIN, set: ExposureSet::Domain, section: Some("Domain") },
-            TemplateExposure { node: SOURCE, set: ExposureSet::SourceTransform, section: Some("Source Transform") },
-            TemplateExposure { node: ROLE, set: ExposureSet::Role, section: Some("Source") },
-            TemplateExposure { node: MATERIAL, set: ExposureSet::Material, section: Some("Material") },
-            TemplateExposure { node: OBJECT, set: ExposureSet::Object, section: None },
+            TemplateExposure::Node { node: FLUID, set: ExposureSet::Fluid, section: Some("Simulation") },
+            TemplateExposure::Node { node: DOMAIN, set: ExposureSet::Domain, section: Some("Domain") },
+            TemplateExposure::Node { node: SOURCE, set: ExposureSet::SourceTransform, section: Some("Source Transform") },
+            TemplateExposure::Node { node: ROLE, set: ExposureSet::Role, section: Some("Source") },
+            TemplateExposure::Node { node: MATERIAL, set: ExposureSet::Material, section: Some("Material") },
+            TemplateExposure::Node { node: OBJECT, set: ExposureSet::Object, section: None },
         ],
     }
 }

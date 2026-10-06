@@ -308,22 +308,11 @@ pub fn sync_inspector_data(
                             // too, or the panel shows the def's stale import
                             // default.
                             let hoisted_gen_inst = l.gen_params();
-                            let display_value = |node_doc_id: u32, param_id: &str, fallback: f32| {
+                            let display_value = |scope: &[u32], node_doc_id: u32, param_id: &str, fallback: f32| {
                                 hoisted_gen_inst
                                     .and_then(|inst| {
-                                        // Instance graph first; a TRACKING
-                                        // instance (graph: None — fresh
-                                        // imports) resolves via the same
-                                        // effective def the VM was built on.
-                                        let id = inst
-                                            .binding_id_for_node_param(node_doc_id, param_id)
-                                            .or_else(|| {
-                                                manifold_core::effects::binding_id_for_node_param_in(
-                                                    def.as_ref()?,
-                                                    node_doc_id,
-                                                    param_id,
-                                                )
-                                            })?;
+                                        let id = crate::ui_bridge::project::scene_binding_id(
+                                            def.as_ref()?, scope, node_doc_id, param_id)?;
                                         inst.params
                                             .contains(id.as_str())
                                             .then(|| inst.get_base_param(id.as_str()))
@@ -346,7 +335,7 @@ pub fn sync_inspector_data(
                                        min: f32,
                                        max: f32| RowValue {
                                 addr: RowAddr::root(node_doc_id, param_id),
-                                value: display_value(node_doc_id, param_id, value),
+                                value: display_value(&[], node_doc_id, param_id, value),
                                 min,
                                 max,
                                 driven,
@@ -366,8 +355,8 @@ pub fn sync_inspector_data(
                                               driven: bool,
                                               min: f32,
                                               max: f32| RowValue {
+                                value: display_value(&scope_path, node_doc_id, param_id, value),
                                 addr: RowAddr { scope_path, node_doc_id, param_id: param_id.to_string() },
-                                value: display_value(node_doc_id, param_id, value),
                                 min,
                                 max,
                                 driven,
@@ -594,7 +583,9 @@ pub fn sync_inspector_data(
                                         } = known.as_ref();
                                         // Water has no Physics row: the liquid moves it.
                                         let (physics_available, physics_unavailable_reason) =
-                                            if physics.is_some() {
+                                            if known.look_mesh.is_some() {
+                                                (false, None)
+                                            } else if physics.is_some() {
                                                 (true, None)
                                             } else if known.liquid_domain.is_some() {
                                                 (false, None)
@@ -614,6 +605,7 @@ pub fn sync_inspector_data(
                                         let mut parameter_ids = super::scene::parameter_ids_for_nodes(
                                             def.as_ref(), &owned,
                                         );
+                                        super::scene::filter_family_parameter_ids(def.as_ref(), known, &mut parameter_ids);
                                         super::scene::filter_inactive_physics_parameter_ids(
                                             def.as_ref(), physics.as_ref(), &mut parameter_ids,
                                         );
@@ -658,6 +650,7 @@ pub fn sync_inspector_data(
                                         }));
                                         ObjectRowVm::Known(Box::new(
                                             manifold_ui::panels::scene_setup_panel::ObjectKnownRow {
+                                                look_mesh: known.look_mesh.clone(),
                                                 index: *index,
                                                 object_node_id: *object_node_id,
                                                 group_node_id: *group_node_id,
@@ -688,10 +681,10 @@ pub fn sync_inspector_data(
                                                         ),
                                                     })
                                                     .collect(),
-                                                modifiers_addable: *modifier_chain_parseable,
+                                                modifiers_addable: known.look_mesh.is_none() && *modifier_chain_parseable,
                                                 sections,
                                                 parameter_ids,
-                                                skin,
+                                                skin: if known.look_mesh.is_some() { None } else { skin },
                                                 physics_enabled: physics.as_ref().is_some_and(|body| body.enabled),
                                                 physics_available,
                                                 physics_unavailable_reason,
@@ -946,7 +939,7 @@ pub fn sync_inspector_data(
                                         // clickable RowValue — unchanged
                                         // pre-existing behavior, not this
                                         // lane's scope.
-                                        mode_is_hdri: display_value(e.switch_node_id, "selector", 0.0) != 0.0,
+                                        mode_is_hdri: display_value(&[], e.switch_node_id, "selector", 0.0) != 0.0,
                                         intensity: mrow(
                                             e.bake_node_id,
                                             "intensity",

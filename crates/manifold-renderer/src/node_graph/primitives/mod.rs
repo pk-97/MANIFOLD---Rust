@@ -354,6 +354,8 @@ pub mod gpu_flip_lentine;
 pub(crate) mod gpu_flip_pressure;
 pub(crate) mod gpu_flip_step;
 pub(crate) mod gpu_flip_sheeting;
+#[cfg(test)]
+mod gpu_flip_sheeting_cpu_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_flip_sheeting_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]

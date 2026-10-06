@@ -105,6 +105,7 @@ pub(crate) fn object_controls(
 ) -> Vec<manifold_core::NodeId> {
     let mut owned = vec![row.object.clone()];
     owned.extend_from_slice(&row.fluid_controls);
+    owned.extend(row.look_mesh.iter().cloned());
     if row.parent_group_id.is_none() && let Some(def) = def {
         owned.extend(group_fluid_role_nodes(def, row.group_node_id));
     }
@@ -120,6 +121,26 @@ pub(crate) fn object_controls(
     owned.extend(row.modifier_chain.iter().map(|modifier| modifier.node.clone()));
     owned.extend(row.transform_chain.iter().map(|modifier| modifier.node.clone()));
     owned
+}
+
+/// Family eyes and look rows use the existing manifest, with one visible
+/// control per row. A child does not acquire scene-object rendering controls.
+pub(crate) fn filter_family_parameter_ids(
+    def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
+    row: &manifold_renderer::node_graph::scene_vm::SceneObjectKnownRow,
+    ids: &mut Vec<String>,
+) {
+    let Some(metadata) = def.and_then(|def| def.preset_metadata.as_ref()) else { return; };
+    if row.look_mesh.is_none() && !(row.is_group && row.liquid_domain.is_some()) { return; }
+    ids.retain(|id| {
+        let Some(binding) = metadata.bindings.iter().find(|binding| &binding.id == id) else { return false; };
+        match &binding.target {
+            manifold_core::effect_graph_def::BindingTarget::Node { node_id, param } if node_id == &row.object => {
+                if row.look_mesh.is_some() { param == "visible" } else { param != "visible" }
+            }
+            _ => true,
+        }
+    });
 }
 
 /// Per-frame VALUE sync for the Scene Setup dock's rows — the scene-row
@@ -676,6 +697,72 @@ mod ownership_tests {
         }
         let sections = sections_for_nodes(Some(def), &owned);
         assert!(sections.iter().any(|section| section == "Whitewater"), "{sections:?}");
+    }
+
+    #[test]
+    fn water_family_projection_keeps_parent_and_look_ownership() {
+        use manifold_core::effect_graph_def::BindingTarget;
+        use manifold_renderer::node_graph::scene_vm::{MaterialVm, SceneObjectVm, SceneVm};
+
+        for preset in ["WaterDamBreakGpuFlip", "WaterDamBreakParticles"] {
+            let def = manifold_renderer::node_graph::bundled_preset_def(&PresetTypeId::new(preset))
+                .expect("water family preset");
+            let vm = SceneVm::from_def(def).expect("water family scene");
+            let water = vm.objects.iter().find_map(|object| match object {
+                SceneObjectVm::Known(row) if row.name == "Water" => Some(row),
+                _ => None,
+            }).expect("Water parent");
+            assert!(water.is_group && water.parent_group_id.is_none(), "{preset}: real Water parent");
+
+            // Collapsing or expanding the family leaves the parent's own
+            // simulation and shared gate controls intact.
+            let parent_owned = object_controls(Some(def), water);
+            let mut parent_ids = parameter_ids_for_nodes(Some(def), &parent_owned);
+            filter_family_parameter_ids(Some(def), water, &mut parent_ids);
+            assert!(parent_ids.contains(&"parent_visible".to_string()), "{preset}: parent gate");
+            assert!(sections_for_nodes(Some(def), &parent_owned).iter().any(|section| section == "Whitewater"),
+                "{preset}: parent simulation controls");
+
+            let children: Vec<_> = vm.objects.iter().filter_map(|object| match object {
+                SceneObjectVm::Known(row) if row.parent_group_id == Some(water.object_node_id) => Some(row),
+                _ => None,
+            }).collect();
+            assert_eq!(children.len(), 3, "{preset}: three look rows");
+            for child in children {
+                let material = match &child.material {
+                    MaterialVm::Known(material) => material.node.clone(),
+                    MaterialVm::None => panic!("{preset}: {} has no material", child.name),
+                };
+                let mesh = child.look_mesh.clone().expect("look mesh");
+                let owned = object_controls(Some(def), child);
+                assert!(owned.contains(&child.object));
+                assert!(owned.contains(&mesh));
+                assert!(owned.contains(&material));
+                assert!(child.transform.is_none() && child.transform_chain.is_empty());
+                assert!(child.modifier_chain.is_empty() && child.physics.is_none());
+
+                let mut ids = parameter_ids_for_nodes(Some(def), &owned);
+                filter_family_parameter_ids(Some(def), child, &mut ids);
+                let metadata = def.preset_metadata.as_ref().unwrap();
+                let specs: Vec<_> = metadata.params.iter().filter(|spec| ids.contains(&spec.id)).collect();
+                assert!(specs.iter().any(|spec| spec.name == "Visible"), "{preset}: {} eye", child.name);
+                assert!(specs.iter().any(|spec| spec.name == "Size"), "{preset}: {} size", child.name);
+                for spec in specs {
+                    let binding = metadata.bindings.iter().find(|binding| binding.id == spec.id)
+                        .expect("spec binding");
+                    match &binding.target {
+                        BindingTarget::Node { node_id, param } if node_id == &child.object => {
+                            assert_eq!(param, "visible", "{preset}: {} object affordance", child.name);
+                        }
+                        BindingTarget::Node { node_id, param } if node_id == &mesh => {
+                            assert_eq!(param, "radius", "{preset}: {} mesh affordance", child.name);
+                        }
+                        BindingTarget::Node { node_id, .. } if node_id == &material => {}
+                        target => panic!("{preset}: {} leaked child target {target:?}", child.name),
+                    }
+                }
+            }
+        }
     }
 
     #[test]

@@ -587,6 +587,23 @@ impl Runner {
                     artifact: Some(path.display().to_string()),
                 }
             }
+            AutomationAction::SaveReloadProject => {
+                let path = out_dir.join("round-trip.manifold");
+                let saved = manifold_io::saver::save_project(&mut data.project, &path, None, false);
+                let reloaded = saved.map_err(|error| error.to_string()).and_then(|()|
+                    manifold_io::loader::load_project(&path).map_err(|error| error.to_string()));
+                match reloaded {
+                    Ok(project) => {
+                        data.project = project;
+                        self.undo = UndoRedoManager::new();
+                        self.needs_structural_sync = true;
+                        self.advance_frame(ui, data, zoom_ppb, render, false);
+                        StepResult { index, action: action_desc, status: "ok",
+                            detail: "saved and reloaded through project IO".into(), artifact: Some(path.display().to_string()) }
+                    }
+                    Err(error) => self.fail(index, action_desc, ui, data, out_dir, error),
+                }
+            }
             AutomationAction::Key { key, modifiers } => {
                 self.modifiers = *modifiers;
                 ui.input.set_modifiers(*modifiers);

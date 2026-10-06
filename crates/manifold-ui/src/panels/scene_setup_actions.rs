@@ -70,7 +70,7 @@ pub(crate) fn build_add_action_row(
         action_w,
         ROW_H,
         btn_style(),
-        "+ Fluid",
+        "+Water",
         KEY_ADD_FLUID,
     );
     tree.set_name(fluid, "scene_setup.add_fluid");

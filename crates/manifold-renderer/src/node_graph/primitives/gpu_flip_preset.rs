@@ -14,7 +14,9 @@
 //! only seed the planned sizes.
 
 use manifold_core::PresetTypeId;
-use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGraphWire};
+use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGraphWire, find_node};
+#[cfg(test)]
+use manifold_core::effect_graph_def::find_node_mut;
 use manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID;
 use serde_json::{Value, json};
 
@@ -563,11 +565,9 @@ fn shipped_preset() -> Value {
 
 /// Reuse the existing nested surface verbatim.
 fn surface_group() -> Value {
-    let preset = shipped_preset();
-    let family = preset["nodes"].as_array().expect("preset nodes").iter()
-        .find(|node| node["nodeId"] == "water_family").expect("Water family");
-    family["group"]["nodes"].as_array().expect("family nodes").iter()
-        .find(|node| node["nodeId"] == "surface").expect("liquid surface group").clone()
+    let preset: EffectGraphDef = serde_json::from_value(shipped_preset()).expect("preset");
+    serde_json::to_value(find_node(&preset.nodes, "surface").expect("liquid surface group"))
+        .expect("surface group")
 }
 
 /// Stage and capture populations, including the unrendered dust oracle.
@@ -712,7 +712,61 @@ impl WaterScene {
                 _ => None,
             }.map(str::to_owned);
         }
-        b.finish()
+        let mut def = b.finish();
+        // Author the parent gate once. Insertion remaps this metadata and
+        // presets copy it intact; neither consumer recreates the target list.
+        let mut bindings: Vec<_> = FAMILY_OUTPUTS.iter().map(|port| {
+            let wire = def.wires.iter().find(|wire| wire.to_node == output as u32 && wire.to_port == *port)
+                .expect("family object output");
+            let object = def.nodes.iter().find(|node| node.id == wire.from_node).expect("family object");
+            json!({"id":"parent_visible", "label":"Visible", "defaultValue":1.0,
+                "convert":{"type":"Float"},
+                "target":{"kind":"node", "nodeId":object.node_id, "param":"parent_visible"}})
+        }).collect();
+        let budget_node = def.nodes.iter().find(|node| node.id == budget as u32).expect("family budget");
+        let domain_node = def.nodes.iter().find(|node| node.id == domain as u32).expect("family domain");
+        bindings.push(json!({"id":"sheet_fill_rate", "label":"Sheet Fill Rate", "defaultValue":0.0,
+            "defaultMirrorsNodeParam":true, "convert":{"type":"Float"},
+            "target":{"kind":"node", "nodeId":domain_node.node_id, "param":"sheet_fill_rate"}}));
+        bindings.push(json!({"id":"whitewater_capacity", "label":"Whitewater Budget", "defaultValue":100000.0,
+            "defaultMirrorsNodeParam":true, "convert":{"type":"IntRound"},
+            "target":{"kind":"node", "nodeId":budget_node.node_id, "param":"value"}}));
+        def.preset_metadata = Some(serde_json::from_value(json!({
+            "id":"WaterFamily", "displayName":"Water", "category":"Geometry", "oscPrefix":"water",
+            "params":[{"id":"parent_visible", "name":"Visible", "defaultValue":1.0,
+                "min":0.0, "max":1.0, "isToggle":true, "cardVisible":false, "section":"Water"},
+                {"id":"sheet_fill_rate", "name":"Sheet Fill Rate", "defaultValue":0.0,
+                "min":0.0, "max":1.0, "formatString":"F2", "wholeNumbers":false,
+                "isToggle":false, "isTrigger":false, "section":"Fluid"},
+                {"id":"whitewater_capacity", "name":"Whitewater Budget", "defaultValue":100000.0,
+                "min":1000.0, "max":250000.0, "wholeNumbers":true, "formatString":"F0", "section":"Water Detail"}],
+            "bindings":bindings
+        })).expect("family visibility metadata"));
+        let metadata = def.preset_metadata.as_mut().expect("family metadata");
+        let look_metadata = crate::node_graph::scene_exposure::look_metadata();
+        let visible_metadata: Vec<_> = crate::node_graph::scene_exposure::metadata_for_node_type("node.scene_object")
+            .into_iter().filter(|param| param.name == "visible").collect();
+        for (kind, section) in [("foam", "Foam"), ("spray", "Spray"), ("bubble", "Bubbles")] {
+            for (suffix, param_id, descriptors) in [
+                ("mesh", format!("{kind}_size"), &look_metadata),
+                ("object", format!("{kind}_visible"), &visible_metadata),
+            ] {
+                let node = def.nodes.iter().find(|node| node.node_id.as_str() == format!("{kind}_{suffix}"))
+                    .expect("family look node");
+                let mut params = Vec::new();
+                let mut bindings = Vec::new();
+                manifold_core::scene_exposure::stamp_scene_node_exposures_into(
+                    &mut params, &mut bindings, node.id, &node.node_id, &node.type_id,
+                    section, descriptors, &node.params,
+                );
+                assert_eq!(params.len(), 1, "one authored look control");
+                for param in &mut params { param.id = param_id.clone(); }
+                for binding in &mut bindings { binding.id = param_id.clone(); }
+                metadata.params.extend(params);
+                metadata.bindings.extend(bindings);
+            }
+        }
+        def
     }
 }
 
@@ -758,6 +812,7 @@ pub(crate) fn render_def(scene: WaterScene) -> EffectGraphDef {
     let mut b = Builder::from_def(def.clone());
     let render = b.id("scene");
     let body = scene.family_def();
+    let family_metadata = body.preset_metadata.clone().expect("family metadata");
     let family = b.node("water_family", "group", json!({}));
     let inputs = if scene.obstacle { vec![json!({"name": "role_0", "portType": "FluidRole"})] } else { vec![] };
     let outputs: Vec<_> = FAMILY_OUTPUTS.iter().map(|name| json!({"name": name, "portType": "SceneObject"})).collect();
@@ -777,7 +832,22 @@ pub(crate) fn render_def(scene: WaterScene) -> EffectGraphDef {
     render_node.params.insert("objects".into(), serde_json::from_value(int(10)).expect("object count"));
     def.nodes = b.nodes;
     def.wires = b.wires;
-    def.preset_metadata = Some(serde_json::from_value(scene_cards(&preset["presetMetadata"], scene)).expect("scene cards"));
+    let mut metadata: manifold_core::effect_graph_def::PresetMetadata =
+        serde_json::from_value(scene_cards(&preset["presetMetadata"], scene)).expect("scene cards");
+    for spec in family_metadata.params {
+        let bindings: Vec<_> = family_metadata.bindings.iter()
+            .filter(|binding| binding.id == spec.id).cloned().collect();
+        let insertion = metadata.bindings.iter().position(|binding| binding.id == spec.id)
+            .unwrap_or(metadata.bindings.len());
+        metadata.bindings.retain(|binding| binding.id != spec.id);
+        metadata.bindings.splice(insertion..insertion, bindings);
+        if let Some(existing) = metadata.params.iter_mut().find(|existing| existing.id == spec.id) {
+            *existing = spec;
+        } else {
+            metadata.params.push(spec);
+        }
+    }
+    def.preset_metadata = Some(metadata);
     def
 }
 
@@ -827,7 +897,7 @@ const ICOSAHEDRON: usize = 3;
 #[cfg(test)]
 pub(crate) fn particle_view_def() -> EffectGraphDef {
     let mut def = render_def(WaterScene::dam_break(64));
-    let family = def.nodes.iter_mut().find(|n| n.node_id.as_str() == "water_family").expect("Water family");
+    let family = find_node_mut(&mut def.nodes, "water_family").expect("Water family");
     let group = family.group.as_mut().expect("family group");
     let mut b = Builder { nodes: std::mem::take(&mut group.nodes), wires: std::mem::take(&mut group.wires) };
     b.remove(&["surface"]);
@@ -888,22 +958,6 @@ fn particle_view_cards(def: &Value) -> Value {
 #[cfg(any(test, feature = "gpu-proofs"))]
 fn scene_cards(metadata: &Value, scene: WaterScene) -> Value {
     let mut metadata = metadata.clone();
-    // The builder owns this card: the seed predates it, so every regeneration
-    // writes it after Max Iterations and a hand edit to the JSON does not survive.
-    for (list, entry) in [
-        ("params", json!({"id":"sheet_fill_rate", "name":"Sheet Fill Rate",
-            "defaultValue":0.0, "min":0.0, "max":1.0, "formatString":"F2",
-            "wholeNumbers":false, "isToggle":false, "isTrigger":false, "section":"Fluid"})),
-        ("bindings", json!({"id":"sheet_fill_rate", "label":"Sheet Fill Rate",
-            "defaultValue":0.0, "defaultMirrorsNodeParam":true, "convert":{"type":"Float"},
-            "target":{"kind":"node", "nodeId":"domain", "param":"sheet_fill_rate"}})),
-    ] {
-        let entries = metadata[list].as_array_mut().expect("card lists");
-        entries.retain(|entry| entry["id"] != "sheet_fill_rate");
-        let after_cap = entries.iter().position(|entry| entry["id"] == "max_iterations")
-            .map_or(entries.len(), |i| i + 1);
-        entries.insert(after_cap, entry);
-    }
     let detail = scene.surface_scale.checked_sub(SURFACE_DETAIL_OFFSET).filter(|detail| *detail <= 2);
     for list in ["params", "bindings"] {
         let entries = metadata[list].as_array_mut().expect("card lists");
@@ -943,7 +997,7 @@ fn set_surface_scale(value: &mut Value, scale: usize) {
 fn surface(b: &mut Builder, scene: WaterScene, frame: usize) -> Port {
     let mut group = surface_group();
     set_surface_scale(&mut group, scene.surface_scale);
-    let id = b.nodes.len();
+    let id = b.nodes.iter().map(|node| node.id as usize + 1).max().unwrap_or(0);
     group["id"] = json!(id);
     group["nodeId"] = json!("surface");
     b.nodes.push(serde_json::from_value(group).expect("surface group"));
@@ -1275,8 +1329,7 @@ pub(super) mod tests {
     fn gpu_flip_any_resolution_walks_on_the_built_graph() {
         for n in [16, 24, 32, 63, 72, 100, 128] {
             let mut def = render_def(WaterScene::dam_break(64));
-            let family = def.nodes.iter_mut().find(|node| node.node_id.as_str() == "water_family").expect("family");
-            let domain = family.group.as_mut().unwrap().nodes.iter_mut().find(|node| node.node_id.as_str() == "domain").expect("domain");
+            let domain = find_node_mut(&mut def.nodes, "domain").expect("domain");
             domain.params.insert("resolution".into(), manifold_core::effect_graph_def::SerializedParamValue::Int { value: n });
             let report = walked(&def, false, &format!("the 64³ graph at Resolution {n}"));
             assert!(report.scene_bytes > 0);
@@ -1432,12 +1485,11 @@ pub(super) mod tests {
         let registry = PrimitiveRegistry::with_builtin();
         for name in [SHIPPED_PRESET, "WaterDamBreakGpu", "WaterDamBreakMatter", "WaterStillPoolMatter", "WaterFloatingBoxMatter"] {
             let json = bundled_preset_json(&PresetTypeId::new(name)).unwrap();
-            let preset: Value = serde_json::from_str(&json).unwrap();
-            fn surface_in(nodes: &[Value]) -> Option<&Value> {
-                nodes.iter().find(|n| n["handle"] == "Liquid Surface").or_else(|| nodes.iter().find_map(|n|
-                    n["group"]["nodes"].as_array().and_then(|nodes| surface_in(nodes))))
-            }
-            let surface = surface_in(preset["nodes"].as_array().unwrap()).expect("nested surface");
+            let mut preset: Value = serde_json::from_str(&json).unwrap();
+            let surface_id = if name == SHIPPED_PRESET { "surface" } else { "liquid_surface" };
+            let surface = crate::node_graph::liquid::conformance::json_node_mut(&mut preset, surface_id)
+                .cloned().expect("nested surface");
+            assert_eq!(surface["handle"], "Liquid Surface", "{name}: authored surface handle");
             assert_eq!(structure(&surface["group"]), structure(group), "{name}: authored surface drift");
             let particle_scale = 3.0_f32;
             let mut defaults = surface["params"].clone();
@@ -1526,8 +1578,7 @@ pub(super) mod tests {
     fn gpu_flip_water_material_matches_saved_native_reference() {
         let registry = PrimitiveRegistry::with_builtin();
         for def in [render_def(WaterScene::dam_break(64)), particle_view_def()] {
-            let family = def.nodes.iter().find(|n| n.node_id.as_str() == "water_family").unwrap().group.as_ref().unwrap();
-            let material = family.nodes.iter().find(|n| n.node_id.as_str() == "water_material").unwrap();
+            let material = find_node(&def.nodes, "water_material").unwrap();
             assert_eq!(material.params.len(), 18, "the material retains its authored parameter surface");
             let runtime = crate::preset_runtime::PresetRuntime::from_def(def, &registry, None).unwrap();
             let id = runtime.graph.instance_by_node_id(&manifold_core::NodeId::new("water_material")).unwrap();
@@ -1648,7 +1699,7 @@ pub(super) mod tests {
         ] {
             let saved = serde_json::to_string(&def).unwrap();
             let def: EffectGraphDef = serde_json::from_str(&saved).unwrap();
-            let family = def.nodes.iter().find(|n| n.node_id.as_str() == "water_family").unwrap();
+            let family = find_node(&def.nodes, "water_family").unwrap();
             let group = family.group.as_ref().expect("ordinary family group");
             assert_eq!(group.interface.outputs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), FAMILY_OUTPUTS);
             assert_eq!(group.interface.inputs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
@@ -1903,15 +1954,13 @@ pub(super) mod tests {
         let again: EffectGraphDef = serde_json::from_str(&saved).expect("the saved preset reloads");
         let reloaded = serde_json::to_value(&again).expect("serialise");
         assert!(canonical(&reloaded) == canonical(&loaded), "a save and reload changed {SHIPPED_PRESET}.json");
-        let nodes = reloaded["nodes"].as_array().expect("nodes");
-        let family = nodes.iter().find(|n| n["nodeId"] == "water_family").expect("Water family");
-        let group = family["group"]["nodes"].as_array().unwrap().iter()
-            .find(|n| n["nodeId"] == "whitewater").expect("Whitewater step");
+        let reloaded_def: EffectGraphDef = serde_json::from_value(reloaded.clone()).expect("reloaded preset");
+        let group = serde_json::to_value(find_node(&reloaded_def.nodes, "whitewater").expect("Whitewater step")).expect("whitewater");
         for param in ["capacity", "wavecrest_emission", "min_energy", "max_energy"] {
             assert!(group["params"][param]["value"].is_number(), "the group lost {param}");
         }
         let cards = reloaded["presetMetadata"]["bindings"].as_array().expect("bindings");
-        for card in ["whitewater_capacity", "foam_radius", "spray_radius", "bubble_density"] {
+        for card in ["whitewater_capacity", "parent_visible", "bubble_density"] {
             assert!(cards.iter().any(|c| c["id"] == card), "the preset lost the {card} card");
         }
     }

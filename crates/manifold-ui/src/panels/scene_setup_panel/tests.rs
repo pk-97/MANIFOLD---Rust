@@ -107,6 +107,7 @@
             atmosphere: AtmosphereRowVm::None,
             objects: vec![
                 ObjectRowVm::Known(Box::new(ObjectKnownRow {
+                    look_mesh: None,
                     index: 0,
                     object_node_id: 40,
                     group_node_id: Some(42),
@@ -751,7 +752,7 @@
         let object = panel.selected_scene_item().unwrap();
         assert!(!object.is_light);
         assert!(matches!(panel.frame_selection_action(), Some(PanelAction::Project(ProjectAction::SceneSetupFrameSelected(_, 99, 40)))));
-        assert!(matches!(panel.rename_selection_action(), Some(PanelAction::Root(RootAction::SceneSetupRenameObjectClicked(_, 42, _)))));
+        assert!(matches!(panel.rename_selection_action(), Some(PanelAction::Root(RootAction::SceneSetupRenameObjectClicked(_, 40, _)))));
         let light_node = panel.outliner_row_ids.iter().find(|(_, selection)| *selection == SceneSelection::Light(60)).unwrap().0;
         let (consumed, actions) = panel.handle_event(&UIEvent::RightClick {
             node_id: Some(light_node), pos: Vec2::new(0.0, 0.0), modifiers: Modifiers::NONE,

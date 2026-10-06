@@ -49,16 +49,38 @@ impl SceneNodeRef {
     /// The node this reference names in `def`, walking the scope group by
     /// group.
     pub fn resolve<'a>(&self, def: &'a EffectGraphDef) -> Option<&'a EffectGraphNode> {
-        let mut nodes = def.nodes.as_slice();
+        self.resolve_nodes(&def.nodes)
+    }
+
+    /// Resolve this scoped reference against a node slice.
+    pub(crate) fn resolve_nodes<'a>(&self, nodes: &'a [EffectGraphNode]) -> Option<&'a EffectGraphNode> {
+        let mut nodes = nodes;
         for group in &self.scope {
             nodes = &nodes.iter().find(|node| &node.node_id == group)?.group.as_deref()?.nodes;
         }
         nodes.iter().find(|node| node.node_id == self.node)
     }
 
+    /// Resolve this scoped reference mutably against a node slice.
+    pub(crate) fn resolve_nodes_mut<'a>(&self, nodes: &'a mut [EffectGraphNode]) -> Option<&'a mut EffectGraphNode> {
+        fn descend<'a>(nodes: &'a mut [EffectGraphNode], scope: &[NodeId], node: &NodeId) -> Option<&'a mut EffectGraphNode> {
+            if let Some((group, rest)) = scope.split_first() {
+                let group = nodes.iter_mut().find(|candidate| candidate.node_id == *group)?.group.as_deref_mut()?;
+                return descend(&mut group.nodes, rest, node);
+            }
+            nodes.iter_mut().find(|candidate| candidate.node_id == *node)
+        }
+        descend(nodes, &self.scope, &self.node)
+    }
+
     /// The scoped reference to the node whose stable id is `node`, anywhere
     /// in `def`. Stable ids are unique across the whole document.
     pub fn locate(def: &EffectGraphDef, node: &NodeId) -> Option<SceneNodeRef> {
+        Self::locate_nodes(&def.nodes, node)
+    }
+
+    /// Locate a stable node id in a node slice, including nested groups.
+    pub(crate) fn locate_nodes(nodes: &[EffectGraphNode], node: &NodeId) -> Option<SceneNodeRef> {
         fn visit(nodes: &[EffectGraphNode], wanted: &NodeId, scope: &mut Vec<NodeId>) -> Option<SceneNodeRef> {
             for candidate in nodes {
                 if &candidate.node_id == wanted {
@@ -80,7 +102,7 @@ impl SceneNodeRef {
         if node.is_empty() {
             return None;
         }
-        visit(&def.nodes, node, &mut Vec::new())
+        visit(nodes, node, &mut Vec::new())
     }
 }
 

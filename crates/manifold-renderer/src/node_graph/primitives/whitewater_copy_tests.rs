@@ -1,4 +1,4 @@
-//! P1: live field placement and influence ownership, without golden recording.
+//! Live field placement and influence ownership, without golden recording.
 use super::*;
 use super::super::liquid_surface_tests::{Harness, read};
 use super::super::whitewater_obstacle_source::WhitewaterSource;

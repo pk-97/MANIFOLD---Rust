@@ -308,7 +308,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "text": "\u25a0 Object 3"
+          "text": "\u25a0 Object 6"
         }
       }
     }
@@ -317,7 +317,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "\u25a0 Object 3"
+          "text": "\u25a0 Object 6"
         }
       },
       "gesture": {

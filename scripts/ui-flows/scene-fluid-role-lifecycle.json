@@ -145,7 +145,7 @@
     "ScrollTo": {
       "target": {
         "Query": {
-          "text": "■ Object 3"
+          "text": "■ Object 6"
         }
       }
     }
@@ -154,7 +154,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "■ Object 3"
+          "text": "■ Object 6"
         }
       },
       "gesture": {
@@ -169,7 +169,7 @@
       "target": {
         "Query": {
           "name_suffix": ".target",
-          "text": "Target: Fluid 1"
+          "text": "Target: Water 1"
         }
       }
     }
@@ -178,7 +178,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Target: Fluid 1"
+          "text": "Target: Water 1"
         }
       },
       "check": "Exists"
@@ -189,7 +189,7 @@
       "target": {
         "Query": {
           "name_suffix": ".target",
-          "text": "Target: Fluid 1"
+          "text": "Target: Water 1"
         }
       },
       "gesture": {
@@ -203,7 +203,7 @@
     "Pointer": {
       "target": {
         "Query": {
-          "text": "Fluid 2"
+          "text": "Water 2"
         }
       },
       "gesture": {
@@ -217,7 +217,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Target: Fluid 2"
+          "text": "Target: Water 2"
         }
       },
       "check": "Exists"
@@ -263,7 +263,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Target: Fluid 2"
+          "text": "Target: Water 2"
         }
       },
       "check": "Exists"
@@ -281,7 +281,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Target: Fluid 1"
+          "text": "Target: Water 1"
         }
       },
       "check": "Exists"
@@ -300,7 +300,7 @@
     "Assert": {
       "selector": {
         "Query": {
-          "text": "Target: Fluid 2"
+          "text": "Target: Water 2"
         }
       },
       "check": "Exists"

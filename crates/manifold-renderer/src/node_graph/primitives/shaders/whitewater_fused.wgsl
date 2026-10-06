@@ -510,7 +510,7 @@ fn ww_dust(@builtin(global_invocation_id) gid: vec3<u32>) {
     out_counts[idx] = counts;
 }
 
-// P3 resources are disjoint per entry point, retaining the 16-binding dispatch cap.
+// Resources are disjoint per entry point, retaining the 16-binding dispatch cap.
 struct Spawn { position_lifetime: vec4<f32>, velocity: vec3<f32>, kind: u32, }
 struct Pool { position_lifetime: vec4<f32>, velocity: vec3<f32>, kind: u32, id: u32, _pad0: u32, _pad1: u32, _pad2: u32, }
 struct SpawnParams {

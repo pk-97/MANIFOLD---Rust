@@ -19,6 +19,10 @@ INTEGRATION_ROWS = {
 # Contracts over every file under a prefix, Rust or not:
 # (prefix, suffix, package, test modules, integration binaries).
 PREFIX_ROWS = [
+    # Scene-panel manifest rows are guarded by the existing INV-8 integration
+    # test; keep it in the scoped CPU plan for every panel change.
+    ("crates/manifold-ui/src/panels/", ".rs", "manifold-ui", [],
+     ["no_bespoke_row_infra"]),
     # Bundled preset JSON is compiled into the renderer.
     ("crates/manifold-renderer/assets/", ".json", "manifold-renderer",
      ["node_graph::bundled_presets"], []),

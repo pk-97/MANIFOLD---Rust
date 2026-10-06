@@ -79,29 +79,7 @@ fn renumber_scope_ids(value: &mut Value, next: &mut u64) {
     }
 }
 
-#[cfg(feature = "whitewater-oracle")]
-fn find_node_mut<'a>(value: &'a mut Value, node_id: &str) -> Option<&'a mut Value> {
-    let nodes = value["nodes"].as_array_mut()?;
-    for node in nodes {
-        if node["nodeId"] == node_id {
-            return Some(node);
-        }
-        if node["group"].is_object()
-            && let Some(found) = find_node_mut(&mut node["group"], node_id)
-        {
-            return Some(found);
-        }
-    }
-    None
-}
-
-fn find_node<'a>(nodes: &'a [EffectGraphNode], node_id: &str) -> Option<&'a EffectGraphNode> {
-    nodes.iter().find_map(|node| {
-        (node.node_id.as_str() == node_id).then_some(node).or_else(|| {
-            node.group.as_deref().and_then(|group| find_node(&group.nodes, node_id))
-        })
-    })
-}
+use crate::node_graph::liquid::conformance::json_node_mut;
 
 fn node_scope_wires<'a>(
     nodes: &'a [EffectGraphNode],
@@ -202,24 +180,11 @@ impl Appender {
         Self { def, next: first }
     }
 
-    fn named(&self, name: &str) -> &Value {
-        fn find<'a>(value: &'a Value, name: &str) -> Option<&'a Value> {
-            for node in value["nodes"].as_array()? {
-                if node["nodeId"] == name {
-                    return Some(node);
-                }
-                if node["group"].is_object()
-                    && let Some(found) = find(&node["group"], name)
-                {
-                    return Some(found);
-                }
-            }
-            None
-        }
-        find(&self.def, name).unwrap_or_else(|| panic!("no node {name}"))
+    fn named(&mut self, name: &str) -> &Value {
+        json_node_mut(&mut self.def, name).unwrap_or_else(|| panic!("no node {name}"))
     }
 
-    fn id(&self, name: &str) -> u64 {
+    fn id(&mut self, name: &str) -> u64 {
         self.named(name)["id"].as_u64().expect("numeric id")
     }
 
@@ -417,7 +382,7 @@ fn vendored_whitewater_scene_loads_and_compiles_without_gpu() {
     use crate::node_graph::freeze::install::fuse_generator_view;
 
     let def = vendored_render_def(WaterScene::dam_break(16));
-    let group = find_node(&def.nodes, "whitewater").expect("the vendored whitewater group");
+    let group = manifold_core::effect_graph_def::find_node(&def.nodes, "whitewater").expect("the vendored whitewater group");
     let body = group.group.as_ref().expect("whitewater is a group");
     assert!(!body.interface.inputs.iter().any(|input| input.name == "capacity"),
         "the lifecycle uses a param, not a silently unused capacity input");
@@ -475,7 +440,6 @@ fn vendored_render_def(scene: WaterScene) -> EffectGraphDef {
     // original frame and surface inputs and drives the render directly,
     // never the step's tick interface.
     g.retain_wires(id, |wire| wire["toNode"] != id && wire["fromNode"] != id);
-    g.remove(&["whitewater_face_u", "whitewater_face_v", "whitewater_face_w"]);
     // Corrected FLIP faces and obstacle lattices share native coordinates.
     let frame = g.id("frame");
     for (source, input) in [("particles_b", "particles"), ("count_b", "count"), ("solid_b", "solid")] {
@@ -2084,7 +2048,7 @@ mod emitter_oracle {
         let n = cells(grid);
         let face_cells = grid.face_cells as u32;
         let mut def = serde_json::to_value(whitewater_render_def(scene.with_faces())).expect("def serialises");
-        let node = find_node_mut(&mut def, "whitewater").expect("the step in the Water group");
+        let node = json_node_mut(&mut def, "whitewater").expect("the step in the Water group");
         for (key, value) in params.as_object().expect("params") {
             node["params"][key] = value.clone();
         }

@@ -8,6 +8,9 @@ impl AppInputHost<'_> {
         if !self.ui_root.object_cards_have_focus {
             return false;
         }
+        if !self.ui_root.scene_setup_panel.scene_item_edit_allowed(action) {
+            return true;
+        }
         let selected = self.ui_root.scene_setup_panel.selected_scene_item();
         if matches!(action, CardEditAction::Copy | CardEditAction::Cut) {
             let Some(item) = selected.as_ref() else {

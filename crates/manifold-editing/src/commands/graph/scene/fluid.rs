@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use manifold_core::GraphTarget;
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{
-    EffectGraphDef, EffectGraphNode, GROUP_TYPE_ID, GroupDef, GroupInterface, InterfacePortDef,
+    BindingTarget, EffectGraphDef, EffectGraphNode, GROUP_TYPE_ID, GroupDef, GroupInterface, InterfacePortDef,
     PresetMetadata, SerializedParamValue,
 };
 use manifold_core::liquid_domain::liquid_domains_in;
@@ -35,10 +35,10 @@ pub use template::{ExposureSet, LiquidTemplate, TemplateExposure, flip_scene_flu
 
 type GraphSnapshot = EffectGraphDef;
 
-/// Append one grouped liquid surface to an existing root render scene.
+/// Append one grouped liquid template to an existing root render scene.
 ///
-/// The object slot is resolved from the live render_scene objects parameter
-/// at execution time. This preserves physical slot ordering for compound
+/// All template outputs reserve slots from the live render_scene objects
+/// parameter in one transaction. This preserves physical slot ordering for compound
 /// scene objects, whose authored count includes every rendered part.
 #[derive(Debug)]
 pub struct AddSceneFluidCommand {
@@ -50,6 +50,7 @@ pub struct AddSceneFluidCommand {
     world_metadata: Vec<SceneParamMetadata>,
     material_metadata: Vec<SceneParamMetadata>,
     object_metadata: Vec<SceneParamMetadata>,
+    whitewater_metadata: Vec<SceneParamMetadata>,
     template: LiquidTemplate,
     catalog_default: EffectGraphDef,
     prev: Option<GraphSnapshot>,
@@ -82,6 +83,7 @@ impl AddSceneFluidCommand {
             world_metadata: Vec::new(),
             material_metadata,
             object_metadata,
+            whitewater_metadata: Vec::new(),
             template,
             catalog_default,
             prev: None,
@@ -101,6 +103,11 @@ impl AddSceneFluidCommand {
 
     pub fn with_world_metadata(mut self, metadata: Vec<SceneParamMetadata>) -> Self {
         self.world_metadata = metadata;
+        self
+    }
+
+    pub fn with_whitewater_metadata(mut self, metadata: Vec<SceneParamMetadata>) -> Self {
+        self.whitewater_metadata = metadata;
         self
     }
 
@@ -268,6 +275,7 @@ impl Command for AddSceneFluidCommand {
             ExposureSet::Role => self.role_metadata.clone(),
             ExposureSet::Material => self.material_metadata.clone(),
             ExposureSet::Object => self.object_metadata.clone(),
+            ExposureSet::Whitewater => self.whitewater_metadata.clone(),
         };
         let mut candidate = baseline.clone();
         let result = (|def: &mut EffectGraphDef| {
@@ -280,16 +288,22 @@ impl Command for AddSceneFluidCommand {
             let Some(object_count) = render.params.get("objects").and_then(object_count) else {
                 return Err("Add Fluid render scene has an invalid object count");
             };
-            let Some(new_count) = object_count.checked_add(1) else {
+            let output_count = u32::try_from(template.object_outputs.len())
+                .map_err(|_| "Add Fluid object count is exhausted")?;
+            if output_count == 0 || template.object_outputs.iter().collect::<HashSet<_>>().len() != template.object_outputs.len() {
+                return Err("Add Fluid template outputs are malformed");
+            }
+            let Some(new_count) = object_count.checked_add(output_count) else {
                 return Err("Add Fluid object count is exhausted");
             };
-            let destination = format!("object_{object_count}");
-            if def
-                .wires
-                .iter()
-                .any(|wire| wire.to_node == render_id && wire.to_port == destination)
-            {
-                return Err("Add Fluid destination object slot is occupied");
+            for (offset, output) in template.object_outputs.iter().enumerate() {
+                if template.wires.iter().filter(|wire| wire.to_node == template.output_node && wire.to_port == *output).count() != 1 {
+                    return Err("Add Fluid template outputs are malformed");
+                }
+                let destination = format!("object_{}", object_count + offset as u32);
+                if def.wires.iter().any(|wire| wire.to_node == render_id && wire.to_port == destination) {
+                    return Err("Add Fluid destination object slot is occupied");
+                }
             }
 
             let mut next_id = max_node_id_over(&def.nodes).checked_add(1);
@@ -348,7 +362,7 @@ impl Command for AddSceneFluidCommand {
 
             let mut handles = HashSet::new();
             collect_all_handles(&def.nodes, &mut handles);
-            let fluid_handle = next_fluid_handle(&mut handles);
+            let fluid_handle = next_fluid_handle(template.name_prefix, &mut handles);
             let group_handle = dedup_handle(&format!("{fluid_handle} Graph"), &mut handles);
             for node in &mut body_nodes {
                 node.handle = match node.handle.take() {
@@ -362,8 +376,34 @@ impl Command for AddSceneFluidCommand {
             }
 
             let mut exposed = Vec::with_capacity(template.exposures.len());
+            let mut shared = Vec::new();
             for exposure in &template.exposures {
-                let id = lookup(exposure.node)?;
+                let TemplateExposure::Node { node, set, section } = exposure else {
+                    let TemplateExposure::Shared { spec, targets } = exposure else { unreachable!() };
+                    if targets.is_empty() { return Err("Add Fluid shared exposure has no targets"); }
+                    let mut spec = spec.as_ref().clone();
+                    spec.id = format!("{group_id}_{}", spec.id);
+                    spec.section = Some(match spec.section.as_deref() {
+                        None | Some("Water") => fluid_handle.clone(),
+                        Some(section) => format!("{fluid_handle} - {section}"),
+                    });
+                    let mut bindings = Vec::with_capacity(targets.len());
+                    for (local, authored) in targets {
+                        let fresh = lookup(*local)?;
+                        let node = body_nodes.iter().find(|node| node.id == fresh)
+                            .ok_or("Add Fluid shared exposure target is missing")?;
+                        let BindingTarget::Node { param, .. } = &authored.target else {
+                            return Err("Add Fluid shared exposure target is not a node");
+                        };
+                        let mut binding = authored.clone();
+                        binding.id = spec.id.clone();
+                        binding.target = BindingTarget::Node { node_id: node.node_id.clone(), param: param.clone() };
+                        bindings.push(binding);
+                    }
+                    shared.push((spec, bindings));
+                    continue;
+                };
+                let id = lookup(*node)?;
                 let node = body_nodes
                     .iter()
                     .find(|node| node.id == id)
@@ -373,8 +413,8 @@ impl Command for AddSceneFluidCommand {
                     node.node_id.clone(),
                     node.type_id.clone(),
                     node.params.clone(),
-                    exposure.set,
-                    exposure.section,
+                    *set,
+                    *section,
                 ));
             }
 
@@ -384,10 +424,9 @@ impl Command for AddSceneFluidCommand {
             group.group = Some(Box::new(GroupDef {
                 interface: GroupInterface {
                     inputs: Vec::new(),
-                    outputs: vec![InterfacePortDef {
-                        name: "object".into(),
-                        port_type: "Object".into(),
-                    }],
+                    outputs: template.object_outputs.iter().map(|name| InterfacePortDef {
+                        name: name.clone(), port_type: "SceneObject".into(),
+                    }).collect(),
                     params: Vec::new(),
                 },
                 nodes: body_nodes,
@@ -396,12 +435,10 @@ impl Command for AddSceneFluidCommand {
             }));
 
             def.nodes.push(group);
-            def.wires.push(scene_build_wire(
-                group_id,
-                "object",
-                render_id,
-                &destination,
-            ));
+            for (offset, output) in template.object_outputs.iter().enumerate() {
+                def.wires.push(scene_build_wire(group_id, output, render_id,
+                    &format!("object_{}", object_count + offset as u32)));
+            }
             def.nodes
                 .iter_mut()
                 .find(|node| node.id == render_id)
@@ -410,6 +447,10 @@ impl Command for AddSceneFluidCommand {
                 .insert("objects".into(), float(new_count as f32));
 
             let meta = def.preset_metadata.get_or_insert_with(empty_scene_metadata);
+            for (spec, bindings) in shared {
+                meta.params.push(spec);
+                meta.bindings.extend(bindings);
+            }
             for (id, node_id, type_id, params, set, section) in &exposed {
                 let label = match section {
                     Some(section) => format!("{fluid_handle} - {section}"),
@@ -503,10 +544,10 @@ fn int(value: i32) -> SerializedParamValue {
     SerializedParamValue::Int { value }
 }
 
-fn next_fluid_handle(handles: &mut HashSet<String>) -> String {
+fn next_fluid_handle(prefix: &str, handles: &mut HashSet<String>) -> String {
     let mut index = 1u32;
     loop {
-        let candidate = format!("Fluid {index}");
+        let candidate = format!("{prefix} {index}");
         if !handles.contains(&candidate) {
             handles.insert(candidate.clone());
             return candidate;
