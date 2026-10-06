@@ -1468,8 +1468,11 @@ fn gpu_flip_marker_motion_matches_native_wall_sequence_without_bodies() {
     }
 }
 
+/// D19: a particle under a body is never removed; only an open face's band
+/// removes water. The first sits at the centre of a solid block, where the
+/// distance has no gradient to climb, so it stays and counts as refused.
 #[test]
-fn gpu_flip_collision_removes_negative_body_phi_then_open_band_particles() {
+fn gpu_flip_collision_keeps_negative_body_phi_and_removes_open_band_particles() {
     let mut solid = wall_solid(N, H);
     let m = N.map(|n| n + 1);
     for z in 2..=3 {
@@ -1487,7 +1490,8 @@ fn gpu_flip_collision_removes_negative_body_phi_then_open_band_particles() {
     for entry in ["faces_to_particles", "narrow_move"] {
     for closed_faces in [62, 63] {
     let step = StepParams { body_count: 1, rows: 1, region_count: 0, closed_faces, particles: 2, ..lattice() };
-    let got: Vec<FluidParticle> = Pass::new()
+    let mut pass = Pass::new();
+    let got: Vec<FluidParticle> = pass
         .bind(2, &particles)
         .bind(3, &faces)
         .bind(9, &solid)
@@ -1498,17 +1502,19 @@ fn gpu_flip_collision_removes_negative_body_phi_then_open_band_particles() {
         .bind(22, &[0_u32; 4])
         .bind(36, &[LiquidBody::default()])
         .run(entry, &step, 19, particles.len(), particles.len());
-    assert_eq!(got[0].position_radius[3], 0.0, "negative body phi removes the stationary particle");
+    assert_eq!(got[0].position_radius, particles[0].position_radius, "{entry}: the particle under the body stays, live");
+    assert_eq!(pass.bound::<u32>(22, 2)[1], 1, "{entry}: its push-out is counted as refused");
     assert_eq!(got[1].position_radius[3], if closed_faces == 62 { 0.0 } else { 0.08 }, "only the open low-X band removes the second particle");
     }
     }
 }
 
 #[test]
-fn gpu_flip_collision_rejects_excessive_push_and_keeps_fallback() {
+fn gpu_flip_collision_refuses_excessive_push_and_keeps_the_particle() {
     // A plane solid whose exit is beyond the native five-cell push limit.
     // The last point also lies outside the safety AABB; its attempted clamp
     // stays inside this solid, so the final native fallback is the old point.
+    // D19: the particle is kept there, live, and counted as refused.
     let solid: Vec<f32> = (0..face_len()).map(|i| (pad_coords(i)[0] as f32 - 10.0) * H).collect();
     let particle = FluidParticle { position_radius: [MIN[0] + 0.05 * H, MIN[1] + 2.5 * H, MIN[2] + 2.5 * H, 0.08], id: 1, ..FluidParticle::default() };
     let faces = vec![FaceSample { velocity: [0.0, 1.0, 0.0, 0.0], weight: [1.0; 4] }; face_len()];
@@ -1522,7 +1528,7 @@ fn gpu_flip_collision_rejects_excessive_push_and_keeps_fallback() {
             .bind(36, &[LiquidBody::default()])
             .run(entry, &step, 19, 1, 1);
         assert_eq!(got[0].position_radius[..3], particle.position_radius[..3], "{entry}: last-position fallback");
-        assert_eq!(got[0].position_radius[3], 0.0, "{entry}: particle still inside solid is removed");
+        assert_eq!(got[0].position_radius[3], particle.position_radius[3], "{entry}: water is never deleted at a solid");
         assert_eq!(pass.bound::<u32>(22, 2)[1], 1, "{entry}: refused push is counted");
     }
 }
