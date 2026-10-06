@@ -1,7 +1,8 @@
 // Production FLIP field contract: native support and solid clipping,
 // with no preview-only border override. Test references are independent gathers.
+// Names avoid particle_volume_common.wgsl, which the codegen prepends.
 
-fn pv_solid(p: vec3<f32>, lattice_min: vec3<f32>, spacing: vec3<f32>, nodes: vec3<u32>) -> f32 {
+fn pv_ref_solid(p: vec3<f32>, lattice_min: vec3<f32>, spacing: vec3<f32>, nodes: vec3<u32>) -> f32 {
     let g = clamp((p - lattice_min) / spacing, vec3<f32>(0.0), vec3<f32>(nodes - vec3<u32>(1u)));
     let base = min(vec3<u32>(floor(g)), nodes - vec3<u32>(2u));
     let f = g - vec3<f32>(base);
@@ -69,7 +70,7 @@ fn body(
         phi = min(phi, r * (length(v) - 1.0));
     }
     let spacing = size / vec3<f32>(solid_nodes - vec3<u32>(1u));
-    if pv_solid(p, lattice_min, spacing, solid_nodes) < 0.0 {
+    if pv_ref_solid(p, lattice_min, spacing, solid_nodes) < 0.0 {
         phi = max(phi, 0.0);
     }
     return phi;

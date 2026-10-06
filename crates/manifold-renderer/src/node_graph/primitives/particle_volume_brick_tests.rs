@@ -1,8 +1,88 @@
 //! Proofs for `node.particle_volume`'s cooperative pass-1 kernel
 //! (PARTICLE_VOLUME_BRICK_GATHER_DESIGN.md section 5 (Oracle and proofs)).
-//! The oracle is the generated kernel on the same inputs, compared bit for bit.
+//! The oracle is the generated kernel on the same inputs. Pass-1 words are
+//! held to Peter's bound (D4 ruling): same class, same sign, at most
+//! `MAX_ULP` apart. Storage pass 1 does not write stays bitwise.
 
 use super::*;
+
+/// D4 ruling: the most two lattice words may differ, in ordered-integer ULP.
+pub(crate) const MAX_ULP: u32 = 4;
+
+/// ULP distance between two f32 bit patterns, or `None` when they differ in
+/// class (finite / +inf / -inf / NaN) or sign. ±0 are equal.
+pub(crate) fn ordered_ulp(a: u32, b: u32) -> Option<u32> {
+    let (x, y) = (f32::from_bits(a), f32::from_bits(b));
+    if x.is_nan() || y.is_nan() {
+        return (x.is_nan() && y.is_nan()).then_some(0);
+    }
+    if x.is_infinite() || y.is_infinite() {
+        return (x == y).then_some(0);
+    }
+    if x == 0.0 && y == 0.0 {
+        return Some(0);
+    }
+    // Zero has no sign of its own: a zero matches a value of either sign.
+    if x != 0.0 && y != 0.0 && x.is_sign_negative() != y.is_sign_negative() {
+        return None;
+    }
+    let key = |v: u32| -> i64 {
+        let v = v as i32;
+        i64::from(if v < 0 { i32::MIN.wrapping_sub(v) } else { v })
+    };
+    Some((key(a) - key(b)).unsigned_abs().min(u64::from(u32::MAX)) as u32)
+}
+
+/// Per-buffer verdict of the bound: words pass 1 wrote, the largest ULP
+/// distance, and the first word more than 1 ULP apart.
+pub(crate) struct Bound {
+    pub written: usize,
+    pub max_ulp: u32,
+    pub first_over_one: Option<usize>,
+}
+
+/// `actual` against `oracle` word by word. Words equal to `untouched` in
+/// the oracle must be bitwise equal; every other word must meet the bound.
+pub(crate) fn assert_within_bound(actual: &[u32], oracle: &[u32], untouched: Option<u32>, what: &str) -> Bound {
+    assert_eq!(actual.len(), oracle.len());
+    let mut bound = Bound { written: 0, max_ulp: 0, first_over_one: None };
+    for (i, (&a, &b)) in actual.iter().zip(oracle).enumerate() {
+        if Some(b) == untouched || Some(a) == untouched {
+            assert_eq!(a, b, "{what}: word {i} is storage pass 1 does not write and must stay untouched");
+            continue;
+        }
+        bound.written += 1;
+        let ulp = ordered_ulp(a, b).unwrap_or_else(|| {
+            panic!("{what}: word {i}: class or sign differs: cooperative {} ({a:#010x}) vs generated {} ({b:#010x})", f32::from_bits(a), f32::from_bits(b))
+        });
+        assert!(ulp <= MAX_ULP, "{what}: word {i}: {ulp} ULP: cooperative {} ({a:#010x}) vs generated {} ({b:#010x})", f32::from_bits(a), f32::from_bits(b));
+        if ulp > 1 && bound.first_over_one.is_none() {
+            bound.first_over_one = Some(i);
+        }
+        bound.max_ulp = bound.max_ulp.max(ulp);
+    }
+    eprintln!("BOUND {what}: max {} ULP over {} words, first word over 1 ULP {:?}", bound.max_ulp, bound.written, bound.first_over_one);
+    bound
+}
+
+#[test]
+fn ordered_ulp_counts_representable_steps() {
+    let one = 1.0f32;
+    assert_eq!(ordered_ulp(one.to_bits(), one.next_up().to_bits()), Some(1));
+    assert_eq!(ordered_ulp(one.to_bits(), one.next_up().next_up().to_bits()), Some(2));
+    assert_eq!(ordered_ulp((-one).to_bits(), (-one).next_down().to_bits()), Some(1));
+    assert_eq!(ordered_ulp(0.0f32.to_bits(), (-0.0f32).to_bits()), Some(0));
+    let tiny = f32::from_bits(1);
+    // Across zero: -tiny, ±0, +tiny are consecutive.
+    assert_eq!(ordered_ulp(0.0f32.to_bits(), tiny.to_bits()), Some(1));
+    assert_eq!(ordered_ulp((-0.0f32).to_bits(), tiny.to_bits()), Some(1));
+    assert_eq!(ordered_ulp((-tiny).to_bits(), tiny.to_bits()), None, "opposite signs");
+    assert_eq!(ordered_ulp(f32::NAN.to_bits(), f32::NAN.to_bits()), Some(0));
+    assert_eq!(ordered_ulp(f32::NAN.to_bits(), one.to_bits()), None);
+    assert_eq!(ordered_ulp(f32::INFINITY.to_bits(), f32::INFINITY.to_bits()), Some(0));
+    assert_eq!(ordered_ulp(f32::INFINITY.to_bits(), f32::NEG_INFINITY.to_bits()), None);
+    assert_eq!(ordered_ulp(f32::INFINITY.to_bits(), f32::MAX.to_bits()), None);
+}
 
 /// Deterministic LCG; the proofs need reproducible inputs, not quality.
 struct Lcg(u64);
@@ -271,9 +351,9 @@ mod gpu {
         encoder.commit_and_wait_completed();
     }
 
-    /// Cooperative pass 1 against generated pass 1 on identical inputs; the
-    /// whole output, canary-filled first, must match bit for bit, so storage
-    /// neither kernel owns stays untouched too. Returns written words.
+    /// Cooperative pass 1 against generated pass 1 on identical inputs, both
+    /// outputs canary-filled first: written words meet the D4 bound, storage
+    /// pass 1 does not write stays the canary. Returns written words.
     fn compare_pass1(h: &Harness, oracle: &GpuComputePipeline, brick: &GpuComputePipeline, uniforms: VolumeUniforms, i: &Inputs, words: usize, what: &str) -> usize {
         let a = h.device.create_buffer_shared((words * 4) as u64);
         let b = h.device.create_buffer_shared((words * 4) as u64);
@@ -281,7 +361,8 @@ mod gpu {
         canary(&b);
         pass1(h, brick, uniforms, i, &a);
         pass1(h, oracle, uniforms, i, &b);
-        assert_bitwise(&a, &b, what).0
+        let words = a.size as usize / 4;
+        assert_within_bound(&read::<u32>(&a, words), &read::<u32>(&b, words), Some(CANARY), what).written
     }
 
     fn shared<T: bytemuck::Pod>(h: &Harness, values: &[T]) -> GpuBuffer {

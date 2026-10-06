@@ -130,12 +130,14 @@ fn cs_main(
     }
 
     var ijk = vec3<u32>(0u);
+    var p = vec3<f32>(0.0);
     // Inactive lanes: an empty window and identities for the union.
     var first_bin = vec3<i32>(2147483647);
     var last_bin = vec3<i32>(-2147483647 - 1);
     if inside {
         ijk = pv_ijk(idx, f.nodes);
-        let w = pv_window(pv_position(ijk, f), f, params.cell_size, bins);
+        p = pv_position(ijk, f);
+        let w = pv_window(p, f, params.cell_size, bins);
         first_bin = w.first_bin;
         last_bin = w.last_bin;
     }
@@ -216,9 +218,6 @@ fn cs_main(
                     // Staged chunk complete before any lane reads it.
                     workgroupBarrier();
                     if lane_z {
-                        // The generated kernel's position expression, evaluated
-                        // where it is consumed.
-                        let p = pv_position(ijk, f);
                         let chunk_end = min(chunk + CHUNK, total);
                         for (var y = row_lo; y <= row_hi; y = y + 1) {
                             // The lane's row as union-rect flat bins, then
@@ -257,7 +256,7 @@ fn cs_main(
     }
 
     if inside {
-        buf_levelset[idx] = pv_finish(phi, pv_position(ijk, f), f, params.interior_len);
+        buf_levelset[idx] = pv_finish(phi, p, f, params.interior_len);
     } else if stores {
         buf_levelset[idx] = f.band;
     }

@@ -85,7 +85,10 @@ fn equal_vertices(a: &GpuBuffer, b: &GpuBuffer, total: usize, stage: &str) {
     );
 }
 
-fn fixture(resolution: u32) {
+/// `cooperative`: the sparse lane's particle volume runs its cooperative
+/// pass-1 kernel and only the volume is checked, within the D4 bound.
+/// Otherwise pass 1 runs the generated kernel and the whole chain is bitwise.
+fn fixture(resolution: u32, cooperative: bool) {
     let mut h = Harness::new();
     let solid_nodes = [resolution + 4; 3];
     let nodes = solid_nodes.map(|n| (n - 1) * 2 + 1);
@@ -119,6 +122,10 @@ fn fixture(resolution: u32) {
     let (sparse_slot, sparse_buffer) = h.array::<f32>(&[], total);
     let (dense_slot, dense_buffer) = h.array::<f32>(&[], total);
     let mut volume = [ParticleVolume::new(), ParticleVolume::new()];
+    if !cooperative {
+        let source = crate::node_graph::freeze::codegen::standalone_for_spec::<ParticleVolume>().expect("volume codegen");
+        volume[0].brick_pipeline = Some(h.device.create_compute_pipeline(&source, ENTRY, "particle_volume.generated_pass1"));
+    }
     volume[1].pipeline = Some(oracle::<ParticleVolume>(
         &h,
         include_str!("shaders/particle_volume_dense_reference.wgsl"),
@@ -287,6 +294,15 @@ fn fixture(resolution: u32) {
                 &base_params,
             );
             assert!(errors.is_empty(), "{errors:?}");
+        }
+        if cooperative {
+            crate::node_graph::primitives::particle_volume::brick_tests::assert_within_bound(
+                &read::<u32>(&sparse_buffer, total),
+                &read::<u32>(&dense_buffer, total),
+                None,
+                &format!("dam break fixture {resolution}, frame {frame}"),
+            );
+            continue;
         }
         equal(&sparse_buffer, &dense_buffer, total, "volume");
         for passes in 0..=3 {
@@ -506,12 +522,18 @@ fn fixture(resolution: u32) {
 
 #[test]
 fn fluid_bricks_lattice_and_mesh_bit_identical_dense_64() {
-    fixture(64);
+    fixture(64, false);
+}
+
+#[test]
+fn particle_volume_brick_gather_dam_break_frames_bitwise() {
+    fixture(64, true);
+    fixture(128, true);
 }
 
 #[test]
 fn fluid_bricks_lattice_and_mesh_bit_identical_dense_128() {
-    fixture(128);
+    fixture(128, false);
 }
 
 #[test]

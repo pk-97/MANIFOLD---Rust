@@ -549,7 +549,7 @@ mod cpu_tests {
 
 #[cfg(test)]
 #[path = "particle_volume_brick_tests.rs"]
-mod brick_tests;
+pub(crate) mod brick_tests;
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
