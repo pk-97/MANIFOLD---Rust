@@ -50,7 +50,6 @@ crate::primitive! {
     depth_rule: Terminal,
     composition_notes: "After node.sample_faces_at_particles in the whitewater emitter chain; the Whitewater group's Min Energy and Max Energy drive it. Feeds node.emission_count, and the spawn's lifetimes.",
     examples: [],
-    picker: { label: "Energy Potential", category: Atom },
     summary: "Scores how fast each bit of water is moving, from 0 to 1, because faster water throws more foam and spray.",
     category: Particles3D,
     role: Filter,

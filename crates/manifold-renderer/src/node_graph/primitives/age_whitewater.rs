@@ -56,7 +56,6 @@ crate::primitive! {
     depth_rule: Terminal,
     composition_notes: "After node.retype_whitewater in the GPU whitewater tick, so a particle ages at its new type's rate; removal follows.",
     examples: [],
-    picker: { label: "Age Whitewater", category: Atom },
     summary: "Counts down each whitewater particle's life, spray fastest and bubbles slowest.",
     category: Particles3D,
     role: Filter,

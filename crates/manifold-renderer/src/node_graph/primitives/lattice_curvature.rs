@@ -50,7 +50,6 @@ crate::primitive! {
     depth_rule: Terminal,
     composition_notes: "distance from node.crossing_distance, nodes_x/y/z the particle frame's grid_nodes_x/y/z, cell_size the domain's. Chain node.extend_lattice three times after it, as FLIP extends its curvature three layers.",
     examples: [],
-    picker: { label: "Lattice Curvature", category: Atom },
     summary: "Measures how sharply the liquid's surface bends at each grid cell, which is where wave crests throw foam.",
     category: Particles3D,
     role: Filter,

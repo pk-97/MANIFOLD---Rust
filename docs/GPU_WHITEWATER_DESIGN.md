@@ -188,6 +188,8 @@ These are the ports the seam's P10 entry asks this design to name.
 
 ### 3.3 Atoms
 
+The whitewater-specific atoms below are registered stage internals, hidden from the palette. Their contracts remain available for saved graphs and reference tests.
+
 Every atom is `fusion_kind: Pointwise` on the codegen path with `BufferGather` inputs, unless marked. Grid atoms run once per whitewater cell (343,000 at 64), particle atoms once per `particles_b` slot, spawn atoms once per spawn slot (C). Grid atoms take the solid lattice's node counts (`grid_nodes_x/y/z` into `nodes_x/y/z`) and derive the cells (nodes − 1) and the refinement; positions are in grid cells, distances in metres through a `cell_size` input. Their records live in `R/whitewater.rs`: `SurfaceCrossing` (crossing, level, normal; 32 B) and `KnownValue` (value, known; 8 B).
 
 | Atom | Runs over | In → out | Rule |
@@ -330,6 +332,8 @@ Ported line by line from `F/diffuseparticlesimulation.cpp` `update` (:55): emit,
 **The pool.** One fixed-capacity `Array(WhitewaterParticle)` (position, velocity, lifetime, type, id) captured after each liquid tick by the liquid boundary. Order in the pool is age order: survivors first in their old order, then this frame's spawns in emission order.
 
 **As built: one stage, `node.whitewater_step`.** The GPU FLIP preset wires the solver's per-step distance, particles and projected faces into the stage within the liquid region. `liquid_state` owns the captured pool, state words, count words and three population buffers. The stage keeps only reusable scratch for that tick; capture copies every result before another tick reuses it. Other liquid graphs may omit these optional result pairs, but wiring an output without its capture is a compile error. Capacity changes reset the held pool; epoch changes reset it with the liquid. The frame-stage interface remains available for older saved graphs.
+
+**As fused.** The stage runs its emitter, spawn, lifecycle and turbulence work as fused kernels. The stage-internal atoms remain registered as bitwise test oracles and are hidden from the palette. See [Whitewater Stage Fusion](WHITEWATER_STAGE_FUSION_DESIGN.md).
 
 **BUG-215v validation:** `whitewater_per_tick_cpu_rows_match_at_every_frame_rate` uses an 8³ CPU fixture and rejects the old frame-batched schedule. `whitewater_per_tick_preset_closes_the_liquid_region` compiles and extent-checks the 16³ preset. `whitewater_per_tick_gpu_rows_match_at_every_frame_rate` compares every pool, state, counter and rendering word at shared instants across 30/60/120 fps, with two ticks in one command buffer at 30 fps and held frames at 120 fps. `whitewater_per_tick_padding_matches_cpu_on_a_small_lattice` checks the internal padding pass. GPU proofs are compile-only in this workstream; execution is owed to the lead. Existing lifecycle reference proofs remain applicable; no FLIP constants or tuning changed.
 

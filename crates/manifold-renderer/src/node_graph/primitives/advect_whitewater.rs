@@ -139,7 +139,6 @@ crate::primitive! {
     depth_rule: Terminal,
     composition_notes: "The first step of the GPU whitewater tick, on the pool node.array_feedback carries; retyping, lifetimes and removal follow. face_u/v/w and face_cells_x/y/z from the liquid frame's face grid, solid its solid lattice, center/size from node.transform_components on its grid_bounds, nodes_x/y/z its grid_nodes_x/y/z. FLIP's ballistic and kill limit behaviours are not ported: every side collides.",
     examples: [],
-    picker: { label: "Advect Whitewater", category: Atom },
     summary: "Moves foam, spray and bubbles one step: spray flies and bounces, bubbles rise, foam rides the water.",
     category: Particles3D,
     role: Filter,

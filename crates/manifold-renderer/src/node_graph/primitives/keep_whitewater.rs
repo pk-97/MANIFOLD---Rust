@@ -92,7 +92,6 @@ crate::primitive! {
     depth_rule: Terminal,
     composition_notes: "The removal step at the end of the GPU whitewater tick, after node.preserve_foam. Wire pool and binned from the same pool, and that pool into a node.sort_particles_into_cells over the whitewater grid with the grid's cell as its cell size; cell_ranges, order and bins_x/y/z come from that sort. center/size/nodes_x/y/z and solid as node.advect_whitewater takes them. node.running_total over the flags, then node.compact_whitewater, drop the removed slots. While the sort has no lattice nothing is binned and the per-cell cap is not counted.",
     examples: [],
-    picker: { label: "Keep Whitewater", category: Atom },
     summary: "Decides which foam, spray and bubbles survive this step: the dead, the stray and the overcrowded go.",
     category: Particles3D,
     role: Filter,
