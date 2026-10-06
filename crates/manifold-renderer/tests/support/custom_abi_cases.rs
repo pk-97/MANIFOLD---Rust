@@ -222,6 +222,20 @@ pub const CASES: &[CustomAbiCase] = &[
         aliases: &[],
     },
     CustomAbiCase {
+        source: "whitewater_step.rs",
+        rust_struct: "SpawnParams",
+        shader: "shaders/whitewater_fused.wgsl",
+        shader_struct: "SpawnParams",
+        aliases: &[],
+    },
+    CustomAbiCase {
+        source: "whitewater_step.rs",
+        rust_struct: "LifecycleParams",
+        shader: "shaders/whitewater_fused.wgsl",
+        shader_struct: "LifecycleParams",
+        aliases: &[],
+    },
+    CustomAbiCase {
         source: "gpu_flip_pressure.rs",
         rust_struct: "InverseParams",
         shader: "shaders/coarse_inverse.wgsl",
