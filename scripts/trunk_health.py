@@ -131,9 +131,10 @@ def main():
         ["python3", "scripts/feature_matrix.py"],
         # Full renderer coverage, including the asset-conformance sweep, belongs
         # here (landing runs only the scoped set; see scripts/gpu_scope.py).
-        # --record-times refreshes the measured-times file into /tmp and prints
-        # the diff; it never commits (a human adopts it, GIT_TREE_DISCIPLINE.md).
-        ["python3", "scripts/gpu_proofs_gate.py", "--all",
+        # Successful proof runs also update the shared timing cache consumed
+        # by landings. This export is for review/refresh of fresh-checkout seeds;
+        # no automatic source commit is needed for slots to learn new costs.
+        ["python3", "scripts/gpu_proofs_gate.py", "--all", "--learn-times",
          "--record-times", "/tmp/gpu_test_times.nightly.json"],
         # RT temporal stability. Nightly and not at landing: it costs an app
         # build plus a 300-frame render, three times over. Skips green (loudly)

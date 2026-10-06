@@ -554,7 +554,13 @@ def _main(stack):
     # fails here, not after a compile.
     run_gpu = touches_gpu and not args.skip_gpu
     if run_gpu:
-        plan = gpu_scope.plan_for_paths(paths, repo)
+        try:
+            plan = gpu_scope.plan_for_paths(paths, repo, base=base_sha)
+        except RuntimeError as error:
+            message = f"GPU-PROOFS SCOPE: FAIL - {error}"
+            print(message)
+            results.append(("FAIL", "gpu-proofs", None, [message]))
+            return finish(repo, base_sha, results)
         if plan.unmapped:
             message = gpu_scope.unmapped_message(plan)
             print(message)
@@ -579,9 +585,6 @@ def _main(stack):
     pending_tests = [(label, cmd, p) for label, cmd, p in test_legs if not p.record]
     proof_passes = [gate_passes.proof_pass(repo, run) for run in plan.runs()] if run_gpu else []
     proof_cached = bool(proof_passes) and all(p.record for p in proof_passes)
-    if proof_cached:
-        proof_cached = sum(p.record['seconds'] for p, run in zip(proof_passes, plan.runs())
-                           if run['budgeted']) <= gpu_scope.LANDING_BUDGET_S
 
     # Compile every test binary the hold will run before taking it, so the
     # hold covers test time only (BUG-w0hh (landing gate speed)). The legs
@@ -625,6 +628,8 @@ def _main(stack):
             return finish(repo, base_sha, results)
     if run_gpu:
         gpu_args = [arg for path in paths for arg in ("--path", path)]
+        if args.base != "origin/main":
+            gpu_args += ["--base", base_sha]
         if proof_cached:
             skip(results, 'gpu-proofs-build', 'all selected proofs already passed; no artifacts needed')
         if not proof_cached and build_leg(results, "gpu-proofs-build",
@@ -665,16 +670,25 @@ def _main(stack):
             print("[gpu-proofs] mode: scoped (focused tests + smoke; --all is nightly only)")
             print("[gpu-proofs] " + plan.describe().replace("\n", "\n[gpu-proofs] "), flush=True)
             cmd = ["python3", "scripts/gpu_proofs_gate.py", *gpu_args,
-                   "--budget", str(gpu_scope.LANDING_BUDGET_S)]
+                   "--budget", str(gpu_scope.LANDING_BUDGET_S), "--learn-times"]
             # The GPU hold was taken before the tests leg and is still held.
             if proof_cached:
                 for passed in proof_passes:
                     passed.reused()
-                exit_, out, err, duration = 0, '[REUSED] gpu-proofs', '', 0.0
+                spent = sum(p.record['seconds'] for p, run in zip(proof_passes, plan.runs())
+                            if run['budgeted'])
+                if spent > gpu_scope.LANDING_BUDGET_S:
+                    print(f"GPU-PROOFS BUDGET: OVER ({spent:.0f}s > "
+                          f"{gpu_scope.LANDING_BUDGET_S}s in reused passing proofs)")
+                deferred = [line for line in plan.describe().splitlines()
+                            if line.startswith('GPU-PROOFS DEFERRED:')]
+                for line in deferred:
+                    print(line, flush=True)
+                exit_, out, err, duration = 0, '\n'.join(['[REUSED] gpu-proofs', *deferred]), '', 0.0
             else:
                 exit_, out, err, duration = run_check("gpu-proofs", cmd, cwd=repo, timeout=7200)
                 for line in out.splitlines():
-                    if line.startswith('[REUSED]'):
+                    if line.startswith(('[REUSED]', 'GPU-PROOFS BUDGET:', 'GPU-PROOFS DEFERRED:')):
                         print(line, flush=True)
             transcript = write_landing_log(repo, "gpu-proofs", out, err)
             print(f"[gpu-proofs] complete transcript: {transcript}")
@@ -698,6 +712,8 @@ def _main(stack):
                         names.append(line)
                 verdict = [l for l in lines if l.startswith("GPU-PROOFS GATE:")]
                 tail = (names + verdict) or lines[-20:]
+            tail += [line for line in lines if line.startswith('GPU-PROOFS DEFERRED:')
+                     and line not in tail]
             status = "PASS" if exit_ == 0 else "FAIL"
             results.append((status, "gpu-proofs", duration, tail))
             print_result("gpu-proofs", status, duration, tail if exit_ != 0 else None)
@@ -729,6 +745,9 @@ def finish(repo, base_sha, results):
             print(f"{status} {label} ({tail[0]})")
         else:
             print(f"{status} {label}")
+        for line in tail:
+            if line.startswith('GPU-PROOFS DEFERRED:'):
+                print(line)
     print(f"landing gate: {passed} passed, {failed} failed, {skipped} skipped")
 
     # Timing log (JSONL append, main checkout — worktrees come and go)
