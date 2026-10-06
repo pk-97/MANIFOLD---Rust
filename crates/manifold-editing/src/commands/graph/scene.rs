@@ -2848,6 +2848,10 @@ fn find_scene_object_scope(
 }
 
 /// Recognise the primary Water output, including Particle View's copies path.
+/// Keep aligned with manifold-renderer scene_vm::discover_water_families:
+/// four distinct object outputs (water, foam, spray, bubbles), with water
+/// reaching the group's sole liquid domain. Editing cannot depend on renderer;
+/// app's water_family_recognizers_agree test checks both through real renames.
 fn is_water_family_parent(group: &GroupDef, object: u32) -> bool {
     let mut domains = group.nodes.iter().filter(|node|
         manifold_core::liquid_domain::is_liquid_domain(&node.type_id));

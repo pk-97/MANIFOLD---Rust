@@ -33,10 +33,6 @@ impl ScenePanel {
             | crate::panels::actions::CardEditAction::Duplicate => {
                 !item.is_family_child && !item.is_family_parent
             }
-            // Delete on a family child is the keyboard alias for Hide. It
-            // never removes the child graph output; parents retain the group
-            // removal path below.
-            crate::panels::actions::CardEditAction::Delete => true,
             _ => true,
         }
     }
@@ -148,9 +144,6 @@ impl ScenePanel {
         if item.is_family_child {
             return self.hide_selection_action();
         }
-        if !self.scene_item_edit_allowed(crate::panels::actions::CardEditAction::Delete) {
-            return None;
-        }
         Some(PanelAction::Project(if item.is_light {
             ProjectAction::SceneSetupRemoveLight(item.layer_id, item.scene, item.index)
         } else {
@@ -176,6 +169,9 @@ impl ScenePanel {
                 if row.object_node_id == object_node_id && row.look_mesh.is_some() => Some(row),
             _ => None,
         })?;
+        if row.visible.driven {
+            return None;
+        }
         Some(PanelAction::Project(ProjectAction::SceneSetupParamChanged(
             vm.layer_id.clone(),
             row.visible.addr.scope_path.clone(),

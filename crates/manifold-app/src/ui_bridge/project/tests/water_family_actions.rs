@@ -257,6 +257,45 @@ fn real_water_hides_child_without_removing_and_withholds_parent_duplicate() {
     assert!(matches!(hidden_ui.scene_setup_panel.remove_selection_action(),
         Some(manifold_ui::PanelAction::Project(manifold_ui::ProjectAction::SceneSetupParamChanged(
             _, _, _, ref param, 0.0))) if param == "visible"));
+
+    // Wire visibility to a scalar so the real projection marks it driven.
+    let mut driven = effective_def(&project, &layer);
+    let driver_id = 900_000;
+    let group = driven.nodes.iter_mut().find(|node| Some(node.id) == water.group_node_id)
+        .unwrap().group.as_mut().unwrap();
+    group.nodes.push(serde_json::from_value(serde_json::json!({
+        "id": driver_id, "nodeId": "hide_visibility_driver", "typeId": "node.value",
+        "params": {"value": {"type": "Float", "value": 1.0}}
+    })).unwrap());
+    group.wires.push(manifold_core::effect_graph_def::EffectGraphWire {
+        from_node: driver_id, from_port: "out".into(),
+        to_node: foam.object_node_id, to_port: "visible".into(),
+    });
+    project.graph_target_owner_mut(&manifold_core::GraphTarget::Generator(layer.clone()))
+        .unwrap().graph = Some(driven);
+    assert!(rows(&project, &layer).iter().find(|row| row.object == foam.object).unwrap().visible_driven);
+    let mut driven_ui = sync_water_ui(&project, &layer);
+    driven_ui.scene_setup_panel.set_selection(layer.clone(),
+        manifold_ui::panels::scene_setup_panel::SceneSelection::Object(foam.object_node_id));
+    build_scene_tree(&mut driven_ui);
+    let button = driven_ui.tree.nodes().iter().find(|node|
+        driven_ui.tree.name_of(node.id) == Some("scene_setup.properties.hide")).unwrap().id;
+    let (_, actions) = driven_ui.scene_setup_panel.handle_event(
+        &manifold_ui::UIEvent::Click { node_id: button, pos: manifold_ui::Vec2::ZERO,
+            modifiers: manifold_ui::Modifiers::default() }, &mut driven_ui.tree);
+    assert!(actions.is_empty(), "driven Hide button is inert");
+    assert!(driven_ui.scene_setup_panel.hide_selection_action().is_none());
+    assert!(driven_ui.scene_setup_panel.remove_selection_action().is_none(), "keyboard Delete is inert");
+    driven_ui.try_open_dropdown(
+        &manifold_ui::PanelAction::Root(manifold_ui::RootAction::SceneItemRightClicked), None);
+    let menu = driven_ui.tree.nodes().iter().rev()
+        .find(|node| node.text.as_deref() == Some("Hide")).expect("driven Hide stays present").id;
+    assert!(matches!(driven_ui.dropdown.handle_event(
+        &manifold_ui::UIEvent::Click { node_id: menu, pos: manifold_ui::Vec2::ZERO,
+            modifiers: manifold_ui::Modifiers::default() }, &mut driven_ui.tree),
+        Some(manifold_ui::panels::dropdown::DropdownAction::Dismissed)),
+        "driven context Hide is inert");
+    assert!(driven_ui.dropdown.is_open(), "disabled Hide only consumes the click");
 }
 
 #[test]

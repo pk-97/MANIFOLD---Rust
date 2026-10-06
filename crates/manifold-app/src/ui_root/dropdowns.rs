@@ -1583,9 +1583,6 @@ impl UIRoot {
                 let mut items = card_edit_menu_items(self.scene_item_clipboard.is_some(), false, false);
                 let selected = self.scene_setup_panel.selected_scene_item();
                 if let Some(selected) = selected {
-                    let can_remove = self.scene_setup_panel.scene_item_edit_allowed(
-                        manifold_ui::panels::actions::CardEditAction::Delete,
-                    );
                     let can_copy = self.scene_setup_panel.scene_item_edit_allowed(
                         manifold_ui::panels::actions::CardEditAction::Copy,
                     );
@@ -1600,16 +1597,16 @@ impl UIRoot {
                         "Cut" => can_cut,
                         // A Water-family child has no graph-removal menu
                         // item; its permanent Hide action writes visible=0.
-                        "Delete" => can_remove && !selected.is_family_child,
+                        "Delete" => !selected.is_family_child,
                         "Duplicate" => can_duplicate,
                         _ => true,
                     });
-                    if selected.is_family_child
-                        && let Some(action) = self.scene_setup_panel.hide_selection_action()
-                    {
-                        items.push(DropdownItem::new("Hide")
-                            .with_separator()
-                            .with_action(action));
+                    if selected.is_family_child {
+                        let hide = match self.scene_setup_panel.hide_selection_action() {
+                            Some(action) => DropdownItem::new("Hide").with_action(action),
+                            None => DropdownItem::disabled("Hide"),
+                        };
+                        items.push(hide.with_separator());
                     }
                     items.push(DropdownItem::new("Rename").with_action(PanelAction::Root(RootAction::SceneItemRename)));
                     items.push(DropdownItem::new("Move Up").with_action(PanelAction::Root(RootAction::SceneItemMove(-1))));

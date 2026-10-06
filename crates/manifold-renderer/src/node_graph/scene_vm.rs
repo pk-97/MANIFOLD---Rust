@@ -910,6 +910,10 @@ struct WaterFamilyInfo {
 /// generic imported compound remains on the legacy path unless it has all
 /// four family outputs and exactly one liquid-domain simulation owner in its
 /// group body.
+/// Keep aligned with manifold-editing commands::graph::scene::is_water_family_parent:
+/// four distinct object outputs (water, foam, spray, bubbles), with water
+/// reaching the group's sole liquid domain. Renderer has no production editing
+/// dependency; app's water_family_recognizers_agree test checks both.
 fn discover_water_families(
     level: &Level<'_>,
     scene_node: &EffectGraphNode,

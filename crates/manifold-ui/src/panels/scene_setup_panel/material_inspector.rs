@@ -1025,12 +1025,14 @@ impl ScenePanel {
                 cy,
                 frame_w,
                 ROW_H,
-                btn_style(),
+                if row.visible.driven { driven_label_style() } else { btn_style() },
                 "Hide",
                 obj_key(row.object_node_id as usize, OBJ_OFF_HIDE),
             );
             tree.set_name(hide_id, "scene_setup.properties.hide");
-            self.object_hide_ids.push((hide_id, row.visible.clone()));
+            if !row.visible.driven {
+                self.object_hide_ids.push((hide_id, row.visible.clone()));
+            }
             action_x += frame_w;
         }
         if show_duplicate {

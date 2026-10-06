@@ -280,6 +280,32 @@ fn water_family_visibility_rename_round_trip() {
     }
 }
 
+#[test]
+fn water_family_recognizers_agree() {
+    for preset in ["WaterDamBreakGpuFlip", "WaterDamBreakParticles"] {
+        let (mut project, layer, render) = water_project_with_preset(preset);
+        let mut editing = EditingService::new();
+        add_water(&mut project, &layer, render, &mut editing);
+        let before = effective_def(&project, &layer);
+        let family_rows: Vec<_> = rows(&before).into_iter().filter(|row|
+            row.look_mesh.is_some() || (row.is_group && row.liquid_domain.is_some())).collect();
+        assert_eq!(family_rows.len(), 8, "shipped and Add Water families");
+        for row in family_rows {
+            // Renaming the enclosing group is editing's observable parent predicate.
+            let mut renamed = project.clone();
+            editing.execute(super::water_family_actions::panel_rename_command(
+                &renamed, &layer, row.object_node_id, "Recognizer probe"), &mut renamed);
+            assert_eq!(editing.take_rejection(), None);
+            let after = effective_def(&renamed, &layer);
+            let changed_groups = before.nodes.iter().filter(|node| node.group.is_some())
+                .filter(|node| after.nodes.iter().find(|after| after.id == node.id)
+                    .unwrap().handle != node.handle).count();
+            assert_eq!(changed_groups, usize::from(row.is_group && row.liquid_domain.is_some()),
+                "{preset}: editing and renderer must agree for {}", row.name);
+        }
+    }
+}
+
 fn visibility_rename_round_trip(preset: &'static str) {
     use manifold_core::effects::ParameterDriver;
     use manifold_core::types::{BeatDivision, DriverWaveform};
