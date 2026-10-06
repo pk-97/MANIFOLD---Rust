@@ -119,6 +119,8 @@ impl GeneratorRegistry {
         crate::node_graph::primitives::multi_blend::MultiBlend::prewarm_pipelines(device);
         crate::node_graph::primitives::Blur::prewarm_pipelines(device);
         crate::node_graph::primitives::BokehGather::prewarm_pipelines(device);
+        // PARTICLE_VOLUME_BRICK_GATHER_DESIGN D1: pass 1's hand-written kernel.
+        crate::node_graph::primitives::particle_volume::ParticleVolume::prewarm_pipelines(device);
 
         // BUG-146: the two mechanisms above only reach atoms a BUNDLED
         // preset's *structure* happens to reference (the loop above never

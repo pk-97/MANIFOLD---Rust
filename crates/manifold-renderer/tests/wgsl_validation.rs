@@ -58,6 +58,10 @@ const PARTIAL_SHADERS: &[&str] = &[
     "smooth_lattice_dense_reference.wgsl",
     "clamp_liquid_to_solids_dense_reference.wgsl",
     "particle_volume_dense_reference.wgsl",
+    // `node.particle_volume`'s shared arithmetic: reads `buf_solid` and
+    // `buf_interior`; validated inside its generated kernel and composed into
+    // the brick gather below.
+    "particle_volume_common.wgsl",
     "count_surface_triangles_dense_reference.wgsl",
     "volume_surface_mesh_dense_reference.wgsl",
     "relax_surface_mesh_dense_reference.wgsl",
@@ -85,6 +89,13 @@ const GPU_FLIP_STEP_PRELUDE: &str = concat!(
     include_str!("../src/node_graph/primitives/shaders/liquid_field.wgsl"),
 );
 
+/// `node.particle_volume`'s pass-1 kernel helpers, as `brick_gather_source` composes them.
+const PARTICLE_VOLUME_BRICK_PRELUDE: &str = concat!(
+    include_str!("../src/node_graph/primitives/shaders/liquid_bricks_common.wgsl"),
+    "\n",
+    include_str!("../src/node_graph/primitives/shaders/particle_volume_common.wgsl"),
+);
+
 /// Shaders whose pipeline prepends a shared helper file at creation time.
 /// Each validates in that composed form, the way production builds it.
 const COMPOSED_SHADERS: &[(&str, &str)] = &[
@@ -99,6 +110,7 @@ const COMPOSED_SHADERS: &[(&str, &str)] = &[
     ("ibl_irradiance.wgsl", PBR_BRDF),
     ("ibl_brdf_lut.wgsl", PBR_BRDF),
     ("gpu_flip_step.wgsl", GPU_FLIP_STEP_PRELUDE),
+    ("particle_volume_brick_gather.wgsl", PARTICLE_VOLUME_BRICK_PRELUDE),
 ];
 
 fn is_partial(path: &std::path::Path) -> bool {

@@ -7,7 +7,7 @@
 
 use std::borrow::Cow;
 
-use manifold_gpu::GpuBinding;
+use manifold_gpu::{GpuBinding, GpuComputePipeline, GpuDevice};
 
 use super::liquid_bricks;
 use super::sort_particles_into_cells::{bin_param, float_param, read_searched_bins};
@@ -115,8 +115,29 @@ crate::primitive! {
     wgsl_body: include_str!("shaders/particle_volume_body.wgsl"),
     input_access: [BufferGather, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
     derived_uniforms: ["brick_pass:u32", "interior_len:u32"],
-    wgsl_includes: [liquid_bricks::COMMON],
+    wgsl_includes: [liquid_bricks::COMMON, COMMON],
     buffer_index: "liquid_brick_index",
+    extra_fields: {
+        brick_pipeline: Option<GpuComputePipeline> = None,
+    },
+}
+
+/// The level-set arithmetic both kernels call.
+pub(crate) const COMMON: &str = include_str!("shaders/particle_volume_common.wgsl");
+/// Pass 1's cooperative kernel (PARTICLE_VOLUME_BRICK_GATHER_DESIGN.md D1):
+/// the one hand-written pipeline beside the generated kernel, which keeps
+/// passes 0 and 2 and stays the bitwise oracle.
+pub(crate) const BRICK_GATHER_SHADER: &str = include_str!("shaders/particle_volume_brick_gather.wgsl");
+const BRICK_LABEL: &str = "node.particle_volume.bricks";
+
+pub(crate) fn brick_gather_source() -> String {
+    format!("{BRICK_GATHER_SHADER}\n{}\n{COMMON}", liquid_bricks::COMMON)
+}
+
+impl ParticleVolume {
+    pub fn prewarm_pipelines(device: &GpuDevice) {
+        let _ = device.create_compute_pipeline(&brick_gather_source(), "cs_main", BRICK_LABEL);
+    }
 }
 
 // Per-frame recompute for a fused region's derived block. An unwired
@@ -193,6 +214,9 @@ impl Primitive for ParticleVolume {
         };
         let gpu = ctx.gpu_encoder();
         let pipeline = standalone_pipeline::<Self>(&mut self.pipeline, gpu.device);
+        let brick_pipeline = &*self.brick_pipeline.get_or_insert_with(|| {
+            gpu.device.create_compute_pipeline(&brick_gather_source(), "cs_main", BRICK_LABEL)
+        });
         if !lattice_valid {
             ctx.error(format!(
                 "Particle Volume: a {}×{}×{} solid lattice has fewer than 2 nodes on an axis. Wire nodes_x/y/z from the same producer as solid.",
@@ -272,6 +296,13 @@ impl Primitive for ParticleVolume {
                 brick_pass: if bricks.is_some() { 2 - pass } else { 0 },
                 ..uniforms
             };
+            // Pass 1 alone takes the cooperative kernel; passes 0 and 2 keep
+            // the generated one.
+            let (pipeline, label) = if uniforms.brick_pass == 1 {
+                (brick_pipeline, BRICK_LABEL)
+            } else {
+                (&*pipeline, "node.particle_volume")
+            };
             liquid_bricks::dispatch(
                 gpu.native_enc,
                 pipeline,
@@ -319,7 +350,7 @@ impl Primitive for ParticleVolume {
                 bricks,
                 uniforms.brick_pass,
                 total as u32,
-                "node.particle_volume",
+                label,
             );
         }
     }
@@ -484,7 +515,10 @@ mod cpu_tests {
         let solid_constraint = wgsl
             .find("if pv_solid(")
             .expect("solid constraint");
-        assert!(clear_guard < interior_union && clear_guard < solid_constraint);
+        // The body gathers under the clear guard, then finishes: interior
+        // union before the solid clamp.
+        let finish = wgsl.find("return pv_finish(").expect("post-gather call");
+        assert!(clear_guard < finish && interior_union < solid_constraint);
         assert!(!wgsl.contains("brick_pass == 2u { return band; }"));
         assert_eq!(std::mem::size_of::<super::VolumeUniforms>(), 80);
     }
@@ -512,6 +546,10 @@ mod cpu_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "particle_volume_brick_tests.rs"]
+mod brick_tests;
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
@@ -573,6 +611,7 @@ mod gpu_tests {
         solid_nodes: [usize; 3],
         interior: Option<&[f32]>,
         blob: Option<FluidBlob>,
+        bricks: bool,
     ) -> Vec<f32> {
         let mut harness = Harness::new();
         let blobs = blob.into_iter().collect::<Vec<_>>();
@@ -608,6 +647,12 @@ mod gpu_tests {
         if let Some(slot) = interior_slot {
             inputs.push(("interior", slot));
         }
+        if bricks {
+            // Every brick active: pass 1 computes every node.
+            let layout = crate::node_graph::primitives::lattice_bricks::brick_layout(levels, 1).unwrap();
+            let words = crate::node_graph::primitives::lattice_bricks::compact_brick_words(&vec![1; layout.count as usize], layout.bricks);
+            inputs.push(("bricks", harness.array(&words, words.len()).0));
+        }
         let (_, errors) = harness.run(
             &mut ParticleVolume::new(),
             &inputs,
@@ -636,7 +681,7 @@ mod gpu_tests {
     /// Markers determine the ranges; the shaped centre can move away from its
     /// original marker. Both the support and bin boundaries get their nearest
     /// representable neighbours, including markers clamped at the box edges.
-    fn search_boundary_blobs(lattice: &Lattice, solid_nodes: [u32; 3]) -> (Vec<FluidBlob>, Vec<CellRange>) {
+    pub(super) fn search_boundary_blobs(lattice: &Lattice, solid_nodes: [u32; 3]) -> (Vec<FluidBlob>, Vec<CellRange>) {
         let min = lattice.min();
         let h: [f32; 3] = std::array::from_fn(|a| lattice.size[a] / (solid_nodes[a] - 1) as f32);
         let neighbour = |v: f32, side| match side {
@@ -706,7 +751,7 @@ mod gpu_tests {
             ("first_bin", "max(home - vec3<i32>(reach_bins), vec3<i32>(0))"),
             ("last_bin", "min(home + vec3<i32>(reach_bins), bins - vec3<i32>(1))"),
         ] {
-            let prefix = format!("let {name} = ");
+            let prefix = format!("w.{name} = ");
             assert_eq!(old.matches(&prefix).count(), 1, "reference replacement must be unique: {name}");
             let assignment = old.lines().find(|line| line.trim_start().starts_with(&prefix)).unwrap().trim().to_owned();
             assert!(assignment.ends_with(';'), "assignment must occupy one line");
@@ -760,13 +805,17 @@ mod gpu_tests {
 
     #[test]
     fn gpu_flip_narrow_band_mesher_values() {
+        narrow_band_mesher_values(false);
+    }
+
+    pub(super) fn narrow_band_mesher_values(bricks: bool) {
         let deep = Lattice {
             center: [0.0; 3],
             size: [2.0; 3],
             cell: 2.0,
         };
         let deep_interior = vec![-3.0; 2 * 2 * 2];
-        let deep_actual = run_volume(&deep, [9, 9, 9], Some(&deep_interior), None);
+        let deep_actual = run_volume(&deep, [9, 9, 9], Some(&deep_interior), None, bricks);
         assert_matches(
             &deep_actual,
             &expected(&deep, [9, 9, 9], Some(&deep_interior), None),
@@ -778,13 +827,13 @@ mod gpu_tests {
             shape_off: [0.0; 4],
         };
         let shallow = vec![-0.1; 2 * 2 * 2];
-        let surface = run_volume(&deep, [9, 9, 9], Some(&shallow), Some(surface_blob));
+        let surface = run_volume(&deep, [9, 9, 9], Some(&shallow), Some(surface_blob), bricks);
         assert_matches(
             &surface,
             &expected(&deep, [9, 9, 9], Some(&shallow), Some(surface_blob)),
         );
 
-        let off = run_volume(&deep, [9, 9, 9], None, Some(surface_blob));
+        let off = run_volume(&deep, [9, 9, 9], None, Some(surface_blob), bricks);
         assert_matches(&off, &expected(&deep, [9, 9, 9], None, Some(surface_blob)));
 
         let rectangular = Lattice {
@@ -798,7 +847,7 @@ mod gpu_tests {
             .map(|value| -6.0 + value as f32)
             .collect();
         let rectangular_actual =
-            run_volume(&rectangular, rectangular_nodes, Some(&rectangular_interior), None);
+            run_volume(&rectangular, rectangular_nodes, Some(&rectangular_interior), None, bricks);
         assert_matches(
             &rectangular_actual,
             &expected(&rectangular, rectangular_nodes, Some(&rectangular_interior), None),
@@ -814,7 +863,7 @@ mod gpu_tests {
             let field: Vec<f32> = (0..resolution.pow(3)).map(|i| {
                 layout.min[0] + (i % resolution) as f32 * mesh.cell_size() + 0.5 * mesh.cell_size() - 0.3
             }).collect();
-            let actual = run_volume(&lattice, mesh.nodes().map(|n| n as usize), Some(&field), None);
+            let actual = run_volume(&lattice, mesh.nodes().map(|n| n as usize), Some(&field), None, false);
             for (i, got) in actual.into_iter().enumerate() {
                 let x = f64::from(mesh.min()[0]) + (i as u32 % mesh.nodes()[0]) as f64 * layout.cell_size;
                 // Trilinear interpolation of a plane is analytic; outside
