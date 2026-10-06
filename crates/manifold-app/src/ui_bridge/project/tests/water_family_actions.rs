@@ -110,7 +110,7 @@ fn real_water_withholds_child_actions_and_parent_duplicate() {
         None,
     );
     assert!(!ui.tree.nodes().iter().any(|node| node.text.as_deref() == Some("Copy")));
-    assert!(ui.tree.nodes().iter().any(|node| node.text.as_deref() == Some("Cut")));
+    assert!(!ui.tree.nodes().iter().any(|node| node.text.as_deref() == Some("Cut")));
     assert!(ui.tree.nodes().iter().any(|node| node.text.as_deref() == Some("Delete")));
     assert!(!ui.tree.nodes().iter().any(|node| node.text.as_deref() == Some("Duplicate")));
 
@@ -178,7 +178,7 @@ fn water_family_clipboard_rejects_every_group_output() {
             row.index as u32,
         )
         .expect_err("Water-family group output must not enter the clipboard");
-        assert!(error.contains("Multi-output scene groups"), "unexpected rejection: {error}");
+        assert!(error.contains("Groups with several objects cannot be copied"), "unexpected rejection: {error}");
     }
 }
 

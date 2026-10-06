@@ -2690,6 +2690,12 @@ mod automation_clipboard_host_tests {
         assert!(h.ui_root.scene_item_clipboard.is_none(), "family copy must not populate the clipboard");
         assert!(h.rx.is_empty());
         assert!(h.host().edit_scene_items(
+            manifold_ui::panels::actions::CardEditAction::Cut,
+        ));
+        assert!(h.ui_root.scene_item_clipboard.is_none(), "family cut must not populate the clipboard");
+        assert!(h.rx.is_empty(), "family cut must not delete");
+        assert!(h.ui_root.pending_keyboard_actions.is_empty());
+        assert!(h.host().edit_scene_items(
             manifold_ui::panels::actions::CardEditAction::Delete,
         ));
         assert!(matches!(

@@ -89,7 +89,7 @@ impl SceneItemClipboard {
                 .filter(|port| port.name.starts_with("object"))
                 .count();
             if object_outputs > 1 {
-                return Err("Multi-output scene groups cannot be copied".into());
+                return Err("Groups with several objects cannot be copied yet; duplicate an imported model with its ⧉ button".into());
             }
         }
         let fluid_role_assignments = fluid_role_group
