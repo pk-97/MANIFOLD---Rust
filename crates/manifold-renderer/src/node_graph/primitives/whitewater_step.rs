@@ -59,6 +59,20 @@ const FUSED_ENTRIES: [(&str, &str); 6] = [
     ("ww_unpack_faces", "node.whitewater_step.unpack_faces"),
 ];
 
+#[derive(Clone, Copy)]
+enum Fused {
+    Emit,
+    Dust,
+    Spawn,
+    Lifecycle,
+    Turbulence,
+    UnpackFaces,
+}
+
+impl Fused {
+    const fn index(self) -> usize { self as usize }
+}
+
 fn fused_source() -> String {
     use crate::node_graph::whitewater::WHITEWATER_COMMON;
     use crate::node_graph::liquid::{grid::LIQUID_FACES, fields::LIQUID_FIELD};
@@ -1248,8 +1262,9 @@ impl Step {
             let [u, v, w] = self.face_axes(faces);
             let [nodes_x, nodes_y, nodes_z] = shape.face_cells.map(|n| (n + 4) as f32);
             let params = UnpackParams { nodes_x, nodes_y, nodes_z, count: (shape.unpacked_face_bytes() / 12) as u32 };
-            dispatch(enc, &self.pipelines.fused[5], bytemuck::bytes_of(&params), &[packed, u, v, w],
-                params.count, FUSED_ENTRIES[5].1, Barrier::After);
+            let pass = Fused::UnpackFaces;
+            dispatch(enc, &self.pipelines.fused[pass.index()], bytemuck::bytes_of(&params), &[packed, u, v, w],
+                params.count, FUSED_ENTRIES[pass.index()].1, Barrier::After);
         }
     }
 
@@ -1468,12 +1483,13 @@ impl Step {
         emitter_path!(reference, {
             self.reference.emit_reference(enc, frame, inputs, f, surface, curvature, influence_next, offsets, emitters);
         }, {
-            dispatch(enc, &fused[0], bytemuck::bytes_of(&EmitParams::new(frame, emitters, false)),
+            let pass = Fused::Emit;
+            dispatch(enc, &fused[pass.index()], bytemuck::bytes_of(&EmitParams::new(frame, emitters, false)),
                 &[inputs.particles, u, v, w,
                   surface, &f.cells, &f.curvature[curvature], &f.turbulence, &f.influence[influence_next],
-                  sampled, energy, offsets, unscaled, wavecrest_bits], emitters, FUSED_ENTRIES[0].1, Barrier::After);
+                  sampled, energy, offsets, unscaled, wavecrest_bits], emitters, FUSED_ENTRIES[pass.index()].1, Barrier::After);
             #[cfg(all(test, feature = "gpu-proofs"))]
-            self.reference.record_dispatch(FUSED_ENTRIES[0].1, emitters);
+            self.reference.record_dispatch(FUSED_ENTRIES[pass.index()].1, emitters);
         });
         #[cfg(all(test, feature = "gpu-proofs"))]
         let (sampled, energy, unscaled) = if reference {
@@ -1495,13 +1511,14 @@ impl Step {
             emitter_path!(reference, {
                 self.reference.dust_reference(enc, frame, inputs, f, influence_next, offsets, emitters);
             }, {
-                dispatch(enc, &fused[1], bytemuck::bytes_of(&EmitParams::new(frame, emitters, true)),
+                let pass = Fused::Dust;
+                dispatch(enc, &fused[pass.index()], bytemuck::bytes_of(&EmitParams::new(frame, emitters, true)),
                     &[unscaled, inputs.solid, inputs.obstacle_source.expect("validated dust source"),
                       &f.state, &f.state, &f.state, &f.state, &f.turbulence,
                       &f.influence[influence_next], &f.state, dust_energy, offsets, &f.state, wavecrest_bits],
-                    emitters, FUSED_ENTRIES[1].1, Barrier::After);
+                    emitters, FUSED_ENTRIES[pass.index()].1, Barrier::After);
                 #[cfg(all(test, feature = "gpu-proofs"))]
-                self.reference.record_dispatch(FUSED_ENTRIES[1].1, emitters);
+                self.reference.record_dispatch(FUSED_ENTRIES[pass.index()].1, emitters);
             });
             #[cfg(all(test, feature = "gpu-proofs"))]
             let dust_energy = if reference { self.reference.dust_energy() } else { dust_energy };
@@ -1530,10 +1547,11 @@ impl Step {
             let [nodes_x, nodes_y, nodes_z] = s.nodes.map(|n| n as f32);
             let params = TurbulenceParams { face_cells_x, face_cells_y, face_cells_z, nodes_x, nodes_y, nodes_z,
                 cell_size: s.cell_size, count: s.cell_count() as u32 };
-            dispatch(enc, &self.pipelines.fused[4], bytemuck::bytes_of(&params),
-                &[&f.state, u, v, w, distance, &f.turbulence], params.count, FUSED_ENTRIES[4].1, Barrier::After);
+            let pass = Fused::Turbulence;
+            dispatch(enc, &self.pipelines.fused[pass.index()], bytemuck::bytes_of(&params),
+                &[&f.state, u, v, w, distance, &f.turbulence], params.count, FUSED_ENTRIES[pass.index()].1, Barrier::After);
             #[cfg(all(test, feature = "gpu-proofs"))]
-            self.reference.record_dispatch(FUSED_ENTRIES[4].1, params.count);
+            self.reference.record_dispatch(FUSED_ENTRIES[pass.index()].1, params.count);
         });
     }
 
@@ -1544,9 +1562,10 @@ impl Step {
         emitter_path!(self.reference.enabled, {
             self.reference.spawn_reference(enc, frame, inputs, f, surface, offsets, sampled, energy, emitters, dust);
         }, {
-            let label = if dust { "node.whitewater_step.dust_spawn" } else { FUSED_ENTRIES[2].1 };
             let [u, v, w] = self.face_axes(inputs.faces);
-            dispatch(enc, &self.pipelines.fused[2], bytemuck::bytes_of(&SpawnParams::new(frame, emitters, dust)),
+            let pass = Fused::Spawn;
+            let label = if dust { "node.whitewater_step.dust_spawn" } else { FUSED_ENTRIES[pass.index()].1 };
+            dispatch(enc, &self.pipelines.fused[pass.index()], bytemuck::bytes_of(&SpawnParams::new(frame, emitters, dust)),
                 &[sampled, u, v, w,
                   surface, &f.cells, offsets, energy, inputs.solid, &f.typed], frame.shape.capacity, label, Barrier::After);
             #[cfg(all(test, feature = "gpu-proofs"))]
@@ -1568,13 +1587,14 @@ impl Step {
             let empty = &f.state;
             let history = motion.map_or([empty; 3], |m| m.faces);
             let [u, v, w] = self.face_axes(inputs.faces);
-            dispatch(enc, &self.pipelines.fused[3], bytemuck::bytes_of(&LifecycleParams::new(frame, inputs)),
+            let pass = Fused::Lifecycle;
+            dispatch(enc, &self.pipelines.fused[pass.index()], bytemuck::bytes_of(&LifecycleParams::new(frame, inputs)),
                 &[a, u, v, w, surface, &f.cells, inputs.solid,
                   motion.map_or(empty, |m| m.schedule), history[0], history[1], history[2],
                   motion.and_then(|m| m.fields.forces).unwrap_or(empty), motion.and_then(|m| m.fields.impulses).unwrap_or(empty), b],
-                frame.shape.capacity, FUSED_ENTRIES[3].1, Barrier::After);
+                frame.shape.capacity, FUSED_ENTRIES[pass.index()].1, Barrier::After);
             #[cfg(all(test, feature = "gpu-proofs"))]
-            self.reference.record_dispatch(FUSED_ENTRIES[3].1, frame.shape.capacity);
+            self.reference.record_dispatch(FUSED_ENTRIES[pass.index()].1, frame.shape.capacity);
         });
         #[cfg(all(test, feature = "gpu-proofs"))]
         self.reference.capture_particle(enc, b, 2);
@@ -1598,7 +1618,6 @@ impl Step {
         let [nx, ny, nz] = s.nodes.map(|n| n as f32);
         let [cx, cy, cz] = s.center;
         let [sx, sy, sz] = s.size;
-        let [fx, fy, fz] = s.face_cells.map(|n| n as f32);
         let [bx, by, bz] = s.bins.map(|n| n as f32);
         let dt = frame.dt;
         let place = [
@@ -1611,9 +1630,6 @@ impl Step {
             ("nodes_x", nx),
             ("nodes_y", ny),
             ("nodes_z", nz),
-            ("face_cells_x", fx),
-            ("face_cells_y", fy),
-            ("face_cells_z", fz),
         ];
         self.lifecycle(enc, frame, inputs, surface, a, b);
         let motion = inputs.motion.as_ref();

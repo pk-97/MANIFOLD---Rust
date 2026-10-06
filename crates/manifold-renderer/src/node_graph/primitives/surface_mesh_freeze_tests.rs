@@ -12,29 +12,16 @@ fn smoothed_surface_with_pointwise_tail() -> manifold_core::effect_graph_def::Ef
     )
     .expect("WaterDamBreakGpuFlip bundled");
     let mut preset: Value = serde_json::from_str(&source).expect("WaterDamBreakGpuFlip parses");
-    let family = preset["nodes"]
-        .as_array_mut()
-        .expect("top-level nodes")
-        .iter_mut()
-        .find(|node| node["nodeId"] == "water_family")
-        .expect("Water family group");
-    let surface = family["group"]["nodes"]
-        .as_array_mut()
-        .expect("Water family nodes")
-        .iter_mut()
-        .find(|node| node["nodeId"] == "surface")
+    let surface = crate::node_graph::liquid::conformance::json_node_mut(&mut preset, "surface")
         .expect("Liquid Surface group");
     let group = &mut surface["group"];
     let (normals, output) = {
-        let nodes = group["nodes"].as_array().expect("surface nodes");
-        let normals = nodes
-            .iter()
-            .find(|node| node["nodeId"] == "liquid_normals")
+        let normals = crate::node_graph::liquid::conformance::json_node_mut(group, "liquid_normals")
             .expect("surface normals")
             .get("id")
             .cloned()
             .expect("surface normals id");
-        let output = nodes
+        let output = group["nodes"].as_array().expect("surface nodes")
             .iter()
             .find(|node| node["typeId"] == "system.group_output")
             .expect("surface group output")

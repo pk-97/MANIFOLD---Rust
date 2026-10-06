@@ -82,7 +82,7 @@ Plainly: there are duplicate graph transactions, per-feature exposure routing, a
 
 ⚠ **VERIFY-AT-IMPL:** Water F1a is not at this HEAD. Peter's current scope is one Water group, four object outputs, and the obstacle source **inside** the group. Read `R/primitives/gpu_flip_preset.rs` and the landed F1a tests before P2/P3. Do not reinstate the older external obstacle-source input from the checked-in Water design. Confirm actual port spellings with `rg -n 'GroupInterface|GroupPortDef|group_output|obstacle' crates/manifold-renderer/src/node_graph/primitives/gpu_flip_preset.rs`.
 
-The liquid seam document marks P7a unaudited, P8 owing L3 acceptance, P10 open, and P5/P6 retired. Source is ahead of parts of the document; this audit does not mark its open phases complete. P1–P3, P6a/P6b, P7/P8, and G1a need no unlanded seam phase. G1b/G2/G3 are deferred under the explicit trigger in section 9. Water F1b/F2 already proceed under their own approved design. No nested regions are introduced.
+The liquid seam document marks P7a unaudited, P8 owing L3 acceptance, P10 open, and P5/P6 retired. Source is ahead of parts of the document; this audit does not mark its open phases complete. P1–P3, P6a/P6b, P7/P8, and G1a need no unlanded seam phase. G1b/G2/G3 are deferred under the explicit trigger in section 9. Water F1b/F2 shipped under their own approved design. No nested regions are introduced.
 
 The integration plan still names incomplete recording/provenance and collected-take acceptance: BUG-vglg (Integrate CPU FLIP liquids with shared scene physics), child BUG-vglg.17 (Complete coupled input-take identity and paired cache playback). Nothing here relaxes those guards. Water D8 keeps simulation advancing when its display is hidden.
 
@@ -423,9 +423,9 @@ Only manifest-backed exposures selected by `controls` feed ParamSurface. Water p
 
 Recompute models on structural revision changes. Reuse cached rows and buffers for value-only updates. Do not scan the graph or allocate a new ownership vector every frame.
 
-### 5.3 Water F1b and F2 proceed now
+### 5.3 Shipped Water family lifecycle
 
-F1b and F2 build on [WATER_FAMILY_DESIGN.md](WATER_FAMILY_DESIGN.md) as written, without waiting for P1–P3. F1b supplies `LiquidTemplate.object_outputs`, `ExposureSet::{Whitewater, Look}`, shared visibility targets, and `look_mesh`; F2 supplies hide, rename, delete, and duplicate rejection. The active F1a obstacle-source placement remains the accepted recipe input to that work.
+F1b and F2 shipped under [WATER_FAMILY_DESIGN.md](WATER_FAMILY_DESIGN.md), independently of P1–P3. The implementation supplies `LiquidTemplate.object_outputs`, `ExposureSet::Whitewater`, recipe-owned Size bindings, shared visibility targets, and `look_mesh`, plus hide, rename, delete, and duplicate rejection. The obstacle source lives inside the family group.
 
 P2 later migrates the landed four-output family template and its metadata compiler-driven to the common insertion path. P3 migrates its parent/kind/control projection without changing Water D1–D10. These are convergence refactors with the Water flows as regression cases, not replacement Water build phases.
 
@@ -561,7 +561,7 @@ P3 baseline field inventory: `rg -n '\.fluid_controls\b|pub fluid_controls:' cra
 3. Ordinary groups and existing tick captures define the graph interface. A group does not imply a private world or a nested tick region.
 4. Reuse the modifier transaction, ordinary template metadata, exposure provider, and manifest-backed ParamSurface.
 5. Derive one object/ownership model and preserve scoped NodeIds across UI actions, undo, save, and reload.
-6. Water D1–D10 stand. F1b/F2 proceed independently; P2/P3 later converge their insertion and rows. Lifecycle migration is out of scope.
+6. Water D1–D10 stand. F1b/F2 shipped independently; P2/P3 later converge their insertion and rows. Lifecycle migration is out of scope.
 7. Rigid/import/role/Shatter convergence has its own phases. GPU separation does not delay Water authoring.
 8. Numerical relocation preserves algorithms, stage composition, ports, time policy, admission, and completion. It cannot claim to finish the liquid seam's open acceptance.
 

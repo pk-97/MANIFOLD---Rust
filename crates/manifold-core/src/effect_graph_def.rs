@@ -42,7 +42,7 @@ use serde::{Deserialize, Serialize};
 use crate::preset_type_id::PresetTypeId;
 use crate::effects::ParamConvert;
 use crate::id::NodeId;
-use crate::scene_modifier_preset::SceneModifierInstanceDef;
+use crate::scene_modifier_preset::{SceneModifierInstanceDef, SceneNodeRef};
 
 /// Schema version for graph-topology-only documents (no preset
 /// metadata). Default for per-instance graph overrides and the 25
@@ -285,6 +285,20 @@ pub struct GroupDef {
     /// show stays byte-identical until a colour is chosen.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tint: Option<[f32; 4]>,
+}
+
+/// Find a stable node id anywhere in a graph node tree.
+pub fn find_node<'a>(nodes: &'a [EffectGraphNode], node_id: &str) -> Option<&'a EffectGraphNode> {
+    let wanted = NodeId::new(node_id);
+    let reference = SceneNodeRef::locate_nodes(nodes, &wanted)?;
+    reference.resolve_nodes(nodes)
+}
+
+/// Find a stable node id mutably anywhere in a graph node tree.
+pub fn find_node_mut<'a>(nodes: &'a mut [EffectGraphNode], node_id: &str) -> Option<&'a mut EffectGraphNode> {
+    let wanted = NodeId::new(node_id);
+    let reference = SceneNodeRef::locate_nodes(nodes, &wanted)?;
+    reference.resolve_nodes_mut(nodes)
 }
 
 /// Tagged-enum wire form of the renderer's `ParamValue`. Tagged because
@@ -1442,5 +1456,48 @@ mod tests {
         let base = def(group_node(Some((10.0, 10.0))));
         let inner_moved = def(group_node(Some((99.0, 99.0))));
         assert!(!inner_moved.diverges_ignoring_layout(&base));
+    }
+
+    #[test]
+    fn find_node_walks_nested_groups_and_mutates_by_stable_id() {
+        let leaf = |node_id: &str| EffectGraphNode {
+            id: 7,
+            node_id: NodeId::new(node_id),
+            type_id: "node.value".into(),
+            handle: None,
+            params: BTreeMap::new(),
+            exposed_params: BTreeSet::new(),
+            editor_pos: None,
+            wgsl_source: None,
+            title: None,
+            output_formats: BTreeMap::new(),
+            output_canvas_scales: BTreeMap::new(),
+            group: None,
+        };
+        let nested = EffectGraphNode {
+            id: 2,
+            node_id: NodeId::new("outer"),
+            type_id: GROUP_TYPE_ID.into(),
+            handle: None,
+            params: BTreeMap::new(),
+            exposed_params: BTreeSet::new(),
+            editor_pos: None,
+            wgsl_source: None,
+            title: None,
+            output_formats: BTreeMap::new(),
+            output_canvas_scales: BTreeMap::new(),
+            group: Some(Box::new(GroupDef {
+                interface: GroupInterface { inputs: Vec::new(), outputs: Vec::new(), params: Vec::new() },
+                nodes: vec![leaf("inner")],
+                wires: Vec::new(),
+                tint: None,
+            })),
+        };
+        let mut nodes = vec![nested, leaf("root")];
+        assert_eq!(find_node(&nodes, "inner").map(|node| node.id), Some(7));
+        assert!(find_node(&nodes, "missing").is_none());
+        assert!(find_node_mut(&mut nodes, "missing").is_none());
+        find_node_mut(&mut nodes, "inner").expect("nested node").type_id = "node.changed".into();
+        assert_eq!(find_node(&nodes, "inner").unwrap().type_id, "node.changed");
     }
 }

@@ -253,16 +253,16 @@ mod tests {
         let bundled: Value = serde_json::from_str(BUNDLED).unwrap();
         assert_eq!(binding("domain"), *find(&bundled["presetMetadata"]["bindings"], PARAM));
         assert_eq!(card(), *find(&bundled["presetMetadata"]["params"], PARAM));
-        let family = bundled["nodes"].as_array().unwrap().iter()
-            .find(|node| node["nodeId"] == "water_family")
-            .expect("bundled Water family");
-        let shipped = family["group"]["wires"].as_array().unwrap().iter()
-            .find(|wire| wire["toPort"] == PARAM)
+        let typed: manifold_core::effect_graph_def::EffectGraphDef = serde_json::from_str(BUNDLED).unwrap();
+        let family = manifold_core::effect_graph_def::find_node(&typed.nodes, "water_family")
+            .expect("Water family");
+        let group = family.group.as_ref().expect("Water family body");
+        let shipped = group.wires.iter()
+            .find(|wire| wire.to_port == PARAM)
             .expect("bundled max-iterations wire");
-        let nodes = family["group"]["nodes"].as_array().unwrap();
-        let domain = nodes.iter().find(|node| node["nodeId"] == "domain").expect("bundled domain");
-        let step = nodes.iter().find(|node| node["nodeId"] == "step").expect("bundled solver");
-        assert_eq!(wire(&domain["id"], &step["id"]), *shipped);
+        let domain = manifold_core::effect_graph_def::find_node(&group.nodes, "domain").expect("bundled domain");
+        let step = manifold_core::effect_graph_def::find_node(&group.nodes, "step").expect("bundled solver");
+        assert_eq!(wire(&json!(domain.id), &json!(step.id)), serde_json::to_value(shipped).unwrap());
         let params = ids(&bundled["presetMetadata"]["params"]);
         let at = params.iter().position(|id| id == BESIDE).unwrap();
         assert_eq!(params[at + 1], PARAM, "the card sits after Solve Level");

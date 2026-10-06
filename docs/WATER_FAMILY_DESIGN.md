@@ -24,7 +24,6 @@ DNS. All source anchors below refer to this SHA, not this worktree's HEAD.
 | Compound rows | `crates/manifold-renderer/src/node_graph/scene_vm.rs:967–1004`; `crates/manifold-ui/src/panels/scene_setup_panel.rs:1838–1841` | Exists: grouping, sort and expansion. Water needs its own physical row as parent, not the importer's synthetic parent. |
 | Card ownership | `crates/manifold-app/src/ui_bridge/projection/scene.rs:102–123`; `scene_vm.rs:1350–1372` | Exists: owned node IDs select exposures; water owns its domain, whitewater and budget. Child mesh ownership is new. |
 | Family recipe | `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_preset.rs:707–745`, `:764–854`, `:879–895` | BUG-ju9j (Add Fluid inserts no whitewater): Add Fluid imports only water material/object from the seed; render builders separately import whitewater dressing. Shared solver is not shared family construction. |
-| Flat builder assumptions | `gpu_flip_preset.rs:334`, `:586`, `:668`, `:939` | Exists: `feed_intervals`, `id_named`, `add_obstacle_render`, `add_dust_render` operate on top-level JSON. Grouping requires rewriting these seams. |
 | Golden fixture | `crates/manifold-renderer/src/node_graph/primitives/whitewater_golden_tests.rs:64–95`, `:144–152` | Exists: `variant()`/`all_emitters()` edit top-level `whitewater`/`whitewater_budget`; fingerprints read step outputs and captures. Grouped lookup must not silently skip edits. |
 | Template insertion | `crates/manifold-editing/src/commands/graph/scene/fluid/template.rs:15–60`; `scene/fluid.rs:66–105`, `:263–271` | One wire away: template, fresh IDs, metadata stamping and undo; extend single-output insertion and metadata coverage. |
 | Visibility | `crates/manifold-renderer/src/node_graph/gltf_import/object_group/static_compound.rs:313–321`; `crates/manifold-app/src/ui_bridge/project.rs:1342–1365` | Exists: shared binding retargeted to `parent_visible`, resolved through ordinary parameter commands. |
@@ -108,17 +107,13 @@ producer costs about 0.05 ms a frame. Amended at F1a (2026-10-06): an
 `obstacle_source` interface input would have forced fifteen domain outputs
 onto the group only to feed them back in.
 `gpu_flip_liquid_body() -> EffectGraphDef` keeps its signature and uses the
-shared recipe. Rewrite `render_def`, `particle_view_def`, `add_obstacle_render`
-and `feed_intervals` for the group boundary; remove the shipped `add_dust_render`
-path. Their top-level `id_named`/JSON assumptions cannot survive as wrappers.
+shared recipe. Render builders and fixture edits resolve nodes through the group boundary.
 
 `LiquidTemplate` retains its fields and adds `pub object_outputs: Vec<String>`;
 single-output literals get `vec!["object".into()]`, family literals all four.
 Insertion reserves physical slots from the content-owned count atomically.
-`AddSceneFluidCommand::new` (`fluid.rs:66–75`) stays. Add `ExposureSet::Whitewater`
-and `::Look`, supplied by `with_whitewater_metadata` and `with_look_metadata`,
-following `with_role_metadata` (`:97`). Extend the exhaustive `metadata_for`
-match (`:263–271`); compiler errors enumerate missed cases.
+`AddSceneFluidCommand::new` keeps its signature. `ExposureSet::Whitewater` uses
+`with_whitewater_metadata`; Size and Sheet Fill Rate bindings belong to the family recipe.
 
 `TemplateExposure` also needs a shared-binding form: one exposure ID and explicit
 node/parameter targets for all four `parent_visible` values. Remap every target
@@ -177,12 +172,6 @@ F1b/F2 own `scene_vm.rs`, `scene_exposure.rs`, editing `scene/fluid.rs` and
 `crates/manifold-app/src/edit_selection.rs`, UI
 `scene_setup_actions.rs`, `scene_setup_panel.rs`, and mapped flows. Reuse
 content routing and the parameter host. No shader, solver or backend rewrite.
-
-⚠ VERIFY-AT-IMPL after P4:
-`rg -n 'gpu_flip_liquid_body|LiquidTemplate|TemplateExposure|ExposureSet|AddSceneFluidCommand|render_def|particle_view_def|feed_intervals|add_dust_render|add_obstacle_render' crates`.
-Record the fresh production/test inventory before code; changed seams require
-revision. Add required fields/variants first and use compiler errors to enumerate
-literals and matches; no compatibility adapters.
 
 ## 4. Invariants & enforcement
 
@@ -285,7 +274,3 @@ whole-crate sweep. Every persistent phase verifies save/reload and bindings.
 | Dust child and render chain | a preset ships dust on |
 | Family Duplicate | duplication preserves independent card exposes and bindings, proven through save/reload and modulation |
 | New physics, solver optimisation, general family tooling | a separate concrete request |
-
-Docs-only static audit: no app, runtime tests or render run. P4's end state and
-the Sheet Fill Rate wiring remain to be re-read at implementation;
-appearance and GPU cost are unverified. The fusion doc's P4 was aligned in d03973d67.

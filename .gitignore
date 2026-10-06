@@ -7,6 +7,7 @@ target/
 # Runtime diagnostic logs from MANIFOLD_LOG_CHAIN_STATS etc.
 chain-stats.log
 *.log
+*.candidate.txt
 .codex/tmp/
 .codex/scratch/
 .codex/*.local.md

@@ -41,7 +41,7 @@ import time
 from pathlib import Path
 
 PLUGIN_DATA_DEFAULT = Path.home() / ".claude" / "plugins" / "data" / "codex-openai-codex"
-CODEX_SESSIONS = Path.home() / ".codex" / "sessions"
+CODEX_SESSIONS = Path(os.environ["CODEX_HOME"]) / "sessions" if os.environ.get("CODEX_HOME") else Path.home() / ".codex" / "sessions"
 BROKER_SCRIPT = "app-server-broker.mjs"
 COMPANION_SCRIPT = "codex-companion.mjs"
 ROLLOUT_FRESH_S = 120     # backstop for a rollout with no turn markers yet
@@ -140,8 +140,10 @@ def last_turn_marker(path):
 
 def rollout_busy(thread_id, now):
     if not isinstance(thread_id, str) or not re.fullmatch(r"[0-9A-Za-z-]+", thread_id):
-        return None
+        return "no rollout found for a recent job; kept to be safe"
+    found = False
     for path in CODEX_SESSIONS.glob(f"*/*/*/rollout-*-{thread_id}.jsonl"):
+        found = True
         try:
             marker = last_turn_marker(path)
             silent = now - path.stat().st_mtime
@@ -155,7 +157,7 @@ def rollout_busy(thread_id, now):
             return "rollout has no turn markers (Codex format changed?); kept to be safe"
         if silent < ROLLOUT_FRESH_S:
             return f"rollout written in the last {ROLLOUT_FRESH_S}s"
-    return None
+    return None if found else "no rollout found for a recent job; kept to be safe"
 
 
 def busy_reason(state_dir, now=None):
@@ -217,7 +219,7 @@ def _wait_exit(pid):
 
 
 def _clear_files(state_dir, broker, sock_path):
-    for key in ("pidFile", "logFile"):
+    for key in ("pidFile",):
         if broker.get(key):
             Path(broker[key]).unlink(missing_ok=True)
     Path(sock_path).unlink(missing_ok=True)

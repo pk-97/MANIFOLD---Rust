@@ -229,10 +229,7 @@ fn fluid_particle_blend_presets_share_display_clock_and_fuse() {
                 .expect("Water family group");
             let group = family.group.as_ref().expect("Water family body");
             let id = |name: &str| {
-                group
-                    .nodes
-                    .iter()
-                    .find(|node| node.node_id.as_str() == name)
+                manifold_core::effect_graph_def::find_node(&group.nodes, name)
                     .unwrap_or_else(|| panic!("missing Water family node {name}"))
                     .id
             };
@@ -251,7 +248,7 @@ fn fluid_particle_blend_presets_share_display_clock_and_fuse() {
             }));
         }
         let flat = manifold_core::flatten::flatten_groups(&grouped).unwrap();
-        let json = serde_json::to_value(flat).unwrap();
+        let json = serde_json::to_value(&flat).unwrap();
         let wires = json["wires"].as_array().unwrap();
         let has = |from: u32, port: &str, to: u32, input: &str| {
             wires.iter().any(|w| {
@@ -262,8 +259,9 @@ fn fluid_particle_blend_presets_share_display_clock_and_fuse() {
             })
         };
         let id = |name: &str| -> u32 {
-            json["nodes"].as_array().unwrap().iter().find(|n| n["nodeId"] == name)
-                .unwrap_or_else(|| panic!("missing {name}"))["id"].as_u64().unwrap() as u32
+            manifold_core::effect_graph_def::find_node(&flat.nodes, name)
+                .unwrap_or_else(|| panic!("missing {name}"))
+                .id
         };
         let frame = id("frame");
         for display in ["particle_blend", "foam_blend", "bubble_blend", "spray_blend"] {

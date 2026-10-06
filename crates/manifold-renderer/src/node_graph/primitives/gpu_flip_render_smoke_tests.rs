@@ -1034,18 +1034,10 @@ fn contact_sheet(stills: &[PathBuf], cols: usize, scale: f64, out: &Path) {
 /// `def` with node params replaced: `{"node": {"param": value}}`. A param
 /// keeps its declared type; one the def leaves unset is a Float.
 fn with_params(def: EffectGraphDef, overrides: &Value) -> EffectGraphDef {
-    fn find<'a>(scope: &'a mut Value, name: &str) -> Option<&'a mut Value> {
-        for node in scope["nodes"].as_array_mut()? {
-            if node["nodeId"] == name { return Some(node); }
-            if node["group"].is_object() && let Some(found) = find(&mut node["group"], name) {
-                return Some(found);
-            }
-        }
-        None
-    }
     let mut v = serde_json::to_value(def).expect("def serialises");
     for (name, params) in overrides.as_object().expect("overrides by node") {
-        let node = find(&mut v, name).unwrap_or_else(|| panic!("no node {name}"));
+        let node = crate::node_graph::liquid::conformance::json_node_mut(&mut v, name)
+            .unwrap_or_else(|| panic!("no node {name}"));
         if !node["params"].is_object() {
             node["params"] = json!({});
         }

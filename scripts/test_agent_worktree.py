@@ -817,8 +817,9 @@ def test_idle_codex_broker_no_longer_pins_a_slot(repo):
         check("acquire stops the idle broker", "STOPPED broker" in text, text)
         check("acquire reuses the slot", "SLOT:     slot-0" in text, text)
         check("broker process exited", wait_gone(proc), text)
-        check("broker record and session files cleared",
-              not (state / "broker.json").exists() and not session.exists(), text)
+        check("broker log is retained", session.joinpath("broker.log").exists(), text)
+        check("broker record and socket files cleared",
+              not (state / "broker.json").exists() and not (session / "broker.sock").exists(), text)
         check("job history kept", (state / "state.json").exists())
     finally:
         brokers.stop_all()
@@ -879,6 +880,11 @@ def test_busy_codex_broker_is_left_alone(repo):
             lines = cb.stop_idle(wt)
             check("closed quiet turn lets the broker stop",
                   lines == [f"STOPPED broker pid {proc.pid}"] and wait_gone(proc), lines)
+
+            proc, _, _ = brokers.start(wt, jobs=[completed_job("missing-rollout")])
+            lines = cb.stop_idle(wt)
+            check("a recent completed job without a rollout keeps its broker",
+                  proc.poll() is None and "no rollout found" in lines[0], lines)
     finally:
         brokers.stop_all()
 

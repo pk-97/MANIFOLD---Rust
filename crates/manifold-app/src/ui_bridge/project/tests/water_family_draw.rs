@@ -181,7 +181,7 @@ mod gpu {
 
     #[test]
     fn water_family_four_outputs_draw() {
-        let output_dir = PathBuf::from("/tmp/water-family-f1b");
+        let output_dir = PathBuf::from("target/journey-proofs/water-family-four-outputs");
         std::fs::create_dir_all(&output_dir).expect("water-family output directory");
 
         let (mut project, layer_id, render_scene_node_id) =

@@ -34,9 +34,9 @@ pub(crate) fn gpu_flip_liquid_template() -> manifold_editing::commands::graph::L
         TemplateExposure::Node { node: id("whitewater"), set: ExposureSet::Whitewater, section: Some("Whitewater") },
     ];
     for (kind, section) in [("foam", "Foam"), ("spray", "Spray"), ("bubble", "Bubbles")] {
-        for (suffix, set) in [("mesh", ExposureSet::Look), ("material", ExposureSet::Material)] {
-            exposures.push(TemplateExposure::Node { node: id(&format!("{kind}_{suffix}")), set, section: Some(section) });
-        }
+        exposures.push(TemplateExposure::Node {
+            node: id(&format!("{kind}_material")), set: ExposureSet::Material, section: Some(section),
+        });
     }
     let metadata = body.preset_metadata.as_ref().expect("family recipe metadata");
     for spec in &metadata.params {
@@ -686,7 +686,6 @@ pub(super) fn dispatch_project(
                 )
                 .with_role_metadata(metadata_for_node_type("node.fluid_role_source"))
                 .with_whitewater_metadata(metadata_for_node_type("node.whitewater_step"))
-                .with_look_metadata(manifold_renderer::node_graph::scene_exposure::look_metadata())
                 .with_world_metadata(metadata_for_node_type("node.physics_world"));
                 ContentCommand::send(content_tx, ContentCommand::ExecuteSelecting(
                     Box::new(command),

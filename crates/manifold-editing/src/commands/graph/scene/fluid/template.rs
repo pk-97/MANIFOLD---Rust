@@ -21,7 +21,6 @@ pub enum ExposureSet {
     Material,
     Object,
     Whitewater,
-    Look,
 }
 
 /// One node's card rows. `section` is the suffix after `"<family N> - "`;

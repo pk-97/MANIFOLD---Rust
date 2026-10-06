@@ -393,28 +393,33 @@ fn id_of(nodes: &Value, node_id: &str) -> Value {
 }
 
 fn use_triangle_list(json: &mut Value) {
-    let family = json["nodes"].as_array_mut().expect("nodes").iter_mut()
-        .find(|node| node["nodeId"] == "water_family").expect("Water family");
-    let json = &mut family["group"];
-    let surface_id = id_of(&json["nodes"], "surface");
-    let surface = json["nodes"].as_array_mut().expect("nodes").iter_mut()
-        .find(|node| node["id"] == surface_id).expect("liquid surface group");
-    let group = &mut surface["group"];
-    let removed = ["liquid_edge_count", "liquid_edge_offsets"].map(|name| id_of(&group["nodes"], name));
-    let nodes = group["nodes"].as_array_mut().expect("surface nodes");
-    let before = nodes.len();
-    nodes.retain(|node| !removed.contains(&node["id"]));
-    assert_eq!(before - nodes.len(), 2, "remove edge count and scan only");
-    group["wires"].as_array_mut().expect("surface wires").retain(|wire| {
-        !removed.iter().any(|id| wire["fromNode"] == *id || wire["toNode"] == *id)
-            && wire["fromPort"] != "indices"
+    let mut def: manifold_core::effect_graph_def::EffectGraphDef = serde_json::from_value(json.clone())
+        .expect("GPU FLIP graph parses");
+    let family = manifold_core::effect_graph_def::find_node_mut(&mut def.nodes, "water_family")
+        .expect("Water family");
+    let family = family.group.as_mut().expect("Water family body");
+    let surface = manifold_core::effect_graph_def::find_node_mut(&mut family.nodes, "surface")
+        .expect("liquid surface group");
+    let surface_id = surface.id;
+    let surface = surface.group.as_mut().expect("Liquid Surface body");
+    let removed = ["liquid_edge_count", "liquid_edge_offsets"].map(|name| {
+        manifold_core::effect_graph_def::find_node(&surface.nodes, name)
+            .expect("surface node").id
     });
-    group["interface"]["outputs"].as_array_mut().expect("surface outputs")
-        .retain(|port| port["name"] != "indices");
-    let wires = json["wires"].as_array_mut().expect("preset wires");
+    let nodes = &mut surface.nodes;
+    let before = nodes.len();
+    nodes.retain(|node| !removed.contains(&node.id));
+    assert_eq!(before - nodes.len(), 2, "remove edge count and scan only");
+    surface.wires.retain(|wire| {
+        !removed.iter().any(|id| wire.from_node == *id || wire.to_node == *id)
+            && wire.from_port != "indices"
+    });
+    surface.interface.outputs.retain(|port| port.name != "indices");
+    let wires = &mut family.wires;
     let before = wires.len();
-    wires.retain(|wire| !(wire["fromNode"] == surface_id && wire["fromPort"] == "indices"));
+    wires.retain(|wire| !(wire.from_node == surface_id && wire.from_port == "indices"));
     assert_eq!(before - wires.len(), 1, "remove the water index wire only");
+    *json = serde_json::to_value(def).expect("GPU FLIP graph serialises");
 }
 
 #[test]

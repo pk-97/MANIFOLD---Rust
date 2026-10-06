@@ -1,4 +1,4 @@
-//! P2–P4: copied text checks on the CPU, bitwise stage oracles on the GPU.
+//! Copied text checks on the CPU, bitwise stage oracles on the GPU.
 use super::*;
 
 const ATOMS: [(&str, &str); 14] = [
@@ -191,7 +191,7 @@ fn whitewater_legacy_refuses_packed_faces() {
 }
 
 #[test]
-fn whitewater_p4_production_does_not_dispatch_replaced_atoms() {
+fn whitewater_production_does_not_dispatch_replaced_atoms() {
     let source = include_str!("whitewater_step.rs");
     for atom in ["JitterParticles", "SampleFacesAtParticles", "WhitewaterEmitterVelocity", "EnergyPotential",
         "WavecrestPotential", "InsideTurbulencePotential", "TurbulenceEmissionCount", "DustPotential",
@@ -275,7 +275,7 @@ mod gpu {
             if due == 0.0 { continue; }
             ticks += 1;
             let held_face_bytes = fused.provided_bytes("state", "faces");
-            if ticks == 1 { println!("P4 packed={packed} dust={dust}: liquid_state held faces = {held_face_bytes} bytes"); }
+            if ticks == 1 { println!("packed={packed} dust={dust}: liquid_state held faces = {held_face_bytes} bytes"); }
             assert_eq!(held_face_bytes, 0, "held face grid must be unallocated");
             for port in PORTS[..if dust { 6 } else { 4 }].iter().chain([&"proof_turbulence"]) {
                 if !dust && *port == "proof_unscaled" { continue; }
@@ -369,7 +369,7 @@ mod gpu {
         // then at 1.5. ticks=3 distinguishes round-then-multiply from its inverse.
         let cases = [(31.99999, 8, 0), (32.0, 8, 3), (32.00001, 8, 3), (96.0, 8, 6), (32.0, 0, 0), (32.0, 8, 3)];
         for (tick, (rate, count, expected)) in cases.into_iter().enumerate() {
-            let mut encoder = device.create_encoder("whitewater P2 synthetic tick");
+            let mut encoder = device.create_encoder("whitewater synthetic tick");
             let mut captured = Vec::new();
             for (stage, fixture) in stages.iter_mut().zip(&fixtures) {
                 let mut frame = fixture.frame(dust);
@@ -463,11 +463,11 @@ mod gpu {
         let count = cell_total(cells.map(|n| n + 1)) as u32;
         let out = std::array::from_fn(|_| shared(device, &vec![12345.0f32; count as usize]));
         let [nx, ny, nz] = cells.map(|n| (n + 4) as f32);
-        let mut enc = device.create_encoder("P4 real face adapters");
+        let mut enc = device.create_encoder("whitewater face adapter oracle");
         for (axis, output) in out.iter().enumerate() {
             atom::<FaceSampleComponent>(&mut enc, pipeline.as_ref().unwrap(),
                 &[("axis", axis as f32), ("nodes_x", nx), ("nodes_y", ny), ("nodes_z", nz)],
-                &[packed, output], count, "P4 adapter oracle");
+                &[packed, output], count, "whitewater adapter oracle");
         }
         enc.commit_and_wait_completed();
         out
@@ -508,7 +508,7 @@ mod gpu {
         let [mut stage, _reference] = particle_stages(&device, shape, 8);
         assert!(stage.fields().unpacked_faces.is_none(), "axes allocate no unpack arrays");
         stage.reserve_faces(&device, true).unwrap();
-        let mut enc = device.create_encoder("P4 unpack mixed-weight fixture");
+        let mut enc = device.create_encoder("whitewater unpack mixed-weight fixture");
         stage.unpack_faces(&mut enc, &shape, FaceSource::Packed(&packed));
         let captured = stage.fields().unpacked_faces.as_ref().unwrap().each_ref().map(|src| copy_shared(&device, &mut enc, src));
         enc.commit_and_wait_completed();
@@ -563,7 +563,7 @@ mod gpu {
         for stage in &mut stages { stage.reference.capture = true; }
         stages[2].reference.enabled = true;
         for tick in 0..3 {
-            let mut enc = device.create_encoder("P4 packed faces, padded mixed weights and substep history");
+            let mut enc = device.create_encoder("whitewater packed faces, padded mixed weights and substep history");
             let mut captures = Vec::new();
             for (variant, stage) in stages.iter_mut().enumerate() {
                 let mut inputs = fixture.inputs();
@@ -620,7 +620,7 @@ mod gpu {
             (h - epsilon, Some(1)), (h, None), (h + epsilon, Some(2))].into_iter().enumerate() {
             for (overflow, offsets) in counts.iter().enumerate() {
                 for dust in [false, true] {
-                    let mut enc = device.create_encoder("whitewater P3 spawn thresholds");
+                    let mut enc = device.create_encoder("whitewater spawn thresholds");
                     let mut captures = Vec::new();
                     for (stage, fixture) in stages.iter_mut().zip(&fixtures) {
                         let mut frame = fixture.frame(dust);
@@ -661,7 +661,7 @@ mod gpu {
         let device = crate::test_device();
         let fixtures = [Fixture::new(&device), Fixture::new(&device)];
         let mut stages = particle_stages(&device, fixtures[0].shape, 8);
-        let mut enc = device.create_encoder("whitewater P3 append overflow");
+        let mut enc = device.create_encoder("whitewater append overflow");
         let mut captures = Vec::new();
         for (stage, fixture) in stages.iter_mut().zip(&fixtures) {
             let mut frame = fixture.frame(true);
@@ -712,7 +712,7 @@ mod gpu {
         // impulse events. Foam slots 1/7 receive history velocity, never a
         // direct impulse. Negative lifetime must not bypass retype or age.
         for (tick, preserve) in [false, true, true, false].into_iter().enumerate() {
-            let mut enc = device.create_encoder("whitewater P3 lifecycle substep history");
+            let mut enc = device.create_encoder("whitewater lifecycle substep history");
             let mut captures = Vec::new();
             for (impulses_on, pair) in [(true, &mut stages), (false, &mut controls)] {
                 for (stage, fixture) in pair.iter_mut().zip(&fixtures) {

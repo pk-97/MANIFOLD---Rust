@@ -51,7 +51,6 @@ pub struct AddSceneFluidCommand {
     material_metadata: Vec<SceneParamMetadata>,
     object_metadata: Vec<SceneParamMetadata>,
     whitewater_metadata: Vec<SceneParamMetadata>,
-    look_metadata: Vec<SceneParamMetadata>,
     template: LiquidTemplate,
     catalog_default: EffectGraphDef,
     prev: Option<GraphSnapshot>,
@@ -85,7 +84,6 @@ impl AddSceneFluidCommand {
             material_metadata,
             object_metadata,
             whitewater_metadata: Vec::new(),
-            look_metadata: Vec::new(),
             template,
             catalog_default,
             prev: None,
@@ -110,11 +108,6 @@ impl AddSceneFluidCommand {
 
     pub fn with_whitewater_metadata(mut self, metadata: Vec<SceneParamMetadata>) -> Self {
         self.whitewater_metadata = metadata;
-        self
-    }
-
-    pub fn with_look_metadata(mut self, metadata: Vec<SceneParamMetadata>) -> Self {
-        self.look_metadata = metadata;
         self
     }
 
@@ -283,7 +276,6 @@ impl Command for AddSceneFluidCommand {
             ExposureSet::Material => self.material_metadata.clone(),
             ExposureSet::Object => self.object_metadata.clone(),
             ExposureSet::Whitewater => self.whitewater_metadata.clone(),
-            ExposureSet::Look => self.look_metadata.clone(),
         };
         let mut candidate = baseline.clone();
         let result = (|def: &mut EffectGraphDef| {

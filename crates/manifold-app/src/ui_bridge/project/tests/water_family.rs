@@ -55,6 +55,33 @@ fn family_value(project: &Project, layer: &LayerId, row: &SceneObjectKnownRow, p
 }
 
 #[test]
+fn water_family_add_sheet_fill_rate_card_binds_to_its_domain() {
+    let (mut project, layer, render) = water_project();
+    let initial_objects = objects_param(&project, &layer, render) as usize;
+    let mut editing = EditingService::new();
+    add_water(&mut project, &layer, render, &mut editing);
+    let def = effective_def(&project, &layer);
+    let water = rows(&def).into_iter().find(|row| row.is_group && row.liquid_domain.is_some()
+        && row.index == initial_objects).expect("Add Water parent");
+    let family = def.nodes.iter().find(|node| Some(node.id) == water.group_node_id)
+        .expect("Add Water family group").group.as_ref().expect("family body");
+    let domain = family.nodes.iter().find(|node| node.type_id == manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID)
+        .expect("Add Water domain");
+    let binding = def.preset_metadata.as_ref().expect("scene metadata").bindings.iter().find(|binding|
+        matches!(&binding.target, BindingTarget::Node { node_id, param }
+            if node_id == &domain.node_id && param == "sheet_fill_rate"))
+        .expect("Sheet Fill Rate binding targets the added domain");
+    let spec = def.preset_metadata.as_ref().unwrap().params.iter().find(|spec| spec.id == binding.id)
+        .expect("Sheet Fill Rate card");
+    assert_eq!(spec.name, "Sheet Fill Rate");
+    assert_eq!(spec.min, 0.0);
+    assert_eq!(spec.max, 1.0);
+    assert_eq!(spec.default_value, 0.0);
+    assert_eq!(spec.section.as_deref(), Some(format!("{} - Fluid", water.name).as_str()));
+    assert_ne!(domain.node_id, NodeId::new("domain"), "Add Water must bind its own domain");
+}
+
+#[test]
 fn water_family_add_undo_redo() {
     let (mut project, layer, render) = water_project();
     let mut editing = EditingService::new();
