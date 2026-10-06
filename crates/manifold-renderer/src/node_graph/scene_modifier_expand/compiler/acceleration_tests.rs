@@ -24,6 +24,34 @@ fn host() -> EffectGraphDef {
 fn recipe() -> EffectGraphDef {
     serde_json::from_str(UNIFORM_FORCE).expect("UniformForce fixture parses")
 }
+
+/// Follow scene_modifier_edit::build_action Add and Retarget: prepare and
+/// insert the all-object force, then resolve frames and apply the selection.
+#[test]
+fn scene_modifier_grouped_water_add_and_retarget_expand() {
+    use crate::node_graph::scene_modifier_authoring::scene_modifier_objects;
+    use crate::node_graph::scene_modifier_expand::resolve_modifier_mesh_frames;
+    use manifold_core::scene_modifier_edit::retarget_scene_modifier;
+    use manifold_core::scene_index::FlatSceneIndex;
+
+    let owner = crate::node_graph::bundled_preset_def(
+        &manifold_core::PresetTypeId::new("WaterDamBreakGpuFlip"),
+    ).expect("shipped Dam Break after load migrations").clone();
+    let scene = scene(&owner);
+    let water = SceneNodeRef::locate(&owner, &NodeId::new("water_object")).unwrap();
+    assert_eq!(water.scope.len(), 1);
+    assert!(scene_modifier_objects(&owner, &scene).unwrap().contains(&water));
+    let owner = attach(&owner, "force", SceneTargetSelection::AllObjects);
+    prepare_scene_modifiers(&owner, &PrimitiveRegistry::with_builtin())
+        .expect("performer Add Uniform Force expands");
+    let mut instance = owner.scene_modifiers[0].clone();
+    instance.targets = SceneTargetSelection::Explicit { objects: vec![water.clone()] };
+    let frames = resolve_modifier_mesh_frames(&owner, &instance).unwrap();
+    let owner = retarget_scene_modifier(&owner, &instance.id, instance.targets, frames).unwrap().graph;
+    assert!(FlatSceneIndex::build(&owner).unwrap().scene_objects(&scene).unwrap().contains(&water));
+    prepare_scene_modifiers(&owner, &PrimitiveRegistry::with_builtin())
+        .expect("performer retarget to grouped Water expands");
+}
 fn reference(def: &EffectGraphDef, ty: &str, id: &str) -> SceneNodeRef {
     let node = def
         .nodes

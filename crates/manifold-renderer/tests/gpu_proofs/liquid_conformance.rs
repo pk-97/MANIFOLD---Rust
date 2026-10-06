@@ -167,23 +167,39 @@ struct Prepared {
 }
 
 fn prepare(row: &LiquidSolverRow, def: &EffectGraphDef, registry: &PrimitiveRegistry, dry: bool) -> Prepared {
-    // Flattening refuses modifier data, so it rides around the flatten; the
-    // runtime expands it, and its refs name top-level scene nodes, which
-    // keep their ids.
+    // Runtime expansion owns the impulse routes as well as the derived graph.
+    // Keep the authored stack for that build, but rebase every host reference
+    // through the flatten map so it still names the same leaf after grouping
+    // is removed. Recipe-local references never cross the host boundary.
+    let index = (!def.scene_modifiers.is_empty()).then(||
+        manifold_core::scene_index::FlatSceneIndex::build(def).expect("modifier host indexes"));
     let mut bare = def.clone();
-    let modifiers = std::mem::take(&mut bare.scene_modifiers);
-    let is_modifier = |target: &BindingTarget| matches!(target, BindingTarget::SceneModifier { .. });
-    let modifier_bindings: Vec<_> = bare.preset_metadata.as_mut().map_or_else(Vec::new, |metadata| {
-        let (modifier, node): (Vec<_>, Vec<_>) =
-            std::mem::take(&mut metadata.bindings).into_iter().partition(|binding| is_modifier(&binding.target));
-        metadata.bindings = node;
-        modifier
-    });
+    let mut modifiers = std::mem::take(&mut bare.scene_modifiers);
+    let metadata = bare.preset_metadata.take();
     let mut def = manifold_core::flatten::flatten_groups(&bare).expect("a liquid scene flattens");
-    def.scene_modifiers = modifiers;
-    if let Some(metadata) = def.preset_metadata.as_mut() {
-        metadata.bindings.extend(modifier_bindings);
+    if let Some(index) = index {
+        let rebase = |reference: &mut manifold_core::SceneNodeRef| {
+            let mapped = index.node(reference).expect("modifier host reference maps to a leaf");
+            let leaf = def.nodes.iter().find(|node| node.id == mapped.id).expect("flattened leaf exists");
+            assert_eq!(leaf.node_id, mapped.node_id, "index and probe flatten must agree");
+            reference.scope.clear();
+            reference.node = leaf.node_id.clone();
+        };
+        for modifier in &mut modifiers {
+            rebase(&mut modifier.scene);
+            if let manifold_core::scene_modifier_preset::SceneTargetSelection::Explicit { objects } = &mut modifier.targets {
+                objects.iter_mut().for_each(&rebase);
+            }
+            for frame in &mut modifier.mesh_frames {
+                rebase(&mut frame.target);
+                rebase(&mut frame.source);
+            }
+        }
     }
+    def.scene_modifiers = modifiers;
+    // Modifier IDs and recipe-local param IDs are unchanged: scalar and string
+    // SceneModifier bindings keep their exact targets, values and order.
+    def.preset_metadata = metadata;
     let outputs = |type_id: &str| -> Vec<String> {
         registry
             .construct(type_id)
@@ -1420,6 +1436,27 @@ fn liquid_pause_holds_frames() {
 /// binding id that fires it.
 fn with_impulse(def: &EffectGraphDef) -> (EffectGraphDef, String) {
     with_force_and_impulse(def, 0.0)
+}
+
+/// CPU-only: probe preparation must preserve runtime force/Fire admission for
+/// every solver, including objects authored behind group outputs.
+#[test]
+fn liquid_conformance_prepare_keeps_modifier_routes_cpu() {
+    let registry = registry();
+    for row in LIQUID_SOLVERS {
+        let (owner, fire) = with_force_and_impulse(&scene(row, Fixture::DamBreak), 1.0);
+        let prepared = prepare(row, &owner, &registry, false);
+        assert_eq!(prepared.def.preset_metadata, owner.preset_metadata,
+            "{}: probe preparation must preserve every binding", row.type_id);
+        let expanded = manifold_renderer::node_graph::scene_modifier_expand::prepare_scene_modifiers(
+            &prepared.def, &registry,
+        ).expect("rebased force and impulse expand");
+        assert!(!expanded.impulse_routes.is_empty(), "{}: Fire has a runtime route", row.type_id);
+        assert!(prepared.def.preset_metadata.as_ref().unwrap().bindings.iter()
+            .any(|binding| binding.id == fire && matches!(binding.target, BindingTarget::SceneModifier { .. })));
+        PresetRuntime::from_def(prepared.def, &registry, None)
+            .unwrap_or_else(|error| panic!("{}: CPU runtime build after probe preparation: {error}", row.type_id));
+    }
 }
 
 fn with_force_and_impulse(def: &EffectGraphDef, strength: f32) -> (EffectGraphDef, String) {
