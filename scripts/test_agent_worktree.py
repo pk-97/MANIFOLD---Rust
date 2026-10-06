@@ -711,7 +711,7 @@ class Brokers:
         return (patch.object(cb, "state_roots", return_value=[self.root]),
                 patch.object(cb, "CODEX_SESSIONS", self.sessions))
 
-    def start(self, wt, jobs=(), mode="answer"):
+    def start(self, wt, jobs=(), mode="answer", rollouts=True):
         state = self.root / cb.state_dir_name(wt)
         state.mkdir(parents=True, exist_ok=True)
         # AF_UNIX paths cap at 104 bytes on macOS; temp dirs run long.
@@ -730,6 +730,12 @@ class Brokers:
         self.write_broker(wt, {"endpoint": f"unix:{sock}", "pidFile": str(pid_file),
                                "logFile": str(log), "sessionDir": str(session), "pid": proc.pid})
         self.set_jobs(wt, jobs)
+        # A real finished job always left a rollout; write a closed, quiet one
+        # unless the test already wrote its own.
+        for job in jobs if rollouts else ():
+            thread = job.get("threadId")
+            if thread and not any(self.sessions.glob(f"*/*/*/rollout-*-{thread}.jsonl")):
+                self.rollout(thread, ["task_started", "task_complete"], age_s=3600)
         return proc, state, session
 
     def companion(self):
@@ -881,7 +887,7 @@ def test_busy_codex_broker_is_left_alone(repo):
             check("closed quiet turn lets the broker stop",
                   lines == [f"STOPPED broker pid {proc.pid}"] and wait_gone(proc), lines)
 
-            proc, _, _ = brokers.start(wt, jobs=[completed_job("missing-rollout")])
+            proc, _, _ = brokers.start(wt, jobs=[completed_job("missing-rollout")], rollouts=False)
             lines = cb.stop_idle(wt)
             check("a recent completed job without a rollout keeps its broker",
                   proc.poll() is None and "no rollout found" in lines[0], lines)
