@@ -504,7 +504,7 @@
           "type": "f32"
         }
       ],
-      "label": "Advect Whitewater",
+      "label": null,
       "outputs": [
         {
           "capacity": "follows:pool",
@@ -826,7 +826,7 @@
       ],
       "purpose": "Moves each live whitewater particle over the accepted liquid substeps and their MAC velocities when a schedule is wired, otherwise one supplied duration. Scene acceleration and timestamped hits use the liquid field inputs. By type: spray falls under gravity with per-id drag and bounces off solids (restitution on the normal part, friction on the tangent part); bubbles rise against gravity and drag toward the liquid velocity; foam rides the liquid velocity. The liquid velocity is FLIP's MAC trilinear of the face grid at the old position. Every type then marches its path in half-cell steps and stops a quarter cell clear of the solid or inside FLIP's boundary box, 1.625 cells in from the whitewater grid. A particle that ends up moving faster than 1.1 times its new speed, or whose travel is not finite, dies (lifetime -1e6). Empty slots (kind 3) pass whole.",
       "role": "Filter",
-      "stratum": "atom",
+      "stratum": "unlisted",
       "summary": "Moves foam, spray and bubbles one step: spray flies and bounces, bubbles rise, foam rides the water.",
       "type_id": "node.advect_whitewater"
     },
@@ -851,7 +851,7 @@
           "type": "f32"
         }
       ],
-      "label": "Age Whitewater",
+      "label": null,
       "outputs": [
         {
           "capacity": "follows:pool",
@@ -903,7 +903,7 @@
       ],
       "purpose": "Shortens each live whitewater particle's lifetime by its type's modifier times the tick, as FLIP does: by default spray ages twice as fast as foam and bubbles a third as fast. Empty slots (kind 3) pass whole.",
       "role": "Filter",
-      "stratum": "atom",
+      "stratum": "unlisted",
       "summary": "Counts down each whitewater particle's life, spray fastest and bubbles slowest.",
       "type_id": "node.age_whitewater"
     },
@@ -5718,7 +5718,7 @@
           "type": "f32"
         }
       ],
-      "label": "Crossing Distance",
+      "label": null,
       "outputs": [
         {
           "capacity": "follows:crossings",
@@ -5770,7 +5770,7 @@
       ],
       "purpose": "The whitewater grid's signed distance to the liquid surface, one f32 per cell in metres: the distance from the cell centre to the tangent plane at its nearest crossing (to the crossing itself when it carries no normal), negative where the level at the centre is, held to 4 cells. FLIP's post-process follows: a cell whose centre is inside a solid and whose distance is under half a cell reads minus half a cell, so the liquid meets the walls, and a distance within 0.005 cell of 0 moves out to it on its own side.",
       "role": "Filter",
-      "stratum": "atom",
+      "stratum": "unlisted",
       "summary": "Measures how far each grid cell is from the liquid's surface, negative inside the liquid.",
       "type_id": "node.crossing_distance"
     },
@@ -8416,7 +8416,7 @@
           "type": "f32"
         }
       ],
-      "label": "Dust Potential",
+      "label": null,
       "outputs": [
         {
           "capacity": "follows:particles",
@@ -8558,7 +8558,7 @@
       ],
       "purpose": "FLIP dust potential: enabled markers zero to 2.5 cells from a dust-emitting solid use strength times normalized turbulence with 0.75 times Min Turbulence and Max Turbulence. Domain sources require Boundary Dust and local z no greater than 3 cells. Defaults disable dust and boundary dust.",
       "role": "Filter",
-      "stratum": "atom",
+      "stratum": "unlisted",
       "summary": "Finds turbulent dust emitters near solid objects.",
       "type_id": "node.dust_potential"
     },
@@ -8923,7 +8923,7 @@
           "type": "f32"
         }
       ],
-      "label": "Emission Count",
+      "label": null,
       "outputs": [
         {
           "capacity": "inputs:1000@1000,1024@1024",
@@ -8985,7 +8985,7 @@
       ],
       "purpose": "How many whitewater particles each liquid particle emits this frame: FLIP's count per tick, Wavecrest Emission × energy potential × wavecrest potential × Duration × 8 / Points per Cell, rounded to a whole number on its own each tick and multiplied by the frame's Ticks. FLIP's rate is set for 8 particles per cell; the 8 / Points per Cell factor keeps the amount the same for any solver's sampling. 0 for slots at or past Live Count, slots with radius 0, and particles slower than 1 mm/s. One u32 per particle slot.",
       "role": "Filter",
-      "stratum": "atom",
+      "stratum": "unlisted",
       "summary": "Works out how many foam, spray and bubble particles each bit of breaking water throws off this frame.",
       "type_id": "node.emission_count"
     },
@@ -9015,7 +9015,7 @@
           "type": "f32"
         }
       ],
-      "label": "Energy Potential",
+      "label": null,
       "outputs": [
         {
           "capacity": "follows:particles",
@@ -9047,7 +9047,7 @@
       ],
       "purpose": "How much whitewater a liquid particle's speed can make, as FLIP measures it: its kinetic energy per kilogram, ½|v|², held between Min Energy and Max Energy and scaled to 0–1 across that range. One f32 per particle slot; 0 for slots with radius 0.",
       "role": "Filter",
-      "stratum": "atom",
+      "stratum": "unlisted",
       "summary": "Scores how fast each bit of water is moving, from 0 to 1, because faster water throws more foam and spray.",
       "type_id": "node.energy_potential"
     },
@@ -9514,7 +9514,7 @@
           "type": "f32"
         }
       ],
-      "label": "Extend Lattice",
+      "label": null,
       "outputs": [
         {
           "capacity": "follows:values",
@@ -9556,7 +9556,7 @@
       ],
       "purpose": "One layer of FLIP's grid extrapolation on the whitewater grid: a known cell keeps its value; an unknown cell off the grid border with a known face neighbour off the border becomes known with the mean of its face neighbours that are known or on the border (FLIP counts the border as settled and never fills it). Others stay as they are.",
       "role": "Filter",
-      "stratum": "atom",
+      "stratum": "unlisted",
       "summary": "Fills the empty cells next to known ones with their neighbours' average, one cell further each time.",
       "type_id": "node.extend_lattice"
     },
@@ -17187,7 +17187,7 @@
           "type": "f32"
         }
       ],
-      "label": "Inside Turbulence Potential",
+      "label": null,
       "outputs": [
         {
           "capacity": "follows:particles",
@@ -17319,7 +17319,7 @@
       ],
       "purpose": "Sample FLIP turbulence at p minus half a cell with out-of-range corners zero, clamp to Min/Max Turbulence and normalize. Exclude surface particles (within 1.5 cells of the surface and bordering air). Inside Enabled zero suppresses this source.",
       "role": "Filter",
-      "stratum": "atom",
+      "stratum": "unlisted",
       "summary": "Finds submerged turbulent emitters, including near-surface particles classified inside by FLIP.",
       "type_id": "node.inside_turbulence_potential"
     },
@@ -17597,7 +17597,7 @@
           "type": "f32"
         }
       ],
-      "label": "Jitter Particles",
+      "label": null,
       "outputs": [
         {
           "capacity": "follows:particles",
@@ -17639,7 +17639,7 @@
       ],
       "purpose": "Moves each live liquid particle by a uniform random offset of up to a quarter cell on each axis (0.25 × (1 − 0.001) × cell size), as FLIP's whitewater does before it looks for emitters, so emitters don't sit on the solver's particle lattice. The offset comes from a hash of the slot, the seed and the epoch: the same inputs give the same jitter. Velocity, radius and id pass through; slots with radius 0 pass whole.",
       "role": "Filter",
-      "stratum": "atom",
+      "stratum": "unlisted",
       "summary": "Nudges each liquid particle by a small random amount, so foam doesn't line up on the simulation's grid.",
       "type_id": "node.jitter_particles"
     },
@@ -17919,7 +17919,7 @@
           "type": "f32"
         }
       ],
-      "label": "Keep Whitewater",
+      "label": null,
       "outputs": [
         {
           "capacity": "follows:pool",
@@ -18091,7 +18091,7 @@
       ],
       "purpose": "Which whitewater pool slots survive the tick, FLIP's removal with every side colliding: 1 to keep, 0 to remove. A slot goes when it is empty (kind 3), its lifetime is at or below 0, its position is not finite, it lies outside FLIP's boundary box (1.625 cells in from the whitewater grid) or inside the solid or an enabled outflow mesh (strictly negative posed SDF, the liquid removal rule), or its cell already holds Max Per Cell kept particles earlier in the pool. One u32 per slot.",
       "role": "Filter",
-      "stratum": "atom",
+      "stratum": "unlisted",
       "summary": "Decides which foam, spray and bubbles survive this step: the dead, the stray and the overcrowded go.",
       "type_id": "node.keep_whitewater"
     },
@@ -18404,7 +18404,7 @@
           "type": "f32"
         }
       ],
-      "label": "Lattice Curvature",
+      "label": null,
       "outputs": [
         {
           "capacity": "follows:distance",
@@ -18456,7 +18456,7 @@
       ],
       "purpose": "Mean curvature of the whitewater grid's signed distance, as FLIP's whitewater measures it: at a cell off the grid border whose distance and six face neighbours' distances all lie within 2 cells of the surface, central differences give the curvature in 1/m, clamped to ±1 per cell, and the cell is known; elsewhere the value is 0 and unknown, for node.extend_lattice to fill.",
       "role": "Filter",
-      "stratum": "atom",
+      "stratum": "unlisted",
       "summary": "Measures how sharply the liquid's surface bends at each grid cell, which is where wave crests throw foam.",
       "type_id": "node.lattice_curvature"
     },
@@ -19447,7 +19447,7 @@
           "type": "f32"
         }
       ],
-      "label": "Liquid Cells",
+      "label": null,
       "outputs": [
         {
           "capacity": "follows:distance",
@@ -19489,7 +19489,7 @@
       ],
       "purpose": "Mark each whitewater cell air (0), liquid (1) or solid (2) as FLIP's whitewater emitter does: solid where the mean of the cell's eight solid-lattice corners is below 0, else liquid where its distance is below 0, else air; then a liquid cell with an air face neighbour becomes air, so emitters sit in the surface layer's air.",
       "role": "Filter",
-      "stratum": "atom",
+      "stratum": "unlisted",
       "summary": "Sorts every grid cell into air, liquid or wall, the map whitewater uses to decide where spray and foam can form.",
       "type_id": "node.liquid_cells"
     },
@@ -26317,7 +26317,7 @@
           "type": "f32"
         }
       ],
-      "label": "Nearest Crossing",
+      "label": null,
       "outputs": [
         {
           "capacity": "follows:crossings",
@@ -26369,7 +26369,7 @@
       ],
       "purpose": "One pass of spreading surface crossings over the whitewater grid: each cell takes whichever of its own crossing and the crossings of the 26 cells Step cells away lies nearest its centre, with its normal, keeping its own level. Passes at steps 2, 1, 1 give every cell the nearest crossing within four cells; a first pass at step 2 finds the nearest crossing where three unit passes settle on a neighbour's.",
       "role": "Filter",
-      "stratum": "atom",
+      "stratum": "unlisted",
       "summary": "Passes each grid cell the closest known point on the liquid's surface from its neighbours.",
       "type_id": "node.nearest_crossing"
     },
@@ -33869,7 +33869,7 @@
           "type": "f32"
         }
       ],
-      "label": "Preserve Foam",
+      "label": null,
       "outputs": [
         {
           "capacity": "follows:pool",
@@ -34031,7 +34031,7 @@
       ],
       "purpose": "FLIP's foam preservation: each foam particle, dead or alive, gains rate · clamp((n − min_density) / (max_density − min_density), 0, 1) · dt seconds of lifetime, n the foam particles (dead ones too) in its cell. Cells are the bins of the sort that binned the pool. Off by default, as in FLIP; other slots pass whole.",
       "role": "Filter",
-      "stratum": "atom",
+      "stratum": "unlisted",
       "summary": "Keeps foam alive longer where lots of it has gathered, so thick foam lingers.",
       "type_id": "node.preserve_foam"
     },
@@ -37274,7 +37274,7 @@
           "type": "f32"
         }
       ],
-      "label": "Retype Whitewater",
+      "label": null,
       "outputs": [
         {
           "capacity": "follows:pool",
@@ -37406,7 +37406,7 @@
       ],
       "purpose": "Retypes each live whitewater particle after it moves, by FLIP's rule: spray outside FLIP's boundary box, 1.625 cells inside the whitewater grid; else foam within one cell of the liquid surface (the distance read trilinearly at cell centres), bubble deeper, spray higher; foam that would turn bubble stays foam until it is a further cell deep; foam or spray whose cell has no air cell among its 26 neighbours becomes bubble. A bubble that turns foam or spray takes the liquid velocity at its position. Empty slots (kind 3) pass whole.",
       "role": "Filter",
-      "stratum": "atom",
+      "stratum": "unlisted",
       "summary": "Re-decides whether each whitewater particle is now spray, foam or a bubble after it has moved.",
       "type_id": "node.retype_whitewater"
     },
@@ -38936,7 +38936,7 @@
           "type": "f32"
         }
       ],
-      "label": "Sample Faces at Particles",
+      "label": null,
       "outputs": [
         {
           "capacity": "follows:particles",
@@ -39068,7 +39068,7 @@
       ],
       "purpose": "Sets each live liquid particle's velocity from a liquid's face grid, as FLIP's whitewater reads its velocity field: each component is the trilinear mix of the eight faces around the particle on that component's staggered stencil, a face past the face grid reads 0, and a particle outside the whitewater grid (the box center ± size/2 over nodes − 1 cells) gets 0. The face grid sits centred in that grid by a whole number of cells. Position, radius and id pass through; slots with radius 0 pass whole.",
       "role": "Filter",
-      "stratum": "atom",
+      "stratum": "unlisted",
       "summary": "Reads the liquid's flow at each particle, so whitewater knows how fast and which way the water there is moving.",
       "type_id": "node.sample_faces_at_particles"
     },
@@ -42679,7 +42679,7 @@
           "type": "f32"
         }
       ],
-      "label": "Spawn Whitewater",
+      "label": null,
       "outputs": [
         {
           "capacity": "param:capacity=100000",
@@ -42891,7 +42891,7 @@
       ],
       "purpose": "Place this frame's new whitewater particles, one per spawn slot, by FLIP's emitter rule. The running total's last entry is the frame's emission count; slot j takes emission j, or past Capacity an even subset (emission ⌊j · total / Capacity⌋). Its emitter is the liquid particle whose running total first passes it. The new particle lands at random in a cylinder about that particle's velocity, 8 of FLIP's marker radii wide and Duration seconds of its travel long. It is dropped outside the whitewater grid or within a quarter cell of a solid; its lifetime is Min Lifetime + energy × (Max − Min) ± Lifetime Variance, dropped at or below 0; its velocity is the liquid's at its position. Dropped and unused slots have lifetime 0. Kind is left 0 for node.whitewater_type.",
       "role": "Filter",
-      "stratum": "atom",
+      "stratum": "unlisted",
       "summary": "Places the new foam, spray and bubble particles around the breaking water that throws them off.",
       "type_id": "node.spawn_whitewater"
     },
@@ -43398,7 +43398,7 @@
           "type": "f32"
         }
       ],
-      "label": "Surface Crossings",
+      "label": null,
       "outputs": [
         {
           "capacity": "follows:solid",
@@ -43470,7 +43470,7 @@
       ],
       "purpose": "For each cell of the whitewater grid (the solid lattice read as nodes − 1 cells a side), the zero crossing of the refined level set nearest the cell centre: of the edges between refined nodes inside the cell (144 at 3 nodes per cell), those whose ends straddle zero with neither end in a solid cross at the linear root. Out holds the crossing in grid cells from the lattice's first node (1e6 when none), the unit surface normal there (the level set's gradient at the edge's liquid end, differenced against liquid neighbours where it has them, since a node outside may sit at the level set's cap; zero when none), and the level set at the cell centre in metres.",
       "role": "Filter",
-      "stratum": "atom",
+      "stratum": "unlisted",
       "summary": "Finds where the liquid's surface passes through each grid cell, the first step to measuring distance to the surface.",
       "type_id": "node.surface_crossings"
     },
@@ -46116,7 +46116,7 @@
           "type": "f32"
         }
       ],
-      "label": "Emission Count",
+      "label": null,
       "outputs": [
         {
           "capacity": "follows:particles",
@@ -46308,7 +46308,7 @@
       ],
       "purpose": "FLIP normal whitewater count per particle: round energy times (wavecrest rate times wavecrest potential plus turbulence rate times turbulence potential) times Duration times 8/points per cell, then multiply by ticks. Reject empty slots, low energy and speed below 1 mm/s.",
       "role": "Filter",
-      "stratum": "atom",
+      "stratum": "unlisted",
       "summary": "Works out how many foam, spray and bubble particles each bit of breaking water throws off this frame.",
       "type_id": "node.turbulence_emission_count"
     },
@@ -46377,7 +46377,7 @@
           "type": "f32"
         }
       ],
-      "label": "Turbulence Field",
+      "label": null,
       "outputs": [
         {
           "capacity": "follows:distance",
@@ -46459,7 +46459,7 @@
       ],
       "purpose": "FLIP turbulence at each liquid cell: sum cell-centre MAC velocity differences over the asymmetric i-2 through i+1 window, excluding the last boundary index, weighted by direction and distance within sqrt(12) cells. Air cells are zero.",
       "role": "Filter",
-      "stratum": "atom",
+      "stratum": "unlisted",
       "summary": "Measures local liquid agitation for whitewater emission.",
       "type_id": "node.turbulence_field"
     },
@@ -47129,7 +47129,7 @@
           "type": "f32"
         }
       ],
-      "label": "Upwind Distance",
+      "label": null,
       "outputs": [
         {
           "capacity": "follows:levelset",
@@ -47181,7 +47181,7 @@
       ],
       "purpose": "One FLIP Fluids upwind signed-distance sweep on valid cells, with recomputed smoothed sign, clamped neighbours and pseudo-time h/2. Invalid cells retain their input.",
       "role": "Filter",
-      "stratum": "atom",
+      "stratum": "unlisted",
       "summary": "One FLIP Fluids upwind signed-distance sweep on valid cells, with recomputed smoothed sign, clamped neighbours and pseudo-time h/2. Invalid cells retain their input.",
       "type_id": "node.upwind_distance"
     },
@@ -48790,7 +48790,7 @@
           "type": "f32"
         }
       ],
-      "label": "Wavecrest Potential",
+      "label": null,
       "outputs": [
         {
           "capacity": "follows:particles",
@@ -48922,7 +48922,7 @@
       ],
       "purpose": "How strongly a liquid particle sits on a breaking crest, as FLIP's whitewater measures it, 0 to 1. Only particles within 1.5 cells of the surface whose cell touches air (any of 26 neighbours) count. The surface's curvature there, times the cell size, must reach Min Curvature (it counts fully at Max Curvature), and the particle must move out through the surface: the cosine between its direction and the surface normal at least Sharpness. Distance and curvature are read trilinearly at the whitewater grid's cell centres. One f32 per particle slot; 0 for slots with radius 0.",
       "role": "Filter",
-      "stratum": "atom",
+      "stratum": "unlisted",
       "summary": "Scores how sharply each bit of water is breaking over a wave crest, which is where foam and spray come from.",
       "type_id": "node.wavecrest_potential"
     },
@@ -49112,7 +49112,7 @@
           "type": "f32"
         }
       ],
-      "label": "Whitewater Emitter Velocity",
+      "label": null,
       "outputs": [
         {
           "capacity": "follows:particles",
@@ -49244,7 +49244,7 @@
       ],
       "purpose": "For surface-classified markers above minus 0.75 cell depth, scale sampled velocity uniformly between 1 and Spray Emission Speed before energy and wavecrest evaluation. Other particles pass unchanged. FLIP diffuseparticlesimulation.cpp:1699.",
       "role": "Filter",
-      "stratum": "atom",
+      "stratum": "unlisted",
       "summary": "Scales surface emitter velocity by the FLIP spray emission factor.",
       "type_id": "node.whitewater_emitter_velocity"
     },
@@ -49303,7 +49303,7 @@
           "type": "f32"
         }
       ],
-      "label": "Whitewater Influence",
+      "label": null,
       "outputs": [
         {
           "capacity": "follows:values",
@@ -49375,7 +49375,7 @@
       ],
       "purpose": "Move every influence node toward Base Level by Decay Rate times dt, then replace nodes within three cells of a solid with its nearest obstacle influence; domain sources use Base Level. Reset starts at Base Level. Matches FLIP InfluenceGrid with its default disabled spread.",
       "role": "Filter",
-      "stratum": "atom",
+      "stratum": "unlisted",
       "summary": "Decays obstacle influence and reapplies solid sources.",
       "type_id": "node.whitewater_influence"
     },
@@ -50419,7 +50419,7 @@
           "type": "f32"
         }
       ],
-      "label": "Whitewater Type",
+      "label": null,
       "outputs": [
         {
           "capacity": "follows:spawns",
@@ -50561,7 +50561,7 @@
       ],
       "purpose": "Sort each new whitewater particle into bubble (0), foam (1) or spray (2) as FLIP types a fresh particle: spray outside FLIP's boundary box, 1.625 cells inside the whitewater grid; else foam within one cell of the liquid surface (the distance read trilinearly at cell centres), bubble deeper, spray higher; and foam or spray whose cell has no air cell among its 26 neighbours becomes bubble. Dust Source selects dust (4, keeping saved GPU empty kind 3); fresh spray velocity is scaled uniformly from 1 to Spray Emission Speed. Slots with lifetime 0 pass whole.",
       "role": "Filter",
-      "stratum": "atom",
+      "stratum": "unlisted",
       "summary": "Decides whether each new whitewater particle is spray, foam or a bubble, from where it sits against the water surface.",
       "type_id": "node.whitewater_type"
     },

@@ -1,6 +1,6 @@
 # Whitewater Stage Fusion — fuse the stage's internal atom chains, drop its grid copies, retire the face adapters
 
-**Status:** IN PROGRESS · 2026-10-06 · P0–P4 on main; P3b deferred (section 8) · owed: P5.
+**Status:** SHIPPED · 2026-10-06 · P0–P5 on main; P3b deferred (section 8).
 **Prerequisites:** none. The display-history landing (`85226c917`) is on main; this design touches nothing it owns.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) and section 6 (Seam briefs) before starting any phase.
 
@@ -133,7 +133,7 @@ Method: `grep -rl '"node.<id>"' crates/manifold-renderer/assets/` per atom, plus
 | `node.whitewater_obstacle_source` | WaterDamBreakParticles, WaterDamBreakGpuFlip |
 | `node.face_sample_component` | WaterDamBreakParticles, WaterDamBreakGpuFlip (six instances each; all retired from both by P4; the node stays catalog for the seam's P10 contract) |
 
-**Stage internals registered as catalog atoms with `picker: { category: Atom }`, `examples: []`, and zero preset consumers (24):** `surface_crossings`, `nearest_crossing`, `crossing_distance`, `liquid_cells`, `lattice_curvature`, `extend_lattice`, `turbulence_field`, `whitewater_influence`, `dust_potential`, `jitter_particles`, `sample_faces_at_particles`, `whitewater_emitter_velocity`, `energy_potential`, `wavecrest_potential`, `inside_turbulence_potential`, `turbulence_emission_count`, `spawn_whitewater`, `whitewater_type`, `advect_whitewater`, `retype_whitewater`, `age_whitewater`, `preserve_foam`, `keep_whitewater`, `upwind_distance`. (⚠ VERIFY-AT-IMPL: `node.emission_count` — `rg 'picker:' crates/manifold-renderer/src/node_graph/primitives/emission_count.rs`; if it carries a picker, it joins the list.) These can stop being catalog entries (D9). WaterDamBreakParticles uses the same `node.whitewater_step` stage (`WaterDamBreakParticles.json:911`), not these atoms.
+**Stage internals registered as catalog atoms with `picker: { category: Atom }`, `examples: []`, and zero preset consumers (25 with `emission_count`):** `surface_crossings`, `nearest_crossing`, `crossing_distance`, `liquid_cells`, `lattice_curvature`, `extend_lattice`, `turbulence_field`, `whitewater_influence`, `dust_potential`, `jitter_particles`, `sample_faces_at_particles`, `whitewater_emitter_velocity`, `energy_potential`, `wavecrest_potential`, `inside_turbulence_potential`, `turbulence_emission_count`, `spawn_whitewater`, `whitewater_type`, `advect_whitewater`, `retype_whitewater`, `age_whitewater`, `preserve_foam`, `keep_whitewater`, `upwind_distance`. (`node.emission_count` carried a picker and no preset consumer, so it joined the list.) These can stop being catalog entries (D9). WaterDamBreakParticles uses the same `node.whitewater_step` stage (`WaterDamBreakParticles.json:911`), not these atoms.
 
 Mechanics: `picker:` is optional in `primitive!` (`primitive.rs:1300`); omitted → `None` → absent from `palette_atoms()` (:1405-1413, `__primitive_picker` :1495-1505) and from the catalog's picker-labelled strata (`catalog_gen.rs:57-58, :199-200`; `gen_node_catalog --check` is the CI gate, `bin/gen_node_catalog.rs:13-14, :74`). The type stays registered (inventory submit :1407-1412), so a saved graph holding one still loads; `UnknownTypeId` (`graph_loader.rs:1328`) is never reached.
 
@@ -190,7 +190,7 @@ Never refresh a golden or weaken equality to make a lane pass. On a mismatch the
 
 **D8 — The frame's face publication leaves both shipped presets; the ports stay.** `WaterScene::faces` stays a builder option (the vendored comparison needs it, whitewater_scene_tests.rs:298). `dam_break()` already sets `faces: false`; the forced publication comes from `render_def(...with_faces())` and `particle_view_def(...with_faces())` (gpu_flip_preset.rs:766, :880). Those two overrides are removed, the vendored comparison keeps its explicit `with_faces()`, so nodes 11/12/13 and their six wires are no longer generated. Both presets are regenerated and validated. The held-state saving (liquid_state.rs:516 allocation filter) stays a claim until P4's dump shows it. `liquid_frame.face_*_in` stay optional inputs; `liquid_state.faces` stays an output; a user or another preset wiring them gets today's behaviour. `liquid_frame.face_valid_layers` then reports 0 (liquid_frame.rs:360), which nothing in either preset reads (section 1.5). Rejected: deleting the ports — the seam's P10 contract (LIQUID_SOLVER_SEAM_DESIGN section 3.2) and saved graphs.
 
-**D9 — The 24 stage-internal atoms lose their `picker:`; they stay registered.** Palette and catalog no longer show them; saved graphs still load; `standalone_for_spec::<P>()` still compiles them for the oracle tests. Rejected: deregistering, because a saved graph holding one would hit `UnknownTypeId` and "silently dropping unresolvable data on a load path is the forbidden move" — and there is no census of saved projects to prove none exist. Deregistration is Deferred with its trigger.
+**D9 — The 25 stage-internal atoms lose their `picker:`; they stay registered.** Palette and catalog no longer show them; saved graphs still load; `standalone_for_spec::<P>()` still compiles them for the oracle tests. Rejected: deregistering, because a saved graph holding one would hit `UnknownTypeId` and "silently dropping unresolvable data on a load path is the forbidden move" — and there is no census of saved projects to prove none exist. Deregistration is Deferred with its trigger.
 
 **D10 — No migration rung; the presets are regenerated (Peter, 2026-10-06).** "we don't need to spend time upgrading old projects please. We can just load the preset (which should always be updated with our new features and fixes)". The shipped GPU FLIP Dam Break, loaded fresh, is the only water project in use, so P4 regenerates both presets and ships no `face_adapters_v1200` rung, no version bump and no old-project handling. Old saved graphs keep their adapters and stay bit-identical (correctness never depended on the rung). Supersedes the earlier one-rung decision.
 
@@ -358,7 +358,7 @@ Order P0 → P1 → P2 → P3 → P3b → P4 → P5; each lands on its own. P1, 
 ### P5 — Catalog demotion and docs
 - **Entry:** P2–P4 landed; anchors: primitive.rs:1300, :1405-1413; catalog_gen.rs:57-58, :199-200; gen_node_catalog.rs:13-14.
 - **Read-back:** D9, section 1.6 list; resolve the `emission_count` ⚠.
-- **Deliverables:** remove `picker:` from the 24 (or 25) atoms; `hidden_whitewater_atoms_still_register`; regenerated `docs/NODE_CATALOG.md`; `GPU_WHITEWATER_DESIGN.md` section 3.9 gains an "as fused" paragraph pointing here; this doc's Status line updated by the landing.
+- **Deliverables:** remove `picker:` from the 25 atoms; `hidden_whitewater_atoms_still_register`; regenerated `docs/NODE_CATALOG.md`; `GPU_WHITEWATER_DESIGN.md` section 3.9 gains an "as fused" paragraph pointing here; this doc's Status line updated by the landing.
 - **Gate:** I9; `gen_node_catalog --check`; `cargo test -p manifold-renderer palette` (whatever names the palette tests carry — list them in the brief after `rg palette_atoms`); clippy.
 - **Forbidden:** deregistering or deleting atom files; renaming type ids.
 - **Test scope:** focused CPU tests. Demo: none — L1.
@@ -389,7 +389,7 @@ Phasing-completeness check: D5/D6 → P1; D1–D4 → P2/P3 (hoists → P3b); D7
 6. Influence ping-pong by index (D6).
 7. `faces` packed input added; axis arrays optional; exactly one source in tick mode (D7).
 8. Frame face publication off in both shipped presets; ports stay (D8).
-9. The 24 internals lose their picker; they stay registered (D9).
+9. The 25 internals lose their picker; they stay registered (D9).
 10. No migration rung: P4 regenerates both presets and old saved graphs keep their adapters, bit-identical (D10, Peter 2026-10-06).
 11. Solid-lattice sharing and metadata-with-distance are deferred, with the shape written down (D12).
 12. Measurement is the house A/B at P3 and P4; node stamps are ratios only.

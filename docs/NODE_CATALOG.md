@@ -302,30 +302,30 @@ _Generated from the node registry. Do not hand-edit. 381 nodes registered, group
 | Node | type_id | role | summary |
 |---|---|---|---|
 | Add Burst (3D, radial) | `node.add_burst_3d` | Filter | Injects 3D particles in a burst around one of a few fixed zones, puffing new material into a 3D sim on a hit. |
-| Advect Whitewater | `node.advect_whitewater` | Filter | Moves foam, spray and bubbles one step: spray flies and bounces, bubbles rise, foam rides the water. |
-| Age Whitewater | `node.age_whitewater` | Filter | Counts down each whitewater particle's life, spray fastest and bubbles slowest. |
+| — | `node.advect_whitewater` | Filter | Moves foam, spray and bubbles one step: spray flies and bounces, bubbles rise, foam rides the water. |
+| — | `node.age_whitewater` | Filter | Counts down each whitewater particle's life, spray fastest and bubbles slowest. |
 | Blob Bounds | `node.blob_bounds` | Filter | Measures kernel reach for exact particle surface searches. |
 | Clamp Liquid To Solids | `node.clamp_liquid_to_solids` | Filter | Keeps a liquid surface out of walls and solid bodies and closed at the edge of its grid, after smoothing. |
-| Crossing Distance | `node.crossing_distance` | Filter | Measures how far each grid cell is from the liquid's surface, negative inside the liquid. |
+| — | `node.crossing_distance` | Filter | Measures how far each grid cell is from the liquid's surface, negative inside the liquid. |
 | Draw Particles (3D scatter) | `node.draw_particles_3d` | Filter | Splats 3D particles into a volume buffer, building up a 3D density field from where they land. The 3D version of Draw Particles. |
 | Draw Particles (camera) | `node.draw_particles_camera` | Filter | Projects 3D particles through a camera and splats them onto a 2D image in one step. The display path for a 3D particle sim. |
-| Dust Potential | `node.dust_potential` | Filter | Finds turbulent dust emitters near solid objects. |
-| Emission Count | `node.emission_count` | Filter | Works out how many foam, spray and bubble particles each bit of breaking water throws off this frame. |
-| Energy Potential | `node.energy_potential` | Filter | Scores how fast each bit of water is moving, from 0 to 1, because faster water throws more foam and spray. |
-| Extend Lattice | `node.extend_lattice` | Filter | Fills the empty cells next to known ones with their neighbours' average, one cell further each time. |
+| — | `node.dust_potential` | Filter | Finds turbulent dust emitters near solid objects. |
+| — | `node.emission_count` | Filter | Works out how many foam, spray and bubble particles each bit of breaking water throws off this frame. |
+| — | `node.energy_potential` | Filter | Scores how fast each bit of water is moving, from 0 to 1, because faster water throws more foam and spray. |
+| — | `node.extend_lattice` | Filter | Fills the empty cells next to known ones with their neighbours' average, one cell further each time. |
 | Face Grid Component | `node.face_sample_component` | Filter | Hands one direction of the water's velocity grid to effects that follow the water. |
 | Flatten to Camera Plane | `node.flatten_to_camera_plane` | Filter | Squashes a cloud of 3D particles flat toward the camera by a dial-able amount, from a full volume down to a pancake facing the screen. |
 | GPU FLIP Domain | `node.gpu_flip_domain` | Source | Sets up a GPU FLIP liquid: its box, resolution, starting fill, gravity and speed. |
 | GPU FLIP Step | `node.gpu_flip_step` | Filter | Moves the water forward one tick, in Steps substeps: gravity, solids, incompressibility and the particles' motion. |
 | Grid to Matter | `node.grid_to_matter` | Filter | Moves each liquid particle with the grid's velocities and updates how compressed it is. |
-| Inside Turbulence Potential | `node.inside_turbulence_potential` | Filter | Finds submerged turbulent emitters, including near-surface particles classified inside by FLIP. |
+| — | `node.inside_turbulence_potential` | Filter | Finds submerged turbulent emitters, including near-surface particles classified inside by FLIP. |
 | Interpolate Particle Frames | `node.interpolate_particle_frames` | Filter | Smooths a particle simulation between two accepted frames while letting new particles grow in naturally. |
-| Jitter Particles | `node.jitter_particles` | Filter | Nudges each liquid particle by a small random amount, so foam doesn't line up on the simulation's grid. |
+| — | `node.jitter_particles` | Filter | Nudges each liquid particle by a small random amount, so foam doesn't line up on the simulation's grid. |
 | Keep In Box (3D) | `node.keep_in_box_3d` | Filter | Holds 3D particles inside their container, either wrapping them around or bouncing them back at the edges. The hard boundary after a move. |
-| Keep Whitewater | `node.keep_whitewater` | Filter | Decides which foam, spray and bubbles survive this step: the dead, the stray and the overcrowded go. |
+| — | `node.keep_whitewater` | Filter | Decides which foam, spray and bubbles survive this step: the dead, the stray and the overcrowded go. |
 | Lattice Bricks | `node.lattice_bricks` | Filter | Finds the lattice bricks that can affect the liquid surface. |
-| Lattice Curvature | `node.lattice_curvature` | Filter | Measures how sharply the liquid's surface bends at each grid cell, which is where wave crests throw foam. |
-| Liquid Cells | `node.liquid_cells` | Filter | Sorts every grid cell into air, liquid or wall, the map whitewater uses to decide where spray and foam can form. |
+| — | `node.lattice_curvature` | Filter | Measures how sharply the liquid's surface bends at each grid cell, which is where wave crests throw foam. |
+| — | `node.liquid_cells` | Filter | Sorts every grid cell into air, liquid or wall, the map whitewater uses to decide where spray and foam can form. |
 | Liquid Fill | `node.liquid_fill` | Source | Places the liquid's starting particles: a pool on the floor plus one block of water. |
 | Liquid Frame | `node.liquid_frame` | Filter | Hands a simulated particle liquid to the liquid surface, one frame per simulation tick. |
 | Liquid Solid Distance | `node.liquid_solid_distance` | Filter | Marks where the walls and solid objects are around a liquid, so its surface stops at them. |
@@ -342,37 +342,37 @@ _Generated from the node registry. Do not hand-edit. 381 nodes registered, group
 | Matter Stats | `node.matter_stats` | Filter | Measures the liquid once per tick: how much there is, how fast it moves, its energy, and whether anything went wrong. |
 | Matter to Grid | `node.matter_to_grid` | Filter | Spreads each liquid particle's weight and motion onto the simulation grid around it. |
 | Move Particles (3D, Euler step) | `node.move_particles_3d` | Filter | Moves every 3D particle one step along its velocity each frame. The integrator for a 3D particle system. |
-| Nearest Crossing | `node.nearest_crossing` | Filter | Passes each grid cell the closest known point on the liquid's surface from its neighbours. |
+| — | `node.nearest_crossing` | Filter | Passes each grid cell the closest known point on the liquid's surface from its neighbours. |
 | Offset Lattice | `node.offset_lattice` | Filter | Add a distance to every scalar lattice sample. Zero returns the input bits unchanged. Negative offsets grow a negative-inside surface; positive offsets shrink … |
 | Particle Volume | `node.particle_volume` | Filter | Turns liquid particles into a distance field on a grid, the step before the surface mesh is drawn. |
 | Particles To Copies | `node.particles_to_copies` | Map | Places a copy of a shape at every liquid particle, sized by the particle, so you can see the particles themselves. |
-| Preserve Foam | `node.preserve_foam` | Filter | Keeps foam alive longer where lots of it has gathered, so thick foam lingers. |
+| — | `node.preserve_foam` | Filter | Keeps foam alive longer where lots of it has gathered, so thick foam lingers. |
 | Push From Walls (3D) | `node.push_from_walls_3d` | Filter | Pushes 3D particles gently away from the walls of their container as they get close, keeping them inside without a hard bounce. |
 | Push Out Of Solid | `node.push_out_of_solid` | Filter | Moves liquid particles out of solid regions while keeping their size, velocity and identity. |
 | Redistance Lattice | `node.redistance_lattice` | Filter | Rebuild a node-centred signed distance field from the input zero surface, using the nearest marching-cubes triangle within Band metres. The sign comes from the… |
 | Remove Drift (3D) | `node.remove_drift_3d` | Filter | Balances the forces on a particle system so it stops slowly sliding in one direction — a long-running fluid stays centered instead of silting into a corner. |
-| Retype Whitewater | `node.retype_whitewater` | Filter | Re-decides whether each whitewater particle is now spray, foam or a bubble after it has moved. |
-| Sample Faces at Particles | `node.sample_faces_at_particles` | Filter | Reads the liquid's flow at each particle, so whitewater knows how fast and which way the water there is moving. |
+| — | `node.retype_whitewater` | Filter | Re-decides whether each whitewater particle is now spray, foam or a bubble after it has moved. |
+| — | `node.sample_faces_at_particles` | Filter | Reads the liquid's flow at each particle, so whitewater knows how fast and which way the water there is moving. |
 | Sample Volume for Particles (3D) | `node.sample_volume_at_particles` | Filter | Reads a 3D volume at each particle's position, so particles can pick up a value from a density or flow field they pass through. |
 | Shape Particle Blobs | `node.shape_particle_blobs` | Map | Stretches each liquid particle along the shape of its neighbours, so thin sheets and streams stay thin instead of turning into beads. |
 | Smooth Lattice | `node.smooth_lattice` | Filter | Softens a liquid's density field so its surface comes out smooth instead of lumpy. |
 | Sort Particles Into Cells | `node.sort_particles_into_cells` | Filter | Groups liquid particles by where they are, so later steps can find each particle's neighbours quickly. |
 | Spawn From Mesh | `node.spawn_from_mesh` | Source | Creates particles from a mesh's own geometry — one per vertex for an exact silhouette, or scattered evenly across its surface. The way an imported model dissol… |
-| Spawn Whitewater | `node.spawn_whitewater` | Filter | Places the new foam, spray and bubble particles around the breaking water that throws them off. |
+| — | `node.spawn_whitewater` | Filter | Places the new foam, spray and bubble particles around the breaking water that throws them off. |
 | Spread Out (3D diffuse) | `node.spread_out_3d` | Filter | Gives each 3D particle a small random kick so a tight clump slowly spreads apart in space. |
-| Surface Crossings | `node.surface_crossings` | Filter | Finds where the liquid's surface passes through each grid cell, the first step to measuring distance to the surface. |
+| — | `node.surface_crossings` | Filter | Finds where the liquid's surface passes through each grid cell, the first step to measuring distance to the surface. |
 | Swirl Force (3D, curl) | `node.swirl_force_3d` | Filter | Turns a 3D gradient field into a swirling, divergence-free force, the move that makes 3D particles curl into smoke-like eddies. |
 | Turbulence (3D, simplex) | `node.turbulence_3d` | Filter | Pushes 3D particles around with a flowing 3D noise field for organic, swirling motion through space. |
-| Emission Count | `node.turbulence_emission_count` | Filter | Works out how many foam, spray and bubble particles each bit of breaking water throws off this frame. |
-| Turbulence Field | `node.turbulence_field` | Filter | Measures local liquid agitation for whitewater emission. |
-| Upwind Distance | `node.upwind_distance` | Filter | One FLIP Fluids upwind signed-distance sweep on valid cells, with recomputed smoothed sign, clamped neighbours and pseudo-time h/2. Invalid cells retain their … |
-| Wavecrest Potential | `node.wavecrest_potential` | Filter | Scores how sharply each bit of water is breaking over a wave crest, which is where foam and spray come from. |
-| Whitewater Emitter Velocity | `node.whitewater_emitter_velocity` | Filter | Scales surface emitter velocity by the FLIP spray emission factor. |
-| Whitewater Influence | `node.whitewater_influence` | Filter | Decays obstacle influence and reapplies solid sources. |
+| — | `node.turbulence_emission_count` | Filter | Works out how many foam, spray and bubble particles each bit of breaking water throws off this frame. |
+| — | `node.turbulence_field` | Filter | Measures local liquid agitation for whitewater emission. |
+| — | `node.upwind_distance` | Filter | One FLIP Fluids upwind signed-distance sweep on valid cells, with recomputed smoothed sign, clamped neighbours and pseudo-time h/2. Invalid cells retain their … |
+| — | `node.wavecrest_potential` | Filter | Scores how sharply each bit of water is breaking over a wave crest, which is where foam and spray come from. |
+| — | `node.whitewater_emitter_velocity` | Filter | Scales surface emitter velocity by the FLIP spray emission factor. |
+| — | `node.whitewater_influence` | Filter | Decays obstacle influence and reapplies solid sources. |
 | Whitewater Lifecycle | `node.whitewater_lifecycle` | Filter | Moves and ages spray, foam and bubbles the way FLIP's own whitewater does. |
 | Whitewater Obstacle Source | `node.whitewater_obstacle_source` | Filter | Supplies obstacle properties for dust emission and whitewater influence. |
 | Whitewater Step | `node.whitewater_step` | Filter | Makes and moves the spray, foam and bubbles a liquid throws up, all on the GPU. |
-| Whitewater Type | `node.whitewater_type` | Filter | Decides whether each new whitewater particle is spray, foam or a bubble, from where it sits against the water surface. |
+| — | `node.whitewater_type` | Filter | Decides whether each new whitewater particle is spray, foam or a bubble, from where it sits against the water surface. |
 
 ### Control (25)
 

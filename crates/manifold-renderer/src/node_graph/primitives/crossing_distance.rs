@@ -53,7 +53,6 @@ crate::primitive! {
     depth_rule: Terminal,
     composition_notes: "After three node.nearest_crossing passes; solid and nodes_x/y/z from the particle frame's solid_b and grid_nodes_x/y/z, cell_size the domain's. Feeds node.liquid_cells and node.lattice_curvature.",
     examples: [],
-    picker: { label: "Crossing Distance", category: Atom },
     summary: "Measures how far each grid cell is from the liquid's surface, negative inside the liquid.",
     category: Particles3D,
     role: Filter,

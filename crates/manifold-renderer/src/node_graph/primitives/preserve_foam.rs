@@ -79,7 +79,6 @@ crate::primitive! {
     depth_rule: Terminal,
     composition_notes: "After node.age_whitewater in the GPU whitewater tick, before removal. Wire pool and binned from the same pool, and that pool into a node.sort_particles_into_cells whose box is the whitewater grid and cell_size its cell, so its bins are FLIP's cells; cell_ranges, order and bins_x/y/z come from that sort, the box and cell size are the ones it was given.",
     examples: [],
-    picker: { label: "Preserve Foam", category: Atom },
     summary: "Keeps foam alive longer where lots of it has gathered, so thick foam lingers.",
     category: Particles3D,
     role: Filter,

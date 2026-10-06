@@ -61,7 +61,6 @@ crate::primitive! {
     depth_rule: Terminal,
     composition_notes: "Ends the whitewater emitter chain: particles from node.sample_faces_at_particles, energy from node.energy_potential, wavecrest from node.wavecrest_potential. ticks and points_per_cell come from the liquid domain, live_count from the frame's particle count. node.running_total over the counts gives each emitter's first spawn slot.",
     examples: [],
-    picker: { label: "Emission Count", category: Atom },
     summary: "Works out how many foam, spray and bubble particles each bit of breaking water throws off this frame.",
     category: Particles3D,
     role: Filter,

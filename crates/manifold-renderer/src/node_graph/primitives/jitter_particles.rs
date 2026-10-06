@@ -48,7 +48,6 @@ crate::primitive! {
     depth_rule: Terminal,
     composition_notes: "The first atom of the whitewater emitter chain: particles from a liquid frame's particles_b, cell_size the domain's, seed the domain's simulation time so each frame jitters afresh, epoch its reset count. Feed node.sample_faces_at_particles next.",
     examples: [],
-    picker: { label: "Jitter Particles", category: Atom },
     summary: "Nudges each liquid particle by a small random amount, so foam doesn't line up on the simulation's grid.",
     category: Particles3D,
     role: Filter,

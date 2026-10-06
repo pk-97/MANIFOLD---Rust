@@ -61,7 +61,6 @@ crate::primitive! {
     depth_rule: Terminal,
     composition_notes: "Compose repeated sweeps with an engine convergence reduction; whitewater uses six maximum sweeps including the final converging sweep. This operation does not perform geometric nearest-triangle redistancing.",
     examples: [],
-    picker: { label: "Upwind Distance", category: Atom },
     summary: "One FLIP Fluids upwind signed-distance sweep on valid cells, with recomputed smoothed sign, clamped neighbours and pseudo-time h/2. Invalid cells retain their input.",
     category: Particles3D,
     role: Filter,

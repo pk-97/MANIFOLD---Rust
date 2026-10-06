@@ -71,7 +71,6 @@ crate::primitive! {
     depth_rule: Terminal,
     composition_notes: "After sample_faces_at_particles, before energy_potential and wavecrest_potential. Keep this separate from fresh spray velocity scaling: FLIP draws a second random factor after spawn classification.",
     examples: [],
-    picker: { label: "Whitewater Emitter Velocity", category: Atom },
     summary: "Scales surface emitter velocity by the FLIP spray emission factor.",
     category: Particles3D,
     role: Filter,
