@@ -751,7 +751,7 @@ fn column_depth(run: &Run, particles: &[FluidParticle], floor: f64) -> f64 {
 }
 
 /// Historical acceptance of the optional density correction: at frame 1800
-/// (30 s), estimated column depth is within 3% of the analytic average and
+/// (30 s), estimated column depth is within 3% plus half a cell of the analytic average and
 /// interior density is within 2% of its start. These are not direct volume
 /// measurements or native agreement tests. From frame 400, KE + PE must not
 /// rise by more than 1e-4 of its start per frame and must finish lower.
@@ -817,7 +817,12 @@ fn gpu_flip_density_projection_settled_column_depth_and_density() {
             worst.2 / e0,
             worst.3 / e0
         );
-        assert!((depth / want - 1.0).abs() <= 0.03, "{steps} steps: column depth {depth} m, want {want} m");
+        // The estimate reads the top particle of each column, and with the
+        // native wall treatment (14ebf56da) water settles against the walls
+        // about half a cell higher at the same interior density; volume is
+        // held by the density check below.
+        let tolerance = 0.03 * want + 0.5 * run.scene.cell_size();
+        assert!((depth - want).abs() <= tolerance, "{steps} steps: column depth {depth} m, want {want} m ± {tolerance}");
         assert!((rho / rho0 - 1.0).abs() <= 0.02, "{steps} steps: interior density {rho} against {rho0}");
         assert!(last < at_settling, "{steps} steps: E {last} at frame {FRAMES} not under {at_settling} at frame {SETTLING}");
         assert!(worst.0 <= 1e-4 * e0, "{steps} steps: energy rose {:e} E0 at frame {}", worst.0 / e0, worst.1);
