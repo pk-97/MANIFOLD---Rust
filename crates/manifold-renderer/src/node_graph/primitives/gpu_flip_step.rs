@@ -2168,6 +2168,7 @@ crate::primitive! {
         closed_faces: ScalarF32 optional,
         solve_level: ScalarF32 optional,
         max_iterations: ScalarF32 optional,
+        sheet_fill_rate: ScalarF32 optional,
         clock_obstacles: Array(f32) optional,
         clock_obstacle_count: ScalarF32 optional,
         initial_obstacle_speed: ScalarF32 optional,
@@ -2228,7 +2229,8 @@ crate::primitive! {
         int_param!("closed_faces", "Closed Faces", 63.0, 0.0, 63.0),
         int_param!("solve_level", "Solve Level", 0.0, 0.0, 4.0),
         int_param!("narrow_band", "Narrow Band", 0.0, 0.0, 1.0),
-        // Test-only until the user controls (BUG-j9l9w step 7); no preset sets it.
+        // Shipped presets wire the domain's Sheet Fill Rate into the input, which wins;
+        // only standalone graphs and tests reach this param.
         float_param!("sheet_fill_rate", "Sheet Fill Rate", 0.0, 0.0, 1.0),
     ],
     depth_rule: Terminal,

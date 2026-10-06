@@ -29,7 +29,7 @@ DNS. All source anchors below refer to this SHA, not this worktree's HEAD.
 | Template insertion | `crates/manifold-editing/src/commands/graph/scene/fluid/template.rs:15–60`; `scene/fluid.rs:66–105`, `:263–271` | One wire away: template, fresh IDs, metadata stamping and undo; extend single-output insertion and metadata coverage. |
 | Visibility | `crates/manifold-renderer/src/node_graph/gltf_import/object_group/static_compound.rs:313–321`; `crates/manifold-app/src/ui_bridge/project.rs:1342–1365` | Exists: shared binding retargeted to `parent_visible`, resolved through ordinary parameter commands. |
 | Delete / duplicate | `crates/manifold-editing/src/commands/graph/scene.rs:1137–1146`, `:1191–1197`; `scene/duplicate.rs:444–451` | Parent deletion is one wire away: group slots removed together, fluid roles detached. Duplicates deliberately carry no card exposes. |
-| Sheet Fill Rate | `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_step.rs:2232`; `scene_vm.rs:1350–1353` | Exists at 0..1. BUG-7zby1 (sheeting speed and controls) supplies its domain dial, wire and binding, following the pressure-cap pattern; domain ownership puts it on Water automatically. |
+| Sheet Fill Rate | `crates/manifold-renderer/src/node_graph/primitives/gpu_flip_step.rs:2232`; `scene_vm.rs:1350–1353` | On main: domain param `sheet_fill_rate` (0..1, default 0), domain → step wire and card binding after Max Iterations (`gpu_flip_preset.rs` `scene_cards`); domain ownership puts it on Water. |
 
 The committed `docs/WHITEWATER_STAGE_FUSION_DESIGN.md:3` records P0 and P1
 landed, including the copies change. Its P4 contract (`:344–350`) supplies packed
@@ -270,7 +270,7 @@ whole-crate sweep. Every persistent phase verifies save/reload and bindings.
 3. One renderer recipe, grouped presets, atomic Add Water.
 4. Regenerate presets; depend on P4's builder end state only.
 5. Shared parent visibility, child Hide, whole-family delete/undo, no Duplicate.
-6. Sheet Fill Rate arrives from BUG-7zby1 through domain ownership.
+6. Sheet Fill Rate is already a domain param on main, so it stays on Water through domain ownership.
 
 ## 7. Deferred and verification limits
 
@@ -281,5 +281,5 @@ whole-crate sweep. Every persistent phase verifies save/reload and bindings.
 | New physics, solver optimisation, general family tooling | a separate concrete request |
 
 Docs-only static audit: no app, runtime tests or render run. P4's end state and
-BUG-7zby1's control wiring remain to be re-read at implementation;
+the Sheet Fill Rate wiring remain to be re-read at implementation;
 appearance and GPU cost are unverified. The fusion doc's P4 was aligned in d03973d67.
