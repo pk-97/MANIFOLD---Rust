@@ -282,4 +282,4 @@ whole-crate sweep. Every persistent phase verifies save/reload and bindings.
 
 Docs-only static audit: no app, runtime tests or render run. P4's end state and
 BUG-7zby1's control wiring remain to be re-read at implementation;
-appearance and GPU cost are unverified. No fusion document changes were made.
+appearance and GPU cost are unverified. The fusion doc's P4 was aligned in d03973d67.
