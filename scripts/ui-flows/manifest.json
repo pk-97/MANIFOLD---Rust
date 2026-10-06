@@ -26,7 +26,8 @@
       "scene-fluid-role-assignment",
       "scene-fluid-role-lifecycle",
       "scene-fluid-object-lifecycle",
-      "scene-forces-controls"
+      "scene-forces-controls",
+      "water-family-preset"
     ],
     "crates/manifold-ui/src/panels/scene_setup_panel.rs": [
       "scene-setup",
@@ -37,14 +38,16 @@
       "scene-fluid-role-assignment",
       "scene-fluid-role-lifecycle",
       "scene-fluid-object-lifecycle",
-      "scene-forces-controls"
+      "scene-forces-controls",
+      "water-family-preset"
     ],
-    "crates/manifold-editing/src/commands/graph/scene/fluid": ["scene-fluid-authoring", "scene-fluid-template"],
-    "crates/manifold-core/src/scene_exposure.rs": ["scene-fluid-dam-break-controls"],
-    "crates/manifold-renderer/src/node_graph/scene_exposure": ["scene-fluid-dam-break-controls"],
+    "crates/manifold-editing/src/commands/graph/scene/fluid": ["scene-fluid-authoring", "scene-fluid-template", "water-family-preset"],
+    "crates/manifold-core/src/scene_exposure.rs": ["scene-fluid-dam-break-controls", "water-family-preset"],
+    "crates/manifold-renderer/src/node_graph/scene_exposure": ["scene-fluid-dam-break-controls", "water-family-preset"],
     "crates/manifold-renderer/src/node_graph/scene_vm.rs": [
       "scene-item-ownership",
-      "scene-liquid-recognition"
+      "scene-liquid-recognition",
+      "water-family-preset"
     ],
     "crates/manifold-app/src/ui_bridge/projection/scene.rs": [
       "scene-item-ownership",
@@ -55,7 +58,8 @@
       "scene-panel",
       "scene-fluid-role-assignment",
       "scene-fluid-role-lifecycle",
-      "scene-fluid-object-lifecycle"
+      "scene-fluid-object-lifecycle",
+      "water-family-preset"
     ],
     "crates/manifold-app/src/ui_bridge/projection/cards.rs": [
       "scene-setup",
@@ -65,7 +69,8 @@
       "set-param",
       "envelope-modulation",
       "calibrated-param",
-      "scene-forces-controls"
+      "scene-forces-controls",
+      "water-family-preset"
     ],
     "crates/manifold-app/src/ui_bridge/projection/inspector.rs": [
       "scene-item-ownership",
@@ -79,15 +84,19 @@
       "scene-fluid-role-assignment",
       "scene-fluid-role-lifecycle",
       "scene-fluid-object-lifecycle",
-      "scene-forces-controls"
+      "scene-forces-controls",
+      "water-family-preset"
     ],
+    "crates/manifold-app/src/ui_bridge/project.rs": ["water-family-preset"],
+    "crates/manifold-app/src/edit_selection.rs": ["water-family-preset"],
     "crates/manifold-app/src/ui_bridge/state_sync.rs": [
       "scene-setup",
       "scene-card",
       "scene-panel",
       "inspector",
       "set-param",
-      "scene-forces-controls"
+      "scene-forces-controls",
+      "water-family-preset"
     ],
     "crates/manifold-app/src/ui_translate.rs": [
       "scene-setup",
@@ -95,7 +104,8 @@
       "scene-panel",
       "inspector",
       "set-param",
-      "envelope-modulation"
+      "envelope-modulation",
+      "water-family-preset"
     ],
     "crates/manifold-ui/src/panels/param_card/": [
       "inspector",
@@ -103,7 +113,8 @@
       "envelope-modulation",
       "scene-card",
       "calibrated-param",
-      "param-step"
+      "param-step",
+      "water-family-preset"
     ],
     "crates/manifold-ui/src/panels/param_slider_shared/": [
       "frame-align-lfo",
@@ -114,7 +125,8 @@
       "scene-setup",
       "scene-card",
       "calibrated-param",
-      "param-step"
+      "param-step",
+      "water-family-preset"
     ],
     "crates/manifold-ui/src/panels/browser_popup.rs": [
       "effect-browser"
@@ -236,6 +248,7 @@
     "scene-setup-fog-undo-removes-fog": "gltfscene",
     "scene-fluid-role-lifecycle": "fluidauthoring",
     "scene-fluid-object-lifecycle": "fluidauthoring",
+    "water-family-preset": "scene-setup",
     "scene-forces-controls": "physicsscene"
   },
   "expected_fail": {},

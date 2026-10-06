@@ -60628,6 +60628,13 @@
           "name": "Appearance Gain"
         },
         {
+          "default": "0.005",
+          "id": "42_radius",
+          "max": "100",
+          "min": "0",
+          "name": "Size"
+        },
+        {
           "default": "0.95",
           "id": "43_color_r",
           "max": "1",
@@ -62735,6 +62742,13 @@
           "name": "Appearance Gain"
         },
         {
+          "default": "0.0035",
+          "id": "45_radius",
+          "max": "100",
+          "min": "0",
+          "name": "Size"
+        },
+        {
           "default": "0.95",
           "id": "46_color_r",
           "max": "1",
@@ -64840,6 +64854,13 @@
           "max": "4",
           "min": "0",
           "name": "Appearance Gain"
+        },
+        {
+          "default": "0.003",
+          "id": "48_radius",
+          "max": "100",
+          "min": "0",
+          "name": "Size"
         },
         {
           "default": "0.95",
@@ -76851,6 +76872,13 @@
           "name": "Billboard"
         },
         {
+          "default": "1",
+          "id": "102_radius",
+          "max": "100",
+          "min": "0",
+          "name": "Size"
+        },
+        {
           "default": "0.15",
           "id": "103_color_r",
           "max": "1",
@@ -79068,6 +79096,13 @@
           "max": "1",
           "min": "0",
           "name": "Billboard"
+        },
+        {
+          "default": "1",
+          "id": "122_radius",
+          "max": "100",
+          "min": "0",
+          "name": "Size"
         },
         {
           "default": "0.15",
@@ -81289,6 +81324,13 @@
           "name": "Collider Detail"
         },
         {
+          "default": "1",
+          "id": "142_radius",
+          "max": "100",
+          "min": "0",
+          "name": "Size"
+        },
+        {
           "default": "0.9",
           "id": "143_color_r",
           "max": "1",
@@ -83506,6 +83548,13 @@
           "max": "64",
           "min": "1",
           "name": "Collider Detail"
+        },
+        {
+          "default": "1",
+          "id": "162_radius",
+          "max": "100",
+          "min": "0",
+          "name": "Size"
         },
         {
           "default": "0.9",
@@ -86380,6 +86429,13 @@
           "name": "Billboard"
         },
         {
+          "default": "1",
+          "id": "102_radius",
+          "max": "100",
+          "min": "0",
+          "name": "Size"
+        },
+        {
           "default": "0.15",
           "id": "103_color_r",
           "max": "1",
@@ -88597,6 +88653,13 @@
           "max": "1",
           "min": "0",
           "name": "Billboard"
+        },
+        {
+          "default": "1",
+          "id": "112_radius",
+          "max": "100",
+          "min": "0",
+          "name": "Size"
         },
         {
           "default": "0.95",
@@ -90818,6 +90881,13 @@
           "name": "Billboard"
         },
         {
+          "default": "1",
+          "id": "122_radius",
+          "max": "100",
+          "min": "0",
+          "name": "Size"
+        },
+        {
           "default": "0.13",
           "id": "123_color_r",
           "max": "1",
@@ -93035,6 +93105,13 @@
           "max": "1",
           "min": "0",
           "name": "Billboard"
+        },
+        {
+          "default": "1",
+          "id": "132_radius",
+          "max": "100",
+          "min": "0",
+          "name": "Size"
         },
         {
           "default": "0.98",
@@ -95256,6 +95333,13 @@
           "name": "Billboard"
         },
         {
+          "default": "1",
+          "id": "142_radius",
+          "max": "100",
+          "min": "0",
+          "name": "Size"
+        },
+        {
           "default": "0.55",
           "id": "143_color_r",
           "max": "1",
@@ -97473,6 +97557,13 @@
           "max": "1",
           "min": "0",
           "name": "Billboard"
+        },
+        {
+          "default": "1",
+          "id": "152_radius",
+          "max": "100",
+          "min": "0",
+          "name": "Size"
         },
         {
           "default": "0.1",
@@ -119926,6 +120017,13 @@
           "name": "Appearance Gain"
         },
         {
+          "default": "0.0035",
+          "id": "45_radius",
+          "max": "100",
+          "min": "0",
+          "name": "Size"
+        },
+        {
           "default": "0.95",
           "id": "46_color_r",
           "max": "1",
@@ -136133,6 +136231,13 @@
           "name": "Appearance Gain"
         },
         {
+          "default": "0.0035",
+          "id": "45_radius",
+          "max": "100",
+          "min": "0",
+          "name": "Size"
+        },
+        {
           "default": "0.95",
           "id": "46_color_r",
           "max": "1",
@@ -142687,20 +142792,6 @@
           "name": "Water Scattering"
         },
         {
-          "default": "0.005",
-          "id": "foam_radius",
-          "max": "0.03",
-          "min": "0.001",
-          "name": "Foam Size"
-        },
-        {
-          "default": "0.003",
-          "id": "spray_radius",
-          "max": "0.02",
-          "min": "0.001",
-          "name": "Spray Size"
-        },
-        {
           "default": "70",
           "id": "bubble_density",
           "max": "200",
@@ -142741,6 +142832,13 @@
           "max": "1",
           "min": "0",
           "name": "Fill Pits"
+        },
+        {
+          "default": "1",
+          "id": "parent_visible",
+          "max": "1",
+          "min": "0",
+          "name": "Visible"
         },
         {
           "default": "1",
@@ -148056,6 +148154,13 @@
           "name": "Appearance Gain"
         },
         {
+          "default": "0.005",
+          "id": "21_radius",
+          "max": "100",
+          "min": "0",
+          "name": "Size"
+        },
+        {
           "default": "0.95",
           "id": "22_color_r",
           "max": "1",
@@ -150163,6 +150268,13 @@
           "name": "Appearance Gain"
         },
         {
+          "default": "0.003",
+          "id": "26_radius",
+          "max": "100",
+          "min": "0",
+          "name": "Size"
+        },
+        {
           "default": "0.95",
           "id": "27_color_r",
           "max": "1",
@@ -152268,6 +152380,13 @@
           "max": "4",
           "min": "0",
           "name": "Appearance Gain"
+        },
+        {
+          "default": "0.0035",
+          "id": "31_radius",
+          "max": "100",
+          "min": "0",
+          "name": "Size"
         },
         {
           "default": "0.95",
@@ -166484,20 +166603,6 @@
           "name": "Water Scattering"
         },
         {
-          "default": "0.005",
-          "id": "foam_radius",
-          "max": "0.03",
-          "min": "0.001",
-          "name": "Foam Size"
-        },
-        {
-          "default": "0.003",
-          "id": "spray_radius",
-          "max": "0.02",
-          "min": "0.001",
-          "name": "Spray Size"
-        },
-        {
           "default": "70",
           "id": "bubble_density",
           "max": "200",
@@ -166510,6 +166615,13 @@
           "max": "250000",
           "min": "1000",
           "name": "Whitewater Budget"
+        },
+        {
+          "default": "1",
+          "id": "parent_visible",
+          "max": "1",
+          "min": "0",
+          "name": "Visible"
         },
         {
           "default": "1",
@@ -171825,6 +171937,13 @@
           "name": "Appearance Gain"
         },
         {
+          "default": "0.005",
+          "id": "21_radius",
+          "max": "100",
+          "min": "0",
+          "name": "Size"
+        },
+        {
           "default": "0.95",
           "id": "22_color_r",
           "max": "1",
@@ -173930,6 +174049,13 @@
           "max": "4",
           "min": "0",
           "name": "Appearance Gain"
+        },
+        {
+          "default": "0.003",
+          "id": "26_radius",
+          "max": "100",
+          "min": "0",
+          "name": "Size"
         },
         {
           "default": "0.95",
@@ -176039,6 +176165,13 @@
           "name": "Appearance Gain"
         },
         {
+          "default": "0.0035",
+          "id": "31_radius",
+          "max": "100",
+          "min": "0",
+          "name": "Size"
+        },
+        {
           "default": "0.95",
           "id": "32_color_r",
           "max": "1",
@@ -178137,6 +178270,13 @@
           "max": "4",
           "min": "0",
           "name": "Appearance Gain"
+        },
+        {
+          "default": "1",
+          "id": "37_radius",
+          "max": "100",
+          "min": "0",
+          "name": "Size"
         },
         {
           "default": "0.35",
@@ -188023,6 +188163,13 @@
           "max": "64",
           "min": "1",
           "name": "Collider Detail"
+        },
+        {
+          "default": "1",
+          "id": "73_radius",
+          "max": "100",
+          "min": "0",
+          "name": "Size"
         },
         {
           "default": "0.42",

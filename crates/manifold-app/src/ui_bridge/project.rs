@@ -26,18 +26,35 @@ pub(crate) fn gpu_flip_liquid_template() -> manifold_editing::commands::graph::L
         body.nodes.iter().find(|node| node.node_id.as_str() == name)
             .unwrap_or_else(|| panic!("the GPU FLIP body has no {name}")).id
     };
-    let exposures = vec![
-        TemplateExposure { node: id("domain"), set: ExposureSet::Fluid, section: Some("Simulation") },
-        TemplateExposure { node: id("initial_column"), set: ExposureSet::SourceTransform, section: Some("Initial Volume") },
-        TemplateExposure { node: id("water_material"), set: ExposureSet::Material, section: Some("Material") },
-        TemplateExposure { node: id("water_object"), set: ExposureSet::Object, section: None },
+    let mut exposures = vec![
+        TemplateExposure::Node { node: id("domain"), set: ExposureSet::Fluid, section: Some("Simulation") },
+        TemplateExposure::Node { node: id("initial_column"), set: ExposureSet::SourceTransform, section: Some("Initial Volume") },
+        TemplateExposure::Node { node: id("water_material"), set: ExposureSet::Material, section: Some("Material") },
+        TemplateExposure::Node { node: id("water_object"), set: ExposureSet::Object, section: None },
+        TemplateExposure::Node { node: id("whitewater"), set: ExposureSet::Whitewater, section: Some("Whitewater") },
     ];
+    for (kind, section) in [("foam", "Foam"), ("spray", "Spray"), ("bubble", "Bubbles")] {
+        for (suffix, set) in [("mesh", ExposureSet::Look), ("material", ExposureSet::Material), ("object", ExposureSet::Object)] {
+            exposures.push(TemplateExposure::Node { node: id(&format!("{kind}_{suffix}")), set, section: Some(section) });
+        }
+    }
+    let metadata = body.preset_metadata.as_ref().expect("family recipe metadata");
+    for spec in &metadata.params {
+        let targets = metadata.bindings.iter().filter(|binding| binding.id == spec.id).map(|binding| {
+            let manifold_core::effect_graph_def::BindingTarget::Node { node_id, .. } = &binding.target else {
+                panic!("family recipe exposure must target a node");
+            };
+            (id(node_id.as_str()), binding.clone())
+        }).collect();
+        exposures.push(TemplateExposure::Shared { spec: Box::new(spec.clone()), targets });
+    }
     let output_node = id(manifold_renderer::node_graph::LIQUID_BODY_OUTPUT);
     LiquidTemplate {
         group_id_slot: body.nodes.len(),
         nodes: body.nodes,
         wires: body.wires,
         output_node,
+        object_outputs: vec!["object".into(), "object_1".into(), "object_2".into(), "object_3".into()],
         exposures,
     }
 }
@@ -667,6 +684,8 @@ pub(super) fn dispatch_project(
                     default,
                 )
                 .with_role_metadata(metadata_for_node_type("node.fluid_role_source"))
+                .with_whitewater_metadata(metadata_for_node_type("node.whitewater_step"))
+                .with_look_metadata(metadata_for_node_type("node.platonic_solid_mesh"))
                 .with_world_metadata(metadata_for_node_type("node.physics_world"));
                 ContentCommand::send(content_tx, ContentCommand::ExecuteSelecting(
                     Box::new(command),
@@ -1315,6 +1334,28 @@ pub(crate) fn find_node_by_scope<'a>(
     nodes.iter().find(|n| n.id == node_doc_id)
 }
 
+/// Resolve a row binding through its group scope. Recipe-local numeric ids
+/// may repeat in nested groups; stable binding targets do not.
+pub(crate) fn scene_binding_id(
+    def: &manifold_core::effect_graph_def::EffectGraphDef,
+    scope_path: &[u32], node_doc_id: u32, param_key: &str,
+) -> Option<String> {
+    let Some(node) = find_node_by_scope(def, scope_path, node_doc_id) else {
+        // Existing scene actions also accept an empty scope for imported
+        // nodes with document-wide ids. Preserve that established address
+        // form; an explicit group scope must always resolve exactly.
+        return scope_path.is_empty().then(||
+            manifold_core::effects::binding_id_for_node_param_in(def, node_doc_id, param_key)
+        ).flatten();
+    };
+    let identity = if node.node_id.is_empty() {
+        manifold_core::NodeId::new(node.handle.clone().unwrap_or_else(|| format!("node{node_doc_id}")))
+    } else { node.node_id.clone() };
+    def.preset_metadata.as_ref()?.bindings.iter().find(|binding| matches!(&binding.target,
+        manifold_core::effect_graph_def::BindingTarget::Node { node_id, param }
+            if node_id == &identity && param == param_key)).map(|binding| binding.id.clone())
+}
+
 /// Resolve `layer_id`'s generator-graph target's catalog default — the same
 /// lookup `Application::watch_generator_graph` performs, factored out so the
 /// Scene Setup panel's dispatch arms above don't need the graph editor to be
@@ -1342,13 +1383,9 @@ fn apply_scene_param_write(
 ) -> Option<Box<dyn manifold_editing::command::Command + Send>> {
     let default = generator_catalog_default(project, layer_id)?;
     let target = manifold_core::GraphTarget::Generator(layer_id.clone());
-    let bound = project
-        .graph_target_owner(&target)
-        .and_then(|inst| inst.binding_id_for_node_param(node_doc_id, param_id))
-        .or_else(|| {
-            // Tracking instance (graph: None — fresh imports).
-            manifold_core::effects::binding_id_for_node_param_in(&default, node_doc_id, param_id)
-        });
+    let effective = project.graph_target_owner(&target)
+        .and_then(|instance| instance.graph.as_ref()).unwrap_or(&default);
+    let bound = scene_binding_id(effective, &scope_path, node_doc_id, param_id);
     if let Some(id) = bound {
         let pid = manifold_core::effects::ParamId::from(id);
         let old_val = project
@@ -1571,6 +1608,9 @@ mod tests {
     use crate::content_command::ContentCommand;
     use manifold_core::effect_graph_def::SerializedParamValue;
     use manifold_core::types::LayerType;
+    mod water_family;
+    mod water_family_draw;
+    mod water_family_expansion;
 
     fn scene_layer_project() -> (Project, LayerId, u32) {
         let mut project = Project::default();
@@ -2149,7 +2189,7 @@ mod tests {
         assert!(matches!(pending.resolve(&project),
             Some(crate::edit_selection::EditSelection::Object { .. })));
         let added = effective_def(&project, &layer_id);
-        assert_eq!(objects_param(&project, &layer_id, render_scene_id), before + 1.0);
+        assert_eq!(objects_param(&project, &layer_id, render_scene_id), before + 4.0);
         let vm = SceneVm::from_def(&added).expect("scene with fluid");
         let row = vm.objects.iter().find_map(|object| match object {
             SceneObjectVm::Known(row) if row.liquid_domain.is_some() => Some(row),

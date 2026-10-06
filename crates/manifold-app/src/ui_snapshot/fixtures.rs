@@ -34,6 +34,7 @@ pub fn build(scene: &str) -> Option<SceneData> {
         "physicsscene" => Some(physics_scene("PhysicsSolids", "Physics Solids")),
         "physicsboxes" => Some(physics_scene("PhysicsBoxes", "Physics Boxes")),
         "fluidauthoring" => Some(physics_scene("Scene", "Fluid Authoring")),
+        "scene-setup" => Some(physics_scene("WaterDamBreakGpuFlip", "Water — Dam Break")),
         "waterdambreak" => Some(physics_scene("WaterDamBreak", "Water — Dam Break")),
         "waterdambreakmatter" => Some(physics_scene("WaterDamBreakMatter", "Water — Dam Break (Live GPU)")),
         "states" => Some(states_scene()),

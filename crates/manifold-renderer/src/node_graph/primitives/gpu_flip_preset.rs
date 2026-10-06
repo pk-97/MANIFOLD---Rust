@@ -712,7 +712,30 @@ impl WaterScene {
                 _ => None,
             }.map(str::to_owned);
         }
-        b.finish()
+        let mut def = b.finish();
+        // Author the parent gate once. Insertion remaps this metadata and
+        // presets copy it intact; neither consumer recreates the target list.
+        let mut bindings: Vec<_> = FAMILY_OUTPUTS.iter().map(|port| {
+            let wire = def.wires.iter().find(|wire| wire.to_node == output as u32 && wire.to_port == *port)
+                .expect("family object output");
+            let object = def.nodes.iter().find(|node| node.id == wire.from_node).expect("family object");
+            json!({"id":"parent_visible", "label":"Visible", "defaultValue":1.0,
+                "convert":{"type":"Float"},
+                "target":{"kind":"node", "nodeId":object.node_id, "param":"parent_visible"}})
+        }).collect();
+        let budget_node = def.nodes.iter().find(|node| node.id == budget as u32).expect("family budget");
+        bindings.push(json!({"id":"whitewater_capacity", "label":"Whitewater Budget", "defaultValue":100000.0,
+            "defaultMirrorsNodeParam":true, "convert":{"type":"IntRound"},
+            "target":{"kind":"node", "nodeId":budget_node.node_id, "param":"value"}}));
+        def.preset_metadata = Some(serde_json::from_value(json!({
+            "id":"WaterFamily", "displayName":"Water", "category":"Geometry", "oscPrefix":"water",
+            "params":[{"id":"parent_visible", "name":"Visible", "defaultValue":1.0,
+                "min":0.0, "max":1.0, "isToggle":true, "cardVisible":false, "section":"Water"},
+                {"id":"whitewater_capacity", "name":"Whitewater Budget", "defaultValue":100000.0,
+                "min":1000.0, "max":250000.0, "wholeNumbers":true, "formatString":"F0", "section":"Water Detail"}],
+            "bindings":bindings
+        })).expect("family visibility metadata"));
+        def
     }
 }
 
@@ -758,6 +781,7 @@ pub(crate) fn render_def(scene: WaterScene) -> EffectGraphDef {
     let mut b = Builder::from_def(def.clone());
     let render = b.id("scene");
     let body = scene.family_def();
+    let family_metadata = body.preset_metadata.clone().expect("family metadata");
     let family = b.node("water_family", "group", json!({}));
     let inputs = if scene.obstacle { vec![json!({"name": "role_0", "portType": "FluidRole"})] } else { vec![] };
     let outputs: Vec<_> = FAMILY_OUTPUTS.iter().map(|name| json!({"name": name, "portType": "SceneObject"})).collect();
@@ -777,7 +801,22 @@ pub(crate) fn render_def(scene: WaterScene) -> EffectGraphDef {
     render_node.params.insert("objects".into(), serde_json::from_value(int(10)).expect("object count"));
     def.nodes = b.nodes;
     def.wires = b.wires;
-    def.preset_metadata = Some(serde_json::from_value(scene_cards(&preset["presetMetadata"], scene)).expect("scene cards"));
+    let mut metadata: manifold_core::effect_graph_def::PresetMetadata =
+        serde_json::from_value(scene_cards(&preset["presetMetadata"], scene)).expect("scene cards");
+    for spec in family_metadata.params {
+        let bindings: Vec<_> = family_metadata.bindings.iter()
+            .filter(|binding| binding.id == spec.id).cloned().collect();
+        let insertion = metadata.bindings.iter().position(|binding| binding.id == spec.id)
+            .unwrap_or(metadata.bindings.len());
+        metadata.bindings.retain(|binding| binding.id != spec.id);
+        metadata.bindings.splice(insertion..insertion, bindings);
+        if let Some(existing) = metadata.params.iter_mut().find(|existing| existing.id == spec.id) {
+            *existing = spec;
+        } else {
+            metadata.params.push(spec);
+        }
+    }
+    def.preset_metadata = Some(metadata);
     def
 }
 
@@ -888,6 +927,11 @@ fn particle_view_cards(def: &Value) -> Value {
 #[cfg(any(test, feature = "gpu-proofs"))]
 fn scene_cards(metadata: &Value, scene: WaterScene) -> Value {
     let mut metadata = metadata.clone();
+    // Size belongs to the child mesh through ordinary manifest exposures.
+    for list in ["params", "bindings"] {
+        metadata[list].as_array_mut().expect("card lists")
+            .retain(|entry| entry["id"] != "foam_radius" && entry["id"] != "spray_radius");
+    }
     // The builder owns this card: the seed predates it, so every regeneration
     // writes it after Max Iterations and a hand edit to the JSON does not survive.
     for (list, entry) in [
@@ -1911,7 +1955,7 @@ pub(super) mod tests {
             assert!(group["params"][param]["value"].is_number(), "the group lost {param}");
         }
         let cards = reloaded["presetMetadata"]["bindings"].as_array().expect("bindings");
-        for card in ["whitewater_capacity", "foam_radius", "spray_radius", "bubble_density"] {
+        for card in ["whitewater_capacity", "parent_visible", "bubble_density"] {
             assert!(cards.iter().any(|c| c["id"] == card), "the preset lost the {card} card");
         }
     }

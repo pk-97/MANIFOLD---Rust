@@ -1105,7 +1105,7 @@ impl ScenePanel {
         mut cy: f32,
         row: &ObjectKnownRow,
     ) -> f32 {
-        if row.is_group {
+        if row.is_group && row.material_inspector.is_none() {
             self.active_material_info = None;
             return self.build_filtered_properties_parameter_ids(
                 tree,
@@ -1196,7 +1196,7 @@ impl ScenePanel {
                 row.object_node_id as usize,
                 row.group_node_id.unwrap_or(row.object_node_id),
             );
-        } else {
+        } else if row.look_mesh.is_none() {
             tree.add_label(
                 Some(self.content_parent),
                 inner_x,

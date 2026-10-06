@@ -399,6 +399,8 @@ pub use super::scene_setup_skin::{SkinRowVm, SkinTargetMap};
 /// `scene_vm.rs`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ObjectKnownRow {
+    /// A family child owns only its look; this is the mesh Size targets.
+    pub look_mesh: Option<manifold_foundation::NodeId>,
     pub index: usize,
     /// The `node.scene_object`'s own doc id — the address the eye toggle
     /// writes `visible` at, and (with `group_node_id`) the selection key
@@ -2017,6 +2019,7 @@ impl ScenePanel {
                 if row.value > 0.5 { "\u{1F441}" } else { "\u{2013}" },
                 outliner_eye_key(group_id),
             );
+            tree.set_name(eye_id, format!("scene_setup.object_eye.{}", row.addr.node_doc_id));
             if !row.driven {
                 self.outliner_eye_ids.push((eye_id, row));
             }
@@ -2064,6 +2067,7 @@ impl ScenePanel {
                 if row.value > 0.5 { "\u{1F441}" } else { "\u{2013}" },
                 outliner_eye_key(object_node_id),
             );
+            tree.set_name(eye_id, format!("scene_setup.object_eye.{}", row.addr.node_doc_id));
             if !row.driven {
                 self.outliner_eye_ids.push((eye_id, row));
             }

@@ -4430,32 +4430,6 @@
         "convert": {
           "type": "Float"
         },
-        "defaultValue": 0.004999999888241291,
-        "id": "foam_radius",
-        "label": "Foam Size",
-        "target": {
-          "kind": "node",
-          "nodeId": "foam_mesh",
-          "param": "radius"
-        }
-      },
-      {
-        "convert": {
-          "type": "Float"
-        },
-        "defaultValue": 0.003000000026077032,
-        "id": "spray_radius",
-        "label": "Spray Size",
-        "target": {
-          "kind": "node",
-          "nodeId": "spray_mesh",
-          "param": "radius"
-        }
-      },
-      {
-        "convert": {
-          "type": "Float"
-        },
         "defaultValue": 70.0,
         "id": "bubble_density",
         "label": "Bubble Scattering",
@@ -4543,6 +4517,58 @@
           "kind": "node",
           "nodeId": "liquid_fill_pits",
           "param": "value"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultValue": 1.0,
+        "id": "parent_visible",
+        "label": "Visible",
+        "target": {
+          "kind": "node",
+          "nodeId": "water_object",
+          "param": "parent_visible"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultValue": 1.0,
+        "id": "parent_visible",
+        "label": "Visible",
+        "target": {
+          "kind": "node",
+          "nodeId": "foam_object",
+          "param": "parent_visible"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultValue": 1.0,
+        "id": "parent_visible",
+        "label": "Visible",
+        "target": {
+          "kind": "node",
+          "nodeId": "spray_object",
+          "param": "parent_visible"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultValue": 1.0,
+        "id": "parent_visible",
+        "label": "Visible",
+        "target": {
+          "kind": "node",
+          "nodeId": "bubble_object",
+          "param": "parent_visible"
         }
       }
     ],
@@ -4711,30 +4737,6 @@
         "wholeNumbers": false
       },
       {
-        "defaultValue": 0.004999999888241291,
-        "formatString": "F3",
-        "id": "foam_radius",
-        "isToggle": false,
-        "isTrigger": false,
-        "max": 0.029999999329447746,
-        "min": 0.0010000000474974513,
-        "name": "Foam Size",
-        "section": "Water Detail",
-        "wholeNumbers": false
-      },
-      {
-        "defaultValue": 0.003000000026077032,
-        "formatString": "F3",
-        "id": "spray_radius",
-        "isToggle": false,
-        "isTrigger": false,
-        "max": 0.019999999552965164,
-        "min": 0.0010000000474974513,
-        "name": "Spray Size",
-        "section": "Water Detail",
-        "wholeNumbers": false
-      },
-      {
         "defaultValue": 70.0,
         "formatString": "F2",
         "id": "bubble_density",
@@ -4807,6 +4809,18 @@
         "name": "Fill Pits",
         "section": "Water Detail",
         "tooltip": "Fill surface dips; distance is measured in particle bins.",
+        "wholeNumbers": false
+      },
+      {
+        "cardVisible": false,
+        "defaultValue": 1.0,
+        "id": "parent_visible",
+        "isToggle": true,
+        "isTrigger": false,
+        "max": 1.0,
+        "min": 0.0,
+        "name": "Visible",
+        "section": "Water",
         "wholeNumbers": false
       }
     ],

@@ -38,7 +38,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use manifold_core::liquid_domain::liquid_domain_of;
+use manifold_core::liquid_domain::{is_liquid_domain, liquid_domain_of};
 use manifold_core::scene_index::FlatSceneIndex;
 use manifold_core::{LayerId, NodeId, SceneNodeRef};
 use manifold_core::effect_graph_def::{
@@ -208,6 +208,10 @@ pub struct SceneObjectKnownRow {
     pub object_node_id: u32,
     /// The stable identity behind `object_node_id`.
     pub object: NodeId,
+    /// The family child's platonic mesh. Water looks expose this node's
+    /// radius as their Size control; the simulation-owning Water row leaves
+    /// it empty because its geometry comes from the liquid surface.
+    pub look_mesh: Option<NodeId>,
     /// `Some(group_id)` when the scene_object is wrapped in a
     /// `GROUP_TYPE_ID` node (the importer/`AddSceneObjectCommand` shape) —
     /// the rename sweep's group target. `None` for a bare scene_object
@@ -889,6 +893,160 @@ struct LiquidDomainAt<'a> {
     scope: Vec<u32>,
     node: &'a EffectGraphNode,
     stable: SceneNodeRef,
+    /// Whether the object's mesh walk should contribute display controls to
+    /// the Water row. Particle View's display mesh is family dressing, not a
+    /// simulation control.
+    surface_controls: bool,
+}
+
+struct WaterFamilyInfo {
+    water_object_id: u32,
+    domain_node_id: u32,
+    /// Child object ids in the family-output order: Foam, Spray, Bubbles.
+    output_order: HashMap<u32, usize>,
+}
+
+/// Recognise the authored Water family from its resolved group outputs. A
+/// generic imported compound remains on the legacy path unless it has all
+/// four family outputs and exactly one liquid-domain simulation owner in its
+/// group body.
+fn discover_water_families(
+    level: &Level<'_>,
+    scene_node: &EffectGraphNode,
+    objects: usize,
+) -> HashMap<u32, WaterFamilyInfo> {
+    let output_roles = ["object", "object_1", "object_2", "object_3"];
+    let mut candidates: HashMap<u32, HashMap<&str, u32>> = HashMap::new();
+    for slot in 0..objects {
+        let Some((group_id, output_port)) = level.producer(scene_node.id, &format!("object_{slot}")) else {
+            continue;
+        };
+        let Some(group_node) = level.node(group_id).filter(|node| node.type_id == GROUP_TYPE_ID) else {
+            continue;
+        };
+        let Some((object, _)) = group_node
+            .group
+            .as_deref()
+            .and_then(|group| find_scene_object_in_group(group, output_port))
+        else {
+            continue;
+        };
+        candidates.entry(group_id).or_default().insert(output_port, object.id);
+    }
+
+    candidates
+        .into_iter()
+        .filter_map(|(group_id, members)| {
+            if output_roles.iter().any(|role| !members.contains_key(role)) {
+                return None;
+            }
+            let mut objects_seen = HashSet::new();
+            if !output_roles.iter().all(|role| objects_seen.insert(members[role])) {
+                return None;
+            }
+            let group = level.node(group_id)?.group.as_deref()?;
+            let mut domain_nodes = group.nodes.iter().filter(|node| is_liquid_domain(&node.type_id));
+            let domain_node_id = domain_nodes.next()?.id;
+            if domain_nodes.next().is_some() {
+                return None;
+            }
+            let water_object_id = members["object"];
+            let group_node = level.node(group_id)?;
+            // Particle View's water vertices come from a platonic mesh, so
+            // liquid_domain_of cannot see the solver through vertices. The
+            // object still has a structural path to the sole domain through
+            // frame → copies → instances; require that path instead of
+            // attributing an unrelated domain to the family by coincidence.
+            if !family_owner_reaches_domain(group_node, water_object_id, domain_node_id) {
+                return None;
+            }
+            let output_order = output_roles
+                .iter()
+                .enumerate()
+                .skip(1)
+                .map(|(order, role)| (members[*role], order))
+                .collect();
+            Some((
+                group_id,
+                WaterFamilyInfo {
+                    water_object_id,
+                    domain_node_id,
+                    output_order,
+                },
+            ))
+        })
+        .collect()
+}
+
+fn family_owner_reaches_domain(
+    group_node: &EffectGraphNode,
+    object_id: u32,
+    domain_node_id: u32,
+) -> bool {
+    let Some(group) = group_node.group.as_deref() else { return false; };
+    let mut pending = vec![object_id];
+    let mut seen = HashSet::new();
+    while let Some(target) = pending.pop() {
+        if !seen.insert(target) { continue; }
+        for wire in group.wires.iter().filter(|wire| wire.to_node == target) {
+            if wire.from_node == domain_node_id { return true; }
+            pending.push(wire.from_node);
+        }
+    }
+    false
+}
+
+fn family_liquid_domain<'a>(
+    root: &Level<'a>,
+    group_id: u32,
+    domain_node_id: u32,
+) -> Option<LiquidDomainAt<'a>> {
+    let group_node = root.node(group_id)?;
+    let group = group_node.group.as_deref()?;
+    let level = Level { nodes: &group.nodes, wires: &group.wires };
+    let node = level.node(domain_node_id)?;
+    Some(LiquidDomainAt {
+        level,
+        scope: vec![group_id],
+        node,
+        stable: SceneNodeRef {
+            scope: vec![group_node.node_id.clone()],
+            node: node.node_id.clone(),
+        },
+        surface_controls: false,
+    })
+}
+
+/// Resolve a Water look's mesh source inside the family group. Child looks
+/// are intentionally simple platonic-mesh → scene-object chains, but tolerate
+/// a known mesh modifier or transparent nested group so the row stays honest
+/// when a preset is hand-edited.
+fn family_look_mesh(group_node: &EffectGraphNode, object_id: u32) -> Option<NodeId> {
+    let group = group_node.group.as_deref()?;
+    let mut level = Level { nodes: &group.nodes, wires: &group.wires };
+    let mut cursor = level.producer(object_id, "vertices");
+    let mut guard = 0;
+    while let Some((node_id, port)) = cursor {
+        guard += 1;
+        if guard > 64 { return None; }
+        let node = level.node(node_id)?;
+        if node.type_id == "node.platonic_solid_mesh" {
+            return Some(node.node_id.clone());
+        }
+        if node.type_id == GROUP_TYPE_ID {
+            let nested = node.group.as_deref()?;
+            let inner = Level { nodes: &nested.nodes, wires: &nested.wires };
+            let output = inner.nodes.iter().find(|candidate| candidate.type_id == GROUP_OUTPUT_TYPE_ID)?;
+            let (inner_id, inner_port) = inner.producer(output.id, port)?;
+            level = inner;
+            cursor = Some((inner_id, inner_port));
+        } else if MODIFIER_TYPE_IDS.contains(&node.type_id.as_str()) {
+            cursor = level.producer(node.id, "in");
+        } else {
+            return None;
+        }
+    }
+    None
 }
 
 fn slot_liquid_domain<'a>(
@@ -910,7 +1068,7 @@ fn slot_liquid_domain<'a>(
         level = Level { nodes: &body.nodes, wires: &body.wires };
     }
     let node = level.nodes.iter().find(|node| node.node_id == domain.node)?;
-    Some(LiquidDomainAt { level, scope, node, stable: domain })
+    Some(LiquidDomainAt { level, scope, node, stable: domain, surface_controls: true })
 }
 
 fn trace_objects(
@@ -920,13 +1078,18 @@ fn trace_objects(
     index: Option<&FlatSceneIndex>,
 ) -> (Vec<SceneObjectVm>, u64, bool) {
     let objects = param_f32(scene_node, "objects", 0.0).max(0.0) as usize;
+    let water_families = discover_water_families(level, scene_node, objects);
     let mut vertex_count: u64 = 0;
     let mut vertex_count_exact = true;
     let mut out = Vec::with_capacity(objects);
     let mut seen_groups = HashSet::new();
     for k in 0..objects {
         let port = format!("object_{k}");
-        let liquid = slot_liquid_domain(level, index, scene_node, k);
+        let liquid = slot_liquid_domain(level, index, scene_node, k).or_else(|| {
+            let (group_id, output_port) = level.producer(scene_node.id, &port)?;
+            let family = water_families.get(&group_id)?;
+            (output_port == "object").then(|| family_liquid_domain(level, group_id, family.domain_node_id))?
+        });
         let (mut row, source_vertex_count) = match level.producer(scene_node.id, &port) {
             Some((producer_id, output_port)) => match level.node(producer_id) {
                 Some(producer_node) if producer_node.type_id == SCENE_OBJECT_TYPE_ID => {
@@ -964,7 +1127,9 @@ fn trace_objects(
             && let Some(group) = group_node.group.as_ref()
         {
             let inner = Level { nodes: &group.nodes, wires: &group.wires };
-            if let Some((parent_source, _)) = inner.producer(child.object_node_id, "parent_transform") {
+            if !water_families.contains_key(&group_id)
+                && let Some((parent_source, _)) = inner.producer(child.object_node_id, "parent_transform")
+            {
                 if seen_groups.insert(group_id) {
                     let mut parent = child.clone();
                     parent.is_group = true;
@@ -993,15 +1158,71 @@ fn trace_objects(
         }
         out.push(row);
     }
+    for (group_id, family) in &water_families {
+        let Some(group_node) = level.node(*group_id) else { continue; };
+        for object in &mut out {
+            let SceneObjectVm::Known(row) = object else { continue; };
+            if row.group_node_id != Some(*group_id) { continue; }
+            if row.object_node_id == family.water_object_id {
+                // Water is the physical row itself. Its object identity stays
+                // the scene_object doc id so selection, rename and deletion
+                // address the actual render slot rather than a virtual group.
+                row.is_group = true;
+                row.parent_group_id = None;
+                row.look_mesh = None;
+                let Some(group) = group_node.group.as_ref() else { continue; };
+                let inner = Level { nodes: &group.nodes, wires: &group.wires };
+                row.visible_addr.param_id = "parent_visible".into();
+                row.visible_value = inner
+                    .node(row.object_node_id)
+                    .is_none_or(|node| param_f32(node, "parent_visible", 1.0) > 0.5);
+                row.visible_driven = inner.producer(row.object_node_id, "parent_visible").is_some();
+            } else if family.output_order.contains_key(&row.object_node_id) {
+                // The other outputs are looks: they own material, Size and
+                // their local eye only. Simulation and object-editing fields
+                // belong exclusively to Water.
+                row.parent_group_id = Some(family.water_object_id);
+                row.look_mesh = family_look_mesh(group_node, row.object_node_id);
+                row.transform = None;
+                row.transform_chain.clear();
+                row.transform_chain_parseable = false;
+                row.modifier_chain.clear();
+                row.modifier_chain_parseable = false;
+                row.skin = None;
+                row.physics = None;
+                row.physics_imported = false;
+                row.liquid_domain = None;
+                row.fluid_controls.clear();
+                row.fluid_domain = None;
+                row.fluid_domain_transform = None;
+            }
+        }
+    }
     // A duplicated child may occupy a later render slot, after another group.
     // Keep the outliner in parent/children order without changing physical slots.
     let group_indices: HashMap<_, _> = out.iter().filter_map(|row| match row {
         SceneObjectVm::Known(row) if row.is_group => Some((row.object_node_id, row.index)),
         _ => None,
     }).collect();
+    let family_order: HashMap<(u32, u32), usize> = water_families
+        .iter()
+        .flat_map(|(group_id, family)| {
+            std::iter::once((*group_id, family.water_object_id, 0usize))
+                .chain(family.output_order.iter().map(|(object_id, order)| (*group_id, *object_id, *order)))
+        })
+        .map(|(group_id, object_id, order)| ((group_id, object_id), order))
+        .collect();
     out.sort_by_key(|row| match row {
-        SceneObjectVm::Known(row) => (row.parent_group_id.and_then(|id| group_indices.get(&id).copied()).unwrap_or(row.index), row.parent_group_id.is_some(), row.index),
-        SceneObjectVm::Custom { index } => (*index, false, *index),
+        SceneObjectVm::Known(row) => {
+            let group_order = row
+                .group_node_id
+                .and_then(|group_id| family_order.get(&(group_id, row.object_node_id)).copied());
+            let anchor = row.parent_group_id
+                .and_then(|id| group_indices.get(&id).copied())
+                .unwrap_or(row.index);
+            (anchor, row.parent_group_id.is_some(), group_order.unwrap_or(row.index), row.index)
+        }
+        SceneObjectVm::Custom { index } => (*index, false, *index, *index),
     });
     assign_shared_material_counts(&mut out);
     (out, vertex_count, vertex_count_exact)
@@ -1348,6 +1569,7 @@ fn trace_scene_object(
         }
     };
     let liquid_domain = liquid.as_ref().map(|domain| domain.stable.clone());
+    let surface_controls = liquid.as_ref().is_some_and(|domain| domain.surface_controls);
     if let Some(LiquidDomainAt { level: domain_level, scope: domain_scope, node: n, .. }) = liquid {
         (fluid_domain, fluid_domain_transform) = trace_fluid_domain(&domain_level, &domain_scope, n);
         own(n);
@@ -1407,7 +1629,7 @@ fn trace_scene_object(
         }
     }
 
-    if liquid_domain.is_some() {
+    if liquid_domain.is_some() && surface_controls {
         // Surface controls belong to the water whose mesh consumes them.
         // Stay inside this mesh level: group inputs are the ownership boundary
         // for simulation, collider and source objects in the enclosing scene.
@@ -1435,6 +1657,7 @@ fn trace_scene_object(
         index: k,
         object_node_id,
         object: node.node_id.clone(),
+        look_mesh: None,
         group_node_id,
         name,
         visible_addr,
@@ -3094,5 +3317,45 @@ mod tests {
         assert!(!water[0].fluid_controls.contains(&camera.node_id));
         assert_eq!(vm.camera_controls.first(), Some(&camera.node_id));
         assert!(!vm.camera_controls.contains(&domain.node));
+    }
+
+    #[test]
+    fn water_family_row_ownership() {
+        for preset in ["WaterDamBreakGpuFlip", "WaterDamBreakParticles"] {
+            let preset_type = manifold_core::PresetTypeId::new(preset);
+            let def = crate::node_graph::bundled_presets::bundled_preset_def(&preset_type)
+                .expect("water family preset");
+            let vm = SceneVm::from_def(def).expect("water family scene resolves");
+            let family: Vec<_> = vm.objects.iter().filter_map(|object| match object {
+                SceneObjectVm::Known(row)
+                    if row.name == "Water" || row.parent_group_id.is_some() => Some(row),
+                _ => None,
+            }).collect();
+            assert_eq!(family.iter().filter(|row| row.name == "Water").count(), 1, "{preset}");
+            let water = family.iter().find(|row| row.name == "Water").expect("Water row");
+            assert!(water.is_group, "{preset}: Water is the physical family parent");
+            assert!(water.parent_group_id.is_none());
+            assert!(water.group_node_id.is_some());
+            assert!(water.look_mesh.is_none());
+            assert_eq!(water.visible_addr.param_id, "parent_visible");
+            assert!(water.liquid_domain.is_some());
+            assert!(!water.fluid_controls.is_empty());
+
+            let names: Vec<_> = family.iter().map(|row| row.name.as_str()).collect();
+            assert_eq!(names, ["Water", "Foam", "Spray", "Bubbles"], "{preset}: family order");
+            for row in family.iter().filter(|row| row.name != "Water") {
+                assert_eq!(row.parent_group_id, Some(water.object_node_id), "{preset}: {} parent", row.name);
+                assert!(row.look_mesh.is_some(), "{preset}: {} owns its platonic mesh", row.name);
+                assert!(row.liquid_domain.is_none(), "{preset}: {} has no fluid domain", row.name);
+                assert!(row.fluid_controls.is_empty(), "{preset}: {} has no fluid controls", row.name);
+                assert!(row.fluid_domain.is_none());
+                assert!(row.fluid_domain_transform.is_none());
+                assert!(row.transform.is_none());
+                assert!(row.transform_chain.is_empty());
+                assert!(row.modifier_chain.is_empty());
+                assert!(row.physics.is_none());
+                assert!(row.skin.is_none());
+            }
+        }
     }
 }

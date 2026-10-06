@@ -1,6 +1,9 @@
     use super::*;
     use crate::input::Modifiers;
 
+    #[path = "no_bespoke_row_infra.rs"]
+    mod no_bespoke_row_infra;
+
     /// C-P1a: wrap a plain `RowValue` in an idle (no active modulation)
     /// `ModulatedRow` — the shape `EnvironmentRowVm`/`AtmosphereRowVm` now
     /// carry for every converted row.
@@ -107,6 +110,7 @@
             atmosphere: AtmosphereRowVm::None,
             objects: vec![
                 ObjectRowVm::Known(Box::new(ObjectKnownRow {
+                    look_mesh: None,
                     index: 0,
                     object_node_id: 40,
                     group_node_id: Some(42),

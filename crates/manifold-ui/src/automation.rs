@@ -46,6 +46,9 @@ pub enum AutomationAction {
     Dump,
     /// Emit a PNG of the current UI to the run's output dir / reply.
     Snapshot,
+    /// Headless acceptance: save and reload through project IO, then rebuild
+    /// the same UI selection. Clears undo history as opening a project does.
+    SaveReloadProject,
     /// D10 assertion; failure = loud stop with dump attached.
     Assert {
         selector: AutomationTarget,

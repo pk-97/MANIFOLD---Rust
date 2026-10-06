@@ -537,11 +537,12 @@ fn gpu_template() -> LiquidTemplate {
     let mut output = node(4, "fluid_output", GROUP_OUTPUT_TYPE_ID);
     output.handle = None;
     LiquidTemplate {
+        object_outputs: vec!["object".into()],
         nodes: vec![live, surface, object, output],
         wires: vec![wire(1, "frame", 2, "frame"), wire(2, "vertices", 3, "vertices"), wire(3, "object", 4, "object")],
         output_node: 4,
         group_id_slot: 0,
-        exposures: vec![TemplateExposure { node: 3, set: ExposureSet::Object, section: None }],
+        exposures: vec![TemplateExposure::Node { node: 3, set: ExposureSet::Object, section: None }],
     }
 }
 
@@ -653,4 +654,21 @@ fn add_undo_redo_reload(template: LiquidTemplate, domain_type: &str) {
 fn scene_physics_add_fluid_template_undo_reload() {
     add_undo_redo_reload(flip_scene_fluid_template(), FLIP_DOMAIN_TYPE_ID);
     add_undo_redo_reload(gpu_template(), manifold_core::liquid_domain::MATTER_DOMAIN_TYPE_ID);
+}
+
+#[test]
+fn multi_output_reservation_rejects_later_occupied_slot_atomically() {
+    let mut def = render_scene_graph(2, false);
+    def.wires.push(wire(100, "object", 10, "object_3"));
+    let (mut project, target) = project_with_graph(def.clone());
+    let before = serde_json::to_value(&project).unwrap();
+    let mut command = command(target, def);
+    let output = command.template.output_node;
+    let object = command.template.wires.iter().find(|wire| wire.to_node == output && wire.to_port == "object").unwrap().from_node;
+    command.template.object_outputs.push("object_1".into());
+    command.template.wires.push(wire(object, "object", output, "object_1"));
+    command.execute(&mut project);
+    assert!(!command.was_applied());
+    assert_eq!(command.rejection_reason(), Some("Add Fluid destination object slot is occupied"));
+    assert_eq!(serde_json::to_value(&project).unwrap(), before);
 }
