@@ -586,6 +586,8 @@ const NON_STANDALONE: &[&str] = &[
     "node.track_persist",
     // Custom GPU kernels, reduction/FFI or seed-stage layouts (not codegen Params).
     "node.blob_tracker",
+    // One MPSGraph FFT call through manifold-gpu; no uniforms at all.
+    "node.inverse_fft_2d",
     // CPU-origin mesh upload uses UploadUniforms, reflected against its actual
     // shader in uniform_layout_extended rather than codegen dispatch Params.
     "node.platonic_solid_mesh",

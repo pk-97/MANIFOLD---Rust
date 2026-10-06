@@ -367,7 +367,15 @@ the final diff, then `landing_gate.py`, then merge.
 
 ## 8. Assets
 
-Filled in at P5: file name · URL · size · licence.
+Both Poly Haven, CC0, downloaded 2026-10-07 into the main checkout's gitignored
+fixtures (the preset string bindings default to these paths).
+
+| File | URL | Size |
+|---|---|---|
+| `tests/fixtures/hdri/umhlanga_sunrise_4k.exr` (Greg Zaal) | https://dl.polyhaven.org/file/ph-assets/HDRIs/exr/4k/umhlanga_sunrise_4k.exr | 19.6 MB |
+| `tests/fixtures/gltf/coastal_cliff_02/coastal_cliff_02_2k.gltf` (Rob Tuytel; 41 × 8.7 × 10 m, 1.77M triangles) | https://dl.polyhaven.org/file/ph-assets/Models/gltf/2k/coastal_cliff_02/coastal_cliff_02_2k.gltf | 3 KB |
+| `…/coastal_cliff_02.bin` | https://dl.polyhaven.org/file/ph-assets/Models/gltf/8k/coastal_cliff_02/coastal_cliff_02.bin | 26.8 MB |
+| `…/textures/coastal_cliff_02_{diff,nor_gl,arm}_2k.jpg` | https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/coastal_cliff_02/ | 2.7 + 4.1 + 2.3 MB |
 
 ## 9. Ocean → FLIP coupling (out of scope tonight)
 
