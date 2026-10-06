@@ -15,6 +15,7 @@ pub mod interaction;
 pub mod stepping;
 pub mod clock;
 pub mod particle_duration;
+pub mod coupled_motion;
 mod field_value;
 pub use field_value::FieldValue;
 pub use interaction::{
@@ -183,6 +184,17 @@ mod ffi {
             body: u64,
             linear: *const f32,
             angular: *const f32,
+        ) -> i32;
+        pub fn manifold_box3d_body_apply_wrench(
+            body: u64,
+            force: *const f32,
+            torque: *const f32,
+        ) -> i32;
+        pub fn manifold_box3d_body_static_contact_normals(
+            body: u64,
+            normals: *mut f32,
+            capacity: i32,
+            count_out: *mut i32,
         ) -> i32;
         pub fn manifold_box3d_body_apply_field(
             body: u64,
@@ -1067,6 +1079,42 @@ impl PhysicsWorld {
     /// Apply a validated batch of center-of-mass linear and angular impulses.
     /// The complete batch is checked before any native body is modified.
     pub fn apply_impulses(&mut self, impulses: &[BodyImpulse]) -> Result<(), PhysicsError> {
+        self.deliver_impulses(impulses, None)
+    }
+
+    /// Queue a liquid's reaction for the next step as a steady force J/dt and
+    /// torque L/dt at each centre of mass, waking the body
+    /// (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` D17). Box3D clears forces after
+    /// every step, so a tick split into several steps queues before each and
+    /// still delivers J and L in all. Validated as [`Self::apply_impulses`].
+    pub fn queue_reaction_over_step(&mut self, reactions: &[BodyImpulse], dt: Seconds) -> Result<(), PhysicsError> {
+        let dt_f32 = dt.0 as f32;
+        if !dt.0.is_finite() || dt.0 <= 0.0 || !dt_f32.is_finite() || dt_f32 <= 0.0 {
+            return Err(PhysicsError::InvalidInput("dt must be finite and positive"));
+        }
+        self.deliver_impulses(reactions, Some(dt_f32))
+    }
+
+    /// Up to three unit normals of `body`'s touching contacts with static and
+    /// kinematic bodies, pointing out of the support into the body
+    /// (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` D16). Returns how many of `out`
+    /// it wrote.
+    pub fn static_contact_normals(&self, body: BodyHandle, out: &mut [[f32; 3]; 3]) -> Result<usize, PhysicsError> {
+        let native = self.native_body(body)?;
+        let mut count = 0;
+        let _lock = native_lock();
+        let result = unsafe {
+            ffi::manifold_box3d_body_static_contact_normals(native, out.as_mut_ptr().cast(), out.len() as i32, &mut count)
+        };
+        if result != 0 || !(0..=out.len() as i32).contains(&count) {
+            return Err(PhysicsError::NativeFailure);
+        }
+        Ok(count as usize)
+    }
+
+    /// Impulses applied at once, or spread as force over a step of `over`
+    /// seconds.
+    fn deliver_impulses(&mut self, impulses: &[BodyImpulse], over: Option<f32>) -> Result<(), PhysicsError> {
         self.field_seen.fill(false);
         self.impulse_scratch.clear();
         let result = (|| {
@@ -1140,12 +1188,18 @@ impl PhysicsWorld {
             }
 
             for application in &self.impulse_scratch {
-                let apply_result = unsafe {
-                    ffi::manifold_box3d_body_apply_impulse(
-                        application.native,
-                        application.linear.as_ptr(),
-                        application.angular.as_ptr(),
-                    )
+                let apply_result = match over {
+                    None => unsafe {
+                        ffi::manifold_box3d_body_apply_impulse(
+                            application.native,
+                            application.linear.as_ptr(),
+                            application.angular.as_ptr(),
+                        )
+                    },
+                    Some(dt) => {
+                        let (force, torque) = (application.linear.map(|j| j / dt), application.angular.map(|l| l / dt));
+                        unsafe { ffi::manifold_box3d_body_apply_wrench(application.native, force.as_ptr(), torque.as_ptr()) }
+                    }
                 };
                 if apply_result != 0 {
                     return Err(PhysicsError::NativeFailure);

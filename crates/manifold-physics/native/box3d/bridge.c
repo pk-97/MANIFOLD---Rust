@@ -951,6 +951,105 @@ int manifold_box3d_body_apply_impulse(
 	return BOX3D_BRIDGE_OK;
 }
 
+// The liquid's reaction spread over the step as a steady force and torque
+// (LIQUID_SOLVER_SEAM_DESIGN.md D17). Box3D clears both after each step.
+int manifold_box3d_body_apply_wrench(
+	uint64_t body_value,
+	const float* force,
+	const float* torque )
+{
+	if ( force == NULL || torque == NULL )
+	{
+		return BOX3D_BRIDGE_ERROR;
+	}
+	for ( int i = 0; i < 3; ++i )
+	{
+		if ( !isfinite( force[i] ) || !isfinite( torque[i] ) )
+		{
+			return BOX3D_BRIDGE_ERROR;
+		}
+	}
+
+	b3BodyId body_id = b3LoadBodyId( body_value );
+	if ( !b3Body_IsValid( body_id ) || b3Body_GetType( body_id ) != b3_dynamicBody || !b3Body_IsEnabled( body_id ) )
+	{
+		return BOX3D_BRIDGE_ERROR;
+	}
+	if ( force[0] != 0.0f || force[1] != 0.0f || force[2] != 0.0f )
+	{
+		b3Body_ApplyForceToCenter( body_id, (b3Vec3){ force[0], force[1], force[2] }, true );
+	}
+	if ( torque[0] != 0.0f || torque[1] != 0.0f || torque[2] != 0.0f )
+	{
+		b3Body_ApplyTorque( body_id, (b3Vec3){ torque[0], torque[1], torque[2] }, true );
+	}
+	return BOX3D_BRIDGE_OK;
+}
+
+// Contacts read per body; a body touching more drops the rest.
+#define BOX3D_CONTACT_READ 64
+
+// Up to `capacity` unit normals of the body's contacts with static and
+// kinematic bodies that touch (a point within the linear slop), pointing out
+// of the support into the body (LIQUID_SOLVER_SEAM_DESIGN.md D16). A normal
+// within about 8 degrees of one already kept adds nothing and is skipped.
+int manifold_box3d_body_static_contact_normals(
+	uint64_t body_value,
+	float* normals,
+	int capacity,
+	int* count_out )
+{
+	if ( normals == NULL || count_out == NULL || capacity < 0 )
+	{
+		return BOX3D_BRIDGE_ERROR;
+	}
+	*count_out = 0;
+	b3BodyId body_id = b3LoadBodyId( body_value );
+	if ( !b3Body_IsValid( body_id ) )
+	{
+		return BOX3D_BRIDGE_ERROR;
+	}
+	b3ContactData contacts[BOX3D_CONTACT_READ];
+	int total = b3Body_GetContactData( body_id, contacts, BOX3D_CONTACT_READ );
+	int count = 0;
+	for ( int c = 0; c < total && count < capacity; ++c )
+	{
+		b3BodyId body_a = b3Shape_GetBody( contacts[c].shapeIdA );
+		b3BodyId body_b = b3Shape_GetBody( contacts[c].shapeIdB );
+		int ours_a = B3_ID_EQUALS( body_a, body_id );
+		if ( b3Body_GetType( ours_a ? body_b : body_a ) == b3_dynamicBody )
+		{
+			continue;
+		}
+		for ( int m = 0; m < contacts[c].manifoldCount && count < capacity; ++m )
+		{
+			const b3Manifold* manifold = contacts[c].manifolds + m;
+			int touching = 0;
+			for ( int k = 0; k < manifold->pointCount; ++k )
+			{
+				touching |= manifold->points[k].separation <= B3_LINEAR_SLOP;
+			}
+			// The manifold normal points from shape A to shape B.
+			b3Vec3 n = ours_a ? b3Neg( manifold->normal ) : manifold->normal;
+			int repeated = 0;
+			for ( int k = 0; k < count; ++k )
+			{
+				repeated |= n.x * normals[3 * k] + n.y * normals[3 * k + 1] + n.z * normals[3 * k + 2] > 0.99f;
+			}
+			if ( !touching || repeated || !box3d_vec3_finite( n ) )
+			{
+				continue;
+			}
+			normals[3 * count] = n.x;
+			normals[3 * count + 1] = n.y;
+			normals[3 * count + 2] = n.z;
+			count += 1;
+		}
+	}
+	*count_out = count;
+	return BOX3D_BRIDGE_OK;
+}
+
 int manifold_box3d_body_apply_field(
 	uint64_t body_value,
 	const float* force,
