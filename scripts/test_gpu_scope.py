@@ -18,6 +18,10 @@ def plan(paths, users=None, repo=None):
 
 
 class ScopeTests(unittest.TestCase):
+    def setUp(self):
+        self.real_learned_times_path = g.learned_times_path
+        self.enterContext(mock.patch.object(g, "learned_times_path", return_value=None))
+
     def test_step_order_cpu_reference_selects_gpu_value_proofs(self):
         path = P + "gpu_flip_extension_tests.rs"
         result = plan([path], repo=self._repo_with(path))
@@ -262,7 +266,8 @@ class ScopeTests(unittest.TestCase):
         self.assertIn("a::slow", p.final_skips())
         self.assertNotIn("a::fast", p.final_skips())
         self.assertNotIn("a::exact", p.final_skips())
-        self.assertIn("a::slow: skipped, run nightly only (measured 61s)", p.describe())
+        p.filters.add("a::")
+        self.assertIn("GPU-PROOFS DEFERRED: a::slow (61s)", p.describe())
         self.assertEqual(p.runs()[0]["skips"], p.final_skips())
 
     def test_glb_sweep_time_never_skips_or_reports_the_sweep(self):
@@ -277,6 +282,100 @@ class ScopeTests(unittest.TestCase):
     def test_test_missing_from_times_file_runs(self):
         self.with_times({"a::slow": 500.0})
         self.assertNotIn("brand::new_test", plan([P + "matter_fill.rs"]).final_skips())
+
+    def test_slow_exact_filter_runs(self):
+        name = "liquid_conformance::liquid_coupled_live_frame_rate"
+        self.with_times({name: 222})
+        p = plan([R + "node_graph/liquid/clock.rs"])
+        self.assertIn(name, p.filters)
+        self.assertNotIn(name, p.final_skips())
+
+    def test_changed_bodies_are_exact_but_helper_edits_stay_module_wide(self):
+        path = g.PROOFS_DIR + "liquid_conformance.rs"
+        repo = self._repo_with(path)
+        (repo / path).write_text(
+            "fn helper() {\n    shared();\n}\n"
+            "#[test]\nfn slow() {\n    old();\n}\n"
+            "mod nested {\n    #[test]\n    fn slower() {\n        old();\n    }\n}\n")
+        self.with_times({"liquid_conformance::slow": 100,
+                         "liquid_conformance::nested::slower": 200,
+                         "unrelated::slow": 300})
+        for hunk, expected in [("@@ -6 +6 @@", {"liquid_conformance::slow"}),
+                               ("@@ -11 +11 @@", {"liquid_conformance::nested::slower"}),
+                               ("@@ -6 +6,0 @@", {"liquid_conformance::slow"}),
+                               ("@@ -2 +2 @@", set())]:
+            with mock.patch.object(g.subprocess, "run", return_value=mock.Mock(
+                    returncode=0, stdout=hunk)):
+                p = plan([path], repo=repo)
+            exact = {f for f in p.filters if not f.endswith("::")}
+            self.assertEqual(exact, expected)
+            self.assertTrue(expected.isdisjoint(p.final_skips()))
+            deferred = {n for n, _ in p.deferred()}
+            self.assertEqual(deferred, {"liquid_conformance::slow",
+                                       "liquid_conformance::nested::slower"} - expected)
+            line = next(l for l in p.describe().splitlines()
+                        if l.startswith("GPU-PROOFS DEFERRED:"))
+            self.assertNotIn("unrelated", line)
+            for name in expected:
+                self.assertNotIn(name + " (", line)
+
+    def test_result_returning_test_bodies_are_promoted(self):
+        path = g.PROOFS_DIR + "liquid_conformance.rs"
+        repo = self._repo_with(path)
+        (repo / path).write_text("#[test]\nfn fallible() -> Result<(), String> {\n    old()\n}\n")
+        with mock.patch.object(g.subprocess, "run", return_value=mock.Mock(
+                returncode=0, stdout="@@ -3 +3 @@")):
+            self.assertEqual(g.changed_test_filters(path, repo, "base"),
+                             {"liquid_conformance::fallible"})
+
+    def test_non_renderer_test_files_promote_nothing(self):
+        path = "crates/manifold-gpu/src/queue.rs"
+        repo = self._repo_with(path)
+        (repo / path).write_text("#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {\n    }\n}\n")
+        with mock.patch.object(g.subprocess, "run") as run:
+            self.assertEqual(g.changed_test_filters(path, repo, "base"), set())
+            run.assert_not_called()
+
+    def test_learned_path_resolves_worktree_git_common_directory(self):
+        # Exercise the real resolver independently of this suite's cache patch.
+        resolver = self.real_learned_times_path
+        with tempfile.TemporaryDirectory() as d:
+            # macOS temp dirs sit behind the /var -> /private/var symlink,
+            # and git reports the resolved path.
+            root = Path(d).resolve()
+            worktree = root / "slot"
+            worktree.mkdir()
+            common = root / "main/.git"
+            admin = common / "worktrees/slot"
+            admin.mkdir(parents=True)
+            (common / "objects").mkdir()
+            (common / "refs").mkdir()
+            (common / "HEAD").write_text("ref: refs/heads/main\n")
+            (admin / "HEAD").write_text("ref: refs/heads/work\n")
+            (admin / "commondir").write_text("../..\n")
+            (worktree / ".git").write_text(f"gitdir: {admin}\n")
+            with mock.patch.object(g, "TIMES_PATH", worktree / "scripts/times.json"):
+                self.assertEqual(resolver(), common / "gpu-test-times.json")
+
+    def test_shared_measurements_replace_seed(self):
+        self.with_times({"cold": 90, "seed_only": 70})
+        with tempfile.TemporaryDirectory() as d:
+            cache = Path(d) / "times.json"
+            cache.write_text(json.dumps({"tests": {"cold": 1, "learned": 100}}))
+            with mock.patch.object(g, "learned_times_path", return_value=cache):
+                self.assertEqual(g.load_times(), {"cold": 1, "seed_only": 70, "learned": 100})
+
+    def test_corrupt_shared_measurements_warn_and_run_unknown_tests(self):
+        import contextlib, io
+        self.with_times({"seed_only": 70})
+        with tempfile.TemporaryDirectory() as d:
+            cache = Path(d) / "times.json"
+            for data in ['{', '{"tests": {"bad": -1}}', '{"tests": {"bad": NaN}}']:
+                cache.write_text(data)
+                with mock.patch.object(g, "learned_times_path", return_value=cache), \
+                        contextlib.redirect_stderr(io.StringIO()) as out:
+                    self.assertEqual(g.load_times(), {"seed_only": 70})
+                self.assertIn("timing cache unreadable", out.getvalue())
 
     def test_missing_times_file_skips_nothing(self):
         with mock.patch.object(g, "TIMES_PATH", Path("/nonexistent/t.json")):
