@@ -1197,6 +1197,7 @@ proofs; record the rest. **Done: no lever kept.** The surface stays 5.27 ms p95.
 |---|---|---|
 | Anisotropy once per tick | The volume already reads each particle's stored ellipsoid (`FluidBlob`, built once per frame by `node.shape_particle_blobs`); a cell visit costs one 3×3 multiply, nothing to hoist. At the 60 Hz producer tick equals frame. | Already so; nothing to gain at 60 Hz |
 | Bin-local shared memory for the volume gather | Tiled kernel (one workgroup per 4×4×4 node block, the block's bins copied to workgroup memory, same sum order) passed the brute-force proof but took 30.4 ms against 1.95 ms at ×2, 103 ms against 5.5 at ×3: the tile needs 31 KB of the core's 32 KB, leaving one 64-thread workgroup per core. | Dropped |
+| Cooperative brick gather (2026-10-06) | One half brick per workgroup, its bins' blobs staged in chunks, each lane visiting its own window in the generated kernel's order; bitwise after an exact-position helper. Oracle res 64: particle_volume 1.5–4.5× slower across CHUNK 64/128/256, tick p95 +4.3 to +23 ms. Barrier count and per-lane imbalance (visits p50 ≈ 0, p95 ≈ 3,300–4,000) outweigh the staging. docs/archive/PARTICLE_VOLUME_BRICK_GATHER_DESIGN.md section 10 (Result). | Dropped |
 | Half-precision neighbour reads | Scalar model at res 64 ×2 scales over 2,000 nodes: f16 blob fields move the level set by up to 9.1e-2 with world-space centres and 1.4e-3 with bin-relative ones, 10⁷–10⁹ f32 ULPs against a 1-LSB bar. | Dropped |
 
 ### P6e — Surface look: a distance level set
