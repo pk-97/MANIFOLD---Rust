@@ -68,6 +68,38 @@ fn whitewater_fused_variants_validate_on_cpu() {
     }
 }
 
+fn synthetic_faces() -> [Vec<f32>; 3] {
+    std::array::from_fn(|a| vec![[2.0, 1.0, -0.5][a]; face_len([8; 3], a) as usize])
+}
+
+fn synthetic_shape() -> StepShape {
+    StepShape::new([13; 3], [13; 3], [8; 3], 1.0,
+        Some(Transform { pos: [0.6; 3], scale: [1.2; 3], ..Default::default() }), 256).unwrap()
+}
+
+fn synthetic_records() -> Vec<FluidParticle> {
+    (0..8).map(|i| FluidParticle {
+        position_radius: [0.45 + 0.015 * i as f32, 0.5, 0.5, if i == 6 { 0.0 } else if i == 7 { -1.0 } else { 0.025 }],
+        velocity: [17.0, -3.25, 0.75], id: 255 - i,
+    }).collect()
+}
+
+#[test]
+fn whitewater_half_integer_fixture_has_saturated_energy() {
+    use super::super::whitewater_particle_cpu::{Box3, energy, jitter, sample_faces};
+    let faces = synthetic_faces();
+    let shape = synthetic_shape();
+    let grid = Box3 { cells: shape.cells, center: shape.center, size: shape.size };
+    for (axis, face) in faces.iter().enumerate() {
+        assert_eq!(bytemuck::cast_slice::<_, u8>(face).len(), face_len([8; 3], axis) as usize * 4);
+    }
+    for (i, particle) in synthetic_records().into_iter().take(6).enumerate() {
+        let sampled = sample_faces(jitter(particle, i as u32, shape.cell_size, 0.375, 7.0),
+            faces.each_ref().map(Vec::as_slice), [8; 3], &grid);
+        assert_eq!(energy(sampled, 0.0, 1.0).to_bits(), 1.0f32.to_bits(), "emitter {i}");
+    }
+}
+
 #[cfg(feature = "gpu-proofs")]
 mod gpu {
     use super::*;
@@ -93,8 +125,11 @@ mod gpu {
         let mut reference = Show::new_with_emitter_oracle(def, (96, 54), false, &[], Some(true));
         fused.restart();
         reference.restart();
+        const TICKS: usize = 120;
         let mut ticks = 0;
-        for _ in 0..12 {
+        let mut saw_counts = false;
+        let mut saw_dust_counts = false;
+        for _ in 0..2 * TICKS {
             fused.frame(false);
             reference.frame(false);
             assert!(fused.errors().is_empty());
@@ -109,9 +144,15 @@ mod gpu {
                 let a = fused.provided_all_bytes("whitewater", port);
                 let b = reference.provided_all_bytes("whitewater", port);
                 equal_words(bytemuck::cast_slice(&a), bytemuck::cast_slice(&b), ticks, port);
+                let nonzero = bytemuck::cast_slice::<_, u32>(&a).iter().any(|&word| word != 0);
+                if *port == "proof_counts" { saw_counts |= nonzero; }
+                if *port == "proof_dust_counts" { saw_dust_counts |= nonzero; }
             }
+            if ticks == TICKS { break; }
         }
-        assert!(ticks >= 8, "scene did not exercise enough accepted ticks: {ticks}");
+        assert_eq!(ticks, TICKS, "scene did not exercise enough accepted ticks");
+        assert!(saw_counts, "scene never produced nonzero normal emission counts");
+        assert!(!dust || saw_dust_counts, "scene never produced nonzero dust emission counts");
     }
 
     fn shared<T: bytemuck::Pod>(device: &GpuDevice, data: &[T]) -> GpuBuffer {
@@ -137,17 +178,13 @@ mod gpu {
 
     impl Fixture {
         fn new(device: &GpuDevice) -> Self {
-            let shape = StepShape::new([13; 3], [13; 3], [8; 3], 1.0,
-                Some(Transform { pos: [0.6; 3], scale: [1.2; 3], ..Default::default() }), 256).unwrap();
-            let records: Vec<_> = (0..8).map(|i| FluidParticle {
-                position_radius: [0.45 + 0.015 * i as f32, 0.5, 0.5, if i == 6 { 0.0 } else if i == 7 { -1.0 } else { 0.025 }],
-                velocity: [17.0, -3.25, 0.75], id: 255 - i,
-            }).collect();
+            let shape = synthetic_shape();
+            let records = synthetic_records();
             Self {
                 shape, particles: shared(device, &records), records,
                 solid: shared(device, &vec![0.1f32; 13 * 13 * 13]),
                 distance: shared(device, &vec![-1.0f32; 8 * 8 * 8]),
-                faces: std::array::from_fn(|a| shared(device, &vec![[2.0, 1.0, -0.5][a]; face_len([8; 3], a) as usize])),
+                faces: synthetic_faces().map(|face| shared(device, &face)),
                 source: shared(device, &vec![WhitewaterSource { influence: 1.0, dust_strength: 1.0, kind: 2, pad: 0 }; 13 * 13 * 13]),
                 pool: shared(device, &vec![empty_slot(); 256]), state: shared(device, &[0u32; 8]),
             }
@@ -242,6 +279,7 @@ mod gpu {
         for pipeline in &stage.pipelines.fused {
             let max = pipeline.max_threads_per_threadgroup();
             println!("fused {}: max_threads={max:?}, dispatched=256", pipeline.label);
+            // GPU proofs are Metal-only for now; Vulkan reports None here.
             assert!(max.is_some_and(|n| n >= 256));
         }
         stage.reference.print_pipeline_limits();

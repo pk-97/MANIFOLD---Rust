@@ -57,7 +57,7 @@ struct EmitParams {
 @group(0) @binding(12) var<storage, read_write> out_energy: array<f32>;
 @group(0) @binding(13) var<storage, read_write> out_counts: array<u32>;
 @group(0) @binding(14) var<storage, read_write> out_unscaled: array<Element>;
-@group(0) @binding(15) var<storage, read_write> out_dust_counts: array<u32>;
+@group(0) @binding(15) var<storage, read_write> out_wavecrest_bits: array<u32>;
 // Dust has disjoint entry-point resources; its solid/source occupy the face slots.
 @group(0) @binding(2) var<storage, read> buf_solid: array<f32>;
 @group(0) @binding(3) var<storage, read> buf_source: array<WhitewaterSource>;
@@ -510,8 +510,8 @@ fn ww_emit(@builtin(global_invocation_id) gid: vec3<u32>) {
     if p.dust_enabled > 0.5 {
         out_unscaled[idx] = unscaled;
         // Retain the exact wavecrest operand of the dust count, including NaNs.
-        // Dust reads these bits before replacing them with its counts.
-        out_dust_counts[idx] = bitcast<u32>(wavecrest);
+        // Dust reads these bits once for this emission; no later tick reads them.
+        out_wavecrest_bits[idx] = bitcast<u32>(wavecrest);
     }
 }
 
@@ -522,7 +522,7 @@ fn ww_dust(@builtin(global_invocation_id) gid: vec3<u32>) {
     let unscaled = buf_particles[idx];
     let dust = ww_phase_dust(idx, p.count, unscaled, p.center_x, p.center_y, p.center_z, p.size_x, p.size_y, p.size_z, p.nodes_x, p.nodes_y, p.nodes_z, p.min_turbulence, p.max_turbulence, p.dust_enabled, p.boundary_dust);
     let energy = ww_phase_energy(idx, p.count, unscaled, p.min_energy, p.max_energy);
-    let counts = ww_phase_count(idx, p.count, unscaled, energy, bitcast<f32>(out_counts[idx]), dust, p.rate, p.turbulence_rate, p.generation_rate, p.seed, p.epoch, p.points_per_cell, p.ticks, p.live_count, p.dt, p.center_x, p.center_y, p.center_z, p.size_x, p.size_y, p.size_z, p.nodes_x, p.nodes_y, p.nodes_z);
+    let counts = ww_phase_count(idx, p.count, unscaled, energy, bitcast<f32>(out_wavecrest_bits[idx]), dust, p.rate, p.turbulence_rate, p.generation_rate, p.seed, p.epoch, p.points_per_cell, p.ticks, p.live_count, p.dt, p.center_x, p.center_y, p.center_z, p.size_x, p.size_y, p.size_z, p.nodes_x, p.nodes_y, p.nodes_z);
     out_energy[idx] = energy;
     out_counts[idx] = counts;
 }

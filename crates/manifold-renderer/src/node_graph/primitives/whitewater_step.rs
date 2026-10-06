@@ -817,7 +817,7 @@ impl Fields {
 #[derive(Default)]
 struct ParticleScratch {
     slots: u32,
-    /// sampled, energy, unscaled, dust_energy, dust_counts (76 bytes per slot).
+    /// sampled, energy, unscaled, dust_energy, wavecrest_bits (76 bytes per slot).
     buffers: Option<[GpuBuffer; 5]>,
 }
 
@@ -1243,7 +1243,7 @@ impl Step {
             atom::<ExtendLattice>(enc, get(&p.extend), &nodes, &[&f.curvature[curvature], &f.curvature[1 - curvature]], cells, label("extend"));
             curvature = 1 - curvature;
         }
-        let [sampled, energy, unscaled, dust_energy, dust_counts] = scratch;
+        let [sampled, energy, unscaled, dust_energy, wavecrest_bits] = scratch;
         let box3 = [("center_x", cx), ("center_y", cy), ("center_z", cz), ("size_x", sx), ("size_y", sy), ("size_z", sz)];
         let faces = [("face_cells_x", fx), ("face_cells_y", fy), ("face_cells_z", fz)];
         atom::<TurbulenceField>(
@@ -1251,10 +1251,6 @@ impl Step {
             &[faces[0], faces[1], faces[2], nodes[0], nodes[1], nodes[2], ("cell_size", s.cell_size)],
             &[distance, inputs.faces[0], inputs.faces[1], inputs.faces[2], &f.turbulence],
             cells, "node.whitewater_step.turbulence");
-        if emitters == 0 {
-            enc.clear_buffer(offsets);
-            enc.clear_buffer(dust_counts);
-        }
         let epoch = frame.epoch as f32;
         let mut grid = [("", 0.0); 9];
         grid[..6].copy_from_slice(&box3);
@@ -1272,7 +1268,7 @@ impl Step {
             dispatch(enc, &p.fused[0], bytemuck::bytes_of(&EmitParams::new(frame, emitters, false)),
                 &[inputs.particles, inputs.faces[0], inputs.faces[1], inputs.faces[2], &f.state,
                   surface, &f.cells, &f.curvature[curvature], &f.turbulence, &f.influence[influence_next],
-                  sampled, energy, offsets, unscaled, dust_counts], emitters, FUSED_ENTRIES[0].1, Barrier::After);
+                  sampled, energy, offsets, unscaled, wavecrest_bits], emitters, FUSED_ENTRIES[0].1, Barrier::After);
             #[cfg(all(test, feature = "gpu-proofs"))]
             self.reference.record_dispatch(FUSED_ENTRIES[0].1, emitters);
         });
@@ -1316,7 +1312,7 @@ impl Step {
                 dispatch(enc, &p.fused[1], bytemuck::bytes_of(&EmitParams::new(frame, emitters, true)),
                     &[unscaled, inputs.solid, inputs.obstacle_source.expect("validated dust source"),
                       &f.state, &f.state, &f.state, &f.state, &f.state, &f.turbulence,
-                      &f.influence[influence_next], &f.state, dust_energy, dust_counts],
+                      &f.influence[influence_next], &f.state, dust_energy, offsets, &f.state, wavecrest_bits],
                     emitters, FUSED_ENTRIES[1].1, Barrier::After);
                 #[cfg(all(test, feature = "gpu-proofs"))]
                 self.reference.record_dispatch(FUSED_ENTRIES[1].1, emitters);
@@ -1324,14 +1320,10 @@ impl Step {
             #[cfg(all(test, feature = "gpu-proofs"))]
             let (dust_energy, dust_counts) = if reference {
                 (self.reference.dust_energy(), offsets)
-            } else { (dust_energy, dust_counts) };
+            } else { (dust_energy, offsets) };
             #[cfg(all(test, feature = "gpu-proofs"))]
             self.reference.capture_dust(enc, dust_energy, dust_counts, emitters);
-            emitter_path!(reference, {
-                self.emission_scan.encode_labelled(enc, emitters.max(1) as usize, EMISSION_SCAN);
-            }, {
-                self.emission_scan.encode_into(enc, emitters.max(1) as usize, dust_counts, offsets);
-            });
+            self.emission_scan.encode_labelled(enc, emitters.max(1) as usize, EMISSION_SCAN);
             spawn[14] = ("seed", frame.seed + 104729.0);
             atom::<SpawnWhitewater>(enc, get(&p.spawn), &spawn[..17],
                 &[offsets, unscaled, dust_energy, inputs.faces[0], inputs.faces[1], inputs.faces[2], inputs.solid, &f.spawns],

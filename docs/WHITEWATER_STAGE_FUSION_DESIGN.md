@@ -244,13 +244,15 @@ The unused set is bound to `f.state` (the existing stand-in for absent optionals
 
 | Buffer | Today | After |
 |---|---|---|
-| `ParticleScratch` | jittered, sampled, energy, wavecrest, inside | `sampled`, `energy`, `unscaled`, `dust_energy`, `dust_counts` (same byte total: 2×32 + 3×4 per slot) |
+| `ParticleScratch` | jittered, sampled, energy, wavecrest, inside | `sampled`, `energy`, `unscaled`, `dust_energy`, `wavecrest_bits` (same byte total: 2×32 + 3×4 per slot) |
 | `Fields.spawns` | spawn → type intermediate | deleted; `ww_spawn` writes `typed` |
 | `Fields.distance`, `Fields.surface` | always | `Option`, allocated only when pad > 0 |
 | `Fields.influence[2]` + copy | copy-back each tick | index swap, no copy |
 | `held_bytes` | whitewater_step.rs:310-321 | updated to match; `whitewater_extents_at_64` (I9 of the whitewater design) re-derived |
 
-Dust sequencing with one emission-scan storage: `ww_emit` writes normal counts into `offsets` (the scan's level-0 storage, as today); the normal scan/spawn/append run; then `emission_scan.encode_into(emitters, dust_counts, offsets)` (prefix_scan.rs:169-178) scans the dust counts into the same storage and the dust spawn/append run exactly as :1236-1249 do today. Order of every state-word update is unchanged.
+Dust sequencing with one emission-scan storage: `ww_emit` writes normal counts into `offsets` (the scan's level-0 storage, as today); the normal scan/spawn/append run; then `ww_dust` writes dust counts directly into `offsets`, which are scanned in place with `emission_scan.encode_labelled` under `EMISSION_SCAN` before dust spawn/append. Never use `encode_into` with the scan's own storage as its destination: its parent totals would overlap level 0. Order of every state-word update is unchanged.
+
+`wavecrest_bits` is a pure side channel: `ww_emit` writes it only when dust is enabled; `ww_dust` reads it once for the same `idx` in that emission, and it is dead afterwards. It is never read across ticks, and nothing between the two dispatches binds it. Dust counts never occupy this buffer.
 
 ### 3.3 Port changes on `node.whitewater_step` (seam brief)
 
