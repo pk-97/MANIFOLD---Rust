@@ -194,6 +194,15 @@ pub(super) fn whitewater_render_def(scene: WaterScene) -> EffectGraphDef {
     g.finish()
 }
 
+/// `def` with the liquid domain's due ticks probed as `ticks`, so a proof can
+/// see how many ticks each frame ran.
+pub(super) fn with_tick_probe(def: EffectGraphDef) -> EffectGraphDef {
+    let mut g = Appender::new(def);
+    let domain = g.id("domain");
+    g.probe("ticks", (domain, "ticks"));
+    g.finish()
+}
+
 /// CPU-only regression: the probed scene must remain compilable after fusion.
 #[test]
 fn whitewater_scene_fuses_without_gpu() {
@@ -530,7 +539,7 @@ impl Show {
 
     /// This frame's values at the named probes. Per-tick whitewater reports
     /// come from the liquid boundary, after `frame` has waited for the GPU.
-    fn probes<const N: usize>(&self, labels: [&str; N]) -> [f32; N] {
+    pub(super) fn probes<const N: usize>(&self, labels: [&str; N]) -> [f32; N] {
         let live = self.runtime.live_node_params_watched();
         labels.map(|label| {
             let name = format!("probe.{label}");
@@ -564,6 +573,24 @@ impl Show {
     pub(super) fn hold(&mut self, names: &[String]) {
         let held: Vec<manifold_core::NodeId> = names.iter().map(|name| manifold_core::NodeId::from(name.as_str())).collect();
         self.runtime.set_dump_arrays(None, &held);
+    }
+
+    /// Every byte of the storage the named node provides on `port`, the
+    /// whole buffer, read after the frame completed. The array dump never
+    /// holds a tick region's body, so per-tick results are read from the
+    /// boundary's captures.
+    pub(super) fn provided_all_bytes(&self, name: &str, port: &str) -> Vec<u8> {
+        let node = self.runtime.graph.nodes().find(|n| n.node_id.as_str() == name).unwrap_or_else(|| panic!("no node {name}"));
+        let buffer = node.node.provided_array_output(port).unwrap_or_else(|| panic!("{name} provides no {port}"));
+        let bytes = buffer.size;
+        // The storage may be GPU-private: copy it to shared storage first.
+        let staged = self.device.create_buffer_shared(bytes.max(4));
+        let mut encoder = self.device.create_encoder("whitewater-scene provided readback");
+        encoder.copy_buffer_to_buffer(buffer, &staged, bytes);
+        encoder.commit_and_wait_completed();
+        let ptr = staged.mapped_ptr().expect("shared readback");
+        // SAFETY: shared storage of `bytes`, the copy completed above.
+        unsafe { std::slice::from_raw_parts(ptr.cast::<u8>().cast_const(), bytes as usize) }.to_vec()
     }
 
     /// The first `len` records the named held node wrote on `port` this frame.
