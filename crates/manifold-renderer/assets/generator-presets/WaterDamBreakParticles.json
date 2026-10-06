@@ -504,7 +504,6 @@
         },
         "nodes": [
           {
-            "handle": "Simulation",
             "id": 0,
             "nodeId": "domain",
             "params": {
@@ -524,7 +523,6 @@
             "typeId": "node.gpu_flip_domain"
           },
           {
-            "handle": "Initial Volume",
             "id": 1,
             "nodeId": "initial_column",
             "params": {
@@ -556,7 +554,6 @@
             "typeId": "node.transform_3d"
           },
           {
-            "handle": "fill",
             "id": 2,
             "nodeId": "fill",
             "params": {
@@ -628,13 +625,11 @@
             "typeId": "node.liquid_fill"
           },
           {
-            "handle": "state",
             "id": 3,
             "nodeId": "state",
             "typeId": "node.liquid_state"
           },
           {
-            "handle": "step",
             "id": 4,
             "nodeId": "step",
             "params": {
@@ -690,25 +685,21 @@
             "typeId": "node.gpu_flip_step"
           },
           {
-            "handle": "stats",
             "id": 5,
             "nodeId": "stats",
             "typeId": "node.liquid_stats"
           },
           {
-            "handle": "mesh solid",
             "id": 6,
             "nodeId": "mesh_solid",
             "typeId": "node.liquid_solid_distance"
           },
           {
-            "handle": "whitewater obstacle source",
             "id": 7,
             "nodeId": "whitewater_obstacle_source",
             "typeId": "node.whitewater_obstacle_source"
           },
           {
-            "handle": "frame",
             "id": 8,
             "nodeId": "frame",
             "params": {
@@ -720,7 +711,6 @@
             "typeId": "node.liquid_frame"
           },
           {
-            "handle": "fluid input",
             "id": 11,
             "nodeId": "fluid_input",
             "typeId": "system.group_input"
@@ -754,7 +744,7 @@
             "typeId": "node.whitewater_step"
           },
           {
-            "handle": "whitewater budget",
+            "handle": "Whitewater Budget",
             "id": 13,
             "nodeId": "whitewater_budget",
             "params": {
@@ -766,31 +756,27 @@
             "typeId": "node.value"
           },
           {
-            "handle": "particle blend",
             "id": 14,
             "nodeId": "particle_blend",
             "typeId": "node.interpolate_particle_frames"
           },
           {
-            "handle": "solid blend",
             "id": 15,
             "nodeId": "solid_blend",
             "typeId": "node.mix_arrays"
           },
           {
-            "handle": "particle push out",
             "id": 16,
             "nodeId": "particle_push_out",
             "typeId": "node.push_out_of_solid"
           },
           {
-            "handle": "display lattice box",
             "id": 17,
             "nodeId": "display_lattice_box",
             "typeId": "node.transform_components"
           },
           {
-            "handle": "Material",
+            "handle": "Water Material",
             "id": 18,
             "nodeId": "water_material",
             "params": {
@@ -870,19 +856,18 @@
             "typeId": "node.pbr_material"
           },
           {
-            "handle": "",
+            "handle": "Water",
             "id": 19,
             "nodeId": "water_object",
             "typeId": "node.scene_object"
           },
           {
-            "handle": "fluid output",
             "id": 20,
             "nodeId": "fluid_output",
             "typeId": "system.group_output"
           },
           {
-            "handle": "foam mesh",
+            "handle": "Foam Mesh",
             "id": 21,
             "nodeId": "foam_mesh",
             "params": {
@@ -898,7 +883,7 @@
             "typeId": "node.platonic_solid_mesh"
           },
           {
-            "handle": "foam material",
+            "handle": "Foam Material",
             "id": 22,
             "nodeId": "foam_material",
             "params": {
@@ -938,7 +923,7 @@
             "typeId": "node.pbr_material"
           },
           {
-            "handle": "foam object",
+            "handle": "Foam",
             "id": 23,
             "nodeId": "foam_object",
             "params": {
@@ -950,19 +935,18 @@
             "typeId": "node.scene_object"
           },
           {
-            "handle": "foam copies",
+            "handle": "Foam Copies",
             "id": 24,
             "nodeId": "foam_copies",
             "typeId": "node.particles_to_copies"
           },
           {
-            "handle": "foam blend",
             "id": 25,
             "nodeId": "foam_blend",
             "typeId": "node.interpolate_particle_frames"
           },
           {
-            "handle": "spray mesh",
+            "handle": "Spray Mesh",
             "id": 26,
             "nodeId": "spray_mesh",
             "params": {
@@ -978,7 +962,7 @@
             "typeId": "node.platonic_solid_mesh"
           },
           {
-            "handle": "spray material",
+            "handle": "Spray Material",
             "id": 27,
             "nodeId": "spray_material",
             "params": {
@@ -1018,7 +1002,7 @@
             "typeId": "node.pbr_material"
           },
           {
-            "handle": "spray object",
+            "handle": "Spray",
             "id": 28,
             "nodeId": "spray_object",
             "params": {
@@ -1030,19 +1014,18 @@
             "typeId": "node.scene_object"
           },
           {
-            "handle": "spray copies",
+            "handle": "Spray Copies",
             "id": 29,
             "nodeId": "spray_copies",
             "typeId": "node.particles_to_copies"
           },
           {
-            "handle": "spray blend",
             "id": 30,
             "nodeId": "spray_blend",
             "typeId": "node.interpolate_particle_frames"
           },
           {
-            "handle": "bubble mesh",
+            "handle": "Bubble Mesh",
             "id": 31,
             "nodeId": "bubble_mesh",
             "params": {
@@ -1058,7 +1041,7 @@
             "typeId": "node.platonic_solid_mesh"
           },
           {
-            "handle": "bubble material",
+            "handle": "Bubble Material",
             "id": 32,
             "nodeId": "bubble_material",
             "params": {
@@ -1102,7 +1085,7 @@
             "typeId": "node.pbr_material"
           },
           {
-            "handle": "bubble object",
+            "handle": "Bubbles",
             "id": 33,
             "nodeId": "bubble_object",
             "params": {
@@ -1114,13 +1097,12 @@
             "typeId": "node.scene_object"
           },
           {
-            "handle": "bubble copies",
+            "handle": "Bubble Copies",
             "id": 34,
             "nodeId": "bubble_copies",
             "typeId": "node.particles_to_copies"
           },
           {
-            "handle": "bubble blend",
             "id": 35,
             "nodeId": "bubble_blend",
             "typeId": "node.interpolate_particle_frames"
@@ -2651,11 +2633,13 @@
       "typeId": "node.fluid_role_source"
     },
     {
+      "handle": "Obstacle Mesh",
       "id": 478,
       "nodeId": "obstacle_mesh",
       "typeId": "node.cube_mesh"
     },
     {
+      "handle": "Obstacle Material",
       "id": 479,
       "nodeId": "obstacle_material",
       "params": {
@@ -2687,6 +2671,7 @@
       "typeId": "node.pbr_material"
     },
     {
+      "handle": "Obstacle",
       "id": 480,
       "nodeId": "obstacle_object",
       "typeId": "node.scene_object"

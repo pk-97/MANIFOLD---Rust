@@ -24,7 +24,8 @@ const RENDER_SCENE_TYPE_ID: &str = "node.render_scene";
 /// migration chain; this function deliberately leaves malformed or shared
 /// shapes unchanged.
 pub(super) fn migrate(def: &mut EffectGraphDef) -> bool {
-    if !def.nodes.iter().any(|node| is_liquid_domain(&node.type_id)) {
+    let Ok(flat) = manifold_core::flatten::flatten_groups(def) else { return false };
+    if !flat.nodes.iter().any(|node| is_liquid_domain(&node.type_id)) {
         return false;
     }
     let mut candidate = def.clone();
@@ -250,6 +251,7 @@ fn find_loose_role_obstacle(
     def: &EffectGraphDef,
     skipped: &HashSet<u32>,
 ) -> Option<(u32, u32, u32)> {
+    let flat = manifold_core::flatten::flatten_groups(def).ok()?;
     for role in def
         .nodes
         .iter()
@@ -257,10 +259,13 @@ fn find_loose_role_obstacle(
     {
         let outs: Vec<_> = def.wires.iter().filter(|wire| wire.from_node == role.id).collect();
         let [out] = outs.as_slice() else { continue };
-        let fluid_ok = out.to_port.starts_with("role_")
-            && def.nodes.iter().any(|node| {
-                node.id == out.to_node && is_liquid_domain(&node.type_id)
-            });
+        // The authored role may enter Water through a group interface.
+        // Recognize its actual solver feed, but group within the authored scope.
+        let fluid_ok = flat.nodes.iter().find(|node| node.node_id == role.node_id).is_some_and(|flat_role| {
+            flat.wires.iter().any(|wire| wire.from_node == flat_role.id
+                && wire.from_port == "role" && wire.to_port.starts_with("role_")
+                && flat.nodes.iter().any(|node| node.id == wire.to_node && is_liquid_domain(&node.type_id)))
+        });
         if !fluid_ok {
             continue;
         }
@@ -759,23 +764,16 @@ mod tests {
 
     /// Role wires into any liquid domain, at any group depth.
     fn domain_role_inputs(def: &EffectGraphDef) -> usize {
-        fn count(nodes: &[EffectGraphNode], wires: &[EffectGraphWire]) -> usize {
-            let here = wires
-                .iter()
-                .filter(|wire| {
-                    wire.to_port.starts_with("role_")
-                        && nodes.iter().any(|node| {
-                            node.id == wire.to_node && is_liquid_domain(&node.type_id)
-                        })
-                })
-                .count();
-            here + nodes
-                .iter()
-                .filter_map(|node| node.group.as_deref())
-                .map(|group| count(&group.nodes, &group.wires))
-                .sum::<usize>()
-        }
-        count(&def.nodes, &def.wires)
+        let flat = flatten_groups(def).expect("fixture graph flattens");
+        flat.wires
+            .iter()
+            .filter(|wire| {
+                wire.to_port.starts_with("role_")
+                    && flat.nodes.iter().any(|node| {
+                        node.id == wire.to_node && is_liquid_domain(&node.type_id)
+                    })
+            })
+            .count()
     }
 
     fn project_with(def: &EffectGraphDef, preset: &'static str) -> (
@@ -913,8 +911,9 @@ mod tests {
     /// A loose collider that cannot group must not stop the others.
     #[test]
     fn ungroupable_loose_collider_does_not_block_the_rest() {
-        let mut def: EffectGraphDef =
-            serde_json::from_str(GPU_FLIP_DAM_BREAK_JSON).expect("preset parses");
+        let def: EffectGraphDef = serde_json::from_str(GPU_FLIP_DAM_BREAK_JSON).expect("preset parses");
+        // Add the second collider directly to the solver topology.
+        let mut def = flatten_groups(&def).expect("preset flattens");
         let mut blocked = def
             .nodes
             .iter()

@@ -250,8 +250,16 @@ mod tests {
         let bundled: Value = serde_json::from_str(BUNDLED).unwrap();
         assert_eq!(binding("domain"), *find(&bundled["presetMetadata"]["bindings"], PARAM));
         assert_eq!(card(), *find(&bundled["presetMetadata"]["params"], PARAM));
-        let shipped = bundled["wires"].as_array().unwrap().iter().find(|w| w["toPort"] == PARAM).unwrap();
-        assert_eq!(wire(&json!(0), &json!(6)), *shipped);
+        let family = bundled["nodes"].as_array().unwrap().iter()
+            .find(|node| node["nodeId"] == "water_family")
+            .expect("bundled Water family");
+        let shipped = family["group"]["wires"].as_array().unwrap().iter()
+            .find(|wire| wire["toPort"] == PARAM)
+            .expect("bundled max-iterations wire");
+        let nodes = family["group"]["nodes"].as_array().unwrap();
+        let domain = nodes.iter().find(|node| node["nodeId"] == "domain").expect("bundled domain");
+        let step = nodes.iter().find(|node| node["nodeId"] == "step").expect("bundled solver");
+        assert_eq!(wire(&domain["id"], &step["id"]), *shipped);
         let params = ids(&bundled["presetMetadata"]["params"]);
         let at = params.iter().position(|id| id == BESIDE).unwrap();
         assert_eq!(params[at + 1], PARAM, "the card sits after Solve Level");

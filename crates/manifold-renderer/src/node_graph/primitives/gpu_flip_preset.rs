@@ -561,14 +561,13 @@ fn shipped_preset() -> Value {
     serde_json::from_str(&json).expect("the GPU FLIP preset parses")
 }
 
-/// Reuse the existing surface verbatim, whether the seed is already grouped.
+/// Reuse the existing nested surface verbatim.
 fn surface_group() -> Value {
-    fn find(nodes: &[Value]) -> Option<&Value> {
-        nodes.iter().find(|n| n["nodeId"] == "surface").or_else(|| nodes.iter().find_map(|n|
-            n["group"]["nodes"].as_array().and_then(|nodes| find(nodes))))
-    }
     let preset = shipped_preset();
-    find(preset["nodes"].as_array().expect("preset nodes")).expect("liquid surface group").clone()
+    let family = preset["nodes"].as_array().expect("preset nodes").iter()
+        .find(|node| node["nodeId"] == "water_family").expect("Water family");
+    family["group"]["nodes"].as_array().expect("family nodes").iter()
+        .find(|node| node["nodeId"] == "surface").expect("liquid surface group").clone()
 }
 
 /// Stage and capture populations, including the unrendered dust oracle.
@@ -583,7 +582,7 @@ pub const LIQUID_BODY_OUTPUT: &str = "fluid_output";
 impl WaterScene {
     /// The shared insertion body: simulation, captured display and four looks.
     /// Preset colliders enter through the ordinary domain role interface.
-    fn with_whitewater(self) -> EffectGraphDef {
+    fn family_def(self) -> EffectGraphDef {
         let mut b = Builder::from_def(water_def(Self { obstacle: false, ..self.with_surface() }));
         b.remove(&["mesh_sink", "output"]);
         let [domain, state, step, frame, solid, source, surface] =
@@ -693,15 +692,25 @@ impl WaterScene {
         feed_intervals(&b.nodes, &mut b.wires, domain as u32);
         for node in &mut b.nodes {
             if node.group.is_some() { continue; }
-            let name = node.node_id.as_str();
-            node.handle = Some(match name {
-                "domain" => "Simulation".into(),
-                "initial_column" => "Initial Volume".into(),
-                "water_material" => "Material".into(),
-                "water_object" => String::new(),
-                "whitewater" => "Whitewater".into(),
-                _ => name.replace('_', " "),
-            });
+            node.handle = match node.node_id.as_str() {
+                "water_material" => Some("Water Material"),
+                "water_object" => Some("Water"),
+                "whitewater" => Some("Whitewater"),
+                "whitewater_budget" => Some("Whitewater Budget"),
+                "foam_object" => Some("Foam"),
+                "spray_object" => Some("Spray"),
+                "bubble_object" => Some("Bubbles"),
+                "foam_mesh" => Some("Foam Mesh"),
+                "foam_material" => Some("Foam Material"),
+                "foam_copies" => Some("Foam Copies"),
+                "spray_mesh" => Some("Spray Mesh"),
+                "spray_material" => Some("Spray Material"),
+                "spray_copies" => Some("Spray Copies"),
+                "bubble_mesh" => Some("Bubble Mesh"),
+                "bubble_material" => Some("Bubble Material"),
+                "bubble_copies" => Some("Bubble Copies"),
+                _ => None,
+            }.map(str::to_owned);
         }
         b.finish()
     }
@@ -709,28 +718,44 @@ impl WaterScene {
 
 /// The insertion body is the same family used by both presets, without a collider.
 pub fn gpu_flip_liquid_body() -> EffectGraphDef {
-    WaterScene { obstacle: false, ..WaterScene::dam_break(64) }.with_whitewater()
+    let mut body = WaterScene { obstacle: false, ..WaterScene::dam_break(64) }.family_def();
+    body.nodes.iter_mut().find(|node| node.node_id.as_str() == "water_object")
+        .expect("water object").handle = Some(String::new());
+    body
 }
 
 #[cfg(any(test, feature = "gpu-proofs"))]
 const SURFACE_DETAIL_OFFSET: usize = 1;
 
+#[cfg(any(test, feature = "gpu-proofs"))]
+const DRESSING: &[&str] = &["input", "camera", "environment", "light", "floor_mesh", "basin_material",
+        "floor_transform", "floor_object", "rear_mesh", "rear_transform", "rear_object", "left_mesh",
+        "left_transform", "left_object", "right_mesh", "right_transform", "right_object", "scene",
+        "final_output", "rim_light", "filmic_display", "sky_environment", "sky_exposure", "environment_select"];
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+fn assert_preset_root(nodes: &[EffectGraphNode]) {
+    for node in nodes {
+        assert!(DRESSING.contains(&node.node_id.as_str()) || matches!(node.node_id.as_str(),
+            "water_family" | "obstacle_transform" | "obstacle_collider" | "obstacle_mesh" |
+            "obstacle_material" | "obstacle_object"),
+            "unclassified top-level preset node would be discarded: {}", node.node_id.as_str());
+    }
+}
+
 /// Only authored environment/camera/tank dressing is read from the preset.
-/// The family is always constructed by WaterScene::with_whitewater.
+/// The family is always constructed by WaterScene::family_def.
 #[cfg(any(test, feature = "gpu-proofs"))]
 pub(crate) fn render_def(scene: WaterScene) -> EffectGraphDef {
     let preset = shipped_preset();
     let mut def: EffectGraphDef = serde_json::from_value(preset.clone()).expect("preset");
-    const DRESSING: &[&str] = &["input", "camera", "environment", "light", "floor_mesh", "basin_material",
-        "floor_transform", "floor_object", "rear_mesh", "rear_transform", "rear_object", "left_mesh",
-        "left_transform", "left_object", "right_mesh", "right_transform", "right_object", "scene",
-        "final_output", "rim_light", "filmic_display", "sky_environment", "sky_exposure", "environment_select"];
+    assert_preset_root(&def.nodes);
     def.nodes.retain(|n| DRESSING.contains(&n.node_id.as_str()));
     let ids: Vec<_> = def.nodes.iter().map(|n| n.id).collect();
     def.wires.retain(|w| ids.contains(&w.from_node) && ids.contains(&w.to_node));
     let mut b = Builder::from_def(def.clone());
     let render = b.id("scene");
-    let body = scene.with_whitewater();
+    let body = scene.family_def();
     let family = b.node("water_family", "group", json!({}));
     let inputs = if scene.obstacle { vec![json!({"name": "role_0", "portType": "FluidRole"})] } else { vec![] };
     let outputs: Vec<_> = FAMILY_OUTPUTS.iter().map(|name| json!({"name": name, "portType": "SceneObject"})).collect();
@@ -746,7 +771,7 @@ pub(crate) fn render_def(scene: WaterScene) -> EffectGraphDef {
     }
     if scene.obstacle { add_obstacle_render(&mut b, family, render); }
     let render_node = b.nodes.iter_mut().find(|n| n.id == render as u32).expect("render");
-    // Eleven former slots minus the removed dust slot (10); existing empty slot 6 remains.
+    // Physical slots span 0 through 9; slot 6 is intentionally empty.
     render_node.params.insert("objects".into(), serde_json::from_value(int(10)).expect("object count"));
     def.nodes = b.nodes;
     def.wires = b.wires;
@@ -770,6 +795,10 @@ fn add_obstacle_render(b: &mut Builder, family: usize, render: usize) {
     b.wire((material, "out"), object, "material");
     b.wire((transform, "transform"), object, "transform");
     b.wire((object, "object"), render, "object_1");
+    for (id, handle) in [(mesh, "Obstacle Mesh"), (material, "Obstacle Material"), (object, "Obstacle")] {
+        b.nodes.iter_mut().find(|node| node.id == id as u32).expect("obstacle node")
+            .handle = Some(handle.into());
+    }
 }
 
 /// The shipped Particle View, which [`particle_view_def`] builds from the
@@ -1600,14 +1629,22 @@ pub(super) mod tests {
             }).collect();
             (serde_json::to_value(nodes).unwrap(), serde_json::to_value(wires).unwrap())
         }
-        let body = gpu_flip_liquid_body();
-        for (def, particles) in [(render_def(WaterScene::dam_break(64)), false), (particle_view_def(), true)] {
+        let mut body = gpu_flip_liquid_body();
+        let water = body.nodes.iter_mut().find(|node| node.node_id.as_str() == "water_object").unwrap();
+        assert_eq!(water.handle.as_deref(), Some(""), "Add Fluid owns the bare fluid handle");
+        water.handle = Some("Water".into());
+        for (def, particles, obstacle) in [
+            (render_def(WaterScene::dam_break(64)), false, true),
+            (particle_view_def(), true, true),
+            (render_def(WaterScene { obstacle: false, ..WaterScene::dam_break(64) }), false, false),
+        ] {
             let saved = serde_json::to_string(&def).unwrap();
             let def: EffectGraphDef = serde_json::from_str(&saved).unwrap();
             let family = def.nodes.iter().find(|n| n.node_id.as_str() == "water_family").unwrap();
             let group = family.group.as_ref().expect("ordinary family group");
             assert_eq!(group.interface.outputs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), FAMILY_OUTPUTS);
-            assert!(group.interface.inputs.iter().all(|p| p.name != "obstacle_source"));
+            assert_eq!(group.interface.inputs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
+                if obstacle { vec!["role_0"] } else { vec![] });
             assert_eq!(facts(&body.nodes, &body.wires, particles), facts(&group.nodes, &group.wires, particles));
             assert_eq!(group.nodes.iter().filter(|n| n.type_id == "node.gpu_flip_domain").count(), 1);
             assert_eq!(group.nodes.iter().filter(|n| n.type_id == "node.whitewater_obstacle_source").count(), 1);
@@ -1634,6 +1671,21 @@ pub(super) mod tests {
         }
     }
 
+    #[test]
+    fn gpu_flip_shipped_scene_rows_keep_authored_names() {
+        use crate::node_graph::scene_vm::{SceneObjectVm, SceneVm};
+        let def = crate::node_graph::bundled_preset_def(&PresetTypeId::new(SHIPPED_PRESET)).unwrap();
+        let vm = SceneVm::from_def(def).expect("shipped scene resolves");
+        let names: Vec<_> = vm.objects.iter().filter_map(|object| match object {
+            SceneObjectVm::Known(row) => Some(row.name.as_str()),
+            _ => None,
+        }).collect();
+        for name in ["Water", "Foam", "Spray", "Bubbles", "Obstacle"] {
+            assert_eq!(names.iter().filter(|&&found| found == name).count(), 1, "{name}: {names:?}");
+        }
+        assert!(!names.contains(&""), "scene rows must have authored names");
+    }
+
     /// The shipped `WaterDamBreakGpuFlip.json` is the builder's Dam Break at 64,
     /// so the tests that build it run what ships. `UPDATE_GPU_FLIP_PRESET=1`
     /// rewrites it from the builder.
@@ -1657,6 +1709,8 @@ pub(super) mod tests {
     #[test]
     fn gpu_flip_particle_view_is_built_from_the_dam_break() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("assets/generator-presets/{PARTICLE_VIEW_PRESET}.json"));
+        let existing: EffectGraphDef = serde_json::from_str(&std::fs::read_to_string(&path).expect("Particle View reads")).expect("preset parses");
+        assert_preset_root(&existing.nodes);
         let def = particle_view_def();
         let built = serde_json::to_value(&def).expect("serialise");
         if std::env::var("UPDATE_GPU_FLIP_PRESET").is_ok() {

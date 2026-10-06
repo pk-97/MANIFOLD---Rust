@@ -608,7 +608,9 @@ mod ownership_tests {
         }).expect("the GPU FLIP water is a Known scene object on a liquid domain");
         assert!(water.physics.is_none(), "water has no physics of its own: {}", water.name);
         let domain = water.liquid_domain.as_ref().unwrap();
-        let domain_type = def.nodes.iter()
+        let flat = manifold_core::flatten::flatten_groups(def)
+            .expect("the GPU dam break scene flattens");
+        let domain_type = flat.nodes.iter()
             .find(|node| node.node_id == domain.node)
             .map(|node| node.type_id.as_str());
         assert_eq!(domain_type, Some(manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID));
@@ -628,8 +630,14 @@ mod ownership_tests {
         }).expect("the water is a scene object");
         let owned = object_controls(Some(def), water);
         let ids = parameter_ids_for_nodes(Some(def), &owned);
-        for id in ["whitewater_capacity", "475_enabled", "475_amount"] {
-            assert!(ids.iter().any(|actual| actual == id), "missing whitewater control {id} in {ids:?}");
+        assert!(ids.iter().any(|id| id == "whitewater_capacity"), "missing whitewater budget");
+        for param in ["enabled", "amount"] {
+            let binding = def.preset_metadata.as_ref().unwrap().bindings.iter().find(|binding| {
+                matches!(&binding.target, manifold_core::effect_graph_def::BindingTarget::Node {
+                    node_id, param: target_param,
+                } if node_id.as_str() == "whitewater" && target_param == param)
+            }).expect("the whitewater stage exposes its control");
+            assert!(ids.contains(&binding.id), "missing whitewater control {} in {ids:?}", binding.id);
         }
         let sections = sections_for_nodes(Some(def), &owned);
         assert!(sections.iter().any(|section| section == "Whitewater"), "{sections:?}");

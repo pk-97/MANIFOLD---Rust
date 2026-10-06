@@ -5,6 +5,7 @@
 
 use std::sync::Arc;
 
+use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::params::ParamManifest;
 use manifold_gpu::GpuTextureFormat;
 use manifold_renderer::frame_status::{FrameRenderFailure, FrameRenderStatus};
@@ -24,7 +25,11 @@ const HEIGHT: u32 = 90;
 #[test]
 fn node_error_fails_the_frame() {
     let harness = harness::shared();
-    let mut def: serde_json::Value = serde_json::from_str(DAM_BREAK_JSON).unwrap();
+    let grouped: EffectGraphDef = serde_json::from_str(DAM_BREAK_JSON).unwrap();
+    let mut def: serde_json::Value = serde_json::to_value(
+        manifold_core::flatten::flatten_groups(&grouped).unwrap(),
+    )
+    .unwrap();
     let domain = def["nodes"]
         .as_array_mut()
         .unwrap()

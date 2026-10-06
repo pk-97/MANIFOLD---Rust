@@ -174,11 +174,23 @@ mod tests {
     }
 
     fn surface(def: &EffectGraphDef) -> &GroupDef {
-        def.nodes.iter().find(|n| n.node_id.as_str() == "surface").unwrap().group.as_deref().unwrap()
+        // Saved v1160 fixtures predate Water; current presets own it inside Water.
+        let nodes = match def.nodes.iter().find(|node| node.node_id.as_str() == "water_family") {
+            Some(family) => &family.group.as_ref().expect("Water family body").nodes,
+            None => &def.nodes,
+        };
+        nodes.iter().find(|node| node.node_id.as_str() == "surface")
+            .expect("Liquid Surface group").group.as_deref().expect("Liquid Surface body")
     }
 
-    fn surface_mut(def: &mut EffectGraphDef) -> &mut GroupDef {
-        def.nodes.iter_mut().find(|n| n.node_id.as_str() == "surface").unwrap().group.as_deref_mut().unwrap()
+    fn surface_node_mut(def: &mut EffectGraphDef) -> &mut EffectGraphNode {
+        let family = def.nodes.iter().position(|node| node.node_id.as_str() == "water_family");
+        let nodes = match family {
+            Some(index) => &mut def.nodes[index].group.as_mut().expect("Water family body").nodes,
+            None => &mut def.nodes,
+        };
+        nodes.iter_mut().find(|node| node.node_id.as_str() == "surface")
+            .expect("Liquid Surface group")
     }
 
     fn volume(group: &GroupDef) -> &EffectGraphNode {
@@ -191,7 +203,7 @@ mod tests {
 
     fn legacy_shipped() -> EffectGraphDef {
         let mut def = shipped();
-        let group = surface_mut(&mut def);
+        let group = surface_node_mut(&mut def).group.as_deref_mut().unwrap();
         let old = brick(group).clone();
         group.nodes.retain(|n| n.id != old.id);
         group.wires.retain(|w| w.from_node != old.id && w.to_node != old.id);
@@ -210,7 +222,7 @@ mod tests {
         assert_eq!(new.interface, old.interface);
         assert_eq!(new.tint, old.tint);
         let mut restored = after.clone();
-        *surface_mut(&mut restored) = old.clone();
+        *surface_node_mut(&mut restored).group.as_deref_mut().unwrap() = old.clone();
         restored.preset_metadata.as_mut().unwrap().bindings.truncate(
             before.preset_metadata.as_ref().unwrap().bindings.len()
         );
@@ -259,21 +271,21 @@ mod tests {
                     }
                     remove_step(&mut def.nodes);
                 }
-                3 => def.nodes.iter_mut().find(|n| n.node_id.as_str() == "surface").unwrap().node_id = NodeId::new("custom_surface"),
-                4 => surface_mut(&mut def).nodes.iter_mut().find(|n| n.node_id.as_str() == "liquid_volume").unwrap().type_id = "node.custom_volume".into(),
+                3 => surface_node_mut(&mut def).node_id = NodeId::new("custom_surface"),
+                4 => surface_node_mut(&mut def).group.as_deref_mut().unwrap().nodes.iter_mut().find(|n| n.node_id.as_str() == "liquid_volume").unwrap().type_id = "node.custom_volume".into(),
                 5 => {
-                    let group = surface_mut(&mut def);
+                    let group = surface_node_mut(&mut def).group.as_deref_mut().unwrap();
                     let id = volume(group).id;
                     group.wires.retain(|w| w.to_node != id || w.to_port != "solid");
                 }
                 6 => {
-                    let group = surface_mut(&mut def);
+                    let group = surface_node_mut(&mut def).group.as_deref_mut().unwrap();
                     let id = volume(group).id;
                     let wire = group.wires.iter().find(|w| w.to_node == id && w.to_port == "band_extra").unwrap().clone();
                     group.wires.push(wire);
                 }
                 7 => {
-                    let group = surface_mut(&mut def);
+                    let group = surface_node_mut(&mut def).group.as_deref_mut().unwrap();
                     let target_handle = volume(group).handle.clone().unwrap();
                     group.interface.params.push(GroupParamDef {
                         name: "custom_detail".into(), target_handle, target_param: "resolution_scale".into(),
@@ -299,7 +311,7 @@ mod tests {
         binding.user_added = true;
         binding.default_mirrors_node_param = true;
         let original_binding = binding.clone();
-        let group = surface_mut(&mut def);
+        let group = surface_node_mut(&mut def).group.as_deref_mut().unwrap();
         let volume_id = volume(group).id;
         let mut source = volume(group).clone();
         source.id = group.nodes.iter().map(|n| n.id).max().unwrap() + 1;
@@ -355,9 +367,8 @@ mod tests {
         }));
         def.nodes.push(wrapper);
         prepare(&mut def);
-        let inner = &def.nodes[0].group.as_ref().unwrap().nodes;
-        let group = inner.iter().find(|n| n.node_id.as_str() == "surface").unwrap().group.as_ref().unwrap();
-        assert_eq!(group.nodes.iter().filter(|n| n.type_id == "node.lattice_bricks").count(), 1);
+        let flat = manifold_core::flatten::flatten_groups(&def).expect("nested fixture flattens");
+        assert_eq!(flat.nodes.iter().filter(|n| n.type_id == "node.lattice_bricks").count(), 1);
         let prepared = def.clone();
         prepare(&mut def);
         assert_eq!(def, prepared);
@@ -383,7 +394,7 @@ mod tests {
                 _ => {}
             }
         }
-        let surface_node = def.nodes.iter_mut().find(|n| n.node_id.as_str() == "surface").unwrap();
+        let surface_node = surface_node_mut(&mut def);
         surface_node.params.insert("particle_scale".into(), SerializedParamValue::Float { value: 3.0 });
         for node in &mut surface_node.group.as_deref_mut().unwrap().nodes {
             match node.node_id.as_str() {
@@ -400,7 +411,7 @@ mod tests {
             matches!(&b.target, BindingTarget::Node { node_id, param } if node_id.as_str() == "liquid_volume" && param == "resolution_scale")
         ).unwrap().offset = 2.0;
         // Exercise the old missing-bounds path through the real loader too.
-        let group = surface_mut(&mut def);
+        let group = surface_node_mut(&mut def).group.as_deref_mut().unwrap();
         let volume_id = volume(group).id;
         group.wires.retain(|w| w.to_node != volume_id || w.to_port != "bounds");
         let mut params = ParamManifest::from_params(def.preset_metadata.as_ref().unwrap().params.iter().cloned().map(Param::bundled).collect());
