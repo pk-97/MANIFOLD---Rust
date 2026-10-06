@@ -1,5 +1,6 @@
 # Whitewater per-tick golden (whitewater_tick_state_matches_golden)
-# sha cc8033f0e71e91421a37b65561ce98721dd77165
+# base 1a7fe1437
+# sha a2d089e2d12e289ae6bdc5bee5360032782f43e9
 # fixtures: shipped GPU FLIP Dam Break 64; all emitters; all emitters at budget 1000; 120 ticks each after restart
 # line: fixture tick N port bytes FNV-1a-64 over the whole buffer
 shipped tick 1 pool_out 4800000 7a46780a0607b725

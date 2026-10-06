@@ -194,12 +194,15 @@ pub(super) fn whitewater_render_def(scene: WaterScene) -> EffectGraphDef {
     g.finish()
 }
 
-/// `def` with the liquid domain's due ticks probed as `ticks`, so a proof can
-/// see how many ticks each frame ran.
+/// `def` with the liquid domain's clock probed under its own port names
+/// (`ticks`, `epoch`, `simulation_time`, `dropped_seconds`), so a proof can
+/// see how many ticks each frame ran and that the clock accepted them.
 pub(super) fn with_tick_probe(def: EffectGraphDef) -> EffectGraphDef {
     let mut g = Appender::new(def);
     let domain = g.id("domain");
-    g.probe("ticks", (domain, "ticks"));
+    for port in ["ticks", "epoch", "simulation_time", "dropped_seconds"] {
+        g.probe(port, (domain, port));
+    }
     g.finish()
 }
 
@@ -573,6 +576,12 @@ impl Show {
     pub(super) fn hold(&mut self, names: &[String]) {
         let held: Vec<manifold_core::NodeId> = names.iter().map(|name| manifold_core::NodeId::from(name.as_str())).collect();
         self.runtime.set_dump_arrays(None, &held);
+    }
+
+    /// The runtime still warming up, as `restart` leaves it when its frame
+    /// bound ran out.
+    pub(super) fn warmup_pending(&self) -> bool {
+        self.runtime.warmup_pending()
     }
 
     /// Every byte of the storage the named node provides on `port`, the
