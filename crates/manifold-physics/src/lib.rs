@@ -15,7 +15,9 @@ pub mod interaction;
 pub mod stepping;
 pub mod clock;
 pub mod particle_duration;
+pub mod coupled_motion;
 mod field_value;
+use coupled_motion::{SupportCount, SupportPoint, MAX_SUPPORT_POINTS};
 pub use field_value::FieldValue;
 pub use interaction::{
     FieldInput, RadialField, SampledField, ScaledField, SumField, TickStamp, UniformField,
@@ -183,6 +185,21 @@ mod ffi {
             body: u64,
             linear: *const f32,
             angular: *const f32,
+        ) -> i32;
+        pub fn manifold_box3d_body_apply_wrench(
+            body: u64,
+            force: *const f32,
+            torque: *const f32,
+            paused_out: *mut i32,
+        ) -> i32;
+        pub fn manifold_box3d_body_allow_sleep(body: u64);
+        pub fn manifold_box3d_body_support_points(
+            body: u64,
+            points: *mut f32,
+            capacity: i32,
+            count_out: *mut i32,
+            found_out: *mut i32,
+            unread_out: *mut i32,
         ) -> i32;
         pub fn manifold_box3d_body_apply_field(
             body: u64,
@@ -353,6 +370,8 @@ pub struct PhysicsWorld {
     bodies: Vec<BodyRecord>,
     field_scratch: Vec<FieldApplication>,
     impulse_scratch: Vec<ImpulseApplication>,
+    /// Bodies handed a reaction for the next step, kept awake through it.
+    reaction_awake: Vec<u64>,
     field_seen: Vec<bool>,
     // Cell is Send but not Sync, matching exclusive world ownership.
     _not_sync: PhantomData<Cell<()>>,
@@ -419,6 +438,7 @@ impl PhysicsWorld {
             bodies: Vec::new(),
             field_scratch: Vec::new(),
             impulse_scratch: Vec::new(),
+            reaction_awake: Vec::new(),
             field_seen: Vec::new(),
             _not_sync: PhantomData,
         })
@@ -546,6 +566,7 @@ impl PhysicsWorld {
             .reserve(self.bodies.len().saturating_sub(self.field_scratch.len()));
         self.impulse_scratch
             .reserve(self.bodies.len().saturating_sub(self.impulse_scratch.len()));
+        self.reaction_awake.reserve(self.bodies.len().saturating_sub(self.reaction_awake.len()));
         Ok(BodyHandle {
             provenance: self.provenance,
             index: index as u32,
@@ -636,6 +657,7 @@ impl PhysicsWorld {
             .reserve(self.bodies.len().saturating_sub(self.field_scratch.len()));
         self.impulse_scratch
             .reserve(self.bodies.len().saturating_sub(self.impulse_scratch.len()));
+        self.reaction_awake.reserve(self.bodies.len().saturating_sub(self.reaction_awake.len()));
         Ok(BodyHandle {
             provenance: self.provenance,
             index: index as u32,
@@ -697,6 +719,10 @@ impl PhysicsWorld {
         }
         let _lock = native_lock();
         unsafe { ffi::manifold_box3d_world_step(self.native, dt_f32, substeps) };
+        for &native in &self.reaction_awake {
+            unsafe { ffi::manifold_box3d_body_allow_sleep(native) };
+        }
+        self.reaction_awake.clear();
         Ok(())
     }
 
@@ -1067,6 +1093,67 @@ impl PhysicsWorld {
     /// Apply a validated batch of center-of-mass linear and angular impulses.
     /// The complete batch is checked before any native body is modified.
     pub fn apply_impulses(&mut self, impulses: &[BodyImpulse]) -> Result<(), PhysicsError> {
+        self.deliver_impulses(impulses, None)
+    }
+
+    /// Queue a liquid's reaction for the next step as a steady force J/dt and
+    /// torque L/dt at each centre of mass, keeping the body awake through
+    /// that step: sleep would zero the velocity the liquid's law predicted
+    /// (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` D17). Box3D clears forces after
+    /// every step, so a tick split into several steps queues before each and
+    /// still delivers J and L in all. Validated as [`Self::apply_impulses`].
+    pub fn queue_reaction_over_step(&mut self, reactions: &[BodyImpulse], dt: Seconds) -> Result<(), PhysicsError> {
+        let dt_f32 = dt.0 as f32;
+        if !dt.0.is_finite() || dt.0 <= 0.0 || !dt_f32.is_finite() || dt_f32 <= 0.0 {
+            return Err(PhysicsError::InvalidInput("dt must be finite and positive"));
+        }
+        self.deliver_impulses(reactions, Some(dt_f32))
+    }
+
+    /// `body`'s touching contact points with static and kinematic bodies
+    /// (`docs/LIQUID_SOLVER_SEAM_DESIGN.md` D16), up to `out`'s length and
+    /// [`MAX_SUPPORT_POINTS`]. A full `out` still holds a point of every
+    /// support: the bridge takes every contact's first touching point before
+    /// any second.
+    pub fn support_points(&self, body: BodyHandle, out: &mut [SupportPoint]) -> Result<SupportCount, PhysicsError> {
+        let native = self.native_body(body)?;
+        let capacity = out.len().min(MAX_SUPPORT_POINTS);
+        let mut raw = [[0.0f32; 20]; MAX_SUPPORT_POINTS];
+        let (mut kept, mut found, mut unread) = (0, 0, 0);
+        let result = {
+            let _lock = native_lock();
+            unsafe {
+                ffi::manifold_box3d_body_support_points(
+                    native,
+                    raw.as_mut_ptr().cast(),
+                    capacity as i32,
+                    &mut kept,
+                    &mut found,
+                    &mut unread,
+                )
+            }
+        };
+        if result != 0 || !(0..=capacity as i32).contains(&kept) || found < kept || unread < 0 {
+            return Err(PhysicsError::NativeFailure);
+        }
+        for (point, raw) in out.iter_mut().zip(&raw[..kept as usize]) {
+            *point = SupportPoint {
+                lever: [raw[0], raw[1], raw[2]],
+                friction: raw[3],
+                normal: [raw[4], raw[5], raw[6]],
+                support_velocity: [raw[8], raw[9], raw[10]],
+                support_spin: raw[11],
+                patch: raw[7] as u32,
+                patch_lever: [raw[12], raw[13], raw[14]],
+                patch_velocity: [raw[16], raw[17], raw[18]],
+            };
+        }
+        Ok(SupportCount { kept: kept as usize, found: found as usize, unread: unread as usize })
+    }
+
+    /// Impulses applied at once, or spread as force over a step of `over`
+    /// seconds.
+    fn deliver_impulses(&mut self, impulses: &[BodyImpulse], over: Option<f32>) -> Result<(), PhysicsError> {
         self.field_seen.fill(false);
         self.impulse_scratch.clear();
         let result = (|| {
@@ -1132,20 +1219,41 @@ impl PhysicsWorld {
                 if preflight_result != 0 {
                     return Err(PhysicsError::InvalidInput("impulse result is invalid"));
                 }
-                self.impulse_scratch.push(ImpulseApplication {
-                    native,
-                    linear: impulse.linear,
-                    angular: impulse.angular,
-                });
+                // Spread over a step, it is applied as force J/dt and torque
+                // L/dt, checked here so no body is touched when one overflows.
+                let (linear, angular) = match over {
+                    None => (impulse.linear, impulse.angular),
+                    Some(dt) => (impulse.linear.map(|j| j / dt), impulse.angular.map(|l| l / dt)),
+                };
+                validate_vec3(linear, "reaction force")?;
+                validate_vec3(angular, "reaction torque")?;
+                self.impulse_scratch.push(ImpulseApplication { native, linear, angular });
             }
 
             for application in &self.impulse_scratch {
-                let apply_result = unsafe {
-                    ffi::manifold_box3d_body_apply_impulse(
-                        application.native,
-                        application.linear.as_ptr(),
-                        application.angular.as_ptr(),
-                    )
+                let apply_result = match over {
+                    None => unsafe {
+                        ffi::manifold_box3d_body_apply_impulse(
+                            application.native,
+                            application.linear.as_ptr(),
+                            application.angular.as_ptr(),
+                        )
+                    },
+                    Some(_) => {
+                        let mut paused = 0;
+                        let result = unsafe {
+                            ffi::manifold_box3d_body_apply_wrench(
+                                application.native,
+                                application.linear.as_ptr(),
+                                application.angular.as_ptr(),
+                                &mut paused,
+                            )
+                        };
+                        if paused != 0 {
+                            self.reaction_awake.push(application.native);
+                        }
+                        result
+                    }
                 };
                 if apply_result != 0 {
                     return Err(PhysicsError::NativeFailure);

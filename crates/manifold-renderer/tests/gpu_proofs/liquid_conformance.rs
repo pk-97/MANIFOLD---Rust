@@ -23,9 +23,10 @@ use manifold_renderer::gpu_encoder::GpuEncoder;
 use manifold_renderer::node_graph::fluid::TICK;
 use manifold_renderer::node_graph::fluid_particles::FluidParticle;
 use manifold_renderer::node_graph::liquid::bodies::LiquidBody;
+use manifold_renderer::node_graph::liquid::coupling::HANDOVER_BOUND;
 use manifold_renderer::node_graph::liquid::grid::{FACE_GRID_PORTS, face_len};
 use manifold_renderer::node_graph::liquid::conformance::{
-    BoxScene, Check, FIXTURE_DENSITY, Fixture, LIQUID_SOLVERS, LiquidSolverRow, LiquidTotals, set_type_param,
+    BoxScene, Check, FIXTURE_DENSITY, Fixture, LIQUID_SOLVERS, LiquidSolverRow, LiquidTotals, STACK_HEIGHT, set_type_param,
 };
 use manifold_renderer::node_graph::physics::{PhysicsStepScope, native_ticks_on_this_thread};
 use manifold_renderer::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
@@ -47,7 +48,8 @@ const SIZE: u32 = 64;
 const G: f64 = 9.81;
 
 /// Domain scalars the probe records, where the domain publishes them.
-const DOMAIN_SCALARS: [&str; 5] = ["simulation_time", "display_time", "ticks", "epoch", "body_count"];
+const DOMAIN_SCALARS: [&str; 8] =
+    ["simulation_time", "display_time", "ticks", "epoch", "body_count", "handover_position", "handover_velocity", "handover_rotation"];
 /// The particle frame's scalars (GPU_FLUID_SURFACE_DESIGN.md section 3 (The
 /// particle-frame contract)).
 const FRAME_SCALARS: [&str; 6] = ["count_a", "count_b", "identity_a", "identity_b", "blend", "span"];
@@ -728,9 +730,20 @@ const ENERGY_BOUND: f64 = 1.01;
 /// impulse cannot reach a body coupled to Live Matter yet (BUG-5svo (impulse
 /// cannot be fired at a body coupled to Live Matter water)).
 #[test]
-fn liquid_coupling_collision() {
-    for row in running(Check::Collision) {
-        for &fixture in Check::Collision.fixtures(row.coupled) {
+fn liquid_coupling_collision_momentum() {
+    coupling_collision(Check::CollisionMomentum);
+}
+
+/// The energy half of the collision proof above (D20: each exemption covers
+/// one assertion).
+#[test]
+fn liquid_coupling_collision_energy() {
+    coupling_collision(Check::CollisionEnergy);
+}
+
+fn coupling_collision(check: Check) {
+    for row in running(check) {
+        for &fixture in check.fixtures(row.coupled) {
             let Fixture::Collision { density_ratio } = fixture else { panic!("{fixture:?} is not a collision") };
             let scene = box_scene(fixture);
             let mass = f64::from(scene.mass);
@@ -808,13 +821,16 @@ fn liquid_coupling_collision() {
                 row.type_id
             );
             assert!(initial > 0.0);
-            assert!(body_peak <= ENERGY_BOUND, "{} ratio {density_ratio}: body energy reached {body_peak:.4}× the start", row.type_id);
-            assert!(
-                total_peak <= ENERGY_BOUND,
-                "{} ratio {density_ratio}: body plus liquid energy reached {total_peak:.4}× the start",
-                row.type_id
-            );
             assert!(exchanged > 0.5, "{} ratio {density_ratio}: the box barely touched the pool ({exchanged:.3} kg·m/s)", row.type_id);
+            if check == Check::CollisionEnergy {
+                assert!(body_peak <= ENERGY_BOUND, "{} ratio {density_ratio}: body energy reached {body_peak:.4}× the start", row.type_id);
+                assert!(
+                    total_peak <= ENERGY_BOUND,
+                    "{} ratio {density_ratio}: body plus liquid energy reached {total_peak:.4}× the start",
+                    row.type_id
+                );
+                continue;
+            }
             assert!(
                 residual_norm <= MOMENTUM_BALANCE * exchanged,
                 "{} ratio {density_ratio}: body plus liquid momentum drifted {residual:?} (|R| {residual_norm:.4e}) \
@@ -870,6 +886,7 @@ fn liquid_export_matches_live_project_schedule() {
 /// over the same second as the centre.
 #[test]
 fn liquid_floating_draft() {
+    let mut misses = Misses::new(Check::FloatingDraft);
     for row in running(Check::FloatingDraft) {
         for &fixture in Check::FloatingDraft.fixtures(row.coupled) {
             let scene = box_scene(fixture);
@@ -943,14 +960,16 @@ fn liquid_floating_draft() {
                 (centre - waterline) / dx,
                 0.5 * (hi - lo)
             );
-            assert!(
-                (centre - waterline).abs() <= 0.5 * dx,
-                "{}: box centre {centre:.4} is not within half a cell ({:.4}) of the waterline {waterline:.4}",
-                row.type_id,
-                0.5 * dx
-            );
+            misses.check(row, "draft", (centre - waterline).abs() <= 0.5 * dx, || {
+                format!(
+                    "{}: box centre {centre:.4} is not within half a cell ({:.4}) of the waterline {waterline:.4}",
+                    row.type_id,
+                    0.5 * dx
+                )
+            });
         }
     }
+    misses.assert_none("liquid_floating_draft");
 }
 
 /// I5: a box as dense as the liquid, under 0.8 m of it, feels the weight of
@@ -996,6 +1015,343 @@ fn liquid_hydrostatic_lift() {
             assert!(error.abs() <= 0.05, "{}: lift {force:.1} N is not within 5% of {expected:.1} N", row.type_id);
         }
     }
+}
+
+/// A rest proof's run at Sim Rate `hz`, one tick per frame.
+fn rest_run(row: &'static LiquidSolverRow, fixture: Fixture, hz: u32) -> LiquidRun {
+    LiquidRun::on_project_rate(row, scene(row, fixture), f64::from(60 / hz), false, false, None, f64::from(hz))
+}
+
+/// GPU FLIP's stats word counting particles a solid would not release this
+/// tick (`liquid_stats.rs`'s layout; word 9).
+const PUSH_REFUSED_WORD: usize = 9;
+
+/// One tick of a rest proof: every body row, the liquid's totals, the
+/// particles left inside a solid (GPU FLIP; 0 for a liquid without the count),
+/// and the handover error of the tick it settled (m, m/s, rad; NaN where the
+/// domain does not publish it).
+struct RestTick {
+    bodies: Vec<LiquidBody>,
+    liquid: LiquidTotals,
+    refused: u32,
+    handover: [f32; 3],
+}
+
+fn rest_tick(run: &mut LiquidRun, row: &LiquidSolverRow, bodies: usize) -> RestTick {
+    let probe = run.step();
+    assert_eq!(probe.get("ticks"), 1.0, "{}: a rest proof's frames each run one tick", row.type_id);
+    assert_eq!(probe.get("body_count"), bodies as f32, "{}: the scene holds {bodies} bodies", row.type_id);
+    let liquid = run.totals(row);
+    assert_eq!(liquid.nonfinite, 0, "{}: a non-finite tick", row.type_id);
+    let mut rows: Vec<LiquidBody> = run.read(run.domain_type, "bodies");
+    rows.truncate(bodies);
+    let refused = if row.type_id == GPU_FLIP_DOMAIN_TYPE_ID { run.totals_words(row)[PUSH_REFUSED_WORD] } else { 0 };
+    let handover = ["handover_position", "handover_velocity", "handover_rotation"].map(|name| probe.get(name));
+    RestTick { bodies: rows, liquid, refused, handover }
+}
+
+fn refused(ticks: &[RestTick]) -> u32 {
+    ticks.iter().map(|t| t.refused).sum()
+}
+
+fn rest_ticks(run: &mut LiquidRun, row: &LiquidSolverRow, bodies: usize, n: u32) -> Vec<RestTick> {
+    (0..n).map(|_| rest_tick(run, row, bodies)).collect()
+}
+
+/// How fast a box moved over one tick, m/s: its centre's travel plus its
+/// turn times the half diagonal, from the tick-start rows either side.
+fn tick_motion(before: &LiquidBody, after: &LiquidBody, edge: f64, dt: f64) -> f64 {
+    let (a, b) = (v3(before.position_inv_mass), v3(after.position_inv_mass));
+    let travel = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2) + (b[2] - a[2]).powi(2)).sqrt();
+    let q = |body: &LiquidBody| body.rotation.map(f64::from);
+    let (p, r) = (q(before), q(after));
+    let cos_half = (p[0] * r[0] + p[1] * r[1] + p[2] * r[2] + p[3] * r[3]).abs().min(1.0);
+    let turn = 2.0 * cos_half.acos();
+    (travel + turn * 0.5 * edge * 3f64.sqrt()) / dt
+}
+
+/// What a window of ticks shows of body `k` at rest.
+struct Rest {
+    rms: f64,
+    peak: f64,
+    drift: f64,
+    mean_y: f64,
+}
+
+fn rest_over(ticks: &[RestTick], k: usize, edge: f64, dt: f64) -> Rest {
+    let motions: Vec<f64> = ticks.windows(2).map(|w| tick_motion(&w[0].bodies[k], &w[1].bodies[k], edge, dt)).collect();
+    let rms = (motions.iter().map(|m| m * m).sum::<f64>() / motions.len() as f64).sqrt();
+    let peak = motions.iter().copied().fold(0.0, f64::max);
+    let at = |t: &RestTick| v3(t.bodies[k].position_inv_mass);
+    let (first, last) = (at(&ticks[0]), at(&ticks[ticks.len() - 1]));
+    let drift = ((last[0] - first[0]).powi(2) + (last[1] - first[1]).powi(2) + (last[2] - first[2]).powi(2)).sqrt();
+    let mean_y = ticks.iter().map(|t| f64::from(t.bodies[k].position_inv_mass[1])).sum::<f64>() / ticks.len() as f64;
+    Rest { rms, peak, drift, mean_y }
+}
+
+/// The share of the first tick's liquid mass gone by the lowest tick: in a
+/// closed tank, lost mass is water removed. The mass is a fixed-order sum
+/// over the particles, so an unchanged count gives the same bits.
+fn water_lost(ticks: &[RestTick]) -> f64 {
+    let start = ticks[0].liquid.mass;
+    let least = ticks.iter().map(|t| t.liquid.mass).fold(f64::MAX, f64::min);
+    assert!(start > 0.0, "the first tick weighs the liquid");
+    ((start - least) / start).max(0.0)
+}
+
+/// A proof's misses, every row and rate reported before it fails. A miss a
+/// row lists as known red is printed instead; one that never fails is a miss.
+struct Misses {
+    check: Check,
+    misses: Vec<String>,
+    known_failed: Vec<(&'static str, &'static str)>,
+}
+
+impl Misses {
+    fn new(check: Check) -> Self {
+        Self { check, misses: Vec::new(), known_failed: Vec::new() }
+    }
+
+    fn check(&mut self, row: &LiquidSolverRow, miss: &'static str, held: bool, what: impl FnOnce() -> String) {
+        if held {
+            return;
+        }
+        match row.known_red(self.check, miss) {
+            Some(reason) => {
+                eprintln!("known red, {reason}: {}", what());
+                self.known_failed.push((row.type_id, miss));
+            }
+            None => self.misses.push(what()),
+        }
+    }
+
+    fn assert_none(mut self, proof: &str) {
+        for row in running(self.check) {
+            for known in row.known_red.iter().filter(|known| known.check == self.check) {
+                if !self.known_failed.contains(&(row.type_id, known.miss)) {
+                    self.misses.push(format!(
+                        "{}: the known red miss {:?} held in every case; if {} is fixed, drop it from the table",
+                        row.type_id, known.miss, known.reason
+                    ));
+                }
+            }
+        }
+        assert!(self.misses.is_empty(), "{proof}:\n{}", self.misses.join("\n"));
+    }
+}
+
+/// I20, Sim Rates the light box is checked at: the rest motion grows with
+/// the tick, so the slowest rate is the hardest.
+const FLOATING_REST_RATES: [u32; 3] = [15, 30, 60];
+
+/// I20: a box at 0.05 and 0.5 of the liquid's density, let go 5 cm above
+/// where it floats, comes to rest at 15, 30 and 60 Hz: over the last 3 s of
+/// 7, RMS motion under 1 cm/s and drift under 1 cm, its centre within a cell
+/// of where it floats, and no water removed. Guards against a run that
+/// passes by not moving: every frame runs a tick, the drop sets the water
+/// moving, and the water holds the box up (its push over the window within
+/// 30% of the box's weight).
+#[test]
+fn liquid_floating_rest() {
+    let mut misses = Misses::new(Check::FloatingRest);
+    for row in running(Check::FloatingRest) {
+        for &fixture in Check::FloatingRest.fixtures(row.coupled) {
+            let Fixture::FloatingAt { density_ratio } = fixture else { panic!("{fixture:?} is not a floating box") };
+            let scene = box_scene(fixture);
+            let (edge, dx) = (f64::from(scene.edge), cell(&scene));
+            let floats_at = f64::from(scene.fill) + edge * (0.5 - f64::from(density_ratio));
+            for hz in FLOATING_REST_RATES {
+                let dt = 1.0 / f64::from(hz);
+                let mut run = rest_run(row, fixture, hz);
+                let mut ticks = rest_ticks(&mut run, row, 1, 4 * hz);
+                let stirred = ticks.iter().map(|t| t.liquid.energy).fold(0.0, f64::max);
+                let window = rest_ticks(&mut run, row, 1, 3 * hz);
+                let push = window.windows(2).map(|w| w[1].bodies[0].linear_velocity[1] - w[0].bodies[0].linear_velocity[1]).sum::<f32>();
+                let lift = (f64::from(push) / (window.len() - 1) as f64 / dt + G) / G;
+                let rest = rest_over(&window, 0, edge, dt);
+                ticks.extend(window);
+                let lost = water_lost(&ticks);
+                let what = format!("{} ratio {density_ratio} at {hz} Hz", row.type_id);
+                eprintln!(
+                    "liquid_floating_rest {what}: RMS motion {:.4} m/s, peak {:.4} m/s, drift {:.4} m, centre {:.4} m \
+                     against {floats_at:.4} m, liquid lift {lift:.2} g, water stirred to {stirred:.3e} J, water lost {:.4}%, \
+                     left inside a solid {}",
+                    rest.rms, rest.peak, rest.drift, rest.mean_y, 100.0 * lost, refused(&ticks)
+                );
+                misses.check(row, "stirred", stirred > 1e-4, || format!("{what}: the drop never set the water moving"));
+                misses.check(row, "lift", (lift - 1.0).abs() <= 0.3, || format!("{what}: the water holds up {lift:.2} of the box's weight"));
+                misses.check(row, "centre", (rest.mean_y - floats_at).abs() <= dx, || {
+                    format!("{what}: centre {:.4} m is not within a cell of {floats_at:.4} m", rest.mean_y)
+                });
+                misses.check(row, "lost", lost == 0.0, || format!("{what}: {:.4}% of the water removed", 100.0 * lost));
+                let stuck = refused(&ticks);
+                misses.check(row, "refused", stuck == 0, || format!("{what}: {stuck} particles left inside a solid"));
+                misses.check(row, "rms", rest.rms <= 0.01, || format!("{what}: RMS motion {:.4} m/s at rest", rest.rms));
+                misses.check(row, "drift", rest.drift <= 0.01, || format!("{what}: drifted {:.4} m in 3 s", rest.drift));
+            }
+        }
+    }
+    misses.assert_none("liquid_floating_rest");
+}
+
+/// I20: a box twice the liquid's density, flat on the floor against a wall
+/// under 1 m of water, stays put at 15 and 30 Hz: over 10 s after a 1 s
+/// settle, RMS motion under 1 mm/s, no tick faster than 5 mm/s (Box3D's soft
+/// contact and the water's pressure leave sub-millimetre jitter; a visible
+/// twitch is centimetres a second), and no water removed.
+#[test]
+fn liquid_resting_contact() {
+    let mut misses = Misses::new(Check::RestingContact);
+    for row in running(Check::RestingContact) {
+        for &fixture in Check::RestingContact.fixtures(row.coupled) {
+            let scene = box_scene(fixture);
+            let edge = f64::from(scene.edge);
+            for hz in [15, 30] {
+                let dt = 1.0 / f64::from(hz);
+                let mut run = rest_run(row, fixture, hz);
+                let mut ticks = rest_ticks(&mut run, row, 1, hz);
+                let window = rest_ticks(&mut run, row, 1, 10 * hz);
+                let rest = rest_over(&window, 0, edge, dt);
+                ticks.extend(window);
+                let lost = water_lost(&ticks);
+                let what = format!("{} at {hz} Hz", row.type_id);
+                eprintln!(
+                    "liquid_resting_contact {what}: RMS motion {:.5} m/s, peak {:.5} m/s, drift {:.5} m, water lost {:.4}%, \
+                     left inside a solid {}",
+                    rest.rms, rest.peak, rest.drift, 100.0 * lost, refused(&ticks)
+                );
+                misses.check(row, "lost", lost == 0.0, || format!("{what}: {:.4}% of the water removed", 100.0 * lost));
+                let stuck = refused(&ticks);
+                misses.check(row, "refused", stuck == 0, || format!("{what}: {stuck} particles left inside a solid"));
+                misses.check(row, "rms", rest.rms <= 1e-3, || format!("{what}: the resting box moves at {:.5} m/s RMS", rest.rms));
+                misses.check(row, "peak", rest.peak <= 5e-3, || format!("{what}: the resting box twitched at {:.5} m/s", rest.peak));
+            }
+        }
+    }
+    misses.assert_none("liquid_resting_contact");
+}
+
+/// I20: a box at 0.3 of the liquid's density resting on one bottom edge on
+/// the floor under 1 m of water, so water reaches under it, leaves the floor
+/// within a second and is at the surface by 4 s, with no water removed.
+#[test]
+fn liquid_lift_off() {
+    let mut misses = Misses::new(Check::LiftOff);
+    for row in running(Check::LiftOff) {
+        for &fixture in Check::LiftOff.fixtures(row.coupled) {
+            let scene = box_scene(fixture);
+            let dx = cell(&scene);
+            let hz = 30;
+            let mut run = rest_run(row, fixture, hz);
+            let ticks = rest_ticks(&mut run, row, 1, 4 * hz);
+            let height = |t: &RestTick| f64::from(t.bodies[0].position_inv_mass[1]);
+            let start = height(&ticks[0]);
+            let left = ticks.iter().position(|t| height(t) > start + 2.0 * dx);
+            let end = height(&ticks[ticks.len() - 1]);
+            let lost = water_lost(&ticks);
+            let what = row.type_id.to_string();
+            eprintln!(
+                "liquid_lift_off {what}: left the floor at tick {left:?} of {hz} a second, centre {start:.4} m to {end:.4} m \
+                 at 4 s, water lost {:.4}%, left inside a solid {}",
+                100.0 * lost,
+                refused(&ticks)
+            );
+            misses.check(row, "left", left.is_some_and(|tick| tick < hz as usize), || format!("{what}: the light box did not leave the floor within a second"));
+            misses.check(row, "surface", end > f64::from(scene.fill) - f64::from(scene.edge), || format!("{what}: the light box sits at {end:.4} m, not at the surface"));
+            misses.check(row, "lost", lost == 0.0, || format!("{what}: {:.4}% of the water removed", 100.0 * lost));
+            let stuck = refused(&ticks);
+            misses.check(row, "refused", stuck == 0, || format!("{what}: {stuck} particles left inside a solid"));
+        }
+    }
+    misses.assert_none("liquid_lift_off");
+}
+
+/// I20: three boxes half again as dense as the liquid, stacked on the floor
+/// under 1 m of water, settle at 30 Hz: over 8 s no body moves faster than
+/// 2 m/s, over the last 2 s each body's RMS motion is under 1 cm/s, and no
+/// water is removed. The evidence for repeated swaps within a tick
+/// (section 7 (Deferred)).
+#[test]
+fn liquid_submerged_stack() {
+    let mut misses = Misses::new(Check::SubmergedStack);
+    for row in running(Check::SubmergedStack) {
+        for &fixture in Check::SubmergedStack.fixtures(row.coupled) {
+            let scene = box_scene(fixture);
+            let (edge, hz) = (f64::from(scene.edge), 30);
+            let dt = 1.0 / f64::from(hz);
+            let mut run = rest_run(row, fixture, hz);
+            let boxes = STACK_HEIGHT as usize;
+            let ticks = rest_ticks(&mut run, row, boxes, 8 * hz);
+            let peak = ticks
+                .iter()
+                .flat_map(|t| t.bodies.iter())
+                .map(|b| dot(v3(b.linear_velocity), v3(b.linear_velocity)).sqrt())
+                .fold(0.0, f64::max);
+            let last = &ticks[ticks.len() - 2 * hz as usize..];
+            let rests: Vec<Rest> = (0..boxes).map(|k| rest_over(last, k, edge, dt)).collect();
+            let lost = water_lost(&ticks);
+            let what = row.type_id.to_string();
+            eprintln!(
+                "liquid_submerged_stack {what}: peak speed {peak:.4} m/s, RMS motion over the last 2 s {:.4?} m/s, \
+                 heights {:.4?} m, water lost {:.4}%, left inside a solid {}",
+                rests.iter().map(|r| r.rms).collect::<Vec<_>>(),
+                rests.iter().map(|r| r.mean_y).collect::<Vec<_>>(),
+                100.0 * lost,
+                refused(&ticks)
+            );
+            misses.check(row, "lost", lost == 0.0, || format!("{what}: {:.4}% of the water removed under the stack", 100.0 * lost));
+            let stuck = refused(&ticks);
+            misses.check(row, "refused", stuck == 0, || format!("{what}: {stuck} particles left inside a solid"));
+            misses.check(row, "peak", peak <= 2.0, || format!("{what}: a stacked box reached {peak:.3} m/s"));
+            for (k, rest) in rests.iter().enumerate() {
+                misses.check(row, "rms", rest.rms <= 0.01, || format!("{what}: stacked box {k} still moves at {:.4} m/s", rest.rms));
+            }
+        }
+    }
+    misses.assert_none("liquid_submerged_stack");
+}
+
+/// I19 (D18): the floating rest boxes and the light box lifting off, at 15,
+/// 30 and 60 Hz over 3 s: Box3D ends every tick within 0.5 mm, 5 mm/s and
+/// 0.1° of where the coupled motion law put the body. Guards: the box moves
+/// more than a centimetre, so the law and the handoff are exercised, and the
+/// check measures a nonzero error on some tick (one that never ran reads 0).
+#[test]
+fn liquid_handover_agreement() {
+    let mut misses = Misses::new(Check::HandoverAgreement);
+    let bound = [HANDOVER_BOUND.position, HANDOVER_BOUND.velocity, HANDOVER_BOUND.rotation];
+    for row in running(Check::HandoverAgreement) {
+        for &fixture in Check::HandoverAgreement.fixtures(row.coupled) {
+            for hz in FLOATING_REST_RATES {
+                let mut run = rest_run(row, fixture, hz);
+                let ticks = rest_ticks(&mut run, row, 1, 3 * hz);
+                // The first frame's figures belong to no settled tick.
+                let worst = ticks[1..].iter().fold([0.0f32; 3], |w, t| std::array::from_fn(|k| w[k].max(t.handover[k])));
+                let start = v3(ticks[0].bodies[0].position_inv_mass);
+                let travel = ticks
+                    .iter()
+                    .map(|t| {
+                        let at = v3(t.bodies[0].position_inv_mass);
+                        (0..3).map(|k| (at[k] - start[k]).powi(2)).sum::<f64>().sqrt()
+                    })
+                    .fold(0.0, f64::max);
+                let what = format!("{} {fixture:?} at {hz} Hz", row.type_id);
+                eprintln!(
+                    "liquid_handover_agreement {what}: worst {:.2e} m, {:.2e} m/s, {:.3}°; travelled {travel:.3} m",
+                    worst[0],
+                    worst[1],
+                    worst[2].to_degrees()
+                );
+                misses.check(row, "published", ticks.iter().all(|t| t.handover.iter().all(|v| v.is_finite())), || format!("{what}: no handover error published"));
+                misses.check(row, "travel", travel > 0.01, || format!("{what}: the box never moved ({travel:.4} m)"));
+                misses.check(row, "measured", worst[0] > 0.0 || worst[1] > 0.0, || format!("{what}: the check never measured"));
+                for (k, unit) in ["m", "m/s", "rad"].into_iter().enumerate() {
+                    misses.check(row, "bound", worst[k] <= bound[k], || format!("{what}: handover error {:.3e} {unit} over {:.1e}", worst[k], bound[k]));
+                }
+            }
+        }
+    }
+    misses.assert_none("liquid_handover_agreement");
 }
 
 /// One coupled substep of a neutral box, as either solver saw it: vertical

@@ -1973,6 +1973,12 @@
     },
     {
       "fromNode": 0,
+      "fromPort": "contacts",
+      "toNode": 6,
+      "toPort": "contacts"
+    },
+    {
+      "fromNode": 0,
       "fromPort": "shapes",
       "toNode": 6,
       "toPort": "shapes"

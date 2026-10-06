@@ -1,10 +1,13 @@
 //! The rigid owner of a coupled GPU liquid (`docs/LIQUID_SOLVER_SEAM_DESIGN.md`
-//! section 3.3, D6). The scene's Box3D world runs one tick behind the liquid:
-//! liquid tick k runs on the GPU from the bodies' state at its start, and
-//! once its GPU work has retired, [`LiquidRigidOwner::settle_ready`] has
-//! the solver decode the tick's reaction into one impulse per body and steps
-//! Box3D over the same tick. The domain waits at tick boundaries before
-//! reading reactions, including between ticks of a coupled live frame.
+//! section 3.3, D6, D15-D18). The scene's Box3D world runs one tick behind
+//! the liquid: liquid tick k runs on the GPU from the bodies' state and
+//! support points at its start, moving each body by the coupled motion law
+//! and holding it on its supports through each pressure solve. Once its GPU
+//! work has retired, [`LiquidRigidOwner::settle_ready`] has the solver
+//! decode the tick's reaction into one impulse per body and steps Box3D
+//! over the same tick with that reaction as a steady force. The domain waits
+//! at tick boundaries before reading reactions, including between ticks of a
+//! coupled live frame.
 //!
 //! The domain's closed faces are walls for the liquid, so they are walls for
 //! the bodies: the owner installs a fixed slab just outside each closed face,
@@ -13,10 +16,11 @@
 
 use std::sync::Arc;
 
+use manifold_physics::coupled_motion::{coupled_state_at, coupled_substep, CoupledStart, SupportPoint, MAX_SUPPORT_POINTS};
 use manifold_physics::stepping::{StepCoupling, SubstepExchange, Uncoupled};
 use manifold_physics::{BodyHandle, BodyImpulse, PhysicsWorld, Seconds, TickStamp};
 
-use super::bodies::LiquidBody;
+use super::bodies::{pack_supports, unpack_supports, BodySupports, LiquidBody};
 #[cfg(test)]
 use crate::node_graph::fluid::TICK;
 use crate::node_graph::fluid::{CoupledRigidFrame, CoupledRigidLayout, FluidDomainLayout};
@@ -43,6 +47,20 @@ pub struct PendingTick {
     /// Frame-clock stamp of the frame that ran the tick (0 = already retired).
     pub stamp: u64,
 }
+
+/// How far Box3D's end of a tick is from the law's, worst body (D18).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct HandoverError {
+    /// m.
+    pub position: f32,
+    /// m/s.
+    pub velocity: f32,
+    /// rad.
+    pub rotation: f32,
+}
+
+/// D18's bounds: past any, the tick is logged.
+pub const HANDOVER_BOUND: HandoverError = HandoverError { position: 5e-4, velocity: 5e-3, rotation: 0.1 * std::f32::consts::PI / 180.0 };
 
 /// A dynamic body with a collider shape: it takes the liquid's reaction. A
 /// NaN inverse mass is not dynamic.
@@ -146,7 +164,9 @@ pub struct LiquidRigidOwner {
     geometries: Vec<Arc<PreparedFluidGeometry>>,
     frame: CoupledRigidFrame,
     rows: Vec<LiquidBody>,
+    contacts: Vec<BodySupports>,
     impulses: Vec<BodyImpulse>,
+    handover: HandoverError,
     pending: Option<PendingTick>,
 }
 
@@ -222,12 +242,14 @@ impl LiquidRigidOwner {
             geometries,
             frame,
             rows: Vec::new(),
+            contacts: Vec::new(),
             impulses: Vec::new(),
+            handover: HandoverError::default(),
             pending: None,
         };
         owner.update_friction(inputs);
         let world = owner.rigid.native_world().expect("prepared above");
-        capture_rows(world, &owner.bodies, &mut owner.rows)?;
+        capture_rows(world, &owner.bodies, &mut owner.rows, &mut owner.contacts)?;
         Ok(owner)
     }
 
@@ -252,6 +274,17 @@ impl LiquidRigidOwner {
     /// body.
     pub fn rows(&self) -> &[LiquidBody] {
         &self.rows
+    }
+
+    /// Each coupled body's support points at the start of the next
+    /// liquid tick, in row order.
+    pub fn contacts(&self) -> &[BodySupports] {
+        &self.contacts
+    }
+
+    /// The last settled tick's handover error (D18).
+    pub fn handover(&self) -> HandoverError {
+        self.handover
     }
 
     /// Each coupled body's hull about its centre of mass, unscaled.
@@ -305,7 +338,7 @@ impl LiquidRigidOwner {
         self.update_friction(inputs);
         let world = self.rigid.native_world().ok_or("Liquid coupling: reanchor lost the rigid world")?;
         self.layout.capture(world, &mut self.frame)?;
-        capture_rows(world, &self.bodies, &mut self.rows)
+        capture_rows(world, &self.bodies, &mut self.rows, &mut self.contacts)
     }
 
     /// Finish a required tick boundary after the caller waits for the GPU.
@@ -367,9 +400,10 @@ impl LiquidRigidOwner {
             frame: &mut self.frame,
             bodies: &self.bodies,
             rows: &mut self.rows,
+            contacts: &mut self.contacts,
             impulses: &self.impulses,
+            handover: &mut self.handover,
             begun: false,
-            applied: false,
             finished: false,
         };
         self.walled.clone_from(inputs);
@@ -407,10 +441,28 @@ fn hull_geometry(world: &PhysicsWorld, handle: BodyHandle) -> Result<(Arc<Prepar
 
 /// Each coupled body's state as a row: its centre of mass, 1/m, velocities,
 /// world inverse inertia (angular acceleration in the rows' w) and the
-/// predicted linear acceleration; shape −1 while disabled.
-fn capture_rows(world: &PhysicsWorld, bodies: &[Coupled], rows: &mut Vec<LiquidBody>) -> Result<(), String> {
+/// predicted linear acceleration; shape −1 while disabled. With it, the
+/// body's support points (D16).
+fn capture_rows(
+    world: &PhysicsWorld,
+    bodies: &[Coupled],
+    rows: &mut Vec<LiquidBody>,
+    contacts: &mut Vec<BodySupports>,
+) -> Result<(), String> {
     rows.clear();
+    contacts.clear();
     for (index, body) in bodies.iter().enumerate() {
+        let mut points = [SupportPoint::default(); MAX_SUPPORT_POINTS];
+        let count = world.support_points(body.handle, &mut points).map_err(|error| error.to_string())?;
+        if !count.complete() {
+            log::warn!(
+                "Liquid coupling: body {index} touches {} support points ({} contacts unread); the liquid sees {}",
+                count.found,
+                count.unread,
+                count.kept
+            );
+        }
+        contacts.push(pack_supports(&points[..count.kept]));
         let d = world.dynamics(body.handle).map_err(|error| error.to_string())?;
         let pose = world.pose(body.handle).map_err(|error| error.to_string())?;
         let (c, v, w, i, a, alpha) = (
@@ -435,8 +487,9 @@ fn capture_rows(world: &PhysicsWorld, bodies: &[Coupled], rows: &mut Vec<LiquidB
     Ok(())
 }
 
-/// The single exchange of one settled tick: the liquid's reaction goes in as
-/// one impulse before Box3D's first contact substep; the end state comes out.
+/// The exchange of one settled tick: the liquid's reaction goes in as a
+/// steady force over every Box3D step of the tick (D17); the end state comes
+/// out, checked against the law (D18).
 pub struct LiquidCoupling<'a> {
     expected: TickStamp,
     duration: Seconds,
@@ -444,9 +497,10 @@ pub struct LiquidCoupling<'a> {
     frame: &'a mut CoupledRigidFrame,
     bodies: &'a [Coupled],
     rows: &'a mut Vec<LiquidBody>,
+    contacts: &'a mut Vec<BodySupports>,
     impulses: &'a [BodyImpulse],
+    handover: &'a mut HandoverError,
     begun: bool,
-    applied: bool,
     finished: bool,
 }
 
@@ -483,20 +537,84 @@ impl SubstepExchange for &mut LiquidCoupling<'_> {
     }
 
     fn exchange(&mut self, rigid: &mut PhysicsWorld, _: Seconds) -> Result<(), String> {
-        if !self.applied {
-            self.applied = true;
-            rigid.apply_impulses(self.impulses).map_err(|error| error.to_string())?;
-        }
-        Ok(())
+        rigid.queue_reaction_over_step(self.impulses, self.duration).map_err(|error| error.to_string())
     }
 
     fn finish(self, rigid: &PhysicsWorld) -> Result<(), String> {
+        *self.handover = handover_error(rigid, self.bodies, self.rows, self.contacts, self.impulses, self.duration)?;
+        if self.handover.position > HANDOVER_BOUND.position
+            || self.handover.velocity > HANDOVER_BOUND.velocity
+            || self.handover.rotation > HANDOVER_BOUND.rotation
+        {
+            log::warn!("Liquid coupling: tick {} ended {:?} from the coupled motion law", self.expected.tick, self.handover);
+        }
         self.layout.capture(rigid, self.frame)?;
         self.frame.stamp = TickStamp { epoch: self.expected.epoch, tick: self.expected.tick + 1 };
-        capture_rows(rigid, self.bodies, self.rows)?;
+        capture_rows(rigid, self.bodies, self.rows, self.contacts)?;
         self.finished = true;
         Ok(())
     }
+}
+
+/// D18: Box3D's end of the tick against the law at its end, from each dynamic
+/// body's tick-start row and contacts under the reaction it was handed;
+/// the worst body per measure.
+fn handover_error(
+    rigid: &PhysicsWorld,
+    bodies: &[Coupled],
+    rows: &[LiquidBody],
+    contacts: &[BodySupports],
+    impulses: &[BodyImpulse],
+    duration: Seconds,
+) -> Result<HandoverError, String> {
+    let mut worst = HandoverError::default();
+    let (t, h) = (duration.0 as f32, coupled_substep(duration));
+    for ((body, row), contacts) in bodies.iter().zip(rows).zip(contacts) {
+        if !takes_reaction(row) {
+            continue;
+        }
+        let (push, turn) = impulses
+            .iter()
+            .find(|impulse| impulse.body == body.handle)
+            .map_or(([0.0; 3], [0.0; 3]), |impulse| (impulse.linear, impulse.angular));
+        let mut points = [SupportPoint::default(); MAX_SUPPORT_POINTS];
+        let count = unpack_supports(contacts, &mut points);
+        let law = coupled_state_at(&coupled_start(row), &points[..count], push, turn, t, h);
+        let end = rigid.dynamics(body.handle).map_err(|error| error.to_string())?;
+        let rotation = rigid.pose(body.handle).map_err(|error| error.to_string())?.rotation;
+        let gap = |a: [f32; 3], b: [f32; 3]| (0..3).map(|i| (a[i] - b[i]).powi(2)).sum::<f32>().sqrt();
+        worst.position = worst.position.max(gap(law.position, end.center_of_mass));
+        worst.velocity = worst.velocity.max(gap(law.linear_velocity, end.linear_velocity));
+        worst.rotation = worst.rotation.max(quaternion_angle(law.rotation, rotation));
+    }
+    Ok(worst)
+}
+
+/// A coupled row as the law's start state.
+pub(crate) fn coupled_start(row: &LiquidBody) -> CoupledStart {
+    let xyz = |v: [f32; 4]| [v[0], v[1], v[2]];
+    CoupledStart {
+        position: xyz(row.position_inv_mass),
+        rotation: row.rotation,
+        linear_velocity: xyz(row.linear_velocity),
+        angular_velocity: xyz(row.angular_velocity),
+        inverse_mass: row.position_inv_mass[3],
+        inverse_inertia: [xyz(row.inv_inertia_x), xyz(row.inv_inertia_y), xyz(row.inv_inertia_z)],
+        linear_acceleration: xyz(row.accel_shape),
+        angular_acceleration: [row.inv_inertia_x[3], row.inv_inertia_y[3], row.inv_inertia_z[3]],
+    }
+}
+
+/// The angle between two unit quaternions, radians.
+fn quaternion_angle(a: [f32; 4], b: [f32; 4]) -> f32 {
+    // conj(a) ⊗ b
+    let r = [
+        a[3] * b[0] - a[0] * b[3] - a[1] * b[2] + a[2] * b[1],
+        a[3] * b[1] + a[0] * b[2] - a[1] * b[3] - a[2] * b[0],
+        a[3] * b[2] - a[0] * b[1] + a[1] * b[0] - a[2] * b[3],
+        a[3] * b[3] + a[0] * b[0] + a[1] * b[1] + a[2] * b[2],
+    ];
+    2.0 * (r[0] * r[0] + r[1] * r[1] + r[2] * r[2]).sqrt().atan2(r[3].abs())
 }
 
 #[cfg(test)]
