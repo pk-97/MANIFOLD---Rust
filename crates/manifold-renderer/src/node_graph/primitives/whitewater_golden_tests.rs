@@ -286,21 +286,21 @@ fn record_candidate(lines: &[String]) {
     const MODULES: &str = "src/node_graph/primitives/mod.rs";
     let changed = git(&["diff", "--quiet", BASE, "HEAD", "--", "src", ":(exclude)*_tests.rs", ":(exclude)**/tests/**", &format!(":(exclude){MODULES}")]);
     assert!(changed.status.success(), "renderer sources differ from the pinned base {BASE}; refusing to record");
-    // The module list may differ only by this test's own registration: HEAD
-    // minus that consecutive cfg-then-mod pair must be the base, so the
-    // allowed cfg cannot land on some other module. Compared as files, since
-    // a diff may slide an insertion between identical lines.
+    // The module list may differ only by this test's own registration, at
+    // one fixed place after a complete declaration, byte for byte: the
+    // allowed cfg can neither land on another module nor take over an
+    // existing attribute.
     let file_at = |rev: &str| {
         let shown = git(&["show", &format!("{rev}:crates/manifold-renderer/{MODULES}")]);
         assert!(shown.status.success(), "git show {rev}:{MODULES} failed; refusing to record");
-        String::from_utf8_lossy(&shown.stdout).lines().map(str::to_string).collect::<Vec<_>>()
+        shown.stdout
     };
-    let (base_modules, mut head_modules) = (file_at(BASE), file_at("HEAD"));
-    let registration = ["#[cfg(all(test, feature = \"gpu-proofs\"))]", "mod whitewater_golden_tests;"];
-    if let Some(at) = head_modules.windows(2).position(|pair| pair == registration) {
-        head_modules.drain(at..at + 2);
-    }
-    assert!(head_modules == base_modules, "{MODULES} differs from {BASE} beyond this test's registration; refusing to record");
+    let base_modules = String::from_utf8(file_at(BASE)).expect("utf-8 module list");
+    let anchor = "\nmod whitewater_scene_tests;\n";
+    assert_eq!(base_modules.matches(anchor).count(), 1, "the registration anchor moved; refusing to record");
+    let registered = base_modules.replacen(
+        anchor, &format!("{anchor}#[cfg(all(test, feature = \"gpu-proofs\"))]\nmod whitewater_golden_tests;\n"), 1);
+    assert!(file_at("HEAD") == registered.as_bytes(), "{MODULES} differs from {BASE} beyond this test's registration; refusing to record");
     let header = format!(
         "# Whitewater per-tick golden (whitewater_tick_state_matches_golden)\n# base {BASE}\n# sha {sha}\n# fixtures: shipped GPU FLIP Dam Break 64; all emitters; all emitters at budget 1000; {TICKS} ticks each after restart\n# line: fixture tick N port bytes FNV-1a-64 over the whole buffer\n"
     );
