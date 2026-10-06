@@ -1889,90 +1889,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 === effect:CodeTerminal node:30 ===
-struct Params {
-    n0_columns: f32,
-    n0_rows: f32,
-    n1_exponent: f32,
-    _pad0: u32,
-}
-
-@group(0) @binding(0) var<uniform> params: Params;
-@group(0) @binding(1) var src_0: texture_2d<f32>;
-@group(0) @binding(2) var<storage, read> src_1: array<u32>;
-@group(0) @binding(3) var samp: sampler;
-@group(0) @binding(4) var dst_0: texture_storage_2d<rgba16float, write>;
-@group(0) @binding(5) var dst_1: texture_storage_2d<rgba16float, write>;
-
-const ATLAS_WIDTH: f32 = 512.0;
-const ATLAS_HEIGHT: f32 = 288.0;
-const TILE_WIDTH: f32 = 32.0;
-const TILE_HEIGHT: f32 = 48.0;
-const ATLAS_COLUMNS: u32 = 16u;
-
-fn n0_body(
-    atlas: texture_2d<f32>,
-    atlas_sampler: sampler,
-    uv: vec2<f32>,
-    dims: vec2<f32>,
-    columns: f32,
-    rows: f32,
-) -> vec4<f32> {
-    // Keep the scalar-to-index conversion bounded even if a live control wire
-    // supplies a value outside the editor's nominal parameter range.
-    let cols = u32(clamp(round(columns), 1.0, 4096.0));
-    let row_count = u32(clamp(round(rows), 1.0, 4096.0));
-    let grid = vec2<f32>(f32(cols), f32(row_count));
-    let cell = min(floor(uv * grid), grid - vec2<f32>(1.0));
-    let cell_index = u32(cell.y) * cols + u32(cell.x);
-
-    let cell_count = arrayLength(&src_1);
-    if (cell_index >= cell_count) {
-        return vec4<f32>(0.0, 0.0, 0.0, 1.0);
-    }
-    let codepoint = src_1[cell_index];
-    if (codepoint < 32u || codepoint > 127u) {
-        return vec4<f32>(0.0, 0.0, 0.0, 1.0);
-    }
-
-    let slot = codepoint - 32u;
-    let local = fract(uv * grid);
-    let tile = vec2<f32>(f32(slot % ATLAS_COLUMNS), f32(slot / ATLAS_COLUMNS));
-
-    // Discard excess atlas padding, preserving every glyph's common baseline.
-    // The original full-tile stretch made terminal text look letter-spaced.
-    // This inner 26×44 rectangle retains the ink and stays inside the tile.
-    let atlas_px = tile * vec2<f32>(TILE_WIDTH, TILE_HEIGHT)
-        + vec2<f32>(2.5)
-        + local * vec2<f32>(25.0, 43.0);
-    let atlas_uv = atlas_px / vec2<f32>(ATLAS_WIDTH, ATLAS_HEIGHT);
-    let coverage = textureSampleLevel(atlas, atlas_sampler, atlas_uv, 0.0).r;
-    return vec4<f32>(coverage, coverage, coverage, 1.0);
-}
-
-fn n1_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, exponent: f32) -> vec4<f32> {
-    return vec4<f32>(
-        pow(max(c.r, 0.0), exponent),
-        pow(max(c.g, 0.0), exponent),
-        pow(max(c.b, 0.0), exponent),
-        c.a,
-    );
-}
-
-@compute @workgroup_size(16, 16)
-fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
-    let dims = textureDimensions(dst_0);
-    if id.x >= dims.x || id.y >= dims.y {
-        return;
-    }
-    let coord = vec2<i32>(i32(id.x), i32(id.y));
-    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
-    let r0 = n0_body(src_0, samp, uv, vec2<f32>(dims), params.n0_columns, params.n0_rows);
-    let r1 = n1_body(r0, uv, vec2<f32>(dims), params.n1_exponent);
-    textureStore(dst_0, coord, r0);
-    textureStore(dst_1, coord, r1);
-}
-
-=== effect:CodeTerminal node:31 ===
 // @input_access: src_0 coincident
 struct Params {
     n0_algorithm: u32,
@@ -2161,41 +2077,41 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst_1, coord, r6);
 }
 
-=== effect:CodeTerminal node:32 ===
-// @input_access: src_0 gather
-// @input_access: src_1 coincident
-// @input_access: src_2 coincident
-// @input_access: src_3 coincident
-// @input_access: src_4 gather
-// @input_access: src_5 coincident
+=== effect:CodeTerminal node:31 ===
 struct Params {
     n0_block_size: f32,
     n0_columns: f32,
     n0_rows: f32,
     n1_exponent: f32,
-    n2_amount: f32,
-    n3_amount: f32,
-    n3_mode: u32,
-    n4_block_size: f32,
+    n2_block_size: f32,
+    n2_columns: f32,
+    n2_rows: f32,
+    n3_low: f32,
+    n3_high: f32,
     n4_columns: f32,
     n4_rows: f32,
-    n5_low: f32,
-    n5_high: f32,
+    n5_exponent: f32,
     n6_amount: f32,
-    _pad0: u32,
-    _pad1: u32,
-    _pad2: u32,
+    n7_amount: f32,
+    n7_mode: u32,
+    n8_amount: f32,
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var src_0: texture_2d<f32>;
 @group(0) @binding(2) var src_1: texture_2d<f32>;
 @group(0) @binding(3) var src_2: texture_2d<f32>;
-@group(0) @binding(4) var src_3: texture_2d<f32>;
+@group(0) @binding(4) var<storage, read> src_3: array<u32>;
 @group(0) @binding(5) var src_4: texture_2d<f32>;
 @group(0) @binding(6) var src_5: texture_2d<f32>;
 @group(0) @binding(7) var samp: sampler;
 @group(0) @binding(8) var dst: texture_storage_2d<rgba16float, write>;
+
+const ATLAS_WIDTH: f32 = 512.0;
+const ATLAS_HEIGHT: f32 = 288.0;
+const TILE_WIDTH: f32 = 32.0;
+const TILE_HEIGHT: f32 = 48.0;
+const ATLAS_COLUMNS: u32 = 16u;
 
 fn overlay_channel(a: f32, b: f32) -> f32 {
     if a < 0.5 {
@@ -2255,25 +2171,7 @@ fn n1_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, exponent: f32) -> vec4<
     );
 }
 
-fn n2_body(a: vec4<f32>, b: vec4<f32>, mask: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32) -> vec4<f32> {
-    let weight = clamp(mask.r * amount, 0.0, 1.0);
-    return mix(a, b, weight);
-}
-
-fn n3_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
-    let blended = blend_rgb(a.rgb, b.rgb, mode);
-    let out_rgb = mix(a.rgb, blended, amount);
-    // Branchless on purpose: an `if` here compiles differently in fused vs
-    // standalone kernel contexts (FMA regrouping) and broke the fp32
-    // bit-exact proof (precision contract section 7.1's "match the exact arithmetic
-    // form" gotcha). mix(x, y, 0.0) = x + (y-x)*0.0 = x exactly, so t_a = 0
-    // IS alpha pass-through, in the original instruction shape.
-    let t_a = select(0.0, amount, mode == 0u);
-    let out_a = mix(a.a, b.a, t_a);
-    return vec4<f32>(out_rgb, out_a);
-}
-
-fn n4_body(source: texture_2d<f32>, samp: sampler, uv: vec2<f32>, dims: vec2<f32>, block_size: f32, columns: f32, rows: f32) -> vec4<f32> {
+fn n2_body(source: texture_2d<f32>, samp: sampler, uv: vec2<f32>, dims: vec2<f32>, block_size: f32, columns: f32, rows: f32) -> vec4<f32> {
     let group = max(round(block_size), 1.0);
     let size = vec2<f32>(
         select(group, dims.x * group / max(columns, 1.0), columns > 0.0),
@@ -2286,7 +2184,7 @@ fn n4_body(source: texture_2d<f32>, samp: sampler, uv: vec2<f32>, dims: vec2<f32
     return textureSampleLevel(source, samp, sample_uv, 0.0);
 }
 
-fn n5_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, low: f32, high: f32) -> vec4<f32> {
+fn n3_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, low: f32, high: f32) -> vec4<f32> {
     return vec4<f32>(
         smoothstep(low, high, c.r),
         smoothstep(low, high, c.g),
@@ -2295,7 +2193,74 @@ fn n5_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, low: f32, high: f32) ->
     );
 }
 
+fn n4_body(
+    atlas: texture_2d<f32>,
+    atlas_sampler: sampler,
+    uv: vec2<f32>,
+    dims: vec2<f32>,
+    columns: f32,
+    rows: f32,
+) -> vec4<f32> {
+    // Keep the scalar-to-index conversion bounded even if a live control wire
+    // supplies a value outside the editor's nominal parameter range.
+    let cols = u32(clamp(round(columns), 1.0, 4096.0));
+    let row_count = u32(clamp(round(rows), 1.0, 4096.0));
+    let grid = vec2<f32>(f32(cols), f32(row_count));
+    let cell = min(floor(uv * grid), grid - vec2<f32>(1.0));
+    let cell_index = u32(cell.y) * cols + u32(cell.x);
+
+    let cell_count = arrayLength(&src_3);
+    if (cell_index >= cell_count) {
+        return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    }
+    let codepoint = src_3[cell_index];
+    if (codepoint < 32u || codepoint > 127u) {
+        return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    }
+
+    let slot = codepoint - 32u;
+    let local = fract(uv * grid);
+    let tile = vec2<f32>(f32(slot % ATLAS_COLUMNS), f32(slot / ATLAS_COLUMNS));
+
+    // Discard excess atlas padding, preserving every glyph's common baseline.
+    // The original full-tile stretch made terminal text look letter-spaced.
+    // This inner 26×44 rectangle retains the ink and stays inside the tile.
+    let atlas_px = tile * vec2<f32>(TILE_WIDTH, TILE_HEIGHT)
+        + vec2<f32>(2.5)
+        + local * vec2<f32>(25.0, 43.0);
+    let atlas_uv = atlas_px / vec2<f32>(ATLAS_WIDTH, ATLAS_HEIGHT);
+    let coverage = textureSampleLevel(atlas, atlas_sampler, atlas_uv, 0.0).r;
+    return vec4<f32>(coverage, coverage, coverage, 1.0);
+}
+
+fn n5_body(c: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, exponent: f32) -> vec4<f32> {
+    return vec4<f32>(
+        pow(max(c.r, 0.0), exponent),
+        pow(max(c.g, 0.0), exponent),
+        pow(max(c.b, 0.0), exponent),
+        c.a,
+    );
+}
+
 fn n6_body(a: vec4<f32>, b: vec4<f32>, mask: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32) -> vec4<f32> {
+    let weight = clamp(mask.r * amount, 0.0, 1.0);
+    return mix(a, b, weight);
+}
+
+fn n7_body(a: vec4<f32>, b: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32, mode: u32) -> vec4<f32> {
+    let blended = blend_rgb(a.rgb, b.rgb, mode);
+    let out_rgb = mix(a.rgb, blended, amount);
+    // Branchless on purpose: an `if` here compiles differently in fused vs
+    // standalone kernel contexts (FMA regrouping) and broke the fp32
+    // bit-exact proof (precision contract section 7.1's "match the exact arithmetic
+    // form" gotcha). mix(x, y, 0.0) = x + (y-x)*0.0 = x exactly, so t_a = 0
+    // IS alpha pass-through, in the original instruction shape.
+    let t_a = select(0.0, amount, mode == 0u);
+    let out_a = mix(a.a, b.a, t_a);
+    return vec4<f32>(out_rgb, out_a);
+}
+
+fn n8_body(a: vec4<f32>, b: vec4<f32>, mask: vec4<f32>, uv: vec2<f32>, dims: vec2<f32>, amount: f32) -> vec4<f32> {
     let weight = clamp(mask.r * amount, 0.0, 1.0);
     return mix(a, b, weight);
 }
@@ -2308,21 +2273,21 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     let coord = vec2<i32>(i32(id.x), i32(id.y));
     let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
-    let ext_1 = textureSampleLevel(src_1, samp, uv, 0.0);
-    let ext_2 = textureSampleLevel(src_2, samp, uv, 0.0);
-    let ext_3 = textureLoad(src_3, coord, 0);
+    let ext_4 = textureLoad(src_4, coord, 0);
     let ext_5 = textureLoad(src_5, coord, 0);
     let r0 = n0_body(src_0, samp, uv, vec2<f32>(dims), params.n0_block_size, params.n0_columns, params.n0_rows);
     let r1 = n1_body(r0, uv, vec2<f32>(dims), params.n1_exponent);
-    let r2 = n2_body(ext_1, ext_2, r1, uv, vec2<f32>(dims), params.n2_amount);
-    let r3 = n3_body(ext_3, r2, uv, vec2<f32>(dims), params.n3_amount, params.n3_mode);
-    let r4 = n4_body(src_4, samp, uv, vec2<f32>(dims), params.n4_block_size, params.n4_columns, params.n4_rows);
-    let r5 = n5_body(r4, uv, vec2<f32>(dims), params.n5_low, params.n5_high);
-    let r6 = n6_body(ext_5, r3, r5, uv, vec2<f32>(dims), params.n6_amount);
-    textureStore(dst, coord, r6);
+    let r2 = n2_body(src_1, samp, uv, vec2<f32>(dims), params.n2_block_size, params.n2_columns, params.n2_rows);
+    let r3 = n3_body(r2, uv, vec2<f32>(dims), params.n3_low, params.n3_high);
+    let r4 = n4_body(src_2, samp, uv, vec2<f32>(dims), params.n4_columns, params.n4_rows);
+    let r5 = n5_body(r4, uv, vec2<f32>(dims), params.n5_exponent);
+    let r6 = n6_body(r4, r5, r1, uv, vec2<f32>(dims), params.n6_amount);
+    let r7 = n7_body(ext_4, r6, uv, vec2<f32>(dims), params.n7_amount, params.n7_mode);
+    let r8 = n8_body(ext_5, r7, r3, uv, vec2<f32>(dims), params.n8_amount);
+    textureStore(dst, coord, r8);
 }
 
-=== effect:CodeTerminal node:33 ===
+=== effect:CodeTerminal node:32 ===
 // @input_access: src_0 coincident
 struct Params {
     n0_gain: f32,
@@ -17785,6 +17750,1174 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let r0 = n0_body(idx, count, params.n0_nodes_x, params.n0_nodes_y, params.n0_nodes_z, params.n0_size_x, params.n0_size_y, params.n0_size_z, params.n0_band, params.n0_enabled);
     let r1 = n1_body(idx, count, r0, params.n1_offset);
     dst[idx] = r1;
+}
+
+=== generator:WaterSeaWallGpuFlip node:103 ===
+struct Params {
+    n0_nodes_x: f32,
+    n0_nodes_y: f32,
+    n0_nodes_z: f32,
+    n0_passes: f32,
+    n0_axis: i32,
+    n1_center_x: f32,
+    n1_center_y: f32,
+    n1_center_z: f32,
+    n1_size_x: f32,
+    n1_size_y: f32,
+    n1_size_z: f32,
+    n1_nodes_x: f32,
+    n1_nodes_y: f32,
+    n1_nodes_z: f32,
+    n1_solid_nodes_x: f32,
+    n1_solid_nodes_y: f32,
+    n1_solid_nodes_z: f32,
+    n1_cell_size: f32,
+    _pad0: u32,
+    _pad1: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> src_0: array<f32>;
+@group(0) @binding(2) var<storage, read> src_1: array<f32>;
+// @fused_output
+@group(0) @binding(3) var<storage, read_write> dst: array<f32>;
+// @fused_output_capacity: s0
+
+fn smooth_weight(passes: i32, d: i32) -> f32 {
+    var rows = array<f32, 15>(
+        0.25, 0.5, 0.25,
+        0.0625, 0.25, 0.375, 0.25, 0.0625,
+        0.015625, 0.09375, 0.234375, 0.3125, 0.234375, 0.09375, 0.015625,
+    );
+    let offset = select(select(8, 3, passes == 2), 0, passes == 1);
+    return rows[offset + passes + d];
+}
+
+fn smooth_lattice_element(idx: u32, count: u32, nodes_x: f32, nodes_y: f32, nodes_z: f32, passes: f32, axis: i32, brick_pass: u32) -> f32 {
+    let value = src_0[idx];
+    let p = i32(clamp(round(passes), 0.0, 3.0));
+    if p == 0 || min(min(nodes_x, nodes_y), nodes_z) < 2.0 {
+        return value;
+    }
+    let nodes = vec3<i32>(vec3<f32>(nodes_x, nodes_y, nodes_z));
+    if idx >= u32(nodes.x) * u32(nodes.y) * u32(nodes.z) {
+        return value;
+    }
+    let node = vec3<i32>(
+        i32(idx % u32(nodes.x)),
+        i32((idx / u32(nodes.x)) % u32(nodes.y)),
+        i32(idx / (u32(nodes.x) * u32(nodes.y))),
+    );
+    if brick_pass == 2u {
+        // Every tap is the same exterior value. Keep the dense multiply/add
+        // sequence: a binomial row summing to one need not return its input
+        // bit-for-bit in f32 (particularly three passes).
+        var exterior = 0.0;
+        for (var d = -p; d <= p; d = d + 1) {
+            exterior = exterior + smooth_weight(p, d) * value;
+        }
+        return exterior;
+    }
+    let a = clamp(axis, 0, 2);
+    var sum = 0.0;
+    for (var d = -p; d <= p; d = d + 1) {
+        var q = node;
+        q[a] = clamp(node[a] + d, 0, nodes[a] - 1);
+        sum = sum + smooth_weight(p, d) * src_0[u32(q.x + nodes.x * (q.y + nodes.y * q.z))];
+    }
+    return sum;
+}
+
+fn clamp_liquid_solid_at(p: vec3<f32>, lattice_min: vec3<f32>, spacing: vec3<f32>, nodes: vec3<u32>) -> f32 {
+    let g = clamp((p - lattice_min) / spacing, vec3<f32>(0.0), vec3<f32>(nodes - vec3<u32>(1u)));
+    let base = min(vec3<u32>(floor(g)), nodes - vec3<u32>(2u));
+    let f = g - vec3<f32>(base);
+    var value = 0.0;
+    for (var corner = 0u; corner < 8u; corner = corner + 1u) {
+        let o = vec3<u32>(corner & 1u, (corner >> 1u) & 1u, (corner >> 2u) & 1u);
+        let at = base + o;
+        let w = select(1.0 - f.x, f.x, o.x == 1u)
+            * select(1.0 - f.y, f.y, o.y == 1u)
+            * select(1.0 - f.z, f.z, o.z == 1u);
+        value = value + w * src_1[at.x + nodes.x * (at.y + nodes.y * at.z)];
+    }
+    return value;
+}
+
+fn clamp_liquid_to_solids_element(
+    idx: u32,
+    count: u32,
+    e_levelset: f32,
+    center_x: f32,
+    center_y: f32,
+    center_z: f32,
+    size_x: f32,
+    size_y: f32,
+    size_z: f32,
+    nodes_x: f32,
+    nodes_y: f32,
+    nodes_z: f32,
+    solid_nodes_x: f32,
+    solid_nodes_y: f32,
+    solid_nodes_z: f32,
+    cell_size: f32,
+    brick_pass: u32,
+) -> f32 {
+    let lattice = vec3<f32>(nodes_x, nodes_y, nodes_z);
+    let solid_lattice = vec3<f32>(solid_nodes_x, solid_nodes_y, solid_nodes_z);
+    if any(lattice < vec3<f32>(2.0)) || any(solid_lattice < vec3<f32>(2.0)) {
+        return e_levelset;
+    }
+    let nodes = vec3<u32>(lattice);
+    let solid_nodes = vec3<u32>(solid_lattice);
+    if idx >= nodes.x * nodes.y * nodes.z || solid_nodes.x * solid_nodes.y * solid_nodes.z > arrayLength(&src_1) {
+        return e_levelset;
+    }
+    let ijk = vec3<u32>(idx % nodes.x, (idx / nodes.x) % nodes.y, idx / (nodes.x * nodes.y));
+    if brick_pass == 2u { return e_levelset; }
+    let size = vec3<f32>(size_x, size_y, size_z);
+    let lattice_min = vec3<f32>(center_x, center_y, center_z) - 0.5 * size;
+    let p = lattice_min + vec3<f32>(ijk) * size / vec3<f32>(nodes - vec3<u32>(1u));
+    let spacing = size / vec3<f32>(solid_nodes - vec3<u32>(1u));
+    if clamp_liquid_solid_at(p, lattice_min, spacing, solid_nodes) < 0.0 {
+        return max(e_levelset, 0.0);
+    }
+    return e_levelset;
+}
+
+fn n0_body(idx: u32, count: u32, nodes_x: f32, nodes_y: f32, nodes_z: f32, passes: f32, axis: i32,) -> f32 {
+    return smooth_lattice_element(idx, count, nodes_x, nodes_y, nodes_z, passes, axis, 0u);
+}
+
+fn n1_body(
+    idx: u32,
+    count: u32,
+    e_levelset: f32,
+    center_x: f32,
+    center_y: f32,
+    center_z: f32,
+    size_x: f32,
+    size_y: f32,
+    size_z: f32,
+    nodes_x: f32,
+    nodes_y: f32,
+    nodes_z: f32,
+    solid_nodes_x: f32,
+    solid_nodes_y: f32,
+    solid_nodes_z: f32,
+    cell_size: f32,
+) -> f32 {
+    return clamp_liquid_to_solids_element(idx, count, e_levelset, center_x, center_y, center_z, size_x, size_y, size_z, nodes_x, nodes_y, nodes_z, solid_nodes_x, solid_nodes_y, solid_nodes_z, cell_size, 0u);
+}
+
+@compute @workgroup_size(256)
+fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    let count = arrayLength(&src_0);
+    if idx >= count {
+        return;
+    }
+    let r0 = n0_body(idx, count, params.n0_nodes_x, params.n0_nodes_y, params.n0_nodes_z, params.n0_passes, params.n0_axis);
+    let r1 = n1_body(idx, count, r0, params.n1_center_x, params.n1_center_y, params.n1_center_z, params.n1_size_x, params.n1_size_y, params.n1_size_z, params.n1_nodes_x, params.n1_nodes_y, params.n1_nodes_z, params.n1_solid_nodes_x, params.n1_solid_nodes_y, params.n1_solid_nodes_z, params.n1_cell_size);
+    dst[idx] = r1;
+}
+
+=== generator:WaterSeaWallGpuFlip node:104 ===
+struct Params {
+    n0_nodes_x: f32,
+    n0_nodes_y: f32,
+    n0_nodes_z: f32,
+    n0_size_x: f32,
+    n0_size_y: f32,
+    n0_size_z: f32,
+    n0_band: f32,
+    n0_enabled: f32,
+    n1_offset: f32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> src_0: array<f32>;
+// @fused_output
+@group(0) @binding(2) var<storage, read_write> dst: array<f32>;
+
+const MC_CORNERS: array<vec3<u32>, 8> = array<vec3<u32>, 8>(
+    vec3<u32>(0u, 0u, 0u), vec3<u32>(1u, 0u, 0u), vec3<u32>(1u, 0u, 1u), vec3<u32>(0u, 0u, 1u),
+    vec3<u32>(0u, 1u, 0u), vec3<u32>(1u, 1u, 0u), vec3<u32>(1u, 1u, 1u), vec3<u32>(0u, 1u, 1u),
+);
+const MC_EDGE_A: array<u32, 12> = array<u32, 12>(0u, 1u, 2u, 3u, 4u, 5u, 6u, 7u, 0u, 1u, 2u, 3u);
+const MC_EDGE_B: array<u32, 12> = array<u32, 12>(1u, 2u, 3u, 0u, 5u, 6u, 7u, 4u, 4u, 5u, 6u, 7u);
+const MC_TRIANGLE_COUNT: array<u32, 256> = array<u32, 256>(
+    0u, 1u, 1u, 2u, 1u, 2u, 2u, 3u, 1u, 2u, 2u, 3u, 2u, 3u, 3u, 2u, 1u, 2u, 2u, 3u, 2u, 3u, 3u, 4u, 2u, 3u, 3u, 4u, 3u, 4u, 4u, 3u,
+    1u, 2u, 2u, 3u, 2u, 3u, 3u, 4u, 2u, 3u, 3u, 4u, 3u, 4u, 4u, 3u, 2u, 3u, 3u, 2u, 3u, 4u, 4u, 3u, 3u, 4u, 4u, 3u, 4u, 5u, 5u, 2u,
+    1u, 2u, 2u, 3u, 2u, 3u, 3u, 4u, 2u, 3u, 3u, 4u, 3u, 4u, 4u, 3u, 2u, 3u, 3u, 4u, 3u, 4u, 4u, 5u, 3u, 4u, 4u, 5u, 4u, 5u, 5u, 4u,
+    2u, 3u, 3u, 4u, 3u, 4u, 2u, 3u, 3u, 4u, 4u, 5u, 4u, 5u, 3u, 2u, 3u, 4u, 4u, 3u, 4u, 5u, 3u, 2u, 4u, 5u, 5u, 4u, 5u, 2u, 4u, 1u,
+    1u, 2u, 2u, 3u, 2u, 3u, 3u, 4u, 2u, 3u, 3u, 4u, 3u, 4u, 4u, 3u, 2u, 3u, 3u, 4u, 3u, 4u, 4u, 5u, 3u, 2u, 4u, 3u, 4u, 3u, 5u, 2u,
+    2u, 3u, 3u, 4u, 3u, 4u, 4u, 5u, 3u, 4u, 4u, 5u, 4u, 5u, 5u, 4u, 3u, 4u, 4u, 3u, 4u, 5u, 5u, 4u, 4u, 3u, 5u, 2u, 5u, 4u, 2u, 1u,
+    2u, 3u, 3u, 4u, 3u, 4u, 4u, 5u, 3u, 4u, 4u, 5u, 2u, 3u, 3u, 2u, 3u, 4u, 4u, 5u, 4u, 5u, 5u, 2u, 4u, 3u, 5u, 4u, 3u, 2u, 4u, 1u,
+    3u, 4u, 4u, 5u, 4u, 5u, 3u, 4u, 4u, 5u, 5u, 2u, 3u, 4u, 2u, 1u, 2u, 3u, 3u, 2u, 3u, 4u, 2u, 1u, 3u, 2u, 4u, 1u, 2u, 1u, 1u, 0u,
+);
+const MC_TRIANGLES: array<u32, 512> = array<u32, 512>(
+    0xffffffffu, 0xffffffffu,
+    0xfffff380u, 0xffffffffu,
+    0xfffff910u, 0xffffffffu,
+    0xff189381u, 0xffffffffu,
+    0xfffffa21u, 0xffffffffu,
+    0xffa21380u, 0xffffffffu,
+    0xff920a29u, 0xffffffffu,
+    0x9a8a2382u, 0xfffffff8u,
+    0xfffff2b3u, 0xffffffffu,
+    0xff0b82b0u, 0xffffffffu,
+    0xffb32091u, 0xffffffffu,
+    0x89b912b1u, 0xfffffffbu,
+    0xff3ab1a3u, 0xffffffffu,
+    0xb8a801a0u, 0xfffffffau,
+    0xab9b3093u, 0xfffffff9u,
+    0xffb8aa89u, 0xffffffffu,
+    0xfffff874u, 0xffffffffu,
+    0xff437034u, 0xffffffffu,
+    0xff748910u, 0xffffffffu,
+    0x37174914u, 0xfffffff1u,
+    0xff748a21u, 0xffffffffu,
+    0x21403743u, 0xfffffffau,
+    0x48209a29u, 0xfffffff7u,
+    0x727929a2u, 0xffff4973u,
+    0xff2b3748u, 0xffffffffu,
+    0x0242b74bu, 0xfffffff4u,
+    0x32748109u, 0xfffffffbu,
+    0xb9b49b74u, 0xffff1292u,
+    0x87ab31a3u, 0xfffffff4u,
+    0x01b41ab1u, 0xffff4b74u,
+    0xb9b09874u, 0xffff30bau,
+    0xb99b4b74u, 0xfffffffau,
+    0xfffff459u, 0xffffffffu,
+    0xff380459u, 0xffffffffu,
+    0xff051450u, 0xffffffffu,
+    0x13538458u, 0xfffffff5u,
+    0xff459a21u, 0xffffffffu,
+    0x94a21803u, 0xfffffff5u,
+    0x04245a25u, 0xfffffff2u,
+    0x535235a2u, 0xffff8434u,
+    0xffb32459u, 0xffffffffu,
+    0x94b802b0u, 0xfffffff5u,
+    0x32510450u, 0xfffffffbu,
+    0x82852512u, 0xffff584bu,
+    0x5931ab3au, 0xfffffff4u,
+    0xa8180594u, 0xffffab81u,
+    0xb5b05045u, 0xffff30bau,
+    0x8aa85845u, 0xfffffffbu,
+    0xff975879u, 0xffffffffu,
+    0x75359039u, 0xfffffff3u,
+    0x51710870u, 0xfffffff7u,
+    0xff753351u, 0xffffffffu,
+    0x1a759879u, 0xfffffff2u,
+    0x3505921au, 0xffff3750u,
+    0x58528208u, 0xffff25a7u,
+    0x533525a2u, 0xfffffff7u,
+    0xb3987597u, 0xfffffff2u,
+    0x29279759u, 0xffffb720u,
+    0x71810b32u, 0xffff7518u,
+    0x1771b12bu, 0xfffffff5u,
+    0x1a758859u, 0xffffb3a3u,
+    0xb7905075u, 0xf0aba010u,
+    0x5a30b0abu, 0xf0757080u,
+    0xff5b75abu, 0xffffffffu,
+    0xfffff56au, 0xffffffffu,
+    0xff6a5380u, 0xffffffffu,
+    0xff6a5109u, 0xffffffffu,
+    0xa5891381u, 0xfffffff6u,
+    0xff162561u, 0xffffffffu,
+    0x03621561u, 0xfffffff8u,
+    0x20609569u, 0xfffffff6u,
+    0x25285895u, 0xffff8236u,
+    0xff56ab32u, 0xffffffffu,
+    0x6a02b80bu, 0xfffffff5u,
+    0xa5b32910u, 0xfffffff6u,
+    0xb92916a5u, 0xffffb892u,
+    0x15356b36u, 0xfffffff3u,
+    0x505b0b80u, 0xffff6b51u,
+    0x606306b3u, 0xffff9505u,
+    0x9bb96956u, 0xfffffff8u,
+    0xff8746a5u, 0xffffffffu,
+    0x56374034u, 0xfffffffau,
+    0x486a5091u, 0xfffffff7u,
+    0x7179156au, 0xffff4973u,
+    0x74156216u, 0xfffffff8u,
+    0x03625521u, 0xffff7434u,
+    0x60509748u, 0xffff6205u,
+    0x23497937u, 0xf9626959u,
+    0x6a4872b3u, 0xfffffff5u,
+    0x242746a5u, 0xffffb720u,
+    0x32874910u, 0xffff6a5bu,
+    0x492b9129u, 0xf6a54b7bu,
+    0x535b3748u, 0xffff6b51u,
+    0x016b5b15u, 0xfb404b7bu,
+    0x30560950u, 0xf74836b6u,
+    0x74b96956u, 0xffff9b79u,
+    0xffa4694au, 0xffffffffu,
+    0x80a946a4u, 0xfffffff3u,
+    0x4606a10au, 0xfffffff0u,
+    0x68618138u, 0xffffa164u,
+    0x62421941u, 0xfffffff4u,
+    0x42921803u, 0xffff4629u,
+    0xff624420u, 0xffffffffu,
+    0x24428238u, 0xfffffff6u,
+    0x2b46a94au, 0xfffffff3u,
+    0x94b82280u, 0xffff6a4au,
+    0x606102b3u, 0xffffa164u,
+    0x84a16146u, 0xf1b8b121u,
+    0x19639469u, 0xffff36b3u,
+    0x6b0181b8u, 0xf1464191u,
+    0x600636b3u, 0xfffffff4u,
+    0xff86b846u, 0xffffffffu,
+    0x98a876a7u, 0xfffffffau,
+    0x907a0370u, 0xffffa76au,
+    0x717a176au, 0xffff0818u,
+    0x7117a76au, 0xfffffff3u,
+    0x81861621u, 0xffff7689u,
+    0x76192962u, 0xf9373909u,
+    0x06607087u, 0xfffffff2u,
+    0xff276237u, 0xffffffffu,
+    0x8a86ab32u, 0xffff7689u,
+    0x90b72702u, 0xf7a9a767u,
+    0xa1871081u, 0xfb32a767u,
+    0x6a71b12bu, 0xffff1761u,
+    0x19768698u, 0xf63136b6u,
+    0xff76b190u, 0xffffffffu,
+    0xb3607087u, 0xffff06b0u,
+    0xfffff6b7u, 0xffffffffu,
+    0xfffffb67u, 0xffffffffu,
+    0xff67b803u, 0xffffffffu,
+    0xff67b910u, 0xffffffffu,
+    0x7b138918u, 0xfffffff6u,
+    0xff7b621au, 0xffffffffu,
+    0xb6803a21u, 0xfffffff7u,
+    0xb69a2092u, 0xfffffff7u,
+    0x8a3a27b6u, 0xffff89a3u,
+    0xff726327u, 0xffffffffu,
+    0x26067807u, 0xfffffff0u,
+    0x10732672u, 0xfffffff9u,
+    0x91681261u, 0xffff6788u,
+    0x3171a67au, 0xfffffff7u,
+    0x81a7167au, 0xffff8017u,
+    0xa0a70730u, 0xffff7a69u,
+    0xa88a7a67u, 0xfffffff9u,
+    0xff68b486u, 0xffffffffu,
+    0x40603b63u, 0xfffffff6u,
+    0x09648b68u, 0xfffffff1u,
+    0x39369649u, 0xffff63b1u,
+    0xa28b6486u, 0xfffffff1u,
+    0x60b03a21u, 0xffff640bu,
+    0x20b648b4u, 0xffff9a29u,
+    0x4923a39au, 0xf36463b3u,
+    0x64248328u, 0xfffffff2u,
+    0xff264240u, 0xffffffffu,
+    0x42432091u, 0xffff8346u,
+    0x42241491u, 0xfffffff6u,
+    0x48168318u, 0xffff1a66u,
+    0x0660a01au, 0xfffffff4u,
+    0xa6834364u, 0xf39a9303u,
+    0xff4a649au, 0xffffffffu,
+    0xffb67594u, 0xffffffffu,
+    0x7b594380u, 0xfffffff6u,
+    0x67045105u, 0xfffffffbu,
+    0x5343867bu, 0xffff5134u,
+    0x6721a459u, 0xfffffffbu,
+    0x80a217b6u, 0xffff5943u,
+    0x24a45b67u, 0xffff204au,
+    0x23453843u, 0xf67b25a5u,
+    0x45267327u, 0xfffffff9u,
+    0x60680459u, 0xffff7862u,
+    0x51673263u, 0xffff0450u,
+    0x12786826u, 0xf8515848u,
+    0x7161a459u, 0xffff7316u,
+    0x01671a61u, 0xf4590787u,
+    0x305a4a04u, 0xfa737a6au,
+    0x458a7a67u, 0xffffa84au,
+    0x8b9b6596u, 0xfffffff9u,
+    0x50360b63u, 0xffff5906u,
+    0x10b508b0u, 0xffffb655u,
+    0x355363b6u, 0xfffffff1u,
+    0xb9b59a21u, 0xffff65b8u,
+    0x90b603b0u, 0xfa219656u,
+    0x0865b58bu, 0xf52025a5u,
+    0xa25363b6u, 0xffff35a3u,
+    0x65825985u, 0xffff2832u,
+    0x60069659u, 0xfffffff2u,
+    0x65081851u, 0xf8262838u,
+    0xff612651u, 0xffffffffu,
+    0x83a61631u, 0xf6989656u,
+    0x5960a01au, 0xffff0650u,
+    0xffa65830u, 0xffffffffu,
+    0xfffff65au, 0xffffffffu,
+    0xffb57a5bu, 0xffffffffu,
+    0x3857ba5bu, 0xfffffff0u,
+    0x91ba57b5u, 0xfffffff0u,
+    0x897ba57au, 0xffff1381u,
+    0x5717b21bu, 0xfffffff1u,
+    0x71721380u, 0xffffb275u,
+    0x09729579u, 0xffff7b22u,
+    0x95b27257u, 0xf2898232u,
+    0x73532a52u, 0xfffffff5u,
+    0x78258028u, 0xffff52a5u,
+    0x353a5109u, 0xffff2a37u,
+    0x78129289u, 0xf25752a2u,
+    0xff573531u, 0xffffffffu,
+    0x71170780u, 0xfffffff5u,
+    0x35539309u, 0xfffffff7u,
+    0xff795789u, 0xffffffffu,
+    0xba8a5485u, 0xfffffff8u,
+    0xa50b5405u, 0xffff03bbu,
+    0xa8a48910u, 0xffff54abu,
+    0x3b54a4bau, 0xf4131494u,
+    0xb2582152u, 0xffff8548u,
+    0x543b0b40u, 0xfb151b2bu,
+    0xb2950520u, 0xf58b8545u,
+    0xff3b2549u, 0xffffffffu,
+    0x43253a52u, 0xffff4835u,
+    0x244252a5u, 0xfffffff0u,
+    0x83a532a3u, 0xf9108545u,
+    0x914252a5u, 0xffff2492u,
+    0x53358548u, 0xfffffff1u,
+    0xff501540u, 0xffffffffu,
+    0x09358548u, 0xffff5305u,
+    0xfffff549u, 0xffffffffu,
+    0xa9b947b4u, 0xfffffffbu,
+    0xb9794380u, 0xffffba97u,
+    0x414b1ba1u, 0xffffb470u,
+    0xa1843413u, 0xf4bab474u,
+    0x294b97b4u, 0xffff219bu,
+    0x197b9479u, 0xf3801b2bu,
+    0x4224b47bu, 0xfffffff0u,
+    0x3824b47bu, 0xffff4234u,
+    0x32972a92u, 0xffff9477u,
+    0x2a4797a9u, 0xf7020787u,
+    0x472a3a73u, 0xfa040a1au,
+    0xff4782a1u, 0xffffffffu,
+    0x17714194u, 0xfffffff3u,
+    0x80714194u, 0xffff1781u,
+    0xff347304u, 0xffffffffu,
+    0xfffff784u, 0xffffffffu,
+    0xff8ba8a9u, 0xffffffffu,
+    0x9bb93903u, 0xfffffffau,
+    0xa88a0a10u, 0xfffffffbu,
+    0xffa3ba13u, 0xffffffffu,
+    0xb99b1b21u, 0xfffffff8u,
+    0x21b93903u, 0xffff9b29u,
+    0xffb08b20u, 0xffffffffu,
+    0xfffffb23u, 0xffffffffu,
+    0x8aa82832u, 0xfffffff9u,
+    0xff2902a9u, 0xffffffffu,
+    0x10a82832u, 0xffff8a18u,
+    0xfffff2a1u, 0xffffffffu,
+    0xff819831u, 0xffffffffu,
+    0xfffff190u, 0xffffffffu,
+    0xfffff830u, 0xffffffffu,
+    0xffffffffu, 0xffffffffu,
+);
+
+fn mc_edge(case_index: u32, entry: u32) -> u32 {
+    return (MC_TRIANGLES[2u * case_index + entry / 8u] >> (4u * (entry % 8u))) & 15u;
+}
+
+fn mc_node(p: vec3<u32>, nodes: vec3<u32>) -> u32 {
+    return p.x + nodes.x * (p.y + nodes.y * p.z);
+}
+
+fn mc_case(cell: vec3<u32>, nodes: vec3<u32>) -> u32 {
+    var case_index = 0u;
+    for (var c = 0u; c < 8u; c = c + 1u) {
+        if src_0[mc_node(cell + MC_CORNERS[c], nodes)] < 0.0 {
+            case_index = case_index | (1u << c);
+        }
+    }
+    return case_index;
+}
+
+// Exact Euclidean distance to the piecewise-linear marching-cubes zero
+// surface, capped at band. This is a geometric distance rebuild, not a blur.
+// The search box contains every cell intersecting the band-radius ball;
+// there is no fixed stencil/slider cap. Distances are in scene metres.
+
+fn rd_segment(p: vec3<f32>, a: vec3<f32>, b: vec3<f32>) -> f32 {
+    let v = b - a;
+    let vv = dot(v, v);
+    if vv == 0.0 { return dot(p-a, p-a); }
+    let d = p - (a + clamp(dot(p-a, v)/vv, 0.0, 1.0)*v);
+    return dot(d,d);
+}
+
+fn rd_triangle(p: vec3<f32>, a: vec3<f32>, b: vec3<f32>, c: vec3<f32>) -> f32 {
+    let ab = b-a;
+    let ac = c-a;
+    let n = cross(ab, ac);
+    let nn = dot(n,n);
+    var best = min(rd_segment(p,a,b), min(rd_segment(p,b,c), rd_segment(p,c,a)));
+    if nn > 0.0 {
+        let q = p-a;
+        let u = dot(cross(q,ac), n)/nn;
+        let v = dot(cross(ab,q), n)/nn;
+        if u >= 0.0 && v >= 0.0 && u+v <= 1.0 {
+            best = min(best, dot(q,n)*dot(q,n)/nn);
+        }
+    }
+    return best;
+}
+
+fn n0_body(idx: u32, count: u32, nodes_x: f32, nodes_y: f32, nodes_z: f32,
+    size_x: f32, size_y: f32, size_z: f32, band: f32, enabled: f32) -> f32 {
+    let original = src_0[idx];
+    if enabled == 0.0 { return original; }
+    let nodes = vec3<u32>(vec3<f32>(nodes_x,nodes_y,nodes_z));
+    if any(nodes < vec3<u32>(2u)) || idx >= nodes.x*nodes.y*nodes.z { return original; }
+    let at = vec3<u32>(idx % nodes.x, (idx/nodes.x)%nodes.y, idx/(nodes.x*nodes.y));
+    let spacing = vec3<f32>(size_x,size_y,size_z)/vec3<f32>(nodes-vec3<u32>(1u));
+    let p = vec3<f32>(at)*spacing;
+    let reach = vec3<i32>(ceil(vec3<f32>(band)/spacing));
+    let low = max(vec3<i32>(at)-reach-vec3<i32>(1),vec3<i32>(0));
+    let high = min(vec3<i32>(at)+reach,vec3<i32>(nodes)-vec3<i32>(2));
+    var best = band*band;
+    for (var z=low.z; z<=high.z; z=z+1) {
+        for (var y=low.y; y<=high.y; y=y+1) {
+            for (var x=low.x; x<=high.x; x=x+1) {
+                let cell = vec3<u32>(vec3<i32>(x,y,z));
+                let box_low = vec3<f32>(cell)*spacing;
+                let box_high = vec3<f32>(cell+vec3<u32>(1u))*spacing;
+                let delta = max(max(box_low-p,p-box_high),vec3<f32>(0.0));
+                if dot(delta,delta) > best { continue; }
+                let case_index = mc_case(cell,nodes);
+                let triangles = MC_TRIANGLE_COUNT[case_index];
+                if triangles == 0u { continue; }
+                var vertices: array<vec3<f32>,12>;
+                for (var e=0u; e<12u; e=e+1u) {
+                    let a = cell+MC_CORNERS[MC_EDGE_A[e]];
+                    let b = cell+MC_CORNERS[MC_EDGE_B[e]];
+                    let va = src_0[mc_node(a,nodes)];
+                    let vb = src_0[mc_node(b,nodes)];
+                    if (va < 0.0) != (vb < 0.0) {
+                        vertices[e] = (vec3<f32>(a)+va/(va-vb)*(vec3<f32>(b)-vec3<f32>(a)))*spacing;
+                    }
+                }
+                for (var t=0u; t<triangles; t=t+1u) {
+                    best = min(best,rd_triangle(p,vertices[mc_edge(case_index,3u*t)],
+                        vertices[mc_edge(case_index,3u*t+1u)],vertices[mc_edge(case_index,3u*t+2u)]));
+                }
+            }
+        }
+    }
+    return select(sqrt(best),-sqrt(best),original < 0.0);
+}
+
+fn n1_body(idx: u32, count: u32, e_levelset: f32, offset: f32) -> f32 {
+    if offset == 0.0 { return e_levelset; }
+    return e_levelset + offset;
+}
+
+@compute @workgroup_size(256)
+fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    let count = arrayLength(&src_0);
+    if idx >= count {
+        return;
+    }
+    let r0 = n0_body(idx, count, params.n0_nodes_x, params.n0_nodes_y, params.n0_nodes_z, params.n0_size_x, params.n0_size_y, params.n0_size_z, params.n0_band, params.n0_enabled);
+    let r1 = n1_body(idx, count, r0, params.n1_offset);
+    dst[idx] = r1;
+}
+
+=== generator:WaterSeaWallGpuFlip node:105 ===
+struct Element {
+    position_radius: vec4<f32>,
+    velocity: vec3<f32>,
+    id: u32,
+}
+
+struct Params {
+    n0_count_a: f32,
+    n0_count_b: f32,
+    n0_identity_a: f32,
+    n0_identity_b: f32,
+    n0_blend: f32,
+    n0_span: f32,
+    n0_acceleration_x: f32,
+    n0_acceleration_y: f32,
+    n0_acceleration_z: f32,
+    n1_center_x: f32,
+    n1_center_y: f32,
+    n1_center_z: f32,
+    n1_size_x: f32,
+    n1_size_y: f32,
+    n1_size_z: f32,
+    n1_nodes_x: f32,
+    n1_nodes_y: f32,
+    n1_nodes_z: f32,
+    _pad0: u32,
+    _pad1: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> src_0: array<Element>;
+@group(0) @binding(2) var<storage, read> src_1: array<Element>;
+@group(0) @binding(3) var<storage, read> src_2: array<f32>;
+// @fused_output
+@group(0) @binding(4) var<storage, read_write> dst: array<Element>;
+// @fused_output_capacity: s1
+
+fn b_count(value: f32, capacity: u32) -> u32 {
+    if value < 0.0 {
+        return capacity;
+    }
+    if !(value >= 0.0) {
+        return 0u;
+    }
+    return min(u32(min(value, f32(capacity))), capacity);
+}
+
+fn a_count(value: f32, capacity: u32) -> u32 {
+    if !(value >= 0.0) {
+        return 0u;
+    }
+    return min(u32(min(value, f32(capacity))), capacity);
+}
+
+fn safe_blend(value: f32) -> f32 {
+    if !(value >= 0.0) {
+        return 0.0;
+    }
+    return min(value, 1.0);
+}
+
+fn safe_span(value: f32) -> f32 {
+    if !(value > 0.0) {
+        return 0.0;
+    }
+    return value;
+}
+
+fn zero_particle() -> Element {
+    return Element(vec4<f32>(0.0), vec3<f32>(0.0), 0u);
+}
+
+fn hermite_particle(a: Element, b: Element, t: f32, span: f32) -> Element {
+    if span == 0.0 {
+        return Element(b.position_radius, b.velocity, b.id);
+    }
+
+    let t2 = t * t;
+    let t3 = t2 * t;
+    let h00 = 2.0 * t3 - 3.0 * t2 + 1.0;
+    let h10 = t3 - 2.0 * t2 + t;
+    let h01 = -2.0 * t3 + 3.0 * t2;
+    let h11 = t3 - t2;
+    let position = h00 * a.position_radius.xyz
+        + h10 * span * a.velocity
+        + h01 * b.position_radius.xyz
+        + h11 * span * b.velocity;
+
+    // Derivative of the Hermite curve with respect to physical time.  The
+    // position terms divide by span; this helper is only called for span > 0.
+    let dh00 = (6.0 * t2 - 6.0 * t) / span;
+    let dh10 = 3.0 * t2 - 4.0 * t + 1.0;
+    let dh01 = (-6.0 * t2 + 6.0 * t) / span;
+    let dh11 = 3.0 * t2 - 2.0 * t;
+    let velocity = dh00 * a.position_radius.xyz
+        + dh10 * a.velocity
+        + dh01 * b.position_radius.xyz
+        + dh11 * b.velocity;
+    let radius = mix(a.position_radius.w, b.position_radius.w, t);
+    return Element(vec4<f32>(position, radius), velocity, b.id);
+}
+
+fn birth_particle(b: Element, t: f32, span: f32, acceleration: vec3<f32>, grow: f32) -> Element {
+    let tau = (1.0 - t) * span;
+    let position = b.position_radius.xyz - tau * b.velocity + 0.5 * acceleration * tau * tau;
+    let velocity = b.velocity - acceleration * tau;
+    return Element(vec4<f32>(position, b.position_radius.w * grow), velocity, b.id);
+}
+
+fn po_node(at: vec3<i32>, nodes: vec3<u32>) -> f32 {
+    if any(at < vec3<i32>(0)) || any(at >= vec3<i32>(nodes)) {
+        return 0.0;
+    }
+    let u = vec3<u32>(at);
+    return src_2[u.x + nodes.x * (u.y + nodes.y * u.z)];
+}
+
+fn po_sample(q_in: vec3<f32>, nodes: vec3<u32>) -> f32 {
+    let top = vec3<f32>(nodes - vec3<u32>(1u));
+    let q = clamp(q_in, vec3<f32>(0.0), top);
+    let base = min(vec3<i32>(floor(q)), vec3<i32>(nodes - vec3<u32>(2u)));
+    let f = q - vec3<f32>(base);
+    var value = 0.0;
+    for (var corner = 0u; corner < 8u; corner = corner + 1u) {
+        let offset = vec3<i32>(i32(corner & 1u), i32((corner >> 1u) & 1u), i32((corner >> 2u) & 1u));
+        let weight = select(1.0 - f.x, f.x, offset.x == 1)
+            * select(1.0 - f.y, f.y, offset.y == 1)
+            * select(1.0 - f.z, f.z, offset.z == 1);
+        value = value + weight * po_node(base + offset, nodes);
+    }
+    return value;
+}
+
+fn po_gradient(q: vec3<f32>, nodes: vec3<u32>, spacing: vec3<f32>) -> vec3<f32> {
+    // Half a lattice cell on either side gives a central difference while
+    // retaining the same trilinear value at arbitrary particle positions.
+    let half = vec3<f32>(0.5);
+    let dx = po_sample(q + vec3<f32>(half.x, 0.0, 0.0), nodes)
+        - po_sample(q - vec3<f32>(half.x, 0.0, 0.0), nodes);
+    let dy = po_sample(q + vec3<f32>(0.0, half.y, 0.0), nodes)
+        - po_sample(q - vec3<f32>(0.0, half.y, 0.0), nodes);
+    let dz = po_sample(q + vec3<f32>(0.0, 0.0, half.z), nodes)
+        - po_sample(q - vec3<f32>(0.0, 0.0, half.z), nodes);
+    return vec3<f32>(dx / max(spacing.x, 1.0e-6), dy / max(spacing.y, 1.0e-6), dz / max(spacing.z, 1.0e-6));
+}
+
+fn n0_body(
+    idx: u32,
+    count: u32,
+    e_particles_b: Element,
+    count_a: f32,
+    count_b: f32,
+    identity_a: f32,
+    identity_b: f32,
+    blend: f32,
+    span: f32,
+    acceleration_x: f32,
+    acceleration_y: f32,
+    acceleration_z: f32,
+) -> Element {
+    // `count` is the output-capacity anchor from particles_b.  Keeping this
+    // bound independent of the coincident input global is required when the
+    // atom fuses: a coincident producer is a register, not a storage binding.
+    let b_limit = b_count(count_b, count);
+    if idx >= b_limit || !(e_particles_b.position_radius.w > 0.0) {
+        return zero_particle();
+    }
+
+    let t = safe_blend(blend);
+    let h = safe_span(span);
+    let a_limit = a_count(count_a, arrayLength(&src_0));
+    var matched = false;
+    var a_particle = zero_particle();
+    if identity_a == identity_b && e_particles_b.id != 0u {
+        var low = 0u;
+        var high = a_limit;
+        loop {
+            if low >= high {
+                break;
+            }
+            let middle = low + (high - low) / 2u;
+            let middle_id = src_0[middle].id;
+            if middle_id < e_particles_b.id {
+                low = middle + 1u;
+            } else {
+                high = middle;
+            }
+        }
+        if low < a_limit {
+            let candidate = src_0[low];
+            if candidate.id == e_particles_b.id && candidate.id != 0u {
+                matched = true;
+                a_particle = candidate;
+            }
+        }
+    }
+
+    if matched {
+        return hermite_particle(a_particle, e_particles_b, t, h);
+    }
+    return birth_particle(
+        e_particles_b,
+        t,
+        h,
+        vec3<f32>(acceleration_x, acceleration_y, acceleration_z),
+        select(1.0, t, a_limit > 0u),
+    );
+}
+
+fn n1_body(
+    idx: u32,
+    count: u32,
+    e_particles: Element,
+    center_x: f32,
+    center_y: f32,
+    center_z: f32,
+    size_x: f32,
+    size_y: f32,
+    size_z: f32,
+    nodes_x: f32,
+    nodes_y: f32,
+    nodes_z: f32,
+) -> Element {
+    var out = e_particles;
+    if !(e_particles.position_radius.w > 0.0) {
+        return out;
+    }
+    // Match the standalone runtime's scalar policy exactly: live wires may
+    // carry fractional values, but lattice dimensions are rounded and have a
+    // minimum of two nodes before sizing and bounds checks.
+    let raw_nodes = vec3<f32>(nodes_x, nodes_y, nodes_z);
+    // Avoid adding 0.5 to an already integral large f32, which can round up.
+    let lattice = floor(raw_nodes) + select(vec3<f32>(0.0), vec3<f32>(1.0), fract(raw_nodes) >= vec3<f32>(0.5));
+    if !all(lattice >= vec3<f32>(2.0)) || !all(lattice <= vec3<f32>(16777216.0)) {
+        return out;
+    }
+    let nodes = vec3<u32>(lattice);
+    // Divide the available storage so a large authored lattice cannot wrap
+    // a u32 product and accidentally pass the bounds check.
+    if nodes.z > arrayLength(&src_2) / nodes.x / nodes.y {
+        return out;
+    }
+    let size = vec3<f32>(size_x, size_y, size_z);
+    let center = vec3<f32>(center_x, center_y, center_z);
+    if !all(size > vec3<f32>(0.0)) || !all(size <= vec3<f32>(3.402823e+38))
+        || !all(abs(center) <= vec3<f32>(3.402823e+38)) {
+        return out;
+    }
+    let spacing = size / vec3<f32>(nodes - vec3<u32>(1u));
+    let origin = center - 0.5 * size;
+    var position = e_particles.position_radius.xyz;
+    let top = vec3<f32>(nodes - vec3<u32>(1u));
+    // Four fixed normalized-gradient steps cover curvature and trilinear
+    // interpolation error while keeping this a barrier-free per-particle
+    // body with deterministic work.
+    for (var iteration = 0u; iteration < 4u; iteration = iteration + 1u) {
+        let q = (position - origin) / spacing;
+        if any(q < vec3<f32>(0.0)) || any(q > top) {
+            break;
+        }
+        let phi = po_sample(q, nodes);
+        if !(phi < 0.0) {
+            break;
+        }
+        let gradient = po_gradient(q, nodes, spacing);
+        let gradient_length = length(gradient);
+        // A flat negative field has no defined outward direction. Keep it
+        // stable rather than producing NaNs or an arbitrary axis push.
+        if !(gradient_length > 1.0e-6)
+            || !(gradient_length < 3.402823e+38)
+            || !(gradient_length == gradient_length)
+        {
+            break;
+        }
+        position = position - phi * gradient / gradient_length;
+    }
+    out.position_radius = vec4<f32>(position, e_particles.position_radius.w);
+    return out;
+}
+
+@compute @workgroup_size(256)
+fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    let count = arrayLength(&src_1);
+    if idx >= count {
+        return;
+    }
+    let e_1 = src_1[idx];
+    let r0 = n0_body(idx, count, e_1, params.n0_count_a, params.n0_count_b, params.n0_identity_a, params.n0_identity_b, params.n0_blend, params.n0_span, params.n0_acceleration_x, params.n0_acceleration_y, params.n0_acceleration_z);
+    let r1 = n1_body(idx, count, r0, params.n1_center_x, params.n1_center_y, params.n1_center_z, params.n1_size_x, params.n1_size_y, params.n1_size_z, params.n1_nodes_x, params.n1_nodes_y, params.n1_nodes_z);
+    dst[idx] = r1;
+}
+
+=== generator:WaterSeaWallGpuFlip node:106 ===
+// @input_access: src_0 gather
+// @input_access: src_1 coincident_texel
+struct Params {
+    n0_max_blur_px: f32,
+    n0_enabled: u32,
+    n1_exposure: f32,
+    n1_curve: u32,
+    n1_mode: u32,
+    n1_paper_white: f32,
+    n1_max_nits: f32,
+    n0_shutter_angle: f32,
+}
+
+// @camera_external: camera_ext_0
+// @derived_uniform_member: n0_shutter_angle words=1 node.motion_blur camera_ext_0
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var src_0: texture_2d<f32>;
+@group(0) @binding(2) var src_1: texture_2d<f32>;
+@group(0) @binding(3) var samp: sampler;
+@group(0) @binding(4) var dst: texture_storage_2d<rgba16float, write>;
+
+const MOTION_BLUR_SAMPLES: u32 = 8u;
+
+fn aces_narkowicz_raw(x: vec3<f32>) -> vec3<f32> {
+    let a: f32 = 2.51;
+    let b: f32 = 0.03;
+    let c: f32 = 2.43;
+    let d: f32 = 0.59;
+    let e: f32 = 0.14;
+    return (x * (a * x + b)) / (x * (c * x + d) + e);
+}
+
+fn aces_narkowicz(x: vec3<f32>) -> vec3<f32> {
+    return saturate(aces_narkowicz_raw(x));
+}
+
+// ── Hill ACES (RRT+ODT fit in AP1) ────────────────────────────────────
+
+// sRGB -> XYZ -> D65_2_D60 -> AP1 -> RRT saturation (concatenated)
+const TONE_MAP_ACES_INPUT: mat3x3<f32> = mat3x3<f32>(
+    vec3<f32>(0.59719, 0.07600, 0.02840),
+    vec3<f32>(0.35458, 0.90834, 0.13383),
+    vec3<f32>(0.04823, 0.01566, 0.83777),
+);
+
+// ODT saturation -> AP1 -> XYZ -> D60_2_D65 -> sRGB (concatenated)
+const TONE_MAP_ACES_OUTPUT: mat3x3<f32> = mat3x3<f32>(
+    vec3<f32>( 1.60475, -0.10208, -0.00327),
+    vec3<f32>(-0.53108,  1.10813, -0.07276),
+    vec3<f32>(-0.07367, -0.00605,  1.07602),
+);
+
+fn rrt_and_odt_fit(v: vec3<f32>) -> vec3<f32> {
+    let a = v * (v + 0.0245786) - 0.000090537;
+    let b = v * (0.983729 * v + 0.4329510) + 0.238081;
+    return a / b;
+}
+
+fn aces_hill_raw(color: vec3<f32>) -> vec3<f32> {
+    var c = TONE_MAP_ACES_INPUT * color;
+    c = rrt_and_odt_fit(c);
+    c = TONE_MAP_ACES_OUTPUT * c;
+    return c;
+}
+
+fn aces_hill(color: vec3<f32>) -> vec3<f32> {
+    return saturate(aces_hill_raw(color));
+}
+
+// ── AgX (Troy Sobotka) ────────────────────────────────────────────────
+
+// sRGB linear -> Rec.2020 linear
+const TONE_MAP_SRGB_TO_REC2020: mat3x3<f32> = mat3x3<f32>(
+    vec3<f32>(0.6274, 0.0691, 0.0164),
+    vec3<f32>(0.3293, 0.9195, 0.0880),
+    vec3<f32>(0.0433, 0.0113, 0.8956),
+);
+
+// Rec.2020 linear -> sRGB linear
+const TONE_MAP_REC2020_TO_SRGB: mat3x3<f32> = mat3x3<f32>(
+    vec3<f32>( 1.6605, -0.1246, -0.0182),
+    vec3<f32>(-0.5876,  1.1329, -0.1006),
+    vec3<f32>(-0.0728, -0.0083,  1.1187),
+);
+
+// AgX inset matrix (operates in Rec.2020 space)
+const TONE_MAP_AGX_INSET: mat3x3<f32> = mat3x3<f32>(
+    vec3<f32>(0.856627153315983, 0.137318972929847, 0.11189821299995),
+    vec3<f32>(0.0951212405381588, 0.761241990602591, 0.0767994186031903),
+    vec3<f32>(0.0482516061458583, 0.101439036467562, 0.811302368396859),
+);
+
+// AgX outset matrix (inverse)
+const TONE_MAP_AGX_OUTSET: mat3x3<f32> = mat3x3<f32>(
+    vec3<f32>( 1.1271005818144368, -0.1413297634984383, -0.14132976349843826),
+    vec3<f32>(-0.11060664309660323, 1.157823702216272, -0.11060664309660294),
+    vec3<f32>(-0.016493938717834573, -0.016493938717834257, 1.2519364065950405),
+);
+
+const TONE_MAP_AGX_MIN_EV: f32 = -12.47393;
+const TONE_MAP_AGX_MAX_EV: f32 = 4.026069;
+
+// 6th-order polynomial approximation of the AgX sigmoid contrast curve
+
+fn agx_default_contrast(x: vec3<f32>) -> vec3<f32> {
+    let x2 = x * x;
+    let x4 = x2 * x2;
+    return 15.5 * x4 * x2
+         - 40.14 * x4 * x
+         + 31.96 * x4
+         - 6.868 * x2 * x
+         + 0.4298 * x2
+         + 0.1191 * x
+         - 0.00232;
+}
+
+fn agx_tonemap(color: vec3<f32>) -> vec3<f32> {
+    // sRGB -> Rec.2020 -> AgX inset
+    var c = TONE_MAP_AGX_INSET * (TONE_MAP_SRGB_TO_REC2020 * color);
+
+    // Log2 encoding
+    c = max(c, vec3<f32>(1e-10));
+    c = log2(c);
+    c = (c - TONE_MAP_AGX_MIN_EV) / (TONE_MAP_AGX_MAX_EV - TONE_MAP_AGX_MIN_EV);
+    c = clamp(c, vec3<f32>(0.0), vec3<f32>(1.0));
+
+    // Sigmoid contrast
+    c = agx_default_contrast(c);
+
+    // AgX outset -> linearize -> Rec.2020 -> sRGB
+    c = TONE_MAP_AGX_OUTSET * c;
+    c = pow(max(c, vec3<f32>(0.0)), vec3<f32>(2.2));
+    c = TONE_MAP_REC2020_TO_SRGB * c;
+
+    return saturate(c);
+}
+
+fn agx_tonemap_raw(color: vec3<f32>) -> vec3<f32> {
+    var c = TONE_MAP_AGX_INSET * (TONE_MAP_SRGB_TO_REC2020 * color);
+
+    c = max(c, vec3<f32>(1e-10));
+    c = log2(c);
+    c = (c - TONE_MAP_AGX_MIN_EV) / (TONE_MAP_AGX_MAX_EV - TONE_MAP_AGX_MIN_EV);
+    c = clamp(c, vec3<f32>(0.0), vec3<f32>(1.0));
+
+    c = agx_default_contrast(c);
+
+    c = TONE_MAP_AGX_OUTSET * c;
+    c = pow(max(c, vec3<f32>(0.0)), vec3<f32>(2.2));
+    c = TONE_MAP_REC2020_TO_SRGB * c;
+
+    return c;
+}
+
+// ── Khronos PBR Neutral ───────────────────────────────────────────────
+// Reference: https://github.com/KhronosGroup/ToneMapping
+
+fn khronos_pbr_neutral(color: vec3<f32>) -> vec3<f32> {
+    let start_compression: f32 = 0.8 - 0.04;
+    let desaturation: f32 = 0.15;
+
+    var x = min(color.r, min(color.g, color.b));
+    var offset: f32;
+    if x < 0.08 {
+        offset = x - 6.25 * x * x;
+    } else {
+        offset = 0.04;
+    }
+    var c = color - offset;
+
+    let peak = max(c.r, max(c.g, c.b));
+    if peak < start_compression {
+        return c;
+    }
+
+    let d = 1.0 - start_compression;
+    let new_peak = 1.0 - d * d / (peak + d - start_compression);
+    c *= new_peak / peak;
+
+    let g = 1.0 - 1.0 / (desaturation * (peak - new_peak) + 1.0);
+    return mix(c, vec3<f32>(new_peak), vec3<f32>(g));
+}
+
+// ── Curve dispatch ─────────────────────────────────────────────────────
+
+fn tonemap_sdr(hdr: vec3<f32>, curve: u32) -> vec3<f32> {
+    if curve == 1u {
+        return aces_hill(hdr);
+    } else if curve == 2u {
+        return agx_tonemap(hdr);
+    } else if curve == 3u {
+        return saturate(khronos_pbr_neutral(hdr));
+    }
+    return aces_narkowicz(hdr);
+}
+
+fn tonemap_raw(hdr: vec3<f32>, curve: u32) -> vec3<f32> {
+    if curve == 1u {
+        return aces_hill_raw(hdr);
+    } else if curve == 2u {
+        return agx_tonemap_raw(hdr);
+    } else if curve == 3u {
+        return khronos_pbr_neutral(hdr);
+    }
+    return aces_narkowicz_raw(hdr);
+}
+
+// ── PQ encoding ────────────────────────────────────────────────────────
+
+fn linear_to_pq(L: vec3<f32>) -> vec3<f32> {
+    let m1: f32 = 0.1593017578125;
+    let m2: f32 = 78.84375;
+    let c1: f32 = 0.8359375;
+    let c2: f32 = 18.8515625;
+    let c3: f32 = 18.6875;
+    let Ym1: vec3<f32> = pow(max(L, vec3<f32>(0.0)), vec3<f32>(m1));
+    return pow((c1 + c2 * Ym1) / (1.0 + c3 * Ym1), vec3<f32>(m2));
+}
+
+fn n0_fetch_in(c: vec2<f32>) -> vec4<f32> {
+    return textureSampleLevel(src_0, samp, c, 0.0);
+}
+
+fn n0_body(
+    c_velocity: vec4<f32>,
+    uv: vec2<f32>,
+    dims: vec2<f32>,
+    max_blur_px: f32,
+    enabled: u32,
+    shutter_angle: f32,
+) -> vec4<f32> {
+    let velocity_ndc = c_velocity.rg;
+    let smear_px_raw = velocity_ndc * 0.5 * dims * (shutter_angle / 360.0);
+    let smear_px = clamp(smear_px_raw, vec2<f32>(-max_blur_px), vec2<f32>(max_blur_px));
+    let smear_uv = smear_px / dims;
+
+    var acc = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    for (var i: u32 = 0u; i < MOTION_BLUR_SAMPLES; i = i + 1u) {
+        let t = f32(i) / f32(MOTION_BLUR_SAMPLES - 1u) - 0.5;
+        acc = acc + n0_fetch_in(uv + smear_uv * t);
+    }
+    return acc / f32(MOTION_BLUR_SAMPLES);
+}
+
+fn n1_body(
+    c: vec4<f32>,
+    uv: vec2<f32>,
+    dims: vec2<f32>,
+    exposure: f32,
+    curve: u32,
+    mode: u32,
+    paper_white: f32,
+    max_nits: f32,
+) -> vec4<f32> {
+    let hdr = c.rgb * exposure;
+
+    var result: vec3<f32>;
+
+    if mode == 1u {
+        // PQ output (export pipeline).
+        let mapped = tonemap_raw(hdr, curve);
+        let nits = clamp(mapped * paper_white, vec3<f32>(0.0), vec3<f32>(max_nits));
+        result = linear_to_pq(nits / 10000.0);
+    } else if mode == 2u {
+        // HDR display-linear output (macOS EDR).
+        let mapped = tonemap_raw(hdr, curve);
+        let nits = clamp(mapped * paper_white, vec3<f32>(0.0), vec3<f32>(max_nits));
+        result = nits / max(paper_white, 1.0);
+    } else if mode == 3u {
+        // EDR passthrough — no curve compression, linear values directly to EDR.
+        let peak = max_nits / max(paper_white, 1.0);
+        let edr = max(hdr, vec3<f32>(0.0));
+        let knee = peak * 0.8;
+        let compressed = knee + (peak - knee) * tanh((edr - knee) / (peak - knee));
+        let below = vec3<f32>(f32(edr.r < knee), f32(edr.g < knee), f32(edr.b < knee));
+        result = mix(compressed, edr, below);
+    } else {
+        // SDR output (default).
+        result = tonemap_sdr(hdr, curve);
+    }
+
+    return vec4<f32>(result, c.a);
+}
+
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dims = textureDimensions(dst);
+    if id.x >= dims.x || id.y >= dims.y {
+        return;
+    }
+    let coord = vec2<i32>(i32(id.x), i32(id.y));
+    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
+    let ext_1 = textureLoad(src_1, coord, 0);
+    let r0 = n0_body(ext_1, uv, vec2<f32>(dims), params.n0_max_blur_px, params.n0_enabled, params.n0_shutter_angle);
+    let r1 = n1_body(r0, uv, vec2<f32>(dims), params.n1_exposure, params.n1_curve, params.n1_mode, params.n1_paper_white, params.n1_max_nits);
+    textureStore(dst, coord, r1);
 }
 
 === generator:WaterStillPoolMatter node:72 ===

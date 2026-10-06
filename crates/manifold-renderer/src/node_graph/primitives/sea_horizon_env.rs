@@ -46,7 +46,8 @@ crate::primitive! {
     examples: ["preset.generator.ocean"],
     picker: { label: "Sea Horizon Environment", category: Atom },
     summary: "Turns the ground half of an HDRI into open sea, so water reflects sky and sea instead of the beach the photo was taken from.",
-    category: ColorAndTone,
+    // An environment map for lighting and reflections, not a composited image.
+    category: MaterialsAndLighting,
     role: Filter,
     aliases: ["sea", "ocean", "horizon", "environment", "hdri", "sky", "lower hemisphere"],
     pure: true,
