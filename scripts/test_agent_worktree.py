@@ -11,11 +11,13 @@ import importlib.util
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
 import time
 import textwrap
+import threading
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
@@ -629,9 +631,364 @@ def test_reclaim_refuses_a_live_process(repo):
     check("live refusal is reported", "live process" in out.getvalue(), out.getvalue())
 
 
+def test_scrub_continues_past_a_victim_that_frees_nothing(repo):
+    """One unmarked target freed nothing and ended the pass, so the warm caches
+    behind it stayed on disk (2026-10-06: pool left at 117G of a 40G goal)."""
+    empty = add_slot(repo, "slot-0", "lane/empty")
+    (empty / "target" / "debug").mkdir(parents=True)
+    (empty / "target" / "debug" / "stray").write_bytes(b"\0" * 2**20)
+    old = time.time() - 3600
+    for path in (empty / "target", empty / "target" / "debug"):
+        os.utime(path, (old, old))
+    warm = add_slot(repo, "slot-1", "lane/warm")
+    exe = fake_target(warm)
+    with patch.object(aw, "SCRUB_TO_GB", 0), \
+            patch.object(aw, "slot_has_live_session", return_value=False), \
+            patch.object(aw, "target_live_status", return_value=False), \
+            redirect_stdout(io.StringIO()) as out:
+        aw.cmd_scrub(SimpleNamespace())
+    check("scrub reaches the cache behind a no-op victim", not exe.exists(), out.getvalue())
+
+
 TESTS += [test_scrub_frees_an_idle_slot_over_its_cap,
           test_reclaim_touches_only_landed_clean_idle_slots,
-          test_reclaim_refuses_a_live_process]
+          test_reclaim_refuses_a_live_process,
+          test_scrub_continues_past_a_victim_that_frees_nothing]
+
+
+# ------------------------------------------------- idle Codex plugin brokers
+
+cb = sys.modules["codex_brokers"]
+
+# Stands in for the plugin's broker. Mode "answer" replies to broker/shutdown
+# the way app-server-broker.mjs does (reply, unlink socket and pid file, exit);
+# "silent" accepts and never replies; "linger" replies and keeps running;
+# "nosocket" never listens. Saved under the broker script's name so the
+# command-line identity check sees a broker.
+FAKE_BROKER = textwrap.dedent("""
+    import json, os, socket, sys, time
+    mode, sock_path, pid_file = sys.argv[1], sys.argv[2], sys.argv[3]
+    open(pid_file, "w").write(str(os.getpid()))
+    if mode == "nosocket":
+        print("READY", flush=True)
+        time.sleep(60)
+        sys.exit(0)
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(sock_path)
+    server.listen(4)
+    print("READY", flush=True)
+    while True:
+        conn, _ = server.accept()
+        if mode == "silent":
+            time.sleep(60)
+        line = conn.makefile().readline()
+        if line and json.loads(line).get("method") == "broker/shutdown":
+            conn.sendall(b'{"id":1,"result":{}}\\n')
+            conn.close()
+            if mode == "linger":
+                continue
+            server.close()
+            os.unlink(sock_path)
+            os.unlink(pid_file)
+            sys.exit(0)
+        conn.close()
+""")
+
+
+class Brokers:
+    """Fake plugin state root, Codex sessions dir, and broker processes whose
+    cwd is a slot — the exact shape that pinned the live ring."""
+
+    def __init__(self, repo):
+        self.root = repo.parent / "plugin-state"
+        self.sessions = repo.parent / "codex-sessions"
+        self.sessions.mkdir()
+        self.script = repo.parent / cb.BROKER_SCRIPT
+        self.script.write_text(FAKE_BROKER)
+        self.procs, self.dirs = [], []
+
+    def patches(self):
+        return (patch.object(cb, "state_roots", return_value=[self.root]),
+                patch.object(cb, "CODEX_SESSIONS", self.sessions))
+
+    def start(self, wt, jobs=(), mode="answer"):
+        state = self.root / cb.state_dir_name(wt)
+        state.mkdir(parents=True, exist_ok=True)
+        # AF_UNIX paths cap at 104 bytes on macOS; temp dirs run long.
+        session = Path(tempfile.mkdtemp(prefix="cxb-", dir="/tmp"))
+        self.dirs.append(session)
+        sock, pid_file, log = session / "broker.sock", session / "broker.pid", session / "broker.log"
+        log.write_text("")
+        proc = subprocess.Popen([sys.executable, str(self.script), mode, str(sock), str(pid_file)],
+                                cwd=str(wt), stdout=subprocess.PIPE, text=True)
+        self.procs.append(proc)
+        if proc.stdout.readline().strip() != "READY":
+            raise RuntimeError("fake broker failed to start")
+        # The real broker is detached and reaped by launchd; reap ours so an
+        # exited one never reads as alive.
+        threading.Thread(target=proc.wait, daemon=True).start()
+        self.write_broker(wt, {"endpoint": f"unix:{sock}", "pidFile": str(pid_file),
+                               "logFile": str(log), "sessionDir": str(session), "pid": proc.pid})
+        self.set_jobs(wt, jobs)
+        return proc, state, session
+
+    def companion(self):
+        """A live process under the plugin worker's script name."""
+        script = self.script.with_name(cb.COMPANION_SCRIPT)
+        script.write_text("import time\ntime.sleep(60)\n")
+        proc = subprocess.Popen([sys.executable, str(script)])
+        self.procs.append(proc)
+        return proc
+
+    def write_broker(self, wt, record):
+        state = self.root / cb.state_dir_name(wt)
+        state.mkdir(parents=True, exist_ok=True)
+        (state / "broker.json").write_text(json.dumps(record))
+
+    def set_jobs(self, wt, jobs):
+        (self.root / cb.state_dir_name(wt) / "state.json").write_text(
+            json.dumps({"version": 1, "jobs": list(jobs)}))
+
+    def rollout(self, thread, events, age_s):
+        """A rollout whose event_msg lines carry these turn markers, in order."""
+        path = self.sessions / "2026" / "10" / "06" / f"rollout-2026-10-06T00-00-00-{thread}.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        filler = json.dumps({"type": "response_item", "payload": {"text": "x" * 70000}})
+        lines = []
+        for event in events:
+            lines += [json.dumps({"timestamp": "2026-10-06T00:00:00.000Z", "type": "event_msg",
+                                  "payload": {"type": event}}, separators=(",", ":")), filler]
+        path.write_text("\n".join(lines) + "\n")
+        stamp = time.time() - age_s
+        os.utime(path, (stamp, stamp))
+
+    def stop_all(self):
+        for proc in self.procs:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+        for path in self.dirs:
+            shutil.rmtree(path, ignore_errors=True)
+
+
+def completed_job(thread="0a1b-c2"):
+    return {"id": "task-a", "status": "completed", "pid": None, "threadId": thread,
+            "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())}
+
+
+def wait_gone(proc, seconds=5.0):
+    deadline = time.time() + seconds
+    while proc.poll() is None and time.time() < deadline:
+        time.sleep(0.05)
+    return proc.poll() is not None
+
+
+def test_state_dir_matches_the_plugin_layout(repo):
+    """The plugin hashes the realpath of git's toplevel, which git has already
+    resolved through symlinks, and slugs that resolved name."""
+    real = repo.parent / "real parent" / "My Slot!"
+    real.mkdir(parents=True)
+    link = repo.parent / "link"
+    link.symlink_to(real)
+    import hashlib
+    expected = "My-Slot-" + hashlib.sha256(str(real.resolve()).encode()).hexdigest()[:16]
+    check("state dir name follows the plugin", cb.state_dir_name(link) == expected,
+          cb.state_dir_name(link))
+
+
+def test_idle_codex_broker_no_longer_pins_a_slot(repo):
+    """The live-ring failure: every slot an Astra job ran in kept a broker whose
+    cwd was the slot, so acquire skipped them all and the pool read full."""
+    wt = add_slot(repo, "slot-0", "lane/done")
+    brokers = Brokers(repo)
+    try:
+        brokers.rollout("0a1b-c2", ["task_started", "task_complete"], age_s=3600)
+        proc, state, session = brokers.start(wt, jobs=[completed_job()])
+        check("an idle broker reads as a live session", aw.slot_has_live_session(wt))
+        roots, sessions = brokers.patches()
+        out = io.StringIO()
+        with roots, sessions, patch.object(aw, "MAX_SLOTS", 1), \
+                redirect_stdout(out), redirect_stderr(out):
+            try:
+                aw.cmd_acquire(acquire_args("lane/next"))
+            except SystemExit as e:
+                out.write(f"exit {e.code}")
+        text = out.getvalue()
+        check("acquire stops the idle broker", "STOPPED broker" in text, text)
+        check("acquire reuses the slot", "SLOT:     slot-0" in text, text)
+        check("broker process exited", wait_gone(proc), text)
+        check("broker record and session files cleared",
+              not (state / "broker.json").exists() and not session.exists(), text)
+        check("job history kept", (state / "state.json").exists())
+    finally:
+        brokers.stop_all()
+
+
+def test_busy_codex_broker_is_left_alone(repo):
+    wt = add_slot(repo, "slot-0", "lane/busy")
+    brokers = Brokers(repo)
+    try:
+        worker = brokers.companion()
+        # The plugin stamps updatedAt on phase changes only, so a long turn
+        # carries its start time: a day-old stamp with a live worker is busy.
+        day_old = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(time.time() - 86400))
+        running = dict(completed_job(), status="running", pid=worker.pid, updatedAt=day_old)
+        proc, _, _ = brokers.start(wt, jobs=[running])
+        roots, sessions = brokers.patches()
+        with roots, sessions:
+            lines = cb.stop_idle(wt)
+            check("running job keeps its broker at any age",
+                  proc.poll() is None and "is running" in lines[0], lines)
+
+            brokers.set_jobs(wt, [dict(running, pid=os.getpid())])
+            lines = cb.stop_idle(wt)
+            check("a stale running job whose pid now belongs to something else does not",
+                  "is running" not in lines[0], lines)
+            proc, _, _ = brokers.start(wt)
+
+            brokers.set_jobs(wt, [dict(completed_job(), status="queued")])
+            lines = cb.stop_idle(wt)
+            check("queued job keeps its broker", proc.poll() is None and "is queued" in lines[0], lines)
+
+            # The plugin marks a job completed on a mid-turn message; Codex can
+            # then go quiet for minutes inside a build. Only the markers tell.
+            brokers.set_jobs(wt, [completed_job()])
+            brokers.rollout("0a1b-c2", ["task_started", "task_complete", "task_started"], age_s=1800)
+            lines = cb.stop_idle(wt)
+            check("open turn keeps its broker through a long quiet build",
+                  proc.poll() is None and "turn still open" in lines[0], lines)
+
+            brokers.set_jobs(wt, [dict(completed_job(), status="cancelled")])
+            brokers.rollout("0a1b-c2", ["task_started"], age_s=7200)
+            lines = cb.stop_idle(wt)
+            check("a killed turn, open but silent for hours, does not",
+                  lines == [f"STOPPED broker pid {proc.pid}"] and wait_gone(proc), lines)
+            proc, _, _ = brokers.start(wt, jobs=[completed_job()])
+
+            brokers.rollout("0a1b-c2", [], age_s=3600)
+            lines = cb.stop_idle(wt)
+            check("a rollout with no turn markers keeps its broker, loudly",
+                  proc.poll() is None and "no turn markers" in lines[0], lines)
+
+            brokers.rollout("0a1b-c2", ["task_started", "turn_aborted"], age_s=5)
+            lines = cb.stop_idle(wt)
+            check("closed but freshly written rollout keeps its broker",
+                  proc.poll() is None and "written in the last" in lines[0], lines)
+
+            brokers.rollout("0a1b-c2", ["task_started", "task_complete"], age_s=3600)
+            lines = cb.stop_idle(wt)
+            check("closed quiet turn lets the broker stop",
+                  lines == [f"STOPPED broker pid {proc.pid}"] and wait_gone(proc), lines)
+    finally:
+        brokers.stop_all()
+
+
+def test_leased_slot_keeps_its_broker_until_release(repo):
+    wt = add_slot(repo, "slot-0", "lane/leased")
+    write_lease(wt, holder_pid=os.getpid())
+    brokers = Brokers(repo)
+    try:
+        proc, _, _ = brokers.start(wt, jobs=[completed_job()])
+        roots, sessions = brokers.patches()
+        with roots, sessions, patch.object(aw, "target_live_status", return_value=False):
+            with redirect_stdout(io.StringIO()) as out:
+                aw.cmd_scrub(SimpleNamespace())
+            check("scrub leaves a leased slot's broker", proc.poll() is None, out.getvalue())
+            with redirect_stdout(io.StringIO()) as out:
+                aw.cmd_release(SimpleNamespace(slot="slot-0"))
+            check("release stops it", "STOPPED broker" in out.getvalue() and wait_gone(proc), out.getvalue())
+    finally:
+        brokers.stop_all()
+
+
+def test_odd_brokers_are_never_signalled(repo):
+    wt = add_slot(repo, "slot-0", "lane/odd")
+    brokers = Brokers(repo)
+    try:
+        roots, sessions = brokers.patches()
+        with roots, sessions, patch.object(cb, "EXIT_WAIT_S", 0.3):
+            silent, state, _ = brokers.start(wt, jobs=[completed_job()], mode="silent")
+            lines = cb.stop_idle(wt)
+            check("a broker that never answers is kept, not killed",
+                  silent.poll() is None and "did not answer" in lines[0], lines)
+            check("its record is kept", (state / "broker.json").exists())
+
+            deaf, _, _ = brokers.start(wt, jobs=[completed_job()], mode="nosocket")
+            lines = cb.stop_idle(wt)
+            check("a running broker without its socket is kept, not killed",
+                  deaf.poll() is None and "socket gone" in lines[0], lines)
+
+            deaf.kill()
+            wait_gone(deaf)
+            lines = cb.stop_idle(wt)
+            check("a dead broker's record is cleared",
+                  "CLEARED stale" in lines[0] and not (state / "broker.json").exists(), lines)
+
+            # After a reboot the recorded pid can be any process, here this one.
+            brokers.write_broker(wt, {"endpoint": "unix:/tmp/cxb-missing/broker.sock", "pid": os.getpid()})
+            lines = cb.stop_idle(wt)
+            check("a reused pid is not mistaken for the broker",
+                  "CLEARED stale" in lines[0] and not (state / "broker.json").exists(), lines)
+
+            linger, _, _ = brokers.start(wt, jobs=[completed_job()], mode="linger")
+            lines = cb.stop_idle(wt)
+            check("an acknowledged broker that stays up is kept",
+                  linger.poll() is None and "still running" in lines[0], lines)
+            lines = cb.stop_idle(wt)
+            check("and is not asked again while it exits", "earlier, still exiting" in lines[0], lines)
+    finally:
+        brokers.stop_all()
+
+
+def test_malformed_plugin_state_never_breaks_the_ring(repo):
+    wt = add_slot(repo, "slot-0", "lane/malformed")
+    brokers = Brokers(repo)
+    roots, sessions = brokers.patches()
+    with roots, sessions:
+        record = {"endpoint": "unix:/tmp/cxb-missing/broker.sock", "pid": None}
+        for jobs in ({"a": 1}, "jobs", [None]):
+            brokers.write_broker(wt, record)
+            (brokers.root / cb.state_dir_name(wt) / "state.json").write_text(json.dumps({"jobs": jobs}))
+            lines = cb.stop_idle(wt)
+            check(f"jobs {jobs!r} fails closed", "unreadable" in lines[0], lines)
+        brokers.set_jobs(wt, [])
+        for bad in ([1, 2], {"endpoint": 7, "pid": 1}, {"endpoint": "unix:/x", "pidFile": 3}):
+            brokers.write_broker(wt, bad)
+            lines = cb.stop_idle(wt)
+            check(f"broker {bad!r} fails closed", "unreadable broker.json" in lines[0], lines)
+    with patch.object(aw, "stop_idle_codex_brokers", side_effect=RuntimeError("boom")), \
+            redirect_stdout(io.StringIO()) as out:
+        aw.stop_idle_brokers([wt])
+    check("a helper crash is reported, not raised", "helper failed" in out.getvalue(), out.getvalue())
+
+
+def test_turn_markers_are_found_across_chunk_boundaries(repo):
+    """The rollout is read backwards in chunks; a marker split by a chunk edge
+    must still count, and an earlier marker must never shadow a later one."""
+    path = repo.parent / "rollout.jsonl"
+    opened, closed = cb.TURN_MARKERS[0], cb.TURN_MARKERS[1]
+    bad = []
+    with patch.object(cb, "TAIL_CHUNK", 64):
+        for shift in range(0, 200, 7):
+            path.write_bytes(closed + b"x" * 300 + opened + b"y" * shift)
+            if cb.last_turn_marker(path) != "open":
+                bad.append(("open", shift))
+            path.write_bytes(opened + b"x" * 300 + closed + b"y" * shift)
+            if cb.last_turn_marker(path) != "closed":
+                bad.append(("closed", shift))
+        path.write_bytes(b"z" * 500)
+        none = cb.last_turn_marker(path)
+    check("markers found at every chunk offset", not bad, bad)
+    check("no marker reads as none", none is None, none)
+
+
+TESTS += [test_state_dir_matches_the_plugin_layout,
+          test_turn_markers_are_found_across_chunk_boundaries,
+          test_idle_codex_broker_no_longer_pins_a_slot,
+          test_busy_codex_broker_is_left_alone,
+          test_leased_slot_keeps_its_broker_until_release,
+          test_odd_brokers_are_never_signalled,
+          test_malformed_plugin_state_never_breaks_the_ring]
 
 
 def main():
