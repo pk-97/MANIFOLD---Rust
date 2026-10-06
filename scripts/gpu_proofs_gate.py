@@ -20,10 +20,11 @@ scripts/gpu_scope.py to the focused tests for what changed plus a fixed smoke
 set. A touched GPU path with no mapping fails loudly; there is no silent
 run-everything fallback. `--all` runs the whole suite (nightly trunk_health).
 Explicit `--test NAME` / `--filter` / `--skip` bypass scoping for a hand-picked
-run. `--budget SECONDS` fails a run whose budgeted tests exceed it and names the
-slowest tests. Scoped runs skip tests measured over
-gpu_scope.SLOW_THRESHOLD_S (scripts/gpu_test_times.json); `--record-times PATH` writes
-fresh measurements. The chosen mode and why are always printed.
+run. `--budget SECONDS` reports a separate budget warning when passing tests
+exceed it; test failures and hangs remain red. Scoped runs skip tests measured
+over gpu_scope.SLOW_THRESHOLD_S unless selected by exact name. Successful gate-driven runs retain their
+times in the Git common directory for all slots; scripts/gpu_test_times.json
+seeds fresh checkouts. `--record-times PATH` exports a merged timing table.
 
 Scoped and explicit runs reuse shared content-addressed passes before building
 or taking the GPU lock. --all and measurement requests always execute.
@@ -46,6 +47,7 @@ and the landing docs point at that instead.
 import argparse
 import codecs
 import contextlib
+import fcntl
 import json
 import os
 import queue
@@ -53,6 +55,7 @@ import re
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -190,6 +193,7 @@ def run_gate(
 
     # Own process group so a hang kill takes cargo and the test binary, and
     # nothing else.
+    watchdog = Watchdog(gpu_scope.load_times(), hang_floor)
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
@@ -199,7 +203,6 @@ def run_gate(
         env=build_environment(),
     )
     assert proc.stdout is not None
-    watchdog = Watchdog(gpu_scope.load_times(), hang_floor)
     chunks: queue.Queue = queue.Queue()
 
     def pump() -> None:
@@ -338,7 +341,7 @@ class Watchdog:
 
 
 def record_timing(line: str, now: float, state: dict, timings: list) -> None:
-    """Append (test, seconds, binary) when `line` is a finished-test line."""
+    """Append (test, seconds, binary, status) for a finished test."""
     m = RUNNING_BINARY_RE.match(line)
     if m:
         state["t"], state["bin"] = now, m.group(1)
@@ -350,7 +353,8 @@ def record_timing(line: str, now: float, state: dict, timings: list) -> None:
     if name is None and state.get("open") and BARE_RESULT_RE.match(line):
         name = state["open"]
     if name is not None:
-        timings.append((name, now - state["t"], state["bin"]))
+        status = m.group(2) if m else BARE_RESULT_RE.match(line).group(1)
+        timings.append((name, now - state["t"], state["bin"], status))
         state["t"], state["open"] = now, None
         return
     m = TEST_START_RE.match(line)
@@ -407,16 +411,35 @@ def write_timings_md(path: Path, timings: list, n: int = 25) -> None:
     path.write_text("\n".join(rows) + "\n")
 
 
-def write_times_json(path: Path, timings: list) -> str:
+def write_times_json(path: Path, timings: list, *, merge=False, learned=False) -> str:
     """Write measured per-test seconds; return a diff against the committed file."""
-    old = gpu_scope.load_times()
-    new = {n: round(secs, 1) for n, secs, _b, _bud in timings}
+    old = gpu_scope.read_times(gpu_scope.TIMES_PATH)
+    new = {n: round(secs, 1) for n, secs, _b, _bud, status in timings if status == "ok"}
+    if merge and not learned:
+        new = gpu_scope.merge_times(old, gpu_scope.read_times(path), new)
+        for n, _s, _b, _bud, status in timings:
+            if status != "ok":
+                new.pop(n, None)
     sha = subprocess.run(["git", "-C", str(Path(__file__).resolve().parent), "rev-parse", "HEAD"],
                          capture_output=True, text=True).stdout.strip()
+    entries = new
+    if learned:
+        entries = json.loads(path.read_text())["tests"] if path.exists() else {}
+        entries.update({n: {"s": secs, "sha": sha, "at": time.time()}
+                        for n, secs in new.items()})
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(
-        {"measured_at": time.strftime("%Y-%m-%d"), "sha": sha,
-         "tests": dict(sorted(new.items(), key=lambda kv: -kv[1]))}, indent=2) + "\n")
+    # Readers in another slot must see either complete version, never a
+    # partially written JSON file.
+    with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as out:
+        temporary = Path(out.name)
+        try:
+            out.write(json.dumps(
+                {"measured_at": time.strftime("%Y-%m-%d"), "sha": sha,
+                 "tests": dict(sorted(entries.items()))}, indent=2) + "\n")
+            out.close()
+            temporary.replace(path)
+        finally:
+            temporary.unlink(missing_ok=True)
     thr = gpu_scope.SLOW_THRESHOLD_S
     lines = [f"GPU test times written to {path} (threshold {thr}s)"]
     for n in sorted(set(old) | set(new)):
@@ -434,6 +457,26 @@ def write_times_json(path: Path, timings: list) -> str:
         lines.append("  no threshold crossings vs the committed file")
     lines.append("To adopt: review, then commit this file as scripts/gpu_test_times.json on a branch.")
     return "\n".join(lines)
+
+
+def remember_times(timings: list, exit_code: int, hung: list) -> None:
+    """Learn only from a completed passing invocation, never a failure or hang."""
+    if exit_code or hung or not timings:
+        return
+    path = gpu_scope.learned_times_path()
+    if path is None:
+        print("[WARN] GPU timings not retained: cannot resolve the Git common directory")
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # Separate from the GPU lock; protects partial measurement merges.
+        with path.with_suffix(".lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            write_times_json(path, timings, learned=True)
+        print(f"[gpu-times] retained {len(timings)} measurements in {path}; "
+              f"tests over {gpu_scope.SLOW_THRESHOLD_S}s are deferred unless selected by exact name")
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        print(f"[WARN] GPU timings not retained: {error}")
 
 
 def print_summary(
@@ -488,16 +531,17 @@ def print_summary(
             print(f"GPU-PROOFS GATE: HUNG {name} after {waited:.0f}s")
         print("GPU-PROOFS GATE: FAIL (hung test killed; a hang is a red gate, never skip or ignore it)")
         return 4
-    if exit_code == 0 and over_budget:
-        print(f"GPU-PROOFS GATE: FAIL (over time budget: {spent:.0f}s > {budget:.0f}s; "
-              "to fix: if these tests are slow on purpose, record times with "
-              "`scripts/gpu_proofs_gate.py --all --record-times /tmp/t.json` and commit it as "
-              "scripts/gpu_test_times.json (tests over "
-              f"{gpu_scope.SLOW_THRESHOLD_S}s are skipped at landing); otherwise shorten the "
-              "slowest tests listed above. Do not raise the budget)")
-        return 3
+    # Output evidence also wins over an erroneously successful cargo status.
+    if failed_tests or goldens or any(status == "FAILED" for _, status, _, _ in binaries):
+        exit_code = exit_code or 1
+    if over_budget:
+        print(f"GPU-PROOFS BUDGET: OVER ({spent:.0f}s > {budget:.0f}s; "
+              "inspect the slowest tests above; successful gate-driven runs retain timings automatically. "
+              "Shorten or narrow the remaining fast proofs; do not raise the budget)")
     if exit_code == 0:
         print("GPU-PROOFS GATE: PASS")
+    elif not failed_tests and not goldens:
+        print(f"GPU-PROOFS GATE: FAIL (cargo exit {exit_code}, no test failure parsed — not the budget)")
     else:
         print(
             f"GPU-PROOFS GATE: FAIL ({len(failed_tests)} failed tests, "
@@ -575,7 +619,7 @@ def main() -> int:
     parser.add_argument("--path", action="append", default=None, metavar="PATH",
                         help="scoped mode: use these touched paths instead of the git diff")
     parser.add_argument("--budget", type=float, default=None, metavar="SECONDS",
-                        help="fail if budgeted test time exceeds this (landing passes "
+                        help="warn separately if passing tests exceed this (landing passes "
                         f"{gpu_scope.LANDING_BUDGET_S})")
     parser.add_argument("--hang-allowance", type=float, default=None, metavar="SECONDS",
                         help="floor of the per-test hang allowance (default "
@@ -587,9 +631,27 @@ def main() -> int:
     parser.add_argument("--timings-md", type=Path, default=None,
                         help="write the 25 slowest tests as markdown to this path")
     parser.add_argument("--record-times", type=Path, default=None, metavar="PATH",
-                        help="write measured per-test seconds as JSON to PATH and print the diff "
-                        "vs scripts/gpu_test_times.json (use with --all; never writes the repo file)")
+                        help="merge measured per-test seconds into PATH and print the diff "
+                        "vs scripts/gpu_test_times.json (use with --all)")
+    parser.add_argument("--learn-times", action="store_true",
+                        help="retain passing gate-driven measurements in the shared cache")
+    parser.add_argument("--forget", metavar="NAME", help="remove a shared timing entry and exit")
     args = parser.parse_args()
+    if args.forget:
+        path = gpu_scope.learned_times_path()
+        if path is None:
+            print("Cannot resolve shared GPU timing cache")
+            return 2
+        with path.with_suffix(".lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            if path.exists():
+                data = json.loads(path.read_text())
+                data["tests"].pop(args.forget, None)
+                with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as out:
+                    json.dump(data, out)
+                Path(out.name).replace(path)
+        print(f"Forgot shared GPU timing: {args.forget}")
+        return 0
 
     manifest_path = args.manifest_path or default_manifest_path()
     repo = manifest_path.parent
@@ -606,10 +668,10 @@ def main() -> int:
     else:
         try:
             paths = args.path if args.path is not None else changed_paths(repo, args.base)
+            plan = gpu_scope.plan_for_paths(paths, repo, base=args.base)
         except RuntimeError as error:
             print(f"GPU-PROOFS SCOPE: FAIL - {error}")
             return 2
-        plan = gpu_scope.plan_for_paths(paths, repo)
         if plan.unmapped:
             print(gpu_scope.unmapped_message(plan))
             return 2
@@ -627,13 +689,6 @@ def main() -> int:
     # per cargo invocation, so queue-wrapped standalone runs count too.
     reuse = not (args.all_tests or args.record_times or args.timings_md or args.hang_allowance)
     passes = [gate_passes.proof_pass(repo, run) if reuse else None for run in runs]
-    cached_seconds = sum(p.record['seconds'] for p, run in zip(passes, runs)
-                         if p and p.record and run['budgeted'])
-    if args.budget is not None and cached_seconds > args.budget:
-        # A cached functional pass is not a pass of a tighter time budget.
-        for p in passes:
-            if p:
-                p.record = None
     pending = [run for run, p in zip(runs, passes) if not (p and p.record)]
     for p in passes:
         if p:
@@ -650,6 +705,7 @@ def main() -> int:
     # One GPU run on the machine at a time (scripts/gpu_queue.py). Held for all
     # cargo runs so another run cannot interleave between test binaries.
     measured = []
+    recorded_timings = []
     with gpu_queue.hold("gpu_proofs_gate") if pending else contextlib.nullcontext():
         for run, passed in zip(runs, passes):
             if passed and passed.record:
@@ -660,23 +716,31 @@ def main() -> int:
             code, output = run_gate(manifest_path, run["filters"], run["skips"], run["targets"],
                                     run["full"], run["lib"], run_timings, hung,
                                     args.hang_allowance)
+            if (parse_failed_tests(output) or parse_golden_mismatches(output)
+                    or any(status == "FAILED" for _, status, _, _ in parse_binaries(output))
+                    or any(t[3] == "FAILED" for t in run_timings)):
+                code = code or 1
             measured.append((passed, code, sum(t[1] for t in run_timings)))
             exit_code = exit_code or code
             outputs.append(output)
-            all_timings += [(n, s, b, run["budgeted"]) for n, s, b in run_timings]
+            all_timings += [(n, s, b, run["budgeted"]) for n, s, b, status in run_timings]
+            recorded = [(n, s, b, run["budgeted"], status) for n, s, b, status in run_timings]
+            recorded_timings.extend(recorded)
             if hung:
                 break
     output = "".join(outputs)
     if args.timings_md:
         write_timings_md(args.timings_md, all_timings)
     if args.record_times:
-        print(write_times_json(args.record_times, all_timings))
+        print(write_times_json(args.record_times, recorded_timings, merge=True))
     verdict = print_summary(output, exit_code, all_timings, args.budget, hung)
+    if args.learn_times:
+        remember_times(recorded_timings, verdict, hung)
     for passed, code, seconds in measured:
         if passed:
-            # A failed invocation is never recorded. Budget/hang failures must
-            # also execute again, even if Cargo itself exited successfully.
-            passed.save(code or (verdict if verdict in (3, 4) else 0), seconds)
+            # Budget warnings do not invalidate functional passes. Real
+            # failures and hangs can never acquire a reusable pass.
+            passed.save(code or verdict, seconds)
     return verdict
 
 

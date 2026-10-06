@@ -30,6 +30,8 @@ class CacheTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.repo = Path(self.temp.name).resolve()
+        self.enterContext(patch.object(gpu_scope, 'learned_times_path',
+                                       return_value=self.repo / '.git/gpu-test-times.json'))
         self.git('init', '-b', 'main')
         self.git('config', 'user.email', 'test@example.invalid')
         self.git('config', 'user.name', 'Cache test')
@@ -253,24 +255,24 @@ class CacheTests(unittest.TestCase):
             os.environ['UPDATE_CONFORMANCE_GOLDENS'] = '1'
             self.assertNotEqual(first, self.real_host_inputs(self.repo, True))
 
-    def test_budget_failure_is_not_saved_and_nightly_ignores_existing_pass(self):
+    def test_budget_warning_reuses_pass_and_nightly_ignores_existing_pass(self):
         argv = ['gpu_proofs_gate.py', '--manifest-path', str(self.repo / 'Cargo.toml'),
                 '--path', 'crates/manifold-renderer/src/node_graph/primitives/invert.rs',
                 '--budget', '360']
 
         def too_slow(manifest, filters, skips, targets, full, lib, timings, *rest):
-            timings.append(('slow', 400, 'binary'))
+            timings.append(('slow', 400, 'binary', 'ok'))
             return 0, ''
 
         with patch.object(sys, 'argv', argv), \
                 patch.object(proofs, 'build_tests', return_value=0), \
+                patch.object(proofs, 'remember_times'), \
                 patch.object(proofs, 'run_gate', side_effect=too_slow) as run, \
                 patch.object(gpu_queue, 'hold', side_effect=lambda *a, **k: contextlib.nullcontext()):
-            self.assertEqual(proofs.main(), 3)
-            self.assertEqual(proofs.main(), 3)
-            self.assertEqual(run.call_count, 2)
-        self.assertIsNone(cache.proof_pass(self.repo, self.run_spec()).record)
-        cache.proof_pass(self.repo, self.run_spec()).save(0, 1)
+            self.assertEqual(proofs.main(), 0)
+            self.assertEqual(proofs.main(), 0)
+            self.assertEqual(run.call_count, 1)
+        self.assertEqual(cache.proof_pass(self.repo, self.run_spec()).record['seconds'], 400)
         with patch.object(sys, 'argv', argv[:3] + ['--all']), \
                 patch.object(proofs, 'build_tests', return_value=0) as build, \
                 patch.object(proofs, 'run_gate', return_value=(0, '')) as run, \
@@ -315,6 +317,13 @@ class CacheTests(unittest.TestCase):
                       'flow-gate', 'tests/1', 'gpu-proofs', 'fresh-docs-index'):
             self.assertIn('[REUSED] ' + label, self.output.getvalue())
         print(f'unchanged simulated gate: {elapsed:.3f}s', file=sys.stderr)
+
+    def test_landing_budget_warning_needs_no_named_red_or_repeat_gpu_hold(self):
+        self.assertEqual(self.run_landing()[0], 0)
+        cache.proof_pass(self.repo, self.run_spec()).save(0, 400)
+        code, calls, holds, proofs_run = self.run_landing()
+        self.assertEqual((code, calls, holds, proofs_run), (0, [], 0, 0))
+        self.assertIn('GPU-PROOFS BUDGET: OVER (400s > 360s', self.output.getvalue())
 
     def test_failed_gate_retries_red_leg_but_reuses_earlier_green_legs(self):
         code, _, _, _ = self.run_landing(failed='deny')

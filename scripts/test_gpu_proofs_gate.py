@@ -3,8 +3,10 @@
 
 import contextlib
 import io
+import json
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
 from pathlib import Path
@@ -32,6 +34,11 @@ def run_gate(*, targets=None, lib=False, full_suite=False, filters=None, skips=N
 
 
 class GpuProofsGateTests(unittest.TestCase):
+    def setUp(self):
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        self.learned = Path(directory) / "learned.json"
+        self.enterContext(patch.object(gate.gpu_scope, "learned_times_path", return_value=self.learned))
+
     def test_default_targets_only_gpu_proofs(self):
         command, _ = run_gate()
 
@@ -105,7 +112,8 @@ class GpuProofsGateTests(unittest.TestCase):
         ]
         for now, line in feed:
             gate.record_timing(line, now, state, timings)
-        self.assertEqual([(n, round(s, 1)) for n, s, _ in timings], [("a::one", 3.0), ("a::two", 10.5)])
+        self.assertEqual([(n, round(s, 1)) for n, s, _, status in timings], [("a::one", 3.0), ("a::two", 10.5)])
+        self.assertEqual([t[3] for t in timings], ["ok", "FAILED"])
 
     def test_result_split_by_native_output_is_charged_to_its_own_test(self):
         timings, state = [], {"t": None, "bin": ""}
@@ -118,7 +126,7 @@ class GpuProofsGateTests(unittest.TestCase):
         ]
         for now, line in feed:
             gate.record_timing(line, now, state, timings)
-        self.assertEqual([(n, round(s, 1)) for n, s, _ in timings], [("a::slow", 200.0), ("a::fast", 1.0)])
+        self.assertEqual([(n, round(s, 1)) for n, s, _, status in timings], [("a::slow", 200.0), ("a::fast", 1.0)])
 
     def test_timings_collected_during_run(self):
         process = FakeProcess()
@@ -129,7 +137,7 @@ class GpuProofsGateTests(unittest.TestCase):
             with patch.object(gate.time, "monotonic", side_effect=lambda: next(ticks)):
                 with contextlib.redirect_stdout(io.StringIO()):
                     gate.run_gate(Path("/tmp/Cargo.toml"), [], [], None, False, False, timings)
-        self.assertEqual(timings, [("x", 3.0, "a")])
+        self.assertEqual(timings, [("x", 3.0, "a", "ok")])
 
     def summary(self, timings, budget, exit_code=0):
         out = io.StringIO()
@@ -137,13 +145,13 @@ class GpuProofsGateTests(unittest.TestCase):
             code = gate.print_summary("", exit_code, timings, budget)
         return code, out.getvalue()
 
-    def test_over_budget_fails_and_names_slowest(self):
+    def test_over_budget_passes_with_separate_warning_and_names_slowest(self):
         timings = [("fast", 10.0, "b", True), ("slow_one", 200.0, "b", True), ("slow_two", 120.0, "b", True)]
         code, text = self.summary(timings, 300)
-        self.assertEqual(code, 3)
-        self.assertIn("over time budget: 330s > 300s", text)
+        self.assertEqual(code, 0)
+        self.assertIn("GPU-PROOFS BUDGET: OVER (330s > 300s", text)
         self.assertLess(text.index("slow_one"), text.index("slow_two"))
-        self.assertLess(text.index("Slowest tests"), text.index("GPU-PROOFS GATE: FAIL"))
+        self.assertIn("GPU-PROOFS GATE: PASS", text)
 
     def test_under_budget_passes_and_unbudgeted_runs_are_exempt(self):
         timings = [("a", 100.0, "b", True), ("glb_sweep", 957.0, "glb", False)]
@@ -155,7 +163,8 @@ class GpuProofsGateTests(unittest.TestCase):
         code, _ = self.summary([("a", 9999.0, "b", True)], None)
         self.assertEqual(code, 0)
 
-    def run_main(self, argv, repo_changed=None, build_exit=0):
+    def run_main(self, argv, repo_changed=None, build_exit=0, measured=(), run_exit=0,
+                 run_output="", run_hung=(), passed=None):
         calls = []
         self.events = events = []
 
@@ -163,9 +172,13 @@ class GpuProofsGateTests(unittest.TestCase):
                           hang_floor=None):
             calls.append(dict(filters=filters, skips=skips, targets=targets, full=full, lib=lib))
             events.append(("run", gate.cargo_test_cmd(manifest, targets, full, lib)))
-            return 0, ""
+            timings.extend(measured)
+            hung.extend(run_hung)
+            return run_exit, run_output
 
         def fake_build(cmd, **kwargs):
+            if cmd[0] == "git":
+                return subprocess.CompletedProcess(cmd, 0, stdout="testsha\n")
             self.assertEqual(kwargs["env"]["CARGO_INCREMENTAL"], "0")
             events.append(("build", cmd))
             return subprocess.CompletedProcess(cmd, build_exit)
@@ -179,7 +192,7 @@ class GpuProofsGateTests(unittest.TestCase):
                 events.append(("hold-exit", label))
         out = io.StringIO()
         with contextlib.ExitStack() as stack:
-            stack.enter_context(patch.object(gate.gate_passes, "proof_pass", return_value=None))
+            stack.enter_context(patch.object(gate.gate_passes, "proof_pass", return_value=passed))
             stack.enter_context(patch.object(sys, "argv", ["gpu_proofs_gate.py", *argv]))
             stack.enter_context(patch.object(gate, "run_gate", side_effect=fake_run_gate))
             stack.enter_context(patch.object(gate.subprocess, "run", side_effect=fake_build))
@@ -281,8 +294,8 @@ class GpuProofsGateTests(unittest.TestCase):
         before = committed.read_text()
         out = d / "out.json"
         with patch.object(gpu_scope, "TIMES_PATH", committed):
-            text = gate.write_times_json(out, [("m::was_slow", 10.0, "b", True),
-                                               ("m::new_slow", 70.0, "b", True)])
+            text = gate.write_times_json(out, [("m::was_slow", 10.0, "b", True, "ok"),
+                                               ("m::new_slow", 70.0, "b", True, "ok")])
         data = json.loads(out.read_text())
         self.assertEqual(data["tests"], {"m::new_slow": 70.0, "m::was_slow": 10.0})
         self.assertIn("now fast: m::was_slow", text)
@@ -293,9 +306,95 @@ class GpuProofsGateTests(unittest.TestCase):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             code = gate.print_summary("", 0, [("slow", 400.0, "b", True)], 300)
-        self.assertEqual(code, 3)
-        self.assertIn("--record-times", out.getvalue())
-        self.assertIn("shorten", out.getvalue())
+        self.assertEqual(code, 0)
+        self.assertIn("retain timings automatically", out.getvalue())
+        self.assertIn("Shorten", out.getvalue())
+
+    def test_first_slow_pass_is_learned_and_next_scoped_run_skips_it(self):
+        name = "liquid_conformance::new_slow_test"
+        path = gate.gpu_scope.PROOFS_DIR + "liquid_conformance.rs"
+        code, calls, text = self.run_main(["--learn-times", "--budget", "360"], [path],
+                                         measured=[(name, 401, "b", "ok")])
+        self.assertEqual(code, 0)
+        self.assertNotIn(name, calls[0]["skips"])
+        self.assertIn("GPU-PROOFS BUDGET: OVER", text)
+        self.assertEqual(json.loads(self.learned.read_text())["tests"][name]["s"], 401)
+        code, calls, _ = self.run_main([], [path])
+        self.assertIn(name, calls[0]["skips"])
+        code, calls, _ = self.run_main(["--all"])
+        self.assertEqual(calls[0]["skips"], [])
+
+    def test_nightly_pass_is_learned_without_record_times_flag(self):
+        self.run_main(["--all", "--learn-times"], measured=[("new_nightly_slow", 80, "b", "ok")])
+        self.assertEqual(gate.gpu_scope.load_times()["new_nightly_slow"], 80)
+
+    def test_failure_over_budget_stays_red_and_is_not_learned(self):
+        for exit_code, output in [(101, ""), (0, "test result: FAILED. 0 passed; 1 failed;\n")]:
+            code, _, text = self.run_main(["--filter", "failed", "--learn-times", "--budget", "1"],
+                                          measured=[("failed_slow", 401, "b", "FAILED")],
+                                          run_exit=exit_code, run_output=output)
+            self.assertNotEqual(code, 0)
+            self.assertIn("GPU-PROOFS GATE: FAIL", text)
+            self.assertFalse(self.learned.exists())
+
+    def test_hung_measurements_are_not_learned(self):
+        gate.remember_times([("hung", 401, "b", True, "ok")], 0, [("hung", 401)])
+        self.assertFalse(self.learned.exists())
+
+    def test_hang_through_main_invalidates_prior_pass_and_learns_nothing(self):
+        # Use the real save failure path with an earlier run's on-disk pass.
+        passed = object.__new__(gate.gate_passes.Pass)
+        passed.key = "earlier"
+        passed.record = None  # The earlier pass was not reusable at lookup.
+        passed.path = self.learned.parent / "pass.json"
+        passed.path.write_text('{"pass": true}')
+        code, _, text = self.run_main(
+            ["--filter", "m::", "--learn-times"], passed=passed,
+            measured=[("m::completed", 10, "b", "ok")],
+            run_hung=[("m::stuck", 301)], run_exit=1)
+        self.assertEqual(code, 4)
+        self.assertIn("HUNG m::stuck", text)
+        self.assertFalse(passed.path.exists())
+        self.assertFalse(self.learned.exists())
+
+    def test_record_times_on_red_run_excludes_failed_test_and_can_get_faster(self):
+        dest = self.learned.parent / "export.json"
+        dest.write_text(json.dumps({"tests": {"m::fast": 100, "m::red": 200}}))
+        code, _, text = self.run_main(
+            ["--filter", "m::", "--learn-times", "--record-times", str(dest)],
+            measured=[("m::fast", 1, "b", "ok"), ("m::red", 126.2, "b", "FAILED")],
+            run_exit=101)
+        self.assertEqual(code, 101)
+        times = json.loads(dest.read_text())["tests"]
+        self.assertEqual(times["m::fast"], 1)
+        self.assertNotIn("m::red", times)
+        self.assertFalse(self.learned.exists())
+        self.assertIn("cargo exit 101, no test failure parsed — not the budget", text)
+
+    def test_ad_hoc_filter_does_not_learn(self):
+        self.run_main(["--filter", "m::"], measured=[("m::slow", 100, "b", "ok")])
+        self.assertFalse(self.learned.exists())
+
+    def test_forget_removes_only_named_shared_entry_without_running(self):
+        self.learned.write_text(json.dumps({"tests": {
+            "a": {"s": 90, "sha": "old", "at": 1},
+            "b": {"s": 80, "sha": "old", "at": 1}}}))
+        code, calls, _ = self.run_main(["--forget", "a"])
+        self.assertEqual((code, calls), (0, []))
+        self.assertEqual(set(json.loads(self.learned.read_text())["tests"]), {"b"})
+
+    def test_latest_run_replaces_cost_and_preserves_other_entries(self):
+        gate.remember_times([("a", 90, "b", True, "ok")], 0, [])
+        gate.remember_times([("b", 80, "b", True, "ok"), ("a", 1, "b", True, "ok")], 0, [])
+        times = json.loads(self.learned.read_text())["tests"]
+        self.assertEqual((times["a"]["s"], times["b"]["s"]), (1, 80))
+        self.assertEqual(set(times["a"]), {"s", "sha", "at"})
+
+    def test_record_merge_preserves_unmeasured_seed_and_destination_entries(self):
+        with patch.object(gate.gpu_scope, "read_times", side_effect=[{"seed": 90}, {"old": 80}]):
+            gate.write_times_json(self.learned, [("new", 70, "b", True, "ok")], merge=True)
+        self.assertEqual(json.loads(self.learned.read_text())["tests"],
+                         {"seed": 90, "old": 80, "new": 70})
 
     def test_explicit_filter_bypasses_scoping(self):
         code, calls, text = self.run_main(["--filter", "water_"], repo_changed=["docs/X.md"])
@@ -310,6 +409,9 @@ class GpuProofsGateTests(unittest.TestCase):
 
 
 class WatchdogTests(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(patch.object(gate.gpu_scope, "learned_times_path", return_value=None))
+
     TIMES = {"m::known": 100.0}
 
     def dog(self, floor=None):
