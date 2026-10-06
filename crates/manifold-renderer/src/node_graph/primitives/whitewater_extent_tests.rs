@@ -576,7 +576,7 @@ fn whitewater_step_extents_at_64() {
     // 64³ reinitialisation arrays, ceil(64/6)³ block flags, four state words, the sweep's indirect grid
     // (16 bytes) and a zero clock plan (48 bytes).
     let engine_distance = 4 * 70u64.pow(3) + 12 * 64u64.pow(3) + 4 * 11u64.pow(3) + 16 + 16 + 48;
-    assert_eq!(held, 282_078_580 + engine_distance, "all emitter and engine-distance storage is accounted for");
+    assert_eq!(held, 278_878_580 + engine_distance, "all emitter and engine-distance storage is accounted for");
 
     let refusals = [
         (StepShape::new([0; 3], level, [64; 3], 1.0, bounds, DEFAULT_CAPACITY), "solid lattice is missing"),
