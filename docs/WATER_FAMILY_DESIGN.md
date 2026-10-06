@@ -1,7 +1,7 @@
 # Water Family — one water, separate looks
 
-**Status:** APPROVED · 2026-10-06 · Astra (draft), Fable review folded in · not built; builds after whitewater fusion P4.
-**Prerequisites:** whitewater fusion P4's builder end state landed.
+**Status:** BUILDING · 2026-10-07 · F1a and F1b on main; F2 (family lifecycle) owed.
+**Prerequisites:** none left for F2; F1b landed.
 **Execution contract:** read [DESIGN_DOC_STANDARD.md](DESIGN_DOC_STANDARD.md) sections 5, 6 and 8; re-derive P4-dependent seams before implementation.
 
 <!-- index: Water parent, Foam/Spray/Bubbles looks, grouped shared Add Water/preset recipe, and undoable family lifecycle. -->
