@@ -50,18 +50,19 @@ pub const MAX_CAPACITY: u32 = 250_000;
 
 
 const WHITEWATER_FUSED_SHADER: &str = include_str!("shaders/whitewater_fused.wgsl");
-const FUSED_ENTRIES: [(&str, &str); 5] = [
+const FUSED_ENTRIES: [(&str, &str); 6] = [
     ("ww_emit", "node.whitewater_step.emit"),
     ("ww_dust", "node.whitewater_step.dust"),
     ("ww_spawn", "node.whitewater_step.spawn"),
     ("ww_lifecycle", "node.whitewater_step.lifecycle"),
     ("ww_turbulence", "node.whitewater_step.turbulence"),
+    ("ww_unpack_faces", "node.whitewater_step.unpack_faces"),
 ];
 
-fn fused_source(packed: bool) -> String {
+fn fused_source() -> String {
     use crate::node_graph::whitewater::WHITEWATER_COMMON;
     use crate::node_graph::liquid::{grid::LIQUID_FACES, fields::LIQUID_FIELD};
-    format!("const LF_PACKED: bool = {packed};\n{WHITEWATER_COMMON}\n{LIQUID_FACES}\n{LIQUID_FIELD}\n{WHITEWATER_FUSED_SHADER}")
+    format!("{WHITEWATER_COMMON}\n{LIQUID_FACES}\n{LIQUID_FIELD}\n{WHITEWATER_FUSED_SHADER}")
 }
 
 #[cfg(all(test, feature = "gpu-proofs"))]
@@ -96,6 +97,15 @@ macro_rules! emitter_path {
         #[cfg(not(all(test, feature = "gpu-proofs")))]
         $fused
     }};
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct UnpackParams {
+    nodes_x: f32,
+    nodes_y: f32,
+    nodes_z: f32,
+    count: u32,
 }
 
 #[repr(C)]
@@ -551,7 +561,8 @@ impl StepShape {
     }
 
     /// Bytes the node holds for this shape and `particles` liquid particle
-    /// slots, every scratch, scan, sort and output slot. Tick mode at pad
+    /// slots, axis-input scratch, scan, sort and output slots. Packed face
+    /// storage is added separately by unpacked_face_bytes. Tick mode at pad
     /// zero borrows distance fields instead of allocating them.
     pub fn held_bytes(&self, particles: u64, tick_mode: bool) -> u64 {
         let cells = self.cell_count();
@@ -565,6 +576,11 @@ impl StepShape {
         let outputs = OUTPUT_SLOTS as u64 * (4 * self.population_bytes() + COUNT_WORDS as u64 * 4);
         grid + per_particle + pool + sort + scan + outputs + 6 * self.solid_bytes()
             + super::whitewater_distance::scratch_bytes(self.face_cells)
+    }
+
+    /// Three adapter-sized arrays, including their zero tails, for packed input.
+    pub fn unpacked_face_bytes(&self) -> u64 {
+        3 * cell_total(self.face_cells.map(|n| n + 1)) * 4
     }
 
     fn owns_distance_fields(&self, tick_mode: bool) -> bool {
@@ -621,8 +637,8 @@ pub(crate) enum FaceSource<'a> {
     Axes([&'a GpuBuffer; 3]),
 }
 
-/// Shared runtime/extent truth table. Wiring selects an installed pipeline,
-/// never a runtime shader flag. Legacy saved graphs keep their axis interface.
+/// Shared runtime/extent truth table. Packed input is unpacked before use;
+/// every floating-point kernel reads axes. Legacy saved graphs keep their axis interface.
 pub(crate) fn packed_face_source(tick: bool, packed: bool, axes: [bool; 3]) -> Result<bool, &'static str> {
     if packed && axes.iter().any(|&wired| wired) {
         return Err("Whitewater Step: wire faces, or face_u, face_v and face_w, not both");
@@ -638,15 +654,6 @@ pub(crate) fn packed_face_source(tick: bool, packed: bool, axes: [bool; 3]) -> R
 }
 
 impl<'a> FaceSource<'a> {
-    fn packed(self) -> usize { usize::from(matches!(self, Self::Packed(_))) }
-
-    fn bindings(self, empty: &'a GpuBuffer) -> [&'a GpuBuffer; 4] {
-        match self {
-            Self::Packed(faces) => [empty, empty, empty, faces],
-            Self::Axes([u, v, w]) => [u, v, w, empty],
-        }
-    }
-
     #[cfg(all(test, feature = "gpu-proofs"))]
     fn axes(self) -> [&'a GpuBuffer; 3] {
         match self {
@@ -851,8 +858,8 @@ struct Pipelines {
     keep: Option<GpuComputePipeline>,
     /// `whitewater_step.wgsl`, in [`Hand`] order.
     hand: Vec<GpuComputePipeline>,
-    /// `whitewater_fused.wgsl` in [`FUSED_ENTRIES`] order, indexed by [`FaceSource::packed`].
-    fused: [Vec<GpuComputePipeline>; 2],
+    /// `whitewater_fused.wgsl` in [`FUSED_ENTRIES`] order, including the face unpack pass.
+    fused: Vec<GpuComputePipeline>,
 }
 
 #[derive(Clone, Copy)]
@@ -913,12 +920,10 @@ impl Pipelines {
         standalone_pipeline::<ExtendLattice>(&mut self.extend, device);
         standalone_pipeline::<PreserveFoam>(&mut self.preserve, device);
         standalone_pipeline::<KeepWhitewater>(&mut self.keep, device);
-        for (packed, pipelines) in self.fused.iter_mut().enumerate() {
-            if pipelines.is_empty() {
-                let source = fused_source(packed != 0);
-                for (entry, label) in FUSED_ENTRIES {
-                    pipelines.push(device.create_compute_pipeline(&source, entry, label));
-                }
+        if self.fused.is_empty() {
+            let source = fused_source();
+            for (entry, label) in FUSED_ENTRIES {
+                self.fused.push(device.create_compute_pipeline(&source, entry, label));
             }
         }
         if self.hand.is_empty() {
@@ -955,6 +960,7 @@ fn allocate(device: &GpuDevice, bytes: u64, shared: bool) -> Result<GpuBuffer, S
 
 /// The grid fields and the pool, sized from one [`StepShape`].
 struct Fields {
+    unpacked_faces: Option<[GpuBuffer; 3]>,
     crossings: [GpuBuffer; 2],
     distance: Option<GpuBuffer>,
     surface: Option<GpuBuffer>,
@@ -976,6 +982,7 @@ impl Fields {
         let cells = shape.cell_count();
         let alloc = |bytes| allocate(device, bytes, false);
         Ok(Self {
+            unpacked_faces: None,
             crossings: [alloc(cells * SURFACE_CROSSING_BYTES)?, alloc(cells * SURFACE_CROSSING_BYTES)?],
             distance: shape.owns_distance_fields(tick_mode).then(|| alloc(cells * 4)).transpose()?,
             surface: shape.owns_distance_fields(tick_mode).then(|| alloc(cells * 4)).transpose()?,
@@ -1216,6 +1223,36 @@ impl Step {
         Ok(())
     }
 
+    fn reserve_faces(&mut self, device: &GpuDevice, packed: bool) -> Result<(), String> {
+        let f = self.fields.as_mut().expect("whitewater fields allocated");
+        if packed {
+            if f.unpacked_faces.is_none() {
+                let bytes = self.shape.expect("shape allocated").unpacked_face_bytes() / 3;
+                f.unpacked_faces = Some([allocate(device, bytes, false)?, allocate(device, bytes, false)?, allocate(device, bytes, false)?]);
+            }
+        } else {
+            f.unpacked_faces = None;
+        }
+        Ok(())
+    }
+
+    fn face_axes<'a>(&'a self, faces: FaceSource<'a>) -> [&'a GpuBuffer; 3] {
+        match faces {
+            FaceSource::Axes(axes) => axes,
+            FaceSource::Packed(_) => self.fields().unpacked_faces.as_ref().expect("packed faces reserved").each_ref(),
+        }
+    }
+
+    fn unpack_faces(&self, enc: &mut manifold_gpu::GpuEncoder, shape: &StepShape, faces: FaceSource<'_>) {
+        if let FaceSource::Packed(packed) = faces {
+            let [u, v, w] = self.face_axes(faces);
+            let [nodes_x, nodes_y, nodes_z] = shape.face_cells.map(|n| (n + 4) as f32);
+            let params = UnpackParams { nodes_x, nodes_y, nodes_z, count: (shape.unpacked_face_bytes() / 12) as u32 };
+            dispatch(enc, &self.pipelines.fused[5], bytemuck::bytes_of(&params), &[packed, u, v, w],
+                params.count, FUSED_ENTRIES[5].1, Barrier::After);
+        }
+    }
+
     /// One liquid tick, with all persistent pool words supplied by the
     /// boundary. No CPU readback or display-frame clock participates.
     pub(crate) fn advance_tick(
@@ -1239,11 +1276,13 @@ impl Step {
         self.slot_scan.prepare(gpu.device);
         self.sort.prepare(gpu.device);
         self.reserve(gpu.device, shape, inputs.particles.size / PARTICLE, inputs.distance.is_some())?;
+        self.reserve_faces(gpu.device, matches!(inputs.faces, FaceSource::Packed(_)))?;
         if self.outputs.slots.is_empty() {
             self.outputs.free(gpu.device, &Retired, &shape)?;
         }
         self.current = 0;
         let enc = &mut *gpu.native_enc;
+        self.unpack_faces(enc, &shape, inputs.faces);
         if enabled {
             let f = self.fields();
             enc.copy_buffer_to_buffer(pool, &f.pools[0], shape.pool_bytes());
@@ -1424,13 +1463,13 @@ impl Step {
         #[cfg(all(test, feature = "gpu-proofs"))]
         let reference = self.reference.enabled;
         self.turbulence(enc, frame, inputs, distance);
-        let [u, v, w, packed] = inputs.faces.bindings(&f.state);
-        let fused = &p.fused[inputs.faces.packed()];
+        let [u, v, w] = self.face_axes(inputs.faces);
+        let fused = &p.fused;
         emitter_path!(reference, {
             self.reference.emit_reference(enc, frame, inputs, f, surface, curvature, influence_next, offsets, emitters);
         }, {
             dispatch(enc, &fused[0], bytemuck::bytes_of(&EmitParams::new(frame, emitters, false)),
-                &[inputs.particles, u, v, w, packed,
+                &[inputs.particles, u, v, w, &f.state,
                   surface, &f.cells, &f.curvature[curvature], &f.turbulence, &f.influence[influence_next],
                   sampled, energy, offsets, unscaled, wavecrest_bits], emitters, FUSED_ENTRIES[0].1, Barrier::After);
             #[cfg(all(test, feature = "gpu-proofs"))]
@@ -1485,14 +1524,14 @@ impl Step {
         emitter_path!(self.reference.enabled, {
             self.reference.turbulence_reference(enc, frame, inputs, distance, &f.turbulence);
         }, {
-            let [u, v, w, packed] = inputs.faces.bindings(&f.state);
+            let [u, v, w] = self.face_axes(inputs.faces);
             let s = &frame.shape;
             let [face_cells_x, face_cells_y, face_cells_z] = s.face_cells.map(|n| n as f32);
             let [nodes_x, nodes_y, nodes_z] = s.nodes.map(|n| n as f32);
             let params = TurbulenceParams { face_cells_x, face_cells_y, face_cells_z, nodes_x, nodes_y, nodes_z,
                 cell_size: s.cell_size, count: s.cell_count() as u32 };
-            dispatch(enc, &self.pipelines.fused[inputs.faces.packed()][4], bytemuck::bytes_of(&params),
-                &[&f.state, u, v, w, packed, distance, &f.turbulence], params.count, FUSED_ENTRIES[4].1, Barrier::After);
+            dispatch(enc, &self.pipelines.fused[4], bytemuck::bytes_of(&params),
+                &[&f.state, u, v, w, &f.state, distance, &f.turbulence], params.count, FUSED_ENTRIES[4].1, Barrier::After);
             #[cfg(all(test, feature = "gpu-proofs"))]
             self.reference.record_dispatch(FUSED_ENTRIES[4].1, params.count);
         });
@@ -1506,9 +1545,9 @@ impl Step {
             self.reference.spawn_reference(enc, frame, inputs, f, surface, offsets, sampled, energy, emitters, dust);
         }, {
             let label = if dust { "node.whitewater_step.dust_spawn" } else { FUSED_ENTRIES[2].1 };
-            let [u, v, w, packed] = inputs.faces.bindings(&f.state);
-            dispatch(enc, &self.pipelines.fused[inputs.faces.packed()][2], bytemuck::bytes_of(&SpawnParams::new(frame, emitters, dust)),
-                &[sampled, u, v, w, packed,
+            let [u, v, w] = self.face_axes(inputs.faces);
+            dispatch(enc, &self.pipelines.fused[2], bytemuck::bytes_of(&SpawnParams::new(frame, emitters, dust)),
+                &[sampled, u, v, w, &f.state,
                   surface, &f.cells, offsets, energy, inputs.solid, &f.typed], frame.shape.capacity, label, Barrier::After);
             #[cfg(all(test, feature = "gpu-proofs"))]
             self.reference.record_dispatch(label, frame.shape.capacity);
@@ -1528,9 +1567,9 @@ impl Step {
             let motion = inputs.motion.as_ref();
             let empty = &f.state;
             let history = motion.map_or([empty; 3], |m| m.faces);
-            let [u, v, w, packed] = inputs.faces.bindings(empty);
-            dispatch(enc, &self.pipelines.fused[inputs.faces.packed()][3], bytemuck::bytes_of(&LifecycleParams::new(frame, inputs)),
-                &[a, u, v, w, packed, surface, &f.cells, inputs.solid,
+            let [u, v, w] = self.face_axes(inputs.faces);
+            dispatch(enc, &self.pipelines.fused[3], bytemuck::bytes_of(&LifecycleParams::new(frame, inputs)),
+                &[a, u, v, w, &f.state, surface, &f.cells, inputs.solid,
                   motion.map_or(empty, |m| m.schedule), history[0], history[1], history[2],
                   motion.and_then(|m| m.fields.forces).unwrap_or(empty), motion.and_then(|m| m.fields.impulses).unwrap_or(empty), b],
                 frame.shape.capacity, FUSED_ENTRIES[3].1, Barrier::After);
@@ -1742,6 +1781,11 @@ impl Primitive for WhitewaterStep {
     }
 
     fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
+        #[cfg(all(test, feature = "gpu-proofs"))]
+        if let Some(axis) = ["proof_unpack_u", "proof_unpack_v", "proof_unpack_w"].iter().position(|&p| p == port) {
+            assert!(self.step.reference.capture);
+            return self.step.fields.as_ref()?.unpacked_faces.as_ref().map(|axes| &axes[axis]);
+        }
         #[cfg(all(test, feature = "gpu-proofs"))]
         if port == "proof_turbulence" {
             assert!(self.step.reference.capture && self.step.reference.turbulence_dispatches.get() > 0);

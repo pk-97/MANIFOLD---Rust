@@ -41,25 +41,6 @@ fn random_calls(source: &str) -> Vec<&str> {
     }).collect()
 }
 
-// Only the compile-time packed branches differ in the copied face helpers.
-// Strip those branches for the axis-oracle text check, keeping every other
-// helper, bounds branch and arithmetic expression under the existing check.
-fn axis_text(source: &str) -> String {
-    let mut text = source.to_owned();
-    while let Some(start) = text.find("    if LF_PACKED {") {
-        let body = start + text[start..].find('{').unwrap();
-        let mut depth = 0;
-        let mut end = body;
-        for (i, c) in text[body..].char_indices() {
-            match c { '{' => depth += 1, '}' => depth -= 1, _ => {} }
-            if depth == 0 { end = body + i + 1; break; }
-        }
-        if text.as_bytes().get(end) == Some(&b'\n') { end += 1; }
-        text.replace_range(start..end, "");
-    }
-    text
-}
-
 #[test]
 fn whitewater_rng_calls_are_the_atoms() {
     for (phase, atom) in ATOMS {
@@ -82,7 +63,7 @@ fn whitewater_rng_calls_are_the_atoms() {
                 "advect" => atom.replace("Element", "Pool").replace("buf_solid", "buf_lifecycle_solid"),
                 _ => atom.replace("Element", "Pool"),
             }.replacen("fn body(", &format!("fn {name}("), 1);
-            assert!(axis_text(WHITEWATER_FUSED_SHADER).contains(&mapped), "{phase}: copied helpers/constants changed");
+            assert!(WHITEWATER_FUSED_SHADER.contains(&mapped), "{phase}: copied helpers/constants changed");
         }
     }
     assert_eq!(random_calls(WHITEWATER_FUSED_SHADER).len(), 10, "extra random draw outside the copied phases");
@@ -100,23 +81,37 @@ fn whitewater_rng_calls_are_the_atoms() {
 }
 
 #[test]
-fn whitewater_fused_variants_validate_on_cpu() {
-    for packed in [false, true] {
-        let source = fused_source(packed);
-        let module = naga::front::wgsl::parse_str(&source).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&source)));
-        naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
-            .validate(&module).unwrap_or_else(|e| panic!("packed={packed}: {e:?}"));
-        assert_eq!(std::mem::size_of::<EmitParams>(), 144);
-        assert_eq!(std::mem::size_of::<SpawnParams>(), 112);
-        assert_eq!(std::mem::size_of::<LifecycleParams>(), 144);
-        assert_eq!(std::mem::size_of::<TurbulenceParams>(), 32);
-        assert_eq!(module.entry_points.len(), 5);
-        for entry in &module.entry_points { assert_eq!(entry.workgroup_size, [256, 1, 1]); }
-    }
+fn whitewater_fused_and_unpack_validate_on_cpu() {
+    let source = fused_source();
+    let module = naga::front::wgsl::parse_str(&source).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&source)));
+    naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
+        .validate(&module).unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(std::mem::size_of::<EmitParams>(), 144);
+    assert_eq!(std::mem::size_of::<SpawnParams>(), 112);
+    assert_eq!(std::mem::size_of::<LifecycleParams>(), 144);
+    assert_eq!(std::mem::size_of::<TurbulenceParams>(), 32);
+    assert_eq!(std::mem::size_of::<UnpackParams>(), 16);
+    assert_eq!(module.entry_points.len(), 6);
+    for entry in &module.entry_points { assert_eq!(entry.workgroup_size, [256, 1, 1]); }
+    let adapter = include_str!("shaders/face_sample_component_body.wgsl");
+    let expected = function(adapter, "body").replace("fn body(", "fn ww_unpack_face(");
+    assert_eq!(function(WHITEWATER_FUSED_SHADER, "ww_unpack_face"), expected, "adapter indexing, select and zero tail");
+    assert!(random_calls(function(WHITEWATER_FUSED_SHADER, "ww_unpack_faces")).is_empty());
 }
 
 fn synthetic_faces() -> [Vec<f32>; 3] {
     std::array::from_fn(|a| vec![[2.0, 1.0, -0.5][a]; face_len([8; 3], a) as usize])
+}
+
+#[test]
+fn whitewater_unpack_extent_matches_adapter_storage() {
+    use super::super::gpu_flip_preset::{render_def, with_whitewater_axes, WaterScene};
+    use crate::node_graph::liquid::extent::check_preset_extents;
+    let packed = render_def(WaterScene::dam_break(64));
+    let axes = with_whitewater_axes(packed.clone());
+    assert_eq!(check_preset_extents(&packed, 64).unwrap().scene_bytes,
+        check_preset_extents(&axes, 64).unwrap().scene_bytes,
+        "the stage holds exactly the three adapter arrays it replaces");
 }
 
 fn face_refusal(packed: bool, axes: [bool; 3], tick: bool, phrase: &str) {
@@ -450,29 +445,101 @@ mod gpu {
         equal_words(&read::<u32>(a, a.size as usize / 4), &read::<u32>(b, b.size as usize / 4), tick, name);
     }
 
+    fn mixed_faces() -> Vec<FaceSample> {
+        (0..9 * 9 * 9).map(|i| FaceSample {
+            velocity: [(i % 17) as f32 / 7.0, -((i % 11) as f32) / 3.0, (i % 13) as f32 / 19.0, 12345.0],
+            weight: [ [-1.0 / 3.0, 0.0, 1.0 / 7.0, 2.0 / 3.0][i % 4],
+                [-1.0 / 7.0, 0.0, 1.0 / 3.0, 3.0 / 7.0][(i + 1) % 4],
+                [-2.0 / 3.0, 0.0, 2.0 / 7.0, 1.0 / 3.0][(i + 2) % 4], -9876.0 ],
+        }).collect()
+    }
+
+    // Compile the actual adapter primitive, with its own generated uniform
+    // layout/body. Dispatch its whole output extent, including the zero tail.
+    fn adapter_outputs(device: &GpuDevice, packed: &GpuBuffer, cells: [u32; 3]) -> [GpuBuffer; 3] {
+        use super::super::super::face_sample_component::FaceSampleComponent;
+        let mut pipeline = None;
+        standalone_pipeline::<FaceSampleComponent>(&mut pipeline, device);
+        let count = cell_total(cells.map(|n| n + 1)) as u32;
+        let out = std::array::from_fn(|_| shared(device, &vec![12345.0f32; count as usize]));
+        let [nx, ny, nz] = cells.map(|n| (n + 4) as f32);
+        let mut enc = device.create_encoder("P4 real face adapters");
+        for (axis, output) in out.iter().enumerate() {
+            atom::<FaceSampleComponent>(&mut enc, pipeline.as_ref().unwrap(),
+                &[("axis", axis as f32), ("nodes_x", nx), ("nodes_y", ny), ("nodes_z", nz)],
+                &[packed, output], count, "P4 adapter oracle");
+        }
+        enc.commit_and_wait_completed();
+        out
+    }
+
+    #[test]
+    fn whitewater_unpacked_faces_match_adapters() {
+        let device = crate::test_device();
+        let mut show = Show::new_with_emitter_oracle(with_tick_probe(whitewater_render_def(WaterScene::dam_break(64))),
+            (96, 54), false, &[], Some(false));
+        show.restart();
+        let mut ticks = 0;
+        for _ in 0..8 {
+            show.frame(false);
+            assert!(show.errors().is_empty());
+            if show.probes(["ticks"])[0] == 0.0 { continue; }
+            let bytes = show.provided_all_bytes("step", "faces");
+            let packed = shared(&device, &bytes);
+            // Resolution 64 has 67 solver cells after native lattice padding.
+            let axes = adapter_outputs(&device, &packed, [67; 3]);
+            for (axis, port) in ["proof_unpack_u", "proof_unpack_v", "proof_unpack_w"].into_iter().enumerate() {
+                let actual = show.provided_all_bytes("whitewater", port);
+                equal_words(bytemuck::cast_slice(&actual), &read::<u32>(&axes[axis], axes[axis].size as usize / 4), ticks, port);
+            }
+            ticks += 1;
+            if ticks == 3 { break; }
+        }
+        assert_eq!(ticks, 3);
+
+        let shape = synthetic_shape();
+        assert_eq!(face_offset(shape.nodes, shape.face_cells).unwrap(), [2; 3]);
+        let packed = shared(&device, &mixed_faces());
+        let axes = adapter_outputs(&device, &packed, shape.face_cells);
+        let [mut stage, _reference] = particle_stages(&device, shape, 8);
+        assert!(stage.fields().unpacked_faces.is_none(), "axes allocate no unpack arrays");
+        stage.reserve_faces(&device, true).unwrap();
+        let mut enc = device.create_encoder("P4 unpack mixed-weight fixture");
+        stage.unpack_faces(&mut enc, &shape, FaceSource::Packed(&packed));
+        let captured = stage.fields().unpacked_faces.as_ref().unwrap().each_ref().map(|src| copy_shared(&device, &mut enc, src));
+        enc.commit_and_wait_completed();
+        for axis in 0..3 {
+            compare_buffers(&captured[axis], &axes[axis], 0, "whole unpacked axis including tail");
+            let words = read::<u32>(&captured[axis], 9 * 9 * 9);
+            assert!(words[face_len(shape.face_cells, axis) as usize..].iter().all(|&word| word == 0));
+        }
+        stage.reserve_faces(&device, false).unwrap();
+        assert!(stage.fields().unpacked_faces.is_none());
+        let resized = StepShape::new([15; 3], [15; 3], [10; 3], 1.0,
+            Some(Transform { pos: [0.7; 3], scale: [1.4; 3], ..Default::default() }), 256).unwrap();
+        stage.reserve_faces(&device, true).unwrap();
+        stage.reserve(&device, resized, 8, true).unwrap();
+        assert!(stage.fields().unpacked_faces.is_none(), "shape changes drop the old arrays");
+        stage.reserve_faces(&device, true).unwrap();
+        assert!(stage.fields().unpacked_faces.as_ref().unwrap().iter().all(|axis| axis.size == 11 * 11 * 11 * 4));
+    }
+
     #[test]
     fn whitewater_packed_faces_match_axis_arrays() {
         super::super::super::whitewater_golden_tests::packed_scene_fingerprints();
         let device = crate::test_device();
         let fixture = Fixture::new(&device);
+        let records: Vec<_> = fixture.records.iter().enumerate().map(|(i, p)| FluidParticle {
+            position_radius: [3.0 / 7.0 + i as f32 / 113.0, 4.0 / 9.0, 5.0 / 11.0, p.position_radius[3]], ..*p
+        }).collect();
+        let particles = shared(&device, &records);
         let shape = fixture.shape;
         assert_eq!(face_offset(shape.nodes, shape.face_cells).unwrap(), [2; 3]);
         // Nonzero values behind invalid weights must be masked, including
         // negative weights. The fourth lanes and unused axis tails are poison.
-        let samples: Vec<FaceSample> = (0..9 * 9 * 9).map(|i| FaceSample {
-            velocity: [0.125 * (i % 7) as f32, -0.0625 * (i % 11) as f32, 0.03125 * (i % 13) as f32, 12345.0],
-            weight: std::array::from_fn(|a| [-1.0, 0.0, 0.25, 1.0][(i + a) % 4]),
-        }).collect();
+        let samples = mixed_faces();
         let packed = shared(&device, &samples);
-        let axes: [GpuBuffer; 3] = std::array::from_fn(|axis| {
-            let mut dims = [8usize; 3]; dims[axis] += 1;
-            let values: Vec<f32> = (0..dims.iter().product()).map(|i| {
-                let g = [i % dims[0], (i / dims[0]) % dims[1], i / (dims[0] * dims[1])];
-                let sample = samples[g[0] + 9 * (g[1] + 9 * g[2])];
-                if sample.weight[axis] > 0.0 { sample.velocity[axis] } else { 0.0 }
-            }).collect();
-            shared(&device, &values)
-        });
+        let axes = adapter_outputs(&device, &packed, shape.face_cells);
         let schedule = shared(&device, &[1.0f32 / 128.0, 0.0, 0.0, 0.0, 1.0 / 128.0, 0.0, 0.0, 0.0]);
         let history: [GpuBuffer; 3] = std::array::from_fn(|axis| {
             let values: Vec<f32> = (0..2).flat_map(|step| std::iter::repeat_n(
@@ -481,7 +548,7 @@ mod gpu {
         });
         let mut pool = vec![empty_slot(); 256];
         for (i, p) in pool[..12].iter_mut().enumerate() {
-            *p = WhitewaterParticle { position_lifetime: [0.5, 0.5, 0.5, 7.0], kind: (i % 5) as u32,
+            *p = WhitewaterParticle { position_lifetime: [3.0 / 7.0, 4.0 / 9.0, 5.0 / 11.0, 7.0], kind: (i % 5) as u32,
                 id: i as u32, ..Default::default() };
         }
         let pool = shared(&device, &pool);
@@ -494,6 +561,7 @@ mod gpu {
             let mut captures = Vec::new();
             for (variant, stage) in stages.iter_mut().enumerate() {
                 let mut inputs = fixture.inputs();
+                inputs.particles = &particles;
                 inputs.faces = if variant == 1 { FaceSource::Packed(&packed) } else { FaceSource::Axes(axes.each_ref()) };
                 inputs.motion = Some(MotionInputs { schedule: &schedule, faces: history.each_ref(), count: 2,
                     fields: FieldBinding { nodes: [2; 3], spacing: 0.5, force_lattices: 0, impulse_tick: 0,
@@ -720,7 +788,7 @@ mod gpu {
         stage.pipelines.prepare(&device);
         stage.reference.enabled = true;
         stage.reference.reserve(&device, 1, 1).unwrap();
-        for pipeline in stage.pipelines.fused.iter().flatten() {
+        for pipeline in &stage.pipelines.fused {
             let max = pipeline.max_threads_per_threadgroup();
             println!("fused {}: max_threads={max:?}, dispatched=256", pipeline.label);
             // GPU proofs are Metal-only for now; Vulkan reports None here.

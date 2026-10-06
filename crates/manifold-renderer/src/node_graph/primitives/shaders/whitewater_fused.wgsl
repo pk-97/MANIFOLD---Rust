@@ -47,7 +47,6 @@ struct EmitParams {
 @group(0) @binding(2) var<storage, read> buf_face_u: array<f32>;
 @group(0) @binding(3) var<storage, read> buf_face_v: array<f32>;
 @group(0) @binding(4) var<storage, read> buf_face_w: array<f32>;
-@group(0) @binding(5) var<storage, read> buf_faces: array<FaceSample>;
 @group(0) @binding(6) var<storage, read> buf_distance: array<f32>;
 @group(0) @binding(7) var<storage, read> buf_cells: array<u32>;
 @group(0) @binding(8) var<storage, read> buf_curvature: array<KnownValue>;
@@ -62,11 +61,6 @@ struct EmitParams {
 @group(0) @binding(2) var<storage, read> buf_solid: array<f32>;
 @group(0) @binding(3) var<storage, read> buf_source: array<WhitewaterSource>;
 fn sf_face_len(axis: u32) -> u32 {
-    if LF_PACKED {
-        var dims = vec3<u32>(max(round(vec3<f32>(p.face_cells_x, p.face_cells_y, p.face_cells_z)), vec3<f32>(0.0)));
-        dims[axis] += 1u;
-        return dims.x * dims.y * dims.z;
-    }
     if axis == 0u {
         return arrayLength(&buf_face_u);
     }
@@ -77,10 +71,6 @@ fn sf_face_len(axis: u32) -> u32 {
 }
 
 fn sf_face(axis: u32, i: u32) -> f32 {
-    if LF_PACKED {
-        let face_cells = vec3<u32>(max(round(vec3<f32>(p.face_cells_x, p.face_cells_y, p.face_cells_z)), vec3<f32>(0.0)));
-        return ww_packed_face(axis, i, face_cells);
-    }
     if axis == 0u {
         return buf_face_u[i];
     }
@@ -673,11 +663,6 @@ fn sw_emitter(m: u32, emitters: u32) -> u32 {
 }
 
 fn sw_face_len(axis: u32) -> u32 {
-    if LF_PACKED {
-        var dims = vec3<u32>(max(round(vec3<f32>(sp.face_cells_x, sp.face_cells_y, sp.face_cells_z)), vec3<f32>(0.0)));
-        dims[axis] += 1u;
-        return dims.x * dims.y * dims.z;
-    }
     if axis == 0u {
         return arrayLength(&buf_face_u);
     }
@@ -688,10 +673,6 @@ fn sw_face_len(axis: u32) -> u32 {
 }
 
 fn sw_face(axis: u32, i: u32) -> f32 {
-    if LF_PACKED {
-        let face_cells = vec3<u32>(max(round(vec3<f32>(sp.face_cells_x, sp.face_cells_y, sp.face_cells_z)), vec3<f32>(0.0)));
-        return ww_packed_face(axis, i, face_cells);
-    }
     if axis == 0u {
         return buf_face_u[i];
     }
@@ -984,11 +965,6 @@ const AW_DEAD: f32 = -1e6;
 const AW_ID_TOP: f32 = 255.0;
 
 fn aw_face_len(axis: u32) -> u32 {
-    if LF_PACKED {
-        var dims = vec3<u32>(max(round(vec3<f32>(lc.face_cells_x, lc.face_cells_y, lc.face_cells_z)), vec3<f32>(0.0)));
-        dims[axis] += 1u;
-        return dims.x * dims.y * dims.z;
-    }
     if axis == 0u {
         return arrayLength(&buf_face_u);
     }
@@ -1005,10 +981,6 @@ fn aw_face(axis: u32, i: u32, step: u32, cells: vec3<u32>) -> f32 {
         if axis == 0u { return buf_substep_u[at]; }
         if axis == 1u { return buf_substep_v[at]; }
         return buf_substep_w[at];
-    }
-    if LF_PACKED {
-        let face_cells = vec3<u32>(max(round(vec3<f32>(lc.face_cells_x, lc.face_cells_y, lc.face_cells_z)), vec3<f32>(0.0)));
-        return ww_packed_face(axis, i, face_cells);
     }
     if axis == 0u {
         return buf_face_u[i];
@@ -1354,11 +1326,6 @@ fn rt_borders_air(c: vec3<i32>, cells: vec3<u32>) -> bool {
 }
 
 fn rt_face_len(axis: u32) -> u32 {
-    if LF_PACKED {
-        var dims = vec3<u32>(max(round(vec3<f32>(lc.face_cells_x, lc.face_cells_y, lc.face_cells_z)), vec3<f32>(0.0)));
-        dims[axis] += 1u;
-        return dims.x * dims.y * dims.z;
-    }
     if axis == 0u {
         return arrayLength(&buf_face_u);
     }
@@ -1369,10 +1336,6 @@ fn rt_face_len(axis: u32) -> u32 {
 }
 
 fn rt_face(axis: u32, i: u32) -> f32 {
-    if LF_PACKED {
-        let face_cells = vec3<u32>(max(round(vec3<f32>(lc.face_cells_x, lc.face_cells_y, lc.face_cells_z)), vec3<f32>(0.0)));
-        return ww_packed_face(axis, i, face_cells);
-    }
     if axis == 0u {
         return buf_face_u[i];
     }
@@ -1525,19 +1488,6 @@ fn ww_lifecycle(@builtin(global_invocation_id) gid: vec3<u32>) {
     out_pool[idx] = aged;
 }
 
-// Logical axis index from lf_face_index, after its range check. Integer
-// reindexing only; the value rule is the adapter's own select.
-fn ww_packed_face(axis: u32, i: u32, face_cells: vec3<u32>) -> f32 {
-    var dims = face_cells;
-    dims[axis] += 1u;
-    let g = vec3<u32>(i % dims.x, (i / dims.x) % dims.y, i / (dims.x * dims.y));
-    let m = face_cells + vec3<u32>(1u);
-    let packed_index = g.x + m.x * (g.y + m.y * g.z);
-    if packed_index >= arrayLength(&buf_faces) { return 0.0; }
-    let s = buf_faces[packed_index];
-    return select(0.0, s.face_velocity[axis], s.face_weight[axis] > 0.0);
-}
-
 struct TurbulenceParams {
     face_cells_x: f32,
     face_cells_y: f32,
@@ -1555,7 +1505,6 @@ struct TurbulenceParams {
 fn tf_face(c: vec3<i32>, axis: u32, pad: vec3<i32>, dims: vec3<u32>) -> f32 {
     let i = lf_face_index(c, axis, pad, dims);
     if i == LF_NONE { return 0.0; }
-    if LF_PACKED { return ww_packed_face(axis, i, dims); }
     if axis == 0u { return buf_face_u[i]; }
     if axis == 1u { return buf_face_v[i]; }
     return buf_face_w[i];
@@ -1604,4 +1553,48 @@ fn ww_turbulence(@builtin(global_invocation_id) gid: vec3<u32>) {
     let idx = gid.x;
     if idx >= tf.count { return; }
     out_turbulence[idx] = ww_phase_turbulence(idx, tf.count, tf.face_cells_x, tf.face_cells_y, tf.face_cells_z, tf.nodes_x, tf.nodes_y, tf.nodes_z, tf.cell_size);
+}
+
+// A dispatch boundary keeps adapter indexing/select out of floating-point
+// interpolation. The helper copies face_sample_component's integer indexing,
+// select and zero tail, including its dimension casts; no float arithmetic.
+struct UnpackParams {
+    nodes_x: f32,
+    nodes_y: f32,
+    nodes_z: f32,
+    count: u32,
+}
+@group(0) @binding(0) var<uniform> unpack: UnpackParams;
+@group(0) @binding(1) var<storage, read> buf_faces: array<FaceSample>;
+@group(0) @binding(2) var<storage, read_write> unpack_u: array<f32>;
+@group(0) @binding(3) var<storage, read_write> unpack_v: array<f32>;
+@group(0) @binding(4) var<storage, read_write> unpack_w: array<f32>;
+fn ww_unpack_face(idx: u32, count: u32, axis: u32, nodes_x: f32, nodes_y: f32, nodes_z: f32) -> f32 {
+    let n = max(vec3<i32>(vec3<f32>(nodes_x, nodes_y, nodes_z)) - vec3<i32>(4), vec3<i32>(0));
+    let m = n + vec3<i32>(1);
+    if axis > 2u || u32(m.x) * u32(m.y) * u32(m.z) > arrayLength(&buf_faces) {
+        return 0.0;
+    }
+    let a = i32(axis);
+    var dims = n;
+    dims[a] = m[a];
+    if idx >= u32(dims.x) * u32(dims.y) * u32(dims.z) {
+        return 0.0;
+    }
+    let f = vec3<i32>(
+        i32(idx % u32(dims.x)),
+        i32((idx / u32(dims.x)) % u32(dims.y)),
+        i32(idx / (u32(dims.x) * u32(dims.y))),
+    );
+    let s = buf_faces[u32(f.x + m.x * (f.y + m.y * f.z))];
+    return select(0.0, s.face_velocity[a], s.face_weight[a] > 0.0);
+}
+
+@compute @workgroup_size(256)
+fn ww_unpack_faces(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let idx = gid.x;
+    if idx >= unpack.count { return; }
+    unpack_u[idx] = ww_unpack_face(idx, unpack.count, 0u, unpack.nodes_x, unpack.nodes_y, unpack.nodes_z);
+    unpack_v[idx] = ww_unpack_face(idx, unpack.count, 1u, unpack.nodes_x, unpack.nodes_y, unpack.nodes_z);
+    unpack_w[idx] = ww_unpack_face(idx, unpack.count, 2u, unpack.nodes_x, unpack.nodes_y, unpack.nodes_z);
 }

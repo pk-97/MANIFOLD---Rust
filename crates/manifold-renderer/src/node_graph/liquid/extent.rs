@@ -1834,6 +1834,7 @@ fn whitewater_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.hold(shape.held_bytes(x.items("particles").unwrap_or(0), x.input("distance").is_some()));
     if packed {
         x.covers("faces", face_bytes(shape.face_cells))?;
+        x.hold(shape.unpacked_face_bytes());
     } else {
         for (axis, port) in ["face_u", "face_v", "face_w"].into_iter().enumerate() {
             x.covers(port, shape.face_bytes(axis))?;
