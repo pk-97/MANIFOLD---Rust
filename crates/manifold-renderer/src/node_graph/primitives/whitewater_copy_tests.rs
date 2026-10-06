@@ -68,7 +68,7 @@ impl Fixture {
 
     fn inputs(&self, tick_mode: bool) -> StepInputs<'_> {
         StepInputs { motion: None, particles: &self.particles, solid: &self.solid,
-            obstacle_source: Some(&self.source), faces: self.faces.each_ref(), level_set: &self.level,
+            obstacle_source: Some(&self.source), faces: FaceSource::Axes(self.faces.each_ref()), level_set: &self.level,
             distance: tick_mode.then_some(&self.distance) }
     }
 

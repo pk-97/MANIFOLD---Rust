@@ -13,7 +13,6 @@ use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice};
 
 use super::crossing_distance::CrossingDistance;
 use super::emission_count::WAVECREST_RATE;
-use super::turbulence_field::TurbulenceField;
 use super::whitewater_influence::WhitewaterInfluence;
 use super::whitewater_obstacle_source::WhitewaterSource;
 use super::energy_potential::{MAX_ENERGY, MIN_ENERGY};
@@ -31,7 +30,7 @@ use super::surface_crossings::SurfaceCrossings;
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::fluid::TICK;
-use crate::node_graph::fluid_particles::{FluidParticle, MAX_BINS, bin_counts, bin_total};
+use crate::node_graph::fluid_particles::{FaceSample, FluidParticle, MAX_BINS, bin_counts, bin_total};
 use crate::node_graph::liquid::grid::face_len;
 use crate::node_graph::liquid::bodies::{LiquidBody, LiquidShape};
 use crate::node_graph::liquid::fields::FieldBinding;
@@ -51,17 +50,19 @@ pub const MAX_CAPACITY: u32 = 250_000;
 
 
 const WHITEWATER_FUSED_SHADER: &str = include_str!("shaders/whitewater_fused.wgsl");
-const FUSED_ENTRIES: [(&str, &str); 4] = [
+const FUSED_ENTRIES: [(&str, &str); 6] = [
     ("ww_emit", "node.whitewater_step.emit"),
     ("ww_dust", "node.whitewater_step.dust"),
     ("ww_spawn", "node.whitewater_step.spawn"),
     ("ww_lifecycle", "node.whitewater_step.lifecycle"),
+    ("ww_turbulence", "node.whitewater_step.turbulence"),
+    ("ww_unpack_faces", "node.whitewater_step.unpack_faces"),
 ];
 
-fn fused_source(packed: bool) -> String {
+fn fused_source() -> String {
     use crate::node_graph::whitewater::WHITEWATER_COMMON;
     use crate::node_graph::liquid::{grid::LIQUID_FACES, fields::LIQUID_FIELD};
-    format!("const LF_PACKED: bool = {packed};\n{WHITEWATER_COMMON}\n{LIQUID_FACES}\n{LIQUID_FIELD}\n{WHITEWATER_FUSED_SHADER}")
+    format!("{WHITEWATER_COMMON}\n{LIQUID_FACES}\n{LIQUID_FIELD}\n{WHITEWATER_FUSED_SHADER}")
 }
 
 #[cfg(all(test, feature = "gpu-proofs"))]
@@ -96,6 +97,28 @@ macro_rules! emitter_path {
         #[cfg(not(all(test, feature = "gpu-proofs")))]
         $fused
     }};
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct UnpackParams {
+    nodes_x: f32,
+    nodes_y: f32,
+    nodes_z: f32,
+    count: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct TurbulenceParams {
+    face_cells_x: f32,
+    face_cells_y: f32,
+    face_cells_z: f32,
+    nodes_x: f32,
+    nodes_y: f32,
+    nodes_z: f32,
+    cell_size: f32,
+    count: u32,
 }
 
 #[repr(C)]
@@ -324,7 +347,8 @@ crate::primitive! {
         obstacle_source: Array(WhitewaterSource) optional,
         grid_bounds: Transform optional,
         grid_nodes_x: ScalarF32 optional, grid_nodes_y: ScalarF32 optional, grid_nodes_z: ScalarF32 optional,
-        face_u: Array(f32) required, face_v: Array(f32) required, face_w: Array(f32) required,
+        faces: Array(FaceSample) optional,
+        face_u: Array(f32) optional, face_v: Array(f32) optional, face_w: Array(f32) optional,
         face_cells_x: ScalarF32 optional, face_cells_y: ScalarF32 optional, face_cells_z: ScalarF32 optional,
         face_valid_layers: ScalarF32 optional,
         level_set: Array(f32) optional,
@@ -434,7 +458,7 @@ crate::primitive! {
         },
     ],
     depth_rule: Terminal,
-    composition_notes: "For per-tick GPU FLIP, wire the solver distance, particles and projected face components; wire pool and pool_state from liquid_state, and close pool_out, state_out, counts_out and the three population arrays through its capture results. tick_index is the boundary clock; each invocation emits and advances one tick. The boundary publishes capacity-sized populations with zero-radius unused records, so particles_to_copies needs no CPU live_count. Wire capacity to both the stage and boundary. The legacy level_set interface keeps its frame ticks, seed, scalar counts and retired output ring for saved graphs. Amount scales emission, while zero leaves the existing pool advancing; disabling clears the pool on the next tick.",
+    composition_notes: "For per-tick GPU FLIP, wire the solver distance, particles and packed faces (or all three projected face components); wire pool and pool_state from liquid_state, and close pool_out, state_out, counts_out and the three population arrays through its capture results. tick_index is the boundary clock; each invocation emits and advances one tick. The boundary publishes capacity-sized populations with zero-radius unused records, so particles_to_copies needs no CPU live_count. Wire capacity to both the stage and boundary. The legacy level_set interface keeps its frame ticks, seed, scalar counts and retired output ring for saved graphs. Amount scales emission, while zero leaves the existing pool advancing; disabling clears the pool on the next tick.",
     examples: [],
     picker: { label: "Whitewater Step", category: Atom },
     summary: "Makes and moves the spray, foam and bubbles a liquid throws up, all on the GPU.",
@@ -537,7 +561,8 @@ impl StepShape {
     }
 
     /// Bytes the node holds for this shape and `particles` liquid particle
-    /// slots, every scratch, scan, sort and output slot. Tick mode at pad
+    /// slots, axis-input scratch, scan, sort and output slots. Packed face
+    /// storage is added separately by unpacked_face_bytes. Tick mode at pad
     /// zero borrows distance fields instead of allocating them.
     pub fn held_bytes(&self, particles: u64, tick_mode: bool) -> u64 {
         let cells = self.cell_count();
@@ -551,6 +576,11 @@ impl StepShape {
         let outputs = OUTPUT_SLOTS as u64 * (4 * self.population_bytes() + COUNT_WORDS as u64 * 4);
         grid + per_particle + pool + sort + scan + outputs + 6 * self.solid_bytes()
             + super::whitewater_distance::scratch_bytes(self.face_cells)
+    }
+
+    /// Three adapter-sized arrays, including their zero tails, for packed input.
+    pub fn unpacked_face_bytes(&self) -> u64 {
+        3 * cell_total(self.face_cells.map(|n| n + 1)) * 4
     }
 
     fn owns_distance_fields(&self, tick_mode: bool) -> bool {
@@ -601,12 +631,44 @@ pub(crate) struct MotionInputs<'a> {
     pub region_count: u32,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum FaceSource<'a> {
+    Packed(&'a GpuBuffer),
+    Axes([&'a GpuBuffer; 3]),
+}
+
+/// Shared runtime/extent truth table. Packed input is unpacked before use;
+/// every floating-point kernel reads axes. Legacy saved graphs keep their axis interface.
+pub(crate) fn packed_face_source(tick: bool, packed: bool, axes: [bool; 3]) -> Result<bool, &'static str> {
+    if packed && axes.iter().any(|&wired| wired) {
+        return Err("Whitewater Step: wire faces, or face_u, face_v and face_w, not both");
+    }
+    if packed {
+        return if tick { Ok(true) } else { Err("Whitewater Step: legacy level-set interface requires face_u, face_v and face_w; packed faces are not supported") };
+    }
+    match axes.into_iter().filter(|&wired| wired).count() {
+        3 => Ok(false),
+        0 => Err("Whitewater Step: wire faces, or face_u, face_v and face_w; neither source is wired"),
+        _ => Err("Whitewater Step: partial axes; wire all of face_u, face_v and face_w"),
+    }
+}
+
+impl<'a> FaceSource<'a> {
+    #[cfg(all(test, feature = "gpu-proofs"))]
+    fn axes(self) -> [&'a GpuBuffer; 3] {
+        match self {
+            Self::Axes(axes) => axes,
+            Self::Packed(_) => panic!("the atom oracle requires independently wired axis adapters"),
+        }
+    }
+}
+
 pub(crate) struct StepInputs<'a> {
     pub motion: Option<MotionInputs<'a>>,
     pub particles: &'a GpuBuffer,
     pub solid: &'a GpuBuffer,
     pub obstacle_source: Option<&'a GpuBuffer>,
-    pub faces: [&'a GpuBuffer; 3],
+    pub faces: FaceSource<'a>,
     pub level_set: &'a GpuBuffer,
     pub distance: Option<&'a GpuBuffer>,
 }
@@ -626,13 +688,26 @@ fn require_inputs(shape: &StepShape, inputs: &StepInputs<'_>) -> Result<(), Stri
     let wanted = [
         ("solid", inputs.solid, shape.solid_bytes()),
         ("liquid distance", inputs.distance.unwrap_or(inputs.level_set), if inputs.distance.is_some() { cell_total(shape.face_cells) * 4 } else { shape.level_bytes() }),
-        ("face_u", inputs.faces[0], shape.face_bytes(0)),
-        ("face_v", inputs.faces[1], shape.face_bytes(1)),
-        ("face_w", inputs.faces[2], shape.face_bytes(2)),
     ];
     for (name, buffer, bytes) in wanted {
         if buffer.size < bytes {
             return Err(format!("{name} holds {} bytes, fewer than the {bytes} its grid reads", buffer.size));
+        }
+    }
+    match inputs.faces {
+        FaceSource::Packed(faces) => {
+            let bytes = super::gpu_flip_step::face_bytes(shape.face_cells);
+            if inputs.distance.is_none() {
+                return Err("legacy level-set interface requires axis arrays".into());
+            }
+            if faces.size < bytes { return Err(format!("faces holds {} bytes, fewer than the {bytes} its grid reads", faces.size)); }
+        }
+        FaceSource::Axes(axes) => {
+            for (axis, buffer) in axes.into_iter().enumerate() {
+                let name = ["face_u", "face_v", "face_w"][axis];
+                let bytes = shape.face_bytes(axis);
+                if buffer.size < bytes { return Err(format!("{name} holds {} bytes, fewer than the {bytes} its grid reads", buffer.size)); }
+            }
         }
     }
     Ok(())
@@ -777,13 +852,13 @@ struct Pipelines {
     distance: Option<GpuComputePipeline>,
     liquid: Option<GpuComputePipeline>,
     curvature: Option<GpuComputePipeline>,
-    turbulence: Option<GpuComputePipeline>,
     influence: Option<GpuComputePipeline>,
     extend: Option<GpuComputePipeline>,
     preserve: Option<GpuComputePipeline>,
     keep: Option<GpuComputePipeline>,
     /// `whitewater_step.wgsl`, in [`Hand`] order.
     hand: Vec<GpuComputePipeline>,
+    /// `whitewater_fused.wgsl` in [`FUSED_ENTRIES`] order, including the face unpack pass.
     fused: Vec<GpuComputePipeline>,
 }
 
@@ -841,13 +916,12 @@ impl Pipelines {
         standalone_pipeline::<CrossingDistance>(&mut self.distance, device);
         standalone_pipeline::<LiquidCells>(&mut self.liquid, device);
         standalone_pipeline::<WhitewaterInfluence>(&mut self.influence, device);
-        standalone_pipeline::<TurbulenceField>(&mut self.turbulence, device);
         standalone_pipeline::<LatticeCurvature>(&mut self.curvature, device);
         standalone_pipeline::<ExtendLattice>(&mut self.extend, device);
         standalone_pipeline::<PreserveFoam>(&mut self.preserve, device);
         standalone_pipeline::<KeepWhitewater>(&mut self.keep, device);
         if self.fused.is_empty() {
-            let source = fused_source(false);
+            let source = fused_source();
             for (entry, label) in FUSED_ENTRIES {
                 self.fused.push(device.create_compute_pipeline(&source, entry, label));
             }
@@ -886,6 +960,7 @@ fn allocate(device: &GpuDevice, bytes: u64, shared: bool) -> Result<GpuBuffer, S
 
 /// The grid fields and the pool, sized from one [`StepShape`].
 struct Fields {
+    unpacked_faces: Option<[GpuBuffer; 3]>,
     crossings: [GpuBuffer; 2],
     distance: Option<GpuBuffer>,
     surface: Option<GpuBuffer>,
@@ -907,6 +982,7 @@ impl Fields {
         let cells = shape.cell_count();
         let alloc = |bytes| allocate(device, bytes, false);
         Ok(Self {
+            unpacked_faces: None,
             crossings: [alloc(cells * SURFACE_CROSSING_BYTES)?, alloc(cells * SURFACE_CROSSING_BYTES)?],
             distance: shape.owns_distance_fields(tick_mode).then(|| alloc(cells * 4)).transpose()?,
             surface: shape.owns_distance_fields(tick_mode).then(|| alloc(cells * 4)).transpose()?,
@@ -1147,6 +1223,36 @@ impl Step {
         Ok(())
     }
 
+    fn reserve_faces(&mut self, device: &GpuDevice, packed: bool) -> Result<(), String> {
+        let f = self.fields.as_mut().expect("whitewater fields allocated");
+        if packed {
+            if f.unpacked_faces.is_none() {
+                let bytes = self.shape.expect("shape allocated").unpacked_face_bytes() / 3;
+                f.unpacked_faces = Some([allocate(device, bytes, false)?, allocate(device, bytes, false)?, allocate(device, bytes, false)?]);
+            }
+        } else {
+            f.unpacked_faces = None;
+        }
+        Ok(())
+    }
+
+    fn face_axes<'a>(&'a self, faces: FaceSource<'a>) -> [&'a GpuBuffer; 3] {
+        match faces {
+            FaceSource::Axes(axes) => axes,
+            FaceSource::Packed(_) => self.fields().unpacked_faces.as_ref().expect("packed faces reserved").each_ref(),
+        }
+    }
+
+    fn unpack_faces(&self, enc: &mut manifold_gpu::GpuEncoder, shape: &StepShape, faces: FaceSource<'_>) {
+        if let FaceSource::Packed(packed) = faces {
+            let [u, v, w] = self.face_axes(faces);
+            let [nodes_x, nodes_y, nodes_z] = shape.face_cells.map(|n| (n + 4) as f32);
+            let params = UnpackParams { nodes_x, nodes_y, nodes_z, count: (shape.unpacked_face_bytes() / 12) as u32 };
+            dispatch(enc, &self.pipelines.fused[5], bytemuck::bytes_of(&params), &[packed, u, v, w],
+                params.count, FUSED_ENTRIES[5].1, Barrier::After);
+        }
+    }
+
     /// One liquid tick, with all persistent pool words supplied by the
     /// boundary. No CPU readback or display-frame clock participates.
     pub(crate) fn advance_tick(
@@ -1170,12 +1276,14 @@ impl Step {
         self.slot_scan.prepare(gpu.device);
         self.sort.prepare(gpu.device);
         self.reserve(gpu.device, shape, inputs.particles.size / PARTICLE, inputs.distance.is_some())?;
+        self.reserve_faces(gpu.device, matches!(inputs.faces, FaceSource::Packed(_)))?;
         if self.outputs.slots.is_empty() {
             self.outputs.free(gpu.device, &Retired, &shape)?;
         }
         self.current = 0;
         let enc = &mut *gpu.native_enc;
         if enabled {
+            self.unpack_faces(enc, &shape, inputs.faces);
             let f = self.fields();
             enc.copy_buffer_to_buffer(pool, &f.pools[0], shape.pool_bytes());
             enc.copy_buffer_to_buffer(state, &f.state, STATE_WORDS * 4);
@@ -1265,7 +1373,6 @@ impl Step {
         let cells = s.cell_count() as u32;
         let [nx, ny, nz] = s.nodes.map(|n| n as f32);
         let [lx, ly, lz] = s.level_nodes.map(|n| n as f32);
-        let [fx, fy, fz] = s.face_cells.map(|n| n as f32);
         let nodes = [("nodes_x", nx), ("nodes_y", ny), ("nodes_z", nz)];
         let label = |pass: &str| -> &'static str {
             match pass {
@@ -1353,19 +1460,16 @@ impl Step {
             curvature = 1 - curvature;
         }
         let [sampled, energy, unscaled, dust_energy, wavecrest_bits] = scratch;
-        let faces = [("face_cells_x", fx), ("face_cells_y", fy), ("face_cells_z", fz)];
-        atom::<TurbulenceField>(
-            enc, get(&p.turbulence),
-            &[faces[0], faces[1], faces[2], nodes[0], nodes[1], nodes[2], ("cell_size", s.cell_size)],
-            &[distance, inputs.faces[0], inputs.faces[1], inputs.faces[2], &f.turbulence],
-            cells, "node.whitewater_step.turbulence");
         #[cfg(all(test, feature = "gpu-proofs"))]
         let reference = self.reference.enabled;
+        self.turbulence(enc, frame, inputs, distance);
+        let [u, v, w] = self.face_axes(inputs.faces);
+        let fused = &p.fused;
         emitter_path!(reference, {
             self.reference.emit_reference(enc, frame, inputs, f, surface, curvature, influence_next, offsets, emitters);
         }, {
-            dispatch(enc, &p.fused[0], bytemuck::bytes_of(&EmitParams::new(frame, emitters, false)),
-                &[inputs.particles, inputs.faces[0], inputs.faces[1], inputs.faces[2], &f.state,
+            dispatch(enc, &fused[0], bytemuck::bytes_of(&EmitParams::new(frame, emitters, false)),
+                &[inputs.particles, u, v, w,
                   surface, &f.cells, &f.curvature[curvature], &f.turbulence, &f.influence[influence_next],
                   sampled, energy, offsets, unscaled, wavecrest_bits], emitters, FUSED_ENTRIES[0].1, Barrier::After);
             #[cfg(all(test, feature = "gpu-proofs"))]
@@ -1391,9 +1495,9 @@ impl Step {
             emitter_path!(reference, {
                 self.reference.dust_reference(enc, frame, inputs, f, influence_next, offsets, emitters);
             }, {
-                dispatch(enc, &p.fused[1], bytemuck::bytes_of(&EmitParams::new(frame, emitters, true)),
+                dispatch(enc, &fused[1], bytemuck::bytes_of(&EmitParams::new(frame, emitters, true)),
                     &[unscaled, inputs.solid, inputs.obstacle_source.expect("validated dust source"),
-                      &f.state, &f.state, &f.state, &f.state, &f.state, &f.turbulence,
+                      &f.state, &f.state, &f.state, &f.state, &f.turbulence,
                       &f.influence[influence_next], &f.state, dust_energy, offsets, &f.state, wavecrest_bits],
                     emitters, FUSED_ENTRIES[1].1, Barrier::After);
                 #[cfg(all(test, feature = "gpu-proofs"))]
@@ -1415,6 +1519,24 @@ impl Step {
         surface
     }
 
+    fn turbulence(&self, enc: &mut manifold_gpu::GpuEncoder, frame: &StepFrame, inputs: &StepInputs<'_>, distance: &GpuBuffer) {
+        let f = self.fields();
+        emitter_path!(self.reference.enabled, {
+            self.reference.turbulence_reference(enc, frame, inputs, distance, &f.turbulence);
+        }, {
+            let [u, v, w] = self.face_axes(inputs.faces);
+            let s = &frame.shape;
+            let [face_cells_x, face_cells_y, face_cells_z] = s.face_cells.map(|n| n as f32);
+            let [nodes_x, nodes_y, nodes_z] = s.nodes.map(|n| n as f32);
+            let params = TurbulenceParams { face_cells_x, face_cells_y, face_cells_z, nodes_x, nodes_y, nodes_z,
+                cell_size: s.cell_size, count: s.cell_count() as u32 };
+            dispatch(enc, &self.pipelines.fused[4], bytemuck::bytes_of(&params),
+                &[&f.state, u, v, w, distance, &f.turbulence], params.count, FUSED_ENTRIES[4].1, Barrier::After);
+            #[cfg(all(test, feature = "gpu-proofs"))]
+            self.reference.record_dispatch(FUSED_ENTRIES[4].1, params.count);
+        });
+    }
+
     /// Spawn and classify before append, preserving the atom defaults for dust typing.
     fn spawn(&self, enc: &mut manifold_gpu::GpuEncoder, frame: &StepFrame, inputs: &StepInputs<'_>,
         surface: &GpuBuffer, offsets: &GpuBuffer, sampled: &GpuBuffer, energy: &GpuBuffer, emitters: u32, dust: bool) {
@@ -1423,8 +1545,9 @@ impl Step {
             self.reference.spawn_reference(enc, frame, inputs, f, surface, offsets, sampled, energy, emitters, dust);
         }, {
             let label = if dust { "node.whitewater_step.dust_spawn" } else { FUSED_ENTRIES[2].1 };
+            let [u, v, w] = self.face_axes(inputs.faces);
             dispatch(enc, &self.pipelines.fused[2], bytemuck::bytes_of(&SpawnParams::new(frame, emitters, dust)),
-                &[sampled, inputs.faces[0], inputs.faces[1], inputs.faces[2], &f.state,
+                &[sampled, u, v, w,
                   surface, &f.cells, offsets, energy, inputs.solid, &f.typed], frame.shape.capacity, label, Barrier::After);
             #[cfg(all(test, feature = "gpu-proofs"))]
             self.reference.record_dispatch(label, frame.shape.capacity);
@@ -1444,8 +1567,9 @@ impl Step {
             let motion = inputs.motion.as_ref();
             let empty = &f.state;
             let history = motion.map_or([empty; 3], |m| m.faces);
+            let [u, v, w] = self.face_axes(inputs.faces);
             dispatch(enc, &self.pipelines.fused[3], bytemuck::bytes_of(&LifecycleParams::new(frame, inputs)),
-                &[a, inputs.faces[0], inputs.faces[1], inputs.faces[2], empty, surface, &f.cells, inputs.solid,
+                &[a, u, v, w, surface, &f.cells, inputs.solid,
                   motion.map_or(empty, |m| m.schedule), history[0], history[1], history[2],
                   motion.and_then(|m| m.fields.forces).unwrap_or(empty), motion.and_then(|m| m.fields.impulses).unwrap_or(empty), b],
                 frame.shape.capacity, FUSED_ENTRIES[3].1, Barrier::After);
@@ -1658,6 +1782,16 @@ impl Primitive for WhitewaterStep {
 
     fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
         #[cfg(all(test, feature = "gpu-proofs"))]
+        if let Some(axis) = ["proof_unpack_u", "proof_unpack_v", "proof_unpack_w"].iter().position(|&p| p == port) {
+            assert!(self.step.reference.capture);
+            return self.step.fields.as_ref()?.unpacked_faces.as_ref().map(|axes| &axes[axis]);
+        }
+        #[cfg(all(test, feature = "gpu-proofs"))]
+        if port == "proof_turbulence" {
+            assert!(self.step.reference.capture && self.step.reference.turbulence_dispatches.get() > 0);
+            return self.step.fields.as_ref().map(|f| &f.turbulence);
+        }
+        #[cfg(all(test, feature = "gpu-proofs"))]
         if let Some(buffer) = self.step.reference.output(port) { return Some(buffer); }
         if self.tick_mode {
             return self.step.tick_output(port);
@@ -1678,6 +1812,11 @@ impl Primitive for WhitewaterStep {
 
     fn run(&mut self, ctx: &mut EffectNodeContext<'_, '_>) {
         self.tick_mode = ctx.inputs.slot("distance").is_some();
+        let packed = match packed_face_source(self.tick_mode, ctx.inputs.slot("faces").is_some(),
+            ["face_u", "face_v", "face_w"].map(|port| ctx.inputs.slot(port).is_some())) {
+            Ok(packed) => packed,
+            Err(refusal) => { ctx.error(refusal); return; }
+        };
         if !self.tick_mode && ctx.param_f32("enabled", 1.0) < 0.5 {
             self.step.stop();
             for name in OUTPUT_COUNTS.iter().chain(["dust_count", "emitted", "thinned", "pool_full"].iter()) {
@@ -1692,16 +1831,22 @@ impl Primitive for WhitewaterStep {
                 return;
             }
         };
-        let (Some(particles), Some(solid), Some(face_u), Some(face_v), Some(face_w), Some(level_set)) = (
+        let (Some(particles), Some(solid), Some(level_set)) = (
             ctx.inputs.array("particles"),
             ctx.inputs.array("solid"),
-            ctx.inputs.array("face_u"),
-            ctx.inputs.array("face_v"),
-            ctx.inputs.array("face_w"),
             ctx.inputs.array("distance").or_else(|| ctx.inputs.array("level_set")),
         ) else {
-            ctx.error("Whitewater Step: particles, solid, face_u/v/w and level_set must all be wired");
+            ctx.error("Whitewater Step: particles, solid and distance or level_set must all be wired");
             return;
+        };
+        let faces = if packed {
+            let Some(faces) = ctx.inputs.array("faces") else { ctx.error("Whitewater Step: faces buffer is unavailable"); return; };
+            FaceSource::Packed(faces)
+        } else {
+            let [Some(u), Some(v), Some(w)] = ["face_u", "face_v", "face_w"].map(|port| ctx.inputs.array(port)) else {
+                ctx.error("Whitewater Step: face_u, face_v and face_w buffers are unavailable"); return;
+            };
+            FaceSource::Axes([u, v, w])
         };
         let motion = if let Some(schedule) = ctx.inputs.array("substep_schedule") {
             let [Some(u), Some(v), Some(w)] = ["substep_u", "substep_v", "substep_w"].map(|n| ctx.inputs.array(n)) else {
@@ -1714,7 +1859,7 @@ impl Primitive for WhitewaterStep {
                 fields, tick_index: ctx.scalar_or_param("tick_index",0.0), regions: ctx.inputs.array("regions"),
                 shapes: ctx.inputs.array("shapes"), atlas: ctx.inputs.array("atlas"), region_count: ctx.scalar_or_param("region_count",0.0) as u32 })
         } else { None };
-        let inputs = StepInputs { motion, particles, solid, obstacle_source: ctx.inputs.array("obstacle_source"), faces: [face_u, face_v, face_w], level_set, distance: ctx.inputs.array("distance") };
+        let inputs = StepInputs { motion, particles, solid, obstacle_source: ctx.inputs.array("obstacle_source"), faces, level_set, distance: ctx.inputs.array("distance") };
         if self.tick_mode {
             let (Some(pool), Some(state)) = (ctx.inputs.array("pool"), ctx.inputs.array("pool_state")) else {
                 ctx.error("Whitewater Step: per-tick distance requires pool and pool_state from the liquid boundary");

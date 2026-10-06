@@ -1,5 +1,6 @@
-//! P2/P3 test-only atom oracle. No fused uniform or phase code is used here.
+//! Test-only atom oracle for the fused whitewater kernels. No fused uniform or phase code is used here.
 use super::*;
+use super::super::turbulence_field::TurbulenceField;
 use super::super::age_whitewater::AgeWhitewater;
 use super::super::retype_whitewater::RetypeWhitewater;
 use super::super::advect_whitewater::AdvectWhitewater;
@@ -23,6 +24,8 @@ pub(super) struct Reference {
     pub dust_dispatches: Cell<u32>,
     pub spawn_dispatches: Cell<u32>,
     pub lifecycle_dispatches: Cell<u32>,
+    pub turbulence_dispatches: Cell<u32>,
+    turbulence: Option<GpuComputePipeline>,
     capacity: u32,
     spawns: Option<GpuBuffer>,
     pub particle_snapshots: Option<[GpuBuffer; 3]>,
@@ -48,7 +51,8 @@ pub(super) struct Reference {
 impl Reference {
     pub fn record_dispatch(&self, label: &str, count: u32) {
         if count == 0 { return; }
-        let counter = if label.ends_with("spawn") || label.ends_with("kind") || label.ends_with("dust_type") {
+        let counter = if label.ends_with("turbulence") { &self.turbulence_dispatches }
+        else if label.ends_with("spawn") || label.ends_with("kind") || label.ends_with("dust_type") {
             &self.spawn_dispatches
         } else if ["lifecycle", "advect", "retype", "age"].iter().any(|s| label.ends_with(s)) {
             &self.lifecycle_dispatches
@@ -69,7 +73,7 @@ impl Reference {
     pub fn print_pipeline_limits(&self) {
         for pipeline in [&self.jitter, &self.sample, &self.emitter_velocity, &self.energy,
             &self.wavecrest, &self.inside, &self.emission, &self.dust,
-            &self.spawn, &self.kind, &self.advect, &self.retype, &self.age] {
+            &self.spawn, &self.kind, &self.advect, &self.retype, &self.age, &self.turbulence] {
             let pipeline = get(pipeline);
             println!("reference {}: max_threads={:?}", pipeline.label, pipeline.max_threads_per_threadgroup());
         }
@@ -102,6 +106,7 @@ impl Reference {
         standalone_pipeline::<RetypeWhitewater>(&mut self.retype, device);
         standalone_pipeline::<AgeWhitewater>(&mut self.age, device);
         standalone_pipeline::<DustPotential>(&mut self.dust, device);
+        standalone_pipeline::<TurbulenceField>(&mut self.turbulence, device);
 
         if self.spawns.is_none() || self.capacity != capacity {
             let n = u64::from(capacity);
@@ -123,6 +128,17 @@ impl Reference {
         if !self.capture { return; }
         let dst = &self.particle_snapshots.as_ref().expect("particle snapshots reserved")[index];
         enc.copy_buffer_to_buffer(src, dst, dst.size);
+    }
+    pub fn turbulence_reference(&self, enc: &mut manifold_gpu::GpuEncoder, frame: &StepFrame,
+        inputs: &StepInputs<'_>, distance: &GpuBuffer, turbulence: &GpuBuffer) {
+        let s = &frame.shape;
+        let [fx, fy, fz] = s.face_cells.map(|n| n as f32);
+        let [nx, ny, nz] = s.nodes.map(|n| n as f32);
+        let [u, v, w] = inputs.faces.axes();
+        self.atom::<TurbulenceField>(enc, get(&self.turbulence),
+            &[("face_cells_x", fx), ("face_cells_y", fy), ("face_cells_z", fz),
+              ("nodes_x", nx), ("nodes_y", ny), ("nodes_z", nz), ("cell_size", s.cell_size)],
+            &[distance, u, v, w, turbulence], s.cell_count() as u32, "node.whitewater_step.turbulence");
     }
     pub fn scratch(&self) -> &[GpuBuffer; 5] { self.scratch.as_ref().expect("oracle reserved") }
     pub fn dust_energy(&self) -> &GpuBuffer { self.dust_energy.as_ref().expect("oracle reserved") }
@@ -180,7 +196,7 @@ impl Reference {
             enc,
             get(&p.sample),
             &sample,
-            &[jittered, inputs.faces[0], inputs.faces[1], inputs.faces[2], sampled],
+            &[jittered, inputs.faces.axes()[0], inputs.faces.axes()[1], inputs.faces.axes()[2], sampled],
             emitters,
             "node.whitewater_step.sample_velocity",
         );
@@ -295,7 +311,7 @@ impl Reference {
         if dust {
             spawn[14] = ("seed", frame.seed + 104729.0);
             self.atom::<SpawnWhitewater>(enc, get(&p.spawn), &spawn[..17],
-                &[offsets, sampled, energy, inputs.faces[0], inputs.faces[1], inputs.faces[2], inputs.solid, self.spawns.as_ref().expect("oracle spawns reserved")],
+                &[offsets, sampled, energy, inputs.faces.axes()[0], inputs.faces.axes()[1], inputs.faces.axes()[2], inputs.solid, self.spawns.as_ref().expect("oracle spawns reserved")],
                 s.capacity, "node.whitewater_step.dust_spawn");
             let mut dust_type = [("", 0.0); 10];
             dust_type[..9].copy_from_slice(&grid);
@@ -307,7 +323,7 @@ impl Reference {
             enc,
             get(&p.spawn),
             &spawn[..17],
-            &[offsets, sampled, energy, inputs.faces[0], inputs.faces[1], inputs.faces[2], inputs.solid, self.spawns.as_ref().expect("oracle spawns reserved")],
+            &[offsets, sampled, energy, inputs.faces.axes()[0], inputs.faces.axes()[1], inputs.faces.axes()[2], inputs.solid, self.spawns.as_ref().expect("oracle spawns reserved")],
             s.capacity,
             "node.whitewater_step.spawn",
         );
@@ -342,7 +358,7 @@ impl Reference {
         let mut advect = [("", 0.0); 24];
         advect[..12].copy_from_slice(&place);
         advect[12..16].copy_from_slice(&[("gravity_x", gx), ("gravity_y", gy), ("gravity_z", gz), ("dt", dt)]);
-        let faces = inputs.faces;
+        let faces = inputs.faces.axes();
         let motion = inputs.motion.as_ref();
         let empty = &f.state;
         let history = motion.map_or([empty;3], |m| m.faces);

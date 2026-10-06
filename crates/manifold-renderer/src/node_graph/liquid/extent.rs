@@ -1806,6 +1806,10 @@ fn whitewater_lifecycle(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 /// refusal by name, each input covering what the grid reads, each
 /// population provided at Capacity, and everything else held.
 fn whitewater_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+    let packed = crate::node_graph::primitives::whitewater_step::packed_face_source(
+        x.input("distance").is_some(), x.input("faces").is_some(),
+        ["face_u", "face_v", "face_w"].map(|port| x.input(port).is_some()),
+    ).map_err(|reason| Verdict::Refused(reason.into()))?;
     let capacity = x.scalar("capacity", STEP_CAPACITY as f32).round();
     if !(1.0..=STEP_MAX_CAPACITY as f32).contains(&capacity) {
         return Err(Verdict::Refused(format!("capacity {capacity} is outside 1 to {STEP_MAX_CAPACITY}")));
@@ -1828,8 +1832,13 @@ fn whitewater_step(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
         x.provide(port, shape.population_bytes());
     }
     x.hold(shape.held_bytes(x.items("particles").unwrap_or(0), x.input("distance").is_some()));
-    for (axis, port) in ["face_u", "face_v", "face_w"].into_iter().enumerate() {
-        x.covers(port, shape.face_bytes(axis))?;
+    if packed {
+        x.covers("faces", face_bytes(shape.face_cells))?;
+        x.hold(shape.unpacked_face_bytes());
+    } else {
+        for (axis, port) in ["face_u", "face_v", "face_w"].into_iter().enumerate() {
+            x.covers(port, shape.face_bytes(axis))?;
+        }
     }
     x.provide("pool_out", shape.pool_bytes());
     x.provide("state_out", 32);
