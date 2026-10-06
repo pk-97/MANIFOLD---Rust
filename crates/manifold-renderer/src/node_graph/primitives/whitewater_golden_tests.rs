@@ -102,7 +102,13 @@ fn run(label: &str, def: EffectGraphDef, lines: &mut Vec<String>) -> [Option<u32
     assert!(!show.warmup_pending(), "{label}: warmup did not finish inside its frame bound");
     let mut seen = [None; EVENTS.len()];
     let mut previous: Option<(Vec<u32>, Vec<u32>)> = None;
-    let mut clock: Option<(f32, i64)> = None;
+    let accepted = |show: &Show| {
+        let [epoch, time] = show.probes(["epoch", "simulation_time"]);
+        (epoch, (f64::from(time) / TICK).round() as i64)
+    };
+    // The baseline is the restart's own frame, so the first sampled frame's
+    // epoch and advance are checked too.
+    let (mut was_epoch, mut was_step) = accepted(&show);
     let mut tick = 0;
     let mut frames = 0;
     let mut dues = Vec::new();
@@ -113,17 +119,15 @@ fn run(label: &str, def: EffectGraphDef, lines: &mut Vec<String>) -> [Option<u32
         // At most one tick per frame, so the captures are that tick's and no
         // earlier tick of the frame goes unseen. A frame with no tick due
         // publishes nothing new and is not a tick.
-        let [due, epoch, time, dropped] = show.probes(["ticks", "epoch", "simulation_time", "dropped_seconds"]);
+        let [due, dropped] = show.probes(["ticks", "dropped_seconds"]);
         dues.push(due);
         assert!(due == 0.0 || due == 1.0, "{label}: frame {frames} ran {due} ticks; dues {dues:?}");
         assert_eq!(dropped, 0.0, "{label}: frame {frames} dropped simulation time");
         // The clock accepted exactly the ticks it scheduled, in one epoch.
-        let step = (f64::from(time) / TICK).round() as i64;
-        if let Some((was_epoch, was_step)) = clock {
-            assert_eq!(epoch, was_epoch, "{label}: frame {frames} changed epoch");
-            assert_eq!(step, was_step + due as i64, "{label}: frame {frames} clock at tick {step}, was {was_step}, due {due}");
-        }
-        clock = Some((epoch, step));
+        let (epoch, step) = accepted(&show);
+        assert_eq!(epoch, was_epoch, "{label}: frame {frames} changed epoch");
+        assert_eq!(step, was_step + due as i64, "{label}: frame {frames} clock at tick {step}, was {was_step}, due {due}");
+        (was_epoch, was_step) = (epoch, step);
         if due == 0.0 {
             continue;
         }
@@ -167,8 +171,9 @@ fn run(label: &str, def: EffectGraphDef, lines: &mut Vec<String>) -> [Option<u32
 }
 
 /// One tick of the stage over a constructed pool with no emission: three
-/// particles that die this tick ahead of one that lives, all at one position
-/// so they share a cell and the stable sort keeps their order. Compaction
+/// particles that die this tick ahead of one that lives. The stage's sort
+/// writes only an index (`order`, `sorted: None`), never the pool, so pool
+/// order reaches the keep and compact passes unchanged. Compaction
 /// must move the survivor from slot 3 to slot 0 (the compact pass's
 /// `scan[i] - 1 != i` case). Returns the survivor's slot and the live count.
 fn compaction_moves_a_survivor() -> (usize, u32) {
@@ -269,8 +274,20 @@ fn record_candidate(lines: &[String]) {
     assert!(dirty.is_empty(), "dirty tree; refusing to record:\n{}", dirty.join("\n"));
     let base = git(&["rev-parse", "--verify", &format!("{BASE}^{{commit}}")]);
     assert!(base.status.success(), "pinned base {BASE} unavailable; refusing to record");
-    let changed = git(&["diff", "--quiet", BASE, "HEAD", "--", "src", ":(exclude)*_tests.rs", ":(exclude)**/tests/**", ":(exclude)src/node_graph/primitives/mod.rs"]);
+    const MODULES: &str = "src/node_graph/primitives/mod.rs";
+    let changed = git(&["diff", "--quiet", BASE, "HEAD", "--", "src", ":(exclude)*_tests.rs", ":(exclude)**/tests/**", &format!(":(exclude){MODULES}")]);
     assert!(changed.status.success(), "renderer sources differ from the pinned base {BASE}; refusing to record");
+    // The module list may differ only by this test's own registration.
+    let modules = git(&["diff", "-U0", BASE, "HEAD", "--", MODULES]);
+    assert!(modules.status.success(), "git diff of {MODULES} failed; refusing to record");
+    let mut delta: Vec<String> = String::from_utf8_lossy(&modules.stdout)
+        .lines()
+        .filter(|l| (l.starts_with('+') || l.starts_with('-')) && !l.starts_with("+++") && !l.starts_with("---"))
+        .map(str::to_string)
+        .collect();
+    delta.sort();
+    let registration = ["+#[cfg(all(test, feature = \"gpu-proofs\"))]", "+mod whitewater_golden_tests;"];
+    assert!(delta.is_empty() || delta == registration, "{MODULES} differs from {BASE} beyond this test's registration; refusing to record:\n{}", delta.join("\n"));
     let header = format!(
         "# Whitewater per-tick golden (whitewater_tick_state_matches_golden)\n# base {BASE}\n# sha {sha}\n# fixtures: shipped GPU FLIP Dam Break 64; all emitters; all emitters at budget 1000; {TICKS} ticks each after restart\n# line: fixture tick N port bytes FNV-1a-64 over the whole buffer\n"
     );
