@@ -40,7 +40,7 @@ This block is **generated from the node registry** by `gen_node_catalog` (`cargo
 
 _Generated from the node registry. Do not hand-edit. 389 nodes registered, grouped by category. Full ports, params, tooltips and search aliases live in [node_catalog.json](node_catalog.json)._
 
-### Color & Tone (17)
+### Color & Tone (16)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -59,7 +59,6 @@ _Generated from the node registry. Do not hand-edit. 389 nodes registered, group
 | Posterize | `node.posterize` | Filter | Crushes each colour into a small number of steps for a banded, blocky look. Fewer levels give a chunkier result. |
 | Reinhard Tone Map | `node.reinhard_tone_map` | Filter | A simpler HDR-to-display tone map using the Reinhard curve. Lighter weight than the full Tone Map node. |
 | Saturation | `node.saturation` | Filter | Pulls colours toward grey or pushes them more vivid. |
-| Sea Horizon Environment | `node.sea_horizon_env` | Filter | Turns the ground half of an HDRI into open sea, so water reflects sky and sea instead of the beach the photo was taken from. |
 | Tone Map | `node.tone_map` | Filter | Fits HDR content, where colours can run far brighter than pure white, onto whatever display you are sending to. On a normal SDR screen or export it rolls the b… |
 
 ### Blur & Sharpen (9)
@@ -268,7 +267,7 @@ _Generated from the node registry. Do not hand-edit. 389 nodes registered, group
 | Voxelize | `node.voxelize_mesh` | Filter | Snaps every vertex to a regular voxel grid, pixel-crushing a smooth mesh into chunky blocks. |
 | Wave Shear Mesh | `node.wave_shear_mesh` | Filter | Shears a textured mesh with a travelling wave while transporting normals and tangents analytically. |
 
-### Materials & Lighting (10)
+### Materials & Lighting (11)
 
 | Node | type_id | role | summary |
 |---|---|---|---|
@@ -279,6 +278,7 @@ _Generated from the node registry. Do not hand-edit. 389 nodes registered, group
 | Matcap Two-Tone | `node.matcap_two_tone` | Filter | Shades a surface by mapping its normals into a two-tone sphere lookup, a fast stylised material that needs no real lights. |
 | PBR Material | `node.pbr_material` | Source | A physically based material with roughness, metalness, and environment reflections. The realistic workhorse for 3D surfaces. |
 | Rim Light (Fresnel) | `node.rim_light` | Filter | Lights up the edges of a surface where it turns away from the camera, the glowing rim you see on backlit objects. |
+| Sea Horizon Environment | `node.sea_horizon_env` | Filter | Turns the ground half of an HDRI into open sea, so water reflects sky and sea instead of the beach the photo was taken from. |
 | Shininess (Blinn) | `node.shininess` | Filter | Adds a tight highlight where the surface catches the light, set by a shininess amount. The glossy hotspot on top of basic lighting. |
 | Surface Bumps | `node.surface_bumps` | Filter | Turns a grayscale height image into a normal map, so light and dark become bumps and dents the lighting can catch. The way to add surface detail from a texture. |
 | Unlit Material | `node.unlit_material` | Source | A flat-colour material with no lighting, so the surface shows its base colour straight. The simplest material, good for solid or glowing looks. |
