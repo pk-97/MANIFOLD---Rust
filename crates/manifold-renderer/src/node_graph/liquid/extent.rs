@@ -1949,7 +1949,8 @@ mod tests {
             ("node.interpolate_particle_frames", "count_b", 16_777_216.0),
             ("node.push_out_of_solid", "nodes_x", 4096.0),
         ] {
-            let mut def = particle_blend_preset();
+            // Corrupt the compiled topology, including nodes inside Water.
+            let mut def = manifold_core::flatten::flatten_groups(&particle_blend_preset()).expect("preset flattens");
             let node = def.nodes.iter_mut().find(|node| node.type_id == type_id).unwrap();
             let id = node.id;
             node.params.insert(port.into(), SerializedParamValue::Float { value });
