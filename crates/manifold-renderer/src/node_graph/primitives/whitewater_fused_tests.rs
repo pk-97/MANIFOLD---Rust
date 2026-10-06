@@ -488,10 +488,14 @@ mod gpu {
             let packed = shared(&device, &bytes);
             // Resolution 64 has 67 solver cells after native lattice padding.
             let axes = adapter_outputs(&device, &packed, [67; 3]);
+            let mut saw_nonzero_axis = false;
             for (axis, port) in ["proof_unpack_u", "proof_unpack_v", "proof_unpack_w"].into_iter().enumerate() {
                 let actual = show.provided_all_bytes("whitewater", port);
-                equal_words(bytemuck::cast_slice(&actual), &read::<u32>(&axes[axis], axes[axis].size as usize / 4), ticks, port);
+                let words: &[u32] = bytemuck::cast_slice(&actual);
+                equal_words(words, &read::<u32>(&axes[axis], axes[axis].size as usize / 4), ticks, port);
+                saw_nonzero_axis |= words[..face_len([67; 3], axis) as usize].iter().any(|&word| word != 0);
             }
+            assert!(saw_nonzero_axis, "scene tick {ticks}: unpack comparison must contain a nonzero logical face");
             ticks += 1;
             if ticks == 3 { break; }
         }
@@ -511,6 +515,8 @@ mod gpu {
         for axis in 0..3 {
             compare_buffers(&captured[axis], &axes[axis], 0, "whole unpacked axis including tail");
             let words = read::<u32>(&captured[axis], 9 * 9 * 9);
+            assert!(words[..face_len(shape.face_cells, axis) as usize].iter().any(|&word| word != 0),
+                "fixture axis {axis}: unpack comparison must contain a nonzero logical face");
             assert!(words[face_len(shape.face_cells, axis) as usize..].iter().all(|&word| word == 0));
         }
         stage.reserve_faces(&device, false).unwrap();

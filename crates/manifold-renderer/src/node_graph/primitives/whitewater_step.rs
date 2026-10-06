@@ -1282,8 +1282,8 @@ impl Step {
         }
         self.current = 0;
         let enc = &mut *gpu.native_enc;
-        self.unpack_faces(enc, &shape, inputs.faces);
         if enabled {
+            self.unpack_faces(enc, &shape, inputs.faces);
             let f = self.fields();
             enc.copy_buffer_to_buffer(pool, &f.pools[0], shape.pool_bytes());
             enc.copy_buffer_to_buffer(state, &f.state, STATE_WORDS * 4);
@@ -1469,7 +1469,7 @@ impl Step {
             self.reference.emit_reference(enc, frame, inputs, f, surface, curvature, influence_next, offsets, emitters);
         }, {
             dispatch(enc, &fused[0], bytemuck::bytes_of(&EmitParams::new(frame, emitters, false)),
-                &[inputs.particles, u, v, w, &f.state,
+                &[inputs.particles, u, v, w,
                   surface, &f.cells, &f.curvature[curvature], &f.turbulence, &f.influence[influence_next],
                   sampled, energy, offsets, unscaled, wavecrest_bits], emitters, FUSED_ENTRIES[0].1, Barrier::After);
             #[cfg(all(test, feature = "gpu-proofs"))]
@@ -1497,7 +1497,7 @@ impl Step {
             }, {
                 dispatch(enc, &fused[1], bytemuck::bytes_of(&EmitParams::new(frame, emitters, true)),
                     &[unscaled, inputs.solid, inputs.obstacle_source.expect("validated dust source"),
-                      &f.state, &f.state, &f.state, &f.state, &f.state, &f.turbulence,
+                      &f.state, &f.state, &f.state, &f.state, &f.turbulence,
                       &f.influence[influence_next], &f.state, dust_energy, offsets, &f.state, wavecrest_bits],
                     emitters, FUSED_ENTRIES[1].1, Barrier::After);
                 #[cfg(all(test, feature = "gpu-proofs"))]
@@ -1531,7 +1531,7 @@ impl Step {
             let params = TurbulenceParams { face_cells_x, face_cells_y, face_cells_z, nodes_x, nodes_y, nodes_z,
                 cell_size: s.cell_size, count: s.cell_count() as u32 };
             dispatch(enc, &self.pipelines.fused[4], bytemuck::bytes_of(&params),
-                &[&f.state, u, v, w, &f.state, distance, &f.turbulence], params.count, FUSED_ENTRIES[4].1, Barrier::After);
+                &[&f.state, u, v, w, distance, &f.turbulence], params.count, FUSED_ENTRIES[4].1, Barrier::After);
             #[cfg(all(test, feature = "gpu-proofs"))]
             self.reference.record_dispatch(FUSED_ENTRIES[4].1, params.count);
         });
@@ -1547,7 +1547,7 @@ impl Step {
             let label = if dust { "node.whitewater_step.dust_spawn" } else { FUSED_ENTRIES[2].1 };
             let [u, v, w] = self.face_axes(inputs.faces);
             dispatch(enc, &self.pipelines.fused[2], bytemuck::bytes_of(&SpawnParams::new(frame, emitters, dust)),
-                &[sampled, u, v, w, &f.state,
+                &[sampled, u, v, w,
                   surface, &f.cells, offsets, energy, inputs.solid, &f.typed], frame.shape.capacity, label, Barrier::After);
             #[cfg(all(test, feature = "gpu-proofs"))]
             self.reference.record_dispatch(label, frame.shape.capacity);
@@ -1569,7 +1569,7 @@ impl Step {
             let history = motion.map_or([empty; 3], |m| m.faces);
             let [u, v, w] = self.face_axes(inputs.faces);
             dispatch(enc, &self.pipelines.fused[3], bytemuck::bytes_of(&LifecycleParams::new(frame, inputs)),
-                &[a, u, v, w, &f.state, surface, &f.cells, inputs.solid,
+                &[a, u, v, w, surface, &f.cells, inputs.solid,
                   motion.map_or(empty, |m| m.schedule), history[0], history[1], history[2],
                   motion.and_then(|m| m.fields.forces).unwrap_or(empty), motion.and_then(|m| m.fields.impulses).unwrap_or(empty), b],
                 frame.shape.capacity, FUSED_ENTRIES[3].1, Barrier::After);

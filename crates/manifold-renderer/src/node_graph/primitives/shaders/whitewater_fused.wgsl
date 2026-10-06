@@ -47,16 +47,16 @@ struct EmitParams {
 @group(0) @binding(2) var<storage, read> buf_face_u: array<f32>;
 @group(0) @binding(3) var<storage, read> buf_face_v: array<f32>;
 @group(0) @binding(4) var<storage, read> buf_face_w: array<f32>;
-@group(0) @binding(6) var<storage, read> buf_distance: array<f32>;
-@group(0) @binding(7) var<storage, read> buf_cells: array<u32>;
-@group(0) @binding(8) var<storage, read> buf_curvature: array<KnownValue>;
-@group(0) @binding(9) var<storage, read> buf_turbulence: array<f32>;
-@group(0) @binding(10) var<storage, read> buf_influence: array<f32>;
-@group(0) @binding(11) var<storage, read_write> out_sampled: array<Element>;
-@group(0) @binding(12) var<storage, read_write> out_energy: array<f32>;
-@group(0) @binding(13) var<storage, read_write> out_counts: array<u32>;
-@group(0) @binding(14) var<storage, read_write> out_unscaled: array<Element>;
-@group(0) @binding(15) var<storage, read_write> out_wavecrest_bits: array<u32>;
+@group(0) @binding(5) var<storage, read> buf_distance: array<f32>;
+@group(0) @binding(6) var<storage, read> buf_cells: array<u32>;
+@group(0) @binding(7) var<storage, read> buf_curvature: array<KnownValue>;
+@group(0) @binding(8) var<storage, read> buf_turbulence: array<f32>;
+@group(0) @binding(9) var<storage, read> buf_influence: array<f32>;
+@group(0) @binding(10) var<storage, read_write> out_sampled: array<Element>;
+@group(0) @binding(11) var<storage, read_write> out_energy: array<f32>;
+@group(0) @binding(12) var<storage, read_write> out_counts: array<u32>;
+@group(0) @binding(13) var<storage, read_write> out_unscaled: array<Element>;
+@group(0) @binding(14) var<storage, read_write> out_wavecrest_bits: array<u32>;
 // Dust has disjoint entry-point resources; its solid/source occupy the face slots.
 @group(0) @binding(2) var<storage, read> buf_solid: array<f32>;
 @group(0) @binding(3) var<storage, read> buf_source: array<WhitewaterSource>;
@@ -583,19 +583,19 @@ struct LifecycleParams {
 }
 @group(0) @binding(0) var<uniform> sp: SpawnParams;
 @group(0) @binding(0) var<uniform> lc: LifecycleParams;
-@group(0) @binding(8) var<storage, read> buf_offsets: array<u32>;
-@group(0) @binding(9) var<storage, read> buf_energy: array<f32>;
-@group(0) @binding(10) var<storage, read> buf_spawn_solid: array<f32>;
-@group(0) @binding(11) var<storage, read_write> out_typed: array<Spawn>;
+@group(0) @binding(7) var<storage, read> buf_offsets: array<u32>;
+@group(0) @binding(8) var<storage, read> buf_energy: array<f32>;
+@group(0) @binding(9) var<storage, read> buf_spawn_solid: array<f32>;
+@group(0) @binding(10) var<storage, read_write> out_typed: array<Spawn>;
 @group(0) @binding(1) var<storage, read> buf_pool: array<Pool>;
-@group(0) @binding(8) var<storage, read> buf_lifecycle_solid: array<f32>;
-@group(0) @binding(9) var<storage, read> buf_substep_schedule: array<f32>;
-@group(0) @binding(10) var<storage, read> buf_substep_u: array<f32>;
-@group(0) @binding(11) var<storage, read> buf_substep_v: array<f32>;
-@group(0) @binding(12) var<storage, read> buf_substep_w: array<f32>;
-@group(0) @binding(13) var<storage, read> buf_forces: array<f32>;
-@group(0) @binding(14) var<storage, read> buf_impulses: array<f32>;
-@group(0) @binding(15) var<storage, read_write> out_pool: array<Pool>;
+@group(0) @binding(7) var<storage, read> buf_lifecycle_solid: array<f32>;
+@group(0) @binding(8) var<storage, read> buf_substep_schedule: array<f32>;
+@group(0) @binding(9) var<storage, read> buf_substep_u: array<f32>;
+@group(0) @binding(10) var<storage, read> buf_substep_v: array<f32>;
+@group(0) @binding(11) var<storage, read> buf_substep_w: array<f32>;
+@group(0) @binding(12) var<storage, read> buf_forces: array<f32>;
+@group(0) @binding(13) var<storage, read> buf_impulses: array<f32>;
+@group(0) @binding(14) var<storage, read_write> out_pool: array<Pool>;
 
 // node.spawn_whitewater — fusable BUFFER body, GATHER only. One thread per
 // spawn slot j, FLIP's _emitDiffuseParticles (diffuseparticlesimulation.cpp
@@ -1499,7 +1499,7 @@ struct TurbulenceParams {
     count: u32,
 }
 @group(0) @binding(0) var<uniform> tf: TurbulenceParams;
-@group(0) @binding(7) var<storage, read_write> out_turbulence: array<f32>;
+@group(0) @binding(6) var<storage, read_write> out_turbulence: array<f32>;
 // FLIP Fluids turbulencefield.cpp:100-171 (MIT); THIRD_PARTY_NOTICES.md.
 // The asymmetric loop and excluded final boundary index are intentional.
 fn tf_face(c: vec3<i32>, axis: u32, pad: vec3<i32>, dims: vec3<u32>) -> f32 {
