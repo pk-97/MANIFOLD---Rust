@@ -394,7 +394,11 @@ def stop_idle_brokers(slots):
     for wt in slots:
         if lease_blocks(wt)[0]:
             continue
-        for line in stop_idle_codex_brokers(wt):
+        try:
+            lines = stop_idle_codex_brokers(wt)
+        except Exception as error:  # a broken helper must not take the ring down
+            lines = [f"KEEP brokers: helper failed ({error!r})"]
+        for line in lines:
             print(f"{wt.name}: {line}")
 
 
