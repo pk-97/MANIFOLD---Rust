@@ -1,6 +1,6 @@
 # Liquid Surface Stage — fold the surface chain into two optimised stage nodes
 
-**Status:** PROPOSED · 2026-10-06 · Fable (design, audited at 5a1218c89), Claude lead · owed: Astra review.
+**Status:** PARKED · 2026-10-06 · measured not worth building: the identity passes it skips cost about 0.1 ms at res 64 and 0.5 ms at 128 (section 10). Mesh relaxation on packed positions moved to its own bead.
 **Prerequisites:** none to start P0/P1. P2 needs P1 landed and measured. The particle_volume brick gather (docs/PARTICLE_VOLUME_BRICK_GATHER_DESIGN.md, branch `feat/volume-brick-gather`) runs in parallel and owns `particle_volume.rs`; this design never touches it.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) and section 6 (Seam briefs) before starting any phase.
 
@@ -223,3 +223,22 @@ The blobs rung follows the same shape for sort + blobs + bounds → stage at the
 - Delete `running_total` from the catalog — `whitewater_vendored_group.json` retired.
 - `level_set` aliasing instead of a copy — slot-system passthrough support confirmed.
 - Shrinking the renderer's 80-B `MeshVertex` — out of scope.
+
+## 10. Measured, parked (2026-10-06)
+
+Astra's review (verdict Change) found the P1 dispatch saving smaller than written: 26 → 21 dispatches on the oracle with the smooth_z+clamp pair kept, plus a long list of migration and compilation-parity requirements. Before revising, the chain was measured on the GPU FLIP Dam Break oracle with per-dispatch stamps (`frame-time --stamp-every 1`, main at 323f3c230, splash-table p50; stamps are ratios inside the encoder, not frame budget):
+
+| Node | res 64 | res 128 |
+|---|---|---|
+| particle_volume | 8.01 ms | 47.2 ms |
+| smooth_surface_mesh | 1.29 ms | 6.59 ms |
+| volume_surface_mesh | 0.68 ms | 3.32 ms |
+| surface_mesh_normals | 0.61 ms | 2.51 ms |
+| lattice_bricks | 0.30 ms | 1.74 ms |
+| smooth_lattice (all identity at defaults) | 0.086 ms | 0.43 ms |
+| running_total | 0.076 ms | 0.43 ms |
+| count_surface_triangles + edges | 0.072 ms | 0.36 ms |
+| offset_lattice (identity at defaults) | 0.014 ms | 0.068 ms |
+| whole timestamped frame | 33.1 ms | 285 ms |
+
+The passes P1 bypasses cost about 0.1 ms at 64 and 0.5 ms at 128: not worth a new node, a migration of saved projects and the atom deletions. The surface costs that matter are particle_volume (see the archived brick gather result) and mesh relaxation plus normals (about 2.6 ms at 64, 12.4 ms at 128), which D6's packed-position idea targets and which can live inside `smooth_surface_mesh` without a stage node.
