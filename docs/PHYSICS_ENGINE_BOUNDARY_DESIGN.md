@@ -1,7 +1,7 @@
 # Physics engine boundary — concrete engines, shared authoring
 
 **Status:** APPROVED · 2026-10-06 · review amendments folded; implementation pending.
-**Prerequisites:** none for P1 or G1a; later phase entries name their dependencies. Water F1b/F2 proceed independently.
+**Prerequisites:** none for P1 or G1a; later phase entries name their dependencies. Water F1b/F2 shipped.
 **Execution contract:** read [DESIGN_DOC_STANDARD.md](DESIGN_DOC_STANDARD.md) sections 5–6 before starting a phase. This task authorizes documentation only.
 
 <!-- index: Engine, graph, and authoring boundaries for physics; Water is the first consumer, with shared insertion, controls, and lifecycle. -->
@@ -17,7 +17,7 @@ Companions:
 - [PHYSICS_DIRECTION.md](PHYSICS_DIRECTION.md): approved physics direction and coupling requirements.
 - [LIQUID_SOLVER_SEAM_DESIGN.md](LIQUID_SOLVER_SEAM_DESIGN.md): concrete solver seams, captures, clock, and coupling. Its owning session controls its open phases; this design does not amend them.
 - [FLUID_ENGINE_INTEGRATION_PLAN.md](FLUID_ENGINE_INTEGRATION_PLAN.md): native integration, provenance, recording, and outstanding acceptance.
-- [WATER_FAMILY_DESIGN.md](WATER_FAMILY_DESIGN.md): D1–D10 remain binding. F1b and F2 proceed on that document as written. This document later converges their implementation; it does not gate them.
+- [WATER_FAMILY_DESIGN.md](WATER_FAMILY_DESIGN.md): D1–D10 remain binding. F1b and F2 shipped on that document; this document later converges their implementation.
 - [NODE_GROUPS_DESIGN.md](NODE_GROUPS_DESIGN.md) and [GROUPING_GRAPHS.md](GROUPING_GRAPHS.md): existing group interface and identity rules.
 - [WIDGET_TREE_DESIGN.md](WIDGET_TREE_DESIGN.md) section 5b (param-surface recipe): the only manifest-backed control surface.
 
@@ -453,7 +453,7 @@ Tests below are required deliverables, not claims of tests already passing. Pref
 |---|---|
 | Engine/UI dependencies are enforced now | P1's deny.toml entries and existing `cargo deny check bans` landing leg; new `dependency_bans_cover_workspace` preflight/test prevents an unlisted workspace crate from bypassing the UI boundary. G1b adds the new crate to this policy; Cargo checks cycles. |
 | One row structure and control owner | P3 delivers `physics_boundary_rows_share_owner` (parent equality on every row), `physics_boundary_scoped_duplicate_doc_ids`, and removal of fluid_controls/look_mesh ownership shortcuts. |
-| No bespoke manifest-backed controls | P3 delivers `no_bespoke_row_infra` if F1b has not already supplied it, then reuses that single check. It is not claimed to exist today. The gate rejects physics-specific slider/drawer construction outside ParamSurface and exercises the shared gesture route. |
+| No bespoke manifest-backed controls | P3 reuses `crates/manifold-ui/tests/no_bespoke_row_infra.rs`, which F1b extended to the scene panel and mapped in `scripts/cpu_scope.py`. The gate rejects physics-specific slider/drawer construction outside ParamSurface and exercises the shared gesture route. |
 | Insertion is atomic | `physics_boundary_insert_rejects_without_mutation`, `physics_boundary_redo_keeps_ids`, `physics_boundary_nested_exposure_remap`; compare graph and instance-layer state before/after failure. |
 | One exposure source and working modulation | `physics_boundary_save_reload_modulate`; numeric/string fan-out, aliases, mappings, and nested targets survive actual IO save/load and a subsequent modulation evaluation. |
 | One step/capture owner | Existing liquid conformance plus `physics_boundary_group_preserves_tick_owner`; reject direct tick-state escape, duplicate shared-world advancement, mixed completion stamps, nested regions. |

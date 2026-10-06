@@ -1,7 +1,7 @@
 # Water Family — one water, separate looks
 
-**Status:** BUILDING · 2026-10-07 · F1a and F1b on main; F2 (family lifecycle) owed.
-**Prerequisites:** none left for F2; F1b landed.
+**Status:** SHIPPED · 2026-10-07 · F1a, F1b and F2 on main; the rename typing gesture in the water-family-controls flow waits on BUG-ajyri (share performer text input with ui-snap).
+**Prerequisites:** none.
 **Execution contract:** read [DESIGN_DOC_STANDARD.md](DESIGN_DOC_STANDARD.md) sections 5, 6 and 8; re-derive P4-dependent seams before implementation.
 
 <!-- index: Water parent, Foam/Spray/Bubbles looks, grouped shared Add Water/preset recipe, and undoable family lifecycle. -->

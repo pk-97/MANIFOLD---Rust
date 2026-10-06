@@ -1,6 +1,7 @@
 # Whitewater Stage Fusion — fuse the stage's internal atom chains, drop its grid copies, retire the face adapters
 
 **Status:** SHIPPED · 2026-10-06 · P0–P5 on main; P3b deferred (section 8).
+Lifecycle: contract — the fused whitewater stage obeys its decisions (D7 amended: packed faces unpacked behind a dispatch boundary for bitwise parity), and section 8 holds the P3b revival trigger.
 **Prerequisites:** none. The display-history landing (`85226c917`) is on main; this design touches nothing it owns.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs) and section 6 (Seam briefs) before starting any phase.
 
