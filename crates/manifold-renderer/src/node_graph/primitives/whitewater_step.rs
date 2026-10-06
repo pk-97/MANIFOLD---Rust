@@ -264,6 +264,7 @@ impl SpawnParams {
 
 impl LifecycleParams {
     fn new(frame: &StepFrame, inputs: &StepInputs<'_>) -> Self {
+        use super::{advect_whitewater as advect, age_whitewater as age};
         let s = &frame.shape;
         let [center_x, center_y, center_z] = s.center;
         let [size_x, size_y, size_z] = s.size;
@@ -276,14 +277,16 @@ impl LifecycleParams {
             center_x, center_y, center_z, size_x, size_y, size_z,
             nodes_x, nodes_y, nodes_z, face_cells_x, face_cells_y, face_cells_z,
             gravity_x, gravity_y, gravity_z, dt: frame.dt,
-            foam_advection: 1.0, bubble_buoyancy: 4.0, bubble_drag: 1.0,
-            spray_drag: 0.0, spray_drag_variance: 0.25, spray_restitution: 0.2, spray_friction: 0.0,
+            foam_advection: advect::FOAM_ADVECTION, bubble_buoyancy: advect::BUBBLE_BUOYANCY, bubble_drag: advect::BUBBLE_DRAG,
+            spray_drag: advect::SPRAY_DRAG, spray_drag_variance: advect::SPRAY_DRAG_VARIANCE,
+            spray_restitution: advect::SPRAY_RESTITUTION, spray_friction: advect::SPRAY_FRICTION,
             substep_count: motion.map_or(0.0, |m| m.count as f32),
             field_nodes_x, field_nodes_y, field_nodes_z,
             field_spacing: motion.map_or(0.25, |m| m.fields.spacing),
             force_lattices: motion.map_or(0.0, |m| m.fields.force_lattices as f32),
             tick_index: motion.map_or(0.0, |m| m.tick_index), first_tick: motion.map_or(0.0, |m| m.fields.first_tick as f32),
-            bubble_lifetime_modifier: 0.333, foam_lifetime_modifier: 1.0, spray_lifetime_modifier: 2.0,
+            bubble_lifetime_modifier: age::BUBBLE_LIFETIME_MODIFIER, foam_lifetime_modifier: age::FOAM_LIFETIME_MODIFIER,
+            spray_lifetime_modifier: age::SPRAY_LIFETIME_MODIFIER,
             count: s.capacity, _pad0: 0,
         }
     }

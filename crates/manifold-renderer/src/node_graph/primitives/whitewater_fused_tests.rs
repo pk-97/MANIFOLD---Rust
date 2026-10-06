@@ -143,7 +143,7 @@ mod gpu {
         }
     }
 
-    fn scene(dust: bool, particle_port: Option<&str>) {
+    fn scene(dust: bool, particle_ports: &[&str]) {
         let def = if dust { super::super::super::whitewater_golden_tests::all_emitters(None) }
             else { with_tick_probe(whitewater_render_def(WaterScene::dam_break(64))) };
         let mut fused = Show::new_with_emitter_oracle(def.clone(), (96, 54), false, &[], Some(false));
@@ -173,8 +173,9 @@ mod gpu {
                 if *port == "proof_counts" { saw_counts |= nonzero; }
                 if *port == "proof_dust_counts" { saw_dust_counts |= nonzero; }
             }
-            if let Some(port) = particle_port {
-                for port in [port, "pool_out", "state_out", "counts_out", "foam_particles", "bubble_particles", "spray_particles", "dust_particles"] {
+            if !particle_ports.is_empty() {
+                let shared = ["pool_out", "state_out", "counts_out", "foam_particles", "bubble_particles", "spray_particles", "dust_particles"];
+                for port in particle_ports.iter().chain(&shared) {
                     let a = fused.provided_all_bytes("whitewater", port);
                     let b = reference.provided_all_bytes("whitewater", port);
                     equal_words(bytemuck::cast_slice(&a), bytemuck::cast_slice(&b), ticks, port);
@@ -291,13 +292,13 @@ mod gpu {
 
     #[test]
     fn whitewater_fused_emit_matches_reference() {
-        scene(false, None);
+        scene(false, &[]);
         synthetic(false);
     }
 
     #[test]
     fn whitewater_fused_dust_matches_reference() {
-        scene(true, None);
+        scene(true, &[]);
         synthetic(true);
     }
 
@@ -416,8 +417,8 @@ mod gpu {
 
     #[test]
     fn whitewater_fused_spawn_matches_reference() {
-        scene(false, Some("proof_typed"));
-        scene(true, Some("proof_dust_typed"));
+        scene(false, &["proof_typed"]);
+        scene(true, &["proof_typed", "proof_dust_typed"]);
         spawn_boundaries();
         spawn_overflow();
     }
@@ -508,8 +509,8 @@ mod gpu {
 
     #[test]
     fn whitewater_fused_lifecycle_matches_reference() {
-        scene(false, Some("proof_lifecycle"));
-        scene(true, Some("proof_lifecycle"));
+        scene(false, &["proof_lifecycle"]);
+        scene(true, &["proof_lifecycle"]);
         lifecycle_history();
     }
 
