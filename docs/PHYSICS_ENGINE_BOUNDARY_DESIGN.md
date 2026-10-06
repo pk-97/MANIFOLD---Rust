@@ -1,12 +1,12 @@
-# Physics engine boundary — one engine contract, one authoring system
+# Physics engine boundary — concrete engines, shared authoring
 
-**Status:** PROPOSED · 2026-10-06 · GPT-6 · not implemented.
-**Prerequisites:** review of this design; Water F1a for the Water integration phases only.
+**Status:** APPROVED · 2026-10-06 · review amendments folded; implementation pending.
+**Prerequisites:** none for P1 or G1a; later phase entries name their dependencies. Water F1b/F2 proceed independently.
 **Execution contract:** read [DESIGN_DOC_STANDARD.md](DESIGN_DOC_STANDARD.md) sections 5–6 before starting a phase. This task authorizes documentation only.
 
 <!-- index: Engine, graph, and authoring boundaries for physics; Water is the first consumer, with shared insertion, controls, and lifecycle. -->
 
-The engine owns simulation, not projects, graph editors, or scene panels. Graph adapters turn authored inputs into simulation work. Authoring owns groups, exposures, and undo. These are three boundaries within the existing infrastructure. A standalone engine crate and a public release are separate decisions.
+The engine owns simulation, not projects, graph editors, or scene panels. Graph adapters turn authored inputs into simulation work. Authoring owns groups, exposures, and undo. These are three boundaries within the existing infrastructure. GPU numerical moves use a private workspace crate; external extraction and public release remain separate decisions.
 
 Peter's direction, verbatim, 2026-10-06:
 
@@ -17,54 +17,45 @@ Companions:
 - [PHYSICS_DIRECTION.md](PHYSICS_DIRECTION.md): approved physics direction and coupling requirements.
 - [LIQUID_SOLVER_SEAM_DESIGN.md](LIQUID_SOLVER_SEAM_DESIGN.md): concrete solver seams, captures, clock, and coupling. Its owning session controls its open phases; this design does not amend them.
 - [FLUID_ENGINE_INTEGRATION_PLAN.md](FLUID_ENGINE_INTEGRATION_PLAN.md): native integration, provenance, recording, and outstanding acceptance.
-- [WATER_FAMILY_DESIGN.md](WATER_FAMILY_DESIGN.md): D1–D10 remain binding. This document replaces the technical briefs for F1b and F2 after review, not Peter's decisions.
+- [WATER_FAMILY_DESIGN.md](WATER_FAMILY_DESIGN.md): D1–D10 remain binding. F1b and F2 proceed on that document as written. This document later converges their implementation; it does not gate them.
 - [NODE_GROUPS_DESIGN.md](NODE_GROUPS_DESIGN.md) and [GROUPING_GRAPHS.md](GROUPING_GRAPHS.md): existing group interface and identity rules.
-- [WIDGET_TREE_DESIGN.md](WIDGET_TREE_DESIGN.md) section 5b: the only manifest-backed control surface.
+- [WIDGET_TREE_DESIGN.md](WIDGET_TREE_DESIGN.md) section 5b (param-surface recipe): the only manifest-backed control surface.
 
 ## 1. Audit — what exists
 
-Verified 2026-10-06 against `c67c1e9ad84a51db2dc3f433247a1d6100cd5eb7`, branch `feat/physics-boundary-design`. HEAD and clean working state were checked before reading. This is a static source audit, not a runtime or visual verification. **Extend the listed infrastructure; do not redesign it.** Line numbers are snapshot anchors and must be re-resolved before implementation.
+Verified 2026-10-06 against `c67c1e9ad84a51db2dc3f433247a1d6100cd5eb7`, branch `feat/physics-boundary-design`. HEAD and clean working state were checked before reading. This is a static source audit, not a runtime or visual verification. **Extend the listed infrastructure; do not redesign it.** Line numbers are snapshot anchors and must be re-resolved before implementation. Amendments, dependency metadata, and duplication were checked at `16dd977ab` (reviewed boundary-design commit), with a clean worktree before this edit.
 
 Path abbreviations below are exact repository-relative prefixes: `P = crates/manifold-physics/src/`, `F = crates/manifold-fluids/src/`, `R = crates/manifold-renderer/src/node_graph/`, `C = crates/manifold-core/src/`, `E = crates/manifold-editing/src/commands/graph/`, `A = crates/manifold-app/src/`, `U = crates/manifold-ui/src/`.
 
 ### 1.1 Engine and host code
 
-| Piece | Verified source | Boundary today |
+| Piece | Source used by the executor | Keep or separate |
 |---|---|---|
-| Native rigid engine | `P/lib.rs:248` (`BodyConfig`), `:322` (`BodyHandle`), `:350` (`PhysicsWorld`), `:407` (`new`), `:690` (`step`), `:1267` (`pose`) | A concrete owned world with typed inputs and handles. It is already usable without a graph. |
-| Box3D | `crates/manifold-physics/native/box3d/include/box3d/box3d.h` (`b3CreateWorld`, `b3World_Step`, body/contact event APIs); `P/lib.rs:31` | Native backend behind the Rust wrapper. Existing native serialization lock is not a reason to add a new shared lock. |
-| Native liquid | `F/lib.rs:43` (`Config`), `:524` (`FluidWorld`), `:552` (`new_seeded`), `:903` (`step_live_with_fields`), `:920` (`surface`) | Concrete CPU FLIP API. The world owns native state; surface reads reuse caller storage. |
-| `flip_engine` | `crates/manifold-fluids/build.rs:10`, `:150` | Vendored C++ source compiled with the bridge/probes, not another Rust crate. Changes to its solver are outside this boundary refactor. |
-| Shared clock and stepping | `P/clock.rs:94` (`SimulationClock`); `P/stepping.rs:29`, `:149`, `:316`, `:869` | `StepInterval`, `CompletionLedger`, `LiveStepSchedule`, coupling protocol already exist. `R/liquid/clock.rs:2` aliases the physics clock. No second clock belongs in an engine facade. |
-| Native coupling | `F/coupling/owner.rs:23`, `:107`, `:159` | `RigidFluidCoupling` owns orchestration and returns completed bodies. It borrows the concrete worlds. |
-| Rigid graph adapter | `R/physics.rs:2`–`:27` imports | Uses core time, engine types, renderer transforms, and generator geometry. Scene resolution and geometry conversion are host work. |
-| Liquid worker/adapter | `R/fluid.rs:9`–`:29`, `:91` | Uses core, both engine crates, cache, roles, rigid events, transforms, render vertices, channels, and worker state. This whole module is not an independent engine. |
-| Liquid shared seam | `R/liquid/bodies.rs:11`, `:35`, `:199`; `lattice.rs:5`, `:60`; `fields.rs:28`–`:40`; `coupling.rs:16`–`:25` | Numerical records coexist with graph contexts, prepared renderer geometry, workers, and rigid graph inputs. Separate records/math from resolution and ownership adapters. |
-| Grid/display helpers | `R/liquid/grid.rs:10`–`:13`, `:92`; `frame_ring.rs:7`–`:9`; `frame_history.rs:10`–`:12` | GPU buffers are already abstracted, but grid code imports renderer `GpuEncoder`; frame code reaches into `fluid::display_blend`. These are concrete dependencies to remove from reusable compute. |
-| Validation/conformance | `R/liquid/extent.rs:22`–`:32`; `conformance.rs:217`, `:256`; `C/liquid_domain.rs:21`, `:114` | Extent validation legitimately understands graph/freeze structure. `FlatSceneIndex` and `liquid_domain_of` are already the core recognition seam. Do not add a second type-ID list. |
-| GPU FLIP | `R/primitives/gpu_flip_domain.rs:19`–`:43`; `gpu_flip_step.rs:39`–`:61`, `:660`, `:1056`, `:1282` | Domain and primitive entry points resolve graph state. `StepState::encode` already takes `manifold_gpu::GpuEncoder`. Its numerical core can be isolated without changing the graph ABI. |
-| FLIP numerical stages | `R/primitives/gpu_flip_pressure.rs:26`, `gpu_flip_bodies.rs:30`, `gpu_flip_clock.rs:17`, `gpu_flip_lentine.rs:7`, `gpu_flip_narrow_band.rs:9`, `gpu_flip_sheeting.rs:42` | Concrete compute stages, not app/UI APIs. Body code still imports graph role capacity and liquid coupling constants. Narrow-band/sheeting allocation calls scene-modifier admission. |
-| Liquid primitives | `R/primitives/liquid_state.rs:15`–`:50`, `liquid_fill.rs:13`–`:25`, `liquid_cells.rs:10`–`:17`, `liquid_solid_distance.rs:8`–`:18` | State/capture boundaries plus composable fill, indexing, and solid-distance work. Registration and `EffectNodeContext` stay in the adapter; numerical buffer layout and dispatch belong inside the engine boundary. |
-| Whitewater | `R/primitives/whitewater_step.rs:11`–`:43`, `:593`, `:666`, `:1121`, `:1714`, `:1813`; `whitewater_type.rs:9`–`:18` | Concrete step engine mixed with parameter decoding, renderer encoder, history publication, and primitive registration. `WhitewaterSpawn` is a real dependency on manifold-fluids, not merely a test oracle. |
-| Whitewater atoms | `R/primitives/whitewater_emitter_velocity.rs:6`–`:15`, `whitewater_influence.rs:4`–`:10`, `whitewater_obstacle_source.rs:180`, `whitewater_distance.rs:60` | Reusable operations with graph descriptors/fusion contracts. Preserve those contracts; do not collapse them into a new monolithic Water node. |
-| Renderer encoder | `crates/manifold-renderer/src/gpu_encoder.rs:7`, `:18`, `:35`, `:41` | Wraps native encoding with uniform arena, audio visuals, and frame status. It must not become the public engine encoder. |
-| Allocation policy leak | `R/scene_modifier_expand/buffer_budget.rs:310`, `:343`; `gpu_flip_step.rs:601`, `:609`, `:1170`; `gpu_flip_narrow_band.rs:208`; `gpu_flip_sheeting.rs:196`; `whitewater_step.rs:954`, `:1215` | Physics allocation uses a scene-modifier error/policy module. Keep admission; separate generic checked budget arithmetic from scene policy and wording. |
-| Shatter | `R/scene_modifier_authoring.rs:29`; `R/scene_modifier_expand/compiler/shatter.rs:156`, `:174`, `:233`; `C/scene_modifier_preset.rs:195` | An authored modifier recipe compiled into fragments and rigid participants. It is not another solver and must not become one. |
+| CPU rigid world and Box3D | `P/lib.rs:207`, `:248`, `:322`, `:350`, `:690`; `crates/manifold-physics/native/box3d/include/box3d/box3d.h` (`b3CreateWorld`, `b3World_Step`) | Concrete owned world, body handles, typed errors. Keep the wrapper and existing native lock. |
+| CPU FLIP and coupling | `F/lib.rs:43`, `:524`, `:903`, `:920`; `F/coupling/owner.rs:23`, `:107`; `crates/manifold-fluids/build.rs:10`, `:150` | `flip_engine` is vendored C++, not a Rust crate. Keep its concrete API and coupling owner; no native solver changes. |
+| Clock and completion | `P/clock.rs:94`; `P/stepping.rs:29`, `:149`, `:316`; `R/liquid/clock.rs:2` | Reuse SimulationClock, StepInterval, CompletionLedger, and LiveStepSchedule. |
+| Graph adapters and worker | `R/physics.rs:2`–`:27`; `R/fluid.rs:9`–`:29`, `:480` (`Worker`) | Core time, geometry, roles, caches, transforms, and worker handoff remain host code. `fluid.rs:91` is domain_size, not worker state. |
+| Liquid records and graph services | `R/liquid/bodies.rs:11`, `:35`, `:199`; `lattice.rs:5`, `:60`; `fields.rs:28`–`:40`; `coupling.rs:16`–`:25` | Separate numerical records from contexts, scene inputs, and renderer preparation only in deferred moves. |
+| Shared graph recognition and validation | `C/liquid_domain.rs:21`, `:114`; `R/liquid/extent.rs:22`–`:32`; `conformance.rs:217`, `:256`; `primitives/liquid_state.rs:50` | Reuse the single domain list/index, extent checks, and capture contract. Keep graph validation outside the engine. |
+| GPU FLIP stages | `R/primitives/gpu_flip_step.rs:660`, `:1056`, `:1282`; `gpu_flip_pressure.rs:26`; `gpu_flip_bodies.rs:30`; `gpu_flip_clock.rs:17`; `gpu_flip_narrow_band.rs:9`; `gpu_flip_sheeting.rs:42` | Encode already takes manifold-gpu's encoder. Graph constants, allocation admission, and generated kernels still cross the proposed boundary. |
+| Whitewater stages | `R/primitives/whitewater_step.rs:593`, `:666`, `:1121`, `:1147`, `:1691`; `whitewater_type.rs:9` | Split numerical scratch/dispatch from fence and display publication. WhitewaterSpawn is a production manifold-fluids dependency. |
+| GPU and generated-kernel dependencies | `R/liquid/grid.rs:10`–`:13`; `crates/manifold-renderer/src/gpu_encoder.rs:18`, `:35`; `R/primitives/standalone_pipeline.rs:8`; `whitewater_step.rs:745`, `:914` | Renderer encoder carries host services; generated atom kernels depend on descriptors/codegen. Supply manifold-gpu resources and prepared kernels, never copied shader implementations. |
+| Allocation dependency | `R/scene_modifier_expand/buffer_budget.rs:310`, `:343`; `primitives/gpu_flip_step.rs:601`; `gpu_flip_narrow_band.rs:208`; `gpu_flip_sheeting.rs:196`; `whitewater_step.rs:954` | Preserve admission while separating checked arithmetic from scene policy/errors. |
+| Shatter | `R/scene_modifier_authoring.rs:29`; `scene_modifier_expand/compiler/shatter.rs:156`, `:174`, `:233`; `C/scene_modifier_preset.rs:195` | A modifier recipe compiled into rigid participants, not a solver. |
 
-Manifest dependency audit: `crates/manifold-physics/Cargo.toml:8`–`:9` declares foundation and serde; build dependencies are cc/sha2. `crates/manifold-fluids/Cargo.toml` `[dependencies]` declares foundation, physics, serde, bytemuck; build dependencies are cc/sha2. Both are `publish = false`. Neither declares renderer/core/app/UI. The search `rg -n 'use .*manifold_(renderer|app|ui|core)|crate::(app|ui)' crates/manifold-{physics,fluids}/src` returned no matches. This checks source imports, not native library licensing or distribution readiness.
+Cargo manifests and `cargo metadata --offline --format-version 1` were checked at the reviewed commit, including normal, build, dev, and target-conditioned workspace edges. Physics depends on foundation; fluids on foundation/physics; GPU and UI on foundation. None of these four has a host dependency. Renderer depends on physics, fluids, GPU, core, native, playback, and UI (`crates/manifold-renderer/Cargo.toml:8`–`:17`). The exact ban allowlists and the cargo-deny check are in section 3.2. No implementation dependency fix is needed today.
 
-`crates/manifold-renderer/Cargo.toml:8`–`:17` declares physics, fluids, core, foundation, gpu, native, playback, and UI. Thus exporting a module from renderer alone does **not** make it independently linkable. `crates/manifold-ui/Cargo.toml:10` declares foundation as its only MANIFOLD dependency. Keep that restriction.
-
-Inventory commands run included `rg --files crates/manifold-renderer/src/node_graph/primitives`, filtered for `gpu_flip_`, `whitewater_`, `liquid_`, and `matter_`; `rg -n '^use '` over those production files; and symbol searches for the APIs above. `gpu_flip_preset`, `gpu_flip_still`, `gpu_flip_volume`, the `*_tests` files, and CPU whitewater reference/oracle files are recipe/proof consumers, not a public world API. MPM's `matter_*` graph stages remain concrete solver adapters; reuse shared grid/data contracts without making FLIP depend on `matter_domain::closed_faces` (`gpu_flip_domain.rs:25`).
+The production source import search `rg -n 'use .*manifold_(renderer|app|ui|core)|crate::(app|ui)' crates/manifold-{physics,fluids}/src` returned zero. GPU primitives and liquid/whitewater atoms still use graph contexts, descriptors, and freeze codegen; those are deferred separation work, not evidence of an independent GPU engine today. MPM keeps its concrete `matter_*` stages. Remove FLIP's `matter_domain::closed_faces` dependency (`gpu_flip_domain.rs:25`) during the numerical moves, without a universal solver trait.
 
 ### 1.2 All scene entry paths in scope
 
 | Entry | Graph, metadata, exposure, and undo path | Duplication to remove |
 |---|---|---|
-| Add Fluid | `A/ui_bridge/project.rs:17`–`:36`, `:652`–`:659` selects the GPU recipe. `E/scene/fluid/template.rs:16`, `:28`, `:46`, `:83` defines six exposure categories and the CPU recipe. `E/scene/fluid.rs:66`, `:215`, `:322`, `:371`, `:390`, `:448` renumbers, stamps, wraps one output, wires World controls, and snapshots graph/instance state. | The command takes separate metadata vectors, has its own transaction, and assumes one object output. `exposed_type_id` searches only top-level body nodes. The template is liquid-specific despite doing ordinary group insertion. |
+| Add Fluid | `A/ui_bridge/project.rs:17`–`:36`, `:652`–`:659` selects the GPU recipe. `E/scene/fluid/template.rs:16`, `:28`, `:46`, `:83` defines six exposure categories and the CPU recipe. `E/scene/fluid.rs:66`, `:215`, `:322`, `:371`, `:390`, `:448` renumbers, stamps, wraps one output, wires World controls, and snapshots graph/instance state. | The command takes separate metadata vectors, has its own transaction, and assumes one object output. `exposed_type_id` (`E/scene/fluid/template.rs:59`) searches only top-level body nodes. The template is liquid-specific despite doing ordinary group insertion. |
 | Add object in an existing physics scene | `E/scene.rs:239`; `E/scene/physics.rs:5` (`append_physics_scene_object`) | Separate transform/body/mesh/material/object construction and slot/handle allocation. This path exists as well as explicit Enable Physics. |
 | Enable/disable Box3D physics | `A/ui_bridge/project.rs:851`–`:884`; `E/scene/physics.rs:647`, `:1049`, `:1141`, `:1182`, `:1245`, `:1268`, `:1344` | Group and loose-object recipes plus exposure stamping. Existing-body enable uses `SetGraphNodeParamCommand`; first enable uses `EnableSceneObjectPhysicsCommand`. Disabling in the UI writes `enabled`; it is not deletion of the engine world. `DisableSceneObjectPhysicsCommand` also exists at `:1399`; do not conflate these operations. |
 | Split/imported object physics | `E/scene/split.rs:379` reuses `add_group_physics`; `R/physics_mesh.rs:38`, `:75`, `:233` resolves assets and prepares colliders. | Asset loading/cooking inputs are host preparation. The numerical world should receive immutable mesh/hull data, never a project path or an import card. |
+| Duplicate a physics object | `E/scene/duplicate.rs:119`–`:179`, `:234`, `:453`, `:515`, `:530`; `E/scene/physics_match.rs:6` (`PhysicsSceneObject`), `:748` (`first_free_physics_body_slot`); `scripts/ui-flows/scene-physics-duplicate-paused.json` | Validates ownership and a free world slot, clones bodies/object outputs with fresh IDs, remaps numeric/string metadata and fluid routes, then keeps its own graph/instance snapshots for undo/redo. Nested physics, copies objects, malformed ownership, and full worlds reject. Converge this transaction in P6a; preserve paused duplicate behavior and Water's no-duplicate rule. |
 | Model import | `R/gltf_import/mod.rs:92`; `merge.rs:35`, `:379`; `A/import_worker.rs:162`; `A/ui_bridge/project.rs:1058`, `:1077`; `E/scene.rs:2666`, `:2690`, `:2721` | Import produces mesh/material/object graph and exposure lists. It does **not** automatically create a physics world/body. A later Enable Physics or role assignment makes colliders relevant. Import's graph/metadata commit is another bespoke transaction to converge. |
 | Shatter | `A/scene_modifier_edit.rs:52`, `:96`, `:101`, `:112`, `:470`; `R/scene_modifier_authoring.rs:29`; `E/modifier_stack.rs:264` | Prepare against the selected imported physics objects, then insert a serialized modifier with atomic stack undo. The compiler requires one active shatter and supported static undeformed imported geometry. Do not remove these admission checks to unify the UI. |
 | Fluid roles | `A/ui_bridge/project.rs:601`; `E/scene/fluid/roles.rs:34`, `:99`, `:219`, `:595`, `:616`, `:657`, `:805`; `roles/lifecycle.rs:126`, `:158` | Assignment creates/reroutes source/role graph nodes, stamps role controls, and snapshots candidate state. Remove and retarget have separate lifecycle work. The source scene object is not owned by Water merely because Water consumes its role. |
@@ -89,15 +80,15 @@ Plainly: there are duplicate graph transactions, per-feature exposure routing, a
 
 ### 1.4 Concurrent work and evidence limits
 
-⚠ **VERIFY-AT-IMPL:** Water F1a is not at this HEAD. Peter's current scope is one Water group, four object outputs, and the obstacle source **inside** the group. Read `R/primitives/gpu_flip_preset.rs` and the landed F1a tests before P2/P4. Do not reinstate the older external obstacle-source input from the checked-in Water design. Confirm actual port spellings with `rg -n 'GroupInterface|GroupPortDef|group_output|obstacle' crates/manifold-renderer/src/node_graph/primitives/gpu_flip_preset.rs`.
+⚠ **VERIFY-AT-IMPL:** Water F1a is not at this HEAD. Peter's current scope is one Water group, four object outputs, and the obstacle source **inside** the group. Read `R/primitives/gpu_flip_preset.rs` and the landed F1a tests before P2/P3. Do not reinstate the older external obstacle-source input from the checked-in Water design. Confirm actual port spellings with `rg -n 'GroupInterface|GroupPortDef|group_output|obstacle' crates/manifold-renderer/src/node_graph/primitives/gpu_flip_preset.rs`.
 
-The liquid seam document marks P7a unaudited, P8 owing L3 acceptance, P10 open, and P5/P6 retired. Source already contains shared grid/conformance work, so this audit does not promote those phases to complete. P1–P8 below need no unlanded liquid-seam phase. G1–G3 touch numerical/grid/capture code owned by that session: they require its accepted source tip and a conflict-free ownership handoff. If they consume P10 grid outputs, **P10's accepted grid ABI and its gates are an explicit prerequisite**. P7a's live stepping audit and P8's owed L3 remain owed; moving code does not discharge them. P11/P12 future solver work is not a prerequisite. No nested regions are introduced.
+The liquid seam document marks P7a unaudited, P8 owing L3 acceptance, P10 open, and P5/P6 retired. Source is ahead of parts of the document; this audit does not mark its open phases complete. P1–P3, P6a/P6b, P7/P8, and G1a need no unlanded seam phase. G1b/G2/G3 are deferred under the explicit trigger in section 9. Water F1b/F2 already proceed under their own approved design. No nested regions are introduced.
 
-The fluid integration plan still names incomplete arbitrary-scene recording/provenance and collected-take acceptance (`BUG-vglg.17`). Nothing below relaxes those guards. Water visibility follows Water D8: hide affects display, not simulation advancement; it must not inherit older broad wording that hidden scenes stop all work.
+The integration plan still names incomplete recording/provenance and collected-take acceptance: BUG-vglg (Integrate CPU FLIP liquids with shared scene physics), child BUG-vglg.17 (Complete coupled input-take identity and paired cache playback). Nothing here relaxes those guards. Water D8 keeps simulation advancing when its display is hidden.
 
 ## 2. Decisions
 
-**D1. Keep three boundaries, with no new engine crate now.** Numerical state and stepping are engine code. Group evaluation and project-time sampling are adapters. Scene editing and cards are authoring. The existing two CPU crates remain; GPU compute is isolated in a checked module inside renderer until extraction is approved. Rejected: a new umbrella crate that still depends on renderer, because it changes packaging without establishing independence.
+**D1. Enforce dependencies now; package GPU numerical code when it moves.** P1 adds Cargo bans for the existing engine/UI boundaries. Deferred G1b creates the private workspace crate `manifold-physics-gpu`, depending on foundation, gpu, physics, and fluids; renderer depends on it. Cargo's acyclic dependency graph checks the boundary. This is workspace packaging, not external extraction or release. Rejected: a renderer submodule plus lexical import checks or a cargo-from-test compile probe; those leave the boundary weaker than the crate graph. The lead made this amendment with Peter informed.
 
 **D2. Use concrete engines, not a universal solver trait.** Keep `PhysicsWorld`, `FluidWorld`, `RigidFluidCoupling`, and concrete GPU stages. Shared data, time, completion, and coupling protocols are enough. Rejected: `dyn PhysicsSolver`, `dyn LiquidSolver`, one universal domain node, or a solver enum threaded through the UI. They hide different state and coupling obligations and contradict the liquid seam.
 
@@ -140,25 +131,44 @@ FluidWorld::surface(&mut self, output: &mut Vec<SurfaceVertex>) -> Result<(), Fl
 
 Creation also uses the existing `BodyConfig`, mesh/hull inputs, `add_hull`/`add_hulls`/`add_triangle_mesh`, and `Config` options. Coupled clients use `RigidFluidCoupling::prepare` and `begin_frame`/`begin_live_frame`; they must not call both worlds' independent step methods for the same interval. Preserve their existing borrowing signatures at `F/coupling/owner.rs:49`, `:107`, `:130`. No adapter or public API rename is required for these CPU calls.
 
-The future GPU embedding surface is concrete stage preparation plus encoding against `manifold_gpu::{GpuDevice, GpuEncoder, GpuBuffer}`. It exposes existing validated physical records and buffer views, not graph ports. G1–G3 relocate existing numerical types field-for-field under `crates/manifold-renderer/src/physics_engine/`; this module is the temporary packaging boundary. It is not yet a separately consumable dependency. Public distribution stability is not promised for packed GPU records.
+⚠ **VERIFY-AT-IMPL:** the GPU field/method inventories in this section are snapshots, not frozen declarations. The seam/body/sheeting/tick sessions are editing them. Before G1b/G2/G3, re-read `R/primitives/gpu_flip_step.rs`, `whitewater_step.rs`, and `R/liquid/substep_history.rs`; run `rg -n 'struct (Step|StepState|StepParams|StepFrame|StepInputs)|fn (encode|emit|tick|publish)' crates/manifold-renderer/src/node_graph/primitives/{gpu_flip_step,whitewater_step}.rs`, and update the reviewed mapping. Never restore an old field layout to match this document.
+
+All new or moved fallible public engine methods return `EngineError`, one typed enum added in the new `manifold-foundation::engine_error` module in G1a. Existing CPU wrapper signatures above remain compatibility APIs; their typed PhysicsError/FluidError values convert when crossing a new stage boundary. Only the host converts EngineError to its scene diagnostic. Callers branch on variants, not detail strings.
+
+```rust
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EngineError {
+    InvalidInput { field: &'static str, detail: String },
+    InvalidState { detail: String },
+    InvalidHandle,
+    Capacity { required: u64, available: u64 },
+    Allocation { requested_bytes: u64, allowed_bytes: u64 },
+    Kernel { operation: &'static str, detail: String },
+    Backend { operation: &'static str, detail: String },
+}
+```
+
+Implement Display and std::error::Error. Convert low-level GpuAllocationRefused to Allocation; invalid dimensions/layouts to InvalidInput; missing prepared resources to InvalidState; backend failures to Backend; descriptor/packing failures to Kernel. Do not collapse all failures into Backend. Private helpers may retain existing error types; new public engine methods never return `Result<_, String>`.
+
+The future GPU embedding surface is concrete stage preparation plus encoding against `manifold_gpu::{GpuDevice, GpuEncoder, GpuBuffer}`. It exposes existing validated physical records and buffer views, not graph ports. Deferred G1b/G2/G3 relocate accepted numerical types under `crates/manifold-physics-gpu/src/`. The crate is private workspace packaging, not a released SDK. Public distribution stability is not promised for packed GPU records.
 
 The load-bearing FLIP encode seam preserves the existing shape (pipeline provisioning is split below):
 
 ```rust
-// physics_engine::flip, moved from primitives/gpu_flip_step.rs.
+// manifold_physics_gpu::flip, moved from primitives/gpu_flip_step.rs.
 // StepState -> FlipState; Step<'a> -> FlipStep<'a>; StepParams -> FlipParams.
 impl FlipState {
     pub fn prepare_pipelines(&mut self, device: &GpuDevice, kernels: &FlipKernels);
     pub fn encode(
         &mut self, device: &GpuDevice, enc: &mut GpuEncoder,
         step: &FlipStep<'_>, clock_params: &GpuFlipClockParams,
-    ) -> Result<(), String>;
+    ) -> Result<(), EngineError>;
 }
 ```
 
 `FlipStep` retains **all** fields of `Step` at `gpu_flip_step.rs:1056`: identity, params, clock_plan, particles, out, capped, tally, count, forces, impulses, bodies, shapes, atlas, regions, reaction, dynamic, pressure, level, wall_inset, band, ghost, density, narrow_enabled, restore_narrow, sheet_rate. Types and lifetimes move unchanged; `StepParams`' fields move unchanged too. Scratch preparation remains separate from encoding and uses the existing checked capacity calculations. `StepState.history` is numerical substep-face history (`R/liquid/substep_history.rs:40`), not presentation history: move it with FLIP, but supply its generated component kernel through the kernel seam below. Keep display-frame publication in the adapter. No raw `f32` timing API is added: existing GPU POD seconds are packed from the typed host interval at the adapter boundary.
 
-Whitewater needs a real split, not a move of the whole `Step`. At `whitewater_step.rs:1121`, `Step` owns both numerical scratch and `Outputs`; `advance` at `:1147` handles fences and publication. Keep that host orchestration, `owed`, output slots, `advance`, `advance_tick`, and string-based `tick_output` in the graph adapter. Move numerical fields and methods into `physics_engine::whitewater::WhitewaterState`. The adapter holds that state exclusively. `StepShape`, `StepFrame`, `MotionInputs`, `FaceSource`, and `StepInputs` at `:478`–`:708` move field-for-field; `StepInputs` keeps motion, particles, solid, obstacle_source, faces, level_set, distance. Preserve packed/axis admission.
+Whitewater needs a real split, not a move of the whole `Step`. At `whitewater_step.rs:1121`, `Step` owns both numerical scratch and `Outputs`; `advance` at `:1147` handles fences and publication. Keep that host orchestration, `owed`, output slots, `advance`, `advance_tick`, and string-based `tick_output` in the graph adapter. Move numerical fields and methods into `manifold_physics_gpu::whitewater::WhitewaterState`. The adapter holds that state exclusively. `StepShape`, `StepFrame`, `MotionInputs`, `FaceSource`, and `StepInputs` at `:478`–`:708` move field-for-field; `StepInputs` keeps motion, particles, solid, obstacle_source, faces, level_set, distance. Preserve packed/axis admission.
 
 The numerical method seam keeps the existing `emit` and `tick` signatures (`:1357`, `:1585`) with `pub` visibility and manifold-gpu types. Replace publication by slot index with supplied buffers:
 
@@ -177,7 +187,7 @@ impl WhitewaterState {
     pub fn tick(
         &mut self, enc: &mut GpuEncoder, device: &GpuDevice,
         frame: &StepFrame, inputs: &StepInputs<'_>, surface: &GpuBuffer,
-    ) -> Result<(), String>;
+    ) -> Result<(), EngineError>;
     pub fn publish(
         &self, enc: &mut GpuEncoder, shape: &StepShape,
         output: &WhitewaterOutput<'_>,
@@ -185,17 +195,47 @@ impl WhitewaterState {
 }
 ```
 
-Before: `Step::publish(enc, shape, index)` dereferences `self.outputs.slots[index]` (`:1691`). After: the adapter selects the same retired/free slot and passes its four buffers and counts to `WhitewaterState::publish`. Pool/state buffers and ping-pong state remain numerical state; output-slot selection and fence retirement remain host state. Capacity preparation, seed, and physical buffer accessors move with the numerical fields; their existing arguments remain, with G1's explicit budget added to allocating methods. The host's existing `advance` and `advance_tick` retain their public signatures and order of operations. No engine method takes a `Fence`, a string port name, or a renderer encoder. This preserves both the legacy frame publication path and the tick capture path.
+Before: `Step::publish(enc, shape, index)` dereferences `self.outputs.slots[index]` (`:1691`). After: the adapter selects the same retired/free slot and passes its four buffers and counts to `WhitewaterState::publish`. Pool/state buffers and ping-pong state remain numerical state; output-slot selection and fence retirement remain host state. Capacity preparation, seed, and physical buffer accessors move with the numerical fields; their existing arguments remain, with the G1a budget added to allocating methods and public fallible results changed to EngineError. The host's existing `advance` and `advance_tick` retain their signatures and order. No engine method takes a Fence, string port name, or renderer encoder. Both legacy frame publication and tick capture remain supported.
 
 **Ownership:** worlds/stage state have one mutable owner. The existing native worker owns native worlds. The render execution owner owns GPU stage state and retained buffers until completion. Content owns authored project state and sends commands; UI receives snapshots. Other hosts can choose their own scheduling around the same exclusive APIs. No new thread, channel, global scheduler, `Arc<Mutex<_>>`, or `Arc<RwLock<_>>` is introduced.
 
 ### 3.2 Dependencies and allocation
 
-Allowed engine dependencies are foundation, the existing physics/fluid crates, manifold-gpu for GPU code, and already-used low-level dependencies. No core, editing, playback, UI, app, native Metal API, or renderer service may be imported by isolated numerical modules. `manifold-gpu` continues to own backend access. Native Metal remains the current backend; shader source names do not authorize a wgpu backend.
+P1 adds the entries below to `[bans].deny` in deny.toml, beside the wgpu/metal precedent. Wrappers are legitimate direct parents, not exemptions for protected crates. The additional workspace targets close indirect routes and make UI's foundation-only rule enforceable.
+
+```toml
+deny = [
+    { name = "manifold-app", wrappers = ["manifold-app"] },
+    { name = "manifold-audio", wrappers = ["manifold-app", "manifold-recording"] },
+    { name = "manifold-core", wrappers = ["manifold-app", "manifold-audio", "manifold-editing", "manifold-io", "manifold-media", "manifold-playback", "manifold-renderer"] },
+    { name = "manifold-editing", wrappers = ["manifold-app", "manifold-playback", "manifold-renderer"] },
+    { name = "manifold-fluids", wrappers = ["manifold-renderer"] },
+    { name = "manifold-gpu", wrappers = ["manifold-app", "manifold-led", "manifold-media", "manifold-recording", "manifold-renderer", "manifold-spectral"] },
+    { name = "manifold-io", wrappers = ["manifold-app", "manifold-editing", "manifold-playback", "manifold-renderer"] },
+    { name = "manifold-led", wrappers = ["manifold-app"] },
+    { name = "manifold-media", wrappers = ["manifold-app"] },
+    { name = "manifold-native", wrappers = ["manifold-renderer"] },
+    { name = "manifold-physics", wrappers = ["manifold-fluids", "manifold-renderer"] },
+    { name = "manifold-playback", wrappers = ["manifold-app", "manifold-audio", "manifold-media", "manifold-renderer"] },
+    { name = "manifold-profiler", wrappers = ["manifold-profiler"] },
+    { name = "manifold-recording", wrappers = ["manifold-app"] },
+    { name = "manifold-renderer", wrappers = ["manifold-app"] },
+    { name = "manifold-spectral", wrappers = ["manifold-app", "manifold-audio"] },
+    { name = "manifold-ui", wrappers = ["manifold-app", "manifold-renderer"] },
+]
+```
+
+These are additional entries, not a replacement config; each gains the reason "Physics and UI dependency boundaries". App and profiler deliberately use self-wrapper sentinels: empty wrappers ban even an unreferenced workspace root. A self dependency cannot form a valid Cargo graph, so these entries admit no real consumer. The installed cargo-deny emits two `unused-wrapper` warnings; explain those sentinels in comments without globally suppressing warnings. [Cargo-deny wrapper semantics](https://embarkstudios.github.io/cargo-deny/checks/bans/cfg.html#wrappers).
+
+**Existing edges that would trip the intended boundary: none.** The exact candidate allowlists passed `cargo deny check --disable-fetch --config <temporary-config> --metadata-path <captured-metadata> --hide-inclusion-graph bans` with exit 0, existing duplicate warnings, and the two explained sentinel warnings. The initial empty-wrapper candidate failed on app/profiler roots; the sentinels fix that config failure, not a source dependency. Legitimate edges that must remain wrapped include renderer → editing (dev), editing/playback/renderer → IO (dev), and audio → playback (dev). No implementation dependency refactor is required today.
+
+The existing landing leg runs `cargo deny check bans` (`scripts/landing_gate.py:487`–`:493`). P1 also adds `dependency_bans_cover_workspace` to its cheap preflight and tests it in `scripts/test_landing_gate.py`: parse workspace manifests and deny.toml; require every non-foundation MANIFOLD package to have a ban entry; reject protected crates in host-wrapper lists; reject UI in every non-foundation wrapper list. This is manifest/config validation, not lexical import policing. It prevents a new workspace package from silently bypassing the boundary. Test normal/dev/build/target examples with mocked manifest data, without invoking Cargo from a test. The actual cargo-deny leg validates resolved edges. G1b adds the new crate and its allowed lower dependencies to this policy.
+
+The workspace dependencies of manifold-physics-gpu are foundation, gpu, physics, and fluids, plus the existing low-level dependencies used by the moved code. No core, editing, playback, UI, app, native Metal API, or renderer service may be imported by isolated numerical modules. `manifold-gpu` continues to own backend access. Native Metal remains the current backend; shader source names do not authorize a wgpu backend.
 
 Host adapters keep scene-index traversal, registry lookup, parameter resolution, asset loading, collider preparation, graph extent validation, cache provenance, freeze registration, render meshes/materials, diagnostics presentation, and display interpolation policy. Engine code keeps physical data/layout arithmetic, solver state, kernels, dispatch sequencing, and physical diagnostics. A code move must follow this distinction rather than moving an entire `liquid` directory.
 
-Allocation admission must survive the separation. Add the following backend-neutral arithmetic to `manifold-gpu` in G1, with the current scene policy choosing `allowed_bytes` outside the engine:
+Allocation admission must survive the separation. Add the following backend-neutral arithmetic to `manifold-gpu` in G1a, with the current scene policy choosing `allowed_bytes` outside the engine:
 
 ```rust
 pub struct GpuAllocationBudget {
@@ -233,7 +273,7 @@ pub struct PhysicsKernel {
 impl PhysicsKernel {
     pub fn pack(
         &self, values: &[(&str, f32)], count: u32, output: &mut [u32; 64],
-    ) -> Result<usize, String>;
+    ) -> Result<usize, EngineError>;
 }
 ```
 
@@ -241,9 +281,9 @@ This is the existing bounded pack operation with descriptor facts supplied as da
 
 The kernel layout includes both declared parameters and derived scalar uniforms, with derived defaults zero, in the existing codegen order. This preserves the packing after the ordinary parameter words, not just the parameter list.
 
-An external GPU host supplies these installation resources through manifold-gpu. Providing a packaged default kernel bundle belongs to extraction, not a claim that an external host can already link renderer without its dependencies. The compile probe supplies kernel data directly and must not import the graph compiler.
+An external GPU host supplies these installation resources through manifold-gpu. Providing a packaged default kernel bundle belongs to extraction, not a claim that an external host can already link renderer without its dependencies. The workspace crate consumes kernel data and cannot import the renderer graph compiler; renderer depends on it, so a reverse dependency would form a Cargo cycle.
 
-Consequences, stated honestly: CPU independence already exists. GPU independence requires moving code, constants, shaders, and tests out of graph modules. Keeping the code inside renderer avoids premature packaging but cannot remove renderer's transitive dependencies for an external project. The isolated module and compile probe establish readiness; only later extraction supplies independent linking.
+Consequences, stated honestly: CPU independence already exists. The GPU crate requires moving code, constants, shaders, and tests after the active solver lanes settle. Cargo checks its dependency direction; prepared kernels preserve the shared implementation. A private workspace crate does not settle public API stability, release packaging, or licensing.
 
 ### 3.3 Industry grounding
 
@@ -375,19 +415,23 @@ The model resolves graph ancestry with `FlatSceneIndex` and the existing liquid/
 
 Water's real object is the parent row; its owner is the Water group. The three whitewater object branches become children only when their simulation ancestry resolves to that owner. An unrecognized authored topology stays an ordinary object with explicit unsupported-operation reasons; it is not silently relabeled Water. Malformed references fail validation. Names are display text only.
 
-App projects these records into the existing scene panel snapshot. UI keeps its own row types and foundation IDs; it does not import this core type. Preserve scope when converting existing `SceneRowAddr` and action targets. Remove `fluid_controls` and app-side additions that rediscover ownership. Existing renderer geometry/bounds/material information can augment a row by its stable reference, but cannot redefine who owns it.
+**SceneVm consumes `scene_object_models` for every row's parent, kind, and controls.** It keeps geometry, bounds, and material enrichment only. Delete its independent family/parent assignment and the app's ownership walk. App then projects SceneVm into UI-owned snapshot types using foundation IDs; UI does not import core. Preserve scope when converting SceneRowAddr and action targets. The F1b `look_mesh` target becomes part of `model.controls`; it is not a second ownership source.
+
+`physics_boundary_rows_share_owner` asserts `parent_group_id == model.parent` on every row after resolving the stable scoped parent reference to the row's document-ID representation. It also checks kind and ordered controls. Include Water's real parent and three children, imported compounds, ordinary objects, and repeated local IDs in different scopes. SceneVm must not synthesize another parent or sort by an independently inferred group after this projection.
 
 Only manifest-backed exposures selected by `controls` feed ParamSurface. Water parent selects simulation/emission/Amount/World sections plus its own look. Child selection includes only its material, Size, and visibility. It excludes body, transform, skin, role, and modifier cards. Role attach/retarget/remove and Enable Physics remain shared action rows driven by capabilities. All parameter writes, including existing-body enabled/visible toggles, use the manifest-backed scene parameter write path when a binding exists. There is no private physics modulation storage.
 
 Recompute models on structural revision changes. Reuse cached rows and buffers for value-only updates. Do not scan the graph or allocate a new ownership vector every frame.
 
-### 5.3 Water F1b and F2
+### 5.3 Water F1b and F2 proceed now
 
-F1b becomes P2 plus P3 plus P4: adapt the accepted F1a recipe to `SceneTemplate`, insert through the common transaction, and project the common rows. It is not an extension of `ExposureSet` with Whitewater/Look cases. Both Add Water and grouped presets consume the same recipe/metadata. Particle View changes only the Water display branch. New scenes show exactly Water with Foam/Spray/Bubbles beneath it; no duplicate Water child, no Dust row, no Duplicate affordance.
+F1b and F2 build on [WATER_FAMILY_DESIGN.md](WATER_FAMILY_DESIGN.md) as written, without waiting for P1–P3. F1b supplies `LiquidTemplate.object_outputs`, `ExposureSet::{Whitewater, Look}`, shared visibility targets, and `look_mesh`; F2 supplies hide, rename, delete, and duplicate rejection. The active F1a obstacle-source placement remains the accepted recipe input to that work.
 
-F2 becomes P5. Rename updates labels/section display names while preserving NodeIds, binding IDs, mappings, automation, and roles. Parent visibility fans out through the existing parent-visible binding to all four render objects without overwriting child visibility. Child Hide changes only that child's visibility. Parent deletion removes owned nodes, wires, exposures, and owned modifier state; detaches/reindexes external role routes; preserves source objects and unrelated World users; and restores all of them on undo. Delete a now-unused World only if the existing ownership/reachability check proves it has no remaining participants. No child Remove operation exists.
+P2 later migrates the landed four-output family template and its metadata compiler-driven to the common insertion path. P3 migrates its parent/kind/control projection without changing Water D1–D10. These are convergence refactors with the Water flows as regression cases, not replacement Water build phases.
 
-Saved projects remain ordinary graph+metadata+instance state. No family registry or project version change. After reload, the model derives the same ownership and modulation resolves through the same bindings. Existing old liquid graphs retain their structure and controls; they do not acquire synthetic new Water children. Unknown data remains inert-but-present or produces a diagnostic, never silently disappears.
+Water lifecycle-to-transaction migration is outside this contract: its current writers were not audited in section 1.2. F2 keeps its own approved implementation and gates. No new deletion of an unused World is specified; there is no existing ownership/reachability check to cite. Any later World reclamation needs an audited design and its own phase.
+
+Saved projects remain graph+metadata+instance state. No family registry or project version change. After P2/P3, save/reload and modulation must retain the landed family's behavior. Old liquid graphs remain structurally unchanged; unknown data stays inert-but-present or reports a diagnostic.
 
 ### 5.4 Convergence and cost
 
@@ -395,11 +439,11 @@ Saved projects remain ordinary graph+metadata+instance state. No family registry
 |---|---|---|
 | Add Fluid | Replace liquid-specific insertion with the common template, remapper, and transaction. | Medium: eight constructor sites at this HEAD, nested metadata, multi-output count, and round-trip coverage. No solver change. |
 | Scene panel | Replace two ownership walks with one derived model; keep ParamSurface and card hosts. | Medium: stable scoped targeting matters more than drawing rows. Value updates must remain cheap. |
-| Box3D enable/add/split | Pure graph builders produce `SceneGraphEdit`; shared transaction and exposure provider own commit. | Medium: group and loose forms, compound children, existing enabled toggles, and shared-world lifetime all need fixtures. Do not create a new world per row. |
+| Box3D enable/add/split/duplicate | Pure graph builders produce `SceneGraphEdit`; shared transaction and exposure provider own commit. | Medium: group and loose forms, compound children, existing enabled toggles, paused duplication, free body slots, and shared-world lifetime all need fixtures. Do not create a new world per row. |
 | Imported colliders | Import candidate uses the common transaction; existing asset preparation remains outside engine. | Medium: async stale-owner rejection, string bindings, held-out glTF, and collected asset reload. Not an importer rewrite. |
 | Fluid roles | Assign/retarget/remove return the common candidate; model supplies action rows and recipient identity. | Medium: external ownership and full rollback are essential. Existing role limits and unsupported-geometry guards remain. |
 | Shatter | Keep modifier recipe/preparation/compiler; use common transaction/model capabilities. | Small after P1/P3, but requires a real imported-body acceptance case. No solver abstraction or fragment rows invented. |
-| GPU numerical separation | Isolate budgets/data, then FLIP and whitewater cores. | Highest cost, three bounded phases with source conformance before moves. Generated atom pipelines are supplied as prepared data; they cannot be replaced with copied shaders. Preserve numerical kernels, fusion, clock, and capture ABI. This work does not block F1b/F2. |
+| GPU numerical separation | Isolate budgets/data, then FLIP and whitewater cores. | Highest cost; G1a adds types/checks without moves. G1b/G2/G3 remain deferred with source conformance before moves. Generated atom pipelines are supplied as prepared data; they cannot be replaced with copied shaders. Preserve numerical kernels, fusion, clock, and capture ABI. This work does not block F1b/F2. |
 
 ## 6. Invariants and enforcement
 
@@ -407,21 +451,23 @@ Tests below are required deliverables, not claims of tests already passing. Pref
 
 | Invariant | Required machine enforcement |
 |---|---|
-| Engine has no host dependency | `scripts/check_physics_boundary.py` checks normal Cargo edges and the isolated module imports; `physics_boundary_compile` compiles that source in a temporary probe crate with only allowed dependencies. No lexical grep alone is accepted as proof. |
-| No alternate UI/ownership model | `physics_boundary_rows_share_owner` and `physics_boundary_scoped_duplicate_doc_ids`; deletion search for the `fluid_controls` field and its accesses after P3 (unrelated test-helper names may remain). UI Cargo dependency check remains foundation-only. |
+| Engine/UI dependencies are enforced now | P1's deny.toml entries and existing `cargo deny check bans` landing leg; new `dependency_bans_cover_workspace` preflight/test prevents an unlisted workspace crate from bypassing the UI boundary. G1b adds the new crate to this policy; Cargo checks cycles. |
+| One row structure and control owner | P3 delivers `physics_boundary_rows_share_owner` (parent equality on every row), `physics_boundary_scoped_duplicate_doc_ids`, and removal of fluid_controls/look_mesh ownership shortcuts. |
+| No bespoke manifest-backed controls | P3 delivers `no_bespoke_row_infra` if F1b has not already supplied it, then reuses that single check. It is not claimed to exist today. The gate rejects physics-specific slider/drawer construction outside ParamSurface and exercises the shared gesture route. |
 | Insertion is atomic | `physics_boundary_insert_rejects_without_mutation`, `physics_boundary_redo_keeps_ids`, `physics_boundary_nested_exposure_remap`; compare graph and instance-layer state before/after failure. |
 | One exposure source and working modulation | `physics_boundary_save_reload_modulate`; numeric/string fan-out, aliases, mappings, and nested targets survive actual IO save/load and a subsequent modulation evaluation. |
 | One step/capture owner | Existing liquid conformance plus `physics_boundary_group_preserves_tick_owner`; reject direct tick-state escape, duplicate shared-world advancement, mixed completion stamps, nested regions. |
-| Water D1–D10 | `physics_boundary_water_rows`, `physics_boundary_water_visibility`, `physics_boundary_water_delete_roles`, `physics_boundary_water_duplicate_rejected`; UI input flows exercise command and shortcut paths. |
-| Labels are not identity | `physics_boundary_rename_keeps_bindings`, including role target, undo/redo, reload, and modulation after reload. |
+| Water D1–D10 | F1b/F2 own their named Water tests and flows. P2/P3 rerun them; P6a retains family-duplicate rejection while migrating rigid duplication. No new Water lifecycle phase here. |
+| Labels are not identity | Preserve F2's `water_family_visibility_rename_round_trip` through P2/P3, including role target, undo/redo, reload, and modulation after reload. |
 | External objects survive lifecycle | `physics_boundary_role_source_survives_delete`, with a second domain/world user and undo. |
 | Preserve GPU resource policy | `physics_boundary_budget_overflow`, `physics_boundary_budget_limit`, `physics_boundary_missing_limits_rejected`; existing whole-scene admission still runs. |
+| Typed public stage failures | G1a defines EngineError and exhaustively matches it in tests; deferred G2/G3 use it for every new public fallible engine method and convert errors to scene diagnostics only in the host. |
 | No steady-state new graph work | Rebuild counter test on value-only updates; if periodic/content-thread work is introduced, trace gate below. |
 | Compatibility is not silent fallback | Round-trip old ungrouped liquid, grouped imports, and legacy whitewater axis inputs; unresolved metadata retained with a diagnostic. No Water migration/version bump. |
 
 ## 7. Phasing
 
-Every phase is separately reviewed and landable. Dependencies are P1 → P2 → P4; P3 → P4 → P5. P6a/P6b/P7/P8 require P1 and P3, and do not gate Water. G1 → G2 → G3 is independent of authoring after source ownership handoff. Do not combine authoring and numerical moves into one change.
+Active phases are P1, P2, P3, P6a, P6b, P7, P8, and G1a. P1 precedes P2/P3; P2/P3 consume the landed F1b family. P6a/P7/P8 require P1/P3; P6b also requires P2's merge helper. G1a can land anytime and makes no numerical moves. Water F1b/F2 remain independent under their own design. Former P4/P5 are removed, not renumbered. Deferred G1b/G2/G3 are listed in section 9 and are not active work.
 
 ### 7.1 Common execution and seam rules
 
@@ -431,66 +477,54 @@ For implementation phases, use `scripts/codex_checks.py` for the changed paths a
 
 For UI phases, deliver the named flow and its manifest entry, then run `CARGO_BUILD_JOBS=4 scripts/run_ui_flows.py <flow-name>`. This runner already owns the GPU execution lock. Its assertions and exit code are the agent gate; retain its PNG for Peter. Target L3 through actual input, including visibly actionable row chrome. A PNG alone does not establish behavior. Give Peter the worktree binary's exact launch command at delivery. Save/reload gates must use the real IO path and modulate after reload. If a phase adds periodic/content work, run its same bounded flow with `MANIFOLD_RENDER_TRACE=1`; any frame over 20 ms fails. Otherwise no trace run is added. No background work is authorized by these docs-only edits.
 
-API inventory at this HEAD (later P6–G3 inventories are deliberately re-derived at entry under DESIGN_DOC_STANDARD section 8.3; their upstream source is changing):
+API inventory at this HEAD (later P6–G3 inventories are deliberately re-derived at entry under DESIGN_DOC_STANDARD.md section 8.3 (execution pre-flight); their upstream source is changing):
 
 - `rg -n 'StackTransaction::prepare' crates` gives **8** callers, all `E/modifier_stack.rs:277,332,386,440,493,547,604,662`. Mechanical: `StackTransaction::prepare(..., |g| domain_edit(g))` → `SceneGraphTransaction::prepare(..., |g| domain_edit(g).map_err(Into::into))`. Keep domain validation in the closure.
 - `rg -n 'SceneModifierGraphEdit \{' crates --glob '*.rs'` gives **12** matches: declaration at `C/scene_modifier_edit.rs:20`; result literals at `:181,249,256,389,521,552,595,677,684,911,954`. Mechanical name/import changes; all three fields are unchanged. Re-run a full symbol search for references too.
 - `rg -n 'AddSceneFluidCommand::new' crates --glob '*.rs'` gives **8** calls: `A/fluid_domain_edit.rs:797`; `A/ui_bridge/project.rs:659,2277`; `E/scene/fluid/tests.rs:87`; renderer `tests/gpu_proofs/water_basin/explicit_authoring.rs:144`, `water_basin.rs:478,683`; renderer `src/preset_runtime/physics_impulses/coupled_playback_tests.rs:31`. Each uses the new prepared constructor, complete template metadata, and a resolved `SceneNodeRef`. Do not preserve test-only old constructors.
 - `rg -n 'LiquidTemplate \{' crates --glob '*.rs'` gives **8** matches including declaration, impl, return signatures, and literals: `E/scene/fluid/template.rs:46,56,83,184`; `E/scene/fluid/tests.rs:501,539`; `A/ui_bridge/project.rs:22,36`. Three recipe bodies need the new pattern: CPU compatibility template, test GPU template, production GPU recipe. Replace body vectors/output ID/category exposures with a complete group plus existing-format metadata. Remove `group_id_slot`; update brittle document-ID fixtures to stable references, preserving saved ID semantics rather than arbitrary creation order.
 
-P3 field inventory: `rg -n '\.fluid_controls\b|pub fluid_controls:' crates` returns **21** matches. Production declaration/use: `R/scene_vm.rs:261`, `A/ui_bridge/projection/scene.rs:107`, `R/viewport_gizmo.rs:199,230`. Tests: `A/ui_bridge/project.rs:2172,2173,2178,2191,2312`; `R/scene_vm.rs:1817,1837,1854,1886,3091,3094`; `R/scene_exposure/fluid_objects.rs:724`; `R/viewport_gizmo.rs:563`; `R/primitives/surface_mesh_normals.rs:140`; renderer `tests/gpu_proofs/water_basin/explicit_authoring.rs:178`, `water_basin.rs:697,795`. Initializers and the local builder at `scene_vm.rs:1344`/`:1453`, `viewport_gizmo.rs:553`/`:790` also change. App projection consumes scoped model controls. Gizmo eligibility uses the model's transform capability, not an empty controls vector. Ownership tests use scoped references; tests merely identifying a liquid use the existing liquid-domain identity. Unrelated helper/test names containing `fluid_controls` are not migration targets.
+⚠ **VERIFY-AT-IMPL — family inventory delta:** the preceding counts are the reviewed baseline, not the concurrent family implementation. P2 reruns `rg -n 'LiquidTemplate|object_outputs|ExposureSet::(Whitewater|Look)|with_(whitewater|look)_metadata' crates`; P3 reruns `rg -n 'look_mesh|parent_group_id|fluid_controls|water_family' crates/manifold-renderer/src/node_graph/scene_vm.rs crates/manifold-app/src/ui_bridge crates/manifold-ui/src`. Record every literal, reader, and count before renaming. P2 maps object_outputs to the group interface, Whitewater/Look/setters to complete metadata, and shared targets through the fresh-ID map. P3 maps look_mesh to controls and the family parent/kind to the single model. Delete old symbols first and follow compiler errors; no family-only insertion wrapper or second row projection survives. The four-output family is P2's real insertion/undo/reload case.
 
-⚠ **VERIFY-AT-IMPL:** F1a can change the template inventory before P2. It is an expected source change, not permission to guess. Read its landed recipe and update the inventory and field mapping before P2 starts. The same rule applies to G1–G3 while the liquid seam session owns those sources.
+P3 baseline field inventory: `rg -n '\.fluid_controls\b|pub fluid_controls:' crates` returns **21** matches. Production declaration/use: `R/scene_vm.rs:261`, `A/ui_bridge/projection/scene.rs:107`, `R/viewport_gizmo.rs:199,230`. Tests: `A/ui_bridge/project.rs:2172,2173,2178,2191,2312`; `R/scene_vm.rs:1817,1837,1854,1886,3091,3094`; `R/scene_exposure/fluid_objects.rs:724`; `R/viewport_gizmo.rs:563`; `R/primitives/surface_mesh_normals.rs:140`; renderer `tests/gpu_proofs/water_basin/explicit_authoring.rs:178`, `water_basin.rs:697,795`. Initializers and the local builder at `scene_vm.rs:1344`/`:1453`, `viewport_gizmo.rs:553`/`:790` also change. App projection consumes scoped model controls. Gizmo eligibility uses the model's transform capability, not an empty controls vector. Ownership tests use scoped references; tests merely identifying a liquid use the existing liquid-domain identity. Unrelated helper/test names containing `fluid_controls` are not migration targets.
 
-### P1 — Reuse the graph transaction
+⚠ **VERIFY-AT-IMPL:** F1a can change the template inventory before P2. It is an expected source change, not permission to guess. Read its landed recipe and update the inventory and field mapping before P2 starts. The same rule applies to deferred G1b/G2/G3 while the liquid seam session owns those sources.
 
-- **Entry/read-back:** baseline audit above; read `E/modifier_stack.rs` and `C/scene_modifier_edit.rs` in full. Re-run the 8/12 inventories. Restate D4, D6, and the stale-owner rules.
-- **Deliverables:** `C/scene_graph_edit.rs`, `E/scene_transaction.rs`; old result/transaction renamed and moved; eight modifier actions use it. Preserve their public domain command APIs. Add `physics_boundary_transaction_atomic`, `physics_boundary_transaction_stale_owner`, `physics_boundary_transaction_undo_instance`.
+### P1 — Enforce dependencies and reuse the graph transaction
+
+- **Entry/read-back:** baseline audit above; read `E/modifier_stack.rs`, `C/scene_modifier_edit.rs`, deny.toml, and the landing deny leg. Re-run the 8/12 inventories and `CARGO_BUILD_JOBS=4 cargo metadata --offline --format-version 1`; compare with section 3.2. Restate D1/D4/D6 and stale-owner rules.
+- **Deliverables:** section 3.2's deny.toml entries, `dependency_bans_cover_workspace` landing preflight, and negative-fixture tests in `scripts/test_landing_gate.py`; `C/scene_graph_edit.rs`, `E/scene_transaction.rs`; old result/transaction renamed and moved; eight modifier actions use it. Preserve public domain command APIs. Add `physics_boundary_transaction_atomic`, `physics_boundary_transaction_stale_owner`, `physics_boundary_transaction_undo_instance`.
 - **Seam:** before `StackTransaction::prepare(...) -> Result<Self, SceneModifierStackError>` with a modifier-only closure/result; after the exact signature in 5.1. Existing graph/result fields map unchanged; generator admission stays in modifier builders. Unsupported GraphTargets reject explicitly.
-- **Gate/scope:** focused core/editing check, clippy, tests `physics_boundary_transaction`; existing modifier transaction sibling filters selected by the gate. `rg -n 'StackTransaction|SceneModifierGraphEdit' crates` must return zero. No renderer/UI behavior changes; direct imports of the renamed core result must be updated wherever the compiler finds them.
+- **Gate/scope:** `cargo deny check bans` exits 0; `python3 -m unittest discover -s scripts -p test_landing_gate.py -k dependency_bans` passes with nonzero tests. Fixtures reject all protected→host edges and UI→non-foundation edges, including a newly added workspace package; no Cargo subprocess inside tests. Then focused core/editing/app check, clippy, `physics_boundary_transaction` and existing modifier sibling filters. `rg -n 'StackTransaction|SceneModifierGraphEdit' crates` returns zero. No renderer/UI behavior changes; update renamed result imports directly.
 - **Demo:** none — L1. Add an app-level `physics_boundary_transaction_reload` test: save/reload an existing modifier candidate through actual project IO, modulate after reload, and restore instance state on undo. Include that focused app test in P1's gate. No new periodic work. Forbidden: weakening stale-owner checks, adding a second snapshot implementation, widening modifier owners.
 
 ### P2 — General template insertion
 
-- **Entry/read-back:** P1; read F1a recipe, old fluid command/template, exposure provider, group flattening, and 7.1 inventories. F1a must be accepted before changing its production recipe. Restate D3/D4/D8.
-- **Deliverables:** exact template/function/command in 5.1; migrate all eight Add Fluid calls and three recipe bodies. Reuse `gpu_flip_preset`, no new core recipe module. Add nested remap, fan-out, capacity rejection, atomic rejection, redo-ID, and save/reload/modulation tests named in section 6.
-- **Seam:** before the eight-argument `AddSceneFluidCommand::new(target, render_scene_node_id, fluid_metadata, source_metadata, material_metadata, object_metadata, template, catalog_default)` plus role/world setters; after `InsertSceneTemplateCommand::new` in 5.1. Metadata comes from the template and existing provider; scene identity is scoped; constructor errors are surfaced before submission. Candidate publication is the P1 transaction.
+- **Entry/read-back:** P1 and landed F1b; read the four-output family recipe, fluid command/template, exposure provider, group flattening, and 7.1 inventories. Coordinate with F2 rather than editing its active files. Restate D3/D4/D8.
+- **Deliverables:** exact template/function/command in 5.1; re-inventory and migrate every Add Fluid call and recipe body, including family literals and shared parent-visible targets. Reuse `gpu_flip_preset`, no new core recipe module. Add nested remap, fan-out, capacity rejection, atomic rejection, redo-ID, and save/reload/modulation tests named in section 6. The four-output Water family is the real primary test case.
+- **Seam:** before the eight-argument `AddSceneFluidCommand::new(target, render_scene_node_id, fluid_metadata, source_metadata, material_metadata, object_metadata, template, catalog_default)` plus role/world and F1b whitewater/look setters, object_outputs, and shared-binding targets; after `InsertSceneTemplateCommand::new` in 5.1. Metadata comes from the template/provider; scene identity is scoped; errors surface before submission. Delete the old symbols first and migrate every family literal from compiler errors. Candidate publication is the P1 transaction.
 - **Gate/scope:** focused core/editing/app and changed renderer recipe tests; filters `physics_boundary_insert`, `physics_boundary_nested`, `physics_boundary_redo`, `physics_boundary_save`. Negative `rg -n 'AddSceneFluidCommand|LiquidTemplate|TemplateExposure|ExposureSet' crates` zero. Whole-world controls and every object output resolve after flattening.
-- **Demo:** L3 `scene-physics-template`: existing Add Fluid action inserts the grouped recipe, undo removes it, redo keeps IDs, reload preserves exposures. The renamed Add Water label and final rows arrive in P4. Gesture: change the liquid Amount through its actual bound control after reload. Forbidden: new metadata vectors, separate child commands, old saved-project upgrading. No numerical changes.
+- **Demo:** L3 `scene-physics-template` and the landed F1b Water flow: +Water inserts four outputs, undo removes the family, redo keeps IDs, reload preserves exposures. Include two families following an imported compound; assert physical slot counts and child visibility. Preserve the landed label and automation name. Gesture: modulate Amount and child Size after reload. Forbidden: replacement Water UI, metadata vectors, separate child commands, old-project upgrading. No numerical changes.
 
 ### P3 — Shared object ownership and cards
 
-- **Entry/read-back:** P1; read `scene_vm`, app scene projection, ParamSurface, scene action routing, and section 5.2. Re-run `rg -n 'fluid_controls|object_controls|PhysicsVm'` over R/A/U and record the complete field readers before the rename.
-- **Deliverables:** exact `SceneObjectModel` API; migrate renderer/app ownership consumers; app-to-UI conversion; cached structural rebuild; tests `physics_boundary_rows_share_owner`, `physics_boundary_scoped_duplicate_doc_ids`, `physics_boundary_value_update_no_rebuild`. Existing fluid/rigid/role/force/modifier cards remain accessible.
-- **Seam:** before `SceneObjectKnownRow.fluid_controls: Vec<NodeId>` plus app-side node additions; after one `controls: Vec<SceneNodeRef>` from core. Mechanical readers consume projected controls; topology walkers are deleted, not wrapped. Geometry/bounds enrichment remains renderer-owned. P3 is not permitted to change material rendering.
-- **Gate/scope:** focused core/renderer/app/UI checks and model/card tests; `rg -n '\.fluid_controls\b|pub fluid_controls:' crates` zero. UI Cargo still depends only on foundation among MANIFOLD crates. Model tests cover one shared world, independent manually grouped domains, and duplicate local document IDs.
+- **Entry/read-back:** P1 and landed F1b; read `scene_vm`, app scene projection, ParamSurface, scene action routing, and section 5.2. Re-run `rg -n 'fluid_controls|object_controls|PhysicsVm|look_mesh|parent_group_id'` over R/A/U and record all readers before the rename.
+- **Deliverables:** exact SceneObjectModel API; SceneVm consumes its parent/kind/controls on every row; migrate app ownership consumers and family look_mesh; app-to-UI conversion; cached structural rebuild; `physics_boundary_rows_share_owner`, `physics_boundary_scoped_duplicate_doc_ids`, `physics_boundary_value_update_no_rebuild`. Deliver `no_bespoke_row_infra` in `scripts/test_scene_param_surface.py` if F1b has not already supplied it; otherwise extend that single existing check. It is a required deliverable, not an assumed existing check. Existing cards remain accessible.
+- **Seam:** before independently assigned SceneVm parent/kind, fluid_controls, F1b `look_mesh: Option<NodeId>`, and app additions; after one parent/kind/controls model. Delete old fields first; move the look mesh target into model controls, then update compiler-identified readers. Delete topology walkers, do not wrap them. SceneVm keeps only geometry/bounds/material enrichment; material rendering does not change.
+- **Gate/scope:** focused core/renderer/app/UI checks and model/card tests; `rg -n '\.fluid_controls\b|pub fluid_controls:|\.look_mesh\b|pub look_mesh:' crates` zero. Run no_bespoke_row_infra with nonzero tests. P1's actual deny/preflight gate enforces UI dependencies. On every row assert parent_group_id equals model.parent after scoped identity conversion, and compare kind/controls. Cover shared worlds, Water, imported compounds, independent grouped domains, and duplicate local IDs.
 - **Demo:** L3 `scene-physics-shared-cards`: select existing rigid and fluid objects and a role source; scrub one manifest control, open its modulation drawer, undo. Save/reload then modulate. Forbidden: another ownership registry, label matching, per-frame graph walks, bespoke sliders. Trace only if periodic work is added.
 
-### P4 — Water F1b: Add Water and family rows
+### P6a — Rigid add, enable, split, and duplicate
 
-- **Entry/read-back:** accepted F1a, P2/P3. Read Water D1–D10 and verify four actual object outputs plus internal obstacle source. No open liquid-seam phase is required.
-- **Deliverables:** Add Water label/action uses the common recipe; parent and three look-only rows; all parent/child controls through ParamSurface; Amount 1; Particle View preserves children; grouped bundled presets regenerated. Tests `physics_boundary_water_rows`, `physics_boundary_water_duplicate_rejected`, `physics_boundary_water_particle_view`, and reload/modulation coverage.
-- **Gate/scope:** focused recipe/core/app/UI tests plus mapped GPU proof scope for changed presets. Negative searches in the new flow/assertions prove no Dust row, duplicate Water child, child physics/transform/modifier controls, or family Duplicate action. Command tests reject shortcut/context duplication even without UI.
-- **Demo:** L3 `scene-water-family`: Add Water, select each row, modulate parent Amount then child Size after reload, switch Particle View, undo/redo insertion. Flow asserts exactly four objects and one undo step. Peter receives the panel PNG. Gesture: perform a Size modulation on Spray without changing Foam or the simulation Amount. Forbidden: another Water builder, whitewater emission on children, Dust output, changing solver defaults beyond approved Amount.
-
-### P5 — Water F2: lifecycle
-
-- **Entry/read-back:** P4; read existing role lifecycle, remove/rename object commands, and parent-visible binding from F1a. Resolve every affected source/world reference before editing. Restate D6/D8.
-- **Deliverables:** common transaction-backed Water rename/hide/delete operations; child Hide only; shared capability rejection in all entry routes. `physics_boundary_water_visibility`, `physics_boundary_water_delete_roles`, `physics_boundary_rename_keeps_bindings`, `physics_boundary_role_source_survives_delete`.
-- **Gate/scope:** focused editing/core/app tests and named flow; compare complete graph+instance restoration after undo. Save/reload renamed/hidden state then modulate. Negative tests reject child delete and family duplicate; assert zero remaining bindings to deleted family nodes and preserved external source/world users.
-- **Demo:** L3 `scene-water-family-lifecycle`: hide Spray, hide/show Water, rename Water while its Amount is modulated, delete Water with attached external roles, undo, reload. Gesture: hide/show the family during playback; assert simulation stamp advances while hidden and child visibility remains unchanged. A bounded runtime observation is mandatory for that claim. Forbidden: hide-as-reset, label-derived IDs, deleting external source objects, a second lifecycle transaction.
-
-### P6a — Rigid add, enable, and split
-
-- **Entry/read-back:** P1/P3; read `E/scene/physics.rs`, add-object path, split caller, and `A/ui_bridge/project.rs` enable branch. Re-run `rg -n 'append_physics_scene_object|add_group_physics|EnableSceneObjectPhysicsCommand|DisableSceneObjectPhysicsCommand' crates`; classify every constructor/helper caller before editing.
-- **Deliverables:** pure rigid graph edits committed by `SceneGraphTransaction`; existing recipes/provider stamp exposures; shared capability/model use; enabled writes route through bound parameter editing. Keep domain commands as semantic entry points. Tests `physics_boundary_rigid_enable`, `physics_boundary_rigid_shared_world`, `physics_boundary_rigid_split_undo`.
+- **Entry/read-back:** P1/P3; read `E/scene/physics.rs`, add-object path, split caller, duplicate.rs, physics_match.rs, and `A/ui_bridge/project.rs` enable branch. Re-run `rg -n 'append_physics_scene_object|add_group_physics|EnableSceneObjectPhysicsCommand|DisableSceneObjectPhysicsCommand|DuplicateSceneObjectCommand|first_free_physics_body_slot' crates`; classify every constructor/helper caller.
+- **Deliverables:** pure rigid graph edits and DuplicateSceneObjectCommand committed through SceneGraphTransaction; shared capability/model/provider use; enabled writes through bound parameter editing. Tests `physics_boundary_rigid_enable`, `physics_boundary_rigid_shared_world`, `physics_boundary_rigid_split_undo`, `physics_boundary_rigid_duplicate_paused`. Preserve free body-slot allocation, cloned numeric/string bindings, fluid-role routes, +0.5 placement offset, and stable redo IDs. Preserve nested-physics/copies/malformed/full-world rejection and Water's duplicate rejection.
 - **Seam:** command constructors remain public entry points; their execute bodies stop owning before/after graph snapshots and instead execute the prepared transaction. Helper graph construction remains pure and returns nodes/edits; no renderer object is stored in a command. The before/after transaction seam is P1, not a new rigid API.
 - **Gate/scope:** focused editing/core/app rigid tests, existing split/physics sibling filters. Negative gate: the migrated commands contain no `prev_graph`, `after_instance`, or direct `project` graph assignment outside the transaction. Existing saved loose and grouped rigid fixtures round-trip and modulate enabled/body controls after reload.
-- **Demo:** L3 extend `scene-physics-controls`: enable physics, adjust bounce, disable/re-enable, split/undo with a second object sharing the world. Gesture: toggle enabled while paused then resume; no duplicate body/world. Forbidden: per-object worlds, topology deletion on disable, new locks, coupling changes.
+- **Demo:** L3 extend `scene-physics-controls` and rerun `scene-physics-duplicate-paused`: enable, adjust bounce, disable/re-enable, split/undo, duplicate a paused rigid object, undo/redo, and resume in the shared world. Gesture: duplicate while paused then resume; exactly one new body and no new world. Forbidden: per-object worlds, deletion on disable, new locks, coupling changes.
 
 ### P6b — Imported graph commit and collider preparation
 
-- **Entry/read-back:** P1/P3; read import worker, merge plan, `ImportModelIntoSceneCommand`, `physics_mesh`, and imported-physics flow. Inventory `rg -n 'ImportModelIntoSceneCommand::new|MergePlan' crates`; preserve current merge return data and worker protocol.
+- **Entry/read-back:** P1/P2/P3; read import worker, merge plan, `ImportModelIntoSceneCommand`, `physics_mesh`, and imported-physics flow. Inventory `rg -n 'ImportModelIntoSceneCommand::new|MergePlan' crates`; preserve current merge return data and worker protocol.
 - **Deliverables:** import graph/metadata assembled as one candidate and committed through P1; shared exposure merge/remap helper from P2, without forcing imported multi-root graphs into Water's template shape; retain engine-ready immutable collider preparation. Tests `physics_boundary_import_atomic`, `physics_boundary_import_stale_owner`, `physics_boundary_import_reload`.
 - **Seam:** current `MergePlan` fields map to a complete `SceneGraphEdit` before publication: nodes/wires/object count plus card params/numeric/string bindings. Report lines remain a host result, not engine data. Existing public import command signature may remain; its internal commit changes. No new asset API.
 - **Gate/scope:** focused import/editing/IO tests and mapped `glb_conformance` if import code changes. Use a held-out glTF with external buffers, nested transforms, and more than one mesh, not the development fixture. Reject missing resources/stale owner without partial metadata. Save, relocate/collect as supported today, reload, enable physics, then modulate body controls.
@@ -512,51 +546,43 @@ P3 field inventory: `rg -n '\.fluid_controls\b|pub fluid_controls:' crates` retu
 - **Gate/scope:** focused modifier/renderer/app tests and mapped proof gate. Negative test rejects unsupported animated/deformed/second-active-shatter cases. Saved recipe and controls round-trip and modulate after reload. Use a held-out supported imported mesh.
 - **Demo:** L3 extend `scene-modifier-preset`: select imported rigid object, add Shatter, modulate one exposed control, undo/redo/reload. Gesture: change the existing shatter control without losing the body's physics card. Forbidden: moving asset/compiler work into the engine, fragment sliders, relaxing admission to make a demo pass.
 
-### G1 — Compute data and allocation boundary
+### G1a — Engine types and checks, no moves
 
-- **Entry/read-back:** accepted handoff from liquid-seam owner; read current grid/body records, buffer admission, manifold-gpu device snapshot, and G2/G3 imports. P10 accepted ABI is required if its grid outputs are moved. Re-run `rg -n 'admit_candidate_bytes|GpuEncoder|REACTION_FLOATS|MAX_FLUID_ROLES'` over the targeted numerical files and enumerate all import/call changes in the phase review. No Water dependency.
-- **Deliverables:** `physics_engine/mod.rs` and `data.rs`; exact allocation and kernel-layout types in 3.2; move shared physical POD/layout helpers field-for-field, leave graph extraction in adapters; shared constants get one physical definition with existing graph limits checked against it. Add dependency checker and compile probe plus budget and `physics_boundary_kernel_pack_matches_descriptor` tests. Move only types needed by the reviewed numerical import closure; graph validators remain in place.
-- **Seam:** before `admit_candidate_bytes(snapshot, candidate) -> Result<(), SceneModifierExpandError>` from numerical code; after `GpuAllocationBudget::admit(candidate) -> Result<(), GpuAllocationRefused>`, with host snapshot/policy/error translation. Scene-modifier public admission may remain as its own host wrapper around the shared arithmetic; physics may not call it. No admission is omitted.
-- **Gate/scope:** focused gpu/renderer/physics checks and `physics_boundary_budget` tests; dependency compile probe; mapped GPU proofs if layouts/shader includes move. Byte-layout assertions and existing small lattice references must stay equal. Negative imports: no `EffectNodeContext`, renderer `GpuEncoder`, app/UI/core/playback, or scene-modifier module in the new engine module.
-- **Demo:** none — L1; data/layout and refusal behavior are computed. No serialized change. Forbidden: new backend, budget fallback, changing role capacity, packed layout cleanup, new solver behavior. If the numerical closure exceeds one session, stop at the reviewed data subset and revise this phase before coding the remainder; do not partially move a type's definition.
-
-### G2 — FLIP numerical stages
-
-- **Entry/read-back:** G1 and liquid-seam handoff; re-read current `gpu_flip_step`, pressure, bodies, clock, narrow-band, sheeting, and their selected proofs. P7a's scheduling audit remains owned by the seam; do not change its policy. Inventory every use of `StepState`, `StepParams`, `Step`, and moved numerical modules before rename; pin the field-for-field mapping from 3.1 to the accepted tip.
-- **Deliverables:** `physics_engine/flip/` contains the numerical dependency closure and shaders; primitive retains parameter decode, graph buffers, tick ownership, registry/fusion, history, and diagnostics translation. Rename StepState/Step/StepParams first as specified. Prepare scratch with G1 budgets. Add `physics_boundary_flip_encode_contract` and compile-probe coverage.
-- **Seam:** exact encode before/after is 3.1; only module/type names and resource-policy arguments change. Update all atom/CPU/GPU proof imports directly; no re-export under obsolete private paths. Preserve all registered node types, ports, descriptor/fusion proofs, pressure/body math, and dispatch order.
-- **Gate/scope:** focused renderer check/clippy, small CPU reference cases, then touched-path GPU proof gate under the shared lock. Compare existing deterministic atom results and counters to their pre-move assertions. Negative gate: isolated module has no `Primitive`, `EffectNodeContext`, `ParamValues`, scene-modifier admission, or renderer encoder imports. Old numerical definitions absent from graph files.
-- **Demo:** no new visual surface — L1 numerical proof artifacts; existing mapped render smoke may run only when required by the gate. No claim of new visual quality. Forbidden: fusing stages, changing pressure settings, retuning timesteps, dropping a capture, extra renderer sweeps. No new serialized state.
-
-### G3 — Whitewater numerical stages
-
-- **Entry/read-back:** G1/G2, accepted current whitewater/capture ABI; read `whitewater_step`, its atoms, handoff/lifecycle tests, and seam conformance. If using P10 packed grid outputs, P10 is a prerequisite. Inventory the types/methods in 3.1 and every caller before moving them. P8 L3 debt is still separate.
-- **Deliverables:** `physics_engine/whitewater/` contains `WhitewaterState`, `WhitewaterOutput`, physical dispatch, and existing whitewater records; graph adapter retains tick/legacy frame routing, publication ring, primitive descriptors/fusion, and material consumers. Reuse manifold-fluids' physical `WhitewaterSpawn`; no new CPU FLIP integration. Add `physics_boundary_whitewater_encode_contract`, compile probe, and old-axis-input round-trip coverage.
-- **Seam:** StepFrame/StepInputs and related records move field-for-field. Split Step as specified in 3.1; retain advance/advance_tick/tick_output and Outputs in the host, and move emit/tick plus explicit-buffer publish into WhitewaterState. Renderer encoder → manifold-gpu encoder only at numerical calls. Install generated kernels through 3.2; preserve byte packing. Buffer retention and fence completion stay explicit in the host adapter. Update direct callers; delete duplicate physical definitions. Existing tick output and legacy graph support remain observable.
-- **Gate/scope:** focused renderer check/clippy, existing small CPU pool/type/lifetime references, mapped whitewater/capture GPU proofs. Negative engine import gate from G2. Assert IDs/pools/counters and liquid/whitewater completion stamps remain coherent, including reset and held frames.
-- **Demo:** no new visual surface — L1 computed lifecycle/dispatch artifacts; required mapped render smoke only. No simulation cache UI. Forbidden: dust removal from state, new whitewater master node, discarding legacy inputs, weakening buffer lifetime/fence tests. No serialized change.
+- **Entry/read-back:** no solver-lane prerequisite. Read sections 3.1–3.2 and current foundation time/error vocabulary, GPU allocation arithmetic, and kernel packing. Do not edit the active numerical files. Restate the no-moves scope and the deferred trigger.
+- **Deliverables:** new shared EngineError in foundation's new engine_error module; allocation budget/refusal types and prepared-kernel layout/packing types in manifold-gpu. No new workspace crate yet. Add `physics_boundary_budget_overflow`, `physics_boundary_budget_limit`, `physics_boundary_engine_error`, and `physics_boundary_kernel_pack_layout` using hand-built layouts, including derived words. The host missing-limits regression belongs to G1b when admission is connected. No public stage method is moved or changed here.
+- **Seam:** additive types only; existing solver calls and scene admission remain unchanged. G1b will use the budget at allocation boundaries and G2/G3 will install kernels. No compatibility wrapper or alternate active solver implementation.
+- **Gate/scope:** focused foundation/gpu check/clippy and the named CPU tests; `cargo deny check bans` remains green. Assert the diff contains no existing numerical Rust/shader file moves or edits. No GPU execution or renderer build is needed for these pure type/arithmetic checks.
+- **Demo:** none — L1. No persistent state, periodic work, or performer surface. Forbidden: touching active body/sheeting/tick lanes, moving POD layouts, changing caps/defaults, a lexical dependency script, or a cargo-from-test compile probe.
 
 ## 8. Decided — do not reopen
 
 1. Existing CPU worlds and concrete GPU stages are the engine; scene graphs, assets, caches, and UI remain host adapters.
-2. No universal solver trait, new server singleton, second clock, new shared lock, or standalone engine crate in these phases.
+2. No universal solver trait, new server singleton, second clock, new shared lock, or public release in these phases. Deferred numerical moves use the private manifold-physics-gpu workspace crate.
 3. Ordinary groups and existing tick captures define the graph interface. A group does not imply a private world or a nested tick region.
 4. Reuse the modifier transaction, ordinary template metadata, exposure provider, and manifest-backed ParamSurface.
 5. Derive one object/ownership model and preserve scoped NodeIds across UI actions, undo, save, and reload.
-6. Water D1–D10 stand. F1b is P2–P4; F2 is P5. Internal obstacle source follows current F1a scope.
+6. Water D1–D10 stand. F1b/F2 proceed independently; P2/P3 later converge their insertion and rows. Lifecycle migration is out of scope.
 7. Rigid/import/role/Shatter convergence has its own phases. GPU separation does not delay Water authoring.
 8. Numerical relocation preserves algorithms, stage composition, ports, time policy, admission, and completion. It cannot claim to finish the liquid seam's open acceptance.
 
 ## 9. Deferred and Peter's calls
 
-**Peter's calls:** whether an external consumer justifies extracting the isolated engine sooner; the public engine name if it is released; whether and under what license/distribution terms to release it. Default: keep existing crate names and private workspace packaging, draw/enforce the boundaries now. None blocks Water. Licensing requires a separate dependency/native-asset audit; no license conclusion is made here.
+**Peter's calls:** whether an external consumer justifies external extraction sooner; the public engine name if it is released; whether and under what license/distribution terms to release it. Default: enforce boundaries now and use manifold-physics-gpu only when deferred numerical moves start; no public extraction or release. None blocks Water. Licensing requires a separate dependency/native-asset audit; no license conclusion is made here.
 
-Deferred with explicit triggers:
+### G1b, G2, G3 — deferred numerical moves
 
-- **Standalone packaging and stable external API:** revisit when Peter selects an external consumer or requests release. Then extract the isolated module, prove a host-only sample builds without renderer/app/UI, and define semver/support. This document does not claim renderer is an independently usable GPU engine package.
+**Trigger:** "seam P7a audited, P8 L3 paid, P10 landed or declined, the body/sheeting/tick lanes merged — or Peter names an external consumer". Neither branch silently discharges another session's acceptance debt. Before work, pin the accepted source tip, hand off file ownership, refresh section 3.1's marked inventories, and review a one-session move brief. No active authoring phase waits for these moves.
+
+- **G1b — Move shared numerical data into manifold-physics-gpu.** Entry: G1a plus the trigger. Create `crates/manifold-physics-gpu/Cargo.toml` and lib/data modules as a private workspace member; its MANIFOLD dependencies are foundation, gpu, physics, fluids. Renderer depends on it. Move accepted physical records/layout helpers, not graph validators; connect G1a's budget and typed errors at existing allocation boundaries. Update deny wrappers for renderer→physics-gpu and physics-gpu→the four lower crates, never a host crate. Gate: focused crate/renderer check/clippy, cargo deny, unchanged byte-layout/overflow/refusal tests, and only mapped GPU proofs if shader/layout consumers move. Cargo's dependency graph is the compile check. Demo: none — L1. No serialization, clock, coupling, or policy changes.
+- **G2 — Move FLIP numerical stages into manifold-physics-gpu.** Entry: G1b and refreshed StepState/Step/StepParams/caller inventories. Read accepted step/pressure/body/clock/sheeting contracts. Move the numerical dependency closure to `crates/manifold-physics-gpu/src/flip/`; keep graph decode, registration, capture ownership, and display publication in renderer. The encode seam in 3.1 uses EngineError; preparation installs existing generated kernels. Gate: focused checks/clippy, small CPU references, mapped GPU proofs, cargo deny, and deletion of old numerical definitions. Preserve dispatch order, POD bytes, ports, defaults, body-pressure coupling, and completion stamps. Demo: none — L1 computed parity; no optional render sweep.
+- **G3 — Move whitewater numerical stages into manifold-physics-gpu.** Entry: G1b/G2 and refreshed whitewater/capture inventories. Move WhitewaterState/WhitewaterOutput and numerical records to `crates/manifold-physics-gpu/src/whitewater/`; leave Outputs, fences, advance/advance_tick/tick_output routing, and legacy publication in renderer. Use explicit-buffer publish and EngineError from 3.1. Gate: focused checks/clippy, CPU pool/type/lifetime references, mapped whitewater/capture proofs, cargo deny, old-axis-input round-trip, and descriptor packing parity. Preserve dust in state, IDs/counters, coherent liquid stamps, reset/held behavior, and buffer lifetimes. Demo: none — L1 computed parity. No new master node or cache UI.
+
+### Other deferred work
+
+- **External extraction and stable public API:** revisit when Peter selects an external consumer or requests release. Package the private engine crate for that consumer, verify a host-only sample without renderer/app/UI, and define semver/support. Workspace packaging alone does not complete this work.
 - **Additional solver families, cross-domain coupling, and a new coupling algorithm:** require their own approved physical contract and proof set. Current common authoring interfaces do not imply numerical interoperability.
 - **Bake/cache UI and arbitrary-scene recorded playback:** only after the integration plan's provenance/collected-take acceptance and the seam's required outputs are complete. Existing guards remain.
 - **Old Water project upgrades, family duplication, Dust display:** excluded by Water D4/D7/D10; reopen only on Peter's explicit change of direction.
 - **Broad physics graph regrouping:** only when a specific consumer needs it. Existing saved loose/grouped graphs remain supported; no mass migration for visual tidiness.
 
-Verification limits: no app, GPU proof, render, benchmark, or test suite was run for this document. Concurrent F1a and liquid-seam results are unverified here. The audit proves source relationships at the named HEAD, not runtime correctness, solver quality, licensing readiness, or standalone packaging. Implementation gates above supply that missing evidence phase by phase.
+Verification limits: dependency metadata and the proposed deny configuration were checked; no app, GPU proof, render, benchmark, or Rust test suite was run for this document. Concurrent Water and liquid-seam results are unverified here. The audit proves source relationships at the named HEAD, not runtime correctness, solver quality, licensing readiness, or release packaging. Implementation gates supply that evidence phase by phase.
