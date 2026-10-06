@@ -63,6 +63,11 @@ pub struct GpuSampler {
 /// Compute pipeline: compiled SPIR-V module + `VkPipeline` + layout +
 /// slot reflection.
 impl GpuComputePipeline {
+    /// Legal threadgroup maximum reported by the backend, not an occupancy metric.
+    pub fn max_threads_per_threadgroup(&self) -> Option<u32> {
+        None
+    }
+
     /// The first binding the entry point references that `bindings` leaves out.
     pub fn unbound_binding(&self, bindings: &[crate::GpuBinding]) -> Option<u32> {
         self.slot_map.bindings().find(|&wanted| !bindings.iter().any(|b| b.binding() == wanted))

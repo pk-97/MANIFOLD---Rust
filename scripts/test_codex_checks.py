@@ -15,7 +15,7 @@ import run_ui_flows
 class PlannerTests(unittest.TestCase):
     def test_worktree_safety_checks_are_selected(self):
         repo = Path(__file__).resolve().parents[1]
-        for path in ("scripts/agent-worktree.py", "scripts/test_agent_worktree.py"):
+        for path in ("scripts/agent-worktree.py", "scripts/codex_brokers.py", "scripts/test_agent_worktree.py"):
             checks = codex_checks.tooling_checks(repo, [path])
             self.assertEqual([c["name"] for c in checks], ["scripts/test_agent_worktree.py"])
 
