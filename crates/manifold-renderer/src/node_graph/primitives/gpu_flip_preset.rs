@@ -719,8 +719,10 @@ impl WaterScene {
 /// The insertion body is the same family used by both presets, without a collider.
 pub fn gpu_flip_liquid_body() -> EffectGraphDef {
     let mut body = WaterScene { obstacle: false, ..WaterScene::dam_break(64) }.family_def();
-    body.nodes.iter_mut().find(|node| node.node_id.as_str() == "water_object")
-        .expect("water object").handle = Some(String::new());
+    for (id, handle) in [("water_object", ""), ("domain", "Simulation"), ("initial_column", "Initial Volume")] {
+        body.nodes.iter_mut().find(|node| node.node_id.as_str() == id)
+            .expect("insertion body node").handle = Some(handle.into());
+    }
     body
 }
 
@@ -1633,6 +1635,12 @@ pub(super) mod tests {
         let water = body.nodes.iter_mut().find(|node| node.node_id.as_str() == "water_object").unwrap();
         assert_eq!(water.handle.as_deref(), Some(""), "Add Fluid owns the bare fluid handle");
         water.handle = Some("Water".into());
+        for (id, handle) in [("domain", "Simulation"), ("initial_column", "Initial Volume")] {
+            let node = body.nodes.iter_mut().find(|node| node.node_id.as_str() == id).unwrap();
+            assert_eq!(node.handle.as_deref(), Some(handle));
+            // These handles belong to insertion; the preset recipe leaves them unnamed.
+            node.handle = None;
+        }
         for (def, particles, obstacle) in [
             (render_def(WaterScene::dam_break(64)), false, true),
             (particle_view_def(), true, true),

@@ -616,6 +616,41 @@ mod ownership_tests {
         assert_eq!(domain_type, Some(manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID));
     }
 
+    #[test]
+    fn gpu_flip_obstacle_keeps_fluid_role_with_scene_modifier() {
+        use manifold_core::{NodeId, SceneNodeRef};
+        use manifold_core::scene_modifier_preset::SceneTargetSelection;
+        use manifold_renderer::node_graph::{scene_modifier_authoring, scene_vm::{SceneObjectVm, SceneVm}};
+        let mut def: manifold_core::effect_graph_def::EffectGraphDef = serde_json::from_str(
+            include_str!("../../../../manifold-renderer/assets/generator-presets/WaterDamBreakGpuFlip.json"),
+        ).unwrap();
+        let scene = SceneNodeRef::locate(&def, &NodeId::new("scene")).unwrap();
+        let water = SceneNodeRef::locate(&def, &NodeId::new("water_object")).unwrap();
+        assert_eq!(water.scope.len(), 1);
+        // The performer's modifier picker uses this same scoped object list.
+        assert!(scene_modifier_authoring::scene_modifier_objects(&def, &scene).unwrap().contains(&water));
+        let recipe = serde_json::from_str(include_str!(
+            "../../../../manifold-renderer/assets/scene-modifier-presets/UniformForce.json",
+        )).unwrap();
+        let instance = scene_modifier_authoring::prepare_new_scene_modifier(
+            &def, &recipe, NodeId::new("force"), scene,
+            SceneTargetSelection::Explicit { objects: vec![water] },
+        ).unwrap();
+        def = manifold_core::scene_modifier_edit::insert_scene_modifier(&def, 0, instance).unwrap().graph;
+        assert_eq!(def.scene_modifiers.len(), 1);
+        assert!(manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures(&mut def));
+        let vm = SceneVm::from_def(&def).unwrap();
+        let obstacle = vm.objects.iter().find_map(|object| match object {
+            SceneObjectVm::Known(row) if row.name == "Obstacle" => Some(row),
+            _ => None,
+        }).unwrap();
+        assert!(obstacle.group_node_id.is_some());
+        let roles = fluid_role_rows(&def, obstacle.group_node_id, &fluid_domains(&vm)).unwrap();
+        assert_eq!(roles.len(), 1, "the Fluid Role panel keeps the collider");
+        assert_eq!(roles[0].target_label, "Target: Water");
+        assert!(object_controls(Some(&def), obstacle).contains(&NodeId::new("obstacle_collider")));
+    }
+
     /// The GPU water's panel carries its whitewater switch, amount and
     /// budget under one Whitewater section (BUG-ejcb item 2).
     #[test]

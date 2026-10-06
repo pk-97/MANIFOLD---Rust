@@ -24,10 +24,6 @@ const RENDER_SCENE_TYPE_ID: &str = "node.render_scene";
 /// migration chain; this function deliberately leaves malformed or shared
 /// shapes unchanged.
 pub(super) fn migrate(def: &mut EffectGraphDef) -> bool {
-    let Ok(flat) = manifold_core::flatten::flatten_groups(def) else { return false };
-    if !flat.nodes.iter().any(|node| is_liquid_domain(&node.type_id)) {
-        return false;
-    }
     let mut candidate = def.clone();
     let mut changed = false;
     let mut index = 0;
@@ -251,7 +247,6 @@ fn find_loose_role_obstacle(
     def: &EffectGraphDef,
     skipped: &HashSet<u32>,
 ) -> Option<(u32, u32, u32)> {
-    let flat = manifold_core::flatten::flatten_groups(def).ok()?;
     for role in def
         .nodes
         .iter()
@@ -259,13 +254,25 @@ fn find_loose_role_obstacle(
     {
         let outs: Vec<_> = def.wires.iter().filter(|wire| wire.from_node == role.id).collect();
         let [out] = outs.as_slice() else { continue };
-        // The authored role may enter Water through a group interface.
-        // Recognize its actual solver feed, but group within the authored scope.
-        let fluid_ok = flat.nodes.iter().find(|node| node.node_id == role.node_id).is_some_and(|flat_role| {
-            flat.wires.iter().any(|wire| wire.from_node == flat_role.id
-                && wire.from_port == "role" && wire.to_port.starts_with("role_")
-                && flat.nodes.iter().any(|node| node.id == wire.to_node && is_liquid_domain(&node.type_id)))
-        });
+        // Trace the authored feed through at most one group boundary. Flattening
+        // is unavailable while saved scene modifiers are still unexpanded.
+        let fluid_ok = out.from_port == "role" && def.nodes.iter()
+            .find(|node| node.id == out.to_node)
+            .is_some_and(|target| {
+                if is_liquid_domain(&target.type_id) {
+                    return out.to_port.starts_with("role_");
+                }
+                target.group.as_ref().is_some_and(|group| {
+                    group.wires.iter().any(|wire| {
+                        wire.from_port == out.to_port
+                            && wire.to_port.starts_with("role_")
+                            && group.nodes.iter().any(|node|
+                                node.id == wire.from_node && node.type_id == GROUP_INPUT_TYPE_ID)
+                            && group.nodes.iter().any(|node|
+                                node.id == wire.to_node && is_liquid_domain(&node.type_id))
+                    })
+                })
+            });
         if !fluid_ok {
             continue;
         }

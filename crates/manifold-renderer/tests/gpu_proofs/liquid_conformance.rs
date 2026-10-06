@@ -1438,7 +1438,7 @@ fn with_force_and_impulse(def: &EffectGraphDef, strength: f32) -> (EffectGraphDe
         &recipe,
         NodeId::new("impulse"),
         top("scene"),
-        SceneTargetSelection::Explicit { objects: vec![top("water_object")] },
+        SceneTargetSelection::Explicit { objects: vec![SceneNodeRef::locate(def, &NodeId::new("water_object")).expect("water object in its authored scope")] },
     )
     .expect("the impulse modifier targets the water");
     let def = manifold_core::scene_modifier_edit::insert_scene_modifier(def, 0, instance).unwrap().graph;
