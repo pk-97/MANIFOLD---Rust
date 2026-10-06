@@ -14749,6 +14749,10 @@
           "type": "f32"
         },
         {
+          "name": "sheet_fill_rate",
+          "type": "f32"
+        },
+        {
           "name": "mesh_wall_inset",
           "type": "f32"
         },
@@ -14818,6 +14822,16 @@
             "900"
           ],
           "type": "int"
+        },
+        {
+          "default": "0",
+          "label": "Sheet Fill Rate",
+          "name": "sheet_fill_rate",
+          "range": [
+            "0",
+            "1"
+          ],
+          "type": "float"
         },
         {
           "default": "4",
@@ -15139,6 +15153,11 @@
         },
         {
           "name": "max_iterations",
+          "required": false,
+          "type": "f32"
+        },
+        {
+          "name": "sheet_fill_rate",
           "required": false,
           "type": "f32"
         },
@@ -142581,6 +142600,13 @@
           "name": "Max Iterations"
         },
         {
+          "default": "0",
+          "id": "sheet_fill_rate",
+          "max": "1",
+          "min": "0",
+          "name": "Sheet Fill Rate"
+        },
+        {
           "default": "1",
           "id": "speed",
           "max": "4",
@@ -168497,6 +168523,13 @@
           "max": "900",
           "min": "1",
           "name": "Max Iterations"
+        },
+        {
+          "default": "0",
+          "id": "sheet_fill_rate",
+          "max": "1",
+          "min": "0",
+          "name": "Sheet Fill Rate"
         },
         {
           "default": "1",

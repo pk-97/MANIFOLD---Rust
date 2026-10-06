@@ -1409,6 +1409,20 @@
           "type": "Float"
         },
         "defaultMirrorsNodeParam": true,
+        "defaultValue": 0.0,
+        "id": "sheet_fill_rate",
+        "label": "Sheet Fill Rate",
+        "target": {
+          "kind": "node",
+          "nodeId": "domain",
+          "param": "sheet_fill_rate"
+        }
+      },
+      {
+        "convert": {
+          "type": "Float"
+        },
+        "defaultMirrorsNodeParam": true,
         "defaultValue": 1.0,
         "id": "speed",
         "label": "Speed",
@@ -1568,6 +1582,18 @@
         "name": "Max Iterations",
         "section": "Fluid",
         "wholeNumbers": true
+      },
+      {
+        "defaultValue": 0.0,
+        "formatString": "F2",
+        "id": "sheet_fill_rate",
+        "isToggle": false,
+        "isTrigger": false,
+        "max": 1.0,
+        "min": 0.0,
+        "name": "Sheet Fill Rate",
+        "section": "Fluid",
+        "wholeNumbers": false
       },
       {
         "defaultValue": 1.0,
@@ -2088,6 +2114,12 @@
       "fromPort": "max_iterations",
       "toNode": 6,
       "toPort": "max_iterations"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "sheet_fill_rate",
+      "toNode": 6,
+      "toPort": "sheet_fill_rate"
     },
     {
       "fromNode": 0,
