@@ -1,8 +1,8 @@
 //! Proofs for `node.particle_volume`'s cooperative pass-1 kernel
 //! (PARTICLE_VOLUME_BRICK_GATHER_DESIGN.md section 5 (Oracle and proofs)).
 //! The oracle is the generated kernel on the same inputs. Pass-1 words are
-//! held to Peter's bound (D4 ruling): same class, same sign, within 8 ULP
-//! of the largest lattice coordinate. Storage pass 1 does not write stays bitwise.
+//! bitwise equal to it (D4 ruling: the exact lattice position makes them so);
+//! the absolute and ULP spread is printed for diagnosis.
 
 use super::*;
 
@@ -41,18 +41,6 @@ pub(crate) struct Bound {
     pub violations: usize,
 }
 
-/// D4 ruling: the absolute tolerance, 8 ULP of the largest lattice
-/// coordinate magnitude over `min` and `min + size` on all three axes.
-pub(crate) fn position_tolerance(center: [f32; 3], size: [f32; 3]) -> f32 {
-    let largest = (0..3)
-        .flat_map(|a| {
-            let min = center[a] - 0.5 * size[a];
-            [min.abs(), (min + size[a]).abs()]
-        })
-        .fold(0.0f32, f32::max);
-    8.0 * (largest.next_up() - largest)
-}
-
 thread_local! {
     static VIOLATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -66,9 +54,10 @@ pub(crate) fn finish_bound_checks() {
 
 /// `actual` against `oracle` word by word. Words equal to `untouched` must
 /// be bitwise equal; every other word must be the same class and sign and
-/// within `tolerance`. Violations are reported and counted, not panicked
+/// within `tolerance`, or bitwise equal when it is `None` (D4: steps one
+/// and three are bitwise; the bound is kept for diagnostics). Violations are reported and counted, not panicked
 /// on, so a run reports every case; `finish_bound_checks` fails the test.
-pub(crate) fn assert_within_bound(actual: &[u32], oracle: &[u32], untouched: Option<u32>, tolerance: f32, what: &str) -> Bound {
+pub(crate) fn assert_within_bound(actual: &[u32], oracle: &[u32], untouched: Option<u32>, tolerance: Option<f32>, what: &str) -> Bound {
     assert_eq!(actual.len(), oracle.len());
     let mut bound = Bound { written: 0, max_abs: 0.0, max_ulp: 0, first_over_one: None, violations: 0 };
     let mut first_violation = None;
@@ -83,13 +72,17 @@ pub(crate) fn assert_within_bound(actual: &[u32], oracle: &[u32], untouched: Opt
             continue;
         }
         bound.written += 1;
+        if tolerance.is_none() && a != b {
+            bound.violations += 1;
+            first_violation.get_or_insert_with(|| format!("bits differ, {}", detail()));
+        }
         let Some(ulp) = ordered_ulp(a, b) else {
             bound.violations += 1;
             first_violation.get_or_insert_with(|| format!("class or sign differs, {}", detail()));
             continue;
         };
         let abs = if x.is_finite() { (x - y).abs() } else { 0.0 };
-        if abs > tolerance {
+        if let Some(tolerance) = tolerance.filter(|&t| abs > t) {
             bound.violations += 1;
             first_violation.get_or_insert_with(|| format!("{abs:e} over {tolerance:e}, {}", detail()));
         }
@@ -100,7 +93,7 @@ pub(crate) fn assert_within_bound(actual: &[u32], oracle: &[u32], untouched: Opt
         bound.max_abs = bound.max_abs.max(abs);
     }
     eprintln!(
-        "BOUND {what}: max abs {:e} (tolerance {tolerance:e}), max {} ULP over {} words, first word over 1 ULP {:?}",
+        "BOUND {what}: max abs {:e} (tolerance {tolerance:?}), max {} ULP over {} words, first word over 1 ULP {:?}",
         bound.max_abs, bound.max_ulp, bound.written, bound.first_over_one,
     );
     if let Some(v) = first_violation {
@@ -408,8 +401,7 @@ mod gpu {
         pass1(h, brick, uniforms, i, &a);
         pass1(h, oracle, uniforms, i, &b);
         let words = a.size as usize / 4;
-        let tolerance = position_tolerance([uniforms.center_x, uniforms.center_y, uniforms.center_z], [uniforms.size_x, uniforms.size_y, uniforms.size_z]);
-        assert_within_bound(&read::<u32>(&a, words), &read::<u32>(&b, words), Some(CANARY), tolerance, what).written
+        assert_within_bound(&read::<u32>(&a, words), &read::<u32>(&b, words), Some(CANARY), None, what).written
     }
 
     fn shared<T: bytemuck::Pod>(h: &Harness, values: &[T]) -> GpuBuffer {

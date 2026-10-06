@@ -50,8 +50,12 @@ fn pv_ijk(idx: u32, nodes: vec3<u32>) -> vec3<u32> {
     return vec3<u32>(idx % nodes.x, (idx / nodes.x) % nodes.y, idx / (nodes.x * nodes.y));
 }
 
+// One explicit fused multiply-add, so Fast math has no reassociation to
+// choose and both kernels get the same bits (D4 ruling): the solid clamp
+// is a step function of p, so a few ULP of p can flip a node.
 fn pv_position(ijk: vec3<u32>, f: PvFrame) -> vec3<f32> {
-    return f.lattice_min + vec3<f32>(ijk) * f.size / vec3<f32>(f.nodes - vec3<u32>(1u));
+    let spacing = f.size / vec3<f32>(f.nodes - vec3<u32>(1u));
+    return fma(vec3<f32>(ijk), spacing, f.lattice_min);
 }
 
 struct PvWindow {

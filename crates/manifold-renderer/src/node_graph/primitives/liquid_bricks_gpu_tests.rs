@@ -300,7 +300,7 @@ fn fixture(resolution: u32, cooperative: bool) {
                 &read::<u32>(&sparse_buffer, total),
                 &read::<u32>(&dense_buffer, total),
                 None,
-                crate::node_graph::primitives::particle_volume::brick_tests::position_tolerance(center, size),
+                None,
                 &format!("dam break fixture {resolution}, frame {frame}"),
             );
             continue;

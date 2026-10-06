@@ -50,7 +50,8 @@ fn body(
     let ijk = vec3<u32>(idx % nodes.x, (idx / nodes.x) % nodes.y, idx / (nodes.x * nodes.y));
     let size = vec3<f32>(size_x, size_y, size_z);
     let lattice_min = vec3<f32>(center_x, center_y, center_z) - 0.5 * size;
-    let p = lattice_min + vec3<f32>(ijk) * size / vec3<f32>(nodes - vec3<u32>(1u));
+    // The production position, one explicit fma (D4 ruling).
+    let p = fma(vec3<f32>(ijk), size / vec3<f32>(nodes - vec3<u32>(1u)), lattice_min);
 
     var phi = band;
     let h = size / vec3<f32>(nodes - vec3<u32>(1u));
