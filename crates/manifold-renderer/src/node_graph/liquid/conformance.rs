@@ -38,10 +38,23 @@ pub enum Fixture {
     FloatingBox,
     /// A density-1 box held under the surface.
     SubmergedBox,
+    /// A flat box `density_ratio` times as dense as the liquid, let go 5 cm
+    /// above where it floats in a still pool.
+    FloatingAt { density_ratio: f32 },
+    /// A box `density_ratio` times as dense as the liquid, resting on the
+    /// floor against a wall under a still pool, turned `tilt` radians about
+    /// the wall's horizontal so it stands on one bottom edge.
+    Resting { density_ratio: f32, tilt: f32 },
+    /// [`STACK_HEIGHT`] boxes, each half again as dense as the liquid,
+    /// stacked on the floor under a still pool.
+    Stack,
     /// The Dam Break at resolution [`FACE_GRID_RESOLUTION`] with its face
     /// grid wired into the frame.
     FaceGrid,
 }
+
+/// Boxes in the [`Fixture::Stack`] scene.
+pub const STACK_HEIGHT: u32 = 3;
 
 /// The face grid scene's resolution: the publish path is the same at any
 /// size, and 32 keeps the check cheap.
@@ -56,8 +69,10 @@ pub const FACE_GRID_GPU_FLIP_LAYERS: u32 = 2;
 pub enum Check {
     /// I4: a coupled Box3D world steps once per tick, only through its owner.
     CoupledWorldStepsOnce,
-    /// I5: momentum and energy hold when a box hits the liquid.
-    Collision,
+    /// I5: momentum holds when a box hits the liquid.
+    CollisionMomentum,
+    /// I5: energy never grows when a box hits the liquid.
+    CollisionEnergy,
     /// I5: a floating box settles at its waterline.
     FloatingDraft,
     /// I5: a held box feels the liquid's weight it displaces.
@@ -85,7 +100,22 @@ pub enum Check {
     /// P10 (D5): the frame publishes the faces the solver's grid gives at
     /// its last tick, bit for bit, and holds them while paused.
     FaceGridPublished,
+    /// I20: a light floating box comes to rest at any Sim Rate, and no water
+    /// is removed.
+    FloatingRest,
+    /// I20: a box resting on the floor against a wall stays put, and no
+    /// water is removed.
+    RestingContact,
+    /// I20: a light box resting on the floor under water lifts off and
+    /// floats.
+    LiftOff,
+    /// I20: boxes stacked under water settle without blowing up, and no
+    /// water is removed.
+    SubmergedStack,
 }
+
+/// The floating rest boxes: foam-light, and half the liquid's density.
+const FLOATING_REST: &[Fixture] = &[Fixture::FloatingAt { density_ratio: 0.05 }, Fixture::FloatingAt { density_ratio: 0.5 }];
 
 const BOX_FALLS: &[Fixture] = &[
     Fixture::Collision { density_ratio: 0.1 },
@@ -94,9 +124,10 @@ const BOX_FALLS: &[Fixture] = &[
 ];
 
 impl Check {
-    pub const ALL: [Check; 15] = [
+    pub const ALL: [Check; 20] = [
         Check::CoupledWorldStepsOnce,
-        Check::Collision,
+        Check::CollisionMomentum,
+        Check::CollisionEnergy,
         Check::FloatingDraft,
         Check::HydrostaticLift,
         Check::FreeFlight,
@@ -110,6 +141,10 @@ impl Check {
         Check::HalfSpeed,
         Check::Reset,
         Check::FaceGridPublished,
+        Check::FloatingRest,
+        Check::RestingContact,
+        Check::LiftOff,
+        Check::SubmergedStack,
     ];
 
     /// Whether the check needs a Box3D body in the liquid.
@@ -117,11 +152,16 @@ impl Check {
         matches!(
             self,
             Check::CoupledWorldStepsOnce
-                | Check::Collision
+                | Check::CollisionMomentum
+                | Check::CollisionEnergy
                 | Check::FloatingDraft
                 | Check::HydrostaticLift
                 | Check::FreeFlight
                 | Check::CoupledLiveFrameRate
+                | Check::FloatingRest
+                | Check::RestingContact
+                | Check::LiftOff
+                | Check::SubmergedStack
         )
     }
 
@@ -131,7 +171,13 @@ impl Check {
     pub fn fixtures(self, coupled: bool) -> &'static [Fixture] {
         match self {
             Check::CoupledWorldStepsOnce | Check::FloatingDraft => &[Fixture::FloatingBox],
-            Check::Collision => BOX_FALLS,
+            Check::CollisionMomentum | Check::CollisionEnergy => BOX_FALLS,
+            Check::FloatingRest => FLOATING_REST,
+            Check::RestingContact => &[Fixture::Resting { density_ratio: 2.0, tilt: 0.0 }],
+            // On an edge, so water reaches under it: a box flat on the
+            // floor has no water cell beneath it and feels no lift.
+            Check::LiftOff => &[Fixture::Resting { density_ratio: 0.3, tilt: 0.3 }],
+            Check::SubmergedStack => &[Fixture::Stack],
             Check::HydrostaticLift => &[Fixture::SubmergedBox],
             Check::FreeFlight => &[Fixture::Collision { density_ratio: 1.0 }],
             Check::PauseDiscardsImpulses => &[Fixture::StillPool],
@@ -144,7 +190,17 @@ impl Check {
 
     /// Whether the check reads the row's [`LiquidSolverRow::totals`].
     pub fn needs_totals(self) -> bool {
-        matches!(self, Check::Collision | Check::ExportFrameRateIndependent | Check::NonfiniteTickNotPublished)
+        matches!(
+            self,
+            Check::CollisionMomentum
+                | Check::CollisionEnergy
+                | Check::ExportFrameRateIndependent
+                | Check::NonfiniteTickNotPublished
+                | Check::FloatingRest
+                | Check::RestingContact
+                | Check::LiftOff
+                | Check::SubmergedStack
+        )
     }
 }
 
@@ -359,7 +415,12 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
         faces: None,
         exempt: &[
             (Check::CoupledWorldStepsOnce, FLIP_COUPLES_NATIVELY),
-            (Check::Collision, FLIP_COUPLES_NATIVELY),
+            (Check::CollisionMomentum, FLIP_COUPLES_NATIVELY),
+            (Check::CollisionEnergy, FLIP_COUPLES_NATIVELY),
+            (Check::FloatingRest, FLIP_COUPLES_NATIVELY),
+            (Check::RestingContact, FLIP_COUPLES_NATIVELY),
+            (Check::LiftOff, FLIP_COUPLES_NATIVELY),
+            (Check::SubmergedStack, FLIP_COUPLES_NATIVELY),
             (Check::FloatingDraft, FLIP_COUPLES_NATIVELY),
             (Check::HydrostaticLift, FLIP_COUPLES_NATIVELY),
             (Check::FreeFlight, FLIP_COUPLES_NATIVELY),
@@ -445,7 +506,7 @@ pub const LIQUID_SOLVERS: &[LiquidSolverRow] = &[
             // A gather: the published faces are the solver's projected faces.
             ulps: (0, ""),
         }),
-        exempt: &[(Check::Collision, GPU_FLIP_WALLS_IN_SOLVE)],
+        exempt: &[(Check::CollisionMomentum, GPU_FLIP_WALLS_IN_SOLVE)],
     },
 ];
 
@@ -470,10 +531,15 @@ fn gpu_flip_fixture(fixture: Fixture) -> Option<EffectGraphDef> {
         Fixture::DamBreak => Some(bundled(SHIPPED_PRESET)),
         Fixture::StillPool => Some(render_def(WaterScene::still_pool(64))),
         Fixture::FaceGrid => Some(render_def(WaterScene::dam_break(FACE_GRID_RESOLUTION as usize).with_faces())),
-        Fixture::Collision { .. } | Fixture::FloatingBox | Fixture::SubmergedBox => {
+        Fixture::Collision { .. }
+        | Fixture::FloatingBox
+        | Fixture::SubmergedBox
+        | Fixture::FloatingAt { .. }
+        | Fixture::Resting { .. }
+        | Fixture::Stack => {
             let scene = BoxScene::of(fixture)?;
             let water = WaterScene::pool(scene.resolution as usize, f64::from(scene.domain_size), f64::from(scene.fill));
-            Some(scene.set(with_box(render_def(water)), GPU_FLIP_DOMAIN_TYPE_ID))
+            Some(scene.stacked(fixture, scene.set(with_box(render_def(water)), GPU_FLIP_DOMAIN_TYPE_ID)))
         }
     }
 }
@@ -663,6 +729,13 @@ pub struct BoxScene {
 
 const G: f32 = 9.81;
 
+/// The rest proofs' tank edge, pool depth and box edge, metres.
+const REST_DOMAIN: f32 = 2.4;
+const REST_FILL: f32 = 1.0;
+const REST_EDGE: f32 = 0.4;
+/// The stack's box edge: three stand 0.75 m tall under the 1 m pool.
+const STACK_EDGE: f32 = 0.25;
+
 /// Every fixture's liquid is water, kg/m³.
 pub const FIXTURE_DENSITY: f32 = WATER_DENSITY;
 
@@ -705,7 +778,109 @@ impl BoxScene {
                 edge: 0.2,
                 mass: density_ratio * FIXTURE_DENSITY * 0.2f32.powi(3),
             }),
+            Fixture::FloatingAt { density_ratio } => {
+                let (fill, edge) = (REST_FILL, REST_EDGE);
+                // Flat, its bottom density_ratio · edge under the surface.
+                let floating = fill + edge * (0.5 - density_ratio);
+                Some(Self {
+                    centre: [0.3, floating + 0.05, -0.2],
+                    rotation: [0.0; 3],
+                    mass: density_ratio * FIXTURE_DENSITY * edge.powi(3),
+                    ..Self::rest_tank()
+                })
+            }
+            Fixture::Resting { density_ratio, tilt } => {
+                let edge = REST_EDGE;
+                let half = 0.5 * REST_DOMAIN;
+                // Half its extent along x and y once turned about z.
+                let reach = 0.5 * edge * (tilt.cos() + tilt.sin());
+                Some(Self {
+                    // On the floor and against the −x wall, a hair off each.
+                    centre: [-half + reach + 5e-4, reach + 5e-4, 0.3],
+                    rotation: [0.0, 0.0, tilt],
+                    mass: density_ratio * FIXTURE_DENSITY * edge.powi(3),
+                    ..Self::rest_tank()
+                })
+            }
+            Fixture::Stack => {
+                let edge = STACK_EDGE;
+                Some(Self {
+                    centre: [0.0, 0.5 * edge + 5e-4, 0.0],
+                    rotation: [0.0; 3],
+                    edge,
+                    mass: 1.5 * FIXTURE_DENSITY * edge.powi(3),
+                    ..Self::rest_tank()
+                })
+            }
             Fixture::StillPool | Fixture::DamBreak | Fixture::FaceGrid => None,
+        }
+    }
+
+    /// `def` with the [`Fixture::Stack`] scene's upper boxes on its box, a
+    /// millimetre apart; any other fixture's `def` as it is. Each copies the
+    /// box's start, body, mesh and object, takes the next body and pose ports
+    /// of the box's world and the scene's next object slot, and shares its
+    /// material.
+    fn stacked(&self, fixture: Fixture, mut def: EffectGraphDef) -> EffectGraphDef {
+        if fixture != Fixture::Stack {
+            return def;
+        }
+        let id_of = |def: &EffectGraphDef, name: &str| {
+            def.nodes.iter().find(|node| node.node_id.as_str() == name).unwrap_or_else(|| panic!("no node {name}")).id
+        };
+        let (world, material, render) = (id_of(&def, "box_world"), id_of(&def, "box_material"), id_of(&def, "scene"));
+        for level in 1..STACK_HEIGHT {
+            let next = def.nodes.iter().map(|node| node.id).max().expect("a scene has nodes") + 1;
+            let mut ids = [0u32; 4];
+            for (i, name) in ["box_start", "box_body", "box_mesh", "box_object"].into_iter().enumerate() {
+                let source = def.nodes.iter().find(|node| node.node_id.as_str() == name).expect("the box").clone();
+                ids[i] = next + i as u32;
+                let handle = source.handle.as_ref().map(|handle| format!("{handle} {}", level + 1));
+                def.nodes.push(EffectGraphNode { id: ids[i], node_id: NodeId::new(format!("{name}_{level}")), handle, ..source });
+            }
+            let [start, body, mesh, object] = ids;
+            let slot = match def.nodes.iter().find(|node| node.id == render).and_then(|node| node.params.get("objects")) {
+                Some(SerializedParamValue::Float { value }) => *value as u32,
+                Some(SerializedParamValue::Int { value }) => *value as u32,
+                other => panic!("the render scene has no object count: {other:?}"),
+            };
+            let wire = |from_node: u32, from_port: String, to_node: u32, to_port: String| EffectGraphWire {
+                from_node,
+                from_port,
+                to_node,
+                to_port,
+            };
+            def.wires.extend([
+                wire(start, "transform".into(), body, "transform".into()),
+                wire(body, "body".into(), world, format!("body_{level}")),
+                wire(body, "shape".into(), mesh, "shape".into()),
+                wire(mesh, "vertices".into(), object, "vertices".into()),
+                wire(material, "out".into(), object, "material".into()),
+                wire(world, format!("pose_{level}"), object, "transform".into()),
+                wire(object, "object".into(), render, format!("object_{slot}")),
+            ]);
+            let scene = def.nodes.iter_mut().find(|node| node.id == render).expect("the render scene");
+            scene.params.insert("objects".into(), SerializedParamValue::Float { value: (slot + 1) as f32 });
+            let y = self.centre[1] + level as f32 * (self.edge + 1e-3);
+            set_node_param(&mut def, &format!("box_start_{level}"), "pos_y", SerializedParamValue::Float { value: y });
+        }
+        def
+    }
+
+    /// The rest proofs' tank: the FLIP Fluids engine's coupled tank size and
+    /// cell (`gpu_flip_engine_tank`), where GPU FLIP is proven against the
+    /// engine, with a shallower pool.
+    fn rest_tank() -> Self {
+        Self {
+            domain_size: REST_DOMAIN,
+            resolution: 48,
+            fill: REST_FILL,
+            liquid_gravity: -G,
+            open_faces: false,
+            centre: [0.0; 3],
+            rotation: [0.0; 3],
+            edge: REST_EDGE,
+            mass: 0.0,
         }
     }
 
@@ -749,7 +924,7 @@ impl BoxScene {
 
 fn matter_fixture(fixture: Fixture) -> Option<EffectGraphDef> {
     Some(match BoxScene::of(fixture) {
-        Some(scene) => scene.apply("WaterFloatingBoxMatter", MATTER_DOMAIN_TYPE_ID),
+        Some(scene) => scene.stacked(fixture, scene.apply("WaterFloatingBoxMatter", MATTER_DOMAIN_TYPE_ID)),
         None if fixture == Fixture::StillPool => bundled("WaterStillPoolMatter"),
         None if fixture == Fixture::FaceGrid => {
             let mut def = matter_dam_break_faces(None, false);
@@ -769,7 +944,13 @@ fn flip_fixture(fixture: Fixture) -> Option<EffectGraphDef> {
             Some(def)
         }
         Fixture::DamBreak => Some(bundled("WaterDamBreak")),
-        Fixture::Collision { .. } | Fixture::FloatingBox | Fixture::SubmergedBox | Fixture::FaceGrid => None,
+        Fixture::Collision { .. }
+        | Fixture::FloatingBox
+        | Fixture::SubmergedBox
+        | Fixture::FloatingAt { .. }
+        | Fixture::Resting { .. }
+        | Fixture::Stack
+        | Fixture::FaceGrid => None,
     }
 }
 
