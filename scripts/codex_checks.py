@@ -35,7 +35,7 @@ def flow_filters_for_paths(repo, paths):
 def tooling_checks(repo, paths):
     """Shared worker/landing selection; does not execute tests."""
     tooling = {
-        "scripts/test_agent_worktree.py": {"scripts/agent-worktree.py", "scripts/test_agent_worktree.py"},
+        "scripts/test_agent_worktree.py": {"scripts/agent-worktree.py", "scripts/codex_brokers.py", "scripts/test_agent_worktree.py"},
         "scripts/test_rt_noise_gate.py": {"scripts/rt_noise_gate.py", "scripts/test_rt_noise_gate.py", "scripts/rt_noise_baseline.json", "scripts/trunk_health.py"},
         "scripts/test_codex_checks.py": {"scripts/codex_checks.py", "scripts/test_codex_checks.py", "scripts/landing_gate.py", "scripts/run_ui_flows.py", "scripts/gpu_proofs_gate.py", "scripts/gpu_scope.py", "scripts/ui-flows/manifest.json"},
         "scripts/test_landing_gate.py": {"scripts/landing_gate.py", "scripts/gpu_scope.py", "scripts/cpu_scope.py", "scripts/diff_scope.py", "scripts/land_branch.py", "scripts/test_landing_gate.py", "scripts/trunk_health.py"},

@@ -16,6 +16,7 @@ import sys
 import tempfile
 import time
 import textwrap
+import threading
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
@@ -629,9 +630,239 @@ def test_reclaim_refuses_a_live_process(repo):
     check("live refusal is reported", "live process" in out.getvalue(), out.getvalue())
 
 
+def test_scrub_continues_past_a_victim_that_frees_nothing(repo):
+    """One unmarked target freed nothing and ended the pass, so the warm caches
+    behind it stayed on disk (2026-10-06: pool left at 117G of a 40G goal)."""
+    empty = add_slot(repo, "slot-0", "lane/empty")
+    (empty / "target" / "debug").mkdir(parents=True)
+    (empty / "target" / "debug" / "stray").write_bytes(b"\0" * 2**20)
+    old = time.time() - 3600
+    for path in (empty / "target", empty / "target" / "debug"):
+        os.utime(path, (old, old))
+    warm = add_slot(repo, "slot-1", "lane/warm")
+    exe = fake_target(warm)
+    with patch.object(aw, "SCRUB_TO_GB", 0), \
+            patch.object(aw, "slot_has_live_session", return_value=False), \
+            patch.object(aw, "target_live_status", return_value=False), \
+            redirect_stdout(io.StringIO()) as out:
+        aw.cmd_scrub(SimpleNamespace())
+    check("scrub reaches the cache behind a no-op victim", not exe.exists(), out.getvalue())
+
+
 TESTS += [test_scrub_frees_an_idle_slot_over_its_cap,
           test_reclaim_touches_only_landed_clean_idle_slots,
-          test_reclaim_refuses_a_live_process]
+          test_reclaim_refuses_a_live_process,
+          test_scrub_continues_past_a_victim_that_frees_nothing]
+
+
+# ------------------------------------------------- idle Codex plugin brokers
+
+cb = sys.modules["codex_brokers"]
+
+# Answers the plugin's broker/shutdown request the way app-server-broker.mjs
+# does: reply, unlink socket and pid file, exit.
+FAKE_BROKER = textwrap.dedent("""
+    import json, os, socket, sys
+    sock_path, pid_file = sys.argv[1], sys.argv[2]
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(sock_path)
+    server.listen(1)
+    open(pid_file, "w").write(str(os.getpid()))
+    print("READY", flush=True)
+    while True:
+        conn, _ = server.accept()
+        line = conn.makefile().readline()
+        if json.loads(line).get("method") == "broker/shutdown":
+            conn.sendall(b'{"id":1,"result":{}}\\n')
+            conn.close()
+            server.close()
+            os.unlink(sock_path)
+            os.unlink(pid_file)
+            sys.exit(0)
+        conn.close()
+""")
+
+
+class Brokers:
+    """Fake plugin state root, Codex sessions dir, and broker processes whose
+    cwd is a slot — the exact shape that pinned the live ring."""
+
+    def __init__(self, repo):
+        self.root = repo.parent / "plugin-state"
+        self.sessions = repo.parent / "codex-sessions"
+        self.sessions.mkdir()
+        self.script = repo.parent / "fake_broker.py"
+        self.script.write_text(FAKE_BROKER)
+        self.procs = []
+
+    def patches(self):
+        return (patch.object(cb, "state_roots", return_value=[self.root]),
+                patch.object(cb, "CODEX_SESSIONS", self.sessions))
+
+    def start(self, wt, jobs=(), answer=True):
+        state = self.root / cb.state_dir_name(wt)
+        state.mkdir(parents=True)
+        # AF_UNIX paths cap at 104 bytes on macOS; temp dirs run long.
+        session = Path(tempfile.mkdtemp(prefix="cxb-", dir="/tmp"))
+        sock, pid_file, log = session / "broker.sock", session / "broker.pid", session / "broker.log"
+        log.write_text("")
+        argv = ([sys.executable, str(self.script), str(sock), str(pid_file)] if answer
+                else ["sleep", "60"])
+        proc = subprocess.Popen(argv, cwd=str(wt), stdout=subprocess.PIPE, text=True)
+        self.procs.append(proc)
+        if answer and proc.stdout.readline().strip() != "READY":
+            raise RuntimeError("fake broker failed to start")
+        # The real broker is detached and reaped by launchd; reap ours so an
+        # exited one never reads as alive.
+        threading.Thread(target=proc.wait, daemon=True).start()
+        (state / "broker.json").write_text(json.dumps({
+            "endpoint": f"unix:{sock}", "pidFile": str(pid_file), "logFile": str(log),
+            "sessionDir": str(session), "pid": proc.pid}))
+        self.set_jobs(wt, jobs)
+        return proc, state, session
+
+    def set_jobs(self, wt, jobs):
+        (self.root / cb.state_dir_name(wt) / "state.json").write_text(
+            json.dumps({"version": 1, "jobs": list(jobs)}))
+
+    def rollout(self, thread, age_s):
+        path = self.sessions / "2026" / "10" / "06" / f"rollout-2026-10-06T00-00-00-{thread}.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}\n")
+        stamp = time.time() - age_s
+        os.utime(path, (stamp, stamp))
+
+    def stop_all(self):
+        for proc in self.procs:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+
+
+def completed_job(thread="thread-a"):
+    return {"id": "task-a", "status": "completed", "pid": None, "threadId": thread,
+            "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())}
+
+
+def wait_gone(proc, seconds=5.0):
+    deadline = time.time() + seconds
+    while proc.poll() is None and time.time() < deadline:
+        time.sleep(0.05)
+    return proc.poll() is not None
+
+
+def test_state_dir_matches_the_plugin_layout(repo):
+    """The plugin hashes the realpath and slugs the unresolved basename."""
+    real = repo.parent / "real parent"
+    (real / "My Slot!").mkdir(parents=True)
+    link = repo.parent / "link"
+    link.symlink_to(real)
+    import hashlib
+    expected = "My-Slot-" + hashlib.sha256(str((real / "My Slot!").resolve()).encode()).hexdigest()[:16]
+    check("state dir name follows the plugin", cb.state_dir_name(link / "My Slot!") == expected,
+          cb.state_dir_name(link / "My Slot!"))
+
+
+def test_idle_codex_broker_no_longer_pins_a_slot(repo):
+    """The live-ring failure: every slot an Astra job ran in kept a broker whose
+    cwd was the slot, so acquire skipped them all and the pool read full."""
+    wt = add_slot(repo, "slot-0", "lane/done")
+    brokers = Brokers(repo)
+    try:
+        brokers.rollout("thread-a", age_s=3600)
+        proc, state, session = brokers.start(wt, jobs=[completed_job()])
+        check("an idle broker reads as a live session", aw.slot_has_live_session(wt))
+        roots, sessions = brokers.patches()
+        out = io.StringIO()
+        with roots, sessions, patch.object(aw, "MAX_SLOTS", 1), \
+                redirect_stdout(out), redirect_stderr(out):
+            try:
+                aw.cmd_acquire(acquire_args("lane/next"))
+            except SystemExit as e:
+                out.write(f"exit {e.code}")
+        text = out.getvalue()
+        check("acquire stops the idle broker", "STOPPED broker" in text, text)
+        check("acquire reuses the slot", "SLOT:     slot-0" in text, text)
+        check("broker process exited", wait_gone(proc), text)
+        check("broker record and session files cleared",
+              not (state / "broker.json").exists() and not session.exists(), text)
+        check("job history kept", (state / "state.json").exists())
+    finally:
+        brokers.stop_all()
+
+
+def test_busy_codex_broker_is_left_alone(repo):
+    wt = add_slot(repo, "slot-0", "lane/busy")
+    brokers = Brokers(repo)
+    try:
+        running = dict(completed_job(), status="running", pid=os.getpid())
+        proc, state, _ = brokers.start(wt, jobs=[running])
+        roots, sessions = brokers.patches()
+        with roots, sessions:
+            lines = cb.stop_idle(wt)
+            check("running job keeps its broker", proc.poll() is None and "is running" in lines[0], lines)
+
+            brokers.set_jobs(wt, [dict(running, status="queued", pid=None)])
+            lines = cb.stop_idle(wt)
+            check("queued job keeps its broker", proc.poll() is None and "is queued" in lines[0], lines)
+
+            brokers.set_jobs(wt, [completed_job()])
+            brokers.rollout("thread-a", age_s=5)
+            lines = cb.stop_idle(wt)
+            check("completed job still writing its rollout keeps its broker",
+                  proc.poll() is None and "rollout" in lines[0], lines)
+
+            brokers.rollout("thread-a", age_s=3600)
+            lines = cb.stop_idle(wt)
+            check("quiet completed job lets the broker stop",
+                  lines == [f"STOPPED broker pid {proc.pid}"] and wait_gone(proc), lines)
+    finally:
+        brokers.stop_all()
+
+
+def test_leased_slot_keeps_its_broker_until_release(repo):
+    wt = add_slot(repo, "slot-0", "lane/leased")
+    write_lease(wt, holder_pid=os.getpid())
+    brokers = Brokers(repo)
+    try:
+        proc, _, _ = brokers.start(wt, jobs=[completed_job()])
+        roots, sessions = brokers.patches()
+        with roots, sessions, patch.object(aw, "target_live_status", return_value=False):
+            with redirect_stdout(io.StringIO()) as out:
+                aw.cmd_scrub(SimpleNamespace())
+            check("scrub leaves a leased slot's broker", proc.poll() is None, out.getvalue())
+            with redirect_stdout(io.StringIO()) as out:
+                aw.cmd_release(SimpleNamespace(slot="slot-0"))
+            check("release stops it", "STOPPED broker" in out.getvalue() and wait_gone(proc), out.getvalue())
+    finally:
+        brokers.stop_all()
+
+
+def test_unanswering_or_dead_broker_is_never_signalled(repo):
+    wt = add_slot(repo, "slot-0", "lane/odd")
+    brokers = Brokers(repo)
+    try:
+        proc, state, _ = brokers.start(wt, jobs=[completed_job()], answer=False)
+        roots, sessions = brokers.patches()
+        with roots, sessions:
+            lines = cb.stop_idle(wt)
+            check("a broker that never answers is kept, not killed",
+                  proc.poll() is None and "did not answer" in lines[0], lines)
+            check("its record is kept", (state / "broker.json").exists())
+            proc.kill()
+            wait_gone(proc)
+            lines = cb.stop_idle(wt)
+            check("a dead broker's record is cleared",
+                  "CLEARED stale" in lines[0] and not (state / "broker.json").exists(), lines)
+    finally:
+        brokers.stop_all()
+
+
+TESTS += [test_state_dir_matches_the_plugin_layout,
+          test_idle_codex_broker_no_longer_pins_a_slot,
+          test_busy_codex_broker_is_left_alone,
+          test_leased_slot_keeps_its_broker_until_release,
+          test_unanswering_or_dead_broker_is_never_signalled]
 
 
 def main():
