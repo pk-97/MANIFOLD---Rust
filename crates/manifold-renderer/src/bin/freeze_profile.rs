@@ -1339,6 +1339,7 @@ fn attribute_def(
         dispatches: u64,
     }
     let mut per_step: BTreeMap<usize, Acc> = BTreeMap::new();
+    let mut by_label: BTreeMap<String, f64> = BTreeMap::new();
     let mut total_ms = 0.0_f64;
     let mut unattributed_ms = 0.0_f64;
     let mut untagged_ms = 0.0_f64;
@@ -1364,7 +1365,10 @@ fn attribute_def(
         unattributed_ms += profile.total_ms - profile.attributed_ms();
         overflow += profile.overflow;
         for span in &profile.spans {
-            match span.tag.strip_prefix('s').and_then(|s| s.parse::<usize>().ok()) {
+            *by_label.entry(span.label.clone()).or_default() += span.millis;
+            // The executor tags `"{scope}:s{step_idx}"`.
+            let step = span.tag.rsplit(':').next().and_then(|t| t.strip_prefix('s')).and_then(|s| s.parse::<usize>().ok());
+            match step {
                 Some(idx) => {
                     let acc = per_step.entry(idx).or_default();
                     acc.gpu_ms += span.millis;
@@ -1433,6 +1437,13 @@ fn attribute_def(
     for (ty, ms) in rolled.iter().take(8) {
         let pct = if grand_gpu > 0.0 { ms / grand_gpu * 100.0 } else { 0.0 };
         println!("    {:<38} {:>9.4} ms {:>5.1}%", ty, ms / frames, pct);
+    }
+    // The passes inside a step (render_scene's depth, shading, velocity…).
+    let mut labels: Vec<(String, f64)> = by_label.into_iter().collect();
+    labels.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    println!("    --- by pass label ---");
+    for (label, ms) in labels.iter().take(16) {
+        println!("    {:<52} {:>9.4} ms", label, ms / frames);
     }
     println!(
         "    untagged (outside steps): {:.4} ms   unattributed (MPS/uncovered): {:.4} ms\n",

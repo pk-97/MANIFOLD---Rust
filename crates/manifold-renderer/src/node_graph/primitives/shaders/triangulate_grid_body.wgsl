@@ -1,7 +1,6 @@
 // node.triangulate_grid — fusable BUFFER body (freeze section 12, buffer domain),
 // GATHER. Convert an NxM positions grid (Array<MeshVertex>) into a triangle-list
-// of (N-1)*(M-1)*6 vertices with finite-difference normals. Matches
-// triangulate_grid.wgsl bit-for-bit.
+// of (N-1)*(M-1)*6 vertices with finite-difference normals.
 //
 // ABI (buffer standalone codegen): `in` is a BUFFER GATHER input — the output
 // vertex reads multiple grid cells (the quad corner + the 4 normal-difference
@@ -61,11 +60,8 @@ fn body(idx: u32, count: u32, src_cols: i32, src_rows: i32) -> Element {
     let qx = quad_idx % quads_x;
     let qy = quad_idx / quads_x;
 
-    // BUG-120: triangle layout, CCW-from-+Y — see `triangulate_grid.wgsl`'s
-    // twin edit for the winding derivation. Corners 1↔2 and 4↔5 swapped
-    // from the un-fixed 0:(0,0) 1:(1,0) 2:(0,1) 3:(0,1) 4:(1,0) 5:(1,1)
-    // layout, which wound CW from above and disagreed with the +Y vertex
-    // normal `tg_compute_normal` computes for the same triangle.
+    // BUG-120: triangles wind CCW seen from +Y, agreeing with the +Y normal
+    // `tg_compute_normal` gives a flat grid (row +1 along +z, col +1 along +x).
     var dx: u32 = 0u;
     var dy: u32 = 0u;
     switch corner {

@@ -90,7 +90,11 @@ pub(crate) fn load_hdri(path: &Path) -> Result<(u32, u32, Vec<u8>), String> {
     }
     let raw = rgb.into_raw();
     let mut out = Vec::with_capacity(raw.len() / 3 * 4 * 2);
-    for px in raw.chunks_exact(3) {
+    // An equirect file stores the zenith in its first row; the renderer's
+    // env convention (`pbr_equirect_uv`: v = elevation/π + 0.5) puts the
+    // nadir at texture row 0. Rows go in bottom first so up stays up.
+    let row_len = w as usize * 3;
+    for px in raw.chunks_exact(row_len).rev().flat_map(|row| row.chunks_exact(3)) {
         out.extend_from_slice(&f16::from_f32(px[0]).to_le_bytes());
         out.extend_from_slice(&f16::from_f32(px[1]).to_le_bytes());
         out.extend_from_slice(&f16::from_f32(px[2]).to_le_bytes());
@@ -518,6 +522,27 @@ mod tests {
         assert!((b - 4.0).abs() < 0.01, "b={b}");
         assert_eq!(a, 1.0, "alpha must be forced to 1.0 — EXR carries none");
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The file's top row (the zenith) lands where `pbr_equirect_uv` looks
+    /// for straight up: the last texture row. A sky-over-ground file must not
+    /// light a scene from the ground.
+    #[test]
+    fn decode_puts_the_zenith_where_the_env_lookup_reads_up() {
+        let dir = std::env::temp_dir().join(format!("manifold-hdri-orient-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("sky_over_ground.exr");
+        let (w, h) = (8u32, 4u32);
+        let buf: image::Rgb32FImage =
+            image::ImageBuffer::from_fn(w, h, |_, y| if y < h / 2 { image::Rgb([3.0, 3.0, 3.0]) } else { image::Rgb([0.25, 0.25, 0.25]) });
+        image::DynamicImage::ImageRgb32F(buf).save_with_format(&path, image::ImageFormat::OpenExr).unwrap();
+
+        let (_, _, bytes) = load_hdri(&path).unwrap();
+        let red = |row: u32| f16::from_le_bytes([bytes[(row * w * 8) as usize], bytes[(row * w * 8) as usize + 1]]).to_f32();
+        // v = (row + 0.5) / h; elevation = (v − 0.5)·π, so row 0 looks down.
+        assert_eq!(red(0), 0.25, "texture row 0 is the nadir: the file's ground");
+        assert_eq!(red(h - 1), 3.0, "the last texture row is the zenith: the file's sky");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

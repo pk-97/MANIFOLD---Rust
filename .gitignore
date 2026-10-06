@@ -70,6 +70,10 @@ tests/fixtures/gltf/*.glb
 tests/fixtures/gltf/*.fbx
 tests/fixtures/gltf/drogon__game_of_thrones_dragon/
 
+# Ocean Cliff preset assets (Poly Haven CC0, OCEAN_SURFACE_DESIGN.md section 8).
+tests/fixtures/gltf/coastal_cliff_02/
+tests/fixtures/hdri/umhlanga_sunrise_4k.exr
+
 # Beads / Dolt files (added by bd init)
 .dolt/
 *.db

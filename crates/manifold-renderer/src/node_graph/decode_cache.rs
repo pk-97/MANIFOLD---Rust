@@ -37,6 +37,9 @@ const CACHE_VERSION: u32 = 1;
 /// Version 3 binds decoded vertices to primary and resolved buffer contents.
 /// Separate keys let older app processes keep their own compatible cache.
 const MESH_CACHE_VERSION: u32 = 3;
+/// Version 2 stores rows nadir first (the renderer's env convention), so a
+/// decode cached upside down by version 1 is never served again.
+const HDRI_CACHE_VERSION: u32 = 2;
 
 /// Magic header: "MANIFOLD DECODE CACHE" shortened to four bytes.
 const MAGIC: &[u8; 4] = b"MDC1";
@@ -312,6 +315,9 @@ fn key_hash(namespace: &str, file_hash: &[u8; 32], extra: &[u8]) -> String {
     hasher.update(namespace.as_bytes());
     if namespace == "gltf_mesh" {
         hasher.update(MESH_CACHE_VERSION.to_le_bytes());
+    }
+    if namespace == "hdri" {
+        hasher.update(HDRI_CACHE_VERSION.to_le_bytes());
     }
     hasher.update(file_hash);
     hasher.update(extra);
@@ -1139,6 +1145,15 @@ mod tests {
         assert_eq!(b1, b2);
         assert_eq!(hdri_hits(), 1, "second decode must hit cache");
         assert_eq!(hdri_misses(), 1, "first decode must miss");
+    }
+
+    #[test]
+    fn hdri_key_never_matches_a_version_one_upside_down_entry() {
+        let file_hash = [7u8; 32];
+        let mut v1 = Sha256::new();
+        v1.update(b"hdri");
+        v1.update(file_hash);
+        assert_ne!(key_hash("hdri", &file_hash, &[]), hex(&v1.finalize()));
     }
 
     #[test]

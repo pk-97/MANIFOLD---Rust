@@ -125,6 +125,20 @@ pub const CASES: &[TextureAbiCase] = &[
         aliases: &[],
     },
     TextureAbiCase {
+        source: "camera_sky.rs",
+        rust_struct: "CameraSkyUniforms",
+        type_id: "node.camera_sky",
+        shader_struct: "Params",
+        aliases: &[],
+    },
+    TextureAbiCase {
+        source: "sea_horizon_env.rs",
+        rust_struct: "SeaHorizonUniforms",
+        type_id: "node.sea_horizon_env",
+        shader_struct: "Params",
+        aliases: &[],
+    },
+    TextureAbiCase {
         source: "coc_from_depth.rs",
         rust_struct: "CocFromDepthUniforms",
         type_id: "node.coc_from_depth",

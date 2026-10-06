@@ -191,9 +191,13 @@ fn dispatch_tail_census_is_stable() {
     // whitewater_emitter_velocity, whitewater_obstacle_source, whitewater_influence and dust_potential.
     // BUG-g75v.7 adds upwind_distance, a buffer stencil atom; particle blending
     // pass 1 adds interpolation, solid projection and array mix (buffer atoms).
-    assert_eq!(total, 239, "standalone atom census drifted");
+    // The ocean (docs/OCEAN_SURFACE_DESIGN.md) adds ocean_spectrum,
+    // projected_grid, ocean_displace and cut_out_box (buffer atoms), over
+    // (texture, manual), and camera_sky and sea_horizon_env (texture,
+    // canonical).
+    assert_eq!(total, 246, "standalone atom census drifted");
     assert_eq!(
-        qualifying, 93,
+        qualifying, 95,
         "canonical texture-path population drifted"
     );
 }
