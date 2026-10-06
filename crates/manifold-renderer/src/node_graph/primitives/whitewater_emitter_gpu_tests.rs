@@ -931,7 +931,7 @@ fn whitewater_dust_step_publishes_a_distinct_population() {
             particles: &particles.1,
             solid: &solid.1,
             obstacle_source: Some(&source.1),
-            faces: [&f[0].1, &f[1].1, &f[2].1],
+            faces: super::whitewater_step::FaceSource::Axes([&f[0].1, &f[1].1, &f[2].1]),
             level_set: &phi.1,
             distance: Some(&phi.1),
         };

@@ -9634,10 +9634,7 @@
         "mac faces"
       ],
       "category": "Particles 3D",
-      "examples": [
-        "WaterDamBreakGpuFlip",
-        "WaterDamBreakParticles"
-      ],
+      "examples": [],
       "fusion": "pointwise",
       "inputs": [
         {
@@ -49884,18 +49881,23 @@
           "type": "f32"
         },
         {
+          "name": "faces",
+          "required": false,
+          "type": "Array"
+        },
+        {
           "name": "face_u",
-          "required": true,
+          "required": false,
           "type": "Array"
         },
         {
           "name": "face_v",
-          "required": true,
+          "required": false,
           "type": "Array"
         },
         {
           "name": "face_w",
-          "required": true,
+          "required": false,
           "type": "Array"
         },
         {

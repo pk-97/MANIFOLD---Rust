@@ -109,6 +109,10 @@ fn whitewater_extents_at_64() {
     let particles = u64::from(PARTICLE_SLOTS);
     assert_eq!(tick.held_bytes(particles, true), 275_854_872,
         "67-cubed grid, particle/pool/scan/output storage and reinitialisation scratch");
+    // Packed input adds three adapter-sized 68³ float arrays: 3 * 68³ * 4
+    // = 3,773,184 bytes to the axis baseline, 275,854,872 + 3,773,184.
+    assert_eq!(tick.unpacked_face_bytes(), 3_773_184);
+    assert_eq!(tick.held_bytes(particles, true) + tick.unpacked_face_bytes(), 279_628_056);
     assert_eq!(tick.held_bytes(particles, false) - tick.held_bytes(particles, true), 2_406_104);
     assert_eq!(2 * 67u64.pow(3) * 4, 2_406_104);
     let padded = StepShape::new([68; 3], [68; 3], [63; 3], 1.0,
@@ -562,6 +566,8 @@ fn whitewater_step_extents_at_64() {
     assert_eq!(step.bins, [70; 3], "one sort bin a cell");
     assert!(bin_total(step.bins) <= MAX_BINS);
     assert_eq!(step.population_bytes(), 3_200_000);
+    // Exactly 64 face cells: three 65³ float arrays, 3 * 65³ * 4.
+    assert_eq!(step.unpacked_face_bytes(), 3_295_500);
     assert_eq!(step.pool_bytes(), 4_800_000);
     assert_eq!(step.slot_scan_values(), 400_000);
     assert_eq!([0, 1, 2].map(|a| step.face_bytes(a)), [266_240 * 4; 3]);
