@@ -12,10 +12,10 @@ Modules ported from it (all under `crates/manifold-renderer/src/node_graph/primi
 - `upwind_distance`, `whitewater_distance` and their WGSL, `whitewater_engine_cpu.rs` — valid-band construction and upwind reinitialisation from `particlelevelset.cpp::calculateCurvatureGrid` and `levelsetsolver.cpp::reinitializeUpwind`, including the vendored convergence and return rule
 - `advect_whitewater` and its WGSL — accepted-substep motion and per-type field acceleration from `diffuseparticlesimulation.cpp::_advanceSprayParticlesThread`, `_advanceBubbleParticlesThread`, `_advanceFoamParticlesThread`, `_advanceDustParticlesThread` and `_getGravityVector`; timestamped hits use MANIFOLD's liquid field seam
 - `keep_whitewater` and its WGSL — diffuse outflow removal from `fluidsimulation.cpp::_updateOutflowMeshFluidSource`, using the existing GPU liquid posed region/atlas sampling
-- `emission_count`, `energy_potential`, `jitter_particles`, `liquid_cells`, `spawn_whitewater`, `whitewater_type` — from `diffuseparticlesimulation.cpp`
+- `emission_count`, `energy_potential`, `jitter_particles`, `liquid_cells`, `spawn_whitewater`, `whitewater_type`, and their copies in `whitewater_fused.wgsl` — from `diffuseparticlesimulation.cpp`
 - `wavecrest_potential` — from `diffuseparticlesimulation.cpp` and `interpolation.cpp`
 - `turbulence_field` — from `turbulencefield.cpp`
-- `turbulence_emission_count`, `inside_turbulence_potential`, `dust_potential`, `whitewater_emitter_velocity`, `whitewater_emitter_cpu.rs` (CPU reference) — turbulence, inside and dust emission, the spray speed factor and the generation coin from `diffuseparticlesimulation.cpp`
+- `turbulence_emission_count`, `inside_turbulence_potential`, `dust_potential`, `whitewater_emitter_velocity`, `whitewater_emitter_cpu.rs` (CPU reference), and their copies in `whitewater_fused.wgsl` — turbulence, inside and dust emission, the spray speed factor and the generation coin from `diffuseparticlesimulation.cpp`
 - `whitewater_influence`, `whitewater_obstacle_source` — the obstacle influence grid from `influencegrid.cpp`, `fluidsimulation.cpp` and `diffuseparticlesimulation.cpp`
 - `extend_lattice` — from `gridutils.h`
 - `sample_faces_at_particles`, `shaders/liquid_faces.wgsl` — from `macvelocityfield.cpp`

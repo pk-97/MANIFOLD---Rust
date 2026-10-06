@@ -1318,11 +1318,9 @@ impl Step {
                 self.reference.record_dispatch(FUSED_ENTRIES[1].1, emitters);
             });
             #[cfg(all(test, feature = "gpu-proofs"))]
-            let (dust_energy, dust_counts) = if reference {
-                (self.reference.dust_energy(), offsets)
-            } else { (dust_energy, offsets) };
+            let dust_energy = if reference { self.reference.dust_energy() } else { dust_energy };
             #[cfg(all(test, feature = "gpu-proofs"))]
-            self.reference.capture_dust(enc, dust_energy, dust_counts, emitters);
+            self.reference.capture_dust(enc, dust_energy, offsets, emitters);
             self.emission_scan.encode_labelled(enc, emitters.max(1) as usize, EMISSION_SCAN);
             spawn[14] = ("seed", frame.seed + 104729.0);
             atom::<SpawnWhitewater>(enc, get(&p.spawn), &spawn[..17],
