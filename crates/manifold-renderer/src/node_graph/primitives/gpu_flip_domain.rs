@@ -188,7 +188,7 @@ impl GpuFlipGeometry {
 }
 
 /// Every scalar output, in the order [`GpuFlipDomain::compute`] fills them.
-const OUTPUTS: [&str; 52] = [
+const OUTPUTS: [&str; 53] = [
     "lattice_min_x", "lattice_min_y", "lattice_min_z", "cell_size", "nodes_x", "nodes_y", "nodes_z",
     "closed_faces", "pool_sites", "box_x0", "box_x1", "box_y0", "box_y1", "box_z0", "box_z1",
     "particle_mass", "gravity_x", "gravity", "gravity_z", "ticks", "epoch", "simulation_time",
@@ -200,7 +200,7 @@ const OUTPUTS: [&str; 52] = [
     "clock_obstacle_count",
     "clock_source_count",
     "live_hit_count", "mesh_min_x", "mesh_min_y", "mesh_min_z", "mesh_nodes_x", "mesh_nodes_y", "mesh_nodes_z",
-    "initial_obstacle_speed", "mesh_wall_inset", "max_iterations"];
+    "initial_obstacle_speed", "mesh_wall_inset", "max_iterations", "display_cursor"];
 const TICKS: usize = 19;
 const IMPULSE_TICK: usize = 33;
 const INITIAL_OBSTACLE_SPEED: usize = 49;
@@ -369,6 +369,7 @@ crate::primitive! {
     live_hits: Array(f32), live_hit_count: ScalarF32,
         target_time: ScalarF32,
         display_time: ScalarF32,
+        display_cursor: ScalarF32,
         dropped_seconds: ScalarF32,
         body_count: ScalarF32, body_rows: ScalarF32, dynamic_bodies: ScalarF32,
         first_tick: ScalarF32,
@@ -873,6 +874,9 @@ impl GpuFlipDomain {
             ("live_hit_count", self.fields.live_hit_count() as f32),
             ("target_time", frame.target_time as f32),
             ("display_time", display_time as f32),
+            // Live uncoupled water presents behind at liquid_frame's cursor;
+            // export and coupled water present exactly (display history D3).
+            ("display_cursor", if offline || self.coupled.owner.is_some() { 0.0 } else { 1.0 }),
             ("dropped_seconds", frame.dropped_seconds as f32),
             ("body_count", self.bodies.count() as f32),
             ("region_count", self.bodies.region_count() as f32),

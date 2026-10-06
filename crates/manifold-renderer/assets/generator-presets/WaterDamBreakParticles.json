@@ -2486,6 +2486,18 @@
       "toPort": "epoch"
     },
     {
+      "fromNode": 0,
+      "fromPort": "display_cursor",
+      "toNode": 10,
+      "toPort": "display_cursor"
+    },
+    {
+      "fromNode": 0,
+      "fromPort": "dropped_seconds",
+      "toNode": 10,
+      "toPort": "dropped_seconds"
+    },
+    {
       "fromNode": 5,
       "fromPort": "faces",
       "toNode": 11,
