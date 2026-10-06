@@ -7,7 +7,7 @@
 //! This rung gives the first top-level `node.gpu_flip_domain` /
 //! `node.gpu_flip_step` pair in each stored graph the wire the bundled def
 //! ships. Idempotent: a step whose `contacts` input is already wired is left
-//! alone. An unwired domain or step inside a group is reported and left alone.
+//! alone. A domain or step inside a group is reported and left alone.
 
 use serde_json::{json, Value};
 
@@ -46,18 +46,12 @@ fn first_of_type<'a>(nodes: &'a [Value], type_id: &str) -> Option<&'a Value> {
     nodes.iter().find(|n| n.get("typeId").and_then(Value::as_str) == Some(type_id))
 }
 
-fn unwired_in_group(nodes: &[Value]) -> bool {
+fn in_group(nodes: &[Value], type_id: &str) -> bool {
     nodes.iter().any(|n| {
         n.get("group")
             .and_then(|g| g.get("nodes"))
             .and_then(Value::as_array)
-            .is_some_and(|inner| {
-                let step = first_of_type(inner, STEP);
-                let wired = step.is_some_and(|step| n["group"]["wires"].as_array()
-                    .is_some_and(|wires| wires.iter().any(|w| w["toNode"] == step["id"] && w["toPort"] == PORT)));
-                ((first_of_type(inner, DOMAIN).is_some() || step.is_some()) && !wired)
-                    || unwired_in_group(inner)
-            })
+            .is_some_and(|inner| first_of_type(inner, type_id).is_some() || in_group(inner, type_id))
     })
 }
 
@@ -68,7 +62,7 @@ fn migrate_graph_value(graph: &mut Value) -> bool {
     let (domain_id, step_id) = match (first_of_type(nodes, DOMAIN), first_of_type(nodes, STEP)) {
         (Some(d), Some(s)) => (d["id"].clone(), s["id"].clone()),
         _ => {
-            if unwired_in_group(nodes) {
+            if in_group(nodes, DOMAIN) || in_group(nodes, STEP) {
                 let name = map.get("name").and_then(Value::as_str).unwrap_or("Unnamed graph");
                 super::note_migration(format!(
                     "{name}: GPU FLIP domain or step sits inside a group; the contacts wire was not added, so water can drain under resting bodies. Re-add the generator from the preset to get it."
@@ -102,11 +96,17 @@ mod tests {
         graph["wires"].as_array().unwrap().iter().filter(|w| w["toPort"] == PORT).collect()
     }
 
+    /// A bundled def in the shape this rung upgrades: ungrouped, read back
+    /// like a saved graph.
+    fn flat_bundled(def: &str) -> Value {
+        let flat = manifold_core::flatten::flatten_groups(&serde_json::from_str(def).unwrap()).unwrap();
+        serde_json::from_str(&serde_json::to_string(&flat).unwrap()).unwrap()
+    }
+
     #[test]
     fn the_wire_is_the_bundled_defs_verbatim() {
         for def in [BUNDLED, PARTICLES] {
-            let authored = serde_json::from_str(def).unwrap();
-            let bundled = serde_json::to_value(manifold_core::flatten::flatten_groups(&authored).unwrap()).unwrap();
+            let bundled = flat_bundled(def);
             let nodes = bundled["nodes"].as_array().unwrap();
             let domain = first_of_type(nodes, DOMAIN).expect("bundled domain");
             let step = first_of_type(nodes, STEP).expect("bundled step");
@@ -137,9 +137,8 @@ mod tests {
     #[test]
     fn the_bundled_def_and_graphs_without_flip_are_passthrough() {
         super::super::take_migration_notes();
-        let bundled: Value = serde_json::from_str(BUNDLED).unwrap();
-        let particles: Value = serde_json::from_str(PARTICLES).unwrap();
-        let before = json!({"projectVersion": "1.19.0", "embeddedPresets": [{"def": bundled}, {"def": particles}],
+        let before = json!({"projectVersion": "1.19.0",
+            "embeddedPresets": [{"def": flat_bundled(BUNDLED)}, {"def": flat_bundled(PARTICLES)}],
             "timeline": {"layers": [{"genParams": {"graph": {"version": 3, "nodes": [{"id": 1, "typeId": "node.value"}], "wires": []}}}]}});
         let after = migrate_project(&before);
         assert_eq!(after["embeddedPresets"], before["embeddedPresets"]);
