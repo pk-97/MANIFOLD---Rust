@@ -1842,10 +1842,16 @@ to identity by `matter_fill`, bound for every model including water, D38) and te
 `matter_material_change_without_restart` (Goo → Water → Goo on a live dial mid-run: ids,
 live count and positions continuous, no epoch change, no point springs on re-entry). P5b reports frame time
 at the hardening bound (D36).
-**Blocking for P5b and P5c, decided by Peter:** how Snow and Sand are drawn. They read as
-clumps and grains, and the Liquid Surface mesh smooths both away; the alternative is
-drawing the particles themselves as grains. P5b and P5c are not briefed further until
-Peter picks. Goo (P5a) and Lava (P5d) use the Liquid Surface mesh.
+**Snow and Sand draw hybrid (Peter, 2026-10-06: "Hybrid makes sense").** The industry
+standard (Houdini's MPM post-sim splits a surface from debris; film sand and snow pipelines
+do the same): the settled bulk is the Liquid Surface mesh with a rough, granular
+material; loose points are drawn as instanced grains, more drawn than simulated. P5b and
+P5c each deliver the split (which points count as loose: speed and neighbour count,
+thresholds set per material at the phase and shown to Peter in the L2 capture) through the
+existing surface and particle-copy atoms, never a matter-only renderer. Goo (P5a) and
+Lava (P5d) use the Liquid Surface mesh alone. ⚠ VERIFY-AT-IMPL at P5b: read Houdini's
+MPM Surface and MPM Debris Source documentation for the split criteria before choosing
+ours.
 
 | Phase | Deliverables | Test | Gesture |
 |---|---|---|---|
