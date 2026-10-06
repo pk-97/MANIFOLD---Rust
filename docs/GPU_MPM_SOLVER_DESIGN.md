@@ -2,7 +2,7 @@
 
 <!-- index: GPU MLS-MPM materials solver (goo, snow, sand, lava) from graph atoms in a repeated substep region, standalone first and coupled to Box3D; material maths kept as a grid-independent per-point stage so it moves onto GPU FLIP's grid in the later unified solver; water is GPU FLIP. -->
 
-**Status:** IN PROGRESS · P0a–P2b on main · direction amended 2026-10-06: standalone materials first, built for the unified solver (D31–D38) · owed: P5-0, P5a–P5e, P3b, P3d, P7, P8 · water presets are test scenes · phase notes in section 13 (Phasing).
+**Status:** IN PROGRESS · P0a–P2b on main · direction amended 2026-10-06: standalone materials first, built for the unified solver (D31–D38) · owed: P5-0, P5a–P5d, P5e-0, P5e, P3b, P3d, P7, P8 · water presets are test scenes · phase notes in section 13 (Phasing).
 **Prerequisites:** GPU_FLUID_SURFACE_DESIGN.md P1–P3 before P1 (met); none for P5-0.
 **Execution contract:** read docs/DESIGN_DOC_STANDARD.md section 5 (Phase briefs)–section 6 (Seam briefs — refactors and API changes) before starting any phase.
 
@@ -691,13 +691,59 @@ quoted in the header).** Amends D10's setup Material Enum. Fixed now:
   two materials'; at rest on one material, that material's alone. Frame time rises as
   the performer pushes toward the stiffest material, so the stiffest point a show
   reaches must fit the budget; P5e reports it.
-- **The gradual blend between two models is designed at P5e entry (blocking: the lead
-  with a consult; Peter approves).** Blending stress between models with different
-  plasticity has no settled answer here; P5e must not start until its blend rule is
-  written into this section.
+- **The blend rule (Astra design, 2026-10-06; everything below is unverified until
+  P5e-0's CPU closure passes).**
+  - *Performer model.* Material A (`material`), Material B (`target_material`) and a
+    Morph dial `morph ∈ [0, 1]`, default 0. Each point's weight w follows the dial with
+    a symmetric slew of eight full ranges per beat, sampled through the physics input
+    history and split across substeps; reversing the fader reverses the next update.
+    Changing an endpoint that is in use first slews to the other endpoint, swaps the
+    unused entry, then returns. Rejected: a target plus a transition rate — the
+    performer cannot hold or reverse a half-way mix. Rejected: instant weight jumps —
+    stress and volume would jump.
+  - *Stress.* **The blend is the weighted sum of the two materials' energies, so the
+    stress is the matching weighted sum of their split stresses**, both evaluated with
+    the same velocity gradient, each with its own J rule (never one J interpolated and
+    fed to both). Density blends the same way. Rejected: interpolating model parameters
+    across different models — their parameters mean different things.
+  - *Energy.* At fixed deformation, moving w changes the stored energy, and changing
+    density makes the material expand against its pressure. **The morph dial does real
+    work on the material, like any performer control that changes stiffness.** The
+    energy gate becomes "no unexplained growth": the dial's work is computed separately
+    and signed; plasticity and Melt must still only remove energy. ⛔ BLOCKING — Peter
+    approves this reading of "energy never grows" before P5e-0.
+  - *Step count.* With density and stiffness blended by the same weights, the blended
+    wave speed never exceeds the faster endpoint's, so D4's "larger of the two" bound
+    holds.
+  - *Plasticity — open.* Snow's clamp and hardening and Sand's return map cannot run in
+    sequence on one shared F (order changes the result), and scaling each by its
+    weight makes the result depend on the step count. No verified partial-weight rule
+    exists here. P5e-0 must find one with a written proof that plastic correction only
+    removes energy, or change the state model (separate histories, about 48 more bytes
+    per point) with Peter's approval. Morphs among Water, Goo and Lava avoid this: none
+    keeps plastic history.
+  - *History.* Nothing dormant may come back: Snow's Jp resets to 1 once its weight is
+    zero, and a completed Goo → Snow → Goo trip must not restore Goo's old rest shape.
+    Lava's yield stays a flow-rate stress with no F history. Melt applies once per
+    substep at the blended rate, never twice.
+  - *Mass and volume.* `affine_y.w` changes from rest volume to the point's mass in kg,
+    stored once and never rescaled; every consumer derives V0 = m/ρ(w). The mapping
+    between tracked volume, Snow and Sand's elastic volume and `volume_ratio` during a
+    hand-off is closed in P5e-0.
+  - *Record words.* `f_x.w` = w; `f_y.w` = Material B's table index (u32 bits);
+    `f_z.w` = tracked J. Material A's index stays in `affine_z.w`, Jp in `affine_x.w`.
+    Fill, emit, compaction and renumbering carry every word.
+  - *Cost.* One extra stress and energy evaluation per point while a morph is partial;
+    no extra grid transfer. A second SVD and 48 bytes per point only if separate
+    histories are chosen. The bigger cost is reaching hardened Snow's step count (D36).
 - **For D32's design, a requirement, not a stretch goal:** GPU FLIP water morphs live
   and gradually into an MPM material and back. That makes D36's stiffness question
-  mandatory for that design.
+  mandatory for that design. Preserve through any conversion one mass, one momentum,
+  one identity and one pressure contribution; a point becomes ineligible for FLIP's
+  deletion and reseeding before it gains material history. The hard part, named: a
+  continuous, conservative hand-over from FLIP's incompressible pressure solve to a
+  compressible material. Rejected for it: running both pressure treatments at partial
+  weight — pressure counted twice.
 Rejected: a setup Material that restarts the simulation (D10's original form). Rejected:
 two domains cross-faded on screen — it fakes the morph and pays for two solvers.
 
@@ -718,7 +764,7 @@ pub struct MatterPoint {
     pub velocity: [f32; 3],   // m/s
     pub volume_ratio: f32,    // J = current / rest volume
     pub affine_x: [f32; 4],   // C row 0 (1/s); w = plastic volume ratio Jp (1 when unused)
-    pub affine_y: [f32; 4],   // C row 1; w = rest volume V0 (m³)
+    pub affine_y: [f32; 4],   // C row 1; w = rest volume V0 (m³); point mass in kg from P5e (D38)
     pub affine_z: [f32; 4],   // C row 2; w = material index as u32 bits (0 under D10; D34)
 }
 // Specs: position Vec3F, id U32, velocity Vec3F, volume_ratio F32, affine_x/y/z Vec4F.
@@ -1242,6 +1288,9 @@ FLIP-only.
 | Deformation follows its point (D34) | `matter_compaction_carries_deformation` (P3b: drain half a Goo blob; every surviving point keeps its F row bit for bit) |
 | Published record unchanged (D34) | the compile-time size assert on `FluidParticle` (`R/fluid_particles.rs`) |
 | Material points are permanent (D35) | `matter_material_points_permanent` (the real check: Goo in a closed box with no drain role, since `matter_drain` legitimately removes points; 600 ticks; live count constant); copy-paste guard only: `rg -n 'nb_delete\|remove_crowded\|remove_marker\|reseed' crates/manifold-renderer/src/node_graph/primitives/shaders/matter_*.wgsl` returns nothing |
+| Morph weight follows the beat, not the frame rate (D38) | `matter_morph_slew_and_reverse`; replay at 30 and 60 fps gives identical weights |
+| The dial's work, plasticity and integration are accounted separately (D38) | `matter_morph_parameter_work_identity`, `matter_morph_plastic_dissipation`, `matter_morph_energy_accounted` |
+| A morph changes rest volume, never mass (D38) | `matter_morph_conserves_mass` |
 
 ## 13. Phasing
 
@@ -1804,7 +1853,8 @@ Peter picks. Goo (P5a) and Lava (P5d) use the Liquid Surface mesh.
 | P5b Snow | hardening and plasticity branch | `matter_snow_ball_fractures` (clump count > 1 after impact); Jp stays in [0.6, 20] | throw a snowball at the floor on the snare |
 | P5c Sand | Drucker–Prager branch | `matter_sand_pile_angle` (settled slope within 5° of the expected angle) | flip gravity on a fader and watch a pile avalanche |
 | P5d Lava | Bingham branch with Melt scaling the yield stress | `matter_bingham_flow_stops_below_yield` | lava flows down a slope, crusts when Melt drops, flows again on the beat |
-| P5e Material morph | not briefed: the blend rule is written into D38 first (blocking, the lead with a consult, Peter approves). Then a Morph dial and target Material on the domain; per-point morph weight in the deformation array's spare words | `matter_morph_conserves_mass`; `matter_morph_round_trip` (Goo → Snow → Goo leaves no stored stress); frame time reported at the stiffest reachable point (D38) | ride a fader from goo to snow through the build and back on the drop |
+| P5e-0 Morph closure (CPU only) | entry: P5a–P5d merged and Peter's energy reading approved (D38). f64 fixtures in `matter/reference.rs`, no renderer change: one point, diagonal F, zero velocity gradient; compression, shear, rotation, Snow at its hardening bounds, both directions, reversals at 0.25 and 0.75, every endpoint pair; a written proof that the chosen plastic rule only removes energy. The lead writes the exact update order and J mapping into D38 | `matter_morph_parameter_work_identity` (dial work matches the energy change within 1e-8 relative); `matter_morph_plastic_dissipation` (no correction adds more than 1e-10 relative); `matter_morph_volume_handoff` (1e-10 relative); `matter_morph_round_trip` (residual shape stress ≤ 1e-8 of the modulus, unused Jp exactly 1). Gate: `cargo nextest run -p manifold-renderer matter_morph_`. Forbidden: damping, relaxed thresholds, GPU runs, any live surface | none — L1 |
+| P5e Material morph | entry: P5e-0 merged. Params `material`, `target_material`, `morph`; two material entries; the D38 record words; old projects load with `target_material = material`, `morph = 0`; `MatterMorph.json`; `scripts/ui-flows/scene-matter-morph.json` (save, reload, modulate again). Gate: the GPU filter and landing gate; stiffest-point solver p95 reported against 6 ms | CPU `matter_morph_slew_and_reverse`, `matter_morph_substep_bound`; GPU `matter_morph_conserves_mass` (mass bits unchanged, grid mass 1e-5, free-flight momentum 1e-4 over 60 ticks), `matter_morph_matches_reference`, `matter_morph_round_trip`, `matter_morph_deformation_follows_point`, `matter_morph_points_permanent`, `matter_morph_fixed_point_headroom` (below 2^30), `matter_morph_energy_accounted` (energy ≤ initial + signed dial work + 1%) | ride Goo → Snow through the build, reverse half-way, reach Snow, back to Goo on the drop |
 
 ### P6 — Whitewater
 
@@ -1896,7 +1946,7 @@ or in section 15.
 21. Material state never enters the published record; the material index lives in `affine_z.w`; deformation moves with its point (D34).
 22. Material points are permanent; only drains and faults remove them (D35).
 23. Live is 64³; c is the P-wave speed at the hardening bound; stiffness levers are Peter's (D36).
-24. Materials are always live and morph gradually; a change never restarts the sim; mass is fixed per point; cost follows the live dial; FLIP water morphing into an MPM material is a requirement of the unified design (D38, Peter).
+24. Materials are always live and morph gradually on an A/B dial; a change never restarts the sim; the blend is a weighted sum of energies; the dial does accounted work; mass is fixed per point; cost follows the live dial; FLIP water morphing into an MPM material is a requirement of the unified design (D38, Peter).
 
 ## 15. Deferred, with triggers
 
@@ -1939,4 +1989,7 @@ or in section 15.
 | R14 | Unverified constants and papers (Liveliness blend, snow, sand, lava, Martin & Moyce) | VERIFY-AT-IMPL markers | Transcribe at phase entry; a mismatch is an escalation |
 | R15 | Every Snow scene runs about 124 substeps at 64³, 3.6× water, because D4 prices the Jp bound without readback (D36) | P5b frame-time report | ξ and Jp floor are Peter's levers; implicit stress is deferred |
 | R16 | The split corotated Goo looks different from taichi_elements' Goo (D33) | P5a L2 capture | Peter's look call; never revert to the unsplit form |
-| R17 | Blending two models with different plasticity has no settled rule; a bad blend stores stress that snaps back (D38) | P5e's round-trip test | Designed with a consult before P5e; never shipped on a guessed rule |
+| R17 | Blending plasticity on one shared F creates energy or brings old history back (D38) | P5e-0's dissipation and round-trip fixtures | P5e stays blocked; change the state model explicitly, with Peter's approval |
+| R18 | A density change creates unexplained work, or only changes the reported volume | `matter_morph_parameter_work_identity`, `matter_morph_volume_handoff` | Separate physical volume, the material's J and the dial's work |
+| R19 | Density-driven compression exceeds D5's fixed-point headroom | `matter_morph_fixed_point_headroom` | Reprice the supported density range; never rely on wrapped values |
+| R20 | A morph costs more than the live budget | P5e's stiffest-point timing, hardened Snow included | Report the miss to Peter; no hidden softening |
