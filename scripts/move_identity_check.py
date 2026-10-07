@@ -31,10 +31,8 @@ Usage:
 The moved-line detection uses `--color-moved=plain` with `--color-moved-ws=
 ignore-all-space` so re-indented relocations still count as moves, and pins the
 four diff colors explicitly so parsing never depends on user git config.
-Blocks of fewer than 3 consecutive lines are below git's move-detection
-threshold and will surface as residue — for a genuine tiny move, name it in the
-commit message and the reviewer eyeballs those lines; that is the intended
-manual surface, kept deliberately small.
+Plain mode marks individual matching added/removed lines; it has no three-line
+minimum. Unmatched lines remain subject to the bounded classes below and review.
 """
 
 import re
@@ -530,7 +528,8 @@ def classify(out: str, claimed: dict[int, str] | None = None) -> tuple[dict[str,
         if USE_OPEN.match(tm_body):
             open_block[sign] = True
         if claimed and index in claimed:
-            counts[claimed[index]] += 1
+            if claimed[index] != "blocked":
+                counts[claimed[index]] += 1
             continue
         if is_moved:
             counts["moved"] += 1
@@ -629,14 +628,46 @@ def skeleton_lines(source: str) -> bool:
     return not in_use
 
 
-def manifest_wiring(source: str, path: str, read_file) -> set[int]:
+def workspace_member(directory: str, root: dict) -> bool:
+    return (any(fnmatch.fnmatchcase(directory, member) for member in root.get("members", []))
+            and not any(fnmatch.fnmatchcase(directory, member) for member in root.get("exclude", [])))
+
+
+def external_dependency_lines(paths, read_file) -> set[str]:
+    """Exact single-line external dependency precedents in the old workspace."""
+    root = tomllib.loads(read_file("Cargo.toml") or "").get("workspace", {})
+    result = set()
+    for path in paths:
+        if path != "Cargo.toml" and not workspace_member(posixpath.dirname(path), root):
+            continue
+        table = ""
+        for line in read_file(path).splitlines():
+            body = line.strip()
+            if body.startswith("["):
+                table = body.split("#", 1)[0].strip().strip("[]")
+            elif table in {"dependencies", "dev-dependencies", "build-dependencies", "workspace.dependencies"}:
+                try:
+                    entry = tomllib.loads(body)
+                except tomllib.TOMLDecodeError:
+                    continue
+                if len(entry) == 1:
+                    value = next(iter(entry.values()))
+                    if isinstance(value, str) or (isinstance(value, dict)
+                                                  and not {"path", "workspace"} & value.keys()):
+                        result.add(body)
+    return result
+
+
+def manifest_wiring(source: str, path: str, read_file, read_other, sign: str,
+                    new_crate=False, external_lines=frozenset()) -> tuple[set[int], set[int]]:
     """Eligible physical lines, with table context from the complete revision.
 
-    Only local workspace path dependencies (no version/source changes), members,
-    and nonempty feature-forward lists qualify. Multiline TOML arrays are checked
-    as complete values, so a local feature hidden in a forwarding list is residue.
+    Added dependencies cannot select features. New manifests contain only package
+    metadata, conservative dependencies and non-default forwarding. Explicit
+    rejections cannot pass through git move detection or legacy visibility pairs.
     """
     root = tomllib.loads(read_file("Cargo.toml") or "").get("workspace", {})
+    other_root = tomllib.loads(read_other("Cargo.toml") or "").get("workspace", {})
     document = tomllib.loads(source)
 
     def workspace_crate(directory: str) -> bool:
@@ -649,29 +680,54 @@ def manifest_wiring(source: str, path: str, read_file) -> set[int]:
     for table in ("dependencies", "dev-dependencies", "build-dependencies"):
         dependencies.update(document.get(table, {}))
 
-    def local_dependency(value) -> bool:
+    def local_dependency(value, conservative=True) -> bool:
+        keys = {"path", "package"}
+        if not conservative:
+            keys |= {"features", "optional", "default-features"}
         return (isinstance(value, dict) and isinstance(value.get("path"), str)
-                and set(value) <= {"path", "package", "features", "optional", "default-features"}
+                and set(value) <= keys
                 and workspace_crate(posixpath.join(posixpath.dirname(path), value["path"])))
 
-    def eligible(table: str, key: str, value) -> bool:
+    def workspace_dependency(value) -> bool:
+        return isinstance(value, dict) and value == {"workspace": True}
+
+    def eligible(table: str, key: str, value, lines) -> bool:
+        if table == "package" and new_crate:
+            return key in {"name", "version", "edition", "publish", "license", "description"}
         if table == "workspace" and key == "members":
-            return isinstance(value, list) and all(
-                isinstance(member, str) and (member in root.get("members", []))
-                for member in value)
+            if not isinstance(value, list):
+                return False
+            for member in value:
+                if not isinstance(member, str):
+                    return False
+                if sign == "+":
+                    if not read_file(member + "/Cargo.toml"):
+                        return False
+                elif member not in other_root.get("members", []):
+                    if not read_file(member) or read_other(member):
+                        return False
+            return True
         if table in {"dependencies", "dev-dependencies", "build-dependencies"}:
-            return local_dependency(value)
-        if table == "features" and isinstance(value, list) and value:
+            return (local_dependency(value, conservative=sign == "+")
+                    or (new_crate and (workspace_dependency(value)
+                                       or (len(lines) == 1 and lines[0].strip() in external_lines))))
+        if table == "features" and key != "default" and isinstance(value, list) and value:
             for feature in value:
                 if not isinstance(feature, str) or not re.fullmatch(r"[\w-]+\??/[\w-]+", feature):
                     return False
                 dependency = feature.split("/")[0].removesuffix("?")
-                if not local_dependency(dependencies.get(dependency)):
-                    return False
+                dep = dependencies.get(dependency)
+                if not local_dependency(dep, conservative=False):
+                    inherited = root.get("dependencies", {}).get(dependency)
+                    if not (workspace_dependency(dep) and isinstance(inherited, dict)
+                            and isinstance(inherited.get("path"), str)
+                            and workspace_member(posixpath.normpath(inherited["path"]), root)
+                            and read_file(posixpath.normpath(inherited["path"]) + "/Cargo.toml")):
+                        return False
             return True
         return False
 
-    allowed = set()
+    allowed, forbidden = set(), set()
     table = ""
     header = None
     entries = []
@@ -679,9 +735,12 @@ def manifest_wiring(source: str, path: str, read_file) -> set[int]:
     start = 0
 
     def finish_table():
-        if (header is not None and table in {"dependencies", "dev-dependencies", "build-dependencies", "features"}
+        if (header is not None and (table in {"dependencies", "dev-dependencies", "build-dependencies", "features"}
+                                   or (new_crate and table == "package"))
                 and entries and all(entries)):
             allowed.add(header)
+        elif header is not None and new_crate:
+            forbidden.add(header)
 
     for number, line in enumerate(source.splitlines(), 1):
         stripped = line.strip()
@@ -691,6 +750,8 @@ def manifest_wiring(source: str, path: str, read_file) -> set[int]:
             header, entries = number, []
             continue
         if not pending and (not stripped or stripped.startswith("#")):
+            if new_crate:
+                allowed.add(number)
             continue
         if not pending:
             start = number
@@ -699,21 +760,30 @@ def manifest_wiring(source: str, path: str, read_file) -> set[int]:
             entry = tomllib.loads("\n".join(pending))
         except tomllib.TOMLDecodeError:
             continue
-        ok = len(entry) == 1 and all(eligible(table, key, value) for key, value in entry.items())
+        ok = len(entry) == 1 and all(eligible(table, key, value, pending) for key, value in entry.items())
         entries.append(ok)
         if ok:
             allowed.update(range(start, number + 1))
+        elif (new_crate or (table == "features" and "default" in entry)
+              or (table == "workspace" and "members" in entry)
+              or (sign == "+" and table in {"dependencies", "dev-dependencies", "build-dependencies"}
+                  and any(isinstance(value, dict) and "path" in value for value in entry.values()))):
+            forbidden.update(range(start, number + 1))
         pending = []
     finish_table()
-    return allowed
+    return allowed, forbidden
 
 
-def crate_move_claims(out: str, read_old, read_new, rewrites) -> dict[int, str]:
+def crate_move_claims(out: str, read_old, read_new, rewrites,
+                      external_lines=frozenset(), hints=None) -> dict[int, str]:
     """Claim three disjoint classes without changing any legacy allowlist.
 
     Rewrite pairs are restricted to the same diff file (including a git-detected
     rename), one removed and one added occurrence each. Maps are explicit,
     simultaneous, token-boundary path substitutions on the removed side only.
+    Basenames and module prefixes cannot prove identity between delete/add files
+    (notably repeated mod.rs names). Such pairs retain residue and get a hint to
+    separate the git mv from its rewrite rather than guessing their pairing.
     """
     claims = {}
     blocks = [[]]
@@ -725,21 +795,31 @@ def crate_move_claims(out: str, read_old, read_new, rewrites) -> dict[int, str]:
     mapping = dict(rewrites)
     pattern = (re.compile(r"(?<![\w$])(?:" + "|".join(
         re.escape(key) for key in sorted(mapping, key=len, reverse=True)) + ")") if mapping else None)
+    deleted_paths, added_paths = [], []
     for lines in blocks:
         plain = [ANSI.sub("", line) for line in lines]
         old_path = next((line[4:].removeprefix("a/") for line in plain if line.startswith("--- ")), None)
         new_path = next((line[4:].removeprefix("b/") for line in plain if line.startswith("+++ ")), None)
         path = new_path if new_path != "/dev/null" else old_path
         added = old_path == "/dev/null"
+        if path and path.endswith(".rs"):
+            if added:
+                added_paths.append(path)
+            elif new_path == "/dev/null":
+                deleted_paths.append(path)
         skeleton = False
-        if path and added and re.fullmatch(r"crates/[^/]+/(?:Cargo.toml|src/(?:lib|main)\.rs)", path):
-            skeleton = path.endswith("Cargo.toml") or skeleton_lines(read_new(path))
+        if path and added and re.fullmatch(r"crates/[^/]+/src/(?:lib|main)\.rs", path):
+            skeleton = skeleton_lines(read_new(path))
         manifest = path and path.endswith("Cargo.toml") and not skeleton
-        eligible = {}
+        eligible, forbidden = {}, {}
+        new_manifest = bool(added and path and re.fullmatch(r"crates/[^/]+/Cargo.toml", path))
         if manifest:
             for sign, file_path, reader in (("-", old_path, read_old), ("+", new_path, read_new)):
                 source = reader(file_path) if file_path != "/dev/null" else ""
-                eligible[sign] = manifest_wiring(source, file_path, reader) if source else set()
+                other = read_new if sign == "-" else read_old
+                eligible[sign], forbidden[sign] = manifest_wiring(
+                    source, file_path, reader, other, sign, new_manifest, external_lines
+                ) if source else (set(), set())
         numbers = {"-": 0, "+": 0}
         removed, additions = [], []
         for index, line in enumerate(plain):
@@ -753,9 +833,11 @@ def crate_move_claims(out: str, read_old, read_new, rewrites) -> dict[int, str]:
                 absolute = offset + index
                 if skeleton:
                     claims[absolute] = "skeletons"
+                elif manifest and numbers[sign] in forbidden[sign]:
+                    claims[absolute] = "blocked"
                 elif manifest and numbers[sign] in eligible[sign]:
-                    claims[absolute] = "manifests"
-                elif pattern and path and path.endswith(".rs"):
+                    claims[absolute] = "skeletons" if new_manifest else "manifests"
+                elif pattern and path and path.endswith(".rs") and not MOVED_RE.match(lines[index]):
                     (removed if sign == "-" else additions).append((absolute, line[1:]))
                 numbers[sign] += 1
             elif line.startswith(" "):
@@ -764,13 +846,19 @@ def crate_move_claims(out: str, read_old, read_new, rewrites) -> dict[int, str]:
         if pattern:
             available = {}
             for index, body in additions:
-                available.setdefault("".join(body.split()), []).append(index)
+                available.setdefault(_normalize_ws(body), []).append(index)
             for index, body in removed:
                 rewritten, count = pattern.subn(lambda match: mapping[match[0]], body)
-                matches = available.get("".join(rewritten.split()), [])
+                matches = available.get(_normalize_ws(rewritten), [])
                 if count and matches:
                     claims[index] = claims[matches.pop()] = "rewrites"
         offset += len(lines)
+    if rewrites and hints is not None:
+        for old_path in deleted_paths:
+            for new_path in added_paths:
+                if posixpath.basename(old_path) == posixpath.basename(new_path):
+                    hints.append(f"  hint: {old_path} -> {new_path} is a delete/add pair; "
+                                 "land the git mv and the rewrite as separate commits.")
     return claims
 
 
@@ -833,10 +921,19 @@ def main() -> int:
         return read
 
     # Strip only ANSI for file boundaries; retain moved colors for legacy classes.
-    claims = crate_move_claims(out, reader(old_ref), reader(new_ref), args.rewrite)
+    old_reader, new_reader = reader(old_ref), reader(new_ref)
+    external_lines = set()
+    if re.search(r"^\+\+\+ b/crates/[^/]+/Cargo.toml$", ANSI.sub("", out), re.MULTILINE):
+        paths = subprocess.check_output(["git", "ls-tree", "-r", "--name-only", old_ref], text=True).splitlines()
+        external_lines = external_dependency_lines(
+            [path for path in paths if path.endswith("Cargo.toml")], old_reader)
+    hints = []
+    claims = crate_move_claims(out, old_reader, new_reader, args.rewrite, external_lines, hints)
     counts, residue = classify(out, claims)
     residue, vis_pairs = drop_visibility_pairs(residue)
     residue, include_pairs = drop_include_str_prefix_pairs(residue)
+    residue.extend(ANSI.sub("", raw) for index, raw in enumerate(out.splitlines())
+                   if claims.get(index) == "blocked")
     scaffold = counts["scaffold"]
 
     print(
@@ -864,8 +961,10 @@ def main() -> int:
             print(f"  RESIDUE {line}")
         if len(residue) > limit:
             print(f"  … {len(residue) - limit} more (--show-all to print)")
-        print("NOT a pure move. Residue lines are semantic changes or sub-threshold")
-        print("(<3-line) moves — split the commit or justify each line in review.")
+        for hint in hints:
+            print(hint)
+        print("NOT a pure move. Residue lines are unmatched changes; split the commit")
+        print("or justify each line in review.")
         return 1
     if scaffold:
         print(f"PURE MOVE PROVEN: every non-scaffold changed line is a detected move "

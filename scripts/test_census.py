@@ -9,6 +9,9 @@ already supplies the same `foo::<path>` identity as standalone `tests/foo.rs`.
 Custom Cargo target names are treated as stems and need an explicit --map if
 renamed. Duplicate identities retain their counts, including ignored tests.
 Diff maps apply to BEFORE only, once, using the longest matching old prefix.
+GPU proofs (required-features gpu-proofs binaries and cfg(feature = "gpu-proofs")
+modules) are listed only when recorded with --features gpu-proofs. INV-5 records
+both sides with -p <crates> --features gpu-proofs as well as the default run.
 """
 
 import argparse
