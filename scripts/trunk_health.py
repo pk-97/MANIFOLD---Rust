@@ -121,6 +121,7 @@ def main():
     print(cap_line, end="")
     log_lines.append(cap_line)
 
+    nightly_nextest = ["cargo", "nextest", "run", "--workspace", "--no-fail-fast"]
     cpu_gates = [
         # Ignored-test ratchet: any #[ignore] beyond the baseline is a red
         # gate made invisible (SCENE_LOOP shipped broken behind one).
@@ -134,16 +135,19 @@ def main():
         # the gate instead of its printed rerun commands.
         ["python3", "scripts/landing_metrics.py", "--days", "7"],
         ["cargo", "clippy", "--workspace", "--tests", "--", "-D", "warnings"],
-        ["cargo", "nextest", "run", "--workspace", "--no-fail-fast"],
+        # Compile the default-feature suite before admission. Its execution
+        # stays with the nightly GPU legs because selected tests may open a
+        # device transitively and must yield to an announced landing.
+        [*nightly_nextest, "--no-run"],
         ["cargo", "deny", "check", "bans"],
         ["python3", "scripts/feature_matrix.py"],
     ]
     gpu_gates = [
+        nightly_nextest,
         # Full renderer coverage, including the asset-conformance sweep, belongs
         # here (landing runs only the scoped set; see scripts/gpu_scope.py).
-        # Successful proof runs also update the shared timing cache consumed
-        # by landings. This export is for review/refresh of fresh-checkout seeds;
-        # no automatic source commit is needed for slots to learn new costs.
+        # Export successful keyed measurements for review. Learned timings are
+        # informational; only committed timings set landing watchdog allowances.
         ["python3", "scripts/gpu_proofs_gate.py", "--all", "--learn-times",
          "--record-times", "/tmp/gpu_test_times.nightly.json"],
         # RT temporal stability. Nightly and not at landing: it costs an app
@@ -163,7 +167,7 @@ def main():
          "--require-fixture"],
         # Presentation-tear class (BUG-xaw4): legacy policy must keep tearing
         # (probe not blind) AND fenced policy must stay clean (the shipped
-        # read-fence contract). All GPU legs share one queue hold.
+        # read-fence contract). Independent legs yield to pending landings.
         ["python3", "scripts/bridge_probe_gate.py"],
     ]
 
@@ -221,9 +225,12 @@ def main():
     for cmd in cpu_gates:
         if run_gate(cmd) == 2:
             return 2
-    # Child gates inherit this hold, so no queued work can interleave.
-    with contextlib.nullcontext() if args.dry_run else gpu_queue.hold("trunk_health gpu legs"):
-        for cmd in gpu_gates:
+    # Each GPU leg is independent. Releasing between legs lets an announced
+    # landing take the next admission while a proof already in flight finishes.
+    for cmd in gpu_gates:
+        gpu_hold = (contextlib.nullcontext() if args.dry_run else
+                    gpu_queue.hold("trunk_health gpu legs", priority="nightly"))
+        with gpu_hold:
             if run_gate(cmd) == 2:
                 return 2
 

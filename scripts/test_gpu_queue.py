@@ -11,6 +11,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from contextlib import contextmanager
@@ -131,6 +132,75 @@ class GpuQueueTests(unittest.TestCase):
             self.assertEqual(free.returncode, 0)
         finally:
             del os.environ["MANIFOLD_GPU_QUEUE_DIR"]
+
+    def test_landing_pending_record_is_removed_on_context_exit(self):
+        pending_dir = self.dir / "q" / gpu_queue.LANDING_PENDING_DIR
+        with gpu_queue.landing_pending(label="test landing"):
+            records = gpu_queue.pending_landings(self.dir / "q")
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0]["pid"], str(os.getpid()))
+            self.assertEqual(records[0]["label"], "test landing")
+            self.assertTrue(list(pending_dir.iterdir()))
+        self.assertEqual(gpu_queue.pending_landings(self.dir / "q"), [])
+        self.assertEqual(list(pending_dir.iterdir()), [])
+
+    def test_stale_landing_record_is_removed_and_does_not_starve_nightly(self):
+        pending_dir = self.dir / "q" / gpu_queue.LANDING_PENDING_DIR
+        pending_dir.mkdir(parents=True)
+        stale = pending_dir / "999999999.dead.pending"
+        stale.write_text("pid=999999999\nnonce=dead\nlabel=stale\n")
+        started = time.monotonic()
+        held = gpu_queue.acquire("nightly", directory=self.dir / "q", priority="nightly",
+                                 poll=0.01, report=0.1)
+        try:
+            self.assertLess(time.monotonic() - started, 2)
+            self.assertFalse(stale.exists())
+        finally:
+            held.release()
+
+    def test_pending_scan_leaves_atomic_write_and_permission_limited_owner_alone(self):
+        pending_dir = self.dir / 'q' / gpu_queue.LANDING_PENDING_DIR
+        pending_dir.mkdir(parents=True)
+        temporary = pending_dir / '.unpublished.tmp'
+        temporary.write_text('pid=')
+        with gpu_queue.landing_pending(directory=self.dir / 'q'):
+            with patch.object(gpu_queue.os, 'kill', side_effect=PermissionError):
+                self.assertEqual(len(gpu_queue.pending_landings(self.dir / 'q')), 1)
+            self.assertTrue(temporary.exists())
+
+    def test_nightly_waits_for_live_landing_then_acquires(self):
+        acquired = threading.Event()
+        result = []
+
+        def wait_for_gpu():
+            held = gpu_queue.acquire("nightly", directory=self.dir / "q", priority="nightly",
+                                     poll=0.01, report=0.1)
+            result.append(held)
+            acquired.set()
+
+        with gpu_queue.landing_pending(directory=self.dir / "q"):
+            worker = threading.Thread(target=wait_for_gpu)
+            worker.start()
+            self.assertFalse(acquired.wait(0.2))
+        self.assertTrue(acquired.wait(2))
+        worker.join(timeout=2)
+        result[0].release()
+
+    def test_nightly_rechecks_pending_after_flock(self):
+        calls = []
+        pending = {"pid": str(os.getpid()), "label": "landing"}
+
+        def pending_check(_directory):
+            calls.append(len(calls))
+            return [pending] if len(calls) == 2 else []
+
+        with patch.object(gpu_queue, "pending_landings", side_effect=pending_check):
+            held = gpu_queue.acquire("nightly", directory=self.dir / "q", priority="nightly",
+                                     poll=0.01, report=0.1)
+        try:
+            self.assertGreaterEqual(len(calls), 3)
+        finally:
+            held.release()
 
     def test_token_admission_when_ancestor_walk_fails(self):
         with patch.dict(os.environ, {gpu_queue.HOLDER_ENV: "previous"}):

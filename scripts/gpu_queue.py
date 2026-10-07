@@ -29,7 +29,9 @@ taken.
 
 Importable: `with gpu_queue.hold("label"): ...` for scripts that take the lock
 for a whole multi-process run. Waiting is poll-based, not first-come
-first-served.
+first-served. A landing announces itself with `landing_pending()` before it
+builds; nightly callers use `hold(..., priority="nightly")` and yield to that
+announcement between independent GPU runs.
 
 Obsolete when: the Vulkan backend ships its own device-level scheduler, or
 GPU runs move off this machine.
@@ -49,6 +51,7 @@ from pathlib import Path
 POLL_SECONDS = 0.25
 REPORT_SECONDS = 30.0
 HOLDER_ENV = "MANIFOLD_GPU_LOCK_HOLDER"
+LANDING_PENDING_DIR = "landing.pending"
 
 # Same-process nesting: `hold()` inside `hold()` must not block on itself.
 _held_depth = 0
@@ -57,6 +60,79 @@ _held_depth = 0
 def queue_dir():
     override = os.environ.get("MANIFOLD_GPU_QUEUE_DIR")
     return Path(override) if override else Path.home() / ".cache" / "manifold"
+
+
+def _landing_pending_dir(directory):
+    return Path(directory) / LANDING_PENDING_DIR
+
+
+def _read_pending(path):
+    info = {}
+    try:
+        text = path.read_text()
+    except OSError:
+        return info
+    for line in text.splitlines():
+        key, sep, value = line.partition("=")
+        if sep:
+            info[key] = value
+    return info
+
+
+def pending_landings(directory=None):
+    """Return live landing announcements, removing dead or malformed records."""
+    directory = Path(directory) if directory else queue_dir()
+    pending_dir = _landing_pending_dir(directory)
+    try:
+        paths = list(pending_dir.iterdir())
+    except OSError:
+        return []
+    live = []
+    for path in paths:
+        if path.suffix != '.pending' or not path.is_file():
+            continue
+        info = _read_pending(path)
+        pid = info.get("pid", "")
+        alive = pid.isdigit() and int(pid) > 1
+        if alive:
+            try:
+                os.kill(int(pid), 0)
+            except PermissionError:
+                pass  # A live process outside our signal permission still owns its announcement.
+            except OSError:
+                alive = False
+        if alive:
+            info["path"] = str(path)
+            live.append(info)
+        else:
+            with contextlib.suppress(OSError):
+                path.unlink()
+    return live
+
+
+def _pending_description(info):
+    label = info.get("label", "landing")
+    return f"pid {info.get('pid', '?')} `{label}`"
+
+
+@contextlib.contextmanager
+def landing_pending(directory=None, label="landing"):
+    """Announce a live landing so nightly GPU work yields before its next leg."""
+    directory = Path(directory) if directory else queue_dir()
+    pending_dir = _landing_pending_dir(directory)
+    pending_dir.mkdir(parents=True, exist_ok=True)
+    nonce = secrets.token_hex(16)
+    path = pending_dir / f"{os.getpid()}.{nonce}.pending"
+    body = (f"pid={os.getpid()}\nnonce={nonce}\nsince={time.time():.3f}\n"
+            f"label={' '.join(str(label).split())[:300]}\n")
+    tmp = pending_dir / f".{path.name}.tmp"
+    tmp.write_text(body)
+    os.replace(tmp, path)
+    try:
+        yield
+    finally:
+        with contextlib.suppress(OSError):
+            path.unlink()
 
 
 def read_holder(directory):
@@ -174,8 +250,18 @@ class Held:
             os.environ[HOLDER_ENV] = self.previous_token
 
 
-def acquire(label, directory=None, poll=POLL_SECONDS, report=REPORT_SECONDS, out=None):
-    """Block until this process may use the GPU. Returns a `Held`."""
+def acquire(label, directory=None, poll=POLL_SECONDS, report=REPORT_SECONDS, out=None,
+            priority="normal"):
+    """Block until this process may use the GPU. Returns a `Held`.
+
+    ``priority="nightly"`` gives an announced landing the next admission. The
+    pending marker is checked both before flock and after flock so a landing
+    that announces during the race cannot be placed behind this leg. Once the
+    caller has acquired the lock with no pending landing, its running proof is
+    never interrupted.
+    """
+    if priority not in {"normal", "nightly"}:
+        raise ValueError(f"unknown GPU queue priority: {priority}")
     out = out or sys.stderr
     directory = Path(directory) if directory else queue_dir()
     directory.mkdir(parents=True, exist_ok=True)
@@ -185,27 +271,42 @@ def acquire(label, directory=None, poll=POLL_SECONDS, report=REPORT_SECONDS, out
     ancestors = None
     try:
         while True:
+            if priority == "nightly":
+                pending = pending_landings(directory)
+                if pending:
+                    now = time.monotonic()
+                    if last_report is None or now - last_report >= report:
+                        print(f"[gpu-queue] waiting for landing: "
+                              f"{_pending_description(pending[0])}", file=out, flush=True)
+                        last_report = now
+                    time.sleep(poll)
+                    continue
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
             except BlockingIOError:
-                pass
-            info = read_holder(directory)
-            if _token_matches(info):
-                os.close(fd)
-                return Held(None, directory)
-            if ancestors is None:
-                ancestors = set(ancestor_pids())
-            holder_pid = info.get("pid", "")
-            if holder_pid.isdigit() and int(holder_pid) in ancestors:
-                os.close(fd)
-                return Held(None, directory)
-            now = time.monotonic()
-            if last_report is None or now - last_report >= report:
-                verb = "waiting for the GPU" if last_report is None else "still waiting for the GPU"
-                print(f"[gpu-queue] {verb}: held by {_describe(info)}", file=out, flush=True)
-                last_report = now
-            time.sleep(poll)
+                info = read_holder(directory)
+                if _token_matches(info):
+                    os.close(fd)
+                    return Held(None, directory)
+                if ancestors is None:
+                    ancestors = set(ancestor_pids())
+                holder_pid = info.get("pid", "")
+                if holder_pid.isdigit() and int(holder_pid) in ancestors:
+                    os.close(fd)
+                    return Held(None, directory)
+                now = time.monotonic()
+                if last_report is None or now - last_report >= report:
+                    verb = "waiting for the GPU" if last_report is None else "still waiting for the GPU"
+                    print(f"[gpu-queue] {verb}: held by {_describe(info)}", file=out, flush=True)
+                    last_report = now
+                time.sleep(poll)
+                continue
+            if priority == "nightly" and pending_landings(directory):
+                # Admission is two-phase: do not let a landing announced while
+                # flock was being acquired wait for this nightly leg.
+                fcntl.flock(fd, fcntl.LOCK_UN)
+                continue
+            break
     except BaseException:
         os.close(fd)
         raise
@@ -224,7 +325,7 @@ def acquire(label, directory=None, poll=POLL_SECONDS, report=REPORT_SECONDS, out
 
 
 @contextlib.contextmanager
-def hold(label, **kwargs):
+def hold(label, priority="normal", **kwargs):
     """Hold the GPU lock for the body; re-entrant within and across processes."""
     global _held_depth
     if _held_depth:
@@ -234,7 +335,7 @@ def hold(label, **kwargs):
         finally:
             _held_depth -= 1
         return
-    held = acquire(label, **kwargs)
+    held = acquire(label, priority=priority, **kwargs)
     _held_depth = 1
     try:
         yield

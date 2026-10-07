@@ -7,53 +7,14 @@ their integration binary. No reverse-dependent or whole-crate fallback.
 """
 
 import re
-import tomllib
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-def godfile_paths():
-    """Read the source-of-truth CEILINGS table; reject unparsed entries."""
-    source = Path(__file__).resolve().parent.parent / "crates/manifold-app/tests/godfile_regrowth.rs"
-    text = re.sub(r"//[^\n]*", "", source.read_text())
-    table = re.search(r"const CEILINGS\b[^=]*=\s*&\[(.*?)\];", text, re.S)
-    entry = re.compile(r'\(\s*"([^"]+)"\s*,\s*\d[\d_]*\s*,?\s*\)\s*,?')
-    if table is None or not entry.search(table[1]) or entry.sub("", table[1]).strip():
-        raise ValueError(f"cannot parse CEILINGS in {source}")
-    return entry.findall(table[1])
+from gate_policy import godfile_paths, integration_rows, PREFIX_ROWS
+from gate_policy import CATALOG_PATHS, CATALOG_PACKAGE
+from gate_workspace import Workspace
 
-
-# Cross-file contracts: path -> (owning package, integration binaries).
-INTEGRATION_ROWS = {
-    "Cargo.toml": ("manifold-app", ["crate_layering"]),
-    "crates/manifold-renderer/src/node_graph/primitives/mod.rs": ("manifold-renderer", ["file_loader_exhaustiveness"]),
-    "crates/manifold-node-engine/src/water/fluid.rs": ("manifold-renderer", ["gpu_proofs"]),
-    **{path: ("manifold-app", ["godfile_regrowth"]) for path in godfile_paths()},
-}
-# Contracts over every file under a prefix, Rust or not:
-# (prefix, suffix, package, test modules, integration binaries).
-PREFIX_ROWS = [
-    ("crates/", "/Cargo.toml", "manifold-app", [], ["crate_layering"]),
-    # Scene-panel manifest rows are guarded by the existing INV-8 integration
-    # test; keep it in the scoped CPU plan for every panel change.
-    ("crates/manifold-ui/src/panels/", ".rs", "manifold-ui", [],
-     ["no_bespoke_row_infra"]),
-    # Bundled preset JSON is compiled into the renderer.
-    ("crates/manifold-renderer/assets/", ".json", "manifold-renderer",
-     ["node_graph::bundled_presets"], []),
-    # The layout proofs scan every primitive's uniform mirror and hand shader.
-    ("crates/manifold-renderer/src/node_graph/primitives/", ".rs", "manifold-renderer",
-     [], ["uniform_layout_proof", "uniform_layout_extended"]),
-    ("crates/manifold-renderer/src/node_graph/primitives/", ".wgsl", "manifold-renderer",
-     [], ["uniform_layout_extended"]),
-    ("crates/manifold-node-engine/src/primitives/", ".rs", "manifold-renderer",
-     [], ["uniform_layout_proof", "uniform_layout_extended"]),
-    ("crates/manifold-node-engine/src/water/primitives/", ".rs", "manifold-renderer",
-     [], ["uniform_layout_proof", "uniform_layout_extended"]),
-    ("crates/manifold-node-engine/src/", ".wgsl", "manifold-renderer",
-     [], ["uniform_layout_extended", "wgsl_validation"]),
-    # wgsl_validation parses every shader in the crate.
-    ("crates/manifold-renderer/src/", ".wgsl", "manifold-renderer", [], ["wgsl_validation"]),
-]
 PATH_MOD = re.compile(r'#\[path\s*=\s*"([^"]+)"\]\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;')
 
 
@@ -77,6 +38,8 @@ def module_name(source, root, aliases, seen=()):
 class Plan:
     packages: set = field(default_factory=set)
     filters: set = field(default_factory=set)
+    whole: set = field(default_factory=set)
+    gpu_binaries: set = field(default_factory=set)
 
     @property
     def filterset(self):
@@ -85,15 +48,23 @@ class Plan:
     def args(self):
         return [a for p in sorted(self.packages) for a in ("-p", p)] + ["-E", self.filterset]
 
+    def selections(self):
+        return {package: f"package(={package})" if package in self.whole else
+                " | ".join(sorted(f for f in self.filters if f"package(={package})" in f))
+                for package in sorted(self.packages)}
+
     def describe(self):
         return "mode: scoped (changed modules + mapped integration binaries)\nfilterset: " + self.filterset
 
 
-def plan_for_paths(paths, repo):
-    repo, plan, cache = Path(repo), Plan(), {}
+def plan_for_paths(paths, repo, workspace=None, base=None):
+    repo, plan, cache = Path(repo).resolve(), Plan(), {}
+    workspace = workspace or Workspace(repo)
+    paths = sorted(set(paths))
+    rows = integration_rows()
     for path in sorted(set(paths)):
-        if path in INTEGRATION_ROWS:
-            package, binaries = INTEGRATION_ROWS[path]
+        if path in rows:
+            package, binaries = rows[path]
             plan.packages.add(package)
             plan.filters.update(f"(package(={package}) & binary(={binary}))" for binary in binaries)
         for prefix, suffix, package, modules, binaries in PREFIX_ROWS:
@@ -101,17 +72,23 @@ def plan_for_paths(paths, repo):
                 plan.packages.add(package)
                 plan.filters.update(f"(package(={package}) & test(/^{module}::/))" for module in modules)
                 plan.filters.update(f"(package(={package}) & binary(={binary}))" for binary in binaries)
-        parts = Path(path).parts
-        if len(parts) < 4 or parts[0] != "crates" or not path.endswith(".rs"):
+        package = workspace.owner(path)
+        if package and path == workspace.roots[package] + '/Cargo.toml':
+            plan.packages.add(package)
+            plan.whole.add(package)
+        if not package or not path.endswith(".rs"):
             continue
+        crate = repo / workspace.roots[package]
+        relative = (repo / path).relative_to(crate)
+        parts = ("crates", package, *relative.parts)
         # Deleted tests have no binary; a rename selects only its surviving path.
         if parts[2] == "tests" and not (repo / path).is_file():
             continue
-        crate = repo / parts[0] / parts[1]
-        if not (crate / "Cargo.toml").exists():
-            continue
         if crate not in cache:
-            manifest = tomllib.loads((crate / "Cargo.toml").read_text())
+            manifest = {"package": {"name": package}}
+            for kind in ("test", "bin"):
+                manifest[kind] = [{"name": t["name"], "path": Path(t["src_path"]).relative_to(crate).as_posix()}
+                                  for t in workspace.targets(package, kind)]
             aliases = {}
             for source in (crate / "src").rglob("*.rs"):
                 for target, name in PATH_MOD.findall(source.read_text()):
@@ -120,6 +97,10 @@ def plan_for_paths(paths, repo):
         manifest, aliases = cache[crate]
         package = manifest["package"]["name"]
         plan.packages.add(package)
+        target_sources = {Path(t['src_path']).resolve(): t for t in workspace.targets(package)}
+        owning_target = target_sources.get((repo / path).resolve())
+        if owning_target and ('lib' in owning_target['kind'] or 'custom-build' in owning_target['kind']):
+            plan.whole.add(package)
         binaries = set()
         if parts[2] == "tests":
             relative = Path(*parts[2:]).as_posix()
@@ -157,9 +138,61 @@ def plan_for_paths(paths, repo):
             for module in modules:
                 prefix = "::".join(module) + "::" if module else "tests::"
                 plan.filters.add(f"(package(={package}){binary_filter} & test(/^{prefix}/))")
+        else:
+            # A metadata target outside Cargo's conventional src/tests layout
+            # changes the package; do not invent a path-derived module filter.
+            plan.whole.add(package)
         for binary in binaries:
             plan.filters.add(f"(package(={package}) & binary(={binary}))")
+    for expression in list(plan.filters):
+        package = re.search(r'package\(=([^)]*)\)', expression)[1]
+        binary = re.search(r'binary\(=([^)]*)\)', expression)
+        if not binary or package not in workspace.packages:
+            continue
+        target = next((t for t in workspace.targets(package) if t['name'] == binary[1]), None)
+        if target and 'gpu-proofs' in target.get('required-features', []):
+            plan.gpu_binaries.add((package, binary[1]))
+            plan.filters.remove(expression)
+    plan.packages = plan.whole | {p for p in plan.packages if any(f'package(={p})' in f for f in plan.filters)}
+    if any(path.startswith(CATALOG_PATHS) for path in paths):
+        plan.packages.add(CATALOG_PACKAGE)
+        plan.filters.add(f'(package(={CATALOG_PACKAGE}) & test(regenerates_in_sync))')
+    if base:
+        old = subprocess.run(['git', '-C', str(repo), 'ls-tree', '-r', '--name-only', base],
+                             capture_output=True, text=True, check=True).stdout.splitlines()
+        for package in plan.packages:
+            if package not in workspace.roots:
+                raise ValueError(f'unresolved test package: {package}')
+            root = workspace.roots[package]
+            sources = {p.relative_to(repo).as_posix() for p in (repo / root).rglob('*.rs')
+                       if 'target' not in p.parts}
+            touched = sources.intersection(paths)
+            if root + '/Cargo.toml' not in old or (sources and len(touched) * 2 >= len(sources)):
+                plan.whole.add(package)
     return plan
+
+
+def validate_inventory(plan, package, listing):
+    """A nonempty union must not conceal an ownership mapping typo."""
+    suites = list(listing['rust-suites'].values())
+
+    def matches(expression):
+        binary = re.search(r'binary\(=([^)]*)\)', expression)
+        prefix = re.search(r'test\(/(.*)/\)', expression)
+        literal = re.search(r'test\(([^/)][^)]*)\)', expression)
+        return {(s['binary-name'], name) for s in suites
+                if not binary or s['binary-name'] == binary[1]
+                for name in s['testcases'] if (not prefix or re.search(prefix[1], name))
+                and (not literal or literal[1] in name)}
+
+    selected = matches('')
+    if not selected:
+        raise ValueError(f'{package}: default-feature inventory contains no tests')
+    if package not in plan.whole:
+        for expression in sorted(plan.filters):
+            if f'package(={package})' in expression and not matches(expression):
+                raise ValueError(f'{package}: ownership mapping resolves to no tests: {expression}')
+    return selected
 
 
 if __name__ == "__main__":

@@ -17,7 +17,10 @@ import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA = 1
+from gate_workspace import Workspace
+from gate_policy import SHARED_ASSETS
+
+SCHEMA = 2
 
 
 def git(repo, *args):
@@ -41,40 +44,8 @@ def dependency_paths(repo, packages):
     root = tomllib.loads((repo / 'Cargo.toml').read_text())
     if root.get('patch') or root.get('replace'):
         raise ValueError('Cargo patch/replace requires a dependency-scope audit')
-    workspace = root.get('workspace', {})
-    manifests = {}
-    for pattern in workspace.get('members', []):
-        for directory in repo.glob(pattern):
-            data = tomllib.loads((directory / 'Cargo.toml').read_text())
-            manifests[data['package']['name']] = (directory, data)
-    found, pending = set(), list(packages)
-    while pending:
-        name = pending.pop()
-        if name in found:
-            continue
-        if name not in manifests:
-            raise ValueError(f'unknown local package {name}')
-        found.add(name)
-        directory, data = manifests[name]
-        tables = [data, *data.get('target', {}).values()]
-        for table in tables:
-            for kind in ('dependencies', 'dev-dependencies', 'build-dependencies'):
-                for alias, dep in table.get(kind, {}).items():
-                    if not isinstance(dep, dict):
-                        continue
-                    owner = directory
-                    if dep.get('workspace'):
-                        dep = workspace.get('dependencies', {})[alias]
-                        owner = repo
-                    if isinstance(dep, dict) and 'path' in dep:
-                        path = (owner / dep['path']).resolve()
-                        if not path.is_relative_to(repo):
-                            raise ValueError(f'external path dependency: {path}')
-                        child = tomllib.loads((path / 'Cargo.toml').read_text())
-                        child_name = child['package']['name']
-                        manifests[child_name] = (path, child)
-                        pending.append(child_name)
-    return sorted(str(manifests[n][0].relative_to(repo)) for n in found)
+    workspace = Workspace(repo)
+    return sorted(workspace.roots[n] for n in workspace.dependencies(packages))
 
 
 def host_inputs(repo, cargo=False):
@@ -139,7 +110,9 @@ def selected_entries(repo, prefixes):
     untracked = git(repo, 'ls-files', '--others', '--exclude-standard', '-z').split('\0')
     # Fixtures ignored by Git still change test results. Limit the scan to
     # selected input roots; never walk target or another slot's checkout.
-    roots = [p for p in prefixes if p.split('/')[0] in {'crates', 'tests', 'assets', 'tools'}]
+    roots = [p for p in prefixes if (repo / p).is_dir()
+             and not any(part in {'target', '.git', '.claude', '__pycache__'}
+                         for part in Path(p).parts)]
     ignored = git(repo, 'ls-files', '--others', '--ignored', '--exclude-standard', '-z',
                   '--', *roots).split('\0') if roots else []
     for path in set(dirty + untracked + ignored):
@@ -167,8 +140,7 @@ def rust_paths(repo, packages):
         'Cargo.toml', 'Cargo.lock', 'rust-toolchain', 'rust-toolchain.toml',
         '.cargo', '.config', 'deny.toml', 'clippy.toml', '.clippy.toml',
         'scripts', 'tests', 'assets', 'tools', 'native', 'shaders', 'vendor',
-        'crates/manifold-foundation/assets/fonts',
-        'docs/node_catalog', '.gitignore']
+        'docs/node_catalog', '.gitignore', *SHARED_ASSETS]
 
 
 def command_spec(repo, label, cmd):
@@ -275,7 +247,7 @@ def command_pass(repo, label, cmd):
 
 def proof_pass(repo, run):
     # Canonical per-invocation selection shared by the proof gate and queue.
-    package = run.get('package', 'manifold-renderer')
+    package = run['package']
     identity = {'kind': 'gpu-proof-run', 'package': package, 'features': ['gpu-proofs'],
                 'targets': sorted(run['targets'] if run['targets'] is not None
                                   else ([] if run['lib'] else ['gpu_proofs'])), 'lib': run['lib'],
@@ -324,11 +296,11 @@ def queued_proof(command, repo):
                 run['filters'].append(arg)
     except (StopIteration, ValueError):
         return None
-    if (len(packages) != 1 or packages[0] not in (
-            'manifold-renderer', 'manifold-node-engine', 'manifold-ui-paint')
-            or sorted(features) != ['gpu-proofs'] or threads != 1):
+    if (len(packages) != 1 or sorted(features) != ['gpu-proofs'] or threads != 1):
         return None
     if not (run['targets'] or run['lib']):
+        return None
+    if packages[0] not in Workspace(repo).feature_packages('gpu-proofs'):
         return None
     run['package'] = packages[0]
     return proof_pass(repo, run)

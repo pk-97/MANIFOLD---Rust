@@ -35,6 +35,9 @@ def flow_filters_for_paths(repo, paths):
 def tooling_checks(repo, paths):
     """Shared worker/landing selection; does not execute tests."""
     tooling = {
+        'scripts/test_gate_readiness.py': {'scripts/gate_readiness.py', 'scripts/gate_workspace.py',
+            'scripts/gate_policy.py', 'scripts/cpu_scope.py', 'scripts/landing_gate.py',
+            'scripts/test_gate_readiness.py', 'scripts/fixtures/gate-p1.json', '.config/nextest.toml'},
         "scripts/test_agent_worktree.py": {"scripts/agent-worktree.py", "scripts/codex_brokers.py", "scripts/test_agent_worktree.py"},
         "scripts/test_rt_noise_gate.py": {"scripts/rt_noise_gate.py", "scripts/test_rt_noise_gate.py", "scripts/rt_noise_baseline.json", "scripts/trunk_health.py"},
         "scripts/test_codex_checks.py": {"scripts/codex_checks.py", "scripts/test_codex_checks.py", "scripts/landing_gate.py", "scripts/run_ui_flows.py", "scripts/gpu_proofs_gate.py", "scripts/gpu_scope.py", "scripts/ui-flows/manifest.json"},
@@ -57,6 +60,12 @@ def tooling_checks(repo, paths):
         "scripts/test_dev.py": {"scripts/dev.py", "scripts/TOOLS.md", "scripts/test_dev.py"} | {
             p for p in paths if p.startswith("scripts/") and p.endswith((".py", ".sh"))},
     }
+    shared = {'scripts/gate_workspace.py', 'scripts/gate_policy.py'}
+    for test in ('scripts/test_gpu_scope.py', 'scripts/test_gate_passes.py',
+                 'scripts/test_gpu_proofs_gate.py', 'scripts/test_landing_gate.py'):
+        tooling[test].update(shared)
+    tooling['scripts/test_gpu_queue.py'] = {'scripts/test_gpu_queue.py', 'scripts/gpu_queue.py',
+                                          'scripts/trunk_health.py'}
     # Reference checks also run when a covered regression source changes.
     from codex_regressions import inventory
     for item in inventory(repo):

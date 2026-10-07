@@ -3,8 +3,9 @@
 
 Gates only what the branch touched (GPU leg: scripts/gpu_scope.py); the workspace-wide sweep lives in
 scripts/trunk_health.py (nightly). Pass --repo <worktree path> of the branch
-being landed, after merging origin/main into it. Stop at the first failed check; preserve its
-transcript and timings. Exit 0 iff all required checks pass; exit CHECKS_RED
+being landed, after merging origin/main into it. Collect cheap readiness errors
+before any build, then collect runtime failures with transcripts and timings.
+Exit 0 iff all required checks pass; exit CHECKS_RED
 when the gate ran every check (the default) and some were red; exit 1 on a
 refusal, a crash, or a `--fail-fast` stop.
 """
@@ -46,6 +47,8 @@ import gpu_scope
 import cpu_scope
 import diff_scope
 import gate_passes
+import gate_readiness
+from gate_workspace import Workspace
 
 
 def build_environment(cmd, cwd):
@@ -65,6 +68,7 @@ def build_environment(cmd, cwd):
     repo = Path(cwd).resolve()
     environment = os.environ.copy()
     environment["CARGO_INCREMENTAL"] = "0"
+    environment["CARGO_BUILD_JOBS"] = "4"
     overrides = [environment[name] for name in
                  ("CARGO_TARGET_DIR", "CARGO_BUILD_TARGET_DIR") if environment.get(name)]
     targets = {Path(os.path.abspath(repo / value)) for value in overrides}
@@ -244,7 +248,7 @@ def parse_slow_tests(output):
             sorted(times.items(), key=lambda item: (-item[1], item[0]))[:10]]
 
 
-def run_check(label, cmd, cwd, timeout):
+def run_check(label, cmd, cwd, timeout, passed=None):
     nextest = len(cmd) > 1 and Path(cmd[0]).name == 'cargo' and cmd[1] == 'nextest'
     slow_tests = SLOW_TESTS.get()
     if nextest and slow_tests is not None:
@@ -253,7 +257,7 @@ def run_check(label, cmd, cwd, timeout):
     # Build receipts alone cannot guarantee artifacts still exist after reclaim.
     cacheable = (label != 'gpu-proofs' and '--no-run' not in cmd
                  and '--build-only' not in cmd)
-    passed = gate_passes.command_pass(cwd, label, cmd) if cacheable else None
+    passed = passed or (gate_passes.command_pass(cwd, label, cmd) if cacheable else None)
     if passed and passed.reused():
         if label == 'flow-gate':
             import run_ui_flows
@@ -270,6 +274,11 @@ def run_check(label, cmd, cwd, timeout):
     print(f"[RUN] {label}  (live transcript: {live})", flush=True)
     result = run_cmd(cmd, cwd, timeout, live_log=live)
     exit_, out, err, seconds = result
+    if exit_ == -1 or any(marker in out + err for marker in (
+            'GPU-PROOFS GATE: HUNG', 'GPU-PROOFS TIMING: FAIL')):
+        # Keep collecting runtime reds, but missing coverage cannot be waived
+        # through the named-red landing path.
+        RAN_EVERY_CHECK.set(False)
     if nextest and slow_tests is not None:
         slow_tests[label] = parse_slow_tests(out + '\n' + err)
     if label == 'docs-index' and exit_ == 0:
@@ -318,55 +327,12 @@ def parse_package_from_cargo(toml_path):
     return None
 
 def packages_for_paths(repo, paths):
-    packages = []
-    for path in paths:
-        parts = path.split("/")
-        if len(parts) >= 2 and parts[0] == "crates":
-            manifest = Path(repo) / "crates" / parts[1] / "Cargo.toml"
-            if manifest.exists():
-                name = parse_package_from_cargo(manifest)
-                if name and name not in packages:
-                    packages.append(name)
-    return packages
+    workspace = Workspace(repo)
+    return sorted({workspace.owner(path) for path in paths} - {None})
 
 
 def reverse_deps(repo, packages):
-    """Find workspace packages that directly depend on any package in packages."""
-    try:
-        exit_, out, err, duration = run_cmd(
-            ["cargo", "metadata", "--format-version", "1"],
-            cwd=repo, timeout=120)
-        if exit_ != 0:
-            print(f"[WARN] cargo metadata failed — gating touched crates only")
-            return []
-
-        metadata = json.loads(out)
-        # Build map of workspace package names to their direct dependencies
-        workspace_members = {}
-        for package in metadata.get("packages", []):
-            # Only consider workspace members
-            if package.get("source") is None:  # workspace packages have no source
-                pkg_name = package.get("name")
-                deps = set()
-                for dep in package.get("dependencies", []):
-                    dep_name = dep.get("name")
-                    # Only track dependencies that are also workspace members
-                    if any(p.get("name") == dep_name and p.get("source") is None
-                           for p in metadata.get("packages", [])):
-                        deps.add(dep_name)
-                workspace_members[pkg_name] = deps
-
-        # Find packages that depend on any of the input packages
-        packages_set = set(packages)
-        dependents = []
-        for pkg_name, deps in workspace_members.items():
-            if pkg_name not in packages_set and (deps & packages_set):
-                dependents.append(pkg_name)
-
-        return sorted(dependents)
-    except Exception as e:
-        print(f"[WARN] cargo metadata failed — gating touched crates only")
-        return []
+    return Workspace(repo).reverse_dependencies(packages)
 
 
 def flow_filters(repo, paths):
@@ -457,8 +423,13 @@ def _main(stack):
                         help=argparse.SUPPRESS)
     parser.add_argument("--fail-fast", dest="keep_going", action="store_false",
                         help="stop at the first red instead of collecting every red")
+    parser.add_argument('--plan-only', action='store_true', help='read-only plan including working-tree changes; no build, test or receipt writes')
+    parser.add_argument('--paths-json', type=Path, help='plan-only path fixture with paths/base/head')
     args = parser.parse_args()
 
+    if args.paths_json and not args.plan_only:
+        parser.error('--paths-json requires --plan-only')
+    planning_started = time.perf_counter()
     repo = Path(args.repo).resolve()
     base_sha = run_cmd(["git", "merge-base", args.base, "HEAD"],
                        cwd=repo, timeout=300)[1].strip()
@@ -469,59 +440,69 @@ def _main(stack):
     # the base: nothing is touched, every check skips, exit 0. Two landings on
     # 2026-09-29 merged on that fully-skipped gate.
     head_sha = run_cmd(["git", "rev-parse", "HEAD"], cwd=repo, timeout=30)[1].strip()
-    if head_sha == base_sha:
+    if head_sha == base_sha and not args.plan_only:
         print(f"[FAIL] HEAD == {args.base} at {repo}: nothing to gate. "
               "Pass --repo <worktree path> of the branch being landed.")
         return 1
     dirty = run_cmd(['git', 'status', '--porcelain', '--untracked-files=normal'],
                     cwd=repo, timeout=30)
-    if dirty[0] or dirty[1].strip():
+    if (dirty[0] or dirty[1].strip()) and not args.plan_only:
         print('[FAIL] landing needs a clean committed tree; standalone proof passes can precede the commit')
         return 1
-    GATED_HEAD.set(head_sha)
+    GATED_HEAD.set(None if args.plan_only else head_sha)
     RAN_EVERY_CHECK.set(args.keep_going)
 
     try:
-        paths, ignored_paths = diff_scope.effective_paths(repo, base_sha)
+        if args.paths_json:
+            fixture = json.loads(args.paths_json.read_text())
+            paths, ignored_paths = fixture['paths'], []
+            base_sha = fixture['base']
+        else:
+            paths, ignored_paths = diff_scope.effective_paths(repo, base_sha, head=None if args.plan_only else 'HEAD')
+            if args.plan_only:
+                paths = sorted(set(paths) | set(diff_scope.git(repo, 'ls-files', '--others', '--exclude-standard', '-z').strip('\0').split('\0')) - {''})
     except RuntimeError as error:
         print(f"[FAIL] diff scope: {error}")
         return 1
     if ignored_paths:
         print(f"[scope] excluded {len(ignored_paths)} docs/comment-only file(s)")
-    packages = packages_for_paths(repo, paths)
-    cpu_plan = cpu_scope.plan_for_paths(paths, repo)
+    readiness = gate_readiness.plan(repo, paths, base_sha)
+    packages, dependents = readiness['packages'], readiness['dependents']
+    cpu_plan, plan = readiness['cpu'], readiness['gpu']
+    touches_gpu = bool(plan and plan.active)
     scope_reason = "docs/comment-only diff" if not paths else "no touched packages"
-    touches_docs = run_cmd(["git", "diff", "--name-only", "--diff-filter=AR",
-                            f"{base_sha}..HEAD", "--", "docs/"],
-                           cwd=repo, timeout=300)[1].strip() != ""
-    touches_gpu = any(gpu_scope.is_gpu_path(path) for path in paths)
-
     results = []
-
-    # Stale generated artifacts are knowable in seconds; report all of them
-    # before any build instead of one per 15-minute rerun.
-    fresh = gate_passes.Pass(repo, 'fresh-docs-index',
-                            lambda: (['docs', 'scripts'], ['fresh-docs-index'], False))
-    problems = [] if fresh.reused() else freshness_problems(repo)
-    if not problems and not fresh.record:
-        fresh.save(0)
-    if problems:
-        for name, detail, command in problems:
-            tail = [*detail, f"regenerate: {command}"]
-            results.append(("FAIL", f"fresh-{name}", None, tail))
-            print_result(f"fresh-{name}", "FAIL", None, tail)
-        return refuse(repo, base_sha, results)
+    for label, message in readiness['errors']:
+        results.append(('FAIL', label, None, message.splitlines()))
+        print_result(label, 'FAIL', tail=message.splitlines())
+    try:
+        freshness = freshness_problems(repo)
+    except (OSError, ValueError, KeyError, RuntimeError) as error:
+        freshness = [('docs-index', [str(error)], 'scripts/gen_docs_index.py')]
+    for name, detail, command in freshness:
+        tail = [*detail, f'regenerate: {command}']
+        results.append(('FAIL', 'fresh-' + name, None, tail))
+        print_result('fresh-' + name, 'FAIL', tail=tail)
+    planning_seconds = time.perf_counter() - planning_started
+    print(f'[planning] {planning_seconds:.3f}s', flush=True)
+    if args.plan_only:
+        print(json.dumps(dict(gate_readiness.describe(readiness), planning_seconds=planning_seconds), indent=2))
+        return int(any(row[0] == 'FAIL' for row in results))
 
     # Harness changes use the same focused tests advertised in worker briefs.
     from codex_checks import tooling_checks
-    for check in tooling_checks(repo, paths):
+    try:
+        tooling = tooling_checks(repo, paths)
+    except (OSError, ValueError, KeyError, RuntimeError) as error:
+        tooling = []
+        results.append(('FAIL', 'tooling-selection', None, [str(error)]))
+        print_result('tooling-selection', 'FAIL', tail=[str(error)])
+    for check in tooling:
         exit_, out, err, duration = run_check(check["name"], check["argv"], cwd=repo, timeout=120)
         tail = (out + err).rstrip().splitlines()[-20:]
         status = "PASS" if exit_ == 0 else "FAIL"
         results.append((status, check["name"], duration, tail))
         print_result(check["name"], status, duration, tail if exit_ else None)
-        if status == "FAIL" and not args.keep_going:
-            return finish(repo, base_sha, results)
 
     # a. design-status
     exit_, out, err, duration = run_check("design-status",
@@ -531,28 +512,21 @@ def _main(stack):
     status = "PASS" if exit_ == 0 else "FAIL"
     results.append((status, "design-status", duration, tail))
     print_result("design-status", status, duration, tail if exit_ != 0 else None)
-    if status == "FAIL" and not args.keep_going:
-        return finish(repo, base_sha, results)
 
-    # b. docs-index (only if docs added/renamed)
-    if touches_docs:
-        exit_, out, err, duration = run_check("docs-index",
-            ["python3", "scripts/gen_docs_index.py"],
-            cwd=repo, timeout=300)
-        tail = (out + err).rstrip().splitlines()[-20:]
-        stale_check = run_cmd(["git", "diff", "--name-only", "--", "docs/README.md"],
-                               cwd=repo, timeout=300)[1].strip()
-        if stale_check:
-            status = "FAIL"
-            tail = ["docs index was stale — commit the regenerated index"]
-        else:
-            status = "PASS" if exit_ == 0 else "FAIL"
-        results.append((status, "docs-index", duration, tail))
-        print_result("docs-index", status, duration, tail if status == "FAIL" else None)
-        if status == "FAIL" and not args.keep_going:
-            return finish(repo, base_sha, results)
-    else:
-        skip(results, "docs-index", "no docs added or renamed")
+    # d2. ignored-tests — no new #[ignore] beyond the ratchet baseline
+    # (spec: .claude/hooks/ignored-test-guard.py docstring).
+    exit_, out, err, duration = run_check("ignored-tests",
+        ["python3", ".claude/hooks/ignored-test-guard.py", "--scan"],
+        cwd=repo, timeout=120)
+    tail = (out + err).rstrip().splitlines()[-20:]
+    status = "PASS" if exit_ == 0 else "FAIL"
+    results.append((status, "ignored-tests", duration, tail))
+    print_result("ignored-tests", status, duration, tail if exit_ != 0 else None)
+
+    # Readiness always collects independent cheap failures before any build.
+    if any(status == 'FAIL' for status, *_ in results):
+        return refuse(repo, base_sha, results)
+    stack.enter_context(gpu_queue.landing_pending())
 
     # d. deny
     exit_, out, err, duration = run_check("deny",
@@ -565,20 +539,6 @@ def _main(stack):
     if status == "FAIL" and not args.keep_going:
         return finish(repo, base_sha, results)
 
-    # d2. ignored-tests — no new #[ignore] beyond the ratchet baseline
-    # (spec: .claude/hooks/ignored-test-guard.py docstring).
-    exit_, out, err, duration = run_check("ignored-tests",
-        ["python3", ".claude/hooks/ignored-test-guard.py", "--scan"],
-        cwd=repo, timeout=120)
-    tail = (out + err).rstrip().splitlines()[-20:]
-    status = "PASS" if exit_ == 0 else "FAIL"
-    results.append((status, "ignored-tests", duration, tail))
-    print_result("ignored-tests", status, duration, tail if exit_ != 0 else None)
-    if status == "FAIL" and not args.keep_going:
-        return finish(repo, base_sha, results)
-
-    # Extend with direct reverse dependents
-    dependents = reverse_deps(repo, packages) if packages else []
     if dependents:
         print(f"dependents added: {', '.join(dependents)}")
     else:
@@ -627,22 +587,7 @@ def _main(stack):
             skip(results, label, scope_reason)
         return finish(repo, base_sha, results)
 
-    # GPU-proofs scope is settled before anything builds: an unmapped path
-    # fails here, not after a compile.
     run_gpu = touches_gpu and not args.skip_gpu
-    if run_gpu:
-        try:
-            plan = gpu_scope.plan_for_paths(paths, repo, base=base_sha)
-        except RuntimeError as error:
-            message = f"GPU-PROOFS SCOPE: FAIL - {error}"
-            print(message)
-            results.append(("FAIL", "gpu-proofs", None, [message]))
-            return refuse(repo, base_sha, results)
-        if plan.unmapped:
-            message = gpu_scope.unmapped_message(plan)
-            print(message)
-            results.append(("FAIL", "gpu-proofs", None, message.splitlines()))
-            return refuse(repo, base_sha, results)
 
     # Nextest must keep the default-feature test set, regardless of proof
     # scope. Enabling gpu-proofs also admits nested/individually gated tests
@@ -652,10 +597,9 @@ def _main(stack):
     # via scoped, budgeted cargo test runs.
 
     test_legs = []
-    for index, filterset in enumerate(sorted(cpu_plan.filters)):
-        package = re.search(r'package\(=([^)]*)\)', filterset).group(1)
-        label = 'tests' if len(cpu_plan.filters) == 1 else f'tests/{index + 1}'
-        cmd = ['cargo', 'nextest', 'run', '--no-fail-fast', '--no-tests=pass',
+    for package, filterset in cpu_plan.selections().items():
+        label = f'tests/{package}'
+        cmd = ['cargo', 'nextest', 'run', '--no-fail-fast',
                '-p', package, '-E', filterset]
         passed = gate_passes.command_pass(repo, label, cmd)
         test_legs.append((label, cmd, passed))
@@ -689,33 +633,25 @@ def _main(stack):
                 unbuilt.add(package)
                 if not args.keep_going:
                     return finish(repo, base_sha, results)
+        for package in sorted(builds.keys() - unbuilt):
+            command = ['cargo', 'nextest', 'list', '-p', package, '--message-format', 'json']
+            code, out, err, duration = run_cmd(command, cwd=repo, timeout=600)
+            try:
+                if code:
+                    raise ValueError(err or out)
+                cpu_scope.validate_inventory(cpu_plan, package, json.loads(out))
+            except (ValueError, KeyError, TypeError) as error:
+                RAN_EVERY_CHECK.set(False)
+                label = f'test-ownership/{package}'
+                tail = [str(error), f'rerun: {rerun_command(command, repo)}']
+                results.append(('FAIL', label, duration, tail))
+                print_result(label, 'FAIL', duration, tail)
+                unbuilt.add(package)
         pending_tests = [leg for leg in pending_tests if leg[1][leg[1].index('-p') + 1] not in unbuilt]
     elif test_legs:
         skip(results, 'tests-build', 'all selected tests already passed; no artifacts needed')
     else:
         skip(results, "tests-build", "no changed Rust modules or mapped integration binaries")
-    # Catalog freshness is relevant to node declarations and catalog output,
-    # not every change in a renderer dependency.
-    catalog_paths = ("crates/manifold-renderer/src/node_graph/primitives/",
-                     "crates/manifold-node-engine/src/primitives/",
-                     "crates/manifold-node-engine/src/water/primitives/",
-                     "crates/manifold-renderer/src/node_graph/catalog_gen.rs",
-                     "crates/manifold-node-engine/src/descriptor.rs",
-                     "crates/manifold-renderer/src/node_graph/registry.rs",
-                     "docs/node_catalog")
-    if any(path.startswith(catalog_paths) for path in paths):
-        exit_, out, err, duration = run_check(
-            "catalog-fresh",
-            ["cargo", "nextest", "run", "-p", "manifold-renderer",
-             "-E", "test(regenerates_in_sync)"], cwd=repo, timeout=600)
-        tail = (out + err).rstrip().splitlines()[-20:]
-        status = "PASS" if exit_ == 0 else "FAIL"
-        if exit_:
-            tail.append("regenerate: cargo run -p manifold-renderer --bin gen_node_catalog")
-        results.append((status, "catalog-fresh", duration, tail))
-        print_result("catalog-fresh", status, duration, tail if exit_ else None)
-        if status == "FAIL" and not args.keep_going:
-            return finish(repo, base_sha, results)
     if run_gpu:
         gpu_args = [arg for path in paths for arg in ("--path", path)]
         if args.base != "origin/main":
@@ -752,11 +688,11 @@ def _main(stack):
 
     # f. tests (if packages touched)
     if test_legs:
-        for label, cmd, _ in test_legs:
+        for label, cmd, passed in test_legs:
             if cmd[cmd.index('-p') + 1] in unbuilt:
                 skip(results, label, "tests-build failed")
                 continue
-            exit_, out, err, duration = run_check(label, cmd, cwd=repo, timeout=3600)
+            exit_, out, err, duration = run_check(label, cmd, cwd=repo, timeout=3600, passed=passed)
             tail = (out + err).rstrip().splitlines()[-20:]
             status = 'PASS' if exit_ == 0 else 'FAIL'
             results.append((status, label, duration, tail))
