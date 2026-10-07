@@ -14,6 +14,7 @@ import contextlib
 import contextvars
 import importlib.util
 import json
+import math
 import os
 import re
 import signal
@@ -36,6 +37,7 @@ RAN_EVERY_CHECK = contextvars.ContextVar('ran_every_check', default=False)
 # Seconds this gate spent waiting for the machine-wide GPU lock; None when no
 # leg needed it. Logged per run: queue time is landing time nobody saw before.
 GPU_WAIT = contextvars.ContextVar('gpu_wait', default=None)
+SLOW_TESTS = contextvars.ContextVar('slow_tests', default=None)
 
 # GPU-proofs scope (touched paths -> focused tests + smoke, time budget, no
 # run-everything fallback) lives in scripts/gpu_scope.py; the full suite runs
@@ -221,7 +223,32 @@ def write_landing_log(repo, label, stdout, stderr):
     return path
 
 
+def parse_slow_tests(output):
+    """Keep one maximum per binary/test, including unfinished SLOW lower bounds."""
+    if not isinstance(output, str):
+        return []
+    output = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', output)
+    times = {}
+    for line in output.splitlines():
+        match = re.fullmatch(
+            r'\s*(?:SLOW|PASS)\s+\[\s*>?\s*([0-9]+(?:\.[0-9]+)?)s\]\s+'
+            r'(?:\(\d+/\d+\)\s+)?(\S+)\s+(\S.*?)\s*', line)
+        if not match:
+            continue
+        seconds = float(match[1])
+        if not math.isfinite(seconds) or seconds < 10:
+            continue
+        name = f'{match[2]} {match[3]}'
+        times[name] = max(times.get(name, 0), seconds)
+    return [{'name': name, 's': seconds} for name, seconds in
+            sorted(times.items(), key=lambda item: (-item[1], item[0]))[:10]]
+
+
 def run_check(label, cmd, cwd, timeout):
+    nextest = len(cmd) > 1 and Path(cmd[0]).name == 'cargo' and cmd[1] == 'nextest'
+    slow_tests = SLOW_TESTS.get()
+    if nextest and slow_tests is not None:
+        slow_tests[label] = []
     # Proofs own their canonical per-invocation records (also used by gpu_queue).
     # Build receipts alone cannot guarantee artifacts still exist after reclaim.
     cacheable = (label != 'gpu-proofs' and '--no-run' not in cmd
@@ -243,6 +270,8 @@ def run_check(label, cmd, cwd, timeout):
     print(f"[RUN] {label}  (live transcript: {live})", flush=True)
     result = run_cmd(cmd, cwd, timeout, live_log=live)
     exit_, out, err, seconds = result
+    if nextest and slow_tests is not None:
+        slow_tests[label] = parse_slow_tests(out + '\n' + err)
     if label == 'docs-index' and exit_ == 0:
         stale = run_cmd(['git', 'diff', '--name-only', '--', 'docs/README.md'],
                         cwd=cwd, timeout=300)[1].strip()
@@ -401,10 +430,12 @@ def main():
     token = GATED_HEAD.set(None)
     ran = RAN_EVERY_CHECK.set(False)
     wait = GPU_WAIT.set(None)
+    slow = SLOW_TESTS.set({})
     try:
         with contextlib.ExitStack() as stack:
             return _main(stack)
     finally:
+        SLOW_TESTS.reset(slow)
         GPU_WAIT.reset(wait)
         RAN_EVERY_CHECK.reset(ran)
         GATED_HEAD.reset(token)
@@ -847,6 +878,9 @@ def finish(repo, base_sha, results):
                 "ts": datetime.now(timezone.utc).isoformat(),
                 "duration_s": round(duration, 1) if duration is not None else None
             }
+            slow_tests = SLOW_TESTS.get() or {}
+            if label in slow_tests:
+                check_entry["slow_tests"] = slow_tests[label]
             checks.append(check_entry)
         entry = {
             "ts": datetime.now(timezone.utc).isoformat(),

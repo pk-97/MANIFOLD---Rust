@@ -37,6 +37,42 @@ def process_alive(pid):
     return bool(state) and not state.startswith("Z")
 
 
+class SlowTestParsingTests(unittest.TestCase):
+    def test_status_lines_colours_counters_and_summary_duplicates(self):
+        transcript = (
+            '    \x1b[33mSLOW\x1b[0m [>30.000s] manifold-renderer preset_runtime::tests::foo\n'
+            '    SLOW [>60.000s] manifold-renderer preset_runtime::tests::foo\n'
+            '    \x1b[32mPASS\x1b[0m [  62.345s] (1/3) \x1b[1mmanifold-renderer\x1b[0m preset_runtime::tests::foo\n'
+            '    PASS [  12.300s] manifold-core::integration binary::name\n'
+            '    PASS [  10.000s] manifold-core boundary\n'
+            '    PASS [   9.999s] manifold-core fast\n'
+            '    SLOW [>30.000s] manifold-renderer unfinished\n'
+            '     Summary [  62.400s] 3 tests run\n'
+            '    SLOW [  62.345s] manifold-renderer preset_runtime::tests::foo\n'
+        )
+        self.assertEqual(landing_gate.parse_slow_tests(transcript), [
+            {'name': 'manifold-renderer preset_runtime::tests::foo', 's': 62.345},
+            {'name': 'manifold-renderer unfinished', 's': 30.0},
+            {'name': 'manifold-core::integration binary::name', 's': 12.3},
+            {'name': 'manifold-core boundary', 's': 10.0},
+        ])
+
+    def test_caps_at_ten_slowest_with_stable_ties(self):
+        transcript = '\n'.join(f'PASS [{n}s] pkg test_{n}' for n in range(25))
+        transcript += '\nPASS [24s] pkg a_tie\nPASS [24s] pkg test_24'
+        expected = [{'name': 'pkg a_tie', 's': 24.0}] + [
+            {'name': f'pkg test_{n}', 's': float(n)} for n in range(24, 15, -1)]
+        self.assertEqual(landing_gate.parse_slow_tests(transcript), expected)
+
+    def test_parse_misses_never_raise(self):
+        for output in (None, b'PASS [10s] pkg test', '', 'test foo ... ok',
+                       'PASS [nans] pkg foo', 'PASS [no duration] pkg foo',
+                       'SLOW [>30s]', 'PASS [12.3.4s] pkg foo',
+                       'PASS [' + '9' * 400 + 's] pkg foo'):
+            with self.subTest(output=output):
+                self.assertEqual(landing_gate.parse_slow_tests(output), [])
+
+
 class LandingTests(unittest.TestCase):
     def setUp(self):
         self.enterContext(patch.object(landing_gate.gpu_scope, "learned_times_path", return_value=None))
@@ -45,7 +81,8 @@ class LandingTests(unittest.TestCase):
               "clippy", "tests-build", "gpu-proofs-build", "flow-gate", "tests", "gpu-proofs"]
 
     def exercise(self, failed=None, extra=(), stale_docs=False, packages=True, head="head", paths=None,
-                 comment=False, gpu_output=None, proof_cached=False, manifest=None):
+                 comment=False, gpu_output=None, proof_cached=False, manifest=None,
+                 nextest_output=None):
         called, commands = [], []
         self.events = events = []
         paths = paths or ["crates/manifold-gpu/src/metal/device.rs"]
@@ -92,6 +129,8 @@ class LandingTests(unittest.TestCase):
             events.append(label)
             if label == "gpu-proofs" and gpu_output is not None:
                 return (1 if label == failed else 0), gpu_output, "", 0.01
+            if cmd[:2] == ["cargo", "nextest"] and "--no-run" not in cmd and nextest_output:
+                return (1 if label == failed else 0), *nextest_output, 0.01
             return (1 if label == failed else 0), f"output for {label}\n", "", 0.01
 
         with tempfile.TemporaryDirectory() as d, contextlib.ExitStack() as stack:
@@ -127,6 +166,27 @@ class LandingTests(unittest.TestCase):
             timings = json.loads(timing_log.read_text()) if timing_log.exists() else None
             logs = [p.read_text() for p in (root / "target/landing-logs").glob("*.log")]
             return code, called, timings, commands, logs, output.getvalue(), deps.call_count
+
+    def test_nextest_timings_keep_full_output_on_pass_and_failure(self):
+        stdout = 'PASS [12.3s] manifold-renderer stdout_test'
+        stderr = 'SLOW [>30s] manifold-renderer stderr_test\n' + 'noise\n' * 25
+        expected = [{'name': 'manifold-renderer stderr_test', 's': 30.0},
+                    {'name': 'manifold-renderer stdout_test', 's': 12.3}]
+        for failed in (None, 'tests', 'catalog-fresh'):
+            with self.subTest(failed=failed):
+                _, _, timings, _, _, _, _ = self.exercise(
+                    failed=failed, nextest_output=(stdout, stderr), gpu_output=stdout,
+                    paths=['crates/manifold-renderer/src/node_graph/primitives/camera_lens.rs'])
+                for check in timings['checks']:
+                    if check['label'] == 'catalog-fresh' or check['label'].startswith('tests/'):
+                        self.assertEqual(check['slow_tests'], expected)
+                    elif check['label'] == 'tests-build':
+                        self.assertEqual(check['slow_tests'], [])
+                    else:
+                        self.assertNotIn('slow_tests', check)
+        _, _, timings, *_ = self.exercise()
+        self.assertEqual(next(c for c in timings['checks'] if c['label'] == 'tests')['slow_tests'], [])
+        self.assertIsNone(landing_gate.SLOW_TESTS.get())
 
     def test_every_failure_stops_later_checks_and_retains_evidence(self):
         for index, failed in enumerate(self.checks):

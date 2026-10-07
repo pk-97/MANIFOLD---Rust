@@ -42,6 +42,39 @@ class MetricsTests(unittest.TestCase):
         m = lm.summarize(self.rows(), landings=0)
         self.assertIsNone(m["runs_per_landing"])
         self.assertIn("runs per landing None", lm.render(m, 7))
+        self.assertEqual(m['slow_tests'], [])
+        self.assertIn('none recorded', lm.render(m, 7))
+
+    def test_slow_tests_take_max_and_count_each_landing_once(self):
+        rows = [row(self.now, 0, [('tests/1', 'PASS', 50), ('tests/2', 'PASS', 40)]),
+                row(self.now, 0, [('tests', 'PASS', 60)])]
+        rows[0]['checks'][0]['slow_tests'] = [
+            {'name': 'pkg shared', 's': 35}, {'name': 'pkg first', 's': 12.3}]
+        rows[0]['checks'][1]['slow_tests'] = [{'name': 'pkg shared', 's': 40}]
+        rows[1]['checks'][0]['slow_tests'] = [
+            {'name': 'pkg shared', 's': 30}, {'name': 'pkg second', 's': 50}]
+        m = lm.summarize(rows, landings=2)
+        self.assertEqual(m['slow_tests'], [
+            {'name': 'pkg second', 'max_s': 50, 'landings': 1},
+            {'name': 'pkg shared', 'max_s': 40, 'landings': 2},
+            {'name': 'pkg first', 'max_s': 12.3, 'landings': 1},
+        ])
+        self.assertIn('pkg shared: 40.000s; 2 landings', lm.render(m, 7))
+
+    def test_slow_tests_limit_and_informational_only(self):
+        recent = row(self.now, 0, [('tests', 'PASS', 10000)])
+        recent['checks'][0]['slow_tests'] = [
+            {'name': f'pkg test_{n}', 's': 1000 + n} for n in range(12)]
+        metrics = lm.summarize([recent], landings=1)
+        self.assertEqual(len(metrics['slow_tests']), 10)
+        self.assertEqual(metrics['slow_tests'][0]['max_s'], 1011)
+        self.assertEqual(metrics['slow_tests'][-1]['max_s'], 1002)
+        with patch.object(lm, 'read_rows', return_value=[recent]), \
+                patch.object(lm, 'landings_since', return_value=1), \
+                contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(lm.main(['--timings', '/unused']), 0)
+        self.assertIn('1011.000s', out.getvalue())
+        self.assertNotIn('LANDING METRICS: RED', out.getvalue())
 
     def test_window_and_red_threshold(self):
         with tempfile.TemporaryDirectory() as d:
