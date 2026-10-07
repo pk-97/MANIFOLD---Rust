@@ -11,7 +11,7 @@ use manifold_core::effect_graph_def::{
 };
 use manifold_core::preset_type_id::PresetTypeId;
 
-use crate::node_graph::bundled_preset_def;
+use manifold_node_engine::load::catalog_source::preset_def;
 
 const REPAIRED_STOCK_IDS: &[&str] = &[
     "MaskedPeel",
@@ -43,7 +43,7 @@ fn repair_graph(def: &mut EffectGraphDef) -> bool {
         return false;
     }
 
-    let Some(stock) = bundled_preset_def(&PresetTypeId::from_string(id.to_owned())) else {
+    let Some(stock) = preset_def(&PresetTypeId::from_string(id.to_owned())) else {
         return false;
     };
     if !same_topology(def, stock) || !qualified_fragment_nodes(def, id) {
