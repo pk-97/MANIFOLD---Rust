@@ -26,7 +26,7 @@ fn main() {
         "MANIFOLD_PHYSICS_INTEGRATION_IDENTITY",
     )
     .expect("compute physics integration source identity");
-    native_source_identity::emit_source_identity(
+    native_source_identity::emit_owned_source_identity(
         &root,
         &["src/node_graph/gltf_anim_identity.rs"],
         "MANIFOLD_PHYSICS_FAMILY_IDENTITY",

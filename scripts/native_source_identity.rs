@@ -14,6 +14,24 @@ pub fn emit_source_identity(
     relative_roots: &[&str],
     env_var: &str,
 ) -> io::Result<String> {
+    emit_identity(crate_root, relative_roots, env_var, true)
+}
+
+/// Hash selected crate-owned sources and build inputs without the implicit units source.
+pub fn emit_owned_source_identity(
+    crate_root: &Path,
+    relative_roots: &[&str],
+    env_var: &str,
+) -> io::Result<String> {
+    emit_identity(crate_root, relative_roots, env_var, false)
+}
+
+fn emit_identity(
+    crate_root: &Path,
+    relative_roots: &[&str],
+    env_var: &str,
+    include_units: bool,
+) -> io::Result<String> {
     let mut files = metadata_files(crate_root);
     let mut watch_roots = Vec::with_capacity(relative_roots.len());
     for relative_root in relative_roots {
@@ -34,7 +52,9 @@ pub fn emit_source_identity(
             ));
         }
     }
-    add_selected_file(crate_root, UNITS_SOURCE, &mut files)?;
+    if include_units {
+        add_selected_file(crate_root, UNITS_SOURCE, &mut files)?;
+    }
     emit_files(
         crate_root,
         &watch_roots,
@@ -258,6 +278,10 @@ mod tests {
         fn identity(&self, roots: &[&str]) -> String {
             emit_source_identity(&self.crate_root, roots, "TEST_SOURCE_IDENTITY").unwrap()
         }
+
+        fn owned_identity(&self, roots: &[&str]) -> String {
+            emit_owned_source_identity(&self.crate_root, roots, "TEST_OWNED_SOURCE_IDENTITY").unwrap()
+        }
     }
 
     impl Drop for Fixture {
@@ -348,6 +372,49 @@ mod tests {
         )
         .unwrap();
         assert_ne!(selected_baseline, fixture.identity(&["src/physics.rs"]));
+    }
+
+    #[test]
+    fn owned_identity_does_not_read_units() {
+        let fixture = Fixture::new("owned-units");
+        let baseline = fixture.owned_identity(&["src/physics.rs"]);
+        let units = fixture.root.join("crates/manifold-foundation/src/units.rs");
+        fs::write(&units, "pub struct Seconds(pub f32);\n").unwrap();
+        assert_eq!(baseline, fixture.owned_identity(&["src/physics.rs"]));
+        fs::remove_file(units).unwrap();
+        assert_eq!(baseline, fixture.owned_identity(&["src/physics.rs"]));
+        let error = emit_source_identity(&fixture.crate_root, &["src/physics.rs"], "TEST")
+            .expect_err("legacy identity must still require units");
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn owned_identity_tracks_selected_sources_and_build_inputs() {
+        let fixture = Fixture::new("owned-inputs");
+        let mut baseline = fixture.owned_identity(&["src/physics.rs"]);
+        fs::write(fixture.crate_root.join("src/material.rs"), "unselected change\n").unwrap();
+        assert_eq!(baseline, fixture.owned_identity(&["src/physics.rs"]));
+        for path in [
+            fixture.crate_root.join("src/physics.rs"),
+            fixture.crate_root.join("Cargo.toml"),
+            fixture.crate_root.join("build.rs"),
+            fixture.root.join("scripts/native_source_identity.rs"),
+        ] {
+            fs::write(&path, "changed selected input\n").unwrap();
+            let changed = fixture.owned_identity(&["src/physics.rs"]);
+            assert_ne!(baseline, changed, "{} must affect identity", path.display());
+            baseline = changed;
+        }
+    }
+
+    #[test]
+    fn owned_identity_is_stable_under_relocation_and_root_order() {
+        let first = Fixture::new("owned-relocated-a");
+        let second = Fixture::new("owned-relocated-b");
+        assert_eq!(
+            first.owned_identity(&["native", "src"]),
+            second.owned_identity(&["src", "native"]),
+        );
     }
 
     #[test]
