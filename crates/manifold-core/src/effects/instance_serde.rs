@@ -1125,7 +1125,7 @@ mod tests {
 
     #[test]
     fn graph_field_skipped_when_none() {
-        // Existing fixtures (Liveschool, Burn, WAYPOINTS) must
+        // Existing fixtures (Liveschool, Burn) must
         // continue to round-trip byte-identically — the new field
         // must not appear in their JSON unless explicitly set.
         let fx = PresetInstance::new(PresetTypeId::new("Mirror"));
