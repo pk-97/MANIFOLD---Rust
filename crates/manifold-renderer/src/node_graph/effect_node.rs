@@ -659,6 +659,10 @@ pub struct DenseBufferFusion {
 }
 
 /// Object-safe access to a concrete node for family-owned proofs.
+///
+/// Call it on the trait object (`node.node.as_ref().as_any()`), never on the
+/// `Box`: the blanket impl also covers `Box<dyn EffectNode>`, whose downcast
+/// to a node type is always `None`.
 pub trait AsAny {
     fn as_any(&self) -> &dyn std::any::Any;
 }
