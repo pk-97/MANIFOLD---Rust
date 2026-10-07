@@ -7,7 +7,7 @@ use manifold_fluids::{
 use manifold_physics::FieldInput;
 use manifold_physics::stepping::StepInterval;
 
-use crate::generators::mesh_common::MeshVertex;
+use crate::mesh::MeshVertex;
 
 use super::impulses::ImpulseSum;
 use super::{FluidRuntime, Reply, Request, cancelled_reply};

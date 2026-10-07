@@ -434,7 +434,7 @@ where
 pub mod test_nodes {
     use std::borrow::Cow;
 
-    use crate::generators::compute_common::Particle;
+    use crate::particles::Particle;
     use crate::node_graph::PrimitiveRegistry;
     use crate::node_graph::effect_node::{
         EffectNode, EffectNodeContext, EffectNodeType, NodeRequires, ParamValues,
@@ -802,7 +802,7 @@ pub mod test_nodes {
                 type_id: EffectNodeType::new("test.mesh_sink"),
                 inputs: vec![port(
                     "vertices",
-                    PortType::Array(ArrayType::of_known::<crate::generators::mesh_common::MeshVertex>()),
+                    PortType::Array(ArrayType::of_known::<crate::mesh::MeshVertex>()),
                     PortKind::Input,
                     true,
                 )],

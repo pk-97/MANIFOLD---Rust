@@ -25,7 +25,7 @@ use manifold_gpu::GpuTextureFormat;
 
 use super::gpu_flip_preset::{WaterScene, render_def, rendered_scene_bytes};
 use crate::frame_status::FrameRenderStatus;
-use crate::generators::mesh_common::MeshVertex;
+use crate::mesh::MeshVertex;
 use crate::gpu_encoder::GpuEncoder;
 use crate::headless_readback::{encode_rgba8_png, readback_srgb_rgba8};
 use crate::node_graph::fluid_particles::FluidParticle;

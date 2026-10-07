@@ -159,7 +159,7 @@ impl Run {
             (0..count as u32).collect()
         };
         let vertex_count = indices.iter().max().map_or(0, |&index| index as usize + 1);
-        let vertices: Vec<crate::generators::mesh_common::MeshVertex> =
+        let vertices: Vec<crate::mesh::MeshVertex> =
             self.read_at(node_ending(&self.graph, "liquid_normals"), "out", vertex_count);
         indices.chunks_exact(3).map(|triangle| [0, 1, 2].map(|i| vertices[triangle[i] as usize].position)).collect()
     }
@@ -1813,7 +1813,7 @@ fn gpu_flip_surface_readback_matches_triangle_list() {
     assert!(volume > 0.0 && area > 0.0);
     assert!((volume - plain_volume).abs() < 1e-5);
     assert!((area - plain_area).abs() < 1e-5);
-    let raw: Vec<crate::generators::mesh_common::MeshVertex> =
+    let raw: Vec<crate::mesh::MeshVertex> =
         plain.read_at(node_ending(&plain.graph, "liquid_mesh"), "vertices", 3 * b.len());
     assert!(raw.iter().zip(b.iter().flatten()).any(|(raw, smoothed)| raw.position != *smoothed),
         "fixture must distinguish raw and smoothed positions");

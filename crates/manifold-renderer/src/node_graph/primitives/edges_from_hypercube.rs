@@ -15,7 +15,7 @@
 //! `build_instances_from_edges`) to consume it same-frame without a
 //! GPU→CPU fence — same pattern as `polytope_edges`.
 
-use crate::generators::mesh_common::EdgePair;
+use crate::mesh::EdgePair;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::primitive::Primitive;
 

@@ -98,7 +98,7 @@ fn run_graph(
         Dump::All => exec.set_dump_all(true),
     }
     let mut state = StateStore::new();
-    let particle_bytes = N * std::mem::size_of::<manifold_renderer::generators::compute_common::Particle>();
+    let particle_bytes = N * std::mem::size_of::<manifold_renderer::particles::Particle>();
     let mut outcome = Outcome { frames: Vec::new(), stats: GpuReplayStats::default(), stats_by_frame: Vec::new() };
     for frame in 0..frames {
         change(frame, &mut graph);

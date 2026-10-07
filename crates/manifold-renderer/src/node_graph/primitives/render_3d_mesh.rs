@@ -17,7 +17,7 @@
 
 use manifold_gpu::{GpuBinding, GpuLoadAction};
 
-use crate::generators::mesh_common::MeshVertex;
+use crate::mesh::MeshVertex;
 use crate::node_graph::camera::Camera;
 use crate::node_graph::effect_node::{ConditionalRequirement, EffectNodeContext};
 use crate::node_graph::material::MaterialKind;

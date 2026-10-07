@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 
 use crate::frame_status::{FrameRenderFailure, FrameRenderStatus};
-use crate::generators::mesh_common::{InstanceTransform, MeshVertex};
+use crate::mesh::{InstanceTransform, MeshVertex};
 use crate::node_graph::effect_node::{EffectNodeContext, ParamValues};
 use crate::node_graph::fluid::{
     CoupledRigidInputs, FluidControls, FluidDomainSnapshot, FluidDomainState, FluidRuntime,

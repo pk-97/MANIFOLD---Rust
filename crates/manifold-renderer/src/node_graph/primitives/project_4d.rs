@@ -9,7 +9,7 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::generators::mesh_common::{CurvePoint, Vec4Vertex};
+use crate::mesh::{CurvePoint, Vec4Vertex};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;
@@ -159,7 +159,7 @@ mod gpu_tests {
     use manifold_gpu::GpuTextureFormat;
 
     use crate::generators::generator_math::project_4d as legacy_project_4d;
-    use crate::generators::mesh_common::{CurvePoint, Vec4Vertex};
+    use crate::mesh::{CurvePoint, Vec4Vertex};
     use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
     use crate::node_graph::effect_node::{
         EffectNode, EffectNodeContext, EffectNodeType, ParamValues,

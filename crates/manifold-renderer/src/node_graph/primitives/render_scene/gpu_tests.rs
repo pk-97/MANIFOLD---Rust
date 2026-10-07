@@ -1,5 +1,5 @@
     use super::*;
-    use crate::generators::mesh_common::InstanceTransform;
+    use crate::mesh::InstanceTransform;
     use crate::node_graph::light::{Light, LightMode, ShadowSoftness};
     use bytemuck::Zeroable;
     use half::f16;

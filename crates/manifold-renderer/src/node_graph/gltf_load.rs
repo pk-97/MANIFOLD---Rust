@@ -12,7 +12,7 @@
 //! missing default scene, a bad file) returns `Err(String)` here instead,
 //! since this is a production code path, not a test.
 
-use crate::generators::mesh_common::MeshVertex;
+use crate::mesh::MeshVertex;
 use crate::node_graph::material::{MapSamplerDesc, MaterialMapInfo};
 
 /// glTF extensions MANIFOLD's importer actually supports, independent of

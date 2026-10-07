@@ -3155,7 +3155,7 @@ fn generated_source_atoms_match_originals() {
 /// order-independent, so the sums are exact whatever order the threads land in.
 #[test]
 fn generated_atomic_side_output_matches_cpu_reference() {
-    use crate::generators::compute_common::Particle;
+    use crate::particles::Particle;
     use crate::node_graph::primitives::test_multi_output_atomic_fixture::{
         cpu_reference, TestMultiOutputAtomic, Uniforms, MOMENTUM_WORDS,
     };

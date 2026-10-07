@@ -10,7 +10,7 @@ use super::fluid::{
     PreparedGeometry, TICK, simulation_tick,
 };
 use super::transform::Transform;
-use crate::generators::mesh_common::{InstanceTransform, MeshVertex};
+use crate::mesh::{InstanceTransform, MeshVertex};
 use crate::node_graph::fluid::WhitewaterFrame;
 use crate::node_graph::physics::{MAX_BODIES, MAX_COPIES};
 use manifold_fluids::FrameStats;

@@ -26,7 +26,7 @@ use super::fluid_role::FluidRole;
 use super::physics_events::ResolvedNodeImpulse;
 use super::transform::Transform;
 use super::vector_field::ContinuousField;
-use crate::generators::mesh_common::{InstanceTransform, MeshVertex};
+use crate::mesh::{InstanceTransform, MeshVertex};
 
 mod coupled;
 mod domain;

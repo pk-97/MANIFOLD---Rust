@@ -21,7 +21,7 @@ use std::sync::OnceLock;
 
 use manifold_gpu::{GpuBinding, GpuComputePipeline};
 
-use crate::generators::compute_common::Particle;
+use crate::particles::Particle;
 use crate::node_graph::effect_node::{EffectNodeContext, EffectNodeType};
 use crate::node_graph::freeze::classify::FusionKind;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};

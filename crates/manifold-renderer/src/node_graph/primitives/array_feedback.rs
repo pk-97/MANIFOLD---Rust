@@ -20,7 +20,7 @@
 
 use manifold_gpu::GpuBuffer;
 
-use crate::generators::compute_common::Particle;
+use crate::particles::Particle;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::ParamValue;
 use crate::node_graph::primitive::Primitive;

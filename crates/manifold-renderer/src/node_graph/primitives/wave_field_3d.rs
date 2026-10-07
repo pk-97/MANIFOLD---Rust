@@ -4,7 +4,7 @@ use manifold_gpu::GpuBinding;
 use std::borrow::Cow;
 
 use super::standalone_pipeline::standalone_pipeline;
-use crate::generators::mesh_common::Vec4Vertex;
+use crate::mesh::Vec4Vertex;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;

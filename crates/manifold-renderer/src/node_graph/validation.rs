@@ -1551,7 +1551,7 @@ mod tests {
         // derived Eq — equivalent ArrayType descriptors match
         // regardless of the macro-side type-name origin.
         use crate::node_graph::ports::ArrayType;
-        let layout = ArrayType::of_known::<crate::generators::compute_common::Particle>();
+        let layout = ArrayType::of_known::<crate::particles::Particle>();
         let mut g = Graph::new();
         let a = g.add_node(Box::new(TestNode::new(
             "producer",
@@ -1580,7 +1580,7 @@ mod tests {
             vec![output(
                 "out",
                 PortType::Array(ArrayType::of_known::<
-                    crate::generators::compute_common::Particle,
+                    crate::particles::Particle,
                 >()),
             )],
         )));
@@ -1589,7 +1589,7 @@ mod tests {
             vec![input(
                 "in",
                 PortType::Array(ArrayType::of_known::<
-                    crate::generators::mesh_common::MeshVertex,
+                    crate::mesh::MeshVertex,
                 >()),
                 true,
             )],
@@ -1616,7 +1616,7 @@ mod tests {
     /// signature forces the validator to refuse the wire.
     #[test]
     fn rejects_array_ports_with_matching_layout_but_mismatched_kind() {
-        use crate::generators::mesh_common::{CurvePoint, EdgePair};
+        use crate::mesh::{CurvePoint, EdgePair};
         use crate::node_graph::ports::ArrayType;
         // Sanity: same byte layout, different Channels signatures.
         let curve = ArrayType::of_known::<CurvePoint>();

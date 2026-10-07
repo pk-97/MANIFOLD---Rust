@@ -137,3 +137,8 @@ pub(crate) fn clear_texture_committed(
 // Standalone CPU specification; deliberately absent from runtime builds.
 #[cfg(test)]
 mod live_sim_clock_reference;
+
+#[path = "generators/compute_common.rs"]
+pub mod particles;
+#[path = "generators/mesh_common.rs"]
+pub mod mesh;

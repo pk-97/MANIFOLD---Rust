@@ -10,7 +10,7 @@ use std::borrow::Cow;
 
 use manifold_gpu::{GpuBinding, GpuComputePipeline};
 
-use crate::generators::mesh_common::{MeshVertex, PLATONIC_SHAPES};
+use crate::mesh::{MeshVertex, PLATONIC_SHAPES};
 use crate::generators::platonic_geometry::{platonic_mesh_upload_bytes, PLATONIC_MESH_CAPACITY};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::mesh_source::MeshSource;
