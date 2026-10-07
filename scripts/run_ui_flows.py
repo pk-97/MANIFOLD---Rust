@@ -252,6 +252,11 @@ def filters_for_paths(paths, manifest):
 def main():
     args = sys.argv[1:]
     touched_range = None
+    # The landing gate compiles the binary before taking the GPU hold, then
+    # runs the flows under it, so queue time never counts against the flows.
+    build_only = "--build-only" in args
+    if build_only:
+        args.remove("--build-only")
     if "--touched" in args:
         i = args.index("--touched")
         if i + 1 >= len(args):
@@ -296,9 +301,12 @@ def main():
     if required or known_red:
         binary = build_binary()
         if binary is None:
-            if touched_range is not None:
+            if touched_range is not None and not build_only:
                 write_gate_marker(touched_range, filters, False)
             return 2
+        if build_only:
+            say(f"flow gate: built; {len(required) + len(known_red)} flow(s) selected, none run (--build-only)")
+            return 0
         gate_start = time.monotonic()
         with gpu_queue.hold(f"run_ui_flows: {len(required) + len(known_red)} flows",
                             out=sys.stdout):
@@ -342,7 +350,11 @@ def main():
     if stale:
         say(f"STALE manifest entries (no such flow file): {stale}")
 
+    for name in green_fail:
+        say(f"rerun: {os.path.join(ROOT, 'scripts', 'run_ui_flows.py')} {name}")
     ok = not green_fail and not xfail_surprise and not missing and not stale
+    if build_only:
+        return 0 if not missing and not stale else 1
     if touched_range is not None:
         write_gate_marker(touched_range, filters, ok)
     return 0 if ok else 1

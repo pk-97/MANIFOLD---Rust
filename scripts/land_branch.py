@@ -111,12 +111,11 @@ def main():
     step("fetch", ["git", "fetch", "origin", "main"], MAIN)
     step("merge origin/main into branch", ["git", "merge", "origin/main", "--no-edit"], wt)
 
+    # The gate collects every red by default; a named-red override needs
+    # exactly that (every mandatory check's result), so no flag is added.
     gate_cmd = [sys.executable, "-u", "scripts/landing_gate.py", "--repo", str(wt.resolve())]
     if a.skip_gpu:
         gate_cmd += ["--skip-gpu", a.skip_gpu]
-    elif a.named_red and a.reason:
-        # An override still requires the results of every mandatory check.
-        gate_cmd += ["--keep-going"]
     log_dir = wt / "target" / "landing-logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")

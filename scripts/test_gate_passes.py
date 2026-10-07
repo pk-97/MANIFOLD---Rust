@@ -281,10 +281,10 @@ class CacheTests(unittest.TestCase):
             self.assertEqual(build.call_count, 1)
             self.assertEqual(run.call_count, 1)
 
-    def run_landing(self, failed=None, keep_going=False):
+    def run_landing(self, failed=None, keep_going=True):
         calls = []
         real_run = landing.run_cmd
-        argv = ['landing_gate.py', '--repo', str(self.repo)] + (['--keep-going'] if keep_going else [])
+        argv = ['landing_gate.py', '--repo', str(self.repo)] + ([] if keep_going else ['--fail-fast'])
 
         def run(command, cwd, timeout, live_log=None):
             if command[0] == 'git':
@@ -326,18 +326,19 @@ class CacheTests(unittest.TestCase):
         self.assertIn('GPU-PROOFS BUDGET: OVER (400s > 360s', self.output.getvalue())
 
     def test_failed_gate_retries_red_leg_but_reuses_earlier_green_legs(self):
-        code, _, _, _ = self.run_landing(failed='deny')
+        code, _, _, _ = self.run_landing(failed='deny', keep_going=False)
         self.assertEqual(code, 1)
         self.output.truncate(0)
         self.output.seek(0)
-        code, calls, _, _ = self.run_landing(failed='deny')
+        code, calls, _, _ = self.run_landing(failed='deny', keep_going=False)
         self.assertEqual(code, 1)
         self.assertEqual(calls, [['cargo', 'deny', 'check', 'bans']])
         self.assertIn('[REUSED] design-status', self.output.getvalue())
 
     def test_only_a_gate_that_ran_every_check_exits_checks_red(self):
-        self.assertEqual(self.run_landing(failed='deny', keep_going=True)[0], landing.CHECKS_RED)
-        self.assertEqual(self.run_landing(failed='deny')[0], 1, 'an early stop skipped later checks')
+        self.assertEqual(self.run_landing(failed='deny')[0], landing.CHECKS_RED)
+        self.assertEqual(self.run_landing(failed='deny', keep_going=False)[0], 1,
+                         'a --fail-fast stop skipped later checks')
         self.write('scratch/untracked.txt', 'build output\n')
         code, calls, _, _ = self.run_landing(keep_going=True)
         self.assertEqual((code, calls), (1, []), 'a refused gate ran nothing')

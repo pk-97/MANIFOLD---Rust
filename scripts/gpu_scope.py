@@ -157,9 +157,11 @@ REPORTER_SKIPS = [
 # and pressure paths stay on the broad `gpu_flip_` row below.
 # Filters, not skips: a skip is global and would hide body proofs that another
 # touched path selected.
+# Real-clock proofs (liquid_coupled_live_frame_rate, ~4 minutes) are never
+# named here: a name selects a slow test past the measured-time deferral.
+# They run nightly and when their own body changes.
 LIQUID_FORCE_FILTERS = [
     "liquid_conformance::liquid_coupled_world_steps",
-    "liquid_conformance::liquid_coupled_live_frame_rate",
     "liquid_conformance::liquid_free_flight",
     "liquid_conformance::liquid_pause_",
     "liquid_conformance::liquid_export_",

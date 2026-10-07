@@ -485,6 +485,7 @@ def print_summary(
     timings: list | None = None,
     budget: float | None = None,
     hung: list | None = None,
+    manifest_path: Path | None = None,
 ) -> int:
     """Print the consolidated report; return the final exit code."""
     failed_tests = parse_failed_tests(output)
@@ -502,6 +503,11 @@ def print_summary(
         print(f"\nFailed tests ({len(failed_tests)}):")
         for name in failed_tests:
             print(f"  - {name}")
+        # One focused run per failure, queued and recorded like the gate.
+        gate = Path(__file__).resolve()
+        manifest = ["--manifest-path", str(manifest_path)] if manifest_path else []
+        for name in failed_tests:
+            print(f"rerun: {gate} {' '.join(manifest)} --filter {name}".replace("  ", " "))
     else:
         print("\nFailed tests: none")
 
@@ -733,7 +739,7 @@ def main() -> int:
         write_timings_md(args.timings_md, all_timings)
     if args.record_times:
         print(write_times_json(args.record_times, recorded_timings, merge=True))
-    verdict = print_summary(output, exit_code, all_timings, args.budget, hung)
+    verdict = print_summary(output, exit_code, all_timings, args.budget, hung, manifest_path)
     if args.learn_times:
         remember_times(recorded_timings, verdict, hung)
     for passed, code, seconds in measured:
