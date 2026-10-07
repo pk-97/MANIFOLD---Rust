@@ -6,7 +6,7 @@
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_gpu::{GpuBuffer, GpuTextureFormat};
 
-use super::divide_by_value::DivideByValue;
+use crate::node_graph::primitives::divide_by_value::DivideByValue;
 use manifold_node_engine::water::primitives::dot_products::DotProducts;
 use manifold_node_engine::water::primitives::face_grid_scenes::{DIVISOR_ROW, matter_dam_break_faces};
 use manifold_node_engine::testkit::liquid_surface::{Harness, params, read};

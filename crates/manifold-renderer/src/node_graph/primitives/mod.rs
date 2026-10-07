@@ -303,17 +303,13 @@ mod trigger_ease_to;
 mod trigger_gate;
 mod transform_3d;
 mod transform_components;
-pub(crate) mod blob_bounds;
+pub mod blob_bounds;
 pub(crate) mod divide_by_value;
 // Standalone staged encoder; the step keeps its existing pressure path.
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod particle_publication_gpu_tests;
 #[cfg(test)]
 mod face_grid_extent_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod face_grid_tests;
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod face_grid_scene_tests;
 mod smooth_surface_mesh;
 mod surface_mesh_normals;
 #[cfg(test)]
@@ -938,11 +934,3 @@ mod interpolate_particle_frames;
 mod mix_arrays;
 pub use interpolate_particle_frames::InterpolateParticleFrames;
 pub use mix_arrays::MixArrays;
-
-#[cfg(test)]
-mod particle_frame_blend_tests;
-
-
-
-
-

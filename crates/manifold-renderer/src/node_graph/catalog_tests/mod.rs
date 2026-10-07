@@ -105,3 +105,10 @@ mod binding_migration;
 mod image_fused;
 #[cfg(feature = "gpu-proofs")]
 mod nested_cubes_geometry;
+
+mod blob_bounds;
+mod particle_frame_blend_tests;
+#[cfg(feature = "gpu-proofs")]
+mod face_grid_scene_tests;
+#[cfg(feature = "gpu-proofs")]
+mod particle_publication_gpu_tests;
