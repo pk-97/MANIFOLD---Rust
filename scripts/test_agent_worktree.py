@@ -546,6 +546,8 @@ def fake_target(wt, name="gen_node_catalog-0f1c97c31eb2a77a", size=2 * 2**20):
     exe = deps / name
     exe.write_bytes(b"\xcf\xfa\xed\xfe" + b"\0" * (size - 4))
     exe.chmod(0o755)
+    old = time.time() - 7200
+    os.utime(exe, (old, old))
     return exe
 
 
@@ -555,7 +557,7 @@ def test_scrub_frees_an_idle_slot_over_its_cap(repo):
     actually lose that cache."""
     wt = add_slot(repo, "slot-0", "lane/landed")
     exe = fake_target(wt)
-    with patch.object(aw, "TARGET_CAP_GB", 0), \
+    with patch.object(aw, "slot_cap_bytes", return_value=1), \
             patch.object(aw, "slot_has_live_session", return_value=False), \
             patch.object(aw, "target_live_status", return_value=False), \
             redirect_stdout(io.StringIO()) as out:
@@ -582,8 +584,8 @@ def test_reclaim_touches_only_landed_clean_idle_slots(repo):
     spare = add_slot(repo, "slot-4", "lane/spare")
     spare_exe = fake_target(spare)
     # Oldest build first: slot-0 is the LRU victim, slot-4 is newer.
-    old = time.time() - 3600
-    for path in (landed / "target", *(landed / "target").iterdir()):
+    old = time.time() - 10800
+    for path in (landed_exe, landed / "target", *(landed / "target").iterdir()):
         os.utime(path, (old, old))
 
     def free_space(_path):
@@ -601,7 +603,7 @@ def test_reclaim_touches_only_landed_clean_idle_slots(repo):
     check("unlanded slot untouched", unlanded_exe.exists(), text)
     check("leased slot untouched", leased_exe.exists(), text)
     check("reclaim names what it kept", "KEEP slot-1: dirty" in text and "KEEP slot-2: unlanded" in text, text)
-    check("reclaim reports the freed slot", "RECLAIMED slot-0" in text, text)
+    check("reclaim reports the freed slot", "RECLAIMED: removed 1" in text, text)
 
     with patch.object(aw, "disk_free", return_value=0), \
             patch.object(aw, "slot_has_live_session", return_value=False), \
@@ -654,6 +656,19 @@ TESTS += [test_scrub_frees_an_idle_slot_over_its_cap,
           test_reclaim_touches_only_landed_clean_idle_slots,
           test_reclaim_refuses_a_live_process,
           test_scrub_continues_past_a_victim_that_frees_nothing]
+
+
+def test_list_exposes_cache_budgets(repo):
+    wt = add_slot(repo, "slot-0", "lane/list-cache")
+    fake_target(wt)
+    with patch.object(aw, "slot_cap_bytes", return_value=1), redirect_stdout(io.StringIO()) as out:
+        aw.cmd_list(SimpleNamespace())
+    text = out.getvalue()
+    check("list exposes cap incremental age and reserve", all(word in text for word in
+          ("/slot", "60m", "50G", "incremental", "OVER")), text)
+
+
+TESTS.append(test_list_exposes_cache_budgets)
 
 
 # ------------------------------------------------- idle Codex plugin brokers

@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Bounded, read-only Cargo target inventory and file-level cache cleanup.
+"""Bounded Cargo target inventory, build admission and cache cleanup.
 
-This module deliberately has no operation which removes a directory.  Cargo
-targets are shared build state, so cleanup is limited to an explicit manifest
-of regular files in the cache subtrees Cargo owns.  Unknown files, links,
-directories, binaries and proof captures are left alone.
+Cleanup uses an exact Cargo-file manifest; only empty incremental session
+directories may also be removed. Unknown files, links and proof captures stay.
+Admission prunes caches older than an hour in idle slots and the admitting
+slot, holding Cargo locks and failing closed on unavailable process inspection.
+MANIFOLD_SLOT_TARGET_CAP_GIB configures the per-slot budget (default 25 GiB).
+Budgets are best effort: protected data can exceed them; the 50 GiB reserve
+still refuses a build when safe reclamation cannot meet it.
 """
 
 from __future__ import annotations
@@ -19,6 +22,8 @@ import shutil
 import stat as stat_module
 import subprocess
 import sys
+import time
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
@@ -26,6 +31,8 @@ from typing import Callable, Iterable, Optional
 GIB = 2 ** 30
 # Two concurrent landing gates (~20 GiB of build cache each) plus headroom.
 MAINTENANCE_GOAL_BYTES = 50 * GIB
+DEFAULT_SLOT_CAP_BYTES = 25 * GIB
+STALE_CACHE_SECONDS = 60 * 60
 DEFAULT_TMP_ROOT = Path("/private/tmp")
 PROFILE_NAMES = ("debug", "release")
 CARGO_MARKERS = (".rustc_info.json", "CACHEDIR.TAG")
@@ -336,17 +343,105 @@ def disk_free(path: Path) -> int:
 
 def check_build(target_dir: Path, repo: Path, free_bytes: Optional[int] = None,
                 reserve_bytes: int = MAINTENANCE_GOAL_BYTES) -> BuildCheck:
-    """Cheap build admission check: canonical target and free-space reserve."""
+    """Maintain slot caches before admission. An injected free count is read-only."""
+    reserve_bytes = max(reserve_bytes, MAINTENANCE_GOAL_BYTES)
     valid, target, reason = canonical_target(target_dir, repo)
     if not valid:
         return BuildCheck(False, target, 0 if free_bytes is None else free_bytes,
                           reserve_bytes, "REFUSED: " + reason)
     available = disk_free(target.parent if target.parent.exists() else Path.cwd()) if free_bytes is None else free_bytes
+    if free_bytes is None:
+        try:
+            cap = slot_cap_bytes()
+            roots = registered_worktrees(repo)
+            slots = [root for root in roots[1:] if is_slot(root)]
+            own = target.parent if target.parent in slots else None
+            removed, files, failures = 0, 0, ()
+            if slots:
+                # Coordinate with acquire/release: eligibility cannot change
+                # underneath this pass. Never create pool files from admission.
+                with admission_pool_lock(slots[0].parent) as locked:
+                    if locked:
+                        eligible = [root / "target" for root in slots
+                                    if root == own or idle_slot(root)]
+                        removed, files, failures = maintain_caches(
+                            eligible, target.parent, reserve_bytes, cap,
+                            same_slot=own / "target" if own else None)
+                    else:
+                        failures = ("cache maintenance skipped: pool lock busy or unavailable",)
+            if files:
+                print(f"STORAGE: removed {files} stale cache files ({removed / GIB:.1f} GiB)",
+                      file=sys.stderr)
+            for failure in failures:
+                print(f"STORAGE: {failure}", file=sys.stderr)
+            available = disk_free(target.parent)
+        except (OSError, ValueError) as error:
+            return BuildCheck(False, target, available, reserve_bytes,
+                              f"REFUSED: cache maintenance unavailable: {error}")
     if available < reserve_bytes:
         return BuildCheck(False, target, available, reserve_bytes,
                           f"REFUSED: only {available / GIB:.1f} GiB free; reserve is {reserve_bytes / GIB:.0f} GiB",
                           reclaimable=True)
     return BuildCheck(True, target, available, reserve_bytes, "build target and free-space reserve are valid")
+
+
+def slot_cap_bytes() -> int:
+    value = float(os.environ.get("MANIFOLD_SLOT_TARGET_CAP_GIB", str(DEFAULT_SLOT_CAP_BYTES / GIB)))
+    if not 0 < value < float("inf"):
+        raise ValueError("MANIFOLD_SLOT_TARGET_CAP_GIB must be finite and positive")
+    return int(value * GIB)
+
+
+@contextmanager
+def admission_pool_lock(pool: Path):
+    """Use the ring's existing reservation lock without following links."""
+    with ExitStack() as stack:
+        try:
+            directory = _open_directory(pool)
+            stack.callback(os.close, directory)
+            fd = os.open(".agent-worktree.lock", os.O_RDONLY | O_NOFOLLOW, dir_fd=directory)
+            stack.callback(os.close, fd)
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            yield False
+            return
+        yield True
+
+
+def is_slot(root: Path) -> bool:
+    return (bool(re.fullmatch(r"slot-[0-9]+", root.name))
+            and root.parent.name == "worktrees" and root.parent.parent.name == ".claude"
+            and not root.is_symlink())
+
+
+def idle_slot(root: Path) -> bool:
+    """A foreign slot must be clean, landed and lease-free; never infer lease expiry."""
+    if (root / ".worktree-lease.json").exists():
+        return False
+    try:
+        status = subprocess.run(["git", "-C", str(root), "status", "--porcelain"],
+                                capture_output=True, text=True, timeout=10)
+        landed = subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor",
+                                 "HEAD", "origin/main"], capture_output=True, timeout=10)
+        return status.returncode == 0 and not status.stdout.strip() and landed.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def target_size(target: Path) -> int:
+    if target.is_symlink() or not target.is_dir():
+        return 0
+    result = subprocess.run(["du", "-sk", str(target)], capture_output=True, text=True)
+    if result.returncode:
+        raise OSError(f"cannot measure {target}: {result.stderr.strip()}")
+    return int(result.stdout.split()[0]) * 1024
+
+
+def incremental_size(target: Path) -> int:
+    if target.is_symlink() or not target.is_dir():
+        return 0
+    return sum(target_size(profile / "incremental") for profile in target.iterdir()
+               if _profile_dir(profile) and not profile.is_symlink())
 
 
 def _profile_dir(path: Path) -> bool:
@@ -498,42 +593,171 @@ def plan_cache_cleanup(target: Path) -> CleanupPlan:
     return CleanupPlan(target, tuple(entries), sum(entry.size_bytes for entry in entries), tuple(refusals))
 
 
-def target_live_status(target: Path) -> Optional[bool]:
-    """Return live/idle, or None when process inspection is unavailable.
-
-    A compiler can keep its cwd at the checkout root while holding files below
-    target, so inspect all descriptors rather than cwd alone.
-    """
+def process_snapshot():
+    """One fail-closed lsof snapshot, indexed for many session-level checks."""
     try:
         result = subprocess.run(
             ["lsof", "-n", "-P", "-Fpcfn"],
             capture_output=True, text=True, timeout=20, check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return None
-    if result.returncode != 0 or not result.stdout:
-        return None
-    target_root = _absolute(target)
-    checkout_root = target_root.parent
-    current_pid: Optional[str] = None
-    current_fd: Optional[str] = None
+        return lambda *args, **kwargs: None
+    if result.returncode != 0 or not result.stdout or getattr(result, "stderr", "").strip():
+        return lambda *args, **kwargs: None
+    occupied, cwd_ancestors = set(), set()
+    current_pid = current_fd = None
     try:
         for line in result.stdout.splitlines():
             if line.startswith("p"):
-                current_pid = line[1:]
+                current_pid, current_fd = line[1:], None
             elif line.startswith("f"):
                 current_fd = line[1:]
             elif line.startswith("n") and current_pid and current_fd:
                 opened = Path(line[1:])
-                # cwd at the worktree root is a live session; any descriptor
-                # under target is also live even when cwd is elsewhere.
-                if ((current_fd == "cwd" and
-                     (opened == checkout_root or checkout_root in opened.parents)) or
-                        opened == target_root or target_root in opened.parents):
-                    return True
+                if not opened.is_absolute():
+                    continue
+                if current_pid == str(os.getpid()) and opened.name == ".cargo-lock":
+                    continue  # The reservation held by this maintenance pass.
+                occupied.update((opened, *opened.parents))
+                if current_fd == "cwd":
+                    cwd_ancestors.update((opened, *opened.parents))
     except (OSError, RuntimeError):
-        return None
-    return False
+        return lambda *args, **kwargs: None
+    if not occupied:
+        return lambda *args, **kwargs: None
+
+    def check(path: Path, include_checkout: bool = True) -> bool:
+        path = _absolute(path)
+        return path in occupied or (include_checkout and path.parent in cwd_ancestors)
+    return check
+
+
+def target_live_status(target: Path, include_checkout: bool = True) -> Optional[bool]:
+    """Return live/idle, or None when process inspection is unavailable."""
+    return process_snapshot()(target, include_checkout=include_checkout)
+
+
+def stale_cache_units(plan: CleanupPlan, cutoff: float):
+    """Whole known incremental sessions first; other manifest files second, LRU.
+
+    Unknown contents or a recently touched file protect the entire session.
+    Build-script products, fixtures and reports never enter the manifest.
+    """
+    sessions: dict[Path, list[CacheEntry]] = {}
+    units = []
+    for entry in plan.entries:
+        if entry.path.relative_to(plan.target).parts[1] == "incremental":
+            sessions.setdefault(entry.path.parent, []).append(entry)
+        elif entry.identity[3] / 1e9 <= cutoff:
+            units.append((1, entry.identity[3] / 1e9, entry.path, (entry,)))
+    for session, entries in sessions.items():
+        try:
+            if set(session.iterdir()) != {entry.path for entry in entries}:
+                continue
+            newest = max(session.stat().st_mtime,
+                         *(entry.identity[3] / 1e9 for entry in entries))
+            if newest <= cutoff:
+                units.append((0, newest, session, tuple(entries)))
+        except OSError:
+            continue
+    return sorted(units)
+
+
+def _remove_empty_session(target: Path, session: Path):
+    """Empty-only removal through no-follow fds; never remove its crate directory."""
+    parts = _relative_parts(target, session)
+    if parts is None or len(parts) != 4 or parts[1] != "incremental":
+        return
+    with ExitStack() as stack:
+        fd = _open_directory(target)
+        stack.callback(os.close, fd)
+        for component in parts[:-1]:
+            fd = _open_directory(Path(component), fd)
+            stack.callback(os.close, fd)
+        os.rmdir(parts[-1], dir_fd=fd)
+
+
+def maintain_caches(targets: Iterable[Path], disk_path: Path,
+                    reserve_bytes: int = MAINTENANCE_GOAL_BYTES,
+                    cap_bytes: Optional[int] = None,
+                    same_slot: Optional[Path] = None,
+                    process_check=None, free_check=None) -> tuple[int, int, tuple[str, ...]]:
+    """Prune stale manifest units, oldest first, stopping at reserve and slot caps.
+
+    Callers select eligible slots. Cargo locks stay held throughout the pass;
+    the admitting slot checks each cache unit, preserving open files and sessions
+    while allowing unrelated logs to remain open.
+    One uncertain or busy target does not prevent reclaiming another idle one.
+    """
+    reserve_bytes = max(reserve_bytes, MAINTENANCE_GOAL_BYTES)
+    cap_bytes = slot_cap_bytes() if cap_bytes is None else cap_bytes
+    free = disk_free if free_check is None else free_check
+    sizes = {target: target_size(target) for target in dict.fromkeys(targets)}
+    available = free(disk_path)
+    if available >= reserve_bytes and all(size <= cap_bytes for size in sizes.values()):
+        return 0, 0, ()
+    removed_bytes = removed_files = 0
+    failures = []
+    units = []
+    cutoff = time.time() - STALE_CACHE_SECONDS
+    with ExitStack() as stack:
+        for target, size in sizes.items():
+            if not size or (available >= reserve_bytes and size <= cap_bytes):
+                continue
+            handles, error = _acquire_cargo_locks(target)
+            for handle in handles:
+                stack.callback(handle.close)
+            if error:
+                failures.append(error)
+                continue
+            plan = plan_cache_cleanup(target)
+            if plan.refusals:
+                failures.extend(plan.refusals)
+                continue
+            units.extend((*unit, target) for unit in stale_cache_units(plan, cutoff))
+        # Inspect after planning, with Cargo locks held; one scan keeps large
+        # caches from paying a process-table walk for every stale file.
+        check = process_snapshot() if process_check is None else process_check
+        foreign_status = {}
+        reported = set()
+        for kind, _mtime, path, entries, target in sorted(units):
+            if available >= reserve_bytes and sizes[target] <= cap_bytes:
+                continue
+            if target == same_slot:
+                live = check(path, include_checkout=False)
+            else:
+                if target not in foreign_status:
+                    foreign_status[target] = check(target, include_checkout=True)
+                live = foreign_status[target]
+            if live is not False:
+                if target not in reported:
+                    failures.append(f"KEEP cache in {target}: " +
+                                    ("live process" if live else "process inspection unavailable"))
+                    reported.add(target)
+                continue
+            # Revalidate the complete unit before removing any of its files.
+            try:
+                if (any(_identity(entry.path) != entry.identity for entry in entries)
+                        or (kind == 0 and (path.stat().st_mtime > cutoff
+                            or set(path.iterdir()) != {entry.path for entry in entries}))):
+                    continue
+            except OSError:
+                continue
+            for entry in entries:
+                removed, error = _unlink_entry(target, entry)
+                if removed:
+                    removed_bytes += entry.size_bytes
+                    removed_files += 1
+                    sizes[target] -= entry.size_bytes
+                elif error:
+                    failures.append(error)
+            if kind == 0:
+                try:
+                    _remove_empty_session(target, path)
+                except OSError as error:
+                    failures.append(f"kept session directory {path}: {error}")
+            available = free(disk_path)
+    return removed_bytes, removed_files, tuple(failures)
 
 
 def _open_directory(path: Path, parent_fd: Optional[int] = None) -> int:

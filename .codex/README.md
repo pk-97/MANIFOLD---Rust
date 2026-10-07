@@ -99,13 +99,14 @@ definition with `/hooks`.
 ## Build storage admission
 
 Supported Cargo build-driving commands and the repository's build gate scripts
-perform a read-only admission check before they execute. The check accepts only
-the `target` directory of a registered Git worktree and requires 100 GiB of
-free space. It recognizes direct Cargo target overrides, common environment and
-build-lock wrappers, and concrete manifest paths; unresolved or dynamic target
-overrides are refused. Read-only Cargo commands such as `metadata` and `fmt`
-remain unaffected.
-
-The storage module also provides an explicit inventory and maintenance goal for
-later operator use. Admission does not delete files, enforce a hard cap, or
-clean protected active work. Hooks never perform automatic cleanup.
+perform an admission check before they execute. The check accepts only the
+`target` directory of a registered Git worktree and keeps a 50 GiB free-space
+reserve. Below the reserve, admission first reclaims stale regenerable caches
+(incremental sessions oldest first, then other recognized cache directories)
+that no running process holds; it never touches fixtures, logs or reports under
+`target/`. If the reserve still cannot be met, the build is refused. Each slot
+also has a cache cap (`MANIFOLD_SLOT_TARGET_CAP_GIB`, default 25). It
+recognizes direct Cargo target overrides, common environment and build-lock
+wrappers, and concrete manifest paths; unresolved or dynamic target overrides
+are refused. Read-only Cargo commands such as `metadata` and `fmt` remain
+unaffected.

@@ -3,8 +3,9 @@
 
 Commands: list; acquire TASK NEW_BRANCH; release SLOT; retire SLOT [--include FILE]; scrub;
 reclaim [--free-bytes N]. Reclaim is the landing gate's pre-admission pass: it
-frees Cargo caches of landed, clean, lease-free, process-free slots only, least
-recently built first, until the disk holds N free bytes. It never touches a
+prunes stale incremental sessions first, then other recognized Cargo caches of
+landed, clean, lease-free, process-free slots, oldest first, until reserve and
+slot budgets are met. It never touches a
 dirty or unlanded slot, nor the main checkout.
 Acquire reuses clean landed slots, or clean inactive branches whose exact HEAD
 is freshly confirmed on origin. It never resets an existing branch name.
@@ -19,8 +20,11 @@ must be resolved first. Failed uploads preserve source and a local archive.
 Unique ignored assets remain local: preserve these before removing a checkout.
 Public remotes expose archive contents. Archives are not verified app landings.
 
-Acquire and release scrub inactive caches toward 40 GiB, with 25 GiB per idle
-slot. Active caches are protected; these are cleanup budgets, not build limits.
+Acquire and release scrub inactive caches toward 40 GiB. Build admission also
+maintains the admitting slot between builds. MANIFOLD_SLOT_TARGET_CAP_GIB sets
+the per-slot budget (default 25 GiB); stale means untouched for 60 minutes.
+Open target files and unknown process state protect caches. Protected data may
+exceed the budget, but builds still require the 50 GiB free-space reserve.
 Successful landings release their slot. Fixture copying prunes hidden and target
 subtrees so old quarantine fixtures cannot multiply across the pool.
 
@@ -49,7 +53,8 @@ from pathlib import Path
 # make the sibling safety module importable there as well as when run directly.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from storage_budget import (MAINTENANCE_GOAL_BYTES, apply_cache_cleanup, disk_free,
-                            plan_cache_cleanup, target_live_status)
+                            plan_cache_cleanup, target_live_status, maintain_caches,
+                            slot_cap_bytes, incremental_size, STALE_CACHE_SECONDS)
 from codex_brokers import stop_idle as stop_idle_codex_brokers
 
 def _main_checkout():
@@ -71,7 +76,6 @@ POOL = REPO / ".claude" / "worktrees"
 POOL_LOCK_NAME = ".agent-worktree.lock"
 LEASE_NAME = ".worktree-lease.json"  # gitignored; only `release` removes it
 MAX_SLOTS = 10         # hard structural cap — there is no override flag
-TARGET_CAP_GB = 25     # per-slot target/ ceiling, enforced at acquire
 SCRUB_TO_GB = 40      # scrub trims the pool under this — below the sentinel's
                        # 200 GB alarm so a scrubbed pool never alarms
 SLOT_PREFIX = "slot-"
@@ -252,15 +256,19 @@ def target_bytes(wt):
 
 def enforce_target_cap(wt):
     size = target_bytes(wt)
-    if size > TARGET_CAP_GB * 2**30:
-        removed, files, failures = _cleanup_target(wt, "TARGET")
+    cap = slot_cap_bytes()
+    if size > cap:
+        removed, files, failures = maintain_caches(
+            [wt / "target"], wt, cap_bytes=cap,
+            process_check=lambda target, **_: (slot_has_live_session(wt)
+                                                or target_live_status(target)))
         if failures:
             print(f"TARGET:   kept {size / 2**30:.1f}G; removed {files} files "
                   f"({removed / 2**30:.1f}G); cleanup refused: "
                   + "; ".join(failures))
         else:
             print(f"TARGET:   removed {files} cache files ({removed / 2**30:.1f}G) "
-                  f"from {size / 2**30:.1f}G over the {TARGET_CAP_GB}G cap")
+                  f"from {size / 2**30:.1f}G over the {cap / 2**30:g}G cap")
 
 
 def _cleanup_target(wt, label):
@@ -339,11 +347,18 @@ def cmd_list(_args):
         print(f"(pool empty — slots are created on demand, cap {MAX_SLOTS})")
         return
     holders = branch_holders()
+    cap = slot_cap_bytes()
+    print(f"CACHE: cap {cap / 2**30:g}G/slot; stale {STALE_CACHE_SECONDS // 60}m; "
+          f"reserve {MAINTENANCE_GOAL_BYTES / 2**30:g}G")
     for wt in slots:
         cat, reason, _ = slot_state(wt, holders)
         branch = git(wt, "branch", "--show-current").stdout.strip() or "(detached)"
         head = git(wt, "rev-parse", "--short", "HEAD").stdout.strip()
-        warm = f"{target_bytes(wt) / 2**30:.1f}G target" if target_bytes(wt) else "cold"
+        size = target_bytes(wt)
+        incremental = incremental_size(wt / "target")
+        warm = (f"{size / 2**30:.1f}G target / {cap / 2**30:g}G cap; "
+                f"{incremental / 2**30:.1f}G incremental"
+                + (" OVER" if size > cap else ""))
         print(f"{cat:8} {wt.name:8} {branch:40} "
               f"{head}  {warm:14} {reason}")
 
@@ -599,11 +614,8 @@ def reclaimable_for_landing(wt, holders):
 
 
 def cmd_reclaim(args):
-    need = args.free_bytes
+    need = max(args.free_bytes, MAINTENANCE_GOAL_BYTES)
     free = disk_free(POOL)
-    if free >= need:
-        print(f"RECLAIM: {free / 2**30:.1f}G free already meets {need / 2**30:.0f}G")
-        return
     holders = branch_holders()
     victims = []
     stop_idle_brokers(pool_slots())
@@ -613,14 +625,15 @@ def cmd_reclaim(args):
             print(f"KEEP {wt.name}: {why}")
         elif target_bytes(wt):
             victims.append(wt)
-    for wt in sorted(victims, key=build_recency):
-        size = target_bytes(wt) / 2**30
-        removed, files, failures = _cleanup_target(wt, "RECLAIMED")
-        print(f"RECLAIMED {wt.name}: removed {files} files ({removed / 2**30:.1f}G) "
-              f"from {size:.1f}G target")
-        free = disk_free(POOL)
-        if free >= need:
-            break
+    removed, files, failures = maintain_caches(
+        [wt / "target" for wt in victims], POOL, reserve_bytes=need,
+        process_check=lambda target, **_: (slot_has_live_session(target.parent)
+                                          or target_live_status(target)),
+        free_check=disk_free)
+    print(f"RECLAIMED: removed {files} stale cache files ({removed / 2**30:.1f}G)")
+    for failure in failures:
+        print(failure)
+    free = disk_free(POOL)
     print(f"RECLAIM: {free / 2**30:.1f}G free (need {need / 2**30:.0f}G)")
     if free < need:
         sys.exit(3)

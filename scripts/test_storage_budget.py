@@ -4,6 +4,7 @@
 import os
 import fcntl
 import tempfile
+import time
 from pathlib import Path
 from contextlib import contextmanager
 from types import SimpleNamespace
@@ -185,7 +186,7 @@ def test_lsof_and_cargo_lock_safety():
         lsof = "p123\nf3\nn" + str(file) + "\n"
         with patch.object(sb.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout=lsof)):
             check("open target descriptor is live", sb.target_live_status(target) is True)
-        lsof = "p123\nfcwd\n" + str(root / "outside") + "\n"
+        lsof = "p123\nfcwd\nn" + str(root / "outside") + "\n"
         with patch.object(sb.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout=lsof)):
             check("unrelated process is idle", sb.target_live_status(target) is False)
 
@@ -286,10 +287,206 @@ def test_hashed_executables():
         check("mode change after plan is preserved", exe.exists() and result[2], str(result))
 
 
+def stale_session(target, name="s-aaa-bbb-ccc", age=7200):
+    marker(target)
+    session = target / "debug" / "incremental" / "crate-abc123" / name
+    session.mkdir(parents=True)
+    cache = session / "query-cache.bin"
+    cache.write_bytes(b"cache" * 1024)
+    old = time.time() - age
+    os.utime(cache, (old, old))
+    os.utime(session, (old, old))
+    return session, cache
+
+
+def test_bounded_reclaim_order_and_preservation():
+    with fixture_directory() as raw:
+        root = Path(raw)
+        target = root / "target"
+        old, old_file = stale_session(target, age=10800)
+        newer, new_file = stale_session(target, "s-ddd-eee-fff")
+        fresh, fresh_file = stale_session(target, "s-ggg-hhh-iii", age=30)
+        mixed, mixed_file = stale_session(target, "s-jjj-kkk-lll")
+        (mixed / "notes.txt").write_text("user report")
+        os.utime(mixed, (time.time() - 7200,) * 2)
+        protected = [target / "fixtures" / "asset.bin",
+                     target / "landing-logs" / "gate.log",
+                     target / "my-report" / "result.rlib",
+                     target / "debug" / "build" / "crate-abcdef" / "out" / "asset.o"]
+        for path in protected:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("keep")
+        deps = target / "debug" / "deps" / "libold-abcdef.rlib"
+        deps.parent.mkdir()
+        deps.write_bytes(b"artifact")
+        os.utime(deps, (time.time() - 14400,) * 2)
+        free = lambda _: sb.MAINTENANCE_GOAL_BYTES if not old.exists() else 0
+        result = sb.maintain_caches([target], root, process_check=lambda *a, **k: False,
+                                   free_check=free)
+        check("oldest incremental session reclaimed before older deps", not old.exists() and deps.exists(), result)
+        check("reserve stops reclamation", newer.exists() and fresh.exists(), result)
+        check("fixtures logs reports and build outputs preserved", all(p.exists() for p in protected), result)
+        check("unknown session contents protect entire directory", mixed_file.exists(), result)
+        # Cap maintenance runs even with ample disk space and stops before deps.
+        size = sb.target_size(target)
+        amount = new_file.stat().st_blocks * sb.ALLOCATED_BLOCK
+        result = sb.maintain_caches([target], root, cap_bytes=size - amount,
+                                   process_check=lambda *a, **k: False,
+                                   free_check=lambda _: 100 * sb.GIB)
+        check("cap prunes incremental first despite healthy reserve", not newer.exists() and deps.exists(), result)
+        check("fresh sessions survive cap pressure", fresh_file.exists(), result)
+        result = sb.maintain_caches([target], root, process_check=lambda *a, **k: False,
+                                   free_check=lambda _: 0)
+        check("other stale Cargo artifacts reclaimed after sessions", not deps.exists(), result)
+        check("protected files survive exhausted reserve", fresh_file.exists() and mixed_file.exists()
+              and all(p.exists() for p in protected), result)
+
+
+def test_bounded_reclaim_liveness_and_lock():
+    with fixture_directory() as raw:
+        root = Path(raw)
+        target = root / "target"
+        session, cache = stale_session(target)
+        for live in (True, None):
+            result = sb.maintain_caches([target], root, process_check=lambda *a, **k: live,
+                                       free_check=lambda _: 0)
+            check(f"bounded reclaim protects liveness={live}", cache.exists() and result[1] == 0 and result[2], result)
+        lock = target / "debug" / ".cargo-lock"
+        lock.touch()
+        with lock.open("rb") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            result = sb.maintain_caches([target], root, process_check=lambda *a, **k: False,
+                                       free_check=lambda _: 0)
+            check("bounded reclaim respects held cargo lock", cache.exists() and result[2], result)
+        checkout = target.parent
+        lsof = f"p123\nfcwd\nn{checkout}\n"
+        with patch.object(sb.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout=lsof)):
+            check("same-slot cwd permits maintenance", sb.target_live_status(target, include_checkout=False) is False)
+            check("foreign-slot cwd blocks maintenance", sb.target_live_status(target) is True)
+        lsof += f"f4\nn{cache}\n"
+        with patch.object(sb.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout=lsof)):
+            check("same-slot open cache still blocks maintenance", sb.target_live_status(target, include_checkout=False) is True)
+        lsof = f"p{os.getpid()}\nf3\nn{lock}\np123\nfcwd\nn/outside\n"
+        with patch.object(sb.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout=lsof)):
+            check("maintenance's own Cargo lock does not mark target live", sb.target_live_status(target) is False)
+        lsof = f"p{os.getpid()}\nf4\nn{cache}\n"
+        with patch.object(sb.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout=lsof)):
+            check("caller's own open cache is protected", sb.target_live_status(target) is True)
+        for response in (SimpleNamespace(returncode=0, stdout="malformed"),
+                         SimpleNamespace(returncode=0, stdout=lsof, stderr="incomplete process scan")):
+            with patch.object(sb.subprocess, "run", return_value=response):
+                check("uncertain process snapshot fails closed", sb.target_live_status(target) is None)
+
+
+def test_admission_reclaims_same_slot_and_idle_only():
+    with fixture_directory() as raw:
+        repo = Path(raw) / "main"
+        pool = repo / ".claude" / "worktrees"
+        own, idle, leased = (pool / f"slot-{i}" for i in range(3))
+        own_session, cache = stale_session(own / "target")
+        (pool / ".agent-worktree.lock").touch()
+        _, idle_cache = stale_session(idle / "target", age=9000)
+        _, leased_cache = stale_session(leased / "target", age=10000)
+        _, main_cache = stale_session(repo / "target", age=11000)
+        (own / ".worktree-lease.json").write_text("{}")
+        (leased / ".worktree-lease.json").write_text("{}")
+        free = lambda _: 100 * sb.GIB if not cache.exists() else 0
+        with patch.object(sb, "registered_worktrees", return_value=(repo, own, idle, leased)), \
+                patch.object(sb, "idle_slot", side_effect=lambda p: p == idle), \
+                patch.object(sb, "process_snapshot") as snapshot, \
+                patch.object(sb, "disk_free", side_effect=free):
+            from unittest.mock import Mock
+            live = Mock(return_value=False)
+            snapshot.return_value = live
+            admitted = sb.check_build(own / "target", own)
+        check("admission reclaims owning leased slot and idle slot", admitted.ok and not cache.exists() and not idle_cache.exists(), admitted)
+        check("admission never reclaims main or foreign leased slot", main_cache.exists() and leased_cache.exists())
+        check("only admitting slot ignores checkout cwd", live.call_args_list[1].kwargs == {"include_checkout": False}
+              and live.call_args_list[0].kwargs == {"include_checkout": True}, live.call_args_list)
+        with patch.object(sb, "registered_worktrees", return_value=(repo, own, idle, leased)), \
+                patch.object(sb, "idle_slot", return_value=False), \
+                patch.object(sb, "process_snapshot", return_value=lambda *a, **k: False), \
+                patch.object(sb, "disk_free", return_value=0):
+            refused = sb.check_build(own / "target", own, reserve_bytes=1)
+        check("reserve still refuses without safe reclaim and cannot be lowered",
+              not refused.ok and refused.reserve_bytes == 50 * sb.GIB, refused)
+
+
+def test_cap_configuration():
+    with patch.dict(os.environ, {"MANIFOLD_SLOT_TARGET_CAP_GIB": "31"}):
+        check("slot cap configurable", sb.slot_cap_bytes() == 31 * sb.GIB)
+    for value in ("0", "-1", "nan", "inf", "bad"):
+        with patch.dict(os.environ, {"MANIFOLD_SLOT_TARGET_CAP_GIB": value}):
+            try:
+                sb.slot_cap_bytes()
+                check(f"bad cap {value} rejected", False)
+            except ValueError:
+                check(f"bad cap {value} rejected", True)
+
+
+def test_same_slot_open_session_and_log():
+    with fixture_directory() as raw:
+        root = Path(raw)
+        target = root / "target"
+        busy, busy_file = stale_session(target, age=10000)
+        idle, idle_file = stale_session(target, "s-ddd-eee-fff")
+        log = target / "landing-logs" / "gate.log"
+        log.parent.mkdir()
+        log.write_text("keep this open log")
+        lsof = f"p123\nfcwd\nn{root}\nf3\nn{busy_file}\nf4\nn{log}\n"
+        with patch.object(sb.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout=lsof)):
+            snapshot = sb.process_snapshot()
+        result = sb.maintain_caches([target], root, same_slot=target,
+                                   process_check=snapshot, free_check=lambda _: 0)
+        check("open session directory is never removed", busy_file.exists() and busy.is_dir(), result)
+        check("open landing log does not pin unrelated stale session", log.exists() and not idle.exists(), result)
+
+
+def test_admission_cap_with_healthy_reserve_and_fresh_refusal():
+    with fixture_directory() as raw:
+        repo = Path(raw) / "main"
+        own = repo / ".claude" / "worktrees" / "slot-0"
+        session, cache = stale_session(own / "target")
+        (own.parent / ".agent-worktree.lock").touch()
+        with patch.object(sb, "registered_worktrees", return_value=(repo, own)), \
+                patch.object(sb, "process_snapshot", return_value=lambda *a, **k: False), \
+                patch.object(sb, "slot_cap_bytes", return_value=1), \
+                patch.object(sb, "disk_free", return_value=100 * sb.GIB):
+            result = sb.check_build(own / "target", own)
+        check("admission enforces slot budget with sufficient free space", result.ok and not session.exists(), result)
+        session, cache = stale_session(own / "target", age=30)
+        with patch.object(sb, "registered_worktrees", return_value=(repo, own)), \
+                patch.object(sb, "process_snapshot", return_value=lambda *a, **k: False), \
+                patch.object(sb, "disk_free", return_value=49 * sb.GIB):
+            result = sb.check_build(own / "target", own)
+        check("admission refuses rather than deleting a fresh session", not result.ok and cache.exists(), result)
+
+
+def test_admission_pool_reservation_safety():
+    with fixture_directory() as raw:
+        pool = Path(raw)
+        with sb.admission_pool_lock(pool) as locked:
+            check("missing pool lock skips automatic cleanup", not locked)
+        lock = pool / ".agent-worktree.lock"
+        check("admission never creates pool lock", not lock.exists())
+        lock.touch()
+        with lock.open("rb") as holder:
+            fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with sb.admission_pool_lock(pool) as locked:
+                check("pool reservation prevents admission cleanup", not locked)
+        with sb.admission_pool_lock(pool) as locked:
+            check("released pool reservation permits maintenance", locked)
+
+
 for test in (test_inventory_and_symlink_boundary, test_build_admission,
              test_manifest_dry_run_apply_and_identity, test_live_and_uninspectable_refused,
              test_lsof_and_cargo_lock_safety, test_ancestor_symlink_refused_by_fd_traversal,
-             test_real_cargo_names, test_hashed_executables):
+             test_real_cargo_names, test_hashed_executables,
+             test_bounded_reclaim_order_and_preservation, test_bounded_reclaim_liveness_and_lock,
+             test_admission_reclaims_same_slot_and_idle_only, test_cap_configuration,
+             test_same_slot_open_session_and_log,
+             test_admission_cap_with_healthy_reserve_and_fresh_refusal,
+             test_admission_pool_reservation_safety):
     try:
         test()
     except Exception as error:
