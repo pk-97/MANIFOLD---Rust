@@ -447,6 +447,28 @@ pub fn all_of_kind(kind: PresetKind) -> Vec<PresetTypeId> {
 // Resolution accessors moved to module scope above; the picker converter
 // moved to `crate::preset_type_registry`.
 
+type MetadataLoader = fn() -> Vec<PresetMetadata>;
+
+fn load_metadata_sources(
+    sources: impl IntoIterator<Item = (&'static str, MetadataLoader)>,
+) -> Vec<PresetMetadata> {
+    let mut sources: Vec<_> = sources.into_iter().collect();
+    sources.sort_unstable_by_key(|(name, _)| *name);
+    assert!(sources.windows(2).all(|pair| pair[0].0 != pair[1].0),
+        "duplicate metadata provider name");
+    let mut owners = HashMap::new();
+    let mut all = Vec::new();
+    for (name, load) in sources {
+        for metadata in load() {
+            assert!(owners.insert(metadata.id.clone(), name).is_none(),
+                "duplicate preset type id across metadata providers: {}", metadata.id);
+            all.push(metadata);
+        }
+    }
+    all
+}
+
+
 pub mod effect {
     use super::*;
 
@@ -456,13 +478,13 @@ pub mod effect {
     /// access and cached for the process lifetime.
     pub fn loaded_preset_metadata() -> &'static [PresetMetadata] {
         static CACHE: OnceLock<Vec<PresetMetadata>> = OnceLock::new();
-        CACHE.get_or_init(|| {
-            let mut all = Vec::new();
-            for source in inventory::iter::<PresetSource> {
-                all.extend((source.load)());
-            }
-            all
-        })
+        CACHE.get_or_init(load_preset_metadata)
+    }
+
+    /// Invoke every provider afresh, in stable provider-name order.
+    pub fn load_preset_metadata() -> Vec<PresetMetadata> {
+        load_metadata_sources(inventory::iter::<PresetSource>.into_iter()
+            .map(|source| (source.name, source.load)))
     }
 
     /// Inventory submission point for JSON-loaded **effect** preset
@@ -473,11 +495,13 @@ pub mod effect {
     /// ```ignore
     /// inventory::submit! {
     ///     manifold_core::preset_definition_registry::effect::PresetSource {
+    ///         name: "my_presets",
     ///         load: my_loader_function,
     ///     }
     /// }
     /// ```
     pub struct PresetSource {
+        pub name: &'static str,
         pub load: fn() -> Vec<PresetMetadata>,
     }
 
@@ -498,13 +522,13 @@ pub mod generator {
     /// generator-preset JSON.
     pub fn loaded_preset_metadata() -> &'static [PresetMetadata] {
         static CACHE: OnceLock<Vec<PresetMetadata>> = OnceLock::new();
-        CACHE.get_or_init(|| {
-            let mut all = Vec::new();
-            for source in inventory::iter::<PresetSource> {
-                all.extend((source.load)());
-            }
-            all
-        })
+        CACHE.get_or_init(load_preset_metadata)
+    }
+
+    /// Invoke every provider afresh, in stable provider-name order.
+    pub fn load_preset_metadata() -> Vec<PresetMetadata> {
+        load_metadata_sources(inventory::iter::<PresetSource>.into_iter()
+            .map(|source| (source.name, source.load)))
     }
 
     /// Inventory submission point for JSON-loaded **generator** preset
@@ -512,6 +536,7 @@ pub mod generator {
     /// generator bucket — kept distinct so a generator preset never lands
     /// in the effect store.
     pub struct PresetSource {
+        pub name: &'static str,
         pub load: fn() -> Vec<PresetMetadata>,
     }
 
@@ -527,15 +552,14 @@ pub mod scene_modifier {
     /// inventory bucket in [`crate::effect_registration`].
     pub fn loaded_preset_metadata() -> &'static [PresetMetadata] {
         static CACHE: OnceLock<Vec<PresetMetadata>> = OnceLock::new();
-        CACHE.get_or_init(|| {
-            let mut all = Vec::new();
-            for source in inventory::iter::<
-                crate::effect_registration::LoadedSceneModifierPresetSource,
-            > {
-                all.extend((source.load)());
-            }
-            all
-        })
+        CACHE.get_or_init(load_preset_metadata)
+    }
+
+    /// Invoke every provider afresh, in stable provider-name order.
+    pub fn load_preset_metadata() -> Vec<PresetMetadata> {
+        load_metadata_sources(inventory::iter::<
+            crate::effect_registration::LoadedSceneModifierPresetSource,
+        >.into_iter().map(|source| (source.name, source.load)))
     }
 }
 
@@ -1115,5 +1139,39 @@ mod tests {
                 .position(|pd| pd.spec.id == resolved.unwrap()),
             Some(5),
         );
+    }
+}
+
+#[cfg(test)]
+mod metadata_source_tests {
+    use super::*;
+
+    fn metadata(id: &str) -> PresetMetadata {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "displayName": id, "category": "Test", "oscPrefix": id,
+            "params": [], "bindings": []
+        })).unwrap()
+    }
+
+    fn first() -> Vec<PresetMetadata> {
+        vec![metadata("first_b"), metadata("first_a")]
+    }
+
+    fn second() -> Vec<PresetMetadata> {
+        vec![metadata("second")]
+    }
+
+    #[test]
+    fn metadata_providers_sort_by_name_and_preserve_each_provider_order() {
+        let sources = [("z", second as MetadataLoader), ("a", first as MetadataLoader)];
+        let expected = vec![metadata("first_b"), metadata("first_a"), metadata("second")];
+        assert_eq!(load_metadata_sources(sources), expected);
+        assert_eq!(load_metadata_sources(sources), expected);
+    }
+
+    #[test]
+    #[should_panic(expected = "duplicate preset type id across metadata providers")]
+    fn duplicate_metadata_type_id_across_providers_is_rejected() {
+        load_metadata_sources([("a", first as MetadataLoader), ("b", first as MetadataLoader)]);
     }
 }

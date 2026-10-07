@@ -801,10 +801,18 @@ fn apply_reload() -> u64 {
     // Rebuild the core definition registry from the reloaded catalog's
     // metadata. The metadata loaders read the current (just-swapped)
     // catalog snapshot.
-    let effect_meta = crate::node_graph::loaded_presets_from_bundled();
-    let generator_meta =
-        crate::generators::bundled_generator_presets::loaded_generator_presets_from_bundled();
-    let scene_modifier_meta = crate::node_graph::loaded_scene_modifier_presets_from_bundled();
+    let effect_meta = manifold_core::preset_definition_registry::effect::load_preset_metadata();
+    let generator_meta = manifold_core::preset_definition_registry::generator::load_preset_metadata();
+    let scene_modifier_meta = manifold_core::preset_definition_registry::scene_modifier::load_preset_metadata();
+    publish_reloaded_metadata(effect_meta, generator_meta, scene_modifier_meta, bump_catalog_generation)
+}
+
+fn publish_reloaded_metadata(
+    effect_meta: Vec<manifold_core::effect_graph_def::PresetMetadata>,
+    generator_meta: Vec<manifold_core::effect_graph_def::PresetMetadata>,
+    scene_modifier_meta: Vec<manifold_core::effect_graph_def::PresetMetadata>,
+    advance_generation: impl FnOnce() -> u64,
+) -> u64 {
     // ONE atomic swap of the merged store — both kinds' metadata in a single
     // rebuild so a reader observing the new generation never sees a
     // half-merged registry.
@@ -840,7 +848,7 @@ fn apply_reload() -> u64 {
         &generator_meta_for_registry,
     );
 
-    let generation = bump_catalog_generation();
+    let generation = advance_generation();
     log::info!("[presets] hot-reload applied; catalog generation = {generation}");
     generation
 }
@@ -893,6 +901,41 @@ pub fn start_preset_watcher() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn metadata_publication_completes_both_registries_before_generation_advances() {
+        use manifold_core::preset_definition_registry::{self as definitions, effect, generator, scene_modifier};
+        let mut effects = effect::load_preset_metadata();
+        let mut generators = generator::load_preset_metadata();
+        let mut modifiers = scene_modifier::load_preset_metadata();
+        for metadata in effects.iter_mut().chain(&mut generators).chain(&mut modifiers) {
+            metadata.display_name = format!("publication-order:{}", metadata.display_name);
+        }
+        let ids: Vec<_> = effects.iter().chain(&generators).chain(&modifiers)
+            .map(|metadata| (metadata.id.clone(), metadata.display_name.clone())).collect();
+        let visible: Vec<_> = effects.iter().filter(|m| EFFECT_CATALOG.load().is_browser_visible(m.id.as_str()))
+            .chain(generators.iter().filter(|m| GENERATOR_CATALOG.load().is_browser_visible(m.id.as_str())))
+            // Compiled browser entries intentionally take precedence over JSON names.
+            .filter(|m| !inventory::iter::<manifold_core::effect_registration::EffectMetadata>
+                .into_iter().any(|entry| entry.id == m.id))
+            .filter(|m| !inventory::iter::<manifold_core::generator_registration::GeneratorMetadata>
+                .into_iter().any(|entry| entry.id == m.id))
+            .map(|metadata| (metadata.id.clone(), metadata.display_name.clone())).collect();
+        assert!(!visible.is_empty(), "publication proof needs a JSON-owned browser entry");
+        let before = catalog_generation();
+        let after = publish_reloaded_metadata(effects, generators, modifiers, || {
+            assert_eq!(catalog_generation(), before);
+            for (id, name) in &ids {
+                assert_eq!(&definitions::get(id).display_name, name);
+            }
+            for (id, name) in &visible {
+                assert_eq!(manifold_core::preset_type_registry::display_name(id), name);
+            }
+            bump_catalog_generation()
+        });
+        assert_eq!(after, before + 1);
+        assert_eq!(catalog_generation(), after);
+    }
 
     #[test]
     fn assets_root_selection_handles_missing_duplicate_and_conflicting_registrations() {

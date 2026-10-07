@@ -194,12 +194,14 @@ pub fn loaded_scene_modifier_presets_from_bundled(
 
 inventory::submit! {
     manifold_core::preset_definition_registry::effect::PresetSource {
+        name: "bundled_effects",
         load: loaded_presets_from_bundled,
     }
 }
 
 inventory::submit! {
     manifold_core::effect_registration::LoadedSceneModifierPresetSource {
+        name: "bundled_scene_modifiers",
         load: loaded_scene_modifier_presets_from_bundled,
     }
 }
@@ -899,5 +901,41 @@ mod tests {
             value.abs() > 0.5,
             "smoothing_y output ({value}) too small to produce visible drift",
         );
+    }
+}
+
+#[cfg(test)]
+mod metadata_source_tests {
+    use super::*;
+
+    #[test]
+    fn registered_metadata_preserves_legacy_published_order() {
+        use manifold_core::preset_definition_registry::{self as definitions, effect, generator, scene_modifier};
+        let direct = [loaded_presets_from_bundled(),
+            crate::generators::bundled_generator_presets::loaded_generator_presets_from_bundled(),
+            loaded_scene_modifier_presets_from_bundled()];
+        let registered = [effect::load_preset_metadata(), generator::load_preset_metadata(),
+            scene_modifier::load_preset_metadata()];
+        assert_eq!(direct, registered);
+        let mut ids = std::collections::HashSet::new();
+        for metadata in registered.iter().flatten() {
+            assert!(ids.insert(metadata.id.clone()), "duplicate metadata preset id: {}", metadata.id);
+        }
+        // Publish through the former direct-loader path, including browser filtering.
+        definitions::rebuild_preset_definitions(&direct[0], &direct[1], &direct[2]);
+        let effects: Vec<_> = direct[0].iter()
+            .filter(|m| EFFECT_CATALOG.load().is_browser_visible(m.id.as_str())).cloned().collect();
+        let generators: Vec<_> = direct[1].iter()
+            .filter(|m| GENERATOR_CATALOG.load().is_browser_visible(m.id.as_str())).cloned().collect();
+        manifold_core::preset_type_registry::rebuild(&effects, &generators);
+        let published_order = || manifold_core::preset_type_registry::all().into_iter()
+            .map(|entry| (entry.id, entry.kind, entry.display_name)).collect::<Vec<_>>();
+        let before = published_order();
+        let generation = catalog_generation();
+        assert_eq!(crate::preset_loader::clear_project_presets(), generation + 1);
+        assert_eq!(published_order(), before);
+        for metadata in direct.iter().flatten() {
+            assert_eq!(definitions::get(&metadata.id).display_name, metadata.display_name);
+        }
     }
 }

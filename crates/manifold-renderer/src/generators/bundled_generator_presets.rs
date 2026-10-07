@@ -63,6 +63,7 @@ pub fn loaded_generator_presets_from_bundled()
 
 inventory::submit! {
     manifold_core::preset_definition_registry::generator::PresetSource {
+        name: "bundled_generators",
         load: loaded_generator_presets_from_bundled,
     }
 }

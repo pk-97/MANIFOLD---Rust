@@ -13,6 +13,7 @@ use crate::preset_def::{PresetDef, PresetKind};
 /// stays separate from effect and generator sources so a modifier recipe is
 /// never interpreted as either kind during registry construction.
 pub struct LoadedSceneModifierPresetSource {
+    pub name: &'static str,
     pub load: fn() -> Vec<crate::effect_graph_def::PresetMetadata>,
 }
 
