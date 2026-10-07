@@ -13,6 +13,7 @@ Landing and gates:
   flows                   UI flow suite; <name> runs one flow, --touched <range> is the gate's selection  [scripts/run_ui_flows.py]
   flows-batch-proof       proof that batched flows report what solo runs report  [scripts/ui_flows_batch_proof.py]
   trunk-health            nightly workspace sweep on main; files beads on red  [scripts/trunk_health.py]
+  landing-metrics         the landing loop measured over N days: runs per landing, red share, GPU reuse, queue wait  [scripts/landing_metrics.py]
   feature-matrix          build every non-default feature so none rots  [scripts/feature_matrix.py]
   rt-noise                RT temporal-stability gate on a paused scene (--record to re-baseline)  [scripts/rt_noise_gate.py]
   bridge-probe            presentation tear regression gate  [scripts/bridge_probe_gate.py]
