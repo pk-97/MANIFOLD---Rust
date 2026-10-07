@@ -44,7 +44,8 @@ use errors::record_chain_error;
 mod bindings;
 use bindings::{StringBindingResolution, def_string_param_value, RelightParamWrite, build_relight_writes};
 
-mod segments;
+#[doc(hidden)]
+pub mod segments;
 pub use segments::{prewarm_chain_segments, prewarm_project_chain_segments};
 pub use crate::freeze::install::prewarm_worker_pending_count;
 use segments::{SegmentMember, classify_segment_member, segment_run, build_segment_cards};
@@ -56,28 +57,24 @@ use build::{assign_texture2d_slots, compute_topology_hash};
 
 mod groups;
 use groups::{chain_active_effects, close_mix_group, validate_mask_groups, OpenGroup};
-pub use scene_impulses::SceneImpulseDiagnostics;
-pub use physics_impulses::{CapturedSceneImpulse, PreparedSceneImpulse};
 mod convert_heal;
 mod math_view;
 mod math_view_events;
 mod lifecycle;
 
-mod core;
+pub mod core;
 pub use core::{ChainBuildInputs, FrameContextInputs, PresetRuntime};
 mod resize;
 pub use resize::PreparedRuntimeResize;
 mod debug;
 pub use debug::{ChainDebugInfo, StepDebugInfo};
 use core::{EffectSlot, PresetIo};
-#[cfg(test)]
-use core::assert_manifest_gate;
 #[cfg(all(test, feature = "gpu-proofs"))]
 use core::GRAPH_FORMAT;
 
 mod dump_sets;
 pub mod instrumentation;
-pub(crate) mod beat_envelope;
+pub mod beat_envelope;
 mod scene_viewport;
 mod modifier_preview;
 mod modifier_runtime;
@@ -99,9 +96,6 @@ mod topology_hash_tests;
 mod user_binding_tests;
 
 #[cfg(test)]
-mod bug080_manifest_gate_tests;
-
-#[cfg(test)]
 mod persistent_slot_tests;
 
 #[cfg(test)]
@@ -117,27 +111,15 @@ mod chain_error_tests;
 mod amount_zero_passthrough_tests;
 
 
-#[cfg(test)]
-mod trigger_initialization;
-
-
-
-
-#[cfg(test)]
-mod segment_prewarm_tests;
-
-
-
-
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod blob_grain_probe_tests;
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod mosh_tests;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testkit"))]
 #[doc(hidden)]
-pub(crate) mod testkit;
+pub mod testkit;
 pub mod background_worker;
 pub mod chain_dispatch;
 pub mod effect;

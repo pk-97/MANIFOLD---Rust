@@ -11,7 +11,7 @@ use super::*;
 use crate::primitives::standalone_pipeline::dispatch_standalone_2d;
 use crate::load::expand::{LegacyMathViewScope, SceneModifierExpandError};
 
-pub(super) struct MathViewRuntime {
+pub(crate) struct MathViewRuntime {
     pub modifier_id: NodeId,
     mode_node: NodeInstanceId,
     scope_node: Option<NodeInstanceId>,

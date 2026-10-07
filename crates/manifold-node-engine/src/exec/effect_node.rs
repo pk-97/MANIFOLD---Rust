@@ -464,7 +464,7 @@ impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
     }
 
     /// Executor-only builder for the output-storage retention proof.
-    pub(crate) fn with_outputs_retained(mut self, retained: bool) -> Self {
+    pub fn with_outputs_retained(mut self, retained: bool) -> Self {
         self.output_storage_retained = retained;
         self
     }

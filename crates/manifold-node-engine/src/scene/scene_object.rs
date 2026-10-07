@@ -132,10 +132,10 @@ const _: () = {
 
 /// Tracks connectivity independently from per-frame vertex positions.
 #[derive(Default)]
-pub(crate) struct MeshTopologyHistory(Option<u64>);
+pub struct MeshTopologyHistory(Option<u64>);
 
 impl MeshTopologyHistory {
-    pub(crate) fn update(
+    pub fn update(
         &mut self,
         resource_epoch: u64,
         revisions: impl Iterator<Item = impl std::hash::Hash>,

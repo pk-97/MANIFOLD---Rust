@@ -33,7 +33,7 @@ fn pair_bytes(slots: u32) -> u64 {
 
 /// Everything the publisher allocates for a target of `slots` records: two
 /// pair arrays, the live-count word and the digit scan's storage.
-pub(crate) fn scratch_bytes(slots: u32) -> u64 {
+pub fn scratch_bytes(slots: u32) -> u64 {
     let slots = slots.max(1);
     2 * pair_bytes(slots) + 16 + storage_words((DIGITS * tiles(slots)) as usize) as u64 * 4
 }
@@ -45,7 +45,7 @@ pub struct ParticlePublication {
     live: Option<GpuBuffer>,
     scan: PrefixScan,
 }
-pub(crate) struct Publication<'a> {
+pub struct Publication<'a> {
     pub source: &'a GpuBuffer,
     pub target: &'a GpuBuffer,
     pub identity: &'a GpuBuffer,
@@ -54,7 +54,7 @@ pub(crate) struct Publication<'a> {
     pub count: u32,
 }
 impl ParticlePublication {
-    pub(crate) fn prepare(&mut self, device: &GpuDevice) {
+    pub fn prepare(&mut self, device: &GpuDevice) {
         if self.pipelines.is_none() {
             let shader = with_stats_layout(SHADER);
             self.pipelines = Some(["first_upsweep", "upsweep", "downsweep", "gather"].map(
@@ -63,7 +63,7 @@ impl ParticlePublication {
         }
         self.scan.prepare(device);
     }
-    pub(crate) fn encode(
+    pub fn encode(
         &mut self,
         device: &GpuDevice,
         enc: &mut GpuEncoder,
@@ -151,8 +151,8 @@ impl ParticlePublication {
         Ok(())
     }
     /// Bytes held now: `scratch_bytes` of the largest target published.
-    #[cfg(all(test, feature = "gpu-proofs"))]
-    pub(super) fn held_bytes(&mut self, device: &GpuDevice) -> u64 {
+    #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
+    pub fn held_bytes(&mut self, device: &GpuDevice) -> u64 {
         let pairs = self.pairs.as_ref().map_or(0, |pairs| pairs[0].size + pairs[1].size);
         let live = self.live.as_ref().map_or(0, |live| live.size);
         pairs + live + self.scan.buffer(device, 1).map_or(0, |scan| scan.size)
@@ -173,19 +173,19 @@ fn binding(binding: u32, buffer: &GpuBuffer) -> GpuBinding<'_> {
 }
 /// The 1-bit publisher this module replaced, transcribed line by line from its
 /// shader: the oracle every publication proof compares bytes against.
-#[cfg(test)]
-pub(super) mod reference {
+#[cfg(any(test, feature = "testkit"))]
+pub mod reference {
     use super::super::liquid_stats::NARROW_BAND_SHORTAGE_WORD;
     use crate::water::fluid_particles::FluidParticle;
 
     /// `radius > 0.0` as that shader's GPU compare evaluated it: subnormals
     /// flush to zero (measured on the 1-bit publisher, 2026-10-04).
-    pub(crate) fn live(radius: f32) -> bool {
+    pub fn live(radius: f32) -> bool {
         radius >= f32::MIN_POSITIVE
     }
 
     /// The target's `slots` records and the four metadata words.
-    pub(crate) fn publish(
+    pub fn publish(
         source: &[FluidParticle],
         count: u32,
         slots: u32,
@@ -227,6 +227,7 @@ pub(super) mod reference {
 
     /// The same contract stated plainly: live records stably sorted by id,
     /// then zeroed records.
+    #[cfg(test)]
     pub(crate) fn stable_id_sort(source: &[FluidParticle], count: u32, slots: u32) -> Vec<FluidParticle> {
         let mut records: Vec<FluidParticle> =
             source[..count as usize].iter().copied().filter(|p| live(p.position_radius[3])).collect();

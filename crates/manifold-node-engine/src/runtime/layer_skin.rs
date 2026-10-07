@@ -77,7 +77,7 @@ impl LayerSkinRegistry {
 
     /// Begin end-of-frame publication while keeping reusable snapshot storage.
     /// No graph may read the registry until `finish_snapshots` completes.
-    pub(crate) fn begin_snapshots(&mut self) {
+    pub fn begin_snapshots(&mut self) {
         for entry in self.textures.values_mut() {
             entry.visible = false;
         }
@@ -85,7 +85,7 @@ impl LayerSkinRegistry {
 
     /// Freeze pixels, rather than retaining a render target that the next
     /// frame will overwrite. Allocation occurs only for a new layer or size.
-    pub(crate) fn publish_snapshot(
+    pub fn publish_snapshot(
         &mut self,
         gpu: &mut crate::gpu::gpu_encoder::GpuEncoder,
         layer_id: &LayerId,
@@ -121,7 +121,7 @@ impl LayerSkinRegistry {
 
     /// Drop sources which did not render this frame, including deleted
     /// layers, and clear the read set so the next publish tracks fresh reads.
-    pub(crate) fn finish_snapshots(&mut self) {
+    pub fn finish_snapshots(&mut self) {
         self.reads.borrow_mut().clear();
         self.textures.retain(|_, entry| entry.visible);
     }
@@ -129,7 +129,7 @@ impl LayerSkinRegistry {
     /// Whether `layer_id` was read since the last `finish_snapshots`. The
     /// compositor's publish loop uses this to snapshot only referenced
     /// layers; `publish_snapshot` itself stays unconditional.
-    pub(crate) fn was_read(&self, layer_id: &LayerId) -> bool {
+    pub fn was_read(&self, layer_id: &LayerId) -> bool {
         self.reads.borrow().contains(layer_id)
     }
 
@@ -155,7 +155,7 @@ impl LayerSkinRegistry {
     }
 
     /// Whether no layer textures are stored.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testkit"))]
     pub fn is_empty(&self) -> bool {
         self.textures.is_empty()
     }

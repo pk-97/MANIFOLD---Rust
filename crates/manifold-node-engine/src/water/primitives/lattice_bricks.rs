@@ -13,7 +13,8 @@ use std::borrow::Cow;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
 
 use super::prefix_scan::{PrefixScan, ScanLabels};
-use super::sort_particles_into_cells::{bin_param, float_param, read_searched_bins};
+use crate::float_param;
+use super::sort_particles_into_cells::{bin_param, read_searched_bins};
 use crate::exec::effect_node::{EffectNodeContext, ParamValues};
 use crate::water::fluid_particles::{CellRange, FluidBlob};
 use crate::parameters::{ParamDef, ParamType, ParamValue};
@@ -49,7 +50,7 @@ struct BrickUniforms {
 
 /// Dimensions and storage size of one brick layout.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct BrickLayout {
+pub struct BrickLayout {
     pub nodes: [u32; 3],
     pub bricks: [u32; 3],
     pub count: u32,
@@ -101,7 +102,7 @@ pub(crate) fn refined_nodes(solid_nodes: [u32; 3], resolution_scale: u32) -> Opt
 
 /// Compute the layout with checked integer arithmetic.  A missing layout is a
 /// named capacity error at the node boundary rather than a wrapped dispatch.
-pub(crate) fn brick_layout(solid_nodes: [u32; 3], resolution_scale: u32) -> Option<BrickLayout> {
+pub fn brick_layout(solid_nodes: [u32; 3], resolution_scale: u32) -> Option<BrickLayout> {
     let nodes = refined_nodes(solid_nodes, resolution_scale)?;
     // Every dense sample index in the generated consumers is a u32.
     nodes[0].checked_mul(nodes[1])?.checked_mul(nodes[2])?;
@@ -130,10 +131,10 @@ fn resolution_from_params(params: &ParamValues) -> u32 {
     param_u32(params, "resolution_scale", 2).clamp(1, 8)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testkit"))]
 const HALO_NODES: u32 = 5;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testkit"))]
 fn expanded_bounds(
     brick: [u32; 3],
     layout: BrickLayout,
@@ -155,7 +156,7 @@ fn expanded_bounds(
     (lo, hi)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testkit"))]
 fn intersects_support(center: [f32; 3], support: [f32; 3], lo: [f32; 3], hi: [f32; 3]) -> bool {
     (0..3).all(|axis| {
         let distance = (lo[axis] - center[axis]).max(center[axis] - hi[axis]).max(0.0);
@@ -166,8 +167,8 @@ fn intersects_support(center: [f32; 3], support: [f32; 3], lo: [f32; 3], hi: [f3
 /// CPU reference for the GPU mark pass.  This deliberately uses the blob's
 /// bounding support, not its anisotropic matrix, so every possible level-set
 /// crossing is retained even when a shape is stretched.
-#[cfg(test)]
-pub(crate) fn conservative_brick_mask(
+#[cfg(any(test, feature = "testkit"))]
+pub fn conservative_brick_mask(
     blobs: &[FluidBlob],
     center: [f32; 3],
     size: [f32; 3],
@@ -220,8 +221,8 @@ pub(crate) fn conservative_brick_mask(
 
 /// Compact an inclusive mask into the same ascending layout emitted by the
 /// GPU.  The zeroed tail models retired bricks after a frame shrinks.
-#[cfg(test)]
-pub(crate) fn compact_brick_words(mask: &[u32], bricks: [u32; 3]) -> Vec<u32> {
+#[cfg(any(test, feature = "testkit"))]
+pub fn compact_brick_words(mask: &[u32], bricks: [u32; 3]) -> Vec<u32> {
     let mut ids = Vec::with_capacity(mask.iter().filter(|&&v| v != 0).count());
     for (id, &active) in mask.iter().enumerate() {
         if active != 0 {
@@ -819,5 +820,5 @@ mod tests {
     }
 }
 
-#[cfg(any(test, feature = "gpu-proofs"))]
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 mod extent;

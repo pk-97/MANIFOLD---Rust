@@ -182,5 +182,5 @@ impl PreparedModifierParameterGuards {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testkit"))]
 mod testkit;

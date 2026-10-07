@@ -4,7 +4,7 @@ use crate::{graph::Graph, persistence::PrimitiveRegistry, load::loaded_preset_vi
 use manifold_core::effects::PresetInstance;
 
 impl EffectSlot {
-    pub(super) fn refresh_chain_physics_source(
+    pub(crate) fn refresh_chain_physics_source(
         &mut self,
         graph: &mut Graph,
         instance: &PresetInstance,
@@ -51,7 +51,7 @@ impl EffectSlot {
 }
 
 impl PresetRuntime {
-    pub(super) fn initialize_chain_physics_sources(
+    pub(crate) fn initialize_chain_physics_sources(
         &mut self,
         instances: &[PresetInstance],
         registry: &PrimitiveRegistry,

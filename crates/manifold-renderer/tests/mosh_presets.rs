@@ -2,6 +2,7 @@
 //! These checks keep the editable graph shape, card controls, and trigger wiring
 //! stable while GPU and multi-frame behaviour are covered by the renderer proofs.
 
+use manifold_renderer as _;
 use std::collections::{BTreeMap, BTreeSet};
 
 use manifold_core::effect_graph_def::{

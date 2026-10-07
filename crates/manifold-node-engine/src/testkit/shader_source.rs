@@ -1,7 +1,7 @@
 // Preserve the dense wrapper while keeping its ABI in lockstep with the
 // scheduled node. Optional solid input is bound by the generated wrapper;
 // no-solid fixtures pass zero solid dimensions so the constraint is inert.
-pub(crate) fn dense_source<P: crate::primitive::PrimitiveSpec>(original: &str) -> String {
+pub fn dense_source<P: crate::primitive::PrimitiveSpec>(original: &str) -> String {
     use crate::freeze::codegen::{StandaloneKernelSpec, generate_standalone};
     let mut body = original.to_owned();
     let start = body.find("fn body(").unwrap();

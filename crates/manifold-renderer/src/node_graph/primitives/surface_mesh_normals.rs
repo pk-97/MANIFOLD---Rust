@@ -2,7 +2,7 @@
 use manifold_node_engine::water::primitives::count_surface_triangles::MARCHING_CUBES_COMMON;
 use manifold_node_engine::water::primitives::liquid_bricks;
 use manifold_node_engine::water::primitives::relax_surface_mesh::SurfaceMeshPass;
-use manifold_node_engine::water::primitives::sort_particles_into_cells::float_param;
+use manifold_node_engine::float_param;
 use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
 use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};

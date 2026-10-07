@@ -7,7 +7,8 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use super::sort_particles_into_cells::{bin_param, float_param, read_searched_bins};
+use crate::float_param;
+use super::sort_particles_into_cells::{bin_param, read_searched_bins};
 use crate::primitives::standalone_pipeline::standalone_pipeline;
 use crate::exec::effect_node::{EffectNodeContext, ParamValues};
 use crate::water::fluid_particles::{CellRange, FluidBlob, FluidParticle};
@@ -270,5 +271,5 @@ mod gpu_tests {
     }
 }
 
-#[cfg(any(test, feature = "gpu-proofs"))]
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 mod extent;

@@ -1,3 +1,11 @@
+use crate::parameters::ParamValue;
+use crate::persistence::PrimitiveRegistry;
+use crate::runtime::FrameContextInputs;
+use crate::runtime::PresetRuntime;
+use manifold_core::Beats;
+use manifold_core::NodeId;
+use manifold_core::Seconds;
+use crate::exec::effect_node::FrameTime;
 use super::*;
 use crate::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
 use crate::{exec::effect_node::EffectNode, exec::effect_node::EffectNodeContext, exec::effect_node::EffectNodeType, parameters::ParamDef};
@@ -71,6 +79,7 @@ impl EffectNode for ObservedPhysics {
 fn runtime() -> PresetRuntime {
     OBSERVATIONS.with_borrow_mut(Vec::clear);
     let mut registry = PrimitiveRegistry::with_builtin();
+    crate::testkit::physics_fixtures::register(&mut registry);
     registry.register("node.physics_world", || {
         Box::new(ObservedPhysics(EffectNodeType::new("node.physics_world")))
     });
@@ -79,17 +88,13 @@ fn runtime() -> PresetRuntime {
         "nodes": [
             {"id": 0, "nodeId": "input", "typeId": "system.generator_input"},
             {"id": 1, "nodeId": "value", "typeId": "node.value"},
-            {"id": 2, "nodeId": "lfo", "typeId": "node.lfo", "params": {
-                "rate_mode": {"type": "Enum", "value": 1},
-                "angular_rate": {"type": "Float", "value": 12.0},
-                "min": {"type": "Float", "value": -1.0},
-                "max": {"type": "Float", "value": 1.0}
-            }},
+            {"id": 2, "nodeId": "lfo", "typeId": "test.physics_wave"},
             {"id": 3, "nodeId": "physics", "typeId": "node.physics_world"},
             {"id": 4, "nodeId": "source", "typeId": "system.source"},
             {"id": 5, "nodeId": "output", "typeId": "system.final_output"}
         ],
         "wires": [
+            {"fromNode": 0, "fromPort": "time", "toNode": 2, "toPort": "clock"},
             {"fromNode": 0, "fromPort": "time", "toNode": 3, "toPort": "clock"},
             {"fromNode": 0, "fromPort": "beat", "toNode": 3, "toPort": "beat"},
             {"fromNode": 0, "fromPort": "trigger_count", "toNode": 3, "toPort": "trigger"},

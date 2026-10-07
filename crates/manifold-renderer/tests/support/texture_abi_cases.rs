@@ -174,7 +174,7 @@ pub const CASES: &[TextureAbiCase] = &[
         aliases: &[],
     },
     TextureAbiCase {
-        source: "compose.rs",
+        source: "../../../../manifold-node-engine/src/primitives/mix.rs",
         rust_struct: "MixUniforms",
         type_id: "node.mix",
         shader_struct: "Params",
@@ -328,7 +328,7 @@ pub const CASES: &[TextureAbiCase] = &[
         aliases: &[],
     },
     TextureAbiCase {
-        source: "gain.rs",
+        source: "../../../../manifold-node-engine/src/primitives/gain.rs",
         rust_struct: "GainUniforms",
         type_id: "node.exposure",
         shader_struct: "Params",
@@ -433,7 +433,7 @@ pub const CASES: &[TextureAbiCase] = &[
         aliases: &[],
     },
     TextureAbiCase {
-        source: "masked_mix.rs",
+        source: "../../../../manifold-node-engine/src/primitives/masked_mix.rs",
         rust_struct: "MaskedMixUniforms",
         type_id: "node.masked_mix",
         shader_struct: "Params",

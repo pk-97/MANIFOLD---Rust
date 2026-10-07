@@ -49,7 +49,7 @@ pub(super) fn generator_error_from_prealloc(
 
 impl PresetRuntime {
     /// Shared structural entry for watched, standalone and fused generators.
-    pub(crate) fn from_def_for_render(
+    pub fn from_def_for_render(
         doc: EffectGraphDef,
         registry: &PrimitiveRegistry,
         manifest: Option<&ParamManifest>,
@@ -268,14 +268,14 @@ impl PresetRuntime {
         Ok(Some(usage))
     }
 
-    pub(crate) fn is_modifier_trigger_param(&self, param: &str) -> bool {
+    pub fn is_modifier_trigger_param(&self, param: &str) -> bool {
         self.modifier_events
             .as_ref()
             .is_some_and(|events| events.is_modifier_param(param))
     }
 
-    #[cfg(test)]
-    pub(crate) fn note_modifier_audio_event(&mut self, param: &str) -> bool {
+    #[cfg(any(test, feature = "testkit"))]
+    pub fn note_modifier_audio_event(&mut self, param: &str) -> bool {
         for view in &mut self.math_views {
             for variant in &mut view.variants {
                 variant.note_modifier_audio_event(param);
@@ -286,7 +286,7 @@ impl PresetRuntime {
             .is_some_and(|events| events.note_audio(param))
     }
 
-    pub(crate) fn note_modifier_audio_key(&mut self, param_key: u64) -> bool {
+    pub fn note_modifier_audio_key(&mut self, param_key: u64) -> bool {
         for view in &mut self.math_views {
             for variant in &mut view.variants {
                 variant.note_modifier_audio_key(param_key);
@@ -297,7 +297,7 @@ impl PresetRuntime {
             .is_some_and(|events| events.note_audio_key(param_key))
     }
 
-    pub(crate) fn note_modifier_clip_event(&mut self, host: Option<&PresetInstance>) {
+    pub fn note_modifier_clip_event(&mut self, host: Option<&PresetInstance>) {
         for view in &mut self.math_views {
             for variant in &mut view.variants {
                 variant.note_modifier_clip_event(host);
@@ -330,11 +330,12 @@ impl PresetRuntime {
         }
     }
 
-    pub(crate) fn carry_pending_trigger_from(&mut self, prior: &Self) {
+    #[doc(hidden)]
+    pub fn carry_pending_trigger_from(&mut self, prior: &Self) {
         self.pending_trigger_baseline = prior.pending_trigger_baseline;
     }
 
-    pub(crate) fn carry_modifier_control_state_from(&mut self, prior: &mut Self) {
+    pub fn carry_modifier_control_state_from(&mut self, prior: &mut Self) {
         for view in &mut self.math_views {
             if let Some(previous) = prior.math_views.iter_mut().find(|previous| previous.modifier_id == view.modifier_id) {
                 view.events.carry_from(&previous.events);

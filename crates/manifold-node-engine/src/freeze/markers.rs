@@ -419,23 +419,23 @@ mod tests {
 
     /// Invariant (FUSION_SOTA_DESIGN D1 / section 3): every marker byte on the wire is
     /// produced/consumed by THIS module. A Rust string literal starting `"// @`
-    /// anywhere else in `manifold-renderer/src` is a hand-formatted/hand-matched
+    /// anywhere else in `manifold-node-engine/src` is a hand-formatted/hand-matched
     /// marker that has drifted out of the single-sourced grammar — the exact
     /// failure mode D1 closes. Doc-comment prose referencing a marker in
     /// backticks (e.g. `` `// @reset_gated` ``) does NOT match this pattern (no
     /// leading `"`), so this only catches real string-literal duplication.
     #[test]
     fn marker_literals_live_in_one_module() {
-        // CARGO_MANIFEST_DIR = <repo>/crates/manifold-renderer
+        // CARGO_MANIFEST_DIR = <repo>/crates/manifold-node-engine
         let src_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut files = Vec::new();
         rust_files_under(&src_dir, &mut files);
 
         let mut violations = Vec::new();
         for path in &files {
-            // Only this file (`node_graph/freeze/markers.rs`) may contain the
+            // Only this file (`freeze/markers.rs`) may contain the
             // literal wire-format prefix.
-            if path.to_string_lossy().replace('\\', "/").ends_with("node_graph/freeze/markers.rs") {
+            if path.to_string_lossy().replace('\\', "/").ends_with("freeze/markers.rs") {
                 continue;
             }
             let Ok(text) = std::fs::read_to_string(path) else { continue };

@@ -908,8 +908,8 @@ mod tests {
                         },
                         "nodes": [
                             { "id": 0, "typeId": "system.group_input" },
-                            { "id": 1, "typeId": "node.scale_offset_image", "handle": "so1" },
-                            { "id": 2, "typeId": "node.scale_offset_image", "handle": "so2" },
+                            { "id": 1, "typeId": "test.document", "handle": "so1" },
+                            { "id": 2, "typeId": "test.document", "handle": "so2" },
                             { "id": 3, "typeId": "system.group_output" }
                         ],
                         "wires": [
@@ -929,7 +929,7 @@ mod tests {
 
         let doc: GraphDocument = serde_json::from_str(json).expect("grouped doc parses");
         let g = doc
-            .into_graph(&registry(), &crate::scene::mesh_change::PreparedMeshRules::default())
+            .into_graph(&crate::testkit::document_fixtures::registry(), &crate::scene::mesh_change::PreparedMeshRules::default())
             .expect("grouped document flattens and loads");
 
         // Boundary + group nodes folded away: only source, so1, so2, final.
@@ -970,7 +970,7 @@ mod tests {
     /// `into_graph` re-installs it via `Graph::set_wgsl_source`.
     #[test]
     fn wgsl_compute_source_field_round_trips_through_json() {
-        use crate::primitives::wgsl_compute::{DEFAULT_WGSL, WgslCompute};
+        use crate::primitives::wgsl_compute::{DEFAULT_WGSL as DEFAULT_WGSL_COMPUTE, WgslCompute};
 
         let mut g = Graph::new();
         let wgsl = g.add_node_named("kernel", Box::new(WgslCompute::new()));
@@ -1325,7 +1325,7 @@ mod tests {
             nodes: vec![NodeDocument {
                 id: 0,
                 node_id: manifold_core::NodeId::new("math_n1"),
-                type_id: "node.math".to_string(),
+                type_id: "test.document".to_string(),
                 handle: Some("math_node".into()),
                 params: BTreeMap::new(),
                 exposed_params: Default::default(),
@@ -1338,7 +1338,7 @@ mod tests {
             }],
             wires: vec![],
         };
-        let err = expect_err(doc.into_graph(&registry(), &crate::scene::mesh_change::PreparedMeshRules::default()));
+        let err = expect_err(doc.into_graph(&crate::testkit::document_fixtures::registry(), &crate::scene::mesh_change::PreparedMeshRules::default()));
         match err {
             LoadError::BindingConvertTypeMismatch {
                 binding_id,

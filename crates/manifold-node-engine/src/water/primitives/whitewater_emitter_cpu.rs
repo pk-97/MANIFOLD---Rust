@@ -4,6 +4,7 @@
 use super::whitewater_particle_cpu::{Box3, face_index};
 
 /// FLIP's influence-scaled rate over one duration, rounded before tick replication.
+#[cfg(test)]
 pub(super) fn emission_count(
     energy: f32,
     potentials: [f32; 2],
@@ -132,6 +133,7 @@ pub(super) fn turbulence(
     field
 }
 
+#[cfg(test)]
 pub(super) fn sample(field: &[f32], grid: Box3, p: [f32; 3]) -> f32 {
     let q = grid.position(p).map(|v| v - 0.5);
     let base = q.map(|v| v.floor() as i32);

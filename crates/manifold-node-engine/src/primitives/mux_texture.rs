@@ -33,7 +33,6 @@ use manifold_gpu::{GpuBinding, GpuComputePipeline, GpuSampler, GpuSamplerDesc};
 use crate::exec::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, ParamValues};
 use crate::parameters::{ParamDef, ParamType, ParamValue};
 use crate::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
-use crate::primitive::PrimitiveDescription;
 
 pub const MUX_TEXTURE_TYPE_ID: &str = "node.switch_texture";
 
@@ -185,18 +184,7 @@ impl MuxTexture {
         self.inputs.len().saturating_sub(1)
     }
 
-    /// AI-composition surface metadata.
-    pub fn description() -> PrimitiveDescription {
-        PrimitiveDescription {
-            type_id: MUX_TEXTURE_TYPE_ID,
-            purpose: "Dynamic N-way Texture2D selector. `num_inputs` sets how many in_0..in_N ports exist; the `selector` scalar (rounded, clamped to [0, num_inputs)) routes the matching input to the output. Use for clip-trigger preset cycling and any pick-1-of-N texture selection (e.g. Infrared's 10 palette ramps) — wire generator_input.trigger_count to selector and each variant sub-graph to in_0..in_N.",
-            composition_notes: "num_inputs (default 8) rebuilds the port list, so the node grows/shrinks in the editor. Selector rounds to nearest int, clamps to [0, num_inputs). selector is port-shadows-param: the inline param drives the choice when no wire is connected. If the selected in_N isn't wired the node falls back to in_0; if every in_N is unwired the output clears to opaque black. Acts as a switch at the executor level via selected_input_branch — with the selector port unwired, only the selected branch's producer subgraph dispatches each frame.",
-            examples: &[],
-            inputs: &[],
-            outputs: &MUX_OUTPUTS,
-            params: &MUX_PARAMS,
-        }
-    }
+
 }
 
 impl Default for MuxTexture {
@@ -856,5 +844,5 @@ mod gpu_tests {
     }
 }
 
-#[cfg(any(test, feature = "gpu-proofs"))]
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 mod extent;

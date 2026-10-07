@@ -371,7 +371,7 @@ ParamDef { name: Cow::Borrowed("copy_layout"), label: "Copy Layout", ty: ParamTy
 }
 impl PhysicsWorldNode {
     /// CPU pose upload is an IO boundary, so the atom codegen sweep cannot warm it.
-    pub(crate) fn prewarm_pipeline(device: &manifold_gpu::GpuDevice) {
+    pub fn prewarm_pipeline(device: &manifold_gpu::GpuDevice) {
         InstanceSnapshotUpload::prewarm(device);
     }
 
@@ -1397,5 +1397,5 @@ mod gpu_tests {
     }
 }
 
-#[cfg(any(test, feature = "gpu-proofs"))]
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 mod extent;

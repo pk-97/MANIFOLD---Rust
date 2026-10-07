@@ -10,7 +10,8 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use super::sort_particles_into_cells::{bin_param, float_param};
+use crate::float_param;
+use super::sort_particles_into_cells::{bin_param};
 use crate::primitives::standalone_pipeline::standalone_pipeline;
 use crate::exec::effect_node::{EffectNodeContext, ParamValues};
 use crate::water::fluid_particles::{CellRange, bin_counts, searched_bins};
@@ -210,5 +211,5 @@ impl Primitive for KeepWhitewater {
     }
 }
 
-#[cfg(any(test, feature = "gpu-proofs"))]
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 mod extent;

@@ -1,6 +1,9 @@
     //! Project-load segment prewarm shares `classify_segment_member` /
     //! `segment_run` with the chain build — these lock the shared pieces.
-    use super::*;
+    use manifold_node_engine::persistence::PrimitiveRegistry;
+    use manifold_node_engine::runtime::segments::{
+        classify_segment_member, prewarm_chain_segments, segment_run, SegmentMember,
+    };
     use manifold_core::PresetTypeId;
     use manifold_core::effects::PresetInstance;
 

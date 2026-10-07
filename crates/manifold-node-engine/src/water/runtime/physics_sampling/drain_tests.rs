@@ -1,4 +1,12 @@
 //! Native FLIP history catch-up through the ordinary CPU graph path.
+use crate::exec::effect_node::FrameTime;
+use crate::parameters::ParamValue;
+use crate::persistence::PrimitiveRegistry;
+use crate::runtime::PresetRuntime;
+use manifold_core::Beats;
+use manifold_core::NodeId;
+use manifold_core::Seconds;
+use manifold_core::effect_graph_def::EffectGraphDef;
 use super::*;
 use crate::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
 use crate::{exec::effect_node::EffectNode, exec::effect_node::EffectNodeContext, exec::effect_node::EffectNodeType, parameters::ParamDef};
@@ -118,6 +126,7 @@ fn fluid_graph_cache_ignores_appearance_but_rejects_authored_force_edits() {
         std::process::id()
     ));
     let mut registry = PrimitiveRegistry::with_cpu_flip_reference();
+    crate::testkit::document_fixtures::register(&mut registry);
     registry.register("test.fluid_time", || {
         fluid_time_observer()
     });
@@ -133,7 +142,7 @@ fn fluid_graph_cache_ignores_appearance_but_rejects_authored_force_edits() {
             {"id":2,"nodeId":"source","typeId":"system.source"},
             {"id":3,"nodeId":"output","typeId":"system.final_output"},
             {"id":4,"nodeId":"input","typeId":"system.generator_input"},
-            {"id":5,"nodeId":"appearance","typeId":"node.pbr_material","params":{
+            {"id":5,"nodeId":"appearance","typeId":"test.document","params":{
                 "roughness":{"type":"Float","value":0.1}
             }}
         ],

@@ -418,10 +418,11 @@ inventory::submit! {
 
 #[cfg(test)]
 mod tests {
+    use crate::validation::validate;
     use super::*;
     use manifold_core::{Beats, Seconds};
 
-    use crate::{exec::execution::Executor, exec::effect_node::FrameTime, graph::Graph, validation::GraphError, exec::execution_plan::compile, validate};
+    use crate::{exec::execution::Executor, exec::effect_node::FrameTime, graph::Graph, validation::GraphError, exec::execution_plan::compile};
 
     fn frame_time() -> FrameTime {
         FrameTime {

@@ -322,6 +322,6 @@ mod tests {
 
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testkit"))]
 #[doc(hidden)]
-pub(crate) mod testkit;
+pub mod testkit;

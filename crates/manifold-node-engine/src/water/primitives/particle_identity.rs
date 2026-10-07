@@ -9,7 +9,7 @@ pub struct ParticleIdentity {
     seed: Option<GpuComputePipeline>,
     reserve: Option<GpuComputePipeline>,
 }
-pub(crate) struct BirthReservation<'a> {
+pub struct BirthReservation<'a> {
     pub particles: &'a GpuBuffer,
     pub identity: &'a GpuBuffer,
     pub ranges: &'a GpuBuffer,
@@ -18,7 +18,7 @@ pub(crate) struct BirthReservation<'a> {
     pub params: [u32; 4],
 }
 impl ParticleIdentity {
-    pub(crate) fn prepare(&mut self, device: &GpuDevice) {
+    pub fn prepare(&mut self, device: &GpuDevice) {
         if self.seed.is_none() {
             self.seed =
                 Some(device.create_compute_pipeline(SHADER, "seed", "particle_identity.seed"));
@@ -29,7 +29,7 @@ impl ParticleIdentity {
             ));
         }
     }
-    pub(crate) fn seed(
+    pub fn seed(
         &self,
         enc: &mut GpuEncoder,
         particles: &GpuBuffer,
@@ -55,7 +55,7 @@ impl ParticleIdentity {
         );
         enc.compute_memory_barrier_buffers();
     }
-    pub(crate) fn reserve(&self, enc: &mut GpuEncoder, job: BirthReservation<'_>) {
+    pub fn reserve(&self, enc: &mut GpuEncoder, job: BirthReservation<'_>) {
         // Prove every single-writer access before dispatch, including the rare
         // rollover loop. The shader separately bounds the GPU live prefix.
         assert!(u64::from(job.params[0]) * 32 <= job.particles.size);

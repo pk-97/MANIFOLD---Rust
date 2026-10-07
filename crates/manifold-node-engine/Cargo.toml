@@ -30,20 +30,27 @@ naga = { version = "28", features = ["wgsl-in", "msl-out"] }
 [build-dependencies]
 sha2 = "0.10"
 
+[dependencies.glam]
+version = "0.29.3"
+optional = true
+
 [dev-dependencies]
 glam = "0.29.3"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.6", optional = true }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 objc2 = "0.6"
 
 [features]
-testkit = []
+testkit = ["dep:glam", "dep:objc2"]
 # GPU-proof tests: slow, flaky, and need a real Metal device with synchronous
 # readback. Off by default so the workspace test sweep stays fast and
 # deterministic; opt in with `--features gpu-proofs`. Gates `test_device()`,
 # every `mod gpu_tests`, the `gpu_proofs` integration binary above, and the
 # counters and error tap the liquid conformance suite reads.
-gpu-proofs = ["manifold-gpu/gpu-proofs"]
+gpu-proofs = ["testkit", "manifold-gpu/gpu-proofs"]
 # Bounded dynamic-RT timing is opt-in, separate from correctness gates.
 rt-perf-proofs = ["gpu-proofs"]
 # GPU liquid-surface budget proof (GPU_FLUID_SURFACE_DESIGN.md D20), opt-in.

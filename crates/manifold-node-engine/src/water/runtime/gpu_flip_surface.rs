@@ -18,7 +18,7 @@ fn shared_param(name: &str) -> bool {
     name == "resolution_scale" || SHARED_INPUTS[4..].contains(&name)
 }
 
-pub(super) fn prepare(def: &mut EffectGraphDef) {
+pub(crate) fn prepare(def: &mut EffectGraphDef) {
     if def.preset_metadata.as_ref().is_none_or(|m| m.id.as_str() != "WaterDamBreakGpuFlip")
         || !contains_step(&def.nodes)
     {
@@ -161,5 +161,5 @@ fn prepare_surface(
     bindings.extend(mirrored);
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testkit"))]
 mod testkit;

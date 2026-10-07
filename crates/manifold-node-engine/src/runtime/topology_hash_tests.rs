@@ -7,8 +7,22 @@
     use manifold_core::PresetTypeId;
     use manifold_core::effects::PresetInstance;
 
+    #[cfg(feature = "gpu-proofs")]
     fn make_default(ty: PresetTypeId) -> PresetInstance {
         manifold_core::preset_definition_registry::create_default(&ty)
+    }
+
+    // Hash mechanics need a mutable parameter manifest, not a catalog preset.
+    fn hash_fixture(ty: PresetTypeId) -> PresetInstance {
+        let mut instance = PresetInstance::new(ty);
+        let spec = serde_json::from_value(serde_json::json!({
+            "id": "amount", "name": "Amount", "min": 0.0, "max": 1.0,
+            "defaultValue": 1.0
+        })).expect("hash fixture parameter spec");
+        instance.params = manifold_core::params::ParamManifest::from_params(vec![
+            manifold_core::params::Param::bundled(spec)
+        ]);
+        instance
     }
 
     #[test]
@@ -18,8 +32,8 @@
         // gate at `should_render_fused` only re-runs on rebuild, so the watched
         // flag has to move the topology hash. Membership-local: a `preview_effect`
         // that isn't in the chain leaves the hash unchanged (no churn elsewhere).
-        let fx = make_default(PresetTypeId::COLOR_GRADE);
-        let other = make_default(PresetTypeId::VORONOI_PRISM);
+        let fx = hash_fixture(PresetTypeId::COLOR_GRADE);
+        let other = hash_fixture(PresetTypeId::VORONOI_PRISM);
 
         let unwatched = compute_topology_hash(std::slice::from_ref(&fx), &[], 256, 256, None);
         let watched =
@@ -47,12 +61,12 @@
         // (Feedback, Watercolor, Bloom, ...) keep their accumulated
         // state across the bypass moment. The only structural skip is
         // `PresetInstance.enabled`.
-        let mut fx = make_default(PresetTypeId::VORONOI_PRISM);
-        fx.set_base_param("amount", 0.0);
+        let mut fx = hash_fixture(PresetTypeId::VORONOI_PRISM);
+        assert!(fx.set_base_param("amount", 0.0));
 
         let hash_at_zero = compute_topology_hash(&[fx.clone()], &[], 256, 256, None);
 
-        fx.set_base_param("amount", 0.5);
+        assert!(fx.set_base_param("amount", 0.5));
         let hash_at_half = compute_topology_hash(&[fx], &[], 256, 256, None);
 
         assert_eq!(
@@ -168,7 +182,7 @@
     /// template topology and legitimately rebuilds.
     #[test]
     fn relight_float_knobs_do_not_change_topology_hash() {
-        let mut fx = make_default(PresetTypeId::MIRROR);
+        let mut fx = hash_fixture(PresetTypeId::MIRROR);
         fx.relight = true;
         let base = compute_topology_hash(&[fx.clone()], &[], 256, 256, None);
 
@@ -209,7 +223,7 @@
         // but NOT `graph_structure_version`, so the topology hash is unchanged
         // and the chain is NOT rebuilt (state preserved). Only a structural
         // edit moves the hash.
-        let mut fx = make_default(PresetTypeId::MIRROR);
+        let mut fx = hash_fixture(PresetTypeId::MIRROR);
         let base = compute_topology_hash(&[fx.clone()], &[], 256, 256, None);
 
         // Value / position edit: snapshot version moves, structure doesn't.

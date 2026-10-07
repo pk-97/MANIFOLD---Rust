@@ -42,8 +42,8 @@ use crate::scene::transform::Transform;
 
 /// Everything whose change restarts the liquid.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct GpuFlipSetup {
-    pub(crate) lattice: LiquidLattice,
+pub struct GpuFlipSetup {
+    pub lattice: LiquidLattice,
     pub(crate) pool_sites: u32,
     pub(crate) box_sites: [[u32; 2]; 3],
     /// Particle slots the pool holds; 0 means the fill's count. Sources
@@ -54,9 +54,9 @@ pub(crate) struct GpuFlipSetup {
 /// The domain's setup and the layout it came from, computed from params and
 /// wires alone: the node and the extent checker both call [`gpu_flip_geometry`].
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct GpuFlipGeometry {
+pub struct GpuFlipGeometry {
     pub(crate) layout: FluidDomainLayout,
-    pub(crate) setup: GpuFlipSetup,
+    pub setup: GpuFlipSetup,
     pub(crate) particles: u64,
     /// The V-cycle level the pressure solves run on; live, so not in the
     /// setup.
@@ -64,12 +64,12 @@ pub(crate) struct GpuFlipGeometry {
     /// The cap Auto pressure solves converge within; live, so not in the setup.
     pub(crate) max_iterations: u32,
     /// Live sheet seeding rate; changing it does not restart the liquid.
-    pub(crate) sheet_fill_rate: f32,
+    pub sheet_fill_rate: f32,
 }
 
 impl GpuFlipGeometry {
     /// The scalar outputs fixed by the setup, by name.
-    pub(crate) fn outputs(&self) -> [(&'static str, f32); 23] {
+    pub fn outputs(&self) -> [(&'static str, f32); 23] {
         let GpuFlipSetup { lattice, pool_sites, box_sites, particle_capacity } = self.setup;
         let h = self.layout.cell_size;
         let surface = lattice.surface();
@@ -144,7 +144,7 @@ fn fill_sites(
 /// the pressure solve cannot take, a solve level the lattice lacks, a fill
 /// that does not fit the domain, and a fill past the count a wire carries
 /// exactly.
-pub(crate) fn gpu_flip_geometry(
+pub fn gpu_flip_geometry(
     read: impl Fn(&str, f32) -> f32,
     domain: Option<Transform>,
     initial_volume: Option<Transform>,
@@ -1178,5 +1178,5 @@ mod tests {
     }
 }
 
-#[cfg(any(test, feature = "gpu-proofs"))]
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 mod extent;

@@ -591,7 +591,7 @@ fn handover_error(
 }
 
 /// A coupled row as the law's start state.
-pub(crate) fn coupled_start(row: &LiquidBody) -> CoupledStart {
+pub fn coupled_start(row: &LiquidBody) -> CoupledStart {
     let xyz = |v: [f32; 4]| [v[0], v[1], v[2]];
     CoupledStart {
         position: xyz(row.position_inv_mass),

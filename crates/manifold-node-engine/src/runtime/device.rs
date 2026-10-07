@@ -35,7 +35,7 @@ impl PresetRuntime {
             .with_generator_device(device, width, height, format)
     }
 
-    pub(crate) fn with_generator_device(
+    pub fn with_generator_device(
         mut self,
         device: std::sync::Arc<GpuDevice>,
         width: u32,

@@ -20,8 +20,8 @@ use crate::runtime::preset_context::PresetContext;
 use crate::runtime::PresetRuntime;
 use crate::gpu::render_target::RenderTarget;
 
-pub(crate) const STEP_REPORTS: [&str; 6] = ["foam_count", "bubble_count", "spray_count", "emitted", "thinned", "pool_full"];
-pub(crate) fn float(v: f64) -> Value {
+pub const STEP_REPORTS: [&str; 6] = ["foam_count", "bubble_count", "spray_count", "emitted", "thinned", "pool_full"];
+pub fn float(v: f64) -> Value {
     json!({"type": "Float", "value": v})
 }
 
@@ -56,7 +56,7 @@ fn renumber_scope_ids(value: &mut Value, next: &mut u64) {
 
 use crate::water::liquid::conformance::json_node_mut;
 
-pub(crate) fn node_scope_wires<'a>(
+pub fn node_scope_wires<'a>(
     nodes: &'a [EffectGraphNode],
     wires: &'a [manifold_core::effect_graph_def::EffectGraphWire],
     node_id: &str,
@@ -74,20 +74,24 @@ pub(crate) fn node_scope_wires<'a>(
     None
 }
 
-pub(crate) const PROBE: &str = "test.scalar_probe";
-pub(crate) const COUNTS_PROBE: &str = "test.whitewater_counts_probe";
+pub const PROBE: &str = "test.scalar_probe";
+pub const COUNTS_PROBE: &str = "test.whitewater_counts_probe";
 
 /// A liveness root that keeps the observed output bound. Scalar probes
 /// shadow their input with `value` for the runtime's live parameter tap;
 /// the count-buffer probe retains the boundary's completed tick reports.
-pub(crate) struct Probe {
+pub struct Probe {
     type_id: EffectNodeType,
     inputs: Vec<NodeInput>,
     params: Vec<ParamDef>,
 }
 
+impl Default for Probe {
+    fn default() -> Self { Self::new() }
+}
+
 impl Probe {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             type_id: EffectNodeType::new(PROBE),
             inputs: vec![NodePort { name: Cow::Borrowed("value"), ty: PortType::Scalar(ScalarType::F32), kind: PortKind::Input, required: true }],
@@ -104,7 +108,7 @@ impl Probe {
 
     /// Keep the boundary's count output bound for late capture. The CPU
     /// reads its shared buffer only after the frame completes.
-    pub(crate) fn whitewater_counts() -> Self {
+    pub fn whitewater_counts() -> Self {
         Self {
             type_id: EffectNodeType::new(COUNTS_PROBE),
             inputs: vec![NodePort { name: Cow::Borrowed("counts"), ty: PortType::Array(ArrayType::of_known::<u32>()), kind: PortKind::Input, required: true }],
@@ -136,7 +140,7 @@ impl EffectNode for Probe {
 }
 
 /// Nodes and wires appended to a def held as JSON, found by name.
-pub(crate) struct Appender {
+pub struct Appender {
     def: Value,
     next: u64,
 }
@@ -144,11 +148,11 @@ pub(crate) struct Appender {
 
 
 impl Appender {
-    pub(crate) fn new(def: EffectGraphDef) -> Self {
+    pub fn new(def: EffectGraphDef) -> Self {
         Self::from_value(serde_json::to_value(def).expect("def serialises"))
     }
 
-    pub(crate) fn from_value(def: Value) -> Self {
+    pub fn from_value(def: Value) -> Self {
         let mut first = 0;
         let mut def = def;
         renumber_scope_ids(&mut def, &mut first);
@@ -159,7 +163,7 @@ impl Appender {
         json_node_mut(&mut self.def, name).unwrap_or_else(|| panic!("no node {name}"))
     }
 
-    pub(crate) fn id(&mut self, name: &str) -> u64 {
+    pub fn id(&mut self, name: &str) -> u64 {
         self.named(name)["id"].as_u64().expect("numeric id")
     }
 
@@ -199,7 +203,7 @@ impl Appender {
         from
     }
 
-    pub(crate) fn node_in_scope(&mut self, name: &str, type_id: &str, params: Value, scope_node: u64) -> u64 {
+    pub fn node_in_scope(&mut self, name: &str, type_id: &str, params: Value, scope_node: u64) -> u64 {
         let id = self.next;
         self.next += 1;
         let path = self.scope_path(scope_node).unwrap_or_else(|| panic!("no node id {scope_node}"));
@@ -212,7 +216,7 @@ impl Appender {
         id
     }
 
-    pub(crate) fn replace(&mut self, name: &str, mut replacement: Value) -> u64 {
+    pub fn replace(&mut self, name: &str, mut replacement: Value) -> u64 {
         fn replace_in(value: &mut Value, name: &str, replacement: &mut Value) -> Option<u64> {
             let nodes = value["nodes"].as_array_mut()?;
             for node in nodes.iter_mut() {
@@ -234,13 +238,13 @@ impl Appender {
         replace_in(&mut self.def, name, &mut replacement).unwrap_or_else(|| panic!("no node {name}"))
     }
 
-    pub(crate) fn wire(&mut self, from: Port<'_>, to: u64, port: &str) {
+    pub fn wire(&mut self, from: Port<'_>, to: u64, port: &str) {
         let wire = json!({"fromNode": from.0, "fromPort": from.1, "toNode": to, "toPort": port});
         let path = self.scope_for_pair(from.0, to);
         self.scope_mut(&path)["wires"].as_array_mut().expect("wires").push(wire);
     }
 
-    pub(crate) fn retain_wires<F>(&mut self, node: u64, mut keep: F)
+    pub fn retain_wires<F>(&mut self, node: u64, mut keep: F)
     where
         F: FnMut(&Value) -> bool,
     {
@@ -249,7 +253,7 @@ impl Appender {
     }
 
     /// A scalar read after the frame as `probe.<label>`.
-    pub(crate) fn probe(&mut self, label: &str, from: Port<'_>) {
+    pub fn probe(&mut self, label: &str, from: Port<'_>) {
         let id = self.next;
         self.next += 1;
         let path = self.scope_path(from.0).unwrap_or_else(|| panic!("no node id {}", from.0));
@@ -263,7 +267,7 @@ impl Appender {
     }
 
     /// Drops the named nodes and every wire touching them.
-    pub(crate) fn remove(&mut self, names: &[&str]) {
+    pub fn remove(&mut self, names: &[&str]) {
         fn remove_in(value: &mut Value, names: &[&str]) {
             let Some(nodes) = value["nodes"].as_array() else { return };
             let ids: Vec<u64> = nodes.iter().filter(|node| names.iter().any(|name| node["nodeId"] == *name))
@@ -280,7 +284,7 @@ impl Appender {
         remove_in(&mut self.def, names);
     }
 
-    pub(crate) fn finish(self) -> EffectGraphDef {
+    pub fn finish(self) -> EffectGraphDef {
         serde_json::from_value(self.def).expect("def with whitewater")
     }
 }
@@ -289,11 +293,11 @@ impl Appender {
 /// at 64 is the shipped preset with its `node.whitewater_step`. The node's
 /// reports are read from the boundary's captured counts after the frame;
 /// the frame's particle count is probed as `count`.
-pub(crate) fn whitewater_render_def(scene: WaterScene) -> EffectGraphDef {
+pub fn whitewater_render_def(scene: WaterScene) -> EffectGraphDef {
     with_whitewater_reports(render_def(scene))
 }
 
-pub(crate) fn with_whitewater_reports(def: EffectGraphDef) -> EffectGraphDef {
+pub fn with_whitewater_reports(def: EffectGraphDef) -> EffectGraphDef {
     let mut g = Appender::new(def);
     let state = g.id("state");
     let counts = g.node_in_scope("whitewater_reports", COUNTS_PROBE, json!({}), state);
@@ -306,7 +310,7 @@ pub(crate) fn with_whitewater_reports(def: EffectGraphDef) -> EffectGraphDef {
 /// `def` with the liquid domain's clock probed under its own port names
 /// (`ticks`, `epoch`, `simulation_time`, `dropped_seconds`), so a proof can
 /// see how many ticks each frame ran and that the clock accepted them.
-pub(crate) fn with_tick_probe(def: EffectGraphDef) -> EffectGraphDef {
+pub fn with_tick_probe(def: EffectGraphDef) -> EffectGraphDef {
     let mut g = Appender::new(def);
     let domain = g.id("domain");
     for port in ["ticks", "epoch", "simulation_time", "dropped_seconds"] {
@@ -316,7 +320,7 @@ pub(crate) fn with_tick_probe(def: EffectGraphDef) -> EffectGraphDef {
 }
 
 /// One preset on the app's generator path, frame by frame at 60 fps.
-pub(crate) struct Show {
+pub struct Show {
     device: manifold_gpu::testkit::TestDevice,
     runtime: PresetRuntime,
     target: RenderTarget,
@@ -339,16 +343,16 @@ pub(crate) struct Show {
 }
 
 /// One frame's clocks and, when profiled, each whitewater label's own GPU ms.
-pub(crate) struct Frame {
-    pub(crate) gpu_ms: f64,
-    pub(crate) cpu_ms: f64,
-    pub(crate) whitewater_ms: Vec<f64>,
+pub struct Frame {
+    pub gpu_ms: f64,
+    pub cpu_ms: f64,
+    pub whitewater_ms: Vec<f64>,
     /// Dispatches the sampler couldn't time.
-    pub(crate) untimed: usize,
+    pub untimed: usize,
 }
 
 impl Show {
-    pub(crate) fn new(def: EffectGraphDef, size: (u32, u32), frozen: bool, held: &[String]) -> Self {
+    pub fn new(def: EffectGraphDef, size: (u32, u32), frozen: bool, held: &[String]) -> Self {
         Self::new_with_emitter_oracle(def, size, frozen, held, None)
     }
 
@@ -411,7 +415,7 @@ impl Show {
 
     /// One frame 1/60 s on. Metal's autoreleased objects drain per frame, as
     /// the content thread drains them.
-    pub(crate) fn frame(&mut self, profile: bool) -> Frame {
+    pub fn frame(&mut self, profile: bool) -> Frame {
         objc2::rc::autoreleasepool(|_| self.frame_inner(profile))
     }
 
@@ -471,7 +475,7 @@ impl Show {
     /// The first frame, warm-up, then a trigger restart from the fill, as
     /// the GPU FLIP smoke runs start: the next frame is the liquid's first and
     /// counts as frame 1.
-    pub(crate) fn restart(&mut self) {
+    pub fn restart(&mut self) {
         self.frame(false);
         let mut warmups = 0;
         while self.runtime.warmup_pending() && warmups < 600 {
@@ -485,7 +489,7 @@ impl Show {
 
     /// This frame's values at the named probes. Per-tick whitewater reports
     /// come from the liquid boundary, after `frame` has waited for the GPU.
-    pub(crate) fn probes<const N: usize>(&self, labels: [&str; N]) -> [f32; N] {
+    pub fn probes<const N: usize>(&self, labels: [&str; N]) -> [f32; N] {
         let live = self.runtime.live_node_params_watched();
         labels.map(|label| {
             let name = format!("probe.{label}");
@@ -506,11 +510,11 @@ impl Show {
         })
     }
 
-    pub(crate) fn readback(&self) -> Vec<u8> {
+    pub fn readback(&self) -> Vec<u8> {
         objc2::rc::autoreleasepool(|_| readback_srgb_rgba8(&self.device, &self.target.texture, self.size.0, self.size.1))
     }
 
-    pub(crate) fn errors(&self) -> Vec<String> {
+    pub fn errors(&self) -> Vec<String> {
         self.runtime.errors().iter().map(|e| format!("{e:?}")).collect()
     }
 
@@ -531,7 +535,7 @@ impl Show {
     /// whole buffer, read after the frame completed. The array dump never
     /// holds a tick region's body, so per-tick results are read from the
     /// boundary's captures.
-    pub(crate) fn provided_all_bytes(&self, name: &str, port: &str) -> Vec<u8> {
+    pub fn provided_all_bytes(&self, name: &str, port: &str) -> Vec<u8> {
         let node = self.runtime.graph.nodes().find(|n| n.node_id.as_str() == name).unwrap_or_else(|| panic!("no node {name}"));
         let buffer = node.node.provided_array_output(port).unwrap_or_else(|| panic!("{name} provides no {port}"));
         let bytes = buffer.size;
@@ -547,7 +551,7 @@ impl Show {
 
     /// The first `len` records the named held node wrote on `port` this frame.
     #[cfg(feature = "whitewater-oracle")]
-    pub(crate) fn dumped<T: bytemuck::Pod>(&self, name: &str, port: &str, len: usize) -> Vec<T> {
+    pub fn dumped<T: bytemuck::Pod>(&self, name: &str, port: &str, len: usize) -> Vec<T> {
         let arrays = self.runtime.dump_arrays_all();
         let array = arrays
             .iter()
@@ -562,7 +566,7 @@ impl Show {
     /// The first `len` records of the storage the named node provides on
     /// `port`, read after the frame completed.
     #[cfg(feature = "whitewater-oracle")]
-    pub(crate) fn provided<T: bytemuck::Pod>(&self, name: &str, port: &str, len: usize) -> Vec<T> {
+    pub fn provided<T: bytemuck::Pod>(&self, name: &str, port: &str, len: usize) -> Vec<T> {
         let node = self.runtime.graph.nodes().find(|n| n.node_id.as_str() == name).unwrap_or_else(|| panic!("no node {name}"));
         let buffer = node.node.provided_array_output(port).unwrap_or_else(|| panic!("{name} provides no {port}"));
         assert!(buffer.size as usize >= len * std::mem::size_of::<T>(), "{name}.{port} is shorter than {len} records");
@@ -578,14 +582,14 @@ impl Show {
     }
 
     /// Bytes of the storage the named node provides on `port`; none, 0.
-    pub(crate) fn provided_bytes(&self, name: &str, port: &str) -> u64 {
+    pub fn provided_bytes(&self, name: &str, port: &str) -> u64 {
         let node = self.runtime.graph.nodes().find(|n| n.node_id.as_str() == name).unwrap_or_else(|| panic!("no node {name}"));
         node.node.provided_array_output(port).map_or(0, |buffer| buffer.size)
     }
 
     /// Live particles (radius above 0) in the storage the named node provides
     /// on `port`.
-    pub(crate) fn provided_live(&self, name: &str, port: &str) -> u64 {
+    pub fn provided_live(&self, name: &str, port: &str) -> u64 {
         use crate::water::fluid_particles::FluidParticle;
         let node = self.runtime.graph.nodes().find(|n| n.node_id.as_str() == name).unwrap_or_else(|| panic!("no node {name}"));
         let buffer = node.node.provided_array_output(port).unwrap_or_else(|| panic!("{name} provides no {port}"));
@@ -599,7 +603,7 @@ impl Show {
 
 impl Show {
     /// The bytes of the storage the named node provides on `port`.
-    pub(crate) fn provided_copy(&self, name: &str, port: &str) -> Vec<u8> {
+    pub fn provided_copy(&self, name: &str, port: &str) -> Vec<u8> {
         let node = self.runtime.graph.nodes().find(|n| n.node_id.as_str() == name).unwrap_or_else(|| panic!("no node {name}"));
         let buffer = node.node.provided_array_output(port).unwrap_or_else(|| panic!("{name} provides no {port}"));
         let ptr = buffer.mapped_ptr().expect("shared storage");
@@ -609,25 +613,25 @@ impl Show {
 }
 
 impl Show {
-    pub(crate) fn runtime(&self) -> &PresetRuntime { &self.runtime }
-    pub(crate) fn labels(&self) -> &[String] { &self.labels }
-    pub(crate) fn set_paused(&mut self, paused: bool) { self.paused = paused; }
-    pub(crate) fn set_cards(&mut self, cards: ParamManifest) { self.cards = cards; }
-    pub(crate) fn expect_node_error(&mut self, expected: bool) { self.expect_node_error = expected; }
-    pub(crate) fn last_status(&self) -> &str { &self.last_status }
+    pub fn runtime(&self) -> &PresetRuntime { &self.runtime }
+    pub fn labels(&self) -> &[String] { &self.labels }
+    pub fn set_paused(&mut self, paused: bool) { self.paused = paused; }
+    pub fn set_cards(&mut self, cards: ParamManifest) { self.cards = cards; }
+    pub fn expect_node_error(&mut self, expected: bool) { self.expect_node_error = expected; }
+    pub fn last_status(&self) -> &str { &self.last_status }
 }
 impl Appender {
-    pub(crate) fn retarget_binding(&mut self, id: &str, target: Value) {
+    pub fn retarget_binding(&mut self, id: &str, target: Value) {
         for binding in self.def["presetMetadata"]["bindings"].as_array_mut().expect("bindings") {
             if binding["id"] == id { binding["target"] = target.clone(); }
         }
     }
-    pub(crate) fn set_card_default(&mut self, list: &str, id: &str, value: Value) {
+    pub fn set_card_default(&mut self, list: &str, id: &str, value: Value) {
         for p in self.def["presetMetadata"][list].as_array_mut().expect("card list") {
             if p["id"] == id { p["defaultValue"] = value.clone(); }
         }
     }
-    pub(crate) fn set_node_param(&mut self, id: &str, name: &str, value: Value) {
+    pub fn set_node_param(&mut self, id: &str, name: &str, value: Value) {
         self.def["nodes"].as_array_mut().expect("nodes").iter_mut().find(|n| n["nodeId"] == id).expect("engine")["params"][name] = value;
     }
 }

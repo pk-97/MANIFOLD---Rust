@@ -1,6 +1,6 @@
-use manifold_node_engine::runtime::*;
 #[cfg(feature = "gpu-proofs")]
-use crate::node_graph::*;
+use manifold_node_engine::exec::effect_node::FrameTime;
+use manifold_node_engine::runtime::*;
 #[cfg(feature = "gpu-proofs")]
 use manifold_core::{Beats, Seconds};
     use manifold_node_engine::persistence::PrimitiveRegistry;

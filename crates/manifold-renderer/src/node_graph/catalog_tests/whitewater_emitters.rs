@@ -39,11 +39,7 @@ fn close(actual: &[f32], expected: &[f32]) {
 
 #[test]
 fn whitewater_turbulence_values_and_fusion() {
-    let grid = Box3 {
-        cells: [8; 3],
-        center: [4.0; 3],
-        size: [8.0; 3],
-    };
+    let grid = Box3::new([8; 3], [4.0; 3], [8.0; 3]);
     let faces: [Vec<f32>; 3] = std::array::from_fn(|a| {
         (0..576)
             .map(|i| ((i * 7 + a * 13) % 31) as f32 - 15.0)

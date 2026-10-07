@@ -21,7 +21,7 @@ use manifold_core::effect_graph_def::EffectGraphDef;
 /// q16/particle-loop cuts, specialization-token cuts, and any
 /// `build_region` drop that isn't the fan-out message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub(crate) enum RefusalFamily {
+pub enum RefusalFamily {
     ParamType,
     Arity,
     MultiOutput,
@@ -58,7 +58,7 @@ struct FamilyStats {
 /// `Eligible` node (nothing to bucket) — the function must never return
 /// `Some` where `classify_node` returns `Eligible`, or vice versa; that
 /// invariant is exactly what `refusal_census_matches_classify_node` checks.
-pub(crate) fn classify_refusal(
+pub fn classify_refusal(
     node: &EffectGraphNode,
     def: &EffectGraphDef,
     registry: &PrimitiveRegistry,

@@ -261,7 +261,7 @@ pub struct ResolvedBinding {
     /// `Some` only for User bindings with a non-identity card mapping
     /// (invert or a non-Linear curve); `None` for static bindings and
     /// identity User bindings, which then pay nothing and stay 1:1.
-    pub(crate) reshape: Option<Reshape>,
+    pub reshape: Option<Reshape>,
     /// `true` when the target param is a [`ParamType::Angle`] knob, so the
     /// applied value loops onto `[0, TAU)` via `rem_euclid` at the write
     /// boundary (Peter's "angles loop 0..360"). Derived from the param type
@@ -271,7 +271,7 @@ pub struct ResolvedBinding {
     /// are author-set and already in range). Safe because every angle consumer
     /// feeds cos/sin (2π-periodic), so the wrap is a no-op on the rendered
     /// result for in-range values and only tames a driver that climbs past 2π.
-    pub(crate) wraps_angle: bool,
+    pub wraps_angle: bool,
     /// Carried from `BindingDef::default_mirrors_node_param` through
     /// [`ParamBinding`] / the generator resolve. The one thing
     /// [`apply_binding_defaults`] reads to decide whether planting this
@@ -291,7 +291,7 @@ pub struct ResolvedBinding {
 /// curve != Linear, scale != 1, or offset != 0), so every existing show carries
 /// `None` and stays byte-identical with zero per-frame cost.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct Reshape {
+pub struct Reshape {
     min: f32,
     max: f32,
     invert: bool,
@@ -488,7 +488,7 @@ impl ResolvedBinding {
     /// over-drove a folded deg→rad affine 57×; this constructor is why that
     /// can't recur — there is no second literal to forget.)
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn assemble(
+    pub fn assemble(
         id: ParamId,
         label: Cow<'static, str>,
         default_value: f32,

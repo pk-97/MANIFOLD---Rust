@@ -18,7 +18,7 @@ use crate::primitive::Primitive;
 use crate::testkit::substep_nodes::register_substep_test_nodes;
 use crate::{persistence::EffectGraphDefExt, exec::execution::Executor, exec::metal_backend::MetalBackend, persistence::PrimitiveRegistry, state_store::StateStore, exec::execution_plan::compile, load::graph_loader::pre_allocate_resources};
 
-pub(crate) fn random_values(count: usize, seed: u64) -> Vec<f32> {
+pub fn random_values(count: usize, seed: u64) -> Vec<f32> {
     let mut state = seed | 1;
     (0..count)
         .map(|_| {
@@ -31,7 +31,7 @@ pub(crate) fn random_values(count: usize, seed: u64) -> Vec<f32> {
 }
 
 /// About seven cells in ten are water.
-pub(crate) fn random_water(cells: usize, seed: u64) -> Vec<f32> {
+pub fn random_water(cells: usize, seed: u64) -> Vec<f32> {
     random_values(cells, seed).iter().map(|&v| f32::from(u8::from(v > -0.2))).collect()
 }
 
@@ -68,7 +68,7 @@ fn step_ports<P: Primitive>(
 }
 
 /// Run one atom on fresh arrays and read its output back.
-pub(crate) fn run_atom<P: Primitive>(prim: &mut P, inputs: &[(&'static str, &[f32])], output_len: usize, step_params: &ParamValues) -> Vec<f32> {
+pub fn run_atom<P: Primitive>(prim: &mut P, inputs: &[(&'static str, &[f32])], output_len: usize, step_params: &ParamValues) -> Vec<f32> {
     let mut harness = Harness::new();
     let slots: Vec<(&'static str, (Slot, GpuBuffer))> =
         inputs.iter().map(|&(name, values)| (name, harness.array(values, values.len().max(1)))).collect();
@@ -86,7 +86,7 @@ pub(crate) fn run_atom<P: Primitive>(prim: &mut P, inputs: &[(&'static str, &[f3
     read(&output.1, output_len)
 }
 
-pub(crate) fn assert_close(actual: &[f32], expected: &[f64], what: &str) {
+pub fn assert_close(actual: &[f32], expected: &[f64], what: &str) {
     assert_eq!(actual.len(), expected.len(), "{what}: length");
     let scale = expected.iter().fold(1.0_f64, |m, v| m.max(v.abs()));
     for (i, (a, e)) in actual.iter().zip(expected).enumerate() {
@@ -95,9 +95,9 @@ pub(crate) fn assert_close(actual: &[f32], expected: &[f64], what: &str) {
 }
 
 /// Floats per face-grid record: velocity, then open fractions.
-pub(crate) const FACE_FLOATS: usize = 8;
+pub const FACE_FLOATS: usize = 8;
 
-pub(crate) fn face_grid_len(n: [usize; 3]) -> usize {
+pub fn face_grid_len(n: [usize; 3]) -> usize {
     n.iter().map(|v| v + 1).product::<usize>() * FACE_FLOATS
 }
 
@@ -109,30 +109,34 @@ pub(crate) fn face_grid_len(n: [usize; 3]) -> usize {
 
 /// A small graph of test sources, atoms and one sink, run once fused and
 /// once unfused; each run's sink input is read back.
-pub(crate) struct Chain {
+pub struct Chain {
     nodes: Vec<serde_json::Value>,
     wires: Vec<serde_json::Value>,
     sources: Vec<(&'static str, Vec<f32>)>,
 }
 
+impl Default for Chain {
+    fn default() -> Self { Self::new() }
+}
+
 impl Chain {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self { nodes: Vec::new(), wires: Vec::new(), sources: Vec::new() }
     }
 
-    pub(crate) fn node(&mut self, name: &str, type_id: &str, params: serde_json::Value) -> usize {
+    pub fn node(&mut self, name: &str, type_id: &str, params: serde_json::Value) -> usize {
         let id = self.nodes.len();
         self.nodes.push(json!({"id": id, "typeId": type_id, "nodeId": name, "params": params}));
         id
     }
 
-    pub(crate) fn source(&mut self, name: &'static str, values: Vec<f32>) -> usize {
+    pub fn source(&mut self, name: &'static str, values: Vec<f32>) -> usize {
         let id = self.node(name, "test.value_source", json!({"max_capacity": {"type": "Int", "value": values.len()}}));
         self.sources.push((name, values));
         id
     }
 
-    pub(crate) fn wire(&mut self, from: usize, from_port: &str, to: usize, to_port: &str) {
+    pub fn wire(&mut self, from: usize, from_port: &str, to: usize, to_port: &str) {
         self.wires.push(json!({"fromNode": from, "fromPort": from_port, "toNode": to, "toPort": to_port}));
     }
 
@@ -193,7 +197,7 @@ impl Chain {
 
     /// Fused and unfused give the same values bit for bit, and the fused graph
     /// ran one fused kernel.
-    pub(crate) fn fused_matches_unfused(&self, into: usize, len: usize) -> Vec<f32> {
+    pub fn fused_matches_unfused(&self, into: usize, len: usize) -> Vec<f32> {
         let def = self.def(into);
         let mut registry = PrimitiveRegistry::with_builtin();
         register_substep_test_nodes(&mut registry);

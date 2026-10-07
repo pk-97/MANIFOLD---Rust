@@ -16,7 +16,7 @@ use manifold_gpu::{GpuDevice, GpuTexture};
 ///
 /// Stalls the calling thread until the clear completes; meant for
 /// test setup, not hot-path work.
-pub(crate) fn clear_texture_committed(
+pub fn clear_texture_committed(
     device: &manifold_gpu::GpuDevice,
     target: &manifold_gpu::GpuTexture,
     rgba: [f64; 4],

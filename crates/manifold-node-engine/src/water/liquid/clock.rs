@@ -11,7 +11,7 @@ pub const FIELD_RESERVE_INTERVALS: u32 = 3;
 /// `gpu_flip_builder_graphs_feed_every_interval_input` fails a shipped preset
 /// that leaves one to a param. A param holds its 1/60 s default at every Sim
 /// Rate, so a duration input left on its param runs at the wrong rate.
-pub(crate) const INTERVAL_DURATION_INPUTS: [(&str, &str); 5] = [
+pub const INTERVAL_DURATION_INPUTS: [(&str, &str); 5] = [
     ("node.gpu_flip_step", "interval_duration"),
     ("node.matter_state", "interval_duration"),
     ("node.whitewater_step", "dt"),

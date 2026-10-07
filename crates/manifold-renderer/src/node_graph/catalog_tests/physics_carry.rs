@@ -1,6 +1,8 @@
 #![cfg(feature = "gpu-proofs")]
+use manifold_node_engine::exec::effect_node::EffectNode;
+use manifold_node_engine::exec::effect_node::FrameTime;
+use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::*;
-use crate::node_graph::*;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::{Beats, Seconds};
 #[test]

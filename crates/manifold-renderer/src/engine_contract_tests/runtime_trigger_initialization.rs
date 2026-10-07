@@ -1,5 +1,7 @@
-use super::*;
-use crate::{parameters::ParamValue, persistence::PrimitiveRegistry};
+use manifold_node_engine::exec::effect_node::FrameTime;
+use manifold_node_engine::parameters::ParamValue;
+use manifold_node_engine::persistence::PrimitiveRegistry;
+use manifold_node_engine::runtime::{ChainError, FrameContextInputs, PresetRuntime};
 use manifold_core::{Beats, Seconds};
 
 fn trigger_graph(wire_initial_count: bool) -> String {
@@ -222,7 +224,7 @@ fn pending_trigger_baseline_carries_across_same_generator_rebuild() {
 
 #[test]
 fn modifier_control_state_runtime_preserves_gate_when_another_modifier_is_removed() {
-    use crate::load::expand::{PreparedModifierControlState, SceneModifierNodeCopy, SceneModifierNodeRoute};
+    use manifold_node_engine::load::expand::{PreparedModifierControlState, SceneModifierNodeCopy, SceneModifierNodeRoute};
     use manifold_core::NodeId;
     use manifold_core::effect_graph_def::EffectGraphDef;
     use manifold_core::scene_modifier_preset::{
@@ -257,17 +259,18 @@ fn modifier_control_state_runtime_preserves_gate_when_another_modifier_is_remove
     removed.id = NodeId::new("removed");
     owner.scene_modifiers.push(removed);
     let mut prior = runtime(true);
-    prior.modifier_control_state = Some(
+    prior.set_modifier_control_state_for_test(Some(
         PreparedModifierControlState::prepare(&owner, std::slice::from_ref(&route), &prior.graph)
             .unwrap(),
-    );
+    ));
     prior.note_trigger_event(0);
     execute(&mut prior, 1.0);
     assert_eq!(scaler_scale(&prior), 1.0);
     owner.scene_modifiers.pop();
     let mut rebuilt = runtime(true);
-    rebuilt.modifier_control_state =
-        Some(PreparedModifierControlState::prepare(&owner, &[route], &rebuilt.graph).unwrap());
+    rebuilt.set_modifier_control_state_for_test(Some(
+        PreparedModifierControlState::prepare(&owner, &[route], &rebuilt.graph).unwrap(),
+    ));
     rebuilt.carry_modifier_control_state_from(&mut prior);
     execute(&mut rebuilt, 1.0);
     assert_eq!(

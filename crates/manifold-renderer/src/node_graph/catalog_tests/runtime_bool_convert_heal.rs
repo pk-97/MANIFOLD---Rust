@@ -8,8 +8,10 @@
     //! dead and the effect stuck on. The cure is a load-time heal:
     //! Float/IntRound → BoolThreshold when the target param is declared
     //! Bool (`heal_bool_convert_bindings`, called at the top of `from_def`).
-    use manifold_node_engine::runtime::*;
-use crate::node_graph::*;
+use manifold_node_engine::persistence::EffectGraphDefExt;
+    use manifold_node_engine::persistence::LoadError;
+use manifold_node_engine::persistence::PrimitiveRegistry;
+use manifold_node_engine::runtime::*;
     use manifold_node_engine::parameters::ParamValue;
     use manifold_core::effect_graph_def::EffectGraphDef;
     use manifold_core::effects::ParamConvert;

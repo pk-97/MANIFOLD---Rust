@@ -27,10 +27,10 @@ use crate::primitive::Primitive;
 pub const WHITEWATER_INPUTS: [&str; 4] = ["foam_in", "bubble_in", "spray_in", "dust_in"];
 pub const WHITEWATER_OUTPUTS: [&str; 4] = ["foam_b", "bubble_b", "spray_b", "dust_b"];
 
-#[cfg(feature = "gpu-proofs")]
+#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 thread_local! {
     /// Proof hook: the next publication on this thread fails to encode.
-    pub(crate) static FAIL_NEXT_PUBLICATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    pub static FAIL_NEXT_PUBLICATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Every provided array output, in [`LiquidFrame`]'s binding table order.
@@ -335,7 +335,7 @@ impl Primitive for LiquidFrame {
                         metadata: target.metadata.as_ref().expect("acquired slot"),
                         count,
                     });
-                    #[cfg(feature = "gpu-proofs")]
+                    #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
                     let encoded = if FAIL_NEXT_PUBLICATION.take() { Err("injected publication failure".to_string()) } else { encoded };
                     if let Err(error) = encoded {
                         // Never selectable; the frame still publishes its
@@ -478,5 +478,5 @@ mod gpu_tests {
     }
 }
 
-#[cfg(any(test, feature = "gpu-proofs"))]
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 mod extent;

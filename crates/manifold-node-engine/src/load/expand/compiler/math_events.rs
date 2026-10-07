@@ -2,7 +2,7 @@
 use super::super::SceneModifierNodeRoute;
 use super::*;
 
-pub(crate) fn resource_node_id(modifier: &NodeId, target: &SceneNodeRef, role: &str) -> NodeId {
+pub fn resource_node_id(modifier: &NodeId, target: &SceneNodeRef, role: &str) -> NodeId {
     let mut parts = vec!["math_view", modifier.as_str(), role];
     parts.extend(target.scope.iter().map(NodeId::as_str));
     parts.push(target.node.as_str());

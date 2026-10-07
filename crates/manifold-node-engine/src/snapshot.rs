@@ -936,7 +936,7 @@ fn param_vec_value(value: &ParamValue) -> Option<[f32; 4]> {
 /// `pub(crate)` so the live-value tap ([`crate::preset_runtime::PresetRuntime::live_node_params`])
 /// can reuse the exact same flattening the structural snapshot uses, keeping the
 /// editor canvas's frozen and live values byte-identical in formatting.
-pub(crate) fn param_default_to_f32(value: &ParamValue) -> f32 {
+pub fn param_default_to_f32(value: &ParamValue) -> f32 {
     match value {
         ParamValue::Float(f) => *f,
         ParamValue::Bool(b) => {
@@ -1037,7 +1037,7 @@ mod tests {
             },
             nodes: vec![
                 mk(0, GROUP_INPUT_TYPE_ID, None),
-                mk(1, "node.scale_offset_image", Some("so")),
+                mk(1, "test.document", Some("so")),
                 mk(2, GROUP_OUTPUT_TYPE_ID, None),
             ],
             wires: vec![w(0, "src", 1, "in"), w(1, "out", 2, "out")],
@@ -1059,7 +1059,7 @@ mod tests {
             wires: vec![w(0, "out", 10, "src"), w(10, "out", 2, "in")],
         };
 
-        let snap = GraphSnapshot::from_def(&def).expect("structural snapshot built");
+        let snap = GraphSnapshot::from_def_structural(&def, &crate::testkit::document_fixtures::registry()).expect("structural snapshot built");
 
         // The group node survived as a group, with interface ports + a body.
         let g = snap

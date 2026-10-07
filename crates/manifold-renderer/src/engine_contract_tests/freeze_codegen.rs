@@ -1,3 +1,7 @@
+//! Renderer-owned catalog contract for the standalone binding census.
+
+#[cfg(test)]
+mod binding_contract_tests {
 //! Binding-introspection contract tests (BUG-uwgn cluster 4 prerequisite).
 //!
 //! Every standalone-codegen kernel's declared binding list, reflected through
@@ -11,7 +15,7 @@
 //! texture as the last binding. Anything else keeps its hand-written tail
 //! and is listed in the census output for review.
 
-use crate::freeze::codegen;
+use manifold_node_engine::freeze::codegen;
 
 /// Reflected binding-resource kinds, in the call site's `GpuBinding` terms.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -98,7 +102,7 @@ fn qualifies_for_dispatch_tail(sig: &[(u32, Res)]) -> bool {
 type CensusRow = (String, Vec<(u32, Res)>, bool);
 
 fn census() -> Vec<CensusRow> {
-    let registry = crate::persistence::PrimitiveRegistry::with_builtin();
+    let registry = manifold_node_engine::persistence::PrimitiveRegistry::with_builtin();
     let mut rows = Vec::new();
     for id in registry.known_type_ids() {
         let Some(node) = registry.construct(id) else {
@@ -209,7 +213,7 @@ fn dispatch_tail_census_is_stable() {
 /// order-preserving rewrite rather than a leap of faith per site.
 #[test]
 fn canonical_kernels_match_dispatch_helper_slot_order() {
-    use crate::primitives::standalone_pipeline::{standalone_2d_slots, StandaloneSlot, STANDALONE_2D_MAX_BINDINGS};
+    use manifold_node_engine::primitives::standalone_pipeline::{standalone_2d_slots, StandaloneSlot, STANDALONE_2D_MAX_BINDINGS};
     for (id, sig, qualifies) in census() {
         if !qualifies {
             continue;
@@ -236,4 +240,6 @@ fn canonical_kernels_match_dispatch_helper_slot_order() {
             "{id}: helper slot order disagrees with the kernel"
         );
     }
+}
+
 }

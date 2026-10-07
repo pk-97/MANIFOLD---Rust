@@ -6,7 +6,7 @@
 //! from the runtime graph, and resolves the local ids through the owning
 //! slot's node map whenever identities are installed.
 
-use {crate::runtime::EffectGraphDef, crate::persistence::PrimitiveRegistry, super::physics_source_controls, super::physics_sources};
+use {manifold_core::effect_graph_def::EffectGraphDef, crate::persistence::PrimitiveRegistry, super::physics_source_controls, super::physics_sources};
 use crate::scene::source_asset::SourceAssetIdentity;
 use crate::{graph::Graph, exec::effect_node::NodeInstanceId, parameters::ParamValue};
 use manifold_core::NodeId;
@@ -14,7 +14,7 @@ use manifold_core::effects::PresetInstance;
 use manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID;
 use sha2::{Digest, Sha256};
 
-pub(super) struct PhysicsSourceState {
+pub(crate) struct PhysicsSourceState {
     sources: Result<Vec<InstalledSource>, String>,
     has_instance: bool,
 }
@@ -174,8 +174,8 @@ impl InstalledSource {
 }
 
 impl PhysicsSourceState {
-    #[cfg(test)]
-    pub(super) fn published_identity(
+    #[cfg(any(test, feature = "testkit"))]
+    pub(crate) fn published_identity(
         &self,
         node: NodeInstanceId,
     ) -> Option<Result<[u8; 32], &str>> {
@@ -242,7 +242,7 @@ impl PhysicsSourceState {
     /// Update the host-control digest for the currently installed sources.
     /// The successful path hashes directly through the existing digest helper
     /// and does not allocate a per-frame JSON representation.
-    pub(super) fn set_instance(&mut self, graph: &mut Graph, instance: Option<&PresetInstance>) {
+    pub(crate) fn set_instance(&mut self, graph: &mut Graph, instance: Option<&PresetInstance>) {
         self.has_instance = instance.is_some();
         let Ok(sources) = &mut self.sources else {
             return;

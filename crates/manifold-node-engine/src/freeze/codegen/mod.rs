@@ -25,8 +25,6 @@ mod fused_buffer;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests;
 #[cfg(test)]
-mod binding_contract_tests;
-#[cfg(test)]
 mod dispatch_contract_tests;
 
 pub use fused::generate_fused;

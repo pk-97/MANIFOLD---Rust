@@ -5,7 +5,7 @@ use manifold_core::effect_graph_def::*;
     use crate::{persistence::EffectGraphDefExt, exec::execution_plan::ExecutionPlan, graph::Graph, persistence::PrimitiveRegistry, exec::execution_plan::compile};
 
 
-pub(crate) fn registry() -> PrimitiveRegistry {
+pub fn registry() -> PrimitiveRegistry {
         let mut registry = PrimitiveRegistry::with_builtin();
         register_substep_test_nodes(&mut registry);
         registry
@@ -26,14 +26,14 @@ fn rules(frozen: bool) -> Vec<ExtentRule> {
         }
         rules
     }
-pub(crate) fn built(def: &EffectGraphDef) -> (Graph, ExecutionPlan) {
+pub fn built(def: &EffectGraphDef) -> (Graph, ExecutionPlan) {
         let graph = def.clone().into_graph(&registry(), &Default::default()).expect("the def builds");
         let plan = compile(&graph).expect("the def compiles");
         (graph, plan)
     }
 /// `def` walked by the liquid extent rules, frozen as the app renders it
 /// when `frozen`.
-pub(crate) fn walk(def: &EffectGraphDef, frozen: bool) -> Result<ExtentReport, ExtentError> {
+pub fn walk(def: &EffectGraphDef, frozen: bool) -> Result<ExtentReport, ExtentError> {
         let view = frozen.then(|| fused_as_rendered(def, &registry())).flatten();
         let (mut graph, plan) = if let Some(view) = view {
             let graph = (*view.def).clone().into_graph(&registry(), &view.mesh_rules).expect("the fused def builds");

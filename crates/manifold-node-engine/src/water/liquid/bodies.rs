@@ -21,10 +21,10 @@ use crate::scene::transform::Transform;
 
 /// Body poses on the GPU: rotation, the constant-angular-velocity turn,
 /// material velocity at a point. Matches [`body_pose_at`].
-pub(crate) const LIQUID_POSE: &str = include_str!("../primitives/shaders/liquid_pose.wgsl");
+pub const LIQUID_POSE: &str = include_str!("../primitives/shaders/liquid_pose.wgsl");
 /// Collider lattice sampling; needs [`LIQUID_POSE`] and the including body's
 /// `liquid_atlas_half`.
-pub(crate) const LIQUID_COLLIDER: &str = include_str!("../primitives/shaders/liquid_collider.wgsl");
+pub const LIQUID_COLLIDER: &str = include_str!("../primitives/shaders/liquid_collider.wgsl");
 
 /// A collider, source, drain or coupled body during one tick. 128 bytes.
 /// The domain uploads one per body per tick of the frame, holding the tick's

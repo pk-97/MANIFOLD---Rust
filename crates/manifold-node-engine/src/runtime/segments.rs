@@ -34,7 +34,8 @@ pub(super) fn build_segment_cards(
 /// Shared between the chain build and the project-load prewarm so the two can
 /// never disagree about what forms a segment.
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub(super) enum SegmentMember {
+#[doc(hidden)]
+pub enum SegmentMember {
     /// Never joins or spans a segment (watched / grouped / stateful /
     /// string-bound / no view).
     Boundary,
@@ -42,7 +43,8 @@ pub(super) enum SegmentMember {
     Fuse,
 }
 
-pub(super) fn classify_segment_member(
+#[doc(hidden)]
+pub fn classify_segment_member(
     fx: &PresetInstance,
     preview_effect: Option<&EffectId>,
     primitives: &PrimitiveRegistry,
@@ -72,7 +74,8 @@ pub(super) fn classify_segment_member(
 /// Scan one maximal segment run starting at `i` (caller guarantees
 /// `members[i] == Fuse`): returns `(j, fuse_idxs)` — the exclusive end
 /// and the fusable indices within `[i, j)`.
-pub(super) fn segment_run(members: &[SegmentMember], i: usize) -> (usize, Vec<usize>) {
+#[doc(hidden)]
+pub fn segment_run(members: &[SegmentMember], i: usize) -> (usize, Vec<usize>) {
     let mut j = i;
     while j < members.len() && members[j] != SegmentMember::Boundary {
         j += 1;

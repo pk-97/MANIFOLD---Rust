@@ -23,15 +23,15 @@ pub struct LoadedAsset<T> {
 }
 
 impl<T> LoadedAsset<T> {
-    pub(crate) fn new(value: T, identity: [u8; 32]) -> Self {
+    pub fn new(value: T, identity: [u8; 32]) -> Self {
         Self { value, identity }
     }
 
-    pub(crate) fn identity(&self) -> [u8; 32] {
+    pub fn identity(&self) -> [u8; 32] {
         self.identity
     }
 
-    pub(crate) fn into_value(self) -> T {
+    pub fn into_value(self) -> T {
         self.value
     }
 }
@@ -43,7 +43,7 @@ impl<T> std::ops::Deref for LoadedAsset<T> {
     }
 }
 
-pub(crate) fn loaded_identity<'a, T>(
+pub fn loaded_identity<'a, T>(
     params: &ParamValues,
     path_param: &str,
     loaded_path: &str,
@@ -69,7 +69,7 @@ pub(crate) fn loaded_identity<'a, T>(
     }
 }
 
-pub(crate) fn mesh_identity(vertices: &[crate::mesh::MeshVertex]) -> [u8; 32] {
+pub fn mesh_identity(vertices: &[crate::mesh::MeshVertex]) -> [u8; 32] {
     use sha2::{Digest, Sha256};
     let mut hash = Sha256::new();
     hash.update(b"manifold.loaded-mesh.v1");

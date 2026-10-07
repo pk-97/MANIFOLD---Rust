@@ -75,13 +75,13 @@ pub struct PresetRuntime {
     pub graph: Graph,
     pub plan: ExecutionPlan,
     /// Captured event routes belong to this installed graph, never a rebuild.
-    pub(super) impulse_identity: std::sync::Arc<()>,
-    pub(super) scene_impulses: crate::water::runtime::scene_impulses::SceneImpulses,
+    pub(crate) impulse_identity: std::sync::Arc<()>,
+    pub(crate) scene_impulses: crate::water::runtime::scene_impulses::SceneImpulses,
     /// Plan-aligned physics input ancestry, built once with the graph.
-    pub(super) physics_sample_steps: Option<Vec<bool>>,
-    pub(super) physics_input_snapshot: Option<crate::water::runtime::physics_sampling::PhysicsInputSnapshot>,
-    pub(super) last_physics_frame_time: Option<FrameTime>,
-    pub(super) physics_project_tempo: Option<crate::runtime::preset_context::ProjectTempo>,
+    pub(crate) physics_sample_steps: Option<Vec<bool>>,
+    pub(crate) physics_input_snapshot: Option<crate::water::runtime::physics_sampling::PhysicsInputSnapshot>,
+    pub(crate) last_physics_frame_time: Option<FrameTime>,
+    pub(crate) physics_project_tempo: Option<crate::runtime::preset_context::ProjectTempo>,
     /// Last seen [`Graph::forced_outputs_epoch`]. When a live param write
     /// changes a node's forced-output set (BUG-317: `render_scene`'s
     /// `rt_enabled`/`temporal_upscale`), the compiled plan's
@@ -91,7 +91,7 @@ pub struct PresetRuntime {
     /// consumption, so a recompile of the structurally-identical graph
     /// yields identical ids — pre-bound io slots and persistent-resource
     /// pins stay valid across the swap.
-    pub(super) last_forced_outputs_epoch: u64,
+    pub(crate) last_forced_outputs_epoch: u64,
     /// BUG-18l: set once when a live param write changes a node's
     /// forced-output set (epoch moved past the built value). Plans never
     /// swap under a live executor — the HOST consumes this via
@@ -99,7 +99,7 @@ pub struct PresetRuntime {
     /// runtime (generator sweep / chain dispatcher), the same
     /// pending-segments-style handshake `awaiting_segment_swap` uses.
     /// Never cleared: the rebuild replaces the runtime, flag and all.
-    pub(super) forced_outputs_stale: bool,
+    pub(crate) forced_outputs_stale: bool,
     /// Earliest counter before a real event awaiting evaluation. A loaded
     /// nonzero counter alone never creates this marker.
     pub(super) pending_trigger_baseline: Option<u32>,
@@ -107,15 +107,15 @@ pub struct PresetRuntime {
         Option<crate::load::expand::PreparedModifierControlState>,
     pub(super) modifier_events:
         Option<crate::load::expand::PreparedModifierEvents>,
-    pub(super) executor: Executor,
+    pub(crate) executor: Executor,
     /// One slot per effect node in the chain graph, in chain order.
     /// Same length as the active subset of effects at build time.
     /// Per-frame param refresh walks this in parallel with the live
     /// `effects` slice.
-    pub(super) effect_nodes: Vec<EffectSlot>,
+    pub(crate) effect_nodes: Vec<EffectSlot>,
     pub(super) modifier_preview_routes:
         Vec<crate::load::expand::SceneModifierNodeRoute>,
-    pub(super) math_views: Vec<super::math_view::MathViewRuntime>,
+    pub(crate) math_views: Vec<super::math_view::MathViewRuntime>,
     pub(super) shared_arrays: Vec<(ResourceId, manifold_gpu::GpuBuffer)>,
     /// One slot per Mix node introduced for a wet/dry group. The
     /// Mix's `amount` param is set to the group's `wet_dry` value
@@ -129,8 +129,8 @@ pub struct PresetRuntime {
     /// has no input — it renders *into* a host-provided target texture
     /// installed at the `final_output` source slot each frame.
     pub(super) io: PresetIo,
-    pub(crate) width: u32,
-    pub(crate) height: u32,
+    pub width: u32,
+    pub height: u32,
     /// Dimension-independent topology hash. Dimensions are compared separately
     /// so a committed resource resize does not trigger a redundant rebuild.
     pub(super) topology_hash: u64,
@@ -190,7 +190,7 @@ pub struct PresetRuntime {
     /// Stable identity for the `GeneratorRegistry`. `Some` for generators
     /// (built via [`Self::from_def`] / [`Self::from_def_with_device`]); `None`
     /// for effect chains (which are addressed by `EffectId` per segment).
-    pub(super) type_id: Option<PresetTypeId>,
+    pub(crate) type_id: Option<PresetTypeId>,
     /// Texture format threaded through to placeholder allocation on a generator
     /// `resize`. `None` for effect chains and the mock-backend test path.
     pub(super) target_format: Option<GpuTextureFormat>,
@@ -231,9 +231,9 @@ pub(super) enum PresetIo {
     },
 }
 
-pub(super) struct EffectSlot {
+pub(crate) struct EffectSlot {
     #[cfg(feature = "gpu-proofs")]
-    pub(super) physics_sources: crate::water::runtime::physics_source_state::PhysicsSourceState,
+    pub(crate) physics_sources: crate::water::runtime::physics_source_state::PhysicsSourceState,
     pub(super) effect_id: EffectId,
     pub(super) effect_type: PresetTypeId,
     /// Index into the chain's `effects` slice at the time this slot
@@ -244,7 +244,7 @@ pub(super) struct EffectSlot {
     /// as the cached graph is reused, `effects[legacy_index]` is the
     /// same `PresetInstance` whose modulated `param_values` the
     /// renderer just updated.
-    pub(super) legacy_index: usize,
+    pub(crate) legacy_index: usize,
     /// Effect-local handles returned by `spec.splice` — names are
     /// scoped to this effect. `Cow<'static, str>` so canonical splices
     /// stay zero-allocation and user-edited divergent defs can hold
@@ -257,7 +257,7 @@ pub(super) struct EffectSlot {
     /// bindings resolve their target `NodeId` against this (see
     /// [`ResolvedBinding::from_static`] / [`ResolvedBinding::from_user`]),
     /// so a binding survives the node's handle changing under grouping.
-    pub(super) node_map: Vec<(NodeId, NodeInstanceId)>,
+    pub(crate) node_map: Vec<(NodeId, NodeInstanceId)>,
     /// Group container `NodeId` → concrete inner producer `NodeId`, for the
     /// node-output preview. A group is a UI container that flattens away before
     /// the splice, so its own id is never in [`Self::node_map`]; selecting a
@@ -297,7 +297,7 @@ pub(super) struct EffectSlot {
     /// [`Self::user_bindings_version`]; a reshape edit bumps `graph_version`.
     /// Only topology changes (node/wire add/remove) bump `graph_structure_version`
     /// and force a full chain rebuild.
-    pub(super) bound: BoundGraph,
+    pub(crate) bound: BoundGraph,
     /// Last seen `PresetInstance.graph_version` for the user tail. User
     /// bindings live in the per-instance graph now, so a binding add /
     /// remove / reshape bumps the graph version. When the live effect's
@@ -315,7 +315,7 @@ pub(super) struct EffectSlot {
     /// closing the editor (unfused → fused rebuild) harvests too. `0` for
     /// cards inside a fused segment (stateless by eligibility, nothing to
     /// harvest).
-    pub(super) def_content_key: u64,
+    pub(crate) def_content_key: u64,
     /// Effect-side `system.generator_input` node id, if the preset
     /// included one. Effects with a generator_input get per-frame
     /// scalars (time / beat / aspect / output dims) pushed to this
@@ -337,7 +337,7 @@ pub(super) struct EffectSlot {
     /// [`BoundGraph::apply_inner_overrides_prefixed`] so that lookup lands in
     /// the right namespace for BOTH a surviving node (via `node_map`) and a
     /// fused-away one (via `fused_retarget`) — BUG-111.
-    pub(super) card_prefix: String,
+    pub(crate) card_prefix: String,
     /// Live D3 relight knob → runtime param/uniform-field writes, applied
     /// every frame when the card's toggle is on. Empty when relight is off.
     pub(super) relight_writes: Vec<RelightParamWrite>,
@@ -359,7 +359,8 @@ impl EffectSlot {
 /// once per instance in release. Extracted so the seam behavior is directly
 /// unit-testable without driving a full chain build — see
 /// `docs/PARAM_MANIFEST_GATE_DESIGN.md` D2, INV-1.
-pub(super) fn assert_manifest_gate(fx: &PresetInstance) {
+#[doc(hidden)]
+pub fn assert_manifest_gate(fx: &PresetInstance) {
     debug_assert!(
         !fx.manifest_provisional(),
         "BUG-080: provisional manifest reached PresetRuntime::try_build — a \
@@ -438,6 +439,15 @@ pub struct FrameContextInputs {
 }
 
 impl PresetRuntime {
+    #[cfg(any(test, feature = "testkit"))]
+    #[doc(hidden)]
+    pub fn set_modifier_control_state_for_test(
+        &mut self,
+        state: Option<crate::load::expand::PreparedModifierControlState>,
+    ) {
+        self.modifier_control_state = state;
+    }
+
     /// Construct a chain graph from `effects` + `groups`. Groups
     /// with `wet_dry < 1.0` become `Mix` sub-graphs (the
     /// pre-group texture fans out into both the group's effects in

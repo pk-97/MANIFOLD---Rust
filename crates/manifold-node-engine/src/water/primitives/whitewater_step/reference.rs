@@ -70,6 +70,7 @@ impl Reference {
         atom_then::<P>(enc, pipeline, values, buffers, count, label, barrier);
         self.record_dispatch(label, count);
     }
+    #[cfg(test)]
     pub fn print_pipeline_limits(&self) {
         for pipeline in [&self.jitter, &self.sample, &self.emitter_velocity, &self.energy,
             &self.wavecrest, &self.inside, &self.emission, &self.dust,

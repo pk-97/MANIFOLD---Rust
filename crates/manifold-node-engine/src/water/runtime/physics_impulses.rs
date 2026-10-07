@@ -432,5 +432,5 @@ impl PresetRuntime {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testkit"))]
 mod testkit;

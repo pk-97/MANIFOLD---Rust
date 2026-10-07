@@ -8,11 +8,11 @@
 pub mod bodies;
 pub mod body_buffers;
 pub mod clock;
-#[cfg(any(test, feature = "gpu-proofs"))]
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 #[doc(hidden)]
 pub mod conformance;
 pub mod coupling;
-#[cfg(any(test, feature = "gpu-proofs"))]
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 #[doc(hidden)]
 pub mod extent;
 pub mod fields;

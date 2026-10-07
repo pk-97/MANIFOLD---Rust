@@ -34,6 +34,7 @@
 //! catalog-reading tests in a shared binary. Keep any future tests here
 //! behind a shared lock (see `project_preset_overlay.rs` in the renderer).
 
+use manifold_renderer as _;
 use manifold_core::PresetTypeId;
 use manifold_core::preset_def::PresetKind;
 use manifold_core::project::{EmbeddedOrigin, EmbeddedPreset, Project};

@@ -44,7 +44,7 @@ pub(crate) const MAX_SIDE: u32 = 1024;
 /// Iterations one solve may run, FLIP Fluids' cap: the scalars buffer holds
 /// two per iteration. Rounds past the stop cost nothing: the template executes
 /// only the chunks the GPU-written ranges name.
-pub(crate) const MAX_ITERATIONS: u32 = 900;
+pub const MAX_ITERATIONS: u32 = 900;
 /// The stop's relative tolerance on |r|∞ / |f|∞, FLIP Fluids'
 /// `_pressureSolveTolerance` unchanged: f32 carries the recursive residual
 /// below it in 11 to 14 iterations on every saved problem
@@ -119,7 +119,7 @@ fn tile_bases(lattices: &[[u32; 3]]) -> Vec<u32> {
 /// vectors and the fine rows, each coarse level's water, touched mask,
 /// faces, rows, right-hand side and correction, the coarse inverse, every
 /// level's tile flags and lists, the partial sums and the scalars.
-#[cfg(any(test, feature = "gpu-proofs"))]
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 pub(crate) fn scratch_bytes(lattice: [u32; 3]) -> u64 {
     let levels = level_lattices(lattice);
     let coarse: u64 = levels[1..].iter().map(|&n| 4 * cells(n) * 4 + cells(n) * ROW_BYTES + face_records(n) * FACE_BYTES).sum();
@@ -200,7 +200,7 @@ pub(crate) fn lattice_refusal(lattice: [u32; 3]) -> Option<String> {
 /// for the free surface's ghost rows (docs/GPU_FLIP_PRESSURE_SOLVE.md
 /// section 2 (the equation)). With no φ the rows are the plain ones, as the
 /// density solve runs; the coarse levels always are.
-pub(crate) struct Water<'a> {
+pub struct Water<'a> {
     pub lattice: [u32; 3],
     pub cell_size: f32,
     pub water: &'a GpuBuffer,
@@ -423,7 +423,7 @@ impl Buffers {
 }
 
 /// Floats in the stop's record: four, then |r|∞ per iteration.
-pub(crate) const PROGRESS_FLOATS: u32 = 4 + MAX_ITERATIONS;
+pub const PROGRESS_FLOATS: u32 = 4 + MAX_ITERATIONS;
 const PROGRESS_BYTES: u64 = PROGRESS_FLOATS as u64 * 4;
 /// Bytes of one indirect dispatch's three group counts.
 const TRIPLE_BYTES: u64 = 12;
@@ -437,23 +437,23 @@ pub(crate) const CHUNK_ENTRIES: u32 = 2 * MAX_ITERATIONS;
 /// to this, so a stop leaves at most this less one guarded round running.
 pub(crate) const ROUND_CHUNK: u32 = 32;
 
-#[cfg(all(test, feature = "gpu-proofs"))]
+#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 static CHUNK_OVERRIDE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 /// Test-only: the most rounds an execute runs while the guard lives; its
 /// drop restores ROUND_CHUNK, so a panicking proof cannot leak the override
 /// into the next test.
-#[cfg(all(test, feature = "gpu-proofs"))]
-pub(crate) fn set_round_chunk(chunk: u32) -> RoundChunkOverride {
+#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
+pub fn set_round_chunk(chunk: u32) -> RoundChunkOverride {
     CHUNK_OVERRIDE.store(chunk, std::sync::atomic::Ordering::SeqCst);
     RoundChunkOverride
 }
 
-#[cfg(all(test, feature = "gpu-proofs"))]
+#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 #[must_use = "the override ends when the guard drops"]
-pub(crate) struct RoundChunkOverride;
+pub struct RoundChunkOverride;
 
-#[cfg(all(test, feature = "gpu-proofs"))]
+#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 impl Drop for RoundChunkOverride {
     fn drop(&mut self) {
         CHUNK_OVERRIDE.store(0, std::sync::atomic::Ordering::SeqCst);
@@ -461,7 +461,7 @@ impl Drop for RoundChunkOverride {
 }
 
 fn round_chunk() -> u32 {
-    #[cfg(all(test, feature = "gpu-proofs"))]
+    #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
     {
         let chunk = CHUNK_OVERRIDE.load(std::sync::atomic::Ordering::SeqCst);
         if chunk > 0 {
@@ -627,7 +627,7 @@ fn spare(b: &Buffers, level: usize, which: Spare) -> &GpuBuffer {
 }
 
 /// One solve's inputs.
-pub(crate) struct Solve<'a> {
+pub struct Solve<'a> {
     pub rhs: &'a GpuBuffer,
     pub pressure: &'a GpuBuffer,
     pub stop: Stop,
@@ -647,7 +647,7 @@ pub(crate) struct Solve<'a> {
 pub(crate) type CoarseRhs<'a> = &'a dyn Fn(&mut GpuEncoder, &GpuBuffer, [u32; 3], f32);
 
 #[derive(Default)]
-pub(crate) struct PressureSolver {
+pub struct PressureSolver {
     pipelines: Option<Pipelines>,
     buffers: Option<Buffers>,
     /// The round template every solve runs (GPU_FLIP_PRESSURE_CAP_DESIGN.md
@@ -663,7 +663,7 @@ pub(crate) struct PressureSolver {
 
 impl PressureSolver {
     /// Build the solver's pipelines; the owning node calls this at install.
-    pub(crate) fn prepare_pipelines(&mut self, device: &GpuDevice) {
+    pub fn prepare_pipelines(&mut self, device: &GpuDevice) {
         if self.pipelines.is_none() {
             self.pipelines = Some(Pipelines::new(device));
         }
@@ -680,7 +680,7 @@ impl PressureSolver {
     /// The clock plan of the slot the next prepare, solve and tally run in.
     /// An inactive slot's (live, no time to step) arms no gated pass, and
     /// every other pass returns at the top.
-    pub(crate) fn set_clock_plan(&mut self, plan: &GpuBuffer) {
+    pub fn set_clock_plan(&mut self, plan: &GpuBuffer) {
         self.plan = Some(plan.clone());
     }
 
@@ -688,7 +688,7 @@ impl PressureSolver {
     /// inverse for `water`. Every solve until the next prepare runs on this
     /// water; a solve with φ needs a prepare that saw it. Allocates only when
     /// the lattice changes.
-    pub(crate) fn prepare(&mut self, device: &GpuDevice, enc: &mut GpuEncoder, water: &Water<'_>) -> Result<(), String> {
+    pub fn prepare(&mut self, device: &GpuDevice, enc: &mut GpuEncoder, water: &Water<'_>) -> Result<(), String> {
         if let Some(reason) = lattice_refusal(water.lattice) {
             return Err(reason);
         }
@@ -802,7 +802,7 @@ impl PressureSolver {
     /// zeroed fine pressure. The bodies stay fine: each direction is
     /// prolonged, their product taken there and restricted into s, so the
     /// coarse operator is L_k + Rᵀ B P.
-    pub(crate) fn solve(&mut self, enc: &mut GpuEncoder, water: &Water<'_>, run: Solve<'_>) -> Result<(), String> {
+    pub fn solve(&mut self, enc: &mut GpuEncoder, water: &Water<'_>, run: Solve<'_>) -> Result<(), String> {
         let n = water.lattice;
         let Solve { rhs, pressure, stop, bodies, level: k, coarse_rhs } = run;
         let Some((lattice, cell_size, with_phi)) = self.prepared else {
@@ -983,7 +983,7 @@ impl PressureSolver {
     /// The fine level's tile buffers after a prepare (the gate triples, the
     /// flags, the lists; the fine level's words start at 0 in each), for
     /// the body passes that run outside the solve.
-    pub(crate) fn tiles(&self) -> Result<[&GpuBuffer; 3], String> {
+    pub fn tiles(&self) -> Result<[&GpuBuffer; 3], String> {
         let b = self.buffers.as_ref().ok_or("the solver was not prepared")?;
         debug_assert_eq!(b.bases[0], 0, "the fine level's flags and lists start at word 0");
         Ok([&b.armed, &b.flags, &b.lists])
@@ -992,8 +992,8 @@ impl PressureSolver {
     /// The last solve's record: |f|∞, iterations run, 1.0 when it stopped by
     /// the tolerance, then |r|∞ per iteration; [`PROGRESS_FLOATS`] floats.
     /// What the round template store did over the solver's life.
-    #[cfg(all(test, feature = "gpu-proofs"))]
-    pub(crate) fn template_stats(&self) -> manifold_gpu::GpuTemplateStats {
+    #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
+    pub fn template_stats(&self) -> manifold_gpu::GpuTemplateStats {
         self.templates.as_ref().map(|t| t.stats()).unwrap_or_default()
     }
 
@@ -1011,8 +1011,8 @@ impl PressureSolver {
         self.buffers.as_ref().map(|b| &b.ranges)
     }
 
-    #[cfg(all(test, feature = "gpu-proofs"))]
-    pub(crate) fn progress(&self) -> Option<&GpuBuffer> {
+    #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
+    pub fn progress(&self) -> Option<&GpuBuffer> {
         self.buffers.as_ref().map(|b| &b.progress)
     }
 
@@ -1066,7 +1066,7 @@ impl PressureSolver {
 
 /// When a solve ends.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) enum Stop {
+pub enum Stop {
     /// Exactly this many iterations.
     Fixed(u32),
     /// The engine's stop (gpu_flip_pressure.wgsl check_main), after at most
@@ -1089,10 +1089,11 @@ impl Stop {
     }
 }
 
-#[cfg(all(test, feature = "gpu-proofs"))]
+#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 impl PressureSolver {
     /// Compare a changed stencil against its original shader in the full
     /// solve, retaining every other production pipeline and buffer.
+    #[cfg(test)]
     pub(crate) fn set_stencil_shader_for_proof(&mut self, device: &GpuDevice, shader: &str) {
         let pipes = self.pipelines.as_mut().expect("pressure pipelines prepared");
         pipes.smooth = device.create_compute_pipeline(shader, "smooth_main", "gpu_flip.pressure.smooth.reference");
@@ -1101,14 +1102,14 @@ impl PressureSolver {
 
     /// Copies the last solve's scalars (iteration k's r·z at 2k, p·s at
     /// 2k + 1) into `into`, a shared buffer of 2 · MAX_ITERATIONS floats.
-    pub(crate) fn copy_scalars(&self, enc: &mut GpuEncoder, into: &GpuBuffer) {
+    pub fn copy_scalars(&self, enc: &mut GpuEncoder, into: &GpuBuffer) {
         let b = self.buffers.as_ref().expect("the solver was prepared");
         enc.copy_buffer_to_buffer(&b.scalars, into, b.scalars.size);
     }
 
     /// Fills the scalars and the stop's record from `sentinel` (at least as
     /// large as either), so storage a solve leaves unwritten holds known bits.
-    pub(crate) fn seed_records(&self, enc: &mut GpuEncoder, sentinel: &GpuBuffer) {
+    pub fn seed_records(&self, enc: &mut GpuEncoder, sentinel: &GpuBuffer) {
         let b = self.buffers.as_ref().expect("the solver was prepared");
         enc.copy_buffer_to_buffer(sentinel, &b.scalars, b.scalars.size);
         enc.copy_buffer_to_buffer(sentinel, &b.progress, b.progress.size);
@@ -1116,6 +1117,7 @@ impl PressureSolver {
 
     /// Copies the fine level's rows (`ROW_BYTES` a cell, gpu_flip_pressure.wgsl
     /// Row) into `into`, a shared buffer of the lattice's cells × `ROW_BYTES`.
+    #[cfg(test)]
     pub(crate) fn copy_rows(&self, enc: &mut GpuEncoder, into: &GpuBuffer) {
         let b = self.buffers.as_ref().expect("the solver was prepared");
         enc.copy_buffer_to_buffer(&b.rows, into, b.rows.size);
@@ -1125,6 +1127,7 @@ impl PressureSolver {
     /// right-hand side and its solution after a solve started on it (the
     /// level's own `rhs` and `e`, which that solve's V-cycle never touches)
     /// into shared buffers of the level's cells × `ROW_BYTES`, × 4 and × 4.
+    #[cfg(test)]
     pub(crate) fn copy_level(&self, enc: &mut GpuEncoder, k: usize, rows: &GpuBuffer, rhs: &GpuBuffer, e: &GpuBuffer) -> ([u32; 3], f32) {
         let b = self.buffers.as_ref().expect("the solver was prepared");
         let c = &b.coarse[k - 1];
@@ -1167,7 +1170,7 @@ const MAX_BINDINGS: usize = 12;
 
 /// Where a solve's dispatches go: the encoder, or a round template's
 /// recorder, which takes gated dispatches only.
-pub(crate) trait Sink {
+pub trait Sink {
     fn gated(&mut self, pipeline: &GpuComputePipeline, bindings: &[GpuBinding], groups: [u32; 3], gate: &GpuBuffer, offset: u64, label: &str);
     fn plain(&mut self, pipeline: &GpuComputePipeline, bindings: &[GpuBinding], groups: [u32; 3], label: &str);
 }
@@ -1503,21 +1506,21 @@ fn dot_finalize<S: Sink>(enc: &mut S, pipes: &Pipelines, b: &Buffers, g: Gate<'_
 
 /// gpu_flip_pressure.wgsl KEEP_RANGES: the stop leaves later rounds' range
 /// entries live.
-#[cfg(all(test, feature = "gpu-proofs"))]
+#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 const KEEP_RANGES: u32 = 8;
 
-#[cfg(all(test, feature = "gpu-proofs"))]
+#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 static KEEP_RANGES_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Test-only: the stop leaves every later round executing, as a chunk of
 /// rounds would, so a proof sees whether rounds past the stop write anything.
-#[cfg(all(test, feature = "gpu-proofs"))]
-pub(crate) fn set_keep_ranges(on: bool) {
+#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
+pub fn set_keep_ranges(on: bool) {
     KEEP_RANGES_ON.store(on, std::sync::atomic::Ordering::SeqCst);
 }
 
 fn keep_ranges() -> u32 {
-    #[cfg(all(test, feature = "gpu-proofs"))]
+    #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
     if KEEP_RANGES_ON.load(std::sync::atomic::Ordering::SeqCst) {
         return KEEP_RANGES;
     }

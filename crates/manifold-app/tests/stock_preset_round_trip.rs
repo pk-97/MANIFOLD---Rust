@@ -24,6 +24,7 @@
 //! makes the stock preset resolvable as a template at all, mirroring what the
 //! app does once at startup before any project-local overlay exists.
 
+use manifold_renderer as _;
 use manifold_core::effects::ParamId;
 use manifold_core::project::Project;
 use manifold_core::types::LayerType;

@@ -117,7 +117,7 @@ pub(crate) struct SortJob<'a> {
 /// the stage nodes that sort inside one dispatch chain (`node.gpu_flip_step`).
 /// Owns the cell ranges and its scratch.
 #[derive(Default)]
-pub(crate) struct ParticleSorter {
+pub struct ParticleSorter {
     pipelines: Vec<GpuComputePipeline>,
     scan: PrefixScan,
     rank: Option<GpuBuffer>,
@@ -274,6 +274,7 @@ fn record_read(layout: &ArrayType) -> Option<RecordRead> {
     }
 }
 
+#[macro_export]
 macro_rules! float_param {
     ($name:literal, $label:literal, $default:expr, $min:expr, $max:expr) => {
         ParamDef {
@@ -286,7 +287,6 @@ macro_rules! float_param {
         }
     };
 }
-pub(crate) use float_param;
 
 /// An Int param: whole numbers in `[min, max]`, stored as a float.
 macro_rules! int_param {
@@ -519,5 +519,5 @@ impl Primitive for SortParticlesIntoCells {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests;
 
-#[cfg(any(test, feature = "gpu-proofs"))]
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 mod extent;

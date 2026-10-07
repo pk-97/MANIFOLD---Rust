@@ -169,7 +169,7 @@ impl GpuFlipClock {
     /// Persistent storage held by the clock for the supplied populations.
     /// This is shared with extent admission so the scheduler cannot hide
     /// scratch or telemetry storage from the domain budget.
-    #[cfg(any(test, feature = "gpu-proofs"))]
+    #[cfg(any(any(test, feature = "testkit"), feature = "gpu-proofs"))]
     pub(crate) fn held_bytes(
         marker_capacity: u32,
         obstacle_capacity: u32,

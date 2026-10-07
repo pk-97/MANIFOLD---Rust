@@ -210,7 +210,7 @@ const MESH_RULE_SCHEMA: u32 = 2;
 /// differ only in live modulation share one key, and the fused kernel keeps
 /// exposed params as uniforms (never baked). Computed on cache miss / chain
 /// rebuild, an editing-time event, never per frame.
-pub(crate) fn def_content_key(def: &EffectGraphDef) -> u64 {
+pub fn def_content_key(def: &EffectGraphDef) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = ahash::AHasher::default();
     MESH_RULE_SCHEMA.hash(&mut h);
@@ -255,7 +255,7 @@ fn clear_cosmetic_fields(nodes: &mut [EffectGraphNode]) {
 /// `preset_metadata.bindings` directly from the cached fused def (registry.rs:253-268),
 /// so normalizing generator bindings would lose metadata at runtime. Effects don't read
 /// bindings from the cache — they flow through `ResolvedBinding::from_static` at slot-build time.
-pub(crate) fn effect_def_content_key(def: &EffectGraphDef) -> u64 {
+pub fn effect_def_content_key(def: &EffectGraphDef) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = ahash::AHasher::default();
     MESH_RULE_SCHEMA.hash(&mut h);
@@ -355,7 +355,7 @@ impl<V: Clone> LruCache<V> {
         self.last_hit.remove(&key);
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(feature = "testkit", feature = "gpu-proofs")))]
     fn len(&self) -> usize {
         self.entries.len()
     }
@@ -383,8 +383,8 @@ thread_local! {
 }
 
 /// Test-only cache size observation for D8/P7 knob-invariance proofs.
-#[cfg(all(test, feature = "gpu-proofs"))]
-pub(crate) fn fused_effect_cache_len_for_test() -> usize {
+#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
+pub fn fused_effect_cache_len_for_test() -> usize {
     FUSED_EFFECT_CACHE.with(|c| c.borrow().len())
 }
 
@@ -549,7 +549,7 @@ pub fn fused_effect_view_for(def: &EffectGraphDef, base: &LoadedPresetView) -> F
         .is_none();
     // Tests stay deterministic: no worker thread, compile inline exactly as
     // fused_view_for always has — every chain-build test sees the fused path.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testkit"))]
     {
         let _ = newly_queued;
         FUSED_EFFECT_PENDING.with(|p| p.borrow_mut().remove(&key));
@@ -562,7 +562,7 @@ pub fn fused_effect_view_for(def: &EffectGraphDef, base: &LoadedPresetView) -> F
     }
     // Each cfg branch is a self-contained tail expression (the segment lookup
     // convention), so neither build sees the other's tail as unreachable.
-    #[cfg(not(test))]
+    #[cfg(not(any(test, feature = "testkit")))]
     {
         if newly_queued {
             let job = EffectJob {
@@ -589,6 +589,7 @@ pub fn fused_effect_view_for(def: &EffectGraphDef, base: &LoadedPresetView) -> F
 /// Panic-contained wrapper around the per-card fuse (the segment
 /// [`compile_segment_view_panic_safe`] rule): a codegen bug that panics
 /// mid-compile refuses the key instead of killing the worker thread.
+#[cfg(not(any(test, feature = "testkit")))]
 fn compile_effect_view_panic_safe(
     job: &EffectJob,
     registry: &PrimitiveRegistry,
@@ -613,6 +614,7 @@ fn compile_effect_view_panic_safe(
 /// `Pending` effect keys that outlived [`SEGMENT_COMPILE_DEADLINE`] expire into
 /// the negative cache — the [`expire_stale_segment_pending`] analog; same
 /// wedged-worker story, same deadline.
+#[cfg(any(test, not(feature = "testkit")))]
 fn expire_stale_effect_pending(now: std::time::Instant) {
     let expired: Vec<u64> = FUSED_EFFECT_PENDING.with(|p| {
         let pending = p.borrow();
@@ -735,6 +737,7 @@ thread_local! {
 /// expiry still overwrites the negative-cache entry (`pump_segment_results`'s
 /// insert path), so a slow-but-alive worker self-heals back to fused on its
 /// next successful compile.
+#[cfg(any(test, not(feature = "testkit")))]
 const SEGMENT_COMPILE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Bumped once per worker result landed by [`pump_segment_results`]. A runtime
@@ -756,6 +759,7 @@ pub fn prewarm_worker_pending_count() -> usize {
     segments + effects
 }
 
+#[cfg(not(any(test, feature = "testkit")))]
 struct SegmentJob {
     key: u64,
     /// Owned def clones — the live defs can mutate under editing while the
@@ -766,6 +770,7 @@ struct SegmentJob {
 /// Per-card fused-view compile job (BUG-j8gy). Owned clones of everything
 /// `fuse_view_parts` needs — the live def and base view can mutate under
 /// editing while the worker runs.
+#[cfg(not(any(test, feature = "testkit")))]
 struct EffectJob {
     key: u64,
     def: EffectGraphDef,
@@ -773,10 +778,9 @@ struct EffectJob {
     type_id: PresetTypeId,
 }
 
-// Variants are constructed only on the production (`not(test)`) lookup paths
-// (tests compile inline and never feed the worker — the SegmentWorker::tx
-// convention above); the match arms in the worker loop keep them read.
-#[cfg_attr(test, allow(dead_code))]
+// Variants are constructed only on the production lookup paths; tests and
+// testkit builds compile inline and never feed the worker.
+#[cfg(not(any(test, feature = "testkit")))]
 enum FusionJob {
     Segment(SegmentJob),
     // Boxed: EffectGraphDef is the large payload and segment jobs the small
@@ -784,25 +788,26 @@ enum FusionJob {
     Effect(Box<EffectJob>),
 }
 
+#[cfg(not(any(test, feature = "testkit")))]
 struct SegmentResult {
     key: u64,
     view: Option<Arc<SegmentView>>,
 }
 
+#[cfg(not(any(test, feature = "testkit")))]
 struct EffectResult {
     key: u64,
     view: Option<Arc<LoadedPresetView>>,
 }
 
+#[cfg(not(any(test, feature = "testkit")))]
 enum FusionResult {
     Segment(SegmentResult),
     Effect(EffectResult),
 }
 
+#[cfg(not(any(test, feature = "testkit")))]
 struct SegmentWorker {
-    // Only sent on from the production (`not(test)`) path; in test builds the
-    // worker is never fed, so the field reads as dead there.
-    #[cfg_attr(test, allow(dead_code))]
     tx: std::sync::mpsc::Sender<FusionJob>,
     /// Drained only by the content thread ([`pump_segment_results`]); the
     /// Mutex exists solely because `OnceLock` requires `Sync` — it is never
@@ -813,6 +818,7 @@ struct SegmentWorker {
 /// Set once the worker thread exists, so [`pump_segment_results`] (called
 /// every chain dispatch) is a single relaxed load until the first segment is
 /// actually enqueued.
+#[cfg(not(any(test, feature = "testkit")))]
 static WORKER_STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// The GPU device the worker prewarms fused-kernel pipelines against (BUG-j8gy).
@@ -836,6 +842,7 @@ pub fn set_prewarm_device(device: Arc<manifold_gpu::GpuDevice>) {
 /// caller's (worker) thread. Fail-open per kernel: a parse/compile failure or
 /// panic leaves the lazy `evaluate()` compile as the fallback, exactly the
 /// pre-prewarm behavior — prewarm is pure latency, never a correctness gate.
+#[cfg(not(any(test, feature = "testkit")))]
 fn prewarm_fused_pipelines(def: &EffectGraphDef) {
     let Some(device) = PREWARM_DEVICE.get() else {
         return;
@@ -858,6 +865,7 @@ fn prewarm_fused_pipelines(def: &EffectGraphDef) {
     }
 }
 
+#[cfg(not(any(test, feature = "testkit")))]
 fn segment_worker() -> &'static SegmentWorker {
     static WORKER: OnceLock<SegmentWorker> = OnceLock::new();
     WORKER.get_or_init(|| {
@@ -910,11 +918,15 @@ fn segment_worker() -> &'static SegmentWorker {
 /// rebuild and pick the winner up. Despite the name this drains BOTH job kinds
 /// (segments and per-card effect views) — they share the one worker.
 pub fn pump_segment_results() {
+    #[cfg(not(any(test, feature = "testkit")))]
     if !WORKER_STARTED.load(std::sync::atomic::Ordering::Acquire) {
         return;
     }
+    #[cfg(not(any(test, feature = "testkit")))]
     let worker = segment_worker();
+    #[cfg(not(any(test, feature = "testkit")))]
     let rx = worker.rx.lock().expect("segment worker rx poisoned");
+    #[cfg(not(any(test, feature = "testkit")))]
     while let Ok(res) = rx.try_recv() {
         match res {
             FusionResult::Segment(res) => {
@@ -940,8 +952,11 @@ pub fn pump_segment_results() {
             }
         }
     }
+    #[cfg(not(any(test, feature = "testkit")))]
     let now = std::time::Instant::now();
+    #[cfg(not(any(test, feature = "testkit")))]
     expire_stale_segment_pending(now);
+    #[cfg(not(any(test, feature = "testkit")))]
     expire_stale_effect_pending(now);
 }
 
@@ -951,6 +966,7 @@ pub fn pump_segment_results() {
 /// the key is removed from `SEGMENT_PENDING` so it can't re-fire). Only walks
 /// the pending map when it's non-empty, so this is zero-cost in the steady
 /// state. `now` is injected so the unit test doesn't need a real 60s sleep.
+#[cfg(any(test, not(feature = "testkit")))]
 fn expire_stale_segment_pending(now: std::time::Instant) {
     let expired: Vec<u64> = SEGMENT_PENDING.with(|p| {
         let pending = p.borrow();
@@ -996,14 +1012,14 @@ pub fn fused_segment_view_for(
     // contending with the GPU-bound suite. Un-seeded segments stay Pending
     // forever (per-card render — today's path); fused paths are exercised via
     // `seed_segment_cache_for_test`.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testkit"))]
     {
         let _ = newly_queued;
         SegmentLookup::Pending
     }
     // Each cfg branch is a self-contained tail expression, so neither build
     // sees the other's `Pending` as unreachable code.
-    #[cfg(not(test))]
+    #[cfg(not(any(test, feature = "testkit")))]
     {
         if newly_queued {
             let job = SegmentJob {
@@ -1046,6 +1062,7 @@ pub(crate) fn arm_segment_compile_panic_hook_for_test(armed: bool) {
 /// segment this session still gets serviced. Not a substitute for a genuine
 /// hang (Rust can't kill a wedged thread); the pump-side deadline in
 /// `pump_segment_results` handles that case.
+#[cfg(any(test, not(feature = "testkit")))]
 fn compile_segment_view_panic_safe(
     cards: &[(&EffectGraphDef, &'static LoadedPresetView)],
     registry: &PrimitiveRegistry,
@@ -1065,6 +1082,7 @@ fn compile_segment_view_panic_safe(
 /// the partition finds, retarget bindings. Pure CPU codegen — the fuse decision
 /// is structural (the region partition), so there is no GPU measurement. Runs on
 /// the codegen worker in production and synchronously in tests.
+#[cfg(any(test, not(feature = "testkit"), feature = "gpu-proofs"))]
 pub(crate) fn compile_segment_view(
     cards: &[(&EffectGraphDef, &'static LoadedPresetView)],
     registry: &PrimitiveRegistry,
@@ -1154,8 +1172,8 @@ pub(crate) fn compile_segment_view(
 /// Test/tooling hook: compile a segment synchronously and seed the
 /// content-thread cache, so integration tests exercise the Ready path without
 /// the worker's asynchrony.
-#[cfg(all(test, feature = "gpu-proofs"))]
-pub(crate) fn seed_segment_cache_for_test(
+#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
+pub fn seed_segment_cache_for_test(
     cards: &[(&EffectGraphDef, &'static LoadedPresetView)],
     registry: &PrimitiveRegistry,
 ) -> Option<Arc<SegmentView>> {
@@ -1332,7 +1350,7 @@ pub(crate) fn convert_for_fused_field(convert: ParamConvert) -> ParamConvert {
 /// both the unfused and fused graphs from one fixture (set inner params by stable
 /// node id on the unfused side, by the `retarget`ed `(fused id, field)` on the
 /// fused side).
-pub(crate) struct FusedDef {
+pub struct FusedDef {
     pub def: EffectGraphDef,
     /// `(original stable node_id, original param) → (fused node id, fused uniform
     /// field)`. The field is `"n{idx}_{param}"` (`idx` = the member's topo index
@@ -1728,7 +1746,7 @@ fn compose_region_mesh_rules(
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
-pub(crate) fn fuse_canonical_def(
+pub fn fuse_canonical_def(
     def: &EffectGraphDef,
     registry: &PrimitiveRegistry,
 ) -> Option<FusedDef> {
@@ -2483,7 +2501,7 @@ fn fused_def_builds(
 
 /// A node's stable id defaults to its handle when the document carries none —
 /// the same convention `instantiate_def` / the preset stamp use.
-fn resolve_node_id(n: &EffectGraphNode) -> NodeId {
+pub fn resolve_node_id(n: &EffectGraphNode) -> NodeId {
     if n.node_id.is_empty() {
         n.handle.as_deref().map(NodeId::new).unwrap_or_default()
     } else {
@@ -2575,7 +2593,9 @@ mod tests {
     use manifold_core::effect_graph_def::EffectGraphDef;
 
     fn registry() -> PrimitiveRegistry {
-        PrimitiveRegistry::with_builtin()
+        let mut registry = PrimitiveRegistry::with_builtin();
+        crate::testkit::fusion_fixtures::register_fusion_test_nodes(&mut registry);
+        registry
     }
 
 
@@ -2590,11 +2610,11 @@ mod tests {
         let json = r#"{
             "version": 1, "name": "split", "nodes": [
                 { "id": 0, "typeId": "system.source", "nodeId": "source" },
-                { "id": 1, "typeId": "node.exposure", "nodeId": "gain" },
-                { "id": 2, "typeId": "node.contrast", "nodeId": "contrast" },
-                { "id": 3, "typeId": "node.threshold", "nodeId": "thresh" },
-                { "id": 4, "typeId": "node.saturation", "nodeId": "sat" },
-                { "id": 5, "typeId": "node.clamp", "nodeId": "clamp" },
+                { "id": 1, "typeId": "test.fusion_map", "nodeId": "gain" },
+                { "id": 2, "typeId": "test.fusion_map", "nodeId": "contrast" },
+                { "id": 3, "typeId": "test.fusion_boundary", "nodeId": "thresh" },
+                { "id": 4, "typeId": "test.fusion_map", "nodeId": "sat" },
+                { "id": 5, "typeId": "test.fusion_map", "nodeId": "clamp" },
                 { "id": 6, "typeId": "system.final_output", "nodeId": "final_output" }
             ], "wires": [
                 { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
@@ -2622,14 +2642,14 @@ mod tests {
             1,
             "only the enabled region becomes a fused node"
         );
-        for survivor in ["node.saturation", "node.clamp"] {
+        for survivor in ["sat", "clamp"] {
             assert!(
-                half.def.nodes.iter().any(|n| n.type_id == survivor),
+                half.def.nodes.iter().any(|n| n.node_id == survivor),
                 "{survivor} must survive the masked fuse"
             );
         }
         assert!(
-            !half.def.nodes.iter().any(|n| n.type_id == "node.exposure"),
+            !half.def.nodes.iter().any(|n| n.node_id == "gain"),
             "the enabled region's members are fused away"
         );
 
@@ -2694,42 +2714,6 @@ mod tests {
         assert!(!should_render_fused(true));
     }
 
-    #[test]
-    fn content_keyed_cache_separates_edited_from_canonical_and_negative_caches() {
-        // An edited shape (different topology) must get its own fused entry by its
-        // own content key and never clobber the canonical one; a non-fusable def
-        // must cache `None` rather than recompile each call. Uses ColorGrade,
-        // whose canonical shape fuses.
-        let base = crate::load::loaded_preset_view::loaded_preset_view_by_id(&PresetTypeId::new("ColorGrade"))
-            .expect("ColorGrade canonical view");
-
-        // Canonical content key fuses and is stable across calls (cache hit).
-        let canon_a = fused_view_for(&base.canonical_def, base);
-        let canon_b = fused_view_for(&base.canonical_def, base);
-        assert!(canon_a.is_some(), "canonical ColorGrade must fuse");
-        assert!(
-            Arc::ptr_eq(canon_a.as_ref().unwrap(), canon_b.as_ref().unwrap()),
-            "same def content must return the same cached Arc view",
-        );
-
-        // Mutating the def's content (duplicate a node → a structurally distinct
-        // def) must route to a *different* cache entry, proving keying is by
-        // content, not type id. We don't assert it fuses (the malformed dup may
-        // strand → None); we assert the canonical entry is untouched afterward.
-        let mut edited = (*base.canonical_def).clone();
-        edited.nodes.push(edited.nodes[0].clone());
-        assert_ne!(
-            def_content_key(&base.canonical_def),
-            def_content_key(&edited),
-            "a structural edit must change the content key",
-        );
-        let _ = fused_view_for(&edited, base);
-        let canon_c = fused_view_for(&base.canonical_def, base);
-        assert!(
-            Arc::ptr_eq(canon_a.as_ref().unwrap(), canon_c.as_ref().unwrap()),
-            "an edited def's entry must not clobber the canonical entry",
-        );
-    }
 
     /// A minimal three-node def (source → gain → final_output) used by the
     /// content-key cosmetic-field tests below.
@@ -2737,7 +2721,7 @@ mod tests {
         let json = r#"{
             "version": 1, "name": "minimal", "nodes": [
                 { "id": 0, "typeId": "system.source", "nodeId": "source" },
-                { "id": 1, "typeId": "node.exposure", "nodeId": "gain", "editorPos": [10.0, 20.0], "title": "Gain" },
+                { "id": 1, "typeId": "test.fusion_map", "nodeId": "gain", "editorPos": [10.0, 20.0], "title": "Gain" },
                 { "id": 2, "typeId": "system.final_output", "nodeId": "final_output" }
             ], "wires": [
                 { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
@@ -2821,41 +2805,6 @@ mod tests {
         assert_ne!(key_param, key_topology, "distinct edits must not collide on the same key");
     }
 
-    /// The fused view must carry the full binding-retarget map so the chain
-    /// builder can repoint a per-instance USER binding (which lives off the def,
-    /// on `PresetInstance.user_param_bindings`, and so is invisible to the
-    /// content-keyed fuse) onto the fused node — exactly as the static card
-    /// bindings are. Without this the map was discarded after retargeting the
-    /// statics, and a user-exposed slider went inert the moment the effect
-    /// re-fused on editor close (the effect/generator divergence: generators
-    /// keep bindings in the def, so they retargeted; effects didn't).
-    #[test]
-    fn fused_view_carries_retarget_map_for_user_bindings() {
-        let base = crate::load::loaded_preset_view::loaded_preset_view_by_id(&PresetTypeId::new("ColorGrade"))
-            .expect("ColorGrade canonical view");
-        // Plain JSON-loaded view: no fusion, so nothing to retarget.
-        assert!(
-            base.fused_retarget.is_empty(),
-            "unfused view must carry an empty retarget map",
-        );
-
-        let fused = fused_view_for(&base.canonical_def, base).expect("ColorGrade fuses");
-        // Same routing the standalone `fuse_canonical_def` retarget asserts —
-        // proving the map survived onto the cached view rather than being
-        // dropped after the static-binding rewrite.
-        assert_eq!(
-            fused
-                .fused_retarget
-                .get(&("gain".to_string(), "gain".to_string()))
-                .map(|(id, f)| (id.as_str(), f.as_str())),
-            Some(("fused_region_0", "n0_gain")),
-            "an inner (node_id, param) the fuse collapsed must resolve to its \
-             fused uniform field so a user binding can be repointed onto it",
-        );
-        // The map is total over fused-away inner params (every param of every
-        // collapsed node), so a user binding can never strand under fusion.
-        assert_eq!(fused.fused_retarget.len(), 14, "all 7 ColorGrade atoms' params");
-    }
 
 
 
@@ -2871,11 +2820,11 @@ mod tests {
         let json = r#"{
             "version": 1, "name": "split", "nodes": [
                 { "id": 0, "typeId": "system.source", "nodeId": "source" },
-                { "id": 1, "typeId": "node.exposure", "nodeId": "gain" },
-                { "id": 2, "typeId": "node.contrast", "nodeId": "contrast" },
-                { "id": 3, "typeId": "node.threshold", "nodeId": "thresh" },
-                { "id": 4, "typeId": "node.saturation", "nodeId": "sat" },
-                { "id": 5, "typeId": "node.clamp", "nodeId": "clamp" },
+                { "id": 1, "typeId": "test.fusion_map", "nodeId": "gain" },
+                { "id": 2, "typeId": "test.fusion_map", "nodeId": "contrast" },
+                { "id": 3, "typeId": "test.fusion_boundary", "nodeId": "thresh" },
+                { "id": 4, "typeId": "test.fusion_map", "nodeId": "sat" },
+                { "id": 5, "typeId": "test.fusion_map", "nodeId": "clamp" },
                 { "id": 6, "typeId": "system.final_output", "nodeId": "final_output" }
             ], "wires": [
                 { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
@@ -2898,7 +2847,7 @@ mod tests {
             .collect();
         assert_eq!(wgsl_nodes.len(), 2, "two fused regions");
         assert!(
-            fused.def.nodes.iter().any(|n| n.type_id == "node.threshold"),
+            fused.def.nodes.iter().any(|n| n.type_id == "test.fusion_boundary"),
             "the threshold boundary survives between the two fused nodes"
         );
 
@@ -2910,9 +2859,9 @@ mod tests {
                 .map(|(id, _)| id.as_str().to_string())
         };
         assert_eq!(region_of("gain", "gain").as_deref(), Some("fused_region_0"));
-        assert_eq!(region_of("contrast", "contrast").as_deref(), Some("fused_region_0"));
-        assert_eq!(region_of("sat", "saturation").as_deref(), Some("fused_region_1"));
-        assert_eq!(region_of("clamp", "max").as_deref(), Some("fused_region_1"));
+        assert_eq!(region_of("contrast", "gain").as_deref(), Some("fused_region_0"));
+        assert_eq!(region_of("sat", "gain").as_deref(), Some("fused_region_1"));
+        assert_eq!(region_of("clamp", "gain").as_deref(), Some("fused_region_1"));
 
         // The chain reconnects: source → r0, r0 → threshold, threshold → r1 → final.
         let id_of =
@@ -2928,111 +2877,7 @@ mod tests {
 
 
 
-    /// P5/D4: a Vec3 param (`node.brightness`'s `weights`) and a Vec4 param
-    /// (`node.channel_mixer`'s `row0..row3`) both actually SEED correct
-    /// per-component values into the fused node's `params` map — not just
-    /// "the codegen text compiles" (the GPU parity tests already prove that
-    /// downstream), but that install-time seeding (`effective_param_vec3`/
-    /// `effective_param_vec4`) reconstructs the right `n{i}_<name>_x/_y/_z
-    /// [_w]` fields from the atom's declared default, matching the exact
-    /// component order `codegen.rs`'s struct/arg emission uses. Also reruns
-    /// the `seeded_fields_match_wgsl_compute_params` drift guard on a region
-    /// containing a non-scalar param, which the ColorGrade-only original
-    /// never covered.
-    #[test]
-    fn vec3_and_vec4_params_seed_correct_component_values() {
-        use crate::exec::effect_node::EffectNode;
-        use crate::primitives::wgsl_compute::WgslCompute;
-        let json = r#"{
-            "version": 1, "name": "vec-params", "nodes": [
-                { "id": 0, "typeId": "system.source", "nodeId": "source" },
-                { "id": 1, "typeId": "node.contrast", "nodeId": "contrast" },
-                { "id": 2, "typeId": "node.brightness", "nodeId": "bright" },
-                { "id": 3, "typeId": "node.channel_mixer", "nodeId": "mixer" },
-                { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }
-            ], "wires": [
-                { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
-                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "source" },
-                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "source" },
-                { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
-            ]
-        }"#;
-        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
-        let fused = fuse_canonical_def(&def, &registry())
-            .expect("contrast+brightness+channel_mixer all fuse (P5 lifts Vec3/Vec4)");
-        let node = fused
-            .def
-            .nodes
-            .iter()
-            .find(|n| n.type_id == "node.wgsl_compute")
-            .expect("one fused region");
 
-        // node.brightness is region index 1 (contrast=0, bright=1, mixer=2) —
-        // the Vec3 `weights` default is BT.709 luma [0.2126, 0.7152, 0.0722].
-        let get = |field: &str| match node.params.get(field) {
-            Some(SerializedParamValue::Float { value }) => *value,
-            other => panic!("expected a seeded Float at `{field}`, got {other:?}"),
-        };
-        assert_eq!(get("n1_weights_x"), 0.2126);
-        assert_eq!(get("n1_weights_y"), 0.7152);
-        assert_eq!(get("n1_weights_z"), 0.0722);
-
-        // node.channel_mixer is region index 2 — row0's Vec4 default is the
-        // identity matrix's first row [1.0, 0.0, 0.0, 0.0].
-        assert_eq!(get("n2_row0_x"), 1.0);
-        assert_eq!(get("n2_row0_y"), 0.0);
-        assert_eq!(get("n2_row0_z"), 0.0);
-        assert_eq!(get("n2_row0_w"), 0.0);
-        // row1's default is [0.0, 1.0, 0.0, 0.0].
-        assert_eq!(get("n2_row1_x"), 0.0);
-        assert_eq!(get("n2_row1_y"), 1.0);
-
-        // Drift guard (same pattern as `seeded_fields_match_wgsl_compute_
-        // params`, on a region a Vec3/Vec4 param actually reaches): every
-        // seeded field name must be a real reparsed WgslCompute param.
-        let mut wc = WgslCompute::new();
-        wc.set_wgsl_source(node.wgsl_source.as_deref().unwrap());
-        let param_names: AHashSet<&str> =
-            wc.parameters().iter().map(|p| p.name.as_ref()).collect();
-        for field in node.params.keys() {
-            assert!(
-                param_names.contains(field.as_str()),
-                "seeded field `{field}` is not a derived WgslCompute param — codegen drift"
-            );
-        }
-    }
-
-    /// The cached fused view retargets every outer-card binding onto its region's
-    /// fused node, preserving the card surface: 9 bindings, all pointing at the
-    /// fused node, at the matching `n{i}_{param}` field.
-    #[test]
-    fn fused_view_retargets_every_binding() {
-        let view = fused_view_by_id(&PresetTypeId::new("ColorGrade"))
-            .expect("ColorGrade has a fused view");
-        assert_eq!(view.bindings.len(), 9, "all outer-card sliders survive");
-        for b in &view.bindings {
-            match &b.target {
-                ParamTarget::Node { node_id, param } => {
-                    assert_eq!(node_id.as_str(), "fused_region_0");
-                    assert!(param.starts_with('n'), "retargeted to a fused field");
-                }
-                other => panic!("binding {:?} not retargeted to a node: {other:?}", b.id),
-            }
-        }
-        // Spot-check two specific routings end-to-end through the cache.
-        let field_for = |id: &str| {
-            view.bindings
-                .iter()
-                .find(|b| AsRef::<str>::as_ref(&b.id) == id)
-                .and_then(|b| match &b.target {
-                    ParamTarget::Node { param, .. } => Some(param.clone()),
-                    _ => None,
-                })
-        };
-        assert_eq!(field_for("amount").as_deref(), Some("n5_amount"));
-        assert_eq!(field_for("gain").as_deref(), Some("n0_gain"));
-        assert_eq!(field_for("tint_focus").as_deref(), Some("n4_focus"));
-    }
 
     /// An effect with no fusable node has no region — left entirely unfused, safe
     /// by construction. `node.threshold` is a Boundary, so a single-threshold
@@ -3071,19 +2916,19 @@ mod tests {
         let json = r#"{
             "version": 1, "name": "fanout", "nodes": [
                 { "id": 0, "typeId": "system.source", "nodeId": "source" },
-                { "id": 1, "typeId": "node.exposure", "nodeId": "gain" },
-                { "id": 2, "typeId": "node.invert", "nodeId": "invert" },
-                { "id": 3, "typeId": "node.contrast", "nodeId": "contrast" },
-                { "id": 4, "typeId": "node.multi_blend", "nodeId": "thr_a" },
-                { "id": 5, "typeId": "node.multi_blend", "nodeId": "thr_b" },
-                { "id": 6, "typeId": "node.mix", "nodeId": "mix" },
+                { "id": 1, "typeId": "test.fusion_map", "nodeId": "gain" },
+                { "id": 2, "typeId": "test.fusion_map", "nodeId": "invert" },
+                { "id": 3, "typeId": "test.fusion_map", "nodeId": "contrast" },
+                { "id": 4, "typeId": "test.fusion_boundary", "nodeId": "thr_a" },
+                { "id": 5, "typeId": "test.fusion_boundary", "nodeId": "thr_b" },
+                { "id": 6, "typeId": "test.fusion_join", "nodeId": "mix" },
                 { "id": 7, "typeId": "system.final_output", "nodeId": "final_output" }
             ], "wires": [
                 { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
                 { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
                 { "fromNode": 1, "fromPort": "out", "toNode": 3, "toPort": "in" },
-                { "fromNode": 2, "fromPort": "out", "toNode": 4, "toPort": "in_0" },
-                { "fromNode": 3, "fromPort": "out", "toNode": 5, "toPort": "in_0" },
+                { "fromNode": 2, "fromPort": "out", "toNode": 4, "toPort": "in" },
+                { "fromNode": 3, "fromPort": "out", "toNode": 5, "toPort": "in" },
                 { "fromNode": 4, "fromPort": "out", "toNode": 6, "toPort": "a" },
                 { "fromNode": 5, "fromPort": "out", "toNode": 6, "toPort": "b" },
                 { "fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "in" }
@@ -3099,7 +2944,7 @@ mod tests {
         assert_eq!(wgsl_nodes.len(), 1, "the fork is one fused node");
         let fused_doc = wgsl_nodes[0].id;
         assert_eq!(
-            fused.def.nodes.iter().filter(|n| n.type_id == "node.multi_blend").count(),
+            fused.def.nodes.iter().filter(|n| n.type_id == "test.fusion_boundary").count(),
             2,
             "both router boundaries survive"
         );
@@ -3126,8 +2971,8 @@ mod tests {
             fused.retarget.get(&(nid.into(), p.into())).map(|(id, _)| id.as_str().to_string())
         };
         assert_eq!(region_of("gain", "gain").as_deref(), Some("fused_region_0"));
-        assert_eq!(region_of("invert", "intensity").as_deref(), Some("fused_region_0"));
-        assert_eq!(region_of("contrast", "contrast").as_deref(), Some("fused_region_0"));
+        assert_eq!(region_of("invert", "gain").as_deref(), Some("fused_region_0"));
+        assert_eq!(region_of("contrast", "gain").as_deref(), Some("fused_region_0"));
     }
 
     /// A control wire driving a fused-away atom's param is re-anchored onto the
@@ -3140,8 +2985,8 @@ mod tests {
             "version": 1, "name": "ctrl", "nodes": [
                 { "id": 0, "typeId": "system.source", "nodeId": "source" },
                 { "id": 1, "typeId": "node.texture_size", "nodeId": "dims" },
-                { "id": 2, "typeId": "node.exposure", "nodeId": "gain" },
-                { "id": 3, "typeId": "node.invert", "nodeId": "invert" },
+                { "id": 2, "typeId": "test.fusion_map", "nodeId": "gain" },
+                { "id": 3, "typeId": "test.fusion_map", "nodeId": "invert" },
                 { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }
             ], "wires": [
                 { "fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in" },
@@ -3183,130 +3028,7 @@ mod tests {
         );
     }
 
-    /// A generator's `preset_metadata` binding is retargeted onto the fused node.
-    /// checkerboard (Source) → gain → invert fuse into one region; the binding that
-    /// drove `gain.gain` is repointed at the fused node's `n1_gain` field (gain is
-    /// member 1), so the generator's modulation surface keeps driving the kernel.
-    #[test]
-    fn generator_binding_def_retargets_onto_fused() {
-        use crate::persistence::EffectGraphDefExt;
-        use manifold_core::effect_graph_def::BindingTarget;
-        let json = r#"{
-            "version": 1, "name": "FuseGen",
-            "presetMetadata": {
-                "id": "FuseGen", "displayName": "Fuse Gen", "category": "Diagnostic",
-                "oscPrefix": "fuse_gen",
-                "params": [{ "id": "g", "name": "Gain", "min": 0.0, "max": 4.0, "defaultValue": 2.0 }],
-                "bindings": [{ "id": "g", "label": "Gain", "defaultValue": 2.0,
-                    "target": { "kind": "node", "nodeId": "gain", "param": "gain" } }]
-            },
-            "nodes": [
-                { "id": 0, "typeId": "system.generator_input", "nodeId": "gen_in" },
-                { "id": 1, "typeId": "node.checkerboard", "nodeId": "checker" },
-                { "id": 2, "typeId": "node.exposure", "nodeId": "gain" },
-                { "id": 3, "typeId": "node.invert", "nodeId": "invert" },
-                { "id": 4, "typeId": "node.absolute_value", "nodeId": "atomless" },
-                { "id": 5, "typeId": "system.final_output", "nodeId": "final_output" }
-            ], "wires": [
-                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
-                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in" },
-                { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" },
-                { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "in" }
-            ]
-        }"#;
-        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
-        let view = fused_generator_view_for(&def).expect("the generator fuses");
-        let cached = fused_generator_view_for(&def).expect("cached view");
-        assert!(Arc::ptr_eq(&view, &cached));
-        let fused = view.def.clone();
-        let (target, field) = view.retarget.get(&("gain".into(), "gain".into()))
-            .expect("value edit route survives caching");
-        let fused_id = NodeId::new("fused_region_0");
-        assert_eq!(view.node_retarget.get(&NodeId::new("gain")), Some(&fused_id));
-        assert_eq!(view.node_retarget.get(&NodeId::new("atomless")), Some(&fused_id));
-        assert_eq!(view.node_retarget, cached.node_retarget, "cache retains member attribution");
-        assert!(view.node_retarget.values().all(|id| {
-            view.def.nodes.iter().any(|node| resolve_node_id(node) == *id)
-        }));
-        let mut graph = (*fused).clone().into_graph(&registry(), &crate::scene::mesh_change::PreparedMeshRules::default()).unwrap();
-        let runtime_id = graph.instance_by_node_id(target).unwrap();
-        graph.set_param(runtime_id, field, ParamValue::Float(0.375)).unwrap();
-        assert_eq!(graph.get_node(runtime_id).unwrap().params.get(field.as_str()), Some(&ParamValue::Float(0.375)));
-        let meta = fused.preset_metadata.as_ref().expect("metadata preserved");
-        assert_eq!(meta.bindings.len(), 1);
-        match &meta.bindings[0].target {
-            BindingTarget::Node { node_id, param } => {
-                assert_eq!(node_id.as_str(), "fused_region_0", "binding re-anchored to the fused node");
-                assert_eq!(param, "n1_gain", "gain is member 1, so its field is n1_gain");
-            }
-            other => panic!("binding not retargeted to a node: {other:?}"),
-        }
-    }
 
-    /// The enum mirror of [`generator_binding_def_retargets_onto_fused`] +
-    /// [`fused_view_retargets_every_binding`]: a binding with an `EnumRound`
-    /// convert onto a member's Enum param (mix.mode — the FluidSim3D
-    /// `container` shape) retargets onto the fused uniform field with its
-    /// convert rewritten to `IntRound`, and the fused def passes the loader's
-    /// convert check (`BindingConvertTypeMismatch` is exactly what stranded
-    /// this before — the fused field introspects as Int, which rejects an
-    /// Enum-producing convert). The atom fuses instead of being classify
-    /// gated (59b3cf25 removed).
-    #[test]
-    fn enum_converted_binding_retargets_with_int_round_and_loads() {
-        use manifold_core::effect_graph_def::BindingTarget;
-        let json = r#"{
-            "version": 1, "name": "EnumFuseGen",
-            "presetMetadata": {
-                "id": "EnumFuseGen", "displayName": "Enum Fuse Gen", "category": "Diagnostic",
-                "oscPrefix": "enum_fuse_gen",
-                "params": [{ "id": "m", "name": "Mode", "min": 0.0, "max": 4.0, "defaultValue": 3.0, "wholeNumbers": true }],
-                "bindings": [{ "id": "m", "label": "Mode", "defaultValue": 3.0,
-                    "target": { "kind": "node", "nodeId": "mix", "param": "mode" },
-                    "convert": { "type": "EnumRound" } }]
-            },
-            "nodes": [
-                { "id": 0, "typeId": "system.generator_input", "nodeId": "gen_in" },
-                { "id": 1, "typeId": "node.checkerboard", "nodeId": "checker" },
-                { "id": 2, "typeId": "node.exposure", "nodeId": "gain" },
-                { "id": 3, "typeId": "node.mix", "nodeId": "mix" },
-                { "id": 4, "typeId": "system.final_output", "nodeId": "final_output" }
-            ], "wires": [
-                { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
-                { "fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "a" },
-                { "fromNode": 1, "fromPort": "out", "toNode": 3, "toPort": "b" },
-                { "fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in" }
-            ]
-        }"#;
-        let def: EffectGraphDef = serde_json::from_str(json).unwrap();
-        let reg = registry();
-        let fused_view = fuse_generator_view(&def, &reg)
-            .expect("an enum-binding-targeted member must fuse, not classify gate");
-        let fused = &fused_view.def;
-        let meta = fused.preset_metadata.as_ref().expect("metadata preserved");
-        assert_eq!(meta.bindings.len(), 1);
-        match &meta.bindings[0].target {
-            BindingTarget::Node { node_id, param } => {
-                assert_eq!(node_id.as_str(), "fused_region_0");
-                assert_eq!(param, "n2_mode", "mix is member 2, so its field is n2_mode");
-            }
-            other => panic!("binding not retargeted to a node: {other:?}"),
-        }
-        assert_eq!(
-            meta.bindings[0].convert,
-            manifold_core::effects::ParamConvert::IntRound,
-            "EnumRound must rewrite to IntRound on retarget — the fused u32 \
-             field consumes Float and casts at the uniform-write boundary"
-        );
-        // The fused def must clear the loader's binding-convert validation —
-        // the check that originally rejected EnumRound against the fused Int
-        // field. A load error here means the rewrite regressed.
-        use crate::persistence::EffectGraphDefExt;
-        (**fused)
-            .clone()
-            .into_graph(&reg, &crate::scene::mesh_change::PreparedMeshRules::default())
-            .expect("fused def with retargeted enum binding must load");
-    }
 
     /// The effect-side (`ParamBinding`) twin of the rewrite: retargeting maps
     /// `EnumRound → IntRound`, while a binding left on a surviving boundary
@@ -3352,30 +3074,6 @@ mod tests {
         );
     }
 
-    /// BUG-j8gy machinery: under `cfg(test)` the chain-build lookup compiles
-    /// inline (deterministic — no worker), so a fusable def comes back `Ready`
-    /// and lands in the content cache, exactly the pre-async behavior every
-    /// chain-build test relies on.
-    #[test]
-    fn fused_effect_view_for_compiles_inline_in_tests() {
-        let base = crate::load::loaded_preset_view::loaded_preset_view_by_id(&PresetTypeId::new("ColorGrade"))
-            .expect("ColorGrade canonical view");
-        match fused_effect_view_for(&base.canonical_def, base) {
-            FusedEffectLookup::Ready(view) => {
-                assert!(
-                    !view.fused_retarget.is_empty(),
-                    "ColorGrade fuses — Ready must carry the fused view"
-                );
-            }
-            FusedEffectLookup::Pending => panic!("test builds never report Pending"),
-            FusedEffectLookup::Refused => panic!("ColorGrade has a fusable region"),
-        }
-        // Second lookup is a cache hit on the same content key.
-        assert!(matches!(
-            fused_effect_view_for(&base.canonical_def, base),
-            FusedEffectLookup::Ready(_)
-        ));
-    }
 
     /// BUG-j8gy machinery: a `Pending` effect key that outlives the compile
     /// deadline expires into the negative cache (`Refused`) — the
@@ -3502,9 +3200,9 @@ mod tests {
     /// mirrors in-process so it runs under `cargo test` too.
     #[test]
     fn freeze_has_no_leaks() {
-        // CARGO_MANIFEST_DIR = <repo>/crates/manifold-renderer
+        // CARGO_MANIFEST_DIR points at the crate that owns this compiler.
         let freeze_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("src/node_graph/freeze");
+            .join("src/freeze");
         let mut files = Vec::new();
         rust_files_under(&freeze_dir, &mut files);
         assert!(!files.is_empty(), "freeze/ file walk found nothing — path broke");
@@ -3533,131 +3231,11 @@ mod tests {
         );
     }
 
-    #[test]
-    fn effect_key_ignores_binding_metadata() {
-        // Two effect defs differing only in binding label/default_value/scale/offset
-        // must produce the same effect content key AND byte-identical fused WGSL.
-        // These fields never reach the generated shader — codegen only reads binding
-        // targets via `param_is_binding_target` (region.rs:2178).
-        let base = crate::load::loaded_preset_view::loaded_preset_view_by_id(&PresetTypeId::new("ColorGrade"))
-            .expect("ColorGrade canonical view");
 
-        // Clone the base def and modify a binding's cosmetic fields
-        let mut def_with_metadata = (*base.canonical_def).clone();
-        if let Some(meta) = def_with_metadata.preset_metadata.as_mut()
-            && let Some(binding) = meta.bindings.first_mut() {
-                binding.label = "DIFFERENT_LABEL".to_string();
-                binding.default_value = 999.0;
-                binding.scale = 2.0;
-                binding.offset = 1.0;
-            }
 
-        // Effect content key must be identical (metadata doesn't affect codegen)
-        assert_eq!(
-            effect_def_content_key(&base.canonical_def),
-            effect_def_content_key(&def_with_metadata),
-            "binding metadata (label/default_value/scale/offset) must not affect effect content key"
-        );
 
-        // Generator key MUST still distinguish these (generator runtime reads bindings
-        // from the cached def, so normalization would lose metadata)
-        assert_ne!(
-            def_content_key(&base.canonical_def),
-            def_content_key(&def_with_metadata),
-            "generator key must still distinguish binding metadata differences"
-        );
-    }
-
-    #[test]
-    fn effect_key_distinguishes_binding_target_changes() {
-        // Two effect defs differing in a binding's target must produce different
-        // effect keys — retargeting changes which params the codegen treats as
-        // binding-exposed, producing different WGSL.
-        let base = crate::load::loaded_preset_view::loaded_preset_view_by_id(&PresetTypeId::new("ColorGrade"))
-            .expect("ColorGrade canonical view");
-
-        // Clone and modify a binding's target
-        let mut def_with_different_target = (*base.canonical_def).clone();
-        if let Some(meta) = def_with_different_target.preset_metadata.as_mut()
-            && let Some(binding) = meta.bindings.first_mut() {
-                // Change target to point to a different param — this MUST change the key
-                if let manifold_core::effect_graph_def::BindingTarget::Node { param, .. } = &mut binding.target {
-                    *param = "different_param".to_string();
-                }
-            }
-
-        assert_ne!(
-            effect_def_content_key(&base.canonical_def),
-            effect_def_content_key(&def_with_different_target),
-            "binding target changes must affect effect content key"
-        );
-    }
-
-    #[test]
-    fn generator_key_still_distinguishes_scale_offset() {
-        // Generator key must distinguish scale/offset changes because the generator
-        // runtime reads these from the cached fused def (registry.rs:253-268).
-        let base = crate::load::loaded_preset_view::loaded_preset_view_by_id(&PresetTypeId::new("Plasma"))
-            .expect("Plasma canonical view");
-
-        let mut def_with_scale = (*base.canonical_def).clone();
-        if let Some(meta) = def_with_scale.preset_metadata.as_mut()
-            && let Some(binding) = meta.bindings.first_mut() {
-                binding.scale = 2.0;
-            }
-
-        assert_ne!(
-            def_content_key(&base.canonical_def),
-            def_content_key(&def_with_scale),
-            "generator key must still distinguish scale changes"
-        );
-    }
-
-    #[test]
-    fn effect_binding_metadata_produces_byte_identical_wgsl() {
-        // Two effect defs differing only in binding metadata must produce
-        // byte-identical fused WGSL. This proves that key equality isn't
-        // circular — the actual codegen output is the same, not just the hash.
-        let base = crate::load::loaded_preset_view::loaded_preset_view_by_id(&PresetTypeId::new("ColorGrade"))
-            .expect("ColorGrade canonical view");
-
-        // Clone and modify binding metadata
-        let mut def_with_metadata = (*base.canonical_def).clone();
-        if let Some(meta) = def_with_metadata.preset_metadata.as_mut()
-            && let Some(binding) = meta.bindings.first_mut() {
-                binding.label = "DIFFERENT_LABEL".to_string();
-                binding.default_value = 999.0;
-                binding.scale = 2.0;
-                binding.offset = 1.0;
-            }
-
-        // Fuse both defs and extract WGSL
-        let registry = PrimitiveRegistry::with_builtin();
-        let fused_a = fuse_canonical_def(&base.canonical_def, &registry)
-            .expect("canonical ColorGrade must fuse");
-        let fused_b = fuse_canonical_def(&def_with_metadata, &registry)
-            .expect("metadata-modified ColorGrade must fuse");
-
-        // Extract WGSL from fused nodes
-        let wgsl_a: String = fused_a.def.nodes.iter()
-            .filter(|n| n.type_id == "node.wgsl_compute")
-            .filter_map(|n| n.wgsl_source.as_deref())
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        let wgsl_b: String = fused_b.def.nodes.iter()
-            .filter(|n| n.type_id == "node.wgsl_compute")
-            .filter_map(|n| n.wgsl_source.as_deref())
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        assert_eq!(
-            wgsl_a, wgsl_b,
-            "binding metadata changes must produce byte-identical fused WGSL"
-        );
-    }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testkit"))]
 #[doc(hidden)]
-pub(crate) mod testkit;
+pub mod testkit;

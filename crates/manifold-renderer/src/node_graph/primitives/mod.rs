@@ -378,7 +378,6 @@ pub use color::{
 };
 pub use color_sample::ColorSample;
 pub use colorize::Colorize;
-pub use compose::{MIX_MODES, MIX_TYPE_ID, Mix};
 pub use contrast::Contrast;
 pub use copy_positions::CopyPositions;
 pub use wave_shear_mesh::WaveShearMesh;
@@ -437,7 +436,6 @@ pub use container_bounds_3d::ContainerBounds3D;
 pub use flatten_to_camera_plane::FlattenToCameraPlane;
 pub use apply_radial_burst_3d_to_particles::ApplyRadialBurst3DToParticles;
 pub use scatter_particles_camera::{SCATTER_CAMERA_MODES, ScatterParticlesCamera};
-pub use gain::Gain;
 pub use gaussian_blur_variable_width::{BLUR_VARIABLE_AXES, GaussianBlurVariableWidth};
 pub use edges_from_grid_uv::EdgesFromGridUv;
 pub use edges_from_mesh::EdgesFromMesh;
@@ -496,24 +494,13 @@ pub use layer_source::LayerSource;
 pub use lic_integrate::LicIntegrate;
 pub use light::LightNode;
 pub use linear_gradient::LinearGradient;
-pub use liquid_solid_distance::LiquidSolidDistance;
 pub use loop_camera::{LOOP_CAMERA_AXIS_LABELS, LoopCamera};
 pub use luminance::Luminance;
 pub use magnitude_db::MagnitudeDb;
 pub use lut1d::ColorLut;
 pub use math::{MATH_OPS, Math};
-pub use masked_mix::MaskedMix;
 pub use matcap_two_tone::MatcapTwoTone;
 pub use grid_to_matter::GridToMatter;
-pub use matter_body_reaction::MatterBodyReaction;
-pub use matter_domain::MatterDomain;
-pub use matter_fill::MatterFill;
-pub use matter_frame::MatterFrame;
-pub use matter_grid_update::MatterGridUpdate;
-pub use matter_move_bodies::MatterMoveBodies;
-pub use matter_state::{MATTER_STATE_PORTS, MatterState};
-pub use matter_stats::MatterStats;
-pub use matter_to_grid::MatterToGrid;
 pub use particles_to_copies::ParticlesToCopies;
 pub use zero_array::ZeroArray;
 pub use melt_mesh::MeltMesh;
@@ -523,7 +510,6 @@ pub use cel_material::CelMaterial;
 pub use multi_blend::MultiBlend;
 pub use mux_array::MuxArray;
 pub use mux_scalar::MuxScalar;
-pub use mux_texture::MuxTexture;
 pub use neighbor_smooth::NeighborSmooth;
 pub use nested_cubes_geometry::{NESTED_CUBES_INSTANCE_COUNT, NestedCubesGeometry};
 pub use noise_displace::NoiseDisplace;
@@ -618,22 +604,22 @@ pub use scene_object::SceneObjectNode;
 pub use shatter_mesh::ShatterMesh;
 pub use uv_displace_by_flow::UvDisplaceByFlow;
 pub use uv_field::UvField;
-pub use value::Value;
 pub use vignette::{VIGNETTE_SHAPES, Vignette};
 pub use voronoi_2d::Voronoi2D;
 pub use voxelize_mesh::VoxelizeMesh;
-pub use wgsl_compute::{DEFAULT_WGSL as DEFAULT_WGSL_COMPUTE, WgslCompute};
 pub use watercolor::{WATERCOLOR_TYPE_ID, Watercolor};
 pub use wet_dry_mix::{WET_DRY_TYPE_ID, WetDry};
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use manifold_node_engine::primitives::mix::Mix;
+use manifold_node_engine::validation::validate;
+use super::*;
     use std::collections::HashSet;
 
     use manifold_core::{Beats, Seconds};
 
-    use manifold_node_engine::{exec::effect_node::EffectNode, exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, graph::Graph, parameters::ParamType, parameters::ParamValue, scene::boundary_nodes::Source, exec::execution_plan::compile, validate};
+    use manifold_node_engine::{exec::effect_node::EffectNode, exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, graph::Graph, parameters::ParamType, parameters::ParamValue, scene::boundary_nodes::Source, exec::execution_plan::compile};
 
     fn frame_time() -> FrameTime {
         FrameTime {
@@ -951,7 +937,6 @@ mod platonic_mesh;
 mod interpolate_particle_frames;
 mod mix_arrays;
 pub use interpolate_particle_frames::InterpolateParticleFrames;
-pub use push_out_of_solid::PushOutOfSolid;
 pub use mix_arrays::MixArrays;
 
 #[cfg(test)]

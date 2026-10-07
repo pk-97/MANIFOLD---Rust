@@ -34,7 +34,7 @@ type ReusableBuckets = AHashMap<ReusableKey, Vec<ResourceId>>;
 /// Arrays whose size can change after planning because a provider hands in
 /// storage of its own size. Derived once during preparation. All of them
 /// keep dedicated storage so replacement cannot alter an unrelated array.
-pub(crate) fn growing_array_resources(graph: &Graph, plan: &ExecutionPlan) -> Vec<bool> {
+pub fn growing_array_resources(graph: &Graph, plan: &ExecutionPlan) -> Vec<bool> {
     capacity_lineage(graph, plan, |node, port| node.node.provides_array_output(port))
 }
 
@@ -591,8 +591,8 @@ fn unbound_error(
 
 /// Test oracle for temporary reuse: no physical root is ever live for two
 /// logical arrays at once.
-#[cfg(test)]
-pub(crate) mod lifetimes {
+#[cfg(any(test, feature = "testkit"))]
+pub mod lifetimes {
     use super::*;
 
     /// Steps over which each array must keep its contents: producer to last
@@ -630,7 +630,7 @@ pub(crate) mod lifetimes {
     /// are live. A declared in-place alias is one array for this check: its
     /// input and output are the same storage by contract. Returns how many
     /// arrays took a root another array had released.
-    pub(crate) fn assert_shared_roots_never_overlap(
+    pub fn assert_shared_roots_never_overlap(
         graph: &Graph,
         plan: &ExecutionPlan,
         allocation: &ArrayAllocationPlan,
@@ -1071,5 +1071,5 @@ mod tests {
 
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testkit"))]
 mod testkit;

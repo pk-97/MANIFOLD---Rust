@@ -50,13 +50,14 @@ use manifold_node_engine::param_binding::composite_handle::CompositeHandle;
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use manifold_node_engine::validation::validate;
+use super::*;
     use manifold_node_engine::{exec::effect_node::NodeInstanceId, validation::GraphError, parameters::ParamValue};
     use std::collections::HashSet;
 
     use manifold_core::{Beats, Seconds};
 
-    use manifold_node_engine::{exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, graph::Graph, scene::boundary_nodes::Source, exec::execution_plan::compile, validate};
+    use manifold_node_engine::{exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, graph::Graph, scene::boundary_nodes::Source, exec::execution_plan::compile};
 
     fn frame_time() -> FrameTime {
         FrameTime {

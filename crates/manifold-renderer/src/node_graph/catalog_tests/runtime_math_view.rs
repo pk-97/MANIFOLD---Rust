@@ -1,4 +1,7 @@
 #[cfg(feature = "gpu-proofs")]
+use manifold_node_engine::exec::execution_plan::ResourceId;
+use manifold_node_engine::persistence::PrimitiveRegistry;
+#[cfg(feature = "gpu-proofs")]
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 #[cfg(feature = "gpu-proofs")]
 use manifold_node_engine::runtime::preset_context::PresetContext;
@@ -12,7 +15,6 @@ use manifold_core::params::ParamManifest;
 #[cfg(feature = "gpu-proofs")]
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::runtime::*;
-use crate::node_graph::*;
 use manifold_core::effect_graph_def::BindingTarget;
 fn owner() -> EffectGraphDef {
     let mut owner = crate::node_graph::catalog_tests::math_view_fixtures::test_owner();
@@ -548,7 +550,7 @@ fn math_view_native_scene_parity_orbit_change_and_overlay() {
     let event_mask = runtime
         .graph
         .instance_by_node_id(
-            &manifold_node_engine::load::expand::math_resource_node_id(
+            &manifold_node_engine::load::expand::compiler::math_events::resource_node_id(
                 &owner.scene_modifiers[1].id,
                 &owner.scene_modifiers[1].mesh_frames[0].target,
                 "weights",

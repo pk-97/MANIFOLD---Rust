@@ -1,7 +1,8 @@
 //! FLIP InfluenceGrid decay and source application (spread is disabled in the engine).
 //! Ported from FLIP Fluids (MIT, Copyright (C) 2026 Ryan L. Guy & Dennis Fassbaender); see THIRD_PARTY_NOTICES.md.
 
-use super::{sort_particles_into_cells::float_param, whitewater_obstacle_source::WhitewaterSource};
+use crate::float_param;
+use super::whitewater_obstacle_source::WhitewaterSource;
 use crate::{exec::effect_node::EffectNodeContext, exec::effect_node::ParamValues, parameters::ParamDef, parameters::ParamType, parameters::ParamValue, primitive::Primitive};
 use std::borrow::Cow;
 
@@ -55,5 +56,5 @@ impl Primitive for WhitewaterInfluence {
     }
 }
 
-#[cfg(any(test, feature = "gpu-proofs"))]
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 mod extent;

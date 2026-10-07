@@ -5,6 +5,7 @@
 //! graph executor. It samples bounded source timelines and layout choices
 //! instead of becoming a thumbnail/render sweep.
 
+use manifold_renderer as _;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::params::{Param, ParamManifest};
 use manifold_node_engine::load::loaded_preset_view::loaded_preset_view_by_id;

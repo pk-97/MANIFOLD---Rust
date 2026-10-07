@@ -1047,8 +1047,8 @@ impl Executor {
 
     /// Test-only read of the logical per-resource mesh revision — the
     /// §3.2 authority state the slot snapshot is published from.
-    #[cfg(test)]
-    pub(crate) fn mesh_revision_of_res(
+    #[cfg(any(test, feature = "testkit"))]
+    pub fn mesh_revision_of_res(
         &self,
         res: ResourceId,
     ) -> crate::scene::mesh_change::MeshRevision {
@@ -5349,9 +5349,7 @@ mod tests {
                 ],
                 "wires": [
                     { "fromNode": 0, "fromPort": "vertices", "toNode": 1, "toPort": "in" },
-                    { "fromNode": 0, "fromPort": "weights", "toNode": 1, "toPort": "weights" },
                     { "fromNode": 1, "fromPort": "out", "toNode": 2, "toPort": "in" },
-                    { "fromNode": 0, "fromPort": "weights", "toNode": 2, "toPort": "weights" },
                     { "fromNode": 3, "fromPort": "out", "toNode": 5, "toPort": "camera" },
                     { "fromNode": 4, "fromPort": "out", "toNode": 5, "toPort": "material" },
                     { "fromNode": 2, "fromPort": "out", "toNode": 5, "toPort": "vertices" },
@@ -5359,7 +5357,8 @@ mod tests {
                 ]
             }"#;
             let def: EffectGraphDef = serde_json::from_str(json).unwrap();
-            let registry = PrimitiveRegistry::with_builtin();
+            let mut registry = PrimitiveRegistry::with_builtin();
+            crate::testkit::fusion_fixtures::register_mesh_fusion_fixture(&mut registry);
 
             // The scripted source replaces `system.mesh_input` (identical
             // ports) because MockBackend cannot run the real producers; its

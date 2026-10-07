@@ -76,10 +76,10 @@ fn fused_source() -> String {
     format!("{WHITEWATER_COMMON}\n{LIQUID_FACES}\n{LIQUID_FIELD}\n{WHITEWATER_FUSED_SHADER}")
 }
 
-#[cfg(all(test, feature = "gpu-proofs"))]
+#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 mod reference;
 
-#[cfg(all(test, feature = "gpu-proofs"))]
+#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 pub(crate) fn reference_proof_node() -> Box<dyn crate::exec::effect_node::EffectNode> {
     let mut node = WhitewaterStep::new();
     node.step.reference.enabled = true;
@@ -87,7 +87,7 @@ pub(crate) fn reference_proof_node() -> Box<dyn crate::exec::effect_node::Effect
     Box::new(node)
 }
 
-#[cfg(all(test, feature = "gpu-proofs"))]
+#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 pub(crate) fn fused_proof_node() -> Box<dyn crate::exec::effect_node::EffectNode> {
     let mut node = WhitewaterStep::new();
     node.step.reference.capture = true;
@@ -101,9 +101,9 @@ mod fused_tests;
 // runtime flag, or reference branch is compiled into a shipping build.
 macro_rules! emitter_path {
     ($reference:expr, $oracle:block, $fused:block) => {{
-        #[cfg(all(test, feature = "gpu-proofs"))]
+        #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
         { if $reference $oracle else $fused }
-        #[cfg(not(all(test, feature = "gpu-proofs")))]
+        #[cfg(not(all(any(test, feature = "testkit"), feature = "gpu-proofs")))]
         $fused
     }};
 }
@@ -324,7 +324,7 @@ impl LifecycleParams {
     }
 }
 
-pub(crate) const WHITEWATER_STEP_SHADER: &str = include_str!("shaders/whitewater_step.wgsl");
+pub const WHITEWATER_STEP_SHADER: &str = include_str!("shaders/whitewater_step.wgsl");
 
 pub(crate) const OUTPUTS: [&str; 4] = ["foam_particles", "bubble_particles", "spray_particles", "dust_particles"];
 /// The population counts, in [`OUTPUTS`]' order.
@@ -663,7 +663,7 @@ pub(crate) fn packed_face_source(tick: bool, packed: bool, axes: [bool; 3]) -> R
 }
 
 impl<'a> FaceSource<'a> {
-    #[cfg(all(test, feature = "gpu-proofs"))]
+    #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
     fn axes(self) -> [&'a GpuBuffer; 3] {
         match self {
             Self::Axes(axes) => axes,
@@ -1127,8 +1127,8 @@ impl Outputs {
 
 /// The node's GPU side: pipelines, the pool and its fields, the outputs.
 #[derive(Default)]
-pub(crate) struct Step {
-    #[cfg(all(test, feature = "gpu-proofs"))]
+pub struct Step {
+    #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
     reference: reference::Reference,
     pipelines: Pipelines,
     surface_distance: super::whitewater_distance::SurfaceDistance,
@@ -1212,7 +1212,7 @@ impl Step {
     }
 
     fn reserve(&mut self, device: &GpuDevice, shape: StepShape, particles: u64, tick_mode: bool) -> Result<(), String> {
-        #[cfg(all(test, feature = "gpu-proofs"))]
+        #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
         self.reference.reserve(device, particles as u32, shape.capacity)?;
         self.surface_distance.reserve(device, shape.face_cells)?;
         if self.shape != Some(shape) || self.tick_mode != tick_mode {
@@ -1470,7 +1470,7 @@ impl Step {
             curvature = 1 - curvature;
         }
         let [sampled, energy, unscaled, dust_energy, wavecrest_bits] = scratch;
-        #[cfg(all(test, feature = "gpu-proofs"))]
+        #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
         let reference = self.reference.enabled;
         self.turbulence(enc, frame, inputs, distance);
         let [u, v, w] = self.face_axes(inputs.faces);
@@ -1483,15 +1483,15 @@ impl Step {
                 &[inputs.particles, u, v, w,
                   surface, &f.cells, &f.curvature[curvature], &f.turbulence, &f.influence[influence_next],
                   sampled, energy, offsets, unscaled, wavecrest_bits], emitters, FUSED_ENTRIES[pass.index()].1, Barrier::After);
-            #[cfg(all(test, feature = "gpu-proofs"))]
+            #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
             self.reference.record_dispatch(FUSED_ENTRIES[pass.index()].1, emitters);
         });
-        #[cfg(all(test, feature = "gpu-proofs"))]
+        #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
         let (sampled, energy, unscaled) = if reference {
             let [jittered, sampled, energy, _, _] = self.reference.scratch();
             (jittered, energy, sampled)
         } else { (sampled, energy, unscaled) };
-        #[cfg(all(test, feature = "gpu-proofs"))]
+        #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
         self.reference.capture_emit(enc, sampled, unscaled, energy, offsets, emitters, frame.dust_emission);
         self.emission_scan.encode_labelled(enc, emitters.max(1) as usize, EMISSION_SCAN);
         self.spawn(enc, frame, inputs, surface, offsets, sampled, energy, emitters, false);
@@ -1512,12 +1512,12 @@ impl Step {
                       &f.state, &f.state, &f.state, &f.state, &f.turbulence,
                       &f.influence[influence_next], &f.state, dust_energy, offsets, &f.state, wavecrest_bits],
                     emitters, FUSED_ENTRIES[pass.index()].1, Barrier::After);
-                #[cfg(all(test, feature = "gpu-proofs"))]
+                #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
                 self.reference.record_dispatch(FUSED_ENTRIES[pass.index()].1, emitters);
             });
-            #[cfg(all(test, feature = "gpu-proofs"))]
+            #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
             let dust_energy = if reference { self.reference.dust_energy() } else { dust_energy };
-            #[cfg(all(test, feature = "gpu-proofs"))]
+            #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
             self.reference.capture_dust(enc, dust_energy, offsets, emitters);
             self.emission_scan.encode_labelled(enc, emitters.max(1) as usize, EMISSION_SCAN);
             self.spawn(enc, frame, inputs, surface, offsets, unscaled, dust_energy, emitters, true);
@@ -1545,7 +1545,7 @@ impl Step {
             let pass = Fused::Turbulence;
             dispatch(enc, &self.pipelines.fused[pass.index()], bytemuck::bytes_of(&params),
                 &[&f.state, u, v, w, distance, &f.turbulence], params.count, FUSED_ENTRIES[pass.index()].1, Barrier::After);
-            #[cfg(all(test, feature = "gpu-proofs"))]
+            #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
             self.reference.record_dispatch(FUSED_ENTRIES[pass.index()].1, params.count);
         });
     }
@@ -1563,10 +1563,10 @@ impl Step {
             dispatch(enc, &self.pipelines.fused[pass.index()], bytemuck::bytes_of(&SpawnParams::new(frame, emitters, dust)),
                 &[sampled, u, v, w,
                   surface, &f.cells, offsets, energy, inputs.solid, &f.typed], frame.shape.capacity, label, Barrier::After);
-            #[cfg(all(test, feature = "gpu-proofs"))]
+            #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
             self.reference.record_dispatch(label, frame.shape.capacity);
         });
-        #[cfg(all(test, feature = "gpu-proofs"))]
+        #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
         self.reference.capture_particle(enc, &f.typed, usize::from(dust));
     }
 
@@ -1588,10 +1588,10 @@ impl Step {
                   motion.map_or(empty, |m| m.schedule), history[0], history[1], history[2],
                   motion.and_then(|m| m.fields.forces).unwrap_or(empty), motion.and_then(|m| m.fields.impulses).unwrap_or(empty), b],
                 frame.shape.capacity, FUSED_ENTRIES[pass.index()].1, Barrier::After);
-            #[cfg(all(test, feature = "gpu-proofs"))]
+            #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
             self.reference.record_dispatch(FUSED_ENTRIES[pass.index()].1, frame.shape.capacity);
         });
-        #[cfg(all(test, feature = "gpu-proofs"))]
+        #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
         self.reference.capture_particle(enc, b, 2);
     }
 
@@ -1792,17 +1792,17 @@ impl Primitive for WhitewaterStep {
     }
 
     fn provided_array_output(&self, port: &str) -> Option<&GpuBuffer> {
-        #[cfg(all(test, feature = "gpu-proofs"))]
+        #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
         if let Some(axis) = ["proof_unpack_u", "proof_unpack_v", "proof_unpack_w"].iter().position(|&p| p == port) {
             assert!(self.step.reference.capture);
             return self.step.fields.as_ref()?.unpacked_faces.as_ref().map(|axes| &axes[axis]);
         }
-        #[cfg(all(test, feature = "gpu-proofs"))]
+        #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
         if port == "proof_turbulence" {
             assert!(self.step.reference.capture && self.step.reference.turbulence_dispatches.get() > 0);
             return self.step.fields.as_ref().map(|f| &f.turbulence);
         }
-        #[cfg(all(test, feature = "gpu-proofs"))]
+        #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
         if let Some(buffer) = self.step.reference.output(port) { return Some(buffer); }
         if self.tick_mode {
             return self.step.tick_output(port);
@@ -1909,5 +1909,5 @@ impl Primitive for WhitewaterStep {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod copy_tests;
 
-#[cfg(any(test, feature = "gpu-proofs"))]
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 mod extent;

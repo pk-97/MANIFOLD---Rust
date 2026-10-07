@@ -1,6 +1,16 @@
 //! CPU ancestry sampling for native rigid-body and fluid simulation inputs.
 
-use crate::runtime::*;
+use crate::exec::effect_node::FrameTime;
+use crate::exec::execution_plan::ExecutionPlan;
+use crate::graph::Graph;
+use crate::param_binding::ResolvedBinding;
+use crate::param_binding::ResolvedTarget;
+use crate::parameters::ParamValue;
+use crate::runtime::PresetRuntime;
+use crate::validation::GraphError;
+use manifold_core::Beats;
+use manifold_core::Seconds;
+use crate::scene::boundary_nodes::GENERATOR_INPUT_TYPE_ID;
 use crate::exec::effect_node::ParamValues;
 use crate::water::physics::{PhysicsHistoryDrainScope, offline_simulation};
 use crate::runtime::preset_context::ProjectTempo;
@@ -48,7 +58,7 @@ fn setup_input(kind: &str, port: &str) -> bool {
 /// Historical CPU passes hold these full-frame outputs instead of evaluating
 /// their setup/GPU ancestry. Pin them before compilation so the last ordinary
 /// reader cannot return their slots to the pool between observations.
-pub(super) fn retain_physics_setup_outputs(graph: &mut Graph) -> Result<(), GraphError> {
+pub(crate) fn retain_physics_setup_outputs(graph: &mut Graph) -> Result<(), GraphError> {
     let outputs: Vec<_> = graph
         .nodes()
         .flat_map(|node| {
@@ -69,7 +79,7 @@ pub(super) fn retain_physics_setup_outputs(graph: &mut Graph) -> Result<(), Grap
 /// The last observed external inputs to the stateless physics ancestry. Keys
 /// and storage are prepared with the graph; capturing another frame only
 /// replaces values (String/Table values retain their existing Arc storage).
-pub(super) struct PhysicsInputSnapshot {
+pub(crate) struct PhysicsInputSnapshot {
     values: Vec<Option<ParamValues>>,
     clock_steps: Vec<usize>,
     project_tempo: Option<ProjectTempo>,
@@ -151,7 +161,7 @@ impl PhysicsInputSnapshot {
         }
     }
 
-    pub(super) fn prepare(graph: &Graph, plan: &ExecutionPlan, steps: &[bool]) -> Self {
+    pub(crate) fn prepare(graph: &Graph, plan: &ExecutionPlan, steps: &[bool]) -> Self {
         assert_eq!(steps.len(), plan.steps().len());
         let mut clock_steps = Vec::new();
         let values = plan
@@ -221,7 +231,7 @@ impl PhysicsInputSnapshot {
 /// The retained CPU ancestry of every physics world. Historical sampling
 /// evaluates this closure only; GPU nodes and stateful upstream nodes cannot
 /// be replayed safely at a past transport time.
-pub(super) fn physics_sample_steps(
+pub(crate) fn physics_sample_steps(
     graph: &Graph,
     plan: &ExecutionPlan,
 ) -> Result<Option<Vec<bool>>, String> {
@@ -373,7 +383,7 @@ impl PresetRuntime {
     /// the same timestamp; InputHistory preserves that discontinuity. Offline
     /// catch-up drains native ticks in bounded input batches without publishing
     /// intermediate graph outputs. Preview continues to retain its time debt.
-    pub(super) fn sample_physics_history(&mut self, current: FrameTime) {
+    pub(crate) fn sample_physics_history(&mut self, current: FrameTime) {
         #[cfg(feature = "gpu-proofs")]
         self.observe_physics_source_assets();
         let (Some(inputs), Some(steps)) = (

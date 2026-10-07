@@ -47,7 +47,8 @@ use super::gpu_flip_pressure::{MAX_ITERATIONS, PressureSolver, Solve, Stop, Wate
 use super::liquid_solid_distance::{SolidDistanceJob, encode_solid_distance};
 use super::liquid_stats::{SOLVER_WORDS, with_stats_layout};
 use super::prefix_scan::ScanLabels;
-use super::sort_particles_into_cells::{LIQUID_PARTICLE_READ, ParticleSorter, SortJob, SortLabels, float_param, int_param};
+use crate::float_param;
+use super::sort_particles_into_cells::{LIQUID_PARTICLE_READ, ParticleSorter, SortJob, SortLabels, int_param};
 use crate::exec::effect_node::{EffectNodeContext, ParamValues};
 use crate::water::fluid_particles::{FaceSample, FluidParticle};
 use crate::water::fluid_role::MAX_FLUID_ROLES;
@@ -64,9 +65,9 @@ const NAME: &str = "GPU FLIP Step";
 
 /// Layers of valid faces the step's face grid holds around the water at
 /// least: both extensions run `band_layers` ≥ 5.
-pub(crate) const FACE_VALID_LAYERS: u32 = 2;
+pub const FACE_VALID_LAYERS: u32 = 2;
 /// Configured engine CFL, shared with the clock.
-pub(crate) const ENGINE_CFL: u32 = 5;
+pub const ENGINE_CFL: u32 = 5;
 
 /// A fenced maximum for the exact incoming marker state can prove that the
 /// GPU scheduler's first step consumes the entire interval. Keep a 1% margin
@@ -84,12 +85,12 @@ fn one_step_cfl_safe(marker_speed: f32, obstacle_speed: f32, interval: f32, cell
 }
 
 /// FLIP Fluids _extrapolateFluidVelocities: configured CFL, never travel.
-pub(crate) fn band_layers(cfl: u32) -> u32 {
+pub fn band_layers(cfl: u32) -> u32 {
     (3f64.sqrt() * f64::from(cfl)).ceil() as u32 + 3
 }
 
 /// Bytes of the step's face grid at `cells`: one record per padded cell.
-pub(crate) fn face_bytes(cells: [u32; 3]) -> u64 {
+pub fn face_bytes(cells: [u32; 3]) -> u64 {
     cells.iter().map(|&n| u64::from(n) + 1).product::<u64>() * size_of::<FaceSample>() as u64
 }
 
@@ -105,7 +106,7 @@ fn cell_bytes(cells: [u32; 3]) -> u64 {
 
 /// Cells per tile side (GPU_FLIP_SPARSE_BLOCKS_DESIGN.md section 3 (The tile
 /// table)). Partial edge tiles are allowed: no lattice side rule.
-pub(crate) const TILE: u32 = 8;
+pub const TILE: u32 = 8;
 
 /// The cell passes' reach from a particle-holding cell, in cells: the tile
 /// set C is every tile within it (`tiles_classify` writes the distance).
@@ -146,7 +147,7 @@ fn tile_args_words(ring_max: u32) -> u64 {
 /// Bytes of the tile table at `cells` for `ring_max`: the nearness, two
 /// ring halves, the list by ring, the retired list, the counts and the
 /// triples.
-#[cfg(any(test, feature = "gpu-proofs"))]
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 pub(crate) fn tile_scratch_bytes(cells: [u32; 3], ring_max: u32) -> u64 {
     (5 * tile_total(cells) + tile_count_words(ring_max) + tile_args_words(ring_max)) * 4
 }
@@ -155,7 +156,7 @@ pub(crate) fn tile_scratch_bytes(cells: [u32; 3], ring_max: u32) -> u64 {
 /// besides the sort's ranges and the solver's scratch: the sorted particles,
 /// [`LATTICE_CELL_ARRAYS`] cell arrays, the solid corners, six face grids, the pocket gate,
 /// the pocket sums, the coarse pockets and the tile table.
-#[cfg(any(test, feature = "gpu-proofs"))]
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 pub(crate) fn scratch_bytes(cells: [u32; 3], slots: u64, ring_max: u32) -> u64 {
     let corners = cells.iter().map(|&n| u64::from(n) + 1).product::<u64>() * 4;
     slots.max(1) * size_of::<FluidParticle>() as u64
@@ -169,7 +170,7 @@ pub(crate) fn scratch_bytes(cells: [u32; 3], slots: u64, ring_max: u32) -> u64 {
         + mask_saved_bytes(cells, slots.max(1))
 }
 
-#[cfg(any(test, feature = "gpu-proofs"))]
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 fn mask_saved_bytes(cells: [u32; 3], slots: u64) -> u64 {
     slots * size_of::<FluidParticle>() as u64
         + cell_bytes(cells)
@@ -187,20 +188,20 @@ fn pocket_coarse_bytes(cells: [u32; 3]) -> u64 {
 /// exposes node access. With it set, `tiles_classify` marks every tile
 /// occupied and `tiles_rings` writes ring 0 everywhere, so the sparse passes
 /// run dense through the same kernels and lists (design D-6).
-#[cfg(all(test, feature = "gpu-proofs"))]
+#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 static ALL_TILES: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-#[cfg(all(test, feature = "gpu-proofs"))]
-pub(crate) fn set_all_tiles(on: bool) {
+#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
+pub fn set_all_tiles(on: bool) {
     ALL_TILES.store(on, std::sync::atomic::Ordering::SeqCst);
 }
 
 pub(super) fn all_tiles() -> bool {
-    #[cfg(all(test, feature = "gpu-proofs"))]
+    #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
     {
         ALL_TILES.load(std::sync::atomic::Ordering::SeqCst)
     }
-    #[cfg(not(all(test, feature = "gpu-proofs")))]
+    #[cfg(not(all(any(test, feature = "testkit"), feature = "gpu-proofs")))]
     {
         false
     }
@@ -211,11 +212,11 @@ pub(super) fn all_tiles() -> bool {
 /// (gpu_flip_tile_tests.rs) after the retire: NaN into every cell array of
 /// the tiles outside rings 0 and 1 (design section 4 (The defined-value
 /// rule)).
-#[cfg(all(test, feature = "gpu-proofs"))]
+#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 static POISON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-#[cfg(all(test, feature = "gpu-proofs"))]
-pub(crate) fn set_poison(on: bool) {
+#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
+pub fn set_poison(on: bool) {
     POISON.store(on, std::sync::atomic::Ordering::SeqCst);
 }
 
@@ -223,20 +224,20 @@ pub(crate) fn set_poison(on: bool) {
 /// slots)): with it set, every pass of an inactive clock slot runs as it did
 /// before the slots were gated. The gate plan is zeros, so only the passes
 /// that always read the clock see the slot as inactive.
-#[cfg(all(test, feature = "gpu-proofs"))]
+#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 static GATE_OFF: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-#[cfg(all(test, feature = "gpu-proofs"))]
-pub(crate) fn set_gate_off(on: bool) {
+#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
+pub fn set_gate_off(on: bool) {
     GATE_OFF.store(on, std::sync::atomic::Ordering::SeqCst);
 }
 
 pub(super) fn gating() -> bool {
-    #[cfg(all(test, feature = "gpu-proofs"))]
+    #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
     {
         !GATE_OFF.load(std::sync::atomic::Ordering::SeqCst)
     }
-    #[cfg(not(all(test, feature = "gpu-proofs")))]
+    #[cfg(not(all(any(test, feature = "testkit"), feature = "gpu-proofs")))]
     {
         true
     }
@@ -244,7 +245,7 @@ pub(super) fn gating() -> bool {
 
 // The proof compares the no-body clear with the existing solid kernels.
 // This switch and its load are absent from production builds.
-#[cfg(all(test, feature = "gpu-proofs"))]
+#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 static FORCE_SOLID_VELOCITY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 #[cfg(all(test, feature = "gpu-proofs"))]
@@ -253,7 +254,7 @@ pub(crate) fn set_force_solid_velocity(on: bool) {
 }
 
 fn solid_velocity_needed(body_count: i32) -> bool {
-    #[cfg(all(test, feature = "gpu-proofs"))]
+    #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
     if FORCE_SOLID_VELOCITY.load(std::sync::atomic::Ordering::SeqCst) {
         return true;
     }
@@ -263,7 +264,7 @@ fn solid_velocity_needed(body_count: i32) -> bool {
 /// The lattice's cell-sized arrays (`LatticeBuffers`): water, φ, the
 /// right-hand side, the pressure, the pocket state and label, the solve
 /// mask.
-#[cfg(any(test, feature = "gpu-proofs"))]
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 const LATTICE_CELL_ARRAYS: u64 = 7;
 
 /// Three words a cell (a pocket's 64-bit sum and its count, indexed by its
@@ -662,7 +663,7 @@ struct NarrowHistory {
 }
 
 #[derive(Default)]
-pub(crate) struct StepState {
+pub struct StepState {
     identity_ops: super::particle_identity::ParticleIdentity,
     pipelines: Option<Pipelines>,
     mask_pipeline: Option<GpuComputePipeline>,
@@ -819,7 +820,7 @@ fn extend(enc: &mut GpuEncoder, pipes: &Pipelines, clock_plan: &GpuBuffer, param
     }
 }
 
-#[cfg(all(test, feature = "gpu-proofs"))]
+#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 static FORCE_DENSE_EXTEND: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 #[cfg(all(test, feature = "gpu-proofs"))]
@@ -828,7 +829,7 @@ pub(crate) fn set_force_dense_extend(on: bool) {
 }
 
 fn indirect_extend() -> bool {
-    #[cfg(all(test, feature = "gpu-proofs"))]
+    #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
     if FORCE_DENSE_EXTEND.load(std::sync::atomic::Ordering::SeqCst) {
         return false;
     }
@@ -845,7 +846,7 @@ pub(crate) fn pocket_rounds(cells: [u32; 3]) -> u32 {
     cells.into_iter().max().unwrap_or(1)
 }
 
-#[cfg(all(test, feature = "gpu-proofs"))]
+#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 static FORCE_INDIRECT_POCKETS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 #[cfg(all(test, feature = "gpu-proofs"))]
@@ -854,7 +855,7 @@ pub(crate) fn set_force_indirect_pockets(on: bool) {
 }
 
 fn segment_pockets() -> bool {
-    #[cfg(all(test, feature = "gpu-proofs"))]
+    #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
     if FORCE_INDIRECT_POCKETS.load(std::sync::atomic::Ordering::SeqCst) {
         return false;
     }
@@ -2284,9 +2285,10 @@ crate::primitive! {
     },
 }
 
-#[cfg(all(test, feature = "gpu-proofs"))]
+#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 impl GpuFlipStep {
     /// The sheet seeding stage, for its proofs.
+    #[cfg(test)]
     pub(crate) fn sheeting(&self) -> &super::gpu_flip_sheeting::GpuSheeting {
         &self.state.sheeting
     }
@@ -3099,5 +3101,5 @@ mod tests {
     }
 }
 
-#[cfg(any(test, feature = "gpu-proofs"))]
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 mod extent;

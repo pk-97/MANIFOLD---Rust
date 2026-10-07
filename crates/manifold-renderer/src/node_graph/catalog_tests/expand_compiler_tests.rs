@@ -1,5 +1,7 @@
+use manifold_node_engine::load::expand::compiler::prepare_legacy_scene_modifier_math_view;
 use manifold_core::scene_modifier_preset::{SceneStageScope, SceneEndpoint, SceneModifierInstanceDef, SceneNodeRef};
-use manifold_node_engine::load::expand::{LegacyMathViewScope, PreparedSceneModifierGraph};
+use manifold_node_engine::load::expand::math_view::LegacyMathViewScope;
+use manifold_node_engine::load::expand::PreparedSceneModifierGraph;
 use std::collections::BTreeSet;
 use manifold_node_engine::load::expand::*;
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphWire, SerializedParamValue};

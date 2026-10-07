@@ -1,20 +1,20 @@
 #[derive(Clone, Default)]
-pub(crate) struct BeatEnvelopeState {
+pub struct BeatEnvelopeState {
     last_count: Option<i32>,
     hit_beat: manifold_core::Beats,
     active: bool,
 }
 
 #[derive(Clone, Copy, Default)]
-pub(crate) struct BeatEnvelopeDurations {
-    pub(crate) window: f32,
-    pub(crate) attack: f32,
-    pub(crate) hold: f32,
-    pub(crate) tail: f32,
+pub struct BeatEnvelopeDurations {
+    pub window: f32,
+    pub attack: f32,
+    pub hold: f32,
+    pub tail: f32,
 }
 
 impl BeatEnvelopeState {
-    pub(crate) fn step(
+    pub fn step(
         &mut self,
         trigger: f32,
         initial_count: Option<f32>,
@@ -91,7 +91,7 @@ impl BeatEnvelopeState {
         Some((output.0 as f32, output.1 as f32))
     }
 
-    pub(crate) fn clear(&mut self) {
+    pub fn clear(&mut self) {
         *self = Self::default();
     }
 }

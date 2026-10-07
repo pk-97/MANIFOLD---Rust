@@ -32,7 +32,7 @@ fn words(bytes: &[u8]) -> Vec<u32> {
     bytes.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
 }
 /// One fixture's fingerprint lines and the first tick each event was seen.
-pub(crate) fn run(label: &str, def: EffectGraphDef, lines: &mut Vec<String>) -> [Option<u32>; EVENTS.len()] {
+pub fn run(label: &str, def: EffectGraphDef, lines: &mut Vec<String>) -> [Option<u32>; EVENTS.len()] {
     let mut show = Show::new(def, (96, 54), true, &[]);
     show.restart();
     assert!(!show.warmup_pending(), "{label}: warmup did not finish inside its frame bound");

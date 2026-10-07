@@ -1,5 +1,5 @@
 pub mod atmosphere;
-mod boundary_nodes;
+pub mod boundary_nodes;
 pub mod camera;
 pub mod depth_rule;
 pub mod exposure_source;

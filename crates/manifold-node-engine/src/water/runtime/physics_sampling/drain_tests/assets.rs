@@ -1,5 +1,12 @@
 //! Native take lifecycle with a controlled source capability. Actual glTF
 //! animation sampling/admission is covered separately, not by this test node.
+use crate::exec::effect_node::FrameTime;
+use crate::persistence::PrimitiveRegistry;
+use crate::runtime::PresetRuntime;
+use manifold_core::Beats;
+use manifold_core::NodeId;
+use manifold_core::Seconds;
+use manifold_core::effect_graph_def::EffectGraphDef;
 use super::*;
 
 use crate::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};

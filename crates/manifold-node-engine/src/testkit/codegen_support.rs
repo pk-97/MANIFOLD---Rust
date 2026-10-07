@@ -8,7 +8,7 @@ use manifold_gpu::{
 
 const FMT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
 
-pub(crate) fn gradient(device: &GpuDevice, w: u32, h: u32) -> GpuTexture {
+pub fn gradient(device: &GpuDevice, w: u32, h: u32) -> GpuTexture {
     let mut px = vec![f16::from_f32(0.0); (w * h * 4) as usize];
     for y in 0..h {
         for x in 0..w {
@@ -40,7 +40,7 @@ pub(crate) fn gradient(device: &GpuDevice, w: u32, h: u32) -> GpuTexture {
 
 /// Dispatch a coincident two-input kernel: uniform(0), a(1), b(2),
 /// sampler(3), dst(4). `param_bytes` is the 16-byte uniform payload.
-pub(crate) fn dispatch_coincident(
+pub fn dispatch_coincident(
     device: &GpuDevice,
     wgsl: &str,
     a: &GpuTexture,
@@ -70,7 +70,7 @@ pub(crate) fn dispatch_coincident(
 
 /// A second gradient with a different layout, so a + b differ per texel
 /// (so the blend + crossfade is actually exercised).
-pub(crate) fn gradient_b(device: &GpuDevice, w: u32, h: u32) -> GpuTexture {
+pub fn gradient_b(device: &GpuDevice, w: u32, h: u32) -> GpuTexture {
     let mut px = vec![f16::from_f32(0.0); (w * h * 4) as usize];
     for y in 0..h {
         for x in 0..w {
@@ -102,7 +102,7 @@ pub(crate) fn gradient_b(device: &GpuDevice, w: u32, h: u32) -> GpuTexture {
 
 /// Dispatch a standard pointwise kernel: uniform(0), src(1), sampler(2),
 /// dst(3). `param_bytes` is the 16-byte uniform payload.
-pub(crate) fn dispatch_pointwise(
+pub fn dispatch_pointwise(
     device: &GpuDevice,
     wgsl: &str,
     input: &GpuTexture,
@@ -129,7 +129,7 @@ pub(crate) fn dispatch_pointwise(
 }
 
 /// Pack f32 params into a 16-byte-multiple uniform payload.
-pub(crate) fn pack_f32(params: &[f32]) -> Vec<u8> {
+pub fn pack_f32(params: &[f32]) -> Vec<u8> {
     let mut bytes = Vec::new();
     for p in params {
         bytes.extend_from_slice(&p.to_le_bytes());
@@ -142,7 +142,7 @@ pub(crate) fn pack_f32(params: &[f32]) -> Vec<u8> {
 
 /// Dispatch a two-input EXACT-TEXEL kernel: uniform(0), a(1), b(2), dst(3) —
 /// NO sampler (both inputs are textureLoad'd). Mirrors dither's binding set.
-pub(crate) fn dispatch_two_texel(
+pub fn dispatch_two_texel(
     device: &GpuDevice,
     wgsl: &str,
     a: &GpuTexture,
@@ -171,7 +171,7 @@ pub(crate) fn dispatch_two_texel(
 /// Dispatch an N-input coincident kernel: uniform(0), inputs(1..=N),
 /// sampler(N+1), dst(N+2) — the generated MultiInputCoincident layout for any
 /// arity. Generalizes `dispatch_coincident` (which is fixed at 2 inputs).
-pub(crate) fn dispatch_coincident_n(
+pub fn dispatch_coincident_n(
     device: &GpuDevice,
     wgsl: &str,
     inputs: &[&GpuTexture],
@@ -207,7 +207,7 @@ pub(crate) fn dispatch_coincident_n(
 
 /// Dispatch a PARAMLESS pointwise kernel: tex(0), sampler(1), dst(2) — no
 /// uniform binding (a paramless atom's generated kernel binds none).
-pub(crate) fn dispatch_paramless_pointwise(
+pub fn dispatch_paramless_pointwise(
     device: &GpuDevice,
     wgsl: &str,
     input: &GpuTexture,
@@ -232,7 +232,7 @@ pub(crate) fn dispatch_paramless_pointwise(
 }
 
 /// Allocate an n×n×n 3D texture with the given usage.
-pub(crate) fn make_3d_texture(device: &GpuDevice, n: u32, usage: GpuTextureUsage, label: &'static str) -> GpuTexture {
+pub fn make_3d_texture(device: &GpuDevice, n: u32, usage: GpuTextureUsage, label: &'static str) -> GpuTexture {
     device.create_texture(&GpuTextureDesc {
         width: n,
         height: n,
@@ -246,7 +246,7 @@ pub(crate) fn make_3d_texture(device: &GpuDevice, n: u32, usage: GpuTextureUsage
 }
 
 /// Fill an n³ density volume on-GPU with a 3D gradient (varies along x/y/z).
-pub(crate) fn fill_volume_gradient(device: &GpuDevice, vol: &GpuTexture, n: u32) {
+pub fn fill_volume_gradient(device: &GpuDevice, vol: &GpuTexture, n: u32) {
     let fill_wgsl = "\
 @group(0) @binding(0) var vol: texture_storage_3d<rgba16float, write>;\n\
 @compute @workgroup_size(4, 4, 4)\n\
@@ -268,7 +268,7 @@ textureStore(vol, vec3<i32>(id), vec4<f32>(f.x, f.y, f.z, 0.5 + 0.5 * f.x));\n\
 }
 
 /// Read back a full n³ volume as f16 bits.
-pub(crate) fn readback_volume(device: &GpuDevice, vol: &GpuTexture, n: u32) -> Vec<u16> {
+pub fn readback_volume(device: &GpuDevice, vol: &GpuTexture, n: u32) -> Vec<u16> {
     let bytes_per_row = n * 8; // rgba16float
     let total = u64::from(bytes_per_row) * u64::from(n) * u64::from(n);
     let buf = device.create_buffer_shared(total);
@@ -283,7 +283,7 @@ pub(crate) fn readback_volume(device: &GpuDevice, vol: &GpuTexture, n: u32) -> V
 
 /// Dispatch a two-output SOURCE kernel: uniform(0), dst_a(1), dst_b(2). Both
 /// outputs get their own texture (no aliasing) so each can be diffed.
-pub(crate) fn dispatch_two_output_source(
+pub fn dispatch_two_output_source(
     device: &GpuDevice,
     wgsl: &str,
     param_bytes: &[u8],
@@ -310,7 +310,7 @@ pub(crate) fn dispatch_two_output_source(
 
 /// Dispatch a SOURCE (generator) kernel: [uniform(0)], output. No texture
 /// inputs, no sampler — a paramless source binds only its output at binding 0.
-pub(crate) fn dispatch_source(
+pub fn dispatch_source(
     device: &GpuDevice,
     wgsl: &str,
     param_bytes: Option<&[u8]>,

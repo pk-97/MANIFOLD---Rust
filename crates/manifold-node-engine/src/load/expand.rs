@@ -7,7 +7,8 @@ use manifold_core::scene_index::{FlatSceneIndex, SceneIndexError};
 
 mod acceleration;
 pub(crate) use acceleration::impulse_recipients;
-mod coupling;
+#[doc(hidden)]
+pub mod coupling;
 pub use coupling::{CoupledSceneBinding, prepare_coupled_scenes};
 mod bindings;
 mod buffer_budget;
@@ -20,11 +21,11 @@ pub use buffer_budget::{
 pub use event_state::{PreparedModifierEvents, SceneModifierEventRoute};
 pub use impulses::SceneModifierImpulseRoute;
 mod impulses;
-mod compiler;
+pub mod compiler;
 pub(crate) use compiler::math_events::resource_node_id as math_resource_node_id;
 pub(crate) use compiler::math_events::sample_node_id as math_sample_node_id;
 mod control_state;
-mod math_view;
+pub mod math_view;
 pub(crate) use math_view::LegacyMathViewScope;
 pub(crate) use compiler::prepare_legacy_scene_modifier_math_view;
 pub use control_state::PreparedModifierControlState;
@@ -108,7 +109,7 @@ impl From<SceneModifierSchemaError> for SceneModifierExpandError {
     }
 }
 
-pub(super) fn scene_objects_for_authoring(
+pub fn scene_objects_for_authoring(
     owner: &manifold_core::effect_graph_def::EffectGraphDef,
     scene: &manifold_core::scene_modifier_preset::SceneNodeRef,
 ) -> Result<Vec<manifold_core::scene_modifier_preset::SceneNodeRef>, SceneModifierExpandError> {
@@ -148,6 +149,6 @@ pub fn force_objects_for_authoring(
     )
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testkit"))]
 #[doc(hidden)]
-pub(crate) mod testkit;
+pub mod testkit;

@@ -4,7 +4,7 @@
 
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
 
-pub(crate) const COMMON: &str = include_str!("shaders/liquid_bricks_common.wgsl");
+pub const COMMON: &str = include_str!("shaders/liquid_bricks_common.wgsl");
 pub(crate) const WIDTH: u32 = 8;
 pub(crate) const HEADER: u64 = 8;
 pub(crate) const GRID_OFFSET: u64 = 4;

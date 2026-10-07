@@ -7,13 +7,13 @@ use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
 use super::liquid_bricks;
-use super::sort_particles_into_cells::float_param;
+use crate::float_param;
 use crate::primitives::standalone_pipeline::standalone_pipeline;
 use crate::exec::effect_node::{EffectNodeContext, ParamValues};
 use crate::parameters::{ParamDef, ParamType, ParamValue};
 use crate::primitive::Primitive;
 
-pub(crate) const MARCHING_CUBES_COMMON: &str = include_str!("shaders/marching_cubes_common.wgsl");
+pub const MARCHING_CUBES_COMMON: &str = include_str!("shaders/marching_cubes_common.wgsl");
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -156,5 +156,5 @@ impl Primitive for CountSurfaceTriangles {
     }
 }
 
-#[cfg(any(test, feature = "gpu-proofs"))]
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 mod extent;

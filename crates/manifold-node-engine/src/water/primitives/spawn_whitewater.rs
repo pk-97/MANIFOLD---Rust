@@ -10,7 +10,7 @@ use std::borrow::Cow;
 use manifold_fluids::WhitewaterSpawn;
 use manifold_gpu::GpuBinding;
 
-use super::sort_particles_into_cells::float_param;
+use crate::float_param;
 use crate::primitives::standalone_pipeline::standalone_pipeline;
 use super::whitewater_lifecycle::{DEFAULT_CAPACITY, MAX_CAPACITY};
 use crate::exec::effect_node::{EffectNodeContext, ParamValues};
@@ -236,5 +236,5 @@ impl Primitive for SpawnWhitewater {
     }
 }
 
-#[cfg(any(test, feature = "gpu-proofs"))]
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 mod extent;

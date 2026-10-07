@@ -8,6 +8,7 @@
 //! captures; `whitewater_side_by_side` renders it beside the FLIP engine's
 //! own whitewater with the cost table, when `WHITEWATER_DEMO_DIR` names where.
 
+use manifold_node_engine::testkit::whitewater_scene::Frame;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -19,8 +20,6 @@ use serde_json::{Value, json};
 use manifold_node_engine::water::primitives::gpu_flip_preset::{WaterScene, render_def};
 use manifold_node_engine::water::primitives::gpu_flip_step::face_bytes;
 use manifold_node_engine::testkit::gpu::encode_rgba8_png;
-#[cfg(feature = "whitewater-oracle")]
-use manifold_node_engine::exec::effect_node::EffectNode;
 use manifold_node_engine::parameters::ParamValue;
 use manifold_node_engine::testkit::substep_nodes::register_substep_test_nodes;
 use manifold_node_engine::persistence::PrimitiveRegistry;
@@ -853,6 +852,7 @@ fn whitewater_step_against_vendored_lifecycle_150() {
 /// O2 (section 3.7): the GPU emitter against FLIP's own on the same inputs.
 #[cfg(feature = "whitewater-oracle")]
 mod emitter_oracle {
+    use manifold_node_engine::water::liquid::conformance::json_node_mut;
     use manifold_node_engine::water::primitives::testkit as water_nodes;
     use manifold_fluids::{
         WhitewaterFields, WhitewaterGrid, WhitewaterKind, WhitewaterLifecycle as NativeLifecycle, WhitewaterParticle, WhitewaterSpawn,

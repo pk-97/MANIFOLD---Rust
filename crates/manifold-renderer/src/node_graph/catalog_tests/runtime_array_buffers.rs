@@ -1,8 +1,9 @@
 //! Array-buffer allocation, aliasing, and live resize regressions.
+use manifold_node_engine::exec::effect_node::NodeInstanceId;
+use manifold_node_engine::exec::execution_plan::ResourceId;
 use manifold_node_engine::gpu::render_target::RenderTarget;
 use manifold_gpu::GpuTextureFormat;
 use manifold_node_engine::runtime::*;
-use crate::node_graph::*;
 use manifold_node_engine::persistence::PrimitiveRegistry;
 
 #[cfg(feature = "gpu-proofs")]

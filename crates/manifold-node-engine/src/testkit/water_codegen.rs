@@ -2,7 +2,7 @@ use crate::testkit::liquid_surface::{Harness, read};
 use crate::{exec::effect_node::NodeInstanceId, exec::effect_node::ParamValues, primitive::Primitive, primitive::PrimitiveSpec, parameters::ParamValue, ports::KnownItem};
 use crate::freeze::{classify::CapacityExpr, codegen::FusionRegion, codegen::InputSource, codegen::RegionNode, codegen::generate_fused};
 use manifold_gpu::{GpuBinding, GpuBuffer};
-pub(crate) fn member<P: PrimitiveSpec>(id: u32, inputs: Vec<InputSource>) -> RegionNode<'static> {
+pub fn member<P: PrimitiveSpec>(id: u32, inputs: Vec<InputSource>) -> RegionNode<'static> {
     RegionNode {
         node_id: NodeInstanceId(id),
         fusion_kind: P::FUSION_KIND,
@@ -21,7 +21,7 @@ pub(crate) fn member<P: PrimitiveSpec>(id: u32, inputs: Vec<InputSource>) -> Reg
         quantize_f16: false,
     }
 }
-pub(crate) fn fused<T: bytemuck::Pod + KnownItem>(
+pub fn fused<T: bytemuck::Pod + KnownItem>(
     h: &mut Harness,
     nodes: Vec<RegionNode<'_>>,
     external: &[&GpuBuffer],
@@ -103,7 +103,7 @@ pub(crate) fn fused<T: bytemuck::Pod + KnownItem>(
     enc.commit_and_wait_completed();
     read(&output.1, count)
 }
-pub(crate) fn run<P: Primitive, T: bytemuck::Pod + crate::ports::KnownItem>(
+pub fn run<P: Primitive, T: bytemuck::Pod + crate::ports::KnownItem>(
     harness: &mut Harness,
     prim: &mut P,
     inputs: &[(&'static str, crate::bindings::Slot)],

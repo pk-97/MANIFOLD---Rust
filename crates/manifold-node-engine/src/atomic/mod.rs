@@ -21,11 +21,12 @@ pub use plasma::{PLASMA_TYPE_ID, Plasma};
 
 #[cfg(test)]
 mod tests {
+    use crate::validation::validate;
     use super::*;
 
     use manifold_core::{Beats, Seconds};
 
-    use crate::{exec::execution::Executor, exec::effect_node::FrameTime, graph::Graph, exec::execution_plan::compile, validate};
+    use crate::{exec::execution::Executor, exec::effect_node::FrameTime, graph::Graph, exec::execution_plan::compile};
 
     fn frame_time() -> FrameTime {
         FrameTime {

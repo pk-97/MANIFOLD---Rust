@@ -313,18 +313,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn field_node_descriptor_picks_vector() {
-        // gradient_central_diff / rotate_vec2_by_angle are FieldsAndCoordinates.
-        assert_eq!(
-            PreviewEncoding::derive("node.edge_slope", "out"),
-            PreviewEncoding::VectorField
-        );
-        assert_eq!(
-            PreviewEncoding::derive("node.rotate_vector", "out"),
-            PreviewEncoding::VectorField
-        );
-    }
+
 
     #[test]
     fn density_port_picks_scalar() {
@@ -406,31 +395,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn blur_inherits_field_kind_through_propagation() {
-        // field_gen (vector) -> blur (transparent) -> blur2 (transparent).
-        // Selecting either blur should preview as a vector field.
-        let d = def(
-            vec![
-                node(0, "field", "node.edge_slope"),
-                node(1, "blur", "node.gaussian_blur"),
-                node(2, "blur2", "node.gaussian_blur"),
-            ],
-            vec![wire(0, "out", 1, "src"), wire(1, "out", 2, "src")],
-        );
-        let kinds = PreviewEncoding::propagate(&d);
-        assert_eq!(kinds[&NodeId::new("field")], PreviewEncoding::VectorField);
-        assert_eq!(
-            kinds[&NodeId::new("blur")],
-            PreviewEncoding::VectorField,
-            "blur should inherit the field kind, not assert Color"
-        );
-        assert_eq!(
-            kinds[&NodeId::new("blur2")],
-            PreviewEncoding::VectorField,
-            "kind propagates through a chain of filters"
-        );
-    }
+
 
     #[test]
     fn color_source_propagates_through_blur() {

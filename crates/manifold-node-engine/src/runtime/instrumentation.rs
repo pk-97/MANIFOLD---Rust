@@ -309,8 +309,8 @@ impl PresetRuntime {
 
     /// Test-only handle to the executor's backend (post-rebuild canvas-dim
     /// assertions). Not on the hot path.
-    #[cfg(all(test, feature = "gpu-proofs"))]
-    pub(crate) fn backend_for_test(&self) -> &dyn crate::exec::backend::Backend {
+    #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
+    pub fn backend_for_test(&self) -> &dyn crate::exec::backend::Backend {
         self.executor.backend()
     }
 

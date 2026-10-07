@@ -10,14 +10,17 @@
 // item here; a default test build compiles only the extent proof's face index.
 #![cfg_attr(not(feature = "gpu-proofs"), allow(dead_code))]
 
+#[cfg(test)]
 use crate::water::fluid_particles::FluidParticle;
 use crate::water::liquid::grid::face_dims;
+#[cfg(test)]
 use crate::water::whitewater::{CELL_AIR, KnownValue};
 
 /// A whitewater grid as the particle atoms read it.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Box3 {
     pub cells: [u32; 3],
+    #[cfg(test)]
     pub center: [f32; 3],
     pub size: [f32; 3],
 }
@@ -27,10 +30,12 @@ impl Box3 {
         self.size[0] / self.cells[0] as f32
     }
 
+    #[cfg(test)]
     pub fn position(&self, p: [f32; 3]) -> [f32; 3] {
         std::array::from_fn(|a| (p[a] - (self.center[a] - 0.5 * self.size[a])) * self.cells[a] as f32 / self.size[a])
     }
 
+    #[cfg(test)]
     pub(super) fn in_grid(&self, c: [i32; 3]) -> bool {
         (0..3).all(|a| c[a] >= 0 && c[a] < self.cells[a] as i32)
     }
@@ -41,6 +46,7 @@ impl Box3 {
     }
 }
 
+#[cfg(test)]
 pub(super) fn hash(x: u32) -> u32 {
     let mut h = x;
     h ^= h >> 16;
@@ -51,25 +57,30 @@ pub(super) fn hash(x: u32) -> u32 {
     h
 }
 
+#[cfg(test)]
 pub(super) fn random(slot: u32, seed: u32, epoch: u32, stream: u32) -> f32 {
     let h = hash(slot.wrapping_add(hash(seed.wrapping_add(hash(epoch.wrapping_mul(16).wrapping_add(stream))))));
     (h >> 8) as f32 * (1.0 / 16_777_216.0)
 }
 
+#[cfg(test)]
 fn corner(c: usize) -> [i32; 3] {
     [(c & 1) as i32, ((c >> 1) & 1) as i32, ((c >> 2) & 1) as i32]
 }
 
+#[cfg(test)]
 fn corner_weight(f: [f32; 3], c: usize) -> f32 {
     let o = corner(c);
     (0..3).map(|a| if o[a] == 1 { f[a] } else { 1.0 - f[a] }).product()
 }
 
+#[cfg(test)]
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a * (1.0 - t) + b * t
 }
 
 /// `node.jitter_particles` for slot `idx`.
+#[cfg(test)]
 pub(super) fn jitter(p: FluidParticle, idx: u32, cell_size: f32, seed: f32, epoch: f32) -> FluidParticle {
     if p.position_radius[3] <= 0.0 {
         return p;
@@ -95,6 +106,7 @@ pub(super) fn face_index(f: [i32; 3], axis: usize, pad: i32, face_cells: [u32; 3
 }
 
 /// `node.sample_faces_at_particles`.
+#[cfg(test)]
 pub(super) fn sample_faces(p: FluidParticle, faces: [&[f32]; 3], face_cells: [u32; 3], grid: &Box3) -> FluidParticle {
     if p.position_radius[3] <= 0.0 {
         return p;
@@ -125,6 +137,7 @@ pub(super) fn sample_faces(p: FluidParticle, faces: [&[f32]; 3], face_cells: [u3
 }
 
 /// `node.energy_potential`.
+#[cfg(test)]
 pub(super) fn energy(p: FluidParticle, min: f32, max: f32) -> f32 {
     if p.position_radius[3] <= 0.0 || max <= min {
         return 0.0;
@@ -136,6 +149,7 @@ pub(super) fn energy(p: FluidParticle, min: f32, max: f32) -> f32 {
 
 /// FLIP's wavecrest limits.
 #[derive(Clone, Copy)]
+#[cfg(test)]
 pub(super) struct Crest {
     pub min_curvature: f32,
     pub max_curvature: f32,
@@ -145,6 +159,7 @@ pub(super) struct Crest {
 /// `node.wavecrest_potential`, and the smallest gap between a thresholded
 /// quantity and its threshold on the way there (in that quantity's units,
 /// relative where it has a scale).
+#[cfg(test)]
 pub(super) fn wavecrest(
     p: FluidParticle,
     distance: &[f32],
@@ -229,15 +244,18 @@ pub(super) fn wavecrest(
 
 /// FLIP's emitter radius over the cell size, 8 · (3 / 32π)^(1/3): the spawn
 /// body's `SW_EMITTER_RADIUS`, the same literal.
+#[cfg(test)]
 const EMITTER_RADIUS: f32 = 2.481_402;
 
 /// FLIP's own truncated 2π (`twopi` in `_emitDiffuseParticles`), the spawn
 /// body's `SW_TWO_PI`.
 #[expect(clippy::approx_constant, reason = "FLIP's literal, not TAU: the port matches it digit for digit")]
+#[cfg(test)]
 const FLIP_TWO_PI: f32 = 6.28318;
 
 /// `node.spawn_whitewater` inputs besides the arrays.
 #[derive(Clone, Copy)]
+#[cfg(test)]
 pub(super) struct Spawn {
     pub dt: f32,
     pub capacity: u32,
@@ -250,6 +268,7 @@ pub(super) struct Spawn {
 }
 
 /// The arrays `node.spawn_whitewater` gathers.
+#[cfg(test)]
 pub(super) struct SpawnFields<'a> {
     pub offsets: &'a [u32],
     pub particles: &'a [FluidParticle],
@@ -259,10 +278,12 @@ pub(super) struct SpawnFields<'a> {
     pub solid: &'a [f32],
 }
 
+#[cfg(test)]
 fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
 }
 
+#[cfg(test)]
 fn normalize(v: [f32; 3]) -> [f32; 3] {
     let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
     v.map(|c| c / l)
@@ -270,6 +291,7 @@ fn normalize(v: [f32; 3]) -> [f32; 3] {
 
 /// The solid lattice's distance at grid position q, trilinear over its
 /// nodes, a node past the lattice reading 0.
+#[cfg(test)]
 fn solid_at(solid: &[f32], grid: &Box3, q: [f32; 3]) -> f32 {
     let nodes = grid.cells.map(|c| c as i32 + 1);
     let lower = q.map(f32::floor);
@@ -288,6 +310,7 @@ fn solid_at(solid: &[f32], grid: &Box3, q: [f32; 3]) -> f32 {
 
 /// `node.spawn_whitewater` for slot `j`, and the smallest gap between a
 /// dropping test and its threshold, in cells or seconds.
+#[cfg(test)]
 pub(super) fn spawn(j: u32, fields: &SpawnFields<'_>, grid: &Box3, s: Spawn) -> (manifold_fluids::WhitewaterSpawn, f32) {
     let empty = manifold_fluids::WhitewaterSpawn::default();
     let n = (s.emitters as usize).min(fields.offsets.len());
@@ -345,6 +368,7 @@ pub(super) fn spawn(j: u32, fields: &SpawnFields<'_>, grid: &Box3, s: Spawn) -> 
 
 /// `node.whitewater_type` for one record, and the smallest gap between a
 /// deciding value and its threshold, in cells.
+#[cfg(test)]
 pub(super) fn kind(spawn: manifold_fluids::WhitewaterSpawn, distance: &[f32], cells: &[u32], grid: &Box3) -> (u32, f32) {
     if spawn.position_lifetime[3] <= 0.0 {
         return (spawn.kind, f32::INFINITY);
@@ -395,6 +419,7 @@ pub(super) fn kind(spawn: manifold_fluids::WhitewaterSpawn, distance: &[f32], ce
 
 /// `node.emission_count` inputs besides the per-particle arrays.
 #[derive(Clone, Copy)]
+#[cfg(test)]
 pub(super) struct Emission {
     pub dt: f32,
     pub rate: f32,
@@ -405,6 +430,7 @@ pub(super) struct Emission {
 
 /// `node.emission_count` for slot `idx`, and how far the per-tick count sat
 /// from a rounding edge.
+#[cfg(test)]
 pub(super) fn emission_count(p: FluidParticle, energy: f32, wavecrest: f32, idx: u32, e: Emission) -> (u32, f32) {
     let speed = (p.velocity[0] * p.velocity[0] + p.velocity[1] * p.velocity[1] + p.velocity[2] * p.velocity[2]).sqrt();
     if idx as f32 >= e.live_count || p.position_radius[3] <= 0.0 || e.points_per_cell <= 0.0 {

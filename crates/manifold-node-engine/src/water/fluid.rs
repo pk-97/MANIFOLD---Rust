@@ -48,7 +48,7 @@ use crate::mesh::{InstanceTransform, MeshVertex};
 mod coupled;
 mod domain;
 #[cfg(feature = "gpu-proofs")]
-pub(super) mod identity;
+pub mod identity;
 #[cfg(feature = "gpu-proofs")]
 mod impulses;
 #[cfg(feature = "gpu-proofs")]

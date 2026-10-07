@@ -17,7 +17,7 @@ use manifold_gpu::{GpuBinding, GpuBuffer};
 
 use super::count_surface_triangles::MARCHING_CUBES_COMMON;
 use super::liquid_bricks;
-use super::sort_particles_into_cells::float_param;
+use crate::float_param;
 use crate::primitives::standalone_pipeline::standalone_pipeline;
 use crate::mesh::MeshVertex;
 use crate::exec::effect_node::{EffectNodeContext, ParamValues};
@@ -986,5 +986,5 @@ mod gpu_tests {
     }
 }
 
-#[cfg(any(test, feature = "gpu-proofs"))]
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 mod extent;

@@ -13,7 +13,7 @@ struct Route {
 }
 
 #[derive(Default)]
-pub(super) struct SceneImpulses {
+pub(crate) struct SceneImpulses {
     routes: Vec<Option<Route>>,
     aliases: AHashMap<String, Vec<usize>>,
     // Inputs excluded from historical CPU sampling need a completed full frame.
@@ -38,7 +38,7 @@ fn invalid(id: &NodeId, detail: String) -> SceneModifierExpandError {
 }
 
 impl PresetRuntime {
-    pub(super) fn prepare_modifier_impulses(
+    pub(crate) fn prepare_modifier_impulses(
         &mut self,
         owner: &EffectGraphDef,
         routes: &[SceneModifierImpulseRoute],
@@ -205,7 +205,7 @@ impl PresetRuntime {
         result
     }
 
-    pub(super) fn observe_impulse_setup(&mut self) {
+    pub(crate) fn observe_impulse_setup(&mut self) {
         // A native Reset parameter creates a new epoch without rebuilding
         // this graph. That explicit reset cancels any failed retained capture.
         if self
@@ -232,7 +232,7 @@ impl PresetRuntime {
         self.scene_impulses.setup_observed = true;
     }
 
-    pub(super) fn reset_modifier_impulses(&mut self) {
+    pub(crate) fn reset_modifier_impulses(&mut self) {
         self.scene_impulses.setup_observed = false;
         for route in self.scene_impulses.routes.iter_mut().flatten() {
             route

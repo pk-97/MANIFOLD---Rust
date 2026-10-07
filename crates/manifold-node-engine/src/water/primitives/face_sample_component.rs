@@ -7,7 +7,7 @@ use std::borrow::Cow;
 use manifold_gpu::GpuBinding;
 
 use super::gpu_flip_step::face_bytes;
-use super::sort_particles_into_cells::float_param;
+use crate::float_param;
 use crate::primitives::standalone_pipeline::standalone_pipeline;
 use crate::exec::effect_node::{EffectNodeContext, ParamValues};
 use crate::freeze::classify::FusedOutputCapacity;
@@ -126,5 +126,5 @@ impl Primitive for FaceSampleComponent {
     }
 }
 
-#[cfg(any(test, feature = "gpu-proofs"))]
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 mod extent;

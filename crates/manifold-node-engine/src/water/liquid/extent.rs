@@ -479,7 +479,7 @@ impl LiquidPreset {
     /// Build with an explicitly selected primitive registry. Product callers
     /// use [`Self::build`], while reference proofs opt into the retired CPU
     /// FLIP node through `PrimitiveRegistry::with_cpu_flip_reference`.
-    pub(crate) fn build_with_registry(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> Result<Self, ExtentError> {
+    pub fn build_with_registry(def: &EffectGraphDef, registry: &PrimitiveRegistry) -> Result<Self, ExtentError> {
         let build = |error: String| ExtentError::Build(error);
         let expanded = crate::load::expand::expand_scene_modifiers(def, registry)
             .map_err(|error| build(error.to_string()))?;
@@ -562,7 +562,7 @@ pub(crate) fn whole(x: &AtomExtent<'_>, name: &str, default: f32) -> u32 {
 /// that grows an array port needs a real rule.
 /// Asset sources size their source textures from decoded images and bound
 /// writes by the destination texture; this does not account texture memory.
-pub(crate) fn texture_only(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+pub fn texture_only(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     let array = |ty: &PortType| matches!(ty, PortType::Array(_));
     if x.node.node.inputs().iter().any(|p| array(&p.ty)) || x.node.node.outputs().iter().any(|p| array(&p.ty)) {
         return Err(x.uncovered("an array port on a texture-only rule".into()));
@@ -574,12 +574,12 @@ pub(crate) fn texture_only(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
 /// writes: mesh sources write their own output's slots, scene objects hand
 /// their arrays to render_scene, which draws each up to its size or its live
 /// extent clamped to it.
-pub(crate) fn size_bounded(_: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+pub fn size_bounded(_: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     Ok(())
 }
 
 /// Dispatches over its own input, in place.
-pub(crate) fn in_place(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+pub fn in_place(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     x.covers("out", x.bytes("in").unwrap_or(0))
 }
 
@@ -594,7 +594,7 @@ pub(crate) fn field_reads(x: &AtomExtent<'_>) -> Result<(), Verdict> {
 
 /// Lattice-wide node kernels read the accumulator and grid through the node
 /// count; P2G's word index is an i32 node index times four.
-pub(crate) fn node_extent(x: &AtomExtent<'_>, lattice: &LiquidLattice) -> Result<u64, Verdict> {
+pub fn node_extent(x: &AtomExtent<'_>, lattice: &LiquidLattice) -> Result<u64, Verdict> {
     let nodes = lattice_total(lattice.nodes());
     if nodes > i32::MAX as u64 || nodes * u64::from(ACCUM_WORDS_PER_NODE) > u64::from(u32::MAX) {
         return Err(x.uncovered(format!("{nodes} nodes overflow the accumulator's 32-bit word index")));
@@ -674,7 +674,7 @@ pub(crate) fn brick_schedule(x: &AtomExtent<'_>, nodes: [u32; 3]) -> Result<(), 
     x.covers("bricks", words * 4)
 }
 
-pub(crate) fn surface_mesh_pass(x: &mut AtomExtent<'_>, output: &str) -> Result<(), Verdict> {
+pub fn surface_mesh_pass(x: &mut AtomExtent<'_>, output: &str) -> Result<(), Verdict> {
     let nodes = x.nodes(["nodes_x", "nodes_y", "nodes_z"]);
     if nodes.iter().any(|&n| n < 2.0) {
         return Err(x.uncovered(format!("no lattice: nodes {nodes:?}")));
@@ -694,10 +694,10 @@ pub(crate) fn surface_mesh_pass(x: &mut AtomExtent<'_>, output: &str) -> Result<
 // their dispatch to the smallest of their arrays at run time; each rule here
 // asks that no array is the smaller one, so no work is ever cut.
 
-pub(crate) const PARTICLE: u64 = size_of::<FluidParticle>() as u64;
+pub const PARTICLE: u64 = size_of::<FluidParticle>() as u64;
 
 /// A whole-number param, as the vector atoms round it.
-pub(crate) fn whole_param(x: &AtomExtent<'_>, name: &str, default: f32) -> u32 {
+pub fn whole_param(x: &AtomExtent<'_>, name: &str, default: f32) -> u32 {
     x.param(name, default).round().max(0.0) as u32
 }
 
@@ -797,6 +797,6 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testkit"))]
 #[doc(hidden)]
-pub(crate) mod testkit;
+pub mod testkit;

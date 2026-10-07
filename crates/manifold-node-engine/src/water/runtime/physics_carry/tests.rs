@@ -1,3 +1,8 @@
+use crate::exec::effect_node::FrameTime;
+use crate::persistence::PrimitiveRegistry;
+use manifold_core::Beats;
+use manifold_core::Seconds;
+use manifold_core::effect_graph_def::EffectGraphDef;
 use super::*;
 use crate::ports::{NodeInput, NodeOutput, NodePort, PortKind};
 use crate::{exec::effect_node::EffectNode, exec::effect_node::EffectNodeContext, exec::effect_node::EffectNodeType, parameters::ParamDef, scene::transform::Transform};
@@ -64,6 +69,7 @@ fn runtime_with_field(height: f32, fused: bool, field: bool) -> PresetRuntime {
 
 fn runtime_with_field_port(height: f32, fused: bool, field_port: Option<&str>) -> PresetRuntime {
     let mut registry = PrimitiveRegistry::with_builtin();
+    crate::testkit::physics_fixtures::register(&mut registry);
     registry.register("test.pose", || {
         Box::new(PoseObserver(EffectNodeType::new("test.pose")))
     });
@@ -71,10 +77,10 @@ fn runtime_with_field_port(height: f32, fused: bool, field_port: Option<&str>) -
         "version": 2, "name": "Native physics carry",
         "nodes": [
             {"id":0,"nodeId":"input","typeId":"system.generator_input"},
-            {"id":1,"nodeId":"start","typeId":"node.transform_3d","params":{
+            {"id":1,"nodeId":"start","typeId":"test.physics_transform","params":{
                 "pos_y":{"type":"Float","value":height}
             }},
-            {"id":2,"nodeId":"body","typeId":"node.rigid_body"},
+            {"id":2,"nodeId":"body","typeId":"test.physics_body"},
             {"id":3,"nodeId":"world","typeId":"node.physics_world"},
             {"id":4,"nodeId":"observe","typeId":"test.pose"},
             {"id":5,"nodeId":"source","typeId":"system.source"},
@@ -91,7 +97,7 @@ fn runtime_with_field_port(height: f32, fused: bool, field_port: Option<&str>) -
     if let Some(field_port) = field_port {
         def.nodes.push(
             serde_json::from_value(serde_json::json!({
-                "id":7,"nodeId":"field","typeId":"node.uniform_vector_field","params":{
+                "id":7,"nodeId":"field","typeId":"test.physics_field","params":{
                     "x":{"type":"Float","value":4.0},
                     "y":{"type":"Float","value":0.0}
                 }
@@ -108,8 +114,8 @@ fn runtime_with_field_port(height: f32, fused: bool, field_port: Option<&str>) -
     }
     if field_port == Some("body_acceleration_0") {
         for node in [
-            serde_json::json!({"id":8,"nodeId":"peer_body","typeId":"node.rigid_body"}),
-            serde_json::json!({"id":9,"nodeId":"peer_start","typeId":"node.transform_3d","params":{
+            serde_json::json!({"id":8,"nodeId":"peer_body","typeId":"test.physics_body"}),
+            serde_json::json!({"id":9,"nodeId":"peer_start","typeId":"test.physics_transform","params":{
                 "pos_x":{"type":"Float","value":10.0},
                 "pos_y":{"type":"Float","value":height}
             }}),

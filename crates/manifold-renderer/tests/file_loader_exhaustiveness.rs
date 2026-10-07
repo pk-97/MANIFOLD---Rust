@@ -5,6 +5,7 @@
 //! skip, and a table entry naming a type that isn't registered is a red test
 //! too.
 
+use manifold_renderer as _;
 use manifold_core::file_loader::{ALL_FILE_LOADER_TYPE_IDS, file_loader_kind};
 use manifold_node_engine::{parameters::ParamType, persistence::PrimitiveRegistry};
 

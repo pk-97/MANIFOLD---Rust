@@ -411,7 +411,7 @@ fn resolve_target_param(
 /// time from a runtime handle, not statically derivable from the
 /// `EffectGraphDef` alone. No bundled preset uses a Composite target
 /// today, so this is a documented gap, not an observed miss.
-pub(crate) fn check_card_lints(
+pub fn check_card_lints(
     def: &EffectGraphDef,
     graph: Option<&crate::graph::Graph>,
 ) -> (Vec<ValidationIssue>, Vec<ValidationIssue>) {
@@ -679,6 +679,18 @@ mod tests {
         },
         params: [
             crate::parameters::ParamDef {
+                name: std::borrow::Cow::Borrowed("intensity"), label: "Intensity",
+                ty: crate::parameters::ParamType::Float,
+                default: crate::parameters::ParamValue::Float(1.0),
+                range: Some((0.0, 1.0)), enum_values: &[],
+            },
+            crate::parameters::ParamDef {
+                name: std::borrow::Cow::Borrowed("next"), label: "Next",
+                ty: crate::parameters::ParamType::Trigger,
+                default: crate::parameters::ParamValue::Float(0.0),
+                range: None, enum_values: &[],
+            },
+            crate::parameters::ParamDef {
                 name: std::borrow::Cow::Borrowed("both_sided"),
                 label: "Both Sided",
                 ty: crate::parameters::ParamType::Float,
@@ -764,7 +776,7 @@ mod tests {
                 ]
               },
               "nodes": [
-                {"id": 0, "nodeId": "invert", "typeId": "node.invert"}
+                {"id": 0, "nodeId": "invert", "typeId": "node.__range_contract_fixture"}
               ],
               "wires": []
             }"#,
@@ -798,7 +810,7 @@ mod tests {
                 ]
               },
               "nodes": [
-                {"id": 0, "nodeId": "invert", "typeId": "node.invert"}
+                {"id": 0, "nodeId": "invert", "typeId": "node.__range_contract_fixture"}
               ],
               "wires": []
             }"#,
@@ -833,7 +845,7 @@ mod tests {
                 ]
               },
               "nodes": [
-                {"id": 0, "nodeId": "invert", "typeId": "node.invert"}
+                {"id": 0, "nodeId": "invert", "typeId": "node.__range_contract_fixture"}
               ],
               "wires": []
             }"#,
@@ -869,7 +881,7 @@ mod tests {
                 ]
               },
               "nodes": [
-                {"id": 0, "nodeId": "invert", "typeId": "node.invert"}
+                {"id": 0, "nodeId": "invert", "typeId": "node.__range_contract_fixture"}
               ],
               "wires": []
             }"#,
@@ -905,7 +917,7 @@ mod tests {
                 ]
               },
               "nodes": [
-                {"id": 0, "nodeId": "invert", "typeId": "node.invert"}
+                {"id": 0, "nodeId": "invert", "typeId": "node.__range_contract_fixture"}
               ],
               "wires": []
             }"#,
@@ -941,7 +953,7 @@ mod tests {
                 ]
               },
               "nodes": [
-                {"id": 0, "nodeId": "folder", "typeId": "node.image_folder"}
+                {"id": 0, "nodeId": "folder", "typeId": "node.__range_contract_fixture"}
               ],
               "wires": []
             }"#,
@@ -978,7 +990,7 @@ mod tests {
                 ]
               },
               "nodes": [
-                {"id": 0, "nodeId": "invert", "typeId": "node.invert"}
+                {"id": 0, "nodeId": "invert", "typeId": "node.__range_contract_fixture"}
               ],
               "wires": []
             }"#,
@@ -1049,7 +1061,7 @@ mod tests {
                 ]
               },
               "nodes": [
-                {"id": 0, "nodeId": "invert", "typeId": "node.invert"}
+                {"id": 0, "nodeId": "invert", "typeId": "node.__range_contract_fixture"}
               ],
               "wires": []
             }"#,
@@ -1089,7 +1101,7 @@ mod tests {
                 ]
               },
               "nodes": [
-                {"id": 0, "nodeId": "invert", "typeId": "node.invert"}
+                {"id": 0, "nodeId": "invert", "typeId": "node.__range_contract_fixture"}
               ],
               "wires": []
             }"#,
@@ -1194,7 +1206,7 @@ mod tests {
                 ]
               },
               "nodes": [
-                {"id": 0, "nodeId": "invert", "typeId": "node.invert"}
+                {"id": 0, "nodeId": "invert", "typeId": "node.__range_contract_fixture"}
               ],
               "wires": []
             }"#,

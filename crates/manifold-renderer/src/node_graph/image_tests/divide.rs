@@ -1,3 +1,4 @@
+use manifold_node_engine::testkit::atom::Chain;
 use manifold_node_engine::testkit::atom::*;
 use manifold_node_engine::testkit::liquid_surface::params;
 use crate::node_graph::primitives::divide_by_value::DivideByValue;

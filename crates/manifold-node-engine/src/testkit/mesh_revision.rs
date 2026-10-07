@@ -23,7 +23,7 @@ use crate::ports::{NodeInput, NodeOutput, NodePort, PortKind};
         /// shared handle because the compiled rule is a plan-compile-time
         /// snapshot — a test that flips the source's topology mid-run
         /// recompiles the plan with the handle changed.
-        pub(crate) struct MeshNode {
+        pub struct MeshNode {
             type_id: EffectNodeType,
             pub(crate) inputs: Vec<NodeInput>,
             pub(crate) outputs: Vec<NodeOutput>,
@@ -45,7 +45,7 @@ use crate::ports::{NodeInput, NodeOutput, NodePort, PortKind};
         );
 
         impl MeshNode {
-            pub(crate) fn producer(rule: Option<MeshOutputRule<'static>>) -> (Self, ProducerHandles) {
+            pub fn producer(rule: Option<MeshOutputRule<'static>>) -> (Self, ProducerHandles) {
                 let declare_unchanged = Arc::new(Mutex::new(false));
                 let declare_pending = Arc::new(Mutex::new(false));
                 let rule = shared_rule(rule);
@@ -62,6 +62,7 @@ use crate::ports::{NodeInput, NodeOutput, NodePort, PortKind};
                 )
             }
 
+            #[cfg(test)]
             pub(crate) fn consumer(rule: Option<MeshOutputRule<'static>>) -> (Self, Arc<Mutex<bool>>, Arc<Mutex<bool>>) {
                 let declare_unchanged = Arc::new(Mutex::new(false));
                 let declare_pending = Arc::new(Mutex::new(false));
@@ -83,7 +84,7 @@ use crate::ports::{NodeInput, NodeOutput, NodePort, PortKind};
             /// compile prunes UNCONSUMED outputs from a step, so every
             /// producer under test needs its mesh output wired somewhere
             /// to keep its resource in the plan.
-            pub(crate) fn sink() -> Self {
+            pub fn sink() -> Self {
                 Self {
                     type_id: EffectNodeType::new("test.mesh_sink"),
                     inputs: vec![input("in", mesh_ty(), true)],
@@ -129,7 +130,7 @@ use crate::ports::{NodeInput, NodeOutput, NodePort, PortKind};
 
         /// The single output resource of `node`, the way production
         /// callers address plan resources.
-        pub(crate) fn out_res(plan: &ExecutionPlan, node: NodeInstanceId) -> ResourceId {
+        pub fn out_res(plan: &ExecutionPlan, node: NodeInstanceId) -> ResourceId {
             plan.steps()
                 .iter()
                 .find(|s| s.node == node)
@@ -138,19 +139,19 @@ use crate::ports::{NodeInput, NodeOutput, NodePort, PortKind};
                 .expect("node must have one output resource")
         }
 
-        pub(crate) fn fixed_rule() -> MeshOutputRule<'static> {
+        pub fn fixed_rule() -> MeshOutputRule<'static> {
             MeshOutputRule {
                 topology: MeshRevisionRule::Fixed,
                 positions: MeshRevisionRule::Fixed,
             }
         }
 
-        pub(crate) struct DeclaredPrimitiveProbe {
+        pub struct DeclaredPrimitiveProbe {
             inner: Box<dyn EffectNode>,
         }
 
         impl DeclaredPrimitiveProbe {
-            pub(crate) fn new(inner: Box<dyn EffectNode>) -> Self { Self { inner } }
+            pub fn new(inner: Box<dyn EffectNode>) -> Self { Self { inner } }
         }
 
         impl EffectNode for DeclaredPrimitiveProbe {

@@ -18,7 +18,7 @@ use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
 
 use super::count_surface_triangles::MARCHING_CUBES_COMMON;
 use super::liquid_bricks;
-use super::sort_particles_into_cells::float_param;
+use crate::float_param;
 use crate::primitives::standalone_pipeline::standalone_pipeline;
 use crate::mesh::MeshVertex;
 use crate::exec::effect_node::{EffectNodeContext, ParamValues};
@@ -116,7 +116,7 @@ pub struct SurfaceMeshPass {
 }
 
 impl SurfaceMeshPass {
-    pub(crate) fn run<P: Primitive>(
+    pub fn run<P: Primitive>(
         &mut self,
         ctx: &mut EffectNodeContext<'_, '_>,
         strength: f32,
@@ -367,5 +367,5 @@ mod shared_shader_tests {
     }
 }
 
-#[cfg(any(test, feature = "gpu-proofs"))]
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 mod extent;

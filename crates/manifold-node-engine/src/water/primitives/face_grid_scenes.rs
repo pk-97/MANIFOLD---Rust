@@ -17,7 +17,7 @@ pub(super) const FACE_CONSUMER: &str = "matter_face_consumer";
 pub(super) const FACE_DIVISOR: &str = "matter_face_length";
 
 /// The 64-cell preset's u faces, 65 × 64 × 64: the divisor's row.
-pub(super) const DIVISOR_ROW: u32 = 65 * 64 * 64;
+pub const DIVISOR_ROW: u32 = 65 * 64 * 64;
 
 /// `WaterDamBreakMatter.json` with `node.matter_face_component` × 3 on
 /// matter_state's grid feeding matter_frame's face inputs. `consumer` puts a
@@ -27,9 +27,10 @@ pub(super) const DIVISOR_ROW: u32 = 65 * 64 * 64;
 /// faces (node.dot_products, a boundary). `consumer` is the v or w axis.
 /// Without `collider` the moving box is unwired, so the tank holds only the
 /// column and the pool, as GPU FLIP's Dam Break does.
-pub(crate) fn matter_dam_break_faces(consumer: Option<usize>, collider: bool) -> EffectGraphDef {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/generator-presets/WaterDamBreakMatter.json");
-    let mut preset: Value = serde_json::from_str(&std::fs::read_to_string(path).expect("preset reads")).expect("preset parses");
+pub fn matter_dam_break_faces(consumer: Option<usize>, collider: bool) -> EffectGraphDef {
+    let json = crate::load::catalog_source::preset_json(&manifold_core::PresetTypeId::new("WaterDamBreakMatter"))
+        .expect("registered catalog owner must provide WaterDamBreakMatter");
+    let mut preset: Value = serde_json::from_str(&json).expect("preset parses");
     let nodes = preset["nodes"].as_array_mut().expect("preset nodes");
     let group = nodes.iter_mut().find(|n| n["nodeId"] == "Live Matter").expect("Live Matter group");
     let group_id = group["id"].clone();

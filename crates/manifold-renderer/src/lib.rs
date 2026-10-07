@@ -1,3 +1,5 @@
+use manifold_node_engine::load::preset_loader;
+
 pub mod compositor;
 pub mod fsr1;
 pub mod generator_renderer;
@@ -22,8 +24,6 @@ inventory::submit!(preset_loader::PresetAssetsRoot {
     dir: concat!(env!("CARGO_MANIFEST_DIR"), "/assets"),
 });
 
-#[cfg(all(test, feature = "gpu-proofs"))]
-pub(crate) use manifold_gpu::testkit::{test_device, TestDevice};
 
 
 // Standalone CPU specification; deliberately absent from runtime builds.
@@ -36,3 +36,36 @@ pub mod reference_fixtures;
 
 #[cfg(test)]
 mod compositor_tests;
+
+// Catalog contracts keep their engine module identities across the P1 split.
+#[cfg(test)]
+#[path = "engine_contract_tests/exec.rs"]
+mod exec;
+
+#[cfg(test)]
+#[path = "engine_contract_tests/freeze.rs"]
+mod freeze;
+
+#[cfg(test)]
+#[path = "../tests/support/source_roots.rs"]
+mod source_roots;
+
+#[cfg(test)]
+#[path = "engine_contract_tests/palette.rs"]
+mod palette;
+
+#[cfg(test)]
+#[path = "engine_contract_tests/preview_encoding.rs"]
+mod preview_encoding;
+
+#[cfg(test)]
+#[path = "engine_contract_tests/water.rs"]
+mod water;
+
+#[cfg(test)]
+#[path = "engine_contract_tests/load.rs"]
+mod load;
+
+#[cfg(test)]
+#[path = "engine_contract_tests/runtime.rs"]
+mod runtime;

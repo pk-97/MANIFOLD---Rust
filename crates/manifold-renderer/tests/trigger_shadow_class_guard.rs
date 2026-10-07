@@ -36,6 +36,7 @@
 //! (GPU-free — pure static analysis over `EffectGraphDef`, safe for the
 //! default sweep).
 
+use manifold_renderer as _;
 use std::collections::HashSet;
 
 use manifold_core::effect_graph_def::EffectGraphDef;

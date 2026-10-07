@@ -86,7 +86,7 @@ impl Transform {
 /// singularity (`|r20| ~= 1`), the conventional resolution for this
 /// Euler order — the fallback's sign also flips with the sign of `r20`
 /// (verified the same way).
-pub(crate) fn quat_to_render_scene_euler(q: [f32; 4]) -> [f32; 3] {
+pub fn quat_to_render_scene_euler(q: [f32; 4]) -> [f32; 3] {
     let (x, y, z, w) = (q[0], q[1], q[2], q[3]);
     let (xx, yy, zz) = (x * x, y * y, z * z);
     let (xy, xz, yz) = (x * y, x * z, y * z);

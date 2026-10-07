@@ -61,7 +61,7 @@ pub const CASES: &[CustomAbiCase] = &[
         aliases: &[],
     },
     CustomAbiCase {
-        source: "../instance_upload.rs",
+        source: "../../../../manifold-node-engine/src/exec/instance_upload.rs",
         rust_struct: "UploadParams",
         shader: "shaders/physics_instance_upload.wgsl",
         shader_struct: "UploadParams",

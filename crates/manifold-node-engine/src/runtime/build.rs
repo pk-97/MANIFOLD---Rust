@@ -286,7 +286,7 @@ impl PresetRuntime {
     /// common graph validation, binding setup, and resource preparation.
     /// `mesh_rules` is the fused view's prepared mesh-revision sidecar
     /// (design §3.3); canonical/unfused defs pass an empty map.
-    pub(crate) fn from_render_def(
+    pub fn from_render_def(
         mut doc: EffectGraphDef,
         registry: &PrimitiveRegistry,
         manifest: Option<&ParamManifest>,

@@ -85,7 +85,7 @@ pub struct NodeInputs<'a> {
 }
 
 impl<'a> NodeInputs<'a> {
-    pub(crate) fn new(
+    pub fn new(
         bindings: &'a [(&'static str, Slot)],
         backend: &'a dyn Backend,
         generations: &'a [u64],
@@ -118,7 +118,7 @@ impl<'a> NodeInputs<'a> {
     /// Separate from [`Self::new`] so the many test constructions keep
     /// their three-argument shape (same pattern as
     /// [`EffectNodeContext::with_errors`](crate::node_graph::EffectNodeContext::with_errors)).
-    pub(crate) fn with_pending(mut self, pending: &'a [bool]) -> Self {
+    pub fn with_pending(mut self, pending: &'a [bool]) -> Self {
         self.pending = pending;
         self
     }
@@ -135,7 +135,7 @@ impl<'a> NodeInputs<'a> {
     }
 
     /// Executor-only: thread the per-slot logical content snapshots through.
-    pub(crate) fn with_content_versions(
+    pub fn with_content_versions(
         mut self,
         content_versions: &'a [Option<ContentVersion>],
     ) -> Self {
@@ -145,7 +145,7 @@ impl<'a> NodeInputs<'a> {
 
     /// View the same bindings with one camera port replaced for a render-only
     /// pass. No backend value or slot binding is changed.
-    pub(crate) fn with_camera_override(
+    pub fn with_camera_override(
         mut self,
         port: &'static str,
         camera: Camera,
@@ -504,7 +504,7 @@ pub struct NodeOutputs<'a> {
 
 impl<'a> NodeOutputs<'a> {
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn new(
+    pub fn new(
         bindings: &'a [(&'static str, Slot)],
         backend: &'a dyn Backend,
         pending_scalar_writes: &'a mut Vec<(Slot, ParamValue)>,
@@ -535,7 +535,7 @@ impl<'a> NodeOutputs<'a> {
         }
     }
 
-    pub(crate) fn with_rigid_body_writes(mut self, writes: &'a mut Vec<(Slot, RigidBody)>) -> Self {
+    pub fn with_rigid_body_writes(mut self, writes: &'a mut Vec<(Slot, RigidBody)>) -> Self {
         self.pending_rigid_body_writes = Some(writes);
         self
     }
@@ -547,7 +547,7 @@ impl<'a> NodeOutputs<'a> {
         }
     }
 
-    pub(crate) fn with_fluid_role_writes(
+    pub fn with_fluid_role_writes(
         mut self,
         writes: &'a mut Vec<(Slot, FluidRole)>,
     ) -> Self {
@@ -566,7 +566,7 @@ impl<'a> NodeOutputs<'a> {
         }
     }
 
-    pub(crate) fn with_mesh_source_writes(
+    pub fn with_mesh_source_writes(
         mut self,
         writes: &'a mut Vec<(Slot, MeshSource)>,
     ) -> Self {
@@ -604,7 +604,7 @@ impl<'a> NodeOutputs<'a> {
         }
     }
 
-    pub(crate) fn with_vector_field_writes(
+    pub fn with_vector_field_writes(
         mut self,
         writes: &'a mut Vec<(Slot, FieldValue)>,
     ) -> Self {

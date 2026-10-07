@@ -1888,6 +1888,7 @@ mod tests {
 
         let mut registry = PrimitiveRegistry::with_builtin();
         register_substep_test_nodes(&mut registry);
+        crate::testkit::fusion_fixtures::register_particle_fusion_fixture(&mut registry);
         // `outside` (a force atom on the seed particles) feeds `inner_a`'s
         // forces through a coincident array wire; both are fusable and the
         // merge is convex, so only the border gate keeps them apart.
@@ -1897,24 +1898,22 @@ mod tests {
                 "version": 3,
                 "nodes": [
                     {"id": 0, "nodeId": "seed", "typeId": "test.particle_source"},
-                    {"id": 1, "nodeId": "forces", "typeId": "test.force_source"},
+                    {"id": 1, "nodeId": "forces", "typeId": "test.particle_source"},
                     {"id": 2, "nodeId": "boundary", "typeId": "test.particle_boundary"},
-                    {"id": 3, "nodeId": "inner_a", "typeId": "node.move_particles_3d"},
-                    {"id": 4, "nodeId": "inner_b", "typeId": "node.move_particles_3d"},
-                    {"id": 5, "nodeId": "outside", "typeId": "node.push_from_walls_3d"},
+                    {"id": 3, "nodeId": "inner_a", "typeId": "test.particle_map"},
+                    {"id": 4, "nodeId": "inner_b", "typeId": "test.particle_map"},
+                    {"id": 5, "nodeId": "outside", "typeId": "test.particle_map"},
                     {"id": 6, "nodeId": "sink", "typeId": "test.particle_sink"},
                     {"id": 7, "nodeId": "output", "typeId": "system.final_output"}
                 ],
                 "wires": [
                     {"fromNode": 0, "fromPort": "out", "toNode": 2, "toPort": "seed"},
                     {"fromNode": 1, "fromPort": "out", "toNode": 5, "toPort": "in"},
-                    {"fromNode": 0, "fromPort": "out", "toNode": 5, "toPort": "particles"},
+                    {"fromNode": 0, "fromPort": "out", "toNode": 5, "toPort": "forces"},
                     {"fromNode": 2, "fromPort": "out", "toNode": 3, "toPort": "in"},
                     {"fromNode": 5, "fromPort": "out", "toNode": 3, "toPort": "forces"},
-                    {"fromNode": 2, "fromPort": "step_dt", "toNode": 3, "toPort": "speed"},
                     {"fromNode": 3, "fromPort": "out", "toNode": 4, "toPort": "in"},
                     {"fromNode": 1, "fromPort": "out", "toNode": 4, "toPort": "forces"},
-                    {"fromNode": 2, "fromPort": "step_index", "toNode": 4, "toPort": "speed"},
                     {"fromNode": 4, "fromPort": "out", "toNode": 2, "toPort": "in"},
                     {"fromNode": 2, "fromPort": "out", "toNode": 6, "toPort": "particles"},
                     {"fromNode": 6, "fromPort": "out", "toNode": 7, "toPort": "in"}
@@ -1935,15 +1934,15 @@ mod tests {
                 "version": 3,
                 "nodes": [
                     {"id": 0, "nodeId": "seed", "typeId": "test.particle_source"},
-                    {"id": 1, "nodeId": "forces", "typeId": "test.force_source"},
-                    {"id": 3, "nodeId": "mover", "typeId": "node.move_particles_3d"},
-                    {"id": 5, "nodeId": "outside", "typeId": "node.push_from_walls_3d"},
+                    {"id": 1, "nodeId": "forces", "typeId": "test.particle_source"},
+                    {"id": 3, "nodeId": "mover", "typeId": "test.particle_map"},
+                    {"id": 5, "nodeId": "outside", "typeId": "test.particle_map"},
                     {"id": 6, "nodeId": "sink", "typeId": "test.particle_sink"},
                     {"id": 7, "nodeId": "output", "typeId": "system.final_output"}
                 ],
                 "wires": [
                     {"fromNode": 1, "fromPort": "out", "toNode": 5, "toPort": "in"},
-                    {"fromNode": 0, "fromPort": "out", "toNode": 5, "toPort": "particles"},
+                    {"fromNode": 0, "fromPort": "out", "toNode": 5, "toPort": "forces"},
                     {"fromNode": 0, "fromPort": "out", "toNode": 3, "toPort": "in"},
                     {"fromNode": 5, "fromPort": "out", "toNode": 3, "toPort": "forces"},
                     {"fromNode": 3, "fromPort": "out", "toNode": 6, "toPort": "particles"},

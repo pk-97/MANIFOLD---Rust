@@ -63,7 +63,7 @@ pub(crate) struct BodyGate<'a> {
 }
 
 /// The bodies a step couples into its solve, and what their passes read.
-pub(crate) struct Bodies<'a> {
+pub struct Bodies<'a> {
     pub lattice: [u32; 3],
     pub lattice_min: [f32; 3],
     pub cell_size: f32,
@@ -107,13 +107,13 @@ struct Pipelines {
     finalize: GpuComputePipeline,
     product: GpuComputePipeline,
     velocity: GpuComputePipeline,
-    #[cfg(all(test, feature = "gpu-proofs"))]
+    #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
     poison: GpuComputePipeline,
 }
 
 /// The passes' pipelines and their partial sums and per-body sums.
 #[derive(Default)]
-pub(crate) struct BodyPasses {
+pub struct BodyPasses {
     pipelines: Option<Pipelines>,
     partials: Option<GpuBuffer>,
     sums: Option<GpuBuffer>,
@@ -137,7 +137,7 @@ fn partial_bytes(n: [u32; 3], count: u32) -> u64 {
 
 /// Device bytes the passes hold once a step has `count` dynamic bodies on
 /// lattice `n`, for the extent proof (gated as `liquid::extent` is).
-#[cfg(any(test, feature = "gpu-proofs"))]
+#[cfg(any(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 pub(crate) fn held_bytes(n: [u32; 3], count: u32) -> u64 {
     partial_bytes(n, count) + SUM_BYTES
 }
@@ -164,13 +164,13 @@ impl BodyPasses {
             finalize: pipe("impulse_finalize", "gpu_flip.bodies.finalize"),
             product: pipe("body_product", "gpu_flip.bodies.product"),
             velocity: pipe("velocity_change", "gpu_flip.bodies.velocity_change"),
-            #[cfg(all(test, feature = "gpu-proofs"))]
+            #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
             poison: pipe("poison_partials", "gpu_flip.bodies.poison"),
         }
     }
 
     /// Build the passes' pipelines; the owning node calls this at install.
-    pub(crate) fn prepare_pipelines(&mut self, device: &GpuDevice) {
+    pub fn prepare_pipelines(&mut self, device: &GpuDevice) {
         if self.pipelines.is_none() {
             self.pipelines = Some(Self::pipelines(device));
         }
@@ -181,7 +181,7 @@ impl BodyPasses {
         }
     }
 
-    pub(crate) fn set_clock_plan(&mut self, plan: &GpuBuffer) {
+    pub fn set_clock_plan(&mut self, plan: &GpuBuffer) {
         self.clock_plan = Some(plan.clone());
     }
 
@@ -192,7 +192,7 @@ impl BodyPasses {
     /// Allocate the sums once and the partials for `count` bodies on
     /// lattice `n`, growing them when a larger lattice or more bodies
     /// arrive. The pipelines come from `prepare_pipelines` at install.
-    pub(crate) fn prepare(&mut self, device: &GpuDevice, n: [u32; 3], count: u32) -> Result<(), String> {
+    pub fn prepare(&mut self, device: &GpuDevice, n: [u32; 3], count: u32) -> Result<(), String> {
         assert!(self.pipelines.is_some(), "body pipelines built by prepare_pipelines at install");
         let need = partial_bytes(n, count);
         if self.partials.as_ref().is_none_or(|p| p.size < need) {
@@ -206,16 +206,16 @@ impl BodyPasses {
     }
 
     /// The last impulse's sums record per body, for the value proofs.
-    #[cfg(all(test, feature = "gpu-proofs"))]
-    pub(crate) fn sums(&self) -> Option<&GpuBuffer> {
+    #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
+    pub fn sums(&self) -> Option<&GpuBuffer> {
         self.sums.as_ref()
     }
 
     /// Test-only: NaN into every partial slot of `bodies` after a prepare,
     /// so a finalize that reads a slot the partial pass did not write shows
     /// in the sums.
-    #[cfg(all(test, feature = "gpu-proofs"))]
-    pub(crate) fn poison(&self, enc: &mut GpuEncoder, bodies: &Bodies<'_>) {
+    #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
+    pub fn poison(&self, enc: &mut GpuEncoder, bodies: &Bodies<'_>) {
         let (pipes, partials, _) = self.parts().expect("the body passes were prepared");
         let params = Self::params(bodies, false);
         enc.dispatch_compute(
@@ -310,7 +310,7 @@ impl BodyPasses {
     /// Inside a conjugate gradient iteration: the bodies' share of the
     /// operator on the search direction `direction`, added to `s`, over the
     /// solver's fine active `tiles`.
-    pub(crate) fn apply<S: Sink>(
+    pub fn apply<S: Sink>(
         &self,
         enc: &mut S,
         bodies: &Bodies<'_>,
@@ -370,7 +370,7 @@ impl BodyPasses {
     /// After the projection, as the engine finishes its pressure stage: the
     /// pressure's impulse into `reaction` and its velocity change into the
     /// solid velocity (`solid_rw`, the same buffer as `bodies.solid`).
-    pub(crate) fn react(
+    pub fn react(
         &self,
         enc: &mut GpuEncoder,
         bodies: &Bodies<'_>,

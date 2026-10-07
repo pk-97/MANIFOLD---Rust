@@ -422,7 +422,7 @@ fn generated_vignette_matches_original() {
         includes: &[],
     })
     .expect("vignette generates");
-    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/node_graph/primitives/shaders/vignette.wgsl"));
+    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../manifold-node-engine/src/primitives/shaders/vignette.wgsl"));
     let differ = TextureDiff::new(&device);
 
     // (shape, size, softness, strength): Circle (aspect-sensitive) + Rectangle.
@@ -506,7 +506,7 @@ fn generated_dither_matches_original() {
         "both dither inputs must be textureLoad'd:\n{generated}"
     );
 
-    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/node_graph/primitives/shaders/dither.wgsl"));
+    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../manifold-node-engine/src/primitives/shaders/dither.wgsl"));
     let mut bytes = [0u8; 16];
     bytes[0..4].copy_from_slice(&0.5f32.to_le_bytes()); // amount
 
@@ -712,7 +712,7 @@ fn generated_paramless_atom_matches_original() {
         "paramless tex must start at binding 0:\n{generated}"
     );
 
-    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/node_graph/primitives/shaders/abs_texture.wgsl"));
+    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../manifold-node-engine/src/primitives/shaders/abs_texture.wgsl"));
     let from_original = dispatch_paramless_pointwise(&device, original, &input);
     let from_generated = dispatch_paramless_pointwise(&device, &generated, &input);
     let differ = TextureDiff::new(&device);
@@ -779,7 +779,7 @@ fn generated_remap_matches_original() {
         "a Gather input must not be pre-sampled into a register:\n{generated}"
     );
 
-    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/node_graph/primitives/shaders/remap.wgsl"));
+    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../manifold-node-engine/src/primitives/shaders/remap.wgsl"));
     // wrap=2 (Mirror), mode=0 (Absolute).
     let mut bytes = [0u8; 16];
     bytes[0..4].copy_from_slice(&2u32.to_le_bytes());
@@ -1026,7 +1026,7 @@ fn generated_separable_gaussian_matches_original() {
         !generated.contains("let c_in"),
         "a Gather input must not be pre-sampled:\n{generated}"
     );
-    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/node_graph/primitives/shaders/separable_gaussian.wgsl"));
+    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../manifold-node-engine/src/primitives/shaders/separable_gaussian.wgsl"));
 
     let pack_hand = |ks: u32, axis: u32, step: f32, rmode: u32, radius: f32| -> Vec<u8> {
         let mut b = vec![0u8; 32];
@@ -1107,7 +1107,7 @@ fn generated_basic_shape_matches_original() {
         includes: &[],
     })
     .expect("basic_shape generates");
-    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/node_graph/primitives/shaders/basic_shape.wgsl"));
+    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../manifold-node-engine/src/primitives/shaders/basic_shape.wgsl"));
 
     // Hand layout: {aspect, line, uv_scale=1/scale, shape_idx(f32), is_wireframe
     // (thresholded 0/1), rotation, _pad, _pad}.
@@ -1200,7 +1200,7 @@ fn generated_gradient_ramp_matches_original() {
         generated.contains("stops: array<vec4<f32>, 16>"),
         "table array missing:\n{generated}"
     );
-    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/node_graph/primitives/shaders/gradient_ramp.wgsl"));
+    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../manifold-node-engine/src/primitives/shaders/gradient_ramp.wgsl"));
 
     let count: u32 = 3;
     let domain: f32 = 2.0;
@@ -1277,7 +1277,7 @@ fn generated_downsample_matches_original() {
         !generated.contains("let c_in"),
         "a Gather input must not be pre-sampled:\n{generated}"
     );
-    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/node_graph/primitives/shaders/downsample.wgsl"));
+    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../manifold-node-engine/src/primitives/shaders/downsample.wgsl"));
 
     let dispatch = |wgsl: &str| -> RenderTarget {
         let pipeline = device.create_compute_pipeline(wgsl, ENTRY, "codegen-downsample");
@@ -1352,7 +1352,7 @@ fn generated_gaussian_blur_variable_width_matches_original() {
         "both gather inputs must avoid pre-sampling:\n{generated}"
     );
     let original =
-        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/node_graph/primitives/shaders/gaussian_blur_variable_width.wgsl"));
+        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../manifold-node-engine/src/primitives/shaders/gaussian_blur_variable_width.wgsl"));
 
     // {direction (0=H), max_radius, _pad, _pad}; the body reads only these two.
     let mut bytes = [0u8; 16];
@@ -1439,7 +1439,7 @@ fn generated_blur_3d_separable_matches_original() {
         "3D workgroup missing:\n{generated}"
     );
     let original =
-        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/generators/shaders/fluid_blur_3d.wgsl"));
+        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../manifold-node-engine/src/shaders/fluid_blur_3d.wgsl"));
 
     // Fill the input volume with a 3D gradient (varies along every axis).
     let input = make_3d_texture(
@@ -1566,7 +1566,7 @@ fn generated_gradient_central_diff_3d_matches_original() {
         generated.contains("var tex_density: texture_3d<f32>"),
         "3D sampled input missing:\n{generated}"
     );
-    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/node_graph/primitives/shaders/gradient_central_diff_3d.wgsl"));
+    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../manifold-node-engine/src/primitives/shaders/gradient_central_diff_3d.wgsl"));
 
     let density = make_3d_texture(
         &device,
@@ -1646,7 +1646,7 @@ fn generated_curl_slope_force_3d_matches_original() {
         !generated.contains("var samp: sampler"),
         "a CoincidentTexel input binds no sampler:\n{generated}"
     );
-    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/node_graph/primitives/shaders/curl_slope_force_3d.wgsl"));
+    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../manifold-node-engine/src/primitives/shaders/curl_slope_force_3d.wgsl"));
 
     let gradient = make_3d_texture(
         &device,
@@ -1836,7 +1836,7 @@ fn generated_hash_field_by_seed_matches_original() {
         !generated.contains("var samp: sampler"),
         "a CoincidentTexel input binds no sampler:\n{generated}"
     );
-    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/node_graph/primitives/shaders/hash_field_by_seed.wgsl"));
+    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../manifold-node-engine/src/primitives/shaders/hash_field_by_seed.wgsl"));
 
     // {seed, seed_x, seed_y, mode} = 16B; mode=0 (Hash2).
     let mut bytes = [0u8; 16];
@@ -1911,7 +1911,7 @@ fn generated_pack_channels_matches_original() {
         generated.contains("use_r: u32"),
         "optional-input use flag missing:\n{generated}"
     );
-    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/node_graph/primitives/shaders/pack_channels.wgsl"));
+    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../manifold-node-engine/src/primitives/shaders/pack_channels.wgsl"));
 
     let use_flags = [1u32, 0, 1, 1]; // g unwired → falls back to default_g
     let defaults = [0.1f32, 0.5, 0.2, 1.0];
@@ -1983,7 +1983,7 @@ fn generated_trig_texture_matches_original() {
         generated.contains("use_freq_tex: u32") && generated.contains("use_phase_tex: u32"),
         "optional-input use flags missing:\n{generated}"
     );
-    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/node_graph/primitives/shaders/trig_texture.wgsl"));
+    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../manifold-node-engine/src/primitives/shaders/trig_texture.wgsl"));
 
     // {freq, phase, mode, use_freq_tex, use_phase_tex, _pad×3} = 32B.
     let mut bytes = vec![0u8; 32];
@@ -2061,7 +2061,7 @@ fn generated_block_displace_field_matches_original() {
         generated.contains("struct BodyOutputs") && generated.contains("write_offset: u32"),
         "multi-output struct/flags missing:\n{generated}"
     );
-    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/node_graph/primitives/shaders/block_displace_field.wgsl"));
+    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../manifold-node-engine/src/primitives/shaders/block_displace_field.wgsl"));
 
     let (amount, block_size, speed, time) = (0.8f32, 16.0f32, 2.0f32, 1.0f32);
     let mut hand = vec![0u8; 16];
@@ -2117,7 +2117,7 @@ fn generated_lic_integrate_matches_original() {
         includes: &[],
     })
     .expect("lic_integrate generates");
-    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/node_graph/primitives/shaders/lic_integrate.wgsl"));
+    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../manifold-node-engine/src/primitives/shaders/lic_integrate.wgsl"));
 
     let mut bytes = [0u8; 16];
     bytes[0..4].copy_from_slice(&16i32.to_le_bytes()); // steps
@@ -2173,7 +2173,7 @@ fn generated_sample_volume_2d_matches_original() {
         generated.contains("var dst: texture_storage_2d<rgba16float, write>"),
         "2D output binding missing:\n{generated}"
     );
-    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/node_graph/primitives/shaders/sample_volume_2d.wgsl"));
+    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../manifold-node-engine/src/primitives/shaders/sample_volume_2d.wgsl"));
 
     let volume = make_3d_texture(
         &device,
@@ -2267,7 +2267,7 @@ fn generated_voronoi_2d_matches_original() {
         generated.contains("write_cell_id: u32"),
         "write_cell_id flag missing:\n{generated}"
     );
-    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/node_graph/primitives/shaders/voronoi_2d.wgsl"));
+    let original = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../manifold-node-engine/src/primitives/shaders/voronoi_2d.wgsl"));
 
     // {scale, offset_x, offset_y, jitter, out_scale, write_out, write_cell_id, _pad}.
     let mut bytes = vec![0u8; 32];

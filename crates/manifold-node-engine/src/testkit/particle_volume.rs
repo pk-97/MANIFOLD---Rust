@@ -37,7 +37,7 @@
         }
         value
     }
-    pub(crate) fn union(
+    pub fn union(
         particle_phi: f32,
         interior: Option<&[f32]>,
         p: [f32; 3],

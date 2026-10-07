@@ -271,7 +271,7 @@ fn build_upload_bytes(shape: u32) -> Box<[u8]> {
 }
 
 /// Return the cached, padded compact payload used by the GPU upload bridge.
-pub(crate) fn platonic_mesh_upload_bytes(shape: u32) -> &'static [u8] {
+pub fn platonic_mesh_upload_bytes(shape: u32) -> &'static [u8] {
     static TETRA: OnceLock<Box<[u8]>> = OnceLock::new();
     static CUBE: OnceLock<Box<[u8]>> = OnceLock::new();
     static OCTA: OnceLock<Box<[u8]>> = OnceLock::new();

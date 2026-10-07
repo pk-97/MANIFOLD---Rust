@@ -67,7 +67,7 @@ pub fn standalone_2d_slots(n_textures: usize, has_sampler: bool) -> Vec<Standalo
 }
 
 /// Stack capacity checked against every canonical kernel by the binding census.
-pub(crate) const STANDALONE_2D_MAX_BINDINGS: usize = 32;
+pub const STANDALONE_2D_MAX_BINDINGS: usize = 32;
 
 /// Canonical texture-path dispatch tail: builds the bindings in
 /// [`standalone_2d_slots`] order and dispatches a 2D grid over `out`

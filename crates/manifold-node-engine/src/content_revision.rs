@@ -25,7 +25,7 @@ pub struct ContentVersion {
 }
 
 impl ContentVersion {
-    pub(crate) fn new(epoch: u64, resource: ResourceId, revision: u64) -> Self {
+    pub fn new(epoch: u64, resource: ResourceId, revision: u64) -> Self {
         Self { epoch, resource, revision }
     }
 }

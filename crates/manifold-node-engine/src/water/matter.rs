@@ -12,7 +12,7 @@ use crate::ports::{ChannelElementType, ChannelSpec, KnownItem};
 pub mod coupling;
 #[doc = "The f64 CPU oracle, compiled for unit tests and the `gpu-proofs` binary."]
 pub mod look;
-#[cfg(any(test, feature = "gpu-proofs"))]
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 #[doc(hidden)]
 pub mod reference;
 

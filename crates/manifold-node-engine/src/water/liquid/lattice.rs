@@ -95,7 +95,7 @@ impl LiquidLattice {
     /// at resolution 64, matching each atom's param defaults. Wires no padded
     /// layout could have produced are reported as `node`'s error and give
     /// `None`.
-    pub(crate) fn from_wires(ctx: &mut EffectNodeContext<'_, '_>, node: &str) -> Option<Self> {
+    pub fn from_wires(ctx: &mut EffectNodeContext<'_, '_>, node: &str) -> Option<Self> {
         Self::from_scalars(|name, default| ctx.scalar_or_param(name, default))
             .map_err(|refusal| ctx.error(format!("{node}: {refusal}")))
             .ok()

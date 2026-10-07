@@ -1,5 +1,6 @@
+use manifold_node_engine::validation::validate;
 use manifold_node_engine::persistence::*;
-use manifold_node_engine::{graph::Graph, parameters::ParamValue, scene::boundary_nodes::Source, scene::boundary_nodes::FinalOutput, scene::boundary_nodes::SOURCE_TYPE_ID, scene::boundary_nodes::FINAL_OUTPUT_TYPE_ID, exec::execution_plan::compile, validate};
+use manifold_node_engine::{graph::Graph, parameters::ParamValue, scene::boundary_nodes::Source, scene::boundary_nodes::FinalOutput, scene::boundary_nodes::SOURCE_TYPE_ID, scene::boundary_nodes::FINAL_OUTPUT_TYPE_ID, exec::execution_plan::compile};
 use crate::node_graph::primitives::{self, Blur, Threshold};
 use std::collections::BTreeMap;
 fn registry() -> PrimitiveRegistry { PrimitiveRegistry::with_builtin() }
@@ -23,7 +24,7 @@ fn registry() -> PrimitiveRegistry { PrimitiveRegistry::with_builtin() }
             primitives::BRIGHTNESS_TYPE_ID,
             primitives::CHANNEL_MIX_TYPE_ID,
             primitives::COLOR_RAMP_TYPE_ID,
-            primitives::MIX_TYPE_ID,
+            manifold_node_engine::primitives::mix::MIX_TYPE_ID,
             primitives::THRESHOLD_TYPE_ID,
             primitives::BLUR_TYPE_ID,
             primitives::GAUSSIAN_BLUR_TYPE_ID,
@@ -210,7 +211,7 @@ fn registry() -> PrimitiveRegistry { PrimitiveRegistry::with_builtin() }
         let mut g = Graph::new();
         let src = g.add_node(Box::new(Source::new()));
         let blur = g.add_node(Box::new(Blur::new()));
-        let mix = g.add_node(Box::new(primitives::Mix::new()));
+        let mix = g.add_node(Box::new(manifold_node_engine::primitives::mix::Mix::new()));
         let out = g.add_node(Box::new(FinalOutput::new()));
 
         g.connect((src, "out"), (blur, "source")).unwrap();

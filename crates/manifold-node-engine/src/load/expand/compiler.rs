@@ -19,17 +19,16 @@ use manifold_core::scene_index::FlatSceneIndex;
 
 use {super::SceneModifierExpandError, super::bindings, super::frames, super::math_view::LegacyMathViewScope, super::math_view::MathViewRequest, super::namespace, crate::load::expand::routes, super::routes::PreparedSceneModifierGraph};
 
-type PortAddress = (u32, String);
-type EndpointKey = (SceneNodeRef, String);
+#[doc(hidden)]
+pub type PortAddress = (u32, String);
+#[doc(hidden)]
+pub type EndpointKey = (SceneNodeRef, String);
 type CloneKey = (u32, Option<SceneNodeRef>);
 type LeafMap = BTreeMap<String, Vec<NodeId>>;
-pub(crate) mod math_events;
+pub mod math_events;
 pub(crate) mod shatter;
 
 
-
-#[cfg(test)]
-mod camera_endpoint_tests;
 
 fn invalid(path: impl Into<String>, detail: impl Into<String>) -> SceneModifierExpandError {
     SceneModifierExpandError::InvalidRecipe {
@@ -143,7 +142,7 @@ pub fn prepare_scene_modifier_math_view(
     }))
 }
 
-pub(crate) fn prepare_legacy_scene_modifier_math_view(
+pub fn prepare_legacy_scene_modifier_math_view(
     owner: &EffectGraphDef,
     registry: &PrimitiveRegistry,
     modifier_id: &NodeId,
@@ -541,13 +540,14 @@ fn validate_binding_leaves(
     Ok(())
 }
 
-struct Builder<'a> {
+#[doc(hidden)]
+pub struct Builder<'a> {
     derived: EffectGraphDef,
     index: &'a FlatSceneIndex,
     registry: &'a PrimitiveRegistry,
     next_id: u32,
-    current: BTreeMap<EndpointKey, Option<PortAddress>>,
-    reference: BTreeMap<EndpointKey, Option<PortAddress>>,
+    pub current: BTreeMap<EndpointKey, Option<PortAddress>>,
+    pub reference: BTreeMap<EndpointKey, Option<PortAddress>>,
     written: BTreeSet<EndpointKey>,
     camera_anchors: BTreeMap<SceneNodeRef, EndpointKey>,
     contexts: BTreeMap<String, PortAddress>,
@@ -662,6 +662,32 @@ fn preflight_expansion(
 }
 
 impl Builder<'_> {
+    #[cfg(any(test, feature = "testkit"))]
+    #[doc(hidden)]
+    pub fn for_test<'a>(
+        graph: &EffectGraphDef,
+        index: &'a FlatSceneIndex,
+        registry: &'a PrimitiveRegistry,
+    ) -> Builder<'a> {
+        Builder {
+            derived: graph.clone(),
+            index,
+            registry,
+            next_id: 100,
+            current: BTreeMap::new(),
+            reference: BTreeMap::new(),
+            written: BTreeSet::new(),
+            camera_anchors: BTreeMap::new(),
+            contexts: BTreeMap::new(),
+            event_routes: Vec::new(),
+            math_view: None,
+            math_seeded: false,
+            math_targets: None,
+            math_captures: BTreeMap::new(),
+            math_samples: BTreeMap::new(),
+        }
+    }
+
     fn seed_math_view(
         &mut self,
         instance: &SceneModifierInstanceDef,
@@ -1484,7 +1510,8 @@ impl Builder<'_> {
         self.constant_node(key, "node.value", params, "out")
     }
 
-    fn attachment_key(
+    #[doc(hidden)]
+    pub fn attachment_key(
         &mut self,
         instance: &SceneModifierInstanceDef,
         target: Option<&SceneNodeRef>,

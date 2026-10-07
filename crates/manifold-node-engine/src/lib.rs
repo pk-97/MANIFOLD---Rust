@@ -4,7 +4,7 @@ pub mod platonic;
 pub mod stateful;
 pub mod mesh;
 pub mod atomic;
-mod bindings;
+pub mod bindings;
 #[cfg(test)]
 mod builtins;
 #[doc = "Canonical channel-name registry for the Channel type system. The"]
@@ -15,25 +15,25 @@ pub mod channel_names;
 pub mod content_revision;
 pub mod descriptor;
 pub mod freeze;
-mod graph;
-mod palette;
-mod param_binding;
+pub mod graph;
+pub mod palette;
+pub mod param_binding;
 pub mod param_doc;
 mod param_tooltips_bulk;
 mod param_tooltips_table;
-pub(crate) mod parameters;
-pub(crate) mod persistence;
+pub mod parameters;
+pub mod persistence;
 pub mod ports;
 pub mod preview_encoding;
 pub mod primitive;
-mod snapshot;
-mod state_store;
+pub mod snapshot;
+pub mod state_store;
 pub mod trigger_shadow_lint;
 pub mod validate;
-mod validation;
+pub mod validation;
 pub mod particles;
 pub mod runtime;
-#[cfg(any(test, feature = "gpu-proofs"))]
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 #[doc(hidden)]
 pub mod testkit;
 pub mod exec;

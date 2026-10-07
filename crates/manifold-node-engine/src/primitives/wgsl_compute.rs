@@ -722,6 +722,7 @@ fn select_compute_entry(module: &naga::Module) -> Result<&naga::EntryPoint, Stri
 /// (parse + the BUG-010 rule above). The freeze worker's pipeline prewarm goes
 /// through here so prewarm and the lazy `evaluate()` compile can never pick
 /// different entries.
+#[cfg(not(any(test, feature = "testkit")))]
 pub(crate) fn select_compute_entry_name(source: &str) -> Option<String> {
     let module = naga::front::wgsl::parse_str(source).ok()?;
     select_compute_entry(&module).ok().map(|e| e.name.clone())

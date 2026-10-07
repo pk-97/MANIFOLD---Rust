@@ -1,6 +1,7 @@
 use std::{env, path::PathBuf};
 
 #[path = "../../scripts/native_source_identity.rs"]
+#[expect(dead_code, reason = "The shared helper also exposes the legacy emitter used by physics crates; this crate hashes only owned sources.")]
 mod native_source_identity;
 
 fn main() {

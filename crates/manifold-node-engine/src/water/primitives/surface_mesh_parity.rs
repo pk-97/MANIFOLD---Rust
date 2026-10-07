@@ -1,7 +1,9 @@
 //! CPU references from FLIP Fluids trianglemesh.cpp and manifold-fluids decode_surface.
 //! The reference uses a global incidence list; the f32 replica uses the GPU's
 //! four cells around each lattice edge, independently of that list.
-use glam::{DVec3, Vec3};
+use glam::DVec3;
+#[cfg(test)]
+use glam::Vec3;
 
 pub(super) const CORNERS: [[usize; 3]; 8] = [
     [0, 0, 0],
@@ -28,13 +30,15 @@ pub(super) const EDGES: [(usize, usize); 12] = [
     (3, 7),
 ];
 
-pub(super) struct Fixture {
+pub struct Fixture {
     pub nodes: usize,
     pub field: Vec<f32>,
     pub points: Vec<DVec3>,
     pub triangles: Vec<[usize; 3]>,
     pub gradients: Vec<DVec3>,
+    #[cfg(any(test, feature = "gpu-proofs"))]
     edges: Vec<([usize; 3], usize)>,
+    #[cfg(any(test, feature = "gpu-proofs"))]
     cell_triangles: Vec<Vec<[usize; 3]>>,
 }
 
@@ -59,7 +63,7 @@ pub(super) fn triangle_table() -> Vec<[i32; 16]> {
         .collect()
 }
 
-pub(super) fn fixture(kind: usize) -> Fixture {
+pub fn fixture(kind: usize) -> Fixture {
     let n = 16;
     let spheres: Vec<(DVec3, f64)> = match kind {
         0 => vec![
@@ -162,14 +166,16 @@ pub(super) fn fixture(kind: usize) -> Fixture {
         points,
         triangles,
         gradients,
+    #[cfg(any(test, feature = "gpu-proofs"))]
         edges,
+    #[cfg(any(test, feature = "gpu-proofs"))]
         cell_triangles,
     }
 }
 
 /// Direct port of _vertexTriangles and _smoothTriangleMesh; repeated meetings
 /// are deliberately not deduplicated (including open and non-manifold fans).
-pub(super) fn flip_smooth(
+pub fn flip_smooth(
     points: &[DVec3],
     triangles: &[[usize; 3]],
     value: f64,
@@ -208,7 +214,7 @@ pub(super) fn flip_smooth(
     points
 }
 
-pub(super) fn flip_normals(points: &[DVec3], triangles: &[[usize; 3]]) -> Vec<DVec3> {
+pub fn flip_normals(points: &[DVec3], triangles: &[[usize; 3]]) -> Vec<DVec3> {
     let mut normals = vec![DVec3::ZERO; points.len()];
     for &[a, b, c] in triangles {
         let normal = (points[b] - points[a]).cross(points[c] - points[a]);
@@ -231,6 +237,7 @@ pub(super) fn flip_normals(points: &[DVec3], triangles: &[[usize; 3]]) -> Vec<DV
 impl Fixture {
     // Shader order: lower edge endpoint, transverse axes, around 0..4,
     // triangle table order, then the two other corners in cyclic order.
+    #[cfg(test)]
     fn gather(&self, vertex: usize, points: &[Vec3]) -> (Vec3, usize, Vec3) {
         let (a, axis) = self.edges[vertex];
         let c = self.nodes - 1;
@@ -267,6 +274,7 @@ impl Fixture {
         }
         (sum, count, normal)
     }
+    #[cfg(test)]
     fn replica(&self, value: f32, iterations: usize) -> (Vec<DVec3>, Vec<DVec3>) {
         let mut points: Vec<Vec3> = self.points.iter().map(|p| p.as_vec3()).collect();
         for _ in 0..iterations {
@@ -391,7 +399,7 @@ fn normals_are_area_weighted_and_degenerate_fans_are_zero() {
 
 #[cfg(feature = "gpu-proofs")]
 impl Fixture {
-    pub(super) fn triangle_scan(&self) -> Vec<u32> {
+    pub fn triangle_scan(&self) -> Vec<u32> {
         let mut total = 0;
         self.cell_triangles
             .iter()
@@ -401,7 +409,7 @@ impl Fixture {
             })
             .collect()
     }
-    pub(super) fn edge_scan(&self) -> Vec<u32> {
+    pub fn edge_scan(&self) -> Vec<u32> {
         let mut counts = vec![0; self.nodes.pow(3)];
         for (p, _) in &self.edges {
             counts[p[0] + self.nodes * (p[1] + self.nodes * p[2])] += 1;

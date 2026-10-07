@@ -226,7 +226,7 @@ fn push_unique(
 
 #[cfg(test)]
 mod tests {
-    use manifold_node_engine::scene::mesh_cut::*;
+    use super::*;
 
     const TRIANGLE: [[f32; 3]; 3] = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
 

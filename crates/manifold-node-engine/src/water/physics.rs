@@ -27,7 +27,7 @@ use targeted_fields::{TargetedFieldHistory, TARGET_SLOTS};
 pub use worker::{RigidSceneInputs, RigidSceneObservation};
 
 /// Shared particle duration with the same advisory HUD path as other live sims.
-pub(crate) fn particle_frame_duration(delta: Seconds) -> f32 {
+pub fn particle_frame_duration(delta: Seconds) -> f32 {
     let outcome = manifold_physics::particle_duration::scaled(delta, offline_simulation());
     if outcome.diagnostic.is_some() {
         crate::water::physics_metrics::record_simulation(0.0, 0.0, false, true);
@@ -56,7 +56,7 @@ pub fn native_ticks_on_this_thread() -> u64 {
     NATIVE_TICKS.get()
 }
 
-pub(crate) fn authored_sample_only() -> bool {
+pub fn authored_sample_only() -> bool {
     SAMPLE_AUTHORED_ONLY.with(std::cell::Cell::get)
 }
 
@@ -87,7 +87,7 @@ pub(crate) fn simulation_interval() -> f64 {
     SIMULATION_INTERVAL.get()
 }
 
-pub(crate) fn offline_simulation() -> bool {
+pub fn offline_simulation() -> bool {
     PREVIEW_STEP_BUDGET.with(|budget| budget.get().is_none())
 }
 

@@ -2,7 +2,7 @@ pub mod fluid;
 #[cfg(feature = "gpu-proofs")]
 pub(crate) mod fluid_cache;
 #[cfg(feature = "gpu-proofs")]
-pub(crate) mod fluid_mesh_upload;
+pub mod fluid_mesh_upload;
 pub mod fluid_particles;
 pub mod fluid_role;
 pub mod liquid;

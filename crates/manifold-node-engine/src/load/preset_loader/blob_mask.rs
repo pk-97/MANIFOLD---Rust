@@ -3,7 +3,8 @@
 /// mask consumer tail is authored here. This keeps detector controls and
 /// wiring coupled to the source preset while each MaskBlob instance still gets
 /// independent primitive state after the normal graph loader clones the def.
-pub(super) fn synthesize_mask_blob_json(blob_tracking_json: &str) -> Result<String, String> {
+#[doc(hidden)]
+pub fn synthesize_mask_blob_json(blob_tracking_json: &str) -> Result<String, String> {
     use serde_json::{Value, json};
 
     fn node_id(node: &Value) -> Option<&str> {

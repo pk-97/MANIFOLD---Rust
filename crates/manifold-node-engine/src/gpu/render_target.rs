@@ -5,12 +5,12 @@ use manifold_gpu::{
 
 // Thread-local fault injection at fallible allocation boundaries. Native tests
 // can reject each preparation stage without exhausting the machine's memory.
-#[cfg(all(test, feature = "gpu-proofs"))]
+#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 thread_local! {
     static FAIL_ALLOCATION_AFTER: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
 }
 
-#[cfg(all(test, feature = "gpu-proofs"))]
+#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 pub(crate) fn allocation_checkpoint() -> Result<(), String> {
     FAIL_ALLOCATION_AFTER.with(|remaining| match remaining.get() {
         Some(0) => Err("injected GPU allocation failure".into()),
@@ -19,14 +19,14 @@ pub(crate) fn allocation_checkpoint() -> Result<(), String> {
     })
 }
 
-#[cfg(all(test, feature = "gpu-proofs"))]
-pub(crate) struct AllocationFailureGuard(Option<usize>);
-#[cfg(all(test, feature = "gpu-proofs"))]
+#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
+pub struct AllocationFailureGuard(Option<usize>);
+#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 impl Drop for AllocationFailureGuard {
     fn drop(&mut self) { FAIL_ALLOCATION_AFTER.with(|value| value.set(self.0)); }
 }
-#[cfg(all(test, feature = "gpu-proofs"))]
-pub(crate) fn fail_allocation_after(count: usize) -> AllocationFailureGuard {
+#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
+pub fn fail_allocation_after(count: usize) -> AllocationFailureGuard {
     AllocationFailureGuard(FAIL_ALLOCATION_AFTER.with(|value| value.replace(Some(count))))
 }
 
@@ -99,7 +99,7 @@ impl RenderTarget {
             bytes,
         )
         .map_err(|error| error.to_string())?;
-        #[cfg(all(test, feature = "gpu-proofs"))]
+        #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
         allocation_checkpoint()?;
         let texture = device.try_create_texture(&GpuTextureDesc {
             width,
@@ -172,7 +172,7 @@ impl RenderTarget {
             bytes,
         )
         .map_err(|error| error.to_string())?;
-        #[cfg(all(test, feature = "gpu-proofs"))]
+        #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
         allocation_checkpoint()?;
         let texture = device.try_create_texture(&GpuTextureDesc {
             width,

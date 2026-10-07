@@ -51,7 +51,7 @@ impl EffectNode for FluidTimeObserver {
     }
 }
 
-pub(crate) fn runtime_definition() -> EffectGraphDef {
+pub fn runtime_definition() -> EffectGraphDef {
     let def = serde_json::json!({
         "version": 2, "name": "Fluid offline history",
         "nodes": [
@@ -73,7 +73,7 @@ pub(crate) fn runtime_definition() -> EffectGraphDef {
     serde_json::from_value(def).unwrap()
 }
 
-pub(crate) fn runtime_from_definition(def: EffectGraphDef) -> PresetRuntime {
+pub fn runtime_from_definition(def: EffectGraphDef) -> PresetRuntime {
     let mut registry = PrimitiveRegistry::with_cpu_flip_reference();
     registry.register("test.fluid_time", || {
         Box::new(FluidTimeObserver(EffectNodeType::new("test.fluid_time")))
@@ -81,13 +81,15 @@ pub(crate) fn runtime_from_definition(def: EffectGraphDef) -> PresetRuntime {
     PresetRuntime::from_def(def, &registry, None).unwrap()
 }
 
+#[cfg(test)]
 pub(crate) fn runtime() -> PresetRuntime {
     runtime_from_definition(runtime_definition())
 }
 
 
-pub(crate) fn observed_fluid_time() -> Option<f32> { FLUID_TIME.get() }
-pub(crate) fn set_observed_fluid_time(value: Option<f32>) { FLUID_TIME.set(value); }
+pub fn observed_fluid_time() -> Option<f32> { FLUID_TIME.get() }
+pub fn set_observed_fluid_time(value: Option<f32>) { FLUID_TIME.set(value); }
+#[cfg(test)]
 pub(crate) fn fluid_time_observer() -> Box<dyn EffectNode> {
     Box::new(FluidTimeObserver(EffectNodeType::new("test.fluid_time")))
 }

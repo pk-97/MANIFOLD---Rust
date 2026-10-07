@@ -2,6 +2,7 @@
     //! (built against an incomplete registry, `pending_wire` still `Some`)
     //! must never reach `PresetRuntime::try_build` silently.
     use manifold_core::effects::PresetInstance;
+    use manifold_node_engine::runtime::core::assert_manifest_gate;
 
     /// A bare `PresetInstance` deserialize referencing an effect type that
     /// isn't registered anywhere, with a params map — the keep-don't-drop
@@ -26,7 +27,7 @@
     #[test]
     fn bug080_provisional_manifest_asserts_at_chain_build() {
         let fx = provisional_instance();
-        let result = std::panic::catch_unwind(|| super::assert_manifest_gate(&fx));
+        let result = std::panic::catch_unwind(|| assert_manifest_gate(&fx));
         assert!(
             result.is_err(),
             "assert_manifest_gate must panic (via debug_assert!) when handed a \
@@ -48,5 +49,5 @@
             "a template-resolved instance must never be provisional"
         );
         // Must not panic.
-        super::assert_manifest_gate(&fx);
+        assert_manifest_gate(&fx);
     }

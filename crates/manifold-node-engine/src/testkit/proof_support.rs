@@ -2,14 +2,19 @@ use crate::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use crate::exec::execution_plan::{ExecutionPlan, ResourceId, compile};
 use crate::graph::Graph;
 use crate::parameters::ParamValue;
+#[cfg(test)]
 use crate::primitives::gain::Gain;
-use crate::{persistence::EffectGraphDefExt, exec::execution::Executor, scene::boundary_nodes::FinalOutput, exec::effect_node::FrameTime, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, persistence::PrimitiveRegistry, scene::boundary_nodes::Source, state_store::StateStore};
+use crate::{persistence::EffectGraphDefExt, exec::execution::Executor, exec::effect_node::FrameTime, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, persistence::PrimitiveRegistry, state_store::StateStore};
+#[cfg(test)]
+use crate::scene::boundary_nodes::{FinalOutput, Source};
 use crate::gpu::render_target::RenderTarget;
 use half::f16;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::{Beats, Seconds};
+#[cfg(test)]
+use manifold_gpu::GpuBinding;
 use manifold_gpu::{
-    GpuBinding, GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat,
+    GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat,
     GpuTextureUsage,
 };
 
@@ -19,7 +24,7 @@ const FMT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
 
 
 
-pub(crate) fn frame_time() -> FrameTime {
+pub fn frame_time() -> FrameTime {
     FrameTime {
         beats: Beats(0.0),
         seconds: Seconds(0.0),
@@ -28,7 +33,7 @@ pub(crate) fn frame_time() -> FrameTime {
     }
 }
 
-pub(crate) fn find_node(graph: &Graph, type_id: &str) -> NodeInstanceId {
+pub fn find_node(graph: &Graph, type_id: &str) -> NodeInstanceId {
     graph
         .nodes()
         .find(|n| n.node.type_id().as_str() == type_id)
@@ -36,14 +41,14 @@ pub(crate) fn find_node(graph: &Graph, type_id: &str) -> NodeInstanceId {
         .unwrap_or_else(|| panic!("ColorGrade graph missing a `{type_id}` node"))
 }
 
-pub(crate) fn set_f(graph: &mut Graph, type_id: &str, param: &str, v: f32) {
+pub fn set_f(graph: &mut Graph, type_id: &str, param: &str, v: f32) {
     let id = find_node(graph, type_id);
     graph
         .set_param(id, param, ParamValue::Float(v))
         .unwrap_or_else(|e| panic!("set {type_id}.{param}: {e:?}"));
 }
 
-pub(crate) fn resource_for_output(plan: &ExecutionPlan, node: NodeInstanceId, port: &str) -> ResourceId {
+pub fn resource_for_output(plan: &ExecutionPlan, node: NodeInstanceId, port: &str) -> ResourceId {
     for step in plan.steps() {
         if step.node == node {
             for &(name, id) in &step.outputs {
@@ -56,7 +61,7 @@ pub(crate) fn resource_for_output(plan: &ExecutionPlan, node: NodeInstanceId, po
     panic!("no output `{port}` on node {node:?}");
 }
 
-pub(crate) fn try_resource_for_output(
+pub fn try_resource_for_output(
     plan: &ExecutionPlan,
     node: NodeInstanceId,
     port: &str,
@@ -75,7 +80,7 @@ pub(crate) fn try_resource_for_output(
 /// CPU-built RGBA gradient as a CPU-uploadable source texture — spatially
 /// varying so a pointwise fusion bug that's invisible on a flat fill can't
 /// hide. R ramps in x, G in y, B fixed, A = 1.
-pub(crate) fn gradient_input(device: &GpuDevice, w: u32, h: u32) -> GpuTexture {
+pub fn gradient_input(device: &GpuDevice, w: u32, h: u32) -> GpuTexture {
     let mut px = vec![f16::from_f32(0.0); (w * h * 4) as usize];
     for y in 0..h {
         for x in 0..w {
@@ -108,7 +113,7 @@ pub(crate) fn gradient_input(device: &GpuDevice, w: u32, h: u32) -> GpuTexture {
 /// Render an effect graph to a standalone texture (the unfused / oracle side).
 /// Copies `input` into the source slot, runs one frame, copies the bound
 /// output into a fresh target that outlives the backend.
-pub(crate) fn render_graph(
+pub fn render_graph(
     device: &std::sync::Arc<GpuDevice>,
     graph: &mut Graph,
     plan: &ExecutionPlan,
@@ -153,7 +158,7 @@ pub(crate) fn render_graph(
 
 /// Like [`render_graph`], but run the graph at a specific [`FrameTime`] so
 /// tests can prove a fused kernel is NOT freezing its frame-derived inputs.
-pub(crate) fn render_graph_at_time(
+pub fn render_graph_at_time(
     device: &std::sync::Arc<GpuDevice>,
     graph: &mut Graph,
     plan: &ExecutionPlan,
@@ -203,6 +208,7 @@ pub(crate) fn render_graph_at_time(
 /// Render the hand-fused Gain kernel: `out.rgb = in.rgb * product`, alpha kept.
 /// One read, one multiply, one write — the bandwidth collapse of an N-Gain
 /// chain.
+#[cfg(test)]
 pub(crate) fn render_fused_gain(device: &GpuDevice, input: &GpuTexture, product: f32) -> RenderTarget {
     let (w, h) = (input.width, input.height);
     let pipeline = device.create_compute_pipeline(
@@ -241,6 +247,7 @@ pub(crate) fn render_fused_gain(device: &GpuDevice, input: &GpuTexture, product:
 
 /// Build the unfused `Source -> Gain(g1) -> Gain(g2) -> FinalOutput` chain and
 /// render it. Returns (rendered texture, the source ResourceId is internal).
+#[cfg(test)]
 pub(crate) fn render_unfused_two_gain(device: &std::sync::Arc<GpuDevice>, input: &GpuTexture, g1: f32, g2: f32) -> RenderTarget {
     let mut g = Graph::new();
     let src = g.add_node(Box::new(Source::new()));
@@ -264,7 +271,7 @@ pub(crate) fn render_unfused_two_gain(device: &std::sync::Arc<GpuDevice>, input:
 /// passes a.a through untouched in every other mode — BUG-181) is observable
 /// in the diff — the section 12.4 hardened-fixture alpha axis. R/G/B as in
 /// `gradient_input`.
-pub(crate) fn gradient_input_varying_alpha(device: &GpuDevice, w: u32, h: u32) -> GpuTexture {
+pub fn gradient_input_varying_alpha(device: &GpuDevice, w: u32, h: u32) -> GpuTexture {
     let mut px = vec![f16::from_f32(0.0); (w * h * 4) as usize];
     for y in 0..h {
         for x in 0..w {
@@ -297,14 +304,14 @@ pub(crate) fn gradient_input_varying_alpha(device: &GpuDevice, w: u32, h: u32) -
 /// Deterministic LCG (Numerical Recipes constants) — a fuzzer needs random
 /// coverage but a *reproducible* seed so a failure can be replayed exactly
 /// (design section 12.3 step 7 reproducer). Not for crypto; just spreads samples.
-pub(crate) fn lcg_next(state: &mut u64) -> u32 {
+pub fn lcg_next(state: &mut u64) -> u32 {
     *state = state
         .wrapping_mul(6364136223846793005)
         .wrapping_add(1442695040888963407);
     (*state >> 33) as u32
 }
 
-pub(crate) fn lcg_f32(state: &mut u64, lo: f32, hi: f32) -> f32 {
+pub fn lcg_f32(state: &mut u64, lo: f32, hi: f32) -> f32 {
     let u = lcg_next(state) as f32 / u32::MAX as f32;
     lo + u * (hi - lo)
 }
@@ -313,7 +320,7 @@ pub(crate) fn lcg_f32(state: &mut u64, lo: f32, hi: f32) -> f32 {
 /// tier's manual-bilinear-vs-hardware-filter gap (neighbouring texels differ by
 /// up to the full range, so any filter-weight difference is maximally visible).
 /// LCG-seeded, reproducible.
-pub(crate) fn noise_input(device: &GpuDevice, w: u32, h: u32) -> GpuTexture {
+pub fn noise_input(device: &GpuDevice, w: u32, h: u32) -> GpuTexture {
     let mut px = vec![f16::from_f32(0.0); (w * h * 4) as usize];
     let mut state = 0x5EED_5EEDu64;
     for v in px.iter_mut() {
@@ -341,7 +348,7 @@ pub(crate) fn noise_input(device: &GpuDevice, w: u32, h: u32) -> GpuTexture {
 /// Render an EFFECT def for `frames` frames through the state-aware executor
 /// (feedback loops warm up across frames), source pre-bound to `input`, and
 /// return the texture feeding `final_output` after the last frame.
-pub(crate) fn render_effect_frames_with_state(
+pub fn render_effect_frames_with_state(
     device: &std::sync::Arc<GpuDevice>,
     registry: &PrimitiveRegistry,
     def: &EffectGraphDef,
@@ -402,7 +409,7 @@ pub(crate) fn render_effect_frames_with_state(
 }
 
 /// Warm a generator preset's feedback loop for 8 frames and capture the final.
-pub(crate) fn render_generator_8_frames(
+pub fn render_generator_8_frames(
     def: EffectGraphDef,
     registry: &PrimitiveRegistry,
     device: &std::sync::Arc<GpuDevice>,
@@ -445,7 +452,7 @@ pub(crate) fn render_generator_8_frames(
 /// build the "ungated" baseline for the seed-gate equivalence proofs. Addresses
 /// the node by stable `node_id` (the def must be flattened first — grouping
 /// nests the seed node and prefixes its handle, but `node_id` survives).
-pub(crate) fn strip_reset_wire(def: &mut EffectGraphDef, seed_node_id: &str) {
+pub fn strip_reset_wire(def: &mut EffectGraphDef, seed_node_id: &str) {
     let Some(id) = def
         .nodes
         .iter()
@@ -460,7 +467,7 @@ pub(crate) fn strip_reset_wire(def: &mut EffectGraphDef, seed_node_id: &str) {
 /// Cap every `max_capacity` / `active_count` param in `def` at `cap` — the
 /// particle-pool shrink the FluidSim sweep uses, for tests whose subject is
 /// texture-domain and doesn't depend on pool size.
-pub(crate) fn shrink_particle_pool(def: &mut EffectGraphDef, cap: i32) {
+pub fn shrink_particle_pool(def: &mut EffectGraphDef, cap: i32) {
     use manifold_core::effect_graph_def::SerializedParamValue;
     for node in &mut def.nodes {
         for key in ["max_capacity", "active_count"] {
@@ -476,7 +483,7 @@ pub(crate) fn shrink_particle_pool(def: &mut EffectGraphDef, cap: i32) {
 /// both sides of an A/B — generator_input stays at defaults) for `frames`
 /// frames, previewing the node `pick` selects so its output survives the last
 /// frame. Returns the previewed texture copied out, plus its dims.
-pub(crate) fn render_def_capture_node(
+pub fn render_def_capture_node(
     def: &EffectGraphDef,
     registry: &PrimitiveRegistry,
     device: &std::sync::Arc<GpuDevice>,
@@ -493,7 +500,7 @@ pub(crate) fn render_def_capture_node(
 /// production `PresetRuntime` path does — the discriminating variable
 /// between the raw harness and production.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn render_def_capture_node_host(
+pub fn render_def_capture_node_host(
     def: &EffectGraphDef,
     registry: &PrimitiveRegistry,
     device: &std::sync::Arc<GpuDevice>,
@@ -574,7 +581,7 @@ pub(crate) fn render_def_capture_node_host(
 /// [`render_graph`] but the output target — and the copy-out — are sized to the
 /// element-space the producer actually writes (e.g. a quarter-res chain below a
 /// downsample), so a fused node that failed to inherit that scale would mismatch.
-pub(crate) fn render_graph_at(
+pub fn render_graph_at(
     device: &std::sync::Arc<GpuDevice>,
     graph: &mut Graph,
     plan: &ExecutionPlan,

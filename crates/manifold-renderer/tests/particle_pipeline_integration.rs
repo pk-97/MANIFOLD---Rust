@@ -80,7 +80,7 @@ fn particle_pipeline_topology_builds_and_connects_with_matching_port_types() {
     // Validate the complete graph — no cycles (Feedback breaks the
     // logical loop via state), every node reachable, every required
     // input wired.
-    let validation = manifold_node_engine::validate(&g);
+    let validation = manifold_node_engine::validation::validate(&g);
     assert!(
         validation.is_ok(),
         "complete particle pipeline should validate cleanly: {validation:?}",
@@ -116,7 +116,7 @@ fn sample_demands_a_field_texture_in_addition_to_particles() {
     g.connect((seed, "particles"), (sample, "particles")).unwrap();
     // No `in` (field texture) wire.
 
-    let validation = manifold_node_engine::validate(&g);
+    let validation = manifold_node_engine::validation::validate(&g);
     assert!(
         validation.is_err(),
         "graph with unwired required Sample.in should fail validation",

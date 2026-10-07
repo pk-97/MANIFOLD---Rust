@@ -528,7 +528,7 @@ fn premultiply_emission(rgb: [f32; 3], intensity: f32) -> [f32; 4] {
 /// usable here: `serde_json` errors serializing a non-finite float, and
 /// this is the default for every glTF import that doesn't carry an
 /// explicit `attenuationDistance` — i.e. almost every asset.
-pub(crate) const VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION: f32 = 1.0e6;
+pub const VOLUME_ATTENUATION_DISTANCE_NO_ATTENUATION: f32 = 1.0e6;
 
 #[cfg(test)]
 mod tests {

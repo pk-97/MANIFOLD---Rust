@@ -6,7 +6,7 @@
 //! keeps red in checks it still runs. The GPU checks read this table
 //! in `tests/gpu_proofs/liquid_conformance.rs`; the CPU checks live here.
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testkit"))]
 use serde_json::Value;
 use manifold_core::effect_graph_def::{
     BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire, SerializedParamValue,
@@ -346,7 +346,7 @@ fn liquid_totals(words: &[u32]) -> LiquidTotals {
 
 /// GPU FLIP's faces: component `axis` of the FaceSample lattice's padded cell,
 /// (cells + 1)³ records x fastest; 0 where no weight reached the face.
-pub(crate) fn gpu_flip_faces(bytes: &[u8], cells: [u32; 3]) -> [Vec<f32>; 3] {
+pub fn gpu_flip_faces(bytes: &[u8], cells: [u32; 3]) -> [Vec<f32>; 3] {
     let lattice: Vec<FaceSample> = bytemuck::pod_collect_to_vec(bytes);
     let m = cells.map(|n| n as usize + 1);
     std::array::from_fn(|axis| {
@@ -626,8 +626,8 @@ fn for_each_node<F: FnMut(&mut EffectGraphNode)>(nodes: &mut [EffectGraphNode], 
 }
 
 /// Find a JSON graph node by stable `nodeId`, walking nested group bodies.
-#[cfg(test)]
-pub(crate) fn json_node_mut<'a>(value: &'a mut Value, node_id: &str) -> Option<&'a mut Value> {
+#[cfg(any(test, feature = "testkit"))]
+pub fn json_node_mut<'a>(value: &'a mut Value, node_id: &str) -> Option<&'a mut Value> {
     let nodes = value["nodes"].as_array_mut()?;
     for node in nodes {
         if node["nodeId"] == node_id {
@@ -718,6 +718,6 @@ mod tests {
     }
 }
 
-#[cfg(any(test, feature = "gpu-proofs"))]
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 #[doc(hidden)]
-pub(crate) mod testkit;
+pub mod testkit;

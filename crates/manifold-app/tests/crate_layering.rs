@@ -17,6 +17,12 @@ const UI_PAINT_DEPS: &[&str] = &[
 // Each later split phase adds its owning crate and allowed workspace edges.
 const LAYERS: &[Layer] = &[
     Layer {
+        package: "manifold-node-engine",
+        normal_and_build: &["manifold-foundation", "manifold-core", "manifold-gpu",
+                            "manifold-native", "manifold-playback", "manifold-physics", "manifold-fluids"],
+        dev: &["manifold-nodes"],
+    },
+    Layer {
         package: "manifold-ui-paint",
         normal_and_build: UI_PAINT_DEPS,
         dev: UI_PAINT_DEPS,

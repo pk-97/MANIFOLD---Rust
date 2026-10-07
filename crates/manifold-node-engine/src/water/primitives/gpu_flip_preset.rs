@@ -15,7 +15,7 @@
 
 use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGraphWire, find_node};
-#[cfg(test)]
+#[cfg(any(test, feature = "testkit"))]
 use manifold_core::effect_graph_def::find_node_mut;
 use manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID;
 use serde_json::{Value, json};
@@ -23,7 +23,7 @@ use serde_json::{Value, json};
 use super::gpu_flip_domain::{GpuFlipGeometry, gpu_flip_geometry};
 use super::gpu_flip_step::FACE_VALID_LAYERS;
 use crate::load::catalog_source::preset_json as bundled_preset_json;
-#[cfg(all(test, feature = "gpu-proofs"))]
+#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 use crate::water::fluid::{FluidDomainLayout, domain_layout};
 use crate::water::liquid::clock::INTERVAL_DURATION_INPUTS;
 use crate::water::liquid::grid::FACE_INPUT_PORTS;
@@ -42,7 +42,7 @@ pub(crate) const STEPS_PER_TICK: usize = 1;
 pub(crate) const PRESSURE_ITERATIONS: usize = super::gpu_flip_pressure::MAX_ITERATIONS as usize;
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct PressureShape {
+pub struct PressureShape {
     /// Cells per side of the cubic lattice.
     pub n: usize,
     /// Conjugate gradient iterations, one V-cycle each.
@@ -75,7 +75,7 @@ const UNIT_CUBE_RADIUS: f64 = 0.866_025_4;
 /// A liquid in a cubic tank: a pool `fill_height` deep plus one box, both
 /// in metres.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct WaterScene {
+pub struct WaterScene {
     pub pressure: PressureShape,
     /// The tank's side in metres: the domain's Domain Size.
     pub size: f64,
@@ -115,14 +115,14 @@ pub(crate) struct WaterScene {
 const CLOSED_PARAMS: [&str; 6] = ["closed_neg_x", "closed_pos_x", "closed_neg_y", "closed_pos_y", "closed_neg_z", "closed_pos_z"];
 
 /// The face grid's nodes in a scene built with `faces`, x, y and z.
-pub(crate) const FACE_NODES: [&str; 3] = ["face_u", "face_v", "face_w"];
+pub const FACE_NODES: [&str; 3] = ["face_u", "face_v", "face_w"];
 
 /// The water step node in every scene.
-pub(crate) const STEP_NODE: &str = "step";
+pub const STEP_NODE: &str = "step";
 
 /// Particles per cell the fill seeds: one per half-cell site.
-#[cfg(all(test, feature = "gpu-proofs"))]
-pub(crate) const REST_PER_CELL: f64 = 8.0;
+#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
+pub const REST_PER_CELL: f64 = 8.0;
 
 impl WaterScene {
     /// The engine's Dam Break, its box obstacle standing in the column's path.
@@ -145,48 +145,48 @@ impl WaterScene {
     }
 
     /// The scene with only the faces in `mask` closed.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testkit"))]
     pub fn with_closed_faces(self, mask: u32) -> Self {
         Self { closed_faces: mask, ..self }
     }
 
     /// The Dam Break the FLIP engine races: no obstacle, as `race_probe` and
     /// the race clips run the engine.
-    #[cfg(all(test, feature = "gpu-proofs"))]
+    #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
     pub fn race_dam_break(n: usize) -> Self {
         Self { obstacle: false, ..Self::dam_break(n) }
     }
 
     /// The scene with the Dam Break's box obstacle.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testkit"))]
     pub fn with_obstacle(self) -> Self {
         Self { obstacle: true, ..self }
     }
 
     /// A pool 1 m deep and nothing else (I5). Every scene built from it
     /// leaves the box out unless it asks with [`Self::with_obstacle`].
-    #[cfg(any(test, feature = "gpu-proofs"))]
+    #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
     pub fn still_pool(n: usize) -> Self {
         Self { fill_height: 1.0, column: [[0.0; 2]; 3], obstacle: false, ..Self::dam_break(n) }
     }
 
     /// A pool `fill` deep in a tank `size` on a side at `n` cells: the
     /// conformance box scenes' water.
-    #[cfg(any(test, feature = "gpu-proofs"))]
+    #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
     pub fn pool(n: usize, size: f64, fill: f64) -> Self {
         Self { size, fill_height: fill, ..Self::still_pool(n) }
     }
 
     /// A pool 3 m deep in the 4 m tank: the coarsest multigrid level is
     /// water but for its top row, the hardest case for the coarse solve.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testkit"))]
     pub fn deep_pool(n: usize) -> Self {
         Self { fill_height: 3.0, ..Self::still_pool(n) }
     }
 
     /// The deep pool with a 1 m × 0.5 m × 1 m block dropped in from 0.2 m
     /// above: a still pool's density source is zero, this one crowds.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testkit"))]
     pub fn deep_drop(n: usize) -> Self {
         Self { column: [[-0.5, 0.5], [3.2, 3.7], [-0.5, 0.5]], ..Self::deep_pool(n) }
     }
@@ -200,7 +200,7 @@ impl WaterScene {
     }
 
     /// A 1 m block of water high in the tank, clear of every wall.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testkit"))]
     pub fn free_fall(n: usize) -> Self {
         Self { fill_height: 0.0, column: [[-0.5, 0.5], [2.5, 3.5], [-0.5, 0.5]], ..Self::still_pool(n) }
     }
@@ -210,31 +210,31 @@ impl WaterScene {
     }
 
     /// Publish the face grid (section 3.2 (Grid outputs) of the seam).
-    #[cfg(any(test, feature = "gpu-proofs"))]
+    #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
     pub fn with_faces(self) -> Self {
         Self { faces: true, ..self }
     }
 
     /// Meshed at `scale` surface nodes per cell.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testkit"))]
     pub fn with_surface_scale(self, scale: usize) -> Self {
         Self { surface: true, surface_scale: scale, ..self }
     }
 
     /// The same scene with `iterations` per pressure solve.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testkit"))]
     pub fn with_iterations(self, iterations: usize) -> Self {
         Self { pressure: PressureShape { iterations, ..self.pressure }, ..self }
     }
 
     /// The cell side in metres: the tank's side over the lattice.
-    #[cfg(all(test, feature = "gpu-proofs"))]
+    #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
     pub fn cell_size(&self) -> f64 {
         self.size / self.pressure.n as f64
     }
 
     /// `steps` water steps a frame.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testkit"))]
     pub fn with_steps(self, steps: usize) -> Self {
         Self { steps, ..self }
     }
@@ -245,13 +245,13 @@ impl WaterScene {
     }
 
     /// The tank: the domain's layout at this resolution, no domain box.
-    #[cfg(all(test, feature = "gpu-proofs"))]
+    #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
     pub fn layout(&self) -> FluidDomainLayout {
         domain_layout(None, self.size as f32, self.pressure.n as u32).expect("the tank's layout")
     }
 
     /// The tank's lowest corner.
-    #[cfg(all(test, feature = "gpu-proofs"))]
+    #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
     pub fn min(&self) -> [f64; 3] {
         self.layout().min.map(f64::from)
     }
@@ -279,18 +279,18 @@ impl WaterScene {
         gpu_flip_geometry(read, None, self.initial_volume()).expect("the scene fits its domain")
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testkit"))]
     pub fn pool_sites(&self) -> u32 {
         self.geometry().setup.pool_sites
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testkit"))]
     pub fn box_sites(&self) -> [[u32; 2]; 3] {
         self.geometry().setup.box_sites
     }
 
     /// Particles the fill places; the particle arrays hold exactly this many.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testkit"))]
     pub fn particles(&self) -> u64 {
         self.geometry().particles
     }
@@ -384,7 +384,7 @@ const FIELD_WIRES: [&str; 9] = [
 /// `state.in` and `state.stats_in`. The frame publishes each tick with the
 /// solid lattice. The harness sink holds the frame, or the surface mesh when
 /// `surface`.
-pub(crate) fn water_def(scene: WaterScene) -> EffectGraphDef {
+pub fn water_def(scene: WaterScene) -> EffectGraphDef {
     let mut b = Builder::default();
     let geometry = scene.geometry();
     let mut params = json!({
@@ -556,7 +556,7 @@ fn obstacle_source(b: &mut Builder) -> (usize, usize) {
 /// The shipped GPU FLIP Dam Break supplies the authored camera, lights,
 /// environment, tank and tone map, plus the shared Liquid Surface group.
 /// The family itself is constructed by the recipe below.
-pub(crate) const SHIPPED_PRESET: &str = "WaterDamBreakGpuFlip";
+pub const SHIPPED_PRESET: &str = "WaterDamBreakGpuFlip";
 
 fn shipped_preset() -> Value {
     let json = bundled_preset_json(&PresetTypeId::new(SHIPPED_PRESET)).expect("the GPU FLIP preset is bundled");
@@ -780,16 +780,16 @@ pub fn gpu_flip_liquid_body() -> EffectGraphDef {
     body
 }
 
-#[cfg(any(test, feature = "gpu-proofs"))]
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 const SURFACE_DETAIL_OFFSET: usize = 1;
 
-#[cfg(any(test, feature = "gpu-proofs"))]
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 const DRESSING: &[&str] = &["input", "camera", "environment", "light", "floor_mesh", "basin_material",
         "floor_transform", "floor_object", "rear_mesh", "rear_transform", "rear_object", "left_mesh",
         "left_transform", "left_object", "right_mesh", "right_transform", "right_object", "scene",
         "final_output", "rim_light", "filmic_display", "sky_environment", "sky_exposure", "environment_select"];
 
-#[cfg(any(test, feature = "gpu-proofs"))]
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 fn assert_preset_root(nodes: &[EffectGraphNode]) {
     for node in nodes {
         assert!(DRESSING.contains(&node.node_id.as_str()) || matches!(node.node_id.as_str(),
@@ -801,8 +801,8 @@ fn assert_preset_root(nodes: &[EffectGraphNode]) {
 
 /// Only authored environment/camera/tank dressing is read from the preset.
 /// The family is always constructed by WaterScene::family_def.
-#[cfg(any(test, feature = "gpu-proofs"))]
-pub(crate) fn render_def(scene: WaterScene) -> EffectGraphDef {
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
+pub fn render_def(scene: WaterScene) -> EffectGraphDef {
     let preset = shipped_preset();
     let mut def: EffectGraphDef = serde_json::from_value(preset.clone()).expect("preset");
     assert_preset_root(&def.nodes);
@@ -853,7 +853,7 @@ pub(crate) fn render_def(scene: WaterScene) -> EffectGraphDef {
 
 /// The obstacle remains an external scene object; its one transform drives
 /// both the visible box and the collider role entering the family.
-#[cfg(any(test, feature = "gpu-proofs"))]
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 fn add_obstacle_render(b: &mut Builder, family: usize, render: usize) {
     let (transform, collider) = obstacle_source(b);
     b.wire((collider, "role"), family, "role_0");
@@ -875,18 +875,18 @@ fn add_obstacle_render(b: &mut Builder, family: usize, render: usize) {
 
 /// The shipped Particle View, which [`particle_view_def`] builds from the
 /// shipped Dam Break (`gpu_flip_particle_view_is_built_from_the_dam_break`).
-#[cfg(test)]
-pub(crate) const PARTICLE_VIEW_PRESET: &str = "WaterDamBreakParticles";
+#[cfg(any(test, feature = "testkit"))]
+pub const PARTICLE_VIEW_PRESET: &str = "WaterDamBreakParticles";
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testkit"))]
 const PARTICLE_VIEW_NAME: &str = "Water — Dam Break (Particle View)";
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testkit"))]
 const PARTICLE_VIEW_DESCRIPTION: &str = "GPU FLIP dam break drawn as small sphere copies of the blended, solid-clamped liquid particles, with the same display-time whitewater as the surface preset.";
 
 /// The Platonic shape the Particle View draws each particle with, scaled by
 /// the particle's radius.
-#[cfg(test)]
+#[cfg(any(test, feature = "testkit"))]
 const ICOSAHEDRON: usize = 3;
 
 /// The Particle View: the shipped Dam Break's render, simulation, scene,
@@ -894,8 +894,8 @@ const ICOSAHEDRON: usize = 3;
 /// `particle_push_out`'s particles drawn as instanced spheres by the water
 /// object. Its cards are the Dam Break's, less those that only reached the
 /// surface.
-#[cfg(test)]
-pub(crate) fn particle_view_def() -> EffectGraphDef {
+#[cfg(any(test, feature = "testkit"))]
+pub fn particle_view_def() -> EffectGraphDef {
     let mut def = render_def(WaterScene::dam_break(64));
     let family = find_node_mut(&mut def.nodes, "water_family").expect("Water family");
     let group = family.group.as_mut().expect("family group");
@@ -925,7 +925,7 @@ pub(crate) fn particle_view_def() -> EffectGraphDef {
 
 /// `def`'s cards under the Particle View's id, less every binding whose node
 /// is gone and every card left with none of the bindings it had.
-#[cfg(test)]
+#[cfg(any(test, feature = "testkit"))]
 fn particle_view_cards(def: &Value) -> Value {
     fn names(nodes: &Value, into: &mut Vec<String>) {
         for node in nodes.as_array().into_iter().flatten() {
@@ -955,7 +955,7 @@ fn particle_view_cards(def: &Value) -> Value {
 /// The shipped cards with every default at the value this scene's def bakes,
 /// so no card overwrites what the extent proof checked: Resolution at the
 /// lattice, Surface Detail at the surface scale, gone past its range.
-#[cfg(any(test, feature = "gpu-proofs"))]
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 fn scene_cards(metadata: &Value, scene: WaterScene) -> Value {
     let mut metadata = metadata.clone();
     let detail = scene.surface_scale.checked_sub(SURFACE_DETAIL_OFFSET).filter(|detail| *detail <= 2);
@@ -1071,14 +1071,14 @@ fn water_step(b: &mut Builder, scene: WaterScene, tick: (usize, usize)) -> usize
 /// Device bytes a scene holds inside the render graph at 1920×1080, as the
 /// liquid extent check counts them: every array at the size the walk reached
 /// plus what each node holds for itself. Textures are not counted.
-#[cfg(test)]
+#[cfg(any(any(test, feature = "testkit"), feature = "testkit"))]
 pub(super) fn rendered_scene_bytes(scene: WaterScene) -> u64 {
     crate::testkit::liquid_extents::walk(&render_def(scene), false).expect("the rendered scene covers every dispatch").scene_bytes
 }
 
 /// `def` as the app renders a generator: fused when it has regions, `None`
 /// when it has none and runs as authored. Regions that refuse to fuse fail.
-#[cfg(test)]
+#[cfg(any(any(test, feature = "testkit"), feature = "testkit"))]
 pub(super) fn fused_as_rendered(
     def: &EffectGraphDef,
     registry: &crate::persistence::PrimitiveRegistry,
@@ -1092,8 +1092,8 @@ pub(super) fn fused_as_rendered(
 }
 
 /// Independent axis oracle over the same solver output and tick region.
-#[cfg(test)]
-pub(super) fn with_whitewater_axes(def: EffectGraphDef) -> EffectGraphDef {
+#[cfg(any(test, feature = "testkit"))]
+pub fn with_whitewater_axes(def: EffectGraphDef) -> EffectGraphDef {
     // This independent axis oracle edits the compiled topology, including nested
     // surface nodes. Production presets retain their authored groups.
     let def = manifold_core::flatten::flatten_groups(&def).expect("axis oracle flattens");
@@ -1124,6 +1124,6 @@ pub(super) fn with_whitewater_axes(def: EffectGraphDef) -> EffectGraphDef {
 // shared liquid extent rules (`liquid::extent`) at every lattice, bare,
 // meshed, rendered and frozen.
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testkit"))]
 #[doc(hidden)]
-pub(crate) mod testkit;
+pub mod testkit;

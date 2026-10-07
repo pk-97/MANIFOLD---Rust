@@ -6,7 +6,7 @@ use crate::ports::PortType;
 mod tests;
 
 impl PresetRuntime {
-    pub(crate) fn carry_generator_state_from(&mut self, prior: &mut Self) {
+    pub fn carry_generator_state_from(&mut self, prior: &mut Self) {
         self.carry_physics_state_from(prior);
         self.carry_modifier_control_state_from(prior);
     }
