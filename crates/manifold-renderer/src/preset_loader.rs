@@ -813,6 +813,20 @@ fn publish_reloaded_metadata(
     scene_modifier_meta: Vec<manifold_core::effect_graph_def::PresetMetadata>,
     advance_generation: impl FnOnce() -> u64,
 ) -> u64 {
+    publish_metadata_for_catalogs(
+        effect_meta, generator_meta, scene_modifier_meta,
+        &EFFECT_CATALOG.load(), &GENERATOR_CATALOG.load(), advance_generation,
+    )
+}
+
+fn publish_metadata_for_catalogs(
+    effect_meta: Vec<manifold_core::effect_graph_def::PresetMetadata>,
+    generator_meta: Vec<manifold_core::effect_graph_def::PresetMetadata>,
+    scene_modifier_meta: Vec<manifold_core::effect_graph_def::PresetMetadata>,
+    effect_browser_ids: &PresetCatalog,
+    generator_browser_ids: &PresetCatalog,
+    advance_generation: impl FnOnce() -> u64,
+) -> u64 {
     // ONE atomic swap of the merged store — both kinds' metadata in a single
     // rebuild so a reader observing the new generation never sees a
     // half-merged registry.
@@ -831,8 +845,6 @@ fn publish_reloaded_metadata(
     // Runtime metadata includes project fallbacks and overrides. Browser
     // visibility follows each catalog's resolved source: disk-backed
     // snapshots stay visible; missing snapshots and Saved entries do not.
-    let effect_browser_ids = EFFECT_CATALOG.load();
-    let generator_browser_ids = GENERATOR_CATALOG.load();
     let effect_meta_for_registry: Vec<_> = effect_meta
         .iter()
         .filter(|m| effect_browser_ids.is_browser_visible(m.id.as_str()))
@@ -904,32 +916,38 @@ mod tests {
 
     #[test]
     fn metadata_publication_completes_both_registries_before_generation_advances() {
-        use manifold_core::preset_definition_registry::{self as definitions, effect, generator, scene_modifier};
-        let mut effects = effect::load_preset_metadata();
-        let mut generators = generator::load_preset_metadata();
-        let mut modifiers = scene_modifier::load_preset_metadata();
-        for metadata in effects.iter_mut().chain(&mut generators).chain(&mut modifiers) {
-            metadata.display_name = format!("publication-order:{}", metadata.display_name);
-        }
+        use manifold_core::effect_graph_def::PresetMetadata;
+        use manifold_core::preset_definition_registry as definitions;
+        let fixture = |id: &str| -> PresetMetadata {
+            serde_json::from_value(serde_json::json!({
+                "id": id, "displayName": format!("publication-order:{id}"),
+                "category": "Test", "oscPrefix": id, "params": [], "bindings": []
+            })).unwrap()
+        };
+        let effects = vec![fixture("fixture_effect"), fixture("fixture_hidden_effect")];
+        let generators = vec![fixture("fixture_generator"), fixture("fixture_hidden_generator")];
+        let modifiers = vec![fixture("fixture_modifier")];
+        let catalog = |id: &str| PresetCatalog {
+            entries: Vec::new(),
+            browser_ids: [Arc::from(id)].into_iter().collect(),
+        };
+        let effect_catalog = catalog("fixture_effect");
+        let generator_catalog = catalog("fixture_generator");
         let ids: Vec<_> = effects.iter().chain(&generators).chain(&modifiers)
             .map(|metadata| (metadata.id.clone(), metadata.display_name.clone())).collect();
-        let visible: Vec<_> = effects.iter().filter(|m| EFFECT_CATALOG.load().is_browser_visible(m.id.as_str()))
-            .chain(generators.iter().filter(|m| GENERATOR_CATALOG.load().is_browser_visible(m.id.as_str())))
-            // Compiled browser entries intentionally take precedence over JSON names.
-            .filter(|m| !inventory::iter::<manifold_core::effect_registration::EffectMetadata>
-                .into_iter().any(|entry| entry.id == m.id))
-            .filter(|m| !inventory::iter::<manifold_core::generator_registration::GeneratorMetadata>
-                .into_iter().any(|entry| entry.id == m.id))
-            .map(|metadata| (metadata.id.clone(), metadata.display_name.clone())).collect();
-        assert!(!visible.is_empty(), "publication proof needs a JSON-owned browser entry");
+        let visible = [ids[0].clone(), ids[2].clone()];
         let before = catalog_generation();
-        let after = publish_reloaded_metadata(effects, generators, modifiers, || {
+        let after = publish_metadata_for_catalogs(effects, generators, modifiers, &effect_catalog, &generator_catalog, || {
             assert_eq!(catalog_generation(), before);
             for (id, name) in &ids {
                 assert_eq!(&definitions::get(id).display_name, name);
             }
             for (id, name) in &visible {
                 assert_eq!(manifold_core::preset_type_registry::display_name(id), name);
+            }
+            let browser = manifold_core::preset_type_registry::all();
+            for id in ["fixture_hidden_effect", "fixture_hidden_generator", "fixture_modifier"] {
+                assert!(!browser.iter().any(|entry| entry.id.as_str() == id));
             }
             bump_catalog_generation()
         });

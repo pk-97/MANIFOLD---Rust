@@ -949,6 +949,7 @@ mod metadata_source_tests {
         let registered = [effect::load_preset_metadata(), generator::load_preset_metadata(),
             scene_modifier::load_preset_metadata()];
         assert_eq!(direct, registered);
+        assert!(registered.iter().all(|metadata| !metadata.is_empty()), "shipping metadata providers must be nonempty");
         let mut ids = std::collections::HashSet::new();
         for metadata in registered.iter().flatten() {
             assert!(ids.insert(metadata.id.clone()), "duplicate metadata preset id: {}", metadata.id);
