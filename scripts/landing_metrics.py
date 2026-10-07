@@ -3,7 +3,7 @@
 
 Reads .claude/orchestration/landing-gate-timings.jsonl (one row per gate run)
 and main's first-parent merges (one per landing). Prints one block: gate runs
-per landing, red share, GPU proof reuse, queue wait, and the slowest legs.
+per landing, red share, GPU proof reuse, queue wait, and the slowest legs/tests.
 Exits 1 when runs per landing pass RUNS_PER_LANDING_RED so trunk_health files
 a bead; everything else is reported, not gated. Fails open on tooling errors.
 
@@ -64,12 +64,21 @@ def summarize(rows, landings):
     red = sum(1 for r in rows if r.get("failed"))
     legs = collections.defaultdict(list)
     status = collections.Counter()
+    slow_max = {}
+    slow_landings = collections.Counter()
     for row in rows:
+        seen = set()
         for check in row["checks"]:
             label = check["label"].split("/")[0]
             status[(label, check["status"])] += 1
             if check.get("duration_s"):
                 legs[label].append(check["duration_s"])
+            for test in check.get("slow_tests", []):
+                name, seconds = test["name"], test["s"]
+                slow_max[name] = max(slow_max.get(name, 0), seconds)
+                seen.add(name)
+        # A timing row is one logged landing attempt, even across several checks.
+        slow_landings.update(seen)
     proofs = {s: status[("gpu-proofs", s)] for s in ("PASS", "REUSED", "FAIL", "SKIP")}
     proof_runs = proofs["PASS"] + proofs["REUSED"] + proofs["FAIL"]
     waits = [r["gpu_wait_s"] for r in rows if r.get("gpu_wait_s") is not None]
@@ -86,6 +95,9 @@ def summarize(rows, landings):
         "flow_gate_over_10min": sum(1 for s in legs["flow-gate"] if s > 600),
         "leg_hours": {label: round(sum(v) / 3600, 1) for label, v in
                       sorted(legs.items(), key=lambda kv: -sum(kv[1]))[:5]},
+        "slow_tests": [{"name": name, "max_s": seconds, "landings": slow_landings[name]}
+                       for name, seconds in
+                       sorted(slow_max.items(), key=lambda item: (-item[1], item[0]))[:10]],
     }
 
 
@@ -99,6 +111,11 @@ def render(metrics, days):
              f"  gpu queue wait: {m['gpu_wait_total_s']}s over {m['gpu_wait_runs_logged']} logged runs; "
              f"flow-gate over 10 min: {m['flow_gate_over_10min']}",
              "  hours by leg: " + ", ".join(f"{k} {v}" for k, v in m["leg_hours"].items())]
+    lines.append("  slowest tests (max seconds; logged landing attempts):")
+    lines.extend(f"    {test['name']}: {test['max_s']:.3f}s; {test['landings']} landings"
+                 for test in m["slow_tests"])
+    if not m["slow_tests"]:
+        lines.append("    none recorded")
     return "\n".join(lines)
 
 
