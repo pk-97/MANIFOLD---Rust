@@ -600,7 +600,7 @@ pub fn sync_inspector_data(
                                                     None => (false, None),
                                                 }
                                             };
-                                        let owned = super::scene::object_controls(def.as_ref(), known);
+                                        let owned = super::scene::object_controls(def.as_ref(), known, &vm.objects);
                                         let sections = sections_for_nodes(def.as_ref(), &owned);
                                         let mut parameter_ids = super::scene::parameter_ids_for_nodes(
                                             def.as_ref(), &owned,
@@ -669,18 +669,7 @@ pub fn sync_inspector_data(
                                                 transform: transform.as_ref().map(&transform_row),
                                                 material: material_row(material),
                                                 material_inspector: def.as_ref().and_then(|d| super::material::inspector_info(project, d, known)),
-                                                modifiers: modifier_chain
-                                                    .iter()
-                                                    .enumerate()
-                                                    .map(|(i, m)| manifold_ui::panels::scene_setup_panel::ModifierKnownRow {
-                                                        index: i,
-                                                        node_doc_id: m.node_doc_id,
-                                                        display_name: modifier_display_name(&m.type_id),
-                                                        parameter_ids: super::scene::parameter_ids_for_nodes(
-                                                            def.as_ref(), std::slice::from_ref(&m.node),
-                                                        ),
-                                                    })
-                                                    .collect(),
+                                                modifiers: object_modifier_rows(def.as_ref(), modifier_chain, &owned),
                                                 modifiers_addable: known.look_mesh.is_none() && *modifier_chain_parseable,
                                                 sections,
                                                 parameter_ids,
@@ -1952,6 +1941,115 @@ fn modifier_display_name(type_id: &str) -> String {
         "node.morph_mesh" => "Morph".to_string(),
         "node.rotate_3d" => "Rotate".to_string(),
         other => other.to_string(),
+    }
+}
+
+fn object_modifier_rows(
+    def: Option<&manifold_core::effect_graph_def::EffectGraphDef>,
+    chain: &[manifold_renderer::node_graph::scene_vm::ModifierVm],
+    owned: &[manifold_core::NodeId],
+) -> Vec<manifold_ui::panels::scene_setup_panel::ModifierKnownRow> {
+    chain.iter().enumerate().map(|(index, modifier)| {
+        manifold_ui::panels::scene_setup_panel::ModifierKnownRow {
+            index,
+            node_doc_id: modifier.node_doc_id,
+            display_name: modifier_display_name(&modifier.type_id),
+            parameter_ids: if owned.contains(&modifier.node) {
+                super::scene::parameter_ids_for_nodes(def, std::slice::from_ref(&modifier.node))
+            } else {
+                Vec::new()
+            },
+        }
+    }).collect()
+}
+
+#[cfg(test)]
+mod modifier_card_ownership_tests {
+    use super::object_modifier_rows;
+    use crate::ui_bridge::projection::scene::{object_controls, parameter_ids_for_nodes};
+    use manifold_core::effect_graph_def::EffectGraphDef;
+    use manifold_renderer::node_graph::scene_vm::{SceneObjectVm, SceneVm};
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn shared_modifier_cards_show_controls_once_and_transfer_ownership() {
+        let mut def: EffectGraphDef = serde_json::from_value(serde_json::json!({
+            "version": 2,
+            "presetMetadata": {
+                "id": "shared_bend", "displayName": "Shared Bend",
+                "category": "Diagnostic", "oscPrefix": "shared_bend",
+                "params": [{"id": "bend_angle", "name": "Angle", "min": -1.0,
+                            "max": 1.0, "defaultValue": 0.0}],
+                "bindings": [{
+                    "id": "bend_angle", "label": "Angle", "defaultValue": 0.0,
+                    "target": {"kind": "node", "nodeId": "bend", "param": "angle"}
+                }]
+            },
+            "nodes": [
+                {"id": 1, "nodeId": "mesh", "typeId": "node.cube_mesh"},
+                {"id": 2, "nodeId": "bend", "typeId": "node.bend_mesh"},
+                {"id": 3, "nodeId": "first", "typeId": "node.scene_object"},
+                {"id": 4, "nodeId": "second", "typeId": "node.scene_object"},
+                {"id": 5, "nodeId": "scene", "typeId": "node.render_scene",
+                 "params": {"objects": {"type": "Int", "value": 2}}},
+                {"id": 6, "nodeId": "output", "typeId": "system.final_output"}
+            ],
+            "wires": []
+        })).unwrap();
+        def.wires = [
+            (1, "vertices", 2, "in"),
+            (2, "out", 3, "vertices"),
+            (2, "out", 4, "vertices"),
+            (3, "object", 5, "object_0"),
+            (4, "object", 5, "object_1"),
+            (5, "color", 6, "in"),
+        ].into_iter().map(|(from_node, from_port, to_node, to_port)| {
+            manifold_core::effect_graph_def::EffectGraphWire {
+                from_node, from_port: from_port.into(), to_node, to_port: to_port.into(),
+            }
+        }).collect();
+
+        let assert_cards = |def: &EffectGraphDef, expected_owner| {
+            let vm = SceneVm::from_def(def).unwrap();
+            let mut before = BTreeSet::new();
+            let mut after = BTreeSet::new();
+            for object in &vm.objects {
+                let SceneObjectVm::Known(row) = object else { panic!("known object"); };
+                let owned = object_controls(Some(def), row, &vm.objects);
+                let cards = object_modifier_rows(Some(def), &row.modifier_chain, &owned);
+                assert_eq!(cards.len(), 1);
+                let card = &cards[0];
+                assert_eq!((card.index, card.node_doc_id, card.display_name.as_str()), (0, 2, "Bend"));
+                let expected = if row.object_node_id == expected_owner { vec!["bend_angle"] } else { vec![] };
+                assert_eq!(card.parameter_ids, expected);
+                after.extend(card.parameter_ids.iter().cloned());
+                for modifier in &row.modifier_chain {
+                    before.extend(parameter_ids_for_nodes(Some(def), std::slice::from_ref(&modifier.node)));
+                }
+            }
+            assert_eq!(before, BTreeSet::from(["bend_angle".to_string()]));
+            assert_eq!(after, before);
+        };
+        assert_cards(&def, 3);
+        assert_cards(&def, 3);
+        for wire in &mut def.wires {
+            if wire.to_node == 5 && matches!(wire.from_node, 3 | 4) {
+                wire.to_port = if wire.from_node == 4 { "object_0" } else { "object_1" }.into();
+            }
+        }
+        assert_cards(&def, 4);
+        def.nodes.retain(|node| node.id != 4);
+        def.wires.retain(|wire| wire.from_node != 4 && wire.to_node != 4);
+        for wire in &mut def.wires {
+            if wire.from_node == 3 && wire.to_node == 5 {
+                wire.to_port = "object_0".into();
+            }
+        }
+        def.nodes.iter_mut().find(|node| node.id == 5).unwrap().params.insert(
+            "objects".into(),
+            manifold_core::effect_graph_def::SerializedParamValue::Int { value: 1 },
+        );
+        assert_cards(&def, 3);
     }
 }
 
