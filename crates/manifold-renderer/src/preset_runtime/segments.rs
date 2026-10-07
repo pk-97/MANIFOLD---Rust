@@ -17,7 +17,7 @@ pub(super) fn build_segment_cards(
         let fx = active_effects[k].1;
         let view = loaded_preset_view_by_id(fx.effect_type()).expect("eligibility implies view");
         let def = if fx.relight_active() {
-            crate::node_graph::relight::relight_augment(
+            crate::node_graph::augmentation::relight_augment(
                 fx.graph.as_ref().unwrap_or(&view.canonical_def),
                 primitives,
                 &RelightParams::default(),

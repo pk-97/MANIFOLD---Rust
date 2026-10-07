@@ -19,7 +19,7 @@
 use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::EffectGraphDef;
 
-use crate::node_graph::bundled_presets::bundled_preset_def;
+use crate::node_graph::catalog_source::preset_def as bundled_preset_def;
 use crate::node_graph::persistence::PrimitiveFactory;
 
 /// Picker section. Texture-domain building blocks group under

@@ -40,7 +40,7 @@ use manifold_core::effect_graph_def::{
     BindingDef, BindingTarget, EffectGraphDef, PresetMetadata,
 };
 
-use crate::node_graph::bundled_presets::bundled_preset_def;
+use crate::node_graph::catalog_source::preset_def as bundled_preset_def;
 use crate::node_graph::mesh_change::PreparedMeshRules;
 use crate::node_graph::param_binding::{ParamBinding, ParamId, ParamTarget};
 use crate::node_graph::snapshot::{GraphSnapshot, OuterParamRouting, OuterParamSource};
@@ -131,7 +131,7 @@ fn build_view_map() -> AHashMap<PresetTypeId, &'static LoadedPresetView> {
     // id-keyed view map serves both. Generators gain editor snapshot +
     // reshape views here (#4); `bundled_preset_def` is kind-agnostic (A3),
     // and a generator without `presetMetadata` simply yields no view.
-    use crate::node_graph::bundled_presets::bundled_preset_type_ids;
+    use crate::node_graph::catalog_source::preset_type_ids as bundled_preset_type_ids;
     use manifold_core::preset_def::PresetKind;
     for type_id in bundled_preset_type_ids(PresetKind::Effect)
         .chain(bundled_preset_type_ids(PresetKind::Generator))

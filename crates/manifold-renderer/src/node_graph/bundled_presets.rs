@@ -36,6 +36,16 @@ use crate::preset_loader::{
     EFFECT_CATALOG, GENERATOR_CATALOG, SCENE_MODIFIER_CATALOG, catalog_generation,
 };
 
+inventory::submit! {
+    crate::node_graph::catalog_source::PresetCatalogSource {
+        name: "bundled",
+        json: bundled_preset_json,
+        def: bundled_preset_def,
+        visit: |kind, visitor| bundled_preset_type_ids(kind).for_each(visitor),
+    }
+}
+
+
 /// Raw JSON for the bundled preset of `preset_type` (either kind), or
 /// `None` if no preset has that type id.
 ///
@@ -901,6 +911,28 @@ mod tests {
             value.abs() > 0.5,
             "smoothing_y output ({value}) too small to produce visible drift",
         );
+    }
+}
+
+#[cfg(test)]
+mod catalog_source_tests {
+    use super::*;
+
+    #[test]
+    fn preset_catalog_registration_preserves_json_and_cached_def() {
+        for kind in [PresetKind::Effect, PresetKind::Generator, PresetKind::SceneModifier] {
+            let direct: Vec<_> = bundled_preset_type_ids(kind).collect();
+            let registered: Vec<_> = crate::node_graph::catalog_source::preset_type_ids(kind).collect();
+            assert_eq!(direct, registered);
+            for id in direct {
+                assert_eq!(bundled_preset_json(&id), crate::node_graph::catalog_source::preset_json(&id));
+                match (bundled_preset_def(&id), crate::node_graph::catalog_source::preset_def(&id)) {
+                    (Some(a), Some(b)) => assert!(std::ptr::eq(a, b)),
+                    (None, None) => {},
+                    _ => panic!("catalog definition mismatch: {id}"),
+                }
+            }
+        }
     }
 }
 

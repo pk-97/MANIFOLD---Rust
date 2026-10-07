@@ -2,13 +2,10 @@
 //! never during simulation. Rendering and collision use the same source selection.
 use std::path::Path;
 
-use super::decode_cache::cached_load_gltf_mesh;
 use super::effect_node::EffectNodeContext;
-use super::gltf_load::{DEFAULT_MATERIAL_MESH_PARAM, GltfMeshSelector};
 use super::mesh_partition::{Fragment, partition};
 use super::parameters::ParamValue;
 use super::physics::ColliderGeometry;
-use super::primitives::gltf_mesh_source::{apply_mesh_fit, apply_translate};
 use crate::mesh::MeshVertex;
 use crate::node_graph::transform::Transform;
 
@@ -64,29 +61,7 @@ impl MeshSelection {
     }
 
     pub fn load(&self, path: &Path) -> Result<Vec<MeshVertex>, String> {
-        let selector = if self.material == DEFAULT_MATERIAL_MESH_PARAM {
-            GltfMeshSelector::DefaultMaterial
-        } else if self.material >= 0 {
-            GltfMeshSelector::Material {
-                material_index: self.material as u32,
-            }
-        } else if self.mesh < 0 {
-            GltfMeshSelector::WholeScene
-        } else if self.primitive < 0 {
-            GltfMeshSelector::Mesh {
-                mesh_index: self.mesh as u32,
-            }
-        } else {
-            GltfMeshSelector::Primitive {
-                mesh_index: self.mesh as u32,
-                primitive_index: self.primitive as u32,
-            }
-        };
-        let vertices = cached_load_gltf_mesh(path, selector)?;
-        let vertices = apply_translate(
-            apply_mesh_fit(vertices, self.fit, self.recenter),
-            self.translate,
-        );
+        let vertices = super::mesh_asset_source::load_mesh(path, self)?;
         select_fragment(vertices, self.fragment_count, self.fragment_index)
     }
 }

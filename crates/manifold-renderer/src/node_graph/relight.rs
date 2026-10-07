@@ -33,6 +33,14 @@ use crate::node_graph::ports::PortType;
 /// def that already carries one.
 const RL_PREFIX: &str = "rl_";
 
+inventory::submit! {
+    crate::node_graph::augmentation::RelightAugmentation {
+        augment: relight_augment,
+        targets: relight_field_targets,
+    }
+}
+
+
 fn is_texture(ty: PortType) -> bool {
     matches!(ty, PortType::Texture2D | PortType::Texture2DTyped(_))
 }
@@ -45,19 +53,7 @@ fn enum_val(v: u32) -> SerializedParamValue {
     SerializedParamValue::Enum { value: v }
 }
 
-/// Maps a live D3 knob to the `(handle, param)` of the template node it
-/// drives, plus any value scaling the template applies at mint time so the
-/// live write matches. Handles are `rl_`-prefixed and deterministic, so this
-/// mapping is static and can be resolved against a spliced graph (unfused
-/// handles) or a fused retarget map (fused uniform fields).
-pub struct RelightTarget {
-    pub node_handle: &'static str,
-    pub param_name: &'static str,
-    /// Multiplier applied to the raw field value before writing. The template
-    /// bakes `relief * 12.0` into `surface_bumps.z_scale`, so the Relief
-    /// knob's `rl_normal` target uses `12.0`; all others are `1.0`.
-    pub scale: f32,
-}
+use crate::node_graph::augmentation::RelightTarget;
 
 pub fn relight_field_targets(field: RelightField) -> &'static [RelightTarget] {
     match field {
@@ -716,5 +712,29 @@ mod tests {
             checked += 1;
         }
         assert!(checked > 0, "expected at least one bundled effect preset to check");
+    }
+}
+
+#[cfg(test)]
+mod augmentation_source_tests {
+    use super::*;
+    #[test]
+    fn relight_registration_preserves_augmentation_and_targets() {
+        let registry = PrimitiveRegistry::with_builtin();
+        let def: EffectGraphDef = serde_json::from_value(serde_json::json!({
+            "version": manifold_core::effect_graph_def::EFFECT_GRAPH_VERSION,
+            "nodes": [{"id": 0, "typeId": "system.source"}, {"id": 1, "typeId": "system.final_output"}],
+            "wires": [{"fromNode": 0, "fromPort": "out", "toNode": 1, "toPort": "in"}]
+        })).unwrap();
+        let params = RelightParams::default();
+        assert!(relight_augment(&def, &registry, &params).nodes.len() > def.nodes.len());
+        assert_eq!(serde_json::to_value(relight_augment(&def, &registry, &params)).unwrap(),
+            serde_json::to_value(crate::node_graph::augmentation::relight_augment(&def, &registry, &params)).unwrap());
+        for field in [RelightField::LightX, RelightField::LightY, RelightField::Relief,
+            RelightField::AoIntensity, RelightField::ShadowSoftness, RelightField::Gain] {
+            let direct = relight_field_targets(field);
+            let registered = crate::node_graph::augmentation::relight_field_targets(field);
+            assert!(std::ptr::eq(direct, registered));
+        }
     }
 }

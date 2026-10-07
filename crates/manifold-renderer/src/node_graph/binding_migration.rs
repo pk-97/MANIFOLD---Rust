@@ -32,7 +32,7 @@ use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::effects::PresetInstance;
 use manifold_core::project::Project;
 
-use crate::node_graph::bundled_presets::bundled_preset_def;
+use crate::node_graph::catalog_source::preset_def as bundled_preset_def;
 
 /// Complete every metadata-only stub graph produced by the v1.3→v1.4
 /// user-binding fold-in. Walks master, layer, and clip effects — the same

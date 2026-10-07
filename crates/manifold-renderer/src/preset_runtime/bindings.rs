@@ -85,7 +85,7 @@ pub(super) fn build_relight_writes(
     }
     let mut writes = Vec::new();
     for field in RelightField::ALL {
-        for target in crate::node_graph::relight::relight_field_targets(*field) {
+        for target in crate::node_graph::augmentation::relight_field_targets(*field) {
             let handle = format!("{card_prefix}{}", target.node_handle);
             let param = target.param_name;
             if let Some((fused_node_id, fused_field)) =

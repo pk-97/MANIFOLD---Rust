@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 
 use super::gpu_flip_domain::{GpuFlipGeometry, gpu_flip_geometry};
 use super::gpu_flip_step::FACE_VALID_LAYERS;
-use crate::node_graph::bundled_presets::bundled_preset_json;
+use crate::node_graph::catalog_source::preset_json as bundled_preset_json;
 #[cfg(all(test, feature = "gpu-proofs"))]
 use crate::node_graph::fluid::{FluidDomainLayout, domain_layout};
 use crate::node_graph::liquid::clock::INTERVAL_DURATION_INPUTS;
@@ -743,8 +743,8 @@ impl WaterScene {
             "bindings":bindings
         })).expect("family visibility metadata"));
         let metadata = def.preset_metadata.as_mut().expect("family metadata");
-        let look_metadata = crate::node_graph::scene_exposure::look_metadata();
-        let visible_metadata: Vec<_> = crate::node_graph::scene_exposure::metadata_for_node_type("node.scene_object")
+        let look_metadata = crate::node_graph::exposure_source::look_metadata();
+        let visible_metadata: Vec<_> = crate::node_graph::exposure_source::metadata_for_node_type("node.scene_object")
             .into_iter().filter(|param| param.name == "visible").collect();
         for (kind, section) in [("foam", "Foam"), ("spray", "Spray"), ("bubble", "Bubbles")] {
             for (suffix, param_id, descriptors) in [

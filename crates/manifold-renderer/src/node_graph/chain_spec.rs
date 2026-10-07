@@ -74,7 +74,7 @@ pub struct SpliceResult {
 ///
 /// `relight` is the "3D Shading" toggle at the compile level
 /// (`docs/DEPTH_RELIGHT_DESIGN.md` D2/P5): `Some(params)` passes `def`
-/// through [`crate::node_graph::relight::relight_augment`] before splicing —
+/// through [`crate::node_graph::augmentation::relight_augment`] before splicing —
 /// the depth-companion synthesis + fixed relight template (parameterized by
 /// the instance's live `RelightParams`) appended before `final_output`.
 /// `None` is the exact unaugmented def, byte-identical to pre-P3 behavior —
@@ -90,7 +90,7 @@ pub fn splice_def_into_chain(
 ) -> Option<SpliceResult> {
     let augmented;
     let def = if let Some(params) = relight {
-        augmented = crate::node_graph::relight::relight_augment(def, registry, params);
+        augmented = crate::node_graph::augmentation::relight_augment(def, registry, params);
         &augmented
     } else {
         def

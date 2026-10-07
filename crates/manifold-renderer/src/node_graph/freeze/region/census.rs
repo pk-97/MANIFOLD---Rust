@@ -451,7 +451,7 @@ pub fn build_census_report(fixture: FixtureCorpus) -> String {
         }
     };
 
-    for type_id in crate::node_graph::bundled_presets::bundled_preset_type_ids(
+    for type_id in crate::node_graph::catalog_source::preset_type_ids(
         manifold_core::preset_def::PresetKind::Effect,
     ) {
         if let Some(view) = crate::node_graph::loaded_preset_view_by_id(&type_id) {
@@ -460,10 +460,10 @@ pub fn build_census_report(fixture: FixtureCorpus) -> String {
             preset_count += 1;
         }
     }
-    for type_id in crate::node_graph::bundled_presets::bundled_preset_type_ids(
+    for type_id in crate::node_graph::catalog_source::preset_type_ids(
         manifold_core::preset_def::PresetKind::Generator,
     ) {
-        if let Some(json) = crate::node_graph::bundled_presets::bundled_preset_json(&type_id) {
+        if let Some(json) = crate::node_graph::catalog_source::preset_json(&type_id) {
             census_json(&json);
             preset_count += 1;
         }

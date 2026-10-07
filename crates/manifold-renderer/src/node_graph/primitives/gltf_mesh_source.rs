@@ -1460,3 +1460,71 @@ mod gpu_tests {
         assert!(explicit_false.iter().all(|vertex| vertex.color == [1.0; 4]));
     }
 }
+
+fn load_physics_mesh_asset(path: &std::path::Path, selection: &crate::node_graph::physics_mesh::MeshSelection) -> Result<Vec<MeshVertex>, String> {
+    use crate::node_graph::gltf_load::{DEFAULT_MATERIAL_MESH_PARAM, GltfMeshSelector};
+    use crate::node_graph::decode_cache::cached_load_gltf_mesh;
+        let selector = if selection.material == DEFAULT_MATERIAL_MESH_PARAM {
+            GltfMeshSelector::DefaultMaterial
+        } else if selection.material >= 0 {
+            GltfMeshSelector::Material {
+                material_index: selection.material as u32,
+            }
+        } else if selection.mesh < 0 {
+            GltfMeshSelector::WholeScene
+        } else if selection.primitive < 0 {
+            GltfMeshSelector::Mesh {
+                mesh_index: selection.mesh as u32,
+            }
+        } else {
+            GltfMeshSelector::Primitive {
+                mesh_index: selection.mesh as u32,
+                primitive_index: selection.primitive as u32,
+            }
+        };
+        let vertices = cached_load_gltf_mesh(path, selector)?;
+        let vertices = apply_translate(
+            apply_mesh_fit(vertices, selection.fit, selection.recenter),
+            selection.translate,
+        );
+    Ok(vertices)
+}
+
+inventory::submit! {
+    crate::node_graph::mesh_asset_source::MeshAssetSource { load: load_physics_mesh_asset }
+}
+
+#[cfg(test)]
+mod mesh_asset_source_tests {
+    #[test]
+    fn mesh_asset_registration_preserves_selection_fit_and_translation() {
+        let dir = std::env::temp_dir().join(format!("manifold-mesh-seam-{}", manifold_core::short_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let positions = [[0.0_f32, 0.0, 0.0], [2.0, 0.0, 0.0], [0.0, 2.0, 0.0]];
+        std::fs::write(dir.join("positions.bin"), bytemuck::cast_slice(&positions)).unwrap();
+        let document = serde_json::json!({
+            "asset": {"version": "2.0"}, "scene": 0,
+            "scenes": [{"nodes": [0]}], "nodes": [{"mesh": 0}],
+            "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}],
+            "buffers": [{"uri": "positions.bin", "byteLength": 36}],
+            "bufferViews": [{"buffer": 0, "byteLength": 36}],
+            "accessors": [{"bufferView": 0, "componentType": 5126, "count": 3,
+                "type": "VEC3", "min": [0,0,0], "max": [2,2,0]}]
+        });
+        let path = dir.join("mesh.gltf");
+        std::fs::write(&path, document.to_string()).unwrap();
+        for (mesh, primitive) in [(-1, -1), (0, -1), (0, 0)] {
+            let selection = crate::node_graph::physics_mesh::MeshSelection {
+                mesh, primitive, material: -1, fit: true, recenter: true,
+                translate: [2.0, 3.0, 4.0], fragment_count: 1, fragment_index: 0, collider_parts: 1,
+            };
+            let direct = super::load_physics_mesh_asset(&path, &selection).unwrap();
+            let registered = crate::node_graph::mesh_asset_source::load_mesh(&path, &selection).unwrap();
+            let selected = selection.load(&path).unwrap();
+            assert_eq!(direct.len(), 3);
+            assert_eq!(bytemuck::cast_slice::<_, u8>(&direct), bytemuck::cast_slice::<_, u8>(&registered));
+            assert_eq!(bytemuck::cast_slice::<_, u8>(&direct), bytemuck::cast_slice::<_, u8>(&selected));
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}

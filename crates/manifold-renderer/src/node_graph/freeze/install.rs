@@ -479,7 +479,7 @@ pub fn select_card_fused_view(
     // per-frame via `EffectSlot::relight_writes`. `height_from` changes
     // template topology, so it legitimately recompiles.
     let effective_def_for_fusion: std::borrow::Cow<'_, EffectGraphDef> = if fx.relight_active() {
-        std::borrow::Cow::Owned(crate::node_graph::relight::relight_augment(
+        std::borrow::Cow::Owned(crate::node_graph::augmentation::relight_augment(
             effective_def,
             primitives,
             &manifold_core::effects::RelightParams::default(),
@@ -1189,7 +1189,7 @@ pub(crate) fn seed_segment_cache_for_test(
 /// modulation bindings can't be retargeted (stranded) — either way it renders
 /// unfused, always correct. Mirrors [`fused_view_by_id`].
 pub fn fused_generator_view_by_id(id: &PresetTypeId) -> Option<Arc<FusedGeneratorView>> {
-    let json = crate::node_graph::bundled_presets::bundled_preset_json(id)?;
+    let json = crate::node_graph::catalog_source::preset_json(id)?;
     let def: EffectGraphDef = serde_json::from_str(&json).ok()?;
     fused_generator_view_for(&def)
 }

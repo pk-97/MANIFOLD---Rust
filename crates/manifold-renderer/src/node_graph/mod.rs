@@ -7,6 +7,10 @@
 //! runtime (topological sort, execution plan, lifetime planner, resource
 //! bindings) lands in subsequent steps.
 
+pub mod catalog_source;
+pub mod augmentation;
+pub mod mesh_asset_source;
+pub mod exposure_source;
 pub mod atomic;
 mod backend;
 mod bindings;

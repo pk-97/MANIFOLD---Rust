@@ -1247,3 +1247,22 @@ mod tests {
         assert_eq!(first, second);
     }
 }
+
+inventory::submit! {
+    crate::node_graph::exposure_source::SceneExposureSource {
+        metadata: metadata_for_node_type,
+        look: look_metadata,
+    }
+}
+
+#[cfg(test)]
+mod exposure_source_tests {
+    #[test]
+    fn scene_exposure_registration_preserves_metadata() {
+        assert_eq!(super::look_metadata(), crate::node_graph::exposure_source::look_metadata());
+        for type_id in ["node.scene_object", "node.pbr_material", "node.camera", "missing"] {
+            assert_eq!(super::metadata_for_node_type(type_id),
+                crate::node_graph::exposure_source::metadata_for_node_type(type_id));
+        }
+    }
+}
