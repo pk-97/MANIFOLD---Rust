@@ -3,8 +3,10 @@
     //! the per-frame skip cache lies about what's been written and the
     //! card has to be "touched" to push the correct value through —
     //! see [`apply_binding_defaults`].
-    use super::*;
-    use crate::parameters::ParamValue;
+    use manifold_node_engine::runtime::*;
+use manifold_node_engine::persistence::*;
+
+    use manifold_node_engine::parameters::ParamValue;
     use manifold_core::PresetTypeId;
     use manifold_core::effects::PresetInstance;
     
@@ -28,11 +30,11 @@
             .expect("SoftFocus chain should build");
 
         let slot = cg
-            .effect_nodes
+            .effect_slots_for_test()
             .first()
             .expect("SoftFocus contributes one effect slot");
         let (_, blur_id) = slot
-            .handles
+            .handles_for_test()
             .iter()
             .find(|(h, _)| h.as_ref() == "blur")
             .expect("SoftFocus splice registers a `blur` handle");

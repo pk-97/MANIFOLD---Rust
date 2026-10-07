@@ -7,7 +7,10 @@
     //! the editor reads via [`PresetRuntime::errors`]. The tests below
     //! pin one variant from the per-build path so the surface
     //! doesn't silently regress.
-    use super::*;
+    use manifold_node_engine::runtime::*;
+use manifold_node_engine::persistence::*;
+use manifold_core::*;
+
     use manifold_core::PresetTypeId;
     use manifold_core::effects::{PresetInstance, ParamConvert, UserParamBinding};
 

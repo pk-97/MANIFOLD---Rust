@@ -20,6 +20,70 @@ def plan(paths, users=None, repo=None):
 
 
 class ScopeTests(unittest.TestCase):
+    def test_moved_lattice_shaders_select_concrete_fill_pits_proofs(self):
+        repo = Path(__file__).resolve().parent.parent
+        names = g.read_times(repo / "scripts/gpu_test_times.json")
+        for shader in ("offset_lattice_body.wgsl", "redistance_lattice_body.wgsl"):
+            path = W + "shaders/" + shader
+            result = plan([path], repo=repo, users=lambda _: [W + shader.replace("_body.wgsl", ".rs")])
+            self.assertIn("fluid_fill_pits", result.filters)
+            relevant = [name for name in names if "fluid_fill_pits" in name]
+            self.assertTrue(relevant, "the owning proof inventory must be nonempty")
+            self.assertTrue(all(any(f in name for f in result.filters) for name in relevant))
+            self.assertFalse(result.unmapped)
+
+    def test_repathed_shader_rows_select_existing_owning_proofs(self):
+        repo = Path(__file__).resolve().parent.parent
+        names = g.read_times(repo / "scripts/gpu_test_times.json")
+        cases = {
+            "liquid_fill": "gpu_flip_",
+            "face_sample_component": "face_grid_tests::",
+            "count_surface_edges": "count_surface_edges::gpu_tests::",
+            "surface_edge_": "volume_surface_mesh::gpu_tests::",
+            "volume_surface_mesh": "volume_surface_mesh::gpu_tests::",
+            "relax_surface_mesh": "volume_surface_mesh::gpu_tests::",
+            "surface_mesh_": "volume_surface_mesh::gpu_tests::",
+            "grid_to_matter": "matter_",
+            "push_out_of_solid": "push_out_of_solid::gpu_tests::",
+            "liquid_frame_faces": "liquid_frame::gpu_tests::",
+        }
+        for prefix, owning in cases.items():
+            paths = list((repo / W / "shaders").glob(prefix + "*.wgsl"))
+            self.assertTrue(paths, prefix)
+            relevant = [name for name in names if owning in name]
+            self.assertTrue(relevant, f"{prefix}: owning proof inventory is empty")
+            for path in paths:
+                result = plan([path.relative_to(repo).as_posix()], repo=repo,
+                              users=lambda shader: g.default_shader_users(repo, shader))
+                self.assertTrue(any(owning in f or f in owning for f in result.filters), (path, result.filters))
+                self.assertTrue(all(any(f in name for f in result.filters) for name in relevant))
+                self.assertFalse(result.unmapped)
+
+    def test_engine_pressure_fixtures_select_their_consuming_proofs(self):
+        for name in ("dambreak_pressure_problems.bin.zst", "deep_pool_pressure_problems.bin.zst",
+                     "deep_pool_density_problems.bin.zst", "gpu_flip_pressure_golden.txt"):
+            path = "crates/manifold-node-engine/tests/fixtures/" + name
+            result = plan([path])
+            self.assertEqual(result.paths, [path])
+            self.assertEqual(result.filters, {"water::primitives::gpu_flip_pressure_tests::"})
+            self.assertFalse(result.unmapped)
+
+    def test_contract_mounts_select_real_module_names(self):
+        repo = Path(__file__).resolve().parent.parent
+        path = R + "engine_contract_tests/freeze_install.rs"
+        result = plan([path], repo=repo)
+        self.assertIn(path, result.paths)
+        self.assertIn("freeze::install::", result.filters)
+        self.assertNotIn("engine_contract_tests::freeze_install::", result.filters)
+        names = g.read_times(repo / "scripts/gpu_test_times.json")
+        self.assertTrue(any(name.startswith("freeze::install::tests::") for name in names))
+        self.assertFalse(result.unmapped)
+
+    def test_unmounted_contract_is_unmapped(self):
+        path = R + "engine_contract_tests/orphan.rs"
+        result = plan([path], repo=self._repo_with(path))
+        self.assertEqual([row[0] for row in result.unmapped], [path])
+
     def test_cpu_flip_reference_inputs_select_consuming_proofs(self):
         required = {
             "liquid_conformance::", "water_basin::", "fluid_surface_perf::",

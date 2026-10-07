@@ -56,35 +56,41 @@ fn enum_val(v: u32) -> SerializedParamValue {
 use manifold_node_engine::load::augmentation::RelightTarget;
 
 pub fn relight_field_targets(field: RelightField) -> &'static [RelightTarget] {
-    match field {
-        RelightField::LightX => &[
+    static LIGHT_X: [RelightTarget; 2] = [
             RelightTarget { node_handle: "rl_lambert", param_name: "light_x", scale: 1.0 },
             RelightTarget { node_handle: "rl_shadow", param_name: "light_x", scale: 1.0 },
-        ],
-        RelightField::LightY => &[
+        ];
+    static LIGHT_Y: [RelightTarget; 2] = [
             RelightTarget { node_handle: "rl_lambert", param_name: "light_y", scale: 1.0 },
             RelightTarget { node_handle: "rl_shadow", param_name: "light_y", scale: 1.0 },
-        ],
-        RelightField::Relief => &[
+        ];
+    static RELIEF: [RelightTarget; 3] = [
             RelightTarget { node_handle: "rl_normal", param_name: "z_scale", scale: 12.0 },
             RelightTarget { node_handle: "rl_ao", param_name: "relief", scale: 1.0 },
             RelightTarget { node_handle: "rl_shadow", param_name: "relief", scale: 1.0 },
-        ],
-        RelightField::AoIntensity => &[RelightTarget {
+        ];
+    static AO_INTENSITY: [RelightTarget; 1] = [RelightTarget {
             node_handle: "rl_ao",
             param_name: "intensity",
             scale: 1.0,
-        }],
-        RelightField::ShadowSoftness => &[RelightTarget {
+        }];
+    static SHADOW_SOFTNESS: [RelightTarget; 1] = [RelightTarget {
             node_handle: "rl_shadow",
             param_name: "softness",
             scale: 1.0,
-        }],
-        RelightField::Gain => &[RelightTarget {
+        }];
+    static GAIN: [RelightTarget; 1] = [RelightTarget {
             node_handle: "rl_exposure",
             param_name: "gain",
             scale: 1.0,
-        }],
+        }];
+    match field {
+        RelightField::LightX => &LIGHT_X,
+        RelightField::LightY => &LIGHT_Y,
+        RelightField::Relief => &RELIEF,
+        RelightField::AoIntensity => &AO_INTENSITY,
+        RelightField::ShadowSoftness => &SHADOW_SOFTNESS,
+        RelightField::Gain => &GAIN,
     }
 }
 

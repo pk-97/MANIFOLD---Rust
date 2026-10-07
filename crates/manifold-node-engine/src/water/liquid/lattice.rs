@@ -36,17 +36,17 @@ pub(crate) const FLIP_WALL_EPSILON: f32 = 5.0e-5;
 /// GPU FLIP's MAC grid, distinct from the authored-grid scalar wire contract.
 /// The native engine adds three cells and offsets its origin by 1.5h.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct FlipSolverGrid {
+pub struct FlipSolverGrid {
     surface: LiquidLattice,
 }
 
 impl FlipSolverGrid {
-    pub(crate) fn from_lattice(authored: LiquidLattice) -> Self {
+    pub fn from_lattice(authored: LiquidLattice) -> Self {
         Self { surface: authored.surface() }
     }
 
-    pub(crate) fn cells(self) -> [u32; 3] { self.surface.nodes().map(|n| n - 1) }
-    pub(crate) fn min(self) -> [f32; 3] { self.surface.min() }
+    pub fn cells(self) -> [u32; 3] { self.surface.nodes().map(|n| n - 1) }
+    pub fn min(self) -> [f32; 3] { self.surface.min() }
     pub(crate) fn nodes(self) -> [u32; 3] { self.surface.nodes() }
     pub(crate) fn bounds(self) -> Transform { self.surface.bounds() }
     pub(crate) fn wall_inset(self) -> f32 {

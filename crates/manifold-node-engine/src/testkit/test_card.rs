@@ -3,7 +3,7 @@ use manifold_gpu::{GpuDevice, GpuTextureDesc, GpuTextureFormat, GpuTextureDimens
 use crate::gpu::render_target::RenderTarget;
 use crate::exec::{effect_node::NodeInstanceId, execution_plan::ResourceId};
 
-pub(crate) fn test_card_pixel(x: u32, y: u32, w: u32, h: u32) -> [f32; 4] {
+pub fn test_card_pixel(x: u32, y: u32, w: u32, h: u32) -> [f32; 4] {
     let wm = (w.max(1) - 1).max(1) as f32;
     let hm = (h.max(1) - 1).max(1) as f32;
     let u = x as f32 / wm;
@@ -56,7 +56,7 @@ fn hue_rgb(h: f32) -> [f32; 3] {
     [f(5.0), f(3.0), f(1.0)]
 }
 
-pub(crate) fn build_test_card_input(
+pub fn build_test_card_input(
     device: &GpuDevice,
     w: u32,
     h: u32,
@@ -90,7 +90,7 @@ pub(crate) fn build_test_card_input(
     RenderTarget::view_of(tex, "preset-thumb-test-card-input")
 }
 
-pub(crate) fn output_resource(plan: &crate::exec::execution_plan::ExecutionPlan, node: NodeInstanceId, port: &str) -> Option<ResourceId> {
+pub fn output_resource(plan: &crate::exec::execution_plan::ExecutionPlan, node: NodeInstanceId, port: &str) -> Option<ResourceId> {
     for step in plan.steps() {
         if step.node == node {
             for &(name, id) in &step.outputs {

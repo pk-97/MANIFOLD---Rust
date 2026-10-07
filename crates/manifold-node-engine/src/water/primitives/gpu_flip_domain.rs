@@ -43,7 +43,7 @@ use crate::scene::transform::Transform;
 /// Everything whose change restarts the liquid.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GpuFlipSetup {
-    pub lattice: LiquidLattice,
+    pub(crate) lattice: LiquidLattice,
     pub(crate) pool_sites: u32,
     pub(crate) box_sites: [[u32; 2]; 3],
     /// Particle slots the pool holds; 0 means the fill's count. Sources
@@ -56,7 +56,7 @@ pub struct GpuFlipSetup {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GpuFlipGeometry {
     pub(crate) layout: FluidDomainLayout,
-    pub setup: GpuFlipSetup,
+    pub(crate) setup: GpuFlipSetup,
     pub(crate) particles: u64,
     /// The V-cycle level the pressure solves run on; live, so not in the
     /// setup.
@@ -64,7 +64,7 @@ pub struct GpuFlipGeometry {
     /// The cap Auto pressure solves converge within; live, so not in the setup.
     pub(crate) max_iterations: u32,
     /// Live sheet seeding rate; changing it does not restart the liquid.
-    pub sheet_fill_rate: f32,
+    pub(crate) sheet_fill_rate: f32,
 }
 
 impl GpuFlipGeometry {
@@ -1180,3 +1180,20 @@ mod tests {
 
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 mod extent;
+
+#[cfg(any(test, feature = "testkit"))]
+impl GpuFlipSetup {
+    pub fn box_sites_for_test(&self) -> [[u32; 2]; 3] { self.box_sites }
+    pub fn pool_sites_for_test(&self) -> u32 { self.pool_sites }
+}
+
+#[cfg(any(test, feature = "testkit"))]
+impl GpuFlipSetup {
+    pub fn lattice_for_test(&self) -> LiquidLattice { self.lattice }
+}
+
+#[cfg(any(test, feature = "testkit"))]
+impl GpuFlipGeometry {
+    pub fn setup_for_test(&self) -> GpuFlipSetup { self.setup }
+    pub fn sheet_fill_rate_for_test(&self) -> f32 { self.sheet_fill_rate }
+}

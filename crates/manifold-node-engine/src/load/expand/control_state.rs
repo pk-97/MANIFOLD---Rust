@@ -15,29 +15,31 @@ use crate::{graph::Graph, exec::effect_node::NodeInstanceId, state_store::StateS
 use super::{SceneModifierExpandError, routes::SceneModifierNodeRoute};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[doc(hidden)]
-pub struct ModifierControlState {
-    pub modifier_id: NodeId,
-    pub graph_hash: String,
-    pub nodes: Vec<ModifierControlNode>,
+struct ModifierControlState {
+    modifier_id: NodeId,
+    graph_hash: String,
+    nodes: Vec<ModifierControlNode>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[doc(hidden)]
-pub struct ModifierControlNode {
-    pub generated_node_id: NodeId,
-    pub runtime_node_id: NodeInstanceId,
-    pub primitive_type: String,
+struct ModifierControlNode {
+    generated_node_id: NodeId,
+    runtime_node_id: NodeInstanceId,
+    primitive_type: String,
 }
 
 /// Prepared CPU trigger-latch state for one authored scene-modifier stack.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreparedModifierControlState {
-    #[doc(hidden)]
-    pub modifiers: Vec<ModifierControlState>,
+    modifiers: Vec<ModifierControlState>,
 }
 
 impl PreparedModifierControlState {
+    #[cfg(any(test, feature = "testkit"))]
+    pub fn node_types_for_test(&self, modifier: usize) -> impl ExactSizeIterator<Item = &str> {
+        self.modifiers[modifier].nodes.iter().map(|node| node.primitive_type.as_str())
+    }
+
     /// Capture routed CPU trigger-latch nodes from a prepared graph.
     pub fn prepare(
         owner: &EffectGraphDef,

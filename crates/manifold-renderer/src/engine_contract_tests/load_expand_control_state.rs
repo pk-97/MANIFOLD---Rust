@@ -200,13 +200,10 @@ mod tests {
         let owner = owner(&[("a", true)]);
         let routes = routes(&[("a", &["gen-a1", "gen-a2", "gpu", "plain"])]);
         let prepared = PreparedModifierControlState::prepare(&owner, &routes, &graph).unwrap();
-        assert_eq!(prepared.modifiers[0].nodes.len(), 2);
+        assert_eq!(prepared.node_types_for_test(0).len(), 2);
         assert!(
-            prepared.modifiers[0]
-                .nodes
-                .iter()
-                .all(|node| node.primitive_type == "node.trigger_gate")
+            prepared.node_types_for_test(0)
+                .all(|node| node == "node.trigger_gate")
         );
     }
 }
-

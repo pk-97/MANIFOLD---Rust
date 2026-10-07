@@ -214,10 +214,22 @@ class GpuProofsGateTests(unittest.TestCase):
         code, _, _ = self.run_main(
             [], repo_changed=["crates/manifold-renderer/src/node_graph/primitives/invert.rs"])
         self.assertEqual(code, 0)
+        packages = ["manifold-renderer", "manifold-node-engine"]
         kinds = [kind for kind, _ in self.events]
-        self.assertEqual(kinds, ["build", "hold-enter", "run", "hold-exit"])
-        (_, build), (_, run) = self.events[0], self.events[2]
-        self.assertEqual(build, run + ["--no-run"])
+        self.assertEqual(
+            kinds,
+            ["build"] * len(packages) + ["hold-enter"]
+            + ["run"] * len(packages) + ["hold-exit"],
+        )
+        builds = [cmd for kind, cmd in self.events if kind == "build"]
+        runs = [cmd for kind, cmd in self.events if kind == "run"]
+        for commands in (builds, runs):
+            self.assertCountEqual(
+                [cmd[cmd.index("-p") + 1] for cmd in commands], packages)
+        builds_by_package = {cmd[cmd.index("-p") + 1]: cmd for cmd in builds}
+        for run in runs:
+            package = run[run.index("-p") + 1]
+            self.assertEqual(builds_by_package[package], run + ["--no-run"])
 
     def test_each_distinct_run_builds_once_before_any_test(self):
         code, calls, _ = self.run_main(

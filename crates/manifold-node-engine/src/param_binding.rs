@@ -261,7 +261,7 @@ pub struct ResolvedBinding {
     /// `Some` only for User bindings with a non-identity card mapping
     /// (invert or a non-Linear curve); `None` for static bindings and
     /// identity User bindings, which then pay nothing and stay 1:1.
-    pub reshape: Option<Reshape>,
+    pub(crate) reshape: Option<Reshape>,
     /// `true` when the target param is a [`ParamType::Angle`] knob, so the
     /// applied value loops onto `[0, TAU)` via `rem_euclid` at the write
     /// boundary (Peter's "angles loop 0..360"). Derived from the param type
@@ -271,7 +271,7 @@ pub struct ResolvedBinding {
     /// are author-set and already in range). Safe because every angle consumer
     /// feeds cos/sin (2π-periodic), so the wrap is a no-op on the rendered
     /// result for in-range values and only tames a driver that climbs past 2π.
-    pub wraps_angle: bool,
+    pub(crate) wraps_angle: bool,
     /// Carried from `BindingDef::default_mirrors_node_param` through
     /// [`ParamBinding`] / the generator resolve. The one thing
     /// [`apply_binding_defaults`] reads to decide whether planting this

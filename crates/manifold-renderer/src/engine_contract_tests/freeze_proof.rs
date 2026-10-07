@@ -1,11 +1,11 @@
-use crate::freeze::TextureDiff;
-use crate::freeze::markers::Marker;
-use crate::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use crate::exec::execution_plan::compile;
-use crate::graph::Graph;
-use crate::parameters::ParamValue;
-use crate::{persistence::EffectGraphDefExt, exec::execution::Executor, exec::effect_node::FrameTime, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, persistence::PrimitiveRegistry, state_store::StateStore};
-use crate::gpu::render_target::RenderTarget;
+use manifold_node_engine::freeze::TextureDiff;
+use manifold_node_engine::freeze::markers::Marker;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
+use manifold_node_engine::exec::execution_plan::compile;
+use manifold_node_engine::graph::Graph;
+use manifold_node_engine::parameters::ParamValue;
+use manifold_node_engine::{persistence::EffectGraphDefExt, exec::execution::Executor, exec::effect_node::FrameTime, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, persistence::PrimitiveRegistry, state_store::StateStore};
+use manifold_node_engine::gpu::render_target::RenderTarget;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::GpuTextureFormat;
@@ -27,7 +27,7 @@ const FMT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
 const OUT_OF_LOOP_ULP_ABS_TOL: f32 = 1.0e-2;
 const OUT_OF_LOOP_ULP_REL_TOL: f32 = 3.0e-2;
 
-use crate::testkit::proof_support::*;
+use manifold_node_engine::testkit::proof_support::*;
 
 #[test]
 fn fused_gain_chain_matches_unfused_within_tolerance() {
@@ -102,8 +102,8 @@ fn oracle_catches_wrong_fusion() {
 /// uses.
 #[test]
 fn camera_derived_pointwise_atom_fuses_and_matches_unfused() {
-    use crate::freeze::install::{FusedDef, fuse_canonical_def};
-    use crate::testkit::test_camera_pointwise_fixture::TestCameraPointwise;
+    use manifold_node_engine::freeze::install::{FusedDef, fuse_canonical_def};
+    use manifold_node_engine::testkit::test_camera_pointwise_fixture::TestCameraPointwise;
 
     let device = manifold_gpu::testkit::test_device();
     // The fixture is deliberately NOT globally inventory-registered (see its
@@ -137,7 +137,7 @@ fn camera_derived_pointwise_atom_fuses_and_matches_unfused() {
     let gain = 1.4f32;
 
     // ── Unfused: the canonical graph, params set by node id. ──
-    let mut unfused_graph = def.clone().into_graph(&registry, &crate::scene::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
+    let mut unfused_graph = def.clone().into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
     let set_by_node_id = |g: &mut Graph, node_id: &str, param: &str, v: f32| {
         let id = g
             .node_id_by_handle(node_id)
@@ -180,7 +180,7 @@ fn camera_derived_pointwise_atom_fuses_and_matches_unfused() {
          derived-uniform recompute), not just fuse structurally"
     );
 
-    let mut fused_graph = fused_def.into_graph(&registry, &crate::scene::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
+    let mut fused_graph = fused_def.into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
     set_by_node_id(&mut fused_graph, "cam", "pos_x", cam_pos_x);
     let fused_node = find_node(&fused_graph, "node.wgsl_compute");
     let (_, gain_field) = retarget
@@ -221,7 +221,7 @@ fn camera_derived_pointwise_atom_fuses_and_matches_unfused() {
 /// numerically faithful.
 #[test]
 fn fused_wgsl_compute_fragment_matches_unfused() {
-    use crate::freeze::install::{FusedDef, fuse_canonical_def};
+    use manifold_node_engine::freeze::install::{FusedDef, fuse_canonical_def};
 
     let device = manifold_gpu::testkit::test_device();
     let registry = PrimitiveRegistry::with_builtin();
@@ -253,7 +253,7 @@ fn fused_wgsl_compute_fragment_matches_unfused() {
     let def: EffectGraphDef = serde_json::from_str(&json).unwrap();
 
     // Unfused: all three atoms dispatch; the fragment runs its synthesized kernel.
-    let mut unfused = def.clone().into_graph(&registry, &crate::scene::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
+    let mut unfused = def.clone().into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("unfused graph");
     let u_plan = compile(&unfused).expect("compile unfused");
     let u_src = resource_for_output(&u_plan, find_node(&unfused, "system.source"), "out");
     let u_out = resource_for_output(&u_plan, find_node(&unfused, "node.invert"), "out");
@@ -266,7 +266,7 @@ fn fused_wgsl_compute_fragment_matches_unfused() {
         !fdef.nodes.iter().any(|n| n.type_id == "node.exposure"),
         "gain must be absorbed into the fused kernel"
     );
-    let mut fused = fdef.into_graph(&registry, &crate::scene::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
+    let mut fused = fdef.into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default()).expect("fused graph builds");
     let f_plan = compile(&fused).expect("compile fused");
     let f_src = resource_for_output(&f_plan, find_node(&fused, "system.source"), "out");
     let f_out = resource_for_output(&f_plan, find_node(&fused, "node.wgsl_compute"), "dst");
@@ -299,10 +299,10 @@ fn fused_wgsl_compute_fragment_matches_unfused() {
 /// order-independent.
 #[test]
 fn atomic_side_output_atom_cuts_fusion_and_matches_unfused() {
-    use crate::freeze::install::fuse_generator_view;
-    use crate::load::graph_loader::{BoundaryHandling, HandleScope, instantiate_def, pre_allocate_resources};
-    use crate::scene::mesh_change::PreparedMeshRules;
-    use crate::testkit::test_multi_output_atomic_fixture::{
+    use manifold_node_engine::freeze::install::fuse_generator_view;
+    use manifold_node_engine::load::graph_loader::{BoundaryHandling, HandleScope, instantiate_def, pre_allocate_resources};
+    use manifold_node_engine::scene::mesh_change::PreparedMeshRules;
+    use manifold_node_engine::testkit::test_multi_output_atomic_fixture::{
         MOMENTUM_WORDS, TYPE_ID as FIXTURE, TestMultiOutputAtomic,
     };
 

@@ -41,7 +41,7 @@ use crate::water::physics_events::{ResolvedNodeImpulse, map_rigid_receipt};
 
 /// Trilinear reads of a field lattice; pure math, included by each atom that
 /// reads one (its own buffer reads stay in its body).
-pub(crate) const LIQUID_FIELD: &str = include_str!("../primitives/shaders/liquid_field.wgsl");
+pub const LIQUID_FIELD: &str = include_str!("../primitives/shaders/liquid_field.wgsl");
 
 /// Impulses held at once: queued, discarded and undrained receipts together.
 pub const IMPULSE_CAPACITY: usize = 256;
@@ -148,7 +148,7 @@ impl FieldFrame {
 
 /// The field scalars and lattices an atom binds: wired lattices too small
 /// for the wired field are refused by name; unwired ones read nothing.
-pub(crate) struct FieldBinding<'a> {
+pub struct FieldBinding<'a> {
     pub nodes: [i32; 3],
     pub spacing: f32,
     pub force_lattices: i32,

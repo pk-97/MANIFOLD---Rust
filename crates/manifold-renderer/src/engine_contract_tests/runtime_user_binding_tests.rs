@@ -12,8 +12,15 @@
     //! After the bindings unification (Phase 1) the runtime walks a
     //! single `slot.bindings: Vec<ResolvedBinding>` — the `&[]` bug
     //! class is structurally unrepresentable.
-    use super::*;
-    use crate::parameters::ParamValue;
+    
+use manifold_node_engine::runtime::*;
+use manifold_node_engine::persistence::*;
+use manifold_node_engine::load::loaded_preset_view::*;
+use manifold_core::*;
+use manifold_core::params::*;
+use manifold_node_engine::runtime::core::EffectSlot;
+
+    use manifold_node_engine::parameters::ParamValue;
     use manifold_core::PresetTypeId;
     use manifold_core::effects::{
         PresetInstance, UserParamBinding, ParamConvert,
@@ -66,7 +73,7 @@
 
     fn affine_scale(cg: &PresetRuntime, slot: &EffectSlot) -> ParamValue {
         let (_, affine_id) = slot
-            .handles
+            .handles_for_test()
             .iter()
             .find(|(h, _)| h.as_ref() == "affine")
             .expect("StylizedFeedback graph registers `affine` handle");
@@ -90,8 +97,9 @@
         // Mirror the per-frame apply `run()` performs: push the live
         // `params` manifest through the slot's bindings into the graph.
         fn apply(cg: &mut PresetRuntime, values: &ParamManifest) {
-            let slot = &mut cg.effect_nodes[0];
-            slot.bound.apply(&mut cg.graph, values);
+            let (slots, graph) = cg.effect_slots_and_graph_for_test();
+        let slot = &mut slots[0];
+            slot.bound_mut_for_test().apply(graph, values);
         }
 
         // Control: same effect, zoom = 0.3, identity binding → inner sees 0.3.
@@ -104,7 +112,7 @@
             PresetRuntime::try_build(ChainBuildInputs { effects: std::slice::from_ref(&control), groups: &[], primitives: &primitives, device: &device, pool: None, width: 256, height: 256, preview_effect: Some(&control.id) }, None)
                 .expect("control chain builds");
         apply(&mut cg0, &control.params);
-        let slot0 = &cg0.effect_nodes[0];
+        let slot0 = &cg0.effect_slots_for_test()[0];
         assert_eq!(
             affine_scale(&cg0, slot0),
             ParamValue::Float(0.3),
@@ -126,7 +134,7 @@
             PresetRuntime::try_build(ChainBuildInputs { effects: std::slice::from_ref(&fx), groups: &[], primitives: &primitives, device: &device, pool: None, width: 256, height: 256, preview_effect: Some(&fx.id) }, None)
                 .expect("reshaped chain builds");
         apply(&mut cg, &fx.params);
-        let slot = &cg.effect_nodes[0];
+        let slot = &cg.effect_slots_for_test()[0];
         assert_eq!(
             affine_scale(&cg, slot),
             ParamValue::Float(0.6),
@@ -192,27 +200,27 @@
             .expect("StylizedFeedback chain with one user binding builds");
 
         let slot = cg
-            .effect_nodes
+            .effect_slots_for_test()
             .first()
             .expect("StylizedFeedback contributes one effect slot");
         // `EffectSlot` no longer stores a static count; the static prefix is
         // the run of `BindingSource::Static` entries at the head of the
         // unified bindings list.
         let n_static = slot
-            .bound
+            .bound_for_test()
             .bindings
             .iter()
-            .filter(|b| matches!(b.source, crate::param_binding::BindingSource::Static))
+            .filter(|b| matches!(b.source, manifold_node_engine::param_binding::BindingSource::Static))
             .count();
         assert_eq!(
-            slot.bound.bindings.len(),
+            slot.bound_for_test().bindings.len(),
             n_static + 1,
             "user-tail binding for affine.translate_x must hydrate at build time",
         );
-        let user_rb = &slot.bound.bindings[n_static];
-        assert_eq!(user_rb.source, crate::param_binding::BindingSource::User);
+        let user_rb = &slot.bound_for_test().bindings[n_static];
+        assert_eq!(user_rb.source, manifold_node_engine::param_binding::BindingSource::User);
         match &user_rb.target {
-            crate::param_binding::ResolvedTarget::Node { param, .. } => {
+            manifold_node_engine::param_binding::ResolvedTarget::Node { param, .. } => {
                 assert_eq!(*param, "translate_x");
             }
             _ => panic!("user binding must resolve to a Node target"),
@@ -233,19 +241,19 @@
 
         // Mirror the per-frame apply that `run()` would execute:
         // walk the slot's unified bindings against fx.params.
-        let slot = &mut cg.effect_nodes[0];
-        slot.bound.apply(&mut cg.graph, &fx.params);
+        let (slots, graph) = cg.effect_slots_and_graph_for_test();
+        let slot = &mut slots[0];
+        slot.bound_mut_for_test().apply(graph, &fx.params);
 
         // Inspect the inner affine node's `translate_x` param — it
         // must reflect the user-tail slot's value, not its primitive
         // default of 0.0.
         let (_, xform_id) = slot
-            .handles
+            .handles_for_test()
             .iter()
             .find(|(h, _)| h.as_ref() == "affine")
             .expect("StylizedFeedback graph registers `affine` handle");
-        let translate_x = cg
-            .graph
+        let translate_x = graph
             .get_node(*xform_id)
             .and_then(|n| n.params.get("translate_x").cloned())
             .expect("affine_transform exposes a `translate_x` param");
@@ -307,16 +315,15 @@
         let cg = PresetRuntime::try_build(ChainBuildInputs { effects: &[fx], groups: &[], primitives: &primitives, device: &device, pool: None, width: 256, height: 256, preview_effect: None }, None)
             .expect("StylizedFeedback chain with one user binding builds");
         let slot = cg
-            .effect_nodes
+            .effect_slots_for_test()
             .first()
             .expect("StylizedFeedback contributes one effect slot");
         let (_, xform_id) = slot
-            .handles
+            .handles_for_test()
             .iter()
             .find(|(h, _)| h.as_ref() == "affine")
             .expect("StylizedFeedback graph registers `affine` handle");
-        let translate_x = cg
-            .graph
+        let translate_x = cg.graph
             .get_node(*xform_id)
             .and_then(|n| n.params.get("translate_x").cloned())
             .expect("affine_transform exposes a `translate_x` param");

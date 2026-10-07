@@ -4,15 +4,15 @@
 #[cfg(any(test, feature = "testkit"))]
 pub mod gpu;
 #[cfg(feature = "gpu-proofs")]
-#[cfg(test)]
-pub(crate) mod test_camera_pointwise_fixture;
-#[cfg(test)]
-pub(crate) mod test_multi_output_atomic_fixture;
+#[cfg(any(test, feature = "testkit"))]
+pub mod test_camera_pointwise_fixture;
+#[cfg(any(test, feature = "testkit"))]
+pub mod test_multi_output_atomic_fixture;
 #[cfg(test)]
 pub(crate) mod test_face_lattice_fixture;
 #[cfg(feature = "gpu-proofs")]
-#[cfg(test)]
-pub(crate) mod test_card;
+#[cfg(any(test, feature = "testkit"))]
+pub mod test_card;
 #[cfg(test)]
 pub(crate) mod graph;
 #[cfg(feature = "gpu-proofs")]

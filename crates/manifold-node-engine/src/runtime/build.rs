@@ -34,7 +34,7 @@ pub fn chain_topology_hash(
 /// `amount = 0` still runs as a normal effect at `amount = 0`. The
 /// only structural skip is `PresetInstance.enabled`; that is
 /// already hashed below.
-pub(super) fn compute_topology_hash(
+pub fn compute_topology_hash(
     effects: &[PresetInstance],
     groups: &[EffectGroup],
     width: u32,

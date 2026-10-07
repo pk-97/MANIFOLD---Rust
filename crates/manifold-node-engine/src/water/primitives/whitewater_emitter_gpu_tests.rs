@@ -589,7 +589,7 @@ fn whitewater_dust_step_publishes_a_distinct_population() {
         ),
         h.array(&vec![0.0f32; 576], 576),
     ];
-    let pool = h.array(&vec![super::whitewater_pool_cpu::empty_slot(); 256], 256);
+    let pool = h.array(&vec![super::whitewater_step::empty_slot(); 256], 256);
     let state = h.array(&[0u32; 8], 8);
     let shape = StepShape::new(
         [9; 3],
@@ -650,7 +650,7 @@ fn whitewater_dust_step_publishes_a_distinct_population() {
         .unwrap();
         // Tick outputs are private storage; read them through shared copies.
         let counts_out = h.array(&[0u32; 9], 9);
-        let pool_out = h.array(&vec![super::whitewater_pool_cpu::empty_slot(); 256], 256);
+        let pool_out = h.array(&vec![super::whitewater_step::empty_slot(); 256], 256);
         let dust_out = h.array::<FluidParticle>(&[], 256);
         for (port, destination) in [
             ("counts_out", &counts_out.1),

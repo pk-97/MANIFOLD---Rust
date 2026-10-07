@@ -94,8 +94,8 @@ pub(crate) fn fused_proof_node() -> Box<dyn crate::exec::effect_node::EffectNode
     Box::new(node)
 }
 
-#[cfg(test)]
-mod fused_tests;
+#[cfg(any(test, feature = "testkit"))]
+pub mod fused_tests;
 
 // The production expansion contains only the fused block: no selector field,
 // runtime flag, or reference branch is compiled into a shipping build.
@@ -484,7 +484,7 @@ crate::primitive! {
 /// The grid and pool one frame's inputs describe, once every placement rule
 /// held. A change in any of it starts the pool over.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct StepShape {
+pub struct StepShape {
     pub nodes: [u32; 3],
     pub cells: [u32; 3],
     pub level_nodes: [u32; 3],
@@ -599,7 +599,7 @@ impl StepShape {
 
 /// One frame's scalar inputs and knobs.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct StepFrame {
+pub struct StepFrame {
     pub shape: StepShape,
     /// Live liquid particles; `None` takes every slot.
     pub count: Option<u32>,
@@ -628,7 +628,7 @@ pub(crate) struct StepFrame {
     pub preserve_foam: bool,
 }
 
-pub(crate) struct MotionInputs<'a> {
+pub struct MotionInputs<'a> {
     pub schedule: &'a GpuBuffer,
     pub faces: [&'a GpuBuffer; 3],
     pub count: u32,
@@ -641,7 +641,7 @@ pub(crate) struct MotionInputs<'a> {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) enum FaceSource<'a> {
+pub enum FaceSource<'a> {
     Packed(&'a GpuBuffer),
     Axes([&'a GpuBuffer; 3]),
 }
@@ -672,7 +672,7 @@ impl<'a> FaceSource<'a> {
     }
 }
 
-pub(crate) struct StepInputs<'a> {
+pub struct StepInputs<'a> {
     pub motion: Option<MotionInputs<'a>>,
     pub particles: &'a GpuBuffer,
     pub solid: &'a GpuBuffer,
@@ -1150,6 +1150,21 @@ pub struct Step {
 }
 
 impl Step {
+    #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
+    pub fn set_reference_capture_for_test(&mut self, capture: bool) { self.reference.capture = capture; }
+    #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
+    pub fn set_reference_enabled_for_test(&mut self, enabled: bool) { self.reference.enabled = enabled; }
+    #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
+    pub fn particle_snapshots_for_test(&self) -> Option<&[GpuBuffer; 3]> { self.reference.particle_snapshots.as_ref() }
+    #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
+    pub fn turbulence_dispatches_for_test(&self) -> u32 { self.reference.turbulence_dispatches.get() }
+
+    #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
+    pub fn unpacked_faces_for_test(&self) -> Option<&[GpuBuffer; 3]> { self.fields().unpacked_faces.as_ref() }
+    #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
+    pub fn turbulence_for_test(&self) -> &GpuBuffer { &self.fields().turbulence }
+
+
     /// One frame: on ticks publish what retired, start the pool over on a new shape
     /// or epoch, emit and step on ticks, and write an output when the pool
     /// changed.
@@ -1211,7 +1226,7 @@ impl Step {
         Ok(self.outputs.report)
     }
 
-    fn reserve(&mut self, device: &GpuDevice, shape: StepShape, particles: u64, tick_mode: bool) -> Result<(), String> {
+    pub fn reserve(&mut self, device: &GpuDevice, shape: StepShape, particles: u64, tick_mode: bool) -> Result<(), String> {
         #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
         self.reference.reserve(device, particles as u32, shape.capacity)?;
         self.surface_distance.reserve(device, shape.face_cells)?;
@@ -1232,7 +1247,7 @@ impl Step {
         Ok(())
     }
 
-    fn reserve_faces(&mut self, device: &GpuDevice, packed: bool) -> Result<(), String> {
+    pub fn reserve_faces(&mut self, device: &GpuDevice, packed: bool) -> Result<(), String> {
         let f = self.fields.as_mut().expect("whitewater fields allocated");
         if packed {
             if f.unpacked_faces.is_none() {
@@ -1252,7 +1267,7 @@ impl Step {
         }
     }
 
-    fn unpack_faces(&self, enc: &mut manifold_gpu::GpuEncoder, shape: &StepShape, faces: FaceSource<'_>) {
+    pub fn unpack_faces(&self, enc: &mut manifold_gpu::GpuEncoder, shape: &StepShape, faces: FaceSource<'_>) {
         if let FaceSource::Packed(packed) = faces {
             let [u, v, w] = self.face_axes(faces);
             let [nodes_x, nodes_y, nodes_z] = shape.face_cells.map(|n| (n + 4) as f32);
@@ -1265,7 +1280,7 @@ impl Step {
 
     /// One liquid tick, with all persistent pool words supplied by the
     /// boundary. No CPU readback or display-frame clock participates.
-    pub(crate) fn advance_tick(
+    pub fn advance_tick(
         &mut self,
         gpu: &mut GpuEncoder<'_>,
         frame: &StepFrame,
@@ -1311,7 +1326,7 @@ impl Step {
         Ok(())
     }
 
-    pub(crate) fn tick_output(&self, port: &str) -> Option<&GpuBuffer> {
+    pub fn tick_output(&self, port: &str) -> Option<&GpuBuffer> {
         match port {
             "pool_out" => self.fields.as_ref().map(|f| &f.pools[self.current]),
             "state_out" => self.fields.as_ref().map(|f| &f.state),
@@ -1911,3 +1926,8 @@ mod copy_tests;
 
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 mod extent;
+
+#[cfg(any(test, feature = "testkit"))]
+pub fn empty_slot() -> WhitewaterParticle {
+    WhitewaterParticle { kind: crate::water::whitewater::WHITEWATER_EMPTY, ..Default::default() }
+}

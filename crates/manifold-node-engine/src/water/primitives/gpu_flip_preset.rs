@@ -39,7 +39,7 @@ const DAM_BREAK_METRES: f64 = 4.0;
 pub(crate) const STEPS_PER_TICK: usize = 1;
 
 /// The main solve's iterations: the step's Auto.
-pub(crate) const PRESSURE_ITERATIONS: usize = super::gpu_flip_pressure::MAX_ITERATIONS as usize;
+pub const PRESSURE_ITERATIONS: usize = super::gpu_flip_pressure::MAX_ITERATIONS as usize;
 
 #[derive(Clone, Copy, Debug)]
 pub struct PressureShape {
@@ -58,13 +58,13 @@ impl PressureShape {
 /// The FLIP Fluids engine's Dam Break (`WaterDamBreak.json`): a 4 m tank
 /// over the floor, a 0.16 m pool, and the `initial_column` block, seeded by
 /// the engine's half-cell site rule.
-pub(crate) const DAM_FILL_HEIGHT: f64 = 0.16;
-pub(crate) const DAM_COLUMN: [[f64; 2]; 3] = [[-1.84, -0.66], [0.16, 2.08], [-1.75, 1.75]];
+pub const DAM_FILL_HEIGHT: f64 = 0.16;
+pub const DAM_COLUMN: [[f64; 2]; 3] = [[-1.84, -0.66], [0.16, 2.08], [-1.75, 1.75]];
 
 /// The Dam Break's box obstacle, the transform of `WaterDamBreak.json`'s
 /// `obstacle_transform`: a unit cube scaled to 0.6 × 1.16 × 0.85 m standing
 /// on the floor in the column's path. Position, then scale.
-pub(crate) const DAM_OBSTACLE: [[f64; 3]; 2] = [[0.35, 0.58, -0.1], [0.6, 1.16, 0.85]];
+pub const DAM_OBSTACLE: [[f64; 3]; 2] = [[0.35, 0.58, -0.1], [0.6, 1.16, 0.85]];
 
 /// Fluid role Collider and the role source's built-in cube, whose circumradius
 /// 0.866 makes it a unit cube before the transform.
@@ -194,7 +194,7 @@ impl WaterScene {
     /// A 0.9 m pool with a 0.2 m slab over its left half: 1 m mean depth,
     /// a step in the surface whose sloshing is mostly the tank's first
     /// standing wave.
-    #[cfg(all(test, feature = "gpu-proofs"))]
+    #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
     pub fn slosh(n: usize) -> Self {
         Self { fill_height: 0.9, column: [[-2.0, 0.0], [0.9, 1.1], [-2.0, 2.0]], obstacle: false, ..Self::dam_break(n) }
     }
@@ -239,7 +239,7 @@ impl WaterScene {
         Self { steps, ..self }
     }
 
-    #[cfg(all(test, feature = "gpu-proofs"))]
+    #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
     pub fn step_dt(&self) -> f64 {
         1.0 / (60.0 * self.steps as f64)
     }

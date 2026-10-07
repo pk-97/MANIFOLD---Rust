@@ -13,8 +13,13 @@
     //! 2. **Per-frame push**: [`PresetRuntime::run`] writes the
     //!    [`PresetContext`]'s `time` / `beat` / `aspect` / output dims
     //!    into the generator_input node's params via `set_param`.
-    use super::*;
-    use crate::parameters::ParamValue;
+    use manifold_node_engine::runtime::*;
+use manifold_node_engine::persistence::*;
+use manifold_core::effects::*;
+use manifold_gpu::*;
+use manifold_node_engine::runtime::core::GRAPH_FORMAT;
+
+    use manifold_node_engine::parameters::ParamValue;
     use manifold_core::PresetTypeId;
     use manifold_core::effect_graph_def::EffectGraphDef;
 
@@ -67,12 +72,12 @@
             .expect("chain builds with a divergent def including system.generator_input");
 
         let slot = cg
-            .effect_nodes
+            .effect_slots_for_test()
             .first()
             .expect("Invert contributes one effect slot");
         assert!(
-            slot.generator_input_node.is_some(),
-            "EffectSlot.generator_input_node must populate when the def \
+            slot.generator_input_node_for_test().is_some(),
+            "EffectSlot.generator_input_node_for_test() must populate when the def \
              includes a system.generator_input node — without this the \
              chain runner has nowhere to push frame-context scalars and \
              effects can't react to project time/beat."
@@ -80,7 +85,7 @@
     }
 
     /// Build-time symmetry: presets without `system.generator_input`
-    /// leave `EffectSlot.generator_input_node` as `None`. Most
+    /// leave `EffectSlot.generator_input_node_for_test()` as `None`. Most
     /// shipping effects today fall in this bucket — the field is
     /// opt-in.
     #[test]
@@ -94,12 +99,12 @@
             .expect("Invert chain builds without divergent def");
 
         let slot = cg
-            .effect_nodes
+            .effect_slots_for_test()
             .first()
             .expect("Invert contributes one effect slot");
         assert!(
-            slot.generator_input_node.is_none(),
-            "EffectSlot.generator_input_node should stay None when the \
+            slot.generator_input_node_for_test().is_none(),
+            "EffectSlot.generator_input_node_for_test() should stay None when the \
              preset doesn't include a system.generator_input — opt-in surface."
         );
     }
@@ -113,8 +118,8 @@
     /// `boundary_nodes.rs`.
     #[test]
     fn run_pushes_frame_context_into_generator_input_params() {
-        use crate::runtime::preset_context::PresetContext;
-        use crate::gpu::gpu_encoder::GpuEncoder;
+        use manifold_node_engine::runtime::preset_context::PresetContext;
+        use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 
         let device = manifold_gpu::testkit::test_device();
         let primitives = PrimitiveRegistry::with_builtin();
@@ -125,13 +130,13 @@
                 .expect("chain builds");
 
         let gi_id = cg
-            .effect_nodes
+            .effect_slots_for_test()
             .first()
-            .and_then(|s| s.generator_input_node)
+            .and_then(|s| s.generator_input_node_for_test())
             .expect("splice populated generator_input_node");
 
         // A dummy input texture for `run` to install into the source slot.
-        let input = crate::gpu::render_target::RenderTarget::new(
+        let input = manifold_node_engine::gpu::render_target::RenderTarget::new(
             &device,
             256,
             256,
@@ -189,8 +194,8 @@
     /// the same layer.
     #[test]
     fn run_feeds_nonzero_trigger_count_into_generator_input_effect_slot() {
-        use crate::runtime::preset_context::PresetContext;
-        use crate::gpu::gpu_encoder::GpuEncoder;
+        use manifold_node_engine::runtime::preset_context::PresetContext;
+        use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 
         let device = manifold_gpu::testkit::test_device();
         let primitives = PrimitiveRegistry::with_builtin();
@@ -201,12 +206,12 @@
                 .expect("chain builds");
 
         let gi_id = cg
-            .effect_nodes
+            .effect_slots_for_test()
             .first()
-            .and_then(|s| s.generator_input_node)
+            .and_then(|s| s.generator_input_node_for_test())
             .expect("splice populated generator_input_node");
 
-        let input = crate::gpu::render_target::RenderTarget::new(
+        let input = manifold_node_engine::gpu::render_target::RenderTarget::new(
             &device,
             256,
             256,
@@ -263,8 +268,8 @@
     /// doc), but this proves the wiring is live, not just present in the JSON.
     #[test]
     fn strobe_clip_trigger_card_flashes_on_trigger_count_jump_when_enabled() {
-        use crate::runtime::preset_context::PresetContext;
-        use crate::gpu::gpu_encoder::GpuEncoder;
+        use manifold_node_engine::runtime::preset_context::PresetContext;
+        use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 
         let device = manifold_gpu::testkit::test_device();
         let primitives = PrimitiveRegistry::with_builtin();
@@ -283,7 +288,7 @@
             let mut cg = PresetRuntime::try_build(ChainBuildInputs { effects: std::slice::from_ref(&fx), groups: &[], primitives: &primitives, device: &device, pool: None, width: 64, height: 64, preview_effect: None }, None)
             .expect("Strobe chain builds");
 
-            let input = crate::gpu::render_target::RenderTarget::new(
+            let input = manifold_node_engine::gpu::render_target::RenderTarget::new(
                 &device,
                 64,
                 64,
@@ -366,12 +371,12 @@
     /// output texture. This is what puts the optimised fused kernel on screen.
     #[test]
     fn colorgrade_chain_renders_via_fused_node() {
-        use crate::runtime::preset_context::PresetContext;
-        use crate::gpu::gpu_encoder::GpuEncoder;
+        use manifold_node_engine::runtime::preset_context::PresetContext;
+        use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
 
         // Honor the kill-switch: when MANIFOLD_FREEZE is off this path is
         // intentionally the unfused one, so the assertion wouldn't hold.
-        if !crate::freeze::install::freeze_enabled() {
+        if !manifold_node_engine::freeze::install::freeze_enabled() {
             return;
         }
 
@@ -396,7 +401,7 @@
 
         // And it renders one frame, producing an output texture (the fused
         // kernel actually dispatched through the production chain).
-        let input = crate::gpu::render_target::RenderTarget::new(
+        let input = manifold_node_engine::gpu::render_target::RenderTarget::new(
             &device,
             256,
             256,

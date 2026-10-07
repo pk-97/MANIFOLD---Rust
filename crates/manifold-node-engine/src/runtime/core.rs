@@ -8,7 +8,7 @@ use crate::{exec::backend::Backend, ports::PortType};
 
 pub(super) use crate::water::runtime::physics_sampling::physics_sample_steps;
 
-pub(super) const GRAPH_FORMAT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
+pub const GRAPH_FORMAT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
 
 /// Walk the plan to find the `ResourceId` produced by `node`'s named
 /// output port. Mirrors the helper in `effects/mirror.rs` —
@@ -129,8 +129,8 @@ pub struct PresetRuntime {
     /// has no input — it renders *into* a host-provided target texture
     /// installed at the `final_output` source slot each frame.
     pub(super) io: PresetIo,
-    pub width: u32,
-    pub height: u32,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
     /// Dimension-independent topology hash. Dimensions are compared separately
     /// so a committed resource resize does not trigger a redundant rebuild.
     pub(super) topology_hash: u64,
@@ -231,7 +231,7 @@ pub(super) enum PresetIo {
     },
 }
 
-pub(crate) struct EffectSlot {
+pub struct EffectSlot {
     #[cfg(feature = "gpu-proofs")]
     pub(crate) physics_sources: crate::water::runtime::physics_source_state::PhysicsSourceState,
     pub(super) effect_id: EffectId,
@@ -439,6 +439,22 @@ pub struct FrameContextInputs {
 }
 
 impl PresetRuntime {
+    #[cfg(any(test, feature = "testkit"))]
+    pub fn transform_slots_for_test(&self) -> Option<(Option<Slot>, Slot)> {
+        match self.io { PresetIo::Transform { source_slot, output_slot, .. } => Some((source_slot, output_slot)), _ => None }
+    }
+
+    #[cfg(any(test, feature = "testkit"))]
+    pub fn effect_slots_for_test(&self) -> &[EffectSlot] { &self.effect_nodes }
+    #[cfg(any(test, feature = "testkit"))]
+    pub fn effect_slots_and_graph_for_test(&mut self) -> (&mut [EffectSlot], &mut Graph) {
+        (&mut self.effect_nodes, &mut self.graph)
+    }
+    #[cfg(any(test, feature = "testkit"))]
+    pub fn group_mix_nodes_for_test(&self) -> &[(EffectGroupId, NodeInstanceId)] { &self.group_mix_nodes }
+    #[cfg(any(test, feature = "testkit"))]
+    pub fn topology_hash_for_test(&self) -> u64 { self.topology_hash }
+
     #[cfg(any(test, feature = "testkit"))]
     #[doc(hidden)]
     pub fn set_modifier_control_state_for_test(
@@ -2061,4 +2077,18 @@ impl PresetRuntime {
         }
         self.state_store.cleanup_nodes(&latch_ids);
     }
+}
+
+#[cfg(any(test, feature = "testkit"))]
+impl EffectSlot {
+    pub fn handles_for_test(&self) -> &[(std::borrow::Cow<'static, str>, NodeInstanceId)] { &self.handles }
+    pub fn bound_for_test(&self) -> &BoundGraph { &self.bound }
+    pub fn bound_mut_for_test(&mut self) -> &mut BoundGraph { &mut self.bound }
+    pub fn generator_input_node_for_test(&self) -> Option<NodeInstanceId> { self.generator_input_node }
+}
+
+#[cfg(any(test, feature = "testkit"))]
+impl PresetRuntime {
+    pub fn width_for_test(&self) -> u32 { self.width }
+    pub fn height_for_test(&self) -> u32 { self.height }
 }

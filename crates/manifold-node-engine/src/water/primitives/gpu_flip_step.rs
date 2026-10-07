@@ -111,23 +111,23 @@ pub const TILE: u32 = 8;
 /// The cell passes' reach from a particle-holding cell, in cells: the tile
 /// set C is every tile within it (`tiles_classify` writes the distance).
 /// The shader holds its own copy; the proofs' CPU model reads this one.
-#[cfg(all(test, feature = "gpu-proofs"))]
-pub(crate) const CELL_REACH: u32 = 2;
+#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
+pub const CELL_REACH: u32 = 2;
 
 /// Tiles per axis, the last one partial when the side is not a multiple of
 /// [`TILE`].
-pub(crate) fn tile_counts(cells: [u32; 3]) -> [u32; 3] {
+pub fn tile_counts(cells: [u32; 3]) -> [u32; 3] {
     cells.map(|n| n.div_ceil(TILE))
 }
 
-pub(crate) fn tile_total(cells: [u32; 3]) -> u64 {
+pub fn tile_total(cells: [u32; 3]) -> u64 {
     tile_counts(cells).iter().map(|&t| u64::from(t)).product()
 }
 
 /// The farthest tile ring any extend layer reaches at `band` layers: a
 /// layer fills faces `1 + layer` cells from the water. A per-step constant,
 /// not a cap: the table is sized for it.
-pub(crate) fn ring_max(band: u32) -> u32 {
+pub fn ring_max(band: u32) -> u32 {
     (1 + band).div_ceil(TILE)
 }
 
@@ -248,8 +248,8 @@ pub(super) fn gating() -> bool {
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 static FORCE_SOLID_VELOCITY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-#[cfg(all(test, feature = "gpu-proofs"))]
-pub(crate) fn set_force_solid_velocity(on: bool) {
+#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
+pub fn set_force_solid_velocity(on: bool) {
     FORCE_SOLID_VELOCITY.store(on, std::sync::atomic::Ordering::SeqCst);
 }
 
@@ -276,7 +276,7 @@ fn pocket_sum_bytes(cells: [u32; 3]) -> u64 {
 /// The shader's `Params`; field meanings are documented there.
 #[repr(C)]
 #[derive(Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)]
-pub(crate) struct StepParams {
+pub struct StepParams {
     pub(crate) n: [u32; 3],
     pub(crate) capacity: u32,
     pub(crate) box_min: [f32; 3],
@@ -329,8 +329,8 @@ pub(crate) struct StepParams {
 /// One pass of the step's shader on its own, for the value proofs against
 /// the CPU references: `entry` over `threads` threads, `buffers` at their
 /// bindings, waited on.
-#[cfg(all(test, feature = "gpu-proofs"))]
-pub(crate) fn dispatch_pass(device: &GpuDevice, entry: &str, params: &StepParams, buffers: &[(u32, &GpuBuffer)], threads: u64) {
+#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
+pub fn dispatch_pass(device: &GpuDevice, entry: &str, params: &StepParams, buffers: &[(u32, &GpuBuffer)], threads: u64) {
     let pipeline = device.create_compute_pipeline(&step_source(), entry, "node.gpu_flip_step");
     let mut bindings = vec![uniform(params)];
     bindings.extend(buffers.iter().map(|&(binding, b)| buffer(binding, b)));
@@ -392,7 +392,7 @@ struct Pipelines {
     tiles_fill: GpuComputePipeline,
     tiles_retire: GpuComputePipeline,
     /// The proofs' poison entry, dispatched under [`POISON`].
-    #[cfg(all(test, feature = "gpu-proofs"))]
+    #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
     poison: GpuComputePipeline,
 }
 
@@ -455,7 +455,7 @@ impl Pipelines {
             tiles_lists: pipe("tiles_lists"),
             tiles_fill: pipe("tiles_fill"),
             tiles_retire: pipe("tiles_retire"),
-            #[cfg(all(test, feature = "gpu-proofs"))]
+            #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
             poison: pipe(super::gpu_flip_tile_tests::POISON_ENTRY),
         }
     }
@@ -823,8 +823,8 @@ fn extend(enc: &mut GpuEncoder, pipes: &Pipelines, clock_plan: &GpuBuffer, param
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 static FORCE_DENSE_EXTEND: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-#[cfg(all(test, feature = "gpu-proofs"))]
-pub(crate) fn set_force_dense_extend(on: bool) {
+#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
+pub fn set_force_dense_extend(on: bool) {
     FORCE_DENSE_EXTEND.store(on, std::sync::atomic::Ordering::SeqCst);
 }
 
@@ -849,8 +849,8 @@ pub(crate) fn pocket_rounds(cells: [u32; 3]) -> u32 {
 #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
 static FORCE_INDIRECT_POCKETS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-#[cfg(all(test, feature = "gpu-proofs"))]
-pub(crate) fn set_force_indirect_pockets(on: bool) {
+#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
+pub fn set_force_indirect_pockets(on: bool) {
     FORCE_INDIRECT_POCKETS.store(on, std::sync::atomic::Ordering::SeqCst);
 }
 
@@ -1561,7 +1561,7 @@ impl StepState {
                 "gpu_flip.step.tiles.retire",
             );
         }
-        #[cfg(all(test, feature = "gpu-proofs"))]
+        #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
         if POISON.load(std::sync::atomic::Ordering::SeqCst) {
             enc.dispatch_compute(
                 &pipes.poison,
@@ -1786,7 +1786,7 @@ impl StepState {
         self.bodies.set_clock_plan(step.clock_plan);
         if step.dynamic {
             self.bodies.prepare(device, cells, coupled.count)?;
-            #[cfg(all(test, feature = "gpu-proofs"))]
+            #[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
             if POISON.load(std::sync::atomic::Ordering::SeqCst) {
                 self.bodies.poison(enc, &coupled);
             }
@@ -3103,3 +3103,24 @@ mod tests {
 
 #[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 mod extent;
+
+#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
+impl StepParams {
+    pub fn capacity_for_test(&self) -> u32 { self.capacity }
+    pub fn narrow_band_for_test(&self) -> u32 { self.narrow_band }
+    pub fn cells_for_test(&self) -> [u32; 3] { self.n }
+    pub fn step_dt_for_test(&self) -> f32 { self.step_dt }
+}
+
+#[cfg(all(any(test, feature = "testkit"), feature = "gpu-proofs"))]
+impl StepParams {
+    pub fn with_grid_for_test(mut self, n: [u32; 3], min: [f32; 3], cell_size: f32) -> Self {
+        self.n = n; self.box_min = min; self.cell_size = cell_size; self
+    }
+    pub fn with_gather_for_test(mut self, capacity: u32, narrow_band: u32, step_dt: f32) -> Self {
+        self.capacity = capacity; self.narrow_band = narrow_band; self.step_dt = step_dt; self
+    }
+    pub fn with_tiles_for_test(mut self, ring_max: u32, extension_layers: u32, all_tiles: u32) -> Self {
+        self.ring_max = ring_max; self.extension_layers = extension_layers; self.all_tiles = all_tiles; self
+    }
+}

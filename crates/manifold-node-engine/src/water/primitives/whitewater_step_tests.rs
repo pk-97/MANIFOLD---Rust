@@ -20,7 +20,7 @@ use super::spawn_whitewater::{LIFETIME_VARIANCE, MAX_LIFETIME, MIN_LIFETIME};
 use super::wavecrest_potential::{MAX_CURVATURE, MIN_CURVATURE, SHARPNESS};
 use {crate::water::primitives::whitewater_cpu as grid_cpu, super::whitewater_cpu::Grid, super::whitewater_cpu::Rng};
 use {crate::water::primitives::whitewater_particle_cpu as particle_cpu, super::whitewater_particle_cpu::Box3, super::whitewater_particle_cpu::Crest, super::whitewater_particle_cpu::Emission, super::whitewater_particle_cpu::Spawn, super::whitewater_particle_cpu::SpawnFields};
-use {crate::water::primitives::whitewater_pool_cpu as pool_cpu, super::whitewater_pool_cpu::Advect, super::whitewater_pool_cpu::Age, super::whitewater_pool_cpu::PoolState, super::whitewater_pool_cpu::Preserve, super::whitewater_pool_cpu::empty_slot};
+use {crate::water::primitives::whitewater_pool_cpu as pool_cpu, super::whitewater_pool_cpu::Advect, super::whitewater_pool_cpu::Age, super::whitewater_pool_cpu::PoolState, super::whitewater_pool_cpu::Preserve, super::whitewater_step::empty_slot};
 use super::whitewater_step::{Report, StepShape};
 use crate::water::fluid::{TICK, whitewater_fade};
 use crate::water::fluid_particles::FluidParticle;

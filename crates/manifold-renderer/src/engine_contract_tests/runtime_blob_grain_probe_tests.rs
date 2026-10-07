@@ -12,9 +12,12 @@
     //!
     //! Covered by the default gpu-proofs suite — no --ignored flag.
 
-    use super::*;
-    use crate::gpu::gpu_encoder::GpuEncoder;
-    use crate::runtime::preset_context::PresetContext;
+    use manifold_node_engine::runtime::*;
+use manifold_node_engine::persistence::*;
+
+
+    use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
+    use manifold_node_engine::runtime::preset_context::PresetContext;
     use half::f16;
     use manifold_core::PresetTypeId;
     use manifold_core::effects::PresetInstance;
@@ -106,7 +109,7 @@
     }
 
     fn assert_solid_red(device: &manifold_gpu::GpuDevice, tex: &manifold_gpu::GpuTexture, w: u32, h: u32, what: &str) {
-        let raw = crate::testkit::gpu::readback_raw_halves(device, tex, w, h);
+        let raw = manifold_node_engine::testkit::gpu::readback_raw_halves(device, tex, w, h);
         let (m, s) = channel_stats(&raw);
         assert!(
             (m[0] - 1.0).abs() < 0.02

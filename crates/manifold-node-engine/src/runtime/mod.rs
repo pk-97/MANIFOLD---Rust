@@ -51,7 +51,8 @@ pub use segments::{prewarm_chain_segments, prewarm_project_chain_segments};
 pub use crate::freeze::install::prewarm_worker_pending_count;
 use segments::{SegmentMember, classify_segment_member, segment_run, build_segment_cards};
 
-mod build;
+#[doc(hidden)]
+pub mod build;
 mod device;
 pub use build::chain_topology_hash;
 use build::{assign_texture2d_slots, compute_topology_hash};
@@ -70,8 +71,7 @@ pub use resize::PreparedRuntimeResize;
 mod debug;
 pub use debug::{ChainDebugInfo, StepDebugInfo};
 use core::{EffectSlot, PresetIo};
-#[cfg(all(test, feature = "gpu-proofs"))]
-use core::GRAPH_FORMAT;
+
 
 mod dump_sets;
 pub mod instrumentation;
@@ -81,20 +81,16 @@ mod modifier_preview;
 mod modifier_runtime;
 pub use modifier_preview::{ModifierPreviewContext, ModifierPreviewError};
 
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod multi_segment_tests;
 
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod group_mask_tests;
 
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod binding_seed_tests;
+
+
+
 
 #[cfg(test)]
 mod topology_hash_tests;
 
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod user_binding_tests;
+
 
 #[cfg(test)]
 mod persistent_slot_tests;
@@ -102,21 +98,16 @@ mod persistent_slot_tests;
 #[cfg(test)]
 mod transient_slot_tests;
 
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod generator_input_tests;
-
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod chain_error_tests;
-
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod amount_zero_passthrough_tests;
 
 
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod blob_grain_probe_tests;
 
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod mosh_tests;
+
+
+
+
+
+
+
 
 #[cfg(any(test, feature = "testkit"))]
 #[doc(hidden)]

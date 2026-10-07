@@ -15,11 +15,11 @@ use manifold_core::effect_graph_def::{BindingTarget, EffectGraphDef};
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
 
-use crate::gpu::gpu_encoder::GpuEncoder;
-use crate::testkit::gpu as headless_readback;
-use crate::{exec::execution_plan::compile, persistence::EffectGraphDefExt, exec::execution::Executor, exec::effect_node::FrameTime, exec::metal_backend::MetalBackend, parameters::ParamValue, persistence::PrimitiveRegistry, state_store::StateStore, scene::boundary_nodes::FINAL_OUTPUT_TYPE_ID, scene::boundary_nodes::SOURCE_TYPE_ID};
-use crate::testkit::test_card::{build_test_card_input, output_resource, test_card_pixel};
-use crate::gpu::render_target::RenderTarget;
+use manifold_node_engine::gpu::gpu_encoder::GpuEncoder;
+use manifold_node_engine::testkit::gpu as headless_readback;
+use manifold_node_engine::{exec::execution_plan::compile, persistence::EffectGraphDefExt, exec::execution::Executor, exec::effect_node::FrameTime, exec::metal_backend::MetalBackend, parameters::ParamValue, persistence::PrimitiveRegistry, state_store::StateStore, scene::boundary_nodes::FINAL_OUTPUT_TYPE_ID, scene::boundary_nodes::SOURCE_TYPE_ID};
+use manifold_node_engine::testkit::test_card::{build_test_card_input, output_resource, test_card_pixel};
+use manifold_node_engine::gpu::render_target::RenderTarget;
 
 const SIZE: u32 = 128;
 const FORMAT: GpuTextureFormat = GpuTextureFormat::Rgba16Float;
@@ -70,7 +70,7 @@ fn expected_card_bytes(w: u32, h: u32) -> Vec<u8> {
 /// Drive every binding whose outer id matches `outer_id` to the given value.
 /// We intentionally set the *inner* node param directly on the built graph,
 /// mirroring what the chain runtime does when the outer card slider is at 0.
-fn zero_outer_param(graph: &mut crate::graph::Graph, def: &EffectGraphDef, outer_id: &str, value: f32) -> Result<(), String> {
+fn zero_outer_param(graph: &mut manifold_node_engine::graph::Graph, def: &EffectGraphDef, outer_id: &str, value: f32) -> Result<(), String> {
     let meta = def
         .preset_metadata
         .as_ref()
@@ -111,7 +111,7 @@ fn render_effect_raw(
     let registry = PrimitiveRegistry::with_builtin();
     let mut graph = def
         .clone()
-        .into_graph(&registry, &crate::scene::mesh_change::PreparedMeshRules::default())
+        .into_graph(&registry, &manifold_node_engine::scene::mesh_change::PreparedMeshRules::default())
         .map_err(|e| format!("graph load failed: {e}"))?;
     zero_outer_param(&mut graph, def, outer_id, value)?;
 
@@ -180,7 +180,7 @@ fn render_effect_raw(
 fn amount_zero_effect_passthrough_is_identity() {
     let device = manifold_gpu::testkit::test_device();
     let expected = expected_card_bytes(SIZE, SIZE);
-    let catalog = crate::load::preset_loader::EFFECT_CATALOG.load();
+    let catalog = manifold_node_engine::load::preset_loader::EFFECT_CATALOG.load();
     let mut failures: Vec<String> = Vec::new();
 
     for (preset_id, outer_id) in FORMERLY_SKIPPABLE_EFFECTS {

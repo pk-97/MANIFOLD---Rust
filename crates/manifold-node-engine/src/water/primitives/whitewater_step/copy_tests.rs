@@ -3,7 +3,7 @@ use super::*;
 use crate::testkit::liquid_surface::{Harness, read};
 use super::super::whitewater_obstacle_source::WhitewaterSource;
 use crate::water::fluid_particles::FluidParticle;
-use super::super::whitewater_pool_cpu::empty_slot;
+use super::super::whitewater_step::empty_slot;
 
 const CAPACITY: u32 = 1024;
 const EMITTERS: usize = 64;
