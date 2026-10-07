@@ -16,9 +16,10 @@ workspace members, local path dependencies and feature-forwarding manifest
 entries; and same-file removed/added pairs matching explicit --rewrite maps.
 Rewrite counts are changed lines (two per pair); no map is implicit.
 New-manifest external dependencies equal to parsed old-workspace values and
-transferred bin tables count as crate skeletons; matched bin removals count as
-manifest wiring. Bins preserve name, crate-relative path (defaulting to
+transferred bin tables count as crate skeletons; transfers in existing manifests
+count as manifest wiring. Bins preserve name, crate-relative path (defaulting to
 src/bin/<name>.rs), and required-features, with no other table keys allowed.
+Their sources must be a git rename pair or byte-identical across revisions.
 Exit code 0 = pure move proven; 1 = residue found (printed); 2 = usage.
 
 Why not `cargo public-api`: not installed, requires a lib target (manifold-app
@@ -673,10 +674,17 @@ def bin_identity(value):
 
 
 def transferred_bins(blocks, read_old, read_new) -> dict[tuple[str, str], set[int]]:
-    """Pair each new-crate bin with one removed declaration in another manifest."""
+    """Pair declarations across manifests only when their sources also transfer."""
     removed, added = [], []
+    renames = set()
     for lines in blocks:
         plain = [ANSI.sub("", line) for line in lines]
+        rename_from = next((line.removeprefix("rename from ") for line in plain
+                            if line.startswith("rename from ")), None)
+        rename_to = next((line.removeprefix("rename to ") for line in plain
+                          if line.startswith("rename to ")), None)
+        if rename_from is not None and rename_to is not None:
+            renames.add((rename_from, rename_to))
         old = next((line[4:].removeprefix("a/") for line in plain if line.startswith("--- ")), None)
         new = next((line[4:].removeprefix("b/") for line in plain if line.startswith("+++ ")), None)
         if not ((old and old.endswith("Cargo.toml")) or (new and new.endswith("Cargo.toml"))):
@@ -688,15 +696,23 @@ def transferred_bins(blocks, read_old, read_new) -> dict[tuple[str, str], set[in
             identity = bin_identity(value)
             if identity is not None and value["name"] not in surviving_names:
                 removed.append((old, index, identity))
-        if old == "/dev/null" and re.fullmatch(r"crates/[^/]+/Cargo.toml", new):
+        previous_names = {value.get("name") for value in before.get("bin", [])}
+        if new and re.fullmatch(r"crates/[^/]+/Cargo.toml", new):
             for index, value in enumerate(after.get("bin", [])):
-                added.append((new, index, bin_identity(value)))
+                if value.get("name") not in previous_names:
+                    added.append((new, index, bin_identity(value)))
     result = {}
     for path, index, identity in added:
         if identity is None:
             continue
         for candidate, (old, old_index, old_identity) in enumerate(removed):
             if old != path and identity == old_identity:
+                old_source = posixpath.join(posixpath.dirname(old), identity[1])
+                new_source = posixpath.join(posixpath.dirname(path), identity[1])
+                if (old_source, new_source) not in renames:
+                    before = read_old(old_source, raw=True)
+                    if before is None or before != read_new(new_source, raw=True):
+                        continue
                 result.setdefault(("+", path), set()).add(index)
                 result.setdefault(("-", old), set()).add(old_index)
                 removed.pop(candidate)
@@ -801,7 +817,7 @@ def manifest_wiring(source: str, path: str, read_file, read_other, sign: str,
         if table == "[bin]":
             if bin_index in bins:
                 allowed.update(range(header, end))
-            elif new_crate:
+            else:
                 forbidden.update(range(header, end))
             return
         if new_crate and re.match(r"^(?:dependencies|dev-dependencies|build-dependencies)\.", table):
@@ -995,12 +1011,13 @@ def main() -> int:
     cache = {}
 
     def reader(ref):
-        def read(path):
+        def read(path, raw=False):
             key = (ref, path)
             if key not in cache:
-                result = subprocess.run(["git", "show", f"{ref}:{path}"], capture_output=True, text=True)
-                cache[key] = result.stdout if result.returncode == 0 else ""
-            return cache[key]
+                result = subprocess.run(["git", "show", f"{ref}:{path}"], capture_output=True)
+                cache[key] = result.stdout if result.returncode == 0 else None
+            # Raw reads preserve line endings and distinguish empty from missing.
+            return cache[key] if raw else (cache[key] or b"").decode()
         return read
 
     # Strip only ANSI for file boundaries; retain moved colors for legacy classes.

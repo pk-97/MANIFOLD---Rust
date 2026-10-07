@@ -1335,18 +1335,69 @@ def case_bin_transfer(repo: Path, mode="exact") -> tuple[bool, str]:
         "Cargo.toml": '[workspace]\nmembers = ["crates/app"]\n',
         "crates/app/Cargo.toml": MANIFEST_BASE + before,
         "crates/app/src/bin/inspect.rs": HELPER,
+        **({"crates/app/src/bin/second.rs": HELPER_EDITED} if mode == "multiple" else {}),
     }, "base")
     (repo / "crates/app/src/bin/inspect.rs").unlink()
+    if mode == "multiple":
+        (repo / "crates/app/src/bin/second.rs").unlink()
     commit_tree(repo, {
         "crates/app/Cargo.toml": MANIFEST_BASE + (before if mode == "retained" else ""),
         "crates/new/Cargo.toml": MANIFEST_BASE.replace('"app"', '"new"') + after,
         "crates/new/src/bin/inspect.rs": HELPER,
+        **({"crates/new/src/bin/second.rs": HELPER_EDITED} if mode == "multiple" else {}),
     }, "bin-transfer")
     code, out = run_checker(repo)
     drift = mode not in {"exact", "default", "multiple"}
     ok = code == int(drift) and (field(out, "residue") > 0) == drift
     if not drift:
         ok &= field(out, "crate skeletons") > 0 and field(out, "manifest wiring") > 0
+    return ok, f"exit={code} {out.splitlines()[0]}"
+
+
+def case_bin_source_transfer(repo: Path, mode="different", existing=False) -> tuple[bool, str]:
+    declaration = '[[bin]]\nname = "inspect"\npath = "tools/inspect.rs"\n'
+    old_source = "crates/app/tools/inspect.rs"
+    new_source = "crates/new/tools/inspect.rs"
+    destination = MANIFEST_BASE.replace('"app"', '"new"')
+    source = HELPER + '\nfn caller() {\n    crate::graph::run(42);\n}\n'
+    files = {
+        "Cargo.toml": '[workspace]\nmembers = ["crates/app", "crates/new"]\n',
+        "crates/app/Cargo.toml": MANIFEST_BASE + declaration,
+    }
+    if existing:
+        files["crates/new/Cargo.toml"] = destination
+    if mode != "missing":
+        files[old_source] = "" if mode == "empty" else source
+    if mode in {"different", "identical", "line-endings", "empty"}:
+        files[new_source] = {
+            "different": source.replace("run(42)", "run(99)"),
+            "identical": source,
+            "line-endings": source.replace("\n", "\r\n"),
+            "empty": "",
+        }[mode]
+    commit_tree(repo, files, "base")
+    moved = mode in {"rename", "rename-rewrite"}
+    files = {
+        "crates/app/Cargo.toml": MANIFEST_BASE,
+        "crates/new/Cargo.toml": destination + declaration,
+    }
+    if moved:
+        (repo / old_source).unlink()
+        files[new_source] = (source.replace("crate::graph::", "new_graph::")
+                             if mode == "rename-rewrite" else source)
+    commit_tree(repo, files, "bin-source-transfer")
+    # Prove the fixture exercises the rename branch, including a non-identical source.
+    renames = subprocess.check_output(
+        ["git", "diff", "--name-status", "-M", "HEAD^", "HEAD"], cwd=repo, text=True)
+    args = ["--rewrite", "crate::graph::=new_graph::"] if mode == "rename-rewrite" else []
+    code, out = run_checker(repo, *args)
+    drift = mode in {"different", "missing", "line-endings"}
+    ok = code == int(drift) and (field(out, "residue") > 0) == drift
+    if moved:
+        ok &= bool(re.search(rf"^R\d+\t{re.escape(old_source)}\t{re.escape(new_source)}$",
+                             renames, re.MULTILINE))
+    if not drift:
+        ok &= field(out, "manifest wiring") > 0
     return ok, f"exit={code} {out.splitlines()[0]}"
 
 
@@ -1446,6 +1497,11 @@ def case_renamed_rewrite(repo: Path, smuggle=False) -> tuple[bool, str]:
 
 
 CASES = [
+    (f"bin source {mode}, {'existing' if existing else 'new'} crate",
+     lambda repo, mode=mode, existing=existing: case_bin_source_transfer(repo, mode, existing))
+    for existing in (False, True)
+    for mode in ("different", "identical", "rename", "rename-rewrite", "missing", "line-endings", "empty")
+] + [
     ("bin transfer with reformatted table", case_bin_transfer),
     ("bin transfer with default path", lambda repo: case_bin_transfer(repo, "default")),
     ("bin changed path is residue", lambda repo: case_bin_transfer(repo, "path")),
