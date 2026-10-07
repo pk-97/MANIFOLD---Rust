@@ -26,7 +26,7 @@ def godfile_paths():
 INTEGRATION_ROWS = {
     "Cargo.toml": ("manifold-app", ["crate_layering"]),
     "crates/manifold-renderer/src/node_graph/primitives/mod.rs": ("manifold-renderer", ["file_loader_exhaustiveness"]),
-    "crates/manifold-renderer/src/node_graph/fluid.rs": ("manifold-renderer", ["gpu_proofs"]),
+    "crates/manifold-node-engine/src/water/fluid.rs": ("manifold-renderer", ["gpu_proofs"]),
     **{path: ("manifold-app", ["godfile_regrowth"]) for path in godfile_paths()},
 }
 # Contracts over every file under a prefix, Rust or not:
@@ -45,6 +45,12 @@ PREFIX_ROWS = [
      [], ["uniform_layout_proof", "uniform_layout_extended"]),
     ("crates/manifold-renderer/src/node_graph/primitives/", ".wgsl", "manifold-renderer",
      [], ["uniform_layout_extended"]),
+    ("crates/manifold-node-engine/src/primitives/", ".rs", "manifold-renderer",
+     [], ["uniform_layout_proof", "uniform_layout_extended"]),
+    ("crates/manifold-node-engine/src/water/primitives/", ".rs", "manifold-renderer",
+     [], ["uniform_layout_proof", "uniform_layout_extended"]),
+    ("crates/manifold-node-engine/src/", ".wgsl", "manifold-renderer",
+     [], ["uniform_layout_extended", "wgsl_validation"]),
     # wgsl_validation parses every shader in the crate.
     ("crates/manifold-renderer/src/", ".wgsl", "manifold-renderer", [], ["wgsl_validation"]),
 ]

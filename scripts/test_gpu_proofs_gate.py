@@ -244,14 +244,14 @@ class GpuProofsGateTests(unittest.TestCase):
         code, calls, text = self.run_main(["--build-only", "--all"])
         self.assertEqual(code, 0)
         self.assertEqual(calls, [])
-        self.assertEqual([kind for kind, _ in self.events], ["build", "build"])
+        self.assertEqual([kind for kind, _ in self.events], ["build", "build", "build"])
         self.assertIn("GPU-PROOFS GATE: BUILT", text)
 
     def test_default_is_scoped_from_diff_and_prints_mode(self):
         p = "crates/manifold-renderer/src/node_graph/primitives/invert.rs"
         code, calls, text = self.run_main([], repo_changed=[p])
         self.assertEqual(code, 0)
-        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(calls), 2)
         self.assertTrue(calls[0]["lib"])
         self.assertFalse(calls[0]["full"])
         self.assertIn("node_graph::primitives::invert::", calls[0]["filters"])
@@ -273,7 +273,7 @@ class GpuProofsGateTests(unittest.TestCase):
     def test_all_flag_runs_full_suite_and_prints_mode(self):
         code, calls, text = self.run_main(["--all"])
         self.assertEqual([call["package"] for call in calls],
-                         ["manifold-renderer", "manifold-ui-paint"])
+                         ["manifold-renderer", "manifold-node-engine", "manifold-ui-paint"])
         self.assertTrue(calls[0]["full"])
         self.assertIn("GPU-PROOFS MODE: all", text)
 
@@ -282,9 +282,9 @@ class GpuProofsGateTests(unittest.TestCase):
             [], repo_changed=["crates/manifold-ui-paint/src/ui_renderer.rs"])
         self.assertEqual(code, 0)
         self.assertEqual([call["package"] for call in calls],
-                         ["manifold-renderer", "manifold-ui-paint"])
-        self.assertTrue(calls[1]["lib"])
-        self.assertEqual(calls[1]["targets"], [])
+                         ["manifold-renderer", "manifold-node-engine", "manifold-ui-paint"])
+        self.assertTrue(calls[2]["lib"])
+        self.assertEqual(calls[2]["targets"], [])
         builds = [cmd for kind, cmd in self.events if kind == "build"]
         runs = [cmd for kind, cmd in self.events if kind == "run"]
         self.assertEqual(builds, [cmd + ["--no-run"] for cmd in runs])
@@ -302,7 +302,7 @@ class GpuProofsGateTests(unittest.TestCase):
             code, calls, _ = self.run_main(["--filter", "m::slow"])
             self.assertEqual(calls[0]["skips"], [])
             code, calls, _ = self.run_main(
-                [], repo_changed=["crates/manifold-renderer/src/node_graph/primitives/matter_fill.rs"])
+                [], repo_changed=["crates/manifold-node-engine/src/water/primitives/matter_fill.rs"])
             self.assertIn("m::slow", calls[0]["skips"])
             self.assertNotIn("m::fast", calls[0]["skips"])
 
@@ -426,8 +426,8 @@ class GpuProofsGateTests(unittest.TestCase):
     def test_gltf_paths_add_a_separate_unbudgeted_glb_run(self):
         code, calls, _ = self.run_main(
             [], repo_changed=["crates/manifold-renderer/tests/glb_conformance.rs"])
-        self.assertEqual([c["targets"] for c in calls], [["gpu_proofs"], ["glb_conformance"]])
-        self.assertEqual(calls[1]["filters"], [])
+        self.assertEqual([c["targets"] for c in calls], [["gpu_proofs"], [], ["glb_conformance"]])
+        self.assertEqual(calls[2]["filters"], [])
 
 
 class WatchdogTests(unittest.TestCase):

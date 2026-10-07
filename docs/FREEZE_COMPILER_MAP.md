@@ -51,6 +51,8 @@ make that impossible; the invariant list (section 9) is what a review must attac
 
 ## 2. File map
 
+Engine paths below are relative to `crates/manifold-node-engine/src/`. The legacy generator registry remains at `crates/manifold-renderer/src/generators/registry.rs`.
+
 | File | Role | Size |
 |---|---|---|
 | `freeze/classify.rs` | `FusionKind` (Boundary/Pointwise/MultiInputCoincident/Source) + `InputAccess` (Coincident/CoincidentTexel/Gather/GatherTexel/BufferGather). Declared per atom via `primitive!`; default Boundary. | 210 |
@@ -63,11 +65,11 @@ make that impossible; the invariant list (section 9) is what a review must attac
 | `freeze/proof.rs` | The oracle suite (test-only): ~40 render-two-ways proofs, per-feature. See section 10. | 3864 |
 | `freeze/reference.rs` | Frozen golden hand-kernels for codegen-drift checks. | 101 |
 | `primitives/wgsl_compute.rs` | The host primitive every fused kernel becomes. Ports/params/bindings derived from the WGSL by naga introspection; parses all freeze markers. Params are always uniforms — `@static_param` value-baking is deleted (COMPILE_CONTRACT_DESIGN D2). | 3440 |
-| `node_graph/execution_plan.rs` | `compile(graph)`: topo + liveness filter + resource dims/canvas-scale propagation + lifetimes (`free_after`) + persistent resources + late-capture steps + hoistable classification. | 1411 |
-| `node_graph/execution.rs` | The executor: per-frame liveness (mux short-circuit), memoized-dataflow skip (`is_pure`), empty-output skip, preview capture, dump/thumbnail pinning, the aliased-output stale guard, end-of-frame feedback texture swap. | 2923 |
-| `node_graph/graph_loader.rs` | `instantiate_def`: flatten groups → construct + configure primitives → wires; array output pre-allocation (`array_output_capacity`). | 1838 |
-| `preset_runtime/` (was preset_runtime.rs — Wave 3 P3-R split, 2026-07-22; core.rs holds the chain build) | Effect-chain build: segmentation pass → per-card `fused_view_for` → splice. The live entry point for effect fusion. `groups.rs` owns membership validation/filtering and wet/dry/mask Mix assembly. | — |
-| `generators/registry.rs` | Generator entry point: `should_render_fused` → `fused_generator_def_for` → `from_def`. | — |
+| `exec/execution_plan.rs` | `compile(graph)`: topo + liveness filter + resource dims/canvas-scale propagation + lifetimes (`free_after`) + persistent resources + late-capture steps + hoistable classification. | 1411 |
+| `exec/execution.rs` | The executor: per-frame liveness (mux short-circuit), memoized-dataflow skip (`is_pure`), empty-output skip, preview capture, dump/thumbnail pinning, the aliased-output stale guard, end-of-frame feedback texture swap. | 2923 |
+| `load/graph_loader.rs` | `instantiate_def`: flatten groups → construct + configure primitives → wires; array output pre-allocation (`array_output_capacity`). | 1838 |
+| `runtime/` (was preset_runtime.rs — Wave 3 P3-R split, 2026-07-22; core.rs holds the chain build) | Effect-chain build: segmentation pass → per-card `fused_view_for` → splice. The live entry point for effect fusion. `groups.rs` owns membership validation/filtering and wet/dry/mask Mix assembly. | — |
+| `crates/manifold-renderer/src/generators/registry.rs` | Generator entry point: `should_render_fused` → `fused_generator_def_for` → `from_def`. | — |
 | `chain_dispatch.rs` | Calls `pump_segment_results()` each dispatch (drains the chain-fusion worker). | — |
 
 ## 3. The pipeline, end to end
@@ -557,7 +559,7 @@ and edges #3/#7 below, which no lens engaged.
    before, just fed a cosmetic-fields-cleared clone. Tests:
    `content_key_ignores_editor_pos_drag`, `content_key_ignores_title_rename`,
    `content_key_changes_on_wire_param_or_topology_edit` in
-   `node_graph/freeze/install.rs`. Residual: `GroupDef::tint` (the group
+   `crates/manifold-node-engine/src/freeze/install.rs`. Residual: `GroupDef::tint` (the group
    header accent colour) is also purely cosmetic and still participates in
    the hash — left alone since it wasn't in this fix's scope; same minor-churn
    character as the original issue, just narrower.
@@ -570,7 +572,7 @@ and edges #3/#7 below, which no lens engaged.
    `FUSED_GENERATOR_CACHE`/`SEGMENT_CACHE`) hold `Arc<T>` with owned
    `Vec`/`String` interiors; at cap, LRU evicts the least-recently-hit entry
    instead of refusing to insert. Negative gate: `rg 'Box::leak'
-   crates/manifold-renderer/src/node_graph/freeze/` returns zero hits
+   crates/manifold-node-engine/src/freeze/` returns zero hits
    (`freeze_has_no_leaks`). Pathological edit-spam past 512 shapes now evicts
    and frees instead of leaking per rebuild.
 8. FIXED: segment `Pending` can no
