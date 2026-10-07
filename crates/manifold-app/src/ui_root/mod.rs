@@ -425,7 +425,7 @@ impl UIRoot {
             tree: {
                 let mut tree = UITree::new();
                 tree.set_text_measure(Box::new(
-                    manifold_renderer::native_text::CoreTextMeasure::new(),
+                    manifold_ui_paint::native_text::CoreTextMeasure::new(),
                 ));
                 tree
             },
@@ -557,8 +557,8 @@ impl UIRoot {
 
     /// Build panel cache info for UICacheManager.
     /// Returns one entry per cacheable panel with its node range and screen rect.
-    pub fn panel_cache_info(&self) -> Vec<manifold_renderer::ui_cache_manager::PanelCacheInfo> {
-        use manifold_renderer::ui_cache_manager::{PanelCacheInfo, PanelSlot};
+    pub fn panel_cache_info(&self) -> Vec<manifold_ui_paint::ui_cache_manager::PanelCacheInfo> {
+        use manifold_ui_paint::ui_cache_manager::{PanelCacheInfo, PanelSlot};
 
         let mut info = Vec::with_capacity(7);
 

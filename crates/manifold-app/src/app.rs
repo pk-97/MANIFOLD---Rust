@@ -19,7 +19,7 @@ use manifold_playback::renderer::StubRenderer;
 use manifold_renderer::generator_renderer::GeneratorRenderer;
 use manifold_renderer::gpu::GpuContext;
 use manifold_renderer::layer_compositor::LayerCompositor;
-use manifold_renderer::ui_renderer::UIRenderer;
+use manifold_ui_paint::ui_renderer::UIRenderer;
 
 use manifold_ui::cursors::{CursorManager, TimelineCursor};
 use manifold_ui::input::{Modifiers, PointerAction};
@@ -232,10 +232,10 @@ pub struct Application {
     /// Last clip-thumbnail visible set sent — dedups `SetClipAtlasVisible`.
     pub(crate) last_clip_atlas_visible_sent: Vec<manifold_core::ClipId>,
     /// Blits clip-thumbnail atlas cells into clip bodies (section 24 5c), 4b′ slot.
-    pub(crate) clip_thumb_gpu: Option<manifold_renderer::clip_thumb_gpu::ClipThumbGpu>,
+    pub(crate) clip_thumb_gpu: Option<manifold_ui_paint::clip_thumb_gpu::ClipThumbGpu>,
     /// Reused per-frame scratch for the thumbnail quad list — no per-frame heap on
     /// the render hot path.
-    pub(crate) clip_thumb_quad_scratch: Vec<manifold_renderer::clip_thumb_gpu::ThumbQuad>,
+    pub(crate) clip_thumb_quad_scratch: Vec<manifold_ui_paint::clip_thumb_gpu::ThumbQuad>,
     pub(crate) blit_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
     pub(crate) blit_sampler: Option<manifold_gpu::GpuSampler>,
     /// Audio Setup spectrogram waterfall renderer + its target texture, created
@@ -281,7 +281,7 @@ pub struct Application {
     /// (see app_render) keep linear taps from bleeding the neighbouring cell.
     pub(crate) thumb_sampler: Option<manifold_gpu::GpuSampler>,
     pub(crate) ui_renderer: Option<UIRenderer>,
-    pub(crate) ui_cache_manager: Option<manifold_renderer::ui_cache_manager::UICacheManager>,
+    pub(crate) ui_cache_manager: Option<manifold_ui_paint::ui_cache_manager::UICacheManager>,
     /// GPU-completion fence shared by every UI immediate-draw vertex ring
     /// (`ui_renderer`, `layer_bitmap_gpu`, `clip_content_gpu`,
     /// `clip_thumb_gpu`) — gates ring-slot reuse against in-flight command
@@ -300,16 +300,16 @@ pub struct Application {
     /// The grid (per-layer indices) draws BEFORE the clips so opaque bodies occlude
     /// it; the panels (1000/1001/1002/2000+) are separate regions whose z-order vs
     /// clips is moot. One instance since section 24 5b retired the per-layer "front" buffer.
-    pub(crate) layer_bitmap_gpu: Option<manifold_renderer::layer_bitmap_gpu::LayerBitmapGpu>,
+    pub(crate) layer_bitmap_gpu: Option<manifold_ui_paint::layer_bitmap_gpu::LayerBitmapGpu>,
     /// Per-clip waveform textures, drawn INSIDE the audio-clip bodies after the
     /// body pass (section 24 5b) — the waveform is part of the clip on the GPU, no longer
     /// a layer-wide CPU bitmap laid over the bodies.
-    pub(crate) clip_content_gpu: Option<manifold_renderer::clip_content_gpu::ClipContentGpu>,
+    pub(crate) clip_content_gpu: Option<manifold_ui_paint::clip_content_gpu::ClipContentGpu>,
     /// Reused per-frame scratch for the GPU clip pass — visible clip rects from
     /// the viewport, and the resolved draw list. Kept on the struct so the clip
     /// pass allocates nothing on the render hot path.
     pub(crate) clip_rect_scratch: Vec<manifold_ui::panels::viewport::ClipScreenRect>,
-    pub(crate) clip_body_scratch: Vec<manifold_renderer::clip_draw::ClipBody>,
+    pub(crate) clip_body_scratch: Vec<manifold_ui_paint::clip_draw::ClipBody>,
     /// Reused scratch for the per-frame timeline-marker overlay lines (beat,
     /// colour). Filled by `viewport::timeline_overlays`; keeps the overlay pass
     /// allocation-free on the render hot path.
@@ -2274,7 +2274,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             ));
 
             // Create panel cache system
-            self.ui_cache_manager = Some(manifold_renderer::ui_cache_manager::UICacheManager::new(
+            self.ui_cache_manager = Some(manifold_ui_paint::ui_cache_manager::UICacheManager::new(
                 manifold_renderer::presentation::UI_FORMAT,
                 scale,
             ));
@@ -2282,15 +2282,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             // Layer grid bitmaps + lane/stem/overview/group panels (one instance),
             // and per-clip waveform textures, drawn around the GPU clip passes
             // (section 24 5b).
-            self.layer_bitmap_gpu = Some(manifold_renderer::layer_bitmap_gpu::LayerBitmapGpu::new(
+            self.layer_bitmap_gpu = Some(manifold_ui_paint::layer_bitmap_gpu::LayerBitmapGpu::new(
                 &native_device,
                 manifold_renderer::presentation::UI_FORMAT,
             ));
-            self.clip_content_gpu = Some(manifold_renderer::clip_content_gpu::ClipContentGpu::new(
+            self.clip_content_gpu = Some(manifold_ui_paint::clip_content_gpu::ClipContentGpu::new(
                 &native_device,
                 manifold_renderer::presentation::UI_FORMAT,
             ));
-            self.clip_thumb_gpu = Some(manifold_renderer::clip_thumb_gpu::ClipThumbGpu::new(
+            self.clip_thumb_gpu = Some(manifold_ui_paint::clip_thumb_gpu::ClipThumbGpu::new(
                 &native_device,
                 manifold_renderer::presentation::UI_FORMAT,
             ));

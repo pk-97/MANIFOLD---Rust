@@ -182,7 +182,7 @@ impl Default for TextRasterizer {
 
 impl TextRasterizer {
     pub fn new() -> Self {
-        let ttf_bytes: &'static [u8] = include_bytes!("../assets/fonts/Inter-Regular.ttf");
+        let ttf_bytes: &'static [u8] = manifold_foundation::fonts::INTER_REGULAR;
         let data: Vec<u8> = ttf_bytes.to_vec();
         let provider = CGDataProvider::from_buffer(Arc::new(data));
         let cg_font =

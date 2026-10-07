@@ -17,7 +17,7 @@
       "automation",
       "toggle-lanes"
     ],
-    "crates/manifold-renderer/src/automation_lane_draw.rs": [
+    "crates/manifold-ui-paint/src/automation_lane_draw.rs": [
       "automation",
       "toggle-lanes"
     ],

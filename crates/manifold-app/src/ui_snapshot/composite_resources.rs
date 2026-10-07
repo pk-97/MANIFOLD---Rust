@@ -11,8 +11,8 @@
 //! this shader/pipeline setup.
 
 use manifold_gpu::{GpuDevice, GpuTexture};
-use manifold_renderer::ui_cache_manager::UICacheManager;
-use manifold_renderer::ui_renderer::UIRenderer;
+use manifold_ui_paint::ui_cache_manager::UICacheManager;
+use manifold_ui_paint::ui_renderer::UIRenderer;
 use manifold_renderer::presentation::UI_FORMAT;
 
 use crate::ui_frame::composite_main_ui_frame;

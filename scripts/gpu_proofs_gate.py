@@ -119,6 +119,7 @@ def cargo_test_cmd(
     targets: list[str] | None = None,
     full_suite: bool = False,
     lib: bool = False,
+    package: str = "manifold-renderer",
 ) -> list[str]:
     """The `cargo test` command up to the libtest `--`, shared by the build
     and the run so the run finds every binary already built."""
@@ -128,7 +129,7 @@ def cargo_test_cmd(
         "cargo",
         "test",
         "-p",
-        "manifold-renderer",
+        package,
         "--features",
         "gpu-proofs",
         "--no-fail-fast",
@@ -155,7 +156,8 @@ def build_tests(manifest_path: Path, runs: list[dict]) -> int:
     starts testing. Returns the first nonzero cargo exit, else 0."""
     built: list[list[str]] = []
     for run in runs:
-        cmd = cargo_test_cmd(manifest_path, run["targets"], run["full"], run["lib"]) + ["--no-run"]
+        cmd = cargo_test_cmd(manifest_path, run["targets"], run["full"], run["lib"],
+                             run.get("package", "manifold-renderer")) + ["--no-run"]
         if cmd in built:
             continue
         built.append(cmd)
@@ -176,8 +178,9 @@ def run_gate(
     timings: list | None = None,
     hung: list | None = None,
     hang_floor: float | None = None,
+    package: str = "manifold-renderer",
 ) -> tuple[int, str]:
-    cmd = cargo_test_cmd(manifest_path, targets, full_suite, lib)
+    cmd = cargo_test_cmd(manifest_path, targets, full_suite, lib, package)
     # Serial test threads, always: ~135 proofs share one Metal device, and
     # parallel execution corrupts VALUES, not just timing (BUG-m0c9 — red
     # sets rotate across identical binaries; the same tests pass serially).
@@ -666,7 +669,9 @@ def main() -> int:
     if args.all_tests:
         print("GPU-PROOFS MODE: all (--all: every test binary, no scoping)", flush=True)
         runs = [{"targets": None, "lib": False, "filters": args.filter, "skips": args.skip,
-                 "budgeted": False, "full": True}]
+                 "budgeted": False, "full": True},
+                {"package": "manifold-ui-paint", "targets": None, "lib": False,
+                 "filters": args.filter, "skips": args.skip, "budgeted": False, "full": True}]
     elif explicit:
         print("GPU-PROOFS MODE: explicit (--test/--filter/--skip given; no scoping)", flush=True)
         runs = [{"targets": args.targets, "lib": False, "filters": args.filter,
@@ -721,7 +726,7 @@ def main() -> int:
             run_timings: list = []
             code, output = run_gate(manifest_path, run["filters"], run["skips"], run["targets"],
                                     run["full"], run["lib"], run_timings, hung,
-                                    args.hang_allowance)
+                                    args.hang_allowance, run.get("package", "manifold-renderer"))
             if (parse_failed_tests(output) or parse_golden_mismatches(output)
                     or any(status == "FAILED" for _, status, _, _ in parse_binaries(output))
                     or any(t[3] == "FAILED" for t in run_timings)):

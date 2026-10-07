@@ -173,8 +173,8 @@ def commit_tree(repo: Path, files: dict[str, str], msg: str) -> None:
     git(repo, "commit", "-q", "-m", msg)
 
 
-def run_checker(repo: Path) -> tuple[int, str]:
-    r = subprocess.run([sys.executable, CHECKER, "HEAD"], cwd=repo,
+def run_checker(repo: Path, *args: str) -> tuple[int, str]:
+    r = subprocess.run([sys.executable, CHECKER, "HEAD", *args], cwd=repo,
                        capture_output=True, text=True)
     return r.returncode, r.stdout
 
@@ -1146,7 +1146,276 @@ def case_ctx_cfg_conversion_smuggled(repo: Path) -> tuple[bool, str]:
     return ok, f"exit={code} {out.splitlines()[0]}"
 
 
+def case_crate_skeleton(repo: Path, smuggle=False) -> tuple[bool, str]:
+    commit_tree(repo, {"keep.rs": "// keep\n"}, "base")
+    lib = ('//! A leaf crate.\n#![deny(unsafe_code)]\n'
+           '#[cfg(feature = "testkit")]\npub mod testkit;\n'
+           'use crate::engine::{\n    Alpha, Beta,\n};\n')
+    if smuggle:
+        lib += "fn smuggled() { perform(99); }\n"
+    commit_tree(repo, {
+        "crates/leaf/Cargo.toml": '[package]\nname = "leaf"\nversion = "0.1.0"\n',
+        "crates/leaf/src/lib.rs": lib,
+        "crates/leaf/src/main.rs": "mod engine;\n",
+    }, "crate-skeleton")
+    code, out = run_checker(repo)
+    ok = code == int(smuggle) and field(out, "crate skeletons") > 0
+    ok &= (field(out, "residue") > 0) == smuggle
+    return ok, f"exit={code} {out.splitlines()[0]}"
+
+
+MANIFEST_BASE = '[package]\nname = "app"\nversion = "0.1.0"\n'
+MANIFEST_WIRING = (
+    '[dependencies]\nleaf = { path = "../leaf" }\n'
+    '[dev-dependencies]\nfixture = { package = "leaf", path = "../leaf" }\n'
+    '[build-dependencies]\nbuilder = { package = "leaf", path = "../leaf" }\n'
+    '[features]\nproofs = [\n    "leaf/gpu-proofs",\n    "fixture/testkit",\n]\n'
+)
+
+
+def case_manifest(repo: Path, mode="add") -> tuple[bool, str]:
+    workspace = '[workspace]\nmembers = [\n    "crates/app",\n    "crates/leaf",\n]\n'
+    commit_tree(repo, {
+        "Cargo.toml": workspace,
+        "crates/leaf/Cargo.toml": '[package]\nname = "leaf"\nversion = "0.1.0"\n',
+        "crates/app/Cargo.toml": MANIFEST_BASE + (MANIFEST_WIRING if mode == "remove" else ""),
+    }, "base")
+    manifest = MANIFEST_BASE + MANIFEST_WIRING
+    if mode == "version":
+        manifest = manifest.replace('version = "0.1.0"', 'version = "0.2.0"')
+    elif mode == "local-feature":
+        manifest = manifest.replace('"leaf/gpu-proofs"', '"local-feature"')
+    elif mode == "external-path":
+        manifest = manifest.replace('path = "../leaf"', 'path = "../../external"')
+    elif mode == "remove":
+        manifest = MANIFEST_BASE
+    elif mode == "default":
+        manifest = manifest.replace("proofs =", "default =")
+    elif mode in {"features", "default-features", "optional"}:
+        option = {'features': '["testkit"]', 'default-features': 'false', 'optional': 'true'}[mode]
+        manifest = manifest.replace('path = "../leaf" }', f'path = "../leaf", {mode} = {option} }}', 1)
+    commit_tree(repo, {"crates/app/Cargo.toml": manifest}, "manifest-wiring")
+    code, out = run_checker(repo)
+    drift = mode not in {"add", "remove"}
+    ok = code == int(drift) and (field(out, "residue") > 0) == drift
+    if not drift:
+        ok &= field(out, "manifest wiring") > 0
+    return ok, f"exit={code} {out.splitlines()[0]}"
+
+
+def case_dependency_selector_removal(repo: Path, selector="features", gone=False,
+                                    moved_table=False) -> tuple[bool, str]:
+    option = {"features": '["testkit"]', "default-features": "false", "optional": "true"}[selector]
+    base = MANIFEST_BASE + f'[dependencies]\nleaf = {{ path = "../leaf", {selector} = {option} }}\n'
+    commit_tree(repo, {
+        "Cargo.toml": '[workspace]\nmembers = ["crates/app", "crates/leaf"]\n',
+        "crates/leaf/Cargo.toml": '[package]\nname = "leaf"\n',
+        "crates/app/Cargo.toml": base,
+    }, "base")
+    after = MANIFEST_BASE if gone else MANIFEST_BASE + '[dependencies]\nleaf = { path = "../leaf" }\n'
+    if moved_table:
+        after = after.replace("[dependencies]", "[dev-dependencies]")
+    commit_tree(repo, {"crates/app/Cargo.toml": after}, "remove-selector")
+    code, out = run_checker(repo)
+    return (code == int(not gone) and (field(out, "residue") > 0) == (not gone),
+            f"exit={code} {out.splitlines()[0]}")
+
+
+def case_manifest_carveout(repo: Path, kind="lints", new=False, near_miss=False) -> tuple[bool, str]:
+    commit_tree(repo, {
+        "Cargo.toml": '[workspace]\nmembers = ["crates/app", "crates/leaf"]\n',
+        "crates/leaf/Cargo.toml": '[package]\nname = "leaf"\n',
+        "crates/app/Cargo.toml": MANIFEST_BASE,
+    }, "base")
+    if kind == "lints":
+        wiring = '[lints]\nworkspace = true\n'
+        if near_miss:
+            wiring += 'extra = true\n'
+    elif kind == "empty-feature":
+        wiring = '[features]\ntestkit = []\n'
+    else:
+        table = "dependencies" if near_miss else "dev-dependencies"
+        if kind == "build-features":
+            table = "build-dependencies"
+        wiring = f'[{table}]\nleaf = {{ path = "../leaf", features = ["testkit"] }}\n'
+    path = "crates/new/Cargo.toml" if new else "crates/app/Cargo.toml"
+    commit_tree(repo, {path: MANIFEST_BASE + wiring}, "carveout")
+    code, out = run_checker(repo)
+    drift = near_miss or (kind == "empty-feature" and not new) or kind == "build-features"
+    return (code == int(drift) and (field(out, "residue") > 0) == drift,
+            f"exit={code} {out.splitlines()[0]}")
+
+
+def case_path_rewrite(repo: Path, mode="exact") -> tuple[bool, str]:
+    before = ('use crate::node_graph::Thing;\n'
+              'fn invoke() {\n    crate::node_graph::run(42);\n'
+              '    $crate::node_graph::emit!(value);\n}\n')
+    after = before.replace("$crate::node_graph::", "manifold_node_engine::").replace(
+        "crate::node_graph::", "manifold_node_engine::")
+    if mode == "argument":
+        after = after.replace("run(42)", "run(43)")
+    if mode == "boundary":
+        before = before.replace("crate::node_graph::run", "othercrate::node_graph::run")
+        after = after.replace("manifold_node_engine::run", "othermanifold_node_engine::run")
+    if mode in {"string-space", "spacing"}:
+        before = before.replace("run(42)", 'run("a b")')
+        after = after.replace("run(42)", 'run("ab")' if mode == "string-space" else 'run("a b")')
+        if mode == "spacing":
+            after = after.replace("    manifold_node_engine::run", "        manifold_node_engine::run")
+    if mode == "moved-collision":
+        before += "fn destination() {\n}\n"
+        after += "fn destination() {\n    crate::node_graph::run(42);\n}\n"
+    commit_tree(repo, {"caller.rs": before, "other.rs": "// other\n"}, "base")
+    commit_tree(repo, {"caller.rs": after if mode != "cross-file" else "// caller\n",
+                       "other.rs": after if mode == "cross-file" else "// other\n"}, "paths")
+    args = [] if mode == "implicit" else ["--rewrite", "crate::node_graph::=manifold_node_engine::",
+                                           "--rewrite", "$crate::node_graph::=manifold_node_engine::"]
+    code, out = run_checker(repo, *args)
+    drift = mode not in {"exact", "spacing"}
+    ok = code == int(drift) and (field(out, "residue") > 0) == drift
+    if mode == "exact":
+        ok &= field(out, "path rewrites") == 6
+    if mode in {"implicit", "cross-file"}:
+        ok &= field(out, "path rewrites") == 0
+    return ok, f"exit={code} {out.splitlines()[0]}"
+
+
+def case_new_manifest(repo: Path, mode="exact") -> tuple[bool, str]:
+    commit_tree(repo, {
+        "Cargo.toml": '[workspace]\nmembers = ["crates/app", "crates/leaf"]\n'
+                      '[workspace.dependencies]\nserde = "1"\n',
+        "crates/app/Cargo.toml": MANIFEST_BASE + '[dependencies]\nlog = "0.4"\n',
+        "crates/leaf/Cargo.toml": '[package]\nname = "leaf"\n',
+    }, "base")
+    manifest = ('[package]\nname = "new"\nversion = "0.1.0"\nedition = "2024"\n'
+                'publish = false\nlicense = "MIT"\ndescription = "A leaf"\n'
+                '[dependencies]\nleaf = { path = "../leaf" }\n'
+                'serde = { workspace = true }\nlog = "0.4"\n'
+                '[features]\nproofs = ["leaf/gpu-proofs"]\n')
+    if mode == "build":
+        manifest = manifest.replace('publish = false', 'build = "build.rs"')
+    elif mode == "default":
+        manifest = manifest.replace("proofs =", "default =")
+    elif mode == "external":
+        manifest = manifest.replace('log = "0.4"', 'log = "0.5"')
+    elif mode == "dep-features":
+        manifest = manifest.replace('path = "../leaf"', 'path = "../leaf", features = ["testkit"]')
+    elif mode == "table":
+        manifest += '[profile.release]\nopt-level = 0\n'
+    commit_tree(repo, {"crates/new/Cargo.toml": manifest}, "new-manifest")
+    code, out = run_checker(repo)
+    drift = mode != "exact"
+    return (code == int(drift) and (field(out, "residue") > 0) == drift,
+            f"exit={code} {out.splitlines()[0]}")
+
+
+def case_members(repo: Path, mode="add") -> tuple[bool, str]:
+    workspace = '[workspace]\nmembers = [\n    "crates/app",\n]\n'
+    leaf = '[package]\nname = "leaf"\n'
+    removing = mode.startswith("remove")
+    commit_tree(repo, {"Cargo.toml": workspace.replace('    "crates/app",',
+                      '    "crates/app",\n    "crates/leaf",') if removing else workspace,
+                      "crates/app/Cargo.toml": MANIFEST_BASE,
+                      "crates/leaf/Cargo.toml": leaf}, "base")
+    if mode in {"remove", "remove-leftover"}:
+        (repo / "crates/leaf/Cargo.toml").unlink()
+        if mode == "remove-leftover":
+            (repo / "crates/leaf/leftover.txt").write_text("still here\n")
+        else:
+            # These moved manifest bytes should not create unrelated residue.
+            (repo / "crates/archive").mkdir()
+            (repo / "crates/archive/Cargo.toml").write_text(leaf)
+    new_workspace = workspace if removing else workspace.replace(
+        '    "crates/app",', '    "crates/app",\n    "crates/leaf",')
+    if mode == "missing":
+        new_workspace = new_workspace.replace("crates/leaf", "crates/missing")
+    commit_tree(repo, {"Cargo.toml": new_workspace}, "members")
+    code, out = run_checker(repo)
+    drift = mode not in {"add", "remove"}
+    return (code == int(drift) and (field(out, "residue") > 0) == drift,
+            f"exit={code} {out.splitlines()[0]}")
+
+
+def case_deleted_added_rewrite(repo: Path, smuggle=False) -> tuple[bool, str]:
+    old = "crates/old/src/worker.rs"
+    new = "crates/new/src/worker.rs"
+    before = "fn work() {\n" + "".join(f"    crate::graph::run({i});\n" for i in range(8)) + "}\n"
+    after = before.replace("crate::graph::", "new_graph::")
+    if smuggle:
+        after = after.replace("run(3)", "run(99)")
+    commit_tree(repo, {old: before}, "base")
+    (repo / old).unlink()
+    commit_tree(repo, {new: after, "crates/new/Cargo.toml": '[package]\nname = "new"\n'}, "move-and-rewrite")
+    code, out = run_checker(repo, "--rewrite", "crate::graph::=new_graph::")
+    ok = code == 1 and field(out, "residue") > 0 and field(out, "path rewrites") == 0
+    ok &= old in out and new in out and "land the git mv and the rewrite as separate commits" in out
+    return ok, f"exit={code} {out.splitlines()[0]}"
+
+
+def case_renamed_rewrite(repo: Path, smuggle=False) -> tuple[bool, str]:
+    before = HELPER + '\nfn caller() {\n    crate::graph::run(42);\n}\n'
+    after = before.replace("crate::graph::", "new_graph::")
+    if smuggle:
+        after = after.replace("run(42)", "run(43)")
+    commit_tree(repo, {"old/worker.rs": before}, "base")
+    (repo / "old/worker.rs").unlink()
+    commit_tree(repo, {"new/worker.rs": after}, "rename-with-rewrite")
+    code, out = run_checker(repo, "--rewrite", "crate::graph::=new_graph::")
+    return (code == int(smuggle) and (field(out, "residue") > 0) == smuggle
+            and field(out, "path rewrites") == (0 if smuggle else 2),
+            f"exit={code} {out.splitlines()[0]}")
+
+
 CASES = [
+    ("new crate skeletons", case_crate_skeleton),
+    ("new lib.rs with function is residue", lambda repo: case_crate_skeleton(repo, True)),
+    ("new manifest with bounded dependencies", case_new_manifest),
+    ("new manifest build script is residue", lambda repo: case_new_manifest(repo, "build")),
+    ("new manifest default features are residue", lambda repo: case_new_manifest(repo, "default")),
+    ("new manifest unproven external dependency is residue", lambda repo: case_new_manifest(repo, "external")),
+    ("new manifest dependency feature selection is residue", lambda repo: case_new_manifest(repo, "dep-features")),
+    ("new manifest unsupported table is residue", lambda repo: case_new_manifest(repo, "table")),
+    ("manifest wiring additions", case_manifest),
+    ("manifest wiring removals", lambda repo: case_manifest(repo, "remove")),
+    ("remove feature-selected dependency entirely", lambda repo: case_dependency_selector_removal(repo, gone=True)),
+    ("drop features from surviving dependency is residue", case_dependency_selector_removal),
+    ("drop default-features from surviving dependency is residue", lambda repo: case_dependency_selector_removal(repo, "default-features")),
+    ("drop optional from surviving dependency is residue", lambda repo: case_dependency_selector_removal(repo, "optional")),
+    ("dependency survives in another table", lambda repo: case_dependency_selector_removal(repo, moved_table=True)),
+    ("existing manifest inherits workspace lints", case_manifest_carveout),
+    ("existing lint table with second key is residue", lambda repo: case_manifest_carveout(repo, near_miss=True)),
+    ("new manifest inherits workspace lints", lambda repo: case_manifest_carveout(repo, new=True)),
+    ("new lint table with second key is residue", lambda repo: case_manifest_carveout(repo, new=True, near_miss=True)),
+    ("new crate defines empty testkit feature", lambda repo: case_manifest_carveout(repo, "empty-feature", new=True)),
+    ("existing crate empty feature is residue", lambda repo: case_manifest_carveout(repo, "empty-feature")),
+    ("added dev-dependency selects testkit", lambda repo: case_manifest_carveout(repo, "dev-features")),
+    ("new manifest dev-dependency selects testkit", lambda repo: case_manifest_carveout(repo, "dev-features", new=True)),
+    ("normal dependency selecting testkit is residue", lambda repo: case_manifest_carveout(repo, "dev-features", near_miss=True)),
+    ("build dependency selecting testkit is residue", lambda repo: case_manifest_carveout(repo, "build-features")),
+    ("default feature forwarding is residue", lambda repo: case_manifest(repo, "default")),
+    ("path dependency features are residue", lambda repo: case_manifest(repo, "features")),
+    ("path dependency default-features is residue", lambda repo: case_manifest(repo, "default-features")),
+    ("path dependency optional is residue", lambda repo: case_manifest(repo, "optional")),
+    ("workspace member names an existing manifest", case_members),
+    ("workspace member removal removes directory", lambda repo: case_members(repo, "remove")),
+    ("workspace member removal retaining crate is residue", lambda repo: case_members(repo, "remove-kept")),
+    ("workspace member removal retaining files is residue", lambda repo: case_members(repo, "remove-leftover")),
+    ("workspace member without manifest is residue", lambda repo: case_members(repo, "missing")),
+    ("manifest version bump is residue", lambda repo: case_manifest(repo, "version")),
+    ("local feature is residue", lambda repo: case_manifest(repo, "local-feature")),
+    ("external path dependency is residue", lambda repo: case_manifest(repo, "external-path")),
+    ("explicit path rewrites", case_path_rewrite),
+    ("rewrite indentation change", lambda repo: case_path_rewrite(repo, "spacing")),
+    ("rewrite string losing a space is residue", lambda repo: case_path_rewrite(repo, "string-space")),
+    ("rewrite cannot consume an already moved line", lambda repo: case_path_rewrite(repo, "moved-collision")),
+    ("rewritten argument change is residue", lambda repo: case_path_rewrite(repo, "argument")),
+    ("no implicit rewrites", lambda repo: case_path_rewrite(repo, "implicit")),
+    ("rewrites cannot pair separate files", lambda repo: case_path_rewrite(repo, "cross-file")),
+    ("rewrites respect path boundaries", lambda repo: case_path_rewrite(repo, "boundary")),
+    ("git-detected rename with rewrite", case_renamed_rewrite),
+    ("git-detected rename with argument edit is residue", lambda repo: case_renamed_rewrite(repo, True)),
+    ("delete/add rewrite gives separate-commits hint", case_deleted_added_rewrite),
+    ("delete/add rewrite plus argument change stays residue", lambda repo: case_deleted_added_rewrite(repo, True)),
     ("pure move -> exit 0", case_pure_move),
     ("smuggled edit -> exit 1", case_smuggled),
     ("dispatch-split scaffold -> exit 0", case_dispatch_split),

@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use manifold_core::types::ClockAuthority;
-use manifold_renderer::ui_renderer::UIRenderer;
+use manifold_ui_paint::ui_renderer::UIRenderer;
 use manifold_ui::node::{Color32, FontWeight};
 
 use crate::app::Application;

@@ -6,6 +6,7 @@ members = [
     "crates/manifold-fluids",
     "crates/manifold-core",
     "crates/manifold-ui",
+    "crates/manifold-ui-paint",
     "crates/manifold-playback",
     "crates/manifold-editing",
     "crates/manifold-io",

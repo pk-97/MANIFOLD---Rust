@@ -2284,6 +2284,7 @@ dependencies = [
  "manifold-renderer",
  "manifold-spectral",
  "manifold-ui",
+ "manifold-ui-paint",
  "mimalloc",
  "muda",
  "objc2 0.6.4",
@@ -2384,6 +2385,7 @@ dependencies = [
  "objc2-metal-fx",
  "objc2-metal-performance-shaders",
  "objc2-metal-performance-shaders-graph",
+ "parking_lot",
  "raw-window-handle",
  "spirv-cross2",
  "spirv-tools",
@@ -2518,6 +2520,7 @@ dependencies = [
  "manifold-physics",
  "manifold-playback",
  "manifold-ui",
+ "manifold-ui-paint",
  "naga",
  "objc2 0.6.4",
  "parking_lot",
@@ -2549,6 +2552,22 @@ dependencies = [
  "manifold-foundation",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "manifold-ui-paint"
+version = "0.1.0"
+dependencies = [
+ "ahash",
+ "bytemuck",
+ "core-foundation 0.9.4",
+ "core-graphics",
+ "core-text",
+ "half",
+ "log",
+ "manifold-foundation",
+ "manifold-gpu",
+ "manifold-ui",
 ]
 
 [[package]]

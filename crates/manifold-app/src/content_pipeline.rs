@@ -1430,7 +1430,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // the big full-res→cell downscale). Reusable helper (unit-tested in
         // manifold-renderer).
         self.clip_downsample_pipeline =
-            Some(manifold_renderer::clip_thumb_gpu::create_box_downsample_pipeline(
+            Some(manifold_ui_paint::clip_thumb_gpu::create_box_downsample_pipeline(
                 &device,
                 manifold_gpu::GpuTextureFormat::Rgba16Float,
                 CLIP_ATLAS_CELL_W,
