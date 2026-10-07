@@ -28,7 +28,7 @@ pub struct ModifierBufferUsage {
 
 pub struct PreparedModifierBufferBudget {
     scenes: BTreeMap<SceneNodeRef, AHashSet<NodeInstanceId>>,
-    cutters: AHashSet<NodeInstanceId>,
+    cutters: AHashMap<NodeInstanceId, fn(u64) -> Option<u64>>,
 }
 
 fn invalid(detail: impl Into<String>) -> SceneModifierExpandError {
@@ -154,13 +154,10 @@ impl PreparedModifierBufferBudget {
         }
         let cutters = graph
             .nodes()
-            .filter(|node| {
-                matches!(
-                    node.node.type_id().as_str(),
-                    "node.cut_mesh_bands" | "node.cut_mesh_cells"
-                )
+            .filter_map(|node| {
+                crate::node_graph::resource_allocation::array_scratch(node.node.type_id().as_str())
+                    .map(|bytes| (node.id, bytes))
             })
-            .map(|node| node.id)
             .collect();
         Ok(Self { scenes, cutters })
     }
@@ -277,10 +274,10 @@ impl PreparedModifierBufferBudget {
         &self,
         item: &crate::node_graph::resource_allocation::ArrayAllocation,
     ) -> Result<u64, SceneModifierExpandError> {
-        if !self.cutters.contains(&item.node) {
+        let Some(bytes) = self.cutters.get(&item.node) else {
             return Ok(item.bytes);
-        }
-        crate::node_graph::primitives::cut_map_scratch_bytes(item.bytes / 16)
+        };
+        bytes(item.bytes / 16)
             .and_then(|scratch| item.bytes.checked_add(scratch))
             .ok_or_else(|| {
                 Self::memory_exceeded(0, u64::MAX, u64::MAX, "cut scratch arithmetic overflow")
@@ -422,7 +419,7 @@ mod tests {
         let cutter = NodeInstanceId(7);
         let budget = PreparedModifierBufferBudget {
             scenes: BTreeMap::from([(scene.clone(), AHashSet::from_iter([cutter]))]),
-            cutters: AHashSet::from_iter([cutter]),
+            cutters: AHashMap::from_iter([(cutter, crate::node_graph::resource_allocation::array_scratch("node.cut_mesh_bands").unwrap())]),
         };
         let map_bytes = (196_608 + 3 * 257) * 16;
         let private_bytes = (257 + 2) * 4 * 2 + 16 + 48;
@@ -456,7 +453,7 @@ mod tests {
         };
         let budget = PreparedModifierBufferBudget {
             scenes: BTreeMap::from([(scene.clone(), AHashSet::from_iter([NodeInstanceId(2)]))]),
-            cutters: AHashSet::default(),
+            cutters: AHashMap::default(),
         };
         let allocation = ArrayAllocationPlan {
             actions: vec![

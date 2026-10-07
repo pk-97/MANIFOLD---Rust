@@ -108,6 +108,20 @@ pub(crate) fn scratch_bytes(map_records: u64) -> Option<u64> {
     words.checked_mul(4)?.checked_mul(2)?.checked_add(16 + 48)
 }
 
+inventory::submit! {
+    crate::node_graph::resource_allocation::ArrayScratch {
+        type_id: "node.cut_mesh_bands",
+        bytes: scratch_bytes,
+    }
+}
+inventory::submit! {
+    crate::node_graph::resource_allocation::ArrayScratch {
+        type_id: "node.cut_mesh_cells",
+        bytes: scratch_bytes,
+    }
+}
+
+
 fn scratch_words(candidate_count: u32) -> Option<u64> {
     let blocks = u64::from(candidate_count)
         .checked_add(255)?
@@ -988,5 +1002,18 @@ mod tests {
         let (output, status) = dispatch_shader(&vertices, 0, 1, 4);
         assert_eq!(status[1], 1);
         assert!(output.iter().all(|vertex| vertex.position[3] == -1.0));
+    }
+}
+
+#[cfg(test)]
+mod scratch_source_tests {
+    #[test]
+    fn array_scratch_registration_preserves_checked_sizing() {
+        for type_id in ["node.cut_mesh_bands", "node.cut_mesh_cells"] {
+            let bytes = crate::node_graph::resource_allocation::array_scratch(type_id).unwrap();
+            for records in [0, 196_608, 196_611, u64::MAX] {
+                assert_eq!(bytes(records), super::scratch_bytes(records));
+            }
+        }
     }
 }

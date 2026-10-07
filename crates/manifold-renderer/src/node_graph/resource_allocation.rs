@@ -14,6 +14,21 @@ use super::graph_loader::PreAllocationError;
 use super::ports::PortType;
 
 type ReusableKey = (PortType, u64);
+
+/// Private scratch required by a family array output.
+pub struct ArrayScratch {
+    pub type_id: &'static str,
+    pub bytes: fn(u64) -> Option<u64>,
+}
+inventory::collect!(ArrayScratch);
+
+pub fn array_scratch(type_id: &str) -> Option<fn(u64) -> Option<u64>> {
+    let mut entries = inventory::iter::<ArrayScratch>.into_iter()
+        .filter(|entry| entry.type_id == type_id);
+    let entry = entries.next()?;
+    assert!(entries.next().is_none(), "duplicate array scratch provider");
+    Some(entry.bytes)
+}
 type ReusableBuckets = AHashMap<ReusableKey, Vec<ResourceId>>;
 
 /// Arrays whose size can change after planning because a provider hands in
