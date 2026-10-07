@@ -11,8 +11,7 @@
 //!
 //! - **STOCK** — resolved in this order, first existing wins:
 //!   1. Packaged macOS bundle: `<dir-of-exe>/../Resources/presets/{effects,generators,scene-modifiers}`
-//!   2. Dev workspace: `<CARGO_MANIFEST_DIR>/assets/{effect-presets,generator-presets,scene-modifier-presets}`
-//!      (manifold-renderer's manifest dir, baked at compile time).
+//!   2. Registered assets root: `<root>/{effect-presets,generator-presets,scene-modifier-presets}`.
 //! - **USER** — `~/Library/Application Support/MANIFOLD/presets/{effects,generators,scene-modifiers}`
 //!   (same base dir as `prefs.json`). Optional; absent is fine.
 //!
@@ -157,6 +156,14 @@ impl PresetCatalog {
     }
 }
 
+/// The crate that ships the stock preset assets registers exactly one root;
+/// the loader never bakes a path.
+pub struct PresetAssetsRoot {
+    pub dir: &'static str,
+}
+
+inventory::collect!(PresetAssetsRoot);
+
 /// Which sub-directory names a preset kind uses under each root.
 struct KindDirs {
     /// Human label for log + panic messages ("effect" / "generator").
@@ -165,26 +172,26 @@ struct KindDirs {
     /// the user `presets/` root (e.g. `"effects"`).
     bundle_subdir: &'static str,
     /// Sub-dir under the dev workspace assets root
-    /// (`<CARGO_MANIFEST_DIR>/...`, e.g. `"assets/effect-presets"`).
+    /// (e.g. `"effect-presets"`).
     dev_subdir: &'static str,
 }
 
 const EFFECT_DIRS: KindDirs = KindDirs {
     label: "effect",
     bundle_subdir: "effects",
-    dev_subdir: "assets/effect-presets",
+    dev_subdir: "effect-presets",
 };
 
 const GENERATOR_DIRS: KindDirs = KindDirs {
     label: "generator",
     bundle_subdir: "generators",
-    dev_subdir: "assets/generator-presets",
+    dev_subdir: "generator-presets",
 };
 
 const SCENE_MODIFIER_DIRS: KindDirs = KindDirs {
     label: "scene modifier",
     bundle_subdir: "scene-modifiers",
-    dev_subdir: "assets/scene-modifier-presets",
+    dev_subdir: "scene-modifier-presets",
 };
 
 /// The effect preset catalog. Built once on first access; fail-loud if
@@ -344,7 +351,7 @@ fn reload_into(slot: &ArcSwap<PresetCatalog>, dirs: &KindDirs) -> bool {
 
 /// Resolve the STOCK root for a kind. First existing directory wins:
 /// packaged bundle `Resources/presets/<subdir>`, then the dev workspace
-/// assets dir baked from `CARGO_MANIFEST_DIR`. Returns the resolved path
+/// assets dir supplied by registration. Returns the resolved path
 /// plus the full list of candidates that were tried (for the fail-loud
 /// message).
 fn resolve_stock_root(dirs: &KindDirs) -> (Option<PathBuf>, Vec<PathBuf>) {
@@ -365,14 +372,32 @@ fn resolve_stock_root(dirs: &KindDirs) -> (Option<PathBuf>, Vec<PathBuf>) {
         }
     }
 
-    // (b) Dev workspace: <CARGO_MANIFEST_DIR>/assets/<...>
-    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(dirs.dev_subdir);
-    tried.push(dev.clone());
-    if dev.is_dir() {
-        return (Some(dev), tried);
+    if let Some(root) = select_assets_root(
+        inventory::iter::<PresetAssetsRoot>
+            .into_iter()
+            .map(|root| root.dir)
+            .collect(),
+    ) {
+        let dev = Path::new(root).join(dirs.dev_subdir);
+        tried.push(dev.clone());
+        if dev.is_dir() {
+            return (Some(dev), tried);
+        }
     }
 
     (None, tried)
+}
+
+fn select_assets_root(mut roots: Vec<&str>) -> Option<&str> {
+    roots.sort_unstable();
+    roots.dedup();
+    if roots.len() > 1 {
+        log::error!(
+            "[presets] conflicting stock assets roots registered: {roots:?}; using {}",
+            roots[0],
+        );
+    }
+    roots.first().copied()
 }
 
 /// Resolve the optional USER root for a kind:
@@ -468,9 +493,8 @@ fn load_catalog(dirs: &KindDirs) -> Arc<PresetCatalog> {
              The app cannot start with an empty preset catalog. For a packaged \
              build, ensure presets were copied into \
              `<App>.app/Contents/Resources/presets/{}/`. For a dev build, ensure \
-             `{}/{}` exists.",
+             the registered assets root contains `{}` (see the resolved paths above).",
             dirs.bundle_subdir,
-            env!("CARGO_MANIFEST_DIR"),
             dirs.dev_subdir,
         ),
     }
@@ -500,7 +524,7 @@ fn try_load_catalog(dirs: &KindDirs) -> Result<Arc<PresetCatalog>, String> {
 
 /// The catalog assembly + empty-scan check, factored out of the
 /// path-resolution so the empty-scan behaviour can be unit-tested against a
-/// real (empty) directory without touching `CARGO_MANIFEST_DIR`.
+/// real (empty) directory without changing the registered assets root.
 ///
 /// `stock_root` is the resolved stock directory (already known to exist).
 /// `user_root`, if `Some`, is overlaid on top (override on stem match).
@@ -870,7 +894,39 @@ pub fn start_preset_watcher() {
 mod tests {
     use super::*;
 
-    /// The dev stock root must resolve (via `CARGO_MANIFEST_DIR`) and
+    #[test]
+    fn assets_root_selection_handles_missing_duplicate_and_conflicting_registrations() {
+        assert_eq!(select_assets_root(Vec::new()), None);
+        assert_eq!(select_assets_root(vec!["/stock"]), Some("/stock"));
+        assert_eq!(select_assets_root(vec!["/stock", "/stock"]), Some("/stock"));
+        assert_eq!(select_assets_root(vec!["/z", "/a", "/z"]), Some("/a"));
+        assert_eq!(select_assets_root(vec!["/a", "/z"]), Some("/a"));
+    }
+
+    #[test]
+    fn missing_stock_root_lists_bundle_and_registered_assets_candidates() {
+        let dirs = KindDirs {
+            label: "missing test kind",
+            bundle_subdir: "missing-preset-loader-test-kind",
+            dev_subdir: "missing-preset-loader-test-kind",
+        };
+        let (root, tried) = resolve_stock_root(&dirs);
+        assert!(root.is_none());
+        let exe = std::env::current_exe().unwrap();
+        let assets = select_assets_root(
+            inventory::iter::<PresetAssetsRoot>.into_iter().map(|root| root.dir).collect(),
+        ).expect("renderer must register its assets");
+        assert_eq!(tried, vec![
+            exe.parent().unwrap().join("../Resources/presets").join(dirs.bundle_subdir),
+            Path::new(assets).join(dirs.dev_subdir),
+        ]);
+        let error = try_load_catalog(&dirs).err().expect("missing stock must fail loudly");
+        for candidate in tried {
+            assert!(error.contains(&candidate.display().to_string()));
+        }
+    }
+
+    /// The dev stock root must resolve via registration and
     /// scan to a non-empty set when no packaged bundle is present.
     #[test]
     fn dev_effect_catalog_is_non_empty() {
@@ -910,10 +966,10 @@ mod tests {
     /// stock dirs) so a hand-edit that skips the loader still fails here.
     #[test]
     fn factory_amount_defaults_full() {
-        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let mut violations: Vec<String> = Vec::new();
-        for subdir in ["assets/effect-presets", "assets/generator-presets"] {
-            let dir = manifest_dir.join(subdir);
+        for kind in [&EFFECT_DIRS, &GENERATOR_DIRS] {
+            let (dir, tried) = resolve_stock_root(kind);
+            let dir = dir.unwrap_or_else(|| panic!("stock preset root missing; tried {tried:?}"));
             let entries = fs::read_dir(&dir).expect("stock preset dir must read");
             for entry in entries.flatten() {
                 let path = entry.path();
@@ -1161,13 +1217,10 @@ mod tests {
 
     #[test]
     fn mask_blob_derives_detector_group_and_controls_from_v2() {
-        let source_json = include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/effect-presets/BlobTrackingV2.json"
-        ));
-        let source: serde_json::Value = serde_json::from_str(source_json).unwrap();
+        let source_json = stock_blob_tracking_json();
+        let source: serde_json::Value = serde_json::from_str(&source_json).unwrap();
         let derived: serde_json::Value =
-            serde_json::from_str(&blob_mask::synthesize_mask_blob_json(source_json).unwrap())
+            serde_json::from_str(&blob_mask::synthesize_mask_blob_json(&source_json).unwrap())
                 .unwrap();
         let source_group = source["nodes"]
             .as_array()
@@ -1246,11 +1299,8 @@ mod tests {
 
     #[test]
     fn mask_blob_follows_source_group_id_and_control_mutations() {
-        let source_json = include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/effect-presets/BlobTrackingV2.json"
-        ));
-        let mut source: serde_json::Value = serde_json::from_str(source_json).unwrap();
+        let source_json = stock_blob_tracking_json();
+        let mut source: serde_json::Value = serde_json::from_str(&source_json).unwrap();
         let group = source["nodes"]
             .as_array_mut()
             .unwrap()
@@ -1324,10 +1374,7 @@ mod tests {
         let stock = scratch("mask-derive-stock");
         fs::write(
             stock.join("BlobTrackingV2.json"),
-            include_str!(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/assets/effect-presets/BlobTrackingV2.json"
-            )),
+            stock_blob_tracking_json(),
         )
         .unwrap();
         let snapshot: OverlayEntries = vec![(Arc::from("MaskBlob"), Arc::from("snapshot"))];
@@ -1344,6 +1391,12 @@ mod tests {
             build_catalog_with_overlays("effect", &stock, None, &snapshot, &saved).unwrap();
         assert_eq!(saved_catalog.json("MaskBlob").unwrap().as_ref(), "saved");
         let _ = fs::remove_dir_all(stock);
+    }
+
+    fn stock_blob_tracking_json() -> String {
+        let (root, tried) = resolve_stock_root(&EFFECT_DIRS);
+        let root = root.unwrap_or_else(|| panic!("stock effect root missing; tried {tried:?}"));
+        fs::read_to_string(root.join("BlobTrackingV2.json")).expect("stock blob preset must read")
     }
 
     #[test]
