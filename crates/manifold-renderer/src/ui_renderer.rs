@@ -2371,7 +2371,7 @@ mod tests {
     #[test]
     #[ignore = "needs a real GPU device; run with --ignored"]
     fn register_image_is_idempotent_per_handle() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let mut ui = UIRenderer::new(&device, GpuTextureFormat::Rgba8Unorm);
 
         let handle = manifold_ui::node::texture_handle_for_key("/fake/path/Bloom.png");
@@ -2407,7 +2407,7 @@ mod tests {
     #[test]
     #[ignore = "needs a real GPU device; run with --ignored"]
     fn transform_boundary_keeps_tree_scissor_on_pending_batch() {
-        let device = crate::test_device();
+        let device = manifold_gpu::testkit::test_device();
         let mut ui = UIRenderer::new(&device, GpuTextureFormat::Bgra8Unorm);
 
         let mut tree = UITree::new();

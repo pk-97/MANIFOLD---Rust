@@ -17,9 +17,10 @@ vulkan = ["dep:ash"]
 # `cargo test -p manifold-gpu --features gpu-proofs -- --test-threads=1`.
 # Also compiles the frame clock's wait counter, which manifold-renderer's
 # GPU proofs read.
-gpu-proofs = []
+gpu-proofs = ["dep:parking_lot"]
 
 [dependencies]
+parking_lot = { workspace = true, optional = true }
 ahash = { workspace = true }
 arrayvec = "0.7"
 bytemuck = { version = "1", features = ["derive"] }
