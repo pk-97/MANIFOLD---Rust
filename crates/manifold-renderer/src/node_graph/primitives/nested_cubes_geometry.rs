@@ -367,13 +367,6 @@ mod gpu_tests {
     //! Smoke tests on the real GPU. Verifies the new primitive produces
     //! non-trivial output (cubes visible, not a black frame) and that
     //! repeated runs with identical inputs produce identical pixels.
-    //!
-    //! Bit-exact parity vs the legacy generator's shader is a follow-up
-    //! (see commit message): the WGSL is copied verbatim from
-    //! `generators/shaders/nested_cubes.wgsl` (retained as the parity
-    //! reference), and the Rust uniform construction mirrors the legacy
-    //! generator 1:1 so a formal `Vec<u16>` diff harness is achievable
-    //! but non-trivial render-pipeline test scaffolding.
     use manifold_core::{Beats, Seconds};
     use manifold_gpu::GpuTextureFormat;
 
