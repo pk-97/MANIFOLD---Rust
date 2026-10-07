@@ -169,7 +169,7 @@ mod sample_texture_at_particles;
 mod wrap_particles_torus;
 mod wave_field_3d;
 mod inverse_fft_2d;
-mod ocean_spectrum;
+pub(crate) mod ocean_spectrum;
 pub(crate) mod ocean_displace;
 mod projected_grid;
 mod cut_out_box;

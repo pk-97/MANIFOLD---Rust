@@ -150,7 +150,7 @@ other path-bearing fields are NOT visited (section 9 E7).
 
 ## 8. Test coverage (what's proven vs. dark)
 
-Proven: real-fixture loads (burn V4/V5, waypoints large, graphtestsv4
+Proven: real-fixture loads (burn V4/V5, graphtestsv4
 identity-reconcile), driver/envelope/mapping counts surviving migration +
 roundtrip, history journal push/dedup/prune/unknown-hash, autosave state
 machine (7 unit tests, time injected), snapshot-on-save capture/prune/
