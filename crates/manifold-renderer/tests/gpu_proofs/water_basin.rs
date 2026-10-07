@@ -31,7 +31,7 @@ mod authored_coupling;
 mod dam_break_authoring;
 mod deleted_obstacle;
 
-const WATER_BASIN_JSON: &str = include_str!("../../assets/generator-presets/WaterBasin.json");
+const WATER_BASIN_JSON: &str = include_str!("../fixtures/cpu-flip/WaterBasin.json");
 const WIDTH: u32 = 640;
 const HEIGHT: u32 = 360;
 const LAST_FRAME: u32 = 90;
@@ -232,7 +232,7 @@ fn assert_pixels_close(before: &[u8], after: &[u8], tolerance: f32) {
 fn water_basin_renders_complete_finite_frames_through_tick_90() {
     let started = Instant::now();
     let harness = harness::shared();
-    let registry = PrimitiveRegistry::with_builtin();
+    let registry = PrimitiveRegistry::with_cpu_flip_reference();
     let mut runtime = PresetRuntime::from_json_str_with_device(
         WATER_BASIN_JSON,
         &registry,
@@ -347,7 +347,7 @@ fn water_basin_paired_rigid_pose_publishes_through_fluid_worker() {
     ]);
 
     let harness = harness::shared();
-    let mut registry = PrimitiveRegistry::with_builtin();
+    let mut registry = PrimitiveRegistry::with_cpu_flip_reference();
     registry.register("node.test_coupled_observer", || {
         Box::new(CoupledObserver {
             type_id: EffectNodeType::new("node.test_coupled_observer"),
@@ -428,7 +428,7 @@ fn water_invalid_configuration_marks_frame_failed_for_export() {
     fluid["params"]["fill_height"]["value"] = serde_json::json!(-1.0);
     let mut runtime = PresetRuntime::from_json_str_with_device(
         &serde_json::to_string(&def).unwrap(),
-        &PrimitiveRegistry::with_builtin(),
+        &PrimitiveRegistry::with_cpu_flip_reference(),
         Arc::clone(&harness.device),
         WIDTH,
         HEIGHT,
@@ -476,7 +476,7 @@ fn scene_physics_added_fluid_renders_after_project_reload() {
     let target_graph = GraphTarget::Generator(layer.layer_id.clone());
     project.timeline.layers.push(layer);
     let mut add = AddSceneFluidCommand::new(target_graph.clone(), render_id,
-        metadata_for_node_type(manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID), metadata_for_node_type("node.transform_3d"),
+        manifold_renderer::reference_fixtures::cpu_flip_metadata(), metadata_for_node_type("node.transform_3d"),
         metadata_for_node_type("node.pbr_material"), metadata_for_node_type("node.scene_object"),
         manifold_editing::commands::graph::flip_scene_fluid_template(), baseline.clone())
         .with_world_metadata(metadata_for_node_type("node.physics_world"));
@@ -486,7 +486,7 @@ fn scene_physics_added_fluid_renders_after_project_reload() {
     let reloaded: Project = serde_json::from_str(&saved).unwrap();
     let graph = reloaded.graph_for_target(&target_graph, None).unwrap();
     let harness = harness::shared();
-    let registry = PrimitiveRegistry::with_builtin();
+    let registry = PrimitiveRegistry::with_cpu_flip_reference();
     let build = |def| PresetRuntime::from_json_str_with_device(
         &serde_json::to_string(def).unwrap(), &registry, Arc::clone(&harness.device),
         WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float, None).unwrap();
@@ -527,7 +527,7 @@ fn scene_physics_invalid_mesh_role_fails_instead_of_waiting_for_preparation() {
     ]);
     let harness = harness::shared();
     let mut runtime = PresetRuntime::from_json_str_with_device(
-        &def.to_string(), &PrimitiveRegistry::with_builtin(), Arc::clone(&harness.device),
+        &def.to_string(), &PrimitiveRegistry::with_cpu_flip_reference(), Arc::clone(&harness.device),
         WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float, None).unwrap();
     let target = RenderTarget::new(&harness.device, WIDTH, HEIGHT,
         GpuTextureFormat::Rgba16Float, "invalid-mesh-role");
@@ -576,7 +576,7 @@ fn scene_physics_shared_field_changes_rendered_liquid_after_graph_round_trip() {
     let restored: manifold_core::effect_graph_def::EffectGraphDef = serde_json::from_str(&saved).unwrap();
     assert_eq!(typed, restored);
     let harness = harness::shared();
-    let registry = PrimitiveRegistry::with_builtin();
+    let registry = PrimitiveRegistry::with_cpu_flip_reference();
     let build = |json: &str| PresetRuntime::from_json_str_with_device(
         json, &registry, Arc::clone(&harness.device), WIDTH, HEIGHT,
         GpuTextureFormat::Rgba16Float, None).unwrap();
@@ -634,7 +634,7 @@ fn scene_physics_mesh_role_renders_after_graph_round_trip() {
     let restored: manifold_core::effect_graph_def::EffectGraphDef = serde_json::from_str(&saved).unwrap();
     assert_eq!(typed, restored);
     let harness = harness::shared();
-    let registry = PrimitiveRegistry::with_builtin();
+    let registry = PrimitiveRegistry::with_cpu_flip_reference();
     let build = |json: &str| PresetRuntime::from_json_str_with_device(
         json, &registry, Arc::clone(&harness.device), WIDTH, HEIGHT,
         GpuTextureFormat::Rgba16Float, None).unwrap();
@@ -681,7 +681,7 @@ fn scene_physics_assigned_object_fills_fluid_through_group_boundaries() {
     let target_graph = GraphTarget::Generator(layer.layer_id.clone());
     project.timeline.layers.push(layer);
     let mut add_fluid = AddSceneFluidCommand::new(target_graph.clone(), render_id,
-        metadata_for_node_type(manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID), metadata_for_node_type("node.transform_3d"),
+        manifold_renderer::reference_fixtures::cpu_flip_metadata(), metadata_for_node_type("node.transform_3d"),
         metadata_for_node_type("node.pbr_material"), metadata_for_node_type("node.scene_object"),
         manifold_editing::commands::graph::flip_scene_fluid_template(), baseline.clone())
         .with_world_metadata(metadata_for_node_type("node.physics_world"));
@@ -746,7 +746,7 @@ fn scene_physics_assigned_object_fills_fluid_through_group_boundaries() {
     let mut def = def;
     let saved = serde_json::to_string(&def).unwrap();
     let harness = harness::shared();
-    let registry = PrimitiveRegistry::with_builtin();
+    let registry = PrimitiveRegistry::with_cpu_flip_reference();
     let build = |json: &str| PresetRuntime::from_json_str_with_device(json, &registry,
         Arc::clone(&harness.device), WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float, None).unwrap();
     let mut fluid_runtime = build(&saved);
@@ -848,7 +848,7 @@ fn scene_physics_modifier_impulse_changes_rendered_liquid() {
     ).unwrap().id.clone();
     let saved = serde_json::to_string(&def).unwrap();
     let harness = harness::shared();
-    let build = || PresetRuntime::from_json_str_with_device(&saved, &PrimitiveRegistry::with_builtin(),
+    let build = || PresetRuntime::from_json_str_with_device(&saved, &PrimitiveRegistry::with_cpu_flip_reference(),
         Arc::clone(&harness.device), WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float, None).unwrap();
     let mut resting = build();
     let mut hit = build();

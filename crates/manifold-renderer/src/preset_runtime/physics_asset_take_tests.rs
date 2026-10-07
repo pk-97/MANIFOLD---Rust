@@ -95,7 +95,7 @@ fn asset_definition(directory: &std::path::Path, cache_mode: u32) -> EffectGraph
 }
 
 fn build(state: &Arc<AtomicU8>, directory: &std::path::Path, cache_mode: u32) -> PresetRuntime {
-    let mut registry = PrimitiveRegistry::with_builtin();
+    let mut registry = PrimitiveRegistry::with_cpu_flip_reference();
     registry.register("test.fluid_time", || {
         Box::new(FluidTimeObserver(EffectNodeType::new("test.fluid_time")))
     });

@@ -93,6 +93,7 @@ impl GeneratorRegistry {
         // `wgsl_body`), so the atom sweep skips it.
         GltfTextureSource::prewarm_pipeline(device);
         crate::node_graph::primitives::physics_world::PhysicsWorldNode::prewarm_pipeline(device);
+        #[cfg(feature = "gpu-proofs")]
         crate::node_graph::fluid_mesh_upload::FluidMeshUpload::prewarm(device);
         crate::node_graph::primitives::terminal_analysis::prewarm_pipeline(device);
         // `node.scatter_on_mesh` is a barriered three-pass scan/reduce; exempt
@@ -248,6 +249,15 @@ impl GeneratorRegistry {
         };
 
         if let Some(def) = effective_def {
+            // A retired CPU FLIP graph is authored project content. If its
+            // removed node cannot instantiate, replacing it with the bundled
+            // canonical would silently discard the graph and its parameters.
+            let preserve_authored_graph = override_def.is_some_and(|def| {
+                manifold_core::retired_cpu_flip::preserve_authored_cpu_flip_graph(
+                    gen_type, def,
+                )
+            });
+
             // D8/P7: relight now fuses. Augment with DEFAULT knob values before
             // the fusion compiler so the fused-generator cache key (and generated
             // WGSL) is knob-invariant; the live values are written per-frame via
@@ -297,6 +307,7 @@ impl GeneratorRegistry {
             // A refused authored stack must surface its failure; falling back
             // to the bundle here would discard its applied modifiers.
             if is_override
+                && !preserve_authored_graph
                 && override_def.is_none_or(|def| def.scene_modifiers.is_empty())
                 && let Some(def) = bundled_preset_def(gen_type) {
                 match PresetRuntime::from_def_with_device(

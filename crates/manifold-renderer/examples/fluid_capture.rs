@@ -261,8 +261,9 @@ struct Metadata {
 
 fn default_preset_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("assets")
-        .join("generator-presets")
+        .join("tests")
+        .join("fixtures")
+        .join("cpu-flip")
         .join("WaterBasin.json")
 }
 
@@ -332,7 +333,7 @@ fn find_preset_node<'a>(
 /// other publishes through a frame node and is a GPU solver.
 fn preset_settings(json: &str) -> CaptureResult<PresetSettings> {
     let document: serde_json::Value = serde_json::from_str(json)?;
-    let registry = PrimitiveRegistry::with_builtin();
+    let registry = PrimitiveRegistry::with_cpu_flip_reference();
     let built = |node: &serde_json::Value| node["typeId"].as_str().and_then(|type_id| registry.construct(type_id));
     let mut domains = Vec::new();
     find_preset_nodes(&document["nodes"], &|node| node["typeId"].as_str().is_some_and(is_liquid_domain), &mut domains);
@@ -557,7 +558,7 @@ fn build_runtime(
     height: u32,
     frame_node: &str,
 ) -> CaptureResult<PresetRuntime> {
-    let registry = PrimitiveRegistry::with_builtin();
+    let registry = PrimitiveRegistry::with_cpu_flip_reference();
     let mut runtime = PresetRuntime::from_json_str_with_device(
         instrumented_json,
         &registry,
@@ -1680,20 +1681,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn metadata_distinguishes_honey_from_legacy_water() {
-        let honey = preset_settings(include_str!(
-            "../assets/generator-presets/HoneyDamBreak.json"
-        ))
-        .unwrap();
-        assert!(honey.viscosity > 0.0);
-        assert_eq!(honey.surface_tension, 0.0);
-        let water =
-            preset_settings(include_str!("../assets/generator-presets/WaterBasin.json")).unwrap();
-        assert_eq!(water.viscosity, 0.0);
-        assert_eq!(water.surface_tension, 0.0);
-    }
-
-    #[test]
     fn every_liquid_on_the_seam_is_found_by_its_frame() {
         let matter = preset_settings(include_str!(
             "../assets/generator-presets/WaterDamBreakMatter.json"
@@ -1712,7 +1699,7 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(sea_wall.speed, 0.5);
-        let flip = preset_settings(include_str!("../assets/generator-presets/WaterDamBreak.json")).unwrap();
+        let flip = preset_settings(include_str!("../tests/fixtures/cpu-flip/WaterDamBreak.json")).unwrap();
         assert_eq!((flip.solver, flip.frame_node.as_str()), (Solver::Flip, "fluid_surface"));
         let ocean = preset_settings(include_str!("../assets/generator-presets/Ocean.json")).unwrap();
         assert_eq!((ocean.solver, ocean.frame_node.as_str()), (Solver::None, ""));

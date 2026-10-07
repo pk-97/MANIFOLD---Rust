@@ -18,6 +18,27 @@ def plan(paths, users=None, repo=None):
 
 
 class ScopeTests(unittest.TestCase):
+    def test_cpu_flip_reference_inputs_select_consuming_proofs(self):
+        required = {
+            "liquid_conformance::", "water_basin::", "fluid_surface_perf::",
+            "node_graph::primitives::whitewater_scene_tests::",
+            "node_graph::primitives::gpu_flip_render_smoke_tests::",
+            "node_graph::primitives::gpu_flip_preset::",
+            "node_graph::scene_modifier_expand::acceleration::",
+            "preset_runtime::physics_carry::", "preset_runtime::physics_sampling::",
+            "preset_runtime::physics_impulses::tests::coupled_playback_tests::",
+        }
+        for path in (R + "reference_fixtures.rs", *(
+                g.CPU_FLIP_FIXTURES_DIR + name for name in (
+                    "WaterBasin.json", "WaterDamBreak.json", "WaterDamBreakGpu.json"))):
+            with self.subTest(path=path):
+                result = plan([path])
+                self.assertEqual(result.paths, [path])
+                self.assertEqual(result.filters, required)
+                self.assertFalse(result.unmapped)
+                self.assertFalse(result.broad)
+                self.assertTrue(set(g.SMOKE_FILTERS) <= set(result.final_filters()))
+
     def test_ui_paint_selects_own_lib_proofs_and_renderer_smoke(self):
         result = plan(["crates/manifold-ui-paint/src/native_text.rs"])
         self.assertFalse(result.unmapped)

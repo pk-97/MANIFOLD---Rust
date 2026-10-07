@@ -18,7 +18,7 @@ mod input_tests;
 #[path = "physics_host_modulation_tests.rs"]
 mod host_modulation_tests;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpu-proofs"))]
 #[path = "physics_history_drain_tests.rs"]
 mod drain_tests;
 
@@ -33,6 +33,7 @@ fn setup_input(kind: &str, port: &str) -> bool {
     }
     match kind {
         "node.rigid_body" => matches!(port, "release_count" | "source"),
+        #[cfg(feature = "gpu-proofs")]
         FLIP_DOMAIN_TYPE_ID => port == "domain",
         "node.fluid_role_source" => !matches!(
             port,
@@ -232,7 +233,8 @@ pub(super) fn physics_sample_steps(
     use std::collections::HashSet;
 
     let replays_history = |type_id: &str| {
-        matches!(type_id, "node.physics_world" | FLIP_DOMAIN_TYPE_ID) || gpu_liquid(type_id)
+        type_id == "node.physics_world" || gpu_liquid(type_id)
+            || (cfg!(feature = "gpu-proofs") && type_id == FLIP_DOMAIN_TYPE_ID)
     };
     // A GPU liquid replays its force field, roles and paired world at each
     // tick's start; its paired world's scene is captured for it there.
@@ -271,7 +273,6 @@ pub(super) fn physics_sample_steps(
         let stateless_cpu = matches!(
             type_id,
             "node.physics_world"
-                | FLIP_DOMAIN_TYPE_ID
                 | "node.fluid_role_source"
                 | "node.rigid_body"
                 | "node.transform_3d"
@@ -281,7 +282,7 @@ pub(super) fn physics_sample_steps(
                 | "node.value"
                 | "node.math"
                 | "node.affine_scalar"
-        ) || node.node.is_pure();
+        ) || (cfg!(feature = "gpu-proofs") && type_id == FLIP_DOMAIN_TYPE_ID) || node.node.is_pure();
         // A GPU liquid's sample run only records its field; it never encodes.
         if gpu_liquid(type_id) {
             continue;
@@ -378,6 +379,7 @@ impl PresetRuntime {
     /// catch-up drains native ticks in bounded input batches without publishing
     /// intermediate graph outputs. Preview continues to retain its time debt.
     pub(super) fn sample_physics_history(&mut self, current: FrameTime) {
+        #[cfg(feature = "gpu-proofs")]
         self.observe_physics_source_assets();
         let (Some(inputs), Some(steps)) = (
             self.physics_input_snapshot.as_mut(),
@@ -563,10 +565,11 @@ mod tests {
     use super::*;
     use crate::node_graph::PrimitiveRegistry;
 
+    #[cfg(feature = "gpu-proofs")]
     #[test]
     fn scene_physics_role_history_samples_live_controls_without_rendering() {
         let mut def: serde_json::Value = serde_json::from_str(include_str!(
-            "../../assets/generator-presets/WaterBasin.json"
+            "../../tests/fixtures/cpu-flip/WaterBasin.json"
         ))
         .unwrap();
         def["nodes"]
@@ -587,7 +590,7 @@ mod tests {
             serde_json::json!({"fromNode": 500, "fromPort": "role", "toNode": 4, "toPort": "role_0"}),
         ]);
         let runtime =
-            PresetRuntime::from_json_str(&def.to_string(), &PrimitiveRegistry::with_builtin())
+            PresetRuntime::from_json_str(&def.to_string(), &PrimitiveRegistry::with_cpu_flip_reference())
                 .expect("typed fluid role ancestry loads");
         let mut saw_source = false;
         let mut saw_motion = false;
@@ -614,11 +617,12 @@ mod tests {
         assert!(saw_source && saw_motion);
     }
 
+    #[cfg(feature = "gpu-proofs")]
     #[test]
     fn water_history_samples_fluid_controls_without_rendering() {
         let runtime = PresetRuntime::from_json_str(
-            include_str!("../../assets/generator-presets/WaterBasin.json"),
-            &PrimitiveRegistry::with_builtin(),
+            include_str!("../../tests/fixtures/cpu-flip/WaterBasin.json"),
+            &PrimitiveRegistry::with_cpu_flip_reference(),
         )
         .expect("WaterBasin loads");
         let mask = runtime

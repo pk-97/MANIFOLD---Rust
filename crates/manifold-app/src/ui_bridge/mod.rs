@@ -14,7 +14,7 @@ mod layer;
 mod marker;
 mod material_looks;
 mod material_colour;
-mod project;
+pub(crate) mod project;
 mod projection;
 pub use projection::timeline::sync_automation_lane_order;
 // `pub(crate)` so the frame-resident gestures in `app_render` (graph-editor

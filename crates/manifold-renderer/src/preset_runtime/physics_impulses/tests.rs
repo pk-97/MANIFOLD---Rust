@@ -9,6 +9,7 @@ use std::{borrow::Cow, cell::Cell};
 mod source_tests;
 #[path = "scene_routes_tests.rs"]
 mod scene_routes_tests;
+#[cfg(feature = "gpu-proofs")]
 #[path = "coupled_playback_tests.rs"]
 mod coupled_playback_tests;
 
@@ -118,6 +119,9 @@ fn fixture() -> EffectGraphDef {
     })).unwrap()
 }
 fn registry() -> PrimitiveRegistry {
+    #[cfg(feature = "gpu-proofs")]
+    let mut registry = PrimitiveRegistry::with_cpu_flip_reference();
+    #[cfg(not(feature = "gpu-proofs"))]
     let mut registry = PrimitiveRegistry::with_builtin();
     registry.register("node.render_scene", || {
         Box::new(CpuScene(
@@ -156,6 +160,7 @@ fn prepare(runtime: &PresetRuntime, def: &EffectGraphDef, ids: &[&str]) -> Prepa
             },
             &NodeId::new("field"),
             "out",
+            &registry(),
         )
         .unwrap()
 }
@@ -433,7 +438,8 @@ fn scene_impulse_rejects_stateful_ancestry_and_inactive_selections() {
                 &reference("scene"),
                 &SceneTargetSelection::Explicit { objects: vec![] },
                 &NodeId::new("field"),
-                "out"
+                "out",
+                &registry(),
             )
             .is_err()
     );
@@ -554,6 +560,7 @@ fn scene_impulse_captures_spatial_shape_before_center_edits() {
     );
 }
 
+#[cfg(feature = "gpu-proofs")]
 #[test]
 fn scene_impulse_selection_combines_body_slots_copies_and_fluid_domain() {
     use crate::node_graph::physics::RigidImpulseTargets;

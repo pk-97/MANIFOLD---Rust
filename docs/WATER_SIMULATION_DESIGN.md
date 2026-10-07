@@ -1,12 +1,12 @@
 # Water — CPU FLIP reference
 
-<!-- index: Current CPU FLIP worker, baked playback and water rendering contract; historical custom GPU proposal below. -->
+<!-- index: Historical CPU FLIP integration and reference-engine contract; product liquids use GPU FLIP. -->
 
-**Status:** SUPERSEDED solver direction · 2026-09-26. The sections below preserve the earlier custom GPU proposal. Current development uses the upstream FLIP Fluids CPU engine; no GPU solver or real-time performance is claimed. Live-solver direction is now `docs/GPU_MPM_SOLVER_DESIGN.md` (GPU MLS-MPM writing the particle-frame seam of `docs/GPU_FLUID_SURFACE_DESIGN.md`); FLIP remains the bake and reference engine.
+**Status:** REFERENCE ONLY · 2026-10-07. CPU FLIP remains the GPU FLIP reference engine. The prototype playback contract below is historical; shared GPU contracts remain in LIQUID_SOLVER_SEAM_DESIGN.md.
 
-## Current implementation contract — CPU FLIP reference
+## Historical implementation contract — CPU FLIP reference
 
-The app integration is specified in [FLUID_ENGINE_INTEGRATION_PLAN.md](FLUID_ENGINE_INTEGRATION_PLAN.md): shared `manifold-physics` interactions, arbitrary scene authoring, musical controls, baking and export. The contract below describes the existing prototype, not completion of that plan.
+The retired app integration was specified in [FLUID_ENGINE_INTEGRATION_PLAN.md](FLUID_ENGINE_INTEGRATION_PLAN.md): shared `manifold-physics` interactions, arbitrary scene authoring, musical controls, baking and export. The contract below describes the existing prototype, not completion of that plan.
 
 The accelerated live-surface direction (GPU reconstruction from particle frames, with a slower interpolated solver tick) is proposed in [GPU_FLUID_SURFACE_DESIGN.md](GPU_FLUID_SURFACE_DESIGN.md).
 

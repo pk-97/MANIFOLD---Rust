@@ -1,10 +1,12 @@
+#[cfg(any(test, feature = "gpu-proofs"))]
+use super::FIXED_TICK;
 use manifold_core::Seconds;
 use manifold_physics::input::AppliedEvent;
 use manifold_physics::stepping::{StepCoupling, StepInterval};
 use manifold_physics::{BodyHandle, FieldValue, PhysicsWorld};
 
 use super::{
-    same_collider, AdvancementPolicy, ResolvedRigidImpulse, RigidBody, RigidSimulation, FIXED_TICK,
+    same_collider, AdvancementPolicy, ResolvedRigidImpulse, RigidBody, RigidSimulation,
     IMPULSE_CAPACITY, MAX_BODIES, TARGET_SLOTS,
 };
 
@@ -58,6 +60,7 @@ pub struct RigidSceneObservation {
 impl RigidSceneInputs {
     /// Validate disk-owned inputs before they reach native code. Geometry is
     /// cooked by the existing native adapter, which also checks hull validity.
+    #[cfg(feature = "gpu-proofs")]
     pub(crate) fn validate_recording(&self) -> Result<(), String> {
         super::validate_fragments(&self.bodies)?;
         if self
@@ -185,6 +188,7 @@ impl RigidSimulation {
     /// Consume one batch of events already assigned by the shared worker
     /// queue. The native queue advances its empty cursor, while these events
     /// retain their original source and applied metadata.
+    #[cfg(any(test, feature = "gpu-proofs"))]
     pub(crate) fn advance_worker_tick<C: StepCoupling>(
         &mut self,
         inputs: &RigidSceneInputs,
@@ -304,6 +308,7 @@ impl RigidSimulation {
             && same_topology_body(self.copy_description.as_ref(), inputs.prototype.as_ref())
     }
 
+    #[cfg(any(test, feature = "gpu-proofs"))]
     fn validate_assigned_impulses(
         &self,
         events: &[AppliedEvent<ResolvedRigidImpulse>],
@@ -344,6 +349,7 @@ impl RigidSimulation {
         Ok(())
     }
 
+    #[cfg(any(test, feature = "gpu-proofs"))]
     fn ensure_worker_tick_is_owed(&self, now: Seconds) -> Result<(), String> {
         if !now.0.is_finite() {
             return Err("Physics worker tick clock must be finite".into());

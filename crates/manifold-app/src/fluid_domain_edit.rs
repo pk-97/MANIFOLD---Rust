@@ -14,7 +14,7 @@ use manifold_core::{GraphTarget, LayerId, NodeId, project::Project};
 use manifold_editing::command::Command;
 use manifold_editing::commands::effects::ChangeGraphParamCommand;
 use manifold_editing::commands::graph::SetGraphNodeParamCommand;
-use manifold_renderer::node_graph::fluid::{FluidDomainLayout, FluidSettings};
+use manifold_renderer::node_graph::fluid::{FluidDomainLayout, domain_layout};
 use manifold_renderer::node_graph::scene_vm::{ParamAddr, SceneObjectVm, SceneVm, TransformVm};
 use manifold_renderer::node_graph::{
     GizmoAxis, GizmoMode, GizmoTarget, GizmoTargetKind, ParamValue, convert_param_value,
@@ -255,9 +255,8 @@ fn set_transform_scalar(transform: &mut TransformVm, mode: GizmoMode, axis: Gizm
 }
 
 fn fluid_layout(resolution: u32, transform: &TransformVm) -> Result<FluidDomainLayout, String> {
-    FluidSettings {
-        resolution,
-        domain: Some(manifold_renderer::node_graph::Transform {
+    domain_layout(
+        Some(manifold_renderer::node_graph::Transform {
             pos: [
                 transform.pos_value.0,
                 transform.pos_value.1,
@@ -275,9 +274,9 @@ fn fluid_layout(resolution: u32, transform: &TransformVm) -> Result<FluidDomainL
             ],
             billboard: false,
         }),
-        ..FluidSettings::default()
-    }
-    .domain_layout()
+        4.0,
+        resolution,
+    )
 }
 
 fn binding_for(
@@ -621,9 +620,10 @@ mod tests {
     use manifold_core::PresetTypeId;
     use manifold_core::effect_graph_def::{BindingDef, EffectGraphWire};
     use manifold_core::types::LayerType;
+    use manifold_editing::commands::graph::{ExposureSet, TemplateExposure};
 
-    const WATER_BASIN: &str =
-        include_str!("../../manifold-renderer/assets/generator-presets/WaterBasin.json");
+    const GPU_FLIP_WATER: &str =
+        include_str!("../../manifold-renderer/assets/generator-presets/WaterDamBreakGpuFlip.json");
 
     #[test]
     fn runtime_domain_bounds_hide_unaccepted_layouts_and_lock_driven_edits() {
@@ -637,7 +637,7 @@ mod tests {
         }).unwrap();
         let layout = row.fluid_domain.unwrap();
         let domain = row.liquid_domain.as_ref().unwrap();
-        assert_eq!(domain.resolve(&def).unwrap().type_id, manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID);
+        assert_eq!(domain.resolve(&def).unwrap().type_id, manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID);
         let fluid = domain.node.clone();
 
         for state in [FluidDomainState::Initializing, FluidDomainState::PendingInputs, FluidDomainState::Failed] {
@@ -682,7 +682,7 @@ mod tests {
         let layout = row.fluid_domain.unwrap();
         let domain = row.liquid_domain.clone().unwrap();
         assert!(!domain.scope.is_empty(), "the added fluid's domain lives in a group");
-        assert_eq!(domain.resolve(&def).unwrap().type_id, manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID);
+        assert_eq!(domain.resolve(&def).unwrap().type_id, manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID);
         apply_runtime_domains(&mut scene, &[(domain.node, FluidDomainSnapshot {
             epoch: 4, state: FluidDomainState::Ready, accepted_layout: Some(layout),
         })]);
@@ -694,12 +694,25 @@ mod tests {
         let index = project.timeline.add_layer(
             "Fluid",
             LayerType::Generator,
-            PresetTypeId::from_string("WaterBasin".to_string()),
+            PresetTypeId::from_string("WaterDamBreakGpuFlip".to_string()),
         );
         let layer_id = project.timeline.layers[index].layer_id.clone();
-        let mut def: EffectGraphDef = serde_json::from_str(WATER_BASIN).unwrap();
-        def.nodes.push(EffectGraphNode {
-            id: 40,
+        let mut def: EffectGraphDef = serde_json::from_str(GPU_FLIP_WATER).unwrap();
+        let family = def
+            .nodes
+            .iter_mut()
+            .find(|node| node.node_id == NodeId::new("water_family"))
+            .expect("GPU FLIP family");
+        let group = family.group.as_mut().expect("GPU FLIP family body");
+        let domain = group
+            .nodes
+            .iter()
+            .find(|node| node.type_id == manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID)
+            .expect("GPU FLIP domain")
+            .id;
+        let transform_id = group.nodes.iter().map(|node| node.id).max().unwrap_or(0) + 1;
+        group.nodes.push(EffectGraphNode {
+            id: transform_id,
             node_id: NodeId::new("domain_transform"),
             type_id: "node.transform_3d".into(),
             handle: Some("Domain".into()),
@@ -717,10 +730,10 @@ mod tests {
             output_canvas_scales: Default::default(),
             group: None,
         });
-        def.wires.push(EffectGraphWire {
-            from_node: 40,
+        group.wires.push(EffectGraphWire {
+            from_node: transform_id,
             from_port: "transform".into(),
-            to_node: 4,
+            to_node: domain,
             to_port: "domain".into(),
         });
         if bound {
@@ -794,14 +807,52 @@ mod tests {
             .find(|node| node.type_id == "node.render_scene")
             .unwrap()
             .id;
+        let mut template = crate::ui_bridge::project::gpu_flip_liquid_template();
+        let domain = template
+            .nodes
+            .iter()
+            .find(|node| node.type_id == manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID)
+            .expect("GPU FLIP domain")
+            .id;
+        let transform_id = template.nodes.iter().map(|node| node.id).max().unwrap_or(0) + 1;
+        template.nodes.push(EffectGraphNode {
+            id: transform_id,
+            node_id: NodeId::new("domain_transform"),
+            type_id: "node.transform_3d".into(),
+            handle: Some("Domain".into()),
+            params: BTreeMap::from([
+                ("pos_y".into(), SerializedParamValue::Float { value: 2.0 }),
+                ("scale_x".into(), SerializedParamValue::Float { value: 4.0 }),
+                ("scale_y".into(), SerializedParamValue::Float { value: 4.0 }),
+                ("scale_z".into(), SerializedParamValue::Float { value: 4.0 }),
+            ]),
+            exposed_params: Default::default(),
+            editor_pos: None,
+            wgsl_source: None,
+            title: None,
+            output_formats: Default::default(),
+            output_canvas_scales: Default::default(),
+            group: None,
+        });
+        template.wires.push(EffectGraphWire {
+            from_node: transform_id,
+            from_port: "transform".into(),
+            to_node: domain,
+            to_port: "domain".into(),
+        });
+        template.exposures.push(TemplateExposure::Node {
+            node: transform_id,
+            set: ExposureSet::Domain,
+            section: Some("Domain"),
+        });
         let mut command = AddSceneFluidCommand::new(
             target.clone(),
             scene_id,
-            metadata_for_node_type(manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID),
+            metadata_for_node_type(manifold_core::liquid_domain::GPU_FLIP_DOMAIN_TYPE_ID),
             metadata_for_node_type("node.transform_3d"),
             metadata_for_node_type("node.pbr_material"),
             metadata_for_node_type("node.scene_object"),
-            manifold_editing::commands::graph::flip_scene_fluid_template(),
+            template,
             default,
         )
         .with_role_metadata(metadata_for_node_type("node.fluid_role_source"))
@@ -987,12 +1038,11 @@ mod tests {
         let before = crate::graph_target::resolve(&project, &target)
             .unwrap()
             .clone();
-        let projected = authored_def(&project, &target).unwrap();
-        let domain = projected
-            .nodes
-            .iter()
-            .find(|node| node.node_id == NodeId::new("domain_transform"))
-            .unwrap();
+        let mut projected = authored_def(&project, &target).unwrap();
+        let domain = find_node_by_stable_id_mut(
+            &mut projected.nodes,
+            &NodeId::new("domain_transform"),
+        ).unwrap();
         assert_eq!(
             serialized_scalar(domain.params.get("pos_x").unwrap()),
             Some(1.5)

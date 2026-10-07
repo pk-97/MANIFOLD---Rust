@@ -32,6 +32,7 @@ use crate::node_graph::PrimitiveRegistry;
 use crate::preset_context::PresetContext;
 use crate::preset_runtime::PresetRuntime;
 use crate::render_target::RenderTarget;
+use crate::reference_fixtures::cpu_flip_preset_json;
 
 const STEP_REPORTS: [&str; 6] = ["foam_count", "bubble_count", "spray_count", "emitted", "thinned", "pool_full"];
 
@@ -42,8 +43,7 @@ const STUDIO_FLOOR: [&str; 4] = ["studio_floor", "studio_floor_mesh", "studio_fl
 const OBSTACLE: [&str; 5] = ["obstacle_transform", "obstacle_collider", "obstacle_mesh", "obstacle_material", "obstacle_object"];
 
 fn preset_json(file: &str) -> Value {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/generator-presets").join(file);
-    serde_json::from_str(&std::fs::read_to_string(path).expect("preset reads")).expect("preset parses")
+    serde_json::from_str(cpu_flip_preset_json(file)).expect("preset parses")
 }
 
 fn float(v: f64) -> Value {
@@ -347,7 +347,7 @@ fn whitewater_scene_fuses_without_gpu() {
     use crate::node_graph::freeze::install::fuse_generator_view;
 
     let def = whitewater_render_def(WaterScene::dam_break(64));
-    let mut registry = PrimitiveRegistry::with_builtin();
+    let mut registry = PrimitiveRegistry::with_cpu_flip_reference();
     register_substep_test_nodes(&mut registry);
     registry.register(PROBE, || Box::new(Probe::new()));
     registry.register(COUNTS_PROBE, || Box::new(Probe::whitewater_counts()));
@@ -398,7 +398,7 @@ fn vendored_whitewater_scene_loads_and_compiles_without_gpu() {
     assert_eq!(capacity.target_handle, "Whitewater Lifecycle");
     assert_eq!(capacity.target_param, "capacity");
 
-    let mut registry = PrimitiveRegistry::with_builtin();
+    let mut registry = PrimitiveRegistry::with_cpu_flip_reference();
     register_substep_test_nodes(&mut registry);
     registry.register(PROBE, || Box::new(Probe::new()));
     registry.register(COUNTS_PROBE, || Box::new(Probe::whitewater_counts()));
@@ -555,7 +555,7 @@ impl Show {
     }
 
     pub(super) fn new_with_emitter_oracle(def: EffectGraphDef, size: (u32, u32), frozen: bool, held: &[String], reference: Option<bool>) -> Self {
-        let mut registry = PrimitiveRegistry::with_builtin();
+        let mut registry = PrimitiveRegistry::with_cpu_flip_reference();
         if let Some(reference) = reference {
             registry.register("node.whitewater_step", if reference {
                 super::whitewater_step::reference_proof_node

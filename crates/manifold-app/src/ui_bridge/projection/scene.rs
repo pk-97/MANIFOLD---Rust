@@ -538,23 +538,6 @@ mod ownership_tests {
         assert_eq!(parameter_ids_for_nodes(Some(&def), &ids(&["grouped_domain"])), vec!["1_intensity"]);
     }
 
-    #[test]
-    fn dam_break_water_owns_curated_quality_controls_after_migration_and_reload() {
-        let mut def: EffectGraphDef = serde_json::from_str(include_str!(
-            "../../../../manifold-renderer/assets/generator-presets/WaterDamBreak.json"
-        )).unwrap();
-        manifold_renderer::node_graph::scene_exposure::migrate_scene_exposures(&mut def);
-        let def: EffectGraphDef = serde_json::from_str(&serde_json::to_string(&def).unwrap()).unwrap();
-        let domain = def.nodes.iter()
-            .find(|node| node.type_id == manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID)
-            .expect("the dam break domain").node_id.clone();
-        let ids = parameter_ids_for_nodes(Some(&def), &[domain]);
-        for id in ["resolution", "surface_detail", "whitewater", "surface_particle_scale", "4_grid_budget_mcells"] {
-            assert!(ids.iter().any(|actual| actual == id), "missing Water control {id}");
-        }
-        assert!(!ids.iter().any(|id| id == "environment_mode"));
-    }
-
     /// Every control the scene panel shows belongs to one item: an object, a
     /// light, the camera or the world. The one sharing allowed is a material
     /// wired into several objects, which each of them shows. Returns the
@@ -608,7 +591,7 @@ mod ownership_tests {
             }
         }
         assert!(scenes.iter().any(|scene| scene == "WaterDamBreakMatter"), "{scenes:?}");
-        assert!(scenes.iter().any(|scene| scene == "WaterDamBreak"), "{scenes:?}");
+        assert!(scenes.iter().any(|scene| scene == "WaterDamBreakGpuFlip"), "{scenes:?}");
     }
 
     #[test]

@@ -7,7 +7,7 @@ use manifold_core::effect_graph_def::{
     EFFECT_GRAPH_VERSION, EffectGraphDef, EffectGraphNode, EffectGraphWire, GROUP_TYPE_ID,
     SerializedParamValue,
 };
-use manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID;
+use manifold_core::liquid_domain::MATTER_DOMAIN_TYPE_ID;
 use manifold_core::{GraphTarget, NodeId};
 
 fn render_scene_graph(objects: u32, occupied_next_slot: bool) -> EffectGraphDef {
@@ -88,6 +88,11 @@ fn command(target: GraphTarget, catalog_default: EffectGraphDef) -> AddSceneFlui
         target,
         10,
         vec![
+            scene_param_meta("gravity_x", "Gravity X"),
+            scene_param_meta("gravity", "Gravity"),
+            scene_param_meta("gravity_z", "Gravity Z"),
+            scene_param_meta("speed", "Speed"),
+            scene_param_meta("reset", "Reset"),
             scene_param_meta("fill_height", "Fill"),
             scene_param_meta("emission", "Legacy Emission"),
             scene_param_meta("inflow_speed", "Legacy Inflow Speed"),
@@ -106,7 +111,7 @@ fn command(target: GraphTarget, catalog_default: EffectGraphDef) -> AddSceneFlui
             scene_param_meta("volume_attenuation_distance", "Attenuation"),
         ],
         vec![scene_param_meta("cast_shadows", "Shadows")],
-        flip_scene_fluid_template(),
+        gpu_template(),
         catalog_default,
     )
     .with_role_metadata(vec![
@@ -134,120 +139,20 @@ fn graph<'a>(
     project.graph_for_target(target, None).unwrap()
 }
 
-#[test]
-fn scene_physics_add_fluid_appends_after_compound_slots() {
-    let def = render_scene_graph(2, false);
-    let (mut project, target) = project_with_graph(def.clone());
-    let mut cmd = command(target.clone(), def);
-
-    cmd.execute(&mut project);
-
-    let result = graph(&project, &target);
-    assert!(cmd.was_applied());
-    assert_eq!(
-        result
-            .nodes
-            .iter()
-            .find(|node| node.id == 10)
-            .unwrap()
-            .params["objects"],
-        SerializedParamValue::Float { value: 3.0 }
-    );
-    let group = result
-        .nodes
-        .iter()
-        .find(|node| node.handle.as_deref() == Some("Fluid 1 Graph"))
-        .unwrap();
-    let body = group.group.as_deref().unwrap();
-    assert_eq!(body.nodes.len(), 8);
-    for type_id in [
-        FLIP_DOMAIN_TYPE_ID,
-        "node.transform_3d",
-        "node.fluid_role_source",
-        "node.pbr_material",
-        "node.scene_object",
-        "system.group_input",
-        "system.group_output",
-    ] {
-        assert!(body.nodes.iter().any(|node| node.type_id == type_id));
+fn node_and_group<'a>(
+    nodes: &'a [EffectGraphNode],
+    type_id: &str,
+) -> Option<(&'a EffectGraphNode, &'a [EffectGraphNode], &'a [EffectGraphWire])> {
+    for node in nodes {
+        let Some(group) = node.group.as_deref() else { continue };
+        if let Some(found) = group.nodes.iter().find(|candidate| candidate.type_id == type_id) {
+            return Some((found, &group.nodes, &group.wires));
+        }
+        if let Some(found) = node_and_group(&group.nodes, type_id) {
+            return Some(found);
+        }
     }
-    assert_eq!(
-        body.nodes
-            .iter()
-            .filter(|node| node.type_id == "node.transform_3d")
-            .count(),
-        2
-    );
-    assert!(result.wires.iter().any(|wire| {
-        wire.from_node == group.id && wire.to_node == 10 && wire.to_port == "object_2"
-    }));
-    assert_eq!(
-        body.nodes
-            .iter()
-            .find(|node| node.type_id == FLIP_DOMAIN_TYPE_ID)
-            .unwrap()
-            .params["resolution"],
-        SerializedParamValue::Int { value: 16 }
-    );
-    let source_id = body
-        .nodes
-        .iter()
-        .find(|node| node.type_id == "node.transform_3d")
-        .unwrap()
-        .node_id
-        .clone();
-    assert!(result.preset_metadata.as_ref().unwrap().bindings.iter().any(|binding| {
-        matches!(&binding.target, manifold_core::effect_graph_def::BindingTarget::Node { node_id, param }
-            if node_id == &source_id && param == "rot_x")
-    }));
-    let fluid = body.nodes.iter().find(|node| node.type_id == FLIP_DOMAIN_TYPE_ID).unwrap();
-    assert_eq!(fluid.params["emission"], SerializedParamValue::Float { value: 0.0 });
-    assert_eq!(fluid.params["domain_size"], SerializedParamValue::Float { value: 4.0 });
-    let domain = body
-        .nodes
-        .iter()
-        .find(|node| node.handle.as_deref() == Some("Fluid 1 Domain"))
-        .unwrap();
-    assert_eq!(domain.params["pos_y"], SerializedParamValue::Float { value: 2.0 });
-    assert_eq!(domain.params["scale_x"], SerializedParamValue::Float { value: 4.0 });
-    assert!(body.wires.iter().any(|wire| {
-        wire.from_node == domain.id
-            && wire.from_port == "transform"
-            && wire.to_node == fluid.id
-            && wire.to_port == "domain"
-    }));
-    let role = body.nodes.iter().find(|node| node.type_id == "node.fluid_role_source").unwrap();
-    assert_eq!(role.params["velocity_y"], SerializedParamValue::Float { value: -1.0 });
-    assert!(body.wires.iter().any(|wire| wire.from_node == role.id && wire.from_port == "role" && wire.to_node == fluid.id && wire.to_port == "role_0"));
-    assert!(!body.wires.iter().any(|wire| wire.to_node == fluid.id && wire.to_port == "emitter"));
-    let fluid_node_id = &fluid.node_id;
-    assert!(!result.preset_metadata.as_ref().unwrap().bindings.iter().any(|binding| matches!(
-        &binding.target,
-        manifold_core::effect_graph_def::BindingTarget::Node { node_id, param }
-            if node_id == fluid_node_id && matches!(param.as_str(), "emission" | "inflow_speed")
-    )));
-    let metadata = result.preset_metadata.as_ref().unwrap();
-    let domain_section = metadata
-        .params
-        .iter()
-        .filter(|param| param.section.as_deref() == Some("Fluid 1 - Domain"))
-        .collect::<Vec<_>>();
-    assert_eq!(domain_section.len(), 6);
-    assert!(domain_section.iter().all(|param| {
-        matches!(
-            param.name.as_str(),
-            "Position X" | "Position Y" | "Position Z" | "Width" | "Height" | "Depth"
-        )
-    }));
-    assert!(domain_section
-        .iter()
-        .filter(|param| matches!(param.name.as_str(), "Width" | "Height" | "Depth"))
-        .all(|param| param.min == 0.5 && param.max == 20.0));
-    assert!(!metadata.bindings.iter().any(|binding| matches!(
-        &binding.target,
-        manifold_core::effect_graph_def::BindingTarget::Node { node_id, param }
-            if node_id == fluid_node_id && param == "domain_size"
-    )));
+    None
 }
 
 #[test]
@@ -374,8 +279,8 @@ fn scene_physics_add_fluid_preserves_world_controls_and_authored_wires() {
     let result = graph(&project, &target);
     let group_node = result.nodes.iter().find(|node| node.type_id == GROUP_TYPE_ID).unwrap();
     let group = group_node.group.as_deref().unwrap();
-    let input = group.nodes.iter().find(|node| node.type_id == "system.group_input").unwrap();
-    let fluid = group.nodes.iter().find(|node| node.type_id == FLIP_DOMAIN_TYPE_ID).unwrap();
+    let (fluid, domain_nodes, domain_wires) = node_and_group(&group.nodes, MATTER_DOMAIN_TYPE_ID).unwrap();
+    let input = domain_nodes.iter().find(|node| node.type_id == "system.group_input").unwrap();
     let metadata = result.preset_metadata.as_ref().unwrap();
     for (world_param, fluid_param) in [("gravity_x", "gravity_x"), ("gravity_y", "gravity"),
         ("gravity_z", "gravity_z"), ("speed", "speed"), ("reset", "reset")]
@@ -383,7 +288,7 @@ fn scene_physics_add_fluid_preserves_world_controls_and_authored_wires() {
         let world_wire = result.wires.iter().find(|wire| wire.to_node == 30 && wire.to_port == world_param).unwrap();
         let fluid_wire = result.wires.iter().find(|wire| wire.to_node == group_node.id && wire.to_port == world_param).unwrap();
         assert_eq!((world_wire.from_node, &world_wire.from_port), (fluid_wire.from_node, &fluid_wire.from_port));
-        assert!(group.wires.iter().any(|wire| wire.from_node == input.id && wire.from_port == world_param
+        assert!(domain_wires.iter().any(|wire| wire.from_node == input.id && wire.from_port == world_param
             && wire.to_node == fluid.id && wire.to_port == fluid_param));
         let id = format!("30_{world_param}");
         let before = original_metadata.bindings.iter().find(|binding| binding.id == id).unwrap();
@@ -413,6 +318,21 @@ fn scene_physics_add_fluid_preserves_world_controls_and_authored_wires() {
     assert_eq!(graph(&project, &target), &def);
     cmd.execute(&mut project);
     assert_eq!(graph(&project, &target), &after);
+}
+
+#[test]
+fn scene_physics_add_fluid_requires_complete_domain_controls_atomically() {
+    for missing in ["gravity_x", "gravity", "gravity_z", "speed", "reset"] {
+        let def = render_scene_graph(0, false);
+        let (mut project, target) = project_with_graph(def.clone());
+        let before = serde_json::to_value(&project).unwrap();
+        let mut cmd = command(target, def);
+        cmd.fluid_metadata.retain(|metadata| metadata.name != missing);
+        cmd.execute(&mut project);
+        assert!(!cmd.was_applied(), "accepted missing {missing}");
+        assert_eq!(cmd.rejection_reason(), Some("Add Fluid liquid domain lacks the shared World controls"));
+        assert_eq!(serde_json::to_value(&project).unwrap(), before);
+    }
 }
 
 #[test]
@@ -554,16 +474,21 @@ fn gpu_template() -> LiquidTemplate {
     }));
     let mut object = node(3, "fluid_object", "node.scene_object");
     object.handle = Some(String::new());
+    let material = node(5, "water_material", "node.pbr_material");
     let mut output = node(4, "fluid_output", GROUP_OUTPUT_TYPE_ID);
     output.handle = None;
     LiquidTemplate {
         name_prefix: "Fluid",
         object_outputs: vec!["object".into()],
-        nodes: vec![live, surface, object, output],
+        nodes: vec![live, surface, object, output, material],
         wires: vec![wire(1, "frame", 2, "frame"), wire(2, "vertices", 3, "vertices"), wire(3, "object", 4, "object")],
         output_node: 4,
         group_id_slot: 0,
-        exposures: vec![TemplateExposure::Node { node: 3, set: ExposureSet::Object, section: None }],
+        exposures: vec![
+            TemplateExposure::Node { node: 1, set: ExposureSet::Fluid, section: Some("Simulation") },
+            TemplateExposure::Node { node: 5, set: ExposureSet::Material, section: Some("Material") },
+            TemplateExposure::Node { node: 3, set: ExposureSet::Object, section: None },
+        ],
     }
 }
 
@@ -614,14 +539,16 @@ fn scene_physics_add_fluid_wires_world_controls_into_nested_gpu_domain() {
 fn scene_physics_add_fluid_rejects_a_template_without_one_liquid_domain() {
     let def = render_scene_graph(0, false);
     for domains in [0, 2] {
-        let mut template = flip_scene_fluid_template();
-        let fluid = template.nodes.iter().position(|node| node.type_id == FLIP_DOMAIN_TYPE_ID).unwrap();
+        let mut template = gpu_template();
+        let live = template.nodes.iter_mut().find(|node| node.node_id.as_str() == "live_matter").unwrap();
+        let body = live.group.as_mut().unwrap();
+        let fluid = body.nodes.iter().position(|node| node.type_id == MATTER_DOMAIN_TYPE_ID).unwrap();
         if domains == 0 {
-            template.nodes[fluid].type_id = "node.value".into();
+            body.nodes[fluid].type_id = "node.value".into();
         } else {
-            let mut second = template.nodes[fluid].clone();
+            let mut second = body.nodes[fluid].clone();
             second.id = 99;
-            template.nodes.push(second);
+            body.nodes.push(second);
         }
         let (mut project, target) = project_with_graph(def.clone());
         let mut cmd = command(target.clone(), def.clone());
@@ -673,7 +600,6 @@ fn add_undo_redo_reload(template: LiquidTemplate, domain_type: &str) {
 
 #[test]
 fn scene_physics_add_fluid_template_undo_reload() {
-    add_undo_redo_reload(flip_scene_fluid_template(), FLIP_DOMAIN_TYPE_ID);
     add_undo_redo_reload(gpu_template(), manifold_core::liquid_domain::MATTER_DOMAIN_TYPE_ID);
 }
 

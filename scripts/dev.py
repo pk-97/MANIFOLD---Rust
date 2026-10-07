@@ -78,7 +78,7 @@ VERBS = [
      "claude-pane", "claude-pane.sh", "launch a Claude Code session in a new tmux pane without stealing focus"),
 
     ("Render and measure",
-     "capture", GPU + ["cargo", "run", "-p", "manifold-renderer", "--example", "fluid_capture", "--"],
+     "capture", GPU + ["cargo", "run", "-p", "manifold-renderer", "--features", "gpu-proofs", "--example", "fluid_capture", "--"],
      "render any preset to PNG frames: OUT_DIR --preset <json> [--frames N] (the visual oracle)"),
     ("Render and measure",
      "render-generator", ["cargo", "run", "-p", "manifold-renderer", "--bin", "render-generator-preset", "--"],

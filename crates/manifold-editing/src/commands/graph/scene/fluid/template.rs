@@ -1,11 +1,15 @@
 //! The liquid an Add Fluid inserts, as data the caller hands the command.
 
+#[cfg(feature = "gpu-proofs")]
 use std::collections::BTreeMap;
 
 use manifold_core::effect_graph_def::{
-    BindingDef, EffectGraphNode, EffectGraphWire, GROUP_OUTPUT_TYPE_ID, ParamSpecDef, SerializedParamValue,
+    BindingDef, EffectGraphNode, EffectGraphWire, ParamSpecDef,
 };
+#[cfg(feature = "gpu-proofs")]
+use manifold_core::effect_graph_def::{GROUP_OUTPUT_TYPE_ID, SerializedParamValue};
 
+#[cfg(feature = "gpu-proofs")]
 use super::{
     MATERIAL_TYPE_ID, ROLE_SOURCE_TYPE_ID, SCENE_OBJECT_TYPE_ID, TRANSFORM_TYPE_ID, float, int,
     scene_build_node, scene_build_wire,
@@ -72,6 +76,7 @@ impl LiquidTemplate {
     }
 }
 
+#[cfg(feature = "gpu-proofs")]
 fn template_node(
     id: u32,
     prefix: &str,
@@ -84,11 +89,13 @@ fn template_node(
     node
 }
 
+#[cfg(feature = "gpu-proofs")]
 fn params(entries: &[(&str, SerializedParamValue)]) -> BTreeMap<String, SerializedParamValue> {
     entries.iter().map(|(name, value)| ((*name).to_owned(), value.clone())).collect()
 }
 
 /// Today's FLIP scene fluid: a CPU FLIP domain fed by one emitter role.
+#[cfg(feature = "gpu-proofs")]
 pub fn flip_scene_fluid_template() -> LiquidTemplate {
     const FLUID: u32 = 1;
     const SOURCE: u32 = 2;
