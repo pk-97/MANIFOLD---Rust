@@ -26,6 +26,20 @@ Body changes and residual repairs belong in subsequent separately reviewed commi
 - `manifests.json`: contextual replacements targeting only Cargo.toml or
   Cargo.lock, applied before relocation, including testkit feature wiring.
   Arbitrary source patch rows (declarations.json and finish.json) are forbidden.
+- `declarations.tsv`: four nonempty tab-separated columns: file, `add|remove`,
+  anchor, exact line. Applied in row order after relocation, path rewrites and
+  templates; paths and anchors describe that replayed tree. An add inserts before
+  a unique exact anchor line (`@start`/`@end` also work for empty files); a remove
+  requires anchor = exact line and exactly one match. Only standalone module-level
+  `mod ident;` and `use <use-tree>;` lines are accepted, with optional `pub`,
+  `pub(crate)`, `pub(super)` or `pub(in path)` visibility. Adjacent attributes are
+  limited to `cfg`, `cfg_attr` recursively containing only these attributes, and
+  `doc(hidden)`. Remove all attached attributes when removing an item; additions
+  cannot capture existing attributes. Bodies, comments, inline mod bodies and
+  other attributes (including `path` and `macro_use`) are forbidden. Added modules
+  need regular source files in the replayed tree; added use paths must exist in
+  its lexical crate/source item inventory (external dependencies and re-export
+  resolution are not inferred). Unedited bytes and line endings are preserved.
 - `templates/`: new files at repository-relative destinations; overwrites fail.
   Engine build.rs hashes only engine-owned source rows. Renderer build.rs must
   already have its final family emission; replay cannot delete emission bodies.
@@ -34,6 +48,7 @@ Body changes and residual repairs belong in subsequent separately reviewed commi
 Templates and manifests are code. Verify prints every template destination,
 Git mode and SHA-256 of its exact bytes, and each manifest hunk with SHA-256 of
 its canonical JSON (sorted keys, ASCII escapes, compact separators, UTF-8).
+Verify also prints every declaration row, including its anchor and exact line.
 Reviewers must sign off on exactly those bytes: template inventory;
 module/import/visibility/cfg changes against prior owners; build.rs source list
 and identity key; dependency versions, build dependencies, feature forwarding
@@ -56,6 +71,6 @@ census and phase tests remain required.
 
 This plan is incomplete against the assembled pre-move tree: the base lacks six
 seams and 22 testkit inputs. The removed 73 declaration patch rows need reviewed
-module templates/pre-move wiring against that source. Prepare the renderer's
+typed declaration rows against that source. Prepare the renderer's
 identity-emission seam separately. Review the engine identity source list and
 coverage before the final replay; residual member widenings are not invented.

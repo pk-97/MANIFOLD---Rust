@@ -412,6 +412,121 @@ class ReplayTests(unittest.TestCase):
         actual = replay.rewrite_rust(text, 'src/a.rs', 'src/a.rs', {'external::call':'other::call'}, {'src/old.txt':'src/new.txt'})
         self.assertEqual(actual, text.replace('external::call();', 'other::call();').replace('\r\ninclude_str!("old.txt")', '\r\ninclude_str!("new.txt")'))
 
+    def declarations(self, rows, source='mod foo;\nfn unchanged() {}\n'):
+        self.original['crates/manifold-renderer/src/lib.rs'] = ('100644', source.encode())
+        (self.plan/'declarations.tsv').write_text(''.join('\t'.join(row)+'\n' for row in rows))
+        self.pin()
+
+    def test_declarations_remove_move_add_mod_cfg_and_use(self):
+        old = 'crates/manifold-renderer/src/lib.rs'
+        new = 'crates/manifold-node-engine/src/lib.rs'
+        template = self.plan/'templates'/new
+        template.parent.mkdir(parents=True)
+        template.write_bytes(b'// engine\r\n')
+        rows = [(old, 'remove', 'mod foo;', 'mod foo;'),
+                (new, 'add', '@end', '#[cfg_attr(test, cfg(any(test, feature = "proof")), doc(hidden))]'),
+                (new, 'add', '@end', 'pub mod foo;'),
+                (old, 'add', '@start', 'use manifold_node_engine::foo::{self, X as Renamed};')]
+        self.declarations(rows)
+        actual = self.moved()
+        self.assertEqual(actual[old][1], b'use manifold_node_engine::foo::{self, X as Renamed};\nfn unchanged() {}\n')
+        self.assertEqual(actual[new][1], b'// engine\r\n#[cfg_attr(test, cfg(any(test, feature = "proof")), doc(hidden))]\r\npub mod foo;\r\n')
+        self.assertEqual(self.run_tool('verify', self.commit(actual, self.base)), 0, self.output)
+        for row in rows: self.assertIn('review declaration '+json.dumps(row), self.output)
+
+    def test_declarations_reject_non_wiring_grammar(self):
+        for line in ('fn injected() {}', 'const X: u8 = 1;', 'impl X {}',
+                     '#[path = "evil.rs"]', '#[macro_use]', '#[allow(dead_code)]',
+                     '#[cfg_attr(test, path = "evil.rs")]', '#[cfg_attr(test, macro_use)]',
+                     'mod foo {}', 'mod foo; mod other;', 'use crate::foo; fn evil() {}',
+                     '// mod foo;', 'mod foo; // fn evil() {}', 'use crate::foo/* hidden */;',
+                     '#[cfg(test)] #[path = "evil.rs"]', '#[cfg_attr(test, cfg('):
+            with self.subTest(line=line):
+                self.declarations([('crates/manifold-renderer/src/lib.rs', 'add', '@start', line)])
+                self.rejects_replay()
+
+    def test_declarations_reject_body_use(self):
+        file = 'crates/manifold-renderer/src/lib.rs'
+        for source in ('fn f() {\n    use manifold_node_engine::foo::X;\n}\n',
+                       'impl X {\n    use manifold_node_engine::foo::X;\n}\n',
+                       'macro_rules! x { () => {\n    use manifold_node_engine::foo::X;\n} }\n',
+                       'const X: () = {\n    use manifold_node_engine::foo::X;\n};\n'):
+            for op in ('add', 'remove'):
+                with self.subTest(source=source, op=op):
+                    self.declarations([(file, op, '    use manifold_node_engine::foo::X;', '    use manifold_node_engine::foo::X;')], source)
+                    self.rejects_replay()
+                    self.assertIn('not module wiring', self.output)
+
+    def test_declarations_reject_missing_module_path_and_remove(self):
+        file = 'crates/manifold-renderer/src/lib.rs'
+        for op, anchor, line in (('add', '@start', 'mod absent;'),
+                                 ('add', '@start', 'use manifold_node_engine::foo::Absent;'),
+                                 ('remove', 'mod absent;', 'mod absent;'),
+                                 ('remove', 'mod foo;', 'mod absent;')):
+            with self.subTest(op=op, line=line):
+                self.declarations([(file, op, anchor, line)])
+                self.rejects_replay()
+
+    def test_declarations_attributes_cannot_transfer_to_bodies(self):
+        file = 'crates/manifold-renderer/src/lib.rs'
+        cases = [([('remove', 'mod foo;', 'mod foo;')], '#[cfg(test)]\nmod foo;\nfn f() {}\n'),
+                 ([('add', '@start', '#[cfg(test)]')], 'fn f() {}\n'),
+                 ([('add', 'mod foo;', 'use manifold_node_engine::foo::X;')], '#[cfg(test)]\nmod foo;\n'),
+                 ([('remove', 'mod foo;', 'mod foo;')], '#[path = "foo.rs"]\nmod foo;\n')]
+        for operations, source in cases:
+            with self.subTest(source=source, operations=operations):
+                self.declarations([(file, *op) for op in operations], source)
+                self.rejects_replay()
+
+    def test_declarations_remove_cfg_group_and_preserve_other_bytes(self):
+        file = 'crates/manifold-renderer/src/lib.rs'
+        self.declarations([(file, 'remove', 'mod foo;', 'mod foo;'),
+                           (file, 'remove', '#[cfg(test)]', '#[cfg(test)]')],
+                          '// keep\r\n#[cfg(test)]\r\nmod foo;\r\nfn unchanged() {}\r\n')
+        actual = self.moved()
+        self.assertEqual(actual[file][1], b'// keep\r\nfn unchanged() {}\r\n')
+        actual[file] = ('100644', b'// keep\r\nfn changed() {}\r\n')
+        self.assertEqual(self.run_tool('verify', self.commit(actual, self.base)), 1, self.output)
+
+    def test_declarations_inline_module_scope(self):
+        file = 'crates/manifold-renderer/src/lib.rs'
+        self.declarations([(file, 'add', '    mod gone;', '    use manifold_node_engine::foo::X;'),
+                           (file, 'remove', '    mod gone;', '    mod gone;')],
+                          'mod nested {\n    mod gone;\n}\n')
+        actual = self.moved()
+        self.assertEqual(actual[file][1], b'mod nested {\n    use manifold_node_engine::foo::X;\n}\n')
+
+    def test_declarations_cfg_mod_visibility_and_empty_root(self):
+        file = 'crates/manifold-node-engine/src/lib.rs'
+        template = self.plan/'templates'/file
+        template.parent.mkdir(parents=True)
+        template.write_bytes(b'')
+        self.declarations([(file, 'add', '@end', '#[cfg(test)]'),
+                           (file, 'add', '@end', '#[doc(hidden)]'),
+                           (file, 'add', '@end', 'pub(crate) mod foo;')])
+        actual = self.moved()
+        self.assertEqual(actual[file][1], b'#[cfg(test)]\n#[doc(hidden)]\npub(crate) mod foo;\n')
+        for visibility in ('', 'pub ', 'pub(crate) ', 'pub(super) ', 'pub(in crate::nested) '):
+            self.assertEqual(replay.declaration(visibility+'mod foo;'), ('mod', ['foo']))
+            self.assertEqual(replay.declaration(visibility+'use crate::foo;'), ('use', [['crate', 'foo']]))
+
+    def test_declarations_module_symlink_is_not_existence(self):
+        file = 'crates/manifold-renderer/src/lib.rs'
+        self.original['crates/manifold-renderer/src/fake.rs'] = ('120000', b'lib.rs')
+        self.declarations([(file, 'add', '@start', 'mod fake;')])
+        self.rejects_replay()
+        self.assertIn('module does not exist', self.output)
+
+    def test_declarations_do_not_edit_comment_or_literal_contents(self):
+        file = 'crates/manifold-renderer/src/lib.rs'
+        line = 'use manifold_node_engine::foo::X;'
+        for source in ('/*\n'+line+'\n*/\n', 'const S: &str = r#"\n'+line+'\n"#;\n'):
+            for op in ('add', 'remove'):
+                with self.subTest(source=source, op=op):
+                    self.declarations([(file, op, line, line)], source)
+                    self.rejects_replay()
+                    self.assertIn('not module wiring', self.output)
+
 
 if __name__ == '__main__':
     unittest.main()

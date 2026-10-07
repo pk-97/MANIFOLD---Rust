@@ -405,12 +405,280 @@ def manifest_rows(plan):
     return rows
 
 
+IDENT = r'(?:r#)?[A-Za-z_][A-Za-z_0-9]*'
+VIS = r'(?:pub(?:\((?:crate|super|in ' + IDENT + r'(?:::' + IDENT + r')*)\))? +)?'
+
+
+def declaration(line):
+    """A whole line, never a comment, body, or second item."""
+    value = line.strip(' ')
+    if any(c in line for c in '\r\n\t') or '//' in value or '/*' in value:
+        raise ValueError('invalid declaration: ' + line)
+    if value.startswith('#[') and value.endswith(']'):
+        attribute(value[2:-1])
+        return 'attribute', []
+    match = re.fullmatch(VIS + r'mod (' + IDENT + r');', value)
+    if match: return 'mod', [match[1]]
+    match = re.fullmatch(VIS + r'use (.+);', value)
+    if match: return 'use', use_paths(match[1])
+    raise ValueError('invalid declaration: ' + line)
+
+
+def use_paths(value):
+    tokens = re.findall(IDENT + r'|::|[{},*]', value)
+    if ''.join(tokens) != re.sub(r' +', '', value):
+        raise ValueError('invalid use tree: ' + value)
+    pos = 0
+    def take():
+        nonlocal pos
+        if pos >= len(tokens): raise ValueError('incomplete use tree')
+        token = tokens[pos]; pos += 1
+        return token
+    def branch(prefix):
+        nonlocal pos
+        token = take()
+        if token == '{':
+            result = []
+            while True:
+                result.extend(branch(prefix))
+                token = take()
+                if token == '}': return result
+                if token != ',': raise ValueError('invalid use group')
+                if pos < len(tokens) and tokens[pos] == '}':
+                    pos += 1; return result
+        if token == '*': return [prefix + ['*']]
+        if not re.fullmatch(IDENT, token): raise ValueError('invalid use segment')
+        path = prefix + [token]
+        if pos < len(tokens) and tokens[pos] == '::':
+            pos += 1
+            return branch(path)
+        if pos < len(tokens) and tokens[pos] == 'as':
+            pos += 1
+            if not re.fullmatch(IDENT, take()): raise ValueError('invalid use alias')
+        return [path]
+    if tokens and tokens[0] == '::': pos += 1
+    result = branch([])
+    if pos != len(tokens): raise ValueError('multiple use items')
+    return result
+
+
+def attribute(value):
+    # Parse cfg predicates separately so cfg_attr cannot smuggle path/macro attributes.
+    tokens = re.findall(r'"(?:[^"\\\r\n]|\\["\\])*"|' + IDENT + r'|[(),=]', value)
+    if ''.join(tokens) != re.sub(r' +(?=(?:[^"]*"[^"]*")*[^"]*$)', '', value):
+        raise ValueError('invalid declaration attribute')
+    pos = 0
+    def take(expected=None):
+        nonlocal pos
+        if pos >= len(tokens): raise ValueError('incomplete declaration attribute')
+        token = tokens[pos]; pos += 1
+        if expected is not None and token != expected: raise ValueError('invalid declaration attribute')
+        return token
+    def predicate():
+        nonlocal pos
+        name = take()
+        if not re.fullmatch(IDENT, name): raise ValueError('invalid cfg predicate')
+        if pos < len(tokens) and tokens[pos] == '=':
+            take('=')
+            if not take().startswith('"'): raise ValueError('cfg value must be a string')
+        elif pos < len(tokens) and tokens[pos] == '(':
+            if name not in ('all', 'any', 'not'): raise ValueError('invalid cfg operator')
+            take('('); count = 0
+            while pos < len(tokens) and tokens[pos] != ')':
+                predicate(); count += 1
+                if tokens[pos] != ')': take(',')
+            take(')')
+            if name == 'not' and count != 1: raise ValueError('not requires one predicate')
+    def attr():
+        nonlocal pos
+        name = take(); take('(')
+        if name == 'doc': take('hidden')
+        elif name == 'cfg': predicate()
+        elif name == 'cfg_attr':
+            predicate(); take(','); attr()
+            while pos < len(tokens) and tokens[pos] == ',':
+                take(',')
+                if tokens[pos] == ')': break
+                attr()
+        else: raise ValueError('forbidden declaration attribute: ' + name)
+        take(')')
+    try:
+        attr()
+        if pos != len(tokens): raise ValueError('multiple declaration attributes')
+    except IndexError:
+        raise ValueError('incomplete declaration attribute') from None
+
+
+def module_items(text):
+    """Locate module-level items; never descend into functions, macros or impls."""
+    masked = code_mask(text)
+    tokens = list(re.finditer(IDENT + r'|[^\s]', masked))
+    result = []
+    def scan(pos, scope):
+        start = None; header = None
+        while pos < len(tokens):
+            token = tokens[pos]; value = token[0]
+            if value == '}': return pos + 1
+            if start is None: start = token.start()
+            if value == '#' and pos + 1 < len(tokens) and tokens[pos+1][0] == '[':
+                pos = skip(pos+1); continue
+            if header is None: header = token.start()
+            if value == '{':
+                head = masked[header:token.start()].strip()
+                mod = re.fullmatch(VIS + r'mod (' + IDENT + ')', head)
+                end = scan(pos+1, scope+(mod[1],)) if mod else skip(pos)
+                result.append((start, tokens[end-1].end(), header, scope))
+                pos = end; start = header = None; continue
+            if value in ('(', '['): pos = skip(pos); continue
+            if value == ';':
+                result.append((start, token.end(), header, scope))
+                start = header = None
+            pos += 1
+        return pos
+    def skip(pos):
+        stack = []
+        pairs = {'(': ')', '[': ']', '{': '}'}
+        while pos < len(tokens):
+            value = tokens[pos][0]
+            if value in pairs: stack.append(pairs[value])
+            elif value in (')', ']', '}'):
+                if not stack or value != stack.pop(): raise ValueError('unbalanced Rust delimiters')
+                if not stack: return pos+1
+            pos += 1
+        raise ValueError('unclosed Rust delimiter')
+    scan(0, ())
+    return result
+
+
+def declaration_rows(plan):
+    path = plan / 'declarations.tsv'
+    if not path.exists(): return []
+    rows = []
+    for n, line in enumerate(read_utf8(path).splitlines(), 1):
+        if not line or line.startswith('#'): continue
+        cells = line.split('\t')
+        if len(cells) != 4 or not all(cells): raise ValueError(f'declarations.tsv:{n}: expected four nonempty columns')
+        file, op, anchor, exact = cells
+        safe_path(file)
+        if not file.endswith('.rs') or op not in ('add', 'remove'): raise ValueError('invalid declaration target/operation')
+        declaration(exact)
+        if op == 'remove' and anchor != exact: raise ValueError('remove anchor must equal exact line')
+        rows.append(tuple(cells))
+    return rows
+
+
+def wiring_lines(text):
+    """Only complete, adjacent attribute/item lines qualify as wiring."""
+    result = {}
+    for start, end, header, scope in module_items(text):
+        first = text.rfind('\n', 0, start)+1
+        last = text.find('\n', end)
+        if last < 0: last = len(text)
+        block = text[first:last].removesuffix('\r').splitlines()
+        try: parsed = [declaration(line) for line in block]
+        except ValueError: continue
+        if not parsed or parsed[-1][0] == 'attribute' or any(kind != 'attribute' for kind, _ in parsed[:-1]): continue
+        line_number = text.count('\n', 0, first)
+        group = set(range(line_number, line_number+len(block)))
+        for index in group: result[index] = (group, scope, parsed[-1])
+    return result
+
+
+def apply_declarations(dest, plan):
+    rows = declaration_rows(plan)
+    pending = {}
+    added = []
+    for file, op, anchor, exact in rows:
+        if file not in pending:
+            p = checked_file(dest, file)
+            pending[file] = [read_utf8(p), []]
+        pending[file][1].append((op, anchor, exact))
+    for file, (original, operations) in pending.items():
+        lines = original.splitlines(keepends=True)
+        # Retain original line identities to detect attributes orphaned by removals.
+        tagged = [(line, i) for i, line in enumerate(lines)]
+        original_wiring = wiring_lines(original)
+        removed = set()
+        for op, anchor, exact in operations:
+            plain = [line.rstrip('\r\n') for line, _ in tagged]
+            if op == 'add' and anchor in ('@start', '@end'):
+                index = 0 if anchor == '@start' else len(tagged)
+            else:
+                matches = [i for i, line in enumerate(plain) if line == anchor]
+                if len(matches) != 1: raise ValueError(file + ': declaration anchor must match exactly once')
+                index = matches[0]
+            if op == 'remove':
+                identity = tagged[index][1]
+                if identity not in original_wiring: raise ValueError(file + ': remove is not module wiring')
+                removed.add(identity); tagged.pop(index)
+            else:
+                if index and not tagged[index-1][0].endswith('\n'): raise ValueError('cannot add after unterminated line')
+                newline = '\r\n' if original and all(line.endswith('\r\n') for line in lines) else '\n'
+                tagged.insert(index, (exact+newline, None))
+        for index in removed:
+            group, _, _ = original_wiring[index]
+            if max(group) in removed and not group <= removed:
+                raise ValueError(file + ': removing an item must remove its attributes')
+        text = ''.join(line for line, _ in tagged)
+        wiring = wiring_lines(text)
+        for index, (line, identity) in enumerate(tagged):
+            if identity is None:
+                if index not in wiring: raise ValueError(file + ': add is not module wiring')
+                group, scope, item = wiring[index]
+                # Existing attributes cannot silently transfer to a new item.
+                if declaration(line.rstrip('\r\n'))[0] != 'attribute' and any(tagged[i][1] is not None for i in group-{index}):
+                    raise ValueError(file + ': add would capture existing attributes')
+                added.append((file, scope, item))
+        pending[file] = text
+    for file, text in pending.items(): write_regular(checked_file(dest, file), text.encode('utf-8'))
+    # Existence is deliberately lexical and local: no invented external paths.
+    symbols = set()
+    inventory = files(dest)
+    for rel, (mode, data) in sorted(inventory.items()):
+        if mode == '120000' or not rel.endswith('.rs'): continue
+        owner = module(rel)
+        if not owner: continue
+        symbols.add(tuple(owner.split('::')))
+        text = data.decode('utf-8')
+        for _, end, header, scope in module_items(text):
+            match = re.match(VIS + r'(?:async +|unsafe +)?(?:fn|struct|enum|trait|type|const|static|union|mod) +(' + IDENT + ')', text[header:end])
+            if match: symbols.add(tuple(owner.split('::'))+scope+(match[1],))
+    for file, scope, (kind, paths) in added:
+        owner = module(file)
+        if not owner: raise ValueError('declaration additions require a crate src module: ' + file)
+        base = owner.split('::') + list(scope)
+        if kind == 'mod':
+            # A declaration itself is not evidence of an out-of-line module.
+            rel = PurePosixPath(file)
+            directory = rel.parent if rel.stem in ('lib', 'main', 'mod') else rel.with_suffix('')
+            directory = directory.joinpath(*scope, paths[0].removeprefix('r#'))
+            candidates = (str(directory)+'.rs', str(directory/'mod.rs'))
+            if not any(p in inventory and inventory[p][0] != '120000' for p in candidates):
+                raise ValueError('added module does not exist: ' + '::'.join(base+paths))
+        elif kind == 'use':
+            for path in paths:
+                path = list(path)
+                if path[-1] in ('*', 'self'): path.pop()
+                if path and path[0] == 'crate': resolved = base[:1]+path[1:]
+                elif path and path[0] == 'self': resolved = base+path[1:]
+                elif path and path[0] == 'super':
+                    resolved = list(base)
+                    while path and path[0] == 'super':
+                        if len(resolved) <= 1: raise ValueError('use escapes crate root')
+                        resolved.pop(); path.pop(0)
+                    resolved += path
+                else: resolved = path
+                if tuple(resolved) not in symbols: raise ValueError('added use path does not exist: ' + '::'.join(resolved))
+
+
 def review_digest(plan):
     for rel, (mode, data) in sorted(files(plan / 'templates').items()):
         print(f'review template {rel} mode={mode} sha256={hashlib.sha256(data).hexdigest()}')
     for n, row in enumerate(manifest_rows(plan), 1):
         data = json.dumps(row, sort_keys=True, ensure_ascii=True, separators=(',', ':')).encode('utf-8')
         print(f"review manifest {row['path']} hunk={n} sha256={hashlib.sha256(data).hexdigest()} {data.decode('utf-8')}")
+    for row in declaration_rows(plan):
+        print('review declaration ' + json.dumps(row, ensure_ascii=True))
 
 
 def apply_manifests(dest, plan):
@@ -439,10 +707,11 @@ def _replay_tree(source, plan, dest):
     if set(CONFIG) - {'version', 'source_crate', 'destination_crate', 'rewrite_roots', 'aliases'}:
         raise ValueError('unsupported plan configuration (body edits require a separate commit)')
     for rel in files(plan):
-        if rel not in ('plan.json', 'moves.tsv', 'rewrites.tsv', 'manifests.json', 'README.md') and not rel.startswith('templates/'):
+        if rel not in ('plan.json', 'moves.tsv', 'rewrites.tsv', 'manifests.json', 'declarations.tsv', 'README.md') and not rel.startswith('templates/'):
             raise ValueError('unsupported plan file: ' + rel)
     for a, b in CONFIG.get('aliases', {}).items(): rust_path(a); rust_path(b)
     manifest_rows(plan)
+    declaration_rows(plan)
     if CONFIG.get('version') != 1: raise ValueError('unsupported plan version')
     R = safe_path(CONFIG['source_crate']) + '/'
     E = safe_path(CONFIG['destination_crate']) + '/'
@@ -487,6 +756,7 @@ def _replay_tree(source, plan, dest):
             if (dest / rel).exists() or (dest / rel).is_symlink():
                 raise ValueError('template would overwrite input: ' + rel)
             write_files(dest, {rel: entry})
+    if declaration_rows(plan): apply_declarations(dest, plan)
     validate_paths(files(dest))
     print(f'replayed {len(moves)} moves, {len(mapping)} path mappings')
 
