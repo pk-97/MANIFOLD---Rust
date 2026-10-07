@@ -36,7 +36,7 @@ class ReplayTests(unittest.TestCase):
             'link': ('120000', b'run'),
             'binary': ('100644', b'\0\xff\n'),
         }
-        self.base = self.commit(self.original)
+        self.pin()
 
     def git(self, *args, data=None):
         env = dict(os.environ, GIT_AUTHOR_NAME='Replay Test', GIT_AUTHOR_EMAIL='replay@example.invalid',
@@ -154,6 +154,7 @@ class ReplayTests(unittest.TestCase):
         (self.plan/'manifests.json').write_text(json.dumps([{
             'path':'Cargo.toml', 'before':'members = []',
             'after':'members = ["crates/manifold-node-engine"]'}]))
+        self.pin()
         actual = self.moved()
         self.assertEqual(actual['crates/manifold-node-engine/Cargo.toml'][1],
                          b'[package]\nname = "manifold-node-engine"\n')
@@ -167,7 +168,7 @@ class ReplayTests(unittest.TestCase):
         self.assertEqual(self.run_tool('replay', '--source', self.base, '--dest', str(self.repo/'result')), 1)
         self.assertIn('plan inputs must not be symlinks', self.output)
 
-    def test_identity_split_keeps_only_family_emission(self):
+    def test_identity_split_requires_separate_reviewed_commit(self):
         build = ('fn main() {\n'
                  '    native_source_identity::emit_source_identity(\n'
                  '        &root, &["src/water.rs"], "INTEGRATION",\n'
@@ -181,9 +182,8 @@ class ReplayTests(unittest.TestCase):
         config['split_identity'] = {'renderer_build':'crates/manifold-renderer/build.rs',
                                     'integration_key':'INTEGRATION', 'family_source':'src/gltf.rs'}
         (self.plan/'plan.json').write_text(json.dumps(config))
-        actual = self.moved()['crates/manifold-renderer/build.rs'][1]
-        self.assertNotIn(b'INTEGRATION', actual)
-        self.assertIn(b'"src/gltf.rs"], "FAMILY"', actual)
+        self.rejects_replay()
+        self.assertIn('body edits require a separate commit', self.output)
 
     def test_other_crate_names(self):
         config = json.loads((self.plan/'plan.json').read_text())
@@ -192,9 +192,10 @@ class ReplayTests(unittest.TestCase):
         (self.plan/'plan.json').write_text(json.dumps(config))
         (self.plan/'moves.tsv').write_text('crates/manifold-image/src/foo.rs\tcrates/manifold-nodes/src/foo.rs\n')
         (self.plan/'rewrites.tsv').write_text('')
-        self.base = self.commit({
+        self.original = {
             'crates/manifold-image/src/foo.rs': ('100644', b'pub const X: u8 = 1;\n'),
-            'crates/manifold-image/src/lib.rs': ('100644', b'use manifold_image::foo::X;\n')})
+            'crates/manifold-image/src/lib.rs': ('100644', b'use manifold_image::foo::X;\n')}
+        self.pin()
         actual = self.moved()
         self.assertEqual(actual['crates/manifold-image/src/lib.rs'][1], b'use manifold_nodes::foo::X;\n')
         self.assertEqual(self.run_tool('verify', self.commit(actual, self.base)), 0, self.output)
@@ -205,6 +206,211 @@ class ReplayTests(unittest.TestCase):
         actual = replay.rewrite_rust(text, 'crates/manifold-renderer/src/node_graph/primitives/liquid_surface_tests.rs',
                                     'crates/manifold-node-engine/src/water/primitives/liquid_surface_tests.rs', {}, {})
         self.assertEqual(actual, text.replace('crate::', 'manifold_renderer::', 1))
+
+    def pin(self):
+        self.original.update({'plans/p1/'+p:v for p,v in replay.files(self.plan).items()})
+        self.base = self.commit(self.original)
+
+    def rejects_replay(self):
+        dest = self.repo/'rejected'
+        self.assertEqual(self.run_tool('replay', '--source', self.base, '--dest', str(dest)), 1, self.output)
+        self.assertFalse(dest.exists())
+
+    def test_case_collision_parent_loses_unplanned_file(self):
+        self.original.update(CaseFile=('100644', b'original'), casefile=('100644', b'overwritten'))
+        self.pin()
+        self.rejects_replay()
+
+    def test_unicode_normalization_parent_loss(self):
+        self.original.update({'é-file': ('100644', b'one'), 'e\u0301-file': ('100644', b'two')})
+        self.pin()
+        self.rejects_replay()
+
+    def test_case_collision_move_destinations_silently_overwrite(self):
+        self.original['second'] = ('100644', b'other')
+        (self.plan/'moves.tsv').write_bytes(b'crates/manifold-renderer/src/foo.rs\tOut\nsecond\tout\n')
+        self.pin()
+        self.rejects_replay()
+
+    def test_materialization_case_alias_follows_symlink(self):
+        outside = self.repo/'outside-file'
+        outside.write_bytes(b'untouched')
+        self.original.update(Alias=('120000', os.fsencode(outside)), alias=('100644', b'overwritten'))
+        self.pin()
+        self.rejects_replay()
+        self.assertEqual(outside.read_bytes(), b'untouched')
+
+    def test_parent_plan_mutation_accepted(self):
+        (self.plan/'README.md').write_bytes(b'reviewed\n')
+        self.pin()
+        rows = self.moved()
+        rows['plans/p1/README.md'] = ('100644', b'unreviewed\n')
+        (self.plan/'README.md').write_bytes(b'unreviewed\n')
+        self.assertEqual(self.run_tool('verify', self.commit(rows, self.base)), 1, self.output)
+
+    def test_parent_plan_deletion_accepted(self):
+        (self.plan/'README.md').write_bytes(b'reviewed\n')
+        self.pin()
+        rows = self.moved()
+        del rows['plans/p1/README.md']
+        (self.plan/'README.md').unlink()
+        self.assertEqual(self.run_tool('verify', self.commit(rows, self.base)), 1, self.output)
+
+    def test_same_commit_plan_can_authorize_body_fix(self):
+        self.pin()
+        rows = self.moved()
+        payload = json.dumps([{'path':'crates/manifold-node-engine/src/foo.rs', 'before':'= 7', 'after':'= 999'}]).encode()
+        rows['plans/p1/declarations.json'] = ('100644', payload)
+        rows['crates/manifold-node-engine/src/foo.rs'] = ('100644', b'pub const X: u32 = 999;\n')
+        (self.plan/'declarations.json').write_bytes(payload)
+        self.assertEqual(self.run_tool('verify', self.commit(rows, self.base)), 1, self.output)
+
+    def test_each_patch_channel_accepts_arbitrary_body_change(self):
+        for name in ('manifests.json', 'declarations.json', 'finish.json'):
+            with self.subTest(channel=name):
+                (self.plan/name).write_bytes(json.dumps([{'path':'crates/manifold-renderer/src/foo.rs', 'before':'= 7', 'after':'= 999'}]).encode())
+                self.rejects_replay()
+                (self.plan/name).unlink()
+
+    def test_rewrite_nonpath_code_injection(self):
+        (self.plan/'rewrites.tsv').write_bytes(b'manifold_renderer::foo::X\tstd::process::exit(42)\n')
+        self.rejects_replay()
+
+    def test_path_rewrites_modify_string_literals(self):
+        replay.CONFIG = {}
+        text = '// external::call\n/* outer /* nested */ external::call */\nconst S: &str = r###"external::call"###;\nconst T: &str = "external::call";\nexternal::call();\n'
+        actual = replay.rewrite_rust(text, 'x.rs', 'x.rs', {'external::call':'other::call'}, {})
+        self.assertEqual(actual, text[:-len('external::call();\n')]+'other::call();\n')
+
+    def test_template_carries_executable_code(self):
+        p = self.plan/'templates/crates/manifold-node-engine/build.rs'
+        p.parent.mkdir(parents=True)
+        p.write_bytes(b'fn main() { std::process::exit(42); }\n')
+        self.pin()
+        rows = self.moved()
+        self.assertEqual(self.run_tool('verify', self.commit(rows, self.base)), 0, self.output)
+        import hashlib
+        self.assertIn(hashlib.sha256(p.read_bytes()).hexdigest(), self.output)
+        self.assertIn('review template crates/manifold-node-engine/build.rs', self.output)
+
+    def test_manifest_can_change_dependency_not_move(self):
+        row = {'path':'Cargo.toml', 'before':'members = []', 'after':'members = []\n[patch.crates-io]\nserde = { path = "elsewhere" }'}
+        (self.plan/'manifests.json').write_bytes(json.dumps([row]).encode())
+        self.pin()
+        rows = self.moved()
+        self.assertEqual(self.run_tool('verify', self.commit(rows, self.base)), 0, self.output)
+        import hashlib
+        digest = hashlib.sha256(json.dumps(row, sort_keys=True, ensure_ascii=True, separators=(',', ':')).encode('utf-8')).hexdigest()
+        self.assertIn(digest, self.output)
+        self.assertIn('review manifest Cargo.toml', self.output)
+
+    def test_duplicate_rewrite_order_changes_body(self):
+        (self.plan/'rewrites.tsv').write_bytes(b'external::call\tfirst::call\nexternal::call\tsecond::call\n')
+        self.rejects_replay()
+
+    def test_symlink_move_parent_creates_outside_directory(self):
+        outside = self.repo/'outside'
+        outside.mkdir()
+        self.original['escape'] = ('120000', os.fsencode(outside))
+        (self.plan/'moves.tsv').write_bytes(b'crates/manifold-renderer/src/foo.rs\tescape/leaked/sub/foo.rs\n')
+        self.pin()
+        self.rejects_replay()
+        self.assertEqual(list(outside.iterdir()), [])
+
+    def test_temporary_cleanup_success_and_failure(self):
+        self.pin()
+        rows = self.moved()
+        self.assertEqual(self.run_tool('verify', self.commit(rows, self.base)), 0, self.output)
+        rows['binary'] = ('100644', b'changed')
+        self.assertEqual(self.run_tool('verify', self.commit(rows, self.base)), 1, self.output)
+        (self.plan/'manifests.json').write_bytes(b'[{"path":"Cargo.toml","before":"absent","after":"x"}]')
+        self.rejects_replay()
+        self.assertEqual(list((self.repo/'target').glob('crate-move-*')), [])
+
+    def test_locale_ascii_without_utf8_mode(self):
+        self.original['crates/manifold-renderer/src/foo.rs'] = ('100644', '// café\npub const X: u32 = 7;\n'.encode('utf-8'))
+        self.pin()
+        import sys
+        env = dict(os.environ, LC_ALL='C', PYTHONUTF8='0', PYTHONCOERCECLOCALE='0')
+        proc = subprocess.run([sys.executable, '-B', str(Path(replay.__file__).resolve()), 'replay', '--source', self.base, '--plan', str(self.plan), '--dest', str(self.repo/'ascii')], capture_output=True, env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
+    def test_directory_component_aliases(self):
+        for paths in (('A/one', 'a/two'), ('é/one', 'e\u0301/two'), ('A', 'a/child')):
+            with self.subTest(paths=paths), self.assertRaisesRegex(ValueError, 'collision'):
+                replay.validate_paths(paths)
+
+    def test_template_aliases_existing_tree(self):
+        p = self.plan/'templates/BINARY'
+        p.parent.mkdir()
+        p.write_bytes(b'overwrite')
+        self.rejects_replay()
+        self.assertIn('collision', self.output)
+
+    def test_template_aliases_move_destination(self):
+        p = self.plan/'templates/crates/manifold-node-engine/src/Foo.rs'
+        p.parent.mkdir(parents=True)
+        p.write_bytes(b'overwrite')
+        self.rejects_replay()
+        self.assertIn('collision', self.output)
+
+    def test_write_files_never_overwrites_symlink(self):
+        root = self.repo/'materialized'
+        root.mkdir()
+        outside = self.repo/'sentinel'
+        outside.write_bytes(b'untouched')
+        (root/'alias').symlink_to(outside)
+        with self.assertRaises(ValueError):
+            replay.write_files(root, {'alias': ('100644', b'overwrite')})
+        self.assertEqual(outside.read_bytes(), b'untouched')
+
+    def test_output_symlink_ancestor_before_mkdir(self):
+        outside = self.repo/'outside'
+        outside.mkdir()
+        (self.repo/'escape').symlink_to(outside)
+        self.assertEqual(self.run_tool('replay', '--source', self.base, '--dest', str(self.repo/'escape/leaked/result')), 1, self.output)
+        self.assertEqual(list(outside.iterdir()), [])
+
+    def test_parent_materialization_roundtrip_required(self):
+        from unittest.mock import patch
+        original_files = replay.files
+        def wrong_inventory(root):
+            rows = original_files(root)
+            if root.name == 'parent': rows.pop('binary', None)
+            return rows
+        with patch.object(replay, 'files', side_effect=wrong_inventory):
+            self.rejects_replay()
+        self.assertIn('materialization differs', self.output)
+
+    def test_plan_must_exist_before_move(self):
+        rows = self.moved()
+        parent = self.commit({p:v for p,v in self.original.items() if not p.startswith('plans/')})
+        self.assertEqual(self.run_tool('verify', self.commit(rows, parent)), 1, self.output)
+        self.assertIn('before the move', self.output)
+
+    def test_plan_mode_change_rejected(self):
+        rows = self.moved()
+        mode, data = rows['plans/p1/plan.json']
+        rows['plans/p1/plan.json'] = ('100755', data)
+        self.assertEqual(self.run_tool('verify', self.commit(rows, self.base)), 1, self.output)
+        self.assertIn('move commit changes plan', self.output)
+
+    def test_conflicting_derived_mapping_rejected(self):
+        (self.plan/'rewrites.tsv').write_bytes(b'manifold_renderer::foo\texternal::foo\n')
+        self.rejects_replay()
+        self.assertIn('conflicting derived rewrite', self.output)
+
+    def test_invalid_alias_rejected(self):
+        config = json.loads((self.plan/'plan.json').read_bytes())
+        config['aliases'] = {'manifold_renderer::foo': 'std::process::exit(42)'}
+        (self.plan/'plan.json').write_bytes(json.dumps(config).encode('utf-8'))
+        self.rejects_replay()
+
+    def test_rewrite_preserves_crlf_and_literal_assets(self):
+        replay.CONFIG = {}
+        text = '// include_str!("old.txt")\r\nconst S: &str = "external::call";\r\nexternal::call();\r\ninclude_str!("old.txt");\r\n'
+        actual = replay.rewrite_rust(text, 'src/a.rs', 'src/a.rs', {'external::call':'other::call'}, {'src/old.txt':'src/new.txt'})
+        self.assertEqual(actual, text.replace('external::call();', 'other::call();').replace('\r\ninclude_str!("old.txt")', '\r\ninclude_str!("new.txt")'))
 
 
 if __name__ == '__main__':

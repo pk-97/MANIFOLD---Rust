@@ -1,50 +1,61 @@
 # P1 replay plan
 
 Reviewed input to `scripts/crate_move_replay.py`; no executable plan hooks.
-Run from this repository:
+Python 3.9+ on POSIX is supported. Run from this repository:
 
 ```
 scripts/crate_move_replay.py replay --plan .claude/orchestration/crate-split/p1 --dest target/p1-move
 scripts/crate_move_replay.py verify --plan .claude/orchestration/crate-split/p1 <move-commit>
 ```
 
-Replay reads HEAD by default; `--source <revision>` selects another pre-move
-commit. It materializes Git blobs, not working-tree files, and requires a new
-destination. It changes neither the source checkout nor its index. Verification
-requires a single-parent commit and compares every file's bytes and Git mode,
-including symlink targets. It requires the supplied plan to equal the plan in
-that commit. A plan first added by the move is overlaid on the parent; no other
-paths are excluded from comparison. Commit the tool before the move; verify
-with the reviewed tool. Residual fixes belong in subsequent reviewed commits.
+Commit and review the complete plan and tool BEFORE the move. Verify reads the
+plan from the immediate parent and rejects any plan addition, deletion, mode or
+byte change in the move commit. The supplied local plan must match the parent.
+No child plan is overlaid. Draft replay defaults to HEAD (`--source` selects a
+different commit) and may use local plan bytes, but cannot verify until that plan
+is committed before the move. Neither command changes the checkout or index.
+Body changes and residual repairs belong in subsequent separately reviewed commits.
 
-- `plan.json`: version, owning crates, Rust rewrite roots, explicit helper
-  aliases, and the physics source-identity split contract. Later phases supply
-  their own configuration, maps, wiring hunks and templates.
-- `moves.tsv`: source and destination paths, separated by a tab; every source
-  is required. Includes the six seam files and all 22 testkit rows available
-  from the tests lane on 2026-10-07 (including runtime and impulses).
-- `rewrites.tsv`: longest-prefix Rust path substitutions, including primitive
-  and param_tooltips macro paths and primitive's exported helper macros.
-  Move rows also derive module substitutions. Unmoved family references keep
-  their renderer owner when the caller moves to the engine.
-- `manifests.json`: exact contextual replacements applied before relocation.
-- `declarations.json`: exact module/import wiring replacements applied after
-  Rust path rewriting. Extracted from the stage-1 reference; no full-source
-  snapshots or function-body repairs are embedded.
-- `templates/`: new files at their repository-relative destinations. Existing
-  destinations fail. Engine build.rs hashes only engine-owned source rows;
-  renderer build.rs retains its family emission after removal of its integration
-  emission. The pre-move identity seam must already exist. The old cross-crate
-  tempo.rs source read is not reproduced.
-- `finish.json`: exact testkit dependency/feature wiring, applied last.
+- `plan.json`: version, owning crates, Rust rewrite roots and explicit helper
+  aliases. Unknown configuration and plan files fail closed.
+- `moves.tsv`: required source and destination paths, separated by a tab. The
+  P1 inventory includes six seam files and 22 testkit files.
+- `rewrites.tsv`: validated Rust path/macro substitutions. Move rows also derive
+  module substitutions. Unmoved family references retain their renderer owner.
+  File-path rewrites derive from moves and affect include/path syntax only.
+- `manifests.json`: contextual replacements targeting only Cargo.toml or
+  Cargo.lock, applied before relocation, including testkit feature wiring.
+  Arbitrary source patch rows (declarations.json and finish.json) are forbidden.
+- `templates/`: new files at repository-relative destinations; overwrites fail.
+  Engine build.rs hashes only engine-owned source rows. Renderer build.rs must
+  already have its final family emission; replay cannot delete emission bodies.
+  The former cross-crate tempo.rs source read is not reproduced.
 
-Traversal and diagnostics are sorted. Conflicting move rows, missing sources,
-changed wiring context and template collisions fail; nothing is silently skipped.
-Rewriting is lexical and preserves grouped imports when they retain a common
-prefix. Reproducibility proves the reviewed transformation, not its Rust semantics;
-the lexical move gate, compiler, census and phase tests remain required.
+Templates and manifests are code. Verify prints every template destination,
+Git mode and SHA-256 of its exact bytes, and each manifest hunk with SHA-256 of
+its canonical JSON (sorted keys, ASCII escapes, compact separators, UTF-8).
+Reviewers must sign off on exactly those bytes: template inventory;
+module/import/visibility/cfg changes against prior owners; build.rs source list
+and identity key; dependency versions, build dependencies, feature forwarding
+and lockfile edges. A digest identifies bytes, not semantic purity. New bodies
+and repairs need separate reviewed commits; do not hide them in these channels.
 
-This plan is not yet validated against the assembled pre-move tree. The base
-34ca0d9a5 lacks the seam/testkit inputs. Reconcile declaration contexts with the
-assembled source before the final replay. Stage-1 module visibility wiring is
-retained for review; residual member widenings are not invented by the tool.
+Materialization uses Git blobs and modes, including symlink targets, and must
+round-trip exactly to the parent's Git tree inventory before replay. Verification
+compares output against the commit's Git tree, never the checkout. Case-folded
+and Unicode-normalized aliases anywhere in the tree, including directories,
+fail before writes. Symlink components are checked before mkdir; regular files
+are written without following symlinks. Failed replay removes its newly created
+output; existing destinations are preserved. Text is explicit UTF-8 and preserves
+newline bytes. Traversal and diagnostics are sorted.
+
+Rewriting is lexical, preserves comments and ordinary strings, and preserves
+grouped imports where they retain a common prefix. Reproducibility proves the
+reviewed transformation, not Rust semantics. The lexical move gate, compiler,
+census and phase tests remain required.
+
+This plan is incomplete against the assembled pre-move tree: the base lacks six
+seams and 22 testkit inputs. The removed 73 declaration patch rows need reviewed
+module templates/pre-move wiring against that source. Prepare the renderer's
+identity-emission seam separately. Review the engine identity source list and
+coverage before the final replay; residual member widenings are not invented.
