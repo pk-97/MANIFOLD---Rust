@@ -5,6 +5,7 @@ Gates only what the branch touched (GPU leg: scripts/gpu_scope.py); the workspac
 scripts/trunk_health.py (nightly). Pass --repo <worktree path> of the branch
 being landed, after merging origin/main into it. Collect cheap readiness errors
 before any build, then collect runtime failures with transcripts and timings.
+Compiled test-inventory validation necessarily happens after compilation.
 Exit 0 iff all required checks pass; exit CHECKS_RED
 when the gate ran every check (the default) and some were red; exit 1 on a
 refusal, a crash, or a `--fail-fast` stop.
@@ -257,6 +258,10 @@ def run_check(label, cmd, cwd, timeout, passed=None):
     # Build receipts alone cannot guarantee artifacts still exist after reclaim.
     cacheable = (label != 'gpu-proofs' and '--no-run' not in cmd
                  and '--build-only' not in cmd)
+    if passed and gate_passes.changed_passes([passed]):
+        RAN_EVERY_CHECK.set(False)
+        return 1, '', 'inputs changed after planning; rerun the gate\nrerun: ' + rerun_command(
+            ['scripts/landing_gate.py', '--repo', str(cwd)], cwd), 0.0
     passed = passed or (gate_passes.command_pass(cwd, label, cmd) if cacheable else None)
     if passed and passed.reused():
         if label == 'flow-gate':
@@ -289,6 +294,11 @@ def run_check(label, cmd, cwd, timeout, passed=None):
             err += '\ndocs index was stale — commit the regenerated index'
             result = exit_, out, err, seconds
     if passed:
+        if passed.key and gate_passes.changed_passes([passed]):
+            RAN_EVERY_CHECK.set(False)
+            exit_ = 1
+            err += '\ninputs changed during execution; rerun the gate'
+            result = exit_, out, err, seconds
         passed.save(exit_, seconds)
     if exit_ and label != "gpu-proofs":
         # Rewritten as stdout then stderr, the layout every landing log has.
@@ -317,14 +327,6 @@ def build_leg(results, label, cmd, repo):
     print_result(label, status, duration, tail if exit_ else None)
     return status
 
-
-def parse_package_from_cargo(toml_path):
-    """Extract the first 'name = \"...\"' line from a Cargo.toml."""
-    content = Path(toml_path).read_text()
-    m = re.search(r'^name\s*=\s*"([^"]+)"', content, re.MULTILINE)
-    if m:
-        return m.group(1)
-    return None
 
 def packages_for_paths(repo, paths):
     workspace = Workspace(repo)
@@ -399,6 +401,7 @@ def main():
     slow = SLOW_TESTS.set({})
     try:
         with contextlib.ExitStack() as stack:
+            stack.enter_context(gate_passes.session())
             return _main(stack)
     finally:
         SLOW_TESTS.reset(slow)
@@ -472,15 +475,20 @@ def _main(stack):
     touches_gpu = bool(plan and plan.active)
     scope_reason = "docs/comment-only diff" if not paths else "no touched packages"
     results = []
+    readiness_cmd = [str(repo / 'scripts/landing_gate.py'), '--repo', str(repo),
+                     '--base', args.base, '--plan-only']
+    if args.paths_json:
+        readiness_cmd += ['--paths-json', str(args.paths_json.resolve())]
     for label, message in readiness['errors']:
-        results.append(('FAIL', label, None, message.splitlines()))
-        print_result(label, 'FAIL', tail=message.splitlines())
+        tail = [*message.splitlines(), f'rerun: {rerun_command(readiness_cmd, repo)}']
+        results.append(('FAIL', label, None, tail))
+        print_result(label, 'FAIL', tail=tail)
     try:
         freshness = freshness_problems(repo)
-    except (OSError, ValueError, KeyError, RuntimeError) as error:
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError) as error:
         freshness = [('docs-index', [str(error)], 'scripts/gen_docs_index.py')]
     for name, detail, command in freshness:
-        tail = [*detail, f'regenerate: {command}']
+        tail = [*detail, f'rerun: {rerun_command([command], repo)}']
         results.append(('FAIL', 'fresh-' + name, None, tail))
         print_result('fresh-' + name, 'FAIL', tail=tail)
     planning_seconds = time.perf_counter() - planning_started
@@ -489,14 +497,8 @@ def _main(stack):
         print(json.dumps(dict(gate_readiness.describe(readiness), planning_seconds=planning_seconds), indent=2))
         return int(any(row[0] == 'FAIL' for row in results))
 
-    # Harness changes use the same focused tests advertised in worker briefs.
-    from codex_checks import tooling_checks
-    try:
-        tooling = tooling_checks(repo, paths)
-    except (OSError, ValueError, KeyError, RuntimeError) as error:
-        tooling = []
-        results.append(('FAIL', 'tooling-selection', None, [str(error)]))
-        print_result('tooling-selection', 'FAIL', tail=[str(error)])
+    # Execute the tooling selection already validated by readiness.
+    tooling = readiness['tooling']
     for check in tooling:
         exit_, out, err, duration = run_check(check["name"], check["argv"], cwd=repo, timeout=120)
         tail = (out + err).rstrip().splitlines()[-20:]
@@ -570,11 +572,11 @@ def _main(stack):
     # (both hour-long flow-gate reds on 2026-10-06 were waits behind a
     # 45-minute render).
     flow_cmd = ["python3", "scripts/run_ui_flows.py", "--touched", f"{base_sha}...HEAD"]
-    flows_pending = (flow_filters(repo, paths)
-                     and not gate_passes.command_pass(repo, "flow-gate", flow_cmd).record)
+    flow_pass = gate_passes.command_pass(repo, "flow-gate", flow_cmd)
+    flows_pending = (readiness['flows'] and not flow_pass.record)
 
     def flow_leg():
-        exit_, out, err, duration = run_check("flow-gate", flow_cmd, cwd=repo, timeout=3600)
+        exit_, out, err, duration = run_check("flow-gate", flow_cmd, cwd=repo, timeout=3600, passed=flow_pass)
         tail = (out + err).rstrip().splitlines()[-20:]
         status = "PASS" if exit_ == 0 else "FAIL"
         results.append((status, "flow-gate", duration, tail))
@@ -667,6 +669,15 @@ def _main(stack):
     else:
         skip(results, "gpu-proofs-build", "no GPU paths touched" if not touches_gpu else args.skip_gpu)
 
+    planned_passes = [flow_pass, *(p for _, _, p in test_legs), *proof_passes]
+    changed = gate_passes.changed_passes(planned_passes)
+    if changed:
+        tail = ['inputs changed after build planning: ' + ', '.join(changed),
+                f'rerun: {rerun_command(readiness_cmd[:-1], repo)}']
+        results.append(('FAIL', 'stable-inputs', None, tail))
+        print_result('stable-inputs', 'FAIL', tail=tail)
+        return refuse(repo, base_sha, results)
+
     # Nextest tests call GpuDevice::new_queued; each would queue behind every
     # agent's GPU run on its own. Hold the machine-wide GPU lock once, from
     # here through gpu-proofs: child test processes inherit an ancestor's hold,
@@ -680,6 +691,12 @@ def _main(stack):
         stack.enter_context(gpu_queue.hold("landing_gate flows+tests+gpu-proofs", out=sys.stdout))
         GPU_WAIT.set(time.monotonic() - started)
         print(f"[gpu-queue] held after {GPU_WAIT.get():.0f}s", flush=True)
+        if gate_passes.changed_passes(planned_passes):
+            tail = ['inputs changed while waiting for the GPU; replan before execution',
+                    f'rerun: {rerun_command(readiness_cmd[:-1], repo)}']
+            results.append(('FAIL', 'stable-inputs', None, tail))
+            print_result('stable-inputs', 'FAIL', tail=tail)
+            return refuse(repo, base_sha, results)
 
     if "flow-gate" in unbuilt:
         skip(results, "flow-gate", "flow-gate-build failed")
@@ -716,7 +733,10 @@ def _main(stack):
             # The GPU hold was taken before the tests leg and is still held.
             if proof_cached:
                 for passed in proof_passes:
-                    passed.reused()
+                    if not passed.reused():
+                        results.append(('FAIL', 'stable-inputs', None,
+                                        ['proof inputs changed before reuse']))
+                        return refuse(repo, base_sha, results)
                 spent = sum(p.record['seconds'] for p, run in zip(proof_passes, plan.runs())
                             if run['budgeted'])
                 if spent > gpu_scope.LANDING_BUDGET_S:
@@ -732,6 +752,13 @@ def _main(stack):
                 for line in out.splitlines():
                     if line.startswith(('[REUSED]', 'GPU-PROOFS BUDGET:', 'GPU-PROOFS DEFERRED:')):
                         print(line, flush=True)
+            if exit_ == 0:
+                if gate_passes.changed_passes(proof_passes):
+                    RAN_EVERY_CHECK.set(False)
+                    exit_, err = 1, err + '\nproof inputs changed during execution'
+                else:
+                    for passed in proof_passes:
+                        passed.accepted()
             transcript = write_landing_log(repo, "gpu-proofs", out, err)
             print(f"[gpu-proofs] complete transcript: {transcript}")
             # On failure the tail MUST name the failing tests. gpu_proofs_gate's
@@ -774,6 +801,14 @@ def refuse(repo, base_sha, results):
 
 
 def finish(repo, base_sha, results):
+    changed = gate_passes.changed_passes(gate_passes.accepted_passes())
+    if changed:
+        RAN_EVERY_CHECK.set(False)
+        tail = ['inputs changed before verdict publication: ' + ', '.join(changed),
+                'rerun: ' + rerun_command(['scripts/landing_gate.py', '--repo', str(repo),
+                                           '--base', base_sha], repo)]
+        results.append(('FAIL', 'stable-inputs', None, tail))
+        print_result('stable-inputs', 'FAIL', tail=tail)
     if GATED_HEAD.get():
         current = run_cmd(['git', 'rev-parse', 'HEAD'], cwd=repo, timeout=30)
         dirty = run_cmd(['git', 'status', '--porcelain', '--untracked-files=normal'],
@@ -878,6 +913,11 @@ def finish(repo, base_sha, results):
                             "runner": "gate_runner.py@lead",
                             "ts": datetime.now(timezone.utc).isoformat()
                         }
+                        if gate_passes.changed_passes(gate_passes.accepted_passes()):
+                            print('[FAIL] inputs changed before verdict publication')
+                            print('rerun: ' + rerun_command(
+                                ['scripts/landing_gate.py', '--repo', str(repo), '--base', base_sha], repo))
+                            return 1
                         gate_runner.append_verdict(bead_id, verdict)
                         print(f"verdict stamped: {bead_id}")
         except Exception as e:

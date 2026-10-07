@@ -12,6 +12,7 @@ from unittest.mock import patch
 import cpu_scope
 import gate_readiness
 import gpu_scope
+import gate_workspace
 from gate_workspace import Workspace
 
 
@@ -32,65 +33,59 @@ def p1_snapshot():
     return snapshot, Workspace(ROOT, metadata=metadata)
 
 
-def projected_match(expression, identity):
-    """Match a census identity under its package-stripped projection.
-
-    The P1 census intentionally omits package owners. Binary names and test
-    expressions still provide a conservative projection for inclusion checks;
-    this does not invent exact nextest ownership.
-    """
-    binary = re.search(r"binary\(=([^)]*)\)", expression)
-    if binary and identity.split("::", 1)[0] != binary[1]:
-        return False
-    prefix = re.search(r"test\(/(.*)/\)", expression)
-    if prefix and not re.search(prefix[1], identity):
-        return False
-    literal = re.search(r"test\(([^/)][^)]*)\)", expression)
-    return not literal or literal[1] in identity
-
-
-def projected_identities(expressions, identities):
-    return {identity for identity in identities
-            if any(projected_match(expression, identity) for expression in expressions)}
-
-
 class P1PlannerTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.snapshot, cls.workspace = p1_snapshot()
         cls.paths = cls.snapshot["paths"]
-        cls.identities = list(cls.snapshot["census"]["identities"])
 
     def test_p1_base_marks_new_and_moved_engine_crates_whole(self):
         plan = cpu_scope.plan_for_paths(self.paths, ROOT, self.workspace,
                                         base=self.snapshot["base"])
-        self.assertEqual(len(self.snapshot["old_cpu_filters"]), 1483)
-        self.assertIn("manifold-node-engine", plan.whole)
-        self.assertIn("manifold-renderer", plan.whole)
-        for package in ("manifold-node-engine", "manifold-renderer"):
+        counts = self.snapshot['old_cpu_filter_counts']['packages']
+        self.assertEqual(sum(counts.values()), 1483)
+        for package in counts:
+            self.assertIn(package, plan.whole)
             self.assertEqual(plan.selections()[package], f"package(={package})")
 
-    def test_aggregate_projection_contains_union_of_old_filters(self):
-        plan = cpu_scope.plan_for_paths(self.paths, ROOT, self.workspace,
-                                        base=self.snapshot["base"])
-        packages = sorted({re.search(r"package\(=([^)]*)", expression)[1]
-                           for expression in self.snapshot["old_cpu_filters"]})
-        for package in packages:
-            with self.subTest(package=package):
-                old = [expression for expression in self.snapshot["old_cpu_filters"]
-                       if f"package(={package})" in expression]
-                new = plan.selections()[package].split(' | ')
-                old_selected = projected_identities(old, self.identities)
-                new_selected = projected_identities(new, self.identities)
-                self.assertLessEqual(
-                    old_selected, new_selected,
-                    f"{package}: aggregate projection narrowed the old filter union")
+    def test_compact_scoped_aggregation_contains_each_old_selection(self):
+        rows = self.snapshot['scoped_cases']
+        self.assertTrue(rows)
+        filters = {f"(package(={row['package']}) & binary(={row['target']}))" for row in rows}
+        plan = cpu_scope.Plan(packages={row['package'] for row in rows}, filters=filters)
+        # These are actual P1 census entries, with explicit metadata owners.
+        identities = {(row['package'], row['target'], row['test']) for row in rows}
+        identities.add(('unrelated', rows[0]['target'], rows[0]['test']))
+
+        def selected(expression):
+            clauses = expression.split(' | ')
+            return {identity for identity in identities if any(
+                f'package(={identity[0]})' in clause and f'binary(={identity[1]})' in clause
+                for clause in clauses)}
+
+        for package, aggregate in plan.selections().items():
+            old_union = set().union(*(selected(expression) for expression in filters
+                                      if f'package(={package})' in expression))
+            self.assertTrue(old_union)
+            self.assertEqual(selected(aggregate), old_union)
+            for owner, target, test in old_union:
+                self.assertTrue(test)
+                self.assertTrue(any(t['name'] == target for t in self.workspace.targets(owner)))
 
     def test_feature_gated_targets_move_to_gpu_required_binaries(self):
         plan = cpu_scope.plan_for_paths(self.paths, ROOT, self.workspace,
                                         base=self.snapshot["base"])
-        expected = {("manifold-renderer", "glb_conformance"),
-                    ("manifold-renderer", "gpu_proofs")}
+        actual = {(package['name'], target['name'])
+                  for package in self.snapshot['metadata']['packages']
+                  for target in package['targets']
+                  if 'gpu-proofs' in target.get('required-features', [])}
+        self.assertEqual({(row['package'], row['target'])
+                          for row in self.snapshot['feature_targets']}, actual)
+        expected = {(row['package'], row['target'])
+                    for row in self.snapshot['feature_targets']
+                    if any(path.endswith(f"tests/{row['target']}.rs")
+                           or f"tests/{row['target']}/" in path for path in self.paths)}
+        self.assertTrue(expected, 'feature-transfer assertions must exercise real targets')
         self.assertEqual(plan.gpu_binaries, expected)
         gpu = gpu_scope.Plan(paths=['fixture'], workspace=self.workspace,
                              required_binaries=plan.gpu_binaries, glb=True)
@@ -99,7 +94,6 @@ class P1PlannerTests(unittest.TestCase):
         for _, target in expected:
             expression = f"(package(=manifold-renderer) & binary(={target}))"
             self.assertNotIn(expression, plan.filters)
-            self.assertEqual(projected_identities([expression], self.identities), set())
             self.assertEqual(required_runs[('manifold-renderer', target)]['filters'], [])
 
     def test_scoped_empty_mapping_is_red_even_with_nonempty_union(self):
@@ -131,6 +125,101 @@ class P1PlannerTests(unittest.TestCase):
         self.assertIsNone(result["gpu"])
         self.assertIn(("metadata", "cargo metadata failed"), result["errors"])
 
+    def test_surviving_unowned_crate_source_is_red(self):
+        workspace = SimpleNamespace(ownership_errors=lambda paths, base: [
+            'crates/omitted/src/lib.rs: surviving Rust/manifests has no Cargo workspace owner'])
+        with self.assertRaisesRegex(ValueError, 'surviving Rust/manifests'):
+            cpu_scope.plan_for_paths(['crates/omitted/src/lib.rs'], ROOT, workspace)
+
+    def test_malformed_metadata_is_normalized_to_value_error(self):
+        with self.assertRaisesRegex(ValueError, 'malformed workspace membership'):
+            Workspace(ROOT, metadata={'workspace_members': None, 'packages': []})
+        with self.assertRaisesRegex(ValueError, 'workspace member missing package'):
+            Workspace(ROOT, metadata={'workspace_members': ['missing'], 'packages': []})
+
+    def test_ownership_distinguishes_surviving_omission_from_deleted_package(self):
+        workspace = Workspace.__new__(Workspace)
+        workspace.roots = {}
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(gate_workspace, '_git_package_roots', return_value={'crates/removed'}):
+            workspace.repo = Path(directory)
+            source = workspace.repo / 'crates/omitted/src/lib.rs'
+            source.parent.mkdir(parents=True)
+            source.write_text('fn omitted() {}')
+            self.assertEqual(len(workspace.ownership_errors(['crates/omitted/src/lib.rs'], 'base')), 1)
+            manifest = workspace.repo / 'crates/excluded/Cargo.toml'
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text('[package]\nname = "excluded"\nversion = "0.1.0"\n')
+            self.assertEqual(len(workspace.ownership_errors(['crates/excluded/src/lib.rs'], 'base')), 1)
+            self.assertEqual(workspace.ownership_errors(['crates/removed/src/lib.rs'], 'base'), [])
+
+    def test_readiness_collects_reverse_dependency_type_error(self):
+        workspace = SimpleNamespace(
+            packages={'fixture': {'features': {}}}, roots={'fixture': 'crates/fixture'},
+            owner=lambda path: 'fixture',
+            ownership_errors=lambda paths, base: [],
+            reverse_dependencies=lambda packages: (_ for _ in ()).throw(TypeError('bad dependency shape')),
+            targets=lambda package, kind=None: [],
+            validate_nextest=lambda: None,
+        )
+        cpu = cpu_scope.Plan(packages={'fixture'})
+        gpu = gpu_scope.Plan()
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(gate_readiness, 'Workspace', return_value=workspace), \
+                patch.object(gate_readiness.cpu_scope, 'plan_for_paths', return_value=cpu), \
+                patch.object(gate_readiness.gpu_scope, 'plan_for_paths', return_value=gpu), \
+                patch.object(gate_readiness, 'reference_problems', return_value=[]), \
+                patch('codex_regressions.inventory', return_value=[]):
+            result = gate_readiness.plan(Path(directory), ['crates/fixture/src/lib.rs'], 'base')
+        self.assertIn(('reverse-dependencies', 'bad dependency shape'), result['errors'])
+
+    def test_unexecutable_selected_tooling_entrypoint_is_reported_even_unchanged(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            script = repo / 'scripts/tool.py'
+            script.parent.mkdir()
+            script.write_text('#!/usr/bin/env python3\n')
+            with patch('codex_checks.tooling_checks', return_value=[{'name': 'scripts/tool.py'}]):
+                problems = gate_readiness.executable_problems(repo, ['src/changed.rs'])
+        self.assertIn('scripts/tool.py: shebang entrypoint is not executable', problems)
+
+    def test_invalid_flow_manifest_collects_shape_and_reference_errors(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            flow_dir = repo / 'scripts/ui-flows'
+            flow_dir.mkdir(parents=True)
+            (flow_dir / 'manifest.json').write_text(json.dumps({
+                'flows': {'missing': ''},
+                'expected_fail': {'duplicate': {'scene': 's'}},
+                'unresolved': {'duplicate': ''},
+                'path_triggers': {'src/': ['unknown']},
+            }))
+            (flow_dir / 'orphan.json').write_text('{')
+            problems = gate_readiness.flow_problems(repo, ['src/main.rs'])
+        self.assertGreaterEqual(len(problems), 4)
+        self.assertTrue(any('stale flow entry' in p for p in problems))
+        self.assertTrue(any('unknown flow' in p for p in problems))
+
+    def test_imported_helper_is_not_a_direct_entrypoint(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            script = repo / 'scripts/helper.py'
+            script.parent.mkdir()
+            script.write_text('#!/usr/bin/env python3\ndef helper(): pass\n')
+            self.assertEqual(gate_readiness.executable_problems(repo, ['scripts/helper.py'], []), [])
+
+    def test_flow_trigger_substrings_match_runner_semantics(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            flow_dir = repo / 'scripts/ui-flows'
+            flow_dir.mkdir(parents=True)
+            (flow_dir / 'manifest.json').write_text(json.dumps({
+                'flows': {'automation-drag': 'scene'},
+                'path_triggers': {'src/': ['automation']},
+            }))
+            (flow_dir / 'automation-drag.json').write_text('[]')
+            self.assertEqual(gate_readiness.flow_problems(repo, ['src/main.rs']), [])
+
     def test_new_gpu_package_needs_explicit_default_test_group_ownership(self):
         workspace = copy.deepcopy(self.workspace)
         original = workspace.nextest_gpu_filter()
@@ -145,6 +234,7 @@ class P1PlannerTests(unittest.TestCase):
             packages={"fixture": {"features": {}}},
             roots={"fixture": "crates/fixture"},
             owner=lambda path: "fixture",
+            ownership_errors=lambda paths, base: [],
             reverse_dependencies=lambda packages: [],
             targets=lambda package, kind=None: [],
             validate_nextest=lambda: (_ for _ in ()).throw(
@@ -157,8 +247,8 @@ class P1PlannerTests(unittest.TestCase):
         gpu = gpu_scope.Plan()
         with tempfile.TemporaryDirectory() as directory, \
                 patch.object(gate_readiness, "Workspace", return_value=workspace), \
-                patch.object(gate_readiness.cpu_scope, "plan_for_paths", return_value=cpu), \
-                patch.object(gate_readiness.gpu_scope, "plan_for_paths", return_value=gpu), \
+                patch.object(gate_readiness.cpu_scope, "plan_for_paths", return_value=cpu) as cpu_mock, \
+                patch.object(gate_readiness.gpu_scope, "plan_for_paths", return_value=gpu) as gpu_mock, \
                 patch.object(gate_readiness, "reference_problems",
                              return_value=["missing fixture asset"]), \
                 patch("codex_regressions.inventory",
@@ -174,6 +264,10 @@ class P1PlannerTests(unittest.TestCase):
         self.assertIn("nextest GPU grouping has stale owner", messages)
         self.assertIn("missing fixture asset", messages)
         self.assertIn("regression inventory missing", messages)
+
+        self.assertIs(result['gpu'], gpu)
+        self.assertEqual(cpu_mock.call_count, 1)
+        self.assertIs(gpu_mock.call_args.kwargs['cpu_plan'], cpu)
 
 
 if __name__ == "__main__":

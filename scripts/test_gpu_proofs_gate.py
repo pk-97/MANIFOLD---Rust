@@ -58,6 +58,9 @@ class GpuProofsGateTests(unittest.TestCase):
                 "manifold-ui-paint": "crates/manifold-ui-paint",
             }
 
+        def ownership_errors(self, paths, base=None):
+            return []  # Scope tests use a synthetic, complete inventory.
+
         def feature_packages(self, feature):
             self.assert_feature = feature
             return list(self.packages)
@@ -434,6 +437,8 @@ class GpuProofsGateTests(unittest.TestCase):
         # Use the real save failure path with an earlier run's on-disk pass.
         passed = object.__new__(gate.gate_passes.Pass)
         passed.key = "earlier"
+        passed.label = 'gpu-proofs'
+        passed.unchanged = lambda: True  # This case tests failed-run invalidation.
         passed.record = None  # The earlier pass was not reusable at lookup.
         passed.path = self.learned.parent / "pass.json"
         passed.path.write_text('{"pass": true}')

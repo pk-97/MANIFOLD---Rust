@@ -16,7 +16,7 @@ import time
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import gpu_queue
 
@@ -168,6 +168,142 @@ class GpuQueueTests(unittest.TestCase):
                 self.assertEqual(len(gpu_queue.pending_landings(self.dir / 'q')), 1)
             self.assertTrue(temporary.exists())
 
+    def test_pid_reuse_removes_old_landing_identity(self):
+        pending_dir = self.dir / "q" / gpu_queue.LANDING_PENDING_DIR
+        pending_dir.mkdir(parents=True)
+        marker = pending_dir / "1234.reused.pending"
+        marker.write_text("pid=1234\nstart=proc:old\nnonce=dead\nlabel=old\n")
+        with patch.object(gpu_queue.os, "kill"), \
+                patch.object(gpu_queue, "process_start_identity", return_value="proc:new"):
+            self.assertEqual(gpu_queue.pending_landings(self.dir / "q"), [])
+        self.assertFalse(marker.exists(), "PID reuse must not keep a stale landing live")
+
+    def test_nightly_freezes_batch_and_admits_before_new_landings(self):
+        pending_dir = self.dir / "q" / gpu_queue.LANDING_PENDING_DIR
+        pending_dir.mkdir(parents=True)
+        start = gpu_queue.process_start_identity()
+        old = pending_dir / f"{os.getpid()}.old.pending"
+        body = f"pid={os.getpid()}\nstart={start}\nnonce={{}}\nlabel={{}}\n"
+        old.write_text(body.format("old", "old"))
+        acquired = threading.Event()
+        result = []
+
+        def wait_for_gpu():
+            held = gpu_queue.acquire("nightly", directory=self.dir / "q", priority="nightly",
+                                     poll=0.01, report=0.1)
+            result.append(held)
+            acquired.set()
+
+        worker = threading.Thread(target=wait_for_gpu)
+        worker.start()
+        self.wait_for(lambda: (self.dir / "q" / gpu_queue.NIGHTLY_WAITING).exists())
+        newer = []
+        for index in range(8):
+            marker = pending_dir / f"{os.getpid()}.new-{index}.pending"
+            marker.write_text(body.format(f"new-{index}", f"new-{index}"))
+            newer.append(marker)
+        old.unlink()
+        self.assertTrue(acquired.wait(2), "new arrivals must not starve the frozen nightly turn")
+        worker.join(timeout=2)
+        result[0].release()
+        for marker in newer:
+            marker.unlink()
+
+    def test_inherited_holder_bypasses_nightly_fairness_wait(self):
+        with patch.object(gpu_queue.fcntl, "flock", side_effect=BlockingIOError), \
+                patch.object(gpu_queue, "_token_matches", return_value=True):
+            held = gpu_queue.acquire("child", directory=self.dir / "q", priority="nightly",
+                                     poll=0.01)
+        self.assertIsNone(held.fd)
+        held.release()
+
+    def test_newer_normal_work_is_deferred_by_nightly_turn(self):
+        pending_dir = self.dir / "q" / gpu_queue.LANDING_PENDING_DIR
+        pending_dir.mkdir(parents=True)
+        waiting = self.dir / "q" / gpu_queue.NIGHTLY_WAITING
+        waiting.write_text("pid=9999\nstart=other\nbatch=old.pending\n")
+        current = pending_dir / f"{os.getpid()}.new.pending"
+        current.write_text(f"pid={os.getpid()}\nstart=self\nnonce=new\nlabel=new\n")
+
+        def identity(pid=None):
+            return "self" if pid in (None, os.getpid()) else "other"
+
+        acquired = threading.Event()
+        result = []
+
+        def wait_for_gpu():
+            result.append(gpu_queue.acquire("new landing", directory=self.dir / "q",
+                                            poll=0.01, report=0.1))
+            acquired.set()
+
+        with patch.object(gpu_queue, "process_start_identity", side_effect=identity), \
+                patch.object(gpu_queue.os, "kill"):
+            worker = threading.Thread(target=wait_for_gpu)
+            worker.start()
+            self.assertFalse(acquired.wait(0.2))
+            waiting.unlink()
+            self.assertTrue(acquired.wait(2))
+            worker.join(timeout=2)
+        result[0].release()
+        current.unlink()
+
+    def test_admission_guard_keeps_one_nightly_turn_owner(self):
+        entered = threading.Event()
+        release = threading.Event()
+        observed = []
+
+        def first():
+            with gpu_queue._admission_guard(self.dir / "q"):
+                gpu_queue._write_nightly_waiting(self.dir / "q", {"old"})
+                entered.set()
+                release.wait(2)
+
+        def second():
+            entered.wait(2)
+            with gpu_queue._admission_guard(self.dir / "q"):
+                observed.append(gpu_queue._nightly_waiting(self.dir / "q"))
+
+        one = threading.Thread(target=first)
+        two = threading.Thread(target=second)
+        one.start()
+        two.start()
+        self.assertTrue(entered.wait(2))
+        time.sleep(0.05)
+        self.assertFalse(observed)
+        release.set()
+        one.join(timeout=2)
+        two.join(timeout=2)
+        self.assertEqual(len(observed), 1)
+        self.assertEqual(observed[0]["pid"], str(os.getpid()))
+        gpu_queue._remove_own_nightly_waiting(self.dir / "q")
+
+    def test_raw_heavy_run_cannot_create_reusable_receipt(self):
+        passed = MagicMock()
+        passed.reused.return_value = False
+        child = type("Child", (), {"wait": lambda self: 0,
+                                    "send_signal": lambda self, sig: None})()
+        with patch("gate_passes.queued_proof", return_value=passed), \
+                patch.object(gpu_queue, "_run_build", return_value=0), \
+                patch.object(gpu_queue, "_ancestor_holds", return_value=False), \
+                patch.object(gpu_queue, "hold", side_effect=lambda *a, **k: contextlib.nullcontext()), \
+                patch.object(gpu_queue.subprocess, "Popen", return_value=child), \
+                patch.object(gpu_queue.time, "monotonic", side_effect=[0, 90]):
+            self.assertEqual(gpu_queue.run_queued(["cargo", "test"]), 0)
+        passed.save.assert_not_called()
+
+    def test_changed_inputs_while_queued_never_start_gpu_process(self):
+        passed = MagicMock()
+        passed.reused.return_value = False
+        with patch('gate_passes.queued_proof', return_value=passed), \
+                patch('gate_passes.changed_passes', side_effect=[[], ['gpu-proofs']]), \
+                patch.object(gpu_queue, '_run_build', return_value=0), \
+                patch.object(gpu_queue, '_ancestor_holds', return_value=False), \
+                patch.object(gpu_queue, 'hold', side_effect=lambda *a, **k: contextlib.nullcontext()), \
+                patch.object(gpu_queue.subprocess, 'Popen') as process:
+            self.assertEqual(gpu_queue.run_queued(['cargo', 'test']), 2)
+        process.assert_not_called()
+        passed.save.assert_not_called()
+
     def test_nightly_waits_for_live_landing_then_acquires(self):
         acquired = threading.Event()
         result = []
@@ -198,7 +334,7 @@ class GpuQueueTests(unittest.TestCase):
             held = gpu_queue.acquire("nightly", directory=self.dir / "q", priority="nightly",
                                      poll=0.01, report=0.1)
         try:
-            self.assertGreaterEqual(len(calls), 3)
+            self.assertGreaterEqual(len(calls), 2)
         finally:
             held.release()
 

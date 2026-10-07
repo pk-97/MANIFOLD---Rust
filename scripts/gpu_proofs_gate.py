@@ -810,6 +810,11 @@ def all_runs(workspace: Workspace) -> list[dict]:
 
 
 def main() -> int:
+    with gate_passes.session():
+        return _main()
+
+
+def _main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--manifest-path",
@@ -946,9 +951,6 @@ def main() -> int:
     reuse = not (args.all_tests or args.record_times or args.timings_md or args.hang_allowance)
     passes = [gate_passes.proof_pass(repo, run) if reuse else None for run in runs]
     pending = [run for run, p in zip(runs, passes) if not (p and p.record)]
-    for p in passes:
-        if p:
-            p.reused()
     build_code = build_tests(manifest_path, pending) if pending else 0
     if build_code:
         print(f"GPU-PROOFS GATE: FAIL (test build failed, exit {build_code}; no GPU lock taken)")
@@ -957,14 +959,23 @@ def main() -> int:
         print("GPU-PROOFS GATE: BUILT (--build-only; no test run, no GPU lock taken)")
         return 0
 
+    if gate_passes.changed_passes(passes):
+        print('GPU-PROOFS GATE: FAIL (inputs changed after planning; rerun before GPU admission)')
+        return 2
     exit_code, outputs, all_timings, hung = 0, [], [], []
     # One GPU run on the machine at a time (scripts/gpu_queue.py). Held for all
     # cargo runs so another run cannot interleave between test binaries.
     measured = []
     recorded_timings = []
     with gpu_queue.hold("gpu_proofs_gate") if pending else contextlib.nullcontext():
+        if gate_passes.changed_passes(passes):
+            print('GPU-PROOFS GATE: FAIL (inputs changed while waiting for the GPU)')
+            return 2
         for run, passed in zip(runs, passes):
             if passed and passed.record:
+                if not passed.reused():
+                    print('GPU-PROOFS GATE: FAIL (inputs changed before reuse)')
+                    return 2
                 target = ','.join(run['targets'] or []) or ('lib' if run['lib'] else 'all')
                 all_timings.append(timing_entry(run.get('package'), target,
                                                 'reused proof set', passed.record['seconds'],
@@ -1010,6 +1021,9 @@ def main() -> int:
                             timing_red, unknown_red)
     if args.learn_times:
         remember_times(recorded_timings, verdict, hung)
+    if gate_passes.changed_passes([p for p in passes if p]):
+        print('GPU-PROOFS GATE: FAIL (inputs changed before receipt publication)')
+        return 2
     for passed, code, seconds in measured:
         if passed:
             # Budget warnings do not invalidate functional passes. Real

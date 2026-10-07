@@ -39,7 +39,7 @@ class CacheTests(unittest.TestCase):
         self.write('Cargo.toml', '[workspace]\nmembers = ["crates/*"]\n')
         self.write('Cargo.lock', 'version = 4\n')
         self.write('.gitignore', 'target/\n.claude/orchestration/\ntests/fixtures/ignored.bin\n')
-        self.write('scripts/ui-flows/manifest.json', '{"path_triggers": {}}')
+        self.write('scripts/ui-flows/manifest.json', '{"flows": {}, "path_triggers": {}}')
         self.write('scripts/codex_regressions.json', '{}\n')
         packages = [('base', ''), ('a', '[dependencies]\nbase = {path="../base"}\n'),
                     ('b', ''), ('manifold-renderer', '[dependencies]\nbase = {path="../base"}\n'
@@ -114,6 +114,75 @@ class CacheTests(unittest.TestCase):
     def call_packages(calls):
         # run_gate appends package, target and budgeted after the test lists.
         return sorted({call.args[-4] for call in calls})
+
+    def test_ignored_fixture_change_between_planning_and_reuse_refuses(self):
+        self.write('tests/fixtures/ignored.bin', 'before')
+        self.clippy('a').save(0)
+        with cache.snapshot():
+            planned = self.clippy('a')
+        self.assertIsNotNone(planned.record)
+        self.write('tests/fixtures/ignored.bin', 'after')
+        self.assertFalse(planned.reused())
+        self.assertEqual(cache.changed_passes([planned]), ['clippy/a'])
+        with patch.object(landing, 'run_cmd') as run:
+            result = landing.run_check('clippy/a', ['cargo', 'clippy', '-p', 'a'],
+                                       self.repo, 30, passed=planned)
+        self.assertEqual(result[0], 1)
+        run.assert_not_called()
+        with patch.object(cache.os, 'replace') as publish:
+            planned.save(0)
+        publish.assert_not_called()
+
+    def test_ignored_fixture_changed_by_build_refuses_before_gpu_admission(self):
+        self.assertEqual(self.run_landing()[0], 0)
+        self.write('crates/b/src/lib.rs', 'pub fn build_new_b() {}\n')
+        self.commit('force one package build while other passes are cached')
+        code, calls, holds, proofs_run = self.run_landing(
+            on_build=lambda: self.write('tests/fixtures/ignored.bin', 'changed during build'))
+        self.assertEqual((code, holds, proofs_run), (1, 0, 0))
+        self.assertIn('inputs changed after build planning', self.output.getvalue())
+        self.assertFalse(any(c[:3] == ['cargo', 'nextest', 'run'] and '--no-run' not in c
+                             for c in calls))
+
+    def test_fresh_publication_check_catches_late_ignored_fixture_change(self):
+        self.write('tests/fixtures/ignored.bin', 'before')
+        planned = self.clippy('a')
+        real_dump = json.dump
+
+        def changed_during_write(*args, **kwargs):
+            real_dump(*args, **kwargs)
+            self.write('tests/fixtures/ignored.bin', 'after')
+
+        with patch.object(cache.json, 'dump', side_effect=changed_during_write), \
+                patch.object(cache.os, 'replace') as publish:
+            planned.save(0)
+        publish.assert_not_called()
+        self.assertFalse(planned.path.exists())
+
+    def test_host_tool_subprocesses_once_across_many_legs(self):
+        with cache.session(), \
+                patch.object(cache.platform, 'platform', return_value='test-platform'), \
+                patch.object(cache.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, b'version', b'')) as run:
+            for _ in range(20):
+                self.real_host_inputs(self.repo, True)
+            expected = 7 if sys.platform == 'darwin' else 5
+            self.assertEqual(run.call_count, expected)
+        with cache.session(), \
+                patch.object(cache.platform, 'platform', return_value='test-platform'), \
+                patch.object(cache.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, b'version', b'')) as run:
+            self.real_host_inputs(self.repo, True)
+            self.assertEqual(run.call_count, expected)
+
+    def test_planning_shares_snapshot_but_validation_observes_new_content(self):
+        self.write('tests/fixtures/ignored.bin', 'before')
+        with patch.object(cache, 'selected_entries', wraps=cache.selected_entries) as selected:
+            with cache.snapshot():
+                passes = [self.clippy('a') for _ in range(10)]
+            calls = selected.call_count
+            self.assertLess(calls, 25)
+            self.write('tests/fixtures/ignored.bin', 'after')
+            self.assertEqual(len(cache.changed_passes(passes)), 10)
+            self.assertEqual(selected.call_count, calls * 2)
 
     def test_changed_crate_invalidates_only_its_dependency_closure(self):
         for name in ('a', 'b', 'manifold-renderer'):
@@ -329,6 +398,7 @@ class CacheTests(unittest.TestCase):
                 patch.object(gpu_queue, '_ancestor_holds', return_value=False), \
                 patch.object(gpu_queue, 'hold', side_effect=lambda *a, **k: contextlib.nullcontext()), \
                 patch.object(gpu_queue.subprocess, 'Popen') as process, \
+                patch.object(passed, 'unchanged', return_value=True), \
                 patch.object(passed, 'save') as saved:
             process.return_value.wait.return_value = 0
             self.assertEqual(gpu_queue.run_queued(command), 0)
@@ -428,6 +498,22 @@ class CacheTests(unittest.TestCase):
         passed.save.assert_not_called()
         self.assertIn('cannot establish per-test hang allowances', self.output.getvalue())
 
+    def test_raw_ninety_second_proof_is_not_reusable_by_landing(self):
+        run = self.run_spec()
+        passed = cache.proof_pass(self.repo, run)
+        with patch.object(cache, 'queued_proof', return_value=passed), \
+                patch.object(passed, 'unchanged', return_value=True), \
+                patch.object(gpu_queue, '_run_build', return_value=0), \
+                patch.object(gpu_queue, '_ancestor_holds', return_value=False), \
+                patch.object(gpu_queue, 'hold', side_effect=lambda *a, **k: contextlib.nullcontext()), \
+                patch.object(gpu_queue.subprocess, 'Popen') as process, \
+                patch.object(gpu_queue.time, 'monotonic', side_effect=[0, 90]):
+            process.return_value.wait.return_value = 0
+            self.assertEqual(gpu_queue.run_queued(['cargo', 'test']), 0)
+        self.assertFalse(passed.path.exists())
+        self.assertFalse(cache.proof_pass(self.repo, run).reused())
+        self.assertGreater(self.run_landing()[3], 0)
+
     def test_worker_identity_is_not_rust_input_but_runtime_switch_is(self):
         with patch.dict(os.environ, {'CODEX_THREAD_ID': 'worker'}, clear=True), \
                 patch.object(cache.platform, 'platform', return_value='test-platform'), \
@@ -468,7 +554,7 @@ class CacheTests(unittest.TestCase):
             self.assertEqual(self.call_packages(run.call_args_list),
                              [entry['package'] for entry in nightly])
 
-    def run_landing(self, failed=None, keep_going=True):
+    def run_landing(self, failed=None, keep_going=True, on_build=None):
         calls = []
         real_run = landing.run_cmd
         argv = ['landing_gate.py', '--repo', str(self.repo)] + ([] if keep_going else ['--fail-fast'])
@@ -477,6 +563,8 @@ class CacheTests(unittest.TestCase):
             if command[0] == 'git':
                 return real_run(command, cwd, timeout, live_log)
             calls.append(command)
+            if on_build and '--no-run' in command:
+                on_build()
             if command[:3] == ['cargo', 'nextest', 'list']:
                 package = command[command.index('-p') + 1]
                 suites = {'fixture': {'binary-name': 'fixture', 'testcases': ['tests::fixture']}}
@@ -592,7 +680,9 @@ class CacheTests(unittest.TestCase):
         source = Path(__file__).resolve().parent.parent
         for path in ('scripts/gate_runner.py', '.claude/hooks/agent-launch-guard.py'):
             self.write(path, (source / path).read_text())
-        self.write('scripts/ui-flows/manifest.json', '{"path_triggers":{"crates/a/":["a-flow"]}}')
+            (self.repo / path).chmod((source / path).stat().st_mode & 0o777)
+        self.write('scripts/ui-flows/manifest.json', '{"flows":{"a-flow":"scene"},"path_triggers":{"crates/a/":["a-flow"]}}')
+        self.write('scripts/ui-flows/a-flow.json', '[]')
         self.commit('gate writer fixture')
         self.assertEqual(self.run_landing()[0], 0)
         self.assertEqual(self.run_landing()[1], [])

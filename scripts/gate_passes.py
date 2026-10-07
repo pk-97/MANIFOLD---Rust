@@ -6,6 +6,8 @@ use Git blob IDs and modes (the leaves of the selected Git trees), overlaying
 working-tree edits so a standalone pass survives committing the same content.
 Unknown commands/dependencies and unreadable inputs run without reuse.
 """
+import contextlib
+import contextvars
 import hashlib
 import json
 import os
@@ -20,7 +22,68 @@ from pathlib import Path
 from gate_workspace import Workspace
 from gate_policy import SHARED_ASSETS
 
-SCHEMA = 2
+SCHEMA = 3
+SESSION = contextvars.ContextVar('pass_session', default=None)
+SNAPSHOT = contextvars.ContextVar('pass_snapshot', default=None)
+
+
+class Snapshot:
+    """One content observation, shared only within a planning/validation batch."""
+    def __init__(self):
+        self.entries = {}
+        self.roots = {}
+        self.workspaces = {}
+
+    def selected(self, repo, paths):
+        if repo not in self.entries:
+            roots = {p.split('/')[0] for p in git(repo, 'ls-files', '-z').split('\0') if p}
+            roots.update(p.split('/')[0] for p in paths)
+            self.entries[repo] = selected_entries(repo, sorted(roots))
+            self.roots[repo] = roots
+        missing = {p.split('/')[0] for p in paths} - self.roots[repo]
+        if missing:
+            self.entries[repo].update(selected_entries(repo, sorted(missing)))
+            self.roots[repo].update(missing)
+        return {path: entry for path, entry in self.entries[repo].items()
+                if any(path == p or path.startswith(p.rstrip('/') + '/') for p in paths)}
+
+
+@contextlib.contextmanager
+def session():
+    token = SESSION.set({'tools': {}, 'accepted': [], 'planning': Snapshot()})
+    try:
+        yield
+    finally:
+        SESSION.reset(token)
+
+
+@contextlib.contextmanager
+def snapshot():
+    token = SNAPSHOT.set(Snapshot())
+    try:
+        yield
+    finally:
+        SNAPSHOT.reset(token)
+
+
+def changed_passes(passes):
+    # New snapshot for every boundary, including ignored fixtures and modes.
+    with snapshot():
+        return [p.label for p in passes if p and not p.unchanged()]
+
+
+def accepted_passes():
+    return SESSION.get()['accepted'] if SESSION.get() is not None else []
+
+
+def workspace_inputs(repo):
+    current = SNAPSHOT.get()
+    if current is None:
+        return Workspace(repo)
+    if repo not in current.workspaces:
+        current.workspaces[repo] = Workspace(repo)
+    return current.workspaces[repo]
+
 
 
 def git(repo, *args):
@@ -44,7 +107,7 @@ def dependency_paths(repo, packages):
     root = tomllib.loads((repo / 'Cargo.toml').read_text())
     if root.get('patch') or root.get('replace'):
         raise ValueError('Cargo patch/replace requires a dependency-scope audit')
-    workspace = Workspace(repo)
+    workspace = workspace_inputs(repo)
     return sorted(workspace.roots[n] for n in workspace.dependencies(packages))
 
 
@@ -72,10 +135,14 @@ def host_inputs(repo, cargo=False):
         if sys.platform == 'darwin':
             commands += [['clang', '--version'], ['xcrun', '--show-sdk-version']]
         for command in commands:
-            out = subprocess.run(command, cwd=repo, capture_output=True, timeout=15)
-            if out.returncode:
-                raise ValueError(f'cannot identify tool: {command}')
-            facts[' '.join(command)] = out.stdout.decode()
+            key = (str(repo), tuple(command))
+            tools = SESSION.get()['tools'] if SESSION.get() is not None else {}
+            if key not in tools:
+                out = subprocess.run(command, cwd=repo, capture_output=True, timeout=15)
+                if out.returncode:
+                    raise ValueError(f'cannot identify tool: {command}')
+                tools[key] = out.stdout.decode()
+            facts[' '.join(command)] = tools[key]
         # Cargo reads config in ancestors and CARGO_HOME, outside Git.
         homes = [*repo.parents, Path(os.environ.get('CARGO_HOME', Path.home() / '.cargo'))]
         configs = {p for home in homes for p in
@@ -182,7 +249,12 @@ class Pass:
         self.key = self.record = None
         self.reason = None
         try:
-            self.key = self.fingerprint()
+            current = SESSION.get()
+            token = SNAPSHOT.set(SNAPSHOT.get() or (current['planning'] if current else Snapshot()))
+            try:
+                self.key = self.fingerprint()
+            finally:
+                SNAPSHOT.reset(token)
             common = git(self.repo, 'rev-parse', '--git-common-dir')
             self.directory = (self.repo / common).resolve() / 'gate-passes-v1'
             self.path = self.directory / (self.key + '.json')
@@ -201,15 +273,29 @@ class Pass:
         paths, identity, cargo = self.spec()
         paths = sorted(set(paths + ['scripts/gate_passes.py', 'scripts/landing_gate.py']))
         return digest({'schema': SCHEMA, 'identity': identity,
-                       'paths': paths, 'entries': selected_entries(self.repo, paths),
+                       'paths': paths, 'entries': (SNAPSHOT.get() or Snapshot()).selected(self.repo, paths),
                        'implementation': {
                            name: hashlib.sha256((Path(__file__).parent / name).read_bytes()).hexdigest()
                            for name in ('gate_passes.py', 'landing_gate.py', 'gpu_proofs_gate.py',
                                         'gpu_queue.py', 'gpu_scope.py', 'cpu_scope.py', 'diff_scope.py')},
                        'host': host_inputs(self.repo, cargo)})
 
+    def unchanged(self):
+        if not self.key:
+            return False
+        try:
+            return self.fingerprint() == self.key
+        except (OSError, ValueError, KeyError, TypeError, AttributeError, subprocess.SubprocessError):
+            return False
+
+    def accepted(self):
+        current = SESSION.get()
+        if current is not None and self not in current['accepted']:
+            current['accepted'].append(self)
+
     def reused(self):
-        if self.record:
+        if self.record and not changed_passes([self]):
+            self.accepted()
             print(f"[REUSED] {self.label} (passed at {self.record['commit']}, {self.record['time']})", flush=True)
             return True
         return False
@@ -221,7 +307,7 @@ class Pass:
             if code:
                 self.path.unlink(missing_ok=True)
                 return
-            if self.fingerprint() != self.key:
+            if changed_passes([self]):
                 print(f'[NO REUSE] {self.label}: inputs changed during execution', flush=True)
                 return
             self.directory.mkdir(parents=True, exist_ok=True)
@@ -231,7 +317,13 @@ class Pass:
             fd, temporary = tempfile.mkstemp(dir=self.directory, prefix='.pass-')
             with os.fdopen(fd, 'w') as stream:
                 json.dump(record, stream)
+            # Recheck immediately before publication, after preparing the record.
+            if changed_passes([self]):
+                os.unlink(temporary)
+                print(f'[NO REUSE] {self.label}: inputs changed before publication', flush=True)
+                return
             os.replace(temporary, self.path)
+            self.accepted()
         except (OSError, ValueError, KeyError, TypeError, AttributeError, subprocess.SubprocessError) as error:
             print(f'[NO REUSE] {self.label}: cannot record pass: {error}', flush=True)
 

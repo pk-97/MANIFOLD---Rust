@@ -102,6 +102,7 @@ def slow_tests(times=None):
 
 
 PATH_ATTR_MOD = re.compile(r'#\[path\s*=\s*"tests/([\w.]+)"\]\s*mod\s+(\w+)\s*;')
+_CPU_PLAN_UNSET = object()
 
 
 def is_gpu_path(path, workspace=None):
@@ -378,7 +379,8 @@ def changed_test_filters(path, repo, base, patch=None):
     return selected
 
 
-def plan_for_paths(paths, repo, shader_users=None, base="origin/main", workspace=None):
+def plan_for_paths(paths, repo, shader_users=None, base="origin/main", workspace=None,
+                   cpu_plan=_CPU_PLAN_UNSET):
     """Map touched `paths` to a Plan. Never returns an implicit 'everything'."""
     workspace = workspace or Workspace(repo)
     if shader_users is None:
@@ -465,8 +467,14 @@ def plan_for_paths(paths, repo, shader_users=None, base="origin/main", workspace
                 continue
         plan.unmapped.append((path, "no GPU test mapping rule for this file type"))
     # Feature-gated integration targets selected by CPU ownership belong here.
-    import cpu_scope
-    plan.required_binaries.update(cpu_scope.plan_for_paths(paths, repo, workspace).gpu_binaries)
+    if cpu_plan is _CPU_PLAN_UNSET:
+        import cpu_scope
+        # GPU callers that do not share readiness planning are commonly using
+        # synthetic repositories without origin/main; preserve the historical
+        # no-base CPU scope in that mode.
+        cpu_plan = cpu_scope.plan_for_paths(paths, repo, workspace)
+    if cpu_plan is not None:
+        plan.required_binaries.update(cpu_plan.gpu_binaries)
     return plan
 
 

@@ -18,12 +18,97 @@ class Workspace:
             if result.returncode:
                 raise ValueError('cargo metadata failed: ' + result.stderr.strip())
             metadata = json.loads(result.stdout)
+        self._validate_metadata(metadata)
         members = set(metadata['workspace_members'])
         self.packages = {p['name']: p for p in metadata['packages'] if p['id'] in members}
+        package_ids = {p['id'] for p in metadata['packages']}
+        if not members <= package_ids:
+            missing = sorted(members - package_ids)
+            raise ValueError(f'cargo metadata workspace member missing package: {missing}')
         if not self.packages:
             raise ValueError('cargo metadata returned no workspace packages')
         self.roots = {name: Path(p['manifest_path']).resolve().parent.relative_to(self.repo).as_posix()
                       for name, p in self.packages.items()}
+        if len(self.roots) != len(set(self.roots.values())):
+            raise ValueError('cargo metadata has duplicate workspace package roots')
+
+    @staticmethod
+    def _validate_metadata(metadata):
+        if not isinstance(metadata, dict):
+            raise ValueError('cargo metadata must be an object')
+        members = metadata.get('workspace_members')
+        packages = metadata.get('packages')
+        if (not isinstance(members, list) or any(not isinstance(item, str) for item in members)
+                or not isinstance(packages, list)):
+            raise ValueError('cargo metadata has malformed workspace membership')
+        for package in packages:
+            if not isinstance(package, dict):
+                raise ValueError('cargo metadata has a malformed package')
+            for key in ('id', 'name', 'manifest_path', 'dependencies', 'features', 'targets'):
+                if key not in package:
+                    raise ValueError(f'cargo metadata package missing {key}')
+            if (not isinstance(package['id'], str) or not isinstance(package['name'], str)
+                    or not isinstance(package['manifest_path'], str)
+                    or not isinstance(package['dependencies'], list)
+                    or not isinstance(package['features'], dict)
+                    or not isinstance(package['targets'], list)):
+                raise ValueError(f"cargo metadata package {package.get('name', '?')} has malformed fields")
+            for dependency in package['dependencies']:
+                if not isinstance(dependency, dict) or not isinstance(dependency.get('name'), str):
+                    raise ValueError(f"cargo metadata package {package['name']} has malformed dependency")
+            for target in package['targets']:
+                if (not isinstance(target, dict) or not isinstance(target.get('name'), str)
+                        or not isinstance(target.get('kind'), list)
+                        or not isinstance(target.get('src_path'), str)):
+                    raise ValueError(f"cargo metadata package {package['name']} has malformed target")
+                if any(not isinstance(kind, str) for kind in target['kind']):
+                    raise ValueError(f"cargo metadata package {package['name']} has malformed target kind")
+                required = target.get('required-features', [])
+                if (not isinstance(required, list)
+                        or any(not isinstance(feature, str) for feature in required)):
+                    raise ValueError(f"cargo metadata package {package['name']} has malformed required-features")
+            if any(not isinstance(feature, str) or not isinstance(values, list)
+                   or any(not isinstance(value, str) for value in values)
+                   for feature, values in package['features'].items()):
+                raise ValueError(f"cargo metadata package {package['name']} has malformed features")
+        ids = [package['id'] for package in packages]
+        names = [package['name'] for package in packages]
+        if len(ids) != len(set(ids)):
+            raise ValueError('cargo metadata has duplicate package IDs')
+        if len(names) != len(set(names)):
+            raise ValueError('cargo metadata has duplicate package names')
+
+    def ownership_errors(self, paths, base=None):
+        """Report surviving Rust/manifests that Cargo did not assign to us.
+
+        A deleted path is allowed when it existed in the base tree.  This
+        keeps package removal and ordinary file deletion valid while making a
+        workspace omission or excluded crate a readiness error.
+        """
+        errors = []
+        base_roots = _git_package_roots(self.repo, base) if base else set()
+        current_roots = _current_package_roots(self.repo)
+        for path in sorted(set(paths)):
+            # Only paths that could be members of this repository's Cargo
+            # workspace participate.  Rust snippets in scripts/templates are
+            # fixtures, not omitted crates.
+            if path == 'Cargo.toml' or not path.startswith('crates/'):
+                continue
+            if not (path.endswith('.rs') or Path(path).name == 'Cargo.toml'):
+                continue
+            if self.owner(path) is not None:
+                continue
+            current = self.repo / path
+            if current.is_file():
+                errors.append(f'{path}: surviving Rust/manifests has no Cargo workspace owner')
+                continue
+            if any(path == root or path.startswith(root + '/') for root in current_roots):
+                errors.append(f'{path}: deleted Rust path remains under an unowned package')
+                continue
+            if base and any(path == root or path.startswith(root + '/') for root in base_roots):
+                continue
+            errors.append(f'{path}: Rust path has no current or base Cargo workspace owner')
+        return errors
 
     def owner(self, path):
         owners = [name for name, root in self.roots.items()
@@ -103,3 +188,19 @@ class Workspace:
                     if r.get('test-group') == 'gpu']
             if rows != [expected]:
                 raise ValueError(f'{config}: {profile} GPU grouping differs from semantic ownership table')
+
+
+def _git_package_roots(repo, revision):
+    """Return package roots present in a base tree, for deletion classification."""
+    result = subprocess.run(['git', '-C', str(repo), 'ls-tree', '-r', '--name-only', revision],
+                            capture_output=True, text=True)
+    if result.returncode:
+        return set()
+    return {path[:-len('/Cargo.toml')] for path in result.stdout.splitlines()
+            if path.startswith('crates/') and path.endswith('/Cargo.toml')}
+
+
+def _current_package_roots(repo):
+    repo = Path(repo)
+    return {path.parent.relative_to(repo).as_posix()
+            for path in repo.glob('crates/**/Cargo.toml') if path.is_file()}

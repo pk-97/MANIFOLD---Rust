@@ -230,9 +230,11 @@ class LandingTests(unittest.TestCase):
             stack.enter_context(patch.object(landing_gate, "MAIN_CHECKOUT", root))
             stack.enter_context(patch.object(landing_gate, "run_cmd", side_effect=run))
             def readiness(_repo, selected_paths, _base):
+                from codex_checks import tooling_checks
+                tooling = tooling_checks(root, selected_paths)
                 if not selected_paths:
                     return {"packages": [], "dependents": [], "cpu": cpu_scope.Plan(),
-                            "gpu": gpu_scope.Plan(), "workspace": None, "errors": []}
+                            "gpu": gpu_scope.Plan(), "workspace": None, "errors": [], "flows": [], "tooling": tooling}
                 cpu = cpu_scope.plan_for_paths(selected_paths, root, workspace=workspace)
                 for selected in selected_paths:
                     if "/tests/" in selected and workspace.owner(selected):
@@ -248,11 +250,14 @@ class LandingTests(unittest.TestCase):
                 if gpu.unmapped:
                     errors.append(("gpu-ownership", gpu_scope.unmapped_message(gpu)))
                 return {"packages": sorted(cpu.packages), "dependents": [], "cpu": cpu,
-                        "gpu": gpu, "workspace": workspace, "errors": errors}
+                        "gpu": gpu, "workspace": workspace, "errors": errors,
+                        "flows": landing_gate.flow_filters(root, selected_paths), "tooling": tooling}
             stack.enter_context(patch.object(landing_gate.gate_readiness, "plan",
                                              side_effect=readiness))
             stack.enter_context(patch.object(landing_gate.gpu_queue, "landing_pending",
                                              return_value=contextlib.nullcontext()))
+            # This harness has no Git repository; freshness has dedicated real-Git tests.
+            stack.enter_context(patch.object(landing_gate.gate_passes, 'changed_passes', return_value=[]))
             if proof_cached:
                 from unittest.mock import Mock
                 stack.enter_context(patch.object(landing_gate.gate_passes, "proof_pass",
@@ -369,6 +374,10 @@ class LandingTests(unittest.TestCase):
                           "ignored-tests"])
         self.assertIn("[FAIL] metadata", output)
         self.assertIn("[FAIL] references", output)
+        reruns = [line.strip() for line in output.splitlines() if line.strip().startswith('rerun: ')]
+        self.assertEqual(len(reruns), 4)  # Immediate diagnostics and final summary.
+        self.assertTrue(all('landing_gate.py --repo ' in line and '--plan-only' in line
+                            for line in reruns))
         self.assertFalse(any(command[0] == "cargo" for command in commands))
         self.assertFalse(any(event.startswith("hold") for event in self.events))
 
@@ -520,7 +529,7 @@ class LandingTests(unittest.TestCase):
             code, called, timings, _, _, output, _ = self.exercise()
         self.assertEqual(code, 1)
         self.assertEqual(called, ["tooling", "design-status", "ignored-tests"])
-        self.assertIn("regenerate: regen-cmd", output)
+        self.assertIn("rerun: regen-cmd", output)
 
     def test_build_failure_stops_before_the_hold(self):
         for failed in ("tests-build", "gpu-proofs-build"):
@@ -865,7 +874,8 @@ class DiffScopeTests(unittest.TestCase):
             self.assertIn("(package(=manifold-app) & binary(=godfile_regrowth))", plan.filters)
             for path in cpu_scope.godfile_paths():
                 with self.subTest(path=path):
-                    plan = cpu_scope.plan_for_paths([path], d, workspace=workspace)
+                    owner_workspace = synthetic_workspace(d, [path])
+                    plan = cpu_scope.plan_for_paths([path], d, workspace=owner_workspace)
                     self.assertIn("(package(=manifold-app) & binary(=godfile_regrowth))", plan.filters)
 
     def test_ceiling_parser_rejects_missing_empty_or_unparsed_tables(self):

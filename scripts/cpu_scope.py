@@ -61,6 +61,10 @@ def plan_for_paths(paths, repo, workspace=None, base=None):
     repo, plan, cache = Path(repo).resolve(), Plan(), {}
     workspace = workspace or Workspace(repo)
     paths = sorted(set(paths))
+    if hasattr(workspace, 'ownership_errors') and ((repo / 'Cargo.toml').is_file() or base):
+        ownership = workspace.ownership_errors(paths, base)
+        if ownership:
+            raise ValueError('; '.join(ownership))
     rows = integration_rows()
     for path in sorted(set(paths)):
         if path in rows:
