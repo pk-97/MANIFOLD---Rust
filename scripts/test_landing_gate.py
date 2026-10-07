@@ -4,6 +4,7 @@ import contextlib
 import io
 import json
 import os
+import runpy
 from pathlib import Path
 import subprocess
 import sys
@@ -18,6 +19,7 @@ import land_branch
 import trunk_health
 import cpu_scope
 import diff_scope
+import bridge_probe_gate
 
 
 def process_alive(pid):
@@ -451,12 +453,17 @@ class LandingTests(unittest.TestCase):
             stack.enter_context(patch.object(sys, "argv", ["trunk_health.py", "--dry-run"]))
             stack.enter_context(patch.object(trunk_health, "LOG_DIR", Path(d)))
             stack.enter_context(patch.object(trunk_health, "BD", "bd"))
-            stack.enter_context(patch.object(trunk_health, "run_cmd", return_value=(0, "tip", "", 0)))
+            commands = stack.enter_context(patch.object(trunk_health, "run_cmd", return_value=(0, "tip", "", 0)))
+            stack.enter_context(patch.object(trunk_health, "cap_main_target", return_value=""))
+            hold = stack.enter_context(patch.object(trunk_health.gpu_queue, "hold"))
             stack.enter_context(patch.object(trunk_health.subprocess, "run",
                                             return_value=subprocess.CompletedProcess([], 0, "", "")))
             self.assertEqual(trunk_health.main(), 0)
+            hold.assert_not_called()
+            self.assertEqual([c.args[0] for c in commands.call_args_list],
+                             [["git", "rev-parse", "--short=12", "origin/main"]])
         self.assertIn("would run: python3 scripts/gpu_proofs_gate.py --all", output.getvalue())
-        self.assertIn("would run: cargo nextest run --workspace", output.getvalue())
+        self.assertIn("would run: cargo nextest run --workspace --no-fail-fast", output.getvalue())
 
     def test_comment_only_rust_skips_builds_tests_and_gpu_without_hold(self):
         code, called, _, commands, _, output, deps = self.exercise(comment=True)
@@ -484,7 +491,157 @@ class LandingTests(unittest.TestCase):
         self.assertIn("[tests] filterset: " + " | ".join(expected), output)
 
 
+class NightlyQueueTests(unittest.TestCase):
+    def test_gpu_legs_share_one_hold_after_cpu_legs_even_when_red(self):
+        held = False
+        events = []
+
+        @contextlib.contextmanager
+        def hold(label):
+            nonlocal held
+            self.assertEqual(label, "trunk_health gpu legs")
+            events.append("acquire")
+            held = True
+            try:
+                yield
+            finally:
+                held = False
+                events.append("release")
+
+        def run(cmd, cwd, timeout):
+            if cmd[0] == "git" or "scripts/hook_census.py" in cmd:
+                self.assertFalse(held)
+                return 0, "tip", "", 0
+            self.assertEqual(timeout, 5400)
+            events.append((cmd, held))
+            if "scripts/gpu_proofs_gate.py" in cmd:
+                raise subprocess.TimeoutExpired(cmd, timeout)
+            return (1 if "nextest" in cmd else 0), "", "", 0
+
+        with tempfile.TemporaryDirectory() as d, contextlib.ExitStack() as stack:
+            stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+            stack.enter_context(patch.object(sys, "argv", ["trunk_health.py"]))
+            stack.enter_context(patch.object(trunk_health, "LOG_DIR", Path(d)))
+            stack.enter_context(patch.object(trunk_health, "missing_tools", return_value=[]))
+            stack.enter_context(patch.object(trunk_health, "cap_main_target", return_value=""))
+            stack.enter_context(patch.object(trunk_health, "run_cmd", side_effect=run))
+            stack.enter_context(patch.object(trunk_health.gpu_queue, "hold", side_effect=hold))
+            beads = stack.enter_context(patch.object(trunk_health.subprocess, "run",
+                return_value=subprocess.CompletedProcess([], 0, "[]", "")))
+            self.assertEqual(trunk_health.main(), 1)
+            self.assertEqual(sum("create" in c.args[0] for c in beads.call_args_list), 2)
+        self.assertEqual(events[7], "acquire")
+        self.assertEqual(events[-1], "release")
+        cpu = events[:7]
+        gpu = events[8:-1]
+        self.assertTrue(all(not locked for _, locked in cpu))
+        self.assertEqual(cpu[3][0], ["cargo", "clippy", "--workspace", "--tests", "--", "-D", "warnings"])
+        self.assertEqual(cpu[4][0], ["cargo", "nextest", "run", "--workspace", "--no-fail-fast"])
+        self.assertEqual([cmd[1] for cmd, _ in gpu], ["scripts/gpu_proofs_gate.py",
+            "scripts/rt_noise_gate.py", "scripts/rt_noise_gate.py", "scripts/bridge_probe_gate.py"])
+        self.assertTrue(all(locked for _, locked in gpu))
+
+
+class BridgeProbeQueueTests(unittest.TestCase):
+    def test_busy_gpu_polls_until_clear(self):
+        output = io.StringIO()
+        with patch.object(bridge_probe_gate, "_gpu_processes", side_effect=[
+                [("123", "manifold bridge-probe")], [("456", "manifold --capture")], []]), \
+                patch.object(bridge_probe_gate.time, "monotonic", side_effect=[0, 0, 15]), \
+                patch.object(bridge_probe_gate.time, "sleep") as sleep, \
+                contextlib.redirect_stdout(output):
+            self.assertTrue(bridge_probe_gate.check_gpu_busy())
+        self.assertEqual([c.args for c in sleep.call_args_list], [(15,), (15,)])
+        self.assertIn("PID 123: manifold bridge-probe", output.getvalue())
+        self.assertIn("PID 456: manifold --capture", output.getvalue())
+
+    def test_busy_gpu_times_out_after_twenty_minutes(self):
+        now = 0
+
+        def sleep(seconds):
+            nonlocal now
+            self.assertEqual(seconds, 15)
+            now += seconds
+
+        output = io.StringIO()
+        with patch.object(bridge_probe_gate, "_gpu_processes", return_value=[("123", "manifold --capture")]), \
+                patch.object(bridge_probe_gate.time, "monotonic", side_effect=lambda: now), \
+                patch.object(bridge_probe_gate.time, "sleep", side_effect=sleep), \
+                contextlib.redirect_stdout(output):
+            self.assertFalse(bridge_probe_gate.check_gpu_busy())
+        self.assertEqual(now, 1200)
+        self.assertIn("EXIT 2", output.getvalue())
+
+    def test_idle_gpu_does_not_sleep(self):
+        with patch.object(bridge_probe_gate, "_gpu_processes", return_value=[]), \
+                patch.object(bridge_probe_gate.time, "sleep") as sleep:
+            self.assertTrue(bridge_probe_gate.check_gpu_busy())
+            sleep.assert_not_called()
+
+    def test_process_list_reports_pid_and_filters_non_gpu_work(self):
+        listing = "123 /tmp/manifold bridge-probe\n456 cargo test --features gpu-proofs\n789 unrelated\n"
+        with patch.object(bridge_probe_gate.subprocess, "run",
+                return_value=subprocess.CompletedProcess([], 0, listing, "")) as run:
+            self.assertEqual(bridge_probe_gate._gpu_processes(), [
+                ("123", "/tmp/manifold bridge-probe"), ("456", "cargo test --features gpu-proofs")])
+        self.assertEqual(run.call_args.args[0], ["ps", "-ax", "-o", "pid=,command="])
+
+    def test_entrypoint_checks_gpu_inside_hold_and_returns_two_on_timeout(self):
+        held = False
+        now = 0
+
+        @contextlib.contextmanager
+        def hold(label):
+            nonlocal held
+            self.assertEqual(label, "bridge_probe_gate")
+            held = True
+            try:
+                yield
+            finally:
+                held = False
+
+        def run(cmd, **kwargs):
+            self.assertTrue(held)
+            self.assertEqual(cmd[0], "ps")
+            return subprocess.CompletedProcess(cmd, 0, "123 manifold --capture\n", "")
+
+        def sleep(seconds):
+            nonlocal now
+            now += seconds
+
+        with patch.object(sys, "argv", ["bridge_probe_gate.py"]), \
+                patch.object(trunk_health.gpu_queue, "hold", side_effect=hold), \
+                patch.object(subprocess, "run", side_effect=run), \
+                patch.object(time, "monotonic", side_effect=lambda: now), \
+                patch.object(time, "sleep", side_effect=sleep), \
+                contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as exited:
+            runpy.run_path(str(Path(bridge_probe_gate.__file__)), run_name="__main__")
+        self.assertEqual(exited.exception.code, 2)
+        self.assertFalse(held)
+
+
 class DiffScopeTests(unittest.TestCase):
+    def test_ceiling_paths_select_app_godfile_binary_across_packages(self):
+        with tempfile.TemporaryDirectory() as d:
+            crate = Path(d) / "crates/manifold-core"
+            (crate / "src/effects").mkdir(parents=True)
+            (crate / "Cargo.toml").write_text('[package]\nname = "manifold-core"\n')
+            plan = cpu_scope.plan_for_paths(["crates/manifold-core/src/effects/instance.rs"], d)
+            self.assertEqual(plan.packages, {"manifold-core", "manifold-app"})
+            self.assertIn("(package(=manifold-core) & test(/^effects::instance::/))", plan.filters)
+            self.assertIn("(package(=manifold-app) & binary(=godfile_regrowth))", plan.filters)
+            for path in cpu_scope.godfile_paths():
+                with self.subTest(path=path):
+                    plan = cpu_scope.plan_for_paths([path], d)
+                    self.assertIn("(package(=manifold-app) & binary(=godfile_regrowth))", plan.filters)
+
+    def test_ceiling_parser_rejects_missing_empty_or_unparsed_tables(self):
+        for text in ("", "const CEILINGS: &[(&str, usize)] = &[];",
+                     'const CEILINGS: &[(&str, usize)] = &[("a.rs", 100), unknown];'):
+            with self.subTest(text=text), patch.object(Path, "read_text", return_value=text):
+                with self.assertRaisesRegex(ValueError, "cannot parse CEILINGS"):
+                    cpu_scope.godfile_paths()
+
     def check_diff(self, before, after, suffix=".rs"):
         import difflib
         patch_text = "".join(difflib.unified_diff(before.splitlines(True), after.splitlines(True), n=0))
