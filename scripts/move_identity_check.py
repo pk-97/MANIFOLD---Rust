@@ -10,6 +10,16 @@ and test-mod headers — `#[cfg(test)]` + `mod <name> {`/`}` — when tests are
 distributed across the new submodules (D7a, 1-old→N-new) or one inline
 `#[cfg(...)] mod X { … }` is converted to a `mod X;` declaration + sibling file
 (W3-D2, 1-to-1; the `#[path = "…"]` tests-out form included)).
+Crate moves add three separately counted classes: newly added
+`crates/<name>/Cargo.toml` and wiring-only `src/lib.rs`/`src/main.rs` skeletons;
+workspace members, local path dependencies and feature-forwarding manifest
+entries; and same-file removed/added pairs matching explicit --rewrite maps.
+Rewrite counts are changed lines (two per pair); no map is implicit.
+New-manifest external dependencies equal to parsed old-workspace values and
+transferred bin tables count as crate skeletons; transfers in existing manifests
+count as manifest wiring. Bins preserve name, crate-relative path (defaulting to
+src/bin/<name>.rs), and required-features, with no other table keys allowed.
+Their sources must be a git rename pair or byte-identical across revisions.
 Exit code 0 = pure move proven; 1 = residue found (printed); 2 = usage.
 
 Why not `cargo public-api`: not installed, requires a lib target (manifold-app
@@ -21,19 +31,22 @@ Usage:
   scripts/move_identity_check.py <base>..<head>      # a range
   scripts/move_identity_check.py --cached            # staged changes
   scripts/move_identity_check.py <ref> --show-all    # print all residue lines
+  scripts/move_identity_check.py <ref> --rewrite 'crate::node_graph::=manifold_node_engine::'
 
 The moved-line detection uses `--color-moved=plain` with `--color-moved-ws=
 ignore-all-space` so re-indented relocations still count as moves, and pins the
 four diff colors explicitly so parsing never depends on user git config.
-Blocks of fewer than 3 consecutive lines are below git's move-detection
-threshold and will surface as residue — for a genuine tiny move, name it in the
-commit message and the reviewer eyeballs those lines; that is the intended
-manual surface, kept deliberately small.
+Plain mode marks individual matching added/removed lines; it has no three-line
+minimum. Unmatched lines remain subject to the bounded classes below and review.
 """
 
 import re
 import subprocess
 import sys
+import argparse
+import fnmatch
+import posixpath
+import tomllib
 
 # Pinned colors: 35=magenta (old moved), 36=cyan (new moved). git may emit
 # them with attributes (e.g. \x1b[1;36m), so match the code anywhere in the
@@ -321,13 +334,14 @@ def drop_include_str_prefix_pairs(residue: list[str]) -> tuple[list[str], int]:
     return remaining, pairs
 
 
-def classify(out: str) -> tuple[dict[str, int], list[str]]:
+def classify(out: str, claimed: dict[int, str] | None = None) -> tuple[dict[str, int], list[str]]:
     """Bucket every +/- line of a `--color-moved` diff into moved / allowlisted
     wiring / comment / dispatch-split scaffold, returning (counts, residue).
     Split out of `main` so the self-test can feed synthetic colored diffs
     without constructing a git repo."""
     residue: list[str] = []
     counts = {"moved": 0, "allowed": 0, "comments": 0, "scaffold": 0}
+    counts.update(skeletons=0, manifests=0, rewrites=0)
     # Per-sign use-block state (D-18): True while a `-` (resp. `+`) multi-line
     # `use { ... }` opened by a SIGNED line is open and hasn't hit its
     # closing `};` yet.
@@ -361,7 +375,7 @@ def classify(out: str) -> tuple[dict[str, int], list[str]]:
     # so a bare `}` closing one is wiring. Reset with the other trackers.
     pending_test_attr = {"+": False, "-": False}
     test_mod_depth = {"+": 0, "-": 0}
-    for raw in out.splitlines():
+    for index, raw in enumerate(out.splitlines()):
         is_moved = bool(MOVED_RE.match(raw))
         plain = ANSI.sub("", raw)
         if HEADER.match(plain):
@@ -518,6 +532,10 @@ def classify(out: str) -> tuple[dict[str, int], list[str]]:
         # residue), and a hunk/context boundary still resets the block.
         if USE_OPEN.match(tm_body):
             open_block[sign] = True
+        if claimed and index in claimed:
+            if claimed[index] != "blocked":
+                counts[claimed[index]] += 1
+            continue
         if is_moved:
             counts["moved"] += 1
             continue
@@ -584,13 +602,376 @@ def classify(out: str) -> tuple[dict[str, int], list[str]]:
     return counts, residue
 
 
+def rewrite_map(value: str) -> tuple[str, str]:
+    old, sep, new = value.partition("=")
+    path = r"\$?[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*::"
+    if not sep or not re.fullmatch(path, old) or not re.fullmatch(path, new):
+        raise argparse.ArgumentTypeError("rewrite must be OLD::=NEW:: Rust path prefixes")
+    return old, new
+
+
+def skeleton_lines(source: str) -> bool:
+    """Whole-file check; a declaration cannot hide a body after its semicolon."""
+    in_use = False
+    for line in source.splitlines():
+        body = line.strip()
+        if not body or body.startswith("//!"):
+            continue
+        if in_use and USE_ITEM.fullmatch(body):
+            in_use = "}" not in body
+            continue
+        if USE_OPEN.fullmatch(body):
+            in_use = True
+            continue
+        if re.fullmatch(r"(?:pub(?:\((?:crate|super)\))?\s+)?mod\s+\w+;", body):
+            continue
+        if re.fullmatch(r"(?:pub(?:\((?:crate|super)\))?\s+)?use\s+[\w:$*,{}\s]+;", body):
+            continue
+        if re.fullmatch(r"(?:#!\[[^\]\n]+\]|#\[cfg\([^\]\n]+\)\])", body):
+            continue
+        return False
+    return not in_use
+
+
+def workspace_member(directory: str, root: dict) -> bool:
+    return (any(fnmatch.fnmatchcase(directory, member) for member in root.get("members", []))
+            and not any(fnmatch.fnmatchcase(directory, member) for member in root.get("exclude", [])))
+
+
+def external_dependency_values(paths, read_file) -> dict[str, list]:
+    """Parsed external dependency precedents in the old workspace."""
+    root = tomllib.loads(read_file("Cargo.toml") or "").get("workspace", {})
+    result = {}
+    for path in paths:
+        if path != "Cargo.toml" and not workspace_member(posixpath.dirname(path), root):
+            continue
+        document = tomllib.loads(read_file(path))
+        scopes = [document, document.get("workspace", {})]
+        scopes.extend(document.get("target", {}).values())
+        for scope in scopes:
+            for table in ("dependencies", "dev-dependencies", "build-dependencies"):
+                for name, value in scope.get(table, {}).items():
+                    if isinstance(value, str) or (isinstance(value, dict)
+                                                  and not {"path", "workspace"} & value.keys()):
+                        result.setdefault(name, []).append(value)
+    return result
+
+
+def bin_identity(value):
+    """Only the bounded, crate-relative bin declaration can transfer."""
+    if not isinstance(value, dict) or not set(value) <= {"name", "path", "required-features"}:
+        return None
+    name = value.get("name")
+    if not isinstance(name, str) or not name:
+        return None
+    path = value.get("path", f"src/bin/{name}.rs")
+    if not isinstance(path, str) or posixpath.isabs(path):
+        return None
+    path = posixpath.normpath(path)
+    if path == ".." or path.startswith("../"):
+        return None
+    return name, path, value.get("required-features")
+
+
+def transferred_bins(blocks, read_old, read_new) -> dict[tuple[str, str], set[int]]:
+    """Pair declarations across manifests only when their sources also transfer."""
+    removed, added = [], []
+    renames = set()
+    for lines in blocks:
+        plain = [ANSI.sub("", line) for line in lines]
+        rename_from = next((line.removeprefix("rename from ") for line in plain
+                            if line.startswith("rename from ")), None)
+        rename_to = next((line.removeprefix("rename to ") for line in plain
+                          if line.startswith("rename to ")), None)
+        if rename_from is not None and rename_to is not None:
+            renames.add((rename_from, rename_to))
+        old = next((line[4:].removeprefix("a/") for line in plain if line.startswith("--- ")), None)
+        new = next((line[4:].removeprefix("b/") for line in plain if line.startswith("+++ ")), None)
+        if not ((old and old.endswith("Cargo.toml")) or (new and new.endswith("Cargo.toml"))):
+            continue
+        before = tomllib.loads(read_old(old) or "") if old != "/dev/null" else {}
+        after = tomllib.loads(read_new(new) or "") if new != "/dev/null" else {}
+        surviving_names = {value.get("name") for value in after.get("bin", [])}
+        for index, value in enumerate(before.get("bin", [])):
+            identity = bin_identity(value)
+            if identity is not None and value["name"] not in surviving_names:
+                removed.append((old, index, identity))
+        previous_names = {value.get("name") for value in before.get("bin", [])}
+        if new and re.fullmatch(r"crates/[^/]+/Cargo.toml", new):
+            for index, value in enumerate(after.get("bin", [])):
+                if value.get("name") not in previous_names:
+                    added.append((new, index, bin_identity(value)))
+    result = {}
+    for path, index, identity in added:
+        if identity is None:
+            continue
+        for candidate, (old, old_index, old_identity) in enumerate(removed):
+            if old != path and identity == old_identity:
+                old_source = posixpath.join(posixpath.dirname(old), identity[1])
+                new_source = posixpath.join(posixpath.dirname(path), identity[1])
+                if (old_source, new_source) not in renames:
+                    before = read_old(old_source, raw=True)
+                    if before is None or before != read_new(new_source, raw=True):
+                        continue
+                result.setdefault(("+", path), set()).add(index)
+                result.setdefault(("-", old), set()).add(old_index)
+                removed.pop(candidate)
+                break
+    return result
+
+
+def manifest_wiring(source: str, path: str, read_file, read_other, sign: str,
+                    new_crate=False, external_values=None, other_path=None,
+                    bins=frozenset()) -> tuple[set[int], set[int]]:
+    """Eligible physical lines, with table context from the complete revision.
+
+    Only added dev-dependencies may select features. Removing feature selectors
+    is wiring only when the dependency key disappears from all dependency tables.
+    New manifests may declare empty non-default features. Exact workspace lint
+    inheritance is wiring in any manifest. Explicit
+    rejections cannot pass through git move detection or legacy visibility pairs.
+    """
+    root = tomllib.loads(read_file("Cargo.toml") or "").get("workspace", {})
+    other_root = tomllib.loads(read_other("Cargo.toml") or "").get("workspace", {})
+    document = tomllib.loads(source)
+    other_document = tomllib.loads(read_other(other_path or path) or "")
+
+    def workspace_crate(directory: str) -> bool:
+        directory = posixpath.normpath(directory)
+        return (any(fnmatch.fnmatchcase(directory, member) for member in root.get("members", []))
+                and not any(fnmatch.fnmatchcase(directory, member) for member in root.get("exclude", []))
+                and bool(read_file(directory + "/Cargo.toml")))
+
+    dependencies = {}
+    surviving_dependencies = set()
+    for table in ("dependencies", "dev-dependencies", "build-dependencies"):
+        dependencies.update(document.get(table, {}))
+        surviving_dependencies.update(other_document.get(table, {}))
+
+    def local_dependency(value, conservative=True, dev_features=False) -> bool:
+        keys = {"path", "package"}
+        if not conservative:
+            keys |= {"features", "optional", "default-features"}
+        elif dev_features:
+            keys.add("features")
+            if isinstance(value, dict) and "features" in value and not (
+                    isinstance(value["features"], list)
+                    and all(isinstance(feature, str) for feature in value["features"])):
+                return False
+        return (isinstance(value, dict) and isinstance(value.get("path"), str)
+                and set(value) <= keys
+                and workspace_crate(posixpath.join(posixpath.dirname(path), value["path"])))
+
+    def workspace_dependency(value) -> bool:
+        return isinstance(value, dict) and value == {"workspace": True}
+
+    def eligible(table: str, key: str, value) -> bool:
+        if table == "lints":
+            return key == "workspace" and value is True and len(document["lints"]) == 1
+        if table == "package" and new_crate:
+            return key in {"name", "version", "edition", "publish", "license", "description"}
+        if table == "workspace" and key == "members":
+            if not isinstance(value, list):
+                return False
+            for member in value:
+                if not isinstance(member, str):
+                    return False
+                if sign == "+":
+                    if not read_file(member + "/Cargo.toml"):
+                        return False
+                elif member not in other_root.get("members", []):
+                    if not read_file(member) or read_other(member):
+                        return False
+            return True
+        if table in {"dependencies", "dev-dependencies", "build-dependencies"}:
+            return (local_dependency(value, conservative=sign == "+" or key in surviving_dependencies,
+                                     dev_features=sign == "+" and table == "dev-dependencies")
+                    or (new_crate and (workspace_dependency(value)
+                                       or value in (external_values or {}).get(key, []))))
+        if table == "features" and key != "default" and isinstance(value, list) and (value or new_crate):
+            for feature in value:
+                if not isinstance(feature, str) or not re.fullmatch(r"[\w-]+\??/[\w-]+", feature):
+                    return False
+                dependency = feature.split("/")[0].removesuffix("?")
+                dep = dependencies.get(dependency)
+                if not local_dependency(dep, conservative=False):
+                    inherited = root.get("dependencies", {}).get(dependency)
+                    if not (workspace_dependency(dep) and isinstance(inherited, dict)
+                            and isinstance(inherited.get("path"), str)
+                            and workspace_member(posixpath.normpath(inherited["path"]), root)
+                            and read_file(posixpath.normpath(inherited["path"]) + "/Cargo.toml")):
+                        return False
+            return True
+        return False
+
+    allowed, forbidden = set(), set()
+    table = ""
+    header = None
+    entries = []
+    pending = []
+    start = 0
+    bin_index = -1
+    source_lines = source.splitlines()
+
+    def finish_table(end):
+        if table == "[bin]":
+            if bin_index in bins:
+                allowed.update(range(header, end))
+            else:
+                forbidden.update(range(header, end))
+            return
+        if new_crate and re.match(r"^(?:dependencies|dev-dependencies|build-dependencies)\.", table):
+            block = tomllib.loads("\n".join(source_lines[header - 1:end - 1]))
+            ok = all(value in (external_values or {}).get(key, [])
+                     for values in block.values() for key, value in values.items())
+            (allowed if ok else forbidden).update(range(header, end))
+            return
+        if (header is not None and (table in {"dependencies", "dev-dependencies", "build-dependencies", "features", "lints"}
+                                   or (new_crate and table == "package"))
+                and entries and all(entries)):
+            allowed.add(header)
+        elif header is not None and (new_crate or table == "lints"):
+            forbidden.add(header)
+
+    for number, line in enumerate(source_lines, 1):
+        stripped = line.strip()
+        if not pending and stripped.startswith("["):
+            finish_table(number)
+            table = stripped.split("#", 1)[0].strip().removeprefix("[").removesuffix("]")
+            header, entries = number, []
+            if table == "[bin]":
+                bin_index += 1
+            continue
+        if table == "[bin]" or (new_crate and re.match(
+                r"^(?:dependencies|dev-dependencies|build-dependencies)\.", table)):
+            continue
+        if not pending and (not stripped or stripped.startswith("#")):
+            if new_crate:
+                allowed.add(number)
+            continue
+        if not pending:
+            start = number
+        pending.append(line)
+        try:
+            entry = tomllib.loads("\n".join(pending))
+        except tomllib.TOMLDecodeError:
+            continue
+        ok = len(entry) == 1 and all(eligible(table, key, value) for key, value in entry.items())
+        entries.append(ok)
+        if ok:
+            allowed.update(range(start, number + 1))
+        elif (new_crate or table == "lints"
+              or (table == "features" and ("default" in entry or any(value == [] for value in entry.values())))
+              or (table == "workspace" and "members" in entry)
+              or (table in {"dependencies", "dev-dependencies", "build-dependencies"}
+                  and any(isinstance(value, dict) and "path" in value for value in entry.values()))):
+            forbidden.update(range(start, number + 1))
+        pending = []
+    finish_table(len(source_lines) + 1)
+    return allowed, forbidden
+
+
+def crate_move_claims(out: str, read_old, read_new, rewrites,
+                      external_values=None, hints=None) -> dict[int, str]:
+    """Claim three disjoint classes without changing any legacy allowlist.
+
+    Rewrite pairs are restricted to the same diff file (including a git-detected
+    rename), one removed and one added occurrence each. Maps are explicit,
+    simultaneous, token-boundary path substitutions on the removed side only.
+    Basenames and module prefixes cannot prove identity between delete/add files
+    (notably repeated mod.rs names). Such pairs retain residue and get a hint to
+    separate the git mv from its rewrite rather than guessing their pairing.
+    """
+    claims = {}
+    blocks = [[]]
+    for raw in out.splitlines():
+        if ANSI.sub("", raw).startswith("diff --git "):
+            blocks.append([])
+        blocks[-1].append(raw)
+    bins = transferred_bins(blocks, read_old, read_new)
+    offset = 0
+    mapping = dict(rewrites)
+    pattern = (re.compile(r"(?<![\w$])(?:" + "|".join(
+        re.escape(key) for key in sorted(mapping, key=len, reverse=True)) + ")") if mapping else None)
+    deleted_paths, added_paths = [], []
+    for lines in blocks:
+        plain = [ANSI.sub("", line) for line in lines]
+        old_path = next((line[4:].removeprefix("a/") for line in plain if line.startswith("--- ")), None)
+        new_path = next((line[4:].removeprefix("b/") for line in plain if line.startswith("+++ ")), None)
+        path = new_path if new_path != "/dev/null" else old_path
+        added = old_path == "/dev/null"
+        if path and path.endswith(".rs"):
+            if added:
+                added_paths.append(path)
+            elif new_path == "/dev/null":
+                deleted_paths.append(path)
+        skeleton = False
+        if path and added and re.fullmatch(r"crates/[^/]+/src/(?:lib|main)\.rs", path):
+            skeleton = skeleton_lines(read_new(path))
+        manifest = path and path.endswith("Cargo.toml") and not skeleton
+        eligible, forbidden = {}, {}
+        new_manifest = bool(added and path and re.fullmatch(r"crates/[^/]+/Cargo.toml", path))
+        if manifest:
+            for sign, file_path, reader in (("-", old_path, read_old), ("+", new_path, read_new)):
+                source = reader(file_path) if file_path != "/dev/null" else ""
+                other = read_new if sign == "-" else read_old
+                eligible[sign], forbidden[sign] = manifest_wiring(
+                    source, file_path, reader, other, sign, new_manifest, external_values,
+                    new_path if sign == "-" else old_path, bins.get((sign, file_path), set())
+                ) if source else (set(), set())
+        numbers = {"-": 0, "+": 0}
+        removed, additions = [], []
+        for index, line in enumerate(plain):
+            hunk = re.match(r"@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@", line)
+            if hunk:
+                numbers = {"-": int(hunk[1]), "+": int(hunk[2])}
+            elif line.startswith(("--- ", "+++ ")):
+                continue
+            elif line.startswith(("+", "-")):
+                sign = line[0]
+                absolute = offset + index
+                if skeleton:
+                    claims[absolute] = "skeletons"
+                elif manifest and numbers[sign] in forbidden[sign]:
+                    claims[absolute] = "blocked"
+                elif manifest and numbers[sign] in eligible[sign]:
+                    claims[absolute] = "skeletons" if new_manifest else "manifests"
+                elif pattern and path and path.endswith(".rs") and not MOVED_RE.match(lines[index]):
+                    (removed if sign == "-" else additions).append((absolute, line[1:]))
+                numbers[sign] += 1
+            elif line.startswith(" "):
+                numbers["-"] += 1
+                numbers["+"] += 1
+        if pattern:
+            available = {}
+            for index, body in additions:
+                available.setdefault(_normalize_ws(body), []).append(index)
+            for index, body in removed:
+                rewritten, count = pattern.subn(lambda match: mapping[match[0]], body)
+                matches = available.get(_normalize_ws(rewritten), [])
+                if count and matches:
+                    claims[index] = claims[matches.pop()] = "rewrites"
+        offset += len(lines)
+    if rewrites and hints is not None:
+        for old_path in deleted_paths:
+            for new_path in added_paths:
+                if posixpath.basename(old_path) == posixpath.basename(new_path):
+                    hints.append(f"  hint: {old_path} -> {new_path} is a delete/add pair; "
+                                 "land the git mv and the rewrite as separate commits.")
+    return claims
+
+
 def main() -> int:
-    args = [a for a in sys.argv[1:] if a != "--show-all"]
-    show_all = "--show-all" in sys.argv
-    if len(args) != 1:
-        print(__doc__)
-        return 2
-    target = args[0]
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("target", nargs="?")
+    parser.add_argument("--cached", action="store_true")
+    parser.add_argument("--show-all", action="store_true")
+    parser.add_argument("--rewrite", type=rewrite_map, action="append", default=[])
+    args = parser.parse_args()
+    if bool(args.target) == args.cached:
+        parser.error("give one commit/range or --cached")
+    target = "--cached" if args.cached else args.target
+    show_all = args.show_all
 
     diff_args = [
         "git",
@@ -598,6 +979,9 @@ def main() -> int:
         "-c", "color.diff.newMoved=cyan",
         "-c", "color.diff.old=red",
         "-c", "color.diff.new=green",
+        # Crate moves are git mv plus path edits; rename pairing keeps a moved
+        # file's rewritten lines in one diff block whatever the user config.
+        "-c", "diff.renames=true",
         "diff",
         "--color=always",
         "--color-moved=plain",
@@ -612,15 +996,52 @@ def main() -> int:
 
     out = subprocess.run(diff_args, capture_output=True, text=True, check=True).stdout
 
-    counts, residue = classify(out)
+    if target == "--cached":
+        old_ref, new_ref = "HEAD", ""
+    elif "..." in target:
+        base, new_ref = target.split("...", 1)
+        new_ref = new_ref or "HEAD"
+        old_ref = subprocess.check_output(["git", "merge-base", base or "HEAD", new_ref], text=True).strip()
+    elif ".." in target:
+        old_ref, new_ref = target.split("..", 1)
+        old_ref, new_ref = old_ref or "HEAD", new_ref or "HEAD"
+    else:
+        old_ref, new_ref = target + "^", target
+
+    cache = {}
+
+    def reader(ref):
+        def read(path, raw=False):
+            key = (ref, path)
+            if key not in cache:
+                result = subprocess.run(["git", "show", f"{ref}:{path}"], capture_output=True)
+                cache[key] = result.stdout if result.returncode == 0 else None
+            # Raw reads preserve line endings and distinguish empty from missing.
+            return cache[key] if raw else (cache[key] or b"").decode()
+        return read
+
+    # Strip only ANSI for file boundaries; retain moved colors for legacy classes.
+    old_reader, new_reader = reader(old_ref), reader(new_ref)
+    external_values = {}
+    if re.search(r"^\+\+\+ b/crates/[^/]+/Cargo.toml$", ANSI.sub("", out), re.MULTILINE):
+        paths = subprocess.check_output(["git", "ls-tree", "-r", "--name-only", old_ref], text=True).splitlines()
+        external_values = external_dependency_values(
+            [path for path in paths if path.endswith("Cargo.toml")], old_reader)
+    hints = []
+    claims = crate_move_claims(out, old_reader, new_reader, args.rewrite, external_values, hints)
+    counts, residue = classify(out, claims)
     residue, vis_pairs = drop_visibility_pairs(residue)
     residue, include_pairs = drop_include_str_prefix_pairs(residue)
+    residue.extend(ANSI.sub("", raw) for index, raw in enumerate(out.splitlines())
+                   if claims.get(index) == "blocked")
     scaffold = counts["scaffold"]
 
     print(
         f"moved lines: {counts['moved']}  allowlisted wiring: {counts['allowed']}  "
         f"comment lines: {counts['comments']}  scaffold: {scaffold}  "
         f"visibility pairs: {vis_pairs}  include_str pairs: {include_pairs}  "
+        f"crate skeletons: {counts['skeletons']}  manifest wiring: {counts['manifests']}  "
+        f"path rewrites: {counts['rewrites']}  "
         f"residue: {len(residue)}"
     )
     if vis_pairs:
@@ -640,8 +1061,10 @@ def main() -> int:
             print(f"  RESIDUE {line}")
         if len(residue) > limit:
             print(f"  … {len(residue) - limit} more (--show-all to print)")
-        print("NOT a pure move. Residue lines are semantic changes or sub-threshold")
-        print("(<3-line) moves — split the commit or justify each line in review.")
+        for hint in hints:
+            print(hint)
+        print("NOT a pure move. Residue lines are unmatched changes; split the commit")
+        print("or justify each line in review.")
         return 1
     if scaffold:
         print(f"PURE MOVE PROVEN: every non-scaffold changed line is a detected move "

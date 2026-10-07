@@ -29,12 +29,12 @@ use std::path::Path;
 use std::slice;
 
 use manifold_gpu::{GpuDevice, GpuLoadAction, GpuTexture, GpuTextureFormat};
-use manifold_renderer::clip_thumb_gpu::ClipThumbGpu;
+use manifold_ui_paint::clip_thumb_gpu::ClipThumbGpu;
 use manifold_renderer::display_capture::{AlphaInterpretation, LinearUiReadback, SrgbRgba8};
 use manifold_renderer::presentation::UI_FORMAT;
 use manifold_renderer::render_target::RenderTarget;
-use manifold_renderer::ui_cache_manager::UICacheManager;
-use manifold_renderer::ui_renderer::UIRenderer;
+use manifold_ui_paint::ui_cache_manager::UICacheManager;
+use manifold_ui_paint::ui_renderer::UIRenderer;
 
 use super::composite_resources::{composite_frame, CompositeResources};
 use super::thumbs;
@@ -66,8 +66,8 @@ const ATLAS_FORMAT: GpuTextureFormat = UI_FORMAT;
 pub(crate) fn make_panel_bitmap_gpu(
     device: &GpuDevice,
     ui: &UIRoot,
-) -> manifold_renderer::layer_bitmap_gpu::LayerBitmapGpu {
-    let mut gpu = manifold_renderer::layer_bitmap_gpu::LayerBitmapGpu::new(device, ATLAS_FORMAT);
+) -> manifold_ui_paint::layer_bitmap_gpu::LayerBitmapGpu {
+    let mut gpu = manifold_ui_paint::layer_bitmap_gpu::LayerBitmapGpu::new(device, ATLAS_FORMAT);
     if let Some((pixels, w, h)) = ui.inspector.led_preview_bitmap_peek() {
         gpu.upload_layer(
             device,
@@ -117,9 +117,9 @@ pub fn render_ui_to_png(
     let mut clip_rects = Vec::new();
     ui.viewport.visible_clip_rects(&mut clip_rects);
     let hovered_clip = ui.viewport.hovered_clip_id();
-    let clip_bodies: Vec<manifold_renderer::clip_draw::ClipBody> = clip_rects
+    let clip_bodies: Vec<manifold_ui_paint::clip_draw::ClipBody> = clip_rects
         .iter()
-        .map(|cr| manifold_renderer::clip_draw::ClipBody {
+        .map(|cr| manifold_ui_paint::clip_draw::ClipBody {
             rect: cr.rect,
             base_color: cr.base_color,
             selected: selection.is_selected(&cr.clip_id),

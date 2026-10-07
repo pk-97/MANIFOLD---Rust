@@ -85,7 +85,7 @@
 //!    field), so this is source-compatible at every call site.
 
 use manifold_gpu::{GpuDevice, GpuLoadAction, GpuTexture};
-use manifold_renderer::ui_renderer::{Depth, UIRenderer};
+use manifold_ui_paint::ui_renderer::{Depth, UIRenderer};
 use manifold_ui::graph_canvas::mapping_popover::MappingPopover;
 use manifold_ui::graph_canvas::{GraphCanvas, Rect as CanvasRect};
 use manifold_ui::node::{NodeId, TextAlign, UIStyle};

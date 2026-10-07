@@ -8,4 +8,3 @@ crates/manifold-media/src/metal_encoder.rs	1
 crates/manifold-playback/src/audio_layer_playback.rs	2
 crates/manifold-renderer/src/node_graph/freeze/proof.rs	1
 crates/manifold-renderer/src/preset_runtime/tests/generator_runtime.rs	1
-crates/manifold-renderer/src/ui_renderer.rs	2

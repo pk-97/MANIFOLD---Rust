@@ -58,8 +58,8 @@ use manifold_core::LayerId;
 use manifold_editing::command::{Command, CompositeCommand};
 use manifold_editing::undo::UndoRedoManager;
 use manifold_gpu::GpuDevice;
-use manifold_renderer::ui_cache_manager::UICacheManager;
-use manifold_renderer::ui_renderer::UIRenderer;
+use manifold_ui_paint::ui_cache_manager::UICacheManager;
+use manifold_ui_paint::ui_renderer::UIRenderer;
 use manifold_ui::automation::{
     self, AssertCheck, AutomationAction, AutomationTarget, Gesture, MatchInfo,
 };
@@ -1650,9 +1650,9 @@ impl Runner {
         let mut clip_rects = Vec::new();
         ui.viewport.visible_clip_rects(&mut clip_rects);
         let hovered_clip = ui.viewport.hovered_clip_id();
-        let clip_bodies: Vec<manifold_renderer::clip_draw::ClipBody> = clip_rects
+        let clip_bodies: Vec<manifold_ui_paint::clip_draw::ClipBody> = clip_rects
             .iter()
-            .map(|cr| manifold_renderer::clip_draw::ClipBody {
+            .map(|cr| manifold_ui_paint::clip_draw::ClipBody {
                 rect: cr.rect,
                 base_color: cr.base_color,
                 selected: data.selection.is_selected(&cr.clip_id),

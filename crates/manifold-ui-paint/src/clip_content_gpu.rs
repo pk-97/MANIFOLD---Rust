@@ -613,10 +613,11 @@ mod tests {
     #[cfg(all(target_os = "macos", feature = "gpu-proofs"))]
     mod gpu {
         use super::super::ClipContentGpu;
-        use crate::render_target::RenderTarget;
         use half::f16;
         use manifold_foundation::{Beats, ClipId};
-        use manifold_gpu::{GpuDevice, GpuTexture};
+        use manifold_gpu::{
+            GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureUsage,
+        };
         use manifold_ui::color;
         use manifold_ui::node::Rect;
         use manifold_ui::panels::viewport::ClipScreenRect;
@@ -660,21 +661,18 @@ mod tests {
         fn clear_and_render(
             device: &GpuDevice,
             content: &mut ClipContentGpu,
-            target: &RenderTarget,
+            target: &GpuTexture,
             tracks: Rect,
             clip: &ClipScreenRect,
         ) {
-            crate::clear_texture_committed(
-                device,
-                &target.texture,
-                [0.0, 0.0, 0.0, 0.0],
-                "clip-waveform-proof-clear",
-            );
+            let mut clear = device.create_encoder("clip-waveform-proof-clear");
+            clear.clear_texture(target, 0.0, 0.0, 0.0, 0.0);
+            clear.commit_and_wait_completed();
             let mut encoder = device.create_encoder("clip-waveform-proof-render");
             content.render(
                 device,
                 &mut encoder,
-                &target.texture,
+                target,
                 WIDTH,
                 HEIGHT,
                 1.0,
@@ -703,8 +701,17 @@ mod tests {
 
         #[test]
         fn clip_waveform_gpu_repaints_same_size_source_replacement() {
-            let device = crate::test_device();
-            let target = RenderTarget::new(&device, WIDTH, HEIGHT, FORMAT, "clip-waveform-proof");
+            let device = manifold_gpu::testkit::test_device();
+            let target = device.create_texture(&GpuTextureDesc {
+                width: WIDTH,
+                height: HEIGHT,
+                depth: 1,
+                format: FORMAT,
+                dimension: GpuTextureDimension::D2,
+                usage: GpuTextureUsage::RENDER_TARGET_FULL,
+                label: "clip-waveform-proof",
+                mip_levels: 1,
+            });
             let mut content = ClipContentGpu::new(&device, FORMAT);
             let rect = Rect::new(0.0, 0.0, WIDTH as f32, HEIGHT as f32);
             let first = clip(waveform(60.0), rect);
@@ -715,7 +722,7 @@ mod tests {
                 Rect::new(0.0, 0.0, WIDTH as f32, HEIGHT as f32),
                 &first,
             );
-            let before = readback(&device, &target.texture);
+            let before = readback(&device, &target);
             let second = clip(waveform(6000.0), rect);
             clear_and_render(
                 &device,
@@ -724,7 +731,7 @@ mod tests {
                 Rect::new(0.0, 0.0, WIDTH as f32, HEIGHT as f32),
                 &second,
             );
-            let after = readback(&device, &target.texture);
+            let after = readback(&device, &target);
             assert_ne!(
                 before, after,
                 "same-sized source replacement left stale waveform pixels"
@@ -733,9 +740,17 @@ mod tests {
 
         #[test]
         fn clip_waveform_gpu_excludes_name_strip() {
-            let device = crate::test_device();
-            let target =
-                RenderTarget::new(&device, WIDTH, HEIGHT, FORMAT, "clip-waveform-strip-proof");
+            let device = manifold_gpu::testkit::test_device();
+            let target = device.create_texture(&GpuTextureDesc {
+                width: WIDTH,
+                height: HEIGHT,
+                depth: 1,
+                format: FORMAT,
+                dimension: GpuTextureDimension::D2,
+                usage: GpuTextureUsage::RENDER_TARGET_FULL,
+                label: "clip-waveform-strip-proof",
+                mip_levels: 1,
+            });
             let mut content = ClipContentGpu::new(&device, FORMAT);
             let rect = Rect::new(0.0, 0.0, WIDTH as f32, HEIGHT as f32);
             let clip = clip(waveform(800.0), rect);
@@ -746,7 +761,7 @@ mod tests {
                 Rect::new(0.0, 0.0, WIDTH as f32, HEIGHT as f32),
                 &clip,
             );
-            let pixels = readback(&device, &target.texture);
+            let pixels = readback(&device, &target);
             assert!(
                 (0..84).any(|y| pixel_luma(&pixels, 32, y) > 0.01),
                 "proof must draw a waveform above the strip"
@@ -765,11 +780,27 @@ mod tests {
 
         #[test]
         fn clip_waveform_gpu_vertical_crop_matches_full_render() {
-            let device = crate::test_device();
-            let full_target =
-                RenderTarget::new(&device, WIDTH, HEIGHT, FORMAT, "clip-waveform-full-proof");
-            let cropped_target =
-                RenderTarget::new(&device, WIDTH, HEIGHT, FORMAT, "clip-waveform-crop-proof");
+            let device = manifold_gpu::testkit::test_device();
+            let full_target = device.create_texture(&GpuTextureDesc {
+                width: WIDTH,
+                height: HEIGHT,
+                depth: 1,
+                format: FORMAT,
+                dimension: GpuTextureDimension::D2,
+                usage: GpuTextureUsage::RENDER_TARGET_FULL,
+                label: "clip-waveform-full-proof",
+                mip_levels: 1,
+            });
+            let cropped_target = device.create_texture(&GpuTextureDesc {
+                width: WIDTH,
+                height: HEIGHT,
+                depth: 1,
+                format: FORMAT,
+                dimension: GpuTextureDimension::D2,
+                usage: GpuTextureUsage::RENDER_TARGET_FULL,
+                label: "clip-waveform-crop-proof",
+                mip_levels: 1,
+            });
             let rect = Rect::new(0.0, 0.0, WIDTH as f32, HEIGHT as f32);
             let full_clip = clip(waveform(800.0), rect);
             let mut full_content = ClipContentGpu::new(&device, FORMAT);
@@ -780,7 +811,7 @@ mod tests {
                 Rect::new(0.0, 0.0, WIDTH as f32, HEIGHT as f32),
                 &full_clip,
             );
-            let full = readback(&device, &full_target.texture);
+            let full = readback(&device, &full_target);
             let full_raster = full_content.scratch.clone();
             let mut cropped_content = ClipContentGpu::new(&device, FORMAT);
             clear_and_render(
@@ -790,7 +821,7 @@ mod tests {
                 Rect::new(0.0, 20.0, WIDTH as f32, 80.0),
                 &full_clip,
             );
-            let cropped = readback(&device, &cropped_target.texture);
+            let cropped = readback(&device, &cropped_target);
             for y in 20..84usize {
                 let full_row = &full_raster[y * WIDTH as usize..(y + 1) * WIDTH as usize];
                 let local_y = y - 20;
@@ -820,7 +851,7 @@ mod tests {
 
         #[test]
         fn clip_waveform_gpu_trim_and_tempo_breakpoint_preserve_impulse_time() {
-            let device = crate::test_device();
+            let device = manifold_gpu::testkit::test_device();
             let mut waveform = WaveformRenderer::new();
             let mut samples = vec![0.0; 4096];
             samples[3072] = 1.0; // Source time 0.75 seconds.
@@ -833,8 +864,16 @@ mod tests {
             // First half of the clip covers 0.25s; second half covers 0.5s.
             // The 0.75s impulse is midway through that second half, at x=48.
             clip.waveform_breakpoints = vec![(0.0, 0.25), (0.5, 0.5), (1.0, 1.0)];
-            let target =
-                RenderTarget::new(&device, WIDTH, HEIGHT, FORMAT, "clip-waveform-time-proof");
+            let target = device.create_texture(&GpuTextureDesc {
+                width: WIDTH,
+                height: HEIGHT,
+                depth: 1,
+                format: FORMAT,
+                dimension: GpuTextureDimension::D2,
+                usage: GpuTextureUsage::RENDER_TARGET_FULL,
+                label: "clip-waveform-time-proof",
+                mip_levels: 1,
+            });
             let mut content = ClipContentGpu::new(&device, FORMAT);
             clear_and_render(
                 &device,
@@ -843,7 +882,7 @@ mod tests {
                 Rect::new(0.0, 0.0, WIDTH as f32, HEIGHT as f32),
                 &clip,
             );
-            let pixels = readback(&device, &target.texture);
+            let pixels = readback(&device, &target);
             let columns: Vec<_> = (0..WIDTH as usize)
                 .filter(|&x| (0..84).any(|y| pixel_luma(&pixels, x, y) > 0.01))
                 .collect();

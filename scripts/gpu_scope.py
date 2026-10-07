@@ -33,6 +33,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 RENDERER_SRC = "crates/manifold-renderer/src/"
+UI_PAINT_DIR = "crates/manifold-ui-paint/"
+UI_PAINT_FILTERS = ["clip_content_gpu::tests::gpu::", "ui_renderer::tests::"]
 PROOFS_DIR = "crates/manifold-renderer/tests/gpu_proofs/"
 
 # Landing warning budget for the scoped (non-glb) GPU step, seconds of test time.
@@ -417,7 +419,7 @@ def is_gpu_path(path):
     """Paths that trigger the GPU-proofs leg (mirrors the context-nudge triggers)."""
     if path.endswith(".wgsl"):
         return True
-    if path.startswith("crates/manifold-gpu/") or path.startswith(RENDERER_SRC + "node_graph/"):
+    if path.startswith(("crates/manifold-gpu/", UI_PAINT_DIR, RENDERER_SRC + "node_graph/")):
         return True
     if "shaders/" in path or "gpu_encoder" in path:
         return True
@@ -435,6 +437,7 @@ class Plan:
     paths: list = field(default_factory=list)       # GPU paths considered
     filters: set = field(default_factory=set)
     skips: set = field(default_factory=set)
+    ui_paint: bool = False
     glb: bool = False
     broad: list = field(default_factory=list)        # (path, reason) that mapped to BROAD
     unmapped: list = field(default_factory=list)     # (path, why)
@@ -463,6 +466,10 @@ class Plan:
             return []
         runs = [{"targets": ["gpu_proofs"], "lib": True, "filters": self.final_filters(),
                  "skips": self.final_skips(), "budgeted": True}]
+        if self.ui_paint:
+            runs.append({"package": "manifold-ui-paint", "targets": [], "lib": True,
+                         "filters": UI_PAINT_FILTERS, "skips": self.final_skips(),
+                         "budgeted": True})
         if self.glb:
             runs.append({"targets": ["glb_conformance"], "lib": False, "filters": [],
                          "skips": [], "budgeted": False})
@@ -478,6 +485,8 @@ class Plan:
         if self.deferred():
             lines.append("GPU-PROOFS DEFERRED: " + ", ".join(
                 f"{name} ({secs:.0f}s)" for name, secs in self.deferred()))
+        if self.ui_paint:
+            lines.append("  manifold-ui-paint --lib: " + ", ".join(UI_PAINT_FILTERS))
         if self.broad:
             lines.append("  broad set (runtime + lighting) because: " +
                          "; ".join(f"{p} ({why})" for p, why in self.broad))
@@ -599,6 +608,9 @@ def plan_for_paths(paths, repo, shader_users=None, base="origin/main"):
         if not is_gpu_path(path):
             continue
         plan.paths.append(path)
+        if path.startswith(UI_PAINT_DIR):
+            plan.ui_paint = True
+            continue
         plan.filters.update(changed_test_filters(path, repo, base))
         if is_gltf_path(path):
             plan.glb = True
@@ -614,6 +626,7 @@ def plan_for_paths(paths, repo, shader_users=None, base="origin/main"):
             plan.broad.append((path, "affects every proof"))
             continue
         if path.startswith("crates/manifold-gpu/"):
+            plan.ui_paint = True
             if path.endswith("raytrace.rs") or "/vulkan/" in path:
                 continue  # rt row above / Vulkan not built here: smoke only
             plan.filters.update(BROAD_FILTERS)

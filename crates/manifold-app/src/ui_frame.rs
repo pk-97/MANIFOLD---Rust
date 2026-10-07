@@ -137,12 +137,12 @@
 
 use manifold_core::Beats;
 use manifold_gpu::{GpuDevice, GpuRenderPipeline, GpuSampler, GpuTexture};
-use manifold_renderer::clip_content_gpu::ClipContentGpu;
-use manifold_renderer::clip_draw::ClipBody;
-use manifold_renderer::clip_thumb_gpu::{ClipThumbGpu, ThumbQuad};
-use manifold_renderer::layer_bitmap_gpu::LayerBitmapGpu;
-use manifold_renderer::ui_cache_manager::UICacheManager;
-use manifold_renderer::ui_renderer::UIRenderer;
+use manifold_ui_paint::clip_content_gpu::ClipContentGpu;
+use manifold_ui_paint::clip_draw::ClipBody;
+use manifold_ui_paint::clip_thumb_gpu::{ClipThumbGpu, ThumbQuad};
+use manifold_ui_paint::layer_bitmap_gpu::LayerBitmapGpu;
+use manifold_ui_paint::ui_cache_manager::UICacheManager;
+use manifold_ui_paint::ui_renderer::UIRenderer;
 use manifold_spectral::{ScopeColumn, Spectrogram, SpectrogramConfig};
 use manifold_ui::node::{Color32, Vec2};
 use manifold_ui::panels::viewport::{AutomationLaneScreen, ClipScreenRect, TimelineOverlays};
@@ -493,7 +493,7 @@ pub(crate) fn render_main_ui_passes(
             // `docs/TIMELINE_INTERACTION_P1_SPEC.md` and
             // `UIRenderer::lane_content_scissor`'s doc comment.
             let mut scissor = ui_renderer.lane_content_scissor(tracks);
-            manifold_renderer::clip_draw::emit_clips(&mut scissor, clip_bodies);
+            manifold_ui_paint::clip_draw::emit_clips(&mut scissor, clip_bodies);
         }
         if ui_renderer.prepare(device, logical_w, logical_h, scale) {
             ui_renderer.render(&mut encoder, offscreen, manifold_gpu::GpuLoadAction::Load);
@@ -586,13 +586,13 @@ pub(crate) fn render_main_ui_passes(
     // Clip name labels (section 24 5b) — on top of the bodies + waveforms, at
     // BASE depth (under the dropdown/modal overlays). Reuses the visible
     // clip list resolved for the Pass 4b body emission this frame.
-    manifold_renderer::clip_draw::emit_clip_names(ui_renderer, clip_rects, tracks);
+    manifold_ui_paint::clip_draw::emit_clip_names(ui_renderer, clip_rects, tracks);
 
     // Automation lane strips (P4, `docs/AUTOMATION_LANES_DESIGN.md` section 7) —
     // on top of the clip names, same overlay pass. Empty whenever
     // automation mode is off (the caller never populated any lanes this
     // frame), so this is a no-op cost in the common case.
-    manifold_renderer::automation_lane_draw::emit_automation_lanes(ui_renderer, automation_lanes, tracks, automation_selection);
+    manifold_ui_paint::automation_lane_draw::emit_automation_lanes(ui_renderer, automation_lanes, tracks, automation_selection);
 
     // Playhead — a red line spanning ruler + tracks, capped by a downward
     // triangle head at the top of the ruler (section 24 5e). The head is the

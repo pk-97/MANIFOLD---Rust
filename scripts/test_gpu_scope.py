@@ -18,6 +18,20 @@ def plan(paths, users=None, repo=None):
 
 
 class ScopeTests(unittest.TestCase):
+    def test_ui_paint_selects_own_lib_proofs_and_renderer_smoke(self):
+        result = plan(["crates/manifold-ui-paint/src/native_text.rs"])
+        self.assertFalse(result.unmapped)
+        self.assertEqual(result.runs()[0]["filters"], sorted(g.SMOKE_FILTERS))
+        paint = result.runs()[1]
+        self.assertEqual(paint["package"], "manifold-ui-paint")
+        self.assertTrue(paint["lib"])
+        self.assertEqual(paint["targets"], [])
+        self.assertEqual(paint["filters"], g.UI_PAINT_FILTERS)
+
+    def test_gpu_core_also_selects_ui_paint(self):
+        result = plan(["crates/manifold-gpu/src/testkit.rs"])
+        self.assertTrue(result.ui_paint)
+
     def setUp(self):
         self.real_learned_times_path = g.learned_times_path
         self.enterContext(mock.patch.object(g, "learned_times_path", return_value=None))
@@ -159,7 +173,8 @@ class ScopeTests(unittest.TestCase):
         p = plan(["crates/manifold-gpu/src/metal/device.rs"])
         self.assertEqual(p.final_filters(), sorted(set(g.SMOKE_FILTERS + g.BROAD_FILTERS)))
         self.assertFalse(p.glb)
-        self.assertEqual(len(p.runs()), 1)
+        self.assertEqual(len(p.runs()), 2)
+        self.assertEqual(p.runs()[1]["package"], "manifold-ui-paint")
 
     def test_broad_set_is_bounded(self):
         # Never a bare gpu_proofs/lib sweep: every filter names something specific.

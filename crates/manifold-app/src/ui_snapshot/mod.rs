@@ -1092,7 +1092,7 @@ mod footer_leak_probe {
     //! node range the way the cache manager does and reports every node whose
     //! visible (clipped) paint reaches BELOW the footer's top edge.
     use super::*;
-    use manifold_renderer::ui_cache_manager::PanelSlot;
+    use manifold_ui_paint::ui_cache_manager::PanelSlot;
     use manifold_ui::node::Rect;
     use manifold_ui::tree::TraversalEvent;
     use manifold_ui::UIFlags;
@@ -1285,8 +1285,8 @@ mod cache_path_full_render {
 
     use manifold_core::LayerId;
     use manifold_gpu::GpuDevice;
-    use manifold_renderer::ui_cache_manager::UICacheManager;
-    use manifold_renderer::ui_renderer::UIRenderer;
+    use manifold_ui_paint::ui_cache_manager::UICacheManager;
+    use manifold_ui_paint::ui_renderer::UIRenderer;
     use manifold_ui::automation::{self, AutomationTarget, SelectorQuery};
     use manifold_ui::input::PointerAction;
     use manifold_ui::node::Vec2;
@@ -1596,7 +1596,7 @@ mod editor_window_harness {
 
     use manifold_gpu::{GpuDevice, GpuTextureFormat};
     use manifold_renderer::render_target::RenderTarget;
-    use manifold_renderer::ui_renderer::UIRenderer;
+    use manifold_ui_paint::ui_renderer::UIRenderer;
     use manifold_ui::graph_canvas::{GraphCanvas, GraphCanvasTargets, Rect as CanvasRect};
     use manifold_ui::hit_targets::HitTargets;
     use manifold_ui::panels::graph_editor::{
@@ -1833,8 +1833,8 @@ mod overlay_fidelity_proof {
     //! to `render_tree_range` makes `sub_region_drew` false and this fails.
 
     use manifold_gpu::{GpuDevice, GpuLoadAction};
-    use manifold_renderer::ui_cache_manager::UICacheManager;
-    use manifold_renderer::ui_renderer::UIRenderer;
+    use manifold_ui_paint::ui_cache_manager::UICacheManager;
+    use manifold_ui_paint::ui_renderer::UIRenderer;
 
     use super::composite_resources::{composite_frame, CompositeResources};
     use super::render::readback;
