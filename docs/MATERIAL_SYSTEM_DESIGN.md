@@ -39,10 +39,10 @@ Introduce a `Material` port type and a v1 set of material atoms that 3D mesh ren
 
 ## 3. The `Material` port type
 
-CPU-only struct, parallel to [`Camera`](../crates/manifold-renderer/src/node_graph/camera.rs) and [`Light`](../crates/manifold-renderer/src/node_graph/light.rs). One source primitive emits a Material per frame; downstream renderers read it via `ctx.inputs.material("material")`.
+CPU-only struct, parallel to [`Camera`](../crates/manifold-node-engine/src/scene/camera.rs) and [`Light`](../crates/manifold-node-engine/src/scene/light.rs). One source primitive emits a Material per frame; downstream renderers read it via `ctx.inputs.material("material")`.
 
 ```rust
-// crates/manifold-renderer/src/node_graph/material.rs
+// crates/manifold-node-engine/src/scene/material.rs
 
 /// Discriminator for the material's shading model. Open enum — each
 /// added kind ships with: (a) a new variant here, (b) a new material
@@ -101,11 +101,11 @@ impl Material {
 }
 ```
 
-**`PortType::Material` variant** added to [`ports.rs`](../crates/manifold-renderer/src/node_graph/ports.rs). **`(Material) => $crate::node_graph::ports::PortType::Material`** macro arm added to the `primitive!` declarative macro in [`primitive.rs`](../crates/manifold-renderer/src/node_graph/primitive.rs).
+**`PortType::Material` variant** added to [`ports.rs`](../crates/manifold-node-engine/src/ports.rs). **`(Material) => $crate::node_graph::ports::PortType::Material`** macro arm added to the `primitive!` declarative macro in [`primitive.rs`](../crates/manifold-node-engine/src/primitive.rs).
 
-**`PortKindSnapshot::Material` variant** added to [`snapshot.rs`](../crates/manifold-renderer/src/node_graph/snapshot.rs) for the graph editor's wire colour. New colour constant `PORT_MATERIAL_COLOR` in [`graph_canvas.rs`](../crates/manifold-app/src/graph_canvas.rs) — recommend a desaturated copper / orange (`[0.95, 0.65, 0.40, 1.0]`) so it's distinct from Light's yellow and Camera's red.
+**`PortKindSnapshot::Material` variant** added to [`snapshot.rs`](../crates/manifold-node-engine/src/snapshot.rs) for the graph editor's wire colour. New colour constant `PORT_MATERIAL_COLOR` in [`graph_canvas.rs`](../crates/manifold-app/src/graph_canvas.rs) — recommend a desaturated copper / orange (`[0.95, 0.65, 0.40, 1.0]`) so it's distinct from Light's yellow and Camera's red.
 
-**Backend trait extension** (mirror of [`Camera`](../crates/manifold-renderer/src/node_graph/backend.rs)):
+**Backend trait extension** (mirror of [`Camera`](../crates/manifold-node-engine/src/exec/backend.rs)):
 
 ```rust
 fn material(&self, _slot: Slot) -> Option<Material> { None }
@@ -114,7 +114,7 @@ fn set_material(&mut self, _slot: Slot, _value: Material) {}
 
 `MockBackend` + `MetalBackend` get a `materials: AHashMap<Slot, Material>` field; same shape as the existing `cameras` / `lights` maps.
 
-**Bindings extension** ([`bindings.rs`](../crates/manifold-renderer/src/node_graph/bindings.rs)): `NodeInputs::material(port)` + `NodeOutputs::set_material(port, value)`, with the executor draining a `pending_material_writes` scratch.
+**Bindings extension** ([`bindings.rs`](../crates/manifold-node-engine/src/bindings.rs)): `NodeInputs::material(port)` + `NodeOutputs::set_material(port, value)`, with the executor draining a `pending_material_writes` scratch.
 
 ---
 
@@ -239,9 +239,9 @@ fn conditional_requirements(&self) -> &'static [ConditionalRequirement] {
 }
 ```
 
-This is small new infrastructure on the `EffectNode` trait — default implementation returns `&[]` (no conditional requirements). Validator hooks in at preset-load via [`validation.rs`](../crates/manifold-renderer/src/node_graph/validation.rs).
+This is small new infrastructure on the `EffectNode` trait — default implementation returns `&[]` (no conditional requirements). Validator hooks in at preset-load via [`validation.rs`](../crates/manifold-node-engine/src/validation.rs).
 
-**Preset-load validation:** when a renderer's `material` input is wired to a statically-resolvable Material atom (no upstream mux on the wire), the validator reads the atom's `kind` param, looks up the renderer's `conditional_requirements`, and checks each required input is wired. Failure → `LoadError::ConditionalRequirementUnmet { node_id, material_kind, missing_input }` (new variant on the existing `LoadError` enum in [`persistence.rs`](../crates/manifold-renderer/src/node_graph/persistence.rs)).
+**Preset-load validation:** when a renderer's `material` input is wired to a statically-resolvable Material atom (no upstream mux on the wire), the validator reads the atom's `kind` param, looks up the renderer's `conditional_requirements`, and checks each required input is wired. Failure → `LoadError::ConditionalRequirementUnmet { node_id, material_kind, missing_input }` (new variant on the existing `LoadError` enum in [`persistence.rs`](../crates/manifold-node-engine/src/persistence.rs)).
 
 **Runtime fallback (when wire is dynamic — e.g., material flows through a mux):** the renderer's `evaluate` checks at first frame. New `ctx.error(message)` API on `EffectNodeContext` surfaces a structured error to the executor, which logs once + skips the dispatch + emits a fallback fill (deterministic magenta `[1.0, 0.0, 1.0, 1.0]` so missing-input errors are visually obvious without breaking the frame).
 
@@ -328,7 +328,7 @@ Each piece of the v1 design has a deliberate seam for future work. None of the e
 
 Future kinds (Glass, Hair, Skin, Toon, Water, Fabric, …) ship as:
 
-1. New `MaterialKind` variant in [`material.rs`](../crates/manifold-renderer/src/node_graph/material.rs).
+1. New `MaterialKind` variant in [`material.rs`](../crates/manifold-node-engine/src/scene/material.rs).
 2. New fields on the `Material` struct if the kind needs them (defaulted on existing materials — no version-break). Example: Glass needs `ior: f32` + `transmission: f32` — both ship defaulted to sensible inert values (1.0 / 0.0) on existing materials.
 3. New atom file (`crates/manifold-renderer/src/node_graph/primitives/{kind}_material.rs`) exposing only the kind's params on the outer card.
 4. New fragment shader (`shaders/material_{kind}.wgsl`).
@@ -369,7 +369,7 @@ If the "textures wire to the renderer, not through the material" UX wart becomes
 **Goal:** the wire exists end-to-end with no consumers yet.
 
 - `PortType::Material` variant + `(Material)` macro arm + `PortKindSnapshot::Material` + graph_canvas wire colour.
-- `crates/manifold-renderer/src/node_graph/material.rs` — `Material` struct, `MaterialKind` enum, helpers. Mirror the shape of [`light.rs`](../crates/manifold-renderer/src/node_graph/light.rs).
+- `crates/manifold-node-engine/src/scene/material.rs` — `Material` struct, `MaterialKind` enum, helpers. Mirror the shape of [`light.rs`](../crates/manifold-node-engine/src/scene/light.rs).
 - Backend trait: `material(slot)` + `set_material(slot, value)`. MockBackend + MetalBackend storage.
 - Bindings: `NodeInputs::material(port)` + `NodeOutputs::set_material(port, value)`. Executor drains `pending_material_writes` scratch.
 - Unit tests on Material helpers (default values, premultiplied emission, kind-dispatch helpers).
@@ -395,8 +395,8 @@ If the "textures wire to the renderer, not through the material" UX wart becomes
 
 - New `ctx.error(message)` API on `EffectNodeContext` — pushes an entry into a per-frame error scratch buffer the executor drains and logs.
 - `EffectNode::conditional_requirements()` method on the trait, default `&[]`.
-- Preset-load validator extension in [`validation.rs`](../crates/manifold-renderer/src/node_graph/validation.rs): for each renderer with `conditional_requirements`, if the material wire's source is statically resolvable, check the wired material's kind against the requirements list. Emit `LoadError::ConditionalRequirementUnmet { node_id, material_kind, missing_input }` (new variant on `LoadError`).
-- New variant in [`persistence.rs`](../crates/manifold-renderer/src/node_graph/persistence.rs) for the `LoadError` enum.
+- Preset-load validator extension in [`validation.rs`](../crates/manifold-node-engine/src/validation.rs): for each renderer with `conditional_requirements`, if the material wire's source is statically resolvable, check the wired material's kind against the requirements list. Emit `LoadError::ConditionalRequirementUnmet { node_id, material_kind, missing_input }` (new variant on `LoadError`).
+- New variant in [`persistence.rs`](../crates/manifold-node-engine/src/persistence.rs) for the `LoadError` enum.
 - Fallback magenta fill: a `gpu.native_enc.clear_texture(target, 1.0, 0.0, 1.0, 1.0)` call when a runtime conditional check fails. New helper on the renderer's path.
 
 **~1 day.**
@@ -599,7 +599,7 @@ Post-vocab ids in play: `node.render_mesh`, `node.render_copies`,
 ## Appendix B: structured-error API shape
 
 ```rust
-// crates/manifold-renderer/src/node_graph/effect_node.rs
+// crates/manifold-node-engine/src/exec/effect_node.rs
 
 impl<'ctx, 'gpu> EffectNodeContext<'ctx, 'gpu> {
     /// Report a structured error for the current node. The executor

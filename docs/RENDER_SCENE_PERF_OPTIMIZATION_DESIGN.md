@@ -29,7 +29,7 @@ anchors carry re-derivation commands.
 | Static sources re-copy every frame | `gltf_mesh_source.rs` (module doc: staging "re-fills the output buffer every frame via a cheap blit"), `gltf_skinned_mesh_source.rs` ~199–219 (three `copy_buffer_to_buffer` per frame), `gltf_texture_source.rs` blit above; sweep: `rg -n 'copy_buffer_to_buffer|dispatch_compute' crates/manifold-renderer/src/node_graph/primitives/gltf_*_source.rs` | **waste (R1)** |
 | Non-indexed geometry | `flatten_primitive`, `gltf_load.rs:462` — indices expanded to flat triangle lists at import; measured 3.84× vertex amplification on the AMG (236,428 unique verts vs 907,476 index entries), paid in main pass AND every shadow pass | exists (R4 — DEFERRED, see D2) |
 | CPU hot path | `render_scene.rs` `evaluate()` ~2264+ — ~22 `format!` allocations per object per frame (`rg -c 'format!' …/render_scene.rs` → 63 sites; the rebuild-time ones at ~705–743 are fine, the evaluate-time ones are not) + `bindings.rs:48–53` linear `iter().find` port scan ⇒ O(objects × wired_ports) ≈ O(objects²) | **waste (R5)** |
-| Executor slot mechanics | `execution.rs:66` `Executor` (typed write scratches lines 70–85); `Slot(pub u32)` `bindings.rs:31`; no per-slot generation anywhere: `rg -n 'generation' crates/manifold-renderer/src/node_graph/execution.rs` → zero hits | generation signal **missing** (R2) |
+| Executor slot mechanics | `execution.rs:66` `Executor` (typed write scratches lines 70–85); `Slot(pub u32)` `bindings.rs:31`; no per-slot generation anywhere: `rg -n 'generation' crates/manifold-node-engine/src/exec/execution.rs` → zero hits | generation signal **missing** (R2) |
 | Measurement oracle | `cargo xtask perf-soak <glb> [--size WxH] [--frames N] [--profile]` — `manifold-app/src/perf_soak_import.rs`; unprofiled GPU p50/p95 = the honest absolute numbers; `--profile` = per-span attribution, shares-not-totals (D6 of the gate design) | exists |
 | Attribution gap | `perf_soak_import.rs` `run_profiled` (~330–345): spans whose tag matches no executor step collapse into one `untagged_ms` scalar — but each span already carries its encoder pass label (`manifold-gpu/src/metal/profiling.rs` span `label` ~78/111; reserve sites `metal/encoder.rs` 265/299/327, labels like `"node.render_scene shadow"`, `"node.render_scene ibl prefilter"`, `"node.render_scene ibl irradiance"`) — the split R0 needs is recorded and then thrown away at report time | **missing (P0 fixes)** |
 | Fixtures | `tests/fixtures/gltf/mercedes-amg_gt3__www.vecarz.com.glb` (BUG-189), `tests/fixtures/gltf/khronos/BrainStem.glb` (BUG-190) | exist |
@@ -411,7 +411,7 @@ branch, exactly as pre-change — the latch is existing behavior, the test pins 
 break it and introduces no staleness beyond the designed one-frame lag); alias-path test: a
 dims-matched mux chain (canvas-sized source) proving the executor propagation — static input →
 downstream consumer's generation stable; input re-emits → generation bumps; negative:
-`rg -n 'node_declared_unchanged' crates/manifold-renderer/src/node_graph/execution.rs` shows the
+`rg -n 'node_declared_unchanged' crates/manifold-node-engine/src/exec/execution.rs` shows the
 alias-path write is inside a `!data_skip` guard; the P3 brief's gate paragraph carries a one-line
 note "perf clause discharged by P3b" (this doc, in-file).
 Demo: before/after JSON + the wired-selector staleness test green — L2. Forbidden moves: touching
@@ -448,7 +448,7 @@ readback bit-identity check before/after on the AMG frame 1; perf: perf-soak CPU
 BrainStem is the sensitive fixture (24 objects; if P0 measured the CPU side as material, this is
 where it shows); negative: `rg -n 'format!' crates/manifold-renderer/src/node_graph/primitives/render_scene.rs`
 → remaining hits are rebuild-time or error paths only (annotate the gate output with the
-classification); `rg -n 'iter\(\)\s*\.find' crates/manifold-renderer/src/node_graph/bindings.rs`
+classification); `rg -n 'iter\(\)\s*\.find' crates/manifold-node-engine/src/bindings.rs`
 → the hot lookup no longer routes through it (either an indexed accessor beside it, or the scan
 kept solely for cold/error paths and documented as such).
 Demo: before/after CPU wall numbers — L2. Forbidden moves: changing any port NAME or binding

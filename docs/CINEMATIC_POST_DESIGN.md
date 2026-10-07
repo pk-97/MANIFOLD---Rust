@@ -465,7 +465,7 @@ this governs everything still open.
   overrides on the atom itself — cards bind to `camera_lens` directly).
   Entry: P0 landed (both layers) + CAMERA P2 + GBUFFER P1 landed (verify:
   `rg 'LensParams'` hits camera.rs; `rg 'linearize_depth'` hits shared
-  header; `rg 'DERIVED_UNIFORMS' crates/manifold-renderer/src/node_graph/freeze/codegen.rs`
+  header; `rg 'DERIVED_UNIFORMS' crates/manifold-node-engine/src/freeze/codegen/mod.rs`
   shows the texture route). Deliverables: the
   atom (full descriptor/picker/aliases; `Pointwise`, `[CoincidentTexel]`),
   variable_blur width-unit note resolved (VERIFY-AT-IMPL) and recorded in

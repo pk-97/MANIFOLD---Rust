@@ -188,7 +188,7 @@ row picks which map port the splice connects).
 **Registry (committed shape):**
 
 ```rust
-// crates/manifold-renderer/src/layer_skin.rs (new)
+// crates/manifold-node-engine/src/runtime/layer_skin.rs (new)
 pub struct LayerSkinRegistry {
     /// Previous-frame composited output per layer, written by the compositor
     /// at end of frame, read by graph execution next frame.

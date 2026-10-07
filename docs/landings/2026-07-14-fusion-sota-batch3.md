@@ -25,7 +25,7 @@ guard in `partition_regions`'s union step, mirroring the existing cycle-convexit
 8 failed (same 8 pre-existing, verified via diff that this phase never touched `codegen.rs`).
 `cargo test --test gpu_proofs --features gpu-proofs`: 36 passed. `cargo nextest run --workspace`:
 3334 passed. Clippy (`-p manifold-renderer` AND `--workspace`) clean. Negative gate `rg
-'Box::leak' crates/manifold-renderer/src/node_graph/freeze/`: **zero hits**, independently
+'Box::leak' crates/manifold-node-engine/src/freeze/`: **zero hits**, independently
 re-verified by the orchestrating session. This is the widest mechanical diff in the wave (12
 files) — migration was compiler-driven throughout; the one apparent misfit (`ParamTarget::Node`'s
 `&'static str` field) resolved cleanly via `Cow<'static, str>`, an already-established pattern in
@@ -86,7 +86,7 @@ scope question.
    row shows `~~BUG-114~~ FIXED`.
 2. `cat docs/fusion_census.md` — expect: param-type family 19→10, multi-output family 3→0,
    buffer-index-shaped family 22→16 (all lifts this wave delivered).
-3. `rg 'Box::leak' crates/manifold-renderer/src/node_graph/freeze/` — expect: zero output (proves
+3. `rg 'Box::leak' crates/manifold-node-engine/src/freeze/` — expect: zero output (proves
    P7's leak-model closure).
 4. `cargo test -p manifold-renderer --lib` — expect: all green (1224 tests).
 5. No visual change anywhere in the app — this whole wave is compiler-internals hardening plus

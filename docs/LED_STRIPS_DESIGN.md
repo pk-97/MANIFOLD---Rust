@@ -203,7 +203,7 @@ Peter's directives (2026-09-03, verbatim — these decide the MVP):
   `AddLayerCommand` (`crates/manifold-editing/src/commands/layer.rs:13,47`).
 - **Presets are disk JSON, hot-reloadable.** Bundle root
   `crates/manifold-renderer/assets/generator-presets/` (32 presets; loader
-  `crates/manifold-renderer/src/preset_loader.rs:162-168`). Type id = filename stem
+  `crates/manifold-node-engine/src/load/preset_loader.rs:162-168`). Type id = filename stem
   (`node_graph/bundled_presets.rs:23-24`). Picker: `build_preset_picker_items`
   (`crates/manifold-app/src/ui_root/dropdowns.rs:113-161`).
 - **MIDI pad → clip triggering is existing machinery.** `midi_input.rs` → `ClipLauncher`
