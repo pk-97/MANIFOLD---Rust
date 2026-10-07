@@ -120,7 +120,7 @@ fn run_tlc_fixture(
     svt_slot: u32,
     base_color_tex: Option<&manifold_gpu::GpuTexture>,
 ) -> ([f32; 3], f32, [f32; 3], f32) {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
 
     let tracer = MetalShadowRayTracer::new(device);
@@ -326,7 +326,7 @@ fn luma(rgb: [f32; 3]) -> f32 {
 
 #[test]
 fn red_petal_tints_transmitted_pool() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
 
     let verts = quad_verts_z(1.0);
@@ -411,7 +411,7 @@ fn red_petal_tints_transmitted_pool() {
 
 #[test]
 fn point_caster_control_svt_stays_white() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
 
     let verts = quad_verts_z(1.0);
@@ -484,7 +484,7 @@ fn point_caster_control_svt_stays_white() {
 
 #[test]
 fn factor_zero_occluder_svt_reads_zero() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
 
     let verts = quad_verts_z(1.0);
@@ -551,7 +551,7 @@ fn factor_zero_occluder_svt_reads_zero() {
 
 #[test]
 fn unoccluded_texels_read_white_in_svt() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
 
     // Quad at z=-1 (BEHIND the depth surface) — doesn't occlude.

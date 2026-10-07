@@ -12,7 +12,6 @@ use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 
-use crate::harness;
 
 fn solid_texture_nodes(id: u32, rgba: [f32; 4]) -> (String, String, u32) {
     let color = format!("[{},{},{},{}]", rgba[0], rgba[1], rgba[2], rgba[3]);
@@ -157,7 +156,7 @@ fn scene_with_light_aim(
 }
 
 fn render_center(json: &str) -> [f32; 3] {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
         json,

@@ -33,7 +33,6 @@
 
 use manifold_gpu::raytrace::{ensure_normal_sources, MetalShadowRayTracer, RtObjectGeometry};
 
-use crate::harness;
 
 /// Flat (non-indexed) vertex layout: 12-byte position, 12-byte normal, no
 /// padding — `packed_float3` mandatory (P0 section 5.1 kernel lesson), stride 24.
@@ -76,7 +75,7 @@ fn assert_close(got: [f32; 3], expected: [f32; 3], label: &str) {
 
 #[test]
 fn fetch_interpolated_normal_2tri_matches_cpu_oracle() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
 
     let verts = [
@@ -152,7 +151,7 @@ fn fetch_interpolated_normal_2tri_matches_cpu_oracle() {
 
 #[test]
 fn fetch_interpolated_normal_uses_inverse_transpose_for_nonuniform_scale() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
     let verts = [
         PackedVertexN { pos: [-1.0, -1.0, 0.0], normal: [1.0, 1.0, 1.0] },

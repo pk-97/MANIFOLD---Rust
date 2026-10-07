@@ -42,7 +42,6 @@ use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 
-use crate::harness;
 
 const TILT: f32 = 0.95;
 const DISTANCE: f32 = 10.0;
@@ -156,7 +155,7 @@ fn scene_json(motion_rate: f32, base_x: f32) -> String {
     )
 }
 
-fn make_ctx(h: &harness::ParityHarness, time: f64, frame_count: i64, dt: f32) -> PresetContext {
+fn make_ctx(h: &manifold_node_engine::testkit::gpu_harness::ParityHarness, time: f64, frame_count: i64, dt: f32) -> PresetContext {
     PresetContext {
         time,
         beat: time * 0.5,
@@ -205,7 +204,7 @@ fn region_mean_luma(bytes: &[u8], w: u32, h: u32, cx: f32, cy: f32, radius: i32)
 
 /// Ground-plane point (x, 0, 0) -> screen pixel, via the same camera math
 /// the scene's `node.orbit_camera` builds.
-fn ground_pixel(h: &harness::ParityHarness, x: f32) -> (f32, f32) {
+fn ground_pixel(h: &manifold_node_engine::testkit::gpu_harness::ParityHarness, x: f32) -> (f32, f32) {
     let cam = Camera::orbit_perspective(ORBIT, TILT, DISTANCE, FOV_Y, 0.0, 0.0, NEAR, FAR);
     let p = cam
         .project_to_pixel([x, 0.0, 0.0], h.width, h.height)
@@ -219,7 +218,7 @@ fn ground_pixel(h: &harness::ParityHarness, x: f32) -> (f32, f32) {
 /// GEOMETRIC: a stale acceleration structure puts the shadow at the
 /// object's OLD x, which this reports directly, rather than hiding inside
 /// an intensity average that AO/GI differences would swamp.
-fn darkest_ground_x(h: &harness::ParityHarness, bytes: &[u8]) -> (f32, f64) {
+fn darkest_ground_x(h: &manifold_node_engine::testkit::gpu_harness::ParityHarness, bytes: &[u8]) -> (f32, f64) {
     let mut best_x = f32::NAN;
     let mut best_l = f64::INFINITY;
     let mut x = SCAN_MIN;
@@ -248,7 +247,7 @@ const SHADOW_AGREEMENT_TOLERANCE: f32 = 0.75;
 
 /// Renders the warmup + motion sequence and returns
 /// `(parked_darkest_x, moved_darkest_x)`.
-fn run_motion_sequence(h: &harness::ParityHarness, rt_on: bool) -> (f32, f32) {
+fn run_motion_sequence(h: &manifold_node_engine::testkit::gpu_harness::ParityHarness, rt_on: bool) -> (f32, f32) {
     let registry = PrimitiveRegistry::with_builtin();
     let motion_rate = (END_X - START_X) / (MOTION_FRAMES as f64 * TIME_STEP) as f32;
     let json = scene_json(motion_rate, START_X).replace(
@@ -332,7 +331,7 @@ fn run_motion_sequence(h: &harness::ParityHarness, rt_on: bool) -> (f32, f32) {
 /// `node.transform_3d`, the same path glTF import wires for rigid objects.
 #[test]
 fn rt_shadow_tracks_a_moving_object_to_the_same_place_raster_does() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
 
     let (rt_parked, rt_moved) = run_motion_sequence(h, true);
     let (raster_parked, raster_moved) = run_motion_sequence(h, false);

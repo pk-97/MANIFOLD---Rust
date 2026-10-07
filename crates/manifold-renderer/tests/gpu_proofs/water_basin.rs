@@ -21,7 +21,6 @@ use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::gpu::render_target::RenderTarget;
 
-use crate::harness;
 
 mod explicit_authoring;
 mod authored_coupling;
@@ -172,7 +171,7 @@ fn warmup_mesh_roles(
 ) {
     // Async geometry preparation is pumped at unchanged transport time, as
     // export pre-roll does. Only complete frames advance simulation time.
-    let wait = crate::harness::BackgroundWait::new("mesh role warmup");
+    let wait = manifold_node_engine::testkit::gpu_harness::BackgroundWait::new("mesh role warmup");
     loop {
         let mut encoder = device.create_encoder("mesh-role-warmup");
         let status = {
@@ -228,7 +227,7 @@ fn assert_pixels_close(before: &[u8], after: &[u8], tolerance: f32) {
 #[test]
 fn water_basin_renders_complete_finite_frames_through_tick_90() {
     let started = Instant::now();
-    let harness = harness::shared();
+    let harness = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_cpu_flip_reference();
     let mut runtime = PresetRuntime::from_json_str_with_device(
         WATER_BASIN_JSON,
@@ -343,7 +342,7 @@ fn water_basin_paired_rigid_pose_publishes_through_fluid_worker() {
         serde_json::json!({"fromNode": 503, "fromPort": "visible", "toNode": 12, "toPort": "visible"}),
     ]);
 
-    let harness = harness::shared();
+    let harness = manifold_node_engine::testkit::gpu_harness::shared();
     let mut registry = PrimitiveRegistry::with_cpu_flip_reference();
     registry.register("node.test_coupled_observer", || {
         Box::new(CoupledObserver {
@@ -414,7 +413,7 @@ fn water_basin_paired_rigid_pose_publishes_through_fluid_worker() {
 
 #[test]
 fn water_invalid_configuration_marks_frame_failed_for_export() {
-    let harness = harness::shared();
+    let harness = manifold_node_engine::testkit::gpu_harness::shared();
     let mut def: serde_json::Value = serde_json::from_str(WATER_BASIN_JSON).unwrap();
     let fluid = def["nodes"]
         .as_array_mut()
@@ -482,7 +481,7 @@ fn scene_physics_added_fluid_renders_after_project_reload() {
     let saved = serde_json::to_string(&project).unwrap();
     let reloaded: Project = serde_json::from_str(&saved).unwrap();
     let graph = reloaded.graph_for_target(&target_graph, None).unwrap();
-    let harness = harness::shared();
+    let harness = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_cpu_flip_reference();
     let build = |def| PresetRuntime::from_json_str_with_device(
         &serde_json::to_string(def).unwrap(), &registry, Arc::clone(&harness.device),
@@ -522,7 +521,7 @@ fn scene_physics_invalid_mesh_role_fails_instead_of_waiting_for_preparation() {
         serde_json::json!({"fromNode": 5, "fromPort": "transform", "toNode": 500, "toPort": "transform"}),
         serde_json::json!({"fromNode": 500, "fromPort": "role", "toNode": 4, "toPort": "role_0"})
     ]);
-    let harness = harness::shared();
+    let harness = manifold_node_engine::testkit::gpu_harness::shared();
     let mut runtime = PresetRuntime::from_json_str_with_device(
         &def.to_string(), &PrimitiveRegistry::with_cpu_flip_reference(), Arc::clone(&harness.device),
         WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float, None).unwrap();
@@ -572,7 +571,7 @@ fn scene_physics_shared_field_changes_rendered_liquid_after_graph_round_trip() {
     let saved = serde_json::to_string(&typed).unwrap();
     let restored: manifold_core::effect_graph_def::EffectGraphDef = serde_json::from_str(&saved).unwrap();
     assert_eq!(typed, restored);
-    let harness = harness::shared();
+    let harness = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_cpu_flip_reference();
     let build = |json: &str| PresetRuntime::from_json_str_with_device(
         json, &registry, Arc::clone(&harness.device), WIDTH, HEIGHT,
@@ -630,7 +629,7 @@ fn scene_physics_mesh_role_renders_after_graph_round_trip() {
     let saved = serde_json::to_string(&typed).unwrap();
     let restored: manifold_core::effect_graph_def::EffectGraphDef = serde_json::from_str(&saved).unwrap();
     assert_eq!(typed, restored);
-    let harness = harness::shared();
+    let harness = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_cpu_flip_reference();
     let build = |json: &str| PresetRuntime::from_json_str_with_device(
         json, &registry, Arc::clone(&harness.device), WIDTH, HEIGHT,
@@ -742,7 +741,7 @@ fn scene_physics_assigned_object_fills_fluid_through_group_boundaries() {
     let def = manifold_renderer::node_graph::override_camera_def(&def, &render_node, &camera).unwrap();
     let mut def = def;
     let saved = serde_json::to_string(&def).unwrap();
-    let harness = harness::shared();
+    let harness = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_cpu_flip_reference();
     let build = |json: &str| PresetRuntime::from_json_str_with_device(json, &registry,
         Arc::clone(&harness.device), WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float, None).unwrap();
@@ -844,7 +843,7 @@ fn scene_physics_modifier_impulse_changes_rendered_liquid() {
         matches!(&binding.target, BindingTarget::SceneModifier { param_id, .. } if param_id == "fire")
     ).unwrap().id.clone();
     let saved = serde_json::to_string(&def).unwrap();
-    let harness = harness::shared();
+    let harness = manifold_node_engine::testkit::gpu_harness::shared();
     let build = || PresetRuntime::from_json_str_with_device(&saved, &PrimitiveRegistry::with_cpu_flip_reference(),
         Arc::clone(&harness.device), WIDTH, HEIGHT, GpuTextureFormat::Rgba16Float, None).unwrap();
     let mut resting = build();

@@ -18,7 +18,6 @@ use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 
-use crate::harness;
 
 /// `occluder_visible`: the occluder scene_object's `visible` param (0.0 or
 /// 1.0). Ground is object_0 (grid_mesh), occluder is object_1 (grid_mesh,
@@ -143,7 +142,7 @@ fn glass_scene_json(alpha_mode: u32, transmission: f32, sheen: f32, translucency
 }
 
 fn render_readback(json: &str) -> (Vec<u8>, u32, u32) {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
         json,
@@ -317,7 +316,7 @@ fn streaming_occluder_json() -> String {
 #[test]
 fn streaming_mesh_drops_only_its_object() {
     use manifold_node_engine::runtime::frame_status::FrameRenderStatus;
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
         &streaming_occluder_json(),

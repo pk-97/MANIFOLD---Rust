@@ -192,7 +192,7 @@ impl<'a> FixtureConfig<'a> {
 /// flat `roughness` factor (multiplied by the map when present). Returns
 /// `[refl_texel0_rgb, refl_texel1_rgb]` (`out_refl`'s rgb channels).
 fn run_fixture_config(config: FixtureConfig<'_>, frame_index: u32) -> [[f32; 3]; 2] {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
 
     // ─── Floor: y=0, x in [-1,1], z in [0,1], normal (0,1,0), uv=((x+1)/2, z) ──
@@ -570,7 +570,7 @@ fn mr_texture_multiplies_flat_factors_per_texel() {
         0.0, 1.0, 0.25, 1.0, // texel 1: products (metallic=.1, roughness=.5)
     ];
     let mr_tex = upload_texture_f32(
-        &harness::shared().device,
+        &manifold_node_engine::testkit::gpu_harness::shared().device,
         2,
         1,
         GpuTextureFormat::Rgba32Float,
@@ -648,7 +648,7 @@ fn anisotropy_rotation_changes_elongated_emitter_coverage() {
 #[test]
 fn zero_blue_anisotropy_map_equals_strength_zero_control() {
     let aniso_map = upload_texture_f32(
-        &harness::shared().device,
+        &manifold_node_engine::testkit::gpu_harness::shared().device,
         1,
         1,
         GpuTextureFormat::Rgba32Float,
@@ -676,7 +676,7 @@ fn zero_blue_anisotropy_map_equals_strength_zero_control() {
 #[test]
 fn anisotropy_rg_direction_matches_scalar_rotation() {
     let direction_map = upload_texture_f32(
-        &harness::shared().device,
+        &manifold_node_engine::testkit::gpu_harness::shared().device,
         1,
         1,
         GpuTextureFormat::Rgba32Float,
@@ -705,7 +705,7 @@ fn anisotropy_rg_direction_matches_scalar_rotation() {
 #[test]
 fn zero_specular_weight_removes_dielectric_but_not_metallic_reflection() {
     let weight_zero = upload_texture_f32(
-        &harness::shared().device,
+        &manifold_node_engine::testkit::gpu_harness::shared().device,
         1,
         1,
         GpuTextureFormat::Rgba32Float,
@@ -751,7 +751,7 @@ fn zero_specular_weight_removes_dielectric_but_not_metallic_reflection() {
 #[test]
 fn colored_specular_map_tints_f0_against_white_environment() {
     let color_map = upload_texture_f32(
-        &harness::shared().device,
+        &manifold_node_engine::testkit::gpu_harness::shared().device,
         1,
         1,
         GpuTextureFormat::Rgba32Float,
@@ -773,7 +773,7 @@ fn colored_specular_map_tints_f0_against_white_environment() {
 #[test]
 fn secondary_hit_extension_factors_match_constant_one_maps() {
     let one = upload_texture_f32(
-        &harness::shared().device,
+        &manifold_node_engine::testkit::gpu_harness::shared().device,
         1,
         1,
         GpuTextureFormat::Rgba32Float,
@@ -781,7 +781,7 @@ fn secondary_hit_extension_factors_match_constant_one_maps() {
         "rt-secondary-one-map",
     );
     let neutral_normal = upload_texture_f32(
-        &harness::shared().device,
+        &manifold_node_engine::testkit::gpu_harness::shared().device,
         1,
         1,
         GpuTextureFormat::Rgba32Float,
@@ -811,7 +811,7 @@ fn secondary_hit_extension_factors_match_constant_one_maps() {
 #[test]
 fn secondary_hit_zero_extension_factors_are_inert() {
     let black = upload_texture_f32(
-        &harness::shared().device,
+        &manifold_node_engine::testkit::gpu_harness::shared().device,
         1,
         1,
         GpuTextureFormat::Rgba32Float,
@@ -861,8 +861,8 @@ fn secondary_hit_iridescence_changes_with_view_angle_and_stays_bounded() {
 #[test]
 fn secondary_hit_ao_only_modulates_diffuse_ibl() {
     let black_light = [[0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0, -1.0], [10.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]];
-    let black = upload_texture_f32(&harness::shared().device, 1, 1, GpuTextureFormat::Rgba32Float, &[0.0; 4], "rt-secondary-ao-black");
-    let white = upload_texture_f32(&harness::shared().device, 1, 1, GpuTextureFormat::Rgba32Float, &[1.0; 4], "rt-secondary-ao-white");
+    let black = upload_texture_f32(&manifold_node_engine::testkit::gpu_harness::shared().device, 1, 1, GpuTextureFormat::Rgba32Float, &[0.0; 4], "rt-secondary-ao-black");
+    let white = upload_texture_f32(&manifold_node_engine::testkit::gpu_harness::shared().device, 1, 1, GpuTextureFormat::Rgba32Float, &[1.0; 4], "rt-secondary-ao-white");
     let mut diffuse = FixtureConfig::base(None, 0.0);
     diffuse.complete_lighting = true;
     diffuse.light_rows = black_light;

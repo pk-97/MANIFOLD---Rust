@@ -137,7 +137,7 @@ fn write_only_texture(
 /// Traces the fixture once and returns the 64 per-pixel sun visibility
 /// values (`out_sv.r`).
 fn run_fixture(cone_half_angle: f32, frame_index: u32) -> Vec<f32> {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
 
     // Occluder quad, x,y in [-4,4] at z = OCCLUDER_Z, u = (x+4)/8.

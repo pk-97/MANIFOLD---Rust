@@ -35,7 +35,6 @@ use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 
-use crate::harness;
 
 /// Which param the `beat_ramp` output port-shadows, one wire added to the
 /// otherwise-identical base scene. `None` renders the fully static scene
@@ -163,7 +162,7 @@ fn scene_json(mutation: Mutation) -> String {
 /// it lives on) depends on this exactly like `gbuffer_velocity.rs`'s
 /// `render_at_beat`.
 fn render_at_beat(
-    h: &harness::ParityHarness,
+    h: &manifold_node_engine::testkit::gpu_harness::ParityHarness,
     runtime: &mut PresetRuntime,
     target: &manifold_gpu::GpuTexture,
     beat: f64,
@@ -193,7 +192,7 @@ fn render_at_beat(
     h.readback(target)
 }
 
-fn build_runtime(h: &harness::ParityHarness, json: &str) -> PresetRuntime {
+fn build_runtime(h: &manifold_node_engine::testkit::gpu_harness::ParityHarness, json: &str) -> PresetRuntime {
     let registry = PrimitiveRegistry::with_builtin();
     PresetRuntime::from_json_str_with_device(
         json,
@@ -213,7 +212,7 @@ fn build_runtime(h: &harness::ParityHarness, json: &str) -> PresetRuntime {
 /// `None`, so it always falls through to a real render).
 #[test]
 fn static_scene_frame_30_matches_fresh_executor_frame_1() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let json = scene_json(Mutation::None);
 
     let mut long_running = build_runtime(h, &json);
@@ -242,7 +241,7 @@ fn static_scene_frame_30_matches_fresh_executor_frame_1() {
 /// `warm_frames`, mutate to `beat1` on the SAME runtime, and assert that
 /// frame's output equals a FRESH executor rendering `beat1` cold.
 fn assert_mutation_forces_fresh_equivalent_render(mutation: Mutation, warm_frames: i64) {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let json = scene_json(mutation);
 
     let mut long_running = build_runtime(h, &json);

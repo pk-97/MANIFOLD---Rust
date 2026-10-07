@@ -19,7 +19,6 @@ use manifold_gpu::raytrace::{EmissiveAliasEntry,EmissiveTableStats,EmissiveTrian
 use manifold_gpu::{GpuBuffer,GpuDevice};
 #[cfg(feature = "rt-perf-proofs")]
 use std::time::Instant;
-use crate::harness;
 
 const ACCUM_FRAMES: i64 = 32;
 const PROBE_RADIUS: i32 = 3;
@@ -69,7 +68,7 @@ fn analytic(em: f32, sz: f32, y: f32) -> f64 {
 
 fn render(json: &str) -> (f64, f64) {
     // frame-0 luma (before accumulation fills in) + converged luma
-    let h=harness::shared();
+    let h=manifold_node_engine::testkit::gpu_harness::shared();
     let reg=PrimitiveRegistry::with_builtin();
     let mut rt=PresetRuntime::from_json_str_with_device(json,&reg,std::sync::Arc::clone(&h.device),h.width,h.height,GpuTextureFormat::Rgba16Float,None).expect("scene");
     let tgt=h.make_target("rs-c");
@@ -154,7 +153,7 @@ fn i_rs3_sampler_converges_to_cpu_analytic_gather_misses() {
 // parallel correctness binary a frame time measures the other tests.
 #[cfg(feature = "rt-perf-proofs")]
 fn ms(json:&str,label:&str,n:usize)->(f64,f64){
-    let h=harness::shared();let reg=PrimitiveRegistry::with_builtin();
+    let h=manifold_node_engine::testkit::gpu_harness::shared();let reg=PrimitiveRegistry::with_builtin();
     let mut rt=PresetRuntime::from_json_str_with_device(json,&reg,std::sync::Arc::clone(&h.device),h.width,h.height,GpuTextureFormat::Rgba16Float,None).expect("tms");
     let tgt=h.make_target("tms");let mut ts=Vec::with_capacity(n);
     for fr in 0..n{let ctx=PresetContext{time:0.1,beat:0.2,dt:1.0/60.0,width:h.width,height:h.height,output_width:h.width,output_height:h.height,aspect:h.width as f32/h.height as f32,owner_key:0,is_clip_level:false,frame_count:fr as i64,anim_progress:0.0,trigger_count:0};
@@ -184,7 +183,7 @@ fn o<'a>(v:&'a GpuBuffer,n:u32)->RtObjectGeometry<'a>{RtObjectGeometry{material_
     }}
 #[test]fn sz(){assert_eq!(std::mem::size_of::<EmissiveTriangleGpu>(),96);assert_eq!(std::mem::size_of::<EmissiveAliasEntry>(),8);}
 #[test]fn at(){
-    let h=harness::shared();let d=&h.device;
+    let h=manifold_node_engine::testkit::gpu_harness::shared();let d=&h.device;
     let vs=[Pv{pos:[0.,0.,0.]},Pv{pos:[1.,0.,0.]},Pv{pos:[0.,1.,0.]},Pv{pos:[1.,0.,0.]},Pv{pos:[0.,1.,0.]},Pv{pos:[1.,1.,0.]}];
     let b=wb(d,&vs);let o=[o(&b,2)];let m=[GiMaterial::new([0.5,0.5,0.5],[1.,0.,0.],[0.,0.5,0.,0.],[0.,0.,0.,0.])];
     // P4a: production GPU preparation (same enumerate/sort/gather/alias/

@@ -19,7 +19,6 @@ use manifold_renderer::node_graph::gltf_import::{
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 
-use crate::harness;
 
 fn box_vertex_colors_fixture() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -93,7 +92,7 @@ fn assert_stable_authored_nodes(before: &EffectGraphDef, after: &EffectGraphDef)
 }
 
 fn render_graph(def: EffectGraphDef, label: &str) -> Vec<u8> {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_def_with_device(
         def,
@@ -106,7 +105,7 @@ fn render_graph(def: EffectGraphDef, label: &str) -> Vec<u8> {
     )
     .unwrap_or_else(|error| panic!("{label} graph must build: {error:?}"));
     let target = h.make_target(label);
-    let wait = harness::BackgroundWait::new(label);
+    let wait = manifold_node_engine::testkit::gpu_harness::BackgroundWait::new(label);
     let mut previous = None;
     let mut stable = 0u32;
     let mut settled_frames = 0u32;
@@ -243,7 +242,7 @@ fn legacy_import_upgrade_matches_fresh_render_and_is_idempotent() {
     let legacy_pixels = render_graph(legacy, "material-upgrade-legacy");
     let upgraded_pixels = render_graph(reloaded_upgraded, "material-upgrade-upgraded");
     let fresh_pixels = render_graph(fresh, "material-upgrade-fresh");
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     for (name, pixels) in [
         ("legacy", &legacy_pixels),
         ("upgraded", &upgraded_pixels),

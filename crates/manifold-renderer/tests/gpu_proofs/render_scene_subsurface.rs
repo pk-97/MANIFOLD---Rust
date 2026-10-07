@@ -15,7 +15,6 @@ use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::gpu::render_target::RenderTarget;
 
-use crate::harness;
 
 const WARMUP_FRAMES: i64 = 8;
 const MAX_SAMPLES: u32 = 64;
@@ -341,7 +340,7 @@ fn render_with_registry_dimensions<F>(
 where
     F: FnMut(&mut PresetRuntime, i64),
 {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let mut runtime = PresetRuntime::from_json_str_with_device(
         json,
         registry,

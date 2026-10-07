@@ -59,7 +59,6 @@ use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 
-use crate::harness;
 
 /// Five distinct depths, near through far, all comfortably inside
 /// `NEAR`/`FAR` below.
@@ -148,7 +147,7 @@ fn scene_json(distance: f32) -> String {
 /// (mirrors `camera_conformance.rs`'s `render_readback`), and return the
 /// `depth` port's raw `R32Float` texture bytes plus its dims.
 fn render_and_dump_depth(json: &str) -> (Vec<u8>, u32, u32) {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
         json,
@@ -207,7 +206,7 @@ fn render_and_dump_depth(json: &str) -> (Vec<u8>, u32, u32) {
 }
 
 /// Read an `R32Float` texture back to host memory as raw little-endian
-/// bytes. Mirrors `harness::ParityHarness::readback` but for 4 bytes/pixel
+/// bytes. Mirrors `manifold_node_engine::testkit::gpu_harness::ParityHarness::readback` but for 4 bytes/pixel
 /// instead of the harness's hardcoded `Rgba16Float` (8 bytes/pixel)
 /// assumption.
 fn readback_r32float(device: &manifold_gpu::GpuDevice, texture: &GpuTexture) -> Vec<u8> {
@@ -317,7 +316,7 @@ fn overlapping_depth_scene_json(reverse_draw_order: bool) -> String {
 }
 
 fn render_color_readback(json: &str) -> Vec<u8> {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
         json,
@@ -329,7 +328,7 @@ fn render_color_readback(json: &str) -> Vec<u8> {
         None,
     )
     .unwrap_or_else(|e| panic!("reversed-Z precision graph must build: {e}\n{json}"));
-    let target = harness::shared().make_target("reversed-z-depth-precision");
+    let target = manifold_node_engine::testkit::gpu_harness::shared().make_target("reversed-z-depth-precision");
     for frame in 0..2 {
         let ctx = PresetContext {
             time: 0.0,
@@ -365,7 +364,7 @@ fn render_color_readback(json: &str) -> Vec<u8> {
 fn gbuffer_depth_conformance() {
     for &distance in &DISTANCES {
         let cam = Camera::orbit_perspective(ORBIT, TILT, distance, FOV_Y, 0.0, 0.0, NEAR, FAR);
-        let h = harness::shared();
+        let h = manifold_node_engine::testkit::gpu_harness::shared();
         let oracle = cam
             .project_to_pixel(WORLD_POINT, h.width, h.height)
             .unwrap_or_else(|| panic!("distance {distance}: origin unexpectedly behind camera"));
@@ -416,7 +415,7 @@ fn gbuffer_depth_conformance() {
 
 #[test]
 fn reversed_z_precision_keeps_near_surface_independent_of_draw_order() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let cam = Camera::orbit_perspective(
         0.0,
         0.0,
@@ -467,7 +466,7 @@ fn gbuffer_depth_unwired_scene_bundled_smoke_stays_finite() {
     // an ordinary scene that never wires `depth` (every bundled 3D preset
     // today) still renders a finite `color` frame — i.e. adding the port
     // didn't perturb the unwired path's own dims/target resolution.
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let json = r#"{"version":2,"name":"GbufferDepthUnwiredSmoke","nodes":[
         {"id":0,"typeId":"system.generator_input","nodeId":"input"},

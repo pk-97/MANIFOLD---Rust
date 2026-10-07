@@ -52,8 +52,8 @@ use manifold_node_engine::runtime::PresetRuntime;
 
 use crate::harness;
 
-const W: u32 = harness::PARITY_WIDTH;
-const H: u32 = harness::PARITY_HEIGHT;
+const W: u32 = manifold_node_engine::testkit::gpu_harness::PARITY_WIDTH;
+const H: u32 = manifold_node_engine::testkit::gpu_harness::PARITY_HEIGHT;
 
 /// Non-black coverage of the healthy render at this fixture size is 0.0709
 /// (measured on a quiet machine). The suppression window reads exactly
@@ -82,7 +82,7 @@ fn ctx(frame_count: i64) -> PresetContext {
 
 fn frame(
     runtime: &mut PresetRuntime,
-    h: &harness::ParityHarness,
+    h: &manifold_node_engine::testkit::gpu_harness::ParityHarness,
     target: &manifold_gpu::GpuTexture,
     f: i64,
     manifest: &manifold_core::params::ParamManifest,
@@ -158,7 +158,7 @@ fn mean_abs_diff(a: &[f32], b: &[f32]) -> f64 {
 /// frame persists). Returns the first lit frame's pixels and its frame index.
 fn render_until_lit(
     runtime: &mut PresetRuntime,
-    h: &harness::ParityHarness,
+    h: &manifold_node_engine::testkit::gpu_harness::ParityHarness,
     target: &manifold_gpu::GpuTexture,
     manifest: &manifold_core::params::ParamManifest,
     start_frame: i64,
@@ -171,7 +171,7 @@ fn render_until_lit(
     let mut frac = 0.0f64;
     // Frames rendered while the rerun build is in flight don't count toward
     // the budget: that window's length depends on machine load.
-    let wait = harness::BackgroundWait::new(format!("bug-majv {phase}"));
+    let wait = manifold_node_engine::testkit::gpu_harness::BackgroundWait::new(format!("bug-majv {phase}"));
     let mut settled = 0;
     let mut next = start_frame;
     while settled < POLL_BUDGET_FRAMES {
@@ -211,7 +211,7 @@ fn rt_kernel_toggle_sequence_preserves_raster_base() {
     let glb = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/gltf/DamagedHelmet.glb");
     assert!(glb.exists(), "fixture missing: {glb:?}");
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let (def, report) = assemble_import_graph(&glb).expect("helmet import must succeed");
     eprintln!("[bug-majv] import report: {report:?}");
 
@@ -229,7 +229,7 @@ fn rt_kernel_toggle_sequence_preserves_raster_base() {
         Some(&manifest),
     )
     .expect("helmet def must build a runtime");
-    harness::assert_no_shadowed_def_params(&runtime, "bug-majv helmet import");
+    manifold_node_engine::testkit::gpu_harness::assert_no_shadowed_def_params(&runtime, "bug-majv helmet import");
 
     let target = h.make_target("bugmajv-helmet");
     // Converge the RT accumulation with all kernels on at view A.
@@ -241,7 +241,7 @@ fn rt_kernel_toggle_sequence_preserves_raster_base() {
     // frames before RT is admitted — the 30155c607 readiness contract made
     // a single early assert frame fire before publication landed (same fix
     // shape as 4942c6f3d's neutral-lens wait).
-    let wait = harness::BackgroundWait::new("bug-majv dispatch");
+    let wait = manifold_node_engine::testkit::gpu_harness::BackgroundWait::new("bug-majv dispatch");
     let mut dispatched = false;
     let mut settled = 0;
     while settled < POLL_BUDGET_FRAMES {

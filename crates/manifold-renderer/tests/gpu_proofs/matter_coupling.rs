@@ -28,7 +28,6 @@ use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::gpu::render_target::RenderTarget;
 use serde_json::{Value, json};
 
-use crate::harness;
 
 const PRESET: &str = include_str!("../../assets/generator-presets/WaterFloatingBoxMatter.json");
 const PROBE_TYPE: &str = "test.matter_coupling_probe";
@@ -218,7 +217,7 @@ struct Run {
 
 impl Run {
     fn new(scene: &Scene) -> Self {
-        let harness = harness::shared();
+        let harness = manifold_node_engine::testkit::gpu_harness::shared();
         let device = Arc::clone(&harness.device);
         let mut registry = PrimitiveRegistry::with_builtin();
         registry.register(PROBE_TYPE, || Box::new(CouplingProbe::new()));
@@ -237,7 +236,7 @@ impl Run {
         runtime.set_dump_all(true);
         let target = RenderTarget::new(&device, SIZE, SIZE, GpuTextureFormat::Rgba16Float, "matter-coupling");
         let mut run = Self { runtime, target, device, frame: 0, _offline: offline };
-        let wait = crate::harness::BackgroundWait::new("matter coupling asset warmup");
+        let wait = manifold_node_engine::testkit::gpu_harness::BackgroundWait::new("matter coupling asset warmup");
         loop {
             run.render(0, true);
             if !run.runtime.warmup_pending() {

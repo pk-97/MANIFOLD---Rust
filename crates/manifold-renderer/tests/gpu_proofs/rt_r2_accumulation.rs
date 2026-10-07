@@ -47,7 +47,6 @@ use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 
-use crate::harness;
 
 const ORBIT: f32 = 0.7;
 const TILT: f32 = 0.95;
@@ -198,7 +197,7 @@ fn scene_json() -> String {
 ///
 /// Returns (baseline_bytes, step_plus_one_bytes, width, height).
 fn render_sequence(
-    h: &harness::ParityHarness,
+    h: &manifold_node_engine::testkit::gpu_harness::ParityHarness,
     json: &str,
     reset_on_target: bool,
 ) -> (Vec<u8>, Vec<u8>, u32, u32) {
@@ -381,7 +380,7 @@ fn mirror_pixel(cam: &Camera, world: [f32; 3], w: u32, h: u32) -> (f32, f32) {
 /// - a_c/B: [1.8, 2.2] — unchanged cut-reset band.
 #[test]
 fn specular_history_blends_without_cut_and_resets_on_cut() {
-    let h = crate::harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let json = scene_json();
 
     let cam = Camera::orbit_perspective(ORBIT, TILT, DISTANCE, FOV_Y, 0.0, 0.0, NEAR, FAR);

@@ -52,7 +52,7 @@ const RT_WARMUP_FRAMES: i64 = 16;
 const RT_WARMUP_BUDGET: i64 = 120;
 
 fn render_readback(json: &str) -> (Vec<u8>, u32, u32) {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
         json,
@@ -104,7 +104,7 @@ fn render_readback(json: &str) -> (Vec<u8>, u32, u32) {
 }
 
 fn build_runtime(json: &str) -> (PresetRuntime, RenderTarget) {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
         json,
@@ -132,7 +132,7 @@ fn build_runtime(json: &str) -> (PresetRuntime, RenderTarget) {
 }
 
 fn render_frame(runtime: &mut PresetRuntime, target: &RenderTarget, frame_count: i64) {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let ctx = PresetContext {
         time: 0.1,
         beat: 0.2,
@@ -172,7 +172,7 @@ fn render_frame(runtime: &mut PresetRuntime, target: &RenderTarget, frame_count:
 /// (frame `RT_WARMUP_FRAMES`) never contaminates the measured bytes — on
 /// these static scenes it would render identically anyway.
 fn render_readback_confirmed(json: &str, context: &str) -> (Vec<u8>, u32, u32) {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let (mut runtime, target) = build_runtime(json);
     // BUG-uo3z's race class: a fresh fixture's async accel build (RT-D4)
     // can land after the fixed `RT_WARMUP_FRAMES` under accumulated device
@@ -699,7 +699,7 @@ fn ambient_only_scene_json(ambient: f32) -> String {
 /// RATIOS must equal the knob ratios within 1e-6 (ao cancels exactly).
 #[test]
 fn no_env_rt_scene_keeps_ambient_values_linear_in_the_knob() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let cam = Camera::orbit_perspective(ORBIT, TILT, DISTANCE, FOV_Y, 0.0, 0.0, NEAR, FAR);
     let center = cam
         .project_to_pixel([0.0, 0.0, 0.0], h.width, h.height)

@@ -33,7 +33,6 @@ use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 
-use crate::harness;
 
 const ORBIT: f32 = 0.0;
 const TILT: f32 = 0.0;
@@ -157,7 +156,7 @@ fn sample_rg16float(bytes: &[u8], width: u32, x: u32, y: u32) -> (f32, f32) {
 
 #[test]
 fn gbuffer_velocity_two_frame_conformance() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let json = scene_json();
     let mut runtime = PresetRuntime::from_json_str_with_device(
@@ -276,7 +275,7 @@ fn gbuffer_velocity_unwired_scene_bundled_smoke_stays_finite() {
     // bundled_smoke_stays_finite`): an ordinary scene that never wires
     // `velocity` (every bundled 3D preset today) still renders a finite
     // `color` frame — adding the port didn't perturb the unwired path.
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let json = r#"{"version":2,"name":"GbufferVelocityUnwiredSmoke","nodes":[
         {"id":0,"typeId":"system.generator_input","nodeId":"input"},

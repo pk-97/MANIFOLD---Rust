@@ -46,7 +46,7 @@ fn remove_obstacle(def: &EffectGraphDef) -> EffectGraphDef {
 }
 
 fn body_count_after_frames(def: &EffectGraphDef, frames: u32) -> f32 {
-    let harness = harness::shared();
+    let harness = manifold_node_engine::testkit::gpu_harness::shared();
     let manifest = ParamManifest::from_params(
         def.preset_metadata
             .as_ref()

@@ -52,7 +52,6 @@ use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 
-use crate::harness;
 
 const ORBIT0: f32 = 0.0;
 /// ~11.5 degrees — comfortably large enough to clear the BUG-136 gate's
@@ -183,7 +182,7 @@ fn sample_rg16float(bytes: &[u8], width: u32, x: u32, y: u32) -> (f32, f32) {
 /// mean D14's force-allocate path failed to fire).
 fn render_and_dump<'a>(
     runtime: &'a mut PresetRuntime,
-    h: &harness::ParityHarness,
+    h: &manifold_node_engine::testkit::gpu_harness::ParityHarness,
     target: &manifold_gpu::GpuTexture,
     beat: f64,
     frame_count: i64,
@@ -228,7 +227,7 @@ fn render_and_dump<'a>(
 /// two-frame camera orbit.
 #[test]
 fn rt_w0_forced_gbuffer_matches_orbit_oracle() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let json = scene_json();
     let mut runtime = PresetRuntime::from_json_str_with_device(
@@ -367,7 +366,7 @@ fn rt_w0_forced_gbuffer_matches_orbit_oracle() {
 /// the runtime cross-check.
 #[test]
 fn rt_w0_default_scene_stays_lazy_no_forced_gbuffer() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let json = r#"{"version":2,"name":"RtW0DefaultLazy","nodes":[
         {"id":0,"typeId":"system.generator_input","nodeId":"input"},

@@ -25,7 +25,6 @@ use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::gpu::render_target::RenderTarget;
 use serde_json::Value;
 
-use crate::harness;
 
 const PRESET: &str = include_str!("../fixtures/cpu-flip/WaterDamBreakGpu.json");
 const SURFACE_ATOMS: [&str; 8] = [
@@ -235,7 +234,7 @@ fn shell(program: &str, args: &[&str]) -> String {
 
 #[test]
 fn fluid_surface_perf() {
-    let harness = harness::shared();
+    let harness = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &harness.device;
     let sampler = device.create_timestamp_sampler(4096).expect("GPU timestamp sampler");
     let _offline = PhysicsStepScope::for_render(true);

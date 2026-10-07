@@ -31,7 +31,7 @@ use manifold_gpu::{
 };
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 
-use crate::harness::shared;
+use manifold_node_engine::testkit::gpu_harness::shared;
 
 const W: u32 = 32;
 const H: u32 = 32;

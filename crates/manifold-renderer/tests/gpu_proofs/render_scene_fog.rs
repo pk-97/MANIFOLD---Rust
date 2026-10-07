@@ -22,7 +22,6 @@ use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::gpu::render_target::RenderTarget;
 
-use crate::harness;
 
 /// A large ground plane lit by one overhead sun, viewed at a grazing angle.
 /// `fog` is `Some((density, r, g, b))` to wire a `node.atmosphere`, or `None`
@@ -433,7 +432,7 @@ fn point_light_unshadowed_glow_moves_pixels_versus_shafts_off() {
 }
 
 fn render_readback(json: &str) -> (Vec<u8>, u32, u32) {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
         json,
@@ -783,7 +782,7 @@ fn write_checkerboard_composite_png(bytes: &[u8], w: u32, h: u32, path: &str) {
 }
 
 /// Same render path as [`render_readback`] but at an arbitrary resolution,
-/// own device/target (not `harness::shared()`'s fixed 128x128 parity
+/// own device/target (not `manifold_node_engine::testkit::gpu_harness::shared()`'s fixed 128x128 parity
 /// canvas) — 128x128 is fine for the numeric proofs above but too small for
 /// a look-pass PNG a reviewer actually looks at (L2).
 fn render_readback_hires(json: &str, w: u32, h: u32) -> Vec<u8> {

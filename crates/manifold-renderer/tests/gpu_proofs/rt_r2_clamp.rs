@@ -39,7 +39,6 @@
 
 use manifold_gpu::raytrace::MetalShadowRayTracer;
 
-use crate::harness;
 
 const TOLERANCE: f32 = 1e-4;
 /// Wider tolerance for cases where the clamp box's own width is near-zero
@@ -100,7 +99,7 @@ fn untonemap(t: [f32; 3]) -> [f32; 3] {
 
 #[test]
 fn clamp_refl_history_noisy_neighborhood_keeps_history_inside_box() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
     let tracer = MetalShadowRayTracer::new(device);
 
@@ -130,7 +129,7 @@ fn clamp_refl_history_noisy_neighborhood_keeps_history_inside_box() {
 
 #[test]
 fn clamp_refl_history_flat_neighborhood_collapses_to_mean() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
     let tracer = MetalShadowRayTracer::new(device);
 
@@ -158,7 +157,7 @@ fn clamp_refl_history_flat_neighborhood_collapses_to_mean() {
 /// failed, so the fix's reason to exist doesn't silently rot.
 #[test]
 fn clamp_refl_history_hdr_neighborhood_engages_in_mapped_space() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
     let tracer = MetalShadowRayTracer::new(device);
 

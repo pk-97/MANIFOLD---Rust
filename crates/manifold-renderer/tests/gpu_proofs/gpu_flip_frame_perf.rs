@@ -42,7 +42,6 @@ use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::gpu::render_target::RenderTarget;
 use serde_json::Value;
 
-use crate::harness;
 
 const PRESET: &str = include_str!("../../assets/generator-presets/WaterDamBreakGpuFlip.json");
 const MEASURED_FRAMES: usize = 300;
@@ -432,7 +431,7 @@ fn indexed_perf_variants_compile_on_cpu() {
 }
 
 fn probe(variant: Variant) -> Vec<(usize, u64)> {
-    let harness = harness::shared();
+    let harness = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &harness.device;
     let sampler = device.create_timestamp_sampler(16384).expect("GPU timestamp sampler");
     let _offline = PhysicsStepScope::for_render(true);

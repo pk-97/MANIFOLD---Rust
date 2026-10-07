@@ -112,7 +112,7 @@ fn scene_json(light_specs: &[(f32, f32, f32, f32)]) -> String {
 /// checks for Metal GPU errors, so a broken binding-8 bind surfaces as a
 /// panic here, not a silently wrong frame.
 fn render_scene_readback(json: &str) -> (Vec<u8>, u32, u32) {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
         json,
@@ -281,7 +281,7 @@ fn light_contract_scene_json(
 }
 
 fn render_light_contract_scene(json: &str, rt_enabled: bool, assert_dispatch: bool) -> f64 {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
         json,

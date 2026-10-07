@@ -13,7 +13,7 @@ const JSON: &str = include_str!("../../assets/generator-presets/PhysicsBoxes.jso
 
 #[test]
 fn physics_boxes_render_motion_and_latch_count_until_reset() {
-    let harness = super::harness::shared();
+    let harness = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &harness.device;
     let (width, height) = (640, 400);
     let def: EffectGraphDef = serde_json::from_str(JSON).unwrap();

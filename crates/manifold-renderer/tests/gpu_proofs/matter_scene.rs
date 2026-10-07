@@ -12,7 +12,6 @@ use manifold_node_engine::water::liquid::lattice::LiquidLattice;
 use manifold_node_engine::water::matter::{MatterPoint, MatterTickStats, STATS_WORDS, lattice_blocks};
 use manifold_node_engine::{exec::execution_plan::ExecutionPlan, exec::execution::Executor, exec::effect_node::FrameTime, graph::Graph, exec::metal_backend::MetalBackend, exec::effect_node::NodeInstanceId, parameters::ParamValue, persistence::PrimitiveRegistry, exec::execution_plan::ResourceId, state_store::StateStore, scene::transform::Transform, exec::execution_plan::compile, load::graph_loader::pre_allocate_resources};
 
-use crate::harness;
 
 /// Scene settings, in the domain node's own terms.
 #[derive(Clone, Debug)]
@@ -236,7 +235,7 @@ impl MatterScene {
 
         let plan = compile(&graph).expect("matter scene compiles");
         assert_eq!(plan.substep_regions().len(), 1, "one substep region");
-        let harness = harness::shared();
+        let harness = manifold_node_engine::testkit::gpu_harness::shared();
         let device = &harness.device;
         let mut backend = MetalBackend::new(device.clone(), 64, 64, GpuTextureFormat::Rgba16Float);
         pre_allocate_resources(&mut graph, &plan, device, &mut backend).expect("pre-allocate");
@@ -401,7 +400,7 @@ impl MatterScene {
     /// [`Self::tick`], returning the frame's GPU time; with a sampler, every
     /// dispatch is timed in its own encoder.
     pub(crate) fn tick_timed(&mut self, sampler: Option<&GpuTimestampSampler>) -> GpuFrameProfile {
-        let device = &harness::shared().device;
+        let device = &manifold_node_engine::testkit::gpu_harness::shared().device;
         let time = FrameTime {
             beats: Beats(0.0),
             seconds: Seconds(f64::from(self.frame_count) * self.frame_interval),

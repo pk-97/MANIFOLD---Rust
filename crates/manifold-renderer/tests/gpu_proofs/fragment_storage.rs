@@ -8,7 +8,6 @@
 //! read per-pixel from the fragment shader. Byte-level value assert via f16
 //! readback.
 
-use crate::harness;
 use manifold_gpu::{GpuBinding, GpuTextureFormat};
 use manifold_node_engine::gpu::render_target::RenderTarget;
 
@@ -44,7 +43,7 @@ fn half_to_f32(h: u16) -> f32 {
 
 #[test]
 fn fragment_reads_storage_buffer_via_bytes_binding() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
     let (w, hgt) = (4u32, 1u32);
 

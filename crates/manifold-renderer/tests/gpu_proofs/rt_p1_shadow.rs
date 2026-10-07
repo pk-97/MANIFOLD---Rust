@@ -98,7 +98,7 @@ const IDENTITY: [[f32; 4]; 4] = [
 
 #[test]
 fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
 
     // ─── Occluder: one quad (2 triangles) at z=1, x in [-1, 0], y in [-1, 1] ──
@@ -366,7 +366,7 @@ fn shadow_rays_2tri_occluder_matches_cpu_oracle() {
 /// outcome for either texel.
 #[test]
 fn shadow_rays_2blas_ground_plus_occluder_matches_cpu_oracle() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
 
     // ─── Object 0: ground quad at z=0, spanning x,y in [-10,10] ──

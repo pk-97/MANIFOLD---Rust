@@ -41,7 +41,6 @@ use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 
-use crate::harness;
 
 const ORBIT: f32 = 0.0;
 const TILT: f32 = 0.0;
@@ -214,7 +213,7 @@ fn region_minmax(bytes: &[u8], w: u32, h: u32, cx: f32, cy: f32, radius: i32) ->
 /// the `color` readback bytes, after `frames` committed calls (>=1; the
 /// last one is what gets read back).
 fn render_and_read(json: &str, frames: i64) -> (Vec<u8>, u32, u32, Vec<u8>) {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
         json,
@@ -276,7 +275,7 @@ fn render_and_read(json: &str, frames: i64) -> (Vec<u8>, u32, u32, Vec<u8>) {
 fn lit_vs_baked_look_rt_off() {
     let json = scene_json(true, false);
     let (ao_bytes, w, h, _color) = render_and_read(&json, 2);
-    assert_eq!((w, h), (harness::PARITY_WIDTH, harness::PARITY_HEIGHT), "ao_mask dims must match canvas");
+    assert_eq!((w, h), (manifold_node_engine::testkit::gpu_harness::PARITY_WIDTH, manifold_node_engine::testkit::gpu_harness::PARITY_HEIGHT), "ao_mask dims must match canvas");
 
     let camera = cam();
     let lit_px = camera
@@ -335,7 +334,7 @@ fn lit_vs_baked_look_rt_off() {
 #[test]
 fn rt_enabled_and_ready_forces_zero_everywhere_drawn() {
     let json = scene_json(true, true);
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
         &json,
@@ -381,7 +380,7 @@ fn rt_enabled_and_ready_forces_zero_everywhere_drawn() {
         .expect("ao_mask must be dumped once wired");
     assert_eq!(ao_tex.format, GpuTextureFormat::R8Unorm);
     let (w, h_) = (ao_tex.width, ao_tex.height);
-    let ao_bytes = readback_r8unorm(&harness::shared().device, ao_tex);
+    let ao_bytes = readback_r8unorm(&manifold_node_engine::testkit::gpu_harness::shared().device, ao_tex);
 
     let camera = cam();
     let lit_px = camera
@@ -446,7 +445,7 @@ fn unwired_ao_mask_stays_inert_color_output_matches_within_epsilon() {
 
     for (name, world) in probes {
         let px = camera
-            .project_to_pixel(world, harness::PARITY_WIDTH, harness::PARITY_HEIGHT)
+            .project_to_pixel(world, manifold_node_engine::testkit::gpu_harness::PARITY_WIDTH, manifold_node_engine::testkit::gpu_harness::PARITY_HEIGHT)
             .unwrap_or_else(|| panic!("{name} probe point must project in front of the camera"));
         let cx = px.px.round() as i32;
         let cy = px.py.round() as i32;
@@ -455,10 +454,10 @@ fn unwired_ao_mask_stays_inert_color_output_matches_within_epsilon() {
             for dx in -RADIUS..=RADIUS {
                 let x = cx + dx;
                 let y = cy + dy;
-                if x < 0 || y < 0 || x >= harness::PARITY_WIDTH as i32 || y >= harness::PARITY_HEIGHT as i32 {
+                if x < 0 || y < 0 || x >= manifold_node_engine::testkit::gpu_harness::PARITY_WIDTH as i32 || y >= manifold_node_engine::testkit::gpu_harness::PARITY_HEIGHT as i32 {
                     continue;
                 }
-                let idx = ((y as u32 * harness::PARITY_WIDTH + x as u32) * 8) as usize;
+                let idx = ((y as u32 * manifold_node_engine::testkit::gpu_harness::PARITY_WIDTH + x as u32) * 8) as usize;
                 for c in 0..4 {
                     let a = f16::from_le_bytes([wired_color[idx + c * 2], wired_color[idx + c * 2 + 1]]).to_f32();
                     let b =
@@ -638,7 +637,7 @@ fn ao_group_cam() -> Camera {
 /// `dump_textures_all` (neither is lazy: `color` always computes,
 /// `mask_mix.out` is wired to `system.final_output`).
 fn render_ao_group(json: &str, frames: i64) -> (Vec<u8>, Vec<u8>, u32, u32) {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
         json,
@@ -751,7 +750,7 @@ fn ao_region_probe(
 #[test]
 fn rt_ready_makes_ao_group_identity_on_color() {
     let json = ao_group_scene_json(true);
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
         &json,

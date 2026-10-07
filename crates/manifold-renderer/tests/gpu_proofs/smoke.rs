@@ -9,7 +9,7 @@
 //! covered here until the equivalent generator JSON migration lands.
 //!
 //! Lives in the parity binary because it reuses the same
-//! `harness::shared()` device + readback machinery — adding a third
+//! `manifold_node_engine::testkit::gpu_harness::shared()` device + readback machinery — adding a third
 //! integration-test binary just for this would re-pay the ~5s
 //! `GpuDevice::new()` cost we just eliminated.
 //!
@@ -27,7 +27,6 @@ use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::gpu::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 
-use crate::harness;
 
 /// Every bundled generator preset instantiates and renders one frame
 /// into a fresh target with default parameters; output must be finite.
@@ -36,7 +35,7 @@ use crate::harness;
 /// generator factories) — is their primary integration check.
 #[test]
 fn every_registered_generator_runs_without_panicking_or_nans() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let ctx = default_generator_ctx(h.width, h.height);
     let registry = PrimitiveRegistry::with_builtin();
 

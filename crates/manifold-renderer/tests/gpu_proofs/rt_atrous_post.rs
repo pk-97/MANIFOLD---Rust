@@ -25,7 +25,6 @@
 
 use manifold_gpu::raytrace::MetalShadowRayTracer;
 
-use crate::harness;
 
 const TOLERANCE: f32 = 1e-4;
 
@@ -149,7 +148,7 @@ fn assert_close(got: [f32; 4], expected: [f32; 4], label: &str) {
 /// irradiance. Variance = 0, spatial spread = 0 → early-out → output = src.
 #[test]
 fn atrous_post_converged_texel_early_out() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let tracer = MetalShadowRayTracer::new(&h.device);
 
     let irr_val = [0.3, 0.5, 0.7, 0.8]; // .rgb = irradiance, .a = ao
@@ -172,7 +171,7 @@ fn atrous_post_converged_texel_early_out() {
 /// Void center → bit-exact passthrough of src (including .a).
 #[test]
 fn atrous_post_void_center_passthrough() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let tracer = MetalShadowRayTracer::new(&h.device);
 
     let src_val = [10.0, 20.0, 30.0, 0.5];
@@ -197,7 +196,7 @@ fn atrous_post_void_center_passthrough() {
 /// should be the plain 9-tap arithmetic mean of src_irr's rgb values.
 #[test]
 fn atrous_post_noisy_flat_mean() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let tracer = MetalShadowRayTracer::new(&h.device);
 
     let depth = [NON_VOID; 9];
@@ -248,7 +247,7 @@ fn atrous_post_noisy_flat_mean() {
 /// ~nothing. Output should stay near the left+center columns' mean.
 #[test]
 fn atrous_post_edge_rejection() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let tracer = MetalShadowRayTracer::new(&h.device);
 
     // Left+center columns (depth 0.5), right column (depth 0.8 — delta 0.3
@@ -294,7 +293,7 @@ fn atrous_post_edge_rejection() {
 /// Strength blend: strength=0.5 → output = 0.5*src + 0.5*filtered.
 #[test]
 fn atrous_post_strength_blend() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let tracer = MetalShadowRayTracer::new(&h.device);
 
     let depth = [NON_VOID; 9];

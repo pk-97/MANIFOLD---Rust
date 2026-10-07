@@ -252,7 +252,7 @@ fn current_geometry_ray(runtime: &PresetRuntime) -> (String, [f32; 3], [f32; 3])
 
 #[test]
 fn rt_dynamic_current_frame_first_frame_dispatches() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
         scene_json(),
@@ -318,7 +318,7 @@ fn rt_dynamic_current_frame_first_frame_dispatches() {
 fn rt_dynamic_current_frame_stock_modifier_combo_accepts_rt_and_dispatches() {
     use manifold_core::NodeId;
     use manifold_node_engine::parameters::ParamValue;
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let owner = modifier_combo_scene();
     assert!(
@@ -451,7 +451,7 @@ fn rt_dynamic_current_frame_stock_modifier_combo_accepts_rt_and_dispatches() {
 fn rt_dynamic_current_frame_warmup_toggle_deform_and_idle() {
     use manifold_core::NodeId;
     use manifold_node_engine::parameters::ParamValue;
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let mut graph: serde_json::Value = serde_json::from_str(scene_json()).unwrap();
     graph["nodes"]
         .as_array_mut()
@@ -586,7 +586,7 @@ fn rt_dynamic_history_reset_and_resume() {
     use manifold_node_engine::parameters::ParamValue;
 
     const SENTINEL: f32 = 123.0;
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
         scene_json(),

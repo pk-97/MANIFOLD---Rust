@@ -35,7 +35,7 @@ fn illuminate(def: &mut EffectGraphDef) {
 }
 
 fn render(def: EffectGraphDef, context: &PresetContext) -> Vec<u8> {
-    let device = crate::harness::shared().device.clone();
+    let device = manifold_node_engine::testkit::gpu_harness::shared().device.clone();
     let mut runtime = manifold_node_engine::runtime::PresetRuntime::from_def_with_device(
         def,
         &PrimitiveRegistry::with_builtin(),

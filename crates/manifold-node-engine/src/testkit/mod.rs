@@ -68,3 +68,6 @@ pub(crate) mod physics_fixtures;
 
 #[cfg(test)]
 pub(crate) mod document_fixtures;
+
+#[cfg(feature = "gpu-proofs")]
+pub mod gpu_harness;

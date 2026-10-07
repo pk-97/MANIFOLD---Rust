@@ -20,7 +20,6 @@ use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 
-use crate::harness;
 
 /// A single unlit white quad (grid_mesh's XZ-plane grid) viewed from a
 /// tilted-down orbit camera so the plane fills the frame (not edge-on).
@@ -84,7 +83,7 @@ fn quad_scene_json(lens_ev: Option<f32>) -> String {
 }
 
 fn render_readback(json: &str) -> Vec<u8> {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
         json,

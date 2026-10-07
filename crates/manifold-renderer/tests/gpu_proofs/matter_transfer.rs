@@ -15,7 +15,6 @@ use {manifold_node_engine::water::matter::reference, manifold_node_engine::water
 use manifold_node_engine::water::matter::{MASS_SCALE, MOMENTUM_SCALE, MatterGridNode, MatterPoint, block_sort_box, lattice_blocks, mass_unit, momentum_unit, rounding_hash, water_lambda};
 use manifold_node_engine::{ports::ArrayType, exec::backend::Backend, exec::effect_node::EffectNode, exec::effect_node::EffectNodeContext, exec::effect_node::EffectNodeType, exec::execution_plan::ExecutionPlan, exec::execution::Executor, exec::effect_node::FrameTime, graph::Graph, ports::KnownItem, exec::metal_backend::MetalBackend, ports::NodeInput, exec::effect_node::NodeInstanceId, ports::NodeOutput, ports::NodePort, parameters::ParamDef, parameters::ParamType, parameters::ParamValue, ports::PortKind, ports::PortType, persistence::PrimitiveRegistry, exec::execution_plan::ResourceId, state_store::StateStore, exec::execution_plan::compile, load::graph_loader::pre_allocate_resources};
 
-use crate::harness;
 
 /// An array the test fills after pre-allocation, sized by `max_capacity`.
 pub(crate) struct HostArray {
@@ -169,7 +168,7 @@ impl Chain {
         set(&mut graph, g2p, "cohesion", p.cohesion as f32);
 
         let plan = compile(&graph).expect("matter chain compiles");
-        let harness = harness::shared();
+        let harness = manifold_node_engine::testkit::gpu_harness::shared();
         let device = &harness.device;
         let mut backend = MetalBackend::new(device.clone(), 64, 64, GpuTextureFormat::Rgba16Float);
         pre_allocate_resources(&mut graph, &plan, device, &mut backend).expect("pre-allocate");
@@ -208,7 +207,7 @@ impl Chain {
     /// `Params { tick_index: k, .. }`).
     pub(crate) fn step(&mut self) {
         set(&mut self.graph, self.p2g, "tick_index", self.frame as f32);
-        let device = &harness::shared().device;
+        let device = &manifold_node_engine::testkit::gpu_harness::shared().device;
         let time = FrameTime {
             beats: Beats(0.0),
             seconds: Seconds(f64::from(self.frame) / 60.0),

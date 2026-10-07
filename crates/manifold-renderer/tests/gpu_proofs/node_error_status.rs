@@ -15,7 +15,6 @@ use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 use manifold_node_engine::gpu::render_target::RenderTarget;
 
-use crate::harness;
 
 const DAM_BREAK_JSON: &str = include_str!("../../assets/generator-presets/WaterDamBreakGpuFlip.json");
 const WIDTH: u32 = 160;
@@ -23,7 +22,7 @@ const HEIGHT: u32 = 90;
 
 #[test]
 fn node_error_fails_the_frame() {
-    let harness = harness::shared();
+    let harness = manifold_node_engine::testkit::gpu_harness::shared();
     let grouped: EffectGraphDef = serde_json::from_str(DAM_BREAK_JSON).unwrap();
     let mut def: serde_json::Value = serde_json::to_value(
         manifold_core::flatten::flatten_groups(&grouped).unwrap(),

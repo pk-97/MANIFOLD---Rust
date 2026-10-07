@@ -11,7 +11,6 @@ use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 
-use crate::harness;
 
 fn scene(
     mode: u32,
@@ -88,7 +87,7 @@ fn center_luma(bytes: &[u8], width: u32, height: u32) -> f64 {
 }
 
 fn render_center(json: &str) -> f64 {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
         json,

@@ -63,7 +63,7 @@ fn ctx(frame_count: i64) -> PresetContext {
 
 fn frame(
     runtime: &mut PresetRuntime,
-    h: &harness::ParityHarness,
+    h: &manifold_node_engine::testkit::gpu_harness::ParityHarness,
     target: &manifold_gpu::GpuTexture,
     f: i64,
     params: &ParamManifest,
@@ -72,7 +72,7 @@ fn frame(
     // A commit can be an InnocentVictim of a shared-GPU contention transient
     // (BUG-m0c9); re-rendering the same idempotent frame absorbs it. A real
     // wedge still panics after the single retry.
-    harness::retry_on_gpu_commit_error(|| {
+    manifold_node_engine::testkit::gpu_harness::retry_on_gpu_commit_error(|| {
         let mut enc = h.device.create_encoder("ntm-frame");
         {
             let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
@@ -130,7 +130,7 @@ fn fixture() -> std::path::PathBuf {
 /// `rt_r3_heldout_gltf` uses for `mr_map`. Also stamps the void-lighting
 /// card values so the reflection term dominates.
 fn build_variant(
-    h: &harness::ParityHarness,
+    h: &manifold_node_engine::testkit::gpu_harness::ParityHarness,
     strip_normal_map: bool,
 ) -> (PresetRuntime, manifold_gpu::GpuTexture, ParamManifest, usize) {
     let (def, report) = assemble_import_graph(&fixture()).expect("import must succeed");
@@ -209,7 +209,7 @@ const SETTLE_FRAMES: i64 = 400;
 /// in this harness" — a scene driven through `import_rt_manifest` traces.
 #[test]
 fn normal_tangent_mirror_dispatches_rt_on_the_import_path() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
 
     let (mut runtime, target, params, _) = build_variant(h, false);
     for f in 0..SETTLE_FRAMES {
@@ -272,7 +272,7 @@ fn normal_tangent_mirror_dispatches_rt_on_the_import_path() {
 /// raster's contribution alone and proves nothing about the kernel. That
 /// false-positive is the reason this reads the internal channel.
 fn settle_and_capture_refl_raw(
-    h: &harness::ParityHarness,
+    h: &manifold_node_engine::testkit::gpu_harness::ParityHarness,
     strip_normal_map: bool,
 ) -> Vec<f32> {
     let (mut runtime, target, params, wire_count) = build_variant(h, strip_normal_map);
@@ -302,7 +302,7 @@ fn settle_and_capture_refl_raw(
 /// variants are rendered separately and compared in the raw reflection channel.
 #[test]
 fn normal_tangent_mirror_normal_map_reaches_the_traced_reflection() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     // Warm-up variant, discarded: the FIRST PresetRuntime built in this
     // process reads `refl_raw` back all-black no matter how many frames it
     // settles for (the same cumulative-load transient `rt_r3_heldout_gltf`

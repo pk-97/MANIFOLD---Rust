@@ -40,7 +40,6 @@ use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 
-use crate::harness;
 
 /// One camera configuration: `(orbit, tilt, distance, fov_y, look_y)`, all
 /// radians / world units, `roll = 0`, `near = 0.05`, `far = 200.0` for every
@@ -175,7 +174,7 @@ fn render_scene_json(cam: (f32, f32, f32, f32, f32)) -> String {
 /// graph's `Rgba16Float` output. Mirrors `render_scene_lights.rs`'s
 /// `render_scene_readback` helper.
 fn render_readback(json: &str) -> Vec<u8> {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
         json,
@@ -251,7 +250,7 @@ fn intensity_centroid(bytes: &[u8], width: u32, height: u32) -> Option<(f32, f32
 
 #[test]
 fn flatten_3d_camera_mode_matches_project_to_pixel_oracle() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     for &cam_params in &CAMERAS {
         let (orbit, tilt, distance, fov_y, look_y) = cam_params;
         let cam = Camera::orbit_perspective(orbit, tilt, distance, fov_y, look_y, 0.0, NEAR, FAR);
@@ -276,7 +275,7 @@ fn flatten_3d_camera_mode_matches_project_to_pixel_oracle() {
 
 #[test]
 fn render_scene_matches_project_to_pixel_oracle() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     for &cam_params in &CAMERAS {
         let (orbit, tilt, distance, fov_y, look_y) = cam_params;
         let cam = Camera::orbit_perspective(orbit, tilt, distance, fov_y, look_y, 0.0, NEAR, FAR);
@@ -306,7 +305,7 @@ fn render_scene_matches_project_to_pixel_oracle() {
 /// separate proof.
 #[test]
 fn flatten_3d_and_render_scene_agree_with_each_other() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     for &cam_params in &CAMERAS {
         let a_bytes = render_readback(&flatten_3d_scene_json(cam_params));
         let b_bytes = render_readback(&render_scene_json(cam_params));

@@ -8,7 +8,6 @@ use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 
-use crate::harness;
 
 fn identity_instances(id: u32) -> String {
     format!(
@@ -110,7 +109,7 @@ fn render_graph(kind: &str) -> String {
 }
 
 fn render_readback(json: &str) -> Vec<u8> {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
         json,

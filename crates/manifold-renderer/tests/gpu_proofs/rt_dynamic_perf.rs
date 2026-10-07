@@ -27,7 +27,6 @@ use manifold_node_engine::gpu::render_target::RenderTarget;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::harness;
 
 const WARMUP_FRAMES: usize = 16;
 const MEASURED_FRAMES: usize = 120;
@@ -601,7 +600,7 @@ fn run_production_configuration(device: &Arc<GpuDevice>, configuration: Configur
 
 #[test]
 fn rt_dynamic_perf_bounded_a9() {
-    let harness = harness::shared();
+    let harness = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &harness.device;
     let reports = [
         run_configuration(device, Configuration::Off),

@@ -27,7 +27,6 @@ use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 
-use crate::harness;
 
 /// A 1-entry `Array<InstanceTransform>` producer. `rot_x` lets callers
 /// additionally orient the instance (e.g. to face a camera) while keeping
@@ -55,7 +54,7 @@ fn identity_instance_node(id: u32, node_id: &str, rot_x: f32) -> String {
 /// hard-checks for Metal GPU errors, so a bad instance-buffer bind surfaces
 /// as a panic here, not a silently wrong frame.
 fn render_readback(json: &str) -> (Vec<u8>, u32, u32) {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
         json,

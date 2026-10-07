@@ -253,7 +253,7 @@ fn authored_vortex(viscosity: f32) -> (EffectGraphDef, NodeId, String) {
 
 #[test]
 fn scene_physics_authored_liquid_only_vortex_rotates_immersed_object_after_reload() {
-    let harness = harness::shared();
+    let harness = manifold_node_engine::testkit::gpu_harness::shared();
     let mut registry = PrimitiveRegistry::with_cpu_flip_reference();
     registry.register("test.explicit_physics_observer", || {
         Box::new(Observe(EffectNodeType::new(

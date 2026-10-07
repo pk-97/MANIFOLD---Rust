@@ -31,7 +31,6 @@ use manifold_node_engine::persistence::PrimitiveRegistry;
 use manifold_node_engine::runtime::preset_context::PresetContext;
 use manifold_node_engine::runtime::PresetRuntime;
 
-use crate::harness;
 
 const DISTANCE: f32 = 5.0;
 const FOV_Y: f32 = 0.9;
@@ -121,7 +120,7 @@ fn scene_json(shutter_angle: f32) -> String {
 /// static control); at `BEAT_MOVED` the quad jumps and the frame carries
 /// real velocity.
 fn render_frame(json: &str, beat: f64, label: &str) -> Vec<f32> {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let mut runtime = PresetRuntime::from_json_str_with_device(
         json,
@@ -152,7 +151,7 @@ fn render_frame(json: &str, beat: f64, label: &str) -> Vec<f32> {
             anim_progress: 0.0,
             trigger_count: 0,
         };
-        harness::retry_on_gpu_commit_error(|| {
+        manifold_node_engine::testkit::gpu_harness::retry_on_gpu_commit_error(|| {
             let mut enc = h.device.create_encoder("motion-blur-visibility-enc");
             {
                 let mut gpu = RendererGpuEncoder::new(&mut enc, &h.device);
@@ -166,7 +165,7 @@ fn render_frame(json: &str, beat: f64, label: &str) -> Vec<f32> {
             enc.commit_and_wait_completed();
         });
     }
-    let bytes = harness::retry_on_gpu_commit_error(|| h.readback(&target.texture));
+    let bytes = manifold_node_engine::testkit::gpu_harness::retry_on_gpu_commit_error(|| h.readback(&target.texture));
     for (i, px) in bytes.chunks_exact(8).enumerate() {
         for c in 0..4 {
             pixels[i * 4 + c] = f16::from_le_bytes([px[c * 2], px[c * 2 + 1]]).to_f32();

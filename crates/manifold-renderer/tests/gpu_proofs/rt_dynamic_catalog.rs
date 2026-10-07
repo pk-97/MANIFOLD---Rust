@@ -627,7 +627,7 @@ fn render_and_witness_controlled(
     control: Option<(&str, &str, &[f32])>,
     writer_offsets: Option<&[f32]>,
 ) {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let registry = PrimitiveRegistry::with_builtin();
     let metadata = owner.preset_metadata.as_ref();
     let mut manifest = manifold_core::params::ParamManifest::from_params(
@@ -712,7 +712,7 @@ fn render_and_witness_controlled(
         if frame == 0 && label == "Shatter" {
             // Imported collision geometry is prepared asynchronously. Resolve
             // it at the initial time before requiring a resident RT scene.
-            let wait = harness::BackgroundWait::new(format!("{label} warmup"));
+            let wait = manifold_node_engine::testkit::gpu_harness::BackgroundWait::new(format!("{label} warmup"));
             loop {
                 let mut encoder = h.device.create_encoder("catalog-physics-warmup");
                 {

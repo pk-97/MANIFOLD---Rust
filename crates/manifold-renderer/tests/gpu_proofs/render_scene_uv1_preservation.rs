@@ -10,7 +10,6 @@ use manifold_node_engine::mesh::MeshVertex;
 use manifold_node_engine::freeze::codegen::{standalone_for_spec, ENTRY};
 use manifold_renderer::node_graph::primitives::MorphMesh;
 
-use crate::harness;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -22,7 +21,7 @@ struct MorphUniforms {
 }
 
 fn dispatch_production_morph(source: MeshVertex, target: MeshVertex) -> MeshVertex {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let wgsl = standalone_for_spec::<MorphMesh>().expect("production morph WGSL must generate");
     let pipeline = h
         .device

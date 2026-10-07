@@ -16,7 +16,6 @@ use manifold_gpu::raytrace::{
 use manifold_gpu::{GpuBuffer, GpuDevice};
 use manifold_node_engine::mesh::InstanceTransform;
 
-use crate::harness;
 
 /// Same interleaved layout the other RT fixtures use: pos(16) + normal(16)
 /// + uv(8), stride 40 — normal offset 16, uv offset 32.
@@ -164,7 +163,7 @@ fn read_stats(accel: &RtAccel) -> EmissiveTableStats {
 
 #[test]
 fn rt_dynamic_emissive_queued_frames_keep_metadata_snapshots() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
     let tracer = MetalShadowRayTracer::new(device);
     let vertices = write_shared(device, &triangle_at(0.0, 1.0));
@@ -261,7 +260,7 @@ fn assert_alias_distribution(aliases: &[EmissiveAliasEntry], context: &str) {
 /// `gpu_proofs_gate.py --filter rt_dynamic_shading` selects it.
 #[test]
 fn rt_dynamic_emissive_gpu_geometry() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
     let tracer = MetalShadowRayTracer::new(device);
 
@@ -677,7 +676,7 @@ fn run_ray_query(
 /// manifold-gpu's `p4b_appearance_source_contracts`).
 #[test]
 fn rt_dynamic_coverage_and_attributes() {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
     let tracer = MetalShadowRayTracer::new(device);
 

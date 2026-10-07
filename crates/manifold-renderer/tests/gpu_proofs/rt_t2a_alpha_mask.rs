@@ -127,7 +127,7 @@ fn run_fixture_with_metadata(
     vertex_alpha: f32,
     alpha_cutoff: f32,
 ) -> [f32; 2] {
-    let h = harness::shared();
+    let h = manifold_node_engine::testkit::gpu_harness::shared();
     let device = &h.device;
 
     // ─── Occluder: one quad at z=1, x,y in [-1,1], u=(x+1)/2 ──
