@@ -32,12 +32,7 @@ fn resize_re_pre_allocates_array_buffers() {
     );
 
     {
-        let metal = g
-            .executor
-            .backend_mut()
-            .as_any_mut()
-            .and_then(|a| a.downcast_mut::<MetalBackend>())
-            .expect("production path constructs a MetalBackend");
+        let metal = crate::preset_runtime::testkit::metal_backend(&mut g);
         for &res in &array_resources {
             let slot = metal
                 .slot_for(res)
@@ -50,22 +45,17 @@ fn resize_re_pre_allocates_array_buffers() {
     }
 
     let old_buffers = array_resources.iter().map(|&id| {
-        let backend = g.executor.backend();
+        let backend = g.backend_for_test();
         backend.array_buffer(backend.slot_for(id).unwrap()).unwrap().clone()
     }).collect::<Vec<_>>();
     g.resize(&device, 1280, 720).unwrap();
     for (&id, before) in array_resources.iter().zip(&old_buffers) {
-        let backend = g.executor.backend();
+        let backend = g.backend_for_test();
         let after = backend.array_buffer(backend.slot_for(id).unwrap()).unwrap();
         assert!(before.ptr_eq(after), "resolution-independent arrays must keep physical storage");
     }
 
-    let metal = g
-        .executor
-        .backend_mut()
-        .as_any_mut()
-        .and_then(|a| a.downcast_mut::<MetalBackend>())
-        .expect("production path constructs a MetalBackend");
+    let metal = crate::preset_runtime::testkit::metal_backend(&mut g);
     for &res in &array_resources {
         let slot = metal
             .slot_for(res)
@@ -208,12 +198,7 @@ fn aliased_array_io_routes_in_and_out_to_one_physical_slot() {
     let integrate_out_res = resource_for(integrate_node, "particles", false);
     let scatter_in_res = resource_for(scatter_node, "particles", true);
 
-    let metal = g
-        .executor
-        .backend_mut()
-        .as_any_mut()
-        .and_then(|a| a.downcast_mut::<MetalBackend>())
-        .expect("production path constructs a MetalBackend");
+    let metal = crate::preset_runtime::testkit::metal_backend(&mut g);
 
     let in_slot = metal.slot_for(integrate_in_res).expect("integrate.in bound");
     let out_slot = metal.slot_for(integrate_out_res).expect("integrate.out bound");
@@ -272,12 +257,7 @@ fn canvas_sized_array_outputs_scale_buffer_with_backend_canvas_dims() {
             panic!("scatter.accum resource missing");
         })();
 
-        let metal = g
-            .executor
-            .backend_mut()
-            .as_any_mut()
-            .and_then(|a| a.downcast_mut::<MetalBackend>())
-            .expect("metal backend");
+        let metal = crate::preset_runtime::testkit::metal_backend(&mut g);
         let slot = metal.slot_for(accum_res).expect("scatter.accum unbound");
         let buf = Backend::array_buffer(metal, slot).expect("no backing buffer");
         let expected = (w as u64) * (h as u64) * 4;

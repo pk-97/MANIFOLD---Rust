@@ -5,7 +5,7 @@
 
 use manifold_core::scene_index::{FlatSceneIndex, SceneIndexError};
 
-pub(crate) mod acceleration;
+mod acceleration;
 pub(crate) use acceleration::impulse_recipients;
 mod coupling;
 pub use coupling::{CoupledSceneBinding, prepare_coupled_scenes};
@@ -19,8 +19,8 @@ pub use buffer_budget::{
 };
 pub use event_state::{PreparedModifierEvents, SceneModifierEventRoute};
 pub use impulses::SceneModifierImpulseRoute;
-pub(crate) mod impulses;
-pub(crate) mod compiler;
+mod impulses;
+mod compiler;
 pub(crate) use compiler::math_events::resource_node_id as math_resource_node_id;
 pub(crate) use compiler::math_events::sample_node_id as math_sample_node_id;
 mod control_state;
@@ -28,15 +28,15 @@ mod math_view;
 pub(crate) use math_view::LegacyMathViewScope;
 pub(crate) use compiler::prepare_legacy_scene_modifier_math_view;
 pub use control_state::PreparedModifierControlState;
-pub(crate) mod frames;
+mod frames;
 mod fragment_cuts;
 pub(crate) use fragment_cuts::contains_fragments;
 mod namespace;
-pub(crate) mod parameter_guards;
+mod parameter_guards;
 pub(crate) use parameter_guards::PreparedModifierParameterGuards;
 mod routes;
 mod value_sources;
-pub(crate) mod value_writes;
+mod value_writes;
 pub use value_sources::{SceneModifierValueSource, SceneModifierValueSourcePlan};
 pub use value_writes::PreparedGraphValueWrites;
 
@@ -147,3 +147,8 @@ pub fn force_objects_for_authoring(
         &crate::node_graph::persistence::PrimitiveRegistry::with_builtin(),
     )
 }
+
+#[cfg(test)]
+#[doc(hidden)]
+#[path = "../testkit/expansion.rs"]
+pub(crate) mod testkit;

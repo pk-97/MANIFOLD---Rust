@@ -26,11 +26,11 @@ fn offline_history_drain_crosses_fluid_history_capacity_without_reset() {
         frame_count: (seconds * 60.0) as i64,
     };
     runtime.execute_frame(time(0.0));
-    assert_eq!(FLUID_TIME.get(), Some(0.0));
-    FLUID_TIME.set(None);
+    assert_eq!(observed_fluid_time(), Some(0.0));
+    set_observed_fluid_time(None);
     runtime.sample_physics_history(time(36.0));
     assert_eq!(
-        FLUID_TIME.get(),
+        observed_fluid_time(),
         None,
         "history must not run the output consumer"
     );
@@ -61,7 +61,7 @@ fn offline_history_drain_crosses_fluid_history_capacity_without_reset() {
     runtime
         .executor
         .execute_frame(&mut runtime.graph, &runtime.plan, time(36.0));
-    assert_eq!(FLUID_TIME.get(), Some(36.0));
+    assert_eq!(observed_fluid_time(), Some(36.0));
 }
 
 #[test]
@@ -122,7 +122,7 @@ fn fluid_graph_cache_ignores_appearance_but_rejects_authored_force_edits() {
     ));
     let mut registry = PrimitiveRegistry::with_builtin();
     registry.register("test.fluid_time", || {
-        Box::new(FluidTimeObserver(EffectNodeType::new("test.fluid_time")))
+        fluid_time_observer()
     });
     let mut definition = serde_json::json!({
         "version": 2, "name": "Recorded source graph",

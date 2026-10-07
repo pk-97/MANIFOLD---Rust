@@ -98,7 +98,7 @@ fn math_view_runtime_keeps_scene_plan_and_routes_values_to_bounded_variants() {
     let registry = PrimitiveRegistry::with_builtin();
     let mut params = manifest(&owner);
     for fused in [false, true] {
-        let baseline = PresetRuntime::from_def_for_render_view(
+        let baseline = crate::preset_runtime::testkit::render_view(
             owner.clone(),
             &registry,
             Some(&params),
@@ -110,14 +110,14 @@ fn math_view_runtime_keeps_scene_plan_and_routes_values_to_bounded_variants() {
             PresetRuntime::from_def_for_render(owner.clone(), &registry, Some(&params), fused)
         .unwrap();
         assert_eq!(runtime.plan.steps().len(), baseline.plan.steps().len());
-        assert_eq!(runtime.math_views.len(), 1);
-        assert_eq!(runtime.math_views[0].variants.len(), 1);
-        assert_eq!(runtime.math_views[0].mode(&runtime.graph), 0);
+        assert_eq!(crate::preset_runtime::testkit::math_view_count(&runtime), 1);
+        assert_eq!(crate::preset_runtime::testkit::math_variant_count(&runtime, 0), 1);
+        assert_eq!(crate::preset_runtime::testkit::math_mode(&runtime, 0), 0);
         set(&owner, &mut params, "math_view_mode", 1.0);
         set(&owner, &mut params, "orbit", 0.73);
         runtime.apply_param_values(&params);
-        assert_eq!(runtime.math_views[0].mode(&runtime.graph), 1);
-        let variant = &mut runtime.math_views[0].variants[0];
+        assert_eq!(crate::preset_runtime::testkit::math_mode(&runtime, 0), 1);
+        let variant = crate::preset_runtime::testkit::math_variant(&mut runtime, 0, 0);
         variant.apply_param_values(&params);
         let local = manifold_core::scene_modifier_preset::SceneNodeRef {
             scope: vec![NodeId::new("vortex_stage")],
@@ -127,11 +127,7 @@ fn math_view_runtime_keeps_scene_plan_and_routes_values_to_bounded_variants() {
             .modifier_node_copies(&NodeId::new("vortex_a"), &local)
             .unwrap();
         for copy in copies {
-            let (target, param) = variant.effect_nodes[0]
-                .bound
-                .fused_retarget
-                .get(&(copy.node_id.to_string(), "orbit".into()))
-                .cloned()
+            let (target, param) = crate::preset_runtime::testkit::fused_retarget(variant, &copy.node_id, "orbit")
                 .unwrap_or_else(|| (copy.node_id.clone(), "orbit".into()));
             let node = variant.graph.instance_by_node_id(&target).unwrap();
             let value = variant.graph.get_node(node).unwrap().params[param.as_str()]
@@ -184,7 +180,7 @@ fn legacy_math_view_runtime_switches_scope_variants() {
     .unwrap()
     .with_generator_device(device.clone(), W, H, GpuTextureFormat::Rgba16Float)
     .unwrap();
-    assert_eq!(runtime.math_views[0].variants.len(), 2);
+    assert_eq!(crate::preset_runtime::testkit::math_variant_count(&runtime, 0), 2);
     let target = RenderTarget::new(
         &device,
         W,
@@ -306,16 +302,10 @@ fn math_view_depth_modes_borrow_scene_depth_and_survive_resize() {
             set(&owner, &mut params, "math_view_occlusion", 1.0);
             let overlay_depth = render(&mut runtime, &params);
             assert!(energy(&overlay_depth) < energy(&overlay_xray), "Depth must occlude Overlay marks");
-            let view = &runtime.math_views[0];
-            let variant = &view.variants[0];
-            for &(source, destination) in &view.shared_depth[0] {
-                let parent = runtime.executor.backend();
-                let child = variant.executor.backend();
-                let original = parent.texture_2d(parent.slot_for(source).unwrap()).unwrap();
-                let borrowed = child.texture_2d(child.slot_for(destination).unwrap()).unwrap();
-                assert!(original.ptr_eq(borrowed), "view must borrow the retained scene depth");
-                assert_eq!((borrowed.width, borrowed.height), (w, h));
-                assert_eq!(borrowed.format, GpuTextureFormat::R32Float);
+            for (shared, size, format) in crate::preset_runtime::testkit::math_depth_sharing(&runtime, 0, 0) {
+                assert!(shared, "view must borrow the retained scene depth");
+                assert_eq!(size, (w, h));
+                assert_eq!(format, GpuTextureFormat::R32Float);
             }
             if w == 320 {
                 if fused {
@@ -345,7 +335,7 @@ fn math_view_native_scene_parity_orbit_change_and_overlay() {
     let owner = owner();
     let registry = PrimitiveRegistry::with_builtin();
     let mut params = manifest(&owner);
-    let mut baseline = PresetRuntime::from_def_for_render_view(
+    let mut baseline = crate::preset_runtime::testkit::render_view(
         owner.clone(),
         &registry,
         Some(&params),
@@ -360,23 +350,10 @@ fn math_view_native_scene_parity_orbit_change_and_overlay() {
             .unwrap()
             .with_generator_device(device.clone(), W, H, GpuTextureFormat::Rgba16Float)
             .unwrap();
-    let view_shared = &runtime.math_views[0].variants[0].shared_arrays;
+    let view_shared = crate::preset_runtime::testkit::math_array_sharing(&runtime, 0, 0);
     assert!(!view_shared.is_empty());
-    for (_, retained) in view_shared.iter() {
-        assert!(
-            runtime
-                .plan
-                .steps()
-                .iter()
-                .flat_map(|step| &step.outputs)
-                .any(|(_, resource)| runtime
-                    .executor
-                    .backend()
-                    .slot_for(*resource)
-                    .and_then(|slot| runtime.executor.backend().array_buffer(slot))
-                    .is_some_and(|parent| parent.ptr_eq(retained))),
-            "borrowed storage must be the parent's buffer"
-        );
+    for shared in view_shared {
+        assert!(shared, "borrowed storage must be the parent's buffer");
     }
     let target = RenderTarget::new(
         &device,
@@ -508,11 +485,7 @@ fn math_view_native_scene_parity_orbit_change_and_overlay() {
     }
     set(&owner, &mut params, "math_view_scan_progress", 0.5);
     render(&mut runtime, &params, 12);
-    for resources in runtime.math_views[0].variants[0]
-        .shared_arrays
-        .chunks_exact(2)
-    {
-        let weights = &resources[1].1;
+    for weights in crate::preset_runtime::testkit::math_weight_buffers(&runtime) {
         // Read only after render's commit-and-wait, never from a live frame.
         let values = unsafe {
             std::slice::from_raw_parts(
@@ -733,7 +706,7 @@ fn math_view_resize_rejection_preserves_live_resources_at_every_allocation() {
     let mut runtime = PresetRuntime::from_def_for_render(owner, &registry, Some(&params), false)
         .unwrap().with_generator_device(device.clone(), 64, 48, GpuTextureFormat::Rgba16Float).unwrap();
     let arrays = || {
-        let backend = runtime.executor.backend();
+        let backend = runtime.backend_for_test();
         (0..runtime.plan.resource_count()).filter_map(|id| {
             let id = ResourceId(id as u32);
             backend.slot_for(id).and_then(|slot| backend.array_buffer(slot)).map(|buffer| (id, buffer.clone()))
@@ -749,7 +722,7 @@ fn math_view_resize_rejection_preserves_live_resources_at_every_allocation() {
         drop(injection);
         assert_eq!((runtime.width, runtime.height), (64, 48));
         for (id, buffer) in &original {
-            let backend = runtime.executor.backend();
+            let backend = runtime.backend_for_test();
             assert!(backend.array_buffer(backend.slot_for(*id).unwrap()).unwrap().ptr_eq(buffer));
         }
         match result {
@@ -760,16 +733,8 @@ fn math_view_resize_rejection_preserves_live_resources_at_every_allocation() {
     assert!(failures > 2, "must exercise parent and child allocation failures");
     assert_eq!(successes, 1, "bounded preparation must eventually succeed");
     assert_eq!((runtime.width, runtime.height), (48, 64));
-    let backend = runtime.executor.backend();
-    for view in &runtime.math_views {
-        for (variant, links) in view.variants.iter().zip(&view.shared_resources) {
-            for (parent, child) in links {
-                let parent = backend.array_buffer(backend.slot_for(*parent).unwrap()).unwrap();
-                let child_backend = variant.executor.backend();
-                let child = child_backend.array_buffer(child_backend.slot_for(*child).unwrap()).unwrap();
-                assert!(parent.ptr_eq(child));
-            }
-        }
+    for shared in crate::preset_runtime::testkit::all_math_array_links_share_storage(&runtime) {
+        assert!(shared);
     }
 }
 

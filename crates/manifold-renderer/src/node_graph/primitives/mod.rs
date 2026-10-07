@@ -323,13 +323,13 @@ mod transform_3d;
 mod transform_components;
 pub(crate) mod prefix_scan;
 pub(crate) mod sort_particles_into_cells;
-pub(crate) mod running_total;
-pub(crate) mod shape_particle_blobs;
+mod running_total;
+mod shape_particle_blobs;
 pub(crate) mod blob_bounds;
 pub(crate) mod particle_volume;
 pub(crate) mod lattice_bricks;
 pub(crate) mod liquid_bricks;
-pub(crate) mod smooth_lattice;
+mod smooth_lattice;
 pub(crate) mod dot_products;
 pub(crate) mod divide_by_value;
 pub(crate) mod gpu_flip_bodies;
@@ -367,17 +367,17 @@ mod lattice_curvature;
 mod extend_lattice;
 mod jitter_particles;
 mod sample_faces_at_particles;
-pub(crate) mod energy_potential;
-pub(crate) mod turbulence_field;
-pub(crate) mod whitewater_obstacle_source;
+mod energy_potential;
+mod turbulence_field;
+mod whitewater_obstacle_source;
 mod whitewater_emitter_dispatch;
-pub(crate) mod whitewater_influence;
-pub(crate) mod dust_potential;
-pub(crate) mod whitewater_emitter_velocity;
-pub(crate) mod inside_turbulence_potential;
-pub(crate) mod turbulence_emission_count;
+mod whitewater_influence;
+mod dust_potential;
+mod whitewater_emitter_velocity;
+mod inside_turbulence_potential;
+mod turbulence_emission_count;
 #[cfg(test)]
-pub(crate) mod whitewater_emitter_cpu;
+mod whitewater_emitter_cpu;
 #[cfg(test)]
 mod whitewater_engine_cpu;
 #[cfg(all(test, feature = "gpu-proofs"))]
@@ -405,7 +405,7 @@ mod whitewater_handoff_tests;
 #[cfg(test)]
 mod whitewater_cpu;
 #[cfg(test)]
-pub(crate) mod whitewater_particle_cpu;
+mod whitewater_particle_cpu;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod whitewater_particle_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
@@ -443,11 +443,11 @@ pub(crate) mod gpu_flip_volume;
 pub(crate) mod gpu_flip_race_tests;
 #[cfg(all(test, feature = "water-race-probes"))]
 pub(crate) mod gpu_flip_still;
-pub(crate) mod clamp_liquid_to_solids;
-pub(crate) mod count_surface_triangles;
+mod clamp_liquid_to_solids;
+mod count_surface_triangles;
 mod count_surface_edges;
 pub(crate) mod volume_surface_mesh;
-pub(crate) mod relax_surface_mesh;
+mod relax_surface_mesh;
 mod smooth_surface_mesh;
 mod surface_mesh_normals;
 #[cfg(test)]
@@ -1115,3 +1115,8 @@ pub(crate) mod whitewater_distance;
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod whitewater_engine_gpu_tests;
+
+#[cfg(all(test, feature = "gpu-proofs"))]
+#[doc(hidden)]
+#[path = "../../testkit/water_nodes.rs"]
+pub(crate) mod testkit;

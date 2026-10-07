@@ -4,10 +4,10 @@ use manifold_core::effect_graph_def::EffectGraphDef;
 use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
 use std::{borrow::Cow, cell::Cell};
 thread_local! {
-    pub(crate) static FLUID_TIME: Cell<Option<f32>> = const { Cell::new(None) };
+    static FLUID_TIME: Cell<Option<f32>> = const { Cell::new(None) };
 }
 
-pub(crate) struct FluidTimeObserver(pub(crate) EffectNodeType);
+struct FluidTimeObserver(EffectNodeType);
 
 impl EffectNode for FluidTimeObserver {
     fn is_liveness_root(&self) -> bool {
@@ -81,3 +81,9 @@ pub(crate) fn runtime() -> PresetRuntime {
     runtime_from_definition(runtime_definition())
 }
 
+
+pub(crate) fn observed_fluid_time() -> Option<f32> { FLUID_TIME.get() }
+pub(crate) fn set_observed_fluid_time(value: Option<f32>) { FLUID_TIME.set(value); }
+pub(crate) fn fluid_time_observer() -> Box<dyn EffectNode> {
+    Box::new(FluidTimeObserver(EffectNodeType::new("test.fluid_time")))
+}

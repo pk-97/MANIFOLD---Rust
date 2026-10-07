@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use manifold_core::NodeId;
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphNode, EffectGraphWire};
 
-use crate::preset_runtime::physics_sources::prepare;
+use crate::preset_runtime::testkit::prepare_sources as prepare;
 use crate::node_graph::PrimitiveRegistry;
 
 #[path = "physics_source_path_tests.rs"]

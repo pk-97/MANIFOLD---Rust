@@ -23,15 +23,15 @@ use crate::node_graph::scene_modifier_expand::{
 };
 
 /// Authored identity for one fluid source graph.
-pub(crate) struct PhysicsSourceGraph {
-    pub(crate) fluid: NodeId,
-    pub(crate) digest: [u8; 32],
-    pub(crate) control_ids: Vec<String>,
+pub(super) struct PhysicsSourceGraph {
+    pub(super) fluid: NodeId,
+    pub(super) digest: [u8; 32],
+    pub(super) control_ids: Vec<String>,
     /// Resolved destinations of relevant host string bindings. Values are
     /// observed after the existing binding policy has applied overrides.
-    pub(crate) string_targets: Vec<(NodeId, String)>,
+    pub(super) string_targets: Vec<(NodeId, String)>,
     /// Relevant file loaders from the existing central asset inventory.
-    pub(crate) asset_nodes: Vec<NodeId>,
+    pub(super) asset_nodes: Vec<NodeId>,
 }
 
 /// Build the stable source identity for every authored fluid domain.
@@ -39,7 +39,7 @@ pub(crate) struct PhysicsSourceGraph {
 /// `expanded` is the unfused, prepared graph. `canonical` owns the authored
 /// scene-modifier stack and its target declarations.  The latter is consulted
 /// through the same resolver used to prepare runtime coupling and impulses.
-pub(crate) fn prepare(
+pub(super) fn prepare(
     expanded: &EffectGraphDef,
     canonical: &EffectGraphDef,
     impulse_routes: &[SceneModifierImpulseRoute],

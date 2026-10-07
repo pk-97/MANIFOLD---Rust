@@ -39,9 +39,9 @@ use std::sync::OnceLock;
 
 use manifold_gpu::{GpuBinding, GpuComputePipeline, GpuSampler, GpuSamplerDesc};
 
-use crate::node_graph::effect_node::{EffectNodeContext, EffectNodeType};
+use crate::node_graph::{EffectNodeContext, EffectNodeType};
 use crate::node_graph::freeze::classify::FusionKind;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
+use crate::node_graph::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortType};
 use crate::node_graph::primitive::{Primitive, PrimitiveSpec};
 use crate::node_graph::primitives::standalone_pipeline::standalone_pipeline;

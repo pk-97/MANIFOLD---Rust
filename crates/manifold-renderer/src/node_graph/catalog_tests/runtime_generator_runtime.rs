@@ -192,17 +192,17 @@ use crate::node_graph::*;
         // Seed a StateStore bucket under BOTH node ids (owner_key 0, the
         // generator convention) — clear_trigger_state must purge only the
         // one belonging to the flagged node.
-        g.state_store.insert(ratio_id, 0, Probe);
-        g.state_store.insert(render_id, 0, Probe);
+        crate::preset_runtime::testkit::insert_state(&mut g, ratio_id, 0, Probe);
+        crate::preset_runtime::testkit::insert_state(&mut g, render_id, 0, Probe);
 
         g.clear_trigger_state();
 
         assert!(
-            g.state_store.get::<Probe>(ratio_id, 0).is_none(),
+            !crate::preset_runtime::testkit::has_state::<Probe>(&mut g, ratio_id, 0),
             "trigger-latch node's StateStore bucket must be purged"
         );
         assert!(
-            g.state_store.get::<Probe>(render_id, 0).is_some(),
+            crate::preset_runtime::testkit::has_state::<Probe>(&mut g, render_id, 0),
             "non-latch node's StateStore bucket must survive a trigger-only clear"
         );
     }
@@ -1269,12 +1269,7 @@ use crate::node_graph::*;
             "group container should have no runtime instance after flattening"
         );
 
-        let seg = g.effect_nodes.first().expect("generator has one segment");
-        let (producer, port) = seg
-            .group_preview_map
-            .iter()
-            .find(|(group, _, _)| *group == manifold_core::NodeId::new("Flow Field"))
-            .map(|(_, producer, port)| (producer.clone(), port.clone()))
+        let (producer, port) = crate::preset_runtime::testkit::group_preview(&g, &manifold_core::NodeId::new("Flow Field"))
             .expect("Flow Field group must be in the preview map");
         assert_eq!(
             producer,

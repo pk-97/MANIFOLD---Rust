@@ -1,10 +1,11 @@
+use crate::node_graph::primitives::testkit as water_nodes;
 use crate::testkit::liquid_surface::{Harness, params};
 use crate::node_graph::NodeInstanceId;
 use crate::node_graph::freeze::{classify::CapacityExpr, codegen::{FusionRegion, InputSource, generate_fused}};
 use crate::testkit::water_codegen::{member, fused, run};
-use crate::node_graph::primitives::{divide_by_value::DivideByValue, turbulence_field::TurbulenceField, whitewater_influence::WhitewaterInfluence};
-use crate::node_graph::primitives::whitewater_emitter_cpu as reference;
-use crate::node_graph::primitives::whitewater_particle_cpu::Box3;
+use crate::node_graph::primitives::{divide_by_value::DivideByValue, };
+
+use crate::node_graph::primitives::testkit::GridBox as Box3;
 fn values(extra: &[(&'static str, f32)]) -> Vec<(&'static str, f32)> {
     let mut v = vec![
         ("center_x", 4.0),
@@ -51,7 +52,7 @@ fn whitewater_turbulence_values_and_fusion() {
     let phi: Vec<f32> = (0..512)
         .map(|i| if i % 7 == 0 { 1.0 } else { -1.0 })
         .collect();
-    let want = reference::turbulence(faces.each_ref().map(Vec::as_slice), [8; 3], &phi, grid);
+    let want = water_nodes::turbulence(faces.each_ref().map(Vec::as_slice), [8; 3], &phi, grid);
     let mut h = Harness::new();
     let d = h.array(&phi, 512);
     let f = faces.each_ref().map(|v| h.array(v, 576));
@@ -59,7 +60,7 @@ fn whitewater_turbulence_values_and_fusion() {
     let p = params(&v);
     let got: Vec<f32> = run(
         &mut h,
-        &mut TurbulenceField::new(),
+        &mut water_nodes::turbulence_field(),
         &[
             ("distance", d.0),
             ("face_u", f[0].0),
@@ -82,7 +83,7 @@ fn whitewater_turbulence_values_and_fusion() {
     let fused = fused::<f32>(
         &mut h,
         vec![
-            member::<TurbulenceField>(0, (0..4).map(InputSource::External).collect()),
+            water_nodes::member("turbulence_field", 0, (0..4).map(InputSource::External).collect()),
             member::<DivideByValue>(
                 1,
                 vec![
@@ -102,12 +103,7 @@ fn whitewater_turbulence_values_and_fusion() {
 fn whitewater_influence_values_and_fusion() {
     let mut h = Harness::new();
     let old = [0.0, 4.0, 0.0, 4.0, 4.0, 0.0];
-    let src = [WhitewaterSource {
-        influence: 0.25,
-        dust_strength: 1.0,
-        kind: 2,
-        pad: 0,
-    }; 6];
+    let src = [water_nodes::source(0.25, 1.0, 2, 0); 6];
     let source = h.array(&src, 6);
     let solid = h.array(&[4.0f32, -4.0, 0.0, 2.99, -3.01, 3.0], 6);
     let previous = h.array(&old, 6);
@@ -116,7 +112,7 @@ fn whitewater_influence_values_and_fusion() {
     let p = params(&v);
     let got: Vec<f32> = run(
         &mut h,
-        &mut WhitewaterInfluence::new(),
+        &mut water_nodes::whitewater_influence(),
         &[
             ("values", previous.0),
             ("solid", solid.0),
@@ -137,7 +133,7 @@ fn whitewater_influence_values_and_fusion() {
     let folded = fused::<f32>(
         &mut h,
         vec![
-            member::<WhitewaterInfluence>(0, (0..3).map(InputSource::External).collect()),
+            water_nodes::member("whitewater_influence", 0, (0..3).map(InputSource::External).collect()),
             member::<DivideByValue>(
                 1,
                 vec![
@@ -160,43 +156,43 @@ fn whitewater_emitter_fusion_compiles_without_device() {
     let cases = [
         (
             vec![
-                member::<TurbulenceField>(0, (0..4).map(ext).collect()),
+                water_nodes::member("turbulence_field", 0, (0..4).map(ext).collect()),
                 member::<DivideByValue>(1, vec![node(0), ext(4)]),
             ],
             5,
         ),
         (
             vec![
-                member::<InsideTurbulencePotential>(0, (0..4).map(ext).collect()),
-                member::<TurbulenceEmissionCount>(1, vec![ext(0), ext(4), ext(5), node(0), ext(6)]),
+                water_nodes::member("inside_turbulence_potential", 0, (0..4).map(ext).collect()),
+                water_nodes::member("turbulence_emission_count", 1, vec![ext(0), ext(4), ext(5), node(0), ext(6)]),
             ],
             7,
         ),
         (
             vec![
-                member::<DustPotential>(0, (0..4).map(ext).collect()),
-                member::<TurbulenceEmissionCount>(1, vec![ext(0), ext(4), ext(5), node(0), ext(6)]),
+                water_nodes::member("dust_potential", 0, (0..4).map(ext).collect()),
+                water_nodes::member("turbulence_emission_count", 1, vec![ext(0), ext(4), ext(5), node(0), ext(6)]),
             ],
             7,
         ),
         (
             vec![
-                member::<WhitewaterInfluence>(0, (0..3).map(ext).collect()),
+                water_nodes::member("whitewater_influence", 0, (0..3).map(ext).collect()),
                 member::<DivideByValue>(1, vec![node(0), ext(3)]),
             ],
             4,
         ),
         (
             vec![
-                member::<WhitewaterEmitterVelocity>(0, (0..3).map(ext).collect()),
-                member::<EnergyPotential>(1, vec![node(0)]),
+                water_nodes::member("whitewater_emitter_velocity", 0, (0..3).map(ext).collect()),
+                water_nodes::member("energy_potential", 1, vec![node(0)]),
             ],
             3,
         ),
         (
             vec![
-                member::<WhitewaterObstacleSource>(0, (1..4).map(ext).collect()),
-                member::<WhitewaterInfluence>(1, vec![ext(0), ext(4), node(0)]),
+                water_nodes::member("whitewater_obstacle_source", 0, (1..4).map(ext).collect()),
+                water_nodes::member("whitewater_influence", 1, vec![ext(0), ext(4), node(0)]),
             ],
             5,
         ),
@@ -226,5 +222,3 @@ fn whitewater_emitter_fusion_compiles_without_device() {
         .unwrap_or_else(|e| panic!("{name}: {}", e.emit_to_string(&g.wgsl)));
     }
 }
-
-use crate::node_graph::primitives::{inside_turbulence_potential::InsideTurbulencePotential, turbulence_emission_count::TurbulenceEmissionCount, dust_potential::DustPotential, whitewater_emitter_velocity::WhitewaterEmitterVelocity, energy_potential::EnergyPotential, whitewater_obstacle_source::{WhitewaterSource, WhitewaterObstacleSource}};

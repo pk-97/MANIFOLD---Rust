@@ -89,7 +89,7 @@ use crate::node_graph::*;
         };
         meta.bindings.push(orphan);
 
-        let healed = crate::preset_runtime::convert_heal::heal_bool_convert_bindings(
+        let healed = crate::preset_runtime::testkit::heal_bool_convert_bindings(
             &mut def,
             &PrimitiveRegistry::with_builtin(),
         );

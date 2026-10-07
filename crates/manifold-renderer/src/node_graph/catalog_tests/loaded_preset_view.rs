@@ -1,8 +1,5 @@
-use crate::node_graph::loaded_preset_view::{LoadedPresetView, owned_bindings, outer_routings_from_view};
-use crate::node_graph::mesh_change::PreparedMeshRules;
+use crate::node_graph::loaded_preset_view::outer_routings_from_view;
 use manifold_core::PresetTypeId;
-use ahash::AHashMap;
-use std::sync::Arc;
 
     /// BUG-103 regression: a glTF-imported scene's per-object card knobs can
     /// target the `mat_k` material node that lives INSIDE that object's
@@ -37,13 +34,9 @@ use std::sync::Arc;
         // canonical_def + owned bindings that `build_view` produces, just from
         // the imported def instead of a bundled catalog entry.
         let meta = def.preset_metadata.clone().expect("import def carries metadata");
-        let view = LoadedPresetView {
-            type_id: PresetTypeId::from_string("test.gltf_import".to_string()),
-            canonical_def: Arc::new(def),
-            bindings: owned_bindings(&meta).expect("ordinary graph bindings"),
-            fused_retarget: AHashMap::default(),
-            mesh_rules: PreparedMeshRules::default(),
-        };
+        let view = crate::node_graph::loaded_preset_view::testkit::imported_view(
+            PresetTypeId::from_string("test.gltf_import".to_string()), def,
+        );
 
         let routings = outer_routings_from_view(&view);
 

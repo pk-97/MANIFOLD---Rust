@@ -1,5 +1,5 @@
 use crate::testkit::liquid_surface::{Harness, read};
-use crate::node_graph::{NodeInstanceId, ParamValues, primitive::{Primitive, PrimitiveSpec}, parameters::ParamValue, ports::KnownItem};
+use crate::node_graph::{NodeInstanceId, ParamValues, primitive::{Primitive, PrimitiveSpec}, ParamValue, ports::KnownItem};
 use crate::node_graph::freeze::{classify::CapacityExpr, codegen::{FusionRegion, InputSource, RegionNode, generate_fused}};
 use manifold_gpu::{GpuBinding, GpuBuffer};
 pub(crate) fn member<P: PrimitiveSpec>(id: u32, inputs: Vec<InputSource>) -> RegionNode<'static> {
@@ -65,7 +65,7 @@ pub(crate) fn fused<T: bytemuck::Pod + KnownItem>(
                     _ => panic!("unexpected uniform {name}"),
                 });
             match param.ty {
-                crate::node_graph::parameters::ParamType::Int => value as i32 as u32,
+                crate::node_graph::ParamType::Int => value as i32 as u32,
                 _ => value.to_bits(),
             }
         })
@@ -106,7 +106,7 @@ pub(crate) fn fused<T: bytemuck::Pod + KnownItem>(
 pub(crate) fn run<P: Primitive, T: bytemuck::Pod + crate::node_graph::ports::KnownItem>(
     harness: &mut Harness,
     prim: &mut P,
-    inputs: &[(&'static str, crate::node_graph::bindings::Slot)],
+    inputs: &[(&'static str, crate::node_graph::Slot)],
     len: usize,
     step_params: &ParamValues,
 ) -> Vec<T> {

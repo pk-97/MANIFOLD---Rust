@@ -1,3 +1,4 @@
+use crate::node_graph::freeze::region::testkit::cycle_contains_array;
 use crate::node_graph::freeze::region::*;
 
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphWire};

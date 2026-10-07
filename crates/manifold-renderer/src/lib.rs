@@ -42,6 +42,7 @@ inventory::submit!(preset_loader::PresetAssetsRoot {
 pub(crate) use manifold_gpu::testkit::{test_device, TestDevice};
 
 #[cfg(any(test, feature = "gpu-proofs"))]
+#[doc(hidden)]
 pub mod testkit;
 
 // Standalone CPU specification; deliberately absent from runtime builds.

@@ -1,7 +1,7 @@
 use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use crate::node_graph::execution_plan::{ExecutionPlan, ResourceId, compile};
-use crate::node_graph::graph::Graph;
-use crate::node_graph::parameters::ParamValue;
+use crate::node_graph::{ExecutionPlan, ResourceId, compile};
+use crate::node_graph::Graph;
+use crate::node_graph::ParamValue;
 use crate::node_graph::primitives::Gain;
 use crate::node_graph::{
     EffectGraphDefExt, Executor, FinalOutput, FrameTime, MetalBackend, NodeInstanceId,
@@ -506,10 +506,10 @@ pub(crate) fn render_def_capture_node_host(
     pick: &dyn Fn(&EffectGraphDef) -> u32,
     host_params: bool,
 ) -> Option<(RenderTarget, (u32, u32))> {
-    use crate::node_graph::graph_loader::{
+    use crate::node_graph::{
         BoundaryHandling, HandleScope, instantiate_def, pre_allocate_resources,
     };
-    use crate::node_graph::parameters::ParamValue;
+    use crate::node_graph::ParamValue;
     use crate::node_graph::{Graph, StateStore};
 
     let mut graph = Graph::new();

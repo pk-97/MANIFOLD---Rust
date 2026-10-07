@@ -1,6 +1,6 @@
 use manifold_core::NodeId;
 use crate::node_graph::scene_modifier_expand::{SceneModifierExpandError, SceneModifierNodeRoute};
-use crate::node_graph::scene_modifier_expand::impulses::prepare;
+use crate::node_graph::scene_modifier_expand::testkit::prepare_impulses as prepare;
 
     use crate::node_graph::scene_modifier_authoring::prepare_new_scene_modifier;
     use crate::node_graph::scene_modifier_expand::{

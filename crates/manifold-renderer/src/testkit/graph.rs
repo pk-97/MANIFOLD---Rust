@@ -1,7 +1,7 @@
 //! Port and parameter fixtures for engine mechanics; never inventory-registered.
 use std::borrow::Cow;
-use crate::node_graph::effect_node::{EffectNode, EffectNodeContext, EffectNodeType, ParamValues};
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
+use crate::node_graph::{EffectNode, EffectNodeContext, EffectNodeType, ParamValues};
+use crate::node_graph::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::ports::{ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType};
 
 pub(crate) struct GraphFixture {

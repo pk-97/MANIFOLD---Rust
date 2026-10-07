@@ -1,3 +1,4 @@
+use crate::node_graph::primitives::gpu_flip_preset::testkit::{surface_group, family_outputs, surface_detail_offset, assert_preset_root, rendered_scene_bytes};
 
 use crate::node_graph::primitives::gpu_flip_preset::*;
 use crate::testkit::liquid_extents::*;
@@ -5,13 +6,13 @@ use manifold_core::effect_graph_def::*;
 use manifold_core::PresetTypeId;
 use serde_json::{Value, json};
     use crate::node_graph::liquid::extent::{ExtentError, ExtentReport};
-    
+
     use crate::node_graph::{ParamValue, PrimitiveRegistry};
 
     #[test]
     fn gpu_flip_defaults_disable_optional_corrections_and_preserve_opt_ins() {
         use crate::node_graph::primitives::gpu_flip_step::GpuFlipStep;
-        use crate::node_graph::parameters::ParamValue;
+        use crate::node_graph::ParamValue;
         use crate::node_graph::primitive::PrimitiveSpec;
 
         assert!(!WaterScene::dam_break(64).volume_projection);
@@ -204,7 +205,7 @@ use serde_json::{Value, json};
     fn gpu_flip_rendered_scenes_cover_every_dispatch() {
         let scenes = [WaterScene::dam_break, WaterScene::still_pool];
         let coarser = LATTICES.into_iter().flat_map(|n| [1, 2].map(|scale| WaterScene::dam_break(n).with_surface_scale(scale)));
-        let detail = (SURFACE_DETAIL_OFFSET..=SURFACE_DETAIL_OFFSET + 2).map(|scale| WaterScene::dam_break(64).with_surface_scale(scale));
+        let detail = (surface_detail_offset()..=surface_detail_offset() + 2).map(|scale| WaterScene::dam_break(64).with_surface_scale(scale));
         // The cadence probe: one step a tick.
         let cadence = [WaterScene::dam_break(64).with_steps(1)];
         // The published face grid, at every lattice.
@@ -545,7 +546,7 @@ use serde_json::{Value, json};
             let def: EffectGraphDef = serde_json::from_str(&saved).unwrap();
             let family = find_node(&def.nodes, "water_family").unwrap();
             let group = family.group.as_ref().expect("ordinary family group");
-            assert_eq!(group.interface.outputs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), FAMILY_OUTPUTS);
+            assert_eq!(group.interface.outputs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), family_outputs());
             assert_eq!(group.interface.inputs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
                 if obstacle { vec!["role_0"] } else { vec![] });
             assert_eq!(facts(&body.nodes, &body.wires, particles), facts(&group.nodes, &group.wires, particles));
@@ -553,7 +554,7 @@ use serde_json::{Value, json};
             assert_eq!(group.nodes.iter().filter(|n| n.type_id == "node.whitewater_obstacle_source").count(), 1);
             assert!(!group.nodes.iter().any(|n| n.node_id.as_str().starts_with("dust_")));
             let boundary = group.nodes.iter().find(|n| n.node_id.as_str() == LIQUID_BODY_OUTPUT).unwrap().id;
-            for (port, object) in FAMILY_OUTPUTS.into_iter().zip(["water_object", "foam_object", "spray_object", "bubble_object"]) {
+            for (port, object) in family_outputs().into_iter().zip(["water_object", "foam_object", "spray_object", "bubble_object"]) {
                 let id = group.nodes.iter().find(|n| n.node_id.as_str() == object).unwrap().id;
                 assert!(group.wires.iter().any(|w| w.from_node == id && w.from_port == "object" && w.to_node == boundary && w.to_port == port));
                 let physical: Vec<_> = def.wires.iter().filter(|w| w.from_node == family.id && w.from_port == port).collect();
@@ -812,3 +813,8 @@ use serde_json::{Value, json};
 use crate::node_graph::primitives::{gpu_flip_domain::gpu_flip_geometry, gpu_flip_step::FACE_VALID_LAYERS};
 use crate::node_graph::bundled_presets::bundled_preset_json;
 use crate::node_graph::liquid::clock::INTERVAL_DURATION_INPUTS;
+
+fn shipped_preset() -> Value {
+    let json = crate::node_graph::bundled_presets::bundled_preset_json(&PresetTypeId::new("WaterDamBreakGpuFlip")).expect("the GPU FLIP preset is bundled");
+    serde_json::from_str(&json).expect("the GPU FLIP preset parses")
+}

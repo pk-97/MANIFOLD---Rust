@@ -2,9 +2,9 @@
         use crate::node_graph::*;
 use crate::node_graph::execution_plan::CompiledMeshRevisionRule;
 use crate::node_graph::mesh_change::MeshAspect;
-        
+
         use crate::node_graph::mesh_change::{MeshOutputRule, MeshRevisionRule};
-        
+
 
 use crate::testkit::mesh_revision::*;
         /// Wraps a real stock primitive so its DECLARED
@@ -32,9 +32,7 @@ use crate::testkit::mesh_revision::*;
             let (src, (_unchanged, _pending, src_rule)) = MeshNode::producer(Some(fixed_rule()));
             let mut g = Graph::new();
             let a = g.add_node(Box::new(src));
-            let probe = g.add_node(Box::new(DeclaredPrimitiveProbe {
-                inner: Box::new(NormalWaveMesh::new()),
-            }));
+            let probe = g.add_node(Box::new(DeclaredPrimitiveProbe::new(Box::new(NormalWaveMesh::new()))));
             let sink = g.add_node(Box::new(MeshNode::sink()));
             g.connect((a, "out"), (probe, "in")).unwrap();
             g.connect((probe, "out"), (sink, "in")).unwrap();

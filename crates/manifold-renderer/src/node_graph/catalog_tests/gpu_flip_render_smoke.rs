@@ -14,6 +14,7 @@
 //! `GPU_FLIP_SMOKE_DIR` names the output directory (stills, mp4, timing CSV);
 //! `GPU_FLIP_SMOKE_FRAMES` the run length (900 when unset).
 
+use crate::node_graph::primitives::gpu_flip_preset::testkit::rendered_scene_bytes;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -23,7 +24,7 @@ use manifold_core::params::{Param, ParamManifest};
 use serde_json::{Value, json};
 use manifold_gpu::GpuTextureFormat;
 
-use crate::node_graph::primitives::gpu_flip_preset::{WaterScene, render_def, rendered_scene_bytes};
+use crate::node_graph::primitives::gpu_flip_preset::{WaterScene, render_def};
 use crate::frame_status::FrameRenderStatus;
 use crate::mesh::MeshVertex;
 use crate::gpu_encoder::GpuEncoder;
@@ -213,7 +214,7 @@ impl Smoke {
         let mut registry = PrimitiveRegistry::with_builtin();
         register_substep_test_nodes(&mut registry);
         let def = render_def(scene);
-        let Some(view) = crate::node_graph::primitives::gpu_flip_preset::fused_as_rendered(&def, &registry) else {
+        let Some(view) = crate::node_graph::primitives::gpu_flip_preset::testkit::fused_as_rendered(&def, &registry) else {
             return Self::with_def(scene, def);
         };
         let mut smoke = Self::with_def(scene, (*view.def).clone());
@@ -456,7 +457,7 @@ impl Smoke {
         let name = self.surface_name("liquid_mesh");
         let node = self.runtime.graph.nodes().find(|n| n.node_id.as_str() == name).expect("mesh node");
         match node.params.get("max_capacity") {
-            Some(crate::node_graph::parameters::ParamValue::Float(v)) => (v.clamp(3.0, 16_777_215.0) as usize / 3) * 3,
+            Some(crate::node_graph::ParamValue::Float(v)) => (v.clamp(3.0, 16_777_215.0) as usize / 3) * 3,
             other => panic!("mesh max_capacity is {other:?}"),
         }
     }

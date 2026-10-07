@@ -1,4 +1,5 @@
 //! Authored preset fixtures for the liquid conformance suite.
+use crate::node_graph::liquid::conformance::testkit::{G, liquid_totals, matter_totals, matter_faces, set_source_param};
 use manifold_core::PresetTypeId;
 use manifold_core::effect_graph_def::{
     BindingDef, BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire, SerializedParamValue,
@@ -284,7 +285,7 @@ fn gpu_flip_fixture(fixture: Fixture) -> Option<EffectGraphDef> {
         | Fixture::Stack => {
             let scene = BoxScene::of(fixture)?;
             let water = WaterScene::pool(scene.resolution as usize, f64::from(scene.domain_size), f64::from(scene.fill));
-            Some(scene.stacked(fixture, scene.set(with_box(render_def(water)), GPU_FLIP_DOMAIN_TYPE_ID)))
+            Some(scene.test_stacked(fixture, scene.test_set(with_box(render_def(water)), GPU_FLIP_DOMAIN_TYPE_ID)))
         }
     }
 }
@@ -312,7 +313,7 @@ pub fn gpu_flip_engine_tank_moved(shift: f32) -> (EffectGraphDef, BoxScene) {
         mass: FIXTURE_DENSITY * edge.powi(3),
     };
     let water = WaterScene::pool(scene.resolution as usize, f64::from(scene.domain_size), f64::from(scene.fill));
-    (scene.set(with_box(render_def(water)), GPU_FLIP_DOMAIN_TYPE_ID), scene)
+    (scene.test_set(with_box(render_def(water)), GPU_FLIP_DOMAIN_TYPE_ID), scene)
 }
 /// The GPU FLIP Dam Break with a free box `density_ratio` times as dense as
 /// the water standing where the static obstacle stands, and that obstacle
@@ -331,7 +332,7 @@ pub fn gpu_flip_dam_break_with_box(density_ratio: f32) -> (EffectGraphDef, BoxSc
         edge,
         mass: density_ratio * FIXTURE_DENSITY * edge.powi(3),
     };
-    (scene.set(with_box(render_def(water)), GPU_FLIP_DOMAIN_TYPE_ID), scene)
+    (scene.test_set(with_box(render_def(water)), GPU_FLIP_DOMAIN_TYPE_ID), scene)
 }
 /// `def` with [`BOX_PRESET`]'s box in its render scene, which pairs the
 /// box's world with the scene's liquid, and the Speed card on the world too.
@@ -391,7 +392,7 @@ fn with_box(mut def: EffectGraphDef) -> EffectGraphDef {
 }
 fn matter_fixture(fixture: Fixture) -> Option<EffectGraphDef> {
     Some(match BoxScene::of(fixture) {
-        Some(scene) => scene.stacked(fixture, scene.apply(bundled("WaterFloatingBoxMatter"), MATTER_DOMAIN_TYPE_ID)),
+        Some(scene) => scene.test_stacked(fixture, scene.apply(bundled("WaterFloatingBoxMatter"), MATTER_DOMAIN_TYPE_ID)),
         None if fixture == Fixture::StillPool => bundled("WaterStillPoolMatter"),
         None if fixture == Fixture::FaceGrid => {
             let mut def = matter_dam_break_faces(None, false);

@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::scene_modifier_preset::{SceneNodeRef, SceneTargetSelection};
 use manifold_core::{NodeId, Seconds};
@@ -13,7 +11,7 @@ use crate::node_graph::{
     ParamValue, ParamValues, PortType, PrimitiveRegistry,
 };
 
-use crate::preset_runtime::physics_impulses::*;
+use crate::preset_runtime::{CapturedSceneImpulse, PreparedSceneImpulse};
 use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind};
 use crate::node_graph::{EffectNode, EffectNodeContext, EffectNodeType, ParamDef};
 use manifold_core::Beats;
@@ -276,7 +274,7 @@ fn scene_impulse_requires_initialized_recipients_and_explicit_clock_mapping() {
             .unwrap_err()
             .contains("clock unavailable")
     );
-    assert!(hit.field.is_none());
+    assert!(hit.test_field().is_none());
     runtime
         .capture_scene_impulse(&mut binding, &mut hit, time(12.0), 0, |_, t| {
             Ok(Seconds(t.0 - 12.0))
@@ -294,7 +292,7 @@ fn scene_impulse_does_not_overwrite_pending_capture_or_reallocate_recipient_stor
     runtime.execute_frame(time(0.0));
     let mut binding = prepare(&runtime, &def, &["part_a", "part_b"]);
     let mut hit = binding.new_capture();
-    let pointer = hit.stamps.as_ptr();
+    let pointer = hit.test_stamp_storage();
     capture(&mut runtime, &mut binding, &mut hit, 0);
     edit(&mut runtime, "field", "x", 9.0);
     assert!(
@@ -303,18 +301,18 @@ fn scene_impulse_does_not_overwrite_pending_capture_or_reallocate_recipient_stor
             .is_err()
     );
     assert_eq!(
-        hit.field.as_ref().unwrap().sample([0.0; 3]),
+        hit.test_field().unwrap().sample([0.0; 3]),
         [2.0, 0.0, 0.0]
     );
     hit.clear();
     capture(&mut runtime, &mut binding, &mut hit, 1);
-    assert_eq!(pointer, hit.stamps.as_ptr());
+    assert_eq!(pointer, hit.test_stamp_storage());
     assert_eq!(
-        hit.field.as_ref().unwrap().sample([0.0; 3]),
+        hit.test_field().unwrap().sample([0.0; 3]),
         [9.0, 0.0, 0.0]
     );
     assert_eq!(
-        hit.recipients.len(),
+        hit.test_recipient_count(),
         1,
         "both body slots share one queue entry"
     );
@@ -368,12 +366,12 @@ fn scene_impulse_invalid_field_never_reuses_previous_value() {
             .capture_scene_impulse(&mut binding, &mut hit, time(0.0), 1, |_, t| Ok(t))
             .is_err()
     );
-    assert!(hit.field.is_none());
+    assert!(hit.test_field().is_none());
     assert!(runtime.deliver_scene_impulse(&mut hit).is_err());
     edit(&mut runtime, "field", "x", 3.0);
     capture(&mut runtime, &mut binding, &mut hit, 1);
     assert_eq!(
-        hit.field.as_ref().unwrap().sample([0.0; 3]),
+        hit.test_field().unwrap().sample([0.0; 3]),
         [3.0, 0.0, 0.0]
     );
 }
@@ -398,7 +396,7 @@ fn scene_impulse_samples_clock_at_capture_without_rewriting_graph_controls() {
         })
         .unwrap();
     assert_eq!(
-        hit.field.as_ref().unwrap().sample([0.0; 3]),
+        hit.test_field().unwrap().sample([0.0; 3]),
         [0.125, 0.0, 0.0]
     );
     let clock = runtime
@@ -560,11 +558,11 @@ fn scene_impulse_captures_spatial_shape_before_center_edits() {
     edit(&mut runtime, "field", "center_x", 1.0);
     capture(&mut runtime, &mut binding, &mut second, 1);
     assert_eq!(
-        first.field.as_ref().unwrap().sample([0.0, 10.0, 0.0]),
+        first.test_field().unwrap().sample([0.0, 10.0, 0.0]),
         [1.0, 0.0, 0.0]
     );
     assert_eq!(
-        second.field.as_ref().unwrap().sample([0.0, 10.0, 0.0]),
+        second.test_field().unwrap().sample([0.0, 10.0, 0.0]),
         [-1.0, 0.0, 0.0]
     );
 }
@@ -596,10 +594,10 @@ fn scene_impulse_selection_combines_body_slots_copies_and_fluid_domain() {
     }
     let runtime = runtime(&def);
     let binding = prepare(&runtime, &def, &["part_a", "part_a_2", "part_b"]);
-    assert_eq!(binding.recipients.len(), 1, "coupled participants share one native event owner");
-    assert_eq!(binding.recipients[0].id.as_str(), "fluid");
+    assert_eq!(binding.test_recipient_count(), 1, "coupled participants share one native event owner");
+    assert_eq!(binding.test_recipient_id(0).as_str(), "fluid");
     assert_eq!(
-        binding.recipients[0].target,
+        binding.test_recipient_target(0),
         ImpulseTarget::FluidAndRigid(RigidImpulseTargets {
             bodies: 1,
             copies: true

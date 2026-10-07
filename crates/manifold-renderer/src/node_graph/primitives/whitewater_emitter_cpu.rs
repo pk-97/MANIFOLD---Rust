@@ -76,7 +76,7 @@ fn whitewater_new_emitter_atoms_generate_valid_wgsl() {
     check::<super::whitewater_type::WhitewaterType>();
 }
 
-pub(crate) fn turbulence(
+pub(super) fn turbulence(
     faces: [&[f32]; 3],
     face_cells: [u32; 3],
     distance: &[f32],

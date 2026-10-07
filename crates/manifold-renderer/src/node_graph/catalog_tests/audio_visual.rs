@@ -1,7 +1,7 @@
 use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use crate::node_graph::execution_plan::{ExecutionPlan, compile};
-use crate::node_graph::graph::Graph;
-use crate::node_graph::parameters::ParamValue;
+use crate::node_graph::{ExecutionPlan, compile};
+use crate::node_graph::Graph;
+use crate::node_graph::ParamValue;
 use crate::node_graph::{
     EffectGraphDefExt, Executor, MetalBackend,
     PrimitiveRegistry,

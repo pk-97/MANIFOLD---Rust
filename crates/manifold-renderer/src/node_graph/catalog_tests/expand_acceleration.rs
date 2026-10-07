@@ -1,6 +1,6 @@
 use manifold_core::NodeId;
 
-    use crate::node_graph::scene_modifier_expand::acceleration::*;
+    use crate::node_graph::scene_modifier_expand::testkit::{authoring_objects, recipient_key, impulse_recipients_with_index};
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::liquid_domain::liquid_domain_of;
 use manifold_core::scene_index::FlatSceneIndex;

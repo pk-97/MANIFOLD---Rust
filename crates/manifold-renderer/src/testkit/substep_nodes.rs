@@ -8,10 +8,10 @@
 
     use crate::particles::Particle;
     use crate::node_graph::PrimitiveRegistry;
-    use crate::node_graph::effect_node::{
+    use crate::node_graph::{
         EffectNode, EffectNodeContext, EffectNodeType, NodeRequires, ParamValues,
     };
-    use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
+    use crate::node_graph::{ParamDef, ParamType, ParamValue};
     use crate::node_graph::ports::{
         ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType,
     };

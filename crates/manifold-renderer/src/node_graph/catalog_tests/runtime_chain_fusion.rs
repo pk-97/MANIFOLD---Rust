@@ -4,7 +4,7 @@
     //! and the cards' `param_values` must keep driving the fused chain
     //! through the retargeted bindings.
 
-    use crate::preset_runtime::segments::build_segment_cards;
+    use crate::preset_runtime::testkit::build_segment_cards;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use crate::preset_runtime::*;
 use crate::node_graph::*;
@@ -145,9 +145,9 @@ use crate::node_graph::*;
         // per-card — today's production path, our oracle. ──
         let mut per_card = PresetRuntime::try_build(ChainBuildInputs { effects: &effects, groups: &[], primitives: &primitives, device: &device, pool: None, width: w, height: h, preview_effect: None }, None)
         .expect("per-card chain builds");
-        assert_eq!(per_card.effect_nodes.len(), 2);
+        assert_eq!(crate::preset_runtime::testkit::slot_count(&per_card), 2);
         assert!(
-            per_card.pending_segments,
+            crate::preset_runtime::testkit::pending_segments(&per_card),
             "cold cache must leave the chain waiting on the segment compile"
         );
         assert!(
@@ -168,8 +168,8 @@ use crate::node_graph::*;
 
         let mut fused = PresetRuntime::try_build(ChainBuildInputs { effects: &effects, groups: &[], primitives: &primitives, device: &device, pool: None, width: w, height: h, preview_effect: None }, None)
         .expect("fused-segment chain builds");
-        assert_eq!(fused.effect_nodes.len(), 2, "one EffectSlot per card survives");
-        assert!(!fused.pending_segments);
+        assert_eq!(crate::preset_runtime::testkit::slot_count(&fused), 2, "one EffectSlot per card survives");
+        assert!(!crate::preset_runtime::testkit::pending_segments(&fused));
         let fused_kernels = fused
             .graph
             .nodes()
@@ -269,7 +269,7 @@ use crate::node_graph::*;
 
         let mut fused = PresetRuntime::try_build(ChainBuildInputs { effects: &effects, groups: &[], primitives: &primitives, device: &device, pool: None, width: w, height: h, preview_effect: None }, None)
         .expect("fused-segment chain builds");
-        assert!(!fused.pending_segments);
+        assert!(!crate::preset_runtime::testkit::pending_segments(&fused));
         let fused_kernels = fused
             .graph
             .nodes()
@@ -360,7 +360,7 @@ use crate::node_graph::*;
 
             let mut fused = PresetRuntime::try_build(ChainBuildInputs { effects: std::slice::from_ref(&fx), groups: &[], primitives: &primitives, device: &device, pool: None, width: w, height: h, preview_effect: None }, None)
             .expect("fused relight-on chain builds");
-            assert!(!fused.pending_segments);
+            assert!(!crate::preset_runtime::testkit::pending_segments(&fused));
             let fused_kernel_count = fused
                 .graph
                 .nodes()
@@ -544,9 +544,9 @@ use crate::node_graph::*;
 
         let cg = PresetRuntime::try_build(ChainBuildInputs { effects: &effects, groups: &[], primitives: &primitives, device: &device, pool: None, width: w, height: h, preview_effect: None }, None)
         .expect("mixed relight segment chain builds");
-        assert!(!cg.pending_segments, "mixed segment must be ready after seeding");
+        assert!(!crate::preset_runtime::testkit::pending_segments(&cg), "mixed segment must be ready after seeding");
         assert_eq!(
-            cg.effect_nodes.len(),
+            crate::preset_runtime::testkit::slot_count(&cg),
             2,
             "one EffectSlot per member survives"
         );

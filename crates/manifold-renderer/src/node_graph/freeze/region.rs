@@ -964,7 +964,7 @@ fn node_on_cycle(start: u32, def: &EffectGraphDef) -> bool {
 ///     buffer → scatter → density): a 1-ulp force difference moves a particle
 ///     across a texel boundary and the scatter amplifies it to a visibly
 ///     different field (measured max_abs 0.6+ over ~30% of pixels).
-pub(crate) fn cycle_contains_array(start: u32, def: &EffectGraphDef, registry: &PrimitiveRegistry) -> bool {
+fn cycle_contains_array(start: u32, def: &EffectGraphDef, registry: &PrimitiveRegistry) -> bool {
     // Forward reachability from `start`, remembering everything reachable.
     let mut forward: AHashSet<u32> = AHashSet::default();
     let mut stack = vec![start];
@@ -4191,3 +4191,8 @@ mod tests {
 }
 
 pub mod census;
+
+#[cfg(test)]
+#[doc(hidden)]
+#[path = "../../testkit/freeze_region.rs"]
+pub(crate) mod testkit;

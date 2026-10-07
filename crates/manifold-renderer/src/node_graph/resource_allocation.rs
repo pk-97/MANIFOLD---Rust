@@ -31,7 +31,7 @@ pub(crate) fn growing_array_resources(graph: &Graph, plan: &ExecutionPlan) -> Ve
 /// (a lattice grid fed by particles) never changes when an input does, so it
 /// stays an ordinary temporary. The capacity rule is opaque, so it is asked:
 /// see [`capacity_follows`].
-pub(crate) fn capacity_lineage(
+fn capacity_lineage(
     graph: &Graph,
     plan: &ExecutionPlan,
     seeded: impl Fn(&super::graph::NodeInstance, &str) -> bool,
@@ -1059,3 +1059,7 @@ mod tests {
 
 
 }
+
+#[cfg(test)]
+#[path = "../testkit/capacity.rs"]
+mod testkit;

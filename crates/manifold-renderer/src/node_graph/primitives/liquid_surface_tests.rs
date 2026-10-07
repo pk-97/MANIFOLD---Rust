@@ -27,7 +27,7 @@ fn fluid_sort_particles_into_cells_is_a_binned_permutation() {
     let lattice = Lattice { center: [0.0, 1.0, 0.0], size: [2.0, 2.0, 2.0], cell: 0.25 };
     let bins = bin_counts(lattice.size, lattice.cell);
     let min = lattice.min();
-    let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
+    let mut rng = Rng::new(0x9e37_79b9_7f4a_7c15);
     // Positions sit well inside their bins (never near a boundary, where
     // fast-math reassociation could bin differently); every 97th lies half a
     // bin outside the box to exercise the border clamp; every tenth is
@@ -144,7 +144,7 @@ fn fluid_sort_particles_into_cells_sizes_ranges_to_its_bins() {
 #[test]
 fn fluid_sort_particles_into_cells_is_deterministic() {
     let mut harness = Harness::new();
-    let mut rng = Rng(31);
+    let mut rng = Rng::new(31);
     let particles: Vec<FluidParticle> = (0..4000u32)
         .map(|i| particle(std::array::from_fn(|_| (rng.next_f32() - 0.5) * 1.9), if i % 11 == 0 { 0.0 } else { 0.02 }, i + 1))
         .collect();
@@ -190,7 +190,7 @@ fn fluid_sort_particles_into_cells_runs_with_sorted_unwired() {
     let mut harness = Harness::new();
     let lattice = Lattice { center: [0.0; 3], size: [2.0; 3], cell: 0.25 };
     let bins = bin_counts(lattice.size, lattice.cell).iter().product::<u32>() as usize;
-    let mut rng = Rng(23);
+    let mut rng = Rng::new(23);
     let particles: Vec<FluidParticle> = (0..500u32)
         .map(|i| particle(std::array::from_fn(|_| (rng.next_f32() - 0.5) * 1.8), if i % 7 == 0 { 0.0 } else { 0.02 }, i + 1))
         .collect();
@@ -234,7 +234,7 @@ fn fluid_sort_particles_into_cells_sorts_matter_points_in_place() {
     let mut harness = Harness::new();
     let lattice = Lattice { center: [0.0; 3], size: [2.0; 3], cell: 0.25 };
     let bins = bin_counts(lattice.size, lattice.cell).iter().product::<u32>() as usize;
-    let mut rng = Rng(47);
+    let mut rng = Rng::new(47);
     let points: Vec<MatterPoint> = (0..3000u32)
         .map(|i| {
             let mut position: [f32; 3] = std::array::from_fn(|_| (rng.next_f32() - 0.5) * 1.9);
@@ -320,7 +320,7 @@ fn fluid_sort_particles_into_cells_disabled_leaves_outputs_untouched() {
     let mut harness = Harness::new();
     let lattice = Lattice { center: [0.0; 3], size: [2.0; 3], cell: 0.25 };
     let bins = bin_counts(lattice.size, lattice.cell).iter().product::<u32>() as usize;
-    let mut rng = Rng(11);
+    let mut rng = Rng::new(11);
     let mut cloud = |seed: f32| -> Vec<FluidParticle> {
         (0..300u32)
             .map(|i| particle(std::array::from_fn(|_| (rng.next_f32() - 0.5) * 1.8 * seed), 0.02, i + 1))
@@ -383,7 +383,7 @@ fn fluid_sort_particles_into_cells_rejects_a_broken_lattice_at_any_count() {
 #[test]
 fn fluid_running_total_matches_cpu_scan_and_total_lags_one_frame() {
     let mut harness = Harness::new();
-    let mut rng = Rng(7);
+    let mut rng = Rng::new(7);
     // (1 << 24) + 3 needs four scan levels, as Surface Detail 2 at resolution 64 does.
     for size in [1usize, 255, 256, 257, (1 << 20) + 3, (1 << 24) + 3] {
         let values: Vec<u32> = (0..size).map(|_| (rng.next_f32() * 6.0) as u32).collect();
@@ -768,7 +768,7 @@ impl SphereLevelSet {
     /// than the lattice's own box.
     fn foam(nodes: u32, seed: u64) -> Self {
         let mut level_set = Self::new(nodes, 0.5);
-        let mut rng = Rng(seed);
+        let mut rng = Rng::new(seed);
         for value in &mut level_set.values {
             *value = rng.next_f32() - 0.5;
         }
@@ -1652,7 +1652,7 @@ fn fluid_smooth_lattice_matches_binomial_reference_and_passes_through() {
     let mut harness = Harness::new();
     let nodes = [13usize, 11, 9];
     let total: usize = nodes.iter().product();
-    let mut rng = Rng(0x5eed_5eed);
+    let mut rng = Rng::new(0x5eed_5eed);
     let values: Vec<f32> = (0..total + 20).map(|_| rng.next_f32() * 2.0 - 1.0).collect();
     let (input, _) = harness.array(&values, values.len());
     let stages: Vec<(Slot, GpuBuffer)> = (0..3).map(|_| harness.array::<f32>(&[], values.len())).collect();
@@ -1703,7 +1703,7 @@ fn fluid_clamp_liquid_to_solids_matches_reference_and_passes_through() {
     let nodes = solid_nodes.map(|n| (n - 1) * 3 + 1);
     let total = nodes.iter().product::<u32>() as usize;
     let min: [f32; 3] = std::array::from_fn(|a| center[a] - 0.5 * size[a]);
-    let mut rng = Rng(0xc1a3_9e11);
+    let mut rng = Rng::new(0xc1a3_9e11);
     let solid: Vec<f32> = (0..solid_nodes.iter().product::<u32>()).map(|_| rng.next_f32() * 2.0 - 0.8).collect();
     let values: Vec<f32> = (0..total + 20).map(|_| rng.next_f32() * 2.0 - 1.0).collect();
     let (solid_slot, _) = harness.array(&solid, solid.len());
@@ -1892,7 +1892,7 @@ fn fluid_relax_surface_mesh_matches_umbrella_reference_on_a_bumpy_sphere() {
     let mut harness = Harness::new();
     let mut sphere = SphereLevelSet::new(33, 0.55);
     // A quarter-cell of noise: the lumpy surface relaxation is for.
-    let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
+    let mut rng = Rng::new(0x9e37_79b9_7f4a_7c15);
     let cell = sphere.size / (sphere.nodes - 1) as f32;
     for value in &mut sphere.values {
         *value += 0.25 * cell * (rng.next_f32() - 0.5);

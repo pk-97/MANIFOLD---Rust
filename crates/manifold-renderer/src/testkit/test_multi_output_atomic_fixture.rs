@@ -22,9 +22,9 @@ use std::sync::OnceLock;
 use manifold_gpu::{GpuBinding, GpuComputePipeline};
 
 use crate::particles::Particle;
-use crate::node_graph::effect_node::{EffectNodeContext, EffectNodeType};
+use crate::node_graph::{EffectNodeContext, EffectNodeType};
 use crate::node_graph::freeze::classify::FusionKind;
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
+use crate::node_graph::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::ports::{
     ArrayType, ChannelElementType, ChannelName, ChannelSpec, MatchMode, NodeInput, NodeOutput,
     NodePort, PortKind, PortType,
@@ -148,7 +148,7 @@ impl Primitive for TestMultiOutputAtomic {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &crate::node_graph::effect_node::ParamValues,
+        _params: &crate::node_graph::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         match port_name {
@@ -218,7 +218,7 @@ pub fn cpu_reference(points: &[Particle], drag: f32, fixed_point_scale: f32) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_graph::effect_node::EffectNode;
+    use crate::node_graph::EffectNode;
     use crate::node_graph::freeze::codegen::standalone_for_spec;
 
     /// The generated kernel for the shape: the aliased element output is

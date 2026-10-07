@@ -11,8 +11,8 @@ use crate::frame_status::FrameRenderStatus;
 use crate::gpu_encoder::GpuEncoder;
 use crate::testkit::gpu::readback_srgb_rgba8;
 use crate::node_graph::depth_rule::DepthRule;
-use crate::node_graph::effect_node::{EffectNode, EffectNodeContext, EffectNodeType};
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
+use crate::node_graph::{EffectNode, EffectNodeContext, EffectNodeType};
+use crate::node_graph::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::ports::{ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType, ScalarType};
 use crate::testkit::substep_nodes::register_substep_test_nodes;
 use crate::node_graph::PrimitiveRegistry;
@@ -137,7 +137,7 @@ impl EffectNode for Probe {
 
 /// Nodes and wires appended to a def held as JSON, found by name.
 pub(crate) struct Appender {
-    pub(crate) def: Value,
+    def: Value,
     next: u64,
 }
 
@@ -317,25 +317,25 @@ pub(crate) fn with_tick_probe(def: EffectGraphDef) -> EffectGraphDef {
 
 /// One preset on the app's generator path, frame by frame at 60 fps.
 pub(crate) struct Show {
-    pub(crate) device: crate::TestDevice,
-    pub(crate) runtime: PresetRuntime,
-    pub(crate) target: RenderTarget,
-    pub(crate) size: (u32, u32),
+    device: crate::TestDevice,
+    runtime: PresetRuntime,
+    target: RenderTarget,
+    size: (u32, u32),
     sampler: manifold_gpu::GpuTimestampSampler,
     /// Per plan step, the index of its whitewater label: a step whose node,
     /// or any member of its fused node, is a `ww.` atom.
     step_label: Vec<Option<usize>>,
-    pub(crate) labels: Vec<String>,
+    labels: Vec<String>,
     frame_count: i64,
     trigger: u32,
     /// The transport is paused: frames hold the clock with dt 0.
-    pub(crate) paused: bool,
+    paused: bool,
     /// The cards' values, as the clip hands them to the runtime.
-    pub(crate) cards: ParamManifest,
+    cards: ParamManifest,
     /// A proof injects a node error this frame; its refusal is expected.
-    pub(crate) expect_node_error: bool,
+    expect_node_error: bool,
     /// The last frame.s status, for proofs that expect a refusal.
-    pub(crate) last_status: String,
+    last_status: String,
 }
 
 /// One frame's clocks and, when profiled, each whitewater label's own GPU ms.
@@ -364,7 +364,7 @@ impl Show {
         register_substep_test_nodes(&mut registry);
         registry.register(PROBE, || Box::new(Probe::new()));
         registry.register(COUNTS_PROBE, || Box::new(Probe::whitewater_counts()));
-        let (def, retarget) = match frozen.then(|| crate::node_graph::primitives::gpu_flip_preset::fused_as_rendered(&def, &registry)).flatten() {
+        let (def, retarget) = match frozen.then(|| crate::node_graph::primitives::gpu_flip_preset::testkit::fused_as_rendered(&def, &registry)).flatten() {
             Some(view) => ((*view.def).clone(), view.node_retarget.clone()),
             None => (def, Default::default()),
         };
@@ -523,7 +523,7 @@ impl Show {
 
     /// The runtime still warming up, as `restart` leaves it when its frame
     /// bound ran out.
-    pub(crate) fn warmup_pending(&self) -> bool {
+    pub(super) fn warmup_pending(&self) -> bool {
         self.runtime.warmup_pending()
     }
 
@@ -594,5 +594,40 @@ impl Show {
         // SAFETY: `frame` waits for GPU completion, and the buffer holds `len` records.
         let particles = unsafe { std::slice::from_raw_parts(ptr.cast::<FluidParticle>(), len) };
         particles.iter().filter(|p| p.position_radius[3] > 0.0).count() as u64
+    }
+}
+
+impl Show {
+    /// The bytes of the storage the named node provides on `port`.
+    pub(crate) fn provided_copy(&self, name: &str, port: &str) -> Vec<u8> {
+        let node = self.runtime.graph.nodes().find(|n| n.node_id.as_str() == name).unwrap_or_else(|| panic!("no node {name}"));
+        let buffer = node.node.provided_array_output(port).unwrap_or_else(|| panic!("{name} provides no {port}"));
+        let ptr = buffer.mapped_ptr().expect("shared storage");
+        // SAFETY: `frame` waited for the GPU; the buffer holds `size` bytes.
+        unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), buffer.size as usize) }.to_vec()
+    }
+}
+
+impl Show {
+    pub(crate) fn runtime(&self) -> &PresetRuntime { &self.runtime }
+    pub(crate) fn labels(&self) -> &[String] { &self.labels }
+    pub(crate) fn set_paused(&mut self, paused: bool) { self.paused = paused; }
+    pub(crate) fn set_cards(&mut self, cards: ParamManifest) { self.cards = cards; }
+    pub(crate) fn expect_node_error(&mut self, expected: bool) { self.expect_node_error = expected; }
+    pub(crate) fn last_status(&self) -> &str { &self.last_status }
+}
+impl Appender {
+    pub(crate) fn retarget_binding(&mut self, id: &str, target: Value) {
+        for binding in self.def["presetMetadata"]["bindings"].as_array_mut().expect("bindings") {
+            if binding["id"] == id { binding["target"] = target.clone(); }
+        }
+    }
+    pub(crate) fn set_card_default(&mut self, list: &str, id: &str, value: Value) {
+        for p in self.def["presetMetadata"][list].as_array_mut().expect("card list") {
+            if p["id"] == id { p["defaultValue"] = value.clone(); }
+        }
+    }
+    pub(crate) fn set_node_param(&mut self, id: &str, name: &str, value: Value) {
+        self.def["nodes"].as_array_mut().expect("nodes").iter_mut().find(|n| n["nodeId"] == id).expect("engine")["params"][name] = value;
     }
 }

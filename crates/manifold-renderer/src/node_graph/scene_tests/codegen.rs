@@ -1,4 +1,4 @@
-use crate::node_graph::effect_node::NodeInstanceId;
+use crate::node_graph::NodeInstanceId;
 use crate::node_graph::freeze::markers::Marker;
 
 use crate::node_graph::freeze::codegen::generate_fused;

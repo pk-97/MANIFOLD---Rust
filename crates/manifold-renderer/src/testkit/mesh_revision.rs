@@ -6,7 +6,7 @@ use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind};
         use crate::node_graph::mesh_change::{MeshOutputRule, MeshRevisionRule};
         use crate::node_graph::ports::ArrayType;
 
-        pub(crate) fn mesh_ty() -> PortType {
+        fn mesh_ty() -> PortType {
             PortType::Array(ArrayType::of_known::<MeshVertex>())
         }
 
@@ -140,7 +140,11 @@ use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind};
         }
 
         pub(crate) struct DeclaredPrimitiveProbe {
-            pub(crate) inner: Box<dyn EffectNode>,
+            inner: Box<dyn EffectNode>,
+        }
+
+        impl DeclaredPrimitiveProbe {
+            pub(crate) fn new(inner: Box<dyn EffectNode>) -> Self { Self { inner } }
         }
 
         impl EffectNode for DeclaredPrimitiveProbe {
@@ -184,4 +188,3 @@ use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind};
             required: false,
         }
     }
-

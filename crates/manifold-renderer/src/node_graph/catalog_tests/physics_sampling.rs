@@ -35,7 +35,7 @@ use manifold_core::{Beats, Seconds};
             .plan
             .steps()
             .iter()
-            .zip(runtime.physics_sample_steps.as_ref().unwrap())
+            .zip(crate::preset_runtime::testkit::sampling_mask(&runtime).unwrap())
         {
             let kind = runtime.graph.get_node(step.node).unwrap().node.type_id();
             match kind.as_str() {
@@ -61,9 +61,7 @@ use manifold_core::{Beats, Seconds};
             &PrimitiveRegistry::with_builtin(),
         )
         .expect("WaterBasin loads");
-        let mask = runtime
-            .physics_sample_steps
-            .as_ref()
+        let mask = crate::preset_runtime::testkit::sampling_mask(&runtime)
             .expect("fluid ancestry");
         let sampled: Vec<_> = runtime
             .plan
@@ -97,7 +95,7 @@ use manifold_core::{Beats, Seconds};
         .expect("WaterFloatingBoxMatter loads");
         let pairs = runtime.plan.coupled_scenes();
         assert!(!pairs.is_empty(), "the box and the liquid are one coupled scene");
-        let mask = runtime.physics_sample_steps.as_ref().expect("the liquid samples its field per tick");
+        let mask = crate::preset_runtime::testkit::sampling_mask(&runtime).expect("the liquid samples its field per tick");
         for pair in pairs {
             assert!(mask[pair.fluid_step], "the liquid samples");
             assert!(mask[pair.rigid_step], "its owned world's scene samples per tick");
@@ -133,9 +131,7 @@ use manifold_core::{Beats, Seconds};
             &PrimitiveRegistry::with_builtin(),
         )
         .expect("PhysicsSolids with an LFO-authored body loads");
-        let mask = runtime
-            .physics_sample_steps
-            .as_ref()
+        let mask = crate::preset_runtime::testkit::sampling_mask(&runtime)
             .expect("physics ancestry");
         let sampled: Vec<_> = runtime
             .plan
@@ -183,9 +179,7 @@ use manifold_core::{Beats, Seconds};
             &PrimitiveRegistry::with_builtin(),
         )
         .expect("rigid body source graph loads");
-        let mask = runtime
-            .physics_sample_steps
-            .as_ref()
+        let mask = crate::preset_runtime::testkit::sampling_mask(&runtime)
             .expect("physics ancestry");
         let sampled: Vec<_> = runtime
             .plan
@@ -220,14 +214,14 @@ use manifold_core::{Beats, Seconds};
             &PrimitiveRegistry::with_builtin(),
         )
         .expect("PhysicsSolids loads");
-        runtime.last_physics_frame_time = Some(FrameTime {
+        crate::preset_runtime::testkit::set_last_physics_frame_time(&mut runtime, Some(FrameTime {
             beats: Beats(1.0),
             seconds: Seconds(1.0),
             delta: Seconds(1.0),
             frame_count: 1,
-        });
+        }));
         runtime.reset_state(&crate::test_device());
-        assert!(runtime.last_physics_frame_time.is_none());
+        assert!(crate::preset_runtime::testkit::last_physics_frame_time(&runtime).is_none());
     }
 
     #[test]
@@ -257,7 +251,7 @@ use manifold_core::{Beats, Seconds};
             .plan
             .steps()
             .iter()
-            .zip(runtime.physics_sample_steps.as_ref().unwrap())
+            .zip(crate::preset_runtime::testkit::sampling_mask(&runtime).unwrap())
         {
             if step.node == event {
                 assert!(!sampled);
@@ -286,7 +280,7 @@ use manifold_core::{Beats, Seconds};
             &PrimitiveRegistry::with_builtin(),
         )
         .expect("OceanCliff loads");
-        let mask = runtime.physics_sample_steps.as_ref().expect("the paddle is physics ancestry");
+        let mask = crate::preset_runtime::testkit::sampling_mask(&runtime).expect("the paddle is physics ancestry");
         let sampled = |node_id: &str| {
             let node = runtime
                 .graph

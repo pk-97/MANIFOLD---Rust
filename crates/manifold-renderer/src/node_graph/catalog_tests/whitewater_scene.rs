@@ -16,12 +16,12 @@ use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::params::{Param, ParamManifest};
 use serde_json::{Value, json};
 
-use crate::node_graph::primitives::gpu_flip_preset::{WHITEWATER_KINDS, WaterScene, render_def};
+use crate::node_graph::primitives::gpu_flip_preset::{WaterScene, render_def};
 use crate::node_graph::primitives::gpu_flip_step::face_bytes;
 use crate::testkit::gpu::encode_rgba8_png;
 #[cfg(feature = "whitewater-oracle")]
-use crate::node_graph::effect_node::EffectNode;
-use crate::node_graph::parameters::ParamValue;
+use crate::node_graph::EffectNode;
+use crate::node_graph::ParamValue;
 use crate::testkit::substep_nodes::register_substep_test_nodes;
 use crate::node_graph::PrimitiveRegistry;
 
@@ -179,11 +179,7 @@ fn vendored_render_def(scene: WaterScene) -> EffectGraphDef {
         g.wire((id, &count), object, "instance_count");
     }
     let target = json!({"kind": "node", "nodeId": "ww.lifecycle", "param": "capacity"});
-    for binding in g.def["presetMetadata"]["bindings"].as_array_mut().expect("bindings") {
-        if binding["id"] == "whitewater_capacity" {
-            binding["target"] = target.clone();
-        }
-    }
+    g.retarget_binding("whitewater_capacity", target);
     for report in LIFECYCLE_REPORTS {
         g.probe(report, (id, report));
     }
@@ -200,15 +196,10 @@ fn flip_def(whitewater: bool) -> EffectGraphDef {
     let on = if whitewater { 1.0 } else { 0.0 };
     // The card owns the switch and overwrites the node's param at build.
     for list in ["params", "bindings"] {
-        for p in g.def["presetMetadata"][list].as_array_mut().expect("card list") {
-            if p["id"] == "whitewater" {
-                p["defaultValue"] = json!(on);
-            }
-        }
+        g.set_card_default(list, "whitewater", json!(on));
     }
     let engine = g.id("fluid_surface");
-    let nodes = g.def["nodes"].as_array_mut().expect("nodes");
-    nodes.iter_mut().find(|n| n["nodeId"] == "fluid_surface").expect("engine")["params"]["whitewater"] = float(on);
+    g.set_node_param("fluid_surface", "whitewater", float(on));
     for output in ["foam_count", "bubble_count", "spray_count", "simulation_ms"] {
         g.probe(output, (engine, output));
     }
@@ -247,12 +238,12 @@ fn gpu_flip_resolution_card_resizes_at_runtime() {
         particles(buffer, bytes).iter().filter(|p| p.position_radius[3] > 0.0).count() as u64
     };
     let state_live = |show: &Show| {
-        let arrays = show.runtime.dump_arrays_all();
+        let arrays = show.runtime().dump_arrays_all();
         let array = arrays.iter().find(|a| a.name == "state" && a.port == "out").expect("held state.out");
         live_in(array.buffer, show.provided_bytes("fill", "particles"))
     };
     let published_live = |show: &Show| {
-        let frame = show.runtime.graph.nodes().find(|node| node.node_id.as_str() == "frame").expect("liquid frame");
+        let frame = show.runtime().graph.nodes().find(|node| node.node_id.as_str() == "frame").expect("liquid frame");
         live_in(frame.node.provided_array_output("particles_b").expect("published frame B"), show.provided_bytes("fill", "particles"))
     };
     show.restart();
@@ -261,7 +252,7 @@ fn gpu_flip_resolution_card_resizes_at_runtime() {
         let mut card = Param::bundled(spec.clone());
         card.value = n as f32;
         card.base = n as f32;
-        show.cards = ParamManifest::from_params(vec![card]);
+        show.set_cards(ParamManifest::from_params(vec![card]));
         show.frame(false);
         let seeded = show.provided_live("fill", "particles");
         assert_eq!(state_live(&show), seeded, "Resolution {n}: the resized state is reseeded");
@@ -269,9 +260,9 @@ fn gpu_flip_resolution_card_resizes_at_runtime() {
         assert_eq!(show.probes(["count"])[0] as u64, seeded, "Resolution {n}: the first published count");
         {
             let bytes = show.provided_bytes("fill", "particles");
-            let fill = show.runtime.graph.nodes().find(|node| node.node_id.as_str() == "fill").unwrap();
+            let fill = show.runtime().graph.nodes().find(|node| node.node_id.as_str() == "fill").unwrap();
             let seed = particles(fill.node.provided_array_output("particles").unwrap(), bytes);
-            let arrays = show.runtime.dump_arrays_all();
+            let arrays = show.runtime().dump_arrays_all();
             let state = arrays.iter().find(|a| a.name == "state" && a.port == "out").unwrap();
             let mut seen = vec![false; seed.len()];
             for p in particles(state.buffer, bytes).iter().filter(|p| p.position_radius[3] > 0.0) {
@@ -280,7 +271,7 @@ fn gpu_flip_resolution_card_resizes_at_runtime() {
                 seen[index] = true;
                 assert_eq!(bytemuck::bytes_of(p), bytemuck::bytes_of(&seed[index]), "Resolution {n}: reseeded record {}", p.id);
             }
-            let frame = show.runtime.graph.nodes().find(|node| node.node_id.as_str() == "frame").unwrap();
+            let frame = show.runtime().graph.nodes().find(|node| node.node_id.as_str() == "frame").unwrap();
             let published = particles(frame.node.provided_array_output("particles_b").unwrap(), bytes);
             // Publication sorts by birth id; the fill assigns id = site + 1.
             for (p, expected) in published.iter().filter(|p| p.position_radius[3] > 0.0).zip(seed.iter().filter(|p| p.position_radius[3] > 0.0)) {
@@ -299,9 +290,9 @@ fn gpu_flip_resolution_card_resizes_at_runtime() {
         }
         // Retire any completed publication without advancing simulation, so
         // the source and published frame refer to the same accepted endpoint.
-        show.paused = true;
+        show.set_paused(true);
         show.frame(false);
-        show.paused = false;
+        show.set_paused(false);
         let [count] = show.probes(["count"]);
         let live = state_live(&show);
         println!("Resolution {n}: {count} published, {live} live in state, {seeded} initially seeded, GPU p50 {:.2} ms; foam {} bubble {} spray {}", percentile(&gpu_ms, 0.5), last[0], last[1], last[2]);
@@ -386,7 +377,7 @@ fn gpu_flip_whitewater_holds_while_paused() {
     }
     let playing = show.probes(STEP_REPORTS);
     assert!(playing[0] > 0.0, "no foam by 1 s: {playing:?}");
-    show.paused = true;
+    show.set_paused(true);
     show.frame(false);
     let (held, image) = (show.probes(STEP_REPORTS), show.readback());
     for _ in 0..3 {
@@ -400,7 +391,7 @@ fn gpu_flip_whitewater_holds_while_paused() {
     assert_eq!(held, playing, "the first paused frame changed whitewater counts");
     assert_eq!(still[..6], held[..6], "paused frames moved the whitewater");
     assert_eq!(changed, 0, "paused frames changed the picture");
-    show.paused = false;
+    show.set_paused(false);
     for _ in 0..15 {
         show.frame(false);
     }
@@ -659,7 +650,7 @@ fn whitewater_side_by_side() {
     let live = crate::node_graph::physics::PhysicsStepScope::for_render(false);
     let mut gpu_flip = gpu_flip_show();
     let gpu_flip_frames: Vec<Frame> = (0..DEMO_FRAMES).map(|_| gpu_flip.frame(true)).collect();
-    let labels = gpu_flip.labels.clone();
+    let labels = gpu_flip.labels().to_vec();
     drop(gpu_flip);
     drop(live);
 
@@ -862,6 +853,7 @@ fn whitewater_step_against_vendored_lifecycle_150() {
 /// O2 (section 3.7): the GPU emitter against FLIP's own on the same inputs.
 #[cfg(feature = "whitewater-oracle")]
 mod emitter_oracle {
+    use crate::node_graph::primitives::testkit as water_nodes;
     use manifold_fluids::{
         WhitewaterFields, WhitewaterGrid, WhitewaterKind, WhitewaterLifecycle as NativeLifecycle, WhitewaterParticle, WhitewaterSpawn,
         whitewater_oracle,
@@ -869,7 +861,6 @@ mod emitter_oracle {
     use manifold_gpu::GpuBuffer;
 
     use crate::node_graph::primitives::emission_count::EmissionCount;
-    use crate::node_graph::primitives::energy_potential::EnergyPotential;
     use crate::node_graph::primitives::jitter_particles::JitterParticles;
     use crate::testkit::liquid_surface::{Harness, params, read};
     use crate::node_graph::primitives::sample_faces_at_particles::SampleFacesAtParticles;
@@ -878,7 +869,7 @@ mod emitter_oracle {
     use crate::node_graph::primitives::wavecrest_potential::WavecrestPotential;
     use crate::node_graph::primitives::whitewater_type::WhitewaterType;
     use super::*;
-    use crate::node_graph::bindings::Slot;
+    use crate::node_graph::Slot;
     use crate::node_graph::fluid_particles::FluidParticle;
     use crate::node_graph::liquid::grid::face_len;
     use crate::node_graph::primitive::Primitive;
@@ -1119,7 +1110,7 @@ mod emitter_oracle {
             self.step(JitterParticles::new(), &[("particles", self.particles.0)], self.jittered.0, &[("cell_size", grid.h), ("seed", seed), ("epoch", 0.0)]);
             let sample = [&[("particles", self.jittered.0)][..], &faces[..]].concat();
             self.step(SampleFacesAtParticles::new(), &sample, self.sampled.0, &faced);
-            self.step(EnergyPotential::new(), &[("particles", self.sampled.0)], self.energy.0, &[]);
+            self.step(water_nodes::energy_potential(), &[("particles", self.sampled.0)], self.energy.0, &[]);
             let crest = [("particles", self.sampled.0), ("distance", self.distance.0), ("curvature", self.curvature.0), ("cells", self.cells.0)];
             self.step(WavecrestPotential::new(), &crest, self.wavecrest.0, &boxed);
             let emit = [("particles", self.sampled.0), ("energy", self.energy.0), ("wavecrest", self.wavecrest.0)];
@@ -1650,16 +1641,6 @@ const HISTORY_PROBES: [&str; 9] =
 /// The probes that describe the selected pair.
 const PAIR: std::ops::Range<usize> = 0..7;
 
-impl Show {
-    /// The bytes of the storage the named node provides on `port`.
-    fn provided_copy(&self, name: &str, port: &str) -> Vec<u8> {
-        let node = self.runtime.graph.nodes().find(|n| n.node_id.as_str() == name).unwrap_or_else(|| panic!("no node {name}"));
-        let buffer = node.node.provided_array_output(port).unwrap_or_else(|| panic!("{name} provides no {port}"));
-        let ptr = buffer.mapped_ptr().expect("shared storage");
-        // SAFETY: `frame` waited for the GPU; the buffer holds `size` bytes.
-        unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), buffer.size as usize) }.to_vec()
-    }
-}
 
 /// GPU_FLIP_DISPLAY_HISTORY_DESIGN.md section 4 (Conviction tests): a live
 /// frame held until its publication retired shows what export shows at that
@@ -1691,7 +1672,7 @@ fn liquid_frame_live_held_frame_matches_offline() {
     let mut holds = 0;
     for (k, (probes, particles_a, particles_b, pixels)) in expected.iter().enumerate() {
         live.frame(false);
-        live.paused = true;
+        live.set_paused(true);
         let mut held = 0;
         while live.probes(HISTORY_PROBES)[PAIR] != probes[PAIR] {
             assert!(held < 8, "frame {k}: live never presented export's pair: live {:?}, export {probes:?}", live.probes(HISTORY_PROBES));
@@ -1699,7 +1680,7 @@ fn liquid_frame_live_held_frame_matches_offline() {
             held += 1;
         }
         holds += held;
-        live.paused = false;
+        live.set_paused(false);
         assert_eq!(&live.provided_copy("frame", "particles_a"), particles_a, "frame {k}: the selected A differs");
         assert_eq!(&live.provided_copy("frame", "particles_b"), particles_b, "frame {k}: the selected B differs");
         assert!(live.readback() == *pixels, "frame {k}: pixels differ from export at the same presentation");
@@ -1763,13 +1744,13 @@ fn liquid_frame_encode_failure_publishes_the_selected_outputs() {
         let armed = frame >= 5;
         clean.frame(false);
         crate::node_graph::primitives::liquid_frame::FAIL_NEXT_PUBLICATION.set(armed);
-        failing.expect_node_error = armed;
+        failing.expect_node_error(armed);
         failing.frame(false);
-        failing.expect_node_error = false;
+        failing.expect_node_error(false);
         let inject = armed && !crate::node_graph::primitives::liquid_frame::FAIL_NEXT_PUBLICATION.get();
         crate::node_graph::primitives::liquid_frame::FAIL_NEXT_PUBLICATION.set(false);
         if inject {
-            assert!(failing.last_status.starts_with("Failed"), "frame {frame}: the failure is reported: {}", failing.last_status);
+            assert!(failing.last_status().starts_with("Failed"), "frame {frame}: the failure is reported: {}", failing.last_status());
             assert_eq!(failing.probes(HISTORY_PROBES)[PAIR], clean.probes(HISTORY_PROBES)[PAIR], "frame {frame}: scalars follow the selection");
             for port in ["particles_a", "particles_b"] {
                 assert_eq!(failing.provided_copy("frame", port), clean.provided_copy("frame", port), "frame {frame}: {port}");
@@ -1802,7 +1783,7 @@ fn liquid_frame_solid_shrink_keeps_mix_capacity() {
             let mut card = Param::bundled(spec.clone());
             card.value = n as f32;
             card.base = n as f32;
-            show.cards = ParamManifest::from_params(vec![card]);
+            show.set_cards(ParamManifest::from_params(vec![card]));
             for _ in 0..4 {
                 show.frame(false);
             }
@@ -1812,3 +1793,5 @@ fn liquid_frame_solid_shrink_keeps_mix_capacity() {
 }
 
 use crate::testkit::whitewater_scene::*;
+
+const WHITEWATER_KINDS: [&str; 4] = ["foam", "bubble", "spray", "dust"];

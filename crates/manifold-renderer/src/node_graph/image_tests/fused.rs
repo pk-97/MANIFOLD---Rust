@@ -1,6 +1,6 @@
 use crate::node_graph::freeze::codegen::{FusionRegion, InputSource, RegionNode};
     use crate::node_graph::freeze::codegen::generate_fused;
-    use crate::node_graph::effect_node::NodeInstanceId;
+    use crate::node_graph::NodeInstanceId;
     use crate::node_graph::primitive::PrimitiveSpec;
     use crate::node_graph::primitives::{LerpInstanceFields as L, NeighborSmooth as N};
 

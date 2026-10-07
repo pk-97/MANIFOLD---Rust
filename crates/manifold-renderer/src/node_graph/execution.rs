@@ -5391,7 +5391,7 @@ mod tests {
                     &mut graph_a.get_node_mut(id).unwrap().node,
                     Box::new(MeshNode::sink()),
                 );
-                graph_a.get_node_mut(id).unwrap().node = Box::new(DeclaredPrimitiveProbe { inner });
+                graph_a.get_node_mut(id).unwrap().node = Box::new(DeclaredPrimitiveProbe::new(inner));
             }
             let plan_a = compile(&graph_a).unwrap();
             let res_r2 = out_res(&plan_a, r2_a);
@@ -5448,7 +5448,7 @@ mod tests {
                     Box::new(MeshNode::sink()),
                 );
                 graph_b.get_node_mut(fused_rt).unwrap().node =
-                    Box::new(DeclaredPrimitiveProbe { inner });
+                    Box::new(DeclaredPrimitiveProbe::new(inner));
             }
             let plan_b = compile(&graph_b).unwrap();
             let res_fused = out_res(&plan_b, fused_rt);

@@ -1,4 +1,4 @@
-use crate::node_graph::scene_modifier_expand::frames::*;
+use crate::node_graph::scene_modifier_expand::{resolve_modifier_mesh_frames, validate_modifier_mesh_frames};
 use manifold_core::effect_graph_def::{EffectGraphDef, SerializedParamValue};
 use manifold_core::scene_modifier_preset::{
     SceneContextValue, SceneModifierInstanceDef, SceneNodeRef,

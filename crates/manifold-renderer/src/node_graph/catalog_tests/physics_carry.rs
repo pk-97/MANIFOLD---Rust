@@ -49,15 +49,15 @@ fn physics_carry_matches_owners_across_actual_fused_topology() {
     };
     let native_owner = owner(&prior);
     assert_ne!(owner(&fused), native_owner);
-    prior.last_physics_frame_time = Some(FrameTime {
+    crate::preset_runtime::testkit::set_last_physics_frame_time(&mut prior, Some(FrameTime {
         seconds: Seconds(0.5),
         beats: Beats(1.0),
         delta: Seconds(1.0 / 30.0),
         frame_count: 15,
-    });
+    }));
     fused.carry_generator_state_from(&mut prior);
     assert_eq!(owner(&fused), native_owner);
-    assert_eq!(fused.last_physics_frame_time.unwrap().seconds, Seconds(0.5));
+    assert_eq!(crate::preset_runtime::testkit::last_physics_frame_time(&fused).unwrap().seconds, Seconds(0.5));
 }
 
 use manifold_core::NodeId;

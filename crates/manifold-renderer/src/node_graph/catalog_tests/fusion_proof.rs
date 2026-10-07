@@ -2,9 +2,9 @@ use crate::node_graph::freeze::TextureDiff;
 use crate::node_graph::freeze::markers::Marker;
 use crate::node_graph::freeze::reference::{ColorGradeParams, colorgrade_pipeline, dispatch_fused_colorgrade};
 use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use crate::node_graph::execution_plan::compile;
-use crate::node_graph::graph::Graph;
-use crate::node_graph::parameters::ParamValue;
+use crate::node_graph::compile;
+use crate::node_graph::Graph;
+use crate::node_graph::ParamValue;
 use crate::node_graph::{
     EffectGraphDefExt, Executor, FinalOutput, FrameTime, MetalBackend, NodeInstanceId,
     PrimitiveRegistry, Source,
@@ -647,7 +647,7 @@ fn every_fused_generator_kernel_compiles() {
 #[test]
 fn infrared_preset_black_stays_black() {
     use crate::node_graph::chain_spec::splice_def_into_chain;
-    use crate::node_graph::parameters::ParamValue;
+    use crate::node_graph::ParamValue;
     use manifold_core::PresetTypeId;
 
     fn black_input(device: &GpuDevice, w: u32, h: u32) -> GpuTexture {
@@ -2618,9 +2618,3 @@ fn fluidsim3d_seed_gate_matches_ungated() {
         r.over_fraction()
     );
 }
-
-
-
-
-
-

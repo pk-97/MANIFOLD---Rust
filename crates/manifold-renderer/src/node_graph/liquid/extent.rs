@@ -147,7 +147,7 @@ pub struct AtomExtent<'a> {
     wires: &'a AHashMap<ResourceId, Wire>,
     bytes: &'a AHashMap<ResourceId, u64>,
     unresolved: RefCell<Option<&'static str>>,
-    pub(crate) provided: Vec<(&'static str, u64)>,
+    provided: Vec<(&'static str, u64)>,
     published: Vec<(&'static str, Wire)>,
     held: u64,
 }
@@ -476,8 +476,8 @@ pub fn check_preset_extents(def: &EffectGraphDef, resolution: u32) -> Result<Ext
 
 /// A liquid preset built once, checked at any resolution of its domain.
 pub struct LiquidPreset {
-    pub(crate) graph: Graph,
-    pub(crate) plan: ExecutionPlan,
+    graph: Graph,
+    plan: ExecutionPlan,
     domains: Vec<crate::node_graph::NodeInstanceId>,
 }
 
@@ -1386,7 +1386,7 @@ fn liquid_stats(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     Ok(())
 }
 
-pub(crate) fn liquid_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
+fn liquid_frame(x: &mut AtomExtent<'_>) -> Result<(), Verdict> {
     // The retained history at its budget: every slot admitted whole.
     const SLOTS: u64 = H_MAX as u64;
     x.covers("identity", 16)?;
@@ -1935,3 +1935,8 @@ mod tests {
         assert_eq!(largest_default, 193);
     }
 }
+
+#[cfg(test)]
+#[doc(hidden)]
+#[path = "../../testkit/extent.rs"]
+pub(crate) mod testkit;

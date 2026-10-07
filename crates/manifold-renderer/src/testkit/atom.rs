@@ -11,9 +11,9 @@ use serde_json::json;
 
 use crate::testkit::liquid_surface::{Harness, read};
 use crate::gpu_encoder::GpuEncoder;
-use crate::node_graph::backend::Backend;
-use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
-use crate::node_graph::effect_node::{EffectNodeContext, FrameTime, ParamValues};
+use crate::node_graph::Backend;
+use crate::node_graph::{NodeInputs, NodeOutputs, Slot};
+use crate::node_graph::{EffectNodeContext, FrameTime, ParamValues};
 use crate::node_graph::primitive::Primitive;
 use crate::testkit::substep_nodes::register_substep_test_nodes;
 use crate::node_graph::{

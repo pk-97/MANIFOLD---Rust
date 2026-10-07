@@ -358,9 +358,9 @@ fn coupled_graph_merges_shared_impulses_and_preserves_single_material_selections
         ),
     ] {
         let mut binding = prepare(&runtime, &def, &selection);
-        assert_eq!(binding.recipients.len(), 1);
-        assert_eq!(binding.recipients[0].id.as_str(), "fluid");
-        assert_eq!(binding.recipients[0].target, target);
+        assert_eq!(binding.test_recipient_count(), 1);
+        assert_eq!(binding.test_recipient_id(0).as_str(), "fluid");
+        assert_eq!(binding.test_recipient_target(0), target);
         let mut captured = binding.new_capture();
         runtime
             .capture_scene_impulse_at_source(&mut binding, &mut captured, time(0.0), sequence)

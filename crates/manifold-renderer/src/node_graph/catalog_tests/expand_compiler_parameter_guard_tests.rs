@@ -136,8 +136,8 @@ fn source_id(runtime: &crate::preset_runtime::PresetRuntime) -> crate::node_grap
         .expect("flattened left source")
 }
 
-fn frame_time() -> crate::node_graph::effect_node::FrameTime {
-    crate::node_graph::effect_node::FrameTime {
+fn frame_time() -> crate::node_graph::FrameTime {
+    crate::node_graph::FrameTime {
         beats: Beats(0.0),
         seconds: Seconds(0.0),
         delta: Seconds(1.0 / 60.0),

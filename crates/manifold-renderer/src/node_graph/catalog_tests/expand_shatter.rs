@@ -1,4 +1,3 @@
-use crate::node_graph::scene_modifier_expand::compiler::shatter::*;
 use manifold_core::effect_graph_def::*;
     use manifold_core::scene_modifier_preset::SceneTargetSelection;
 
@@ -50,7 +49,7 @@ use manifold_core::effect_graph_def::*;
             legacy_math_view_carrier: None,
             graph: Box::new(recipe),
         };
-        modifier.mesh_frames = frames::resolve_modifier_mesh_frames(&owner, &modifier).unwrap();
+        modifier.mesh_frames = resolve_modifier_mesh_frames(&owner, &modifier).unwrap();
         owner.scene_modifiers.push(modifier);
         owner
     }
@@ -105,7 +104,7 @@ use manifold_core::effect_graph_def::*;
             .clone()
             .into_graph(&PrimitiveRegistry::with_builtin(), &Default::default())
             .unwrap();
-        crate::node_graph::scene_modifier_expand::value_writes::PreparedGraphValueWrites::prepare(
+        crate::node_graph::scene_modifier_expand::PreparedGraphValueWrites::prepare(
             &owner,
             &prepared.routes,
             &graph,
@@ -282,6 +281,19 @@ use manifold_core::effect_graph_def::*;
 use manifold_core::{NodeId, scene_modifier_preset::{SceneModifierInstanceDef, SceneNodeRef}};
 use std::collections::BTreeSet;
 use crate::node_graph::PrimitiveRegistry;
-use crate::node_graph::scene_modifier_expand::{prepare_scene_modifiers, frames};
+use crate::node_graph::scene_modifier_expand::{prepare_scene_modifiers, resolve_modifier_mesh_frames};
 
 use crate::node_graph::EffectGraphDefExt;
+
+fn float(value: f32) -> SerializedParamValue {
+    SerializedParamValue::Float { value }
+}
+fn number(value: Option<&SerializedParamValue>) -> Option<f32> {
+    match value {
+        Some(SerializedParamValue::Float { value }) => Some(*value),
+        Some(SerializedParamValue::Int { value }) => Some(*value as f32),
+        Some(SerializedParamValue::Enum { value }) => Some(*value as f32),
+        Some(SerializedParamValue::Bool { value }) => Some(u8::from(*value) as f32),
+        _ => None,
+    }
+}

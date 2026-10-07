@@ -14,10 +14,10 @@
 use std::borrow::Cow;
 use std::sync::OnceLock;
 
-use crate::node_graph::effect_node::{EffectNodeContext, EffectNodeType, ParamValues};
+use crate::node_graph::{EffectNodeContext, EffectNodeType, ParamValues};
 use crate::node_graph::fluid_particles::FaceSample;
 use crate::node_graph::freeze::classify::{FusedOutputCapacity, FusionKind, InputAccess};
-use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
+use crate::node_graph::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::ports::{ArrayType, NodeInput, NodeOutput, NodePort, PortKind, PortType};
 use crate::node_graph::primitive::{Primitive, PrimitiveSpec};
 

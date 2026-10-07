@@ -1,4 +1,4 @@
-use crate::node_graph::freeze::install::*;
+use crate::node_graph::freeze::install::testkit::compose_region_mesh_rules;
 use crate::node_graph::mesh_change::*;
 
     /// P2 (BUG-e3p6.4, design §3.3) — the fused node's mesh-rule sidecar
@@ -55,7 +55,7 @@ use crate::node_graph::mesh_change::*;
             virtual_chains: vec![],
             output_capacity: None,
         };
-        let keepalive: Vec<Box<dyn crate::node_graph::effect_node::EffectNode>> = vec![
+        let keepalive: Vec<Box<dyn crate::node_graph::EffectNode>> = vec![
             Box::new(NormalWaveMesh::new()),
             Box::new(MorphMesh::new()),
         ];

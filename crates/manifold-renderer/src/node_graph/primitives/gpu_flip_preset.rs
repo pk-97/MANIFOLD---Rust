@@ -558,23 +558,23 @@ fn obstacle_source(b: &mut Builder) -> (usize, usize) {
 /// The family itself is constructed by the recipe below.
 pub(crate) const SHIPPED_PRESET: &str = "WaterDamBreakGpuFlip";
 
-pub(crate) fn shipped_preset() -> Value {
+fn shipped_preset() -> Value {
     let json = bundled_preset_json(&PresetTypeId::new(SHIPPED_PRESET)).expect("the GPU FLIP preset is bundled");
     serde_json::from_str(&json).expect("the GPU FLIP preset parses")
 }
 
 /// Reuse the existing nested surface verbatim.
-pub(crate) fn surface_group() -> Value {
+fn surface_group() -> Value {
     let preset: EffectGraphDef = serde_json::from_value(shipped_preset()).expect("preset");
     serde_json::to_value(find_node(&preset.nodes, "surface").expect("liquid surface group"))
         .expect("surface group")
 }
 
 /// Stage and capture populations, including the unrendered dust oracle.
-pub(crate) const WHITEWATER_KINDS: [&str; 4] = ["foam", "bubble", "spray", "dust"];
+pub(super) const WHITEWATER_KINDS: [&str; 4] = ["foam", "bubble", "spray", "dust"];
 /// Child looks in family-output order. Dust has no display chain.
 const RENDERED_KINDS: [&str; 3] = ["foam", "spray", "bubble"];
-pub(crate) const FAMILY_OUTPUTS: [&str; 4] = ["object", "object_1", "object_2", "object_3"];
+const FAMILY_OUTPUTS: [&str; 4] = ["object", "object_1", "object_2", "object_3"];
 
 /// The body output retained by the insertion template.
 pub const LIQUID_BODY_OUTPUT: &str = "fluid_output";
@@ -781,7 +781,7 @@ pub fn gpu_flip_liquid_body() -> EffectGraphDef {
 }
 
 #[cfg(any(test, feature = "gpu-proofs"))]
-pub(crate) const SURFACE_DETAIL_OFFSET: usize = 1;
+const SURFACE_DETAIL_OFFSET: usize = 1;
 
 #[cfg(any(test, feature = "gpu-proofs"))]
 const DRESSING: &[&str] = &["input", "camera", "environment", "light", "floor_mesh", "basin_material",
@@ -790,7 +790,7 @@ const DRESSING: &[&str] = &["input", "camera", "environment", "light", "floor_me
         "final_output", "rim_light", "filmic_display", "sky_environment", "sky_exposure", "environment_select"];
 
 #[cfg(any(test, feature = "gpu-proofs"))]
-pub(crate) fn assert_preset_root(nodes: &[EffectGraphNode]) {
+fn assert_preset_root(nodes: &[EffectGraphNode]) {
     for node in nodes {
         assert!(DRESSING.contains(&node.node_id.as_str()) || matches!(node.node_id.as_str(),
             "water_family" | "obstacle_transform" | "obstacle_collider" | "obstacle_mesh" |
@@ -1072,14 +1072,14 @@ fn water_step(b: &mut Builder, scene: WaterScene, tick: (usize, usize)) -> usize
 /// liquid extent check counts them: every array at the size the walk reached
 /// plus what each node holds for itself. Textures are not counted.
 #[cfg(test)]
-pub(crate) fn rendered_scene_bytes(scene: WaterScene) -> u64 {
+pub(super) fn rendered_scene_bytes(scene: WaterScene) -> u64 {
     crate::testkit::liquid_extents::walk(&render_def(scene), false).expect("the rendered scene covers every dispatch").scene_bytes
 }
 
 /// `def` as the app renders a generator: fused when it has regions, `None`
 /// when it has none and runs as authored. Regions that refuse to fuse fail.
 #[cfg(test)]
-pub(crate) fn fused_as_rendered(
+pub(super) fn fused_as_rendered(
     def: &EffectGraphDef,
     registry: &crate::node_graph::PrimitiveRegistry,
 ) -> Option<crate::node_graph::freeze::install::FusedGeneratorView> {
@@ -1123,3 +1123,8 @@ pub(super) fn with_whitewater_axes(def: EffectGraphDef) -> EffectGraphDef {
 // CPU size proofs for every GPU FLIP graph, run before any GPU run of it: the
 // shared liquid extent rules (`liquid::extent`) at every lattice, bare,
 // meshed, rendered and frozen.
+
+#[cfg(test)]
+#[doc(hidden)]
+#[path = "../../testkit/water_recipe.rs"]
+pub(crate) mod testkit;

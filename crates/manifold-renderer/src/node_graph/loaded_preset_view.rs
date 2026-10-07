@@ -172,7 +172,7 @@ fn build_view(type_id: &PresetTypeId) -> Option<LoadedPresetView> {
     })
 }
 
-pub(crate) fn owned_bindings(meta: &PresetMetadata) -> Option<Vec<ParamBinding>> {
+fn owned_bindings(meta: &PresetMetadata) -> Option<Vec<ParamBinding>> {
     meta.bindings
         .iter()
         .map(|b| binding_def_to_runtime(b, meta.params.iter().find(|p| p.id == b.id)))
@@ -321,3 +321,8 @@ mod tests {
 
 
 }
+
+#[cfg(test)]
+#[doc(hidden)]
+#[path = "../testkit/loaded_view.rs"]
+pub(crate) mod testkit;

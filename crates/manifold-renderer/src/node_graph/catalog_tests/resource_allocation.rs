@@ -1,9 +1,9 @@
     use crate::node_graph::resource_allocation::*;
 use crate::node_graph::{Graph, ExecutionPlan, NodeInstanceId, ResourceId};
-use crate::node_graph::graph_loader::PreAllocationError;
+use crate::node_graph::PreAllocationError;
 use ahash::AHashMap;
     use crate::node_graph::compile;
-        
+
     use crate::node_graph::ports::PortType;
     use crate::node_graph::primitives::{
         ArrayFeedback, ContainerBounds3D, GenerateCubeMesh, ResolveAccumulator, ScatterParticles,
@@ -128,9 +128,9 @@ use ahash::AHashMap;
     #[test]
     fn temporary_arrays_match_dedicated_storage_across_animated_and_repeat_frames() {
         use crate::gpu_encoder::GpuEncoder;
-        use crate::node_graph::backend::Backend;
-        use crate::node_graph::graph_loader::pre_allocate_resources;
-        use crate::node_graph::parameters::ParamValue;
+        use crate::node_graph::Backend;
+        use crate::node_graph::pre_allocate_resources;
+        use crate::node_graph::ParamValue;
         use crate::node_graph::{Executor, FrameTime, MetalBackend};
         use manifold_core::{Beats, Seconds};
         use manifold_gpu::GpuTextureFormat;
@@ -423,9 +423,7 @@ use ahash::AHashMap;
     fn canvas_lineage_follows_capacity_not_wires() {
         let (graph, scatter) = scatter_graph();
         let plan = compile(&graph).unwrap();
-        let canvas = capacity_lineage(&graph, &plan, |node, port| {
-            node.node.canvas_sized_array_outputs().contains(&port)
-        });
+        let canvas = graph.test_canvas_capacity_lineage(&plan);
         let step = plan.steps().iter().find(|step| step.node == scatter).unwrap();
         let port = |ports: &[(&str, ResourceId)], name| ports.iter().find(|(p, _)| *p == name).unwrap().1;
         assert!(canvas[port(&step.outputs, "accum").0 as usize]);

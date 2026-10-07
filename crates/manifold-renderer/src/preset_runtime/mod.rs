@@ -51,7 +51,7 @@ use errors::record_chain_error;
 mod bindings;
 use bindings::{StringBindingResolution, def_string_param_value, RelightParamWrite, build_relight_writes};
 
-pub(crate) mod segments;
+mod segments;
 pub use segments::{prewarm_chain_segments, prewarm_project_chain_segments};
 pub use crate::node_graph::freeze::install::prewarm_worker_pending_count;
 use segments::{SegmentMember, classify_segment_member, segment_run, build_segment_cards};
@@ -63,20 +63,20 @@ use build::{assign_texture2d_slots, compute_topology_hash};
 
 mod groups;
 use groups::{chain_active_effects, close_mix_group, validate_mask_groups, OpenGroup};
-pub(crate) mod physics_sampling;
-pub(crate) mod physics_impulses;
+mod physics_sampling;
+mod physics_impulses;
 mod scene_impulses;
 pub use scene_impulses::SceneImpulseDiagnostics;
 pub use physics_impulses::{CapturedSceneImpulse, PreparedSceneImpulse};
 mod physics_carry;
-pub(crate) mod physics_sources;
+mod physics_sources;
 mod physics_source_runtime;
 mod physics_source_controls;
 mod physics_source_state;
 mod physics_source_chain;
 #[cfg(test)]
 mod physics_source_state_tests;
-pub(crate) mod convert_heal;
+mod convert_heal;
 mod math_view;
 mod math_view_events;
 mod lifecycle;
@@ -98,7 +98,7 @@ mod instrumentation;
 mod scene_viewport;
 mod modifier_preview;
 mod modifier_runtime;
-pub(crate) mod gpu_flip_surface;
+mod gpu_flip_surface;
 pub use modifier_preview::{ModifierPreviewContext, ModifierPreviewError};
 
 #[cfg(all(test, feature = "gpu-proofs"))]
@@ -167,3 +167,8 @@ mod blob_grain_probe_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 #[path = "tests/mosh.rs"]
 mod mosh_tests;
+
+#[cfg(test)]
+#[doc(hidden)]
+#[path = "../testkit/runtime.rs"]
+pub(crate) mod testkit;

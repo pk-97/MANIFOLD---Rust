@@ -1,4 +1,4 @@
-use crate::node_graph::scene_modifier_expand::parameter_guards::*;
+use crate::node_graph::scene_modifier_expand::testkit::GuardFixture as PreparedModifierParameterGuards;
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::NodeId;
     use crate::node_graph::persistence::EffectGraphDefExt;
@@ -15,11 +15,11 @@ use manifold_core::NodeId;
         let guards = PreparedModifierParameterGuards::prepare(&owner)
             .expect("legacy fragment graph should prepare");
         assert_eq!(
-            guards.scenes,
+            guards.scenes(),
             vec![NodeId::new("scan_render")],
             "the legacy downstream render scene remains a valid target"
         );
-        assert!(guards.sources.is_empty());
+        assert!(guards.sources_empty());
 
         let mut graph = owner
             .into_graph(

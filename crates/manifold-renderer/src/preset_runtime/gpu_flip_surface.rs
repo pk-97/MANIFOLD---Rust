@@ -8,7 +8,7 @@ use manifold_core::effect_graph_def::{
     BindingDef, BindingTarget, EffectGraphDef, EffectGraphNode, EffectGraphWire, GroupDef,
 };
 
-pub(crate) const SHARED_INPUTS: &[&str] = &[
+const SHARED_INPUTS: &[&str] = &[
     "blobs", "cell_ranges", "solid", "bounds", "cell_size",
     "bins_x", "bins_y", "bins_z", "nodes_x", "nodes_y", "nodes_z",
     "center_x", "center_y", "center_z", "size_x", "size_y", "size_z", "band_extra",
@@ -18,7 +18,7 @@ fn shared_param(name: &str) -> bool {
     name == "resolution_scale" || SHARED_INPUTS[4..].contains(&name)
 }
 
-pub(crate) fn prepare(def: &mut EffectGraphDef) {
+pub(super) fn prepare(def: &mut EffectGraphDef) {
     if def.preset_metadata.as_ref().is_none_or(|m| m.id.as_str() != "WaterDamBreakGpuFlip")
         || !contains_step(&def.nodes)
     {
@@ -160,3 +160,7 @@ fn prepare_surface(
     identities.insert(node_id.to_string());
     bindings.extend(mirrored);
 }
+
+#[cfg(test)]
+#[path = "../testkit/surface_inputs.rs"]
+mod testkit;

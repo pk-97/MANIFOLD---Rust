@@ -39,13 +39,7 @@ fn published_identity(runtime: &PresetRuntime) -> Option<Result<[u8; 32], String
         .graph
         .instance_by_node_id(&NodeId::new("fluid"))
         .expect("fluid node");
-    runtime
-        .effect_nodes
-        .first()
-        .expect("effect slot")
-        .physics_sources
-        .published_identity(fluid)
-        .map(|result| result.map_err(str::to_owned))
+    crate::preset_runtime::testkit::published_identity(runtime, fluid)
 }
 
 fn settle_source_at(runtime: &mut PresetRuntime, seconds: f64) -> [u8; 32] {
@@ -106,8 +100,7 @@ fn settle_source_failure(runtime: &mut PresetRuntime) -> (String, String) {
 }
 
 fn assert_observed_time(expected: f64) {
-    let observed = FLUID_TIME
-        .get()
+    let observed = observed_fluid_time()
         .expect("fluid observer accepted a simulation time");
     assert!(
         (f64::from(observed) - expected).abs() < 1e-5,
@@ -285,7 +278,7 @@ fn collected_flip_source_identity_survives_relocation_and_geometry_changes() {
 
     let mut original = runtime_from_definition(definition(&model));
     original.set_string_params(Some(&strings(&model)));
-    FLUID_TIME.set(None);
+    set_observed_fluid_time(None);
     let original_identity = settle_source_at(&mut original, 0.0);
     assert_observed_time(0.0);
     let held_identity = settle_source_at(&mut original, 0.1);
@@ -309,7 +302,7 @@ fn collected_flip_source_identity_survives_relocation_and_geometry_changes() {
     );
     let mut loaded_runtime = runtime_from_definition(loaded_def);
     loaded_runtime.set_string_params(Some(&loaded_values));
-    FLUID_TIME.set(None);
+    set_observed_fluid_time(None);
     let loaded_identity = settle_source_at(&mut loaded_runtime, 0.0);
     assert_observed_time(0.0);
     assert_eq!(loaded_identity, original_identity);
@@ -325,7 +318,7 @@ fn collected_flip_source_identity_survives_relocation_and_geometry_changes() {
     assert!(moved_model.starts_with(&moved_root));
     let mut moved_runtime = runtime_from_definition(moved_def);
     moved_runtime.set_string_params(Some(&moved_values));
-    FLUID_TIME.set(None);
+    set_observed_fluid_time(None);
     assert_eq!(settle_source_at(&mut moved_runtime, 0.0), original_identity);
     assert_observed_time(0.0);
     assert_eq!(settle_source_at(&mut moved_runtime, 0.1), original_identity);
@@ -338,7 +331,7 @@ fn collected_flip_source_identity_survives_relocation_and_geometry_changes() {
     let (moved_again_def, moved_again_values) = loaded_inputs(&moved_again);
     let mut moved_again_runtime = runtime_from_definition(moved_again_def);
     moved_again_runtime.set_string_params(Some(&moved_again_values));
-    FLUID_TIME.set(None);
+    set_observed_fluid_time(None);
     assert_eq!(
         settle_source_at(&mut moved_again_runtime, 0.0),
         original_identity

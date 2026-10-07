@@ -16,7 +16,7 @@ use crate::node_graph::whitewater::{CELL_AIR, KnownValue};
 
 /// A whitewater grid as the particle atoms read it.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct Box3 {
+pub(super) struct Box3 {
     pub cells: [u32; 3],
     pub center: [f32; 3],
     pub size: [f32; 3],

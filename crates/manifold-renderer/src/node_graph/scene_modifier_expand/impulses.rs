@@ -18,7 +18,7 @@ pub struct SceneModifierImpulseRoute {
 
 /// Validate and retain generated field outputs referenced by authored impulse
 /// declarations. The live graph is the output type authority.
-pub(crate) fn prepare(
+pub(super) fn prepare(
     owner: &EffectGraphDef,
     routes: &[SceneModifierNodeRoute],
     graph: &mut Graph,

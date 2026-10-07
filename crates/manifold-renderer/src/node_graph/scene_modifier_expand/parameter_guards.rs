@@ -9,8 +9,8 @@ use manifold_core::NodeId;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub(crate) struct PreparedModifierParameterGuards {
-    pub(crate) sources: Vec<(NodeId, BTreeMap<String, SerializedParamValue>)>,
-    pub(crate) scenes: Vec<NodeId>,
+    sources: Vec<(NodeId, BTreeMap<String, SerializedParamValue>)>,
+    scenes: Vec<NodeId>,
 }
 
 fn invalid(path: impl Into<String>, detail: impl Into<String>) -> SceneModifierExpandError {
@@ -181,3 +181,7 @@ impl PreparedModifierParameterGuards {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "../../testkit/guard_observations.rs"]
+mod testkit;

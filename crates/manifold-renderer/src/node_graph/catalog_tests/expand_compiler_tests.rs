@@ -1,7 +1,7 @@
 use manifold_core::scene_modifier_preset::{SceneStageScope, SceneEndpoint, SceneModifierInstanceDef, SceneNodeRef};
 use crate::node_graph::scene_modifier_expand::{LegacyMathViewScope, PreparedSceneModifierGraph};
 use std::collections::BTreeSet;
-use crate::node_graph::scene_modifier_expand::compiler::*;
+use crate::node_graph::scene_modifier_expand::*;
 use manifold_core::effect_graph_def::{EffectGraphDef, EffectGraphWire, SerializedParamValue};
 use manifold_core::NodeId;
 use crate::node_graph::persistence::{EffectGraphDefExt, PrimitiveRegistry};
@@ -202,7 +202,7 @@ pub(super) fn fusion_fixture() -> EffectGraphDef {
 
 #[test]
 fn scene_modifier_expand_runtime_loads_canonical_in_watched_and_fused_modes() {
-    use crate::node_graph::parameters::ParamValue;
+    use crate::node_graph::ParamValue;
     let registry = PrimitiveRegistry::with_builtin();
     for fused_mode in [false, true] {
         let mut owner = fusion_fixture();
@@ -333,7 +333,7 @@ fn scene_modifier_expand_runtime_accepts_ray_tracing_enabled_by_live_manifest() 
 
 #[test]
 fn scene_modifier_expand_cached_values_reach_copies_and_restore_first_edit() {
-    use crate::node_graph::parameters::ParamValue;
+    use crate::node_graph::ParamValue;
     use crate::node_graph::scene_modifier_expand::PreparedGraphValueWrites;
     let mut owner = fixture();
     let registry = PrimitiveRegistry::with_builtin();
@@ -427,7 +427,7 @@ fn scene_modifier_expand_cached_values_reach_copies_and_restore_first_edit() {
 
 #[test]
 fn scene_modifier_expand_cached_values_follow_fused_mesh_uniforms() {
-    use crate::node_graph::parameters::ParamValue;
+    use crate::node_graph::ParamValue;
     use crate::node_graph::scene_modifier_expand::PreparedGraphValueWrites;
     let mut owner = fusion_fixture();
     let registry = PrimitiveRegistry::with_builtin();
@@ -686,7 +686,7 @@ fn scene_modifier_expand_compiler_macro_fanout_keeps_real_leaf_conversion() {
     }
     use crate::node_graph::bound_graph::BoundGraph;
     use crate::node_graph::param_binding::{BindingSource, ResolvedBinding, ResolvedTarget};
-    use crate::node_graph::parameters::ParamValue;
+    use crate::node_graph::ParamValue;
     use manifold_core::params::{Param, ParamManifest};
     let mut graph = expanded.clone().into_graph(&registry, &crate::node_graph::mesh_change::PreparedMeshRules::default()).unwrap();
     let resolved = bindings
@@ -886,7 +886,7 @@ fn scene_modifier_math_view_is_sparse_and_cuts_final_output_at_requested_stage()
         let expected: std::collections::HashSet<_> = modifier
             .mesh_frames
             .iter()
-            .map(|frame| crate::node_graph::scene_modifier_expand::compiler::math_events::resource_node_id(&modifier.id, &frame.target, role))
+            .map(|frame| crate::node_graph::scene_modifier_expand::testkit::resource_node_id(&modifier.id, &frame.target, role))
             .collect();
         let actual: std::collections::HashSet<_> = prepared
             .def
@@ -961,7 +961,7 @@ fn scene_modifier_math_view_routes_one_shared_grid_control() {
         .mesh_frames
         .iter()
         .map(|frame| {
-            crate::node_graph::scene_modifier_expand::compiler::math_events::resource_node_id(&modifier.id, &frame.target, "diagram")
+            crate::node_graph::scene_modifier_expand::testkit::resource_node_id(&modifier.id, &frame.target, "diagram")
         })
         .collect();
     let diagrams: Vec<_> = prepared
@@ -1005,7 +1005,7 @@ fn scene_modifier_math_view_shares_depth_and_appearance_across_surfaces() {
         .iter()
         .map(|frame| {
             let export_id =
-                crate::node_graph::scene_modifier_expand::compiler::math_events::resource_node_id(&modifier.id, &frame.target, "export");
+                crate::node_graph::scene_modifier_expand::testkit::resource_node_id(&modifier.id, &frame.target, "export");
             let export = parent
                 .def
                 .nodes
@@ -1038,7 +1038,7 @@ fn scene_modifier_math_view_shares_depth_and_appearance_across_surfaces() {
     let surfaces: Vec<_> = frames
         .iter()
         .map(|frame| {
-            let id = crate::node_graph::scene_modifier_expand::compiler::math_events::resource_node_id(&modifier.id, &frame.target, "surface");
+            let id = crate::node_graph::scene_modifier_expand::testkit::resource_node_id(&modifier.id, &frame.target, "surface");
             prepared
                 .def
                 .nodes
@@ -1050,7 +1050,7 @@ fn scene_modifier_math_view_shares_depth_and_appearance_across_surfaces() {
     let diagrams: Vec<_> = frames
         .iter()
         .map(|frame| {
-            let id = crate::node_graph::scene_modifier_expand::compiler::math_events::resource_node_id(&modifier.id, &frame.target, "diagram");
+            let id = crate::node_graph::scene_modifier_expand::testkit::resource_node_id(&modifier.id, &frame.target, "diagram");
             prepared
                 .def
                 .nodes
@@ -1564,7 +1564,7 @@ fn scene_modifier_math_view_instance_only_chain_never_partially_connects() {
         .map(|node| node.id)
         .collect();
     for frame in &view.mesh_frames {
-        let mask_id = crate::node_graph::scene_modifier_expand::compiler::math_events::resource_node_id(&view.id, &frame.target, "weights");
+        let mask_id = crate::node_graph::scene_modifier_expand::testkit::resource_node_id(&view.id, &frame.target, "weights");
         let mask = parent
             .def
             .nodes
@@ -1580,7 +1580,7 @@ fn scene_modifier_math_view_instance_only_chain_never_partially_connects() {
         // Without a qualified patch carrier the mask stays presentation-only:
         // it feeds the view's export boundary for the derived view to read,
         // never the scene object itself.
-        let export_id = crate::node_graph::scene_modifier_expand::compiler::math_events::resource_node_id(&view.id, &frame.target, "export");
+        let export_id = crate::node_graph::scene_modifier_expand::testkit::resource_node_id(&view.id, &frame.target, "export");
         let export = parent
             .def
             .nodes

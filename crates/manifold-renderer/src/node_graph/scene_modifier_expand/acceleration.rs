@@ -170,7 +170,7 @@ fn trace(
 /// Return every scene object that can be named as a physical force target.
 /// Material parts are retained here; recipient deduplication is performed by
 /// the compiler before per-recipient stages are cloned.
-pub(crate) fn authoring_objects(
+pub(super) fn authoring_objects(
     owner: &EffectGraphDef,
     scene: &SceneNodeRef,
     registry: &PrimitiveRegistry,
@@ -231,7 +231,7 @@ pub(super) fn selected(
     Ok(result)
 }
 
-pub(crate) fn recipient_key(
+pub(super) fn recipient_key(
     index: &FlatSceneIndex,
     object: &SceneNodeRef,
     registry: &PrimitiveRegistry,
@@ -258,7 +258,7 @@ pub(crate) fn impulse_recipients(
     impulse_recipients_with_index(&index, scene, selection, registry)
 }
 
-pub(crate) fn impulse_recipients_with_index(
+pub(super) fn impulse_recipients_with_index(
     index: &FlatSceneIndex,
     scene: &SceneNodeRef,
     selection: &SceneTargetSelection,

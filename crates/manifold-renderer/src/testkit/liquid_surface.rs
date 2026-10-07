@@ -3,15 +3,14 @@ use std::borrow::Cow;
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::{GpuBuffer, GpuTextureFormat};
 
-use crate::node_graph::primitives::shape_particle_blobs::ShapeParticleBlobs;
 use crate::node_graph::primitives::sort_particles_into_cells::SortParticlesIntoCells;
 use crate::gpu_encoder::GpuEncoder as RendererGpuEncoder;
-use crate::node_graph::backend::Backend;
-use crate::node_graph::bindings::{NodeInputs, NodeOutputs, Slot};
-use crate::node_graph::effect_node::{EffectNodeContext, FrameTime, ParamValues};
-use crate::node_graph::execution_plan::ResourceId;
+use crate::node_graph::Backend;
+use crate::node_graph::{NodeInputs, NodeOutputs, Slot};
+use crate::node_graph::{EffectNodeContext, FrameTime, ParamValues};
+use crate::node_graph::ResourceId;
 use crate::node_graph::fluid_particles::{CellRange, FluidBlob, FluidParticle, bin_counts};
-use crate::node_graph::parameters::ParamValue;
+use crate::node_graph::ParamValue;
 use crate::node_graph::ports::{ArrayType, KnownItem};
 use crate::node_graph::primitive::Primitive;
 use crate::node_graph::{MetalBackend, PortType, ScalarType};
@@ -159,9 +158,10 @@ pub(crate) fn params(values: &[(&'static str, f32)]) -> ParamValues {
 }
 
 /// Deterministic pseudo-random stream (xorshift) for fixtures.
-pub(crate) struct Rng(pub(crate) u64);
+pub(crate) struct Rng(u64);
 
 impl Rng {
+    pub(crate) fn new(seed: u64) -> Self { Self(seed) }
     pub fn next_f32(&mut self) -> f32 {
         self.0 ^= self.0 << 13;
         self.0 ^= self.0 >> 7;
@@ -246,7 +246,7 @@ pub(crate) fn sort_and_shape(
     );
     assert!(errors.is_empty(), "{errors:?}");
     let (blobs_slot, blobs_buf) = harness.array::<FluidBlob>(&[], particles.len());
-    let mut shape_node = ShapeParticleBlobs::new();
+    let mut shape_node = crate::node_graph::primitives::testkit::shape_particle_blobs();
     let (_, errors) = harness.run(
         &mut shape_node,
         &[("sorted", sorted_slot), ("cell_ranges", ranges_slot)],
@@ -321,5 +321,3 @@ pub(crate) fn solid_sample(solid: &[f32], nodes: [u32; 3], min: [f32; 3], size: 
         })
         .sum()
 }
-
-

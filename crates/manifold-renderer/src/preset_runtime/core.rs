@@ -75,12 +75,12 @@ pub struct PresetRuntime {
     pub graph: Graph,
     pub plan: ExecutionPlan,
     /// Captured event routes belong to this installed graph, never a rebuild.
-    pub(crate) impulse_identity: std::sync::Arc<()>,
+    pub(super) impulse_identity: std::sync::Arc<()>,
     pub(super) scene_impulses: super::scene_impulses::SceneImpulses,
     /// Plan-aligned physics input ancestry, built once with the graph.
-    pub(crate) physics_sample_steps: Option<Vec<bool>>,
+    pub(super) physics_sample_steps: Option<Vec<bool>>,
     pub(super) physics_input_snapshot: Option<super::physics_sampling::PhysicsInputSnapshot>,
-    pub(crate) last_physics_frame_time: Option<FrameTime>,
+    pub(super) last_physics_frame_time: Option<FrameTime>,
     pub(super) physics_project_tempo: Option<crate::preset_context::ProjectTempo>,
     /// Last seen [`Graph::forced_outputs_epoch`]. When a live param write
     /// changes a node's forced-output set (BUG-317: `render_scene`'s
@@ -105,18 +105,18 @@ pub struct PresetRuntime {
     pub(super) pending_trigger_baseline: Option<u32>,
     pub(super) modifier_control_state:
         Option<crate::node_graph::scene_modifier_expand::PreparedModifierControlState>,
-    pub(crate) modifier_events:
+    pub(super) modifier_events:
         Option<crate::node_graph::scene_modifier_expand::PreparedModifierEvents>,
-    pub(crate) executor: Executor,
+    pub(super) executor: Executor,
     /// One slot per effect node in the chain graph, in chain order.
     /// Same length as the active subset of effects at build time.
     /// Per-frame param refresh walks this in parallel with the live
     /// `effects` slice.
-    pub(crate) effect_nodes: Vec<EffectSlot>,
+    pub(super) effect_nodes: Vec<EffectSlot>,
     pub(super) modifier_preview_routes:
         Vec<crate::node_graph::scene_modifier_expand::SceneModifierNodeRoute>,
-    pub(crate) math_views: Vec<super::math_view::MathViewRuntime>,
-    pub(crate) shared_arrays: Vec<(ResourceId, manifold_gpu::GpuBuffer)>,
+    pub(super) math_views: Vec<super::math_view::MathViewRuntime>,
+    pub(super) shared_arrays: Vec<(ResourceId, manifold_gpu::GpuBuffer)>,
     /// One slot per Mix node introduced for a wet/dry group. The
     /// Mix's `amount` param is set to the group's `wet_dry` value
     /// every frame (so dragging a wet/dry slider in the UI doesn't
@@ -147,7 +147,7 @@ pub struct PresetRuntime {
     /// per-card. The dispatcher rebuilds when the segment generation advances,
     /// picking up the fused winner (or the cached refusal) — the swap-in
     /// trigger. False once every segment resolved either way.
-    pub(crate) pending_segments: bool,
+    pub(super) pending_segments: bool,
     /// [`crate::node_graph::freeze::install::segment_generation`] observed at
     /// build time. Compared by the dispatcher only while
     /// [`Self::pending_segments`] is set.
@@ -169,7 +169,7 @@ pub struct PresetRuntime {
     /// also lost on rebuild. `clear_state()` calls `cleanup_all()`
     /// on the store so seek / project-load paths reset both styles
     /// of stateful primitive uniformly.
-    pub(crate) state_store: StateStore,
+    pub(super) state_store: StateStore,
     /// Structured error log accumulated during `try_build` and the
     /// per-frame `run`. Each variant carries enough context
     /// (effect_id / effect_type / binding identity / node handle) for
@@ -231,8 +231,8 @@ pub(super) enum PresetIo {
     },
 }
 
-pub(crate) struct EffectSlot {
-    pub(crate) physics_sources: super::physics_source_state::PhysicsSourceState,
+pub(super) struct EffectSlot {
+    pub(super) physics_sources: super::physics_source_state::PhysicsSourceState,
     pub(super) effect_id: EffectId,
     pub(super) effect_type: PresetTypeId,
     /// Index into the chain's `effects` slice at the time this slot
@@ -267,7 +267,7 @@ pub(crate) struct EffectSlot {
     /// texture-output producer. The third element is that output's interface
     /// port name (`forceField`), which drives the preview encoding. Empty for
     /// groupless effects.
-    pub(crate) group_preview_map: Vec<(NodeId, NodeId, String)>,
+    pub(super) group_preview_map: Vec<(NodeId, NodeId, String)>,
     /// Propagated preview data-kind per node `NodeId`, computed once at chain
     /// build from the flattened def via [`PreviewEncoding::propagate`]. Lets the
     /// node-output preview follow the *data*: a Gaussian Blur whose input was a
@@ -296,7 +296,7 @@ pub(crate) struct EffectSlot {
     /// [`Self::user_bindings_version`]; a reshape edit bumps `graph_version`.
     /// Only topology changes (node/wire add/remove) bump `graph_structure_version`
     /// and force a full chain rebuild.
-    pub(crate) bound: BoundGraph,
+    pub(super) bound: BoundGraph,
     /// Last seen `PresetInstance.graph_version` for the user tail. User
     /// bindings live in the per-instance graph now, so a binding add /
     /// remove / reshape bumps the graph version. When the live effect's

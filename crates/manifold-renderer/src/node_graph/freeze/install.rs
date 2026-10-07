@@ -1694,7 +1694,7 @@ fn expand_member_aspect(
 /// array is assumed to be a triangle mesh. The output name matches the port
 /// the install pass emits: an in-place region's output rides its aliased
 /// `src_<k>` port, a fan-out region emits `dst_<k>`, otherwise `dst`.
-pub(crate) fn compose_region_mesh_rules(
+fn compose_region_mesh_rules(
     region: &Region,
     all_members: &[&RegionMember],
     node_keepalive: &[Box<dyn crate::node_graph::effect_node::EffectNode>],
@@ -3660,3 +3660,8 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[doc(hidden)]
+#[path = "../../testkit/freeze_install.rs"]
+pub(crate) mod testkit;

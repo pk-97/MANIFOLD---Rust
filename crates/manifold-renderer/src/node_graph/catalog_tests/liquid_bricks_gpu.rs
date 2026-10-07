@@ -1,20 +1,17 @@
 //! Sparse field proofs against independent dense gathers. The field oracle
 //! follows native ParticleMesher support and production solid/border semantics.
+use crate::node_graph::primitives::testkit as water_nodes;
 use crate::testkit::shader_source::dense_source;
 use crate::mesh::MeshVertex;
-use crate::node_graph::bindings::Slot;
+use crate::node_graph::Slot;
 use crate::node_graph::fluid_particles::{CellRange, FluidBlob, bin_counts};
 use crate::node_graph::freeze::codegen::ENTRY;
 use crate::node_graph::primitive::PrimitiveSpec;
 use crate::node_graph::primitives::{
-    clamp_liquid_to_solids::ClampLiquidToSolids,
-    count_surface_triangles::CountSurfaceTriangles,
     lattice_bricks::{LatticeBricks, brick_layout, compact_brick_words, conservative_brick_mask},
     particle_volume::ParticleVolume,
-    smooth_lattice::SmoothLattice,
-};
+    };
 use crate::node_graph::primitives::{
-    relax_surface_mesh::RelaxSurfaceMesh, running_total::RunningTotal,
     volume_surface_mesh::VolumeSurfaceMesh,
 };
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
@@ -122,33 +119,23 @@ fn fixture(resolution: u32) {
         &h,
         include_str!("../primitives/shaders/particle_volume_dense_reference.wgsl"),
     ));
-    let mut smoothing: [[SmoothLattice; 3]; 2] =
-        std::array::from_fn(|_| std::array::from_fn(|_| SmoothLattice::new()));
-    for n in &mut smoothing[1] {
-        n.pipeline = Some(oracle::<SmoothLattice>(
-            &h,
-            include_str!("../primitives/shaders/smooth_lattice_dense_reference.wgsl"),
-        ));
-    }
+    let mut smoothing: [[_; 3]; 2] = std::array::from_fn(|lane| std::array::from_fn(|_| {
+        water_nodes::smooth_lattice((lane == 1).then(|| water_nodes::dense_pipeline("smooth_lattice", &h.device,
+            include_str!("../primitives/shaders/smooth_lattice_dense_reference.wgsl"))))
+    }));
     let smooth_slots: [[(Slot, GpuBuffer); 3]; 2] =
         std::array::from_fn(|_| std::array::from_fn(|_| h.array::<f32>(&[], total)));
-    let mut clamp = [ClampLiquidToSolids::new(), ClampLiquidToSolids::new()];
-    clamp[1].pipeline = Some(oracle::<ClampLiquidToSolids>(
-        &h,
-        include_str!("../primitives/shaders/clamp_liquid_to_solids_dense_reference.wgsl"),
-    ));
+    let mut clamp = [water_nodes::clamp_liquid_to_solids(None), water_nodes::clamp_liquid_to_solids(Some(water_nodes::dense_pipeline("clamp_liquid_to_solids", &h.device,
+        include_str!("../primitives/shaders/clamp_liquid_to_solids_dense_reference.wgsl"))))];
     let clamp_slots: [(Slot, GpuBuffer); 2] = std::array::from_fn(|_| h.array::<f32>(&[], total));
-    let mut counters = [CountSurfaceTriangles::new(), CountSurfaceTriangles::new()];
-    counters[1].pipeline = Some(oracle::<CountSurfaceTriangles>(
-        &h,
-        include_str!("../primitives/shaders/count_surface_triangles_dense_reference.wgsl"),
-    ));
+    let mut counters = [water_nodes::count_surface_triangles(None), water_nodes::count_surface_triangles(Some(water_nodes::dense_pipeline("count_surface_triangles", &h.device,
+        include_str!("../primitives/shaders/count_surface_triangles_dense_reference.wgsl"))))];
     let count_slots: [(Slot, GpuBuffer); 2] = std::array::from_fn(|_| h.array::<u32>(&[], total));
     let mut builder = LatticeBricks::new();
     let (bounds_slot, _) = h.array::<f32>(&[], 2);
     let mut bounder = crate::node_graph::primitives::blob_bounds::BlobBounds::new();
     crate::node_graph::primitive::Primitive::prepare_pipelines(&mut bounder, &h.device);
-    let mut scans: [RunningTotal; 2] = std::array::from_fn(|_| RunningTotal::new());
+    let mut scans: [_; 2] = std::array::from_fn(|_| water_nodes::running_total());
     let scan_slots: [(Slot, GpuBuffer); 2] = std::array::from_fn(|_| h.array::<u32>(&[], total));
     let extent_slots: [(Slot, GpuBuffer); 2] = std::array::from_fn(|_| h.array::<u32>(&[], 4));
     let total_slots: [Slot; 2] = std::array::from_fn(|_| h.scalar());
@@ -162,11 +149,11 @@ fn fixture(resolution: u32) {
         &h,
         include_str!("../primitives/shaders/volume_surface_mesh_dense_reference.wgsl"),
     );
-    let relax_oracle = oracle::<RelaxSurfaceMesh>(
-        &h,
+    let relax_oracle = water_nodes::dense_pipeline("relax_surface_mesh",
+        &h.device,
         include_str!("../primitives/shaders/relax_surface_mesh_dense_reference.wgsl"),
     );
-    let mut relaxers: [RelaxSurfaceMesh; 2] = std::array::from_fn(|_| RelaxSurfaceMesh::new());
+    let mut relaxers: [_; 2] = std::array::from_fn(|_| water_nodes::relax_surface_mesh());
     let relaxed: [[(Slot, GpuBuffer); 2]; 2] = std::array::from_fn(|_| {
         std::array::from_fn(|_| h.array::<MeshVertex>(&[], SLOTS as usize))
     });
@@ -689,8 +676,8 @@ fn fluid_smooth_clamp_dense_fusion_matches_unfused() {
         ENTRY,
         "liquid-smooth-clamp-dense-fused",
     );
-    let mut smooth = SmoothLattice::new();
-    let mut clamp = ClampLiquidToSolids::new();
+    let mut smooth = water_nodes::smooth_lattice(None);
+    let mut clamp = water_nodes::clamp_liquid_to_solids(None);
     for passes in 0..=3 {
         for axis in 0..3 {
             let p = params_for(passes, axis);

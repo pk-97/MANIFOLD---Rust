@@ -78,7 +78,7 @@ fn registry() -> PrimitiveRegistry { PrimitiveRegistry::with_builtin() }
     /// non-existent fields and silently no-op — this catches it without a GPU.
     #[test]
     fn seeded_fields_match_wgsl_compute_params() {
-        use crate::node_graph::effect_node::EffectNode;
+        use crate::node_graph::EffectNode;
         use crate::node_graph::primitives::WgslCompute;
         let def = colorgrade_def();
         let fused = fuse_canonical_def(&def, &registry()).expect("ColorGrade fuses");

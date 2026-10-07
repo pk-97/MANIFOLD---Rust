@@ -3,8 +3,8 @@ use crate::node_graph::liquid::lattice::LiquidLattice;
 use manifold_core::effect_graph_def::EffectGraphDef;
     use crate::node_graph::bundled_presets::{bundled_preset_def, bundled_preset_type_ids};
     use crate::node_graph::fluid::domain_layout;
-    
-    
+
+
     use manifold_core::preset_def::PresetKind;
 
 
@@ -96,15 +96,10 @@ use manifold_core::effect_graph_def::EffectGraphDef;
         let mut preset = LiquidPreset::build(&particle_blend_preset()).unwrap();
         let rules: Vec<_> = LIQUID_EXTENT_RULES.iter().map(|rule| {
             if rule.type_id == "node.liquid_frame" {
-                ExtentRule { type_id: rule.type_id, check: |x| {
-                    liquid_frame(x)?;
-                    // Simulate a malformed frame publisher, without a device.
-                    x.provided.iter_mut().find(|(port, _)| *port == "solid_b").unwrap().1 += 4;
-                    Ok(())
-                }}
+                ExtentRule { type_id: rule.type_id, check: crate::node_graph::liquid::extent::testkit::malformed_frame }
             } else { *rule }
         }).collect();
-        match check_graph(&mut preset.graph, &preset.plan, &rules) {
+        match crate::node_graph::liquid::extent::testkit::check_with_rules(&mut preset, &rules) {
             Err(ExtentError::Refused { node, reason }) => {
                 assert!(node.contains("node.mix_arrays"), "{node}");
                 assert!(reason.contains("input capacities must match"), "{reason}");
@@ -211,7 +206,7 @@ use manifold_core::liquid_domain::is_liquid_domain;
         let mut preset = LiquidPreset::build(def).expect("builds");
         let rules: Vec<ExtentRule> =
             LIQUID_EXTENT_RULES.iter().filter(|rule| rule.type_id != "node.matter_to_grid").copied().collect();
-        match check_graph(&mut preset.graph, &preset.plan, &rules) {
+        match crate::node_graph::liquid::extent::testkit::check_with_rules(&mut preset, &rules) {
             Err(ExtentError::NoRule { type_id, .. }) => assert_eq!(type_id, "node.matter_to_grid"),
             other => panic!("expected a missing rule, got {other:?}"),
         }

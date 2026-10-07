@@ -190,7 +190,7 @@ fn control_runtime_for(
     let control = extract_control_graph(&prepared.def, &routes);
     let mut runtime = PresetRuntime::from_def_for_render(control, &registry, None, false)
         .expect("CPU control graph loads");
-    runtime.modifier_events = Some(
+    let events = Some(
         crate::node_graph::scene_modifier_expand::PreparedModifierEvents::prepare(
             &owner,
             &routes,
@@ -198,6 +198,7 @@ fn control_runtime_for(
         )
         .expect("event routes resolve in extracted graph"),
     );
+    crate::preset_runtime::testkit::set_modifier_events(&mut runtime, events);
     (runtime, owner, routes)
 }
 

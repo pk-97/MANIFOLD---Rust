@@ -1,12 +1,12 @@
+use crate::node_graph::primitives::testkit as water_nodes;
 use std::borrow::Cow;
 
 
 use crate::node_graph::primitives::particle_volume::ParticleVolume;
-use crate::node_graph::primitives::shape_particle_blobs::ShapeParticleBlobs;
-use crate::node_graph::bindings::Slot;
-use crate::node_graph::effect_node::ParamValues;
+use crate::node_graph::Slot;
+use crate::node_graph::ParamValues;
 use crate::node_graph::fluid_particles::{CellRange, FluidBlob, FluidParticle};
-use crate::node_graph::parameters::ParamValue;
+use crate::node_graph::ParamValue;
 use crate::node_graph::primitive::Primitive;
 
 use crate::testkit::liquid_surface::*;
@@ -62,7 +62,7 @@ fn fluid_liquid_surface_keeps_padding_and_border_air_at_extreme_dials() {
     // from the floor through the open top's padding.
     let low: [f32; 3] = std::array::from_fn(|a| min[a] + PADDING_NODES as f32 * cell);
     let layers = [2 * cells[0], 2 * (cells[1] + PADDING_NODES), 2 * cells[2]];
-    let mut rng = Rng(0xb0c0_4011);
+    let mut rng = Rng::new(0xb0c0_4011);
     let mut particles = Vec::new();
     for k in 0..layers[2] {
         for j in 0..layers[1] {
@@ -115,14 +115,14 @@ fn fluid_liquid_surface_keeps_padding_and_border_air_at_extreme_dials() {
             ("passes", 3.0),
             ("axis", axis as f32),
         ];
-        let (_, errors) = harness.run(&mut SmoothLattice::new(), &[("levelset", source)], &[("smoothed", stage)], &params(&smoothing));
+        let (_, errors) = harness.run(&mut water_nodes::smooth_lattice(None), &[("levelset", source)], &[("smoothed", stage)], &params(&smoothing));
         assert!(errors.is_empty(), "{errors:?}");
         source = stage;
         smoothed = Some(buffer);
     }
     let (clamped_slot, clamped_buf) = harness.array::<f32>(&[], capacity);
     let (_, errors) = harness.run(
-        &mut ClampLiquidToSolids::new(),
+        &mut water_nodes::clamp_liquid_to_solids(None),
         &[("levelset", source), ("solid", solid_slot)],
         &[("clamped", clamped_slot)],
         &clamp_params(lattice.center, lattice.size, nodes, solid_nodes, cell),
@@ -307,7 +307,7 @@ fn fluid_searchers_refuse_bins_past_their_ranges() {
     let shape = |harness: &mut Harness, ranges: Slot, extra_inputs: &[(&'static str, Slot)], params: &ParamValues| {
         let mut inputs = vec![("sorted", sorted), ("cell_ranges", ranges)];
         inputs.extend_from_slice(extra_inputs);
-        harness.run(&mut ShapeParticleBlobs::new(), &inputs, &[("blobs", blobs)], params).1
+        harness.run(&mut water_nodes::shape_particle_blobs(), &inputs, &[("blobs", blobs)], params).1
     };
 
     let errors = shape(&mut harness, short, &[], &lattice.params(&[]));
@@ -352,7 +352,7 @@ fn fluid_searchers_refuse_bins_past_their_ranges() {
 fn volume_distance_on_lattice(band_extra: f32, lattice: Lattice, solid_nodes: [u32; 3]) {
     let mut harness = Harness::new();
     let min = lattice.min();
-    let mut rng = Rng(0x1234_5678);
+    let mut rng = Rng::new(0x1234_5678);
     let particles: Vec<FluidParticle> = (0..900u32)
         .map(|i| {
             let position = std::array::from_fn(|axis| {
@@ -470,5 +470,3 @@ fn volume_distance_reference(band_extra: f32) {
     let solid_nodes = [9u32, 9, 9];
     volume_distance_on_lattice(band_extra, lattice, solid_nodes);
 }
-
-use crate::node_graph::primitives::{smooth_lattice::SmoothLattice, clamp_liquid_to_solids::ClampLiquidToSolids};

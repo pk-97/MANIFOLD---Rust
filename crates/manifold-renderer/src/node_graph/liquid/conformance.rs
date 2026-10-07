@@ -322,7 +322,7 @@ impl LiquidSolverRow {
 }
 
 /// A particle liquid's tick statistics: it stores no elastic energy.
-pub(crate) fn liquid_totals(words: &[u32]) -> LiquidTotals {
+fn liquid_totals(words: &[u32]) -> LiquidTotals {
     let stats = LiquidTickStats::from_words(words);
     LiquidTotals {
         mass: f64::from(stats.mass),
@@ -363,7 +363,7 @@ pub(crate) fn gpu_flip_faces(bytes: &[u8], cells: [u32; 3]) -> [Vec<f32>; 3] {
 /// MPM's faces: the mean velocity of the four lattice nodes around each
 /// face's centre that carry mass, past the lattice's padding, summed in the
 /// component's order.
-pub(crate) fn matter_faces(bytes: &[u8], cells: [u32; 3]) -> [Vec<f32>; 3] {
+fn matter_faces(bytes: &[u8], cells: [u32; 3]) -> [Vec<f32>; 3] {
     let grid: Vec<MatterGridNode> = bytemuck::pod_collect_to_vec(bytes);
     let pad = PADDING_NODES as usize;
     let nodes = cells.map(|n| n as usize + 1 + 2 * pad);
@@ -391,7 +391,7 @@ pub(crate) fn matter_faces(bytes: &[u8], cells: [u32; 3]) -> [Vec<f32>; 3] {
     })
 }
 
-pub(crate) fn matter_totals(words: &[u32]) -> LiquidTotals {
+fn matter_totals(words: &[u32]) -> LiquidTotals {
     let stats = MatterTickStats::from_words(words);
     LiquidTotals {
         mass: f64::from(stats.mass),
@@ -416,7 +416,7 @@ pub struct BoxScene {
     pub mass: f32,
 }
 
-pub(crate) const G: f32 = 9.81;
+const G: f32 = 9.81;
 
 /// The rest proofs' tank edge, pool depth and box edge, metres.
 const REST_DOMAIN: f32 = 2.4;
@@ -510,7 +510,7 @@ impl BoxScene {
     /// box's start, body, mesh and object, takes the next body and pose ports
     /// of the box's world and the scene's next object slot, and shares its
     /// material.
-    pub(crate) fn stacked(&self, fixture: Fixture, mut def: EffectGraphDef) -> EffectGraphDef {
+    fn stacked(&self, fixture: Fixture, mut def: EffectGraphDef) -> EffectGraphDef {
         if fixture != Fixture::Stack {
             return def;
         }
@@ -592,7 +592,7 @@ impl BoxScene {
     }
 
     /// `def` set to this scene, but for which faces are open.
-    pub(crate) fn set(self, mut def: EffectGraphDef, type_id: &str) -> EffectGraphDef {
+    fn set(self, mut def: EffectGraphDef, type_id: &str) -> EffectGraphDef {
         let float = |value: f32| SerializedParamValue::Float { value };
         set_type_param(&mut def, type_id, "domain_size", float(self.domain_size));
         set_type_param(&mut def, type_id, "resolution", SerializedParamValue::Int { value: self.resolution });
@@ -689,7 +689,7 @@ pub fn set_type_param(def: &mut EffectGraphDef, type_id: &str, param: &str, valu
 
 /// Set `param` on the transform feeding the domain's `port`. The def is
 /// flattened first, so the wire is direct.
-pub(crate) fn set_source_param(def: &mut EffectGraphDef, type_id: &str, port: &str, param: &str, value: f32) {
+fn set_source_param(def: &mut EffectGraphDef, type_id: &str, port: &str, param: &str, value: f32) {
     *def = manifold_core::flatten::flatten_groups(def).expect("a liquid preset flattens");
     let domain = def.nodes.iter().find(|node| node.type_id == type_id).unwrap_or_else(|| panic!("no {type_id} node")).id;
     let wire = def.wires.iter().find(|wire| wire.to_node == domain && wire.to_port == port);
@@ -717,3 +717,8 @@ mod tests {
         assert!(json_node_mut(&mut graph, "missing").is_none());
     }
 }
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+#[doc(hidden)]
+#[path = "../../testkit/conformance.rs"]
+pub(crate) mod testkit;

@@ -12,10 +12,10 @@ pub(crate) fn copy_id(modifier: &NodeId, source: &NodeId, role: &str, index: usi
         &index.to_string(),
     ])
 }
-pub(crate) fn float(value: f32) -> SerializedParamValue {
+fn float(value: f32) -> SerializedParamValue {
     SerializedParamValue::Float { value }
 }
-pub(crate) fn number(value: Option<&SerializedParamValue>) -> Option<f32> {
+fn number(value: Option<&SerializedParamValue>) -> Option<f32> {
     match value {
         Some(SerializedParamValue::Float { value }) => Some(*value),
         Some(SerializedParamValue::Int { value }) => Some(*value as f32),

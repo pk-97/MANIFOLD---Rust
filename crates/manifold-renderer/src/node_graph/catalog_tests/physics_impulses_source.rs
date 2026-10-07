@@ -19,7 +19,7 @@ fn scene_impulse_source_requires_rebuild_after_output_roots_change() {
             .contains("outputs changed")
     );
     assert_eq!(
-        runtime.last_physics_frame_time.unwrap().seconds,
+        crate::preset_runtime::testkit::last_physics_frame_time(&runtime).unwrap().seconds,
         Seconds::ZERO
     );
     runtime.execute_frame(time(0.1));
@@ -69,14 +69,14 @@ fn scene_impulse_source_captures_fluid_clock_and_waits_for_changed_setup() {
     runtime
         .capture_scene_impulse_at_source(&mut binding, &mut hit, time(2.05), 0)
         .unwrap();
-    assert!((hit.stamps[0].time.0 - 0.05).abs() < 1e-12);
+    assert!((hit.test_stamp(0).time.0 - 0.05).abs() < 1e-12);
     runtime.deliver_scene_impulse(&mut hit).unwrap();
     hit.clear();
     runtime
         .capture_scene_impulse_at_source(&mut binding, &mut hit, time(2.10), 1)
         .unwrap();
-    assert!((hit.stamps[0].time.0 - 0.15).abs() < 1e-12);
-    let epoch = hit.stamps[0].epoch;
+    assert!((hit.test_stamp(0).time.0 - 0.15).abs() < 1e-12);
+    let epoch = hit.test_stamp(0).epoch;
     runtime.deliver_scene_impulse(&mut hit).unwrap();
     let mut receipts = 0;
     runtime.drain_scene_impulses(|_, _| receipts += 1);
@@ -106,8 +106,8 @@ fn scene_impulse_source_captures_fluid_clock_and_waits_for_changed_setup() {
     runtime
         .capture_scene_impulse_at_source(&mut binding, &mut hit, time(2.10), 2)
         .unwrap();
-    assert_ne!(hit.stamps[0].epoch, epoch);
-    assert_eq!(hit.stamps[0].time, Seconds::ZERO);
+    assert_ne!(hit.test_stamp(0).epoch, epoch);
+    assert_eq!(hit.test_stamp(0).time, Seconds::ZERO);
 }
 
 #[test]
@@ -128,7 +128,7 @@ fn scene_impulse_source_maps_speed_edits_and_pause_without_stepping() {
         .capture_scene_impulse_at_source(&mut binding, &mut hit, time(10.125), 0)
         .unwrap();
     assert_eq!(
-        hit.stamps[0].time,
+        hit.test_stamp(0).time,
         Seconds(0.125),
         "close old speed before applying edit"
     );
@@ -137,20 +137,20 @@ fn scene_impulse_source_maps_speed_edits_and_pause_without_stepping() {
     runtime
         .capture_scene_impulse_at_source(&mut binding, &mut hit, time(10.25), 1)
         .unwrap();
-    assert_eq!(hit.stamps[0].time, Seconds(0.375));
+    assert_eq!(hit.test_stamp(0).time, Seconds(0.375));
     runtime.deliver_scene_impulse(&mut hit).unwrap();
     hit.clear();
     edit(&mut runtime, "world", "speed", 0.0);
     runtime
         .capture_scene_impulse_at_source(&mut binding, &mut hit, time(10.25), 2)
         .unwrap();
-    assert_eq!(hit.stamps[0].time, Seconds(0.375));
+    assert_eq!(hit.test_stamp(0).time, Seconds(0.375));
     runtime.deliver_scene_impulse(&mut hit).unwrap();
     hit.clear();
     runtime
         .capture_scene_impulse_at_source(&mut binding, &mut hit, time(10.5), 3)
         .unwrap();
-    assert_eq!(hit.stamps[0].time, Seconds(0.375));
+    assert_eq!(hit.test_stamp(0).time, Seconds(0.375));
     assert_eq!(
         POSITIONS.get(),
         [0.0, 5.0],
@@ -210,7 +210,7 @@ fn scene_impulse_source_rejects_old_or_pending_capture_without_moving_anchor() {
             .contains("acknowledge")
     );
     assert_eq!(
-        runtime.last_physics_frame_time.unwrap().seconds,
+        crate::preset_runtime::testkit::last_physics_frame_time(&runtime).unwrap().seconds,
         Seconds(1.1)
     );
     hit.clear();
@@ -221,7 +221,7 @@ fn scene_impulse_source_rejects_old_or_pending_capture_without_moving_anchor() {
             .contains("precedes")
     );
     assert_eq!(
-        runtime.last_physics_frame_time.unwrap().seconds,
+        crate::preset_runtime::testkit::last_physics_frame_time(&runtime).unwrap().seconds,
         Seconds(1.1)
     );
     assert!(
@@ -242,7 +242,7 @@ fn scene_impulse_source_rejects_old_or_pending_capture_without_moving_anchor() {
     runtime
         .capture_scene_impulse_at_source(&mut binding, &mut hit, time(1.1), 1)
         .unwrap();
-    assert_eq!(hit.stamps[0].time, Seconds::ZERO);
+    assert_eq!(hit.test_stamp(0).time, Seconds::ZERO);
 }
 
 #[test]
@@ -291,7 +291,7 @@ fn scene_impulse_source_ticks_match_across_frame_rates_and_display_stall() {
                         sequence,
                     )
                     .unwrap();
-                stamps.push(hit.stamps[0]);
+                stamps.push(hit.test_stamp(0));
                 runtime.deliver_scene_impulse(&mut hit).unwrap();
                 hit.clear();
                 sequence += 1;

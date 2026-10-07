@@ -3,10 +3,10 @@ use manifold_core::effect_graph_def::EffectGraphDef;
 use crate::node_graph::fluid::TICK;
 pub(crate) const WHITEWATER: &str = "whitewater";
 /// The liquid boundary that captures each tick's whitewater results.
-pub(crate) const BOUNDARY: &str = "state";
+const BOUNDARY: &str = "state";
 /// Each whitewater output and the boundary port that holds its capture,
 /// closed after every tick.
-pub(crate) const PORTS: [(&str, &str); 7] = [
+const PORTS: [(&str, &str); 7] = [
     ("pool_out", "whitewater_pool"),
     ("state_out", "whitewater_state"),
     ("counts_out", "whitewater_counts"),
@@ -25,10 +25,10 @@ const ID_LIMIT: u32 = 256;
 /// proves it on a constructed pool.
 pub(crate) const EVENTS: [&str; 6] = ["spawn candidate", "spawn placed", "removal", "capacity overflow", "id wrap", "dust spawn"];
 
-pub(crate) fn fnv(bytes: &[u8]) -> u64 {
+fn fnv(bytes: &[u8]) -> u64 {
     bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3))
 }
-pub(crate) fn words(bytes: &[u8]) -> Vec<u32> {
+fn words(bytes: &[u8]) -> Vec<u32> {
     bytes.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
 }
 /// One fixture's fingerprint lines and the first tick each event was seen.

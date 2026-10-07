@@ -9,7 +9,7 @@ use super::*;
 /// never lands (readers match `ParamValue::Bool` exactly), so the poisoned
 /// form is strictly dead — thresholding is the semantics the stamp always
 /// meant. Returns the number of bindings healed.
-pub(crate) fn heal_bool_convert_bindings(doc: &mut EffectGraphDef, registry: &PrimitiveRegistry) -> usize {
+pub(super) fn heal_bool_convert_bindings(doc: &mut EffectGraphDef, registry: &PrimitiveRegistry) -> usize {
     use crate::node_graph::ParamType;
     use manifold_core::effect_graph_def::BindingTarget;
     use manifold_core::effects::ParamConvert;
