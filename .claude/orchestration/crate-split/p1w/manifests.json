@@ -1,0 +1,12 @@
+[
+  {
+    "path": "crates/manifold-node-engine/Cargo.toml",
+    "before": "half = \"2\"\n",
+    "after": "half = \"2\"\npng = \"0.18\"\n"
+  },
+  {
+    "path": "Cargo.lock",
+    "before": "[[package]]\nname = \"manifold-node-engine\"\nversion = \"0.1.0\"\ndependencies = [\n \"ahash\",\n \"arc-swap\",\n \"arrayvec\",\n \"bytemuck\",\n \"glam\",\n \"half\",\n \"image\",\n \"inventory\",\n \"log\",\n \"manifold-core\",\n \"manifold-fluids\",\n \"manifold-foundation\",\n \"manifold-gpu\",\n \"manifold-physics\",\n \"manifold-playback\",\n \"naga\",\n \"objc2 0.6.4\",\n \"serde\",\n \"serde_json\",\n \"sha2\",\n \"zstd\",\n]\n\n",
+    "after": "[[package]]\nname = \"manifold-node-engine\"\nversion = \"0.1.0\"\ndependencies = [\n \"ahash\",\n \"arc-swap\",\n \"arrayvec\",\n \"bytemuck\",\n \"glam\",\n \"half\",\n \"image\",\n \"inventory\",\n \"log\",\n \"manifold-core\",\n \"manifold-fluids\",\n \"manifold-foundation\",\n \"manifold-gpu\",\n \"manifold-physics\",\n \"manifold-playback\",\n \"naga\",\n \"objc2 0.6.4\",\n \"png\",\n \"serde\",\n \"serde_json\",\n \"sha2\",\n \"zstd\",\n]\n\n"
+  }
+]
