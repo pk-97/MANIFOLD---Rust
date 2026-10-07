@@ -9,7 +9,7 @@ use super::mesh_partition::{Fragment, partition};
 use super::parameters::ParamValue;
 use super::physics::ColliderGeometry;
 use super::primitives::gltf_mesh_source::{apply_mesh_fit, apply_translate};
-use crate::generators::mesh_common::MeshVertex;
+use crate::mesh::MeshVertex;
 use crate::node_graph::transform::Transform;
 
 pub(crate) const PART_PORTS: [&str; 64] = [

@@ -17,7 +17,7 @@
 
 use std::borrow::Cow;
 
-use crate::generators::mesh_pipeline::{look_at_rh, mat4_mul, ortho_rh};
+use crate::mesh::pipeline::{look_at_rh, mat4_mul, ortho_rh};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;

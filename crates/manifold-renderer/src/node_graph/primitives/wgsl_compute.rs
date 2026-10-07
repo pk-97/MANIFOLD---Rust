@@ -2139,7 +2139,7 @@ impl EffectNode for WgslCompute {
     ) -> Result<(), String> {
         use crate::node_graph::ports::KnownItem;
         let mesh_vertex_specs =
-            <crate::generators::mesh_common::MeshVertex as KnownItem>::SPECS;
+            <crate::mesh::MeshVertex as KnownItem>::SPECS;
         for rule in rules {
             let output = self.outputs.iter().find(|p| p.name == rule.output).ok_or_else(|| {
                 format!(

@@ -658,6 +658,19 @@ pub struct DenseBufferFusion {
     pub schedule_inputs: &'static [&'static str],
 }
 
+/// Object-safe access to a concrete node for family-owned proofs.
+///
+/// Call it on the trait object (`node.node.as_ref().as_any()`), never on the
+/// `Box`: the blanket impl also covers `Box<dyn EffectNode>`, whose downcast
+/// to a node type is always `None`.
+pub trait AsAny {
+    fn as_any(&self) -> &dyn std::any::Any;
+}
+
+impl<T: std::any::Any> AsAny for T {
+    fn as_any(&self) -> &dyn std::any::Any { self }
+}
+
 /// One unit of GPU work in the effect graph.
 ///
 /// Implemented by:
@@ -678,7 +691,7 @@ pub struct DenseBufferFusion {
 ///
 /// [`Source`]: # "Boundary node — input edge of the graph."
 /// [`FinalOutput`]: # "Boundary node — output edge of the graph."
-pub trait EffectNode: Send {
+pub trait EffectNode: Send + AsAny {
     /// Stable type ID. See [`EffectNodeType`] for the renaming policy.
     fn type_id(&self) -> &EffectNodeType;
 
@@ -1382,8 +1395,8 @@ pub trait EffectNode: Send {
     /// was held (pause, Speed 0); they are never applied.
     fn drain_discarded_impulses(&mut self, _consume: &mut dyn FnMut(manifold_physics::input::EventStamp)) {}
 
-    #[cfg(feature = "gpu-proofs")]
-    fn rt_probe_scene(&self) -> Option<&crate::node_graph::primitives::render_scene::rt_proof::RtProbeScene> {
+    /// Return a fresh pass with its own renderer and render history, never this node's own state.
+    fn viewport_pass(&self) -> Option<Box<dyn crate::node_graph::scene_viewport::ViewportPass>> {
         None
     }
 

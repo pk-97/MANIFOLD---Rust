@@ -107,7 +107,7 @@ mod gpu_tests {
     use super::super::smooth_surface_mesh::SmoothSurfaceMesh;
     use super::super::surface_mesh_normals::SurfaceMeshNormals;
     use super::super::surface_mesh_parity::{fixture, flip_normals, flip_smooth};
-    use crate::generators::mesh_common::MeshVertex;
+    use crate::mesh::MeshVertex;
     use crate::node_graph::effect_node::NodeInstanceId;
     use crate::node_graph::freeze::codegen::{
         ENTRY, FusionRegion, InputSource, RegionNode, generate_fused,

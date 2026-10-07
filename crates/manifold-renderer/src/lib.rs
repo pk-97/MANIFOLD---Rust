@@ -33,6 +33,11 @@ pub mod text_rasterizer;
 pub mod tonemap;
 pub mod uniform_arena;
 
+// This registration moves with the assets to the catalog crate at P3.
+inventory::submit!(preset_loader::PresetAssetsRoot {
+    dir: concat!(env!("CARGO_MANIFEST_DIR"), "/assets"),
+});
+
 #[cfg(all(test, feature = "gpu-proofs"))]
 pub(crate) use manifold_gpu::testkit::{test_device, TestDevice};
 
@@ -72,3 +77,8 @@ mod live_sim_clock_reference;
 
 #[cfg(any(test, feature = "gpu-proofs"))]
 pub mod reference_fixtures;
+
+#[path = "generators/compute_common.rs"]
+pub mod particles;
+#[path = "generators/mesh_common.rs"]
+pub mod mesh;

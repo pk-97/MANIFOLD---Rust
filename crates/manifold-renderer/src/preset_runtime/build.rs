@@ -354,7 +354,7 @@ impl PresetRuntime {
         let group_preview_map = manifold_core::flatten::group_output_producer_map(&doc);
         let mut flat_doc = manifold_core::flatten::flatten_groups(&doc).ok();
         if let Some(flat) = flat_doc.as_mut()
-            && crate::node_graph::wire_gpu_flip_grid(flat)
+            && crate::node_graph::liquid::migration::wire_gpu_flip_grid(flat)
         {
             doc = flat.clone();
         }

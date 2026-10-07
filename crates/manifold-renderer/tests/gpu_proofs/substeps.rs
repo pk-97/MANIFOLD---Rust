@@ -10,7 +10,7 @@
 use manifold_core::effect_graph_def::EffectGraphDef;
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::GpuTextureFormat;
-use manifold_renderer::generators::compute_common::Particle;
+use manifold_renderer::particles::Particle;
 use manifold_renderer::gpu_encoder::GpuEncoder;
 use manifold_renderer::node_graph::freeze::install::fuse_generator_view;
 use manifold_renderer::node_graph::ports::PortType;

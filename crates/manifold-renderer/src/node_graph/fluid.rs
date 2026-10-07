@@ -43,7 +43,7 @@ use super::transform::Transform;
 #[cfg(feature = "gpu-proofs")]
 use super::vector_field::ContinuousField;
 #[cfg(feature = "gpu-proofs")]
-use crate::generators::mesh_common::{InstanceTransform, MeshVertex};
+use crate::mesh::{InstanceTransform, MeshVertex};
 
 mod coupled;
 mod domain;

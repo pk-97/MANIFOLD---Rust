@@ -27,7 +27,7 @@ use crate::node_graph::primitives::{matter_domain::fill_region, matter_fill::fil
 use manifold_core::liquid_domain::{MATTER_DOMAIN_TYPE_ID, GPU_FLIP_DOMAIN_TYPE_ID, is_liquid_domain};
 use manifold_core::{Beats, Seconds};
 
-use crate::generators::mesh_common::{InstanceTransform, MeshVertex};
+use crate::mesh::{InstanceTransform, MeshVertex};
 use crate::node_graph::physics::MAX_COPIES;
 use crate::node_graph::fluid_particles::{
     CellRange, FluidBlob, FluidParticle, MAX_BINS, bin_counts, bin_total, searched_bins,

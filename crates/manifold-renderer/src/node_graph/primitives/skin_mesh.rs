@@ -29,7 +29,7 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use crate::generators::mesh_common::{JointMatrix, MeshVertex, Vec4Vertex};
+use crate::mesh::{JointMatrix, MeshVertex, Vec4Vertex};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::parameters::{ParamDef, ParamType, ParamValue};
 use crate::node_graph::primitive::Primitive;

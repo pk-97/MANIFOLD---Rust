@@ -5,7 +5,7 @@
 
 use std::borrow::Cow;
 
-use crate::generators::mesh_common::{MeshVertex, Vec4Vertex};
+use crate::mesh::{MeshVertex, Vec4Vertex};
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::freeze::classify::FusedOutputCapacity;
 use crate::node_graph::primitive::Primitive;

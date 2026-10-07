@@ -4,7 +4,7 @@
 //! publisher can therefore replace its source slice immediately after
 //! `upload` returns without racing an in-flight Metal command buffer.
 
-use crate::generators::mesh_common::InstanceTransform;
+use crate::mesh::InstanceTransform;
 use crate::gpu_encoder::GpuEncoder;
 use bytemuck::Zeroable;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice};

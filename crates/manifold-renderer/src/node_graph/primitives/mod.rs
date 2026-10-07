@@ -253,7 +253,7 @@ mod remove_drift_3d;
 mod render_3d_mesh;
 mod render_instanced_3d_mesh;
 mod render_mode;
-pub(crate) mod render_scene;
+pub mod render_scene;
 #[cfg(feature = "gpu-proofs")]
 pub use render_scene::rt_proof::{RtProbeObject, RtProbeScene};
 #[cfg(feature = "gpu-proofs")]
@@ -367,7 +367,7 @@ pub(crate) mod gpu_flip_narrow_band;
 mod gpu_flip_pressure_tests;
 pub(crate) mod liquid_fill;
 pub(crate) mod liquid_state;
-pub(crate) mod liquid_stats;
+pub mod liquid_stats;
 pub(crate) mod liquid_frame;
 pub(crate) mod particle_identity;
 pub(crate) mod particle_publication;
@@ -439,7 +439,7 @@ pub(crate) mod face_grid_scenes;
 mod face_grid_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod face_grid_scene_tests;
-pub(crate) mod gpu_flip_preset;
+pub mod gpu_flip_preset;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_flip_atom_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]

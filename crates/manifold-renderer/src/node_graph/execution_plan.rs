@@ -22,7 +22,7 @@
 
 use ahash::AHashMap;
 
-use crate::generators::mesh_common::MeshVertex;
+use crate::mesh::MeshVertex;
 use crate::node_graph::effect_node::{intern_name, NodeInstanceId, NodeRequires, NodeWire};
 use crate::node_graph::graph::Graph;
 use crate::node_graph::mesh_change::{MeshAspect, MeshRevisionRule};

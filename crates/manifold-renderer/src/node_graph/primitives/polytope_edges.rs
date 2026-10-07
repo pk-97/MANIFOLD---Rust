@@ -11,7 +11,7 @@
 
 use std::borrow::Cow;
 
-use crate::generators::mesh_common::{
+use crate::mesh::{
     EdgePair, PLATONIC_MAX_EDGES, PLATONIC_SHAPES, platonic_edges,
 };
 use crate::node_graph::effect_node::EffectNodeContext;

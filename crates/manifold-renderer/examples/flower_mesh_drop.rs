@@ -8,7 +8,7 @@ use std::{borrow::Cow, error::Error, fs, path::Path};
 use bytemuck::Zeroable;
 use manifold_foundation::{Beats, Bpm};
 use manifold_physics::{BodyConfig, BodyKind, PhysicsWorld, Seconds};
-use manifold_renderer::generators::mesh_common::MeshVertex;
+use manifold_renderer::mesh::MeshVertex;
 use manifold_renderer::node_graph::physics_mesh::prepare_colliders;
 use serde_json::{Value, json};
 

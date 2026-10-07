@@ -14,7 +14,7 @@ use std::borrow::Cow;
 use std::sync::mpsc;
 use std::sync::{Arc, OnceLock};
 
-use crate::generators::mesh_common::MeshVertex;
+use crate::mesh::MeshVertex;
 use crate::node_graph::decode_cache::cached_load_gltf_mesh;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::gltf_load::{DEFAULT_MATERIAL_MESH_PARAM, GltfMeshSelector};
