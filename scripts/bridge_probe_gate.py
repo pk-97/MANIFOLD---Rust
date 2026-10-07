@@ -14,9 +14,9 @@ Probabilistic-LIVENESS, strict-SAFETY semantics:
   contract (docs/VSYNC_AND_FRAME_PACING.md "Read fence"). A single fenced tear
   fails the gate (strict safety — regression = bead, BUG-m0c9).
 
-GPU-busy pre-check: Exits loud if concurrent GPU work detected (cargo test
-with gpu-proofs, another bridge-probe, manifold renders). GPU gates own the
-machine — never a silent pass or skip.
+GPU-busy pre-check: Inside the queue hold, wait up to 20 minutes for concurrent
+GPU work that ignores the queue (cargo test with gpu-proofs, another
+bridge-probe, manifold renders). Timeout is a loud exit, never a pass or skip.
 
 Debug binary, not release: the probe's race window is timing-based and was
 validated (and Peter-confirmed) against the debug build.
@@ -51,7 +51,26 @@ def run(cmd, timeout):
 
 
 def check_gpu_busy():
-    """Check for concurrent GPU work — exits loud if GPU processes detected (BUG-m0c9).
+    """Wait for jobs outside the queue (BUG-m0c9: concurrent GPU work)."""
+    deadline = time.monotonic() + 20 * 60
+    while True:
+        gpu_processes = _gpu_processes()
+        if not gpu_processes:
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            log("EXIT 2: concurrent GPU work did not clear within 20 minutes (BUG-m0c9)")
+        else:
+            log(f"waiting for concurrent GPU work ({remaining:.0f}s remaining):")
+        for pid, cmd in gpu_processes:
+            log(f"  PID {pid}: {cmd}")
+        if remaining <= 0:
+            return False
+        time.sleep(min(15, remaining))
+
+
+def _gpu_processes():
+    """List concurrent GPU work.
 
     Matches on process cmdline (not just process names) so cargo test
     invocations carrying gpu-proofs / manifold_renderer, a running
@@ -59,14 +78,14 @@ def check_gpu_busy():
     """
     gpu_processes = []
     try:
-        # `ps aux -o pid=,command=` gives PID + full command line per process.
+        # Request only PID + full command line, without ps's default columns.
         out = subprocess.run(
-            ["ps", "aux", "-o", "pid=,command="],
+            ["ps", "-ax", "-o", "pid=,command="],
             capture_output=True, text=True, timeout=30,
         ).stdout
     except (subprocess.TimeoutExpired, OSError) as e:
         log(f"WARNING: could not enumerate processes ({e}); skipping GPU-busy check")
-        return True
+        return []
 
     for line in out.splitlines():
         line = line.strip()
@@ -85,12 +104,7 @@ def check_gpu_busy():
         if _is_gpu_process(cmd):
             gpu_processes.append((pid, cmd[:200]))
 
-    if gpu_processes:
-        log("EXIT 2: concurrent GPU process detected — GPU gates own the machine (BUG-m0c9)")
-        for pid, cmd in gpu_processes:
-            print(f"  PID {pid}: {cmd}")
-        return False
-    return True
+    return gpu_processes
 
 
 def _is_gpu_process(cmd):
@@ -186,5 +200,6 @@ def main():
 if __name__ == "__main__":
     import gpu_queue
 
+    # Acquire before the busy-check: queue-aware jobs are already excluded.
     with gpu_queue.hold("bridge_probe_gate"):
         sys.exit(main())

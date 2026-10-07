@@ -230,6 +230,19 @@ impl GeneratorRenderer {
         width: u32,
         height: u32,
         format: GpuTextureFormat,
+        pool_size: usize,
+    ) -> Self {
+        let renderer = Self::new_unwarmed(device, width, height, format, pool_size);
+        renderer.registry.prewarm_all(&renderer.device);
+        renderer
+    }
+
+    /// Prewarm is the app's no-hitch guarantee; tests use this constructor to compile lazily.
+    pub fn new_unwarmed(
+        device: Arc<GpuDevice>,
+        width: u32,
+        height: u32,
+        format: GpuTextureFormat,
         _pool_size: usize,
     ) -> Self {
         // Lazy allocation: start empty, grow on demand as clips start.
@@ -239,10 +252,6 @@ impl GeneratorRenderer {
         let uniform_arena = UniformArena::new(&device);
 
         let registry = GeneratorRegistry::new(format);
-        // Pre-compile all generator pipelines into the binary archive.
-        // Generators are created and immediately dropped — compiled Metal pipeline
-        // binaries persist in the archive. Eliminates first-use stutter.
-        registry.prewarm_all(&device);
 
         Self {
             next_physics_event: 0,
@@ -1954,7 +1963,7 @@ mod tests {
         let host_w: u32 = 1280;
         let host_h: u32 = 720;
 
-        let mut renderer = GeneratorRenderer::new(
+        let mut renderer = GeneratorRenderer::new_unwarmed(
             device.arc(),
             host_w,
             host_h,
@@ -2103,7 +2112,9 @@ mod tests {
     #[test]
     fn effective_trigger_count_sums_clip_and_audio_and_respects_clip_edge_mode() {
         let device = crate::test_device();
-        let mut renderer = GeneratorRenderer::new(device.arc(), 256, 256, GpuTextureFormat::Rgba16Float, 0);
+        let mut renderer = GeneratorRenderer::new_unwarmed(
+            device.arc(), 256, 256, GpuTextureFormat::Rgba16Float, 0,
+        );
         let layer_id = LayerId::new("trigger-count-layer");
         // TrivialPassthrough moved to test fixtures (PRESET_BROWSER_AUDITION
         // P1, D8) — Plasma is the bundled stand-in for mechanics tests.
@@ -2303,7 +2314,7 @@ mod warmup_tests {
     fn node_error_frame_stays_presentable() {
         use crate::frame_status::{FrameRenderFailure, FrameRenderStatus};
         let device = crate::test_device();
-        let mut renderer = GeneratorRenderer::new(
+        let mut renderer = GeneratorRenderer::new_unwarmed(
             device.arc(),
             CANVAS_W,
             CANVAS_H,
@@ -2319,7 +2330,7 @@ mod warmup_tests {
     #[test]
     fn thumbnail_pruning_handles_captured_offscreen_and_equal_size_changes() {
         let device = crate::test_device();
-        let mut renderer = GeneratorRenderer::new(
+        let mut renderer = GeneratorRenderer::new_unwarmed(
             device.arc(),
             CANVAS_W,
             CANVAS_H,
@@ -2382,7 +2393,7 @@ mod warmup_tests {
     #[test]
     fn pending_visible_thumbnail_is_retained_and_live_generator_is_independent() {
         let device = crate::test_device();
-        let mut renderer = GeneratorRenderer::new(
+        let mut renderer = GeneratorRenderer::new_unwarmed(
             device.arc(),
             CANVAS_W,
             CANVAS_H,
@@ -2428,7 +2439,7 @@ mod warmup_tests {
         let event = device.create_event();
         let (sender, mut retirement) = manifold_gpu::RetireQueue::new();
         device.set_retirement(manifold_gpu::RetireMark::new(event.second_handle(), sender));
-        let mut renderer = GeneratorRenderer::new(
+        let mut renderer = GeneratorRenderer::new_unwarmed(
             device.clone(), 64, 64, GpuTextureFormat::Rgba8Unorm, 0,
         );
         insert_test_thumb(
@@ -2469,7 +2480,7 @@ mod warmup_tests {
     #[test]
     fn thumbnail_output_is_withheld_until_ready_and_frame_complete() {
         let device = crate::test_device();
-        let mut renderer = GeneratorRenderer::new(
+        let mut renderer = GeneratorRenderer::new_unwarmed(
             device.arc(),
             CANVAS_W,
             CANVAS_H,
