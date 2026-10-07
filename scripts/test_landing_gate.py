@@ -141,6 +141,10 @@ class LandingTests(unittest.TestCase):
                         crate = root / "crates" / path.split("/")[1]
                         crate.mkdir(parents=True, exist_ok=True)
                         (crate / "Cargo.toml").write_text(f'[package]\nname = "{crate.name}"\n')
+                        if path.split("/")[2] == "tests":
+                            source = root / path
+                            source.parent.mkdir(parents=True, exist_ok=True)
+                            source.touch()
             if manifest is not None:
                 (root / "scripts/ui-flows").mkdir(parents=True)
                 (root / "scripts/ui-flows/manifest.json").write_text(json.dumps(manifest))
@@ -759,6 +763,33 @@ class DiffScopeTests(unittest.TestCase):
             self.assertIn("test(/^node_graph::fluid::checks::/)", plan.filterset)
             self.assertIn("binary(=gpu_proofs)", plan.filterset)
 
+    def test_deleted_integration_test_selects_no_binary(self):
+        with tempfile.TemporaryDirectory() as d:
+            crate = Path(d) / "crates/manifold-renderer"
+            crate.mkdir(parents=True)
+            (crate / "Cargo.toml").write_text('[package]\nname = "manifold-renderer"\n')
+            plan = cpu_scope.plan_for_paths(
+                ["crates/manifold-renderer/tests/fluid_preset.rs"], d)
+            self.assertEqual(plan.filters, set())
+            self.assertEqual(plan.packages, set())
+
+    def test_renamed_integration_test_selects_only_new_binary(self):
+        with tempfile.TemporaryDirectory() as d:
+            crate = Path(d) / "crates/manifold-renderer"
+            tests = crate / "tests"
+            tests.mkdir(parents=True)
+            (crate / "Cargo.toml").write_text('[package]\nname = "manifold-renderer"\n')
+            (tests / "new_preset.rs").write_text("#[test] fn preset() {}\n")
+            # effective_paths uses --no-renames: both old and new paths arrive.
+            plan = cpu_scope.plan_for_paths([
+                "crates/manifold-renderer/tests/old_preset.rs",
+                "crates/manifold-renderer/tests/new_preset.rs",
+            ], d)
+            self.assertEqual(plan.filters, {
+                "(package(=manifold-renderer) & binary(=new_preset))",
+            })
+            self.assertEqual(plan.packages, {"manifold-renderer"})
+
     def test_shared_test_code_selects_the_binaries_that_use_it(self):
         with tempfile.TemporaryDirectory() as d:
             crate = Path(d) / "crates/manifold-renderer"
@@ -770,6 +801,8 @@ class DiffScopeTests(unittest.TestCase):
             (tests / "layout.rs").write_text('#[path = "support/cases.rs"]\nmod cases;\n')
             (tests / "other.rs").write_text("")
             (tests / "proofs/main.rs").write_text("")
+            (tests / "support/cases.rs").write_text("")
+            (tests / "proofs/water.rs").write_text("")
             plan = cpu_scope.plan_for_paths(["crates/manifold-renderer/tests/support/cases.rs",
                                              "crates/manifold-renderer/tests/proofs/water.rs"], d)
             self.assertEqual(plan.filters, {

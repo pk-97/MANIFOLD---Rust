@@ -98,6 +98,9 @@ def plan_for_paths(paths, repo):
         parts = Path(path).parts
         if len(parts) < 4 or parts[0] != "crates" or not path.endswith(".rs"):
             continue
+        # Deleted tests have no binary; a rename selects only its surviving path.
+        if parts[2] == "tests" and not (repo / path).is_file():
+            continue
         crate = repo / parts[0] / parts[1]
         if not (crate / "Cargo.toml").exists():
             continue
