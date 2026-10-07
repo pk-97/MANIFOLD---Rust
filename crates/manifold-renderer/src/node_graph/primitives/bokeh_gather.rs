@@ -42,7 +42,7 @@ struct BokehCompositeUniforms {
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct BokehSettings {
+pub(crate) struct BokehSettings {
     pub radius: f32,
     pub aperture: u32,
     pub quality: u32,
@@ -251,7 +251,7 @@ impl BokehGather {
     }
 
     // Shared production encoding seam for the node and image/performance proofs.
-    pub(super) fn encode(
+    pub(crate) fn encode(
         &mut self,
         gpu: &mut manifold_node_engine::gpu::gpu_encoder::GpuEncoder<'_>,
         source: &GpuTexture,
@@ -597,9 +597,6 @@ mod tests {
         assert!(shader.contains("textureSampleLevel(tex_in, samp, tap_uv, lod)"));
     }
 }
-#[cfg(all(test, feature = "gpu-proofs"))]
-#[path = "bokeh_gather_tests.rs"]
-mod gpu_tests;
 
 #[cfg(any(test, feature = "gpu-proofs"))]
 mod extent;

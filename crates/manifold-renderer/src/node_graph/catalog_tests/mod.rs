@@ -101,3 +101,7 @@ mod gpu_flip_render_smoke;
 mod liquid_prepare;
 
 mod binding_migration;
+
+mod image_fused;
+#[cfg(feature = "gpu-proofs")]
+mod nested_cubes_geometry;
