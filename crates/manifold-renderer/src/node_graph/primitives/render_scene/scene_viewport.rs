@@ -287,6 +287,17 @@ fn scaled_dimension(value: u32, numerator: u32, denominator: u32) -> u32 {
     scaled.clamp(1, u64::from(u32::MAX)) as u32
 }
 
+impl ViewportPass for SceneViewportPass {
+    fn render(&mut self, ctx: &mut EffectNodeContext<'_, '_>, config: SceneViewportConfig) {
+        SceneViewportPass::render(self, ctx, config);
+    }
+
+    fn texture(&self) -> Option<&GpuTexture> { SceneViewportPass::texture(self) }
+    fn status(&self) -> FrameRenderStatus { SceneViewportPass::status(self) }
+    fn errors(&self) -> &[String] { SceneViewportPass::errors(self) }
+    fn clear_state(&mut self) { SceneViewportPass::clear_state(self); }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -388,15 +399,4 @@ mod tests {
             (321, 201, GpuTextureFormat::Rgba16Float)
         );
     }
-}
-
-impl ViewportPass for SceneViewportPass {
-    fn render(&mut self, ctx: &mut EffectNodeContext<'_, '_>, config: SceneViewportConfig) {
-        SceneViewportPass::render(self, ctx, config);
-    }
-
-    fn texture(&self) -> Option<&GpuTexture> { SceneViewportPass::texture(self) }
-    fn status(&self) -> FrameRenderStatus { SceneViewportPass::status(self) }
-    fn errors(&self) -> &[String] { SceneViewportPass::errors(self) }
-    fn clear_state(&mut self) { SceneViewportPass::clear_state(self); }
 }
