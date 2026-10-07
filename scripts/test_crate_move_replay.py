@@ -13,6 +13,32 @@ import crate_move_replay as replay
 
 
 class ReplayTests(unittest.TestCase):
+    def test_shared_map_derivation_is_rooted_and_scoped(self):
+        moves = {'crates/a/src/foo.rs': 'crates/b/src/bar.rs'}
+        mapping = replay.mappings(moves, [], {})
+        self.assertEqual(mapping, {'a::foo': 'b::bar'})
+        self.assertIs(replay.file_mapping('crates/a/src/foo.rs', 'crates/b/src/bar.rs',
+                                          moves, mapping, ['crates/a', 'crates/b']), mapping)
+        self.assertIsNone(replay.file_mapping('crates/c/src/foo.rs', 'crates/c/src/foo.rs',
+                                              moves, mapping, ['crates/a', 'crates/b']))
+        self.assertIsNone(replay.file_mapping('crates/a/src/other.rs', 'crates/b/src/bar.rs',
+                                              moves, mapping, ['crates/a', 'crates/b']))
+        # A consumer crate's local crate::foo is not the source crate's foo.
+        self.assertEqual(replay.rewrite_rust('crate::foo::X;', 'crates/c/src/lib.rs',
+                                             'crates/c/src/lib.rs', mapping, moves), 'crate::foo::X;')
+
+    def test_shared_include_module_discovery_does_not_mutate_globals(self):
+        sources = {'crates/a/src/foo.rs': 'include!("fragment.rs");\n',
+                   'crates/a/src/fragment.rs': 'pub const X: u8 = 1;\n'}
+        moves = {'crates/a/src/foo.rs': 'crates/b/src/bar.rs',
+                 'crates/a/src/fragment.rs': 'crates/b/src/fragment.rs'}
+        previous = dict(replay.MODULES)
+        modules = replay.path_modules(sources, moves, sources.__contains__)
+        self.assertEqual(modules, {'crates/a/src/fragment.rs': 'a::foo',
+                                   'crates/b/src/fragment.rs': 'b::bar'})
+        self.assertEqual(replay.MODULES, previous)
+        self.assertEqual(replay.mappings(moves, [], modules), {'a::foo': 'b::bar'})
+
     def setUp(self):
         scratch = Path(__file__).resolve().parents[1] / 'target'
         scratch.mkdir(exist_ok=True)

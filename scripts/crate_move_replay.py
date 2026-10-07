@@ -37,8 +37,9 @@ def safe_path(p):
         raise ValueError(f'unsafe relative path: {p}')
     return p
 
-def module(path):
-    if path in MODULES: return MODULES[path]
+def module(path, modules=None):
+    modules = MODULES if modules is None else modules
+    if path in modules: return modules[path]
     if not path.startswith('crates/') or '/src/' not in path or not path.endswith('.rs'): return None
     package, rest = path.split('/src/', 1)
     root = package.rsplit('/', 1)[1].replace('-', '_')
@@ -69,15 +70,15 @@ def expand_use(s, prefix=''):
 
 USE = re.compile(r'(?m)^([ \t]*)(pub(?:\([^\n)]*\))?\s+)?use\s+([^;]+);')
 
-def mappings(moves, rewrites):
+def mappings(moves, rewrites, modules=None):
     result = {}
     for a, b in rewrites:
         a, b = rust_path(a), rust_path(b)
         if a in result and result[a] != b: raise ValueError('conflicting rewrite: ' + a)
         result[a] = b
     for a, b in moves.items():
-        if module(a) and module(b):
-            key, value = rust_path(module(a)), rust_path(module(b))
+        if module(a, modules) and module(b, modules):
+            key, value = rust_path(module(a, modules)), rust_path(module(b, modules))
             if key in result and result[key] != value: raise ValueError('conflicting derived rewrite: ' + key)
             result[key] = value
     return result
@@ -95,28 +96,47 @@ def inline_modules(source):
 
 def collect_path_modules(source,moves):
     MODULES.clear()
+    sources = {str(p.relative_to(source)): read_utf8(p)
+               for p in sorted((source/(R+'src')).rglob('*.rs')) if not p.is_symlink()}
+    MODULES.update(path_modules(sources, moves, lambda path: (source/path).is_file()))
+
+
+def path_modules(sources, moves, exists):
+    """Shared module ownership discovery for disk replay and Git-blob checking."""
+    modules = {}
     rows=[]
-    for p in sorted((source/(R+'src')).rglob('*.rs')):
-        if p.is_symlink(): continue
-        text=read_utf8(p); parent=str(p.relative_to(source))
+    for parent, text in sorted(sources.items()):
         masked=code_mask(text)
         offsets,scopes=inline_modules(text)
         for m in re.finditer(r'#\[path\s*=\s*"([^"]+)"\]\s*(?:#\[[^\n]+\]\s*)*(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;',text):
             if masked[m.start()] != '#': continue
             child=os.path.normpath(str(PurePosixPath(parent).parent/m[1]))
-            if (source/child).is_file():
+            if exists(child):
                 inline=scopes[bisect.bisect_right(offsets,m.start())-1]
                 rows.append((parent,child,inline+(m[2],)))
         for m in re.finditer(r'include!\("([^"]+\.rs)"\)',text):
             if masked[m.start()] != 'i': continue
             child=os.path.normpath(str(PurePosixPath(parent).parent/m[1]))
-            if (source/child).is_file():
+            if exists(child):
                 rows.append((parent,child,scopes[bisect.bisect_right(offsets,m.start())-1]))
     for _ in range(4):
         for parent,child,names in rows:
-            if module(parent): MODULES[child]='::'.join((module(parent),)+names)
+            if module(parent, modules): modules[child]='::'.join((module(parent, modules),)+names)
             if parent in moves and child in moves:
-                MODULES[moves[child]]='::'.join((module(moves[parent]),)+names)
+                modules[moves[child]]='::'.join((module(moves[parent], modules),)+names)
+    return modules
+
+
+def file_mapping(old, new, moves, mapping, rewrite_roots):
+    """Select only the reviewed file pair and rewrite roots; paths stay rooted.
+
+    Consumers resolve crate/self/super relative to this pair, never by making
+    a global crate:: alias for the source crate's mappings.
+    """
+    roots = tuple(safe_path(x) + '/' for x in rewrite_roots)
+    if not new.endswith('.rs') or not new.startswith(roots): return None
+    if moves.get(old, old) != new: return None
+    return mapping
 
 def rewrite_rust(text, old_path, new_path, mapping, moves):
     offsets,scopes=inline_modules(text)
@@ -610,13 +630,13 @@ def _replay_tree(source, plan, dest):
         p.parent.mkdir(parents=True, exist_ok=True)
         (dest / a).rename(p)
     inverse = {b: a for a, b in moves.items()}
-    roots = tuple(safe_path(x) + '/' for x in CONFIG['rewrite_roots'])
     for p in sorted(dest.rglob('*.rs')):
         if p.is_symlink(): continue
         new = p.relative_to(dest).as_posix()
-        if not new.startswith(roots): continue
         old = inverse.get(new, new)
-        write_regular(p, rewrite_rust(read_utf8(p), old, new, mapping, moves).encode('utf-8'))
+        selected = file_mapping(old, new, moves, mapping, CONFIG['rewrite_roots'])
+        if selected is None: continue
+        write_regular(p, rewrite_rust(read_utf8(p), old, new, selected, moves).encode('utf-8'))
     templates = plan / 'templates'
     if templates.exists():
         for rel, entry in sorted(files(templates).items()):

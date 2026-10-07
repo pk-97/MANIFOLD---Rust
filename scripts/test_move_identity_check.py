@@ -145,6 +145,8 @@ Run: scripts/test_move_identity_check.py   (exit 0 = all pass)
 """
 
 import re
+import json
+import hashlib
 import subprocess
 import sys
 import tempfile
@@ -1705,6 +1707,98 @@ def case_import_identity(repo: Path, mode='split') -> tuple[bool, str]:
     return ok, f'exit={code} {out.splitlines()[0] if out else "no output"}'
 
 
+def case_plan_rewrite(repo: Path, mode='moved') -> tuple[bool, str]:
+    old, new = 'crates/old/src/graph.rs', 'crates/new/src/engine.rs'
+    source = HELPER + 'pub fn run(x: crate::graph::Thing) { crate::graph::accept(x, 42); }\n'
+    changed = source.replace('crate::graph::', 'crate::engine::')
+    before = {
+        'crates/old/Cargo.toml': '[package]\nname = "old"\n',
+        'crates/old/src/lib.rs': 'pub mod graph;\nuse crate::graph::Thing as Alias;\n',
+        'crates/app/Cargo.toml': '[package]\nname = "app"\n',
+        'crates/app/src/lib.rs': 'use old::graph::Thing as Alias;\n',
+        old: source,
+    }
+    templates = {
+        'crates/new/Cargo.toml': '[package]\nname = "new"\n',
+        'crates/new/src/lib.rs': 'pub mod engine;\n',
+    }
+    after = {
+        'crates/old/src/lib.rs': 'use new::engine::Thing as Alias;\n',
+        'crates/app/src/lib.rs': 'use new::engine::Thing as Alias;\n',
+        new: changed,
+        **templates,
+    }
+    moves = [(old, new)]
+    positive = {'moved', 'super', 'include', 'template', 'explicit-module'}
+    if mode == 'super':
+        before[old] = HELPER + 'mod nested { fn run(x: super::Thing) { super::accept(x, 42); } }\n'
+        after[new] = before[old]
+    elif mode == 'wrong-crate':
+        before['crates/app/src/lib.rs'] = 'use crate::graph::Thing as Alias;\n'
+    elif mode == 'outside-root':
+        before['crates/other/Cargo.toml'] = '[package]\nname = "other"\n'
+        before['crates/other/src/lib.rs'] = 'use old::graph::Thing;\n'
+        after['crates/other/src/lib.rs'] = 'use new::engine::Thing;\n'
+    elif mode == 'unmoved-path':
+        before[old] = source.replace('graph::', 'untouched::')
+    elif mode == 'stale-crate':
+        after[new] = source
+    elif mode == 'alias':
+        after['crates/old/src/lib.rs'] = 'use new::engine::Thing as Different;\n'
+    elif mode == 'body':
+        after[new] = changed.replace('42', '99')
+    elif mode in {'include', 'include-body', 'include-alias', 'include-literal'}:
+        fragment_old, fragment_new = 'crates/old/src/fragment.rs', 'crates/new/src/fragment.rs'
+        before[old] = HELPER + 'include!("fragment.rs");\n'
+        after[new] = before[old]
+        before[fragment_old] = source
+        after[fragment_new] = changed.replace('42', '99') if mode == 'include-body' else changed
+        if mode == 'include-alias':
+            before[fragment_old] += 'use crate::graph::Thing as Alias;\n'
+            after[fragment_new] += 'use crate::engine::Thing as Different;\n'
+        elif mode == 'include-literal':
+            before[fragment_old] += 'const TEXT: &str = "old";\n'
+            after[fragment_new] += 'const TEXT: &str = "new";\n'
+        moves.append((fragment_old, fragment_new))
+    elif mode in {'template', 'template-drift', 'template-existing', 'template-existing-unchanged', 'template-steal'}:
+        build = 'crates/new/build.rs'
+        templates[build] = 'fn main() { reviewed(42); }\n'
+        after[build] = templates[build]
+        if mode == 'template-drift':
+            after[build] = 'fn main() { reviewed(99); }\n'
+        elif mode == 'template-existing':
+            before[build] = 'fn main() { previous(1); }\n'
+        elif mode == 'template-existing-unchanged':
+            before[build] = templates[build]
+        elif mode == 'template-steal':
+            templates[build] = source.removeprefix(HELPER)
+            after[build] = templates[build]
+            after[new] = HELPER
+    else:
+        assert mode in {'moved', 'explicit-module'}, mode
+    plan = repo / 'plan'
+    plan.mkdir()
+    (plan / 'plan.json').write_text(json.dumps({
+        'version': 1, 'source_crate': 'crates/old', 'destination_crate': 'crates/new',
+        'rewrite_roots': ['crates/old', 'crates/new', 'crates/app'], 'aliases': {}}))
+    (plan / 'moves.tsv').write_text(''.join(a + '\t' + b + '\n' for a, b in moves))
+    (plan / 'rewrites.tsv').write_text('old::graph\tnew::engine\n' if mode == 'explicit-module' else '')
+    for path, body in templates.items():
+        p = plan / 'templates' / path
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(body)
+    commit_tree(repo, before, 'base with reviewed plan')
+    for path, _ in moves:
+        (repo / path).unlink()
+    commit_tree(repo, after, 'move')
+    code, out = run_checker(repo, '--plan', str(plan), '--show-all')
+    ok = code == int(mode not in positive)
+    if mode == 'template':
+        ok &= 'template' in out and hashlib.sha256(templates['crates/new/build.rs'].encode()).hexdigest() in out
+        ok &= 'PURE MOVE PROVEN' not in out
+    return ok, out.strip()
+
+
 def case_item_rewrite(repo: Path, mode='import', from_file=False) -> tuple[bool, str]:
     before = 'use old::{Thing as Alias, __primitive_struct};\n'
     after = 'use new::Thing as Alias;\nuse engine::__primitive_struct;\n'
@@ -2017,6 +2111,11 @@ def review_cases():
 
 
 CASES = review_cases() + [
+    (f'plan rewrite {mode}', lambda repo, mode=mode: case_plan_rewrite(repo, mode))
+    for mode in ('moved', 'explicit-module', 'super', 'wrong-crate', 'outside-root', 'unmoved-path', 'stale-crate',
+                 'alias', 'body', 'include', 'include-body', 'include-alias', 'include-literal',
+                 'template', 'template-drift', 'template-existing', 'template-existing-unchanged', 'template-steal')
+] + [
     (f'rewrite input {mode}', lambda repo, mode=mode: case_rewrite_input(repo, mode))
     for mode in ('columns', 'empty', 'invalid', 'mixed-kind', 'macro-kind', 'conflict',
                  'kind-conflict', 'cli-conflict', 'missing')

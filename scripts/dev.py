@@ -54,7 +54,7 @@ VERBS = [
     ("Landing and gates",
      "crate-move", "crate_move_replay.py", "replay a reviewed crate move or verify full tree identity"),
     ("Landing and gates",
-     "move-check", "move_identity_check.py", "prove a pure code move; --rewrite paths or --rewrites-file replay TSV"),
+     "move-check", "move_identity_check.py", "prove a pure code move; --plan derives replay maps and reports template digests; --rewrite/--rewrites-file for explicit maps"),
     ("Landing and gates",
      "test-census", "test_census.py", "record and compare test identities across crate moves"),
     ("Landing and gates",

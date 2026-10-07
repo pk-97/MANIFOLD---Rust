@@ -23,8 +23,12 @@ macro arguments and $crate. Prefix maps use OLD::=NEW::; exact item maps use
 OLD::Item=NEW::Item. Exported macro maps use OLD::macro!=NEW::macro!
 (the legacy !:: spelling also works). --rewrites-file reads the replay plan's
 two-column TSV, including blank lines and # comments, without altering row kinds.
+--plan imports replay's module-map derivation and restricts it to the plan's
+file pairs and rewrite roots. Matched new-file templates are excluded from move
+proof, counted separately, and printed with their SHA-256 for digest review.
 Strings/comments are opaque. Includes and build-source rows follow exact git
-rename pairs; includes additionally require asset byte identity. New-package
+rename pairs; data includes require asset byte identity, while include! Rust
+sources may pass the plan's path-only identity proof. New-package
 lock entries and target dependencies/features require source-crate precedents.
 Unmatched contextual paths stay residue even when shaped like legacy wiring.
 New-manifest external dependencies equal to parsed old-workspace values and
@@ -45,6 +49,7 @@ Usage:
   scripts/move_identity_check.py <ref> --show-all    # print all residue lines
   scripts/move_identity_check.py <ref> --rewrite 'crate::node_graph::=manifold_node_engine::'
   scripts/move_identity_check.py <ref> --rewrites-file path/to/rewrites.tsv
+  scripts/move_identity_check.py <ref> --plan path/to/plan
 
 The moved-line detection uses `--color-moved=plain --color-moved-ws=no` and
 pins the four diff colors so parsing never depends on user git config.
@@ -62,6 +67,8 @@ import fnmatch
 import json
 import posixpath
 import tomllib
+import hashlib
+import difflib
 from collections import Counter
 from pathlib import Path
 
@@ -358,7 +365,7 @@ def classify(out: str, claimed: dict[int, str] | None = None) -> tuple[dict[str,
     without constructing a git repo."""
     residue: list[str] = []
     counts = {"moved": 0, "allowed": 0, "comments": 0, "scaffold": 0}
-    counts.update(skeletons=0, manifests=0, rewrites=0)
+    counts.update(skeletons=0, manifests=0, rewrites=0, templates=0)
     # Per-sign use-block state (D-18): True while a `-` (resp. `+`) multi-line
     # `use { ... }` opened by a SIGNED line is open and hasn't hit its
     # closing `};` yet.
@@ -854,6 +861,11 @@ def item_attributes(source):
 
 
 def crate_context(path, reader):
+    mounted = getattr(reader, 'plan_modules', {}).get(path)
+    if mounted:
+        root = path.split('/src/', 1)[0]
+        name, *parts = mounted.split('::')
+        return root, name, tuple(parts)
     match = re.match(r'(crates/[^/]+)/(.*)', path or '')
     if not match:
         return None, None, ()
@@ -1058,7 +1070,7 @@ def recorded_macro_names(source, resolve, rewrites):
 
 
 def contextual_lines(source, path, reader, rewrites, renames, other_path=None,
-                     other_reader=None, proved=None, recorded_macros=None):
+                     other_reader=None, proved=None, recorded_macros=None, plan=None):
     """Canonical line keys, preserving every non-path token and literal byte.
 
     Only the old side receives declared rewrites. Canonical crate/module paths
@@ -1112,13 +1124,15 @@ def contextual_lines(source, path, reader, rewrites, renames, other_path=None,
     # Includes are source-relative, even in inline modules. Require the exact
     # file move, or the same existing file, and preserve all surrounding bytes.
     if other_path and other_reader:
-        for match in re.finditer(r'\binclude_(?:str|bytes)!\s*\(\s*"([^"\n]+)"\s*\)', source):
+        for match in re.finditer(r'\b(?:include_(?:str|bytes)|include)!\s*\(\s*"([^"\n]+)"\s*\)', source):
             if match.start() not in code_starts:
                 continue
             old_asset = posixpath.normpath(posixpath.join(posixpath.dirname(path), match[1]))
             new_asset = renames.get(old_asset, old_asset)
             old_bytes = reader(old_asset, raw=True)
-            if old_bytes is not None and old_bytes == other_reader(new_asset, raw=True):
+            if old_bytes is not None and (old_bytes == other_reader(new_asset, raw=True)
+                    or (plan and match[0].startswith('include!')
+                        and plan.proves_include(old_asset, new_asset, renames))):
                 target = posixpath.relpath(new_asset, posixpath.dirname(other_path))
                 replacements.append((match.start(1), match.end(1), target))
                 if proved is not None and target != match[1]:
@@ -1636,8 +1650,97 @@ def manifest_wiring(source: str, path: str, read_file, read_other, sign: str,
     return allowed, forbidden
 
 
+class PlanRewrites:
+    """Replay owns map derivation; this checker still owns identity proofs."""
+
+    def __init__(self, directory, read_old, read_new, paths, new_modes):
+        import crate_move_replay as replay
+        self.replay = replay
+        self.read_old, self.read_new = read_old, read_new
+        directory = Path(directory)
+        self.config = json.loads(replay.read_utf8(directory / 'plan.json'))
+        if self.config.get('version') != 1 or set(self.config) - {
+                'version', 'source_crate', 'destination_crate', 'rewrite_roots', 'aliases'}:
+            raise ValueError('unsupported plan configuration')
+        if self.config.get('aliases'):
+            raise ValueError('plan aliases require an explicit identity proof')
+        self.moves = {}
+        destinations = set()
+        for old, new in replay.tsv(directory / 'moves.tsv'):
+            replay.safe_path(old)
+            replay.safe_path(new)
+            if old in self.moves or new in destinations:
+                raise ValueError('duplicate plan move: ' + old)
+            if read_old(old, raw=True) is None or read_new(new, raw=True) is None:
+                raise ValueError('missing plan move endpoint: ' + old + ' -> ' + new)
+            self.moves[old] = new
+            destinations.add(new)
+        source_root = replay.safe_path(self.config['source_crate']) + '/src/'
+        sources = {p: read_old(p) for p in paths if p.startswith(source_root) and p.endswith('.rs')}
+        self.modules = replay.path_modules(sources, self.moves, lambda p: read_old(p, raw=True) is not None)
+        read_old.plan_modules = {p: name for p, name in self.modules.items() if p in paths}
+        read_new.plan_modules = {p: name for p, name in self.modules.items() if p not in self.moves}
+        rows = read_rewrites_file(str(directory / 'rewrites.tsv'))
+        validate_rewrites(rows)
+        if any(a.split('::', 1)[0] in ('crate', '$crate', 'super', 'self') for a, _ in rows):
+            raise ValueError('plan rewrite rows must name canonical crate owners')
+        self.mapping = replay.mappings(self.moves, rows, self.modules)
+        # Keep explicit item rows exact. Only module maps derived from moves
+        # gain prefix semantics; replay supplies their canonical owners.
+        explicit = {a.removesuffix('::'): (a, b) for a, b in rows}
+        derived = replay.mappings(self.moves, [], self.modules)
+        self.rows = [(a + '::', b + '::') if a in derived else explicit[a]
+                     for a, b in self.mapping.items()]
+        self.templates = replay.files(directory / 'templates') if (directory / 'templates').exists() else {}
+        self.template_ok = {}
+        for path, (mode, data) in self.templates.items():
+            replay.safe_path(path)
+            self.template_ok[path] = (read_old(path, raw=True) is None
+                                      and read_new(path, raw=True) == data and new_modes.get(path) == mode
+                                      and mode in ('100644', '100755'))
+        self.include_cache = {}
+
+    def for_file(self, old, new):
+        selected = self.replay.file_mapping(old or '', new or '', self.moves, self.mapping,
+                                            self.config['rewrite_roots'])
+        return self.rows if selected else []
+
+    def proves_include(self, old, new, renames):
+        key = old, new
+        if key in self.include_cache:
+            return self.include_cache[key]
+        self.include_cache[key] = False
+        if not old.endswith('.rs') or self.moves.get(old, old) != new:
+            return False
+        a, b = self.read_old(old, raw=True), self.read_new(new, raw=True)
+        if a is None or b is None:
+            return False
+        before, after = a.decode(), b.decode()
+        rows = self.for_file(old, new)
+        if not rows:
+            return False
+        old_resolve = rust_path_resolver(old, self.read_old, rows, new, self.read_new, renames)
+        new_resolve = rust_path_resolver(new, self.read_new, [])
+        old_macros = recorded_macro_names(before, old_resolve, rows)
+        new_macros = recorded_macro_names(after, new_resolve, rows)
+        # Includes are not a second route around opaque text/attribute checks.
+        old_text = [before[a:b] for a, b in text_identity_regions(before, old_macros)]
+        new_text = [after[a:b] for a, b in text_identity_regions(after, new_macros)]
+        if old_text != new_text:
+            return False
+        old_leaves, _, old_body = import_identity(before, old_resolve)
+        new_leaves, _, new_body = import_identity(after, new_resolve)
+        if old_leaves is None or old_leaves != new_leaves:
+            return False
+        left = contextual_lines(old_body, old, self.read_old, rows, renames, new, self.read_new)
+        right = contextual_lines(new_body, new, self.read_new, [], {}, recorded_macros=new_macros)
+        proved = [line for line in left if line] == [line for line in right if line]
+        self.include_cache[key] = proved
+        return proved
+
+
 def crate_move_claims(out: str, read_old, read_new, rewrites,
-                      external_values=None, hints=None) -> dict[int, str]:
+                      external_values=None, hints=None, plan=None) -> dict[int, str]:
     """Claim bounded crate wiring before applying the legacy classifications.
 
     Rewrite pairs are restricted to the same diff file (including a git-detected
@@ -1651,6 +1754,7 @@ def crate_move_claims(out: str, read_old, read_new, rewrites,
     separate the git mv from its rewrite rather than guessing their pairing.
     """
     claims = {}
+    explicit_rewrites = rewrites
     blocks = [[]]
     for raw in out.splitlines():
         if ANSI.sub("", raw).startswith("diff --git "):
@@ -1668,7 +1772,7 @@ def crate_move_claims(out: str, read_old, read_new, rewrites,
                 ('+', '+++ b/', 'rename to ', read_new)):
             file = next((line[len(prefix):] for line in plain if line.startswith(prefix)), None)
             file = file or next((line[len(rename_prefix):] for line in plain if line.startswith(rename_prefix)), None)
-            if file and file.endswith('.rs'):
+            if file and file.endswith('.rs') and not (plan and file in plan.templates):
                 source = reader(file)
                 inventories[sign].update(source[a:b] for a, b in text_identity_regions(source))
     donor_paths = {}
@@ -1689,6 +1793,16 @@ def crate_move_claims(out: str, read_old, read_new, rewrites,
         new_path = new_path or next((line[10:] for line in plain if line.startswith('rename to ')), None)
         path = new_path if new_path != "/dev/null" else old_path
         added = old_path == "/dev/null"
+        rewrites = plan.for_file(old_path, new_path) if plan else explicit_rewrites
+        if plan and path in plan.templates:
+            matched = added and plan.template_ok[path]
+            if not matched:
+                claims[offset] = 'blocked'
+            for index, line in enumerate(plain):
+                if line.startswith(('+', '-')) and not line.startswith(('+++ ', '--- ')):
+                    claims[offset + index] = 'templates' if matched else 'blocked'
+            offset += len(lines)
+            continue
         if path and path.endswith(".rs"):
             if added:
                 added_paths.append(path)
@@ -1741,7 +1855,7 @@ def crate_move_claims(out: str, read_old, read_new, rewrites,
             # proof below; their changed string spellings are not data edits.
             for sign, source in (('-', before), ('+', after)):
                 for number, row in enumerate(source.splitlines(), 1):
-                    if 'include_str!' in row or 'include_bytes!' in row:
+                    if 'include_str!' in row or 'include_bytes!' in row or (plan and 'include!' in row):
                         protected[sign].discard(number)
                         macro_protected[sign].discard(number)
                 if path.endswith('/build.rs'):
@@ -1782,12 +1896,12 @@ def crate_move_claims(out: str, read_old, read_new, rewrites,
                     protected[sign].difference_update(owned)
                     if header in changed_headers:
                         attribute_protected[sign].update(owned)
-            if old_path != new_path:
-                pattern = r'\binclude_(?:str|bytes)!\s*\(\s*"([^"\n]+)"\s*\)'
+            if old_path != new_path or plan:
+                pattern = r'\b(?:include_(?:str|bytes)|include)!\s*\(\s*"([^"\n]+)"\s*\)'
                 def includes(source):
                     tokens = list(rust_tokens(source))
                     starts = {pos for i, (pos, token, _) in enumerate(tokens[:-1])
-                              if token in ('include_str', 'include_bytes') and tokens[i + 1][1] == '!'}
+                              if token in ('include_str', 'include_bytes', 'include') and tokens[i + 1][1] == '!'}
                     matches = [match for match in re.finditer(pattern, source) if match.start() in starts]
                     # Unsupported syntax is unproved, not an empty include list.
                     return matches if len(matches) == len(starts) else None
@@ -1795,22 +1909,36 @@ def crate_move_claims(out: str, read_old, read_new, rewrites,
                 new_includes = includes(after)
                 if old_includes is None or new_includes is None or len(old_includes) != len(new_includes) or any(
                         read_old(posixpath.normpath(posixpath.join(posixpath.dirname(old_path), a[1])), raw=True) is None
-                        or read_old(posixpath.normpath(posixpath.join(posixpath.dirname(old_path), a[1])), raw=True)
+                        or (read_old(posixpath.normpath(posixpath.join(posixpath.dirname(old_path), a[1])), raw=True)
                         != read_new(posixpath.normpath(posixpath.join(posixpath.dirname(new_path), b[1])), raw=True)
+                        and not (plan and a[0].startswith('include!') and b[0].startswith('include!')
+                                 and plan.proves_include(
+                                     posixpath.normpath(posixpath.join(posixpath.dirname(old_path), a[1])),
+                                     posixpath.normpath(posixpath.join(posixpath.dirname(new_path), b[1])), renames)))
                         for a, b in zip(old_includes, new_includes)):
                     claims[offset] = 'blocked'
-            if rewrites or (crate_context(old_path, read_old)[0] != crate_context(new_path, read_new)[0]):
+            if plan or rewrites or (crate_context(old_path, read_old)[0] != crate_context(new_path, read_new)[0]):
                 old_leaves, import_lines['-'], old_remainder = import_identity(
                     before, rust_path_resolver(old_path, read_old, rewrites, new_path, read_new, renames))
                 new_leaves, import_lines['+'], new_remainder = import_identity(
                     after, rust_path_resolver(new_path, read_new, []))
                 import_ok = old_leaves is not None and new_leaves is not None and old_leaves == new_leaves
+                if plan and not import_ok:
+                    claims[offset] = 'blocked'
                 if import_ok:
                     before, after = old_remainder, new_remainder
                 import_remainders = {'-': old_remainder.splitlines(), '+': new_remainder.splitlines()}
             keys['-'] = contextual_lines(before, old_path, read_old,
-                                          rewrites, renames, new_path, read_new, proved)
+                                          rewrites, renames, new_path, read_new, proved, plan=plan)
             keys['+'] = contextual_lines(after, new_path, read_new, [], {}, recorded_macros=new_recorded)
+            if plan and old_path != new_path:
+                # Git reports no changed line for a stale crate:: path in a
+                # renamed file. Equal source lines must still name equal
+                # owners in their before/after module contexts.
+                matches = difflib.SequenceMatcher(None, before.splitlines(), after.splitlines(), autojunk=False)
+                if any(keys['-'][a + n] != keys['+'][b + n]
+                       for a, b, size in matches.get_matching_blocks() for n in range(size)):
+                    claims[offset] = 'blocked'
         removed, additions = [], []
         for index, line in enumerate(plain):
             hunk = re.match(r"@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@", line)
@@ -1877,7 +2005,10 @@ def main() -> int:
     parser.add_argument("--show-all", action="store_true")
     parser.add_argument("--rewrite", type=rewrite_map, action="append", default=[])
     parser.add_argument("--rewrites-file", action="append", default=[], metavar="TSV")
+    parser.add_argument("--plan", metavar="DIR", help="use the replay plan's derived per-file module maps and template digests")
     args = parser.parse_args()
+    if args.plan and (args.rewrite or args.rewrites_file or args.cached):
+        parser.error('--plan requires a committed target and cannot be combined with extra rewrite maps')
     try:
         for path in args.rewrites_file:
             args.rewrite.extend(read_rewrites_file(path))
@@ -1910,7 +2041,25 @@ def main() -> int:
     else:
         diff_args.append(f"{target}^!")
 
-    out = subprocess.run(diff_args, capture_output=True, text=True, check=True).stdout
+    template_paths = []
+    if args.plan:
+        import crate_move_replay as replay
+        directory = Path(args.plan) / 'templates'
+        try:
+            template_paths = sorted(replay.files(directory)) if directory.exists() else []
+            for path in template_paths:
+                replay.safe_path(path)
+        except (ValueError, OSError) as error:
+            print('plan: ' + str(error), file=sys.stderr)
+            return 1
+    # Templates cannot donate moved colors or opaque payload identities to
+    # non-template files. Diff them separately without move detection.
+    paths = ['--', '.', *[':(exclude,literal)' + path for path in template_paths]] if template_paths else []
+    out = subprocess.run(diff_args + paths, capture_output=True, text=True, check=True).stdout
+    if template_paths:
+        out += subprocess.run(diff_args + ['--color-moved=no', '--',
+                                           *[':(literal)' + path for path in template_paths]],
+                              capture_output=True, text=True, check=True).stdout
 
     if target == "--cached":
         old_ref, new_ref = "HEAD", ""
@@ -1938,18 +2087,33 @@ def main() -> int:
 
     # Strip only ANSI for file boundaries; retain moved colors for legacy classes.
     old_reader, new_reader = reader(old_ref), reader(new_ref)
+    plan = None
+    if args.plan:
+        try:
+            paths = subprocess.check_output(['git', 'ls-tree', '-r', '--name-only', old_ref], text=True).splitlines()
+            modes = {}
+            for row in subprocess.check_output(['git', 'ls-tree', '-r', new_ref], text=True).splitlines():
+                metadata, path = row.split('\t', 1)
+                modes[path] = metadata.split()[0]
+            plan = PlanRewrites(args.plan, old_reader, new_reader, paths, modes)
+        except (ValueError, OSError, KeyError) as error:
+            print('plan: ' + str(error), file=sys.stderr)
+            return 1
     external_values = {}
     if re.search(r"^\+\+\+ b/crates/[^/]+/Cargo.toml$", ANSI.sub("", out), re.MULTILINE):
         paths = subprocess.check_output(["git", "ls-tree", "-r", "--name-only", old_ref], text=True).splitlines()
         external_values = external_dependency_values(
             [path for path in paths if path.endswith("Cargo.toml")], old_reader)
     hints = []
-    claims = crate_move_claims(out, old_reader, new_reader, args.rewrite, external_values, hints)
+    claims = crate_move_claims(out, old_reader, new_reader, args.rewrite, external_values, hints, plan)
     counts, residue = classify(out, claims)
     residue, vis_pairs = drop_visibility_pairs(residue)
     residue, include_pairs = drop_include_str_prefix_pairs(residue)
     residue.extend(ANSI.sub("", raw) for index, raw in enumerate(out.splitlines())
                    if claims.get(index) == "blocked")
+    if plan:
+        residue.extend('template is not an exact new file: ' + path
+                       for path, matched in sorted(plan.template_ok.items()) if not matched)
     scaffold = counts["scaffold"]
 
     print(
@@ -1958,8 +2122,13 @@ def main() -> int:
         f"visibility pairs: {vis_pairs}  include_str pairs: {include_pairs}  "
         f"crate skeletons: {counts['skeletons']}  manifest wiring: {counts['manifests']}  "
         f"path rewrites: {counts['rewrites']}  "
+        f"template files: {sum(plan.template_ok.values()) if plan else 0}  template lines: {counts['templates']}  "
         f"residue: {len(residue)}"
     )
+    if plan:
+        for path, (mode, data) in sorted(plan.templates.items()):
+            status = 'matched; digest review required' if plan.template_ok[path] else 'MISMATCH'
+            print(f'  TEMPLATE {path} mode={mode} sha256={hashlib.sha256(data).hexdigest()} {status}')
     if vis_pairs:
         print(f"  note: {vis_pairs} signature(s) widened visibility (fn -> pub(crate) fn "
               f"etc.) — required wiring when private items move across module walls.")
@@ -1982,7 +2151,9 @@ def main() -> int:
         print("NOT a pure move. Residue lines are unmatched changes; split the commit")
         print("or justify each line in review.")
         return 1
-    if scaffold:
+    if plan and plan.templates:
+        print('NON-TEMPLATE MOVE PROVEN; templates are excluded and require the printed digest review.')
+    elif scaffold:
         print(f"PURE MOVE PROVEN: every non-scaffold changed line is a detected move "
               f"({scaffold} dispatch-split scaffold line(s), within cap {SCAFFOLD_CAP}).")
     else:
