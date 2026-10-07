@@ -145,6 +145,8 @@ Run: scripts/test_move_identity_check.py   (exit 0 = all pass)
 """
 
 import re
+import json
+import hashlib
 import subprocess
 import sys
 import tempfile
@@ -1705,6 +1707,279 @@ def case_import_identity(repo: Path, mode='split') -> tuple[bool, str]:
     return ok, f'exit={code} {out.splitlines()[0] if out else "no output"}'
 
 
+def case_plan_rewrite(repo: Path, mode='moved') -> tuple[bool, str]:
+    old, new = 'crates/old/src/graph.rs', 'crates/new/src/engine.rs'
+    source = HELPER + 'pub fn run(x: crate::graph::Thing) { crate::graph::accept(x, 42); }\n'
+    changed = source.replace('crate::graph::', 'crate::engine::')
+    before = {
+        'crates/old/Cargo.toml': '[package]\nname = "old"\n',
+        'crates/old/src/lib.rs': 'pub mod graph;\nuse crate::graph::Thing as Alias;\n',
+        'crates/app/Cargo.toml': '[package]\nname = "app"\n',
+        'crates/app/src/lib.rs': 'use old::graph::Thing as Alias;\n',
+        old: source,
+    }
+    templates = {
+        'crates/new/Cargo.toml': '[package]\nname = "new"\n',
+        'crates/new/src/lib.rs': 'pub mod engine;\n',
+    }
+    after = {
+        'crates/old/src/lib.rs': 'use new::engine::Thing as Alias;\n',
+        'crates/app/src/lib.rs': 'use new::engine::Thing as Alias;\n',
+        new: changed,
+        **templates,
+    }
+    moves = [(old, new)]
+    positive = {'moved', 'super', 'include', 'template', 'explicit-module', 'macro', 'macro-map', 'macro-crate', 'macro-turbofish', 'macro-metavar'}
+    macro_modes = ('macro', 'macro-map', 'macro-body', 'macro-literal', 'macro-comment',
+                   'macro-space', 'macro-matcher', 'macro-wrong-crate', 'macro-unmoved',
+                   'macro-stale', 'macro-hygiene', 'macro-adjacent', 'macro-alias',
+                   'macro-crate', 'macro-map-nearmiss', 'macro-relative', 'macro-glob', 'macro-turbofish', 'macro-turbofish-body',
+                   'macro-metavar', 'macro-metavar-body')
+    if mode in macro_modes:
+        before[old] = HELPER + 'macro_rules! make {\n    ($x:expr) => { $crate::graph::accept($x, 42, "keep"); /* keep */ };\n}\n'
+        after[new] = before[old].replace('$crate::graph::', '$crate::engine::')
+        if mode in {'macro-map', 'macro-map-nearmiss'}:
+            before[old] = before[old].replace('$crate::graph::accept(', '$crate::helper!(')
+            after[new] = after[new].replace('$crate::engine::accept(', '$crate::helper!(')
+            if mode == 'macro-map-nearmiss':
+                before[old] = before[old].replace('helper!', 'helperExtra!')
+                after[new] = after[new].replace('helper!', 'helperExtra!')
+        elif mode == 'macro-crate':
+            before[old] = before[old].replace('$crate::', 'crate::')
+            after[new] = after[new].replace('$crate::', 'crate::')
+        elif mode in {'macro-turbofish', 'macro-turbofish-body'}:
+            before[old] = before[old].replace('accept(', 'accept::<u32>(')
+            after[new] = after[new].replace('accept(', 'accept::<u32>(')
+            if mode == 'macro-turbofish-body': after[new] = after[new].replace('u32', 'u64')
+        elif mode in {'macro-metavar', 'macro-metavar-body'}:
+            before[old] = HELPER + 'macro_rules! make { ($ty:ident) => { $crate::graph::$ty(42); }; }\n'
+            after[new] = before[old].replace('graph::', 'engine::')
+            if mode == 'macro-metavar-body': after[new] = after[new].replace('::$ty', '::$other')
+        elif mode == 'macro-glob':
+            before[old] = HELPER + 'macro_rules! make { () => { use $crate::untouched::*; }; }\n'
+            after[new] = before[old].replace('untouched::', 'destination::')
+        elif mode == 'macro-relative': before[old] = before[old].replace('$crate::graph::', 'self::')
+        elif mode == 'macro-body': after[new] = after[new].replace('42', '99')
+        elif mode == 'macro-literal': after[new] = after[new].replace('"keep"', '"changed"')
+        elif mode == 'macro-comment': after[new] = after[new].replace('/* keep */', '/* changed */')
+        elif mode == 'macro-space': after[new] = after[new].replace('42,', '42 ,')
+        elif mode == 'macro-matcher': after[new] = after[new].replace('$x:expr', '$x:tt')
+        elif mode == 'macro-wrong-crate': before[old] = before[old].replace('$crate::', 'app::')
+        elif mode == 'macro-unmoved': before[old] = before[old].replace('graph::', 'untouched::')
+        elif mode == 'macro-stale': after[new] = before[old]
+        elif mode == 'macro-hygiene': after[new] = after[new].replace('$crate::', 'crate::')
+        elif mode == 'macro-adjacent':
+            before[old] = before[old].replace('}\n', '} const SIDE: u8 = 42;\n')
+            after[new] = after[new].replace('}\n', '} const SIDE: u8 = 99;\n')
+        elif mode == 'macro-alias':
+            before[old] += 'use crate::graph::Thing as Alias;\n'
+            after[new] += 'use crate::engine::Thing as Different;\n'
+    elif mode == 'super':
+        before[old] = HELPER + 'mod nested { fn run(x: super::Thing) { super::accept(x, 42); } }\n'
+        after[new] = before[old]
+    elif mode == 'wrong-crate':
+        before['crates/app/src/lib.rs'] = 'use crate::graph::Thing as Alias;\n'
+    elif mode == 'outside-root':
+        before['crates/other/Cargo.toml'] = '[package]\nname = "other"\n'
+        before['crates/other/src/lib.rs'] = 'use old::graph::Thing;\n'
+        after['crates/other/src/lib.rs'] = 'use new::engine::Thing;\n'
+    elif mode == 'unmoved-path':
+        before[old] = source.replace('graph::', 'untouched::')
+    elif mode == 'stale-crate':
+        after[new] = source
+    elif mode == 'alias':
+        after['crates/old/src/lib.rs'] = 'use new::engine::Thing as Different;\n'
+    elif mode == 'body':
+        after[new] = changed.replace('42', '99')
+    elif mode in {'include', 'include-body', 'include-alias', 'include-literal'}:
+        fragment_old, fragment_new = 'crates/old/src/fragment.rs', 'crates/new/src/fragment.rs'
+        before[old] = HELPER + 'include!("fragment.rs");\n'
+        after[new] = before[old]
+        before[fragment_old] = source
+        after[fragment_new] = changed.replace('42', '99') if mode == 'include-body' else changed
+        if mode == 'include-alias':
+            before[fragment_old] += 'use crate::graph::Thing as Alias;\n'
+            after[fragment_new] += 'use crate::engine::Thing as Different;\n'
+        elif mode == 'include-literal':
+            before[fragment_old] += 'const TEXT: &str = "old";\n'
+            after[fragment_new] += 'const TEXT: &str = "new";\n'
+        moves.append((fragment_old, fragment_new))
+    elif mode in {'template', 'template-drift', 'template-existing', 'template-existing-unchanged', 'template-steal'}:
+        build = 'crates/new/build.rs'
+        templates[build] = 'fn main() { reviewed(42); }\n'
+        after[build] = templates[build]
+        if mode == 'template-drift':
+            after[build] = 'fn main() { reviewed(99); }\n'
+        elif mode == 'template-existing':
+            before[build] = 'fn main() { previous(1); }\n'
+        elif mode == 'template-existing-unchanged':
+            before[build] = templates[build]
+        elif mode == 'template-steal':
+            templates[build] = source.removeprefix(HELPER)
+            after[build] = templates[build]
+            after[new] = HELPER
+    else:
+        assert mode in {'moved', 'explicit-module'}, mode
+    plan = repo / 'plan'
+    plan.mkdir()
+    (plan / 'plan.json').write_text(json.dumps({
+        'version': 1, 'source_crate': 'crates/old', 'destination_crate': 'crates/new',
+        'rewrite_roots': ['crates/old', 'crates/new', 'crates/app'], 'aliases': {}}))
+    (plan / 'moves.tsv').write_text(''.join(a + '\t' + b + '\n' for a, b in moves))
+    (plan / 'rewrites.tsv').write_text('old::graph\tnew::engine\n' if mode == 'explicit-module' else
+                                       'old::helper!\tnew::helper!\n' if mode in {'macro-map', 'macro-map-nearmiss'} else
+                                       'old::untouched::\tnew::destination::\n' if mode == 'macro-glob' else '')
+    for path, body in templates.items():
+        p = plan / 'templates' / path
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(body)
+    commit_tree(repo, before, 'base with reviewed plan')
+    for path, _ in moves:
+        (repo / path).unlink()
+    commit_tree(repo, after, 'move')
+    code, out = run_checker(repo, '--plan', str(plan), '--show-all')
+    ok = code == int(mode not in positive)
+    if mode == 'template':
+        ok &= 'template' in out and hashlib.sha256(templates['crates/new/build.rs'].encode()).hexdigest() in out
+        ok &= 'PURE MOVE PROVEN' not in out
+    return ok, out.strip()
+
+
+def case_item_rewrite(repo: Path, mode='import', from_file=False) -> tuple[bool, str]:
+    before = 'use old::{Thing as Alias, __primitive_struct};\n'
+    after = 'use new::Thing as Alias;\nuse engine::__primitive_struct;\n'
+    maps = ['old::Thing=new::Thing', 'old::__primitive_struct=engine::__primitive_struct']
+    positive = {'import', 'qualified', 'macro', 'macro-map', 'legacy-macro-map',
+                'hidden', 'raw', 'prefix', 'simultaneous', 'duplicate-map'}
+    if mode == 'qualified':
+        before, after = 'fn run() { old::Thing(); }\n', 'fn run() { new::Thing(); }\n'
+    elif mode in {'macro', 'macro-map', 'legacy-macro-map'}:
+        before = 'fn run() { old::__primitive_struct!(); }\n'
+        after = before.replace('old::', 'engine::')
+        if mode == 'macro-map':
+            maps = ['old::__primitive_struct!=engine::__primitive_struct!']
+        elif mode == 'legacy-macro-map':
+            maps = ['old::__primitive_struct!::=engine::__primitive_struct!::']
+    elif mode == 'hidden':
+        before = '#[doc(hidden)]\npub use old::__primitive_struct;\n'
+        after = before.replace('old::', 'engine::')
+    elif mode == 'raw':
+        before, after = 'use ::old::r#type as r#match;\n', 'use ::new::r#type as r#match;\n'
+        maps = ['old::r#type=new::r#type']
+    elif mode == 'prefix':
+        before, after = 'use old::module::Thing;\n', 'use new::module::Thing;\n'
+        maps += ['old::module::=new::module::']
+    elif mode == 'simultaneous':
+        maps += ['new::Thing=wrong::Thing']
+    elif mode == 'duplicate-map':
+        maps += maps[:1]
+    elif mode in {'longer', 'wrong-crate', 'child', 'glob'}:
+        suffix = {'longer': 'ThingExtra', 'wrong-crate': 'Thing',
+                  'child': 'Thing::Child', 'glob': 'Thing::*'}[mode]
+        before = 'use ' + ('other' if mode == 'wrong-crate' else 'old') + '::' + suffix + ';\n'
+        after = 'use new::' + suffix + ';\n'
+    elif mode in {'qualified-longer', 'qualified-wrong-crate', 'qualified-child'}:
+        old = {'qualified-longer': 'old::ThingExtra', 'qualified-wrong-crate': 'other::Thing',
+               'qualified-child': 'old::Thing::child'}[mode]
+        before = 'fn run() { ' + old + '(); }\n'
+        after = before.replace(old, 'new::' + old.split('::', 1)[1])
+    elif mode == 'alias':
+        after = after.replace('as Alias', 'as Different')
+    elif mode in {'spaced-child', 'spaced-crate', 'comment-child', 'comment-crate'}:
+        before = {
+            'spaced-child': 'fn run() { old::Thing ::child(); }\n',
+            'spaced-crate': 'fn run() { other :: old::Thing(); }\n',
+            'comment-child': 'fn run() { old::Thing /* qualifier */ ::child(); }\n',
+            'comment-crate': 'fn run() { other:: /* qualifier */ old::Thing(); }\n',
+        }[mode]
+        after = before.replace('old::Thing', 'new::Thing')
+    elif mode == 'hidden-attribute':
+        before = '#[doc(hidden)]\npub use old::__primitive_struct;\n'
+        after = 'pub use engine::__primitive_struct;\n'
+    elif mode == 'raw-alias':
+        before, after = 'use ::old::r#type as r#match;\n', 'use ::new::r#type as Other;\n'
+        maps = ['old::r#type=new::r#type']
+    elif mode == 'body':
+        before = before.rstrip() + ' const VALUE: u32 = 42;\n'
+        after = after.rstrip() + ' const VALUE: u32 = 99;\n'
+    elif mode == 'duplicate':
+        after += 'use new::Thing as Alias;\n'
+    elif mode == 'drop':
+        after = 'use new::Thing as Alias;\n'
+    elif mode == 'opaque':
+        before = 'fn run() { stringify!(old::Thing); }\n'
+        after = before.replace('old::', 'new::')
+    elif mode in {'macro-body', 'macro-map-body'}:
+        before = 'fn run() { old::__primitive_struct!(42); }\n'
+        after = 'fn run() { engine::__primitive_struct!(99); }\n'
+        if mode == 'macro-map-body':
+            maps = ['old::__primitive_struct!=engine::__primitive_struct!']
+    elif mode == 'macro-longer':
+        before = 'fn run() { old::__primitive_struct_extra!(); }\n'
+        after = before.replace('old::', 'engine::')
+    else:
+        assert mode == 'import', mode
+    path = 'crates/app/src/lib.rs'
+    commit_tree(repo, {'crates/app/Cargo.toml': '[package]\nname = "app"\n', path: HELPER + before}, 'base')
+    commit_tree(repo, {path: HELPER + after}, 'rewrite')
+    if from_file:
+        plan = repo / 'rewrites.tsv'
+        plan.write_text('# replay path mappings\n\n' + '\n'.join(row.replace('=', '\t') for row in maps) + '\n')
+        args = ['--rewrites-file', str(plan)]
+    else:
+        args = [arg for row in maps for arg in ('--rewrite', row)]
+    code, out = run_checker(repo, *args)
+    ok = code == 0 and field(out, 'residue') == 0 if mode in positive else code == 1 and field(out, 'residue') > 0
+    return ok, out.strip()
+
+
+def case_rewrite_input(repo: Path, mode='columns') -> tuple[bool, str]:
+    commit_tree(repo, {'lib.rs': 'fn run() {}\n'}, 'base')
+    commit_tree(repo, {'lib.rs': 'fn run() { changed(); }\n'}, 'body change')
+    plan = repo / 'rewrites.tsv'
+    rows = {
+        'columns': 'old::Thing\tnew::Thing\textra\n',
+        'empty': 'old::Thing\t\n',
+        'invalid': 'old::Thing\tnew::Thing()\n',
+        'mixed-kind': 'old::Thing\tnew::Thing::\n',
+        'macro-kind': 'old::macro!\tnew::macro\n',
+        'conflict': 'old::Thing\tnew::Thing\nold::Thing\tother::Thing\n',
+        'kind-conflict': 'old::Thing\tnew::Thing\nold::Thing::\tnew::Thing::\n',
+        'cli-conflict': 'old::Thing\tnew::Thing\n',
+        'missing': '',
+    }
+    if mode != 'missing':
+        plan.write_text(rows[mode])
+    args = ['--rewrites-file', str(plan)]
+    if mode == 'cli-conflict':
+        args += ['--rewrite', 'old::Thing=other::Thing']
+    result = subprocess.run([sys.executable, CHECKER, 'HEAD', *args], cwd=repo,
+                            capture_output=True, text=True)
+    return (result.returncode == 2 and 'error:' in result.stderr
+            and 'Traceback' not in result.stderr), result.stderr.splitlines()[-1]
+
+
+def case_import_eof(repo: Path, mode='eof') -> tuple[bool, str]:
+    # An erased EOF import must retain its line for diff hunk coordinates.
+    before, after = 'use old::Thing;', 'use new::Thing;'
+    if mode == 'newline':
+        before += '\n'
+        after += '\n'
+    elif mode == 'blank-tail':
+        before += '\n\n'
+        after += '\n\n'
+    elif mode in {'mixed', 'body'}:
+        before += ' const VALUE: u32 = 42;'
+        after += ' const VALUE: u32 = ' + ('99' if mode == 'body' else '42') + ';'
+    elif mode == 'alias':
+        after = 'use new::Thing as Different;'
+    path = 'crates/app/src/lib.rs'
+    commit_tree(repo, {path: HELPER + before}, 'base')
+    commit_tree(repo, {path: HELPER + after}, 'EOF import')
+    code, out = run_checker(repo, '--rewrite', 'old::=new::')
+    return code == int(mode in {'body', 'alias'}) and 'residue:' in out, out.strip()
+
+
 def case_verified_consumers(repo: Path, kind='rerun'):
     package = '[package]\nname = "old"\nversion = "0.1.0"\n'
     old = 'crates/old/src/worker.rs'
@@ -1882,6 +2157,32 @@ def review_cases():
 
 
 CASES = review_cases() + [
+    (f'plan rewrite {mode}', lambda repo, mode=mode: case_plan_rewrite(repo, mode))
+    for mode in ('macro', 'macro-map', 'macro-body', 'macro-literal', 'macro-comment',
+                 'macro-space', 'macro-matcher', 'macro-wrong-crate', 'macro-unmoved',
+                 'macro-stale', 'macro-hygiene', 'macro-adjacent', 'macro-alias',
+                 'macro-crate', 'macro-map-nearmiss', 'macro-relative', 'macro-glob', 'macro-turbofish', 'macro-turbofish-body',
+                 'macro-metavar', 'macro-metavar-body',
+                 'moved', 'explicit-module', 'super', 'wrong-crate', 'outside-root', 'unmoved-path', 'stale-crate',
+                 'alias', 'body', 'include', 'include-body', 'include-alias', 'include-literal',
+                 'template', 'template-drift', 'template-existing', 'template-existing-unchanged', 'template-steal')
+] + [
+    (f'rewrite input {mode}', lambda repo, mode=mode: case_rewrite_input(repo, mode))
+    for mode in ('columns', 'empty', 'invalid', 'mixed-kind', 'macro-kind', 'conflict',
+                 'kind-conflict', 'cli-conflict', 'missing')
+] + [
+    (f'EOF import {mode}', lambda repo, mode=mode: case_import_eof(repo, mode))
+    for mode in ('eof', 'newline', 'blank-tail', 'mixed', 'body', 'alias')
+] + [
+    (f'item rewrite {mode}, file={from_file}',
+     lambda repo, mode=mode, from_file=from_file: case_item_rewrite(repo, mode, from_file))
+    for from_file in (False, True)
+    for mode in ('import', 'qualified', 'macro', 'macro-map', 'legacy-macro-map', 'hidden', 'raw',
+                 'prefix', 'simultaneous', 'duplicate-map', 'hidden-attribute', 'raw-alias',
+                 'longer', 'wrong-crate', 'child', 'glob', 'qualified-longer', 'qualified-wrong-crate',
+                 'qualified-child', 'alias', 'body', 'duplicate', 'drop', 'opaque', 'macro-body',
+                 'macro-longer', 'macro-map-body', 'spaced-child', 'spaced-crate', 'comment-child', 'comment-crate')
+] + [
     ('verified rerun source consumer', case_verified_consumers),
     ('verified dotted target dependency', lambda repo: case_verified_consumers(repo, 'target')),
 ] + [
