@@ -97,7 +97,7 @@ impl KnownItem for Vec4Vertex {
 }
 
 /// Per-instance transform for instanced mesh rendering. Matches
-/// the existing `generators::mesh_pipeline::MeshInstance` layout
+/// the existing `mesh::pipeline::MeshInstance` layout
 /// so legacy generators and graph primitives speak the same
 /// bytes. 32 bytes.
 ///
@@ -470,3 +470,6 @@ mod mesh_common_specs_drift {
     // `blob_rect_struct_is_16_bytes_for_channels_wire` in
     // primitives/blob_detect_ffi.rs.
 }
+
+#[path = "mesh_pipeline.rs"]
+pub mod pipeline;

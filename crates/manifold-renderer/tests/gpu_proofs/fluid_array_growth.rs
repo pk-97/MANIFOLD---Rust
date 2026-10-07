@@ -4,7 +4,7 @@ use bytemuck::pod_read_unaligned;
 use manifold_core::{Beats, Seconds};
 use manifold_gpu::GpuTextureFormat;
 use manifold_renderer::frame_status::FrameRenderStatus;
-use manifold_renderer::generators::mesh_common::MeshVertex;
+use manifold_renderer::mesh::MeshVertex;
 use manifold_renderer::gpu_encoder::GpuEncoder;
 use manifold_renderer::node_graph::physics::PhysicsStepScope;
 use manifold_renderer::node_graph::primitives::WaveShearMesh;

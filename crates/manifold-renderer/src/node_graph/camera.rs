@@ -18,7 +18,7 @@
 //! exposes helpers (`Camera::proj`, `Camera::view_proj`) that take the
 //! consumer-supplied aspect to build the projection.
 
-use crate::generators::mesh_pipeline::{look_at_rh, mat4_mul};
+use crate::mesh::pipeline::{look_at_rh, mat4_mul};
 
 /// Discriminator for the projection style. Carried in [`Camera::mode`] so
 /// consumers that have meaningfully different code paths (e.g. fluid scatter's

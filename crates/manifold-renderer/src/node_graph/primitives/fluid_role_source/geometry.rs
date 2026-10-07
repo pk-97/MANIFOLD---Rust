@@ -10,7 +10,7 @@ use ahash::AHashMap;
 use manifold_physics::TriangleMesh;
 
 use super::{CompoundPreparation, WiredPreparation};
-use crate::generators::mesh_common::MeshVertex;
+use crate::mesh::MeshVertex;
 use crate::generators::platonic_geometry::{platonic_mesh, platonic_points};
 use crate::node_graph::physics_mesh::{
     MeshSelection, load_compound_materials, prepare_colliders, transform_vertices,

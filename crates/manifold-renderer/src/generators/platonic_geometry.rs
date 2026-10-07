@@ -9,7 +9,7 @@ use std::sync::OnceLock;
 
 use bytemuck::Zeroable;
 
-use crate::generators::mesh_common::MeshVertex;
+use crate::mesh::MeshVertex;
 
 /// Number of triangle-list vertices in the largest Platonic solid mesh.
 /// The dodecahedron has twelve pentagonal faces, each triangulated as a fan.

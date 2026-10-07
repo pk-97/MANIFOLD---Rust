@@ -55,3 +55,10 @@ impl RtProbeScene {
         encoder.commit_and_wait_completed();
     }
 }
+
+/// Observe the first captured scene without exposing scene-family types in the engine.
+pub fn rt_probe_scene(runtime: &crate::preset_runtime::PresetRuntime) -> Option<&RtProbeScene> {
+    runtime.graph.nodes().find_map(|node| {
+        node.node.as_ref().as_any().downcast_ref::<super::RenderScene>()?.rt_probe_scene()
+    })
+}

@@ -5,7 +5,7 @@
 //! encoder snapshots each chunk, so a later worker publication cannot race a
 //! buffer that is still in flight.
 
-use crate::generators::mesh_common::MeshVertex;
+use crate::mesh::MeshVertex;
 use crate::gpu_encoder::GpuEncoder;
 use bytemuck::Zeroable;
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline, GpuDevice};

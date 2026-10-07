@@ -7,7 +7,7 @@
 
 #![allow(clippy::too_many_arguments)]
 
-use crate::generators::mesh_common::{MeshVertex, Vec4Vertex};
+use crate::mesh::{MeshVertex, Vec4Vertex};
 use crate::node_graph::freeze::codegen::{ENTRY, standalone_for_spec};
 use crate::node_graph::primitives::{
     MeshSpatialMask, MeshStaggerEnvelope, MorphMesh, RemapCutWeights, RemapMeshCut,

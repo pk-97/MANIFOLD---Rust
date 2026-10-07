@@ -8,7 +8,7 @@
 
 use manifold_gpu::GpuTextureFormat;
 use manifold_renderer::frame_status::FrameRenderStatus;
-use manifold_renderer::generators::mesh_common::MeshVertex;
+use manifold_renderer::mesh::MeshVertex;
 use manifold_renderer::gpu_encoder::GpuEncoder as RendererGpuEncoder;
 use manifold_renderer::node_graph::PrimitiveRegistry;
 use manifold_renderer::preset_context::PresetContext;
@@ -669,8 +669,7 @@ fn rt_dynamic_history_reset_and_resume() {
         .unwrap();
     let (_, reference_resets, fresh) = render_frame(&mut reference, 2, false);
     assert!(reference_resets > 0);
-    runtime
-        .rt_probe_scene()
+    manifold_renderer::node_graph::primitives::render_scene::rt_proof::rt_probe_scene(&runtime)
         .expect("settled RT frame must publish resident histories")
         .inject_history_sentinel(&h.device, f64::from(SENTINEL));
 

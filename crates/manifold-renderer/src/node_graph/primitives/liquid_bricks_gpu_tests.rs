@@ -1,7 +1,7 @@
 //! Sparse field proofs against independent dense gathers. The field oracle
 //! follows native ParticleMesher support and production solid/border semantics.
 use super::dense_source;
-use crate::generators::mesh_common::MeshVertex;
+use crate::mesh::MeshVertex;
 use crate::node_graph::bindings::Slot;
 use crate::node_graph::fluid_particles::{CellRange, FluidBlob, bin_counts};
 use crate::node_graph::freeze::codegen::ENTRY;

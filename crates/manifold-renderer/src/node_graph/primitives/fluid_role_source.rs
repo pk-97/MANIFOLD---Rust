@@ -8,7 +8,7 @@ use std::borrow::Cow;
 use std::path::PathBuf;
 use std::sync::{Arc, mpsc};
 
-use crate::generators::mesh_common::PLATONIC_SHAPES;
+use crate::mesh::PLATONIC_SHAPES;
 use crate::node_graph::effect_node::EffectNodeContext;
 use crate::node_graph::fluid_role::{FluidRole, FluidRoleKind, PreparedFluidGeometry};
 use crate::node_graph::mesh_source::MeshSource;

@@ -93,3 +93,5 @@ pub fn assemble_import_graph(path: &Path) -> Result<(EffectGraphDef, ImportRepor
     let summary = gltf_load::gltf_import_summary(path)?;
     build_import_graph(&summary, path)
 }
+
+mod migration;

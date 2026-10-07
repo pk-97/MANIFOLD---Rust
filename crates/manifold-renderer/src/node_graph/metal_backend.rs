@@ -1120,7 +1120,7 @@ mod array_buffer_tests {
         // ArrayType (size, align, specs, match_mode) so two
         // ArrayTypes with the same byte layout but different
         // Channels signatures get separate buffers.
-        ArrayType::of_known::<crate::generators::compute_common::Particle>()
+        ArrayType::of_known::<crate::particles::Particle>()
     }
 
     #[test]

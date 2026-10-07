@@ -21,18 +21,18 @@ impl PresetRuntime {
         let result = if !config.is_valid() {
             Err(SceneViewportError::InvalidConfiguration)
         } else if let Some(node) = resolved {
-            if node.node.type_id().as_str() == "node.render_scene" {
-                Ok(node.id)
-            } else {
-                Err(SceneViewportError::NotSceneRenderer)
-            }
+            Ok(node)
         } else {
             Err(SceneViewportError::TargetNotFound)
         };
         match result {
-            Ok(instance) => {
-                self.executor.set_scene_viewport(instance, config);
-                Ok(())
+            Ok(node) => {
+                if self.executor.set_scene_viewport(node.id, config, || node.node.viewport_pass()) {
+                    Ok(())
+                } else {
+                    self.clear_scene_viewport();
+                    Err(SceneViewportError::NotSceneRenderer)
+                }
             }
             Err(error) => {
                 self.clear_scene_viewport();
@@ -70,11 +70,6 @@ impl PresetRuntime {
 
     pub fn scene_viewport_errors(&self) -> &[String] {
         self.executor.scene_viewport_errors()
-    }
-
-    #[cfg(feature = "gpu-proofs")]
-    pub fn rt_probe_scene(&self) -> Option<&crate::node_graph::primitives::render_scene::rt_proof::RtProbeScene> {
-        self.graph.nodes().find_map(|node| node.node.rt_probe_scene())
     }
 
     #[cfg(feature = "gpu-proofs")]

@@ -25,7 +25,7 @@ mod gpu_tests {
         GpuTextureFormat, GpuTextureUsage,
     };
 
-    use crate::generators::mesh_common::MeshVertex;
+    use crate::mesh::MeshVertex;
     use crate::node_graph::freeze::codegen::standalone_for_spec;
     use crate::node_graph::primitives::{
         bend_mesh::BendMesh,
