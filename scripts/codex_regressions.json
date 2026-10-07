@@ -32,7 +32,7 @@
   "generator-fusion": {
     "triggers": ["crates/manifold-renderer/src/node_graph/", "crates/manifold-node-engine/src/", "crates/manifold-gpu/"],
     "kind": "gpu",
-    "source": "crates/manifold-node-engine/src/freeze/proof.rs",
+    "source": "crates/manifold-renderer/src/engine_contract_tests/freeze_proof.rs",
     "tests": ["fused_gain_chain_matches_unfused_within_tolerance", "oracle_catches_wrong_fusion"]
   }
 }
