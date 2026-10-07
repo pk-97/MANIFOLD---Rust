@@ -16,7 +16,9 @@ pub(super) mod array {
     ) -> Result<[T; N], D::Error> {
         struct FixedArray<T, const N: usize>(std::marker::PhantomData<T>);
         impl<'de, T: Deserialize<'de>, const N: usize> Visitor<'de> for FixedArray<T, N> {
-            type Value = [T; N];
+            // Keep large physics arrays off the nested deserializer frames.
+            // Materialize the inline array only after the visitor returns.
+            type Value = Vec<T>;
             fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
                 write!(formatter, "exactly {N} physics input slots")
             }
@@ -35,11 +37,12 @@ pub(super) mod array {
                 if sequence.next_element::<serde::de::IgnoredAny>()?.is_some() {
                     return Err(A::Error::invalid_length(N + 1, &self));
                 }
-                values
-                    .try_into()
-                    .map_err(|_| A::Error::custom("physics array length changed"))
+                Ok(values)
             }
         }
-        deserializer.deserialize_seq(FixedArray(std::marker::PhantomData))
+        deserializer
+            .deserialize_seq(FixedArray::<T, N>(std::marker::PhantomData))?
+            .try_into()
+            .map_err(|_| D::Error::custom("physics array length changed"))
     }
 }
