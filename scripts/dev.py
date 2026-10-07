@@ -54,6 +54,8 @@ VERBS = [
     ("Landing and gates",
      "move-check", "move_identity_check.py", "prove a commit is a pure code move"),
     ("Landing and gates",
+     "test-census", "test_census.py", "record and compare test identities across crate moves"),
+    ("Landing and gates",
      "crate-closure", "crate_closure.py",
      "renderer crate-split census: `closure` sizes the engine hub, `seams` lists hub->family reaches"),
     ("Landing and gates",
