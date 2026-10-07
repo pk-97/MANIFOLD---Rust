@@ -2,29 +2,29 @@
 //! CPU `FluidRole` wire.  The node has no solver state, native handles, timing,
 //! or rendering responsibilities.
 
-mod geometry;
+pub mod geometry;
 
 use std::borrow::Cow;
 use std::path::PathBuf;
 use std::sync::{Arc, mpsc};
 
-use manifold_node_engine::mesh::PLATONIC_SHAPES;
-use manifold_node_engine::exec::effect_node::EffectNodeContext;
-use manifold_node_engine::water::fluid_role::{FluidRole, FluidRoleKind, PreparedFluidGeometry};
-use manifold_node_engine::scene::mesh_source::MeshSource;
-use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
-use manifold_node_engine::scene::physics_mesh::{MeshSelection, PART_PORTS, parse_compound_materials};
-use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::scene::transform::Transform;
+use crate::mesh::PLATONIC_SHAPES;
+use crate::exec::effect_node::EffectNodeContext;
+use crate::water::fluid_role::{FluidRole, FluidRoleKind, PreparedFluidGeometry};
+use crate::scene::mesh_source::MeshSource;
+use crate::parameters::{ParamDef, ParamType, ParamValue};
+use crate::scene::physics_mesh::{MeshSelection, PART_PORTS, parse_compound_materials};
+use crate::primitive::Primitive;
+use crate::scene::transform::Transform;
 use geometry::{GeometryMode, prepare_geometry, prepare_wired_geometry};
 
 const GEOMETRY_MODES: &[&str] = &["Collision Proxy", "Closed Mesh"];
 const FLUID_ROLE_KINDS: &[&str] = &["Initial Fill", "Inflow", "Outflow", "Collider"];
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct CompoundPreparation {
-    pub(crate) materials: [Option<i32>; 64],
-    pub(crate) part_transforms: [Transform; 64],
+pub struct CompoundPreparation {
+    pub materials: [Option<i32>; 64],
+    pub part_transforms: [Transform; 64],
 }
 
 pub(crate) const MESH_PORTS: [&str; 64] = [
@@ -39,13 +39,13 @@ pub(crate) const MESH_PORTS: [&str; 64] = [
 ];
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct WiredPreparation {
-    pub(crate) sources: [Option<MeshSource>; 64],
-    pub(crate) part_transforms: [Transform; 64],
+pub struct WiredPreparation {
+    pub sources: [Option<MeshSource>; 64],
+    pub part_transforms: [Transform; 64],
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(super) struct PreparationKey {
+pub struct PreparationKey {
     path: String,
     selection: MeshSelection,
     shape: u32,
@@ -78,7 +78,7 @@ impl PreparationKey {
     }
 }
 
-manifold_node_engine::primitive! {
+crate::primitive! {
     name: FluidRoleSource,
     type_id: "node.fluid_role_source",
     purpose: "Prepare one built-in or imported closed volume as a CPU FluidRole wire. Collision Proxy cooks reusable Box3D hulls; Closed Mesh preserves the exact indexed surface after exact-coordinate welding and validates it as a closed volume. Live transform, enabled, velocity, inheritance, and friction controls do not recook geometry.",
@@ -289,10 +289,10 @@ impl Primitive for FluidRoleSource {
 
     fn source_asset_identity(
         &self,
-        _: &manifold_node_engine::exec::effect_node::ParamValues,
-    ) -> manifold_node_engine::scene::source_asset::SourceAssetIdentity<'_> {
+        _: &crate::exec::effect_node::ParamValues,
+    ) -> crate::scene::source_asset::SourceAssetIdentity<'_> {
         // Native take preflight compares the complete accepted role mesh.
-        manifold_node_engine::scene::source_asset::SourceAssetIdentity::PreparedGeometry
+        crate::scene::source_asset::SourceAssetIdentity::PreparedGeometry
     }
 
     fn warmup_pending(&self) -> bool {
@@ -368,7 +368,7 @@ impl Primitive for FluidRoleSource {
 
         // Historical samples update live controls against the last prepared
         // source. Setup edits are discrete and must not recook past geometry.
-        if manifold_node_engine::water::physics::authored_sample_only() {
+        if crate::water::physics::authored_sample_only() {
             self.publish_role(
                 ctx,
                 role,
@@ -522,7 +522,7 @@ impl Primitive for FluidRoleSource {
         if let Some(rx) = &self.pending_geometry {
             // Offline waits for the preparation, so the liquid's first tick
             // never depends on how fast the worker ran.
-            let received = if manifold_node_engine::water::physics::offline_simulation() {
+            let received = if crate::water::physics::offline_simulation() {
                 rx.recv().map_err(|_| mpsc::TryRecvError::Disconnected)
             } else {
                 rx.try_recv()
@@ -599,8 +599,8 @@ impl FluidRoleSource {
         ctx.error(error);
         ctx.mark_outputs_pending();
         if let Some(gpu) = ctx.gpu.as_deref_mut() {
-            gpu.merge_frame_status(manifold_node_engine::runtime::frame_status::FrameRenderStatus::Failed(
-                manifold_node_engine::runtime::frame_status::FrameRenderFailure::InvalidGeometry,
+            gpu.merge_frame_status(crate::runtime::frame_status::FrameRenderStatus::Failed(
+                crate::runtime::frame_status::FrameRenderFailure::InvalidGeometry,
             ));
         }
     }
@@ -675,7 +675,7 @@ fn resolve_compound(
     Ok(Some(compound))
 }
 
-fn default_selection(collider_parts: u32) -> MeshSelection {
+pub fn default_selection(collider_parts: u32) -> MeshSelection {
     MeshSelection {
         mesh: -1,
         primitive: -1,
@@ -850,24 +850,15 @@ fn resolve_selection(ctx: &EffectNodeContext<'_, '_>) -> Result<MeshSelection, S
 #[cfg(test)]
 mod tests {
     use super::*;
-    use manifold_node_engine::exec::backend::Backend;
-    use manifold_node_engine::bindings::{NodeInputs, NodeOutputs, Slot};
-    use manifold_node_engine::exec::effect_node::{EffectNodeContext, FrameTime, ParamValues};
-    use manifold_node_engine::exec::execution_plan::ResourceId;
-    use manifold_node_engine::parameters::TableData;
-    use manifold_node_engine::ports::PortType;
-    use manifold_node_engine::primitive::PrimitiveSpec;
-    use manifold_node_engine::exec::backend::MockBackend;
-    use manifold_core::{Beats, Seconds};
-
-    fn frame_time() -> FrameTime {
-        FrameTime {
-            beats: Beats(0.0),
-            seconds: Seconds(0.0),
-            delta: Seconds(1.0 / 60.0),
-            frame_count: 0,
-        }
-    }
+    use crate::exec::backend::Backend;
+    use crate::bindings::Slot;
+    use crate::exec::effect_node::ParamValues;
+    use crate::exec::execution_plan::ResourceId;
+    use crate::parameters::TableData;
+    use crate::ports::PortType;
+    use crate::primitive::PrimitiveSpec;
+    use crate::exec::backend::MockBackend;
+    use crate::testkit::fluid_role_source::{run_inputs, test_slots, settle_inputs};
 
     fn run_once(
         primitive: &mut FluidRoleSource,
@@ -878,55 +869,6 @@ mod tests {
     ) -> bool {
         let input_bindings: &[(&'static str, Slot)] = &[("transform", transform_slot)];
         run_inputs(primitive, backend, input_bindings, output_slot, params)
-    }
-
-    fn run_inputs(
-        primitive: &mut FluidRoleSource,
-        backend: &mut MockBackend,
-        input_bindings: &[(&'static str, Slot)],
-        output_slot: Slot,
-        params: &ParamValues,
-    ) -> bool {
-        let output_bindings: &[(&'static str, Slot)] = &[("role", output_slot)];
-        let mut scalar_scratch = Vec::new();
-        let mut camera_scratch = Vec::new();
-        let mut light_scratch = Vec::new();
-        let mut material_scratch = Vec::new();
-        let mut transform_scratch = Vec::new();
-        let mut atmosphere_scratch = Vec::new();
-        let mut render_mode_scratch = Vec::new();
-        let mut object_scratch = Vec::new();
-        let mut role_scratch = Vec::new();
-        let inputs = NodeInputs::new(input_bindings, backend, &[]);
-        let outputs = NodeOutputs::new(
-            output_bindings,
-            backend,
-            &mut scalar_scratch,
-            &mut camera_scratch,
-            &mut light_scratch,
-            &mut material_scratch,
-            &mut transform_scratch,
-            &mut atmosphere_scratch,
-            &mut render_mode_scratch,
-            &mut object_scratch,
-        )
-        .with_fluid_role_writes(&mut role_scratch);
-        let pending = {
-            let mut ctx = EffectNodeContext::new(frame_time(), params, inputs, outputs, None);
-            primitive.run(&mut ctx);
-            ctx.outputs_pending
-        };
-        for (slot, value) in role_scratch.drain(..) {
-            backend.set_fluid_role(slot, value);
-        }
-        pending
-    }
-
-    fn test_slots(backend: &mut MockBackend) -> (Slot, Slot) {
-        let transform_slot = backend.acquire(ResourceId(0), PortType::Transform, None, (0, 0));
-        let output_slot = backend.acquire(ResourceId(1), PortType::FluidRole, None, (0, 0));
-        backend.set_transform(transform_slot, Transform::default());
-        (transform_slot, output_slot)
     }
 
     fn settle(
@@ -943,23 +885,6 @@ mod tests {
             output_slot,
             params,
         )
-    }
-
-    fn settle_inputs(
-        primitive: &mut FluidRoleSource,
-        backend: &mut MockBackend,
-        inputs: &[(&'static str, Slot)],
-        output_slot: Slot,
-        params: &ParamValues,
-    ) -> FluidRole {
-        for _ in 0..200 {
-            let pending = run_inputs(primitive, backend, inputs, output_slot, params);
-            if !pending && let Some(role) = backend.fluid_role(output_slot) {
-                return role;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        panic!("fluid role source preparation did not settle");
     }
 
     #[test]
@@ -1002,7 +927,7 @@ mod tests {
         );
         backend.set_mesh_source(mesh, MeshSource::Cube { size: 3.0 });
         {
-            let _sample = manifold_node_engine::water::physics::PhysicsAuthoredSampleScope::new();
+            let _sample = crate::water::physics::PhysicsAuthoredSampleScope::new();
             // Source slots may be unbound in the CPU-only historical pass.
             let historical = [("transform", transform), ("mesh_0", missing)];
             assert!(!run_inputs(
@@ -1211,80 +1136,4 @@ mod tests {
         assert!(primitive.last_key.is_none());
     }
 
-    #[test]
-    fn scene_physics_fluid_role_source_compound_recooks_parts_but_reuses_body_pose() {
-        let (path, compound) = geometry::tests::write_two_material_cube_fixture();
-        let mut backend = MockBackend::new();
-        let (transform_slot, output_slot) = test_slots(&mut backend);
-        let part_zero = backend.acquire(ResourceId(2), PortType::Transform, None, (0, 0));
-        let part_one = backend.acquire(ResourceId(3), PortType::Transform, None, (0, 0));
-        let source = backend.acquire(ResourceId(4), PortType::Transform, None, (0, 0));
-        backend.set_transform(part_zero, compound.part_transforms[0]);
-        backend.set_transform(part_one, compound.part_transforms[1]);
-        backend.set_transform(
-            source,
-            Transform {
-                pos: [0.0, 2.0, 0.0],
-                ..Transform::default()
-            },
-        );
-        let inputs = [
-            ("transform", transform_slot),
-            ("part_0", part_zero),
-            ("part_1", part_one),
-            ("source_transform", source),
-        ];
-        let mut params = ParamValues::default();
-        params.insert(
-            Cow::Borrowed("path"),
-            ParamValue::String(Arc::new(path.to_string_lossy().into_owned())),
-        );
-        params.insert(Cow::Borrowed("geometry"), ParamValue::Enum(1));
-        params.insert(Cow::Borrowed("recenter"), ParamValue::Bool(false));
-        params.insert(
-            Cow::Borrowed("compound_materials"),
-            ParamValue::Table(Arc::new(
-                TableData::new(vec![vec![0.0, 0.0], vec![1.0, 1.0]]).unwrap(),
-            )),
-        );
-        let mut primitive = FluidRoleSource::new();
-        let first = settle_inputs(&mut primitive, &mut backend, &inputs, output_slot, &params);
-        let min_y = first.geometry.meshes[0]
-            .vertices
-            .iter()
-            .map(|v| v[1])
-            .fold(f32::INFINITY, f32::min);
-        assert_eq!(
-            min_y, 1.5,
-            "source transform applies to the assembled compound"
-        );
-        backend.set_transform(
-            transform_slot,
-            Transform {
-                pos: [3.0, 0.0, 0.0],
-                ..Transform::default()
-            },
-        );
-        let moved_body = settle_inputs(&mut primitive, &mut backend, &inputs, output_slot, &params);
-        assert!(Arc::ptr_eq(&first.geometry, &moved_body.geometry));
-        assert_eq!(moved_body.transform.pos, [3.0, 0.0, 0.0]);
-        for (slot, mut transform) in [
-            (part_zero, compound.part_transforms[0]),
-            (part_one, compound.part_transforms[1]),
-        ] {
-            transform.pos[0] += 1.0;
-            backend.set_transform(slot, transform);
-        }
-        let moved_parts =
-            settle_inputs(&mut primitive, &mut backend, &inputs, output_slot, &params);
-        assert!(!Arc::ptr_eq(&first.geometry, &moved_parts.geometry));
-        let min_x = moved_parts.geometry.meshes[0]
-            .vertices
-            .iter()
-            .map(|v| v[0])
-            .fold(f32::INFINITY, f32::min);
-        assert_eq!(min_x, 0.5, "child transforms alter the prepared geometry");
-        manifold_fluids::validate_mesh(&moved_parts.geometry.meshes[0]).unwrap();
-        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
-    }
 }

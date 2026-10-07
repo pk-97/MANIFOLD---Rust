@@ -149,6 +149,6 @@ pub mod blob_bounds;
 mod face_grid_extent_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod face_grid_tests;
-mod fluid_role_source;
+pub mod fluid_role_source;
 mod grid_to_matter;
 mod rigid_body;

@@ -1,9 +1,9 @@
 //! Exact bounds for indexed blob gathers. Shared by the field and its sparse
 //! schedule; spatial bins never impose a radius or quality limit.
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuComputePipeline};
-use manifold_node_engine::exec::effect_node::{EffectNodeContext, ParamValues};
-use manifold_node_engine::water::fluid_particles::FluidBlob;
-use manifold_node_engine::primitive::Primitive;
+use crate::exec::effect_node::{EffectNodeContext, ParamValues};
+use crate::water::fluid_particles::FluidBlob;
+use crate::primitive::Primitive;
 
 const SHADER: &str = include_str!("shaders/blob_bounds.wgsl");
 const THREADS: u32 = 256;
@@ -19,7 +19,7 @@ struct BoundsParams {
     _pad2: u32,
 }
 
-manifold_node_engine::primitive! {
+crate::primitive! {
     name: BlobBounds,
     type_id: "node.blob_bounds",
     purpose: "Reduce surface blobs to two exact conservative bounds: the largest kernel axis, and the largest 1.5-axis support plus centre displacement from the sorted particle. A barriered maximum reduction; no size cap or atomic operations.",
@@ -98,7 +98,7 @@ mod tests {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
     use super::*;
-    use manifold_node_engine::testkit::liquid_surface::{Harness, read};
+    use crate::testkit::liquid_surface::{Harness, read};
 
     fn reference(blobs: &[FluidBlob]) -> [u32; 2] {
         let mut bounds = [0.0f32; 2];
@@ -230,13 +230,13 @@ pub fn wire_blob_bounds(def: &mut EffectGraphDef) -> bool {
 
 
 inventory::submit! {
-    manifold_node_engine::load::migration::GraphMigration {
+    crate::load::migration::GraphMigration {
         name: "wire_blob_bounds",
-        stage: manifold_node_engine::load::migration::MigrationStage::AfterFlatten,
+        stage: crate::load::migration::MigrationStage::AfterFlatten,
         order: 400,
         apply: wire_blob_bounds,
     }
 }
 
-#[cfg(any(test, feature = "gpu-proofs"))]
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 mod extent;

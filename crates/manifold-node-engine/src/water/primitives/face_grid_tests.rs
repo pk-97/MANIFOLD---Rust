@@ -4,16 +4,16 @@
 //! positions, comes out of its component atom as that field at the seam's
 //! face positions (`liquid::grid::face_position`).
 
-use manifold_node_engine::water::primitives::face_sample_component::FaceSampleComponent;
-use manifold_node_engine::testkit::liquid_surface::{Harness, params, read};
-use manifold_node_engine::water::primitives::matter_face_component::MatterFaceComponent;
-use manifold_node_engine::exec::effect_node::ParamValues;
-use manifold_node_engine::water::fluid_particles::FaceSample;
-use manifold_node_engine::water::liquid::grid::{face_coords, face_len, face_position};
-use manifold_node_engine::water::liquid::lattice::PADDING_NODES;
-use manifold_node_engine::water::matter::MatterGridNode;
-use manifold_node_engine::parameters::ParamValue;
-use manifold_node_engine::primitive::Primitive;
+use crate::water::primitives::face_sample_component::FaceSampleComponent;
+use crate::testkit::liquid_surface::{Harness, params, read};
+use crate::water::primitives::matter_face_component::MatterFaceComponent;
+use crate::exec::effect_node::ParamValues;
+use crate::water::fluid_particles::FaceSample;
+use crate::water::liquid::grid::{face_coords, face_len, face_position};
+use crate::water::liquid::lattice::PADDING_NODES;
+use crate::water::matter::MatterGridNode;
+use crate::parameters::ParamValue;
+use crate::primitive::Primitive;
 
 /// Unequal sides, so a swapped axis shows.
 const N: [u32; 3] = [6, 5, 4];
@@ -62,7 +62,7 @@ fn component_params(nodes: [u32; 3], axis: u32) -> ParamValues {
 fn run_component<P: Primitive>(
     harness: &mut Harness,
     prim: &mut P,
-    input: (&'static str, manifold_node_engine::bindings::Slot),
+    input: (&'static str, crate::bindings::Slot),
     len: usize,
     step_params: &ParamValues,
 ) -> Vec<f32> {

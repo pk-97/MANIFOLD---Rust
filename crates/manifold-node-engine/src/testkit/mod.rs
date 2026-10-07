@@ -71,3 +71,5 @@ pub(crate) mod document_fixtures;
 
 #[cfg(feature = "gpu-proofs")]
 pub mod gpu_harness;
+
+pub mod fluid_role_source;

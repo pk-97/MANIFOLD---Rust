@@ -39,7 +39,7 @@ impl Default for ReadbackRequest {
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod tests {
     use super::*;
-    use manifold_node_engine::gpu::{gpu_encoder::GpuEncoder, render_target::RenderTarget};
+    use crate::gpu::{gpu_encoder::GpuEncoder, render_target::RenderTarget};
     use manifold_gpu::GpuTextureFormat;
 
     #[test]
@@ -105,7 +105,7 @@ impl ReadbackRequest {
     /// try_read() on the next frame to consume the result.
     pub fn submit(
         &mut self,
-        gpu: &mut manifold_node_engine::gpu::gpu_encoder::GpuEncoder,
+        gpu: &mut crate::gpu::gpu_encoder::GpuEncoder,
         texture: &manifold_gpu::GpuTexture,
         width: u32,
         height: u32,

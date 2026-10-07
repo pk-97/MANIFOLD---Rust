@@ -490,7 +490,6 @@ pub use magnitude_db::MagnitudeDb;
 pub use lut1d::ColorLut;
 pub use math::{MATH_OPS, Math};
 pub use matcap_two_tone::MatcapTwoTone;
-pub use grid_to_matter::GridToMatter;
 pub use particles_to_copies::ParticlesToCopies;
 pub use zero_array::ZeroArray;
 pub use melt_mesh::MeltMesh;

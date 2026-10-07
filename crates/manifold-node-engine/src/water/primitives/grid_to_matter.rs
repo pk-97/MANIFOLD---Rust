@@ -7,14 +7,14 @@ use std::borrow::Cow;
 
 use manifold_gpu::GpuBinding;
 
-use manifold_node_engine::exec::effect_node::EffectNodeContext;
-use manifold_node_engine::water::fluid_role::MAX_FLUID_ROLES;
-use manifold_node_engine::water::liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
-use manifold_node_engine::water::liquid::lattice::LiquidLattice;
-use manifold_node_engine::water::matter::{MatterGridNode, MatterPoint, REACTION_WORDS, grid_bytes, lattice_nodes, momentum_unit_fits};
-use manifold_node_engine::parameters::{ParamDef, ParamType, ParamValue};
-use manifold_node_engine::primitive::Primitive;
-use manifold_node_engine::primitives::standalone_pipeline::{active_elements, standalone_pipeline};
+use crate::exec::effect_node::EffectNodeContext;
+use crate::water::fluid_role::MAX_FLUID_ROLES;
+use crate::water::liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE, LiquidBody, LiquidShape};
+use crate::water::liquid::lattice::LiquidLattice;
+use crate::water::matter::{MatterGridNode, MatterPoint, REACTION_WORDS, grid_bytes, lattice_nodes, momentum_unit_fits};
+use crate::parameters::{ParamDef, ParamType, ParamValue};
+use crate::primitive::Primitive;
+use crate::primitives::standalone_pipeline::{active_elements, standalone_pipeline};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -41,7 +41,7 @@ struct ToMatterUniforms {
     _pad0: u32,
 }
 
-manifold_node_engine::primitive! {
+crate::primitive! {
     name: GridToMatter,
     type_id: "node.grid_to_matter",
     purpose: "Transfer the resolved matter grid back to its points (MLS-MPM grid-to-particle): each live point gathers velocity and its affine velocity field from its 27-node stencil, blends toward a FLIP update by Liveliness, moves with the gathered velocity and updates its volume ratio. A point that ends inside a collider steps out onto its surface and loses the velocity pointing into it; a dynamic body gains the momentum the point lost, added to its reaction words. A point leaving the lattice is removed.",
@@ -105,7 +105,7 @@ manifold_node_engine::primitive! {
     // settles it.
     fusion_kind: Boundary,
     boundary_reason: Blocked,
-    wgsl_body: include_str!("../../../../manifold-node-engine/src/water/primitives/shaders/grid_to_matter_body.wgsl"),
+    wgsl_body: include_str!("shaders/grid_to_matter_body.wgsl"),
     input_access: [Coincident, BufferGather, BufferGather, BufferGather, BufferGather, BufferGather],
     wgsl_includes: [LIQUID_POSE, LIQUID_COLLIDER],
     atomic_outputs: ["reaction_out"],
@@ -115,7 +115,7 @@ impl Primitive for GridToMatter {
     fn array_output_capacity(
         &self,
         port_name: &str,
-        _params: &manifold_node_engine::exec::effect_node::ParamValues,
+        _params: &crate::exec::effect_node::ParamValues,
         input_capacities: &[(&str, u32)],
     ) -> Option<u32> {
         let input = match port_name {
@@ -241,7 +241,7 @@ mod tests {
 
     #[test]
     fn grid_to_matter_generates_a_gathering_point_kernel() {
-        let wgsl = manifold_node_engine::freeze::codegen::standalone_for_spec::<GridToMatter>()
+        let wgsl = crate::freeze::codegen::standalone_for_spec::<GridToMatter>()
             .expect("grid_to_matter codegen");
         let module = naga::front::wgsl::parse_str(&wgsl).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&wgsl)));
         naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
@@ -259,9 +259,9 @@ mod tests {
 
     #[test]
     fn grid_to_matter_is_a_boundary_for_its_reaction_words() {
-        use manifold_node_engine::exec::effect_node::EffectNode;
+        use crate::exec::effect_node::EffectNode;
         let node = GridToMatter::new();
-        assert_eq!(node.fusion_kind(), manifold_node_engine::freeze::classify::FusionKind::Boundary);
+        assert_eq!(node.fusion_kind(), crate::freeze::classify::FusionKind::Boundary);
         assert_eq!(node.atomic_outputs(), &["reaction_out"]);
     }
 
@@ -269,11 +269,11 @@ mod tests {
     /// f64 reference uses.
     #[test]
     fn grid_to_matter_body_pins_the_j_bound() {
-        let body = include_str!("../../../../manifold-node-engine/src/water/primitives/shaders/grid_to_matter_body.wgsl");
-        assert_eq!(manifold_node_engine::water::matter::COHESIVE_J_MAX, 2.0);
+        let body = include_str!("shaders/grid_to_matter_body.wgsl");
+        assert_eq!(crate::water::matter::COHESIVE_J_MAX, 2.0);
         assert!(body.contains("select(2.0, 1.0, cohesion <= 0.0)"), "{body}");
     }
 }
 
-#[cfg(any(test, feature = "gpu-proofs"))]
+#[cfg(any(test, feature = "testkit", feature = "gpu-proofs"))]
 mod extent;
