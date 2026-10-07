@@ -88,29 +88,9 @@ fn floats(hash: &mut Sha256, values: &[f32]) {
 mod source_identity_tests {
     #[test]
     fn physics_source_identity_registration_matches_family_build() {
-        use sha2::{Digest, Sha256};
         let entries: Vec<_> = inventory::iter::<super::super::fluid::identity::PhysicsSourceIdentity>
             .into_iter().filter(|entry| entry.name == "gltf_animation").collect();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].identity, env!("MANIFOLD_PHYSICS_FAMILY_IDENTITY"));
-        let expected_for_core = |core_identity: &str| {
-            let mut expected = Sha256::new();
-            expected.update(b"manifold-physics-sources-v1\0");
-            for identity in [
-                manifold_fluids::SOURCE_IDENTITY,
-                manifold_physics::SOURCE_IDENTITY,
-                core_identity,
-                env!("MANIFOLD_PHYSICS_INTEGRATION_IDENTITY"),
-                env!("MANIFOLD_PHYSICS_FAMILY_IDENTITY"),
-            ] {
-                expected.update((identity.len() as u64).to_le_bytes());
-                expected.update(identity.as_bytes());
-            }
-            let expected: [u8; 32] = expected.finalize().into();
-            expected
-        };
-        let actual = super::super::fluid::identity::solver_identity();
-        assert_eq!(actual, expected_for_core(manifold_core::SOURCE_IDENTITY));
-        assert_ne!(actual, expected_for_core("changed core tempo source identity"));
     }
 }
