@@ -6,11 +6,11 @@
 //! surface of amplitude 2 cells and wavelength 16.
 
 use super::crossing_distance::CrossingDistance;
-use super::liquid_surface_tests::{Harness, params};
+use crate::testkit::liquid_surface::{Harness, params};
 use super::nearest_crossing::NearestCrossing;
 use super::surface_crossings::SurfaceCrossings;
 use super::whitewater_cpu::Grid;
-use super::whitewater_grid_tests::run;
+use crate::testkit::water_codegen::run;
 use crate::node_graph::bindings::Slot;
 use crate::node_graph::effect_node::ParamValues;
 use crate::node_graph::whitewater::{SPREAD_STEPS, SurfaceCrossing};

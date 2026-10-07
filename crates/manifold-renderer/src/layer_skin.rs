@@ -304,7 +304,7 @@ mod tests {
             gpu.clear_texture(&target.texture, 0.75, 0.0, 0.0, 1.0);
         }
         encoder.commit_and_wait_completed();
-        let raw = crate::headless_readback::readback_raw_halves(&device, registry.get(&id), 4, 4);
+        let raw = crate::testkit::gpu::readback_raw_halves(&device, registry.get(&id), 4, 4);
         let red = half::f16::from_bits(u16::from_le_bytes([raw[0], raw[1]])).to_f32();
         assert!((red - 0.25).abs() < 0.001, "published frame changed when source was reused: {red}");
     }

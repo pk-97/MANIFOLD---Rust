@@ -206,7 +206,7 @@ mod tests {
 
     #[test]
     fn mix_arrays_two_node_graph_reports_one_fusion_region() {
-        use crate::node_graph::substeps::test_nodes::register_substep_test_nodes;
+        use crate::testkit::substep_nodes::register_substep_test_nodes;
         use crate::node_graph::{PrimitiveRegistry, fusion_report};
         use manifold_core::effect_graph_def::EffectGraphDef;
 

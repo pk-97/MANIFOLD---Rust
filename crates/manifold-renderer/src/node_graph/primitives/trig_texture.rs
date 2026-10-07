@@ -222,13 +222,13 @@ mod gpu_tests {
         let in_target = RenderTarget::new(&device, w, h, format, "trig-in");
         let ftex_target = RenderTarget::new(&device, w, h, format, "trig-ftex");
         let out_target = RenderTarget::new(&device, w, h, format, "trig-out");
-        crate::clear_texture_committed(
+        crate::testkit::gpu::clear_texture_committed(
             &device,
             &in_target.texture,
             [in_val as f64, in_val as f64, in_val as f64, 1.0],
             "trig-in-clear",
         );
-        crate::clear_texture_committed(
+        crate::testkit::gpu::clear_texture_committed(
             &device,
             &ftex_target.texture,
             [freq_tex_val as f64, 0.0, 0.0, 1.0],
@@ -288,13 +288,13 @@ mod gpu_tests {
         let in_target = RenderTarget::new(&device, w, h, format, "trig-in");
         let ptex_target = RenderTarget::new(&device, w, h, format, "trig-ptex");
         let out_target = RenderTarget::new(&device, w, h, format, "trig-out");
-        crate::clear_texture_committed(
+        crate::testkit::gpu::clear_texture_committed(
             &device,
             &in_target.texture,
             [in_val as f64, in_val as f64, in_val as f64, 1.0],
             "trig-in-clear",
         );
-        crate::clear_texture_committed(
+        crate::testkit::gpu::clear_texture_committed(
             &device,
             &ptex_target.texture,
             [phase_tex_val as f64, 0.0, 0.0, 1.0],

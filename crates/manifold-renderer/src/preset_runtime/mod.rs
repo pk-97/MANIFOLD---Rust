@@ -51,7 +51,7 @@ use errors::record_chain_error;
 mod bindings;
 use bindings::{StringBindingResolution, def_string_param_value, RelightParamWrite, build_relight_writes};
 
-mod segments;
+pub(crate) mod segments;
 pub use segments::{prewarm_chain_segments, prewarm_project_chain_segments};
 pub use crate::node_graph::freeze::install::prewarm_worker_pending_count;
 use segments::{SegmentMember, classify_segment_member, segment_run, build_segment_cards};
@@ -63,20 +63,20 @@ use build::{assign_texture2d_slots, compute_topology_hash};
 
 mod groups;
 use groups::{chain_active_effects, close_mix_group, validate_mask_groups, OpenGroup};
-mod physics_sampling;
-mod physics_impulses;
+pub(crate) mod physics_sampling;
+pub(crate) mod physics_impulses;
 mod scene_impulses;
 pub use scene_impulses::SceneImpulseDiagnostics;
 pub use physics_impulses::{CapturedSceneImpulse, PreparedSceneImpulse};
 mod physics_carry;
-mod physics_sources;
+pub(crate) mod physics_sources;
 mod physics_source_runtime;
 mod physics_source_controls;
 mod physics_source_state;
 mod physics_source_chain;
 #[cfg(test)]
 mod physics_source_state_tests;
-mod convert_heal;
+pub(crate) mod convert_heal;
 mod math_view;
 mod math_view_events;
 mod lifecycle;
@@ -98,7 +98,7 @@ mod instrumentation;
 mod scene_viewport;
 mod modifier_preview;
 mod modifier_runtime;
-mod gpu_flip_surface;
+pub(crate) mod gpu_flip_surface;
 pub use modifier_preview::{ModifierPreviewContext, ModifierPreviewError};
 
 #[cfg(all(test, feature = "gpu-proofs"))]
@@ -145,44 +145,20 @@ mod chain_error_tests;
 #[path = "tests/amount_zero_passthrough.rs"]
 mod amount_zero_passthrough_tests;
 
-#[cfg(test)]
-#[path = "tests/generator_runtime.rs"]
-mod generator_runtime_tests;
-#[cfg(all(test, feature = "gpu-proofs"))]
-#[path = "tests/array_buffers.rs"]
-mod array_buffers_tests;
 
 #[cfg(test)]
 #[path = "tests/trigger_initialization.rs"]
 mod trigger_initialization;
 
-#[cfg(test)]
-#[path = "tests/bool_convert_heal.rs"]
-mod bool_convert_heal_tests;
 
-#[cfg(test)]
-#[path = "tests/layer_skin.rs"]
-mod layer_skin_tests;
 
-#[cfg(all(test, feature = "gpu-proofs"))]
-#[path = "tests/chain_fusion.rs"]
-mod chain_fusion_tests;
 
 #[cfg(test)]
 #[path = "tests/segment_prewarm.rs"]
 mod segment_prewarm_tests;
 
-#[cfg(test)]
-#[path = "tests/bound_param_survives_rebuild.rs"]
-mod bound_param_survives_rebuild_tests;
 
-#[cfg(test)]
-#[path = "tests/modifier_events.rs"]
-mod modifier_events_tests;
 
-#[cfg(test)]
-#[path = "tests/math_view.rs"]
-mod math_view_tests;
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 #[path = "tests/blob_grain_probe.rs"]

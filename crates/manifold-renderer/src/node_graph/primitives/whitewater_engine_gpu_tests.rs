@@ -1,7 +1,7 @@
 //! BUG-g75v.7: engine value and fusion proofs, 8³ CPU-proven extents only.
-use super::liquid_surface_tests::{params, read, Harness};
-use super::whitewater_emitter_gpu_tests::{fused, member};
-use super::whitewater_grid_tests::run;
+use crate::testkit::liquid_surface::{params, read, Harness};
+use crate::testkit::water_codegen::{fused, member};
+use crate::testkit::water_codegen::run;
 use super::{
     advect_whitewater::AdvectWhitewater, offset_lattice::OffsetLattice,
     upwind_distance::UpwindDistance,

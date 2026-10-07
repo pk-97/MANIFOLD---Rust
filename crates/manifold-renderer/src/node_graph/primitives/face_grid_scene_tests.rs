@@ -9,7 +9,7 @@ use manifold_gpu::{GpuBuffer, GpuTextureFormat};
 use super::divide_by_value::DivideByValue;
 use super::dot_products::DotProducts;
 use super::face_grid_scenes::{DIVISOR_ROW, matter_dam_break_faces};
-use super::liquid_surface_tests::{Harness, params, read};
+use crate::testkit::liquid_surface::{Harness, params, read};
 use super::matter_face_component::MatterFaceComponent;
 use super::gpu_flip_preset::WaterScene;
 use super::gpu_flip_scene_tests::Run;

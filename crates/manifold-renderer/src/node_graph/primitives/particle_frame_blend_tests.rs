@@ -284,7 +284,7 @@ fn fluid_particle_blend_presets_share_display_clock_and_fuse() {
 
 #[cfg(feature = "gpu-proofs")]
 mod gpu_tests {
-    use super::super::liquid_surface_tests::{Harness, params, read};
+    use crate::testkit::liquid_surface::{Harness, params, read};
     use super::*;
     use crate::mesh::InstanceTransform;
     use crate::node_graph::fluid_particles::FluidParticle;

@@ -6,12 +6,12 @@
 use super::emission_count::EmissionCount;
 use super::energy_potential::EnergyPotential;
 use super::jitter_particles::JitterParticles;
-use super::liquid_surface_tests::{Harness, params, read};
+use crate::testkit::liquid_surface::{Harness, params, read};
 use super::whitewater_cpu::Rng;
 use super::sample_faces_at_particles::SampleFacesAtParticles;
 use super::spawn_whitewater::SpawnWhitewater;
 use super::wavecrest_potential::WavecrestPotential;
-use super::whitewater_grid_tests::run;
+use crate::testkit::water_codegen::run;
 use super::whitewater_particle_cpu::{self as cpu, Box3, Crest, Emission};
 use super::whitewater_type::WhitewaterType;
 use manifold_fluids::WhitewaterSpawn;

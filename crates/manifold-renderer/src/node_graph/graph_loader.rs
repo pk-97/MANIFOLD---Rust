@@ -2198,15 +2198,15 @@ mod tests {
     /// the shared layer where regressions would surface for both.
     #[test]
     fn audit_fires_on_unbound_array_resource() {
-        use crate::node_graph::primitives::{EulerStepParticles, GridUvField, SeedParticles};
+        use crate::testkit::graph::GraphFixture;
         use crate::node_graph::{compile, MetalBackend};
 
         let device = crate::gpu::test_gpu_device("graph_loader tests");
         let mut graph = Graph::new();
-        let seed = graph.add_node(Box::new(SeedParticles::new()));
-        let step = graph.add_node(Box::new(EulerStepParticles::new()));
+        let seed = graph.add_node(Box::new(GraphFixture::particles()));
+        let step = graph.add_node(Box::new(GraphFixture::particle_step()));
         graph.connect((seed, "particles"), (step, "in")).unwrap();
-        let forces = graph.add_node(Box::new(GridUvField::new()));
+        let forces = graph.add_node(Box::new(GraphFixture::forces()));
         graph.connect((forces, "uv"), (step, "forces")).unwrap();
         let plan = compile(&graph).expect("seed → step graph compiles");
 
@@ -2239,12 +2239,12 @@ mod tests {
     /// or always-pass fails CI loudly.
     #[test]
     fn pre_allocate_resources_accepts_fully_bound_plan() {
-        use crate::node_graph::primitives::SeedParticles;
+        use crate::testkit::graph::GraphFixture;
         use crate::node_graph::{compile, MetalBackend};
 
         let device = crate::gpu::test_gpu_device("graph_loader tests");
         let mut graph = Graph::new();
-        graph.add_node(Box::new(SeedParticles::new()));
+        graph.add_node(Box::new(GraphFixture::particles()));
         let plan = compile(&graph).expect("seed-only graph compiles");
 
         let mut backend = MetalBackend::new(std::sync::Arc::clone(&device), 256, 256, GpuTextureFormat::Rgba16Float);

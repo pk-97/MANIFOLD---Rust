@@ -8,8 +8,8 @@
 //! bindings) lands in subsequent steps.
 
 pub mod atomic;
-mod backend;
-mod bindings;
+pub(crate) mod backend;
+pub(crate) mod bindings;
 pub mod atmosphere;
 pub mod camera;
 pub mod light;
@@ -35,7 +35,7 @@ mod boundary_nodes;
 mod mesh_boundary;
 pub mod mesh_change;
 mod bound_graph;
-mod bundled_presets;
+pub(crate) mod bundled_presets;
 pub mod catalog_gen;
 mod chain_spec;
 pub mod composites;
@@ -43,9 +43,9 @@ pub mod depth_rule;
 pub(crate) mod decode_cache;
 pub mod descriptor;
 pub mod preview_encoding;
-mod effect_node;
+pub(crate) mod effect_node;
 pub(crate) mod execution;
-mod execution_plan;
+pub(crate) mod execution_plan;
 pub mod freeze;
 pub mod fluid;
 pub(crate) mod physics_scene;
@@ -57,10 +57,8 @@ pub(crate) mod whitewater_handoff;
 pub(crate) mod fluid_cache;
 pub(crate) mod fluid_mesh_upload;
 pub(crate) mod instance_upload;
-#[cfg(all(test, feature = "gpu-proofs"))]
-mod fragment_mask_continuity_tests;
-mod graph;
-mod graph_loader;
+pub(crate) mod graph;
+pub(crate) mod graph_loader;
 pub mod resource_allocation;
 mod gltf_anim_cache;
 mod gltf_anim_identity;
@@ -73,7 +71,7 @@ mod param_binding;
 pub mod param_doc;
 mod param_tooltips_bulk;
 mod param_tooltips_table;
-mod parameters;
+pub(crate) mod parameters;
 mod persistence;
 pub mod ports;
 pub mod primitive;
@@ -207,3 +205,13 @@ pub(crate) mod migration;
 
 #[cfg(test)]
 mod builtins;
+
+#[cfg(test)]
+mod catalog_tests;
+#[cfg(test)]
+mod scene_tests;
+#[cfg(test)]
+mod image_tests;
+
+#[cfg(any(test, feature = "gpu-proofs"))]
+pub mod liquid_conformance_fixtures;

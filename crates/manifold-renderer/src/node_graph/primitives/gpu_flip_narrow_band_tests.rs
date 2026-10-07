@@ -514,7 +514,7 @@ mod gpu_tests {
     use std::collections::BTreeSet;
 
     use super::super::gpu_flip_step::{GpuFlipStep, StepParams, dispatch_pass};
-    use super::super::liquid_surface_tests::{Harness, params as effect_params, read};
+    use crate::testkit::liquid_surface::{Harness, params as effect_params, read};
     use super::super::prefix_scan::PrefixScan;
     use super::super::liquid_stats::{SOLVER_WORDS, NARROW_BAND_SHORTAGE_TAIL};
     use super::cpu_tests::{

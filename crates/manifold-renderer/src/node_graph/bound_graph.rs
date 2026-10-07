@@ -594,7 +594,7 @@ mod tests {
 
     use crate::node_graph::param_binding::{BindingSource, ResolvedBinding, ResolvedTarget};
     use crate::node_graph::parameters::ParamValue;
-    use crate::node_graph::primitives::AffineTransform;
+    use crate::testkit::graph::GraphFixture;
     use crate::node_graph::{Graph, ParamConvert};
 
     fn slot(id: &str, value: f32, exposed: bool) -> Param {
@@ -647,7 +647,7 @@ mod tests {
             nodes: vec![EffectGraphNode {
                 id: 0,
                 node_id: NodeId::new("feedback"),
-                type_id: "node.transform".to_string(),
+                type_id: "test.texture_filter".to_string(),
                 handle: Some("feedback".to_string()),
                 params,
                 exposed_params: Default::default(),
@@ -670,7 +670,7 @@ mod tests {
     #[test]
     fn apply_inner_overrides_clears_cache_so_bound_value_re_asserts() {
         let mut graph = Graph::new();
-        let feedback = graph.add_node_named("feedback", Box::new(AffineTransform::new()));
+        let feedback = graph.add_node_named("feedback", Box::new(GraphFixture::binding()));
         graph.set_node_id(feedback, NodeId::new("feedback"));
         let node_map = vec![(NodeId::new("feedback"), feedback)];
 
@@ -744,8 +744,8 @@ mod tests {
         let mut graph = Graph::new();
         // The single fused kernel that replaced the card's atoms. Its uniform
         // field for the collapsed `gain` node's `scale` param is modelled here as
-        // the AffineTransform `scale` param (a real fused field is `n{i}_scale`).
-        let fused = graph.add_node_named("fused", Box::new(AffineTransform::new()));
+        // the binding fixture `scale` param (a real fused field is `n{i}_scale`).
+        let fused = graph.add_node_named("fused", Box::new(GraphFixture::binding()));
         graph.set_node_id(fused, NodeId::new("fused_region_0"));
         // node_map holds ONLY surviving/fused nodes — the collapsed `gain` node is
         // absent, exactly as after `fuse_view_for`.
@@ -791,7 +791,7 @@ mod tests {
             let mut graph = Graph::new();
             // A scalar destination stands in for the numeric field emitted by
             // fusion. The authored enum/toggle still retains its typed value.
-            let fused = graph.add_node_named("fused", Box::new(AffineTransform::new()));
+            let fused = graph.add_node_named("fused", Box::new(GraphFixture::binding()));
             graph.set_node_id(fused, NodeId::new("fused_region_0"));
             let node_map = vec![(NodeId::new("fused_region_0"), fused)];
             let retarget = AHashMap::from_iter([(
@@ -850,7 +850,7 @@ mod tests {
     /// baked value — what `into_graph`/`splice_def_into_chain` hand `BoundGraph`.
     fn graph_with_baked_scale(baked: f32) -> (Graph, NodeInstanceId) {
         let mut graph = Graph::new();
-        let feedback = graph.add_node_named("feedback", Box::new(AffineTransform::new()));
+        let feedback = graph.add_node_named("feedback", Box::new(GraphFixture::binding()));
         graph.set_node_id(feedback, NodeId::new("feedback"));
         graph
             .set_param(feedback, "scale", ParamValue::Float(baked))

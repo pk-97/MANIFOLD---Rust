@@ -198,7 +198,7 @@ mod gpu_tests {
 
     fn cleared(device: &GpuDevice, w: u32, h: u32, rgba: [f64; 4], label: &str) -> RenderTarget {
         let rt = RenderTarget::new(device, w, h, FMT, label);
-        crate::clear_texture_committed(device, &rt.texture, rgba, label);
+        crate::testkit::gpu::clear_texture_committed(device, &rt.texture, rgba, label);
         rt
     }
 

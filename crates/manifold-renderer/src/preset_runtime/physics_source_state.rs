@@ -14,7 +14,7 @@ use manifold_core::effects::PresetInstance;
 use manifold_core::liquid_domain::FLIP_DOMAIN_TYPE_ID;
 use sha2::{Digest, Sha256};
 
-pub(super) struct PhysicsSourceState {
+pub(crate) struct PhysicsSourceState {
     sources: Result<Vec<InstalledSource>, String>,
     has_instance: bool,
 }
@@ -175,7 +175,7 @@ impl InstalledSource {
 
 impl PhysicsSourceState {
     #[cfg(test)]
-    pub(super) fn published_identity(
+    pub(crate) fn published_identity(
         &self,
         node: NodeInstanceId,
     ) -> Option<Result<[u8; 32], &str>> {

@@ -189,7 +189,7 @@ mod tests {
 mod gpu_tests {
     use super::*;
     use crate::node_graph::freeze::codegen;
-    use crate::node_graph::primitives::liquid_surface_tests::{
+    use crate::testkit::liquid_surface::{
         Harness, Lattice, read, sort_and_shape,
     };
     use bytemuck::Zeroable;

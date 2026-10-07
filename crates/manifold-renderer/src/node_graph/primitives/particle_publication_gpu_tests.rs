@@ -1,7 +1,7 @@
 //! Device proofs against the pass-1 publication contract, and byte for byte
 //! against the transcribed 1-bit publisher (`particle_publication::reference`).
 use super::liquid_stats::LIQUID_STATS_WORDS;
-use super::liquid_surface_tests::read;
+use crate::testkit::liquid_surface::read;
 use super::particle_frame_blend_tests::publication_contract::publish as reference;
 use super::particle_identity::{BirthReservation, ParticleIdentity};
 use super::particle_publication::reference::{live as live_radius, publish as oracle};

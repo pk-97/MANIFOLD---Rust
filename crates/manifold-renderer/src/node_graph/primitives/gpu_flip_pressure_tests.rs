@@ -9,7 +9,7 @@
 use manifold_gpu::{GpuBinding, GpuBuffer, GpuEncoder, GpuReplayCache, ProfileGranularity};
 
 use super::gpu_flip_pressure::{MAX_ITERATIONS, PROGRESS_FLOATS, PressureSolver, ROW_FLOATS, Solve, Stop, Water, level_lattices, max_solve_level, passes};
-use super::liquid_surface_tests::read;
+use crate::testkit::liquid_surface::read;
 
 /// One saved problem: water cells and the divergence f (zero in air).
 pub(crate) struct Problem {

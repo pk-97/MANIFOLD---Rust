@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use manifold_fluids::{WhitewaterFields, WhitewaterGrid, WhitewaterKind, WhitewaterLifecycle as NativeLifecycle, WhitewaterSpawn};
 use manifold_gpu::GpuBuffer;
 
-use super::liquid_surface_tests::{Harness, params, read};
+use crate::testkit::liquid_surface::{Harness, params, read};
 use super::whitewater_lifecycle::{Frame, Report, WhitewaterLifecycle};
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::fluid::{TICK, whitewater_fade};

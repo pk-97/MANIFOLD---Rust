@@ -1,16 +1,13 @@
 //! Small value proofs for the reference emitters. Run only through gpu_queue.
 //! The turbulence reference is independently checked against the vendored C++ engine.
-use super::liquid_surface_tests::{Harness, params, read};
-use super::whitewater_emitter_cpu as reference;
-use super::whitewater_grid_tests::run;
+use crate::testkit::liquid_surface::{Harness, params, read};
+use crate::testkit::water_codegen::run;
 use super::whitewater_particle_cpu::{self as cpu, Box3};
 use super::{
-    divide_by_value::DivideByValue,
     dust_potential::DustPotential,
     energy_potential::EnergyPotential,
     inside_turbulence_potential::InsideTurbulencePotential,
     turbulence_emission_count::TurbulenceEmissionCount,
-    turbulence_field::TurbulenceField,
     whitewater_emitter_velocity::WhitewaterEmitterVelocity,
     whitewater_influence::WhitewaterInfluence,
     whitewater_obstacle_source::{
@@ -20,15 +17,8 @@ use super::{
 use crate::node_graph::effect_node::NodeInstanceId;
 use crate::node_graph::{
     fluid_particles::FluidParticle,
-    freeze::{
-        classify::CapacityExpr,
-        codegen::{FusionRegion, InputSource, RegionNode, generate_fused},
-    },
-    parameters::ParamValue,
-    ports::KnownItem,
-    primitive::PrimitiveSpec,
+    freeze::codegen::InputSource,
 };
-use manifold_gpu::{GpuBinding, GpuBuffer};
 
 fn values(extra: &[(&'static str, f32)]) -> Vec<(&'static str, f32)> {
     let mut v = vec![
@@ -49,107 +39,8 @@ fn values(extra: &[(&'static str, f32)]) -> Vec<(&'static str, f32)> {
     v.extend_from_slice(extra);
     v
 }
-pub(super) fn member<P: PrimitiveSpec>(id: u32, inputs: Vec<InputSource>) -> RegionNode<'static> {
-    RegionNode {
-        node_id: NodeInstanceId(id),
-        fusion_kind: P::FUSION_KIND,
-        body: P::WGSL_BODY.unwrap(),
-        params: P::PARAMS,
-        inputs,
-        input_access: P::INPUT_ACCESS.to_vec(),
-        node_inputs: P::INPUTS,
-        node_outputs: P::OUTPUTS,
-        node_includes: P::WGSL_INCLUDES,
-        derived_uniforms: P::DERIVED_UNIFORMS,
-        type_id: P::TYPE_ID.to_string(),
-        derived_camera_ext: None,
-        output_storage: "rgba16float",
-        stencil_fetch: false,
-        quantize_f16: false,
-    }
-}
-pub(super) fn fused<T: bytemuck::Pod + KnownItem>(
-    h: &mut Harness,
-    nodes: Vec<RegionNode<'_>>,
-    external: &[&GpuBuffer],
-    count: usize,
-    values: &[(&str, f32)],
-) -> Vec<T> {
-    let last = nodes.last().unwrap().node_id;
-    let region = FusionRegion {
-        nodes,
-        num_external_inputs: external.len(),
-        outputs: vec![(last, "out".to_owned())],
-        in_place_alias: None,
-        sampler_address_mode: "clamp",
-        dispatch_count_field: None,
-        virtual_chains: vec![],
-        sampled_externals: vec![],
-        camera_externals: 0,
-        output_capacity: Some(CapacityExpr::Slot(0)),
-    };
-    let generated = generate_fused(&region).unwrap();
-    let mut words: Vec<u32> = generated
-        .param_order
-        .iter()
-        .map(|(node, name)| {
-            let param = region
-                .nodes
-                .iter()
-                .find(|n| n.node_id == *node)
-                .unwrap()
-                .params
-                .iter()
-                .find(|p| p.name == *name)
-                .unwrap();
-            let value = values
-                .iter()
-                .rev()
-                .find(|(n, _)| n == name)
-                .map(|(_, v)| *v)
-                .unwrap_or_else(|| match param.default {
-                    ParamValue::Float(v) => v,
-                    _ => panic!("unexpected uniform {name}"),
-                });
-            match param.ty {
-                crate::node_graph::parameters::ParamType::Int => value as i32 as u32,
-                _ => value.to_bits(),
-            }
-        })
-        .collect();
-    words.resize(words.len().next_multiple_of(4), 0);
-    let output = h.array::<T>(&[], count);
-    let pipeline = h.device.create_compute_pipeline(
-        &generated.wgsl,
-        crate::node_graph::freeze::codegen::ENTRY,
-        "whitewater-reference-fused",
-    );
-    let mut bindings = vec![GpuBinding::Bytes {
-        binding: 0,
-        data: bytemuck::cast_slice(&words),
-    }];
-    for (i, b) in external.iter().enumerate() {
-        bindings.push(GpuBinding::Buffer {
-            binding: i as u32 + 1,
-            buffer: b,
-            offset: 0,
-        });
-    }
-    bindings.push(GpuBinding::Buffer {
-        binding: external.len() as u32 + 1,
-        buffer: &output.1,
-        offset: 0,
-    });
-    let mut enc = h.device.create_encoder("whitewater-reference-fused");
-    enc.dispatch_compute(
-        &pipeline,
-        &bindings,
-        [(count as u32).div_ceil(256), 1, 1],
-        "whitewater-reference-fused",
-    );
-    enc.commit_and_wait_completed();
-    read(&output.1, count)
-}
+
+
 fn close(actual: &[f32], expected: &[f32]) {
     assert_eq!(actual.len(), expected.len());
     for (i, (a, b)) in actual.iter().zip(expected).enumerate() {
@@ -160,67 +51,7 @@ fn close(actual: &[f32], expected: &[f32]) {
     }
 }
 
-#[test]
-fn whitewater_turbulence_values_and_fusion() {
-    let grid = Box3 {
-        cells: [8; 3],
-        center: [4.0; 3],
-        size: [8.0; 3],
-    };
-    let faces: [Vec<f32>; 3] = std::array::from_fn(|a| {
-        (0..576)
-            .map(|i| ((i * 7 + a * 13) % 31) as f32 - 15.0)
-            .collect()
-    });
-    let phi: Vec<f32> = (0..512)
-        .map(|i| if i % 7 == 0 { 1.0 } else { -1.0 })
-        .collect();
-    let want = reference::turbulence(faces.each_ref().map(Vec::as_slice), [8; 3], &phi, grid);
-    let mut h = Harness::new();
-    let d = h.array(&phi, 512);
-    let f = faces.each_ref().map(|v| h.array(v, 576));
-    let v = values(&[]);
-    let p = params(&v);
-    let got: Vec<f32> = run(
-        &mut h,
-        &mut TurbulenceField::new(),
-        &[
-            ("distance", d.0),
-            ("face_u", f[0].0),
-            ("face_v", f[1].0),
-            ("face_w", f[2].0),
-        ],
-        512,
-        &p,
-    );
-    close(&got, &want);
-    let scalar = h.array(&[2.0f32], 1);
-    let t = h.array(&got, 512);
-    let unfused: Vec<f32> = run(
-        &mut h,
-        &mut DivideByValue::new(),
-        &[("values", t.0), ("divisor", scalar.0)],
-        512,
-        &p,
-    );
-    let fused = fused::<f32>(
-        &mut h,
-        vec![
-            member::<TurbulenceField>(0, (0..4).map(InputSource::External).collect()),
-            member::<DivideByValue>(
-                1,
-                vec![
-                    InputSource::Node(NodeInstanceId(0)),
-                    InputSource::External(4),
-                ],
-            ),
-        ],
-        &[&d.1, &f[0].1, &f[1].1, &f[2].1, &scalar.1],
-        512,
-        &v,
-    );
-    close(&fused, &unfused);
-}
+
 
 #[test]
 fn whitewater_inside_dust_counts_and_fusion() {
@@ -404,60 +235,7 @@ fn whitewater_inside_dust_counts_and_fusion() {
     close(&got, &[0.0; 32]);
 }
 
-#[test]
-fn whitewater_influence_values_and_fusion() {
-    let mut h = Harness::new();
-    let old = [0.0, 4.0, 0.0, 4.0, 4.0, 0.0];
-    let src = [WhitewaterSource {
-        influence: 0.25,
-        dust_strength: 1.0,
-        kind: 2,
-        pad: 0,
-    }; 6];
-    let source = h.array(&src, 6);
-    let solid = h.array(&[4.0f32, -4.0, 0.0, 2.99, -3.01, 3.0], 6);
-    let previous = h.array(&old, 6);
-    let divisor = h.array(&[2.0f32], 1);
-    let v = values(&[("dt", 0.25), ("decay_rate", 2.0), ("base_level", 1.0)]);
-    let p = params(&v);
-    let got: Vec<f32> = run(
-        &mut h,
-        &mut WhitewaterInfluence::new(),
-        &[
-            ("values", previous.0),
-            ("solid", solid.0),
-            ("source", source.0),
-        ],
-        6,
-        &p,
-    );
-    close(&got, &[0.5, 3.5, 0.25, 0.25, 3.5, 0.25]);
-    let input = h.array(&got, 6);
-    let unfused: Vec<f32> = run(
-        &mut h,
-        &mut DivideByValue::new(),
-        &[("values", input.0), ("divisor", divisor.0)],
-        6,
-        &p,
-    );
-    let folded = fused::<f32>(
-        &mut h,
-        vec![
-            member::<WhitewaterInfluence>(0, (0..3).map(InputSource::External).collect()),
-            member::<DivideByValue>(
-                1,
-                vec![
-                    InputSource::Node(NodeInstanceId(0)),
-                    InputSource::External(3),
-                ],
-            ),
-        ],
-        &[&previous.1, &solid.1, &source.1, &divisor.1],
-        6,
-        &v,
-    );
-    close(&folded, &unfused);
-}
+
 
 #[test]
 fn whitewater_emitter_speed_values_and_fusion() {
@@ -650,79 +428,7 @@ fn whitewater_obstacle_source_closed_and_open_domain() {
     close(&folded, &vec![2.0; 729]);
 }
 
-#[test]
-fn whitewater_emitter_fusion_compiles_without_device() {
-    let node = |n| InputSource::Node(NodeInstanceId(n));
-    let ext = InputSource::External;
-    let cases = [
-        (
-            vec![
-                member::<TurbulenceField>(0, (0..4).map(ext).collect()),
-                member::<DivideByValue>(1, vec![node(0), ext(4)]),
-            ],
-            5,
-        ),
-        (
-            vec![
-                member::<InsideTurbulencePotential>(0, (0..4).map(ext).collect()),
-                member::<TurbulenceEmissionCount>(1, vec![ext(0), ext(4), ext(5), node(0), ext(6)]),
-            ],
-            7,
-        ),
-        (
-            vec![
-                member::<DustPotential>(0, (0..4).map(ext).collect()),
-                member::<TurbulenceEmissionCount>(1, vec![ext(0), ext(4), ext(5), node(0), ext(6)]),
-            ],
-            7,
-        ),
-        (
-            vec![
-                member::<WhitewaterInfluence>(0, (0..3).map(ext).collect()),
-                member::<DivideByValue>(1, vec![node(0), ext(3)]),
-            ],
-            4,
-        ),
-        (
-            vec![
-                member::<WhitewaterEmitterVelocity>(0, (0..3).map(ext).collect()),
-                member::<EnergyPotential>(1, vec![node(0)]),
-            ],
-            3,
-        ),
-        (
-            vec![
-                member::<WhitewaterObstacleSource>(0, (1..4).map(ext).collect()),
-                member::<WhitewaterInfluence>(1, vec![ext(0), ext(4), node(0)]),
-            ],
-            5,
-        ),
-    ];
-    for (nodes, num_external_inputs) in cases {
-        let name = nodes[0].type_id.clone();
-        let region = FusionRegion {
-            nodes,
-            num_external_inputs,
-            outputs: vec![(NodeInstanceId(1), "out".to_owned())],
-            in_place_alias: None,
-            sampler_address_mode: "clamp",
-            dispatch_count_field: None,
-            virtual_chains: vec![],
-            sampled_externals: vec![],
-            camera_externals: 0,
-            output_capacity: Some(CapacityExpr::Slot(0)),
-        };
-        let g = generate_fused(&region).unwrap();
-        let m = naga::front::wgsl::parse_str(&g.wgsl)
-            .unwrap_or_else(|e| panic!("{name}: {}", e.emit_to_string(&g.wgsl)));
-        naga::valid::Validator::new(
-            naga::valid::ValidationFlags::all(),
-            naga::valid::Capabilities::all(),
-        )
-        .validate(&m)
-        .unwrap_or_else(|e| panic!("{name}: {}", e.emit_to_string(&g.wgsl)));
-    }
-}
+
 
 #[test]
 fn whitewater_dust_lifecycle_values_and_fusion() {
@@ -979,3 +685,5 @@ fn whitewater_dust_step_publishes_a_distinct_population() {
         );
     }
 }
+
+use crate::testkit::water_codegen::{member, fused};

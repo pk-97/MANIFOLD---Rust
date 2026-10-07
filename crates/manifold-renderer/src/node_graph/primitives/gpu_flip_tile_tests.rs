@@ -14,7 +14,7 @@ use super::gpu_flip_step::{
     ring_max, set_all_tiles, set_poison, tile_counts, tile_total,
 };
 use super::liquid_stats::with_stats_layout;
-use super::liquid_surface_tests::read;
+use crate::testkit::liquid_surface::read;
 use crate::node_graph::fluid_particles::{CellRange, FluidParticle};
 use crate::node_graph::liquid::bodies::{LIQUID_COLLIDER, LIQUID_POSE};
 use crate::node_graph::liquid::fields::LIQUID_FIELD;

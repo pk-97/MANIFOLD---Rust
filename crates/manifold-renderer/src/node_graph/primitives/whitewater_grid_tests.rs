@@ -7,12 +7,11 @@ use super::crossing_distance::CrossingDistance;
 use super::extend_lattice::ExtendLattice;
 use super::lattice_curvature::LatticeCurvature;
 use super::liquid_cells::LiquidCells;
-use super::liquid_surface_tests::{Harness, params, read};
+use crate::testkit::liquid_surface::{Harness, params, read};
 use super::nearest_crossing::NearestCrossing;
 use super::surface_crossings::SurfaceCrossings;
 use super::whitewater_cpu::{self as cpu, Grid, Rng};
 use crate::node_graph::effect_node::ParamValues;
-use crate::node_graph::primitive::Primitive;
 use crate::node_graph::whitewater::{KnownValue, NO_CROSSING, SurfaceCrossing};
 
 /// Unequal sides, so a swapped axis shows.
@@ -52,18 +51,7 @@ fn refined_level(grid: &Grid, s: u32, rng: &mut Rng) -> Vec<f32> {
         .collect()
 }
 
-pub(super) fn run<P: Primitive, T: bytemuck::Pod + crate::node_graph::ports::KnownItem>(
-    harness: &mut Harness,
-    prim: &mut P,
-    inputs: &[(&'static str, crate::node_graph::bindings::Slot)],
-    len: usize,
-    step_params: &ParamValues,
-) -> Vec<T> {
-    let out = harness.array::<T>(&[], len);
-    let (_, errors) = harness.run(prim, inputs, &[("out", out.0)], step_params);
-    assert!(errors.is_empty(), "{errors:?}");
-    read(&out.1, len)
-}
+
 
 fn crossing_close(a: SurfaceCrossing, b: SurfaceCrossing) -> bool {
     (0..3).all(|i| (a.crossing[i] - b.crossing[i]).abs() <= 1e-4 * b.crossing[i].abs().max(1.0) && (a.normal[i] - b.normal[i]).abs() <= 1e-5)
@@ -383,3 +371,5 @@ fn extend_lattice_matches_cpu() {
     let known = values.iter().filter(|v| v.known > 0.0).count();
     assert!(known > inside / 2, "three passes fill {known} of the {inside} inner cells");
 }
+
+use crate::testkit::water_codegen::run;

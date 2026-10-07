@@ -179,7 +179,7 @@ mod tests {
 mod gpu_tests {
     use super::*;
     use crate::mesh::MeshVertex;
-    use crate::node_graph::primitives::liquid_surface_tests::{Harness, params, read};
+    use crate::testkit::liquid_surface::{Harness, params, read};
     use crate::node_graph::primitives::smooth_surface_mesh::SmoothSurfaceMesh;
     use crate::node_graph::primitives::surface_mesh_parity::{fixture, flip_normals, flip_smooth};
     use glam::DVec3;

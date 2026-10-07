@@ -1694,7 +1694,7 @@ fn expand_member_aspect(
 /// array is assumed to be a triangle mesh. The output name matches the port
 /// the install pass emits: an in-place region's output rides its aliased
 /// `src_<k>` port, a fan-out region emits `dst_<k>`, otherwise `dst`.
-fn compose_region_mesh_rules(
+pub(crate) fn compose_region_mesh_rules(
     region: &Region,
     all_members: &[&RegionMember],
     node_keepalive: &[Box<dyn crate::node_graph::effect_node::EffectNode>],
@@ -2581,87 +2581,7 @@ mod tests {
         PrimitiveRegistry::with_builtin()
     }
 
-    /// P2 (BUG-e3p6.4, design §3.3) — the fused node's mesh-rule sidecar
-    /// composed from member declarations, proven at the composition seam for
-    /// the Surface Waves core: a gathered-external `normal_wave_mesh` feeding
-    /// a coincident `morph_mesh`. This shape cannot reach the composition
-    /// through `fuse_canonical_def_masked` today — morph's `weights_len`
-    /// derived uniform has no registered recompute, so the fail-closed gate
-    /// keeps the region unfused — so the seam is exercised directly.
-    /// Composition semantics under test: an external leaf renames to
-    /// `src_<slot>`; an internal dependency recurses into the producing
-    /// member's declaration; `Written` dominates its aspect; the
-    /// sorted/deduped leaf list collapses both mesh wires onto the single
-    /// vertices external.
-    #[test]
-    fn mesh_change_compose_region_rules_wave_morph() {
-        use crate::node_graph::freeze::classify::InputAccess;
-        use crate::node_graph::freeze::region::{
-            ExternalRef, Region, RegionInput, RegionMember,
-        };
-        use crate::node_graph::mesh_change::{MeshAspect, MeshDependency};
-        use crate::node_graph::primitives::{MorphMesh, NormalWaveMesh};
-        use std::borrow::Cow;
 
-        // Buffer region (space None): scalar ports are not region ports, so
-        // wave threads only its gathered mesh `in`; morph threads `in`
-        // (external), `b` (wave's register), `weights` (external).
-        let region = Region {
-            members: vec![
-                RegionMember {
-                    doc_id: 1,
-                    inputs: vec![RegionInput::External(0)],
-                    input_access: vec![InputAccess::BufferGather],
-                    quantize_f16: false,
-                },
-                RegionMember {
-                    doc_id: 2,
-                    inputs: vec![
-                        RegionInput::External(0),
-                        RegionInput::Member(1),
-                        RegionInput::External(1),
-                    ],
-                    input_access: vec![InputAccess::Coincident; 3],
-                    quantize_f16: false,
-                },
-            ],
-            externals: vec![
-                ExternalRef { from_node: 0, from_port: "vertices".to_string() },
-                ExternalRef { from_node: 0, from_port: "weights".to_string() },
-            ],
-            outputs: vec![(2, "out".to_string())],
-            space: None,
-            sampled_externals: vec![],
-            virtual_chains: vec![],
-            output_capacity: None,
-        };
-        let keepalive: Vec<Box<dyn crate::node_graph::effect_node::EffectNode>> = vec![
-            Box::new(NormalWaveMesh::new()),
-            Box::new(MorphMesh::new()),
-        ];
-        let all_members: Vec<&RegionMember> = region.members.iter().collect();
-        let rules = compose_region_mesh_rules(&region, &all_members, &keepalive, None);
-        assert_eq!(rules.len(), 1, "exactly the region's mesh output earns a rule");
-        let rule = &rules[0];
-        assert_eq!(rule.output, "dst", "single-output region emits dst, got {:?}", rule);
-        // morph declares topology = Dependencies([in.Topology, b.Topology]).
-        // `in` is external slot 0 → src_0.Topology. `b` is wave's register;
-        // wave declares Dependencies([in.Topology]) and wave's `in` is the
-        // SAME external slot 0 → src_0.Topology again. Sort + dedup → one leaf.
-        assert_eq!(
-            rule.topology,
-            PreparedMeshRevisionRule::Dependencies(vec![MeshDependency {
-                input: Cow::Owned("src_0".to_string()),
-                aspect: MeshAspect::Topology,
-            }]),
-            "composed topology must rename + recurse + dedup to the single vertices external"
-        );
-        assert!(
-            matches!(rule.positions, PreparedMeshRevisionRule::Written),
-            "morph positions are Written and Written dominates, got {:?}",
-            rule.positions
-        );
-    }
 
     /// A region mask leaves the disabled region's nodes as ordinary surviving
     /// nodes: source → gain → contrast → threshold(boundary) → saturation →
@@ -2940,67 +2860,9 @@ mod tests {
         assert_eq!(fused.fused_retarget.len(), 14, "all 7 ColorGrade atoms' params");
     }
 
-    fn colorgrade_def() -> EffectGraphDef {
-        let json = std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/assets/effect-presets/ColorGrade.json"
-        ))
-        .expect("read ColorGrade.json");
-        serde_json::from_str(&json).expect("parse ColorGrade.json")
-    }
 
-    /// The whole ColorGrade card (7 atoms, one region) collapses to ONE
-    /// `node.wgsl_compute` node between the retained boundaries, wired
-    /// source → fused.src_0 → final_output. The retarget maps each inner
-    /// (node_id, param) to its region's fused node + `n{i}_{param}` field — the
-    /// load-bearing routing for the binding rewrite.
-    #[test]
-    fn colorgrade_fuses_to_single_wgsl_node() {
-        let def = colorgrade_def();
-        let fused = fuse_canonical_def(&def, &registry()).expect("ColorGrade fuses");
 
-        // 3 nodes: source, fused, final_output. 2 wires.
-        assert_eq!(fused.def.nodes.len(), 3, "boundaries + one fused node");
-        let wgsl_nodes: Vec<_> = fused
-            .def
-            .nodes
-            .iter()
-            .filter(|n| n.type_id == "node.wgsl_compute")
-            .collect();
-        assert_eq!(wgsl_nodes.len(), 1, "exactly one fused node");
-        assert!(wgsl_nodes[0].wgsl_source.is_some(), "fused node carries WGSL");
-        assert_eq!(fused.def.wires.len(), 2, "source→fused, fused→final_output");
-        assert!(
-            fused.def.wires.iter().any(|w| w.to_port == "src_0"),
-            "an input wire targets the fused src_0 port"
-        );
-        assert!(
-            fused.def.wires.iter().any(|w| w.from_port == "dst"),
-            "the fused output wire leaves the dst port"
-        );
 
-        // Region topo order: gain(0) sat(1) hue(2) contrast(3) colorize(4)
-        // mix(5) clamp(6). Spot-check the routing the binding rewrite depends on.
-        let field_of = |nid: &str, p: &str| {
-            fused
-                .retarget
-                .get(&(nid.into(), p.into()))
-                .map(|(_, f)| f.clone())
-        };
-        assert_eq!(field_of("gain", "gain").as_deref(), Some("n0_gain"));
-        assert_eq!(field_of("saturation", "saturation").as_deref(), Some("n1_saturation"));
-        assert_eq!(field_of("hue", "hue").as_deref(), Some("n2_hue"));
-        assert_eq!(field_of("contrast", "contrast").as_deref(), Some("n3_contrast"));
-        assert_eq!(field_of("colorize", "focus").as_deref(), Some("n4_focus"));
-        assert_eq!(field_of("grade_mix", "amount").as_deref(), Some("n5_amount"));
-        assert_eq!(field_of("clamp", "max").as_deref(), Some("n6_max"));
-        // 14 inner params across the 7 atoms (1+1+3+1+4+2+2).
-        assert_eq!(fused.retarget.len(), 14);
-        // All routed onto the single region's fused node.
-        for (fused_id, _) in fused.retarget.values() {
-            assert_eq!(fused_id.as_str(), "fused_region_0");
-        }
-    }
 
     /// A true boundary in the middle splits the card into TWO fused nodes — the
     /// headline generalisation past whole-card fusion. source → gain → contrast
@@ -3067,42 +2929,7 @@ mod tests {
         assert!(has_wire(thresh, r1), "the threshold feeds fused_region_1");
     }
 
-    /// Every seeded field name + every retarget target exists as a real param on
-    /// the `WgslCompute` node once it reparses the generated source. The drift
-    /// guard: if the codegen's `n{i}_{param}` field-naming convention diverges
-    /// from the install-side reconstruction, the seeded params would land on
-    /// non-existent fields and silently no-op — this catches it without a GPU.
-    #[test]
-    fn seeded_fields_match_wgsl_compute_params() {
-        use crate::node_graph::effect_node::EffectNode;
-        use crate::node_graph::primitives::WgslCompute;
-        let def = colorgrade_def();
-        let fused = fuse_canonical_def(&def, &registry()).expect("ColorGrade fuses");
-        let node = fused
-            .def
-            .nodes
-            .iter()
-            .find(|n| n.type_id == "node.wgsl_compute")
-            .unwrap();
 
-        let mut wc = WgslCompute::new();
-        wc.set_wgsl_source(node.wgsl_source.as_deref().unwrap());
-        let param_names: AHashSet<&str> =
-            wc.parameters().iter().map(|p| p.name.as_ref()).collect();
-
-        for field in node.params.keys() {
-            assert!(
-                param_names.contains(field.as_str()),
-                "seeded field `{field}` is not a derived WgslCompute param — codegen drift"
-            );
-        }
-        for (_, field) in fused.retarget.values() {
-            assert!(
-                param_names.contains(field.as_str()),
-                "retarget field `{field}` is not a derived WgslCompute param — codegen drift"
-            );
-        }
-    }
 
     /// P5/D4: a Vec3 param (`node.brightness`'s `weights`) and a Vec4 param
     /// (`node.channel_mixer`'s `row0..row3`) both actually SEED correct

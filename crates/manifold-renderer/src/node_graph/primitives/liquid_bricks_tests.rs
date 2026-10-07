@@ -1,3 +1,4 @@
+use crate::testkit::shader_source::dense_source;
 use super::*;
 
 fn index(p: [usize; 3], n: [usize; 3]) -> usize {
@@ -35,43 +36,7 @@ fn constant_filter(value: f32, passes: usize, fused: bool) -> f32 {
     sum
 }
 
-// Preserve the dense wrapper while keeping its ABI in lockstep with the
-// scheduled node. Optional solid input is bound by the generated wrapper;
-// no-solid fixtures pass zero solid dimensions so the constraint is inert.
-fn dense_source<P: crate::node_graph::primitive::PrimitiveSpec>(original: &str) -> String {
-    use crate::node_graph::freeze::codegen::{StandaloneKernelSpec, generate_standalone};
-    let mut body = original.to_owned();
-    let start = body.find("fn body(").unwrap();
-    let end = start + body[start..].find(") ->").unwrap();
-    let comma = if body[..end].trim_end().ends_with(',') {
-        ""
-    } else {
-        ","
-    };
-    let derived = P::DERIVED_UNIFORMS.join(", ");
-    body.insert_str(end, &format!("{comma} {derived}"));
-    let includes: Vec<_> = P::WGSL_INCLUDES
-        .iter()
-        .copied()
-        .filter(|include| {
-            !P::DENSE_BUFFER_FUSION.is_some_and(|dense| dense.body_fragments.contains(include))
-        })
-        .collect();
-    // The retained dense oracle emits only the original triangle-list output.
-    let outputs: Vec<_> = P::OUTPUTS.iter().filter(|output| output.name != "indices").cloned().collect();
-    generate_standalone(&StandaloneKernelSpec {
-        fusion_kind: P::FUSION_KIND,
-        body: &body,
-        inputs: P::INPUTS,
-        params: P::PARAMS,
-        input_access: P::INPUT_ACCESS,
-        derived_uniforms: P::DERIVED_UNIFORMS,
-        outputs: &outputs,
-        stencil_fetch: P::STENCIL_FETCH,
-        includes: &includes,
-    })
-    .unwrap()
-}
+
 
 #[test]
 fn fluid_bricks_exterior_is_the_exact_dense_filter_not_the_input_band() {
@@ -205,7 +170,7 @@ fn fluid_bricks_generated_consumers_validate_on_cpu() {
 
 #[test]
 fn fluid_bricks_preset_extents_cover_dense_storage_and_schedule() {
-    use crate::node_graph::primitives::gpu_flip_preset::{WaterScene, render_def, tests::walk};
+    use crate::node_graph::primitives::gpu_flip_preset::{WaterScene, render_def};
     for resolution in [64, 128] {
         for scale in [1, 2, 4] {
             let def = render_def(WaterScene::dam_break(resolution).with_surface_scale(scale));
@@ -218,55 +183,7 @@ fn fluid_bricks_preset_extents_cover_dense_storage_and_schedule() {
     }
 }
 
-#[test]
-fn fluid_bricks_still_pool_installs_dense_clamp() {
-    use crate::node_graph::PrimitiveRegistry;
-    use crate::node_graph::freeze::install::fuse_generator_view;
-    use manifold_core::effect_graph_def::EffectGraphDef;
 
-    let json = crate::node_graph::bundled_presets::bundled_preset_json(
-        &manifold_core::PresetTypeId::new("WaterStillPoolMatter"),
-    )
-    .expect("Still Pool bundled");
-    let canonical: EffectGraphDef = serde_json::from_str(&json).expect("Still Pool parses");
-    let flat = manifold_core::flatten::flatten_groups(&canonical).expect("Still Pool flattens");
-    let clamp = flat
-        .nodes
-        .iter()
-        .find(|node| node.type_id == "node.clamp_liquid_to_solids")
-        .expect("Still Pool contains the clamp");
-    let smooth_id = flat
-        .wires
-        .iter()
-        .find(|wire| wire.to_node == clamp.id && wire.to_port == "levelset")
-        .expect("clamp reads the final smoothing pass")
-        .from_node;
-    let smooth = flat
-        .nodes
-        .iter()
-        .find(|node| node.id == smooth_id)
-        .expect("final smoothing node exists");
-    assert_eq!(smooth.type_id, "node.smooth_lattice");
-    let fused = fuse_generator_view(&canonical, &PrimitiveRegistry::with_builtin())
-        .expect("Still Pool fuses");
-    let region_id = fused.node_retarget.get(&clamp.node_id).expect("clamp is fused");
-    assert_eq!(
-        fused.node_retarget.get(&smooth.node_id),
-        Some(region_id),
-        "clamp shares the final smoothing region"
-    );
-    let region = fused
-        .def
-        .nodes
-        .iter()
-        .find(|node| node.node_id == *region_id)
-        .expect("clamp retarget names an installed node");
-    assert_eq!(region.type_id, "node.wgsl_compute");
-    assert!(region.wgsl_source.is_some(), "region has generated WGSL");
-    assert!(
-        !fused.def.nodes.iter().any(|node| node.type_id == "node.clamp_liquid_to_solids")
-    );
-}
 
 #[test]
 fn fluid_bricks_dense_fusion_is_independent_of_optional_schedules() {
@@ -333,6 +250,6 @@ fn fluid_bricks_dense_fusion_is_independent_of_optional_schedules() {
     );
 }
 
-#[cfg(feature = "gpu-proofs")]
-#[path = "liquid_bricks_gpu_tests.rs"]
-mod gpu_tests;
+
+
+use crate::testkit::liquid_extents::walk;

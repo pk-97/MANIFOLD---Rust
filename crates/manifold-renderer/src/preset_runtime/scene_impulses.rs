@@ -233,7 +233,7 @@ impl PresetRuntime {
         self.scene_impulses.setup_observed = true;
     }
 
-    pub(super) fn reset_modifier_impulses(&mut self) {
+    pub(crate) fn reset_modifier_impulses(&mut self) {
         self.scene_impulses.setup_observed = false;
         for route in self.scene_impulses.routes.iter_mut().flatten() {
             route

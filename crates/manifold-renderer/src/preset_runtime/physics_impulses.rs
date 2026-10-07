@@ -14,10 +14,10 @@ use crate::node_graph::{
     NodeInstanceId, ParamValue, ParamValues, PortType, PrimitiveRegistry, ResourceId,
 };
 
-struct Recipient {
-    id: NodeId,
+pub(crate) struct Recipient {
+    pub(crate) id: NodeId,
     instance: NodeInstanceId,
-    target: ImpulseTarget,
+    pub(crate) target: ImpulseTarget,
 }
 
 /// Reusable capture plan. Build when authoring a binding or changing its
@@ -26,7 +26,7 @@ struct Recipient {
 pub struct PreparedSceneImpulse {
     identity: Arc<()>,
     plan_epoch: u64,
-    recipients: Arc<[Recipient]>,
+    pub(crate) recipients: Arc<[Recipient]>,
     field: ResourceId,
     steps: Vec<bool>,
     params: Vec<Option<ParamValues>>,
@@ -38,10 +38,10 @@ pub struct PreparedSceneImpulse {
 /// current field controls or target selection.
 pub struct CapturedSceneImpulse {
     identity: Arc<()>,
-    recipients: Arc<[Recipient]>,
-    stamps: Vec<EventStamp>,
+    pub(crate) recipients: Arc<[Recipient]>,
+    pub(crate) stamps: Vec<EventStamp>,
     planned: Vec<Option<TickStamp>>,
-    field: Option<FieldValue>,
+    pub(crate) field: Option<FieldValue>,
     source: Option<FrameTime>,
 }
 
@@ -432,6 +432,3 @@ impl PresetRuntime {
         }
     }
 }
-
-#[cfg(test)]
-mod tests;

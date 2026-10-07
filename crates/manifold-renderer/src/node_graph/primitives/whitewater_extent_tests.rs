@@ -398,7 +398,7 @@ fn whitewater_chain_def(spawn: bool) -> (manifold_core::effect_graph_def::Effect
 #[test]
 fn whitewater_emitter_chain_fuses() {
     let mut registry = crate::node_graph::PrimitiveRegistry::with_builtin();
-    crate::node_graph::substeps::test_nodes::register_substep_test_nodes(&mut registry);
+    crate::testkit::substep_nodes::register_substep_test_nodes(&mut registry);
     let (def, names) = emitter_chain_def();
     let report = crate::node_graph::fusion_report(&def, &registry);
     assert!(report.preparation_error.is_none(), "{:?}", report.preparation_error);
@@ -434,7 +434,7 @@ fn whitewater_emitter_chain_fuses() {
 #[test]
 fn whitewater_spawn_chain_fuses() {
     let mut registry = crate::node_graph::PrimitiveRegistry::with_builtin();
-    crate::node_graph::substeps::test_nodes::register_substep_test_nodes(&mut registry);
+    crate::testkit::substep_nodes::register_substep_test_nodes(&mut registry);
     let (def, names) = whitewater_chain_def(true);
     let report = crate::node_graph::fusion_report(&def, &registry);
     assert!(report.preparation_error.is_none(), "{:?}", report.preparation_error);
@@ -531,7 +531,7 @@ fn grid_chain_def() -> (manifold_core::effect_graph_def::EffectGraphDef, Vec<&'s
 #[test]
 fn whitewater_grid_chain_fuses_only_the_distance_pair() {
     let mut registry = crate::node_graph::PrimitiveRegistry::with_builtin();
-    crate::node_graph::substeps::test_nodes::register_substep_test_nodes(&mut registry);
+    crate::testkit::substep_nodes::register_substep_test_nodes(&mut registry);
     let (def, names) = grid_chain_def();
     let report = crate::node_graph::fusion_report(&def, &registry);
     assert!(report.preparation_error.is_none(), "{:?}", report.preparation_error);

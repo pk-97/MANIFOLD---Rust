@@ -71,7 +71,7 @@ impl PresetRuntime {
         Ok(runtime)
     }
 
-    pub(super) fn from_def_for_render_view(
+    pub(crate) fn from_def_for_render_view(
         doc: EffectGraphDef,
         registry: &PrimitiveRegistry,
         manifest: Option<&ParamManifest>,

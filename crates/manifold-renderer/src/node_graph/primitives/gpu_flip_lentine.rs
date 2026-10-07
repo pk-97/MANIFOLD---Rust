@@ -379,7 +379,7 @@ impl ComponentProjection {
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod gpu_tests {
-    use super::super::liquid_surface_tests::read;
+    use crate::testkit::liquid_surface::read;
     use super::*;
 
     #[derive(serde::Deserialize)]

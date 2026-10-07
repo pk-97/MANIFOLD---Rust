@@ -5,7 +5,7 @@
 
 use manifold_core::scene_index::{FlatSceneIndex, SceneIndexError};
 
-mod acceleration;
+pub(crate) mod acceleration;
 pub(crate) use acceleration::impulse_recipients;
 mod coupling;
 pub use coupling::{CoupledSceneBinding, prepare_coupled_scenes};
@@ -19,8 +19,8 @@ pub use buffer_budget::{
 };
 pub use event_state::{PreparedModifierEvents, SceneModifierEventRoute};
 pub use impulses::SceneModifierImpulseRoute;
-mod impulses;
-mod compiler;
+pub(crate) mod impulses;
+pub(crate) mod compiler;
 pub(crate) use compiler::math_events::resource_node_id as math_resource_node_id;
 pub(crate) use compiler::math_events::sample_node_id as math_sample_node_id;
 mod control_state;
@@ -28,15 +28,15 @@ mod math_view;
 pub(crate) use math_view::LegacyMathViewScope;
 pub(crate) use compiler::prepare_legacy_scene_modifier_math_view;
 pub use control_state::PreparedModifierControlState;
-mod frames;
+pub(crate) mod frames;
 mod fragment_cuts;
 pub(crate) use fragment_cuts::contains_fragments;
 mod namespace;
-mod parameter_guards;
+pub(crate) mod parameter_guards;
 pub(crate) use parameter_guards::PreparedModifierParameterGuards;
 mod routes;
 mod value_sources;
-mod value_writes;
+pub(crate) mod value_writes;
 pub use value_sources::{SceneModifierValueSource, SceneModifierValueSourcePlan};
 pub use value_writes::PreparedGraphValueWrites;
 
@@ -44,12 +44,6 @@ pub use compiler::{
     expand_scene_modifiers, prepare_scene_modifier_math_view, prepare_scene_modifiers,
     validate_modifier_attachment, validate_modifier_runtime,
 };
-#[cfg(test)]
-pub(crate) use math_view::test_owner as math_view_test_owner;
-// Only the gpu-proofs scene proof uses this re-export; compiler tests call
-// math_view::test_owner_with_instance_echoes directly.
-#[cfg(all(test, feature = "gpu-proofs"))]
-pub(crate) use math_view::test_owner_with_instance_echoes as math_view_test_owner_with_instance_echoes;
 pub use routes::{PreparedSceneModifierGraph, SceneModifierNodeCopy, SceneModifierNodeRoute};
 
 pub use frames::{resolve_modifier_mesh_frames, validate_modifier_mesh_frames};

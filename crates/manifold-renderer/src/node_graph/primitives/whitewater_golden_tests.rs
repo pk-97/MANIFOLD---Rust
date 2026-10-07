@@ -12,8 +12,8 @@ use serde_json::{Value, json};
 
 use super::energy_potential::{MAX_ENERGY, MIN_ENERGY};
 use super::gpu_flip_preset::WaterScene;
-use super::liquid_surface_tests::{Harness, read};
-use super::whitewater_scene_tests::{Show, whitewater_render_def, with_tick_probe};
+use crate::testkit::liquid_surface::{Harness, read};
+use crate::testkit::whitewater_scene::{whitewater_render_def, with_tick_probe};
 use super::whitewater_step::{Step, StepFrame, StepInputs, StepShape};
 use crate::gpu_encoder::GpuEncoder;
 use crate::node_graph::fluid::TICK;
@@ -27,37 +27,10 @@ const CANDIDATE: &str = "whitewater_tick_golden.candidate.txt";
 /// The commit the golden belongs to: main before any whitewater stage
 /// change. Recording refuses when the renderer's non-test sources differ.
 const BASE: &str = "1a7fe1437";
-const WHITEWATER: &str = "whitewater";
-/// The liquid boundary that captures each tick's whitewater results.
-const BOUNDARY: &str = "state";
-/// Each whitewater output and the boundary port that holds its capture,
-/// closed after every tick.
-const PORTS: [(&str, &str); 7] = [
-    ("pool_out", "whitewater_pool"),
-    ("state_out", "whitewater_state"),
-    ("counts_out", "whitewater_counts"),
-    ("foam_particles", "foam_particles"),
-    ("bubble_particles", "bubble_particles"),
-    ("spray_particles", "spray_particles"),
-    ("dust_particles", "dust_particles"),
-];
-const TICKS: u32 = 120;
-/// `WHITEWATER_ID_LIMIT`: ids are taken modulo this.
-const ID_LIMIT: u32 = 256;
 
-/// The events the fused passes must reproduce; each has to happen in the
-/// recorded run or the golden proves nothing about it. Compaction moving a
-/// survivor is not visible in the outputs alone: [`compaction_moves_a_survivor`]
-/// proves it on a constructed pool.
-const EVENTS: [&str; 6] = ["spawn candidate", "spawn placed", "removal", "capacity overflow", "id wrap", "dust spawn"];
 
-fn fnv(bytes: &[u8]) -> u64 {
-    bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3))
-}
 
-fn words(bytes: &[u8]) -> Vec<u32> {
-    bytes.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
-}
+
 
 use crate::node_graph::liquid::conformance::json_node_mut;
 
@@ -93,92 +66,10 @@ pub(super) fn all_emitters(budget: Option<f64>) -> EffectGraphDef {
     )
 }
 
-/// One fixture's fingerprint lines and the first tick each event was seen.
-fn run(label: &str, def: EffectGraphDef, lines: &mut Vec<String>) -> [Option<u32>; EVENTS.len()] {
-    let mut show = Show::new(def, (96, 54), true, &[]);
-    show.restart();
-    assert!(!show.warmup_pending(), "{label}: warmup did not finish inside its frame bound");
-    let mut seen = [None; EVENTS.len()];
-    let mut previous: Option<(Vec<u32>, Vec<u32>)> = None;
-    let accepted = |show: &Show| {
-        let [epoch, time] = show.probes(["epoch", "simulation_time"]);
-        (epoch, (f64::from(time) / TICK).round() as i64)
-    };
-    // The baseline is the restart's own frame, so frame 1 is checked too.
-    // `restart` rewinds the harness clock to zero after its trigger frame,
-    // and a backwards seek restarts the liquid clock: frame 1 is that
-    // restart, exactly one epoch on with no tick.
-    let (mut was_epoch, mut was_step) = accepted(&show);
-    let mut tick = 0;
-    let mut frames = 0;
-    let mut dues = Vec::new();
-    while tick < TICKS {
-        show.frame(false);
-        frames += 1;
-        assert!(frames <= 2 * TICKS, "{label}: {tick} ticks in {frames} frames; dues {dues:?}");
-        // At most one tick per frame, so the captures are that tick's and no
-        // earlier tick of the frame goes unseen. A frame with no tick due
-        // publishes nothing new and is not a tick.
-        let [due, dropped] = show.probes(["ticks", "dropped_seconds"]);
-        dues.push(due);
-        assert!(due == 0.0 || due == 1.0, "{label}: frame {frames} ran {due} ticks; dues {dues:?}");
-        assert_eq!(dropped, 0.0, "{label}: frame {frames} dropped simulation time");
-        // The clock accepted exactly the ticks it scheduled, in one epoch.
-        let (epoch, step) = accepted(&show);
-        if frames == 1 {
-            let [time] = show.probes(["simulation_time"]);
-            assert_eq!(epoch, was_epoch + 1.0, "{label}: frame 1 is not the rewind's restart");
-            assert_eq!(due, 0.0, "{label}: the rewind's restart ran a tick");
-            assert_eq!(time, 0.0, "{label}: the rewind's restart accepted time");
-        } else {
-            assert_eq!(epoch, was_epoch, "{label}: frame {frames} changed epoch");
-            assert_eq!(step, was_step + due as i64, "{label}: frame {frames} clock at tick {step}, was {was_step}, due {due}");
-        }
-        (was_epoch, was_step) = (epoch, step);
-        if due == 0.0 {
-            continue;
-        }
-        tick += 1;
-        // The stage's own outputs, which the boundary's captures must equal
-        // whole: a skipped or truncated capture fails here.
-        let bytes: Vec<Vec<u8>> = PORTS.iter().map(|(port, _)| show.provided_all_bytes(WHITEWATER, port)).collect();
-        for ((port, capture), stage) in PORTS.iter().zip(&bytes) {
-            let captured = show.provided_all_bytes(BOUNDARY, capture);
-            assert_eq!(stage.len(), captured.len(), "{label} tick {tick}: {port} and its capture differ in length");
-            assert!(*stage == captured, "{label} tick {tick}: {port} and its capture differ");
-            lines.push(format!("{label} tick {tick} {port} {} {:016x}", stage.len(), fnv(stage)));
-        }
-        let state = words(&bytes[1])[..8].to_vec();
-        let counts = words(&bytes[2])[..9].to_vec();
-        if let Some((was, was_counts)) = &previous {
-            let spawned = state[3].wrapping_sub(was[3]);
-            let full = state[2].wrapping_sub(was[2]);
-            let placed = spawned - full;
-            // Pool balance: lifetime deaths and keep-pass removals alike.
-            let removed = (was[0] + placed).saturating_sub(state[0]);
-            let happened = [
-                spawned > 0,
-                placed > 0,
-                removed > 0,
-                full > 0,
-                placed > 0 && (state[1] < was[1] || placed >= ID_LIMIT),
-                counts[8] > was_counts[8],
-            ];
-            for (first, now) in seen.iter_mut().zip(happened) {
-                if now && first.is_none() {
-                    *first = Some(tick);
-                }
-            }
-        }
-        previous = Some((state, counts));
-    }
-    let errors = show.errors();
-    assert!(errors.is_empty(), "{label} ran with errors: {errors:#?}");
-    seen
-}
+
 
 pub(super) fn packed_scene_fingerprints() {
-    use super::whitewater_scene_tests::with_whitewater_axes;
+    use crate::node_graph::primitives::gpu_flip_preset::with_whitewater_axes;
     let def = with_tick_probe(whitewater_render_def(WaterScene::dam_break(64)));
     let mut packed = Vec::new();
     let mut axes = Vec::new();
@@ -187,26 +78,7 @@ pub(super) fn packed_scene_fingerprints() {
     assert_eq!(packed, axes, "I1 fingerprints: packed grid versus real axis adapters");
 }
 
-#[test]
-fn whitewater_packed_preset_save_load_matches_fingerprints() {
-    use manifold_core::{project::Project, types::LayerType, preset_type_id::PresetTypeId};
-    use super::whitewater_scene_tests::with_whitewater_reports;
-    let def = super::gpu_flip_preset::render_def(WaterScene::dam_break(64));
-    let mut project = Project::default();
-    let index = project.timeline.add_layer("Dam Break", LayerType::Generator, PresetTypeId::new("WaterDamBreakGpuFlip"));
-    project.timeline.layers[index].gen_params_or_init().graph = Some(def.clone());
-    let path = std::env::temp_dir().join(format!("whitewater_round_trip_{}_{}.manifold", std::process::id(),
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
-    manifold_io::saver::save_project(&mut project, &path, Some("Whitewater round trip"), false).expect("save actual project archive");
-    let reloaded = manifold_io::loader::load_project(&path).expect("load actual project archive");
-    let loaded = reloaded.timeline.layers[index].generator_graph().expect("saved generator graph").clone();
-    std::fs::remove_file(&path).expect("remove round-trip archive");
-    let mut before = Vec::new();
-    let mut after = Vec::new();
-    run("save_load", with_tick_probe(with_whitewater_reports(def)), &mut before);
-    run("save_load", with_tick_probe(with_whitewater_reports(loaded)), &mut after);
-    assert_eq!(before, after, "I11: I1 fingerprints after manifold-io save/load");
-}
+
 
 /// One tick of the stage over a constructed pool with no emission: three
 /// particles that die this tick ahead of one that lives. The stage's sort
@@ -377,3 +249,5 @@ fn whitewater_tick_state_matches_golden() {
         expected.iter().zip(&lines).filter(|(e, l)| **e != l.as_str()).map(|(e, l)| format!("want {e}\n got {l}")).collect();
     assert!(moved.is_empty(), "{} of {} fingerprints moved; first:\n{}", moved.len(), lines.len(), moved.iter().take(10).cloned().collect::<Vec<_>>().join("\n"));
 }
+
+use crate::testkit::whitewater_fingerprints::*;

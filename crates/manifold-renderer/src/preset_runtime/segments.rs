@@ -7,7 +7,7 @@ use super::*;
 /// Build the `(def, view)` slice for a fused segment, augmenting relight-on
 /// members with DEFAULT knob values so the segment content key (and fused
 /// WGSL) is knob-invariant.
-pub(super) fn build_segment_cards(
+pub(crate) fn build_segment_cards(
     fuse_idxs: &[usize],
     active_effects: &[(usize, &PresetInstance)],
     primitives: &PrimitiveRegistry,

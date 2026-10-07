@@ -11,7 +11,7 @@ use super::*;
 use crate::node_graph::primitives::standalone_pipeline::dispatch_standalone_2d;
 use crate::node_graph::scene_modifier_expand::{LegacyMathViewScope, SceneModifierExpandError};
 
-pub(super) struct MathViewRuntime {
+pub(crate) struct MathViewRuntime {
     pub modifier_id: NodeId,
     mode_node: NodeInstanceId,
     scope_node: Option<NodeInstanceId>,
@@ -20,8 +20,8 @@ pub(super) struct MathViewRuntime {
     presentation: Option<Presentation>,
     last_active_scope: Option<usize>,
     pub(super) events: super::math_view_events::MathEvents,
-    pub(super) shared_resources: Vec<Vec<(ResourceId, ResourceId)>>,
-    pub(super) shared_depth: Vec<Vec<(ResourceId, ResourceId)>>,
+    pub(crate) shared_resources: Vec<Vec<(ResourceId, ResourceId)>>,
+    pub(crate) shared_depth: Vec<Vec<(ResourceId, ResourceId)>>,
 }
 
 pub(super) struct PreparedMathViewResize {

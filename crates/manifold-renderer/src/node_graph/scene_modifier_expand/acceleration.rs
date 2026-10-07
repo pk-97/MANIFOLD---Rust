@@ -170,7 +170,7 @@ fn trace(
 /// Return every scene object that can be named as a physical force target.
 /// Material parts are retained here; recipient deduplication is performed by
 /// the compiler before per-recipient stages are cloned.
-pub(super) fn authoring_objects(
+pub(crate) fn authoring_objects(
     owner: &EffectGraphDef,
     scene: &SceneNodeRef,
     registry: &PrimitiveRegistry,
@@ -231,7 +231,7 @@ pub(super) fn selected(
     Ok(result)
 }
 
-pub(super) fn recipient_key(
+pub(crate) fn recipient_key(
     index: &FlatSceneIndex,
     object: &SceneNodeRef,
     registry: &PrimitiveRegistry,
@@ -258,7 +258,7 @@ pub(crate) fn impulse_recipients(
     impulse_recipients_with_index(&index, scene, selection, registry)
 }
 
-pub(super) fn impulse_recipients_with_index(
+pub(crate) fn impulse_recipients_with_index(
     index: &FlatSceneIndex,
     scene: &SceneNodeRef,
     selection: &SceneTargetSelection,
@@ -309,76 +309,4 @@ pub(super) fn impulse_recipients_with_index(
         .into_iter()
         .map(|(id, target)| (manifold_core::NodeId::new(id), target))
         .collect())
-}
-
-#[cfg(test)]
-mod tests {
-    use manifold_core::NodeId;
-
-    use super::*;
-    use crate::node_graph::physics_events::ImpulseTarget;
-
-    fn preset(json: &str) -> EffectGraphDef {
-        serde_json::from_str(json).expect("preset parses")
-    }
-
-    fn top(node: &str) -> SceneNodeRef {
-        SceneNodeRef { scope: Vec::new(), node: NodeId::new(node) }
-    }
-
-    /// BUG-4lfm (GPU-surface water not recognised as water): the water object
-    /// is fed by particles_b → sort → blobs → volume → marching cubes, never
-    /// by fluid_surface.vertices, and must still reach its domain.
-    #[test]
-    fn gpu_surface_water_resolves_to_its_flip_domain() {
-        let def = preset(include_str!(
-            "../../../assets/generator-presets/WaterDamBreakGpu.json"
-        ));
-        let registry = PrimitiveRegistry::with_builtin();
-        let index = FlatSceneIndex::build(&def).unwrap();
-        let water = top("water_object");
-        assert_eq!(liquid_domain_of(&index, &water).unwrap(), Some(top("fluid_surface")));
-        assert_eq!(
-            recipient_key(&index, &water, &registry).unwrap(),
-            Some((top("fluid_surface"), "acceleration_field".to_string()))
-        );
-        assert!(authoring_objects(&def, &top("scene"), &registry).unwrap().contains(&water));
-        let recipients = impulse_recipients_with_index(
-            &index,
-            &top("scene"),
-            &SceneTargetSelection::Explicit { objects: vec![water] },
-            &registry,
-        )
-        .unwrap();
-        assert_eq!(recipients, vec![(NodeId::new("fluid_surface"), ImpulseTarget::Fluid)]);
-        for rigid in ["floor_object", "obstacle_object"] {
-            assert_eq!(liquid_domain_of(&index, &top(rigid)).unwrap(), None, "{rigid}");
-        }
-    }
-
-    /// A matter domain is found by the same walk, through its group, and
-    /// takes scene forces and impulses on the same port FLIP does.
-    #[test]
-    fn matter_surface_water_resolves_to_its_domain_force_port() {
-        let def = preset(include_str!(
-            "../../../assets/generator-presets/WaterDamBreakMatter.json"
-        ));
-        let registry = PrimitiveRegistry::with_builtin();
-        let index = FlatSceneIndex::build(&def).unwrap();
-        let water = top("water_object");
-        let domain = liquid_domain_of(&index, &water).unwrap().expect("matter water has a domain");
-        assert_eq!(domain.node, NodeId::new("matter_domain"));
-        assert_eq!(
-            recipient_key(&index, &water, &registry).unwrap(),
-            Some((domain, "acceleration_field".to_string()))
-        );
-        let recipients = impulse_recipients_with_index(
-            &index,
-            &top("scene"),
-            &SceneTargetSelection::Explicit { objects: vec![water] },
-            &registry,
-        )
-        .unwrap();
-        assert_eq!(recipients, vec![(NodeId::new("matter_domain"), ImpulseTarget::Fluid)]);
-    }
 }
