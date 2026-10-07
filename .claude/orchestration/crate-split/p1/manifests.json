@@ -1,0 +1,37 @@
+[
+  {
+    "path": "Cargo.lock",
+    "before": " \"manifold-io\",\n \"manifold-led\",\n \"manifold-media\",\n \"manifold-playback\",\n \"manifold-profiler\",\n \"manifold-recording\",\n",
+    "after": " \"manifold-io\",\n \"manifold-led\",\n \"manifold-media\",\n \"manifold-node-engine\",\n \"manifold-playback\",\n \"manifold-profiler\",\n \"manifold-recording\",\n"
+  },
+  {
+    "path": "Cargo.lock",
+    "before": "]\n\n[[package]]\nname = \"manifold-physics\"\nversion = \"0.1.0\"\ndependencies = [\n",
+    "after": "]\n\n[[package]]\nname = \"manifold-node-engine\"\nversion = \"0.1.0\"\ndependencies = [\n \"ahash\",\n \"arc-swap\",\n \"arrayvec\",\n \"bytemuck\",\n \"core-foundation 0.9.4\",\n \"core-graphics\",\n \"core-text\",\n \"glam\",\n \"half\",\n \"image\",\n \"inventory\",\n \"log\",\n \"manifold-core\",\n \"manifold-fluids\",\n \"manifold-foundation\",\n \"manifold-gpu\",\n \"manifold-physics\",\n \"manifold-playback\",\n \"naga\",\n \"objc2 0.6.4\",\n \"serde\",\n \"serde_json\",\n \"sha2\",\n \"syn 2.0.117\",\n \"zstd\",\n]\n\n[[package]]\nname = \"manifold-physics\"\nversion = \"0.1.0\"\ndependencies = [\n"
+  },
+  {
+    "path": "Cargo.lock",
+    "before": " \"manifold-gpu\",\n \"manifold-io\",\n \"manifold-native\",\n \"manifold-physics\",\n \"manifold-playback\",\n \"manifold-ui\",\n",
+    "after": " \"manifold-gpu\",\n \"manifold-io\",\n \"manifold-native\",\n \"manifold-node-engine\",\n \"manifold-physics\",\n \"manifold-playback\",\n \"manifold-ui\",\n"
+  },
+  {
+    "path": "Cargo.toml",
+    "before": "    \"crates/manifold-editing\",\n    \"crates/manifold-io\",\n    \"crates/manifold-renderer\",\n    \"crates/manifold-native\",\n    \"crates/manifold-profiler\",\n    \"crates/manifold-media\",\n",
+    "after": "    \"crates/manifold-editing\",\n    \"crates/manifold-io\",\n    \"crates/manifold-renderer\",\n    \"crates/manifold-node-engine\",\n    \"crates/manifold-native\",\n    \"crates/manifold-profiler\",\n    \"crates/manifold-media\",\n"
+  },
+  {
+    "path": "crates/manifold-app/Cargo.toml",
+    "before": "path = \"src/main.rs\"\n\n[dependencies]\nmanifold-core = { path = \"../manifold-core\" }\nmanifold-editing = { path = \"../manifold-editing\" }\nmanifold-ui = { path = \"../manifold-ui\" }\n",
+    "after": "path = \"src/main.rs\"\n\n[dependencies]\nmanifold-node-engine = { path = \"../manifold-node-engine\" }\nmanifold-core = { path = \"../manifold-core\" }\nmanifold-editing = { path = \"../manifold-editing\" }\nmanifold-ui = { path = \"../manifold-ui\" }\n"
+  },
+  {
+    "path": "crates/manifold-renderer/Cargo.toml",
+    "before": "publish = false\n\n[dependencies]\nmanifold-physics = { path = \"../manifold-physics\" }\nmanifold-fluids = { path = \"../manifold-fluids\" }\nzstd = \"0.13.3\"\n",
+    "after": "publish = false\n\n[dependencies]\nmanifold-node-engine = { path = \"../manifold-node-engine\" }\nmanifold-physics = { path = \"../manifold-physics\" }\nmanifold-fluids = { path = \"../manifold-fluids\" }\nzstd = \"0.13.3\"\n"
+  },
+  {
+    "path": "crates/manifold-renderer/Cargo.toml",
+    "before": "# deterministic; opt in with `--features gpu-proofs`. Gates `test_device()`,\n# every `mod gpu_tests`, the `gpu_proofs` integration binary above, and the\n# counters and error tap the liquid conformance suite reads.\ngpu-proofs = [\"manifold-gpu/gpu-proofs\"]\n# Bounded dynamic-RT timing is opt-in, separate from correctness gates.\nrt-perf-proofs = [\"gpu-proofs\"]\n# GPU liquid-surface budget proof (GPU_FLUID_SURFACE_DESIGN.md D20), opt-in.\nfluid-perf-proofs = [\"gpu-proofs\"]\n# GPU matter solver budget report (GPU_MPM_SOLVER_DESIGN.md P1b, D20), opt-in.\nmatter-perf-proofs = [\"gpu-proofs\"]\n# Water race probes (GPU_FLIP_PRESSURE_SOLVE.md): minutes-long Dam Break\n# runs of GPU FLIP and the FLIP Fluids engine, opt-in. The frame probe reads\n# render_scene::water_perf.\nwater-race-probes = [\"gpu-proofs\", \"fluid-perf-proofs\", \"manifold-fluids/face-oracle\"]\n# The whitewater fields against FLIP's own (GPU_WHITEWATER_DESIGN.md O1, O2),\n# opt-in: builds FLIP's oracle entries into manifold-fluids.\nwhitewater-oracle = [\"gpu-proofs\", \"manifold-fluids/whitewater-oracle\"]\n[lints]\nworkspace = true\n",
+    "after": "# deterministic; opt in with `--features gpu-proofs`. Gates `test_device()`,\n# every `mod gpu_tests`, the `gpu_proofs` integration binary above, and the\n# counters and error tap the liquid conformance suite reads.\ngpu-proofs = [\"manifold-node-engine/gpu-proofs\", \"manifold-gpu/gpu-proofs\"]\n# Bounded dynamic-RT timing is opt-in, separate from correctness gates.\nrt-perf-proofs = [\"manifold-node-engine/rt-perf-proofs\", \"gpu-proofs\"]\n# GPU liquid-surface budget proof (GPU_FLUID_SURFACE_DESIGN.md D20), opt-in.\nfluid-perf-proofs = [\"manifold-node-engine/fluid-perf-proofs\", \"gpu-proofs\"]\n# GPU matter solver budget report (GPU_MPM_SOLVER_DESIGN.md P1b, D20), opt-in.\nmatter-perf-proofs = [\"manifold-node-engine/matter-perf-proofs\", \"gpu-proofs\"]\n# Water race probes (GPU_FLIP_PRESSURE_SOLVE.md): minutes-long Dam Break\n# runs of GPU FLIP and the FLIP Fluids engine, opt-in. The frame probe reads\n# render_scene::water_perf.\nwater-race-probes = [\"manifold-node-engine/water-race-probes\", \"gpu-proofs\", \"fluid-perf-proofs\", \"manifold-fluids/face-oracle\"]\n# The whitewater fields against FLIP's own (GPU_WHITEWATER_DESIGN.md O1, O2),\n# opt-in: builds FLIP's oracle entries into manifold-fluids.\nwhitewater-oracle = [\"manifold-node-engine/whitewater-oracle\", \"gpu-proofs\", \"manifold-fluids/whitewater-oracle\"]\n[lints]\nworkspace = true\n"
+  }
+]

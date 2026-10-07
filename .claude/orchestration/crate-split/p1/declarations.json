@@ -1,0 +1,367 @@
+[
+  {
+    "path": "crates/manifold-node-engine/src/runtime/mod.rs",
+    "before": "mod physics_sampling;\nmod physics_impulses;\nmod scene_impulses;\npub use scene_impulses::SceneImpulseDiagnostics;\npub use physics_impulses::{CapturedSceneImpulse, PreparedSceneImpulse};\nmod physics_carry;\nmod physics_sources;\nmod physics_source_runtime;\nmod physics_source_controls;\nmod physics_source_state;\nmod physics_source_chain;\n#[cfg(test)]\nmod physics_source_state_tests;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-node-engine/src/runtime/mod.rs",
+    "before": "mod core;\n",
+    "after": "pub(crate) mod core;\n"
+  },
+  {
+    "path": "crates/manifold-node-engine/src/runtime/mod.rs",
+    "before": "mod gpu_flip_surface;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-node-engine/src/runtime/mod.rs",
+    "before": "#[path = \"tests/mosh.rs\"]\nmod mosh_tests;\n",
+    "after": "#[path = \"tests/mosh.rs\"]\nmod mosh_tests;\npub mod preset_context;\npub mod chain_dispatch;\npub mod effect;\npub mod effects;\npub mod layer_skin;\npub mod frame_status;\npub mod background_worker;\npub mod plugin_prewarm;\n"
+  },
+  {
+    "path": "crates/manifold-renderer/src/generators/mod.rs",
+    "before": "pub mod clip_trigger;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/generators/mod.rs",
+    "before": "pub mod line_pipeline;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/generators/mod.rs",
+    "before": "pub mod stateful_base;\n\npub mod platonic_geometry;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/lib.rs",
+    "before": "pub mod background_worker;\npub mod chain_dispatch;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/lib.rs",
+    "before": "pub mod effect;\npub mod effects;\npub mod frame_status;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/lib.rs",
+    "before": "pub mod gpu;\npub mod gpu_encoder;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/lib.rs",
+    "before": "pub mod gpu_types;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/lib.rs",
+    "before": "pub mod layer_skin;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/lib.rs",
+    "before": "pub mod plugin_prewarm;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/lib.rs",
+    "before": "pub mod preset_context;\npub mod preset_loader;\npub mod preset_runtime;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/lib.rs",
+    "before": "pub mod render_target;\npub mod render_target_pool;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/lib.rs",
+    "before": "pub mod uniform_arena;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/lib.rs",
+    "before": "\nuse manifold_node_engine::particles as particles;\nuse manifold_node_engine::mesh as mesh;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/mod.rs",
+    "before": "pub mod atomic;\nmod backend;\nmod bindings;\npub mod atmosphere;\npub mod camera;\npub mod light;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/mod.rs",
+    "before": "pub mod material;\npub mod live_extent;\npub mod mesh_source;\npub mod source_asset;\npub mod render_mode;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/mod.rs",
+    "before": "pub mod scene_object;\npub mod transform;\npub mod viewport_camera;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/mod.rs",
+    "before": "pub mod scene_viewport;\npub mod vector_field;\nmod binding_migration;\npub mod content_revision;\nmod boundary_nodes;\nmod mesh_boundary;\npub mod mesh_change;\nmod bound_graph;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/mod.rs",
+    "before": "mod chain_spec;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/mod.rs",
+    "before": "pub mod depth_rule;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/mod.rs",
+    "before": "pub mod descriptor;\npub mod preview_encoding;\nmod effect_node;\npub(crate) mod execution;\nmod execution_plan;\npub mod freeze;\npub mod fluid;\npub(crate) mod physics_scene;\npub mod fluid_role;\npub mod fluid_particles;\npub mod liquid;\npub mod whitewater;\npub(crate) mod whitewater_handoff;\npub(crate) mod fluid_cache;\npub(crate) mod fluid_mesh_upload;\npub(crate) mod instance_upload;\n#[cfg(all(test, feature = \"gpu-proofs\"))]\nmod fragment_mask_continuity_tests;\nmod graph;\nmod graph_loader;\npub mod resource_allocation;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/mod.rs",
+    "before": "mod gltf_anim_identity;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/mod.rs",
+    "before": "mod loaded_preset_view;\nmod metal_backend;\nmod palette;\nmod param_binding;\npub mod param_doc;\nmod param_tooltips_bulk;\nmod param_tooltips_table;\nmod parameters;\nmod persistence;\npub mod ports;\npub mod primitive;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/mod.rs",
+    "before": "pub mod scene_modifier_expand;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/mod.rs",
+    "before": "mod snapshot;\nmod state_store;\npub mod matter;\npub mod substeps;\npub mod temporal_reset;\npub mod trigger_shadow_lint;\npub mod validate;\nmod validation;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/mod.rs",
+    "before": "pub mod channel_names;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/mod.rs",
+    "before": "pub use backend::{Backend, MockBackend};\npub use bindings::{NodeInputs, NodeOutputs, Slot};\npub use content_revision::{ContentVersion, StorageRevision};\npub use camera::{Camera, CameraMode};\npub use light::{Light, LightMode, ShadowSoftness};\npub use material::{Material, MaterialKind};\npub use scene_object::SceneObject;\npub use transform::Transform;\npub use fluid_role::{FluidRole, FluidRoleKind, PreparedFluidGeometry, MAX_FLUID_ROLES};\npub use mesh_source::MeshSource;\npub use viewport_camera::ViewportCamera;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/mod.rs",
+    "before": "pub use boundary_nodes::{\n    FINAL_OUTPUT_TYPE_ID, FinalOutput, GENERATOR_INPUT_TYPE_ID, GeneratorInput, SOURCE_TYPE_ID,\n    Source,\n};\npub use binding_migration::migrate_user_param_bindings_to_node_id;\npub use bound_graph::{\n    BoundGraph, FusedRetarget, ShadowedDefParam, apply_inner_param_overrides,\n    audible_shadow_findings, find_shadowed_def_params, is_baseline_shadow,\n    shadow_baseline_entries, unretarget_shadow,\n};\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/mod.rs",
+    "before": "pub use effect_node::{\n    intern_name, EffectNode, EffectNodeContext, EffectNodeType, FrameTime, NodeInstanceId,\n    NodeRequires, NodeWire, ParamValues, RtQuality,\n};\n#[cfg(feature = \"gpu-proofs\")]\npub use effect_node::NodeErrorTap;\npub use execution::{Executor, StepProfile};\npub use execution_plan::{ExecutionPlan, ExecutionStep, ResourceId, compile};\npub use chain_spec::{SpliceResult, splice_def_into_chain};\npub use graph::{Graph, NodeInstance, WireWalkMode};\npub use graph_loader::{\n    BoundaryHandling, GraphBuildError, HandleScope, NodeInstantiation, PreAllocationError,\n    WireSide as BuildWireSide, instantiate_def, log_build_error, pre_allocate_resources, allocate_resources,\n};\npub(crate) use graph_loader::{has_retired_params, retire_params};\npub use loaded_preset_view::{\n    LoadedPresetView, collect_node_handles, loaded_preset_view_by_id, outer_routings_from_view,\n    snapshot_for_view,\n};\npub use metal_backend::MetalBackend;\npub(crate) use metal_backend::PreparedMetalBackendResize;\npub use mesh_change::{\n    MeshAspect, MeshDependency, MeshOutputRule, MeshRevision, MeshRevisionRule,\n    PreparedMeshOutputRule, PreparedMeshRevisionRule, PreparedMeshRules,\n};\npub use palette::{catalog_graph_def_for, palette_atoms, PaletteAtom};\npub(crate) use param_binding::Reshape;\npub use param_binding::{\n    BindingCacheEntry, BindingSource, LastAppliedCache, ParamBinding, ParamConvert, ParamId,\n    ParamTarget, ResolvedBinding, ResolvedTarget, apply_binding_defaults, apply_bindings,\n    binding_value, convert_param_value, outer_routings_from_bindings,\n};\npub use parameters::{ParamDef, ParamType, ParamValue};\npub use persistence::{\n    EffectGraphDefExt, GRAPH_DOCUMENT_VERSION, GraphDocument, LoadError, NodeConstructor,\n    NodeDocument, PrimitiveRegistry, SerializedParamValue, WireDocument, WireSide,\n};\npub use ports::{\n    ArrayType, ChannelElementType, ChannelName, ChannelSpec, KnownItem, MatchMode, NodeInput,\n    NodeOutput, NodePort, PortKind, PortType, ScalarType, TextureChannels, std430_layout,\n    std430_stride, std430_stride_and_align,\n};\npub use descriptor::{Category, NodeDescriptor, Role, descriptor_for};\npub use preview_encoding::{LiveNodeParams, PreviewEncoding, PreviewScalarIo};\npub use param_doc::{ParamDoc, tooltip_for};\npub use primitive::{Primitive, PrimitiveDescription, PrimitiveSpec};\npub use physics_events::{ImpulseTarget, ResolvedNodeImpulse};\npub use snapshot::{\n    ArrayMatchMode, ChannelSnapshot, GraphSnapshot, GroupSnapshot, NodeSnapshot, OuterParamRouting,\n    OuterParamSource, ParamSnapshot, ParamSnapshotKind, PortKindSnapshot, PortSnapshot,\n    WireSnapshot,\n};\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/mod.rs",
+    "before": "pub(crate) use snapshot::param_default_to_f32;\npub use freeze::{FusionReport, NodeFusionInfo, RegionSummary, fusion_report};\npub use state_store::{NodeState, OwnerKey, StateStore};\npub use validate::{ValidateKind, ValidationIssue, ValidationReport, validate_def};\npub use validation::{\n    ChannelMismatchInfo, ChannelMismatchReason, GraphError, TextureChannelMismatchInfo,\n    TextureChannelMismatchReason, channels_compatible, texture_channels_compatible,\n    topological_sort, validate,\n};\n\npub mod mesh_partition;\npub mod physics_mesh;\npub mod physics;\npub mod physics_events;\npub mod physics_metrics;\n\npub(crate) mod migration;\n\n#[cfg(test)]\nmod builtins;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/primitives/mod.rs",
+    "before": "pub(crate) mod fluid_surface;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/primitives/mod.rs",
+    "before": "mod compose;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/primitives/mod.rs",
+    "before": "mod gain;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/primitives/mod.rs",
+    "before": "mod liquid_solid_distance;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/primitives/mod.rs",
+    "before": "mod masked_mix;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/primitives/mod.rs",
+    "before": "mod matter_body_reaction;\nmod matter_common;\npub(crate) mod matter_domain;\npub(crate) mod matter_fill;\nmod matter_frame;\nmod matter_grid_update;\nmod matter_move_bodies;\nmod matter_state;\nmod matter_stats;\nmod matter_to_grid;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/primitives/mod.rs",
+    "before": "mod mux_texture;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/primitives/mod.rs",
+    "before": "pub mod standalone_pipeline;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/primitives/mod.rs",
+    "before": "pub(crate) mod prefix_scan;\npub(crate) mod sort_particles_into_cells;\nmod running_total;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/primitives/mod.rs",
+    "before": "pub(crate) mod particle_volume;\npub(crate) mod lattice_bricks;\npub(crate) mod liquid_bricks;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/primitives/mod.rs",
+    "before": "pub(crate) mod dot_products;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/primitives/mod.rs",
+    "before": "pub(crate) mod gpu_flip_bodies;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/primitives/mod.rs",
+    "before": "pub mod gpu_flip_lentine;\npub(crate) mod gpu_flip_pressure;\npub(crate) mod gpu_flip_step;\npub(crate) mod gpu_flip_sheeting;\n#[cfg(test)]\nmod gpu_flip_sheeting_cpu_tests;\n#[cfg(all(test, feature = \"gpu-proofs\"))]\nmod gpu_flip_sheeting_tests;\n#[cfg(all(test, feature = \"gpu-proofs\"))]\nmod gpu_flip_sheeting_step_tests;\npub(crate) mod gpu_flip_clock;\npub(crate) mod gpu_flip_narrow_band;\n#[cfg(all(test, feature = \"gpu-proofs\"))]\nmod gpu_flip_pressure_tests;\npub(crate) mod liquid_fill;\npub(crate) mod liquid_state;\npub mod liquid_stats;\npub(crate) mod liquid_frame;\npub(crate) mod particle_identity;\npub(crate) mod particle_publication;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/primitives/mod.rs",
+    "before": "pub(crate) mod gpu_flip_domain;\npub(crate) mod face_sample_component;\npub(crate) mod matter_face_component;\nmod surface_crossings;\nmod nearest_crossing;\nmod crossing_distance;\nmod liquid_cells;\nmod lattice_curvature;\nmod extend_lattice;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/primitives/mod.rs",
+    "before": "mod energy_potential;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/primitives/mod.rs",
+    "before": "mod whitewater_obstacle_source;\nmod whitewater_emitter_dispatch;\nmod whitewater_influence;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/primitives/mod.rs",
+    "before": "mod whitewater_emitter_velocity;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/primitives/mod.rs",
+    "before": "#[cfg(test)]\nmod whitewater_emitter_cpu;\n#[cfg(test)]\nmod whitewater_engine_cpu;\n#[cfg(all(test, feature = \"gpu-proofs\"))]\nmod whitewater_emitter_gpu_tests;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/primitives/mod.rs",
+    "before": "mod emission_count;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/primitives/mod.rs",
+    "before": "mod whitewater_type;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/primitives/mod.rs",
+    "before": "mod preserve_foam;\nmod keep_whitewater;\n#[cfg(test)]\nmod whitewater_pool_cpu;\n#[cfg(all(test, feature = \"gpu-proofs\"))]\nmod whitewater_pool_tests;\npub(crate) mod whitewater_lifecycle;\npub(crate) mod whitewater_step;\nmod pad_distance_lattice;\n#[cfg(test)]\nmod whitewater_step_tests;\n#[cfg(all(test, feature = \"gpu-proofs\"))]\nmod whitewater_handoff_tests;\n#[cfg(test)]\nmod whitewater_cpu;\n#[cfg(test)]\nmod whitewater_particle_cpu;\n#[cfg(all(test, feature = \"gpu-proofs\"))]\nmod whitewater_particle_tests;\n#[cfg(all(test, feature = \"gpu-proofs\"))]\nmod whitewater_grid_tests;\n#[cfg(all(test, feature = \"gpu-proofs\"))]\nmod whitewater_field_tests;\n#[cfg(test)]\nmod whitewater_extent_tests;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/primitives/mod.rs",
+    "before": "pub mod gpu_flip_preset;\n#[cfg(all(test, feature = \"gpu-proofs\"))]\nmod gpu_flip_atom_tests;\n#[cfg(all(test, feature = \"gpu-proofs\"))]\nmod gpu_flip_body_tests;\n#[cfg(test)]\nmod gpu_flip_extension_tests;\n#[cfg(all(test, feature = \"gpu-proofs\"))]\nmod gpu_flip_step_tests;\n#[cfg(test)]\nmod gpu_flip_narrow_band_tests;\n#[cfg(all(test, feature = \"gpu-proofs\"))]\nmod gpu_flip_scene_tests;\n#[cfg(all(test, feature = \"gpu-proofs\"))]\nmod gpu_flip_tile_tests;\n#[cfg(all(test, feature = \"gpu-proofs\"))]\nmod whitewater_scene_tests;\n#[cfg(all(test, feature = \"gpu-proofs\"))]\nmod whitewater_golden_tests;\n#[cfg(all(test, feature = \"gpu-proofs\"))]\nmod liquid_prepare_tests;\n#[cfg(all(test, feature = \"gpu-proofs\"))]\npub(crate) mod gpu_flip_volume;\n#[cfg(all(test, feature = \"water-race-probes\"))]\npub(crate) mod gpu_flip_race_tests;\n#[cfg(all(test, feature = \"water-race-probes\"))]\npub(crate) mod gpu_flip_still;\n#[cfg(all(test, feature = \"water-race-probes\"))]\nmod gpu_flip_render_smoke_tests;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/primitives/mod.rs",
+    "before": "mod count_surface_triangles;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/primitives/mod.rs",
+    "before": "pub(crate) mod volume_surface_mesh;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/primitives/mod.rs",
+    "before": "#[cfg(all(test, feature = \"gpu-proofs\"))]\nmod liquid_surface_tests;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/primitives/mod.rs",
+    "before": "mod value;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/primitives/mod.rs",
+    "before": "pub(crate) mod wgsl_compute;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/primitives/mod.rs",
+    "before": "pub use compose::{MIX_MODES, MIX_TYPE_ID, Mix};\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/primitives/mod.rs",
+    "before": "pub use gain::Gain;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/primitives/mod.rs",
+    "before": "pub use liquid_solid_distance::LiquidSolidDistance;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/primitives/mod.rs",
+    "before": "pub use masked_mix::MaskedMix;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/primitives/mod.rs",
+    "before": "pub use matter_body_reaction::MatterBodyReaction;\npub use matter_domain::MatterDomain;\npub use matter_fill::MatterFill;\npub use matter_frame::MatterFrame;\npub use matter_grid_update::MatterGridUpdate;\npub use matter_move_bodies::MatterMoveBodies;\npub use matter_state::{MATTER_STATE_PORTS, MatterState};\npub use matter_stats::MatterStats;\npub use matter_to_grid::MatterToGrid;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/primitives/mod.rs",
+    "before": "pub use mux_texture::MuxTexture;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/primitives/mod.rs",
+    "before": "pub use value::Value;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/primitives/mod.rs",
+    "before": "pub use wgsl_compute::{DEFAULT_WGSL as DEFAULT_WGSL_COMPUTE, WgslCompute};\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/primitives/mod.rs",
+    "before": "mod tests {\n    use super::*;\n",
+    "after": "mod tests {\n    use super::*;\n    use manifold_node_engine::primitives::Mix;\n"
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/primitives/mod.rs",
+    "before": "pub(crate) mod physics_world;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/primitives/mod.rs",
+    "before": "pub(crate) mod push_out_of_solid;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/primitives/mod.rs",
+    "before": "pub use push_out_of_solid::PushOutOfSolid;\n",
+    "after": ""
+  },
+  {
+    "path": "crates/manifold-renderer/src/node_graph/primitives/mod.rs",
+    "before": "\n#[cfg(test)]\nmod lattice_closing_tests;\n\npub mod upwind_distance;\npub(crate) mod whitewater_distance;\n\n#[cfg(all(test, feature = \"gpu-proofs\"))]\nmod whitewater_engine_gpu_tests;\n",
+    "after": ""
+  }
+]

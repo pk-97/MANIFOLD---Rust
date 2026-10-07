@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "source_crate": "crates/manifold-renderer",
+  "destination_crate": "crates/manifold-node-engine",
+  "rewrite_roots": [
+    "crates/manifold-renderer",
+    "crates/manifold-node-engine",
+    "crates/manifold-app"
+  ],
+  "aliases": {
+    "manifold_renderer::mesh": "manifold_renderer::generators::mesh_common",
+    "manifold_renderer::particles": "manifold_renderer::generators::compute_common"
+  },
+  "split_identity": {
+    "renderer_build": "crates/manifold-renderer/build.rs",
+    "integration_key": "MANIFOLD_PHYSICS_INTEGRATION_IDENTITY",
+    "family_source": "src/node_graph/gltf_anim_identity.rs"
+  }
+}
