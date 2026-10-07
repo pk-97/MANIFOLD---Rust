@@ -19,7 +19,10 @@ group). Each file pair's use-leaf multisets must match after rewriting; scope,
 visibility, attributes, aliases and glob/named identities are preserved.
 Declared paths resolve in each
 revision's crate and file/inline-module context, including terminal symbols,
-macro arguments and $crate. Exported macro maps use OLD::macro!::=NEW::macro!::.
+macro arguments and $crate. Prefix maps use OLD::=NEW::; exact item maps use
+OLD::Item=NEW::Item. Exported macro maps use OLD::macro!=NEW::macro!
+(the legacy !:: spelling also works). --rewrites-file reads the replay plan's
+two-column TSV, including blank lines and # comments, without altering row kinds.
 Strings/comments are opaque. Includes and build-source rows follow exact git
 rename pairs; includes additionally require asset byte identity. New-package
 lock entries and target dependencies/features require source-crate precedents.
@@ -41,6 +44,7 @@ Usage:
   scripts/move_identity_check.py --cached            # staged changes
   scripts/move_identity_check.py <ref> --show-all    # print all residue lines
   scripts/move_identity_check.py <ref> --rewrite 'crate::node_graph::=manifold_node_engine::'
+  scripts/move_identity_check.py <ref> --rewrites-file path/to/rewrites.tsv
 
 The moved-line detection uses `--color-moved=plain --color-moved-ws=no` and
 pins the four diff colors so parsing never depends on user git config.
@@ -59,6 +63,7 @@ import json
 import posixpath
 import tomllib
 from collections import Counter
+from pathlib import Path
 
 # Pinned colors: 35=magenta (old moved), 36=cyan (new moved). git may emit
 # them with attributes (e.g. \x1b[1;36m), so match the code anywhere in the
@@ -616,10 +621,40 @@ def classify(out: str, claimed: dict[int, str] | None = None) -> tuple[dict[str,
 
 def rewrite_map(value: str) -> tuple[str, str]:
     old, sep, new = value.partition("=")
-    path = r"\$?(?:r#)?[A-Za-z_]\w*(?:::(?:r#)?[A-Za-z_]\w*)*(?:!::|::)"
-    if not sep or not re.fullmatch(path, old) or not re.fullmatch(path, new):
-        raise argparse.ArgumentTypeError("rewrite must be OLD::=NEW:: Rust path prefixes")
+    path = r"(?:\$crate|(?:r#)?[A-Za-z_]\w*)(?:::(?:r#)?[A-Za-z_]\w*)*(?:!)?(?:::)?"
+    if (not sep or not re.fullmatch(path, old) or not re.fullmatch(path, new)
+            or old.endswith('::') != new.endswith('::')
+            or old.removesuffix('::').endswith('!') != new.removesuffix('::').endswith('!')):
+        raise argparse.ArgumentTypeError(
+            "rewrite must be OLD::=NEW:: prefixes, OLD::Item=NEW::Item items, or matching macro paths")
     return old, new
+
+
+def read_rewrites_file(path: str) -> list[tuple[str, str]]:
+    rows = []
+    for number, line in enumerate(Path(path).read_text(encoding='utf-8').splitlines(), 1):
+        if not line.strip() or line.startswith('#'):
+            continue
+        cells = line.split('\t')
+        if len(cells) != 2 or not all(cells):
+            raise ValueError(f'{path}:{number}: expected two nonempty tab-separated columns')
+        try:
+            rows.append(rewrite_map('='.join(cells)))
+        except argparse.ArgumentTypeError as error:
+            raise ValueError(f'{path}:{number}: {error}') from error
+    return rows
+
+
+def validate_rewrites(rows):
+    # Reject ambiguity across CLI and file inputs instead of letting dict
+    # insertion order silently choose an authorization.
+    seen = {}
+    for old, new in rows:
+        key, value = old.removesuffix('::'), new.removesuffix('::')
+        kind = old.endswith('::') and not key.endswith('!')
+        if key in seen and seen[key] != (value, kind):
+            raise ValueError('conflicting rewrite: ' + old)
+        seen[key] = value, kind
 
 
 # Keep literals opaque: path-looking text in a shader, string or comment is not
@@ -647,6 +682,25 @@ def rust_tokens(source):
             yield match.start(), source[match.start():end], False
         else:
             yield match.start(), token, bool(re.fullmatch(RUST_PATH, token))
+
+
+def partial_path_offsets(tokens):
+    """Do not treat a whitespace/comment-separated path fragment as an item."""
+    code = [(pos, token, is_path) for pos, token, is_path in tokens
+            if not token.startswith(('//', '/*'))]
+    partial = set()
+    for i, (pos, _, is_path) in enumerate(code):
+        if not is_path:
+            continue
+        if i + 1 < len(code) and code[i + 1][1] == '::':
+            partial.add(pos)
+        if i and code[i - 1][1].endswith('::'):
+            # A standalone leading :: is absolute, unless a preceding path
+            # token supplies its qualifier. Keywords cannot be qualifiers.
+            if code[i - 1][1] != '::' or (i > 1 and code[i - 2][2]
+                    and code[i - 2][1] not in {'return', 'as', 'impl', 'for', 'dyn', 'in'}):
+                partial.add(pos)
+    return partial
 
 
 def macro_ranges(source, recorded=()):
@@ -903,15 +957,16 @@ def rust_path_resolver(path, reader, rewrites, other_path=None, other_reader=Non
     """One resolver shared by exact lines and expanded import leaves."""
     root, crate, module = crate_context(path, reader)
     _, new_crate, _ = crate_context(other_path, other_reader) if other_reader else (None, None, None)
-    mapping = {old.removesuffix('::'): new.removesuffix('::') for old, new in rewrites}
+    mapping = {old.removesuffix('::'): (new.removesuffix('::'), old.endswith('::'))
+               for old, new in rewrites}
     if crate:
         mapping = {(crate + key[len('crate'):] if key.startswith('crate::') else
                     crate + key[len('$crate'):] if key.startswith('$crate::') else key): value
                    for key, value in mapping.items()}
     if new_crate:
-        mapping = {key: (new_crate + value[len('crate'):] if value.startswith('crate::')
+        mapping = {key: ((new_crate + value[len('crate'):] if value.startswith('crate::')
                          else '$' + new_crate + value[len('$crate'):] if value.startswith('$crate::')
-                         else value) for key, value in mapping.items()}
+                         else value), prefix) for key, (value, prefix) in mapping.items()}
     prefixes = sorted(mapping, key=len, reverse=True)
     local_source = reader(path) or ''
     opaque = opaque_macro_offsets(local_source)
@@ -919,7 +974,7 @@ def rust_path_resolver(path, reader, rewrites, other_path=None, other_reader=Non
                     if is_path and not any(a <= pos < b for a, b in opaque)]
     local_names = {local_tokens[i + 1][1] for i, (_, token) in enumerate(local_tokens[:-1])
                    if token in ('mod', 'as')}
-    def resolve(token, inline=(), macro=False):
+    def resolve(token, inline=(), macro=False, complete=True):
         mapped = False
         absolute = token.startswith('::')
         token = token.removeprefix('::')
@@ -950,13 +1005,15 @@ def rust_path_resolver(path, reader, rewrites, other_path=None, other_reader=Non
             canonical = '::'.join([crate, *list(module or ()), *inline, *parts])
         original_canonical = canonical
         macro_key = canonical + '!' if macro else None
-        if macro_key in mapping:
-            canonical = mapping[macro_key].removesuffix('!')
+        if complete and macro_key in mapping:
+            canonical = mapping[macro_key][0].removesuffix('!')
             mapped = True
         else:
-            key = next((key for key in prefixes if canonical == key or canonical.startswith(key + '::')), None)
+            key = next((key for key in prefixes
+                        if canonical == key and (mapping[key][1] or (complete and not trailing))
+                        or mapping[key][1] and canonical.startswith(key + '::')), None)
             if key is not None:
-                canonical = mapping[key] + canonical[len(key):]
+                canonical = mapping[key][0] + canonical[len(key):]
                 mapped = True
         if mapped and value.endswith('::*'):
             # A declared prefix map alone says nothing about a glob's exports.
@@ -988,11 +1045,13 @@ def rust_path_resolver(path, reader, rewrites, other_path=None, other_reader=Non
 
 
 def recorded_macro_names(source, resolve, rewrites):
-    names = {p.removesuffix('!::') for pair in rewrites for p in pair if p.endswith('!::')}
+    names = {p.removesuffix('::').removesuffix('!') for pair in rewrites for p in pair
+             if p.removesuffix('::').endswith('!')}
     tokens = list(rust_tokens(source))
-    for i, (_, token, is_path) in enumerate(tokens[:-1]):
+    partial = partial_path_offsets(tokens)
+    for i, (pos, token, is_path) in enumerate(tokens[:-1]):
         if is_path and tokens[i + 1][1] == '!':
-            canonical, _ = resolve(token, macro=True)
+            canonical, _ = resolve(token, macro=True, complete=pos not in partial)
             if canonical in names:
                 names.add(token)
     return names
@@ -1015,7 +1074,9 @@ def contextual_lines(source, path, reader, rewrites, renames, other_path=None,
     recorded = (recorded_macros if recorded_macros is not None else
                 recorded_macro_names(source, resolve, rewrites))
     opaque = opaque_macro_offsets(source, recorded)
-    for start, token, is_path in rust_tokens(source):
+    tokens = list(rust_tokens(source))
+    partial = partial_path_offsets(tokens)
+    for start, token, is_path in tokens:
         if '\n' in token and not token.startswith(('//', '/*')):
             first = source.count('\n', 0, start)
             literal_lines.update(range(first + 1, first + token.count('\n') + 1))
@@ -1041,7 +1102,8 @@ def contextual_lines(source, path, reader, rewrites, renames, other_path=None,
         if is_path and ('::' in token):
             absolute = source[:start].endswith('::')
             canonical, mapped = resolve(('::' if absolute else '') + token, inline,
-                                        source[start + len(token):start + len(token) + 1] == '!')
+                                        source[start + len(token):start + len(token) + 1] == '!',
+                                        complete=start not in partial)
             if absolute:
                 canonical = canonical.removeprefix('::')
             if mapped and proved is not None:
@@ -1256,7 +1318,12 @@ def import_identity(source, resolve):
     owned, pieces, end = set(), [], 0
     for start, stop in spans:
         owned.update(range(source.count('\n', 0, start) + 1, source.count('\n', 0, stop) + 2))
-        pieces.extend((source[end:start], '\n' * source.count('\n', start, stop)))
+        # Preserve the final unterminated line: erasing an EOF import can
+        # make splitlines() lose the line that diff hunk coordinates index.
+        replacement = '\n' * source.count('\n', start, stop)
+        if stop == len(source):
+            replacement += ' '
+        pieces.extend((source[end:start], replacement))
         end = stop
     pieces.append(source[end:])
     return leaves if valid else None, owned, ''.join(pieces)
@@ -1809,7 +1876,14 @@ def main() -> int:
     parser.add_argument("--cached", action="store_true")
     parser.add_argument("--show-all", action="store_true")
     parser.add_argument("--rewrite", type=rewrite_map, action="append", default=[])
+    parser.add_argument("--rewrites-file", action="append", default=[], metavar="TSV")
     args = parser.parse_args()
+    try:
+        for path in args.rewrites_file:
+            args.rewrite.extend(read_rewrites_file(path))
+        validate_rewrites(args.rewrite)
+    except (ValueError, OSError) as error:
+        parser.error(str(error))
     if bool(args.target) == args.cached:
         parser.error("give one commit/range or --cached")
     target = "--cached" if args.cached else args.target

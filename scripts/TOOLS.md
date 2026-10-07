@@ -17,7 +17,7 @@ Landing and gates:
   feature-matrix          build every non-default feature so none rots  [scripts/feature_matrix.py]
   rt-noise                RT temporal-stability gate on a paused scene (--record to re-baseline)  [scripts/rt_noise_gate.py]
   bridge-probe            presentation tear regression gate  [scripts/bridge_probe_gate.py]
-  move-check              prove a commit is a pure code move  [scripts/move_identity_check.py]
+  move-check              prove a pure code move; --rewrite paths or --rewrites-file replay TSV  [scripts/move_identity_check.py]
   test-census             record and compare test identities across crate moves  [scripts/test_census.py]
   crate-closure           renderer crate-split census: `closure` sizes the engine hub, `seams` lists hub->family reaches  [scripts/crate_closure.py]
   docs-index              regenerate docs/README.md after adding or renaming a doc  [scripts/gen_docs_index.py]

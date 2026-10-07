@@ -52,7 +52,7 @@ VERBS = [
     ("Landing and gates",
      "bridge-probe", "bridge_probe_gate.py", "presentation tear regression gate"),
     ("Landing and gates",
-     "move-check", "move_identity_check.py", "prove a commit is a pure code move"),
+     "move-check", "move_identity_check.py", "prove a pure code move; --rewrite paths or --rewrites-file replay TSV"),
     ("Landing and gates",
      "test-census", "test_census.py", "record and compare test identities across crate moves"),
     ("Landing and gates",
