@@ -39,16 +39,3 @@ pub fn preset_type_ids(kind: PresetKind) -> impl Iterator<Item = PresetTypeId> {
     visit_presets(kind, &mut |id| ids.push(id));
     ids.into_iter()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn preset_catalog_providers_have_disjoint_type_ids() {
-        let mut ids = std::collections::HashSet::new();
-        for kind in [PresetKind::Effect, PresetKind::Generator, PresetKind::SceneModifier] {
-            visit_presets(kind, &mut |id| assert!(ids.insert(id.clone()), "duplicate preset type id: {id}"));
-        }
-    }
-}

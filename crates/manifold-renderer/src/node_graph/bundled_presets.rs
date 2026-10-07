@@ -919,6 +919,15 @@ mod catalog_source_tests {
     use super::*;
 
     #[test]
+    fn preset_catalog_providers_have_disjoint_type_ids() {
+        let mut ids = std::collections::HashSet::new();
+        for kind in [PresetKind::Effect, PresetKind::Generator, PresetKind::SceneModifier] {
+            crate::node_graph::catalog_source::visit_presets(kind, &mut |id| assert!(ids.insert(id.clone()), "duplicate preset type id: {id}"));
+        }
+        assert!(!ids.is_empty(), "catalog census requires linked family presets");
+    }
+
+    #[test]
     fn preset_catalog_registration_preserves_json_and_cached_def() {
         for kind in [PresetKind::Effect, PresetKind::Generator, PresetKind::SceneModifier] {
             let direct: Vec<_> = bundled_preset_type_ids(kind).collect();
