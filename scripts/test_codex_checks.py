@@ -17,7 +17,8 @@ class PlannerTests(unittest.TestCase):
         repo = Path(__file__).resolve().parents[1]
         for path in ("scripts/agent-worktree.py", "scripts/codex_brokers.py", "scripts/test_agent_worktree.py"):
             checks = codex_checks.tooling_checks(repo, [path])
-            self.assertEqual([c["name"] for c in checks], ["scripts/test_agent_worktree.py"])
+            self.assertEqual([c["name"] for c in checks],
+                             ["scripts/test_agent_worktree.py", "scripts/test_dev.py"])
 
     def test_feature_coverage_is_checked_without_builds(self):
         repo = Path(__file__).resolve().parents[1]
@@ -38,6 +39,8 @@ class PlannerTests(unittest.TestCase):
             expected = ["scripts/test_rt_noise_gate.py"]
             if path == "scripts/trunk_health.py":
                 expected.append("scripts/test_landing_gate.py")
+            if path.endswith(".py"):
+                expected.append("scripts/test_dev.py")  # every script is inventoried
             self.assertEqual([c["name"] for c in checks], expected)
             self.assertEqual(checks[0]["argv"],
                              ["python3", "-B", str(repo / "scripts/test_rt_noise_gate.py")])
@@ -77,8 +80,8 @@ class PlannerTests(unittest.TestCase):
     def test_real_package_and_tooling_scopes(self):
         repo = Path(__file__).resolve().parents[1]
         plan = codex_checks.build_plan(repo, ["scripts/codex_usage.py"])
-        self.assertEqual(len(plan["checks"]), 1)
-        self.assertTrue(plan["checks"][0]["argv"][-1].endswith("test_codex_usage.py"))
+        self.assertEqual([Path(c["argv"][-1]).name for c in plan["checks"]],
+                         ["test_codex_usage.py", "test_dev.py"])
         plan = codex_checks.build_plan(repo, ["crates/manifold-ui/src/param_surface.rs"])
         self.assertIn("manifold-ui", plan["packages"])
         self.assertTrue(all("--manifest-path" in c["argv"] for c in plan["checks"] if c["argv"][0] == "cargo"))

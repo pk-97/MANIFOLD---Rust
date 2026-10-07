@@ -23,8 +23,13 @@
     },
     {
       "topic": "landing",
-      "command_globs": ["*git merge*", "*git push*origin main*"],
+      "command_globs": ["*git merge*", "*git push*origin main*", "*landing_gate.py*", "*land_branch.py*", "*dev.py gate*", "*dev.py land*"],
       "snippet": "landing-protocol.md"
+    },
+    {
+      "topic": "tool-inventory",
+      "globs": ["*/scripts/*.py", "*/scripts/*.sh"],
+      "snippet": "tool-inventory.md"
     },
     {
       "topic": "workspace-test",
