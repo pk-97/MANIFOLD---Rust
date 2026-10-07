@@ -262,7 +262,7 @@ impl MathViewRuntime {
         height: u32,
         format: GpuTextureFormat,
     ) -> Result<(), JsonGeneratorLoadError> {
-        crate::node_graph::primitives::RenderMeshDiagram::prewarm_pipelines(&device);
+        crate::plugin_prewarm::prewarm_pipeline("node.render_mesh_diagram", &device);
         self.bind_shared_resources(parent)?;
         for variant in &mut self.variants {
             variant.install_generator_device(

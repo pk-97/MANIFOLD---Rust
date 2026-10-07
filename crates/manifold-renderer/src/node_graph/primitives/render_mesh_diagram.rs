@@ -192,6 +192,14 @@ crate::primitive! {
 const SHADER: &str = concat!(include_str!("shaders/sample_face_common.wgsl"), "\n", include_str!("shaders/render_mesh_diagram.wgsl"));
 const CAPTURE_SHADER: &str = include_str!("shaders/history_capture.wgsl");
 
+inventory::submit! {
+    crate::plugin_prewarm::PipelinePrewarm {
+        type_id: RenderMeshDiagram::TYPE_ID,
+        run: RenderMeshDiagram::prewarm_pipelines,
+    }
+}
+
+
 impl RenderMeshDiagram {
     /// Startup prewarm hook used by the native generator registry.
     pub fn prewarm_pipelines(device: &manifold_gpu::GpuDevice) {
@@ -778,3 +786,16 @@ mod gpu_tests;
 #[cfg(all(test, feature = "gpu-proofs"))]
 #[path = "render_mesh_diagram_depth_tests.rs"]
 mod depth_tests;
+
+#[cfg(test)]
+mod prewarm_source_tests {
+    use crate::node_graph::primitive::PrimitiveSpec;
+    #[test]
+    fn pipeline_prewarm_registration_uses_direct_prewarmer() {
+        let entries: Vec<_> = inventory::iter::<crate::plugin_prewarm::PipelinePrewarm>
+            .into_iter().filter(|entry| entry.type_id == super::RenderMeshDiagram::TYPE_ID).collect();
+        assert_eq!(entries.len(), 1);
+        assert!(std::ptr::fn_addr_eq(entries[0].run,
+            super::RenderMeshDiagram::prewarm_pipelines as fn(&manifold_gpu::GpuDevice)));
+    }
+}

@@ -44,6 +44,23 @@ pub struct PluginPrewarm {
 
 inventory::collect!(PluginPrewarm);
 
+/// Family pipeline preparation, invoked at the owning runtime's preparation site.
+pub struct PipelinePrewarm {
+    pub type_id: &'static str,
+    pub run: fn(&GpuDevice),
+}
+
+inventory::collect!(PipelinePrewarm);
+
+pub fn prewarm_pipeline(type_id: &str, device: &GpuDevice) {
+    let mut entries = inventory::iter::<PipelinePrewarm>
+        .into_iter()
+        .filter(|entry| entry.type_id == type_id);
+    let entry = entries.next().expect("pipeline prewarm provider must be linked");
+    assert!(entries.next().is_none(), "duplicate pipeline prewarm provider");
+    (entry.run)(device);
+}
+
 /// Run every registered [`PluginPrewarm`] submission, returning the
 /// vector of constructed processors. The caller (renderer's
 /// compositor) must hold the returned `Vec` for the process lifetime
