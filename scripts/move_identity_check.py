@@ -683,10 +683,13 @@ def opaque_macro_offsets(source, recorded=()):
 def build_source_spans(source):
     """Only literal source-list arguments and literal Cargo rerun directives."""
     tokens = list(rust_tokens(source))
+    # A locally declared consumer has no verified source-list contract.
+    local_consumer = any(token in ('mod', 'as') and tokens[i + 1][1] == 'native_source_identity'
+                         for i, (_, token, _) in enumerate(tokens[:-1]))
     opaque = opaque_macro_offsets(source)
     spans = []
     for i, (start, token, _) in enumerate(tokens):
-        if token != 'native_source_identity::emit_source_identity' or any(a < start < b for a, b in opaque):
+        if local_consumer or token != 'native_source_identity::emit_source_identity' or any(a < start < b for a, b in opaque):
             continue
         if i + 1 >= len(tokens) or tokens[i + 1][1] != '(':
             continue
@@ -734,11 +737,19 @@ def changed_region_lines(before, after, old_regions, new_regions, inventories=No
     old_values = Counter(before[a:b] for a, b in old_regions)
     new_values = Counter(after[a:b] for a, b in new_regions)
     result = {'-': set(), '+': set()}
+    # Extraction can remove payloads, but surviving payloads must retain their
+    # occurrence order. Membership elsewhere cannot authorize a swap.
+    exchanged = set()
+    shared = old_values.keys() & new_values.keys()
+    old_order = [before[a:b] for a, b in old_regions if before[a:b] in shared]
+    new_order = [after[a:b] for a, b in new_regions if after[a:b] in shared]
+    if old_order != new_order:
+        exchanged.update(shared)
     for sign, source, regions, own, other in (
             ('-', before, old_regions, old_values, new_values),
             ('+', after, new_regions, new_values, old_values)):
         for a, b in regions:
-            if (source[a:b] not in inventories['+' if sign == '-' else '-'] if inventories is not None
+            if source[a:b] in exchanged or (source[a:b] not in inventories['+' if sign == '-' else '-'] if inventories is not None
                     else own[source[a:b]] != other[source[a:b]]):
                 result[sign].update(range(source.count('\n', 0, a) + 1,
                                           source.count('\n', 0, b) + 2))
@@ -774,8 +785,7 @@ def item_attributes(source):
                 i += 1
                 if depth == 0:
                     break
-            if len(group) < 2 or group[1] != 'path':
-                attrs.extend(group)
+            attrs.extend(group)
         header = []
         end = tokens[i - 1][0] + len(tokens[i - 1][1])
         for _, value, _ in tokens[i:]:
@@ -908,7 +918,7 @@ def rust_path_resolver(path, reader, rewrites, other_path=None, other_reader=Non
     local_tokens = [(pos, token) for pos, token, is_path in rust_tokens(local_source)
                     if is_path and not any(a <= pos < b for a, b in opaque)]
     local_names = {local_tokens[i + 1][1] for i, (_, token) in enumerate(local_tokens[:-1])
-                   if token == 'mod'}
+                   if token in ('mod', 'as')}
     def resolve(token, inline=(), macro=False):
         mapped = False
         absolute = token.startswith('::')
@@ -1679,9 +1689,24 @@ def crate_move_claims(out: str, read_old, read_new, rewrites,
             new_tokens = ' '.join(t for _, t, _ in rust_tokens(after))
             common_headers = {header for header in old_headers | new_headers
                               if ' '.join(header) in old_tokens and ' '.join(header) in new_tokens}
+            def comparable_attributes(records, header):
+                inline_to_decl = (len(header) >= 2 and header[-2] == 'mod'
+                                  and ' '.join(header) + ' {' in old_tokens
+                                  and ' '.join(header) + ' ;' in new_tokens)
+                values = []
+                for attrs, h in records:
+                    if h != header:
+                        continue
+                    if inline_to_decl:
+                        # Existing tests-out wiring can introduce #[path].
+                        # An external-module redirect has no old inline body
+                        # and must keep the path in its identity.
+                        attrs = tuple(re.sub(r'\[ path = "[^"\n]+" \]', '', ' '.join(attrs)).split())
+                    values.append(attrs)
+                return values
             changed_headers = {header for header in common_headers
-                               if Counter(attrs for attrs, h in old_attrs if h == header)
-                               != Counter(attrs for attrs, h in new_attrs if h == header)}
+                               if comparable_attributes(old_attrs, header)
+                               != comparable_attributes(new_attrs, header)}
             for sign, source, records, regions in (
                     ('-', before, old_attrs, old_regions), ('+', after, new_attrs, new_regions)):
                 for (_, header), (a, b) in zip(records, regions):
@@ -1693,12 +1718,15 @@ def crate_move_claims(out: str, read_old, read_new, rewrites,
             if old_path != new_path:
                 pattern = r'\binclude_(?:str|bytes)!\s*\(\s*"([^"\n]+)"\s*\)'
                 def includes(source):
-                    starts = {pos for pos, token, is_path in rust_tokens(source)
-                              if is_path and token in ('include_str', 'include_bytes')}
-                    return [match for match in re.finditer(pattern, source) if match.start() in starts]
+                    tokens = list(rust_tokens(source))
+                    starts = {pos for i, (pos, token, _) in enumerate(tokens[:-1])
+                              if token in ('include_str', 'include_bytes') and tokens[i + 1][1] == '!'}
+                    matches = [match for match in re.finditer(pattern, source) if match.start() in starts]
+                    # Unsupported syntax is unproved, not an empty include list.
+                    return matches if len(matches) == len(starts) else None
                 old_includes = includes(before)
                 new_includes = includes(after)
-                if len(old_includes) != len(new_includes) or any(
+                if old_includes is None or new_includes is None or len(old_includes) != len(new_includes) or any(
                         read_old(posixpath.normpath(posixpath.join(posixpath.dirname(old_path), a[1])), raw=True) is None
                         or read_old(posixpath.normpath(posixpath.join(posixpath.dirname(old_path), a[1])), raw=True)
                         != read_new(posixpath.normpath(posixpath.join(posixpath.dirname(new_path), b[1])), raw=True)
@@ -1728,9 +1756,9 @@ def crate_move_claims(out: str, read_old, read_new, rewrites,
                 absolute = offset + index
                 import_line = numbers[sign] in import_lines[sign]
                 if numbers[sign] in attribute_protected[sign] or numbers[sign] in macro_protected[sign] or (
-                        numbers[sign] in protected[sign] and not MOVED_RE.match(lines[index])):
+                        numbers[sign] in protected[sign]):
                     claims[absolute] = 'blocked'
-                elif path and not path.endswith(('.rs', 'Cargo.toml', 'Cargo.lock')) and not MOVED_RE.match(lines[index]):
+                elif path and not path.endswith(('.rs', 'Cargo.toml', 'Cargo.lock')):
                     claims[absolute] = 'blocked'
                 elif import_line and not import_ok:
                     claims[absolute] = 'blocked'
