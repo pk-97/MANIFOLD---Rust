@@ -148,6 +148,10 @@ mod amount_zero_passthrough_tests;
 #[cfg(test)]
 #[path = "tests/generator_runtime.rs"]
 mod generator_runtime_tests;
+#[cfg(all(test, feature = "gpu-proofs"))]
+#[path = "tests/array_buffers.rs"]
+mod array_buffers_tests;
+
 #[cfg(test)]
 #[path = "tests/trigger_initialization.rs"]
 mod trigger_initialization;

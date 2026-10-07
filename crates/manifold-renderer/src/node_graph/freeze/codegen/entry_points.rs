@@ -1,13 +1,11 @@
 use crate::node_graph::ports::PortType;
 
-use super::types::{is_texture_input, CodegenError};
+use super::types::{is_texture_input, wgsl_storage_token, CodegenError};
 use super::standalone::{
     generate_standalone, generate_standalone_buffer_with_options,
     generate_standalone_resolve,
     StandaloneKernelSpec,
 };
-
-
 
 /// Generate the standalone kernel for a primitive type — the single-source
 /// `run()` path. Reads the body + classification + ports/params off the type's
@@ -38,16 +36,8 @@ pub fn standalone_for_spec<P: crate::node_graph::primitive::PrimitiveSpec>(
             P::BUFFER_INDEX,
         );
     }
-    // BUFFER→TEXTURE resolve: an Array input with NO texture input, feeding a
-    // texture output — the accumulator-to-density bridge
-    // (`generate_standalone_resolve`'s contract: exactly one atomic-integer
-    // accumulator in, no texture reads at all). D3 (BUG-114) adds a SECOND,
-    // distinct Array-input shape — a texture-domain atom that ALSO reads ≥1
-    // texture input and tags its Array input `BufferIndex` (the `draw_*`
-    // family) — which is NOT the resolve bridge and must fall through to
-    // `generate_standalone` below (the codegen path that now handles
-    // `BufferIndex`). Gated on "no texture input" so this branch's scope
-    // stays exactly what it always was for every existing resolve atom.
+    // Resolve kernels cannot read textures. Texture-domain atoms with Array
+    // inputs use the standalone path's BufferIndex support instead.
     if P::INPUTS.iter().any(|i| matches!(i.ty, PortType::Array(_)))
         && !P::INPUTS.iter().any(is_texture_input)
     {
@@ -56,11 +46,8 @@ pub fn standalone_for_spec<P: crate::node_graph::primitive::PrimitiveSpec>(
     generate_standalone(&spec)
 }
 
-/// The emission shape `generate_standalone`'s arity gate expects, derived
-/// from the texture-input count: 0 → Source, 1 → Pointwise, ≥2 →
-/// MultiInputCoincident (mirrors the gate's own arms). Used only by the
-/// boundary-atom entry points below, where the declared `FUSION_KIND` is
-/// `Boundary` and the shape must come from the ports instead.
+/// Boundary atoms need an emission shape because their declared fusion kind
+/// does not describe texture-input arity.
 fn emission_shape_for(
     inputs: &[crate::node_graph::ports::NodePort],
 ) -> crate::node_graph::freeze::classify::FusionKind {
@@ -107,18 +94,6 @@ pub fn standalone_for_boundary_spec<P: crate::node_graph::primitive::PrimitiveSp
     generate_standalone(&spec)
 }
 
-/// WGSL storage-texture format token for the formats a texture kernel can declare
-/// as a write target. `None` for anything else (the standalone path only supports
-/// the f16 working default + fp32 opt-in for precision-sensitive feedback loops).
-pub fn wgsl_storage_token(fmt: manifold_gpu::GpuTextureFormat) -> Option<&'static str> {
-    use manifold_gpu::GpuTextureFormat as F;
-    match fmt {
-        F::Rgba16Float => Some("rgba16float"),
-        F::Rgba32Float => Some("rgba32float"),
-        _ => None,
-    }
-}
-
 /// Like [`standalone_for_spec`] but emits the output storage texture at `fmt`
 /// instead of the hardcoded rgba16float. The unfused side of FULL-PRECISION
 /// in-loop fusion: a texture atom inside a chaotic feedback loop can declare an
@@ -153,19 +128,8 @@ pub fn standalone_for_spec_fmt<P: crate::node_graph::primitive::PrimitiveSpec>(
 /// [`EffectNode`](crate::node_graph::effect_node::EffectNode) trait instead of
 /// a compile-time `PrimitiveSpec` type parameter.
 ///
-/// `standalone_for_spec::<Self>()` needs the concrete primitive type at the
-/// call site (it's generic over `P: PrimitiveSpec`), which is exactly what a
-/// registry-driven prewarm sweep doesn't have — `PrimitiveRegistry::construct`
-/// only ever hands back a type-erased `Box<dyn EffectNode>`. But every const
-/// `standalone_for_spec` reads (`WGSL_BODY`, `INPUTS`, `OUTPUTS`, `PARAMS`,
-/// `INPUT_ACCESS`, `DERIVED_UNIFORMS`, `WGSL_INCLUDES`, `ATOMIC_OUTPUTS`,
-/// `FUSION_KIND`, `STENCIL_FETCH`) is ALSO exposed as a same-shaped `&dyn
-/// EffectNode` method by the blanket `impl<P: Primitive> EffectNode for P`
-/// (`primitive.rs`) — the trait was already carrying everything codegen
-/// needs, just behind dynamic dispatch instead of a type parameter. This
-/// function is that dynamic path, letting `GeneratorRegistry::prewarm_all`
-/// compile every registered atom's codegen pipeline generically (BUG-146),
-/// without a per-atom `prewarm_pipeline` method or a hand-maintained list.
+/// Registry-driven prewarming only has type-erased nodes, so it cannot call
+/// the generic entry point.
 ///
 /// Returns `Err(CodegenError::NoBody)` for any node with no `wgsl_body` (hand-
 /// written pipelines like `render_scene`/`gltf_texture_source`/`draw_*`, and
