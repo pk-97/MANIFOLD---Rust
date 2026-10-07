@@ -15,7 +15,6 @@ use sha2::{Digest as ShaDigest, Sha256};
 const DIGEST_VERSION: &[u8] = b"manifold.physics-source-controls\0v1";
 
 #[cfg(test)]
-#[path = "physics_source_controls_tests.rs"]
 mod tests;
 
 /// Hash the authored control identity for the requested, already canonical IDs.

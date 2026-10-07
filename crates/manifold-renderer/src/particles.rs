@@ -63,7 +63,7 @@ pub const FIXED_POINT_SCALE: f32 = 4096.0;
 
 /// Particle common WGSL source (WangHash, noise, etc.).
 /// Include this in compute shaders that need hash/noise functions.
-pub const PARTICLE_COMMON_WGSL: &str = include_str!("shaders/particle_common.wgsl");
+pub const PARTICLE_COMMON_WGSL: &str = include_str!("generators/shaders/particle_common.wgsl");
 
 #[cfg(test)]
 mod particle_specs_drift {

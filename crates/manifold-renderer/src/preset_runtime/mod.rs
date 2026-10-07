@@ -108,73 +108,57 @@ mod gpu_flip_surface;
 pub use modifier_preview::{ModifierPreviewContext, ModifierPreviewError};
 
 #[cfg(all(test, feature = "gpu-proofs"))]
-#[path = "tests/multi_segment.rs"]
 mod multi_segment_tests;
 
 #[cfg(all(test, feature = "gpu-proofs"))]
-#[path = "tests/group_mask.rs"]
 mod group_mask_tests;
 
 #[cfg(all(test, feature = "gpu-proofs"))]
-#[path = "tests/binding_seed.rs"]
 mod binding_seed_tests;
 
 #[cfg(test)]
-#[path = "tests/topology_hash.rs"]
 mod topology_hash_tests;
 
 #[cfg(all(test, feature = "gpu-proofs"))]
-#[path = "tests/user_binding.rs"]
 mod user_binding_tests;
 
 #[cfg(test)]
-#[path = "tests/bug080_manifest_gate.rs"]
 mod bug080_manifest_gate_tests;
 
 #[cfg(test)]
-#[path = "tests/persistent_slot.rs"]
 mod persistent_slot_tests;
 
 #[cfg(test)]
-#[path = "tests/transient_slot.rs"]
 mod transient_slot_tests;
 
 #[cfg(all(test, feature = "gpu-proofs"))]
-#[path = "tests/generator_input.rs"]
 mod generator_input_tests;
 
 #[cfg(all(test, feature = "gpu-proofs"))]
-#[path = "tests/chain_error.rs"]
 mod chain_error_tests;
 
 #[cfg(all(test, feature = "gpu-proofs"))]
-#[path = "tests/amount_zero_passthrough.rs"]
 mod amount_zero_passthrough_tests;
 
 
 #[cfg(test)]
-#[path = "tests/trigger_initialization.rs"]
 mod trigger_initialization;
 
 
 
 
 #[cfg(test)]
-#[path = "tests/segment_prewarm.rs"]
 mod segment_prewarm_tests;
 
 
 
 
 #[cfg(all(test, feature = "gpu-proofs"))]
-#[path = "tests/blob_grain_probe.rs"]
 mod blob_grain_probe_tests;
 
 #[cfg(all(test, feature = "gpu-proofs"))]
-#[path = "tests/mosh.rs"]
 mod mosh_tests;
 
 #[cfg(test)]
 #[doc(hidden)]
-#[path = "../testkit/runtime.rs"]
 pub(crate) mod testkit;

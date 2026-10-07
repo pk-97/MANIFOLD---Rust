@@ -4194,5 +4194,4 @@ pub mod census;
 
 #[cfg(test)]
 #[doc(hidden)]
-#[path = "../../testkit/freeze_region.rs"]
 pub(crate) mod testkit;

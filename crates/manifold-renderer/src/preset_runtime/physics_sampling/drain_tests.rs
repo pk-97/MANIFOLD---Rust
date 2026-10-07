@@ -4,11 +4,8 @@ use crate::node_graph::ports::{NodeInput, NodeOutput, NodePort, PortKind, PortTy
 use crate::node_graph::{EffectNode, EffectNodeContext, EffectNodeType, ParamDef};
 use std::borrow::Cow;
 
-mod string_bindings {
-    include!("physics_string_binding_tests.rs");
-}
+mod string_bindings;
 
-#[path = "physics_asset_take_tests.rs"]
 mod assets;
 
 

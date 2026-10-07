@@ -30,11 +30,6 @@ const OUT_OF_LOOP_ULP_REL_TOL: f32 = 3.0e-2;
 
 use crate::testkit::proof_support::*;
 
-/// The real target: the shipped ColorGrade preset (9 nodes, 7 pointwise atoms
-/// fanning source into both a grade chain and a mix) hand-fused into one
-/// kernel and validated against the unfused preset at non-trivial params.
-
-
 /// BUG-135/BUG-141: the real glb-import-shaped region — a camera-derived
 /// `wgsl_includes` TEXTURE atom (`node.coc_from_depth`, whose body calls
 /// `depth_common.wgsl`'s `linearize_depth`) fused with a Pointwise neighbour

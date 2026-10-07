@@ -57,7 +57,7 @@ impl MeshPipeline {
     /// Create a new MeshPipeline. Call once during generator initialization.
     pub fn new(device: &manifold_gpu::GpuDevice, label: &str) -> Self {
         let pipeline = device.create_render_pipeline_depth(
-            include_str!("shaders/mesh_pipeline.wgsl"),
+            include_str!("../generators/shaders/mesh_pipeline.wgsl"),
             "vs_main",
             "fs_main",
             manifold_gpu::GpuTextureFormat::Rgba16Float,

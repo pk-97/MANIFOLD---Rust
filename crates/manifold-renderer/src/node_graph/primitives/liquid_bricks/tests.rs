@@ -141,20 +141,20 @@ fn fluid_bricks_generated_consumers_validate_on_cpu() {
         standalone_for_spec::<CountSurfaceTriangles>().unwrap(),
         standalone_for_spec::<VolumeSurfaceMesh>().unwrap(),
         dense_source::<VolumeSurfaceMesh>(include_str!(
-            "shaders/volume_surface_mesh_dense_reference.wgsl"
+            "../shaders/volume_surface_mesh_dense_reference.wgsl"
         )),
         dense_source::<RelaxSurfaceMesh>(include_str!(
-            "shaders/relax_surface_mesh_dense_reference.wgsl"
+            "../shaders/relax_surface_mesh_dense_reference.wgsl"
         )),
         dense_source::<ParticleVolume>(include_str!(
-            "shaders/particle_volume_dense_reference.wgsl"
+            "../shaders/particle_volume_dense_reference.wgsl"
         )),
-        dense_source::<SmoothLattice>(include_str!("shaders/smooth_lattice_dense_reference.wgsl")),
+        dense_source::<SmoothLattice>(include_str!("../shaders/smooth_lattice_dense_reference.wgsl")),
         dense_source::<ClampLiquidToSolids>(include_str!(
-            "shaders/clamp_liquid_to_solids_dense_reference.wgsl"
+            "../shaders/clamp_liquid_to_solids_dense_reference.wgsl"
         )),
         dense_source::<CountSurfaceTriangles>(include_str!(
-            "shaders/count_surface_triangles_dense_reference.wgsl"
+            "../shaders/count_surface_triangles_dense_reference.wgsl"
         )),
     ] {
         let module = naga::front::wgsl::parse_str(&source)

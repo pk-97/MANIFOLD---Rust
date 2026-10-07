@@ -2,20 +2,20 @@
 use super::*;
 
 const ATOMS: [(&str, &str); 14] = [
-    ("jitter", include_str!("shaders/jitter_particles_body.wgsl")),
-    ("sample", include_str!("shaders/sample_faces_at_particles_body.wgsl")),
-    ("velocity", include_str!("shaders/whitewater_emitter_velocity_body.wgsl")),
-    ("energy", include_str!("shaders/energy_potential_body.wgsl")),
-    ("wavecrest", include_str!("shaders/wavecrest_potential_body.wgsl")),
-    ("inside", include_str!("shaders/inside_turbulence_potential_body.wgsl")),
-    ("count", include_str!("shaders/turbulence_emission_count_body.wgsl")),
-    ("dust", include_str!("shaders/dust_potential_body.wgsl")),
-    ("spawn", include_str!("shaders/spawn_whitewater_body.wgsl")),
-    ("type", include_str!("shaders/whitewater_type_body.wgsl")),
-    ("advect", include_str!("shaders/advect_whitewater_body.wgsl")),
-    ("retype", include_str!("shaders/retype_whitewater_body.wgsl")),
-    ("age", include_str!("shaders/age_whitewater_body.wgsl")),
-    ("turbulence", include_str!("shaders/turbulence_field_body.wgsl")),
+    ("jitter", include_str!("../shaders/jitter_particles_body.wgsl")),
+    ("sample", include_str!("../shaders/sample_faces_at_particles_body.wgsl")),
+    ("velocity", include_str!("../shaders/whitewater_emitter_velocity_body.wgsl")),
+    ("energy", include_str!("../shaders/energy_potential_body.wgsl")),
+    ("wavecrest", include_str!("../shaders/wavecrest_potential_body.wgsl")),
+    ("inside", include_str!("../shaders/inside_turbulence_potential_body.wgsl")),
+    ("count", include_str!("../shaders/turbulence_emission_count_body.wgsl")),
+    ("dust", include_str!("../shaders/dust_potential_body.wgsl")),
+    ("spawn", include_str!("../shaders/spawn_whitewater_body.wgsl")),
+    ("type", include_str!("../shaders/whitewater_type_body.wgsl")),
+    ("advect", include_str!("../shaders/advect_whitewater_body.wgsl")),
+    ("retype", include_str!("../shaders/retype_whitewater_body.wgsl")),
+    ("age", include_str!("../shaders/age_whitewater_body.wgsl")),
+    ("turbulence", include_str!("../shaders/turbulence_field_body.wgsl")),
 ];
 
 fn function<'a>(source: &'a str, name: &str) -> &'a str {
@@ -93,7 +93,7 @@ fn whitewater_fused_and_unpack_validate_on_cpu() {
     assert_eq!(std::mem::size_of::<UnpackParams>(), 16);
     assert_eq!(module.entry_points.len(), 6);
     for entry in &module.entry_points { assert_eq!(entry.workgroup_size, [256, 1, 1]); }
-    let adapter = include_str!("shaders/face_sample_component_body.wgsl");
+    let adapter = include_str!("../shaders/face_sample_component_body.wgsl");
     let expected = function(adapter, "body").replace("fn body(", "fn ww_unpack_face(");
     assert_eq!(function(WHITEWATER_FUSED_SHADER, "ww_unpack_face"), expected, "adapter indexing, select and zero tail");
     assert!(random_calls(function(WHITEWATER_FUSED_SHADER, "ww_unpack_faces")).is_empty());
@@ -192,7 +192,7 @@ fn whitewater_legacy_refuses_packed_faces() {
 
 #[test]
 fn whitewater_production_does_not_dispatch_replaced_atoms() {
-    let source = include_str!("whitewater_step.rs");
+    let source = include_str!("../whitewater_step.rs");
     for atom in ["JitterParticles", "SampleFacesAtParticles", "WhitewaterEmitterVelocity", "EnergyPotential",
         "WavecrestPotential", "InsideTurbulencePotential", "TurbulenceEmissionCount", "DustPotential",
         "SpawnWhitewater", "WhitewaterType", "AdvectWhitewater", "RetypeWhitewater", "AgeWhitewater", "TurbulenceField"] {

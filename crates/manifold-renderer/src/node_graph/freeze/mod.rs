@@ -34,9 +34,9 @@ pub use diff::{DiffResult, TextureDiff};
 pub use fusion_report::{FusionReport, NodeFusionInfo, RegionSummary, fusion_report};
 pub use markers::Marker;
 
-/// First end-to-end fusion proof — hand-fused Gain and ColorGrade chains
-/// validated against the unfused chains through the oracle (correct fusion
-/// clears, wrong fusion fails). Test-only; the eventual codegen reuses this
-/// render-two-ways shape and the [`reference`] kernels as its targets.
+#[doc = "First end-to-end fusion proof — hand-fused Gain and ColorGrade chains"]
+#[doc = "validated against the unfused chains through the oracle (correct fusion"]
+#[doc = "clears, wrong fusion fails). Test-only; the eventual codegen reuses this"]
+#[doc = "render-two-ways shape and the [`reference`] kernels as its targets."]
 #[cfg(all(test, feature = "gpu-proofs"))]
 mod proof;

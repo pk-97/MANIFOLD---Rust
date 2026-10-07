@@ -53,6 +53,6 @@ pub(crate) fn turbulence(faces: [&[f32]; 3], face_cells: [u32; 3], distance: &[f
     super::whitewater_emitter_cpu::turbulence(faces, face_cells, distance, super::whitewater_particle_cpu::Box3 { cells: grid.cells, center: grid.center, size: grid.size })
 }
 
-pub(crate) fn source(influence: f32, dust_strength: f32, kind: u32, pad: u32) -> impl bytemuck::Pod + crate::node_graph::ports::KnownItem {
+pub(crate) fn source(influence: f32, dust_strength: f32, kind: u32, pad: u32) -> impl crate::node_graph::ports::KnownItem {
     super::whitewater_obstacle_source::WhitewaterSource { influence, dust_strength, kind, pad }
 }

@@ -44,7 +44,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use arc_swap::ArcSwap;
 use manifold_core::project::EmbeddedOrigin;
 
-#[path = "preset_loader/blob_mask.rs"]
 mod blob_mask;
 
 /// Monotonic catalog generation counter. Starts at 0 and is bumped by the

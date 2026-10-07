@@ -324,5 +324,4 @@ mod tests {
 
 #[cfg(test)]
 #[doc(hidden)]
-#[path = "../testkit/loaded_view.rs"]
 pub(crate) mod testkit;

@@ -720,5 +720,4 @@ mod tests {
 
 #[cfg(any(test, feature = "gpu-proofs"))]
 #[doc(hidden)]
-#[path = "../../testkit/conformance.rs"]
 pub(crate) mod testkit;

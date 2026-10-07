@@ -519,5 +519,4 @@ impl Primitive for SortParticlesIntoCells {
 }
 
 #[cfg(all(test, feature = "gpu-proofs"))]
-#[path = "sort_particles_into_cells_gpu_tests.rs"]
 mod gpu_tests;

@@ -3663,5 +3663,4 @@ mod tests {
 
 #[cfg(test)]
 #[doc(hidden)]
-#[path = "../../testkit/freeze_install.rs"]
 pub(crate) mod testkit;

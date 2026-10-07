@@ -2036,5 +2036,4 @@ mod tests {
 
 #[cfg(test)]
 #[doc(hidden)]
-#[path = "../../testkit/extent.rs"]
 pub(crate) mod testkit;

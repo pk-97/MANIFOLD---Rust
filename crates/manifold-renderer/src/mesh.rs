@@ -471,5 +471,4 @@ mod mesh_common_specs_drift {
     // primitives/blob_detect_ffi.rs.
 }
 
-#[path = "mesh_pipeline.rs"]
 pub mod pipeline;

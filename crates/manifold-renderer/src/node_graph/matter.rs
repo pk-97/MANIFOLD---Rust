@@ -10,7 +10,7 @@ use crate::node_graph::liquid::lattice::LiquidLattice;
 use crate::node_graph::ports::{ChannelElementType, ChannelSpec, KnownItem};
 
 pub mod coupling;
-/// The f64 CPU oracle, compiled for unit tests and the `gpu-proofs` binary.
+#[doc = "The f64 CPU oracle, compiled for unit tests and the `gpu-proofs` binary."]
 pub mod look;
 #[cfg(any(test, feature = "gpu-proofs"))]
 #[doc(hidden)]

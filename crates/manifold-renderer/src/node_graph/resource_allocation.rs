@@ -1076,5 +1076,4 @@ mod tests {
 }
 
 #[cfg(test)]
-#[path = "../testkit/capacity.rs"]
 mod testkit;

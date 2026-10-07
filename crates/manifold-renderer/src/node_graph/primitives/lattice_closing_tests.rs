@@ -287,7 +287,6 @@ fn fluid_fill_pits_standalone_shaders_validate() {
     }
 }
 #[cfg(feature = "gpu-proofs")]
-#[path = "lattice_closing_gpu_tests.rs"]
 mod gpu_tests;
 
 fn fused_redistance_offset() -> String {

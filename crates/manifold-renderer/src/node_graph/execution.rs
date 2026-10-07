@@ -138,11 +138,8 @@ enum StepFlow {
     Abort,
 }
 
-#[path = "execution/coupled_physics.rs"]
 mod coupled_physics;
-#[path = "execution/array_growth.rs"]
 mod array_growth;
-#[path = "execution/substep_region.rs"]
 mod substep_region;
 
 pub struct Executor {

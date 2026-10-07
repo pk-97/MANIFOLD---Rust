@@ -8,7 +8,6 @@ use crate::node_graph::{
 use manifold_core::{NodeId, PresetTypeId, effects::PresetInstance};
 use std::cell::RefCell;
 
-#[path = "physics_source_asset_tests.rs"]
 mod assets;
 
 type Identity = Result<[u8; 32], String>;

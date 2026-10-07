@@ -150,5 +150,4 @@ pub fn force_objects_for_authoring(
 
 #[cfg(test)]
 #[doc(hidden)]
-#[path = "../testkit/expansion.rs"]
 pub(crate) mod testkit;

@@ -3,7 +3,6 @@ use super::*;
 use crate::node_graph::PortType;
 
 #[cfg(test)]
-#[path = "physics_carry_tests.rs"]
 mod tests;
 
 impl PresetRuntime {

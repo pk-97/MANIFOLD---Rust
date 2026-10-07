@@ -11,12 +11,10 @@ use manifold_core::liquid_domain::{FLIP_DOMAIN_TYPE_ID, GPU_FLIP_DOMAIN_TYPE_ID,
 use manifold_core::tempo::TempoMapConverter;
 
 #[cfg(test)]
-#[path = "physics_sampling_inputs_tests.rs"]
 mod input_tests;
 
 
 #[cfg(all(test, feature = "gpu-proofs"))]
-#[path = "physics_history_drain_tests.rs"]
 mod drain_tests;
 
 /// GPU liquids whose force field is evaluated at each tick's start.

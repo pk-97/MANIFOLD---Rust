@@ -1116,5 +1116,4 @@ mod whitewater_engine_gpu_tests;
 
 #[cfg(all(test, feature = "gpu-proofs"))]
 #[doc(hidden)]
-#[path = "../../testkit/water_nodes.rs"]
 pub(crate) mod testkit;

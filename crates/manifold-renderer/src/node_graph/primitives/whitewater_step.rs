@@ -80,7 +80,6 @@ fn fused_source() -> String {
 }
 
 #[cfg(all(test, feature = "gpu-proofs"))]
-#[path = "whitewater_reference.rs"]
 mod reference;
 
 #[cfg(all(test, feature = "gpu-proofs"))]
@@ -99,7 +98,6 @@ pub(crate) fn fused_proof_node() -> Box<dyn crate::node_graph::effect_node::Effe
 }
 
 #[cfg(test)]
-#[path = "whitewater_fused_tests.rs"]
 mod fused_tests;
 
 // The production expansion contains only the fused block: no selector field,
@@ -1912,5 +1910,4 @@ impl Primitive for WhitewaterStep {
 }
 
 #[cfg(all(test, feature = "gpu-proofs"))]
-#[path = "whitewater_copy_tests.rs"]
 mod copy_tests;

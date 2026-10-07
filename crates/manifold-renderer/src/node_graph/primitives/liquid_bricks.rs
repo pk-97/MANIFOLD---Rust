@@ -45,5 +45,4 @@ pub(crate) fn dispatch(
 }
 
 #[cfg(test)]
-#[path = "liquid_bricks_tests.rs"]
 mod tests;

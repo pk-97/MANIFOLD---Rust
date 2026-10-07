@@ -162,5 +162,4 @@ fn prepare_surface(
 }
 
 #[cfg(test)]
-#[path = "../testkit/surface_inputs.rs"]
 mod testkit;

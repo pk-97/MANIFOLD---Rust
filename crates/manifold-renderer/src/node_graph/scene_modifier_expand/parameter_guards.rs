@@ -183,5 +183,4 @@ impl PreparedModifierParameterGuards {
 }
 
 #[cfg(test)]
-#[path = "../../testkit/guard_observations.rs"]
 mod testkit;

@@ -1126,5 +1126,4 @@ pub(super) fn with_whitewater_axes(def: EffectGraphDef) -> EffectGraphDef {
 
 #[cfg(test)]
 #[doc(hidden)]
-#[path = "../../testkit/water_recipe.rs"]
 pub(crate) mod testkit;
