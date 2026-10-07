@@ -291,10 +291,18 @@ class ScopeTests(unittest.TestCase):
         self.with_times({"a::slow": 500.0})
         self.assertNotIn("brand::new_test", plan([P + "matter_fill.rs"]).final_skips())
 
+    def test_no_row_names_a_measured_slow_test(self):
+        # A name in a row selects past the deferral; slow proofs are nightly
+        # and changed-body only (every water landing paid ~4 minutes for one).
+        for row in g.NARROW_ROWS + g.EXPLICIT_ROWS:
+            for name in row[1][0]:
+                self.assertLessEqual(g.read_times(g.TIMES_PATH).get(name, 0), g.SLOW_THRESHOLD_S, name)
+
     def test_slow_exact_filter_runs(self):
         name = "liquid_conformance::liquid_coupled_live_frame_rate"
         self.with_times({name: 222})
         p = plan([R + "node_graph/liquid/clock.rs"])
+        p.filters.add(name)
         self.assertIn(name, p.filters)
         self.assertNotIn(name, p.final_skips())
 

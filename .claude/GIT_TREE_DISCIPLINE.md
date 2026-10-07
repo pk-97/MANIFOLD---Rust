@@ -118,7 +118,10 @@ Obsolete when: main stops being a locally-landed shared trunk (PR/CI-gated merge
   call, the script does fetch/merge-in/gate/merge/push/bead-close/branch-
   delete with per-step exit checks; push happens only after a green gate or
   an explicit `--named-red BUG-id --reason` over a gate that ran every check
-  (`landing_gate.py` exit `CHECKS_RED`; a refusal or crash never lands). The gate script itself is the
+  (`landing_gate.py` exit `CHECKS_RED`; a refusal or crash never lands).
+  **The gate finds every red in one run and prints a `rerun:` command per
+  red; fix each with that command, never by rerunning the gate** (serial
+  discovery cost 3-10 gate runs per water landing, 2026-09-20..10-06). The gate script itself is the
   whole landing gate and gates only what
   the branch touched: design-status housekeeping
   (`.claude/hooks/design_status_check.py origin/main HEAD`, so status lines

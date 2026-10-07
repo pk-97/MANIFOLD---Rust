@@ -5,7 +5,8 @@ Gates only what the branch touched (GPU leg: scripts/gpu_scope.py); the workspac
 scripts/trunk_health.py (nightly). Pass --repo <worktree path> of the branch
 being landed, after merging origin/main into it. Stop at the first failed check; preserve its
 transcript and timings. Exit 0 iff all required checks pass; exit CHECKS_RED
-when --keep-going ran every check and some were red; exit 1 otherwise.
+when the gate ran every check (the default) and some were red; exit 1 on a
+refusal, a crash, or a `--fail-fast` stop.
 """
 
 import argparse
@@ -27,11 +28,14 @@ import gpu_queue
 
 MAIN_CHECKOUT = Path("/Users/peterkiemann/MANIFOLD - Rust")
 GATED_HEAD = contextvars.ContextVar('gated_head', default=None)
-# Exit code of a gate that ran every check (--keep-going) on a tree that
+# Exit code of a gate that ran every check (the default) on a tree that
 # held still and found some red: the only red land_branch.py may land over
-# with an explicit named red. Refusals, crashes and early stops exit 1.
+# with an explicit named red. Refusals, crashes and --fail-fast stops exit 1.
 CHECKS_RED = 4
 RAN_EVERY_CHECK = contextvars.ContextVar('ran_every_check', default=False)
+# Seconds this gate spent waiting for the machine-wide GPU lock; None when no
+# leg needed it. Logged per run: queue time is landing time nobody saw before.
+GPU_WAIT = contextvars.ContextVar('gpu_wait', default=None)
 
 # GPU-proofs scope (touched paths -> focused tests + smoke, time budget, no
 # run-everything fallback) lives in scripts/gpu_scope.py; the full suite runs
@@ -256,6 +260,13 @@ def run_check(label, cmd, cwd, timeout):
     else:
         with contextlib.suppress(OSError):
             live.unlink()
+    if exit_:
+        # After the transcript is written: a leg that names its own failures
+        # (gpu-proofs, flow-gate) prints `rerun:` lines; otherwise the leg's
+        # command is the rerun.
+        reruns = [line for line in (out + err).splitlines() if line.startswith("rerun: ")]
+        err += "\n" + "\n".join(reruns or [f"rerun: {rerun_command(cmd, cwd)}"])
+        result = exit_, out, err, seconds
     return result
 
 
@@ -329,6 +340,26 @@ def reverse_deps(repo, packages):
         return []
 
 
+def flow_filters(repo, paths):
+    """The flow-name filters the flow gate would run for the touched `paths`;
+    [] when nothing flow-mapped was touched (a missing manifest maps nothing)."""
+    import run_ui_flows
+    manifest_path = Path(repo) / 'scripts/ui-flows/manifest.json'
+    manifest = json.loads(manifest_path.read_text()) if manifest_path.is_file() else {}
+    return run_ui_flows.filters_for_paths(paths, manifest)[0]
+
+
+def rerun_command(cmd, repo):
+    """`cmd` as an agent can run it from any cwd: cargo gets --manifest-path,
+    repo scripts run by absolute path (no interpreter prefix)."""
+    repo = Path(repo).resolve()
+    if cmd[0] == "cargo" and "--manifest-path" not in cmd:
+        cmd = [*cmd[:2], "--manifest-path", str(repo / "Cargo.toml"), *cmd[2:]]
+    elif cmd[0] in {"python3", sys.executable} and len(cmd) > 1 and cmd[1].endswith(".py"):
+        cmd = [str(repo / cmd[1]), *cmd[2:]]
+    return " ".join(part if " " not in part else repr(part) for part in cmd)
+
+
 def stale_docs_index(repo):
     """True when docs/README.md differs from what gen_docs_index.py would write."""
     docs = Path(repo) / "docs"
@@ -369,10 +400,12 @@ def print_result(label, status, duration=None, tail=None):
 def main():
     token = GATED_HEAD.set(None)
     ran = RAN_EVERY_CHECK.set(False)
+    wait = GPU_WAIT.set(None)
     try:
         with contextlib.ExitStack() as stack:
             return _main(stack)
     finally:
+        GPU_WAIT.reset(wait)
         RAN_EVERY_CHECK.reset(ran)
         GATED_HEAD.reset(token)
 
@@ -385,8 +418,14 @@ def _main(stack):
                         help="base ref for merge-base (default: origin/main)")
     parser.add_argument("--skip-gpu", default=None, metavar="REASON",
                         help="skip gpu-proofs with a reason (does not fail gate)")
-    parser.add_argument("--keep-going", action="store_true",
-                        help="collect every result for explicit named-red review")
+    # Every red in one run, each with its rerun command: the gate is for
+    # landing, the printed commands are for fixing. Stopping at the first red
+    # found one failure per 20-minute run (3-10 gate runs per water landing,
+    # 2026-09-20..10-06).
+    parser.add_argument("--keep-going", action="store_true", default=True,
+                        help=argparse.SUPPRESS)
+    parser.add_argument("--fail-fast", dest="keep_going", action="store_false",
+                        help="stop at the first red instead of collecting every red")
     args = parser.parse_args()
 
     repo = Path(args.repo).resolve()
@@ -440,7 +479,7 @@ def _main(stack):
             tail = [*detail, f"regenerate: {command}"]
             results.append(("FAIL", f"fresh-{name}", None, tail))
             print_result(f"fresh-{name}", "FAIL", None, tail)
-        return finish(repo, base_sha, results)
+        return refuse(repo, base_sha, results)
 
     # Harness changes use the same focused tests advertised in worker briefs.
     from codex_checks import tooling_checks
@@ -534,18 +573,25 @@ def _main(stack):
         skip(results, "clippy", scope_reason)
 
     # c. flow-gate uses the same comment-aware diff and writes its landing
-    # marker even when no flows need a build or run.
-    exit_, out, err, duration = run_check("flow-gate",
-        ["python3", "scripts/run_ui_flows.py", "--touched", f"{base_sha}...HEAD"],
-        cwd=repo, timeout=3600)
-    tail = (out + err).rstrip().splitlines()[-20:]
-    status = "PASS" if exit_ == 0 else "FAIL"
-    results.append((status, "flow-gate", duration, tail))
-    print_result("flow-gate", status, duration, tail if exit_ != 0 else None)
-    if status == "FAIL" and not args.keep_going:
-        return finish(repo, base_sha, results)
+    # marker even when no flows need a build or run. Its binary compiles
+    # before the GPU hold and its flows run under the hold with the tests and
+    # proofs: one wait per landing, and no leg's timeout counts queue time
+    # (both hour-long flow-gate reds on 2026-10-06 were waits behind a
+    # 45-minute render).
+    flow_cmd = ["python3", "scripts/run_ui_flows.py", "--touched", f"{base_sha}...HEAD"]
+    flows_pending = (flow_filters(repo, paths)
+                     and not gate_passes.command_pass(repo, "flow-gate", flow_cmd).record)
+
+    def flow_leg():
+        exit_, out, err, duration = run_check("flow-gate", flow_cmd, cwd=repo, timeout=3600)
+        tail = (out + err).rstrip().splitlines()[-20:]
+        status = "PASS" if exit_ == 0 else "FAIL"
+        results.append((status, "flow-gate", duration, tail))
+        print_result("flow-gate", status, duration, tail if exit_ != 0 else None)
+        return status
 
     if not paths:
+        flow_leg()
         for label in ("tests-build", "catalog-fresh", "gpu-proofs-build", "tests", "gpu-proofs"):
             skip(results, label, scope_reason)
         return finish(repo, base_sha, results)
@@ -560,12 +606,12 @@ def _main(stack):
             message = f"GPU-PROOFS SCOPE: FAIL - {error}"
             print(message)
             results.append(("FAIL", "gpu-proofs", None, [message]))
-            return finish(repo, base_sha, results)
+            return refuse(repo, base_sha, results)
         if plan.unmapped:
             message = gpu_scope.unmapped_message(plan)
             print(message)
             results.append(("FAIL", "gpu-proofs", None, message.splitlines()))
-            return finish(repo, base_sha, results)
+            return refuse(repo, base_sha, results)
 
     # Nextest must keep the default-feature test set, regardless of proof
     # scope. Enabling gpu-proofs also admits nested/individually gated tests
@@ -590,6 +636,14 @@ def _main(stack):
     # hold covers test time only (BUG-w0hh (landing gate speed)). The legs
     # under the hold then find everything built and go straight to testing.
     print("[tests] " + cpu_plan.describe().replace("\n", "\n[tests] "), flush=True)
+    # A leg whose compile failed is skipped by name (the build's red stands);
+    # the hold still serves whatever else compiled.
+    unbuilt = set()
+    if flows_pending:
+        if build_leg(results, "flow-gate-build", [*flow_cmd, "--build-only"], repo) == "FAIL":
+            unbuilt.add("flow-gate")
+            if not args.keep_going:
+                return finish(repo, base_sha, results)
     if pending_tests:
         builds = {}
         for _, cmd, _ in pending_tests:
@@ -600,8 +654,11 @@ def _main(stack):
             label = 'tests-build' if len(builds) == 1 else f'tests-build/{package}'
             if build_leg(results, label, ['cargo', 'nextest', 'run', '--no-run',
                                          '-p', package, '-E', ' | '.join(filters)],
-                         repo) == 'FAIL' and not args.keep_going:
-                return finish(repo, base_sha, results)
+                         repo) == 'FAIL':
+                unbuilt.add(package)
+                if not args.keep_going:
+                    return finish(repo, base_sha, results)
+        pending_tests = [leg for leg in pending_tests if leg[1][leg[1].index('-p') + 1] not in unbuilt]
     elif test_legs:
         skip(results, 'tests-build', 'all selected tests already passed; no artifacts needed')
     else:
@@ -634,8 +691,10 @@ def _main(stack):
             skip(results, 'gpu-proofs-build', 'all selected proofs already passed; no artifacts needed')
         if not proof_cached and build_leg(results, "gpu-proofs-build",
                      ["python3", "scripts/gpu_proofs_gate.py", *gpu_args, "--build-only"],
-                     repo) == "FAIL" and not args.keep_going:
-            return finish(repo, base_sha, results)
+                     repo) == "FAIL":
+            unbuilt.add("gpu-proofs")
+            if not args.keep_going:
+                return finish(repo, base_sha, results)
     else:
         skip(results, "gpu-proofs-build", "no GPU paths touched" if not touches_gpu else args.skip_gpu)
 
@@ -645,13 +704,25 @@ def _main(stack):
     # so the landing waits once (visibly, on stdout) then runs straight through.
     # Keep the hold for scoped nextest: transitive helpers can open a device,
     # so source-path inspection alone cannot prove a selected test CPU-only.
-    if pending_tests or (run_gpu and not proof_cached):
-        print("[gpu-queue] taking the GPU lock for the tests and gpu-proofs legs", flush=True)
-        stack.enter_context(gpu_queue.hold("landing_gate tests+gpu-proofs", out=sys.stdout))
+    proofs_pending = run_gpu and not proof_cached and "gpu-proofs" not in unbuilt
+    if ((flows_pending and "flow-gate" not in unbuilt) or pending_tests or proofs_pending):
+        print("[gpu-queue] taking the GPU lock for the flow-gate, tests and gpu-proofs legs", flush=True)
+        started = time.monotonic()
+        stack.enter_context(gpu_queue.hold("landing_gate flows+tests+gpu-proofs", out=sys.stdout))
+        GPU_WAIT.set(time.monotonic() - started)
+        print(f"[gpu-queue] held after {GPU_WAIT.get():.0f}s", flush=True)
+
+    if "flow-gate" in unbuilt:
+        skip(results, "flow-gate", "flow-gate-build failed")
+    elif flow_leg() == "FAIL" and not args.keep_going:
+        return finish(repo, base_sha, results)
 
     # f. tests (if packages touched)
     if test_legs:
         for label, cmd, _ in test_legs:
+            if cmd[cmd.index('-p') + 1] in unbuilt:
+                skip(results, label, "tests-build failed")
+                continue
             exit_, out, err, duration = run_check(label, cmd, cwd=repo, timeout=3600)
             tail = (out + err).rstrip().splitlines()[-20:]
             status = 'PASS' if exit_ == 0 else 'FAIL'
@@ -666,6 +737,8 @@ def _main(stack):
     if touches_gpu:
         if args.skip_gpu:
             skip(results, "gpu-proofs", f"skipped by flag: {args.skip_gpu}")
+        elif "gpu-proofs" in unbuilt:
+            skip(results, "gpu-proofs", "gpu-proofs-build failed")
         else:
             print("[gpu-proofs] mode: scoped (focused tests + smoke; --all is nightly only)")
             print("[gpu-proofs] " + plan.describe().replace("\n", "\n[gpu-proofs] "), flush=True)
@@ -712,7 +785,7 @@ def _main(stack):
                         names.append(line)
                 verdict = [l for l in lines if l.startswith("GPU-PROOFS GATE:")]
                 tail = (names + verdict) or lines[-20:]
-            tail += [line for line in lines if line.startswith('GPU-PROOFS DEFERRED:')
+            tail += [line for line in lines if line.startswith(('GPU-PROOFS DEFERRED:', 'rerun: '))
                      and line not in tail]
             status = "PASS" if exit_ == 0 else "FAIL"
             results.append((status, "gpu-proofs", duration, tail))
@@ -722,6 +795,12 @@ def _main(stack):
     else:
         skip(results, "gpu-proofs", "no GPU paths touched")
 
+    return finish(repo, base_sha, results)
+
+
+def refuse(repo, base_sha, results):
+    """A stop before the checks could run: never the named-red exit."""
+    RAN_EVERY_CHECK.set(False)
     return finish(repo, base_sha, results)
 
 
@@ -746,9 +825,13 @@ def finish(repo, base_sha, results):
         else:
             print(f"{status} {label}")
         for line in tail:
-            if line.startswith('GPU-PROOFS DEFERRED:'):
+            if line.startswith('GPU-PROOFS DEFERRED:') or (status == 'FAIL' and line.startswith('rerun: ')):
                 print(line)
+    if GPU_WAIT.get() is not None:
+        print(f"gpu-queue wait: {GPU_WAIT.get():.0f}s")
     print(f"landing gate: {passed} passed, {failed} failed, {skipped} skipped")
+    if failed:
+        print("fix each red with its `rerun:` command above, then run the gate once more to land")
 
     # Timing log (JSONL append, main checkout — worktrees come and go)
     branch = run_cmd(["git", "rev-parse", "--abbrev-ref", "HEAD"],
@@ -769,7 +852,8 @@ def finish(repo, base_sha, results):
             "ts": datetime.now(timezone.utc).isoformat(),
             "branch": branch,
             "checks": checks,
-            "failed": failed
+            "failed": failed,
+            "gpu_wait_s": None if GPU_WAIT.get() is None else round(GPU_WAIT.get(), 1),
         }
         with open(timings_path, "a") as f:
             f.write(json.dumps(entry) + "\n")

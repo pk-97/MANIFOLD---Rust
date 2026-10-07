@@ -40,10 +40,10 @@ class LandingTests(unittest.TestCase):
         self.enterContext(patch.object(landing_gate.gpu_scope, "learned_times_path", return_value=None))
 
     checks = ["tooling", "design-status", "docs-index", "deny", "ignored-tests",
-              "clippy", "flow-gate", "tests-build", "gpu-proofs-build", "tests", "gpu-proofs"]
+              "clippy", "tests-build", "gpu-proofs-build", "flow-gate", "tests", "gpu-proofs"]
 
     def exercise(self, failed=None, extra=(), stale_docs=False, packages=True, head="head", paths=None,
-                 comment=False, gpu_output=None, proof_cached=False):
+                 comment=False, gpu_output=None, proof_cached=False, manifest=None):
         called, commands = [], []
         self.events = events = []
         paths = paths or ["crates/manifold-gpu/src/metal/device.rs"]
@@ -100,6 +100,9 @@ class LandingTests(unittest.TestCase):
                         crate = root / "crates" / path.split("/")[1]
                         crate.mkdir(parents=True, exist_ok=True)
                         (crate / "Cargo.toml").write_text(f'[package]\nname = "{crate.name}"\n')
+            if manifest is not None:
+                (root / "scripts/ui-flows").mkdir(parents=True)
+                (root / "scripts/ui-flows/manifest.json").write_text(json.dumps(manifest))
             output = stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
             stack.enter_context(patch.object(sys, "argv", ["landing_gate.py", "--repo", d, *extra]))
             stack.enter_context(patch.object(landing_gate, "MAIN_CHECKOUT", root))
@@ -126,7 +129,8 @@ class LandingTests(unittest.TestCase):
     def test_every_failure_stops_later_checks_and_retains_evidence(self):
         for index, failed in enumerate(self.checks):
             with self.subTest(failed=failed):
-                code, called, timings, commands, logs, output, deps = self.exercise(failed)
+                code, called, timings, commands, logs, output, deps = self.exercise(
+                    failed, extra=["--fail-fast"])
                 self.assertEqual(code, 1)
                 self.assertEqual(called, self.checks[:index + 1])
                 self.assertEqual(timings["failed"], 1)
@@ -137,8 +141,42 @@ class LandingTests(unittest.TestCase):
                 if index < 5:
                     self.assertEqual(deps, 0)
 
+    def test_default_collects_every_red_with_a_rerun_command_each(self):
+        # The gate is for landing; reds are fixed with the printed commands,
+        # never by rerunning the gate to find the next one.
+        code, called, timings, _, _, output, _ = self.exercise("clippy")
+        self.assertEqual(code, landing_gate.CHECKS_RED)
+        self.assertEqual(called, self.checks)
+        self.assertEqual(timings["failed"], 1)
+        summary = output[output.index("FAIL clippy"):]
+        self.assertRegex(summary, r"rerun: cargo clippy --manifest-path \S+/Cargo.toml -p manifold-gpu")
+        self.assertIn("fix each red with its `rerun:` command", summary)
+
+    def test_leg_rerun_lines_win_over_the_leg_command(self):
+        gpu_output = ("failures:\n    liquid_conformance::broken\n\n"
+                      "test result: FAILED. 0 passed; 1 failed;\n"
+                      "rerun: /r/scripts/gpu_proofs_gate.py --filter liquid_conformance::broken\n"
+                      "GPU-PROOFS GATE: FAIL (1 failed tests, 0 drifted goldens)\n")
+        _, _, _, _, _, output, _ = self.exercise(failed="gpu-proofs", gpu_output=gpu_output)
+        summary = output[output.index("FAIL gpu-proofs"):]
+        self.assertIn("rerun: /r/scripts/gpu_proofs_gate.py --filter liquid_conformance::broken", summary)
+        self.assertNotIn("rerun: /", summary.replace("rerun: /r/scripts", ""))
+
+    def test_flow_gate_builds_before_the_hold_and_runs_under_it(self):
+        path = "crates/manifold-ui/src/panels/inspector.rs"
+        manifest = {"flows": {"inspector-scroll": "inspector"},
+                    "path_triggers": {"crates/manifold-ui/src/panels/": ["inspector"]}}
+        code, called, timings, commands, *_ = self.exercise(paths=[path], manifest=manifest)
+        self.assertEqual(code, 0)
+        events = self.events
+        enter = events.index("hold-enter:landing_gate flows+tests+gpu-proofs")
+        self.assertLess(events.index("flow-gate-build"), enter)
+        self.assertLess(enter, events.index("flow-gate"))
+        self.assertIn(["python3", "scripts/run_ui_flows.py", "--touched", "base...HEAD", "--build-only"], commands)
+        self.assertEqual(timings["gpu_wait_s"], 0.0)
+
     def test_stale_docs_stop_before_cargo_or_rendering(self):
-        code, called, timings, *_ = self.exercise(stale_docs=True)
+        code, called, timings, *_ = self.exercise(stale_docs=True, extra=["--fail-fast"])
         self.assertEqual(code, 1)
         self.assertEqual(called, self.checks[:3])
         self.assertEqual(timings["checks"][-1]["label"], "docs-index")
@@ -154,7 +192,7 @@ class LandingTests(unittest.TestCase):
         deferred = "GPU-PROOFS DEFERRED: liquid_conformance::other (100s)"
         code, _, _, _, _, output, _ = self.exercise(
             failed="gpu-proofs", gpu_output=deferred + "\n" + summary.getvalue())
-        self.assertEqual(code, 1)
+        self.assertEqual(code, landing_gate.CHECKS_RED)
         self.assertIn("GPU-PROOFS BUDGET: OVER", output)
         self.assertIn("liquid_conformance::broken", output)
         self.assertIn("GPU-PROOFS GATE: FAIL", output)
@@ -188,8 +226,8 @@ class LandingTests(unittest.TestCase):
         self.assertEqual(code, 0)
         events = self.events
         self.assertEqual([e for e in events if e.startswith("hold")],
-                         ["hold-enter:landing_gate tests+gpu-proofs", "hold-exit"])
-        enter, leave = events.index("hold-enter:landing_gate tests+gpu-proofs"), events.index("hold-exit")
+                         ["hold-enter:landing_gate flows+tests+gpu-proofs", "hold-exit"])
+        enter, leave = events.index("hold-enter:landing_gate flows+tests+gpu-proofs"), events.index("hold-exit")
         self.assertLess(enter, events.index("tests"))
         self.assertLess(events.index("gpu-proofs"), leave)
         # Cheap prerequisites, clippy and every test-binary compile run
@@ -285,9 +323,19 @@ class LandingTests(unittest.TestCase):
     def test_build_failure_stops_before_the_hold(self):
         for failed in ("tests-build", "gpu-proofs-build"):
             with self.subTest(failed=failed):
-                code, *_ = self.exercise(failed)
+                code, *_ = self.exercise(failed, extra=["--fail-fast"])
                 self.assertEqual(code, 1)
                 self.assertFalse(any(e.startswith("hold") for e in self.events))
+
+    def test_build_failure_skips_only_the_leg_it_feeds(self):
+        for failed, skipped, still_run in (("tests-build", "tests", "gpu-proofs"),
+                                           ("gpu-proofs-build", "gpu-proofs", "tests")):
+            with self.subTest(failed=failed):
+                code, called, _, _, _, output, _ = self.exercise(failed)
+                self.assertEqual(code, landing_gate.CHECKS_RED)
+                self.assertNotIn(skipped, called)
+                self.assertIn(still_run, called)
+                self.assertIn(f"[SKIP] {skipped} ({failed} failed)", output)
 
     def test_tests_failure_still_releases_the_hold(self):
         self.exercise("tests")
@@ -542,11 +590,13 @@ class DiffScopeTests(unittest.TestCase):
 
 
 class DeliveryTests(unittest.TestCase):
-    def test_only_explicit_named_red_collects_all_checks(self):
-        cases = [([], False), (["--named-red", "BUG-test", "--reason", "reviewed"], True),
-                 (["--named-red", "BUG-test"], False),
-                 (["--named-red", "BUG-test", "--reason", "reviewed", "--skip-gpu", "deferred"], False)]
-        for extra, expected in cases:
+    def test_delivery_never_narrows_the_gate(self):
+        # Every mandatory result is the gate's default; a named red needs
+        # them all and no caller may ask for a first-red stop.
+        cases = [[], ["--named-red", "BUG-test", "--reason", "reviewed"],
+                 ["--named-red", "BUG-test"],
+                 ["--named-red", "BUG-test", "--reason", "reviewed", "--skip-gpu", "deferred"]]
+        for extra in cases:
             with self.subTest(extra=extra), tempfile.TemporaryDirectory() as d, contextlib.ExitStack() as stack:
                 stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
                 stack.enter_context(patch.object(sys, "argv", ["land_branch.py", "codex/test", "--worktree", d, "--message", "test", *extra]))
@@ -554,8 +604,9 @@ class DeliveryTests(unittest.TestCase):
                 gate = stack.enter_context(patch.object(land_branch, "run_landing_gate", side_effect=RuntimeError("stop before delivery")))
                 with self.assertRaisesRegex(RuntimeError, "stop before delivery"):
                     land_branch.main()
-                self.assertEqual("--keep-going" in gate.call_args.args[0], expected)
                 argv = gate.call_args.args[0]
+                self.assertNotIn("--fail-fast", argv)
+                self.assertNotIn("--keep-going", argv)
                 self.assertEqual(argv[argv.index("--repo") + 1], str(Path(d).resolve()))
 
     def test_progress_is_forwarded_before_child_exits(self):
