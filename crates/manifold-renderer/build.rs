@@ -22,7 +22,6 @@ fn main() {
             "src/preset_runtime/physics_source_state.rs",
             "src/preset_runtime/physics_source_chain.rs",
             "src/preset_context.rs",
-            "../manifold-core/src/tempo.rs",
         ],
         "MANIFOLD_PHYSICS_INTEGRATION_IDENTITY",
     )

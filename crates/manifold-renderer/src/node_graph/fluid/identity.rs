@@ -16,6 +16,7 @@ pub(in crate::node_graph) fn solver_identity() -> [u8; 32] {
     for source in [
         manifold_fluids::SOURCE_IDENTITY,
         manifold_physics::SOURCE_IDENTITY,
+        manifold_core::SOURCE_IDENTITY,
         env!("MANIFOLD_PHYSICS_INTEGRATION_IDENTITY"),
     ] {
         hash.update((source.len() as u64).to_le_bytes());
