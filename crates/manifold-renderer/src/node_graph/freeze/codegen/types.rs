@@ -174,6 +174,18 @@ pub(super) struct DimForms {
     pub(super) store_coord: &'static str,
 }
 
+/// WGSL storage-texture format token for the formats a texture kernel can declare
+/// as a write target. `None` for anything else (the standalone path only supports
+/// the f16 working default + fp32 opt-in for precision-sensitive feedback loops).
+pub fn wgsl_storage_token(fmt: manifold_gpu::GpuTextureFormat) -> Option<&'static str> {
+    use manifold_gpu::GpuTextureFormat as F;
+    match fmt {
+        F::Rgba16Float => Some("rgba16float"),
+        F::Rgba32Float => Some("rgba32float"),
+        _ => None,
+    }
+}
+
 pub(super) fn dim_forms(dim: TexDim) -> DimForms {
     match dim {
         TexDim::D2 => DimForms {
@@ -495,4 +507,3 @@ pub struct GeneratedFusion {
     pub wgsl: String,
     pub param_order: Vec<(NodeInstanceId, &'static str)>,
 }
-
