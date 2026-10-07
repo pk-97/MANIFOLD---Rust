@@ -51,6 +51,10 @@ def tooling_checks(repo, paths):
         "scripts/test_codex_regressions.py": {"scripts/codex_regressions.py", "scripts/codex_regressions.json", "scripts/test_codex_regressions.py", "scripts/codex_checks.py", "scripts/ui-flows/manifest.json"},
         ".codex/hooks/test_guard.py": {".codex/hooks/guard.py", ".codex/hooks/test_guard.py", ".codex/hooks.json", "scripts/storage_budget.py"},
         ".codex/hooks/test_context.py": {".codex/hooks/guard.py", ".codex/hooks/context.py", ".codex/hooks/test_context.py", "scripts/codex_prepare.py", "scripts/codex_subsystems.json", ".codex/hooks.json"},
+        # The tool inventory covers every script: any script added, renamed or
+        # removed must keep scripts/dev.py and scripts/TOOLS.md in step.
+        "scripts/test_dev.py": {"scripts/dev.py", "scripts/TOOLS.md", "scripts/test_dev.py"} | {
+            p for p in paths if p.startswith("scripts/") and p.endswith((".py", ".sh"))},
     }
     # Reference checks also run when a covered regression source changes.
     from codex_regressions import inventory

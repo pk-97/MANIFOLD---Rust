@@ -105,6 +105,7 @@ Verify one level closer to the stage than where you changed things — compiles 
 
 ## Tooling
 
+- **`scripts/TOOLS.md` is the tool inventory** (`scripts/dev.py --help` prints the same; `dev.py <verb>` runs it). Read it before writing any script, probe, or renderer: every verb names a tool that exists. A new `scripts/*` file gets a verb in `dev.py` (test-enforced); one-offs live in the scratchpad.
 - `rg` not `grep`, `fd` not `find`, `ast-grep` for code-shape queries. No rust-analyzer in agent sessions: it costs 3 GB and a re-index per branch switch on the cores cargo needs.
 - Runtime bugs: printlns, reproduce, read logs. Static analysis is for compile errors.
 - **Parallel lanes share one GPU and 14 cores.** Solve on the CPU first: small CPU reference tests that run in seconds. A GPU proof or an app render only confirms a finished stage, one run, through `scripts/gpu_queue.py`. Order the work in stages: edit, check, CPU proof, commit. Cargo runs one command at a time with `CARGO_BUILD_JOBS=4`. Codex can't take the GPU lock, so it writes GPU proofs and the lead runs them.
