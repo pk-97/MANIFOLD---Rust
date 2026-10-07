@@ -14,7 +14,6 @@ manifold-foundation = { path = "../manifold-foundation" }
 manifold-gpu = { path = "../manifold-gpu" }
 manifold-native = { path = "../manifold-native" }
 manifold-playback = { path = "../manifold-playback" }
-manifold-ui = { path = "../manifold-ui" }
 log = { workspace = true }
 bytemuck = { version = "1", features = ["derive", "min_const_generics"] }
 half = "2"
@@ -92,6 +91,7 @@ core-foundation = "0.9"
 sha2 = "0.10"
 
 [dev-dependencies]
+manifold-ui = { path = "../manifold-ui" }
 manifold-ui-paint = { path = "../manifold-ui-paint" }
 # Independent f64 FLIP surface reconstruction reference fixtures.
 glam = "0.29.3"

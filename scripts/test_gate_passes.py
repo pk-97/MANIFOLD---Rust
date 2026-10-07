@@ -189,7 +189,7 @@ class CacheTests(unittest.TestCase):
         self.assertIsNone(cache.proof_pass(self.repo, paint).record)
         self.assertIsNotNone(cache.proof_pass(self.repo, renderer).record)
         cache.proof_pass(self.repo, paint).save(0)
-        self.write('crates/manifold-renderer/assets/fonts/Inter-Regular.ttf', 'new font bytes')
+        self.write('crates/manifold-foundation/assets/fonts/Inter-Regular.ttf', 'new font bytes')
         self.assertIsNone(cache.proof_pass(self.repo, paint).record)
         self.assertIsNone(cache.proof_pass(self.repo, renderer).record)
         cache.proof_pass(self.repo, paint).save(0)

@@ -167,7 +167,7 @@ def rust_paths(repo, packages):
         'Cargo.toml', 'Cargo.lock', 'rust-toolchain', 'rust-toolchain.toml',
         '.cargo', '.config', 'deny.toml', 'clippy.toml', '.clippy.toml',
         'scripts', 'tests', 'assets', 'tools', 'native', 'shaders', 'vendor',
-        'crates/manifold-renderer/assets/fonts',
+        'crates/manifold-foundation/assets/fonts',
         'docs/node_catalog', '.gitignore']
 
 
